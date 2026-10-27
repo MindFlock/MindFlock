@@ -5898,6 +5898,23 @@ unsure tail shown muted in the caption, never typed). The phone page's mic is th
 version of the same conversation, with spoken replies on by default — see
 [Voice: talking to a session](#voice-talking-to-a-session) under the Mobile UI.
 
+The mic starts without a wait: the microphone is opened as soon as talking is
+likely — the mic's options opening, the button going down, the ask pop-up's
+mic appearing (only if the permission is already given) — and kept open
+90 s after a dictation (`KEEP_STREAM_MS` in `lib/voiceMic.ts`), so the next
+press records at once; the browser's "mic in use" light stays on for that
+grace, and it is given back at once when the page has been hidden 10 s or you
+say "mic off". The server's stream opens while the mic gets ready, so the
+first chunk goes the moment you speak (the quiet before it is never sent).
+While it listens, a ring around the mic button (and the ask pop-up's) follows
+your voice — room noise sits at zero — and the caption says *Listening…*,
+then *Hearing you…* once it hears speech; the words show greyed as soon as the
+recogniser has a guess (the options popover shows them too, over a level
+bar), and only the settled words are typed. With localStorage `cs_voice_debug`
+set to `1` the console logs the start's timings (also in
+`window.__mfVoiceTiming`): press, mic ready, stream open, first speech, first
+greyed words, first typed word.
+
 ## Mobile UI (`/m`)
 
 A single full-screen terminal for phones: session picker, state dot and chip,

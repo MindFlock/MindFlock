@@ -38,6 +38,9 @@ export interface AskMic {
   cancel(): boolean;
   /** There is a recognizer on this page. */
   supported(): boolean;
+  /** Ready the microphone ahead of a press (the pop-up's mic appeared) —
+   * only when its permission is already given. */
+  warm?(): void;
 }
 
 let ask: AskVoice | null = null;
