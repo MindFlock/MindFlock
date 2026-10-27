@@ -63,7 +63,8 @@ MAX_DIALOG_ID = 64
 #: Activities in which an agent is waiting on a dialog an answer can address.
 ANSWERABLE_ACTIVITIES = ("clarify", "limit")
 #: Keys that SETTLE a dialog (pick, confirm, refuse) — as opposed to the
-#: ones that only move its cursor or toggle a choice.
+#: ones that only move its cursor or toggle a choice. (A digit in a
+#: multi-select question toggles: see :data:`_TOGGLE_IDS`.)
 SETTLING_KEYS = frozenset(
     ["Enter", "Escape", "y", "n"] + [str(n) for n in range(1, 10)]
 )
@@ -224,6 +225,11 @@ _ANSWER_LOCKS_GUARD = threading.Lock()
 #: title -> (dialog id, monotonic time) of the last settling answer.
 _ANSWERED: Dict[str, Tuple[str, float]] = {}
 _ANSWERED_MAX = 1024
+#: Ids of dialogs whose digits TOGGLE rather than answer (a multi-select
+#: question, ``/dialog``'s ``multi: true``), as seen by :func:`current_dialog`.
+#: Ticking a box keeps the dialog — and its id — on screen, so a second tick
+#: pinned to that id is no double answer.
+_TOGGLE_IDS: Dict[str, bool] = {}
 
 
 def answer_lock(title: str) -> threading.Lock:
@@ -266,6 +272,8 @@ def answered_recently(title: str, dialog_id: str) -> bool:
 
 
 def note_answered(title: str, dialog_id: str) -> None:
+    if dialog_id in _TOGGLE_IDS:
+        return  # a tick, not an answer: the next tick is welcome
     if len(_ANSWERED) >= _ANSWERED_MAX:
         _ANSWERED.clear()
     _ANSWERED[title] = (dialog_id, time.monotonic())
@@ -292,7 +300,12 @@ def current_dialog(name: str, program: str) -> Tuple[Optional[dict], Optional[st
         parsed = None
     if not isinstance(parsed, dict):
         parsed = None
-    return dialogs.describe(parsed, screen), None
+    body = dialogs.describe(parsed, screen)
+    if body.get("multi"):
+        if len(_TOGGLE_IDS) >= _ANSWERED_MAX:
+            _TOGGLE_IDS.clear()
+        _TOGGLE_IDS[body["id"]] = True
+    return body, None
 
 
 def send_answer(name: str, text: str, keys: List[str]) -> bool:

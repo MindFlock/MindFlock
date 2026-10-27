@@ -621,6 +621,8 @@ that opens the pane). The shared pieces and every layout live in
   command`, `Edit file`, `Tool use` for an MCP tool, `Accessing workspace:`
   for the folder trust gate, plan approval), the command or path, the
   question and the `❯ 1.` options.
+- **`claude`** also reads Claude Code's **question tool** (AskUserQuestion,
+  2.1.311; see below) as a `kind: "select"` parse.
 - **`codex`** reads the approval overlay (`Would you like to run the
   following command?` / `…make the following edits?`, an optional `Reason:`,
   the `$ command`) and the trust screen, with `› 1.` options.
@@ -728,10 +730,71 @@ columns (`claude2_stop_session_w*`, `claude2_spawn_w*`, plus synthetic
 re-wraps checked line for line against those captures). The 2-option variant
 Claude draws at ≤ 80 columns has different keys, so a different id.
 
+**Claude's question tool (`kind: "select"`).** AskUserQuestion draws, under
+the dialog's top rule: a tab row (`←  ☐ Color  ☒ Toppings  ✔ Submit  →` —
+☐ unanswered, ☒ answered, `✔ Submit` the review tab; a single question shows
+just ` ☐ Framework`, no arrows, no review tab), the question, the numbered
+choices — each label over its description, a `[ ]` / `[✔]` checkbox in front
+in a multi-select, the free-text `Type something.` row last — then a rule,
+`N. Chat about this` and the footer (`Enter to select · Tab/Arrow keys to
+navigate · Esc to cancel`; `↑/↓ to navigate` for one question; `ctrl+g to
+edit in Vim` while the text row holds the cursor). A multi-select draws its
+own button row under its choices (`Next`, or `Submit` on the last question:
+not a choice). The review tab shows `Review your answers`, `● question` /
+`→ answer` pairs, `Ready to submit your answers?` and `1. Submit answers` /
+`2. Cancel`. `dialogs._claude_ask` parses all of it before the generic path;
+the parse adds `kind: "select"`, `multi`, `steps` (`[{label, done}]`, the
+review tab `submit: true`), `step`, `review` (the pairs, review screen only),
+`cursor` (the key under the cursor), `button` and `nav` (`{next: ["Right"],
+prev: ["Left"], submit: ["Enter"]}`), and per option `desc` (`null` when it
+repeats the label), `checked` (`null` without a checkbox), `keys` and a
+`kind` of `other` / `text` / `chat` (review: `yes` / `no`). Rules worth
+knowing:
+
+- **The active tab is drawn by colour alone** (Claude's
+  `backgroundColor: "permission"` pill): `step` comes from the background of
+  the tab's glyph in the coloured capture `/dialog` takes. Without colours it
+  is inferred: the review tab on the review screen; the last question when a
+  multi-select's button says `Submit`; the only tab with a label drawn (the
+  narrowest pane draws only the active one); the tab whose label words the
+  question uses; the first unanswered one.
+- **Label vs description**: both sit at the same column. A label line that
+  ran to the pane's edge wrapped onto the next line; one that stopped short
+  ended, and the rest is its description.
+- **The text row**: `kind: "text"` by its `Type something` placeholder, or
+  (once typed into — the typed text replaces the label) by being the last
+  choice above the rule. While it holds the cursor a digit would be typed
+  into it, so every other choice's `keys` lead with `Up`.
+- **The id** hashes the question (the review's pairs on the review screen),
+  then each choice as `key:label+description` (the 24-character prefix, as
+  for every option) with checkbox and cursor gone — the text row by its key
+  alone. The tab row is left out (its ticks change as questions are
+  answered, its labels are cut with the width). So ticking boxes, moving the
+  cursor, typing into the text row and resizing keep the id; another
+  question or the review screen changes it.
+- **Keys verified on 2.1.311**: a digit picks (single-select: picks and
+  moves on / submits at once) or ticks (multi-select: the cursor stays);
+  Up/Down move; Enter picks the cursor's row; Left/Right (and Tab) switch
+  tabs; on the review screen `1`/Enter submits, `2` cancels; Esc cancels the
+  whole tool. **Unverified**: whether Enter on a multi-select row ticks it
+  (clients use the digits), and how the button row is reached by keys (use
+  `nav.next` to the review tab instead). A multi-select's ids are remembered
+  by `agent_io.current_dialog` so `/answer` does not count its digit ticks
+  as settling (`agent_io._TOGGLE_IDS`).
+- Answered, the tool's result (`● User answered Claude's questions:` over
+  `· question → answer`) is transcript under nothing live: no parse.
+
+The goldens are `claude2_ask_<state>_w100` — real 2.1.311 captures, `#!`
+header naming the state and prompt — plus `_w80` / `_w60` re-wraps generated
+by `tests/unit/test_dialog_ask.py::_rewrap` (which reproduces each w100
+capture line for line at 100 columns).
+
 **The `/dialog` body.** `GET /api/instances/{title}/dialog` serves
 `dialogs.describe()`: `id`, `parsed`, `question` (composed), `command`,
 `options` as `{"key", "label", "kind"}` plus **`"keys": [...]`** when the
-parser gave them, and `source` when set. The UI posts `opt.keys ?? [opt.key]`
+parser gave them, and `source` when set; a `kind: "select"` parse adds the
+fields above (and its `question` is the question line, not composed with
+the heading). The UI posts `opt.keys ?? [opt.key]`
 to `/answer` with the `id` as `dialog_id`. `current_dialog` captures the pane
 with `capture-pane -e -J`: every parser strips the escapes (`strip_ansi`;
 Claude and Codex read a coloured capture exactly as a plain one), and

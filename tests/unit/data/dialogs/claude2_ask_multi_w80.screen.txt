@@ -1,0 +1,42 @@
+#! synthetic: claude2_ask_multi_w100 re-wrapped to 80 columns by tests/unit/test_dialog_ask.py::_rewrap
+
+ ▐▛███▛█   Claude Code v2.1.311
+▝▜██████▀  Opus 5.5 with high effort · Claude Max
+ ▝▝   ▝▝   /tmp/aq-scratch
+
+
+❯ Use the AskUserQuestion tool once to ask me two questions in one call:
+  question 1 header "Color", question "Which color should the button be?" with
+  options Red (description: warm), Green (description: calm), Blue
+  (description: default); question 2 header "Toppings", multiSelect true,
+  question "Which toppings do you want?" with options Cheese, Olives,
+  Mushrooms. Do nothing else and do not write files.
+────────────────────────────────────────────────────────────────────────────────
+←  ☒ Color  ☐ Toppings  ✔ Submit  →
+
+Which toppings do you want?
+
+❯ 1. [ ] Cheese
+         Cheese
+  2. [ ] Olives
+         Olives
+  3. [ ] Mushrooms
+         Mushrooms
+  4. [ ] Type something
+     Submit
+────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+

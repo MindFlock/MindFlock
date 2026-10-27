@@ -53,6 +53,18 @@ A parsed dialog (``parse_*``'s return)::
                             # ALL whitespace removed and anything the width
                             # can cut reduced to a short prefix
 
+Claude Code's question tool (AskUserQuestion, :func:`_claude_ask`) parses to
+the same dict plus ``"kind": "select"``, ``"multi"`` (checkboxes), ``"steps"``
+(the tab row: ``[{"label", "done"}]``, the review tab ``"submit": True``),
+``"step"`` (the active tab), ``"review"`` (the review screen's ``[{"question",
+"answer"}]``, else None), ``"cursor"`` (the key under the cursor),
+``"button"`` (a multi-select's own "Next" / "Submit" row) and ``"nav"``
+(the keys that switch tabs / press the cursor's row); each option adds
+``"desc"`` (its description, None when it only repeats the label) and
+``"checked"`` (None without a checkbox), and its ``kind`` is ``other`` (a
+choice), ``text`` (the "Type something" row), ``chat`` ("Chat about this"),
+or ``yes`` / ``no`` (Submit answers / Cancel).
+
 The id must not depend on the terminal's width: resizing a pane (opening the
 page, a new worker pane changing the layout) re-wraps a dialog's long lines,
 and an id that moved with the wrapping refused the next click as "the prompt
@@ -832,6 +844,328 @@ def _claude_v2_command(
     return command, description
 
 
+# --- AskUserQuestion (Claude Code 2.1.311) ---------------------------------- #
+#: The question tool's tab row, right under the dialog's top rule: one tab per
+#: question (☐ unanswered, ☒ answered) and the review tab (✔ Submit), between
+#: ← and → arrows when there is more than one tab. The ACTIVE tab is drawn on
+#: a background colour alone (``backgroundColor: "permission"``, padded with a
+#: space each side); a narrow pane cuts the labels with "…", and the
+#: narrowest shows only the active tab's.
+_ASK_TAB_ROW = re.compile(r"^\s*(?:←\s+)?(?P<tabs>[☐☒✔]\s.*?)(?:\s+→)?\s*$")
+_ASK_TAB = re.compile(r"(?P<mark>[☐☒✔])[ \t]?(?P<label>[^☐☒✔]*)")
+#: One choice: the cursor, the number, a checkbox (multi-select), the label.
+_ASK_OPTION = re.compile(
+    r"^(?P<indent>\s*)(?P<cursor>❯\s*)?(?P<num>[1-9])\.\s+"
+    r"(?:(?P<box>\[[ ✔]\])\s+)?(?P<label>\S.*?)\s*$"
+)
+#: A multi-select question's own button under its choices: "Next", or
+#: "Submit" on the last question.
+_ASK_BUTTON = re.compile(r"^\s*(?P<cursor>❯\s*)?(?P<label>Submit|Next)\s*$")
+#: The free-text choice's placeholder ("Type something." single-select,
+#: "[ ] Type something" multi-select); the typed text replaces it.
+_ASK_TEXT_LABEL = re.compile(r"^Type something\.?$")
+_ASK_REVIEW = "Review your answers"
+#: What the key-hint footer wraps onto its second line in a narrow pane.
+_ASK_FOOTER_TAIL = re.compile(r"[A-Za-z/↑↓·+ -]{1,40}")
+#: The keys that move between the tabs, and that pick the row under the
+#: cursor — served so a client never names tmux keys itself.
+ASK_NAV = {"next": ["Right"], "prev": ["Left"], "submit": ["Enter"]}
+
+
+def _ask_tabs(text: str) -> List[dict]:
+    """The tab row's text → ``[{"label", "done"}]`` (the review tab adds
+    ``"submit": True``)."""
+    steps = []
+    for m in _ASK_TAB.finditer(text):
+        label = _squash(m.group("label"))
+        if m.group("mark") == "✔":
+            steps.append({"label": label or "Submit", "done": False, "submit": True})
+        else:
+            steps.append({"label": label, "done": m.group("mark") == "☒"})
+    return steps
+
+
+def _ask_active_tab(raw: str, steps: Sequence[dict]) -> Optional[int]:
+    """The tab drawn on a background of its own in the captured tab row
+    ``raw`` (colour escapes kept), or None without colours."""
+    text, backs = _styled(raw)
+    marks = [i for i, ch in enumerate(text) if ch in "☐☒✔"]
+    if len(marks) != len(steps) or not any(backs):
+        return None
+    lit = [k for k, col in enumerate(marks) if backs[col] is not None]
+    return lit[0] if len(lit) == 1 else None
+
+
+def _ask_step(
+    steps: Sequence[dict],
+    raw: str,
+    question: str,
+    button: Optional[str],
+    review: bool,
+) -> int:
+    """The active tab's index. From the colours when the capture has them;
+    without them: the review tab on the review screen; the last question
+    when a multi-select's button says "Submit"; the only tab whose label is
+    drawn (the narrowest pane); the tab whose label words the question uses
+    ("Toppings" — "Which toppings…"); the first unanswered one."""
+    lit = _ask_active_tab(raw, steps)
+    if lit is not None:
+        return lit
+    questions = [k for k, s in enumerate(steps) if not s.get("submit")]
+    if review:
+        return next((k for k, s in enumerate(steps) if s.get("submit")), len(steps) - 1)
+    if len(questions) <= 1:
+        return questions[0] if questions else 0
+    if button == "Submit":
+        return questions[-1]
+    drawn = [k for k in questions if steps[k]["label"]]
+    if len(drawn) == 1:
+        return drawn[0]
+    asked = set(re.findall(r"[a-z0-9]+", question.lower()))
+
+    def stem(word: str) -> str:
+        return word[:5] if len(word) > 5 else word
+
+    stems = {stem(w) for w in asked}
+    hits = [
+        k
+        for k in questions
+        if any(
+            stem(w) in stems
+            for w in re.findall(r"[a-z0-9]+", steps[k]["label"].lower().rstrip("…"))
+            if len(w) >= 3
+        )
+    ]
+    if len(hits) == 1:
+        return hits[0]
+    return next((k for k in questions if not steps[k]["done"]), questions[0])
+
+
+def _ask_review(lines: Sequence[str]) -> List[dict]:
+    """The review screen's ``● question`` / ``→ answer`` pairs (each may wrap
+    onto indented lines; anything else — a "not answered" warning — is
+    skipped)."""
+    pairs: List[dict] = []
+    field = None
+    for line in lines:
+        text = line.strip()
+        if not text:
+            field = None
+            continue
+        if text.startswith("●"):
+            pairs.append({"question": text[1:].strip(), "answer": ""})
+            field = "question"
+        elif text.startswith("→") and pairs:
+            pairs[-1]["answer"] = text[1:].strip()
+            field = "answer"
+        elif field and pairs and _indent(line) >= 2:
+            pairs[-1][field] = (pairs[-1][field] + " " + text).strip()
+        else:
+            field = None
+    return [
+        {
+            "question": _cap(_squash(p["question"]), MAX_QUESTION_CHARS) or "",
+            "answer": _cap(_squash(p["answer"]), MAX_DETAIL_CHARS) or "",
+        }
+        for p in pairs
+    ]
+
+
+def _ask_footer_only(below: Sequence[str]) -> bool:
+    """Whether ``below`` (under the choices) holds only blank lines, rules
+    and the key-hint footer — which a narrow pane wraps onto a second
+    line."""
+    footer = False
+    for text in below:
+        stripped = text.strip()
+        if not stripped or _ANY_RULE.match(text):
+            continue
+        if _FOOTER.search(stripped) and len(stripped) <= _FOOTER_MAX_CHARS:
+            footer = True
+            continue
+        if footer and _ASK_FOOTER_TAIL.fullmatch(stripped):
+            continue  # the footer's wrapped tail ("cancel")
+        return False
+    return True
+
+
+def _claude_ask(
+    lines: Sequence[str], raws: Sequence[str], widths: Sequence[int]
+) -> Optional[dict]:
+    """Claude Code's AskUserQuestion prompt → the parsed dict (``kind:
+    "select"``), or None when the screen does not end in one.
+
+    The layout, under the dialog's top rule: the tab row, the question, the
+    numbered choices — each label over its description, a ``[ ]`` / ``[✔]``
+    checkbox in front when several may be picked, the free-text "Type
+    something" choice last — then a rule and "Chat about this", and the
+    key-hint footer. A multi-select question draws its own Next / Submit
+    button under its choices (not a choice). The review tab shows "Review
+    your answers", each question with its ``→`` answer, "Ready to submit
+    your answers?" and Submit answers / Cancel."""
+    tab = None
+    for i in range(len(lines) - 1, -1, -1):
+        if _ASK_TAB_ROW.match(lines[i]):
+            above = next((ln for ln in reversed(lines[:i]) if ln.strip()), "")
+            if _SOLID_RULE.match(above):
+                tab = i
+            break
+    if tab is None:
+        return None
+    steps = _ask_tabs(_ASK_TAB_ROW.match(lines[tab]).group("tabs"))
+    if not steps:
+        return None
+    body = list(lines[tab + 1 :])
+    first = next((k for k, ln in enumerate(body) if _ASK_OPTION.match(ln)), None)
+    if first is None:
+        return None
+    paras = _paragraphs(body[:first])
+    review = bool(paras) and paras[0] == [_ASK_REVIEW]
+    if review:
+        q_lines = paras[-1] if len(paras) > 1 else []
+        rest: List[List[str]] = []
+    else:
+        q_lines = paras[0] if paras else []
+        rest = paras[1:]
+    question = _squash(" ".join(q_lines))
+    if not question:
+        return None
+    cols = max(widths, default=0)
+    opts: List[dict] = []
+    button = None
+    button_cursor = False
+    rule = False
+    k = first
+    while k < len(body):
+        line = body[k]
+        m = _ASK_OPTION.match(line)
+        if m:
+            opts.append(
+                {
+                    "num": m.group("num"),
+                    "label": [m.group("label")],
+                    "desc": [],
+                    "box": m.group("box"),
+                    "cursor": bool(m.group("cursor")),
+                    "col": m.start("label"),
+                    "width": widths[tab + 1 + k] if tab + 1 + k < len(widths) else 0,
+                    "below_rule": rule,
+                }
+            )
+            k += 1
+            continue
+        if not line.strip():
+            break
+        if _ANY_RULE.match(line):
+            rule = True
+            k += 1
+            continue
+        b = _ASK_BUTTON.match(line)
+        if b and opts[-1]["box"] and not rule and _indent(line) < opts[-1]["col"] - 1:
+            button = b.group("label")
+            button_cursor = bool(b.group("cursor"))
+            k += 1
+            continue
+        opt = opts[-1]
+        if _indent(line) < opt["col"] - 1:
+            return None  # neither a choice nor its label's or description's line
+        text = line.strip()
+        # A label line that ran to the pane's edge wrapped onto this one;
+        # one that stopped short ended, and this is its description.
+        if not opt["desc"] and cols and opt["width"]:
+            token = len(text.split(None, 1)[0])
+            if opt["width"] + 1 + token > cols - 1:
+                opt["label"].append(text)
+                opt["width"] = widths[tab + 1 + k] if tab + 1 + k < len(widths) else 0
+                k += 1
+                continue
+        opt["desc"].append(text)
+        k += 1
+    if not _ask_footer_only(body[k:]):
+        return None
+    nums = [int(o["num"]) for o in opts]
+    if len(opts) < 2 or nums != list(range(1, len(opts) + 1)):
+        return None
+    if not (any(o["cursor"] for o in opts) or button_cursor):
+        return None
+    multi = any(o["box"] for o in opts)
+    above_rule = [o for o in opts if not o["below_rule"]]
+    text_num = None
+    if not review:
+        for o in above_rule:
+            if _ASK_TEXT_LABEL.match(_squash(" ".join(o["label"]))):
+                text_num = o["num"]
+        if text_num is None and len(above_rule) < len(opts) and len(above_rule) >= 2:
+            text_num = above_rule[-1]["num"]
+    # The free-text row under the cursor holds the keyboard: a digit typed
+    # there is text, so every other choice is reached by leaving it (Up).
+    typing = any(o["cursor"] and o["num"] == text_num for o in opts)
+    options = []
+    cursor = None
+    for o in opts:
+        label = clean_label(" ".join(o["label"]))
+        if review:
+            kind = "yes" if label.lower().startswith("submit") else option_kind(label)
+        elif o["below_rule"]:
+            kind = "chat"
+        elif o["num"] == text_num:
+            kind = "text"
+        else:
+            kind = "other"
+        desc = _cap(_squash(" ".join(o["desc"])), MAX_DETAIL_CHARS) or None
+        if desc is not None and _squash(desc).lower() == _squash(label).lower():
+            desc = None
+        keys = [o["num"]] if (not typing or o["num"] == text_num) else ["Up", o["num"]]
+        options.append(
+            {
+                "key": o["num"],
+                "label": label,
+                "kind": kind,
+                "keys": keys,
+                "desc": desc,
+                "checked": (o["box"] == "[✔]") if o["box"] else None,
+            }
+        )
+        if o["cursor"]:
+            cursor = o["num"]
+    step = _ask_step(
+        steps, raws[tab] if tab < len(raws) else "", question, button, review
+    )
+    # The id: the question (and the review's answers), then each choice as
+    # key:label+description with the checkbox and cursor gone — ticking boxes
+    # and moving the cursor keep it; the free-text choice counts by its key
+    # alone, so typing into it keeps it too. The tab row is left out: its
+    # ticks change as questions are answered and its labels with the width.
+    region = ["ask:review" if review else "ask"]
+    if review:
+        for p in _ask_review(body[:first]):
+            region.append(_WS.sub("", p["question"] + "→" + p["answer"]))
+    region += [_id_part(p) for p in [q_lines] + rest]
+    for o in opts:
+        if o["num"] == text_num:
+            region.append("%s:text" % o["num"])
+        else:
+            region.append("%s:%s" % (o["num"], _id_part(o["label"] + o["desc"], True)))
+    detail = _squash(" ".join(" ".join(p) for p in rest)) or None
+    return {
+        "heading": _cap(steps[step]["label"] or None, MAX_DETAIL_CHARS),
+        "question": _cap(question, MAX_QUESTION_CHARS),
+        "command": None,
+        "detail": _cap(detail, MAX_DETAIL_CHARS),
+        "options": options,
+        "source": None,
+        "region": "\n".join(region),
+        "kind": "select",
+        "multi": multi,
+        "steps": steps,
+        "step": step,
+        "review": _ask_review(body[:first]) if review else None,
+        "cursor": cursor,
+        "button": button,
+        "nav": {k: list(v) for k, v in ASK_NAV.items()},
+    }
+
+
 def parse_claude(screen: str) -> Optional[dict]:
     """A Claude Code dialog (a top rule, the heading, the body, the question,
     ``❯ 1.`` options, a key-hint footer) → the parsed dict, or None.
@@ -853,9 +1187,16 @@ def parse_claude(screen: str) -> Optional[dict]:
     A tab header on the heading ("· from the general-purpose agent 2 of 3",
     a background sub-agent's prompt) is cut off the heading and reported as
     ``source``.
+
+    The question tool's own layout (2.1.311: a tab row, choices with
+    descriptions, checkboxes, the review screen) is :func:`_claude_ask`'s —
+    a ``kind: "select"`` parse.
     """
     lines = normalize_lines(screen)
     widths = _drawn_widths(screen)
+    ask = _claude_ask(lines, _raw_lines(screen), widths)
+    if ask is not None:
+        return ask
     block = option_block(lines, CLAUDE_CURSORS, widths)
     if block is None:
         return None
@@ -1699,7 +2040,15 @@ def _describe_option(opt: dict) -> dict:
     out = {"key": str(opt["key"]), "label": str(opt["label"]), "kind": str(opt["kind"])}
     if opt.get("keys"):
         out["keys"] = [str(k) for k in opt["keys"]]
+    for field in ("desc", "checked"):
+        # A select dialog's choices only (absent from every other dialog's).
+        if field in opt:
+            out[field] = opt[field]
     return out
+
+
+#: The fields a ``kind: "select"`` parse adds to the body.
+_SELECT_FIELDS = ("heading", "multi", "steps", "step", "cursor", "button", "nav")
 
 
 def describe(parsed: Optional[dict], screen: str) -> dict:
@@ -1743,6 +2092,19 @@ def describe(parsed: Optional[dict], screen: str) -> dict:
         # background sub-agent's prompt), from the tab header the question
         # no longer carries.
         body["source"] = str(parsed["source"])
+    if parsed.get("kind") == "select":
+        # Claude's question tool: the question line as asked (its tab label
+        # is ``heading``, not glued onto it), the tabs, the review.
+        body["kind"] = "select"
+        body["question"] = _cap(
+            _squash(parsed.get("question") or ""), MAX_QUESTION_CHARS
+        )
+        if parsed.get("detail"):
+            body["detail"] = parsed["detail"]
+        for field in _SELECT_FIELDS:
+            body[field] = parsed.get(field)
+        if parsed.get("review") is not None:
+            body["review"] = parsed["review"]
     return body
 
 
