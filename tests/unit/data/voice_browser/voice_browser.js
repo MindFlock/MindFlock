@@ -712,7 +712,7 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     const page3 = await ctx.newPage();
     page3.on("pageerror", (e) => errors.push(String(e)));
     await page3.addInitScript(() => {
-      window.__gum = 0;
+      window.__gum = 0; window.__stops = 0;
       navigator.mediaDevices.getUserMedia = function () {
         window.__gum++;
         const ac = new AudioContext();
@@ -723,6 +723,8 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
         osc.frequency.value = 440;
         osc.connect(gain); gain.connect(dst); osc.start();
         window.__tone = (g) => { gain.gain.value = g; };
+        // The page giving the microphone back = its tracks stopped.
+        dst.stream.getTracks().forEach((t) => { const stop = t.stop.bind(t); t.stop = () => { window.__stops++; stop(); }; });
         return Promise.resolve(dst.stream);
       };
     });
@@ -737,9 +739,19 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     await sleep(400);
     await page3.evaluate(() => window.__tone(0.4));
     await sleep(900);
-    const level = await page3.evaluate(() => document.getElementById("voice-level-bar").style.width || "");
-    check("the level meter moves with the voice", /%$/.test(level) && parseFloat(level) > 0, level);
+    const lvl = () => page3.evaluate(() => ["voice-level", "voice-btn", "asking-mic"].map((id) => document.getElementById(id).style.getPropertyValue("--lvl")));
+    const level = await lvl();
+    check("the level meter moves with the voice (--lvl on the meter)", parseFloat(level[0]) > 0.3, JSON.stringify(level));
+    check("…the mic's ring and the ask sheet's mic follow the same level", level[1] === level[0] && level[2] === level[0], JSON.stringify(level));
+    check("…the mic is marked as hearing (the waiting pulse stops)", await page3.evaluate(() => document.getElementById("voice-btn").hasAttribute("data-hearing")));
+    const capH = await page3.evaluate(() => document.getElementById("voice-caption").textContent);
+    check("the caption says 'Hearing you…' while the voice comes in", /^Hearing you…/.test(capH), capH);
     await page3.evaluate(() => window.__tone(0.002));
+    await sleep(650);   // past VOICE_HEARING_MS, short of the silence stop
+    const capL = await page3.evaluate(() => document.getElementById("voice-caption").textContent);
+    const level2 = await lvl();
+    check("…and 'Listening…' once it is quiet", /^Listening… \d+ s/.test(capL), capL);
+    check("…the ring falls back to (near) zero within the decay", parseFloat(level2[0]) < 0.05 && !(await page3.evaluate(() => document.getElementById("voice-btn").hasAttribute("data-hearing"))), JSON.stringify(level2));
     // VOICE_SILENCE_MS of quiet after speech ends the clip by itself.
     const t0 = Date.now();
     while (!state.transcribes.length && Date.now() - t0 < 6000) await sleep(50);
@@ -756,6 +768,44 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     const diag3 = await page3.evaluate(() => document.getElementById("voice-diag").textContent);
     check("diagnostics: the WAV recorder and the server's built-in engine", /Recorder: WAV 16 kHz \(ScriptProcessor\)/.test(diag3) && /Built-in engine: Windows — System\.Speech \(en-US\)/.test(diag3) && /Last transcribe: 90 ms via builtin/.test(diag3), diag3.replace(/\n/g, " | "));
     check("diagnostics: the clip went through the browser's resampler; the silence stop is 1100 ms", /Resampler: OfflineAudioContext \(the browser's\)$/m.test(diag3) && /Silence stop: 1100 ms after speech/.test(diag3), diag3.replace(/\n/g, " | "));
+    check("diagnostics: the warm microphone and the last start-up trace", /^Microphone: warm \(kept 90 s after the last phrase\)$/m.test(diag3) && /^Last start: mic \d+ ms, speech \d+ ms after the start$/m.test(diag3), diag3.replace(/\n/g, " | "));
+    await page3.click("#voice-done");
+    // ---- the warm microphone: kept after the phrase, reused by the next
+    // tap (no getUserMedia), given back once the grace runs out.
+    await page3.click("#voice-cancel");
+    await waitFor(page3, () => window.mfVoice.state === "idle", 3000, "server idle");
+    check("after the phrase the microphone stays warm (its tracks running)", (await page3.evaluate(() => window.mfVoice.stt.warm() && window.__stops === 0)));
+    const vib3 = await page3.evaluate(() => window.__vibes);
+    await page3.click("#voice-btn");
+    await waitFor(page3, () => window.mfVoice.state === "listening" && window.mfVoice.rec.trace && "mic" in window.mfVoice.rec.trace, 3000, "warm listening");
+    const tr3 = await page3.evaluate(() => window.mfVoice.rec.trace);
+    check("…the next tap reused it: no second getUserMedia, the mic ready at once", (await page3.evaluate(() => window.__gum)) === 1 && tr3.mic <= 50, JSON.stringify(tr3));
+    await sleep(900);   // past the listening buzz's gap
+    await page3.evaluate(() => window.__tone(0.4));
+    await waitFor(page3, () => "speech" in window.mfVoice.rec.trace, 2000, "the first word");
+    await sleep(600);   // more loud blocks: still one tick
+    check("vibrate: the listening buzz, then ONE tick at the phrase's first word", (await page3.evaluate(() => window.__vibes)) - vib3 === 2, String((await page3.evaluate(() => window.__vibes)) - vib3) + " " + JSON.stringify(await page3.evaluate(() => [window.mfVoice.rec.trace, window.mfVoice.buzzAt])));
+    await page3.evaluate(() => window.__tone(0.002));
+    await page3.click("#voice-cancel");
+    await waitFor(page3, () => window.mfVoice.state === "idle", 3000, "idle again");
+    const vib3b = await page3.evaluate(() => window.__vibes);
+    await page3.click("#voice-btn");
+    await waitFor(page3, () => window.mfVoice.state === "listening", 3000, "listening, speaking at once");
+    await sleep(120);
+    await page3.evaluate(() => window.__tone(0.4));
+    await sleep(500);
+    check("…no tick on top of the listening buzz (speech right after the tap)", (await page3.evaluate(() => window.__vibes)) - vib3b === 1 && (await page3.evaluate(() => "speech" in window.mfVoice.rec.trace)), String((await page3.evaluate(() => window.__vibes)) - vib3b));
+    await page3.evaluate(() => window.__tone(0.002));
+    // The grace, shortened: past it the tracks stop and the next tap asks again.
+    await page3.evaluate(() => { window.mfVoice.keepMs = 300; });
+    await page3.click("#voice-cancel");
+    await waitFor(page3, () => window.mfVoice.state === "idle", 3000, "idle before the grace");
+    await waitFor(page3, () => !window.mfVoice.stt.warm(), 3000, "the mic released");
+    check("past the grace the microphone is given back (tracks stopped)", (await page3.evaluate(() => !window.mfVoice.stt.warm() && window.__stops >= 1)));
+    await page3.click("#voice-btn");
+    await waitFor(page3, () => window.mfVoice.state === "listening" && window.__gum === 2, 3000, "cold listening");
+    check("…and the next tap asks for it again", (await page3.evaluate(() => window.__gum)) === 2);
+    await page3.click("#voice-cancel");
     await page3.close();
 
     // ---- streaming recognition: the words appear while the phrase is spoken
@@ -788,12 +838,17 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
         window.__tone = (g) => { gain.gain.value = g; };
         return Promise.resolve(dst.stream);
       };
-      // Every value the box and the caption take, in order.
-      window.__boxes = []; window.__caps = [];
+      // Every value the box and the caption take, in order (and the
+      // caption's greyed, still-settling words).
+      window.__boxes = []; window.__caps = []; window.__parts = [];
       setInterval(() => {
         const b = document.getElementById("compose"), c = document.getElementById("voice-caption");
         if (b && b.value !== window.__lastBox) { window.__lastBox = b.value; window.__boxes.push(b.value); }
-        if (c && c.textContent !== window.__lastCap) { window.__lastCap = c.textContent; window.__caps.push(c.textContent); }
+        if (c && c.textContent !== window.__lastCap) {
+          window.__lastCap = c.textContent; window.__caps.push(c.textContent);
+          const sp = c.querySelector(".voice-partial");
+          window.__parts.push(sp ? sp.textContent : null);
+        }
       }, 15);
     });
     await page4.route("**/api/**", mock);
@@ -806,20 +861,37 @@ const spokeAs = async (page, name, text) => said(page, name + ": " + text);
     while (!state.streamOpens.length && Date.now() - t4 < 3000) await sleep(30);
     check("streaming: the tap opened a stream with the page's language", state.streamOpens.length === 1 && !!state.streamOpens[0].lang, JSON.stringify(state.streamOpens));
     await sleep(400);   // the noise floor first, as a voice would
+    const tr4q = await page4.evaluate(() => window.mfVoice.rec.trace);
+    check("…opened at the start, before any word (the trace: open, no speech yet)", "open" in tr4q && !("speech" in tr4q), JSON.stringify(tr4q));
+    check("…and no quiet uploaded: no chunk before the first word", state.streamChunks.length === 0, JSON.stringify(state.streamChunks));
     await page4.evaluate(() => window.__tone(0.4));
     await sleep(1300);
     await page4.evaluate(() => window.__tone(0.002));
+    const tr4 = await page4.evaluate(() => window.mfVoice.rec.trace);
+    const c4 = state.streamChunks.filter((c) => c.id === "s1");
+    // The first chunk is the lead-in (VOICE_LEAD_MS) + the first loud block(s): it goes as the word starts.
+    check("the first chunk went as the word started: words shown within 400 ms of the first loud block", tr4.words - tr4.speech < 400 && c4.length >= 1 && c4[0].len < 44 + 32000 * 0.7, JSON.stringify(tr4) + " first chunk " + (c4[0] && c4[0].len) + " B");
+    console.log("  trace (phrase 1): " + JSON.stringify(tr4));
     t4 = Date.now();
     while (state.streamOpens.length < 2 && Date.now() - t4 < 6000) await sleep(30);
+    // The next phrase's stream opens as listening restarts — before the
+    // router's answer has put phrase 1 in the box.
+    await waitFor(page4, () => window.__boxes.some(Boolean), 3000, "phrase 1 in the box");
     const box1 = await page4.evaluate(() => window.__boxes.filter(Boolean));
     const caps1 = await page4.evaluate(() => window.__caps.slice());
     check("…phrase 1 into an empty box (maybe a command) showed in the caption as it came", caps1.indexOf("fix the") >= 0 && caps1.indexOf("fix the parser") >= 0, JSON.stringify(caps1));
+    const parts1 = await page4.evaluate(() => window.__parts.slice());
+    check("…the partial greyed (the still-settling words), before anything reached the box", parts1[caps1.indexOf("fix the")] === "fix the" && parts1[caps1.indexOf("fix the parser")] === "parser" && box1.length >= 1, JSON.stringify(parts1));
+    const hear1 = caps1.findIndex((c) => /^Hearing you…/.test(c));
+    check("…'Hearing you…' between the quiet 'Listening…' and the first words", caps1.findIndex((c) => /^Listening…/.test(c)) < hear1 && hear1 >= 0 && hear1 < caps1.indexOf("fix the"), JSON.stringify(caps1.slice(0, 6)));
     check("…and reached the box whole, after the silence stop's /end", box1[0] === "fix the parser" && state.streamEnds[0] === "s1", JSON.stringify([box1, state.streamEnds]));
     check("…the router had the whole phrase", state.posts.some((x) => x.path === "/api/voice/route" && x.body.text === "fix the parser"));
     check("…the next phrase opened a new stream", state.streamOpens.length === 2);
     await sleep(300);
+    const vib4 = await page4.evaluate(() => window.__vibes);
     await page4.evaluate(() => window.__tone(0.4));
     await sleep(1300);
+    check("vibrate: phrase 2 (no listening buzz of its own) ticked once at its first word", (await page4.evaluate(() => window.__vibes)) - vib4 === 1, String((await page4.evaluate(() => window.__vibes)) - vib4));
     await page4.evaluate(() => window.__tone(0.002));
     await waitFor(page4, () => window.mfVoice.state === "working" || window.mfVoice.state === "sending", 6000, "stream words sent");
     const boxes4 = await page4.evaluate(() => window.__boxes.slice());

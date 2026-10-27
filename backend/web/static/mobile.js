@@ -2804,8 +2804,9 @@
   //
   // Adapters, reachable as window.mfVoice.stt / .tts, all with one surface:
   //   stt {name, available(), start({onInterim, onFinal, onError, onEnd,
-  //        onLevel?, onStatus?, until?, whole?, answers?}), stop(), active(), release()} —
+  //        onLevel?, onSpeech?, onStatus?, until?, whole?, answers?}), stop(), active(), release()} —
   //        onFinal fires once per PHRASE (one start may deliver several);
+  //        onInterim(text, tail?): tail = the end of text still settling;
   //        onStatus carries a caption that is not words ("Transcribing…").
   //        PhoneSTT over webkitSpeechRecognition (continuous), adding end()
   //        (stop gracefully: what was heard still arrives); ServerSTT
@@ -3035,10 +3036,14 @@
   // VOICE_WAV_RATE (voiceResampleClip: the browser's own anti-aliased
   // resampler, else voiceResample's low-pass decimator) and encodes
   // (voiceWavEncode) — the same clip as the desktop app's lib/wavRecorder.ts. The mic stream is
-  // asked for once and kept across turns, its tracks stopped when voice goes
-  // off or the page hides (release()). There are no interim words: onStatus
-  // says "Listening… <n> s" (the machine adds the radio hint), and onLevel
-  // feeds the strip's level meter from the RMS of the same blocks.
+  // asked for once and kept warm across turns — VOICE_KEEP_STREAM_MS after
+  // the last phrase (longer while a reply is on its way, VOICE_KEEP_HIDDEN_MS
+  // once the page hides; keep()) — its tracks stopped then and when voice
+  // goes off (release()). There are no interim words: onStatus says
+  // "Hearing you…" while the detector hears speech, else "Listening… <n> s"
+  // (the machine adds the radio hint); onLevel feeds the mic's ring and the
+  // strip's meter (voiceLevelOf: floor-relative, 0..1) from the RMS of the
+  // same blocks, and onSpeech fires on a phrase's first loud block.
   // The clip is one phrase: it ends on VOICE_SILENCE_MS of quiet after speech
   // was heard, on a tap (finish()), or at the cap (VOICE_CLIP_MAX_MS, or the listening window if
   // that is shorter); stop() discards it and never reports, like PhoneSTT's.
@@ -3049,7 +3054,10 @@
   //
   // Streaming (GET /api/voice → server_ready.stt_stream: the local whisper
   // backend): the words appear WHILE the phrase is spoken. start() opens a
-  // stream (POST /api/voice/stream {lang} → {id}); whenever the previous
+  // stream (POST /api/voice/stream {lang} → {id}) at once, alongside
+  // getUserMedia; nothing is sent before the first loud block (only the
+  // last VOICE_LEAD_MS before it is kept, so the first chunk goes as the
+  // word starts); from then, whenever the previous
   // request has returned and VOICE_STREAM_CHUNK_MS of new audio is in, the
   // samples since the last cut go out as one more 16 kHz WAV (POST
   // …/chunk → {committed, partial}) — one request at a time, so a slow
@@ -3074,6 +3082,12 @@
   var VOICE_STREAM_MAX_MS = 30000;       // a streamed phrase's cap (its words arrive as it goes)
   var VOICE_LEVEL_MS = 100;              // the caption clock's period
   var VOICE_RMS_SPEECH = 0.02;           // RMS (0..1) above which the clip has speech
+  var VOICE_KEEP_STREAM_MS = 90000;      // the microphone stays warm this long after its last phrase (keep())
+  var VOICE_KEEP_HIDDEN_MS = 15000;      // ...but only this long once the page is hidden
+  var VOICE_LEAD_MS = 300;               // a stream's audio kept from before the first loud block (the soft start of the word)
+  var VOICE_HEARING_MS = 400;            // "Hearing you…" holds this long after the last loud block
+  var VOICE_RING_ATTACK_MS = 30;         // the mic's ring: how fast it rises to the voice's level
+  var VOICE_RING_DECAY_MS = 150;         // ...and its fall's time constant
   var VOICE_UPLOAD_TIMEOUT_MS = 45000;   // the transcribe request's own cap
   var VOICE_RESAMPLE_TIMEOUT_MS = 5000;  // OfflineAudioContext's render; past it, voiceResample
   var VOICE_SINC_HALF = 16;              // voiceResample's kernel half-width, in output samples
@@ -3216,6 +3230,35 @@
     b = String(b || "").trim();
     return a && b ? a + " " + b : a || b;
   }
+  // The level the mic's ring and the meter show (0..1) for a block's RMS:
+  // relative to the noise floor, so a room's hum sits at zero, on a square
+  // root so a quiet voice still moves it well.
+  function voiceLevelOf(rms, floor) {
+    var over = (Number(rms) || 0) - Math.max((Number(floor) || 0) * 2, 0.003);
+    return over > 0 ? Math.min(1, Math.sqrt(over * 8)) : 0;
+  }
+  // One step (dtMs later) of the shown level toward the latest block's:
+  // it rises within VOICE_RING_ATTACK_MS and falls with a
+  // VOICE_RING_DECAY_MS time constant. Pure: the rAF loop calls it per frame.
+  function voiceLevelStep(shown, target, dtMs) {
+    var dt = Math.max(0, Number(dtMs) || 0);
+    if (target >= shown) return shown + (target - shown) * Math.min(1, dt / VOICE_RING_ATTACK_MS);
+    return target + (shown - target) * Math.exp(-dt / VOICE_RING_DECAY_MS);
+  }
+  // The start-up trace of a phrase: ms from start() (for the first phrase,
+  // the tap itself) to the microphone ready, the stream open, the first loud
+  // block, the first words shown and the first settled ones. The last one
+  // is in Diagnostics; with localStorage cs_voice_debug set, the console
+  // gets every mark.
+  function voiceTraceMark(g, what) {
+    if (!g.trace || what in g.trace) return;
+    g.trace[what] = Date.now() - g.t00;
+    voice.rec.trace = g.trace;
+    if (g.debug) { try { console.log("[voice] " + what + " +" + g.trace[what] + " ms"); } catch (e) {} }
+  }
+  function voiceDebugOn() {
+    try { var f = localStorage.getItem("cs_voice_debug"); return !!f && f !== "0" && f !== "false"; } catch (e) { return false; }
+  }
   function ServerSTT() {
     var stream = null;        // the microphone, kept across turns
     var token = null;         // one object per start(); null = not active
@@ -3224,14 +3267,49 @@
     var aborter = null;       // AbortController of that upload
     var live = null;          // the streamed phrase (recStart's g) until its words are in
     var clockTimer = null, capTimer = null;
+    var keepTimer = null, keepHidden = false;   // keep(): when the warm microphone goes back
     function available() {
       return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia &&
                 (window.AudioContext || window.webkitAudioContext));
     }
+    // A stream still worth reusing: active, every track live and not muted
+    // (iOS mutes the track of a page it suspended; another app may hold the mic).
+    function micLive(s) {
+      if (!s || s.active === false) return false;
+      try {
+        return s.getAudioTracks().every(function (t) { return t.readyState !== "ended" && !t.muted; });
+      } catch (e) { return true; }
+    }
+    function micStop(s) {
+      if (s) { try { s.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} }
+    }
     function getStream() {
-      if (stream && stream.active !== false) return Promise.resolve(stream);
+      clearTimeout(keepTimer);
+      if (micLive(stream)) return Promise.resolve(stream);
+      micStop(stream);
       stream = null;
       return navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) { stream = s; return s; });
+    }
+    // The microphone stays warm VOICE_KEEP_STREAM_MS after its last phrase,
+    // so the next tap starts at once (no getUserMedia: on a phone that is
+    // 100 ms to a second). The browser shows its mic-in-use indicator for
+    // that long. While a turn is on its way back (sending / working /
+    // speaking: the reply opens listening by itself, with no tap to ask for
+    // the mic again) the grace starts over; once the page is hidden it is
+    // VOICE_KEEP_HIDDEN_MS (release(ms)) and never starts over.
+    // voice.keepMs is VOICE_KEEP_STREAM_MS (tests shorten it).
+    function keep(ms, hidden) {
+      clearTimeout(keepTimer);
+      keepHidden = !!hidden;
+      if (!stream) return;
+      keepTimer = setTimeout(function () {
+        if (token) return;   // in use again (start() clears the timer; this is a belt)
+        if (!document.hidden && (keepHidden || /^(sending|working|speaking)$/.test(voice.state))) {
+          keep();
+          return;
+        }
+        release();
+      }, ms || voice.keepMs);
     }
     function errCode(err) {
       var n = (err && err.name) || "";
@@ -3246,19 +3324,37 @@
     // every block drives the level meter and ends the clip after a phrase.
     // A context that is not running (made outside a tap) delivers no blocks:
     // then the cap decides, and the clip says so.
-    function recStart(s, mine, h) {
+    // The phrase, made in start() before the microphone is there: its
+    // stream opens alongside getUserMedia (recStart wires the audio in).
+    function recNew() {
+      return { ctx: null, rate: 0, blocks: [], frames: 0,
+               source: null, proc: null, mute: null,
+               heard: false, lastLoud: 0, floor: 0, t0: Date.now(), said: "",
+               t00: Date.now(), trace: {}, debug: voiceDebugOn(),
+               // The stream: mode "clip" (none, or it broke) / "opening" /
+               // "stream"; blocks + queued = the audio it has not answered
+               // yet; busy = a request in flight (never two); pend = settled
+               // words not in the box yet; lead = the words before a clip
+               // that took over; words = the caption shows words.
+               mode: "clip", sid: "", queued: 0, loudQueued: false, busy: false, opening: false, chunks: 0,
+               req: null, ending: false, dead: false, pend: "", partial: "", lead: "", words: false };
+    }
+    // The caption while nothing has come back: "Hearing you…" while the
+    // detector hears speech (and VOICE_HEARING_MS after), else
+    // "Listening… <n> s". Once the stream shows words, the caption is theirs.
+    function recStatus(g, h) {
+      if (!h.onStatus || g.words) return;
+      var now = Date.now();
+      var t = g.heard && now - g.lastLoud < VOICE_HEARING_MS ? "Hearing you…"
+        : "Listening… " + Math.round((now - g.t0) / 1000) + " s";
+      if (t !== g.said) { g.said = t; h.onStatus(t); }
+    }
+    function recStart(g, s, mine, h) {
       var ctx = voiceAudioCtx();
-      if (!ctx || !ctx.createScriptProcessor || !ctx.createMediaStreamSource) return null;
-      var g = { ctx: ctx, rate: ctx.sampleRate, blocks: [], frames: 0,
-                source: null, proc: null, mute: null,
-                heard: false, lastLoud: 0, floor: 0, t0: Date.now(),
-                // The stream: mode "clip" (none, or it broke) / "opening" /
-                // "stream"; blocks + queued = the audio it has not answered
-                // yet; busy = a request in flight (never two); pend = settled
-                // words not in the box yet; lead = the words before a clip
-                // that took over; words = the caption shows words.
-                mode: "clip", sid: "", queued: 0, loudQueued: false, busy: false, opening: false,
-                req: null, ending: false, dead: false, pend: "", partial: "", lead: "", words: false };
+      if (!ctx || !ctx.createScriptProcessor || !ctx.createMediaStreamSource) return false;
+      g.ctx = ctx;
+      g.rate = ctx.sampleRate;
+      g.t0 = Date.now();
       try {
         g.source = ctx.createMediaStreamSource(s);
         g.proc = ctx.createScriptProcessor(4096, 1, 1);
@@ -3267,7 +3363,7 @@
         g.source.connect(g.proc);
         g.proc.connect(g.mute);
         g.mute.connect(ctx.destination);
-      } catch (e) { recStop(g); return null; }
+      } catch (e) { recStop(g); return false; }
       g.proc.onaudioprocess = function (ev) {
         if (token !== mine || rec !== g) return;
         // The engine reuses the input buffer between callbacks: copy it.
@@ -3283,12 +3379,26 @@
         // speech is well above it.
         g.floor = g.floor === 0 ? rms : Math.min(rms, g.floor * 1.05 + 0.001);
         var loud = rms > Math.max(VOICE_RMS_SPEECH, g.floor * 3);
+        if (loud && !g.heard) {
+          // The phrase's first word: the trace, and the tick (h.onSpeech).
+          voiceTraceMark(g, "speech");
+          if (h.onSpeech) h.onSpeech();
+          if (token !== mine || rec !== g) return;
+        }
         if (loud) { g.heard = true; g.lastLoud = now; g.loudQueued = true; }
-        if (h.onLevel) h.onLevel(Math.min(1, rms * 4));
+        // Before the first word a stream holds only the last VOICE_LEAD_MS
+        // (the word's soft start, under the detector): no quiet is uploaded,
+        // and the first chunk goes the moment speech starts.
+        while (!g.heard && g.mode !== "clip" && g.blocks.length > 1 &&
+               (g.queued - g.blocks[0].length) * 1000 >= g.rate * VOICE_LEAD_MS) {
+          g.queued -= g.blocks.shift().length;
+        }
+        if (h.onLevel) h.onLevel(voiceLevelOf(rms, g.floor));
+        recStatus(g, h);
         if (g.heard && now - g.lastLoud > VOICE_SILENCE_MS) finish();
         else if (g.mode === "stream") streamPump(g, mine);
       };
-      return g;
+      return true;
     }
     function recStop(g) {
       clearInterval(clockTimer);
@@ -3310,18 +3420,26 @@
         return true;
       }
       var capMs = Math.min(streams() ? VOICE_STREAM_MAX_MS : VOICE_CLIP_MAX_MS, remaining);
+      // The stream opens now, alongside getUserMedia: its round trip
+      // overlaps the microphone's start-up and the first syllable.
+      var g = recNew();
+      if (streams()) streamOpen(g, mine);
       getStream().then(function (s) {
-        if (token !== mine) return;
-        var g = recStart(s, mine, h);
-        if (!g) { token = null; if (h.onError) h.onError("start-failed"); return; }
+        if (token !== mine) { if (!token) keep(); return; }   // stopped while the mic came up: its grace starts now
+        voiceTraceMark(g, "mic");
+        if (!recStart(g, s, mine, h)) {
+          token = null;
+          streamDrop(g);
+          live = null;
+          if (h.onError) h.onError("start-failed");
+          return;
+        }
         rec = g;
         voice.rec.mime = "audio/wav";
-        if (streams()) streamOpen(g, mine);
-        if (h.onStatus) h.onStatus("Listening…");
+        if (h.onStatus) { g.said = "Listening…"; h.onStatus(g.said); }
         clockTimer = setInterval(function () {
           if (token !== mine || rec !== g) { clearInterval(clockTimer); return; }
-          // Once the stream shows words, the caption is theirs.
-          if (h.onStatus && !g.words) h.onStatus("Listening… " + Math.round((Date.now() - g.t0) / 1000) + " s");
+          recStatus(g, h);
         }, VOICE_LEVEL_MS);
         capTimer = setTimeout(function () {
           if (token !== mine) return;
@@ -3333,6 +3451,8 @@
       }).catch(function (err) {
         if (token !== mine) return;
         token = null;
+        streamDrop(g);
+        live = null;
         if (h.onError) h.onError(errCode(err));
       });
       return true;
@@ -3347,6 +3467,7 @@
       rec = null;
       clearTimeout(capTimer);
       recStop(g);
+      keep();
       if (mine.h.onLevel) mine.h.onLevel(null);
       if (!g.frames) {
         token = null;
@@ -3451,7 +3572,7 @@
         g.busy = g.opening = false;
         var id = x.r.ok && x.j.id ? String(x.j.id) : "";
         if (g.dead) { streamDelete(id); return; }
-        if (id) { g.sid = id; g.mode = "stream"; streamPump(g, mine); return; }
+        if (id) { g.sid = id; g.mode = "stream"; voiceTraceMark(g, "open"); streamPump(g, mine); return; }
         // 409: this server does not stream after all — a clip per phrase
         // until GET /api/voice says otherwise.
         if (x.r.status === 409 && voice.cfg.server_ready) voice.cfg.server_ready.stt_stream = false;
@@ -3464,26 +3585,31 @@
     // The next request, when one is due and none is in flight: a chunk once
     // VOICE_STREAM_CHUNK_MS of new audio is in; once the phrase has ended,
     // the rest (when it holds speech — after the silence stop it is the
-    // quiet), then /end.
+    // quiet), then /end. Nothing goes before the first word; the first
+    // chunk goes on it (the lead-in recStart kept, VOICE_LEAD_MS, and the
+    // loud block — short of the minimum only when the mic has just opened).
     function streamPump(g, mine) {
       if (g.dead || token !== mine || g.mode !== "stream" || g.busy) return;
       if (g.ending) {
         if (g.queued && g.loudQueued) streamChunk(g, mine); else streamEnd(g, mine);
         return;
       }
-      if (g.queued * 1000 >= g.rate * VOICE_STREAM_CHUNK_MS) streamChunk(g, mine);
+      if (g.heard && (!g.chunks || g.queued * 1000 >= g.rate * VOICE_STREAM_CHUNK_MS)) streamChunk(g, mine);
     }
     // The samples since the last cut, as a 16 kHz WAV (resampled as a clip
-    // is; a rest shorter than the server's minimum padded with silence).
+    // is; one shorter than the server's minimum padded with silence — the
+    // first chunk BEFORE its audio, where the quiet was, the rest after).
     function streamChunk(g, mine) {
       var n = g.blocks.length, frames = g.queued, all = new Float32Array(frames), at = 0, t0 = Date.now();
       for (var i = 0; i < n; i++) { all.set(g.blocks[i], at); at += g.blocks[i].length; }
+      var first = !g.chunks;
+      g.chunks++;
       g.busy = true;
       g.loudQueued = false;
       voiceResampleClip(all, g.rate).then(function (pcm) {
         if (g.dead) return null;
         var min = Math.ceil((VOICE_WAV_RATE * VOICE_STREAM_CHUNK_MS) / 1000);
-        if (pcm.length < min) { var pad = new Float32Array(min); pad.set(pcm); pcm = pad; }
+        if (pcm.length < min) { var pad = new Float32Array(min); pad.set(pcm, first ? min - pcm.length : 0); pcm = pad; }
         return streamReq(g, streamUrl(g.sid, "chunk"), {
           method: "POST",
           headers: { "Content-Type": "audio/wav" },
@@ -3509,6 +3635,7 @@
     // (voiceStreamSplit); what is held and the unstable tail, the caption.
     function streamWords(g, mine, committed, partial) {
       var h = mine.h;
+      if (String(committed || "").trim()) voiceTraceMark(g, "settled");
       g.pend = voiceJoin(g.pend, committed);
       g.partial = String(partial || "").trim();
       // A stop phrase acts the moment it settles, mid-phrase or not.
@@ -3527,8 +3654,14 @@
           if (g.dead || token !== mine) return;
         }
       }
+      // The settled-but-held words, then the partial (shown greyed: it may
+      // still change) — from the first chunk's answer on.
       var shown = voiceJoin(g.pend, g.partial);
-      if (shown) { g.words = true; if (h.onInterim) h.onInterim(shown); }
+      if (shown) {
+        g.words = true;
+        voiceTraceMark(g, "words");
+        if (h.onInterim) h.onInterim(shown, g.partial);
+      }
     }
     // The phrase is over: /end flushes the words the stream still holds.
     function streamEnd(g, mine) {
@@ -3588,21 +3721,26 @@
       streamDrop(live);
       live = null;
       if (uploading) { uploading = false; if (aborter) { try { aborter.abort(); } catch (e) {} } aborter = null; }
+      keep();
     }
     // stop(): drop whatever is going on — the clip, the upload, the stream —
-    // and report nothing. The microphone stays for the next turn.
+    // and report nothing. The microphone stays warm for the next turn (keep()).
     function stop() { discard(); }
-    // release(): stop() and give the microphone back (voice off, page hidden).
-    function release() {
+    // release(): stop() and give the microphone back (voice off); with ms
+    // (the page hid), give it back that long from now unless it is used again.
+    function release(ms) {
       discard();
+      if (ms > 0) { keep(ms, true); return; }
+      clearTimeout(keepTimer);
       var s = stream;
       stream = null;
-      if (s) { try { s.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} }
+      micStop(s);
     }
     function active() { return !!token; }
     function pending() { return uploading; }
+    function warm() { return !!stream; }
     return { name: "server", available: available, start: start, stop: stop, finish: finish,
-             active: active, pending: pending, release: release };
+             active: active, pending: pending, release: release, warm: warm };
   }
 
   // --- ServerTTS: POST /api/voice/speak → Web Audio --------------------------
@@ -3815,7 +3953,9 @@
     cfg: { stt: "phone", tts: "phone", approve_dialogs: true, loaded: false,
            server_ready: {}, backends: { stt: [], tts: [] }, system: null },
     audioCtx: null,              // the page's one AudioContext (voiceAudioCtx)
-    rec: { mime: "", last: null, lastSpeak: null, resampler: "", chunk: null },   // Diagnostics: recorder type, last transcribe / speak, resampler, last stream chunk
+    rec: { mime: "", last: null, lastSpeak: null, resampler: "", chunk: null, trace: null },   // Diagnostics: recorder type, last transcribe / speak, resampler, last stream chunk, last start-up trace
+    keepMs: VOICE_KEEP_STREAM_MS,   // how long the server recognizer keeps the microphone warm (tests shorten it)
+    buzzAt: 0,                   // the last haptic cue (the listening buzz, the first-word tick)
     sttHinted: false,            // "server recognition isn't ready" said once
     saved: null,                 // {session, on} from localStorage, for "Tap to resume voice"
     lastSay: { text: "", ts: 0 }, // never speak the same say twice
@@ -3848,6 +3988,8 @@
   var voiceAdapters = { phoneStt: voice.stt, phoneTts: voice.tts, serverStt: null, serverTts: null };
   voiceAdapters.serverStt = ServerSTT();
   voiceAdapters.serverTts = ServerTTS(voice.tts);
+  voice.levelOf = voiceLevelOf;       // the ring's math, pure (tests call it)
+  voice.levelStep = voiceLevelStep;
   window.mfVoice = voice;
 
   // --- persistence (per browser; nothing else is stored) --------------------
@@ -3904,7 +4046,22 @@
     fitSoon();   // the strip takes terminal rows
     askVoiceMirror();
   }
-  function voiceCaption(text) { voiceCaptionEl.textContent = text || ""; askVoiceMirror(); }
+  // tail: the end of text still settling (a stream's partial) — greyed
+  // after the settled words; the caption's text is the whole either way.
+  function voiceCaption(text, tail) {
+    text = text || "";
+    tail = tail ? String(tail) : "";
+    if (!tail || text.length < tail.length || text.slice(text.length - tail.length) !== tail) {
+      voiceCaptionEl.textContent = text;
+    } else {
+      voiceCaptionEl.textContent = text.slice(0, text.length - tail.length);
+      var span = document.createElement("span");
+      span.className = "voice-partial";
+      span.textContent = tail;
+      voiceCaptionEl.appendChild(span);
+    }
+    askVoiceMirror();
+  }
   function voiceError(msg) {
     voice.lastError = msg || "";
     voiceErrEl.textContent = msg || "";
@@ -3920,16 +4077,57 @@
   // The gesture, named: what starts talking, and what ends it (keeping the words).
   function voiceTalkHint() { return voice.prefs.ptt === "hold" ? "Hold the mic to talk" : "Tap to talk"; }
   function voiceDictHint() { return voiceListen_.held ? VOICE_HINT_HOLD : VOICE_HINT_TAP; }
-  // The level meter under the strip while a clip records (the server adapter
-  // has no interim words to show); null hides it.
+  // The level meter under the strip and the ring round the mic (the ask
+  // sheet's too) while the server adapter records: v is the latest block's
+  // level (voiceLevelOf, 0..1); null hides the meter and drops the ring.
+  // A requestAnimationFrame loop eases the shown level toward it
+  // (voiceLevelStep) and writes one CSS variable, --lvl, which the CSS turns
+  // into transforms — no layout. It runs only while there is a level to show.
+  var voiceRing = { shown: 0, target: 0, at: 0, raf: 0, painted: "", hearing: false };
   function voiceLevel(v) {
+    var R = voiceRing;
     if (v === null || v === undefined || v < 0) {
       if (!voiceLevelEl.classList.contains("hidden")) { voiceLevelEl.classList.add("hidden"); fitSoon(); }
-      voiceLevelBar.style.width = "0%";
+      if (R.raf) { cancelAnimationFrame(R.raf); R.raf = 0; }
+      R.shown = R.target = 0;
+      voiceRingPaint(0);
       return;
     }
     if (voiceLevelEl.classList.contains("hidden")) { voiceLevelEl.classList.remove("hidden"); fitSoon(); }
-    voiceLevelBar.style.width = (Math.min(1, Math.max(0, Number(v) || 0)) * 100).toFixed(0) + "%";
+    R.target = Math.min(1, Math.max(0, Number(v) || 0));
+    if (!R.raf && window.requestAnimationFrame) { R.at = Date.now(); R.raf = requestAnimationFrame(voiceRingFrame); }
+  }
+  function voiceRingFrame() {
+    var R = voiceRing, now = Date.now();
+    R.raf = 0;
+    R.shown = voiceLevelStep(R.shown, R.target, now - R.at);
+    R.at = now;
+    if (R.shown < 0.005 && R.target === 0) R.shown = 0;
+    voiceRingPaint(R.shown);
+    if (R.shown > 0 || R.target > 0) R.raf = requestAnimationFrame(voiceRingFrame);
+  }
+  // --lvl on the mic, the ask sheet's mic and the meter (the bar inherits
+  // it); data-hearing while the level shows a voice (the CSS stops the
+  // "waiting" pulse then). Written only when it changes.
+  function voiceRingPaint(v) {
+    var R = voiceRing, s = v.toFixed(2), hearing = v >= 0.05;
+    if (s !== R.painted) {
+      R.painted = s;
+      [voiceBtn, voiceLevelEl, askMicBtn].forEach(function (el) { if (el) el.style.setProperty("--lvl", s); });
+    }
+    if (hearing !== R.hearing) {
+      R.hearing = hearing;
+      [voiceBtn, askMicBtn].forEach(function (el) { if (el) el.toggleAttribute("data-hearing", hearing); });
+    }
+  }
+  // A phrase's first word (the server adapter's onSpeech): a short tick on
+  // Android — not when the listening buzz has just gone (two in a row read
+  // as one long buzz, and that one already said "go").
+  var VOICE_TICK_GAP_MS = 700;
+  function voiceSpeechTick() {
+    if (!ANDROID || !navigator.vibrate || Date.now() - voice.buzzAt < VOICE_TICK_GAP_MS) return;
+    voice.buzzAt = Date.now();
+    try { navigator.vibrate(12); } catch (e) {}
   }
   // The tap on the mic or the strip while a DIALOG is listening: a clip being
   // recorded is finished and transcribed first (its words count), then
@@ -4061,7 +4259,7 @@
       voiceIdle();
       return;
     }
-    if (ANDROID && navigator.vibrate) { try { navigator.vibrate(30); } catch (e) {} }
+    if (ANDROID && navigator.vibrate) { voice.buzzAt = Date.now(); try { navigator.vibrate(30); } catch (e) {} }
     voiceRecStart();
     // A recognizer that never ends is still bound by the window — but a clip
     // on its way to the server is not expired: its words are coming. The
@@ -4087,9 +4285,10 @@
       // the stream holds back what may start one. Not into the ask sheet's
       // field: there every word is the answer, sent on "submit".
       answers: function () { return !voice.box && !!voiceAsks(voice.session); },
-      onInterim: function (t) { if (voiceIsListening()) { voiceHeardSome(); voiceCaption(t || voiceDictHint()); } },
+      onInterim: function (t, tail) { if (voiceIsListening()) { voiceHeardSome(); voiceCaption(t || voiceDictHint(), t ? tail : ""); } },
       onStatus: function (t) { if (voiceIsListening()) voiceCaption(mode === "dialog" ? t : t + " · " + voiceDictHint()); },
       onLevel: function (v) { voiceLevel(voiceIsListening() ? v : null); },
+      onSpeech: function () { if (voiceIsListening()) voiceSpeechTick(); },
       onFinal: function (t) { if (voiceIsListening()) { voiceHeardSome(); voiceHeard(t, mode); } },
       onError: function (code, detail) {
         if (!voiceIsListening()) return;
@@ -5383,10 +5582,12 @@
     }
     safariAltEl.classList.toggle("hidden", voice.cfg.stt === "server");
   }
-  // Give the microphone back: every adapter that may hold it.
-  function voiceSttRelease() {
+  // Give the microphone back: every adapter that may hold it — now, or (ms:
+  // the page hid) the server recognizer's warm stream in ms unless it is
+  // used again first.
+  function voiceSttRelease(ms) {
     var A = voiceAdapters;
-    [A.phoneStt, A.serverStt].forEach(function (a) { if (a && a.release) a.release(); });
+    [A.phoneStt, A.serverStt].forEach(function (a) { if (a && a.release) a.release(ms); });
   }
   function voiceWakeLock() {
     if (!navigator.wakeLock || voice.wake || document.hidden) return;
@@ -5548,7 +5749,7 @@
   voiceCancelBtn.addEventListener("click", voiceCancelTap);
   // The strip is the mic's big twin: a tap there while listening stops too.
   voiceStrip.addEventListener("click", function (ev) {
-    if (ev.target === voiceStrip || ev.target === voiceStateEl || ev.target === voiceCaptionEl ||
+    if (ev.target === voiceStrip || ev.target === voiceStateEl || voiceCaptionEl.contains(ev.target) ||
         ev.target === voiceLevelEl || ev.target === voiceLevelBar) {
       if (voiceIsListening()) voiceListenOver();
     }
@@ -5624,7 +5825,8 @@
     if (document.hidden) {
       clearTimeout(voiceListen_.timer);
       voice.stt.stop();
-      voiceSttRelease();
+      // A quick look elsewhere comes back to a warm mic; a long one does not.
+      voiceSttRelease(VOICE_KEEP_HIDDEN_MS);
       voice.tts.cancel();
       voiceSpeakSeq++;
       voiceAckStop();
@@ -5754,6 +5956,9 @@
           ? "OfflineAudioContext (the browser's), no clip yet" : "low-pass decimator (no OfflineAudioContext)")),
       "Silence stop: " + VOICE_SILENCE_MS + " ms after speech (clip cap " + VOICE_CLIP_MAX_MS / 1000 + " s)",
       voice.cfg.stt === "server" ? "Recognition stream: " + voiceDiagStream() : "",
+      voice.cfg.stt === "server" ? "Microphone: " + (voiceAdapters.serverStt.warm()
+        ? "warm (kept " + Math.round(voice.keepMs / 1000) + " s after the last phrase)" : "not held") : "",
+      voice.rec.trace ? "Last start: " + voiceDiagTrace(voice.rec.trace) : "",
       "AudioContext: " + (voice.audioCtx ? String(voice.audioCtx.state)
         : (window.AudioContext || window.webkitAudioContext) ? "not created — the server adapters make it on a tap" : "not supported"),
       "Last transcribe: " + voiceDiagLast(voice.rec.last),
@@ -5788,6 +5993,13 @@
       : c.error ? "last chunk failed — " + c.error
       : "last chunk " + c.ms + " ms" + (c.audio ? ", " + c.audio.toFixed(1) + " s of audio" : "");
     return ready.stt_stream ? "words as you speak (" + last + ")" : "one clip per phrase" + (c ? " (" + last + ")" : "");
+  }
+  // "mic 3 ms, stream open 41 ms, speech 420 ms, words 610 ms, settled 905 ms after the start"
+  function voiceDiagTrace(t) {
+    var names = { mic: "mic", open: "stream open", speech: "speech", words: "words", settled: "settled" };
+    var parts = ["mic", "open", "speech", "words", "settled"].filter(function (k) { return k in t; })
+      .map(function (k) { return names[k] + " " + t[k] + " ms"; });
+    return parts.length ? parts.join(", ") + " after the start" : "nothing yet";
   }
   function voiceDiagLast(x) {
     if (!x) return "none yet";
