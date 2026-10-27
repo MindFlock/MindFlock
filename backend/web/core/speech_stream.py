@@ -26,6 +26,19 @@ appended to a window with no uncommitted tail, runs no pass (``last_ms`` is
 0) — there is nothing for a pass to settle and nothing new to hear. The
 audio is kept, so a soft start of speech is decoded with the next chunk.
 
+Two tiers. The passes above run the FAST model (``base.en``): they are what
+the client types as the person speaks. A stream opened with an
+``accurate(audio)`` callable as well (``LocalSTT.final_transcriber``: the
+one-shot ``small``, ``voice.stt_final``) keeps the whole phrase's audio
+beside the window — at most :data:`PHRASE_MAX_SECONDS`, the last of it
+beyond that — and :meth:`Stream.finish` decodes all of it once more with the
+accurate model: ``final`` is the text the client replaces its typed phrase
+with (``same`` when it only differs from the fast words in case, spacing or
+punctuation). The accurate pass is skipped for a phrase with less than
+:data:`FINAL_MIN_SECONDS` of speech and for one longer than the buffer (the
+final would not cover what was typed); one that fails or takes longer than
+:data:`FINAL_TIMEOUT_S` leaves the fast text standing.
+
 Pure: a stream is built on a ``transcribe(audio, prompt)`` callable
 (``core.speech.LocalSTT.stream_transcriber`` in the server, a scripted fake
 in tests) that takes the float32 samples at 16 kHz (an ``array('f')``) and
@@ -43,6 +56,7 @@ thread per stream). Tests replace :func:`_now` (the clock).
 from __future__ import annotations
 
 import io
+import logging
 import secrets
 import sys
 import threading
@@ -53,7 +67,10 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 __all__ = [
     "EXPIRE_SECONDS",
+    "FINAL_MIN_SECONDS",
+    "FINAL_TIMEOUT_S",
     "MAX_STREAMS",
+    "PHRASE_MAX_SECONDS",
     "RATE",
     "SILENCE_RMS",
     "Stream",
@@ -63,8 +80,11 @@ __all__ = [
     "decode_wav",
     "get_stream",
     "open_stream",
+    "same_text",
     "sweep",
 ]
+
+_logger = logging.getLogger(__name__)
 
 #: The sample rate of everything a stream holds (Whisper's).
 RATE = 16000
@@ -89,6 +109,17 @@ _OVERLAP_SECONDS = 0.1
 #: How many trailing committed words a pass's opening words are matched to.
 _NGRAM = 5
 
+#: The phrase audio a stream keeps for the accurate pass; a longer phrase
+#: keeps its last this-many seconds and skips the pass.
+PHRASE_MAX_SECONDS = 60.0
+#: A phrase with less speech than this (seconds of 100 ms frames louder than
+#: :data:`SILENCE_RMS`) skips the accurate pass: nothing to gain.
+FINAL_MIN_SECONDS = 0.6
+#: The accurate pass's deadline; past it the fast text stands.
+FINAL_TIMEOUT_S = 6.0
+#: The frame the speech in a chunk is counted in (100 ms).
+_FRAME = RATE // 10
+
 #: Open streams per server (``POST /api/voice/stream`` refuses beyond).
 MAX_STREAMS = 4
 #: A stream is forgotten this long after its last chunk.
@@ -96,6 +127,7 @@ EXPIRE_SECONDS = 60.0
 
 Word = Tuple[str, float, float]
 Transcribe = Callable[[array, str], Sequence[Tuple[str, float, float]]]
+Accurate = Callable[[array], str]
 
 
 def _now() -> float:
@@ -122,15 +154,45 @@ def _quiet(samples: Sequence[float]) -> bool:
     return sum(x * x for x in samples) / n < SILENCE_RMS * SILENCE_RMS
 
 
+def _voiced(samples: Sequence[float]) -> float:
+    """The seconds of ``samples`` in 100 ms frames that are not quiet."""
+    loud = 0
+    for i in range(0, len(samples), _FRAME):
+        frame = samples[i : i + _FRAME]
+        if not _quiet(frame):
+            loud += len(frame)
+    return loud / RATE
+
+
+def _plain(text: str) -> List[str]:
+    return "".join(
+        ch for ch in str(text or "").lower() if ch.isalnum() or ch.isspace()
+    ).split()
+
+
+def same_text(a: str, b: str) -> bool:
+    """Whether two transcripts are the same words: compared lower-cased,
+    punctuation dropped, whitespace collapsed."""
+    return _plain(a) == _plain(b)
+
+
 class Stream:
     """One live recognition: see the module doc for the policy. Thread-safe —
     one pass at a time (a chunk that arrives during a pass waits, then gets
     the state after its own pass)."""
 
-    def __init__(self, transcribe: Transcribe):
+    def __init__(self, transcribe: Transcribe, accurate: Optional[Accurate] = None):
         self._transcribe = transcribe
+        self._accurate = accurate
         self._lock = threading.Lock()
         self._audio = array("f")
+        self._phrase = array("f")  # the whole phrase, for the accurate pass
+        #: The phrase outgrew :data:`PHRASE_MAX_SECONDS` (no accurate pass).
+        self.phrase_trimmed = False
+        #: Seconds of speech in the phrase (see :data:`FINAL_MIN_SECONDS`).
+        self.voiced_s = 0.0
+        #: How long the accurate pass took (0 when it did not run).
+        self.final_ms = 0
         self._offset = 0.0  # stream seconds before _audio[0]
         self._committed: List[Word] = []  # stream-absolute times
         self._tail: List[Word] = []  # the last pass's uncommitted words
@@ -150,6 +212,11 @@ class Stream:
         return len(self._audio) / RATE
 
     @property
+    def phrase_seconds(self) -> float:
+        """The phrase audio kept for the accurate pass, in seconds."""
+        return len(self._phrase) / RATE
+
+    @property
     def text(self) -> str:
         """Everything committed so far."""
         return _join(self._committed)
@@ -164,6 +231,7 @@ class Stream:
             self.touched = _now()
             quiet = _quiet(samples)
             self._audio.extend(samples)
+            self._keep(samples)
             self.last_ms, self.last_window_s = 0, 0.0
             if not self._audio:
                 return "", ""
@@ -185,9 +253,14 @@ class Stream:
             self.touched = _now()
             return self._pay(new), _join(self._tail)
 
-    def finish(self) -> str:
-        """One last pass over what the window holds, all of it committed →
-        the words not committed before (``""`` when there is no audio)."""
+    def finish(self) -> dict:
+        """End the phrase → ``{"committed": the fast words not committed
+        before, "partial": ""}`` after one last fast pass over the window,
+        all of it committed; plus ``"final"`` (the accurate pass's text of
+        the whole phrase), ``"final_ms"`` and ``"same"`` (``final`` is the
+        fast text up to :func:`same_text`) when the accurate pass ran and
+        heard words (see the module doc for when it does not). A failed fast
+        pass raises, as in :meth:`feed`; a failed accurate one is logged."""
         with self._lock:
             self.touched = _now()
             self._cap()
@@ -196,9 +269,68 @@ class Stream:
             self._tail = []
             self._offset += self.held_seconds
             self._audio = array("f")
-            return self._pay(rest)
+            out: dict = {"committed": self._pay(rest), "partial": ""}
+            fast, phrase = self.text, self._phrase
+            self._phrase = array("f")
+            run = self._accurate is not None and phrase
+            run = run and not self.phrase_trimmed
+            run = run and self.voiced_s >= FINAL_MIN_SECONDS
+        final = self._final(phrase) if run else ""
+        if final:
+            out.update(final=final, final_ms=self.final_ms, same=same_text(final, fast))
+        return out
 
     # -- internals (called under the lock) -------------------------------- #
+    def _keep(self, samples: Sequence[float]) -> None:
+        """Add a chunk to the phrase buffer, at most its last
+        :data:`PHRASE_MAX_SECONDS`."""
+        if self._accurate is None:
+            return
+        self._phrase.extend(samples)
+        self.voiced_s += _voiced(samples)
+        drop = len(self._phrase) - int(PHRASE_MAX_SECONDS * RATE)
+        if drop > 0:
+            del self._phrase[:drop]
+            if not self.phrase_trimmed:
+                _logger.info(
+                    "voice stream: phrase over %ds, no accurate pass at its end",
+                    PHRASE_MAX_SECONDS,
+                )
+            self.phrase_trimmed = True
+
+    def _final(self, phrase: array) -> str:
+        """The accurate pass over ``phrase`` on its own daemon thread, at
+        most :data:`FINAL_TIMEOUT_S` → its text, ``""`` when it failed or
+        timed out (logged; a late result is dropped). Not under the lock."""
+        box: dict = {}
+
+        def run() -> None:
+            try:
+                box["text"] = self._accurate(phrase)  # type: ignore[misc]
+            except Exception as err:  # noqa: BLE001 — the fast text stands
+                box["error"] = err
+
+        started = time.monotonic()
+        worker = threading.Thread(target=run, name="voice-final", daemon=True)
+        worker.start()
+        worker.join(FINAL_TIMEOUT_S)
+        self.final_ms = int((time.monotonic() - started) * 1000)
+        if worker.is_alive():
+            _logger.warning(
+                "voice stream: the accurate pass took over %.1fs on %.1fs of"
+                " audio; the fast text stands",
+                FINAL_TIMEOUT_S,
+                len(phrase) / RATE,
+            )
+            return ""
+        if "error" in box:
+            _logger.warning(
+                "voice stream: the accurate pass failed (%s); the fast text stands",
+                box["error"],
+            )
+            return ""
+        return str(box.get("text") or "").strip()
+
     def _prompt(self) -> str:
         text = self.text
         if len(text) <= PROMPT_CHARS:
@@ -329,14 +461,17 @@ def sweep(now: Optional[float] = None) -> List[str]:
     return dropped
 
 
-def open_stream(transcribe: Transcribe) -> Optional[str]:
-    """A new stream's opaque id, or ``None`` at :data:`MAX_STREAMS`."""
+def open_stream(
+    transcribe: Transcribe, accurate: Optional[Accurate] = None
+) -> Optional[str]:
+    """A new stream's opaque id, or ``None`` at :data:`MAX_STREAMS`;
+    ``accurate`` adds the accurate pass at its end (see the module doc)."""
     with _REG_LOCK:
         sweep()
         if len(_STREAMS) >= MAX_STREAMS:
             return None
         sid = secrets.token_urlsafe(18)
-        _STREAMS[sid] = Stream(transcribe)
+        _STREAMS[sid] = Stream(transcribe, accurate)
         _arm_timer()
         return sid
 

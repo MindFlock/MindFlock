@@ -604,6 +604,56 @@ class TestStream:
         body = _chunk(sid).json()
         assert body["partial"] == "hi" and body["window_s"] == 1.0
 
+    def test_end_adds_the_accurate_final(self, streaming):
+        heard: list = []
+
+        def final_transcriber(lang=""):
+            heard.append(("open", lang))
+
+            def run(audio):
+                heard.append(("final", len(audio)))
+                return "Run the tests."
+
+            return run
+
+        streaming.final_transcriber = final_transcriber
+        sid = _open("en-GB").json()["id"]
+        assert heard == [("open", "en-GB")]
+        streaming.passes += [_words("run the tick")] * 3
+        _chunk(sid)
+        _chunk(sid)
+        r = client.post("/api/voice/stream/%s/end" % sid)
+        assert r.status_code == 200
+        body = r.json()
+        assert set(body) == {"committed", "partial", "final", "final_ms", "same"}
+        assert body["committed"] == "" and body["partial"] == ""
+        assert body["final"] == "Run the tests."
+        assert body["same"] is False and isinstance(body["final_ms"], int)
+        # The whole phrase: both chunks.
+        assert heard[-1] == ("final", 16000)
+
+    def test_end_says_same_when_the_final_agrees(self, streaming):
+        streaming.final_transcriber = lambda lang="": lambda audio: "Hello, world."
+        sid = _open().json()["id"]
+        streaming.passes += [_words("hello world")] * 3
+        _chunk(sid)
+        _chunk(sid)
+        body = client.post("/api/voice/stream/%s/end" % sid).json()
+        assert body["final"] == "Hello, world." and body["same"] is True
+
+    def test_a_failed_final_leaves_the_fast_body(self, streaming):
+        def boom(audio):
+            raise speech.SpeechError("faster-whisper failed: boom")
+
+        streaming.final_transcriber = lambda lang="": boom
+        sid = _open().json()["id"]
+        streaming.passes += [_words("hello")] * 3
+        _chunk(sid)
+        _chunk(sid)
+        r = client.post("/api/voice/stream/%s/end" % sid)
+        assert r.status_code == 200
+        assert r.json() == {"committed": "", "partial": ""}
+
     def test_delete_abandons(self, streaming):
         sid = _open().json()["id"]
         r = client.delete("/api/voice/stream/" + sid)
@@ -758,6 +808,21 @@ class TestWake:
         assert fakes.stt.calls[-1][3:] == ("en", "MindFlock")
         assert self._wake(fakes, "MindFlock is great").json()["wake"] is False
         assert self._wake(fakes, "").json()["wake"] is False
+
+    def test_the_wake_check_takes_the_fast_path(self, fakes, monkeypatch):
+        def fast(audio, mime, lang="", word=""):
+            fakes.stt.calls.append(("wake", audio, mime, lang, word))
+            return "MindFlock"
+
+        monkeypatch.setattr(fakes.stt, "wake_transcribe", fast, raising=False)
+        body = self._wake(fakes, "unused").json()
+        assert body["wake"] is True and isinstance(body["ms"], int)
+        assert fakes.stt.calls == [
+            ("wake", b"RIFFclip", "audio/wav", "en", "MindFlock")
+        ]
+        # A phrase sent whole keeps the accurate one-shot path.
+        assert _transcribe().status_code == 200
+        assert fakes.stt.calls[-1][0] == "transcribe"
 
     def test_the_clip_rules_are_transcribes(self, fakes):
         r = client.post(

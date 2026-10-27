@@ -31,8 +31,10 @@ Status codes, in the order they are checked:
   or a WAV that is not 16 kHz mono 16-bit; 413 over
   :data:`MAX_AUDIO_BYTES`; 502 the pass failed (the chunk is kept); 200
   ``{"committed", "partial", "ms", "window_s", "audio_s"}``.
-* ``stream/{id}/end`` — 404 as above; 502; 200 ``{"committed", "partial":
-  ""}`` and the stream is gone. ``DELETE stream/{id}`` — 204, always.
+* ``stream/{id}/end`` — 404 as above; 502 the last fast pass failed; 200
+  ``{"committed", "partial": ""}`` plus ``{"final", "final_ms", "same"}``
+  when the accurate pass ran (``core.speech_stream``'s two tiers), and the
+  stream is gone. ``DELETE stream/{id}`` — 204, always.
 * ``install-local`` — ``POST`` 403 not the owner; 409 already running; 200
   the status (``core.speech_install``). ``GET`` the status, for anyone.
 """
@@ -237,7 +239,9 @@ async def _clip(request: Request):
 async def voice_wake(request: Request, lang: str = "") -> JSONResponse:
     """Is this short clip the wake word ("MindFlock") on its own? The body
     and ``Content-Type`` are exactly ``/transcribe``'s; the clip is
-    recognised with the word as the decoder's hint and judged by
+    recognised with the word as the decoder's hint — on the fast streaming
+    model where the backend has one (``Backend.wake_transcribe``) — and
+    judged by
     ``core.wake.is_wake`` (the word alone, one or two tokens, two letters of
     slack for how whisper hears a made-up word; a sentence never wakes). →
     ``{"wake": bool, "text", "word", "backend", "ms"}``; the same status
@@ -251,7 +255,7 @@ async def voice_wake(request: Request, lang: str = "") -> JSONResponse:
     started = time.monotonic()
     try:
         text = await asyncio.to_thread(
-            backend.transcribe, audio, mime, _lang_hint(lang), "MindFlock"
+            backend.wake_transcribe, audio, mime, _lang_hint(lang), "MindFlock"
         )
     except Exception as err:  # noqa: BLE001
         return _failed(err)
@@ -287,7 +291,9 @@ def voice_stream_open(payload: Optional[dict] = None) -> JSONResponse:
             },
             status_code=409,
         )
-    sid = _stream.open_stream(backend.stream_transcriber(lang))
+    sid = _stream.open_stream(
+        backend.stream_transcriber(lang), backend.final_transcriber(lang)
+    )
     if sid is None:
         return JSONResponse(
             {
@@ -347,17 +353,21 @@ async def voice_stream_chunk(sid: str, request: Request) -> JSONResponse:
 
 @router.post("/api/voice/stream/{sid}/end")
 async def voice_stream_end(sid: str) -> JSONResponse:
-    """Finish a stream: one last pass, all of it committed →
-    ``{"committed": the words not committed before, "partial": ""}``. The
-    stream is gone afterwards (404 for a second ``end``)."""
+    """Finish a stream: one last fast pass, all of it committed →
+    ``{"committed": the words not committed before, "partial": ""}``; then
+    the accurate pass over the whole phrase adds ``"final"`` (the text to
+    replace the typed phrase with), ``"final_ms"`` and ``"same"`` (``final``
+    only differs in case, spacing or punctuation) — absent when it was off,
+    skipped, failed or timed out (``core.speech_stream``). The stream is
+    gone afterwards (404 for a second ``end``)."""
     stream = _stream.close_stream(sid)
     if stream is None:
         return _no_stream()
     try:
-        rest = await asyncio.to_thread(stream.finish)
+        body = await asyncio.to_thread(stream.finish)
     except Exception as err:  # noqa: BLE001
         return _failed(err)
-    return JSONResponse({"committed": rest, "partial": ""})
+    return JSONResponse(body)
 
 
 @router.delete("/api/voice/stream/{sid}")
