@@ -2010,10 +2010,7 @@ def test_a_browser_without_a_speech_service_is_told_so_and_falls_back_to_the_ser
     assert "VOICE_NO_SPEECH_SERVICE_RE = /DuckDuckGo|Firefox|FxiOS|; wv\\)/" in js
     assert "function voiceNoSpeechService()" in js
     denied = js.split("function voiceSttDeniedText(code) {")[1].split("\n  }")[0]
-    assert (
-        'code === "service-not-allowed" || voiceNoSpeechService() || voice.micPerm === "granted"'
-        in denied
-    )
+    assert 'code === "service-not-allowed" || voiceNoSpeechService()' in denied
     assert (
         "return VOICE_NO_SERVICE_TEXT" in denied
         and "return VOICE_MIC_DENIED_TEXT" in denied
@@ -2023,10 +2020,9 @@ def test_a_browser_without_a_speech_service_is_told_so_and_falls_back_to_the_ser
         in js
     )
     assert "Microphone permission denied — allow the mic for this site." in js
-    # The permission is read when voice turns on (navigator.permissions).
-    assert 'navigator.permissions.query({ name: "microphone" })' in js
-    on = js.split("function voiceTurnOn(title, listenAfter) {")[1].split("\n  }")[0]
-    assert "voiceMicPermRead();" in on
+    # No Permissions-API query: the code and the browser decide (a query at
+    # voice start made the headless phone loop flaky).
+    assert "navigator.permissions" not in js
     # The fallback: the server's recognizer for the rest of the page, when ready.
     fb = js.split("function voiceSttFallbackToServer() {")[1].split("\n  }")[0]
     assert "if (!ready.stt || !A.serverStt.available()) return false;" in fb

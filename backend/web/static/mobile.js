@@ -2900,20 +2900,10 @@
   var VOICE_MIC_DENIED_TEXT = "Microphone permission denied — allow the mic for this site.";
   var VOICE_INSECURE_TEXT = "The microphone needs an https page: open the phone page by its https link (Settings → Your phone), not an http:// address.";
   // What the phone recognizer's "not-allowed" means: the microphone — unless
-  // it is already granted (navigator.permissions, read when voice turns on),
   // the code says the service, or this browser is known to have none.
   function voiceSttDeniedText(code) {
-    if (code === "service-not-allowed" || voiceNoSpeechService() || voice.micPerm === "granted") return VOICE_NO_SERVICE_TEXT;
+    if (code === "service-not-allowed" || voiceNoSpeechService()) return VOICE_NO_SERVICE_TEXT;
     return VOICE_MIC_DENIED_TEXT;
-  }
-  function voiceMicPermRead() {
-    try {
-      if (!navigator.permissions || !navigator.permissions.query) return;
-      navigator.permissions.query({ name: "microphone" }).then(function (st) {
-        voice.micPerm = st.state;
-        st.onchange = function () { voice.micPerm = st.state; };
-      }).catch(function () {});
-    } catch (e) {}
   }
   var VOICE_STORE = "cs_voice";          // localStorage: session, on, rate, voiceName, handsFree, ptt, replies, wake, confirm, sounds
   var VOICE_TUT_STORE = "cs_voice_tutorial";   // localStorage: "1" once How to talk's Got it was tapped
@@ -4406,7 +4396,6 @@
     buzzAt: 0,                   // the last haptic cue (the listening buzz, the first-word tick)
     sttHinted: false,            // "server recognition isn't ready" said once
     sttFallback: false,          // the phone's recognizer failed for good: the server's for this page
-    micPerm: "",                 // navigator.permissions' microphone state ("granted"…), when readable
     saved: null,                 // {session, on} from localStorage, for "Tap to resume voice"
     lastSay: { text: "", ts: 0 }, // never speak the same say twice
     asked: false,                // that say asked a question: "yes" / "no" answer it (voiceAsks)
@@ -7014,7 +7003,6 @@
   }
   function voiceTurnOn(title, listenAfter) {
     voice.session = title;
-    voiceMicPermRead();
     var inst = instByTitle(title) || {};
     // What the session last said is on the screen already: heard, not news,
     // whatever its stamp (a phone clock is not the server's): until the
