@@ -250,7 +250,7 @@
     </div>
 
     <!-- Voice sheet (the strip's ⚙): voice mode for the selected session,
-         push to talk (tap / hold), spoken replies, the wake word, hands-free, speech rate,
+         push to talk (tap / hold), spoken replies, spoken confirmations, sounds (the chimes), the wake word, hands-free, speech rate,
          the voice, the read-only approve-dialogs
          line (that setting lives in Settings → Your phone), and Diagnostics —
          what THIS phone can and cannot do, stated plainly, so a silent
@@ -276,6 +276,14 @@
             <option value="mine">Replies to what I said by voice</option>
             <option value="all">Everything — every session's finished turn, even with voice off</option>
           </select>
+        </label>
+        <label class="voice-opt">
+          <input type="checkbox" id="voice-confirm" />
+          <span>Spoken confirmations <span class="new-muted">— a short “Sent.”, “Cleared.”, “Stopped.” for what you said, even with spoken replies off</span></span>
+        </label>
+        <label class="voice-opt">
+          <input type="checkbox" id="voice-sounds" />
+          <span>Sounds <span class="new-muted">— a rising chime when the mic starts listening, a falling one when it stops</span></span>
         </label>
         <!-- The wake word (mobile.js "the wake word"): a lone "MindFlock"
              starts listening, as a tap on the mic does. -->

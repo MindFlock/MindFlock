@@ -179,7 +179,7 @@ def test_speech_queue_wiring():
     # Never a cancel of the line being said: queued, not superseded.
     assert "voice.tts.cancel()" not in speak
     pump = _whole(js, "voiceSpeechPump")
-    assert "hold: voiceIsListening()" in pump
+    assert "hold: hold," in pump and "var hold = voiceIsListening() &&" in pump
     assert "maxAge: VOICE_LINE_MAX_AGE_MS" in pump and "console.debug(" in pump
     assert "var VOICE_LINE_MAX_AGE_MS = 60000;" in js
     # A tap on the mic stops the line being said and holds the rest.
@@ -197,3 +197,89 @@ def test_speech_queue_wiring():
     assert "speakLine(voice.lastLine" in _whole(js, "voiceRunCommand")
     # Everything keeps the socket whatever voice is.
     assert 'voice.prefs.replies === "all"' in _whole(js, "voiceEventsWanted")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_nods_jump_the_queue_play_over_a_listen_and_go_stale():
+    """A spoken confirmation ("Sent.", voiceNod) queues at the FRONT — after
+    the confirmations already there, before every other line — plays even
+    while the mic listens (the listen's hold keeps every other line), and is
+    dropped once VOICE_NOD_MAX_AGE_MS (5 s) old by its turn; the switch off
+    (prefs.confirm false) or voice off says nothing."""
+    js = _js()
+    consts = "var VOICE_NOD_MAX_AGE_MS = 5000;\n"
+    script = consts + _fns("voiceQueueStep", "voiceNod") + """
+var voice = {prefs: {confirm: true}, state: "listening"};
+var voiceSpeakSeq = 0, pumps = 0;
+var voiceSpeech = {q: [{text: "reply", at: Date.now()}, {text: "other", at: Date.now()}]};
+function voiceSpeechPump() { pumps++; }
+voiceNod("Sent.");
+voiceNod("Cleared.");
+var order = voiceSpeech.q.map(function (x) { return x.text; });
+var now = voiceSpeech.q[0].at;
+function names(r) { return {next: r.next ? r.next.text : null, drop: r.drop.map(function (x) { return x.text; })}; }
+var o = {playing: false, hold: true, maxAge: 60000, nodAge: 5000};
+var out = {order: order, pumps: pumps,
+  hold: names(voiceQueueStep(voiceSpeech.q, now + 10, o)),
+  stale: names(voiceQueueStep(voiceSpeech.q, now + 6000, o)),
+  open: names(voiceQueueStep(voiceSpeech.q.slice(2), now, {playing: false, hold: false, maxAge: 60000, nodAge: 5000}))};
+voice.prefs.confirm = false;
+voiceNod("Stopped.");
+voice.prefs.confirm = true; voice.state = "off";
+voiceNod("Stopped.");
+out.after = voiceSpeech.q.length;
+console.log(JSON.stringify(out));
+"""
+    out = _run(script)
+    # Front of the queue, in the order they were made.
+    assert out["order"] == ["Sent.", "Cleared.", "reply", "other"] and out["pumps"] == 2
+    # While the mic listens: the nod plays, never the reply behind it.
+    assert out["hold"] == {"next": "Sent.", "drop": []}
+    # Older than 5 s by its turn: dropped; the reply still holds.
+    assert out["stale"] == {"next": None, "drop": ["Sent.", "Cleared."]}
+    assert out["open"] == {"next": "reply", "drop": []}
+    # Off (the switch, or voice): nothing queued.
+    assert out["after"] == 4
+
+
+def test_nod_and_listen_wiring():
+    js = _js()
+    pump = _whole(js, "voiceSpeechPump")
+    # Continuous listening holds the queue only mid-sentence; a line said
+    # while listening is said over it, the recorder deaf, never stopped.
+    assert "var hold = voiceIsListening() && (!voiceListen_.cont || mid);" in pump
+    assert "if ((line.over = voiceIsListening())) {" in pump
+    assert "voice.tts.speak(said, line.nod ? { cache: true } : undefined)" in pump
+    end = _whole(js, "voiceSpeechEnd")
+    assert "voice.micMuteUntil = Date.now() + VOICE_NOD_MUTE_MS;" in end
+    assert "var VOICE_NOD_MUTE_MS = 150;" in js
+    muted = _whole(js, "voiceMicMuted")
+    assert "!!(p && p.over)" in muted
+    assert "if (voiceMicMuted()) {" in js  # the recorder's block handler
+    # The five lines, fired where they belong.
+    assert 'voiceNod("Cleared.");' in _whole(js, "voiceHeard")
+    assert 'voiceNod("Stopped.");' in _whole(js, "voiceStopPhrase")
+    assert 'voiceNod("Sent.");' in _whole(js, "voiceSendOn")
+    words = _whole(js, "voiceHeardWords")
+    assert (
+        '"Sent. Over and out." : "Sent."' in words
+        and 'voiceNod("Over and out.")' in words
+    )
+    # A reply in continuous listening is said, not held; nothing after it stops the listen.
+    assert '(voice.state === "listening" && !voiceListen_.cont)' in _whole(
+        js, "voiceReply"
+    )
+    assert "if (voiceIsListening() && voiceListen_.cont) return;" in _whole(
+        js, "voiceAfterReply"
+    )
+    # The chimes: every start, every stop, held while a line is said, off with Sounds.
+    chime = _whole(js, "voiceChime")
+    assert (
+        "voice.prefs.sounds === false" in chime
+        and "if (p && !p.nod) { voice.chimeWait = kind; return false; }" in chime
+    )
+    assert 'if (!voiceIsListening() && !L.woke) voiceChime("start");' in _whole(
+        js, "voiceListen"
+    )
+    assert 'voiceChime("stop");' in _whole(js, "voiceSetState")
+    assert "voiceChimeFlush();" in _whole(js, "voiceSpeechEnd")

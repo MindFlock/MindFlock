@@ -239,11 +239,11 @@ def test_mobile_js_a_network_error_is_said_not_retried_in_silence():
     assert "L.netErrs = 0;" in _fn(js, "voiceListen")
 
 
-def test_mobile_js_radio_rules_over_submit_and_disregard():
+def test_mobile_js_radio_rules_over_and_disregard():
     """Dictation is radio-style: every phrase lands in the compose box and
-    listening goes on across pauses; a trailing "over" stops listening with
-    the words left in the box (nothing sent), a trailing "submit" sends the
-    box, a trailing "disregard" empties it and listens on; Cancel drops the
+    listening goes on across pauses; a trailing "over" sends the box (with
+    the phrase's words), a trailing "disregard" empties it and listens on,
+    "submit" is a word (retired as a radio word); Cancel drops the
     words, VOICE_DICT_IDLE_MS of silence stops with them kept, never sent,
     and there is no countdown anywhere. Commands are commands only while the
     box is empty; a dialog answer needs no "over"."""
@@ -253,17 +253,67 @@ def test_mobile_js_radio_rules_over_submit_and_disregard():
     assert "var p = voiceDictParse(text);" in heard
     assert 'p.kind === "disregard"' in heard and 'vbox().value = "";' in heard
     words = _fn(js, "voiceHeardWords")
-    # "submit" sends (an empty box: says so and listens on); "over" keeps.
-    submit = words.split('if (p.kind === "submit") {')[1].split("\n    }\n")[0]
-    assert "if (vbox().value.trim()) { voiceSend(vbox().value); return; }" in submit
-    assert 'voiceCaption("Nothing to send yet");' in submit
-    over = words.split('if (p.kind === "over") {')[1].split("\n    }\n")[0]
-    assert "voiceListenKept();" in over and "voiceSend" not in over
-    assert words.count("voiceSend(") == 1
+    # "over" sends (an empty box: says so and listens on) — listening on
+    # while the listen is continuous; "over and out" sends and stops (an
+    # empty box: nothing sent, just stops). No radio word only keeps.
+    assert 'var out = p.kind === "out";' in words
+    assert 'voiceCaption("Nothing to send yet");' in words
+    assert (
+        'if (out) { voiceStopForCommand(); voiceListenKept(); voiceNod("Over and out."); return; }'
+        in words
+    )
+    assert (
+        "if (voiceListen_.cont) { voiceSendOn(vbox().value); voiceListenContinue(); return; }"
+        in words
+    )
+    assert (
+        'voiceSend(vbox().value, undefined, out ? "Sent. Over and out." : "Sent.");'
+        in words
+    )
+    assert words.count("voiceSend(") == 1 and '"submit"' not in words
+    # The continuous send never stops the mic: the box empties at once, a
+    # failure puts the words back in front of what was said since.
+    on = _fn(js, "voiceSendOn")
+    assert "voice.stt.stop()" not in on and "voiceSetState(" not in on
+    assert (
+        'box.value = "";' in on
+        and 'box.value = since ? text + " " + since : text;' in on
+    )
+    assert "body: JSON.stringify({ text: text, dialog_safe: true, say: say })," in on
+    # A continuous listen has no window: its end moves out whenever read.
+    until = _fn(js, "voiceListenUntil")
+    assert (
+        "if (L.cont) L.until = Math.max(L.until, Date.now() + VOICE_DICT_IDLE_MS);"
+        in until
+    )
+    listen = _fn(js, "voiceListen")
+    assert 'L.cont = !!cont && !held && mode === "prompt";' in listen
+    assert "var left = voiceListenUntil() - Date.now();" in listen
+    assert "until: voiceListenUntil()," in _fn(js, "voiceRecStart")
+    assert "if (Date.now() < voiceListenUntil()) {" in _fn(js, "voiceRecStart")
+    # What a continuous listen is: the owner's own start — a tap, the
+    # first tap that turns voice on, the wake word, the ask sheet's mic.
+    assert 'voiceListen("prompt", VOICE_TAP_MS, false, true);' in _fn(js, "voiceTap")
+    assert 'voiceListen("prompt", VOICE_TAP_MS, false, true);' in _fn(js, "voiceWoke")
+    assert 'if (listenAfter) voiceListen("prompt", VOICE_TAP_MS, false, true);' in js
+    assert 'voiceListen("prompt", VOICE_ANSWER_MS, false, true);' in _fn(
+        js, "askListenFor"
+    )
+    # A hold never is (its "over" sends and ends it); every stop clears it.
+    assert 'voiceListen("prompt", VOICE_DICT_IDLE_MS, true);' in _fn(
+        js, "voiceHoldStart"
+    )
+    for fn in (
+        "voiceListenStop",
+        "voiceListenKept",
+        "voiceListenOver",
+        "voiceStopForCommand",
+    ):
+        assert "cont = false;" in _fn(js, fn), fn
     kept = _fn(js, "voiceListenKept")
     assert "voiceIdle(vbox().value.trim() ? VOICE_KEPT : undefined);" in kept
     assert "voiceSend" not in kept
-    assert 'var VOICE_KEPT = "In the box — say “submit”, or tap Send";' in v
+    assert 'var VOICE_KEPT = "In the box — say “over”, or tap Send";' in v
     assert (
         "if (p.text && !composeEl.value.trim()) {" in heard
     )  # commands: empty box only
@@ -292,11 +342,11 @@ def test_mobile_js_radio_rules_over_submit_and_disregard():
     )
     # The hints name the radio words (and, holding, the release).
     assert (
-        'var VOICE_HINT_TAP = "Say “over” to keep it, “submit” to send, “disregard” to start over";'
+        'var VOICE_HINT_TAP = "Say “over” to send, “over and out” to stop, “disregard” to start over";'
         in v
     )
-    assert 'var VOICE_HINT_HOLD = "Release to keep it; say “submit” to send";' in v
-    assert "“over” to send" not in v and "Release or say" not in v
+    assert 'var VOICE_HINT_HOLD = "Release to keep it; say “over” to send";' in v
+    assert "“over” to keep" not in v and "Release or say" not in v
     assert "return voiceListen_.held ? VOICE_HINT_HOLD : VOICE_HINT_TAP;" in _fn(
         js, "voiceDictHint"
     )
@@ -325,7 +375,7 @@ def test_mobile_js_push_to_talk_toggle_and_hold():
     listening and pointerup / pointercancel stops it — after waiting for the
     words still on their way (VOICE_OVER_WAIT_MS for the phone's last
     phrase, as long as a server clip is pending, a route answer) — with the
-    words left in the box. Only "submit" and the Send button send. The click
+    words left in the box. Only "over" and the Send button send. The click
     a release fires is swallowed; the click still turns voice on and starts
     a tap-style listen for a keyboard. The silence stop keeps the words,
     unsent."""
@@ -337,7 +387,7 @@ def test_mobile_js_push_to_talk_toggle_and_hold():
         assert gone not in v, gone
     # The sheet's choice, and the default.
     assert (
-        'prefs: { rate: 1, voiceName: "", handsFree: false, ptt: "toggle", replies: "mine", wake: false }'
+        'prefs: { rate: 1, voiceName: "", handsFree: false, ptt: "toggle", replies: "mine", wake: false, confirm: true, sounds: true }'
         in v
     )
     sel = html.split('<select id="voice-ptt"')[1].split("</select>")[0]
@@ -889,6 +939,8 @@ def test_mobile_js_reply_loop_rules():
         "ptt",
         "replies",
         "wake",
+        "confirm",
+        "sounds",
     ], keys
     assert persist.lstrip().startswith("try {")
     load = _fn(js, "voiceLoadPrefs")
@@ -1322,7 +1374,7 @@ def test_voice_matchers_under_node():
         "out.choices.yn = voiceDialogChoices({ options: YN });\n"
         "out.choices.other = voiceDialogChoices({ options: OTHER });\n"
         "out.choices.two = voiceDialogChoices({ options: OTHER.slice(0, 2) });\n"
-        "out.dict = ['fix the login bug over', 'Over.', 'disregard', 'Disregard that.', 'move it over', 'hangover', 'fix it, over!', 'nothing here', '', 'fix the login bug submit', 'Submit.', 'submit', 'add a test, Submit!', 'submitted', 'over it', 'Submit it'].map(function (t) { var p = voiceDictParse(t); return p.kind + '|' + p.text; });\n"
+        "out.dict = ['fix the login bug over', 'Over.', 'disregard', 'Disregard that.', 'move it over', 'hangover', 'fix it, over!', 'nothing here', '', 'fix the login bug submit', 'Submit.', 'submit', 'add a test, Submit!', 'submitted', 'over it', 'Submit it', 'fix it over and out', 'over, out', 'Over and out.', 'move it over and', 'over and out of here', 'ship it, over. Out!'].map(function (t) { var p = voiceDictParse(t); return p.kind + '|' + p.text; });\n"
         "console.log(JSON.stringify(out));\n"
     )
     res = subprocess.run(
@@ -1330,7 +1382,8 @@ def test_voice_matchers_under_node():
     )
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
-    # Radio words: the LAST word, any case or punctuation; mid-sentence is a word.
+    # Radio words ("over", "disregard"): the LAST word, any case or
+    # punctuation; mid-sentence is a word.
     assert out["dict"] == [
         "over|fix the login bug",
         "over|",
@@ -1341,14 +1394,22 @@ def test_voice_matchers_under_node():
         "over|fix it",
         "|nothing here",
         "|",
-        "submit|fix the login bug",
-        "submit|",
-        "submit|",
-        "submit|add a test",
+        # "submit" is retired as a radio word: plain words, any case.
+        "|fix the login bug submit",
+        "|Submit.",
+        "|submit",
+        "|add a test, Submit!",
         "|submitted",
         # "that / it" after the word belongs to "disregard" only.
         "|over it",
         "|Submit it",
+        # "over and out" (or "over, out") — the longer phrase first.
+        "out|fix it",
+        "out|",
+        "out|",
+        "|move it over and",
+        "|over and out of here",
+        "out|ship it",
     ]
     assert out["answers"]["yes"] == ["1", "1", "1", "1"]
     assert out["answers"]["no"] == ["3", "3", "3", "3"]
@@ -1509,6 +1570,9 @@ def test_voice_guess_hold_back_and_commands_under_node():
         "please stop talking",
         "add a test and yes",
         "pick option",
+        "fix it over and",
+        "fix it over and out",
+        "carry it over and back",
     ]
     asking = [
         "add a test and yes",
@@ -1578,7 +1642,8 @@ def test_voice_guess_hold_back_and_commands_under_node():
         ["go", "over"],
         ["fix it", "disregard"],
         ["fix it", "disregard that"],
-        ["add a test", "submit"],
+        # "submit" is a word now: typed as it comes.
+        ["add a test submit", ""],
         ["move it over to", ""],
         # A stop phrase never reaches the box, even half said.
         ["fix it", "stop"],
@@ -1592,6 +1657,10 @@ def test_voice_guess_hold_back_and_commands_under_node():
         # Not asking: an answer word is a word.
         ["add a test and yes", ""],
         ["pick option", ""],
+        # "over and" may become "over and out": held; "back" rules it out.
+        ["fix it", "over and"],
+        ["fix it", "over and out"],
+        ["carry it over and back", ""],
     ]
     assert out["asking"] == [
         ["add a test and", "yes"],
@@ -1839,3 +1908,76 @@ def test_voice_wav_encoder_under_node():
     # Between the samples, the straight line; past the last, the last.
     assert out["mid"] == [0, 0.5, 1, 0.5, 0, 0]
     assert out["empty"] == 44
+
+
+@pytest.mark.skipif(_node() is None, reason="needs node")
+def test_guess_control_under_node():
+    """A streamed guess that ENDS in a control phrase acts once the voice has
+    been quiet VOICE_CONTROL_TAIL_MS (ServerSTT's controlFire): "over" and
+    "over and out" send (they wait for /end's accurate final, at most
+    VOICE_CONTROL_END_MS), "disregard", a stop phrase and "stop talking"
+    act on the guess alone; anything else is no control."""
+    js = _js()
+    script = (
+        _control_fns(js)
+        + js[js.index("  var VOICE_CMD = [") : js.index("  function voiceRunCommand(")]
+        + "console.log(JSON.stringify(['fix the bug over', 'fix it over and out', 'no disregard',"
+        " 'fix it stop recording', 'please stop talking', 'go over the', 'fix the bug', ''].map(function (t) {"
+        " var c = voiceGuessControl(t); return c ? c.word + '|' + c.send : null; })));"
+    )
+    res = subprocess.run(
+        [_node(), "-e", script], capture_output=True, text=True, timeout=30
+    )
+    assert res.returncode == 0, res.stderr
+    assert json.loads(res.stdout) == [
+        "over|true",
+        "over and out|true",
+        "disregard|false",
+        "stop|false",
+        "stop talking|false",
+        None,
+        None,
+        None,
+    ]
+    v = _voice_section(js)
+    assert (
+        "var VOICE_CONTROL_TAIL_MS = 250;" in v
+        and "var VOICE_CONTROL_END_MS = 2500;" in v
+    )
+    # The recorder fires it: quiet VOICE_CONTROL_TAIL_MS after a guess that
+    # ends in one (the next guess may rule it out), never while loud.
+    assert "g.ctl = voiceGuessControl(shown);" in js
+    assert (
+        "if (g.ctl && g.heard && !loud && now - g.lastLoud >= VOICE_CONTROL_TAIL_MS) controlFire(g, mine);"
+        in js
+    )
+    fire = js[js.index("    function controlFire(g, mine) {") :]
+    fire = fire[: fire.index("\n    }\n") + 6]
+    assert "streamDrop(g);" in fire and "streamDone(g, mine, c.text);" in fire
+    assert "}, VOICE_CONTROL_END_MS);" in fire and "finish();" in fire
+    # The Enter is timed from the word's end: "over → sent 0.9 s".
+    assert "voiceCtlSent();" in _fn(js, "voiceSendOn") and "voiceCtlSent();" in _fn(
+        js, "voiceSend"
+    )
+    assert '" → sent " + (voice.rec.ctl.sentMs / 1000).toFixed(1) + " s"' in v
+
+
+def test_no_hint_names_submit_as_a_radio_word():
+    """'submit' is retired as a radio word: no hint, caption or placeholder
+    on the phone page tells the owner to say it (a dialog's own "Submit" /
+    "Submit answers" buttons are labels, not radio words)."""
+    import re
+
+    js, html = _js(), _html()
+    for src in (js, html):
+        assert "“submit”" not in src and "“Submit”" not in src
+        assert not re.search(r"say\W{0,3}submit", src, re.I), re.search(
+            r"say\W{0,3}submit", src, re.I
+        )
+    v = _voice_section(js)
+    # Every hint names the radio words the owner has.
+    assert "“over” to send" in v and "“over and out” to stop" in v
+    assert 'var VOICE_KEPT = "In the box — say “over”, or tap Send";' in v
+    # The ⚙ sheet's switches for the confirmations and the chimes.
+    assert '<input type="checkbox" id="voice-confirm" />' in html
+    assert '<input type="checkbox" id="voice-sounds" />' in html

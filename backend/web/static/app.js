@@ -37847,9 +37847,10 @@ function startWavRecording(stream, ctx, opts = {}) {
 	let done = false;
 	let result = null;
 	let skip = Math.max(0, Math.round((opts.skipS || 0) * ctx.sampleRate));
+	let muted = false;
 	const keep = opts.keepS ? Math.max(1, Math.round(opts.keepS * ctx.sampleRate)) : 0;
 	processor.onaudioprocess = (e) => {
-		if (done) return;
+		if (done || muted) return;
 		if (skip > 0) {
 			skip -= e.inputBuffer.getChannelData(0).length;
 			return;
@@ -37905,6 +37906,10 @@ function startWavRecording(stream, ctx, opts = {}) {
 			teardown();
 			blocks = [];
 			fresh = 0;
+		},
+		mute(on, tailS = 0) {
+			if (!on && muted) skip = Math.max(skip, Math.round(tailS * ctx.sampleRate));
+			muted = on;
 		},
 		seconds() {
 			return frames / ctx.sampleRate;
@@ -38140,6 +38145,9 @@ function meterFeed(rms, now = Date.now()) {
 		setHearing(true);
 	}
 }
+function lastLoudAt() {
+	return lastLoud;
+}
 function meterPoll(read) {
 	poll = read;
 	lastPoll = 0;
@@ -38183,6 +38191,10 @@ function voiceWake(ms) {
 	if (typeof window !== "undefined") window.__mfVoiceWake = Math.round(ms);
 	if (debugOn()) console.debug("[voice] wake " + Math.round(ms) + " ms (sound end → listening)");
 }
+function voiceSent(ms) {
+	if (typeof window !== "undefined") window.__mfVoiceSent = Math.round(ms);
+	if (debugOn()) console.debug("[voice] over → sent " + (ms / 1e3).toFixed(1) + " s");
+}
 function voicePass(ms) {
 	passes = [...passes, Math.round(ms)].slice(-20);
 	if (typeof window !== "undefined") window.__mfVoicePasses = passes;
@@ -38192,13 +38204,13 @@ function voicePass(ms) {
 //#region src/lib/voiceDesktop.ts
 function parseRadio(text) {
 	const t = String(text || "").trim();
-	const m = /^(.*?)[\s,.!?]*\b(over|submit|disregard)(?:\s+(?:that|it|all|everything))?[.!?\s]*$/i.exec(t);
+	const m = /^(.*?)[\s,.!?]*\b(?:(over[\s,.!?]+(?:and[\s,.!?]+)?out)|(over|disregard)(?:\s+(?:that|it|all|everything))?)[.!?\s]*$/i.exec(t);
 	if (!m) return {
 		kind: "",
 		text: t
 	};
 	return {
-		kind: m[2].toLowerCase(),
+		kind: m[2] ? "out" : m[3].toLowerCase(),
 		text: m[1].trim()
 	};
 }
@@ -38322,6 +38334,18 @@ function mayBeCommand(text) {
 		return true;
 	});
 }
+function isSwitchCommand(text) {
+	let w = routerWords(text);
+	if (w.length > 1 && ROUTER_LEADS.has(w[0])) w = w.slice(1);
+	if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
+	if (/^(?:switch|go|change|jump)$/.test(w[0] || "")) {
+		const at = w[1] === "over" ? 2 : 1;
+		return w[at] === "to" && w.length > at + 1;
+	}
+	if (/^(?:focus|select)$/.test(w[0] || "")) return w.length > 1;
+	if (/^(?:next|previous)$/.test(w[0] || "")) return w.length === 2 && /^(?:session|one)$/.test(w[1]);
+	return w.length >= 2 && /^(?:session|number|row)$/.test(w[0]) && new RegExp("^(?:" + NUMS + ")$").test(w[1]);
+}
 var bareWord = (w) => w.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, "");
 var STOP_PHRASES = [
 	"stop recording",
@@ -38351,16 +38375,20 @@ var HUSH_PHRASES = [
 var CONTROL_PHRASES = [
 	...STOP_PHRASES,
 	...HUSH_PHRASES,
-	...[
-		"over",
-		"submit",
-		"disregard"
-	].flatMap((w) => [[w], ...[
+	...["over", "disregard"].flatMap((w) => [[w], ...[
 		"that",
 		"it",
 		"all",
 		"everything"
-	].map((tail) => [w, tail])])
+	].map((tail) => [w, tail])]),
+	["over", "out"],
+	...["that's", "thats"].map((w) => [
+		"over",
+		"and",
+		"out",
+		w,
+		"all"
+	])
 ];
 var CONTROL_MAX_WORDS = Math.max(...CONTROL_PHRASES.map((p) => p.length));
 var wordIndexes = (ws) => ws.flatMap((w, i) => bareWord(w) ? [i] : []);
@@ -38429,7 +38457,9 @@ function normPrefs(v) {
 	return {
 		ptt: o.ptt === "hold" ? "hold" : "toggle",
 		replies: repliesMode(o.replies),
-		wake: o.wake === true
+		wake: o.wake === true,
+		confirm: o.confirm !== false,
+		sounds: o.sounds !== false
 	};
 }
 function sayOnSend(byVoice, p = loadVoicePrefs()) {
@@ -38506,8 +38536,9 @@ function talkKeyAction(phase, hold, listening, keyHeld) {
 }
 var DICT_IDLE_MS = 12e4;
 var HOLD_FINAL_WAIT_MS = 1500;
-var DICT_HINT = "Say over to leave it, submit to send, disregard to start over";
-var OVER_LINE = "In the field — say submit or press Enter";
+var DICT_HINT = "Say “over” to send, “over and out” to stop, “disregard” to start over";
+var answerHint = (name) => "Answer " + name + " — say “over” to send, “over and out” to stop, “disregard” to start over";
+var LEFT_LINE = "In the field — press Enter to send";
 var STOPPED_LINE = "Stopped listening";
 var HUSH_LINE = "Quiet.";
 var HUSH_CAPTION_MS = 1e3;
@@ -38526,6 +38557,10 @@ function retype(before, after) {
 		type: b.slice(i).join("")
 	};
 }
+var CONTROL_TAIL_MS = 250;
+var CONTROL_POLL_MS = 50;
+var OVER_FINAL_WAIT_MS = 2500;
+var SWALLOW_MAX_MS = 5e3;
 var withErase = (o, erase) => erase ? {
 	...o,
 	erase
@@ -38536,10 +38571,41 @@ var Dictation = class {
 	held = "";
 	partial = "";
 	routes = true;
+	continuous = false;
 	answering = false;
 	phraseAt = -1;
 	begin() {
 		this.listening = true;
+		this.typed = "";
+		this.held = "";
+		this.partial = "";
+		this.phraseAt = -1;
+	}
+	tail() {
+		if (!this.listening) return null;
+		const all = joinWords(this.held, this.partial);
+		if (!all) return null;
+		if (isHushPhrase(all)) return {
+			kind: "hush",
+			text: all
+		};
+		const before = stopTail(all);
+		if (before !== null) return {
+			kind: parseRadio(before).kind === "out" ? "out" : "stop",
+			text: all
+		};
+		const r = parseRadio(all).kind;
+		if (r) return {
+			kind: r,
+			text: all
+		};
+		if (this.routes && !this.before && isSwitchCommand(all)) return {
+			kind: "route",
+			text: all
+		};
+		return null;
+	}
+	next() {
 		this.typed = "";
 		this.held = "";
 		this.partial = "";
@@ -38594,12 +38660,25 @@ var Dictation = class {
 				text: this.erase()
 			};
 			case "over":
-			case "submit":
-				this.listening = false;
-				return {
-					kind: p.kind,
-					...this.settle(p.text ? p.text + " " : "")
+			case "out": {
+				const end = p.kind === "out" || !this.continuous;
+				if (end) this.listening = false;
+				const s = this.settle(p.text ? p.text + " " : "");
+				if (p.kind === "out") return {
+					kind: "send",
+					...s,
+					end,
+					out: true
 				};
+				return end ? {
+					kind: "send",
+					...s,
+					end
+				} : {
+					kind: "send",
+					...s
+				};
+			}
 			default: {
 				const s = this.settle(p.text ? p.text + " " : "");
 				return s.text || s.erase ? {
@@ -38615,7 +38694,7 @@ var Dictation = class {
 		const out = tail || this.phraseAt >= 0 ? this.heard(tail) : { kind: "continue" };
 		this.listening = false;
 		if (out.kind === "type") return withErase({
-			kind: "over",
+			kind: "leave",
 			text: out.text
 		}, out.erase || "");
 		if (out.kind === "erase") return {
@@ -38623,13 +38702,17 @@ var Dictation = class {
 			text: out.text
 		};
 		if (out.kind === "continue") return {
-			kind: "over",
+			kind: "leave",
 			text: ""
 		};
 		if (out.kind === "hush") return withErase({
 			kind: "hush",
 			end: true
 		}, out.erase || "");
+		if (out.kind === "send") return {
+			...out,
+			end: true
+		};
 		return out;
 	}
 	cancel() {
@@ -38650,7 +38733,7 @@ var Dictation = class {
 		}, this.settle("").erase || "");
 		const rest = parseRadio(all).text;
 		return {
-			kind: "over",
+			kind: "leave",
 			...this.settle(rest ? rest + " " : "")
 		};
 	}
@@ -38684,8 +38767,15 @@ var Dictation = class {
 		const before = stopTail(all);
 		if (before !== null) {
 			this.listening = false;
+			const out = parseRadio(before);
+			if (out.kind === "out") return {
+				kind: "send",
+				...this.settle(out.text ? out.text + " " : ""),
+				end: true,
+				out: true
+			};
 			return {
-				kind: "over",
+				kind: "leave",
 				...this.settle(before ? before + " " : ""),
 				stop: true
 			};
@@ -38721,6 +38811,13 @@ function sessionTarget(title, name) {
 		erase: (text) => !text || send(backspaces(text))
 	};
 }
+var CONFIRM_LINES = {
+	sent: "Sent.",
+	out: "Sent. Over and out.",
+	bye: "Over and out.",
+	cleared: "Cleared.",
+	stopped: "Stopped."
+};
 var SUBMIT_SETTLE_MS = 250;
 async function submitDraft(title, name, say) {
 	try {
@@ -38736,7 +38833,7 @@ async function submitDraft(title, name, say) {
 		let line = "Couldn't submit: " + (err?.message || "error") + " — the words are still in the field";
 		if (err instanceof ApiError && err.status === 409) {
 			if (body?.in_dialog) line = name + " is on a dialog — press Enter yourself when it is answered";
-			else if (body?.waking) line = name + " is waking up — say submit again in a moment";
+			else if (body?.waking) line = name + " is waking up — say over again in a moment";
 			else if (body?.paused) line = name + " is paused — resume it first";
 		}
 		return {
@@ -38756,26 +38853,44 @@ var LiveDictation = class {
 	heardAnything = false;
 	recording = false;
 	hearingNow = false;
+	tailTimer;
+	sendWait;
+	swallowing;
+	wordEnd = 0;
+	wordsAt = Date.now();
 	constructor(target, hooks, opts = {}) {
 		this.target = target;
 		this.hooks = hooks;
 		this.opts = opts;
 		this.dict.begin();
 		this.dict.routes = target?.kind !== "field";
+		this.dict.continuous = !!opts.continuous;
 	}
 	get active() {
 		return !this.done;
 	}
+	midSentence() {
+		if (this.done) return false;
+		const recent = Date.now() - this.wordsAt < MID_SENTENCE_MS;
+		if (!this.heardAnything) return recent;
+		const quiet = this.hooks.quietMs?.() ?? 0;
+		return recent && !!(this.dict.held || this.dict.partial) && quiet < CONTROL_TAIL_MS;
+	}
 	hearing(t) {
 		if (t) this.heardAnything = true;
+		if (t) this.wordsAt = Date.now();
+		if (this.swallowing) return this.chain;
 		return this.step(() => this.dict.hearing(t));
 	}
 	heard(phrase) {
 		if (phrase.trim()) this.heardAnything = true;
+		if (this.phraseEnded()) return this.chain;
 		return this.step(() => this.dict.heard(phrase));
 	}
 	stream(w, p) {
 		if (w.trim() || p.trim()) this.heardAnything = true;
+		if (w.trim() || p.trim()) this.wordsAt = Date.now();
+		if (this.swallowing) return this.chain;
 		return this.step(() => this.dict.stream(w, p));
 	}
 	words(w) {
@@ -38783,7 +38898,53 @@ var LiveDictation = class {
 	}
 	flush(w, final) {
 		if (w.trim() || final?.trim()) this.heardAnything = true;
+		if (this.phraseEnded()) return this.chain;
 		return this.step(() => this.dict.flush(w, final));
+	}
+	phraseEnded() {
+		clearTimeout(this.sendWait);
+		this.sendWait = void 0;
+		if (!this.swallowing) return false;
+		clearTimeout(this.swallowing);
+		this.swallowing = void 0;
+		return true;
+	}
+	swallow() {
+		clearTimeout(this.swallowing);
+		this.swallowing = setTimeout(() => this.swallowing = void 0, SWALLOW_MAX_MS);
+	}
+	watchTail() {
+		if (!this.hooks.quietMs || this.done || this.sendWait || this.swallowing || !this.dict.tail()) {
+			clearInterval(this.tailTimer);
+			this.tailTimer = void 0;
+			return;
+		}
+		if (!this.tailTimer) this.tailTimer = setInterval(() => this.checkTail(), CONTROL_POLL_MS);
+		this.checkTail();
+	}
+	checkTail() {
+		const t = this.done || this.sendWait || this.swallowing ? null : this.dict.tail();
+		if (!t) {
+			clearInterval(this.tailTimer);
+			this.tailTimer = void 0;
+			return;
+		}
+		const quiet = this.hooks.quietMs?.() ?? 0;
+		if (quiet < CONTROL_TAIL_MS) return;
+		clearInterval(this.tailTimer);
+		this.tailTimer = void 0;
+		this.wordEnd = Date.now() - Math.min(quiet, 6e4);
+		this.hooks.endPhrase?.();
+		if (t.kind === "over" || t.kind === "out") {
+			this.sendWait = setTimeout(() => {
+				this.sendWait = void 0;
+				this.swallow();
+				this.step(() => this.dict.heard(t.text));
+			}, OVER_FINAL_WAIT_MS);
+			return;
+		}
+		this.swallow();
+		this.step(() => this.dict.heard(t.text));
 	}
 	unsure(t) {
 		if (this.done) return;
@@ -38839,12 +39000,15 @@ var LiveDictation = class {
 			const t = this.target;
 			this.dict.answering = t?.kind === "session" && !!this.hooks.pending?.(t.title);
 			return this.apply(next());
-		}).catch(() => {});
+		}).catch(() => {}).then(() => this.watchTail());
 		return this.chain;
 	}
 	end(line, sticky = false, how) {
 		if (this.done) return;
 		this.done = true;
+		clearInterval(this.tailTimer);
+		clearTimeout(this.sendWait);
+		clearTimeout(this.swallowing);
 		this.dict.listening = false;
 		this.hooks.halt();
 		if (line !== null) this.hooks.caption(line, sticky);
@@ -38865,6 +39029,7 @@ var LiveDictation = class {
 			case "erase":
 				t?.erase(out.text);
 				this.hooks.caption("Disregarded — go on", true);
+				this.hooks.confirm?.("cleared");
 				return;
 			case "hush":
 				if (out.erase && t && !this.keys(t, out.erase, "")) return;
@@ -38874,36 +39039,73 @@ var LiveDictation = class {
 				t?.erase(out.text);
 				this.end(out.text ? "Disregarded" : "", false, "stopped");
 				return;
-			case "over":
+			case "leave":
 				if ((out.text || out.erase) && !await this.put(out.text, true, out.erase)) return;
-				this.end(t?.kind === "session" && this.dict.typed ? OVER_LINE : out.stop ? STOPPED_LINE : "", false, out.stop ? "stopped" : void 0);
+				if (out.stop) this.hooks.confirm?.("stopped");
+				this.end(t?.kind === "session" && this.dict.typed ? LEFT_LINE : out.stop ? STOPPED_LINE : "", false, out.stop ? "stopped" : void 0);
 				return;
-			case "submit": {
+			case "send": {
+				const quiet = this.hooks.quietMs?.();
+				const from = this.wordEnd || (quiet != null && quiet < 6e4 ? Date.now() - quiet : 0);
+				this.wordEnd = 0;
 				const typedNow = !!(out.text || out.erase);
 				if (typedNow && !await this.put(out.text, true, out.erase)) return;
+				if (this.done) return;
+				if (out.out && !this.dict.typed) {
+					this.hooks.confirm?.("bye");
+					this.end(STOPPED_LINE, false, "stopped");
+					return;
+				}
 				if (t?.kind === "field" && t.submit) {
 					this.acted = true;
-					this.end("Sending to " + t.name + "…", true);
+					this.hooks.caption("Sending to " + t.name + "…", true);
 					const say = this.hooks.replies();
 					const r = await t.submit(say);
 					if (r.ok && t.title) this.hooks.submitted(t.title, say);
-					this.hooks.caption(r.line, !r.ok);
+					this.sent(r, out, from);
 					return;
 				}
 				if (!t || t.kind === "field") {
-					this.end(t ? "" : "Click a session first");
+					if (out.end || !t) this.end(t ? "" : "Click a session first");
+					else this.next();
 					return;
 				}
 				this.acted = true;
-				this.end("Submitting to " + t.name + "…", true);
+				this.hooks.caption("Sending to " + t.name + "…", true);
 				if (typedNow) await new Promise((r) => setTimeout(r, SUBMIT_SETTLE_MS));
 				const say = this.hooks.replies();
 				const r = await submitDraft(t.title, t.name, say);
 				if (r.ok) this.hooks.submitted(t.title, say);
-				this.hooks.caption(r.line, !r.ok);
+				this.sent(r, out, from);
 				return;
 			}
 		}
+	}
+	sent(r, how, from = 0) {
+		if (r.ok) this.hooks.confirm?.(how.out ? "out" : "sent");
+		if (r.ok && from) {
+			const ms = Date.now() - from;
+			voiceSent(ms);
+			this.hooks.sentIn?.(ms);
+		}
+		if (how.end) this.end(r.line, !r.ok);
+		else if (!r.ok) this.end(r.line, true, "stopped");
+		else this.next(r.line);
+	}
+	next(line) {
+		if (this.done) return;
+		this.dict.next();
+		const n = this.hooks.retarget?.();
+		if (n) {
+			this.target = n.target;
+			this.opts = {
+				...this.opts,
+				hint: n.hint
+			};
+			this.dict.routes = n.target?.kind !== "field";
+		}
+		if (line) this.hooks.caption(line, true);
+		else if (line === void 0) this.show();
 	}
 	hushed() {
 		this.acted = true;
@@ -38933,7 +39135,8 @@ var LiveDictation = class {
 			}
 			if (routed) {
 				this.acted = true;
-				this.end(null);
+				if (this.dict.continuous && routed !== "end") this.next(null);
+				else this.end(null);
 				return false;
 			}
 			if (this.done) return false;
@@ -39264,7 +39467,7 @@ var HandsFree = class {
 		this.begin();
 		try {
 			const name = this.deps.name(title);
-			await this.listen(title, "Still there? " + spokenLine(this.spoken(title), say), "Answer " + name + " — say submit to send");
+			await this.listen(title, "Still there? " + spokenLine(this.spoken(title), say), answerHint(name));
 		} finally {
 			this.over();
 		}
@@ -39294,7 +39497,7 @@ var HandsFree = class {
 			if (a.said) await a.said;
 			else await x.speak(spokenLine(this.spoken(title), plain(q)), title);
 			if (this.stopped === title) return;
-			await this.listen(title, "Still there? " + spokenLine(this.spoken(title), plain(q)), "Answer " + name + " — say submit to send");
+			await this.listen(title, "Still there? " + spokenLine(this.spoken(title), plain(q)), answerHint(name));
 		} finally {
 			this.over();
 		}
@@ -39323,6 +39526,12 @@ var HandsFree = class {
 	}
 };
 var SPEECH_STALE_MS = 6e4;
+var CONFIRM_STALE_MS = 5e3;
+var GATE_RETRY_MS = 50;
+var MID_SENTENCE_MS = 1500;
+var confirmSentences = null;
+var isConfirmSentence = (part) => (confirmSentences ||= new Set(Object.values(CONFIRM_LINES).flatMap((l) => speechSentences(l)))).has(part);
+var SPEAK_CACHE_MAX = 32;
 var SpeechQueue = class {
 	engine;
 	onSpeaking;
@@ -39333,6 +39542,8 @@ var SpeechQueue = class {
 	held = false;
 	turn = 0;
 	waiters = [];
+	gate = null;
+	gateRetry;
 	last = "";
 	constructor(engine, onSpeaking = () => {}, opts = {}) {
 		this.engine = engine;
@@ -39353,6 +39564,32 @@ var SpeechQueue = class {
 			});
 			this.pump();
 		});
+	}
+	confirmLine(line, opts = {}) {
+		if (!line.trim()) return Promise.resolve();
+		return new Promise((done) => {
+			let at = 0;
+			while (at < this.lines.length && this.lines[at].confirm) at++;
+			this.lines.splice(at, 0, {
+				line,
+				at: this.now(),
+				title: "",
+				done,
+				confirm: true,
+				start: opts.start
+			});
+			this.pump();
+		});
+	}
+	setGate(ok) {
+		this.gate = ok;
+		clearTimeout(this.gateRetry);
+		this.gateRetry = void 0;
+		if (!ok) this.pump();
+	}
+	skip() {
+		this.cut();
+		this.pump();
 	}
 	get busy() {
 		return !!this.speaking;
@@ -39401,11 +39638,19 @@ var SpeechQueue = class {
 		w.forEach((r) => r());
 	}
 	pump() {
-		if (this.speaking || this.held) return;
-		const stale = this.opts.staleMs ?? SPEECH_STALE_MS;
+		if (this.speaking) return;
 		for (;;) {
+			if (this.held && !this.lines[0]?.confirm) return;
+			if (this.gate && this.lines[0] && !this.lines[0].confirm && !this.gate()) {
+				if (!this.gateRetry) this.gateRetry = setTimeout(() => {
+					this.gateRetry = void 0;
+					this.pump();
+				}, GATE_RETRY_MS);
+				return;
+			}
 			const next = this.lines.shift();
 			if (!next) return this.settle();
+			const stale = next.confirm ? CONFIRM_STALE_MS : this.opts.staleMs ?? SPEECH_STALE_MS;
 			const age = this.now() - next.at;
 			const text = String((typeof next.line === "function" ? next.line() : next.line) || "").trim();
 			if (age > stale) {
@@ -39423,6 +39668,7 @@ var SpeechQueue = class {
 			this.speaking = sp;
 			this.current = next;
 			this.onSpeaking(true);
+			next.start?.();
 			const done = () => {
 				if (this.turn !== turn || !this.speaking) return;
 				this.speaking = null;
@@ -39443,6 +39689,43 @@ function bargeIn(q, title) {
 	if (title) q.cancel(title);
 	return talking ? BARGE_SKIP_MS : 0;
 }
+function localVoice(cfg) {
+	const r = cfg.server_ready || {};
+	const id = String(r.tts_backend || "").toLowerCase();
+	if (id === "local" || id === "system") return true;
+	return /(?:^|[\s/@])(?:localhost|0\.0\.0\.0|(?:127|10)\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|[\w.-]+\.(?:local|localhost|ts\.net))(?:[:/\s]|$)/i.test(String(r.tts_detail || ""));
+}
+function ttsVoiceKey(cfg) {
+	const r = cfg.server_ready || {};
+	return String(r.tts_backend || "") + "|" + String(r.tts_detail || "");
+}
+var Confirmer = class {
+	deps;
+	primed = false;
+	constructor(deps) {
+		this.deps = deps;
+	}
+	say(kind) {
+		const x = this.deps;
+		if (!x.on()) return Promise.resolve();
+		const line = typeof kind === "string" ? CONFIRM_LINES[kind] : kind.line;
+		const mic = x.mic();
+		let muted = false;
+		return x.queue.confirmLine(line, { start: () => {
+			muted = true;
+			mic?.mute?.(true);
+		} }).then(() => {
+			if (muted) mic?.mute?.(false);
+			if (muted && x.server() && !x.speaker.lastError) this.prime(true);
+		});
+	}
+	prime(spoke = false) {
+		const x = this.deps;
+		if (this.primed || !x.on() || !x.server() || !spoke && !x.local()) return;
+		this.primed = true;
+		x.speaker.prefetch(Object.values(CONFIRM_LINES)).catch(() => {});
+	}
+};
 function sentenceChunks(text) {
 	const s = String(text || "").replace(/\s+/g, " ").trim();
 	if (!s) return [];
@@ -39606,8 +39889,11 @@ function voiceAudioCtx() {
 	if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
 	return audioCtx;
 }
-function serverSpeaker(fallback) {
+function serverSpeaker(fallback, opts = {}) {
 	let gen = 0;
+	const cache = /* @__PURE__ */ new Map();
+	const cacheable = opts.cacheable || isConfirmSentence;
+	const keyOf = (part) => (opts.voiceKey ? opts.voiceKey() : "") + "\n" + part;
 	const playing = /* @__PURE__ */ new Map();
 	let inflight = null;
 	const fetchAudio = async (ctx, part, ac) => {
@@ -39623,8 +39909,29 @@ function serverSpeaker(fallback) {
 		}
 		return ctx.decodeAudioData(await r.arrayBuffer());
 	};
+	const remember = (part, p) => {
+		const key = keyOf(part);
+		if (cache.size >= SPEAK_CACHE_MAX) cache.delete(cache.keys().next().value);
+		cache.set(key, p);
+		p.catch(() => {
+			if (cache.get(key) === p) cache.delete(key);
+		});
+	};
 	const self = {
 		lastError: "",
+		cached(part) {
+			return cache.has(keyOf(part));
+		},
+		async prefetch(lines) {
+			const ctx = voiceAudioCtx();
+			if (!ctx) return;
+			for (const line of lines) for (const part of speechSentences(line)) {
+				if (cache.has(keyOf(part))) continue;
+				const p = fetchAudio(ctx, part, new AbortController());
+				remember(part, p);
+				await p.catch(() => {});
+			}
+		},
 		async speak(text) {
 			const parts = speechSentences(text);
 			if (!parts.length) return;
@@ -39635,6 +39942,8 @@ function serverSpeaker(fallback) {
 				return fallback.speak(parts.join(" "));
 			}
 			const ask = (i) => {
+				const hit = cacheable(parts[i]) ? cache.get(keyOf(parts[i])) : void 0;
+				if (hit) return hit;
 				const ac = new AbortController();
 				inflight = ac;
 				const p = fetchAudio(ctx, parts[i], ac);
@@ -39642,6 +39951,7 @@ function serverSpeaker(fallback) {
 					if (inflight === ac) inflight = null;
 				};
 				p.then(settled, settled);
+				if (cacheable(parts[i])) remember(parts[i], p);
 				return p;
 			};
 			let endAt = 0;
@@ -39720,6 +40030,8 @@ function browserRecognizer() {
 	let interim = "";
 	let rapid = 0;
 	let startedAt = 0;
+	let muted = false;
+	let deafUntil = 0;
 	const open = () => {
 		const Ctor = speechRecCtor();
 		if (!Ctor || !h) return false;
@@ -39735,6 +40047,7 @@ function browserRecognizer() {
 		r.lang = navigator.language || "en-US";
 		interim = "";
 		r.onresult = (ev) => {
+			if (muted || Date.now() < deafUntil) return;
 			let finals = "";
 			interim = "";
 			for (let i = ev.resultIndex; i < ev.results.length; i++) {
@@ -39788,12 +40101,18 @@ function browserRecognizer() {
 	const self = {
 		name: "browser",
 		available: () => !!speechRecCtor(),
+		mute(on) {
+			if (!on && muted) deafUntil = Date.now() + BARGE_SKIP_MS;
+			muted = on;
+		},
 		start(handlers) {
 			self.stop();
 			h = handlers;
 			want = true;
 			finishing = false;
 			rapid = 0;
+			muted = false;
+			deafUntil = 0;
 			if (!open()) {
 				want = false;
 				return false;
@@ -39865,6 +40184,7 @@ function serverRecognizer(opts = {}) {
 	let lastEnd = Promise.resolve();
 	const open = /* @__PURE__ */ new Set();
 	let skipUntil = 0;
+	let muted = false;
 	const unhold = () => {
 		if (!holding) return;
 		holding = false;
@@ -40211,6 +40531,7 @@ function serverRecognizer(opts = {}) {
 			failed("start-failed");
 			return;
 		}
+		if (muted) c.rec.mute?.(true);
 		cur = c;
 		voiceMark("mic");
 		h?.onReady?.();
@@ -40225,10 +40546,18 @@ function serverRecognizer(opts = {}) {
 		finalMs: null,
 		mic,
 		available: () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia && !!audioCtxCtor(),
+		mute(on) {
+			muted = on;
+			cur?.rec?.mute?.(on, BARGE_SKIP_MS / 1e3);
+		},
+		endPhrase() {
+			if (cur?.heard && want) endClip();
+		},
 		start(handlers, o = {}) {
 			self.stop();
 			if (!self.available()) return false;
 			skipUntil = Date.now() + Math.max(0, o.skipMs || 0);
+			muted = false;
 			h = handlers;
 			want = true;
 			finishing = false;
@@ -40338,6 +40667,9 @@ function passLine(backend, passMs) {
 function finalLine(finalMs) {
 	return finalMs != null && finalMs > 0 ? "final " + (finalMs / 1e3).toFixed(1) + " s" : "";
 }
+function sentLine(ms) {
+	return ms != null && ms >= 0 ? "over → sent " + (ms / 1e3).toFixed(1) + " s" : "";
+}
 function recognizerErrorLine(code, detail) {
 	if (code === "network") return "Speech recognition failed (network): use Chrome, Edge or Safari, or turn on server recognition in Settings → Voice";
 	if (code === "not-allowed" || code === "service-not-allowed") return "Microphone permission denied";
@@ -40359,6 +40691,7 @@ var WAKE_KEEP_S = 3;
 var WAKE_LISTEN_MS = 8e3;
 var WAKE_HINT = "Yes?";
 var CHIME_MS = 120;
+var STOP_CHIME_MS = 140;
 var CHECK_TIMEOUT_MS = 1e4;
 var CLIP_RATE = 16e3;
 var RELEARN_MS = 5e3;
@@ -40661,19 +40994,22 @@ var WakeStandby = class {
 function wakeLine(ms) {
 	return ms != null && ms >= 0 ? "wake " + (ms / 1e3).toFixed(1) + " s" : "";
 }
-function chime(ctx) {
+function chime(ctx, kind = "start") {
 	if (!ctx || ctx.state !== "running") return;
 	try {
+		const stop = kind === "stop";
+		const ms = stop ? STOP_CHIME_MS : CHIME_MS;
+		const peak = stop ? .09 : .12;
 		const t = ctx.currentTime;
-		const end = t + CHIME_MS / 1e3;
+		const end = t + ms / 1e3;
 		const osc = ctx.createOscillator();
 		const gain = ctx.createGain();
 		osc.type = "sine";
-		osc.frequency.setValueAtTime(660, t);
-		osc.frequency.setValueAtTime(990, t + CHIME_MS / 2e3);
+		osc.frequency.setValueAtTime(stop ? 880 : 660, t);
+		osc.frequency.setValueAtTime(stop ? 660 : 990, t + ms / 2e3);
 		gain.gain.setValueAtTime(1e-4, t);
-		gain.gain.exponentialRampToValueAtTime(.12, t + .01);
-		gain.gain.setValueAtTime(.12, end - .03);
+		gain.gain.exponentialRampToValueAtTime(peak, t + .01);
+		gain.gain.setValueAtTime(peak, end - .03);
 		gain.gain.exponentialRampToValueAtTime(1e-4, end);
 		osc.connect(gain);
 		gain.connect(ctx.destination);
@@ -40687,7 +41023,7 @@ var browserRec = browserRecognizer();
 var cfgNow = DEFAULT_VOICE_CFG;
 var serverRec = serverRecognizer({ stream: () => !!cfgNow.server_ready.stt_stream });
 var browserSp = browserSpeaker();
-var serverSp = serverSpeaker(browserSp);
+var serverSp = serverSpeaker(browserSp, { voiceKey: () => ttsVoiceKey(cfgNow) });
 var tracker = new ReplyTracker();
 var heard = new HeardTurns();
 var speakingListeners = /* @__PURE__ */ new Set();
@@ -40695,6 +41031,7 @@ var queue = new SpeechQueue(() => ttsEngine(cfgNow) === "server" ? serverSp : br
 var standbyMeter = false;
 var wakeFrom = null;
 var lastWakeMs = null;
+var lastSentMs = null;
 function listened(d) {
 	if (wakeFrom?.d !== d) return;
 	lastWakeMs = Math.max(0, Date.now() - wakeFrom.at);
@@ -40763,7 +41100,8 @@ function micDiagnostics() {
 	return [
 		engineDiagnostics(c, stt, tts),
 		...pass,
-		wakeLine(lastWakeMs)
+		wakeLine(lastWakeMs),
+		sentLine(lastSentMs)
 	].filter(Boolean).join(" · ");
 }
 function talkHotkey() {
@@ -40877,6 +41215,15 @@ function TopBarMic() {
 	const menuRef = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => meterRef(btnRef.current), []);
 	const rec = (0, import_react.useRef)(null);
+	const confirmer = (0, import_react.useRef)(null);
+	confirmer.current ||= new Confirmer({
+		queue,
+		on: () => prefsRef.current.confirm !== false,
+		mic: () => rec.current,
+		server: () => ttsEngine(cfgNow) === "server",
+		local: () => localVoice(cfgNow),
+		speaker: serverSp
+	});
 	const live = (0, import_react.useRef)(null);
 	const pressedField = (0, import_react.useRef)(null);
 	const deciding = (0, import_react.useRef)(null);
@@ -40934,7 +41281,10 @@ function TopBarMic() {
 			const want = sayAllMismatch(prefsRef.current.replies, c.say_all);
 			if (want !== null) syncSayAll(want);
 		});
-		const l = (on) => setSpeaking(on);
+		const l = (on) => {
+			setSpeaking(on);
+			if (gated.current) rec.current?.mute?.(on);
+		};
 		speakingListeners.add(l);
 		const onFocus = () => void refreshCfg();
 		window.addEventListener("focus", onFocus);
@@ -41021,11 +41371,30 @@ function TopBarMic() {
 		};
 	}, []);
 	const supported = recEngine(cfg || cfgNow) !== "none";
+	const idles = (0, import_react.useRef)(true);
 	const armIdle = () => {
 		clearTimeout(idleTimer.current);
-		idleTimer.current = setTimeout(() => void live.current?.expire(), DICT_IDLE_MS);
+		if (idles.current) idleTimer.current = setTimeout(() => void live.current?.expire(), DICT_IDLE_MS);
+	};
+	const chimed = (0, import_react.useRef)(false);
+	const gated = (0, import_react.useRef)(false);
+	const sound = (kind) => {
+		if (prefsRef.current.sounds === false) return;
+		if (!queue.busy) return chime(voiceAudioCtx(), kind);
+		const after = (on) => {
+			if (on) return;
+			speakingListeners.delete(after);
+			chime(voiceAudioCtx(), kind);
+		};
+		speakingListeners.add(after);
 	};
 	const halt = () => {
+		gated.current = false;
+		queue.setGate(null);
+		if (chimed.current) {
+			chimed.current = false;
+			sound("stop");
+		}
 		clearTimeout(idleTimer.current);
 		deciding.current = null;
 		live.current = null;
@@ -41071,7 +41440,11 @@ function TopBarMic() {
 		const r = engine === "server" ? serverRec : browserRec;
 		voiceMark("start");
 		const ctx = voiceAudioCtx();
+		confirmer.current?.prime();
 		const skipMs = Math.max(bargeIn(queue, ask && opts.title === ask.title ? ask.title : ""), opts.skipMs || 0);
+		const chimeSkip = prefsRef.current.sounds !== false ? CHIME_MS + 30 : 0;
+		const continuous = opts.continuous !== false;
+		idles.current = opts.idle ?? (!continuous || prefsRef.current.ptt === "hold");
 		const d = new LiveDictation(target(into, opts.title), {
 			caption: say,
 			halt: () => {
@@ -41082,15 +41455,32 @@ function TopBarMic() {
 				const ask = askVoice();
 				if (ask && ask.title === session && ask.phrase?.(text)) {
 					setTimeout(() => {
-						if (!live.current && askVoice()?.field()) start(null);
+						if (!live.current && askVoice()?.field()) start(null, { continuous });
 					}, 150);
-					return true;
+					return "end";
 				}
 				const reply = await routePhrase(text, session);
 				if (reply.kind === "prompt") return false;
 				if (reply.kind === "hush") return "hush";
 				await routed(reply, text, session);
-				return true;
+				return reply.kind === "stop" || reply.kind === "off" || reply.kind === "cancel" ? "end" : true;
+			},
+			retarget: () => {
+				if (into) return null;
+				const ask = askVoice();
+				const title = ask && ask.title === opts.title ? ask.title : "";
+				opts = {
+					...opts,
+					title: title || void 0
+				};
+				publishMicState({
+					listening: true,
+					title: title || useUi.getState().focused || ""
+				});
+				return {
+					target: target(null, title),
+					hint: title ? ask?.hint() : void 0
+				};
 			},
 			hush: () => {
 				queue.cancel();
@@ -41103,8 +41493,20 @@ function TopBarMic() {
 				questions.delete(title);
 			},
 			pending: (title) => liveActivity(title) === "clarify" || questions.has(title),
-			done: (how) => opts.done?.(how)
-		}, { hint: opts.hint });
+			done: (how) => opts.done?.(how),
+			confirm: (kind) => void confirmer.current?.say(kind),
+			quietMs: () => {
+				const at = lastLoudAt();
+				return at ? Date.now() - at : Infinity;
+			},
+			endPhrase: () => {
+				if (live.current === d) rec.current?.endPhrase?.();
+			},
+			sentIn: (ms) => void (lastSentMs = ms)
+		}, {
+			hint: opts.hint,
+			continuous
+		});
 		live.current = d;
 		rec.current = r;
 		setListening(true);
@@ -41170,12 +41572,19 @@ function TopBarMic() {
 				}
 				d.expire();
 			}
-		}, { skipMs });
+		}, { skipMs: Math.max(skipMs, chimeSkip) });
 		refreshCfg();
 		if (!ok) {
 			halt();
 			say("Speech recognition did not start");
 			return null;
+		}
+		sound("start");
+		chimed.current = true;
+		if (continuous) {
+			gated.current = true;
+			queue.setGate(() => !d.midSentence());
+			queue.release();
 		}
 		if (r === browserRec) {
 			d.ready();
@@ -41193,6 +41602,7 @@ function TopBarMic() {
 		const d = start(null, {
 			title,
 			hint,
+			continuous: false,
 			done: (how) => {
 				clearTimeout(timer);
 				resolve(how);
@@ -41208,6 +41618,10 @@ function TopBarMic() {
 		const r = rec.current;
 		const d = live.current;
 		if (!r || !d || deciding.current) return;
+		if (gated.current && queue.busy && prefsRef.current.ptt !== "hold") {
+			queue.skip();
+			return;
+		}
 		let done = false;
 		const decide = () => {
 			if (done) return;
@@ -41276,7 +41690,13 @@ function TopBarMic() {
 					if (r.kind === "new") refreshInstances().then(() => selectSession(title, { noKeyboard: true }));
 					else selectSession(title, { noKeyboard: true });
 				}
-				announce(r.say || (r.kind === "new" ? "Started " : "Now talking to ") + (r.name || r.title || "") + ".");
+				{
+					const line = r.say || (r.kind === "new" ? "Started " : "Now talking to ") + (r.name || r.title || "") + ".";
+					if (prefsRef.current.confirm !== false) {
+						say(line);
+						confirmer.current?.say({ line });
+					} else announce(line);
+				}
 				return;
 			case "cancel":
 				say("Dropped");
@@ -41374,10 +41794,9 @@ function TopBarMic() {
 		if (live.current) return;
 		const d = start(textField(document.activeElement), {
 			hint: WAKE_HINT,
-			skipMs: CHIME_MS + 30
+			idle: false
 		});
 		if (!d) return;
-		chime(voiceAudioCtx());
 		wakeFrom = {
 			d,
 			at: soundEnd
@@ -90389,7 +90808,7 @@ function MicPrefs() {
 							...prefs,
 							ptt: "toggle"
 						})
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Click to talk — press to start, press again to stop" })]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Click to talk — press to start; it listens until you say “over and out” or press again" })]
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "voice-ptt-choice",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
@@ -90444,6 +90863,68 @@ function MicPrefs() {
 			})]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row set-switch-row",
+			id: "voice-confirm-row",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "notif-rule-text",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					id: "voice-confirm-label",
+					children: "Spoken confirmations"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint notif-rule-desc",
+					id: "voice-confirm-hint",
+					children: "Say “Sent.”, “Cleared.”, “Stopped.” or the session you switched to, in the reply voice — about what you did, so even with Read replies aloud off."
+				})]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "ca-switch",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					id: "voice-confirm",
+					"aria-labelledby": "voice-confirm-label",
+					checked: prefs.confirm !== false,
+					onChange: (e) => {
+						if (e.target.checked) voiceAudioCtx();
+						save({
+							...prefs,
+							confirm: e.target.checked
+						});
+					}
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+			})]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row set-switch-row",
+			id: "voice-sounds-row",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "notif-rule-text",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-label",
+					id: "voice-sounds-label",
+					children: "Sounds"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint notif-rule-desc",
+					id: "voice-sounds-hint",
+					children: "A rising chime when the mic starts listening, a falling one when it stops."
+				})]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "ca-switch",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					id: "voice-sounds",
+					"aria-labelledby": "voice-sounds-label",
+					checked: prefs.sounds !== false,
+					onChange: (e) => {
+						if (e.target.checked) voiceAudioCtx();
+						save({
+							...prefs,
+							sounds: e.target.checked
+						});
+					}
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+			})]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "set-row",
 			id: "voice-mic-howto",
 			children: [
@@ -90453,7 +90934,7 @@ function MicPrefs() {
 					children: [
 						"The words are typed into the session as you speak, and corrected when the accurate pass hears a phrase otherwise. ",
 						DICT_HINT,
-						"; Esc takes them back. Say “stop recording” to stop, “focus 3” or “next session” to switch, and “yes”, “no”, “always” or a number to answer a dialog. Hotkey:",
+						"; Esc takes them back. A click keeps the mic on across messages until “over and out”. Say “stop recording” to stop, “focus 3” or “next session” to switch, and “yes”, “no”, “always” or a number to answer a dialog. Hotkey:",
 						" ",
 						talkHotkey() || "the Talk shortcut in Keyboard shortcuts",
 						"."
@@ -105036,7 +105517,7 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 		name,
 		act
 	]);
-	const hint = d?.parsed ? name + ": " + dialogChoices(d) : isDialog ? "Answer " + name + " on the screen" : "Answer " + name + " — say submit to send";
+	const hint = d?.parsed ? name + ": " + dialogChoices(d) : isDialog ? "Answer " + name + " on the screen" : answerHint(name);
 	const sendRef = (0, import_react.useRef)(send);
 	sendRef.current = sel?.field ? sendField : send;
 	const hintRef = (0, import_react.useRef)(hint);
