@@ -151,7 +151,7 @@ class TestInstall:
         st = _run()
         assert st["state"] == "done" and st["step"] == "done" and st["error"] == ""
         assert st["started"] and st["finished"] >= st["started"]
-        install, whisper, piper = spawn.calls
+        install, whisper, stream, piper = spawn.calls
         assert install[:5] == [
             "/usr/bin/uv",
             "pip",
@@ -162,6 +162,7 @@ class TestInstall:
         assert whisper[0] == sys.executable and whisper[1] == "-c"
         assert "_download_main" in whisper[2]
         assert whisper[3:] == ["whisper", "small"]
+        assert stream[3:] == ["whisper", "base.en"]  # the live transcript's
         assert piper[3:] == ["piper", "en_US-lessac-medium"]
         S.invalidate()
         voice = S.load_settings().voice
@@ -177,11 +178,24 @@ class TestInstall:
 
     def test_the_configured_model_and_voice_are_fetched(self, spawn):
         S.update_settings(
-            voice={"stt_model": "medium.en", "tts_voice": "en_GB-alan-low"}
+            voice={
+                "stt_model": "medium.en",
+                "stt_stream_model": "tiny.en",
+                "tts_voice": "en_GB-alan-low",
+            }
         )
         _run()
         assert spawn.calls[1][3:] == ["whisper", "medium.en"]
-        assert spawn.calls[2][3:] == ["piper", "en_GB-alan-low"]
+        assert spawn.calls[2][3:] == ["whisper", "tiny.en"]
+        assert spawn.calls[3][3:] == ["piper", "en_GB-alan-low"]
+
+    def test_one_model_for_both_is_fetched_once(self, spawn):
+        S.update_settings(voice={"stt_model": "base.en"})
+        _run()
+        assert [c[3:] for c in spawn.calls[1:]] == [
+            ["whisper", "base.en"],
+            ["piper", "en_US-lessac-medium"],
+        ]
 
     def test_another_backends_names_fall_back_to_the_defaults(self, spawn):
         S.update_settings(
@@ -189,7 +203,8 @@ class TestInstall:
         )
         _run()
         assert spawn.calls[1][3:] == ["whisper", "small"]
-        assert spawn.calls[2][3:] == ["piper", "en_US-lessac-medium"]
+        assert spawn.calls[2][3:] == ["whisper", "base.en"]
+        assert spawn.calls[3][3:] == ["piper", "en_US-lessac-medium"]
 
     def test_steps_are_reported_while_running(self, spawn):
         gate = threading.Event()

@@ -30,7 +30,7 @@ Status codes, in the order they are checked:
 * ``stream/{id}/chunk`` — 404 unknown or expired id; 415 not ``audio/wav``,
   or a WAV that is not 16 kHz mono 16-bit; 413 over
   :data:`MAX_AUDIO_BYTES`; 502 the pass failed (the chunk is kept); 200
-  ``{"committed", "partial", "ms", "audio_s"}``.
+  ``{"committed", "partial", "ms", "window_s", "audio_s"}``.
 * ``stream/{id}/end`` — 404 as above; 502; 200 ``{"committed", "partial":
   ""}`` and the stream is gone. ``DELETE stream/{id}`` — 204, always.
 * ``install-local`` — ``POST`` 403 not the owner; 409 already running; 200
@@ -152,9 +152,11 @@ def voice_get(allowed: bool = Depends(_auth.configure_allowed)) -> JSONResponse:
         "configure_allowed": bool(allowed),
     }
     body.update(_speech.describe())
-    # A voice client is here: have the local model resident before its first
-    # press (a no-op unless voice.stt_backend is local and the model is out).
+    # A voice client is here: have the recognition models resident and the
+    # voice warm before its first use (no-ops unless there is something to
+    # load: see core.speech.warm_in_background).
     _speech.warm_in_background("stt")
+    _speech.warm_in_background("tts")
     return JSONResponse(body)
 
 
@@ -308,7 +310,9 @@ def _no_stream() -> JSONResponse:
 async def voice_stream_chunk(sid: str, request: Request) -> JSONResponse:
     """Feed one ``audio/wav`` chunk (16 kHz mono 16-bit PCM, the raw body)
     → ``{"committed": newly committed words, "partial": the unstable tail,
-    "ms": inference ms, "audio_s": seconds held}``. Send the next chunk only
+    "ms": inference ms, "window_s": seconds the pass decoded, "audio_s":
+    seconds held}`` — ``ms`` and ``window_s`` are 0 when a quiet chunk ran
+    no pass (``core.speech_stream``). Send the next chunk only
     after this one returned. See the module doc for the status codes."""
     stream = _stream.get_stream(sid)
     if stream is None:
@@ -335,6 +339,7 @@ async def voice_stream_chunk(sid: str, request: Request) -> JSONResponse:
             "committed": committed,
             "partial": partial,
             "ms": stream.last_ms,
+            "window_s": round(stream.last_window_s, 2),
             "audio_s": round(stream.held_seconds, 2),
         }
     )

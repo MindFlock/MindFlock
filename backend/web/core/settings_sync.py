@@ -251,6 +251,7 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         "stt_url",
         "stt_api_key",
         "stt_model",
+        "stt_stream_model",
         "tts_backend",
         "tts_url",
         "tts_api_key",

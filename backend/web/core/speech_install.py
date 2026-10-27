@@ -14,7 +14,9 @@ the Settings screen, in a background thread, three steps:
 2. **downloading recognition model (<name>)** — the faster-whisper model of
    ``voice.stt_model`` (``small`` unless it names another size) into
    ``speech.voice_dir()/whisper``, the cache ``LocalSTT`` loads from, so the
-   first phrase is not a download.
+   first phrase is not a download; then **downloading streaming model
+   (<name>)**, the live transcript's (``speech.stream_whisper_model``:
+   ``base.en``, ~75 MB) — skipped when it is the same model.
 3. **downloading voice (<name>)** — the piper voice of ``voice.tts_voice``
    (``en_US-lessac-medium`` unless it names a piper voice), fetched the way
    ``LocalTTS`` fetches one (``speech.fetch_piper_voice``).
@@ -278,6 +280,7 @@ def _install() -> None:
     try:
         voice = _settings().load_settings().voice
         model = _speech.whisper_model(voice.stt_model)
+        stream = _speech.stream_whisper_model(voice.stt_stream_model)
         piper = _speech.piper_voice(voice.tts_voice)
         _run_step(STEP_PACKAGES, install_argv())
         _speech.invalidate()
@@ -285,6 +288,11 @@ def _install() -> None:
             "downloading recognition model (%s)" % model,
             _download_argv("whisper", model),
         )
+        if stream != model:
+            _run_step(
+                "downloading streaming model (%s)" % stream,
+                _download_argv("whisper", stream),
+            )
         _run_step("downloading voice (%s)" % piper, _download_argv("piper", piper))
         _settings().update_settings(voice={"stt_backend": "local"})
         _speech.invalidate()

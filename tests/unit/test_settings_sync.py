@@ -230,6 +230,18 @@ def test_every_settings_field_is_classified():
             )
 
 
+def test_the_voice_models_are_this_machines():
+    """Which whisper models run is about THIS machine's CPU and RAM — the
+    streaming model as much as the one-shot one."""
+    for name in ("stt_model", "stt_stream_model"):
+        assert name in settings_sync.LOCAL["voice"]
+        assert name not in settings_sync.SYNCED["voice"]
+    v = store.VoiceSettings.from_dict({"stt_stream_model": " tiny.en "})
+    assert v.stt_stream_model == "tiny.en"
+    assert v.to_dict() == {"stt_stream_model": "tiny.en"}
+    assert store.VoiceSettings().to_dict() == {}
+
+
 def test_secret_and_keyed_paths_are_all_synced_paths():
     assert settings_sync.SECRET_PATHS <= set(settings_sync.paths())
     assert set(settings_sync.KEYED) <= set(settings_sync.paths())
