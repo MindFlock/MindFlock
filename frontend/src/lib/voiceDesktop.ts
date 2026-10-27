@@ -330,11 +330,14 @@ export function sayAllFlip(prev: RepliesMode, next: RepliesMode): boolean | null
   return (prev === "all") === (next === "all") ? null : next === "all";
 }
 
-/** On load: the pref wins — the marker to post when the server's
- * `say_all` disagrees with it, else null (an older server sends none). */
+/** On load: a device on "all" turns the server's marker ON when it is off
+ * (true); it never turns it off — another device may be the one listening
+ * to everything, and off is only ever an explicit switch away
+ * (`sayAllFlip`). Null when nothing is to be posted (an older server sends
+ * no `say_all`). */
 export function sayAllMismatch(pref: RepliesMode, server: boolean | undefined): boolean | null {
   if (typeof server !== "boolean") return null;
-  return (pref === "all") === server ? null : pref === "all";
+  return pref === "all" && !server ? true : null;
 }
 
 /** POST /api/voice/say-all {on}: "forbidden" on a 403 (not the owner). */

@@ -416,7 +416,9 @@ describe('"Everything": a Say line on every prompt (POST /api/voice/say-all)', (
     expect(sayAllFlip("off", "mine")).toBeNull();
     expect(sayAllFlip("all", "all")).toBeNull();
     expect(sayAllMismatch("all", false)).toBe(true);
-    expect(sayAllMismatch("off", true)).toBe(false);
+    // Never off on load: another device may be the one on Everything.
+    expect(sayAllMismatch("off", true)).toBeNull();
+    expect(sayAllMismatch("mine", true)).toBeNull();
     expect(sayAllMismatch("all", true)).toBeNull();
     expect(sayAllMismatch("mine", false)).toBeNull();
     expect(sayAllMismatch("all", undefined)).toBeNull(); // an older server

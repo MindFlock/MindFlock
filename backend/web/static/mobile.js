@@ -5888,14 +5888,15 @@
       });
   }
   // The server's say-all marker against the Spoken replies pref: on load
-  // (the first GET that carries it) the pref wins, with one POST; an older
-  // server (no say_all) is left alone.
+  // (the first GET that carries it) a phone on Everything turns the marker
+  // ON when it is off, once. It never turns it off on load — another
+  // device may be the one listening to everything; off is only ever an
+  // explicit switch away. An older server (no say_all) is left alone.
   function voiceSayAllSync(serverOn) {
     voice.cfg.say_all = serverOn;
     if (voice.sayAll.synced) return;
     voice.sayAll.synced = true;
-    var want = voice.prefs.replies === "all";
-    if (serverOn !== want) voiceSayAllPost(want);
+    if (voice.prefs.replies === "all" && !serverOn) voiceSayAllPost(true);
   }
   function voiceSayAllPost(on) {
     voice.sayAll.synced = true;

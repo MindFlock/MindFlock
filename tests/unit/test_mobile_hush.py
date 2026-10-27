@@ -232,7 +232,11 @@ def test_say_all_follows_everything():
     assert "r.status === 403" in post and "voice.sayAll.denied = true;" in post
     sync = _whole(js, "voiceSayAllSync")
     assert "if (voice.sayAll.synced) return;" in sync
-    assert "if (serverOn !== want) voiceSayAllPost(want);" in sync
+    # On load only ever ON: another device may be the one on Everything.
+    assert (
+        'if (voice.prefs.replies === "all" && !serverOn) voiceSayAllPost(true);' in sync
+    )
+    assert "voiceSayAllPost(false)" not in sync
     # Only a GET that carries it (an older server is left alone).
     assert 'if (typeof j.say_all === "boolean") voiceSayAllSync(j.say_all);' in _whole(
         js, "voiceLoadCfg"

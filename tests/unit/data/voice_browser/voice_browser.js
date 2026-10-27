@@ -1901,7 +1901,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await page11.goto(`http://127.0.0.1:${PORT}/mobile.html?s=login-fix`, { waitUntil: "load" });
     await waitFor(page11, () => window.mfVoice && window.mfVoice.cfg.loaded, 6000, "say-all page loaded");
     await sleep(400);
-    check("say-all: not Everything on load while the server's say_all is on → ONE POST {on:false}", JSON.stringify(posts("/voice/say-all").slice(sa1).map((x) => x.body.on)) === "[false]", JSON.stringify(posts("/voice/say-all").slice(sa1)));
+    check("say-all: not Everything on load while the server's say_all is on → NOTHING posted (another device may be on Everything; off is only an explicit switch)", posts("/voice/say-all").length === sa1, JSON.stringify(posts("/voice/say-all").slice(sa1)));
     await page11.close();
     state.sayAll = null;
     state.ntfy = { ask_popup: false, active: false };

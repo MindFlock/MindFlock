@@ -3014,20 +3014,65 @@
   min-height: 44px;
 }
 
+/* Back · Cancel the question … then the step's ONE primary (Next / Submit,
+   or the review's Cancel + Submit answers): the house `.modal-actions`
+   buttons, a little apart from the options above. */
 .ask-sel-nav {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  margin-top: 2px;
 }
 
 .ask-sel-nav .ask-sel-sp {
   flex: 1;
 }
 
-.ask-cancel-q {
+.ask-sel-nav button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.ask-sel-nav button:not(.linklike):hover:not(:disabled) {
+  border-color: rgba(var(--accent-rgb), 0.7);
+}
+
+.ask-sel-nav button[type=submit]:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.ask-sel-nav button[type=submit]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ask-sel-nav .ask-cancel-q {
+  border: none;
+  background: none;
+  padding: 4px 2px;
   font-size: 12px;
   color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.ask-sel-nav .ask-cancel-q:hover:not(:disabled) {
+  color: var(--text);
+}
+
+/* The review reads as a confirmation: the answers, then the buttons. */
+.ask-select[data-stage="review"] .ask-review {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+
+.ask-select {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 /* Connect GitHub's numbered token steps (components/dialogs/ConnectGitHub.tsx):
    1 make a token → 2 paste it → 3 Save & test, the answer under step 3. The
