@@ -1386,7 +1386,11 @@ preference order:
   [memory guard](session-engine.md#memory-guard) reads low; models are
   downloaded from Hugging Face on first use into `~/.mindflock/voice/`
   (`$MINDFLOCK_VOICE_DIR`: `whisper/`, `piper/<voice>.onnx`) and a loaded
-  model is unloaded after 10 idle minutes. webm/mp4 clips decode through
+  model is unloaded after 30 idle minutes; with `voice.stt_backend = local`
+  it is loaded ahead of use (and primed with one silent pass) a few seconds
+  after boot and again whenever a client fetches `GET /api/voice`, on a
+  daemon thread, so the first press of the mic never pays the load. webm/mp4
+  clips decode through
   faster-whisper's bundled PyAV, so `ffmpeg` is not required (readiness still
   says when it is missing, as the first thing to try when a clip is refused).
   `local` recognition is the only backend that **streams** (the

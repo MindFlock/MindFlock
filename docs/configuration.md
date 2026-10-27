@@ -1206,7 +1206,9 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     host (OpenAI, Groq, a self-hosted server); `"local"` = faster-whisper /
     piper on this machine — the optional upgrade (models under
     `~/.mindflock/voice/` or `$MINDFLOCK_VOICE_DIR`, refused while memory is
-    low, unloaded after 10 idle minutes). Only `local` recognition **streams**
+    low, unloaded after 30 idle minutes — and loaded ahead of the first press:
+    at boot and whenever a voice client fetches `GET /api/voice`, so a mic
+    press never waits for the model). Only `local` recognition **streams**
     (words appear while the person speaks: `POST /api/voice/stream`,
     `GET /api/voice`'s `server_ready.stt_stream`); with `system` or
     `openai` the mic sends one clip per phrase. The built-in Windows recognizer is
