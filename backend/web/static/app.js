@@ -34696,7 +34696,41 @@ function normOption(v) {
 		kind: str$3(o.kind, "other")
 	};
 	if (keys.length) opt.keys = keys;
+	const desc = typeof o.desc === "string" ? o.desc.trim() : "";
+	if (desc) opt.desc = desc;
+	if (typeof o.checked === "boolean") opt.checked = o.checked;
 	return opt;
+}
+var keyList = (v) => Array.isArray(v) ? v.map((k) => str$3(k).trim()).filter(Boolean) : [];
+function normSelect(d, o) {
+	d.multi = o.multi === true;
+	d.steps = (Array.isArray(o.steps) ? o.steps : []).map((v) => {
+		const s = obj$3(v);
+		return s.submit === true ? {
+			label: str$3(s.label).trim(),
+			done: s.done === true,
+			submit: true
+		} : {
+			label: str$3(s.label).trim(),
+			done: s.done === true
+		};
+	});
+	const step = Math.trunc(Number(o.step));
+	d.step = Number.isFinite(step) && step >= 0 && step < d.steps.length ? step : 0;
+	if (Array.isArray(o.review)) d.review = o.review.map((v) => ({
+		question: str$3(obj$3(v).question).trim(),
+		answer: str$3(obj$3(v).answer).trim()
+	}));
+	const nav = obj$3(o.nav);
+	const or = (keys, dflt) => keys.length ? keys : [dflt];
+	d.nav = {
+		next: or(keyList(nav.next), "Right"),
+		prev: or(keyList(nav.prev), "Left"),
+		submit: or(keyList(nav.submit), "Enter")
+	};
+	const cursor = str$3(o.cursor).trim();
+	d.cursor = /^[1-9]$/.test(cursor) ? cursor : null;
+	d.button = str$3(o.button).trim() || null;
 }
 function normDialog(v) {
 	const o = obj$3(v);
@@ -34710,11 +34744,12 @@ function normDialog(v) {
 		command,
 		options
 	};
-	if (o.kind === "question" || o.kind === "dialog") d.kind = o.kind;
+	if (o.kind === "question" || o.kind === "dialog" || o.kind === "select") d.kind = o.kind;
 	if (d.kind === "question") {
 		d.parsed = false;
 		d.options = [];
 	}
+	if (d.kind === "select") normSelect(d, o);
 	const heading = str$3(o.heading).trim();
 	if (heading) d.heading = heading;
 	const source = str$3(o.source).trim();
@@ -34909,10 +34944,12 @@ function askQueue(instances, waiting, events, opts = {}) {
 var AskMemory = class {
 	done = /* @__PURE__ */ new Map();
 	snoozedDialog = /* @__PURE__ */ new Map();
+	asked = /* @__PURE__ */ new Set();
 	handle(item, _how = "answered", dialogId) {
 		let s = this.done.get(item.title);
 		if (!s) this.done.set(item.title, s = /* @__PURE__ */ new Set());
 		s.add(item.key);
+		if (item.kind === "question") this.asked.delete(item.title);
 		const id = dialogId || item.dialogId;
 		if (_how === "later" && item.kind === "dialog" && id) this.snoozedDialog.set(item.title, id);
 	}
@@ -34925,14 +34962,25 @@ var AskMemory = class {
 		this.done.delete(title);
 		this.snoozedDialog.delete(title);
 	}
+	invite(title) {
+		this.asked.add(title);
+	}
+	invited(title) {
+		return this.asked.has(title);
+	}
 	prune(asking) {
 		for (const t of [...this.done.keys()]) if (!asking.has(t)) this.done.delete(t);
 		for (const t of [...this.snoozedDialog.keys()]) if (!asking.has(t)) this.snoozedDialog.delete(t);
+		for (const t of [...this.asked]) if (!asking.has(t)) this.asked.delete(t);
 	}
 };
+function cardQueue(queue, memory) {
+	return queue.filter((i) => !memory.handled(i) && (i.kind === "dialog" || memory.invited(i.title)));
+}
 var askMemory = new AskMemory();
 function askSuppressed(item, ctx) {
 	if (!ctx.popupOn) return "off";
+	if (item.kind === "question") return "prose";
 	if (ctx.memory.handled(item)) return "handled";
 	const now = ctx.now ?? Date.now();
 	if (ctx.focused === item.title && ctx.typedAt && now - ctx.typedAt < TYPED_RECENTLY_MS) return "typing";
@@ -34958,6 +35006,7 @@ function nextAfter(queue, current, before) {
 function askKindLabel(kind, d) {
 	if (kind === "question") return "Question";
 	if (!d) return "Permission";
+	if (d.kind === "select") return "Question";
 	const heading = String(d.heading || "");
 	const words = [
 		heading,
@@ -35003,8 +35052,316 @@ function sendAnswer(title, text, say = false) {
 function openAsk(title) {
 	if (!title) return;
 	askMemory.forget(title);
+	askMemory.invite(title);
 	useUi.getState().openDialogFor("ask", title);
 }
+//#endregion
+//#region src/lib/askSelect.ts
+function isSelect(d) {
+	return !!d && d.kind === "select" && d.parsed && d.options.length > 0;
+}
+function selectStage(d) {
+	if (d.steps?.[d.step ?? -1]?.submit || d.review && d.review.length) return "review";
+	return d.multi ? "multi" : "single";
+}
+var isBox = (o) => typeof o.checked === "boolean";
+var takesWords = (o) => o.kind === "text" || o.kind === "chat";
+function initialChecked(d) {
+	const out = {};
+	for (const o of d.options) if (isBox(o)) out[o.key] = !!o.checked;
+	return out;
+}
+function dirty(d, checked) {
+	return d.options.some((o) => isBox(o) && !!checked[o.key] !== !!o.checked);
+}
+var press = (o) => ({
+	to: "answer",
+	keys: o.keys?.length ? o.keys : [o.key]
+});
+function selectPosts(d, act, checked = {}) {
+	if (act.type === "cancel") return [{
+		to: "answer",
+		keys: ["Escape"]
+	}];
+	const changed = d.multi ? d.options.filter((o) => isBox(o) && !!checked[o.key] !== !!o.checked) : [];
+	const toggles = changed.length ? [{
+		to: "answer",
+		keys: changed.flatMap((o) => o.keys?.length ? o.keys : [o.key])
+	}] : [];
+	const opt = "key" in act ? d.options.find((o) => o.key === act.key) : void 0;
+	switch (act.type) {
+		case "pick": return opt ? [...toggles, press(opt)] : [];
+		case "next": return d.nav?.next?.length ? [...toggles, {
+			to: "answer",
+			keys: d.nav.next
+		}] : toggles;
+		case "prev": return d.nav?.prev?.length && (d.step ?? 0) > 0 ? [...toggles, {
+			to: "answer",
+			keys: d.nav.prev
+		}] : [];
+		case "text": {
+			const text = act.text.trim();
+			if (!opt || !text) return [];
+			return [
+				...toggles,
+				press(opt),
+				{ to: "settle" },
+				{
+					to: "answer",
+					keys: ["Enter"],
+					text
+				}
+			];
+		}
+		case "chat": {
+			const text = act.text.trim();
+			if (!opt || !text) return [];
+			return [
+				...toggles,
+				press(opt),
+				{ to: "settle" },
+				{
+					to: "send",
+					text
+				}
+			];
+		}
+	}
+}
+var SELECT_KEY_GAP_MS = 150;
+var SELECT_SETTLE_MS = 400;
+var SELECT_REDRAW_MS = 350;
+var SEND_RETRIES = 3;
+var inDialog = (err) => {
+	const e = err;
+	return e?.status === 409 && !!e.body?.in_dialog;
+};
+async function runSelect(d, posts, deps) {
+	const read = () => deps.fetch().catch(() => void 0);
+	let first = true;
+	for (const p of posts) {
+		if (p.to === "settle") {
+			await deps.sleep(SELECT_SETTLE_MS);
+			continue;
+		}
+		if (!first) await deps.sleep(SELECT_KEY_GAP_MS);
+		try {
+			if (p.to === "answer") try {
+				await deps.answer(p.keys, d.id, p.text);
+			} catch (err) {
+				if (first || !(isDialogChanged(err) || isDialogAnswered(err))) throw err;
+				await deps.answer(p.keys, null, p.text);
+			}
+			else for (let tries = 0;; tries++) try {
+				await deps.send(p.text);
+				break;
+			} catch (err) {
+				if (!inDialog(err) || tries >= SEND_RETRIES) throw err;
+				await deps.sleep(SELECT_SETTLE_MS * 2);
+			}
+		} catch (err) {
+			if (first && isDialogChanged(err)) return {
+				kind: "changed",
+				dialog: await read()
+			};
+			if (first && isDialogAnswered(err)) return {
+				kind: "already",
+				dialog: await read()
+			};
+			return {
+				kind: "failed",
+				error: err
+			};
+		}
+		first = false;
+	}
+	await deps.sleep(SELECT_REDRAW_MS);
+	return {
+		kind: "done",
+		dialog: await read()
+	};
+}
+function answerSelect(title, keys, dialogId, text) {
+	const json = {
+		keys,
+		by: "user"
+	};
+	if (dialogId) json.dialog_id = dialogId;
+	if (text) json.text = text;
+	return instApi(title, "/answer", { json });
+}
+function selectKey(d, e, typing) {
+	if (!d || !isSelect(d) || typing || e.ctrlKey || e.metaKey || e.altKey || !/^[1-9]$/.test(e.key)) return null;
+	const o = d.options.find((x) => x.key === e.key);
+	if (!o) return null;
+	if (takesWords(o)) return {
+		type: "field",
+		key: o.key
+	};
+	return {
+		type: d.multi && isBox(o) ? "toggle" : "pick",
+		key: o.key
+	};
+}
+function fieldPhrase(text) {
+	const t = text.toLowerCase().replace(/[^a-z ]+/g, " ").replace(/\s+/g, " ").trim();
+	if (/^(type|write) (something|my own|an answer|it)\b/.test(t) || t === "other") return "text";
+	if (/^chat about (this|it)\b/.test(t)) return "chat";
+	return null;
+}
+var SELECT_GRACE_MS = 1e4;
+var SELECT_POLL_MS = 2e3;
+function fresh(d, now) {
+	return {
+		dialog: d,
+		checked: initialChecked(d),
+		field: "",
+		text: "",
+		busy: false,
+		note: "",
+		at: now,
+		ended: ""
+	};
+}
+var SelectFlows = class {
+	map = /* @__PURE__ */ new Map();
+	subs = /* @__PURE__ */ new Set();
+	get(title) {
+		return this.map.get(title) || null;
+	}
+	subscribe = (cb) => {
+		this.subs.add(cb);
+		return () => {
+			this.subs.delete(cb);
+		};
+	};
+	set(title, f) {
+		this.map.set(title, f);
+		this.subs.forEach((s) => s());
+	}
+	patch(title, p) {
+		const f = this.map.get(title);
+		if (f) this.set(title, {
+			...f,
+			...p
+		});
+	}
+	offer(title, d, readAt = Date.now()) {
+		if (!isSelect(d)) return;
+		const f = this.map.get(title);
+		if (f && (f.busy || readAt < f.at || f.dialog.id === d.id)) return;
+		this.set(title, fresh(d, readAt));
+	}
+	took(title, d, now = Date.now(), note = "") {
+		const f = this.map.get(title);
+		if (!f || d === void 0) {
+			if (f) this.patch(title, { busy: false });
+			return;
+		}
+		if (!d) return this.set(title, {
+			...f,
+			busy: false,
+			ended: "done",
+			at: now
+		});
+		if (!isSelect(d)) return this.set(title, {
+			...f,
+			busy: false,
+			ended: "handoff",
+			note,
+			at: now
+		});
+		if (d.id === f.dialog.id) {
+			if (f.busy) return this.set(title, {
+				...fresh(d, now),
+				note: f.note
+			});
+			const checked = dirty(f.dialog, f.checked) ? f.checked : initialChecked(d);
+			return this.set(title, {
+				...f,
+				dialog: d,
+				checked,
+				ended: "",
+				at: now
+			});
+		}
+		const next = fresh(d, now);
+		const was = f.field ? f.dialog.options.find((o) => o.key === f.field) : void 0;
+		const same = was && d.step === f.dialog.step && d.options.some((o) => o.key === was.key && o.kind === was.kind);
+		this.set(title, same && !f.busy ? {
+			...next,
+			field: f.field,
+			text: f.text
+		} : next);
+	}
+	polled(title, d, startedAt, now = Date.now()) {
+		const f = this.map.get(title);
+		if (!f || f.busy || f.ended || f.at > startedAt) return;
+		this.took(title, d, now);
+	}
+	toggle(title, key) {
+		const f = this.map.get(title);
+		if (!f || f.busy || f.ended) return;
+		this.patch(title, {
+			checked: {
+				...f.checked,
+				[key]: !f.checked[key]
+			},
+			note: ""
+		});
+	}
+	openField(title, key) {
+		const f = this.map.get(title);
+		if (f && !f.busy && f.field !== key) this.patch(title, {
+			field: key,
+			text: ""
+		});
+	}
+	closeField(title) {
+		this.patch(title, {
+			field: "",
+			text: ""
+		});
+	}
+	setText(title, text) {
+		this.patch(title, { text });
+	}
+	async act(title, act, deps, now = Date.now) {
+		const f = this.map.get(title);
+		if (!f || f.busy || f.ended) return;
+		const posts = selectPosts(f.dialog, act, f.checked);
+		if (!posts.length) return;
+		this.patch(title, {
+			busy: true,
+			note: "",
+			at: now()
+		});
+		const out = await runSelect(f.dialog, posts, deps);
+		if (out.kind === "failed") {
+			const msg = out.error?.message || String(out.error || "error");
+			this.patch(title, {
+				busy: false,
+				note: "Couldn't answer: " + msg,
+				at: now()
+			});
+			return;
+		}
+		this.took(title, out.dialog, now(), out.kind === "changed" ? "The prompt changed — this is the new one" : "");
+	}
+	active(title, now = Date.now()) {
+		const f = this.map.get(title);
+		return !!f && !f.ended && (f.busy || now - f.at < SELECT_GRACE_MS);
+	}
+	prune(asking) {
+		let gone = false;
+		for (const t of [...this.map.keys()]) if (!asking.has(t) && !this.active(t)) {
+			this.map.delete(t);
+			gone = true;
+		}
+		if (gone) this.subs.forEach((s) => s());
+	}
+};
+var selectFlows = new SelectFlows();
 //#endregion
 //#region src/components/AnswerStrip.tsx
 var ANSWER_RECHECK_MS = 3e3;
@@ -35166,11 +35523,11 @@ function AnswerStripView({ state, rootRef, variant, hint, onPick, onOpen, childr
 		})]
 	});
 }
-function AskedInWordsView({ question, variant, onReply, onOpen }) {
+function AskedInWordsView({ question, variant, onReply, onOpen, asking = "question" }) {
 	const q = (question || "").trim();
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "flock-answer fa-" + variant + " is-question",
-		"data-asking": "question",
+		"data-asking": asking,
 		onClick: (e) => e.stopPropagation(),
 		onDoubleClick: (e) => e.stopPropagation(),
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -35315,10 +35672,11 @@ function useAnswerStrip(title, waiting, opts = {}) {
 		});
 		return true;
 	};
-	const reload = () => {
+	const reload = (note) => {
 		fetchDialog(title).then((dialog) => dispatch({
 			type: "loaded",
-			dialog
+			dialog,
+			note: dialog ? note : ""
 		}), () => {});
 	};
 	return {
@@ -35356,6 +35714,14 @@ function AnswerStrip({ title, activity, variant, question, onOpen, onReply, onRe
 		onOpen
 	});
 	if (!waiting) return null;
+	const sd = state.dialog;
+	if (sd && isSelect(sd) && (sd.multi || selectStage(sd) === "review")) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AskedInWordsView, {
+		question: sd.question,
+		variant,
+		asking: "select",
+		onReply: onReply ?? (() => openAsk(title)),
+		onOpen
+	});
 	let hint;
 	if (variant === "bell") {
 		const parent = instances?.find((i) => i.title === title)?.parent;
@@ -37928,6 +38294,34 @@ function isAnswerPhrase(text) {
 }
 var joinWords = (a, b) => [a.trim(), b.trim()].filter(Boolean).join(" ");
 var VOICE_PREFS_KEY = "cs_voice_desktop";
+var REPLIES_CHOICES = [
+	{
+		value: "off",
+		label: "Off"
+	},
+	{
+		value: "mine",
+		label: "Replies to what I said by voice"
+	},
+	{
+		value: "all",
+		label: "Everything, every session"
+	}
+];
+function repliesMode(v) {
+	if (v === "mine" || v === "all") return v;
+	return v === true ? "mine" : "off";
+}
+function normPrefs(v) {
+	const o = v && typeof v === "object" ? v : {};
+	return {
+		ptt: o.ptt === "hold" ? "hold" : "toggle",
+		replies: repliesMode(o.replies)
+	};
+}
+function sayOnSend(byVoice, p = loadVoicePrefs()) {
+	return p.replies === "all" || byVoice && p.replies === "mine";
+}
 function storage() {
 	try {
 		return typeof localStorage === "undefined" ? null : localStorage;
@@ -37943,18 +38337,11 @@ function loadVoicePrefs(kv = storage()) {
 	} catch {
 		raw = null;
 	}
-	const o = raw && typeof raw === "object" ? raw : {};
-	return {
-		ptt: o.ptt === "hold" ? "hold" : "toggle",
-		replies: o.replies === true
-	};
+	return normPrefs(raw);
 }
 var VOICE_PREFS_EVENT = "mindflock:voice-prefs";
 function saveVoicePrefs(p, kv = storage()) {
-	const next = {
-		ptt: p.ptt === "hold" ? "hold" : "toggle",
-		replies: !!p.replies
-	};
+	const next = normPrefs(p);
 	try {
 		kv?.setItem(VOICE_PREFS_KEY, JSON.stringify(next));
 	} catch {}
@@ -37966,10 +38353,7 @@ function onVoicePrefs(fn) {
 	if (typeof window === "undefined") return () => {};
 	const h = (e) => {
 		const d = e.detail;
-		fn(d && typeof d === "object" ? {
-			ptt: d.ptt === "hold" ? "hold" : "toggle",
-			replies: !!d.replies
-		} : loadVoicePrefs());
+		fn(d && typeof d === "object" ? normPrefs(d) : loadVoicePrefs());
 	};
 	window.addEventListener(VOICE_PREFS_EVENT, h);
 	return () => window.removeEventListener(VOICE_PREFS_EVENT, h);
@@ -38476,11 +38860,13 @@ async function answer(r, text, deps, again) {
 			return;
 		}
 		try {
-			await instApi(title, "/answer", { json: {
+			const json = {
 				keys: r.keys,
 				dialog_id: r.dialog_id,
 				by: "user"
-			} });
+			};
+			if (r.text) json.text = r.text;
+			await instApi(title, "/answer", { json });
 			deps.announce(r.say || "Answered " + (r.choice === "number" ? String(r.number || "") : r.choice || "") + ".");
 		} catch (err) {
 			const body = err instanceof ApiError ? err.body : null;
@@ -38510,6 +38896,28 @@ function spokenLine(name, say) {
 	const n = String(name || "").trim();
 	return n ? n + ": " + s : s;
 }
+function voiceName(title, focused, name) {
+	return title && title === focused ? "" : name;
+}
+var HEARD_DEDUPE_MS = 18e4;
+var HeardTurns = class {
+	seen = /* @__PURE__ */ new Map();
+	fresh(title, say, ts, now = Date.now()) {
+		const words = String(say || "").replace(/\s+/g, " ").trim();
+		if (!title || !words) return false;
+		const key = ts ? "ts:" + ts : "say:" + words;
+		const last = this.seen.get(title);
+		if (last && last.key === key && (ts || now - last.at < HEARD_DEDUPE_MS)) return false;
+		this.seen.set(title, {
+			key,
+			at: now
+		});
+		return true;
+	}
+	clear() {
+		this.seen.clear();
+	}
+};
 var STAMP_SLACK_S = 5;
 var PENDING_MAX_MS = 18e5;
 var ReplyTracker = class {
@@ -38533,18 +38941,18 @@ var ReplyTracker = class {
 		const p = this.pending.get(title);
 		if (p) p.working = true;
 	}
-	take(title, name, say, ts, now = Date.now()) {
+	take(title, say, ts, now = Date.now()) {
 		if (!this.waiting(title, now)) return null;
 		const p = this.pending.get(title);
 		const fresh = !ts || ts * 1e3 >= p.sentAt - STAMP_SLACK_S * 1e3;
 		const s = String(say || "").trim();
 		if (s && fresh) {
 			this.pending.delete(title);
-			return spokenLine(name, s);
+			return s;
 		}
 		if (p.working) {
 			this.pending.delete(title);
-			return spokenLine(name, "Finished.");
+			return "Finished.";
 		}
 		return null;
 	}
@@ -38568,12 +38976,15 @@ function plain(text) {
 	return String(text || "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/[*_`#>]+/g, "").replace(/\s+/g, " ").trim();
 }
 function dialogChoices(d) {
+	const select = d.kind === "select";
+	if (select && d.steps?.[d.step ?? -1]?.submit) return "Say submit, or cancel.";
 	const kinds = new Set(d.options.map((o) => o.kind));
-	if (kinds.has("yes") || kinds.has("no")) return kinds.has("always") ? "Say yes, no, or always." : "Say yes or no.";
+	if (!select && (kinds.has("yes") || kinds.has("no"))) return kinds.has("always") ? "Say yes, no, or always." : "Say yes or no.";
 	const opts = d.options.slice(0, ORD.length);
 	const nums = opts.map((_, i) => ORD[i]);
 	const list = nums.length === 1 ? nums[0] : nums.length === 2 ? nums[0] + " or " + nums[1] : nums.slice(0, -1).join(", ") + ", or " + nums[nums.length - 1];
-	return opts.map((o, i) => ORD[i] + ": " + plain(o.label)).join(". ") + ". Say " + list + ".";
+	const say = select && d.multi ? ". Say the numbers to tick, then next." : ". Say " + list + ".";
+	return opts.map((o, i) => ORD[i] + ": " + plain(o.label)).join(". ") + say;
 }
 function dialogSpeech(name, d) {
 	const parts = [spokenLine(name, plain(d.question) || "a permission prompt")];
@@ -38602,7 +39013,7 @@ var HandsFree = class {
 			if (!x.replies() || x.busy() || title !== x.focused()) return;
 			this.seen = d.id;
 			const name = x.name(title);
-			await x.speak(dialogSpeech(name, d));
+			await x.speak(dialogSpeech(this.spoken(title), d));
 			if (!await x.approveDialogs()) {
 				await x.speak("Answer it on the screen.");
 				return;
@@ -38617,7 +39028,7 @@ var HandsFree = class {
 		this.running = true;
 		try {
 			const name = this.deps.name(title);
-			await this.listen(title, "Still there? " + spokenLine(name, say), "Answer " + name + " — say submit to send");
+			await this.listen(title, "Still there? " + spokenLine(this.spoken(title), say), "Answer " + name + " — say submit to send");
 		} finally {
 			this.running = false;
 		}
@@ -38633,7 +39044,7 @@ var HandsFree = class {
 			if (d) {
 				if (!d.parsed || !d.options.length || d.id === this.seen) return;
 				this.seen = d.id;
-				await x.speak(dialogSpeech(name, d));
+				await x.speak(dialogSpeech(this.spoken(title), d));
 				if (this.stopped === title) return;
 				if (!await x.approveDialogs()) {
 					await x.speak("Answer it on the screen.");
@@ -38645,9 +39056,9 @@ var HandsFree = class {
 			const q = String(a.question || "").trim();
 			if (!q) return;
 			if (a.said) await a.said;
-			else await x.speak(spokenLine(name, plain(q)));
+			else await x.speak(spokenLine(this.spoken(title), plain(q)));
 			if (this.stopped === title) return;
-			await this.listen(title, "Still there? " + spokenLine(name, plain(q)), "Answer " + name + " — say submit to send");
+			await this.listen(title, "Still there? " + spokenLine(this.spoken(title), plain(q)), "Answer " + name + " — say submit to send");
 		} finally {
 			this.running = false;
 		}
@@ -38655,12 +39066,16 @@ var HandsFree = class {
 	stop(title) {
 		this.stopped = title;
 	}
+	spoken(title) {
+		return this.deps.voiceName ? this.deps.voiceName(title) : this.deps.name(title);
+	}
 	ready(title) {
 		return !!title && !this.running && this.deps.replies() && !this.deps.busy();
 	}
 	async listen(title, retry, hint) {
 		const x = this.deps;
 		for (let tries = 0;; tries++) {
+			if (x.drained) await x.drained();
 			if (!x.replies() || x.busy() || this.stopped === title) return;
 			if (await x.listen(title, hint, ANSWER_LISTEN_MS) !== "missed" || this.stopped === title) return;
 			if (tries >= 1) {
@@ -38678,37 +39093,52 @@ function pendingDiagnostics(name, dialog, dialogUp, question) {
 	if (question) return "Pending: " + name + " asked — " + plain(question);
 	return "Pending: nothing on " + name;
 }
+var SPEECH_STALE_MS = 6e4;
 var SpeechQueue = class {
 	engine;
 	onSpeaking;
+	opts;
 	lines = [];
-	speaking = false;
+	speaking = null;
 	held = false;
+	turn = 0;
+	waiters = [];
 	last = "";
-	constructor(engine, onSpeaking = () => {}) {
+	constructor(engine, onSpeaking = () => {}, opts = {}) {
 		this.engine = engine;
 		this.onSpeaking = onSpeaking;
+		this.opts = opts;
 	}
-	say(line) {
-		const t = String(line || "").trim();
-		if (!t) return Promise.resolve();
+	now() {
+		return this.opts.now ? this.opts.now() : Date.now();
+	}
+	say(line, opts = {}) {
+		if (typeof line === "string" && !line.trim()) return Promise.resolve();
 		return new Promise((done) => {
 			this.lines.push({
-				text: t,
+				line,
+				at: opts.at ?? this.now(),
 				done
 			});
 			this.pump();
 		});
 	}
 	get busy() {
-		return this.speaking;
+		return !!this.speaking;
 	}
 	get queued() {
 		return this.lines.length;
 	}
+	get idle() {
+		return !this.speaking && !this.lines.length;
+	}
+	drained() {
+		if (this.idle) return Promise.resolve();
+		return new Promise((r) => this.waiters.push(r));
+	}
 	hold() {
 		this.held = true;
-		if (this.speaking) this.engine().cancel();
+		this.speaking?.cancel();
 	}
 	release() {
 		this.held = false;
@@ -38718,21 +39148,47 @@ var SpeechQueue = class {
 		const dropped = this.lines;
 		this.lines = [];
 		dropped.forEach((l) => l.done());
-		if (this.speaking) this.engine().cancel();
+		if (this.speaking) this.speaking.cancel();
+		else this.settle();
+	}
+	settle() {
+		if (!this.idle) return;
+		const w = this.waiters;
+		this.waiters = [];
+		w.forEach((r) => r());
 	}
 	pump() {
-		if (this.speaking || this.held || !this.lines.length) return;
-		const line = this.lines.shift();
-		this.last = line.text;
-		this.speaking = true;
-		this.onSpeaking(true);
-		const done = () => {
-			this.speaking = false;
-			this.onSpeaking(false);
-			line.done();
-			this.pump();
-		};
-		this.engine().speak(line.text).then(done, done);
+		if (this.speaking || this.held) return;
+		const stale = this.opts.staleMs ?? SPEECH_STALE_MS;
+		for (;;) {
+			const next = this.lines.shift();
+			if (!next) return this.settle();
+			const age = this.now() - next.at;
+			const text = String((typeof next.line === "function" ? next.line() : next.line) || "").trim();
+			if (age > stale) {
+				(this.opts.log ?? ((m) => console.debug(m)))("[voice] dropped a line " + Math.round(age / 1e3) + " s old: " + text.slice(0, 80));
+				next.done();
+				continue;
+			}
+			if (!text) {
+				next.done();
+				continue;
+			}
+			const sp = this.engine();
+			const turn = ++this.turn;
+			this.last = text;
+			this.speaking = sp;
+			this.onSpeaking(true);
+			const done = () => {
+				if (this.turn !== turn || !this.speaking) return;
+				this.speaking = null;
+				this.onSpeaking(false);
+				next.done();
+				this.pump();
+			};
+			sp.speak(text).then(done, done);
+			return;
+		}
 	}
 };
 function sentenceChunks(text) {
@@ -39509,6 +39965,7 @@ var serverRec = serverRecognizer({ stream: () => !!cfgNow.server_ready.stt_strea
 var browserSp = browserSpeaker();
 var serverSp = serverSpeaker(browserSp);
 var tracker = new ReplyTracker();
+var heard = new HeardTurns();
 var speakingListeners = /* @__PURE__ */ new Set();
 var queue = new SpeechQueue(() => ttsEngine(cfgNow) === "server" ? serverSp : browserSp, (on) => speakingListeners.forEach((l) => l(on)));
 var untap = null;
@@ -39684,7 +40141,7 @@ function TopBarMic() {
 	const setPrefs = (p) => {
 		setPrefsState(p);
 		saveVoicePrefs(p);
-		if (!p.replies) queue.cancel();
+		if (p.replies === "off") queue.cancel();
 	};
 	const refreshCfg = () => loadVoiceCfg(cfgNow === DEFAULT_VOICE_CFG ? null : cfgNow).then((c) => {
 		cfgNow = c;
@@ -39717,30 +40174,37 @@ function TopBarMic() {
 		let retry;
 		const ended = (title, data, ts) => {
 			if (title === useUi.getState().focused) refreshQuestion(title);
-			if (!tracker.waiting(title)) return;
-			const speak = (line, ask = "") => {
-				if (!line) return;
-				say(line);
-				if (!prefsRef.current.replies) return;
+			const mode = prefsRef.current.replies;
+			const inline = String(data.say || "").trim();
+			const ours = tracker.waiting(title);
+			const speak = (words, ask = "", listen = true) => {
+				if (!words) return;
+				say(spokenLine(displayName(title), words));
+				if (mode === "off") return;
 				if (ask) questions.set(title, ask);
-				const said = queue.say(line);
-				if (ask && askPopupOn()) asksSaid.set(title, {
+				const said = queue.say(() => spokenLine(voiceName(title, useUi.getState().focused, displayName(title)), words));
+				if (!ask) return;
+				asksSaid.set(title, {
 					done: said,
 					at: Date.now()
 				});
-				else said.then(() => {
-					if (ask) hands.current?.question(title, ask);
-				});
+				if (listen) said.then(() => hands.current?.question(title, ask));
 			};
-			const inline = String(data.say || "").trim();
+			if (mode === "all" && inline) {
+				if (!heard.fresh(title, inline, Number(data.ts) || null)) return;
+				const mine = ours && tracker.take(title, inline, ts) !== null;
+				speak(inline, data.has_question ? inline : "", mine);
+				return;
+			}
+			if (!ours) return;
 			if (inline) {
-				speak(tracker.take(title, displayName(title), inline, ts), data.has_question ? inline : "");
+				speak(tracker.take(title, inline, ts), data.has_question ? inline : "");
 				return;
 			}
 			instApi(title, "/voice").then((j) => {
 				const said = String(j?.say || "");
-				speak(tracker.take(title, displayName(title), said, Number(j?.ts) || null), j?.has_question ? said : "");
-			}).catch(() => speak(tracker.take(title, displayName(title), "", null)));
+				speak(tracker.take(title, said, Number(j?.ts) || null), j?.has_question ? said : "");
+			}).catch(() => speak(tracker.take(title, "", null)));
 		};
 		const attach = () => {
 			const ev = window.mindflock?.events;
@@ -39795,7 +40259,7 @@ function TopBarMic() {
 	const target = (into, session = "") => {
 		if (into) return fieldTarget(into);
 		const ask = askVoice();
-		if (ask && session === ask.title && ask.kind === "question") {
+		if (ask && session === ask.title) {
 			const t = askTarget(ask);
 			if (t) return t;
 		}
@@ -39830,13 +40294,20 @@ function TopBarMic() {
 			},
 			route: async (text) => {
 				const session = opts.title || useUi.getState().focused || "";
+				const ask = askVoice();
+				if (ask && ask.title === session && ask.phrase?.(text)) {
+					setTimeout(() => {
+						if (!live.current && askVoice()?.field()) start(null);
+					}, 150);
+					return true;
+				}
 				const reply = await routePhrase(text, session);
 				if (reply.kind === "prompt") return false;
 				await routed(reply, text, session);
 				return true;
 			},
 			activity: liveActivity,
-			replies: () => prefsRef.current.replies,
+			replies: () => prefsRef.current.replies !== "off",
 			submitted: (title, wantSay) => {
 				tracker.sent(title, wantSay);
 				questions.delete(title);
@@ -39973,7 +40444,7 @@ function TopBarMic() {
 	const announce = (line) => {
 		if (!line) return;
 		say(line);
-		if (prefsRef.current.replies) queue.say(line);
+		if (prefsRef.current.replies !== "off") queue.say(line);
 	};
 	const routed = async (r, text, session) => {
 		if (await runVoiceCommand(r, text, {
@@ -39986,7 +40457,7 @@ function TopBarMic() {
 			route: routePhrase,
 			approveDialogs: () => refreshCfg().then((c) => !!c.approve_dialogs),
 			activity: liveActivity,
-			replies: () => prefsRef.current.replies,
+			replies: () => prefsRef.current.replies !== "off",
 			submitted: (title, wantSay) => {
 				tracker.sent(title, wantSay);
 				questions.delete(title);
@@ -40036,16 +40507,18 @@ function TopBarMic() {
 		refreshCfg
 	};
 	if (!hands.current) hands.current = new HandsFree({
-		replies: () => prefsRef.current.replies,
+		replies: () => prefsRef.current.replies !== "off",
 		focused: () => useUi.getState().focused || "",
 		name: displayName,
 		busy: () => !!live.current,
 		fetchDialog: (title) => fetchDialog(title),
 		approveDialogs: () => latest.current.refreshCfg().then((c) => !!c.approve_dialogs),
+		voiceName: (title) => voiceName(title, useUi.getState().focused, displayName(title)),
 		speak: (line) => {
 			say(line, true);
 			return queue.say(line);
 		},
+		drained: () => queue.drained(),
 		caption: say,
 		listen: (title, hint, ms) => latest.current.listenFor(title, hint, ms)
 	});
@@ -40271,18 +40744,22 @@ function TopBarMic() {
 						})]
 					})]
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "mic-sub",
+					children: "Read replies aloud"
+				}),
+				REPLIES_CHOICES.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 					className: "mic-row",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "checkbox",
-						role: "switch",
-						checked: prefs.replies,
-						onChange: (e) => setPrefs({
+						type: "radio",
+						name: "mic-replies",
+						checked: prefs.replies === c.value,
+						onChange: () => setPrefs({
 							...prefs,
-							replies: e.target.checked
+							replies: c.value
 						})
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Read replies aloud" })]
-				}),
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: c.label })]
+				}, c.value)),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "mic-sub",
 					children: "Push to talk"
@@ -40324,7 +40801,7 @@ function TopBarMic() {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "mic-hint",
 					id: "mic-handsfree",
-					children: "With Read replies aloud on, a dialog on the focused session — or a question in a reply to what you sent — is read out and the mic listens 12 s for your answer."
+					children: "With Read replies aloud on, a dialog on the focused session — or a question in a reply to what you sent — is read out and the mic listens 12 s for your answer. Every line names its session unless it is the one in front of you, and only one plays at a time."
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "mic-diag",
@@ -53790,10 +54267,15 @@ function ThreadTab({ title, active }) {
 		const plannedNow = mode === "now" ? plan.now : [];
 		const plannedLater = mode === "now" ? plan.later : chip.titles;
 		setSending(true);
-		const results = await Promise.allSettled([...plannedNow.map((t) => instApi(t, "/send", { json: {
+		const body = sayOnSend(false) ? {
+			text,
+			dialog_safe: true,
+			say: true
+		} : {
 			text,
 			dialog_safe: true
-		} })), ...plannedLater.map((t) => instApi(t, "/queue", { json: { text } }))]);
+		};
+		const results = await Promise.allSettled([...plannedNow.map((t) => instApi(t, "/send", { json: body })), ...plannedLater.map((t) => instApi(t, "/queue", { json: { text } }))]);
 		if (!live.current) return;
 		setSending(false);
 		setTimeout(() => box.current?.focus(), 0);
@@ -74028,7 +74510,7 @@ var SETTINGS_SEARCH = [
 	{
 		key: "notifications",
 		label: "Notifications → Question pop-up",
-		sub: "Pop up a session's question in the middle of the screen",
+		sub: "Pop up a session's permission and choice prompts in the middle of the screen",
 		terms: [
 			"question",
 			"questions",
@@ -88989,7 +89471,7 @@ function MicPrefs() {
 			children: "The mic in the top bar; the same choices are in its popover. These are per browser."
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "set-row set-switch-row",
+			className: "set-row",
 			id: "voice-replies-row",
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "notif-rule-text",
@@ -88999,20 +89481,26 @@ function MicPrefs() {
 					children: "Read replies aloud"
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint notif-rule-desc",
-					children: "Off by default here. On, a reply to a prompt you sent by voice is spoken, name first, and a session's question is read out and the mic listens for your answer."
+					children: "Off by default here. A line from a session other than the one in front of you starts with its name; lines from several sessions play one at a time, never over each other. A question read out opens the mic for your answer."
 				})]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "ca-switch",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					type: "checkbox",
-					id: "voice-replies",
-					"aria-labelledby": "voice-replies-label",
-					checked: prefs.replies,
-					onChange: (e) => save({
-						...prefs,
-						replies: e.target.checked
-					})
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "voice-ptt-choices",
+				id: "voice-replies",
+				role: "radiogroup",
+				"aria-labelledby": "voice-replies-label",
+				children: REPLIES_CHOICES.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "voice-ptt-choice",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "radio",
+						name: "voice-replies",
+						value: c.value,
+						checked: prefs.replies === c.value,
+						onChange: () => save({
+							...prefs,
+							replies: c.value
+						})
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: c.label })]
+				}, c.value))
 			})]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -92057,8 +92545,8 @@ function groupRules(rules) {
 		more: rules.filter((r) => ruleGroup(r.id) === MORE_GROUP)
 	};
 }
-var ASK_POPUP_LABEL = "Pop up a session's question in the middle of the screen";
-var ASK_POPUP_HINT = "When a session asks you something — a dialog, or a question at the end of its reply — answer it right there, typed or by voice. Later puts it off; the bell keeps it.";
+var ASK_POPUP_LABEL = "Pop up a session's permission and choice prompts in the middle of the screen";
+var ASK_POPUP_HINT = "When an agent asks for permission or shows a choice — Claude's own questions included — answer it right there, by click, keys or voice. A question asked in plain words at the end of a reply doesn't pop up: the bell, the rail and the notification show it, and its Reply opens it here. Later puts it off; the bell keeps it.";
 var NEEDS_INPUT_EXTRA = "Also covers a question the agent asks in plain words at the end of its reply.";
 var ONLY_BELL_HINT = "Right now alerts only show in the bell. Turn on desktop or phone alerts to hear about them when you're away.";
 var AGENT_WORDS_LABEL = "Include the agent's words in pushes";
@@ -103334,12 +103822,15 @@ function AskDialog() {
 		outbox,
 		tick
 	]);
-	const queue = all.filter((i) => !askMemory.handled(i));
+	(0, import_react.useSyncExternalStore)(selectFlows.subscribe, () => selectFlows.get(target || ""), () => null);
+	const queue = cardQueue(all, askMemory);
 	const queueKey = queue.map((q) => q.title + "|" + q.key).join("\n");
 	const queueRef = (0, import_react.useRef)(queue);
 	queueRef.current = queue;
 	(0, import_react.useEffect)(() => {
-		askMemory.prune(new Set(all.map((i) => i.title)));
+		const asking = new Set(all.map((i) => i.title));
+		askMemory.prune(asking);
+		selectFlows.prune(asking);
 	}, [all]);
 	(0, import_react.useEffect)(() => {
 		if (open || !popupOn) return;
@@ -103392,7 +103883,8 @@ function AskDialog() {
 		bump
 	]);
 	const shown = (0, import_react.useRef)([]);
-	const current = open && target ? queue.find((q) => q.title === target) || null : null;
+	const flowing = !!target && selectFlows.active(target);
+	const current = open && target ? queue.find((q) => q.title === target) || (flowing ? flowItem(target) : null) : null;
 	if (current) shown.current = queue.map((q) => q.title);
 	const currentKey = current?.key || "";
 	(0, import_react.useEffect)(() => {
@@ -103424,8 +103916,8 @@ function AskDialog() {
 		onClose: () => laterRef.current?.(),
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AskPanel, {
 			item: current,
-			index: at,
-			count: queue.length,
+			index: Math.max(0, at),
+			count: at < 0 ? 1 : queue.length,
 			onStep: (delta) => {
 				const t = stepAsk(queue, current.title, delta);
 				if (t) useUi.getState().openDialogFor("ask", t);
@@ -103434,6 +103926,17 @@ function AskDialog() {
 			laterRef
 		}, current.title + "|" + current.key)
 	});
+}
+function flowItem(title) {
+	const f = selectFlows.get(title);
+	return {
+		title,
+		kind: "dialog",
+		text: f?.dialog.question || "",
+		ts: 0,
+		dialogId: f?.dialog.id || null,
+		key: "sel:" + title
+	};
 }
 var laterRef = { current: null };
 function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
@@ -103452,8 +103955,38 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 			}
 		}
 	});
-	const d = isDialog ? strip.state.dialog : null;
+	const stripD = isDialog ? strip.state.dialog : null;
+	const flow = (0, import_react.useSyncExternalStore)(selectFlows.subscribe, () => selectFlows.get(title), () => null);
+	(0, import_react.useEffect)(() => {
+		if (stripD && isSelect(stripD)) selectFlows.offer(title, stripD, strip.state.loadedAt || Date.now());
+	}, [
+		stripD,
+		title,
+		strip.state.loadedAt
+	]);
+	const sel = flow && flow.ended !== "handoff" ? flow : null;
+	const handingOff = flow?.ended === "handoff" && isSelect(stripD);
+	const d = sel ? sel.dialog : handingOff ? null : stripD;
+	const ended = flow?.ended || "";
+	(0, import_react.useEffect)(() => {
+		if (ended === "done") onDone("answered", selectFlows.get(title)?.dialog.id);
+		else if (ended === "handoff") strip.reload(selectFlows.get(title)?.note || void 0);
+	}, [ended, title]);
+	const polling = !!flow && !flow.ended && !flow.busy;
+	(0, import_react.useEffect)(() => {
+		if (!polling) return;
+		const ctl = new AbortController();
+		const timer = window.setInterval(() => {
+			const at = Date.now();
+			fetchDialog(title, ctl.signal).then((fresh) => !ctl.signal.aborted && selectFlows.polled(title, fresh, at), () => {});
+		}, SELECT_POLL_MS);
+		return () => {
+			ctl.abort();
+			clearInterval(timer);
+		};
+	}, [polling, title]);
 	const field = (0, import_react.useRef)(null);
+	const selField = (0, import_react.useRef)(null);
 	const [hasText, setHasText] = (0, import_react.useState)(false);
 	const [sending, setSending] = (0, import_react.useState)(false);
 	const [note, setNote] = (0, import_react.useState)("");
@@ -103481,7 +104014,7 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 		setSending(true);
 		setNote("");
 		try {
-			const line = ((await sendAnswer(title, text, say))?.queued ? "Queued for " : "Sent to ") + name + ".";
+			const line = ((await sendAnswer(title, text, say || sayOnSend(false)))?.queued ? "Queued for " : "Sent to ") + name + ".";
 			toast(line);
 			onDone("answered");
 			return {
@@ -103507,9 +104040,42 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 		name,
 		onDone
 	]);
+	const act = (0, import_react.useCallback)((a, say) => selectFlows.act(title, a, {
+		answer: (keys, id, text) => answerSelect(title, keys, id, text),
+		send: (text) => sendAnswer(title, text, say ?? sayOnSend(false)),
+		fetch: () => fetchDialog(title),
+		sleep: (ms) => new Promise((r) => setTimeout(r, ms))
+	}), [title]);
+	const sendField = (0, import_react.useCallback)(async (say) => {
+		const f = selectFlows.get(title);
+		const opt = f?.dialog.options.find((o) => o.key === f.field);
+		const text = (f?.text || "").trim();
+		if (!f || !opt || !text) return {
+			ok: false,
+			line: "Nothing to send yet"
+		};
+		await act({
+			type: opt.kind === "chat" ? "chat" : "text",
+			key: opt.key,
+			text
+		}, say);
+		const after = selectFlows.get(title);
+		if (after?.note && !after.ended) return {
+			ok: false,
+			line: after.note
+		};
+		return {
+			ok: true,
+			line: (opt.kind === "chat" ? "Sent to " : "Answered ") + name + "."
+		};
+	}, [
+		title,
+		name,
+		act
+	]);
 	const hint = d?.parsed ? name + ": " + dialogChoices(d) : isDialog ? "Answer " + name + " on the screen" : "Answer " + name + " — say submit to send";
 	const sendRef = (0, import_react.useRef)(send);
-	sendRef.current = send;
+	sendRef.current = sel?.field ? sendField : send;
 	const hintRef = (0, import_react.useRef)(hint);
 	hintRef.current = hint;
 	(0, import_react.useEffect)(() => {
@@ -103517,8 +104083,16 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 			title,
 			kind: isDialog ? "dialog" : "question",
 			hint: () => hintRef.current,
-			field: () => field.current,
-			submit: (say) => sendRef.current(say)
+			field: () => field.current || selField.current,
+			submit: (say) => sendRef.current(say),
+			phrase: (text) => {
+				const want = fieldPhrase(text);
+				const f = selectFlows.get(title);
+				const opt = want && f && !f.ended ? f.dialog.options.find((o) => o.kind === want) : void 0;
+				if (!opt) return false;
+				selectFlows.openField(title, opt.key);
+				return true;
+			}
 		};
 		setAskVoice(voice);
 		return () => {
@@ -103528,19 +104102,20 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 			}, 0);
 		};
 	}, [title, isDialog]);
-	const dialogReady = !!d && strip.state.phase === "ready";
+	const dialogReady = !!d && (sel ? !sel.busy : strip.state.phase === "ready");
+	const readKey = sel && d ? "sel:" + title + "|" + (d.step ?? 0) + "|" + d.question : item.key;
 	(0, import_react.useEffect)(() => {
-		if (readOut.has(item.key)) return;
+		if (readOut.has(readKey)) return;
 		if (item.kind === "dialog") {
 			if (!dialogReady || !d) return;
-			readOut.add(item.key);
+			readOut.add(readKey);
 			askMic()?.handsFree(title, { dialog: d });
 		} else {
 			readOut.add(item.key);
 			askMic()?.handsFree(title, { question: item.text });
 		}
 	}, [
-		item.key,
+		readKey,
 		item.kind,
 		dialogReady,
 		title
@@ -103552,6 +104127,19 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 		const onKey = (e) => {
 			const el = document.activeElement;
 			const typing = !!el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT");
+			if (isSelect(d)) {
+				const k = selectKey(d, e, typing);
+				if (!k) return;
+				e.preventDefault();
+				e.stopPropagation();
+				if (k.type === "toggle") selectFlows.toggle(title, k.key);
+				else if (k.type === "field") selectFlows.openField(title, k.key);
+				else act({
+					type: "pick",
+					key: k.key
+				});
+				return;
+			}
 			const key = askKeyPick(d, e, typing);
 			if (!key) return;
 			e.preventDefault();
@@ -103560,7 +104148,11 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 		};
 		window.addEventListener("keydown", onKey, true);
 		return () => window.removeEventListener("keydown", onKey, true);
-	}, [d]);
+	}, [
+		d,
+		title,
+		act
+	]);
 	const primaryBtn = (0, import_react.useRef)(null);
 	(0, import_react.useEffect)(() => {
 		if (d?.parsed) primaryBtn.current?.focus({ preventScroll: true });
@@ -103568,8 +104160,12 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 	(0, import_react.useEffect)(() => {
 		if (!isDialog) setTimeout(() => field.current?.focus({ preventScroll: true }), 0);
 	}, [isDialog]);
+	const openField = sel?.field || "";
+	(0, import_react.useEffect)(() => {
+		if (openField) setTimeout(() => selField.current?.focus({ preventScroll: true }), 0);
+	}, [openField]);
 	const kind = askKindLabel(item.kind, d);
-	const loading = isDialog && !d && strip.state.phase !== "ready";
+	const loading = isDialog && !d && (strip.state.phase !== "ready" || handingOff);
 	const question = isDialog ? (d ? questionText(d, "thread") : "") || item.text : item.text || "It asked you a question in its reply";
 	const busy = strip.state.phase === "sending" || strip.state.phase === "answered";
 	const prim = d ? primaryIndex(d.options) : -1;
@@ -103645,7 +104241,21 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 				className: "ask-cmd",
 				children: d.command
 			}),
-			d?.parsed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			sel && d && isSelect(d) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SelectView, {
+				flow: sel.ended ? {
+					...sel,
+					busy: true
+				} : sel,
+				primaryRef: primaryBtn,
+				fieldRef: selField,
+				onAct: (a) => void act(a),
+				onToggle: (k) => selectFlows.toggle(title, k),
+				onField: (k) => selectFlows.openField(title, k),
+				onText: (t) => selectFlows.setText(title, t),
+				onCloseField: () => selectFlows.closeField(title),
+				onSendField: () => void sendField()
+			}),
+			d?.parsed && !isSelect(d) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ask-opts",
 				role: "group",
 				"aria-label": "Answers",
@@ -103690,10 +104300,10 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 					send(false);
 				}
 			}),
-			(strip.state.note || note) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			(strip.state.note || note || sel?.note) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "ask-note",
 				role: "status",
-				children: note || strip.state.note
+				children: note || sel?.note || strip.state.note
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AskMicRow, { title }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -103701,7 +104311,7 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "ask-keys",
-						children: d?.parsed ? "1–9 or Y / N / A · Enter · Esc later" : !isDialog ? "Enter sends · Shift+Enter new line · Esc later" : "Esc later"
+						children: d && isSelect(d) ? SELECT_KEYS[selectStage(d)] : d?.parsed ? "1–9 or Y / N / A · Enter · Esc later" : !isDialog ? "Enter sends · Shift+Enter new line · Esc later" : "Esc later"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -103722,6 +104332,154 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }) {
 						disabled: !hasText || sending,
 						onClick: () => void send(false),
 						children: sending ? "Sending…" : "Send"
+					})
+				]
+			})
+		]
+	});
+}
+var SELECT_KEYS = {
+	single: "1–9 picks · Esc later",
+	multi: "1–9 ticks · Enter next · Esc later",
+	review: "Enter submits · Esc later"
+};
+function SelectView({ flow, primaryRef, fieldRef, onAct, onToggle, onField, onText, onCloseField, onSendField }) {
+	const d = flow.dialog;
+	const stage = selectStage(d);
+	const steps = d.steps || [];
+	const step = d.step ?? 0;
+	const busy = flow.busy;
+	const words = flow.field ? d.options.find((o) => o.key === flow.field) : void 0;
+	const prim = stage === "multi" ? "" : (stage === "review" ? d.options.find((o) => o.kind === "yes") : d.options.find((o) => !takesWords(o)))?.key || "";
+	const label = (o) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "ask-opt-text",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "ask-opt-label",
+			children: o.label
+		}), o.desc && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "ask-opt-desc",
+			children: o.desc
+		})]
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "ask-select",
+		"data-stage": stage,
+		"aria-busy": busy || void 0,
+		children: [
+			steps.length > 1 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+				className: "ask-tabs",
+				"aria-label": "Questions",
+				children: steps.map((s, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					className: "ask-tab" + (i === step ? " active" : "") + (s.done ? " done" : ""),
+					"aria-current": i === step ? "step" : void 0,
+					children: [s.done && i !== step ? "✓ " : "", s.label || (s.submit ? "Submit" : "Question " + (i + 1))]
+				}, i))
+			}),
+			stage === "review" && !!d.review?.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dl", {
+				className: "ask-review",
+				children: d.review.map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					style: { display: "contents" },
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: r.question }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { children: r.answer || "—" })]
+				}, i))
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ask-opts",
+				role: "group",
+				"aria-label": "Answers",
+				children: d.options.map((o) => {
+					const box = stage === "multi" && isBox(o) && !takesWords(o);
+					const on = !!flow.checked[o.key];
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						ref: o.key === prim ? primaryRef : void 0,
+						type: "button",
+						role: box ? "checkbox" : void 0,
+						"aria-checked": box ? on : void 0,
+						className: "ask-opt" + (o.key === prim ? " primary" : "") + (flow.field === o.key ? " picked" : ""),
+						"data-key": o.key,
+						"data-kind": o.kind,
+						disabled: busy,
+						title: "Press " + o.key + ": " + o.label,
+						onClick: () => takesWords(o) ? onField(o.key) : box ? onToggle(o.key) : onAct({
+							type: "pick",
+							key: o.key
+						}),
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "k",
+								children: o.key
+							}),
+							box && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "ask-box",
+								"aria-hidden": "true"
+							}),
+							label(o)
+						]
+					}, o.key);
+				})
+			}),
+			words && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ask-sel-field",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+					ref: fieldRef,
+					id: "ask-select-field",
+					className: "ask-answer",
+					rows: 2,
+					placeholder: words.kind === "chat" ? "What to talk about — it goes to the session…" : "Your answer…",
+					"aria-label": words.label,
+					spellCheck: true,
+					disabled: busy,
+					value: flow.text,
+					onChange: (e) => onText(e.currentTarget.value),
+					onKeyDown: (e) => {
+						if (e.key === "Escape" && !flow.text) {
+							e.preventDefault();
+							e.stopPropagation();
+							onCloseField();
+							return;
+						}
+						if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+						e.preventDefault();
+						onSendField();
+					}
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					id: "ask-select-send",
+					disabled: busy || !flow.text.trim(),
+					onClick: onSendField,
+					children: words.kind === "chat" ? "Send" : "Answer"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ask-sel-nav",
+				children: [
+					step > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "ghost",
+						id: "ask-select-back",
+						disabled: busy,
+						onClick: () => onAct({ type: "prev" }),
+						children: "‹ Back"
+					}),
+					stage === "multi" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "primary",
+						id: "ask-select-next",
+						ref: primaryRef,
+						disabled: busy,
+						onClick: () => onAct({ type: "next" }),
+						children: [d.button || "Next", " ›"]
+					}),
+					busy && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ask-state",
+						children: "sending…"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ask-sel-sp" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike ask-cancel-q",
+						disabled: busy,
+						onClick: () => onAct({ type: "cancel" }),
+						children: "Cancel the question"
 					})
 				]
 			})
