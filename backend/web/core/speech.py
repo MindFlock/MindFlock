@@ -40,7 +40,10 @@ Files the local backend keeps, under ``~/.mindflock/voice/`` (or
   that is not a faster-whisper size, like the ``whisper-1`` a host wants,
   reads as ``small``); the live transcript uses the much faster
   ``voice.stt_stream_model`` (:func:`stream_whisper_model`: ``base.en`` for
-  English, ``base`` otherwise). Downloaded from Hugging Face on first use,
+  English, ``base`` otherwise), and at the phrase's end the accurate pass
+  re-decodes the whole phrase with ``stt_model`` again unless
+  ``voice.stt_final`` says ``off`` or names another size
+  (:func:`final_whisper_model`). Downloaded from Hugging Face on first use,
   or ahead of time by the one-click install (``core.speech_install``, which
   puts the packages in too).
 * ``piper/<voice>.onnx`` + ``<voice>.onnx.json`` — piper voices, downloaded
@@ -49,7 +52,9 @@ Files the local backend keeps, under ``~/.mindflock/voice/`` (or
 
 ``local`` recognition is also the one that streams (:attr:`Backend.streams`,
 :meth:`LocalSTT.stream_transcriber`): ``core.speech_stream`` re-transcribes a
-growing window and commits the words two passes agree on.
+growing window and commits the words two passes agree on, and
+:meth:`LocalSTT.final_transcriber` is the accurate pass over the whole phrase
+at its end.
 
 faster-whisper decodes webm/mp4 clips through its bundled PyAV, so a system
 ``ffmpeg`` is not required; ``ready()`` still says when it is missing because
@@ -464,6 +469,14 @@ class Backend:
         cannot bias the decoder ignore it."""
         raise SpeechError("%s does not do recognition" % self.label)
 
+    def wake_transcribe(
+        self, audio: bytes, mime: str, lang: str = "", word: str = ""
+    ) -> str:
+        """A short clip for the wake-word check (``POST /api/voice/wake``),
+        ``word`` as the hint: :meth:`transcribe` unless the backend has a
+        faster path for one lone word."""
+        return self.transcribe(audio, mime, lang, word)
+
     def speak(self, text: str, voice: str = "") -> Tuple[bytes, str]:
         raise SpeechError("%s does not do voices" % self.label)
 
@@ -474,6 +487,12 @@ class Backend:
         """The ``transcribe(audio, prompt)`` a :class:`speech_stream.Stream`
         is built on — only a backend whose :attr:`streams` is true has one."""
         raise SpeechError("%s does not stream" % self.label)
+
+    def final_transcriber(self, lang: str = "") -> Optional[Callable]:
+        """The ``accurate(audio) -> text`` a stream runs over the whole
+        phrase at its end (``core.speech_stream``), or ``None``: no accurate
+        pass, the fast words stand."""
+        return None
 
 
 class _OpenAI(Backend):
@@ -625,6 +644,23 @@ def stream_whisper_model(raw: str = "", lang: str = "") -> str:
     )
 
 
+#: ``voice.stt_final`` that turns the accurate pass off.
+FINAL_OFF = "off"
+
+
+def final_whisper_model(raw: str = "", stt_model: str = "") -> str:
+    """The accurate pass's faster-whisper model for ``raw``
+    (``voice.stt_final``): ``""`` for :data:`FINAL_OFF`, ``raw`` when it is
+    a size or ``org/repo`` id, else the one-shot model
+    (:func:`whisper_model` of ``stt_model``)."""
+    name = (raw or "").strip()
+    if name.lower() == FINAL_OFF:
+        return ""
+    if name in WHISPER_SIZES or "/" in name:
+        return name
+    return whisper_model(stt_model)
+
+
 def piper_voice(raw: str = "") -> str:
     """The piper voice for ``raw`` (``voice.tts_voice``, or a per-call
     voice), else :data:`PIPER_VOICE`."""
@@ -710,12 +746,19 @@ class LocalSTT(Backend):
         """The live transcript's model for ``lang`` (:func:`stream_whisper_model`)."""
         return stream_whisper_model(_voice().stt_stream_model, lang)
 
+    def final_model_name(self) -> str:
+        """The accurate pass's model (:func:`final_whisper_model`; ``""``:
+        off). ``voice.stt_final`` is read with a default, so this works on a
+        settings model without the field."""
+        v = _voice()
+        return final_whisper_model(getattr(v, "stt_final", ""), v.stt_model)
+
     def warm_keys(self) -> List[str]:
-        """What :meth:`warm` loads: the one-shot model and the streaming one
-        for English (a stream in another language loads its own on open)."""
-        return sorted(
-            {"whisper:" + self._model_name(), "whisper:" + self.stream_model_name()}
-        )
+        """What :meth:`warm` loads: the one-shot model, the streaming one
+        for English (a stream in another language loads its own on open)
+        and the accurate pass's when it is a third."""
+        names = {self._model_name(), self.stream_model_name(), self.final_model_name()}
+        return sorted("whisper:" + n for n in names if n)
 
     def resident_keys(self) -> List[str]:
         """Never idle-unloaded while ``local`` recognition is configured: the
@@ -768,11 +811,29 @@ class LocalSTT(Backend):
     def transcribe(
         self, audio: bytes, mime: str, lang: str = "", prompt: str = ""
     ) -> str:
-        model = self._model()
-        path = _temp_clip(audio, mime)
         kw = {"language": whisper_language(lang), "beam_size": 5}
         if prompt:
             kw["initial_prompt"] = prompt
+        return self._clip(self._model(), audio, mime, kw)
+
+    def wake_transcribe(
+        self, audio: bytes, mime: str, lang: str = "", word: str = ""
+    ) -> str:
+        """The wake-word clip on the FAST streaming model
+        (:meth:`stream_model_name`) — the judgement is one lone word, which
+        it hears about as well as the one-shot model in a third of the
+        time: greedy, ``word`` as the prompt, no VAD (the clip is the word
+        already; the VAD can eat a short one)."""
+        kw = {"language": whisper_language(lang), "beam_size": 1, "vad_filter": False}
+        if word:
+            kw["initial_prompt"] = word
+        return self._clip(self._model(self.stream_model_name(lang)), audio, mime, kw)
+
+    @staticmethod
+    def _clip(model, audio: bytes, mime: str, kw: dict) -> str:
+        """``audio`` (any container PyAV decodes) through ``model`` → its
+        text; the temp clip is removed after."""
+        path = _temp_clip(audio, mime)
         try:
             segments, _info = model.transcribe(path, **kw)
             words = [str(getattr(s, "text", "") or "").strip() for s in segments]
@@ -822,12 +883,41 @@ class LocalSTT(Backend):
 
         return run
 
+    def final_transcriber(self, lang: str = "") -> Optional[Callable]:
+        """The accurate pass at a stream's end: the whole phrase (float32)
+        into :meth:`final_model_name` with a small beam, no prompt (the fast
+        words may be the wrong ones), no conditioning and the VAD → its
+        text. ``None`` when ``voice.stt_final`` is ``off``."""
+        name = self.final_model_name()
+        if not name:
+            return None
+        language = whisper_language(lang)
+
+        def run(audio) -> str:
+            model = self._model(name)
+            np = _import("numpy")
+            samples = np.frombuffer(bytes(audio), dtype=np.float32)
+            try:
+                segments, _info = model.transcribe(
+                    samples,
+                    language=language,
+                    beam_size=2,
+                    condition_on_previous_text=False,
+                    vad_filter=True,
+                )
+                parts = [str(getattr(s, "text", "") or "").strip() for s in segments]
+            except Exception as err:  # noqa: BLE001
+                raise SpeechError("faster-whisper failed: %s" % err) from err
+            return " ".join(p for p in parts if p).strip()
+
+        return run
+
     def warm(self, prime: bool = True) -> str:
-        """Load both models (:meth:`warm_keys`) ahead of their first use and,
+        """Load every model (:meth:`warm_keys`) ahead of their first use and,
         when ``prime`` is set, run one short silent pass through each one
         this call loaded (CTranslate2 allocates its workspaces on the first
         call, another second or two). ``"loaded"`` when this call loaded
-        either, ``"already"`` when both were resident."""
+        any, ``"already"`` when all were resident."""
         fresh = False
         for key in self.warm_keys():
             name = key.split(":", 1)[1]

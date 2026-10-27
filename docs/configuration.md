@@ -1209,8 +1209,9 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     host (OpenAI, Groq, a self-hosted server); `"local"` = faster-whisper /
     piper on this machine — the optional upgrade (models under
     `~/.mindflock/voice/` or `$MINDFLOCK_VOICE_DIR`, refused while memory is
-    low). With `stt_backend = "local"` both whisper models (`stt_model` for a
-    phrase sent whole, `stt_stream_model` for the live transcript) are
+    low). With `stt_backend = "local"` the whisper models (`stt_model` for a
+    phrase sent whole and the accurate pass, `stt_stream_model` for the live
+    transcript and the wake word, `stt_final` when it names a third) are
     **resident**: loaded 3 s after boot and whenever a voice client fetches
     `GET /api/voice`, and never idle-unloaded while `local` stays configured,
     so a mic press never waits for a model; a piper voice is unloaded after
@@ -1244,7 +1245,16 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     there; `stt_stream_model` — the live transcript's faster-whisper model
     on `local` (blank = `base.en` for English, `base` for any other
     language: ~5× faster than `small` on a CPU at a small accuracy cost; a
-    non-size name reads as the default too); this machine's, never synced;
+    non-size name reads as the default too); `stt_final` — **the balance
+    between speed and accuracy**: the live transcript types the fast
+    model's words as the person speaks, then at the end of the phrase the
+    accurate pass re-decodes the whole phrase and corrects it (blank = with
+    `stt_model`, i.e. `small`, ~1–1.5 s after the phrase ends; `"off"` = no
+    accurate pass — fastest, the fast words stand; any faster-whisper size
+    or `org/repo` id = that model, e.g. `medium.en` for more accuracy at
+    more delay; a non-size name reads as blank). A third model is loaded and
+    kept resident with the other two. The wake word ("MindFlock") is judged
+    on the fast model. All three this machine's, never synced;
     for
     `system`, `tts_voice` is the OS voice name — `Microsoft Zira Desktop` on
     Windows, `Samantha` on macOS — and a name the OS does not have falls back
