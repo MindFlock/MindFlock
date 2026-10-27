@@ -421,6 +421,15 @@
     if (inst.repo) sub.appendChild(document.createTextNode("  ·  " + inst.repo));
     text.appendChild(name);
     text.appendChild(sub);
+    // What it asks, under the state word: the Question chip says THAT it
+    // asks, this line says what (a tap opens the ask sheet over it).
+    var askLine = askRowText(inst);
+    if (askLine) {
+      var q = document.createElement("span");
+      q.className = "sess-ask";
+      q.textContent = askLine;
+      text.appendChild(q);
+    }
     main.appendChild(dot);
     main.appendChild(text);
     var more = document.createElement("button");
@@ -459,6 +468,7 @@
       if (pressed) { pressed = false; return; }
       closeSheet(sessionsSheet);
       select(title);
+      askOpenFor(title, "row");   // asking → its sheet, over the session
     });
     row.appendChild(main);
     row.appendChild(more);
@@ -915,6 +925,12 @@
     if (inst.setup && inst.setup.state === "failed")
       return needsYou("setup_failed", "Worktree setup failed — prompts are held");
     var act = inst.activity || "idle";
+    // The server's `asking` (a dialog, or a question in prose nobody has
+    // typed to since) is a Question whatever the activity reads — a prose
+    // question sits on an idle agent and is not "waiting for input".
+    var asking = inst.asking;
+    if (asking && (asking.kind === "dialog" || asking.kind === "question"))
+      return needsYou("question", "The agent asked you a question" + (asking.text ? ": " + String(asking.text) : ""));
     if (act === "clarify") return needsYou("question", "The agent asked you a question");
     if (act === "working") return st("working", { hint: "Agent is working" });
     if (act === "limit") {
@@ -1019,7 +1035,7 @@
         var sig = instances.map(function (i) {
           var rz = rzChip(i);
           return attnRank(i) + i.title + "\u0000" + (i.name || "") + "\u0000" + sessionState(i).label +
-            "\u0000" + (rz ? rz.label : "");
+            "\u0000" + (rz ? rz.label : "") + "\u0000" + (i.asking ? String(i.asking.ts) + String(i.asking.text || "") : "");
         }).join("|");
         if (sig !== poll._sig) { poll._sig = sig; renderPicker(); }
         // After renderPicker, before the dot: a session created from the "+"
@@ -1034,6 +1050,7 @@
         updateActions();
         updatePlanCard();
         voiceOnPoll();
+        askOnPoll();
       })
       .catch(function () { /* transient; next tick retries */ });
   }
@@ -2143,6 +2160,7 @@
   function openSessionsSheet() {
     renderRows();   // closed: a fresh sort, then held while open
     document.getElementById("sessions-voice-note").classList.toggle("hidden", voice.state === "off");
+    askNotifyRender();
     openSheet(sessionsSheet);
   }
 
@@ -3805,6 +3823,7 @@
     lastLine: "",                // "say that again"
     lastError: "",
     pendingSay: null,            // a reply that arrived mid-dictation, spoken when idle
+    box: null,                   // where dictation goes: null = the compose box; the ask sheet's field while it listens (vbox)
     dialog: null,
     dialogKey: "",               // the dialog id read out (or "none"), so a poll never re-reads it
     dialogTries: 0,
@@ -3883,8 +3902,9 @@
     voiceCancelBtn.classList.toggle("hidden", s === "off" || s === "idle");
     if (!voiceSheet.classList.contains("hidden")) voiceOnToggle.checked = s !== "off";
     fitSoon();   // the strip takes terminal rows
+    askVoiceMirror();
   }
-  function voiceCaption(text) { voiceCaptionEl.textContent = text || ""; }
+  function voiceCaption(text) { voiceCaptionEl.textContent = text || ""; askVoiceMirror(); }
   function voiceError(msg) {
     voice.lastError = msg || "";
     voiceErrEl.textContent = msg || "";
@@ -3893,6 +3913,10 @@
   function voiceIsListening() {
     return voice.state === "listening" || voice.state === "awaiting" || voice.state === "dialog";
   }
+  // The box dictation fills: the compose box, or the ask sheet's answer
+  // field while its mic listens (voice.box). Only the compose box autosizes.
+  function vbox() { return voice.box || composeEl; }
+  function vboxSized() { if (vbox() === composeEl) autosizeCompose(); }
   // The gesture, named: what starts talking, and what ends it (keeping the words).
   function voiceTalkHint() { return voice.prefs.ptt === "hold" ? "Hold the mic to talk" : "Tap to talk"; }
   function voiceDictHint() { return voiceListen_.held ? VOICE_HINT_HOLD : VOICE_HINT_TAP; }
@@ -3922,7 +3946,7 @@
     voiceListen_.until = 0;
     voiceListen_.stopAfter = false;
     voiceListen_.overAfter = false;
-    voiceIdle(composeEl.value.trim() ? "Kept, not sent — Send sends it, or tap the mic to go on" : undefined);
+    voiceIdle(vbox().value.trim() ? "Kept, not sent — Send sends it, or tap the mic to go on" : undefined);
   }
   // "over" (said, or the push-to-talk gesture): listening stops, the words
   // stay in the box, nothing is sent — "submit" or the Send button sends.
@@ -3930,7 +3954,7 @@
     voiceListen_.until = 0;
     voiceListen_.stopAfter = false;
     voiceListen_.overAfter = false;
-    voiceIdle(composeEl.value.trim() ? VOICE_KEPT : undefined);
+    voiceIdle(vbox().value.trim() ? VOICE_KEPT : undefined);
   }
   // Push to talk ends a prompt like "over": the second tap (toggle),
   // letting go (hold). What was said is still on its way — the phone's last
@@ -4058,10 +4082,11 @@
       // A streamed phrase arrives whole while it may be a command (the box
       // is empty: the router decides) or a dialog's answer; else its words
       // go into the box as they settle.
-      whole: function () { return mode === "dialog" || !composeEl.value.trim(); },
+      whole: function () { return mode === "dialog" || (!voice.box && !composeEl.value.trim()); },
       // The session is asking: an answer at the end of the words acts, so
-      // the stream holds back what may start one.
-      answers: function () { return !!voiceAsks(voice.session); },
+      // the stream holds back what may start one. Not into the ask sheet's
+      // field: there every word is the answer, sent on "submit".
+      answers: function () { return !voice.box && !!voiceAsks(voice.session); },
       onInterim: function (t) { if (voiceIsListening()) { voiceHeardSome(); voiceCaption(t || voiceDictHint()); } },
       onStatus: function (t) { if (voiceIsListening()) voiceCaption(mode === "dialog" ? t : t + " · " + voiceDictHint()); },
       onLevel: function (v) { voiceLevel(voiceIsListening() ? v : null); },
@@ -4148,7 +4173,15 @@
     clearTimeout(voiceListen_.timer);
     voice.stt.stop();
     // Words but no "over" and then silence: kept in the box, never sent.
-    if (mode !== "dialog" && composeEl.value.trim()) { voiceListenStop(); return; }
+    if (mode !== "dialog" && vbox().value.trim()) { voiceListenStop(); return; }
+    // The ask sheet read its question and nothing came back: once more.
+    if (mode === "prompt" && voice.box && !voiceListen_.reprompted && askVoiceLine()) {
+      voiceListen_.reprompted = true;
+      speakLine("Still there? " + askVoiceLine()).then(function (ok) {
+        if (ok && voice.box) voiceListen("prompt", VOICE_ANSWER_MS);
+      });
+      return;
+    }
     if (mode === "answer" && !voiceListen_.reprompted && voice.lastSay.text) {
       voiceListen_.reprompted = true;
       speakLine("Still there? " + nameOf(voice.session) + ": " + voice.lastSay.text).then(function (ok) {
@@ -4183,13 +4216,16 @@
       return;
     }
     if (p.kind === "disregard") {
-      composeEl.value = "";
-      autosizeCompose();
+      vbox().value = "";
+      vboxSized();
       voice.dictated = false;
       voiceCaption("Disregarded — go on");
       voiceListenContinue();
       return;
     }
+    // Into the ask sheet's field every phrase is the answer's words: no
+    // router, no commands — "submit" sends it, "over" keeps it.
+    if (voice.box) { voiceHeardWords(p); return; }
     if (p.text && !composeEl.value.trim()) {
       var gen = L.gen;
       L.routing = true;
@@ -4222,9 +4258,10 @@
     return false;
   }
   function voiceAppend(text) {
-    var cur = composeEl.value.trim();
-    composeEl.value = cur ? cur + " " + text : text;
-    autosizeCompose();
+    var box = vbox();
+    var cur = box.value.trim();
+    box.value = cur ? cur + " " + text : text;
+    vboxSized();
     voice.dictated = true;
   }
   // A stop phrase: listening ends, the words said before it join the box
@@ -4241,7 +4278,7 @@
   function voiceHeardWords(p) {
     if (p.text) voiceAppend(p.text);
     if (p.kind === "submit") {
-      if (composeEl.value.trim()) { voiceSend(composeEl.value); return; }
+      if (vbox().value.trim()) { voiceSend(vbox().value); return; }
       voiceCaption("Nothing to send yet");
       voiceListenContinue();
       return;
@@ -4419,7 +4456,7 @@
         return;
       case "switch_rel": voiceSwitchRel(cmd.arg === "next" ? 1 : -1); return;
       case "question": voiceQuestion(voice.session); return;
-      case "stop": voiceIdle(composeEl.value.trim() ? VOICE_KEPT : undefined); return;
+      case "stop": voiceIdle(vbox().value.trim() ? VOICE_KEPT : undefined); return;
       case "needs": voiceNeedsMe(); return;
       case "status": voiceStatus(); return;
       case "condense": voiceCondense(); return;
@@ -4593,7 +4630,9 @@
     var mine = title === voice.session;
     if (mine && voice.dialog) return "dialog";
     if (inst.activity === "clarify" && !(mine && Date.now() - (voice.answeredAt || 0) < VOICE_ANSWERED_GRACE_MS)) return "dialog";
+    if (inst.asking && inst.asking.kind === "dialog") return "dialog";
     if (mine && voice.asked) return "question";
+    if (inst.asking && inst.asking.kind === "question") return "question";
     if (inst.activity === "idle" && /\?["')\]\s]*$/.test(String(inst.last_say || ""))) return "question";
     return "";
   }
@@ -4638,7 +4677,7 @@
         var opt = voiceParseAnswer(a.said, d.options);
         if (!opt) { voiceSayThenIdle("I didn't catch that: " + voiceDialogChoices(d).replace(/^.*\bSay /, "say ")); return; }
         if (title === voice.session) { voice.dialog = d; voice.dialogKey = String(d.id); }
-        voiceAnswerPost(title, String(d.id), [String(opt.key)], voiceKindWord(opt), "");
+        voiceAnswerPost(title, String(d.id), askOptKeys(opt), voiceKindWord(opt), "");
       });
   }
   // A question's answer goes as a prompt: to this session with the words
@@ -4655,7 +4694,7 @@
     return voiceNorm(say).indexOf(voiceNorm(name)) === 0 ? say : name + ": " + say;
   }
   function voiceSayThenIdle(line) {
-    speakLine(line).then(function (ok) { if (ok) voiceIdle(composeEl.value.trim() ? VOICE_KEPT : undefined); });
+    speakLine(line).then(function (ok) { if (ok) voiceIdle(vbox().value.trim() ? VOICE_KEPT : undefined); });
   }
   // A command ends the listen: the recognizer, its clock, the window.
   function voiceStopForCommand() {
@@ -4684,6 +4723,7 @@
   // down the PTY, as before).
   function voiceTakesSend() {
     if (voice.state === "off" || !composeEl.value.trim()) return false;
+    voice.box = null;   // the compose box's Send
     if (voice.state === "sending") return true;   // one tap, one prompt
     voiceSend(composeEl.value);
     return true;
@@ -4704,6 +4744,7 @@
     // with Spoken replies on — a typed prompt costs no Say tokens.
     var dictated = !!voice.dictated;
     var say = !!(voice.prefs.replies && dictated);
+    var box = vbox();            // the ask sheet's field, or the compose box
     clearTimeout(voiceListen_.timer);
     voice.stt.stop();
     voiceSetState("sending", text);
@@ -4721,12 +4762,13 @@
           if (voice.state !== "sending") return;
           if (r.ok && other) {
             var to2 = j && j.queued ? "Queued for " + name + "." : "Sent to " + name + ".";
-            speakLine(to2).then(function (ok) { if (ok) voiceIdle(composeEl.value.trim() ? VOICE_KEPT : undefined); });
+            speakLine(to2).then(function (ok) { if (ok) voiceIdle(vbox().value.trim() ? VOICE_KEPT : undefined); });
             return;
           }
           if (r.ok) {
-            composeEl.value = "";
-            autosizeCompose();
+            box.value = "";
+            if (box === composeEl) autosizeCompose();
+            if (box !== composeEl) { voice.box = null; askSentByVoice(title); }
             voice.dictated = false;
             voice.expectSay = say;     // its reply is read out only if it was asked for
             voice.lastPrompt = { dictated: dictated, say: say };
@@ -4749,6 +4791,7 @@
           var line = "Couldn't send.";
           if (r.status === 409 && j && j.waking) line = name + " is waking up, try again in a moment.";
           else if (r.status === 409 && j && j.paused) line = name + " is paused. Resume it first.";
+          else if (r.status === 409 && j && j.in_dialog) { line = name + " is showing a prompt now — answer that first."; askInDialog(title); }
           else if (r.status === 409) line = "Couldn't send: " + why;
           voiceError(why);
           speakLine(line).then(function (ok) { if (ok) voiceIdle("Edit it, then Send"); });
@@ -4923,6 +4966,7 @@
     if (s) { try { s.onclose = null; s.close(); } catch (e) {} }
   }
   voice.onEvent = function (f) {
+    askOnEvent(f);   // every session's asks, whichever one voice is on
     if (voice.state === "off" || !f || f.session !== voice.session) return;
     var data = f.data || {};
     if (f.event === "session.activity_changed") {
@@ -5019,6 +5063,9 @@
         voice.dialogBusy = false;
         if (voice.session !== title || voice.state === "off") return;
         if (voiceIsListening() || voice.state === "sending") return;
+        // A question in prose (the newer server answers it here too): its
+        // Say line (or the ask sheet) asks it — "open the screen" would be wrong.
+        if (d && d.kind === "question") return;
         var key = d && d.parsed && (d.options || []).length ? String(d.id) : "none";
         // The row reads clarify for a poll or two after a voice answer; the
         // dialog is gone (204) and "waiting on you" would be wrong.
@@ -5084,7 +5131,7 @@
     if (!d) { voiceIdle(); return; }
     var opt = voiceParseAnswer(text, d.options);
     if (!opt) { voiceDialogRetry(); return; }
-    voiceAnswerPost(voice.session, d.id, [String(opt.key)], voiceKindWord(opt), "");
+    voiceAnswerPost(voice.session, d.id, askOptKeys(opt), voiceKindWord(opt), "");
   }
   // POST /answer, pinned to the dialog it was read from, by the person.
   // This session's: "Answered yes." and it is working again. Another's
@@ -5106,14 +5153,16 @@
             voice.lastSay = { text: "", ts: 0 };   // the agent carries on: a new turn
             voice.answeredAt = Date.now();         // the row reads clarify for a poll or two yet
           }
+          askAnsweredByVoice(title, dialogId);
           var line = say ? voiceNameFirst(title, say) : mine ? "Answered " + word + "." : name + ": answered " + word + ".";
           speakLine(line).then(function (ok) {
             if (!ok) return;
-            if (mine) voiceSetState("working", ""); else voiceIdle(composeEl.value.trim() ? VOICE_KEPT : undefined);
+            if (mine) voiceSetState("working", ""); else voiceIdle(vbox().value.trim() ? VOICE_KEPT : undefined);
           });
           return;
         }
         if (r.status === 409 && j && j.dialog_changed) {
+          askDialogChanged(title);
           if (!mine) { voiceSayThenIdle(name + " is asking something else now."); return; }
           voice.dialog = null;
           voice.dialogKey = "";
@@ -5123,6 +5172,7 @@
         }
         if (r.status === 409 && j && j.dialog_answered) {
           if (mine) voice.dialog = null;
+          askDialogAnswered(title);
           voiceSayThenIdle("Already answered.");
           return;
         }
@@ -5414,6 +5464,7 @@
     voiceWakeRelease();
     voice.pendingSay = null;
     voice.dialog = null;
+    voice.box = null;
     voiceSetState("off", "");
     voiceError("");
     voicePersist();
@@ -5448,10 +5499,11 @@
       return;
     }
     // Hold to talk: the first tap turns voice on; the next press talks.
-    if (s === "off") { voiceTurnOn(current, voice.prefs.ptt !== "hold"); return; }
+    if (s === "off") { voice.box = null; voiceTurnOn(current, voice.prefs.ptt !== "hold"); return; }
     if (voiceIsListening()) { voiceListenOver(); return; }
     if (s === "sending") return;
     // idle, working or speaking: talk (speech is cut short)
+    voice.box = null;
     voiceListen("prompt", VOICE_TAP_MS);
   }
   function voiceHoldStart(ev) {
@@ -5462,6 +5514,7 @@
     if (s === "off" || s === "sending" || voiceIsListening() || !current || !voice.stt.available()) return;   // the click handles these
     voiceHold.on = true;
     try { voiceBtn.setPointerCapture(ev.pointerId); } catch (e) {}   // the release lands here even off the button
+    voice.box = null;
     voiceListen("prompt", VOICE_DICT_IDLE_MS, true);   // the finger says when it ends
   }
   function voiceHoldEnd(ev) {
@@ -5478,7 +5531,7 @@
     voice.tts.cancel();
     voiceSpeakSeq++;
     voiceAckStop();
-    if (voiceIsListening()) { composeEl.value = ""; autosizeCompose(); voice.dictated = false; }
+    if (voiceIsListening()) { vbox().value = ""; vboxSized(); voice.dictated = false; }
     voiceListen_.until = 0;
     voiceListen_.overAfter = false;
     voiceListen_.gen++;   // a route answer on its way is for nobody now
@@ -5777,6 +5830,866 @@
   voiceLoadCfg();   // before the first tap: voicePrime needs to know about the server
   voiceBtn.dataset.state = "off";
 
+  // =========================================================================
+  // ASK — a session is asking you something
+  // =========================================================================
+  // The rows' `asking` — {kind: "dialog" | "question", text, ts, dialog_id,
+  // parsed, source}, null when nothing is asked; from an older server, a
+  // clarify activity — feed one sheet in the middle of the screen: whose ask
+  // (the Sessions sheet's number and name), what kind (Permission /
+  // Question / Plan approval), the question and its command, and the way
+  // to answer it right there:
+  //   a parsed dialog   → its options; a tap posts /answer {keys,
+  //                       dialog_id, by: "user"} (409 dialog_changed →
+  //                       the new prompt; dialog_answered → "Already
+  //                       answered"), as the desktop's answer strip does
+  //   an unparsed one   → "Open the session": only the terminal answers it
+  //   a prose question  → a field + Send: POST /send {text, dialog_safe}
+  //                       (409 in_dialog → the dialog it is showing now)
+  // The mic answers the one shown: a dialog by the voice dialog mode
+  // (words only, approve_dialogs respected), a question by dictating into
+  // the field with the radio words (vbox). Later — the button, a tap
+  // outside, Back, Esc — puts the one shown off: a question is dismissed
+  // on the server (POST /asking/dismiss), a dialog snoozed here by its id.
+  //
+  // It opens by itself (notifications.ask_popup, on unless Settings turn
+  // it off) for an ask it has not shown yet — never one put off or
+  // answered, and not while you are typing into that session's compose box
+  // (it waits for you). Several asking → one sheet, "1 of N", dialogs
+  // first, then oldest first. A push's tap (/m?s=<title>&voice=1) opens it
+  // for that session whatever the setting, with "Hear it and answer" (a page
+  // cannot speak before a tap). The count of asking sessions is in the
+  // tab's title; a new ask buzzes a visible phone and, hidden, raises a
+  // notification when this browser allows one ("Notify me when a session
+  // asks", in the Sessions sheet).
+  var askEl = document.getElementById("asking-sheet");
+  var askNumEl = document.getElementById("asking-num");
+  var askNameEl = document.getElementById("asking-name");
+  var askNavEl = document.getElementById("asking-nav");
+  var askStepEl = document.getElementById("asking-step");
+  var askPrevBtn = document.getElementById("asking-prev");
+  var askNextBtn = document.getElementById("asking-next");
+  var askKindEl = document.getElementById("asking-kind");
+  var askQuestionEl = document.getElementById("asking-question");
+  var askCommandEl = document.getElementById("asking-command");
+  var askNoteEl = document.getElementById("asking-note");
+  var askOptionsEl = document.getElementById("asking-options");
+  var askReplyEl = document.getElementById("asking-reply");
+  var askTextEl = document.getElementById("asking-text");
+  var askVoiceEl = document.getElementById("asking-voice");
+  var askHearBtn = document.getElementById("asking-hear");
+  var askErrEl = document.getElementById("asking-error");
+  var askNotifyInline = document.getElementById("asking-notify");
+  var askMicBtn = document.getElementById("asking-mic");
+  var askLaterBtn = document.getElementById("asking-later");
+  var askOpenBtn = document.getElementById("asking-open");
+  var askSendBtn = document.getElementById("asking-send");
+  var askNotifyBtn = document.getElementById("ask-notify-btn");
+  var askNotifyNote = document.getElementById("ask-notify-note");
+
+  var ASK_HIDDEN_POLL_MS = 10000;        // the hidden page's poll while notifications are on
+  var ASK_HINT_MS = 15000;               // an event's question waits this long for the rows to agree
+  var ASK_NOTIFY_STORE = "cs_ask_notify"; // localStorage: "off" mutes this page's notifications
+  var ASK_SW = "/mobile-sw.js";          // the service worker Android Chrome needs to show one
+  var ASK_BUZZ = [70, 60, 70];           // a new ask on a visible phone (the listening cue is one 30 ms tick)
+  var ask = {
+    popup: true,         // notifications.ask_popup (GET /api/notify/ntfy)
+    ntfyActive: false,   // ntfy pushes already reach a phone (said next to the notify button)
+    all: [],             // every ask the rows (and events) show, in sheet order
+    open: false,
+    entry: null,         // the ask shown (a copy: it stays readable when the row lets go of it)
+    origin: "",          // what opened it: auto | row | push | link | notification
+    gone: false,         // the shown ask is not asking any more
+    dialog: null,        // GET /dialog for the shown dialog: null = not read yet, false = nothing (204)
+    dialogSeq: 0,
+    busy: false,
+    note: "",
+    hints: {},           // title → {text, ts, kind, at}: a session.question ahead of the rows
+    later: {}, answered: {}, seen: {}, notified: {}, spoken: {},
+    polls: 0,
+    lastPollAt: 0,
+    deepDone: !deepLink, // the ?s= link's sheet: opened (or given up on)
+    deepTries: 0,
+    pollAsked: 0,        // when an event last fetched the rows (one per second at most)
+    history: false, popping: false,
+    notifyErr: "",
+    notifications: [],   // Diagnostics / tests: what was raised
+    baseTitle: document.title,
+  };
+  window.mfAsk = ask;
+  ask.notifyOn = (function () { try { return localStorage.getItem(ASK_NOTIFY_STORE) !== "off"; } catch (e) { return true; } })();
+
+  // --- what is asking --------------------------------------------------------
+  function askHas(o, k) { return !!o && Object.prototype.hasOwnProperty.call(o, k); }
+  function askOptKeys(opt) {
+    return opt.keys && opt.keys.length ? opt.keys.map(String) : [String(opt.key)];
+  }
+  // A row's ask, or null. The server's `asking` is the truth once the row
+  // carries the field (even null); a session.question event stands in for
+  // it until the next poll; an older server's clarify is a dialog.
+  function askEntryOf(inst) {
+    var t = inst.title, a = inst.asking, h = ask.hints[t];
+    if (a && (a.kind === "dialog" || a.kind === "question")) {
+      var ts = Number(a.ts) || 0;
+      return { title: t, kind: a.kind, text: String(a.text || ""), ts: ts, dialogId: String(a.dialog_id || ""),
+               parsed: a.parsed !== false, source: String(a.source || ""),
+               key: a.kind === "dialog" ? "d:" + t + ":" + (a.dialog_id || ts) : "q:" + t + ":" + ts };
+    }
+    if (h && (!askHas(inst, "asking") || h.at > ask.lastPollAt) && Date.now() - h.at < ASK_HINT_MS && inst.activity !== "working")
+      return { title: t, kind: "question", text: h.text, ts: h.ts, dialogId: "", parsed: false, source: "",
+               key: "q:" + t + ":" + h.ts };
+    if (!askHas(inst, "asking") && inst.activity === "clarify") {
+      var since = Number(inst.activity_since) || 0;
+      return { title: t, kind: "dialog", text: "", ts: since, dialogId: "", parsed: true, source: "",
+               key: "c:" + t + ":" + since };
+    }
+    return null;
+  }
+  function askOrder(a, b) {
+    if (a.kind !== b.kind) return a.kind === "dialog" ? -1 : 1;
+    return (a.ts - b.ts) || (rowOrder.indexOf(a.title) - rowOrder.indexOf(b.title));
+  }
+  // The sheet's list: answered ones out, put-off ones out (except the one
+  // on screen, so the counter does not jump under the thumb).
+  function askList() {
+    return ask.all.filter(function (e) {
+      return !ask.answered[e.key] && (!ask.later[e.key] || (ask.entry && e.key === ask.entry.key));
+    });
+  }
+  // The line an ask reads as: the question, else the dialog's command,
+  // else what it is.
+  function askLineText(e) {
+    var d = ask.entry && ask.entry.key === e.key && ask.dialog ? ask.dialog : null;
+    var q = String((d && d.question) || e.text || "").trim();
+    if (q) return q;
+    return e.kind === "dialog" ? "It's waiting on a prompt." : "It asked you something.";
+  }
+  function askRowText(inst) {
+    var a = inst && inst.asking;
+    return a && (a.kind === "dialog" || a.kind === "question") && a.text ? String(a.text) : "";
+  }
+  // Typing into that session's compose box: its ask waits.
+  function askTypingInto(title) {
+    return document.activeElement === composeEl && title === current && !!composeEl.value.trim();
+  }
+
+  // --- the rows → asks -------------------------------------------------------
+  function askOnPoll() {
+    ask.polls++;
+    ask.lastPollAt = Date.now();
+    askRefresh();
+  }
+  function askRefresh() {
+    var all = [], live = {};
+    instances.forEach(function (inst) {
+      var e = askEntryOf(inst);
+      if (e) { all.push(e); live[e.key] = true; }
+    });
+    all.sort(askOrder);
+    ask.all = all;
+    [ask.later, ask.answered, ask.seen, ask.notified, ask.spoken].forEach(function (m) {
+      for (var k in m) if (!live[k] && !(ask.entry && k === ask.entry.key)) delete m[k];
+    });
+    for (var t in ask.hints) if (Date.now() - ask.hints[t].at >= ASK_HINT_MS) delete ask.hints[t];
+    askTitleCount(all.length);
+    var first = ask.polls <= 1;   // the asks already there at load: shown, not announced
+    all.forEach(function (e) {
+      if (ask.answered[e.key] || ask.later[e.key] || ask.notified[e.key]) return;
+      ask.notified[e.key] = true;
+      if (!first) askAnnounce(e);
+    });
+    if (ask.open) { askRelist(); return; }
+    if (!ask.deepDone) { askDeepLink(); if (ask.open) return; }
+    if (!ask.popup) return;
+    var fresh = all.filter(function (e) {
+      return !ask.answered[e.key] && !ask.later[e.key] && !ask.seen[e.key] && !askTypingInto(e.title);
+    });
+    if (fresh.length) askShow(fresh[0], "auto");
+  }
+  // The push's /m?s=<title>[&voice=1]: that session's sheet, whatever the
+  // pop-up setting or a Later — the tap asked for it. A link that does not
+  // resolve yet (the device prefix waits on /api/remote/hello) gets a few
+  // polls; an ask answered meanwhile opens nothing.
+  function askDeepLink() {
+    var titles = instances.map(function (x) { return x.title; });
+    var t = resolveDeepLink(deepLink, titles);
+    if (!t) { if (++ask.deepTries > 3) ask.deepDone = true; return; }
+    ask.deepDone = true;
+    var e = ask.all.filter(function (x) { return x.title === t; })[0];
+    if (e) askShow(e, voice.deepLink ? "push" : "link");
+  }
+  function askTitleCount(n) {
+    var want = n ? "(" + n + ") " + ask.baseTitle : ask.baseTitle;
+    if (document.title !== want) document.title = want;
+  }
+  // A new ask: a buzz on a visible phone (not while the mic listens — its
+  // own tick says "listening"), a notification on a hidden one.
+  function askAnnounce(e) {
+    if (document.visibilityState !== "visible") { askNotify(e); return; }
+    if (voiceIsListening() || !navigator.vibrate) return;
+    try { navigator.vibrate(ASK_BUZZ); } catch (x) {}
+  }
+
+  // --- events (the voice socket, while voice is on) ----------------------------
+  // session.question: a hint until the rows agree (they carry it on the
+  // next poll, fetched now); clarify, or an idle / turn_ended with a
+  // question: fetch the rows now rather than at the next 4 s tick.
+  function askOnEvent(f) {
+    if (!f || typeof f !== "object") return;
+    var d = f.data || {};
+    var title = String(f.session || d.title || f.title || "");
+    if (!title) return;
+    var ev = f.event, q = null;
+    if (ev === "session.question") q = { text: d.text || f.text, ts: d.ts || f.ts, kind: d.kind || f.kind };
+    else if ((ev === "session.activity_changed" && f.new === "idle") || ev === "session.turn_ended") {
+      if (d.question) q = typeof d.question === "object" ? d.question : { text: d.question, ts: f.ts };
+    } else if (ev === "session.activity_changed" && f.new === "working") {
+      delete ask.hints[title];
+      return;
+    } else if (!(ev === "session.activity_changed" && f.new === "clarify")) {
+      return;
+    }
+    if (q && q.text && (q.kind || "question") === "question")
+      ask.hints[title] = { text: String(q.text), ts: Number(q.ts) || Number(f.ts) || 0, at: Date.now() };
+    askRefresh();
+    if (Date.now() - ask.pollAsked > 1000) { ask.pollAsked = Date.now(); poll(); }
+  }
+
+  // --- the sheet ------------------------------------------------------------------
+  function askShow(e, origin) {
+    var wasOpen = ask.open;
+    ask.open = true;
+    ask.origin = origin;
+    askSetEntry(e);
+    askRelist();
+    if (!wasOpen) {
+      openSheet(askEl);
+      askHistoryPush();
+      askEl.querySelector(".sheet-box").scrollTop = 0;
+    }
+    askMaybeSpeak(ask.entry);
+  }
+  // Show this ask (fresh state for it): its dialog is read, the field kept
+  // only for the same session's question.
+  function askSetEntry(e) {
+    var prev = ask.entry;
+    if (prev && prev.key === e.key) return;
+    askVoiceRelease();
+    // Voice listening for the dialog stepped away from: not its answer now.
+    if (prev && voice.session === prev.title && voice.state === "dialog") voiceIdle(nameOf(prev.title) + " is waiting on you");
+    ask.entry = { title: e.title, kind: e.kind, text: e.text, ts: e.ts, dialogId: e.dialogId,
+                  parsed: e.parsed, source: e.source, key: e.key };
+    ask.gone = false;
+    ask.dialog = null;
+    ask.busy = false;
+    ask.note = "";
+    askErr("");
+    if (!prev || prev.title !== e.title) askTextEl.value = "";
+    if (e.kind === "dialog") askFetchDialog();
+  }
+  // The list moved under the open sheet (a poll, an answer): the ask shown
+  // stays if it can; gone, the next one; none left, the sheet closes — unless
+  // words are waiting in the field (they still go, as a prompt).
+  function askRelist() {
+    if (!ask.open) return;
+    var list = askList();
+    list.forEach(function (x) { ask.seen[x.key] = true; });
+    var e = ask.entry;
+    var at = e ? askIndex(list, e.key) : -1;
+    if (e && at < 0) {
+      // The same session still asking the same kind (a dialog's id arrived)
+      // is the same ask.
+      var same = list.filter(function (x) { return x.title === e.title && x.kind === e.kind; })[0];
+      if (same && !ask.answered[e.key]) { ask.entry.key = same.key; ask.entry.dialogId = same.dialogId; at = askIndex(list, same.key); }
+    }
+    if (e && at < 0 && !ask.answered[e.key] && e.kind === "question" && askTextEl.value.trim()) {
+      ask.gone = true;
+      askRender();
+      return;
+    }
+    if (e && at < 0) {
+      if (!list.length) { askClose(); return; }
+      askSetEntry(list[0]);
+      askMaybeSpeak(ask.entry);
+    } else if (!e) {
+      if (!list.length) { askClose(); return; }
+      askSetEntry(list[0]);
+    } else {
+      ask.entry.text = list[at].text || ask.entry.text;
+    }
+    askRender();
+  }
+  function askIndex(list, key) {
+    for (var i = 0; i < list.length; i++) if (list[i].key === key) return i;
+    return -1;
+  }
+  function askStep(delta) {
+    var list = askList();
+    if (!ask.entry || list.length < 2) return;
+    var at = askIndex(list, ask.entry.key);
+    var next = list[(Math.max(0, at) + delta + list.length) % list.length];
+    askSetEntry(next);
+    askRender();
+  }
+  function askClose() {
+    askVoiceRelease();
+    ask.open = false;
+    ask.entry = null;
+    ask.dialog = null;
+    ask.busy = false;
+    closeSheet(askEl);
+    askHistoryPop();
+  }
+  // Answered (or sent): out of the list, the next ask if there is one.
+  function askDone(e, msg) {
+    ask.answered[e.key] = true;
+    if (msg) flashStatus(nameOf(e.title) + ": " + msg);
+    if (!ask.open || !ask.entry || ask.entry.key !== e.key) return;
+    askAdvance();
+  }
+  function askAdvance() {
+    var list = askList().filter(function (x) { return !ask.entry || x.key !== ask.entry.key; });
+    if (!list.length) { askClose(); return; }
+    askSetEntry(list[0]);
+    askRender();
+    askMaybeSpeak(ask.entry);
+  }
+  function askErr(msg) {
+    askErrEl.textContent = msg || "";
+    askErrEl.classList.toggle("hidden", !msg);
+  }
+
+  // GET /dialog for the dialog shown: its options (or 204: nothing any
+  // more; or, from the newer server, a question in prose after all).
+  function askFetchDialog(note) {
+    var e = ask.entry;
+    if (!e) return;
+    var seq = ++ask.dialogSeq;
+    ask.dialog = null;
+    if (note) ask.note = note;
+    fetch("/api/instances/" + encodeURIComponent(e.title) + "/dialog?quiet=1")
+      .then(function (r) { return r.status === 204 ? false : r.ok ? r.json() : false; })
+      .catch(function () { return false; })
+      .then(function (d) {
+        if (seq !== ask.dialogSeq || !ask.entry || ask.entry.key !== e.key) return;
+        if (d && d.kind === "question") {
+          ask.entry.kind = "question";
+          ask.entry.text = String(d.question || ask.entry.text || "");
+          ask.dialog = null;
+        } else {
+          ask.dialog = d && typeof d === "object" ? d : false;
+        }
+        askRender();
+      });
+    askRender();
+  }
+
+  // What kind of ask, in a word: a dialog with yes/no options or a command
+  // is a Permission, a heading about a plan is Plan approval, the rest are
+  // Questions.
+  function askKindWord(e, d) {
+    if (e.kind !== "dialog") return "Question";
+    if (d && /\bplan\b/i.test(String(d.heading || ""))) return "Plan approval";
+    var opts = (d && d.options) || [];
+    if ((d && d.command) || opts.some(function (o) { return o.kind === "yes" || o.kind === "no" || o.kind === "always"; }))
+      return "Permission";
+    return "Question";
+  }
+  function askRender() {
+    var e = ask.entry;
+    if (!e) return;
+    var d = e.kind === "dialog" ? ask.dialog : null;
+    var list = askList();
+    var at = askIndex(list, e.key);
+    var n = rowOrder.indexOf(e.title);
+    askNumEl.textContent = n >= 0 ? String(n + 1) : "";
+    askNameEl.textContent = nameOf(e.title);
+    askNavEl.classList.toggle("hidden", list.length < 2 && !(ask.gone && list.length));
+    askStepEl.textContent = (at >= 0 ? at + 1 : "–") + " of " + list.length;
+    askKindEl.textContent = askKindWord(e, d);
+    var src = String((d && d.source) || e.source || "");
+    if (src) {
+      var s = document.createElement("span");
+      s.className = "asking-source";
+      s.textContent = " · from " + src;
+      askKindEl.appendChild(s);
+    }
+    var reading = e.kind === "dialog" && ask.dialog === null;
+    askQuestionEl.textContent = reading && !e.text ? "Reading the prompt…" : askLineText(e);
+    askCommandEl.textContent = d && d.command ? String(d.command) : "";
+    askCommandEl.classList.toggle("hidden", !(d && d.command));
+    // The way to answer.
+    askOptionsEl.innerHTML = "";
+    var parsed = !!(d && d.parsed && (d.options || []).length);
+    var nothing = e.kind === "dialog" && ask.dialog === false;
+    var note = ask.note;
+    if (ask.gone) note = "It isn't asking any more — Send still sends this to it.";
+    else if (nothing && !note) note = "It isn't waiting on that prompt any more.";
+    else if (d && !parsed) note = note || "This prompt needs the terminal — open the session to answer it.";
+    if (parsed) {
+      d.options.forEach(function (opt, i) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.className = "asking-opt";
+        b.dataset.kind = opt.kind || "other";
+        b.disabled = ask.busy;
+        var k = document.createElement("span");
+        k.className = "asking-opt-key";
+        k.textContent = String(opt.key || i + 1);
+        var l = document.createElement("span");
+        l.className = "asking-opt-label";
+        l.textContent = String(opt.label || opt.key || "");
+        b.appendChild(k);
+        b.appendChild(l);
+        b.addEventListener("click", function () { askAnswer(opt); });
+        askOptionsEl.appendChild(b);
+      });
+    }
+    askNoteEl.textContent = note || "";
+    askNoteEl.classList.toggle("hidden", !note);
+    var prose = e.kind === "question";
+    askReplyEl.classList.toggle("hidden", !prose);
+    askSendBtn.disabled = ask.busy;
+    askOpenBtn.classList.toggle("primary", !!(d && !parsed) || nothing);
+    askLaterBtn.textContent = nothing || (ask.gone && !askTextEl.value.trim()) ? "Close" : "Later";
+    askMicBtn.classList.toggle("hidden", !(parsed || prose));
+    // A push's sheet: the page has not been tapped yet, so it cannot speak —
+    // one big button hears it and listens for the answer.
+    var hear = ask.origin === "push" && voice.state === "off" && (parsed || prose);
+    askHearBtn.textContent = "🔊 Hear it and answer by voice";
+    askHearBtn.classList.toggle("hidden", !hear);
+    askNotifyInline.classList.toggle("hidden", !(askNotifySupported() && Notification.permission === "default"));
+    askVoiceMirror();
+  }
+  askPrevBtn.addEventListener("click", function () { askStep(-1); });
+  askNextBtn.addEventListener("click", function () { askStep(1); });
+
+  // Open the sheet for one session (a row's tap, a notification's): its
+  // ask, put off or not; nothing when it is not asking.
+  function askOpenFor(title, origin) {
+    var e = ask.all.filter(function (x) { return x.title === title && !ask.answered[x.key]; })[0];
+    if (!e) return false;
+    delete ask.later[e.key];
+    askShow(e, origin);
+    return true;
+  }
+
+  // --- answering ------------------------------------------------------------------
+  function askAnswer(opt) {
+    var e = ask.entry, d = ask.dialog;
+    if (!e || !d || ask.busy) return;
+    ask.busy = true;
+    askErr("");
+    askRender();
+    fetch("/api/instances/" + encodeURIComponent(e.title) + "/answer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keys: askOptKeys(opt), dialog_id: String(d.id), by: "user" }),
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        ask.busy = false;
+        if (!ask.entry || ask.entry.key !== e.key) return;
+        if (r.ok) {
+          askVoiceAnsweredHere(e.title);
+          askDone(e, "answered " + stripMarkdown(String(opt.label || opt.key)));
+          return;
+        }
+        if (r.status === 409 && j && j.dialog_changed) { askFetchDialog("It changed — this is the prompt it shows now."); return; }
+        if (r.status === 409 && j && j.dialog_answered) {
+          ask.answered[e.key] = true;
+          ask.dialog = false;
+          ask.note = "Already answered.";
+          askRender();
+          return;
+        }
+        if (r.status === 409 && j && j.no_dialog) { askFetchDialog(); return; }
+        askErr((j && j.error) || ("Couldn't answer (HTTP " + r.status + ")"));
+        askRender();
+      });
+    }).catch(function (err) {
+      ask.busy = false;
+      askErr("Couldn't answer: " + String((err && err.message) || err));
+      askRender();
+    });
+  }
+  // Send: the field's words, as a prompt. With voice on for this session
+  // the voice loop sends it (its reply is then read out, and words that came
+  // from the mic ask for a Say line); otherwise straight to /send.
+  function askSend() {
+    var e = ask.entry;
+    var text = askTextEl.value.trim();
+    if (!e || ask.busy) return;
+    if (!text) { askTextEl.focus(); return; }
+    if (voice.state !== "off" && voice.session === e.title && voice.state !== "sending") {
+      voice.box = askTextEl;
+      voiceSend(text);
+      return;
+    }
+    ask.busy = true;
+    askErr("");
+    askRender();
+    fetch("/api/instances/" + encodeURIComponent(e.title) + "/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: text, dialog_safe: true }),
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        ask.busy = false;
+        if (r.ok) {
+          if (ask.entry && ask.entry.key === e.key) askTextEl.value = "";
+          askDone(e, j && j.queued ? "queued" : "sent");
+          if (ask.gone) askClose();
+          return;
+        }
+        if (r.status === 409 && j && j.in_dialog) { askInDialog(e.title); return; }
+        var why = (j && j.error) || ("HTTP " + r.status);
+        if (r.status === 409 && j && j.waking) why = nameOf(e.title) + " is waking up — try again in a moment.";
+        else if (r.status === 409 && j && j.paused) why = nameOf(e.title) + " is paused — resume it first.";
+        askErr("Couldn't send: " + why);
+        askRender();
+      });
+    }).catch(function (err) {
+      ask.busy = false;
+      askErr("Couldn't send: " + String((err && err.message) || err));
+      askRender();
+    });
+  }
+  // /send said a dialog is up (409 in_dialog): the sheet shows THAT, the
+  // words kept in the field for after.
+  function askInDialog(title) {
+    var e = ask.entry;
+    if (!ask.open || !e || e.title !== title) return;
+    e.kind = "dialog";
+    ask.gone = false;
+    askFetchDialog("It's showing a prompt now — answer that first; your words are kept.");
+  }
+  function askLater(close) {
+    var e = ask.entry;
+    if (!e) { askClose(); return; }
+    ask.later[e.key] = true;
+    if (e.kind === "question" && !ask.gone && !ask.answered[e.key]) {
+      fetch("/api/instances/" + encodeURIComponent(e.title) + "/asking/dismiss", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      }).catch(function () {});
+    }
+    // Voice listening for this one stops: "not now" is not "yes".
+    if (voice.session === e.title && voice.state === "dialog") voiceIdle(nameOf(e.title) + " is waiting on you");
+    if (close) { askClose(); return; }
+    askAdvance();
+  }
+  function askOpenSession() {
+    var e = ask.entry;
+    if (!e) return;
+    closeSheet(sessionsSheet);
+    askClose();
+    select(e.title);
+  }
+  askLaterBtn.addEventListener("click", function () { askLater(false); });
+  askOpenBtn.addEventListener("click", askOpenSession);
+  askSendBtn.addEventListener("click", askSend);
+  askTextEl.addEventListener("keydown", function (ev) {
+    if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); askSend(); }
+  });
+  askEl.addEventListener("click", function (ev) { if (ev.target === askEl) askLater(true); });
+  document.addEventListener("keydown", function (ev) { if (ask.open && ev.key === "Escape") askLater(true); });
+  // Back = Later: opening pushes a history entry, Back pops it; closing any
+  // other way pops it ourselves (and ignores the popstate that follows).
+  function askHistoryPush() {
+    if (ask.history || !ask.open) return;
+    // A Back of our own still on its way would pop this entry: after it.
+    if (ask.popping) { setTimeout(askHistoryPush, 80); return; }
+    try { history.pushState({ mfAsk: true }, ""); ask.history = true; } catch (e) {}
+  }
+  function askHistoryPop() {
+    if (!ask.history) return;
+    ask.history = false;
+    ask.popping = true;
+    try { history.back(); } catch (e) { ask.popping = false; }
+  }
+  window.addEventListener("popstate", function () {
+    if (ask.popping) { ask.popping = false; return; }
+    if (!ask.history) return;
+    ask.history = false;
+    if (ask.open) askLater(true);
+  });
+
+  // --- the voice side ---------------------------------------------------------------
+  // The voice loop answered (or met) this session's dialog: the sheet follows.
+  function askAnsweredByVoice(title, dialogId) {
+    ask.all.forEach(function (x) {
+      if (x.title === title && x.kind === "dialog" && (!dialogId || !x.dialogId || x.dialogId === String(dialogId))) ask.answered[x.key] = true;
+    });
+    if (ask.open && ask.entry && ask.entry.title === title && ask.entry.kind === "dialog") askDone(ask.entry, "");
+  }
+  function askDialogChanged(title) {
+    if (ask.open && ask.entry && ask.entry.title === title && ask.entry.kind === "dialog")
+      askFetchDialog("It changed — this is the prompt it shows now.");
+  }
+  function askDialogAnswered(title) {
+    if (!ask.open || !ask.entry || ask.entry.title !== title) return;
+    ask.answered[ask.entry.key] = true;
+    ask.dialog = false;
+    ask.note = "Already answered.";
+    askRender();
+  }
+  // The field's words went out through the voice loop.
+  function askSentByVoice(title) {
+    ask.all.forEach(function (x) { if (x.title === title && x.kind === "question") ask.answered[x.key] = true; });
+    if (ask.open && ask.entry && ask.entry.title === title) {
+      var gone = ask.gone;
+      askDone(ask.entry, "sent");
+      if (gone && ask.open) askClose();
+    }
+  }
+  // A tap answered the dialog voice was listening for: voice stops
+  // listening and waits for the agent, as after a spoken answer.
+  function askVoiceAnsweredHere(title) {
+    if (voice.state === "off" || voice.session !== title) return;
+    voice.dialog = null;
+    voice.answeredAt = Date.now();
+    if (voiceIsListening() || voice.state === "speaking") {
+      voiceStopForCommand();
+      voice.tts.cancel();
+      voiceSpeakSeq++;
+      voiceSetState("working", "");
+    }
+  }
+  // The question the sheet reads aloud, name first — the retry's line too.
+  function askVoiceLine() {
+    var e = ask.entry;
+    return ask.open && e && e.kind === "question" ? nameOf(e.title) + " asks: " + askLineText(e) : "";
+  }
+  // The sheet is not the dictation target any more (closed, another ask):
+  // a listen that was filling its field stops, the words dropped with it.
+  function askVoiceRelease() {
+    if (voice.box !== askTextEl) return;
+    voice.box = null;
+    if (voiceIsListening()) {
+      voiceListen_.until = 0;
+      voiceListen_.overAfter = false;
+      voiceListen_.gen++;
+      voiceIdle();
+    }
+  }
+  // The strip is under the backdrop: its state and caption, mirrored on
+  // the sheet while voice is on for the session shown; the mic wears it.
+  function askVoiceMirror() {
+    if (!askEl || !ask.open || !ask.entry) return;
+    var mine = voice.state !== "off" && voice.session === ask.entry.title;
+    var st8 = mine ? voiceBtnState(voice.state) : "idle";
+    askMicBtn.dataset.state = st8;
+    askMicBtn.setAttribute("aria-label", mine && voiceIsListening() ? "Stop listening" : "Answer by voice");
+    var cap = mine ? String(voiceCaptionEl.textContent || "") : "";
+    var word = mine ? VOICE_WORDS[voice.state] || "" : "";
+    var show = mine && voice.state !== "idle" && (word || cap);
+    askVoiceEl.innerHTML = "";
+    if (show) {
+      var b = document.createElement("b");
+      b.textContent = word;
+      askVoiceEl.appendChild(b);
+      if (cap) askVoiceEl.appendChild(document.createTextNode((word ? " — " : "") + cap));
+    }
+    askVoiceEl.classList.toggle("hidden", !show);
+  }
+  // Voice on for the shown session, selecting it first (voice follows the
+  // selection). False when this phone cannot listen.
+  function askVoiceOn(title) {
+    if (current !== title) select(title);
+    if (voice.state === "off") voiceTurnOn(title, false);
+    else if (voice.session !== title) voiceMoveTo(title);
+    if (!voice.stt.available()) {
+      if (IOS) voiceShowSafariBanner();
+      ask.note = "No speech recognition here" + (IOS ? " — open the page in a Safari tab." : ".");
+      askRender();
+      return false;
+    }
+    return true;
+  }
+  // The sheet's mic: listening for this ask → stop (the words stay);
+  // else listen for its answer — a dialog's words, or a question's
+  // dictation into the field.
+  function askMicTap() {
+    voicePrime();   // FIRST, synchronously: the gesture that lets the page speak
+    var e = ask.entry;
+    if (!e) return;
+    if (voice.state !== "off" && voice.session === e.title && voiceIsListening()) { voiceListenOver(); return; }
+    if (voice.state === "sending") return;
+    voiceHearHide();
+    if (!askVoiceOn(e.title)) return;
+    askListenFor(e, false);
+  }
+  // `read`: say it first (name first), as the push's button does; a tap
+  // on the mic just listens — the question is on the screen.
+  function askListenFor(e, read) {
+    ask.spoken[e.key] = true;
+    var d = ask.dialog;
+    if (e.kind === "dialog") {
+      if (!d || !d.parsed || !(d.options || []).length) {
+        if (read) voiceSayThenIdle(nameOf(e.title) + " is waiting on you: open the screen.");
+        return;
+      }
+      voice.dialog = d;
+      voice.dialogKey = String(d.id);   // the poll never reads it again
+      voice.dialogTries = 0;
+      if (read) { voiceReadDialog(d); return; }   // reads, then listens (or "Answer it on the screen.")
+      if (!voice.cfg.loaded || !voice.cfg.approve_dialogs) {
+        ask.note = "Answering prompts by voice is off (Settings → Your phone) — tap an answer.";
+        askRender();
+        return;
+      }
+      voiceListen("dialog", VOICE_DIALOG_MS);
+      return;
+    }
+    voice.box = askTextEl;
+    voiceListen_.reprompted = false;
+    if (read) {
+      speakLine(askVoiceLine()).then(function (ok) {
+        if (ok && voice.box === askTextEl) voiceListen("prompt", VOICE_ANSWER_MS);
+      });
+      return;
+    }
+    voiceListen("prompt", VOICE_ANSWER_MS);
+  }
+  askMicBtn.addEventListener("click", askMicTap);
+  askHearBtn.addEventListener("click", function () {
+    voicePrime();   // in the gesture, first
+    var e = ask.entry;
+    if (!e) return;
+    voiceHearHide();   // the strip's "Tap to hear" is this
+    if (!askVoiceOn(e.title)) return;
+    askRender();
+    askListenFor(e, true);
+  });
+  // Spoken replies on and voice on: a new ask from ANOTHER session is read
+  // (name first, once) — listening for it would change what "yes" means
+  // mid-conversation, so its answer is the sheet's mic. Voice's own session
+  // reads its own (the dialog read-out, the Say line): never twice.
+  function askMaybeSpeak(e) {
+    if (!e || ask.spoken[e.key] || voice.state === "off" || !voice.prefs.replies) return;
+    if (e.title === voice.session) return;
+    ask.spoken[e.key] = true;
+    var line = nameOf(e.title) + " asks: " + askLineText(e);
+    if (voice.state === "idle") voiceSayThenIdle(line);
+    else if (voice.state === "working") speakLine(line, true);
+  }
+
+  // --- the pop-up setting -------------------------------------------------------------
+  // notifications.ask_popup on GET /api/notify/ntfy (on when absent: an
+  // older server); re-read when the page comes back.
+  function askLoadSettings() {
+    fetch("/api/notify/ntfy")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (!j || typeof j !== "object") return;
+        if (typeof j.ask_popup === "boolean") ask.popup = j.ask_popup;
+        ask.ntfyActive = !!j.active;
+      })
+      .catch(function () {});
+  }
+  askLoadSettings();
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) askLoadSettings(); });
+
+  // --- notifications ------------------------------------------------------------------
+  // The Web Notification API while this page is open but hidden. Android
+  // Chrome shows one only through a service worker (`new Notification`
+  // throws there), so the page registers ASK_SW when allowed and uses its
+  // registration, else the constructor (desktop browsers, Firefox). An
+  // iPhone lets only a Home Screen web app notify, and a closed page
+  // notifies nobody — the server's ntfy pushes cover both.
+  function askNotifySupported() { return typeof window.Notification === "function"; }
+  function askNotifyAllowed() {
+    return askNotifySupported() && Notification.permission === "granted" && ask.notifyOn;
+  }
+  function askSwReg() {
+    if (!("serviceWorker" in navigator)) return Promise.resolve(null);
+    return navigator.serviceWorker.getRegistration().catch(function () { return null; });
+  }
+  function askSwRegister() {
+    if (!("serviceWorker" in navigator) || !askNotifyAllowed()) return;
+    navigator.serviceWorker.register(ASK_SW, { scope: "/m" }).catch(function (err) {
+      ask.swError = String((err && err.message) || err);
+    });
+  }
+  function askNotify(e) {
+    if (!askNotifyAllowed()) return;
+    var title = nameOf(e.title) + (e.kind === "dialog" ? " is waiting on you" : " asked you a question");
+    var opts = { body: askLineText(e).slice(0, 240), tag: "mf-ask-" + e.title, renotify: true,
+                 icon: "/apple-touch-icon.png", data: { title: e.title, key: e.key } };
+    ask.notifications.push({ title: title, body: opts.body, session: e.title, key: e.key });
+    if (ask.notifications.length > 20) ask.notifications.shift();
+    askSwReg().then(function (reg) {
+      if (reg && reg.showNotification) return reg.showNotification(title, opts);
+      var n = new Notification(title, opts);
+      n.onclick = function () {
+        try { window.focus(); } catch (x) {}
+        try { n.close(); } catch (x) {}
+        askOpenFor(e.title, "notification");
+      };
+    }).catch(function (err) {
+      ask.notifyErr = String((err && err.message) || err);
+      askNotifyRender();
+    });
+  }
+  // The service worker's notificationclick focuses this page and says which.
+  if ("serviceWorker" in navigator && navigator.serviceWorker.addEventListener) {
+    navigator.serviceWorker.addEventListener("message", function (ev) {
+      var m = ev.data;
+      if (m && m.type === "mf-ask-open" && m.title) askOpenFor(String(m.title), "notification");
+    });
+  }
+  // The Sessions sheet's line: a button while there is something to ask
+  // for or toggle, and what this browser can and cannot do.
+  function askNotifyRender() {
+    var btn = askNotifyBtn, note = "", label = "";
+    if (!askNotifySupported()) {
+      note = IOS && !STANDALONE
+        ? "On an iPhone only a Home Screen web app can notify: Share → Add to Home Screen, then open it from there. ntfy pushes reach you either way."
+        : IOS ? "This iOS version cannot notify from a web app (iOS 16.4 or newer can). ntfy pushes reach you either way."
+        : "This browser cannot notify from a page. ntfy pushes reach you either way.";
+    } else if (Notification.permission === "denied") {
+      note = "Notifications are blocked for this site — allow them in the browser's site settings.";
+    } else if (Notification.permission === "default") {
+      label = "Notify me when a session asks";
+      note = "While this page is open in the background.";
+    } else {
+      label = ask.notifyOn ? "Notifications on — tap to turn off" : "Notifications off — tap to turn on";
+      note = ask.notifyOn ? "Shown while this page is open in the background; a closed page relies on ntfy pushes." : "";
+      if (ask.notifyErr) note = "Couldn't show one: " + ask.notifyErr + (ANDROID ? " — Android needs the page's service worker." : "");
+    }
+    if (ask.ntfyActive && label) note += (note ? " " : "") + "ntfy already pushes asks; both would arrive.";
+    btn.textContent = label;
+    btn.classList.toggle("hidden", !label);
+    askNotifyNote.textContent = note;
+  }
+  function askNotifyTap() {
+    if (!askNotifySupported()) { askNotifyRender(); return; }
+    if (Notification.permission === "granted") {
+      ask.notifyOn = !ask.notifyOn;
+      try { localStorage.setItem(ASK_NOTIFY_STORE, ask.notifyOn ? "on" : "off"); } catch (e) {}
+      ask.notifyErr = "";
+      askNotifyRender();
+      askSwRegister();
+      return;
+    }
+    var asked = false;
+    var done = function () {
+      if (asked) return;
+      asked = true;
+      ask.notifyOn = true;
+      try { localStorage.setItem(ASK_NOTIFY_STORE, "on"); } catch (e) {}
+      askNotifyRender();
+      if (ask.open) askRender();
+      askSwRegister();
+    };
+    try {
+      var p = Notification.requestPermission(done);   // old Safari: the callback; the rest: a promise
+      if (p && p.then) p.then(done, done);
+    } catch (e) { done(); }
+  }
+  askNotifyBtn.addEventListener("click", askNotifyTap);
+  askNotifyInline.addEventListener("click", askNotifyTap);
+  askSwRegister();
+
   // ---- Update banner: a newer release, here or on your other devices ----
   // The same facts Settings shows (/api/update/check, /api/fleet), checked on
   // load and every 30 minutes (the server caches the release lookup). Your
@@ -5876,14 +6789,15 @@
   applyViewport();
   poll();
   // Visibility-aware cadence: 4s while visible, ~30s while the tab is hidden
-  // (a backgrounded phone browser doesn't need a fresh session list).
+  // (a backgrounded phone browser doesn't need a fresh session list) — 10s
+  // while page notifications are on, or an ask would wait half a minute.
   // Self-rescheduling timeout re-reads the cadence every cycle; returning to
   // the tab polls immediately and re-arms at 4s.
   var _pollTimer = null;
   function schedulePoll() {
     clearTimeout(_pollTimer);
     _pollTimer = setTimeout(function () { poll(); schedulePoll(); },
-      document.hidden ? 30000 : 4000);
+      document.hidden ? (askNotifyAllowed() ? ASK_HIDDEN_POLL_MS : 30000) : 4000);
   }
   schedulePoll();
   document.addEventListener("visibilitychange", function () {
