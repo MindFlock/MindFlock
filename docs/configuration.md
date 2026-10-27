@@ -1237,6 +1237,14 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     to its default voice).
   - `stt_api_key` / `tts_api_key` — secrets (masked on read as `•••set`,
     kept on an empty write; `POST /api/voice/clear-key {kind}` forgets one).
+    **A local host needs none**: with the URL on this machine or a private
+    network (loopback, `localhost`, a `.local` / `.ts.net` name, an RFC 1918
+    address, or any plain `http://` host) the `openai` backends are ready
+    without a key and send no bearer header — so your own model server that
+    speaks the OpenAI shape (Voice Lab's `/v1/audio/speech`, Kokoro-FastAPI,
+    openedai-speech, a local whisper server) plugs in as *OpenAI-compatible
+    host* with just its URL, and swapping models is a matter of its `model`
+    / `voice` fields.
 
   Everything but `approve_dialogs` names **this** machine's backends and keys
   and stays local (never synced). Read on every call, so a save applies at
