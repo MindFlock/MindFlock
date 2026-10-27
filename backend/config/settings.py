@@ -1865,8 +1865,14 @@ class VoiceSettings:
     * ``stt_api_key`` / ``tts_api_key`` — SECRETS (masked on read, keep-on-empty
       on write by the settings addon).
 
-    ``approve_dialogs`` is a personal policy and syncs across the person's
-    devices; everything else names THIS machine's backends and stays local.
+    * ``words`` — the person's own voice keywords (send / end / clear / stop /
+      hush phrases and the wake word), stored as
+      :func:`backend.web.core.voice_words.normalize` keeps them: only the
+      kinds that differ from the defaults; ``{}`` = all defaults.
+
+    ``approve_dialogs`` and ``words`` are personal policy and sync across the
+    person's devices; everything else names THIS machine's backends and stays
+    local.
     """
 
     approve_dialogs: bool = True
@@ -1883,6 +1889,7 @@ class VoiceSettings:
     tts_api_key: str = ""  # SECRET
     tts_model: str = ""
     tts_voice: str = ""
+    words: dict = field(default_factory=dict)
 
     _STR_FIELDS = (
         "stt_backend",
@@ -1910,10 +1917,14 @@ class VoiceSettings:
             v = getattr(self, k)
             if v:
                 out[k] = v
+        if self.words:
+            out["words"] = dict(self.words)
         return out
 
     @classmethod
     def from_dict(cls, d: dict) -> "VoiceSettings":
+        from backend.web.core import voice_words
+
         def _where(v: Any) -> str:
             v = str(v or "").strip().lower()
             return v if v in ("phone", "server") else "phone"
@@ -1922,6 +1933,7 @@ class VoiceSettings:
             approve_dialogs=bool(d.get("approve_dialogs", True)),
             stt=_where(d.get("stt")),
             tts=_where(d.get("tts")),
+            words=voice_words.normalize(d.get("words")),
             **{k: str(d.get(k, "") or "").strip() for k in cls._STR_FIELDS},
         )
 

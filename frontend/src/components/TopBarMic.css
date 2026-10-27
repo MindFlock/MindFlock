@@ -204,6 +204,20 @@
 .mic-pop-title {
   font-weight: 600;
   font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+/* The "?" beside the title: the Voice tour (the shared .tour-btn, smaller). */
+.mic-pop .mic-pop-help {
+  width: 18px;
+  height: 18px;
+  font-size: 11px;
+}
+/* While the Voice tour points into the options: under its layer (2500), so
+   its card and ring sit on top and the rest of the options dims with the page. */
+.mic-pop.in-tour {
+  z-index: 2400;
 }
 .mic-pop-close {
   background: none;

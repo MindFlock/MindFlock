@@ -88,8 +88,8 @@ REPOS = [
 ]
 
 
-def ans(text, session="", rows=ROWS, title=""):
-    return vr.answer(text, session, rows, now=NOW, title=title)
+def ans(text, session="", rows=ROWS, title="", words=None):
+    return vr.answer(text, session, rows, now=NOW, title=title, words=words)
 
 
 # --- not a command ------------------------------------------------------------
@@ -166,6 +166,44 @@ def test_conservative_non_matches_are_prompts(text):
 )
 def test_local_kinds_carry_no_say(text, kind):
     assert ans(text) == {"kind": kind}
+
+
+# --- the person's own stop / hush words (voice.words) ----------------------------
+def _words(**kinds):
+    from backend.web.core import voice_words
+
+    return voice_words.effective(kinds)
+
+
+def test_the_default_words_are_the_old_grammar():
+    # None and the effective defaults read the same.
+    for text in ("stop the microphone", "turn the mic off", "enough of that"):
+        assert vr.command(text) == vr.command(text, _words())
+
+
+def test_custom_stop_and_hush_words_are_matched_whole():
+    w = _words(stop=["halt", "don't listen"], hush=["zip it"])
+    assert ans("Halt.", words=w) == {"kind": "stop"}
+    assert ans("dont listen", words=w) == {"kind": "stop"}
+    assert ans("okay, zip it", words=w) == {"kind": "hush"}
+    assert ans("halt the build", words=w) == {"kind": "prompt"}
+    # The defaults they replaced are gone.
+    assert vr.command("stop talking", w) is None
+    assert vr.command("stop recording", w) is None
+
+
+def test_a_kept_default_keeps_its_variants():
+    w = _words(stop=["stop listening", "halt"], hush=["enough", "zip it"])
+    assert ans("stop the microphone", words=w) == {"kind": "stop"}
+    assert ans("halt", words=w) == {"kind": "stop"}
+    assert ans("that's enough", words=w) == {"kind": "hush"}
+    # "mic off" was dropped, and so were its variants.
+    assert vr.command("turn the mic off", w) is None
+
+
+def test_a_word_moved_from_stop_to_hush():
+    w = _words(stop=["halt"], hush=["stop", "quiet"])
+    assert ans("stop", words=w) == {"kind": "hush"}
 
 
 # --- switch ---------------------------------------------------------------------
@@ -985,6 +1023,26 @@ def test_route_switch_by_number(env):
         "Now on API docs. Should I push?"
     )
     assert route("stop recording") == {"kind": "stop"}
+
+
+def test_route_uses_the_persons_words(env, monkeypatch):
+    from backend.web.core import voice_words
+
+    monkeypatch.setattr(
+        voice_routes, "_words", lambda: voice_words.effective({"stop": ["halt"]})
+    )
+    assert route("halt") == {"kind": "stop"}
+    assert route("stop recording") == {"kind": "prompt"}
+    assert env.row_reads == 0
+
+
+def test_route_words_come_from_the_settings(env, isolate_settings_store):
+    from backend.config import settings as S
+
+    S.update_settings(voice={"words": {"hush": ["zip it"]}})
+    S.invalidate()
+    assert voice_routes._words()["hush"] == ["zip it"]
+    assert route("zip it") == {"kind": "hush"}
 
 
 # --------------------------------------------------------------------------- #

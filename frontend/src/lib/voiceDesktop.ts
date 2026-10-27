@@ -49,6 +49,7 @@ import { peekTerm } from "./terminals";
 import { toast } from "./toast";
 import { resamplerName, startWavRecording, type WavRecording } from "./wavRecorder";
 import { MicKeeper, isLoud, noiseFloor, pickupLine, voiceMark, voicePass, voiceSent } from "./voiceMic";
+import { applyVoiceView, phraseWords, quoted, voiceWords, voiceWordsVersion, withKin, wordKey, type VoiceWords } from "./voiceWords";
 
 // --- the radio words -------------------------------------------------------- //
 
@@ -56,17 +57,20 @@ export type RadioKind = "over" | "out" | "disregard" | "";
 
 /** "fix the bug over" → {kind: "over", text: "fix the bug"} (send it, go on
  * listening); "… over and out" (or "over, out") → {kind: "out"} (send it,
- * stop) — matched before "over"; "… disregard" (or "disregard that") →
- * {kind: "disregard"}; else {kind: "", text} — "… submit" too: it is a word
- * like any other. Case and punctuation do not matter ("Over." from Safari); only the LAST word counts — an "over" mid-sentence
- * is a word, and "hangover" is not "over". The shape is mobile.js
- * `voiceDictParse`'s, so both surfaces hear alike. */
+ * stop); "… disregard" (or "disregard that") → {kind: "disregard"}; else
+ * {kind: "", text} — "… submit" too: it is a word like any other. The words
+ * are the CURRENT ones (lib/voiceWords: `send`, `end`, `clear`), the longest
+ * phrase tried first, so "over and out" wins over "over". Case and
+ * punctuation do not matter ("Over." from Safari); only the LAST words count
+ * — an "over" mid-sentence is a word, and "hangover" is not "over". The shape
+ * is mobile.js `voiceDictParse`'s, so both surfaces hear alike. */
 export function parseRadio(text: string): { kind: RadioKind; text: string } {
   const t = String(text || "").trim();
-  const m =
-    /^(.*?)[\s,.!?]*\b(?:(over[\s,.!?]+(?:and[\s,.!?]+)?out)|(over|disregard)(?:\s+(?:that|it|all|everything))?)[.!?\s]*$/i.exec(t);
+  const M = matchers();
+  const m = M.radio.exec(t);
   if (!m) return { kind: "", text: t };
-  return { kind: m[2] ? "out" : (m[3].toLowerCase() as RadioKind), text: m[1].trim() };
+  const kind = M.radioKinds.find(([rx]) => rx.test(m[2]))?.[1] || "";
+  return { kind, text: m[1].trim() };
 }
 
 /** The words of a phrase as the router reads them (voice_router.py `norm`):
@@ -130,11 +134,12 @@ export function mayBeCommand(text: string): boolean {
   if (w.length > 1 && ROUTER_LEADS.has(w[0])) w = w.slice(1);
   if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
   if (!w.length) return true;
-  return COMMANDS.some((p) => {
+  const keys = w.map(wordKey);
+  return COMMANDS.concat(matchers().commands).some((p) => {
     for (let i = 0; i < w.length; i++) {
       if (i >= p.length) return false;
       if (p[i][0] === "*") return true;
-      if (!p[i].includes(w[i])) return false;
+      if (!p[i].includes(w[i]) && !p[i].includes(keys[i])) return false;
     }
     return true;
   });
@@ -156,40 +161,108 @@ export function isSwitchCommand(text: string): boolean {
   return w.length >= 2 && /^(?:session|number|row)$/.test(w[0]) && new RegExp("^(?:" + NUMS + ")$").test(w[1]);
 }
 
-const bareWord = (w: string) => w.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, "");
+const bareWord = (w: string) => w.toLowerCase().replace(/[’`]/g, "'").replace(/[^\p{L}\p{N}']+/gu, "");
 
-/** "Stop recording" and its kin: said at the end of any committed words they
- * stop listening at once, never typed, and the words before them stay. */
-const STOP_PHRASES = [
-  "stop recording", "stop listening", "mic off", "microphone off", "turn mic off",
-  "turn microphone off", "that's all", "thats all", "that is all",
-].map((p) => p.split(" "));
-/** "Stop talking" and its kin, as the hold-back keeps them whole. */
-const HUSH_PHRASES = [
-  "stop talking", "stop speaking", "stop reading", "be quiet", "quiet", "shut up", "hush", "enough",
-  "that's enough", "thats enough", "ok stop", "okay stop",
-].map((p) => p.split(" "));
-/** Every phrase the hold-back keeps whole while it may still be said: the
- * stop family, "stop talking" and its kin, and the radio words with their
- * tails ("disregard that"), "over and out" (so "over" and "over and" wait for
- * the next word too) and "over and out, that's all". */
-const CONTROL_PHRASES = [
-  ...STOP_PHRASES,
-  ...HUSH_PHRASES,
-  ...["over", "disregard"].flatMap((w) =>
-    [[w], ...["that", "it", "all", "everything"].map((tail) => [w, tail])]
-  ),
-  ["over", "out"],
-  ...["that's", "thats"].map((w) => ["over", "and", "out", w, "all"]),
-];
+// --- the matchers, built from the current words (lib/voiceWords) ----------- //
+
+/** The radio words' optional tails: "disregard that", "over it". */
+const RADIO_TAILS = ["that", "it", "all", "everything"];
+/** Spoken before or after "stop talking" and still a hush: "okay, be quiet
+ * please". */
+const HUSH_LEADS = ["ok", "okay", "hey", "please"];
+const HUSH_ENDS = ["please", "now"];
+
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** A phrase as a pattern: its words in order, any run of spaces and , . ! ?
+ * between them, an apostrophe optional ("that's" = "thats"). */
+const phraseRx = (p: string) =>
+  phraseWords(p)
+    .map((w) => esc(w).replace(/'/g, "['’`]?"))
+    .join("[\\s,.!?]+");
+/** Longest first (in words, then characters): "over and out" before "over". */
+const longestFirst = (a: string, b: string) => phraseWords(b).length - phraseWords(a).length || b.length - a.length;
+const keysOf = (p: string) => phraseWords(p).map(wordKey);
+
+export interface VoiceMatchers {
+  /** The words they were built from ({@link voiceWordsVersion}). */
+  v: number;
+  /** "<the words before> <a send / end / clear phrase>" at the end. */
+  radio: RegExp;
+  /** Which kind the matched phrase is: the first whole match, longest first. */
+  radioKinds: Array<[RegExp, RadioKind]>;
+  /** The stop phrases (and their older wordings) of two words or more,
+   * longest first, as word keys: they end any committed words. A one-word one ("stop") is the router's, said as
+   * a whole phrase — at the end of words it is a word ("make it stop"). */
+  stop: string[][];
+  hush: RegExp;
+  /** Every phrase the hold-back keeps whole while it may still be said. */
+  control: string[][];
+  /** The longest of {@link control}, in words. */
+  maxWords: number;
+  /** The stop and hush phrases as router commands (one slot per word). */
+  commands: string[][][];
+}
+
+/** The matchers for `w` (pure: the tests build their own). */
+export function buildMatchers(w: VoiceWords, v = -1): VoiceMatchers {
+  const tails = "(?:[\\s,]+(?:" + RADIO_TAILS.join("|") + "))?";
+  const entries: Array<{ p: string; kind: RadioKind; rx: string }> = [
+    ...w.end.map((p) => ({ p, kind: "out" as const, rx: phraseRx(p) })),
+    ...w.send.map((p) => ({ p, kind: "over" as const, rx: phraseRx(p) + tails })),
+    ...w.clear.map((p) => ({ p, kind: "disregard" as const, rx: phraseRx(p) + tails })),
+  ]
+    .filter((e) => e.rx)
+    .sort((a, b) => longestFirst(a.p, b.p));
+  const radio = entries.length
+    ? new RegExp(
+        "^(.*?)[\\s,.!?]*(?<![\\p{L}\\p{N}'])(" + entries.map((e) => "(?:" + e.rx + ")").join("|") + ")[.!?\\s]*$",
+        "iu"
+      )
+    : /(?!)/;
+  const radioKinds = entries.map((e) => [new RegExp("^(?:" + e.rx + ")$", "iu"), e.kind] as [RegExp, RadioKind]);
+  // The stop and stop-talking words with their older wordings (PHRASE_KIN).
+  const stops = withKin(w, "stop");
+  const hushes = withKin(w, "hush");
+  const stopAll = [...stops].sort(longestFirst).map(keysOf);
+  const stop = stopAll.filter((p) => p.length > 1);
+  const hushKeys = [...hushes].sort(longestFirst).map((p) => keysOf(p).join(" "));
+  const hush = new RegExp(
+    "^(?:(?:" + HUSH_LEADS.join("|") + ") )?(?:" + (hushKeys.map(esc).join("|") || "(?!)") + ")(?: (?:" + HUSH_ENDS.join("|") + "))?$",
+    "u"
+  );
+  const radioPhrases = (ps: string[]) =>
+    ps.map(keysOf).flatMap((k) => [k, ...RADIO_TAILS.map((t) => [...k, t])]);
+  const control = [
+    ...stopAll,
+    ...hushes.map(keysOf),
+    ...radioPhrases(w.send),
+    ...radioPhrases(w.clear),
+    ...w.end.map(keysOf),
+    // "Over and out, that's all": the end phrase, then a stop phrase.
+    ...w.end.map(keysOf).flatMap((e) => stop.map((s) => [...e, ...s])),
+  ].filter((p) => p.length);
+  const commands = [...stops, ...hushes].map((p) => phraseWords(p).map((x) => [x, wordKey(x)]));
+  return { v, radio, radioKinds, stop, hush, control, maxWords: Math.max(1, ...control.map((p) => p.length)), commands };
+}
+
+let built: VoiceMatchers | null = null;
+/** The matchers for the words the mic hears now (rebuilt when they change). */
+export function matchers(): VoiceMatchers {
+  const v = voiceWordsVersion();
+  if (!built || built.v !== v) built = buildMatchers(voiceWords(), v);
+  return built;
+}
+
 /** The longest control phrase, in words: what the hold-back may keep. */
-export const CONTROL_MAX_WORDS = Math.max(...CONTROL_PHRASES.map((p) => p.length));
+export function controlMaxWords(): number {
+  return matchers().maxWords;
+}
 
 /** The indexes of `ws`'s real words (a bare "." is not one). */
 const wordIndexes = (ws: string[]) => ws.flatMap((w, i) => (bareWord(w) ? [i] : []));
 
 /** A phrase in flight → what may be typed now and what waits: the last words
- * (up to {@link CONTROL_MAX_WORDS}) while they are, or could still become, a
+ * (up to {@link controlMaxWords}) while they are, or could still become, a
  * control phrase — "over", "disregard that", "stop" (…recording), "that is"
  * (…all) — with a bare punctuation token kept with its word. Any other last
  * word is typed at once; a held one goes in once the next word rules the
@@ -197,24 +270,26 @@ const wordIndexes = (ws: string[]) => ws.flatMap((w, i) => (bareWord(w) ? [i] : 
 export function holdBack(text: string): { type: string; held: string } {
   const ws = String(text || "").trim().split(/\s+/).filter(Boolean);
   if (!ws.length) return { type: "", held: "" };
+  const M = matchers();
   const idx = wordIndexes(ws);
   let n = ws.length;
-  for (let k = 1; k <= Math.min(CONTROL_MAX_WORDS, idx.length); k++) {
-    const tail = idx.slice(-k).map((i) => bareWord(ws[i]));
-    if (CONTROL_PHRASES.some((p) => p.length >= k && tail.every((w, j) => p[j] === w))) n = idx[idx.length - k];
+  for (let k = 1; k <= Math.min(M.maxWords, idx.length); k++) {
+    const tail = idx.slice(-k).map((i) => wordKey(bareWord(ws[i])));
+    if (M.control.some((p) => p.length >= k && tail.every((w, j) => p[j] === w))) n = idx[idx.length - k];
   }
   return { type: ws.slice(0, n).join(" "), held: ws.slice(n).join(" ") };
 }
 
-/** `text` ends with a stop phrase: the words before it (maybe ""), else null.
+/** `text` ends with a stop phrase (of two words or more — {@link
+ * VoiceMatchers.stop}): the words before it (maybe ""), else null.
  * "fix the bug, stop recording." → "fix the bug,". */
 export function stopTail(text: string): string | null {
   const ws = String(text || "").trim().split(/\s+/).filter(Boolean);
   const idx = wordIndexes(ws);
-  for (const p of STOP_PHRASES) {
+  for (const p of matchers().stop) {
     if (idx.length < p.length) continue;
     const tail = idx.slice(-p.length);
-    if (tail.every((i, j) => bareWord(ws[i]) === p[j])) return ws.slice(0, tail[0]).join(" ").replace(/[\s,;:]+$/, "");
+    if (tail.every((i, j) => wordKey(bareWord(ws[i])) === p[j])) return ws.slice(0, tail[0]).join(" ").replace(/[\s,;:]+$/, "");
   }
   return null;
 }
@@ -230,17 +305,13 @@ const ANSWER_RE = new RegExp(
     ")(?: please)?$"
 );
 
-const HUSH_RE = new RegExp(
-  "^(?:(?:ok|okay|hey|please) )?(?:" + HUSH_PHRASES.map((p) => p.join(" ")).join("|") + ")(?: please| now)?$"
-);
-
 /** "Stop talking", "be quiet", "quiet", "shut up", "stop reading",
- * "enough", "okay stop"…: the app's own voice stops — everything said and
- * queued, every session — and listening goes on. Only ever a WHOLE phrase
- * ("don't stop talking to me" is a prompt); never typed. The server's router
- * answers the same words with kind `hush`. */
+ * "enough", "okay stop"… (the current `hush` words): the app's own voice
+ * stops — everything said and queued, every session — and listening goes on.
+ * Only ever a WHOLE phrase ("don't stop talking to me" is a prompt); never
+ * typed. The server's router answers the same words with kind `hush`. */
 export function isHushPhrase(text: string): boolean {
-  return HUSH_RE.test(routerWords(text).join(" "));
+  return matchers().hush.test(phraseWords(text).map(wordKey).join(" "));
 }
 
 /** A whole answer to a dialog or a question: yes / no / always / a number,
@@ -485,11 +556,18 @@ export type DictOutcome =
 export const DICT_IDLE_MS = 120_000;
 /** A hold released mid-phrase waits this long for the phrase's final. */
 export const HOLD_FINAL_WAIT_MS = 1500;
-export const DICT_HINT = "Say “over” to send, “over and out” to stop, “disregard” to start over";
+/** "say “over” to send, “over and out” to stop, “disregard” to start over" —
+ * the first phrase of each kind, from the current words. */
+const radioLine = (w: VoiceWords) =>
+  "say " + quoted(w.send[0]) + " to send, " + quoted(w.end[0]) + " to stop, " + quoted(w.clear[0]) + " to start over";
+/** The caption before a word: "Say “over” to send, …" in the current words. */
+export const dictHint = (w: VoiceWords = voiceWords()) => {
+  const line = radioLine(w);
+  return line[0].toUpperCase() + line.slice(1);
+};
 /** The caption before a word when the mic listens for `name`'s answer to a
  * question (the ask pop-up's field, a hands-free listen). */
-export const answerHint = (name: string) =>
-  "Answer " + name + " — say “over” to send, “over and out” to stop, “disregard” to start over";
+export const answerHint = (name: string, w: VoiceWords = voiceWords()) => "Answer " + name + " — " + radioLine(w);
 /** The caption after push to talk let go (or silence) on a session. */
 export const LEFT_LINE = "In the field — press Enter to send";
 /** The caption after a stop phrase with nothing typed. */
@@ -1152,7 +1230,7 @@ export class LiveDictation {
       return;
     }
     const field = this.target?.kind === "field";
-    const base = this.opts.hint || (field ? "the words go into the text box" : DICT_HINT);
+    const base = this.opts.hint || (field ? "the words go into the text box" : dictHint());
     const lead = pickupLine(this.recording, this.hearingNow);
     this.hooks.caption(lead ? lead + " · " + base : field ? "Listening — " + base : base, true);
   }
@@ -3455,11 +3533,14 @@ export interface VoiceCfg {
 }
 export const DEFAULT_VOICE_CFG: VoiceCfg = { stt: "phone", tts: "phone", server_ready: {}, system: {} };
 
-/** Where speech runs (Settings → Voice). Unreachable / older server: `prev`
+/** Where speech runs (Settings → Voice), and the voice words (lib/voiceWords
+ * takes them). Unreachable / older server: `prev`
  * (a blink must not swap engines), else the browser's own. */
 export async function loadVoiceCfg(prev: VoiceCfg | null): Promise<VoiceCfg> {
   try {
     const j = await api<Partial<VoiceCfg>>("/api/voice");
+    // The voice words ride along: the matchers and hints use them from now.
+    applyVoiceView(j);
     if (j && typeof j === "object") {
       return {
         stt: j.stt === "server" ? "server" : "phone",

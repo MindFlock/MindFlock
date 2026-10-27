@@ -81,7 +81,7 @@ import { placeUnder } from "../lib/menuPlace";
 import { askVoice, getMicState, publishMicState, registerAskMic, type AskVoice } from "../lib/askVoice";
 import {
   Confirmer,
-  DICT_HINT,
+  dictHint,
   DICT_IDLE_MS,
   HUSH_CAPTION_MS,
   HUSH_LINE,
@@ -152,8 +152,15 @@ import {
   chime,
   wakeLine,
   wakeStatus,
+  wakeSwitchLabel,
   type WakeStatus,
 } from "../lib/wakeWord";
+import { quoted, wakeName } from "../lib/voiceWords";
+import { useVoiceWords } from "../lib/useVoiceWords";
+import { MIC_POP_SCREEN, setTalkKeyLabel } from "../lib/tours/voice";
+import { TOURS } from "../lib/tours";
+import { openTourOnFirstUse } from "./onboarding/useAutoTour";
+import { replayTour } from "./onboarding/replayTour";
 
 // One of each for the page: the mic renders in one of two places (the mac
 // mirror), and what it sent must outlive a remount.
@@ -289,6 +296,8 @@ export function talkHotkey(): string {
   const e = KEYMAP.find((b) => !b.aliasOf && /\btalk\b/i.test(String(b.help?.[2] || "")));
   return (e?.id && shortcutLabels(e.id)[0]) || "";
 }
+// The Voice tour names it in its first step.
+setTalkKeyLabel(talkHotkey);
 
 
 /** The recognizer this page has under `c`: "none" when it has none. */
@@ -400,6 +409,23 @@ export function TopBarMic() {
   /** "Quiet." in the pill, for a second after "stop talking". */
   const [quiet, setQuiet] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // The title and the wake switch name the current words.
+  const words = useVoiceWords();
+  /** The Voice tour is on a step in the options (`screen` "mic-pop"): they
+   * open for it, and close again when it moves on if it opened them. */
+  const tourPop = useUi((s) => s.coachTour?.id === "voice" && TOURS.voice.steps[s.coachTour.step]?.screen === MIC_POP_SCREEN);
+  const tourOpened = useRef(false);
+  useEffect(() => {
+    if (tourPop && !menuOpen) {
+      tourOpened.current = true;
+      setMenuOpen(true);
+    } else if (!tourPop && tourOpened.current) {
+      tourOpened.current = false;
+      setMenuOpen(false);
+    }
+    // Only the tour's moves: a click on the mic still closes the options.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tourPop]);
   /** The window's size while the options are open (they re-fit to it). */
   const [, setViewport] = useState("");
   const focusedName = useUi((s) => (s.focused ? s.aliases[s.focused] || s.focused : ""));
@@ -798,7 +824,7 @@ export function TopBarMic() {
           void d.hearing(t);
         },
         onStatus: (t) => {
-          if (live.current === d && !d.dict.shown && !into) say(t + " · " + DICT_HINT, true);
+          if (live.current === d && !d.dict.shown && !into) say(t + " · " + dictHint(), true);
         },
         onReady: () => {
           if (live.current !== d) return;
@@ -1179,6 +1205,14 @@ export function TopBarMic() {
   // --- the gestures -------------------------------------------------------- //
   const hold = prefs.ptt === "hold";
 
+  /** A start the person keyed (a click, a press, the hotkey): the first one
+   * ever opens the Voice tour (onboarding/useAutoTour openTourOnFirstUse). */
+  const userStart = (into: HTMLInputElement | HTMLTextAreaElement | null) => {
+    const d = start(into);
+    if (d) openTourOnFirstUse("voice");
+    return d;
+  };
+
   const openMenu = () => {
     setMenuOpen(true);
     // The options are often the step before talking: ready the mic now.
@@ -1189,8 +1223,8 @@ export function TopBarMic() {
   // The push-to-talk hotkey (the keymap's Talk action): works wherever the
   // focus is — a terminal pane too — and its keydown is the gesture that
   // lets start() make the AudioContext.
-  const keyRef = useRef({ hold, start, finish });
-  keyRef.current = { hold, start, finish };
+  const keyRef = useRef({ hold, start: userStart, finish });
+  keyRef.current = { hold, start: userStart, finish };
   useEffect(() => {
     const onTalk = (e: Event) => {
       const phase = (e as CustomEvent<{ phase?: TalkPhase }>).detail?.phase;
@@ -1211,7 +1245,9 @@ export function TopBarMic() {
     if (!menuOpen) return;
     const onDown = (e: MouseEvent) => {
       const t = e.target as Node;
-      if (!menuRef.current?.contains(t) && !btnRef.current?.contains(t)) setMenuOpen(false);
+      // The Voice tour's card is not "outside": Next / Back drive the options.
+      const el = t instanceof Element ? t : t.parentElement;
+      if (!menuRef.current?.contains(t) && !btnRef.current?.contains(t) && !el?.closest(".coach-card")) setMenuOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
@@ -1241,7 +1277,7 @@ export function TopBarMic() {
         ? "Listening — release to stop (the words stay), Esc to take them back"
         : "Listening — click to stop (the words stay), Esc to take them back"
       : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") +
-        (wake.on ? ", or say “MindFlock”" : "") + ", right-click for options";
+        (wake.on ? ", or say " + quoted(wakeName(words)) : "") + ", right-click for options";
   // The last line (an error, "Sent to…") is there on hover — never a box.
   const title = caption && !listening ? base + "\n" + caption : base;
   const pill = micPill({ listening, speaking, quiet });
@@ -1260,6 +1296,7 @@ export function TopBarMic() {
       <span className="mic-wrap">
         <button
           id="mic-btn"
+          data-tour="voice-mic"
           ref={btnRef}
           type="button"
           className={[
@@ -1290,7 +1327,7 @@ export function TopBarMic() {
             } catch {
               /* synthetic pointer */
             }
-            start(pressedField.current);
+            userStart(pressedField.current);
           }}
           onPointerUp={() => {
             if (!holding.current) return;
@@ -1315,7 +1352,7 @@ export function TopBarMic() {
             }
             if (hold) return; // the pointer (or the key) did it
             if (live.current) finish();
-            else start(pressedField.current);
+            else userStart(pressedField.current);
             pressedField.current = null;
           }}
           onContextMenu={(e) => {
@@ -1327,7 +1364,7 @@ export function TopBarMic() {
             e.preventDefault();
             if (e.repeat || holding.current) return;
             holding.current = true;
-            start(null);
+            userStart(null);
           }}
           onKeyUp={(e) => {
             if (!hold || (e.key !== " " && e.key !== "Enter")) return;
@@ -1347,9 +1384,33 @@ export function TopBarMic() {
       </span>
       {menuOpen &&
         createPortal(
-          <div className="mic-pop" id="mic-pop" ref={menuRef} style={popStyle} role="menu" aria-label="Voice options">
+          <div
+            className={"mic-pop" + (tourPop ? " in-tour" : "")}
+            id="mic-pop"
+            ref={menuRef}
+            style={popStyle}
+            role="menu"
+            aria-label="Voice options"
+          >
             <div className="mic-pop-head">
-              <span className="mic-pop-title">Voice</span>
+              <span className="mic-pop-title">
+                Voice
+                {/* The only explainer here: the Voice tour, from its first step. */}
+                <button
+                  type="button"
+                  className="tour-btn mic-pop-help"
+                  id="mic-pop-help"
+                  aria-label="Show me how"
+                  title="Show me how — the Voice tour"
+                  data-tour-id="voice"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    replayTour("voice");
+                  }}
+                >
+                  ?
+                </button>
+              </span>
               <button
                 type="button"
                 className="mic-pop-close"
@@ -1401,7 +1462,7 @@ export function TopBarMic() {
               </div>
             </div>
             <label className="mic-pop-row mic-switch-row" id="mic-wake-row" title={(prefs.wake && wake.line) || ""}>
-              <span className="mic-pop-label">Listen for “MindFlock”</span>
+              <span className="mic-pop-label">{wakeSwitchLabel(words)}</span>
               <input type="checkbox" id="mic-wake" checked={!!prefs.wake} onChange={(e) => setWakePref(e.target.checked)} />
             </label>
             {speaking && (

@@ -29,6 +29,9 @@ export function replayTour(id: TourId): void {
   } else if (id === "people") {
     // People is a Settings screen (key "peer"), not a top-bar dialog.
     openSettings("peer");
+  } else if (id === "voice") {
+    // The top-bar mic: nothing over it (Settings → Voice's "Show me how").
+    ui.closeDialog();
   } else {
     ui.openDialogFor(SURFACE[id]!);
   }

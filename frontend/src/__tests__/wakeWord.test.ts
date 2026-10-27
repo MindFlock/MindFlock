@@ -543,9 +543,10 @@ describe("the mic's wiring (components/TopBarMic.tsx)", () => {
   it("the popover has the switch and its hint; the button shows standby, quietly", () => {
     const tsx = src("components/TopBarMic.tsx");
     expect(tsx).toMatch(/id="mic-wake"\s*checked=\{!!prefs\.wake\}\s*onChange=\{\(e\) => setWakePref\(e\.target\.checked\)\}/);
-    expect(tsx).toContain('<span className="mic-pop-label">Listen for “MindFlock”</span>');
+    // In the current wake word (lib/voiceWords): "Listen for “MindFlock”" by default.
+    expect(tsx).toContain('<span className="mic-pop-label">{wakeSwitchLabel(words)}</span>');
     // The hint lives in Settings → Voice; why standby stopped is the row's tooltip.
-    expect(src("components/settings/screens/Voice.tsx")).toContain("{WAKE_SWITCH_HINT}");
+    expect(src("components/settings/screens/Voice.tsx")).toContain("{wakeSwitchHint(words)}");
     expect(tsx).toContain('title={(prefs.wake && wake.line) || ""}');
     expect(MIC).toContain('wake.on && !listening && "standby"');
     // Standby: a small still grey dot — no ring, no animation.

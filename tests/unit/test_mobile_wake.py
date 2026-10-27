@@ -191,7 +191,8 @@ def test_wake_switch_in_the_voice_sheet():
     # Where Spoken replies lives: right after it.
     assert sheet.index('id="voice-replies"') < sheet.index('id="voice-wake"')
     label = sheet.split('id="voice-wake"')[1].split("</label>")[0]
-    assert "Listen for “MindFlock”" in label
+    # The word is the owner's (voiceWordsShow fills it from GET /api/voice).
+    assert 'Listen for “<span class="voice-wake-word">MindFlock</span>”' in label
     assert "mic stays open" in label and "mic indicator" in label
     assert "iPhone" in label and "never in the background" in label
     assert 'id="voice-wake-note" class="new-muted hidden"' in sheet

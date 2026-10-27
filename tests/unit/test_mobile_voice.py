@@ -311,9 +311,11 @@ def test_mobile_js_radio_rules_over_and_disregard():
     ):
         assert "cont = false;" in _fn(js, fn), fn
     kept = _fn(js, "voiceListenKept")
-    assert "voiceIdle(vbox().value.trim() ? VOICE_KEPT : undefined);" in kept
+    assert "voiceIdle(vbox().value.trim() ? voiceKept() : undefined);" in kept
     assert "voiceSend" not in kept
-    assert 'var VOICE_KEPT = "In the box — say “over”, or tap Send";' in v
+    assert 'return "In the box — say " + voiceSaid("send") + ", or tap Send";' in _fn(
+        js, "voiceKept"
+    )
     assert (
         "if (p.text && !composeEl.value.trim()) {" in heard
     )  # commands: empty box only
@@ -340,14 +342,18 @@ def test_mobile_js_radio_rules_over_and_disregard():
     assert '"Kept, not sent — Send sends it, or tap the mic to go on"' in _fn(
         js, "voiceListenStop"
     )
-    # The hints name the radio words (and, holding, the release).
+    # The hints name the radio words the owner has (and, holding, the
+    # release): built from the words, never a fixed string.
     assert (
-        'var VOICE_HINT_TAP = "Say “over” to send, “over and out” to stop, “disregard” to start over";'
-        in v
+        'return "Say " + voiceSaid("send") + " to send, " + voiceSaid("end") + " to stop, " + voiceSaid("clear") + " to start over";'
+        in _fn(js, "voiceHintTap")
     )
-    assert 'var VOICE_HINT_HOLD = "Release to keep it; say “over” to send";' in v
+    assert 'return "Release to keep it; say " + voiceSaid("send") + " to send";' in _fn(
+        js, "voiceHintHold"
+    )
     assert "“over” to keep" not in v and "Release or say" not in v
-    assert "return voiceListen_.held ? VOICE_HINT_HOLD : VOICE_HINT_TAP;" in _fn(
+    assert "VOICE_HINT_TAP" not in v and "VOICE_KEPT" not in v
+    assert "return voiceListen_.held ? voiceHintHold() : voiceHintTap();" in _fn(
         js, "voiceDictHint"
     )
     assert "VOICE_DICT_HINT" not in v
@@ -868,7 +874,15 @@ def test_mobile_js_voice_commands_and_switching():
     ):
         assert 'kind: "%s"' % kind in cmds, kind
     assert "never ?mind" in cmds and "scratch that" in cmds
-    assert "say that again" in cmds and "stop listening" in cmds and "voice off" in cmds
+    assert "say that again" in cmds and "voice off" in cmds
+    # Stop and hush are the owner's words (VOICE_W, from GET /api/voice).
+    assert (
+        'kind: "stop",     words: "stopCmd"' in cmds
+        and 'kind: "hush",     words: "hush"' in cmds
+    )
+    assert (
+        '"stop listening"' in v.split("var VOICE_WORDS_DEFAULT = {")[1].split("};")[0]
+    )
     assert "what did it say" in cmds
     # Matched on the whole transcript, case- and punctuation-insensitive.
     norm = _fn(js, "voiceNorm")
@@ -1975,9 +1989,12 @@ def test_no_hint_names_submit_as_a_radio_word():
             r"say\W{0,3}submit", src, re.I
         )
     v = _voice_section(js)
-    # Every hint names the radio words the owner has.
-    assert "“over” to send" in v and "“over and out” to stop" in v
-    assert 'var VOICE_KEPT = "In the box — say “over”, or tap Send";' in v
+    # Every hint names the radio words the owner has (voiceSaid: the first
+    # phrase of each kind from GET /api/voice's words; ours by default).
+    assert ' to send, " + voiceSaid("end") + " to stop, "' in v
+    assert (
+        'send: ["over"], end: ["over and out", "over, out"], clear: ["disregard"],' in v
+    )
     # The ⚙ sheet's switches for the confirmations and the chimes.
     assert '<input type="checkbox" id="voice-confirm" />' in html
     assert '<input type="checkbox" id="voice-sounds" />' in html

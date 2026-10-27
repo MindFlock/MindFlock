@@ -11,14 +11,14 @@ import MIC_SRC from "../components/TopBarMic.tsx?raw";
 import {
   ANSWER_LISTEN_MS,
   APPROVE_OFF_LINE,
-  CONTROL_MAX_WORDS,
+  controlMaxWords,
   FIRST_CHUNK_S,
   chunkMinS,
   passLine,
   retype,
   DEFAULT_VOICE_CFG,
   DEFAULT_VOICE_PREFS,
-  DICT_HINT,
+  dictHint,
   Dictation,
   HandsFree,
   LiveDictation,
@@ -680,8 +680,8 @@ describe("LiveDictation: typing into the session as you speak", () => {
   it("before a word, the caption names the radio words", () => {
     const k = hooks();
     new LiveDictation(sessionTarget("t1", "Login fix"), k.h).show();
-    expect(k.last()).toBe(DICT_HINT);
-    expect(DICT_HINT).toBe("Say “over” to send, “over and out” to stop, “disregard” to start over");
+    expect(k.last()).toBe(dictHint());
+    expect(dictHint()).toBe("Say “over” to send, “over and out” to stop, “disregard” to start over");
   });
 });
 
@@ -809,7 +809,7 @@ describe("streaming helpers", () => {
     ["scrap that, Disregard that.", "scrap that,", "Disregard that."],
     ["move it over", "move it", "over"],
     ["it", "it", ""],
-    ["done .", "done .", ""],
+    ["fine .", "fine .", ""],
     ["please stop", "please", "stop"],
     ["over .", "", "over ."],
     ["", "", ""],
@@ -1884,7 +1884,7 @@ describe("control words at any point", () => {
     ["ship it over and out that's", "ship it", "over and out that's"],
   ])("holdBack(%j) holds a control phrase that may still be said: types %j, holds %j", (text, type, held) => {
     expect(holdBack(text)).toEqual({ type, held });
-    expect(CONTROL_MAX_WORDS).toBe(5); // "over and out, that's all"
+    expect(controlMaxWords()).toBe(7); // "over and out, turn off the microphone"
   });
 
   it.each([

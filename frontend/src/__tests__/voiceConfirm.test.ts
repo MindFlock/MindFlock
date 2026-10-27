@@ -23,7 +23,7 @@ import {
   isSwitchCommand,
   sentLine,
   Confirmer,
-  DICT_HINT,
+  dictHint,
   LiveDictation,
   SpeechQueue,
   answerHint,
@@ -459,7 +459,7 @@ describe("the wiring and the copy", () => {
   });
 
   it("the hints name “over”, “over and out” and “disregard”", () => {
-    expect(DICT_HINT).toBe("Say “over” to send, “over and out” to stop, “disregard” to start over");
+    expect(dictHint()).toBe("Say “over” to send, “over and out” to stop, “disregard” to start over");
     expect(answerHint("Bot")).toBe("Answer Bot — say “over” to send, “over and out” to stop, “disregard” to start over");
   });
 

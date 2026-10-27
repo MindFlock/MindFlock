@@ -1005,7 +1005,7 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   GitHub options/repos/token, repository branches and Verify options, default
   agents and launch args, budgets, agent limits, trusted Tailscale accounts,
   notification rules and ntfy (the agent-words push toggle included), the
-  voice approval policy (`voice.approve_dialogs`), accent and scroll speed, disabled extensions,
+  voice approval policy and voice keywords (`voice.approve_dialogs`, `voice.words`), accent and scroll speed, disabled extensions,
   UI preferences (`prefs`: keymap, prompt presets, theme, diff view, bars,
   break/idle reminders, hints, Map tour seen), session templates, red zones of repos with a
   remote, and user agent-CLI providers (`~/.mindflock/providers/*.toml`; a
@@ -1196,6 +1196,24 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     answer a permission dialog after its command was read aloud ("always"
     only when said literally). `false`: dialogs are read out, never answered
     by voice. A personal policy, so it is **synced** across your devices.
+  - `words` (default `{}` = ours) — the voice keywords, editable in
+    Settings → Voice; **the clients, the router and the wake word all read
+    it** (`GET /api/voice` serves the effective set as `words`). Kinds and
+    defaults: `send` `["over"]` (type the pending words and press Enter, keep
+    listening), `end` `["over and out", "over, out"]` (send and stop
+    listening), `clear` `["disregard"]` (drop the pending words), `stop`
+    `["stop", "stop listening", "mic off", "pause listening", "that's all",
+    "done talking"]` (stop listening, typed words stay), `hush` `["stop
+    talking", "be quiet", "quiet", "hush", "shut up", "enough"]` (stop
+    talking, keep listening) and `wake` `"mindflock"` (one string). Limits:
+    each phrase 1–40 characters of letters, digits, spaces, apostrophes and
+    commas, at most 6 per kind; `wake` one or two words of letters, 3–20
+    characters. Stored normalised (`core.voice_words.normalize`): lower
+    case, trimmed, deduplicated, invalid phrases dropped, and a kind left
+    empty — or equal to ours — is not written, so it follows the default.
+    The router still hears a kept default's variants ("stop the
+    microphone", "that's enough"); a phrase you add is matched whole.
+    Personal, so **synced** like `approve_dialogs`.
   - `stt` / `tts` — `"phone"` (default) or `"server"`: which engine the
     **phone page** prefers. Server recognition is what lets an iOS
     home-screen icon hear you (Web Speech recognition exists only in a Safari
@@ -1270,7 +1288,7 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     host* with just its URL, and swapping models is a matter of its `model`
     / `voice` fields.
 
-  Everything but `approve_dialogs` names **this** machine's backends and keys
+  Everything but `approve_dialogs` and `words` names **this** machine's backends and keys
   and stays local (never synced). Read on every call, so a save applies at
   once. Written through `POST /api/settings` (`{"voice": {"stt": "server"}}`,
   owner only); `GET /api/voice` reports the effective state plus the server's
@@ -1294,7 +1312,7 @@ The whole `notifications` group as it lands in `settings.json`:
 
 And the `voice` group, with every field at its default left out the same way
 (`approve_dialogs` is written only when `false`, `stt` / `tts` only when
-`"server"`, the strings only when set):
+`"server"`, the strings only when set, `words` only the kinds you changed):
 
 ```jsonc
 "voice": {
@@ -1306,7 +1324,8 @@ And the `voice` group, with every field at its default left out the same way
   "tts": "server",
   "tts_backend": "local",                // piper on this machine
   "tts_voice": "en_US-lessac-medium",    // the piper voice; a host's voice name ("alloy") for "openai"
-  "approve_dialogs": false               // dialogs are read out, never answered by voice
+  "approve_dialogs": false,              // dialogs are read out, never answered by voice
+  "words": {"send": ["send it"], "wake": "jarvis"}   // the rest stay ours
 }
 ```
 

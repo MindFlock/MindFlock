@@ -104,6 +104,21 @@ class TestGet:
         assert sr["tts"] is False
         assert sr["tts_detail"] == "local models not installed: uv sync --group voice"
 
+    def test_serves_the_effective_words_and_ours(self, fakes):
+        from backend.web.core import voice_words
+
+        body = client.get("/api/voice").json()
+        assert body["words"] == voice_words.effective({})
+        assert body["words_default"] == voice_words.DEFAULTS
+        assert body["words"]["send"] == ["over"]
+        assert body["words"]["wake"] == "mindflock"
+        _voice(words={"send": ["Go Go"], "wake": "Jarvis"})
+        body = client.get("/api/voice").json()
+        assert body["words"]["send"] == ["go go"]
+        assert body["words"]["wake"] == "jarvis"
+        assert body["words"]["end"] == ["over and out", "over, out"]
+        assert body["words_default"]["send"] == ["over"]
+
     def test_reports_the_stream_model_and_warm_ups(self, fakes):
         body = client.get("/api/voice").json()
         assert body["stream_model"] == ""  # the fake does not stream
@@ -118,6 +133,7 @@ class TestGet:
         assert calls == ["stt", "tts"]
 
     def test_boot_warms_both_kinds(self, fakes, monkeypatch):
+        monkeypatch.setenv("MINDFLOCK_VOICE_WARM", "1")  # the suite turns it off
         calls: list = []
         monkeypatch.setattr(
             speech,
@@ -127,6 +143,16 @@ class TestGet:
         with TestClient(server.app):
             pass
         assert calls == [("stt", 3.0), ("tts", 6.0)]
+
+    def test_the_suite_skips_the_boot_warm(self, fakes, monkeypatch):
+        monkeypatch.setenv("MINDFLOCK_VOICE_WARM", "0")
+        calls: list = []
+        monkeypatch.setattr(
+            speech, "warm_in_background", lambda kind, delay_s=0.0: calls.append(kind)
+        )
+        with TestClient(server.app):
+            pass
+        assert calls == []
 
     def test_system_block(self, fakes, monkeypatch):
         from backend.web.core import speech_system
@@ -402,6 +428,30 @@ class TestClearKey:
         assert addon._guarded_paths(
             {"voice": {"stt_model": "tiny", "stt_stream_model": "tiny.en"}}
         ) == ["voice.stt_model", "voice.stt_stream_model"]
+
+    def test_the_words_post_roundtrips_normalised(self, fakes):
+        r = client.post(
+            "/api/settings",
+            json={"voice": {"words": {"stop": [" HALT ", "halt", "x!"], "send": []}}},
+        )
+        assert r.status_code == 200
+        S.invalidate()
+        assert S.load_settings().voice.words == {"stop": ["halt"]}
+        assert client.get("/api/voice").json()["words"]["stop"] == ["halt"]
+        assert client.get("/api/settings").json()["settings"]["voice"]["words"] == {
+            "stop": ["halt"]
+        }
+        # {} = back to all defaults.
+        r = client.post("/api/settings", json={"voice": {"words": {}}})
+        assert r.status_code == 200
+        S.invalidate()
+        assert S.load_settings().voice.words == {}
+        assert "words" not in S.load_settings().voice.to_dict()
+
+    def test_the_words_are_owner_only(self):
+        from backend.web.addons import settings as addon
+
+        assert addon._guarded_paths({"voice": {"words": {}}}) == ["voice.words"]
 
     def test_400_bad_kind(self, fakes):
         assert (
@@ -808,6 +858,13 @@ class TestWake:
         assert fakes.stt.calls[-1][3:] == ("en", "MindFlock")
         assert self._wake(fakes, "MindFlock is great").json()["wake"] is False
         assert self._wake(fakes, "").json()["wake"] is False
+
+    def test_the_persons_wake_word(self, fakes):
+        _voice(words={"wake": "Hey Jarvis"})
+        body = self._wake(fakes, "Hey, Jarvis!").json()
+        assert body["wake"] is True and body["word"] == "hey jarvis"
+        assert fakes.stt.calls[-1][3:] == ("en", "Hey Jarvis")
+        assert self._wake(fakes, "MindFlock").json()["wake"] is False
 
     def test_the_wake_check_takes_the_fast_path(self, fakes, monkeypatch):
         def fast(audio, mime, lang="", word=""):
