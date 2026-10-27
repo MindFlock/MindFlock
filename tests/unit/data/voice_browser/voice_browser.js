@@ -859,8 +859,9 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     };
     state.voiceGet = { on: false, say: null, has_question: false, source: "none", ts: null };
     state.transcribes = [];
-    // Phrase 1 into the empty box (it may be a command: it arrives whole);
-    // phrase 2 streams into the box and ends in "submit".
+    // Phrase 1 into the empty box (it can't be a command: typed as it
+    // comes, the router reads its final words); phrase 2 streams into the
+    // box, corrected as it goes, and ends in "submit".
     state.streamScript = {
       s1: [{ committed: "", partial: "fix the" }, { committed: "fix the", partial: "parser" }, { committed: "parser", partial: "" }],
       s2: [{ committed: "and add", partial: "a" }, { committed: "a test", partial: "submit" }],
@@ -914,6 +915,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     const c4 = state.streamChunks.filter((c) => c.id === "s1");
     // The first chunk is the lead-in (VOICE_LEAD_MS) + the first loud block(s): it goes as the word starts.
     check("the first chunk went as the word started: words shown within 400 ms of the first loud block", tr4.words - tr4.speech < 400 && c4.length >= 1 && c4[0].len < 44 + 32000 * 0.7, JSON.stringify(tr4) + " first chunk " + (c4[0] && c4[0].len) + " B");
+    check("…and typed into the box in the same moment (the trace's 'typed' mark, each pass's ms listed)", tr4.typed - tr4.words < 50 && Array.isArray(tr4.passes) && tr4.passes[0] === 42, JSON.stringify(tr4));
     console.log("  trace (phrase 1): " + JSON.stringify(tr4));
     t4 = Date.now();
     while (state.streamOpens.length < 2 && Date.now() - t4 < 6000) await sleep(30);
@@ -924,11 +926,15 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     const caps1 = await page4.evaluate(() => window.__caps.slice());
     check("…phrase 1 into an empty box (maybe a command) showed in the caption as it came", caps1.indexOf("fix the") >= 0 && caps1.indexOf("fix the parser") >= 0, JSON.stringify(caps1));
     const parts1 = await page4.evaluate(() => window.__parts.slice());
-    check("…the partial greyed (the still-settling words), before anything reached the box", parts1[caps1.indexOf("fix the")] === "fix the" && parts1[caps1.indexOf("fix the parser")] === "parser" && box1.length >= 1, JSON.stringify(parts1));
+    check("…the partial greyed (the still-settling words)", parts1[caps1.indexOf("fix the")] === "fix the" && parts1[caps1.indexOf("fix the parser")] === "parser", JSON.stringify(parts1));
     const hear1 = caps1.findIndex((c) => /^Hearing you…/.test(c));
     check("…'Hearing you…' between the quiet 'Listening…' and the first words", caps1.findIndex((c) => /^Listening…/.test(c)) < hear1 && hear1 >= 0 && hear1 < caps1.indexOf("fix the"), JSON.stringify(caps1.slice(0, 6)));
-    check("…and reached the box whole, after the silence stop's /end", box1[0] === "fix the parser" && state.streamEnds[0] === "s1", JSON.stringify([box1, state.streamEnds]));
+    // The session's last Say: line asked a question, so "the" waits a word
+    // (it may start "the first").
+    check("…typed into the box as it came — the first pass's guess (its 'the' held back: the session is asking), then corrected by the next", box1[0] === "fix" && box1[1] === "fix the parser" && state.streamEnds[0] === "s1", JSON.stringify([box1, state.streamEnds]));
     check("…the router had the whole phrase", state.posts.some((x) => x.path === "/api/voice/route" && x.body.text === "fix the parser"));
+    const all1 = await page4.evaluate(() => window.__boxes.slice());
+    check("…and the words never blinked out while it read them (the guess stayed until the answer)", all1.indexOf("fix") >= 0 && all1.slice(all1.indexOf("fix")).every(Boolean), JSON.stringify(all1));
     check("…the next phrase opened a new stream", state.streamOpens.length === 2);
     await sleep(300);
     const vib4 = await page4.evaluate(() => window.__vibes);
@@ -939,14 +945,20 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await waitFor(page4, () => window.mfVoice.state === "working" || window.mfVoice.state === "sending", 6000, "stream words sent");
     const boxes4 = await page4.evaluate(() => window.__boxes.slice());
     const caps4 = await page4.evaluate(() => window.__caps.slice());
-    const i1 = boxes4.indexOf("fix the parser and"), i2 = boxes4.indexOf("fix the parser and add a");
-    check("phrase 2's settled words landed in the box progressively, the last word held back", i1 >= 0 && i2 > i1, JSON.stringify(boxes4));
-    check("…the held word + the partial showed in the caption", caps4.indexOf("add a") >= 0 && caps4.indexOf("test submit") >= 0, JSON.stringify(caps4));
+    const i1 = boxes4.indexOf("fix the parser and add a"), i2 = boxes4.indexOf("fix the parser and add a test");
+    check("phrase 2 typed into the box as it came — the unstable tail too — after the words already there", i1 >= 0 && i2 > i1, JSON.stringify(boxes4));
+    check("…the phrase so far showed in the caption, its unstable tail greyed", caps4.indexOf("and add a") >= 0 && caps4.indexOf("and add a test submit") >= 0, JSON.stringify(caps4));
     check("…'submit' never reached the box", !boxes4.some((b) => /submit/i.test(b)), JSON.stringify(boxes4));
     const sent4 = posts("/send").slice(sends4);
     check("…the flush ending in 'submit' sent the box without the word", sent4.length === 1 && sent4[0].body.text === "fix the parser and add a test", JSON.stringify(sent4));
     check("chunks went one at a time (never two in flight)", state.streamChunks.length >= 4 && state.streamMaxInflight === 1, state.streamChunks.length + " chunks, max in flight " + state.streamMaxInflight);
-    check("…each a 16 kHz WAV of at least 300 ms", state.streamChunks.every((c) => c.ctype === "audio/wav" && c.head === "RIFF" && c.rate === 16000 && c.len >= 44 + 9600), JSON.stringify(state.streamChunks.slice(0, 3)));
+    check("…each a 16 kHz WAV", state.streamChunks.every((c) => c.ctype === "audio/wav" && c.head === "RIFF" && c.rate === 16000), JSON.stringify(state.streamChunks.slice(0, 3)));
+    // Pacing: a stream's first chunk is at least 300 ms (padded before its
+    // audio); with a 42 ms pass the later ones need only 150 ms of new
+    // audio — never the old 300 ms floor — and none is padded.
+    const ids4 = ["s1", "s2"].map((id) => state.streamChunks.filter((c) => c.id === id));
+    const later4 = [].concat.apply([], ids4.map((cs) => cs.slice(1)));
+    check("…a stream's first chunk ≥ 300 ms; the later ones ≥ 150 ms, some under 300 ms (paced by the 42 ms pass)", ids4.every((cs) => cs.length && cs[0].len >= 44 + 9600) && later4.length >= 2 && later4.every((c) => c.len >= 44 + 4800) && later4.some((c) => c.len < 44 + 9600), JSON.stringify(state.streamChunks.map((c) => c.id + ":" + c.len)));
     check("…and no clip went to /transcribe", state.transcribes.length === 0);
     // Cancel mid-phrase: the stream is DELETEd.
     await sleep(300);
@@ -963,7 +975,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await page4.click("#voice-gear");
     await sleep(200);
     const diag4 = await page4.evaluate(() => document.getElementById("voice-diag").textContent);
-    check("diagnostics: words as you speak, the last chunk's time", /Recognition stream: words as you speak \(last chunk 42 ms, 0\.4 s of audio\)/.test(diag4), diag4.replace(/\n/g, " | "));
+    check("diagnostics: words as you speak, the pass time, the last chunk's time", /Recognition stream: words as you speak \(~0\.04 s\/pass, last chunk 42 ms, 0\.4 s of audio\)/.test(diag4), diag4.replace(/\n/g, " | "));
     await page4.click("#voice-done");
     // A 409 on the open: the phrase is a clip, and the page stops asking.
     state.streamOpenStatus = 409;

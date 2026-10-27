@@ -6457,38 +6457,60 @@ phrase arrives sooner (a tap ends it at once, 12 s or the listening window
 is the cap, and a clip that heard no speech is dropped).
 When the server streams (`GET /api/voice` → `server_ready.stt_stream: true`,
 the local whisper backend) the words appear **while you speak**: the tap
-opens a stream (`POST /api/voice/stream {lang}` → `{id}`), and whenever the
-previous request is back and 300 ms of new audio is in, the samples since the
-last cut go out as one more 16 kHz WAV (`POST /api/voice/stream/{id}/chunk`
-→ `{committed, partial}`) — one request at a time, so a slow server gets
-fewer, longer chunks rather than a queue. `committed` words never change and
-go into the box as they come, all but the last (it may be the radio word
-that ends the phrase) and never a run that would *end* in a radio word
-(*go over the code* reaches the box as *go*, then *over the code*), so
-*over*, *submit* and *disregard* still act only as the phrase's real end;
-up to three trailing words that may *start* a control phrase wait too
-(*fix it stop* reaches the box as *fix it*: *stop* may be *stop
-recording*; while the session is asking, *yes*, *no*, *option* wait as
-well), so a control phrase never lands in the box, and a stop phrase acts
-the moment its words settle, mid-phrase;
-the held words and `partial`, the unstable tail, are the caption. A phrase
-said into an empty box (it may be a command — the router decides) or a
-dialog's answer arrives whole at its end, the caption showing it as it
-comes. The phrase ends as a clip does (silence, the tap, the cap — 30 s
-here); the unsent rest goes out, `POST …/end` → `{committed}` flushes the
-last words, and the next phrase opens a new stream; Cancel or voice off
-`DELETE`s it. A 409 on the open (the server does not stream after all: a
-clip per phrase until `GET /api/voice` says otherwise) or any failed request
-turns the phrase into a clip — the words so far stay, the audio the stream
-had not answered is transcribed in one piece.
+opens a stream (`POST /api/voice/stream {lang}` → `{id}`), and the phrase
+goes out in chunks of 16 kHz WAV (`POST /api/voice/stream/{id}/chunk` →
+`{committed, partial, ms}`) — one request at a time, so a slow server gets
+fewer, longer chunks rather than a queue.
+
+**Words as you speak, corrected as you go.** Like the phone keyboard's
+dictation, the phrase so far — the stream's `committed` words, then its
+`partial` (the unstable tail) — is **typed into the box after every chunk**:
+the first pass's guess shows within one pass of your first word, and each
+new answer **corrects it in place** from where it differs (*fix the bu* →
+*fix the bag* takes back *u* and adds *ag*; the words before the phrase are
+never touched, the caret stays at the end). A space joins the phrase to the
+words already in the box; none is added after it while you speak. The
+phrase is decided only at its **end**: the guess is taken back and the
+final words go in by the usual rules — *over*, *submit*, *disregard* (which
+takes back the whole box, the guess included), a command, an answer — so a
+correction can never send, stop or answer anything. **Never typed, not even
+as a guess:** a trailing control phrase or its start — *over*, *submit*,
+*disregard (that)*, *stop* (it may become *stop recording*), *that is*
+(…*all*), *quiet* / *stop talking*, and while the session is asking *yes*,
+*no*, *option* (…*two*) — until the next word rules it out (*stop the
+server* goes in once *the* is heard); a **first phrase into an empty box
+that may still be a command** (*switch to…*, *what's…*, *new session…*,
+*yes*: it waits whole for the router — one that can't be one, most prompts,
+is typed as it comes and stays in the box while the router reads its final
+words); anything while a **dialog** is being answered by voice (its answer
+is the final words, never a guess); and anything while an earlier phrase is
+with the router. A stop phrase still acts the moment its words settle,
+mid-phrase. Listening that stops before a phrase ends (Cancel aside, which
+empties the box) leaves its guess in the box as text.
+
+**Pacing.** A phrase's first chunk goes once **150 ms of speech** is in
+(with the 300 ms lead-in before it); after that each chunk waits for the
+last pass's time (the server's `ms`) × 0.8 of new audio, held to
+**150–600 ms** (300 ms until a pass has reported), and audio that arrives
+while a pass runs goes together the moment it is back — a fast server is
+fed small chunks often, a slow one no slivers. Only a first chunk is padded
+(with silence before it, where the quiet was). The phrase ends as a clip
+does (silence, the tap, the cap — 30 s here); the unsent rest goes out,
+`POST …/end` → `{committed}` flushes the last words, and the next phrase
+opens a new stream; Cancel or voice off `DELETE`s it. A 409 on the open
+(the server does not stream after all: a clip per phrase until `GET
+/api/voice` says otherwise) or any failed request turns the phrase into a
+clip — the words so far stay, the audio the stream had not answered is
+transcribed in one piece.
 **Starting fast, and seeing it hear you** (server recognition). The stream
 opens *with* the tap, alongside the microphone's start-up, and nothing is
 uploaded before your first word: the page keeps only the last 300 ms before
-it (the word's soft start) and sends that with the first loud block at once,
-so the first grey words show about 0.2 s after you start talking instead of
-0.3–0.45 s (measured in the headless harness with a 120 ms recognizer; a
-real whisper pass adds its own time). The **microphone stays warm** for 90 s
-after a phrase (`VOICE_KEEP_STREAM_MS`), for as long as a reply is on its
+it (the word's soft start) and sends that with the first 150 ms of speech,
+so the first words show — and are typed — about 0.25 s after you start
+talking (measured in the headless harness with a 120 ms recognizer; a real
+whisper pass adds its own time, ~0.3–0.6 s with the streaming model). The
+**microphone stays warm** for 90 s after a phrase (`VOICE_KEEP_STREAM_MS`),
+for as long as a reply is on its
 way back (the reply opens listening by itself), and 15 s after the page is
 hidden: a tap in that time starts listening at once, with no
 `getUserMedia`. The browser's mic-in-use indicator stays lit for that long;
@@ -6498,13 +6520,14 @@ relative to the room's noise, so a quiet room sits at zero, rising in 30 ms
 and falling over ~150 ms — and the meter under the strip follows it; the
 caption says ***Hearing you…*** while your voice is coming in and nothing
 has come back yet, *Listening… n s* when it is quiet. The streamed words
-replace it as soon as the first chunk answers: the settled ones in the
-text colour, the still-settling tail **greyed**. Android ticks (12 ms) at
+replace it as soon as the first chunk answers: the committed ones in the
+text colour, the still-settling guess **greyed**. Android ticks (12 ms) at
 each phrase's first word — but not when the 30 ms listening buzz has just
 gone. Diagnostics shows *Microphone: warm / not held* and *Last start: mic
-… ms, stream open … ms, speech … ms, words … ms, settled … ms after the
-start*; with `localStorage.cs_voice_debug = "1"` the console logs every
-mark too.
+… ms, stream open … ms, speech … ms, words … ms, typed … ms, settled … ms
+after the start* (*typed*: the first characters in the box); with
+`localStorage.cs_voice_debug = "1"` the console logs every mark and every
+pass's time too.
 A Chromium browser that does not ship Google's speech key — Arc, Brave,
 Vivaldi, Opera — has the recognizer but every start fails with a `network`
 error and nothing is heard: the first is retried, the second in a listening
@@ -6715,9 +6738,9 @@ or "please" in front:
 Anything else is a prompt — and so is any `kind` the page does not know (a
 newer server's): the words stay words.
 
-**Control words, anywhere.** At the end of every phrase — and of every run
-of words a streaming recognizer settles — two kinds of words act whatever
-is in the box, and never land in it:
+**Control words, anywhere.** At the end of every phrase — and, for a stop
+phrase, the moment a streaming recognizer settles it — two kinds of words
+act whatever is in the box, and never land in it:
 
 | Say (at the end) | Does |
 |---|---|
@@ -6796,8 +6819,9 @@ server's when Settings say server and `GET /api/voice` reports it ready),
 microphone), *Resampler* (which one made the last clip — *OfflineAudioContext
 (the browser's)*, or *low-pass decimator* and why — or which one will),
 *Silence stop* (*1100 ms after speech*, and the clip cap), *Recognition
-stream* with server recognition (*words as you speak* or *one clip per
-phrase*, and the last chunk's time or why it failed), *AudioContext*
+stream* with server recognition (*words as you speak* with the pass time —
+*~0.4 s/pass* — or *one clip per phrase*, and the last chunk's time or why
+it failed), *AudioContext*
 (its state), *Last transcribe* / *Last speak*
 (how long the server took and which backend, or why it failed), *Primed*
 (whether a tap has unlocked speech output yet), *Push to talk* (tap or

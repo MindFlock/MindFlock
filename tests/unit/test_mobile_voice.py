@@ -614,11 +614,11 @@ def test_mobile_js_wider_vocabulary_numbers_stops_and_answers():
     stt = _fn(js, "ServerSTT")
     words = stt.split("function streamWords(g, mine, committed, partial) {")[1]
     assert 'if (tail && tail.kind === "stop") {' in words
-    assert "var VOICE_HOLD_MAX = 3;" in v
-    assert "Math.min(VOICE_HOLD_MAX, all.length)" in _fn(js, "voiceStreamSplit")
-    assert (
-        "answers: function () { return !voice.box && !!voiceAsks(voice.session); },"
-        in _fn(js, "voiceRecStart")
+    # A guess holds back what may start a control phrase — the answers too
+    # while the session is asking (not into the ask sheet's field).
+    assert "Math.min(VOICE_TAIL_MAX, words.length)" in _fn(js, "voiceHoldBack")
+    assert "voiceHoldBack(all, !voice.box && !!voiceAsks(voice.session))[0];" in _fn(
+        js, "voiceGuessShow"
     )
     # Answers only while the session is asking.
     rest = _fn(js, "voiceHeardRest")
@@ -1000,10 +1000,12 @@ def test_mobile_js_server_recognizer_records_wav():
 def test_mobile_js_server_recognizer_streams_words_as_you_speak():
     """On a server that streams (GET /api/voice → server_ready.stt_stream)
     the phrase goes out in chunks while it is spoken: one stream per phrase,
-    a chunk once 300 ms of new audio is in and the previous request is back,
-    settled words into the box as they come (all but the held-back end), the
-    unstable tail in the caption, /end at the phrase's end, DELETE on stop.
-    A 409 on the open or any failed request turns the phrase into a clip."""
+    the first chunk after 150 ms of speech, later ones paced by the last
+    pass's time and only once the previous request is back; the phrase so
+    far typed into the box as a guess and corrected by every answer (the
+    unstable tail greyed in the caption), the whole phrase through the radio
+    rules at its end (/end), DELETE on stop. A 409 on the open or any failed
+    request turns the phrase into a clip."""
     js = _js()
     v = _voice_section(js)
     stt = _fn(js, "ServerSTT")
@@ -1024,37 +1026,74 @@ def test_mobile_js_server_recognizer_streams_words_as_you_speak():
     )
     assert "if (streams()) streamOpen(g, mine);" in stt
     assert '"/api/voice/transcribe?lang="' in stt
-    # Pacing: 300 ms of new audio, never two requests in flight.
+    # Pacing: the first chunk after 150 ms of speech (the lead-in rides
+    # along); later ones once voiceChunkMinMs(the last pass) of new audio is
+    # in; never two requests in flight.
+    assert "var VOICE_FIRST_CHUNK_MS = 150;" in v
     assert "var VOICE_STREAM_CHUNK_MS = 300;" in v
     pump = stt.split("function streamPump(g, mine) {")[1].split("\n    }\n")[0]
     assert "g.busy) return;" in pump
-    assert "g.queued * 1000 >= g.rate * VOICE_STREAM_CHUNK_MS" in pump
+    assert "g.queued * 1000 >= g.rate * voiceChunkMinMs(passMs)" in pump
+    assert "(g.queued - g.speechAt) * 1000 >= g.rate * VOICE_FIRST_CHUNK_MS" in pump
+    assert "g.speechAt = g.queued - block.length;" in stt
     chunk = stt.split("function streamChunk(g, mine) {")[1].split("\n    }\n")[0]
     assert "g.busy = true;" in chunk and "g.busy = false;" in chunk
     assert "voiceResampleClip(all, g.rate)" in chunk  # 16 kHz, as a clip
     assert "voiceWavEncode(pcm, VOICE_WAV_RATE)" in chunk
     assert "g.blocks.splice(0, n);" in chunk  # cut only once answered
+    # Only a first chunk is padded (before its audio): the stream is one piece.
+    assert "if (first && pcm.length < min) {" in chunk
+    assert "pad.set(pcm, min - pcm.length);" in chunk
+    # The pass's time paces the next chunk (a quiet chunk's 0 does not).
+    assert "if (ms > 0) passMs = voice.rec.passMs = ms;" in chunk
+    assert "(g.trace.passes = g.trace.passes || []).push(ms);" in chunk
     # The audio processor pumps; the silence stop ends the phrase as before.
     assert 'else if (g.mode === "stream") streamPump(g, mine);' in stt
     # The cap drops a phrase the detector missed only when the stream
     # showed no words either.
     assert "if (g.frames && !g.heard && !g.words) { discard();" in stt
-    # Settled words: all but the held-back end into the box; the rest +
-    # the partial into the caption; whole() keeps a phrase in one piece.
+    # The phrase so far — committed words + the unstable tail — goes to the
+    # caption (the tail greyed) and into the box as a guess (onGuess, the
+    # "typed" mark); onFinal only at the end (or for a stop phrase).
     words = stt.split("function streamWords(g, mine, committed, partial) {")[1]
     words = words.split("\n    }\n")[0]
-    assert "if (!(h.whole && h.whole())) {" in words
-    assert "var cut = voiceStreamSplit(g.pend, !!(h.answers && h.answers()));" in words
-    assert "if (h.onFinal) h.onFinal(cut[0]);" in words
-    # The caption greys the partial: it is handed over as the tail.
+    assert "var shown = voiceJoin(g.pend, g.partial);" in words
     assert "if (h.onInterim) h.onInterim(shown, g.partial);" in words
-    split = _fn(js, "voiceStreamSplit")
-    assert "var held = words.length ? [words.pop()] : [];" in split
-    assert 'voiceDictParse(words.join(" ")).kind' in split
+    assert 'if (h.onGuess && h.onGuess(shown)) voiceTraceMark(g, "typed");' in words
+    assert words.count("h.onFinal(") == 1  # the stop phrase's
+    assert "voiceStreamSplit" not in js and "h.whole" not in js
     rs = _fn(js, "voiceRecStart")
     assert (
-        'whole: function () { return mode === "dialog" || (!voice.box && !composeEl.value.trim()); },'
+        "onGuess: function (t) { if (!voiceIsListening()) return false; voiceHeardSome(); return voiceGuessShow(t); },"
         in rs
+    )
+    # The final takes the guess back first: the rules read the box as it
+    # was before the phrase, and only final words (while the router has the
+    # phrase before it, the guess in the box is that one's: it stays).
+    assert 'voiceHeard(t, mode, voiceListen_.routing ? "" : voiceGuessDrop());' in rs
+    assert rs.index("voiceGuessDrop();   // the phrase ended with no words") > rs.index(
+        "onEnd: function () {"
+    )
+    # Never guessed: a dialog's words, anything while the router has a
+    # phrase, a first phrase into an empty box that may be a command.
+    gs = _fn(js, "voiceGuessShow")
+    assert 'if (L.mode === "dialog" || L.routing) return false;' in gs
+    assert "!voice.box && !base.trim() && voiceMayBeCommand(all)" in gs
+    assert "var put = voiceGuessPut(cur, G.typed, words);" in gs
+    assert "box.setSelectionRange(put.value.length, put.value.length);" in gs
+    # A first phrase typed as it was said stays in the box while the router
+    # reads its final words, and goes with the answer: no blink.
+    heard = _fn(js, "voiceHeard")
+    route = heard.split("if (p.text && !composeEl.value.trim()) {")[1]
+    assert route.index("if (typed) voiceGuessHold(typed);") < route.index(
+        "voiceRoute(p.text)"
+    )
+    assert route.index("L.routing = false;\n        voiceGuessDrop();") < route.index(
+        "voiceRouted(res, p)"
+    )
+    # Listening that ends before the phrase's end keeps the guess as text.
+    assert "if (!voiceIsListening()) { voiceLevel(null); voiceGuessKeep(); }" in _fn(
+        js, "voiceSetState"
     )
     # The end: the rest, then /end, its words through onFinal.
     end = stt.split("function streamEnd(g, mine) {")[1].split("\n    }\n")[0]
@@ -1087,7 +1126,9 @@ def test_mobile_js_server_recognizer_streams_words_as_you_speak():
     diag = _fn(js, "voiceDiag")
     assert '"Recognition stream: " + voiceDiagStream()' in diag
     ds = _fn(js, "voiceDiagStream")
-    assert '"words as you speak (" + last + ")"' in ds
+    assert '"words as you speak (" + pass + last + ")"' in ds
+    assert '"~" + voicePassSeconds(voice.rec.passMs) + " s/pass, "' in ds
+    assert 'typed: "typed"' in _fn(js, "voiceDiagTrace")
     assert '"one clip per phrase"' in ds
     assert '"last chunk " + c.ms + " ms"' in ds
 
@@ -1139,12 +1180,9 @@ def test_mobile_js_server_recognizer_starts_fast_and_shows_it_hears():
     # Before the first word: only the lead-in is kept, nothing is sent.
     assert "(g.queued - g.blocks[0].length) * 1000 >= g.rate * VOICE_LEAD_MS" in stt
     pump = stt.split("function streamPump(g, mine) {")[1].split("\n    }\n")[0]
-    assert (
-        "if (g.heard && (!g.chunks || g.queued * 1000 >= g.rate * VOICE_STREAM_CHUNK_MS))"
-        in pump
-    )
+    assert "if (!g.heard) return;" in pump
     # A short first chunk is padded before its audio (where the quiet was).
-    assert "pad.set(pcm, first ? min - pcm.length : 0);" in stt
+    assert "pad.set(pcm, min - pcm.length);" in stt
     # "Hearing you…" while a voice comes in and nothing came back yet.
     st = stt.split("function recStatus(g, h) {")[1].split("\n    }\n")[0]
     assert "if (!h.onStatus || g.words) return;" in st
@@ -1167,7 +1205,7 @@ def test_mobile_js_server_recognizer_starts_fast_and_shows_it_hears():
     assert "if (loud && !g.heard) {" in stt and "if (h.onSpeech) h.onSpeech();" in stt
     # The trace, and its switch.
     assert 'localStorage.getItem("cs_voice_debug")' in _fn(js, "voiceDebugOn")
-    for mark in ('"mic"', '"open"', '"speech"', '"words"', '"settled"'):
+    for mark in ('"mic"', '"open"', '"speech"', '"words"', '"typed"', '"settled"'):
         assert "voiceTraceMark(g, " + mark + ")" in stt, mark
     assert '"Last start: " + voiceDiagTrace(voice.rec.trace)' in _fn(js, "voiceDiag")
 
@@ -1348,43 +1386,159 @@ def _control_fns(js: str) -> str:
     )
 
 
-def test_voice_stream_split_under_node():
-    """The stream's held-back end, run as-is: the last settled word waits
-    for the next words or the flush, and a run never reaches the box ending
-    in a radio word — so "over" / "submit" / "disregard" act only as the
-    phrase's real end, and mid-sentence they stay words. Up to three
-    trailing words that may START a control phrase wait too ("stop" may be
-    "stop recording"); while the session is asking, so do answers."""
+@pytest.mark.skipif(_node() is None, reason="needs node")
+def test_voice_guess_retype_under_node():
+    """The guess model, run as-is: a streamed phrase is typed as it is
+    heard and every answer corrects it from where it differs — the common
+    prefix stays, the differing tail is taken back, the new tail goes in;
+    the words before the guess are never touched; pacing follows the
+    server's pass time."""
     js = _js()
-    split = js[
-        js.index("  function voiceStreamSplit(") : js.index("  function ServerSTT(")
+    fns = js[js.index("  function voiceRetype(") : js.index("  function ServerSTT(")]
+    # The pacing constants, as the page has them.
+    consts = "\n".join(
+        ln
+        for ln in js.splitlines()
+        if re.match(r"\s*var VOICE_(STREAM_CHUNK|CHUNK_MIN|CHUNK_MAX)_MS = ", ln)
+    )
+    assert consts.count("var ") == 3
+    script = consts + "\n" + fns + _control_fns(js) + """
+var out = {};
+out.retype = [["fix the bu", "fix the bag"], ["fix the", "fix the bug"], ["fix the bug in", "fix the"],
+              ["add a tesst", "add a test"], ["", "fix"], ["fix", ""], ["caf\u00e9", "cafe"], ["same", "same"]]
+  .map(function (x) { return voiceRetype(x[0], x[1]); });
+// Answers into a box that already holds a phrase: the guess grows, changes
+// mid-phrase, shrinks, then is all held back.
+var seq = [], v = "draft", t = "";
+["fix the", "fix the parser", "fix a parser in", "fix a parser", ""].forEach(function (w) {
+  var r = voiceGuessPut(v, t, w); v = r.value; t = r.typed; seq.push([v, t, r.erase, r.type]);
+});
+out.seq = seq;
+out.empty = [voiceGuessPut("", "", "fix the"), voiceGuessPut("draft ", "", "fix")];
+out.edited = voiceGuessPut("draft fix it", " fix the", "fix the bug");
+// Committed words beyond what was typed (the guess was a prefix of them).
+out.beyond = voiceGuessPut("draft fix th", " fix th", "fix the bug");
+out.pace = [null, 0, -5, 42, 190, 400, 750, 2000].map(voiceChunkMinMs);
+out.join = [voiceJoin("a ", " b"), voiceJoin("", "b"), voiceJoin("a", null)];
+console.log(JSON.stringify(out));
+"""
+    res = subprocess.run(
+        [_node(), "-e", script], capture_output=True, text=True, timeout=30
+    )
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    assert out["retype"] == [
+        {"erase": "u", "type": "ag"},  # mid-word change
+        {"erase": "", "type": " bug"},  # the guess grew
+        {"erase": " bug in", "type": ""},  # a shorter new guess
+        {"erase": "st", "type": "t"},
+        {"erase": "", "type": "fix"},
+        {"erase": "fix", "type": ""},
+        {"erase": "\u00e9", "type": "e"},  # one code point
+        {"erase": "", "type": ""},
     ]
+    assert out["seq"] == [
+        ["draft fix the", " fix the", "", " fix the"],
+        ["draft fix the parser", " fix the parser", "", " parser"],
+        ["draft fix a parser in", " fix a parser in", "the parser", "a parser in"],
+        ["draft fix a parser", " fix a parser", " in", ""],
+        ["draft", "", " fix a parser", ""],  # never past the phrase's start
+    ]
+    # An empty box: no leading space; a box ending in a space: none added.
+    assert [e["value"] for e in out["empty"]] == ["fix the", "draft fix"]
+    # Edited by hand: the guess can't be found, so nothing is taken back.
+    assert out["edited"]["value"] == "draft fix it fix the bug"
+    assert out["edited"]["erase"] == ""
+    assert out["beyond"]["value"] == "draft fix the bug"
+    assert out["beyond"]["erase"] == "" and out["beyond"]["type"] == "e bug"
+    # 300 ms until a pass says; then 0.8 x the pass, held to 150-600 ms.
+    assert out["pace"] == [300, 300, 300, 150, 152, 320, 600, 600]
+    assert out["join"] == ["a b", "b", "a"]
+
+
+@pytest.mark.skipif(_node() is None, reason="needs node")
+def test_voice_guess_hold_back_and_commands_under_node():
+    """What a guess never types: a trailing control phrase or its start —
+    the radio words ("over", "disregard that"), a stop phrase ("stop" may be
+    "stop recording"), "stop talking" and its kin, and while the session is
+    asking an answer ("yes", "option" …two) — until the next word rules it
+    out; and a first phrase into an empty box that may still be a router
+    command (it waits whole for the router)."""
+    js = _js()
     cases = [
         "",
         "fix",
         "fix the login bug",
         "fix the login bug over",
+        "fix it. Over.",
+        "fix it over .",
         "go over the",
+        "go over",
+        "fix it disregard",
         "fix it disregard that",
         "add a test submit",
         "move it over to",
-        "  spaced   out  words ",
         "fix it stop",
         "fix it stop recording",
+        "stop the server",
         "remove the logs that's",
         "remove the logs that is all",
         "turn the mic",
+        "keep it quiet",
+        "please stop talking",
         "add a test and yes",
         "pick option",
     ]
-    asking = ["add a test and yes", "pick option", "fix the login bug", "it is no"]
+    asking = [
+        "add a test and yes",
+        "pick option",
+        "fix the login bug",
+        "it is no",
+        "do it",
+    ]
+    commands = [
+        "",
+        "fix the login bug",
+        "switch",
+        "switch to the parser",
+        "switch the bug",
+        "go back",
+        "go fix it",
+        "what's",
+        "what is the parser asking",
+        "what was it asking",
+        "session number two",
+        "why is it slow",
+        "new session for the parser",
+        "start a new session",
+        "a test",
+        "okay status",
+        "please fix it",
+        "hey",
+        "yes",
+        "no thanks",
+        "ok do it",
+        "this",
+        "this function is broken",
+        "session three yes",
+        "the second one",
+        "the bug",
+        "stop",
+        "stop the server",
+        "Stop talking.",
+        "open the readme",
+        "option two",
+        "two bugs remain",
+        "never mind",
+        "summarize that",
+        "summarize the logs",
+    ]
     script = (
-        split
-        + _control_fns(js)
-        + "\nconsole.log(JSON.stringify({plain: %s.map(function (t) { return voiceStreamSplit(t); }),"
-        " asking: %s.map(function (t) { return voiceStreamSplit(t, true); }),"
-        " join: [voiceJoin('a ', ' b'), voiceJoin('', 'b'), voiceJoin('a', null)]}));\n"
-        % (json.dumps(cases), json.dumps(asking))
+        _control_fns(js)
+        + "\nconsole.log(JSON.stringify({plain: %s.map(function (t) { return voiceHoldBack(t); }),"
+        " asking: %s.map(function (t) { return voiceHoldBack(t, true); }),"
+        " cmd: %s.map(function (t) { return voiceMayBeCommand(t); })}));\n"
+        % (json.dumps(cases), json.dumps(asking), json.dumps(commands))
     )
     res = subprocess.run(
         [_node(), "-e", script], capture_output=True, text=True, timeout=30
@@ -1393,31 +1547,75 @@ def test_voice_stream_split_under_node():
     out = json.loads(res.stdout)
     assert out["plain"] == [
         ["", ""],
-        ["", "fix"],
-        ["fix the login", "bug"],
+        ["fix", ""],
+        ["fix the login bug", ""],
         ["fix the login bug", "over"],
-        ["go", "over the"],
+        ["fix it.", "Over."],
+        ["fix it", "over ."],
+        # "over" mid-sentence is a word: typed once the next word is in.
+        ["go over the", ""],
+        ["go", "over"],
+        ["fix it", "disregard"],
         ["fix it", "disregard that"],
         ["add a test", "submit"],
-        ["move it", "over to"],
-        ["spaced out", "words"],
+        ["move it over to", ""],
         # A stop phrase never reaches the box, even half said.
         ["fix it", "stop"],
         ["fix it", "stop recording"],
+        ["stop the server", ""],
         ["remove the logs", "that's"],
         ["remove the logs", "that is all"],
         ["turn the", "mic"],
+        ["keep it", "quiet"],
+        ["please", "stop talking"],
         # Not asking: an answer word is a word.
-        ["add a test and", "yes"],
-        ["pick", "option"],
+        ["add a test and yes", ""],
+        ["pick option", ""],
     ]
     assert out["asking"] == [
         ["add a test and", "yes"],
         ["pick", "option"],
-        ["fix the login", "bug"],
+        ["fix the login bug", ""],
         ["it is", "no"],
+        ["", "do it"],
     ]
-    assert out["join"] == ["a b", "b", "a"]
+    assert dict(zip(commands, out["cmd"])) == {
+        "": True,
+        "fix the login bug": False,
+        "switch": True,
+        "switch to the parser": True,
+        "switch the bug": False,
+        "go back": True,
+        "go fix it": False,
+        "what's": True,
+        "what is the parser asking": True,
+        "what was it asking": True,
+        "session number two": True,
+        "why is it slow": False,
+        "new session for the parser": True,
+        "start a new session": True,
+        "a test": False,
+        "okay status": True,
+        "please fix it": False,
+        "hey": True,
+        "yes": True,
+        "no thanks": True,
+        "ok do it": True,
+        "this": True,
+        "this function is broken": False,
+        "session three yes": True,
+        "the second one": True,
+        "the bug": False,
+        "stop": True,
+        "stop the server": False,
+        "Stop talking.": True,
+        "open the readme": True,
+        "option two": True,
+        "two bugs remain": False,
+        "never mind": True,
+        "summarize that": True,
+        "summarize the logs": False,
+    }
 
 
 @pytest.mark.skipif(_node() is None, reason="needs node")

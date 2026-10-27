@@ -2821,7 +2821,7 @@
   //
   // Adapters, reachable as window.mfVoice.stt / .tts, all with one surface:
   //   stt {name, available(), start({onInterim, onFinal, onError, onEnd,
-  //        onLevel?, onSpeech?, onStatus?, until?, whole?, answers?}), stop(), active(), release()} —
+  //        onLevel?, onSpeech?, onStatus?, onGuess?, until?}), stop(), active(), release()} —
   //        onFinal fires once per PHRASE (one start may deliver several);
   //        onInterim(text, tail?): tail = the end of text still settling;
   //        onStatus carries a caption that is not words ("Transcribing…").
@@ -2831,11 +2831,10 @@
   //        ends the clip — and POSTs it to /api/voice/transcribe, adding
   //        finish() (end the clip now: the tap) and pending() (on its way);
   //        on a server that streams it sends the phrase in chunks and
-  //        onFinal fires with each run of settled words as they come, unless
-  //        whole() says the phrase must arrive in one piece (it may be a
-  //        command, or a dialog's answer); a stop phrase is handed over the
-  //        moment it settles, and the words that may start a control phrase
-  //        (answers(): the session is asking, so "yes" too) are held back
+  //        onGuess(text) fires after each with the phrase so far (typed into
+  //        the box as a guess; true when characters went in), onFinal once
+  //        with the whole phrase at its end — a stop phrase the moment it
+  //        settles
   //   tts {name, available(), prime(), speak(text) → Promise, cancel(),
   //        voices()} — PhoneTTS over speechSynthesis; ServerTTS POSTs
   //        /api/voice/speak and plays the audio through one AudioContext,
@@ -3079,29 +3078,33 @@
   // backend): the words appear WHILE the phrase is spoken. start() opens a
   // stream (POST /api/voice/stream {lang} → {id}) at once, alongside
   // getUserMedia; nothing is sent before the first loud block (only the
-  // last VOICE_LEAD_MS before it is kept, so the first chunk goes as the
-  // word starts); from then, whenever the previous
-  // request has returned and VOICE_STREAM_CHUNK_MS of new audio is in, the
-  // samples since the last cut go out as one more 16 kHz WAV (POST
-  // …/chunk → {committed, partial}) — one request at a time, so a slow
-  // server gets fewer, longer chunks instead of a queue. `committed` words
-  // never change: they reach onFinal (into the box) as they come — all but
-  // the last, and never a run ending in a radio word (voiceStreamSplit), so
-  // "over" / "submit" / "disregard" act only as the phrase's real end.
-  // `partial`, the unstable tail, is the caption (onInterim). While whole()
-  // says so (an empty box: the router decides what the phrase is; a
-  // dialog's answer), nothing reaches onFinal before the end — the caption
-  // shows the words. The phrase ends as a clip does (silence, the tap, the
-  // cap): the unsent audio, then POST …/end → {committed} → onFinal of the
-  // rest, and the state machine's restart opens the next phrase's stream.
-  // stop() DELETEs the stream. A 409 on the open (the server does not
-  // stream after all: clip per phrase until GET /api/voice says otherwise)
-  // or any failed chunk turns the phrase into a clip: the words so far
-  // stay, the audio not yet answered is transcribed in one piece.
+  // last VOICE_LEAD_MS before it is kept, the word's soft start); the first
+  // chunk goes once VOICE_FIRST_CHUNK_MS of speech is in (the lead-in rides
+  // along), and from then, whenever the previous request has returned and
+  // voiceChunkMinMs(the last pass's `ms`) of new audio is in, the samples
+  // since the last cut go out as one more 16 kHz WAV (POST …/chunk →
+  // {committed, partial, ms}) — one request at a time, so a slow server
+  // gets fewer, longer chunks instead of a queue. After every answer the
+  // phrase so far — its committed words, then `partial`, the unstable tail —
+  // goes to onGuess (the state machine types it into the box as a guess and
+  // corrects it with the next answer) and to the caption (onInterim, the
+  // tail greyed). The phrase reaches onFinal ONCE, whole, at its end — so
+  // "over" / "submit" / "disregard", a command, a dialog's answer are all
+  // decided on the final words — except a stop phrase, handed over the
+  // moment its words settle. The phrase ends as a clip does (silence, the
+  // tap, the cap): the unsent audio, then POST …/end → {committed} → onFinal
+  // of all of it, and the state machine's restart opens the next phrase's
+  // stream. stop() DELETEs the stream. A 409 on the open (the server does
+  // not stream after all: clip per phrase until GET /api/voice says
+  // otherwise) or any failed chunk turns the phrase into a clip: the words
+  // so far stay, the audio not yet answered is transcribed in one piece.
   var VOICE_WAV_RATE = 16000;            // the rate of the uploaded clip
   var VOICE_SILENCE_MS = 1100;           // quiet after speech that ends the clip
   var VOICE_CLIP_MAX_MS = 12000;         // the hard cap on one clip
-  var VOICE_STREAM_CHUNK_MS = 300;       // the least new audio a stream chunk carries (the server's minimum)
+  var VOICE_FIRST_CHUNK_MS = 150;        // a stream's first chunk: this much speech (the lead-in rides along)
+  var VOICE_STREAM_CHUNK_MS = 300;       // later chunks' least new audio while no pass has said its time; the first chunk is padded to it
+  var VOICE_CHUNK_MIN_MS = 150;          // voiceChunkMinMs: the least new audio once the server reports `ms`...
+  var VOICE_CHUNK_MAX_MS = 600;          // ...and the most it waits for
   var VOICE_STREAM_MAX_MS = 30000;       // a streamed phrase's cap (its words arrive as it goes)
   var VOICE_LEVEL_MS = 100;              // the caption clock's period
   var VOICE_RMS_SPEECH = 0.02;           // RMS (0..1) above which the clip has speech
@@ -3229,24 +3232,44 @@
     }
     return buf;
   }
-  // A stream's settled words, split: what may go into the box now, and what
-  // waits for the next words or the flush — the last word (it may be the
-  // radio word that ends the phrase) and, with it, any words that would make
-  // the run END in a radio word ("go over the" → "go" now, "over the"
-  // waits: an "over" mid-sentence is a word, but "go over" alone would stop
-  // listening) — and up to VOICE_HOLD_MAX trailing words that may be the
-  // start of a control phrase ("fix it stop" → "fix it" now, "stop" waits:
-  // it may be "stop recording"; with `answers`, the session is asking and
-  // "yes" / "option" wait too). [now, held].
-  function voiceStreamSplit(text, answers) {
-    var words = String(text || "").trim().split(/\s+/).filter(Boolean);
-    var held = words.length ? [words.pop()] : [];
-    while (words.length && voiceDictParse(words.join(" ")).kind) held.unshift(words.pop());
-    var all = words.concat(held);
-    for (var k = Math.min(VOICE_HOLD_MAX, all.length); k > held.length; k--) {
-      if (voiceMayStart(all.slice(all.length - k).join(" "), answers)) { held = all.slice(all.length - k); break; }
-    }
-    return [all.slice(0, all.length - held.length).join(" "), held.join(" ")];
+  // The keys that turn `before` (typed) into `after`: `erase` — the tail of
+  // `before` past the start they share — then `type`, the tail of `after`.
+  // By code point, so "café" or an emoji is one. "fix the bu" → "fix the
+  // bag": erase "u", type "ag" (the desktop's retype, lib/voiceDesktop.ts).
+  function voiceRetype(before, after) {
+    var x = Array.from(String(before || "")), y = Array.from(String(after || ""));
+    var i = 0;
+    while (i < x.length && i < y.length && x[i] === y[i]) i++;
+    return { erase: x.slice(i).join(""), type: y.slice(i).join("") };
+  }
+  // A box's `value` whose end, `typed`, is the guess at the phrase under
+  // way, with that guess corrected to `words` → {value, typed, erase, type}:
+  // only the differing tail changes, the words before the guess never.
+  // `typed` comes back as the new guess as it now ends the value — with the
+  // space that joins it to the words before (a phrase's end adds none: the
+  // box joins phrases with one space, as voiceAppend does). A value that no
+  // longer ends with the guess (edited by hand) keeps all it has; the guess
+  // goes after it.
+  function voiceGuessPut(value, typed, words) {
+    value = String(value || "");
+    typed = String(typed || "");
+    if (value.slice(value.length - typed.length) !== typed) typed = "";
+    var base = value.slice(0, value.length - typed.length);
+    words = String(words || "").trim();
+    var want = words ? (base && !/\s$/.test(base) ? " " : "") + words : "";
+    var fix = voiceRetype(typed, want);
+    return { value: value.slice(0, value.length - fix.erase.length) + fix.type, typed: want,
+             erase: fix.erase, type: fix.type };
+  }
+  // The least new audio (ms) for a stream's next chunk: about as long as the
+  // last pass took (`passMs`, the server's `ms`) × 0.8, held to
+  // VOICE_CHUNK_MIN_MS..VOICE_CHUNK_MAX_MS — a fast server is fed small
+  // chunks often, a slow one no slivers; VOICE_STREAM_CHUNK_MS while no pass
+  // has said (the desktop's chunkMinS).
+  function voiceChunkMinMs(passMs) {
+    var ms = Number(passMs);
+    if (!(ms > 0)) return VOICE_STREAM_CHUNK_MS;
+    return Math.min(VOICE_CHUNK_MAX_MS, Math.max(VOICE_CHUNK_MIN_MS, ms * 0.8));
   }
   function voiceJoin(a, b) {
     a = String(a || "").trim();
@@ -3270,9 +3293,11 @@
   }
   // The start-up trace of a phrase: ms from start() (for the first phrase,
   // the tap itself) to the microphone ready, the stream open, the first loud
-  // block, the first words shown and the first settled ones. The last one
-  // is in Diagnostics; with localStorage cs_voice_debug set, the console
-  // gets every mark.
+  // block, the first words shown (the caption), the first characters
+  // typed into the box (the guess) and the first settled ones; `passes`
+  // lists each chunk's pass time (the server's `ms`). The last one is in
+  // Diagnostics; with localStorage cs_voice_debug set, the console gets
+  // every mark and every pass.
   function voiceTraceMark(g, what) {
     if (!g.trace || what in g.trace) return;
     g.trace[what] = Date.now() - g.t00;
@@ -3354,6 +3379,7 @@
     var clockTimer = null, capTimer = null;
     var keepTimer = null, keepHidden = false;   // keep(): when the warm microphone goes back
     var standing = null;      // the wake word's standby (standby()); null = not running
+    var passMs = 0;           // the stream's last pass, as the server timed it (`ms`; 0 = not yet): the pacing
     var holding = false;      // hold(): the standby wants the microphone kept (it may be paused)
     function available() {
       return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia &&
@@ -3430,10 +3456,12 @@
                t00: Date.now(), trace: {}, debug: voiceDebugOn(),
                // The stream: mode "clip" (none, or it broke) / "opening" /
                // "stream"; blocks + queued = the audio it has not answered
-               // yet; busy = a request in flight (never two); pend = settled
-               // words not in the box yet; lead = the words before a clip
-               // that took over; words = the caption shows words.
-               mode: "clip", sid: "", queued: 0, loudQueued: false, busy: false, opening: false, chunks: 0,
+               // yet; speechAt = the frames of it before the first loud
+               // block (the lead-in); busy = a request in flight (never
+               // two); pend = the phrase's committed words; partial = its
+               // unstable tail; lead = the words before a clip that took
+               // over; words = the caption shows words.
+               mode: "clip", sid: "", queued: 0, speechAt: 0, loudQueued: false, busy: false, opening: false, chunks: 0,
                req: null, ending: false, dead: false, pend: "", partial: "", lead: "", words: false };
     }
     // The caption while nothing has come back: "Hearing you…" while the
@@ -3478,6 +3506,7 @@
         var loud = rms > Math.max(VOICE_RMS_SPEECH, g.floor * 3);
         if (loud && !g.heard) {
           // The phrase's first word: the trace, and the tick (h.onSpeech).
+          g.speechAt = g.queued - block.length;
           voiceTraceMark(g, "speech");
           if (h.onSpeech) h.onSpeech();
           if (token !== mine || rec !== g) return;
@@ -3681,22 +3710,28 @@
       });
     }
     // The next request, when one is due and none is in flight: a chunk once
-    // VOICE_STREAM_CHUNK_MS of new audio is in; once the phrase has ended,
-    // the rest (when it holds speech — after the silence stop it is the
-    // quiet), then /end. Nothing goes before the first word; the first
-    // chunk goes on it (the lead-in recStart kept, VOICE_LEAD_MS, and the
-    // loud block — short of the minimum only when the mic has just opened).
+    // enough new audio is in; once the phrase has ended, the rest (when it
+    // holds speech — after the silence stop it is the quiet), then /end.
+    // Nothing goes before the first word; the first chunk goes after
+    // VOICE_FIRST_CHUNK_MS of it (with the lead-in recStart kept,
+    // VOICE_LEAD_MS), so the first words show one pass later; then each
+    // waits for voiceChunkMinMs(passMs) of new audio — what came in while a
+    // pass ran goes together the moment it is back.
     function streamPump(g, mine) {
       if (g.dead || token !== mine || g.mode !== "stream" || g.busy) return;
       if (g.ending) {
         if (g.queued && g.loudQueued) streamChunk(g, mine); else streamEnd(g, mine);
         return;
       }
-      if (g.heard && (!g.chunks || g.queued * 1000 >= g.rate * VOICE_STREAM_CHUNK_MS)) streamChunk(g, mine);
+      if (!g.heard) return;
+      var due = g.chunks ? g.queued * 1000 >= g.rate * voiceChunkMinMs(passMs)
+        : (g.queued - g.speechAt) * 1000 >= g.rate * VOICE_FIRST_CHUNK_MS;
+      if (due) streamChunk(g, mine);
     }
     // The samples since the last cut, as a 16 kHz WAV (resampled as a clip
-    // is; one shorter than the server's minimum padded with silence — the
-    // first chunk BEFORE its audio, where the quiet was, the rest after).
+    // is; a first chunk shorter than VOICE_STREAM_CHUNK_MS padded with
+    // silence BEFORE its audio, where the quiet was — never a later one: the
+    // stream's audio is one piece). Its answer times the pass (passMs).
     function streamChunk(g, mine) {
       var n = g.blocks.length, frames = g.queued, all = new Float32Array(frames), at = 0, t0 = Date.now();
       for (var i = 0; i < n; i++) { all.set(g.blocks[i], at); at += g.blocks[i].length; }
@@ -3707,7 +3742,7 @@
       voiceResampleClip(all, g.rate).then(function (pcm) {
         if (g.dead) return null;
         var min = Math.ceil((VOICE_WAV_RATE * VOICE_STREAM_CHUNK_MS) / 1000);
-        if (pcm.length < min) { var pad = new Float32Array(min); pad.set(pcm, first ? min - pcm.length : 0); pcm = pad; }
+        if (first && pcm.length < min) { var pad = new Float32Array(min); pad.set(pcm, min - pcm.length); pcm = pad; }
         return streamReq(g, streamUrl(g.sid, "chunk"), {
           method: "POST",
           headers: { "Content-Type": "audio/wav" },
@@ -3719,7 +3754,13 @@
         if (!x.r.ok) { streamFail(g, mine, streamWhy(x)); return; }
         g.blocks.splice(0, n);
         g.queued -= frames;
-        voice.rec.chunk = { ms: Number(x.j.ms) || (Date.now() - t0), audio: Number(x.j.audio_s) || 0, error: "", at: Date.now() };
+        var ms = Number(x.j.ms) || 0;   // 0: a quiet chunk ran no pass
+        if (ms > 0) passMs = voice.rec.passMs = ms;
+        voice.rec.chunk = { ms: ms || (Date.now() - t0), audio: Number(x.j.audio_s) || 0, error: "", at: Date.now() };
+        if (g.trace) {
+          (g.trace.passes = g.trace.passes || []).push(ms);
+          if (g.debug) { try { console.log("[voice] pass " + ms + " ms (" + (Date.now() - t0) + " ms round trip, " + (frames / g.rate).toFixed(2) + " s sent)"); } catch (e) {} }
+        }
         streamWords(g, mine, x.j.committed, x.j.partial);
         streamPump(g, mine);
       }, function (err) {
@@ -3728,38 +3769,30 @@
         streamFail(g, mine, streamWhy(null, err));
       });
     }
-    // A chunk's words: the settled ones into the box as they come (unless
-    // the phrase must arrive whole), all but the held-back end
-    // (voiceStreamSplit); what is held and the unstable tail, the caption.
+    // A chunk's words: the phrase so far (its committed words, then the
+    // unstable tail) to onGuess — typed into the box as a guess, corrected
+    // by the next answer — and to the caption (onInterim, the tail greyed).
+    // The phrase reaches onFinal whole at its end (streamEnd) — but a stop
+    // phrase acts the moment it settles.
     function streamWords(g, mine, committed, partial) {
       var h = mine.h;
       if (String(committed || "").trim()) voiceTraceMark(g, "settled");
       g.pend = voiceJoin(g.pend, committed);
       g.partial = String(partial || "").trim();
-      // A stop phrase acts the moment it settles, mid-phrase or not.
       var tail = voiceTail(g.pend, false);
       if (tail && tail.kind === "stop") {
         var all = g.pend;
-        g.pend = "";
+        g.pend = g.partial = "";
         if (h.onFinal) h.onFinal(all);
         return;
       }
-      if (!(h.whole && h.whole())) {
-        var cut = voiceStreamSplit(g.pend, !!(h.answers && h.answers()));
-        if (cut[0]) {
-          g.pend = cut[1];
-          if (h.onFinal) h.onFinal(cut[0]);
-          if (g.dead || token !== mine) return;
-        }
-      }
-      // The settled-but-held words, then the partial (shown greyed: it may
-      // still change) — from the first chunk's answer on.
       var shown = voiceJoin(g.pend, g.partial);
-      if (shown) {
-        g.words = true;
-        voiceTraceMark(g, "words");
-        if (h.onInterim) h.onInterim(shown, g.partial);
-      }
+      if (!shown) return;
+      g.words = true;
+      voiceTraceMark(g, "words");
+      if (h.onInterim) h.onInterim(shown, g.partial);
+      if (g.dead || token !== mine) return;
+      if (h.onGuess && h.onGuess(shown)) voiceTraceMark(g, "typed");
     }
     // The phrase is over: /end flushes the words the stream still holds.
     function streamEnd(g, mine) {
@@ -4132,7 +4165,7 @@
            server_ready: {}, backends: { stt: [], tts: [] }, system: null, say_all: null },
     sayAll: { synced: false, denied: false },   // the say-all marker: set from the pref once this load; a 403 said once
     audioCtx: null,              // the page's one AudioContext (voiceAudioCtx)
-    rec: { mime: "", last: null, lastSpeak: null, resampler: "", chunk: null, trace: null },   // Diagnostics: recorder type, last transcribe / speak, resampler, last stream chunk, last start-up trace
+    rec: { mime: "", last: null, lastSpeak: null, resampler: "", chunk: null, trace: null, passMs: 0 },   // Diagnostics: recorder type, last transcribe / speak, resampler, last stream chunk, last start-up trace, the stream's last pass (ms)
     keepMs: VOICE_KEEP_STREAM_MS,   // how long the server recognizer keeps the microphone warm (tests shorten it)
     buzzAt: 0,                   // the last haptic cue (the listening buzz, the first-word tick)
     sttHinted: false,            // "server recognition isn't ready" said once
@@ -4144,6 +4177,7 @@
     lastError: "",
     pendingSay: null,            // a reply that arrived mid-dictation, spoken when idle
     box: null,                   // where dictation goes: null = the compose box; the ask sheet's field while it listens (vbox)
+    guess: { box: null, typed: "" },   // the streamed phrase's guess: the box it is in and the end of that box's value it is (voiceGuessShow)
     dialog: null,
     dialogKey: "",               // the dialog id read out (or "none"), so a poll never re-reads it
     dialogTries: 0,
@@ -4227,7 +4261,7 @@
     voiceStrip.classList.toggle("hidden", s === "off" && !voice.hearPending && !voiceSpeech.playing);
     voiceStateEl.textContent = VOICE_WORDS[s] || "";
     if (caption !== undefined) voiceCaption(caption);
-    if (!voiceIsListening()) voiceLevel(null);
+    if (!voiceIsListening()) { voiceLevel(null); voiceGuessKeep(); }
     voiceCancelBtn.classList.toggle("hidden", s === "off" || s === "idle");
     if (!voiceSheet.classList.contains("hidden")) voiceOnToggle.checked = s !== "off";
     fitSoon();   // the strip takes terminal rows
@@ -4672,21 +4706,20 @@
   function voiceRecStart() {
     var mode = voiceListen_.mode;
     voiceListen_.startedAt = Date.now();
+    voiceGuessKeep();   // a new phrase: an old guess is text now
     voice.stt.start({
       until: voiceListen_.until,
-      // A streamed phrase arrives whole while it may be a command (the box
-      // is empty: the router decides) or a dialog's answer; else its words
-      // go into the box as they settle.
-      whole: function () { return mode === "dialog" || (!voice.box && !composeEl.value.trim()); },
-      // The session is asking: an answer at the end of the words acts, so
-      // the stream holds back what may start one. Not into the ask sheet's
-      // field: there every word is the answer, sent on "submit".
-      answers: function () { return !voice.box && !!voiceAsks(voice.session); },
       onInterim: function (t, tail) { if (voiceIsListening()) { voiceHeardSome(); voiceCaption(t || voiceDictHint(), t ? tail : ""); } },
+      // A streamed phrase so far: into the box as a guess (voiceGuessShow).
+      onGuess: function (t) { if (!voiceIsListening()) return false; voiceHeardSome(); return voiceGuessShow(t); },
       onStatus: function (t) { if (voiceIsListening()) voiceCaption(mode === "dialog" ? t : t + " · " + voiceDictHint()); },
       onLevel: function (v) { voiceLevel(voiceIsListening() ? v : null); },
       onSpeech: function () { if (voiceIsListening()) voiceSpeechTick(); },
-      onFinal: function (t) { if (voiceIsListening()) { voiceHeardSome(); voiceHeard(t, mode); } },
+      // The phrase's final: its guess is taken back first, so every rule
+      // reads the box as it was before the phrase (and only final words).
+      // (While the router has the phrase before it, the guess in the box is
+      // that phrase's: it stays.)
+      onFinal: function (t) { if (voiceIsListening()) { voiceHeardSome(); voiceHeard(t, mode, voiceListen_.routing ? "" : voiceGuessDrop()); } },
       onError: function (code, detail) {
         if (!voiceIsListening()) return;
         if (code === "not-allowed" || code === "service-not-allowed") {
@@ -4723,6 +4756,7 @@
       },
       onEnd: function () {
         if (!voiceIsListening()) return;
+        voiceGuessDrop();   // the phrase ended with no words: its guess was wrong
         if (voice.stt.active()) return;   // already up again (voiceListenContinue)
         var L = voiceListen_;
         if (L.stopAfter) { voiceListenStop(); return; }
@@ -4795,8 +4829,9 @@
   // off"…) is one only while the box is empty — the server's router says
   // which (voiceRoute), the local table when it cannot; mid-message those
   // are words. A dialog answer ("yes", "two") needs no "over"; an "over" or
-  // a "submit" is stripped when said.
-  function voiceHeard(text, mode) {
+  // a "submit" is stripped when said. `typed`: the phrase's guess, taken
+  // back from the box just now ("" when there was none).
+  function voiceHeard(text, mode, typed) {
     var L = voiceListen_;
     if (L.routing) { L.routeQ.push([text, mode]); return; }   // after the phrase being routed
     // "Stop talking", in any mode and into any box: the voice stops, the
@@ -4830,9 +4865,14 @@
     if (p.text && !composeEl.value.trim()) {
       var gen = L.gen;
       L.routing = true;
+      // Its guess stays in the box while the router answers, and goes the
+      // moment the answer is in — for the final words, or for a command —
+      // so the words never blink out.
+      if (typed) voiceGuessHold(typed);
       voiceRoute(p.text).then(function (res) {
         if (L.gen !== gen) return;      // a newer listen (or none): this answer is for nobody
         L.routing = false;
+        voiceGuessDrop();
         if (!voiceIsListening()) { L.routeQ = []; return; }
         L.draining = true;            // the queued phrases first, then listen on / send
         if (voiceRouted(res, p)) { L.draining = false; L.routeQ = []; return; }   // a command: listening is over
@@ -4864,6 +4904,65 @@
     box.value = cur ? cur + " " + text : text;
     vboxSized();
     voice.dictated = true;
+  }
+  // --- the guess: a streamed phrase in the box while it is said -------------
+  // Like a phone keyboard's dictation: after every chunk ServerSTT hands
+  // over the phrase so far (onGuess) and it goes into the box at once, after
+  // what is there; each new answer corrects it from where it differs
+  // (voiceGuessPut: one value per answer, the caret at the end). The
+  // phrase's end takes the guess back (voiceGuessDrop, in the same tick) and
+  // puts the final words in by the rules above — so the radio words, a
+  // command, an answer are decided on final words only. Never typed, not
+  // even as a guess: a trailing control phrase or its start (voiceHoldBack:
+  // "over", "submit", "disregard that", "stop" …recording, "quiet", and
+  // while the session is asking "yes", "option" …two) until the next word
+  // rules it out; a first phrase into an empty box while it may be a
+  // command (voiceMayBeCommand: it waits whole for the router — one that
+  // cannot be is typed, and stays in the box while the router reads its
+  // final words, voiceGuessHold); anything in a dialog (its answer is the
+  // final words, never a guess); anything while an earlier phrase is with
+  // the router. Listening that stops before the phrase's end leaves the
+  // guess in the box as text (voiceGuessKeep).
+  function voiceGuessShow(all) {
+    var L = voiceListen_, box = vbox(), G = voice.guess;
+    if (L.mode === "dialog" || L.routing) return false;
+    if (G.box !== box) { voiceGuessDrop(); G.box = box; }
+    var cur = box.value;
+    var base = G.typed && cur.slice(cur.length - G.typed.length) === G.typed ? cur.slice(0, cur.length - G.typed.length) : cur;
+    var words = !voice.box && !base.trim() && voiceMayBeCommand(all) ? ""
+      : voiceHoldBack(all, !voice.box && !!voiceAsks(voice.session))[0];
+    var put = voiceGuessPut(cur, G.typed, words);
+    G.typed = put.typed;
+    if (!put.erase && !put.type) return false;
+    box.value = put.value;
+    try { if (document.activeElement === box) box.setSelectionRange(put.value.length, put.value.length); } catch (e) {}
+    vboxSized();
+    if (put.typed) voice.dictated = true;
+    return !!put.type;
+  }
+  // Take the guess back (the phrase's final is here, or it heard nothing):
+  // the box as it was before the phrase. Returns what was taken back.
+  function voiceGuessDrop() {
+    var G = voice.guess, box = G.box, t = G.typed;
+    G.box = null;
+    G.typed = "";
+    if (!box || !t || box.value.slice(box.value.length - t.length) !== t) return "";
+    box.value = box.value.slice(0, box.value.length - t.length);
+    if (box === composeEl) autosizeCompose();
+    return t;
+  }
+  // A routed phrase's guess, taken back with its final, back in the empty
+  // box while the router answers (voiceHeard drops it with the answer).
+  function voiceGuessHold(typed) {
+    composeEl.value += typed;
+    autosizeCompose();
+    voice.guess.box = composeEl;
+    voice.guess.typed = typed;
+  }
+  // The guess stays as it is, the box's own text now.
+  function voiceGuessKeep() {
+    voice.guess.box = null;
+    voice.guess.typed = "";
   }
   // A stop phrase: listening ends, the words said before it join the box
   // (radio words still count: "fix it over, that's all").
@@ -4935,12 +5034,12 @@
   // session is asking (voiceAsks: a dialog, or a Say line with a question),
   // an answer ("yes", "no thanks", "always", "option two") at the end of a
   // phrase answers it. Both are matched on the last VOICE_TAIL_MAX words
-  // ("yes and don't ask me again" is six), and a stream holds back up to
-  // VOICE_HOLD_MAX words that may start one (voiceStreamSplit), so a
-  // control phrase never lands in the box. A number answers only as
-  // the whole phrase or with its marker ("option two"): "add two" is words.
+  // ("yes and don't ask me again" is six), and a streamed phrase's guess
+  // holds back the words that may start one, or a radio word, or "stop
+  // talking" (voiceHoldBack), so a control phrase never lands in the box.
+  // A number answers only as the whole phrase or with its marker ("option
+  // two"): "add two" is words.
   var VOICE_TAIL_MAX = 6;
-  var VOICE_HOLD_MAX = 3;
   var VOICE_STOP = /^(?:stop (?:listening|recording|dictating)|(?:mic|microphone) off|that'?s all|that is all|(?:i'?m )?done talking)$/;
   var VOICE_ANS_YES = /^(?:yes|yeah|yep|yup|sure|ok|okay|allow|approve|go ahead|do it)(?: (?:it|that|please))?$/;
   var VOICE_ANS_NO = /^(?:no|nope|nah|deny|reject|don'?t|skip)(?: (?:it|that|thanks|thank you))?$/;
@@ -4951,6 +5050,12 @@
   var VOICE_HOLD_ANSWER = ["yes always", "yes and always", "yeah always", "ok always", "always allow", "don't ask again",
                            "do not ask again", "never ask again", "no thanks", "no thank you", "go ahead", "do it",
                            "option", "number", "choice", "the first", "the second", "the third", "answer", "reply"];
+  // ...and, for a guess, always: the radio words (voiceDictParse) and "stop
+  // talking" and its kin (VOICE_CMD's hush).
+  var VOICE_HOLD_ALWAYS = ["over", "submit", "disregard", "disregard that", "disregard it", "disregard all",
+                           "disregard everything", "stop talking", "stop speaking", "stop reading", "stop saying that",
+                           "be quiet", "quiet", "hush", "shut up", "enough", "enough talking", "enough of that",
+                           "that's enough", "thats enough", "that is enough", "ok stop", "okay stop"];
   var VOICE_NUM_WORDS = { ten: 10, eleven: 11, twelve: 12 };
   // "two" / "2" / "second" → 2; 0 when it is not a number.
   function voiceNumber(word) {
@@ -4962,9 +5067,73 @@
   function voiceMayStart(words, answers) {
     var t = voiceNorm(words);
     if (!t) return false;
-    var lists = answers ? VOICE_HOLD_STOP.concat(VOICE_HOLD_ANSWER) : VOICE_HOLD_STOP;
+    var lists = VOICE_HOLD_STOP.concat(VOICE_HOLD_ALWAYS, answers ? VOICE_HOLD_ANSWER : []);
     for (var i = 0; i < lists.length; i++) if ((lists[i] + " ").indexOf(t + " ") === 0) return true;
     return answers ? !!voiceAnswerWords(t, true) : false;
+  }
+  // A phrase in flight → [what may be typed now, what waits]: its last words
+  // (up to VOICE_TAIL_MAX) while they are, or could still become, a control
+  // phrase (voiceMayStart: "over", "disregard that", "stop" …recording,
+  // "that is" …all, "quiet"; with `answers`, "yes", "option" …two) — the
+  // longest such tail. Any other last word goes in at once; a held one once
+  // the next word rules the phrase out ("stop the server"), or at the end.
+  function voiceHoldBack(text, answers) {
+    var words = String(text || "").trim().split(/\s+/).filter(Boolean);
+    var n = words.length;
+    for (var k = 1; k <= Math.min(VOICE_TAIL_MAX, words.length); k++) {
+      if (voiceMayStart(words.slice(words.length - k).join(" "), answers)) n = words.length - k;
+    }
+    return [words.slice(0, n).join(" "), words.slice(n).join(" ")];
+  }
+  // Could the phrase that starts with `text` be one of the router's commands
+  // (backend/web/core/voice_router.py) or VOICE_CMD's? Each pattern is
+  // matched word by word as a PREFIX: a slot lists the words it takes, a
+  // final "*" takes the rest; a phrase made only of answer words ("yes",
+  // "no thanks", "ok do it") may be an answer. The router's lead word
+  // ("okay", "hey"…) and trailing "please" are dropped as it drops them. A
+  // first phrase into an empty box that may be a command is never guessed
+  // into the box (it waits whole for the router); one that cannot be — most
+  // prompts — is typed as it comes (the router still reads its final words).
+  var VOICE_NUMS = "one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|first|second|third|fourth|" +
+                   "fifth|sixth|seventh|eighth|ninth|1|2|3|4|5|6|7|8|9";
+  var VOICE_VERBS = "switch|go|change|jump|move|focus|open|show|select";
+  var VOICE_LEADS = ["ok", "okay", "hey", "please"];
+  var VOICE_ANSWER_WORDS = ("yes yeah yep yup sure ok okay approve approved allow allowed go ahead do it that this all " +
+                            "no nope nah deny denied reject don't dont not skip cancel stop always and ask me again never " +
+                            "thanks thank you please").split(" ");
+  var VOICE_MAY_CMD = [
+    "cancel", "never mind", "nevermind", "scratch that", "forget it",
+    VOICE_VERBS + " to *", VOICE_VERBS + " over to *", "focus|open|show|select *", "go back",
+    "what|which sessions *", "list sessions", "list the|my sessions",
+    "what's|whats *", "what is|was *", "what does *", "what did it say", "what|who needs *",
+    "status", "summarize|summarise", "summarize|summarise that|it", "summary",
+    "read the|its|it's question *", "read me the|its|it's question *", "read that|it again",
+    "say that again", "repeat", "repeat that",
+    "voice off", "turn voice|mic|microphone off", "turn off voice", "turn off the mic|microphone", "turn the mic|microphone off",
+    "stop", "stop talking|speaking|reading|listening|recording|dictating", "stop saying that", "stop the mic|microphone",
+    "be quiet", "quiet", "hush", "shut up", "enough", "enough talking", "enough of that",
+    "that's|thats enough|all", "that is enough|all", "mic|microphone off", "pause listening",
+    "done talking", "i'm|im done talking", "i am done talking",
+    "session|window|number|row " + VOICE_NUMS + " *", "session|window number " + VOICE_NUMS + " *", "the " + VOICE_NUMS + " one|session|window|option|choice",
+    VOICE_NUMS + " one|option|choice", "next|previous|prev|last session|one|window",
+    "the next|previous|prev|last session|one|window",
+    "option|choice " + VOICE_NUMS, "always allow *", "answer|tell|reply *",
+    "new session *", "a|another new session *", "start|create|make new session *",
+    "start|create|make a|another new session *", "spin up new session *", "spin up a|another new session *",
+  ].map(function (p) { return p.split(" ").map(function (slot) { return slot.split("|"); }); });
+  function voiceMayBeCommand(text) {
+    var w = voiceNorm(text).split(" ").filter(Boolean);
+    if (w.length > 1 && VOICE_LEADS.indexOf(w[0]) >= 0) w = w.slice(1);
+    if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
+    if (!w.length || w.every(function (x) { return VOICE_ANSWER_WORDS.indexOf(x) >= 0 || VOICE_LEADS.indexOf(x) >= 0; })) return true;
+    return VOICE_MAY_CMD.some(function (p) {
+      for (var i = 0; i < w.length; i++) {
+        if (i >= p.length) return false;
+        if (p[i][0] === "*") return true;
+        if (p[i].indexOf(w[i]) < 0) return false;
+      }
+      return true;
+    });
   }
   // An answer phrase (normalized, the whole of `t`) → {choice, number?}, or
   // null. "answer yes" / "reply no" are answers too. `whole`: t is the whole
@@ -6771,12 +6940,18 @@
     var last = !c ? "no chunk yet"
       : c.error ? "last chunk failed — " + c.error
       : "last chunk " + c.ms + " ms" + (c.audio ? ", " + c.audio.toFixed(1) + " s of audio" : "");
-    return ready.stt_stream ? "words as you speak (" + last + ")" : "one clip per phrase" + (c ? " (" + last + ")" : "");
+    var pass = voice.rec.passMs > 0 ? "~" + voicePassSeconds(voice.rec.passMs) + " s/pass, " : "";
+    return ready.stt_stream ? "words as you speak (" + pass + last + ")" : "one clip per phrase" + (c ? " (" + last + ")" : "");
   }
-  // "mic 3 ms, stream open 41 ms, speech 420 ms, words 610 ms, settled 905 ms after the start"
+  // A pass's time as the diagnostics say it: 0.4, or 0.04 under a tenth.
+  function voicePassSeconds(ms) {
+    var sec = ms / 1000;
+    return sec < 0.1 ? sec.toFixed(2) : sec.toFixed(1);
+  }
+  // "mic 3 ms, stream open 41 ms, speech 420 ms, words 610 ms, typed 611 ms, settled 905 ms after the start"
   function voiceDiagTrace(t) {
-    var names = { mic: "mic", open: "stream open", speech: "speech", words: "words", settled: "settled" };
-    var parts = ["mic", "open", "speech", "words", "settled"].filter(function (k) { return k in t; })
+    var names = { mic: "mic", open: "stream open", speech: "speech", words: "words", typed: "typed", settled: "settled" };
+    var parts = ["mic", "open", "speech", "words", "typed", "settled"].filter(function (k) { return k in t; })
       .map(function (k) { return names[k] + " " + t[k] + " ms"; });
     return parts.length ? parts.join(", ") + " after the start" : "nothing yet";
   }
