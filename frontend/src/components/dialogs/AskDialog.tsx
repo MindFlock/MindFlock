@@ -63,7 +63,7 @@ import {
   type EventAsk,
 } from "../../lib/ask";
 import { askMic, askVoice, clearAskVoice, getMicState, setAskVoice, subscribeMicState, type AskVoice } from "../../lib/askVoice";
-import { dialogChoices, sayOnSend, TALK_EVENT } from "../../lib/voiceDesktop";
+import { answerHint, dialogChoices, sayOnSend, TALK_EVENT } from "../../lib/voiceDesktop";
 import {
   answerSelect,
   fieldPhrase,
@@ -460,7 +460,7 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
     useUi.getState().closeDialog();
   };
 
-  /** Send the answer box (Enter, the Send button, a spoken "submit"). */
+  /** Send the answer box (Enter, the Send button, a spoken "over"). */
   const send = useCallback(
     async (say = false): Promise<{ ok: boolean; line: string }> => {
       const text = (field.current?.value || "").trim();
@@ -517,7 +517,7 @@ function AskPanel({ item, index, count, onStep, onDone, laterRef }: PanelProps) 
   );
 
   // The mic answers THIS session while the panel is up.
-  const hint = d?.parsed ? name + ": " + dialogChoices(d) : isDialog ? "Answer " + name + " on the screen" : "Answer " + name + " — say submit to send";
+  const hint = d?.parsed ? name + ": " + dialogChoices(d) : isDialog ? "Answer " + name + " on the screen" : answerHint(name);
   const sendRef = useRef(send);
   sendRef.current = sel?.field ? sendField : send;
   const hintRef = useRef(hint);

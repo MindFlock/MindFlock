@@ -520,7 +520,7 @@ describe("voice: the pop-up is the one hands-free entry", () => {
     done();
     await run;
     expect(x.said).toEqual([]);
-    expect(x.heard).toEqual([["bot", "Answer Bot — say submit to send"]]);
+    expect(x.heard).toEqual([["bot", "Answer Bot — say “over” to send, “over and out” to stop, “disregard” to start over"]]);
   });
 
   it("a miss retries once; stop() ends it without the retry", async () => {
@@ -563,7 +563,7 @@ describe("voice: the pop-up is the one hands-free entry", () => {
     expect(cmdDeps.announce).toHaveBeenLastCalledWith(APPROVE_OFF_LINE);
   });
 
-  it("a question: the words go into the answer box, 'disregard' takes them back, 'submit' sends with say when replies are on", async () => {
+  it("a question: the words go into the answer box, 'disregard' takes them back, 'over' sends with say when replies are on", async () => {
     let box = "";
     const submit = vi.fn(async (say: boolean) => ({ ok: true, line: "Sent to Bot. " + say }));
     const target = {
@@ -595,7 +595,7 @@ describe("voice: the pop-up is the one hands-free entry", () => {
     expect(box).toBe("the second one ");
     await d.heard("disregard");
     expect(box).toBe("");
-    await d.heard("use sqlite submit");
+    await d.heard("use sqlite over");
     expect(box).toBe("use sqlite ");
     expect(submit).toHaveBeenCalledWith(true);
     expect(submitted).toEqual([["bot", true]]);
@@ -603,7 +603,7 @@ describe("voice: the pop-up is the one hands-free entry", () => {
     expect(hooks.route).not.toHaveBeenCalled();
   });
 
-  it("'over' stops and leaves the text", async () => {
+  it("a stop phrase stops and leaves the text; 'submit' is typed like any word", async () => {
     let box = "";
     const target = { kind: "field" as const, title: "bot", name: "Bot", type: (t: string) => ((box += t), true), erase: () => true, submit: vi.fn() };
     const d = new LiveDictation(target, {
@@ -614,10 +614,44 @@ describe("voice: the pop-up is the one hands-free entry", () => {
       replies: () => false,
       submitted: () => {},
     });
-    await d.heard("maybe later over");
-    expect(box).toBe("maybe later ");
+    await d.heard("maybe later submit");
+    await d.heard("stop recording");
+    expect(box).toBe("maybe later submit ");
     expect(d.active).toBe(false);
     expect(target.submit).not.toHaveBeenCalled();
+  });
+
+  it("continuous: 'over' sends the field and listening goes on — onto the focused session once the card moved on; 'over and out' sends and stops", async () => {
+    let box = "";
+    const submit = vi.fn(async () => ({ ok: true, line: "Sent to Bot." }));
+    const field = { kind: "field" as const, title: "bot", name: "Bot", type: (t: string) => ((box += t), true), erase: () => true, submit };
+    const typed: string[] = [];
+    const session = { kind: "session" as const, title: "t1", name: "Login fix", type: (t: string) => typed.push(t) > 0, erase: () => true };
+    instApi.mockReset();
+    instApi.mockResolvedValue({ ok: true });
+    const routed: string[] = [];
+    const d = new LiveDictation(
+      field,
+      {
+        caption: () => {},
+        halt: () => {},
+        route: async (t: string) => (routed.push(t), false),
+        activity: () => "idle",
+        replies: () => false,
+        submitted: () => {},
+        retarget: () => ({ target: session }),
+      },
+      { continuous: true }
+    );
+    await d.heard("use sqlite over");
+    expect(box).toBe("use sqlite ");
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(d.active).toBe(true);
+    await d.heard("now run the tests over and out");
+    expect(typed).toEqual(["now run the tests "]);
+    expect(routed).toEqual(["now run the tests"]); // a new message: past the router again
+    expect(instApi).toHaveBeenCalledWith("t1", "/send", { json: { enter: true, say: false } });
+    expect(d.active).toBe(false);
   });
 
   it("the mic routes to the pop-up's ask, and leaves read-outs to it while it is on", () => {

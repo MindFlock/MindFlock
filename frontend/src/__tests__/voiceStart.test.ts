@@ -395,9 +395,9 @@ describe("the caption: what it hears before what it types", () => {
     const k = hooks();
     const d = new LiveDictation({ kind: "session", title: "t1", name: "Login fix", type: () => true, erase: () => true }, k.h);
     d.show();
-    expect(k.last()[0]).toBe("Say over to leave it, submit to send, disregard to start over");
+    expect(k.last()[0]).toBe("Say “over” to send, “over and out” to stop, “disregard” to start over");
     d.ready();
-    expect(k.last()[0]).toBe("Listening… · Say over to leave it, submit to send, disregard to start over");
+    expect(k.last()[0]).toBe("Listening… · Say “over” to send, “over and out” to stop, “disregard” to start over");
     d.loud(true);
     expect(k.last()[0]).toMatch(/^Hearing you… · /);
     d.loud(false);

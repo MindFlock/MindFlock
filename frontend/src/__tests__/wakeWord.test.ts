@@ -509,7 +509,7 @@ describe("the mic's wiring (components/TopBarMic.tsx)", () => {
   it("a wake starts listening at once, as a click does, the chime in the same moment (skipped), a quiet miss after WAKE_LISTEN_MS", () => {
     // start() first — no delay before it — then the chime, synchronously.
     expect(MIC).toMatch(
-      /const woken = \(soundEnd: number\) => \{\s*if \(live\.current\) return;\s*const d = start\(textField\(document\.activeElement\), \{ hint: WAKE_HINT, skipMs: CHIME_MS \+ 30 \}\);\s*if \(!d\) return;\s*chime\(voiceAudioCtx\(\)\);\s*wakeFrom = \{ d, at: soundEnd \};/
+      /const woken = \(soundEnd: number\) => \{\s*if \(live\.current\) return;\s*const d = start\(textField\(document\.activeElement\), \{ hint: WAKE_HINT, skipMs: CHIME_MS \+ 30, idle: false \}\);\s*if \(!d\) return;\s*chime\(voiceAudioCtx\(\)\);\s*wakeFrom = \{ d, at: soundEnd \};/
     );
     const woken = MIC.slice(MIC.indexOf("const woken = "), MIC.indexOf("const latestWake"));
     expect(woken.indexOf("setTimeout")).toBeGreaterThan(woken.indexOf("chime(")); // only the miss timer

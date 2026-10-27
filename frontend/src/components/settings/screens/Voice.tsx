@@ -485,7 +485,7 @@ export function MicPrefs() {
         <div className="voice-ptt-choices" role="radiogroup" aria-label="Push to talk">
           <label className="voice-ptt-choice">
             <input type="radio" name="voice-ptt" checked={prefs.ptt !== "hold"} onChange={() => save({ ...prefs, ptt: "toggle" })} />
-            <span>Click to talk — press to start, press again to stop</span>
+            <span>Click to talk — press to start; it listens until you say “over and out” or press again</span>
           </label>
           <label className="voice-ptt-choice">
             <input type="radio" name="voice-ptt" checked={prefs.ptt === "hold"} onChange={() => save({ ...prefs, ptt: "hold" })} />
@@ -523,12 +523,37 @@ export function MicPrefs() {
           <span className="ca-slider" />
         </label>
       </div>
+      <div className="set-row set-switch-row" id="voice-confirm-row">
+        <span className="notif-rule-text">
+          <span className="set-label" id="voice-confirm-label">
+            Spoken confirmations
+          </span>
+          <span className="set-hint notif-rule-desc" id="voice-confirm-hint">
+            Say “Sent.”, “Cleared.”, “Stopped.” or the session you switched to, in the reply voice — about what you
+            did, so even with Read replies aloud off.
+          </span>
+        </span>
+        <label className="ca-switch">
+          <input
+            type="checkbox"
+            id="voice-confirm"
+            aria-labelledby="voice-confirm-label"
+            checked={prefs.confirm !== false}
+            onChange={(e) => {
+              if (e.target.checked) voiceAudioCtx();
+              save({ ...prefs, confirm: e.target.checked });
+            }}
+          />
+          <span className="ca-slider" />
+        </label>
+      </div>
       {/* What the top-bar mic's options no longer explain (they are controls
           only): how dictation and hands-free answers work, and its diagnostics. */}
       <div className="set-row" id="voice-mic-howto">
         <p className="set-hint" id="voice-mic-typing">
           The words are typed into the session as you speak, and corrected when the accurate pass hears a
-          phrase otherwise. {DICT_HINT}; Esc takes them back. Say “stop recording” to stop, “focus 3” or
+          phrase otherwise. {DICT_HINT}; Esc takes them back. A click keeps the mic on across messages until
+          “over and out”. Say “stop recording” to stop, “focus 3” or
           “next session” to switch, and “yes”, “no”, “always” or a number to answer a dialog. Hotkey:{" "}
           {talkHotkey() || "the Talk shortcut in Keyboard shortcuts"}.
         </p>
