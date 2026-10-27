@@ -37664,6 +37664,45 @@ function NotificationsBell() {
 	}), document.body)] });
 }
 //#endregion
+//#region src/lib/menuPlace.ts
+var MENU_MARGIN = 6;
+function placeMenu(a, w, h, vw, vh, m = MENU_MARGIN) {
+	const maxHeight = Math.max(0, vh - 2 * m);
+	const hh = Math.min(h, maxHeight);
+	let left = a.align === "end" ? a.x - w : a.x;
+	if (a.align === "start" && left + w > vw - m && a.x - w >= m) left = a.x - w;
+	left = Math.max(m, Math.min(left, vw - m - w));
+	let top;
+	if (a.y + hh <= vh - m) top = a.y;
+	else if (a.flipY - hh >= m) top = a.flipY - hh;
+	else top = Math.max(m, vh - m - hh);
+	return {
+		left: Math.round(left),
+		top: Math.round(top),
+		maxHeight
+	};
+}
+function refitMenu(prev, w, h, vw, vh, m = MENU_MARGIN) {
+	const maxHeight = Math.max(0, vh - 2 * m);
+	const hh = Math.min(h, maxHeight);
+	return {
+		left: Math.round(Math.max(m, Math.min(prev.left, vw - m - w))),
+		top: Math.round(Math.max(m, Math.min(prev.top, vh - m - hh))),
+		maxHeight
+	};
+}
+function placeUnder(btn, w, vw, vh, m = 8) {
+	let left = btn.left;
+	if (left + w > vw - m) left = btn.right - w;
+	left = Math.max(m, Math.min(left, vw - m - w));
+	const top = btn.bottom + 6;
+	return {
+		left: Math.round(left),
+		top: Math.round(top),
+		maxHeight: Math.max(0, Math.round(vh - top - 2 * m))
+	};
+}
+//#endregion
 //#region src/lib/askVoice.ts
 var ask = null;
 var mic = null;
@@ -37982,6 +38021,23 @@ var MicKeeper = class {
 var RMS_SPEECH = .02;
 var LEVEL_DECAY_MS = 150;
 var LEVEL_FULL_RMS = .12;
+var LEVEL_SMOOTH_MS = 400;
+var STEP_OPACITY = [
+	.45,
+	.75,
+	1
+];
+var STEP_AT = [.12, .55];
+var STEP_HYSTERESIS = .05;
+function levelStep(prev, smoothed) {
+	const [hear, loud] = STEP_AT;
+	if (smoothed >= loud || prev === 2 && smoothed >= loud - STEP_HYSTERESIS) return 2;
+	if (smoothed >= hear || prev >= 1 && smoothed >= hear - STEP_HYSTERESIS) return 1;
+	return 0;
+}
+function slowLevel(prev, level, dtMs) {
+	return prev + (level - prev) * (1 - Math.exp(-Math.max(0, dtMs) / LEVEL_SMOOTH_MS));
+}
 var HEARING_HOLD_MS = 700;
 var STALE_MS = 250;
 var POLL_MS$3 = 85;
@@ -38003,19 +38059,6 @@ function pickupLine(ready, hearing) {
 	if (!ready) return "";
 	return hearing ? "Hearing you…" : "Listening…";
 }
-var LIVE_CAPTION_CHARS = 60;
-function endOf(text, max) {
-	if (text.length <= max) return text;
-	const cut = text.slice(text.length - max);
-	const sp = cut.indexOf(" ");
-	return "…" + (sp >= 0 && sp < cut.length - 1 ? cut.slice(sp + 1) : cut);
-}
-function liveTail(text, tail = "", max = LIVE_CAPTION_CHARS) {
-	return endOf(text, Math.max(16, max - tail.length));
-}
-function liveUnsure(tail, max = LIVE_CAPTION_CHARS) {
-	return endOf(tail, max);
-}
 function rmsOf(buf) {
 	let sum = 0;
 	for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
@@ -38024,6 +38067,8 @@ function rmsOf(buf) {
 var els = /* @__PURE__ */ new Set();
 var hearingSubs = /* @__PURE__ */ new Set();
 var level = 0;
+var slow = 0;
+var step = 0;
 var target = 0;
 var floor = 0;
 var lastFeed = 0;
@@ -38042,10 +38087,10 @@ function setHearing(on) {
 	hearingSubs.forEach((cb) => cb(on));
 }
 function paint$1() {
-	const v = level.toFixed(3);
+	const v = String(STEP_OPACITY[step]);
 	if (v === painted) return;
 	painted = v;
-	els.forEach((el) => el.style.setProperty("--mic-level", v));
+	els.forEach((el) => el.style.setProperty("--mic-step", v));
 }
 function frame(t) {
 	raf = 0;
@@ -38056,8 +38101,12 @@ function frame(t) {
 	}
 	if (now - lastFeed > STALE_MS) target = 0;
 	if (hearing && now - lastLoud > HEARING_HOLD_MS) setHearing(false);
-	level = smoothLevel(level, target, frameAt ? t - frameAt : 16);
+	const dt = frameAt ? t - frameAt : 16;
+	level = smoothLevel(level, target, dt);
 	if (target === 0 && level < .01) level = 0;
+	slow = slowLevel(slow, level, dt);
+	if (!active && level === 0) slow = 0;
+	step = levelStep(step, slow);
 	frameAt = t;
 	paint$1();
 	if (active || level > 0) raf = schedule(frame);
@@ -38105,7 +38154,7 @@ function onHearing(cb) {
 function meterRef(el) {
 	if (!el) return void 0;
 	els.add(el);
-	el.style.setProperty("--mic-level", level.toFixed(3));
+	el.style.setProperty("--mic-step", String(STEP_OPACITY[step]));
 	return () => {
 		els.delete(el);
 	};
@@ -38129,6 +38178,10 @@ function voiceMark(m) {
 	marks[m] = Math.round(clock() - t0);
 	if (typeof window !== "undefined") window.__mfVoiceTiming = { ...marks };
 	if (debugOn()) console.debug("[voice] " + m + " +" + marks[m] + " ms");
+}
+function voiceWake(ms) {
+	if (typeof window !== "undefined") window.__mfVoiceWake = Math.round(ms);
+	if (debugOn()) console.debug("[voice] wake " + Math.round(ms) + " ms (sound end → listening)");
 }
 function voicePass(ms) {
 	passes = [...passes, Math.round(ms)].slice(-20);
@@ -38458,6 +38511,11 @@ var OVER_LINE = "In the field — say submit or press Enter";
 var STOPPED_LINE = "Stopped listening";
 var HUSH_LINE = "Quiet.";
 var HUSH_CAPTION_MS = 1e3;
+function micPill(s) {
+	if (s.quiet) return HUSH_LINE;
+	if (s.listening) return "Listening…";
+	return s.speaking ? "Speaking…" : "";
+}
 function retype(before, after) {
 	const a = Array.from(before);
 	const b = Array.from(after);
@@ -38515,9 +38573,9 @@ var Dictation = class {
 	words(w) {
 		return this.stream(w, "");
 	}
-	flush(w) {
+	flush(w, final) {
 		if (!this.listening) return { kind: "stopped" };
-		return this.heard(joinWords(this.held, w));
+		return this.heard(final?.trim() ? final.trim() : joinWords(this.held, w));
 	}
 	wrote(text) {
 		this.typed += text;
@@ -38723,9 +38781,9 @@ var LiveDictation = class {
 	words(w) {
 		return this.stream(w, "");
 	}
-	flush(w) {
-		if (w.trim()) this.heardAnything = true;
-		return this.step(() => this.dict.flush(w));
+	flush(w, final) {
+		if (w.trim() || final?.trim()) this.heardAnything = true;
+		return this.step(() => this.dict.flush(w, final));
 	}
 	unsure(t) {
 		if (this.done) return;
@@ -39264,13 +39322,6 @@ var HandsFree = class {
 		}
 	}
 };
-function pendingDiagnostics(name, dialog, dialogUp, question) {
-	if (!name) return "Pending: no session focused";
-	if (dialog) return "Pending: " + name + " shows a dialog — " + (plain(dialog.question) || "unparsed");
-	if (dialogUp) return "Pending: " + name + " shows a dialog";
-	if (question) return "Pending: " + name + " asked — " + plain(question);
-	return "Pending: nothing on " + name;
-}
 var SPEECH_STALE_MS = 6e4;
 var SpeechQueue = class {
 	engine;
@@ -39422,6 +39473,71 @@ function sentenceChunks(text) {
 	}
 	return out;
 }
+var ABBREVIATIONS = /* @__PURE__ */ new Set([
+	"mr",
+	"mrs",
+	"ms",
+	"dr",
+	"st",
+	"jr",
+	"sr",
+	"vs",
+	"etc",
+	"approx",
+	"cf",
+	"no",
+	"fig",
+	"inc",
+	"ltd",
+	"dept",
+	"est"
+]);
+var SPEECH_SENTENCE_MIN = 12;
+var SPEECH_SENTENCE_MAX = 180;
+function speechSentences(text) {
+	const s = String(text || "").replace(/\s+/g, " ").trim();
+	if (!s) return [];
+	const pieces = [];
+	let start = 0;
+	for (let i = 0; i < s.length; i++) {
+		const c = s.charAt(i);
+		if (".!?;".indexOf(c) < 0) continue;
+		let j = i + 1;
+		while (j < s.length && ".!?\"')]”’".indexOf(s.charAt(j)) >= 0) j++;
+		if (j < s.length && s.charAt(j) !== " ") continue;
+		if (c === ".") {
+			const word = s.slice(s.lastIndexOf(" ", i) + 1, i + 1).replace(/^[("'“‘[]+/, "");
+			if (/^(?:\p{L}\.){2,}$/u.test(word) || ABBREVIATIONS.has(word.slice(0, -1).toLowerCase())) continue;
+		}
+		pieces.push(s.slice(start, j).trim());
+		start = j;
+		i = j - 1;
+	}
+	if (start < s.length) pieces.push(s.slice(start).trim());
+	const joined = [];
+	let buf = "";
+	for (const p of pieces) {
+		if (!p) continue;
+		buf = buf ? buf + " " + p : p;
+		if (buf.length >= SPEECH_SENTENCE_MIN) {
+			joined.push(buf);
+			buf = "";
+		}
+	}
+	if (buf) joined.push(buf);
+	const out = [];
+	for (let sent of joined) {
+		while (sent.length > SPEECH_SENTENCE_MAX) {
+			let cut = sent.lastIndexOf(", ", SPEECH_SENTENCE_MAX);
+			if (cut < 40) cut = sent.lastIndexOf(" ", SPEECH_SENTENCE_MAX);
+			if (cut < 40) cut = SPEECH_SENTENCE_MAX;
+			out.push(sent.slice(0, cut + 1).trim());
+			sent = sent.slice(cut + 1).trim();
+		}
+		if (sent) out.push(sent);
+	}
+	return out;
+}
 var WORD_MS = 400;
 var CHUNK_GRACE_MS = 1500;
 function browserSpeaker() {
@@ -39490,80 +39606,105 @@ function voiceAudioCtx() {
 	if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
 	return audioCtx;
 }
-var SPEAK_MAX_CHARS = 1200;
 function serverSpeaker(fallback) {
 	let gen = 0;
-	let playing = null;
+	const playing = /* @__PURE__ */ new Map();
+	let inflight = null;
+	const fetchAudio = async (ctx, part, ac) => {
+		const r = await apiRaw("/api/voice/speak", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ text: part }),
+			signal: ac.signal
+		});
+		if (!r.ok) {
+			const j = await r.json().catch(() => ({}));
+			throw new Error(j.error || "HTTP " + r.status);
+		}
+		return ctx.decodeAudioData(await r.arrayBuffer());
+	};
 	const self = {
 		lastError: "",
-		speak(text) {
-			const groups = [];
-			let cur = "";
-			for (const s of sentenceChunks(text)) if (cur && (cur + " " + s).length > SPEAK_MAX_CHARS) {
-				groups.push(cur);
-				cur = s;
-			} else cur = cur ? cur + " " + s : s;
-			if (cur) groups.push(cur.slice(0, SPEAK_MAX_CHARS));
+		async speak(text) {
+			const parts = speechSentences(text);
+			if (!parts.length) return;
 			const g = gen;
-			const one = async (part) => {
-				const ctx = voiceAudioCtx();
-				if (!ctx || ctx.state !== "running") {
-					self.lastError = "AudioContext " + (ctx ? ctx.state : "missing");
-					return fallback.speak(part);
-				}
-				try {
-					const r = await apiRaw("/api/voice/speak", {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({ text: part })
-					});
-					if (!r.ok) {
-						const j = await r.json().catch(() => ({}));
-						throw new Error(j.error || "HTTP " + r.status);
-					}
-					const audio = await ctx.decodeAudioData(await r.arrayBuffer());
-					self.lastError = "";
-					if (g !== gen) return;
-					await new Promise((resolve) => {
-						const src = ctx.createBufferSource();
-						src.buffer = audio;
-						src.connect(ctx.destination);
-						let done = false;
-						const finish = () => {
-							if (done) return;
-							done = true;
-							clearTimeout(timer);
-							if (playing === src) playing = null;
-							resolve();
-						};
-						src.onended = finish;
-						const timer = setTimeout(finish, (audio.duration || 1) * 1e3 + CHUNK_GRACE_MS);
-						playing = src;
-						try {
-							src.start(0);
-						} catch {
-							finish();
-						}
-					});
-				} catch (err) {
-					self.lastError = String(err?.message || err);
-					if (g !== gen) return;
-					return fallback.speak(part);
-				}
+			const ctx = voiceAudioCtx();
+			if (!ctx || ctx.state !== "running") {
+				self.lastError = "AudioContext " + (ctx ? ctx.state : "missing");
+				return fallback.speak(parts.join(" "));
+			}
+			const ask = (i) => {
+				const ac = new AbortController();
+				inflight = ac;
+				const p = fetchAudio(ctx, parts[i], ac);
+				const settled = () => {
+					if (inflight === ac) inflight = null;
+				};
+				p.then(settled, settled);
+				return p;
 			};
-			return groups.reduce((p, part) => p.then(() => g === gen ? one(part) : void 0), Promise.resolve());
+			let endAt = 0;
+			let last = Promise.resolve();
+			let next = ask(0);
+			for (let i = 0; i < parts.length; i++) {
+				let audio;
+				try {
+					audio = await next;
+				} catch (err) {
+					if (g !== gen) return;
+					self.lastError = String(err?.message || err);
+					await last;
+					if (g !== gen) return;
+					return fallback.speak(parts.slice(i).join(" "));
+				}
+				if (g !== gen) return;
+				self.lastError = "";
+				if (i + 1 < parts.length) next = ask(i + 1);
+				const at = Math.max(ctx.currentTime, endAt);
+				endAt = at + (audio.duration || 0);
+				last = play(ctx, audio, at);
+			}
+			await last;
 		},
 		cancel() {
 			gen++;
-			const s = playing;
-			playing = null;
-			if (s) try {
-				s.onended = null;
-				s.stop(0);
-			} catch {}
+			inflight?.abort();
+			inflight = null;
+			const cut = [...playing];
+			playing.clear();
+			for (const [s, finish] of cut) {
+				try {
+					s.onended = null;
+					s.stop(0);
+				} catch {}
+				finish();
+			}
 			fallback.cancel();
 		}
 	};
+	const play = (ctx, audio, at) => new Promise((resolve) => {
+		const src = ctx.createBufferSource();
+		src.buffer = audio;
+		src.connect(ctx.destination);
+		let done = false;
+		const finish = () => {
+			if (done) return;
+			done = true;
+			clearTimeout(timer);
+			playing.delete(src);
+			resolve();
+		};
+		src.onended = finish;
+		const wait = Math.max(0, at - ctx.currentTime) + (audio.duration || 1);
+		const timer = setTimeout(finish, wait * 1e3 + CHUNK_GRACE_MS);
+		playing.set(src, finish);
+		try {
+			src.start(at);
+		} catch {
+			finish();
+		}
+	});
 	return self;
 }
 function speechRecCtor() {
@@ -39942,8 +40083,14 @@ function serverRecognizer(opts = {}) {
 				if (h !== hh) return;
 				if (!r.ok) throw new Error(String(r.j.error || "HTTP " + r.status));
 				c.stream = false;
+				const fms = Number(r.j.final_ms);
+				if (fms > 0) {
+					self.finalMs = fms;
+					voiceMark("final");
+				}
+				const final = typeof r.j.final === "string" && r.j.same !== true ? wordsOf(r.j.final) : "";
 				hh.onPartial?.("");
-				hh.onFlush?.(wordsOf(r.j.committed));
+				hh.onFlush?.(wordsOf(r.j.committed), final || void 0);
 			} catch (err) {
 				if (h !== hh) return;
 				c.sid = sid;
@@ -40075,6 +40222,7 @@ function serverRecognizer(opts = {}) {
 		name: "server",
 		lastError: "",
 		passMs: null,
+		finalMs: null,
 		mic,
 		available: () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia && !!audioCtxCtor(),
 		start(handlers, o = {}) {
@@ -40187,6 +40335,9 @@ function passLine(backend, passMs) {
 	const id = String(backend || "");
 	return (!id || id === "local" ? "whisper" : id) + " ~" + (passMs / 1e3).toFixed(1) + " s/pass";
 }
+function finalLine(finalMs) {
+	return finalMs != null && finalMs > 0 ? "final " + (finalMs / 1e3).toFixed(1) + " s" : "";
+}
 function recognizerErrorLine(code, detail) {
 	if (code === "network") return "Speech recognition failed (network): use Chrome, Edge or Safari, or turn on server recognition in Settings → Voice";
 	if (code === "not-allowed" || code === "service-not-allowed") return "Microphone permission denied";
@@ -40198,9 +40349,10 @@ function recognizerErrorLine(code, detail) {
 //#endregion
 //#region src/lib/wakeWord.ts
 var WAKE_QUIET_MS = 350;
+var WAKE_TAIL_MS = 200;
 var WAKE_MIN_MS = 250;
 var WAKE_MAX_MS = 1600;
-var WAKE_LEAD_MS = 150;
+var WAKE_LEAD_MS = 100;
 var WAKE_CHECK_GAP_MS = 1500;
 var WAKE_AFTER_SPEECH_MS = 500;
 var WAKE_KEEP_S = 3;
@@ -40243,7 +40395,7 @@ var LoneUtterance = class {
 			return null;
 		}
 		const gap = this.t - this.lastLoud;
-		if (gap < WAKE_QUIET_MS) return null;
+		if (gap < WAKE_TAIL_MS) return null;
 		const loudMs = this.lastLoud - this.start;
 		const clipMs = WAKE_LEAD_MS + (this.t - this.start);
 		const long = this.long;
@@ -40251,7 +40403,8 @@ var LoneUtterance = class {
 		this.quiet = gap;
 		return long || loudMs < WAKE_MIN_MS ? null : {
 			loudMs,
-			clipMs
+			clipMs,
+			tailMs: gap
 		};
 	}
 };
@@ -40473,9 +40626,9 @@ var WakeStandby = class {
 			lastCheck: this.lastCheck
 		}) !== "ok") return;
 		this.lastCheck = now;
-		this.check(g, rec, cand);
+		this.check(g, rec, cand, now - cand.tailMs);
 	}
-	async check(g, rec, cand) {
+	async check(g, rec, cand, soundEnd) {
 		this.inFlight = true;
 		let v = null;
 		try {
@@ -40487,7 +40640,7 @@ var WakeStandby = class {
 		if (!v || g !== this.gen) return;
 		if (v.status === 409) return this.stop(WAKE_NO_RECOGNIZER_LINE);
 		if (v.wake && !this.deps.recording()) {
-			this.deps.onWake();
+			this.deps.onWake(soundEnd);
 			this.sync();
 		}
 	}
@@ -40505,6 +40658,9 @@ var WakeStandby = class {
 		}
 	}
 };
+function wakeLine(ms) {
+	return ms != null && ms >= 0 ? "wake " + (ms / 1e3).toFixed(1) + " s" : "";
+}
 function chime(ctx) {
 	if (!ctx || ctx.state !== "running") return;
 	try {
@@ -40537,6 +40693,14 @@ var heard = new HeardTurns();
 var speakingListeners = /* @__PURE__ */ new Set();
 var queue = new SpeechQueue(() => ttsEngine(cfgNow) === "server" ? serverSp : browserSp, (on) => speakingListeners.forEach((l) => l(on)));
 var standbyMeter = false;
+var wakeFrom = null;
+var lastWakeMs = null;
+function listened(d) {
+	if (wakeFrom?.d !== d) return;
+	lastWakeMs = Math.max(0, Date.now() - wakeFrom.at);
+	wakeFrom = null;
+	voiceWake(lastWakeMs);
+}
 var untap = null;
 function tapLevel(ctx) {
 	untap?.();
@@ -40585,18 +40749,31 @@ function refreshQuestion(title) {
 		else questions.delete(title);
 	}).catch(() => {});
 }
+var POP_W = 280;
+var REPLIES_SHORT = {
+	off: "Off",
+	mine: "Mine",
+	all: "Everything"
+};
+function micDiagnostics() {
+	const c = cfgNow;
+	const stt = recEngine(c);
+	const tts = ttsEngine(c) === "server" ? "server" : browserSp.available() ? "browser" : "none";
+	const pass = stt === "server" ? [passLine(c.server_ready.stt_backend, serverRec.passMs), finalLine(serverRec.finalMs)] : [];
+	return [
+		engineDiagnostics(c, stt, tts),
+		...pass,
+		wakeLine(lastWakeMs)
+	].filter(Boolean).join(" · ");
+}
 function talkHotkey() {
 	const e = KEYMAP.find((b) => !b.aliasOf && /\btalk\b/i.test(String(b.help?.[2] || "")));
 	return e?.id && shortcutLabels(e.id)[0] || "";
-}
-function talkShortcut() {
-	return talkHotkey() || "the Talk shortcut in Keyboard shortcuts";
 }
 function recEngine(c) {
 	const e = sttEngine(c, serverRec.available());
 	return e === "browser" && !browserRec.available() ? "none" : e;
 }
-var VOICE_SCREEN = "voice";
 function textField(el) {
 	if (!el || el.classList.contains("xterm-helper-textarea")) return null;
 	if (el instanceof HTMLTextAreaElement) return el.readOnly || el.disabled ? null : el;
@@ -40692,8 +40869,9 @@ function TopBarMic() {
 	const [listening, setListening] = (0, import_react.useState)(false);
 	const [speaking, setSpeaking] = (0, import_react.useState)(queue.busy);
 	const [caption, setCaptionState] = (0, import_react.useState)("");
-	const [unsure, setUnsure] = (0, import_react.useState)("");
+	const [quiet, setQuiet] = (0, import_react.useState)(false);
 	const [menuOpen, setMenuOpen] = (0, import_react.useState)(false);
+	const [, setViewport] = (0, import_react.useState)("");
 	const focusedName = useUi((s) => s.focused ? s.aliases[s.focused] || s.focused : "");
 	const btnRef = (0, import_react.useRef)(null);
 	const menuRef = (0, import_react.useRef)(null);
@@ -40704,16 +40882,15 @@ function TopBarMic() {
 	const deciding = (0, import_react.useRef)(null);
 	const idleTimer = (0, import_react.useRef)(void 0);
 	const captionTimer = (0, import_react.useRef)(void 0);
+	const quietTimer = (0, import_react.useRef)(void 0);
 	const holding = (0, import_react.useRef)(false);
 	const keyHeld = (0, import_react.useRef)(false);
 	const hands = (0, import_react.useRef)(null);
-	const [pendingLine, setPendingLine] = (0, import_react.useState)("");
 	const handsLive = (0, import_react.useRef)(null);
 	const standby = (0, import_react.useRef)(null);
 	const [wake, setWake] = (0, import_react.useState)(wakeStatus);
 	const say = (text, sticky = false, tail = "", ms = 6e3) => {
 		setCaptionState(text);
-		setUnsure(tail);
 		publishMicState({
 			caption: text,
 			unsure: tail
@@ -40723,7 +40900,13 @@ function TopBarMic() {
 	};
 	const hush = () => {
 		queue.cancel();
+		quietPill();
 		if (!live.current) say(HUSH_LINE, false, "", HUSH_CAPTION_MS);
+	};
+	const quietPill = () => {
+		setQuiet(true);
+		clearTimeout(quietTimer.current);
+		quietTimer.current = setTimeout(() => setQuiet(false), HUSH_CAPTION_MS);
 	};
 	(0, import_react.useEffect)(() => onVoicePrefs((p) => setPrefsState(p)), []);
 	const setPrefs = (p) => {
@@ -40765,6 +40948,7 @@ function TopBarMic() {
 			unsubSettings();
 			clearTimeout(idleTimer.current);
 			clearTimeout(captionTimer.current);
+			clearTimeout(quietTimer.current);
 			rec.current?.stop();
 			untap?.();
 			serverRec.mic.releaseIdle();
@@ -40836,8 +41020,7 @@ function TopBarMic() {
 			unsubFocus();
 		};
 	}, []);
-	const sttNow = recEngine(cfg || cfgNow);
-	const supported = sttNow !== "none";
+	const supported = recEngine(cfg || cfgNow) !== "none";
 	const armIdle = () => {
 		clearTimeout(idleTimer.current);
 		idleTimer.current = setTimeout(() => void live.current?.expire(), DICT_IDLE_MS);
@@ -40909,7 +41092,10 @@ function TopBarMic() {
 				await routed(reply, text, session);
 				return true;
 			},
-			hush: () => queue.cancel(),
+			hush: () => {
+				queue.cancel();
+				quietPill();
+			},
 			activity: liveActivity,
 			replies: () => prefsRef.current.replies !== "off",
 			submitted: (title, wantSay) => {
@@ -40940,7 +41126,9 @@ function TopBarMic() {
 				if (live.current === d && !d.dict.shown && !into) say(t + " · " + DICT_HINT, true);
 			},
 			onReady: () => {
-				if (live.current === d) d.ready();
+				if (live.current !== d) return;
+				d.ready();
+				listened(d);
 			},
 			onLevel: (rms) => {
 				if (live.current === d) meterFeed(rms);
@@ -40961,8 +41149,8 @@ function TopBarMic() {
 				if (w) voiceMark("commit");
 				d.stream(w, p);
 			},
-			onFlush: (t) => {
-				if (live.current === d) d.flush(t);
+			onFlush: (t, final) => {
+				if (live.current === d) d.flush(t, final);
 			},
 			onPartial: (t) => {
 				if (live.current === d) d.unsure(t);
@@ -40991,6 +41179,7 @@ function TopBarMic() {
 		}
 		if (r === browserRec) {
 			d.ready();
+			listened(d);
 			tapLevel(ctx);
 		}
 		return d;
@@ -41181,14 +41370,18 @@ function TopBarMic() {
 		supported: () => recEngine(cfgNow) !== "none",
 		warm: () => warmMic(false)
 	}), []);
-	const woken = () => {
+	const woken = (soundEnd) => {
 		if (live.current) return;
-		chime(voiceAudioCtx());
 		const d = start(textField(document.activeElement), {
 			hint: WAKE_HINT,
 			skipMs: CHIME_MS + 30
 		});
 		if (!d) return;
+		chime(voiceAudioCtx());
+		wakeFrom = {
+			d,
+			at: soundEnd
+		};
 		setTimeout(() => {
 			if (live.current === d && !d.heardAnything) d.drop();
 		}, WAKE_LISTEN_MS);
@@ -41200,7 +41393,7 @@ function TopBarMic() {
 		ctx: voiceAudioCtx,
 		speaking: () => queue.busy,
 		recording: () => !!live.current,
-		onWake: () => latestWake.current(),
+		onWake: (soundEnd) => latestWake.current(soundEnd),
 		onLevel: (rms) => {
 			if (!live.current) meterFeed(rms);
 		},
@@ -41234,14 +41427,6 @@ function TopBarMic() {
 		setMenuOpen(true);
 		warmMic(true);
 		refreshCfg();
-		readPending();
-	};
-	const readPending = async () => {
-		const title = useUi.getState().focused || "";
-		const up = !!title && liveActivity(title) === "clarify";
-		let d = null;
-		if (up) d = await fetchDialog(title).catch(() => null);
-		setPendingLine(pendingDiagnostics(title ? displayName(title) : "", d, up, questions.get(title) || ""));
 	};
 	const keyRef = (0, import_react.useRef)({
 		hold,
@@ -41280,31 +41465,36 @@ function TopBarMic() {
 			setMenuOpen(false);
 			btnRef.current?.focus();
 		};
+		const onResize = () => setViewport(window.innerWidth + "x" + window.innerHeight);
 		document.addEventListener("pointerdown", onDown, true);
 		document.addEventListener("keydown", onKey, true);
+		window.addEventListener("resize", onResize);
 		return () => {
 			document.removeEventListener("pointerdown", onDown, true);
 			document.removeEventListener("keydown", onKey, true);
+			window.removeEventListener("resize", onResize);
 		};
 	}, [menuOpen]);
 	const who = focusedName || "a session";
-	const title = !supported ? noRecognizerLine() + " — right-click for options" : listening ? hold ? "Listening — release to stop (the words stay), Esc to take them back" : "Listening — click to stop (the words stay), Esc to take them back" : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") + (wake.on ? ", or say “MindFlock”" : "") + ", right-click for options";
+	const base = !supported ? noRecognizerLine() + " — right-click for options" : listening ? hold ? "Listening — release to stop (the words stay), Esc to take them back" : "Listening — click to stop (the words stay), Esc to take them back" : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") + (wake.on ? ", or say “MindFlock”" : "") + ", right-click for options";
+	const title = caption && !listening ? base + "\n" + caption : base;
+	const pill = micPill({
+		listening,
+		speaking,
+		quiet
+	});
 	const rect = menuOpen ? btnRef.current?.getBoundingClientRect() : void 0;
-	const popStyle = rect ? {
-		top: rect.bottom + 6 + "px",
-		left: Math.max(8, Math.min(rect.left, window.innerWidth - 288)) + "px"
+	const popW = Math.min(POP_W, window.innerWidth - 32);
+	const place = rect ? placeUnder(rect, popW, window.innerWidth, window.innerHeight) : null;
+	const popStyle = place ? {
+		top: place.top + "px",
+		left: place.left + "px",
+		width: popW + "px",
+		maxHeight: place.maxHeight + "px"
 	} : void 0;
-	const showCaption = !!(caption || unsure) && !menuOpen;
-	const capRect = showCaption ? btnRef.current?.getBoundingClientRect() : void 0;
-	const capStyle = capRect ? {
-		top: capRect.bottom + 6 + "px",
-		left: Math.max(8, Math.min(capRect.left, window.innerWidth - 348)) + "px"
-	} : void 0;
-	const ttsNow = ttsEngine(cfg || cfgNow) === "server" ? "server" : browserSp.available() ? "browser" : "none";
-	const pass = sttNow === "server" ? passLine((cfg || cfgNow).server_ready.stt_backend, serverRec.passMs) : "";
-	const diagnostics = engineDiagnostics(cfg || cfgNow, sttNow, ttsNow) + (pass ? " · " + pass : "");
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "mic-wrap",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			id: "mic-btn",
 			ref: btnRef,
 			type: "button",
@@ -41375,166 +41565,130 @@ function TopBarMic() {
 				finish();
 			},
 			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MicGlyph, {})
-		}),
-		showCaption && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			id: "mic-caption",
-			className: listening ? "live" : "",
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			id: "mic-pill",
+			className: pill ? "on" : "",
 			role: "status",
 			"aria-live": "polite",
-			style: capStyle,
-			children: [listening ? liveTail(caption, liveUnsure(unsure)) : caption, unsure && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "mic-unsure",
-				children: [" ", listening ? liveUnsure(unsure) : unsure]
-			})]
-		}), document.body),
-		menuOpen && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "mic-pop",
-			id: "mic-pop",
-			ref: menuRef,
-			style: popStyle,
-			role: "menu",
-			"aria-label": "Voice options",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "mic-pop-head",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "mic-pop-title",
-						children: "Voice"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "mic-pop-close",
-						id: "mic-pop-close",
-						"aria-label": "Close",
-						title: "Close (Esc)",
-						onClick: () => {
-							setMenuOpen(false);
-							btnRef.current?.focus();
-						},
-						children: "×"
-					})]
-				}),
-				speaking && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			children: pill
+		})]
+	}), menuOpen && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "mic-pop",
+		id: "mic-pop",
+		ref: menuRef,
+		style: popStyle,
+		role: "menu",
+		"aria-label": "Voice options",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "mic-pop-head",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "mic-pop-title",
+					children: "Voice"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
-					className: "mic-stop-talking",
-					id: "mic-stop-talking",
-					title: "Stop talking (Esc)",
-					onClick: hush,
-					children: "Stop talking"
-				}),
-				(listening || caption || unsure) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "mic-live",
-					id: "mic-live",
-					role: "status",
-					"aria-live": "polite",
-					children: [listening && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						className: "mic-level",
-						ref: meterRef,
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { className: "mic-level-bar" })
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "mic-live-text",
-						children: [caption, unsure && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "mic-unsure",
-							children: [" ", unsure]
-						})]
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "mic-sub",
-					children: "Read replies aloud"
-				}),
-				REPLIES_CHOICES.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "mic-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "radio",
-						name: "mic-replies",
-						checked: prefs.replies === c.value,
-						onChange: () => setPrefs({
-							...prefs,
-							replies: c.value
-						})
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: c.label })]
-				}, c.value)),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "mic-row",
-					id: "mic-wake-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "checkbox",
-						id: "mic-wake",
-						checked: !!prefs.wake,
-						onChange: (e) => setWakePref(e.target.checked)
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Listen for “MindFlock”" })]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "mic-hint",
-					id: "mic-wake-hint",
-					children: [WAKE_SWITCH_HINT, prefs.wake && wake.line && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "mic-wake-line",
-						children: [" ", wake.line]
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "mic-sub",
-					children: "Push to talk"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "mic-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "radio",
-						name: "mic-ptt",
-						checked: !hold,
-						onChange: () => setPrefs({
-							...prefs,
-							ptt: "toggle"
-						})
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Click to talk" })]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "mic-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "radio",
-						name: "mic-ptt",
-						checked: hold,
-						onChange: () => setPrefs({
-							...prefs,
-							ptt: "hold"
-						})
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Hold to talk" })]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "mic-hint",
-					children: [
-						"The words are typed into the session as you speak. ",
-						DICT_HINT,
-						"; Esc takes them back. Say “stop recording” to stop, “focus 3” or “next session” to switch, and “yes”, “no”, “always” or a number to answer a dialog. Hotkey: ",
-						talkShortcut(),
-						"."
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "mic-hint",
-					id: "mic-handsfree",
-					children: "With Read replies aloud on, a dialog on the focused session — or a question in a reply to what you sent — is read out and the mic listens 12 s for your answer. Every line names its session unless it is the one in front of you, and only one plays at a time."
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "mic-diag",
-					children: diagnostics
-				}),
-				pendingLine && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "mic-diag mic-pending",
-					children: pendingLine
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "linklike mic-link",
+					className: "mic-pop-close",
+					id: "mic-pop-close",
+					"aria-label": "Close",
+					title: "Close (Esc)",
 					onClick: () => {
 						setMenuOpen(false);
-						openSettings(VOICE_SCREEN);
+						btnRef.current?.focus();
 					},
-					children: "Speech engines: Settings → Voice"
-				})
-			]
-		}), document.body)
-	] });
+					children: "×"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "mic-pop-row",
+				id: "mic-replies-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "mic-pop-label",
+					id: "mic-replies-label",
+					children: "Read replies aloud"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "mic-seg",
+					role: "radiogroup",
+					"aria-labelledby": "mic-replies-label",
+					children: REPLIES_CHOICES.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "mic-seg-opt",
+						title: c.label,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "radio",
+							name: "mic-replies",
+							checked: prefs.replies === c.value,
+							onChange: () => setPrefs({
+								...prefs,
+								replies: c.value
+							})
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: REPLIES_SHORT[c.value] })]
+					}, c.value))
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "mic-pop-row",
+				id: "mic-ptt-row",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "mic-pop-label",
+					id: "mic-ptt-label",
+					children: ["Push to talk", talkHotkey() && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "mic-pop-key",
+						children: [" ", talkHotkey()]
+					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "mic-seg",
+					role: "radiogroup",
+					"aria-labelledby": "mic-ptt-label",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "mic-seg-opt",
+						title: "Click to start, click again to stop",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "radio",
+							name: "mic-ptt",
+							checked: !hold,
+							onChange: () => setPrefs({
+								...prefs,
+								ptt: "toggle"
+							})
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Click" })]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "mic-seg-opt",
+						title: "Hold the mic (or the hotkey) while you speak",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "radio",
+							name: "mic-ptt",
+							checked: hold,
+							onChange: () => setPrefs({
+								...prefs,
+								ptt: "hold"
+							})
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Hold" })]
+					})]
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "mic-pop-row mic-switch-row",
+				id: "mic-wake-row",
+				title: prefs.wake && wake.line || "",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "mic-pop-label",
+					children: "Listen for “MindFlock”"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					id: "mic-wake",
+					checked: !!prefs.wake,
+					onChange: (e) => setWakePref(e.target.checked)
+				})]
+			}),
+			speaking && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "mic-stop-talking",
+				id: "mic-stop-talking",
+				title: "Stop talking (Esc)",
+				onClick: hush,
+				children: "Stop talking"
+			})
+		]
+	}), document.body)] });
 }
 //#endregion
 //#region src/lib/desktopNotify.ts
@@ -45968,34 +46122,6 @@ function SessionMenu({ model, onDone, onInUse }) {
 			danger && group(danger, !body.length && !model.more.length)
 		]
 	});
-}
-//#endregion
-//#region src/lib/menuPlace.ts
-var MENU_MARGIN = 6;
-function placeMenu(a, w, h, vw, vh, m = MENU_MARGIN) {
-	const maxHeight = Math.max(0, vh - 2 * m);
-	const hh = Math.min(h, maxHeight);
-	let left = a.align === "end" ? a.x - w : a.x;
-	if (a.align === "start" && left + w > vw - m && a.x - w >= m) left = a.x - w;
-	left = Math.max(m, Math.min(left, vw - m - w));
-	let top;
-	if (a.y + hh <= vh - m) top = a.y;
-	else if (a.flipY - hh >= m) top = a.flipY - hh;
-	else top = Math.max(m, vh - m - hh);
-	return {
-		left: Math.round(left),
-		top: Math.round(top),
-		maxHeight
-	};
-}
-function refitMenu(prev, w, h, vw, vh, m = MENU_MARGIN) {
-	const maxHeight = Math.max(0, vh - 2 * m);
-	const hh = Math.min(h, maxHeight);
-	return {
-		left: Math.round(Math.max(m, Math.min(prev.left, vw - m - w))),
-		top: Math.round(Math.max(m, Math.min(prev.top, vh - m - hh))),
-		maxHeight
-	};
 }
 //#endregion
 //#region src/components/sidebar/RowMenu.tsx
@@ -90306,6 +90432,34 @@ function MicPrefs() {
 					}
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 			})]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row",
+			id: "voice-mic-howto",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "set-hint",
+					id: "voice-mic-typing",
+					children: [
+						"The words are typed into the session as you speak, and corrected when the accurate pass hears a phrase otherwise. ",
+						DICT_HINT,
+						"; Esc takes them back. Say “stop recording” to stop, “focus 3” or “next session” to switch, and “yes”, “no”, “always” or a number to answer a dialog. Hotkey:",
+						" ",
+						talkHotkey() || "the Talk shortcut in Keyboard shortcuts",
+						"."
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "set-hint",
+					id: "voice-mic-handsfree",
+					children: "With Read replies aloud on, a dialog on the focused session — or a question in a reply to what you sent — is read out and the mic listens 12 s for your answer."
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "set-hint",
+					id: "voice-mic-diag",
+					children: micDiagnostics()
+				})
+			]
 		})
 	] });
 }
