@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **DuckDuckGo (and Firefox, and in-app browsers) on the phone page said
+  "Microphone permission denied" with the mic allowed.** Their Web Speech
+  API has no recognition service behind it, so every start fails with the
+  same code a refused microphone gives. The page now tells them apart — a
+  granted microphone, the *service-not-allowed* code or a known browser
+  reads as *This browser has no speech recognition service … use recognition
+  on this computer, or open this page in Chrome* — and when the server has
+  recognition ready it switches this page to it on the spot and keeps
+  listening. The ⚙ sheet's diagnostics and the Voice screen's privacy note
+  name the browsers.
+- **"Speech recognition did not start (start-failed)" now says why.** The
+  phone page's microphone failures were one code with no reason. A page
+  opened over plain http (the Local URL on a phone has no microphone at
+  all) reads *The microphone needs an https page: open the phone page by its
+  https link*, before either recognizer is tried; a microphone another app
+  or tab holds reads *busy or unavailable*; anything else carries the
+  browser's own error name and message. The ⚙ sheet's diagnostics start with
+  the page's protocol.
+
 ## [0.10.1] - 2026-10-27
 
 Local speech models install from the row that says they are missing and

@@ -269,18 +269,30 @@ export function PhoneAppRow({ app }: { app?: MobilePayload["phone_app"] }) {
  * wrap inside their own cell (stacked under the label when narrow). */
 export function UrlList({ urls }: { urls: Array<{ label: string; url: string }> }) {
   if (!urls.length) return null;
+  const plain = urls.some((u) => /^http:\/\//i.test(u.url));
   return (
-    <dl className="mobile-urls">
-      {urls.map((u) => (
-        <div className="mobile-url-row" key={u.url}>
-          <dt className="set-label">{u.label}</dt>
-          <dd>
-            <a href={u.url} target="_blank" rel="noopener noreferrer">
-              {u.url}
-            </a>
-          </dd>
-        </div>
-      ))}
-    </dl>
+    <>
+      <dl className="mobile-urls">
+        {urls.map((u) => (
+          <div className="mobile-url-row" key={u.url}>
+            <dt className="set-label">{u.label}</dt>
+            <dd>
+              <a href={u.url} target="_blank" rel="noopener noreferrer">
+                {u.url}
+              </a>
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {plain && (
+        <p className="set-hint" id="mobile-urls-https">
+          {URLS_HTTPS_HINT}
+        </p>
+      )}
+    </>
   );
 }
+
+/** Under a URL list with a plain-http link: a phone browser gives no page
+ * on http a microphone, so voice needs one of the https links. */
+export const URLS_HTTPS_HINT = "Voice needs an https link: a phone browser gives an http:// page no microphone.";

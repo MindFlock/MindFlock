@@ -445,7 +445,8 @@ export function VoiceSectionView({
           model exists.
         </p>
         <p className="set-hint" id="voice-iphone">
-          On iPhone, voice needs a Safari tab: the home-screen icon cannot hear you. Recognition on this
+          DuckDuckGo, Firefox and in-app browsers have no speech recognition of their own; recognition on this
+          computer works in all of them. On iPhone, voice needs a Safari tab: the home-screen icon cannot hear you. Recognition on this
           computer fixes that.
         </p>
       </div>

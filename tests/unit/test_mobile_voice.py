@@ -1998,3 +1998,98 @@ def test_no_hint_names_submit_as_a_radio_word():
     # The ⚙ sheet's switches for the confirmations and the chimes.
     assert '<input type="checkbox" id="voice-confirm" />' in html
     assert '<input type="checkbox" id="voice-sounds" />' in html
+
+
+def test_a_browser_without_a_speech_service_is_told_so_and_falls_back_to_the_server():
+    """DuckDuckGo / Firefox / a WebView: the phone recognizer's start fails
+    "not-allowed" whatever the microphone permission says. The page tells a
+    refused microphone from a missing service (the code, a granted
+    permission, a known browser) and, when the server has recognition
+    ready, switches this page to it instead of stopping with an error."""
+    js = _js()
+    assert "VOICE_NO_SPEECH_SERVICE_RE = /DuckDuckGo|Firefox|FxiOS|; wv\\)/" in js
+    assert "function voiceNoSpeechService()" in js
+    denied = js.split("function voiceSttDeniedText(code) {")[1].split("\n  }")[0]
+    assert 'code === "service-not-allowed" || voiceNoSpeechService()' in denied
+    assert (
+        "return VOICE_NO_SERVICE_TEXT" in denied
+        and "return VOICE_MIC_DENIED_TEXT" in denied
+    )
+    assert (
+        "This browser has no speech recognition service (DuckDuckGo, Firefox and in-app browsers don't)"
+        in js
+    )
+    assert "Microphone permission denied — allow the mic for this site." in js
+    # No Permissions-API query: the code and the browser decide (a query at
+    # voice start made the headless phone loop flaky).
+    assert "navigator.permissions" not in js
+    # The fallback: the server's recognizer for the rest of the page, when ready.
+    fb = js.split("function voiceSttFallbackToServer() {")[1].split("\n  }")[0]
+    assert "if (!ready.stt || !A.serverStt.available()) return false;" in fb
+    assert "voice.sttFallback = true;" in fb and "voiceApplyAdapters();" in fb
+    assert (
+        '(voice.cfg.stt === "server" || voice.sttFallback) && ready.stt && A.serverStt.available()'
+        in js
+    )
+    err = js.split('if (code === "not-allowed" || code === "service-not-allowed") {')[
+        1
+    ].split('} else if (code === "audio-capture")')[0]
+    assert 'voice.stt.name === "phone" && voiceSttFallbackToServer()' in err
+    assert (
+        'voiceError(voice.stt.name === "phone" ? voiceSttDeniedText(code) : VOICE_MIC_DENIED_TEXT);'
+        in err
+    )
+    # "unavailable" (no constructor: iOS outside Safari) falls back the same way.
+    un = js.split('} else if (code === "unavailable" || code === "start-failed") {')[
+        1
+    ].split('} else if (code === "network")')[0]
+    assert "voiceSttFallbackToServer()" in un
+    # The ⚙ sheet's diagnostics say so too.
+    assert "but this browser has no speech service behind it" in js
+
+
+def test_the_server_recognizer_names_why_the_microphone_did_not_start():
+    """A plain-http page has no getUserMedia (the Local URL on a phone), a
+    busy microphone is NotReadableError, the audio graph can fail: each was
+    "start-failed" with no reason. Now: "insecure" / "mic-busy" with their
+    own sentences, and start-failed carries the error's name and message."""
+    js = _js()
+    code = js.split("function errCode(err) {")[1].split("\n    }")[0]
+    assert 'if (n === "InsecureContext") return "insecure";' in code
+    assert (
+        'n === "NotReadableError" || n === "TrackStartError" || n === "AbortError") return "mic-busy"'
+        in code
+    )
+    assert "function errDetail(err) {" in js
+    assert js.count("onError(errCode(err), errDetail(err))") == 2
+    get = js.split("    function getStream() {")[1].split("\n    }")[0]
+    assert (
+        "if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {" in get
+    )
+    assert 'ins.name = "InsecureContext";' in get
+    # The phone recognizer on a plain-http page says so before it fails "not-allowed".
+    assert (
+        'if (window.isSecureContext === false) { if (h.onError) h.onError("insecure"); return false; }'
+        in js
+    )
+    assert (
+        "The microphone needs an https page: open the phone page by its https link (Settings → Your phone), not an http:// address."
+        in js
+    )
+    assert "this browser's audio graph could not start (AudioContext)" in js
+    err = js.split("onError: function (code, detail) {")[1].split(
+        '} else if (code === "network")'
+    )[0]
+    assert (
+        '} else if (code === "insecure") {' in err
+        and "voiceError(VOICE_INSECURE_TEXT);" in err
+    )
+    assert '} else if (code === "mic-busy") {' in err
+    assert (
+        '"Speech recognition did not start (" + code + (detail ? ": " + detail : "") + ")."'
+        in err
+    )
+    assert (
+        '"Page: " + (window.isSecureContext === false ? "http — the microphone needs https'
+        in js
+    )

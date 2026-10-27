@@ -90723,7 +90723,8 @@ function PhoneAppRow({ app }) {
 }
 function UrlList({ urls }) {
 	if (!urls.length) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dl", {
+	const plain = urls.some((u) => /^http:\/\//i.test(u.url));
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("dl", {
 		className: "mobile-urls",
 		children: urls.map((u) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "mobile-url-row",
@@ -90737,8 +90738,13 @@ function UrlList({ urls }) {
 				children: u.url
 			}) })]
 		}, u.url))
-	});
+	}), plain && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "set-hint",
+		id: "mobile-urls-https",
+		children: URLS_HTTPS_HINT
+	})] });
 }
+var URLS_HTTPS_HINT = "Voice needs an https link: a phone browser gives an http:// page no microphone.";
 //#endregion
 //#region src/components/settings/screens/VoiceWords.tsx
 var WORD_ROWS = [
@@ -91407,7 +91413,7 @@ function VoiceSectionView({ model, view, onClearKey, install, tryRow }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 						className: "set-hint",
 						id: "voice-iphone",
-						children: "On iPhone, voice needs a Safari tab: the home-screen icon cannot hear you. Recognition on this computer fixes that."
+						children: "DuckDuckGo, Firefox and in-app browsers have no speech recognition of their own; recognition on this computer works in all of them. On iPhone, voice needs a Safari tab: the home-screen icon cannot hear you. Recognition on this computer fixes that."
 					})
 				]
 			})

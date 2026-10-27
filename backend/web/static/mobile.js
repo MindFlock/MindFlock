@@ -2888,6 +2888,23 @@
 
   var ANDROID = /Android/i.test(navigator.userAgent);
   var SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+  // Browsers whose Web Speech API has no service behind it: the constructor
+  // is there (the same Blink), but start() fails "not-allowed" /
+  // "service-not-allowed" whatever the microphone permission says —
+  // DuckDuckGo and every other Android WebView browser, Firefox. (iOS
+  // browsers other than Safari have no constructor at all: "unavailable",
+  // the Safari banner.) The page used to call that a refused microphone.
+  var VOICE_NO_SPEECH_SERVICE_RE = /DuckDuckGo|Firefox|FxiOS|; wv\)/;
+  function voiceNoSpeechService() { return VOICE_NO_SPEECH_SERVICE_RE.test(navigator.userAgent || ""); }
+  var VOICE_NO_SERVICE_TEXT = "This browser has no speech recognition service (DuckDuckGo, Firefox and in-app browsers don't). Use recognition on this computer — Settings → Voice → On the phone page — or open this page in Chrome.";
+  var VOICE_MIC_DENIED_TEXT = "Microphone permission denied — allow the mic for this site.";
+  var VOICE_INSECURE_TEXT = "The microphone needs an https page: open the phone page by its https link (Settings → Your phone), not an http:// address.";
+  // What the phone recognizer's "not-allowed" means: the microphone — unless
+  // the code says the service, or this browser is known to have none.
+  function voiceSttDeniedText(code) {
+    if (code === "service-not-allowed" || voiceNoSpeechService()) return VOICE_NO_SERVICE_TEXT;
+    return VOICE_MIC_DENIED_TEXT;
+  }
   var VOICE_STORE = "cs_voice";          // localStorage: session, on, rate, voiceName, handsFree, ptt, replies, wake, confirm, sounds
   var VOICE_TUT_STORE = "cs_voice_tutorial";   // localStorage: "1" once How to talk's Got it was tapped
   var VOICE_LINE_MAX_AGE_MS = 60000;     // a queued line this old when its turn comes is dropped, not said late
@@ -2925,6 +2942,9 @@
     function start(h) {
       stop();
       if (!SpeechRec) { if (h.onError) h.onError("unavailable"); return false; }
+      // A plain-http page: the recognizer would fail "not-allowed" whatever
+      // the permission says — the same words as a refused microphone.
+      if (window.isSecureContext === false) { if (h.onError) h.onError("insecure"); return false; }
       var r;
       try { r = new SpeechRec(); } catch (e) { if (h.onError) h.onError("unavailable"); return false; }
       // continuous: Chrome keeps one session up across pauses and delivers
@@ -3443,6 +3463,13 @@
       if (asking) return asking;
       micStop(stream);
       stream = null;
+      // A plain-http page (the Local URL on a phone) has no getUserMedia at
+      // all: say that, instead of the TypeError it would throw.
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        var ins = new Error(window.isSecureContext === false ? "this page is not https" : "no getUserMedia in this browser");
+        ins.name = "InsecureContext";
+        return (asking = Promise.reject(ins).catch(function (e) { asking = null; throw e; }));
+      }
       asking = navigator.mediaDevices.getUserMedia({ audio: true }).then(
         function (s) { asking = null; stream = s; return s; },
         function (err) { asking = null; throw err; });
@@ -3474,9 +3501,17 @@
     }
     function errCode(err) {
       var n = (err && err.name) || "";
+      if (n === "InsecureContext") return "insecure";
       if (n === "NotAllowedError" || n === "SecurityError" || n === "PermissionDeniedError") return "not-allowed";
       if (n === "NotFoundError" || n === "DevicesNotFoundError" || n === "OverconstrainedError") return "audio-capture";
+      if (n === "NotReadableError" || n === "TrackStartError" || n === "AbortError") return "mic-busy";
       return "start-failed";
+    }
+    // The reason behind a code, for the strip: "NotReadableError: Could not start audio source".
+    function errDetail(err) {
+      if (!err) return "";
+      var n = err.name || "", m = String(err.message || err) || "";
+      return n && m && m !== n ? n + ": " + m : n || m;
     }
     function lang() { return String(navigator.language || "en").split(";")[0]; }
     // The server streams (GET /api/voice: the local whisper backend).
@@ -3618,7 +3653,7 @@
           token = null;
           streamDrop(g);
           live = null;
-          if (h.onError) h.onError("start-failed");
+          if (h.onError) h.onError("start-failed", "this browser's audio graph could not start (AudioContext)");
           return;
         }
         rec = g;
@@ -3640,7 +3675,7 @@
         token = null;
         streamDrop(g);
         live = null;
-        if (h.onError) h.onError(errCode(err));
+        if (h.onError) h.onError(errCode(err), errDetail(err));
       });
       return true;
     }
@@ -4008,7 +4043,7 @@
       }).catch(function (err) {
         if (standing !== w) return;
         standing = null;
-        if (w.h.onError) w.h.onError(errCode(err));
+        if (w.h.onError) w.h.onError(errCode(err), errDetail(err));
       });
       return true;
     }
@@ -4360,6 +4395,7 @@
     keepMs: VOICE_KEEP_STREAM_MS,   // how long the server recognizer keeps the microphone warm (tests shorten it)
     buzzAt: 0,                   // the last haptic cue (the listening buzz, the first-word tick)
     sttHinted: false,            // "server recognition isn't ready" said once
+    sttFallback: false,          // the phone's recognizer failed for good: the server's for this page
     saved: null,                 // {session, on} from localStorage, for "Tap to resume voice"
     lastSay: { text: "", ts: 0 }, // never speak the same say twice
     asked: false,                // that say asked a question: "yes" / "no" answer it (voiceAsks)
@@ -5128,17 +5164,42 @@
       onError: function (code, detail) {
         if (!voiceIsListening()) return;
         if (code === "not-allowed" || code === "service-not-allowed") {
-          voiceError("Microphone permission denied — allow the mic for this site.");
-          voiceListen_.until = 0;
-          voiceIdle();
+          // The phone's recognizer has no service in this browser (DuckDuckGo,
+          // a WebView) or the microphone is refused: recognition on the
+          // server takes over for this page when it is ready; else say which.
+          if (voice.stt.name === "phone" && voiceSttFallbackToServer()) {
+            voiceCaption("This browser's recognizer isn't available — using recognition on this computer.");
+            if (voiceIsListening() && !voice.stt.active()) voiceRecStart();
+          } else {
+            // The server recognizer's "not-allowed" IS the microphone.
+            voiceError(voice.stt.name === "phone" ? voiceSttDeniedText(code) : VOICE_MIC_DENIED_TEXT);
+            voiceListen_.until = 0;
+            voiceIdle();
+          }
         } else if (code === "audio-capture") {
           voiceError("No microphone found.");
           voiceListen_.until = 0;
           voiceIdle();
-        } else if (code === "unavailable" || code === "start-failed") {
-          voiceError("Speech recognition did not start (" + code + ").");
+        } else if (code === "insecure") {
+          // Neither recognizer can hear on a plain-http page; no fallback helps.
+          voiceError(VOICE_INSECURE_TEXT);
           voiceListen_.until = 0;
           voiceIdle();
+        } else if (code === "mic-busy") {
+          voiceError("The microphone is busy or unavailable — another app or tab is using it" + (detail ? " (" + detail + ")" : "") + ".");
+          voiceListen_.until = 0;
+          voiceIdle();
+        } else if (code === "unavailable" || code === "start-failed") {
+          if (voice.stt.name === "phone" && voiceSttFallbackToServer()) {
+            voiceCaption("This browser has no recognizer — using recognition on this computer.");
+            if (voiceIsListening() && !voice.stt.active()) voiceRecStart();
+          } else {
+            voiceError(voice.stt.name === "phone" && voiceNoSpeechService()
+              ? VOICE_NO_SERVICE_TEXT
+              : "Speech recognition did not start (" + code + (detail ? ": " + detail : "") + ").");
+            voiceListen_.until = 0;
+            voiceIdle();
+          }
         } else if (code === "network") {
           // A Chromium without Google's speech key (Arc, Brave, Vivaldi,
           // Opera…) fails EVERY start this way and hears nothing: the first
@@ -6871,7 +6932,7 @@
   // server that is asked for but not ready is said once, in the strip.
   function voiceApplyAdapters() {
     var A = voiceAdapters, ready = voice.cfg.server_ready || {};
-    var stt = voice.cfg.stt === "server" && ready.stt && A.serverStt.available() ? A.serverStt : A.phoneStt;
+    var stt = (voice.cfg.stt === "server" || voice.sttFallback) && ready.stt && A.serverStt.available() ? A.serverStt : A.phoneStt;
     var tts = voice.cfg.tts === "server" && ready.tts && A.serverTts.available() ? A.serverTts : A.phoneTts;
     if (voice.tts !== tts) {
       voice.tts.cancel();
@@ -6895,6 +6956,16 @@
         (ready.stt_detail || ready.detail || "see Settings → Voice") + ". Using the phone's.");
     }
     safariAltEl.classList.toggle("hidden", voice.cfg.stt === "server");
+  }
+  // The phone's recognizer failed for good (no speech service in this
+  // browser): the server's takes over for the rest of this page when it is
+  // ready, whatever Settings say → whether it did.
+  function voiceSttFallbackToServer() {
+    var A = voiceAdapters, ready = voice.cfg.server_ready || {};
+    if (!ready.stt || !A.serverStt.available()) return false;
+    voice.sttFallback = true;
+    voiceApplyAdapters();
+    return voice.stt === A.serverStt;
   }
   // Give the microphone back: every adapter that may hold it — now, or (ms:
   // the page hid) the server recognizer's warm stream in ms unless it is
@@ -7576,8 +7647,9 @@
     // server sends no `system`, and then the line is left out.
     var sys = voice.cfg.system;
     var lines = [
+      "Page: " + (window.isSecureContext === false ? "http — the microphone needs https (the Local URL cannot hear you)" : location.protocol.replace(":", "") + " (secure)"),
       "Recognition: " + (voice.stt.available()
-        ? "available (" + (window.SpeechRecognition ? "SpeechRecognition" : "webkitSpeechRecognition") + ")"
+        ? "available (" + (window.SpeechRecognition ? "SpeechRecognition" : "webkitSpeechRecognition") + ")" + (voiceNoSpeechService() ? " — but this browser has no speech service behind it" : "")
         : "NOT available" + (IOS ? " — iOS has it only in a Safari tab" : "")),
       "Speech: " + (voice.tts.available()
         ? "available, " + vs.length + " voice" + (vs.length === 1 ? "" : "s") + " loaded"

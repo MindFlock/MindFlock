@@ -5719,7 +5719,10 @@ labels above the inputs.
   phone** (*as <login>* when known, with *This QR gets the app*), **3 Make
   MindFlock reachable from your phone** (✗ while it only listens on this
   computer, with **Turn on Make reachable…**), and **4 Scan to open
-  MindFlock** — the QR and the `/m` URLs (`GET /api/mobile`), drawn ONLY once
+  MindFlock** — the QR and the `/m` URLs (`GET /api/mobile`; under a list
+  with a plain `http://` link: *Voice needs an https link: a phone browser
+  gives an http:// page no microphone* — neither recognizer can hear on
+  it, and the phone page says so itself), drawn ONLY once
   1 and 3 are ✓, so there is never a QR that opens a URL that hangs. No
   backticked shell in the prose: Tailscale issue lines drop the clause that
   quotes their own fix (`plainIssueMessage`). Nothing here is a knob. **Turn
@@ -5849,7 +5852,12 @@ labels above the inputs.
   - **Privacy**: the built-in engines (Windows' and Apple's on-device
     speech) and local models keep audio on this computer, a host receives
     what you send it; the phone's own recognition sends audio to Google on
-    Android and to Apple on iOS when no on-device model exists; on iPhone,
+    Android and to Apple on iOS when no on-device model exists; DuckDuckGo,
+    Firefox and in-app (WebView) browsers have no speech recognition service
+    of their own — their recognizer fails every start with *not-allowed*
+    whatever the microphone permission says, which the page used to report
+    as a refused microphone; it now says so, and when the server has
+    recognition ready it switches this page to it on the spot; on iPhone,
     voice needs a Safari tab (the home-screen icon cannot hear you), which
     recognition on this computer fixes.
 
