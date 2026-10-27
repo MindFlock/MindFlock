@@ -21,7 +21,7 @@ from backend.web.core import events as events_mod
 from backend.web.core import session_removal, spoken, state_events, voice
 from backend.web.core.events import EventBus
 
-NONE = {"say": None, "has_question": False, "source": "none"}
+NONE = {"say": None, "has_question": False, "source": "none", "question": None}
 
 
 class _Inst:
@@ -108,6 +108,8 @@ def test_idle_carries_the_spoken_line_and_working_carries_nothing(bus, monkeypat
         "say": "All green. Push it?",
         "has_question": True,
         "source": "hook",
+        # No reply file behind the patched record: core.asking has none.
+        "question": None,
     }
     # Back to work: a transition OUT of idle carries no words (and the first
     # sighting above only seeded the snapshot, so this is the first one).
@@ -191,7 +193,9 @@ def test_turn_ended_carries_the_same_keys_on_its_own_channel(bus, monkeypatch):
     assert len(_ended(got)) == 2
     data2 = _ended(got)[1]["data"]
     assert "idle_for" in data2
-    assert {k: data2[k] for k in ("say", "has_question", "source")} == NONE
+    assert {k: data2[k] for k in ("say", "has_question", "source")} == {
+        k: NONE[k] for k in ("say", "has_question", "source")
+    }
 
 
 def test_unknown_session_or_a_failing_reader_still_emits(bus, monkeypatch):
@@ -230,6 +234,7 @@ def test_the_payload_reads_the_real_reply_file(bus):
         "say": "Tests pass. Merge?",
         "has_question": True,
         "source": "hook",
+        "question": "Merge?",
     }
 
 
@@ -301,6 +306,7 @@ def test_a_turn_the_poll_missed_is_announced_from_the_reply_file(bus, monkeypatc
         "say": "Hello! How is your day going?",
         "has_question": True,
         "source": "hook",
+        "question": "How is your day going?",
     }
     # No "working" announcement is forged for it (the one real working
     # reading above was the first sighting, which only seeds), and the next

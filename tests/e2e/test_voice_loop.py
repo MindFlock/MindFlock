@@ -299,7 +299,13 @@ def test_voice_loop_from_flag_to_push(mf_server):
                 for f in seen
             ],
         )
-        assert frame["data"] == {"say": SAY, "has_question": True, "source": "hook"}
+        assert frame["data"] == {
+            "say": SAY,
+            "has_question": True,
+            "source": "hook",
+            # The turn ended on a question (core.asking).
+            "question": "Should I push?",
+        }
 
         # --- the push --------------------------------------------------------------
         deadline = time.time() + 90
@@ -309,7 +315,10 @@ def test_voice_loop_from_flag_to_push(mf_server):
                 (
                     r
                     for r in ntfy.records
-                    if str(r.get("title", "")).startswith("talk has finished")
+                    # A turn that ends on a question pushes ONE alert, the
+                    # question (needs_input via session.question) — not
+                    # "has finished" too.
+                    if str(r.get("title", "")).startswith("talk needs you")
                 ),
                 None,
             )
@@ -318,7 +327,11 @@ def test_voice_loop_from_flag_to_push(mf_server):
         # Agent words on: the body IS the spoken line (no URL appended — there
         # is no phone URL in a tailnet-less sandbox, and a read-aloud body
         # never carries one anyway).
-        assert pushed["message"] == SAY, pushed
+        assert pushed["message"] == "Should I push?", pushed
+        assert not any(
+            str(r.get("title", "")).startswith("talk has finished")
+            for r in ntfy.records
+        ), ntfy.records
         assert pushed.get("topic") == "voiceqa"
     finally:
         ntfy.stop()

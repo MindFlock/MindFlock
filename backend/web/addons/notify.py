@@ -74,12 +74,17 @@ NOTIFY_RULES: List[dict] = [
         "tags": ["zzz"],
     },
     {
+        # Both ways an agent waits on you: a dialog (activity → clarify) and a
+        # question asked in plain prose at the end of its turn
+        # (``session.question``, core.asking) — ``also`` lists the second
+        # event shape. One identity per dialog/question: see _NEEDS_INPUT_MEMORY_S.
         "id": "needs_input",
         "label": "A session asks you a question",
         "description": "The agent is waiting for your answer.",
         "event": "session.activity_changed",
         "old": None,
         "new": "clarify",
+        "also": [{"event": "session.question", "old": None, "new": None}],
         "title": "{session} needs you: Question",
         "body": "The agent is waiting on a clarification.",
         "default_enabled": True,
@@ -567,6 +572,14 @@ _INTERNAL_RULE_FIELDS = ("default_enabled", "was_opt_in", "priority", "tags", "n
 #: instead — see ``server._note_turn_boundary``.
 _DEDUPE_SECONDS = 5.0
 
+#: ``needs_input`` is deduped on WHAT is asked, not on the rule: one push per
+#: (session, dialog id) or (session, question ts) for this long. A second,
+#: different dialog seconds after the first still pushes (the 5 s rule window
+#: would have eaten it); the same dialog read again — a clarify flap, a
+#: re-parse — does not. Without an identity (the screen could not be read)
+#: the 5 s window applies as before.
+_NEEDS_INPUT_MEMORY_S = 300.0
+
 
 def _unreadable_response() -> JSONResponse:
     """409 for a save refused because settings.json exists but can't be read
@@ -635,18 +648,22 @@ def _rules_with_state() -> List[dict]:
 
 
 def _matches(rule: dict, envelope: dict) -> bool:
-    """Whether ``envelope`` satisfies ``rule`` (``None`` constraint = any value).
+    """Whether ``envelope`` satisfies ``rule`` (``None`` constraint = any value)
+    — its own ``event``/``old``/``new``, or any shape in its ``also`` list
+    (each ``{event, old, new}``, same semantics).
 
     The server-side twin of ``ruleMatches`` in static/addons/notify.js — keep the
     two in step, they decide the same thing for their own channel.
     """
-    if rule.get("event") != envelope.get("event"):
-        return False
-    if rule.get("old") is not None and rule["old"] != envelope.get("old"):
-        return False
-    if rule.get("new") is not None and rule["new"] != envelope.get("new"):
-        return False
-    return True
+    for shape in [rule] + [a for a in rule.get("also") or () if isinstance(a, dict)]:
+        if shape.get("event") != envelope.get("event"):
+            continue
+        if shape.get("old") is not None and shape["old"] != envelope.get("old"):
+            continue
+        if shape.get("new") is not None and shape["new"] != envelope.get("new"):
+            continue
+        return True
+    return False
 
 
 def _session_branch(title: str) -> str:
@@ -726,12 +743,31 @@ def _agent_words_on() -> bool:
         return False
 
 
+def _ask_popup_on() -> bool:
+    """``notifications.ask_popup`` (default on; an unreadable store says on)."""
+    try:
+        return bool(settings_store.load_settings().notifications.ask_popup)
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def _read_dialog(title: str) -> Optional[dict]:
     """The dialog on ``title``'s visible screen, as ``GET /dialog`` serves it
     (``{id, parsed, question, command, options: [{key, label, kind}]}``) —
     only when its provider PARSED one; ``None`` for no session, no live
     pane, a capture failure, or an unparsed screen. Never raises: this runs
     inside the event dispatch, where a push is never worth an exception."""
+    return _screen_dialog(title, parsed_only=True)
+
+
+def _read_unparsed_dialog(title: str) -> Optional[dict]:
+    """:func:`_read_dialog` for a screen its provider could NOT parse: the
+    ``/dialog`` body with its best-effort question line (no options), so a
+    dialog push still says what is asked. None as :func:`_read_dialog`."""
+    return _screen_dialog(title, parsed_only=False)
+
+
+def _screen_dialog(title: str, parsed_only: bool) -> Optional[dict]:
     try:
         from backend.web import server as _server  # lazy: the addon loads first
 
@@ -742,7 +778,9 @@ def _read_dialog(title: str) -> Optional[dict]:
         if name is None:
             return None
         body, err = _agent_io.current_dialog(name, getattr(inst, "Program", "") or "")
-        if err is not None or not isinstance(body, dict) or not body.get("parsed"):
+        if err is not None or not isinstance(body, dict):
+            return None
+        if parsed_only and not body.get("parsed"):
             return None
         return body
     except Exception:  # noqa: BLE001
@@ -774,10 +812,16 @@ def push_body(rule: dict, envelope: dict, dialog: Optional[dict]) -> "tuple[str,
     generic = _fill(rule.get("body", ""), envelope)
     if rule.get("id") not in _SPOKEN_RULES or not _agent_words_on():
         return generic, False
+    data = envelope.get("data") if isinstance(envelope.get("data"), dict) else {}
     if rule["id"] == "session_idle":
-        data = envelope.get("data") if isinstance(envelope.get("data"), dict) else {}
         say = " ".join(str(data.get("say") or "").split())
         return (say, True) if say else (generic, False)
+    if envelope.get("event") == "session.question":
+        # A question asked in prose: its words ARE the body.
+        text = " ".join(str(data.get("text") or "").split())
+        if len(text) > MAX_DIALOG_BODY:
+            text = text[: MAX_DIALOG_BODY - 1].rstrip() + "…"
+        return (text, True) if text else (generic, False)
     text = dialog_body(dialog)
     return (text, True) if text else (generic, False)
 
@@ -855,6 +899,9 @@ class NotifyAddon(Addon):
         self._unsubscribe = None
         # (session, event) -> monotonic ts of the last push, for _DEDUPE_SECONDS.
         self._last_push: dict = {}
+        # (session, dialog id | "q:<ts>") -> monotonic ts of its needs_input
+        # push, for _NEEDS_INPUT_MEMORY_S.
+        self._asked: dict = {}
         self._push_lock = threading.Lock()
 
     # --- ntfy channel (server-side dispatch) ------------------------------- #
@@ -903,13 +950,41 @@ class NotifyAddon(Addon):
                 # (see the rule), so the generic dispatch stays out of it.
                 if rule.get("ntfy") is False or not _matches(rule, envelope):
                     continue
-                key = (str(envelope.get("session") or ""), str(rule["id"]))
+                session = str(envelope.get("session") or "")
+                if (
+                    rule["id"] == "session_idle"
+                    and data.get("question")
+                    and rule_enabled("needs_input")
+                ):
+                    # The turn ended on a question: needs_input pushes it
+                    # (session.question) — one push, not "has finished" too.
+                    continue
+                # A dialog push reads the dialog off the screen now (the same
+                # parse GET /dialog serves): its question is the body, its
+                # yes/no options become one-tap buttons. The emitter already
+                # captured this screen to decide "clarify"; one more capture
+                # per push is what the route costs too. Unparsed, its
+                # best-effort question line is still the body.
+                dialog = None
+                if (
+                    rule["id"] == "needs_input"
+                    and envelope.get("event") != "session.question"
+                ):
+                    dialog = _read_dialog(session) or _read_unparsed_dialog(session)
+                key = (session, str(rule["id"]))
+                asked = self._asked_key(session, rule, envelope, dialog)
                 now = time.monotonic()
                 with self._push_lock:
-                    if now - self._last_push.get(key, 0.0) < _DEDUPE_SECONDS:
+                    if asked is not None:
+                        for k, at in list(self._asked.items()):
+                            if now - at >= _NEEDS_INPUT_MEMORY_S:
+                                del self._asked[k]
+                        if asked in self._asked:
+                            continue
+                        self._asked[asked] = now
+                    elif now - self._last_push.get(key, 0.0) < _DEDUPE_SECONDS:
                         continue
                     self._last_push[key] = now
-                session = str(envelope.get("session") or "")
                 # Tap the notification -> the mobile view, already on the
                 # session it is about (the voice deep link for the two pushes
                 # that carry words). Cached, never probed here: this runs on
@@ -925,12 +1000,6 @@ class NotifyAddon(Addon):
                 if click and rule["id"] == "device_join" and data.get("id"):
                     # Straight to the phone's Approve card for this request.
                     click += "#approve=" + str(data["id"])
-                # A dialog push reads the dialog off the screen now (the same
-                # parse GET /dialog serves): its question is the body, its
-                # yes/no options become one-tap buttons. The emitter already
-                # captured this screen to decide "clarify"; one more capture
-                # per push is what the route costs too.
-                dialog = _read_dialog(session) if rule["id"] == "needs_input" else None
                 message, spoken = push_body(rule, envelope, dialog)
                 actions = (
                     dialog_actions(
@@ -963,6 +1032,25 @@ class NotifyAddon(Addon):
             ntfy.log_error(
                 "ntfy dispatch for %s failed: %s", envelope.get("event"), err
             )
+
+    @staticmethod
+    def _asked_key(session: str, rule: dict, envelope: dict, dialog) -> Optional[tuple]:
+        """The identity a ``needs_input`` push is deduped on —
+        ``(session, dialog id)`` or ``(session, "q:<ts>")`` — or None (any
+        other rule, or a dialog that could not be read)."""
+        if rule.get("id") != "needs_input":
+            return None
+        if envelope.get("event") == "session.question":
+            data = (
+                envelope.get("data") if isinstance(envelope.get("data"), dict) else {}
+            )
+            try:
+                return (session, "q:%.3f" % float(data.get("ts") or 0.0))
+            except (TypeError, ValueError):
+                return None
+        if isinstance(dialog, dict) and dialog.get("id"):
+            return (session, str(dialog["id"]))
+        return None
 
     # --- routes ----------------------------------------------------------- #
     def _build_router(self) -> APIRouter:
@@ -1088,6 +1176,11 @@ class NotifyAddon(Addon):
                 # The agent's words in push bodies (pocket mode). Synced like
                 # the rest of the channel; the toggle sits in the same fold.
                 patch["ntfy_agent_words"] = bool(payload.get("agent_words"))
+            if "ask_popup" in payload:
+                # Not an ntfy field, but the Notifications screen reads and
+                # writes through this view: a session's question pops up in
+                # the middle of the screen (desktop and phone).
+                patch["ask_popup"] = bool(payload.get("ask_popup"))
 
             # Validate whenever the channel is (or is becoming) on, and whenever
             # a topic is present at all — but not "pick a topic" for someone who
@@ -1282,6 +1375,8 @@ def _ntfy_view() -> dict:
         # Pocket mode: the agent's words (a finished turn's spoken line, a
         # dialog's question) in push bodies.
         "agent_words": _agent_words_on(),
+        # A session's question pops up mid-screen (desktop + phone follow it).
+        "ask_popup": _ask_popup_on(),
         "configured": cfg.configured,
         "active": cfg.active,
         "public_server": cfg.is_public_server,

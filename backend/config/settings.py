@@ -1401,6 +1401,10 @@ class NotificationSettings:
     spoken ``Say:`` line of a finished turn, the question of a dialog) so a
     phone that reads notifications aloud says something useful. On by default;
     off keeps bodies generic (the words would travel through the ntfy server).
+    ``ask_popup``: whether a session's question (a dialog, or a question its
+    turn ended on — the instance rows' ``asking``) pops up in the middle of
+    the screen; the desktop app and the phone page both follow it. On by
+    default; synced like the rest of the group.
     """
 
     muted_rules: List[str] = field(default_factory=list)
@@ -1411,6 +1415,7 @@ class NotificationSettings:
     ntfy_token: str = ""  # SECRET
     ntfy_click_url: str = ""
     ntfy_agent_words: bool = True
+    ask_popup: bool = True
 
     def to_dict(self) -> dict:
         out: dict = {}
@@ -1430,6 +1435,8 @@ class NotificationSettings:
             out["ntfy_click_url"] = self.ntfy_click_url
         if not self.ntfy_agent_words:
             out["ntfy_agent_words"] = False
+        if not self.ask_popup:
+            out["ask_popup"] = False
         return out
 
     @classmethod
@@ -1443,6 +1450,7 @@ class NotificationSettings:
             ntfy_token=str(d.get("ntfy_token", "") or "").strip(),
             ntfy_click_url=str(d.get("ntfy_click_url", "") or "").strip(),
             ntfy_agent_words=bool(d.get("ntfy_agent_words", True)),
+            ask_popup=bool(d.get("ask_popup", True)),
         )
 
 

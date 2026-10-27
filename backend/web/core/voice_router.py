@@ -578,7 +578,7 @@ def session_state(row: dict, now: Optional[float] = None) -> dict:
     if setup.get("state") == "failed":
         return st("needs_you", "Setup failed", "setup_failed", True)
     act = row.get("activity") or "idle"
-    if act == "clarify":
+    if act == "clarify" or (act == "idle" and _prose_question(row)):
         return st("needs_you", "Question", "question", True)
     if act == "working":
         return st("working", "Working")
@@ -604,6 +604,22 @@ def session_state(row: dict, now: Optional[float] = None) -> dict:
     if idle_for > STUCK_IDLE_S and dirty:
         return st("idle", "Idle", "stuck", True)
     return st("idle", "Idle")
+
+
+def _prose_question(row: dict) -> Optional[str]:
+    """The question ``row``'s session asked in prose (its ``asking`` of kind
+    ``question``, core.asking), or None."""
+    asking = row.get("asking") if isinstance(row.get("asking"), dict) else {}
+    if asking.get("kind") != "question":
+        return None
+    return str(asking.get("text") or "") or None
+
+
+def asking_text(row: dict) -> Optional[str]:
+    """What ``row``'s session is asking, as a row says it: its ``asking``
+    text (a dialog's question line or a prose question), else None."""
+    asking = row.get("asking") if isinstance(row.get("asking"), dict) else {}
+    return str(asking.get("text") or "") or None
 
 
 def _attn_rank(row: dict, now: float) -> int:
@@ -729,9 +745,8 @@ def _needs(rows, now: float) -> dict:
     for r in bell[:MAX_NEEDS]:
         ss = session_state(r, now)
         if ss["reason"] == "question":
-            lines.append(
-                _end("%s is asking: %s" % (_name(r), r.get("last_say") or "a question"))
-            )
+            said = asking_text(r) or r.get("last_say") or "a question"
+            lines.append(_end("%s is asking: %s" % (_name(r), strip_markdown(said))))
         else:
             lines.append(_end("%s is %s" % (_name(r), _state_word(ss))))
     return {"kind": "needs", "say": " ".join(lines) if lines else "Nothing needs you."}
@@ -929,7 +944,11 @@ def finish(ans: dict, dialog, spoken=None, remote: bool = False) -> dict:
     none) — never pressed here, the client POSTs ``/answer``. No parsed
     dialog → ``no_dialog`` and why; but a BARE answer ("yes" said to the
     session being talked to) with no parsed dialog is ``{"kind": "prompt"}``:
-    the agent may have asked in words, and the words reach it as typed."""
+    the agent may have asked in words, and the words reach it as typed. A
+    question asked in prose (``/dialog``'s ``kind: "question"``) is read out
+    like a dialog's; an answer to it that names the session is
+    ``no_dialog`` with a ``say`` that it was asked in words — switch to it
+    and say the answer, which goes in as a prompt."""
     out = dict(ans)
     bare = out.pop("bare", False)
     name = out.get("name") or out.get("title") or ""
@@ -954,6 +973,11 @@ def finish(ans: dict, dialog, spoken=None, remote: bool = False) -> dict:
         out["no_dialog"] = True
         if remote:
             out["say"] = "%s is on another device: answer it there." % name
+        elif isinstance(dialog, dict) and dialog.get("kind") == "question":
+            out["say"] = (
+                "%s asked in words, not a dialog: switch to it and say your answer."
+                % name
+            )
         elif isinstance(dialog, dict):
             out["say"] = "%s is waiting on you: open the screen." % name
         else:

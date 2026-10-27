@@ -31,7 +31,7 @@ condensation:
   ``switch_rel`` (the client's own numbering: it maps ``index`` / ``delta``),
   ``answer`` (a session's dialog: ``dialog_id`` + ``keys`` the client posts
   to ``/answer`` — nothing is pressed here — or ``no_dialog``), ``question``
-  (its dialog read out), or one the client carries out itself (``cancel``,
+  (its dialog, or a question it asked in prose, read out), or one the client carries out itself (``cancel``,
   ``stop``, ``off``, ``repeat``, ``condense``; no ``say``). An optional
   ``title`` maps a numbered target the client resolved ("session three,
   yes" → its title) for the full answer. The rows are ``GET
@@ -369,13 +369,16 @@ def _read_spoken(title: str) -> dict:
 async def _finish_answer(ans: dict, rows: list) -> dict:
     """An ``answer`` / ``question`` naming a session, finished with its live
     dialog. Another device's session can't be read here: its row's
-    ``last_say`` stands in for a question, and an answer says so."""
+    ``asking`` text (else its ``last_say``) stands in for a question, and an
+    answer says so. A local session's prose question comes back from
+    ``/dialog`` itself (``kind: "question"``)."""
     title = ans["title"]
     row = next((r for r in rows if r.get("title") == title), None) or {}
     if row.get("device") or "::" in title:
+        asked = _voice_router.asking_text(row)
         spoken = {
-            "say": row.get("last_say"),
-            "has_question": row.get("activity") == "clarify",
+            "say": asked or row.get("last_say"),
+            "has_question": bool(asked) or row.get("activity") == "clarify",
         }
         return _voice_router.finish(ans, None, spoken, remote=True)
     dialog = await _read_dialog(title)
