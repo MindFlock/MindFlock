@@ -977,3 +977,177 @@ def test_route_switch_by_number(env):
         "Now on API docs. Should I push?"
     )
     assert route("stop recording") == {"kind": "stop"}
+
+
+# --------------------------------------------------------------------------- #
+# Claude's question tool (/dialog kind "select")                               #
+# --------------------------------------------------------------------------- #
+def _ask(state: str) -> dict:
+    """The /dialog body of a real AskUserQuestion capture."""
+    from pathlib import Path
+
+    from backend.providers import dialogs
+    from backend.providers.claude import ClaudeProvider
+
+    path = Path(__file__).parent / "data" / "dialogs"
+    text = (path / ("claude2_ask_%s_w100.screen.txt" % state)).read_text("utf-8")
+    screen = text.partition("\n")[2]
+    return {
+        "kind": "dialog",
+        **dialogs.describe(ClaudeProvider().parse_dialog(screen), screen),
+    }
+
+
+def _keys(text, state):
+    got = vr.select_answer(text, _ask(state))
+    return None if got is None else got["keys"]
+
+
+def test_select_speech_reads_the_question_and_its_choices():
+    assert vr.dialog_speech("API docs", _ask("tabs")) == (
+        "API docs asks: Which color should the button be? "
+        "Options: Red, Green, Blue — say a number or the option."
+    )
+    assert vr.dialog_speech("API docs", _ask("multi_one")) == (
+        "API docs asks: Which toppings do you want? Options: Cheese, Olives, "
+        "Mushrooms — pick as many as you like, then say next. Ticked: Cheese."
+    )
+    assert vr.dialog_speech("API docs", _ask("review")) == (
+        "API docs asks: Ready to submit your answers? "
+        "Which color should the button be? Red. "
+        "Which toppings do you want? Cheese, Mushrooms. Say submit or cancel."
+    )
+
+
+@pytest.mark.parametrize(
+    "text,keys",
+    [
+        ("two", ["2"]),
+        ("option two", ["2"]),
+        ("the second one", ["2"]),
+        ("Red", ["1"]),
+        ("pick blue please", ["3"]),
+        ("type something", ["4"]),
+        ("other", ["4"]),
+        ("chat about this", ["5"]),
+        ("plain", None),  # no such label here (see the frameworks below)
+        ("next", ["Right"]),
+        ("submit", ["Right", "Right"]),  # on to the review tab, never Enter
+        # A bare yes never picks a choice; two picks are no single answer.
+        ("yes", None),
+        ("one and three", None),
+        ("back", None),  # already the first tab
+        ("purple", None),
+    ],
+)
+def test_select_answer_single(text, keys):
+    assert _keys(text, "tabs") == keys
+
+
+@pytest.mark.parametrize(
+    "text,keys",
+    [
+        ("one and three", ["1", "3"]),
+        ("cheese, olives and mushrooms", ["1", "2", "3"]),
+        ("two", ["2"]),
+        ("next", ["Right"]),  # the last question: on to the review tab
+        ("submit", ["Right"]),
+        ("done", ["Right"]),
+        ("back", ["Left"]),
+        ("go back", ["Left"]),
+        ("yes", None),
+    ],
+)
+def test_select_answer_multi(text, keys):
+    assert _keys(text, "multi") == keys
+
+
+def test_a_label_prefix_picks_and_a_number_past_the_end_does_not():
+    assert _keys("plain", "single") == ["3"]
+    assert _keys("plain html", "single") == ["3"]
+    assert _keys("seven", "single") is None
+    assert _keys("option three then", "single") == ["3"]
+
+
+def test_a_ticked_box_is_left_alone_and_untick_clears_it():
+    assert _keys("cheese and olives", "multi_one") == ["2"]
+    got = vr.select_answer("cheese", _ask("multi_one"))
+    assert got == {"keys": [], "said": "already ticked"}
+    assert _keys("untick cheese", "multi_one") == ["1"]
+    assert _keys("untick olives", "multi_one") == []
+
+
+def test_select_answer_review():
+    assert _keys("submit", "review") == ["1"]
+    assert _keys("yes", "review") == ["1"]
+    assert _keys("cancel", "review") == ["2"]
+    assert _keys("no", "review") == ["2"]
+    assert _keys("back", "review") == ["Left"]
+    assert _keys("red", "review") is None
+
+
+def test_the_free_text_row_takes_the_words():
+    """With the cursor on "Type something" the phrase is the answer, typed,
+    then Enter; leaving it for another choice goes Up first (a digit would
+    be typed into the row)."""
+    assert vr.select_answer("Vue please, with Pinia", _ask("text")) == {
+        "keys": ["Enter"],
+        "text": "Vue please, with Pinia",
+        "said": "Vue please, with Pinia",
+    }
+    assert _keys("svelte", "text") == ["Up", "2"]
+    assert _keys("yes", "text") is None
+    # Away from the row, words are no answer.
+    assert _keys("Vue please, with Pinia", "single") is None
+
+
+def test_finish_answers_a_select_dialog():
+    ans = {"kind": "answer", "title": "docs", "name": "API docs", "words": "option two"}
+    got = vr.finish(dict(ans, choice="number", number=2), _ask("tabs"))
+    assert got["keys"] == ["2"] and got["say"] == "Answered Green on API docs."
+    assert got["dialog_id"] == _ask("tabs")["id"]
+    nope = vr.finish(dict(ans, choice="yes", words="yes", bare=True), _ask("tabs"))
+    assert nope["keys"] == []
+    assert nope["say"].startswith("I didn't catch that for API docs. Options: Red")
+    sure = vr.finish(dict(ans, choice="yes", words="yes"), _ask("review"))
+    assert (
+        sure["keys"] == ["1"] and sure["say"] == "Answered Submit answers on API docs."
+    )
+
+
+def test_route_answers_the_question_tool(env):
+    env.dialogs["docs"] = _ask("multi")
+    got = route("cheese and mushrooms", "docs")
+    assert got == {
+        "kind": "answer",
+        "title": "docs",
+        "name": "API docs",
+        "words": "cheese and mushrooms",
+        "dialog_id": _ask("multi")["id"],
+        "keys": ["1", "3"],
+        "say": "Answered Cheese and Mushrooms on API docs.",
+    }
+    # "go back" is a tab here, not the previous session.
+    assert route("go back", "docs")["keys"] == ["Left"]
+    # Words that answer nothing stay a prompt; "never mind" stays local.
+    assert route("fix the login bug", "docs") == {"kind": "prompt"}
+    assert route("never mind", "docs") == {"kind": "cancel"}
+
+
+def test_route_cancel_on_the_review_screen_is_cancel(env):
+    env.dialogs["docs"] = _ask("review")
+    assert route("cancel", "docs")["keys"] == ["2"]
+    assert route("submit", "docs")["keys"] == ["1"]
+
+
+def test_route_free_text_answer_carries_the_text(env):
+    env.dialogs["docs"] = _ask("text")
+    got = route("Vue please", "docs")
+    assert (got["text"], got["keys"]) == ("Vue please", ["Enter"])
+
+
+def test_route_permission_dialogs_are_untouched(env):
+    """Only the question tool reads a prompt phrase as an answer."""
+    env.dialogs["docs"] = PERM
+    assert route("red", "docs") == {"kind": "prompt"}
+    assert route("go back", "docs")["kind"] == "switch_rel"

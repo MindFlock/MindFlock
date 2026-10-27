@@ -1,0 +1,41 @@
+#! real capture 2026-10-27: Claude Code 2.1.311, 100x40 pane, tmux capture-pane -p -J; AskUserQuestion after "4": the cursor on the free-text row; prompt: Use the AskUserQuestion tool once to ask me ONE question: header "Framework", question "Which framework should the new page use?" with options React (description: what the app uses), Svelte (description: smaller), Plain HTML (description: no build). Do nothing else.
+▝▜██████▀  Opus 5.5 with high effort · Claude Max
+ ▝▝   ▝▝   /tmp/aq-scratch
+
+
+❯ Use the AskUserQuestion tool once to ask me two questions in one call: question 1 header "Color",
+  question "Which color should the button be?" with options Red (description: warm), Green
+  (description: calm), Blue (description: default); question 2 header "Toppings", multiSelect true,
+  question "Which toppings do you want?" with options Cheese, Olives, Mushrooms. Do nothing else
+  and do not write files.
+
+● User answered Claude's questions:
+  ⎿  · Which color should the button be? → Red
+     · Which toppings do you want? → Cheese, Mushrooms
+
+● You picked Red for the button color, and Cheese and Mushrooms for toppings.
+
+  The tool requires a description for every option and you didn't give any for the toppings, so each
+  topping's description repeated its name. I didn't write any files or do anything else.
+
+✻ Baked for 4s · done 8:13 AM
+
+❯ Use the AskUserQuestion tool once to ask me ONE question: header "Framework", question "Which
+  framework should the new page use?" with options React (description: what the app uses), Svelte
+  (description: smaller), Plain HTML (description: no build). Do nothing else.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Framework
+
+Which framework should the new page use?
+
+  1. React
+     what the app uses
+  2. Svelte
+     smaller
+  3. Plain HTML
+     no build
+❯ 4. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · ctrl+g to edit in Vim · Esc to cancel

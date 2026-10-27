@@ -468,7 +468,7 @@ class ClaudeProvider(BaseProvider):
             r"(?m)^\s*(?:│\s*)?❯\s+\d+\.",  # select-menu cursor at line start
             "Yes, and don't ask again",  # permission box option
             "No, and tell Claude what to do differently",  # tool-permission box
-            "Type something\\.",  # AskUserQuestion free-text option
+            r"Type something\b",  # AskUserQuestion free-text option ("Type something." single-select, "[ ] Type something" multi-select)
             "Chat about this",  # AskUserQuestion footer
         )
 

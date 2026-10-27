@@ -42,7 +42,11 @@ condensation:
   else the most recent, turns its voice flag on and arms the one-shot
   ``.next`` so its seeded first prompt asks for a ``Say:`` line. The dialog
   is ``GET …/dialog?quiet=1``'s own (``_read_dialog``), read only for an
-  answer or question naming a local session. Always 200 — a failed create is ``{kind: "new-failed", say}``; 400 only for a body
+  answer or question naming a local session — and for any other phrase said
+  to ``session`` while its agent shows Claude's question tool (``/dialog``'s
+  ``kind: "select"``): "red", "one and three", "next", "submit", the words
+  for its free-text row are that question's ``answer`` (``keys``, plus
+  ``text`` to type first for a free-text answer). Always 200 — a failed create is ``{kind: "new-failed", say}``; 400 only for a body
   that is not an object.
 
 Routes only translate HTTP into core calls; the registry lookup, the tmux
@@ -388,6 +392,25 @@ async def _finish_answer(ans: dict, rows: list) -> dict:
     return _voice_router.finish(ans, dialog, spoken)
 
 
+#: Commands a phrase said to a session showing Claude's question tool may
+#: really be its answer: "go back" (a tab, not the previous session) and, on
+#: the review screen, "cancel". A prompt (no command) may be one too.
+_SELECT_FIRST = ("switch_rel", "cancel")
+
+
+async def _select_answer(text: str, session: str, request):
+    """The ``answer`` to ``session``'s question tool that ``text`` is
+    ("red", "one and three", "next", "submit", the free-text row's words),
+    or None — not asking such a question, or not an answer to it."""
+    dialog = await _read_dialog(session)
+    if not _voice_router.is_select(dialog):
+        return None
+    if _voice_router.select_answer(text, dialog) is None:
+        return None
+    rows = await asyncio.to_thread(_session_rows, request)
+    return _voice_router.select_route(text, session, dialog, rows)
+
+
 @router.post("/api/voice/route")
 async def voice_route(request: Request) -> JSONResponse:
     """One finished phrase → ``{kind, …}`` (see the module docstring and
@@ -402,6 +425,10 @@ async def voice_route(request: Request) -> JSONResponse:
     session = str(payload.get("session") or "")
     title = str(payload.get("title") or "")
     cmd = _voice_router.command(text)
+    if session and (cmd is None or cmd["kind"] in _SELECT_FIRST):
+        picked = await _select_answer(text, session, request)
+        if picked is not None:
+            return JSONResponse(picked)
     if cmd is None:
         return JSONResponse({"kind": "prompt"})
     if cmd["kind"] in _voice_router.LOCAL_KINDS:

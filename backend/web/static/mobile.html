@@ -264,9 +264,13 @@
             <option value="hold">Hold to talk</option>
           </select>
         </label>
-        <label class="voice-opt">
-          <input type="checkbox" id="voice-replies" checked />
-          <span>Spoken replies <span class="new-muted">— read the session's answer to what you said aloud</span></span>
+        <label class="voice-opt voice-opt-col" for="voice-replies">
+          <span>Spoken replies <span class="new-muted">— one voice at a time; another session's name first</span></span>
+          <select id="voice-replies" aria-label="Spoken replies">
+            <option value="off">Off</option>
+            <option value="mine">Replies to what I said by voice</option>
+            <option value="all">Everything — every session's finished turn, even with voice off</option>
+          </select>
         </label>
         <label class="voice-opt">
           <input type="checkbox" id="voice-handsfree" />
@@ -400,14 +404,17 @@
     </div>
 
     <!-- A session is asking you something (mobile.js ASK section): opens by
-         itself, in the middle of the screen, when a row's `asking` is set (a
-         dialog or a question in prose). The session's number (the Sessions
-         sheet's) and name, what kind of ask, the question and its command,
-         then the way to answer it here: the dialog's options, a field + Send
-         for a question, or "Open the session" for a prompt only the terminal
-         can answer. The mic answers by voice. Later (or a tap outside, or
-         Back) puts it off; several asking → "1 of N". Last in #app so it
-         sits over any other sheet. -->
+         itself, in the middle of the screen, when a row's `asking` is a
+         dialog (a question in prose opens only when you tap its row or
+         notification). The session's number (the Sessions sheet's) and name,
+         what kind of ask, the question and its command, then the way to
+         answer it here: the dialog's options; Claude's select questions
+         step by step (the step row, checkboxes + Next, the review's Submit,
+         "Type something" in the field); a field + Send for a question; or
+         "Open the session" for a prompt only the terminal can answer. The
+         mic answers by voice. Later (or a tap outside, or Back) puts it off;
+         several dialogs → "1 of N". Last in #app so it sits over any other
+         sheet. -->
     <div id="asking-sheet" class="sheet sheet-center hidden" role="dialog" aria-modal="true" aria-labelledby="asking-name">
       <div class="sheet-box">
         <div class="asking-head">
@@ -420,10 +427,16 @@
           </span>
         </div>
         <div id="asking-kind" class="asking-kind"></div>
+        <div id="asking-steps" class="asking-steps hidden" aria-label="Questions"></div>
         <div id="asking-question" class="asking-question"></div>
+        <dl id="asking-review" class="asking-review hidden"></dl>
         <pre id="asking-command" class="asking-command hidden"></pre>
         <div id="asking-note" class="new-muted hidden" aria-live="polite"></div>
         <div id="asking-options" class="asking-options"></div>
+        <div id="asking-sel" class="asking-sel hidden">
+          <button type="button" id="asking-sel-prev">‹ Back</button>
+          <button type="button" id="asking-sel-next">Next ›</button>
+        </div>
         <div id="asking-reply" class="asking-reply hidden">
           <textarea id="asking-text" rows="2"
                     autocomplete="off" autocapitalize="sentences" spellcheck="true"

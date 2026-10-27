@@ -5,7 +5,9 @@
  * (`setAskVoice`): the Talk hotkey, the top-bar mic and the pop-up's own mic
  * button then listen for THAT session's answer — a dialog's words go to the
  * voice router for that session (`answer` → /answer), a question's words are
- * typed into the pop-up's answer field and "submit" sends them. The mic
+ * typed into the pop-up's answer field and "submit" sends them; on Claude's
+ * question prompt "type something" opens that option's field and the words
+ * after it go there. The mic
  * (TopBarMic, which owns the recognizer and the speech queue) registers its
  * side (`registerAskMic`): read the ask out and listen hands-free, cancel,
  * and whether it is listening — published back with its caption, so the
@@ -19,11 +21,16 @@ export interface AskVoice {
   kind: "dialog" | "question";
   /** The words the mic shows before a word is heard. */
   hint(): string;
-  /** The answer field (a question; null for a dialog). */
+  /** The answer field: a question's, or the text field a select option
+   * opened ("Type something"); null for a dialog otherwise. */
   field(): HTMLTextAreaElement | null;
   /** Send what the field holds (a question): POST /send {text, enter:
    * true[, say]} — resolves to the caption line, `ok` when it went. */
   submit(say: boolean): Promise<{ ok: boolean; line: string }>;
+  /** A dictation's first phrase, before the router: true when the pop-up
+   * acted on it itself ("type something" opened that option's field — the
+   * next words go there). */
+  phrase?(text: string): boolean;
 }
 
 /** What the mic does for the pop-up. */

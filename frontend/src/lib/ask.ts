@@ -9,16 +9,22 @@
  *    nobody has typed to it since — answered by typing (POST /send).
  * An older server sends no `asking`: a clarify row still reads as a dialog.
  *
- * The pop-up opens by itself when an ask appears, except (`askSuppressed`):
+ * The pop-up opens by itself only for a DIALOG — the agent's permission or
+ * choice prompt, Claude's question prompt included — and not even then
+ * when (`askSuppressed`):
  *  - the setting `notifications.ask_popup` is off;
  *  - that very ask was answered from here, put off with "Later", or opened in
  *    its pane — one ask pops up once, never again after you dealt with it;
  *  - it is the focused session and you typed into it in the last
  *    TYPED_RECENTLY_MS — you are already handling it, in its pane;
  *  - another dialog is open (it waits for that one to close, never on top).
+ * A question in plain words never pops up by itself (the word "question" in
+ * a reply is no prompt): its bell row, rail strip, toast and notification
+ * stay, and their Reply opens the pop-up on it (`openAsk`).
  * Several asking at once share ONE pop-up, stepped "1 of N", in the bell's
  * order: every ask is an answer the bell lists first, so by time — the one
- * waiting longest first. */
+ * waiting longest first. Only dialogs count there, and a question you opened
+ * with Reply (`cardQueue`). */
 
 import { useQuery } from "@tanstack/react-query";
 import { api, instApi } from "../api/client";
@@ -164,12 +170,17 @@ export function askQueue(
 export class AskMemory {
   private done = new Map<string, Set<string>>();
   private snoozedDialog = new Map<string, string>();
+  /** Sessions whose prose question you opened (Reply): it steps with the
+   * dialogs until it is dealt with. */
+  private asked = new Set<string>();
 
   /** `how` is informational (tests, debugging); every way counts the same. */
   handle(item: Pick<AskItem, "title" | "key" | "kind" | "dialogId">, _how: "answered" | "later" | "pane" | "typing" = "answered", dialogId?: string | null): void {
     let s = this.done.get(item.title);
     if (!s) this.done.set(item.title, (s = new Set()));
     s.add(item.key);
+    // Dealt with: the session's NEXT prose question waits for its own Reply.
+    if (item.kind === "question") this.asked.delete(item.title);
     const id = dialogId || item.dialogId;
     if (_how === "later" && item.kind === "dialog" && id) this.snoozedDialog.set(item.title, id);
   }
@@ -187,12 +198,29 @@ export class AskMemory {
     this.snoozedDialog.delete(title);
   }
 
+  /** You opened `title`'s ask yourself: its prose question joins the pop-up. */
+  invite(title: string): void {
+    this.asked.add(title);
+  }
+
+  invited(title: string): boolean {
+    return this.asked.has(title);
+  }
+
   /** Drop what is remembered for sessions no longer asking (keeps it small;
    * a later ask has a new key anyway). */
   prune(asking: ReadonlySet<string>): void {
     for (const t of [...this.done.keys()]) if (!asking.has(t)) this.done.delete(t);
     for (const t of [...this.snoozedDialog.keys()]) if (!asking.has(t)) this.snoozedDialog.delete(t);
+    for (const t of [...this.asked]) if (!asking.has(t)) this.asked.delete(t);
   }
+}
+
+/** What the pop-up steps through: the asks not dealt with — every dialog,
+ * and a prose question only once you opened it (Reply, a toast, a
+ * notification). */
+export function cardQueue(queue: readonly AskItem[], memory: Pick<AskMemory, "handled" | "invited">): AskItem[] {
+  return queue.filter((i) => !memory.handled(i) && (i.kind === "dialog" || memory.invited(i.title)));
 }
 
 /** The page's one memory (the pop-up, the bell's Reply and the toasts share it). */
@@ -213,8 +241,10 @@ export function askSuppressed(
     otherDialog: boolean;
     now?: number;
   }
-): "" | "off" | "handled" | "typing" | "other-dialog" {
+): "" | "off" | "prose" | "handled" | "typing" | "other-dialog" {
   if (!ctx.popupOn) return "off";
+  // A question in plain words waits in the bell, the rail and the toasts.
+  if (item.kind === "question") return "prose";
   if (ctx.memory.handled(item)) return "handled";
   const now = ctx.now ?? Date.now();
   if (ctx.focused === item.title && ctx.typedAt && now - ctx.typedAt < TYPED_RECENTLY_MS) return "typing";
@@ -249,9 +279,14 @@ export function nextAfter(queue: readonly AskItem[], current: string, before: re
 
 /** The pop-up's kind label, from the dialog's own heading when the server
  * sends one, else from what it asks: Plan approval · Permission · Question. */
-export function askKindLabel(kind: AskKind, d?: Pick<Dialog, "question" | "command" | "options"> & { heading?: string | null } | null): string {
+export function askKindLabel(
+  kind: AskKind,
+  d?: (Pick<Dialog, "question" | "command" | "options"> & { heading?: string | null; kind?: Dialog["kind"] }) | null
+): string {
   if (kind === "question") return "Question";
   if (!d) return "Permission";
+  // Claude's question prompt: its heading is the question's tab label.
+  if (d.kind === "select") return "Question";
   const heading = String(d.heading || "");
   const words = [heading, d.question, ...d.options.map((o) => o.label)].join(" ");
   if (/\bplan\b/i.test(words)) return "Plan approval";
@@ -314,9 +349,10 @@ export function sendAnswer(title: string, text: string, say = false) {
 // --- The pop-up's door -------------------------------------------------------------- //
 
 /** Open the pop-up on `title` (the bell's Reply, a toast or a notification):
- * what you put off on that session shows again. */
+ * what you put off on that session shows again, a prose question too. */
 export function openAsk(title: string): void {
   if (!title) return;
   askMemory.forget(title);
+  askMemory.invite(title);
   useUi.getState().openDialogFor("ask", title);
 }

@@ -172,7 +172,8 @@ describe("the stepper", () => {
 // --- When it must not open --------------------------------------------------------- //
 
 describe("askSuppressed: the open / suppress rules", () => {
-  const item = askQueue([q("s", 1)], null, null, { activity: (i) => i.activity })[0];
+  const item = askQueue([dlg("s", 1)], null, null, { activity: (i) => i.activity })[0];
+  const prose = askQueue([q("s", 1)], null, null, { activity: (i) => i.activity })[0];
   const base = { popupOn: true, memory: new AskMemory(), focused: null, typedAt: 0, otherDialog: false, now: NOW };
 
   it("opens by default", () => {
@@ -181,6 +182,31 @@ describe("askSuppressed: the open / suppress rules", () => {
 
   it("never with the setting off", () => {
     expect(askSuppressed(item, { ...base, popupOn: false })).toBe("off");
+  });
+
+  it("a question in plain words never opens it by itself — only a real dialog does", () => {
+    expect(askSuppressed(prose, base)).toBe("prose");
+    expect(askSuppressed(item, base)).toBe("");
+    // A prose ask is no dialog, even when the word "question" is all over it.
+    const [word] = askQueue([q("w", 1, "Quick question: which one do you want?")], null, null, { activity: (i) => i.activity });
+    expect(askSuppressed(word, base)).toBe("prose");
+  });
+
+  it("…and counts in the '1 of N' only once you opened it (Reply, a toast, a notification)", () => {
+    const m = new AskMemory();
+    const both = askQueue([dlg("d", 1), q("p", 2)], null, null, { activity: (i) => i.activity });
+    expect(ask.cardQueue(both, m).map((i) => i.title)).toEqual(["d"]);
+    m.invite("p");
+    expect(ask.cardQueue(both, m).map((i) => i.title)).toEqual(["d", "p"]);
+    // Answered: gone, and the session's NEXT question waits for its own Reply.
+    m.handle(both[1], "answered");
+    expect(ask.cardQueue(both, m).map((i) => i.title)).toEqual(["d"]);
+    const [next] = askQueue([q("p", 9)], null, null, { activity: (i) => i.activity });
+    expect(ask.cardQueue([next], m)).toEqual([]);
+    // openAsk is the explicit open: it invites.
+    openAsk("p");
+    expect(ask.cardQueue([next], ask.askMemory).map((i) => i.title)).toEqual(["p"]);
+    expect(useUi.getState().dialogTarget).toBe("p");
   });
 
   it("not for the focused session you typed into in the last 10 s — but yes for another session", () => {
@@ -598,7 +624,11 @@ describe("voice: the pop-up is the one hands-free entry", () => {
     const mic = code("components/TopBarMic.tsx");
     expect(mic).toMatch(/const ask = askVoice\(\);\s*if \(ask && !opts\.title && \(!into \|\| into === ask\.field\(\)\)\)/);
     expect(mic).toMatch(/env\.new === "clarify" && !askPopupOn\(\)/);
-    expect(mic).toMatch(/if \(ask && askPopupOn\(\)\) asksSaid\.set/);
+    // A reply's question never opens the pop-up: the mic listens itself
+    // (for a prompt it sent), and a Reply meanwhile waits for the read-out.
+    expect(mic).toContain("asksSaid.set(title, { done: said, at: Date.now() });");
+    expect(mic).toContain("if (listen) void said.then(() => hands.current?.question(title, ask));");
+    expect(mic).not.toMatch(/askPopupOn\(\)\) asksSaid/);
     expect(mic).toMatch(/registerAskMic\(/);
     const dlgSrc = code("components/dialogs/AskDialog.tsx");
     expect(dlgSrc).toMatch(/new CustomEvent\(TALK_EVENT, \{ detail: \{ phase \} \}\)/);
@@ -624,7 +654,7 @@ describe("Settings → Notifications", () => {
     expect(c).toMatch(/<AskPopupRow \/>/);
     expect(c).toMatch(/rule\.id === "needs_input" &&/);
     const copy = src("components/settings/screens/notifyCopy.ts");
-    expect(copy).toContain("Pop up a session's question in the middle of the screen");
+    expect(copy).toContain("Pop up a session's permission and choice prompts in the middle of the screen");
     expect(copy).toMatch(/question the agent asks in plain words/);
     const search = src("components/palette/settingsSearch.ts");
     expect(search).toMatch(/"question"[\s\S]*"pop up"[\s\S]*"ask"[\s\S]*anchor: "#notif-ask-row"/);

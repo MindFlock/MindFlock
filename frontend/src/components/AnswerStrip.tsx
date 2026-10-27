@@ -24,6 +24,8 @@
  * "clarify", and "not waiting" reads as no dialog, quietly (`?quiet=1`). Keys 1–9 are the HOST's job (only while its row is focused),
  * through the `answerKey` handle on `ref`.
  *
+ * Claude's question prompt (kind "select") with boxes to tick or on its
+ * review step shows its question and Reply too: the pop-up walks it.
  * A question the agent asked in plain words (`question`, lib/ask.ts) has no
  * key to press: the strip shows it with Reply, which opens the ask pop-up
  * (AskDialog) — the one place a typed or spoken answer is written. The
@@ -37,6 +39,7 @@ import { displayName } from "../state/store";
 import { errMsg } from "../lib/format";
 import { answerFresh, fetchDialog } from "../lib/flockActions";
 import { openAsk } from "../lib/ask";
+import { isSelect, selectStage } from "../lib/askSelect";
 
 export type AnswerVariant = "rail" | "bell" | "thread";
 
@@ -294,17 +297,20 @@ export function AskedInWordsView({
   variant,
   onReply,
   onOpen,
+  asking = "question",
 }: {
   question?: string;
   variant: AnswerVariant;
   onReply(): void;
   onOpen?: () => void;
+  /** "select": Claude's question prompt, answered in the pop-up too. */
+  asking?: "question" | "select";
 }) {
   const q = (question || "").trim();
   return (
     <div
       className={"flock-answer fa-" + variant + " is-question"}
-      data-asking="question"
+      data-asking={asking}
       onClick={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
     >
@@ -472,10 +478,11 @@ export function useAnswerStrip(
     return true;
   };
 
-  /** Read the dialog again now (a 409 elsewhere said it changed). */
-  const reload = () => {
+  /** Read the dialog again now (a 409 elsewhere said it changed); `note`
+   * goes under the new one. */
+  const reload = (note?: string) => {
     fetchDialog(title).then(
-      (dialog) => dispatch({ type: "loaded", dialog }),
+      (dialog) => dispatch({ type: "loaded", dialog, note: dialog ? note : "" }),
       () => {}
     );
   };
@@ -515,6 +522,12 @@ export function AnswerStrip({ title, activity, variant, question, onOpen, onRepl
     );
   }
   if (!waiting) return null;
+  // Claude's question prompt that takes more than one press (boxes to tick,
+  // the review): the pop-up walks it, step by step.
+  const sd = state.dialog;
+  if (sd && isSelect(sd) && (sd.multi || selectStage(sd) === "review")) {
+    return <AskedInWordsView question={sd.question} variant={variant} asking="select" onReply={onReply ?? (() => openAsk(title))} onOpen={onOpen} />;
+  }
   let hint: string | undefined;
   if (variant === "bell") {
     const parent = instances?.find((i) => i.title === title)?.parent;

@@ -380,3 +380,50 @@ def test_send_answer_text_starting_with_a_dash_is_literal(env, text):
     keys (Enter) still went out and the route said ok."""
     assert agent_io.send_answer("mindflock_w", text, ["Enter"]) is True
     assert env.tm.sends() == [["-l", "--", text], ["Enter"]]
+
+
+# --------------------------------------------------------------------------- #
+# Claude's question tool: a multi-select's digits tick, they don't answer      #
+# --------------------------------------------------------------------------- #
+def _ask_screen(state: str) -> str:
+    from pathlib import Path
+
+    path = Path(__file__).parent / "data" / "dialogs"
+    text = (path / ("claude2_ask_%s_w100.screen.txt" % state)).read_text("utf-8")
+    return text.partition("\n")[2]  # the #! provenance header
+
+
+@pytest.fixture
+def ask_env(env, monkeypatch):
+    from backend.providers.claude import ClaudeProvider
+
+    monkeypatch.setattr(server.providers, "resolve", lambda prog: ClaudeProvider())
+    monkeypatch.setattr(agent_io, "_ANSWERED", {})
+    monkeypatch.setattr(agent_io, "_TOGGLE_IDS", {})
+    return env
+
+
+def test_ticking_two_boxes_with_one_dialog_id(ask_env):
+    """Ticking a box keeps the question (and its id) up: the second tick,
+    pinned to the same id inside ANSWERED_HOLD_S, is not a double answer."""
+    ask_env.tm.screen = _ask_screen("multi")
+    body = client.get("/api/instances/w/dialog").json()
+    assert body["kind"] == "select" and body["multi"] is True
+    for key in ("1", "3"):
+        r = client.post(
+            "/api/instances/w/answer", json={"keys": [key], "dialog_id": body["id"]}
+        )
+        assert r.status_code == 200, r.json()
+    assert ask_env.tm.sends() == [["1"], ["3"]]
+
+
+def test_a_single_select_digit_still_answers_once(ask_env):
+    ask_env.tm.screen = _ask_screen("tabs")
+    did = client.get("/api/instances/w/dialog").json()["id"]
+    assert did not in agent_io._TOGGLE_IDS
+    ok = client.post("/api/instances/w/answer", json={"keys": ["1"], "dialog_id": did})
+    assert ok.status_code == 200
+    again = client.post(
+        "/api/instances/w/answer", json={"keys": ["1"], "dialog_id": did}
+    )
+    assert again.status_code == 409 and again.json()["dialog_answered"] is True

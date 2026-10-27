@@ -11942,7 +11942,9 @@ async def instance_dialog(title: str, quiet: Optional[str] = None):
     if derr is not None:
         return JSONResponse({"error": derr}, status_code=500)
     _agent_io.note_dialog_seen(title, body.get("id"))
-    return JSONResponse({**body, "kind": "dialog"})
+    # A parser may name its own kind (``select`` for Claude's question prompt);
+    # ``dialog`` is the default for a permission / choice prompt.
+    return JSONResponse({"kind": "dialog", **body})
 
 
 @app.post("/api/instances/{title}/asking/dismiss")

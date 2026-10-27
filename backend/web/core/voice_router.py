@@ -47,11 +47,16 @@ __all__ = [
     "dialog_choices",
     "dialog_speech",
     "finish",
+    "is_select",
     "match_repo",
     "match_session",
     "norm",
     "parse_answer",
     "plan_new",
+    "select_answer",
+    "select_choices",
+    "select_route",
+    "select_speech",
     "session_state",
     "started",
     "title_base",
@@ -882,6 +887,219 @@ def parse_answer(text, options) -> Optional[dict]:
     return None
 
 
+# --- Claude's question tool (``/dialog``'s ``kind: "select"``) -------------------
+#: The keys that switch tabs / press the cursor's row, when a body has none.
+_SELECT_NAV = {"next": ["Right"], "prev": ["Left"], "submit": ["Enter"]}
+_SEL_NEXT_RE = re.compile(r"^(?:next|next question|next one|go on|skip|skip it)$")
+_SEL_BACK_RE = re.compile(
+    r"^(?:back|go back|previous|previous question|prev|last question)$"
+)
+_SEL_SUBMIT_RE = re.compile(
+    r"^(?:submit|submit (?:it|them|that|answers|my answers|the answers)"
+    r"|send (?:it|them)|done|finish|finished)$"
+)
+_SEL_TEXT_RE = re.compile(
+    r"^(?:type something|other|something else|write in|write my own|my own answer"
+    r"|type my own|type an answer)$"
+)
+#: What leads a pick ("pick two", "choose red and blue") — dropped.
+_SEL_LEAD = frozenset(
+    "pick choose select take tick check option options number numbers the".split()
+)
+#: What leads an UN-pick in a multi-select ("untick cheese").
+_SEL_UNDO = frozenset("untick uncheck unselect remove drop deselect".split())
+#: Words that only join picks ("one and three", "red then blue").
+_SEL_JOIN = frozenset("and plus also then".split())
+
+
+def is_select(dialog) -> bool:
+    """Whether ``dialog`` (a ``/dialog`` body) is Claude's question tool."""
+    return _parsed(dialog) and dialog.get("kind") == "select"
+
+
+def _select_opts(dialog: dict) -> List[dict]:
+    return [o for o in dialog.get("options") or () if isinstance(o, dict)]
+
+
+def _opt_keys(opt: dict) -> List[str]:
+    return [str(k) for k in (opt.get("keys") or [opt.get("key")])]
+
+
+def _said_label(opt: dict) -> str:
+    return strip_markdown(opt.get("label") or "").rstrip(".") or "that"
+
+
+def _select_picks(words: List[str], opts: List[dict]) -> Optional[List[dict]]:
+    """The choices ``words`` pick, in order, or None when any word is
+    neither a pick nor a joiner: a label (the longest run of words that is
+    one — "salt and pepper" stays whole — else the unique label those words
+    begin, "plain" for "Plain HTML"), a number ("two", "3"), an ordinal
+    ("the second one"); "pick", "option", "and", "the"… only join them."""
+    labels = [(norm(o.get("label")), o) for o in opts]
+
+    def by_key(n) -> Optional[dict]:
+        return next((o for o in opts if str(o.get("key")) == str(n)), None)
+
+    picks: List[dict] = []
+    i, n = 0, len(words)
+    while i < n:
+        w = words[i]
+        hit = None
+        for j in range(n, i, -1):
+            said = " ".join(words[i:j])
+            exact = [o for lab, o in labels if lab == said]
+            if exact:
+                hit = (exact[0], j)
+                break
+        if hit is None:
+            for j in range(n, i, -1):
+                said = " ".join(words[i:j])
+                starts = [o for lab, o in labels if lab.startswith(said + " ")]
+                if len(said) >= 3 and len(starts) == 1:
+                    hit = (starts[0], j)
+                    break
+        if hit is None and _ordinal(w) and i + 1 < n and words[i + 1] in _PICK_NOUNS:
+            hit = (by_key(_ordinal(w)), i + 2)
+        if hit is None and _count(w) is not None:
+            hit = (by_key(_count(w)), i + 1)
+        if hit is None:
+            if w in _SEL_LEAD or w in _SEL_JOIN:
+                i += 1
+                continue
+            return None
+        if hit[0] is None:
+            return None  # a number past the last choice
+        picks.append(hit[0])
+        i = hit[1]
+    return picks
+
+
+def select_answer(text, dialog) -> Optional[dict]:
+    """A phrase said to Claude's question tool → ``{"keys", "said"}`` (and
+    ``"text"`` — typed before the keys — for a free-text answer), or None.
+
+    * The review screen (``review`` in the body): "submit" / a yes → Submit
+      answers, "cancel" / a no → Cancel, "back" → the previous tab.
+    * A question: "next" / "back" switch tabs (``nav``); "submit" / "done"
+      goes on to the review tab (Right up to it) — never Enter, which would
+      pick whatever row the cursor is on. "type something" / "other" →
+      the free-text row. Numbers and labels pick: one for a single-select
+      ("two", "red", "option two"); any number for a multi-select ("one and
+      three", "cheese and mushrooms") — boxes already ticked are left alone,
+      "untick cheese" clears one. A bare "yes" is no pick. With the cursor
+      on the free-text row, any other phrase is the answer typed into it,
+      then Enter."""
+    if not isinstance(dialog, dict):
+        return None
+    t = norm(text)
+    if len(t.split()) > 1 and t.split()[-1] == "please":
+        t = t.rsplit(" ", 1)[0]
+    if not t:
+        return None
+    opts = _select_opts(dialog)
+    nav = dialog.get("nav") or _SELECT_NAV
+    steps = [s for s in dialog.get("steps") or () if isinstance(s, dict)]
+    step = dialog.get("step") if isinstance(dialog.get("step"), int) else 0
+    if "review" in dialog:
+        if _SEL_BACK_RE.match(t) and step > 0:
+            return {"keys": list(nav["prev"]), "said": "back"}
+        if _NO_RE.search(t):
+            opt = next((o for o in opts if o.get("kind") == "no"), None)
+        elif _SEL_SUBMIT_RE.match(t) or _YES_RE.search(t):
+            opt = next((o for o in opts if o.get("kind") == "yes"), None)
+        else:
+            picks = _select_picks(t.split(), opts) or []
+            opt = picks[0] if len(picks) == 1 else None
+        if opt is None:
+            return None
+        return {"keys": _opt_keys(opt), "said": _said_label(opt)}
+    if _SEL_NEXT_RE.match(t):
+        if step + 1 < len(steps):
+            return {"keys": list(nav["next"]), "said": "next"}
+        return None
+    if _SEL_BACK_RE.match(t):
+        return {"keys": list(nav["prev"]), "said": "back"} if step > 0 else None
+    if _SEL_SUBMIT_RE.match(t):
+        review = next((k for k, s in enumerate(steps) if s.get("submit")), None)
+        if review is None or review <= step:
+            return None
+        return {"keys": list(nav["next"]) * (review - step), "said": "submit"}
+    text_opt = next((o for o in opts if o.get("kind") == "text"), None)
+    if text_opt is not None and _SEL_TEXT_RE.match(t):
+        return {"keys": _opt_keys(text_opt), "said": "type something"}
+    words = t.split()
+    undo = bool(dialog.get("multi")) and bool(words) and words[0] in _SEL_UNDO
+    picks = _select_picks(words[1:] if undo else words, opts)
+    if picks:
+        if not dialog.get("multi"):
+            if len(picks) != 1:
+                return None
+            return {"keys": _opt_keys(picks[0]), "said": _said_label(picks[0])}
+        keys: List[str] = []
+        said: List[str] = []
+        seen = set()
+        for opt in picks:
+            if str(opt.get("key")) in seen:
+                continue
+            seen.add(str(opt.get("key")))
+            if opt.get("checked") is (not undo) and opt.get("kind") == "other":
+                continue  # already as asked
+            for k in _opt_keys(opt):
+                if k != "Up" or not keys:
+                    keys.append(k)
+            said.append(_said_label(opt))
+        if not keys:
+            return {"keys": [], "said": "already " + ("cleared" if undo else "ticked")}
+        return {"keys": keys, "said": " and ".join(said)}
+    if (
+        text_opt is not None
+        and str(dialog.get("cursor")) == str(text_opt.get("key"))
+        and not _ANSWERED_WORDS_RE.match(t)
+    ):
+        return {
+            "keys": ["Enter"],
+            "text": str(text or "").strip(),
+            "said": str(text or "").strip(),
+        }
+    return None
+
+
+#: Phrases that are never a typed free-text answer.
+_ANSWERED_WORDS_RE = re.compile(
+    r"^(?:yes|yeah|yep|no|nope|cancel|stop|never ?mind|ok|okay)$"
+)
+
+
+def select_choices(dialog: dict) -> str:
+    """How to answer Claude's question tool, as said."""
+    opts = _select_opts(dialog)
+    if "review" in dialog:
+        answered = [
+            "%s %s"
+            % (
+                _end(strip_markdown(r.get("question") or "")),
+                _end(strip_markdown(r.get("answer") or "")),
+            )
+            for r in dialog.get("review") or ()
+            if isinstance(r, dict)
+        ]
+        return " ".join(answered + ["Say submit or cancel."])
+    names = ", ".join(_said_label(o) for o in opts if o.get("kind") == "other")
+    if dialog.get("multi"):
+        ticked = [_said_label(o) for o in opts if o.get("checked") is True]
+        out = "Options: %s — pick as many as you like, then say next." % names
+        if ticked:
+            out += " Ticked: %s." % ", ".join(ticked)
+        return out
+    return "Options: %s — say a number or the option." % names
+
+
+def select_speech(name: str, dialog: dict) -> str:
+    """``<name> asks: <question> <choices>`` for Claude's question tool."""
+    question = strip_markdown(dialog.get("question") or "") or "a question"
+    return "%s asks: %s %s" % (name, _end(question), select_choices(dialog))
+
+
 def _kind_word(opt: dict) -> str:
     """mobile.js ``voiceKindWord``."""
     k = opt.get("kind")
@@ -913,7 +1131,10 @@ def dialog_choices(dialog: dict) -> str:
 
 def dialog_speech(name: str, dialog: dict) -> str:
     """mobile.js ``voiceDialogSpeech``: ``<name>: <question> [It wants to
-    run: <command>.] <choices>``."""
+    run: <command>.] <choices>`` — Claude's question tool:
+    :func:`select_speech`."""
+    if dialog.get("kind") == "select":
+        return select_speech(name, dialog)
     parts = [
         "%s: %s"
         % (name, strip_markdown(dialog.get("question") or "") or "a permission prompt")
@@ -984,6 +1205,8 @@ def finish(ans: dict, dialog, spoken=None, remote: bool = False) -> dict:
             out["say"] = "%s is not asking anything." % name
         return out
     out["dialog_id"] = dialog.get("id")
+    if is_select(dialog):
+        return _finish_select(out, name, dialog, out.get("words") or "")
     opt = parse_answer(out.get("words") or "", dialog.get("options"))
     if opt is None:
         out["keys"] = []
@@ -996,6 +1219,42 @@ def finish(ans: dict, dialog, spoken=None, remote: bool = False) -> dict:
     out["keys"] = [str(opt.get("key"))]
     out["say"] = "Answered %s on %s." % (_kind_word(opt), name)
     return out
+
+
+def _finish_select(out: dict, name: str, dialog: dict, words: str) -> dict:
+    """``out`` (an ``answer``) finished against Claude's question tool:
+    :func:`select_answer`'s ``keys`` (and ``text``), or ``[]`` and how to
+    answer it."""
+    sel = select_answer(words, dialog)
+    if sel is None or not sel["keys"]:
+        out["keys"] = []
+        out["say"] = (
+            "%s: %s." % (name, _end(sel["said"]).rstrip("."))
+            if sel is not None
+            else "I didn't catch that for %s. %s" % (name, select_choices(dialog))
+        )
+        return out
+    out["keys"] = sel["keys"]
+    if sel.get("text"):
+        out["text"] = sel["text"]
+    out["say"] = "Answered %s on %s." % (sel["said"], name)
+    return out
+
+
+def select_route(text, session: str, dialog, rows=()) -> Optional[dict]:
+    """A phrase said to ``session`` while its agent shows Claude's question
+    tool → the ``answer`` (``dialog_id``, ``keys``, maybe ``text``), or None
+    to route it as usual. :func:`command` reads "red", "one and three",
+    "next" or "submit" as a prompt (or "go back" as a session switch);
+    against a question they are its answer."""
+    if not session or not is_select(dialog):
+        return None
+    if select_answer(text, dialog) is None:
+        return None
+    row = _row(rows, session) or {"title": session}
+    out = {"kind": "answer", "title": session, "name": _name(row), "words": text}
+    out["dialog_id"] = dialog.get("id")
+    return _finish_select(out, out["name"], dialog, text)
 
 
 # --- new sessions --------------------------------------------------------------
