@@ -34,8 +34,10 @@ from __future__ import annotations
 
 import re
 import time
+from functools import lru_cache
 from typing import Iterable, List, Optional, Tuple
 
+from backend.web.core import voice_words as _voice_words
 from backend.web.core.session_create import title_from_prompt
 from backend.web.core.spoken import strip_markdown
 
@@ -101,8 +103,57 @@ _ORD_RX = r"(?:[1-9][0-9]?(?:st|nd|rd|th)|" + "|".join(_ORDS) + ")"
 # old approach" stays words for the agent).
 _VERB_RX = r"(?:switch|go|change|jump|focus|open|show|select) (?:over )?to"
 
+
+def norm(text) -> str:
+    """mobile.js ``voiceNorm``: lowercase, curly quotes straightened, anything
+    but letters, digits, ``'`` and spaces made a space, spaces collapsed."""
+    s = str(text or "").lower().replace("’", "'").replace("`", "'")
+    s = re.sub(r"[^a-z0-9' ]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+# A default "stop" / "hush" phrase (core.voice_words.DEFAULTS) → the spoken
+# variants heard while that phrase is in the person's list; any other phrase
+# (a default without variants, or one the person added) is matched whole.
+_VARIANTS = {
+    "stop listening": r"stop (?:listening|recording|dictating|the mic|the microphone)",
+    "mic off": (
+        r"(?:mic|microphone) off"
+        r"|turn (?:off the (?:mic|microphone)|the (?:mic|microphone) off)"
+    ),
+    "that's all": r"that'?s all|that is all",
+    "done talking": r"(?:i'?m |i am )?done talking",
+    "stop talking": r"stop (?:talking|speaking|reading|saying that)",
+    "enough": r"(?:that'?s |that is )?enough|enough (?:talking|of that)",
+}
+#: The kinds whose words the person may change (``voice.words``).
+_WORD_KINDS = ("hush", "stop")
+
+
+@lru_cache(maxsize=32)
+def _words_rx(phrases: Tuple[str, ...]) -> "re.Pattern":
+    """The whole-phrase pattern for one kind's ``phrases``: each default's
+    :data:`_VARIANTS`, the rest as said (normalised like the text, an
+    apostrophe optional)."""
+    parts = [_VARIANTS[p] for p in phrases if p in _VARIANTS]
+    literal = [norm(p) for p in phrases if p not in _VARIANTS]
+    alt = _voice_words.phrase_regex([p for p in literal if p])
+    parts.append(alt.replace("'", "'?"))
+    return re.compile(r"^(?:%s)$" % "|".join(parts))
+
+
+def _kind_rx(kind: str, words: Optional[dict]) -> "re.Pattern":
+    """``kind``'s pattern for the effective ``words`` (None = the defaults)."""
+    got = (words or {}).get(kind)
+    if not isinstance(got, (list, tuple)) or not got:
+        got = _voice_words.DEFAULTS[kind]
+    return _words_rx(tuple(str(p) for p in got))
+
+
 # The phone's table, in its order (mobile.js VOICE_CMD), plus "list" and the
-# wider "stop" (the client stops listening; typed text stays).
+# wider "stop" (the client stops listening; typed text stays). "hush" and
+# "stop" are the person's words (``voice.words``): :func:`command` swaps in
+# their patterns; these are the defaults'.
 _CMDS = [
     ("cancel", re.compile(r"^(?:cancel|never ?mind|scratch that|forget it)$")),
     ("switch", re.compile(r"^%s (.+)$" % _VERB_RX)),
@@ -130,25 +181,8 @@ _CMDS = [
     ("off", re.compile(r"^(?:voice off|turn voice off|turn off voice)$")),
     # "Stop talking": the client cuts what is being said and drops the queue,
     # and keeps listening if it was — unlike "stop", which stops the mic.
-    (
-        "hush",
-        re.compile(
-            r"^(?:stop (?:talking|speaking|reading|saying that)"
-            r"|be quiet|quiet|hush|shut up|(?:that'?s |that is )?enough"
-            r"|enough (?:talking|of that))$"
-        ),
-    ),
-    (
-        "stop",
-        re.compile(
-            r"^(?:stop"
-            r"|stop (?:listening|recording|dictating|the mic|the microphone)"
-            r"|(?:mic|microphone) off"
-            r"|turn (?:off the (?:mic|microphone)|the (?:mic|microphone) off)"
-            r"|pause listening|that'?s all|that is all"
-            r"|(?:i'?m |i am )?done talking)$"
-        ),
-    ),
+    ("hush", _kind_rx("hush", None)),
+    ("stop", _kind_rx("stop", None)),
 ]
 
 # "switch to session three", "go to 2", "session three", "number 4", "the
@@ -232,14 +266,6 @@ _LEAD = ("ok", "okay", "hey", "please")
 # Words around a spoken repository name that are not part of it.
 _REPO_LEAD = ("the", "my", "our")
 _REPO_TAIL = ("repo", "repository", "project", "folder", "codebase", "checkout")
-
-
-def norm(text) -> str:
-    """mobile.js ``voiceNorm``: lowercase, curly quotes straightened, anything
-    but letters, digits, ``'`` and spaces made a space, spaces collapsed."""
-    s = str(text or "").lower().replace("’", "'").replace("`", "'")
-    s = re.sub(r"[^a-z0-9' ]+", " ", s)
-    return re.sub(r"\s+", " ", s).strip()
 
 
 def _end(text) -> str:
@@ -454,7 +480,7 @@ def _question_command(text: str) -> Optional[dict]:
     return {"kind": "question", "target": tgt}
 
 
-def command(text) -> Optional[dict]:
+def command(text, words: Optional[dict] = None) -> Optional[dict]:
     """The command ``text`` is, or None (a prompt): ``{"kind", "arg"}``, and
     for ``new`` ``{"kind": "new", "name", "repo", "task"}`` as said (the repo
     words unresolved — :func:`plan_new` resolves them); ``{"kind":
@@ -462,7 +488,9 @@ def command(text) -> Optional[dict]:
     "pick", "index"}`` ("the second one": :func:`answer` decides), ``{"kind":
     "answer", "choice", "number"?, "words", "target"}`` and ``{"kind":
     "question", "target"}`` (targets unresolved — :func:`answer` resolves
-    them against the rows)."""
+    them against the rows). ``words``: the person's effective voice words
+    (``core.voice_words.effective``) — ``hush`` and ``stop`` are theirs;
+    None = the defaults."""
     w = _Words(text)
     if not w.text:
         return None
@@ -485,6 +513,8 @@ def command(text) -> Optional[dict]:
         if m:
             return {"kind": "switch_index", "index": _count(m.group(1))}
     for kind, rx in _CMDS[1:]:
+        if kind in _WORD_KINDS and words is not None:
+            rx = _kind_rx(kind, words)
         m = rx.match(w.text)
         if m:
             return {
@@ -812,20 +842,26 @@ def _answer_or_question(cmd: dict, session: str, rows, title: str) -> dict:
 
 
 def answer(
-    text, session: str, rows, now: Optional[float] = None, title: str = ""
+    text,
+    session: str,
+    rows,
+    now: Optional[float] = None,
+    title: str = "",
+    words: Optional[dict] = None,
 ) -> dict:
     """The answer to ``text`` said to ``session`` (a title, ``""`` for none).
 
     ``title``: the client's mapping of the phrase's numbered target ("session
     three, yes") or next/previous to one of its titles, sent back — the
     numbering is the client's (its rail or list order), so without it those
-    answers carry ``index`` / ``delta`` and no ``say``.
+    answers carry ``index`` / ``delta`` and no ``say``. ``words``: as
+    :func:`command`'s.
 
     ``new`` comes back as :func:`command` parsed it — the route resolves it
     with :func:`plan_new` and creates the session; ``answer`` and
     ``question`` that name a session come back for :func:`finish` (the route
     reads that session's dialog). Every other kind is final."""
-    cmd = command(text)
+    cmd = command(text, words)
     if cmd is None:
         return {"kind": "prompt"}
     now = time.time() if now is None else now

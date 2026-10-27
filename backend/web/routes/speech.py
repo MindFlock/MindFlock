@@ -42,6 +42,7 @@ Status codes, in the order they are checked:
 from __future__ import annotations
 
 import asyncio
+import copy
 import re
 import time
 from typing import Optional, Tuple
@@ -54,6 +55,7 @@ from backend.web.core import speech as _speech
 from backend.web.core import speech_install as _install
 from backend.web.core import speech_stream as _stream
 from backend.web.core import voice as _voice
+from backend.web.core import voice_words as _voice_words
 from backend.web.core import wake as _wake
 
 router = APIRouter()
@@ -74,6 +76,15 @@ def _settings():
     from backend.config import settings as settings_store
 
     return settings_store.load_settings()
+
+
+def _wake_word() -> str:
+    """The effective wake word (``core.voice_words``); ours when the
+    settings can't be read."""
+    try:
+        return _voice_words.effective(_settings())["wake"]
+    except Exception:  # noqa: BLE001 — the wake route must still answer
+        return _voice_words.DEFAULTS["wake"]
 
 
 def _refusal(kind: str) -> Tuple[Optional[_speech.Backend], Optional[JSONResponse]]:
@@ -129,6 +140,9 @@ def voice_get(allowed: bool = Depends(_auth.configure_allowed)) -> JSONResponse:
 
         {"stt": "phone"|"server", "tts": "phone"|"server",
          "approve_dialogs": bool, "agent_words": bool, "ask_popup": bool,
+         "words": {"send": [phrases], "end": […], "clear": […],
+                   "stop": […], "hush": […], "wake": str},
+         "words_default": {… the same shape: ours …},
          "backends": {"stt": [ids], "tts": [ids]},
          "server_ready": {"stt": bool, "tts": bool, "detail": str, …},
          "system": {"available": bool, "platform": str, "detail": str,
@@ -142,7 +156,10 @@ def voice_get(allowed: bool = Depends(_auth.configure_allowed)) -> JSONResponse:
     ``clear-key``), so the page can disable those buttons. ``server_ready``
     and ``system`` are :func:`core.speech.describe`'s offline verdict on the
     saved fields (no network, no model load; the built-in engine is probed
-    once per process)."""
+    once per process). ``words`` is :func:`core.voice_words.effective` —
+    every kind present, the person's own where they changed it — and every
+    client builds its matchers from it (``voice_words.phrase_regex``'s
+    contract); ``words_default`` is ours, for Settings' "reset"."""
     s = _settings()
     body = {
         "stt": s.voice.stt,
@@ -151,6 +168,8 @@ def voice_get(allowed: bool = Depends(_auth.configure_allowed)) -> JSONResponse:
         "agent_words": bool(s.notifications.ntfy_agent_words),
         "ask_popup": bool(s.notifications.ask_popup),
         "say_all": _voice.say_all(),
+        "words": _voice_words.effective(s),
+        "words_default": copy.deepcopy(_voice_words.DEFAULTS),
         "configure_allowed": bool(allowed),
     }
     body.update(_speech.describe())
@@ -237,7 +256,8 @@ async def _clip(request: Request):
 
 @router.post("/api/voice/wake")
 async def voice_wake(request: Request, lang: str = "") -> JSONResponse:
-    """Is this short clip the wake word ("MindFlock") on its own? The body
+    """Is this short clip the wake word on its own — ``voice.words``'s
+    ``wake`` (``core.voice_words``; "MindFlock" by default)? The body
     and ``Content-Type`` are exactly ``/transcribe``'s; the clip is
     recognised with the word as the decoder's hint — on the fast streaming
     model where the backend has one (``Backend.wake_transcribe``) — and
@@ -252,18 +272,19 @@ async def voice_wake(request: Request, lang: str = "") -> JSONResponse:
     if not isinstance(got, tuple):
         return got
     audio, mime, backend = got
+    word = _wake_word()
     started = time.monotonic()
     try:
         text = await asyncio.to_thread(
-            backend.wake_transcribe, audio, mime, _lang_hint(lang), "MindFlock"
+            backend.wake_transcribe, audio, mime, _lang_hint(lang), _wake.hint(word)
         )
     except Exception as err:  # noqa: BLE001
         return _failed(err)
     return JSONResponse(
         {
-            "wake": _wake.is_wake(text),
+            "wake": _wake.is_wake(text, word),
             "text": text,
-            "word": _wake.WAKE_WORD,
+            "word": word,
             "backend": backend.id,
             "ms": int((time.monotonic() - started) * 1000),
         }

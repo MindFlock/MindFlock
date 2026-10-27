@@ -230,6 +230,13 @@ def test_every_settings_field_is_classified():
             )
 
 
+def test_the_voice_words_are_the_persons():
+    """The person's keywords are how THEY talk, on every device."""
+    assert "words" in settings_sync.SYNCED["voice"]
+    assert "words" not in settings_sync.LOCAL["voice"]
+    assert settings_sync.LABELS["voice.words"] == "Voice words"
+
+
 def test_the_voice_models_are_this_machines():
     """Which whisper models run is about THIS machine's CPU and RAM — the
     streaming model as much as the one-shot one."""

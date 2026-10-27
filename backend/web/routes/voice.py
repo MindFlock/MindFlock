@@ -32,7 +32,8 @@ condensation:
   ``answer`` (a session's dialog: ``dialog_id`` + ``keys`` the client posts
   to ``/answer`` — nothing is pressed here — or ``no_dialog``), ``question``
   (its dialog, or a question it asked in prose, read out), or one the client carries out itself (``cancel``,
-  ``stop``, ``off``, ``repeat``, ``condense``; no ``say``). An optional
+  ``stop``, ``hush``, ``off``, ``repeat``, ``condense``; no ``say``) —
+  ``stop`` and ``hush`` are the person's ``voice.words``. An optional
   ``title`` maps a numbered target the client resolved ("session three,
   yes" → its title) for the full answer. The rows are ``GET
   /api/instances``'s own (other devices' ``<device>::<title>`` rows
@@ -71,6 +72,7 @@ from backend.web.core import session_create as _session_create
 from backend.web.core import spoken as _spoken
 from backend.web.core import voice as _voice
 from backend.web.core import voice_router as _voice_router
+from backend.web.core import voice_words as _voice_words
 from backend.web.routes import _server
 
 router = APIRouter()
@@ -392,6 +394,18 @@ async def _finish_answer(ans: dict, rows: list) -> dict:
     return _voice_router.finish(ans, dialog, spoken)
 
 
+def _words() -> dict:
+    """The person's effective voice words (``core.voice_words.effective``):
+    the router's ``stop`` / ``hush``. The defaults when the settings can't
+    be read. Blocking; module-level so tests replace it."""
+    try:
+        from backend.config import settings as settings_store
+
+        return _voice_words.effective(settings_store.load_settings())
+    except Exception:  # noqa: BLE001 — the router must still answer
+        return _voice_words.effective({})
+
+
 #: Commands a phrase said to a session showing Claude's question tool may
 #: really be its answer: "go back" (a tab, not the previous session) and, on
 #: the review screen, "cancel". A prompt (no command) may be one too.
@@ -424,7 +438,8 @@ async def voice_route(request: Request) -> JSONResponse:
     text = str(payload.get("text") or "")
     session = str(payload.get("session") or "")
     title = str(payload.get("title") or "")
-    cmd = _voice_router.command(text)
+    words = await asyncio.to_thread(_words)
+    cmd = _voice_router.command(text, words)
     if session and (cmd is None or cmd["kind"] in _SELECT_FIRST):
         picked = await _select_answer(text, session, request)
         if picked is not None:
@@ -436,7 +451,7 @@ async def voice_route(request: Request) -> JSONResponse:
     rows = await asyncio.to_thread(_session_rows, request)
     if cmd["kind"] == "new":
         return JSONResponse(await _start_new(text, session, rows, request))
-    ans = _voice_router.answer(text, session, rows, title=title)
+    ans = _voice_router.answer(text, session, rows, title=title, words=words)
     if ans.get("kind") in ("answer", "question") and ans.get("title"):
         ans = await _finish_answer(ans, rows)
     return JSONResponse(ans)
