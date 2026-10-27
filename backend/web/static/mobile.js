@@ -2864,6 +2864,8 @@
   var voiceHandsEl = document.getElementById("voice-handsfree");
   var voicePttEl = document.getElementById("voice-ptt");
   var voiceRepliesEl = document.getElementById("voice-replies");
+  var voiceWakeEl = document.getElementById("voice-wake");
+  var voiceWakeNote = document.getElementById("voice-wake-note");
   var voiceRateEl = document.getElementById("voice-rate");
   var voiceRateVal = document.getElementById("voice-rate-val");
   var voiceVoiceEl = document.getElementById("voice-voice");
@@ -2878,7 +2880,7 @@
 
   var ANDROID = /Android/i.test(navigator.userAgent);
   var SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition || null;
-  var VOICE_STORE = "cs_voice";          // localStorage: session, on, rate, voiceName, handsFree, ptt, replies
+  var VOICE_STORE = "cs_voice";          // localStorage: session, on, rate, voiceName, handsFree, ptt, replies, wake
   var VOICE_LINE_MAX_AGE_MS = 60000;     // a queued line this old when its turn comes is dropped, not said late
   var VOICE_DICT_IDLE_MS = 120000;       // listening ends after this long without a word (the words stay)
   var VOICE_RAPID_RESTART_MAX = 8;       // recognizers that die within a second of starting, in a row
@@ -3280,6 +3282,68 @@
   function voiceDebugOn() {
     try { var f = localStorage.getItem("cs_voice_debug"); return !!f && f !== "0" && f !== "false"; } catch (e) { return false; }
   }
+  // The wake word's lone-utterance detector (ServerSTT.standby feeds it; see
+  // "the wake word" in the state machine): the RMS of each block and its
+  // length in ms. A wake is a word or two ON ITS OWN — VOICE_WAKE_QUIET_MS
+  // of quiet before it, VOICE_WAKE_MIN_MS..VOICE_WAKE_MAX_MS from its first
+  // loud block to its last, VOICE_WAKE_QUIET_MS of quiet after (dips shorter
+  // than that, the stop in "mind·flock", are inside the word). Shorter is a
+  // click or a cough, longer a sentence: both dropped, nothing sent. The
+  // noise floor and "loud" are the recorder's (scaled to the block's length:
+  // its rule is per 85 ms block).
+  var VOICE_WAKE_BLOCK = 2048;           // the standby's ScriptProcessor block (~43 ms at 48 kHz)
+  var VOICE_WAKE_QUIET_MS = 350;         // quiet that ends a lone utterance, and that must come before it
+  var VOICE_WAKE_MIN_MS = 250;           // its sound lasts at least this long...
+  var VOICE_WAKE_MAX_MS = 1600;          // ...and at most this (longer is a sentence: never a wake)
+  var VOICE_WAKE_LEAD_MS = 150;          // audio kept from before its first loud block (the word's soft start)
+  function voiceWakeNew() {
+    return { t: 0, floor: 0, phase: "wait", quiet: 0, from: 0, last: 0, tail: 0 };
+  }
+  // One block: d's clock moves on by ms. → null, or what just ended:
+  // {kind: "clip", from, to, ms} — from..to on d's clock (ms), the lead-in
+  // and the quiet tail included; ms = the sound's length — or {kind:
+  // "short" | "long"}. phase: "wait" (no quiet before yet: the start, or
+  // speech that went on), "ready" (quiet enough), "word" (sounding).
+  function voiceWakeStep(d, rms, ms) {
+    var at = d.t, k = ms / 85;
+    rms = Number(rms) || 0;
+    d.t += ms;
+    d.floor = d.floor === 0 ? rms : Math.min(rms, d.floor * (1 + 0.05 * k) + 0.001 * k);
+    var loud = rms > Math.max(VOICE_RMS_SPEECH, d.floor * 3);
+    if (d.phase === "word") {
+      if (loud) {
+        d.last = d.t;
+        d.tail = 0;
+        if (d.last - d.from > VOICE_WAKE_MAX_MS) { d.phase = "wait"; d.quiet = 0; return { kind: "long" }; }
+        return null;
+      }
+      d.tail += ms;
+      if (d.tail < VOICE_WAKE_QUIET_MS) return null;
+      d.phase = "ready";   // its quiet tail is the quiet before the next one
+      d.quiet = d.tail;
+      var span = d.last - d.from;
+      if (span < VOICE_WAKE_MIN_MS) return { kind: "short", ms: span };
+      return { kind: "clip", from: Math.max(0, d.from - VOICE_WAKE_LEAD_MS), to: d.t, ms: span };
+    }
+    if (loud) {
+      if (d.phase === "ready") { d.phase = "word"; d.from = at; d.last = d.t; d.tail = 0; }
+      else d.quiet = 0;   // no quiet before it: part of something longer
+      return null;
+    }
+    d.quiet += ms;
+    if (d.phase === "wait" && d.quiet >= VOICE_WAKE_QUIET_MS) d.phase = "ready";
+    return null;
+  }
+  // The samples of the blocks ({at: ms on the detector's clock, x}) that
+  // overlap from..to, joined.
+  function voiceWakeSlice(blocks, from, to, rate) {
+    var keep = blocks.filter(function (b) { return b.at < to && b.at + (b.x.length * 1000) / rate > from; });
+    var n = 0, at = 0;
+    keep.forEach(function (b) { n += b.x.length; });
+    var out = new Float32Array(n);
+    keep.forEach(function (b) { out.set(b.x, at); at += b.x.length; });
+    return out;
+  }
   function ServerSTT() {
     var stream = null;        // the microphone, kept across turns
     var token = null;         // one object per start(); null = not active
@@ -3289,6 +3353,8 @@
     var live = null;          // the streamed phrase (recStart's g) until its words are in
     var clockTimer = null, capTimer = null;
     var keepTimer = null, keepHidden = false;   // keep(): when the warm microphone goes back
+    var standing = null;      // the wake word's standby (standby()); null = not running
+    var holding = false;      // hold(): the standby wants the microphone kept (it may be paused)
     function available() {
       return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia &&
                 (window.AudioContext || window.webkitAudioContext));
@@ -3304,12 +3370,19 @@
     function micStop(s) {
       if (s) { try { s.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} }
     }
+    // One ask at a time: the standby and a tap's recording asking together
+    // share it (two streams would leave one open, the mic indicator on).
+    var asking = null;
     function getStream() {
       clearTimeout(keepTimer);
       if (micLive(stream)) return Promise.resolve(stream);
+      if (asking) return asking;
       micStop(stream);
       stream = null;
-      return navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) { stream = s; return s; });
+      asking = navigator.mediaDevices.getUserMedia({ audio: true }).then(
+        function (s) { asking = null; stream = s; return s; },
+        function (err) { asking = null; throw err; });
+      return asking;
     }
     // The microphone stays warm VOICE_KEEP_STREAM_MS after its last phrase,
     // so the next tap starts at once (no getUserMedia: on a phone that is
@@ -3318,13 +3391,16 @@
     // speaking: the reply opens listening by itself, with no tap to ask for
     // the mic again) the grace starts over; once the page is hidden it is
     // VOICE_KEEP_HIDDEN_MS (release(ms)) and never starts over.
-    // voice.keepMs is VOICE_KEEP_STREAM_MS (tests shorten it).
+    // voice.keepMs is VOICE_KEEP_STREAM_MS (tests shorten it). While the
+    // wake word's standby runs or wants the microphone (hold()), the page in
+    // front, the grace only starts over: the stream is never given back.
     function keep(ms, hidden) {
       clearTimeout(keepTimer);
       keepHidden = !!hidden;
       if (!stream) return;
       keepTimer = setTimeout(function () {
         if (token) return;   // in use again (start() clears the timer; this is a belt)
+        if (!document.hidden && (standing || holding)) { keep(); return; }
         if (!document.hidden && (keepHidden || /^(sending|working|speaking)$/.test(voice.state))) {
           keep();
           return;
@@ -3431,6 +3507,7 @@
     }
     function start(h) {
       stop();
+      standbyStop();   // a belt: the state machine pauses the standby before it listens
       if (!available()) { if (h.onError) h.onError("unavailable"); return false; }
       var mine = { h: h };
       token = mine;
@@ -3751,17 +3828,97 @@
     // (the page hid), give it back that long from now unless it is used again.
     function release(ms) {
       discard();
+      standbyStop();
       if (ms > 0) { keep(ms, true); return; }
       clearTimeout(keepTimer);
       var s = stream;
       stream = null;
       micStop(s);
     }
+    // --- the wake word's standby (voiceWakeSync drives it) ---
+    // The warm stream → its own ScriptProcessor(VOICE_WAKE_BLOCK) → the
+    // lone-utterance detector (voiceWakeStep), on the phone: nothing leaves
+    // it until a lone utterance ends, and then only that clip (+ its
+    // lead-in), resampled and encoded as a recording's clip is, handed to
+    // h.onClip(blob) — if h.wanted() still says a check may go (the rate
+    // limit, one in flight). h.onLevel feeds the mic's ring; h.onReady(ctx)
+    // once the audio flows (or not: a context that is not running delivers
+    // no blocks); h.onError(code) with start()'s codes. The blocks a clip
+    // can reach are all it keeps.
+    function standby(h) {
+      if (standing) { standing.h = h; return true; }
+      if (token || !available()) return false;
+      var w = standing = { h: h, d: voiceWakeNew(), blocks: [], rate: 0, source: null, proc: null, mute: null };
+      getStream().then(function (s) {
+        if (standing !== w) { if (!token && !standing) keep(); return; }
+        var ctx = voiceAudioCtx();
+        try {
+          w.rate = ctx.sampleRate;
+          w.source = ctx.createMediaStreamSource(s);
+          w.proc = ctx.createScriptProcessor(VOICE_WAKE_BLOCK, 1, 1);
+          w.mute = ctx.createGain();
+          w.mute.gain.value = 0;
+          w.source.connect(w.proc);
+          w.proc.connect(w.mute);
+          w.mute.connect(ctx.destination);
+        } catch (e) {
+          standbyDrop(w);
+          standing = null;
+          if (h.onError) h.onError("start-failed");
+          return;
+        }
+        w.proc.onaudioprocess = function (ev) { if (standing === w) standbyBlock(w, ev.inputBuffer.getChannelData(0)); };
+        if (w.h.onReady) w.h.onReady(ctx);
+      }).catch(function (err) {
+        if (standing !== w) return;
+        standing = null;
+        if (w.h.onError) w.h.onError(errCode(err));
+      });
+      return true;
+    }
+    function standbyBlock(w, data) {
+      var block = new Float32Array(data);   // the engine reuses the buffer
+      if (!block.length) return;
+      var sum = 0;
+      for (var i = 0; i < block.length; i++) sum += block[i] * block[i];
+      var rms = Math.sqrt(sum / block.length), h = w.h;
+      w.blocks.push({ at: w.d.t, x: block });
+      var r = voiceWakeStep(w.d, rms, (block.length * 1000) / w.rate);
+      var reach = VOICE_WAKE_MAX_MS + VOICE_WAKE_QUIET_MS + VOICE_WAKE_LEAD_MS + 500;
+      while (w.blocks.length && w.blocks[0].at < w.d.t - reach) w.blocks.shift();
+      if (h.onLevel) h.onLevel(voiceLevelOf(rms, w.d.floor));
+      if (!r || r.kind !== "clip" || (h.wanted && !h.wanted())) return;
+      voiceResampleClip(voiceWakeSlice(w.blocks, r.from, r.to, w.rate), w.rate).then(function (pcm) {
+        if (standing !== w) return;
+        if (w.h.onClip) w.h.onClip(new Blob([voiceWavEncode(pcm, VOICE_WAV_RATE)], { type: "audio/wav" }), r);
+      });
+    }
+    function standbyDrop(w) {
+      if (w.proc) w.proc.onaudioprocess = null;
+      [w.source, w.proc, w.mute].forEach(function (n) { if (n) { try { n.disconnect(); } catch (e) {} } });
+      w.source = w.proc = w.mute = null;
+    }
+    // Pause / stop the standby: the stream stays warm (keep()'s grace; hold()
+    // keeps it while the standby wants it back).
+    function standbyStop() {
+      var w = standing;
+      standing = null;
+      if (!w) return;
+      standbyDrop(w);
+      if (!token) keep();
+    }
+    function standbyOn() { return !!standing; }
+    // The standby wants the microphone (on, the page in front), running or
+    // paused: the grace never gives it back meanwhile. Off: the grace that
+    // is already running (keep() re-arms it while held; a hidden page's is
+    // VOICE_KEEP_HIDDEN_MS) gives it back when it ends.
+    function hold(on) { holding = !!on; }
     function active() { return !!token; }
     function pending() { return uploading; }
     function warm() { return !!stream; }
     return { name: "server", available: available, start: start, stop: stop, finish: finish,
-             active: active, pending: pending, release: release, warm: warm };
+             active: active, pending: pending, release: release, warm: warm,
+             standby: standby, standbyStop: standbyStop, standbyOn: standbyOn, hold: hold };
   }
 
   // --- ServerTTS: POST /api/voice/speak → Web Audio --------------------------
@@ -3966,7 +4123,7 @@
     session: "",                 // the title voice is on for (== current while on)
     stt: null,
     tts: null,
-    prefs: { rate: 1, voiceName: "", handsFree: false, ptt: "toggle", replies: "mine" },   // replies: off | mine | all
+    prefs: { rate: 1, voiceName: "", handsFree: false, ptt: "toggle", replies: "mine", wake: false },   // replies: off | mine | all; wake: listen for "MindFlock"
     dictated: false,             // a dictated phrase is in the box (since it was last emptied / sent)
     expectSay: null,             // the last prompt sent asked for a Say line (null: none sent here yet)
     lastPrompt: null,            // Diagnostics: {dictated, say} of that prompt
@@ -4025,6 +4182,7 @@
       voice.prefs.handsFree = !!j.handsFree;
       voice.prefs.ptt = j.ptt === "hold" ? "hold" : "toggle";
       voice.prefs.replies = voiceRepliesPref(j.replies);
+      voice.prefs.wake = j.wake === true;
       voice.saved = { session: String(j.session || ""), on: !!j.on };
     } catch (e) {}
   }
@@ -4043,6 +4201,7 @@
         handsFree: voice.prefs.handsFree,
         ptt: voice.prefs.ptt,
         replies: voice.prefs.replies,
+        wake: voice.prefs.wake,
       }));
     } catch (e) {}
   }
@@ -4078,6 +4237,7 @@
       clearTimeout(voiceSpeech.timer);
       voiceSpeech.timer = setTimeout(voiceSpeechPump, 0);
     }
+    voiceWakeSync();   // the wake word's standby follows the state
   }
   // tail: the end of text still settling (a stream's partial) — greyed
   // after the settled words; the caption's text is the whole either way.
@@ -4098,7 +4258,9 @@
   function voiceError(msg) {
     voice.lastError = msg || "";
     voiceErrEl.textContent = msg || "";
+    if (voiceErrEl.classList.contains("hidden") === !msg) return;
     voiceErrEl.classList.toggle("hidden", !msg);
+    fitSoon();   // the line takes terminal rows, as the strip does
   }
   function voiceIsListening() {
     return voice.state === "listening" || voice.state === "awaiting" || voice.state === "dialog";
@@ -4116,8 +4278,9 @@
   // A requestAnimationFrame loop eases the shown level toward it
   // (voiceLevelStep) and writes one CSS variable, --lvl, which the CSS turns
   // into transforms — no layout. It runs only while there is a level to show.
+  // ring: the ring alone, never the meter (the wake word's standby).
   var voiceRing = { shown: 0, target: 0, at: 0, raf: 0, painted: "", hearing: false };
-  function voiceLevel(v) {
+  function voiceLevel(v, ring) {
     var R = voiceRing;
     if (v === null || v === undefined || v < 0) {
       if (!voiceLevelEl.classList.contains("hidden")) { voiceLevelEl.classList.add("hidden"); fitSoon(); }
@@ -4126,7 +4289,7 @@
       voiceRingPaint(0);
       return;
     }
-    if (voiceLevelEl.classList.contains("hidden")) { voiceLevelEl.classList.remove("hidden"); fitSoon(); }
+    if (!ring && voiceLevelEl.classList.contains("hidden")) { voiceLevelEl.classList.remove("hidden"); fitSoon(); }
     R.target = Math.min(1, Math.max(0, Number(v) || 0));
     if (!R.raf && window.requestAnimationFrame) { R.at = Date.now(); R.raf = requestAnimationFrame(voiceRingFrame); }
   }
@@ -4385,6 +4548,7 @@
   // off too (Everything reads every session): then the strip shows for it.
   function voiceHushShow() {
     var on = !!voiceSpeech.playing;
+    voiceWakeSpeaking(on);
     if (voiceHushBtn.classList.contains("hidden") === !on) return;
     voiceHushBtn.classList.toggle("hidden", !on);
     voiceStrip.classList.toggle("hidden", voice.state === "off" && !voice.hearPending && !on);
@@ -5975,7 +6139,7 @@
     voice.tts.prime();
     // The server adapters play and meter through one AudioContext, which
     // iOS and Chrome run only when it was made (or resumed) in a gesture.
-    if (voice.cfg.stt === "server" || voice.cfg.tts === "server") voiceAudioCtx();
+    if (voice.cfg.stt === "server" || voice.cfg.tts === "server" || voice.prefs.wake) voiceAudioCtx();
     voice.primed = true;
     try {
       if (navigator.audioSession && navigator.audioSession.type !== "playback") navigator.audioSession.type = "playback";
@@ -6036,6 +6200,241 @@
     voiceSetState("off", "");
     voiceError("");
     voicePersist();
+  }
+
+  // --- the wake word: "MindFlock" on its own starts listening --------------------
+  // prefs.wake (the sheet's "Listen for “MindFlock”", off by default). While
+  // voice is on, the page is in front and nothing else has the mic or the
+  // speaker — not listening, nothing being recorded or on its way, no line
+  // being said nor VOICE_WAKE_AFTER_SPEECH_MS after one (voiceWakeGate) — the
+  // server recognizer's warm stream feeds the standby (ServerSTT.standby): a
+  // level detector on the phone (voiceWakeStep), no server traffic. A lone
+  // utterance — quiet before it, VOICE_WAKE_MIN_MS..VOICE_WAKE_MAX_MS of
+  // sound, quiet after — is cut out (+VOICE_WAKE_LEAD_MS of lead-in) and sent
+  // as a 16 kHz WAV to POST /api/voice/wake: one in flight, one per
+  // VOICE_WAKE_GAP_MS. The server says whether it was the word alone (a
+  // sentence never is). wake → the chime (voiceWakeChime), "Yes?", a tick,
+  // then listening exactly as a tap does (toggle); anything else → nothing.
+  // 409 (no recognizer) / 404 (an older server) / the mic refused → the pref
+  // goes off and the strip says why. The mic's ring shows the standby
+  // (data-standby) and still moves with the room. Hidden → the standby stops
+  // and the stream goes back as for any hidden page; visible → it starts
+  // again (a new getUserMedia when the browser cut the stream); a context the
+  // browser will not resume outside a gesture (iOS) waits for one tap
+  // anywhere. While the phone's own recognizer listens, the stream is given
+  // back: that recognizer needs the mic to itself.
+  var VOICE_WAKE_GAP_MS = 1500;           // one check per this long
+  var VOICE_WAKE_AFTER_SPEECH_MS = 500;   // no standby while the page speaks and this long after
+  var VOICE_WAKE_CHIME_MS = 130;          // the chime's length: listening opens after it
+  var VOICE_WAKE_TIMEOUT_MS = 10000;      // a check's own cap
+  var VOICE_WAKE_GESTURE_MS = 5000;       // a refused mic this long after a tap is a refusal, else "tap once"
+  var voiceWake_ = { inflight: false, at: 0, speaking: false, spokeAt: 0, timer: null, needTap: false,
+                     tapArmed: false, gestureAt: 0, gen: 0, checks: 0, wakes: 0, chimes: 0, last: null, note: "" };
+  voice.wakeState = voiceWake_;   // tests read it
+  // Any tap: a refused microphone right after one is the person's answer.
+  document.addEventListener("click", function () { voiceWake_.gestureAt = Date.now(); }, true);
+  // Pure: why a lone utterance is not checked now ("" = it is). g: on,
+  // hidden, listening, recording, speaking, spokeAgo, inflight, sinceCheck.
+  function voiceWakeGate(g) {
+    if (!g.on) return "off";
+    if (g.hidden) return "hidden";
+    if (g.listening) return "listening";
+    if (g.recording) return "recording";
+    if (g.speaking || g.spokeAgo < VOICE_WAKE_AFTER_SPEECH_MS) return "speaking";
+    if (g.inflight) return "inflight";
+    if (g.sinceCheck < VOICE_WAKE_GAP_MS) return "rate";
+    return "";
+  }
+  voice.wakeGate = voiceWakeGate;
+  function voiceWakeLive() {
+    var A = voiceAdapters, W = voiceWake_, now = Date.now();
+    return voiceWakeGate({
+      on: !!voice.prefs.wake && voice.state !== "off" && !W.needTap,
+      hidden: document.hidden,
+      listening: voiceIsListening(),
+      recording: A.serverStt.active() || A.serverStt.pending() || A.phoneStt.active(),
+      speaking: !!voiceSpeech.playing,
+      spokeAgo: now - W.spokeAt,
+      inflight: W.inflight,
+      sinceCheck: now - W.at,
+    });
+  }
+  // The standby follows the gate: it runs unless the gate is shut for more
+  // than the check itself (in flight, the rate limit: the detector goes on).
+  function voiceWakeSync() {
+    var A = voiceAdapters.serverStt, W = voiceWake_;
+    var want = !!voice.prefs.wake && voice.state !== "off" && !document.hidden;
+    if (want && !A.available()) { voiceWakeOff("No microphone for a web page here — listening for “MindFlock” is off."); return; }
+    var ready = voice.cfg.server_ready || {};
+    if (want && ready.stt === false) {
+      voiceWakeOff("Listening for “MindFlock” is off: the server has no speech recognition ready (Settings → Voice).");
+      return;
+    }
+    A.hold(want);
+    var why = want ? voiceWakeLive() : "off";
+    var run = why === "" || why === "inflight" || why === "rate";
+    clearTimeout(W.timer);
+    if (why === "speaking" && !voiceSpeech.playing) {
+      W.timer = setTimeout(voiceWakeSync, Math.max(0, VOICE_WAKE_AFTER_SPEECH_MS - (Date.now() - W.spokeAt)) + 20);
+    }
+    if (run && !A.standbyOn()) A.standby(voiceWakeHandlers);
+    else if (!run && A.standbyOn()) {
+      A.standbyStop();
+      if (!voiceIsListening()) voiceLevel(null);
+    }
+    if (want && why === "listening" && voice.stt !== A && A.warm()) A.release();
+    if (voiceBtn.hasAttribute("data-standby") !== run) voiceBtn.toggleAttribute("data-standby", run);
+    voiceWakeNoteShow();
+  }
+  var voiceWakeHandlers = {
+    onLevel: function (v) { if (!voiceIsListening()) voiceLevel(v, true); },
+    wanted: function () { return voiceWakeLive() === ""; },
+    onClip: function (blob) { voiceWakeCheck(blob); },
+    onReady: function (ctx) { voiceWakeCtxCheck(ctx); },
+    onError: function (code) {
+      // Refused right after a tap: refused. Long after (the page came back,
+      // no gesture): the browser wants one — a tap anywhere tries again.
+      if (code === "not-allowed" && Date.now() - voiceWake_.gestureAt > VOICE_WAKE_GESTURE_MS) { voiceWakeNeedTap(); return; }
+      voiceWakeOff(code === "not-allowed" ? "Microphone permission denied — listening for “MindFlock” is off."
+        : code === "audio-capture" ? "No microphone found — listening for “MindFlock” is off."
+        : "The microphone did not start (" + code + ") — listening for “MindFlock” is off.");
+    },
+  };
+  // The audio flows only through a running context: one the browser keeps
+  // suspended (iOS, back from the background, no gesture) waits for a tap.
+  function voiceWakeCtxCheck(ctx) {
+    if (!ctx || ctx.state === "running") return;
+    var done = false;
+    function check() {
+      if (done) return;
+      done = true;
+      if (ctx.state !== "running" && voice.prefs.wake && voice.state !== "off") voiceWakeNeedTap();
+    }
+    try { ctx.resume().then(check, check); } catch (e) {}
+    setTimeout(check, 600);
+  }
+  function voiceWakeNeedTap() {
+    var W = voiceWake_;
+    W.needTap = true;
+    voiceWakeSync();
+    if (voice.state === "idle") voiceCaption("Tap anywhere to listen for “MindFlock” again");
+    if (W.tapArmed) return;
+    W.tapArmed = true;
+    document.addEventListener("click", function once() {
+      document.removeEventListener("click", once, true);
+      W.tapArmed = false;
+      voiceAudioCtx();   // inside the gesture
+      W.gestureAt = Date.now();
+      W.needTap = false;
+      voiceWakeSync();
+    }, true);
+  }
+  // Pref off, with the reason in the strip and the sheet.
+  function voiceWakeOff(msg) {
+    voice.prefs.wake = false;
+    voiceWake_.note = msg || "";
+    voiceWake_.needTap = false;
+    voicePersist();
+    voiceWakeEl.checked = false;
+    if (msg && voice.state !== "off") voiceError(msg);
+    voiceWakeSync();
+  }
+  function voiceWakeSpeaking(on) {
+    var W = voiceWake_;
+    if (W.speaking === on) return;
+    if (!on) W.spokeAt = Date.now();
+    W.speaking = on;
+    voiceWakeSync();
+  }
+  function voiceWakeCheck(blob) {
+    var W = voiceWake_;
+    if (voiceWakeLive()) return;   // something took over while the clip was encoded
+    W.inflight = true;
+    W.at = Date.now();
+    W.checks++;
+    var t0 = W.at, a = window.AbortController ? new AbortController() : null;
+    var timer = a ? setTimeout(function () { try { a.abort(); } catch (e) {} }, VOICE_WAKE_TIMEOUT_MS) : null;
+    fetch("/api/voice/wake?lang=" + encodeURIComponent(String(navigator.language || "en").split(";")[0]), {
+      method: "POST",
+      headers: { "Content-Type": "audio/wav" },
+      body: blob,
+      signal: a ? a.signal : undefined,
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) { return { r: r, j: j || {} }; });
+    }).then(function (x) {
+      clearTimeout(timer);
+      W.inflight = false;
+      if (x.r.status === 409 || x.r.status === 404 || x.r.status === 405) {
+        W.last = { error: String(x.j.error || ("HTTP " + x.r.status)), at: Date.now() };
+        voiceWakeOff(x.r.status === 409
+          ? "Listening for “MindFlock” is off: the server has no speech recognition ready (Settings → Voice)."
+          : "Listening for “MindFlock” is off: this server is too old for it.");
+        return;
+      }
+      if (!x.r.ok) { W.last = { error: String(x.j.error || ("HTTP " + x.r.status)), at: Date.now() }; return; }
+      W.last = { text: String(x.j.text || ""), wake: !!x.j.wake, ms: Number(x.j.ms) || (Date.now() - t0), error: "", at: Date.now() };
+      if (x.j.wake) voiceWoke();
+    }).catch(function (err) {
+      clearTimeout(timer);
+      W.inflight = false;
+      W.last = { error: err && err.name === "AbortError" ? "the server took too long" : String((err && err.message) || err), at: Date.now() };
+    });
+  }
+  // The word: the chime, "Yes?", a tick — then listening, as a tap in
+  // toggle mode (a line being said is cut first). A tap or a send that came
+  // first wins.
+  function voiceWoke() {
+    var W = voiceWake_;
+    if (voice.state === "off" || voice.state === "sending" || voiceIsListening() || document.hidden) return;
+    W.wakes++;
+    voiceWakeChime();
+    voice.buzzAt = Date.now();
+    if (navigator.vibrate) { try { navigator.vibrate(12); } catch (e) {} }
+    voiceCaption("Yes?");
+    var gen = ++W.gen;
+    setTimeout(function () {
+      if (W.gen !== gen || voice.state === "off" || voice.state === "sending" || voiceIsListening()) return;
+      voiceBargeIn();
+      voice.box = null;
+      voiceListen("prompt", VOICE_TAP_MS);
+    }, VOICE_WAKE_CHIME_MS);
+  }
+  // Two short rising tones (~120 ms) through the page's AudioContext — made
+  // or resumed by the tap that turned voice / the standby on.
+  function voiceWakeChime() {
+    var ctx = voice.audioCtx;
+    if (!ctx || ctx.state !== "running") return false;
+    try {
+      var t = ctx.currentTime;
+      [[660, 0], [990, 0.06]].forEach(function (n) {
+        var o = ctx.createOscillator(), g = ctx.createGain(), at = t + n[1];
+        o.type = "sine";
+        o.frequency.value = n[0];
+        g.gain.setValueAtTime(0.0001, at);
+        g.gain.exponentialRampToValueAtTime(0.25, at + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, at + 0.06);
+        o.connect(g);
+        g.connect(ctx.destination);
+        o.start(at);
+        o.stop(at + 0.065);
+      });
+      voiceWake_.chimes++;
+      return true;
+    } catch (e) { return false; }
+  }
+  // The line under the sheet's switch: what the standby is doing, or why it
+  // went off.
+  function voiceWakeNoteText() {
+    var W = voiceWake_;
+    if (!voice.prefs.wake) return W.note;
+    if (W.needTap) return "Paused — tap anywhere to listen again";
+    if (voice.state === "off") return "Starts with voice mode";
+    return voiceBtn.hasAttribute("data-standby") ? "Listening for “MindFlock” — the mic is open" : "Paused while the phone listens or speaks";
+  }
+  function voiceWakeNoteShow() {
+    var t = voiceWakeNoteText();
+    if (voiceWakeNote.textContent !== t) voiceWakeNote.textContent = t;
+    voiceWakeNote.classList.toggle("hidden", !t);
   }
 
   // --- the gestures -------------------------------------------------------------------
@@ -6208,9 +6607,11 @@
       voiceEventsClose();
       voiceWakeRelease();
       if (voice.state !== "working") voiceSetState("idle", voiceTalkHint());
+      voiceWakeSync();   // the standby stops; its stream went back with the rest
       return;
     }
     voiceWakeLock();
+    voiceWakeSync();   // the standby again (the stream re-asked for if the browser cut it)
     voice.eventsBackoff = 1000;
     voiceEventsOpen();
     voiceLoadCfg();   // Settings may have moved speech to the server meanwhile
@@ -6250,6 +6651,8 @@
     voiceHandsEl.checked = !!voice.prefs.handsFree;
     voicePttEl.value = voice.prefs.ptt;
     voiceRepliesEl.value = voice.prefs.replies;
+    voiceWakeEl.checked = !!voice.prefs.wake;
+    voiceWakeNoteShow();
     voiceRateEl.value = String(voice.prefs.rate);
     voiceRateVal.textContent = voice.prefs.rate.toFixed(1) + "×";
     voiceFillVoices();
@@ -6341,6 +6744,7 @@
       "Primed: " + (voice.primed ? "yes" : "no — tap the mic once"),
       "Push to talk: " + (voice.prefs.ptt === "hold" ? "hold" : "tap"),
       "Replies: " + ({ off: "off", mine: "to what you said by voice", all: "everything" })[voice.prefs.replies],
+      "Wake word: " + voiceDiagWake(),
       "Last prompt: " + (voice.lastPrompt
         ? (voice.lastPrompt.dictated ? "dictated" : "typed") + ", say " + (voice.lastPrompt.say ? "yes" : "no")
         : "none yet"),
@@ -6376,6 +6780,15 @@
       .map(function (k) { return names[k] + " " + t[k] + " ms"; });
     return parts.length ? parts.join(", ") + " after the start" : "nothing yet";
   }
+  // "standby, mic open (3 checks; last “Mindflock.” → wake, 240 ms)" / "off"
+  function voiceDiagWake() {
+    var W = voiceWake_, x = W.last;
+    if (!voice.prefs.wake) return "off" + (W.note ? " — " + W.note : "");
+    var now = voiceBtn.hasAttribute("data-standby") ? "standby, mic open" : W.needTap ? "waiting for a tap" : "paused";
+    var last = !x ? "no check yet" : x.error ? "last check failed — " + x.error
+      : "last “" + x.text + "” → " + (x.wake ? "wake" : "not the word") + ", " + x.ms + " ms";
+    return now + " (" + W.checks + " check" + (W.checks === 1 ? "" : "s") + ", " + W.wakes + " wake" + (W.wakes === 1 ? "" : "s") + "; " + last + ")";
+  }
   function voiceDiagLast(x) {
     if (!x) return "none yet";
     return x.error ? "failed — " + x.error : x.ms + " ms via " + x.backend;
@@ -6409,6 +6822,17 @@
     // Everything listens to every session, voice on or off.
     if (voice.prefs.replies === "all") voiceEventsOpen();
     else if (voice.state === "off") voiceEventsClose();
+  });
+  // Listen for "MindFlock": this tap makes (or resumes) the AudioContext the
+  // standby records through and the chime plays through.
+  voiceWakeEl.addEventListener("change", function () {
+    voice.prefs.wake = voiceWakeEl.checked;
+    voicePrime();   // a tap on the checkbox is a gesture too: the context now
+    voiceWake_.note = "";
+    voiceWake_.needTap = false;
+    voicePersist();
+    if (!voice.prefs.wake) voiceError("");
+    voiceWakeSync();
   });
   voiceRateEl.addEventListener("input", function () {
     voice.prefs.rate = Number(voiceRateEl.value) || 1;

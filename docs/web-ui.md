@@ -6516,6 +6516,43 @@ reply. A turn that ends with no line at all says *<name> finished.*
   403 (a device that is not the owner) is said once on the status line and
   the choice stays.
 
+**Wake word: say "MindFlock".** **Listen for "MindFlock"** in the ⚙ sheet
+(under Spoken replies; off by default, stored with the phone's other voice
+choices) lets you start listening without touching the phone: say
+*MindFlock* **on its own** and it chimes, the strip says *Yes?*, Android
+gives a short tick, and it listens exactly as a tap on the mic does (Tap to
+talk, whatever Push to talk says). What wakes it: the word alone, with a
+moment of quiet before and after — a lone utterance of roughly ¼ s to
+1.6 s. What does not: the word inside a sentence (*"MindFlock is great"*,
+*"ask MindFlock to…"*), anything longer than 1.6 s, a click or a cough, and
+anything while the phone is listening, recording, sending a clip, or
+speaking (and for half a second after it stops). How it works: while voice
+mode is on and the page is in front, the phone keeps the microphone open
+and watches the sound level itself — **nothing goes to the server** until a
+short sound bounded by quiet ends; then just that clip (16 kHz WAV, with
+~150 ms before it) goes to `POST /api/voice/wake`, which recognises it with
+*MindFlock* as the hint and answers whether it was the word alone
+(`backend/web/core/wake.py`). At most one check is on its way and one goes
+per 1.5 s; a "no" does nothing at all. **The mic indicator:** because the
+mic stays open, the phone shows its mic-in-use indicator the whole time,
+and the 🎙 button shows a faint ring and a dot (the ring still moves with
+the room); the warm-mic grace never gives the mic back while the wake word
+is on. It needs a server recognizer (Settings → Voice): if the server has
+none ready (409), or is too old for the wake word, or the microphone is
+refused, the switch turns itself off and the strip says why. With the
+phone's own recognizer (not server recognition) the mic is handed back
+while it listens, since that recognizer needs it to itself. **iPhone
+limits:** it works only while the page is open in Safari and on screen —
+never in the background or with the phone locked (iOS cuts a hidden page's
+microphone). Hidden, it stops; back on screen it starts again by itself,
+asking for the mic again if iOS cut it. If iOS keeps the page's audio
+paused until you touch the screen, the strip says *Tap anywhere to listen
+for "MindFlock" again*, and one tap anywhere resumes it. The chime is two
+short rising tones played through the page's own audio (made by the tap
+that turned voice or the switch on), not a sound file. Diagnostics shows a
+**Wake word** line: standby / paused / waiting for a tap, how many checks
+and wakes, and what the last check heard.
+
 **One voice at a time.** Everything the phone says — replies, the
 first-sentence confirmation, dialog read-outs, *what is it asking*, the
 router's lines, another session's ask or turn — goes through **one speech
@@ -6656,7 +6693,8 @@ listens. The ⚙ sheet shows that setting read-only.
 
 **The ⚙ sheet** — *Voice mode for <session>* on/off, **Push to talk**
 (*Tap to talk* / *Hold to talk*), **Spoken replies** (*Off* / *Replies to
-what I said by voice*, the default / *Everything*),
+what I said by voice*, the default / *Everything*), **Listen for
+"MindFlock"** (the wake word, above; off by default),
 **Hands-free** (listen
 after every reply, not only after questions; off by default), **Speech rate**
 0.7–1.6×, a **Voice** picker (the phone's `speechSynthesis` voices, this

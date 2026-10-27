@@ -336,7 +336,7 @@ def test_mobile_js_push_to_talk_toggle_and_hold():
         assert gone not in v, gone
     # The sheet's choice, and the default.
     assert (
-        'prefs: { rate: 1, voiceName: "", handsFree: false, ptt: "toggle", replies: "mine" }'
+        'prefs: { rate: 1, voiceName: "", handsFree: false, ptt: "toggle", replies: "mine", wake: false }'
         in v
     )
     sel = html.split('<select id="voice-ptt"')[1].split("</select>")[0]
@@ -887,6 +887,7 @@ def test_mobile_js_reply_loop_rules():
         "handsFree",
         "ptt",
         "replies",
+        "wake",
     ], keys
     assert persist.lstrip().startswith("try {")
     load = _fn(js, "voiceLoadPrefs")
