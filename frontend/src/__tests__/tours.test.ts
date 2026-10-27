@@ -42,20 +42,20 @@ const { topBarShows } = await import("../lib/calm");
 const { useUi } = await import("../state/store");
 
 describe("the tours registry", () => {
-  it("has the seven tours, each under its own id", () => {
-    expect([...TOUR_IDS]).toEqual(["welcome", "new", "intake", "verify", "schedule", "settings", "people"]);
+  it("has the eight tours, each under its own id", () => {
+    expect([...TOUR_IDS]).toEqual(["welcome", "new", "intake", "verify", "schedule", "settings", "people", "voice"]);
     expect(Object.keys(TOURS).sort()).toEqual([...TOUR_IDS].sort());
     for (const id of TOUR_IDS) expect(TOURS[id].id).toBe(id);
     expect(isTourId("intake")).toBe(true);
     expect(isTourId("map")).toBe(false);
   });
 
-  it("keeps every tour short: 3–7 steps of one plain sentence each", () => {
+  it("keeps every tour short: 3–7 steps of one plain sentence each (Voice: the mic's eight)", () => {
     for (const id of TOUR_IDS) {
       const { steps, title } = TOURS[id];
       expect(title, id).toMatch(/^[A-Z]/);
       expect(steps.length, id).toBeGreaterThanOrEqual(3);
-      expect(steps.length, id).toBeLessThanOrEqual(7);
+      expect(steps.length, id).toBeLessThanOrEqual(id === "voice" ? 8 : 7);
       for (const s of steps) {
         expect(s.title.trim(), id).not.toBe("");
         expect(s.body.trim(), id).not.toBe("");
@@ -146,8 +146,10 @@ describe("the tours registry", () => {
     expect(steps[1].target).not.toContain("data-conn");
   });
 
-  it("only Settings' tour switches screens (the others live on one surface)", () => {
-    for (const id of TOUR_IDS) if (id !== "settings") for (const s of TOURS[id].steps) expect(s.screen, id).toBeUndefined();
+  it("only Settings' tour switches screens (the others live on one surface) — and Voice opens the mic's options", () => {
+    for (const id of TOUR_IDS)
+      if (id !== "settings" && id !== "voice") for (const s of TOURS[id].steps) expect(s.screen, id).toBeUndefined();
+    for (const s of TOURS.voice.steps) expect([undefined, "mic-pop"], s.title).toContain(s.screen);
   });
 });
 

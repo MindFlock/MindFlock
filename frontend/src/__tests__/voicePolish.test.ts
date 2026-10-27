@@ -350,10 +350,12 @@ describe("the bar shows a state pill, never a transcript", () => {
     expect(MIC).toContain("quietTimer.current = setTimeout(() => setQuiet(false), HUSH_CAPTION_MS);");
   });
 
-  it("the options open only on an explicit right-click or Shift+click — never by themselves", () => {
-    expect(MIC.split("setMenuOpen(true)").length - 1).toBe(1);
-    const open = MIC.indexOf("setMenuOpen(true)");
+  it("the options open only on an explicit right-click or Shift+click — never by themselves (the Voice tour aside)", () => {
+    expect(MIC.split("setMenuOpen(true)").length - 1).toBe(2);
+    const open = MIC.indexOf("setMenuOpen(true)", MIC.indexOf("const openMenu = () => {"));
     expect(MIC.lastIndexOf("const openMenu = () => {", open)).toBeGreaterThan(MIC.lastIndexOf("};", open));
+    // The other: the Voice tour on a step in the options ("mic-pop"), which closes them after.
+    expect(MIC).toMatch(/if \(tourPop && !menuOpen\) \{\s*tourOpened\.current = true;\s*setMenuOpen\(true\);/);
     const calls = [...MIC.matchAll(/openMenu\(\)/g)].map((m) => m.index!);
     expect(calls.length).toBe(2);
     for (const at of calls) {

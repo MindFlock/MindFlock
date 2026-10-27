@@ -213,6 +213,7 @@ const TOUR_HINT: Record<TourId, string> = {
   schedule: "Templates, and sessions that start by themselves.",
   settings: "Where your connections and every setting live.",
   people: "Working with another person: invite, share a folder, a joint task.",
+  voice: "Talking to sessions: the mic, the words that send and stop, the wake word.",
 };
 
 /** Slider position = thirds of a line (1–9 → 0.33…3); tmux gets the whole-line

@@ -1,5 +1,6 @@
-/** The wake word on the desktop: say "MindFlock" on its own and the top-bar
- * mic starts listening, as if the Talk hotkey had been pressed.
+/** The wake word on the desktop: say "MindFlock" (the `wake` voice word,
+ * lib/voiceWords — the server hears for the saved one) on its own and the
+ * top-bar mic starts listening, as if the Talk hotkey had been pressed.
  *
  * Standby (the `wake` pref in `cs_voice_desktop`, off by default) keeps the
  * page's one microphone stream (lib/voiceMic MicKeeper) open and watches its
@@ -34,6 +35,7 @@
 import { apiRaw } from "../api/client";
 import { startWavRecording, type WavRecorderOptions, type WavRecording } from "./wavRecorder";
 import { isLoud, noiseFloor, type MicKeeper } from "./voiceMic";
+import { quoted, voiceWords, wakeName, type VoiceWords } from "./voiceWords";
 
 /** Quiet before an utterance that starts one: the gap before a word said on
  * its own; a breath inside a sentence is shorter. */
@@ -195,9 +197,12 @@ export async function postWake(clip: Blob, lang = langTag()): Promise<WakeVerdic
   }
 }
 
-/** The switch's one hint line (the mic's options and Settings → Voice). */
-export const WAKE_SWITCH_HINT =
-  "Say “MindFlock” on its own — not inside a sentence — and the mic listens, as if you clicked it. " +
+/** The switch's label: "Listen for “MindFlock”" — the current wake word. */
+export const wakeSwitchLabel = (w: VoiceWords = voiceWords()) => "Listen for " + quoted(wakeName(w));
+
+/** The switch's one hint line (Settings → Voice), in the current wake word. */
+export const wakeSwitchHint = (w: VoiceWords = voiceWords()) =>
+  "Say " + quoted(wakeName(w)) + " on its own — not inside a sentence — and the mic listens, as if you clicked it. " +
   "The mic stays open while this is on, so the browser's mic light stays on; only a lone word is sent to the server to check.";
 
 /** The lines standby stops with. */

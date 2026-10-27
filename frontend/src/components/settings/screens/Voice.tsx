@@ -12,8 +12,9 @@
  * the mic and the phone page deep-link — and, under Recognition, the
  * one-click local-models installer when the built-in recognizer is basic or
  * local models are picked but missing); **On the phone page**, where the
- * phone page runs each (`voice.stt` / `voice.tts`, phone | server);
- * **Permission dialogs** (the approve-by-voice switch); **Try it** (speak a
+ * phone page runs each (`voice.stt` / `voice.tts`, phone | server); **This
+ * computer's mic** (per-browser prefs, and "Show me how" — the Voice tour);
+ * **Voice words** (`voice.words`, ./VoiceWords.tsx); **Permission dialogs** (the approve-by-voice switch); **Try it** (speak a
  * sentence, hear three seconds back); **Privacy**.
  *
  * Built only from the shared Settings pieces, like every other screen: a
@@ -32,9 +33,13 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { api, apiRaw } from "../../../api/client";
 import { toast } from "../../../lib/toast";
 import { startWavRecording } from "../../../lib/wavRecorder";
-import { DICT_HINT, loadVoicePrefs, onVoicePrefs, saveVoicePrefs, REPLIES_CHOICES, voiceAudioCtx, type VoicePrefs } from "../../../lib/voiceDesktop";
+import { dictHint, loadVoicePrefs, onVoicePrefs, saveVoicePrefs, REPLIES_CHOICES, voiceAudioCtx, type VoicePrefs } from "../../../lib/voiceDesktop";
 import { micDiagnostics, talkHotkey } from "../../TopBarMic";
-import { WAKE_SWITCH_HINT, onWakeStatus, wakeStatus } from "../../../lib/wakeWord";
+import { onWakeStatus, wakeStatus, wakeSwitchHint, wakeSwitchLabel } from "../../../lib/wakeWord";
+import { applyVoiceView, quoted } from "../../../lib/voiceWords";
+import { useVoiceWords } from "../../../lib/useVoiceWords";
+import { replayTour } from "../../onboarding/replayTour";
+import { VoiceWordsBlock } from "./VoiceWords";
 import type { ScreenProps } from "../SettingsDialog";
 import { SECRET_MASK, SettingField, useSettings, type SettingsModel } from "../useSettings";
 import "./voice.css";
@@ -68,6 +73,10 @@ export interface VoiceView {
      * also from WSL) or "good" (macOS'); absent on an older server. */
     stt_quality?: "basic" | "good" | string;
   };
+  /** The voice words in effect (the defaults overlaid) and the defaults
+   * (lib/voiceWords); absent on a server older than them. */
+  words?: Record<string, unknown>;
+  words_default?: Record<string, unknown>;
   /** Whether this viewer may change the server (auth.may_configure). Absent
    * means the server didn't say: assume yes — an owner-only POST answers a
    * refusal with its own 403 sentence anyway. */
@@ -259,7 +268,11 @@ export function VoiceSection({ active }: { active: boolean }) {
     if (!active) return;
     let live = true;
     api<VoiceView>("/api/voice")
-      .then((v) => live && setView(v))
+      .then((v) => {
+        // The words saved here work at once: the mic's matchers and hints.
+        applyVoiceView(v);
+        if (live) setView(v);
+      })
       .catch((err: Error) => {
         if (!live) return;
         const why = "could not ask the server: " + (err.message || "no answer");
@@ -387,6 +400,7 @@ export function VoiceSectionView({
         <PhoneWhere kind="tts" title="The voice runs on" />
       </div>
       <MicPrefs />
+      <VoiceWordsBlock model={model} view={view} />
       <h3 className="set-section-title">Permission dialogs</h3>
       <div className="set-row set-switch-row" id="voice-approve-row">
         <span className="notif-rule-text">
@@ -444,6 +458,7 @@ export function MicPrefs() {
   // Why standby stopped (the top-bar mic runs it: lib/wakeWord).
   const [wakeLine, setWakeLine] = useState(() => wakeStatus().line);
   useEffect(() => onWakeStatus((s) => setWakeLine(s.line)), []);
+  const words = useVoiceWords();
   const save = (p: VoicePrefs) => {
     setPrefs(p);
     saveVoicePrefs(p);
@@ -452,7 +467,10 @@ export function MicPrefs() {
     <>
       <h3 className="set-section-title">This computer's mic</h3>
       <p className="set-hint" id="voice-mic-hint">
-        The mic in the top bar; the same choices are in its popover. These are per browser.
+        The mic in the top bar; the same choices are in its popover. These are per browser.{" "}
+        <button type="button" className="linklike" id="voice-tour-link" data-tour-id="voice" onClick={() => replayTour("voice")}>
+          Show me how
+        </button>
       </p>
       <div className="set-row" id="voice-replies-row">
         <span className="notif-rule-text">
@@ -485,7 +503,7 @@ export function MicPrefs() {
         <div className="voice-ptt-choices" role="radiogroup" aria-label="Push to talk">
           <label className="voice-ptt-choice">
             <input type="radio" name="voice-ptt" checked={prefs.ptt !== "hold"} onChange={() => save({ ...prefs, ptt: "toggle" })} />
-            <span>Click to talk — press to start; it listens until you say “over and out” or press again</span>
+            <span>Click to talk — press to start; it listens until you say {quoted(words.end[0])} or press again</span>
           </label>
           <label className="voice-ptt-choice">
             <input type="radio" name="voice-ptt" checked={prefs.ptt === "hold"} onChange={() => save({ ...prefs, ptt: "hold" })} />
@@ -496,10 +514,10 @@ export function MicPrefs() {
       <div className="set-row set-switch-row" id="voice-wake-row">
         <span className="notif-rule-text">
           <span className="set-label" id="voice-wake-label">
-            Listen for “MindFlock”
+            {wakeSwitchLabel(words)}
           </span>
           <span className="set-hint notif-rule-desc" id="voice-wake-hint">
-            {WAKE_SWITCH_HINT}
+            {wakeSwitchHint(words)}
           </span>
           {prefs.wake && wakeLine && (
             <span className="set-hint notif-rule-desc" id="voice-wake-line">
@@ -575,8 +593,8 @@ export function MicPrefs() {
       <div className="set-row" id="voice-mic-howto">
         <p className="set-hint" id="voice-mic-typing">
           The words are typed into the session as you speak, and corrected when the accurate pass hears a
-          phrase otherwise. {DICT_HINT}; Esc takes them back. A click keeps the mic on across messages until
-          “over and out”. Say “stop recording” to stop, “focus 3” or
+          phrase otherwise. {dictHint(words)}; Esc takes them back. A click keeps the mic on across messages until
+          {" " + quoted(words.end[0])}. Say {quoted(words.stop.find((p) => p.includes(" ")) || words.stop[0])} to stop, “focus 3” or
           “next session” to switch, and “yes”, “no”, “always” or a number to answer a dialog. Hotkey:{" "}
           {talkHotkey() || "the Talk shortcut in Keyboard shortcuts"}.
         </p>

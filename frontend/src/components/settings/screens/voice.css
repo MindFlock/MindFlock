@@ -49,3 +49,47 @@
   margin: 0;
   accent-color: var(--accent);
 }
+
+/* Voice words (screens/VoiceWords.tsx): each kind's phrases as chips, the
+   field that adds one sitting at the end of the same line. A kind with none
+   of its own shows the defaults faded. */
+.voice-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.voice-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-2);
+  font-size: 12px;
+  color: var(--text);
+}
+.voice-chip.is-default {
+  padding-right: 8px;
+  color: var(--muted);
+  background: transparent;
+  border-style: dashed;
+}
+.voice-chip-x {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  border-radius: 50%;
+}
+.voice-chip-x:hover {
+  color: var(--text);
+}
+.voice-chip-input {
+  flex: 1;
+  min-width: 140px;
+}

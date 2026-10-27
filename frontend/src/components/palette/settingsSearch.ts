@@ -191,6 +191,13 @@ export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
     terms: ["voice", "speech", "microphone", "mic", "dictation", "recognition", "whisper", "piper", "text to speech", "tts", "stt", "talk", "spoken replies","read replies aloud","push to talk","hold to talk","click to talk", "approve dialogs by voice", "wake word", "hey mindflock", "listen for mindflock", "standby"],
   },
   {
+    key: "voice",
+    label: "Voice → Voice words",
+    sub: "The words that send, stop and start over, and the wake word",
+    terms: ["keywords", "voice words", "over", "over and out", "disregard", "wake word", "radio words", "stop words"],
+    anchor: "#voice-words",
+  },
+  {
     key: "peer",
     label: "People",
     sub: "Invite someone and share one folder with their agent",

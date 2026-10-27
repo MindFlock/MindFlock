@@ -18,6 +18,11 @@
  * sits in that screen's header, and replaying it opens Settings on People
  * (settings/screens/peer/replayPeopleTour).
  *
+ * Voice walks the top-bar mic, not a dialog: it opens by itself the first
+ * time the mic is used (components/TopBarMic), its copy is built from the
+ * current voice words each time it is read (./voice.ts), and its last steps'
+ * `screen` "mic-pop" opens the mic's options.
+ *
  * Rendered by components/onboarding/CoachTour.tsx (CoachTourHost), opened by
  * the store's `openCoachTour(id)` — from a dialog header's "?"
  * (onboarding/TourButton), Settings → General → Tours, the palette, or ONCE
@@ -31,8 +36,9 @@ import { VERIFY_TOUR } from "./verify";
 import { SCHEDULE_TOUR } from "./schedule";
 import { SETTINGS_TOUR } from "./settings";
 import { PEOPLE_TOUR } from "./people";
+import { VOICE_TOUR } from "./voice";
 
-export type TourId = "welcome" | "new" | "intake" | "verify" | "schedule" | "settings" | "people";
+export type TourId = "welcome" | "new" | "intake" | "verify" | "schedule" | "settings" | "people" | "voice";
 
 export interface TourStep {
   /** CSS selector resolved in `document`; "" centres the card. */
@@ -43,7 +49,8 @@ export interface TourStep {
   /** The screen of the tour's surface this step shows, switched to before the
    * step is measured — so one tour can walk several screens. Settings reads
    * it (a Settings screen key: "connections", "coding", …) and follows the
-   * store's `coachTour` step; Back returns to the step's screen too. Omit it
+   * store's `coachTour` step; Back returns to the step's screen too. The
+   * Voice tour's "mic-pop" opens the top-bar mic's options instead. Omit it
    * and the step stays on whatever is showing. */
   screen?: string;
 }
@@ -63,10 +70,11 @@ export const TOURS: Record<TourId, TourDef> = {
   schedule: SCHEDULE_TOUR,
   settings: SETTINGS_TOUR,
   people: PEOPLE_TOUR,
+  voice: VOICE_TOUR,
 };
 
 /** Every tour, in the order Settings → General → Tours lists them. */
-export const TOUR_IDS: readonly TourId[] = ["welcome", "new", "intake", "verify", "schedule", "settings", "people"];
+export const TOUR_IDS: readonly TourId[] = ["welcome", "new", "intake", "verify", "schedule", "settings", "people", "voice"];
 
 export function isTourId(v: unknown): v is TourId {
   return typeof v === "string" && (TOUR_IDS as readonly string[]).includes(v);

@@ -3429,9 +3429,10 @@ body) or the window is scrolled to the pane's centre (`behavior: "smooth"`,
 or instant under reduce motion) — nobody scrolls to find a ring. A target
 that renders late is looked for again for a few seconds. A step can also name
 a `screen` of its surface to switch to first (`TourStep.screen`); Settings is
-the one surface that reads it.
+the one surface that reads it as a screen, and the mic reads `"mic-pop"` (the
+Voice tour) as "open my options".
 
-There are seven (`lib/tours/`, one file per tour, `TOURS` in `index.ts`):
+There are eight (`lib/tours/`, one file per tour, `TOURS` in `index.ts`):
 **Welcome** (over the Get set up checklist: the *next:* line, ① Install your
 agent (the checklist names which), ② Sign in to your agent, ③ Start your first session, then the
 first sidebar row), **New** (the task box, the *Runs in* folder picker,
@@ -3455,7 +3456,8 @@ safety number, the share-a-folder row, the joint task — hooks
 `people-joint`; the link-card steps centre until someone is linked. Its **?**
 sits in the People screen's header; replaying it from General or the palette
 opens Settings on People first, `settings/screens/peer/replayPeopleTour.ts`.
-It never opens by itself). A step's target is a CSS selector, usually a stable id or a
+It never opens by itself) and **Voice** (eight steps over the top-bar mic,
+its last two in the mic's options; see [The Voice tour](#the-voice-tour)). A step's target is a CSS selector, usually a stable id or a
 `data-tour="<surface>-<thing>"` hook (with today's id as a fallback in the
 same selector list — a list matches in *document* order, so a fallback must
 be the hooked element or inside it, never earlier in the page).
@@ -3470,7 +3472,8 @@ be the hooked element or inside it, never earlier in the page).
   isn't in the synced `prefs.tours_seen` list (localStorage `mf_tours_seen`;
   the page waits for its first prefs pull, so a tour seen on another device
   never opens here). Never outside the first hour, never with hints off,
-  never over the welcome card or another tour.
+  never over the welcome card or another tour. The Voice tour is the one
+  that opens on a control's first use instead — the mic's — in any hour.
 - **Seen by every exit**: **Done**, **Skip tour**, `Esc`, or closing the
   dialog under it (`closeCoachTour` in the store) adds it to `tours_seen`.
 
@@ -5803,11 +5806,14 @@ labels above the inputs.
     every session* (an older saved switch loads as *Off* / *Replies to what
     I said by voice*) — with the name-first and one-at-a-time rules under it;
     **Push to talk** (*Click to talk* · *Hold to talk*); and the **Listen
-    for “MindFlock”** switch (`#voice-wake`, pref `wake`, off by default;
+    for “MindFlock”** switch (the current wake word) (`#voice-wake`, pref `wake`, off by default;
     see [the wake word](#voice-input)), with its hint that the mic stays
     open and the browser's mic light stays on, and — when standby has
     stopped — why (*server recognition isn't ready*, *the microphone was
-    refused*).
+    refused*). Its hint line ends with **Show me how** (`#voice-tour-link`),
+    which replays [the Voice tour](#the-voice-tour).
+  - **Voice words** (`#voice-words`): the words that send, stop and start
+    over, and the wake word — [Voice words](#voice-words).
   - **Permission dialogs**: the **Approve dialogs by voice** switch (*A
     spoken yes or no answers a permission dialog after its command is read
     aloud. 'Always' is only accepted when you say the word.*).
@@ -6039,6 +6045,12 @@ its toolbar counts it again. See
 
 ## Voice input
 
+Every voice word named in this section — "over", "over and out",
+"disregard", "stop recording", "stop talking", "MindFlock" — is the
+**default**: each can be changed in [Settings → Voice → Voice
+words](#voice-words), and the mic, its hints and the Voice tour then use the
+new ones.
+
 The mic in the top bar, beside the bell, talks to the **focused session** and
 types as you speak: click (or hold) to talk, and each recognised phrase lands
 in the session's input field at once — word by word while you speak when the
@@ -6221,6 +6233,91 @@ in the options and in Settings — when the server has no recogniser
 ready (409), when the microphone is refused, and on "mic off" (which also
 turns the switch off). After a reload it starts again by itself when the mic
 permission is already granted, else at your next click in the app.
+
+### Voice words
+
+The words the mic listens for are the person's to change — **Settings →
+Voice → Voice words** (`#voice-words`, `screens/VoiceWords.tsx`, right after
+*This computer's mic*), saved through the ordinary settings model as
+`voice.words` (owner-only; synced across the person's devices; `{}` = every
+default). `GET /api/voice` reports them as `words` (the effective ones, the
+defaults overlaid) and `words_default`; the page keeps them in
+`lib/voiceWords.ts` — the built-in defaults until that answers (the mic reads
+it when it mounts, with its engine config; Settings → Voice re-reads it after
+every save), then the server's.
+
+- **The rows**: **Send** ("over" — sends, listening goes on), **End (send and
+  stop)** ("over and out", "over, out"), **Start over** ("disregard"),
+  **Stop listening** ("stop", "stop listening", "mic off", "pause
+  listening", "that's all", "done talking"), **Stop talking** ("stop
+  talking", "be quiet", "quiet", "hush", "shut up", "enough") — each a chips editor: type a phrase,
+  **Enter** adds it, **×** (or Backspace in the empty field) removes the
+  last; a row with none of its own shows the defaults faded, and phrases of
+  its own **replace** them — and the **Wake word**, one text field with the
+  default as its placeholder (empty = the default). **Reset to defaults**
+  (only once something is set) saves `{}`. The hint says they work
+  everywhere: this computer's mic, the phone page and the wake word.
+- **Limits** (the server's, refused before a save with the reason under the
+  field): at most 6 phrases per row, 1–40 characters each (English letters,
+  digits, spaces, apostrophes, commas), no repeats; the wake word one or two
+  words of letters, 3–20 characters, shown capitalised as the server hints
+  it to the recogniser ("Hey Jarvis"). Phrases are lowercased and their spaces
+  collapsed; a save the server kept differently shows *Saved as: …* under the
+  row. A viewer who may not change the server (`configure_allowed: false`)
+  sees the rows disabled with *Only the owner of this computer can change
+  them.*
+- **The matchers** (`lib/voiceDesktop.ts` `buildMatchers`, rebuilt the moment
+  the words change): `parseRadio` reads the send / end / clear phrases at the
+  END of a phrase, **longest first** (so "over and out" beats "over"),
+  case- and punctuation-blind, an apostrophe optional ("thats all"), each
+  phrase's words escaped, the send and clear phrases taking today's tails
+  ("disregard that", "over it"); the hold-back keeps any of them (and their
+  starts, and an end phrase followed by a stop phrase) whole; the older
+  wordings the router still hears ride along with their main phrase while it
+  is in the list (`PHRASE_KIN`: "stop recording" with "stop listening", "turn
+  off the mic" with "mic off", "that is all" with "that's all", "stop
+  speaking" / "okay stop" with "stop talking", "that's enough" with
+  "enough") and go when it goes; a stop phrase of
+  **two words or more** ends any committed words at once, while a one-word one
+  ("stop", "halt") counts only said on its own (the router's), so "make it
+  stop" stays a prompt; a stop-talking phrase counts only as the whole
+  phrase, with an optional "ok" / "okay" / "hey" / "please" before and
+  "please" / "now" after; and the stop and stop-talking phrases wait whole for
+  the router like its own commands. The wake word is checked by the server
+  (`POST /api/voice/wake` hears for the saved one).
+- **The copy follows**: the caption (*Say “over” to send, “over and out” to
+  stop, “disregard” to start over*), the ask card's hint, the mic's tooltip
+  and *Listen for “MindFlock”* switch, Settings → Voice's hints and the Voice
+  tour all name the current words (`dictHint`, `answerHint`,
+  `wakeSwitchLabel`, `wakeSwitchHint`).
+
+### The Voice tour
+
+A [tour](#tours) of the mic (`lib/tours/voice.ts`, id `voice`), eight steps
+on real elements, in the current voice words: ① the mic button (`#mic-btn`,
+hook `voice-mic`) — *Click the mic or press Ctrl+T* (the Talk hotkey as the
+keymap shows it), hold it in Hold to talk; ② the focused session's terminal —
+the words go in as you speak; ③ the mic's pill — *say “over” to send*,
+listening stays on; ④ the mic — “over and out” sends and stops, “disregard”
+starts the message over; ⑤ the sidebar's rows — “session three”, “next
+session”, “switch to” a name; ⑥ the ask card's mic (`#ask-mic`) when a card
+is up, else the bell (`#notif-btn`) — answering a question; ⑦ the mic's
+options' **Listen for “MindFlock”** row; ⑧ their **Read replies aloud** row
+(Off / Mine / Everything, and “stop talking” cuts it short). Steps ⑦ and ⑧
+carry `screen: "mic-pop"`: the mic opens its options for them (under the
+tour's layer, so the card and ring sit on top; a click on the card never
+closes them) and closes them again when the tour moves off — the only time
+the options open without a right-click.
+
+It **opens by itself the first time the mic is used** — a click, a press or
+the Talk hotkey that starts listening (not the wake word or a hands-free
+listen; `openTourOnFirstUse` in `onboarding/useAutoTour.ts`) — in any hour,
+once the first prefs pull is in, with hints on, nothing else touring, and
+`voice` not yet in `tours_seen`. **Show me how** replays it: the link in
+Settings → Voice → This computer's mic (closing Settings first), the **?**
+beside the title of the mic's options (the only thing added to them), and
+Settings → General → Help / the palette like every tour. Any exit marks it
+seen.
 
 ## Mobile UI (`/m`)
 
