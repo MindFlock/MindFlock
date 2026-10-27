@@ -6057,6 +6057,87 @@ row of `/api/repos/suggest`, and Start refuses anything that isn't absolute
 anyway. The create answers **202**, so the new session is selected from the next
 poll tick, when its row actually appears in the list.
 
+### A session is asking you something
+
+When a session waits on you — a permission prompt or other dialog, or a reply
+that ended with a question in plain prose that nobody has typed to since (the
+server's `asking` on each `GET /api/instances` row) — the phone opens the
+**ask sheet** by itself, in the middle of the screen, over whatever else is
+open. It shows the session's number (the Sessions sheet's, so "session two" by
+voice is the same one) and name, the kind of ask (**Permission**, **Question**,
+**Plan approval**, plus *from &lt;agent&gt;* for a background sub-agent's
+prompt), the question, and the command in monospace. Then the way to answer it
+right there:
+
+- **A dialog the server parsed** — its options as buttons. A tap posts
+  `POST /answer {keys, dialog_id, by: "user"}` pinned to the dialog it read;
+  a dialog that changed meanwhile (409 `dialog_changed`) is re-read and the new
+  prompt shown with a note; one answered elsewhere (409 `dialog_answered`)
+  says *Already answered*.
+- **A dialog it could not parse** — **Open the session**, and a line saying the
+  prompt needs the terminal.
+- **A question in prose** — a field and **Send** (`POST /send {text,
+  dialog_safe: true}`), plus **Open the session**. If a dialog came up in the
+  meantime (409 `in_dialog`) the sheet shows that dialog instead and keeps your
+  words in the field.
+
+**Later** puts the ask off: a prose question is dismissed on the server
+(`POST /asking/dismiss`, so it stops being "asking" everywhere), a dialog is
+snoozed on this phone by its id (a new dialog from the same session still pops
+up). A tap outside the sheet, the phone's Back and Esc do the same. Several
+sessions asking → one sheet with **1 of N** and ‹ › — dialogs first, then the
+oldest; answering one moves on to the next. The sheet does not open for an ask
+you put off or already answered, nor while you are typing into that session's
+compose box (it opens once you stop), and not by itself at all with the
+ask pop-up setting off (`notifications.ask_popup`, read from
+`GET /api/notify/ntfy`; on when absent). Whatever that setting says, an asking
+row in the Sessions sheet reads **Question** with the question under it (a
+prose question no longer reads *Idle*), tapping it opens the session with its
+ask sheet on top, and the tab's title counts the asking sessions
+(`(2) MindFlock — Mobile`). Asks arrive with the 4 s session poll; while voice
+is on, the events socket's `session.question` / clarify frames bring them at
+once.
+
+**Answering by voice.** The sheet's 🎙 listens for the answer to the ask shown
+(it selects that session first — voice follows the selection). A dialog goes
+through the voice dialog mode: *yes* / *no* / *always* (said, never implied) /
+an option's number when the options are not a permission, under **Approve
+dialogs by voice** (off → *tap an answer*). A prose question is dictated into
+the sheet's field with the radio words — *submit* sends it (a dictated answer
+asks for a spoken reply, like any dictated prompt with Spoken replies on),
+*disregard* clears it, *over* stops and leaves the words for Send; inside the
+sheet every phrase is the answer's words, never a command. The strip's state
+is mirrored on the sheet while it is open. A push's tap (`/m?s=<title>&voice=1`)
+opens that session's sheet — even with the pop-up off — with **Hear it and
+answer by voice**: one tap reads the question name first and listens (12 s, one
+*Still there?* retry), replacing the strip's *Tap to hear*. With voice already
+on and Spoken replies on, another session's new ask is read aloud once, name
+first, without listening (that would change what "yes" means mid-conversation);
+the voice session's own ask is read by its own loop, never twice.
+
+**Notifications while the page is open.** The Sessions sheet has **Notify me
+when a session asks**: it asks the browser for permission, then a new ask on a
+hidden page raises a notification (once per ask, tagged per session), and
+tapping it focuses the page with that ask's sheet open; once granted the same
+row turns them off and on for this browser. A visible page buzzes instead
+(`navigator.vibrate`, not while the mic is listening). What the phone can do
+is said under the button:
+
+- **Android Chrome** shows page notifications only through a service worker;
+  the page registers `/mobile-sw.js` (scope `/m`) when notifications are
+  allowed and shows them through it, falling back to `new Notification` (which
+  desktop browsers and Firefox accept). A backgrounded tab is polled every 10 s
+  while notifications are on, and Android freezes a long-hidden tab — a
+  closed or frozen page notifies nobody.
+- **iPhone / iPad**: only a web app added to the Home Screen (Share → Add to
+  Home Screen, iOS 16.4+) can notify at all, and even then only through a
+  service worker; a Safari tab cannot. The page says so instead of offering
+  the button.
+- Everywhere, the server's **ntfy** pushes (rule *needs input*, now also for
+  prose questions with the question as the body, tap → the deep link above)
+  are what reach a phone whose page is closed; when ntfy is active the row
+  notes that both would arrive.
+
 ### Voice: talking to a session
 
 The phone page can hold a spoken conversation with a session: you dictate a

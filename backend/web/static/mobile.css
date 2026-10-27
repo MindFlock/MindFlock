@@ -851,7 +851,7 @@ html, body {
 
 /* --- voice (mobile.js VOICE section) --- */
 /* The mic sits next to Send; data-state paints the state the strip words. */
-#voice-btn {
+#voice-btn, #asking-mic {
   flex: 0 0 auto;
   min-width: 48px;
   height: 42px;
@@ -868,16 +868,16 @@ html, body {
   -webkit-touch-callout: none;
   touch-action: none;
 }
-#voice-btn:active { background: var(--border); }
-#voice-btn[data-state="idle"] { border-color: var(--accent); color: var(--accent); }
-#voice-btn[data-state="listening"] {
+#voice-btn:active, #asking-mic:active { background: var(--border); }
+#voice-btn[data-state="idle"], #asking-mic[data-state="idle"] { border-color: var(--accent); color: var(--accent); }
+#voice-btn[data-state="listening"], #asking-mic[data-state="listening"] {
   background: var(--accent);
   color: #fff;
   border-color: var(--accent);
   animation: dot-pulse 1.2s ease-in-out infinite;
 }
-#voice-btn[data-state="speaking"] { border-color: var(--tone-waiting); color: var(--tone-waiting); }
-#voice-btn[data-state="working"] { border-color: var(--tone-working); color: var(--tone-working); }
+#voice-btn[data-state="speaking"], #asking-mic[data-state="speaking"] { border-color: var(--tone-waiting); color: var(--tone-waiting); }
+#voice-btn[data-state="working"], #asking-mic[data-state="working"] { border-color: var(--tone-working); color: var(--tone-working); }
 
 #voice-strip {
   flex: 0 0 auto;
@@ -1013,3 +1013,178 @@ html, body {
   border-radius: 7px;
   padding: 8px 10px;
 }
+
+/* --- the asking sheet (mobile.js ASK section) --- */
+/* The one sheet in the MIDDLE of the screen: a session is waiting on you,
+   which is a question, not a form — and it may open by itself, so it sits
+   over any other sheet (z-index) without hugging the keyboard edge. */
+.sheet.sheet-center {
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 60;
+}
+.sheet-center .sheet-box {
+  max-width: 480px;
+  max-height: 100%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--tone-attention);
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+.asking-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+/* The Sessions sheet's number for this session: "session two" by voice. */
+.asking-num {
+  flex: 0 0 auto;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 11px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 20px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.asking-num:empty { display: none; }
+.asking-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.asking-nav { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.asking-nav button {
+  min-width: 34px;
+  height: 30px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 16px;
+  font-family: inherit;
+}
+.asking-nav button:active { background: var(--border); }
+.asking-nav button[disabled] { opacity: 0.4; }
+.asking-kind {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--tone-attention);
+  margin-bottom: 6px;
+}
+.asking-kind .asking-source { color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
+.asking-question {
+  font-size: 15px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 35vh;
+  overflow-y: auto;
+}
+.asking-command {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 25vh;
+  overflow-y: auto;
+}
+/* Full-width option rows: a thumb, not a cursor, picks them. */
+.asking-options { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.asking-options:empty { display: none; }
+.asking-opt {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  text-align: left;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 11px 12px;
+  font-size: 14px;
+  font-family: inherit;
+}
+.asking-opt-key { flex: 0 0 auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.asking-opt[data-kind="yes"] { border-color: var(--accent); }
+.asking-opt[data-kind="no"] .asking-opt-label { color: #f87171; }
+.asking-opt:active { background: var(--border); }
+.asking-opt[disabled] { opacity: 0.5; }
+/* The answer field with Send beside it, like the compose row. */
+.asking-reply { display: flex; align-items: flex-end; gap: 8px; margin-top: 12px; }
+#asking-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  resize: none;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 9px 10px;
+  /* 16px minimum: below that iOS Safari zooms the page on focus. */
+  font-size: 16px;
+  font-family: inherit;
+  line-height: 1.35;
+}
+#asking-text:focus { outline: none; border-color: var(--accent); }
+/* The voice strip, mirrored here: the strip is under the dimmed backdrop. */
+.asking-voice { margin-top: 8px; font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
+.asking-voice b { color: var(--accent); font-weight: 600; }
+#asking-hear {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  padding: 13px;
+  font-size: 15px;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  border-radius: 9px;
+  font-family: inherit;
+}
+#asking-hear:active { background: rgba(var(--accent-rgb), 0.75); }
+#asking-mic { margin-right: auto; }
+#asking-send {
+  flex: 0 0 auto;
+  border-radius: 7px;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-family: inherit;
+  border: 1px solid var(--accent);
+}
+#asking-send[disabled] { opacity: 0.5; }
+#asking-send, #asking-open.primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+#asking-send:active, #asking-open.primary:active { background: rgba(var(--accent-rgb), 0.75); }
+#asking-sheet .sheet-actions { flex-wrap: wrap; }
+#asking-sheet .sheet-actions button[disabled] { opacity: 0.5; }
+#asking-notify { margin-top: 10px; }
+/* The Sessions sheet: the question under an asking row, and the
+   notifications line under the list. */
+.sess-ask {
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ask-notify { margin-top: 10px; }
+.ask-notify .new-muted:empty { display: none; }
