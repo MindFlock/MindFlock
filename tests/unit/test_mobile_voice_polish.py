@@ -215,12 +215,14 @@ def test_the_server_voice_speaks_one_sentence_ahead():
     start = js.index("  function ServerTTS(phone) {")
     tts = js[start : js.index("\n  }\n", start)]
     speak = _inner(tts, "speak")
-    assert "var parts = voiceSpeakSentences(text);" in speak
+    assert (
+        "var parts = voiceSpeakSentences(text), keep = !!(opts && opts.cache);" in speak
+    )
     # Sentence 1 is asked for at once…
-    assert "ahead = fetchClip(ctx, parts[0]);" in speak
+    assert "ahead = fetchClip(ctx, parts[0], keep);" in speak
     # …and the next one as each starts to play (one ahead), never more.
-    assert "if (i < parts.length) ahead = fetchClip(ctx, parts[i]);" in speak
-    assert speak.index("ahead = fetchClip(ctx, parts[i]);") < speak.index(
+    assert "if (i < parts.length) ahead = fetchClip(ctx, parts[i], keep);" in speak
+    assert speak.index("ahead = fetchClip(ctx, parts[i], keep);") < speak.index(
         "(x.audio ? play(ctx, x.audio) : phone.speak(part)).then(next, next);"
     )
     # A cancelled line stops before its next clip; cancel aborts the fetches.
