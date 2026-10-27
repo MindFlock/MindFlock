@@ -464,8 +464,12 @@ class ClaudeProvider(BaseProvider):
         # agent happens to be *printing* mid-generation ("see ❯ 1. below") never
         # sits at line start behind the cursor glyph, so it no longer matches.
         # The phrases are exact strings from the permission / AskUserQuestion UI.
+        from . import dialogs
+
         return (
-            r"(?m)^\s*(?:│\s*)?❯\s+\d+\.",  # select-menu cursor at line start
+            # select-menu cursor at line start — unless the screen is one of
+            # Claude Code's own menus (/model draws the same cursor list).
+            r"(?m)^\s*(?:│\s*)?❯\s+\d+\." + dialogs.CLAUDE_MENU_VETO,
             "Yes, and don't ask again",  # permission box option
             "No, and tell Claude what to do differently",  # tool-permission box
             r"Type something\b",  # AskUserQuestion free-text option ("Type something." single-select, "[ ] Type something" multi-select)

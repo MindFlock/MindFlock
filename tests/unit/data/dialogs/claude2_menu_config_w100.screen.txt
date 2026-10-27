@@ -1,0 +1,41 @@
+#! real capture 2026-10-27: Claude Code 2.1.311, 100x40 pane, tmux capture-pane -p; one of Claude Code's OWN command menus, never a dialog: /config — the settings list ('Type to filter · Enter/↓ to select')
+
+  ⎿  Cancelled
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ ● high · /effort ▔
+   Settings  Status   Config   Usage   Stats
+
+   ╭────────────────────────────────────────────────────────────────────────────────────────────╮
+   │ ⌕ Search settings…                                                                         │
+   ╰────────────────────────────────────────────────────────────────────────────────────────────╯
+
+   ❯ Auto-compact                                true
+     Idle compaction                             true
+     Continue automatically at usage limit       true
+     Switch models when a message is flagged     Not asked yet ›
+     Show tips                                   true
+     Claude-drafted feedback                     notify
+     Reduce motion                               false
+     Thinking mode                               true
+     Thinking can't be turned off for Opus 5.5
+     Fast mode (Opus 5.5)                        false
+     Prompt suggestions                          true
+     Session recap                               true
+     Rewind code (checkpoints)                   true
+     Dynamic workflows                           true
+     Ultracode keyword trigger                   true
+     Dynamic workflow size                       medium (default)
+     Artifacts                                   true
+     Verbose output                              false
+     Terminal progress bar                       true
+     Show turn duration                          true
+     Time format                                 auto ›
+     Default permission mode                     Bypass Permissions
+     Worktree base ref                           fresh
+     Use auto mode during plan                   true
+     Respect .gitignore in file picker           true
+     Skip the /copy picker                       false
+     Copy on select                              true
+     Auto-scroll                                 true
+     ↓ 20 more
+
+   Type to filter · Enter/↓ to select · ↑ to tabs · Esc to clear
