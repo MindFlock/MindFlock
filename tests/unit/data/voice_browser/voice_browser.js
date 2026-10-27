@@ -34,6 +34,7 @@ const state = {
   streamChunks: [],       // {id, ctype, head, rate, len}
   streamScript: {},       // id → [{committed, partial}…], one per chunk in order (then empty words)
   streamEndReply: {},     // id → {committed}
+  streamEndDelay: {},     // id → ms before /end answers
   streamEnds: [],
   streamDeletes: [],
   streamInflight: 0,
@@ -181,6 +182,7 @@ async function mock(route) {
   }
   if ((sm = /^\/api\/voice\/stream\/([^/]+)\/end$/.exec(p)) && m === "POST") {
     state.streamEnds.push(sm[1]);
+    if (state.streamEndDelay[sm[1]]) await sleep(state.streamEndDelay[sm[1]]);
     return json(route, Object.assign({ committed: "", ms: 30 }, state.streamEndReply[sm[1]] || {}));
   }
   if ((sm = /^\/api\/voice\/stream\/([^/]+)$/.exec(p)) && m === "DELETE") {
@@ -326,7 +328,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     check("page loaded, session selected", (await page.evaluate(() => document.getElementById("picker-title").textContent)) === "Login fix");
     check("strip hidden while off", await page.evaluate(() => document.getElementById("voice-strip").classList.contains("hidden")));
 
-    // ---- Scenario 1: tap mic → phrases land in the box → "over" keeps them → "submit" sends → ack → reply
+    // ---- Scenario 1: tap mic → phrases land in the box → "over" sends and listens on → "over and out" sends and stops → ack → reply
     await page.click("#voice-btn");
     await waitFor(page, () => window.mfVoice.state === "listening", 3000, "listening");
     check("tap mic → listening", (await vstate(page)) === "listening");
@@ -340,8 +342,8 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     // The loop's caption (the hints, the words so far) is the ask sheet's
     // and Diagnostics' (mfVoice.caption) — never drawn on the strip.
     const hint = await page.evaluate(() => window.mfVoice.caption);
-    check("caption hints the radio words", /over/.test(hint) && /submit/.test(hint) && /disregard/.test(hint), hint);
-    check("…'Say over to keep it, submit to send'", /^Say “over” to keep it, “submit” to send/.test(hint), hint);
+    check("caption hints the radio words, no 'submit'", /over/.test(hint) && /over and out/.test(hint) && /disregard/.test(hint) && !/submit/i.test(hint), hint);
+    check("…'Say over to send, over and out to stop, disregard to start over'", hint === "Say “over” to send, “over and out” to stop, “disregard” to start over", hint);
     await page.evaluate(() => window.__hear("fix the login", true));
     check("interim words reach the loop's caption, never the strip (it says Listening…)", (await page.evaluate(() => window.mfVoice.caption)) === "fix the login" && (await strip(page)) === "Listening…");
     const compose = () => page.evaluate(() => document.getElementById("compose").value);
@@ -358,25 +360,51 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await page.evaluate(() => window.__hear("Disregard."));
     await sleep(150);
     check("'disregard' empties the box and listens on", (await compose()) === "" && (await vstate(page)) === "listening" && posts("/send").length === 0);
-    await page.evaluate(() => window.__hear("submit"));
     await sleep(150);
-    check("'submit' with an empty box sends nothing, still listening", posts("/send").length === 0 && (await vstate(page)) === "listening");
+    check("…and says 'Cleared.' (a spoken confirmation, the mic still listening)", (await said(page, "Cleared.")) && (await vstate(page)) === "listening");
+    await waitFor(page, () => !window.mfVoice.speech.playing && !window.mfVoice.speech.q.length, 3000, "nod said");
+    await sleep(250);
+    // "submit" is retired: a word like any other — typed, nothing sent.
+    await page.evaluate(() => window.__hear("submit"));
+    await waitFor(page, () => document.getElementById("compose").value === "submit", 3000, "submit typed");
+    check("'submit' is a plain word: typed into the box, nothing sent, still listening", (await compose()) === "submit" && posts("/send").length === 0 && (await vstate(page)) === "listening", await compose());
+    await page.evaluate(() => window.__hear("fix the login bug submit"));
+    await sleep(150);
+    check("…'… submit' too: the words and the word, unsent", (await compose()) === "submit fix the login bug submit" && posts("/send").length === 0, await compose());
+    await page.evaluate(() => window.__hear("disregard that"));
+    // Words said while a confirmation plays over the listen are its echo
+    // (the phone's recognizer cannot be deafened): wait it out.
+    await waitFor(page, () => !window.mfVoice.speech.playing && !window.mfVoice.speech.q.length, 3000, "nod said");
+    await sleep(250);
+    // Continuous: "over" sends the box and the mic listens on.
     await page.evaluate(() => window.__hear("fix the login bug"));
     await waitFor(page, () => document.getElementById("compose").value === "fix the login bug", 3000, "routed phrase again");
-    await page.evaluate(() => window.__hear("Over."));
-    await sleep(300);
-    check("'over' stops listening, the words left in the box, unsent", (await vstate(page)) === "idle" && !(await page.evaluate(() => window.mfVoice.stt.active())) && (await compose()) === "fix the login bug" && posts("/send").length === 0, (await vstate(page)) + " | " + (await compose()));
-    check("…and says how to send: 'In the box — say submit, or tap Send'", (await page.evaluate(() => window.mfVoice.caption)) === "In the box — say “submit”, or tap Send", await page.evaluate(() => window.mfVoice.caption));
-    await page.click("#voice-btn");
-    await waitFor(page, () => window.mfVoice.state === "listening", 3000, "listening after over");
-    await page.evaluate(() => window.__hear("Submit."));
-    await waitFor(page, () => window.mfVoice.state === "working", 4500, "working after submit");
+    await page.evaluate(() => window.__hear("and add a test, over."));
+    for (let t = Date.now(); posts("/send").length < 1 && Date.now() - t < 3000; ) await sleep(30);
+    const send0 = posts("/send");
+    check("'… over' → POST /send {text, dialog_safe:true, say:true} (dictated, Spoken replies on)", send0.length === 1 && send0[0].path.includes("login-fix") && send0[0].body.text === "fix the login bug and add a test" && send0[0].body.dialog_safe === true && send0[0].body.say === true, JSON.stringify(send0.map((x) => x.body)));
+    await sleep(200);
+    check("…and listening goes on: the box empty, the recognizer up, no stop", (await vstate(page)) === "listening" && (await compose()) === "" && (await page.evaluate(() => window.mfVoice.stt.active())), await vstate(page));
+    check("…'Sent.' said, 'Sent to Login fix.' only shown", (await said(page, "Sent.")) && !(await said(page, "Sent to Login fix.")) && (await page.evaluate(() => window.mfVoice.caption)) === "Sent to Login fix.", await page.evaluate(() => window.mfVoice.caption));
+    // A second message in the same listen, each sent on its own "over".
+    await page.evaluate(() => window.__hear("then run the linter over"));
+    for (let t = Date.now(); posts("/send").length < 2 && Date.now() - t < 3000; ) await sleep(30);
+    check("a second '… over' in the same listen sends just its words, still listening", posts("/send")[1].body.text === "then run the linter" && (await vstate(page)) === "listening", JSON.stringify(posts("/send")[1].body));
+    // No idle stop while continuous: the window is never due.
+    await page.evaluate(() => { window.mfVoice.listen.until = Date.now() - 1000; window.__silence(); });
+    await sleep(600);
+    check("continuous: silence with the window long past never stops it (no idle stop), the recognizer up again", (await vstate(page)) === "listening" && (await page.evaluate(() => !!(window.__rec && window.__rec.started))), await vstate(page));
+    // "over and out": sends what is in the box and stops.
+    await page.evaluate(() => window.__hear("fix the login bug"));
+    await sleep(150);
+    await page.evaluate(() => window.__hear("Over and out."));
+    await waitFor(page, () => window.mfVoice.state === "working", 4500, "working after over and out");
     const send = posts("/send");
-    check("POST /send on 'submit' (the kept words)", send.length === 1 && send[0].path.includes("login-fix"));
-    check("send body {text, dialog_safe:true, say:true} — dictated, Spoken replies on", send[0] && send[0].body.text === "fix the login bug" && send[0].body.dialog_safe === true && send[0].body.say === true, JSON.stringify(send[0] && send[0].body));
+    check("'over and out' → POST /send of the box, then listening stops", send.length === 3 && send[2].body.text === "fix the login bug" && !(await page.evaluate(() => window.mfVoice.stt.active())), JSON.stringify(send.map((x) => x.body.text)));
+    check("send body {text, dialog_safe:true, say:true} — dictated, Spoken replies on", send[2] && send[2].body.dialog_safe === true && send[2].body.say === true, JSON.stringify(send[2] && send[2].body));
     check("compose box cleared after send", (await page.evaluate(() => document.getElementById("compose").value)) === "");
     await sleep(200);
-    check("spoke 'Sent to Login fix.'", (await spoken(page)).includes("Sent to Login fix."));
+    check("spoke 'Sent. Over and out.' (the confirmation, not 'Sent to …')", (await said(page, "Sent. Over and out.")) && !(await said(page, "Sent to Login fix.")));
     check("state working", (await vstate(page)) === "working");
     // the ack: last_reply changes from the baseline
     state.lastReply = "I'll look at the **login handler** first. Then I'll check `auth.py`.";
@@ -392,16 +420,16 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await page.evaluate(() => window.mfVoice.onEvent({ seq: 6, event: "session.turn_ended", session: "login-fix", old: null, new: null, ts: Date.now() / 1000, data: { say: "Fixed the login bug. Should I push it?", has_question: true, source: "hook", idle_for: 12 } }));
     await sleep(300);
     check("turn_ended with the same say is not spoken twice", (await spoken(page)).length === nBefore);
-    await page.evaluate(() => window.__hear("yes push it submit"));
+    await page.evaluate(() => window.__hear("yes push it over"));
     await waitFor(page, () => window.mfVoice.state === "working", 4500, "answer sent");
     const send2 = posts("/send");
-    check("the answer went as a prompt via /send", send2.length === 2 && send2[1].body.text === "yes push it" && send2[1].body.dialog_safe === true);
+    check("the answer went as a prompt via /send", send2.length === 4 && send2[3].body.text === "yes push it" && send2[3].body.dialog_safe === true);
 
     // ---- A new turn whose Say line repeats the last one is still news
     await page.evaluate(() => window.mfVoice.onEvent({ seq: 60, event: "session.activity_changed", session: "login-fix", old: "working", new: "idle", ts: Date.now() / 1000, data: { say: "Fixed the login bug. Should I push it?", has_question: true, source: "hook" } }));
     await waitFor(page, () => window.mfVoice.state === "awaiting", 3000, "awaiting again");
     check("the same Say line after a NEW prompt is spoken again", (await saidAll(page)).split("Fixed the login bug. Should I push it?").length === 3);
-    await page.evaluate(() => window.__hear("no thanks, submit"));
+    await page.evaluate(() => window.__hear("no thanks, over"));
     await waitFor(page, () => window.mfVoice.state === "working", 4500, "answer 2 sent");
 
     // ---- Poll fallback: idle row with a new last_say, socket dead
@@ -584,13 +612,16 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await page.evaluate(() => window.__hear("say that again"));
     await sleep(600);
     check("'say that again' re-speaks the last line", (await saidAll(page)).split("Login fix is asking: Should I push?").length === before + 1, (await saidAll(page)).slice(-120));
-    // the silence stop (2 minutes without a word): the words stay, unsent
+    // the silence stop (2 minutes without a word) of a listen that is not
+    // continuous (a reply's question, hands-free): the words stay, unsent
     await waitFor(page, () => window.mfVoice.state === "idle", 3000, "idle");
     await page.click("#voice-btn");
     await waitFor(page, () => window.mfVoice.state === "listening", 3000, "listening");
+    check("a tap's listen is continuous", await page.evaluate(() => window.mfVoice.listen.cont === true));
+    await page.evaluate(() => { window.mfVoice.listen.cont = false; });   // as an auto-listen is
     await page.evaluate(() => window.__hear("add a test for the parser"));
     await waitFor(page, () => document.getElementById("compose").value === "add a test for the parser", 3000, "phrase in the box");
-    check("a phrase without 'over' or 'submit' sits in the box, still listening", (await vstate(page)) === "listening" && (await page.evaluate(() => document.getElementById("compose").value)) === "add a test for the parser");
+    check("a phrase without 'over' sits in the box, still listening", (await vstate(page)) === "listening" && (await page.evaluate(() => document.getElementById("compose").value)) === "add a test for the parser");
     await page.evaluate(() => { window.mfVoice.listen.until = 0; window.__silence(); });   // the window ran out
     await sleep(300);
     check("silence stops listening and keeps the text, unsent", (await vstate(page)) === "idle" && (await page.evaluate(() => document.getElementById("compose").value)) === "add a test for the parser" && posts("/send").length === sendsBefore);
@@ -606,7 +637,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     check("idle with no say while working → '<name> finished.'", (await spoken(page)).includes("API docs finished."));
     const lastSend = () => posts("/send").slice(-1)[0] || { body: {} };
     const idleEvent = (say, seq) => page.evaluate((a) => window.mfVoice.onEvent({ seq: a[1], event: "session.activity_changed", session: "api-docs", old: "working", new: "idle", ts: Date.now() / 1000, data: { say: a[0], has_question: false, source: "hook" } }), [say, seq]);
-    // ---- push to talk, tap mode: the second tap is "over" — it keeps the box, never sends
+    // ---- push to talk, tap mode: the second tap stops — it keeps the box, never sends
     await page.click("#voice-btn");
     await waitFor(page, () => window.mfVoice.state === "listening", 3000, "listening");
     await page.evaluate(() => window.__hear("rebuild the docs index"));
@@ -616,7 +647,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await waitFor(page, () => window.mfVoice.state === "idle", 3000, "second tap stopped");
     await sleep(200);
     check("tap mode: the second tap keeps the words, unsent", (await vstate(page)) === "idle" && posts("/send").length === nSends && (await page.evaluate(() => document.getElementById("compose").value)) === "rebuild the docs index");
-    check("…'In the box — say submit, or tap Send'", /^In the box/.test(await page.evaluate(() => window.mfVoice.caption)));
+    check("…'In the box — say over, or tap Send'", (await page.evaluate(() => window.mfVoice.caption)) === "In the box — say “over”, or tap Send", await page.evaluate(() => window.mfVoice.caption));
     await page.dispatchEvent("#send", "pointerdown");
     await waitFor(page, () => window.mfVoice.state === "working", 3000, "send button after the tap");
     check("…then the Send button sends it (dictated: say:true)", posts("/send").length === nSends + 1 && lastSend().body.text === "rebuild the docs index" && lastSend().body.say === true, JSON.stringify(lastSend().body));
@@ -646,11 +677,12 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     const sentLines = (await spoken(page)).filter((t) => t === "Sent to API docs.").length;
     await page.click("#voice-btn");
     await waitFor(page, () => window.mfVoice.state === "listening", 3000, "listening");
-    await page.evaluate(() => window.__hear("check the build submit"));
+    await page.evaluate(() => window.__hear("check the build over and out"));
     await waitFor(page, () => window.mfVoice.state === "working", 3000, "replies-off send");
     check("Spoken replies off → /send say:false even when dictated", lastSend().body.text === "check the build" && lastSend().body.say === false, JSON.stringify(lastSend().body));
     await sleep(300);
     check("…'Sent to' is shown, not spoken", (await spoken(page)).filter((t) => t === "Sent to API docs.").length === sentLines && (await page.evaluate(() => window.mfVoice.caption)) === "Sent to API docs.");
+    check("…but the confirmation still is (it is about what you did, not the reply)", (await saidAll(page)).slice(-40).indexOf("Sent. Over and out.") >= 0, JSON.stringify((await spoken(page)).slice(-3)));
     await idleEvent("Build is green.", 17);
     await waitFor(page, () => window.mfVoice.state === "idle", 3000, "idle after replies off");
     await sleep(200);
@@ -659,11 +691,11 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     state.sendStatus = 409; state.sendReply = { error: "session is waking up", waking: true };
     await page.click("#voice-btn");
     await waitFor(page, () => window.mfVoice.state === "listening", 3000, "listening");
-    await page.evaluate(() => window.__hear("hello there submit"));
+    await page.evaluate(() => window.__hear("hello there over and out"));
     await waitFor(page, () => window.__spoken.includes("API docs is waking up, try again in a moment."), 5000, "waking line");
     check("409 waking → spoken reason", (await spoken(page)).includes("API docs is waking up, try again in a moment."));
     check("…text stays in the box", (await page.evaluate(() => document.getElementById("compose").value)) === "hello there");
-    check("'hello there submit' into an empty box was routed (the router said prompt) as 'hello there'", posts("/voice/route").some((x) => x.body.text === "hello there"));
+    check("'hello there over and out' into an empty box was routed (the router said prompt) as 'hello there'", posts("/voice/route").some((x) => x.body.text === "hello there"));
     state.sendStatus = 0; state.sendReply = null;
     await page.evaluate(() => { document.getElementById("compose").value = ""; });
     // ---- a Chromium without Google's speech key (Arc, Brave, Vivaldi…):
@@ -683,7 +715,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     check("second network error → idle, the reason shown", (await vstate(page)) === "idle" && /^Speech recognition failed \(network\)/.test(netErr) && !(await page.evaluate(() => document.getElementById("voice-error").classList.contains("hidden"))), netErr);
     check("…and no further recognizer starts", (await page.evaluate(() => window.__recStarts)) === startsBefore + 1);
     check("…diagnostics keep it as the last error", (await page.evaluate(() => window.mfVoice.lastError)).indexOf("network") > 0);
-    // ---- push to talk, hold mode: press to talk, let go to keep ("over"); "submit" sends
+    // ---- push to talk, hold mode: press to talk, let go to keep; "over" sends (and ends the hold's listen)
     await page.evaluate(() => { const el = document.getElementById("voice-ptt"); el.value = "hold"; el.dispatchEvent(new Event("change")); });
     check("hold mode: the strip says 'Hold the mic to talk'", (await page.evaluate(() => window.mfVoice.caption)) === "Hold the mic to talk");
     const mic = await page.locator("#voice-btn").boundingBox();
@@ -692,7 +724,8 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await waitFor(page, () => window.mfVoice.state === "listening", 3000, "hold listening");
     check("pointerdown on the mic → listening", (await vstate(page)) === "listening");
     const holdHint = await page.evaluate(() => window.mfVoice.caption);
-    check("…the hint: 'Release to keep it; say submit to send'", holdHint.indexOf("Release to keep it; say “submit” to send") >= 0, holdHint);
+    check("…the hint: 'Release to keep it; say over to send'", holdHint.indexOf("Release to keep it; say “over” to send") >= 0, holdHint);
+    check("…a hold is never continuous", await page.evaluate(() => window.mfVoice.listen.cont === false));
     await page.evaluate(() => window.__hear("deploy the docs"));
     await waitFor(page, () => document.getElementById("compose").value === "deploy the docs", 3000, "hold phrase");
     nSends = posts("/send").length;
@@ -722,15 +755,15 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await page.dispatchEvent("#voice-btn", "pointercancel");
     await waitFor(page, () => window.mfVoice.state === "idle", 4000, "pointercancel kept");
     check("pointercancel keeps like a release", posts("/send").length === nSends && (await page.evaluate(() => document.getElementById("compose").value)) === "ship it");
-    // A press that says "submit": the kept words go, with say.
+    // A press that says "over": the kept words go, with say, and the hold's listen ends.
     await page.dispatchEvent("#voice-btn", "pointerdown");
     await waitFor(page, () => window.mfVoice.state === "listening", 3000, "hold listening 4");
-    await page.evaluate(() => window.__hear("now submit"));
-    await waitFor(page, () => window.mfVoice.state === "working", 4000, "hold submit sent");
-    check("holding, 'submit' sends the box (say:true)", posts("/send").length === nSends + 1 && lastSend().body.text === "ship it now" && lastSend().body.say === true, JSON.stringify(lastSend().body));
+    await page.evaluate(() => window.__hear("now over"));
+    await waitFor(page, () => window.mfVoice.state === "working", 4000, "hold over sent");
+    check("holding, 'over' sends the box (say:true)", posts("/send").length === nSends + 1 && lastSend().body.text === "ship it now" && lastSend().body.say === true, JSON.stringify(lastSend().body));
     await page.dispatchEvent("#voice-btn", "pointercancel");   // the finger lifts after: nothing more
     await sleep(200);
-    check("…the release after a submit changes nothing", (await vstate(page)) === "working" && posts("/send").length === nSends + 1);
+    check("…the release after an over changes nothing", (await vstate(page)) === "working" && posts("/send").length === nSends + 1);
     await idleEvent("Shipped.", 19);
     await waitFor(page, () => window.mfVoice.state === "idle", 3000, "idle after cancel");
     check("the ptt choice is remembered", (await page.evaluate(() => JSON.parse(localStorage.getItem("cs_voice")).ptt)) === "hold");
@@ -743,7 +776,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     check("'voice off' → off + POST /voice {on:false}", (await vstate(page)) === "off" && posts("/voice").some((x) => x.path.includes("api-docs") && x.body.on === false));
     check("strip hidden again", await page.evaluate(() => document.getElementById("voice-strip").classList.contains("hidden")));
     const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("cs_voice")));
-    check("localStorage holds session/on/rate/voiceName/handsFree/ptt/replies/wake only", stored && Object.keys(stored).sort().join(",") === "handsFree,on,ptt,rate,replies,session,voiceName,wake" && stored.on === false && stored.ptt === "toggle" && stored.replies === "mine" && stored.wake === false, JSON.stringify(stored));
+    check("localStorage holds session/on/rate/voiceName/handsFree/ptt/replies/wake/confirm/sounds only", stored && Object.keys(stored).sort().join(",") === "confirm,handsFree,on,ptt,rate,replies,session,sounds,voiceName,wake" && stored.on === false && stored.ptt === "toggle" && stored.replies === "mine" && stored.wake === false && stored.confirm === true && stored.sounds === true, JSON.stringify(stored));
 
     // ---- the sheet: diagnostics + voices
     await page.evaluate(() => document.getElementById("voice-btn").click());
@@ -785,7 +818,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
       backends: { stt: ["builtin"], tts: [] },
       system: { available: true, platform: "Windows", detail: "System.Speech (en-US)", voices: [], recognizers: ["en-US"] },
     };
-    state.transcribeReply = { text: "fix the parser submit", backend: "builtin", ms: 90 };
+    state.transcribeReply = { text: "fix the parser over and out", backend: "builtin", ms: 90 };
     state.transcribes = [];
     const sends3 = posts("/send").length;
     const page3 = await ctx.newPage();
@@ -846,7 +879,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     check("…the body is a RIFF/WAVE file at 16 kHz", tr.head === "RIFF" && tr.wave === "WAVE" && tr.rate === 16000 && tr.dataSize === tr.len - 44 && tr.len > 44 + 16000, JSON.stringify(tr));
     await waitFor(page3, () => window.mfVoice.state === "working", 5000, "server words sent");
     const sent3 = posts("/send").slice(sends3);
-    check("the server's 'fix the parser submit' went through the radio rules: sent", sent3.length === 1 && sent3[0].body.text === "fix the parser" && sent3[0].path.includes("invoice-parser"), JSON.stringify(sent3));
+    check("the server's 'fix the parser over and out' went through the radio rules: sent", sent3.length === 1 && sent3[0].body.text === "fix the parser" && sent3[0].path.includes("invoice-parser"), JSON.stringify(sent3));
     check("the microphone was asked for once", (await page3.evaluate(() => window.__gum)) === 1);
     await page3.click("#voice-gear");
     await sleep(200);
@@ -903,12 +936,12 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     state.transcribes = [];
     // Phrase 1 into the empty box (it can't be a command: typed as it
     // comes, the router reads its final words); phrase 2 streams into the
-    // box, corrected as it goes, and ends in "submit".
+    // box, corrected as it goes, and ends in "over and out".
     state.streamScript = {
       s1: [{ committed: "", partial: "fix the" }, { committed: "fix the", partial: "parser" }, { committed: "parser", partial: "" }],
-      s2: [{ committed: "and add", partial: "a" }, { committed: "a test", partial: "submit" }],
+      s2: [{ committed: "and add", partial: "a" }, { committed: "a test", partial: "over and out" }],
     };
-    state.streamEndReply = { s2: { committed: "submit" } };
+    state.streamEndReply = { s2: { committed: "over and out" } };
     const sends4 = posts("/send").length;
     const page4 = await ctx.newPage();
     page4.on("pageerror", (e) => errors.push(String(e)));
@@ -988,9 +1021,9 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     const i1 = boxes4.indexOf("fix the parser and add a"), i2 = boxes4.indexOf("fix the parser and add a test");
     check("phrase 2 typed into the box as it came — the unstable tail too — after the words already there", i1 >= 0 && i2 > i1, JSON.stringify(boxes4));
     check("…and the strip still said only its word (the DOM: one text node, no partial span)", caps4.every((c) => STRIP_WORDS.includes(c)) && (await page4.evaluate(() => { const c = document.getElementById("voice-caption"); return c.children.length === 0 && c.offsetHeight < 30; })), JSON.stringify(caps4));
-    check("…'submit' never reached the box", !boxes4.some((b) => /submit/i.test(b)), JSON.stringify(boxes4));
+    check("…'over and out' never reached the box (held back, then acted on)", !boxes4.some((b) => /\bover\b|\bout\b/i.test(b)), JSON.stringify(boxes4));
     const sent4 = posts("/send").slice(sends4);
-    check("…the flush ending in 'submit' sent the box without the word", sent4.length === 1 && sent4[0].body.text === "fix the parser and add a test", JSON.stringify(sent4));
+    check("…the phrase ending in 'over and out' sent the box without the words", sent4.length === 1 && sent4[0].body.text === "fix the parser and add a test", JSON.stringify(sent4));
     check("chunks went one at a time (never two in flight)", state.streamChunks.length >= 4 && state.streamMaxInflight === 1, state.streamChunks.length + " chunks, max in flight " + state.streamMaxInflight);
     check("…each a 16 kHz WAV", state.streamChunks.every((c) => c.ctype === "audio/wav" && c.head === "RIFF" && c.rate === 16000), JSON.stringify(state.streamChunks.slice(0, 3)));
     // Pacing: a stream's first chunk is at least 300 ms (padded before its
@@ -1019,7 +1052,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await page4.click("#voice-done");
     // A 409 on the open: the phrase is a clip, and the page stops asking.
     state.streamOpenStatus = 409;
-    state.transcribeReply = { text: "check the logs over", backend: "whisper", ms: 80 };
+    state.transcribeReply = { text: "check the logs, that's all", backend: "whisper", ms: 80 };
     await page4.evaluate(() => { document.getElementById("compose").value = ""; });
     await page4.click("#voice-btn");
     await waitFor(page4, () => window.mfVoice.state === "listening", 3000, "listening for the clip");
@@ -1044,7 +1077,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     const sidF = "s" + (state.streamOpens.length + 1);
     state.streamScript[sidF] = [{ committed: "check the", partial: "build" }];
     state.streamFailChunk[sidF] = 2;
-    state.transcribeReply = { text: "logs over", backend: "whisper", ms: 70 };
+    state.transcribeReply = { text: "logs that's all", backend: "whisper", ms: 70 };
     const deletesF = state.streamDeletes.length;
     await page4.evaluate(() => { document.getElementById("compose").value = ""; window.mfVoice.cfg.server_ready.stt_stream = true; });
     await page4.click("#voice-btn");
@@ -1077,20 +1110,20 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
       await waitFor(page4, done || (() => window.mfVoice.state === "idle"), 4000, "final kept");
       return { box: await page4.evaluate(() => document.getElementById("compose").value), boxes: await page4.evaluate(() => window.__boxes.slice()) };
     };
-    const fx = await finalRun({ committed: "over", final: "fix the bug over", final_ms: 1200, same: false });
-    check("final: a different final replaces the whole typed phrase (the words before it stay), then 'over' keeps it", fx.box === "keep this fix the bug" && fx.boxes.includes("keep this fix the bag") && fx.boxes.every((b) => b.indexOf("keep this") === 0 && !/over/.test(b)), JSON.stringify(fx));
+    const fx = await finalRun({ committed: "that's all", final: "fix the bug that's all", final_ms: 1200, same: false });
+    check("final: a different final replaces the whole typed phrase (the words before it stay), then the stop phrase keeps it", fx.box === "keep this fix the bug" && fx.boxes.includes("keep this fix the bag") && fx.boxes.every((b) => b.indexOf("keep this") === 0 && !/that's/.test(b)), JSON.stringify(fx));
     await page4.click("#voice-gear");
     await sleep(200);
     const diagF = await page4.evaluate(() => document.getElementById("voice-diag").textContent);
     check("final: …Diagnostics says 'final 1.2 s (corrected)' once", (diagF.match(/final 1\.2 s \(corrected\)/g) || []).length === 1, diagF.replace(/\n/g, " | "));
     await page4.click("#voice-done");
-    const fs = await finalRun({ committed: "over", final: "fix the bug over", final_ms: 900, same: true });
+    const fs = await finalRun({ committed: "that's all", final: "fix the bug that's all", final_ms: 900, same: true });
     check("final: `same` → no retype, the fast words stand", fs.box === "keep this fix the bag", JSON.stringify(fs));
-    const fa = await finalRun({ committed: "over" });
+    const fa = await finalRun({ committed: "that's all" });
     check("final: no `final` (an older server) → the fast words stand", fa.box === "keep this fix the bag", JSON.stringify(fa));
-    const fd = await finalRun({ committed: "", final: "fix the bug submit", final_ms: 800, same: false }, () => ["sending", "working"].includes(window.mfVoice.state));
+    const fd = await finalRun({ committed: "", final: "fix the bug over and out", final_ms: 800, same: false }, () => ["sending", "working"].includes(window.mfVoice.state));
     const sentF = posts("/send").slice(-1)[0];
-    check("final: …the rules read the final words ('submit' in the final alone sends the corrected box)", sentF && sentF.body.text === "keep this fix the bug", JSON.stringify([fd, sentF && sentF.body]));
+    check("final: …the rules read the final words ('over and out' in the final alone sends the corrected box)", sentF && sentF.body.text === "keep this fix the bug", JSON.stringify([fd, sentF && sentF.body]));
     await page4.close();
     state.voiceCfg = null;
 
@@ -1115,7 +1148,8 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     const rowTitles = () => page5.evaluate(() => Array.from(document.querySelectorAll("#session-list .sess-row")).map((r) => r.getAttribute("data-title")));
     const listen5 = async (label) => {
       if (!["listening", "awaiting"].includes(await vstate(page5))) await page5.click("#voice-btn");
-      return waitFor(page5, () => window.mfVoice.state === "listening" || window.mfVoice.state === "awaiting", 3000, label);
+      // (the recognizer too: a tap that cut a line — "Stopped." — opens the mic a moment later)
+      return waitFor(page5, () => (window.mfVoice.state === "listening" || window.mfVoice.state === "awaiting") && window.__rec && window.__rec.started, 3000, label);
     };
     const idle5 = (label) => waitFor(page5, () => window.mfVoice.state === "idle", 4000, label);
     const posts5 = (p) => state.posts.filter((x) => x.path.endsWith(p));
@@ -1505,17 +1539,23 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await page6.evaluate(() => window.__hear("disregard"));
     await sleep(150);
     check("ask: 'disregard' clears the field, still listening", (await fld()) === "" && (await page6.evaluate(() => window.mfVoice.state)) === "listening");
+    await waitFor(page6, () => !window.mfVoice.speech.playing && !window.mfVoice.speech.q.length, 3000, "nod said");
+    await sleep(250);
+    await page6.evaluate(() => window.__hear("call it parser"));
+    await page6.evaluate(() => window.__hear("submit"));
+    await sleep(150);
+    check("ask: 'submit' is a word in the field too: typed, nothing sent", (await fld()) === "call it parser submit" && posts6("/send").length === sendsQ5 && (await open6()), await fld());
+    await page6.evaluate(() => window.__hear("disregard"));
+    await waitFor(page6, () => !window.mfVoice.speech.playing && !window.mfVoice.speech.q.length, 3000, "nod said");
+    await sleep(250);
     await page6.evaluate(() => window.__hear("call it parser two"));
     await page6.evaluate(() => window.__hear("over"));
-    await sleep(300);
-    check("ask: 'over' stops, the words stay in the field, unsent", (await fld()) === "call it parser two" && (await page6.evaluate(() => window.mfVoice.state)) === "idle" && posts6("/send").length === sendsQ5 && (await open6()));
-    await page6.click("#asking-mic");
-    await waitFor(page6, () => window.mfVoice.state === "listening" && window.__rec && window.__rec.started, 4000, "listening again");
-    await page6.evaluate(() => window.__hear("submit"));
     await waitShut6("sent by voice");
     const sv = posts6("/send").slice(sendsQ5);
-    check("ask: 'submit' → POST /send {text, dialog_safe, say:true} to the asking session", sv.length === 1 && sv[0].path === "/api/instances/invoice-parser/send" && sv[0].body.text === "call it parser two" && sv[0].body.say === true && sv[0].body.dialog_safe === true, JSON.stringify(sv));
+    check("ask: 'over' → POST /send {text, dialog_safe, say:true} to the asking session", sv.length === 1 && sv[0].path === "/api/instances/invoice-parser/send" && sv[0].body.text === "call it parser two" && sv[0].body.say === true && sv[0].body.dialog_safe === true, JSON.stringify(sv));
     check("ask: …the sheet closes, the field emptied, the compose box untouched", !(await open6()) && (await fld()) === "" && (await page6.evaluate(() => document.getElementById("compose").value)) === "");
+    await sleep(200);
+    check("ask: …and listening goes on, now into the compose box (the sheet's mic is continuous)", (await page6.evaluate(() => window.mfVoice.state)) === "listening" && (await page6.evaluate(() => window.mfVoice.box === null)));
     state.rows[1].asking = null;
     await page6.evaluate(() => { document.getElementById("voice-cancel").click(); });
     await sleep(200);
@@ -1576,7 +1616,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     check("ask: Hear → read aloud name first, then listening for the answer", (await page7.evaluate(() => window.__spoken.join(" "))).indexOf("Invoice parser asks: Should I bump the version?") >= 0);
     check("ask: …the strip's 'Tap to hear' gone (one tap, not two)", await page7.evaluate(() => document.getElementById("voice-hear").classList.contains("hidden")));
     const sendsQ7 = posts("/send").length;
-    await page7.evaluate(() => window.__hear("yes bump it submit"));
+    await page7.evaluate(() => window.__hear("yes bump it over"));
     await waitFor(page7, () => document.getElementById("asking-name").textContent === "API docs", 4000, "deep link answered");
     const s7 = posts("/send").slice(sendsQ7);
     check("ask: the spoken answer → /send to that session, say:true", s7.length === 1 && s7[0].path === "/api/instances/invoice-parser/send" && s7[0].body.text === "yes bump it" && s7[0].body.say === true, JSON.stringify(s7));
@@ -1811,17 +1851,37 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await sleep(300);
     const ts9 = posts("/send").slice(sends9);
     check("everything: a typed prompt with voice off → POST /send {text, dialog_safe, say:true}", ts9.length === 1 && ts9[0].path === "/api/instances/login-fix/send" && ts9[0].body.text === "list the files" && ts9[0].body.say === true && ts9[0].body.dialog_safe === true, JSON.stringify(ts9));
-    // Voice on: the queue holds while the mic listens, and a listen after a
-    // read-out starts only once the queue has drained.
-    await page9.evaluate(() => { window.__speakMs = 15; });
+    // Voice on, continuous listening (a tap): a line plays in the quiet,
+    // over the listen — the recorder deaf for it — never after "over and
+    // out"; mid-sentence it waits for the quiet. A listen that is not
+    // continuous holds the queue; a listen after a read-out starts only
+    // once the queue has drained.
+    await page9.evaluate(() => { window.__speakMs = 300; });
     await page9.click("#voice-btn");
     await waitFor(page9, () => window.mfVoice.state === "listening", 3000, "listening (everything)");
+    await sleep(300);
     await turn9("api-docs", "Deployed to staging.");
+    await sleep(120);
+    check("continuous: a line queued in the quiet plays at once, over the listen", (await said(page9, "API docs: Deployed to staging.")) && (await vstate(page9)) === "listening", await vstate(page9));
+    check("continuous: …the recorder is muted while it plays, the listen still on", (await page9.evaluate(() => window.mfVoice.micMuted() && window.mfVoice.speech.playing && window.mfVoice.speech.playing.over === true)));
+    await waitFor(page9, () => !window.mfVoice.speech.playing, 3000, "line over");
+    await sleep(200);
+    check("continuous: …and unmuted after it (+150 ms), still listening", !(await page9.evaluate(() => window.mfVoice.micMuted())) && (await vstate(page9)) === "listening");
+    // Mid-sentence: words a moment ago and still coming — it waits for the quiet.
+    await page9.evaluate(() => window.__hear("fix the", true));
+    await turn9("invoice-parser", "Parsed the last file.");
+    await sleep(60);
+    check("continuous: mid-sentence the line waits", !(await said(page9, "Invoice parser: Parsed the last file.")));
+    await waitFor(page9, () => window.__spoken.indexOf("Invoice parser: Parsed the last file.") >= 0, 3000, "said in the quiet");
+    check("continuous: …then plays once the voice has been quiet, still listening", (await vstate(page9)) === "listening");
+    await waitFor(page9, () => !window.mfVoice.speech.playing, 3000, "line 2 over");
+    await page9.evaluate(() => { window.__speakMs = 15; window.mfVoice.listen.cont = false; });   // as an answer-listen is
+    await turn9("api-docs", "Deployed again.");
     await sleep(500);
-    check("queue: holds while the mic listens", !(await said(page9, "API docs: Deployed to staging.")) && (await page9.evaluate(() => window.mfVoice.speech.q.length)) === 1);
-    await page9.evaluate(() => window.__hear("hello over"));
-    await waitFor(page9, () => window.__spoken.indexOf("API docs: Deployed to staging.") >= 0, 3000, "said after listening");
-    check("queue: …and says it once listening stops", await said(page9, "API docs: Deployed to staging."));
+    check("queue: a listen that is not continuous holds it", !(await said(page9, "API docs: Deployed again.")) && (await page9.evaluate(() => window.mfVoice.speech.q.length)) === 1);
+    await page9.evaluate(() => window.__hear("hello, that's all"));
+    await waitFor(page9, () => window.__spoken.indexOf("API docs: Deployed again.") >= 0, 3000, "said after listening");
+    check("queue: …and says it once listening stops", await said(page9, "API docs: Deployed again."));
     await page9.evaluate(() => { document.getElementById("compose").value = ""; });
     await waitFor(page9, () => window.mfVoice.state === "idle", 3000, "idle again");
     await page9.evaluate(() => { window.__speakMs = 300; window.__speakLog = []; });
@@ -1879,6 +1939,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     // "stop talking" by voice, while listening: the queue goes, the mic stays.
     await page10.click("#voice-btn");
     await waitFor(page10, () => window.mfVoice.state === "listening" && window.__rec && window.__rec.started, 3000, "listening (hush)");
+    await page10.evaluate(() => { window.mfVoice.listen.cont = false; });   // a listen that holds the queue (an answer-listen); continuous plays them (page9)
     await turn10("invoice-parser", "Parsed the twelve files.");
     await turn10("api-docs", "Docs are built.");
     await sleep(200);
@@ -1938,7 +1999,8 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     const b10 = await page10.evaluate(() => ({ cancelAt: window.__cancelAt, recAt: window.__recStartAt, q: window.mfVoice.speech.q.map((x) => x.text), playing: !!window.mfVoice.speech.playing }));
     check("barge-in: the mic while a line is said → the speaker is cut BEFORE the mic opens", b10.cancelAt > 0 && b10.recAt > 0 && b10.cancelAt <= b10.recAt, JSON.stringify(b10));
     check("barge-in: …the mic opens ~150 ms after the cut (the phone's own voice unheard)", b10.recAt - b10.cancelAt >= 120 && b10.recAt - b10.cancelAt < 1000, String(b10.recAt - b10.cancelAt));
-    check("barge-in: …that session's next line dropped, another session's kept for after", b10.q.length === 1 && /Kept for later/.test(b10.q[0]) && !b10.playing, JSON.stringify(b10.q));
+    const b10s = await spoken(page10);
+    check("barge-in: …that session's next line dropped, another session's kept (said over the continuous listen, or queued)", !b10.q.some((t) => /Barge line two/.test(t)) && !b10s.some((t) => /Barge line two/.test(t)) && (b10.q.some((t) => /Kept for later/.test(t)) || (await page10.evaluate(() => window.mfVoice.speech.playing && /Kept for later/.test(window.mfVoice.speech.playing.text))) || b10s.some((t) => /Kept for later/.test(t))), JSON.stringify([b10.q, b10s.slice(-3)]));
     check("barge-in: …and the cut line is not said again", (await spoken(page10)).filter((t) => /Barge line/.test(t)).length === 1, JSON.stringify((await spoken(page10)).slice(-6)));
     await page10.click("#voice-cancel");
     await waitFor(page10, () => window.mfVoice.state === "idle", 3000, "idle (barge)");
@@ -2231,7 +2293,8 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
         setTimeout(() => { rec.endedAt = Date.now(); if (!rec.stopped && src.onended) src.onended({}); }, rec.dur * 1000);
       };
       AudioBufferSourceNode.prototype.stop = function () { if (this.__rec) this.__rec.stopped = Date.now(); };
-      try { localStorage.setItem("cs_voice", JSON.stringify({ replies: "all" })); } catch (e) {}
+      // Confirmations off here: their prefetch would add /speak requests to the sentence checks (tested below).
+      try { localStorage.setItem("cs_voice", JSON.stringify({ replies: "all", confirm: false })); } catch (e) {}
       window.__caps = [];
       document.addEventListener("DOMContentLoaded", () => {
         const el = document.getElementById("voice-caption");
@@ -2286,7 +2349,213 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     const capsS = await S(() => window.__caps.slice());
     const firstSp = capsS.indexOf("Speaking…"), lastSp = capsS.lastIndexOf("Speaking…");
     check("speak: the strip says 'Speaking…' for the whole line (no gap between sentences) and never the line's text", firstSp >= 0 && capsS.every((c) => ["", "Listening…", "Speaking…", "Quiet."].includes(c)) && capsS.slice(firstSp, lastSp + 1).every((c) => c === "Speaking…") && state.speaks.length === 3, JSON.stringify(capsS));
+    // ---- spoken confirmations through the server voice: made ahead only
+    // for a voice made on this machine, then played from memory.
+    await waitFor(pageS, () => !window.mfVoice.speech.playing, 4000, "quiet before the nods");
+    state.speaks = [];
+    await S(() => { window.mfVoice.prefs.confirm = true; window.mfVoice.nodPre.done = false; window.mfVoice.nodPrefetch(false); });
+    await sleep(500);
+    check("nod: no prefetch for a voice that may cost per line (voicelab), before a line it made has played", state.speaks.length === 0, JSON.stringify(state.speaks.map((x) => x.text)));
+    await S(() => { window.mfVoice.cfg.server_ready.tts_backend = "local"; window.mfVoice.nodPrefetch(false); });
+    for (let t = Date.now(); state.speaks.length < 4 && Date.now() - t < 5000; ) await sleep(50);
+    await sleep(300);
+    const pre = state.speaks.map((x) => x.text);
+    check("nod: a local voice → the confirmations made ahead, once each", ["Cleared.", "Stopped.", "Over and out."].every((t) => pre.includes(t)) && pre.some((t) => /^Sent\./.test(t)) && new Set(pre).size === pre.length, JSON.stringify(pre));
+    await S(() => window.mfVoice.nodPrefetch(false));
+    await sleep(300);
+    check("nod: …never twice", state.speaks.length === pre.length);
+    state.speaks = [];
+    await S(() => { window.__plays = []; });
+    await S(() => window.mfVoice.tts.speak("Cleared.", { cache: true }));
+    check("nod: a line made ahead plays from memory — no request", state.speaks.length === 0 && (await S(() => window.__plays.length)) === 1, JSON.stringify(state.speaks));
+    await S(() => window.mfVoice.tts.speak("All set here.", { cache: true }));
+    await S(() => window.mfVoice.tts.speak("All set here.", { cache: true }));
+    check("nod: …and a new one is asked for once, the second play from memory", state.speaks.filter((x) => x.text === "All set here.").length === 1, JSON.stringify(state.speaks.map((x) => x.text)));
     await pageS.close();
+    state.voiceCfg = null;
+
+    // ---- chimes and confirmations on the phone's own voice: a rising chime
+    // whenever listening starts, a falling one whenever it stops (never on
+    // "over", which listens on), held while a line is said, off with Sounds;
+    // "Sent." / "Cleared." / "Stopped." / "Sent. Over and out." spoken.
+    state.voiceCfg = { stt: "phone", tts: "phone", approve_dialogs: true };
+    const pageC = await ctx.newPage();
+    pageC.on("pageerror", (e) => errors.push(String(e)));
+    await pageC.addInitScript(() => { try { localStorage.removeItem("cs_voice"); } catch (e) {} });
+    await pageC.route("**/api/**", mock);
+    await pageC.goto(`http://127.0.0.1:${PORT}/mobile.html?s=login-fix`, { waitUntil: "load" });
+    await waitFor(pageC, () => window.mfVoice && document.getElementById("picker-title").textContent === "Login fix", 5000, "chime page loaded");
+    const C = (fn, arg) => pageC.evaluate(fn, arg);
+    const chimes = () => C(() => Object.assign({ start: 0, stop: 0 }, window.mfVoice.chimes || {}));
+    const ch0 = await chimes();
+    await pageC.click("#voice-btn");
+    await waitFor(pageC, () => window.mfVoice.state === "listening", 3000, "chime listening");
+    check("chime: Sounds on by default; the tap's start → the rising chime", (await C(() => window.mfVoice.prefs.sounds)) === true && (await chimes()).start === ch0.start + 1 && (await chimes()).stop === ch0.stop, JSON.stringify(await chimes()));
+    const sendsC = posts("/send").length;
+    await C(() => window.__hear("fix the login bug"));
+    await sleep(200);
+    await C(() => window.__hear("now over"));
+    for (let t = Date.now(); posts("/send").length === sendsC && Date.now() - t < 3000; ) await sleep(30);
+    await sleep(300);
+    check("chime: 'over' sends and listens on — no chime; 'Sent.' said", (await chimes()).stop === ch0.stop && (await chimes()).start === ch0.start + 1 && (await vstate(pageC)) === "listening" && (await said(pageC, "Sent.")), JSON.stringify(await chimes()));
+    await C(() => window.__hear("disregard"));
+    await sleep(300);
+    check("chime: 'disregard' — no chime either", (await chimes()).stop === ch0.stop);
+    await C(() => window.__hear("fix the docs"));
+    await sleep(150);
+    await C(() => window.__hear("over and out"));
+    await waitFor(pageC, () => window.mfVoice.state === "working", 4000, "over and out sent");
+    check("chime: 'over and out' → the falling chime", (await chimes()).stop === ch0.stop + 1, JSON.stringify(await chimes()));
+    await C(() => { window.mfVoice.state = "idle"; });
+    await pageC.click("#voice-btn");
+    await waitFor(pageC, () => window.mfVoice.state === "listening", 3000, "chime listening 2");
+    await pageC.click("#voice-cancel");
+    await waitFor(pageC, () => window.mfVoice.state === "idle", 3000, "cancelled");
+    check("chime: start again, then Cancel → the falling chime", (await chimes()).start === ch0.start + 2 && (await chimes()).stop === ch0.stop + 2, JSON.stringify(await chimes()));
+    await pageC.click("#voice-btn");
+    await waitFor(pageC, () => window.mfVoice.state === "listening", 3000, "chime listening 3");
+    await C(() => window.__hear("that's all"));
+    await waitFor(pageC, () => window.mfVoice.state === "idle", 3000, "stopped by phrase");
+    await sleep(200);
+    check("chime: a stop phrase → the falling chime, and 'Stopped.' said", (await chimes()).stop === ch0.stop + 3 && (await said(pageC, "Stopped.")), JSON.stringify(await chimes()));
+    await pageC.click("#voice-btn");
+    await waitFor(pageC, () => window.mfVoice.state === "listening", 3000, "chime listening 4");
+    await pageC.click("#voice-btn");
+    await waitFor(pageC, () => window.mfVoice.state === "idle", 3000, "tap stopped");
+    check("chime: the second tap → the falling chime", (await chimes()).start === ch0.start + 4 && (await chimes()).stop === ch0.stop + 4, JSON.stringify(await chimes()));
+    // Held while a line is said, then played.
+    await C(() => { window.__speakMs = 500; window.mfVoice.speakLine("A long enough line to hold a chime."); });
+    await sleep(150);
+    const heldC = await C(() => window.mfVoice.chime("stop"));
+    check("chime: muted while a line is said (held)", heldC === false && (await chimes()).stop === ch0.stop + 4);
+    await waitFor(pageC, () => !window.mfVoice.speech.playing, 3000, "line said");
+    await sleep(100);
+    check("chime: …and played once it is over", (await chimes()).stop === ch0.stop + 5, JSON.stringify(await chimes()));
+    await C(() => { window.__speakMs = 15; window.mfVoice.state = "idle"; });
+    // Sounds off: no chime either way; saved.
+    await C(() => { const el = document.getElementById("voice-sounds"); el.checked = false; el.dispatchEvent(new Event("change")); });
+    const chOff = await chimes();
+
+    await pageC.click("#voice-btn");
+    await waitFor(pageC, () => window.mfVoice.state === "listening", 3000, "listening, sounds off");
+    await pageC.click("#voice-cancel");
+    await waitFor(pageC, () => window.mfVoice.state === "idle", 3000, "idle, sounds off");
+    check("chime: Sounds off → no chime at the start or the stop; the choice saved", JSON.stringify(await chimes()) === JSON.stringify(chOff) && (await C(() => JSON.parse(localStorage.getItem("cs_voice")).sounds)) === false, JSON.stringify([chOff, await chimes()]));
+    // Confirmations off: silent.
+    await C(() => { const el = document.getElementById("voice-confirm"); el.checked = false; el.dispatchEvent(new Event("change")); window.__spoken = []; });
+    await pageC.click("#voice-btn");
+    await waitFor(pageC, () => window.mfVoice.state === "listening", 3000, "listening, confirmations off");
+    await C(() => window.__hear("disregard"));
+    await sleep(300);
+    check("nod: Spoken confirmations off → 'disregard' clears silently", !(await said(pageC, "Cleared.")) && (await C(() => JSON.parse(localStorage.getItem("cs_voice")).confirm)) === false);
+    await pageC.click("#voice-cancel");
+    await pageC.close();
+    state.voiceCfg = null;
+
+    // ---- control words act from the streamed guess: once the voice has been
+    // quiet 250 ms after one (never before), "over" ends the phrase at once
+    // and goes with /end's final (or the fast words after 2.5 s);
+    // "disregard" acts on the guess alone.
+    state.voiceCfg = {
+      stt: "server", tts: "phone", approve_dialogs: true,
+      server_ready: { stt: true, tts: false, stt_backend: "whisper", stt_stream: true },
+      backends: { stt: ["whisper"], tts: [] },
+    };
+    state.voiceGet = { on: false, say: null, has_question: false, source: "none", ts: null };
+    const pageG = await ctx.newPage();
+    pageG.on("pageerror", (e) => errors.push(String(e)));
+    await pageG.addInitScript(() => {
+      navigator.mediaDevices.getUserMedia = function () {
+        const ac = new AudioContext();
+        const osc = ac.createOscillator(), gain = ac.createGain(), dst = ac.createMediaStreamDestination();
+        gain.gain.value = 0.002;
+        osc.frequency.value = 440;
+        osc.connect(gain); gain.connect(dst); osc.start();
+        window.__tone = (g) => { gain.gain.value = g; };
+        return Promise.resolve(dst.stream);
+      };
+      window.__boxes = [];
+      setInterval(() => { const b = document.getElementById("compose"); if (b && b.value !== window.__lastBox) { window.__lastBox = b.value; window.__boxes.push(b.value); } }, 10);
+      try { localStorage.setItem("cs_voice", JSON.stringify({ confirm: false })); } catch (e) {}
+    });
+    await pageG.route("**/api/**", mock);
+    await pageG.goto(`http://127.0.0.1:${PORT}/mobile.html?s=api-docs`, { waitUntil: "load" });
+    await waitFor(pageG, () => window.mfVoice && window.mfVoice.cfg.loaded && document.getElementById("picker-title").textContent === "API docs", 5000, "guess page loaded");
+    await pageG.evaluate(() => { document.getElementById("compose").value = "draft:"; });
+    await pageG.click("#voice-btn");
+    await waitFor(pageG, () => window.mfVoice.state === "listening" && window.mfVoice.stt.name === "server" && window.__tone, 4000, "guess listening");
+    // The next phrase's stream: wait for it to open, script it, speak.
+    let usedG = 0;
+    const nextSid = async () => {
+      for (let t = Date.now(); state.streamOpens.length <= usedG && Date.now() - t < 4000; ) await sleep(20);
+      usedG = state.streamOpens.length;
+      return "s" + usedG;
+    };
+    const sidGA = await nextSid();
+    state.streamScript[sidGA] = [{ committed: "", partial: "fix the" }, { committed: "fix the", partial: "bug over" }, { committed: "bug over", partial: "" }];
+    state.streamEndReply[sidGA] = { committed: "", final: "fix the bug over", final_ms: 300, same: true };
+    const sendsG = posts("/send").length;
+    await sleep(400);
+    await pageG.evaluate(() => window.__tone(0.4));
+    for (let t = Date.now(); state.streamChunks.filter((c) => c.id === sidGA).length < 4 && Date.now() - t < 4000; ) await sleep(20);
+    await sleep(200);
+    check("guess: 'over' in the guess while the voice goes on → nothing yet (no /end, nothing sent)", state.streamEnds.indexOf(sidGA) < 0 && posts("/send").length === sendsG, JSON.stringify([state.streamEnds, state.streamChunks.filter((c) => c.id === sidGA).length]));
+    const offGA = Date.now();
+    await pageG.evaluate(() => window.__tone(0.002));
+    for (let t = Date.now(); posts("/send").length === sendsG && Date.now() - t < 4000; ) await sleep(10);
+    const tookGA = Date.now() - offGA;
+    const sentGA = posts("/send").slice(sendsG);
+    check("guess: …quiet after it → /end at once and the box sent, well before the silence stop (" + tookGA + " ms)", state.streamEnds.indexOf(sidGA) >= 0 && sentGA.length === 1 && sentGA[0].body.text === "draft: fix the bug" && tookGA < 1000, JSON.stringify([tookGA, sentGA.map((x) => x.body.text)]));
+    check("guess: …'over' never reached the box, and listening goes on", !(await pageG.evaluate(() => window.__boxes.some((b) => /over/.test(b)))) && (await vstate(pageG)) === "listening");
+    await pageG.click("#voice-gear");
+    await sleep(200);
+    const diagG = await pageG.evaluate(() => document.getElementById("voice-diag").textContent);
+    check("guess: Diagnostics says 'over → sent N s' (the word's end → the Enter)", /Last control: over → sent \d\.\d s/.test(diagG), diagG.replace(/\n/g, " | "));
+    await pageG.click("#voice-done");
+    // A slow accurate pass: past 2.5 s the fast words go, a late final is ignored.
+    const sidGB = await nextSid();
+    state.streamScript[sidGB] = [{ committed: "", partial: "ship" }, { committed: "ship", partial: "it over" }, { committed: "it over", partial: "" }];
+    state.streamEndReply[sidGB] = { committed: "", final: "skip it over", final_ms: 3900, same: false };
+    state.streamEndDelay[sidGB] = 4000;
+    const sendsG2 = posts("/send").length;
+    await sleep(300);
+    await pageG.evaluate(() => window.__tone(0.4));
+    for (let t = Date.now(); state.streamChunks.filter((c) => c.id === sidGB).length < 4 && Date.now() - t < 4000; ) await sleep(20);
+    const offGB = Date.now();
+    await pageG.evaluate(() => window.__tone(0.002));
+    for (let t = Date.now(); posts("/send").length === sendsG2 && Date.now() - t < 6000; ) await sleep(10);
+    const tookGB = Date.now() - offGB;
+    const sentGB = posts("/send").slice(sendsG2);
+    check("guess: /end slower than 2.5 s → the fast words sent at ~2.5 s (" + tookGB + " ms)", sentGB.length === 1 && sentGB[0].body.text === "ship it" && tookGB >= 2400 && tookGB < 3600, JSON.stringify([tookGB, sentGB.map((x) => x.body.text)]));
+    await sleep(2000);
+    check("guess: …and the late final changed nothing (no second send)", posts("/send").length === sendsG2 + 1 && (await vstate(pageG)) === "listening");
+    // "disregard": acts on the guess, the stream dropped (never ended).
+    await pageG.evaluate(() => { document.getElementById("compose").value = "throw this away"; });
+    const sidGD = await nextSid();
+    state.streamScript[sidGD] = [{ committed: "", partial: "no" }, { committed: "no", partial: "disregard" }, { committed: "disregard", partial: "" }];
+    await sleep(300);
+    await pageG.evaluate(() => window.__tone(0.4));
+    for (let t = Date.now(); state.streamChunks.filter((c) => c.id === sidGD).length < 4 && Date.now() - t < 4000; ) await sleep(20);
+    const offGD = Date.now();
+    await pageG.evaluate(() => window.__tone(0.002));
+    await waitFor(pageG, () => document.getElementById("compose").value === "", 2000, "disregarded");
+    const tookGD = Date.now() - offGD;
+    check("guess: 'disregard' acts on the guess at once (" + tookGD + " ms), no /end, the stream DELETEd", tookGD < 800 && state.streamEnds.indexOf(sidGD) < 0 && state.streamDeletes.indexOf(sidGD) >= 0 && (await vstate(pageG)) === "listening", JSON.stringify([tookGD, state.streamEnds, state.streamDeletes]));
+    // A held word the next word rules out is typed, and nothing fires.
+    const sidGH = await nextSid();
+    state.streamScript[sidGH] = [{ committed: "", partial: "go over" }, { committed: "go over", partial: "the bridge" }, { committed: "the bridge", partial: "" }];
+    await pageG.evaluate(() => { document.getElementById("compose").value = "note:"; window.__boxes = []; window.__lastBox = null; });
+    const sendsGH = posts("/send").length;
+    await sleep(300);
+    await pageG.evaluate(() => window.__tone(0.4));
+    for (let t = Date.now(); state.streamChunks.filter((c) => c.id === sidGH).length < 4 && Date.now() - t < 4000; ) await sleep(20);
+    await sleep(150);
+    await pageG.evaluate(() => window.__tone(0.002));
+    await sleep(700);
+    const boxesGH = await pageG.evaluate(() => window.__boxes.slice());
+    check("guess: 'over' held back until the next word rules it out ('go' → 'go over the bridge'), nothing fired", boxesGH.includes("note: go") && boxesGH.includes("note: go over the bridge") && !boxesGH.includes("note: go over") && posts("/send").length === sendsGH && state.streamEnds.indexOf(sidGH) < 0, JSON.stringify([boxesGH, state.streamEnds.slice(-2)]));
+    await pageG.click("#voice-cancel");
+    await pageG.close();
     state.voiceCfg = null;
   } catch (e) {
     console.log("HARNESS ERROR", e && e.stack || e);

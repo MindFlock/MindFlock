@@ -6366,7 +6366,7 @@ right there:
   and say so; *next* and *back* are the buttons; *submit* / *done* before the
   review run **Next** up to it; *submit* / *yes* on the review submits,
   *cancel* / *no* cancels; *type something* /
-  *chat about this* open the field and dictate into it — *submit* sends it.
+  *chat about this* open the field and dictate into it — *over* sends it.
   After each spoken step the next one is read and listened for; the end is
   *Answered.*
 
@@ -6410,10 +6410,12 @@ once.
 through the voice dialog mode: *yes* / *no* / *always* (said, never implied) /
 an option's number when the options are not a permission, under **Approve
 dialogs by voice** (off → *tap an answer*). A prose question is dictated into
-the sheet's field with the radio words — *submit* sends it (a dictated answer
-asks for a spoken reply, like any dictated prompt with Spoken replies on),
-*disregard* clears it, *over* stops and leaves the words for Send; inside the
-sheet every phrase is the answer's words, never a command. The strip's state
+the sheet's field with the radio words — *over* sends it (a dictated answer
+asks for a spoken reply, like any dictated prompt with Spoken replies on)
+and, the sheet closed, listening goes on into the compose box (the sheet's
+🎙 is a continuous listen, below); *over and out* sends it and stops;
+*disregard* clears it; *submit* is just a word. Inside the sheet every phrase
+is the answer's words, never a command. The strip's state
 is mirrored on the sheet while it is open. A push's tap (`/m?s=<title>&voice=1`)
 opens that session's sheet — even with the pop-up off — with **Hear it and
 answer by voice**: one tap reads the question name first and listens (12 s, one
@@ -6538,10 +6540,10 @@ new answer **corrects it in place** from where it differs (*fix the bu* →
 never touched, the caret stays at the end). A space joins the phrase to the
 words already in the box; none is added after it while you speak. The
 phrase is decided only at its **end**: the guess is taken back and the
-final words go in by the usual rules — *over*, *submit*, *disregard* (which
+final words go in by the usual rules — *over*, *over and out*, *disregard* (which
 takes back the whole box, the guess included), a command, an answer — so a
 correction can never send, stop or answer anything. **Never typed, not even
-as a guess:** a trailing control phrase or its start — *over*, *submit*,
+as a guess:** a trailing control phrase or its start — *over* (…*and out*),
 *disregard (that)*, *stop* (it may become *stop recording*), *that is*
 (…*all*), *quiet* / *stop talking*, and while the session is asking *yes*,
 *no*, *option* (…*two*) — until the next word rules it out (*stop the
@@ -6554,6 +6556,20 @@ is the final words, never a guess); and anything while an earlier phrase is
 with the router. A stop phrase still acts the moment its words settle,
 mid-phrase. Listening that stops before a phrase ends (Cancel aside, which
 empties the box) leaves its guess in the box as text.
+
+**Control words act from the guess.** A guess that **ends** in a control
+phrase (`voiceGuessControl`: *over and out* before *over*, *disregard*, a
+stop phrase, *stop talking*) acts as soon as the voice has been quiet
+**250 ms** after it (`VOICE_CONTROL_TAIL_MS`) — never while it is still
+loud, and not at all if the next guess rules it out (*go over the bridge*)
+— instead of after the 1.1 s silence stop. *Disregard*, a stop phrase and
+*stop talking* need no accurate words: they act on the guess at once, the
+stream DELETEd, never ended. *Over* / *over and out* end the phrase there
+(`POST …/end`) and send with `/end`'s accurate `final` (the retype first);
+when `/end` takes longer than **2.5 s** (`VOICE_CONTROL_END_MS`) the fast
+words go and a later final is ignored. The trace and Diagnostics time it:
+*Last control: over → sent 0.9 s* (the word's last loud block → the
+Enter).
 
 **Pacing.** A phrase's first chunk goes once **150 ms of speech** is in
 (with the 300 ms lead-in before it); after that each chunk waits for the
@@ -6571,7 +6587,7 @@ transcribed again by it), `final_ms` and `same` (true: no different). When
 `final` is there and `same` is not true, the **whole phrase typed so far**
 (its committed words and the guess — never the words before it) is
 replaced in the box by `final`, the caret at the end, **before** the phrase
-is decided: *over*, *submit*, *disregard*, a command, a dialog's answer all
+is decided: *over*, *over and out*, *disregard*, a command, a dialog's answer all
 read the accurate words. Without `final` (an older server, one model) the
 fast words stand. Diagnostics' *Last transcribe* line says *final 1.2 s*
 (and *(corrected)* when it changed the words). A 409 on the open
@@ -6616,36 +6632,44 @@ phrase: interim words show in the strip's caption, each finished phrase
 lands in the compose box, and the mic stays open across pauses. How it ends
 is the ⚙ sheet's **Push to talk** (a per-phone setting):
 
-- **Tap to talk** (the default) — a tap on the mic starts listening; the
-  next tap on the mic (or on the strip) means **"over"**: listening stops
-  and the words stay in the box, unsent.
+- **Tap to talk** (the default) — a tap on the mic starts a **continuous**
+  listen (so do the first tap that turns voice on, the wake word and the
+  ask sheet's 🎙): it runs until **"over and out"**, a stop phrase, the next
+  tap on the mic (or on the strip), Cancel — never on silence. The tap
+  stops with the words in the box, unsent.
 - **Hold to talk** — press and hold the mic to talk; letting go (or the
-  phone cancelling the touch) means "over" too. The first tap of a session
+  phone cancelling the touch) stops, the words kept. A hold is never
+  continuous: its *over* sends and ends it. The first tap of a session
   still just turns voice on, and a plain click (a keyboard, a screen
   reader) starts a tap-style listen.
 
 Either way the words still on their way are waited for before listening
 stops: the phone's last phrase (at most 1.5 s), a server clip being
 transcribed, a route answer (below). The radio words work in both modes:
-end a phrase with **"over"** and listening stops with the words in the box,
-nothing sent (*In the box — say "submit", or tap Send*); end it with
-**"submit"** and the box (with that phrase's words) is **sent**; end it
-with **"disregard"** (or *disregard that*) and the box is emptied and
-listening goes on. **"submit" and the Send button are the only ways to
-send** — the push-to-talk gesture never does. A "submit" with nothing in
-the box says *Nothing to send yet* and listens on. **Cancel** stops and
-drops the words, **Send** sends whatever is in the box at once, and two
-minutes without a word stops with the words kept, unsent (*Kept, not sent —
-Send sends it, or tap the mic to go on*). The last word of a phrase is what
-counts — an "over" in the middle of a sentence is a word, and so is
-"submitted" — and case and punctuation do not matter (*Over.*, *Submit!*,
-*Disregard that.*). Commands ("switch to…", "new
+end a phrase with **"over"** and the box (with that phrase's words) is
+**sent** — and a continuous listen goes on listening: the box empties at
+once, the next phrase starts on the same session, no tap needed (the send
+is the same `POST /send`; a failure puts the words back in front of what
+was said since). End it with **"over and out"** (or *over, out*) and the
+box is sent and listening **stops** (nothing in the box: nothing is sent,
+it just stops). End it with **"disregard"** (or *disregard that*) and the
+box is emptied and listening goes on. **"over" and the Send button are the
+only ways to send** — the push-to-talk gesture never does; **"submit" is an
+ordinary word** (typed, never sent — a select dialog's review still takes a
+spoken *submit*, below). An "over" with nothing in the box says *Nothing
+to send yet* and listens on. **Cancel** stops and drops the words, **Send**
+sends whatever is in the box at once, and a listen that is not continuous
+(a reply's question, hands-free) stops after two minutes without a word,
+the words kept, unsent (*Kept, not sent — Send sends it, or tap the mic to
+go on*). The last words of a phrase are what count — an "over" in the
+middle of a sentence is a word — and case and punctuation do not matter
+(*Over.*, *Over and out!*, *Disregard that.*). Commands ("switch to…", "new
 session…", "what needs me", "voice off"…) are commands only while the box
 is empty; mid-message they are words (see **Voice commands** below) — except
 the **control words**, which act at the end of *any* phrase: a stop phrase
 always, an answer while the session is asking (below). Then
 *Sent to <name>.* (or *Queued for <name> — it is on a prompt.*: while voice
-is on, Send and "submit" go through `POST /send {dialog_safe:
+is on, Send and "over" go through `POST /send {dialog_safe:
 true, say}`, so a prompt is queued
 rather than typed into a dialog; a waking session says *<name> is waking up,
 try again in a moment.*, a paused one *<name> is paused. Resume it first.*,
@@ -6697,6 +6721,48 @@ reply. A turn that ends with no line at all says *<name> finished.*
   to it with one POST (an older server without `say_all` is left alone). A
   403 (a device that is not the owner) is said once on the status line and
   the choice stays.
+
+**In continuous listening** a line does not wait for the listen to end: the
+Say line of the turn you sent, another session's line, an ask read-out, a
+router line all play **as soon as they are ready**, over the listen — the
+recorder deaf for the line and 150 ms after it (its blocks skipped, the
+phrase under way not ended; the phone's own recognizer, which cannot be
+deafened, has what it reports meanwhile dropped), and listening goes on
+after it. Only **mid-sentence** — words in the last 1.5 s and a voice in
+the last 250 ms — does the queue hold, until the quiet. A tap on the mic
+while such a line plays cuts it (barge-in) and the listen goes on; the
+reply's own answer-listen and hands-free do not apply (it never stopped
+listening). A listen that is not continuous still holds the queue.
+
+**Spoken confirmations** (the ⚙ sheet, per phone, under Spoken replies; on
+by default): short lines in the configured voice for what *you* did —
+*Sent.* after *over* (as the Enter is pressed; listening goes on), *Sent.
+Over and out.* after *over and out* (*Over and out.* when nothing was in the
+box), *Cleared.* after *disregard*, *Stopped.* after a stop phrase; a
+session switch says the router's own line (*Now on …*). They speak even
+with Spoken replies **Off** (they are about your action, not the agent's
+reply). One voice still: they go through the queue but at its **front**
+(after the confirmations already there), are said even while the mic
+listens (the recorder deaf for them, as above), and are dropped when 5 s
+old by their turn. With the server's voice each confirmation's audio is
+kept in memory per voice (backend + its detail) after its first synthesis,
+so a slow voice says the second *Sent.* at once; the five lines are made
+ahead once — right after the tap that unlocks audio for a voice made on
+this machine (`server_ready.tts_backend` `local` / `system`), and for any
+other host (it may cost per line) only once a line it made has played. The
+phone's own voice says them directly. A phrase heard right after a
+confirmation that starts with its words has them taken off (the phone
+recognizer's echo).
+
+**Sounds** (the ⚙ sheet, per phone; on by default): a **rising** two-tone
+chime (~120 ms) whenever the mic starts listening — a tap, the wake word,
+the ask sheet's 🎙, a listen after a question — and a **falling**, softer one
+(880 → 660 Hz, ~140 ms) whenever it stops: *over and out*, a stop phrase,
+Cancel, the tap that ends it, a hold's release, the window running out, a
+refused or failed microphone. *Over* (send, listen on) plays none — *Sent.*
+is the cue. Both are made from the page's AudioContext (no asset); the
+recorder skips them; a chime due while a reply is being said waits for it
+to end.
 
 **Wake word: say "MindFlock".** **Listen for "MindFlock"** in the ⚙ sheet
 (under Spoken replies; off by default, stored with the phone's other voice
@@ -6828,7 +6894,7 @@ act whatever is in the box, and never land in it:
 
 | Say (at the end) | Does |
 |---|---|
-| *stop recording* · *stop listening* · *stop dictating* · *mic off* · *that's all* · *that is all* · *done talking* · *I'm done talking* | stops listening; the words said before it stay in the box, unsent (*In the box — say "submit", or tap Send*). In a dialog too — before *stop* could be read as a *no* |
+| *stop recording* · *stop listening* · *stop dictating* · *mic off* · *that's all* · *that is all* · *done talking* · *I'm done talking* | stops listening; the words said before it stay in the box, unsent (*In the box — say "over", or tap Send*), and says *Stopped.* — after an *over* (*fix it over and out, that's all*) it sends as *over and out* does. In a dialog too — before *stop* could be read as a *no* |
 | *yes* · *no (thanks)* · *always* · *yes and don't ask again* · *option two* · *the second one* · *answer yes* | **only while the session is asking** — a dialog is up, or its last `Say:` line asked a question: answers it. A bare number counts only as the whole phrase (*add two* is words) |
 
 An answer to a **dialog** is the option the dialog's own words pick (the
@@ -6836,7 +6902,7 @@ table under *Dialogs by voice*: *always* only when said, a number never on a
 permission prompt), POSTed as below — only with **Approve dialogs by voice**
 on, else *Answer it on the screen.* An answer to a **question** is a prompt:
 it goes to the session through `POST /send` like any other (with the words
-already in the box in front of it), no *submit* needed. Said into an empty
+already in the box in front of it), no *over* needed. Said into an empty
 box the router decides first: `{kind: "answer", choice, number?, dialog_id,
 keys, say?}` is POSTed as is (`POST /answer {keys, dialog_id, by: "user"}` —
 *always* is the router's call), `{kind: "answer", index}` (only the row
@@ -6942,8 +7008,9 @@ tap to reply". See [Notifications](#notifications-).
 the page is hidden it stops listening and speaking, closes its socket and
 releases the wake lock; on return it re-locks, reconnects and asks for a
 line that arrived meanwhile. Nothing speaks while the phone is locked except
-the OS reading a push. Dictation is for intent, not code — the explicit
-"submit" (after "over" leaves the words to read) and the editable box are
+the OS reading a push. Dictation is for intent, not code — the words show
+in the box as you speak, nothing goes before an explicit "over", and a stop
+phrase or a tap keeps them in the editable box to fix before Send: that is
 the mitigation for misheard identifiers. iOS speaks
 only through its compact voices and cuts long utterances, so lines are
 chunked by sentence with a timeout behind each chunk. Phone recognition

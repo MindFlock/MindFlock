@@ -199,7 +199,7 @@ def test_wake_switch_in_the_voice_sheet():
 
 def test_wake_pref_load_save_and_default():
     js = _js()
-    assert 'replies: "mine", wake: false }' in js
+    assert 'replies: "mine", wake: false, confirm: true, sounds: true }' in js
     assert "voice.prefs.wake = j.wake === true;" in _fn(js, "voiceLoadPrefs")
     assert "wake: voice.prefs.wake," in _fn(js, "voicePersist")
     # The switch: the pref, saved, the context made in this tap.
@@ -208,7 +208,9 @@ def test_wake_pref_load_save_and_default():
     assert (
         "voicePrime();" in sw and "voicePersist();" in sw and "voiceWakeSync();" in sw
     )
-    assert "voice.prefs.wake) voiceAudioCtx();" in _fn(js, "voicePrime")
+    assert "voice.prefs.wake || voice.prefs.sounds !== false) voiceAudioCtx();" in _fn(
+        js, "voicePrime"
+    )
     assert "voiceWakeEl.checked = !!voice.prefs.wake;" in _fn(js, "voiceSheetOpen")
     off = _fn(js, "voiceWakeOff")
     assert "voice.prefs.wake = false;" in off and "voicePersist();" in off
@@ -229,10 +231,14 @@ def test_wake_request_shape_and_answers():
     assert "navigator.vibrate(12)" in woke
     # Exactly a tap in toggle mode — at once, the chime in the same moment
     # (no timer before listening), the chime's audio skipped by the recorder.
-    assert 'voiceListen("prompt", VOICE_TAP_MS);' in woke and "voiceBargeIn();" in woke
+    # …and continuous, as a tap is: listening until "over and out".
+    assert (
+        'voiceListen("prompt", VOICE_TAP_MS, false, true);' in woke
+        and "voiceBargeIn();" in woke
+    )
     assert "setTimeout" not in woke
     assert woke.index("voiceWakeChime();") < woke.index(
-        'voiceListen("prompt", VOICE_TAP_MS);'
+        'voiceListen("prompt", VOICE_TAP_MS, false, true);'
     )
     assert (
         "voiceListen_.woke = { skipUntil: now + VOICE_WAKE_CHIME_MS + VOICE_WAKE_SKIP_PAD_MS, wakeMs: W.wakeMs };"
@@ -260,7 +266,10 @@ def test_wake_request_shape_and_answers():
     # Diagnostics: "wake 0.6 s" (the word's end → listening).
     assert '", wake " + (W.wakeMs / 1000).toFixed(1) + " s' in _fn(js, "voiceDiagWake")
     assert '"wake " + (t.wake / 1000).toFixed(1) + " s' in _fn(js, "voiceDiagTrace")
-    chime = _fn(js, "voiceWakeChime")
+    # The wake word's chime is the start chime (voiceChime: the page's
+    # AudioContext, no asset).
+    assert 'var ok = voiceChime("start");' in _fn(js, "voiceWakeChime")
+    chime = _fn(js, "voiceChime")
     assert "voice.audioCtx" in chime and "createOscillator" in chime
     assert "var VOICE_WAKE_GAP_MS = 1500;" in js
     assert "var VOICE_WAKE_AFTER_SPEECH_MS = 500;" in js
