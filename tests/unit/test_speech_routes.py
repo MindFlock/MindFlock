@@ -157,6 +157,8 @@ class TestGet:
         r = client.post("/api/voice/install-local")
         assert r.status_code == 403
         assert client.get("/api/voice/install-local").status_code == 200
+        r = client.post("/api/voice/say-all", json={"on": True})
+        assert r.status_code == 403
 
     def test_configure_allowed_for_the_owner(self, fakes):
         assert client.get("/api/voice").json()["configure_allowed"] is True
@@ -646,3 +648,28 @@ class TestInstallLocal:
         r = client.post("/api/voice/install-local")
         assert r.status_code == 403
         assert install.box["starts"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# POST /api/voice/say-all
+# --------------------------------------------------------------------------- #
+class TestSayAll:
+    def test_sets_and_clears_the_marker_and_the_get_reports_it(
+        self, fakes, monkeypatch, tmp_path
+    ):
+        from backend.web import server
+        from backend.web.core import voice
+
+        monkeypatch.setenv("MINDFLOCK_VOICE_FLAG_DIR", str(tmp_path / "flags"))
+        pins = []
+        monkeypatch.setattr(server, "repin_voice_hooks", lambda: pins.append(1) or 1)
+        assert client.get("/api/voice").json()["say_all"] is False
+        r = client.post("/api/voice/say-all", json={"on": True})
+        assert r.status_code == 200 and r.json() == {"say_all": True}
+        assert voice.say_all() is True and pins == [1]
+        assert client.get("/api/voice").json()["say_all"] is True
+        r = client.post("/api/voice/say-all", json={"on": False})
+        assert r.status_code == 200 and r.json() == {"say_all": False}
+        assert voice.say_all() is False and pins == [1]  # off needs no re-pin
+        assert client.post("/api/voice/say-all", json={"on": "yes"}).status_code == 400
+        assert client.post("/api/voice/say-all", json={}).status_code == 400

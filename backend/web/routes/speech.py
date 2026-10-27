@@ -51,6 +51,7 @@ from backend.web.core import auth as _auth
 from backend.web.core import speech as _speech
 from backend.web.core import speech_install as _install
 from backend.web.core import speech_stream as _stream
+from backend.web.core import voice as _voice
 
 router = APIRouter()
 
@@ -146,6 +147,7 @@ def voice_get(allowed: bool = Depends(_auth.configure_allowed)) -> JSONResponse:
         "approve_dialogs": bool(s.voice.approve_dialogs),
         "agent_words": bool(s.notifications.ntfy_agent_words),
         "ask_popup": bool(s.notifications.ask_popup),
+        "say_all": _voice.say_all(),
         "configure_allowed": bool(allowed),
     }
     body.update(_speech.describe())
@@ -329,6 +331,39 @@ async def voice_speak(payload: Optional[dict] = None) -> Response:
         media_type=mime or "application/octet-stream",
         headers={"X-Voice-Backend": backend.id, "Cache-Control": "no-store"},
     )
+
+
+@router.post("/api/voice/say-all")
+def voice_say_all(
+    payload: Optional[dict] = None, allowed: bool = Depends(_auth.configure_allowed)
+) -> JSONResponse:
+    """Ask every prompt in every session for its ``Say:`` line, or stop:
+    ``{"on": bool}`` → ``{"say_all": bool}`` (the state read back). A client
+    whose replies choice is *Everything* turns this on, so a prompt typed
+    straight into a terminal — which no per-prompt ``say`` can reach — still
+    ends with the spoken line. It is the standing ``<voice dir>/say-all``
+    marker the Claude prompt hook reads (``core.voice.set_say_all``), plus
+    the instruction typed after a ``/send`` for the other CLIs; turning it on
+    re-pins every live Claude session's hooks so one launched by an older
+    build learns the marker. Owner only (403); 400 without a boolean
+    ``on``; 500 when the marker cannot be written."""
+    if not allowed:
+        return _auth.configure_refused()
+    on = (payload or {}).get("on")
+    if not isinstance(on, bool):
+        return JSONResponse({"error": 'pass {"on": true|false}'}, status_code=400)
+    try:
+        state = _voice.set_say_all(on)
+    except OSError as err:
+        return JSONResponse({"error": str(err)}, status_code=500)
+    if state:
+        try:
+            from backend.web import server as _server
+
+            _server.repin_voice_hooks()
+        except Exception:  # noqa: BLE001 — the re-pin is enrichment
+            pass
+    return JSONResponse({"say_all": state})
 
 
 @router.post("/api/voice/clear-key")

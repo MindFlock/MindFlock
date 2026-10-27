@@ -221,7 +221,7 @@ a session first*).
   always.* / *Still there? …*), then it goes quiet (*Login fix is waiting on
   you*). With approving by voice off the dialog is read and *Answer it on the
   screen.* follows; the mic doesn't open.
-- **Options**: right-click or Shift+click the mic for *Read replies aloud* (Off / Replies to what I said by voice / Everything, every session — another window's line starts with its name, the focused one's does not; everything spoken goes through one queue, one line at a time),
+- **Options**: right-click or Shift+click the mic for *Read replies aloud* (Off / Replies to what I said by voice / Everything, every session — another window's line starts with its name, the focused one's does not; everything spoken goes through one queue, one line at a time; *Everything* also turns on the server's `say-all` marker, `POST /api/voice/say-all`, so every prompt in every session — typed into a terminal included — ends with a `Say:` line instead of a digest),
   *Click to talk* / *Hold to talk*, a diagnostics line naming the engines in
   use (*Recognition: server, built in (Windows via WSL) — one clip per phrase:
   16 kHz, browser resampler, a phrase ends after 1.1 s of quiet · Voice: server
