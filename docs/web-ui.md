@@ -1415,16 +1415,36 @@ fast-track never takes that slot over.
 
 **When a run stops on something the agent can fix** — a pre-commit step or
 the repo's verification check failed, CI went red on the PR, or the PR
-conflicts with (or is behind) its base — MindFlock also leaves that agent a
-one-line **`[MindFlock note …]`**: what failed, where to look (`pre-commit run
+conflicts with (or is behind) its base — MindFlock hands it to that agent
+with a **`[MindFlock note …]`**: what failed, where to look (`pre-commit run
 <hook>`, `.mindflock_check.log`), and to fix it and commit — or, when the
 failure is really a conflict with someone else's change, to stop and tell
-you. It rides the agent-message lane, so it is typed only once the agent is
-idle and never while you are typing in the pane. The halt reason is
+you. A failed **pre-commit hook's own output** goes in with it: the hook's
+section of the Terminal tab (its `- hook id:` block up to the next hook),
+ANSI and shell-special characters stripped, at most 25 lines (a huge one,
+like a test run, keeps its first 5 and last 20 with *… N lines …* between)
+and 1500 characters. The note then says **which steps are left and that
+fast-track takes them by itself** — *"Fast-track will then push the branch,
+open the PR and merge it once CI is green by itself, so fixing and
+committing is all that is left for you."* (a Commit target: *"That commit is
+the last step of this Fast-track run."*). The run stays armed, waits for the
+fix turn and carries on from the agent's commit (twice per run; a third
+failure stops it, and that note says so). The same hook failing again after
+the fix gets a fresh note with the fresh output, marked *failed again
+(second time)*; the same failure seen twice is told once.
+
+The note is typed **immediately** — the commit ran in the Terminal tab, so the
+agent is idle — through the agent-message lane's own safety checks: only into
+an idle agent, never into a dialog, never into a bare shell and never while
+you are typing in the pane. When any of those holds it, the lane types it at
+the agent's next settled idle instead. Typed, it is one line (the output's
+lines are separated by `│`); the inbox keeps it as written. The ⏩ row keeps
+the output too (`fix_output`), until the fix turn is over. The halt reason is
 unchanged; the ✗ tooltip and the *fast-track stopped* toast add that the
 agent was told. A team run's members are left to their run, which sends its
 own fix prompt. **Settings → Workspace → Advanced → Tell the agent when
-fast-track stops** turns it off (on by default).
+fast-track stops** turns the note off (on by default); the run then stops on
+the failure.
 
 A session that shares its branch with another (a copy session), a team run's
 lead (its team run ships it once) and a one-for-all member (its work merges

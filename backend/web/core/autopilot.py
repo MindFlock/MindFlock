@@ -67,6 +67,8 @@ __all__ = [
     "stage_achieved",
     "next_action",
     "failure_note",
+    "precommit_output",
+    "remaining_steps",
     "arm",
     "disarm",
     "get",
@@ -207,6 +209,7 @@ def autopilot_path() -> str:
 #                "idle_since": null, "step_since": 0.0, "acted_at": 0.0,
 #                "fixing": "", "fix_reason": "", "fix_rounds": 0,
 #                "fix_since": 0.0, "fix_head": "",
+#                "fix_output": "", "fix_key": "", "fix_times": 0, "fix_sent": "",
 #                "boot": "", "started": 0.0, "updated": 0.0}}
 def _load() -> dict:
     return read_json(autopilot_path(), {}, expect=dict)
@@ -295,6 +298,18 @@ def _blank() -> dict:
         "fix_rounds": 0,
         "fix_since": 0.0,
         "fix_head": "",
+        # The failing hook's own output, read off the shell pane when the
+        # commit failed (:func:`precommit_output`): the note quotes it, and
+        # the row / bell can show it. Cleared once the fix turn is over.
+        "fix_output": "",
+        # Which failure the agent was last told about ("precommit:mypy",
+        # "check", …) and how many times in a row that same one came back —
+        # a second note says "second time" — plus the identity of the
+        # failure a note was sent FOR, so the same failure observed again
+        # (no new commit attempt, no new HEAD) is never sent twice.
+        "fix_key": "",
+        "fix_times": 0,
+        "fix_sent": "",
         "step_since": 0.0,
         "acted_at": 0.0,
         "boot": "",
@@ -364,6 +379,9 @@ def _normalize(entry) -> dict:
     e["fixing"] = fixing if fixing in FIX_KINDS else ""
     e["fix_reason"] = str(entry.get("fix_reason", "") or "")
     e["fix_head"] = str(entry.get("fix_head", "") or "")
+    e["fix_output"] = str(entry.get("fix_output", "") or "")[: OUTPUT_MAX_CHARS + 200]
+    e["fix_key"] = str(entry.get("fix_key", "") or "")[:96]
+    e["fix_sent"] = str(entry.get("fix_sent", "") or "")[:256]
     raw = entry.get("retryable")
     e["retryable"] = [str(h) for h in raw][:16] if isinstance(raw, list) else []
     att = entry.get("attempts")
@@ -386,7 +404,7 @@ def _normalize(entry) -> dict:
         e["issues"] = out2
     sk = entry.get("skipped")
     e["skipped"] = [str(h) for h in sk][:16] if isinstance(sk, list) else []
-    for key in ("commits", "fix_rounds"):
+    for key in ("commits", "fix_rounds", "fix_times"):
         try:
             e[key] = max(0, int(entry.get(key, 0) or 0))
         except (TypeError, ValueError):
@@ -717,30 +735,179 @@ _NOTE_ESCALATE = (
     "If it is not yours to fix (it conflicts with a change someone else made, "
     "or needs a decision), stop and tell the user what conflicts instead."
 )
-#: What a hand-off note adds: the run is waiting, not over.
+#: What a hand-off note adds: the run is waiting, not over. The generic
+#: wording, for a caller that does not say which steps are left (see
+#: :func:`remaining_steps`).
 _NOTE_RESUMES = (
     "When you finish, Fast-track carries on from your commit (push, PR) by itself."
 )
 #: Stripped from every value a note interpolates (hook names and step names
-#: read off the pane, GitHub's blocker text, the repo's check command). The
-#: mailbox lane never types into a bare shell, but like its own framing the
-#: note keeps no backtick, ``$``, ``;``, backslash or single quote.
+#: read off the pane, GitHub's blocker text, the repo's check command, the
+#: failed hook's own output). The mailbox lane never types into a bare shell,
+#: but like its own framing the note keeps no backtick, ``$``, ``;``,
+#: backslash or single quote.
 _NOTE_UNSAFE = re.compile(r"[`$;\\']")
+#: "failed again (second time)": how a note counts the same failure coming back.
+_ORDINALS = ("", "first", "second", "third", "fourth", "fifth")
+
+# --- The failed hook's own output ---------------------------------------------
+#: Caps on what a note quotes of a failed hook (and the record keeps): the
+#: whole block, each line, and the line count — past it the HEAD and the TAIL
+#: survive (a pytest run says what it ran first and what failed last).
+OUTPUT_MAX_CHARS = 1500
+OUTPUT_MAX_LINES = 25
+OUTPUT_HEAD_LINES = 5
+OUTPUT_LINE_CHARS = 200
+#: How the note sets the output off from its sentences. The mailbox types a
+#: note as ONE line (a newline would submit half of it), which folds every
+#: line break and indent to a single space — the gutter is what still tells
+#: one output line from the next once it is typed.
+_OUTPUT_GUTTER = "    │ "
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+#: pre-commit's one line per hook ("ruff.......Passed"): where a section ends.
+_HOOK_RESULT_RE = re.compile(r"^(.*?)\.{3,}.*\b(Passed|Failed|Skipped)\s*$")
+_HOOK_ID_LINE_RE = re.compile(r"^\s*-\s*hook id:\s*(\S+)\s*$")
+#: The commit one-liner's own lines (a later attempt typed into the shell).
+_PLUMBING_RE = re.compile(r"\.mindflock_\w|precommit\.lock")
+#: A shell prompt left under the output once the one-liner returned.
+_PROMPT_RE = re.compile(r"[$%#❯>]\s*$")
 
 
-def failure_note(detail: dict, check_command: str = "", resumes: bool = False) -> str:
+def precommit_output(pane: str, hook: str = "") -> str:
+    """The failed hook's own output, out of the shell pane the commit ran in —
+    what the note quotes so the agent sees WHY without re-running anything.
+    Pure; ``""`` when the pane holds no pre-commit failure.
+
+    The section is the hook's ``- hook id: <hook>`` block (the LAST one: an
+    auto-fix retry prints the run again) through the next hook's result line,
+    the commit one-liner's next line, or the end; with no ``hook`` it is
+    whatever follows the last ``…Failed`` line. ANSI and control characters
+    go, the :data:`_NOTE_UNSAFE` characters are scrubbed per line, blank
+    lines and the shell prompt under it are dropped, and it is capped at
+    :data:`OUTPUT_MAX_LINES` (head :data:`OUTPUT_HEAD_LINES` + tail, with a
+    "… N lines …" marker) and :data:`OUTPUT_MAX_CHARS`."""
+    lines = _ANSI_RE.sub("", str(pane or "")).splitlines()
+    hook = str(hook or "").strip()
+    start = -1
+    for i, line in enumerate(lines):
+        m = _HOOK_ID_LINE_RE.match(line)
+        if hook and m and m.group(1) == hook:
+            start = i
+    if start < 0:
+        # No id to anchor on (a raw git hook, or the id scrolled away): the
+        # output starts right under the last "…Failed" line.
+        for i, line in enumerate(lines):
+            r = _HOOK_RESULT_RE.match(line)
+            if r and r.group(2) == "Failed":
+                start = i + 1
+    if start < 0:
+        return ""
+    body: List[str] = []
+    for line in lines[start:]:
+        if _HOOK_RESULT_RE.match(line) or _PLUMBING_RE.search(line):
+            break
+        clean = _CTRL_RE.sub("", _NOTE_UNSAFE.sub("", line.replace("\t", "    ")))
+        clean = clean.rstrip()
+        if clean.strip():
+            body.append(clean)
+    while body and _PROMPT_RE.search(body[-1]):
+        body.pop()
+    return _clip_output(body)
+
+
+def _clip_output(lines: List[str]) -> str:
+    """Head + tail of ``lines`` within the caps, with the cut counted."""
+    lines = [
+        ln if len(ln) <= OUTPUT_LINE_CHARS else ln[: OUTPUT_LINE_CHARS - 1] + "…"
+        for ln in lines
+    ]
+    head = lines[:OUTPUT_HEAD_LINES]
+    rest = lines[OUTPUT_HEAD_LINES:]
+    keep = OUTPUT_MAX_LINES - OUTPUT_HEAD_LINES
+    cut = max(0, len(rest) - keep)
+    tail = rest[cut:]
+
+    def render() -> str:
+        marker = ["… %d line%s …" % (cut, "" if cut == 1 else "s")] if cut else []
+        return "\n".join(head + marker + tail)
+
+    while tail and len(render()) > OUTPUT_MAX_CHARS:
+        tail.pop(0)
+        cut += 1
+    return render()[:OUTPUT_MAX_CHARS]
+
+
+def remaining_steps(rec: dict, snap: dict) -> List[str]:
+    """What Fast-track still does BY ITSELF once the agent has fixed the
+    failure and committed, in words, in order — ``[]`` when that commit is the
+    run's last step (a Commit target). Pure: from the run's ``depth`` and the
+    observed ``stage`` (an open PR is pushed to, not opened again) plus
+    ``check_required`` (the repo gates the push on its verification check,
+    which the fix commit has not passed yet)."""
+    depth = normalize_depth((rec or {}).get("depth"))
+    if depth not in ("push", "pr", "merge"):
+        return []
+    snap = snap or {}
+    pr_open = stage_achieved(str(snap.get("stage") or "")) == "pr"
+    steps = []
+    if snap.get("check_required"):
+        steps.append("run the verification check")
+    steps.append("push it to the open PR" if pr_open else "push the branch")
+    if depth in ("pr", "merge") and not pr_open:
+        steps.append("open the PR")
+    if depth == "merge":
+        steps.append("merge it once CI is green")
+    return steps
+
+
+def _steps_sentence(steps: List[str]) -> str:
+    if not steps:
+        return "That commit is the last step of this Fast-track run."
+    said = steps[0] if len(steps) == 1 else ", ".join(steps[:-1]) + " and " + steps[-1]
+    return (
+        "Fast-track will then %s by itself, so fixing and committing is all "
+        "that is left for you." % said
+    )
+
+
+def failure_note(
+    detail: dict,
+    check_command: str = "",
+    resumes: bool = False,
+    remaining: Optional[List[str]] = None,
+    attempt: int = 0,
+) -> str:
     """The short note typed into the agent when its Fast-track run stops on
     something the agent can fix — or ``""`` when the stop carries no ``fix``.
-    Pure, one line: what failed, where to look, what to do. ``resumes`` is a
-    hand-off (:func:`hand_to_agent`): the run waits for the fix and carries on,
-    so the note says so instead of "stopped"."""
+    Pure: what failed, where to look, what to do. ``resumes`` is a hand-off
+    (:func:`hand_to_agent`): the run waits for the fix and carries on, so the
+    note says so instead of "stopped" — and, given ``remaining``
+    (:func:`remaining_steps`), names the steps it will then take by itself.
+    ``attempt`` ≥ 2 says the same failure came back ("second time").
+
+    One line, except for a pre-commit stop whose ``detail["output"]`` holds
+    the failed hook's output (:func:`precommit_output`): that follows the
+    first sentence as an indented block, one output line per line. The
+    mailbox types it folded into one line all the same."""
 
     def plain(value) -> str:
         # split/join also folds a newline (a multi-line check_command) into
-        # one space: the note is a single line before the mailbox sees it.
+        # one space: the sentences are single lines before the mailbox sees them.
         return " ".join(_NOTE_UNSAFE.sub("", str(value or "")).split())
 
+    try:
+        n = int(attempt or 0)
+    except (TypeError, ValueError):
+        n = 0
+    times = (
+        " (%s time)" % (_ORDINALS[n] if n < len(_ORDINALS) else "%dth" % n)
+        if n >= 2
+        else ""
+    )
+    again = " again" + times if times else ""
     fix = str((detail or {}).get("fix") or "")
+    output = ""
     if fix == "precommit":
         hook = plain(detail.get("hook"))
         step = plain(detail.get("step")) or hook or "a hook"
@@ -749,37 +916,55 @@ def failure_note(detail: dict, check_command: str = "", resumes: bool = False) -
             if hook
             else 're-running "git commit" shows why'
         )
-        what = "the pre-commit step %s failed, so nothing was committed (%s)." % (
+        what = "the pre-commit step %s failed%s, so nothing was committed (%s)." % (
             step,
+            again,
             rerun,
         )
         todo = "Fix it and commit."
+        output = str(detail.get("output") or "").strip("\n")
     elif fix == "check":
         cmd = ' ("%s")' % plain(check_command) if plain(check_command) else ""
         what = (
-            "the verification check%s failed on your last commit, its output "
-            "is in .mindflock_check.log." % cmd
+            "the verification check%s failed%s on your last commit, its output "
+            "is in .mindflock_check.log." % (cmd, again)
         )
         todo = "Fix what failed and commit."
     elif fix == "ci":
-        what = "CI failed on the pull request for this branch, so it was not merged."
+        what = (
+            "CI failed%s on the pull request for this branch, so it was not merged."
+            % again
+        )
         todo = "Find the failing check, fix it and commit."
     elif fix == "conflict":
         blockers = plain(
             str(detail.get("reason") or "").replace("cannot merge — ", "", 1)
         )
-        what = "the pull request cannot merge: %s." % (
-            blockers or "it conflicts with its base"
+        what = "the pull request %scannot merge%s: %s." % (
+            "still " if times else "",
+            times,
+            blockers or "it conflicts with its base",
         )
         todo = "Bring the base branch in, resolve the conflicts and commit."
     else:
         return ""
     if resumes:
-        return plain(
-            "Fast-track paused: %s %s %s %s"
-            % (what, todo, _NOTE_RESUMES, _NOTE_ESCALATE)
+        then = _NOTE_RESUMES if remaining is None else _steps_sentence(remaining)
+        head, rest = "Fast-track paused: " + what, "%s %s %s" % (
+            todo,
+            then,
+            _NOTE_ESCALATE,
         )
-    return plain("Fast-track stopped: %s %s %s" % (what, todo, _NOTE_ESCALATE))
+    else:
+        head, rest = "Fast-track stopped: " + what, "%s %s" % (todo, _NOTE_ESCALATE)
+    block = [
+        _OUTPUT_GUTTER + ln
+        for ln in (_NOTE_UNSAFE.sub("", raw).rstrip() for raw in output.splitlines())
+        if ln.strip()
+    ]
+    if not block:
+        return plain("%s %s" % (head, rest))
+    return "%s Its output:\n%s\n%s" % (plain(head), "\n".join(block), plain(rest))
 
 
 def _blocker_fix(blockers) -> str:
@@ -951,6 +1136,8 @@ def dto(title: str):
         "source": rec.get("source") or "session",
         "item": rec.get("item") or "",
         "skipped": list(rec.get("skipped") or []),
+        # The failed hook's output the agent was handed (see precommit_output).
+        "fix_output": rec.get("fix_output") or "",
     }
 
 
@@ -1112,7 +1299,7 @@ def hand_to_agent(
 def finish(title: str) -> Optional[dict]:
     """Mark a run complete (its target rung was reached). Clears the wait note —
     see :func:`halt`."""
-    return update(title, state="done", reason="", note="", fixing="")
+    return update(title, state="done", reason="", note="", fixing="", fix_output="")
 
 
 def disarm(title: str) -> bool:

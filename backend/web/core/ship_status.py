@@ -21,6 +21,9 @@ started yet":
   ``refs/remotes/origin/<branch>``, which ``git push -u origin HEAD`` updates on
   success. Local refs only: no network, so polling this every few seconds is
   cheap.
+* ``failed_output`` — after a failed commit, the failed hook's own lines out
+  of the shell pane (the section Fast-track's note quotes, see
+  :func:`autopilot.precommit_output`).
 * ``shell_tail`` (only when asked) — the end of the shell pane, which is where
   a failed hook or a refused push says why.
 
@@ -140,10 +143,20 @@ def snapshot(inst, title: str, wt: str, tail: int = 0) -> dict:
         "has_origin": bool(srv._has_origin(wt)),
         "failed_step": None,
         "failed_hook": None,
+        "failed_output": None,
     }
+    pane = None
     if rc not in (None, 0) and not committing:
+        from backend.web.core import autopilot as _autopilot
+
         out["failed_step"] = srv._failed_precommit_step(title)
         out["failed_hook"] = srv._failed_precommit_hook(title)
+        pane = srv._capture_shell_pane(title, 2000) or ""
+        out["failed_output"] = _autopilot.precommit_output(
+            pane, out["failed_hook"] or ""
+        )
     if tail and tail > 0:
-        out["shell_tail"] = tail_text(srv._capture_shell_pane(title, 2000) or "", tail)
+        if pane is None:
+            pane = srv._capture_shell_pane(title, 2000) or ""
+        out["shell_tail"] = tail_text(pane, tail)
     return out
