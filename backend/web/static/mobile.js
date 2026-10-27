@@ -2863,6 +2863,8 @@
   var voiceHearBtn = document.getElementById("voice-hear");
   var voiceErrEl = document.getElementById("voice-error");
   var voiceSheet = document.getElementById("voice-sheet");
+  var voiceTutEl = document.getElementById("voice-tut");
+  var voiceTutList = document.getElementById("voice-tut-list");
   var voiceOnToggle = document.getElementById("voice-on-toggle");
   var voiceSheetSession = document.getElementById("voice-sheet-session");
   var voiceHandsEl = document.getElementById("voice-handsfree");
@@ -2887,6 +2889,7 @@
   var ANDROID = /Android/i.test(navigator.userAgent);
   var SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition || null;
   var VOICE_STORE = "cs_voice";          // localStorage: session, on, rate, voiceName, handsFree, ptt, replies, wake, confirm, sounds
+  var VOICE_TUT_STORE = "cs_voice_tutorial";   // localStorage: "1" once How to talk's Got it was tapped
   var VOICE_LINE_MAX_AGE_MS = 60000;     // a queued line this old when its turn comes is dropped, not said late
   var VOICE_NOD_MAX_AGE_MS = 5000;   // ...and a spoken confirmation ("Sent.") this old
   var VOICE_NOD_MUTE_MS = 150;       // the recorder stays deaf this long after a confirmation ends
@@ -2897,9 +2900,6 @@
   var VOICE_NOD_LINES = ["Sent.", "Sent. Over and out.", "Over and out.", "Cleared.", "Stopped."];
   var VOICE_DICT_IDLE_MS = 120000;       // listening ends after this long without a word (the words stay)
   var VOICE_RAPID_RESTART_MAX = 8;       // recognizers that die within a second of starting, in a row
-  var VOICE_HINT_TAP = "Say “over” to send, “over and out” to stop, “disregard” to start over";
-  var VOICE_HINT_HOLD = "Release to keep it; say “over” to send";
-  var VOICE_KEPT = "In the box — say “over”, or tap Send";
   var VOICE_OVER_WAIT_MS = 1500;         // push to talk: how long the last phrase may take to arrive
   var VOICE_ROUTE_TIMEOUT_MS = 2000;     // POST /api/voice/route; past it the local table decides
   var VOICE_TAP_MS = 15000;              // listening window after a deliberate tap
@@ -4525,7 +4525,14 @@
   function vboxSized() { if (vbox() === composeEl) autosizeCompose(); }
   // The gesture, named: what starts talking, and what ends it (keeping the words).
   function voiceTalkHint() { return voice.prefs.ptt === "hold" ? "Hold the mic to talk" : "Tap to talk"; }
-  function voiceDictHint() { return voiceListen_.held ? VOICE_HINT_HOLD : VOICE_HINT_TAP; }
+  function voiceDictHint() { return voiceListen_.held ? voiceHintHold() : voiceHintTap(); }
+  // The hints name the radio words the owner has (voiceSaid: the first of
+  // each kind, as GET /api/voice says them).
+  function voiceHintTap() {
+    return "Say " + voiceSaid("send") + " to send, " + voiceSaid("end") + " to stop, " + voiceSaid("clear") + " to start over";
+  }
+  function voiceHintHold() { return "Release to keep it; say " + voiceSaid("send") + " to send"; }
+  function voiceKept() { return "In the box — say " + voiceSaid("send") + ", or tap Send"; }
   // The level meter under the strip and the ring round the mic (the ask
   // sheet's too) while the server adapter records: v is the latest block's
   // level (voiceLevelOf, 0..1); null hides the meter and drops the ring.
@@ -4609,7 +4616,7 @@
     voiceListen_.cont = false;
     voiceListen_.stopAfter = false;
     voiceListen_.overAfter = false;
-    voiceIdle(vbox().value.trim() ? VOICE_KEPT : undefined);
+    voiceIdle(vbox().value.trim() ? voiceKept() : undefined);
   }
   // Push to talk ends a prompt, the words kept: the second tap (toggle),
   // letting go (hold). What was said is still on its way — the phone's last
@@ -5395,12 +5402,13 @@
   // "… disregard" (or "disregard that") → {kind: "disregard"}; else {kind:
   // "", text} — "… submit" too, a word. Case and punctuation do not matter
   // ("Over." from iOS); only the LAST words count — an "over" in the middle
-  // of a sentence is a word.
+  // of a sentence is a word. The words are the owner's (VOICE_W.dict: send,
+  // end, clear); the kinds keep their names.
   function voiceDictParse(text) {
     var t = String(text || "").trim();
-    var m = /^(.*?)[\s,.!?]*\b(?:(over)(?:[\s,.!?]+(?:and[\s,.!?]+)?(out))?|(disregard)(?:\s+(?:that|it|all|everything))?)[.!?\s]*$/i.exec(t);
+    var m = VOICE_W.dict.exec(t);
     if (!m) return { kind: "", text: t };
-    return { kind: m[4] ? "disregard" : m[3] ? "out" : "over", text: m[1].trim() };
+    return { kind: m[3] ? "disregard" : m[2] ? "out" : "over", text: m[1].trim() };
   }
 
   // --- control phrases: they act at the END of any phrase -------------------
@@ -5415,22 +5423,15 @@
   // A number answers only as the whole phrase or with its marker ("option
   // two"): "add two" is words.
   var VOICE_TAIL_MAX = 6;
-  var VOICE_STOP = /^(?:stop (?:listening|recording|dictating)|(?:mic|microphone) off|that'?s all|that is all|(?:i'?m )?done talking)$/;
   var VOICE_ANS_YES = /^(?:yes|yeah|yep|yup|sure|ok|okay|allow|approve|go ahead|do it)(?: (?:it|that|please))?$/;
   var VOICE_ANS_NO = /^(?:no|nope|nah|deny|reject|don'?t|skip)(?: (?:it|that|thanks|thank you))?$/;
   var VOICE_ANS_NUM = /^(?:option|number|choice) (\S+)$|^(?:the )?(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth)(?: one| option)?$/;
-  // What the held-back words may be the start of (voiceMayStart).
-  var VOICE_HOLD_STOP = ["stop listening", "stop recording", "stop dictating", "mic off", "microphone off",
-                         "that's all", "thats all", "that is all", "done talking", "i'm done talking", "im done talking"];
+  // What the held-back words may be the start of (voiceMayStart): the stop
+  // phrases (VOICE_W.holdStop), the answers, and for a guess always the
+  // radio words and the hush phrases (VOICE_W.holdAlways).
   var VOICE_HOLD_ANSWER = ["yes always", "yes and always", "yeah always", "ok always", "always allow", "don't ask again",
                            "do not ask again", "never ask again", "no thanks", "no thank you", "go ahead", "do it",
                            "option", "number", "choice", "the first", "the second", "the third", "answer", "reply"];
-  // ...and, for a guess, always: the radio words (voiceDictParse) and "stop
-  // talking" and its kin (VOICE_CMD's hush).
-  var VOICE_HOLD_ALWAYS = ["over", "over and out", "over out", "disregard", "disregard that", "disregard it", "disregard all",
-                           "disregard everything", "stop talking", "stop speaking", "stop reading", "stop saying that",
-                           "be quiet", "quiet", "hush", "shut up", "enough", "enough talking", "enough of that",
-                           "that's enough", "thats enough", "that is enough", "ok stop", "okay stop"];
   var VOICE_NUM_WORDS = { ten: 10, eleven: 11, twelve: 12 };
   // "two" / "2" / "second" → 2; 0 when it is not a number.
   function voiceNumber(word) {
@@ -5442,7 +5443,7 @@
   function voiceMayStart(words, answers) {
     var t = voiceNorm(words);
     if (!t) return false;
-    var lists = VOICE_HOLD_STOP.concat(VOICE_HOLD_ALWAYS, answers ? VOICE_HOLD_ANSWER : []);
+    var lists = VOICE_W.holdStop.concat(VOICE_W.holdAlways, answers ? VOICE_HOLD_ANSWER : []);
     for (var i = 0; i < lists.length; i++) if ((lists[i] + " ").indexOf(t + " ") === 0) return true;
     return answers ? !!voiceAnswerWords(t, true) : false;
   }
@@ -5469,6 +5470,7 @@
   // first phrase into an empty box that may be a command is never guessed
   // into the box (it waits whole for the router); one that cannot be — most
   // prompts — is typed as it comes (the router still reads its final words).
+  // The stop and hush phrases are the owner's (VOICE_W.mayCmd).
   var VOICE_NUMS = "one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|first|second|third|fourth|" +
                    "fifth|sixth|seventh|eighth|ninth|1|2|3|4|5|6|7|8|9";
   var VOICE_VERBS = "switch|go|change|jump|move|focus|open|show|select";
@@ -5485,10 +5487,6 @@
     "read the|its|it's question *", "read me the|its|it's question *", "read that|it again",
     "say that again", "repeat", "repeat that",
     "voice off", "turn voice|mic|microphone off", "turn off voice", "turn off the mic|microphone", "turn the mic|microphone off",
-    "stop", "stop talking|speaking|reading|listening|recording|dictating", "stop saying that", "stop the mic|microphone",
-    "be quiet", "quiet", "hush", "shut up", "enough", "enough talking", "enough of that",
-    "that's|thats enough|all", "that is enough|all", "mic|microphone off", "pause listening",
-    "done talking", "i'm|im done talking", "i am done talking",
     "session|window|number|row " + VOICE_NUMS + " *", "session|window number " + VOICE_NUMS + " *", "the " + VOICE_NUMS + " one|session|window|option|choice",
     VOICE_NUMS + " one|option|choice", "next|previous|prev|last session|one|window",
     "the next|previous|prev|last session|one|window",
@@ -5501,7 +5499,7 @@
     if (w.length > 1 && VOICE_LEADS.indexOf(w[0]) >= 0) w = w.slice(1);
     if (w.length > 1 && w[w.length - 1] === "please") w = w.slice(0, -1);
     if (!w.length || w.every(function (x) { return VOICE_ANSWER_WORDS.indexOf(x) >= 0 || VOICE_LEADS.indexOf(x) >= 0; })) return true;
-    return VOICE_MAY_CMD.some(function (p) {
+    return VOICE_MAY_CMD.concat(VOICE_W.mayCmd).some(function (p) {
       for (var i = 0; i < w.length; i++) {
         if (i >= p.length) return false;
         if (p[i][0] === "*") return true;
@@ -5530,7 +5528,7 @@
     var words = String(text || "").trim().split(/\s+/).filter(Boolean);
     for (var k = Math.min(VOICE_TAIL_MAX, words.length); k >= 1; k--) {
       var t = voiceNorm(words.slice(words.length - k).join(" "));
-      var hit = VOICE_STOP.test(t) ? { kind: "stop" } : null;
+      var hit = VOICE_W.stop.test(t) ? { kind: "stop" } : null;
       if (!hit && answers) {
         hit = voiceAnswerWords(t, k === words.length);
         if (hit) hit.kind = "answer";
@@ -5577,12 +5575,125 @@
     return String(text || "").toLowerCase().replace(/[’`]/g, "'")
       .replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
   }
+  // --- the voice words: GET /api/voice → words (Settings → Voice) ----------
+  // send ("over": the box goes, listening on), end ("over and out": sent,
+  // listening over), clear ("disregard", and "… that / it / all /
+  // everything"), stop (a phrase of two words or more ends ANY phrase —
+  // "fix it, that's all"; a one-word one, "stop", only on its own), hush (on
+  // its own: the voice stops, the mic listens on) and the wake word (the
+  // server hears it; the page only names it). Ours until GET /api/voice says
+  // otherwise; the desktop's Settings → Voice changes them (synced), the
+  // phone only reads (voiceLoadCfg, on every refetch). A default phrase keeps
+  // the spoken variants the router keeps while it is in the list
+  // (VOICE_WORD_VARIANTS); a phrase the owner adds is matched whole.
+  // voiceWordsApply builds every matcher from them — voiceDictParse,
+  // voiceTail's stop, voiceHoldBack, voiceMayBeCommand, VOICE_CMD's hush and
+  // stop — longest first, escaped, an apostrophe optional.
+  var VOICE_WORDS_DEFAULT = {
+    send: ["over"], end: ["over and out", "over, out"], clear: ["disregard"],
+    stop: ["stop", "stop listening", "mic off", "pause listening", "that's all", "done talking"],
+    hush: ["stop talking", "be quiet", "quiet", "hush", "shut up", "enough"],
+    wake: "mindflock",
+  };
+  var VOICE_WORD_KINDS = ["send", "end", "clear", "stop", "hush"];
+  var VOICE_WORD_VARIANTS = {
+    "stop listening": ["stop recording", "stop dictating", "stop the mic", "stop the microphone"],
+    "mic off": ["microphone off"],
+    "that's all": ["that is all"],
+    "done talking": ["i'm done talking", "i am done talking"],
+    "stop talking": ["stop speaking", "stop reading", "stop saying that", "ok stop", "okay stop"],
+    "enough": ["that's enough", "that is enough", "enough talking", "enough of that"],
+  };
+  // ...and, said on its own only (the stop command, never a phrase's end:
+  // "turn the mic" may be words), the router's "turn off the mic".
+  var VOICE_WORD_CMD_VARIANTS = {
+    "mic off": ["turn off the mic", "turn off the microphone", "turn the mic off", "turn the microphone off"],
+  };
+  var VOICE_CLEAR_TAILS = ["that", "it", "all", "everything"];
+  var VOICE_W = null;   // {words, dict, stop, stopCmd, hush, holdStop, holdAlways, mayCmd}
+  // The words as GET /api/voice sends them → every kind present: a kind
+  // missing, empty or not a list of phrases is ours.
+  function voiceWordsClean(raw) {
+    var src = raw && typeof raw === "object" ? raw : {}, w = {};
+    VOICE_WORD_KINDS.forEach(function (k) {
+      var got = [];
+      (Array.isArray(src[k]) ? src[k] : []).forEach(function (p) {
+        p = typeof p === "string" ? p.toLowerCase().replace(/[’`]/g, "'").replace(/\s+/g, " ").trim() : "";
+        if (voiceNorm(p) && got.indexOf(p) < 0) got.push(p);
+      });
+      w[k] = got.length ? got : VOICE_WORDS_DEFAULT[k].slice();
+    });
+    var wake = typeof src.wake === "string" ? src.wake.toLowerCase().replace(/\s+/g, " ").trim() : "";
+    w.wake = /^[a-z]+(?: [a-z]+)?$/.test(wake) ? wake : VOICE_WORDS_DEFAULT.wake;
+    return w;
+  }
+  // The phrases with their variants, normalized, each once.
+  function voiceWordsWide(list) {
+    var out = [];
+    list.forEach(function (p) {
+      [p].concat(VOICE_WORD_VARIANTS[p] || []).forEach(function (q) {
+        q = voiceNorm(q);
+        if (q && out.indexOf(q) < 0) out.push(q);
+      });
+    });
+    return out;
+  }
+  // ...and once more without their apostrophes ("thats all"): what a
+  // held-back guess may be the start of.
+  function voiceWordsBare(list) {
+    var out = list.slice();
+    list.forEach(function (p) { var q = p.replace(/'/g, ""); if (out.indexOf(q) < 0) out.push(q); });
+    return out;
+  }
+  // One alternation, longest first: each word escaped, its apostrophe
+  // optional (`apos`: what an apostrophe may be), the words joined by `sep`.
+  // No phrases → a group that never matches.
+  function voiceWordsAlt(list, sep, apos) {
+    var alts = list.map(voiceNorm).filter(function (p, i, a) { return p && a.indexOf(p) === i; })
+      .sort(function (a, b) { return b.length - a.length; })
+      .map(function (p) {
+        return p.split(" ").map(function (t) {
+          return t.replace(/[\\^$.*+?()[\]{}|\/-]/g, "\\$&").replace(/'/g, apos + "?");
+        }).join(sep);
+      });
+    return alts.length ? "(?:" + alts.join("|") + ")" : "(?!)";
+  }
+  function voiceWordsApply(raw) {
+    var w = voiceWordsClean(raw), R = "[\\s,.!?]+";
+    var stop = voiceWordsWide(w.stop), hush = voiceWordsWide(w.hush);
+    var clear = voiceWordsWide(w.clear), tails = [];
+    clear.forEach(function (p) { VOICE_CLEAR_TAILS.forEach(function (t) { tails.push(p + " " + t); }); });
+    VOICE_W = {
+      words: w,
+      // voiceDictParse, on the text as said: (before)(end)|(clear …that)|send.
+      dict: new RegExp("^(.*?)[\\s,.!?]*\\b(?:(" + voiceWordsAlt(w.end, R, "['’]") + ")|(" + voiceWordsAlt(w.clear, R, "['’]") +
+        "(?:\\s+(?:" + VOICE_CLEAR_TAILS.join("|") + "))?)|" + voiceWordsAlt(w.send, R, "['’]") + ")[.!?\\s]*$", "i"),
+      // On normalized words: a stop phrase at the end (two words or more),
+      // the stop command and the hush phrase (the whole phrase).
+      stop: new RegExp("^" + voiceWordsAlt(stop.filter(function (p) { return p.indexOf(" ") > 0; }), " ", "'") + "$"),
+      stopCmd: new RegExp("^" + voiceWordsAlt(stop.concat(w.stop.indexOf("mic off") >= 0 ? VOICE_WORD_CMD_VARIANTS["mic off"] : []), " ", "'") + "$"),
+      hush: new RegExp("^" + voiceWordsAlt(hush, " ", "'") + "$"),
+      holdStop: voiceWordsBare(stop),
+      holdAlways: voiceWordsBare(voiceWordsWide(w.send.concat(w.end)).concat(clear, tails, hush)),
+      // voiceMayBeCommand's patterns: one slot per word ("that's|thats").
+      mayCmd: voiceWordsBare(stop.concat(hush)).map(function (p) { return p.split(" ").map(function (x) { return [x]; }); }),
+    };
+    return w;
+  }
+  voiceWordsApply(null);   // ours, until GET /api/voice says
+  // The first phrase of a kind, quoted, for a hint: “over”.
+  function voiceSaid(kind) { return "“" + VOICE_W.words[kind][0] + "”"; }
+  // The wake word as the page names it: “MindFlock”, “Hey Jarvis”.
+  function voiceWakeName() {
+    var w = VOICE_W.words.wake;
+    return w === VOICE_WORDS_DEFAULT.wake ? "MindFlock" : w.replace(/\b[a-z]/g, function (c) { return c.toUpperCase(); });
+  }
   // By number and by step before by name: "go to session two" is row two.
   // focus / open / show / select <name> switch only on a session whose
   // name starts so (voiceRouted) — "open the readme" stays a prompt.
   // hush ("stop talking") is not "stop": it cuts the voice, the mic goes on.
   var VOICE_CMD = [
-    { kind: "hush",     re: /^(?:stop (?:talking|speaking|reading|saying that)|be quiet|quiet|hush|shut up|(?:that'?s |that is )?enough|enough (?:talking|of that))$/ },
+    { kind: "hush",     words: "hush" },   // the owner's (VOICE_W)
     { kind: "cancel",   re: /^(?:cancel|never ?mind|scratch that|forget it)$/ },
     { kind: "switch_index", re: /^(?:(?:switch|go|change|jump|move) (?:over )?to |focus (?:on )?|open |show |select )?session (?:number )?(\S+)$/ },
     { kind: "switch_rel", re: /^(?:(?:switch|go|change|jump|move) (?:over )?to |focus (?:on )?|open |show |select )?(?:the )?(next|previous|prev) (?:session|one)$/ },
@@ -5594,14 +5705,14 @@
     { kind: "condense", re: /^(?:summari[sz]e(?: that| it)?|what did it say|summary)$/ },
     { kind: "repeat",   re: /^(?:say that again|repeat(?: that)?)$/ },
     { kind: "off",      re: /^(?:voice off|turn voice off|turn off voice)$/ },
-    { kind: "stop",     re: /^(?:stop listening|stop)$/ },
+    { kind: "stop",     words: "stopCmd" },
   ];
   function voiceCommand(text) {
     var n = voiceNorm(text);
-    if (/^(?:ok|okay) stop$/.test(n)) return { kind: "hush", arg: "" };   // before the "okay" goes: not "stop"
+    if (VOICE_W.hush.test(n)) return { kind: "hush", arg: "" };   // before the "okay" goes: "okay stop" is not "stop"
     var t = n.replace(/^(?:ok|okay|hey|please) /, "").replace(/ please$/, "");
     for (var i = 0; i < VOICE_CMD.length; i++) {
-      var m = VOICE_CMD[i].re.exec(t);
+      var m = (VOICE_CMD[i].re || VOICE_W[VOICE_CMD[i].words]).exec(t);
       if (m) return { kind: VOICE_CMD[i].kind, arg: (m[1] || "").trim() };
     }
     return null;
@@ -5621,8 +5732,9 @@
     var t = String(text || "").trim();
     if (!t) return null;
     var p = voiceDictParse(t);
-    if (p.kind === "over" || p.kind === "out") return { word: p.kind === "out" ? "over and out" : "over", send: true, text: t };
-    if (p.kind === "disregard") return { word: "disregard", send: false, text: t };
+    var W = VOICE_W.words;   // the word, as Diagnostics names it: the owner's
+    if (p.kind === "over" || p.kind === "out") return { word: p.kind === "out" ? W.end[0] : W.send[0], send: true, text: t };
+    if (p.kind === "disregard") return { word: W.clear[0], send: false, text: t };
     if (voiceTail(t, false)) return { word: "stop", send: false, text: t };
     if (voiceIsHush(p.text || t)) return { word: "stop talking", send: false, text: t };
     return null;
@@ -5648,7 +5760,7 @@
         return;
       case "switch_rel": voiceSwitchRel(cmd.arg === "next" ? 1 : -1); return;
       case "question": voiceQuestion(voice.session); return;
-      case "stop": voiceIdle(vbox().value.trim() ? VOICE_KEPT : undefined); return;
+      case "stop": voiceIdle(vbox().value.trim() ? voiceKept() : undefined); return;
       case "needs": voiceNeedsMe(); return;
       case "status": voiceStatus(); return;
       case "condense": voiceCondense(); return;
@@ -5889,7 +6001,7 @@
     return voiceNorm(say).indexOf(voiceNorm(name)) === 0 ? say : name + ": " + say;
   }
   function voiceSayThenIdle(line) {
-    speakLine(line).then(function (ok) { if (ok) voiceIdle(vbox().value.trim() ? VOICE_KEPT : undefined); });
+    speakLine(line).then(function (ok) { if (ok) voiceIdle(vbox().value.trim() ? voiceKept() : undefined); });
   }
   // A command ends the listen: the recognizer, its clock, the window.
   function voiceStopForCommand() {
@@ -5963,7 +6075,7 @@
           if (voice.state !== "sending") return;
           if (r.ok && other) {
             var to2 = j && j.queued ? "Queued for " + name + "." : "Sent to " + name + ".";
-            speakLine(to2).then(function (ok) { if (ok) voiceIdle(vbox().value.trim() ? VOICE_KEPT : undefined); });
+            speakLine(to2).then(function (ok) { if (ok) voiceIdle(vbox().value.trim() ? voiceKept() : undefined); });
             return;
           }
           if (r.ok) {
@@ -6485,7 +6597,7 @@
           var line = say ? voiceNameFirst(title, say) : mine ? "Answered " + word + "." : name + ": answered " + word + ".";
           speakLine(line).then(function (ok) {
             if (!ok) return;
-            if (mine) voiceSetState("working", ""); else voiceIdle(vbox().value.trim() ? VOICE_KEPT : undefined);
+            if (mine) voiceSetState("working", ""); else voiceIdle(vbox().value.trim() ? voiceKept() : undefined);
           });
           return;
         }
@@ -6672,6 +6784,10 @@
           voice.cfg.backends = j.backends && typeof j.backends === "object" ? j.backends : { stt: [], tts: [] };
           voice.cfg.system = j.system && typeof j.system === "object" ? j.system : null;
           if (typeof j.say_all === "boolean") voiceSayAllSync(j.say_all);
+          // The owner's words (Settings → Voice); an older server has none: ours.
+          var hint = voiceDictHint();
+          voiceWordsApply(j.words);
+          voiceWordsShow(hint);
         } else if (!voice.cfg.loaded) {
           voice.cfg.server_ready = {};
         }
@@ -6794,6 +6910,9 @@
     voiceEventsOpen();
     voiceLoadCfg();
     if (!inst.voice) voiceSetFlag(title, true);
+    // The first time in this browser: How to talk first — the listen this
+    // tap would have started waits for Got it (a tap too: the mic starts there).
+    if (voiceTutFirst(listenAfter)) return;
     if (listenAfter) voiceListen("prompt", VOICE_TAP_MS, false, true);
   }
   function voiceMoveTo(title) {
@@ -6898,10 +7017,10 @@
   function voiceWakeSync() {
     var A = voiceAdapters.serverStt, W = voiceWake_;
     var want = !!voice.prefs.wake && voice.state !== "off" && !document.hidden;
-    if (want && !A.available()) { voiceWakeOff("No microphone for a web page here — listening for “MindFlock” is off."); return; }
+    if (want && !A.available()) { voiceWakeOff("No microphone for a web page here — listening for “" + voiceWakeName() + "” is off."); return; }
     var ready = voice.cfg.server_ready || {};
     if (want && ready.stt === false) {
-      voiceWakeOff("Listening for “MindFlock” is off: the server has no speech recognition ready (Settings → Voice).");
+      voiceWakeOff("Listening for “" + voiceWakeName() + "” is off: the server has no speech recognition ready (Settings → Voice).");
       return;
     }
     A.hold(want);
@@ -6929,9 +7048,9 @@
       // Refused right after a tap: refused. Long after (the page came back,
       // no gesture): the browser wants one — a tap anywhere tries again.
       if (code === "not-allowed" && Date.now() - voiceWake_.gestureAt > VOICE_WAKE_GESTURE_MS) { voiceWakeNeedTap(); return; }
-      voiceWakeOff(code === "not-allowed" ? "Microphone permission denied — listening for “MindFlock” is off."
-        : code === "audio-capture" ? "No microphone found — listening for “MindFlock” is off."
-        : "The microphone did not start (" + code + ") — listening for “MindFlock” is off.");
+      voiceWakeOff(code === "not-allowed" ? "Microphone permission denied — listening for “" + voiceWakeName() + "” is off."
+        : code === "audio-capture" ? "No microphone found — listening for “" + voiceWakeName() + "” is off."
+        : "The microphone did not start (" + code + ") — listening for “" + voiceWakeName() + "” is off.");
     },
   };
   // The audio flows only through a running context: one the browser keeps
@@ -6951,7 +7070,7 @@
     var W = voiceWake_;
     W.needTap = true;
     voiceWakeSync();
-    if (voice.state === "idle") voiceCaption("Tap anywhere to listen for “MindFlock” again");
+    if (voice.state === "idle") voiceCaption("Tap anywhere to listen for “" + voiceWakeName() + "” again");
     if (W.tapArmed) return;
     W.tapArmed = true;
     document.addEventListener("click", function once() {
@@ -7002,8 +7121,8 @@
       if (x.r.status === 409 || x.r.status === 404 || x.r.status === 405) {
         W.last = { error: String(x.j.error || ("HTTP " + x.r.status)), at: Date.now() };
         voiceWakeOff(x.r.status === 409
-          ? "Listening for “MindFlock” is off: the server has no speech recognition ready (Settings → Voice)."
-          : "Listening for “MindFlock” is off: this server is too old for it.");
+          ? "Listening for “" + voiceWakeName() + "” is off: the server has no speech recognition ready (Settings → Voice)."
+          : "Listening for “" + voiceWakeName() + "” is off: this server is too old for it.");
         return;
       }
       if (!x.r.ok) { W.last = { error: String(x.j.error || ("HTTP " + x.r.status)), at: Date.now() }; return; }
@@ -7051,7 +7170,7 @@
     if (!voice.prefs.wake) return W.note;
     if (W.needTap) return "Paused — tap anywhere to listen again";
     if (voice.state === "off") return "Starts with voice mode";
-    return voiceBtn.hasAttribute("data-standby") ? "Listening for “MindFlock” — the mic is open" : "Paused while the phone listens or speaks";
+    return voiceBtn.hasAttribute("data-standby") ? "Listening for “" + voiceWakeName() + "” — the mic is open" : "Paused while the phone listens or speaks";
   }
   function voiceWakeNoteShow() {
     var t = voiceWakeNoteText();
@@ -7273,6 +7392,82 @@
   });
   safariCloseBtn.addEventListener("click", function () { safariBanner.classList.add("hidden"); fitSoon(); });
 
+  // --- the tutorial: How to talk ------------------------------------------------------
+  // A short card in the page's sheet style: the gesture, the words in the
+  // box, the radio words, stopping, switching, answering, the wake word and
+  // Spoken replies. It opens by itself the first time voice is turned on in
+  // this browser (VOICE_TUT_STORE; storage that throws: once per page) — the
+  // listen that turn-on would start waits for Got it — and from the voice
+  // sheet's "How to talk". Got it closes it and remembers. Its lines name
+  // the owner's words (voiceSaid, voiceWakeName) and are refilled whenever
+  // GET /api/voice brings them (voiceWordsShow).
+  var voiceTut_ = { shown: false, then: null };
+  voice.tut = voiceTut_;   // tests read it
+  voice.wordsNow = function () { return VOICE_W.words; };
+  function voiceTutSeen() {
+    try { return localStorage.getItem(VOICE_TUT_STORE) === "1"; } catch (e) { return voiceTut_.shown; }
+  }
+  // The lines: [what, how], every word quoted from VOICE_W.
+  function voiceTutLines() {
+    var W = VOICE_W.words;
+    var stops = W.stop.slice(0, 2).map(function (p) { return "“" + p + "”"; }).join(" or ");
+    return [
+      ["Talk", voice.prefs.ptt === "hold"
+        ? "Hold the mic while you speak; let go and the words stay in the box."
+        : "Tap the mic and talk — it keeps listening until you stop it. Push to talk in ⚙ makes it hold to talk."],
+      ["Your words", "They appear in the box as you speak. Fix them by hand any time."],
+      ["Send", "Say " + voiceSaid("send") + " at the end to send — listening stays on."],
+      ["Finish", voiceSaid("end") + " sends and stops listening. " + voiceSaid("clear") + " empties the box and starts over."],
+      ["Stop", "Say " + stops + " to stop listening; the words stay in the box. " +
+        voiceSaid("hush") + " cuts a spoken reply and the mic stays on."],
+      ["Switch", "“session three” or “next session” moves you to another session."],
+      ["Answer", "When a session asks you something a sheet opens: say “yes”, “no” or “option two”, or tap."],
+      ["Wake word", "Turn on Listen for “" + voiceWakeName() + "” in ⚙, then say it on its own to start listening."],
+      ["Spoken replies", "In ⚙: Off, Mine (replies to what you said by voice) or Everything (every session's finished turn)."],
+    ];
+  }
+  function voiceTutFill() {
+    voiceTutList.innerHTML = "";
+    voiceTutLines().forEach(function (x) {
+      var li = document.createElement("li"), b = document.createElement("b");
+      b.textContent = x[0];
+      li.appendChild(b);
+      li.appendChild(document.createTextNode(x[1]));
+      voiceTutList.appendChild(li);
+    });
+  }
+  // then: what Got it does after closing (the first turn-on's listen).
+  function voiceTutOpen(then) {
+    voiceTut_.shown = true;
+    voiceTut_.then = then || null;
+    voiceTutFill();
+    voiceTutEl.querySelector(".sheet-box").scrollTop = 0;
+    openSheet(voiceTutEl);
+  }
+  // Voice just turned on: the card, the first time — true when it opened
+  // (the caller's listen is Got it's). Never over the asking sheet (its mic
+  // is listening for the answer).
+  function voiceTutFirst(listenAfter) {
+    if (voiceTutSeen() || voiceTut_.shown || (ask && ask.open)) return false;
+    voiceTutOpen(listenAfter ? function () { if (voice.state === "idle") voiceListen("prompt", VOICE_TAP_MS, false, true); } : null);
+    return true;
+  }
+  function voiceTutDone() {
+    try { localStorage.setItem(VOICE_TUT_STORE, "1"); } catch (e) {}
+    closeSheet(voiceTutEl);
+    var then = voiceTut_.then;
+    voiceTut_.then = null;
+    if (then) { voicePrime(); then(); }
+  }
+  // GET /api/voice brought the words: everything on screen that names one
+  // (`was`: the hint before them — a caption still saying it says the new).
+  function voiceWordsShow(was) {
+    var wake = voiceWakeName();
+    document.querySelectorAll(".voice-wake-word").forEach(function (el) { el.textContent = wake; });
+    if (!voiceTutEl.classList.contains("hidden")) voiceTutFill();
+    if (was && voice.caption === was) voiceCaption(voiceDictHint());
+  }
+
   // --- the voice sheet ------------------------------------------------------------------
   function voiceSheetOpen() {
     voiceOnToggle.checked = voice.state !== "off";
@@ -7441,6 +7636,8 @@
       (x.first ? ", first sound " + (x.first / 1000).toFixed(1) + " s" + (x.parts > 1 ? " (" + x.parts + " sentences)" : "") : "");
   }
   voiceGearBtn.addEventListener("click", voiceSheetOpen);
+  document.getElementById("voice-tut-open").addEventListener("click", function () { voiceTutOpen(null); });
+  document.getElementById("voice-tut-ok").addEventListener("click", voiceTutDone);
   voiceDoneBtn.addEventListener("click", voiceSheetClose);
   voiceOnToggle.addEventListener("change", function () {
     voicePrime();   // a tap on the checkbox is a gesture too

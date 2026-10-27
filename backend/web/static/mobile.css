@@ -1041,6 +1041,34 @@ html, body {
   font-family: inherit;
 }
 #voice-approve-line { margin: 6px 0 10px; }
+/* "How to talk": a row in the voice sheet, and its card (#voice-tut). */
+.voice-tut-row {
+  width: 100%;
+  background: none;
+  color: var(--accent);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-family: inherit;
+  display: block;
+}
+#voice-tut .sheet-box {
+  max-height: 100%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.voice-tut-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.voice-tut-list li { padding: 7px 0; border-bottom: 1px solid var(--border); }
+.voice-tut-list li:last-child { border-bottom: 0; }
+.voice-tut-list b { display: block; font-size: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+#voice-tut-foot { margin-top: 8px; }
+#voice-tut-ok { background: var(--accent); color: #fff; border-color: var(--accent); }
 .voice-diag {
   font-size: 12px;
   color: var(--muted);

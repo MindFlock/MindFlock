@@ -250,7 +250,7 @@
     </div>
 
     <!-- Voice sheet (the strip's ⚙): voice mode for the selected session,
-         push to talk (tap / hold), spoken replies, spoken confirmations, sounds (the chimes), the wake word, hands-free, speech rate,
+         How to talk (the tutorial card), push to talk (tap / hold), spoken replies, spoken confirmations, sounds (the chimes), the wake word, hands-free, speech rate,
          the voice, the read-only approve-dialogs
          line (that setting lives in Settings → Your phone), and Diagnostics —
          what THIS phone can and cannot do, stated plainly, so a silent
@@ -262,6 +262,7 @@
           <input type="checkbox" id="voice-on-toggle" />
           <span>Voice mode for <span id="voice-sheet-session">this session</span></span>
         </label>
+        <button type="button" id="voice-tut-open" class="voice-opt voice-tut-row">How to talk <span class="new-muted">— the words, the gestures</span></button>
         <label class="voice-opt voice-opt-col" for="voice-ptt">
           <span>Push to talk</span>
           <select id="voice-ptt" aria-label="Push to talk">
@@ -289,7 +290,7 @@
              starts listening, as a tap on the mic does. -->
         <label class="voice-opt">
           <input type="checkbox" id="voice-wake" />
-          <span>Listen for “MindFlock” <span class="new-muted">— say it on its own and the mic listens. The mic stays open while voice mode is on and this page is in front, so the phone shows its mic indicator. On an iPhone only while the page is open in Safari, never in the background.</span></span>
+          <span>Listen for “<span class="voice-wake-word">MindFlock</span>” <span class="new-muted">— say it on its own and the mic listens. The mic stays open while voice mode is on and this page is in front, so the phone shows its mic indicator. On an iPhone only while the page is open in Safari, never in the background.</span></span>
         </label>
         <div id="voice-wake-note" class="new-muted hidden"></div>
         <label class="voice-opt">
@@ -309,6 +310,21 @@
         <div id="voice-diag" class="voice-diag"></div>
         <div class="sheet-actions">
           <button type="button" id="voice-done">Done</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- How to talk (mobile.js "the tutorial"): opens by itself the first
+         time voice is turned on in this browser, and from the voice sheet's
+         "How to talk". Its lines name the owner's words (GET /api/voice →
+         words; Settings → Voice changes them), filled by voiceTutFill. -->
+    <div id="voice-tut" class="sheet hidden" role="dialog" aria-labelledby="voice-tut-title">
+      <div class="sheet-box">
+        <div class="sheet-title" id="voice-tut-title">How to talk</div>
+        <ul id="voice-tut-list" class="voice-tut-list"></ul>
+        <div id="voice-tut-foot" class="new-muted">Change these words in Settings → Voice on the desktop; they sync here.</div>
+        <div class="sheet-actions">
+          <button type="button" id="voice-tut-ok">Got it</button>
         </div>
       </div>
     </div>

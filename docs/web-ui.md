@@ -6796,6 +6796,44 @@ cannot reach its speech service…* on the strip (Diagnostics keeps it as *Last
 error*). Use Chrome, Edge or Safari there, or server recognition, whose clip
 records in any browser.
 
+**The words come from Settings → Voice.** Every word below — *over* (send),
+*over and out* (send and stop), *disregard* (clear), the stop phrases, the
+*stop talking* phrases and the wake word *MindFlock* — is the default; the
+owner changes them on the desktop in **Settings → Voice** (synced to every
+device), and the phone only reads them: `GET /api/voice` → `words` (`send`,
+`end`, `clear`, `stop`, `hush` lists and `wake`), on load, when voice turns
+on, when the ⚙ sheet opens and when the page comes back to the front while
+voice is on. Until the first answer — and from an older server that sends
+none, or a kind it leaves empty — the page uses ours. Every client-side
+check is built from them (`voiceWordsApply`: the radio parser, the stop
+phrase at a phrase's end, the guess's held-back words, the commands' stop
+and hush, the fast control on a streamed guess), longest first, each phrase
+escaped, an apostrophe optional, a comma optional (*over, out* is also
+*over out*), the clear words keeping their tails (*… that / it / all /
+everything*). A stop phrase of two words or more ends any phrase (*fix it,
+that's all*); a one-word one (*stop*) stops only said on its own. A default
+phrase keeps the spoken variants the router keeps while it is in the list
+(*stop listening* → *stop recording*, *mic off* → *microphone off*, *done
+talking* → *I'm done talking*, *stop talking* → *stop speaking*, *okay
+stop*…); a phrase the owner adds is matched whole. Every hint and caption
+that names a word — *Say “over” to send…*, *In the box — say “over”…*, the
+⚙ sheet's *Listen for “MindFlock”*, the wake word's notes — names the
+current one, refreshed the moment a refetch brings new words.
+
+**How to talk** is a short card in the page's sheet style: tap the mic (or
+hold it, with Hold to talk); the words appear in the box as you speak; say
+*over* to send — listening stays on; *over and out* sends and stops,
+*disregard* starts over; *stop* / *stop listening* stops with the words
+kept, *stop talking* cuts a spoken reply; switch with *session three* or
+*next session*; answer a session's question from its sheet (*yes*, *no*,
+*option two*); the wake word; Spoken replies Off / Mine / Everything — each
+line built from the owner's words. It opens by itself the **first time
+voice is turned on in this browser** (the `cs_voice_tutorial` localStorage
+flag; storage that throws: once per page load) — the listen that tap would
+have started waits for **Got it**, whose tap starts it — never over the
+asking sheet, and any time from the ⚙ sheet's **How to talk** row, right
+under voice mode. **Got it** closes it and remembers.
+
 **The loop.** Push to talk, with radio rules. Say the prompt phrase by
 phrase: interim words show in the strip's caption, each finished phrase
 lands in the compose box, and the mic stays open across pauses. How it ends
