@@ -582,8 +582,10 @@ and exit 1.
 
 ### `mindflock templates [--json]`
 
-The templates with their schedule in words, the next run (*paused* for a
-paused schedule, *(skipping …)* when Skip next is set), the autopilot depth
+The templates with their schedule in words (*Every day at 21:00*, *Once on
+Wed 28 Oct at 21:00* — *Ran once on …* once that one run is behind it), the
+next run (*paused* for a paused schedule, *(skipping …)* when Skip next is
+set, *done* for a spent one-off), the autopilot depth
 and the last run (or why it failed / was skipped), plus which device fires
 schedules when it isn't this one. The same list, with Run now, Pause and Skip
 next, is the web UI's **Schedule** (top bar, `Alt+S`). `--json` prints `GET /api/templates` as is.

@@ -17,8 +17,9 @@ session from the New dialog stays with the existing ``POST /api/instances``
 
 Two ways to start one WITHOUT the dialog — **Run now** (``POST
 /api/templates/{name}/run``, also ``mindflock run <name>``) and an optional
-per-template **schedule** (``{"at": "HH:MM", "days": "daily" | "weekdays"}``
-or a cron expression, ``{"cron": "0 21 * * 1-5"}``) — live in
+per-template **schedule** (``{"at": "HH:MM", "days": "daily" | "weekdays"}``,
+a cron expression, ``{"cron": "0 21 * * 1-5"}``, or a one-off, ``{"once":
+"2026-10-28T21:00"}``) — live in
 :mod:`backend.web.core.template_schedule`; both go through the same
 ``core.session_create`` path, so session creation still has one code path.
 A template may also carry ``autopilot`` (``commit`` / ``push`` / ``pr``): how
@@ -225,6 +226,25 @@ def save_refusal(body: dict) -> Optional[dict]:
     return None
 
 
+def once_behind(name: str, sched: dict, now: Optional[float] = None) -> bool:
+    """Whether saving ``sched`` on ``name`` would set a NEW one-off that is
+    already behind the clock — it would never fire, armed after its minute.
+    The one-off the template already carries is never refused: a spent one
+    stays on the card (and Pause / Resume re-POST the whole template)."""
+    import time as _time
+
+    if "once" not in sched:
+        return False
+    key = _schedule._key(name)
+    prev = next(
+        (t for t in list_templates() if _schedule._key(t.get("name")) == key), None
+    )
+    kept = (_schedule.schedule_or_none((prev or {}).get("schedule")) or {}).get("once")
+    if kept == sched["once"]:
+        return False
+    return _schedule.once_epoch(sched) <= (_time.time() if now is None else now)
+
+
 def record_refused_run(tpl: dict, refusal: dict, trigger: str = "manual") -> None:
     """Put a run that never started into the template's history as a FAILED
     run (``status: "failed"``, ``reason``), so the card says "Last run failed"
@@ -426,6 +446,8 @@ class TemplatesAddon(Addon):
                 problem = _schedule.run_problem(body)
                 if not problem and not str(body.get("prompt", "") or "").strip():
                     problem = "a scheduled template needs a prompt"
+                if not problem and once_behind(name, sched):
+                    problem = "that date and time have already passed"
                 if problem:
                     return JSONResponse(
                         {"error": "can't schedule it: " + problem}, status_code=400

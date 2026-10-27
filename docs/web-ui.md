@@ -523,7 +523,7 @@ GitHub issues** — the tabs' own names — so typing "issues" lands on that que
 have to navigate), **Verify — check that pushed changes work**, **Customize…**, **Prompts…** (*manage saved prompts*),
 **Schedule…** (`Alt+S`; also on the short menu), **Templates…** (*your templates — in
 Schedule*, the name it had, kept so the word still finds it), **New scheduled template…**
-(*daily, weekdays or cron* — opens Schedule on a new template with **Run on a schedule**
+(*daily, weekdays, once or cron* — opens Schedule on a new template with **Run on a schedule**
 ticked; *schedule a session* still finds it), one **Run template:
 <name>** (*fresh session, task sent*) per template that has a folder,
 **Assistant instructions (agent file)…**,
@@ -2833,9 +2833,14 @@ and *To send text to a session that's already running, use Prompts.*, with
   (closed)* once it's gone — the same in **Recent runs**), or *Last run
   failed: …* in red (the card's border turns red, and the top bar counts a
   scheduled one), or *Skipped …: the previous run is still working*, and the
-  **Recent runs (n)** fold. With nothing scheduled the section says *Nothing
+  **Recent runs (n)** fold. A one-off's card reads *Once on Wed 28 Oct at
+  21:00 EDT · next Oct 28 21:00* until its minute, then *Ran once on Wed 28
+  Oct at 21:00 EDT* (or *Skipped once on …* / *Failed once on …*) with no
+  next run and no **Pause** — the template keeps its schedule, spent, and
+  **Change schedule** picks a new date; the top bar counts it only when that
+  one run failed. With nothing scheduled the section says *Nothing
   runs by itself yet — Schedule… on a template below starts it every day,
-  weekday or on any cron.*
+  weekday, once or on any cron.*
 - **Not scheduled (n)** *run now or add a schedule* — the templates without a
   schedule, each with **▶ Run now**, **Schedule…**, **Edit** and **Delete**.
 
@@ -2907,16 +2912,22 @@ unscheduled and offers **Undo** in its toast); **Edit** keeps the whole form.
 Saving a schedule toasts its schedule line (*Saved “nightly” — Weekdays at
 07:30 EDT · next tomorrow 07:30*). Either way the schedule is
 **Every day** / **Weekdays** **at** a 24-hour time (a text field, *07:30* —
-one format everywhere; *7:30* and *730* are read as 07:30), or **Custom
-(cron)**: a 5-field cron expression (`*/30 * * * *`, `0 21 * * 1-5`,
-`@weekly`) that starts from the days and time on screen (*Every day 07:30* →
-`30 7 * * *`, *Weekdays* → `30 7 * * 1-5`; switching back keeps a simple
-cron's time). Every mode shows the server's reading under it as you type,
-with the zone of the computer that runs schedules: *Every day at 07:30 EDT —
-next tomorrow 07:30, Fri 07:30, Sat 07:30*, *Every 30 minutes — next today
-10:30, today 11:00, today 11:30*, *Every Feb 29 at 00:00 EDT — next Feb 29
-2028, 2032, 2036* (dates in another year name it), or why it can't be saved
-— nothing more often than every 15 minutes. A scheduled template needs a
+one format everywhere; *7:30* and *730* are read as 07:30), **Once** — a
+date (the browser's date picker, starting on the first day the time on
+screen is still ahead) **at** that time: one run, then the schedule is
+spent — or **Custom (cron)**: a 5-field cron expression (`*/30 * * * *`,
+`0 21 * * 1-5`, `@weekly`) that starts from the days and time on screen
+(*Every day 07:30* → `30 7 * * *`, *Weekdays* → `30 7 * * 1-5`; switching
+back keeps a simple cron's time). Every mode shows the server's reading
+under it as you type, with the zone of the computer that runs schedules:
+*Every day at 07:30 EDT — next tomorrow 07:30, Fri 07:30, Sat 07:30*, *Once
+on Wed 28 Oct at 21:00 EDT — next Oct 28 21:00*, *Every 30 minutes — next
+today 10:30, today 11:00, today 11:30*, *Every Feb 29 at 00:00 EDT — next
+Feb 29 2028, 2032, 2036* (dates in another year name it), or why it can't
+be saved — nothing more often than every 15 minutes, and a one-off's minute
+must still be ahead (*Pick a date and time that are still ahead.*; a spent
+one re-saves as it is, so editing its task never trips this, but a new date
+must). A scheduled template needs a
 folder and a Task. **Fast-track** arms each Run now and scheduled run with
 that autopilot depth, so a nightly chore can end in a PR. The card then reads *Weekdays at 21:00 EDT ·
 next today 21:00 · last yesterday 21:00 (scheduled) → rivian-update-oct12*
@@ -5980,7 +5991,8 @@ labels above the inputs.
   **Schedule**, `Alt+S`) opens [Schedule](#schedule).
   A template's **Run now** (its card, its ▶ in New, or the palette's **Run template: …**)
   starts a fresh session from it with the prompt already sent, and an
-  optional schedule (every day / weekdays at a time) starts one on its own.
+  optional schedule (every day / weekdays at a time, once on a date, or a
+  cron) starts one on its own.
   A template can carry a fast-track, so a scheduled one can end in a PR.
   Saved prompts are the templates that hold only a prompt — one list. To
   paste text into a session that is already running, use the

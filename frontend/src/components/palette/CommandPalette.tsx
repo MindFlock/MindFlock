@@ -165,7 +165,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     // that is what it makes ("Schedule a session…" still finds it).
     acts.push({
       label: "New scheduled template…",
-      hint: "daily, weekdays or cron",
+      hint: "daily, weekdays, once or cron",
       keywords: "schedule a session recurring cron every day nightly weekly",
       run: () => ui.openDialogFor("schedule", "schedule"),
     });
