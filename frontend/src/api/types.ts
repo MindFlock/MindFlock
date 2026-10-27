@@ -273,6 +273,17 @@ export interface Instance {
   budget: BudgetStatus | null;
   activity: Activity | string;
   activity_since: number;
+  /** The session is asking you something (backend ask-signal; lib/ask.ts):
+   * a dialog on screen, or a reply that ended with a question nobody has
+   * answered. Optional: an older server doesn't send it. */
+  asking?: {
+    kind: "dialog" | "question";
+    text: string | null;
+    ts: number;
+    dialog_id: string | null;
+    parsed: boolean;
+    source: string | null;
+  } | null;
   /** Jobs the agent backgrounded and left running after its turn ended
    * (lib/backgroundJobs). Optional: an older server doesn't send it. */
   background?: BackgroundJob[] | null;
@@ -465,6 +476,9 @@ export interface DialogOption {
   key: string;
   label: string;
   kind: "yes" | "always" | "no" | "other" | string;
+  /** The tmux key names that pick it, when not just `key` (an arrow-key
+   * picker): /answer is sent `keys ?? [key]`. */
+  keys?: string[];
 }
 
 /** `GET /api/instances/{t}/dialog`: the prompt a session in `clarify` is
@@ -478,6 +492,13 @@ export interface Dialog {
   /** Who raised it, from the dialog's tab header — "general-purpose agent"
    * for a Claude background sub-agent's prompt. Only sent when known. */
   source?: string;
+  /** "dialog" (a prompt on screen) or "question" (the agent's reply ended
+   * with a question in plain words — id "q:<ts>", no options; answered by
+   * typing, never /answer). Absent from an older server: a dialog. */
+  kind?: "dialog" | "question";
+  /** The dialog's own heading ("Permission required", "Ready to code?"),
+   * when the provider reads one. */
+  heading?: string;
 }
 
 /** One member of a session's family as `GET …/thread` returns it. */

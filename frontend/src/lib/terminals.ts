@@ -423,6 +423,15 @@ export function attachDragHistoryGesture(
 // Terminal handle (port of mkTerm) + registry
 // ---------------------------------------------------------------------------
 
+/** When the person last typed into each session's terminals (ms). The ask
+ * pop-up (lib/ask.ts) stays down for a session you are typing to. */
+const typedAt = new Map<string, number>();
+
+/** When the person last typed into `title`'s terminals (ms; 0 = never). */
+export function lastTypedAt(title: string): number {
+  return typedAt.get(title) || 0;
+}
+
 function makeTerm(
   title: string,
   wsPath: string,
@@ -661,6 +670,7 @@ function makeTerm(
 
   if (interactive) {
     term.onData((data) => {
+      typedAt.set(title, Date.now());
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(data);
     });
     attachWheelScroll(container, term, () => ws);

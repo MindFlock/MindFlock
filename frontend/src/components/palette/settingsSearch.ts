@@ -78,6 +78,13 @@ export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
   },
   {
     key: "notifications",
+    label: "Notifications → Question pop-up",
+    sub: "Pop up a session's question in the middle of the screen",
+    terms: ["question", "questions", "pop up", "popup", "pop-up", "ask", "asking", "dialog", "permission", "answer"],
+    anchor: "#notif-ask-row",
+  },
+  {
+    key: "notifications",
     label: "Notifications → Phone alerts",
     sub: "Push notifications to your phone (ntfy)",
     terms: ["phone", "mobile", "push", "ntfy", "alerts on my phone", "notifications on phone"],

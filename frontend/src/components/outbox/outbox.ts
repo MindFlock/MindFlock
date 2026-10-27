@@ -228,7 +228,9 @@ export interface NeedsRow {
 /** The bell's ONE list of what waits on you: the sidebar's attention items
  * merged with the server's waiting rows, one row per session. A session whose
  * agent is asking keeps its answer row (the server's "prompt" item is that same
- * question, so it is dropped); otherwise an approval or escalation outranks the
+ * question, so it is dropped; a `question` row — asked in plain words — is that
+ * session's answer row when the rows don't show it yet); otherwise an
+ * approval or escalation outranks the
  * session's other attention reasons. Ordered answer → approvals/escalations →
  * broken → checks failing → ready, stable within a rank. */
 export function needsAttention(
@@ -240,6 +242,21 @@ export function needsAttention(
     if (!rows.has(a.title)) rows.set(a.title, { key: a.title, title: a.title, rank: a.p === 0 ? 0 : a.p + 1, attn: a });
   }
   for (const w of dedupe(waiting).filter((x) => x.kind !== "prompt")) {
+    // A question asked in plain words (lib/ask.ts) is an answer, ranked with
+    // a prompt: it reads as the session's own Question row — the rows poll
+    // may not show it yet — and folds into one already there.
+    if (w.kind === "question" && w.title) {
+      if (!rows.has(w.title) || rows.get(w.title)!.rank > 0) {
+        const text = String(w.text || "");
+        rows.set(w.title, {
+          key: w.title,
+          title: w.title,
+          rank: 0,
+          attn: { p: 0, title: w.title, reason: "Question", snippet: text, question: text },
+        });
+      }
+      continue;
+    }
     // Only a row about a SESSION folds into that session's row. A group-level
     // item with no session (a budget pause, a ticket line that never resolved,
     // a lead-less ask) keeps the server's own key: one run can hold several,

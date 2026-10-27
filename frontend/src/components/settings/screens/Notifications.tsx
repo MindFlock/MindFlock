@@ -16,11 +16,15 @@ import { flashSaved } from "../savedCue";
 import {
   AGENT_WORDS_LABEL,
   ANNOUNCE_TIP,
+  ASK_POPUP_HINT,
+  ASK_POPUP_LABEL,
   agentWordsHint,
   groupRules,
+  NEEDS_INPUT_EXTRA,
   ONLY_BELL_HINT,
   ruleCopy,
 } from "./notifyCopy";
+import { saveAskPopup, useAskPopup } from "../../../lib/ask";
 
 const NOTIFY_KEY = "mindflock.notify.enabled";
 
@@ -113,6 +117,7 @@ export function Notifications({ gotoScreen }: ScreenProps) {
           </span>
           <span className="notif-channel-state on">On</span>
         </div>
+        <AskPopupRow />
         <div
           className="notif-channel set-switch-row"
           id="notif-browser-row"
@@ -574,6 +579,51 @@ function Ntfy({ onChange, setup = 0 }: { onChange?(v: NtfyView): void; setup?: n
   );
 }
 
+/** The ask pop-up's switch (lib/ask.ts, `notifications.ask_popup`): read
+ * from and written to the notification settings view, like the ntfy fields. */
+function AskPopupRow() {
+  const on = useAskPopup();
+  const [busy, setBusy] = useState(false);
+  return (
+    <div
+      className="notif-channel set-switch-row"
+      id="notif-ask-row"
+      data-channel="popup"
+      title="A session asking you something opens a card in the middle of the screen"
+    >
+      <span className="notif-rule-text">
+        <span className="set-label" id="notif-ask-label">
+          {ASK_POPUP_LABEL}
+        </span>
+        <span className="set-hint notif-rule-desc">{ASK_POPUP_HINT}</span>
+      </span>
+      <label className="ca-switch">
+        <input
+          type="checkbox"
+          id="notif-ask-popup"
+          aria-labelledby="notif-ask-label"
+          checked={on}
+          disabled={busy}
+          onChange={async (e) => {
+            const want = e.target.checked;
+            const row = e.currentTarget;
+            setBusy(true);
+            try {
+              await saveAskPopup(want);
+              if (!flashSaved(row)) toast(want ? "Questions pop up" : "Questions stay in the bell");
+            } catch {
+              toast("Save failed: the question pop-up");
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+        <span className="ca-slider" />
+      </label>
+    </div>
+  );
+}
+
 function RuleRow({ rule }: { rule: NotifyRule }) {
   const [on, setOn] = useState(rule.enabled !== false);
   // Never the server's body: that is the notification's own template text
@@ -585,6 +635,11 @@ function RuleRow({ rule }: { rule: NotifyRule }) {
       <span className="notif-rule-text">
         <span className="set-label" id={labelId}>{label}</span>
         {desc && <span className="set-hint notif-rule-desc">{desc}</span>}
+        {rule.id === "needs_input" && (
+          <span className="set-hint notif-rule-desc notif-rule-extra" id="notif-needs-input-extra">
+            {NEEDS_INPUT_EXTRA}
+          </span>
+        )}
       </span>
       {/* label wraps only the switch, so clicking the row text no longer flips it */}
       <label className="ca-switch">
