@@ -23,6 +23,7 @@ const state = {
   lastReply: "",
   dialog: null,       // null → 204
   voiceCfg: null,     // null → 404
+  voiceCfgDelay: 0,   // ms before GET /api/voice answers (the words scenario: ours until then)
   posts: [],          // {url, body}
   routeStatus: 0,     // non-zero → /api/voice/route answers that status (an older server: 404)
   routeDelay: 0,      // ms before /api/voice/route answers (past 2 s the page stops waiting)
@@ -232,6 +233,7 @@ async function mock(route) {
     } catch (e) { rec.aborted = true; }   // the page aborted it (cancel)
     return;
   }
+  if (p === "/api/voice" && state.voiceCfgDelay) await sleep(state.voiceCfgDelay);
   if (p === "/api/voice") return state.voiceCfg ? json(route, Object.assign({}, state.voiceCfg, state.sayAll === null ? {} : { say_all: state.sayAll })) : json(route, { error: "nope" }, 404);
   if (p === "/api/notify/ntfy") return json(route, state.ntfy);
   if (p === "/api/fleet") return json(route, { in_fleet: false, members: [], requests: [] });
@@ -315,7 +317,9 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
   await sleep(800);
   const browser = await chromium.launch({ executablePath: CHROME, args: ["--no-sandbox"] });
   const ctx = await browser.newContext({ viewport: { width: 390, height: 780 }, isMobile: true, hasTouch: true, userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36" });
-  await ctx.addInitScript(INIT);
+  // How to talk opens the first time voice turns on in a browser: every
+  // scenario but its own (a context of its own, below) has seen it.
+  await ctx.addInitScript(INIT + `try { localStorage.setItem("cs_voice_tutorial", "1"); } catch (e) {}`);
   const page = await ctx.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));
@@ -2556,6 +2560,118 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     check("guess: 'over' held back until the next word rules it out ('go' → 'go over the bridge'), nothing fired", boxesGH.includes("note: go") && boxesGH.includes("note: go over the bridge") && !boxesGH.includes("note: go over") && posts("/send").length === sendsGH && state.streamEnds.indexOf(sidGH) < 0, JSON.stringify([boxesGH, state.streamEnds.slice(-2)]));
     await pageG.click("#voice-cancel");
     await pageG.close();
+    state.voiceCfg = null;
+
+    // ---- the words from the server (Settings → Voice) and How to talk
+    // A browser of its own (no tutorial flag), spoken confirmations off (no
+    // echo to wait out); GET /api/voice slow, then the owner's words.
+    const ctxT = await browser.newContext({ viewport: { width: 390, height: 780 }, isMobile: true, hasTouch: true, userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36" });
+    await ctxT.addInitScript(INIT + `try { if (!localStorage.getItem("cs_voice")) localStorage.setItem("cs_voice", JSON.stringify({ confirm: false })); } catch (e) {}`);
+    const WORDS = {
+      send: ["roger"], end: ["roger and out", "roger, out"], clear: ["scrap that"],
+      stop: ["halt", "halt listening", "we're done"], hush: ["silence", "pipe down"], wake: "hey jarvis",
+    };
+    state.voiceCfg = { stt: "phone", tts: "phone", approve_dialogs: true, server_ready: {}, backends: { stt: [], tts: [] }, words: WORDS };
+    state.voiceCfgDelay = 1500;
+    const pageT = await ctxT.newPage();
+    pageT.on("pageerror", (e) => errors.push(String(e)));
+    pageT.on("console", (msg) => { if (msg.type() === "error" && !/WebSocket|ws:\/\/|404|409/.test(msg.text())) errors.push(msg.text()); });
+    await pageT.route("**/api/**", mock);
+    await pageT.goto(`http://127.0.0.1:${PORT}/mobile.html?s=login-fix`, { waitUntil: "load" });
+    await waitFor(pageT, () => window.mfVoice && document.getElementById("picker-title").textContent === "Login fix", 5000, "words page loaded");
+    const wordsT = () => pageT.evaluate(() => window.mfVoice.wordsNow());
+    const wakeLabel = () => pageT.evaluate(() => document.querySelector("#voice-sheet .voice-wake-word").textContent);
+    const tutOpen = () => pageT.evaluate(() => !document.getElementById("voice-tut").classList.contains("hidden"));
+    const tutText = () => pageT.evaluate(() => document.getElementById("voice-tut-list").textContent);
+    const boxT = () => pageT.evaluate(() => document.getElementById("compose").value);
+    const wT0 = await wordsT();
+    check("words: ours before GET /api/voice answers (over / over and out / disregard, MindFlock)", !(await pageT.evaluate(() => window.mfVoice.cfg.loaded)) && wT0.send[0] === "over" && wT0.end[0] === "over and out" && wT0.clear[0] === "disregard" && (await wakeLabel()) === "MindFlock", JSON.stringify(wT0));
+    await waitFor(pageT, () => window.mfVoice.cfg.loaded, 5000, "words: cfg loaded");
+    const wT1 = await wordsT();
+    check("words: the server's once it answers — and the sheet's wake label names its word", wT1.send[0] === "roger" && wT1.stop.join() === WORDS.stop.join() && (await wakeLabel()) === "Hey Jarvis", JSON.stringify([wT1, await wakeLabel()]));
+    state.voiceCfgDelay = 0;
+    // The first tap that turns voice on: How to talk, the listen waiting for Got it.
+    await pageT.click("#voice-btn");
+    await waitFor(pageT, () => !document.getElementById("voice-tut").classList.contains("hidden"), 3000, "tutorial opened");
+    const ttT = await tutText();
+    check("tutorial: opens the first time voice is turned on, and the mic waits for it", (await tutOpen()) && (await vstate(pageT)) === "idle", await vstate(pageT));
+    check("tutorial: its lines name the owner's words (send, end, clear, stop, hush, wake), never ours", ["“roger”", "“roger and out”", "“scrap that”", "“halt” or “halt listening”", "“silence”", "“Hey Jarvis”"].every((x) => ttT.indexOf(x) >= 0) && !/“over|disregard|MindFlock/.test(ttT), ttT);
+    check("tutorial: the gesture, the box, switching, answering, Spoken replies", /Tap the mic/.test(ttT) && /appear in the box/.test(ttT) && /session three/.test(ttT) && /next session/.test(ttT) && /“yes”/.test(ttT) && /Off, Mine/.test(ttT) && /Everything/.test(ttT), ttT);
+    check("tutorial: not remembered before Got it", (await pageT.evaluate(() => localStorage.getItem("cs_voice_tutorial"))) === null);
+    await pageT.click("#voice-tut-ok");
+    await waitFor(pageT, () => window.mfVoice.state === "listening", 3000, "listening after Got it");
+    check("tutorial: Got it closes it, remembers, and starts the listen the tap asked for", !(await tutOpen()) && (await vstate(pageT)) === "listening" && (await pageT.evaluate(() => localStorage.getItem("cs_voice_tutorial"))) === "1", await vstate(pageT));
+    const hintT = await pageT.evaluate(() => window.mfVoice.caption);
+    check("words: the hint names the owner's words", hintT === "Say “roger” to send, “roger and out” to stop, “scrap that” to start over", hintT);
+    // The radio words, the owner's.
+    const sendsT = posts("/send").length;
+    await pageT.evaluate(() => window.__hear("fix the login bug"));
+    await waitFor(pageT, () => document.getElementById("compose").value === "fix the login bug", 3000, "words: routed phrase");
+    await pageT.evaluate(() => window.__hear("and add a test, roger."));
+    for (let t = Date.now(); posts("/send").length < sendsT + 1 && Date.now() - t < 3000; ) await sleep(30);
+    check("words: '… roger' sends, listening on", posts("/send").length === sendsT + 1 && posts("/send")[sendsT].body.text === "fix the login bug and add a test" && (await vstate(pageT)) === "listening", JSON.stringify(posts("/send").slice(sendsT).map((x) => x.body)));
+    await pageT.evaluate(() => window.__hear("move it over"));
+    await sleep(200);
+    check("words: ours are words now ('… over' is typed, nothing sent)", (await boxT()) === "move it over" && posts("/send").length === sendsT + 1, await boxT());
+    await pageT.evaluate(() => window.__hear("and disregard"));
+    await sleep(200);
+    check("words: …'disregard' too", (await boxT()) === "move it over and disregard", await boxT());
+    await pageT.evaluate(() => window.__hear("Scrap that."));
+    await sleep(200);
+    check("words: 'scrap that' empties the box and listens on", (await boxT()) === "" && (await vstate(pageT)) === "listening", await boxT());
+    await pageT.evaluate(() => window.__hear("silence"));
+    await sleep(200);
+    check("words: 'silence' is the hush (nothing typed, still listening)", (await boxT()) === "" && (await vstate(pageT)) === "listening", await boxT());
+    await pageT.evaluate(() => window.__hear("note the logs"));
+    await waitFor(pageT, () => document.getElementById("compose").value === "note the logs", 3000, "words: second routed phrase");
+    await pageT.evaluate(() => window.__hear("and the trace halt listening"));
+    await waitFor(pageT, () => window.mfVoice.state !== "listening", 3000, "words: halt listening");
+    check("words: '… halt listening' stops, the words kept, unsent", (await vstate(pageT)) !== "listening" && (await boxT()) === "note the logs and the trace" && posts("/send").length === sendsT + 1, JSON.stringify([await vstate(pageT), await boxT()]));
+    await pageT.click("#voice-btn");
+    await waitFor(pageT, () => window.mfVoice.state === "listening", 3000, "words: listening again");
+    check("tutorial: a later turn-on or tap never opens it again", !(await tutOpen()) && (await vstate(pageT)) === "listening");
+    await pageT.evaluate(() => window.__hear("ship it, roger and out"));
+    for (let t = Date.now(); posts("/send").length < sendsT + 2 && Date.now() - t < 3000; ) await sleep(30);
+    await sleep(200);
+    check("words: '… roger and out' (the longest first) sends the box and stops", posts("/send").length === sendsT + 2 && posts("/send")[sendsT + 1].body.text === "note the logs and the trace ship it" && (await vstate(pageT)) !== "listening", JSON.stringify([posts("/send").slice(sendsT + 1).map((x) => x.body), await vstate(pageT)]));
+    // Settings → Voice changed them meanwhile: the next refetch brings them.
+    state.voiceCfg = Object.assign({}, state.voiceCfg, { words: { send: ["copy"], wake: "computer" } });
+    await pageT.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await waitFor(pageT, () => window.mfVoice.wordsNow().send[0] === "copy", 3000, "words: refetched");
+    const wT2 = await wordsT();
+    check("words: a refetch (the page in front again) brings the new ones; a kind left out is ours", wT2.send[0] === "copy" && wT2.end[0] === "over and out" && wT2.clear[0] === "disregard" && (await wakeLabel()) === "Computer", JSON.stringify([wT2, await wakeLabel()]));
+    await pageT.click("#voice-btn");
+    await waitFor(pageT, () => window.mfVoice.state === "listening", 3000, "words: listening after the refetch");
+    const hintT2 = await pageT.evaluate(() => window.mfVoice.caption);
+    check("words: …the hint says them", hintT2 === "Say “copy” to send, “over and out” to stop, “disregard” to start over", hintT2);
+    const sendsT2 = posts("/send").length;
+    await pageT.evaluate(() => window.__hear("fix it roger"));
+    await sleep(200);
+    await pageT.evaluate(() => window.__hear("then copy"));
+    for (let t = Date.now(); posts("/send").length < sendsT2 + 1 && Date.now() - t < 3000; ) await sleep(30);
+    check("words: …'copy' sends, 'roger' is a word again", posts("/send").length === sendsT2 + 1 && posts("/send")[sendsT2].body.text === "fix it roger then", JSON.stringify(posts("/send").slice(sendsT2).map((x) => x.body)));
+    await pageT.click("#voice-cancel");
+    // How to talk from the ⚙ sheet: the current words, Got it closes it.
+    await pageT.click("#voice-gear");
+    await waitFor(pageT, () => !document.getElementById("voice-sheet").classList.contains("hidden"), 2000, "voice sheet");
+    await pageT.click("#voice-tut-open");
+    await waitFor(pageT, () => !document.getElementById("voice-tut").classList.contains("hidden"), 2000, "tutorial from the sheet");
+    const ttT2 = await tutText();
+    check("tutorial: opens again from the ⚙ sheet's How to talk, with the current words", (await tutOpen()) && ttT2.indexOf("“copy”") >= 0 && ttT2.indexOf("“Computer”") >= 0 && ttT2.indexOf("“roger”") < 0, ttT2);
+    await pageT.click("#voice-tut-ok");
+    await sleep(100);
+    check("tutorial: Got it closes it (the voice sheet still open under it, nothing started)", !(await tutOpen()) && (await pageT.evaluate(() => !document.getElementById("voice-sheet").classList.contains("hidden"))) && (await vstate(pageT)) !== "listening", await vstate(pageT));
+    await pageT.click("#voice-done");
+    // Remembered across a reload: voice on again, no card.
+    await pageT.evaluate(() => { try { localStorage.setItem("cs_voice", JSON.stringify({ confirm: false, on: false })); } catch (e) {} });
+    await pageT.reload({ waitUntil: "load" });
+    await waitFor(pageT, () => window.mfVoice && window.mfVoice.cfg.loaded && document.getElementById("picker-title").textContent === "Login fix", 5000, "words page reloaded");
+    await pageT.click("#voice-btn");
+    await waitFor(pageT, () => window.mfVoice.state === "listening", 3000, "listening after reload");
+    check("tutorial: remembered per browser — after a reload the first tap just listens", !(await tutOpen()) && (await vstate(pageT)) === "listening", await vstate(pageT));
+    await pageT.click("#voice-cancel");
+    await pageT.close();
+    await ctxT.close();
     state.voiceCfg = null;
   } catch (e) {
     console.log("HARNESS ERROR", e && e.stack || e);
