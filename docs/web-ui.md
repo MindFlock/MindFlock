@@ -5849,7 +5849,12 @@ labels above the inputs.
   - **Privacy**: the built-in engines (Windows' and Apple's on-device
     speech) and local models keep audio on this computer, a host receives
     what you send it; the phone's own recognition sends audio to Google on
-    Android and to Apple on iOS when no on-device model exists; on iPhone,
+    Android and to Apple on iOS when no on-device model exists; DuckDuckGo,
+    Firefox and in-app (WebView) browsers have no speech recognition service
+    of their own — their recognizer fails every start with *not-allowed*
+    whatever the microphone permission says, which the page used to report
+    as a refused microphone; it now says so, and when the server has
+    recognition ready it switches this page to it on the spot; on iPhone,
     voice needs a Safari tab (the home-screen icon cannot hear you), which
     recognition on this computer fixes.
 

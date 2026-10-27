@@ -1998,3 +1998,52 @@ def test_no_hint_names_submit_as_a_radio_word():
     # The ⚙ sheet's switches for the confirmations and the chimes.
     assert '<input type="checkbox" id="voice-confirm" />' in html
     assert '<input type="checkbox" id="voice-sounds" />' in html
+
+
+def test_a_browser_without_a_speech_service_is_told_so_and_falls_back_to_the_server():
+    """DuckDuckGo / Firefox / a WebView: the phone recognizer's start fails
+    "not-allowed" whatever the microphone permission says. The page tells a
+    refused microphone from a missing service (the code, a granted
+    permission, a known browser) and, when the server has recognition
+    ready, switches this page to it instead of stopping with an error."""
+    js = _js()
+    assert "VOICE_NO_SPEECH_SERVICE_RE = /DuckDuckGo|Firefox|FxiOS|; wv\\)/" in js
+    assert "function voiceNoSpeechService()" in js
+    denied = js.split("function voiceSttDeniedText(code) {")[1].split("\n  }")[0]
+    assert (
+        'code === "service-not-allowed" || voiceNoSpeechService() || voice.micPerm === "granted"'
+        in denied
+    )
+    assert (
+        "return VOICE_NO_SERVICE_TEXT" in denied
+        and "return VOICE_MIC_DENIED_TEXT" in denied
+    )
+    assert (
+        "This browser has no speech recognition service (DuckDuckGo, Firefox and in-app browsers don't)"
+        in js
+    )
+    assert "Microphone permission denied — allow the mic for this site." in js
+    # The permission is read when voice turns on (navigator.permissions).
+    assert 'navigator.permissions.query({ name: "microphone" })' in js
+    on = js.split("function voiceTurnOn(title, listenAfter) {")[1].split("\n  }")[0]
+    assert "voiceMicPermRead();" in on
+    # The fallback: the server's recognizer for the rest of the page, when ready.
+    fb = js.split("function voiceSttFallbackToServer() {")[1].split("\n  }")[0]
+    assert "if (!ready.stt || !A.serverStt.available()) return false;" in fb
+    assert "voice.sttFallback = true;" in fb and "voiceApplyAdapters();" in fb
+    assert (
+        '(voice.cfg.stt === "server" || voice.sttFallback) && ready.stt && A.serverStt.available()'
+        in js
+    )
+    err = js.split('if (code === "not-allowed" || code === "service-not-allowed") {')[
+        1
+    ].split('} else if (code === "audio-capture")')[0]
+    assert 'voice.stt.name === "phone" && voiceSttFallbackToServer()' in err
+    assert "voiceError(voiceSttDeniedText(code));" in err
+    # "unavailable" (no constructor: iOS outside Safari) falls back the same way.
+    un = js.split('} else if (code === "unavailable" || code === "start-failed") {')[
+        1
+    ].split('} else if (code === "network")')[0]
+    assert "voiceSttFallbackToServer()" in un
+    # The ⚙ sheet's diagnostics say so too.
+    assert "but this browser has no speech service behind it" in js

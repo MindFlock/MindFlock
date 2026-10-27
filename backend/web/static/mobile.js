@@ -2888,6 +2888,32 @@
 
   var ANDROID = /Android/i.test(navigator.userAgent);
   var SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+  // Browsers whose Web Speech API has no service behind it: the constructor
+  // is there (the same Blink), but start() fails "not-allowed" /
+  // "service-not-allowed" whatever the microphone permission says —
+  // DuckDuckGo and every other Android WebView browser, Firefox. (iOS
+  // browsers other than Safari have no constructor at all: "unavailable",
+  // the Safari banner.) The page used to call that a refused microphone.
+  var VOICE_NO_SPEECH_SERVICE_RE = /DuckDuckGo|Firefox|FxiOS|; wv\)/;
+  function voiceNoSpeechService() { return VOICE_NO_SPEECH_SERVICE_RE.test(navigator.userAgent || ""); }
+  var VOICE_NO_SERVICE_TEXT = "This browser has no speech recognition service (DuckDuckGo, Firefox and in-app browsers don't). Use recognition on this computer — Settings → Voice → On the phone page — or open this page in Chrome.";
+  var VOICE_MIC_DENIED_TEXT = "Microphone permission denied — allow the mic for this site.";
+  // What the phone recognizer's "not-allowed" means: the microphone — unless
+  // it is already granted (navigator.permissions, read when voice turns on),
+  // the code says the service, or this browser is known to have none.
+  function voiceSttDeniedText(code) {
+    if (code === "service-not-allowed" || voiceNoSpeechService() || voice.micPerm === "granted") return VOICE_NO_SERVICE_TEXT;
+    return VOICE_MIC_DENIED_TEXT;
+  }
+  function voiceMicPermRead() {
+    try {
+      if (!navigator.permissions || !navigator.permissions.query) return;
+      navigator.permissions.query({ name: "microphone" }).then(function (st) {
+        voice.micPerm = st.state;
+        st.onchange = function () { voice.micPerm = st.state; };
+      }).catch(function () {});
+    } catch (e) {}
+  }
   var VOICE_STORE = "cs_voice";          // localStorage: session, on, rate, voiceName, handsFree, ptt, replies, wake, confirm, sounds
   var VOICE_TUT_STORE = "cs_voice_tutorial";   // localStorage: "1" once How to talk's Got it was tapped
   var VOICE_LINE_MAX_AGE_MS = 60000;     // a queued line this old when its turn comes is dropped, not said late
@@ -4360,6 +4386,8 @@
     keepMs: VOICE_KEEP_STREAM_MS,   // how long the server recognizer keeps the microphone warm (tests shorten it)
     buzzAt: 0,                   // the last haptic cue (the listening buzz, the first-word tick)
     sttHinted: false,            // "server recognition isn't ready" said once
+    sttFallback: false,          // the phone's recognizer failed for good: the server's for this page
+    micPerm: "",                 // navigator.permissions' microphone state ("granted"…), when readable
     saved: null,                 // {session, on} from localStorage, for "Tap to resume voice"
     lastSay: { text: "", ts: 0 }, // never speak the same say twice
     asked: false,                // that say asked a question: "yes" / "no" answer it (voiceAsks)
@@ -5128,17 +5156,30 @@
       onError: function (code, detail) {
         if (!voiceIsListening()) return;
         if (code === "not-allowed" || code === "service-not-allowed") {
-          voiceError("Microphone permission denied — allow the mic for this site.");
-          voiceListen_.until = 0;
-          voiceIdle();
+          // The phone's recognizer has no service in this browser (DuckDuckGo,
+          // a WebView) or the microphone is refused: recognition on the
+          // server takes over for this page when it is ready; else say which.
+          if (voice.stt.name === "phone" && voiceSttFallbackToServer()) {
+            voiceCaption("This browser's recognizer isn't available — using recognition on this computer.");
+            if (voiceIsListening() && !voice.stt.active()) voiceRecStart();
+          } else {
+            voiceError(voiceSttDeniedText(code));
+            voiceListen_.until = 0;
+            voiceIdle();
+          }
         } else if (code === "audio-capture") {
           voiceError("No microphone found.");
           voiceListen_.until = 0;
           voiceIdle();
         } else if (code === "unavailable" || code === "start-failed") {
-          voiceError("Speech recognition did not start (" + code + ").");
-          voiceListen_.until = 0;
-          voiceIdle();
+          if (voice.stt.name === "phone" && voiceSttFallbackToServer()) {
+            voiceCaption("This browser has no recognizer — using recognition on this computer.");
+            if (voiceIsListening() && !voice.stt.active()) voiceRecStart();
+          } else {
+            voiceError(code === "unavailable" && voiceNoSpeechService() ? VOICE_NO_SERVICE_TEXT : "Speech recognition did not start (" + code + ").");
+            voiceListen_.until = 0;
+            voiceIdle();
+          }
         } else if (code === "network") {
           // A Chromium without Google's speech key (Arc, Brave, Vivaldi,
           // Opera…) fails EVERY start this way and hears nothing: the first
@@ -6871,7 +6912,7 @@
   // server that is asked for but not ready is said once, in the strip.
   function voiceApplyAdapters() {
     var A = voiceAdapters, ready = voice.cfg.server_ready || {};
-    var stt = voice.cfg.stt === "server" && ready.stt && A.serverStt.available() ? A.serverStt : A.phoneStt;
+    var stt = (voice.cfg.stt === "server" || voice.sttFallback) && ready.stt && A.serverStt.available() ? A.serverStt : A.phoneStt;
     var tts = voice.cfg.tts === "server" && ready.tts && A.serverTts.available() ? A.serverTts : A.phoneTts;
     if (voice.tts !== tts) {
       voice.tts.cancel();
@@ -6895,6 +6936,16 @@
         (ready.stt_detail || ready.detail || "see Settings → Voice") + ". Using the phone's.");
     }
     safariAltEl.classList.toggle("hidden", voice.cfg.stt === "server");
+  }
+  // The phone's recognizer failed for good (no speech service in this
+  // browser): the server's takes over for the rest of this page when it is
+  // ready, whatever Settings say → whether it did.
+  function voiceSttFallbackToServer() {
+    var A = voiceAdapters, ready = voice.cfg.server_ready || {};
+    if (!ready.stt || !A.serverStt.available()) return false;
+    voice.sttFallback = true;
+    voiceApplyAdapters();
+    return voice.stt === A.serverStt;
   }
   // Give the microphone back: every adapter that may hold it — now, or (ms:
   // the page hid) the server recognizer's warm stream in ms unless it is
@@ -6932,6 +6983,7 @@
   }
   function voiceTurnOn(title, listenAfter) {
     voice.session = title;
+    voiceMicPermRead();
     var inst = instByTitle(title) || {};
     // What the session last said is on the screen already: heard, not news,
     // whatever its stamp (a phone clock is not the server's): until the
@@ -7577,7 +7629,7 @@
     var sys = voice.cfg.system;
     var lines = [
       "Recognition: " + (voice.stt.available()
-        ? "available (" + (window.SpeechRecognition ? "SpeechRecognition" : "webkitSpeechRecognition") + ")"
+        ? "available (" + (window.SpeechRecognition ? "SpeechRecognition" : "webkitSpeechRecognition") + ")" + (voiceNoSpeechService() ? " — but this browser has no speech service behind it" : "")
         : "NOT available" + (IOS ? " — iOS has it only in a Safari tab" : "")),
       "Speech: " + (voice.tts.available()
         ? "available, " + vs.length + " voice" + (vs.length === 1 ? "" : "s") + " loaded"
