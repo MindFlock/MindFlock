@@ -52,13 +52,15 @@ import { effectiveActivity } from "../lib/sessionState";
 import { selectSession } from "../lib/sessionActions";
 import { openSettings, type SettingsScreen } from "../lib/openSettings";
 import { fetchDialog } from "../lib/flockActions";
-import { KEYMAP, shortcutLabels } from "../lib/keymap";
+import { KEYMAP, overlayOpen, shortcutLabels } from "../lib/keymap";
 import { askPopupOn } from "../lib/ask";
 import { askVoice, getMicState, publishMicState, registerAskMic, type AskVoice } from "../lib/askVoice";
 import type { Dialog } from "../api/types";
 import {
   DICT_HINT,
   DICT_IDLE_MS,
+  HUSH_CAPTION_MS,
+  HUSH_LINE,
   DEFAULT_VOICE_CFG,
   HOLD_FINAL_WAIT_MS,
   HandsFree,
@@ -68,6 +70,7 @@ import {
   ReplyTracker,
   SpeechQueue,
   TALK_EVENT,
+  bargeIn,
   browserRecognizer,
   browserSpeaker,
   engineDiagnostics,
@@ -79,6 +82,8 @@ import {
   routePhrase,
   runVoiceCommand,
   saveVoicePrefs,
+  sayAllMismatch,
+  syncSayAll,
   onVoicePrefs,
   serverRecognizer,
   serverSpeaker,
@@ -184,6 +189,11 @@ const questions = new Map<string, string>();
 const asksSaid = new Map<string, { done: Promise<void>; at: number }>();
 /** How long a reply's read-out stands in for the pop-up's. */
 const SAID_FRESH_MS = 60_000;
+/** The page checked the server's say-all marker against the pref once. */
+let sayAllChecked = false;
+/** The asks the pop-up had read out (by session): the next step of one
+ * first silences what is left of the previous step's read-out. */
+const asksRead = new Set<string>();
 
 /** Re-read `title`'s last Say line: its question waits until it works again. */
 function refreshQuestion(title: string) {
@@ -325,16 +335,26 @@ export function TopBarMic() {
   const hands = useRef<HandsFree | null>(null);
   /** The options' Diagnostics line for what waits on the focused session. */
   const [pendingLine, setPendingLine] = useState("");
+  /** The dictation hands-free listening opened (an ask read out). */
+  const handsLive = useRef<LiveDictation | null>(null);
 
   /** The caption under the mic. `sticky`: stays until replaced (listening, or
-   * words waiting to be continued); otherwise it fades after a few seconds.
+   * words waiting to be continued); otherwise it fades after `ms`.
    * `tail`: streamed words the recognizer may still change, shown muted. */
-  const say = (text: string, sticky = false, tail = "") => {
+  const say = (text: string, sticky = false, tail = "", ms = 6000) => {
     setCaptionState(text);
     setUnsure(tail);
     publishMicState({ caption: text, unsure: tail });
     clearTimeout(captionTimer.current);
-    if (text && !sticky) captionTimer.current = setTimeout(() => setCaptionState(""), 6000);
+    if (text && !sticky) captionTimer.current = setTimeout(() => setCaptionState(""), ms);
+  };
+
+  /** "Stop talking" (the words, Esc, the options' button): everything the
+   * app is saying or has queued, every session, dropped — the mic goes on
+   * listening if it was. */
+  const hush = () => {
+    queue.cancel();
+    if (!live.current) say(HUSH_LINE, false, "", HUSH_CAPTION_MS);
   };
 
   // Settings → Voice edits the same prefs: follow it.
@@ -353,7 +373,13 @@ export function TopBarMic() {
     });
 
   useEffect(() => {
-    void refreshCfg();
+    void refreshCfg().then((c) => {
+      // On load the pref wins: the server's say-all marker set to match it, once.
+      if (sayAllChecked || typeof c.say_all !== "boolean") return;
+      sayAllChecked = true;
+      const want = sayAllMismatch(prefsRef.current.replies, c.say_all);
+      if (want !== null) void syncSayAll(want);
+    });
     const l = (on: boolean) => setSpeaking(on);
     speakingListeners.add(l);
     // Where speech runs moves with Settings (another window, an engine just
@@ -396,7 +422,7 @@ export function TopBarMic() {
         say(spokenLine(displayName(title), words));
         if (mode === "off") return;
         if (ask) questions.set(title, ask);
-        const said = queue.say(() => spokenLine(voiceName(title, useUi.getState().focused, displayName(title)), words));
+        const said = queue.say(() => spokenLine(voiceName(title, useUi.getState().focused, displayName(title)), words), { title });
         if (!ask) return;
         // Its Reply opens the ask pop-up, which waits for this read-out
         // instead of reading the question a second time.
@@ -523,7 +549,10 @@ export function TopBarMic() {
     // Inside the gesture: a context made here runs (server playback, the
     // server recognizer's recording and the browser one's level need it).
     const ctx = voiceAudioCtx();
-    queue.hold();
+    // Barge-in: the app stops talking BEFORE the mic opens — answering the
+    // ask being read drops the rest of its read-out — and the first moment
+    // of audio (its voice dying away) is skipped.
+    const skipMs = bargeIn(queue, ask && opts.title === ask.title ? ask.title : "");
     const d = new LiveDictation(
       target(into, opts.title),
       {
@@ -544,9 +573,11 @@ export function TopBarMic() {
           }
           const reply = await routePhrase(text, session);
           if (reply.kind === "prompt") return false;
+          if (reply.kind === "hush") return "hush";
           await routed(reply, text, session);
           return true;
         },
+        hush: () => queue.cancel(),
         activity: liveActivity,
         replies: () => prefsRef.current.replies !== "off",
         submitted: (title, wantSay) => {
@@ -565,69 +596,72 @@ export function TopBarMic() {
     d.show();
     armIdle();
     meterStart();
-    const ok = r.start({
-      onInterim: (t) => {
-        if (live.current !== d) return;
-        armIdle();
-        if (t) voiceMark("partial");
-        d.hearing(t);
-      },
-      onStatus: (t) => {
-        if (live.current === d && !d.dict.shown && !into) say(t + " · " + DICT_HINT, true);
-      },
-      onReady: () => {
-        if (live.current === d) d.ready();
-      },
-      // The ring, the level bar and "Hearing you…" (lib/voiceMic).
-      onLevel: (rms) => {
-        if (live.current === d) meterFeed(rms);
-      },
-      onSpeech: () => {
-        if (live.current === d) armIdle();
-      },
-      // Each phrase is typed as it arrives — also the tail while finishing.
-      onFinal: (t) => {
-        if (live.current !== d) return;
-        armIdle();
-        voiceMark("commit");
-        void d.heard(t);
-      },
-      // Streaming: committed words as they come, a phrase's end, the unsure
-      // tail (never typed), and the one line when it falls back to clips.
-      onWords: (t) => {
-        if (live.current !== d) return;
-        armIdle();
-        voiceMark("commit");
-        void d.words(t);
-      },
-      onFlush: (t) => {
-        if (live.current === d) void d.flush(t);
-      },
-      onPartial: (t) => {
-        if (live.current !== d) return;
-        if (t) {
+    const ok = r.start(
+      {
+        onInterim: (t) => {
+          if (live.current !== d) return;
           armIdle();
-          voiceMark("partial");
-        }
-        d.unsure(t);
+          if (t) voiceMark("partial");
+          d.hearing(t);
+        },
+        onStatus: (t) => {
+          if (live.current === d && !d.dict.shown && !into) say(t + " · " + DICT_HINT, true);
+        },
+        onReady: () => {
+          if (live.current === d) d.ready();
+        },
+        // The ring, the level bar and "Hearing you…" (lib/voiceMic).
+        onLevel: (rms) => {
+          if (live.current === d) meterFeed(rms);
+        },
+        onSpeech: () => {
+          if (live.current === d) armIdle();
+        },
+        // Each phrase is typed as it arrives — also the tail while finishing.
+        onFinal: (t) => {
+          if (live.current !== d) return;
+          armIdle();
+          voiceMark("commit");
+          void d.heard(t);
+        },
+        // Streaming: committed words as they come, a phrase's end, the unsure
+        // tail (never typed), and the one line when it falls back to clips.
+        onWords: (t) => {
+          if (live.current !== d) return;
+          armIdle();
+          voiceMark("commit");
+          void d.words(t);
+        },
+        onFlush: (t) => {
+          if (live.current === d) void d.flush(t);
+        },
+        onPartial: (t) => {
+          if (live.current !== d) return;
+          if (t) {
+            armIdle();
+            voiceMark("partial");
+          }
+          d.unsure(t);
+        },
+        onNotice: (t) => {
+          if (live.current === d) d.notice(t);
+        },
+        onError: (code, detail) => {
+          if (live.current !== d) return;
+          d.fail(recognizerErrorLine(code, detail));
+        },
+        onEnd: () => {
+          if (live.current !== d) return;
+          if (deciding.current) {
+            deciding.current();
+            return;
+          }
+          // Down without being asked: the words stay where they are.
+          void d.expire();
+        },
       },
-      onNotice: (t) => {
-        if (live.current === d) d.notice(t);
-      },
-      onError: (code, detail) => {
-        if (live.current !== d) return;
-        d.fail(recognizerErrorLine(code, detail));
-      },
-      onEnd: () => {
-        if (live.current !== d) return;
-        if (deciding.current) {
-          deciding.current();
-          return;
-        }
-        // Down without being asked: the words stay where they are.
-        void d.expire();
-      },
-    });
+      { skipMs }
+    );
     // Settings may have moved the engines since: the next round knows.
     void refreshCfg();
     if (!ok) {
@@ -666,6 +700,7 @@ export function TopBarMic() {
         },
       });
       if (!d) return resolve("stopped");
+      handsLive.current = d;
       timer = setTimeout(() => {
         if (live.current === d && !d.heardAnything) d.drop();
       }, ms);
@@ -704,6 +739,21 @@ export function TopBarMic() {
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);
   }, [listening]);
+
+  // Escape while the app is talking (not listening, no dialog or popover
+  // taking it): stop talking — everything, every session.
+  useEffect(() => {
+    if (!speaking || listening || menuOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || overlayOpen()) return;
+      e.stopPropagation();
+      e.preventDefault();
+      hush();
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [speaking, listening, menuOpen]);
 
   // --- the router's answers ------------------------------------------------ //
   const announce = (line: string) => {
@@ -749,6 +799,9 @@ export function TopBarMic() {
       case "stop":
         say("");
         return;
+      case "hush":
+        hush();
+        return;
       case "off":
         queue.cancel();
         untap?.();
@@ -784,17 +837,28 @@ export function TopBarMic() {
       fetchDialog: (title) => fetchDialog(title),
       approveDialogs: () => latest.current.refreshCfg().then((c) => !!c.approve_dialogs),
       voiceName: (title) => voiceName(title, useUi.getState().focused, displayName(title)),
-      speak: (line) => {
+      speak: (line, title) => {
         say(line, true);
-        return queue.say(line);
+        return queue.say(line, { title });
       },
       drained: () => queue.drained(),
       caption: say,
       listen: (title, hint, ms) => latest.current.listenFor(title, hint, ms),
     });
 
+  /** Nothing more read out or listened for hands-free for `title`'s ask:
+   * its lines (being said and queued) dropped, the listen it opened ended.
+   * Other sessions' lines play on; a dictation the person keyed stays. */
+  const quietAsk = (title: string) => {
+    queue.cancel(title);
+    hands.current?.stop(title);
+    const d = live.current;
+    if (d && d === handsLive.current && getMicState().title === title) void d.expire();
+  };
+
   // The ask pop-up's side of the mic (lib/askVoice): read its ask out and
-  // listen hands-free, stop for a session it moved on from, Escape.
+  // listen hands-free, go quiet when it is answered by hand, stop for a
+  // session it moved on from, Escape.
   useEffect(
     () =>
       registerAskMic({
@@ -802,9 +866,17 @@ export function TopBarMic() {
           const said = asksSaid.get(title);
           asksSaid.delete(title);
           const fresh = said && Date.now() - said.at < SAID_FRESH_MS ? said.done : null;
-          void hands.current?.ask(title, { ...a, said: fresh });
+          // The next step of an ask: the previous step's read-out (and its
+          // listen) is over before the new one is read.
+          if (asksRead.has(title)) quietAsk(title);
+          asksRead.add(title);
+          const h = hands.current;
+          void h?.settled().then(() => h.ask(title, { ...a, said: fresh }));
         },
+        quiet: (title) => quietAsk(title),
         stop: (title) => {
+          asksRead.delete(title);
+          queue.cancel(title);
           hands.current?.stop(title);
           const d = live.current;
           if (d && getMicState().title === title) void d.expire();
@@ -1010,6 +1082,11 @@ export function TopBarMic() {
                 ×
               </button>
             </div>
+            {speaking && (
+              <button type="button" className="mic-stop-talking" id="mic-stop-talking" title="Stop talking (Esc)" onClick={hush}>
+                Stop talking
+              </button>
+            )}
             {(listening || caption || unsure) && (
               <div className="mic-live" id="mic-live" role="status" aria-live="polite">
                 {listening && (

@@ -2273,8 +2273,13 @@ notification, and their **Reply** opens the card on it. Then:
   (`nav.next`). **‹ Back** is Left. **Type something** opens a text field:
   Enter posts its digit, then `{text, keys: ["Enter"]}`; **Chat about this**
   opens one whose words go to the session as a prompt (its digit, then
-  `/send {text, dialog_safe: true}`). The **review** step lists the answers
-  with **Submit answers** (its digit) and Cancel. Every post carries the
+  `/send {text, dialog_safe: true}`). The **review** step reads as a
+  confirmation: the answers listed, then **one** primary **Submit answers**
+  beside a plain **Cancel** in the dialog-button row — no digit badges there
+  (1 / 2 still press them; Enter is Submit answers, Esc is Later). The step
+  buttons sit in that same row: **‹ Back** on the left, the step's one
+  primary on the right — **Next ›** on a multi-select, labelled from the
+  prompt's own `button` (**Submit**, no arrow, on the last question). Every post carries the
   option's own `keys` (with Claude's cursor on the text row they read
   `["Up", "1"]`, never a bare digit) and is pinned to the dialog id you saw
   (`dialog_id` — it holds across ticks and while the text row is typed into);
@@ -2322,7 +2327,17 @@ said, **over** stops and leaves the text. The card reads its step again every
 replies aloud* on (either choice), the card reads the ask out as it opens —
 *"sitecheck-bot7: Allow git push? Say yes, no, or always."*, each step of a
 question prompt once — and, once nothing else is waiting to be said, listens
-for 12 seconds, with one retry; nothing is ever spoken with it off. The card is
+for 12 seconds, with one retry; nothing is ever spoken with it off.
+**Speech stops when you act**: any hand on the card — a click on an option, a
+tick, Back / Next / Submit, typing in its field, a digit or Enter — cancels
+the read-out of **that** ask, the line being said and everything queued for
+it (other sessions' lines play on), and ends its 12-second listen. When the
+card steps to the next question the previous step's read-out is cancelled
+first, and the new step is read only if nothing on the card was touched by
+hand in the last 3 s — clicking through by hand is never narrated at; a
+voice-driven flow is. You can also answer **before it finishes speaking**:
+the card's mic, the Talk hotkey or the top-bar mic cut the speech and listen
+at once (see [Voice input](#voice-input)). The card is
 the one hands-free entry for a dialog: the top-bar mic no longer reads dialogs
 out by itself while the pop-up is on, so nothing is read twice.
 
@@ -5940,7 +5955,23 @@ other, never the browser's voice and the server's at once; a burst from
 several sessions plays in arrival order; nothing new starts while the mic
 listens (it waits, then goes on); a line more than 60 s old when its turn
 comes is dropped (logged to the console, not said); "repeat" says the last
-line again. With either choice a dialog or a question in a reply to what you
+line again. **Barge in** any time: pressing the mic (or the Talk hotkey, or
+the ask card's mic) while a line is being read cuts it **before** the mic
+opens — that line is over, never resumed, and when you are answering the ask
+being read the rest of its read-out is dropped too — and the server's
+recogniser skips the first 150 ms of audio (the app's own voice dying away;
+`BARGE_SKIP_MS`), so it never hears itself. **"Stop talking"** — or "be
+quiet", "quiet", "shut up", "stop reading", "enough", "okay stop", said as a
+whole phrase (the router's kind `hush`, matched locally too) — silences
+everything queued, every session, never typed; the mic keeps listening if it
+was, and the caption says *Quiet.* for a second. **Esc** while something is
+being read (and no dialog or popover is taking Esc) does the same, and the
+mic's options show a **Stop talking** button while it speaks. Switching
+*Read replies aloud* to **Everything** also turns on the server's say-all
+marker (`POST /api/voice/say-all {on: true}`, off again when switched away;
+`GET /api/voice` `say_all`), so a prompt typed straight into a terminal asks
+for a `Say:` line too; on load the pref wins once if the two disagree, and a
+device that may not change it (403) says so once and keeps the pref. With either choice a dialog or a question in a reply to what you
 said is read out and, once the queue is quiet, the mic listens 12 s for the
 answer. With the
 [ask pop-up](#when-a-session-asks-you-something) on (the default), the pop-up
