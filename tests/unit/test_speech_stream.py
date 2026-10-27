@@ -41,8 +41,10 @@ class Script:
         return out
 
 
-def _secs(s):
-    return array("f", [0.0] * int(s * RATE))
+def _secs(s, level=0.1):
+    """``s`` seconds of audio: a steady ``level`` (speech-loud by default,
+    0.0 for silence)."""
+    return array("f", [level] * int(s * RATE))
 
 
 @pytest.fixture(autouse=True)
@@ -162,29 +164,29 @@ class TestCommit:
 class TestPrune:
     def test_audio_before_the_last_committed_word_is_dropped(self):
         fake = Script(
-            [("one", 0.0, 0.5), ("two", 0.6, 1.0), ("three", 5.0, 5.5)],
+            [("one", 0.0, 0.5), ("two", 0.6, 1.0), ("three", 2.5, 2.9)],
             [
                 ("one", 0.0, 0.5),
                 ("two", 0.6, 1.0),
-                ("three", 5.0, 5.5),
-                ("four", 11.0, 11.5),
+                ("three", 2.5, 2.9),
+                ("four", 5.0, 5.5),
             ],
-            # The window now starts at 5.2 s: times are relative to it.
-            [("three", 0.0, 0.3), ("four", 5.8, 6.3), ("five", 6.5, 6.9)],
+            # The window now starts at 2.6 s: times are relative to it.
+            [("three", 0.0, 0.3), ("four", 2.4, 2.9), ("five", 3.1, 3.5)],
         )
         st = ss.Stream(fake)
-        st.feed(_secs(6))
-        assert st.feed(_secs(6)) == ("one two three", "four")
-        assert st.held_seconds == pytest.approx(12 - 5.2, abs=1e-3)
+        st.feed(_secs(3))
+        assert st.feed(_secs(3)) == ("one two three", "four")
+        assert st.held_seconds == pytest.approx(6 - 2.6, abs=1e-3)
         assert st.feed(_secs(0.5)) == ("four", "five")
-        assert fake.calls[2][0] == int(round((12.5 - 5.2) * RATE))
+        assert fake.calls[2][0] == int(round((6.5 - 2.6) * RATE))
 
     def test_uncommitted_words_keep_their_audio(self):
         fake = Script(_words("um so"), _words("well then"))
         st = ss.Stream(fake)
-        st.feed(_secs(6))
-        assert st.feed(_secs(6)) == ("", "well then")
-        assert st.held_seconds == 12  # nothing committed: nothing dropped
+        st.feed(_secs(3))
+        assert st.feed(_secs(3)) == ("", "well then")
+        assert st.held_seconds == 6  # nothing committed: nothing dropped
 
     def test_a_tail_after_commits_keeps_its_audio(self):
         fake = Script(
@@ -192,23 +194,108 @@ class TestPrune:
             [("one", 0.0, 0.5), ("two", 0.6, 1.0), ("three", 1.1, 1.5)],
         )
         st = ss.Stream(fake)
-        st.feed(_secs(6))
-        assert st.feed(_secs(6)) == ("one two", "three")
+        st.feed(_secs(3))
+        assert st.feed(_secs(3)) == ("one two", "three")
         # cut at min(two's end - 0.3, three's start - 0.3) = 0.7 s
-        assert st.held_seconds == pytest.approx(12 - 0.7, abs=1e-3)
+        assert st.held_seconds == pytest.approx(6 - 0.7, abs=1e-3)
 
     def test_a_window_with_no_words_keeps_its_last_second(self):
         st = ss.Stream(Script([], []))
-        st.feed(_secs(6))
-        st.feed(_secs(6))
+        st.feed(_secs(3))
+        st.feed(_secs(3))
         assert st.held_seconds == pytest.approx(ss.SILENT_KEEP_SECONDS)
 
-    def test_a_tail_that_never_settles_is_committed_past_30_seconds(self):
-        # Nothing agrees yet, but "a" ended more than 10 s before the end of
-        # 31 s of audio: committed anyway; "b" is recent and waits.
-        st = ss.Stream(Script([("a", 1.0, 1.5), ("b", 25.0, 25.5)]))
-        assert st.feed(_secs(31)) == ("a", "b")
-        assert st.held_seconds == pytest.approx(31 - 1.2, abs=1e-3)
+
+class TestWindow:
+    """No pass decodes more than WINDOW_SECONDS; what leaves the window
+    uncommitted is committed on the way out."""
+
+    def test_a_pass_never_decodes_more_than_the_window(self):
+        assert ss.WINDOW_SECONDS == 8.0 and ss.MAX_HELD_SECONDS == 8.0
+        fake = Script(
+            # Nothing agrees yet: "a" straddles the edge-to-be (2 s), "b" not.
+            [("a", 1.5, 2.5), ("b", 5.0, 5.5)],
+            # The window starts at 2.0 s now: times are relative to it.
+            [("b", 3.0, 3.5), ("c", 7.0, 7.5)],
+        )
+        st = ss.Stream(fake)
+        assert st.feed(_secs(6)) == ("", "a b")
+        assert st.feed(_secs(4)) == ("a b", "c")
+        assert fake.calls[1][0] == 8 * RATE
+        assert st.last_window_s == 8.0
+        # Then the usual prune: cut at b's end - 0.3 = 5.2 s.
+        assert st.held_seconds == pytest.approx(10 - 5.2, abs=1e-3)
+        assert st.text == "a b"
+
+    def test_a_tail_that_never_settles_is_committed_at_the_edge(self):
+        st = ss.Stream(Script(_words("x y"), _words("p q"), _words("p q")))
+        st.feed(_secs(3))
+        assert st.feed(_secs(3)) == ("", "p q")
+        # 9 s held: the first second leaves, and the tail that starts in it
+        # ("p" at 0.0 s, "q" at 0.5 s) is committed as it goes.
+        assert st.feed(_secs(3)) == ("p q", "")
+        assert st.text == "p q"
+
+    def test_words_forced_out_before_a_failed_pass_are_returned_later(self):
+        fake = Script(
+            [("a", 1.0, 1.5), ("b", 5.0, 5.5)],
+            speech.SpeechError("faster-whisper failed: boom"),
+            [("b", 3.0, 3.5)],
+        )
+        st = ss.Stream(fake)
+        st.feed(_secs(6))
+        with pytest.raises(speech.SpeechError):
+            st.feed(_secs(4))
+        assert st.text == "a"  # committed when it left the window ...
+        assert st.feed(_secs(0)) == ("a b", "")  # ... and returned with the next
+
+    def test_the_flush_respects_the_window(self):
+        fake = Script(speech.SpeechError("boom"), [("late", 7.0, 7.5)])
+        st = ss.Stream(fake)
+        with pytest.raises(speech.SpeechError):
+            st.feed(_secs(9))
+        assert st.finish() == "late"
+        assert fake.calls[1][0] == 8 * RATE
+
+
+class TestSilence:
+    """A quiet chunk with nothing pending runs no pass."""
+
+    def test_quiet(self):
+        assert ss._quiet(array("f")) is True
+        assert ss._quiet(array("f", [0.005, -0.005] * 100)) is True
+        assert ss._quiet(array("f", [0.02, -0.02] * 100)) is False
+
+    def test_silence_with_nothing_pending_runs_no_pass(self):
+        fake = Script(_words("hello"))
+        st = ss.Stream(fake)
+        assert st.feed(_secs(1, level=0.0)) == ("", "")
+        assert fake.calls == []
+        assert (st.last_ms, st.last_window_s) == (0, 0.0)
+        # The quiet audio is kept: a soft start is decoded with the next chunk.
+        assert st.feed(_secs(0.5)) == ("", "hello")
+        assert fake.calls[0][0] == int(1.5 * RATE)
+        assert st.last_window_s == 1.5
+
+    def test_silence_still_decodes_while_a_tail_waits(self):
+        fake = Script(_words("hello"), _words("hello"))
+        st = ss.Stream(fake)
+        st.feed(_secs(1))
+        assert st.feed(_secs(0.5, level=0.0)) == ("hello", "")
+        assert len(fake.calls) == 2
+
+    def test_silence_after_commits_runs_no_pass(self):
+        fake = Script(_words("hi there"), _words("hi there"))
+        st = ss.Stream(fake)
+        st.feed(_secs(1))
+        assert st.feed(_secs(1)) == ("hi there", "")
+        assert st.feed(_secs(1, level=0.0)) == ("", "")
+        assert len(fake.calls) == 2
+
+    def test_a_long_silence_is_held_to_the_window(self):
+        st = ss.Stream(Script())
+        assert st.feed(_secs(12, level=0.0)) == ("", "")
+        assert st.held_seconds == ss.WINDOW_SECONDS
 
 
 class TestDecodeWav:

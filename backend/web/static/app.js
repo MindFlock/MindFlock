@@ -37808,6 +37808,7 @@ function startWavRecording(stream, ctx, opts = {}) {
 	let done = false;
 	let result = null;
 	let skip = Math.max(0, Math.round((opts.skipS || 0) * ctx.sampleRate));
+	const keep = opts.keepS ? Math.max(1, Math.round(opts.keepS * ctx.sampleRate)) : 0;
 	processor.onaudioprocess = (e) => {
 		if (done) return;
 		if (skip > 0) {
@@ -37818,6 +37819,7 @@ function startWavRecording(stream, ctx, opts = {}) {
 		blocks.push(block);
 		frames += block.length;
 		fresh += block.length;
+		while (keep && blocks.length > 1 && fresh - blocks[0].length >= keep) fresh -= blocks.shift().length;
 		if (onLevel && block.length) {
 			let sum = 0;
 			for (let i = 0; i < block.length; i++) sum += block[i] * block[i];
@@ -37856,8 +37858,8 @@ function startWavRecording(stream, ctx, opts = {}) {
 			result = resampleTo(drain(), ctx.sampleRate, targetRate).then((pcm) => encodeWav(pcm, targetRate));
 			return result;
 		},
-		take() {
-			if (done || fresh < TAKE_MIN_S * ctx.sampleRate) return null;
+		take(minS = TAKE_MIN_S) {
+			if (done || !fresh || fresh < minS * ctx.sampleRate) return null;
 			return encodeWav(resample(drain(), ctx.sampleRate, targetRate), targetRate);
 		},
 		cancel() {
@@ -37867,6 +37869,18 @@ function startWavRecording(stream, ctx, opts = {}) {
 		},
 		seconds() {
 			return frames / ctx.sampleRate;
+		},
+		async last(s) {
+			if (done || !fresh) return null;
+			let want = Math.min(fresh, Math.max(1, Math.round(s * ctx.sampleRate)));
+			const out = new Float32Array(want);
+			for (let i = blocks.length - 1; i >= 0 && want > 0; i--) {
+				const b = blocks[i];
+				const n = Math.min(want, b.length);
+				out.set(b.subarray(b.length - n), want - n);
+				want -= n;
+			}
+			return encodeWav(await resampleTo(out, ctx.sampleRate, targetRate), targetRate);
 		}
 	};
 }
@@ -37989,13 +38003,18 @@ function pickupLine(ready, hearing) {
 	if (!ready) return "";
 	return hearing ? "Hearing you…" : "Listening…";
 }
-var LIVE_CAPTION_CHARS = 90;
-function liveTail(text, tail = "", max = LIVE_CAPTION_CHARS) {
-	const room = Math.max(24, max - tail.length);
-	if (text.length <= room) return text;
-	const cut = text.slice(text.length - room);
+var LIVE_CAPTION_CHARS = 60;
+function endOf(text, max) {
+	if (text.length <= max) return text;
+	const cut = text.slice(text.length - max);
 	const sp = cut.indexOf(" ");
 	return "…" + (sp >= 0 && sp < cut.length - 1 ? cut.slice(sp + 1) : cut);
+}
+function liveTail(text, tail = "", max = LIVE_CAPTION_CHARS) {
+	return endOf(text, Math.max(16, max - tail.length));
+}
+function liveUnsure(tail, max = LIVE_CAPTION_CHARS) {
+	return endOf(tail, max);
 }
 function rmsOf(buf) {
 	let sum = 0;
@@ -38091,6 +38110,7 @@ function meterRef(el) {
 		els.delete(el);
 	};
 }
+var passes = [];
 var t0 = 0;
 var marks = {};
 var clock = () => typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -38109,6 +38129,11 @@ function voiceMark(m) {
 	marks[m] = Math.round(clock() - t0);
 	if (typeof window !== "undefined") window.__mfVoiceTiming = { ...marks };
 	if (debugOn()) console.debug("[voice] " + m + " +" + marks[m] + " ms");
+}
+function voicePass(ms) {
+	passes = [...passes, Math.round(ms)].slice(-20);
+	if (typeof window !== "undefined") window.__mfVoicePasses = passes;
+	if (debugOn()) console.debug("[voice] pass " + Math.round(ms) + " ms");
 }
 //#endregion
 //#region src/lib/voiceDesktop.ts
@@ -38293,8 +38318,8 @@ function holdBack(text) {
 		held: ""
 	};
 	const idx = wordIndexes(ws);
-	let n = idx.length ? idx[idx.length - 1] : 0;
-	for (let k = 2; k <= Math.min(CONTROL_MAX_WORDS, idx.length); k++) {
+	let n = ws.length;
+	for (let k = 1; k <= Math.min(CONTROL_MAX_WORDS, idx.length); k++) {
 		const tail = idx.slice(-k).map((i) => bareWord(ws[i]));
 		if (CONTROL_PHRASES.some((p) => p.length >= k && tail.every((w, j) => p[j] === w))) n = idx[idx.length - k];
 	}
@@ -38350,7 +38375,8 @@ function normPrefs(v) {
 	const o = v && typeof v === "object" ? v : {};
 	return {
 		ptt: o.ptt === "hold" ? "hold" : "toggle",
-		replies: repliesMode(o.replies)
+		replies: repliesMode(o.replies),
+		wake: o.wake === true
 	};
 }
 function sayOnSend(byVoice, p = loadVoicePrefs()) {
@@ -38432,9 +38458,22 @@ var OVER_LINE = "In the field — say submit or press Enter";
 var STOPPED_LINE = "Stopped listening";
 var HUSH_LINE = "Quiet.";
 var HUSH_CAPTION_MS = 1e3;
+function retype(before, after) {
+	const a = Array.from(before);
+	const b = Array.from(after);
+	let i = 0;
+	while (i < a.length && i < b.length && a[i] === b[i]) i++;
+	return {
+		erase: a.slice(i).join(""),
+		type: b.slice(i).join("")
+	};
+}
+var withErase = (o, erase) => erase ? {
+	...o,
+	erase
+} : o;
 var Dictation = class {
 	listening = false;
-	interim = "";
 	typed = "";
 	held = "";
 	partial = "";
@@ -38443,62 +38482,54 @@ var Dictation = class {
 	phraseAt = -1;
 	begin() {
 		this.listening = true;
-		this.interim = "";
 		this.typed = "";
 		this.held = "";
 		this.partial = "";
 		this.phraseAt = -1;
 	}
 	get shown() {
-		return [
-			this.typed.trim(),
-			this.held.trim(),
-			this.interim.trim()
-		].filter(Boolean).join(" ");
+		return [this.before.trim(), this.held.trim()].filter(Boolean).join(" ");
+	}
+	get before() {
+		return this.phraseAt < 0 ? this.typed : this.typed.slice(0, this.phraseAt);
+	}
+	get guessed() {
+		return this.phraseAt < 0 ? "" : this.typed.slice(this.phraseAt);
 	}
 	hearing(t) {
-		if (this.listening) this.interim = t;
+		if (!this.listening) return { kind: "stopped" };
+		this.partial = String(t || "").trim();
+		return this.guess();
 	}
 	unsure(t) {
 		if (this.listening) this.partial = t;
 	}
-	words(w) {
+	stream(w, p) {
 		if (!this.listening) return { kind: "stopped" };
-		if (this.phraseAt < 0) this.phraseAt = this.typed.length;
-		const all = joinWords(this.held, w);
-		const ctl = this.control(all, false);
+		this.held = joinWords(this.held, w);
+		this.partial = String(p || "").trim();
+		const ctl = this.control(this.held, false);
 		if (ctl) return ctl;
-		if (this.routes && !this.typed && mayBeCommand(all)) {
-			this.held = all;
-			return { kind: "continue" };
-		}
-		const cut = holdBack(all);
-		this.held = cut.held;
-		return cut.type ? {
-			kind: "type",
-			text: cut.type + " ",
-			route: false
-		} : { kind: "continue" };
+		return this.guess();
+	}
+	words(w) {
+		return this.stream(w, "");
 	}
 	flush(w) {
 		if (!this.listening) return { kind: "stopped" };
-		const whole = this.phraseAt < 0 || this.typed.length === this.phraseAt;
-		this.phraseAt = -1;
-		const all = joinWords(this.held, w);
-		this.held = "";
-		this.partial = "";
-		return this.heard(all, whole);
+		return this.heard(joinWords(this.held, w));
 	}
 	wrote(text) {
 		this.typed += text;
 	}
-	heard(phrase, whole = true) {
+	unwrote(text) {
+		if (text && this.typed.endsWith(text)) this.typed = this.typed.slice(0, this.typed.length - text.length);
+	}
+	heard(phrase) {
 		if (!this.listening) return { kind: "stopped" };
-		this.interim = "";
-		const ctl = this.control(phrase, whole);
+		const ctl = this.control(phrase, true);
 		if (ctl) return ctl;
 		const p = parseRadio(phrase);
-		const text = p.text ? p.text + " " : "";
 		switch (p.kind) {
 			case "disregard": return {
 				kind: "erase",
@@ -38509,25 +38540,26 @@ var Dictation = class {
 				this.listening = false;
 				return {
 					kind: p.kind,
-					text
+					...this.settle(p.text ? p.text + " " : "")
 				};
-			default: return text ? {
-				kind: "type",
-				text
-			} : { kind: "continue" };
+			default: {
+				const s = this.settle(p.text ? p.text + " " : "");
+				return s.text || s.erase ? {
+					kind: "type",
+					...s
+				} : { kind: "continue" };
+			}
 		}
 	}
 	finish() {
 		if (!this.listening) return { kind: "stopped" };
-		const tail = joinWords(this.held, this.interim);
-		this.held = "";
-		this.partial = "";
-		const out = tail ? this.heard(tail) : { kind: "continue" };
+		const tail = joinWords(this.held, this.partial);
+		const out = tail || this.phraseAt >= 0 ? this.heard(tail) : { kind: "continue" };
 		this.listening = false;
-		if (out.kind === "type") return {
+		if (out.kind === "type") return withErase({
 			kind: "over",
 			text: out.text
-		};
+		}, out.erase || "");
 		if (out.kind === "erase") return {
 			kind: "dropped",
 			text: out.text
@@ -38536,10 +38568,10 @@ var Dictation = class {
 			kind: "over",
 			text: ""
 		};
-		if (out.kind === "hush") return {
+		if (out.kind === "hush") return withErase({
 			kind: "hush",
 			end: true
-		};
+		}, out.erase || "");
 		return out;
 	}
 	cancel() {
@@ -38553,58 +38585,65 @@ var Dictation = class {
 	expire() {
 		if (!this.listening) return { kind: "stopped" };
 		this.listening = false;
-		this.interim = "";
-		if (isHushPhrase(this.held)) {
-			this.held = "";
-			this.partial = "";
-			return {
-				kind: "hush",
-				end: true
-			};
-		}
-		const rest = parseRadio(this.held).text;
-		this.held = "";
-		this.partial = "";
+		const all = joinWords(this.held, this.partial);
+		if (isHushPhrase(all)) return withErase({
+			kind: "hush",
+			end: true
+		}, this.settle("").erase || "");
+		const rest = parseRadio(all).text;
 		return {
 			kind: "over",
-			text: rest ? rest + " " : ""
+			...this.settle(rest ? rest + " " : "")
 		};
 	}
+	guess() {
+		if (this.phraseAt < 0) this.phraseAt = this.typed.length;
+		const all = joinWords(this.held, this.partial);
+		const want = this.routes && !this.before && mayBeCommand(all) ? "" : holdBack(all).type;
+		const fix = retype(this.guessed, want);
+		if (!fix.erase && !fix.type) return { kind: "continue" };
+		return withErase({
+			kind: "type",
+			text: fix.type,
+			route: false,
+			guess: true
+		}, fix.erase);
+	}
+	settle(text) {
+		const guessed = this.guessed;
+		const whole = this.routes && !this.before && mayBeCommand(text);
+		this.phraseAt = -1;
+		this.held = "";
+		this.partial = "";
+		const fix = whole ? {
+			erase: guessed,
+			type: text
+		} : retype(guessed, text);
+		return withErase({ text: fix.type }, fix.erase);
+	}
 	control(all, whole) {
-		if (whole && isHushPhrase(all)) {
-			this.interim = "";
-			this.held = "";
-			this.partial = "";
-			return { kind: "hush" };
-		}
+		if (whole && isHushPhrase(all)) return withErase({ kind: "hush" }, this.settle("").erase || "");
 		const before = stopTail(all);
 		if (before !== null) {
 			this.listening = false;
-			this.interim = "";
-			this.held = "";
-			this.partial = "";
 			return {
 				kind: "over",
-				text: before ? before + " " : "",
+				...this.settle(before ? before + " " : ""),
 				stop: true
 			};
 		}
-		if (this.answering && this.routes && !this.typed && isAnswerPhrase(all)) {
-			this.held = "";
-			this.partial = "";
-			return {
-				kind: "type",
-				text: all.trim() + " "
-			};
-		}
+		if (this.answering && this.routes && !this.before && isAnswerPhrase(all)) return {
+			kind: "type",
+			...this.settle(all.trim() + " ")
+		};
 		return null;
 	}
 	erase() {
 		const text = this.typed;
 		this.typed = "";
-		this.interim = "";
 		this.held = "";
 		this.partial = "";
+		this.phraseAt = -1;
 		return text;
 	}
 };
@@ -38670,18 +38709,19 @@ var LiveDictation = class {
 		return !this.done;
 	}
 	hearing(t) {
-		if (this.done) return;
 		if (t) this.heardAnything = true;
-		this.dict.hearing(t);
-		this.show();
+		return this.step(() => this.dict.hearing(t));
 	}
 	heard(phrase) {
 		if (phrase.trim()) this.heardAnything = true;
 		return this.step(() => this.dict.heard(phrase));
 	}
+	stream(w, p) {
+		if (w.trim() || p.trim()) this.heardAnything = true;
+		return this.step(() => this.dict.stream(w, p));
+	}
 	words(w) {
-		if (w.trim()) this.heardAnything = true;
-		return this.step(() => this.dict.words(w));
+		return this.stream(w, "");
 	}
 	flush(w) {
 		if (w.trim()) this.heardAnything = true;
@@ -38762,13 +38802,14 @@ var LiveDictation = class {
 				this.end("");
 				return;
 			case "type":
-				if (await this.put(out.text, out.route !== false)) this.show();
+				if (await this.put(out.text, out.route !== false, out.erase, out.guess)) this.show();
 				return;
 			case "erase":
 				t?.erase(out.text);
 				this.hooks.caption("Disregarded — go on", true);
 				return;
 			case "hush":
+				if (out.erase && t && !this.keys(t, out.erase, "")) return;
 				this.hushed();
 				return;
 			case "dropped":
@@ -38776,12 +38817,12 @@ var LiveDictation = class {
 				this.end(out.text ? "Disregarded" : "", false, "stopped");
 				return;
 			case "over":
-				if (out.text && !await this.put(out.text)) return;
+				if ((out.text || out.erase) && !await this.put(out.text, true, out.erase)) return;
 				this.end(t?.kind === "session" && this.dict.typed ? OVER_LINE : out.stop ? STOPPED_LINE : "", false, out.stop ? "stopped" : void 0);
 				return;
 			case "submit": {
-				const typedNow = !!out.text;
-				if (out.text && !await this.put(out.text)) return;
+				const typedNow = !!(out.text || out.erase);
+				if (typedNow && !await this.put(out.text, true, out.erase)) return;
 				if (t?.kind === "field" && t.submit) {
 					this.acted = true;
 					this.end("Sending to " + t.name + "…", true);
@@ -38816,9 +38857,16 @@ var LiveDictation = class {
 		this.hooks.caption(HUSH_LINE, true);
 		setTimeout(() => this.show(), HUSH_CAPTION_MS);
 	}
-	async put(text, route = true) {
+	async put(text, route = true, erase = "", guess = false) {
 		const t = this.target;
-		if (!this.dict.typed && t?.kind !== "field") {
+		if (guess) {
+			if (!t || !this.dict.typed && t.kind !== "field" && dialogUp(this.hooks.activity(t.title))) return true;
+			return this.keys(t, erase, text);
+		}
+		if (this.dict.typed.length === erase.length && t?.kind !== "field") {
+			if (erase && t && !this.keys(t, erase, "")) return false;
+			erase = "";
+			if (!text) return true;
 			const words = text.trim();
 			const routed = route ? await this.hooks.route(words) : false;
 			if (routed === "hush") {
@@ -38840,11 +38888,23 @@ var LiveDictation = class {
 				return false;
 			}
 		}
-		if (!t || !t.type(text)) {
-			this.end("Couldn't type into " + (t?.name || "the session") + " — its terminal isn't connected", true);
+		if (!t) {
+			this.end("Couldn't type into the session — its terminal isn't connected", true);
 			return false;
 		}
-		this.dict.wrote(text);
+		return this.keys(t, erase, text);
+	}
+	keys(t, erase, text) {
+		if (!erase && !text) return true;
+		if (!(t.replace ? t.replace(erase, text) : (!erase || t.erase(erase)) && (!text || t.type(text)))) {
+			this.end("Couldn't type into " + t.name + " — its terminal isn't connected", true);
+			return false;
+		}
+		this.dict.unwrote(erase);
+		if (text) {
+			this.dict.wrote(text);
+			voiceMark("typed");
+		}
 		return true;
 	}
 };
@@ -39638,11 +39698,17 @@ function browserRecognizer() {
 var SILENCE_MS = 1100;
 var CLIP_MAX_MS = 12e3;
 var UPLOAD_TIMEOUT_MS = 45e3;
-var CLIP_RATE = 16e3;
+var CLIP_RATE$1 = 16e3;
 var TAIL_MIN_BYTES = 1644;
+var FIRST_CHUNK_S = .15;
+var LATER_CHUNK_S = .3;
+function chunkMinS(passMs) {
+	if (passMs == null || !(passMs > 0)) return LATER_CHUNK_S;
+	return Math.min(600, Math.max(150, passMs * .8)) / 1e3;
+}
 var STREAM_FRESH_MS = 4e4;
 var wordsOf = (v) => String((Array.isArray(v) ? v.join(" ") : v) || "").trim();
-var langTag = () => String(navigator.language || "en").split(";")[0];
+var langTag$1 = () => String(navigator.language || "en").split(";")[0];
 function serverRecognizer(opts = {}) {
 	const mic = opts.mic || new MicKeeper();
 	let holding = false;
@@ -39690,7 +39756,7 @@ function serverRecognizer(opts = {}) {
 		aborters.add(ac);
 		const timer = setTimeout(() => ac.abort(), UPLOAD_TIMEOUT_MS);
 		try {
-			const r = await apiRaw("/api/voice/transcribe?lang=" + encodeURIComponent(langTag()), {
+			const r = await apiRaw("/api/voice/transcribe?lang=" + encodeURIComponent(langTag$1()), {
 				method: "POST",
 				headers: { "Content-Type": "audio/wav" },
 				body: blob,
@@ -39786,7 +39852,7 @@ function serverRecognizer(opts = {}) {
 				const r = await call("/api/voice/stream", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ lang: langTag() })
+					body: JSON.stringify({ lang: langTag$1() })
 				});
 				const id = String(r.j.id || "");
 				if (h !== hh || !c.stream) {
@@ -39817,17 +39883,28 @@ function serverRecognizer(opts = {}) {
 			if (h !== hh || !hh || !c.stream) return;
 			if (!r.ok) throw new Error(String(r.j.error || "HTTP " + r.status));
 			self.lastError = "";
+			const ms = Number(r.j.ms);
+			if (ms > 0) {
+				self.passMs = ms;
+				voicePass(ms);
+			}
 			const w = wordsOf(r.j.committed);
-			if (w) hh.onWords?.(w);
-			hh.onPartial?.(wordsOf(r.j.partial));
+			const p = wordsOf(r.j.partial);
+			if (hh.onStream) hh.onStream(w, p);
+			else {
+				if (w) hh.onWords?.(w);
+				hh.onPartial?.(p);
+			}
 		} catch (err) {
 			if (h === hh) streamFailed(c, err);
 		}
 	};
 	const pump = (c) => {
 		if (!c.stream || !c.sid || !c.heard || c.busy || c.ending || !c.rec || h === null) return;
-		const blob = c.rec.take();
+		const min = c.sent ? chunkMinS(self.passMs) : Math.max(0, c.speechS - c.trimS) + FIRST_CHUNK_S;
+		const blob = c.rec.take(min);
 		if (!blob) return;
+		c.sent = true;
 		c.fresh = false;
 		const hh = h;
 		run(c, () => sendChunk(c, blob, hh));
@@ -39917,7 +39994,10 @@ function serverRecognizer(opts = {}) {
 			opened: 0,
 			busy: null,
 			fresh: false,
-			ending: false
+			ending: false,
+			sent: false,
+			trimS: 0,
+			speechS: 0
 		};
 		if (c.stream) openStream(c);
 		let s;
@@ -39945,13 +40025,17 @@ function serverRecognizer(opts = {}) {
 		}
 		let floor = 0;
 		let lastLoud = 0;
+		let blockAt = 0;
 		const onLevel = (rms) => {
 			if (cur !== c) return;
+			const at = blockAt;
+			blockAt = c.rec?.seconds() ?? 0;
 			h?.onLevel?.(rms);
 			floor = noiseFloor(floor, rms);
 			const now = Date.now();
 			if (isLoud(rms, floor)) {
 				if (!c.heard) {
+					c.speechS = at;
 					h?.onSpeech?.();
 					if (c.stream && c.sid && now - c.opened > STREAM_FRESH_MS) {
 						discard(c);
@@ -39962,14 +40046,16 @@ function serverRecognizer(opts = {}) {
 				c.heard = true;
 				c.fresh = true;
 				lastLoud = now;
-			} else if (!c.heard && c.stream) c.rec?.take();
+			} else if (!c.heard && c.stream) {
+				if (c.rec?.take()) c.trimS = blockAt;
+			}
 			if (c.heard && now - lastLoud > SILENCE_MS) endClip();
 			else pump(c);
 		};
 		try {
 			const skip = Math.max(0, skipUntil - Date.now());
 			c.rec = startWavRecording(s, ctx, {
-				targetRate: CLIP_RATE,
+				targetRate: CLIP_RATE$1,
 				onLevel,
 				skipS: skip / 1e3
 			});
@@ -39988,6 +40074,7 @@ function serverRecognizer(opts = {}) {
 	const self = {
 		name: "server",
 		lastError: "",
+		passMs: null,
 		mic,
 		available: () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia && !!audioCtxCtor(),
 		start(handlers, o = {}) {
@@ -40095,6 +40182,11 @@ function engineDiagnostics(cfg, stt, tts, electron = isElectron()) {
 	const voice = tts === "server" ? serverEngineName(ready.tts_backend, cfg.system) : tts === "browser" ? "this browser" : "none";
 	return "Recognition: " + rec + " · Voice: " + voice;
 }
+function passLine(backend, passMs) {
+	if (passMs == null || !(passMs > 0)) return "";
+	const id = String(backend || "");
+	return (!id || id === "local" ? "whisper" : id) + " ~" + (passMs / 1e3).toFixed(1) + " s/pass";
+}
 function recognizerErrorLine(code, detail) {
 	if (code === "network") return "Speech recognition failed (network): use Chrome, Edge or Safari, or turn on server recognition in Settings → Voice";
 	if (code === "not-allowed" || code === "service-not-allowed") return "Microphone permission denied";
@@ -40102,6 +40194,336 @@ function recognizerErrorLine(code, detail) {
 	if (detail) return detail;
 	if (code === "unavailable" || code === "start-failed") return "Speech recognition did not start (" + code + ")";
 	return "Voice error: " + code;
+}
+//#endregion
+//#region src/lib/wakeWord.ts
+var WAKE_QUIET_MS = 350;
+var WAKE_MIN_MS = 250;
+var WAKE_MAX_MS = 1600;
+var WAKE_LEAD_MS = 150;
+var WAKE_CHECK_GAP_MS = 1500;
+var WAKE_AFTER_SPEECH_MS = 500;
+var WAKE_KEEP_S = 3;
+var WAKE_LISTEN_MS = 8e3;
+var WAKE_HINT = "Yes?";
+var CHIME_MS = 120;
+var CHECK_TIMEOUT_MS = 1e4;
+var CLIP_RATE = 16e3;
+var RELEARN_MS = 5e3;
+var LoneUtterance = class {
+	floor = 0;
+	t = 0;
+	quiet = 0;
+	start = -1;
+	lastLoud = 0;
+	long = false;
+	feed(rms, blockMs) {
+		const at = this.t;
+		this.t += Math.max(0, blockMs);
+		const learn = this.start < 0 || at - this.start > RELEARN_MS;
+		this.floor = learn ? noiseFloor(this.floor, rms) : Math.min(this.floor, rms);
+		const loud = isLoud(rms, this.floor);
+		if (this.start < 0) {
+			if (!loud) {
+				this.quiet += blockMs;
+				return null;
+			}
+			if (this.quiet < WAKE_QUIET_MS) {
+				this.quiet = 0;
+				return null;
+			}
+			this.start = at;
+			this.lastLoud = this.t;
+			this.long = false;
+			return null;
+		}
+		if (loud) {
+			this.lastLoud = this.t;
+			if (this.lastLoud - this.start > WAKE_MAX_MS) this.long = true;
+			return null;
+		}
+		const gap = this.t - this.lastLoud;
+		if (gap < WAKE_QUIET_MS) return null;
+		const loudMs = this.lastLoud - this.start;
+		const clipMs = WAKE_LEAD_MS + (this.t - this.start);
+		const long = this.long;
+		this.start = -1;
+		this.quiet = gap;
+		return long || loudMs < WAKE_MIN_MS ? null : {
+			loudMs,
+			clipMs
+		};
+	}
+};
+function wakeGate(g) {
+	if (!g.visible) return "hidden";
+	if (g.recording) return "recording";
+	if (g.speaking || g.now - g.clipMs - g.lastSpoke < WAKE_AFTER_SPEECH_MS) return "speaking";
+	if (g.inFlight) return "busy";
+	if (g.now - g.lastCheck < WAKE_CHECK_GAP_MS) return "soon";
+	return "ok";
+}
+var langTag = () => String(typeof navigator !== "undefined" && navigator.language || "en").split(";")[0];
+async function postWake(clip, lang = langTag()) {
+	const ac = new AbortController();
+	const timer = setTimeout(() => ac.abort(), CHECK_TIMEOUT_MS);
+	try {
+		const r = await apiRaw("/api/voice/wake?lang=" + encodeURIComponent(lang), {
+			method: "POST",
+			headers: { "Content-Type": "audio/wav" },
+			body: clip,
+			signal: ac.signal
+		});
+		const j = await r.json().catch(() => ({}));
+		return {
+			status: r.status,
+			wake: r.ok && j.wake === true,
+			text: String(j.text || ""),
+			error: String(j.error || "")
+		};
+	} catch (err) {
+		return {
+			status: 0,
+			wake: false,
+			text: "",
+			error: String(err?.message || err)
+		};
+	} finally {
+		clearTimeout(timer);
+	}
+}
+var WAKE_SWITCH_HINT = "Say “MindFlock” on its own — not inside a sentence — and the mic listens, as if you clicked it. The mic stays open while this is on, so the browser's mic light stays on; only a lone word is sent to the server to check.";
+var WAKE_NO_RECOGNIZER_LINE = "Standby stopped: server recognition isn't ready — Settings → Voice";
+var WAKE_DENIED_LINE = "Standby stopped: the microphone was refused";
+var WAKE_NO_MIC_LINE = "Standby stopped: no microphone";
+var WAKE_GESTURE_LINE = "Click anywhere in the app to open the mic";
+var status = {
+	on: false,
+	line: ""
+};
+var statusSubs = /* @__PURE__ */ new Set();
+function wakeStatus() {
+	return status;
+}
+function onWakeStatus(cb) {
+	statusSubs.add(cb);
+	return () => {
+		statusSubs.delete(cb);
+	};
+}
+function publish(s) {
+	if (s.on === status.on && s.line === status.line) return;
+	status = s;
+	statusSubs.forEach((cb) => cb(s));
+}
+var pageVisible = () => typeof document === "undefined" || document.visibilityState !== "hidden";
+function nextGesture(go) {
+	if (typeof document === "undefined") return () => {};
+	const on = () => {
+		off();
+		go();
+	};
+	const off = () => {
+		document.removeEventListener("pointerdown", on, true);
+		document.removeEventListener("keydown", on, true);
+	};
+	document.addEventListener("pointerdown", on, true);
+	document.addEventListener("keydown", on, true);
+	return off;
+}
+var WakeStandby = class {
+	deps;
+	want = false;
+	blocked = "";
+	gen = 0;
+	running = false;
+	holding = false;
+	rec = null;
+	det = new LoneUtterance();
+	recorded = 0;
+	lastSpoke = -Infinity;
+	lastCheck = -Infinity;
+	inFlight = false;
+	waiting = null;
+	line = "";
+	constructor(deps) {
+		this.deps = deps;
+	}
+	now() {
+		return this.deps.now ? this.deps.now() : Date.now();
+	}
+	visible() {
+		return this.deps.visible ? this.deps.visible() : pageVisible();
+	}
+	get wanted() {
+		return this.want;
+	}
+	get on() {
+		return !!this.rec;
+	}
+	set(want, gesture = false) {
+		if (want === this.want) {
+			if (want && gesture && !this.running) this.sync(true);
+			return;
+		}
+		this.want = want;
+		this.blocked = "";
+		this.line = "";
+		this.sync(gesture);
+	}
+	stop(line) {
+		this.blocked = line;
+		this.close();
+		this.line = line;
+		this.report();
+	}
+	sync(gesture = false) {
+		const run = this.want && !this.blocked && this.visible() && !this.deps.recording();
+		if (run && !this.running) this.open(gesture);
+		else if (!run && this.running) this.close();
+		if (!this.want) this.line = this.blocked = "";
+		this.report();
+	}
+	report() {
+		const s = {
+			on: !!this.rec,
+			line: this.want || this.blocked ? this.line : ""
+		};
+		publish(s);
+		this.deps.onStatus?.(s);
+	}
+	async open(gesture) {
+		this.running = true;
+		const g = ++this.gen;
+		this.waiting?.();
+		this.waiting = null;
+		let ctx = this.deps.ctx();
+		if (!gesture) {
+			if (ctx && ctx.state === "suspended") await ctx.resume().catch(() => {});
+			const ready = !!ctx && ctx.state === "running" && await this.deps.mic.warm(true);
+			if (g !== this.gen) return;
+			if (!ready) {
+				this.running = false;
+				this.line = WAKE_GESTURE_LINE;
+				this.waiting = (this.deps.onGesture || nextGesture)(() => {
+					this.waiting = null;
+					if (g === this.gen && !this.running) this.sync(true);
+				});
+				this.report();
+				return;
+			}
+		}
+		if (g !== this.gen) return;
+		this.deps.mic.hold();
+		this.holding = true;
+		let stream;
+		try {
+			stream = await this.deps.mic.get();
+		} catch (err) {
+			if (g !== this.gen) return;
+			const n = err?.name || "";
+			if (n === "AbortError") return this.close();
+			return this.stop(n === "NotFoundError" || n === "OverconstrainedError" ? WAKE_NO_MIC_LINE : WAKE_DENIED_LINE);
+		}
+		ctx = this.deps.ctx();
+		if (ctx && ctx.state === "suspended") await ctx.resume().catch(() => {});
+		if (g !== this.gen) return;
+		if (!ctx || ctx.state !== "running") {
+			this.close();
+			this.line = WAKE_GESTURE_LINE;
+			this.report();
+			return;
+		}
+		this.det = new LoneUtterance();
+		this.recorded = 0;
+		const record = this.deps.record || startWavRecording;
+		try {
+			this.rec = record(stream, ctx, {
+				targetRate: CLIP_RATE,
+				keepS: WAKE_KEEP_S,
+				onLevel: (rms) => this.block(g, rms)
+			});
+		} catch {
+			this.close();
+			return;
+		}
+		this.line = "";
+		this.report();
+	}
+	block(g, rms) {
+		const rec = this.rec;
+		if (g !== this.gen || !rec) return;
+		this.deps.onLevel?.(rms);
+		const total = rec.seconds() * 1e3;
+		const ms = total - this.recorded;
+		this.recorded = total;
+		const now = this.now();
+		const speaking = this.deps.speaking();
+		if (speaking) this.lastSpoke = now;
+		const cand = this.det.feed(rms, ms);
+		if (!cand) return;
+		if (wakeGate({
+			now,
+			clipMs: cand.clipMs,
+			visible: this.visible(),
+			recording: this.deps.recording(),
+			speaking,
+			lastSpoke: this.lastSpoke,
+			inFlight: this.inFlight,
+			lastCheck: this.lastCheck
+		}) !== "ok") return;
+		this.lastCheck = now;
+		this.check(g, rec, cand);
+	}
+	async check(g, rec, cand) {
+		this.inFlight = true;
+		let v = null;
+		try {
+			const clip = await rec.last(cand.clipMs / 1e3);
+			if (clip && g === this.gen) v = await (this.deps.check || postWake)(clip);
+		} finally {
+			this.inFlight = false;
+		}
+		if (!v || g !== this.gen) return;
+		if (v.status === 409) return this.stop(WAKE_NO_RECOGNIZER_LINE);
+		if (v.wake && !this.deps.recording()) {
+			this.deps.onWake();
+			this.sync();
+		}
+	}
+	close() {
+		this.gen++;
+		this.running = false;
+		this.waiting?.();
+		this.waiting = null;
+		const rec = this.rec;
+		this.rec = null;
+		rec?.cancel();
+		if (this.holding) {
+			this.holding = false;
+			this.deps.mic.done();
+		}
+	}
+};
+function chime(ctx) {
+	if (!ctx || ctx.state !== "running") return;
+	try {
+		const t = ctx.currentTime;
+		const end = t + CHIME_MS / 1e3;
+		const osc = ctx.createOscillator();
+		const gain = ctx.createGain();
+		osc.type = "sine";
+		osc.frequency.setValueAtTime(660, t);
+		osc.frequency.setValueAtTime(990, t + CHIME_MS / 2e3);
+		gain.gain.setValueAtTime(1e-4, t);
+		gain.gain.exponentialRampToValueAtTime(.12, t + .01);
+		gain.gain.setValueAtTime(.12, end - .03);
+		gain.gain.exponentialRampToValueAtTime(1e-4, end);
+		osc.connect(gain);
+		gain.connect(ctx.destination);
+		osc.start(t);
+		osc.stop(end + .01);
+	} catch {}
 }
 //#endregion
 //#region src/components/TopBarMic.tsx
@@ -40114,6 +40536,7 @@ var tracker = new ReplyTracker();
 var heard = new HeardTurns();
 var speakingListeners = /* @__PURE__ */ new Set();
 var queue = new SpeechQueue(() => ttsEngine(cfgNow) === "server" ? serverSp : browserSp, (on) => speakingListeners.forEach((l) => l(on)));
+var standbyMeter = false;
 var untap = null;
 function tapLevel(ctx) {
 	untap?.();
@@ -40214,6 +40637,16 @@ function fieldTarget(el) {
 			} catch {}
 			el.dispatchEvent(new Event("input", { bubbles: true }));
 			return true;
+		},
+		replace: (old, text) => {
+			const at = el.selectionStart != null ? el.selectionStart : el.value.length;
+			const from = old && el.value.slice(Math.max(0, at - old.length), at) === old ? at - old.length : at;
+			el.value = el.value.slice(0, from) + text + el.value.slice(at);
+			try {
+				el.selectionStart = el.selectionEnd = from + text.length;
+			} catch {}
+			el.dispatchEvent(new Event("input", { bubbles: true }));
+			return true;
 		}
 	};
 }
@@ -40276,6 +40709,8 @@ function TopBarMic() {
 	const hands = (0, import_react.useRef)(null);
 	const [pendingLine, setPendingLine] = (0, import_react.useState)("");
 	const handsLive = (0, import_react.useRef)(null);
+	const standby = (0, import_react.useRef)(null);
+	const [wake, setWake] = (0, import_react.useState)(wakeStatus);
 	const say = (text, sticky = false, tail = "", ms = 6e3) => {
 		setCaptionState(text);
 		setUnsure(tail);
@@ -40295,6 +40730,14 @@ function TopBarMic() {
 		setPrefsState(p);
 		saveVoicePrefs(p);
 		if (p.replies === "off") queue.cancel();
+	};
+	const setWakePref = (on) => {
+		if (on) voiceAudioCtx();
+		standby.current?.set(on, true);
+		setPrefs({
+			...prefsRef.current,
+			wake: on
+		});
 	};
 	const refreshCfg = () => loadVoiceCfg(cfgNow === DEFAULT_VOICE_CFG ? null : cfgNow).then((c) => {
 		cfgNow = c;
@@ -40407,6 +40850,7 @@ function TopBarMic() {
 		rec.current = null;
 		untap?.();
 		meterStop();
+		standbyMeter = false;
 		setListening(false);
 		publishMicState({
 			listening: false,
@@ -40444,7 +40888,7 @@ function TopBarMic() {
 		const r = engine === "server" ? serverRec : browserRec;
 		voiceMark("start");
 		const ctx = voiceAudioCtx();
-		const skipMs = bargeIn(queue, ask && opts.title === ask.title ? ask.title : "");
+		const skipMs = Math.max(bargeIn(queue, ask && opts.title === ask.title ? ask.title : ""), opts.skipMs || 0);
 		const d = new LiveDictation(target(into, opts.title), {
 			caption: say,
 			halt: () => {
@@ -40510,22 +40954,18 @@ function TopBarMic() {
 				voiceMark("commit");
 				d.heard(t);
 			},
-			onWords: (t) => {
+			onStream: (w, p) => {
 				if (live.current !== d) return;
-				armIdle();
-				voiceMark("commit");
-				d.words(t);
+				if (w || p) armIdle();
+				if (p) voiceMark("partial");
+				if (w) voiceMark("commit");
+				d.stream(w, p);
 			},
 			onFlush: (t) => {
 				if (live.current === d) d.flush(t);
 			},
 			onPartial: (t) => {
-				if (live.current !== d) return;
-				if (t) {
-					armIdle();
-					voiceMark("partial");
-				}
-				d.unsure(t);
+				if (live.current === d) d.unsure(t);
 			},
 			onNotice: (t) => {
 				if (live.current === d) d.notice(t);
@@ -40660,6 +41100,11 @@ function TopBarMic() {
 				return;
 			case "off":
 				queue.cancel();
+				if (prefsRef.current.wake) setPrefs({
+					...prefsRef.current,
+					wake: false
+				});
+				standby.current?.set(false);
 				untap?.();
 				browserRec.release();
 				serverRec.release();
@@ -40736,6 +41181,54 @@ function TopBarMic() {
 		supported: () => recEngine(cfgNow) !== "none",
 		warm: () => warmMic(false)
 	}), []);
+	const woken = () => {
+		if (live.current) return;
+		chime(voiceAudioCtx());
+		const d = start(textField(document.activeElement), {
+			hint: WAKE_HINT,
+			skipMs: CHIME_MS + 30
+		});
+		if (!d) return;
+		setTimeout(() => {
+			if (live.current === d && !d.heardAnything) d.drop();
+		}, WAKE_LISTEN_MS);
+	};
+	const latestWake = (0, import_react.useRef)(woken);
+	latestWake.current = woken;
+	if (!standby.current) standby.current = new WakeStandby({
+		mic: serverRec.mic,
+		ctx: voiceAudioCtx,
+		speaking: () => queue.busy,
+		recording: () => !!live.current,
+		onWake: () => latestWake.current(),
+		onLevel: (rms) => {
+			if (!live.current) meterFeed(rms);
+		},
+		onStatus: (s) => {
+			setWake(s);
+			if (s.on === standbyMeter || live.current) return;
+			standbyMeter = s.on;
+			if (s.on) meterStart();
+			else meterStop();
+		}
+	});
+	(0, import_react.useEffect)(() => {
+		standby.current?.set(!!prefs.wake);
+	}, [prefs.wake]);
+	(0, import_react.useEffect)(() => {
+		standby.current?.sync();
+	}, [listening]);
+	(0, import_react.useEffect)(() => {
+		const onVis = () => standby.current?.sync();
+		document.addEventListener("visibilitychange", onVis);
+		return () => {
+			document.removeEventListener("visibilitychange", onVis);
+			standby.current?.set(false);
+		};
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (wake.line && prefsRef.current.wake && !live.current) say(wake.line);
+	}, [wake.line]);
 	const hold = prefs.ptt === "hold";
 	const openMenu = () => {
 		setMenuOpen(true);
@@ -40795,7 +41288,7 @@ function TopBarMic() {
 		};
 	}, [menuOpen]);
 	const who = focusedName || "a session";
-	const title = !supported ? noRecognizerLine() + " — right-click for options" : listening ? hold ? "Listening — release to stop (the words stay), Esc to take them back" : "Listening — click to stop (the words stay), Esc to take them back" : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") + ", right-click for options";
+	const title = !supported ? noRecognizerLine() + " — right-click for options" : listening ? hold ? "Listening — release to stop (the words stay), Esc to take them back" : "Listening — click to stop (the words stay), Esc to take them back" : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") + (wake.on ? ", or say “MindFlock”" : "") + ", right-click for options";
 	const rect = menuOpen ? btnRef.current?.getBoundingClientRect() : void 0;
 	const popStyle = rect ? {
 		top: rect.bottom + 6 + "px",
@@ -40808,7 +41301,8 @@ function TopBarMic() {
 		left: Math.max(8, Math.min(capRect.left, window.innerWidth - 348)) + "px"
 	} : void 0;
 	const ttsNow = ttsEngine(cfg || cfgNow) === "server" ? "server" : browserSp.available() ? "browser" : "none";
-	const diagnostics = engineDiagnostics(cfg || cfgNow, sttNow, ttsNow);
+	const pass = sttNow === "server" ? passLine((cfg || cfgNow).server_ready.stt_backend, serverRec.passMs) : "";
+	const diagnostics = engineDiagnostics(cfg || cfgNow, sttNow, ttsNow) + (pass ? " · " + pass : "");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			id: "mic-btn",
@@ -40818,6 +41312,7 @@ function TopBarMic() {
 				"tb-item",
 				"mic-ring",
 				listening && "listening",
+				wake.on && !listening && "standby",
 				speaking && !listening && "speaking",
 				!supported && "unsupported"
 			].filter(Boolean).join(" "),
@@ -40887,9 +41382,9 @@ function TopBarMic() {
 			role: "status",
 			"aria-live": "polite",
 			style: capStyle,
-			children: [listening ? liveTail(caption, unsure) : caption, unsure && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			children: [listening ? liveTail(caption, liveUnsure(unsure)) : caption, unsure && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "mic-unsure",
-				children: [" ", unsure]
+				children: [" ", listening ? liveUnsure(unsure) : unsure]
 			})]
 		}), document.body),
 		menuOpen && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -40959,6 +41454,24 @@ function TopBarMic() {
 						})
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: c.label })]
 				}, c.value)),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "mic-row",
+					id: "mic-wake-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						id: "mic-wake",
+						checked: !!prefs.wake,
+						onChange: (e) => setWakePref(e.target.checked)
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Listen for “MindFlock”" })]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "mic-hint",
+					id: "mic-wake-hint",
+					children: [WAKE_SWITCH_HINT, prefs.wake && wake.line && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "mic-wake-line",
+						children: [" ", wake.line]
+					})]
+				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "mic-sub",
 					children: "Push to talk"
@@ -74987,7 +75500,11 @@ var SETTINGS_SEARCH = [
 			"push to talk",
 			"hold to talk",
 			"click to talk",
-			"approve dialogs by voice"
+			"approve dialogs by voice",
+			"wake word",
+			"hey mindflock",
+			"listen for mindflock",
+			"standby"
 		]
 	},
 	{
@@ -89667,6 +90184,8 @@ function VoiceSectionView({ model, view, onClearKey, install, tryRow }) {
 function MicPrefs() {
 	const [prefs, setPrefs] = (0, import_react.useState)(loadVoicePrefs);
 	(0, import_react.useEffect)(() => onVoicePrefs(setPrefs), []);
+	const [wakeLine, setWakeLine] = (0, import_react.useState)(() => wakeStatus().line);
+	(0, import_react.useEffect)(() => onWakeStatus((s) => setWakeLine(s.line)), []);
 	const save = (p) => {
 		setPrefs(p);
 		saveVoicePrefs(p);
@@ -89747,6 +90266,45 @@ function MicPrefs() {
 						})
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Hold to talk — hold the mic or the Talk hotkey while you speak" })]
 				})]
+			})]
+		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "set-row set-switch-row",
+			id: "voice-wake-row",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "notif-rule-text",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-label",
+						id: "voice-wake-label",
+						children: "Listen for “MindFlock”"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint notif-rule-desc",
+						id: "voice-wake-hint",
+						children: WAKE_SWITCH_HINT
+					}),
+					prefs.wake && wakeLine && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint notif-rule-desc",
+						id: "voice-wake-line",
+						children: wakeLine
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "ca-switch",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					id: "voice-wake",
+					"aria-labelledby": "voice-wake-label",
+					checked: !!prefs.wake,
+					onChange: (e) => {
+						if (e.target.checked) voiceAudioCtx();
+						save({
+							...prefs,
+							wake: e.target.checked
+						});
+					}
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 			})]
 		})
 	] });

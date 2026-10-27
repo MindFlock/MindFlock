@@ -27,17 +27,22 @@ flavour, in preference order (:data:`BACKENDS`):
   box has been OOM-killed before); a loaded model stays in a module cache
   and is unloaded after :data:`IDLE_SECONDS` without use — a daemon timer
   armed on load sweeps it, and :func:`sweep_idle` is cheap enough for a
-  server tick to call too.
+  server tick to call too. The exception: while ``voice.stt_backend`` is
+  ``local`` its whisper models (one-shot and streaming) stay resident — a
+  reload is the slowest thing a press can hit; piper voices still unload.
 
 Files the local backend keeps, under ``~/.mindflock/voice/`` (or
 ``$MINDFLOCK_VOICE_DIR``):
 
-* ``whisper/`` — faster-whisper's ``download_root``: the CTranslate2 model,
-  ``small`` run as int8 on the CPU unless ``voice.stt_model`` names another
-  size (``base``, ``medium`` …; a name that is not a faster-whisper size,
-  like the ``whisper-1`` a host wants, reads as ``small``). Downloaded from
-  Hugging Face on first use, or ahead of time by the one-click install
-  (``core.speech_install``, which puts the packages in too).
+* ``whisper/`` — faster-whisper's ``download_root``: the CTranslate2 models,
+  run as int8 on the CPU. A phrase sent whole uses ``small`` unless
+  ``voice.stt_model`` names another size (``base``, ``medium`` …; a name
+  that is not a faster-whisper size, like the ``whisper-1`` a host wants,
+  reads as ``small``); the live transcript uses the much faster
+  ``voice.stt_stream_model`` (:func:`stream_whisper_model`: ``base.en`` for
+  English, ``base`` otherwise). Downloaded from Hugging Face on first use,
+  or ahead of time by the one-click install (``core.speech_install``, which
+  puts the packages in too).
 * ``piper/<voice>.onnx`` + ``<voice>.onnx.json`` — piper voices, downloaded
   from Hugging Face on first use (:data:`PIPER_VOICE` unless
   ``voice.tts_voice`` names a piper voice; ~60 MB each).
@@ -65,6 +70,7 @@ import importlib
 import importlib.util
 import io
 import json
+import logging
 import re
 import os
 import shutil
@@ -101,7 +107,10 @@ __all__ = [
     "warm_in_background",
 ]
 
-#: A cached local model is dropped after this long without a call. Half an
+_logger = logging.getLogger(__name__)
+
+#: A cached local model is dropped after this long without a call (never
+#: local recognition's while it is configured: :func:`_resident`). Half an
 #: hour: a model unloaded between two sentences costs the next press ~7 s
 #: (faster-whisper ``small`` loading), which read as "the mic is slow to
 #: start"; :func:`warm` reloads it ahead of use whenever a voice client shows
@@ -116,9 +125,22 @@ OPENAI_STT_MODEL = "gpt-transcribe"
 OPENAI_TTS_MODEL = "gpt-4o-mini-tts"
 OPENAI_TTS_VOICE = "alloy"
 WHISPER_MODEL = "small"
+#: The live transcript's model (``voice.stt_stream_model`` unset): ``base``
+#: decodes ~5x faster than ``small`` on a CPU at a small accuracy cost, and
+#: the English-only build is the better ``base`` for English.
+STREAM_MODEL = "base.en"
+STREAM_MODEL_MULTI = "base"
 PIPER_VOICE = "en_US-lessac-medium"
 STT_TIMEOUT = 30.0
 TTS_TIMEOUT = 20.0
+#: The warm-up line a local OpenAI-compatible voice host is asked to say (its
+#: audio is discarded), and how long it may take: a cloned-voice model
+#: loading on a CPU takes ~40 s on its first call.
+WARM_TEXT = "Ready."
+WARM_TIMEOUT = 180.0
+#: A host or OS engine (no model cache to look in) is warmed again at most
+#: this often by :func:`warm_in_background`, unless its setup changed.
+REWARM_SECONDS = 600.0
 NOT_INSTALLED = "local models not installed: uv sync --group voice"
 
 KIND_WORD = {"stt": "recognition", "tts": "voice"}
@@ -333,14 +355,31 @@ def _cached(key: str, loader: Callable[[], object]) -> object:
         return obj
 
 
+def _resident() -> frozenset:
+    """The cache keys :func:`sweep_idle` never drops: the whisper models of
+    ``local`` recognition while it is the configured backend."""
+    try:
+        if _configured("stt") != "local":
+            return frozenset()
+        backend = get("stt", "local")
+        keys = getattr(backend, "resident_keys", None)
+        return frozenset(keys()) if keys else frozenset()
+    except Exception:  # noqa: BLE001 — an unreadable setting pins nothing
+        return frozenset()
+
+
 def sweep_idle(now: Optional[float] = None) -> List[str]:
-    """Drop every cached model idle for :data:`IDLE_SECONDS` or more; returns
-    the keys dropped. Cheap when nothing is loaded — a server tick may call
-    it freely; the timer armed on load calls it anyway."""
+    """Drop every cached model idle for :data:`IDLE_SECONDS` or more, except
+    the resident ones (:func:`_resident`); returns the keys dropped. Cheap
+    when nothing is loaded — a server tick may call it freely; the timer
+    armed on load calls it anyway."""
     stamp = _now() if now is None else now
     dropped: List[str] = []
     with _LOCK:
+        keep = _resident() if _CACHE else frozenset()
         for key in list(_CACHE):
+            if key in keep:
+                continue
             if stamp - _USED.get(key, stamp) >= IDLE_SECONDS:
                 _CACHE.pop(key, None)
                 _USED.pop(key, None)
@@ -355,11 +394,13 @@ def loaded() -> List[str]:
 
 
 def unload_all() -> None:
-    """Drop every cached model and the sweep timer (tests, shutdown)."""
+    """Drop every cached model, the warm-up record and the sweep timer
+    (tests, shutdown)."""
     global _TIMER
     with _LOCK:
         _CACHE.clear()
         _USED.clear()
+        _WARMED.clear()
         if _TIMER is not None:
             _TIMER.cancel()
             _TIMER = None
@@ -516,7 +557,9 @@ class OpenAITTS(_OpenAI):
             return False, "%s needs an API key for %s" % (self.label, _host(url))
         return True, "%s (%s) at %s" % (model, voice, _host(url))
 
-    def speak(self, text: str, voice: str = "") -> Tuple[bytes, str]:
+    def speak(
+        self, text: str, voice: str = "", timeout: float = TTS_TIMEOUT
+    ) -> Tuple[bytes, str]:
         url, key, model, default_voice = self._cfg()
         if not key and not _local_host(url):
             raise SpeechError("%s needs an API key for %s" % (self.label, _host(url)))
@@ -530,7 +573,7 @@ class OpenAITTS(_OpenAI):
         if key:
             headers["Authorization"] = "Bearer " + key
         body = json.dumps(payload).encode("utf-8")
-        rtype, data = self._call(url + "/audio/speech", headers, body, TTS_TIMEOUT)
+        rtype, data = self._call(url + "/audio/speech", headers, body, timeout)
         if (
             not data
             or rtype.startswith("application/json")
@@ -538,6 +581,16 @@ class OpenAITTS(_OpenAI):
         ):
             raise SpeechError("%s sent no audio back" % _host(url))
         return data, (rtype if rtype.startswith("audio/") else "audio/mpeg")
+
+    def warm(self, prime: bool = True) -> str:  # noqa: ARG002 — no model here
+        """Have a LOCAL host load its voice model: one short synthesis
+        (:data:`WARM_TEXT`, the audio discarded). Never a remote host — that
+        is a paid API, and it has no cold start to hide."""
+        url = self._cfg()[0]
+        if not _local_host(url):
+            return "skipped: %s is not on this machine or network" % _host(url)
+        self.speak(WARM_TEXT, timeout=WARM_TIMEOUT)
+        return "loaded"
 
 
 #: faster-whisper's own size names; anything else in the shared
@@ -557,6 +610,19 @@ def whisper_model(raw: str = "") -> str:
     name or a Hugging Face ``org/repo`` id, else :data:`WHISPER_MODEL`."""
     name = (raw or "").strip()
     return name if name in WHISPER_SIZES or "/" in name else WHISPER_MODEL
+
+
+def stream_whisper_model(raw: str = "", lang: str = "") -> str:
+    """The live transcript's faster-whisper model for ``raw``
+    (``voice.stt_stream_model``) when it is a size or ``org/repo`` id, else
+    :data:`STREAM_MODEL` for English (``lang``'s primary subtag ``en``, or
+    none) and :data:`STREAM_MODEL_MULTI` for any other language."""
+    name = (raw or "").strip()
+    if name in WHISPER_SIZES or "/" in name:
+        return name
+    return (
+        STREAM_MODEL if whisper_language(lang) in (None, "en") else STREAM_MODEL_MULTI
+    )
 
 
 def piper_voice(raw: str = "") -> str:
@@ -640,6 +706,24 @@ class LocalSTT(Backend):
     def _model_name(self) -> str:
         return whisper_model(_voice().stt_model)
 
+    def stream_model_name(self, lang: str = "") -> str:
+        """The live transcript's model for ``lang`` (:func:`stream_whisper_model`)."""
+        return stream_whisper_model(_voice().stt_stream_model, lang)
+
+    def warm_keys(self) -> List[str]:
+        """What :meth:`warm` loads: the one-shot model and the streaming one
+        for English (a stream in another language loads its own on open)."""
+        return sorted(
+            {"whisper:" + self._model_name(), "whisper:" + self.stream_model_name()}
+        )
+
+    def resident_keys(self) -> List[str]:
+        """Never idle-unloaded while ``local`` recognition is configured: the
+        :meth:`warm_keys` and the streaming model of any other language."""
+        return sorted(
+            set(self.warm_keys()) | {"whisper:" + self.stream_model_name("xx")}
+        )
+
     def ready(self) -> Tuple[bool, str]:
         if not _installed("faster_whisper"):
             return False, NOT_INSTALLED
@@ -663,14 +747,15 @@ class LocalSTT(Backend):
             name, device="cpu", compute_type="int8", download_root=str(root)
         )
 
-    def _model(self):
-        """The cached model, after the install and memory checks."""
+    def _model(self, name: str = ""):
+        """The cached model ``name`` (default: the one-shot one), after the
+        install and memory checks."""
         if not _installed("faster_whisper"):
             raise SpeechError(NOT_INSTALLED)
         low = _memory_block()
         if low:
             raise SpeechError("local recognition held back: " + low)
-        name = self._model_name()
+        name = name or self._model_name()
         try:
             return _cached("whisper:" + name, lambda: self._load(name))
         except SpeechError:
@@ -702,14 +787,15 @@ class LocalSTT(Backend):
 
     def stream_transcriber(self, lang: str = "") -> Callable:
         """One pass of a stream (``core.speech_stream``): the float32 window
-        straight into the model (no clip file, no PyAV) with word timestamps,
-        greedy decoding and the committed text as the prompt →
-        ``[(word, start_s, end_s)]``. The model is fetched per pass, so the
-        idle unload never strands a stream."""
+        straight into the streaming model (:meth:`stream_model_name`, not
+        the one-shot one) with word timestamps, greedy decoding and the
+        committed text as the prompt → ``[(word, start_s, end_s)]``. The
+        model is fetched per pass, so an unload never strands a stream."""
         language = whisper_language(lang)
+        name = self.stream_model_name(lang)
 
         def run(audio, prompt: str) -> List[Tuple[str, float, float]]:
-            model = self._model()
+            model = self._model(name)
             np = _import("numpy")
             # A copy: the stream trims its buffer later, which a view would block.
             samples = np.frombuffer(bytes(audio), dtype=np.float32)
@@ -737,27 +823,35 @@ class LocalSTT(Backend):
         return run
 
     def warm(self, prime: bool = True) -> str:
-        """Load the model ahead of its first use and, when ``prime`` is set,
-        run one short silent pass through it (CTranslate2 allocates its
-        workspaces on the first call, another second or two). ``"loaded"``
-        when this call loaded it, ``"already"`` when it was resident."""
-        key = "whisper:" + self._model_name()
-        was = key in loaded()
-        model = self._model()
-        if prime and not was:
-            np = _import("numpy")
-            try:
-                segments, _info = model.transcribe(
-                    np.zeros(8000, dtype=np.float32),
-                    language="en",
-                    beam_size=1,
-                    vad_filter=False,
-                )
-                for _seg in segments:  # the generator does the work
-                    pass
-            except Exception:  # noqa: BLE001 — a warm-up may fail quietly
+        """Load both models (:meth:`warm_keys`) ahead of their first use and,
+        when ``prime`` is set, run one short silent pass through each one
+        this call loaded (CTranslate2 allocates its workspaces on the first
+        call, another second or two). ``"loaded"`` when this call loaded
+        either, ``"already"`` when both were resident."""
+        fresh = False
+        for key in self.warm_keys():
+            name = key.split(":", 1)[1]
+            was = key in loaded()
+            model = self._model(name)
+            fresh = fresh or not was
+            if prime and not was:
+                self._prime(model)
+        return "loaded" if fresh else "already"
+
+    @staticmethod
+    def _prime(model) -> None:
+        np = _import("numpy")
+        try:
+            segments, _info = model.transcribe(
+                np.zeros(8000, dtype=np.float32),
+                language="en",
+                beam_size=1,
+                vad_filter=False,
+            )
+            for _seg in segments:  # the generator does the work
                 pass
-        return "already" if was else "loaded"
+        except Exception:  # noqa: BLE001 — a warm-up may fail quietly
+            pass
 
 
 class LocalTTS(Backend):
@@ -785,21 +879,42 @@ class LocalTTS(Backend):
         onnx = fetch_piper_voice(name)
         return _import("piper.voice").PiperVoice.load(str(onnx))
 
-    def speak(self, text: str, voice: str = "") -> Tuple[bytes, str]:
+    def _model(self, name: str):
+        """The cached voice ``name``, after the install and memory checks."""
         if not _installed("piper"):
             raise SpeechError(NOT_INSTALLED)
         low = _memory_block()
         if low:
             raise SpeechError("local voice held back: " + low)
-        name = self._voice_name(voice)
         try:
-            model = _cached("piper:" + name, lambda: self._load(name))
+            return _cached("piper:" + name, lambda: self._load(name))
         except SpeechError:
             raise
         except Exception as err:  # noqa: BLE001
             raise SpeechError(
                 "could not load piper voice %s: %s" % (name, err)
             ) from err
+
+    def warm_keys(self) -> List[str]:
+        return ["piper:" + self._voice_name()]
+
+    def warm(self, prime: bool = True) -> str:
+        """Load the configured voice and, when ``prime`` is set, say
+        :data:`WARM_TEXT` into nothing once (onnxruntime's first run is the
+        slow one). ``"loaded"`` / ``"already"`` like :meth:`LocalSTT.warm`."""
+        name = self._voice_name()
+        was = ("piper:" + name) in loaded()
+        model = self._model(name)
+        if prime and not was:
+            try:
+                with wave.open(io.BytesIO(), "wb") as wav:
+                    model.synthesize_wav(WARM_TEXT, wav)
+            except Exception:  # noqa: BLE001 — a warm-up may fail quietly
+                pass
+        return "already" if was else "loaded"
+
+    def speak(self, text: str, voice: str = "") -> Tuple[bytes, str]:
+        model = self._model(self._voice_name(voice))
         buf = io.BytesIO()
         try:
             with wave.open(buf, "wb") as wav:
@@ -885,64 +1000,119 @@ def choose(kind: str) -> str:
 
 
 _WARMING: Dict[str, threading.Thread] = {}
+#: The last warm per kind: ``(result, what was warmed, when)`` — ``result``
+#: is "loaded", "loading" or "skipped: …" (:func:`describe`'s ``warm``).
+_WARMED: Dict[str, Tuple[str, str, float]] = {}
+
+
+def _warm_target(kind: str) -> Tuple[Optional[Backend], str]:
+    """The backend a warm of ``kind`` would load, with its readiness detail
+    — or ``(None, "skipped: <why>")``. Recognition: only an explicitly
+    configured ``local`` (an unset backend might pick a host, and nobody
+    asked for half a gigabyte of model in memory). Voice: whichever backend
+    speaks (:func:`select`) — a local piper voice, a local OpenAI-compatible
+    host (:meth:`OpenAITTS.warm` never calls a remote one) or the OS engine."""
+    if kind == "stt":
+        if _configured(kind) != "local":
+            return None, "skipped: stt backend is not local"
+        backend = get(kind, "local")
+        if backend is None:
+            return None, "skipped: no local stt backend"
+        ok, detail = backend.ready()
+    elif kind == "tts":
+        backend, detail = select(kind)
+        ok = backend is not None
+    else:
+        return None, "skipped: no %s backend" % kind
+    if not ok or backend is None:
+        return None, "skipped: " + detail
+    if not hasattr(backend, "warm"):
+        return None, "skipped: %s has nothing to warm" % backend.label
+    return backend, detail
 
 
 def warm(kind: str = "stt", prime: bool = True) -> str:
-    """Load the configured LOCAL model of ``kind`` now, so the first press
-    of the mic does not pay for it. Only an explicitly configured ``local``
-    backend is warmed (an unset backend might pick a host, and nobody asked
-    for half a gigabyte of model in memory); returns ``"loaded"`` /
-    ``"already"``, or ``"skipped: <why>"`` (not local, not installed, memory
-    low, load failed). Never raises; blocking — see
-    :func:`warm_in_background`."""
-    if _configured(kind) != "local":
-        return "skipped: %s backend is not local" % kind
-    backend = get(kind, "local")
-    if backend is None or not hasattr(backend, "warm"):
-        return "skipped: no local %s backend" % kind
-    ok, detail = backend.ready()
-    if not ok:
-        return "skipped: " + detail
+    """Load ``kind``'s model now (:func:`_warm_target`), so the first press
+    of the mic — or the first line read aloud — does not pay for it; returns
+    ``"loaded"`` / ``"already"``, or ``"skipped: <why>"`` (nothing to warm,
+    not installed, memory low, load or host failed). Never raises;
+    blocking — see :func:`warm_in_background`."""
+    what = ""
     try:
-        return str(backend.warm(prime=prime))  # type: ignore[attr-defined]
+        backend, detail = _warm_target(kind)
+        if backend is None:
+            result = detail
+        else:
+            what = "%s:%s" % (backend.id, detail)
+            result = str(backend.warm(prime=prime))  # type: ignore[attr-defined]
     except Exception as err:  # noqa: BLE001 — warming is best effort
-        return "skipped: %s" % err
+        result = "skipped: %s" % err
+    _WARMED[kind] = ("loaded" if result == "already" else result, what, _now())
+    _logger.debug("voice warm %s: %s", kind, result)
+    return result
+
+
+def _warm_due(kind: str) -> bool:
+    """Whether :func:`warm_in_background` has anything to do for ``kind``: a
+    model-cache backend with a key not resident, or a host / OS engine not
+    warmed in the last :data:`REWARM_SECONDS` with its current setup."""
+    backend, detail = _warm_target(kind)
+    if backend is None:
+        return False
+    keys = getattr(backend, "warm_keys", None)
+    if keys is not None:
+        with _LOCK:
+            return not all(k in _CACHE for k in keys())
+    last = _WARMED.get(kind)
+    return not (
+        last is not None
+        and last[1] == "%s:%s" % (backend.id, detail)
+        and _now() - last[2] < REWARM_SECONDS
+    )
 
 
 def warm_in_background(
     kind: str = "stt", delay_s: float = 0.0
 ) -> Optional[threading.Thread]:
-    """Run :func:`warm` on a daemon thread unless the model is resident or a
-    warm-up is already running: the server calls this at boot and whenever
-    a voice client fetches ``GET /api/voice`` (the mic UI mounting), so the
-    model is back before the next press after an idle unload. Returns the
-    thread it started, or None when there was nothing to do (not local, not
-    installed, already loaded or already warming)."""
-    if _configured(kind) != "local":
-        return None
-    backend = get(kind, "local")
-    if backend is None or not hasattr(backend, "warm") or not backend.ready()[0]:
-        return None
-    try:
-        key = "whisper:" + backend._model_name()  # type: ignore[attr-defined]
-    except Exception:  # noqa: BLE001
-        key = kind
-    with _LOCK:
-        if key in _CACHE:
+    """Run :func:`warm` on a daemon thread unless there is nothing to do
+    (:func:`_warm_due`) or a warm-up of ``kind`` is already running: the
+    server calls this at boot for both kinds and whenever a voice client
+    fetches ``GET /api/voice`` (the mic UI mounting). Returns the thread it
+    started, or None. With ``delay_s`` (boot) the check runs on the thread
+    after the delay — choosing the voice backend may probe the OS engine,
+    which the event loop must not wait for."""
+    if delay_s <= 0:
+        try:
+            if not _warm_due(kind):
+                return None
+        except Exception:  # noqa: BLE001 — never break the caller
             return None
+    with _LOCK:
         running = _WARMING.get(kind)
         if running is not None and running.is_alive():
             return None
 
+        def loading() -> None:
+            prev = _WARMED.get(kind, ("", "", 0.0))
+            _WARMED[kind] = ("loading", prev[1], prev[2])
+
         def go() -> None:
             if delay_s > 0:
                 time.sleep(delay_s)
+                try:
+                    if not _warm_due(kind):
+                        return
+                except Exception:  # noqa: BLE001
+                    return
+                loading()
             warm(kind)
 
         t = threading.Thread(
             target=go, name="mindflock-voice-warm-" + kind, daemon=True
         )
         _WARMING[kind] = t
+        if delay_s <= 0:
+            loading()
         t.start()
         return t
 
@@ -959,17 +1129,23 @@ def describe() -> dict:
                     "platform": "windows"|"wsl"|"mac"|"none",
                     "detail": str, "voices": [names],
                     "recognizers": [culture tags],
-                    "stt_quality": "basic"|"good"|"none"}}
+                    "stt_quality": "basic"|"good"|"none"},
+         "stream_model": str,
+         "warm": {"stt": str, "tts": str}}
 
     ``detail`` is the one-paragraph summary; the per-kind keys are what the
     Settings screen prints under each row; ``stt_stream`` says the ready
     recognition backend streams (``POST /api/voice/stream``: only
-    ``local``); ``system`` is the built-in engine's own report
-    (:func:`speech_system.describe`). Offline and cheap:
-    the built-in engine is probed once per process, not per call.
+    ``local``) and ``stream_model`` names the model its live transcript runs
+    for English (``""`` when it does not stream); ``system`` is the built-in
+    engine's own report (:func:`speech_system.describe`); ``warm`` is each
+    kind's last warm-up — ``"loaded"``, ``"loading"``, ``"skipped: <why>"``,
+    or ``""`` before the first. Offline and cheap: the built-in engine is
+    probed once per process, not per call.
     """
     ready: dict = {}
     lines: List[str] = []
+    stream_model = ""
     for kind in ("stt", "tts"):
         backend, detail = select(kind)
         ready[kind] = backend is not None
@@ -977,6 +1153,12 @@ def describe() -> dict:
         ready[kind + "_detail"] = detail
         if kind == "stt":
             ready["stt_stream"] = bool(backend is not None and backend.streams)
+            namer = getattr(backend, "stream_model_name", None)
+            if ready["stt_stream"] and callable(namer):
+                try:
+                    stream_model = str(namer())
+                except Exception:  # noqa: BLE001 — a label, never a failure
+                    stream_model = ""
         word = KIND_WORD[kind]
         lines.append(
             "Server %s ready (%s): %s" % (word, backend.id, detail)
@@ -988,4 +1170,6 @@ def describe() -> dict:
         "backends": {k: ids(k) for k in ("stt", "tts")},
         "server_ready": ready,
         "system": _system.describe(),
+        "stream_model": stream_model,
+        "warm": {k: _WARMED.get(k, ("", "", 0.0))[0] for k in ("stt", "tts")},
     }

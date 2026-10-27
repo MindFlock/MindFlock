@@ -23,10 +23,13 @@
  * queue, one line at a time (lib/voiceDesktop SpeechQueue). Right-click or Shift+click opens those options. In the desktop app
  * the words and the voice go through the server's engines (its Web Speech
  * fails there); in a browser tab, through the browser's unless Settings →
- * Voice says "server" (lib/voiceDesktop sttEngine). The server's recognizer
- * streams when it can (`server_ready.stt_stream`): the words are typed while
- * you speak, the last one held back in case it is a radio word, and the
- * unsure tail shows muted in the caption. "Stop recording" stops at any
+ * Voice says "server" (lib/voiceDesktop sttEngine). The words are typed as
+ * you speak, like a phone keyboard: the server's recognizer streams when it
+ * can (`server_ready.stt_stream`) and Web Speech has interim words — either
+ * way the phrase so far is typed as a guess and corrected (backspaces, then
+ * the new end) as the recognizer changes its mind, the unsure words muted in
+ * the caption until they commit; a trailing radio word or stop phrase is
+ * never typed, not even as a guess. "Stop recording" stops at any
  * point; "focus three" / "next session" move by the rail's numbers; "yes" /
  * "no" / "always" answer the focused session's dialog or question; the Talk
  * hotkey (`mindflock:voice-talk`) is push to talk from anywhere; and with
@@ -39,8 +42,16 @@
  * appearing) and kept warm KEEP_STREAM_MS after a dictation, and the server's
  * stream opens while the mic gets ready. While listening, a ring on the button
  * follows the level, the caption says "Hearing you…" once the level says
- * speech, and the unsure words show greyed as soon as the first chunk is back
- * (never typed). */
+ * speech, and the first words are typed (and shown greyed) as soon as the
+ * first chunk is back — sent after 150 ms of speech, later chunks paced by
+ * the server's pass time (lib/voiceDesktop chunkMinS).
+ *
+ * The wake word (lib/wakeWord): with "Listen for “MindFlock”" on, the mic
+ * stays open in standby (a faint ring and a dot on the button; the ring still
+ * follows the level) and a lone "MindFlock" — never one inside a sentence —
+ * chimes, says "Yes?" and starts listening as a click would. Standby pauses
+ * while the page is hidden or a dictation records, and stops on "mic off",
+ * the switch, a refused microphone or a server without recognition (409). */
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -74,6 +85,7 @@ import {
   browserRecognizer,
   browserSpeaker,
   engineDiagnostics,
+  passLine,
   loadVoiceCfg,
   loadVoicePrefs,
   noRecognizerLine,
@@ -105,6 +117,7 @@ import {
 } from "../lib/voiceDesktop";
 import {
   liveTail,
+  liveUnsure,
   meterFeed,
   meterPoll,
   meterRef,
@@ -114,6 +127,16 @@ import {
   rmsOf,
   voiceMark,
 } from "../lib/voiceMic";
+import {
+  CHIME_MS,
+  WAKE_HINT,
+  WAKE_LISTEN_MS,
+  WAKE_SWITCH_HINT,
+  WakeStandby,
+  chime,
+  wakeStatus,
+  type WakeStatus,
+} from "../lib/wakeWord";
 
 // One of each for the page: the mic renders in one of two places (the mac
 // mirror), and what it sent must outlive a remount.
@@ -130,6 +153,9 @@ const queue = new SpeechQueue(
   () => (ttsEngine(cfgNow) === "server" ? serverSp : browserSp),
   (on) => speakingListeners.forEach((l) => l(on))
 );
+
+/** Standby (the wake word) runs the level meter. */
+let standbyMeter = false;
 
 /** The browser recognizer has no level of its own: an AnalyserNode on the
  * kept microphone stream gives the meter one. Its undo, while it runs. */
@@ -277,6 +303,20 @@ function fieldTarget(el: HTMLInputElement | HTMLTextAreaElement): DictTarget {
       el.dispatchEvent(new Event("input", { bubbles: true }));
       return true;
     },
+    // A correction sets the value once: `old` before the cursor becomes
+    // `text` (edited since — the cursor moved off it — `text` just goes in).
+    replace: (old, text) => {
+      const at = el.selectionStart != null ? el.selectionStart : el.value.length;
+      const from = old && el.value.slice(Math.max(0, at - old.length), at) === old ? at - old.length : at;
+      el.value = el.value.slice(0, from) + text + el.value.slice(at);
+      try {
+        el.selectionStart = el.selectionEnd = from + text.length;
+      } catch {
+        /* readonly */
+      }
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      return true;
+    },
   };
 }
 
@@ -337,6 +377,10 @@ export function TopBarMic() {
   const [pendingLine, setPendingLine] = useState("");
   /** The dictation hands-free listening opened (an ask read out). */
   const handsLive = useRef<LiveDictation | null>(null);
+  /** Listening for the wake word (lib/wakeWord); its status for the button
+   * and the options. */
+  const standby = useRef<WakeStandby | null>(null);
+  const [wake, setWake] = useState<WakeStatus>(wakeStatus);
 
   /** The caption under the mic. `sticky`: stays until replaced (listening, or
    * words waiting to be continued); otherwise it fades after `ms`.
@@ -363,6 +407,12 @@ export function TopBarMic() {
     setPrefsState(p);
     saveVoicePrefs(p);
     if (p.replies === "off") queue.cancel();
+  };
+  /** The standby switch (in a click: the mic and the audio engine may start). */
+  const setWakePref = (on: boolean) => {
+    if (on) voiceAudioCtx();
+    standby.current?.set(on, true);
+    setPrefs({ ...prefsRef.current, wake: on });
   };
 
   const refreshCfg = () =>
@@ -503,6 +553,7 @@ export function TopBarMic() {
     rec.current = null;
     untap?.();
     meterStop();
+    standbyMeter = false; // standby, resuming, starts it again
     setListening(false);
     publishMicState({ listening: false, title: "" });
     queue.release();
@@ -527,7 +578,7 @@ export function TopBarMic() {
    * the session read out), else the focused session. Null: it didn't start. */
   const start = (
     into: HTMLInputElement | HTMLTextAreaElement | null,
-    opts: { title?: string; hint?: string; done?: (how: DictEnd) => void } = {}
+    opts: { title?: string; hint?: string; skipMs?: number; done?: (how: DictEnd) => void } = {}
   ): LiveDictation | null => {
     if (live.current) return null;
     // The ask pop-up is up: the mic answers THAT session — unless a box other
@@ -552,7 +603,7 @@ export function TopBarMic() {
     // Barge-in: the app stops talking BEFORE the mic opens — answering the
     // ask being read drops the rest of its read-out — and the first moment
     // of audio (its voice dying away) is skipped.
-    const skipMs = bargeIn(queue, ask && opts.title === ask.title ? ask.title : "");
+    const skipMs = Math.max(bargeIn(queue, ask && opts.title === ask.title ? ask.title : ""), opts.skipMs || 0);
     const d = new LiveDictation(
       target(into, opts.title),
       {
@@ -598,11 +649,12 @@ export function TopBarMic() {
     meterStart();
     const ok = r.start(
       {
+        // Web Speech's interim words: typed as a guess, corrected as they change.
         onInterim: (t) => {
           if (live.current !== d) return;
           armIdle();
           if (t) voiceMark("partial");
-          d.hearing(t);
+          void d.hearing(t);
         },
         onStatus: (t) => {
           if (live.current === d && !d.dict.shown && !into) say(t + " · " + DICT_HINT, true);
@@ -624,24 +676,21 @@ export function TopBarMic() {
           voiceMark("commit");
           void d.heard(t);
         },
-        // Streaming: committed words as they come, a phrase's end, the unsure
-        // tail (never typed), and the one line when it falls back to clips.
-        onWords: (t) => {
+        // Streaming: each chunk's committed words and unsure tail, typed as
+        // you speak and corrected once per answer; a phrase's end; the tail
+        // cleared (a stream's end); the one line when it falls back to clips.
+        onStream: (w, p) => {
           if (live.current !== d) return;
-          armIdle();
-          voiceMark("commit");
-          void d.words(t);
+          if (w || p) armIdle();
+          if (p) voiceMark("partial");
+          if (w) voiceMark("commit");
+          void d.stream(w, p);
         },
         onFlush: (t) => {
           if (live.current === d) void d.flush(t);
         },
         onPartial: (t) => {
-          if (live.current !== d) return;
-          if (t) {
-            armIdle();
-            voiceMark("partial");
-          }
-          d.unsure(t);
+          if (live.current === d) d.unsure(t);
         },
         onNotice: (t) => {
           if (live.current === d) d.notice(t);
@@ -804,6 +853,9 @@ export function TopBarMic() {
         return;
       case "off":
         queue.cancel();
+        // The standby's open mic too: off means off, until switched on again.
+        if (prefsRef.current.wake) setPrefs({ ...prefsRef.current, wake: false });
+        standby.current?.set(false);
         untap?.();
         browserRec.release();
         serverRec.release();
@@ -892,6 +944,63 @@ export function TopBarMic() {
     []
   );
 
+  // --- the wake word: standby, and a wake starting listening -------------- //
+  /** A lone "MindFlock": the chime, "Yes?", and listening as a click starts
+   * it (a text box with the keyboard gets the words); nothing heard within
+   * WAKE_LISTEN_MS is a quiet miss. */
+  const woken = () => {
+    if (live.current) return;
+    chime(voiceAudioCtx());
+    const d = start(textField(document.activeElement), { hint: WAKE_HINT, skipMs: CHIME_MS + 30 });
+    if (!d) return;
+    setTimeout(() => {
+      if (live.current === d && !d.heardAnything) d.drop();
+    }, WAKE_LISTEN_MS);
+  };
+  const latestWake = useRef(woken);
+  latestWake.current = woken;
+  if (!standby.current)
+    standby.current = new WakeStandby({
+      mic: serverRec.mic,
+      ctx: voiceAudioCtx,
+      speaking: () => queue.busy,
+      recording: () => !!live.current,
+      onWake: () => latestWake.current(),
+      onLevel: (rms) => {
+        if (!live.current) meterFeed(rms);
+      },
+      onStatus: (s) => {
+        setWake(s);
+        // The ring follows the level in standby too (lib/voiceMic's meter),
+        // from its start to its stop — a dictation runs its own.
+        if (s.on === standbyMeter || live.current) return;
+        standbyMeter = s.on;
+        if (s.on) meterStart();
+        else meterStop();
+      },
+    });
+  // The pref (this switch, Settings → Voice, another window) turns it on/off.
+  useEffect(() => {
+    standby.current?.set(!!prefs.wake);
+  }, [prefs.wake]);
+  // A dictation pauses it; its end resumes it — so does the page coming back.
+  useEffect(() => {
+    standby.current?.sync();
+  }, [listening]);
+  useEffect(() => {
+    const onVis = () => standby.current?.sync();
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      standby.current?.set(false);
+    };
+  }, []);
+  // Standby stopped with a reason (no recognizer, a refused mic): say it once.
+  useEffect(() => {
+    if (wake.line && prefsRef.current.wake && !live.current) say(wake.line);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wake.line]);
+
   // --- the gestures -------------------------------------------------------- //
   const hold = prefs.ptt === "hold";
 
@@ -963,7 +1072,8 @@ export function TopBarMic() {
       ? hold
         ? "Listening — release to stop (the words stay), Esc to take them back"
         : "Listening — click to stop (the words stay), Esc to take them back"
-      : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") + ", right-click for options";
+      : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") +
+        (wake.on ? ", or say “MindFlock”" : "") + ", right-click for options";
 
   const rect = menuOpen ? btnRef.current?.getBoundingClientRect() : undefined;
   const popStyle = rect
@@ -977,7 +1087,8 @@ export function TopBarMic() {
     : undefined;
 
   const ttsNow = ttsEngine(cfg || cfgNow) === "server" ? "server" : browserSp.available() ? "browser" : "none";
-  const diagnostics = engineDiagnostics(cfg || cfgNow, sttNow, ttsNow);
+  const pass = sttNow === "server" ? passLine((cfg || cfgNow).server_ready.stt_backend, serverRec.passMs) : "";
+  const diagnostics = engineDiagnostics(cfg || cfgNow, sttNow, ttsNow) + (pass ? " · " + pass : "");
 
   return (
     <>
@@ -985,7 +1096,14 @@ export function TopBarMic() {
         id="mic-btn"
         ref={btnRef}
         type="button"
-        className={["tb-item", "mic-ring", listening && "listening", speaking && !listening && "speaking", !supported && "unsupported"]
+        className={[
+          "tb-item",
+          "mic-ring",
+          listening && "listening",
+          wake.on && !listening && "standby",
+          speaking && !listening && "speaking",
+          !supported && "unsupported",
+        ]
           .filter(Boolean)
           .join(" ")}
         title={title}
@@ -1058,8 +1176,8 @@ export function TopBarMic() {
       {showCaption &&
         createPortal(
           <div id="mic-caption" className={listening ? "live" : ""} role="status" aria-live="polite" style={capStyle}>
-            {listening ? liveTail(caption, unsure) : caption}
-            {unsure && <span className="mic-unsure"> {unsure}</span>}
+            {listening ? liveTail(caption, liveUnsure(unsure)) : caption}
+            {unsure && <span className="mic-unsure"> {listening ? liveUnsure(unsure) : unsure}</span>}
           </div>,
           document.body
         )}
@@ -1112,6 +1230,19 @@ export function TopBarMic() {
                 <span>{c.label}</span>
               </label>
             ))}
+            <label className="mic-row" id="mic-wake-row">
+              <input
+                type="checkbox"
+                id="mic-wake"
+                checked={!!prefs.wake}
+                onChange={(e) => setWakePref(e.target.checked)}
+              />
+              <span>Listen for “MindFlock”</span>
+            </label>
+            <div className="mic-hint" id="mic-wake-hint">
+              {WAKE_SWITCH_HINT}
+              {prefs.wake && wake.line && <span className="mic-wake-line"> {wake.line}</span>}
+            </div>
             <div className="mic-sub">Push to talk</div>
             <label className="mic-row">
               <input

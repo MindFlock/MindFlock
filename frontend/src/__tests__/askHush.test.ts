@@ -187,7 +187,8 @@ describe("barge-in: answer before it is done speaking", () => {
   it("TopBarMic.start barges in before r.start and hands the recognizer the skip", () => {
     const MIC = code("components/TopBarMic.tsx");
     const start = MIC.slice(MIC.indexOf("const start = ("), MIC.indexOf("// Before the first word"));
-    const barge = start.indexOf("const skipMs = bargeIn(queue, ask && opts.title === ask.title ? ask.title : \"\")");
+    // (A wake adds its chime's length: lib/wakeWord, the larger skip wins.)
+    const barge = start.indexOf("const skipMs = Math.max(bargeIn(queue, ask && opts.title === ask.title ? ask.title : \"\"), opts.skipMs || 0)");
     expect(barge).toBeGreaterThan(-1);
     expect(start.indexOf("r.start(")).toBeGreaterThan(barge);
     expect(start).toContain("{ skipMs }");

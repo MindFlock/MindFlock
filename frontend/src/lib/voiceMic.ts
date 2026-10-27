@@ -17,8 +17,10 @@
  *    ask pop-up's mic. No React render per block. Its "hearing" edge
  *    ({@link onHearing}) turns the caption's "Listening…" into "Hearing you…".
  *  - Timing ({@link voiceMark}): the moments from the press to the first
- *    committed word, in `window.__mfVoiceTiming` (ms after the press), and on
- *    the console (debug) with localStorage `cs_voice_debug` = "1". */
+ *    word typed and the first committed one, in `window.__mfVoiceTiming` (ms
+ *    after the press), each streaming pass's server time ({@link voicePass},
+ *    `window.__mfVoicePasses`), and both on the console (debug) with
+ *    localStorage `cs_voice_debug` = "1". */
 
 /** How long the microphone stays open after a dictation: long enough for a
  * back-and-forth (say a prompt, hear the reply, answer it) without a cold
@@ -199,18 +201,28 @@ export function pickupLine(ready: boolean, hearing: boolean): string {
   return hearing ? "Hearing you…" : "Listening…";
 }
 
-/** The live caption's length (committed words + the unsure tail): about a
- * line and a half beside the mic. */
-export const LIVE_CAPTION_CHARS = 90;
+/** The top bar's live caption length (settled words + the unsure tail): the
+ * last ~60 characters, one line beside the mic. */
+export const LIVE_CAPTION_CHARS = 60;
 
-/** The committed words of the live caption: only the end of a long
- * dictation (from a word's start, after "…"), leaving room for `tail`. */
-export function liveTail(text: string, tail = "", max = LIVE_CAPTION_CHARS): string {
-  const room = Math.max(24, max - tail.length);
-  if (text.length <= room) return text;
-  const cut = text.slice(text.length - room);
+/** The end of `text` in about `max` characters, from a word's start after "…". */
+function endOf(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const cut = text.slice(text.length - max);
   const sp = cut.indexOf(" ");
   return "…" + (sp >= 0 && sp < cut.length - 1 ? cut.slice(sp + 1) : cut);
+}
+
+/** The settled words of the live caption: only the end of a long
+ * dictation, leaving room for `tail`. */
+export function liveTail(text: string, tail = "", max = LIVE_CAPTION_CHARS): string {
+  return endOf(text, Math.max(16, max - tail.length));
+}
+
+/** The unsure tail of the live caption (shown muted after {@link liveTail}):
+ * its end, when it alone fills the line. */
+export function liveUnsure(tail: string, max = LIVE_CAPTION_CHARS): string {
+  return endOf(tail, max);
 }
 
 /** The RMS of an analyser's time-domain samples. */
@@ -336,14 +348,20 @@ export function meterRef(el: HTMLElement | null): (() => void) | undefined {
 
 /** The moments of a start, in order: the press, the mic recording, the
  * server stream open, the first speech, the first unsure words, the first
- * committed (typed) ones. */
-export type VoiceMoment = "start" | "mic" | "stream" | "speech" | "partial" | "commit";
+ * characters typed (a guess, usually — "first partial typed"), the first
+ * committed words. */
+export type VoiceMoment = "start" | "mic" | "stream" | "speech" | "partial" | "typed" | "commit";
 
 declare global {
   interface Window {
     __mfVoiceTiming?: Partial<Record<VoiceMoment, number>>;
+    /** The last {@link PASSES_KEPT} streaming passes' server times (ms). */
+    __mfVoicePasses?: number[];
   }
 }
+
+const PASSES_KEPT = 20;
+let passes: number[] = [];
 
 let t0 = 0;
 let marks: Partial<Record<VoiceMoment, number>> = {};
@@ -366,4 +384,11 @@ export function voiceMark(m: VoiceMoment): void {
   marks[m] = Math.round(clock() - t0);
   if (typeof window !== "undefined") window.__mfVoiceTiming = { ...marks };
   if (debugOn()) console.debug("[voice] " + m + " +" + marks[m] + " ms");
+}
+
+/** A streaming pass took `ms` on the server (its chunk answer's `ms`). */
+export function voicePass(ms: number): void {
+  passes = [...passes, Math.round(ms)].slice(-PASSES_KEPT);
+  if (typeof window !== "undefined") window.__mfVoicePasses = passes;
+  if (debugOn()) console.debug("[voice] pass " + Math.round(ms) + " ms");
 }

@@ -11,7 +11,7 @@
 
 const DEFAULT_TARGET_RATE = 16000;
 const BLOCK_FRAMES = 4096;
-/** {@link WavRecording.take} returns nothing for less audio than this (s). */
+/** {@link WavRecording.take} returns nothing for less audio than this (s), unless told otherwise. */
 export const TAKE_MIN_S = 0.3;
 
 /** 16-bit PCM mono WAV (44-byte RIFF header, little-endian), type "audio/wav". */
@@ -129,14 +129,20 @@ export interface WavRecording {
   stop(): Promise<Blob>;
   /** The WAV of what was heard since the previous take() (or start), and
    * recording goes on — a streaming recognizer's next chunk. Null for less
-   * than {@link TAKE_MIN_S} (kept for the next take), or once stopped.
+   * than `minS` seconds (default {@link TAKE_MIN_S}; kept for the next
+   * take), or once stopped.
    * Synchronous, so it resamples with {@link resample}; {@link stop} then
    * returns only what came after the last take. */
-  take(): Blob | null;
+  take(minS?: number): Blob | null;
   /** Drop everything; no blob. */
   cancel(): void;
   /** Seconds recorded so far. */
   seconds(): number;
+  /** The WAV of the last `s` seconds heard (at most what is kept: see
+   * {@link WavRecorderOptions.keepS}), resampled by {@link resampleTo};
+   * recording goes on and nothing is drained. Null once stopped or before
+   * any audio — the wake word's standby sends a lone utterance this way. */
+  last(s: number): Promise<Blob | null>;
 }
 
 export interface WavRecorderOptions {
@@ -147,6 +153,10 @@ export interface WavRecorderOptions {
   /** Drop this much audio at the start (seconds), unrecorded and unmetered:
    * the app's own voice, cut just before the mic opened (barge-in). */
   skipS?: number;
+  /** Keep only the last this-many seconds (a rolling window — the wake
+   * word's standby records for as long as it is on; nothing else may grow
+   * without bound). Unset: everything until stop/take. */
+  keepS?: number;
 }
 
 /** Record a MediaStream through `ctx` (the caller's AudioContext, already running) with a
@@ -173,6 +183,7 @@ export function startWavRecording(
   let done = false;
   let result: Promise<Blob> | null = null;
   let skip = Math.max(0, Math.round((opts.skipS || 0) * ctx.sampleRate));
+  const keep = opts.keepS ? Math.max(1, Math.round(opts.keepS * ctx.sampleRate)) : 0;
 
   processor.onaudioprocess = (e: AudioProcessingEvent) => {
     if (done) return;
@@ -185,6 +196,8 @@ export function startWavRecording(
     blocks.push(block);
     frames += block.length;
     fresh += block.length;
+    // The rolling window: whole blocks off the front, never under `keep`.
+    while (keep && blocks.length > 1 && fresh - blocks[0].length >= keep) fresh -= blocks.shift()!.length;
     if (onLevel && block.length) {
       let sum = 0;
       for (let i = 0; i < block.length; i++) sum += block[i] * block[i];
@@ -230,8 +243,8 @@ export function startWavRecording(
       result = resampleTo(all, ctx.sampleRate, targetRate).then((pcm) => encodeWav(pcm, targetRate));
       return result;
     },
-    take() {
-      if (done || fresh < TAKE_MIN_S * ctx.sampleRate) return null;
+    take(minS = TAKE_MIN_S) {
+      if (done || !fresh || fresh < minS * ctx.sampleRate) return null;
       return encodeWav(resample(drain(), ctx.sampleRate, targetRate), targetRate);
     },
     cancel() {
@@ -241,6 +254,19 @@ export function startWavRecording(
     },
     seconds() {
       return frames / ctx.sampleRate;
+    },
+    async last(s: number) {
+      if (done || !fresh) return null;
+      let want = Math.min(fresh, Math.max(1, Math.round(s * ctx.sampleRate)));
+      const out = new Float32Array(want);
+      for (let i = blocks.length - 1; i >= 0 && want > 0; i--) {
+        const b = blocks[i];
+        const n = Math.min(want, b.length);
+        out.set(b.subarray(b.length - n), want - n);
+        want -= n;
+      }
+      const pcm = await resampleTo(out, ctx.sampleRate, targetRate);
+      return encodeWav(pcm, targetRate);
     },
   };
 }

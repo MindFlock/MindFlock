@@ -318,6 +318,39 @@ describe("startWavRecording", () => {
     expect(rec.seconds()).toBeCloseTo(8192 / 48000, 9);
   });
 
+  it("keepS keeps a rolling window (whole blocks, never under it); last(s) is the tail, without draining", async () => {
+    const g = fakeGraph(16000); // the target rate: no resampling in the way
+    const levels: number[] = [];
+    const rec = startWavRecording(STREAM, g.ctx, { keepS: 0.5, onLevel: (r) => levels.push(r) });
+    for (const v of [0.1, 0.2, 0.3, 0.4]) g.fire(new Float32Array(4096).fill(v));
+    expect(levels).toHaveLength(4); // the level of every block, kept or not
+    expect(rec.seconds()).toBeCloseTo((4 * 4096) / 16000, 9);
+    // 0.5 s = 8000 frames: the last two blocks (8192) are what is kept.
+    const all = await view((await rec.last(10))!);
+    expect(all.getUint32(40, true)).toBe(8192 * 2);
+    expect(all.getInt16(44, true)).toBe(Math.round(0.3 * 32767));
+    // The last 0.1 s: 1600 frames off the end of the newest block.
+    const tail = await view((await rec.last(0.1))!);
+    expect(tail.getUint32(40, true)).toBe(1600 * 2);
+    expect(tail.getInt16(44, true)).toBe(Math.round(0.4 * 32767));
+    // Across a block boundary, in order.
+    const two = await view((await rec.last(5000 / 16000))!);
+    expect(two.getInt16(44, true)).toBe(Math.round(0.3 * 32767));
+    expect(two.getInt16(44 + 4999 * 2, true)).toBe(Math.round(0.4 * 32767));
+    // Nothing drained: the same window again; nothing once cancelled.
+    expect((await view((await rec.last(10))!)).getUint32(40, true)).toBe(8192 * 2);
+    rec.cancel();
+    expect(await rec.last(1)).toBeNull();
+  });
+
+  it("without keepS nothing is dropped, and last() before any audio is null", async () => {
+    const g = fakeGraph(16000);
+    const rec = startWavRecording(STREAM, g.ctx);
+    expect(await rec.last(1)).toBeNull();
+    for (let i = 0; i < 6; i++) g.fire(new Float32Array(4096).fill(0.1));
+    expect((await view((await rec.last(100))!)).getUint32(40, true)).toBe(6 * 4096 * 2);
+  });
+
   it("copies each block instead of keeping the engine's reused buffer", async () => {
     const g = fakeGraph(16000);
     const rec = startWavRecording(STREAM, g.ctx);

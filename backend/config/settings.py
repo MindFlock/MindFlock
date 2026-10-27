@@ -1852,6 +1852,11 @@ class VoiceSettings:
       For ``system``, ``tts_voice`` is the OS voice name (a Windows voice like
       "Microsoft Zira Desktop", a macOS voice like "Samantha"); a name the OS
       does not have falls back to its default voice.
+    * ``stt_stream_model`` — the faster-whisper model the LIVE transcript
+      (``POST /api/voice/stream``) runs on ``local``: ``""`` = ``base.en`` for
+      English, ``base`` for any other language — about five times faster
+      than the one-shot ``stt_model`` (``small``), which a phrase sent whole
+      still uses.
     * ``stt_api_key`` / ``tts_api_key`` — SECRETS (masked on read, keep-on-empty
       on write by the settings addon).
 
@@ -1866,6 +1871,7 @@ class VoiceSettings:
     stt_url: str = ""
     stt_api_key: str = ""  # SECRET
     stt_model: str = ""
+    stt_stream_model: str = ""
     tts_backend: str = ""
     tts_url: str = ""
     tts_api_key: str = ""  # SECRET
@@ -1877,6 +1883,7 @@ class VoiceSettings:
         "stt_url",
         "stt_api_key",
         "stt_model",
+        "stt_stream_model",
         "tts_backend",
         "tts_url",
         "tts_api_key",

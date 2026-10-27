@@ -12,6 +12,10 @@ import {
   ANSWER_LISTEN_MS,
   APPROVE_OFF_LINE,
   CONTROL_MAX_WORDS,
+  FIRST_CHUNK_S,
+  chunkMinS,
+  passLine,
+  retype,
   DEFAULT_VOICE_CFG,
   DEFAULT_VOICE_PREFS,
   DICT_HINT,
@@ -135,8 +139,10 @@ describe("Dictation: the machine (what to type, what to take back)", () => {
     d.wrote("fix the login bug ");
     expect(d.heard("and add a test")).toEqual({ kind: "type", text: "and add a test " });
     d.wrote("and add a test ");
-    d.hearing("then push");
-    expect(d.shown).toBe("fix the login bug and add a test then push");
+    // Interim words are a guess: typed, and shown greyed after the settled words.
+    expect(d.hearing("then push")).toEqual({ kind: "type", text: "then push", route: false, guess: true });
+    expect(d.shown).toBe("fix the login bug and add a test");
+    expect(d.partial).toBe("then push");
     expect(d.listening).toBe(true);
   });
 
@@ -331,15 +337,16 @@ describe("LiveDictation: typing into the session as you speak", () => {
     const k = hooks();
     const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
     await d.heard("fix the bug");
-    d.hearing("and the test");
+    await d.hearing("and the test");
+    expect(sent.t1).toEqual(["fix the bug ", "and the test"]); // typed as heard
     await d.finish();
-    expect(sent.t1).toEqual(["fix the bug ", "and the test "]);
+    expect(sent.t1).toEqual(["fix the bug ", "and the test", " "]);
     expect(k.last()).toBe(OVER_LINE);
     expect(mocks.instApi).not.toHaveBeenCalled();
     expect(d.active).toBe(false);
     // Anything the recognizer delivers afterwards is ignored.
     await d.heard("late");
-    expect(sent.t1).toHaveLength(2);
+    expect(sent.t1).toHaveLength(3);
   });
 
   it("“submit” types the phrase, then presses Enter through /send {enter: true, say}", async () => {
@@ -436,32 +443,49 @@ describe("LiveDictation: typing into the session as you speak", () => {
   });
 
   describe("streamed words", () => {
-    it("are typed as they are committed, the last word held back until more come", async () => {
+    it("are typed as soon as the first pass hears them — the unsure tail too — and corrected as they change", async () => {
       const sent = terms();
       const k = hooks();
       const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
-      await d.words("fix the login");
-      expect(sent.t1).toEqual(["fix the "]);
-      expect(k.last()).toBe("fix the login"); // the held word is shown
-      await d.words("bug and");
-      expect(sent.t1).toEqual(["fix the ", "login bug "]);
-      await d.flush("add a test");
-      expect(sent.t1).toEqual(["fix the ", "login bug ", "and add a test "]);
-      // Words that can't open a command never wait on the router.
+      await d.stream("", "fix the");
+      expect(sent.t1).toEqual(["fix the"]); // the first pass, before anything commits
+      expect(k.last()).toBe(""); // settled: nothing yet…
+      expect(k.tails[k.tails.length - 1]).toBe("fix the"); // …the guess greyed
+      await d.stream("fix the", "log in");
+      expect(sent.t1).toEqual(["fix the", " log in"]);
+      await d.stream("", "login bug");
+      // From where they differ: " log in" → " login bug" takes back " in" and types "in bug".
+      expect(sent.t1.slice(2)).toEqual(["\x7f\x7f\x7f", "in bug"]);
+      expect(k.last()).toBe("fix the"); // committed words are solid
+      expect(k.tails[k.tails.length - 1]).toBe("login bug");
+      await d.flush("login bug");
+      expect(sent.t1.slice(4)).toEqual([" "]); // the phrase's end: its trailing space
       expect(k.calls.routed).toEqual([]);
       expect(d.active).toBe(true);
     });
 
-    it("a trailing “submit” in the flush is never typed, and presses Enter", async () => {
+    it("each answer is one correction: the backspaces, then the new end", async () => {
+      const sent = terms();
+      const d = new LiveDictation(sessionTarget("t1", "Login fix"), hooks().h);
+      await d.stream("", "run the test");
+      await d.stream("run the", "tests now");
+      expect(sent.t1).toEqual(["run the test", "s now"]); // a longer guess: no backspace
+      await d.stream("", "tests");
+      expect(sent.t1.slice(2)).toEqual(["\x7f\x7f\x7f\x7f"]); // a shorter one: backspaces only
+      await d.stream("tests", "");
+      expect(sent.t1).toHaveLength(3); // the same text: no keys
+    });
+
+    it("a trailing “submit” in the partial is never typed, and in the flush presses Enter", async () => {
       const sent = terms();
       mocks.instApi.mockResolvedValueOnce({ ok: true });
       const k = hooks();
       const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
-      await d.words("run the tests submit");
-      expect(sent.t1).toEqual(["run the tests "]);
+      await d.stream("run the", "tests submit");
+      expect(sent.t1).toEqual(["run the tests"]);
       expect(mocks.instApi).not.toHaveBeenCalled(); // held: more words may follow
-      await d.flush("");
-      expect(sent.t1).toEqual(["run the tests "]);
+      await d.flush("tests submit");
+      expect(sent.t1).toEqual(["run the tests", " "]);
       expect(sent.t1.join("")).not.toContain("submit");
       expect(mocks.instApi).toHaveBeenCalledWith("t1", "/send", { json: { enter: true, say: false } });
       expect(k.calls.halt).toBe(1);
@@ -474,57 +498,63 @@ describe("LiveDictation: typing into the session as you speak", () => {
       const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
       await d.words("ship the fix");
       await d.flush("Submit.");
-      expect(sent.t1).toEqual(["ship the ", "fix "]);
+      expect(sent.t1).toEqual(["ship the fix", " "]);
       expect(mocks.instApi).toHaveBeenCalledTimes(1);
       const sent2 = terms();
       const d2 = new LiveDictation(sessionTarget("t2", "Billing"), hooks().h);
-      await d2.words("deploy it submit it");
-      expect(sent2.t2).toEqual(["deploy it "]);
-      await d2.flush("");
-      expect(sent2.t2).toEqual(["deploy it "]);
+      await d2.stream("deploy it", "submit it");
+      expect(sent2.t2).toEqual(["deploy it"]);
+      await d2.flush("submit it");
+      expect(sent2.t2).toEqual(["deploy it", " "]);
       expect(mocks.instApi).toHaveBeenCalledTimes(2);
+    });
+
+    it("a held control word goes in once the next word rules it out", async () => {
+      const sent = terms();
+      const d = new LiveDictation(sessionTarget("t1", "Login fix"), hooks().h);
+      await d.stream("", "move it over");
+      expect(sent.t1).toEqual(["move it"]);
+      await d.stream("", "move it over here");
+      expect(sent.t1).toEqual(["move it", " over here"]);
+      await d.stream("", "move it over here and stop");
+      expect(sent.t1.slice(2)).toEqual([" and"]); // "stop" may be "stop recording"
     });
 
     it("“over” at the end of a streamed phrase stops with the words in the field", async () => {
       const sent = terms();
       const k = hooks();
       const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
-      await d.words("leave it there over");
-      await d.flush("");
-      expect(sent.t1).toEqual(["leave it there "]);
+      await d.stream("", "leave it there over");
+      await d.flush("leave it there over");
+      expect(sent.t1).toEqual(["leave it there", " "]);
       expect(k.last()).toBe(OVER_LINE);
       expect(mocks.instApi).not.toHaveBeenCalled();
     });
 
-    it("“disregard” backspaces everything this dictation typed, streamed words included", async () => {
+    it("“disregard” backspaces everything this dictation typed, the guess included", async () => {
       const sent = terms();
       const k = hooks();
       const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
       await d.heard("café"); // a phrase from before (clip or stream alike)
-      await d.words("scrap this whole");
-      await d.words("thing disregard");
-      expect(sent.t1).toEqual(["café ", "scrap this ", "whole thing "]);
-      await d.flush("that");
-      expect(sent.t1[3]).toBe("\x7f".repeat("café scrap this whole thing ".length));
+      await d.stream("scrap this", "whole thing disregard");
+      expect(sent.t1).toEqual(["café ", "scrap this whole thing"]);
+      await d.flush("whole thing disregard that");
+      expect(sent.t1[2]).toBe("\x7f".repeat("café scrap this whole thing".length));
       expect(k.last()).toBe("Disregarded — go on");
       expect(d.active).toBe(true);
     });
 
-    it("the unsure tail is shown muted and never typed — not even when let go", async () => {
+    it("never takes back past the phrase's start: what came before stays", async () => {
       const sent = terms();
-      const k = hooks();
-      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
-      await d.words("fix the bug");
-      d.unsure("in the parser maybe");
-      expect(k.last()).toBe("fix the bug");
-      expect(k.tails[k.tails.length - 1]).toBe("in the parser maybe");
-      await d.flush("");
-      await d.finish();
-      expect(sent.t1.join("")).toBe("fix the bug ");
-      expect(sent.t1.join("")).not.toContain("parser");
+      const d = new LiveDictation(sessionTarget("t1", "Login fix"), hooks().h);
+      await d.heard("first part");
+      await d.stream("", "fix it");
+      await d.stream("", "Different words");
+      expect(sent.t1).toEqual(["first part ", "fix it", "\x7f\x7f\x7f\x7f\x7f\x7f", "Different words"]);
+      expect(d.dict.typed).toBe("first part Different words");
     });
 
-    it("a first phrase that may be a command waits whole for the router", async () => {
+    it("a first phrase that may be a command waits whole for the router — even a guess that turns into one", async () => {
       const sent = terms();
       const k = hooks({
         route: async (t) => {
@@ -533,13 +563,14 @@ describe("LiveDictation: typing into the session as you speak", () => {
         },
       });
       const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
-      await d.words("switch to");
-      await d.words("the login fix");
-      expect(sent.t1).toBeUndefined();
+      await d.stream("", "switch two the");
+      expect(sent.t1).toEqual(["switch two the"]); // can't be a command: typed
+      await d.stream("switch to", "the login fix");
+      expect(sent.t1).toEqual(["switch two the", "\x7f".repeat("switch two the".length)]); // now it may: taken back
       expect(k.calls.routed).toEqual([]);
-      await d.flush("");
+      await d.flush("the login fix");
       expect(k.calls.routed).toEqual(["switch to the login fix"]);
-      expect(sent.t1).toBeUndefined();
+      expect(sent.t1).toHaveLength(2);
     });
 
     it("…and is typed once the words rule a command out", async () => {
@@ -549,7 +580,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
       await d.words("stop");
       expect(sent.t1).toBeUndefined();
       await d.words("the server first");
-      expect(sent.t1).toEqual(["stop the server "]);
+      expect(sent.t1).toEqual(["stop the server first"]);
       expect(k.calls.routed).toEqual([]);
     });
 
@@ -559,28 +590,52 @@ describe("LiveDictation: typing into the session as you speak", () => {
       await d.words("submit");
       await d.words("the form then");
       await d.flush("wait");
-      expect(sent.t1).toEqual(["submit the form ", "then wait "]);
+      expect(sent.t1).toEqual(["submit the form then", " wait "]);
       expect(mocks.instApi).not.toHaveBeenCalled();
     });
 
-    it("the dialog guard still comes first", async () => {
+    it("the dialog guard still comes first: no guess goes in, and the phrase's end says why", async () => {
       const sent = terms();
       const k = hooks({ activity: () => "clarify" });
       const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
-      await d.words("yes do it now");
+      await d.stream("yes do", "it now");
+      expect(sent.t1).toBeUndefined();
+      expect(d.active).toBe(true);
+      await d.flush("it now");
       expect(sent.t1).toBeUndefined();
       expect(k.last()).toBe("Login fix is waiting on a dialog — answer it first");
       expect(d.active).toBe(false);
     });
 
-    it("a text box takes streamed words too, never routed", async () => {
-      const typed: string[] = [];
-      const box: DictTarget = { kind: "field", title: "", name: "the text box", type: (t) => typed.push(t) > 0, erase: () => true };
+    it("with no session focused a guess isn't typed, and doesn't end the dictation", async () => {
+      const k = hooks();
+      const d = new LiveDictation(null, k.h);
+      await d.stream("", "Swish to the");
+      expect(d.active).toBe(true);
+      await d.flush("fix the bug");
+      expect(k.last()).toBe("Click a session first — “fix the bug” not typed");
+    });
+
+    it("a text box takes streamed words too, never routed, a correction setting its value once", async () => {
+      const ops: string[] = [];
+      const box: DictTarget = {
+        kind: "field",
+        title: "",
+        name: "the text box",
+        type: (t) => ops.push("type:" + t) > 0,
+        erase: (t) => ops.push("erase:" + t) > 0,
+        replace: (old, t) => ops.push("replace:" + old + "→" + t) > 0,
+      };
       const k = hooks();
       const d = new LiveDictation(box, k.h);
-      await d.words("switch to the");
+      await d.stream("", "switch to the");
+      await d.stream("switch to the", "other bran");
+      await d.stream("", "other branch");
       await d.flush("other branch");
-      expect(typed).toEqual(["switch to ", "the other branch "]);
+      expect(ops).toEqual(["replace:→switch to the", "replace:→ other bran", "replace:→ch", "replace:→ "]);
+      await d.stream("", "and the tusts");
+      await d.stream("", "and the tests");
+      expect(ops.slice(4)).toEqual(["replace:→and the tusts", "replace:usts→ests"]);
       expect(k.calls.routed).toEqual([]);
     });
   });
@@ -593,15 +648,129 @@ describe("LiveDictation: typing into the session as you speak", () => {
   });
 });
 
+describe("typing as you speak: the guess and its corrections", () => {
+  it.each([
+    // [typed so far, the new text, backspaced, typed]
+    ["", "fix the", "", "fix the"],
+    ["fix the", "fix the login bug", "", " login bug"], // committed beyond what was typed
+    ["fix the bu", "fix the bag", "u", "ag"], // a mid-word change
+    ["fix the log in", "fix the login", " in", "in"],
+    ["run the tests now", "run the tests", " now", ""], // a shorter partial
+    ["same", "same", "", ""],
+    ["café au", "café olé", "au", "olé"], // by code point
+    ["ship 🚀 now", "ship 🚀", " now", ""],
+    ["Fix it", "fix it", "Fix it", "fix it"],
+  ] as const)("retype(%j → %j): erase %j, type %j", (before, after, erase, type) => {
+    expect(retype(before, after)).toEqual({ erase, type });
+    expect(backspaces(erase).length).toBe(Array.from(erase).length);
+  });
+
+  it("the machine: the phrase is guessed as it comes, settled at its end with its trailing space", () => {
+    const d = new Dictation();
+    d.begin();
+    const keys = (o: ReturnType<Dictation["stream"]>) => {
+      if (o.kind === "type" || o.kind === "over" || o.kind === "submit") {
+        d.unwrote(o.erase || "");
+        d.wrote(o.text);
+      }
+      return o;
+    };
+    expect(keys(d.stream("", "fix the"))).toEqual({ kind: "type", text: "fix the", route: false, guess: true });
+    expect(keys(d.stream("fix the", "bag"))).toEqual({ kind: "type", text: " bag", route: false, guess: true });
+    expect(keys(d.stream("", "bug"))).toEqual({ kind: "type", text: "ug", erase: "ag", route: false, guess: true });
+    expect(d.guessed).toBe("fix the bug");
+    expect(d.shown).toBe("fix the"); // settled: the committed words
+    expect(keys(d.stream("", "bug"))).toEqual({ kind: "continue" }); // no change, no keys
+    expect(keys(d.flush("bug."))).toEqual({ kind: "type", text: ". " });
+    expect(d.typed).toBe("fix the bug. ");
+    expect(d.guessed).toBe("");
+    // The next phrase never reaches back into this one.
+    expect(keys(d.stream("", "Totally different"))).toEqual({ kind: "type", text: "Totally different", route: false, guess: true });
+    expect(keys(d.stream("", "X"))).toEqual({ kind: "type", text: "X", erase: "Totally different", route: false, guess: true });
+    expect(d.typed).toBe("fix the bug. X");
+  });
+
+  it("the control-phrase hold: a trailing radio word or stop phrase — or its start — is never typed, even as a guess", () => {
+    const d = new Dictation();
+    d.begin();
+    const typed = (o: ReturnType<Dictation["stream"]>) => (o.kind === "type" ? (d.wrote(o.text), o.text) : "");
+    expect(typed(d.stream("", "please fix it over"))).toBe("please fix it");
+    expect(typed(d.stream("", "please fix it submit"))).toBe("");
+    expect(typed(d.stream("", "please fix it disregard that"))).toBe("");
+    expect(typed(d.stream("", "please fix it stop"))).toBe(""); // …recording?
+    expect(typed(d.stream("", "please fix it that is"))).toBe(""); // …all?
+    expect(d.typed).toBe("please fix it");
+    // Committed, the stop phrase acts: the guess is corrected to the words before it.
+    const o = d.stream("please fix it stop recording", "");
+    expect(o).toEqual({ kind: "over", text: " ", stop: true });
+    expect(d.listening).toBe(false);
+  });
+
+  it("“disregard” at the end takes the whole dictation out — the phrase's guess too", () => {
+    const d = new Dictation();
+    d.begin();
+    d.wrote("earlier words ");
+    const g = d.stream("scrap", "that idea");
+    if (g.kind === "type") d.wrote(g.text);
+    expect(d.typed).toBe("earlier words scrap that idea");
+    expect(d.flush("that idea disregard")).toEqual({ kind: "erase", text: "earlier words scrap that idea" });
+    expect(d.typed).toBe("");
+    expect(d.listening).toBe(true);
+  });
+
+  it("“stop talking” as the whole phrase takes its guess back; a hush is never typed", () => {
+    const d = new Dictation();
+    d.begin();
+    d.wrote("one ");
+    const g = d.stream("", "please");
+    expect(g).toEqual({ kind: "type", text: "please", route: false, guess: true });
+    d.wrote("please");
+    expect(d.stream("please", "be quiet")).toEqual({ kind: "continue" }); // "be quiet" held whole
+    expect(d.flush("be quiet")).toEqual({ kind: "hush", erase: "please" });
+  });
+
+  it("the browser recognizer's interim words go the same way: typed, corrected, then settled by the final", async () => {
+    const sent: string[] = [];
+    mocks.peekTerm.mockImplementation(() => ({ send: (x: string) => (sent.push(x), true) }));
+    try {
+      const h: LiveHooks = {
+        caption: () => {},
+        halt: () => {},
+        route: async () => false,
+        activity: () => "idle",
+        replies: () => false,
+        submitted: () => {},
+      };
+      const d = new LiveDictation(sessionTarget("t1", "Login fix"), h);
+      await d.hearing("fix the");
+      await d.hearing("fix the bug");
+      await d.hearing("fix the bag");
+      await d.heard("fix the bag.");
+      expect(sent).toEqual(["fix the", " bug", "\x7f\x7f", "ag", ". "]);
+      // A later phrase: interim words after the first final.
+      await d.hearing("and run");
+      await d.hearing("and run the tests over");
+      await d.heard("and run the tests over");
+      expect(sent.slice(5)).toEqual(["and run", " the tests", " "]);
+      expect(d.active).toBe(false);
+      expect(MIC_SRC).toContain("void d.hearing(t)");
+    } finally {
+      mocks.peekTerm.mockReset();
+    }
+  });
+});
+
 describe("streaming helpers", () => {
   it.each([
-    ["fix the login bug", "fix the login", "bug"],
+    ["fix the login bug", "fix the login bug", ""],
     ["run the tests submit", "run the tests", "submit"],
     ["deploy it submit it", "deploy it", "submit it"],
     ["scrap that, Disregard that.", "scrap that,", "Disregard that."],
     ["move it over", "move it", "over"],
-    ["it", "", "it"],
-    ["done .", "", "done ."],
+    ["it", "it", ""],
+    ["done .", "done .", ""],
+    ["please stop", "please", "stop"],
+    ["submit .", "", "submit ."],
     ["", "", ""],
   ])("holdBack(%j) types %j, holds %j", (text, type, held) => {
     expect(holdBack(text)).toEqual({ type, held });
@@ -640,9 +809,9 @@ describe("streaming helpers", () => {
 });
 
 describe("prefs: cs_voice_desktop", () => {
-  it("defaults to click-to-talk with replies OFF", () => {
-    expect(DEFAULT_VOICE_PREFS).toEqual({ ptt: "toggle", replies: "off" });
-    expect(loadVoicePrefs(memKV())).toEqual({ ptt: "toggle", replies: "off" });
+  it("defaults to click-to-talk with replies OFF and no wake-word standby", () => {
+    expect(DEFAULT_VOICE_PREFS).toEqual({ ptt: "toggle", replies: "off", wake: false });
+    expect(loadVoicePrefs(memKV())).toEqual({ ptt: "toggle", replies: "off", wake: false });
     expect(loadVoicePrefs(null)).toEqual(DEFAULT_VOICE_PREFS);
   });
 
@@ -650,8 +819,8 @@ describe("prefs: cs_voice_desktop", () => {
     for (const replies of ["off", "mine", "all"] as const) {
       const kv = memKV();
       saveVoicePrefs({ ptt: "hold", replies }, kv);
-      expect(JSON.parse(kv.m.get(VOICE_PREFS_KEY)!)).toEqual({ ptt: "hold", replies });
-      expect(loadVoicePrefs(kv)).toEqual({ ptt: "hold", replies });
+      expect(JSON.parse(kv.m.get(VOICE_PREFS_KEY)!)).toEqual({ ptt: "hold", replies, wake: false });
+      expect(loadVoicePrefs(kv)).toEqual({ ptt: "hold", replies, wake: false });
     }
     expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: "{nope" }))).toEqual(DEFAULT_VOICE_PREFS);
     expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: '{"ptt":"sideways","replies":"yes"}' }))).toEqual(
@@ -660,8 +829,8 @@ describe("prefs: cs_voice_desktop", () => {
   });
 
   it("the old switch loads as its meaning: true is 'mine' (replies to what you said), false 'off'", () => {
-    expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: '{"ptt":"hold","replies":true}' }))).toEqual({ ptt: "hold", replies: "mine" });
-    expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: '{"ptt":"toggle","replies":false}' }))).toEqual({ ptt: "toggle", replies: "off" });
+    expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: '{"ptt":"hold","replies":true}' }))).toEqual({ ptt: "hold", replies: "mine", wake: false });
+    expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: '{"ptt":"toggle","replies":false}' }))).toEqual({ ptt: "toggle", replies: "off", wake: false });
     expect(repliesMode(true)).toBe("mine");
     expect(repliesMode("all")).toBe("all");
     expect(repliesMode(undefined)).toBe("off");
@@ -671,6 +840,17 @@ describe("prefs: cs_voice_desktop", () => {
     const p = (replies: "off" | "mine" | "all") => ({ ptt: "toggle" as const, replies });
     expect([sayOnSend(true, p("off")), sayOnSend(true, p("mine")), sayOnSend(true, p("all"))]).toEqual([false, true, true]);
     expect([sayOnSend(false, p("off")), sayOnSend(false, p("mine")), sayOnSend(false, p("all"))]).toEqual([false, false, true]);
+  });
+
+  it("the wake-word standby: on only when saved true, kept through a save, absent reads as off", () => {
+    const kv = memKV();
+    saveVoicePrefs({ ptt: "toggle", replies: "off", wake: true }, kv);
+    expect(JSON.parse(kv.m.get(VOICE_PREFS_KEY)!)).toEqual({ ptt: "toggle", replies: "off", wake: true });
+    expect(loadVoicePrefs(kv).wake).toBe(true);
+    saveVoicePrefs({ ...loadVoicePrefs(kv), replies: "mine" }, kv);
+    expect(loadVoicePrefs(kv)).toEqual({ ptt: "toggle", replies: "mine", wake: true });
+    for (const raw of ['{"wake":"yes"}', '{"wake":1}', '{"ptt":"hold"}'])
+      expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: raw })).wake).toBe(false);
   });
 
   it("a storage that throws never breaks the mic", () => {
@@ -1432,6 +1612,77 @@ describe("serverRecognizer: streaming, words as you speak", () => {
       vi.restoreAllMocks();
     }
   });
+
+  it("paces by the server: the first chunk after 150 ms of speech, later ones after ~0.8 × the last pass (150–600 ms)", async () => {
+    let answer: (v: unknown) => void = () => {};
+    const slow = () => new Promise((res) => (answer = res));
+    const t = setup(server([() => resp(200, { committed: "", partial: "fix", ms: 500 }), slow]));
+    const r = serverRecognizer({ stream: () => true });
+    r.start(t.h);
+    await vi.waitFor(() => expect(t.clips.length).toBe(1));
+    t.clips[0].feed();
+    t.block(0, false); // the quiet before: trimmed (no lead-in left)
+    t.block(0, true); // speech
+    await vi.waitFor(() => expect(t.calls.length).toBe(1));
+    await Promise.resolve();
+    t.clips[0].feed();
+    t.block(0, true);
+    expect(t.chunks()).toBe(1);
+    expect(t.clips[0].take.mock.calls.at(-1)).toEqual([FIRST_CHUNK_S]);
+    expect(FIRST_CHUNK_S).toBe(0.15);
+    await vi.waitFor(() => expect(r.passMs).toBe(500));
+    t.clips[0].feed();
+    t.block(0, true);
+    expect(t.chunks()).toBe(2);
+    expect(t.clips[0].take.mock.calls.at(-1)).toEqual([0.4]); // 500 ms × 0.8
+    // A pass still running when the next chunk is due: the audio waits, and
+    // goes together when it is back (one request in flight).
+    t.clips[0].feed();
+    t.block(0, true);
+    t.block(0, true);
+    expect(t.chunks()).toBe(2);
+    answer(resp(200, { committed: "fix", partial: "the bug", ms: 90 }));
+    await vi.waitFor(() => expect(t.chunks()).toBe(3));
+    expect(t.clips[0].take.mock.calls.at(-1)).toEqual([0.15]); // a fast pass: the floor
+    r.stop();
+  });
+
+  it.each([
+    [null, 0.3],
+    [0, 0.3],
+    [100, 0.15],
+    [187.5, 0.15],
+    [500, 0.4],
+    [750, 0.6],
+    [2000, 0.6],
+  ] as const)("chunkMinS(%j) → %j s", (ms, want) => {
+    expect(chunkMinS(ms)).toBeCloseTo(want, 6);
+  });
+
+  it("with onStream, each chunk's answer arrives whole — once — and the pass time is kept", async () => {
+    const t = setup(server([() => resp(200, { committed: ["fix", "the"], partial: "bug", ms: 412 })], ["bug"]));
+    const got: Array<[string, string]> = [];
+    const r = serverRecognizer({ stream: () => true });
+    r.start({ ...t.h, onStream: (w, p) => void got.push([w, p]) });
+    await vi.waitFor(() => expect(t.clips.length).toBe(1));
+    t.block(0, false);
+    t.block(0, true);
+    await vi.waitFor(() => expect(t.calls.length).toBe(1));
+    await Promise.resolve();
+    t.clips[0].feed();
+    t.block(0, true);
+    await vi.waitFor(() => expect(got).toEqual([["fix the", "bug"]]));
+    expect(t.ev.filter((e) => e.startsWith("words:") || e.startsWith("partial:"))).toEqual([]);
+    expect(r.passMs).toBe(412);
+    expect(passLine("local", r.passMs)).toBe("whisper ~0.4 s/pass");
+    expect(passLine("", 1234)).toBe("whisper ~1.2 s/pass");
+    expect(passLine("system", 300)).toBe("system ~0.3 s/pass");
+    expect(passLine("local", null)).toBe("");
+    // The phrase's end still clears the tail and flushes.
+    r.finish();
+    await vi.waitFor(() => expect(t.ev).toContain("end"));
+    expect(t.ev.slice(-3)).toEqual(["partial:", "flush:bug", "end"]);
+  });
 });
 
 describe("wiring", () => {
@@ -1503,9 +1754,9 @@ describe("wiring", () => {
     expect(MIC).toContain("Hold to talk");
   });
 
-  it("streams when GET /api/voice says the server can, and the unsure tail is shown muted, never typed", () => {
+  it("streams when GET /api/voice says the server can: each answer typed as a guess, the unsure tail shown muted", () => {
     expect(MIC).toContain("serverRecognizer({ stream: () => !!cfgNow.server_ready.stt_stream })");
-    expect(MIC).toContain("void d.words(t)");
+    expect(MIC).toContain("void d.stream(w, p)");
     expect(MIC).toContain("void d.flush(t)");
     expect(MIC).toContain("d.unsure(t)");
     expect(MIC).toContain('<span className="mic-unsure">');
@@ -1626,9 +1877,9 @@ describe("control words at any point", () => {
     const k = hooks();
     const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
     await d.words("ship it that is");
-    expect(sent.t1).toEqual(["ship it "]);
+    expect(sent.t1).toEqual(["ship it"]);
     await d.words("all");
-    expect(sent.t1).toEqual(["ship it "]);
+    expect(sent.t1).toEqual(["ship it", " "]);
     expect(k.calls.halt).toBe(1);
   });
 
@@ -1653,7 +1904,7 @@ describe("control words at any point", () => {
     const d = new LiveDictation(sessionTarget("t1", "Login fix"), hooks().h);
     await d.words("stop");
     await d.words("the server and");
-    expect(sent.t1).toEqual(["stop the server "]);
+    expect(sent.t1).toEqual(["stop the server and"]);
   });
 
   it("with a question pending, a lone answer goes to the router at once — before the phrase ends", async () => {
@@ -2010,8 +2261,8 @@ describe("voice prefs are shared between the popover and Settings → Voice", ()
       const off = mod.onVoicePrefs((p) => seen.push(p));
       const kv = { store: {} as Record<string, string>, getItem(k: string) { return this.store[k] ?? null; }, setItem(k: string, v: string) { this.store[k] = v; } };
       mod.saveVoicePrefs({ ptt: "hold", replies: "all" }, kv);
-      expect(seen).toEqual([{ ptt: "hold", replies: "all" }]);
-      expect(JSON.parse(kv.store[mod.VOICE_PREFS_KEY])).toEqual({ ptt: "hold", replies: "all" });
+      expect(seen).toEqual([{ ptt: "hold", replies: "all", wake: false }]);
+      expect(JSON.parse(kv.store[mod.VOICE_PREFS_KEY])).toEqual({ ptt: "hold", replies: "all", wake: false });
       off();
       mod.saveVoicePrefs({ ptt: "toggle", replies: "off" }, kv);
       expect(seen).toHaveLength(1);

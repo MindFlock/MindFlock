@@ -104,6 +104,30 @@ class TestGet:
         assert sr["tts"] is False
         assert sr["tts_detail"] == "local models not installed: uv sync --group voice"
 
+    def test_reports_the_stream_model_and_warm_ups(self, fakes):
+        body = client.get("/api/voice").json()
+        assert body["stream_model"] == ""  # the fake does not stream
+        assert body["warm"] == {"stt": "", "tts": ""}
+
+    def test_warms_both_kinds(self, fakes, monkeypatch):
+        calls: list = []
+        monkeypatch.setattr(
+            speech, "warm_in_background", lambda kind, delay_s=0.0: calls.append(kind)
+        )
+        assert client.get("/api/voice").status_code == 200
+        assert calls == ["stt", "tts"]
+
+    def test_boot_warms_both_kinds(self, fakes, monkeypatch):
+        calls: list = []
+        monkeypatch.setattr(
+            speech,
+            "warm_in_background",
+            lambda kind, delay_s=0.0: calls.append((kind, delay_s)),
+        )
+        with TestClient(server.app):
+            pass
+        assert calls == [("stt", 3.0), ("tts", 6.0)]
+
     def test_system_block(self, fakes, monkeypatch):
         from backend.web.core import speech_system
 
@@ -371,6 +395,14 @@ class TestClearKey:
             client.get("/api/settings").json()["settings"]["voice"]["stt_api_key"] == ""
         )
 
+    def test_the_model_fields_are_owner_only(self):
+        # The settings POST allow-list: a voice model is never an open field.
+        from backend.web.addons import settings as addon
+
+        assert addon._guarded_paths(
+            {"voice": {"stt_model": "tiny", "stt_stream_model": "tiny.en"}}
+        ) == ["voice.stt_model", "voice.stt_stream_model"]
+
     def test_400_bad_kind(self, fakes):
         assert (
             client.post("/api/voice/clear-key", json={"kind": "github"}).status_code
@@ -436,13 +468,15 @@ def streaming(fakes):
     speech_stream.clear()
 
 
-def _wav(seconds=0.5, rate=16000, channels=1):
+def _wav(seconds=0.5, rate=16000, channels=1, sample=b"\x00\x10"):
+    """A WAV chunk; each sample ``sample`` (default 4096/32768: speech-loud,
+    so the stream's silence check lets the pass run)."""
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
         w.setnchannels(channels)
         w.setsampwidth(2)
         w.setframerate(rate)
-        w.writeframes(b"\x00\x00" * int(seconds * rate) * channels)
+        w.writeframes(sample * int(seconds * rate) * channels)
     return buf.getvalue()
 
 
@@ -498,9 +532,10 @@ class TestStream:
         r = _chunk(sid)
         assert r.status_code == 200
         first = r.json()
-        assert set(first) == {"committed", "partial", "ms", "audio_s"}
+        assert set(first) == {"committed", "partial", "ms", "window_s", "audio_s"}
         assert first["committed"] == "" and first["partial"] == "hello world"
         assert isinstance(first["ms"], int) and first["audio_s"] == 0.5
+        assert first["window_s"] == 0.5
         second = _chunk(sid).json()
         assert (second["committed"], second["partial"]) == ("Hello world", "how")
         assert second["audio_s"] == 1.0
@@ -552,6 +587,22 @@ class TestStream:
         assert r.status_code == 502
         assert r.json()["error"] == "faster-whisper failed: boom"
         assert _chunk(sid).json()["audio_s"] == 1.0
+
+    def test_a_quiet_chunk_runs_no_pass(self, streaming):
+        sid = _open().json()["id"]
+        r = _chunk(sid, body=_wav(sample=b"\x00\x00"))
+        assert r.status_code == 200
+        assert r.json() == {
+            "committed": "",
+            "partial": "",
+            "ms": 0,
+            "window_s": 0.0,
+            "audio_s": 0.5,
+        }
+        assert [c for c in streaming.calls if c[0] == "pass"] == []
+        streaming.passes.append(_words("hi"))
+        body = _chunk(sid).json()
+        assert body["partial"] == "hi" and body["window_s"] == 1.0
 
     def test_delete_abandons(self, streaming):
         sid = _open().json()["id"]

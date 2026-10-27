@@ -415,11 +415,12 @@ class TestLocalStream:
     def model(self, monkeypatch):
         from array import array
 
-        seen: dict = {"loads": 0, "calls": []}
+        seen: dict = {"loads": 0, "calls": [], "names": []}
 
         class _Model:
             def __init__(self, name, **kw):
                 seen["loads"] += 1
+                seen["names"].append(name)
 
             def transcribe(self, audio, **kw):
                 seen["calls"].append((audio, kw))
@@ -467,7 +468,42 @@ class TestLocalStream:
         run(array("f"), "")
         assert model["calls"][1][1]["initial_prompt"] is None
         assert model["loads"] == 1  # the cached model
-        assert speech.loaded() == ["whisper:small"]
+        # The streaming model, not the one-shot "small": base for Portuguese.
+        assert model["names"] == ["base"]
+        assert speech.loaded() == ["whisper:base"]
+
+    @pytest.mark.parametrize(
+        "lang,setting,name",
+        [
+            ("en-US", "", "base.en"),
+            ("", "", "base.en"),
+            ("EN", "", "base.en"),
+            ("de-DE", "", "base"),
+            ("fr", "tiny", "tiny"),
+            ("en-GB", "small.en", "small.en"),
+            ("en", "whisper-1", "base.en"),  # a host's name is not a size
+            ("en", "Systran/faster-whisper-tiny.en", "Systran/faster-whisper-tiny.en"),
+        ],
+    )
+    def test_the_stream_model_by_language_and_setting(self, model, lang, setting, name):
+        from array import array
+
+        _set(stt_stream_model=setting)
+        stt = speech.LocalSTT()
+        assert stt.stream_model_name(lang) == name
+        stt.stream_transcriber(lang)(array("f", [0.0]), "")
+        assert model["names"] == [name]
+        assert speech.loaded() == ["whisper:" + name]
+
+    def test_the_one_shot_keeps_its_own_model(self, model):
+        from array import array
+
+        _set(stt_model="medium")
+        stt = speech.LocalSTT()
+        stt.stream_transcriber("en")(array("f", [0.0]), "")
+        assert stt._model() is not None
+        assert model["names"] == ["base.en", "medium"]
+        assert speech.loaded() == ["whisper:base.en", "whisper:medium"]
 
     def test_refusals_are_speech_errors(self, model, monkeypatch):
         from array import array
@@ -811,17 +847,33 @@ class TestWarm:
         _set(stt_backend="local")
         return whisper
 
-    def test_warm_loads_and_primes_once(self, local):
+    def test_warm_loads_and_primes_both_models_once(self, local):
         assert speech.warm("stt") == "loaded"
-        assert speech.loaded() == ["whisper:small"]
-        assert len(local.loads) == 1
-        # The priming pass: a short silent array, greedy, no VAD.
-        ((path, kw),) = local.calls
-        assert path == ("zeros", 8000, "float32")
-        assert kw == {"language": "en", "beam_size": 1, "vad_filter": False}
+        # The one-shot model and the live transcript's.
+        assert speech.loaded() == ["whisper:base.en", "whisper:small"]
+        assert sorted(n for n, _kw in local.loads) == ["base.en", "small"]
+        # One priming pass each: a short silent array, greedy, no VAD.
+        assert len(local.calls) == 2
+        for path, kw in local.calls:
+            assert path == ("zeros", 8000, "float32")
+            assert kw == {"language": "en", "beam_size": 1, "vad_filter": False}
         # Resident already: nothing loaded, nothing primed.
         assert speech.warm("stt") == "already"
-        assert len(local.loads) == 1 and len(local.calls) == 1
+        assert len(local.loads) == 2 and len(local.calls) == 2
+        assert speech.describe()["warm"]["stt"] == "loaded"
+
+    def test_warm_loads_the_one_missing_model(self, local):
+        speech.LocalSTT().transcribe(b"x", "audio/wav", "")
+        assert speech.loaded() == ["whisper:small"]
+        assert speech.warm("stt") == "loaded"
+        assert speech.loaded() == ["whisper:base.en", "whisper:small"]
+        assert len(local.loads) == 2
+
+    def test_one_model_for_both_loads_once(self, local):
+        _set(stt_backend="local", stt_model="base.en")
+        assert speech.warm("stt") == "loaded"
+        assert speech.loaded() == ["whisper:base.en"]
+        assert len(local.loads) == 1
 
     def test_warm_skips_unless_the_backend_is_local(self, whisper, monkeypatch):
         monkeypatch.setattr(
@@ -849,8 +901,8 @@ class TestWarm:
         assert t is not None
         t.join(5)
         assert not t.is_alive()
-        assert speech.loaded() == ["whisper:small"]
-        assert len(local.loads) == 1
+        assert speech.loaded() == ["whisper:base.en", "whisper:small"]
+        assert len(local.loads) == 2
         # Resident: nothing to do.
         assert speech.warm_in_background("stt") is None
         speech.unload_all()
@@ -872,9 +924,10 @@ class TestWarm:
         t = speech.warm_in_background("stt")
         assert t is not None
         assert speech.warm_in_background("stt") is None  # already warming
+        assert speech.describe()["warm"]["stt"] == "loading"
         gate.set()
         t.join(5)
-        assert speech.loaded() == ["whisper:small"]
+        assert speech.loaded() == ["whisper:base.en", "whisper:small"]
 
 
 def test_a_prompt_biases_the_local_decoder(whisper):
@@ -947,3 +1000,194 @@ class TestLocalHostNeedsNoKey:
             speech.OpenAISTT().transcribe(b"RIFF", "audio/wav", "en") == "hello there"
         )
         assert "Authorization" not in http.calls[0].headers
+
+
+# --------------------------------------------------------------------------- #
+# Resident recognition, the voice's warm-up, describe()'s additions
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def both(monkeypatch):
+    """faster-whisper and piper both installed (fakes), numpy faked."""
+    w, p = _FakeWhisper(), _FakePiper()
+    mods = dict(p.modules, faster_whisper=w, numpy=_FakeNumpy)
+    monkeypatch.setattr(
+        speech, "_installed", lambda n: n in ("faster_whisper", "piper")
+    )
+    monkeypatch.setattr(speech, "_import", lambda n: mods[n])
+    return SimpleNamespace(whisper=w, piper=p)
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(speech, "_now", lambda: now[0])
+    return now
+
+
+class TestResident:
+    """While recognition is ``local`` its whisper models are never idle-
+    unloaded; piper voices (and everything else) still are."""
+
+    WHISPERS = ["whisper:base.en", "whisper:small"]
+
+    def test_local_recognition_stays_voices_unload(self, both, clock):
+        _set(stt_backend="local", tts_backend="local")
+        assert speech.warm("stt") == "loaded"
+        assert speech.warm("tts") == "loaded"
+        assert speech.loaded() == ["piper:en_US-lessac-medium"] + self.WHISPERS
+        clock[0] += speech.IDLE_SECONDS + 1
+        assert speech.sweep_idle() == ["piper:en_US-lessac-medium"]
+        assert speech.loaded() == self.WHISPERS
+
+    def test_another_languages_stream_model_stays_too(self, both, clock):
+        _set(stt_backend="local")
+        speech.LocalSTT()._model("base")  # a German stream's model
+        clock[0] += speech.IDLE_SECONDS + 1
+        assert speech.sweep_idle() == []
+        assert speech.loaded() == ["whisper:base"]
+
+    def test_not_local_any_more_unloads(self, both, clock):
+        _set(stt_backend="local")
+        speech.warm("stt")
+        _set(stt_backend="system")
+        clock[0] += speech.IDLE_SECONDS + 1
+        assert speech.sweep_idle() == self.WHISPERS
+        assert speech.loaded() == []
+
+    def test_a_model_from_an_old_setting_unloads(self, both, clock):
+        _set(stt_backend="local")
+        speech.warm("stt")
+        _set(stt_backend="local", stt_model="medium")
+        clock[0] += speech.IDLE_SECONDS + 1
+        assert speech.sweep_idle() == ["whisper:small"]
+        assert speech.loaded() == ["whisper:base.en"]
+
+    def test_the_timer_keeps_running_and_unload_all_still_works(
+        self, both, clock, monkeypatch
+    ):
+        armed: list = []
+        monkeypatch.setattr(speech, "_arm_timer", lambda: armed.append(1))
+        _set(stt_backend="local")
+        speech.warm("stt")
+        armed.clear()
+        clock[0] += speech.IDLE_SECONDS + 1
+        speech._timer_fire()
+        assert speech.loaded() == self.WHISPERS and armed == [1]
+        speech.unload_all()
+        assert speech.loaded() == []
+
+    def test_the_memory_guard_still_refuses_a_load(self, both, monkeypatch):
+        _set(stt_backend="local")
+        monkeypatch.setattr(speech, "_memory_block", lambda: "memory is low")
+        assert "memory is low" in speech.warm("stt")
+        assert speech.loaded() == []
+
+
+class TestWarmVoice:
+    """warm("tts"): the voice that speaks is ready before its first line."""
+
+    def test_local_piper_loads_and_primes_once(self, both):
+        _set(tts_backend="local")
+        assert speech.warm("tts") == "loaded"
+        assert speech.loaded() == ["piper:en_US-lessac-medium"]
+        assert both.piper.spoken == [speech.WARM_TEXT]
+        assert speech.warm("tts") == "already"
+        assert both.piper.spoken == [speech.WARM_TEXT]
+        assert speech.describe()["warm"]["tts"] == "loaded"
+
+    def test_a_local_host_says_one_word(self, monkeypatch):
+        _set(
+            tts_backend="openai",
+            tts_url="http://127.0.0.1:8770/v1",
+            tts_voice="harvey",
+        )
+        http = _Http(ctype="audio/wav", body=b"RIFFwav")
+        monkeypatch.setattr(speech, "_http", http)
+        assert speech.warm("tts") == "loaded"
+        (call,) = http.calls
+        assert call.url == "http://127.0.0.1:8770/v1/audio/speech"
+        assert call.timeout == speech.WARM_TIMEOUT
+        body = json.loads(call.body)
+        assert body["input"] == speech.WARM_TEXT and body["voice"] == "harvey"
+        assert speech.describe()["warm"]["tts"] == "loaded"
+
+    def test_a_paid_api_is_never_warmed(self, http):
+        _set(
+            tts_backend="openai",
+            tts_url="",
+            tts_api_key="sk-test",  # pragma: allowlist secret
+        )
+        result = speech.warm("tts")
+        assert result.startswith("skipped:") and "api.openai.com" in result
+        assert http.calls == []
+
+    def test_a_host_that_fails_is_skipped_not_raised(self, http):
+        _set(tts_backend="openai", tts_url="http://localhost:8770/v1")
+        http.raise_ = urllib.error.URLError("refused")
+        result = speech.warm("tts")
+        assert result.startswith("skipped: could not reach localhost:8770")
+        assert speech.describe()["warm"]["tts"] == result
+
+    def test_system_runs_the_probe(self, monkeypatch):
+        from backend.web.core import speech_system as sysmod
+
+        probes: list = []
+        found = [sysmod.Probe("windows", True, "ok", True, "Windows voices")]
+
+        def probe():
+            probes.append(1)
+            return found[0]
+
+        monkeypatch.setattr(sysmod, "probe", probe)
+        _set(tts_backend="system")
+        assert speech.warm("tts") == "loaded"
+        assert probes
+        found[0] = sysmod.Probe("windows", True, "ok", False, "no voices installed")
+        assert speech.warm("tts") == "skipped: no voices installed"
+
+    def test_nothing_ready_is_skipped(self, monkeypatch):
+        monkeypatch.setattr(speech, "_installed", lambda name: False)
+        _set(tts_backend="")
+        assert speech.warm("tts").startswith("skipped: no voice backend is ready")
+
+    def test_in_the_background_a_host_is_warmed_again_only_when_due(
+        self, monkeypatch, clock
+    ):
+        _set(tts_backend="openai", tts_url="http://127.0.0.1:8770/v1")
+        http = _Http(ctype="audio/wav", body=b"RIFFwav")
+        monkeypatch.setattr(speech, "_http", http)
+        speech.warm_in_background("tts").join(5)
+        assert len(http.calls) == 1
+        assert speech.warm_in_background("tts") is None  # warmed just now
+        _set(tts_backend="openai", tts_url="http://127.0.0.1:8770/v1", tts_voice="x")
+        speech.warm_in_background("tts").join(5)  # another voice: due
+        assert len(http.calls) == 2
+        clock[0] += speech.REWARM_SECONDS + 1
+        speech.warm_in_background("tts").join(5)  # a while later: due
+        assert len(http.calls) == 3
+
+    def test_in_the_background_a_resident_voice_is_left_alone(self, both):
+        _set(tts_backend="local")
+        speech.warm_in_background("tts").join(5)
+        assert speech.loaded() == ["piper:en_US-lessac-medium"]
+        assert speech.warm_in_background("tts") is None
+
+    def test_a_delayed_warm_decides_on_its_thread(self, monkeypatch):
+        calls: list = []
+        monkeypatch.setattr(speech, "_warm_due", lambda kind: calls.append(kind))
+        t = speech.warm_in_background("tts", delay_s=0.01)
+        assert t is not None and calls == []  # nothing probed on the caller
+        t.join(5)
+        assert calls == ["tts"]
+
+
+class TestDescribeAdditions:
+    def test_stream_model_and_warm(self, whisper):
+        d = speech.describe()
+        assert d["warm"] == {"stt": "", "tts": ""}
+        _set(stt_backend="local")
+        assert speech.describe()["stream_model"] == "base.en"
+        _set(stt_backend="local", stt_stream_model="tiny.en")
+        assert speech.describe()["stream_model"] == "tiny.en"
+        _set(stt_backend="openai", stt_url="https://api.openai.com/v1")
+        assert speech.describe()["stream_model"] == ""  # it does not stream

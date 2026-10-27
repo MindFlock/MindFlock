@@ -897,6 +897,24 @@ html, body {
   animation: dot-pulse 1.2s ease-in-out infinite;
 }
 #voice-btn[data-state="speaking"], #asking-mic[data-state="speaking"] { border-color: var(--tone-waiting); color: var(--tone-waiting); }
+/* The wake word's standby (mobile.js voiceWakeSync): the mic is open, so it
+   shows — a faint ring that still moves with the room's level, and a dot. */
+#voice-btn[data-standby]:not([data-state="listening"])::after {
+  opacity: calc(0.22 + var(--lvl, 0) * 0.6);
+  transform: scale(calc(1 + var(--lvl, 0) * 0.15));
+  border-width: 2px;
+}
+#voice-btn[data-standby]:not([data-state="listening"])::before {
+  content: "";
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  pointer-events: none;
+}
 #voice-btn[data-state="working"], #asking-mic[data-state="working"] { border-color: var(--tone-working); color: var(--tone-working); }
 
 #voice-strip {
