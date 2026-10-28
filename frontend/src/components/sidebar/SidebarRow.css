@@ -1058,6 +1058,11 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 .inst .guest-pill:hover {
   background: rgba(var(--accent-rgb), 0.3);
 }
+.inst .guest-pill.guest-pill-chat {
+  padding: 0 5px;
+  font-size: 10px;
+  background: transparent;
+}
 .inst .guest-pill.following {
   background: var(--accent);
   border-color: var(--accent);

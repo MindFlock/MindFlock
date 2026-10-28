@@ -4,6 +4,7 @@
  * while no guest is on the row. Styles: `.guest-pill` in SidebarRow.css. */
 
 import { guestName, toggleFollow, useGuestFocus } from "../../lib/guestFocus";
+import { openChat } from "../../lib/chat";
 
 export function GuestPills({ title }: { title: string }) {
   const { focus, following } = useGuestFocus();
@@ -33,6 +34,19 @@ export function GuestPills({ title }: { title: string }) {
           </button>
         );
       })}
+      <button
+        type="button"
+        className="guest-pill guest-pill-chat"
+        title="Open the chat for this session"
+        aria-label="Open the chat for this session"
+        onClick={(e) => {
+          e.stopPropagation();
+          openChat(title);
+        }}
+        onDoubleClick={(e) => e.stopPropagation()}
+      >
+        💬
+      </button>
     </span>
   );
 }
