@@ -28,7 +28,7 @@ import {
   type Speaker,
 } from "../lib/voiceDesktop";
 import { placeUnder } from "../lib/menuPlace";
-import { LEVEL_SMOOTH_MS, STEP_OPACITY, levelStep, slowLevel } from "../lib/voiceMic";
+import { LEVEL_ATTACK_MS, LEVEL_RELEASE_MS, STEP_OPACITY, levelStep, slowLevel } from "../lib/voiceMic";
 import { code, cssRule, src } from "./sourceText";
 
 const mocks = vi.hoisted(() => ({
@@ -404,12 +404,16 @@ describe("the options never leave the window (placeUnder)", () => {
 });
 
 describe("the mic is still: the level is an opacity in three steps", () => {
-  it("smoothed over ~400 ms, so one loud block barely moves it", () => {
-    expect(LEVEL_SMOOTH_MS).toBe(400);
-    expect(slowLevel(0, 1, 85)).toBeLessThan(0.2);
+  it("a fast attack (one loud block moves it half way) and a slow release (a word's gap barely drops it)", () => {
+    expect(LEVEL_ATTACK_MS).toBe(120);
+    expect(LEVEL_RELEASE_MS).toBe(400);
+    expect(slowLevel(0, 1, 85)).toBeGreaterThan(0.45);
+    expect(slowLevel(1, 0, 85)).toBeGreaterThan(0.75);
     let v = 0;
-    for (let t = 0; t < 1200; t += 16) v = slowLevel(v, 1, 16);
+    for (let t = 0; t < 400; t += 16) v = slowLevel(v, 1, 16);
     expect(v).toBeGreaterThan(0.9);
+    for (let t = 0; t < 200; t += 16) v = slowLevel(v, 0, 16);
+    expect(v).toBeGreaterThan(0.5); // 200 ms of quiet: still well up
   });
   it("quiet / hearing / loud, with hysteresis at each edge (no jitter)", () => {
     expect(STEP_OPACITY).toEqual([0.45, 0.75, 1]);

@@ -521,7 +521,7 @@ describe("the mic's wiring (components/TopBarMic.tsx)", () => {
     );
     // start() chimes (every start does), its sound skipped from the recording.
     expect(MIC).toMatch(/sound\("start"\);\s*chimed\.current = true;/);
-    expect(MIC).toMatch(/const chimeSkip = prefsRef\.current\.sounds !== false \? CHIME_MS \+ 30 : 0;/);
+    expect(MIC).toMatch(/const chimeSkip = prefsRef\.current\.sounds !== false \? queue\.cueLead \+ CHIME_MS \+ 30 : 0;/);
     expect(MIC).toContain("onWake: (soundEnd) => latestWake.current(soundEnd),");
     expect(MIC).toMatch(/if \(live\.current === d && !d\.heardAnything\) d\.drop\(\);\s*\}, WAKE_LISTEN_MS\);/);
     // start() honours the extra skip next to the barge-in's.
