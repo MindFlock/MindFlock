@@ -1,0 +1,349 @@
+{
+ "cases": [
+  {
+   "family": "heteronyms",
+   "name": "the owner's line: goes live is the adjective",
+   "in": "Once it is done everything goes live.",
+   "out": "Once it is done everything goes lyve."
+  },
+  {
+   "family": "heteronyms",
+   "name": "go live in a countdown",
+   "in": "We go live in 3, 2, 1.",
+   "out": "We go lyve in 3, 2, 1."
+  },
+  {
+   "family": "heteronyms",
+   "name": "the live site",
+   "in": "The live site is up and the live stream is on.",
+   "out": "The lyve site is up and the lyve stream is on."
+  },
+  {
+   "family": "heteronyms",
+   "name": "is / are / was live",
+   "in": "It is live. They are live now. The deploy was live by 5.",
+   "out": "It is lyve. They are lyve now. The deploy was lyve by 5."
+  },
+  {
+   "family": "heteronyms",
+   "name": "Live at a sentence start",
+   "in": "Live! Live data, live mode.",
+   "out": "Lyve! Lyve data, lyve mode."
+  },
+  {
+   "family": "heteronyms",
+   "name": "live as a verb after a pronoun",
+   "in": "I live in Boston and they live with me.",
+   "out": "I live in Boston and they live with me."
+  },
+  {
+   "family": "heteronyms",
+   "name": "live as a verb before in/with/here",
+   "in": "People who live here. We live in the city. Live with it.",
+   "out": "People who live here. We live in the city. Live with it."
+  },
+  {
+   "family": "heteronyms",
+   "name": "live for / long live stay verbs",
+   "in": "Users live for this. Long live the king.",
+   "out": "Users live for this. Long live the king."
+  },
+  {
+   "family": "heteronyms",
+   "name": "live in a number is the adjective, live in a place the verb",
+   "in": "It'll be live in 10 minutes; you live in 10 Downing Street.",
+   "out": "It'll be lyve in 10 minutes; you live in 10 Downing Street."
+  },
+  {
+   "family": "heteronyms",
+   "name": "read: past after a pronoun or have/has/had, imperative kept",
+   "in": "I read the file yesterday. Read the file. They have read it. A read-only file.",
+   "out": "I red the file yesterday. Read the file. They have red it. A read only file."
+  },
+  {
+   "family": "heteronyms",
+   "name": "read: already / just",
+   "in": "We already read that. I just read it. Read it again.",
+   "out": "We already red that. I just red it. Read it again."
+  },
+  {
+   "family": "heteronyms",
+   "name": "record: verb after to/will, noun after the",
+   "in": "We will record it. The record shows. Record a video. To record the call.",
+   "out": "We will recorde it. The record shows. Record a video. To recorde the call."
+  },
+  {
+   "family": "heteronyms",
+   "name": "present: verb before an object or after will, adjective kept",
+   "in": "Present the results. The present state. Is present in the list. We present it.",
+   "out": "Prezent the results. The present state. Is present in the list. We prezent it."
+  },
+  {
+   "family": "heteronyms",
+   "name": "use: verb by default, noun after the/in/make",
+   "in": "Use the tool. The use of memory. In use. Make use of it. A use-case. I use vim.",
+   "out": "Yooz the tool. The use of memory. In use. Make use of it. A use case. I yooz vim."
+  },
+  {
+   "family": "heteronyms",
+   "name": "separate and estimate: verbs before an object",
+   "in": "Separate the files. A separate file. Estimate the cost. An estimate.",
+   "out": "Seperate the files. A separate file. Estimayt the cost. An estimate."
+  },
+  {
+   "family": "heteronyms",
+   "name": "wind down, tear down; the wind, a tear",
+   "in": "Wind down the server. The wind. Tear down the sandbox. A tear in the page.",
+   "out": "Wined down the server. The wind. Tare down the sandbox. A tear in the page."
+  },
+  {
+   "family": "heteronyms",
+   "name": "resume: noun after a possessive, verb otherwise",
+   "in": "Your resume is attached. Resume the session. Resume.",
+   "out": "Your rezoomay is attached. Resume the session. Resume."
+  },
+  {
+   "family": "heteronyms",
+   "name": "alternate and permit as verbs",
+   "in": "Alternate between them. An alternate path. Permit it. A permit. We permit this.",
+   "out": "Alternayt between them. An alternate path. Permitt it. A permit. We permitt this."
+  },
+  {
+   "family": "heteronyms",
+   "name": "the rest of the classic list is left alone",
+   "in": "The lead developer, close to done, the project, an object, produce output, the content, invalid input, a duplicate, a minute, a wound, a bow, refuse it, the export, import the module, the update, upgrade it.",
+   "out": "The lead developer, close to done, the project, an object, produce output, the content, invalid input, a duplicate, a minute, a wound, a bow, refuse it, the export, import the module, the update, upgrade it."
+  },
+  {
+   "family": "heteronyms",
+   "name": "capitalisation follows the word",
+   "in": "LIVE now. Live now. live now.",
+   "out": "lyve now. Lyve now. lyve now."
+  },
+  {
+   "family": "tech",
+   "name": "the big ones",
+   "in": "SQL and JSON over nginx in tmux; uv runs pytest with a regex on GitHub via sudo chmod in a venv.",
+   "out": "sequel and jayson over engine x in tee mux; you vee runs pie test with a rej ex on Git hub via soo doo C H mod in a vee env."
+  },
+  {
+   "family": "tech",
+   "name": "acronyms as letters",
+   "in": "npm, API, CLI, URL, SSH, CI, PR, ID, UUID, ETA, FYI, LGTM.",
+   "out": "N P M, A P I, C L I, U R L, S S H, C I, P R, I D, U U I D, E T A, F Y I, looks good to me."
+  },
+  {
+   "family": "tech",
+   "name": "the rest of the table",
+   "in": "k8s i18n a11y e2e OAuth WebSocket async enum config src dir args kwargs init tmp var bin usr msg pkg ctx db grep awk sed zsh bash vim eslint vitest tsc.",
+   "out": "kubernetes i 18 n a 11 y end to end O auth Web socket async ee num config source dir args kay wargs init temp var bin user message package context dee bee grep awk sed zee shell bash vim E S lint vee test T S C."
+  },
+  {
+   "family": "tech",
+   "name": "abbreviations with dots",
+   "in": "e.g. this, i.e. that, etc. A vs B. Etc",
+   "out": "for example this, that is that, etcetera. A versus B. Etcetera"
+  },
+  {
+   "family": "tech",
+   "name": "plurals and possessives",
+   "in": "Two APIs, three PRs, the IDs, the URLs.",
+   "out": "Two A P I's, three P R's, the I D's, the U R L's."
+  },
+  {
+   "family": "tech",
+   "name": "a tech word inside a longer word is not touched",
+   "in": "The idea of a prism: a database upid. Spring, apiary, prudent.",
+   "out": "The idea of a prism: a database upid. Spring, apiary, prudent."
+  },
+  {
+   "family": "numbers",
+   "name": "units after a number",
+   "in": "It took 350ms, 12px wide, 3 KB, 1 MB, 2.5GB, 60fps.",
+   "out": "It took 350 milliseconds, 12 pixels wide, 3 kilobytes, 1 megabyte, 2.5 gigabytes, 60 frames per second."
+  },
+  {
+   "family": "numbers",
+   "name": "versions and dotted numbers",
+   "in": "v0.10.2 is out; 1.2.3 too; 1.5 is a decimal; V2.0.1.",
+   "out": "version 0 point 10 point 2 is out; 1 point 2 point 3 too; 1.5 is a decimal; version 2 point 0 point 1."
+  },
+  {
+   "family": "numbers",
+   "name": "PR, issue and bare hash numbers",
+   "in": "#275 merged; PR #275 and PR 274; pr#12; issue #12; ticket #9; the # sign; C# stays.",
+   "out": "number 275 merged; P R 275 and P R 274; P R 12; issue 12; ticket 9; the # sign; C# stays."
+  },
+  {
+   "family": "numbers",
+   "name": "durations",
+   "in": "Fixed in 1m23s, ran 2h5m, waited 45s, 1h, 1s, 1 minute, 2h 5m 3s, 90min, 1.5s.",
+   "out": "Fixed in 1 minute 23 seconds, ran 2 hours 5 minutes, waited 45 seconds, 1 hour, 1 second, 1 minute, 2 hours 5 minutes 3 seconds, 90 minutes, 1.5 seconds."
+  },
+  {
+   "family": "numbers",
+   "name": "thousands separators",
+   "in": "Totals: 1,234 and 12,345,678 but 1,2 and 12,34.",
+   "out": "Totals: 1234 and 12345678 but 1,2 and 12,34."
+  },
+  {
+   "family": "identifiers",
+   "name": "snake, camel, kebab, letter-digit",
+   "in": "voice_router calls askMicTap on sitecheck-bot7; HTMLElement; db_url; api_key; end-to-end; 2024-10-27; UTF-8; sha256; base64.",
+   "out": "voice router calls ask mic tap on sitecheck bot 7; H T M L element; dee bee U R L; A P I key; end to end; 2024-10-27; U T F 8; shah 256; base 64."
+  },
+  {
+   "family": "identifiers",
+   "name": "a tech word as a part",
+   "in": "The json_path and the MyAPIClient use tmux-session.",
+   "out": "The jayson path and the my A P I client yooz tee mux session."
+  },
+  {
+   "family": "identifiers",
+   "name": "plain words and dates are not split",
+   "in": "well done, re-run, 2026-10-27, 10-4, a-b",
+   "out": "well done, re run, 2026-10-27, 10-4, a b"
+  },
+  {
+   "family": "paths",
+   "name": "a path with a line number",
+   "in": "See backend/web/core/speech.py:404 and docs/web-api.md.",
+   "out": "See backend, web, core, speech dot pie line 404 and docs, web A P I dot M D."
+  },
+  {
+   "family": "paths",
+   "name": "home, hidden, relative",
+   "in": "~/.mindflock/settings.json, ./run.sh, ../x/y.txt, /usr/bin/env",
+   "out": "home, dot mindflock, settings dot jayson, run dot S H, dot dot, x, y dot text, user, bin, env"
+  },
+  {
+   "family": "paths",
+   "name": "bare files",
+   "in": "README.md, node.js, index.html, example.com, package.json",
+   "out": "read me dot M D, node dot J S, index dot H T M L, example.com, package dot jayson"
+  },
+  {
+   "family": "paths",
+   "name": "not paths",
+   "in": "and/or, n/a, input/output, 3/4",
+   "out": "and/or, n/a, input/output, 3/4"
+  },
+  {
+   "family": "paths",
+   "name": "git SHAs: first seven spelled, words and numbers kept",
+   "in": "Commit fcb250cd8 and 4ae4bfc4 (deadbeef, 1234567, cafe).",
+   "out": "Commit f c b 2 5 0 c and 4 a e 4 b f c (deadbeef, 1234567, cafe)."
+  },
+  {
+   "family": "markup",
+   "name": "emphasis, code, link, url, emoji, html, heading, list, quote",
+   "in": "**Done.** `git push` failed — see [the PR](https://github.com/x/y/pull/1) or https://example.com/a?b=c 🚀 ✅ <b>bold</b>\n# Heading\n- item one\n> quoted",
+   "out": "Done. git push failed — see the P R or a link bold\nHeading\nitem one\nquoted"
+  },
+  {
+   "family": "markup",
+   "name": "a fenced block keeps its lines",
+   "in": "Run:\n```sh\nuv run pytest\n```\nthen *rest* and _more_ and ~~gone~~.",
+   "out": "Run:\nyou vee run pie test\nthen rest and more and gone."
+  },
+  {
+   "family": "markup",
+   "name": "www links and images",
+   "in": "www.example.com/x and ![alt text](a.png)",
+   "out": "a link and alt text"
+  },
+  {
+   "family": "say",
+   "name": "a Say: prefix is not ours to strip",
+   "in": "Say: Sent. Listening.",
+   "out": "Say: Sent. Listening."
+  },
+  {
+   "family": "say",
+   "name": "nothing to change",
+   "in": "Hello world, nothing to change here.",
+   "out": "Hello world, nothing to change here."
+  },
+  {
+   "family": "say",
+   "name": "whitespace collapsed, lines kept",
+   "in": "Sent.   Listening.\n\n\n  Done.  ",
+   "out": "Sent. Listening.\nDone."
+  },
+  {
+   "family": "overrides",
+   "name": "a word and a phrase, case-insensitive, applied first",
+   "in": "MindFlock made a Pull Request; I live here",
+   "out": "Mind flock made a P R; I lyve here",
+   "overrides": [
+    {
+     "say": "MindFlock",
+     "as": "mind flock"
+    },
+    {
+     "say": "pull request",
+     "as": "P R"
+    },
+    {
+     "say": "live",
+     "as": "lyve"
+    }
+   ]
+  },
+  {
+   "family": "overrides",
+   "name": "an override beats the tech table and is never reshaped",
+   "in": "Use SQL for the API",
+   "out": "Yooz S Q L for the ay pee eye",
+   "overrides": [
+    {
+     "say": "sql",
+     "as": "S Q L"
+    },
+    {
+     "say": "API",
+     "as": "ay pee eye"
+    }
+   ]
+  },
+  {
+   "family": "overrides",
+   "name": "an invalid list is ignored",
+   "in": "SQL rules",
+   "out": "sequel rules",
+   "overrides": [
+    {
+     "say": "",
+     "as": "x"
+    },
+    {
+     "say": "sql",
+     "as": ""
+    },
+    "junk",
+    {
+     "say": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "as": "b"
+    }
+   ]
+  },
+  {
+   "family": "overrides",
+   "name": "a phrase matches across any spacing",
+   "in": "pull   request 5",
+   "out": "P R 5",
+   "overrides": [
+    {
+     "say": "pull request",
+     "as": "P R"
+    }
+   ]
+  },
+  {
+   "family": "bounds",
+   "name": "a long line is cut at a space",
+   "in": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word ",
+   "out": "word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word word"
+  }
+ ]
+}

@@ -20,9 +20,12 @@ Status codes, in the order they are checked:
   (``{"error"}`` is :func:`core.speech.select`'s reason); 502 the backend
   failed (the built-in recognizer refuses a non-WAV clip this way); 200
   ``{"text", "backend", "ms"}``.
-* ``speak`` — 400 no text; 413 over :data:`MAX_SPEAK_CHARS`; 409 / 502 as
-  above; 200 the audio bytes (``audio/mpeg`` or ``audio/wav``) with
-  ``X-Voice-Backend``.
+* ``speak`` — 400 no text (or nothing left once shaped); 413 over
+  :data:`MAX_SPEAK_CHARS`; 409 / 502 as above; 200 the audio bytes
+  (``audio/mpeg`` or ``audio/wav``) with ``X-Voice-Backend`` and
+  ``X-Voice-Cache`` (``hit`` | ``miss``: :data:`SPEAK_CACHE`). The text is
+  shaped for the voice first (``core.spoken_text``) unless ``shape`` is
+  false; the caller's text — the caption — is never changed.
 * ``stream`` (open) — 409 no recognition backend is ready, the ready one
   does not stream (only ``local`` does: the client sends one clip per phrase
   instead), or :data:`speech_stream.MAX_STREAMS` are open; 200
@@ -45,6 +48,7 @@ import asyncio
 import copy
 import re
 import time
+from collections import OrderedDict
 from typing import Optional, Tuple
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -54,6 +58,7 @@ from backend.web.core import auth as _auth
 from backend.web.core import speech as _speech
 from backend.web.core import speech_install as _install
 from backend.web.core import speech_stream as _stream
+from backend.web.core import spoken_text as _spoken_text
 from backend.web.core import voice as _voice
 from backend.web.core import voice_words as _voice_words
 from backend.web.core import wake as _wake
@@ -76,6 +81,84 @@ def _settings():
     from backend.config import settings as settings_store
 
     return settings_store.load_settings()
+
+
+def _pronounce(settings) -> list:
+    """The person's pronunciations (``voice.pronounce``), normalised
+    (``core.spoken_text.normalize_pronounce``); ``[]`` on a settings model
+    that does not carry the field."""
+    try:
+        return _spoken_text.normalize_pronounce(
+            getattr(settings.voice, "pronounce", None)
+        )
+    except Exception:  # noqa: BLE001 — the voice must still speak
+        return []
+
+
+class SpeakCache:
+    """The speak cache: ``(voice, shaped text)`` → ``(audio, mime)`` for one
+    engine signature (backend id, host, model, voice setting) — a repeat
+    ("Sent.", "Listening.", a session's name) costs no engine call, which on
+    a neural host is a second or more. LRU in :attr:`max_entries` entries
+    and :attr:`max_bytes` in all; a clip over :attr:`max_entry_bytes` is
+    served but not kept; a new signature (the backend, its host, its voice
+    changed in Settings) drops everything."""
+
+    max_entries = 64
+    max_bytes = 8 * 1024 * 1024
+    max_entry_bytes = 2 * 1024 * 1024
+
+    def __init__(self) -> None:
+        self._items: "OrderedDict[tuple, Tuple[bytes, str]]" = OrderedDict()
+        self._sig: Optional[tuple] = None
+        self.bytes = 0
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def clear(self) -> None:
+        self._items.clear()
+        self._sig = None
+        self.bytes = 0
+
+    def _sync(self, sig: tuple) -> None:
+        if sig != self._sig:
+            self.clear()
+            self._sig = sig
+
+    def get(self, sig: tuple, key: tuple) -> Optional[Tuple[bytes, str]]:
+        self._sync(sig)
+        got = self._items.get(key)
+        if got is not None:
+            self._items.move_to_end(key)
+        return got
+
+    def put(self, sig: tuple, key: tuple, audio: bytes, mime: str) -> None:
+        self._sync(sig)
+        if len(audio) > self.max_entry_bytes:
+            return
+        old = self._items.pop(key, None)
+        if old is not None:
+            self.bytes -= len(old[0])
+        self._items[key] = (audio, mime)
+        self.bytes += len(audio)
+        while self._items and (
+            len(self._items) > self.max_entries or self.bytes > self.max_bytes
+        ):
+            _, (gone, _mime) = self._items.popitem(last=False)
+            self.bytes -= len(gone)
+
+
+#: The one speak cache (``POST /api/voice/speak``, ``X-Voice-Cache``).
+SPEAK_CACHE = SpeakCache()
+
+
+def _engine_signature(backend: _speech.Backend, settings) -> tuple:
+    """What a cached clip depends on besides its text and per-call voice:
+    the backend object itself (a rebuilt registry is a new engine), its
+    host, model and voice settings."""
+    v = settings.voice
+    return (backend.id, id(backend), v.tts_url, v.tts_model, v.tts_voice)
 
 
 def _wake_word() -> str:
@@ -173,6 +256,7 @@ def voice_get(allowed: bool = Depends(_auth.configure_allowed)) -> JSONResponse:
         "say_all": _voice.say_all(),
         "words": _voice_words.effective(s),
         "words_default": copy.deepcopy(_voice_words.DEFAULTS),
+        "pronounce": _pronounce(s),
         "configure_allowed": bool(allowed),
     }
     body.update(_speech.describe())
@@ -403,10 +487,18 @@ def voice_stream_abandon(sid: str) -> Response:
 
 @router.post("/api/voice/speak")
 async def voice_speak(payload: Optional[dict] = None) -> Response:
-    """Say ``{"text", "voice"?}`` → the audio bytes, ``Content-Type`` the
-    backend's (``audio/mpeg`` for a host, ``audio/wav`` for piper and the
-    built-in engine) and ``X-Voice-Backend`` its id. ``voice`` overrides ``voice.tts_voice`` for
-    this one call. See the module doc for the status codes."""
+    """Say ``{"text", "voice"?, "shape"?}`` → the audio bytes, ``Content-Type``
+    the backend's (``audio/mpeg`` for a host, ``audio/wav`` for piper and the
+    built-in engine), ``X-Voice-Backend`` its id and ``X-Voice-Cache``
+    ``hit`` or ``miss``. ``voice`` overrides ``voice.tts_voice`` for this one
+    call. The text is shaped for the voice first
+    (:func:`core.spoken_text.shape`: the person's ``voice.pronounce``, then
+    markup, paths, numbers, identifiers, the tech words and the heteronyms
+    by context — "goes live" is said as the adjective) — the caller's own
+    text, what a caption shows, is never changed; ``shape: false`` sends it
+    as written (Settings' "Try" hears a respelling itself). A repeat of the
+    same shaped text in the same voice is served from :data:`SPEAK_CACHE`
+    without an engine call. See the module doc for the status codes."""
     body = payload if isinstance(payload, dict) else {}
     text = body.get("text")
     if not isinstance(text, str) or not text.strip():
@@ -426,14 +518,31 @@ async def voice_speak(payload: Optional[dict] = None) -> Response:
     backend, refused = _refusal("tts")
     if refused is not None or backend is None:
         return refused or _failed(RuntimeError("no backend"))
-    try:
-        audio, mime = await asyncio.to_thread(backend.speak, text.strip(), voice)
-    except Exception as err:  # noqa: BLE001
-        return _failed(err)
+    settings = _settings()
+    if body.get("shape") is False:
+        spoken = text.strip()
+    else:
+        spoken = _spoken_text.shape(text, _pronounce(settings))
+    if not spoken:
+        return JSONResponse({"error": "nothing to say once shaped"}, status_code=400)
+    sig = _engine_signature(backend, settings)
+    key = (voice, spoken)
+    headers = {"X-Voice-Backend": backend.id, "Cache-Control": "no-store"}
+    cached = SPEAK_CACHE.get(sig, key)
+    if cached is not None:
+        audio, mime = cached
+        headers["X-Voice-Cache"] = "hit"
+    else:
+        try:
+            audio, mime = await asyncio.to_thread(backend.speak, spoken, voice)
+        except Exception as err:  # noqa: BLE001
+            return _failed(err)
+        SPEAK_CACHE.put(sig, key, audio, mime)
+        headers["X-Voice-Cache"] = "miss"
     return Response(
         content=audio,
         media_type=mime or "application/octet-stream",
-        headers={"X-Voice-Backend": backend.id, "Cache-Control": "no-store"},
+        headers=headers,
     )
 
 

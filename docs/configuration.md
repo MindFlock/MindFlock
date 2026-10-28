@@ -1222,6 +1222,20 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     The router still hears a kept default's variants ("stop the
     microphone", "that's enough"); a phrase you add is matched whole.
     Personal, so **synced** like `approve_dialogs`.
+  - `pronounce` (default `[]`) — your own pronunciations, editable in
+    Settings → Voice → **Say it as**: an ordered list of `{say, as}` rows
+    (`[{"say": "live", "as": "lyve"}, {"say": "mindflock", "as": "mind
+    flock"}]`). `say` is a whole word or phrase, matched case-insensitively
+    (letters, digits, spaces and `' . + # _ -`); `as` is spoken as written.
+    At most 40 rows, 40 characters a side; stored normalised
+    (`core.spoken_text.normalize_pronounce`): `say` lower case, both sides
+    trimmed, a repeated `say` dropped. **Every voice applies them first** —
+    the server inside `POST /api/voice/speak`, the desktop app and the phone
+    page before `speechSynthesis` (`GET /api/voice` serves them as
+    `pronounce`) — ahead of the built-in shaping (the tech words, the
+    heteronyms by context, paths and numbers: `backend/web/core/spoken_text.py`),
+    and a caption never shows the respelling. Personal, meant to **sync**
+    like `words`.
   - `stt` / `tts` — `"phone"` (default) or `"server"`: which engine the
     **phone page** prefers. Server recognition is what lets an iOS
     home-screen icon hear you (Web Speech recognition exists only in a Safari
