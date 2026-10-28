@@ -170,8 +170,9 @@ a session first*).
   default; per browser, `confirm` in `cs_voice_desktop`): your own actions are
   said back in the reply voice — *Sent.* after “over”, *Sent. Over and out.*
   (or *Over and out.* with nothing to send), *Cleared.* after “disregard”,
-  *Stopped.* after a stop phrase, and the router's own line after a switch
-  (*Now talking to Billing.*) — with *Read replies aloud* off too. They go to
+  and the router's own line after a switch (*Now talking to Billing.*) — with
+  *Read replies aloud* off too. A stop phrase says nothing back: the falling
+  chime is its answer. They go to
   the front of the one speech queue (after other confirmations, never behind
   a reply), are said even while the person is mid-sentence, are
   dropped when more than 5 s late, and the recorder drops its audio while one
@@ -238,8 +239,8 @@ a session first*).
   “Over” (sent, still listening) plays none — *Sent.* is the cue. A chime
   never plays over words: it goes through the speech queue
   (`SpeechQueue.cue`) after the line being said and the confirmations
-  waiting, ~120 ms after their end, before any reply — so a stop's own
-  *Stopped.* / *Over and out.* plays whole, then the chime. Nothing on the
+  waiting, ~120 ms after their end, before any reply — so a pending
+  *Over and out.* / *Sent.* plays whole, then the chime. Nothing on the
   stop path cancels or skips the queue; a per-session cancel never drops a
   confirmation.
 - **Stop at any moment**: **“stop recording”**, “stop listening”, “mic off”
@@ -7155,8 +7156,10 @@ listening). A listen that is not continuous still holds the queue.
 by default): short lines in the configured voice for what *you* did —
 *Sent.* after *over* (as the Enter is pressed; listening goes on), *Sent.
 Over and out.* after *over and out* (*Over and out.* when nothing was in the
-box), *Cleared.* after *disregard*, *Stopped.* after a stop phrase; a
-session switch says the router's own line (*Now on …*). They speak even
+box), *Cleared.* after *disregard*; a stop phrase says nothing back (the
+falling chime is its answer — *Stopped.* was heard as the phone saying stop
+back, every time); a session switch says the router's own line (*Now on …*).
+They speak even
 with Spoken replies **Off** (they are about your action, not the agent's
 reply). One voice still: they go through the queue but at its **front**
 (after the confirmations already there), are said even while the mic
@@ -7169,8 +7172,8 @@ this machine (`server_ready.tts_backend` `local` / `system`), and for any
 other host (it may cost per line) only once a line it made has played. The
 phone's own voice says them directly. A phrase heard right after a
 confirmation that starts with its words has them taken off (the phone
-recognizer's echo). A stop never cuts its own confirmation: *Stopped.*,
-*Over and out.* and *Sent. (Over and out.)* are queued before listening
+recognizer's echo). A stop never cuts a confirmation: *Over and out.* and
+*Sent. (Over and out.)* are queued before listening
 ends, so the order is the line, whole → the falling chime → whatever
 waited for the mic (a reply); nothing queued is dropped by a stop (only
 *stop talking* drops lines). After *disregard* the phone's own recognizer,
@@ -7371,7 +7374,7 @@ act whatever is in the box, and never land in it:
 
 | Say (at the end) | Does |
 |---|---|
-| *stop recording* · *stop listening* · *stop dictating* · *mic off* · *that's all* · *that is all* · *done talking* · *I'm done talking* | stops listening; the words said before it stay in the box, unsent (*In the box — say "over", or tap Send*), and says *Stopped.* — after an *over* (*fix it over and out, that's all*) it sends as *over and out* does. In a dialog too — before *stop* could be read as a *no* |
+| *stop recording* · *stop listening* · *stop dictating* · *mic off* · *that's all* · *that is all* · *done talking* · *I'm done talking* | stops listening; the words said before it stay in the box, unsent (*In the box — say "over", or tap Send*), answered by the falling chime alone (no *Stopped.*) — after an *over* (*fix it over and out, that's all*) it sends as *over and out* does. In a dialog too — before *stop* could be read as a *no* |
 | *yes* · *no (thanks)* · *always* · *yes and don't ask again* · *option two* · *the second one* · *answer yes* | **only while the session is asking** — a dialog is up, or its last `Say:` line asked a question: answers it. A bare number counts only as the whole phrase (*add two* is words) |
 
 An answer to a **dialog** is the option the dialog's own words pick (the
@@ -7513,7 +7516,7 @@ barge-in stops the sentence playing, drops the rest and aborts the requests
 on their way (at most two). A sentence the server cannot say is said by the
 phone's voice. The phone's own voice (speechSynthesis) is unchanged.
 Diagnostics' *Last speak* line says *first sound 0.9 s (3 sentences)*. The
-spoken confirmations (*Sent.*, *Cleared.*, *Stopped.*…) are made ahead and
+spoken confirmations (*Sent.*, *Cleared.*, *Over and out.*…) are made ahead and
 cached at the first tap for a voice made on this machine or **nearby** — not
 only `local` / `system` but any host whose detail names a loopback or
 private address, such as Voice Lab at 127.0.0.1:8770 — so the first *Sent.*

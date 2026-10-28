@@ -165,13 +165,17 @@ def test_mobile_keyboard_viewport_handling():
     # the height stops moving.
     assert "Math.min(vv.height, window.innerHeight)" in js
     assert "setInterval" in js and "appliedH" in js
-    # iOS Safari (page mode) reports vv.height WITHOUT subtracting the compact
-    # address-bar strip it keeps above the keyboard (?debug=1 overlay measured
-    # vvH 458 vs ~400 actually visible, 2026-07-09) — a fixed allowance is
-    # reserved while the keyboard is up, folded into visibleHeight() so the
-    # settle loop compares like with like. Standalone mode has no strip.
-    assert "iosChromeAllowance" in js
-    assert "IOS_KB_CHROME_PX" in js
+    # visualViewport.height is taken at its word. The fixed 60px allowance
+    # once reserved for iOS Safari's compact address-bar strip above the
+    # keyboard (2026-07-09 measurement) became the owner's "weird big gap"
+    # between the keys and the keyboard once that strip was gone (?debug=1,
+    # 2026-10-28: inner 650 · vvH 417 · applied 357). No fixed allowance.
+    assert "iosChromeAllowance" not in js
+    assert "IOS_KB_CHROME_PX" not in js
+    assert (
+        "return vv ? Math.min(vv.height, window.innerHeight) : window.innerHeight;"
+        in js
+    )
 
 
 def test_mobile_css_composer_rules():

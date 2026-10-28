@@ -229,9 +229,9 @@ var out = {order: order, pumps: pumps,
   stale: names(voiceQueueStep(voiceSpeech.q, now + 6000, o)),
   open: names(voiceQueueStep(voiceSpeech.q.slice(2), now, {playing: false, hold: false, maxAge: 60000, nodAge: 5000}))};
 voice.prefs.confirm = false;
-voiceNod("Stopped.");
+voiceNod("Cleared.");
 voice.prefs.confirm = true; voice.state = "off";
-voiceNod("Stopped.");
+voiceNod("Cleared.");
 out.after = voiceSpeech.q.length;
 console.log(JSON.stringify(out));
 """
@@ -272,9 +272,12 @@ def test_nod_and_listen_wiring():
         in js
     )
     assert "var loud = !muted && rms > Math.max(VOICE_RMS_SPEECH, g.floor * 3);" in js
-    # The five lines, fired where they belong.
+    # The four lines, fired where they belong — and none for a stop phrase:
+    # the falling chime is its answer ("Stopped." was heard as the phone
+    # saying stop back, every time; owner, 2026-10-28).
     assert 'voiceNod("Cleared.");' in _whole(js, "voiceHeard")
-    assert 'voiceNod("Stopped.");' in _whole(js, "voiceStopPhrase")
+    assert "voiceNod(" not in _whole(js, "voiceStopPhrase")
+    assert '"Stopped."' not in js.split("var VOICE_NOD_LINES = ")[1].split("\n")[0]
     assert 'voiceNod("Sent.");' in _whole(js, "voiceSendOn")
     words = _whole(js, "voiceHeardWords")
     assert (
@@ -313,15 +316,18 @@ def test_nod_and_listen_wiring():
 
 
 def test_a_stop_never_cuts_its_own_confirmation():
-    """A stop phrase, "over and out" and a send's nod queue the confirmation
-    BEFORE listening ends — so the stop chime (held for a nod) comes after
-    the line, never over it — and cancel nothing; the phone's recognizer is
-    not restarted under a line said over the listen ("Cleared.")."""
+    """ "Over and out" and a send's nod queue the confirmation BEFORE
+    listening ends — so the stop chime (held for a nod) comes after the
+    line, never over it — and a stop phrase cancels nothing (a "Sent."
+    still being said plays whole, then the chime); the phone's recognizer
+    is not restarted under a line said over the listen ("Cleared.")."""
     js = _js()
     stop = _whole(js, "voiceStopPhrase")
-    assert stop.index('voiceNod("Stopped.");') < stop.index("voiceListenKept();")
-    assert stop.index('voiceNod("Stopped.");') < stop.index("voiceIdle(")
     assert "voiceSpeechStop" not in stop and "tts.cancel" not in stop
+    assert (
+        'if (p && (!p.nod || kind === "stop")) { voice.chimeWait = kind; return false; }'
+        in _whole(js, "voiceChime")
+    )
     words = _whole(js, "voiceHeardWords")
     assert (
         'voiceStopForCommand(); voiceNod("Over and out."); voiceListenKept(); return; }'

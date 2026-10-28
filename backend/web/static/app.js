@@ -40305,8 +40305,7 @@ var CONFIRM_LINES = {
 	sent: "Sent.",
 	out: "Sent. Over and out.",
 	bye: "Over and out.",
-	cleared: "Cleared.",
-	stopped: "Stopped."
+	cleared: "Cleared."
 };
 var SUBMIT_SETTLE_MS = 250;
 async function submitDraft(title, name, say) {
@@ -40545,7 +40544,6 @@ var LiveDictation = class {
 				return;
 			case "leave":
 				if ((out.text || out.erase) && !await this.put(out.text, true, out.erase)) return;
-				if (out.stop) this.hooks.confirm?.("stopped");
 				this.end(t?.kind === "session" && this.dict.typed ? LEFT_LINE : out.stop ? STOPPED_LINE : "", false, out.stop ? "stopped" : void 0);
 				return;
 			case "send": {

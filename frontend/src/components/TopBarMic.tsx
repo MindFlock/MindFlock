@@ -698,7 +698,7 @@ export function TopBarMic() {
   const gated = useRef(false);
   /** The mic's chime (Settings → Voice "Sounds"), in the speech queue's
    * order (lib/voiceDesktop SpeechQueue.cue): never over words — a stop's
-   * chime follows its "Stopped." whole, then the replies go. */
+   * chime follows a pending "Over and out." whole, then the replies go. */
   const sound = (kind: "start" | "stop") => {
     if (prefsRef.current.sounds === false) return;
     void queue.cue(() => chime(voiceAudioCtx(), kind), kind === "stop" ? STOP_CHIME_MS : CHIME_MS);
@@ -709,8 +709,8 @@ export function TopBarMic() {
     queue.setGate(null);
     if (chimed.current) {
       chimed.current = false;
-      // Queued behind the stop's own confirmation ("Stopped.", "Over and
-      // out."), before the replies the release lets go — and nothing here
+      // Queued behind a confirmation still owed ("Over and out.", "Sent."),
+      // before the replies the release lets go — and nothing here
       // cancels or skips the queue: the confirmation plays whole.
       sound("stop");
     }
