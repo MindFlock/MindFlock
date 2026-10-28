@@ -2590,30 +2590,20 @@
   // window.innerHeight — authoritative when interactive-widget=resizes-content
   // is honored and the keyboard resizes the layout viewport — and (b) poll
   // until the height stops moving instead of trusting one event.
-  // iOS Safari (page mode) computes visualViewport.height as screen − status
-  // bar − keyboard, forgetting the compact address-bar strip it keeps above
-  // the keyboard. Measured with the ?debug=1 overlay (2026-07-09, iPhone):
-  // vvH 458 while only ~400px were actually visible — off by exactly that
-  // strip. No web API exposes it, so when the keyboard is clearly up (the
-  // viewport lost >150px to it) in non-standalone iOS, reserve a fixed
-  // allowance. Overshooting costs a few px of dark gap above the keyboard;
-  // undershooting buries the key bar.
+  // visualViewport.height is taken at its word. iOS Safari (a tab) once got a
+  // fixed 60px allowance here for the compact address-bar strip it kept above
+  // the keyboard (?debug=1, 2026-07-09: vvH 458 with ~400px visible). On the
+  // owner's phone today that strip is gone and the same overlay read
+  // "inner 650 · vvH 417 · applied 357": the allowance WAS the band between
+  // the keys and the keyboard (2026-10-28). If a Safari layout brings the
+  // strip back, the answer is a measured allowance, never a fixed one.
   var IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
             (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   var STANDALONE = !!(navigator.standalone ||
       (window.matchMedia && matchMedia("(display-mode: standalone)").matches));
-  var IOS_KB_CHROME_PX = 60;
-  function iosChromeAllowance(h) {
-    if (!IOS || STANDALONE) return 0;
-    return (window.innerHeight - h) > 150 ? IOS_KB_CHROME_PX : 0;
-  }
-  // Folded into visibleHeight (not applied ad hoc) so the settle loop compares
-  // like with like — subtracting only inside applyViewport would leave a
-  // permanent 60px "drift" that re-triggers the loop forever.
   function visibleHeight() {
     var vv = window.visualViewport;
-    var h = vv ? Math.min(vv.height, window.innerHeight) : window.innerHeight;
-    return h - iosChromeAllowance(h);
+    return vv ? Math.min(vv.height, window.innerHeight) : window.innerHeight;
   }
   function viewportTop() {
     var vv = window.visualViewport;
@@ -2707,7 +2697,9 @@
       " · vvTop " + (vv ? Math.round(vv.offsetTop) : "n/a") +
       " · scale " + (vv ? vv.scale.toFixed(2) : "n/a") +
       " · scrollY " + Math.round(window.scrollY) +
-      " · applied " + Math.round(appliedH) + "/" + Math.round(appliedTop);
+      " · applied " + Math.round(appliedH) + "/" + Math.round(appliedTop) +
+      " · " + (STANDALONE ? "app" : "tab") +
+      (document.getElementById("app").classList.contains("kb") ? " · kb" : "");
   }
 
   // --- appearance sync -------------------------------------------------------
