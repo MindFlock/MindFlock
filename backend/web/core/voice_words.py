@@ -16,7 +16,7 @@ spoken variants of a default phrase ("stop the microphone", "that is all",
 person adds is matched whole.
 
 Whisper does not always write the word that was said: "over" comes out as
-"ova", "submit" as "some it", "disregard" as "this regard". Two layers make
+"ova", "submit" as "some it", "disregard" as "dis regard". Two layers make
 the matchers tolerant without new false positives, both defined here once
 and consumed by the router, the desktop (``lib/voiceWords.ts``,
 ``lib/voiceDesktop.ts``) and the phone (``mobile.js``):
@@ -97,9 +97,7 @@ HEARD: Dict[str, Tuple[str, ...]] = {
     "over, out": ("ova out", "over owt"),
     "disregard": (
         "dis regard",
-        "this regard",
         "just regard",
-        "the regard",
         "disregarded",
         "disregards",
         "this is guard",
@@ -395,14 +393,21 @@ def _words(text: Any) -> List[str]:
 
 
 def sound_tail(
-    text: Any, phrases: Sequence[str], tails: Sequence[str] = ()
+    text: Any,
+    phrases: Sequence[str],
+    tails: Sequence[str] = (),
+    lead: bool = False,
 ) -> Optional[Tuple[str, str]]:
     """The last words of ``text`` that sound like one of ``phrases``
     (:func:`sounds_like`, the longest phrase tried first, one word more than
     the phrase has allowed for a split like "rod ger") → ``(before, phrase)``
     — the words said before it, trailing punctuation dropped, and the phrase
     as the person set it — or None. ``tails``: words that may follow a
-    phrase and still count ("disregard that")."""
+    phrase and still count ("disregard that"). ``lead``: a tail that is not
+    the whole utterance must also start with the phrase's first letter —
+    the clear words, whose false hit throws a draft away: "I agree in this
+    regard" is dictation, "fix it dis regards" clears, and "this regard"
+    on its own clears."""
     toks = str(text or "").split()
     idx = [i for i, t in enumerate(toks) if _words(t)]
     if not idx:
@@ -421,6 +426,8 @@ def sound_tail(
         for k in range(min(most, end), 0, -1):
             said = "".join("".join(_words(toks[i])) for i in idx[end - k : end])
             for p in ordered:
+                if lead and k < end and said[:1] != _letters(p)[:1]:
+                    continue
                 if sounds_like(said, p):
                     before = " ".join(toks[: idx[end - k]])
                     return re.sub(r"[\s,.!?]+$", "", before), p
@@ -472,7 +479,9 @@ def control_kind(text: Any, words: Any = None) -> Optional[str]:
     - ``"end"`` / ``"send"`` / ``"clear"``: it ends in one of those phrases
       or heard forms (the longest first, a send or clear phrase followed by
       "that" / "it" / "all" / "everything" too), else its last words sound
-      like one (:func:`sound_tail`).
+      like one (:func:`sound_tail`) — a clear phrase, whose false hit loses
+      the draft, only from its first letter on ("in this regard" is
+      dictation) unless it is the whole utterance.
 
     A control phrase never fires with more words after it: "over the bridge"
     and "this regard is important" are dictation. ``words``: the effective
@@ -502,8 +511,12 @@ def control_kind(text: Any, words: Any = None) -> Optional[str]:
     for p, kind, tails in radio:
         if _ends_with(ws, p, tails):
             return kind
-    for kind, tails in (("end", ()), ("send", _RADIO_TAILS), ("clear", _RADIO_TAILS)):
-        hit = sound_tail(text, w[kind], tails)
+    for kind, tails, lead in (
+        ("end", (), False),
+        ("send", _RADIO_TAILS, False),
+        ("clear", _RADIO_TAILS, True),
+    ):
+        hit = sound_tail(text, w[kind], tails, lead)
         if hit is not None:
             return kind
     return None

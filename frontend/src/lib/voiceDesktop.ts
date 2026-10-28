@@ -248,7 +248,9 @@ export function buildMatchers(w: VoiceWords, v = -1): VoiceMatchers {
     .filter((e) => e.rx)
     .sort((a, b) => longestFirst(a.p, b.p));
   const sounded = (text: string): RegExpExecArray | null => {
-    const hit = soundTail(text, w.end) || soundTail(text, w.send, RADIO_TAILS) || soundTail(text, w.clear, RADIO_TAILS);
+    // A clear phrase heard a little off must start with its letter unless
+    // said alone: a false clear throws the draft away ("… in this regard").
+    const hit = soundTail(text, w.end) || soundTail(text, w.send, RADIO_TAILS) || soundTail(text, w.clear, RADIO_TAILS, true);
     return hit ? heardAs(text, hit.before, hit.phrase) : null;
   };
   const radio = entries.length

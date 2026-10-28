@@ -6120,7 +6120,7 @@ Every voice word named in this section — "over", "over and out",
 **default**: each can be changed in [Settings → Voice → Voice
 words](#voice-words), and the mic, its hints and the Voice tour then use the
 new ones. Each is also heard the way the recogniser tends to write it (*ova*,
-*over an out*, *this regard*, *mind lock*), and a word you add a letter off
+*over an out*, *dis regard*, *mind lock*), and a word you add a letter off
 (*rodger* for "roger") — at the end of a phrase only, never mid-sentence
 ([Voice words](#voice-words), *Heard a little off*).
 
@@ -6387,7 +6387,10 @@ every save), then the server's.
   whisper writes** for each default phrase comes with the words as
   `words.heard` (`lib/voiceWords` `heardOf`) and is matched exactly like
   the phrase — *ova*, *oh ver* send; *over an out*, *over and now* send and
-  stop; *this regard*, *dis regard*, *just regard that* start over; *stop
+  stop; *dis regard*, *just regard that* start over (a clear word heard a
+  little off counts from its first letter on — *dis regards* — or said on
+  its own: "…in this regard" is dictation, and a false clear loses the
+  draft); *stop
   listing*, *mike off* stop; *be quite*, *quite*, *enuf* hush — and is held
   back while it may still be said, like the words; and a phrase **a letter
   off** (`soundsLike`: *rodger* for "roger", *pipe town* for "pipe down" —
@@ -6972,7 +6975,7 @@ phrase keeps the spoken variants the router keeps while it is in the list
 (*stop listening* → *stop recording*, *mic off* → *microphone off*, *done
 talking* → *I'm done talking*, *stop talking* → *stop speaking*, *okay
 stop*…) and what the recogniser writes for it (`words.heard`, the server's
-table — *ova*, *this regard*, *over an out*, *be quite* — folded in by
+table — *ova*, *dis regard*, *over an out*, *be quite* — folded in by
 `voiceWordsWide`, held back on a guess like the words); a phrase the owner
 adds is matched whole, or a letter off (`voiceSoundsLike`, the server's
 `sounds_like` to the letter — *rodger*, *pipe town*): `voiceDictParse`

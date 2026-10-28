@@ -489,7 +489,7 @@ def test_heard_forms_and_the_sound_key_are_wired():
     parse = _fn(js, "voiceDictParse")
     assert (
         "voiceSoundTail(t, W.end)" in parse
-        and "voiceSoundTail(t, W.clear, VOICE_CLEAR_TAILS)" in parse
+        and "voiceSoundTail(t, W.clear, VOICE_CLEAR_TAILS, true)" in parse
     )
     hush = _fn(js, "voiceIsHush")
     assert "voiceSoundsLike(t, p)" in hush and "VOICE_W.hush.test(t)" in hush

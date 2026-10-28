@@ -1697,7 +1697,7 @@ equal to ours — is not stored, so it follows the default.
 
 **What the recogniser writes** (`words.heard`). Whisper does not always
 write the word that was said — "over" comes out as *ova*, "disregard" as
-*this regard*, "over and out" as *over an out*, "mindflock" as *mind lock* —
+*dis regard*, "over and out" as *over an out*, "mindflock" as *mind lock* —
 so `words` also carries `heard: {send: [...], end: [...], clear: [...],
 stop: [...], hush: [...], wake: [...]}`: for each kind, the forms the
 recogniser is known to write for the phrases in its list

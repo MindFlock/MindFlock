@@ -45,7 +45,8 @@ describe("the shared fixture", () => {
     const w = W.wordsFrom(F.words, W.BUILTIN_VOICE_WORDS);
     expect(w.send).toEqual(["over"]);
     expect(w.heard?.send).toEqual(["ova", "ovah", "oh ver", "o ver", "overt"]);
-    expect(w.heard?.clear).toContain("this regard");
+    expect(w.heard?.clear).toContain("dis regard");
+    expect(w.heard?.clear).not.toContain("this regard"); // "in this regard" ends a sentence
     expect(w.heard?.wake).toContain("mind lock");
     const c = W.wordsFrom(F.custom, W.BUILTIN_VOICE_WORDS);
     expect(c.send).toEqual(["roger"]);
@@ -80,7 +81,10 @@ describe("the heard forms (words.heard)", () => {
     W.setVoiceWords(F.words, W.BUILTIN_VOICE_WORDS);
     expect(V.parseRadio("fix the bug ova")).toEqual({ kind: "over", text: "fix the bug" });
     expect(V.parseRadio("ship it over an out")).toEqual({ kind: "out", text: "ship it" });
-    expect(V.parseRadio("scrap it this regard")).toEqual({ kind: "disregard", text: "scrap it" });
+    expect(V.parseRadio("scrap it dis regard")).toEqual({ kind: "disregard", text: "scrap it" });
+    // "…in this regard" ends a sentence: a clear heard a little off needs its first letter mid-dictation.
+    expect(V.parseRadio("I agree in this regard")).toEqual({ kind: "", text: "I agree in this regard" });
+    expect(V.parseRadio("this regard")).toEqual({ kind: "disregard", text: "" });
     expect(V.stopTail("fix it stop listing")).toBe("fix it");
     expect(V.isHushPhrase("a nuff")).toBe(true);
     // Before the server answers (or from an older one): the words alone
@@ -95,8 +99,8 @@ describe("the heard forms (words.heard)", () => {
 
   it("are held back while they may still be said, like the words", () => {
     W.setVoiceWords(F.words, W.BUILTIN_VOICE_WORDS);
-    expect(V.holdBack("fix the bug this")).toEqual({ type: "fix the bug", held: "this" });
-    expect(V.holdBack("fix the bug this regard")).toEqual({ type: "fix the bug", held: "this regard" });
+    expect(V.holdBack("fix the bug dis")).toEqual({ type: "fix the bug", held: "dis" });
+    expect(V.holdBack("fix the bug dis regard")).toEqual({ type: "fix the bug", held: "dis regard" });
     expect(V.holdBack("fix the bug this time")).toEqual({ type: "fix the bug this time", held: "" });
     expect(V.holdBack("ship it over an")).toEqual({ type: "ship it", held: "over an" });
     expect(V.controlMaxWords()).toBe(7);

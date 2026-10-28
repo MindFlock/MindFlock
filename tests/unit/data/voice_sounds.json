@@ -49,9 +49,7 @@
    ],
    "clear": [
     "dis regard",
-    "this regard",
     "just regard",
-    "the regard",
     "disregarded",
     "disregards",
     "this is guard"
@@ -415,7 +413,7 @@
   },
   {
    "text": "scrap it this regard",
-   "kind": "clear",
+   "kind": null,
    "words": "default"
   },
   {
@@ -771,6 +769,21 @@
   {
    "text": "move it over and back",
    "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "I agree in this regard",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "this regard",
+   "kind": "clear",
+   "words": "default"
+  },
+  {
+   "text": "scrap it, disregard",
+   "kind": "clear",
    "words": "default"
   }
  ]

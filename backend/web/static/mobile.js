@@ -5519,7 +5519,7 @@
     var W = VOICE_W.words, hit;
     if ((hit = voiceSoundTail(t, W.end))) return { kind: "out", text: hit.before };
     if ((hit = voiceSoundTail(t, W.send))) return { kind: "over", text: hit.before };
-    if ((hit = voiceSoundTail(t, W.clear, VOICE_CLEAR_TAILS))) return { kind: "disregard", text: hit.before };
+    if ((hit = voiceSoundTail(t, W.clear, VOICE_CLEAR_TAILS, true))) return { kind: "disregard", text: hit.before };
     return { kind: "", text: t };
   }
 
@@ -5813,7 +5813,10 @@
   // {before, phrase} (the words before it, trailing punctuation dropped;
   // the phrase as the owner set it), else null. `tails`: words that may
   // follow a phrase and still count ("… that").
-  function voiceSoundTail(text, phrases, tails) {
+  // `lead`: a tail that is not the whole utterance must also start with the
+  // phrase's first letter (the clear words — a false clear throws the draft
+  // away: "in this regard" is dictation, "dis regards" clears).
+  function voiceSoundTail(text, phrases, tails, lead) {
     var toks = String(text || "").trim().split(/\s+/).filter(Boolean), idx = [];
     toks.forEach(function (t, i) { if (voiceLetters(t)) idx.push(i); });
     if (!idx.length) return null;
@@ -5826,6 +5829,7 @@
       for (var k = Math.min(most, ends[e]); k >= 1; k--) {
         var said = idx.slice(ends[e] - k, ends[e]).map(function (i) { return voiceLetters(toks[i]); }).join("");
         for (var j = 0; j < ordered.length; j++) {
+          if (lead && k < ends[e] && said.charAt(0) !== voiceLetters(ordered[j]).charAt(0)) continue;
           if (voiceSoundsLike(said, ordered[j])) {
             return { before: toks.slice(0, idx[ends[e] - k]).join(" ").replace(/[\s,.!?]+$/, ""), phrase: ordered[j] };
           }

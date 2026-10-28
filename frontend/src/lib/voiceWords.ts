@@ -345,9 +345,16 @@ export function soundsLikeAny(text: string, phrases: readonly string[]): boolean
  * phrase tried first, one word more than it has allowed for a split like
  * "rod ger") → the phrase as the person set it and the words said before
  * it (trailing punctuation dropped), else null. `tails`: words that may
- * follow a phrase and still count ("disregard that"). The server's
- * `sound_tail`. */
-export function soundTail(text: string, phrases: readonly string[], tails: readonly string[] = []): { before: string; phrase: string } | null {
+ * follow a phrase and still count ("disregard that"); `lead`: a tail that
+ * is not the whole utterance must also start with the phrase's first letter
+ * (the clear words — a false hit throws a draft away: "in this regard" is
+ * dictation, "dis regards" clears). The server's `sound_tail`. */
+export function soundTail(
+  text: string,
+  phrases: readonly string[],
+  tails: readonly string[] = [],
+  lead = false,
+): { before: string; phrase: string } | null {
   const toks = String(text || "").trim().split(/\s+/).filter(Boolean);
   const idx = toks.flatMap((t, i) => (letters(t) ? [i] : []));
   if (!idx.length) return null;
@@ -359,11 +366,13 @@ export function soundTail(text: string, phrases: readonly string[], tails: reado
   for (const end of ends)
     for (let k = Math.min(most, end); k >= 1; k--) {
       const said = idx.slice(end - k, end).map((i) => letters(toks[i])).join("");
-      for (const p of ordered)
+      for (const p of ordered) {
+        if (lead && k < end && said[0] !== letters(p)[0]) continue;
         if (soundsLike(said, p)) {
           const before = toks.slice(0, idx[end - k]).join(" ").replace(/[\s,.!?]+$/, "");
           return { before, phrase: p };
         }
+      }
     }
   return null;
 }
