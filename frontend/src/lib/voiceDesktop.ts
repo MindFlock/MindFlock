@@ -1073,8 +1073,9 @@ export const CONFIRM_LINES = {
   bye: "Over and out.",
   /** "disregard". */
   cleared: "Cleared.",
-  /** A stop phrase ("stop recording"). */
-  stopped: "Stopped.",
+  // A stop phrase ("stop recording") has no line: the falling stop chime is
+  // its answer — "Stopped." was heard as the mic saying stop back, every
+  // time (2026-10-28).
 } as const;
 export type ConfirmKind = keyof typeof CONFIRM_LINES;
 
@@ -1410,7 +1411,6 @@ export class LiveDictation {
         return;
       case "leave":
         if ((out.text || out.erase) && !(await this.put(out.text, true, out.erase))) return;
-        if (out.stop) this.hooks.confirm?.("stopped");
         this.end(
           t?.kind === "session" && this.dict.typed ? LEFT_LINE : out.stop ? STOPPED_LINE : "",
           false,
@@ -2388,7 +2388,7 @@ interface Queued {
  *    (the mic is muted for it), and is dropped once {@link CONFIRM_STALE_MS}
  *    old; a per-session {@link cancel} never drops one;
  *  - a {@link cue} (the mic's chime) takes a confirmation's place: never over
- *    words — a stop's chime follows its "Stopped." whole. */
+ *    words — a stop's chime follows a pending "Over and out." whole. */
 export class SpeechQueue {
   private lines: Queued[] = [];
   /** The engine saying the current line (cancel THAT one, even if the
@@ -2442,7 +2442,7 @@ export class SpeechQueue {
 
   /** A short sound (the mic's chime) in the queue's order: never over words —
    * after the line being said and the confirmations waiting (a stop phrase's
-   * "Stopped." plays whole, then the chime), before any reply; played even
+   * "Over and out." plays whole, then the chime), before any reply; played even
    * while held or gated, {@link CUE_GAP_MS} of quiet first when it follows a
    * line. `play` starts it, `ms` is its length. Not words: no onSpeaking,
    * never {@link last}; a {@link hold} (the mic keyed again) drops it

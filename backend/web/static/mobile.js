@@ -2930,8 +2930,10 @@
   var VOICE_NOD_ECHO_MS = 4000;      // a phrase this soon after one that is just its words is its echo
   var VOICE_MID_WORDS_MS = 1500;         // continuous listening: words this recent mean mid-sentence...
   var VOICE_MID_QUIET_MS = 250;          // ...until the voice has been quiet this long — then a line may play
-  // The spoken confirmations (prefs.confirm): what was done, said short.
-  var VOICE_NOD_LINES = ["Sent.", "Sent. Over and out.", "Over and out.", "Cleared.", "Stopped."];
+  // The spoken confirmations (prefs.confirm): what was done, said short. A
+  // stop phrase has none — the falling chime is its answer (the owner heard
+  // "Stopped." as the phone saying stop back, every time; 2026-10-28).
+  var VOICE_NOD_LINES = ["Sent.", "Sent. Over and out.", "Over and out.", "Cleared."];
   var VOICE_DICT_IDLE_MS = 120000;       // listening ends after this long without a word (the words stay)
   var VOICE_RAPID_RESTART_MAX = 8;       // recognizers that die within a second of starting, in a row
   var VOICE_OVER_WAIT_MS = 1500;         // push to talk: how long the last phrase may take to arrive
@@ -5020,8 +5022,8 @@
   // mic starts listening; "stop" — two falling, ~140 ms, softer — whenever
   // it stops (voiceSetState). The recorder skips them (voiceMicMuted). A
   // reply being said holds a chime until it is over; the stop chime waits
-  // for a confirmation too ("Stopped." is queued first, the chime after it,
-  // never over it) — the queue plays it once the last one is said
+  // for a confirmation too ("Over and out." is queued first, the chime after
+  // it, never over it) — the queue plays it once the last one is said
   // (voiceSpeechPump), the next line VOICE_CHIME_MS after it.
   var VOICE_CHIMES = {
     start: { tones: [[660, 0], [990, 0.06]], gain: 0.25, len: 0.06 },
@@ -5068,7 +5070,7 @@
     return !!k && voiceChime(k);
   }
   // A nod: the spoken confirmation of what the owner just did by voice — "Sent.",
-  // "Sent. Over and out.", "Cleared.", "Stopped." — under prefs.confirm
+  // "Sent. Over and out.", "Cleared." — under prefs.confirm
   // (on by default; Spoken replies off does not silence it: it is about
   // the owner's action, not the agent's reply). One voice still: it goes
   // through the queue, but at its FRONT (after the confirmations already
@@ -5539,17 +5541,16 @@
   }
   // A stop phrase: listening ends, the words said before it join the box,
   // kept — unless an "over" (and out) came first: "fix it over and out,
-  // that's all" sends "fix it", as "over and out" would. The stop never
-  // cuts its own confirmation: "Stopped." is queued first (said over the
-  // listen's last moment, the recognizer already stopped), then listening
-  // ends — the stop chime waits for the line (voiceChime), and a reply that
-  // waited for the mic comes after both. Nothing queued is dropped.
+  // that's all" sends "fix it", as "over and out" would. No spoken
+  // confirmation: the falling stop chime is the answer ("Stopped." was
+  // heard as the phone saying stop back). A nod already queued ("Sent.")
+  // still plays whole before the chime (voiceChime holds it), and a reply
+  // that waited for the mic comes after. Nothing queued is dropped.
   function voiceStopPhrase(before, mode) {
     var p = voiceDictParse(before);
     if (mode !== "dialog" && (p.kind === "over" || p.kind === "out")) { voiceHeardWords({ kind: "out", text: p.text }); return; }
     voiceStopForCommand();
     if (mode !== "dialog" && p.kind !== "disregard" && p.text) voiceAppend(p.text);
-    voiceNod("Stopped.");
     if (mode === "dialog") { voiceIdle(nameOf(voice.session) + " is waiting on you"); return; }
     voiceListenKept();
   }

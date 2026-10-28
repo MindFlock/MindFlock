@@ -4,7 +4,8 @@
  *    router again), "over and out" sends what is pending and stops, a stop
  *    phrase / Esc / letting go stop without sending; "submit" is a word;
  *  - spoken confirmations ("Sent.", "Sent. Over and out.", "Over and out.",
- *    "Cleared.", "Stopped.", a switch's line): the queue's front, said while
+ *    "Cleared.", a switch's line — a stop phrase has none, its chime is the
+ *    answer): the queue's front, said while
  *    the mic listens (held), stale after 5 s, the recorder muted for them,
  *    their audio cached per voice and made ahead only for a local voice;
  *  - snappy control words: one at the end of the GUESS acts after
@@ -158,7 +159,7 @@ describe("continuous dictation: “over” sends and listening goes on", () => {
       else await d.finish();
       expect(mocks.instApi).not.toHaveBeenCalled();
       expect(d.active).toBe(false);
-      expect(k.said).toEqual(how === "stop" ? ["stopped"] : []);
+      expect(k.said).toEqual([]); // a stop phrase says nothing: the falling chime is its answer
     }
   });
 
@@ -319,7 +320,7 @@ describe("Confirmer: the switch, the mute, the made-ahead audio", () => {
     local.c.prime();
     local.c.prime();
     expect(local.prefetched).toEqual([Object.values(CONFIRM_LINES)]);
-    expect(Object.values(CONFIRM_LINES)).toEqual(["Sent.", "Sent. Over and out.", "Over and out.", "Cleared.", "Stopped."]);
+    expect(Object.values(CONFIRM_LINES)).toEqual(["Sent.", "Sent. Over and out.", "Over and out.", "Cleared."]);
 
     const paid = rig({ local: false });
     paid.c.prime();
@@ -530,7 +531,7 @@ describe("snappy control words: acted on from the guess after a moment's quiet",
     expect(d.active).toBe(false);
     expect(ends).toBe(1);
     expect(mocks.instApi).not.toHaveBeenCalled();
-    expect(k.said).toEqual(["stopped"]);
+    expect(k.said).toEqual([]); // no "Stopped.": the chime answers a stop
   });
 
   it("a held word the next word rules out goes in, and nothing fires", async () => {
@@ -842,27 +843,20 @@ describe("a stop's own confirmation plays whole: nothing cuts it, the chime come
     while (!done) await vi.advanceTimersByTimeAsync(10);
   };
 
-  it("a stop phrase: “Stopped.” finishes on its own, then the falling chime — no cancel, skip or hold", async () => {
+  it("a stop phrase says nothing: the falling chime alone answers it — no cancel, skip or hold", async () => {
     const r = rig();
     expect(r.events).toEqual(["chime start"]); // the queue was idle: at once
     await vi.advanceTimersByTimeAsync(CHIME_MS);
     await r.d.heard("half a thought stop recording");
     expect(r.d.active).toBe(false);
     expect(r.halts()).toBe(1);
-    expect(r.events).toEqual(["chime start", "say Stopped."]);
-    expect(r.mutes).toEqual([true]);
-    // The stop's teardown and the release are done: the line plays on.
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(r.events).toEqual(["chime start", "say Stopped."]);
-    await r.end();
-    // A breath after the words, never over them.
-    await vi.advanceTimersByTimeAsync(CUE_GAP_MS - 1);
-    expect(r.events.at(-1)).toBe("end Stopped.");
-    await vi.advanceTimersByTimeAsync(1);
-    expect(r.events).toEqual(["chime start", "say Stopped.", "end Stopped.", "chime stop"]);
+    // No "Stopped." (the owner heard it as the mic saying stop back): the
+    // queue was idle, so the stop chime plays at once, and nothing is cut.
+    expect(r.events).toEqual(["chime start", "chime stop"]);
+    expect(r.events.some((e) => e.startsWith("say"))).toBe(false);
     expect(r.events.some((e) => e.startsWith("cut"))).toBe(false);
     expect(r.queueCalls()).toEqual([]);
-    expect(r.mutes).toEqual([true, false]);
+    expect(r.mutes).toEqual([]);
     await vi.advanceTimersByTimeAsync(STOP_CHIME_MS);
     expect(r.q.idle).toBe(true);
   });
