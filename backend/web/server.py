@@ -647,6 +647,8 @@ from backend.web.core.red_zone_driver import (
 )
 from backend.web.addons import AppContext as _AddonContext, register_addons
 from backend.web.routes import peer as _peer_routes
+from backend.web.routes import peer_sessions as _peer_session_routes
+from backend.web.routes import chat as _chat_routes
 from backend.web.routes import guests as _guest_routes
 from backend.web.routes import team_runs as _team_runs_routes
 from backend.web.core import voice_actions as _voice_actions
@@ -11549,6 +11551,8 @@ _serve_pty = pump_pty
 # Peer links (docs/peer-link.md): routes/peer.py
 # --------------------------------------------------------------------------- #
 app.include_router(_peer_routes.router)
+app.include_router(_peer_session_routes.router)
+app.include_router(_chat_routes.router)
 app.include_router(_guest_routes.router)
 
 
