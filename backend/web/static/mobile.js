@@ -2620,13 +2620,24 @@
     return vv ? Math.max(0, vv.offsetTop) : 0;
   }
   var appliedH = 0, appliedTop = 0;
+  // The tallest the viewport has been since the last turn of the phone: the
+  // keyboard is up when the viewport has lost more than 150px to it (the
+  // browser chrome coming and going is less). innerHeight can't be the
+  // yardstick — under interactive-widget=resizes-content it shrinks too.
+  var KB_UP_PX = 150;
+  var tallestH = 0;
   function applyViewport() {
     var h = visibleHeight();
     var top = viewportTop();
     appliedH = h;
     appliedTop = top;
+    if (h > tallestH) tallestH = h;
     var app = document.getElementById("app");
     app.style.height = h + "px";
+    // #app.kb: the keyboard covers the home bar, so the key bar drops its
+    // safe-area inset (mobile.css) — iOS keeps reporting it, which left a
+    // band of panel between the keys and the keyboard.
+    app.classList.toggle("kb", tallestH - h > KB_UP_PX);
     // Browsers that PAN the visual viewport toward the focused compose box
     // (iOS always; Android when interactive-widget=resizes-content is not
     // honored) slide the layout viewport partly out of view — offsetTop is
@@ -2661,7 +2672,19 @@
   }
   composeEl.addEventListener("focus", nudgeViewport);
   composeEl.addEventListener("blur", nudgeViewport);
-  window.addEventListener("orientationchange", function () { setTimeout(applyViewport, 200); });
+  // #app.typing while the compose box has focus: the voice strip (its
+  // "Tap to hear …" block included) leaves the screen to the terminal and
+  // the keyboard (mobile.css), and the terminal refits around it.
+  function setTyping(on) {
+    document.getElementById("app").classList.toggle("typing", on);
+    fitSoon();
+  }
+  composeEl.addEventListener("focus", function () { setTyping(true); });
+  composeEl.addEventListener("blur", function () { setTyping(false); });
+  window.addEventListener("orientationchange", function () {
+    tallestH = 0;   // portrait and landscape have their own tallest
+    setTimeout(applyViewport, 200);
+  });
 
   // --- viewport debug overlay (?debug=1) -------------------------------------
   // iOS Safari can't be remote-inspected from the server box, so when the

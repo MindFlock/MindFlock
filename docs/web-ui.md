@@ -6482,9 +6482,15 @@ seen.
 ## Mobile UI (`/m`)
 
 A single full-screen terminal for phones: session picker, state dot and chip,
-Agent/Terminal tabs, a `+` that starts a session, and a soft-key bar (esc, sticky
-ctrl, tab, arrows, enter — the sticky ctrl folds the next key into a control
-code). It uses the same WebSockets
+Agent/Terminal/Diff tabs, a `+` that starts a session, and a soft-key bar (esc,
+sticky ctrl, tab, arrows, enter — the sticky ctrl folds the next key into a
+control code). The top bar is one row, always: the picker's name is what gives
+(it ellipsizes), and under ~200 px of picker — a phone in portrait — the state
+chip hides and the dot alone carries the tone. While the compose box has focus
+the voice strip (its *Tap to hear …* block included) leaves the screen to the
+terminal and the keyboard, and the key bar drops its home-bar inset while the
+keyboard is up (iOS keeps reporting the inset; it left a band between the keys
+and the keyboard). It uses the same WebSockets
 and session list as the desktop UI, remembers your last session, and accepts
 `?s=<title>` to deep-link one. The server prints the `/m` URL (and a QR code in
 tailscale mode) shortly after startup — the banner probe (like the other
