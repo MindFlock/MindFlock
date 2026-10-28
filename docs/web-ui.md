@@ -2509,6 +2509,23 @@ approval, Claude's question menu — raises a Question; on, a reply ending
 with a question also puts a Question on the row, in the bell, the toast and
 the push, answered with Reply.
 
+## The session chat (people, not agents)
+
+When a guest (or a peer) is on one of your sessions — their name pill on
+the rail row — a small floating chat for that session pops up bottom-right
+(`components/chat/ChatPanel.tsx`, `lib/chat.ts`; a bottom sheet at phone
+width). It is between the people on the session only; agents never see it.
+It opens by itself when someone arrives (`guest.focus_changed`, `joined`),
+and as a minimized pill with an unread count when someone writes on a
+session whose chat isn't open (`session.chat`); a guest's page opens it when
+the owner writes. ▁ minimizes, × closes (and that person arriving again on
+that session doesn't reopen it this page load); **💬 Chat** opens it by hand
+for the focused session while someone is on it, and `openChat(title)` is
+what any other surface (the guest pill) calls. Messages load from
+`GET /api/instances/<title>/chat`, follow `session.chat` live and re-read
+every 15 s while a window is up; nothing is persisted — see
+[people.md](people.md#a-small-chat).
+
 ## Diff → instruction
 
 Select any text in a pane's **Diff** tab and a floating **✦ Ask agent** button

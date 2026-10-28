@@ -124,6 +124,8 @@ G = {"id": "g", "label": "", "sessions": ["alpha"]}
         ("GET", "/api/instances/alpha/diff", True),
         ("POST", "/api/instances/alpha/send", True),
         ("POST", "/api/instances/alpha/queue/edit", True),
+        ("POST", "/api/instances/alpha/chat", True),
+        ("POST", "/api/instances/beta/chat", False),
         ("GET", "/api/instances/alpha/terminal", True),
         ("POST", "/api/instances/alpha/close", False),
         ("POST", "/api/instances/alpha/commit", False),
@@ -325,6 +327,41 @@ def test_a_guests_focus_moves_a_pill_on_the_owners_rail(link, owner, monkeypatch
         }
     finally:
         unsub()
+
+
+def test_a_guest_chats_on_its_session_and_not_another(link, owner, monkeypatch):
+    """The session chat (core.chat): a guest reads and writes the chat of a
+    session their link reaches, as themselves; another session's is the
+    invite's 403."""
+    from backend.web.core import chat
+    from backend.web.core import person as _person
+
+    chat._reset()
+    monkeypatch.setattr(guests, "_live_instances", lambda: {})
+    monkeypatch.setattr(_person, "current", lambda: {"id": "o", "name": "Erik"})
+    for t in ("alpha", "gamma"):
+        monkeypatch.setitem(server.ENGINE.instances, t, object())
+    rec, tok = link
+    guests.set_name(rec["id"], "Sam")
+    c = _guest_client(tok)
+    try:
+        r = c.get("/api/instances/alpha/chat")
+        assert r.status_code == 200
+        assert r.json()["me"] == {"id": "guest:" + rec["id"], "name": "Sam"}
+        r = c.post("/api/instances/alpha/chat", json={"text": "hi Erik"})
+        assert r.status_code == 201 and r.json()["from"] == "guest:" + rec["id"]
+        owner.post("/api/instances/alpha/chat", json={"text": "hi Sam"})
+        said = [
+            (m["name"], m["text"])
+            for m in c.get("/api/instances/alpha/chat").json()["messages"]
+        ]
+        assert said == [("Sam", "hi Erik"), ("Erik", "hi Sam")]
+        assert c.get("/api/instances/gamma/chat").status_code == 403
+        assert (
+            c.post("/api/instances/gamma/chat", json={"text": "x"}).status_code == 403
+        )
+    finally:
+        chat._reset()
 
 
 # --------------------------------------------------------------------------- #

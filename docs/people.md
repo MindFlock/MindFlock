@@ -222,6 +222,32 @@ What the link holds, exactly (`backend/web/core/guests.py`):
 
 `GET/POST /api/guests`, `POST/DELETE /api/guests/<id>` — [web-api.md](web-api.md#guest-links).
 
+### A small chat
+
+When someone is on one of your sessions, a little chat window pops up
+bottom-right for that session — a full-width sheet on a phone. It is for the
+**people** on the session: you, a guest who came in through a guest link,
+and a peer who has the session open from their own MindFlock. **Agents are
+not in it** — nothing typed there reaches the terminal.
+
+- **It opens by itself** when someone arrives on one of your sessions (the
+  guest's pill appears) and, minimized with an unread count, when someone
+  writes on a session whose chat isn't open. A guest's own page opens it
+  when you write to them. Close it and it stays closed for that person on
+  that session for the rest of the page load; someone else arriving brings
+  it back as a pill, not a window. **💬 Chat** in the corner opens it by
+  hand for the session in focus while someone else is on it.
+- **One per session**, the session's name in the header, **▁** to minimize
+  (the pill carries the unread count), **×** to close. Enter sends,
+  Shift+Enter is a new line; messages are up to 2000 characters.
+- **Nothing is kept.** The server holds the last 200 messages per session
+  in memory (`backend/web/core/chat.py`); a restart or deleting the session
+  forgets them. A chat lives where its session lives — another device's row
+  has none here.
+
+`GET/POST /api/instances/<title>/chat` (a guest may use it on a session
+their link reaches); every message is `session.chat` on the bus.
+
 ## Git identity
 
 `backend.web.core.person.git_identity_args()` returns

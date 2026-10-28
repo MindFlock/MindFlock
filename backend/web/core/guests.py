@@ -78,7 +78,8 @@ MAX_SESSIONS = 50
 #: The session sub-routes a guest may change (anything else under their
 #: session answers GET only): the typing surface — the terminal and shell
 #: sockets, prompts, answers, the queue, voice, find, the family thread,
-#: waking a sleeping agent, background-job expectations, the map's ask-plan.
+#: waking a sleeping agent, background-job expectations, the map's ask-plan,
+#: the session chat (core.chat).
 #: Not: closing, deleting, copying, committing, pushing, PRs, fast-track,
 #: branches, fences, zones, owner/parent/order/profile — the owner's calls.
 SESSION_WRITE_OK = frozenset(
@@ -100,6 +101,7 @@ SESSION_WRITE_OK = frozenset(
         "background",
         "code-map",
         "focus",
+        "chat",
     }
 )
 
