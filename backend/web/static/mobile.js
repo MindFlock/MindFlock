@@ -5976,6 +5976,10 @@
         if (!say) { voiceQuestion(String(res.title || "") || voice.session); return true; }
         voiceSayThenIdle(voiceNameFirst(String(res.title || "") || voice.session, say));
         return true;
+      case "help":
+        voiceStopForCommand();
+        voiceHelp(res);
+        return true;
       case "needs":
       case "status":
         voiceStopForCommand();
@@ -5995,6 +5999,27 @@
         voiceRunCommand({ kind: res.kind, arg: "" });
         return true;
     }
+  }
+  // --- help: a question about MindFlock, answered from its docs -----------------
+  // The router's {kind: "help", text}: "Looking that up…" while POST
+  // /api/voice/help ranks the docs and a quick model words the answer, then
+  // the answer said (captioned, and kept for "say that again").
+  VOICE_ROUTE_KINDS.push("help");
+  function voiceHelp(res) {
+    var text = String(res.text || "").trim();
+    voiceSetState("working", "Looking that up…");
+    fetch("/api/voice/help", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: text }),
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (voice.state === "off") return;
+        var line = r.ok && j && j.say ? String(j.say) : "Couldn't look that up.";
+        speakLine(line).then(function (ok) { if (ok) voiceIdle(); });
+      });
+    }).catch(function () {
+      if (voice.state === "off") return;
+      speakLine("Couldn't look that up.").then(function (ok) { if (ok) voiceIdle(); });
+    });
   }
   // The router's answer to a question or a dialog: {choice, number?,
   // index?, title?, dialog_id?, keys?, no_dialog?, say?}. With dialog_id +

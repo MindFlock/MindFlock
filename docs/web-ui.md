@@ -6104,7 +6104,10 @@ session showing a dialog — a lone "yes", "no", "always" or a number answers it
 instead (pressed only with *Approve dialogs by voice* on), and answers a
 question the session asked as a prompt. A dictation's first phrase is offered
 to the voice router first ("switch to …", "focus three", "next session", "new
-session …", "what needs me", "what sessions do I have", "session three yes"),
+session …", "what needs me", "what sessions do I have", "session three yes",
+and questions about MindFlock itself — "how does the fence work?" — which are
+answered out loud from the docs, *Read replies aloud* or not, and kept for
+"say that again"),
 and the reply is read aloud only while *Read replies aloud* says so (right-click
 the mic, or Settings → Voice → This computer's mic): **Off** (the default),
 **Replies to what I said by voice** (a draft this mic submitted asks the
@@ -7178,6 +7181,7 @@ or "please" in front:
 | *what needs me* · *who needs me* · *what needs (my) attention* | the sessions in the bell, attention first, at most three: *<name> is asking: <its line>.* or *<name> is <state word>.* — else *Nothing needs you.* |
 | *what's it doing* · *what is it doing* · *status* · *what's happening* · *what's going on* | the state word (*for N minutes* while working) and the session's latest turn snippet |
 | *summarize that* · *summarize it* · *summarise* · *what did it say* · *summary* | one model call on the server (`POST /voice/condense`, 10–45 s): the newest reply in two sentences — *That took too long.* on a timeout, the route's own sentence on any other refusal |
+| *how do I schedule a template?* · *what does autopilot do?* · *where do I turn on the phone page?* · *mindflock, …* · *help: …* | a question about **MindFlock itself** is answered from its docs: *Looking that up…*, then at most two sentences naming the section they come from (*From Fast-track: …*) — the router's `{kind: "help", text}`, answered by `POST /api/voice/help` (a quick model call words the best sections; without one, the best section's first sentences). It is help only when the question names MindFlock or one of its features (sessions, templates, schedules, fences, zones, Fast-track, devices, the phone page, voice, tickets, PRs, worktrees, settings, team runs, peers, extensions, …) and says nothing of the agent's work (*fix*, *bug*, *test*, *file*, *code*, *this*, *my project*…), the session's state (*doing*, *said*, *status*…) or *you* — *how do I fix the login bug?* is a prompt. Said after *mindflock* or *help* it is always help. Not in the offline table: a question is a prompt there |
 | *say that again* · *repeat (that)* | the last line again |
 | *voice off* · *turn voice off* · *turn off voice* | voice mode off (`POST /voice {on: false}`) |
 | *stop talking* · *stop speaking* · *stop reading* · *be quiet* · *quiet* · *hush* · *shut up* · *(that's) enough* · *okay stop* | stops talking: the queue goes, listening goes on (below) — matched in **any** mode, before everything else |

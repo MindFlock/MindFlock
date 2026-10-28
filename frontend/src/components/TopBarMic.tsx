@@ -1055,6 +1055,10 @@ export function TopBarMic() {
       name: displayName,
       caption: say,
       announce,
+      speak: (line) => {
+        say(line, true);
+        queue.say(line);
+      },
       route: routePhrase,
       approveDialogs: () => refreshCfg().then((c) => !!c.approve_dialogs),
       activity: liveActivity,

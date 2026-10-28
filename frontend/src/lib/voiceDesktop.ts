@@ -44,7 +44,7 @@
  * browser's unless Settings say "server". */
 
 import { ApiError, api, apiRaw, instApi } from "../api/client";
-import type { Dialog } from "../api/types";
+import type { Dialog, VoiceHelp } from "../api/types";
 import { peekTerm } from "./terminals";
 import { toast } from "./toast";
 import { resamplerName, startWavRecording, type WavRecording } from "./wavRecorder";
@@ -1476,7 +1476,8 @@ export interface RouteReply {
     | "switch_index"
     | "switch_rel"
     | "answer"
-    | "question";
+    | "question"
+    | "help";
   title?: string;
   name?: string;
   say?: string;
@@ -1491,7 +1492,7 @@ export interface RouteReply {
   dialog_id?: string;
   keys?: string[];
   /** answer, on Claude's question prompt: free words for its "Type
-   * something" row, typed with the keys. */
+   * something" row, typed with the keys; help: the question asked. */
   text?: string;
   /** answer: the session has no dialog up (`say` says so). */
   no_dialog?: boolean;
@@ -1500,7 +1501,7 @@ export interface RouteReply {
 const ROUTE_KINDS = new Set<string>([
   "prompt", "switch", "new", "ambiguous", "no-session", "new-failed", "list",
   "needs", "status", "cancel", "stop", "hush", "off", "repeat", "condense",
-  "switch_index", "switch_rel", "answer", "question",
+  "switch_index", "switch_rel", "answer", "question", "help",
 ]);
 
 /** Ask the router what one phrase means. Anything but a well-formed 200 —
@@ -1554,6 +1555,9 @@ export interface CommandDeps {
   /** The caption; `announce` also speaks it when replies are on. */
   caption(line: string, sticky?: boolean): void;
   announce(line: string): void;
+  /** Say `line` whatever the replies choice — the answer to a question the
+   * person asked out loud — and caption it; absent: `announce`. */
+  speak?(line: string): void;
   /** POST /api/voice/route for `session`. */
   route(text: string, session: string): Promise<RouteReply>;
   /** GET /api/voice's `approve_dialogs`, read now. */
@@ -1612,9 +1616,34 @@ export async function runVoiceCommand(r: RouteReply, text: string, deps: Command
     case "question":
       deps.announce(r.say || "Nothing is being asked.");
       return true;
+    case "help": {
+      deps.caption(HELP_LOOKING_LINE);
+      const said = (await askHelp(r.text || text)).say;
+      // Asked out loud, answered out loud — replies on or off — and kept
+      // for "say that again".
+      (deps.speak || deps.announce)(said);
+      return true;
+    }
     default:
       return false;
   }
+}
+
+// --- help: questions about MindFlock --------------------------------------------- //
+
+export const HELP_LOOKING_LINE = "Looking that up…";
+export const HELP_FAILED_LINE = "Couldn't look that up.";
+
+/** POST /api/voice/help: the answer to a question about MindFlock, from its
+ * docs. Never throws — a failure is a line to say. */
+export async function askHelp(text: string): Promise<VoiceHelp> {
+  try {
+    const j = await api<VoiceHelp>("/api/voice/help", { json: { text } });
+    if (j && typeof j.say === "string" && j.say.trim()) return j;
+  } catch {
+    /* fall through */
+  }
+  return { say: HELP_FAILED_LINE, source: null, model: false };
 }
 
 /** An answer: into the dialog the server resolved (only with approving by

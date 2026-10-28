@@ -2109,3 +2109,32 @@ def test_the_server_recognizer_names_why_the_microphone_did_not_start():
         '"Page: " + (window.isSecureContext === false ? "http — the microphone needs https'
         in js
     )
+
+
+def test_mobile_js_help_answers_a_question_about_mindflock():
+    """The router's {kind: "help", text} (a question about MindFlock itself):
+    the page knows the kind, ends the listen, shows "Looking that up…" while
+    POST /api/voice/help {text} answers from the docs, then speaks its say —
+    speakLine captions it and keeps it as voice.lastLine, so "say that
+    again" repeats it. A failure is said, never silent."""
+    js = _js()
+    v = _voice_section(js)
+    assert 'VOICE_ROUTE_KINDS.push("help");' in v
+    routed = _fn(js, "voiceRouted")
+    case = routed.split('case "help":')[1].split("return true;")[0]
+    assert "voiceStopForCommand();" in case and "voiceHelp(res);" in case
+    helpfn = _fn(js, "voiceHelp")
+    assert 'voiceSetState("working", "Looking that up…");' in helpfn
+    assert 'fetch("/api/voice/help", {' in helpfn
+    assert "JSON.stringify({ text: text })" in helpfn
+    assert (
+        'var line = r.ok && j && j.say ? String(j.say) : "Couldn\'t look that up.";'
+        in helpfn
+    )
+    assert helpfn.count("speakLine(") == 2
+    assert 'if (voice.state === "off") return;' in helpfn
+    # "say that again" repeats what speakLine said last.
+    assert "voice.lastLine = said;" in js
+    assert 'speakLine(voice.lastLine || "Nothing to repeat yet.")' in _fn(
+        js, "voiceRunCommand"
+    )

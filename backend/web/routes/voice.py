@@ -455,3 +455,38 @@ async def voice_route(request: Request) -> JSONResponse:
     if ans.get("kind") in ("answer", "question") and ans.get("title"):
         ans = await _finish_answer(ans, rows)
     return JSONResponse(ans)
+
+
+# ---- voice help: questions about MindFlock -------------------------------------
+#: Longest question handed to the docs search and the model (characters).
+HELP_TEXT_MAX = 400
+
+
+def _help_answer(text: str) -> dict:
+    """``core.voice_help.answer`` — blocking (the model call). Module-level
+    so tests replace it."""
+    from backend.web.core import voice_help as _voice_help
+
+    return _voice_help.answer(text)
+
+
+@router.post("/api/voice/help")
+async def voice_help(request: Request) -> JSONResponse:
+    """A spoken question about MindFlock (the router's ``help`` answer
+    carries it as ``text``) → ``{say, source: {doc, heading} | null, model}``
+    — answered from the docs (``core.voice_help``): the best sections worded
+    by one quick model call, else the best section's first sentences. 400
+    when the body is not an object with a non-empty ``text``."""
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001 — not JSON: a bad body, not a 422
+        payload = None
+    text = payload.get("text") if isinstance(payload, dict) else None
+    text = (
+        " ".join(str(text or "").split())[:HELP_TEXT_MAX]
+        if isinstance(text, str)
+        else ""
+    )
+    if not text:
+        return JSONResponse({"error": "text must be a question"}, status_code=400)
+    return JSONResponse(await asyncio.to_thread(_help_answer, text))

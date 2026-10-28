@@ -480,6 +480,76 @@ def _question_command(text: str) -> Optional[dict]:
     return {"kind": "question", "target": tgt}
 
 
+# --- help: a question about MindFlock itself (core.voice_help answers it) ----
+# The shape of a question: "how do I …", "what is …", "where do I …", "can I
+# …", "is there …", "explain …", "tell me about …". "can you …" / "could you
+# …" ask the agent to do something: never help.
+_HELP_Q_RE = re.compile(
+    r"^(?:how(?: (?:do|does|can|should|would|to|is|are|come)\b|$)"
+    r"|what(?:'?s|s)?\b|which\b|where\b|why\b|when\b"
+    r"|(?:can|could|should|do|does|is|are) (?:i|we|mindflock|there)\b"
+    r"|is it possible\b|explain\b|describe\b"
+    r"|tell me (?:about|how|what|where|why|when|whether|if)\b)"
+)
+# Said first, they address MindFlock itself: "mindflock, how does the fence
+# work", "help: what is a team run" ("help me fix the login bug" is not a
+# question, so it stays a prompt).
+_HELP_PREFIX_RE = re.compile(
+    r"^(?:(?:ask |hey )?mind ?flock(?:'?s)?|help|help me understand) (?P<q>.+)$"
+)
+_HELP_NAMED_RE = re.compile(r"\b(?:in|about|does|do|can|with|of|on) mind ?flock\b")
+# MindFlock's own things, from the docs' headings and the Vocabulary table —
+# a how/what question about one of these is about MindFlock.
+_HELP_FEATURES = re.compile(
+    r"\b(?:sessions?|templates?|schedul(?:e|es|ed|ing)|cron"
+    r"|fences?|fenced|(?:red|green|keep ?out) zones?|zones?|autopilot|fast ?track"
+    r"|team runs?|split(?:ting)? (?:a |one )?task|lanes?|outbox|mailbox"
+    r"|devices?|my (?:mac|laptop|pc|computer|phone)|phone page|mobile page|the phone"
+    r"|voice(?: words| mode| replies)?|mic|microphone|radio words|wake word|say all"
+    r"|spoken replies|whisper|tickets?|intake|prs?|pull requests?|issues?"
+    r"|worktrees?|settings|peers?|peer links?|people|shared folder|extensions?"
+    r"|add ?ons?|the rail|rail|notifications?|the bell|toasts?|code (?:map|tree)"
+    r"|the map|map tab|tours?|onboarding|verify|checklists?|saved prompts?"
+    r"|prompt queue|pin(?:ned)? (?:a )?prompts?|recently closed|customi[sz]e|themes?"
+    r"|keyboard shortcuts?|shortcuts?|hotkeys?|usage|token usage|costs?"
+    r"|providers?|agent clis?|mcp|orchestrators?|workers?|lineage|tailscale"
+    r"|tailnet|desktop app|doctor|workflow optimi[sz]er|branch(?:ing)? a session"
+    r"|window rows?|windows|panes?|tabs?|diff tab|ask anywhere|assistant"
+    r"|make pr|open pr|merge when green|commit button|ship(?:ping)?)\b"
+)
+# The agent's work (a prompt), the session's state (a status question), or
+# someone spoken to: never help unless MindFlock was addressed first.
+_HELP_NOT = re.compile(
+    r"\b(?:fix(?:es|ed|ing)?|bugs?|tests?|testing|code(?! map| tree)|coding|files?|functions?"
+    r"|methods?|class(?:es)?|errors?|exceptions?|stack ?traces?|crash(?:es|ed)?"
+    r"|fail(?:s|ed|ing)?|broken|refactor(?:ing)?|implement(?:ed|ing|ation)?"
+    r"|compil(?:e|es|ed|ing)|deploy(?:s|ed|ing)?|login|endpoints?|variables?"
+    r"|modules?|imports?|lines?|components?|css|(?:my|this|the|our|that) "
+    r"(?:project|repo|repository|codebase|app|branch|pr|ticket|issue|session|window)"
+    r"|this|that|these|those|(?<!is )it|its|doing|did|done|finished|working on|said|saying"
+    r"|asking|asked|stuck|status|progress|right now|currently|yet|how many|running"
+    r"|(?<!how do )(?<!how can )(?<!where do )(?<!where can )you|your)\b"
+)
+
+
+def _help_command(text: str) -> Optional[dict]:
+    """A question about MindFlock itself → ``{"kind": "help", "text"}`` (the
+    question, a "mindflock," / "help:" lead dropped), or None. Help when the
+    phrase is question-shaped (:data:`_HELP_Q_RE`) AND either MindFlock was
+    addressed first ("mindflock, …", "help: …") or it names MindFlock or one
+    of its features (:data:`_HELP_FEATURES`) and says nothing of the agent's
+    work, the session's state or "you" (:data:`_HELP_NOT`). A missed
+    question still reaches the agent; when unsure it is a prompt."""
+    m = _HELP_PREFIX_RE.match(text)
+    if m and _HELP_Q_RE.match(m.group("q")):
+        return {"kind": "help", "text": m.group("q")}
+    if not _HELP_Q_RE.match(text) or _HELP_NOT.search(text):
+        return None
+    if _HELP_NAMED_RE.search(text) or _HELP_FEATURES.search(text):
+        return {"kind": "help", "text": text}
+    return None
+
+
 def command(text, words: Optional[dict] = None) -> Optional[dict]:
     """The command ``text`` is, or None (a prompt): ``{"kind", "arg"}``, and
     for ``new`` ``{"kind": "new", "name", "repo", "task"}`` as said (the repo
@@ -521,7 +591,7 @@ def command(text, words: Optional[dict] = None) -> Optional[dict]:
                 "kind": kind,
                 "arg": (m.group(1) or "").strip() if m.groups() else "",
             }
-    q = _question_command(w.text)
+    q = _question_command(w.text) or _help_command(w.text)
     if q is not None:
         return q
     m = _PICK_RE.match(w.text)
@@ -894,6 +964,8 @@ def answer(
         return _switched(row)
     if kind in ("answer", "question"):
         return _answer_or_question(cmd, session, rows, title)
+    if kind == "help":
+        return {"kind": "help", "text": cmd["text"]}
     if kind == "list":
         return _list(rows, now)
     if kind == "needs":

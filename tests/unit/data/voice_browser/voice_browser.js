@@ -27,6 +27,11 @@ const state = {
   posts: [],          // {url, body}
   routeStatus: 0,     // non-zero → /api/voice/route answers that status (an older server: 404)
   routeDelay: 0,      // ms before /api/voice/route answers (past 2 s the page stops waiting)
+  // POST /api/voice/help (a question about MindFlock): its answer, how slow,
+  // and a non-zero status to answer instead.
+  helpReply: { say: "From Fences: A fence keeps a worker inside the paths it may change.", source: { doc: "mcp.md", heading: "Fences" }, model: true },
+  helpDelay: 0,
+  helpStatus: 0,
   transcribes: [],    // POST /api/voice/transcribe: {ctype, head, len, rate}
   transcribeReply: { text: "", backend: "builtin", ms: 90 },
   // The streaming recognizer (POST /api/voice/stream …): ids s1, s2… in open order.
@@ -120,6 +125,7 @@ function routeAnswer(text, session) {
   // A "stop talking" only the router knows.
   if (t === "could you pipe down") return { kind: "hush", say: null };
   if (t === "say that again") return { kind: "repeat" };
+  if (t === "how does the fence work") return { kind: "help", text: "how does the fence work" };
   if (t === "voice off") return { kind: "off" };
   return { kind: "prompt" };
 }
@@ -215,6 +221,10 @@ async function mock(route) {
     return json(route, state.answerReply || { ok: true }, state.answerStatus || 200);
   }
   if (p === "/api/voice/route" && state.routeDelay) await sleep(state.routeDelay);
+  if (p === "/api/voice/help") {
+    if (state.helpDelay) await sleep(state.helpDelay);
+    return state.helpStatus ? json(route, { error: "boom" }, state.helpStatus) : json(route, state.helpReply);
+  }
   if (p === "/api/voice/route") return state.routeStatus ? json(route, { error: "no route" }, state.routeStatus) : json(route, routeAnswer(body.text, body.session));
   if (p === "/api/voice/say-all" && m === "POST") {
     if (state.sayAllStatus) return json(route, { error: "owner only" }, state.sayAllStatus);
@@ -2854,6 +2864,42 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await pageT.close();
     await ctxT.close();
     state.voiceCfg = null;
+
+    // ---- help: a question about MindFlock is answered from its docs ---------------
+    const pageH = await ctx.newPage();
+    pageH.on("pageerror", (e) => errors.push(String(e)));
+    await pageH.route("**/api/**", mock);
+    await pageH.goto(`http://127.0.0.1:${PORT}/mobile.html?s=login-fix`, { waitUntil: "load" });
+    await waitFor(pageH, () => window.mfVoice && document.getElementById("picker-title").textContent === "Login fix", 5000, "help page");
+    const captionH = () => pageH.evaluate(() => window.mfVoice.caption);
+    const sendsH = posts("/send").length;
+    state.helpDelay = 700;
+    await pageH.click("#voice-btn");
+    await waitFor(pageH, () => window.mfVoice.state === "listening", 3000, "help: listening");
+    await pageH.evaluate(() => window.__hear("how does the fence work"));
+    await waitFor(pageH, () => window.mfVoice.caption === "Looking that up…", 3000, "help: looking it up");
+    check("help: 'how does the fence work' → 'Looking that up…' while the docs are read, the listen over", (await vstate(pageH)) === "working" && (await captionH()) === "Looking that up…", JSON.stringify([await vstate(pageH), await captionH()]));
+    const helpPosts = posts("/voice/help");
+    check("help: …POST /api/voice/help {text} with the router's question", helpPosts.length === 1 && helpPosts[0].body.text === "how does the fence work", JSON.stringify(helpPosts));
+    await waitFor(pageH, () => window.__spoken.join(" ").indexOf("A fence keeps a worker inside") >= 0, 4000, "help: answer said");
+    check("help: …the answer is said (captioned and kept for 'say that again'), nothing sent to the session", (await said(pageH, state.helpReply.say)) && (await pageH.evaluate(() => window.mfVoice.lastLine)) === state.helpReply.say && posts("/send").length === sendsH, await captionH());
+    await waitFor(pageH, () => window.mfVoice.state === "idle", 3000, "help: idle");
+    await pageH.click("#voice-btn");
+    await waitFor(pageH, () => window.mfVoice.state === "listening", 3000, "help: listening again");
+    const beforeH = (await saidAll(pageH)).split(state.helpReply.say).length;
+    await pageH.evaluate(() => window.__hear("say that again"));
+    for (let t = Date.now(); (await saidAll(pageH)).split(state.helpReply.say).length <= beforeH && Date.now() - t < 3000; ) await sleep(50);
+    check("help: 'say that again' repeats the answer", (await saidAll(pageH)).split(state.helpReply.say).length === beforeH + 1);
+    await waitFor(pageH, () => window.mfVoice.state === "idle", 3000, "help: idle again");
+    state.helpDelay = 0;
+    state.helpStatus = 500;
+    await pageH.click("#voice-btn");
+    await waitFor(pageH, () => window.mfVoice.state === "listening", 3000, "help: listening for the failure");
+    await pageH.evaluate(() => window.__hear("how does the fence work"));
+    await waitFor(pageH, () => window.__spoken.join(" ").indexOf("Couldn't look that up.") >= 0, 3000, "help: failure said");
+    check("help: a failed lookup is said, never silent, nothing sent", (await said(pageH, "Couldn't look that up.")) && posts("/send").length === sendsH);
+    state.helpStatus = 0;
+    await pageH.close();
   } catch (e) {
     console.log("HARNESS ERROR", e && e.stack || e);
     results.push({ name: "harness", ok: false, detail: String(e) });

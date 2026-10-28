@@ -2197,3 +2197,12 @@ export interface SlotsReading {
   running: number;
   waiting: number;
 }
+
+/** POST /api/voice/help: a spoken question about MindFlock answered from its
+ * docs — `say` names the section it came from; `model`: worded by the model
+ * (else the section's own first sentences). */
+export interface VoiceHelp {
+  say: string;
+  source: { doc: string; heading: string } | null;
+  model: boolean;
+}
