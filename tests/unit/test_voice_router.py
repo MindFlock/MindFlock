@@ -161,7 +161,7 @@ def test_conservative_non_matches_are_prompts(text):
         ("Say that again", "repeat"),
         ("repeat that", "repeat"),
         ("summarize that", "condense"),
-        ("what did it say", "condense"),
+        ("summary", "condense"),
     ],
 )
 def test_local_kinds_carry_no_say(text, kind):
@@ -213,11 +213,11 @@ def test_switch_the_phones_cases():
         "kind": "switch",
         "title": "invoice-parser",
         "name": "invoice-parser",
-        "say": "Now on invoice-parser. Parsing the totals now.",
+        "say": "Now on invoice-parser, working.",
     }
     a = ans("go to API docs")
     assert (a["kind"], a["title"], a["name"]) == ("switch", "docs", "API docs")
-    assert a["say"] == "Now on API docs. Should I push?"
+    assert a["say"] == "Now on API docs, waiting on a question."
     # Word overlap: "api" is in one session's name only.
     assert ans("go to the api")["title"] == "docs"
     assert ans("jump over to docs")["title"] == "docs"
@@ -226,14 +226,20 @@ def test_switch_the_phones_cases():
 
 def test_switch_reaches_other_devices_but_never_hidden_rows():
     a = ans("switch to billing")
-    assert a["title"] == "mac::billing" and a["say"] == "Now on billing."
+    assert a["title"] == "mac::billing" and a["say"] == "Now on billing, idle."
     assert ans("go to verify")["kind"] == "no-session"
 
 
 def test_switch_ambiguous_and_no_match():
+    pair = [
+        {"title": "login-fix", "name": "login-fix"},
+        {"title": "login-page", "name": "login-page"},
+    ]
     assert ans("go to login") == {
         "kind": "ambiguous",
-        "say": "Which one: login-fix, login-page?",
+        "say": "Which one: login-fix or login-page?",
+        "candidates": pair,
+        "pending": {"kind": "pick", "candidates": pair},
     }
     assert ans("go to narnia") == {
         "kind": "no-session",
@@ -352,14 +358,14 @@ def plan(text, session="", rows=ROWS, repos=REPOS):
 
 
 def test_plan_named_repo_and_title():
-    p = plan("open a new session called parser in mindflock")
+    p = plan("open a new session called parser in mindflock to fix it")
     assert p == {
         "kind": "new",
         "title_base": "parser",
         "name": "parser",
         "repo_name": "MindFlock",
         "repo_path": "/r/MindFlock",
-        "task": "",
+        "task": "fix it",
     }
     # A name the words begin ("sitecheck" → the most recent sitecheck-bot*).
     p = plan("start a new session in sitecheck and add tests for the queue")
@@ -369,10 +375,8 @@ def test_plan_named_repo_and_title():
         "add-tests-queue",
     )
     # Spacing and case don't count; "the … repo" is not part of the name.
-    assert (
-        plan("new session in the Site Check Bot 6 repo")["repo_path"]
-        == "/r/sitecheck-bot6"
-    )
+    p = plan("new session in the Site Check Bot 6 repo to add tests")
+    assert p["repo_path"] == "/r/sitecheck-bot6"
 
 
 def test_plan_repo_words_run_into_the_task():
@@ -384,44 +388,83 @@ def test_plan_repo_words_run_into_the_task():
     )
 
 
+def test_plan_the_project_may_come_after_the_task():
+    p = plan("create a session to fix the login bug in mindflock")
+    assert (p["kind"], p["repo_path"], p["task"]) == (
+        "new",
+        "/r/MindFlock",
+        "fix the login bug",
+    )
+    # "in" before words that name no project: they stay the task (and the
+    # project is asked for).
+    p = plan("new session to fix the bug in the parser module")
+    assert p["kind"] == "ask"
+    assert p["pending"]["task"] == "fix the bug in the parser module"
+
+
 def test_plan_for_or_on_a_non_repo_is_the_task():
-    p = plan("new session for the login bug", session="login-fix")
-    assert (p["repo_path"], p["task"]) == ("/r/sitecheck-bot5", "for the login bug")
+    p = plan("new session for the login bug in parser")
+    assert (p["repo_path"], p["task"]) == ("/r/parser", "for the login bug")
     assert p["title_base"] == "login-bug"
 
 
-def test_plan_in_an_unknown_repo_fails():
-    assert plan("new session in narnia") == {
-        "kind": "new-failed",
-        "say": "I don't know a repository called narnia. Repositories: MindFlock, "
-        "sitecheck-bot5, sitecheck-bot6, parser.",
+def test_plan_without_a_project_asks_for_one():
+    # The current session's project first, then the most recent.
+    p = plan("new session to fix it", session="login-fix")
+    assert p == {
+        "kind": "ask",
+        "say": "In which project? sitecheck-bot5, MindFlock, sitecheck-bot6 or parser?",
+        "pending": {
+            "kind": "new",
+            "await": "repo",
+            "name": "",
+            "task": "fix it",
+            "choices": ["sitecheck-bot5", "MindFlock", "sitecheck-bot6", "parser"],
+        },
+    }
+    # Another device's session has no project here.
+    p = plan("spin one up", session="mac::billing")
+    assert (
+        p["say"]
+        == "In which project? MindFlock, sitecheck-bot5, sitecheck-bot6 or parser?"
+    )
+
+
+def test_plan_without_a_task_asks_for_one():
+    assert plan("new session in parser") == {
+        "kind": "ask",
+        "say": "What should it do in parser?",
+        "pending": {
+            "kind": "new",
+            "await": "task",
+            "name": "",
+            "task": "",
+            "repo_name": "parser",
+            "repo_path": "/r/parser",
+        },
     }
 
 
-def test_plan_defaults_to_the_current_sessions_repo():
-    assert (
-        plan("new session to fix it", session="login-fix")["repo_path"]
-        == "/r/sitecheck-bot5"
+def test_plan_in_an_unknown_repo_asks_again():
+    p = plan("new session in narnia to fix it")
+    assert p["kind"] == "ask"
+    assert p["say"] == (
+        "I don't know a project called narnia. In which project? MindFlock, "
+        "sitecheck-bot5, sitecheck-bot6 or parser?"
     )
-    # Another device's session has no repository here: the most recent one.
-    assert (
-        plan("new session to fix it", session="mac::billing")["repo_path"]
-        == "/r/MindFlock"
-    )
-    assert plan("new session", session="")["repo_path"] == "/r/MindFlock"
+    assert p["pending"]["task"] == "fix it"
 
 
 def test_plan_only_or_no_repository():
     only = [{"name": "solo", "path": "/r/solo", "source": "nearby"}]
-    assert plan("new session", rows=[], repos=only)["repo_path"] == "/r/solo"
-    two = only + [{"name": "duo", "path": "/r/duo", "source": "nearby"}]
-    assert plan("new session", rows=[], repos=two) == {
-        "kind": "new-failed",
-        "say": "I don't know which repository: say new session in solo, duo.",
-    }
+    p = plan("new session to fix it", rows=[], repos=only)
+    assert (p["kind"], p["repo_path"]) == ("new", "/r/solo")
+    assert (
+        plan("new session", rows=[], repos=only)["say"] == "What should it do in solo?"
+    )
     assert plan("new session", rows=[], repos=[]) == {
         "kind": "new-failed",
-        "say": "I don't know which repository: say new session in <repo>.",
+        "say": "I don't know any projects yet: open one from the New dialog first.",
     }
 
 
@@ -482,7 +525,7 @@ def test_title_maps_a_number_to_the_full_switch():
         "kind": "switch",
         "title": "docs",
         "name": "API docs",
-        "say": "Now on API docs. Should I push?",
+        "say": "Now on API docs, waiting on a question.",
     }
     assert ans("next one", title="login-fix")["title"] == "login-fix"
     assert ans("session two", title="gone") == {
@@ -698,7 +741,7 @@ def test_answer_by_name(text, title, choice):
 
 
 def test_answer_by_name_ambiguous_and_unknown():
-    which = {"kind": "ambiguous", "say": "Which one: login-fix, login-page?"}
+    which = {"kind": "ambiguous", "say": "Which one: login-fix or login-page?"}
     assert ans("tell login yes") == which
     assert ans("login, yes") == which
     assert ans("tell narnia yes")["kind"] == "no-session"
@@ -737,7 +780,7 @@ def test_question_targets():
     assert ans("what is session 2 asking", title="docs")["title"] == "docs"
     assert ans("what is login asking")["kind"] == "ambiguous"
     assert ans("what does the user want") == {"kind": "prompt"}
-    assert ans("what did it say") == {"kind": "condense"}
+    assert ans("what did it say")["kind"] == "read"
 
 
 # --- finish: the dialog --------------------------------------------------------------
@@ -861,10 +904,12 @@ def env(monkeypatch, tmp_path):
     return state
 
 
-def route(text, session="", title=None):
+def route(text, session="", title=None, pending=None):
     body = {"text": text, "session": session}
     if title is not None:
         body["title"] = title
+    if pending is not None:
+        body["pending"] = pending
     r = client.post("/api/voice/route", json=body)
     assert r.status_code == 200, r.text
     return r.json()
@@ -882,7 +927,7 @@ def test_route_switch_and_list(env):
         "kind": "switch",
         "title": "invoice-parser",
         "name": "invoice-parser",
-        "say": "Now on invoice-parser. Parsing the totals now.",
+        "say": "Now on invoice-parser, working.",
     }
     assert route("list my sessions")["say"].startswith(
         "Sessions: invoice-parser (working), "
@@ -908,7 +953,10 @@ def test_route_new_creates_like_the_new_dialog(env):
 
 
 def test_route_new_without_a_task_sends_no_prompt(env):
-    got = route("open a new session called parser in mindflock")
+    asked = route("open a new session called parser in mindflock")
+    assert asked["say"] == "What should it do in MindFlock?"
+    assert env.created == []
+    got = route("nothing yet", pending=asked["pending"])
     assert got["title"] == "parser" and got["say"] == "Started parser in MindFlock."
     assert env.created == [{"title": "parser", "repo_path": "/r/MindFlock"}]
 
@@ -918,7 +966,7 @@ def test_route_new_title_never_collides(env, monkeypatch):
     monkeypatch.setattr(
         server.ENGINE, "instances", {"fix-login-bug": taken, "fix-login-bug-2": taken}
     )
-    got = route("new session to fix the login bug", "login-fix")
+    got = route("new session in sitecheck to fix the login bug", "login-fix")
     assert got["title"] == "fix-login-bug-3"
     assert env.created[0]["title"] == "fix-login-bug-3"
     assert env.created[0]["repo_path"] == "/r/sitecheck-bot5"
@@ -926,13 +974,13 @@ def test_route_new_title_never_collides(env, monkeypatch):
 
 def test_route_new_failures_are_spoken(env):
     env.create = (409, {"error": "instance parser already exists."})
-    assert route("new session called parser") == {
+    assert route("new session called parser in parser to fix it") == {
         "kind": "new-failed",
         "say": "Couldn't start it: instance parser already exists.",
     }
     assert not voice.is_on(tmux.to_mindflock_tmux_name("parser"))
     env.rows = []
-    assert route("new session in narnia")["kind"] == "new-failed"
+    assert route("new session in narnia")["kind"] == "ask"
     assert len(env.created) == 1  # nothing created for an unknown repository
 
 
@@ -952,7 +1000,7 @@ def test_session_rows_are_the_instances_listing(monkeypatch):
         "kind": "switch",
         "title": "mac::billing",
         "name": "billing",
-        "say": "Now on billing.",
+        "say": "Now on billing, idle.",
     }
 
 
@@ -1020,7 +1068,7 @@ def test_route_switch_by_number(env):
     assert route("session three") == {"kind": "switch_index", "index": 3}
     assert route("next one") == {"kind": "switch_rel", "delta": 1}
     assert route("session three", title="docs")["say"] == (
-        "Now on API docs. Should I push?"
+        "Now on API docs, waiting on a question."
     )
     assert route("stop recording") == {"kind": "stop"}
 
@@ -1217,3 +1265,585 @@ def test_route_permission_dialogs_are_untouched(env):
     env.dialogs["docs"] = PERM
     assert route("red", "docs") == {"kind": "prompt"}
     assert route("go back", "docs")["kind"] == "switch_rel"
+
+
+# --- switching in plain speech ---------------------------------------------------------
+FLEET = [
+    {
+        "title": "sitecheck-bot7",
+        "name": "sitecheck-bot7",
+        "activity": "working",
+        "activity_since": NOW - 600,
+        "task_headline": "Fix settings screen",
+        "last_say": "Started on the settings screen",
+        "repo": "sitecheck-bot7",
+        "path": "/r/sitecheck-bot7",
+    },
+    {
+        "title": "sitecheck-bot7-copy-2",
+        "name": "sitecheck-bot7-copy-2",
+        "activity": "idle",
+        "activity_since": NOW - 30,
+        "last_say": "Done. The tests pass.",
+    },
+    {
+        "title": "login-fix",
+        "name": "login-fix",
+        "activity": "idle",
+        "activity_since": NOW - 3600,
+        "last_say": "I fixed the redirect an hour ago",
+        "task_headline": "Fix login redirect",
+        "repo": "MindFlock",
+        "path": "/r/MindFlock",
+    },
+    {"title": "settings-ui", "name": "settings-ui", "activity": "idle"},
+    {"title": "mf-7", "name": "Invoice parser", "activity": "clarify"},
+]
+SITECHECK = [
+    {"title": "sitecheck-bot7", "name": "sitecheck-bot7"},
+    {"title": "sitecheck-bot7-copy-2", "name": "sitecheck-bot7-copy-2"},
+]
+
+
+def fleet(text, session="login-fix", pending=None):
+    return vr.answer(text, session, FLEET, now=NOW, pending=pending)
+
+
+@pytest.mark.parametrize(
+    "text,title",
+    [
+        ("switch to the login fix session", "login-fix"),
+        ("put me on the login fix", "login-fix"),
+        ("take me to login fix please", "login-fix"),
+        ("Jump over to the settings one.", "settings-ui"),
+        ("go to settings", "settings-ui"),
+        ("switch to the settings session", "settings-ui"),
+        ("focus on settings", "settings-ui"),
+        ("pull up the settings session", "settings-ui"),
+        ("open settings ui", "settings-ui"),
+        ("talk to login fix", "login-fix"),
+        ("let's go to login fix", "login-fix"),
+        ("can you switch to the login fix", "login-fix"),
+        ("switch me over to settings", "settings-ui"),
+        # Hyphens, digits and spoken numbers line up.
+        ("switch to sitecheck bot seven", "sitecheck-bot7"),
+        ("switch to site check bot 7", "sitecheck-bot7"),
+        ("go to sitecheck bot seven copy two", "sitecheck-bot7-copy-2"),
+        ("go to the copy", "sitecheck-bot7-copy-2"),
+        # A plural, a wrong letter.
+        ("switch to the login fixes", "login-fix"),
+        ("go to the setings session", "settings-ui"),
+        # The display name too.
+        ("switch to the invoice parser", "mf-7"),
+        ("open invoice parser", "mf-7"),
+    ],
+)
+def test_switch_by_name_in_plain_speech(text, title):
+    a = fleet(text)
+    assert (a["kind"], a.get("title")) == ("switch", title), a
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "switch to the sitecheck session",
+        "go to sitecheck bot",
+        "open sitecheck",
+        "take me to bot seven",
+        "jump to the sitecheck one",
+        "go to sitechek",
+    ],
+)
+def test_several_matches_ask_which_one(text):
+    assert fleet(text) == {
+        "kind": "ambiguous",
+        "say": "Which one: sitecheck-bot7 or sitecheck-bot7-copy-2?",
+        "candidates": SITECHECK,
+        "pending": {"kind": "pick", "candidates": SITECHECK},
+    }
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "open the file",
+        "open the readme",
+        "show me the logs",
+        "show me the diff",
+        "go back to the old approach",
+        "talk to the API",
+        "select all of it",
+        "focus on the failing test",
+        "can you go to the docs folder and fix the links",
+        "could you switch to tabs instead of spaces",
+        "let's go to lunch",
+        "open a new session tab in the browser",
+        "start a session",
+        "pull up the stack trace",
+        "bring up the error again",
+        "back to the plan",
+        "what did the tests say",
+    ],
+)
+def test_plain_speech_that_stays_a_prompt(text):
+    assert fleet(text) == {"kind": "prompt"}
+
+
+def test_a_plain_go_to_still_says_there_is_no_such_session():
+    a = fleet("switch to narnia")
+    assert a["kind"] == "no-session" and a["say"].startswith(
+        "No session called narnia."
+    )
+
+
+def test_find_sessions_prefers_the_whole_name():
+    hit, cands = vr.find_sessions("sitecheck bot 7", FLEET)
+    assert hit["title"] == "sitecheck-bot7" and cands == []
+    hit, cands = vr.find_sessions("login fix", FLEET, "strict")
+    assert hit["title"] == "login-fix"
+    assert vr.find_sessions("fix", FLEET, "strict") == (None, [])
+    assert vr.find_sessions("the session", FLEET) == (None, [])
+
+
+# --- the pick: the next phrase after "Which one?" ------------------------------------------
+PICK_PENDING = {"kind": "pick", "candidates": SITECHECK}
+
+
+@pytest.mark.parametrize(
+    "text,title",
+    [
+        ("the first one", "sitecheck-bot7"),
+        ("first", "sitecheck-bot7"),
+        ("the second", "sitecheck-bot7-copy-2"),
+        ("number two", "sitecheck-bot7-copy-2"),
+        ("two", "sitecheck-bot7-copy-2"),
+        ("the last one", "sitecheck-bot7-copy-2"),
+        ("copy two", "sitecheck-bot7-copy-2"),
+        ("the copy", "sitecheck-bot7-copy-2"),
+        ("bot seven", "sitecheck-bot7"),
+        ("I mean bot 7", "sitecheck-bot7"),
+        ("sitecheck bot seven copy two", "sitecheck-bot7-copy-2"),
+        ("the one that's working", "sitecheck-bot7"),
+        ("the working one", "sitecheck-bot7"),
+        ("the idle one", "sitecheck-bot7-copy-2"),
+        ("go to the copy", "sitecheck-bot7-copy-2"),
+    ],
+)
+def test_pick_answers_which_one(text, title):
+    a = fleet(text, pending=PICK_PENDING)
+    assert (a["kind"], a.get("title")) == ("switch", title), a
+
+
+def test_pick_that_picks_nothing_is_routed_as_usual():
+    # Not a pick: a prompt, a command, another session.
+    assert fleet("fix the flaky test", pending=PICK_PENDING) == {"kind": "prompt"}
+    assert fleet("never mind", pending=PICK_PENDING) == {"kind": "cancel"}
+    assert fleet("switch to settings", pending=PICK_PENDING)["title"] == "settings-ui"
+    assert fleet("stop listening", pending=PICK_PENDING) == {"kind": "stop"}
+    # A candidate that is gone is no pick; none left: as usual.
+    gone = {"kind": "pick", "candidates": [{"title": "gone", "name": "gone"}]}
+    assert fleet("the first one", pending=gone)["kind"] == "switch_index"
+
+
+def test_pick_out_of_range_or_no_state_asks_again():
+    a = fleet("the third one", pending=PICK_PENDING)
+    assert (
+        a["say"] == "There are 2. Which one: sitecheck-bot7 or sitecheck-bot7-copy-2?"
+    )
+    assert a["pending"] == PICK_PENDING
+    a = fleet("the one asking", pending=PICK_PENDING)
+    assert a["say"].startswith("None of them is asking. Which one:")
+    assert a["kind"] == "ambiguous"
+
+
+def test_pick_narrows_but_still_ties():
+    three = {
+        "kind": "pick",
+        "candidates": SITECHECK + [{"title": "login-fix", "name": "login-fix"}],
+    }
+    a = fleet("the sitecheck one", pending=three)
+    assert a["kind"] == "ambiguous" and a["candidates"] == SITECHECK
+
+
+# --- the switch announcement: the last reply only when it is news -----------------------------
+def test_switch_reads_a_reply_only_while_it_is_news():
+    row = dict(FLEET[1])
+    assert (
+        vr.switch_line(row, NOW)
+        == "Now on sitecheck-bot7-copy-2, idle. Done. The tests pass."
+    )
+    # Two minutes is the edge; past it the reply is old news.
+    assert vr.switch_line(row, NOW - 30 + vr.FRESH_REPLY_S).endswith("The tests pass.")
+    assert (
+        vr.switch_line(row, NOW - 29 + vr.FRESH_REPLY_S)
+        == "Now on sitecheck-bot7-copy-2, idle."
+    )
+    # No turn-end stamp: never news.
+    assert (
+        vr.switch_line(dict(row, activity_since=0), NOW)
+        == "Now on sitecheck-bot7-copy-2, idle."
+    )
+
+
+def test_switch_says_the_state_and_the_task_never_a_stale_reply():
+    # Working: its previous turn's line is not read.
+    assert (
+        fleet("go to sitecheck bot seven")["say"]
+        == "Now on sitecheck-bot7, working: Fix settings screen."
+    )
+    # Done an hour ago: the state and the task, nothing more.
+    assert (
+        fleet("put me on the login fix")["say"]
+        == "Now on login-fix, idle: Fix login redirect."
+    )
+    assert (
+        fleet("switch to the invoice parser")["say"]
+        == "Now on Invoice parser, waiting on a question."
+    )
+    assert fleet(
+        "session two",
+    ) == {"kind": "switch_index", "index": 2}
+    assert vr.answer("session two", "", FLEET, now=NOW, title="login-fix")["say"] == (
+        "Now on login-fix, idle: Fix login redirect."
+    )
+
+
+# --- read: the last reply on demand -------------------------------------------------------------
+@pytest.mark.parametrize(
+    "text",
+    [
+        "what did it say",
+        "What did it say?",
+        "read it",
+        "read me the last reply",
+        "read that",
+        "what was its last answer",
+    ],
+)
+def test_read_is_the_last_reply_whatever_its_age(text):
+    assert fleet(text) == {
+        "kind": "read",
+        "title": "login-fix",
+        "name": "login-fix",
+        "say": "login-fix said: I fixed the redirect an hour ago.",
+    }
+
+
+def test_read_names_and_states():
+    a = fleet("what did sitecheck bot7 say")
+    assert (
+        a["say"]
+        == "sitecheck-bot7 is still working. Before that it said: Started on the settings screen."
+    )
+    assert (
+        fleet("what did settings ui say")["say"]
+        == "settings-ui hasn't said anything yet."
+    )
+    assert fleet("what did it say", session="")["say"] == "No session is open."
+    assert fleet("what did narnia say") == {"kind": "prompt"}
+    # "read it again" is still the question read out again.
+    assert fleet("read it again")["kind"] == "question"
+
+
+# --- the new-session conversation ----------------------------------------------------------------
+@pytest.mark.parametrize(
+    "text",
+    [
+        "start a new session",
+        "I want to start a new session",
+        "can you start a new session",
+        "let's make a new session",
+        "give me a new session",
+        "spin one up",
+        "spin up a new one",
+        "spin another one up",
+        "start another session",
+        "launch a new agent",
+        "create a session to fix the login bug",
+        "start a session in parser",
+    ],
+)
+def test_new_session_in_plain_speech(text):
+    assert vr.command(text)["kind"] == "new"
+
+
+def step(text, pending, session="login-fix", repos=REPOS):
+    return vr.continue_new(text, pending, session, FLEET, repos)
+
+
+def test_new_session_conversation_project_then_task():
+    a = plan("start a new session", session="login-fix", rows=FLEET)
+    assert (
+        a["say"]
+        == "In which project? MindFlock, sitecheck-bot5, sitecheck-bot6 or parser?"
+    )
+    b = step("the sitecheck repo", a["pending"])
+    assert b == {
+        "kind": "ask",
+        "say": "What should it do in sitecheck-bot5?",
+        "pending": {
+            "kind": "new",
+            "await": "task",
+            "name": "",
+            "task": "",
+            "repo_name": "sitecheck-bot5",
+            "repo_path": "/r/sitecheck-bot5",
+        },
+    }
+    c = step("Fix the login bug in auth.py.", b["pending"])
+    assert c == {
+        "kind": "new",
+        "title_base": "fix-login-bug-auth",
+        "name": "",
+        "repo_name": "sitecheck-bot5",
+        "repo_path": "/r/sitecheck-bot5",
+        "task": "Fix the login bug in auth.py.",
+    }
+
+
+@pytest.mark.parametrize(
+    "said,path",
+    [
+        ("parser", "/r/parser"),
+        ("in parser", "/r/parser"),
+        ("the parser one", "/r/parser"),
+        ("um, the mindflock project", "/r/MindFlock"),
+        ("this one", "/r/MindFlock"),  # the current session's
+        ("the same project", "/r/MindFlock"),
+        ("the second one", "/r/sitecheck-bot5"),  # as read out
+        ("site check bot six", "/r/sitecheck-bot6"),
+    ],
+)
+def test_new_session_project_answers(said, path):
+    a = plan("new session to add tests", session="login-fix", rows=FLEET)
+    got = step(said, a["pending"])
+    assert (got["kind"], got["repo_path"], got["task"]) == ("new", path, "add tests")
+
+
+def test_new_session_project_and_task_in_one_answer():
+    a = plan("spin one up", session="login-fix", rows=FLEET)
+    got = step("parser, and add tests for the queue", a["pending"])
+    assert (got["kind"], got["repo_path"], got["task"]) == (
+        "new",
+        "/r/parser",
+        "add tests for the queue",
+    )
+
+
+def test_new_session_task_answers():
+    p = {
+        "kind": "new",
+        "await": "task",
+        "name": "",
+        "task": "",
+        "repo_name": "parser",
+        "repo_path": "/r/parser",
+    }
+    assert step("to fix the flaky test", p)["task"] == "fix the flaky test"
+    assert step("it should fix the flaky test", p)["task"] == "fix the flaky test"
+    for none in ("nothing", "nothing yet", "just start it", "no task"):
+        got = step(none, p)
+        assert (got["kind"], got["task"], got["title_base"]) == (
+            "new",
+            "",
+            "voice-session",
+        )
+    # The commands a task never is: the mic, the voice.
+    assert step("stop listening", p) is None
+    assert step("stop talking", p) is None
+    # A project the server does not know: asked for again.
+    forged = dict(p, repo_path="/etc")
+    assert step("fix it", forged)["pending"]["await"] == "repo"
+
+
+def test_new_session_cancel_and_not_an_answer():
+    a = plan("start a new session", session="login-fix", rows=FLEET)
+    for words in ("never mind", "cancel", "forget it", "don't start it"):
+        assert step(words, a["pending"]) == {
+            "kind": "new-failed",
+            "say": "Okay, no new session.",
+            "cancelled": True,
+        }
+    # A command while it asks for the project: routed as usual.
+    assert step("switch to settings", a["pending"]) is None
+    assert step("what needs me", a["pending"]) is None
+    # Anything else: it did not catch a project, and asks again.
+    got = step("narnia", a["pending"])
+    assert got["say"].startswith(
+        "I don't know a project called narnia. In which project?"
+    )
+    assert got["pending"]["await"] == "repo"
+
+
+# --- the route: pending -----------------------------------------------------------------------------
+def test_route_pick_round_trip(env):
+    env.rows = FLEET
+    asked = route("switch to the sitecheck session", "login-fix")
+    assert asked["kind"] == "ambiguous" and asked["pending"] == PICK_PENDING
+    got = route("copy two", "login-fix", pending=asked["pending"])
+    assert (got["kind"], got["title"]) == ("switch", "sitecheck-bot7-copy-2")
+    # Not a pick: the phrase as usual (a prompt reads no dialog to answer).
+    assert route("fix the flaky test", "login-fix", pending=asked["pending"]) == {
+        "kind": "prompt"
+    }
+
+
+def test_route_pick_beats_the_question_tool(env):
+    env.rows = FLEET
+    env.dialogs["login-fix"] = {
+        "id": "s1",
+        "parsed": True,
+        "kind": "select",
+        "question": "Which?",
+        "options": [
+            {"key": "1", "label": "a", "kind": "other"},
+            {"key": "2", "label": "b", "kind": "other"},
+        ],
+    }
+    got = route("two", "login-fix", pending=PICK_PENDING)
+    assert (got["kind"], got["title"]) == ("switch", "sitecheck-bot7-copy-2")
+
+
+def test_route_new_session_conversation(env):
+    asked = route("start a new session", "docs")
+    assert asked["kind"] == "ask" and asked["pending"]["await"] == "repo"
+    assert env.created == []
+    task = route("parser", "docs", pending=asked["pending"])
+    assert task["say"] == "What should it do in parser?"
+    got = route("add tests for the queue", "docs", pending=task["pending"])
+    assert got == {
+        "kind": "new",
+        "title": "add-tests-queue",
+        "name": "add-tests-queue",
+        "say": "Started add-tests-queue in parser.",
+    }
+    assert env.created == [
+        {
+            "title": "add-tests-queue",
+            "repo_path": "/r/parser",
+            "prompt": "add tests for the queue",
+        }
+    ]
+    assert (
+        route("never mind", "docs", pending=asked["pending"])["say"]
+        == "Okay, no new session."
+    )
+    assert len(env.created) == 1
+
+
+def test_route_ignores_a_pending_that_is_not_an_object(env):
+    assert route("fix it", "docs", pending="pick") == {"kind": "prompt"}
+    assert route("fix it", "docs", pending={"kind": "mystery"}) == {"kind": "prompt"}
+
+
+# --- help: questions about MindFlock itself ----------------------------------------
+@pytest.mark.parametrize(
+    "text, question",
+    [
+        ("how do I schedule a template?", "how do i schedule a template"),
+        ("How does the fence work?", "how does the fence work"),
+        ("What does autopilot do?", "what does autopilot do"),
+        ("how do I add my Mac?", "how do i add my mac"),
+        ("Where do I turn on the phone page?", "where do i turn on the phone page"),
+        ("what is a team run", "what is a team run"),
+        ("what are red zones", "what are red zones"),
+        ("how does fast-track work", "how does fast track work"),
+        ("what's the code map", "what's the code map"),
+        ("how do I change the voice words", "how do i change the voice words"),
+        ("tell me about peer links", "tell me about peer links"),
+        ("explain team runs", "explain team runs"),
+        (
+            "is it possible to schedule a template",
+            "is it possible to schedule a template",
+        ),
+        ("is there a way to pin a prompt", "is there a way to pin a prompt"),
+        (
+            "can I run two sessions on one branch",
+            "can i run two sessions on one branch",
+        ),
+        ("how do you set up a fence", "how do you set up a fence"),
+        ("which shortcut opens intake", "which shortcut opens intake"),
+        ("what is a worktree in MindFlock", "what is a worktree in mindflock"),
+        ("how do I open a PR in MindFlock", "how do i open a pr in mindflock"),
+        ("ok, what's a session", "what's a session"),
+        # Addressed to MindFlock: the lead is dropped, and the agent's-work
+        # words no longer make it a prompt.
+        ("MindFlock, how do I fix the login bug?", "how do i fix the login bug"),
+        ("Hey MindFlock, what does the bell do?", "what does the bell do"),
+        ("mindflock what is a lane", "what is a lane"),
+        ("help: what is a team run", "what is a team run"),
+    ],
+)
+def test_help_questions_about_mindflock(text, question):
+    want = {"kind": "help", "text": question}
+    assert vr.command(text) == want
+    assert ans(text, session="docs") == want
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # The agent's work.
+        "how do I fix the login bug?",
+        "how do I run the tests",
+        "how does this function work",
+        "what does this error mean",
+        "why are the tests failing",
+        "where is the bug",
+        "how does the template loader parse the file",
+        "add a schedule button to the settings page",
+        "how should we structure the settings component",
+        "what does my project do",
+        "fix the fence code",
+        "help me fix the login bug",
+        # Said to the agent ("you"), or about the session's state.
+        "what are you doing",
+        "how did you fix it",
+        "can you open the settings",
+        "could you add a template",
+        "what is the status of the PR",
+        "what's the session working on",
+        "how many sessions are running",
+        "what does the ticket say",
+        "why does the session keep failing",
+        "is it done",
+        # Questions that name nothing of MindFlock's.
+        "what is a closure",
+        "how do I center a div",
+        "what's the weather",
+    ],
+)
+def test_help_is_never_the_agents_work(text):
+    assert vr.command(text) is None or vr.command(text)["kind"] != "help"
+    assert ans(text, session="docs").get("kind") != "help"
+
+
+@pytest.mark.parametrize(
+    "text, kind",
+    [
+        ("what is it doing", "status"),
+        ("what's going on", "status"),
+        ("what did it say", "read"),
+        ("what is it asking", "question"),
+        ("what does docs want", "question"),
+        ("what needs me", "needs"),
+        ("what sessions are open", "list"),
+        ("mindflock yes", "prompt"),
+        ("go to templates", "no-session"),
+    ],
+)
+def test_help_never_takes_another_commands_phrase(text, kind):
+    assert ans(text, session="docs")["kind"] == kind
+
+
+def test_route_help_carries_the_question(env):
+    assert route("how does the fence work?", "docs") == {
+        "kind": "help",
+        "text": "how does the fence work",
+    }
+    # Said while Claude's question tool is up, help is still help.
+    env.dialogs["docs"] = _ask("multi")
+    assert route("mindflock, what is a team run", "docs") == {
+        "kind": "help",
+        "text": "what is a team run",
+    }

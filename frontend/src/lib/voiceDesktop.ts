@@ -44,7 +44,7 @@
  * browser's unless Settings say "server". */
 
 import { ApiError, api, apiRaw, instApi } from "../api/client";
-import type { Dialog } from "../api/types";
+import type { Dialog, VoiceHelp } from "../api/types";
 import { peekTerm } from "./terminals";
 import { toast } from "./toast";
 import { resamplerName, startWavRecording, type WavRecording } from "./wavRecorder";
@@ -1476,7 +1476,10 @@ export interface RouteReply {
     | "switch_index"
     | "switch_rel"
     | "answer"
-    | "question";
+    | "question"
+    | "ask"
+    | "read"
+    | "help";
   title?: string;
   name?: string;
   say?: string;
@@ -1491,24 +1494,61 @@ export interface RouteReply {
   dialog_id?: string;
   keys?: string[];
   /** answer, on Claude's question prompt: free words for its "Type
-   * something" row, typed with the keys. */
+   * something" row, typed with the keys; help: the question asked. */
   text?: string;
   /** answer: the session has no dialog up (`say` says so). */
   no_dialog?: boolean;
+  /** ambiguous: the sessions "Which one: a or b?" reads out. */
+  candidates?: { title: string; name: string }[];
+  /** ambiguous / ask: what the router asked back — sent with the next
+   * phrase ({@link PendingChoice}), which it reads as the pick, the project
+   * or the task. */
+  pending?: Record<string, unknown>;
 }
 
 const ROUTE_KINDS = new Set<string>([
   "prompt", "switch", "new", "ambiguous", "no-session", "new-failed", "list",
   "needs", "status", "cancel", "stop", "hush", "off", "repeat", "condense",
-  "switch_index", "switch_rel", "answer", "question",
+  "switch_index", "switch_rel", "answer", "question", "ask", "read", "help",
 ]);
 
-/** Ask the router what one phrase means. Anything but a well-formed 200 —
- * the route missing (an older server), an error, the network — means "it is
- * a prompt": the words were meant for the session, never lost to the router. */
-export async function routePhrase(text: string, session: string): Promise<RouteReply> {
+/** How long what the router asked back waits for its answer. */
+export const PENDING_MS = 30_000;
+
+/** What the router last asked back ("Which one: a or b?", "In which
+ * project?", "What should it do?"): its answer's `pending`, sent with the
+ * next phrase for {@link PENDING_MS}; any answer without one drops it. */
+export class PendingChoice {
+  private held: { data: Record<string, unknown>; at: number } | null = null;
+  constructor(private now: () => number = Date.now) {}
+  take(): Record<string, unknown> | null {
+    if (this.held && this.now() - this.held.at > PENDING_MS) this.held = null;
+    return this.held ? this.held.data : null;
+  }
+  keep(r: RouteReply | null | undefined): void {
+    const p = r?.pending;
+    this.held = p && typeof p === "object" ? { data: p, at: this.now() } : null;
+  }
+}
+
+/** The desktop's one: every phrase the mic routes goes through it. */
+export const routePending = new PendingChoice();
+
+/** Ask the router what one phrase means, with what it last asked back.
+ * Anything but a well-formed 200 — the route missing (an older server), an
+ * error, the network — means "it is a prompt": the words were meant for the
+ * session, never lost to the router. */
+export async function routePhrase(
+  text: string,
+  session: string,
+  pending: PendingChoice = routePending,
+): Promise<RouteReply> {
   try {
-    const r = await api<RouteReply>("/api/voice/route", { json: { text, session } });
+    const json: Record<string, unknown> = { text, session };
+    const held = pending.take();
+    if (held) json.pending = held;
+    const r = await api<RouteReply>("/api/voice/route", { json });
+    if (r && typeof r === "object") pending.keep(r);
     if (r && typeof r === "object" && ROUTE_KINDS.has(String(r.kind))) return r;
   } catch {
     /* fall through */
@@ -1554,6 +1594,9 @@ export interface CommandDeps {
   /** The caption; `announce` also speaks it when replies are on. */
   caption(line: string, sticky?: boolean): void;
   announce(line: string): void;
+  /** Say `line` whatever the replies choice — the answer to a question the
+   * person asked out loud — and caption it; absent: `announce`. */
+  speak?(line: string): void;
   /** POST /api/voice/route for `session`. */
   route(text: string, session: string): Promise<RouteReply>;
   /** GET /api/voice's `approve_dialogs`, read now. */
@@ -1612,9 +1655,34 @@ export async function runVoiceCommand(r: RouteReply, text: string, deps: Command
     case "question":
       deps.announce(r.say || "Nothing is being asked.");
       return true;
+    case "help": {
+      deps.caption(HELP_LOOKING_LINE);
+      const said = (await askHelp(r.text || text)).say;
+      // Asked out loud, answered out loud — replies on or off — and kept
+      // for "say that again".
+      (deps.speak || deps.announce)(said);
+      return true;
+    }
     default:
       return false;
   }
+}
+
+// --- help: questions about MindFlock --------------------------------------------- //
+
+export const HELP_LOOKING_LINE = "Looking that up…";
+export const HELP_FAILED_LINE = "Couldn't look that up.";
+
+/** POST /api/voice/help: the answer to a question about MindFlock, from its
+ * docs. Never throws — a failure is a line to say. */
+export async function askHelp(text: string): Promise<VoiceHelp> {
+  try {
+    const j = await api<VoiceHelp>("/api/voice/help", { json: { text } });
+    if (j && typeof j.say === "string" && j.say.trim()) return j;
+  } catch {
+    /* fall through */
+  }
+  return { say: HELP_FAILED_LINE, source: null, model: false };
 }
 
 /** An answer: into the dialog the server resolved (only with approving by
@@ -1688,6 +1756,114 @@ export function voiceName(title: string, focused: string | null | undefined, nam
   return title && title === focused ? "" : name;
 }
 
+// --- news only, and where a reply is from ------------------------------------ //
+// The twin of mobile.js's voiceIsNews / voiceContextLead: a reply is read by
+// itself only when it is NEWS — it ended after the listener could have heard
+// it (the page opened, replies turned on, they last looked at, sent to or
+// heard that session) and no more than NEWS_MS ago. Asking for it ("what did
+// it say") reads it whatever its age.
+
+/** A reply older than this is never read by itself (mobile.js VOICE_NEWS_MS). */
+export const NEWS_MS = 10 * 60_000;
+/** Not heard from this long, a reply opens with where it is from
+ * (mobile.js VOICE_CONTEXT_GAP_MS). */
+export const CONTEXT_GAP_MS = 10 * 60_000;
+
+/** A reply that ended at `endedAt` (ms; 0 = unknown) is news to a listener
+ * who could last have heard its session at `heardAt` (ms): it ended after
+ * that, and within {@link NEWS_MS} of `now`. An unknown end never is. */
+export function isNews(endedAt: number, heardAt: number, now = Date.now()): boolean {
+  const e = Number(endedAt) || 0;
+  return e > 0 && e > (Number(heardAt) || 0) && now - e <= NEWS_MS;
+}
+
+/** When a turn ended (ms) from an "it finished" event: its stamp (unix
+ * seconds) less the dwell `session.turn_ended` carries (`idle_for`); 0 when
+ * the event has no stamp. */
+export function turnEndedAt(ts: number | null | undefined, idleFor?: unknown): number {
+  const t = Number(ts) || 0;
+  if (!t) return 0;
+  return (t - Math.max(0, Number(idleFor) || 0)) * 1000;
+}
+
+/** What {@link contextLead} reads. */
+export interface ContextLeadInput {
+  title: string;
+  /** The session on screen (focused). */
+  focused: string | null | undefined;
+  name: string;
+  /** The row's task headline ("Fix pin bar below terminal"), when it has one. */
+  headline?: string | null;
+  /** When the listener last heard from / looked at `title` (ms; 0 = never). */
+  lastAt: number;
+  now: number;
+  /** The words about to be said (a line already naming the session gets no lead). */
+  text: string;
+}
+
+const leadNorm = (t: string) => String(t || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+
+/** What a reply opens with so the listener knows where it is from — "In
+ * Login fix, on fix the pin bar: " — when it is about another session than
+ * the focused one, or one not heard from in {@link CONTEXT_GAP_MS} (or
+ * ever); "" for the session being talked to right along, a line already
+ * naming it, or no name. */
+export function contextLead(o: ContextLeadInput): string {
+  const name = String(o.name || "").trim();
+  if (!name || !o.title) return "";
+  const away = !o.lastAt || o.now - o.lastAt > CONTEXT_GAP_MS;
+  if (o.title === o.focused && !away) return "";
+  const t = leadNorm(o.text);
+  if (t.startsWith(leadNorm(name)) || t.startsWith(leadNorm("In " + name))) return "";
+  let task = String(o.headline || "").replace(/\s+/g, " ").trim().replace(/[\s.,;:!?]+$/, "");
+  // "Fix pin bar" → "fix pin bar" (said mid-sentence); "API docs" stays.
+  if (task && !/^.[A-Z]/.test(task)) task = task.charAt(0).toLowerCase() + task.slice(1);
+  return "In " + name + (task ? ", on " + task : "") + ": ";
+}
+
+/** A reply as said: {@link contextLead} then the words. */
+export function replyText(o: ContextLeadInput): string {
+  const text = String(o.text || "").trim();
+  return contextLead({ ...o, text }) + text;
+}
+
+/** When the listener last heard from / looked at each session, and since
+ * when anything is news at all — {@link isNews}'s `heardAt`, and
+ * {@link contextLead}'s `lastAt`. */
+export class HeardClock {
+  private marks = new Map<string, number>();
+  private from: number;
+
+  constructor(now = Date.now()) {
+    this.from = now;
+  }
+
+  /** Replies were turned on (or the page came back): nothing that ended
+   * before `now` is news. */
+  restart(now = Date.now()): void {
+    this.from = now;
+  }
+
+  /** The listener heard from, sent to or looked at `title` at `now`. */
+  mark(title: string | null | undefined, now = Date.now()): void {
+    if (title) this.marks.set(title, now);
+  }
+
+  /** When `title` was last heard from (0 = never). */
+  last(title: string): number {
+    return this.marks.get(title) ?? 0;
+  }
+
+  /** The news boundary for `title`: the later of {@link restart} and its mark. */
+  heardAt(title: string): number {
+    return Math.max(this.from, this.last(title));
+  }
+
+  clear(): void {
+    this.marks.clear();
+  }
+}
+
 /** With "all", the same reply rides both "it finished" events (idle and
  * turn_ended, seconds to a minute apart): this long, the same words from the
  * same session are that one reply. */
@@ -1732,9 +1908,11 @@ interface Pending {
  * from the phone — and each turn once (idle and turn_ended both report it). */
 export class ReplyTracker {
   private pending = new Map<string, Pending>();
+  private lastSent = new Map<string, number>();
 
   /** A voice draft was submitted to `title`. `say` is what /send was told. */
   sent(title: string, say: boolean, now = Date.now()): void {
+    this.lastSent.set(title, now);
     if (!say) {
       this.pending.delete(title);
       return;
@@ -1746,6 +1924,12 @@ export class ReplyTracker {
     const p = this.pending.get(title);
     if (p && now - p.sentAt > PENDING_MAX_MS) this.pending.delete(title);
     return this.pending.has(title);
+  }
+
+  /** When a draft last went to `title` from here (ms; 0 = never) — the
+   * listener was talking to it then ({@link contextLead}'s `lastAt`). */
+  sentAt(title: string): number {
+    return this.lastSent.get(title) ?? 0;
   }
 
   /** The session started on it: the next idle is this prompt's turn ending. */
@@ -1779,6 +1963,7 @@ export class ReplyTracker {
 
   clear(): void {
     this.pending.clear();
+    this.lastSent.clear();
   }
 }
 

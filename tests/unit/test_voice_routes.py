@@ -767,3 +767,69 @@ def test_voice_route_answers_read_the_dialog_route(env, monkeypatch):
     assert got["no_dialog"] is True and got["say"] == "worker is not asking anything."
     # Unknown session: the route's 404 → no dialog, never an error.
     assert asyncio.run(voice_routes._read_dialog("nope")) is None
+
+
+# ---------------------------------------------------------------------------
+# POST /api/voice/help — a question about MindFlock, answered from the docs
+# ---------------------------------------------------------------------------
+def test_voice_help_answers_from_the_docs(monkeypatch):
+    from backend.web.core import voice_help
+
+    asked = []
+
+    def model(prompt):
+        asked.append(prompt)
+        return "Open **Settings**, then Voice. Pick a voice.\nThat's all."
+
+    monkeypatch.setattr(voice_help, "_ask_model", model)
+    voice_help._CACHE.clear()
+    r = client.post(
+        "/api/voice/help", json={"text": "  how do I change the voice words?  "}
+    )
+    assert r.status_code == 200, r.text
+    got = r.json()
+    assert got["model"] is True
+    assert got["say"].startswith("From ") and got["say"].endswith(
+        ": Open Settings, then Voice. Pick a voice."
+    )
+    assert got["source"]["doc"].endswith(".md") and got["source"]["heading"]
+    (prompt,) = asked
+    assert "Question: how do I change the voice words?" in prompt
+    voice_help._CACHE.clear()
+
+
+def test_voice_help_falls_back_without_the_model(monkeypatch):
+    from backend.web.core import voice_help
+
+    voice_help._CACHE.clear()
+    # The real _ask_model: refused under pytest, so the section is read.
+    got = client.post("/api/voice/help", json={"text": "what is the code map"}).json()
+    assert got["model"] is False
+    assert got["say"].startswith("From ")
+    assert "{" not in got["say"] and "`" not in got["say"] and "**" not in got["say"]
+
+
+def test_voice_help_route_passes_the_text_through(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        voice_routes,
+        "_help_answer",
+        lambda text: seen.append(text)
+        or {"say": "Yes.", "source": None, "model": False},
+    )
+    r = client.post("/api/voice/help", json={"text": "what\n is  a fence " + "x" * 600})
+    assert r.json() == {"say": "Yes.", "source": None, "model": False}
+    assert (
+        seen[0].startswith("what is a fence x")
+        and len(seen[0]) == voice_routes.HELP_TEXT_MAX
+    )
+
+
+@pytest.mark.parametrize(
+    "body", [["nope"], {}, {"text": ""}, {"text": "   "}, {"text": 3}]
+)
+def test_voice_help_rejects_a_bad_body(body, monkeypatch):
+    monkeypatch.setattr(voice_routes, "_help_answer", lambda t: pytest.fail("asked"))
+    r = client.post("/api/voice/help", json=body)
+    assert r.status_code == 400
+    assert r.json() == {"error": "text must be a question"}

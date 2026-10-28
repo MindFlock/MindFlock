@@ -7,7 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Ask MindFlock how it works, by voice.** "How do I schedule a
+  template?", "what does autopilot do?", "where do I turn on the phone
+  page?" — a question about MindFlock itself is no longer typed into the
+  session as a prompt: the phone and the desktop mic say *Looking that up…*
+  and answer out loud in a sentence or two from MindFlock's own docs, naming
+  the section ("From Fast-track: …"). A quick model call words the answer;
+  without one, the section's own first sentences are read. "Say that again"
+  repeats it. A question about the agent's work ("how do I fix the login
+  bug?") is still a prompt; start with "MindFlock, …" or "help: …" to ask
+  MindFlock anyway (`POST /api/voice/help`).
+
 ### Changed
+
+- **Voice says only what is news.** Switching sessions, turning voice on,
+  resuming it, coming back to the page, the poll and *Everything* no longer
+  read a reply from a session that has been done for a while. A reply is read
+  by itself only when it ended after you could have heard it — after voice
+  went on or the page came back, after you last switched to, selected or sent
+  to that session — and within the last ten minutes; a reply to a prompt you
+  sent is always read. Asking still reads it: the notification's *Tap to
+  hear*, and the phone's `mfVoice.sayLast` for "what did it say". The same
+  rule holds on the phone and on the desktop mic.
+- **Spoken replies give their context.** The `Say:` line a session is asked
+  for now opens with what it was working on, then what it did, then the
+  question — up to three short sentences (*We were working on MindFlock's
+  settings screen, and the voice install button now sits in the Try-it row.
+  Should I add it to the phone page too?*). And a reply from a session you
+  are not on, or have not heard from in ten minutes, says where it is from
+  first: *In Invoice parser, on parse the March invoices: …*. Claude Code
+  sessions pick the new instruction up when their hook is re-pinned (turning
+  voice on does it).
+- **Switch sessions by voice the way you'd say it.** "Switch to the
+  sitecheck session", "take me to login fix", "jump over to the settings
+  one", "open sitecheck" — the words around a name are ignored and a name
+  matches across hyphens and digits ("bot seven" is bot7), with a plural or
+  a wrong letter forgiven. When two sessions match, it asks *Which one:
+  sitecheck-bot7 or sitecheck-bot7-copy-2?* and listens: "the second one",
+  "copy two" or "the one that's working" picks. Phone and desktop.
+- **Start a session by talking.** "Start a new session", "spin one up" or
+  "create a session to fix the login bug in mindflock": it asks *In which
+  project?* and *What should it do?* when you haven't said, then starts it
+  and moves you there. "This one" means the project you're on; "never mind"
+  drops it.
+- **"What did it say?"** reads the session's last reply on demand ("read
+  it", "what did login fix say").
+
+
+- **Switching sessions no longer replays an old reply.** Moving to a
+  session by voice says where you are — *Now on login-fix, idle: Fix login
+  redirect.* — and reads its last reply only if it finished in the last two
+  minutes. "What did it say" is now that read-back; "summarize that" still
+  condenses.
+- **A new session by voice asks for its project** when more than one is
+  known, instead of taking the current session's (say "this one" for it),
+  and an unknown project is asked for again rather than refused.
 
 - **Only a real prompt raises a Question.** A reply that merely ends with a
   question in plain words ("Should I also add them?") no longer puts a

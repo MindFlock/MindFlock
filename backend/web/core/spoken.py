@@ -1,8 +1,9 @@
 """The spoken line: what the phone says when a session's turn ends.
 
 A session in voice mode is asked (:data:`INSTRUCTION`) to end every reply
-with one line starting ``Say:`` — at most two plain sentences a person can
-hear. This module lifts that line out of the reply and, when there is none,
+with one line starting ``Say:`` — up to three short plain sentences a person
+can hear: the context first (what was being worked on, so a listener who was
+away knows where they are), then what was done, then any question. This module lifts that line out of the reply and, when there is none,
 makes a deterministic digest of the reply instead. Pure text helpers plus ONE
 cached reader:
 

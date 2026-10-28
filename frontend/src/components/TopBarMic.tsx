@@ -91,6 +91,7 @@ import {
   micPill,
   HandsFree,
   HeardTurns,
+  HeardClock,
   LiveDictation,
   REPLIES_CHOICES,
   ReplyTracker,
@@ -120,6 +121,9 @@ import {
   talkKeyAction,
   ttsEngine,
   ttsVoiceKey,
+  isNews,
+  replyText,
+  turnEndedAt,
   localVoice,
   voiceAudioCtx,
   voiceName,
@@ -175,6 +179,10 @@ const serverSp = serverSpeaker(browserSp, { voiceKey: () => ttsVoiceKey(cfgNow) 
 const tracker = new ReplyTracker();
 /** "Everything": the turns already read (idle and turn_ended both carry one). */
 const heard = new HeardTurns();
+/** When each session was last heard from / looked at, and since when
+ * anything is news: only news is read by itself (isNews), and a reply from a
+ * session you were not just talking to says where it is from (replyText). */
+const clock = new HeardClock();
 const speakingListeners = new Set<(on: boolean) => void>();
 const queue = new SpeechQueue(
   () => (ttsEngine(cfgNow) === "server" ? serverSp : browserSp),
@@ -261,6 +269,12 @@ let sayAllChecked = false;
 /** The asks the pop-up had read out (by session): the next step of one
  * first silences what is left of the previous step's read-out. */
 const asksRead = new Set<string>();
+
+/** The session's task headline, from the rows the app already polls. */
+function taskHeadline(title: string): string {
+  const inst = (queryClient.getQueryData<Instance[]>(["instances"]) || []).find((i) => i.title === title);
+  return String(inst?.task_headline || "");
+}
 
 /** Re-read `title`'s last Say line: its question waits until it works again. */
 function refreshQuestion(title: string) {
@@ -553,6 +567,11 @@ export function TopBarMic() {
   }, []);
 
   // --- replies: the turns of prompts this mic sent, or every turn --------- //
+  // Replies turned on: what ended before is not news.
+  const repliesOn = prefs.replies !== "off";
+  useEffect(() => {
+    if (repliesOn) clock.restart();
+  }, [repliesOn]);
   useEffect(() => {
     let unsubs: Array<() => void> = [];
     let retry: ReturnType<typeof setTimeout> | undefined;
@@ -561,6 +580,11 @@ export function TopBarMic() {
       const mode = prefsRef.current.replies;
       const inline = String(data.say || "").trim();
       const ours = tracker.waiting(title);
+      // News only: a turn that ended before the listener could have heard
+      // it (before this page or replies were on, before they last looked at
+      // or heard that session) or over ten minutes ago is never read by
+      // itself. A prompt sent from here is the tracker's (take: its turn).
+      if (!ours && !isNews(turnEndedAt(ts, data.idle_for), clock.heardAt(title))) return;
       // Into the one queue, worded when its turn comes: the name first
       // unless it is the session you are looking at by then. A reply that
       // asks something: once it (and whatever was queued before it) has been
@@ -570,7 +594,22 @@ export function TopBarMic() {
         say(spokenLine(displayName(title), words));
         if (mode === "off") return;
         if (ask) questions.set(title, ask);
-        const said = queue.say(() => spokenLine(voiceName(title, useUi.getState().focused, displayName(title)), words), { title });
+        // Where it is from when that is not obvious ("In Login fix, on fix the
+        // pin bar: …"): another session than the one on screen, or one not
+        // heard from in ten minutes.
+        const said = queue.say(() => {
+          const line = replyText({
+            title,
+            focused: useUi.getState().focused,
+            name: displayName(title),
+            headline: taskHeadline(title),
+            lastAt: Math.max(clock.last(title), tracker.sentAt(title)),
+            now: Date.now(),
+            text: words,
+          });
+          clock.mark(title);
+          return line;
+        }, { title });
         if (!ask) return;
         // Its Reply opens the ask pop-up, which waits for this read-out
         // instead of reading the question a second time.
@@ -622,8 +661,13 @@ export function TopBarMic() {
     attach();
     // The focused session's question, read when focus moves to it.
     refreshQuestion(useUi.getState().focused || "");
+    clock.mark(useUi.getState().focused);
     const unsubFocus = useUi.subscribe((s, prev) => {
-      if (s.focused !== prev.focused) refreshQuestion(s.focused || "");
+      if (s.focused === prev.focused) return;
+      // Looked at until now, and from now: what ended before is not news.
+      clock.mark(prev.focused);
+      clock.mark(s.focused);
+      refreshQuestion(s.focused || "");
     });
     return () => {
       clearTimeout(retry);
@@ -1011,6 +1055,10 @@ export function TopBarMic() {
       name: displayName,
       caption: say,
       announce,
+      speak: (line) => {
+        say(line, true);
+        queue.say(line);
+      },
       route: routePhrase,
       approveDialogs: () => refreshCfg().then((c) => !!c.approve_dialogs),
       activity: liveActivity,
@@ -1039,6 +1087,16 @@ export function TopBarMic() {
           } else announce(line);
         }
         return;
+      case "ask":
+      case "ambiguous":
+        // The router asked something back ("Which one?", "In which
+        // project?"): said like your own action's confirmation, and the
+        // next phrase is its answer (lib/voiceDesktop routePending).
+        if (r.say && prefsRef.current.confirm !== false) {
+          say(r.say, true);
+          void confirmer.current?.say({ line: r.say });
+        } else announce(r.say || "");
+        return;
       case "cancel":
         say("Dropped");
         return;
@@ -1066,7 +1124,7 @@ export function TopBarMic() {
         say("");
         return;
       default:
-        // ambiguous / no-session / new-failed / list / needs / status:
+        // no-session / new-failed / list / needs / status / read:
         // the router's words, nothing typed.
         announce(r.say || "");
         if (!r.say) say("“" + text + "” — not typed", true);

@@ -1286,8 +1286,10 @@ true`** (`/send`, decided per prompt by the client — see [Send a
 message](#send-a-message--prompt-queue)) carries one instruction
 (`backend.web.core.spoken.INSTRUCTION`, exposed for the phone to parse
 against) asking it to end that reply with one final line starting `Say:` —
-at most two short plain sentences, no code, paths or markdown, saying what it
-did or will do and any question it has. Only those prompts: the line costs
+up to three short plain sentences under about 50 words, no code, paths or
+markdown: first the context (what was being worked on, the feature or area,
+and the project when more than one could be meant), then what it did or will
+do, then any question it has. Only those prompts: the line costs
 tokens. Claude Code gets the sentence from its own `UserPromptSubmit` hook:
 the delivery arms the one-shot `<voice dir>/<tmux session>.next` (the arming
 unix time as text) right before typing the prompt, and the activity hook
@@ -1444,6 +1446,7 @@ never stalls the event loop.
 | GET | `/api/voice/install-local` | The install's progress: `{state: "idle"\|"running"\|"done"\|"failed", step: "installing packages"\|"reinstalling the local models' packages after the update"\|"downloading recognition model (small)"\|"downloading streaming model (base.en)"\|"downloading voice (en_US-lessac-medium)"\|"done"\|"", log: [the last 20 output lines], started, finished (epoch seconds or null), error}`. A step that exits non-zero, cannot start or runs past 30 minutes fails the install with `error` = the step and its last output line; the settings are then untouched. Per server process (a restart forgets it). Readable by any signed-in client |
 | POST | `/api/voice/wake?lang=` | Is this short clip the wake word on its own — `voice.words.wake`, **"MindFlock"** by default? Body and `Content-Type` exactly as `/transcribe`; the clip is recognised with the word as the decoder's hint (`MindFlock` for ours, else the word capitalised: `Hey Jarvis`) — on `local` by the fast streaming model (`base.en`, greedy, no VAD: ~0.6 s for a 1 s clip where `small` takes ~1.8 s), other backends their `/transcribe` — and judged by `core.wake.is_wake` (the word alone, in at most one token more than it has, two letters of slack for a word of 8+ letters — how whisper hears a made-up word: *Mind flock*, *Mindlock*, *mind block* — one for 5–7, none below; a sentence never wakes, however it starts) → `{wake: bool, text, word: "mindflock" (the effective word), backend, ms}`; `/transcribe`'s status codes. The clients keep the mic in a standby that watches the sound level and send only a short lone utterance bounded by silence, so the model sees a second of audio at a time, never the room |
 | POST | `/api/voice/say-all` | `{"on": bool}` → `{say_all: bool}` (the state read back) — ask **every** prompt in **every** session for its `Say:` line, or stop. A client whose replies choice is *Everything* turns this on: the per-prompt `say` on `/send` only reaches prompts the app sends, and a prompt typed straight into a terminal would otherwise end with no spoken line (the listener hears a digest). It is the standing `<voice dir>/say-all` marker the Claude prompt hook honours like a young `.next` (printed on every `UserPromptSubmit` while it exists; a `.next` beside it is still consumed, and the line prints once), and `/send` appends the instruction for the other CLIs. Turning it on re-pins every live Claude session's hooks (so one launched by an older build learns the marker); the server does the same at boot while it is on. `GET /api/voice` reports it as `say_all`. Owner only (**403**); **400** without a boolean `on`; **500** when the marker can't be written |
+| POST | `/api/voice/help` | `{"text": "<a question about MindFlock>"}` (the router's `help` answer carries it) → `{say, source: {doc, heading} \| null, model: bool}` — answered from `docs/*.md` (`core.voice_help`): the docs split at every heading into passages of a few paragraphs (a table row on its own, code dropped), ranked BM25-style over the words plus the headings (the index is built once per process and rebuilt when a doc's mtime or size changes); the best four go to ONE headless model call (`claude --model claude-haiku-5-5 -p`, MCP servers stripped, the neutral one-shot dir, 20 s) told to answer in at most two plain spoken sentences or say *I don't know*. `say` names the section (`"From Fast-track: …"`); `model` false when the model was missing, failed, timed out or said nothing — then `say` is the best passage's first two sentences, markdown stripped. Nothing matching → `"I couldn't find that in the MindFlock docs."`; the model saying it doesn't know → `"I don't know — the MindFlock docs don't say."` (both `source: null`); no docs folder at all (an installed copy run away from its checkout) → `"I can't find the MindFlock docs on this computer."`. Answers are kept per question (64 per process), so asking again costs nothing. **400** `{error}` without a non-empty string `text` (cut to 400 characters). Readable by any signed-in client |
 | POST | `/api/voice/clear-key` | `{"kind": "stt"\|"tts"}` → `{ok: true, kind}` — forget a saved API key. `POST /api/settings` keeps a secret whenever its field arrives blank (the app-wide convention, so a form resubmit never wipes a token), which leaves no way back to *no key*: this is it. Owner only (`auth.may_configure`, **403**); **400** any other `kind`; **500** when the settings file can't be read |
 
 **Streaming recognition** (`backend/web/core/speech_stream.py`): Whisper is
@@ -1488,7 +1491,8 @@ a false command is worse than a missed one.
 
 `POST /api/voice/route` with `{"text": "<one finished phrase>", "session":
 "<the title being talked to, or ''>", "title": "<optional: the client's
-mapping of a numbered target>"}` → **200** with one of the shapes below
+mapping of a numbered target>", "pending": <optional: the last answer's
+`pending`, sent back — see **Asking back**>}` → **200** with one of the shapes below
 (**400** `{error}` only for a body that is not an object; an unknown
 `session` reads as none). Matching is case- and punctuation-insensitive
 (`voiceNorm`: lowercase, anything but letters, digits and `'` a space), and a
@@ -1497,16 +1501,19 @@ leading `ok`/`okay`/`hey`/`please` and a trailing `please` are dropped.
 | Phrase | Answer |
 |---|---|
 | anything else, or blank | `{"kind": "prompt"}` — send it to the session (`/send`). No session rows are read. |
-| `(switch\|go\|change\|jump\|focus\|open\|show\|select) (over )?to <name>` | `{"kind": "switch", "title", "name", "say": "Now on <name>. <its last_say>"}`. `<name>` is matched against each row's display `name` and its title: a unique prefix, else the unique best word overlap, else a unique loose containment (mobile.js `voiceMatchSession`). A tie → `{"kind": "ambiguous", "say": "Which one: <A>, <B>?"}`; nothing → `{"kind": "no-session", "say": "No session called <words>. Sessions: <A>, <B>, <C>."}` (at most 6 names; `"There are no sessions."` with none). Other devices' `<device>::<title>` rows count — the client selects the title it gets. |
+| `(switch\|go\|change\|jump\|hop)( me)? (over )?to <name>`, `(take\|bring) me (over )?to <name>`, `(put\|get) me (on\|onto\|in) <name>`, also `(focus\|open\|show\|select) (over )?to <name>` | `{"kind": "switch", "title", "name", "say": "Now on <name>, <state word>[: <task_headline>]. [<its last_say>]"}` — the last reply only while it is news: the row is `idle` and its `activity_since` (the turn's end) is at most 120 s old (`FRESH_REPLY_S`); else just where you are. `<name>` is matched against each row's display `name` and its title (`find_sessions`): the words around a name are dropped (`the`, `my`, `a`, `session(s)`, `window`, `one`, `called`; `bot` / `agent` when they match nothing), and every word left must name a word of the name — across hyphens, underscores and letter/digit runs (`sitecheck` ↔ sitecheck-bot7, `bot seven` ↔ bot7, `site check` ↔ sitecheck), a plural, its start (3+ letters) or one wrong letter (5+) allowed; one session's whole name said wins, then whole words over starts; when no row matches every word, the unique row matching most (at least half) of them. A tie → `{"kind": "ambiguous", "say": "Which one: <A> or <B>?", "candidates": [{title, name}], "pending": {"kind": "pick", "candidates": […]}}`; nothing → `{"kind": "no-session", "say": "No session called <words>. Sessions: <A>, <B>, <C>."}` (at most 6 names; `"There are no sessions."` with none). After a polite lead (`can you`, `could you`, `let's`, `I want to`, …) a miss is `{"kind": "prompt"}`. Other devices' `<device>::<title>` rows count — the client selects the title it gets. |
+| `(open\|show( me)?\|focus( on)?\|select\|pull up\|bring up\|talk to\|go back to\|back to) <name>` | The same `switch` / `ambiguous`, but only for a session whose whole name or title is said, or its start in whole words (`open sitecheck`); with `session` / `window` said (`pull up the settings session`) any match as above. No match → `{"kind": "prompt"}` (`open the readme`, `show me the logs`, `go back to the old approach`). |
+| `what did <it\|name> (say\|reply\|answer\|write)`, `what was (the\|its) (last )?(reply\|answer\|message)`, `read (me )?(it\|that\|it out\|the (last )?reply\|its (last )?reply\|what it said)` | `{"kind": "read", "title", "name", "say": "<name> said: <its last_say>"}` — whatever its age (`"<name> is still working. Before that it said: …"`, `"<name> hasn't said anything yet."`, `"No session is open."`). A name only as `<name>, yes` takes one (whole name or its start); an unknown one is a prompt. |
 | `(what\|which) sessions (do i have\|are (up\|open\|running))`, `list (the \|my )?sessions`, `what('s\| is) (up\|open\|running)` | `{"kind": "list", "say": "Sessions: <A> (working), <B> (waiting on you), <C> (idle)."}` — at most 10, then `, and N more`. |
 | `(what\|who) needs (me\|attention\|my attention)` | `{"kind": "needs", "say": …}` — the rail bell's attention set (a question, a failed setup or pre-commit, failing checks, an offline terminal, idle 20 min on uncommitted work), most urgent first, three at most: `"<A> is asking: <its asking.text, else its last_say>"` (a question asked in prose counts — its row's `asking.kind == "question"` reads as `Question` here and in `status`/`list`) / `"<B> is waiting on failing checks."` / `"Nothing needs you."` |
 | `status`, `what's it doing`, `what's happening`, `what's going on` | `{"kind": "status", "say": "<name> is working for 5 minutes. <its last_turn>"}` — the CURRENT session (`"No session is open."` / `"<title> is not listed."`). |
 | `(switch\|go\|…) (over )?to [session\|window\|number] <N>`, `(switch\|go\|…) to the <Nth> (one\|session\|window)`, `session <N>`, `number <N>`, `window <N>`, `the <Nth> session` | `{"kind": "switch_index", "index": N}` — 1-based, in the CLIENT's numbering (the desktop's rail order, the phone's list order), so the client maps it. `<N>`: `one`…`twenty` or digits; `<Nth>`: `first`…`tenth` or `3rd`. `the <Nth> one` alone is this too — unless the session being talked to is asking (`activity: clarify`), when it picks that option (an `answer`, below). |
 | `next (session\|one\|window)`, `(previous\|last) (session\|one\|window)` (optionally after `(switch\|go\|…) to the`), `go back` | `{"kind": "switch_rel", "delta": 1\|-1}` — the client moves along its own order. |
 | An answer to a dialog — bare: `yes`, `no`, `always allow`, `approve`, `deny`, `allow it`, `go ahead`, `option two`, `the second option`, `answer <answer>`, `tell it <answer>`; targeted: `<target>, <answer>`, `<answer> to <target>`, `(answer\|say) <answer> (to\|on\|for) <target>`, `tell <target> (to )?<answer>` | `{"kind": "answer", "choice", "number"?, "words", …}` — see **Answers** below. |
-| `what('s\| is) <it\|target> asking`, `what does <it\|target> want`, `what's the question`, `read (me )?the question (again)?`, `read that again` | `{"kind": "question", "title", "name", "say": "<name>: <the dialog's question, what it runs and the choices>"}` — the dialog read out the phone's way (`voiceDialogSpeech`); with no parsed dialog the dialog's question line (a question asked in prose included: `/dialog` serves it as `kind: "question"`), else the session's `Say:` line when it `has_question`, else `"<name>: Nothing is being asked."`. A numbered target → `{"kind": "question", "index": N}` (map it, send `title`); no session → `{"kind": "question", "say": "No session is open."}`. `what did it say` is still `condense`. |
-| `[start\|open\|create\|make\|spin up] [a\|another] new session [called\|named <name>] [in\|for\|on <repo>] [to\|and\|that <task>]`, or the bare `new session <task>` | Creates a session → `{"kind": "new", "title", "name", "say": "Started <name> in <repo name>."}`, or `{"kind": "new-failed", "say"}`. See below. |
-| `cancel`, `never mind`, `scratch that`, `forget it` / `stop`, `stop (listening\|recording\|dictating\|the mic\|the microphone)`, `mic off`, `turn off the mic`, `pause listening`, `that's all`, `done talking` / `stop talking`, `stop speaking`, `stop reading`, `be quiet`, `quiet`, `hush`, `shut up`, `(that's) enough` / `voice off` / `say that again`, `repeat` / `summarize (that)`, `what did it say` | `{"kind": "cancel"\|"stop"\|"hush"\|"off"\|"repeat"\|"condense"}` with no `say` — the client acts on its own (`stop`: it stops listening; typed text stays; `hush`: it cuts what is being said and drops everything queued, and keeps listening if it was). The `stop` and `hush` phrases are the person's `voice.words` (**Voice words** below); those listed are the defaults'. |
+| `what('s\| is) <it\|target> asking`, `what does <it\|target> want`, `what's the question`, `read (me )?the question (again)?`, `read that again` | `{"kind": "question", "title", "name", "say": "<name>: <the dialog's question, what it runs and the choices>"}` — the dialog read out the phone's way (`voiceDialogSpeech`); with no parsed dialog the dialog's question line (a question asked in prose included: `/dialog` serves it as `kind: "question"`), else the session's `Say:` line when it `has_question`, else `"<name>: Nothing is being asked."`. A numbered target → `{"kind": "question", "index": N}` (map it, send `title`); no session → `{"kind": "question", "say": "No session is open."}`. `what did it say` is `read` (above). |
+| A question about MindFlock itself: question-shaped (`how (do\|does\|can\|…)`, `what`, `where`, `which`, `why`, `when`, `can i`, `is there`, `is it possible`, `explain`, `tell me about`) AND either said after `mindflock` / `hey mindflock` / `help`, or naming MindFlock (`in mindflock`) or one of its features (sessions, templates, schedules, fences, zones, autopilot / Fast-track, team runs, devices, the phone page, voice, tickets, PRs, worktrees, settings, peers, extensions, the rail, notifications, the code map, …) with no word of the agent's work (`fix`, `bug`, `test`, `code`, `file`, `error`, `this`, `my project`, …), the session's state (`doing`, `said`, `status`, `how many`, …) or `you` (but the generic `how do you`) | `{"kind": "help", "text": "<the question, normalised, the mindflock/help lead dropped>"}` — the client says *Looking that up…* and asks [`POST /api/voice/help`](#voice-talking-to-a-session-from-the-phone) `{text}`, then speaks its `say`. `how do I fix the login bug` stays a prompt; `mindflock, how do I fix the login bug` is help. Checked after `question`, before the answers. |
+| `[I want to\|can you\|let's\|…] [start\|open\|create\|make\|spin up\|launch\|give me\|I want\|…] [a\|another] new (session\|agent)` or `another session` or `spin (one\|another one\|a new one) up` — then `[called\|named <name>] [in\|for\|on <repo>] [to\|and\|that <task>]`; a plain `a session` with a verb and one of those (`create a session to fix the login bug`); the bare `new session <task>` | Creates a session → `{"kind": "new", "title", "name", "say": "Started <name> in <repo name>."}`; or asks first → `{"kind": "ask", "say": "In which project? …" \| "What should it do in <repo>?", "pending": {"kind": "new", …}}`; or `{"kind": "new-failed", "say"}`. See below. `start a session` alone is a prompt. |
+| `cancel`, `never mind`, `scratch that`, `forget it` / `stop`, `stop (listening\|recording\|dictating\|the mic\|the microphone)`, `mic off`, `turn off the mic`, `pause listening`, `that's all`, `done talking` / `stop talking`, `stop speaking`, `stop reading`, `be quiet`, `quiet`, `hush`, `shut up`, `(that's) enough` / `voice off` / `say that again`, `repeat` / `summarize (that)`, `summary` | `{"kind": "cancel"\|"stop"\|"hush"\|"off"\|"repeat"\|"condense"}` with no `say` — the client acts on its own (`stop`: it stops listening; typed text stays; `hush`: it cuts what is being said and drops everything queued, and keeps listening if it was). The `stop` and `hush` phrases are the person's `voice.words` (**Voice words** below); those listed are the defaults'. |
 
 Every `say` is a sentence the client speaks as is. Rows are
 [`GET /api/instances`](#get-apiinstances)'s own (`name`, `activity`,
@@ -1514,6 +1521,62 @@ Every `say` is a sentence the client speaks as is. Rows are
 command; rows hidden off the rail (`hidden_by`) are never named. Words that
 are not one of these forms stay a prompt: `yes, but run the tests first`,
 `stop the server`, `go back to the old approach`, `the answer is no`.
+
+**Asking back.** Two answers ask something and carry `pending`, which the
+client keeps (≈30 s: the phone's `VOICE_PENDING_MS`, the desktop's
+`PENDING_MS`) and sends back verbatim with the next phrase; any answer
+without a `pending` drops it.
+
+- `ambiguous` → `{"kind": "pick", "candidates": [{title, name}]}` (at most
+  6, in the order read out). The next phrase is a pick when it names one:
+  its place (`the first one`, `second`, `number two`, `the last one`; past
+  the end → `ambiguous` again, `"There are 2. Which one: …"`), its state
+  (`the one that's working`, `the idle one`, `the one asking`; none →
+  `"None of them is working. Which one: …"`), or a fragment of its name
+  (`copy two`, `bot seven`; `I mean` / `go to` before it dropped) — a tie
+  among candidates goes to the one the words END, and a fragment still
+  shared asks again, narrowed. The pick is a `switch`. A candidate no longer
+  listed is ignored. Anything else is routed as usual (`never mind` is
+  `cancel`, `switch to docs` a switch, `fix the test` a prompt). A pick
+  comes before Claude's question tool's answer (`two` said to a session
+  showing one).
+- `ask` (a new session) → `{"kind": "new", "await": "repo" | "task",
+  "name", "task", "choices"?: [repo names as read out], "repo_name"?,
+  "repo_path"?}` — the fields gathered so far. Awaiting the **project**: a
+  known repository the words name (`parser`, `the sitecheck repo`, `site
+  check bot six`), `this one` / `the same project` (the current session's),
+  `the second one` (in `choices`), or the project and then the task
+  (`parser, add tests`); anything else asks again (`"I don't know a project
+  called <words>. In which project? …"`), but a command (`switch to docs`,
+  `what needs me`, `stop listening`) is routed as usual. Awaiting the
+  **task**: the phrase is the task as said (`to` / `it should` / `have it`
+  before it dropped); `nothing`, `no task`, `just start it` start it with
+  none; only `stop` / `hush` / `voice off` are commands. Both: `never mind`,
+  `cancel`, `don't start it` → `{"kind": "new-failed", "say": "Okay, no new
+  session.", "cancelled": true}`. A `repo_path` this server does not know
+  (the current session's, or a known repository) is not trusted — the
+  project is asked for again. Once nothing is missing the session is
+  created as below and the answer is `new`.
+
+```json
+POST /api/voice/route {"text": "switch to the sitecheck session", "session": "docs"}
+→ {"kind": "ambiguous", "say": "Which one: sitecheck-bot7 or sitecheck-bot7-copy-2?",
+   "candidates": [{"title": "sitecheck-bot7", "name": "sitecheck-bot7"}, …],
+   "pending": {"kind": "pick", "candidates": […]}}
+POST /api/voice/route {"text": "copy two", "session": "docs", "pending": {"kind": "pick", "candidates": […]}}
+→ {"kind": "switch", "title": "sitecheck-bot7-copy-2", "name": "sitecheck-bot7-copy-2",
+   "say": "Now on sitecheck-bot7-copy-2, idle."}
+
+POST /api/voice/route {"text": "start a new session", "session": "docs"}
+→ {"kind": "ask", "say": "In which project? MindFlock, sitecheck-bot5 or parser?",
+   "pending": {"kind": "new", "await": "repo", "name": "", "task": "", "choices": […]}}
+POST /api/voice/route {"text": "parser", "session": "docs", "pending": {…}}
+→ {"kind": "ask", "say": "What should it do in parser?",
+   "pending": {"kind": "new", "await": "task", …, "repo_name": "parser", "repo_path": "/r/parser"}}
+POST /api/voice/route {"text": "add tests for the queue", "session": "docs", "pending": {…}}
+→ {"kind": "new", "title": "add-tests-queue", "name": "add-tests-queue",
+   "say": "Started add-tests-queue in parser."}
+```
 
 **Numbers are the client's.** `switch_index` / `switch_rel` and a numbered
 target (`session three, yes`, `what is number 2 asking`) carry `index` /
@@ -1585,13 +1648,16 @@ one MindFlock knows: what the New dialog suggests
 (`GET /api/repos/suggest`) plus every local session's
 repository, by folder name with spacing, case and punctuation ignored
 (`site check bot 5` is `sitecheck-bot5`; an unambiguous start like
-`sitecheck` picks the most recent match). Words after `for`/`on` that name no
-repository are the task (`new session for the login bug`); after `in` they
-were meant as a repository and nothing is guessed: `"I don't know a
-repository called <words>. Repositories: …"`. Named none → the current
-session's repository (a local row), else the only one known, else the most
-recent; nothing → `"I don't know which repository: say new session in
-<A>, <B>."`. The **title** is the `called` name hyphenated (≤ 32 chars), else
+`sitecheck` picks the most recent match; number words count, `bot six` is
+`bot6`), or a known one the task ends on (`create a session to fix the login
+bug in mindflock`). Words after `for`/`on` that name no repository are the
+task (`new session for the login bug`); after `in` they were meant as a
+repository and nothing is guessed: `ask` with `"I don't know a project
+called <words>. In which project? …"`. Named none → the only one known, else
+`ask` `"In which project? <the current session's first, then the most
+recent, at most 6>?"`; none known → `"I don't know any projects yet: open
+one from the New dialog first."` (`new-failed`). No task → `ask` `"What
+should it do in <repo>?"`. The **title** is the `called` name hyphenated (≤ 32 chars), else
 the first four words of the task named the New dialog's way
 (`title_from_prompt`: `fix the login bug` → `fix-login-bug`), else
 `voice-session`; made unique with `-2`, `-3`… against every session and

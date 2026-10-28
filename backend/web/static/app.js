@@ -38210,7 +38210,7 @@ function meterRef(el) {
 var passes = [];
 var t0 = 0;
 var marks = {};
-var clock = () => typeof performance !== "undefined" ? performance.now() : Date.now();
+var clock$1 = () => typeof performance !== "undefined" ? performance.now() : Date.now();
 function debugOn() {
 	try {
 		return typeof localStorage !== "undefined" && localStorage.getItem("cs_voice_debug") === "1";
@@ -38220,10 +38220,10 @@ function debugOn() {
 }
 function voiceMark(m) {
 	if (m === "start") {
-		t0 = clock();
+		t0 = clock$1();
 		marks = {};
 	} else if (!t0 || m in marks) return;
-	marks[m] = Math.round(clock() - t0);
+	marks[m] = Math.round(clock$1() - t0);
 	if (typeof window !== "undefined") window.__mfVoiceTiming = { ...marks };
 	if (debugOn()) console.debug("[voice] " + m + " +" + marks[m] + " ms");
 }
@@ -39405,14 +39405,41 @@ var ROUTE_KINDS = /* @__PURE__ */ new Set([
 	"switch_index",
 	"switch_rel",
 	"answer",
-	"question"
+	"question",
+	"ask",
+	"read",
+	"help"
 ]);
-async function routePhrase(text, session) {
+var PENDING_MS = 3e4;
+var PendingChoice = class {
+	now;
+	held = null;
+	constructor(now = Date.now) {
+		this.now = now;
+	}
+	take() {
+		if (this.held && this.now() - this.held.at > PENDING_MS) this.held = null;
+		return this.held ? this.held.data : null;
+	}
+	keep(r) {
+		const p = r?.pending;
+		this.held = p && typeof p === "object" ? {
+			data: p,
+			at: this.now()
+		} : null;
+	}
+};
+var routePending = new PendingChoice();
+async function routePhrase(text, session, pending = routePending) {
 	try {
-		const r = await api("/api/voice/route", { json: {
+		const json = {
 			text,
 			session
-		} });
+		};
+		const held = pending.take();
+		if (held) json.pending = held;
+		const r = await api("/api/voice/route", { json });
+		if (r && typeof r === "object") pending.keep(r);
 		if (r && typeof r === "object" && ROUTE_KINDS.has(String(r.kind))) return r;
 	} catch {}
 	return { kind: "prompt" };
@@ -39472,8 +39499,27 @@ async function runVoiceCommand(r, text, deps) {
 		case "question":
 			deps.announce(r.say || "Nothing is being asked.");
 			return true;
+		case "help": {
+			deps.caption(HELP_LOOKING_LINE);
+			const said = (await askHelp(r.text || text)).say;
+			(deps.speak || deps.announce)(said);
+			return true;
+		}
 		default: return false;
 	}
+}
+var HELP_LOOKING_LINE = "Looking that up…";
+var HELP_FAILED_LINE = "Couldn't look that up.";
+async function askHelp(text) {
+	try {
+		const j = await api("/api/voice/help", { json: { text } });
+		if (j && typeof j.say === "string" && j.say.trim()) return j;
+	} catch {}
+	return {
+		say: HELP_FAILED_LINE,
+		source: null,
+		model: false
+	};
 }
 async function answer(r, text, deps, again) {
 	if (!r.title && r.index != null && !again) {
@@ -39542,6 +39588,58 @@ function spokenLine(name, say) {
 function voiceName(title, focused, name) {
 	return title && title === focused ? "" : name;
 }
+var NEWS_MS = 6e5;
+var CONTEXT_GAP_MS = 6e5;
+function isNews(endedAt, heardAt, now = Date.now()) {
+	const e = Number(endedAt) || 0;
+	return e > 0 && e > (Number(heardAt) || 0) && now - e <= NEWS_MS;
+}
+function turnEndedAt(ts, idleFor) {
+	const t = Number(ts) || 0;
+	if (!t) return 0;
+	return (t - Math.max(0, Number(idleFor) || 0)) * 1e3;
+}
+var leadNorm = (t) => String(t || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+function contextLead(o) {
+	const name = String(o.name || "").trim();
+	if (!name || !o.title) return "";
+	const away = !o.lastAt || o.now - o.lastAt > CONTEXT_GAP_MS;
+	if (o.title === o.focused && !away) return "";
+	const t = leadNorm(o.text);
+	if (t.startsWith(leadNorm(name)) || t.startsWith(leadNorm("In " + name))) return "";
+	let task = String(o.headline || "").replace(/\s+/g, " ").trim().replace(/[\s.,;:!?]+$/, "");
+	if (task && !/^.[A-Z]/.test(task)) task = task.charAt(0).toLowerCase() + task.slice(1);
+	return "In " + name + (task ? ", on " + task : "") + ": ";
+}
+function replyText(o) {
+	const text = String(o.text || "").trim();
+	return contextLead({
+		...o,
+		text
+	}) + text;
+}
+var HeardClock = class {
+	marks = /* @__PURE__ */ new Map();
+	from;
+	constructor(now = Date.now()) {
+		this.from = now;
+	}
+	restart(now = Date.now()) {
+		this.from = now;
+	}
+	mark(title, now = Date.now()) {
+		if (title) this.marks.set(title, now);
+	}
+	last(title) {
+		return this.marks.get(title) ?? 0;
+	}
+	heardAt(title) {
+		return Math.max(this.from, this.last(title));
+	}
+	clear() {
+		this.marks.clear();
+	}
+};
 var HEARD_DEDUPE_MS = 18e4;
 var HeardTurns = class {
 	seen = /* @__PURE__ */ new Map();
@@ -39565,7 +39663,9 @@ var STAMP_SLACK_S = 5;
 var PENDING_MAX_MS = 18e5;
 var ReplyTracker = class {
 	pending = /* @__PURE__ */ new Map();
+	lastSent = /* @__PURE__ */ new Map();
 	sent(title, say, now = Date.now()) {
+		this.lastSent.set(title, now);
 		if (!say) {
 			this.pending.delete(title);
 			return;
@@ -39579,6 +39679,9 @@ var ReplyTracker = class {
 		const p = this.pending.get(title);
 		if (p && now - p.sentAt > PENDING_MAX_MS) this.pending.delete(title);
 		return this.pending.has(title);
+	}
+	sentAt(title) {
+		return this.lastSent.get(title) ?? 0;
 	}
 	working(title) {
 		const p = this.pending.get(title);
@@ -39601,6 +39704,7 @@ var ReplyTracker = class {
 	}
 	clear() {
 		this.pending.clear();
+		this.lastSent.clear();
 	}
 };
 var ANSWER_LISTEN_MS = 12e3;
@@ -41781,6 +41885,7 @@ var browserSp = browserSpeaker();
 var serverSp = serverSpeaker(browserSp, { voiceKey: () => ttsVoiceKey(cfgNow) });
 var tracker = new ReplyTracker();
 var heard = new HeardTurns();
+var clock = new HeardClock();
 var speakingListeners = /* @__PURE__ */ new Set();
 var queue = new SpeechQueue(() => ttsEngine(cfgNow) === "server" ? serverSp : browserSp, (on) => speakingListeners.forEach((l) => l(on)));
 var standbyMeter = false;
@@ -41834,6 +41939,10 @@ var asksSaid = /* @__PURE__ */ new Map();
 var SAID_FRESH_MS = 6e4;
 var sayAllChecked = false;
 var asksRead = /* @__PURE__ */ new Set();
+function taskHeadline(title) {
+	const inst = (queryClient.getQueryData(["instances"]) || []).find((i) => i.title === title);
+	return String(inst?.task_headline || "");
+}
 function refreshQuestion(title) {
 	if (!title) return;
 	instApi(title, "/voice").then((j) => {
@@ -42072,6 +42181,10 @@ function TopBarMic() {
 			serverRec.mic.releaseIdle();
 		};
 	}, []);
+	const repliesOn = prefs.replies !== "off";
+	(0, import_react.useEffect)(() => {
+		if (repliesOn) clock.restart();
+	}, [repliesOn]);
 	(0, import_react.useEffect)(() => {
 		let unsubs = [];
 		let retry;
@@ -42080,12 +42193,25 @@ function TopBarMic() {
 			const mode = prefsRef.current.replies;
 			const inline = String(data.say || "").trim();
 			const ours = tracker.waiting(title);
+			if (!ours && !isNews(turnEndedAt(ts, data.idle_for), clock.heardAt(title))) return;
 			const speak = (words, ask = "", listen = true) => {
 				if (!words) return;
 				say(spokenLine(displayName(title), words));
 				if (mode === "off") return;
 				if (ask) questions.set(title, ask);
-				const said = queue.say(() => spokenLine(voiceName(title, useUi.getState().focused, displayName(title)), words), { title });
+				const said = queue.say(() => {
+					const line = replyText({
+						title,
+						focused: useUi.getState().focused,
+						name: displayName(title),
+						headline: taskHeadline(title),
+						lastAt: Math.max(clock.last(title), tracker.sentAt(title)),
+						now: Date.now(),
+						text: words
+					});
+					clock.mark(title);
+					return line;
+				}, { title });
 				if (!ask) return;
 				asksSaid.set(title, {
 					done: said,
@@ -42129,8 +42255,12 @@ function TopBarMic() {
 		};
 		attach();
 		refreshQuestion(useUi.getState().focused || "");
+		clock.mark(useUi.getState().focused);
 		const unsubFocus = useUi.subscribe((s, prev) => {
-			if (s.focused !== prev.focused) refreshQuestion(s.focused || "");
+			if (s.focused === prev.focused) return;
+			clock.mark(prev.focused);
+			clock.mark(s.focused);
+			refreshQuestion(s.focused || "");
 		});
 		return () => {
 			clearTimeout(retry);
@@ -42435,6 +42565,10 @@ function TopBarMic() {
 			name: displayName,
 			caption: say,
 			announce,
+			speak: (line) => {
+				say(line, true);
+				queue.say(line);
+			},
 			route: routePhrase,
 			approveDialogs: () => refreshCfg().then((c) => !!c.approve_dialogs),
 			activity: liveActivity,
@@ -42459,6 +42593,13 @@ function TopBarMic() {
 						confirmer.current?.say({ line });
 					} else announce(line);
 				}
+				return;
+			case "ask":
+			case "ambiguous":
+				if (r.say && prefsRef.current.confirm !== false) {
+					say(r.say, true);
+					confirmer.current?.say({ line: r.say });
+				} else announce(r.say || "");
 				return;
 			case "cancel":
 				say("Dropped");
