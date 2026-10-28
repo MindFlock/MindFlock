@@ -174,6 +174,9 @@ export interface PeerStatus {
 export interface PeerInvite {
   invite_id: string;
   code: string;
+  /** The link to send: `<this device or its public address>/join#<code>`
+   * (the code in the fragment, never the query). An older server sends none. */
+  url?: string;
   /** Ready to send: the code plus what to do with it. */
   message?: string;
   expires_in: number;
@@ -203,16 +206,39 @@ export type PeerReach = "auto" | "tunnel" | "direct";
 
 const CODE_RE = /mfp[12]:[a-z2-7]+-[a-z2-7]{4}/i;
 
-/** Whether pasted text carries a peer-link invite code anywhere in it (the
- * bare code, the whole invite message, a link). */
-export function isPeerCode(text: string): boolean {
-  return CODE_RE.test(text || "");
+/** The text as pasted, then URL-decoded (a link may carry `mfp2%3A…`). */
+function codeCandidates(text: string): string[] {
+  const t = text || "";
+  try {
+    return [t, decodeURIComponent(t)];
+  } catch {
+    return [t];
+  }
 }
 
-/** The code inside pasted text, lowercased, or "". */
+/** Whether pasted text carries a peer-link invite code anywhere in it (the
+ * bare code, the whole invite message, the invite link, a mindflock:// link). */
+export function isPeerCode(text: string): boolean {
+  return codeCandidates(text).some((t) => CODE_RE.test(t));
+}
+
+/** The code inside pasted text, lowercased, or "" — the same forms the
+ * server takes (backend/peer/invite.py code_from_text). */
 export function extractPeerCode(text: string): string {
-  const m = CODE_RE.exec(text || "");
-  return m ? m[0].toLowerCase() : "";
+  for (const t of codeCandidates(text)) {
+    const m = CODE_RE.exec(t);
+    if (m) return m[0].toLowerCase();
+  }
+  return "";
+}
+
+/** What "Copy invite" puts on the clipboard: the link first (one click for
+ * them), then the server's message — the code and how to paste it — for
+ * when the link can't open MindFlock. */
+export function inviteMessage(inv: Pick<PeerInvite, "code" | "message" | "url">): string {
+  const rest = inv.message || inv.code;
+  if (!inv.url || rest.includes(inv.url)) return rest;
+  return "Open this link to join me in MindFlock: " + inv.url + "\n\n" + rest;
 }
 
 /** What a Reconnect box holds: a fresh invite (re-pair, same link), a new

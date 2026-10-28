@@ -2492,6 +2492,29 @@ the rules a client must expect from them:
 - `GET /api/peer` → `listen.bound`: where the listener really is now
   (`"host:port"`, or `null`); a changed `peer.listen_port` re-binds it.
 
+### Peer links — join by link
+
+An invite is a link to send; the code (single use, 10 minutes, the safety
+number, the handshake — unchanged) rides inside it.
+
+- `POST /api/peer/invites` also answers `url`: `<base>/join#<code>`, where
+  `<base>` is the public tunnel address guest links use
+  (`guest_tunnel.url()`) while it is up, else this device's own tailnet/LAN
+  address (the one guest links call `local_url`). The code is in the
+  **fragment**, never the query, so it never reaches a server log. `GET
+  /api/peer` never repeats `url` (it holds the code), as it never repeats the
+  code.
+- `GET /join` (no token — see [Authentication](#authentication)):
+  "You've been invited to work together in MindFlock", an **Open in
+  MindFlock** button (`mindflock://join?code=<code>`, which the desktop app
+  turns into its own URL with `#join=<code>`: People → Join someone opens
+  prefilled), the code with **Copy code**, and the install fallback. No code
+  in the fragment → "This invite link is incomplete".
+- `POST /api/peer/join {code}` takes anything holding a code
+  (`invite.code_from_text`): the bare code, the whole invite message, the
+  invite link (`…/join#<code>`) or `mindflock://join?code=<code>`, either
+  link URL-encoded or not. Nothing found → the service's sentence as before.
+
 ### Peer links — joint tasks
 
 Peer-link routes live under `/api/peer` and are specified in
@@ -3263,6 +3286,12 @@ websockets alike — via one ASGI middleware (`web/core/auth.py`).
   one key (`core/voice_actions.py`). POST only, exactly that path shape
   (`auth._PUBLIC_VOICE_ACT`), so nothing else under `/api/notify` opens up.
   See [Addon routes](#addon-routes).
+- **The join page.** `GET /join` (exactly that path, `auth._PUBLIC_PATHS`)
+  passes the gate with no credential: it is the page a peer invite link opens,
+  and the person opening it is a stranger. It is a static file
+  (`static/join.html`) that asks the server for nothing; the code it shows is
+  in the URL fragment, which the browser never sends. See
+  [Peer links — join by link](#peer-links--join-by-link).
 - **Changing what runs on your devices (gate on or off).** Routes that write
   what agents run with — `POST /api/settings` (every field except
   `general.onboarded`, `general.last_repo_path`, `ui.surface` and `ui.accent`; `general.setup` is written only by the server's own hooks and `POST /api/setup/<step>/skip`), `PUT

@@ -10,6 +10,7 @@ import { publishWindowName } from "./lib/windowName";
 import { installGlobalDropGuards } from "./lib/clipboard";
 import { applyStoredAppearance } from "./components/settings/screens/Appearance";
 import { installPrefsSync } from "./lib/prefsSync";
+import { installJoinLink } from "./lib/joinLink";
 import App from "./App";
 import "./styles/index.css";
 
@@ -50,3 +51,8 @@ requestAnimationFrame(() => {
 // whenever settings sync brings one in from another device. After first paint:
 // localStorage already painted the page, this only corrects it.
 requestAnimationFrame(() => installPrefsSync());
+
+// Join by link (lib/joinLink.ts): a `#join=<code>` the desktop shell put on
+// the URL opens People with Join someone prefilled. After first paint, so the
+// Settings dialog it opens has an App to open in.
+requestAnimationFrame(() => installJoinLink());

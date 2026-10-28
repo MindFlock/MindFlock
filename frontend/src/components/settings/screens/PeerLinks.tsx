@@ -16,8 +16,9 @@
  * cards change as links connect, drop or get messages. No protocol words on
  * screen — "safety number", "You invited them", never SAS / listener / dialer.
  *
- * Everything goes through /api/peer*. The invite code is shown only in the
- * response that created it (the server never lists it again).
+ * Everything goes through /api/peer*. The invite code — and the invite link
+ * that carries it (`…/join#<code>`) — is shown only in the response that
+ * created it (the server never lists it again).
  *
  * This file is the screen and the invite / join half. Each link is a
  * peer/PeerLinkCard (with its joint task, peer/JointTask, and the Mirror
@@ -36,6 +37,7 @@ import { InstallMissing, type InstallStep } from "../../dialogs/InstallTerminal"
 import { TourButton } from "../../onboarding/TourButton";
 import {
   inviteExpiryText,
+  inviteMessage,
   isCutOffInvite,
   joinPeerCode,
   newOpId,
@@ -332,12 +334,37 @@ export function PeerLinks(_: ScreenProps) {
                   {invite.fallback.text}
                 </p>
               )}
-              <textarea
-                readOnly
-                rows={5}
-                value={invite.message || invite.code}
-                onClick={(e) => (e.target as HTMLTextAreaElement).select()}
-              />
+              {invite.url ? (
+                <div className="set-row">
+                  <input
+                    id="peer-invite-url"
+                    readOnly
+                    value={invite.url}
+                    aria-label="Invite link"
+                    onClick={(e) => (e.target as HTMLInputElement).select()}
+                  />
+                  <button
+                    type="button"
+                    className="test-btn"
+                    id="peer-invite-copy-link"
+                    disabled={inviteLeft <= 0}
+                    onClick={() =>
+                      copyText(invite.url || "").then((ok) =>
+                        toast(ok ? "Invite link copied — send it to them" : "Copy failed")
+                      )
+                    }
+                  >
+                    Copy link
+                  </button>
+                </div>
+              ) : (
+                <textarea
+                  readOnly
+                  rows={5}
+                  value={inviteMessage(invite)}
+                  onClick={(e) => (e.target as HTMLTextAreaElement).select()}
+                />
+              )}
               <div className="set-row">
                 <button
                   type="button"
@@ -345,7 +372,7 @@ export function PeerLinks(_: ScreenProps) {
                   id="peer-invite-copy"
                   disabled={inviteLeft <= 0}
                   onClick={() =>
-                    copyText(invite.message || invite.code).then((ok) =>
+                    copyText(inviteMessage(invite)).then((ok) =>
                       toast(ok ? "Invite copied — send it to them" : "Copy failed")
                     )
                   }
@@ -471,7 +498,7 @@ export function PeerLinks(_: ScreenProps) {
             <input
               id="peer-join-code"
               ref={joinInput}
-              placeholder="paste the invite you were sent"
+              placeholder="paste the link, the message or the code"
               value={code}
               onChange={(e) => setCode(e.target.value)}
               onKeyDown={(e) => {
@@ -488,8 +515,8 @@ export function PeerLinks(_: ScreenProps) {
             </span>
           ) : (
             <span className="set-hint">
-              Paste the whole message or just the code — either works. A fresh invite from someone you're
-              already connected to reconnects you.
+              Paste the link, the whole message or just the code — any of them works. A fresh invite from
+              someone you're already connected to reconnects you.
             </span>
           )}
           {joinErr && (

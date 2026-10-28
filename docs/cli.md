@@ -598,9 +598,9 @@ and `join` turn peer links on):
 | Command | Does |
 |---|---|
 | `peer status` | sandbox availability, identity fingerprint, listener, invites, links |
-| `peer invite [--ttl S] [--advertise HOST] [--reach auto\|tunnel\|direct]` | prints a one-time `mfp1:…` code (≤ 10 min, single use); with a relay on, an `mfp2:…` code that goes through it. `--reach direct` names this machine (same network or tailnet only) whatever the relay; `tunnel` refuses without one. In `auto`, a tunnel that won't start gives a direct code and says so on stderr |
+| `peer invite [--ttl S] [--advertise HOST] [--reach auto\|tunnel\|direct]` | prints the invite link to send (`<base>/join#<code>` — this device's public tunnel address while guest links have one up, else its tailnet/LAN address), then the one-time `mfp1:…` code (≤ 10 min, single use); with a relay on, an `mfp2:…` code that goes through it. `--reach direct` names this machine (same network or tailnet only) whatever the relay; `tunnel` refuses without one. In `auto`, a tunnel that won't start gives a direct code and says so on stderr |
 | `peer revoke INVITE` | cancels an unused invite (its id is in `peer status`) |
-| `peer join CODE` | pairs, prints the safety number to compare with your peer. A fresh invite from someone you're already linked to reconnects that link (prints `reconnected to …`; the shared folder is kept) |
+| `peer join CODE` | `CODE` is the code, the whole invite message, the invite link (`https://…/join#mfp…`) or `mindflock://join?code=…` — quote a link in the shell (zsh globs the `?`). Pairs, prints the safety number to compare with your peer. A fresh invite from someone you're already linked to reconnects that link (prints `reconnected to …`; the shared folder is kept) |
 | `peer links` | links with their SAS, state and what the peer may do |
 | `peer unlink LINK [--delete-files]` | stops the shared session, forgets the peer |
 | `peer share LINK REPO [--branch B] [--program CLI]` | clones REPO into the link's shared folder and starts its sandboxed session |
