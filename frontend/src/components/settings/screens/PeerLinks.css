@@ -505,3 +505,6 @@
   margin: 0 0 8px;
   cursor: pointer;
 }
+.peer-guest-kill {
+  margin: 8px 0;
+}

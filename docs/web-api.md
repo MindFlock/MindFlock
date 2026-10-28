@@ -2439,10 +2439,12 @@ device 403, a change needs `may_configure`.
 
 | Method | Path | Behavior |
 |---|---|---|
-| GET | `/api/guests` | `{links: [{id, label, sessions, created_at, url, phone_url}], gate_on}` — `url` is the link to send (`<advertised root>/?token=…`; `phone_url` the same at `/m`) |
-| POST | `/api/guests` | `{label?, sessions: [title, …]}` → **201** the link row with its URL; 400 with no session; 409 while the access gate is off (a link limits nothing then) |
-| POST | `/api/guests/{id}` | `{label?, sessions?}` — change what the link opens; the URL stays; 400 for an empty list, 404 unknown |
-| DELETE | `/api/guests/{id}` | Revoke: the link's browser is signed out on its next request; 404 unknown |
+| GET | `/api/guests` | `{links: [{id, label, sessions, created_at, url, phone_url, local_url}], gate_on, tunnel}` — `url` is the link to send: the public tunnel address with the token (`https://<label>.trycloudflare.com/?token=…`; `phone_url` the same at `/m`), **null while the tunnel is not up**; `local_url` the same on this device's tailnet/LAN address. `tunnel` = `{state: up\|starting\|failed\|off, url, installed, error, reason}` (`backend/web/core/guest_tunnel.py`). With links and the gate on, this GET keeps the tunnel up (starts it if it isn't) |
+| POST | `/api/guests` | `{label?, sessions: [title, …]}` → **201** the link row (URLs as above) plus `tunnel`; starts the tunnel; 400 with no session; 409 while the access gate is off (a tunnel would be the whole machine on the internet) |
+| POST | `/api/guests/tunnel` | Ask for the public address: starts the tunnel (or says `installed: false` — the doctor's install plan now carries cloudflared) → the `tunnel` object; 409 with the gate off |
+| DELETE | `/api/guests/tunnel` | **Kill the connection**: every link revoked, the tunnel stopped → `{ok, revoked}`. A guest's open websockets close on their next frame (close code 4401) |
+| POST | `/api/guests/{id}` | `{label?, sessions?}` — change what the link opens; the URL stays; sockets on a session the link lost close; 400 for an empty list, 404 unknown |
+| DELETE | `/api/guests/{id}` | Revoke: the link's open sockets close on their next frame and its token stops working; the last link takes the tunnel down; 404 unknown |
 
 ### Peer links — the safety number, unlinking, the off switch, export
 

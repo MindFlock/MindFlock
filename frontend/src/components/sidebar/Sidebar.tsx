@@ -17,6 +17,7 @@ import { viewCap } from "../grid/layout";
 import { SidebarRow } from "./SidebarRow";
 import { windowRows, WindowRowItem, type WindowRow } from "./WindowList";
 import { guestNote, useLockedRows } from "../../lib/guest";
+import { GuestBar } from "./GuestBar";
 import { SessionFilter } from "./SessionFilter";
 import { SidebarResizer } from "./SidebarResizer";
 import { BulkBar } from "./BulkBar";
@@ -530,6 +531,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
               {searchVisible && <SessionFilter />}
               <BulkBar />
               <OfflineBar />
+              <GuestBar />
               <PeerSharedRows />
               {config?.guest && (
                 <div className="guest-note" id="guest-note" title="Sessions not on the link are crossed out">

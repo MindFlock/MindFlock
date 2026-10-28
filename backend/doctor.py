@@ -1153,7 +1153,8 @@ def check_cloudflared() -> Check:
     """Peer links across networks run a locally installed ``cloudflared``.
     Wanted — and in the install plan — when ``peer.relay`` is ``cloudflare``,
     or ``auto`` (the default) with peer links on: that is what lets an invite
-    reach someone on another network."""
+    reach someone on another network. Also wanted for a guest link's public
+    address (backend.web.core.guest_tunnel)."""
     import os
 
     from backend.peer.tunnel import find_cloudflared
@@ -1164,9 +1165,24 @@ def check_cloudflared() -> Check:
     peer = _peer_settings()
     relay = peer.get("relay")
     wanted = relay == "cloudflare" or (relay == "auto" and bool(peer.get("enabled")))
+    # Guest links (backend.web.core.guest_tunnel) open through the same
+    # kind of tunnel: wanted once the owner asks for one, or has links.
+    guests = False
+    try:
+        from backend.web.core import guest_tunnel as _guest_tunnel
+
+        guests = _guest_tunnel.wanted()
+    except Exception:  # noqa: BLE001 — the doctor must never fail on it
+        guests = False
+    wanted = wanted or guests
     cmd, pkg = _cloudflared_install()
     if relay == "cloudflare":
         detail = "not found, but peer.relay is 'cloudflare' — invites will fail"
+    elif guests and not (relay == "auto" and bool(peer.get("enabled"))):
+        detail = (
+            "not found — a guest link only reaches people on your own network "
+            "or tailnet until it's installed"
+        )
     elif wanted:
         detail = (
             "not found — your peer-link invites only reach people on your own "

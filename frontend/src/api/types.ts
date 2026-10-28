@@ -953,8 +953,23 @@ export interface GuestLink {
   label: string;
   sessions: string[];
   created_at: number;
+  /** The link to send: the public tunnel address with the token, or null
+   * while the tunnel is not up (`GuestTunnel.state` says why). */
+  url: string | null;
+  phone_url: string | null;
+  /** The same link on this device's tailnet/LAN address — only for someone
+   * already on your network. */
+  local_url: string;
+}
+
+/** The public address guest links are opened at (`GET /api/guests` →
+ * `tunnel`): a Cloudflare quick tunnel to this server. */
+export interface GuestTunnel {
+  state: "up" | "starting" | "failed" | "off" | string;
   url: string;
-  phone_url: string;
+  installed: boolean;
+  error: string;
+  reason: string;
 }
 
 /** One auth profile (Settings → Accounts): an identity a session's CLI can run
