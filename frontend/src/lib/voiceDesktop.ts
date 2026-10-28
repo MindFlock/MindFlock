@@ -395,7 +395,7 @@ export interface VoicePrefs {
   sounds?: boolean;
 }
 export const VOICE_PREFS_KEY = "cs_voice_desktop";
-export const DEFAULT_VOICE_PREFS: VoicePrefs = { ptt: "toggle", replies: "off", wake: false, confirm: true, sounds: true };
+export const DEFAULT_VOICE_PREFS: VoicePrefs = { ptt: "toggle", replies: "off", wake: false, confirm: false, sounds: true };
 
 /** The three choices as the mic's popover and Settings → Voice show them. */
 export const REPLIES_CHOICES: ReadonlyArray<{ value: RepliesMode; label: string }> = [
@@ -411,13 +411,18 @@ export function repliesMode(v: unknown): RepliesMode {
   return v === true ? "mine" : "off";
 }
 
-function normPrefs(v: unknown): VoicePrefs {
+/** `stored`: `v` is the saved JSON, where the spoken confirmations live
+ * under `nods` (they were `confirm`, on by default, so every saved copy
+ * carried true: the owner heard "Sent." after "over and out" as an echo,
+ * 2026-10-28 — the old key is ignored, so they are off unless chosen
+ * since). In memory the field is still `confirm`. */
+function normPrefs(v: unknown, stored = false): VoicePrefs {
   const o = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
   return {
     ptt: o.ptt === "hold" ? "hold" : "toggle",
     replies: repliesMode(o.replies),
     wake: o.wake === true,
-    confirm: o.confirm !== false,
+    confirm: (stored ? o.nods : o.confirm) === true,
     sounds: o.sounds !== false,
   };
 }
@@ -445,7 +450,7 @@ export function loadVoicePrefs(kv: KV | null = storage()): VoicePrefs {
   } catch {
     raw = null;
   }
-  return normPrefs(raw);
+  return normPrefs(raw, true);
 }
 
 /** Fired on `window` whenever the prefs are saved (detail: the new prefs):
@@ -464,7 +469,8 @@ export function saveVoicePrefs(
   const next = normPrefs(p);
   const flip = sayAllFlip(loadVoicePrefs(kv).replies, next.replies);
   try {
-    kv?.setItem(VOICE_PREFS_KEY, JSON.stringify(next));
+    const { confirm, ...rest } = next;
+    kv?.setItem(VOICE_PREFS_KEY, JSON.stringify({ ...rest, nods: confirm }));
   } catch {
     /* private window / quota: the choice lasts this page */
   }
@@ -1761,7 +1767,7 @@ export async function runVoiceCommand(r: RouteReply, text: string, deps: Command
       else if (isWindowRow(key)) deps.announce("Row " + n + " is a window, not a session");
       else {
         deps.select(key);
-        deps.announce(r.say || "Now talking to " + deps.name(key) + ".");
+        deps.announce(r.say || deps.name(key) + ".");
       }
       return true;
     }
@@ -1770,7 +1776,7 @@ export async function runVoiceCommand(r: RouteReply, text: string, deps: Command
       if (!key) deps.announce("There is no other session");
       else {
         deps.select(key);
-        deps.announce(r.say || "Now talking to " + deps.name(key) + ".");
+        deps.announce(r.say || deps.name(key) + ".");
       }
       return true;
     }

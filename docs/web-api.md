@@ -1614,7 +1614,7 @@ POST /api/voice/route {"text": "switch to the sitecheck session", "session": "do
    "pending": {"kind": "pick", "candidates": […]}}
 POST /api/voice/route {"text": "copy two", "session": "docs", "pending": {"kind": "pick", "candidates": […]}}
 → {"kind": "switch", "title": "sitecheck-bot7-copy-2", "name": "sitecheck-bot7-copy-2",
-   "say": "Now on sitecheck-bot7-copy-2, idle."}
+   "say": "sitecheck-bot7-copy-2."}
 
 POST /api/voice/route {"text": "start a new session", "session": "docs"}
 → {"kind": "ask", "say": "In which project? MindFlock, sitecheck-bot5 or parser?",

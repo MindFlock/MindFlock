@@ -393,9 +393,15 @@ def test_mobile_js_push_to_talk_toggle_and_hold():
         assert gone not in v, gone
     # The sheet's choice, and the default.
     assert (
-        'prefs: { rate: 1, voiceName: "", handsFree: false, ptt: "toggle", replies: "mine", wake: false, confirm: true, sounds: true }'
+        'prefs: { rate: 1, voiceName: "", handsFree: false, ptt: "toggle", replies: "mine", wake: false, confirm: false, sounds: true }'
         in v
     )
+    # Spoken confirmations are OFF unless chosen: stored as `nods` (the old
+    # `confirm` key, true in every saved copy, is ignored) — the owner heard
+    # "Sent." after "over and out" as an echo (2026-10-28).
+    assert "voice.prefs.confirm = j.nods === true;" in _fn(js, "voiceLoadPrefs")
+    assert "nods: voice.prefs.confirm," in _fn(js, "voicePersist")
+    assert "confirm: voice.prefs.confirm," not in _fn(js, "voicePersist")
     sel = html.split('<select id="voice-ptt"')[1].split("</select>")[0]
     assert '<option value="toggle">Tap to talk</option>' in sel
     assert '<option value="hold">Hold to talk</option>' in sel
@@ -495,7 +501,8 @@ def test_mobile_js_spoken_replies_say_per_prompt():
         'if (talk) baseline.then(function (base) { if (base !== null && seq === voiceSendSeq && voice.state === "working") voiceAckStart(title, base); });'
         in send
     )
-    assert "if (talk) speakLine(sent, true); else voiceCaption(sent);" in send
+    # "Sent to X." is on the strip, never spoken: one more echo.
+    assert "voiceCaption(sent);" in send and "speakLine(sent" not in send
     # Everything with voice off: a typed prompt goes through /send too, say:true.
     every = _fn(js, "everythingTakesSend")
     assert "body: JSON.stringify({ text: text, dialog_safe: true, say: true })" in every
@@ -895,7 +902,9 @@ def test_mobile_js_voice_commands_and_switching():
     assert '"Which one: "' in sw
     to = _fn(js, "voiceSwitchTo")
     assert "select(title);" in to and "speakLine(voiceSwitchLine(title, news))" in to
-    assert '"Now on " + nameOf(title)' in _fn(js, "voiceSwitchLine")
+    line = _fn(js, "voiceSwitchLine")
+    assert "endSentence(nameOf(title))" in line  # the name alone
+    assert "task_headline" not in line and "voiceStateWord" not in line
     # "What needs me": the rail's attention set, three at most.
     needs = _fn(js, "voiceNeedsMe")
     assert "sessionState(i).inBell" in needs and ".slice(0, 3)" in needs
@@ -951,7 +960,7 @@ def test_mobile_js_reply_loop_rules():
         "ptt",
         "replies",
         "wake",
-        "confirm",
+        "nods",
         "sounds",
     ], keys
     assert persist.lstrip().startswith("try {")
@@ -2147,14 +2156,16 @@ def test_mobile_js_pending_choice_round_trip():
 
 
 def test_mobile_js_switch_line_reads_only_news():
-    """A switch says the state and the task headline; the last reply only
-    when its turn ended in the last VOICE_FRESH_REPLY_S (the router's
+    """A switch says the session's name — not the state word, not the task
+    headline (the owner heard "Now on hackathon-2, idle: explain how to …"
+    as the whole thing on every switch, 2026-10-28) — and the last reply
+    only when its turn ended in the last VOICE_FRESH_REPLY_S (the router's
     FRESH_REPLY_S); "what did it say" reads it offline."""
     js = _js()
     assert "var VOICE_FRESH_REPLY_S = 120;" in _voice_section(js)
     line = _fn(js, "voiceSwitchLine")
-    assert "voiceStateWord(sessionState(inst))" in line
-    assert "inst.task_headline" in line
+    assert "var line = endSentence(nameOf(title));" in line
+    assert "voiceStateWord" not in line and "task_headline" not in line
     assert 'inst.activity === "idle"' in line and "age <= VOICE_FRESH_REPLY_S" in line
     assert "since > 0" in line
     read = _fn(js, "voiceReadLast")
@@ -2229,10 +2240,10 @@ def test_offline_switching_and_the_switch_line_under_node():
         "the session": [],
     }
     assert out["lines"] == {
-        "sitecheck-bot7": "Now on sitecheck-bot7, working: Fix settings screen.",
-        "sitecheck-bot7-copy-2": "Now on sitecheck-bot7-copy-2, idle. Done. Tests pass.",
-        "login-fix": "Now on login-fix, idle.",
-        "settings-ui": "Now on settings-ui, idle.",
+        "sitecheck-bot7": "sitecheck-bot7.",
+        "sitecheck-bot7-copy-2": "sitecheck-bot7-copy-2. Done. Tests pass.",
+        "login-fix": "login-fix.",
+        "settings-ui": "settings-ui.",
     }
     assert out["or"] == ["a", "a or b", "a, b or c"]
 

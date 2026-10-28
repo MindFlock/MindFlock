@@ -2922,7 +2922,7 @@
     if (code === "service-not-allowed" || voiceNoSpeechService()) return VOICE_NO_SERVICE_TEXT;
     return VOICE_MIC_DENIED_TEXT;
   }
-  var VOICE_STORE = "cs_voice";          // localStorage: session, on, rate, voiceName, handsFree, ptt, replies, wake, confirm, sounds
+  var VOICE_STORE = "cs_voice";          // localStorage: session, on, rate, voiceName, handsFree, ptt, replies, wake, nods, sounds
   var VOICE_TUT_STORE = "cs_voice_tutorial";   // localStorage: "1" once How to talk's Got it was tapped
   var VOICE_LINE_MAX_AGE_MS = 60000;     // a queued line this old when its turn comes is dropped, not said late
   var VOICE_NOD_MAX_AGE_MS = 5000;   // ...and a spoken confirmation ("Sent.") this old
@@ -4457,7 +4457,7 @@
     session: "",                 // the title voice is on for (== current while on)
     stt: null,
     tts: null,
-    prefs: { rate: 1, voiceName: "", handsFree: false, ptt: "toggle", replies: "mine", wake: false, confirm: true, sounds: true },   // replies: off | mine | all; wake: listen for "MindFlock"; confirm: spoken confirmations; sounds: the chimes
+    prefs: { rate: 1, voiceName: "", handsFree: false, ptt: "toggle", replies: "mine", wake: false, confirm: false, sounds: true },   // replies: off | mine | all; wake: listen for "MindFlock"; confirm: spoken confirmations (off: the owner heard them as echoes, 2026-10-28); sounds: the chimes
     dictated: false,             // a dictated phrase is in the box (since it was last emptied / sent)
     expectSay: null,             // the last prompt sent asked for a Say line (null: none sent here yet)
     lastPrompt: null,            // Diagnostics: {dictated, say} of that prompt
@@ -4526,7 +4526,11 @@
       voice.prefs.ptt = j.ptt === "hold" ? "hold" : "toggle";
       voice.prefs.replies = voiceRepliesPref(j.replies);
       voice.prefs.wake = j.wake === true;
-      voice.prefs.confirm = j.confirm !== false;
+      // Stored as `nods` (was `confirm`, on by default, and every saved
+      // copy carried true): the spoken confirmations are off unless
+      // chosen since — the owner heard "Sent." after "over and out" as
+      // an echo (2026-10-28).
+      voice.prefs.confirm = j.nods === true;
       voice.prefs.sounds = j.sounds !== false;
       voice.saved = { session: String(j.session || ""), on: !!j.on };
     } catch (e) {}
@@ -4547,7 +4551,7 @@
         ptt: voice.prefs.ptt,
         replies: voice.prefs.replies,
         wake: voice.prefs.wake,
-        confirm: voice.prefs.confirm,
+        nods: voice.prefs.confirm,
         sounds: voice.prefs.sounds,
       }));
     } catch (e) {}
@@ -6187,7 +6191,7 @@
         voiceRouteSelect(String(res.title || ""), res.kind === "new").then(function (title) {
           if (!title) { speakLine(say || "Couldn't find that session.").then(function (ok) { if (ok) voiceIdle(); }); return; }
           var inst = instByTitle(title) || {};
-          speakLine(say || "Now on " + (res.name || nameOf(title)) + ".").then(function (ok) {
+          speakLine(say || endSentence(res.name || nameOf(title))).then(function (ok) {
             if (!ok) return;
             if (inst.activity === "clarify") { voice.dialogKey = ""; voiceDialog(); } else voiceIdle();
           });
@@ -6478,8 +6482,10 @@
             var talk = voice.prefs.replies !== "off";
             if (talk) baseline.then(function (base) { if (base !== null && seq === voiceSendSeq && voice.state === "working") voiceAckStart(title, base); });
             var sent = j && j.queued ? "Queued for " + name + " — it is on a prompt." : "Sent to " + name + ".";
-            if (nod && voice.prefs.confirm !== false) voiceCaption(sent);   // its nod was said with the Enter
-            else if (talk) speakLine(sent, true); else voiceCaption(sent);
+            // On the strip, never spoken: "Sent to X." in the reply voice was
+            // one more echo (2026-10-28); a nod says "Sent." when the
+            // spoken confirmations are on.
+            voiceCaption(sent);
             return;
           }
           var why = (j && j.error) || ("HTTP " + r.status);
@@ -7255,12 +7261,12 @@
   // activity_since). A session done a while ago is not read out again:
   // "what did it say" reads it.
   var VOICE_FRESH_REPLY_S = 120;
+  // The line is the session's NAME alone (it said the state word and the
+  // task headline too — "Now on hackathon-2, idle: explain how to add …" —
+  // which the owner heard as the whole thing on every switch, 2026-10-28).
   function voiceSwitchLine(title, news) {
     var inst = instByTitle(title) || {};
-    var line = "Now on " + nameOf(title) + ", " + voiceStateWord(sessionState(inst));
-    var head = stripMarkdown(String(inst.task_headline || "")).trim().replace(/\.$/, "");
-    if (head) line += ": " + head;
-    line = endSentence(line);
+    var line = endSentence(nameOf(title));
     if (typeof news === "string") return news ? line + news : line;
     var since = Number(inst.activity_since) || 0, age = Date.now() / 1000 - since;
     if (inst.last_say && inst.activity === "idle" && since > 0 && age >= 0 && age <= VOICE_FRESH_REPLY_S) {
