@@ -6119,7 +6119,10 @@ Every voice word named in this section — "over", "over and out",
 "disregard", "stop recording", "stop talking", "MindFlock" — is the
 **default**: each can be changed in [Settings → Voice → Voice
 words](#voice-words), and the mic, its hints and the Voice tour then use the
-new ones.
+new ones. Each is also heard the way the recogniser tends to write it (*ova*,
+*over an out*, *this regard*, *mind lock*), and a word you add a letter off
+(*rodger* for "roger") — at the end of a phrase only, never mid-sentence
+([Voice words](#voice-words), *Heard a little off*).
 
 The mic in the top bar, beside the bell, talks to the **focused session** and
 types as you speak: click (or hold) to talk, and each recognised phrase lands
@@ -6376,6 +6379,27 @@ every save), then the server's.
   "please" / "now" after; and the stop and stop-talking phrases wait whole for
   the router like its own commands. The wake word is checked by the server
   (`POST /api/voice/wake` hears for the saved one).
+- **Heard a little off.** The recogniser does not always write the word
+  said, so two more hearings ride along, both the server's
+  ([Voice words](web-api.md#voice-words) in the API doc has the rule) and
+  pinned against the phone and the server by one fixture
+  (`tests/unit/data/voice_sounds.json`, run by `voiceEars.test.ts`): **what
+  whisper writes** for each default phrase comes with the words as
+  `words.heard` (`lib/voiceWords` `heardOf`) and is matched exactly like
+  the phrase — *ova*, *oh ver* send; *over an out*, *over and now* send and
+  stop; *this regard*, *dis regard*, *just regard that* start over; *stop
+  listing*, *mike off* stop; *be quite*, *quite*, *enuf* hush — and is held
+  back while it may still be said, like the words; and a phrase **a letter
+  off** (`soundsLike`: *rodger* for "roger", *pipe town* for "pipe down" —
+  a phonetic key plus an edit margin that shrinks with the phrase, so a
+  four-letter word is only ever itself) counts for the send / end / clear
+  words at the end of a phrase and for a stop-talking phrase said whole,
+  never mid-sentence (*over the bridge*, *the summit meeting*, *this regard
+  is important* type through). `parseRadio` and `isHushPhrase` still read
+  one RegExp: the matchers' `radio` and `hush` are a `RegExp` whose `exec`
+  tries the pattern (the words and their heard forms) and then the sound.
+  The stop tail (`stopTail`) stays word for word; a one-word stop or hush
+  word a letter off ("hault") is the router's, said alone.
 - **The copy follows**: the caption (*Say “over” to send, “over and out” to
   stop, “disregard” to start over*), the ask card's hint, the mic's tooltip
   and *Listen for “MindFlock”* switch, Settings → Voice's hints and the Voice
@@ -6947,7 +6971,16 @@ that's all*); a one-word one (*stop*) stops only said on its own. A default
 phrase keeps the spoken variants the router keeps while it is in the list
 (*stop listening* → *stop recording*, *mic off* → *microphone off*, *done
 talking* → *I'm done talking*, *stop talking* → *stop speaking*, *okay
-stop*…); a phrase the owner adds is matched whole. Every hint and caption
+stop*…) and what the recogniser writes for it (`words.heard`, the server's
+table — *ova*, *this regard*, *over an out*, *be quite* — folded in by
+`voiceWordsWide`, held back on a guess like the words); a phrase the owner
+adds is matched whole, or a letter off (`voiceSoundsLike`, the server's
+`sounds_like` to the letter — *rodger*, *pipe town*): `voiceDictParse`
+falls back to the last words that sound like a send / end / clear phrase
+(`voiceSoundTail`), `voiceIsHush` to the whole phrase sounding like a hush
+one; `voiceTail` (a stop phrase at a phrase's end) stays word for word. The
+shared fixture `tests/unit/data/voice_sounds.json` pins the page against
+the desktop and the server. Every hint and caption
 that names a word — *Say “over” to send…*, *In the box — say “over”…*, the
 ⚙ sheet's *Listen for “MindFlock”*, the wake word's notes — names the
 current one, refreshed the moment a refetch brings new words.

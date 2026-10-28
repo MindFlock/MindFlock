@@ -1677,7 +1677,7 @@ The keywords every voice client listens for are **ours by default and the
 person's own once changed** in Settings → Voice: the setting `voice.words`
 (synced across their devices, owner-only through `POST /api/settings`
 `{"voice": {"words": {...}}}`; `{}` = all defaults). `GET /api/voice`
-serves the effective set as `words` — every kind present — and every client
+serves the effective set as `words` — every kind present, plus `heard` (below) — and every client
 builds its matchers from it:
 
 | Kind | Default | Who acts on it |
@@ -1695,6 +1695,48 @@ letters, 3–20 characters. A save is normalised (`core.voice_words.normalize`):
 anything invalid is dropped, duplicates collapse, and a kind left empty — or
 equal to ours — is not stored, so it follows the default.
 
+**What the recogniser writes** (`words.heard`). Whisper does not always
+write the word that was said — "over" comes out as *ova*, "disregard" as
+*this regard*, "over and out" as *over an out*, "mindflock" as *mind lock* —
+so `words` also carries `heard: {send: [...], end: [...], clear: [...],
+stop: [...], hush: [...], wake: [...]}`: for each kind, the forms the
+recogniser is known to write for the phrases in its list
+(`core.voice_words.HEARD`, a curated table keyed by phrase — every entry a
+mishearing seen in practice and *not* a plausible last word of dictation, so
+*hover* and *ever* are not "over"), at most 24 per kind, empty for a kind
+made only of the person's own phrases. The forms follow their phrase: drop
+"quiet" from `hush` and *quite* goes with it; move it to `clear` and *quite*
+clears. Every client folds `heard` into its matchers beside the words (the
+desktop's `lib/voiceWords` `heardOf`, the phone's `voiceWordsWide`) and the
+router hears them as the phrase (`stop listing` stops, `be quite` hushes);
+`POST /api/voice/wake` takes the wake word's forms. `heard` is derived, never
+saved: `normalize` drops it, and `words_default` has none.
+
+**A letter off** (`core.voice_words.sound_key` / `sounds_like`). A phrase
+the person added has no table, so every client and the router also take a
+phrase heard a little off — *rodger* for "roger", *pipe town* for "pipe
+down", *scrap dat* for "scrap that" — by one rule, implemented identically
+in Python, the desktop (`lib/voiceWords.ts` `soundKey` / `soundsLike`) and
+the phone (`mobile.js` `voiceSoundKey` / `voiceSoundsLike`) and pinned by
+the shared fixture `tests/unit/data/voice_sounds.json` (pytest and vitest
+both run it): the letters of what was said and of the phrase, run
+together, must be within a margin of edits that shrinks with the phrase —
+two from eight letters, one from five, none below, so a four-letter word
+("over", "stop", "halt") is only ever itself or a `heard` form — *and* share
+a compact metaphone-like key (voiced consonants folded onto unvoiced,
+vowels after the first letter dropped: "over" → `ofr`, "hover" → `hfr`,
+"oven" → `ofn`), one key edit allowed from five key letters; a phrase of
+eight letters or more also takes a same-key homophone one letter further
+off (*sight check* for sitecheck). It is a WHOLE-phrase comparison, only at
+the end of an utterance (the send / end / clear words, with their tail
+word) or as the whole utterance (the hush words; the router's one-word
+`stop` / `hush` commands): a sound-alike never fires mid-sentence or with
+more words after it — *over the bridge*, *this regard is important*, *the
+summit meeting* are dictation. The stop phrases at the end of dictation
+(`stop listening`, `mic off` …) stay word for word (the words or a `heard`
+form). `core.voice_words.control_kind(text, words)` is the reference
+reading of one finished phrase that both clients' matchers follow.
+
 **The regex contract** (`voice_words.phrase_regex(phrases)`): one
 non-capturing alternation, longest phrase first, each escaped, a comma
 optional — `["over and out", "over, out"]` → `(?:over and out|over,? out)`.
@@ -1705,8 +1747,9 @@ default phrase's spoken variants while that phrase is in the list (`stop
 listening` also hears *stop recording / dictating / the mic / the
 microphone*; `mic off` *turn off the mic*; `that's all` *that is all*;
 `done talking` *I'm done talking*; `stop talking` *stop speaking / reading /
-saying that*; `enough` *that's enough*, *enough of that*); a phrase the person
-adds is matched whole.
+saying that*; `enough` *that's enough*, *enough of that*) and its `heard`
+forms; a phrase the person adds is matched whole, or a letter off
+(`sounds_like`, above).
 
 ### Inter-agent messages
 

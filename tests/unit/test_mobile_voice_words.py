@@ -4,12 +4,17 @@
 
 The matchers run as-is under node (the same slices test_mobile_voice.py
 runs); the headless-Chrome harness (voice_browser.js) drives the words from
-the mocked server, their refresh and the card end to end.
+the mocked server, their refresh and the card end to end. The sound-alike
+tolerance — ``words.heard`` and the phonetic key — is pinned by
+``tests/unit/data/voice_sounds.json``, the fixture the server's reference
+(``core.voice_words.control_kind``) and the desktop (``voiceEars.test.ts``)
+run too.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -273,12 +278,13 @@ def test_regex_specials_in_a_phrase_are_escaped_under_node():
     # voiceNorm drops what is not a letter, digit or apostrophe, so a
     # phrase with a special in it is its words ("c go", "a b"); none
     # reaches a pattern raw (the server only ever sends letters, digits,
-    # spaces, apostrophes and commas).
+    # spaces, apostrophes and commas). Said with its specials, the phrase
+    # is still its letters (voiceSoundTail: "c++ go" is "c go").
     assert _run(script) == [
         "over|fix",
         "disregard|fix it",
         "|fix it axb",
-        "|fix it c++ go",
+        "over|fix it",
     ]
 
 
@@ -419,3 +425,80 @@ def test_docs_name_the_words_and_the_card():
         doc.index("cs_voice_tutorial") - 3000 : doc.index("cs_voice_tutorial") + 1500
     ]
     assert "Settings → Voice" in phone and "How to talk" in phone
+
+
+# --- a word heard a little off: the shared fixture ----------------------------------
+FIXTURE = ROOT / "tests" / "unit" / "data" / "voice_sounds.json"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_the_sound_fixture_reads_alike_under_node():
+    f = json.loads(FIXTURE.read_text())
+    script = _matchers(_js()) + "var F = %s;\n" % json.dumps(f) + """
+// voiceHeard's order: the hush (the whole phrase), a stop phrase at the end, the radio words.
+function kindOf(t) {
+  var p = voiceDictParse(t);
+  if (voiceIsHush(p.text || t)) return "hush";
+  if (voiceTail(t, false)) return "stop";
+  return { over: "send", out: "end", disregard: "clear" }[p.kind] || null;
+}
+var out = { keys: {}, alike: [], cases: [] };
+Object.keys(F.keys).forEach(function (t) { out.keys[t] = voiceSoundKey(t); });
+F.alike.forEach(function (a) { out.alike.push(voiceSoundsLike(a[0], a[1])); });
+F.cases.forEach(function (c) { voiceWordsApply(c.words === "custom" ? F.custom : F.words); out.cases.push(kindOf(c.text)); });
+voiceWordsApply(F.words);
+out.heard = VOICE_W.words.heard;
+out.hold = ["fix the bug this", "fix the bug this regard", "fix the bug this time", "ship it over an"].map(function (t) { return voiceHoldBack(t); });
+out.guess = ["fix the bug ova", "ship it over an out", "scrap it this regard", "fix it stop listing", "be quite"].map(function (t) { var c = voiceGuessControl(t); return c ? c.word + "|" + c.send : null; });
+voiceWordsApply(null);
+out.none = [voiceDictParse("fix the bug ova").kind, voiceDictParse("fix it be quite").kind, voiceIsHush("be quite"), voiceIsHush("a nuff"), VOICE_W.words.heard.send.length];
+console.log(JSON.stringify(out));
+"""
+    out = _run(script)
+    assert out["keys"] == f["keys"]
+    assert out["alike"] == [a[2] for a in f["alike"]]
+    for c, got in zip(f["cases"], out["cases"]):
+        assert got == c["kind"], c
+    # The heard forms are the server's, bounded, never a phrase itself.
+    assert out["heard"] == f["words"]["heard"]
+    # A streamed guess holds back a heard form while it may still be said.
+    assert out["hold"] == [
+        ["fix the bug", "this"],
+        ["fix the bug", "this regard"],
+        ["fix the bug this time", ""],
+        ["ship it", "over an"],
+    ]
+    # The fast control on a guess names the owner's word, not the form.
+    assert out["guess"] == [
+        "over|true",
+        "over and out|true",
+        "disregard|false",
+        "stop|false",
+        "stop talking|false",
+    ]
+    # Before GET /api/voice answers: the words alone (and what sounds like
+    # them — "be quite" is "be quiet" either way), no forms.
+    assert out["none"] == ["", "", True, False, 0]
+
+
+def test_heard_forms_and_the_sound_key_are_wired():
+    js = _js()
+    apply = _fn(js, "voiceWordsApply")
+    assert "H = w.heard" in apply and "voiceWordsWide(w.stop, H.stop)" in apply
+    assert "voiceWordsAlt(w.end.concat(H.end)" in apply
+    parse = _fn(js, "voiceDictParse")
+    assert (
+        "voiceSoundTail(t, W.end)" in parse
+        and "voiceSoundTail(t, W.clear, VOICE_CLEAR_TAILS)" in parse
+    )
+    hush = _fn(js, "voiceIsHush")
+    assert "voiceSoundsLike(t, p)" in hush and "VOICE_W.hush.test(t)" in hush
+    # The stop tail stays word for word.
+    assert "voiceSound" not in _fn(js, "voiceTail")
+    # One rule table, the server's (core.voice_words._SOUND_RULES), in order.
+    from backend.web.core import voice_words as vw
+
+    rules = js.split("  var VOICE_SOUND_RULES = [")[1].split("  ];")[0]
+    pairs = re.findall(r"\[/(.+?)/g, \"(.*?)\"\]", rules)
+    assert pairs == [(p, r) for p, r in vw._SOUND_RULES]
+    assert "var VOICE_HEARD_MAX = 24;" in js and vw.HEARD_MAX == 24

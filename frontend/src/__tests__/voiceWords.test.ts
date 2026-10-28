@@ -95,6 +95,23 @@ describe("the words, before and after the server answers", () => {
     expect(W.voiceWordsVersion()).toBe(v);
   });
 
+  it("carries the server's `heard` beside the words, bounded, and drops it when the server sends none", () => {
+    W.applyVoiceView({ words: { send: ["over"], heard: { send: ["ova", " Oh  Ver ", "ova", 7, ""], wake: ["mind lock"] } } });
+    expect(W.voiceWords().heard).toEqual({ send: ["ova", "oh ver"], end: [], clear: [], stop: [], hush: [], wake: ["mind lock"] });
+    expect(W.heardOf(W.voiceWords(), "send")).toEqual(["ova", "oh ver"]);
+    expect(W.heardOf(W.voiceWords(), "wake")).toEqual(["mind lock"]);
+    // A form that is a phrase itself is not a form.
+    W.applyVoiceView({ words: { send: ["over", "ova"], heard: { send: ["ova", "overt"] } } });
+    expect(W.heardOf(W.voiceWords(), "send")).toEqual(["overt"]);
+    W.applyVoiceView({ words: { send: ["over"], heard: { send: Array.from({ length: 40 }, (_, i) => "f" + i) } } });
+    expect(W.voiceWords().heard?.send.length).toBe(W.HEARD_MAX);
+    W.applyVoiceView({ words: { send: ["over"] } });
+    expect(W.voiceWords().heard).toBeUndefined();
+    expect(W.heardOf(W.voiceWords(), "send")).toEqual([]);
+    // Never saved: the editor reads the saved setting, not `heard`.
+    expect(savedWords({ send: ["roger"], heard: { send: ["x"] } })).toEqual({ send: ["roger"] });
+  });
+
   it("tells its listeners only when the words change", () => {
     const seen: string[] = [];
     const off = W.onVoiceWords((w) => seen.push(w.send[0]));
