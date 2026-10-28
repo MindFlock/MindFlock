@@ -449,7 +449,7 @@ F.cases.forEach(function (c) { voiceWordsApply(c.words === "custom" ? F.custom :
 voiceWordsApply(F.words);
 out.heard = VOICE_W.words.heard;
 out.hold = ["fix the bug this", "fix the bug this regard", "fix the bug this time", "ship it over an"].map(function (t) { return voiceHoldBack(t); });
-out.guess = ["fix the bug ova", "ship it over an out", "scrap it this regard", "fix it stop listing", "be quite"].map(function (t) { var c = voiceGuessControl(t); return c ? c.word + "|" + c.send : null; });
+out.guess = ["fix the bug ova", "ship it over an out", "scrap it dis regard", "fix it stop listing", "be quite"].map(function (t) { var c = voiceGuessControl(t); return c ? c.word + "|" + c.send : null; });
 voiceWordsApply(null);
 out.none = [voiceDictParse("fix the bug ova").kind, voiceDictParse("fix it be quite").kind, voiceIsHush("be quite"), voiceIsHush("a nuff"), VOICE_W.words.heard.send.length];
 console.log(JSON.stringify(out));
@@ -464,7 +464,8 @@ console.log(JSON.stringify(out));
     # A streamed guess holds back a heard form while it may still be said.
     assert out["hold"] == [
         ["fix the bug", "this"],
-        ["fix the bug", "this regard"],
+        # "this regard" is not a heard clear form any more (it ends sentences).
+        ["fix the bug this regard", ""],
         ["fix the bug this time", ""],
         ["ship it", "over an"],
     ]
