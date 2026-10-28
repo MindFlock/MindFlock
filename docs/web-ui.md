@@ -6277,7 +6277,11 @@ also answers `final` — the whole phrase heard again by the accurate model —
 with `final_ms`, `final_wait_ms` (how long `/end` itself waited: the
 accurate pass usually started on the quiet chunk that ended the speech, so
 often little), `final_early` and `same` (true when it matches the fast
-words). When
+words). How long to wait for `/end` is seeded from `GET /api/voice`'s
+`server_ready.final_ms` (`final.expect_ms`: the server's measured p95 over
+its last 20 finishes, 1.4 s before it has three), not a fixed worst case;
+`final_early: true` means the pass started on the quiet chunk that ended the
+speech, so the correction usually lands within a second of your stopping. When
 `final` differs, the whole phrase as typed (its committed words and the guess)
 is retyped to it, the same backspace-then-type correction as above and never
 before the phrase's start (a text box gets its value set once), before the
@@ -6927,7 +6931,12 @@ opens a new stream; Cancel or voice off `DELETE`s it. **The accurate
 final:** a server with a slower, more accurate model besides the fast
 streaming one also answers `/end` with `final` (the whole phrase
 transcribed again by it), `final_ms`, `final_wait_ms`, `final_early` and
-`same` (true: no different). When
+`same` (true: no different). The page sizes its wait for `/end` from `GET
+/api/voice`'s `server_ready.final_ms` (`final.expect_ms`, the server's
+measured p95; 1.4 s before it has three finishes) rather than a fixed worst
+case, and `final_early: true` says the accurate pass started on the quiet
+chunk that ended the speech, so the correction usually lands within a second
+of the person stopping. When
 `final` is there and `same` is not true, the **whole phrase typed so far**
 (its committed words and the guess — never the words before it) is
 replaced in the box by `final`, the caret at the end, **before** the phrase

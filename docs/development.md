@@ -342,6 +342,23 @@ it is not a gate yet. Known expected failure: `test_shortcuts_guard` is
 `xfail(strict=False)` until Ctrl+W is guarded while the command palette is
 open; it flips to a pass by itself when that lands.
 
+### Benches
+
+`tests/bench/` holds measurement scripts, not tests: pytest's
+`testpaths=["tests"]` still skips them (no `test_` prefix, no `__init__`),
+and CI never runs them. `voice_bench.py` synthesises ~50–80 command phrases
+with piper and runs them through a real streaming recogniser, reporting the
+control-word hit rate, WER and the pass / `/end` percentiles behind the
+numbers quoted in `web-api.md`. It needs the local models' packages
+(faster-whisper, piper, numpy), which the dev venv lacks, so run it with the
+installed tool's interpreter, on an idle box if the timings are to mean
+anything:
+
+```bash
+PYTHONPATH=$PWD ~/.local/share/uv/tools/mindflock/bin/python \
+    tests/bench/voice_bench.py --configs base.en+small
+```
+
 ### Test map
 
 | Area | Files |

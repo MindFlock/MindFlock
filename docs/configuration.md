@@ -1304,7 +1304,9 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     accurate pass re-decodes the whole phrase and corrects it (blank = with
     `stt_model`, i.e. `small`: the pass is ~1.1–1.3 s on an 8-core CPU
     whatever the phrase's length, started on the first quiet chunk so the
-    correction usually lands within a second of the person stopping; `"off"`
+    correction usually lands within a second of the person stopping; it is
+    skipped only under 0.2 s of speech, so a lone "stop" is still corrected,
+    and waited for at most 1.5 s, after which the fast words stand; `"off"`
     = no accurate pass — fastest, the fast words stand; any faster-whisper size
     or `org/repo` id = that model, e.g. `medium.en` for more accuracy at
     more delay; a non-size name reads as blank). A third model is loaded and
