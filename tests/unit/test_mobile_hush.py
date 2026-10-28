@@ -190,7 +190,8 @@ def test_stop_talking_is_hush_not_stop():
     assert heard.index("if (voiceIsHush(") < heard.index("var stop = voiceTail(")
     hush = _whole(js, "voiceHush")
     assert "voiceSpeechStop(true);" in hush and "voiceQuiet();" in hush
-    assert 'voiceCaption("Quiet.");' in _whole(js, "voiceQuiet")
+    assert 'voiceStripNote("Quiet.")' in _whole(js, "voiceQuiet")
+    assert "voiceCaption(voice.quietWord);" in _whole(js, "voiceStripNote")
     assert "voiceListenStop" not in hush and "voiceStopForCommand" not in hush
     # The strip: a Stop talking button while a line is said; a tap on the strip too.
     html = (STATIC / "mobile.html").read_text()

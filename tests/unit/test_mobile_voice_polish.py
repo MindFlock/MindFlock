@@ -109,20 +109,28 @@ def test_the_strip_says_one_word():
 var states = ["off", "idle", "listening", "awaiting", "dialog", "sending", "working", "speaking"];
 var out = {};
 states.forEach(function (s) {
-  out[s] = [voiceStripWord(s, false, false), voiceStripWord(s, true, false), voiceStripWord(s, false, true)];
+  out[s] = [voiceStripWord(s, false, ""), voiceStripWord(s, true, ""), voiceStripWord(s, false, "Quiet.")];
 });
 console.log(JSON.stringify(out));
 """
     out = _run(script)
     for s in ("listening", "awaiting", "dialog"):
         assert out[s][0] == "Listening…", s
-    for s in ("off", "idle", "sending", "working", "speaking"):
+    # The moment a prompt is on its way: the radio word was heard.
+    assert out["sending"][0] == "Sending…"
+    for s in ("off", "idle", "working", "speaking"):
         assert out[s][0] == "", s
     # A line playing says Speaking… whatever the state (a line with voice off).
     assert all(v[1] == "Speaking…" for v in out.values())
+    # A note (a hush's "Quiet.", a closed window's "Heard nothing.") comes first.
     assert all(v[2] == "Quiet." for v in out.values())
     words = {w for v in out.values() for w in v}
-    assert words == {"", "Listening…", "Speaking…", "Quiet."}
+    assert words == {"", "Listening…", "Speaking…", "Sending…", "Quiet."}
+    note = _run(
+        _whole(_js(), "voiceStripWord")
+        + 'console.log(JSON.stringify([voiceStripWord("idle", false, "Heard nothing."), voiceStripWord("listening", true, "")]));'
+    )
+    assert note == ["Heard nothing.", "Speaking…"]
 
 
 def test_the_strip_never_shows_the_words_heard_or_said():
@@ -137,10 +145,16 @@ def test_the_strip_never_shows_the_words_heard_or_said():
     assert "voiceCaptionEl.appendChild" not in js and "voice-partial" not in js
     # Speaking spans the line: the queue's playing line, or the state.
     assert '!!voiceSpeech.playing || voice.state === "speaking"' in paint
-    # Quiet. for VOICE_QUIET_CAPTION_MS after a hush, then nothing.
-    q = _whole(js, "voiceQuiet")
+    # Quiet. for VOICE_QUIET_CAPTION_MS after a hush, then nothing — one
+    # mechanism (voiceStripNote) for every moment's word.
+    q = _whole(js, "voiceStripNote")
     assert "voice.quietUntil = Date.now() + VOICE_QUIET_CAPTION_MS;" in q
     assert "setTimeout(voiceStripPaint, VOICE_QUIET_CAPTION_MS + 20);" in q
+    assert 'voiceStripNote("Quiet.")' in _whole(js, "voiceQuiet")
+    assert 'if (!heard) voiceStripNote("Heard nothing.");' in _whole(
+        js, "voiceListenExpired"
+    )
+    assert 'Date.now() < voice.quietUntil ? voice.quietWord : ""' in paint
     # The ask sheet is unchanged: its mirror still reads the full caption.
     assert 'var cap = mine ? String(voice.caption || "") : "";' in _whole(
         js, "askVoiceMirror"
@@ -185,27 +199,27 @@ console.log(JSON.stringify(cases.map(voiceSpeakSentences)));
 """
     )
     out = _run(script)
-    # . ? ! and ; end a sentence.
+    # . ? ! and ; end a sentence; a piece under 20 characters ("it now
+    # passes.") joins the next — each request costs the voice its fixed time.
     assert out[0] == [
         "Fixed the login bug in auth.py.",
         "The token check was off by one;",
-        "it now passes.",
-        "Should I push it?",
+        "it now passes. Should I push it?",
     ]
-    # "e.g." and "3.5" stay inside their sentence.
-    assert out[1] == ["Use a flag, e.g. the dry run, before 3.5 ships.", "Then tag it."]
+    # "e.g." and "3.5" stay inside their sentence; a short last one joins the one before.
+    assert out[1] == ["Use a flag, e.g. the dry run, before 3.5 ships. Then tag it."]
     # Abbreviations ("U.S.", "i.e.", "Dr.") never end one.
     assert out[2] == [
-        "Pushed to the U.S. mirror, i.e. the one Dr. Smith runs.",
-        "All good there.",
+        "Pushed to the U.S. mirror, i.e. the one Dr. Smith runs. All good there."
     ]
-    # A sentence under 12 characters joins the next…
+    # A sentence under 20 characters joins the next…
     assert out[3] == ["Done. Tests pass now."]
     # …and the last one joins the one before it.
     assert out[4] == ["Fixed it all and pushed. Ok?"]
     assert out[5] == ["Ok."] and out[6] == []
     # Closing quotes stay with their sentence.
-    assert out[7] == ['It said "done."', "Then it stopped! Odd, right?"]
+    assert out[7] == ['It said "done." Then it stopped! Odd, right?']
+    assert "var VOICE_SPEAK_MIN_CHARS = 20;" in js
     # A sentence past 180 characters is cut at a comma.
     assert all(len(p) <= 181 for p in out[8]) and len(out[8]) >= 2
 
@@ -218,11 +232,18 @@ def test_the_server_voice_speaks_one_sentence_ahead():
     assert (
         "var parts = voiceSpeakSentences(text), keep = !!(opts && opts.cache);" in speak
     )
-    # Sentence 1 is asked for at once…
-    assert "ahead = fetchClip(ctx, parts[0], keep);" in speak
-    # …and the next one as each starts to play (one ahead), never more.
-    assert "if (i < parts.length) ahead = fetchClip(ctx, parts[i], keep);" in speak
-    assert speak.index("ahead = fetchClip(ctx, parts[i], keep);") < speak.index(
+    # Sentences 1 and 2 are asked for at once, and from then two ahead of
+    # the one playing (VOICE_SPEAK_AHEAD): a voice that makes one at a time
+    # is never idle between sentences; a cancel wastes at most two.
+    assert "var VOICE_SPEAK_AHEAD = 2;" in js
+    assert (
+        "function fill() { while (asked < parts.length && ahead.length < VOICE_SPEAK_AHEAD) ahead.push(fetchClip(ctx, parts[asked++], keep)); }"
+        in speak
+    )
+    assert "var part = parts[i++], got = ahead.shift();" in speak
+    assert speak.index(
+        "fill();   // the next sentences are made while this one plays"
+    ) < speak.index(
         "(x.audio ? play(ctx, x.audio) : phone.speak(part)).then(next, next);"
     )
     # A cancelled line stops before its next clip; cancel aborts the fetches.

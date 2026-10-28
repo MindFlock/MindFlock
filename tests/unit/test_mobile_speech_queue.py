@@ -258,9 +258,20 @@ def test_nod_and_listen_wiring():
     end = _whole(js, "voiceSpeechEnd")
     assert "voice.micMuteUntil = Date.now() + VOICE_NOD_MUTE_MS;" in end
     assert "var VOICE_NOD_MUTE_MS = 150;" in js
-    muted = _whole(js, "voiceMicMuted")
-    assert "!!(p && p.over)" in muted
-    assert "if (voiceMicMuted()) {" in js  # the recorder's block handler
+    # Deaf (blocks skipped) only while a line plays over the listen; the
+    # mute after it, a chime's, a barge-in's keeps a word from starting
+    # while the audio is kept (the recorder's block handler).
+    assert "!!(p && p.over)" in _whole(js, "voiceMicDeaf")
+    assert (
+        "return voiceMicDeaf() || Date.now() < (voice.micMuteUntil || 0) + (grace || 0);"
+        in _whole(js, "voiceMicMuted")
+    )
+    assert "if (voiceMicDeaf()) {" in js
+    assert (
+        "var muted = (h.skipUntil && Date.now() < h.skipUntil) || voiceMicMuted();"
+        in js
+    )
+    assert "var loud = !muted && rms > Math.max(VOICE_RMS_SPEECH, g.floor * 3);" in js
     # The five lines, fired where they belong.
     assert 'voiceNod("Cleared.");' in _whole(js, "voiceHeard")
     assert 'voiceNod("Stopped.");' in _whole(js, "voiceStopPhrase")

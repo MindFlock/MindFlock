@@ -252,7 +252,11 @@ def test_wake_request_shape_and_answers():
         and "wakeMs: woke ? woke.wakeMs : -1," in rs
     )
     stt = js[js.index("  function ServerSTT(") : js.index("  // --- ServerTTS")]
-    assert "if (h.skipUntil && Date.now() < h.skipUntil) return;" in stt
+    # The chime's audio is kept (a word under it loses nothing) but no word starts in it.
+    assert (
+        "var muted = (h.skipUntil && Date.now() < h.skipUntil) || voiceMicMuted();"
+        in stt
+    )
     assert "g.trace.wake = h.wakeMs;" in stt
     # The clip goes in the block its tail ends: the synchronous decimator,
     # never the browser's async render; the word's end on the wall clock.
