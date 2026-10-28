@@ -525,30 +525,6 @@ def test_mobile_js_spoken_replies_say_per_prompt():
     )
 
 
-def test_mobile_js_reply_lines_name_another_session_only():
-    """A spoken line carries the session it is about (speakLine's title);
-    the queue names it first only when the phone is on another session
-    (voiceLineText, run under node in test_mobile_speech_queue): the Say
-    line, the ack and the dialog read-out pass their session and no name of
-    their own."""
-    js = _js()
-    reply = _fn(js, "voiceReply")
-    # A reply line (the 5th argument): the queue adds where it is from when
-    # that is not obvious (voiceReplyText, test_mobile_speech_queue).
-    assert "speakLine(say, false, voice.session, 0, true)" in reply
-    assert 'speakLine(name + " finished.")' in reply
-    assert "speakLine(line, true, title)" in _fn(js, "voiceAckTick")
-    assert "var parts = [stripMarkdown(d.question" in _fn(js, "voiceDialogSpeech")
-    assert "speakLine(voiceDialogSpeech(d), false, voice.session)" in _fn(
-        js, "voiceReadDialog"
-    )
-    assert (
-        "var said = line.reply ? voiceReplyText(line) : voiceLineText(line, current, nameOf);"
-        in _fn(js, "voiceSpeechPump")
-    )
-    assert "voiceReply({" in _fn(js, "voiceOnPoll")
-
-
 def test_mobile_js_router_first_then_the_local_table():
     """The first phrase said into an empty box goes to POST /api/voice/route
     {text, session} BEFORE the local VOICE_CMD table: switch / new select the
@@ -562,9 +538,10 @@ def test_mobile_js_router_first_then_the_local_table():
     route = _fn(js, "voiceRoute")
     assert 'fetch("/api/voice/route", {' in route
     assert (
-        "JSON.stringify({ text: text, session: session || voice.session || current })"
+        "JSON.stringify(voiceRouteBody(text, session || voice.session || current))"
         in route
     )
+    assert "var body = { text: text, session: session }" in _fn(js, "voiceRouteBody")
     assert "VOICE_ROUTE_TIMEOUT_MS" in route and "Promise.race([asked, late])" in route
     assert "if (!r.ok) {" in route and "return null;" in route
     assert "VOICE_ROUTE_KINDS.indexOf(j.kind) < 0" in route
@@ -899,7 +876,7 @@ def test_mobile_js_voice_commands_and_switching():
     assert (
         '"stop listening"' in v.split("var VOICE_WORDS_DEFAULT = {")[1].split("};")[0]
     )
-    assert "what did it say" in cmds
+    assert 'kind: "read"' in cmds and "what did it (?:say" in cmds
     # Matched on the whole transcript, case- and punctuation-insensitive.
     norm = _fn(js, "voiceNorm")
     assert ".toLowerCase()" in norm and "[^a-z0-9' ]+" in norm
@@ -913,7 +890,8 @@ def test_mobile_js_voice_commands_and_switching():
     assert "voiceSwitchTo(m.hit.title);" in sw
     assert '"Which one: "' in sw
     to = _fn(js, "voiceSwitchTo")
-    assert "select(title);" in to and '"Now on " + nameOf(title)' in to
+    assert "select(title);" in to and "speakLine(voiceSwitchLine(title))" in to
+    assert '"Now on " + nameOf(title)' in _fn(js, "voiceSwitchLine")
     # "What needs me": the rail's attention set, three at most.
     needs = _fn(js, "voiceNeedsMe")
     assert "sessionState(i).inBell" in needs and ".slice(0, 3)" in needs
@@ -2111,6 +2089,131 @@ def test_the_server_recognizer_names_why_the_microphone_did_not_start():
     )
 
 
+def test_mobile_js_pending_choice_round_trip():
+    """What the router asks back ("Which one: a or b?", "In which project?")
+    rides its answer as ``pending``; the page keeps it VOICE_PENDING_MS
+    (30 s), sends it with the next phrase, and drops it on any answer
+    without one. Asking back opens the mic for the answer."""
+    js = _js()
+    v = _voice_section(js)
+    assert "var VOICE_PENDING_MS = 30000;" in v
+    assert 'VOICE_ROUTE_KINDS.push("ask", "read");' in v
+    take = _fn(js, "voicePendingTake")
+    assert (
+        "Date.now() - p.at > VOICE_PENDING_MS" in take
+        and "voice.routePending = null" in take
+    )
+    keep = _fn(js, "voicePendingKeep")
+    assert "res.pending" in keep and "at: Date.now()" in keep
+    body = _fn(js, "voiceRouteBody")
+    assert "voicePendingTake()" in body and "body.pending = pending;" in body
+    # Every well-formed answer replaces it (no pending: dropped).
+    assert "voicePendingKeep(j);" in _fn(js, "voiceRoute")
+    routed = _fn(js, "voiceRouted")
+    assert 'case "ask":' in routed and 'case "read":' in routed
+    assert "voiceSayThenListen(say, !!res.pending);" in routed
+    listen = _fn(js, "voiceSayThenListen")
+    assert (
+        'voiceListenAfter("prompt", VOICE_TAP_MS)' in listen
+        and "voiceIdle();" in listen
+    )
+    # Offline, the page asks too — and keeps the candidates for the router.
+    sw = _fn(js, "voiceSwitch")
+    assert "voiceFindSessions(query)" in sw and 'kind: "pick"' in sw
+    assert "voiceOr(names)" in sw
+
+
+def test_mobile_js_switch_line_reads_only_news():
+    """A switch says the state and the task headline; the last reply only
+    when its turn ended in the last VOICE_FRESH_REPLY_S (the router's
+    FRESH_REPLY_S); "what did it say" reads it offline."""
+    js = _js()
+    assert "var VOICE_FRESH_REPLY_S = 120;" in _voice_section(js)
+    line = _fn(js, "voiceSwitchLine")
+    assert "voiceStateWord(sessionState(inst))" in line
+    assert "inst.task_headline" in line
+    assert 'inst.activity === "idle"' in line and "age <= VOICE_FRESH_REPLY_S" in line
+    assert "since > 0" in line
+    read = _fn(js, "voiceReadLast")
+    assert "inst.last_say" in read and '" said: "' in read
+    assert 'case "read": voiceReadLast(); return;' in _fn(js, "voiceRunCommand")
+
+
+def _whole_fn(js: str, name: str) -> str:
+    return (
+        "function %s(" % name
+        + js.split("  function %s(" % name)[1].split("\n  }\n")[0]
+        + "\n}\n"
+    )
+
+
+def test_offline_switching_and_the_switch_line_under_node():
+    """The offline table's plain-speech matcher (voiceFindSessions) and the
+    switch line, run: the same answers as the router for the common cases."""
+    js = _js()
+    v = _voice_section(js)
+    nums = js[
+        js.index("  var VOICE_NUM = /") : js.index("  // The option an utterance picks")
+    ]
+    around = [ln for ln in v.splitlines() if "var VOICE_AROUND =" in ln][0]
+    script = "\n".join(
+        [
+            "var now = Date.now() / 1000;",
+            "var instances = [",
+            " {title:'sitecheck-bot7', activity:'working', task_headline:'Fix settings screen', last_say:'Old.'},",
+            " {title:'sitecheck-bot7-copy-2', activity:'idle', activity_since: now - 30, last_say:'Done. Tests pass.'},",
+            " {title:'login-fix', activity:'idle', activity_since: now - 3600, last_say:'Fixed an hour ago.'},",
+            " {title:'settings-ui', activity:'idle'}];",
+            "function nameOf(t) { return t; }",
+            "function instByTitle(t) { return instances.filter(function (i) { return i.title === t; })[0]; }",
+            "function sessionState(i) { return i.activity === 'working' ? {label:'Working'} : {label:'Idle'}; }",
+            "function stripMarkdown(t) { return String(t || ''); }",
+            "var VOICE_NUM_WORDS = { ten: 10, eleven: 11, twelve: 12 };",
+            nums,
+            around,
+            "var VOICE_FRESH_REPLY_S = 120;",
+            _whole_fn(js, "voiceNorm"),
+            _whole_fn(js, "voiceNumber"),
+            _whole_fn(js, "endSentence"),
+            _whole_fn(js, "voiceStateWord"),
+            _whole_fn(js, "voiceToks"),
+            _whole_fn(js, "voiceWordHit"),
+            _whole_fn(js, "voiceFindSessions"),
+            _whole_fn(js, "voiceOr"),
+            _whole_fn(js, "voiceSwitchLine"),
+            "var out = { find: {}, lines: {} };",
+            "['the sitecheck session', 'sitecheck bot seven', 'the settings one', 'login fix', 'the login fixes',"
+            " 'bot seven copy two', 'narnia', 'the session'].forEach(function (q) {"
+            " var m = voiceFindSessions(q); out.find[q] = m.hit ? m.hit.title : m.cands.map(function (r) { return r.title; }); });",
+            "instances.forEach(function (i) { out.lines[i.title] = voiceSwitchLine(i.title); });",
+            "out.or = [voiceOr(['a']), voiceOr(['a', 'b']), voiceOr(['a', 'b', 'c'])];",
+            "console.log(JSON.stringify(out));",
+        ]
+    )
+    res = subprocess.run(
+        [_node(), "-e", script], capture_output=True, text=True, timeout=30
+    )
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    assert out["find"] == {
+        "the sitecheck session": ["sitecheck-bot7", "sitecheck-bot7-copy-2"],
+        "sitecheck bot seven": "sitecheck-bot7",
+        "the settings one": "settings-ui",
+        "login fix": "login-fix",
+        "the login fixes": "login-fix",
+        "bot seven copy two": "sitecheck-bot7-copy-2",
+        "narnia": [],
+        "the session": [],
+    }
+    assert out["lines"] == {
+        "sitecheck-bot7": "Now on sitecheck-bot7, working: Fix settings screen.",
+        "sitecheck-bot7-copy-2": "Now on sitecheck-bot7-copy-2, idle. Done. Tests pass.",
+        "login-fix": "Now on login-fix, idle.",
+        "settings-ui": "Now on settings-ui, idle.",
+    }
+    assert out["or"] == ["a", "a or b", "a, b or c"]
+
+
 def test_mobile_js_help_answers_a_question_about_mindflock():
     """The router's {kind: "help", text} (a question about MindFlock itself):
     the page knows the kind, ends the listen, shows "Looking that up…" while
@@ -2138,3 +2241,27 @@ def test_mobile_js_help_answers_a_question_about_mindflock():
     assert 'speakLine(voice.lastLine || "Nothing to repeat yet.")' in _fn(
         js, "voiceRunCommand"
     )
+
+
+def test_mobile_js_reply_lines_name_another_session_only():
+    """A spoken line carries the session it is about (speakLine's title);
+    the queue names it first only when the phone is on another session
+    (voiceLineText, run under node in test_mobile_speech_queue): the Say
+    line, the ack and the dialog read-out pass their session and no name of
+    their own."""
+    js = _js()
+    reply = _fn(js, "voiceReply")
+    # A reply line (the 5th argument): the queue adds where it is from when
+    # that is not obvious (voiceReplyText, test_mobile_speech_queue).
+    assert "speakLine(say, false, voice.session, 0, true)" in reply
+    assert 'speakLine(name + " finished.")' in reply
+    assert "speakLine(line, true, title)" in _fn(js, "voiceAckTick")
+    assert "var parts = [stripMarkdown(d.question" in _fn(js, "voiceDialogSpeech")
+    assert "speakLine(voiceDialogSpeech(d), false, voice.session)" in _fn(
+        js, "voiceReadDialog"
+    )
+    assert (
+        "var said = line.reply ? voiceReplyText(line) : voiceLineText(line, current, nameOf);"
+        in _fn(js, "voiceSpeechPump")
+    )
+    assert "voiceReply({" in _fn(js, "voiceOnPoll")

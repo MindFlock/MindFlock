@@ -34,6 +34,8 @@ import {
   railRow,
   railStep,
   routePhrase,
+  PENDING_MS,
+  PendingChoice,
   runVoiceCommand,
   stopTail,
   talkKeyAction,
@@ -1774,7 +1776,8 @@ describe("wiring", () => {
     expect(MIC).toContain('const session = opts.title || useUi.getState().focused || "";');
     expect(MIC).toContain("routePhrase(text, session)");
     expect(MIC).toContain("selectSession(title, { noKeyboard: true })");
-    expect(code("lib/voiceDesktop.ts")).toContain('api<RouteReply>("/api/voice/route", { json: { text, session } })');
+    expect(code("lib/voiceDesktop.ts")).toContain('const json: Record<string, unknown> = { text, session };');
+    expect(code("lib/voiceDesktop.ts")).toContain('api<RouteReply>("/api/voice/route", { json })');
   });
 
   it("push to talk ends in finish() (\u201cover\u201d), Escape in cancel() (\u201cdisregard\u201d + stop)", () => {
@@ -2023,6 +2026,54 @@ describe("the router's new answers", () => {
     };
     return { d, out };
   }
+
+  it("routePhrase sends back what the router asked, for 30 s, and drops it on any answer without one", async () => {
+    let t = 1_000_000;
+    const held = new PendingChoice(() => t);
+    const which = [
+      { title: "sitecheck-bot7", name: "sitecheck-bot7" },
+      { title: "sitecheck-bot7-copy-2", name: "sitecheck-bot7-copy-2" },
+    ];
+    mocks.api.mockClear();
+    mocks.api.mockResolvedValueOnce({
+      kind: "ambiguous",
+      say: "Which one: sitecheck-bot7 or sitecheck-bot7-copy-2?",
+      candidates: which,
+      pending: { kind: "pick", candidates: which },
+    });
+    expect((await routePhrase("switch to the sitecheck session", "t1", held)).kind).toBe("ambiguous");
+    expect(mocks.api.mock.calls[0][1]).toEqual({ json: { text: "switch to the sitecheck session", session: "t1" } });
+    // The next phrase carries the choice; the switch answer drops it.
+    mocks.api.mockResolvedValueOnce({ kind: "switch", title: "sitecheck-bot7-copy-2", say: "Now on sitecheck-bot7-copy-2, idle." });
+    await routePhrase("copy two", "t1", held);
+    expect(mocks.api.mock.calls[1][1]).toEqual({
+      json: { text: "copy two", session: "t1", pending: { kind: "pick", candidates: which } },
+    });
+    expect(held.take()).toBeNull();
+    // A new session's questions ride the same way; past PENDING_MS, gone.
+    mocks.api.mockResolvedValueOnce({ kind: "ask", say: "In which project?", pending: { kind: "new", await: "repo" } });
+    await routePhrase("start a new session", "t1", held);
+    expect(held.take()).toEqual({ kind: "new", await: "repo" });
+    t += PENDING_MS + 1;
+    mocks.api.mockResolvedValueOnce({ kind: "prompt" });
+    await routePhrase("parser", "t1", held);
+    expect(mocks.api.mock.calls[3][1]).toEqual({ json: { text: "parser", session: "t1" } });
+    // A failed call keeps it (it still expires on its own).
+    held.keep({ kind: "ask", pending: { kind: "new", await: "task" } });
+    mocks.api.mockRejectedValueOnce(new Error("offline"));
+    expect(await routePhrase("fix it", "t1", held)).toEqual({ kind: "prompt" });
+    expect(held.take()).toEqual({ kind: "new", await: "task" });
+  });
+
+  it("an ask or a Which one is said like a confirmation; read is the router's words", () => {
+    const routed = blockFrom(code("components/TopBarMic.tsx"), "const routed = async (", "// --- hands-free");
+    const ask = routed.slice(routed.indexOf('case "ask":'), routed.indexOf('case "cancel":'));
+    expect(ask).toContain('case "ambiguous":');
+    expect(ask).toContain("confirmer.current?.say({ line: r.say })");
+    expect(ask).toContain("else announce(r.say");
+    // read (and no-session, list …): the router's words, nothing typed.
+    expect(routed.slice(routed.indexOf("default:"))).toContain('announce(r.say || "");');
+  });
 
   it("routePhrase passes the new kinds and treats an unknown one as a prompt", async () => {
     mocks.api.mockResolvedValueOnce({ kind: "switch_index", index: 2 });

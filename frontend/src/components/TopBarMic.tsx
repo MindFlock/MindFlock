@@ -1087,6 +1087,16 @@ export function TopBarMic() {
           } else announce(line);
         }
         return;
+      case "ask":
+      case "ambiguous":
+        // The router asked something back ("Which one?", "In which
+        // project?"): said like your own action's confirmation, and the
+        // next phrase is its answer (lib/voiceDesktop routePending).
+        if (r.say && prefsRef.current.confirm !== false) {
+          say(r.say, true);
+          void confirmer.current?.say({ line: r.say });
+        } else announce(r.say || "");
+        return;
       case "cancel":
         say("Dropped");
         return;
@@ -1114,7 +1124,7 @@ export function TopBarMic() {
         say("");
         return;
       default:
-        // ambiguous / no-session / new-failed / list / needs / status:
+        // no-session / new-failed / list / needs / status / read:
         // the router's words, nothing typed.
         announce(r.say || "");
         if (!r.say) say("“" + text + "” — not typed", true);

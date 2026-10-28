@@ -83,9 +83,34 @@ const NUMS = { one: 1, two: 2, three: 3, four: 4, nine: 9, "1": 1, "2": 2, "3": 
 // A small stand-in for the server's router (POST /api/voice/route): the
 // commands the scenarios say, a session it creates for "new session …",
 // and "prompt" for everything else.
-function routeAnswer(text, session) {
+function routeAnswer(text, session, pending) {
   const t = String(text || "").toLowerCase().replace(/[^a-z0-9' ]+/g, " ").replace(/\s+/g, " ").trim();
   let m;
+  // What the router asked back, answered with the next phrase (pending).
+  const switchTo = (row) => ({ kind: "switch", title: row.title, name: row.name, say: "Now on " + row.name + ", idle." });
+  if (pending && pending.kind === "pick") {
+    const c = (pending.candidates || []).map((x) => state.rows.find((r) => r.title === x.title)).filter(Boolean);
+    const hit = t === "copy two" ? c.find((r) => /copy-2$/.test(r.title)) : t === "the first one" ? c[0] : null;
+    if (hit) return switchTo(hit);
+  }
+  if (pending && pending.kind === "new") {
+    if (t === "never mind") return { kind: "new-failed", say: "Okay, no new session.", cancelled: true };
+    if (pending.await === "repo" && t === "parser") {
+      return { kind: "ask", say: "What should it do in parser?", pending: { kind: "new", await: "task", name: "", task: "", repo_name: "parser", repo_path: "/r/parser" } };
+    }
+    if (pending.await === "task") {
+      const title = t.replace(/ /g, "-");
+      state.rows.push({ title, name: title, activity: "working", status: "running", last_turn: "", last_say: null, voice: true });
+      return { kind: "new", title, name: title, say: "Started " + title + " in " + pending.repo_name + "." };
+    }
+  }
+  if (t === "switch to the sitecheck session") {
+    const candidates = state.rows.filter((r) => /^sitecheck/.test(r.title)).map((r) => ({ title: r.title, name: r.name }));
+    return { kind: "ambiguous", say: "Which one: " + candidates.map((c) => c.name).join(" or ") + "?", candidates, pending: { kind: "pick", candidates } };
+  }
+  if (t === "start a new session") {
+    return { kind: "ask", say: "In which project? MindFlock or parser?", pending: { kind: "new", await: "repo", name: "", task: "", choices: ["MindFlock", "parser"] } };
+  }
   // The widened vocabulary: numbered / stepped switching, answers (by row
   // number the router names only the index; asked again with that row's
   // title it names the dialog), "what is it asking".
@@ -225,7 +250,7 @@ async function mock(route) {
     if (state.helpDelay) await sleep(state.helpDelay);
     return state.helpStatus ? json(route, { error: "boom" }, state.helpStatus) : json(route, state.helpReply);
   }
-  if (p === "/api/voice/route") return state.routeStatus ? json(route, { error: "no route" }, state.routeStatus) : json(route, routeAnswer(body.text, body.session));
+  if (p === "/api/voice/route") return state.routeStatus ? json(route, { error: "no route" }, state.routeStatus) : json(route, routeAnswer(body.text, body.session, body.pending));
   if (p === "/api/voice/say-all" && m === "POST") {
     if (state.sayAllStatus) return json(route, { error: "owner only" }, state.sayAllStatus);
     state.sayAll = !!body.on;
@@ -603,6 +628,80 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await page.evaluate(() => window.__hear("switch to api docs"));
     await waitFor(page, () => window.mfVoice.session === "api-docs" && window.mfVoice.state === "idle", 4000, "back on API docs");
     check("…and back to API docs", (await page.evaluate(() => window.mfVoice.session)) === "api-docs");
+
+    // ---- "Which one?": the router asks back, the next phrase is the pick
+    state.rows.push({ title: "sitecheck-bot7", name: "sitecheck-bot7", activity: "working", status: "running", last_turn: "", last_say: null, voice: false });
+    state.rows.push({ title: "sitecheck-bot7-copy-2", name: "sitecheck-bot7-copy-2", activity: "idle", status: "running", last_turn: "", last_say: null, voice: false });
+    await waitFor(page, () => window.mfVoice.state === "idle", 3000, "idle");
+    await page.click("#voice-btn");
+    await waitFor(page, () => window.mfVoice.state === "listening", 3000, "listening for the sitecheck switch");
+    await page.evaluate(() => window.__hear("switch to the sitecheck session"));
+    await waitFor(page, () => window.__spoken.join(" ").indexOf("Which one: sitecheck-bot7 or sitecheck-bot7-copy-2?") >= 0, 3000, "which one");
+    check("pick: 'switch to the sitecheck session' → the router's 'Which one: a or b?'", await said(page, "Which one: sitecheck-bot7 or sitecheck-bot7-copy-2?"));
+    await waitFor(page, () => window.mfVoice.state === "listening", 4000, "listening for the pick");
+    check("pick: …and the mic opens for the answer", (await vstate(page)) === "listening");
+    await page.evaluate(() => window.__hear("copy two"));
+    await waitFor(page, () => window.mfVoice.session === "sitecheck-bot7-copy-2", 5000, "picked");
+    const pickPost = posts("/voice/route").filter((x) => x.body.text === "copy two")[0];
+    check("pick: 'copy two' went back with the pending candidates", !!pickPost && pickPost.body.pending && pickPost.body.pending.kind === "pick" && pickPost.body.pending.candidates.length === 2, JSON.stringify(pickPost && pickPost.body));
+    check("pick: …and switched to the copy", (await page.evaluate(() => window.mfVoice.session)) === "sitecheck-bot7-copy-2");
+    await waitFor(page, () => window.mfVoice.state === "idle", 3000, "idle after pick");
+    // Any answer without a pending drops it; and a pending older than 30 s goes unsent.
+    check("pick: the switch answer dropped the pending choice", (await page.evaluate(() => window.mfVoice.routePending)) === null);
+    await page.click("#voice-btn");
+    await waitFor(page, () => window.mfVoice.state === "listening", 3000, "listening for the second ask");
+    await page.evaluate(() => window.__hear("switch to the sitecheck session"));
+    await waitFor(page, () => window.mfVoice.state === "listening" && !!window.mfVoice.routePending, 5000, "asked again");
+    await page.evaluate(() => { window.mfVoice.routePending.at -= 31000; });
+    await page.evaluate(() => window.__hear("the first one"));
+    for (let t = Date.now(); !posts("/voice/route").some((x) => x.body.text === "the first one") && Date.now() - t < 3000; ) await sleep(30);
+    const latePost = posts("/voice/route").filter((x) => x.body.text === "the first one")[0];
+    check("pick: a choice older than 30 s is not sent (the phrase routes as usual)", !!latePost && !latePost.body.pending, JSON.stringify(latePost && latePost.body));
+    // The late phrase was words (the mock's prompt): wait for them to land, then empty the box.
+    await waitFor(page, () => document.getElementById("compose").value.indexOf("the first one") >= 0, 3000, "late phrase typed");
+    await page.click("#voice-cancel");
+    await page.evaluate(() => { document.getElementById("compose").value = ""; });
+    await waitFor(page, () => window.mfVoice.state === "idle", 3000, "idle after the late phrase");
+    await page.click("#voice-btn");
+    await waitFor(page, () => window.mfVoice.state === "listening", 3000, "listening to leave the copy");
+    await page.evaluate(() => window.__hear("switch to api docs"));
+    await waitFor(page, () => window.mfVoice.session === "api-docs" && window.mfVoice.state === "idle", 5000, "back on API docs before the rows go");
+    state.rows = state.rows.filter((r) => !/^sitecheck/.test(r.title));
+
+    // ---- "start a new session": the project, then the task, then it starts
+    await page.click("#voice-btn");
+    await waitFor(page, () => window.mfVoice.state === "listening", 3000, "listening for the new session");
+    await page.evaluate(() => window.__hear("start a new session"));
+    await waitFor(page, () => window.__spoken.join(" ").indexOf("In which project? MindFlock or parser?") >= 0, 5000, "which project");
+    await waitFor(page, () => window.mfVoice.state === "listening", 4000, "listening for the project");
+    check("new: 'start a new session' asks which project, and listens for it", (await said(page, "In which project? MindFlock or parser?")) && (await vstate(page)) === "listening");
+    await page.evaluate(() => window.__hear("parser"));
+    await waitFor(page, () => window.__spoken.join(" ").indexOf("What should it do in parser?") >= 0, 3000, "what should it do");
+    await waitFor(page, () => window.mfVoice.state === "listening", 4000, "listening for the task");
+    check("new: …then what it should do", (await vstate(page)) === "listening");
+    await page.evaluate(() => window.__hear("add tests for the queue"));
+    await waitFor(page, () => window.mfVoice.session === "add-tests-for-the-queue", 5000, "new session selected");
+    const newPosts = posts("/voice/route").filter((x) => x.body.text === "parser" || x.body.text === "add tests for the queue");
+    check("new: each answer carried the gathered fields back", newPosts.length === 2 && newPosts[0].body.pending.await === "repo" && newPosts[1].body.pending.await === "task" && newPosts[1].body.pending.repo_name === "parser", JSON.stringify(newPosts.map((x) => x.body.pending)));
+    await waitFor(page, () => window.__spoken.join(" ").indexOf("Started add-tests-for-the-queue in parser.") >= 0, 3000, "started");
+    check("new: …and it started and is selected", (await page.evaluate(() => window.mfVoice.session)) === "add-tests-for-the-queue" && (await spoken(page)).includes("Started add-tests-for-the-queue in parser."));
+    check("new: the task was never typed as a prompt", posts("/send").every((x) => x.body.text.indexOf("queue") < 0));
+    await waitFor(page, () => window.mfVoice.state === "idle", 3000, "idle after new");
+    await page.click("#voice-btn");
+    await waitFor(page, () => window.mfVoice.state === "listening", 3000, "listening for the cancelled new session");
+    await page.evaluate(() => window.__hear("start a new session"));
+    await waitFor(page, () => window.mfVoice.state === "listening" && !!window.mfVoice.routePending, 5000, "asked for the project again");
+    const rowsBefore = state.rows.length;
+    await page.evaluate(() => window.__hear("never mind"));
+    await waitFor(page, () => window.__spoken.join(" ").indexOf("Okay, no new session.") >= 0, 3000, "cancelled");
+    check("new: 'never mind' drops it — said, nothing created, no pending kept", state.rows.length === rowsBefore && (await page.evaluate(() => window.mfVoice.routePending)) === null);
+    await waitFor(page, () => window.mfVoice.state === "idle", 3000, "idle after cancel");
+    await page.click("#voice-btn");
+    await waitFor(page, () => window.mfVoice.state === "listening", 3000, "listening to go back");
+    await page.evaluate(() => window.__hear("switch to api docs"));
+    await waitFor(page, () => window.mfVoice.session === "api-docs" && window.mfVoice.state === "idle", 5000, "back on API docs again");
+    state.rows = state.rows.filter((r) => r.title !== "add-tests-for-the-queue");
+    await sleep(4600);   // the page's row list refreshes on its 4 s poll: the scenarios below see the rows they expect
 
     // ---- commands: what needs me / cancel / status / repeat / stop
     await waitFor(page, () => window.mfVoice.state === "idle", 3000, "idle");

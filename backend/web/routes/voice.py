@@ -22,12 +22,13 @@ condensation:
   this is the step that costs money, and it runs only when the listener asks
   ("summarize that"). 409 ``{error}`` with no reply or no CLI, 504 on
   timeout, 502 when the CLI fails.
-* ``POST /api/voice/route {text, session, title?}`` → ``{kind, …}`` — the voice
-  router (``core.voice_router``): one finished phrase said to ``session``
-  (a title, ``""`` for none) is either a prompt for that session (``{kind:
-  "prompt"}``, the default) or a command: ``switch`` / ``ambiguous`` /
-  ``no-session``, ``list``, ``needs``, ``status`` (each with the ``say`` the
-  client speaks), ``new`` / ``new-failed``, ``switch_index`` /
+* ``POST /api/voice/route {text, session, title?, pending?}`` → ``{kind, …}``
+  — the voice router (``core.voice_router``): one finished phrase said to
+  ``session`` (a title, ``""`` for none) is either a prompt for that session
+  (``{kind: "prompt"}``, the default) or a command: ``switch`` / ``ambiguous``
+  / ``no-session``, ``list``, ``needs``, ``status``, ``read`` (the last
+  reply, on demand) (each with the ``say`` the client speaks), ``new`` /
+  ``ask`` / ``new-failed``, ``switch_index`` /
   ``switch_rel`` (the client's own numbering: it maps ``index`` / ``delta``),
   ``answer`` (a session's dialog: ``dialog_id`` + ``keys`` the client posts
   to ``/answer`` — nothing is pressed here — or ``no_dialog``), ``question``
@@ -37,18 +38,26 @@ condensation:
   ``title`` maps a numbered target the client resolved ("session three,
   yes" → its title) for the full answer. The rows are ``GET
   /api/instances``'s own (other devices' ``<device>::<title>`` rows
-  included), read only once the phrase IS a command. ``new`` creates the
-  session the way the New dialog does (``core.session_create``, the task as
-  its first prompt) in the named repository, else the current session's,
-  else the most recent, turns its voice flag on and arms the one-shot
-  ``.next`` so its seeded first prompt asks for a ``Say:`` line. The dialog
-  is ``GET …/dialog?quiet=1``'s own (``_read_dialog``), read only for an
+  included), read only once the phrase IS a command (or answers a
+  ``pending``). ``new`` creates the session the way the New dialog does
+  (``core.session_create``, the task as its first prompt) in the named
+  repository (the only one known needs no name), turns its voice flag on
+  and arms the one-shot ``.next`` so its seeded first prompt asks for a
+  ``Say:`` line — a phrase without a project or a task is an ``ask``
+  first. The dialog is ``GET …/dialog?quiet=1``'s own (``_read_dialog``), read only for an
   answer or question naming a local session — and for any other phrase said
   to ``session`` while its agent shows Claude's question tool (``/dialog``'s
   ``kind: "select"``): "red", "one and three", "next", "submit", the words
   for its free-text row are that question's ``answer`` (``keys``, plus
-  ``text`` to type first for a free-text answer). Always 200 — a failed create is ``{kind: "new-failed", say}``; 400 only for a body
-  that is not an object.
+  ``text`` to type first for a free-text answer). An answer that asks
+  something back carries ``pending`` — ``ambiguous``'s ``{kind: "pick",
+  candidates: [{title, name}]}`` ("Which one: a or b?"), ``ask``'s ``{kind:
+  "new", await: "repo" | "task", …the fields gathered}`` ("In which
+  project?", "What should it do?") — and the client sends it back with the
+  next phrase (for ~30 s): a phrase that answers it is the pick, the
+  project or the task (the session is created once nothing is missing); any
+  other is routed as usual. Always 200 — a failed create is ``{kind:
+  "new-failed", say}``; 400 only for a body that is not an object.
 
 Routes only translate HTTP into core calls; the registry lookup, the tmux
 name and the providers are read through the server module at call time, so
@@ -310,11 +319,18 @@ def _failed(reason: str) -> dict:
 
 
 async def _start_new(text: str, session: str, rows: list, request) -> dict:
-    """Resolve and create the session a ``new`` phrase asks for."""
+    """Resolve and create the session a ``new`` phrase asks for — or the
+    question it asks first (``ask``: the project, the task)."""
     repos = await asyncio.to_thread(_known_repos, rows)
     plan = _voice_router.plan_new(text, session, rows, repos)
     if plan.get("kind") != "new":
         return plan
+    return await _create_planned(plan, request)
+
+
+async def _create_planned(plan: dict, request) -> dict:
+    """Create the session a finished plan names (``core.voice_router``'s
+    ``kind: "new"``) → ``started``, or ``new-failed``."""
     title = await asyncio.to_thread(_session_create.free_title, plan["title_base"])
     payload = {"title": title, "repo_path": plan["repo_path"]}
     if plan["task"]:
@@ -406,6 +422,24 @@ def _words() -> dict:
         return _voice_words.effective({})
 
 
+async def _pending_answer(
+    text: str, session: str, pending: dict, rows: list, words, request
+):
+    """The answer to the question the router asked last — "Which one: a or
+    b?" (``pending.kind`` "pick") or a new session's "In which project?" /
+    "What should it do?" ("new") — or None when ``text`` is not one (it is
+    routed as usual)."""
+    if pending.get("kind") == "pick":
+        return _voice_router.pick(text, pending, rows)
+    if pending.get("kind") == "new":
+        repos = await asyncio.to_thread(_known_repos, rows)
+        plan = _voice_router.continue_new(text, pending, session, rows, repos, words)
+        if plan is not None and plan.get("kind") == "new":
+            return await _create_planned(plan, request)
+        return plan
+    return None
+
+
 #: Commands a phrase said to a session showing Claude's question tool may
 #: really be its answer: "go back" (a tab, not the previous session) and, on
 #: the review screen, "cancel". A prompt (no command) may be one too.
@@ -438,9 +472,18 @@ async def voice_route(request: Request) -> JSONResponse:
     text = str(payload.get("text") or "")
     session = str(payload.get("session") or "")
     title = str(payload.get("title") or "")
+    pending = payload.get("pending")
     words = await asyncio.to_thread(_words)
+    rows = None
+    if isinstance(pending, dict) and text.strip():
+        rows = await asyncio.to_thread(_session_rows, request)
+        got = await _pending_answer(text, session, pending, rows, words, request)
+        if got is not None:
+            return JSONResponse(got)
     cmd = _voice_router.command(text, words)
-    if session and (cmd is None or cmd["kind"] in _SELECT_FIRST):
+    if session and (
+        cmd is None or cmd["kind"] in _SELECT_FIRST or cmd.get("mode") == "strict"
+    ):
         picked = await _select_answer(text, session, request)
         if picked is not None:
             return JSONResponse(picked)
@@ -448,7 +491,8 @@ async def voice_route(request: Request) -> JSONResponse:
         return JSONResponse({"kind": "prompt"})
     if cmd["kind"] in _voice_router.LOCAL_KINDS:
         return JSONResponse({"kind": cmd["kind"]})
-    rows = await asyncio.to_thread(_session_rows, request)
+    if rows is None:
+        rows = await asyncio.to_thread(_session_rows, request)
     if cmd["kind"] == "new":
         return JSONResponse(await _start_new(text, session, rows, request))
     ans = _voice_router.answer(text, session, rows, title=title, words=words)

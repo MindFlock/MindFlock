@@ -40,6 +40,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   first: *In Invoice parser, on parse the March invoices: …*. Claude Code
   sessions pick the new instruction up when their hook is re-pinned (turning
   voice on does it).
+- **Switch sessions by voice the way you'd say it.** "Switch to the
+  sitecheck session", "take me to login fix", "jump over to the settings
+  one", "open sitecheck" — the words around a name are ignored and a name
+  matches across hyphens and digits ("bot seven" is bot7), with a plural or
+  a wrong letter forgiven. When two sessions match, it asks *Which one:
+  sitecheck-bot7 or sitecheck-bot7-copy-2?* and listens: "the second one",
+  "copy two" or "the one that's working" picks. Phone and desktop.
+- **Start a session by talking.** "Start a new session", "spin one up" or
+  "create a session to fix the login bug in mindflock": it asks *In which
+  project?* and *What should it do?* when you haven't said, then starts it
+  and moves you there. "This one" means the project you're on; "never mind"
+  drops it.
+- **"What did it say?"** reads the session's last reply on demand ("read
+  it", "what did login fix say").
+
+
+- **Switching sessions no longer replays an old reply.** Moving to a
+  session by voice says where you are — *Now on login-fix, idle: Fix login
+  redirect.* — and reads its last reply only if it finished in the last two
+  minutes. "What did it say" is now that read-back; "summarize that" still
+  condenses.
+- **A new session by voice asks for its project** when more than one is
+  known, instead of taking the current session's (say "this one" for it),
+  and an unknown project is asked for again rather than refused.
+
 - **Only a real prompt raises a Question.** A reply that merely ends with a
   question in plain words ("Should I also add them?") no longer puts a
   Question on the session's row, in the bell, the toast, the push or the
