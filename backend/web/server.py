@@ -6590,6 +6590,10 @@ async def post_message(title: str, payload: dict) -> JSONResponse:
     if data is not None:
         if not isinstance(data, dict):
             return bad("data must be an object")
+        if "peer" in data:
+            # Only the peer service posts another person's agent message
+            # (mailbox.is_cross_user): a client must not borrow its framing.
+            return bad('"data.peer" is reserved for messages over a peer link')
         size = len(json.dumps(data, ensure_ascii=False).encode("utf-8"))
         if size > _MSG_DATA_MAX_BYTES:
             return bad(

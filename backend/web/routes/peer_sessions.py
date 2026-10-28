@@ -9,7 +9,8 @@ are. Requests for them never reach the device proxy: :class:`PeerRowsMiddleware`
 ``/api/instances/<peer>::<title>/…`` to ``/api/peer/rows/<link id>/<title>/…``,
 where the row answers, its terminal socket rides the peer link
 (``term_open`` / ``term_in`` / ``term_out``), ``/focus`` tells the peer
-which row this page selected — and every other call is a 409: the session
+which row this page selected, ``POST …/messages`` sends an agent's message
+over the link (``agent_msg``) — and every other call is a 409: the session
 lives on the peer's machine.
 
 Like the other peer routes, none of this answers another MindFlock relaying
@@ -222,6 +223,60 @@ async def peer_row_focus(request: Request, link_id: str, title: str) -> JSONResp
     except PeerServiceError as err:
         return JSONResponse({"error": err.message}, status_code=err.status)
     return JSONResponse({"ok": True, "peer": True})
+
+
+@router.post(ROWS_PREFIX + "{link_id}/{title}/messages")
+async def peer_row_message(request: Request, link_id: str, title: str):
+    """``POST /api/instances/<peer>::<title>/messages``: an agent in one of my
+    sessions (``from``) messaging their shared session — sent over the link
+    (``agent_msg``), stored in THEIR mailbox and typed in there as another
+    person's agent. Body as the local route's (``text``, ``from``,
+    ``reply_to``); it is always ``auto`` there. 202 ``{ok, id, their_id,
+    peer: true}``; 409 not shared with me, 503 the peer is offline."""
+    why = _refused_here(request.scope)
+    if why:
+        return JSONResponse({"error": why}, status_code=403)
+    refused = await _peer_remote_refusal(request)
+    if refused is not None:
+        return refused
+    body = await _peer_body(request)
+    text, sender = body.get("text", ""), body.get("from") or ""
+    reply_to = body.get("reply_to") or None
+    if not isinstance(text, str) or not isinstance(sender, str):
+        return JSONResponse({"error": "text and from must be strings"}, 400)
+    if reply_to is not None and not isinstance(reply_to, str):
+        return JSONResponse({"error": "reply_to must be a message id"}, 400)
+    if (body.get("kind") or "message") != "message":
+        return JSONResponse(
+            {"error": "only messages reach another person's session"}, 400
+        )
+    from backend.peer.service import PeerServiceError
+
+    try:
+        out = await _service().send_agent_msg(link_id, title, text, sender, reply_to)
+    except PeerServiceError as err:
+        return JSONResponse({"error": err.message}, status_code=err.status)
+    if (body.get("delivery") or "auto") != "auto":
+        out["detail"] = (
+            "sent as auto: their MindFlock types it in when that agent is idle"
+        )
+    return JSONResponse(out, status_code=202)
+
+
+@router.get(ROWS_PREFIX + "{link_id}/{title}/messages")
+async def peer_row_messages(request: Request, link_id: str, title: str):
+    """A peer's session's inbox is not read from here."""
+    why = _refused_here(request.scope)
+    if why:
+        return JSONResponse({"error": why}, status_code=403)
+    try:
+        name = _service().peer_name(link_id)
+    except Exception:  # noqa: BLE001
+        name = "the peer"
+    return JSONResponse(
+        {"error": "their inbox lives on their machine (%s's)" % name},
+        status_code=409,
+    )
 
 
 @router.websocket(ROWS_PREFIX + "{link_id}/{title}/terminal")

@@ -12,7 +12,7 @@ It is also the transport's handler: an inbound ``msg`` is logged per link
 for the people (and for a share bound later); ``diff`` / ``read_file`` /
 ``list_files`` / ``status`` read OUR share, after OUR ``link.perms`` say yes.
 The shared-session ops (``sessions``, ``term_open``, ``term_close``,
-``session_focus``) and the terminal pushes serve the sessions this side
+``session_focus``, ``agent_msg``) and the terminal pushes serve the sessions this side
 shares on the link (:mod:`backend.peer.sessions_bridge`, docs/peer-link.md
 "Shared sessions — CONTRACT"); what the peer shares with us is asked over
 the wire and shown as ``<peer>::<title>`` rows (:meth:`PeerService.peer_rows`).
@@ -93,8 +93,10 @@ _SAS_OPS = frozenset(("diff", "read_file", "list_files", "screen", "mirror_pull"
 #: link perm grants them — sharing a session IS the grant, one session at a
 #: time — but all of them wait for *It matches* on this side, like the
 #: folder's content (``term_close`` only ends what is open).
-_SESSION_OPS = frozenset(("sessions", "term_open", "term_close", "session_focus"))
-_SESSION_SAS_OPS = frozenset(("sessions", "term_open", "session_focus"))
+_SESSION_OPS = frozenset(
+    ("sessions", "term_open", "term_close", "session_focus", "agent_msg")
+)
+_SESSION_SAS_OPS = frozenset(("sessions", "term_open", "session_focus", "agent_msg"))
 #: How often connected peers' share lists (their rows' status and activity)
 #: are re-read, and stale focus swept.
 _SESSIONS_POLL_S = 15.0
@@ -2857,6 +2859,8 @@ class PeerService:
         if op == "term_close":
             await self.bridge.close_mine(lid, str(p.get("term_id") or ""))
             return {"ok": True}
+        if op == "agent_msg":
+            return await self._in_thread(link, self._inbound_agent_msg, link, p)
         # session_focus: where their page is ("" = it moved off my sessions).
         title = str(p.get("title") or "")
         name = str(_get(link, "peer_name") or "peer")
@@ -2898,6 +2902,152 @@ class PeerService:
             raise _peer_op_error("could not attach to the session") from err
         self.focus.note(lid, str(_get(link, "peer_name") or "peer"), title)
         return {"ok": True, "term_id": term_id}
+
+    # -- agent messages across the link ------------------------------------ #
+    def _row_prefix(self, link_id: str) -> str:
+        """The ``<prefix>`` of this peer's rows on my rail (its name,
+        numbered on a collision) — the peer's name when it shares nothing."""
+        for prefix, lid in self.row_prefixes().items():
+            if lid == link_id:
+                return prefix
+        return self._peer_names.get(link_id) or self.peer_name(link_id)
+
+    def _inbound_agent_msg(self, link, p: dict) -> dict:
+        """An agent in the peer's session ``from_title`` messaging ``title``,
+        a session I share on this link: into its mailbox as
+        ``<peer>::<from_title>`` with ``data.peer`` (typed as another
+        person's untrusted agent). Never a session not shared on this link."""
+        from backend.web.core import events, mailbox
+
+        lid = str(_get(link, "link_id") or "")
+        title = str(p.get("title") or "")
+        rec = self._my_shared(link).get(title)
+        if rec is None:
+            raise _peer_op_error("not shared")
+        from_title = str(p.get("from_title") or "")
+        peer_name = str(_get(link, "peer_name") or "peer")
+        sender = self._row_prefix(lid) + "::" + from_title
+        data = {
+            "peer": True,
+            "link_id": lid,
+            "peer_name": peer_name,
+            "from_title": from_title,
+            "from_name": str(p.get("from_name") or ""),
+            "peer_msg_id": str(p.get("msg_id") or ""),
+            "mode": rec["mode"],
+            # Their session is a row on my rail: my agent can answer it.
+            "reply_ok": any(
+                i.get("title") == from_title for i in self.their_sessions(lid)
+            ),
+        }
+        text = str(p.get("text") or "")
+        try:
+            msg = mailbox.post(
+                title,
+                text,
+                sender=sender,
+                data=data,
+                reply_to=p.get("reply_to") or None,
+                delivery="auto",
+                min_hop=int(p.get("hop") or 0),
+            )
+        except ValueError as err:
+            raise _peer_op_error("refused: %s" % err) from err
+        with contextlib.suppress(Exception):  # the event is enrichment only
+            events.BUS.emit(
+                "session.message",
+                session=title,
+                data={
+                    "id": msg["id"],
+                    "from": sender,
+                    "kind": "message",
+                    "text": mailbox.sanitize(text)[:200],
+                    "delivery": "held" if msg["state"] == "held" else "pending",
+                },
+            )
+        return {"ok": True, "id": msg["id"]}
+
+    async def send_agent_msg(
+        self, link_id: str, title: str, text, from_title, reply_to=None
+    ) -> dict:
+        """My session ``from_title``'s agent messaging THEIR shared session
+        ``title`` (a ``<peer>::<title>`` row) → ``{ok, id, their_id, peer}``
+        (``id`` is the one a reply names); raises
+        :class:`PeerServiceError` in words: 409 not shared with me, 503 the
+        peer is offline."""
+        link = self._link_or_404(link_id)
+        name = str(_get(link, "peer_name") or "they")
+        text = str(text or "")
+        if not text.strip():
+            raise PeerServiceError("empty message")
+        if len(text) > 20000:
+            raise PeerServiceError("message too long (%d chars; max 20000)" % len(text))
+        if _CTRL_RE.search(text):
+            raise PeerServiceError("the message has control characters in it")
+        from_title = str(from_title or "")
+        inst = self.server.ENGINE.instances.get(from_title) if from_title else None
+        if inst is None:
+            raise PeerServiceError(
+                "a message to another person's session must come from one of "
+                "your sessions (from: <your session title>)"
+            )
+        if not self.is_connected(link_id):
+            raise PeerServiceError(
+                "%s isn't connected right now — the message was not sent" % name, 503
+            )
+        if not any(i.get("title") == title for i in self.their_sessions(link_id)):
+            raise PeerServiceError("%s doesn't share %r with you" % (name, title), 409)
+        p = {
+            "title": title,
+            "text": text,
+            "from_title": self._line(from_title, 200),
+            "from_name": "",
+            "msg_id": "x%d_%s" % (int(time.time() * 1000), secrets.token_hex(4)),
+        }
+        try:
+            from backend.web.core import aliases
+
+            p["from_name"] = self._line(
+                aliases.display_name(from_title, getattr(inst, "Branch", "") or ""),
+                200,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        if reply_to:
+            # The id my agent answers is MY copy of their message: the wire
+            # names their id for it, and the chain's depth goes along.
+            from backend.web.core import mailbox
+
+            parent = await asyncio.to_thread(mailbox.get, from_title, str(reply_to))
+            pdata = (parent or {}).get("data") or {}
+            if (
+                parent is not None
+                and mailbox.is_cross_user(parent)
+                and pdata.get("link_id") == link_id
+                and _OP_ID_RE.match(str(pdata.get("peer_msg_id") or ""))
+            ):
+                p["reply_to"] = pdata["peer_msg_id"]
+                p["hop"] = min(int(parent.get("hop") or 0) + 1, 1000)
+        try:
+            res = await self.request(link_id, "agent_msg", p, timeout=30.0)
+        except Exception as err:  # noqa: BLE001 — PeerUnavailable, PeerOpError
+            if "not shared" in str(err):
+                self._schedule(self.refresh_their_sessions(link_id))
+                raise PeerServiceError(
+                    "%s stopped sharing %r — the message was not sent" % (name, title),
+                    409,
+                ) from err
+            mapped = self._peer_error(link, err, "agent_msg")
+            if mapped.status == 502 and "isn't connected" in mapped.message:
+                mapped.status = 503
+            raise mapped from err
+        # ``id`` is in MY namespace: their agent's reply names it as reply_to.
+        return {
+            "ok": True,
+            "id": p["msg_id"],
+            "their_id": str(_get(res or {}, "id", "") or ""),
+            "peer": True,
+        }
 
     async def handle_push(self, link, op: str, p: dict) -> None:
         """One push frame from the peer (schema-checked by the transport;
