@@ -1286,8 +1286,10 @@ true`** (`/send`, decided per prompt by the client — see [Send a
 message](#send-a-message--prompt-queue)) carries one instruction
 (`backend.web.core.spoken.INSTRUCTION`, exposed for the phone to parse
 against) asking it to end that reply with one final line starting `Say:` —
-at most two short plain sentences, no code, paths or markdown, saying what it
-did or will do and any question it has. Only those prompts: the line costs
+up to three short plain sentences under about 50 words, no code, paths or
+markdown: first the context (what was being worked on, the feature or area,
+and the project when more than one could be meant), then what it did or will
+do, then any question it has. Only those prompts: the line costs
 tokens. Claude Code gets the sentence from its own `UserPromptSubmit` hook:
 the delivery arms the one-shot `<voice dir>/<tmux session>.next` (the arming
 unix time as text) right before typing the prompt, and the activity hook
