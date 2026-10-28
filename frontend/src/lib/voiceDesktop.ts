@@ -1476,7 +1476,9 @@ export interface RouteReply {
     | "switch_index"
     | "switch_rel"
     | "answer"
-    | "question";
+    | "question"
+    | "ask"
+    | "read";
   title?: string;
   name?: string;
   say?: string;
@@ -1495,20 +1497,57 @@ export interface RouteReply {
   text?: string;
   /** answer: the session has no dialog up (`say` says so). */
   no_dialog?: boolean;
+  /** ambiguous: the sessions "Which one: a or b?" reads out. */
+  candidates?: { title: string; name: string }[];
+  /** ambiguous / ask: what the router asked back — sent with the next
+   * phrase ({@link PendingChoice}), which it reads as the pick, the project
+   * or the task. */
+  pending?: Record<string, unknown>;
 }
 
 const ROUTE_KINDS = new Set<string>([
   "prompt", "switch", "new", "ambiguous", "no-session", "new-failed", "list",
   "needs", "status", "cancel", "stop", "hush", "off", "repeat", "condense",
-  "switch_index", "switch_rel", "answer", "question",
+  "switch_index", "switch_rel", "answer", "question", "ask", "read",
 ]);
 
-/** Ask the router what one phrase means. Anything but a well-formed 200 —
- * the route missing (an older server), an error, the network — means "it is
- * a prompt": the words were meant for the session, never lost to the router. */
-export async function routePhrase(text: string, session: string): Promise<RouteReply> {
+/** How long what the router asked back waits for its answer. */
+export const PENDING_MS = 30_000;
+
+/** What the router last asked back ("Which one: a or b?", "In which
+ * project?", "What should it do?"): its answer's `pending`, sent with the
+ * next phrase for {@link PENDING_MS}; any answer without one drops it. */
+export class PendingChoice {
+  private held: { data: Record<string, unknown>; at: number } | null = null;
+  constructor(private now: () => number = Date.now) {}
+  take(): Record<string, unknown> | null {
+    if (this.held && this.now() - this.held.at > PENDING_MS) this.held = null;
+    return this.held ? this.held.data : null;
+  }
+  keep(r: RouteReply | null | undefined): void {
+    const p = r?.pending;
+    this.held = p && typeof p === "object" ? { data: p, at: this.now() } : null;
+  }
+}
+
+/** The desktop's one: every phrase the mic routes goes through it. */
+export const routePending = new PendingChoice();
+
+/** Ask the router what one phrase means, with what it last asked back.
+ * Anything but a well-formed 200 — the route missing (an older server), an
+ * error, the network — means "it is a prompt": the words were meant for the
+ * session, never lost to the router. */
+export async function routePhrase(
+  text: string,
+  session: string,
+  pending: PendingChoice = routePending,
+): Promise<RouteReply> {
   try {
-    const r = await api<RouteReply>("/api/voice/route", { json: { text, session } });
+    const json: Record<string, unknown> = { text, session };
+    const held = pending.take();
+    if (held) json.pending = held;
+    const r = await api<RouteReply>("/api/voice/route", { json });
+    if (r && typeof r === "object") pending.keep(r);
     if (r && typeof r === "object" && ROUTE_KINDS.has(String(r.kind))) return r;
   } catch {
     /* fall through */

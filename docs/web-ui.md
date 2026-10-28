@@ -256,11 +256,16 @@ a session first*).
   is the exception: it sends itself, and once the card closes or moves on the
   next message goes to the focused session).
 - **Routing.** A dictation's first phrase is first offered to the voice
-  router: “switch to the login fix” (or focus / open / show / select it)
-  selects that session (and the conversation stays there — later words go to
-  it), “start a new session for the billing page” starts one and selects it,
-  “what needs me” / “status” / “what is it asking” answer out loud — none of
-  them is typed. Everything else — and everything when the router can't be
+  router: “switch to the login fix”, “take me to the sitecheck session”,
+  “open settings” selects that session (and the conversation stays there —
+  later words go to it); when two match it asks *Which one: a or b?* and
+  the next phrase picks (“the second one”, “copy two”). “Start a new
+  session” asks *In which project?* and *What should it do?*, then starts
+  it and selects it; “what needs me” / “status” / “what is it asking” /
+  “what did it say” answer out loud — none of them is typed. What the
+  router asked back rides with the next phrase for 30 s
+  (`routePending`); a continuous dictation keeps listening for the answer,
+  a single one needs another press. Everything else — and everything when the router can't be
   reached, or answers with a kind this page doesn't know — is typed into the
   focused session.
 - **Numbered sessions.** Sessions are numbered as the rail's badges number
@@ -7113,8 +7118,13 @@ routes, the row fields and the event data.
 
 **Voice commands.** The first phrase said into an empty box goes to the
 server's router first (`POST /api/voice/route {text, session}`), which
-knows every session and can act on what it hears: *switch to <name>* moves
-voice there and says so; *new session to fix the parser* creates the session, selects it and says so; *what sessions do I
+knows every session and can act on what it hears: *switch to <name>* — said
+any natural way, *switch to the sitecheck session*, *put me on the login
+fix*, *jump over to the settings one* — moves voice there and says so (two
+matches: *Which one: a or b?*, and the mic opens for the pick); *start a new
+session* asks *In which project?* and *What should it do?* (the mic opens
+for each answer), then creates the session, selects it and says so; *what
+did it say* reads the session's last reply; *what sessions do I
 have* reads them; *what needs me* and *status* read the attention list and
 the current session; the bare commands below run on the page. **Anything
 else is a prompt and stays with the current session** — the words land in
@@ -7128,12 +7138,15 @@ or "please" in front:
 | *cancel* · *never mind* · *scratch that* · *forget it* | drops the dictated text |
 | *session two* · *go to session 3* · *focus (on) session number four* | moves voice to that row of the Sessions sheet, numbered as shown (the router: `{kind: "switch_index", index}`); past the last row, *There is no session N.* |
 | *next session* · *previous session* · *switch to the next one* | one row down / up from the current session's, round the ends (`{kind: "switch_rel", delta: ±1}`) |
-| *switch to <name>* · *go to <name>* · *change to* · *jump (over) to* | moves voice to that session — by name or title: a prefix, then word overlap, then loose containment. A tie asks *Which one: a, b?*; a miss says *No session called X. Sessions: …*; a hit says *Now on <name>.* plus its last line, and reads its dialog when it is on one |
-| *focus (on) <name>* · *open <name>* · *show <name>* · *select <name>* | the same, but only for a session whose name (or title) is said or starts so — *open the readme* stays a prompt |
+| *switch to <name>* · *go to <name>* · *change to* · *jump (over) to* · *take me to* · *put me on* · *can you switch to …* | moves voice to that session — by name or title, the words around it (*the*, *my*, *session*, *one*, *please*; *bot* when it matches nothing) ignored: every word said must name a word of the name, across hyphens and digits (*sitecheck* ↔ sitecheck-bot7, *bot seven* ↔ bot7, *login fix* ↔ login-fix), a plural or one wrong letter allowed; the whole name said wins. A tie asks *Which one: a or b?* (below); a miss says *No session called X. Sessions: …* (after a polite lead — *can you switch to …* — a miss is a prompt); a hit says *Now on <name>, <state>: <task>.* — and its last reply only when its turn ended in the last two minutes — and reads its dialog when it is on one |
+| *focus (on) <name>* · *open <name>* · *show (me) <name>* · *select* · *pull up* · *bring up* · *talk to* · *go back to* | the same, but only for a session whose whole name (or title) is said or its start in whole words — *open the readme*, *show me the logs*, *go back to the old approach* stay prompts; with *session* said (*pull up the settings session*) any match counts |
+| *the second one* · *number two* · *the last one* · *copy two* · *the one that's working* · *the idle one* | **right after *Which one: a or b?*** (within 30 s): picks one of the sessions read out — by its place, a fragment of its name, or its state. A phrase that picks none is routed as usual and the question is dropped |
+| *start a new session* · *I want a new session* · *spin one up* · *create a session to fix the login bug in mindflock* · *new session in sitecheck* | a short conversation: no project named (and more than one known) → *In which project? a, b or c?* — answer *parser*, *the sitecheck repo*, *this one* (the current session's), *the second one*, or the project and the task (*parser, add tests*); no task → *What should it do in <project>?* — the next phrase is the task, as said (*nothing* / *just start it*: none). Then it starts and says *Started <title> in <project>.* *Never mind* drops it (*Okay, no new session.*) |
+| *what did it say* · *read it* · *read me the last reply* · *what did <name> say* | the session's last reply (its spoken line), whatever its age: *<name> said: …* (`{kind: "read", say}`) |
 | *what is it asking* · *what's it asking (me)* · *what does it want* · *what's the question* | the current session's question: its dialog read out again (and listened for), or the question its last line asked; the router's `{kind: "question", say}` is said name first |
 | *what needs me* · *who needs me* · *what needs (my) attention* | the sessions in the bell, attention first, at most three: *<name> is asking: <its line>.* or *<name> is <state word>.* — else *Nothing needs you.* |
 | *what's it doing* · *what is it doing* · *status* · *what's happening* · *what's going on* | the state word (*for N minutes* while working) and the session's latest turn snippet |
-| *summarize that* · *summarize it* · *summarise* · *what did it say* · *summary* | one model call on the server (`POST /voice/condense`, 10–45 s): the newest reply in two sentences — *That took too long.* on a timeout, the route's own sentence on any other refusal |
+| *summarize that* · *summarize it* · *summarise* · *summary* | one model call on the server (`POST /voice/condense`, 10–45 s): the newest reply in two sentences — *That took too long.* on a timeout, the route's own sentence on any other refusal |
 | *say that again* · *repeat (that)* | the last line again |
 | *voice off* · *turn voice off* · *turn off voice* | voice mode off (`POST /voice {on: false}`) |
 | *stop talking* · *stop speaking* · *stop reading* · *be quiet* · *quiet* · *hush* · *shut up* · *(that's) enough* · *okay stop* | stops talking: the queue goes, listening goes on (below) — matched in **any** mode, before everything else |
@@ -7142,6 +7155,21 @@ or "please" in front:
 
 Anything else is a prompt — and so is any `kind` the page does not know (a
 newer server's): the words stay words.
+
+**A switch is not a replay.** Moving to a session by voice says where you
+are — *Now on login-fix, idle: Fix login redirect.* (the state word and the
+row's `task_headline`) — and reads its last reply only when that is news:
+the session is idle and its turn ended (`activity_since`) at most two
+minutes ago. A session that finished a while back, or is working on
+something new, is not read out again; *what did it say* reads it on demand.
+A tap on another session while voice is on moves voice there silently. The
+offline table follows the same rule (`voiceSwitchLine`).
+
+**What the router asks back.** *Which one: a or b?* and the new session's
+*In which project?* / *What should it do?* carry a `pending` the page keeps
+for 30 s (`VOICE_PENDING_MS`) and sends with the next phrase; after saying
+the question the mic opens for the answer, as after a tap. Any answer
+without a `pending` drops it.
 
 **Control words, anywhere.** At the end of every phrase — and, for a stop
 phrase, the moment a streaming recognizer settles it — two kinds of words
