@@ -1220,7 +1220,13 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     case, trimmed, deduplicated, invalid phrases dropped, and a kind left
     empty — or equal to ours — is not written, so it follows the default.
     The router still hears a kept default's variants ("stop the
-    microphone", "that's enough"); a phrase you add is matched whole.
+    microphone", "that's enough") and what the recogniser writes for it
+    (`GET /api/voice` adds `words.heard`: "stop listing", "be quite", "ova",
+    "this regard", "mind lock" — a table keyed by phrase, so a default you
+    keep keeps its forms wherever you put it); a phrase you add is matched
+    whole, or a letter off by one shared sound rule (a phonetic key plus an
+    edit margin that shrinks with the phrase: "rodger" for "roger", never
+    "hover" for "over" — see [Voice words](web-api.md#voice-words)).
     Personal, so **synced** like `approve_dialogs`.
   - `stt` / `tts` — `"phone"` (default) or `"server"`: which engine the
     **phone page** prefers. Server recognition is what lets an iOS

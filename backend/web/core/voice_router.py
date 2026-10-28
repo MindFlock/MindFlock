@@ -13,9 +13,11 @@ session three no") use the phone's dialog words too (mobile.js
 
 A switch by NAME is said the way people talk ("switch to the sitecheck
 session", "take me to login fix", "open sitecheck"): :func:`find_sessions`
-ignores the words around a name and matches across hyphens and digits,
-a plural or a wrong letter allowed; several matches ask "Which one: a or
-b?". A new session is a short conversation: "In which project?", "What
+ignores the words around a name and matches across hyphens, underscores,
+camelCase and digits ("bot seven" is bot7), a plural, a wrong letter or a
+word that merely SOUNDS like the name's (``voice_words.sounds_like``:
+"sightcheck") allowed; several matches — two names a said word fits
+equally — ask "Which one: a or b?" rather than guess. A new session is a short conversation: "In which project?", "What
 should it do?". Each of those answers carries ``pending`` — what it asked
 — which the client sends back with the next phrase: :func:`pick` and
 :func:`continue_new` take it, and a phrase that is no answer to it is
@@ -153,9 +155,12 @@ _WORD_KINDS = ("hush", "stop")
 def _words_rx(phrases: Tuple[str, ...]) -> "re.Pattern":
     """The whole-phrase pattern for one kind's ``phrases``: each default's
     :data:`_VARIANTS`, the rest as said (normalised like the text, an
-    apostrophe optional)."""
+    apostrophe optional), and what the recogniser writes for a default
+    (``voice_words.HEARD``: "stop listing", "be quite") while it is in the
+    list."""
     parts = [_VARIANTS[p] for p in phrases if p in _VARIANTS]
     literal = [norm(p) for p in phrases if p not in _VARIANTS]
+    literal += [norm(f) for f in _voice_words.heard_of(phrases)]
     alt = _voice_words.phrase_regex([p for p in literal if p])
     parts.append(alt.replace("'", "'?"))
     return re.compile(r"^(?:%s)$" % "|".join(parts))
@@ -757,6 +762,14 @@ def command(text, words: Optional[dict] = None) -> Optional[dict]:
                 "kind": kind,
                 "arg": (m.group(1) or "").strip() if m.groups() else "",
             }
+    # A stop or hush phrase heard a letter off ("pipe town", "hault
+    # listening"): the whole phrase, within voice_words.sounds_like's margin.
+    for kind in _WORD_KINDS:
+        got = (words or {}).get(kind)
+        if not isinstance(got, (list, tuple)) or not got:
+            got = _voice_words.DEFAULTS[kind]
+        if any(_voice_words.sounds_like(w.text, str(p)) for p in got):
+            return {"kind": kind, "arg": ""}
     q = _question_command(w.text) or _help_command(w.text)
     if q is not None:
         return q
@@ -819,11 +832,15 @@ def match_session(query, rows) -> Tuple[Optional[dict], List[dict]]:
     return None, [c["row"] for c in loose]
 
 
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
 def _toks(text) -> List[str]:
-    """A name as spoken tokens: normalised, letter and digit runs apart
-    ("bot7" → bot 7), number words as digits ("seven" → 7)."""
+    """A name as spoken tokens: camelCase apart ("SiteCheck" → site check),
+    normalised, letter and digit runs apart ("bot7" → bot 7), number words
+    as digits ("seven" → 7)."""
     out: List[str] = []
-    for w in norm(text).replace("'", "").split():
+    for w in norm(_CAMEL.sub(" ", str(text or ""))).replace("'", "").split():
         for part in re.findall(r"[a-z]+|[0-9]+", w):
             out.append(str(_NUMS[part]) if part in _NUMS else part)
     return out
@@ -866,8 +883,12 @@ def _one_edit(a: str, b: str) -> bool:
 
 def _word_hit(q: str, n: str) -> int:
     """How well the said word ``q`` names the name token ``n``: 3 the same,
-    2 a plural of it, 1 its start (three letters at least) or one letter
-    off (five at least), 0 not at all. Numbers only match whole."""
+    2 a plural of it, 1 its start (three letters at least), one letter off
+    (five at least) or a sound-alike of it ("sightcheck" for sitecheck:
+    ``voice_words.sounds_like``, five letters at least, its margin), 0 not
+    at all. Numbers only match whole. A sound-alike scores no higher than a
+    start, so a name said right always beats one that merely sounds right,
+    and two that sound alike tie — and are asked about."""
     if q == n:
         return 3
     if q.isdigit() or n.isdigit():
@@ -876,7 +897,11 @@ def _word_hit(q: str, n: str) -> int:
         return 2
     if len(q) >= 3 and n.startswith(q):
         return 1
-    if len(q) >= 5 and len(n) >= 5 and _one_edit(q, n):
+    if (
+        len(q) >= 5
+        and len(n) >= 5
+        and (_one_edit(q, n) or _voice_words.sounds_like(q, n))
+    ):
         return 1
     return 0
 
@@ -884,10 +909,11 @@ def _word_hit(q: str, n: str) -> int:
 def _label_score(said: List[str], label: List[str], strict: bool):
     """``said`` against one name's tokens → ``(matched, quality, soft,
     exact, tail, leftover)``, or None when a word matches nothing. Two or
-    three said words may make one token ("site check" ↔ sitecheck), one
-    said word two tokens ("sitecheckbot"); a :data:`_SOFT` word that
-    matches nothing is skipped. ``strict``: ``said`` must be the whole
-    name or its start, word for word."""
+    three said words may make one token ("site check" ↔ sitecheck — spelt
+    right, or as a sound-alike: "sight check"), one said word two tokens
+    ("sitecheckbot"); a :data:`_SOFT` word that matches nothing is skipped.
+    ``strict``: ``said`` must be the whole name or its start, word for
+    word."""
     if not said or not label:
         return None
     exact = "".join(said) == "".join(label)
@@ -912,15 +938,29 @@ def _label_score(said: List[str], label: List[str], strict: bool):
                 if h > best:
                     best, at = h, j
         if not best:
+            # Two or three words heard a little off, run together: "sight
+            # check" for sitecheck (the shorter join first: it leaves the
+            # next word to match on its own merits).
+            for k in (2, 3):
+                if i + k <= len(said):
+                    joined = "".join(said[i : i + k])
+                    for j, n in enumerate(pool):
+                        h = _word_hit(joined, n)
+                        if h > best:
+                            step, best, at = k, h, j
+                    if best:
+                        break
+        if not best:
             if said[i] not in _SOFT:
                 return None
             i += 1
             continue
         used.add(at)
-        if said[i] in _SOFT:
-            soft += 1
-        else:
-            matched += step
+        if at >= len(label):  # two tokens run together: both are spoken for
+            used.update((at - len(label), at - len(label) + 1))
+        chunk = said[i : i + step]
+        soft += sum(1 for x in chunk if x in _SOFT)
+        matched += sum(1 for x in chunk if x not in _SOFT)
         quality += best * step
         i += step
     if not matched:
@@ -941,7 +981,10 @@ def find_sessions(query, rows, mode: str = "", pick: bool = False):
     nothing matches every word, the unique row matching most of them (at
     least half); ``"strict"`` only a whole name or its start, word for
     word. ``pick``: choosing among candidates already read out, so a tie
-    goes to the one the words END ("bot seven" over bot7-copy-2)."""
+    goes to the one the words END ("bot seven" over bot7-copy-2). Among
+    equals, a name the words cover WHOLE wins over one with words left
+    ("sightcheck bot seven" is sitecheck-bot7, not its copy-2 as well) —
+    "bot seven" covers neither whole and is asked about."""
     listed = _listed(rows)
     for said in _said_variants(query):
         if not [w for w in said if w not in _SOFT]:
@@ -979,6 +1022,9 @@ def find_sessions(query, rows, mode: str = "", pick: bool = False):
         for key in (lambda s: s[1], lambda s: s[2]):  # whole words, then "bot" said
             top = max(key(s) for s, _ in scored)
             scored = [(s, r) for s, r in scored if key(s) == top]
+        whole = [(s, r) for s, r in scored if s[5] == 0]
+        if len(whole) == 1 and len(scored) > 1:
+            return whole[0][1], []
         if pick and len(scored) > 1:
             scored = [(s, r) for s, r in scored if s[4]] or scored
         if len(scored) == 1:

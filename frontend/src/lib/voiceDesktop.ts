@@ -165,6 +165,10 @@ const bareWord = (w: string) => w.toLowerCase().replace(/[’`]/g, "'").replace(
 
 // --- the matchers, built from the current words (lib/voiceWords) ----------- //
 
+// The sound-alike tolerance (lib/voiceWords: `heard`, soundTail, soundsLikeAny),
+// imported here beside the matchers that use it.
+import { heardOf, soundTail, soundsLikeAny } from "./voiceWords";
+
 /** The radio words' optional tails: "disregard that", "over it". */
 const RADIO_TAILS = ["that", "it", "all", "everything"];
 /** Spoken before or after "stop talking" and still a hush: "okay, be quiet
@@ -183,16 +187,39 @@ const phraseRx = (p: string) =>
 const longestFirst = (a: string, b: string) => phraseWords(b).length - phraseWords(a).length || b.length - a.length;
 const keysOf = (p: string) => phraseWords(p).map(wordKey);
 
+/** A RegExp with a second hearing: when the pattern (the words as written
+ * and what the recogniser is known to write for them) misses, `also` may
+ * still answer — the last words SOUNDING like a phrase (lib/voiceWords
+ * soundTail / soundsLikeAny), which no pattern can say. It is a RegExp, so
+ * parseRadio and isHushPhrase read it as the one they always had; `test`
+ * goes through `exec`. */
+class SoundRegExp extends RegExp {
+  private readonly also: (text: string) => RegExpExecArray | null;
+  constructor(src: string, flags: string, also: (text: string) => RegExpExecArray | null) {
+    super(src, flags);
+    this.also = also;
+  }
+  exec(text: string): RegExpExecArray | null {
+    return super.exec(text) ?? this.also(text);
+  }
+}
+/** `exec`'s answer for a hearing: the whole text, the words before, the phrase. */
+const heardAs = (text: string, before: string, phrase: string): RegExpExecArray =>
+  Object.assign([text, before, phrase], { index: 0, input: text, groups: undefined }) as RegExpExecArray;
+
 export interface VoiceMatchers {
   /** The words they were built from ({@link voiceWordsVersion}). */
   v: number;
-  /** "<the words before> <a send / end / clear phrase>" at the end. */
+  /** "<the words before> <a send / end / clear phrase>" at the end — the
+   * phrase as written, as the recogniser writes it (`heard`), or as it
+   * sounds ({@link SoundRegExp}). */
   radio: RegExp;
   /** Which kind the matched phrase is: the first whole match, longest first. */
   radioKinds: Array<[RegExp, RadioKind]>;
-  /** The stop phrases (and their older wordings) of two words or more,
-   * longest first, as word keys: they end any committed words. A one-word one ("stop") is the router's, said as
-   * a whole phrase — at the end of words it is a word ("make it stop"). */
+  /** The stop phrases (their older wordings and heard forms too) of two
+   * words or more, longest first, as word keys: they end any committed
+   * words, word for word. A one-word one ("stop") is the router's, said
+   * as a whole phrase — at the end of words it is a word ("make it stop"). */
   stop: string[][];
   hush: RegExp;
   /** Every phrase the hold-back keeps whole while it may still be said. */
@@ -203,43 +230,63 @@ export interface VoiceMatchers {
   commands: string[][][];
 }
 
-/** The matchers for `w` (pure: the tests build their own). */
+/** The matchers for `w` (pure: the tests build their own). The phrases are
+ * `w`'s with their kin (lib/voiceWords PHRASE_KIN) and what is heard for
+ * them (`w.heard`); the send / end / clear and hush matchers also take the
+ * person's phrases a letter off (soundsLike), the stop tail does not. */
 export function buildMatchers(w: VoiceWords, v = -1): VoiceMatchers {
   const tails = "(?:[\\s,]+(?:" + RADIO_TAILS.join("|") + "))?";
+  const ends = [...w.end, ...heardOf(w, "end")];
+  const sends = [...w.send, ...heardOf(w, "send")];
+  const clears = [...w.clear, ...heardOf(w, "clear")];
   const entries: Array<{ p: string; kind: RadioKind; rx: string }> = [
-    ...w.end.map((p) => ({ p, kind: "out" as const, rx: phraseRx(p) })),
-    ...w.send.map((p) => ({ p, kind: "over" as const, rx: phraseRx(p) + tails })),
-    ...w.clear.map((p) => ({ p, kind: "disregard" as const, rx: phraseRx(p) + tails })),
+    ...ends.map((p) => ({ p, kind: "out" as const, rx: phraseRx(p) })),
+    ...sends.map((p) => ({ p, kind: "over" as const, rx: phraseRx(p) + tails })),
+    ...clears.map((p) => ({ p, kind: "disregard" as const, rx: phraseRx(p) + tails })),
   ]
     .filter((e) => e.rx)
     .sort((a, b) => longestFirst(a.p, b.p));
+  const sounded = (text: string): RegExpExecArray | null => {
+    const hit = soundTail(text, w.end) || soundTail(text, w.send, RADIO_TAILS) || soundTail(text, w.clear, RADIO_TAILS);
+    return hit ? heardAs(text, hit.before, hit.phrase) : null;
+  };
   const radio = entries.length
-    ? new RegExp(
+    ? new SoundRegExp(
         "^(.*?)[\\s,.!?]*(?<![\\p{L}\\p{N}'])(" + entries.map((e) => "(?:" + e.rx + ")").join("|") + ")[.!?\\s]*$",
-        "iu"
+        "iu",
+        sounded
       )
     : /(?!)/;
   const radioKinds = entries.map((e) => [new RegExp("^(?:" + e.rx + ")$", "iu"), e.kind] as [RegExp, RadioKind]);
-  // The stop and stop-talking words with their older wordings (PHRASE_KIN).
-  const stops = withKin(w, "stop");
-  const hushes = withKin(w, "hush");
+  // The stop and stop-talking words with their older wordings (PHRASE_KIN)
+  // and what is heard for them.
+  const stops = [...new Set([...withKin(w, "stop"), ...heardOf(w, "stop")])];
+  const hushes = [...new Set([...withKin(w, "hush"), ...heardOf(w, "hush")])];
   const stopAll = [...stops].sort(longestFirst).map(keysOf);
   const stop = stopAll.filter((p) => p.length > 1);
   const hushKeys = [...hushes].sort(longestFirst).map((p) => keysOf(p).join(" "));
-  const hush = new RegExp(
+  // A hush a letter off: the whole phrase, its lead and tail word dropped.
+  const hushSounded = (keys: string): RegExpExecArray | null => {
+    let ws = keys.split(" ").filter(Boolean);
+    if (ws.length > 1 && HUSH_LEADS.includes(ws[0])) ws = ws.slice(1);
+    if (ws.length > 1 && HUSH_ENDS.includes(ws[ws.length - 1])) ws = ws.slice(0, -1);
+    return soundsLikeAny(ws.join(" "), w.hush) ? heardAs(keys, "", w.hush[0]) : null;
+  };
+  const hush = new SoundRegExp(
     "^(?:(?:" + HUSH_LEADS.join("|") + ") )?(?:" + (hushKeys.map(esc).join("|") || "(?!)") + ")(?: (?:" + HUSH_ENDS.join("|") + "))?$",
-    "u"
+    "u",
+    hushSounded
   );
   const radioPhrases = (ps: string[]) =>
     ps.map(keysOf).flatMap((k) => [k, ...RADIO_TAILS.map((t) => [...k, t])]);
   const control = [
     ...stopAll,
     ...hushes.map(keysOf),
-    ...radioPhrases(w.send),
-    ...radioPhrases(w.clear),
-    ...w.end.map(keysOf),
+    ...radioPhrases(sends),
+    ...radioPhrases(clears),
+    ...ends.map(keysOf),
     // "Over and out, that's all": the end phrase, then a stop phrase.
-    ...w.end.map(keysOf).flatMap((e) => stop.map((s) => [...e, ...s])),
+    ...ends.map(keysOf).flatMap((e) => stop.map((s) => [...e, ...s])),
   ].filter((p) => p.length);
   const commands = [...stops, ...hushes].map((p) => phraseWords(p).map((x) => [x, wordKey(x)]));
   return { v, radio, radioKinds, stop, hush, control, maxWords: Math.max(1, ...control.map((p) => p.length)), commands };

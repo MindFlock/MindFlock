@@ -5509,12 +5509,18 @@
   // "", text} — "… submit" too, a word. Case and punctuation do not matter
   // ("Over." from iOS); only the LAST words count — an "over" in the middle
   // of a sentence is a word. The words are the owner's (VOICE_W.dict: send,
-  // end, clear); the kinds keep their names.
+  // end, clear — as written and as the recogniser writes them), or the last
+  // words SOUND like one of them (voiceSoundTail: "rodger" for roger, whole,
+  // at the end); the kinds keep their names.
   function voiceDictParse(text) {
     var t = String(text || "").trim();
     var m = VOICE_W.dict.exec(t);
-    if (!m) return { kind: "", text: t };
-    return { kind: m[3] ? "disregard" : m[2] ? "out" : "over", text: m[1].trim() };
+    if (m) return { kind: m[3] ? "disregard" : m[2] ? "out" : "over", text: m[1].trim() };
+    var W = VOICE_W.words, hit;
+    if ((hit = voiceSoundTail(t, W.end))) return { kind: "out", text: hit.before };
+    if ((hit = voiceSoundTail(t, W.send))) return { kind: "over", text: hit.before };
+    if ((hit = voiceSoundTail(t, W.clear, VOICE_CLEAR_TAILS))) return { kind: "disregard", text: hit.before };
+    return { kind: "", text: t };
   }
 
   // --- control phrases: they act at the END of any phrase -------------------
@@ -5694,7 +5700,15 @@
   // (VOICE_WORD_VARIANTS); a phrase the owner adds is matched whole.
   // voiceWordsApply builds every matcher from them — voiceDictParse,
   // voiceTail's stop, voiceHoldBack, voiceMayBeCommand, VOICE_CMD's hush and
-  // stop — longest first, escaped, an apostrophe optional.
+  // stop — longest first, escaped, an apostrophe optional. Two more hearings
+  // make them tolerant of the recogniser, both the server's
+  // (core.voice_words; tests/unit/data/voice_sounds.json pins all three
+  // clients): `words.heard` lists what whisper writes for each default
+  // phrase ("ova", "this regard" — folded in beside the variants), and
+  // voiceSoundsLike (a small phonetic key with an edit-distance margin) lets
+  // a phrase the owner added be heard a letter off ("rodger") — whole, at
+  // the end of a phrase (voiceDictParse) or as the whole phrase
+  // (voiceIsHush); the stop tail (voiceTail) stays word for word.
   var VOICE_WORDS_DEFAULT = {
     send: ["over"], end: ["over and out", "over, out"], clear: ["disregard"],
     stop: ["stop", "stop listening", "mic off", "pause listening", "that's all", "done talking"],
@@ -5731,10 +5745,98 @@
     });
     var wake = typeof src.wake === "string" ? src.wake.toLowerCase().replace(/\s+/g, " ").trim() : "";
     w.wake = /^[a-z]+(?: [a-z]+)?$/.test(wake) ? wake : VOICE_WORDS_DEFAULT.wake;
+    // What the recogniser writes for them (the server's `heard`): every
+    // kind a list, empty when the server sent none (an older one, or the
+    // owner's own phrases); never a phrase itself; at most VOICE_HEARD_MAX.
+    var heard = src.heard && typeof src.heard === "object" ? src.heard : {};
+    w.heard = {};
+    VOICE_WORD_KINDS.concat("wake").forEach(function (k) {
+      var own = k === "wake" ? [w.wake] : w[k], got = [];
+      (Array.isArray(heard[k]) ? heard[k] : []).forEach(function (p) {
+        p = typeof p === "string" ? p.toLowerCase().replace(/[’`]/g, "'").replace(/\s+/g, " ").trim() : "";
+        if (voiceNorm(p) && own.indexOf(p) < 0 && got.indexOf(p) < 0 && got.length < VOICE_HEARD_MAX) got.push(p);
+      });
+      w.heard[k] = got;
+    });
     return w;
   }
-  // The phrases with their variants, normalized, each once.
-  function voiceWordsWide(list) {
+  var VOICE_HEARD_MAX = 24;
+  // --- the sound of a phrase (core.voice_words sound_key / sounds_like, kept identical) ---
+  // The key's rewrites, in order, on the lower-cased letters and digits of a
+  // phrase run together — the server's _SOUND_RULES, pattern for pattern.
+  var VOICE_SOUND_RULES = [
+    [/^[kgp]n/g, "n"], [/^wr/g, "r"], [/^x/g, "s"], [/^wh/g, "w"], [/mb$/g, "m"],
+    [/x/g, "ks"], [/ph/g, "f"], [/sch/g, "sk"], [/ch/g, "X"], [/sh/g, "X"], [/th/g, "0"],
+    [/gh$/g, "f"], [/gh/g, ""], [/ck/g, "k"], [/q/g, "k"], [/c(?=[eiy])/g, "s"], [/c/g, "k"],
+    [/dg(?=[eiy])/g, "j"], [/g(?=[eiy])/g, "j"], [/b/g, "p"], [/d/g, "t"], [/v/g, "f"], [/z/g, "s"], [/g/g, "k"],
+  ];
+  function voiceLetters(text) { return String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, ""); }
+  // A compact phonetic key: "over" → "ofr", "roger" and "rodger" → "rjr".
+  function voiceSoundKey(text) {
+    var s = voiceLetters(text);
+    if (!s) return "";
+    for (var i = 0; i < VOICE_SOUND_RULES.length; i++) s = s.replace(VOICE_SOUND_RULES[i][0], VOICE_SOUND_RULES[i][1]);
+    if (!s) return "";
+    return (s[0] + s.slice(1).replace(/[aeiouhwy]/g, "")).replace(/(.)\1+/g, "$1");
+  }
+  // Damerau–Levenshtein distance (two letters swapped count one).
+  function voiceEdits(a, b) {
+    var d = [], i, j;
+    for (i = 0; i <= a.length; i++) { d.push([i]); for (j = 1; j <= b.length; j++) d[i].push(i ? 0 : j); }
+    for (i = 1; i <= a.length; i++) {
+      for (j = 1; j <= b.length; j++) {
+        var cost = a[i - 1] === b[j - 1] ? 0 : 1;
+        d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+        if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+      }
+    }
+    return d[a.length][b.length];
+  }
+  // How many letters may differ for a phrase of n letters: two from eight
+  // up, one from five, none below — a four-letter word is only ever itself.
+  function voiceSlack(n) { return n >= 8 ? 2 : n >= 5 ? 1 : 0; }
+  // Is `said` `phrase` heard a little off? Their letters within voiceSlack
+  // edits AND one key (one key edit from five key letters); a phrase of
+  // eight letters or more also takes a same-key homophone one letter
+  // further off, about as long. "rodger" is "roger"; "hover" and "ever" are
+  // not "over"; "over and" is not "over and out".
+  function voiceSoundsLike(said, phrase) {
+    var a = voiceLetters(said), b = voiceLetters(phrase);
+    if (!a || !b) return false;
+    if (a === b) return true;
+    var d = voiceEdits(a, b), n = voiceSlack(b.length), ka = voiceSoundKey(a), kb = voiceSoundKey(b);
+    if (d <= n) return ka === kb || (kb.length >= 5 && voiceEdits(ka, kb) <= 1);
+    return b.length >= 8 && d === n + 1 && Math.abs(a.length - b.length) <= 1 && ka === kb;
+  }
+  // The last words of `text` that sound like one of `phrases` (the longest
+  // first, one word more than it has allowed for a split like "rod ger") →
+  // {before, phrase} (the words before it, trailing punctuation dropped;
+  // the phrase as the owner set it), else null. `tails`: words that may
+  // follow a phrase and still count ("… that").
+  function voiceSoundTail(text, phrases, tails) {
+    var toks = String(text || "").trim().split(/\s+/).filter(Boolean), idx = [];
+    toks.forEach(function (t, i) { if (voiceLetters(t)) idx.push(i); });
+    if (!idx.length) return null;
+    var ordered = phrases.filter(voiceLetters).sort(function (a, b) { return voiceLetters(b).length - voiceLetters(a).length; });
+    if (!ordered.length) return null;
+    var most = Math.max.apply(null, ordered.map(function (p) { return voiceNorm(p).split(" ").length; })) + 1;
+    var ends = [idx.length];
+    if (idx.length > 1 && (tails || []).indexOf(voiceLetters(toks[idx[idx.length - 1]])) >= 0) ends.push(idx.length - 1);
+    for (var e = 0; e < ends.length; e++) {
+      for (var k = Math.min(most, ends[e]); k >= 1; k--) {
+        var said = idx.slice(ends[e] - k, ends[e]).map(function (i) { return voiceLetters(toks[i]); }).join("");
+        for (var j = 0; j < ordered.length; j++) {
+          if (voiceSoundsLike(said, ordered[j])) {
+            return { before: toks.slice(0, idx[ends[e] - k]).join(" ").replace(/[\s,.!?]+$/, ""), phrase: ordered[j] };
+          }
+        }
+      }
+    }
+    return null;
+  }
+  // The phrases with their variants and (`heard`: the server's forms for
+  // that kind) what is heard for them, normalized, each once.
+  function voiceWordsWide(list, heard) {
     var out = [];
     list.forEach(function (p) {
       [p].concat(VOICE_WORD_VARIANTS[p] || []).forEach(function (q) {
@@ -5742,6 +5844,7 @@
         if (q && out.indexOf(q) < 0) out.push(q);
       });
     });
+    (heard || []).forEach(function (q) { q = voiceNorm(q); if (q && out.indexOf(q) < 0) out.push(q); });
     return out;
   }
   // ...and once more without their apostrophes ("thats all"): what a
@@ -5765,22 +5868,24 @@
     return alts.length ? "(?:" + alts.join("|") + ")" : "(?!)";
   }
   function voiceWordsApply(raw) {
-    var w = voiceWordsClean(raw), R = "[\\s,.!?]+";
-    var stop = voiceWordsWide(w.stop), hush = voiceWordsWide(w.hush);
-    var clear = voiceWordsWide(w.clear), tails = [];
+    var w = voiceWordsClean(raw), R = "[\\s,.!?]+", H = w.heard;
+    var stop = voiceWordsWide(w.stop, H.stop), hush = voiceWordsWide(w.hush, H.hush);
+    var clear = voiceWordsWide(w.clear, H.clear), tails = [];
+    var send = voiceWordsWide(w.send, H.send), end = voiceWordsWide(w.end, H.end);
     clear.forEach(function (p) { VOICE_CLEAR_TAILS.forEach(function (t) { tails.push(p + " " + t); }); });
     VOICE_W = {
       words: w,
-      // voiceDictParse, on the text as said: (before)(end)|(clear …that)|send.
-      dict: new RegExp("^(.*?)[\\s,.!?]*\\b(?:(" + voiceWordsAlt(w.end, R, "['’]") + ")|(" + voiceWordsAlt(w.clear, R, "['’]") +
-        "(?:\\s+(?:" + VOICE_CLEAR_TAILS.join("|") + "))?)|" + voiceWordsAlt(w.send, R, "['’]") + ")[.!?\\s]*$", "i"),
+      // voiceDictParse, on the text as said: (before)(end)|(clear …that)|send
+      // — each the owner's phrases and what is heard for them.
+      dict: new RegExp("^(.*?)[\\s,.!?]*\\b(?:(" + voiceWordsAlt(w.end.concat(H.end), R, "['’]") + ")|(" + voiceWordsAlt(w.clear.concat(H.clear), R, "['’]") +
+        "(?:\\s+(?:" + VOICE_CLEAR_TAILS.join("|") + "))?)|" + voiceWordsAlt(w.send.concat(H.send), R, "['’]") + ")[.!?\\s]*$", "i"),
       // On normalized words: a stop phrase at the end (two words or more),
       // the stop command and the hush phrase (the whole phrase).
       stop: new RegExp("^" + voiceWordsAlt(stop.filter(function (p) { return p.indexOf(" ") > 0; }), " ", "'") + "$"),
       stopCmd: new RegExp("^" + voiceWordsAlt(stop.concat(w.stop.indexOf("mic off") >= 0 ? VOICE_WORD_CMD_VARIANTS["mic off"] : []), " ", "'") + "$"),
       hush: new RegExp("^" + voiceWordsAlt(hush, " ", "'") + "$"),
       holdStop: voiceWordsBare(stop),
-      holdAlways: voiceWordsBare(voiceWordsWide(w.send.concat(w.end)).concat(clear, tails, hush)),
+      holdAlways: voiceWordsBare(send.concat(end, clear, tails, hush)),
       // voiceMayBeCommand's patterns: one slot per word ("that's|thats").
       mayCmd: voiceWordsBare(stop.concat(hush)).map(function (p) { return p.split(" ").map(function (x) { return [x]; }); }),
     };
@@ -5826,9 +5931,17 @@
   }
   // "Stop talking" is the one command matched here before the router: it
   // must act in every mode (a dialog, the ask sheet's field) and never wait.
+  // The whole phrase: the owner's hush words, their variants and what is
+  // heard for them (VOICE_W.hush), an "ok" / "okay" / "hey" / "please"
+  // before and a "please" / "now" after allowed — or a letter off one of
+  // the owner's (voiceSoundsLike: "pipe town").
   function voiceIsHush(text) {
     var c = voiceCommand(text);
-    return !!c && c.kind === "hush";
+    if (c && c.kind === "hush") return true;
+    var t = voiceNorm(text).replace(/^(?:ok|okay|hey|please) /, "").replace(/ (?:please|now)$/, "");
+    if (!t) return false;
+    if (VOICE_W.hush.test(t)) return true;
+    return VOICE_W.words.hush.some(function (p) { return voiceSoundsLike(t, p); });
   }
   // A streamed guess that ENDS in a control phrase → {word, send, text}
   // (null: none): "over" / "over and out" send (the longer one first, as

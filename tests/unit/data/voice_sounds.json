@@ -1,0 +1,777 @@
+{
+ "_doc": "Pins the sound-alike tolerance of the voice words across Python (core.voice_words.control_kind, test_voice_words.py), the desktop (lib/voiceDesktop isHushPhrase / stopTail / parseRadio, voiceEars.test.ts) and the phone (mobile.js voiceIsHush / voiceTail / voiceDictParse, test_mobile_voice_words.py). `words` and `custom` are what GET /api/voice serves as `words` (core.voice_words.effective, `heard` included); `keys` pins sound_key, `alike` sounds_like, and each case is one finished utterance and the control kind it ends with (null: dictation).",
+ "words": {
+  "send": [
+   "over"
+  ],
+  "end": [
+   "over and out",
+   "over, out"
+  ],
+  "clear": [
+   "disregard"
+  ],
+  "stop": [
+   "stop",
+   "stop listening",
+   "mic off",
+   "pause listening",
+   "that's all",
+   "done talking"
+  ],
+  "hush": [
+   "stop talking",
+   "be quiet",
+   "quiet",
+   "hush",
+   "shut up",
+   "enough"
+  ],
+  "wake": "mindflock",
+  "heard": {
+   "send": [
+    "ova",
+    "ovah",
+    "oh ver",
+    "o ver",
+    "overt"
+   ],
+   "end": [
+    "over an out",
+    "over in out",
+    "over and now",
+    "over en out",
+    "overran out",
+    "ova and out",
+    "ovah and out",
+    "ova out",
+    "over owt"
+   ],
+   "clear": [
+    "dis regard",
+    "this regard",
+    "just regard",
+    "the regard",
+    "disregarded",
+    "disregards",
+    "this is guard"
+   ],
+   "stop": [
+    "stock",
+    "stopped",
+    "stop listing",
+    "stop listen",
+    "stopped listening",
+    "stop lisning",
+    "mike off",
+    "mic of",
+    "mike of",
+    "pause listing",
+    "paws listening",
+    "paused listening",
+    "pause listen",
+    "that's al",
+    "that's hall",
+    "done talkin",
+    "dun talking",
+    "done torking"
+   ],
+   "hush": [
+    "stop talkin",
+    "stop torking",
+    "stopped talking",
+    "be quite",
+    "b quiet",
+    "be quiets",
+    "quite",
+    "quiets",
+    "hushed",
+    "husch",
+    "shadap",
+    "shut app",
+    "enuf",
+    "a nuff",
+    "inough"
+   ],
+   "wake": [
+    "mind flock",
+    "mine flock",
+    "mind lock",
+    "mindlock",
+    "my flock",
+    "mind block",
+    "mind flog",
+    "min flock",
+    "mindflocked"
+   ]
+  }
+ },
+ "custom": {
+  "send": [
+   "roger"
+  ],
+  "end": [
+   "roger and out",
+   "roger, out"
+  ],
+  "clear": [
+   "scrap that",
+   "never mind that"
+  ],
+  "stop": [
+   "halt",
+   "halt listening",
+   "we're done"
+  ],
+  "hush": [
+   "silence",
+   "pipe down"
+  ],
+  "wake": "hey jarvis",
+  "heard": {
+   "send": [],
+   "end": [],
+   "clear": [],
+   "stop": [],
+   "hush": [],
+   "wake": []
+  }
+ },
+ "keys": {
+  "over": "ofr",
+  "ever": "efr",
+  "hover": "hfr",
+  "oven": "ofn",
+  "cover": "kfr",
+  "roger": "rjr",
+  "rodger": "rjr",
+  "quiet": "kt",
+  "quite": "kt",
+  "disregard": "tsrkrt",
+  "this regard": "0srkrt",
+  "discard": "tskrt",
+  "submit": "spmt",
+  "some it": "smt",
+  "summit": "smt",
+  "mindflock": "mntflk",
+  "mind lock": "mntlk",
+  "pipe down": "ptn",
+  "pipe town": "ptn",
+  "halt": "hlt",
+  "hold": "hlt",
+  "send": "snt",
+  "sound": "snt",
+  "over and out": "ofrnt",
+  "over an out": "ofrnt",
+  "scrap that": "skrp0t",
+  "enough": "enf",
+  "silence": "slns",
+  "knight": "nt",
+  "write": "rt",
+  "xerox": "srks",
+  "whale": "wl",
+  "thumb": "0m",
+  "church": "XrX",
+  "school": "skl",
+  "phone": "fn",
+  "judge": "j",
+  "sitecheck": "stXk",
+  "Over, out!": "ofrt",
+  "": "",
+  "sight check": "stXk"
+ },
+ "alike": [
+  [
+   "rodger",
+   "roger",
+   true
+  ],
+  [
+   "quite",
+   "quiet",
+   true
+  ],
+  [
+   "this regard",
+   "disregard",
+   true
+  ],
+  [
+   "mind lock",
+   "mindflock",
+   true
+  ],
+  [
+   "pipe town",
+   "pipe down",
+   true
+  ],
+  [
+   "over an out",
+   "over and out",
+   true
+  ],
+  [
+   "scrap dat",
+   "scrap that",
+   true
+  ],
+  [
+   "rod ger",
+   "roger",
+   true
+  ],
+  [
+   "Over.",
+   "over",
+   true
+  ],
+  [
+   "ever",
+   "over",
+   false
+  ],
+  [
+   "hover",
+   "over",
+   false
+  ],
+  [
+   "oven",
+   "over",
+   false
+  ],
+  [
+   "offer",
+   "over",
+   false
+  ],
+  [
+   "ova",
+   "over",
+   false
+  ],
+  [
+   "hold",
+   "halt",
+   false
+  ],
+  [
+   "hault",
+   "halt",
+   false
+  ],
+  [
+   "sand",
+   "send",
+   false
+  ],
+  [
+   "sound",
+   "send",
+   false
+  ],
+  [
+   "discard",
+   "disregard",
+   false
+  ],
+  [
+   "some it",
+   "submit",
+   false
+  ],
+  [
+   "silents",
+   "silence",
+   false
+  ],
+  [
+   "stock",
+   "stop",
+   false
+  ],
+  [
+   "spot",
+   "stop",
+   false
+  ],
+  [
+   "",
+   "over",
+   false
+  ],
+  [
+   "sight check",
+   "sitecheck",
+   true
+  ],
+  [
+   "cite check",
+   "sitecheck",
+   true
+  ],
+  [
+   "sightcheck bot",
+   "sitecheck",
+   false
+  ],
+  [
+   "over and",
+   "over and out",
+   false
+  ],
+  [
+   "roger and",
+   "roger and out",
+   false
+  ]
+ ],
+ "cases": [
+  {
+   "text": "fix the login bug over",
+   "kind": "send",
+   "words": "default"
+  },
+  {
+   "text": "Over.",
+   "kind": "send",
+   "words": "default"
+  },
+  {
+   "text": "ship it over and out",
+   "kind": "end",
+   "words": "default"
+  },
+  {
+   "text": "ship it, over, out!",
+   "kind": "end",
+   "words": "default"
+  },
+  {
+   "text": "Disregard that.",
+   "kind": "clear",
+   "words": "default"
+  },
+  {
+   "text": "fix it, stop listening",
+   "kind": "stop",
+   "words": "default"
+  },
+  {
+   "text": "fix it that's all",
+   "kind": "stop",
+   "words": "default"
+  },
+  {
+   "text": "stop talking",
+   "kind": "hush",
+   "words": "default"
+  },
+  {
+   "text": "okay, be quiet please",
+   "kind": "hush",
+   "words": "default"
+  },
+  {
+   "text": "fix the bug ova",
+   "kind": "send",
+   "words": "default"
+  },
+  {
+   "text": "fix the bug, oh ver.",
+   "kind": "send",
+   "words": "default"
+  },
+  {
+   "text": "Fix it overt",
+   "kind": "send",
+   "words": "default"
+  },
+  {
+   "text": "ship it over an out",
+   "kind": "end",
+   "words": "default"
+  },
+  {
+   "text": "ship it over in out",
+   "kind": "end",
+   "words": "default"
+  },
+  {
+   "text": "Over and now.",
+   "kind": "end",
+   "words": "default"
+  },
+  {
+   "text": "ship it, ova and out",
+   "kind": "end",
+   "words": "default"
+  },
+  {
+   "text": "ship it overran out",
+   "kind": "end",
+   "words": "default"
+  },
+  {
+   "text": "scrap it this regard",
+   "kind": "clear",
+   "words": "default"
+  },
+  {
+   "text": "dis regard",
+   "kind": "clear",
+   "words": "default"
+  },
+  {
+   "text": "just regard that",
+   "kind": "clear",
+   "words": "default"
+  },
+  {
+   "text": "this is guard",
+   "kind": "clear",
+   "words": "default"
+  },
+  {
+   "text": "disregarded",
+   "kind": "clear",
+   "words": "default"
+  },
+  {
+   "text": "fix it stop listing",
+   "kind": "stop",
+   "words": "default"
+  },
+  {
+   "text": "fix it, mike off",
+   "kind": "stop",
+   "words": "default"
+  },
+  {
+   "text": "fix it paws listening",
+   "kind": "stop",
+   "words": "default"
+  },
+  {
+   "text": "fix it done talkin",
+   "kind": "stop",
+   "words": "default"
+  },
+  {
+   "text": "stop torking",
+   "kind": "hush",
+   "words": "default"
+  },
+  {
+   "text": "be quite",
+   "kind": "hush",
+   "words": "default"
+  },
+  {
+   "text": "quite",
+   "kind": "hush",
+   "words": "default"
+  },
+  {
+   "text": "okay, enuf please",
+   "kind": "hush",
+   "words": "default"
+  },
+  {
+   "text": "a nuff",
+   "kind": "hush",
+   "words": "default"
+  },
+  {
+   "text": "hey shadap",
+   "kind": "hush",
+   "words": "default"
+  },
+  {
+   "text": "fix it dis regards",
+   "kind": "clear",
+   "words": "default"
+  },
+  {
+   "text": "ship it over en out",
+   "kind": "end",
+   "words": "default"
+  },
+  {
+   "text": "hand it over and out of the way",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "over the bridge",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "start over the tests then stop",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "make it hover",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "it was ever thus",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "preheat the oven",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "take cover",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "the summit meeting",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "run the tests submit",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "this regard is important",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "discard",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "discard the changes",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "stop listing the files",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "fix it stock",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "make it stop",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "quite a few tests fail",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "the room went quiet",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "don't stop talking to me",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "hangover",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "resubmit",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "fix the bug roger",
+   "kind": "send",
+   "words": "custom"
+  },
+  {
+   "text": "fix it, Roger and out.",
+   "kind": "end",
+   "words": "custom"
+  },
+  {
+   "text": "ship it roger out!",
+   "kind": "end",
+   "words": "custom"
+  },
+  {
+   "text": "toss it, scrap that.",
+   "kind": "clear",
+   "words": "custom"
+  },
+  {
+   "text": "toss it never mind that",
+   "kind": "clear",
+   "words": "custom"
+  },
+  {
+   "text": "fix it halt listening",
+   "kind": "stop",
+   "words": "custom"
+  },
+  {
+   "text": "fix it, were done",
+   "kind": "stop",
+   "words": "custom"
+  },
+  {
+   "text": "silence",
+   "kind": "hush",
+   "words": "custom"
+  },
+  {
+   "text": "Pipe down.",
+   "kind": "hush",
+   "words": "custom"
+  },
+  {
+   "text": "okay pipe down please",
+   "kind": "hush",
+   "words": "custom"
+  },
+  {
+   "text": "fix it rodger",
+   "kind": "send",
+   "words": "custom"
+  },
+  {
+   "text": "fix it, Rojer.",
+   "kind": "send",
+   "words": "custom"
+  },
+  {
+   "text": "fix it rod ger",
+   "kind": "send",
+   "words": "custom"
+  },
+  {
+   "text": "fix it roger an out",
+   "kind": "end",
+   "words": "custom"
+  },
+  {
+   "text": "fix it rodger and out",
+   "kind": "end",
+   "words": "custom"
+  },
+  {
+   "text": "toss it scrap dat",
+   "kind": "clear",
+   "words": "custom"
+  },
+  {
+   "text": "pipe town",
+   "kind": "hush",
+   "words": "custom"
+  },
+  {
+   "text": "okay, pipe town",
+   "kind": "hush",
+   "words": "custom"
+  },
+  {
+   "text": "silence please",
+   "kind": "hush",
+   "words": "custom"
+  },
+  {
+   "text": "fix it over",
+   "kind": null,
+   "words": "custom"
+  },
+  {
+   "text": "fix it over and out",
+   "kind": null,
+   "words": "custom"
+  },
+  {
+   "text": "fix it disregard",
+   "kind": null,
+   "words": "custom"
+  },
+  {
+   "text": "stop talking",
+   "kind": null,
+   "words": "custom"
+  },
+  {
+   "text": "be quiet",
+   "kind": null,
+   "words": "custom"
+  },
+  {
+   "text": "the jolly roger is a flag",
+   "kind": null,
+   "words": "custom"
+  },
+  {
+   "text": "rogers",
+   "kind": null,
+   "words": "custom"
+  },
+  {
+   "text": "fix it hault listening",
+   "kind": null,
+   "words": "custom"
+  },
+  {
+   "text": "fix it halt",
+   "kind": null,
+   "words": "custom"
+  },
+  {
+   "text": "silence the alarm",
+   "kind": null,
+   "words": "custom"
+  },
+  {
+   "text": "silents",
+   "kind": null,
+   "words": "custom"
+  },
+  {
+   "text": "the pipe down there",
+   "kind": null,
+   "words": "custom"
+  },
+  {
+   "text": "move it over and",
+   "kind": null,
+   "words": "default"
+  },
+  {
+   "text": "ship it roger and",
+   "kind": null,
+   "words": "custom"
+  },
+  {
+   "text": "move it over and back",
+   "kind": null,
+   "words": "default"
+  }
+ ]
+}
