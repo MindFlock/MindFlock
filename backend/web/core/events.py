@@ -355,6 +355,16 @@ EVENT_NAMES = (
     # "label", "title", "joined"}. The owner's rail moves the guest's pill
     # on it, and follows when asked to.
     "guest.focus_changed",
+    # A person wrote in a session's chat (core.chat): the owner, a guest on
+    # the session, or a peer with it open. data: {"id", "from" (person id,
+    # "guest:<link>" or "peer:<link>"), "name", "text", "ts"}.
+    "session.chat",
+    # One of my sessions was shared with / withdrawn from a peer link
+    # (backend.peer: shared sessions), or a peer shared one of theirs with
+    # me. data: {"link_id", "peer_name", "title", "mode": "gated"|"full",
+    # "by": "you"|"peer", "theirs": bool}.
+    "peer.session_shared",
+    "peer.session_unshared",
     # The machine's memory headroom changed level (backend.memory_pressure,
     # the server's memory watch; ``session`` is ""). ``old``/``new`` are
     # "ok" | "low" | "critical"; while low or critical, agent spawns, team-run

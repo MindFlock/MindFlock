@@ -149,6 +149,9 @@ def test_event_names_vocabulary_is_complete():
         "peer.joint_check",
         "update.available",
         "guest.focus_changed",
+        "session.chat",
+        "peer.session_shared",
+        "peer.session_unshared",
         "system.memory_changed",
     }
 
