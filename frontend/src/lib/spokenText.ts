@@ -549,6 +549,22 @@ export function normalizePronounce(raw: unknown): PronounceRule[] {
   return out;
 }
 
+/** The person's pronunciations as the server last served them
+ * (`GET /api/voice` → `pronounce`; lib/voiceDesktop's loadVoiceCfg sets
+ * them): what the browser's own voice shapes with. */
+let served: PronounceRule[] = [];
+
+/** Keep `raw` (`pronounce` from GET /api/voice, any state) as the
+ * pronunciations {@link pronounce} returns; a non-list clears them. */
+export function setPronounce(raw: unknown): void {
+  served = normalizePronounce(raw);
+}
+
+/** The pronunciations {@link setPronounce} kept. */
+export function pronounce(): PronounceRule[] {
+  return served;
+}
+
 /** `text` as a voice should read it. `overrides` is `voice.pronounce` in
  * any state (raw, normalised, or nothing). Pure; a non-string is "". */
 export function shapeForSpeech(text: unknown, overrides?: unknown): string {

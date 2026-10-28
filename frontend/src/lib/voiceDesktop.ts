@@ -50,6 +50,7 @@ import { toast } from "./toast";
 import { resamplerName, startWavRecording, type WavRecording } from "./wavRecorder";
 import { MicKeeper, isLoud, noiseFloor, pickupLine, rmsOf, voiceMark, voicePass, voiceSent } from "./voiceMic";
 import { applyVoiceView, phraseWords, quoted, voiceWords, voiceWordsVersion, withKin, wordKey, type VoiceWords } from "./voiceWords";
+import { pronounce, setPronounce, shapeForSpeech } from "./spokenText";
 
 // --- the radio words -------------------------------------------------------- //
 
@@ -2824,7 +2825,8 @@ export function browserSpeaker(): Speaker & { available(): boolean } {
     available,
     speak(text) {
       return new Promise<void>((resolve) => {
-        const parts = sentenceChunks(text);
+        // Shaped for the voice only here: a caption shows the text as written.
+        const parts = sentenceChunks(shapeForSpeech(text, pronounce()));
         if (!available() || !parts.length) return resolve();
         const g = gen;
         let i = 0;
@@ -3348,6 +3350,9 @@ export const BARGE_RMS = 0.04;
 /** The mute lifted this soon after a barge-in is for it: the recorder's tail
  * is the person's, not the voice dying away (no {@link BARGE_SKIP_MS}). */
 export const BARGE_FRESH_MS = 1000;
+/** A barge-in lifts the mute with this much of the muted audio kept: the
+ * detector's {@link BARGE_POLLS} reads plus the word's soft start. */
+export const BARGE_REWIND_MS = BARGE_POLL_MS * BARGE_POLLS + 150;
 
 /** Hears for the person while the app talks. What reaches the microphone
  * of the app's own voice — what the browser's echo cancellation leaves of
@@ -3924,9 +3929,10 @@ export function serverRecognizer(
       muted = on;
       if (on) listenOver();
       else unlistenOver();
-      // Lifted for a barge-in: the tail is the person's, kept.
-      const tailS = !on && Date.now() - lastBargeAt < BARGE_FRESH_MS ? 0 : BARGE_SKIP_MS / 1000;
-      cur?.rec?.mute?.(on, tailS);
+      // Lifted for a barge-in: the tail is the person's, kept — and so is
+      // the start of their word, heard while the detector was counting.
+      const barged = !on && Date.now() - lastBargeAt < BARGE_FRESH_MS;
+      cur?.rec?.mute?.(on, barged ? 0 : BARGE_SKIP_MS / 1000, barged ? BARGE_REWIND_MS / 1000 : 0);
     },
     endPhrase() {
       if (cur?.heard && want) endClip();
@@ -4026,8 +4032,10 @@ export const DEFAULT_VOICE_CFG: VoiceCfg = { stt: "phone", tts: "phone", server_
 export async function loadVoiceCfg(prev: VoiceCfg | null): Promise<VoiceCfg> {
   try {
     const j = await api<Partial<VoiceCfg>>("/api/voice");
-    // The voice words ride along: the matchers and hints use them from now.
+    // The voice words ride along: the matchers and hints use them from now;
+    // so do the person's pronunciations (the browser's own voice shapes with them).
     applyVoiceView(j);
+    setPronounce((j as { pronounce?: unknown } | null)?.pronounce);
     if (j && typeof j === "object") {
       return {
         stt: j.stt === "server" ? "server" : "phone",

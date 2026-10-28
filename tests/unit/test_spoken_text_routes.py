@@ -209,12 +209,7 @@ class TestGet:
         body = client.get("/api/voice").json()
         assert body["pronounce"] == [{"say": "live", "as": "lyve"}]
 
-    @pytest.mark.xfail(
-        reason="VoiceSettings (backend/config/settings.py, outside this change) does not carry "
-        "voice.pronounce yet; settings_sync.SYNCED needs it too",
-        strict=True,
-    )
-    def test_pronounce_persists_once_the_model_carries_it(self, tts):
+    def test_pronounce_persists_through_the_settings_model(self, tts):
         _voice(pronounce=[{"say": "live", "as": "lyve"}])
         body = client.get("/api/voice").json()
         assert body["pronounce"] == [{"say": "live", "as": "lyve"}]
