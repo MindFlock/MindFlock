@@ -31,6 +31,7 @@ import re
 import secrets
 import threading
 import time
+import urllib.parse
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -42,7 +43,9 @@ __all__ = [
     "CodeInfo",
     "Invite",
     "InviteBook",
+    "code_from_text",
     "encode_code",
+    "invite_url",
     "parse_code",
 ]
 
@@ -65,6 +68,8 @@ _TAIL = INVITE_ID_LEN + SECRET_LEN + FP_LEN
 _MAX_PAYLOAD = 1 + 1 + 253 + 2 + 1 + 255 + _TAIL
 _B32_RE = re.compile(r"^[a-z2-7]+\Z")
 _HEX16_RE = re.compile(r"^[0-9a-f]{16}\Z")
+#: A pairing code anywhere in text: prefix, base32 payload, 4-char checksum.
+_CODE_IN_TEXT_RE = re.compile(r"mfp[12]:[a-z2-7]+-[a-z2-7]{4}", re.I)
 
 
 def _b32enc(data: bytes) -> str:
@@ -222,6 +227,28 @@ def parse_code(code: str) -> CodeInfo:
         carrier=_CARRIERS[carrier],
         path=path,
     )
+
+
+def code_from_text(text) -> str:
+    """The pairing code inside whatever the joiner pasted, lowercased: the
+    bare code, the whole invite message, the invite link
+    (``https://<host>/join#<code>``) or the app link
+    (``mindflock://join?code=<code>``) — either link URL-encoded or not.
+    ``""`` when there is none. Shape only: :func:`parse_code` validates."""
+    if not isinstance(text, str) or len(text) > 4096:
+        return ""
+    for candidate in (text, urllib.parse.unquote(text)):
+        m = _CODE_IN_TEXT_RE.search(candidate)
+        if m:
+            return m.group(0).lower()
+    return ""
+
+
+def invite_url(base: str, code: str) -> str:
+    """The link an invite travels as: ``<base>/join#<code>``. The code rides
+    in the fragment, which a browser never sends, so it never reaches a
+    server log (a code's alphabet needs no escaping there)."""
+    return base.rstrip("/") + "/join#" + code
 
 
 @dataclass(frozen=True)

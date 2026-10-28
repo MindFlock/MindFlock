@@ -1,0 +1,169 @@
+<!doctype html>
+<!--
+  The page a peer invite link opens: <base>/join#<code> (backend/web/routes/
+  peer.py). Hand-written, no framework, no auth (auth._PUBLIC_PATHS): the
+  person opening it is a stranger with no token. The code lives in the URL
+  fragment — browsers never send it, so it never reaches a server log — and
+  this page asks the server for nothing. It hands the code to the desktop app
+  (mindflock://join?code=…, electron/main.js) or offers it to copy.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="no-referrer" />
+  <meta name="robots" content="noindex" />
+  <title>Join on MindFlock</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f6f7fb;
+      --card: #ffffff;
+      --fg: #1b1e27;
+      --muted: #5d6475;
+      --line: #d9dce6;
+      --accent: #4f6bed;
+      --accent-fg: #ffffff;
+      --field: #f0f2f8;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f1117;
+        --card: #171a23;
+        --fg: #e6e8ef;
+        --muted: #9aa1b2;
+        --line: #2a2f3d;
+        --accent: #6d86ff;
+        --accent-fg: #0f1117;
+        --field: #10131a;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+      background: var(--bg);
+      color: var(--fg);
+      font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    main {
+      width: 100%;
+      max-width: 480px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 28px 24px;
+    }
+    .brand { margin: 0 0 18px; font-size: 14px; font-weight: 600; letter-spacing: 0.02em; color: var(--muted); }
+    h1 { margin: 0 0 8px; font-size: 22px; line-height: 1.3; }
+    p { margin: 0 0 16px; color: var(--muted); }
+    .open {
+      display: block;
+      width: 100%;
+      margin: 20px 0 24px;
+      padding: 14px 18px;
+      border-radius: 10px;
+      background: var(--accent);
+      color: var(--accent-fg);
+      font-size: 18px;
+      font-weight: 600;
+      text-align: center;
+      text-decoration: none;
+    }
+    .open:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    label { display: block; margin-bottom: 6px; font-size: 14px; color: var(--muted); }
+    .row { display: flex; gap: 8px; }
+    input {
+      flex: 1;
+      min-width: 0;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--field);
+      color: var(--fg);
+      font: 14px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    button {
+      padding: 10px 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--card);
+      color: var(--fg);
+      font: inherit;
+      font-size: 14px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .fallback { margin: 24px 0 0; padding-top: 16px; border-top: 1px solid var(--line); font-size: 14px; }
+    .fallback p { margin: 0 0 4px; }
+    a { color: var(--accent); }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="brand">MindFlock</p>
+    <div id="invite" class="hidden">
+      <h1>You've been invited to work together in MindFlock</h1>
+      <p>Open it in MindFlock to join. The invite works once and expires 10 minutes after it was made.</p>
+      <a id="open" class="open" href="#">Open in MindFlock</a>
+      <label for="code">The invite code</label>
+      <div class="row">
+        <input id="code" readonly spellcheck="false" autocomplete="off" />
+        <button type="button" id="copy">Copy code</button>
+      </div>
+      <div class="fallback">
+        <p>No MindFlock yet? <a href="https://mindflock.ai" rel="noopener noreferrer">Install it</a> —</p>
+        <p>then Settings → People → Join someone and paste the code.</p>
+      </div>
+    </div>
+    <div id="missing" class="hidden">
+      <h1>This invite link is incomplete</h1>
+      <p>The code is missing from the end of the link. Ask the person who sent it to copy the whole link again.</p>
+    </div>
+  </main>
+  <script>
+    (function () {
+      // Same shape the server accepts (backend/peer/invite.py code_from_text).
+      var CODE_RE = /mfp[12]:[a-z2-7]+-[a-z2-7]{4}/i;
+      var raw = location.hash.slice(1);
+      try { raw = decodeURIComponent(raw); } catch (e) { /* keep it as typed */ }
+      var m = CODE_RE.exec(raw);
+      if (!m) {
+        document.getElementById('missing').classList.remove('hidden');
+        return;
+      }
+      var code = m[0].toLowerCase();
+      document.getElementById('invite').classList.remove('hidden');
+      document.getElementById('open').href = 'mindflock://join?code=' + encodeURIComponent(code);
+      var box = document.getElementById('code');
+      box.value = code;
+      box.addEventListener('focus', function () { box.select(); });
+      var btn = document.getElementById('copy');
+      function copied(ok) {
+        btn.textContent = ok ? 'Copied' : 'Select and copy';
+        setTimeout(function () { btn.textContent = 'Copy code'; }, 2000);
+      }
+      function legacyCopy() {
+        // Plain http on a LAN address has no navigator.clipboard.
+        box.focus();
+        box.select();
+        var ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+        copied(ok);
+      }
+      btn.addEventListener('click', function () {
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(code).then(function () { copied(true); }, legacyCopy);
+        } else {
+          legacyCopy();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
