@@ -32,14 +32,27 @@ in — the ``session.prompt_sent`` subscriber below), or once dismissed
 (:func:`dismiss`); a NEWER reply asks again. The announcement memory is seeded
 on first sighting (:func:`seed`) like ``state_events._REPLY_SEEN``, so a
 restart does not re-announce a question a dead server already pushed.
+
+**What survives a restart** (``mindflock restart`` re-execs the server in
+place; an update does too): the dismissals and the answered-marks, in
+``~/.mindflock/asking.json`` (:func:`_store_path`: under ``MINDFLOCK_HOME``
+when set; none under the pytest home guard, so tests stay in memory).
+Without it a question put off with Later, or answered in a way that left no
+newer reply, came back as a Question chip after every restart — a reply that
+ended with a question at 5 PM was asking again at 8 PM. The file is written
+only when a dismissal or an answer changes what shows (``note_input`` fires
+on every keystroke; it writes only while that session has a question), and
+holds at most :data:`STORE_MAX` sessions.
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import threading
 import time
+from pathlib import Path
 from typing import Dict, Optional
 
 from backend.web.core import spoken as _spoken
@@ -61,6 +74,9 @@ __all__ = [
 
 #: Ceiling on ``asking.text`` (characters), both kinds.
 QUESTION_MAX_CHARS = 300
+#: How many sessions' dismissals / answered-marks the store keeps (the
+#: oldest answered-marks go first).
+STORE_MAX = 200
 #: A cached screen older than this is not used (seconds): the probe captures
 #: every ~4 s while anyone polls, so anything older describes another moment.
 SCREEN_MAX_AGE_S = 15.0
@@ -228,6 +244,84 @@ _STATE: Dict[str, dict] = {}
 _INPUT_AT: Dict[str, float] = {}
 #: title -> (screen hash, body) — one dialog parse per distinct screen.
 _DIALOG_MEMO: Dict[str, tuple] = {}
+#: title -> the dismissed reply key, as loaded from the store (JSON lists);
+#: applied to a title's record the first time it is observed.
+_DISMISSED_STORED: Dict[str, list] = {}
+_STORE_LOADED = False
+
+
+def _store_path() -> Optional[Path]:
+    """``~/.mindflock/asking.json`` — under ``MINDFLOCK_HOME`` when set; None
+    with no home to use (the pytest guard refused the real one)."""
+    home = os.environ.get("MINDFLOCK_HOME", "").strip()
+    if home:
+        return Path(os.path.expanduser(home)) / "asking.json"
+    try:
+        from backend.config.config import GetConfigDir
+
+        return Path(GetConfigDir()) / "asking.json"
+    except Exception:  # noqa: BLE001 — the home guard refused the real home
+        return None
+
+
+def _load_store() -> None:
+    """Read the store once per process (under ``_LOCK``)."""
+    global _STORE_LOADED
+    if _STORE_LOADED:
+        return
+    _STORE_LOADED = True
+    path = _store_path()
+    if path is None:
+        return
+    try:
+        from backend.fsutil import read_json
+
+        data = read_json(path, default=None)
+    except Exception:  # noqa: BLE001 — an unreadable store is an empty one
+        data = None
+    if not isinstance(data, dict):
+        return
+    raw = data.get("dismissed")
+    if isinstance(raw, dict):
+        for title, key in raw.items():
+            if isinstance(title, str) and isinstance(key, list) and len(key) == 2:
+                _DISMISSED_STORED[title] = key
+    raw = data.get("input_at")
+    if isinstance(raw, dict):
+        for title, at in raw.items():
+            if isinstance(title, str) and isinstance(at, (int, float)):
+                _INPUT_AT.setdefault(title, float(at))
+
+
+def _save_store() -> None:
+    """Write what suppresses a question (called under ``_LOCK``). Best
+    effort: a failed write costs one repeated chip after a restart."""
+    path = _store_path()
+    if path is None:
+        return
+    dismissed: Dict[str, list] = dict(_DISMISSED_STORED)
+    for title, st in _STATE.items():
+        key = st.get("dismissed")
+        if key:
+            dismissed[title] = list(key)
+    input_at = {t: at for t, at in _INPUT_AT.items() if at}
+    if len(input_at) > STORE_MAX:
+        keep = sorted(input_at, key=input_at.get)[-STORE_MAX:]
+        input_at = {t: input_at[t] for t in keep}
+    if len(dismissed) > STORE_MAX:
+        dismissed = dict(list(dismissed.items())[-STORE_MAX:])
+    try:
+        from backend.fsutil import atomic_write_json
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(
+            path,
+            {"version": 1, "dismissed": dismissed, "input_at": input_at},
+            ensure_ascii=True,
+            mode=0o600,
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def question_id(ts) -> str:
@@ -237,17 +331,28 @@ def question_id(ts) -> str:
 
 def note_input(title: str) -> None:
     """Input reached ``title`` (a person, or a queued prompt): any question
-    its newest reply asked is answered or superseded."""
-    if title:
-        _INPUT_AT[title] = time.time()
+    its newest reply asked is answered or superseded. Remembered on disk
+    while the session has a question, so a restart does not ask it again."""
+    if not title:
+        return
+    _INPUT_AT[title] = time.time()
+    with _LOCK:
+        _load_store()
+        if _STATE.get(title, {}).get("text"):
+            _save_store()
 
 
 def forget(title: str) -> None:
     """Drop ``title``'s state (session removal)."""
     with _LOCK:
+        _load_store()
+        had = title in _STATE or title in _DISMISSED_STORED or title in _INPUT_AT
         _STATE.pop(title, None)
         _DIALOG_MEMO.pop(title, None)
-    _INPUT_AT.pop(title, None)
+        _DISMISSED_STORED.pop(title, None)
+        _INPUT_AT.pop(title, None)
+        if had:
+            _save_store()
 
 
 def _session_name(title: str) -> str:
@@ -296,6 +401,7 @@ def _observe(title: str, inst) -> Optional[dict]:
         return None
     key, ts, text, source = got
     with _LOCK:
+        _load_store()
         st = _STATE.setdefault(title, {})
         if st.get("key") != key:
             st.update(
@@ -304,6 +410,10 @@ def _observe(title: str, inst) -> Optional[dict]:
                 text=question_in(text),
                 source=source,
             )
+            # Put off before a restart: still put off, for that reply only.
+            stored = _DISMISSED_STORED.pop(title, None)
+            if stored is not None and tuple(stored) == tuple(key):
+                st["dismissed"] = key
         return dict(st)
 
 
@@ -328,7 +438,9 @@ def seed(title: str, inst) -> None:
 def _armed(rec: Optional[dict], title: str) -> bool:
     if not rec or not rec.get("text"):
         return False
-    if rec.get("dismissed") == rec.get("key"):
+    if rec.get("dismissed") is not None and tuple(rec.get("dismissed")) == tuple(
+        rec.get("key") or ()
+    ):
         return False
     return _INPUT_AT.get(title, 0.0) <= float(rec.get("ts") or 0.0)
 
@@ -420,11 +532,14 @@ def dismiss(title: str) -> bool:
     """Suppress the question ``title``'s newest reply asks (a newer reply asks
     again). → whether there was one."""
     with _LOCK:
+        _load_store()
         st = _STATE.get(title)
         if not st or not st.get("key"):
             return False
         had = bool(st.get("text")) and st.get("dismissed") != st.get("key")
         st["dismissed"] = st.get("key")
+        if had:
+            _save_store()
         return had
 
 

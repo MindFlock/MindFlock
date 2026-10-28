@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A question put off with Later came back after every restart.** The
+  dismissal and the "someone typed into it" mark lived in the server's
+  memory, and `mindflock restart` (an update too) re-execs the server in
+  place — so a reply that ended with a question at 5 PM wore its Question
+  chip again after the 8 PM update. Both are now kept in
+  `~/.mindflock/asking.json`.
+
 ## [0.10.2] - 2026-10-27
 
 ### Fixed
