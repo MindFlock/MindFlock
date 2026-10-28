@@ -1091,13 +1091,18 @@ export function TopBarMic() {
           else selectSession(title, { noKeyboard: true });
         }
         {
-          const line = r.say || (r.kind === "new" ? "Started " : "Now talking to ") + (r.name || r.title || "") + ".";
+          const line = r.say || (r.kind === "new" ? "Started " : "") + (r.name || r.title || "") + ".";
           // Your own action: a confirmation (said now, the mic muted for it),
-          // with replies off too; with confirmations off, as before.
+          // with replies off too. With confirmations off the name is still
+          // said — a switch by voice is answered by voice, as on the phone —
+          // only not as a confirmation (nothing is muted for it).
           if (prefsRef.current.confirm !== false) {
             say(line);
             void confirmer.current?.say({ line });
-          } else announce(line);
+          } else {
+            say(line);
+            void queue.say(line);
+          }
         }
         return;
       case "ask":

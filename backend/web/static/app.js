@@ -39917,13 +39917,13 @@ function repliesMode(v) {
 	if (v === "mine" || v === "all") return v;
 	return v === true ? "mine" : "off";
 }
-function normPrefs(v) {
+function normPrefs(v, stored = false) {
 	const o = v && typeof v === "object" ? v : {};
 	return {
 		ptt: o.ptt === "hold" ? "hold" : "toggle",
 		replies: repliesMode(o.replies),
 		wake: o.wake === true,
-		confirm: o.confirm !== false,
+		confirm: (stored ? o.nods : o.confirm) === true,
 		sounds: o.sounds !== false
 	};
 }
@@ -39945,14 +39945,18 @@ function loadVoicePrefs(kv = storage()) {
 	} catch {
 		raw = null;
 	}
-	return normPrefs(raw);
+	return normPrefs(raw, true);
 }
 var VOICE_PREFS_EVENT = "mindflock:voice-prefs";
 function saveVoicePrefs(p, kv = storage(), sync = syncSayAll) {
 	const next = normPrefs(p);
 	const flip = sayAllFlip(loadVoicePrefs(kv).replies, next.replies);
 	try {
-		kv?.setItem(VOICE_PREFS_KEY, JSON.stringify(next));
+		const { confirm, ...rest } = next;
+		kv?.setItem(VOICE_PREFS_KEY, JSON.stringify({
+			...rest,
+			nods: confirm
+		}));
 	} catch {}
 	if (flip !== null) sync(flip);
 	try {
@@ -40765,7 +40769,7 @@ async function runVoiceCommand(r, text, deps) {
 			else if (isWindowRow(key)) deps.announce("Row " + n + " is a window, not a session");
 			else {
 				deps.select(key);
-				deps.announce(r.say || "Now talking to " + deps.name(key) + ".");
+				deps.announce(r.say || deps.name(key) + ".");
 			}
 			return true;
 		}
@@ -40774,7 +40778,7 @@ async function runVoiceCommand(r, text, deps) {
 			if (!key) deps.announce("There is no other session");
 			else {
 				deps.select(key);
-				deps.announce(r.say || "Now talking to " + deps.name(key) + ".");
+				deps.announce(r.say || deps.name(key) + ".");
 			}
 			return true;
 		}
@@ -43984,11 +43988,14 @@ function TopBarMic() {
 					else selectSession(title, { noKeyboard: true });
 				}
 				{
-					const line = r.say || (r.kind === "new" ? "Started " : "Now talking to ") + (r.name || r.title || "") + ".";
+					const line = r.say || (r.kind === "new" ? "Started " : "") + (r.name || r.title || "") + ".";
 					if (prefsRef.current.confirm !== false) {
 						say(line);
 						confirmer.current?.say({ line });
-					} else announce(line);
+					} else {
+						say(line);
+						queue.say(line);
+					}
 				}
 				return;
 			case "ask":
@@ -93394,7 +93401,7 @@ function MicPrefs() {
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "set-hint notif-rule-desc",
 					id: "voice-confirm-hint",
-					children: "Say “Sent.”, “Cleared.”, “Stopped.” or the session you switched to, in the reply voice — about what you did, so even with Read replies aloud off."
+					children: "Say “Sent.” or “Cleared.” in the reply voice for what you did, even with Read replies aloud off. Off unless you want them: the chimes answer a start and a stop, and a switch says the session's name anyway."
 				})]
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
 				className: "ca-switch",

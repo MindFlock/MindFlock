@@ -21,8 +21,8 @@ equally — ask "Which one: a or b?" rather than guess. A new session is a short
 should it do?". Each of those answers carries ``pending`` — what it asked
 — which the client sends back with the next phrase: :func:`pick` and
 :func:`continue_new` take it, and a phrase that is no answer to it is
-routed as usual. A switch says the session's state and task, and its last
-reply only when that is news (:func:`switch_line`).
+routed as usual. A switch says the session's name — nothing more — and
+its last reply only when that is news (:func:`switch_line`).
 
 Sessions said by number ("session three", "next one") are numbered by the
 CLIENT (the desktop's rail order, the phone's list order): the answer
@@ -1184,14 +1184,14 @@ def fresh_reply(row: dict, now: float) -> Optional[str]:
 
 
 def switch_line(row: dict, now: float) -> str:
-    """What a switch says: "Now on <name>, <state>: <task headline>." and
-    the last reply only when it is news (:func:`fresh_reply`) — a session
-    done a while ago is not read out again ("what did it say" reads it)."""
-    say = "Now on %s, %s" % (_name(row), _state_word(session_state(row, now)))
-    head = strip_markdown(str(row.get("task_headline") or "")).strip().rstrip(".")
-    if head:
-        say += ": " + head
-    say = _end(say)
+    """What a switch says: the session's name, and the last reply only when
+    it is news (:func:`fresh_reply`) — a session done a while ago is not
+    read out again ("what did it say" reads it). It used to add the state
+    word and the task headline ("Now on hackathon-2, idle: explain how to
+    add …"); the owner heard that as "the whole thing" on every switch and
+    asked for the name alone (2026-10-28). The state is on the screen, and
+    "what is it doing" / "what did it say" ask for the rest."""
+    say = _end(_name(row))
     news = fresh_reply(row, now)
     if news:
         say += " " + _end(strip_markdown(news))

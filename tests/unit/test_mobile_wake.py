@@ -200,7 +200,7 @@ def test_wake_switch_in_the_voice_sheet():
 
 def test_wake_pref_load_save_and_default():
     js = _js()
-    assert 'replies: "mine", wake: false, confirm: true, sounds: true }' in js
+    assert 'replies: "mine", wake: false, confirm: false, sounds: true }' in js
     assert "voice.prefs.wake = j.wake === true;" in _fn(js, "voiceLoadPrefs")
     assert "wake: voice.prefs.wake," in _fn(js, "voicePersist")
     # The switch: the pref, saved, the context made in this tap.

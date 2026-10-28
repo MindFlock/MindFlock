@@ -166,12 +166,15 @@ a session first*).
   review step, see [When a session asks you something](#when-a-session-asks-you-something)). To stop and leave the words
   unsent, use a stop phrase, Esc, the mic or the Talk hotkey again, or let go
   in *Hold to talk*.
-- **Spoken confirmations** (Settings → Voice → *Spoken confirmations*, on by
-  default; per browser, `confirm` in `cs_voice_desktop`): your own actions are
+- **Spoken confirmations** (Settings → Voice → *Spoken confirmations*, **off**
+  unless you turn them on; per browser, `nods` in `cs_voice_desktop` — the
+  old `confirm` key is ignored, since every saved copy carried true and the
+  owner heard *Sent.* after “over and out” as an echo): your own actions are
   said back in the reply voice — *Sent.* after “over”, *Sent. Over and out.*
   (or *Over and out.* with nothing to send), *Cleared.* after “disregard”,
-  and the router's own line after a switch (*Now talking to Billing.*) — with
-  *Read replies aloud* off too. A stop phrase says nothing back: the falling
+  and the router's own line after a switch (*Billing.*) — with
+  *Read replies aloud* off too. With them off, the chimes answer a start and
+  a stop, and a switch still says the session's name. A stop phrase says nothing back: the falling
   chime is its answer. They go to
   the front of the one speech queue (after other confirmations, never behind
   a reply), are said even while the person is mid-sentence, are
@@ -7152,13 +7155,16 @@ while such a line plays cuts it (barge-in) and the listen goes on; the
 reply's own answer-listen and hands-free do not apply (it never stopped
 listening). A listen that is not continuous still holds the queue.
 
-**Spoken confirmations** (the ⚙ sheet, per phone, under Spoken replies; on
-by default): short lines in the configured voice for what *you* did —
+**Spoken confirmations** (the ⚙ sheet, per phone, under Spoken replies;
+**off** unless you turn them on — stored as `nods`, the old `confirm` key
+ignored, since every saved copy carried true and the owner heard *Sent.*
+after *over and out* as an echo; a send's *Sent to …* is on the strip, never
+spoken): short lines in the configured voice for what *you* did —
 *Sent.* after *over* (as the Enter is pressed; listening goes on), *Sent.
 Over and out.* after *over and out* (*Over and out.* when nothing was in the
 box), *Cleared.* after *disregard*; a stop phrase says nothing back (the
 falling chime is its answer — *Stopped.* was heard as the phone saying stop
-back, every time); a session switch says the router's own line (*Now on …*).
+back, every time); a session switch says the session's name (the router's own line).
 They speak even
 with Spoken replies **Off** (they are about your action, not the agent's
 reply). One voice still: they go through the queue but at its **front**
@@ -7353,9 +7359,11 @@ or "please" in front:
 Anything else is a prompt — and so is any `kind` the page does not know (a
 newer server's): the words stay words.
 
-**A switch is not a replay.** Moving to a session by voice says where you
-are — *Now on login-fix, idle: Fix login redirect.* (the state word and the
-row's `task_headline`) — and reads its last reply only when that is news:
+**A switch is not a replay.** Moving to a session by voice says the
+session's name — *login-fix.* — and nothing more (it used to add the state
+word and the task headline, heard as "the whole thing" on every switch;
+the state is on the screen, "what is it doing" asks for it) — and reads
+its last reply only when that is news:
 the session is idle and its turn ended (`activity_since`) at most two
 minutes ago. A session that finished a while back, or is working on
 something new, is not read out again; *what did it say* reads it on demand.
