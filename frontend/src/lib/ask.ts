@@ -327,6 +327,9 @@ export function askKindLabel(
  * the pop-up reads. Shared with Settings → Notifications' switch. */
 export interface AskSettingsView {
   ask_popup?: boolean;
+  /** Whether a reply ending with a question in plain words counts as the
+   * session asking at all (`notifications.prose_questions`, default off). */
+  prose_questions?: boolean;
 }
 
 export const NOTIFY_VIEW_KEY = ["notify-view"] as const;
@@ -353,6 +356,25 @@ export async function saveAskPopup(on: boolean): Promise<boolean> {
   const v = await api<AskSettingsView>("/api/notify/ntfy", { json: { ask_popup: on } });
   queryClient.setQueryData(NOTIFY_VIEW_KEY, v);
   return v?.ask_popup !== false;
+}
+
+/** Whether a question in plain words counts (`notifications.prose_questions`;
+ * off by default and on an older server). */
+export function useProseQuestions(): boolean {
+  const q = useQuery({
+    queryKey: NOTIFY_VIEW_KEY,
+    queryFn: () => api<AskSettingsView>("/api/notify/ntfy"),
+    staleTime: 60_000,
+    refetchInterval: 300_000,
+    retry: false,
+  });
+  return q.data?.prose_questions === true;
+}
+
+export async function saveProseQuestions(on: boolean): Promise<boolean> {
+  const v = await api<AskSettingsView>("/api/notify/ntfy", { json: { prose_questions: on } });
+  queryClient.setQueryData(NOTIFY_VIEW_KEY, v);
+  return v?.prose_questions === true;
 }
 
 // --- The server calls ------------------------------------------------------------- //

@@ -7,8 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Only a real prompt raises a Question.** A reply that merely ends with a
+  question in plain words ("Should I also add them?") no longer puts a
+  Question on the session's row, in the bell, the toast, the push or the
+  voice router — only a permission, a plan approval or Claude's question
+  menu does. The old behaviour is a switch, off by default: Settings →
+  Notifications → *Count a question asked in plain words at the end of a
+  reply* (`notifications.prose_questions`).
+
 ### Fixed
 
+- **iPhone: "Speech recognition did not start (start-failed: InvalidStateError:
+  audio session category is not compatible with audio capture)".** The
+  first tap set iOS's audio session to playback-only (so the silent switch
+  does not mute replies), and that category refuses the microphone the
+  server's recognizer then asks for — in Safari and in DuckDuckGo alike. A
+  page that may open the microphone (recognition on the server, the
+  fallback to it, the wake word) now takes `play-and-record`, which the
+  silent switch does not mute either, and the server recognizer sets it
+  again right before it asks for the microphone.
 - **A question put off with Later came back after every restart.** The
   dismissal and the "someone typed into it" mark lived in the server's
   memory, and `mindflock restart` (an update too) re-execs the server in

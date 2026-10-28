@@ -180,6 +180,7 @@ SYNCED: Dict[str, Tuple[str, ...]] = {
         "ntfy_token",
         "ntfy_agent_words",
         "ask_popup",
+        "prose_questions",
     ),
     "extensions": ("disabled",),
     # Personal policy (may a spoken "yes" answer a dialog; the person's own
@@ -421,6 +422,7 @@ LABELS: Dict[str, str] = {
     "notifications.ntfy_topic": "ntfy topic",
     "notifications.ntfy_agent_words": "Agent's words in phone pushes",
     "notifications.ask_popup": "Question pop-up",
+    "notifications.prose_questions": "Questions in plain words",
     "voice.approve_dialogs": "Approve dialogs by voice",
     "voice.words": "Voice words",
     "notifications.ntfy_token": "ntfy token",

@@ -3470,6 +3470,7 @@
         ins.name = "InsecureContext";
         return (asking = Promise.reject(ins).catch(function (e) { asking = null; throw e; }));
       }
+      voiceAudioSession(true);   // iOS: a playback-only session refuses capture
       asking = navigator.mediaDevices.getUserMedia({ audio: true }).then(
         function (s) { asking = null; stream = s; return s; },
         function (err) { asking = null; throw err; });
@@ -6997,8 +6998,24 @@
     // the chimes (voiceChime) play through it too.
     if (voice.cfg.stt === "server" || voice.cfg.tts === "server" || voice.prefs.wake || voice.prefs.sounds !== false) voiceAudioCtx();
     voice.primed = true;
+    voiceAudioSession(voiceMayCapture());
+  }
+  // Whether this page may open the microphone itself (the server's
+  // recognizer, by choice or as the fallback; the wake word's standby) —
+  // the phone's own recognizer captures through the OS, not the page.
+  function voiceMayCapture() {
+    return voice.cfg.stt === "server" || !!voice.sttFallback || !!voice.prefs.wake;
+  }
+  // iOS's audio session (Safari 17+, navigator.audioSession): "playback" so
+  // the silent switch does not mute the page — but that category refuses
+  // audio CAPTURE (getUserMedia: InvalidStateError "audio session category
+  // is not compatible with audio capture"), so a page that may open the
+  // microphone takes "play-and-record" (also unmuted by the switch).
+  function voiceAudioSession(capture) {
     try {
-      if (navigator.audioSession && navigator.audioSession.type !== "playback") navigator.audioSession.type = "playback";
+      if (!navigator.audioSession) return;
+      var want = capture ? "play-and-record" : "playback";
+      if (navigator.audioSession.type !== want) navigator.audioSession.type = want;
     } catch (e) {}
   }
   function voiceTurnOn(title, listenAfter) {

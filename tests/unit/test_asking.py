@@ -48,6 +48,14 @@ class _Inst:
 
 
 @pytest.fixture(autouse=True)
+def _prose_on(isolate_settings_store):
+    """The prose-question signal is off by default: these tests pin what it
+    does when on (the default-off rule has its own tests below)."""
+    S.update_settings(notifications={"prose_questions": True})
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _clean(monkeypatch, tmp_path):
     monkeypatch.setenv("MINDFLOCK_ACTIVITY_MARKER_DIR", str(tmp_path / "markers"))
     monkeypatch.setenv("MINDFLOCK_VOICE_FLAG_DIR", str(tmp_path / "voice"))
@@ -787,3 +795,39 @@ def test_a_corrupt_store_reads_as_empty(monkeypatch, tmp_path):
     inst = _Inst("t")
     _reply("t", "Should I push?", time.time() - 5)
     assert asking.current("t", inst, "idle") is not None
+
+
+# --------------------------------------------------------------------------- #
+# Off by default: only a real prompt raises a Question                         #
+# --------------------------------------------------------------------------- #
+def test_prose_questions_are_off_by_default_and_round_trip(isolate_settings_store):
+    assert S.NotificationSettings().prose_questions is False
+    assert "prose_questions" not in S.NotificationSettings().to_dict()
+    on = S.NotificationSettings(prose_questions=True)
+    assert on.to_dict() == {"prose_questions": True}
+    assert S.NotificationSettings.from_dict(on.to_dict()).prose_questions is True
+    S.update_settings(notifications={"prose_questions": False})
+    assert client.get("/api/notify/ntfy").json()["prose_questions"] is False
+    r = client.post("/api/notify/ntfy", json={"prose_questions": True})
+    assert r.status_code == 200 and r.json()["prose_questions"] is True
+    assert S.load_settings().notifications.prose_questions is True
+
+
+def test_with_the_switch_off_a_reply_ending_with_a_question_asks_nothing(
+    isolate_settings_store,
+):
+    S.update_settings(notifications={"prose_questions": False})
+    assert asking.prose_on() is False
+    inst = _Inst("t")
+    _reply("t", "Done.\n\nShould I also add them to the ticket?", time.time() - 5)
+    assert asking.current("t", inst, "idle") is None
+    assert asking.announce("t", inst) is None
+    assert asking.peek("t") is None
+    # A real prompt (the dialog kind) is untouched by the switch.
+    assert asking.current("t", inst, "clarify")["kind"] == "dialog"
+    # Flipping it on brings the question back.
+    S.update_settings(notifications={"prose_questions": True})
+    assert (
+        asking.current("t", inst, "idle")["text"]
+        == "Should I also add them to the ticket?"
+    )

@@ -18,13 +18,15 @@ import {
   ANNOUNCE_TIP,
   ASK_POPUP_HINT,
   ASK_POPUP_LABEL,
+  PROSE_QUESTIONS_HINT,
+  PROSE_QUESTIONS_LABEL,
   agentWordsHint,
   groupRules,
   NEEDS_INPUT_EXTRA,
   ONLY_BELL_HINT,
   ruleCopy,
 } from "./notifyCopy";
-import { saveAskPopup, useAskPopup } from "../../../lib/ask";
+import { saveAskPopup, saveProseQuestions, useAskPopup, useProseQuestions } from "../../../lib/ask";
 
 const NOTIFY_KEY = "mindflock.notify.enabled";
 
@@ -118,6 +120,7 @@ export function Notifications({ gotoScreen }: ScreenProps) {
           <span className="notif-channel-state on">On</span>
         </div>
         <AskPopupRow />
+        <ProseQuestionsRow />
         <div
           className="notif-channel set-switch-row"
           id="notif-browser-row"
@@ -576,6 +579,51 @@ function Ntfy({ onChange, setup = 0 }: { onChange?(v: NtfyView): void; setup?: n
         </p>
       )}
     </>
+  );
+}
+
+/** Whether a question in plain words counts at all (lib/ask.ts,
+ * `notifications.prose_questions`, off by default), saved the same way. */
+function ProseQuestionsRow() {
+  const on = useProseQuestions();
+  const [busy, setBusy] = useState(false);
+  return (
+    <div
+      className="notif-channel set-switch-row"
+      id="notif-prose-row"
+      data-channel="prose"
+      title="A reply that ends with a question in plain words counts as the session asking"
+    >
+      <span className="notif-rule-text">
+        <span className="set-label" id="notif-prose-label">
+          {PROSE_QUESTIONS_LABEL}
+        </span>
+        <span className="set-hint notif-rule-desc">{PROSE_QUESTIONS_HINT}</span>
+      </span>
+      <label className="ca-switch">
+        <input
+          type="checkbox"
+          id="notif-prose-questions"
+          aria-labelledby="notif-prose-label"
+          checked={on}
+          disabled={busy}
+          onChange={async (e) => {
+            const want = e.target.checked;
+            const row = e.currentTarget;
+            setBusy(true);
+            try {
+              await saveProseQuestions(want);
+              if (!flashSaved(row)) toast(want ? "Questions in plain words count" : "Only real prompts count");
+            } catch {
+              toast("Save failed: questions in plain words");
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+        <span className="ca-slider" />
+      </label>
+    </div>
   );
 }
 

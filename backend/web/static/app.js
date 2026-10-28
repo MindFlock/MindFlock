@@ -35062,6 +35062,20 @@ async function saveAskPopup(on) {
 	queryClient.setQueryData(NOTIFY_VIEW_KEY, v);
 	return v?.ask_popup !== false;
 }
+function useProseQuestions() {
+	return useQuery({
+		queryKey: NOTIFY_VIEW_KEY,
+		queryFn: () => api("/api/notify/ntfy"),
+		staleTime: 6e4,
+		refetchInterval: 3e5,
+		retry: false
+	}).data?.prose_questions === true;
+}
+async function saveProseQuestions(on) {
+	const v = await api("/api/notify/ntfy", { json: { prose_questions: on } });
+	queryClient.setQueryData(NOTIFY_VIEW_KEY, v);
+	return v?.prose_questions === true;
+}
 function dismissQuestion(title) {
 	return instApi(title, "/asking/dismiss", { json: {} });
 }
@@ -94705,7 +94719,9 @@ function groupRules(rules) {
 }
 var ASK_POPUP_LABEL = "Pop up a session's permission and choice prompts in the middle of the screen";
 var ASK_POPUP_HINT = "When an agent asks for permission or shows a choice — Claude's own questions included — answer it right there, by click, keys or voice. A question asked in plain words at the end of a reply doesn't pop up: the bell, the rail and the notification show it, and its Reply opens it here. Later puts it off; the bell keeps it.";
-var NEEDS_INPUT_EXTRA = "Also covers a question the agent asks in plain words at the end of its reply.";
+var NEEDS_INPUT_EXTRA = "Also covers a question the agent asks in plain words at the end of its reply, when that switch is on.";
+var PROSE_QUESTIONS_LABEL = "Count a question asked in plain words at the end of a reply";
+var PROSE_QUESTIONS_HINT = "Off: only a real prompt counts — a permission, a plan approval, Claude's question menu. On: a reply that ends with a question also puts a Question on the session's row, in the bell and in the notification, answered with Reply.";
 var ONLY_BELL_HINT = "Right now alerts only show in the bell. Turn on desktop or phone alerts to hear about them when you're away.";
 var AGENT_WORDS_LABEL = "Include the agent's words in pushes";
 var AGENT_WORDS_HINT = "The spoken summary of a finished turn and the question of a dialog travel through your ntfy server.";
@@ -94791,6 +94807,7 @@ function Notifications({ gotoScreen }) {
 					})]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AskPopupRow, {}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ProseQuestionsRow, {}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "notif-channel set-switch-row",
 					id: "notif-browser-row",
@@ -95243,6 +95260,49 @@ function Ntfy({ onChange, setup = 0 } = {}) {
 			]
 		})
 	] });
+}
+function ProseQuestionsRow() {
+	const on = useProseQuestions();
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "notif-channel set-switch-row",
+		id: "notif-prose-row",
+		"data-channel": "prose",
+		title: "A reply that ends with a question in plain words counts as the session asking",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "notif-rule-text",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				id: "notif-prose-label",
+				children: PROSE_QUESTIONS_LABEL
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint notif-rule-desc",
+				children: PROSE_QUESTIONS_HINT
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "ca-switch",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "checkbox",
+				id: "notif-prose-questions",
+				"aria-labelledby": "notif-prose-label",
+				checked: on,
+				disabled: busy,
+				onChange: async (e) => {
+					const want = e.target.checked;
+					const row = e.currentTarget;
+					setBusy(true);
+					try {
+						await saveProseQuestions(want);
+						if (!flashSaved(row)) toast(want ? "Questions in plain words count" : "Only real prompts count");
+					} catch {
+						toast("Save failed: questions in plain words");
+					} finally {
+						setBusy(false);
+					}
+				}
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+		})]
+	});
 }
 function AskPopupRow() {
 	const on = useAskPopup();

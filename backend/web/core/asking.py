@@ -13,7 +13,13 @@ Two ways an agent waits on a person, one shape for both (the instance rows'
 * ``kind: "question"`` — the agent asked in plain prose and its turn ended:
   the session is idle, its newest reply ENDS with a question
   (:func:`question_in`), and nobody has put input into it since. Nothing on
-  screen blocks; the answer is a prompt (``/send``).
+  screen blocks; the answer is a prompt (``/send``). **Only while
+  ``notifications.prose_questions`` is on** (:func:`prose_on`; off by
+  default): the owner wants a Question only for a real prompt — a
+  permission, a plan approval, Claude's question menu — not for a reply
+  that happens to end with "Should I also…?". Off, :func:`current`,
+  :func:`announce` and :func:`peek` report nothing for this kind, so the
+  row, the bell, the outbox, the push and the voice router stay quiet.
 
 The reply text comes from, in order: the Stop hook's reply file
 (``spoken.read_reply``, Claude), the provider's newest assistant text
@@ -324,6 +330,17 @@ def _save_store() -> None:
         pass
 
 
+def prose_on() -> bool:
+    """``notifications.prose_questions`` (default off; an unreadable store
+    says off)."""
+    try:
+        from backend.config import settings as settings_store
+
+        return bool(settings_store.load_settings().notifications.prose_questions)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def question_id(ts) -> str:
     """The ``/dialog`` id of a prose question (``"q:<ts>"``)."""
     return "q:%.3f" % float(ts or 0.0)
@@ -520,7 +537,7 @@ def current(title: str, inst, activity: str) -> Optional[dict]:
     try:
         if activity == "clarify":
             return dialog_asking(title, inst)
-        if activity != "idle":
+        if activity != "idle" or not prose_on():
             return None
         rec = _observe(title, inst)
         return _question(rec) if _armed(rec, title) else None
@@ -550,6 +567,8 @@ def announce(title: str, inst) -> Optional[dict]:
     announced, else None. The caller emits; claiming here is what makes it
     once. Never raises."""
     try:
+        if not prose_on():
+            return None
         rec = _observe(title, inst)
         if not _armed(rec, title):
             return None
@@ -576,6 +595,8 @@ def announce(title: str, inst) -> Optional[dict]:
 def peek(title: str) -> Optional[str]:
     """The question ``title`` is asking right now per the last observation
     (no source read), or None."""
+    if not prose_on():
+        return None
     with _LOCK:
         rec = dict(_STATE.get(title) or {})
     return rec.get("text") if _armed(rec, title) else None

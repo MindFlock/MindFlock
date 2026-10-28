@@ -743,6 +743,14 @@ def _agent_words_on() -> bool:
         return False
 
 
+def _prose_questions_on() -> bool:
+    """``notifications.prose_questions`` (default off)."""
+    try:
+        return bool(settings_store.load_settings().notifications.prose_questions)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _ask_popup_on() -> bool:
     """``notifications.ask_popup`` (default on; an unreadable store says on)."""
     try:
@@ -1181,6 +1189,10 @@ class NotifyAddon(Addon):
                 # writes through this view: a session's question pops up in
                 # the middle of the screen (desktop and phone).
                 patch["ask_popup"] = bool(payload.get("ask_popup"))
+            if "prose_questions" in payload:
+                # Whether a question in plain words counts at all (default
+                # off): the switch under the pop-up's, same view.
+                patch["prose_questions"] = bool(payload.get("prose_questions"))
 
             # Validate whenever the channel is (or is becoming) on, and whenever
             # a topic is present at all — but not "pick a topic" for someone who
@@ -1377,6 +1389,8 @@ def _ntfy_view() -> dict:
         "agent_words": _agent_words_on(),
         # A session's question pops up mid-screen (desktop + phone follow it).
         "ask_popup": _ask_popup_on(),
+        # A reply ending with a question in plain words counts as asking.
+        "prose_questions": _prose_questions_on(),
         "configured": cfg.configured,
         "active": cfg.active,
         "public_server": cfg.is_public_server,
