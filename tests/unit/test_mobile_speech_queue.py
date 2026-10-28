@@ -455,3 +455,14 @@ def test_every_unasked_reply_path_asks_is_news():
     assert js.count("voiceHeardNow(title, true)") == 3  # voiceSend ×2, voiceSendOn
     say_last = _whole(js, "voiceSayLast")
     assert "voiceIsNews" not in say_last and "voice.sayLast = voiceSayLast;" in js
+
+
+def test_the_sheets_mic_ends_the_hands_quiet_window():
+    """A tap on the ask sheet keeps what the sheet moves to unread for 3 s
+    (askHandsOn → askMayNarrate); the sheet's mic is the person turning to
+    voice, so a step voice moves the sheet to right after a tap is still
+    read (askSelVoiceNext) — never silenced by the earlier hand."""
+    mic = _whole(_js(), "askMicTap")
+    assert "ask.handAt = 0;" in mic
+    assert mic.index("if (!askVoiceOn(e.title)) return;") < mic.index("ask.handAt = 0;")
+    assert mic.index("ask.handAt = 0;") < mic.index("askListenFor(e, false);")
