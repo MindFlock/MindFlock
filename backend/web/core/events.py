@@ -174,6 +174,11 @@ EVENT_NAMES = (
     # "previous_name"} — how the previous driver hears they lost it.
     "session.presence_changed",
     "session.driver_changed",
+    # The owner renamed a session (``POST /api/aliases`` delta): ``new`` is
+    # the name it is now called, "" when the rename was cleared (data:
+    # {"name": str}). Every open browser — the owner's others, a guest's —
+    # re-reads the alias map on it, so a rename shows everywhere at once.
+    "session.renamed",
     # A background job the agent left running first passed the duration it
     # was expected to take (a person's, the agent's, or the command's own
     # MINDFLOCK_EXPECT=; see providers.claude_background) — at 1×, not the
@@ -344,6 +349,12 @@ EVENT_NAMES = (
     # "current", "here", "blocked", "behind": [{"key", "host", "version"}],
     # "count", "detail"}).
     "update.available",
+    # A guest link's page selected a session, or came back after a while
+    # (core.guests.note_focus): ``session``/``new`` are the title it is on,
+    # ``old`` the one before ("" when they had been away), data: {"link",
+    # "label", "title", "joined"}. The owner's rail moves the guest's pill
+    # on it, and follows when asked to.
+    "guest.focus_changed",
     # The machine's memory headroom changed level (backend.memory_pressure,
     # the server's memory watch; ``session`` is ""). ``old``/``new`` are
     # "ok" | "low" | "critical"; while low or critical, agent spawns, team-run

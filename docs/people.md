@@ -174,14 +174,37 @@ and the block offers to turn it on first.
 What the link holds, exactly (`backend/web/core/guests.py`):
 
 - **Their sessions, as yours.** Everything under `/api/instances/<title>`
-  for a title on the link — the terminal and shell, prompts, answers, the
-  queue, voice, find, the family thread, waking, the diff and history — with
-  the owner's calls held back: close/delete, copy, commit, push, PR, merge,
-  fast-track, branch, fences, zones, owner/parent/order/profile answer 403.
-- **Every other session: a stub.** `GET /api/instances` lists it as
-  `{title, status, locked: true}` — the rail draws it crossed out, the phone
-  page leaves it out — and every call on it is `403 {"error": "not part of
-  your invite"}`. The event stream carries only their sessions' events.
+  for a title the link reaches — the terminal and shell, prompts, answers,
+  the queue, voice, find, the family thread, waking, the diff and history —
+  with the owner's calls held back: close/delete, copy, commit, push, PR,
+  merge, fast-track, branch, fences, zones, owner/parent/order/profile answer
+  403. A link **reaches its named sessions and their sub-sessions**: anything
+  whose parent chain leads to a named title, spawned before the link or
+  after it (`guests.reach`, per request). The picker lists root sessions
+  only — a sub-session is never picked on its own, it comes with its parent.
+- **Under your names.** A session the owner renamed is called that for the
+  guest too, now and after any later rename: `GET /api/aliases` is on the
+  guest's read-only list (filtered to the link's reach) and a rename is
+  `session.renamed` on the bus, which every open page — the owner's other
+  devices, the guest's tab — answers by re-reading the map
+  (`frontend/src/lib/aliasSync.ts`). A guest cannot rename (the POST is
+  403; the UI reverts).
+- **Every other session: absent.** `GET /api/instances` lists only what the
+  link reaches — nothing crossed out, nothing to wonder about — and every
+  call on another session is `403 {"error": "not part of your invite"}`.
+  The event stream carries only their sessions' events.
+- **Their own name.** The owner does not name the link. The guest's first
+  screen asks *What should we call you?* (`POST /api/guest/name`, required
+  before their pill shows; unique on this rail — another guest's name or the
+  owner's own is refused) and the name is kept on the link, so a reload
+  doesn't ask again.
+- **Where they are.** The guest's page reports the session it has selected
+  (`POST /api/instances/<title>/focus`, on every change and every 30 s) and
+  the owner's rail shows a **pill with the guest's name** on that row; it
+  moves as they click (`guest.focus_changed`; `GET /api/guests` rows carry
+  `focus` for a fresh page) and a toast says when they arrive. Press the
+  pill to **follow** them — your selection then moves with theirs — press
+  again to stop. A page silent for 90 s has left (`guests.FOCUS_TTL_S`).
 - **Nothing else.** No creating sessions, no settings, no token, no devices,
   no links — a few read-only boot calls (`/api/config` says `guest:
   {label, sessions}`, which is what crosses the rail out) and the speech

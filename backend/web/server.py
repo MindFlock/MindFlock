@@ -3875,12 +3875,17 @@ def list_create_failures(title: str = "") -> JSONResponse:
 
 
 @app.get("/api/aliases")
-def get_aliases() -> JSONResponse:
+def get_aliases(request: Request) -> JSONResponse:
     """The synced session display aliases (title -> label). See core.aliases:
-    the browser owns renames; this mirror only feeds server-originated text
-    (ntfy pushes) so a phone notification names the tab the way the sidebar
-    does."""
-    return JSONResponse({"aliases": _aliases.all_aliases()})
+    the owner's browsers own renames; this mirror feeds server-originated
+    text (ntfy pushes) and is the ONLY source of names for a guest link's
+    browser — the owner's renames are what a guest sees, filtered to the
+    sessions the link reaches."""
+    aliases = _aliases.all_aliases()
+    guest = _guests.scope_guest(request)
+    if guest is not None:
+        aliases = _guests.aliases_for(guest, aliases)
+    return JSONResponse({"aliases": aliases})
 
 
 @app.post("/api/aliases")
@@ -3921,6 +3926,10 @@ def post_aliases(payload: dict) -> JSONResponse:
             status_code=409,
         )
     _aliases.set_alias(title, alias)
+    # Every open browser re-reads the map on this — the owner's other devices
+    # and a guest's — so the rename shows everywhere at once, not at their
+    # next page load.
+    _events.BUS.emit("session.renamed", session=title, new=alias, data={"name": alias})
     return JSONResponse({"aliases": _aliases.all_aliases()})
 
 

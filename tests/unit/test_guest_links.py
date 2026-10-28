@@ -146,7 +146,8 @@ def test_path_allowed(method, path, ok):
     assert guests.path_allowed(method, path, G) is ok
 
 
-def test_stub_rows_keep_own_sessions_whole_and_cross_out_the_rest():
+def test_stub_rows_keep_own_sessions_whole_and_drop_the_rest(monkeypatch):
+    monkeypatch.setattr(guests, "_live_instances", lambda: {})
     rows = [
         {"title": "alpha", "status": "running", "branch": "x", "folder": "/w"},
         {
@@ -159,23 +160,171 @@ def test_stub_rows_keep_own_sessions_whole_and_cross_out_the_rest():
         {"title": "mac::alpha", "status": "running", "device": "mac", "branch": "z"},
     ]
     out = guests.stub_rows(rows, G)
-    assert out[0] == rows[0]
-    assert out[1] == {
-        "title": "beta",
-        "status": "paused",
-        "device": "",
-        "hidden_by": "",
-        "pending": False,
-        "locked": True,
-    }
-    # Another device's same-titled session is not the one on the link.
-    assert out[2]["locked"] is True and "branch" not in out[2]
+    # Their session as is; another session simply absent — not crossed out,
+    # not a stub; another device's same-titled session is not the one on the
+    # link.
+    assert out == [rows[0]]
 
 
-def test_event_allowed():
+def test_event_allowed(monkeypatch):
+    monkeypatch.setattr(guests, "_live_instances", lambda: {})
     assert guests.event_allowed({"session": ""}, G)
     assert guests.event_allowed({"session": "alpha"}, G)
     assert not guests.event_allowed({"session": "beta"}, G)
+
+
+class _Inst:
+    def __init__(self, parent=""):
+        self.Parent = parent
+
+
+#: alpha (named) → w1 → w1a; beta → w2 (not reached); orphan has a dead parent.
+LIVE = {
+    "alpha": _Inst(),
+    "w1": _Inst("alpha"),
+    "w1a": _Inst("w1"),
+    "beta": _Inst(),
+    "w2": _Inst("beta"),
+    "orphan": _Inst("gone"),
+}
+
+
+def test_reach_follows_lineage_down_from_the_named_sessions(monkeypatch):
+    # Sub-sessions ride with their parent, however deep, whenever spawned;
+    # a session under another root does not, nor one whose parent is gone.
+    assert guests.reach(G, LIVE) == ["alpha", "w1", "w1a"]
+    assert guests.reach({"sessions": []}, LIVE) == []
+    # Named titles stay first, in the link's order; descendants sorted after.
+    assert guests.reach({"sessions": ["beta", "alpha"]}, LIVE) == [
+        "beta",
+        "alpha",
+        "w1",
+        "w1a",
+        "w2",
+    ]
+    # The policy functions use the live reach, not the stored list.
+    monkeypatch.setattr(guests, "_live_instances", lambda: dict(LIVE))
+    assert guests.path_allowed("GET", "/api/instances/w1a/diff", G)
+    assert guests.path_allowed("POST", "/api/instances/w1/send", G)
+    assert not guests.path_allowed("GET", "/api/instances/w2/diff", G)
+    assert guests.event_allowed({"session": "w1"}, G)
+    assert not guests.event_allowed({"session": "orphan"}, G)
+    rows = [{"title": t, "status": "running"} for t in LIVE]
+    assert [r["title"] for r in guests.stub_rows(rows, G)] == ["alpha", "w1", "w1a"]
+    assert guests.aliases_for(G, {"alpha": "A", "w1": "W", "beta": "B"}) == {
+        "alpha": "A",
+        "w1": "W",
+    }
+
+
+def test_a_guest_sees_the_owners_renames_for_its_sessions_only(link, monkeypatch):
+    from backend.web.core import aliases as _aliases
+
+    _, tok = link
+    monkeypatch.setattr(guests, "_live_instances", lambda: {})
+    monkeypatch.setattr(
+        _aliases, "all_aliases", lambda: {"alpha": "Login fix", "gamma": "Secret"}
+    )
+    c = _guest_client(tok)
+    assert c.get("/api/aliases").json() == {"aliases": {"alpha": "Login fix"}}
+    # A guest may not rename: the owner's names are the names.
+    assert (
+        c.post("/api/aliases", json={"title": "alpha", "alias": "x"}).status_code == 403
+    )
+
+
+def test_a_guest_names_themselves_once_and_uniquely(link, owner, monkeypatch):
+    from backend.web.core import person as _person
+
+    monkeypatch.setattr(guests, "_live_instances", lambda: {})
+    monkeypatch.setattr(guests, "_FOCUS", {})
+    monkeypatch.setattr(_person, "current", lambda: {"id": "o", "name": "Erik"})
+    rec, tok = link
+    other = guests.create("", ["gamma"])
+    guests.set_name(other["id"], "Pat")
+    c = _guest_client(tok)
+    # Unnamed so far: config says so (the page asks), the owner's row too.
+    assert c.get("/api/config").json()["guest"]["name"] == ""
+    assert owner.get("/api/guests").json()["links"][0]["name"] == ""
+    # Empty is a 400; another guest's name or the owner's own is a 409.
+    assert c.post("/api/guest/name", json={"name": "   "}).status_code == 400
+    r = c.post("/api/guest/name", json={"name": "pat"})
+    assert r.status_code == 409 and r.json()["taken"] is True
+    assert c.post("/api/guest/name", json={"name": "erik"}).status_code == 409
+    # A free name sticks — whitespace squeezed — survives a restart, and is
+    # what config, the owner's row and the pill say.
+    r = c.post("/api/guest/name", json={"name": "  Sam   Lee "})
+    assert r.status_code == 200 and r.json() == {"name": "Sam Lee"}
+    monkeypatch.setattr(guests, "_LINKS", None)
+    assert c.get("/api/config").json()["guest"]["name"] == "Sam Lee"
+    assert owner.get("/api/guests").json()["links"][0]["name"] == "Sam Lee"
+    seen = []
+    unsub = server._events.BUS.subscribe(
+        lambda e: seen.append(e) if e["event"] == "guest.focus_changed" else None
+    )
+    try:
+        c.post("/api/instances/alpha/focus", json={})
+        assert seen[-1]["data"]["label"] == "Sam Lee"
+        # Renaming while on the rail re-announces the pill under the new name.
+        c.post("/api/guest/name", json={"name": "Sam"})
+        assert seen[-1]["data"] == {
+            "link": rec["id"],
+            "label": "Sam",
+            "title": "alpha",
+            "joined": False,
+        }
+    finally:
+        unsub()
+    # One's own name again is fine; the owner's browser has no link to name.
+    assert c.post("/api/guest/name", json={"name": "SAM"}).status_code == 200
+    assert owner.post("/api/guest/name", json={"name": "x"}).status_code == 403
+
+
+def test_a_guests_focus_moves_a_pill_on_the_owners_rail(link, owner, monkeypatch):
+    rec, tok = link
+    monkeypatch.setattr(guests, "_live_instances", lambda: {})
+    monkeypatch.setattr(guests, "_FOCUS", {})
+    seen = []
+    unsub = server._events.BUS.subscribe(
+        lambda e: seen.append(e) if e["event"] == "guest.focus_changed" else None
+    )
+    try:
+        c = _guest_client(tok)
+        # Nobody here yet.
+        assert owner.get("/api/guests").json()["links"][0]["focus"] is None
+        r = c.post("/api/instances/alpha/focus", json={})
+        assert r.status_code == 200 and r.json()["guest"] is True
+        assert r.json()["focus"]["title"] == "alpha"
+        # Arriving is an event (joined); staying put (the heartbeat) is not;
+        # moving is.
+        assert [e["data"]["title"] for e in seen] == ["alpha"]
+        assert seen[0]["data"] == {
+            "link": rec["id"],
+            "label": "Mauricio",
+            "title": "alpha",
+            "joined": True,
+        }
+        c.post("/api/instances/alpha/focus", json={})
+        assert len(seen) == 1
+        c.post("/api/instances/beta/focus", json={})
+        assert [e["new"] for e in seen] == ["alpha", "beta"] and seen[1][
+            "old"
+        ] == "alpha"
+        assert seen[1]["data"]["joined"] is False
+        # The owner's listing says where they are …
+        assert owner.get("/api/guests").json()["links"][0]["focus"]["title"] == "beta"
+        # … a session off the link is the invite's 403 …
+        assert c.post("/api/instances/gamma/focus", json={}).status_code == 403
+        # … and a stale report means they left.
+        guests._FOCUS[rec["id"]]["ts"] -= guests.FOCUS_TTL_S + 1
+        assert owner.get("/api/guests").json()["links"][0]["focus"] is None
+        # The owner's own browser reporting is nobody's business.
+        assert owner.post("/api/instances/alpha/focus", json={}).json() == {
+            "ok": True,
+            "guest": False,
+        }
+    finally:
+        unsub()
 
 
 # --------------------------------------------------------------------------- #
@@ -203,7 +352,11 @@ def test_guest_sees_itself_in_config(link):
     _, tok = link
     r = _guest_client(tok).get("/api/config")
     assert r.status_code == 200
-    assert r.json()["guest"] == {"label": "Mauricio", "sessions": ["alpha", "beta"]}
+    assert r.json()["guest"] == {
+        "label": "Mauricio",
+        "name": "",
+        "sessions": ["alpha", "beta"],
+    }
 
 
 def test_owner_config_has_no_guest(owner):
@@ -242,8 +395,9 @@ def test_guest_token_is_not_the_owners(link):
     assert auth.own_token_valid(tok) is False
 
 
-def test_instances_rows_are_stubbed_for_a_guest(link, monkeypatch):
+def test_instances_rows_are_only_the_guests_own(link, monkeypatch):
     _, tok = link
+    monkeypatch.setattr(guests, "_live_instances", lambda: {})
     monkeypatch.setattr(
         server,
         "_guest_rows",
@@ -256,16 +410,7 @@ def test_instances_rows_are_stubbed_for_a_guest(link, monkeypatch):
         ),
     )
     rows = _guest_client(tok).get("/api/instances").json()
-    by = {r["title"]: r for r in rows}
-    assert by["alpha"]["branch"] == "b"
-    assert by["zeta"] == {
-        "title": "zeta",
-        "status": "idle",
-        "device": "",
-        "hidden_by": "",
-        "pending": False,
-        "locked": True,
-    }
+    assert rows == [{"title": "alpha", "branch": "b", "status": "running"}]
 
 
 # --------------------------------------------------------------------------- #
@@ -490,6 +635,7 @@ def test_public_scope_never_carries_the_token(link):
     scope = {"state": {"guest": g}}
     assert guests.public_scope(scope) == {
         "label": "Mauricio",
+        "name": "",
         "sessions": ["alpha", "beta"],
     }
 

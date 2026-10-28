@@ -815,6 +815,17 @@ export function titleFromPrompt(prompt: string): string {
   return out;
 }
 
+/** The name a session with an empty Name and no task gets from WHERE it
+ * works: the folder's own name, lowercased, non-word runs hyphenated — the
+ * mirror of the server's session_create.title_from_place
+ * ("/home/me/Allure/sitecheck-bot7" → "sitecheck-bot7"). "" for no folder
+ * (the server then calls it "untitled"). */
+export function titleFromFolder(folder: string): string {
+  const name = (folder || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "";
+  const words = name.toLowerCase().match(/[a-z0-9]+/g) || [];
+  return words.join("-").slice(0, TITLE_FROM_PROMPT_MAX).replace(/^-+|-+$/g, "");
+}
+
 /** git-branch-safe, as the engine's sanitize_branch_name builds it. */
 export function sanitizeBranch(s: string): string {
   return s
@@ -866,13 +877,14 @@ export function freeTitle(base: string, taken: ReadonlySet<string>): string {
 
 /** What Create will call the session and its branch, given the names
  * already in use. `clash` is a TYPED name another session already has (the
- * server refuses it); `renumbered` is the name made from the task that was
- * taken, so this one gets a number. */
+ * server refuses it); `renumbered` is the name made from the task (or the
+ * folder) that was taken, so this one gets a number. */
 export interface PlannedName {
   title: string;
   branch: string;
-  /** Where the name comes from: typed, made from the task, or neither. */
-  from: "name" | "task" | "none";
+  /** Where the name comes from: typed, made from the task, made from the
+   * folder it works in, or none of those ("untitled"). */
+  from: "name" | "task" | "folder" | "none";
   clash: boolean;
   renumbered: string;
 }
@@ -882,6 +894,9 @@ export function plannedName(where: {
   title: string;
   prompt: string;
   taken: ReadonlySet<string>;
+  /** The folder the session will work in — its name is the fallback when
+   * there is no task to name the session from. */
+  folder?: string;
 }): PlannedName {
   const typed = where.title.trim();
   if (typed)
@@ -892,8 +907,9 @@ export function plannedName(where: {
       clash: where.taken.has(typed),
       renumbered: "",
     };
-  const base = titleFromPrompt(where.prompt);
-  const from = base ? "task" : "none";
+  const fromTask = titleFromPrompt(where.prompt);
+  const base = fromTask || titleFromFolder(where.folder || "");
+  const from = fromTask ? "task" : base ? "folder" : "none";
   const title = freeTitle(base || "untitled", where.taken);
   return {
     title,

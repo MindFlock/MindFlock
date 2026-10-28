@@ -69,6 +69,7 @@ import { MidName } from "./MidName";
 import { TaskLine, taskLineOf } from "./TaskLine";
 import { sessionMenu } from "../../lib/sessionMenu";
 import { PresenceDots } from "../presence/Presence";
+import { GuestPills } from "../presence/GuestPill";
 import { useMe } from "../../lib/presence";
 import { PEER_SCREEN, peerChip } from "../../lib/peer";
 import { actionCtx, sessionAction } from "../../lib/sessionActionTable";
@@ -869,6 +870,9 @@ export const SidebarRow = memo(function SidebarRow({
           {inst.shared_branch && (
             <span className="shared-branch-mark" title={"Shared branch " + (inst.branch || "") + " — others push to it too"} aria-label="shared branch">⑂</span>
           )}
+          {/* A guest link's visitor looking at this session (lib/guestFocus):
+              their name, click to follow them around. */}
+          {!pending && <GuestPills title={inst.title} />}
           {extra.check && (
             <span className={"stagechip checkchip " + extra.check.cls} title={extra.check.title}>
               {extra.check.label}

@@ -7,6 +7,11 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { api } from "./api/client";
 import { setWheelDamping } from "./lib/terminals";
+import { installAliasSync } from "./lib/aliasSync";
+
+/** How often a guest's page re-says which session it is on (the server
+ * forgets a focus after 90 s: core.guests.FOCUS_TTL_S). */
+export const GUEST_FOCUS_HEARTBEAT_MS = 30_000;
 import { useConfig, useExtensions, useInstances, useIntakeWarm } from "./state/queries";
 import { useUi, type SpecialKind } from "./state/store";
 import { followAutopilot, noteActivity, reconcileLoopReset } from "./lib/stage";
@@ -34,6 +39,7 @@ import { PeerSessionViewer } from "./components/PeerSessionViewer";
 import { MakePrDialog } from "./components/dialogs/MakePrDialog";
 import { AskDialog } from "./components/dialogs/AskDialog";
 import { RenameDialog } from "./components/dialogs/RenameDialog";
+import { GuestNameDialog } from "./components/dialogs/GuestNameDialog";
 import { RecentDialog } from "./components/dialogs/RecentDialog";
 import { SetupDialog, useDoctorAutoShow } from "./components/dialogs/SetupDialog";
 import { ConnectGitHubDialog } from "./components/dialogs/ConnectGitHub";
@@ -83,24 +89,30 @@ export default function App() {
       .catch(() => {});
   }, []);
 
+  // Renames: seed-and-adopt for the owner, read-only for a guest, and live
+  // on `session.renamed` for both (lib/aliasSync). Waits for /api/config: the
+  // two paths differ, and a guest's seed POST would be a 403.
+  const isGuest = config ? !!config.guest : null;
   useEffect(() => {
-    // The answer is the merged map: adopt it, so a rename made in another
-    // browser is this one's name for the session too.
-    const aliases = useUi.getState().aliases;
-    api<{ aliases?: Record<string, string> }>("/api/aliases", {
-      json: { aliases },
-    })
-      .then((r) => {
-        if (!r?.aliases) return;
-        try {
-          localStorage.setItem("mf_aliases", JSON.stringify(r.aliases));
-        } catch {
-          /* storage off: still adopt it for this load */
-        }
-        useUi.setState({ aliases: r.aliases });
-      })
-      .catch(() => {});
-  }, []);
+    if (isGuest === null) return;
+    installAliasSync(isGuest);
+  }, [isGuest]);
+
+  // A guest's page tells the owner where it is: the session it has selected,
+  // on every change and every 30 s while open (core.guests.note_focus) — the
+  // owner's rail shows a pill with the guest's name on that row and can
+  // follow it. Never from the owner's own browser, and not before the guest
+  // has said who they are (GuestNameDialog): the pill carries their name.
+  const focusedTitle = ui.focused || "";
+  const guestNamed = !!config?.guest?.name;
+  useEffect(() => {
+    if (!isGuest || !guestNamed || !focusedTitle) return;
+    const report = () =>
+      api("/api/instances/" + encodeURIComponent(focusedTitle) + "/focus", { json: {} }).catch(() => {});
+    report();
+    const t = setInterval(report, GUEST_FOCUS_HEARTBEAT_MS);
+    return () => clearInterval(t);
+  }, [isGuest, guestNamed, focusedTitle]);
 
   // Capability gating: body classes drive the caps-gate CSS (and addon CSS).
   useEffect(() => {
@@ -311,6 +323,7 @@ export default function App() {
       <PeerSessionViewer />
       <MakePrDialog />
       <RenameDialog />
+      <GuestNameDialog />
       <RecentDialog />
       <SetupDialog />
       <ConnectGitHubDialog />

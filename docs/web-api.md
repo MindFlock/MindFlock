@@ -294,7 +294,8 @@ appears as `loading` until ready.
 {
   "title": "sc-19815",          // optional: with story_id defaults to sc-<id>; else
                                 //   named from "prompt" (add-readme-section-about-setup,
-                                //   -2 when taken), else "untitled" / "untitled-N"
+                                //   -2 when taken), else from repo_path's folder name
+                                //   (sitecheck-bot7), else "untitled" / "untitled-N"
   "program": "claude",          // optional; default from ~/.mindflock/config.json
   "repo_path": "/path/to/repo", // base repo (plain sessions; optional for provisioned)
   "in_place": false,            // run directly in repo_path, no worktree
@@ -2424,12 +2425,14 @@ Let someone else type into a few of this device's sessions through a link
 ([people.md](people.md#guest-links--someone-else-in-a-few-of-your-sessions)).
 A guest signs in like the owner (`?token=` → cookie), but the gate records the
 link and allows per request: anything on `/api/instances/<title>` for a title
-on the link (writes only on the typing routes: terminal, shell, send, answer,
-asking, dialog, prompt, queue, voice, find, messages, thread, wake, jobs,
-background, code-map), `GET /api/instances` (every other row a stub:
-`{title, status, device, hidden_by, pending, locked: true}`), `WS /api/events`
-(their sessions' envelopes only), a few read-only boot calls (`/api/config`
-carries `guest: {label, sessions}`; `/api/prefs`, `/api/aliases`,
+the link reaches — the named sessions and their live sub-sessions, whenever
+spawned (`guests.reach`) — (writes only on the typing routes: terminal, shell,
+send, answer, asking, dialog, prompt, queue, voice, find, messages, thread,
+wake, jobs, background, code-map, focus), `GET /api/instances` (only the rows
+the link reaches; every other session is absent), `WS /api/events` (their
+sessions' envelopes only), a few read-only boot calls (`/api/config` carries
+`guest: {label, sessions}` — the whole reach; `/api/prefs`, `/api/aliases`
+(the owner's renames, filtered to the reach),
 `/api/addons`, `/api/devices`, `/api/providers[/status]`, `/api/setup`,
 `/api/person`, `/api/voice[/help]`, `/api/mindflock/status`) and the speech
 POSTs (`/api/voice/transcribe`, `/api/voice/speak`, `/api/paste-image`).
@@ -2445,6 +2448,8 @@ device 403, a change needs `may_configure`.
 | DELETE | `/api/guests/tunnel` | **Kill the connection**: every link revoked, the tunnel stopped → `{ok, revoked}`. A guest's open websockets close on their next frame (close code 4401) |
 | POST | `/api/guests/{id}` | `{label?, sessions?}` — change what the link opens; the URL stays; sockets on a session the link lost close; 400 for an empty list, 404 unknown |
 | DELETE | `/api/guests/{id}` | Revoke: the link's open sockets close on their next frame and its token stops working; the last link takes the tunnel down; 404 unknown |
+| POST | `/api/guest/name` | **The guest's**: `{name}` → `{name}` — what they are called on the owner's rail (the page asks on open; required before the pill shows). Unique on this rail: another guest's name or the owner's own → **409** `{error, taken: true}`; empty → 400; from the owner's browser → 403. Kept on the link (`GET /api/guests` rows carry `name`; `/api/config` → `guest.name`) |
+| POST | `/api/instances/{title}/focus` | **The guest's** other call here: its page selected `title` (sent on every change and every 30 s) → `{ok, guest: true, focus: {title, ts}}`; emits `guest.focus_changed` when the session changed or they had been away. `GET /api/guests` rows carry `focus: {title, ts} \| null` (null after 90 s of silence). From the owner's own browser a no-op `{ok, guest: false}` |
 
 ### Peer links — the safety number, unlinking, the off switch, export
 
@@ -2600,8 +2605,12 @@ usage_restored|turn_ended|question|message|presence_changed|driver_changed|
 pr_state_changed|pr_review_changed|test_plan_ready|
 test_plan_failed|test_plan_due|test_plan_checked|test_plan_step_failed|
 test_plan_gave_up|
-red_zone_blocked|red_zone_breached|red_zone_tampered`
-(plus addon-originated `addon.*`). `session.pr_review_changed` reports a
+red_zone_blocked|red_zone_breached|red_zone_tampered|renamed`,
+`guest.focus_changed` (plus addon-originated `addon.*`). `session.renamed`
+is the owner renaming a session (`POST /api/aliases` delta; `new` = the name,
+`""` when cleared): every open page re-reads `/api/aliases` on it.
+`guest.focus_changed` is a guest link's page selecting a session (`data:
+{link, label, title, joined}`): the owner's rail moves the guest's pill. `session.pr_review_changed` reports a
 *reviewer's* verdict on the branch's open PR (`"" → approved →
 changes_requested`), read off the PR's review list rather than from
 `mergeable_state`, which cannot express "approved"; like `pr_state_changed` it

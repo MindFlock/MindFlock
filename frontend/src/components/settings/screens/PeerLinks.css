@@ -468,6 +468,61 @@
 .peer-guests {
   margin-top: 18px;
 }
+/* The picker dialog (opened by ticking "I understand"): the same card as
+   #rename-form — a Modal is only the backdrop, its child is the card. */
+#peer-guests-pick-form {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px;
+  width: 460px;
+  max-width: 92vw;
+  max-height: 85vh;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--text);
+}
+#peer-guests-pick-form h2 {
+  margin: 0;
+  font-size: 16px;
+}
+#peer-guests-pick-form > .set-hint {
+  margin: 0;
+  font-size: 12px;
+}
+#peer-guests-pick-form > label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+#peer-guests-pick-form > label input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 9px 12px;
+  font-size: 13px;
+}
+#peer-guests-pick-form > label input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+#peer-guests-pick-form .peer-guest-pick {
+  max-height: 40vh;
+  font-size: 13px;
+  color: var(--text);
+}
+#peer-guests-pick-form .peer-guest-pick li {
+  padding: 4px 0;
+}
+#peer-guests-pick-form .modal-actions {
+  margin-top: 4px;
+}
+
 .peer-guest-pick {
   list-style: none;
   margin: 6px 0 8px;

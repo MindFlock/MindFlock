@@ -1120,6 +1120,7 @@ export function NewSessionDialog() {
     title,
     prompt,
     taken: device ? new Set<string>() : takenNames(liveRows || [], aliases),
+    folder: folderPath,
   });
   const branchKnown = isGit && folderCheck?.branchPrefix !== undefined;
   /** Sessions on this device already working in this repo, any way. */

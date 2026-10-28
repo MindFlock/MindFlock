@@ -2800,9 +2800,11 @@ task, fast-track) to run again or schedule.* — then **Folder** and **Agent**,
 its Task: the first line's first few words, filler dropped, lowercased and
 hyphenated, at most 32 characters (*Add a README section about setup* →
 `add-readme-section-about-setup`; `-2`, `-3`… when taken). With no Task either
-it is the `untitled` quick launch. The server does this
-(`session_create.title_from_prompt`), so a create from anywhere — the form,
-page 1, the API — gets the same name; the Name placeholder previews it.
+it is named for the **folder** it works in (`sitecheck-bot7`, `app-2`…), and
+only a launch with neither is the `untitled` quick launch. The server does
+this (`session_create.title_from_prompt`, `title_from_place`), so a create
+from anywhere — the form, page 1, the API — gets the same name; the Name
+placeholder previews it (`newSession.ts`: titleFromPrompt, titleFromFolder).
 
 **The by-hand path costs nothing.** The form is pre-filled with the template,
 agent and account the last session in that folder was started with — so

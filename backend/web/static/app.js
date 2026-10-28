@@ -24182,7 +24182,7 @@ function instApi(title, suffix, opts) {
 //#endregion
 //#region src/lib/guest.ts
 var locked = [];
-var listeners$5 = /* @__PURE__ */ new Set();
+var listeners$6 = /* @__PURE__ */ new Set();
 function splitLockedRows(list) {
 	if (!Array.isArray(list)) {
 		setLocked([]);
@@ -24206,23 +24206,14 @@ function splitLockedRows(list) {
 function setLocked(rows) {
 	if (rows.length === locked.length && rows.every((r, i) => r.title === locked[i].title && r.status === locked[i].status && r.device === locked[i].device)) return;
 	locked = rows;
-	for (const l of listeners$5) l();
-}
-function subscribe$1(l) {
-	listeners$5.add(l);
-	return () => listeners$5.delete(l);
-}
-function snapshot$1() {
-	return locked;
-}
-function useLockedRows() {
-	return (0, import_react.useSyncExternalStore)(subscribe$1, snapshot$1, snapshot$1);
+	for (const l of listeners$6) l();
 }
 function guestNote(guest) {
 	if (!guest) return "";
 	const n = guest.sessions.length;
 	const where = n === 1 ? "one session" : `${n} sessions`;
-	return guest.label ? `Guest link for ${guest.label} — ${where}` : `Guest link — ${where}`;
+	const who = guest.name || guest.label;
+	return who ? `You're here as ${who} — ${where}` : `Guest link — ${where}`;
 }
 //#endregion
 //#region src/lib/usageRefresh.ts
@@ -27535,7 +27526,7 @@ function rememberNewSessionChoice(repo, choice, kv = lsKV()) {
 }
 //#endregion
 //#region src/lib/windowName.ts
-function snapshot() {
+function snapshot$1() {
 	const w = globalThis;
 	try {
 		const list = w.mindflock?.sessions?.();
@@ -27549,7 +27540,7 @@ function windowName(title) {
 	if (!raw) return "";
 	const alias = useUi.getState().aliases[raw];
 	if (alias) return alias;
-	const inst = snapshot().find((i) => i && (i.title === raw || i.display_title === raw));
+	const inst = snapshot$1().find((i) => i && (i.title === raw || i.display_title === raw));
 	if (!inst) return raw;
 	return sessionLabel(inst.display_title || inst.title || raw, inst.branch || "").text || raw;
 }
@@ -27562,12 +27553,12 @@ function slotNumber(title) {
 		if (rail.length) {
 			let idx = rail.indexOf(raw);
 			if (idx < 0) {
-				const inst = snapshot().find((i) => i && i.display_title === raw);
+				const inst = snapshot$1().find((i) => i && i.display_title === raw);
 				if (inst) idx = rail.indexOf(inst.title);
 			}
 			return idx >= 0 && idx < 9 ? String(idx + 1) : "";
 		}
-		const { rows } = orderedInstances(snapshot().filter((i) => i && !isVerifySession(i)), ui.order);
+		const { rows } = orderedInstances(snapshot$1().filter((i) => i && !isVerifySession(i)), ui.order);
 		const filtered = rows.filter((i) => matchesFilter(i, ui.filter, ui.aliases));
 		const local = filtered.filter((i) => !i.device);
 		const remote = filtered.filter((i) => i.device);
@@ -27580,7 +27571,7 @@ function slotNumber(title) {
 function nameTakenBy(title, name) {
 	const n = String(name || "").trim();
 	if (!n) return "";
-	for (const i of snapshot()) {
+	for (const i of snapshot$1()) {
 		const t = i?.title;
 		if (!t || t === title || i.device) continue;
 		if (n === t || n === windowName(t)) return t;
@@ -33389,7 +33380,7 @@ function templateRunsNow() {
 function runInfoFor(name) {
 	return runsStatus.runs[(name || "").trim().toLowerCase()] || {};
 }
-function notify() {
+function notify$1() {
 	if (typeof document !== "undefined") document.dispatchEvent(new Event(TEMPLATES_CHANGED));
 }
 function setTemplates(list, kv = storage$1()) {
@@ -33397,7 +33388,7 @@ function setTemplates(list, kv = storage$1()) {
 	try {
 		kv?.setItem(TEMPLATES_MIRROR_KEY, JSON.stringify(cache$1));
 	} catch {}
-	notify();
+	notify$1();
 	return cache$1;
 }
 function templatesNow(kv = storage$1()) {
@@ -33875,7 +33866,7 @@ function applyLive(fields) {
 	}
 	if (Object.keys(st).length) useUi.setState(st);
 }
-function adopt(fields, since = null) {
+function adopt$1(fields, since = null) {
 	const inFlight = pendingFields();
 	const now = since ? writeGens(since.keys()) : null;
 	const take = {};
@@ -33938,13 +33929,13 @@ function pullPrefs() {
 					refused = r;
 					noteRefused(r, e);
 				} else {
-					if (Object.keys(plan.apply).length) adopt(plan.apply, started);
+					if (Object.keys(plan.apply).length) adopt$1(plan.apply, started);
 					if (dirtyFields().size) flushPrefWrites();
 					return;
 				}
 			}
 			settleFields([...unsent].filter((f) => !refused.includes(f)), gens);
-			if (Object.keys(plan.apply).length) adopt(plan.apply, started);
+			if (Object.keys(plan.apply).length) adopt$1(plan.apply, started);
 			markSeeded();
 			try {
 				reconcileAccent((await api("/api/settings"))?.settings, !wasSeeded);
@@ -33960,10 +33951,10 @@ var settleFirstPull = () => {};
 var firstPrefsPull = new Promise((r) => {
 	settleFirstPull = r;
 });
-var installed = false;
+var installed$1 = false;
 function installPrefsSync() {
-	if (installed) return;
-	installed = true;
+	if (installed$1) return;
+	installed$1 = true;
 	setRefusedListener((_fields, message) => toast(message, { duration: 1e4 }));
 	pullPrefs();
 	if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
@@ -33989,6 +33980,36 @@ function installPrefsSync() {
 		if (status !== "connected") return;
 		if (connectedOnce) repull();
 		connectedOnce = true;
+	});
+}
+//#endregion
+//#region src/lib/aliasSync.ts
+var installed = false;
+function adopt(aliases) {
+	try {
+		localStorage.setItem("mf_aliases", JSON.stringify(aliases));
+	} catch {}
+	useUi.setState({ aliases });
+}
+async function pullAliases() {
+	const r = await api("/api/aliases");
+	if (r?.aliases) adopt(r.aliases);
+}
+function installAliasSync(guest) {
+	if (installed) return;
+	installed = true;
+	if (guest) pullAliases().catch(() => {});
+	else {
+		const aliases = useUi.getState().aliases;
+		api("/api/aliases", { json: { aliases } }).then((r) => {
+			if (r?.aliases) adopt(r.aliases);
+		}).catch(() => {});
+	}
+	const ev = window.mindflock?.events;
+	if (!ev) return;
+	ev.subscribe("session.renamed", (env) => {
+		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
+		pullAliases().catch(() => {});
 	});
 }
 //#endregion
@@ -34061,11 +34082,11 @@ var records = /* @__PURE__ */ new Map();
 var known = /* @__PURE__ */ new Map();
 var epochCounter = 0;
 var version$1 = 0;
-var listeners$4 = /* @__PURE__ */ new Set();
+var listeners$5 = /* @__PURE__ */ new Set();
 function subscribeHost(cb) {
-	listeners$4.add(cb);
+	listeners$5.add(cb);
 	return () => {
-		listeners$4.delete(cb);
+		listeners$5.delete(cb);
 	};
 }
 function hostVersion() {
@@ -34073,7 +34094,7 @@ function hostVersion() {
 }
 function bump() {
 	version$1++;
-	for (const cb of listeners$4) cb();
+	for (const cb of listeners$5) cb();
 }
 function buildTarget(extId, surfaceId, ref) {
 	return extId + ":" + surfaceId + (ref ? ":" + ref : "");
@@ -37815,7 +37836,7 @@ var micState = {
 	caption: "",
 	unsure: ""
 };
-var listeners$3 = /* @__PURE__ */ new Set();
+var listeners$4 = /* @__PURE__ */ new Set();
 function publishMicState(patch) {
 	const next = {
 		...micState,
@@ -37823,15 +37844,15 @@ function publishMicState(patch) {
 	};
 	if (next.listening === micState.listening && next.title === micState.title && next.caption === micState.caption && next.unsure === micState.unsure) return;
 	micState = next;
-	listeners$3.forEach((l) => l());
+	listeners$4.forEach((l) => l());
 }
 function getMicState() {
 	return micState;
 }
 function subscribeMicState(cb) {
-	listeners$3.add(cb);
+	listeners$4.add(cb);
 	return () => {
-		listeners$3.delete(cb);
+		listeners$4.delete(cb);
 	};
 }
 //#endregion
@@ -38430,7 +38451,7 @@ function wordsFrom(raw, fallback) {
 var defaults = BUILTIN_VOICE_WORDS;
 var current$1 = BUILTIN_VOICE_WORDS;
 var version = 0;
-var listeners$2 = /* @__PURE__ */ new Set();
+var listeners$3 = /* @__PURE__ */ new Set();
 function voiceWords() {
 	return current$1;
 }
@@ -38444,11 +38465,11 @@ function setVoiceWords(words, wordsDefault) {
 	defaults = d;
 	current$1 = w;
 	version++;
-	for (const fn of [...listeners$2]) fn(w);
+	for (const fn of [...listeners$3]) fn(w);
 }
 function onVoiceWords(fn) {
-	listeners$2.add(fn);
-	return () => void listeners$2.delete(fn);
+	listeners$3.add(fn);
+	return () => void listeners$3.delete(fn);
 }
 function applyVoiceView(j) {
 	const v = j && typeof j === "object" ? j : {};
@@ -48611,7 +48632,7 @@ async function expectBackgroundJob(title, jobId, secs) {
 var KEY = "mf_codemap_seen";
 var MAX_TITLES = 200;
 var cache = null;
-var listeners$1 = /* @__PURE__ */ new Set();
+var listeners$2 = /* @__PURE__ */ new Set();
 function load() {
 	if (cache) return cache;
 	try {
@@ -48646,11 +48667,11 @@ function markCodemapSeen(title, ts) {
 	try {
 		localStorage.setItem(KEY, JSON.stringify(next));
 	} catch {}
-	listeners$1.forEach((l) => l());
+	listeners$2.forEach((l) => l());
 }
 function subscribeCodemapSeen(cb) {
-	listeners$1.add(cb);
-	return () => listeners$1.delete(cb);
+	listeners$2.add(cb);
+	return () => listeners$2.delete(cb);
 }
 function redZoneChip(rz, seenAt) {
 	if (!rz) return null;
@@ -49286,6 +49307,121 @@ function DriveButton({ inst, me }) {
 			}
 		},
 		children: ctl.label
+	});
+}
+//#endregion
+//#region src/lib/guestFocus.ts
+var focus = {};
+var following = null;
+var listeners$1 = /* @__PURE__ */ new Set();
+var bridged = false;
+function notify() {
+	for (const l of listeners$1) l();
+}
+function guestName(label) {
+	return (label || "").trim() || "Guest";
+}
+function focusFromLinks(prev, links) {
+	const next = {};
+	for (const l of links || []) {
+		if (!l?.id || !l.focus?.title) continue;
+		next[l.id] = {
+			link: l.id,
+			label: l.name || l.label || "",
+			title: l.focus.title,
+			ts: Number(l.focus.ts) || 0
+		};
+	}
+	return Object.keys(next).length === Object.keys(prev).length && Object.values(next).every((f) => {
+		const p = prev[f.link];
+		return !!p && p.title === f.title && p.label === f.label && p.ts === f.ts;
+	}) ? prev : next;
+}
+function feedGuestFocus(links) {
+	const next = focusFromLinks(focus, links);
+	if (next === focus) return;
+	focus = next;
+	if (following && !focus[following]) following = null;
+	notify();
+}
+function applyFocusEvent(env) {
+	const d = env?.data || {};
+	const link = String(d.link || "");
+	const title = String(d.title || env?.session || "");
+	if (!link || !title) return "";
+	focus = {
+		...focus,
+		[link]: {
+			link,
+			label: String(d.label || ""),
+			title,
+			ts: Number(env.ts) || Date.now() / 1e3
+		}
+	};
+	notify();
+	if (following === link) selectSession(title, { noKeyboard: true });
+	return d.joined ? `${guestName(String(d.label || ""))} joined — on ${displayName(title)}` : "";
+}
+function installGuestFocusEvents() {
+	const ev = window.mindflock?.events;
+	if (bridged || !ev) return;
+	bridged = true;
+	ev.subscribe("guest.focus_changed", (env) => {
+		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
+		const say = applyFocusEvent(env);
+		if (say) toast(say);
+	});
+}
+function toggleFollow(link) {
+	following = following === link ? null : link;
+	const f = following ? focus[following] : null;
+	if (f) selectSession(f.title, { noKeyboard: true });
+	notify();
+	return following === link;
+}
+function subscribe$1(l) {
+	listeners$1.add(l);
+	return () => listeners$1.delete(l);
+}
+var snap = {
+	focus,
+	following
+};
+function snapshot() {
+	if (snap.focus !== focus || snap.following !== following) snap = {
+		focus,
+		following
+	};
+	return snap;
+}
+function useGuestFocus() {
+	return (0, import_react.useSyncExternalStore)(subscribe$1, snapshot, snapshot);
+}
+//#endregion
+//#region src/components/presence/GuestPill.tsx
+function GuestPills({ title }) {
+	const { focus, following } = useGuestFocus();
+	const here = Object.values(focus).filter((f) => f.title === title);
+	if (!here.length) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "guest-pills",
+		children: here.map((f) => {
+			const name = guestName(f.label);
+			const on = following === f.link;
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				className: "guest-pill" + (on ? " following" : ""),
+				"data-guest": f.link,
+				title: on ? `Following ${name} — click to stop` : `${name} is on this session — click to follow them`,
+				"aria-pressed": on,
+				onClick: (e) => {
+					e.stopPropagation();
+					toggleFollow(f.link);
+				},
+				onDoubleClick: (e) => e.stopPropagation(),
+				children: [on ? "▶ " : "", name]
+			}, f.link);
+		})
 	});
 }
 //#endregion
@@ -50308,6 +50444,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 						"aria-label": "shared branch",
 						children: "⑂"
 					}),
+					!pending && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GuestPills, { title: inst.title }),
 					extra.check && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "stagechip checkchip " + extra.check.cls,
 						title: extra.check.title,
@@ -50827,7 +50964,7 @@ function useAct(reload) {
 //#endregion
 //#region src/components/settings/screens/peer/GuestLinks.tsx
 function guestLinkLine(l) {
-	const who = l.label || "Guest";
+	const who = l.name || l.label || "Guest · not opened yet";
 	const n = l.sessions.length;
 	return `${who} · ${n} session${n === 1 ? "" : "s"}: ${l.sessions.join(", ")}`;
 }
@@ -50849,13 +50986,21 @@ function GuestLinks() {
 	const [tunnel, setTunnel] = (0, import_react.useState)(null);
 	const [gateOn, setGateOn] = (0, import_react.useState)(null);
 	const [picked, setPicked] = (0, import_react.useState)(() => /* @__PURE__ */ new Set());
-	const [label, setLabel] = (0, import_react.useState)("");
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [err, setErr] = (0, import_react.useState)("");
 	const [made, setMade] = (0, import_react.useState)(null);
 	const [install, setInstall] = (0, import_react.useState)([]);
 	const [understood, setUnderstood] = (0, import_react.useState)(false);
-	const sessions = (0, import_react.useMemo)(() => (instances || []).filter((i) => !i.device && !i.hidden_by && !i.pending && !i.locked), [instances]);
+	const [pickOpen, setPickOpen] = (0, import_react.useState)(false);
+	const sessions = (0, import_react.useMemo)(() => (instances || []).filter((i) => !i.device && !i.hidden_by && !i.pending && !i.locked && !i.parent), [instances]);
+	const ack = (on) => {
+		setUnderstood(on);
+		setPickOpen(on);
+	};
+	const cancelPick = () => {
+		setPickOpen(false);
+		setUnderstood(false);
+	};
 	const load = (0, import_react.useCallback)(async () => {
 		try {
 			const r = await api("/api/guests");
@@ -50899,12 +51044,13 @@ function GuestLinks() {
 		setErr("");
 		try {
 			const row = await api("/api/guests", { json: {
-				label: label.trim(),
+				label: "",
 				sessions: sessions.map((s) => s.title).filter((t) => picked.has(t))
 			} });
 			setMade(row.id);
 			setPicked(/* @__PURE__ */ new Set());
-			setLabel("");
+			setPickOpen(false);
+			setUnderstood(false);
 			await load();
 			if (row.url) toast(await copyText(row.url) ? "Guest link copied — send it to them" : "Guest link made — press Copy to send it");
 			else if (row.tunnel?.installed === false) toast("Guest link made — install cloudflared below to get its public address");
@@ -50988,7 +51134,7 @@ function GuestLinks() {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "set-hint",
-				children: "No second MindFlock needed: they open the link in a browser — from anywhere, it goes through a Cloudflare tunnel to this computer — and type into the sessions you pick. Every other session is crossed out for them."
+				children: "No second MindFlock needed: they open the link in a browser — from anywhere, it goes through a Cloudflare tunnel to this computer — and type into the sessions you pick, under the names you gave them. Sub-sessions come with their parent. They see those sessions and nothing else."
 			}),
 			live && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "peer-row peer-guest-kill",
@@ -51029,70 +51175,86 @@ function GuestLinks() {
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "peer-guest-make",
 				id: "peer-guests-make",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "peer-danger peer-guest-warn",
-						id: "peer-guests-warn",
-						role: "alert",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "This gives another person access to your computer, from anywhere on the internet." }),
-							" In those sessions they type at your agent and your shell: they can read and change the files in that worktree, run commands as you, and spend your agent's credits. Only send a link to someone you would hand your keyboard to, and press ",
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Kill the connection" }),
-							" when you're done."
-						]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "peer-guest-ack",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-								type: "checkbox",
-								id: "peer-guests-ack",
-								checked: understood,
-								onChange: (e) => setUnderstood(e.target.checked)
-							}),
-							" ",
-							"I understand this lets them act on my machine"
-						]
-					}),
-					sessions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-hint",
-						children: "Start a session first — a link opens sessions that exist."
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-						className: "peer-guest-pick",
-						children: sessions.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-								type: "checkbox",
-								checked: picked.has(s.title),
-								onChange: () => toggle(s.title),
-								"data-session": s.title
-							}),
-							" ",
-							displayName(s.title),
-							s.branch && s.branch !== s.title ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-								className: "set-hint",
-								children: [" · ", s.branch]
-							}) : null
-						] }) }, s.title))
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "set-row",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							id: "peer-guests-label",
-							placeholder: "who it's for (optional)",
-							value: label,
-							maxLength: 80,
-							onChange: (e) => setLabel(e.target.value)
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "btn-primary",
-							id: "peer-guests-create",
-							disabled: busy || picked.size === 0 || !understood,
-							title: understood ? void 0 : "Tick the warning above first",
-							onClick: () => void create(),
-							children: busy ? "Making…" : "Make a link"
-						})]
-					})
-				]
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "peer-danger peer-guest-warn",
+					id: "peer-guests-warn",
+					role: "alert",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "This gives another person access to your computer, from anywhere on the internet." }),
+						" In those sessions they type at your agent and your shell: they can read and change the files in that worktree, run commands as you, and spend your agent's credits. Only send a link to someone you would hand your keyboard to, and press ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Kill the connection" }),
+						" when you're done."
+					]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "peer-guest-ack",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							id: "peer-guests-ack",
+							checked: understood,
+							onChange: (e) => ack(e.target.checked)
+						}),
+						" ",
+						"I understand this lets them act on my machine — pick the sessions"
+					]
+				})]
+			}),
+			pickOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+				id: "peer-guests-pick",
+				role: "dialog",
+				"aria-modal": "true",
+				portal: true,
+				onClose: cancelPick,
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+					id: "peer-guests-pick-form",
+					onSubmit: (e) => {
+						e.preventDefault();
+						if (picked.size > 0 && understood) create();
+					},
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Which sessions?" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "set-hint",
+							children: "The guest works in the sessions you tick, under the names you see here. Sub-sessions aren't listed — they always come with their parent, whether they exist now or get spawned later. They pick their own name when they open the link; that's the pill you'll see them as."
+						}),
+						sessions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: "Start a session first — a link opens sessions that exist."
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+							className: "peer-guest-pick",
+							children: sessions.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: "checkbox",
+									checked: picked.has(s.title),
+									onChange: () => toggle(s.title),
+									"data-session": s.title
+								}),
+								" ",
+								displayName(s.title),
+								s.branch && s.branch !== s.title ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "set-hint",
+									children: [" · ", s.branch]
+								}) : null
+							] }) }, s.title))
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "modal-actions",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								id: "peer-guests-cancel",
+								onClick: cancelPick,
+								children: "Cancel"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "submit",
+								className: "btn-primary",
+								id: "peer-guests-create",
+								disabled: busy || picked.size === 0 || !understood,
+								title: picked.size === 0 ? "Tick at least one session" : void 0,
+								children: busy ? "Making…" : "Make a link"
+							})]
+						})
+					]
+				})
 			}),
 			needsInstall && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "peer-needs",
@@ -51209,10 +51371,12 @@ function GuestBar() {
 	(0, import_react.useEffect)(() => {
 		if (!owner) return;
 		let live = true;
+		installGuestFocusEvents();
 		const tick = () => api("/api/guests").then((r) => {
 			if (!live) return;
 			setLinks(r.links || []);
 			setTunnel(r.tunnel || null);
+			feedGuestFocus(r.links || []);
 		}).catch(() => {});
 		tick();
 		const t = setInterval(() => void tick(), POLL_MS$3);
@@ -53940,7 +54104,6 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 		return () => window.removeEventListener(MODAL_OPEN_EVENT, on);
 	}, []);
 	const { data: instances = [] } = useInstances();
-	const lockedRows = useLockedRows();
 	const { data: devices } = useDevices();
 	const ui = useUi();
 	const doctorWarn = useDoctorWarn();
@@ -54192,8 +54355,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 		] }, "run:" + g.id)),
 		renderRail(localSplit.families, familyTaskOf),
 		localSplit.groups.length + localSplit.families.length > 0 && localSplit.own.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OwnHeader, {}),
-		renderRail(localSplit.own, familyTaskOf),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LockedRows, { rows: lockedRows.filter((r) => !r.device) })
+		renderRail(localSplit.own, familyTaskOf)
 	] });
 	const cap = viewCap(effectiveViewMode(ui));
 	const shownCount = listed.filter((i) => !ui.hidden.has(i.title)).length;
@@ -54232,7 +54394,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 						config?.guest && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: "guest-note",
 							id: "guest-note",
-							title: "Sessions not on the link are crossed out",
+							title: "Only the sessions on your link are listed",
 							children: guestNote(config.guest)
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
@@ -54512,29 +54674,6 @@ function DeviceSection(props) {
 		}),
 		props.children
 	] });
-}
-function LockedRows({ rows }) {
-	if (!rows.length) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: rows.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
-		className: "inst locked",
-		"data-title": r.title,
-		"aria-disabled": "true",
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "inst-row",
-			title: "Not part of your invite",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "idx locked-x",
-				"aria-hidden": "true",
-				children: "✕"
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "meta",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "title",
-					children: r.title
-				})
-			})]
-		})
-	}, "locked:" + r.title)) });
 }
 //#endregion
 //#region src/lib/paneHistory.ts
@@ -79431,6 +79570,9 @@ function titleFromPrompt(prompt) {
 	if (!out && use.length) out = use[0].slice(0, TITLE_FROM_PROMPT_MAX);
 	return out;
 }
+function titleFromFolder(folder) {
+	return (((folder || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || "").toLowerCase().match(/[a-z0-9]+/g) || []).join("-").slice(0, TITLE_FROM_PROMPT_MAX).replace(/^-+|-+$/g, "");
+}
 function sanitizeBranch(s) {
 	return s.toLowerCase().replace(/ /g, "-").replace(/[^a-z0-9\-_/.]/g, "").replace(/-+/g, "-").replace(/^[-/]+|[-/]+$/g, "");
 }
@@ -79459,8 +79601,9 @@ function plannedName(where) {
 		clash: where.taken.has(typed),
 		renumbered: ""
 	};
-	const base = titleFromPrompt(where.prompt);
-	const from = base ? "task" : "none";
+	const fromTask = titleFromPrompt(where.prompt);
+	const base = fromTask || titleFromFolder(where.folder || "");
+	const from = fromTask ? "task" : base ? "folder" : "none";
 	const title = freeTitle(base || "untitled", where.taken);
 	return {
 		title,
@@ -84961,7 +85104,8 @@ function NewSessionDialog() {
 		prefix: folderCheck?.asked === folderPath && folderCheck?.branchPrefix || "",
 		title,
 		prompt,
-		taken: device ? /* @__PURE__ */ new Set() : takenNames(liveRows || [], aliases)
+		taken: device ? /* @__PURE__ */ new Set() : takenNames(liveRows || [], aliases),
+		folder: folderPath
 	});
 	const branchKnown = isGit && folderCheck?.branchPrefix !== void 0;
 	const others = device ? [] : sessionsInRepo(liveRows || [], [folderPath, folderCheck?.asked === folderPath ? folderCheck.resolved || "" : ""]);
@@ -109221,6 +109365,89 @@ function RenameDialog() {
 	});
 }
 //#endregion
+//#region src/components/dialogs/GuestNameDialog.tsx
+function GuestNameDialog() {
+	const { data: config } = useConfig();
+	const guest = config?.guest;
+	const open = !!guest && !guest.name;
+	const [value, setValue] = (0, import_react.useState)("");
+	const [err, setErr] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const inputRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		if (open) setTimeout(() => inputRef.current?.focus(), 0);
+	}, [open]);
+	if (!open) return null;
+	const next = value.trim();
+	const submit = async () => {
+		if (!next || busy) return;
+		setBusy(true);
+		setErr("");
+		try {
+			await api("/api/guest/name", { json: { name: next } });
+			await refreshConfig();
+		} catch (e) {
+			setErr(errMsg(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		id: "guest-name-dialog",
+		role: "dialog",
+		"aria-modal": "true",
+		portal: true,
+		closeOnBackdrop: false,
+		closeOnEscape: false,
+		onClose: () => {},
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+			id: "guest-name-form",
+			onSubmit: (e) => {
+				e.preventDefault();
+				submit();
+			},
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "What should we call you?" }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "set-hint",
+					children: [
+						"You've been let into ",
+						guest.sessions.length === 1 ? "one session" : guest.sessions.length + " sessions",
+						". The owner sees your name on the session you're looking at."
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: ["Your name", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "text",
+					id: "guest-name-input",
+					ref: inputRef,
+					autoComplete: "off",
+					spellCheck: false,
+					maxLength: 40,
+					"aria-invalid": !!err,
+					value,
+					onChange: (e) => {
+						setValue(e.target.value);
+						setErr("");
+					}
+				})] }),
+				err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "rename-taken",
+					role: "alert",
+					children: err
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "modal-actions",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "submit",
+						disabled: !next || busy,
+						children: busy ? "Joining…" : "Join"
+					})
+				})
+			]
+		})
+	});
+}
+//#endregion
 //#region src/lib/rowSort.ts
 function compareText(a, b) {
 	return a.localeCompare(b, void 0, {
@@ -112391,6 +112618,7 @@ function installSurfaceHash(win = window) {
 }
 //#endregion
 //#region src/App.tsx
+var GUEST_FOCUS_HEARTBEAT_MS = 3e4;
 function App() {
 	const { data: config } = useConfig();
 	const { data: instances } = useInstances();
@@ -112402,16 +112630,24 @@ function App() {
 			if (s?.speed) setWheelDamping(s.speed);
 		}).catch(() => {});
 	}, []);
+	const isGuest = config ? !!config.guest : null;
 	(0, import_react.useEffect)(() => {
-		const aliases = useUi.getState().aliases;
-		api("/api/aliases", { json: { aliases } }).then((r) => {
-			if (!r?.aliases) return;
-			try {
-				localStorage.setItem("mf_aliases", JSON.stringify(r.aliases));
-			} catch {}
-			useUi.setState({ aliases: r.aliases });
-		}).catch(() => {});
-	}, []);
+		if (isGuest === null) return;
+		installAliasSync(isGuest);
+	}, [isGuest]);
+	const focusedTitle = ui.focused || "";
+	const guestNamed = !!config?.guest?.name;
+	(0, import_react.useEffect)(() => {
+		if (!isGuest || !guestNamed || !focusedTitle) return;
+		const report = () => api("/api/instances/" + encodeURIComponent(focusedTitle) + "/focus", { json: {} }).catch(() => {});
+		report();
+		const t = setInterval(report, GUEST_FOCUS_HEARTBEAT_MS);
+		return () => clearInterval(t);
+	}, [
+		isGuest,
+		guestNamed,
+		focusedTitle
+	]);
 	(0, import_react.useEffect)(() => {
 		const caps = config?.caps;
 		document.body.classList.toggle("no-git", caps ? !caps.git : false);
@@ -112539,6 +112775,7 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerSessionViewer, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MakePrDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RenameDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GuestNameDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RecentDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetupDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ConnectGitHubDialog, {}),

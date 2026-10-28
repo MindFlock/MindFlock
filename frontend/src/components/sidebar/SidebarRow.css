@@ -1029,21 +1029,39 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   border-color: var(--red);
 }
 
-/* A guest link's crossed-out rows (lib/guest.ts): not yours to open. */
-.inst.locked .inst-row {
-  opacity: 0.45;
-  cursor: not-allowed;
+/* A guest's pill (lib/guestFocus, presence/GuestPill): their name on the
+   row their page has selected; pressed = you are following them. */
+.inst .guest-pills {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 3px;
+  margin-left: 4px;
 }
-.inst.locked .inst-row:hover {
-  background: transparent;
-}
-.inst.locked .title {
-  text-decoration: line-through;
-}
-.inst.locked .locked-x {
-  opacity: 1;
-  color: var(--danger, #c0392b);
+.inst .guest-pill {
+  appearance: none;
+  border: 1px solid rgba(var(--accent-rgb), 0.6);
+  background: rgba(var(--accent-rgb), 0.18);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0 7px;
+  height: 16px;
+  line-height: 14px;
+  font-size: 9.5px;
   font-weight: 600;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.inst .guest-pill:hover {
+  background: rgba(var(--accent-rgb), 0.3);
+}
+.inst .guest-pill.following {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg, #fff);
 }
 .guest-note {
   margin: 4px 8px 2px;
