@@ -442,6 +442,11 @@ def test_every_unasked_reply_path_asks_is_news():
     assert "voiceIsNews(" in _whole(js, "voiceOnTurn")
     switch = _whole(js, "voiceSwitchTo")
     assert "news = voiceSwitchNews(title);" in switch
+    # …and the switch line carries it (the router-shaped line + the news reply).
+    assert "speakLine(voiceSwitchLine(title, news))" in switch
+    assert 'if (typeof news === "string") return news ? line + news : line;' in _whole(
+        js, "voiceSwitchLine"
+    )
     assert switch.index("voiceSwitchNews(") < switch.index("select(title)")
     assert "last_say" not in switch
     assert "voiceIsNews(" in _whole(js, "voiceSwitchNews")

@@ -2085,16 +2085,16 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
       };
       await hear("switch to invoice parser", "news: listening to switch");
       await waitFor(pg, () => window.mfVoice.session === "invoice-parser" && window.mfVoice.state === "idle", 4000, "news: switched");
-      check("news: switching to a session whose reply is an hour old says only 'Now on Invoice parser.'", (await said(pg, "Now on Invoice parser.")) && !(await old()), await saidAll(pg));
+      check("news: switching to a session whose reply is an hour old says only 'Now on Invoice parser, …'", (await said(pg, "Now on Invoice parser")) && !(await old()), await saidAll(pg));
       await hear("switch to login fix", "news: listening to switch back");
       await waitFor(pg, () => window.mfVoice.session === "login-fix" && window.mfVoice.state === "idle", 4000, "news: switched back");
-      check("news: …and back to one whose reply you heard: 'Now on Login fix.' only", (await said(pg, "Now on Login fix.")) && !(await said(pg, "Now on Login fix. We were")), await saidAll(pg));
+      check("news: …and back to one whose reply you heard: 'Now on Login fix, …' only", (await said(pg, "Now on Login fix")) && !/Now on Login fix[\s\S]*We were working/.test(await saidAll(pg)), await saidAll(pg));
       // Invoice parser finishes after you left it: news on the switch back.
       Object.assign(state.rows[1], { last_say: "Parsed the March invoices.", activity_since: Date.now() / 1000 });
       await sleep(4300);   // the rows refresh
       await hear("switch to invoice parser", "news: listening to switch again");
       await waitFor(pg, () => window.__spoken.join(" ").indexOf("Parsed the March invoices.") >= 0, 4000, "news: switch with news");
-      check("news: switching to a session that finished after you left it reads that reply", await said(pg, "Now on Invoice parser. Parsed the March invoices."), await saidAll(pg));
+      check("news: switching to a session that finished after you left it reads that reply", /Now on Invoice parser[^]*?\. Parsed the March invoices\./.test(await saidAll(pg)), await saidAll(pg));
       await waitFor(pg, () => window.mfVoice.state === "idle", 3000, "news: idle after the switch");
       // Not heard from in eleven minutes: the reply says where it is from.
       await pg.evaluate(() => { window.mfVoice.heardAt["invoice-parser"] = Date.now() - 11 * 60000; });

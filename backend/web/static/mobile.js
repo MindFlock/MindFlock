@@ -7029,22 +7029,27 @@
     var inst = instByTitle(title) || {}, news = voiceSwitchNews(title);   // before select() marks it heard
     closeSheet(sessionsSheet);
     select(title);
-    speakLine(voiceSwitchLine(title)).then(function (ok) {
+    speakLine(voiceSwitchLine(title, news)).then(function (ok) {
       if (!ok) return;
       if (inst.activity === "clarify") { voice.dialogKey = ""; voiceDialog(); } else voiceIdle();
     });
   }
   // What a switch says (voice_router.switch_line): its state and task, and
-  // its last reply only when it is news — the turn ended in the last
-  // VOICE_FRESH_REPLY_S (an idle row's activity_since). A session done a
-  // while ago is not read out again: "what did it say" reads it.
+  // its last reply only when it is news. The page's own switch passes
+  // `news` (voiceSwitchNews: the reply ended after the listener last heard
+  // that session, and within the news window — "" when it is not news);
+  // without it (a line built for the rows) the reply counts as news when
+  // the turn ended in the last VOICE_FRESH_REPLY_S (an idle row's
+  // activity_since). A session done a while ago is not read out again:
+  // "what did it say" reads it.
   var VOICE_FRESH_REPLY_S = 120;
-  function voiceSwitchLine(title) {
+  function voiceSwitchLine(title, news) {
     var inst = instByTitle(title) || {};
     var line = "Now on " + nameOf(title) + ", " + voiceStateWord(sessionState(inst));
     var head = stripMarkdown(String(inst.task_headline || "")).trim().replace(/\.$/, "");
     if (head) line += ": " + head;
     line = endSentence(line);
+    if (typeof news === "string") return news ? line + news : line;
     var since = Number(inst.activity_since) || 0, age = Date.now() / 1000 - since;
     if (inst.last_say && inst.activity === "idle" && since > 0 && age >= 0 && age <= VOICE_FRESH_REPLY_S) {
       line += " " + endSentence(stripMarkdown(inst.last_say));

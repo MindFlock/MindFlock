@@ -890,7 +890,7 @@ def test_mobile_js_voice_commands_and_switching():
     assert "voiceSwitchTo(m.hit.title);" in sw
     assert '"Which one: "' in sw
     to = _fn(js, "voiceSwitchTo")
-    assert "select(title);" in to and "speakLine(voiceSwitchLine(title))" in to
+    assert "select(title);" in to and "speakLine(voiceSwitchLine(title, news))" in to
     assert '"Now on " + nameOf(title)' in _fn(js, "voiceSwitchLine")
     # "What needs me": the rail's attention set, three at most.
     needs = _fn(js, "voiceNeedsMe")
