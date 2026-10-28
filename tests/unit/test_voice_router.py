@@ -1217,3 +1217,116 @@ def test_route_permission_dialogs_are_untouched(env):
     env.dialogs["docs"] = PERM
     assert route("red", "docs") == {"kind": "prompt"}
     assert route("go back", "docs")["kind"] == "switch_rel"
+
+
+# --- help: questions about MindFlock itself ----------------------------------------
+@pytest.mark.parametrize(
+    "text, question",
+    [
+        ("how do I schedule a template?", "how do i schedule a template"),
+        ("How does the fence work?", "how does the fence work"),
+        ("What does autopilot do?", "what does autopilot do"),
+        ("how do I add my Mac?", "how do i add my mac"),
+        ("Where do I turn on the phone page?", "where do i turn on the phone page"),
+        ("what is a team run", "what is a team run"),
+        ("what are red zones", "what are red zones"),
+        ("how does fast-track work", "how does fast track work"),
+        ("what's the code map", "what's the code map"),
+        ("how do I change the voice words", "how do i change the voice words"),
+        ("tell me about peer links", "tell me about peer links"),
+        ("explain team runs", "explain team runs"),
+        (
+            "is it possible to schedule a template",
+            "is it possible to schedule a template",
+        ),
+        ("is there a way to pin a prompt", "is there a way to pin a prompt"),
+        (
+            "can I run two sessions on one branch",
+            "can i run two sessions on one branch",
+        ),
+        ("how do you set up a fence", "how do you set up a fence"),
+        ("which shortcut opens intake", "which shortcut opens intake"),
+        ("what is a worktree in MindFlock", "what is a worktree in mindflock"),
+        ("how do I open a PR in MindFlock", "how do i open a pr in mindflock"),
+        ("ok, what's a session", "what's a session"),
+        # Addressed to MindFlock: the lead is dropped, and the agent's-work
+        # words no longer make it a prompt.
+        ("MindFlock, how do I fix the login bug?", "how do i fix the login bug"),
+        ("Hey MindFlock, what does the bell do?", "what does the bell do"),
+        ("mindflock what is a lane", "what is a lane"),
+        ("help: what is a team run", "what is a team run"),
+    ],
+)
+def test_help_questions_about_mindflock(text, question):
+    want = {"kind": "help", "text": question}
+    assert vr.command(text) == want
+    assert ans(text, session="docs") == want
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # The agent's work.
+        "how do I fix the login bug?",
+        "how do I run the tests",
+        "how does this function work",
+        "what does this error mean",
+        "why are the tests failing",
+        "where is the bug",
+        "how does the template loader parse the file",
+        "add a schedule button to the settings page",
+        "how should we structure the settings component",
+        "what does my project do",
+        "fix the fence code",
+        "help me fix the login bug",
+        # Said to the agent ("you"), or about the session's state.
+        "what are you doing",
+        "how did you fix it",
+        "can you open the settings",
+        "could you add a template",
+        "what is the status of the PR",
+        "what's the session working on",
+        "how many sessions are running",
+        "what does the ticket say",
+        "why does the session keep failing",
+        "is it done",
+        # Questions that name nothing of MindFlock's.
+        "what is a closure",
+        "how do I center a div",
+        "what's the weather",
+    ],
+)
+def test_help_is_never_the_agents_work(text):
+    assert vr.command(text) is None or vr.command(text)["kind"] != "help"
+    assert ans(text, session="docs").get("kind") != "help"
+
+
+@pytest.mark.parametrize(
+    "text, kind",
+    [
+        ("what is it doing", "status"),
+        ("what's going on", "status"),
+        ("what did it say", "condense"),
+        ("what is it asking", "question"),
+        ("what does docs want", "question"),
+        ("what needs me", "needs"),
+        ("what sessions are open", "list"),
+        ("mindflock yes", "prompt"),
+        ("go to templates", "no-session"),
+    ],
+)
+def test_help_never_takes_another_commands_phrase(text, kind):
+    assert ans(text, session="docs")["kind"] == kind
+
+
+def test_route_help_carries_the_question(env):
+    assert route("how does the fence work?", "docs") == {
+        "kind": "help",
+        "text": "how does the fence work",
+    }
+    # Said while Claude's question tool is up, help is still help.
+    env.dialogs["docs"] = _ask("multi")
+    assert route("mindflock, what is a team run", "docs") == {
+        "kind": "help",
+        "text": "what is a team run",
+    }

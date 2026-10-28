@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Ask MindFlock how it works, by voice.** "How do I schedule a
+  template?", "what does autopilot do?", "where do I turn on the phone
+  page?" — a question about MindFlock itself is no longer typed into the
+  session as a prompt: the phone and the desktop mic say *Looking that up…*
+  and answer out loud in a sentence or two from MindFlock's own docs, naming
+  the section ("From Fast-track: …"). A quick model call words the answer;
+  without one, the section's own first sentences are read. "Say that again"
+  repeats it. A question about the agent's work ("how do I fix the login
+  bug?") is still a prompt; start with "MindFlock, …" or "help: …" to ask
+  MindFlock anyway (`POST /api/voice/help`).
+
 ### Changed
 
 - **Only a real prompt raises a Question.** A reply that merely ends with a
