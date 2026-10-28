@@ -56,6 +56,12 @@
   },
   {
    "family": "heteronyms",
+   "name": "goes / is / now live in a place is still the adjective",
+   "in": "It goes live in production. We are live in Europe now. Now live in beta; still live in the app.",
+   "out": "It goes lyve in production. We are lyve in Europe now. Now lyve in beta; still lyve in the app."
+  },
+  {
+   "family": "heteronyms",
    "name": "read: past after a pronoun or have/has/had, imperative kept",
    "in": "I read the file yesterday. Read the file. They have read it. A read-only file.",
    "out": "I red the file yesterday. Read the file. They have red it. A read only file."

@@ -214,7 +214,7 @@ def test_mobile_js_voice_state_machine_and_adapters():
         in tts
     )
     assert "return new Promise(function (resolve) {" in tts
-    assert "var parts = sentenceChunks(text);" in tts
+    assert "var parts = sentenceChunks(voiceShapeSpoken(text));" in tts
     assert "words * VOICE_WORD_MS + VOICE_CHUNK_GRACE_MS" in tts
     assert "var VOICE_WORD_MS = 400;" in v and "var VOICE_CHUNK_GRACE_MS = 1500;" in v
     assert "keep.push(u);" in tts

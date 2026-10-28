@@ -5,10 +5,9 @@
  * first, then markup, paths, numbers, identifiers, the tech table and the
  * heteronyms by context. Pure, idempotent, no dependencies, no lookbehind. */
 var MindFlockSpokenText = (function(exports) {
-
-Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
-//#region src/lib/spokenText.ts
-/** The longest input shaped; the rest is cut first. */
+	Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
+	//#region src/lib/spokenText.ts
+	/** The longest input shaped; the rest is cut first. */
 	const MAX_IN = 4e3;
 	/** The longest output. */
 	const MAX_OUT = 2e3;
@@ -218,6 +217,41 @@ Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 				"word": "live",
 				"as": "lyve",
 				"default": "respell",
+				"respell_prev": [
+					"go",
+					"goes",
+					"went",
+					"going",
+					"gone",
+					"is",
+					"are",
+					"was",
+					"were",
+					"be",
+					"been",
+					"being",
+					"it's",
+					"its",
+					"now",
+					"still",
+					"already",
+					"stay",
+					"stays",
+					"stayed",
+					"remain",
+					"remains",
+					"became",
+					"become",
+					"becomes",
+					"got",
+					"get",
+					"gets",
+					"back",
+					"fully",
+					"finally",
+					"officially",
+					"currently"
+				],
 				"keep_prev": [
 					"i",
 					"we",
@@ -992,6 +1026,7 @@ Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 	function decide(rule, prev, next, after) {
 		if (rule.respell) {
 			if (rule.keepPrev.has(prev)) return false;
+			if (rule.respellPrev.has(prev)) return true;
 			if (rule.respellNextRe && rule.respellNextRe.test(after)) return true;
 			if (rule.keepNext.has(next)) return false;
 			if (rule.keepNextRe && rule.keepNextRe.test(after)) return false;
@@ -1040,6 +1075,19 @@ Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 		}
 		return out;
 	}
+	/** The person's pronunciations as the server last served them
+	* (`GET /api/voice` → `pronounce`; lib/voiceDesktop's loadVoiceCfg sets
+	* them): what the browser's own voice shapes with. */
+	let served = [];
+	/** Keep `raw` (`pronounce` from GET /api/voice, any state) as the
+	* pronunciations {@link pronounce} returns; a non-list clears them. */
+	function setPronounce(raw) {
+		served = normalizePronounce(raw);
+	}
+	/** The pronunciations {@link setPronounce} kept. */
+	function pronounce() {
+		return served;
+	}
 	/** `text` as a voice should read it. `overrides` is `voice.pronounce` in
 	* any state (raw, normalised, or nothing). Pure; a non-string is "". */
 	function shapeForSpeech(text, overrides) {
@@ -1058,23 +1106,24 @@ Object.defineProperty(exports, Symbol.toStringTag, { value: 'Module' });
 		t = s.release(t);
 		if (t.length > 2e3) {
 			const cut = t.lastIndexOf(" ", 1999);
-			t = t.slice(0, cut > 2e3 / 2 ? cut : MAX_OUT).replace(/\s+$/, "");
+			t = t.slice(0, cut > 1e3 ? cut : MAX_OUT).replace(/\s+$/, "");
 		}
 		return t;
 	}
 	/** `window.MindFlockSpokenText.shape` in the static twin. */
 	const shape = shapeForSpeech;
-
-//#endregion
-exports.MAX_IN = MAX_IN;
-exports.MAX_OUT = MAX_OUT;
-exports.PRONOUNCE_MAX = PRONOUNCE_MAX;
-exports.PRONOUNCE_MAX_CHARS = PRONOUNCE_MAX_CHARS;
-exports.TABLES = TABLES;
-exports.normalizePronounce = normalizePronounce;
-exports.shape = shape;
-exports.shapeForSpeech = shapeForSpeech;
-return exports;
+	//#endregion
+	exports.MAX_IN = MAX_IN;
+	exports.MAX_OUT = MAX_OUT;
+	exports.PRONOUNCE_MAX = PRONOUNCE_MAX;
+	exports.PRONOUNCE_MAX_CHARS = PRONOUNCE_MAX_CHARS;
+	exports.TABLES = TABLES;
+	exports.normalizePronounce = normalizePronounce;
+	exports.pronounce = pronounce;
+	exports.setPronounce = setPronounce;
+	exports.shape = shape;
+	exports.shapeForSpeech = shapeForSpeech;
+	return exports;
 })({});
 
 if (typeof window !== "undefined") window.MindFlockSpokenText = MindFlockSpokenText;

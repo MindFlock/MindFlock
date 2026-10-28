@@ -113,6 +113,10 @@ export const TABLES: Tables = {
   "heteronyms": [
     {
       "word": "live", "as": "lyve", "default": "respell",
+      "respell_prev": ["go", "goes", "went", "going", "gone", "is", "are", "was", "were", "be",
+        "been", "being", "it's", "its", "now", "still", "already", "stay", "stays", "stayed",
+        "remain", "remains", "became", "become", "becomes", "got", "get", "gets", "back",
+        "fully", "finally", "officially", "currently"],
       "keep_prev": ["i", "we", "you", "they", "people", "who", "to", "can't", "cannot",
         "couldn't", "won't", "wouldn't", "don't", "didn't", "doesn't", "must", "may", "might",
         "will", "would", "could", "should", "shall", "i'll", "we'll", "you'll", "they'll",
@@ -497,6 +501,8 @@ const HETERONYMS: CompiledHeteronym[] = TABLES.heteronyms.map((rule) => ({
 function decide(rule: CompiledHeteronym, prev: string, next: string, after: string): boolean {
   if (rule.respell) {
     if (rule.keepPrev.has(prev)) return false;
+    // "goes live in production": a respell-context before the word beats a keep-context after it.
+    if (rule.respellPrev.has(prev)) return true;
     if (rule.respellNextRe && rule.respellNextRe.test(after)) return true;
     if (rule.keepNext.has(next)) return false;
     if (rule.keepNextRe && rule.keepNextRe.test(after)) return false;

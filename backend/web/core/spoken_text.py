@@ -145,6 +145,10 @@ TABLES = {
   "heteronyms": [
     {
       "word": "live", "as": "lyve", "default": "respell",
+      "respell_prev": ["go", "goes", "went", "going", "gone", "is", "are", "was", "were", "be",
+        "been", "being", "it's", "its", "now", "still", "already", "stay", "stays", "stayed",
+        "remain", "remains", "became", "become", "becomes", "got", "get", "gets", "back",
+        "fully", "finally", "officially", "currently"],
       "keep_prev": ["i", "we", "you", "they", "people", "who", "to", "can't", "cannot",
         "couldn't", "won't", "wouldn't", "don't", "didn't", "doesn't", "must", "may", "might",
         "will", "would", "could", "should", "shall", "i'll", "we'll", "you'll", "they'll",
@@ -632,6 +636,10 @@ def _decide(rule: Dict[str, Any], prev: str, nxt: str, after: str) -> bool:
     if rule["respell"]:
         if prev in rule["keep_prev"]:
             return False
+        # "goes live in production": a respell-context before the word beats
+        # a keep-context after it.
+        if prev in rule["respell_prev"]:
+            return True
         if rule["respell_next_re"] is not None and rule["respell_next_re"].search(
             after
         ):

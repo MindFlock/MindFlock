@@ -252,8 +252,10 @@ def test_the_server_voice_speaks_one_sentence_ahead():
     assert "gen++;" in cancel and "a.abort();" in cancel
     # No AudioContext running: the phone's voice says the whole line, once.
     assert "return phone.speak(text);" in speak
-    # The phone's own voice is untouched (sentenceChunks, as before).
-    assert "var parts = sentenceChunks(text);" in _whole(js, "PhoneTTS")
+    # The phone's own voice reads the text shaped for it (spoken-text.js).
+    assert "var parts = sentenceChunks(voiceShapeSpoken(text));" in _whole(
+        js, "PhoneTTS"
+    )
     # Diagnostics: the first sound's time and the sentence count.
     assert "{ first: first, parts: parts.length }" in speak
     assert '", first sound " + (x.first / 1000).toFixed(1) + " s"' in _whole(

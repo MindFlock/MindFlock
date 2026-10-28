@@ -3008,6 +3008,15 @@
     return { name: "phone", available: available, start: start, stop: stop, end: end, active: active, release: stop };
   }
 
+  // The text as the phone's own voice should read it: /spoken-text.js
+  // (window.MindFlockSpokenText, the twin of lib/spokenText.ts) with the
+  // owner's pronunciations (GET /api/voice `pronounce`). Server audio is
+  // shaped by the server; a missing script leaves the text as written.
+  function voiceShapeSpoken(text) {
+    var S = window.MindFlockSpokenText;
+    if (!S || typeof S.shape !== "function") return String(text || "");
+    try { return S.shape(text, (voice.cfg && voice.cfg.pronounce) || []) || ""; } catch (e) { return String(text || ""); }
+  }
   // --- PhoneTTS: speechSynthesis --------------------------------------------
   function PhoneTTS() {
     var synth = window.speechSynthesis || null;
@@ -3042,7 +3051,9 @@
     // ~400 ms/word + 1.5 s, because onend is unreliable on phones.
     function speak(text) {
       return new Promise(function (resolve) {
-        var parts = sentenceChunks(text);
+        // Shaped for the voice only here (spoken-text.js; a caption shows
+        // the text as written); without the script the text goes as is.
+        var parts = sentenceChunks(voiceShapeSpoken(text));
         if (!available() || !parts.length) { resolve(); return; }
         var g = gen, i = 0;
         function next() {
@@ -7342,6 +7353,8 @@
           var hint = voiceDictHint();
           voiceWordsApply(j.words);
           voiceWordsShow(hint);
+          // The owner's pronunciations: the phone's own voice shapes with them.
+          voice.cfg.pronounce = Array.isArray(j.pronounce) ? j.pronounce : [];
         } else if (!voice.cfg.loaded) {
           voice.cfg.server_ready = {};
         }
