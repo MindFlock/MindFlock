@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-10-28
+
 ### Added
 
 - **Guest links — someone else in a few of your sessions.** Settings →
@@ -18,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   your computer and won't make one until you tick *I understand*; Revoke
   signs them out. Needs the access gate on (it offers to turn it on).
   `GET/POST /api/guests`, `POST/DELETE /api/guests/<id>`.
+
+### Changed
+
+- Dependencies: the desktop app's electron packages and the setup-uv
+  action bumped (#252, #253).
 
 ## [0.10.3] - 2026-10-28
 
@@ -4565,7 +4572,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.10.3...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.10.4...HEAD
+[0.10.4]: https://github.com/MindFlock/MindFlock/releases/tag/v0.10.4
 [0.10.3]: https://github.com/MindFlock/MindFlock/releases/tag/v0.10.3
 [0.10.2]: https://github.com/MindFlock/MindFlock/releases/tag/v0.10.2
 [0.10.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.10.1
