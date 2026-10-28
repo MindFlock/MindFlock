@@ -86,7 +86,16 @@ export const ASK_POPUP_HINT =
   "When an agent asks for permission or shows a choice — Claude's own questions included — answer it right there, by click, keys or voice. A question asked in plain words at the end of a reply doesn't pop up: the bell, the rail and the notification show it, and its Reply opens it here. Later puts it off; the bell keeps it.";
 
 /** Under the "needs input" rule: what it covers now. */
-export const NEEDS_INPUT_EXTRA = "Also covers a question the agent asks in plain words at the end of its reply.";
+export const NEEDS_INPUT_EXTRA = "Also covers a question the agent asks in plain words at the end of its reply, when that switch is on.";
+
+/* The second switch (notifications.prose_questions, off by default): whether
+ * a reply that ends with a question in plain words counts as the session
+ * asking at all. Off, only a real prompt — a permission, a plan approval,
+ * Claude's question menu — raises a Question. */
+export const PROSE_QUESTIONS_LABEL = "Count a question asked in plain words at the end of a reply";
+
+export const PROSE_QUESTIONS_HINT =
+  "Off: only a real prompt counts — a permission, a plan approval, Claude's question menu. On: a reply that ends with a question also puts a Question on the session's row, in the bell and in the notification, answered with Reply.";
 
 /** The plain one-liner under "Where alerts go" when nothing but the bell is
  * on — the reason the switches below seem to do nothing. */

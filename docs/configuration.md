@@ -1175,6 +1175,14 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   `GET /api/notify/ntfy` (and `GET /api/voice` for the phone) and saved with
   `POST /api/notify/ntfy {"ask_popup": false}` or `POST /api/settings`
   (owner only). Written to `settings.json` only when off.
+- **Questions in plain words** (`notifications.prose_questions`, default
+  **off**, Settings → Notifications, under the pop-up switch) — whether a
+  reply that ends with a question in plain words counts as the session
+  asking at all (the rows' `asking` of kind `question`, the
+  `session.question` event, the outbox's question rows, the needs-input
+  push). Off, only a real prompt — a permission, a plan approval, Claude's
+  question menu — raises a Question. Saved with `POST /api/notify/ntfy
+  {"prose_questions": true}`; written to `settings.json` only when on.
 - **Voice** (`voice.*`, Settings → Voice) — talking to a session from the
   phone page and the desktop app's mic
   ([web-ui.md](web-ui.md#voice-talking-to-a-session)). The phone page uses its

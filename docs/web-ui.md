@@ -2463,7 +2463,13 @@ In the window, the **Question** toast does the same on click. Both follow the
 **The switch.** Settings → Notifications → *Pop up a session's permission and
 choice prompts in the middle of the screen* (`notifications.ask_popup`, on by
 default, saved through the notification settings view). Off, asks stay in the
-bell, the rail and the toasts (a Reply still opens the card).
+bell, the rail and the toasts (a Reply still opens the card). Under it, *Count
+a question asked in plain words at the end of a reply*
+(`notifications.prose_questions`, **off** by default) decides whether such a
+question counts at all: off, only a real prompt — a permission, a plan
+approval, Claude's question menu — raises a Question; on, a reply ending
+with a question also puts a Question on the row, in the bell, the toast and
+the push, answered with Reply.
 
 ## Diff → instruction
 
@@ -6659,8 +6665,13 @@ spends a model call unless you ask for a summary.
 
 **Starting.** Tap the mic (🎙, right of **Send**). The tap primes speech
 output (iOS and Android speak nothing until the first `speak()` runs inside
-a tap; the same tap sets `navigator.audioSession.type = "playback"` so the
-silent switch does not mute the page), takes a screen wake lock, turns voice
+a tap; the same tap sets `navigator.audioSession.type` to `"playback"` so the
+silent switch does not mute the page — or to `"play-and-record"` when this
+page may open the microphone itself: recognition on the server, the
+fallback to it, the wake word; iOS refuses capture under `"playback"` with
+*InvalidStateError: audio session category is not compatible with audio
+capture*, and the server recognizer sets `"play-and-record"` again right
+before it asks for the microphone), takes a screen wake lock, turns voice
 mode on for the selected session (`POST /api/instances/<title>/voice
 {on: true}`), opens the events socket and listens — 15 s for a first word,
 then for as long as you keep talking (Android buzzes 30 ms). With **Hold to

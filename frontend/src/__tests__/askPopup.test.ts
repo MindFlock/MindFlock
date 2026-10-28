@@ -701,6 +701,21 @@ describe("Settings → Notifications", () => {
     expect(ask.askPopupOn()).toBe(true); // default on: an older server sends nothing
   });
 
+  it("the second switch reads and writes notifications.prose_questions the same way — off by default", async () => {
+    api.mockResolvedValueOnce({ ask_popup: true, prose_questions: true });
+    expect(await ask.saveProseQuestions(true)).toBe(true);
+    expect(api).toHaveBeenCalledWith("/api/notify/ntfy", { json: { prose_questions: true } });
+    queryClient.setQueryData(ask.NOTIFY_VIEW_KEY, {});
+    api.mockResolvedValueOnce({ ask_popup: true });
+    expect(await ask.saveProseQuestions(false)).toBe(false); // an older server sends nothing: off
+    const c = code("components/settings/screens/Notifications.tsx");
+    expect(c).toContain('id="notif-prose-questions"');
+    expect(c).toMatch(/<AskPopupRow \/>\s*<ProseQuestionsRow \/>/);
+    const copy = code("components/settings/screens/notifyCopy.ts");
+    expect(copy).toContain("PROSE_QUESTIONS_LABEL");
+    expect(copy).toMatch(/Off: only a real prompt counts/);
+  });
+
   it("the row, its words and the needs-input note are on the screen, and Search finds it", () => {
     const c = code("components/settings/screens/Notifications.tsx");
     expect(c).toContain('id="notif-ask-popup"');

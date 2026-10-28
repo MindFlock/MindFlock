@@ -15,6 +15,8 @@ import time
 
 import pytest
 
+from backend.config import settings as S
+
 from backend.providers import activity_markers as am
 from backend.web import server
 from backend.web.core import events as events_mod
@@ -22,6 +24,14 @@ from backend.web.core import session_removal, spoken, state_events, voice
 from backend.web.core.events import EventBus
 
 NONE = {"say": None, "has_question": False, "source": "none", "question": None}
+
+
+@pytest.fixture(autouse=True)
+def _prose_questions_on(isolate_settings_store):
+    """These payloads carry the question a reply ends with; that signal is off
+    by default (notifications.prose_questions), so turn it on here."""
+    S.update_settings(notifications={"prose_questions": True})
+    yield
 
 
 class _Inst:

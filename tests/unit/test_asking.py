@@ -48,6 +48,14 @@ class _Inst:
 
 
 @pytest.fixture(autouse=True)
+def _prose_on(isolate_settings_store):
+    """The prose-question signal is off by default: these tests pin what it
+    does when on (the default-off rule has its own tests below)."""
+    S.update_settings(notifications={"prose_questions": True})
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _clean(monkeypatch, tmp_path):
     monkeypatch.setenv("MINDFLOCK_ACTIVITY_MARKER_DIR", str(tmp_path / "markers"))
     monkeypatch.setenv("MINDFLOCK_VOICE_FLAG_DIR", str(tmp_path / "voice"))
@@ -700,3 +708,126 @@ def test_ask_popup_setting_roundtrip_and_views(isolate_settings_store):
     assert S.load_settings().notifications.ask_popup is False
     # The phone page reads it off GET /api/voice.
     assert client.get("/api/voice").json()["ask_popup"] is False
+
+
+# --------------------------------------------------------------------------- #
+# What survives a restart                                                      #
+# --------------------------------------------------------------------------- #
+def _restart():
+    """Forget everything the process held, as a re-exec does."""
+    asking._STATE.clear()
+    asking._INPUT_AT.clear()
+    asking._DISMISSED_STORED.clear()
+    asking._STORE_LOADED = False
+    spoken._REPLY_CACHE.clear()
+
+
+def test_the_store_is_never_the_real_home_under_the_guard(monkeypatch):
+    """With no MINDFLOCK_HOME the pytest home guard refuses the real
+    ~/.mindflock: nothing is read or written (the module stays in memory)."""
+    monkeypatch.delenv("MINDFLOCK_HOME", raising=False)
+    _restart()
+    p = asking._store_path()
+    assert p is None or ".mindflock/asking.json" not in str(p).replace(
+        str(Path.home()), "~/.mindflock"
+    )
+    inst = _Inst("t")
+    _reply("t", "Should I push?", time.time() - 5)
+    assert asking.current("t", inst, "idle") is not None
+    assert asking.dismiss("t") is True
+    assert asking.current("t", inst, "idle") is None
+
+
+def test_a_dismissal_survives_a_restart(monkeypatch, tmp_path):
+    monkeypatch.setenv("MINDFLOCK_HOME", str(tmp_path))
+    _restart()
+    inst = _Inst("t")
+    t0 = time.time() - 30
+    _reply("t", "Should I push?", t0)
+    assert asking.current("t", inst, "idle") is not None
+    assert asking.dismiss("t") is True
+    data = json.loads((tmp_path / "asking.json").read_text())
+    assert data["version"] == 1 and data["dismissed"]["t"] == ["hook", t0]
+    _restart()
+    assert asking.current("t", inst, "idle") is None
+    assert asking.peek("t") is None
+    # Only that reply: a newer one that asks shows again.
+    _reply("t", "Pushed.\n\nOpen a PR?", time.time() + 1)
+    assert asking.current("t", inst, "idle")["text"] == "Open a PR?"
+
+
+def test_an_answer_survives_a_restart(monkeypatch, tmp_path):
+    monkeypatch.setenv("MINDFLOCK_HOME", str(tmp_path))
+    _restart()
+    inst = _Inst("t")
+    _reply("t", "Should I push?", time.time() - 30)
+    assert asking.current("t", inst, "idle") is not None
+    asking.note_input("t")
+    assert asking.current("t", inst, "idle") is None
+    assert "t" in json.loads((tmp_path / "asking.json").read_text())["input_at"]
+    _restart()
+    assert asking.current("t", inst, "idle") is None
+
+
+def test_input_into_a_session_without_a_question_writes_nothing(monkeypatch, tmp_path):
+    monkeypatch.setenv("MINDFLOCK_HOME", str(tmp_path))
+    _restart()
+    asking.note_input("quiet")
+    assert not (tmp_path / "asking.json").exists()
+
+
+def test_forget_drops_the_stored_entries(monkeypatch, tmp_path):
+    monkeypatch.setenv("MINDFLOCK_HOME", str(tmp_path))
+    _restart()
+    inst = _Inst("t")
+    _reply("t", "Should I push?", time.time() - 30)
+    asking.current("t", inst, "idle")
+    asking.dismiss("t")
+    asking.forget("t")
+    data = json.loads((tmp_path / "asking.json").read_text())
+    assert data["dismissed"] == {} and data["input_at"] == {}
+
+
+def test_a_corrupt_store_reads_as_empty(monkeypatch, tmp_path):
+    monkeypatch.setenv("MINDFLOCK_HOME", str(tmp_path))
+    (tmp_path / "asking.json").write_text("{nope")
+    _restart()
+    inst = _Inst("t")
+    _reply("t", "Should I push?", time.time() - 5)
+    assert asking.current("t", inst, "idle") is not None
+
+
+# --------------------------------------------------------------------------- #
+# Off by default: only a real prompt raises a Question                         #
+# --------------------------------------------------------------------------- #
+def test_prose_questions_are_off_by_default_and_round_trip(isolate_settings_store):
+    assert S.NotificationSettings().prose_questions is False
+    assert "prose_questions" not in S.NotificationSettings().to_dict()
+    on = S.NotificationSettings(prose_questions=True)
+    assert on.to_dict() == {"prose_questions": True}
+    assert S.NotificationSettings.from_dict(on.to_dict()).prose_questions is True
+    S.update_settings(notifications={"prose_questions": False})
+    assert client.get("/api/notify/ntfy").json()["prose_questions"] is False
+    r = client.post("/api/notify/ntfy", json={"prose_questions": True})
+    assert r.status_code == 200 and r.json()["prose_questions"] is True
+    assert S.load_settings().notifications.prose_questions is True
+
+
+def test_with_the_switch_off_a_reply_ending_with_a_question_asks_nothing(
+    isolate_settings_store,
+):
+    S.update_settings(notifications={"prose_questions": False})
+    assert asking.prose_on() is False
+    inst = _Inst("t")
+    _reply("t", "Done.\n\nShould I also add them to the ticket?", time.time() - 5)
+    assert asking.current("t", inst, "idle") is None
+    assert asking.announce("t", inst) is None
+    assert asking.peek("t") is None
+    # A real prompt (the dialog kind) is untouched by the switch.
+    assert asking.current("t", inst, "clarify")["kind"] == "dialog"
+    # Flipping it on brings the question back.
+    S.update_settings(notifications={"prose_questions": True})
+    assert (
+        asking.current("t", inst, "idle")["text"]
+        == "Should I also add them to the ticket?"
+    )

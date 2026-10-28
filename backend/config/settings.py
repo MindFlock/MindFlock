@@ -1405,6 +1405,12 @@ class NotificationSettings:
     turn ended on — the instance rows' ``asking``) pops up in the middle of
     the screen; the desktop app and the phone page both follow it. On by
     default; synced like the rest of the group.
+    ``prose_questions``: whether a reply that ENDS with a question in plain
+    words counts as the session asking at all (the instance rows' ``asking``
+    of kind ``question``, the ``session.question`` event, the outbox's
+    question rows, the needs-input push). Off by default — the owner wants
+    only real prompts (a permission, a plan approval, Claude's question
+    menu) to raise a Question; a closing "Should I also…?" is not one.
     """
 
     muted_rules: List[str] = field(default_factory=list)
@@ -1416,6 +1422,7 @@ class NotificationSettings:
     ntfy_click_url: str = ""
     ntfy_agent_words: bool = True
     ask_popup: bool = True
+    prose_questions: bool = False
 
     def to_dict(self) -> dict:
         out: dict = {}
@@ -1437,6 +1444,8 @@ class NotificationSettings:
             out["ntfy_agent_words"] = False
         if not self.ask_popup:
             out["ask_popup"] = False
+        if self.prose_questions:
+            out["prose_questions"] = True
         return out
 
     @classmethod
@@ -1451,6 +1460,7 @@ class NotificationSettings:
             ntfy_click_url=str(d.get("ntfy_click_url", "") or "").strip(),
             ntfy_agent_words=bool(d.get("ntfy_agent_words", True)),
             ask_popup=bool(d.get("ask_popup", True)),
+            prose_questions=bool(d.get("prose_questions", False)),
         )
 
 

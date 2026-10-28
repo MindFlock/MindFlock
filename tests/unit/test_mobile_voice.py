@@ -724,8 +724,21 @@ def test_mobile_js_prime_runs_inside_the_tap_before_anything_async():
     prime = _fn(js, "voicePrime")
     assert prime.lstrip().startswith("voice.tts.prime();")
     assert "then(" not in prime and "await" not in prime
-    # The audio session follows inside the same gesture (silent switch).
-    assert 'navigator.audioSession.type = "playback"' in prime
+    # The audio session follows inside the same gesture (silent switch):
+    # playback-only unless this page may open the microphone itself — iOS
+    # refuses capture under "playback" (InvalidStateError), so the server's
+    # recognizer, the fallback and the wake word take "play-and-record".
+    assert "voiceAudioSession(voiceMayCapture());" in prime
+    sess = _fn(js, "voiceAudioSession")
+    assert 'capture ? "play-and-record" : "playback"' in sess
+    may = _fn(js, "voiceMayCapture")
+    assert (
+        'voice.cfg.stt === "server" || !!voice.sttFallback || !!voice.prefs.wake' in may
+    )
+    get = js.split("    function getStream() {")[1].split("\n    }")[0]
+    assert "voiceAudioSession(true);" in get and get.index(
+        "voiceAudioSession(true);"
+    ) < get.index("getUserMedia(")
     tts_prime = _fn(js, "PhoneTTS").split("function prime() {")[1].split("\n    }\n")[0]
     assert 'new SpeechSynthesisUtterance("")' in tts_prime
     assert "synth.speak(u);" in tts_prime
