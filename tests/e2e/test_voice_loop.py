@@ -178,6 +178,9 @@ def test_voice_loop_from_flag_to_push(mf_server):
                     "ntfy_server": ntfy.url,
                     "ntfy_topic": "voiceqa",
                     "ntfy_agent_words": True,
+                    # A reply ending with a question counts only with this
+                    # on (off by default: only real prompts raise a Question).
+                    "prose_questions": True,
                 }
             },
         )
