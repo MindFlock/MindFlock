@@ -6700,16 +6700,20 @@ talk** (the ⚙ sheet's *Push to talk*) that first tap only turns voice on;
 you then press and hold the mic to talk. A **voice
 strip** appears above the composer. It says **one word and nothing else**:
 *Listening…* while the mic listens, *Speaking…* while a line is said (the
-whole line, every sentence of it), *Quiet.* for a moment after a hush, and
+whole line, every sentence of it), *Sending…* for the moment a prompt is on
+its way (the radio word was heard), *Quiet.* for a moment after a hush,
+*Heard nothing.* for a moment when a listening window closed without a word
+(a cue, never a silent blank), and
 otherwise nothing — never the words it hears (they are in the box already,
 as you speak), never the line being said, no hints; one line, so nothing
 on the strip pops up or grows as words are typed or a line plays. Beside
 it, **Cancel** and **⚙** (and **Stop talking** while a line plays). The
 hints and the words so far still reach the ask sheet's voice line, which is
 unchanged. **The mic is still:** while it records, a constant thin red ring
-round the 🎙 (and the ask sheet's) whose opacity alone eases (400 ms) between
-three steps — quiet, hearing you, loud — from the voice's level smoothed
-over ~400 ms; no scale, no pulse, no halo that bounces with the voice. The
+round the 🎙 (and the ask sheet's) whose opacity alone eases (150 ms) between
+three steps — quiet, hearing you, loud — from the voice's level, up in
+~80 ms (alive on the first syllable) and down over ~300 ms (no flicker
+between words); no scale, no pulse, no halo that bounces with the voice. The
 wake word's standby is a small grey dot, a line being said a still accent
 dot. The level meter (a thin bar along the strip's top edge, never a row of
 its own) shows only while the ⚙ sheet is open. Voice follows the
@@ -6796,10 +6800,18 @@ loud, and not at all if the next guess rules it out (*go over the bridge*)
 *stop talking* need no accurate words: they act on the guess at once, the
 stream DELETEd, never ended. *Over* / *over and out* end the phrase there
 (`POST …/end`) and send with `/end`'s accurate `final` (the retype first);
-when `/end` takes longer than **2.5 s** (`VOICE_CONTROL_END_MS`) the fast
-words go and a later final is ignored. The trace and Diagnostics time it:
-*Last control: over → sent 0.9 s* (the word's last loud block → the
-Enter).
+when `/end` takes longer than its **budget** the fast words go and a later
+final is ignored. The budget follows how long `/end` takes on this server
+(`voiceEndBudgetMs`): **1.5 s** (`VOICE_CONTROL_END_MS`) only while nothing
+is known; once `/end` has been timed here (a running mean of its round
+trips, seeded by the advisory `final_ms` when `GET /api/voice` carries one)
+**1.5× that plus 100 ms**, held to **0.3–1.5 s** (the desktop app's rule)
+— so a whisper that answers in 300 ms is waited for 550 ms at most, and a
+late `/end` grows the next budget (it took at least that). The Enter itself waits for no round
+trip: the ack's baseline read goes out alongside `POST /send`, not before
+it. The trace and Diagnostics time it: *Last control: over → sent 0.9 s
+(waited for /end up to 1.2 s; /end takes ~0.7 s here)* (the word's last
+loud block → the Enter).
 
 **Pacing.** A phrase's first chunk goes once **150 ms of speech** is in
 (with the 300 ms lead-in before it); after that each chunk waits for the
@@ -6839,8 +6851,12 @@ hidden: a tap in that time starts listening at once, with no
 `getUserMedia`. The browser's mic-in-use indicator stays lit for that long;
 voice off gives the mic back at once. While you speak, a **ring round the
 mic** (and the ask sheet's mic) grows and firms with your voice — its level
-relative to the room's noise, so a quiet room sits at zero, rising in 30 ms
-and falling over ~150 ms — and the ⚙ sheet's meter follows it. The
+relative to the room's noise, so a quiet room sits at zero, rising in
+~80 ms and falling over ~300 ms — and the ⚙ sheet's meter follows it. The
+start chime never delays the first word: under it (and under a barge-in's
+or a confirmation's tail) the recorder keeps the audio, so a word that
+starts right away loses nothing, but no word *starts* in it — the chime
+is never heard as speech. The
 strip says *Listening…* throughout — no *Hearing you…*, no greyed partial:
 the streamed words are typed into the box as they come. Android ticks (12 ms) at
 each phrase's first word — but not when the 30 ms listening buzz has just
@@ -6999,8 +7015,9 @@ reply. A turn that ends with no line at all says *<name> finished.*
 **In continuous listening** a line does not wait for the listen to end: the
 Say line of the turn you sent, another session's line, an ask read-out, a
 router line all play **as soon as they are ready**, over the listen — the
-recorder deaf for the line and 150 ms after it (its blocks skipped, the
-phrase under way not ended; the phone's own recognizer, which cannot be
+recorder deaf for the line (its blocks skipped, the phrase under way not
+ended) and no word starting in the 150 ms after it (the audio kept — a word
+that starts right away loses nothing; the phone's own recognizer, which cannot be
 deafened, has what it reports meanwhile dropped), and listening goes on
 after it. Only **mid-sentence** — words in the last 1.5 s and a voice in
 the last 250 ms — does the queue hold, until the quiet. A tap on the mic
@@ -7102,8 +7119,11 @@ answer to a question, a dialog, hands-free) starts only once the queue has
 drained. **Barge-in:** you can answer before it has finished speaking — a
 tap on the mic (or a hold, or the ask sheet's 🎙) while a line is being said
 cuts the speaker first, drops that session's remaining lines (another
-session's wait for their turn), and opens the mic ~150 ms later so the
-phone's own voice is not transcribed; the cut line is not said again.
+session's wait for their turn), and keeps the phone's own voice out of the
+transcript: the server's recorder starts at once (its stream opens and the
+mic comes up under the speaker's tail) but no word may start for 150 ms;
+the phone's own recognizer, which cannot be deafened, starts 150 ms later.
+The cut line is not said again.
 **Stop talking:** say *stop talking* (*be quiet*, *quiet*, *hush*, *shut
 up*, *stop reading*, *enough*, *okay stop*…; the router's `{kind: "hush"}`,
 the page's own table when it cannot answer) — or tap **Stop talking** in the
@@ -7356,15 +7376,23 @@ sentence**, so a slow voice (the owner's own Voice Lab voices take ~8 s to
 make a 5 s line on a CPU) starts after its first sentence, not the whole
 line: a line is split at `.` `?` `!` `;` (never inside *3.5* or
 *note.txt*, never after *e.g.*, *i.e.*, *U.S.*, *Dr.*, *etc.*; a sentence
-under 12 characters joins the next, the last one the one before);
-`/api/voice/speak` is asked for sentence 1 at once and it plays when it
-arrives; sentence 2 is asked for as 1 starts playing (one ahead — a busy
-server makes one at a time) and plays the moment 1 ends, and so on, back to
-back. *Speaking…* spans the whole line. Cancel, a hush or a barge-in stops
-the sentence playing, drops the rest and aborts the request on its way. A
-sentence the server cannot say is said by the phone's voice. The phone's
-own voice (speechSynthesis) is unchanged. Diagnostics' *Last speak* line
-says *first sound 0.9 s (3 sentences)*.
+under 20 characters joins the next, the last one the one before — every
+request costs the voice its fixed time, ~1.1 s on Voice Lab, however short
+the words); `/api/voice/speak` is asked for sentences 1 and 2 at once and 1
+plays when it arrives; from then the clips are asked for **two ahead** of
+the one playing (`VOICE_SPEAK_AHEAD`), so a voice that makes one at a time
+is never idle between sentences — each plays the moment the one before
+ends, back to back. *Speaking…* spans the whole line. Cancel, a hush or a
+barge-in stops the sentence playing, drops the rest and aborts the requests
+on their way (at most two). A sentence the server cannot say is said by the
+phone's voice. The phone's own voice (speechSynthesis) is unchanged.
+Diagnostics' *Last speak* line says *first sound 0.9 s (3 sentences)*. The
+spoken confirmations (*Sent.*, *Cleared.*, *Stopped.*…) are made ahead and
+cached at the first tap for a voice made on this machine or **nearby** — not
+only `local` / `system` but any host whose detail names a loopback or
+private address, such as Voice Lab at 127.0.0.1:8770 — so the first *Sent.*
+is instant; a remote host (it may cost per line) gets them once a line it
+made has played.
 
 The page remembers, per browser (`localStorage`): the voice session and
 whether voice was on (the next visit offers **Tap to resume voice**), the
