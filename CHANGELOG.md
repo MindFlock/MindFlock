@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-10-28
+
 ### Added
+
+- **Say it as.** Settings → Voice gains your own pronunciation rows ("k8s"
+  → "kubernetes", your project's name the way you say it), synced across
+  your devices, with a Try button. They win over the built-in table.
+- **The words engineers say.** Every spoken line — a reply, a confirmation,
+  the phone's and the desktop's alike — is shaped once, at the moment it is
+  said and never in a caption: "everything goes live" says *live* the right
+  way, "I read it" says *red*, SQL, JSON, nginx, tmux, uv, pytest, k8s,
+  "PR #275", "v0.10.2" and "1m23s" are said as a person says them,
+  identifiers and paths are read as words, and markup and URLs are left out.
 
 - **Ask MindFlock how it works, by voice.** "How do I schedule a
   template?", "what does autopilot do?", "where do I turn on the phone
@@ -22,6 +34,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **"Over" sends sooner.** The wait for the accurate recognition pass after
+  "over" is no longer a fixed 2.5 seconds: the phone and the desktop wait
+  about one and a half times the pass's measured round trip, between 0.3
+  and 1.5 seconds, and a final that matches the words already heard sends at
+  once. The server starts the accurate pass on the first quiet chunk and
+  gives it the command words and your session names as vocabulary hints:
+  on the bench the wait halved and dictation errors fell from one word in
+  ten to one in twenty-five.
+- **Harder to mishear.** Each command has a table of what the recognizer
+  actually writes for it ("ova", "over an out", "dis regard", "stop
+  listing", "mind lock"), the same on the server, the desktop and the
+  phone. A command word heard a little off counts only at the start of a
+  phrase or alone, so "…in this regard" mid-sentence never wipes a draft.
+  Session names match across camelCase, digits and number words, and
+  sound-alikes ("sight check"), with *Which one?* when two fit.
+- **Speech that keeps up.** Short sentences are packed into one request for
+  a voice with a fixed cost per request (Voice Lab), spoken clips are
+  cached, the mic ring reacts at once with a slow release, *Listening…*
+  lands in the frame of the press, the start chime no longer clips, and
+  speaking over a reply on the desktop cuts it and keeps the word you said.
+- **"Stop listening" says nothing back.** A stop phrase was answered with a
+  spoken *Stopped.*, heard as the mic saying stop back, every time. The
+  falling chime alone answers it now, on the phone and the desktop; *Sent.*,
+  *Over and out.* and *Cleared.* are unchanged, and one still owed finishes
+  before the chime.
+- **Phone page: one-row top bar, room to type.** The top bar never wraps
+  (the session's name gives way, and in portrait the state chip steps aside
+  for it — the dot still shows the colour); tapping the text box hides the
+  voice strip, *Tap to hear …* included, until you leave it; and the
+  compose placeholder fits on one line.
 - **Voice says only what is news.** Switching sessions, turning voice on,
   resuming it, coming back to the page, the poll and *Everything* no longer
   read a reply from a session that has been done for a while. A reply is read
@@ -75,6 +117,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Phone page: the band between the keys and the keyboard.** Two causes,
+  both gone: the key bar kept its home-bar inset under the keyboard (iOS
+  keeps reporting it), and a fixed 60-pixel allowance for a Safari
+  address strip above the keyboard that today's Safari no longer draws.
+  The esc / ctrl keys now sit on the keyboard.
 - **iPhone: "Speech recognition did not start (start-failed: InvalidStateError:
   audio session category is not compatible with audio capture)".** The
   first tap set iOS's audio session to playback-only (so the silent switch
@@ -4495,7 +4542,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.10.2...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.10.3...HEAD
+[0.10.3]: https://github.com/MindFlock/MindFlock/releases/tag/v0.10.3
 [0.10.2]: https://github.com/MindFlock/MindFlock/releases/tag/v0.10.2
 [0.10.1]: https://github.com/MindFlock/MindFlock/releases/tag/v0.10.1
 [0.10.0]: https://github.com/MindFlock/MindFlock/releases/tag/v0.10.0
