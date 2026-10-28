@@ -1091,6 +1091,12 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 # token check before it can be proxied anywhere.
 app.add_middleware(_remote.RemoteProxyMiddleware)
 
+# Peer-link rows (`<peer>::<title>`, routes/peer_sessions.py): answered here
+# (their terminal rides the peer link) instead of being proxied to a tailnet
+# device of that name. Between the two: inside the auth gate, outside the
+# device proxy.
+app.add_middleware(_peer_session_routes.PeerRowsMiddleware)
+
 # Bearer-token auth gate (covers HTTP + websockets). Added AFTER the cache
 # middleware so it sits OUTERMOST — auth is checked before anything else runs.
 # No-op unless enabled (tailnet exposure / configured token / MINDFLOCK_AUTH=1).
@@ -1913,11 +1919,17 @@ def list_instances(request: Request) -> JSONResponse:
 
     Connected tailnet devices' sessions ride along, title-namespaced as
     ``<device>::<title>`` (cached by :func:`_remote.instances_loop` — no
-    network on this path). Another MindFlock asking (the remote header) gets
+    network on this path), and so do the sessions connected peer links share
+    with us, as ``<peer>::<title>`` (routes/peer_sessions.py — the peer
+    service's cache, no network either). Another MindFlock asking (the remote header) gets
     this device's OWN sessions only: the rows it mirrors belong to their own
     devices, and handing them on is how two paired devices echoed each
     other's sessions back as ``a::b::title``."""
-    remote = [] if _remote.from_remote(request) else _remote.merged_instances()
+    remote = (
+        []
+        if _remote.from_remote(request)
+        else _remote.merged_instances() + _peer_session_routes.peer_rows()
+    )
     cached = _events.sessions_snapshot()
     if time.time() - _SNAPSHOT_AT <= _INSTANCES_TICK_INTERVAL * 2.5:
         if {d.get("title") for d in cached} == set(ENGINE.instances.keys()):
@@ -12377,6 +12389,19 @@ async def pane_find_step(title: str, payload: dict) -> JSONResponse:
     return JSONResponse(res)
 
 
+def ensure_terminal_session(inst, title: str):
+    """What opening a session's terminal does first (blocking — call it in a
+    thread): wake a SLEEPING agent, then make sure its tmux session exists,
+    relaunching a dead agent. → ``(tmux name, None)`` or ``(None, error)``
+    (:data:`PAUSED_REFUSED` for a paused one). Shared with the peer-link
+    terminal bridge (backend.peer.sessions_bridge), which attaches to the
+    same tmux session for a peer."""
+    _woke, err = _sleep.ensure_awake(inst, title, "terminal opened")
+    if err is not None:
+        return None, err
+    return _ensure_agent_session(inst, title)
+
+
 @app.websocket("/api/instances/{title}/terminal")
 async def terminal_ws(ws: WebSocket, title: str) -> None:
     """Live agent terminal: attach a per-connection PTY to the session's tmux
@@ -12400,11 +12425,7 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
     # does not: both helpers refuse to relaunch it (PAUSED_REFUSED), and the
     # socket closes with 4423 so the pane shows its Paused placeholder and
     # does not reconnect. (Its agent still alive somehow → just attached.)
-    _woke, err = await asyncio.to_thread(
-        _sleep.ensure_awake, inst, title, "terminal opened"
-    )
-    if err is None:
-        name, err = await asyncio.to_thread(_ensure_agent_session, inst, title)
+    name, err = await asyncio.to_thread(ensure_terminal_session, inst, title)
     if err is not None:
         paused = err == PAUSED_REFUSED
         frame = {"type": "error", "message": err}
