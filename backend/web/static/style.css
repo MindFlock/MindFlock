@@ -1742,6 +1742,47 @@
   flex: 1;
   min-width: 140px;
 }
+
+/* Say it as (screens/Pronounce.tsx): one line per pronunciation — the word,
+   an arrow, how to say it, Try, × — and the draft line's two fields the same
+   way, so the eye reads every row alike. */
+.voice-pronounce-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.voice-pronounce-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+.voice-pronounce-say,
+.voice-pronounce-as {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-2);
+  font-size: 12px;
+}
+.voice-pronounce-as {
+  font-style: italic;
+}
+.voice-pronounce-arrow {
+  color: var(--muted);
+}
+.voice-pronounce-row input {
+  flex: 1;
+  min-width: 120px;
+  max-width: 220px;
+}
+.voice-pronounce-said,
+.voice-pronounce-kept {
+  flex-basis: 100%;
+}
 /* Settings → People, round 6: the header's tour "?", the joint task on a link
    card (start form, proposal, active card with its two halves, the Contract
    panel, the Mirror row and the joint checklist). The older People rules
@@ -9155,8 +9196,9 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 /* The ring (this mic and the ask pop-up's, both .mic-ring): constant and
    thin while listening. The only thing the sound changes is its opacity, in
    three steps — quiet / hearing / loud — that lib/voiceMic writes as
-   --mic-step only when the step changes (the level smoothed over ~400 ms
-   first), eased here over 400 ms. Never a scale, never a halo. */
+   --mic-step only when the step changes (the level smoothed first: a fast
+   attack, a slow release), eased here over 150 ms — quick enough to answer
+   a word, slow enough not to blink. Never a scale, never a halo. */
 .mic-ring {
   position: relative;
 }
@@ -9169,7 +9211,7 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   border: 1.5px solid var(--red);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 400ms ease;
+  transition: opacity 150ms ease-out;
 }
 
 .mic-ring.listening::after {
