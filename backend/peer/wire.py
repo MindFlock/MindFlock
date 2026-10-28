@@ -93,14 +93,18 @@ OPS = (
     "term_open",
     "term_close",
     "session_focus",
+    # An agent's message to a shared session (docs/peer-link.md "Agent
+    # messages across the link").
+    "agent_msg",
 )
 #: One-way frames (``t: "push"``): the sharer's terminal output and its end,
 #: "my share list changed" — and the opener's keystrokes and resizes.
 PUSH_OPS = ("term_out", "term_end", "term_in", "term_resize", "sessions_changed")
 #: What this version can do beyond the original ops, for the handshake's
 #: ``caps`` (sent by the transport; a peer advertising ``sessions`` speaks
-#: the shared-session ops and push frames).
-CAPS = ("sessions",)
+#: the shared-session ops and push frames, ``agent_msg`` takes an agent's
+#: message to a session it shares).
+CAPS = ("sessions", "agent_msg")
 
 MAX_NAME = 128  # on the wire; stores sanitize further to 32
 MAX_MSG_TEXT = 20_000
@@ -140,6 +144,9 @@ MAX_SESSION_TITLE = 200
 MAX_SESSIONS = 50
 MAX_ACTIVITY = 200
 SESSION_MODES = ("gated", "full")
+#: ``agent_msg``'s reply-chain depth: the mailbox holds far shallower chains
+#: (backend.web.core.mailbox.max_hops); this only bounds the number.
+MAX_AGENT_HOP = 1000
 
 
 class ProtocolError(Exception):
@@ -598,6 +605,33 @@ def _req_session_focus(p, strict) -> dict:
     return p
 
 
+def _req_agent_msg(p, strict) -> dict:
+    """``{title, text, from_title, from_name, msg_id, reply_to?, hop?}`` — an
+    agent in the sender's session ``from_title`` messaging the shared session
+    ``title``; ``reply_to`` is the id of the message it answers (one the
+    receiver sent), ``hop`` how deep that reply chain is."""
+    p = _keys(
+        p,
+        ("title", "text", "from_title", "from_name", "msg_id"),
+        ("reply_to", "hop"),
+        strict,
+    )
+    _session_title(p["title"])
+    _session_title(p["from_title"])
+    if not _str(p["from_name"], 0, MAX_SESSION_TITLE):
+        _fail("bad from_name")
+    if not _str(p["msg_id"], 1, 64) or not _MSG_ID_RE.match(p["msg_id"]):
+        _fail("bad msg_id")
+    if not _str(p["text"], 1, MAX_MSG_TEXT, _BAD_TEXT):
+        _fail("bad text")
+    rt = p.get("reply_to")
+    if rt is not None and (not _str(rt, 1, 64) or not _MSG_ID_RE.match(rt)):
+        _fail("bad reply_to")
+    if "hop" in p and not _int(p["hop"], 0, MAX_AGENT_HOP):
+        _fail("bad hop")
+    return p
+
+
 _REQUESTS = {
     "msg": _req_msg,
     "diff": _req_diff,
@@ -617,6 +651,7 @@ _REQUESTS = {
     "term_open": _req_term_open,
     "term_close": _req_term_close,
     "session_focus": _req_session_focus,
+    "agent_msg": _req_agent_msg,
 }
 
 
@@ -896,6 +931,17 @@ def _res_term_open(p, req, strict) -> dict:
     return p
 
 
+def _res_agent_msg(p, req, strict) -> dict:
+    """``{ok: true, id}`` — ``id`` is the message's id in the receiver's
+    mailbox."""
+    p = _keys(p, ("ok", "id"), (), strict)
+    if p["ok"] is not True:
+        _fail("bad ok")
+    if not _str(p["id"], 1, 64) or not _MSG_ID_RE.match(p["id"]):
+        _fail("bad id")
+    return p
+
+
 _RESPONSES = {
     "msg": _res_msg,
     "diff": _res_diff,
@@ -915,6 +961,7 @@ _RESPONSES = {
     "term_open": _res_term_open,
     "term_close": _res_joint_ok,
     "session_focus": _res_joint_ok,
+    "agent_msg": _res_agent_msg,
 }
 
 
