@@ -240,6 +240,15 @@ body.narrow .sidebar-resizer {
   background: var(--panel-2) !important;
 }
 
+/* ⇄ beside a peer's name: their sessions, shared over a peer link
+   (lib/peerSessions) — not one of this person's devices. */
+.device-group .dev-peer {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 /* A device group's header is a real button (its fold toggle, aria-expanded)
    that reads exactly like the header text did; the ✕ beside it stays its
    own button. */
