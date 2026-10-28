@@ -6,6 +6,7 @@
 import { useEffect } from "react";
 import { QueryClient, useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { splitLockedRows } from "../lib/guest";
 import { nudgeUsage } from "../lib/usageRefresh";
 import { toast } from "../lib/toast";
 import { errorPop } from "../lib/errorPop";
@@ -78,7 +79,9 @@ export function useInstances() {
   return useQuery({
     queryKey: ["instances"],
     queryFn: async () => {
-      const list = await api<Instance[]>("/api/instances");
+      // A guest link's crossed-out rows go to lib/guest.ts for the rail to
+      // draw; nothing else (the grid, the pickers, the bell) ever sees them.
+      const list = splitLockedRows(await api<Instance[]>("/api/instances"));
       window.mindflock?.__setSessions?.(list);
       return list;
     },

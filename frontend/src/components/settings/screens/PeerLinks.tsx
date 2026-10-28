@@ -46,6 +46,7 @@ import {
 } from "../../../lib/peer";
 import { PEER_JOIN_EVENT, takePendingPeerJoin } from "../../../lib/peerActions";
 import { PeerAdvanced } from "./peer/PeerAdvanced";
+import { GuestLinks } from "./peer/GuestLinks";
 import { PeerLinkCard } from "./peer/PeerLinkCard";
 import { errText } from "./peer/useAct";
 import "./PeerLinks.css";
@@ -505,6 +506,8 @@ export function PeerLinks(_: ScreenProps) {
       </div>
 
       {error && <p className="error">{error}</p>}
+
+      <GuestLinks />
 
       {st && !st.sandbox.available && (
         <div className="peer-needs" id="peer-needs">

@@ -2418,6 +2418,32 @@ git_email}`, and so does the `POST /api/fleet/adopt` body; the joiner adopts the
 id. The settings-sync export (`GET /api/settings/sync/export`) carries
 `"person": {"id": …}` for the tie-break.
 
+### Guest links
+
+Let someone else type into a few of this device's sessions through a link
+([people.md](people.md#guest-links--someone-else-in-a-few-of-your-sessions)).
+A guest signs in like the owner (`?token=` → cookie), but the gate records the
+link and allows per request: anything on `/api/instances/<title>` for a title
+on the link (writes only on the typing routes: terminal, shell, send, answer,
+asking, dialog, prompt, queue, voice, find, messages, thread, wake, jobs,
+background, code-map), `GET /api/instances` (every other row a stub:
+`{title, status, device, hidden_by, pending, locked: true}`), `WS /api/events`
+(their sessions' envelopes only), a few read-only boot calls (`/api/config`
+carries `guest: {label, sessions}`; `/api/prefs`, `/api/aliases`,
+`/api/addons`, `/api/devices`, `/api/providers[/status]`, `/api/setup`,
+`/api/person`, `/api/voice[/help]`, `/api/mindflock/status`) and the speech
+POSTs (`/api/voice/transcribe`, `/api/voice/speak`, `/api/paste-image`).
+Everything else → `403 {"error": "not part of your invite"}` (websocket close
+4403). The routes below are the owner's: a guest gets the same 403, a relayed
+device 403, a change needs `may_configure`.
+
+| Method | Path | Behavior |
+|---|---|---|
+| GET | `/api/guests` | `{links: [{id, label, sessions, created_at, url, phone_url}], gate_on}` — `url` is the link to send (`<advertised root>/?token=…`; `phone_url` the same at `/m`) |
+| POST | `/api/guests` | `{label?, sessions: [title, …]}` → **201** the link row with its URL; 400 with no session; 409 while the access gate is off (a link limits nothing then) |
+| POST | `/api/guests/{id}` | `{label?, sessions?}` — change what the link opens; the URL stays; 400 for an empty list, 404 unknown |
+| DELETE | `/api/guests/{id}` | Revoke: the link's browser is signed out on its next request; 404 unknown |
+
 ### Peer links — the safety number, unlinking, the off switch, export
 
 The routes are specified in

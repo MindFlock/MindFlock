@@ -1029,7 +1029,9 @@
     return fetch("/api/instances")
       .then(function (r) { return r.json(); })
       .then(function (list) {
-        instances = Array.isArray(list) ? list : [];
+        // A guest link's crossed-out rows (`locked`, backend.web.core.guests)
+        // have no terminal to open: the phone lists only what it can show.
+        instances = (Array.isArray(list) ? list : []).filter(function (i) { return !i.locked; });
         // Re-render when the title set OR any attention state changes, so
         // markers move without a session being added/removed.
         var sig = instances.map(function (i) {

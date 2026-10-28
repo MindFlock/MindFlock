@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Guest links — someone else in a few of your sessions.** Settings →
+  People → *Let someone into a few of your sessions*: tick the sessions,
+  name who it's for, Make a link. They open it in a browser — no MindFlock
+  of their own — and type into exactly those sessions on your device; every
+  other session is crossed out for them, and closing, committing, pushing
+  or shipping stays yours. The block warns in red that a link is access to
+  your computer and won't make one until you tick *I understand*; Revoke
+  signs them out. Needs the access gate on (it offers to turn it on).
+  `GET/POST /api/guests`, `POST/DELETE /api/guests/<id>`.
+
 ## [0.10.3] - 2026-10-28
 
 ### Added

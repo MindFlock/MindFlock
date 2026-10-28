@@ -224,6 +224,10 @@ export interface Instance {
    * `""` for the user's own work. Optional only because an older server
    * doesn't send it — see `isVerifySession` for the fallback that covers. */
   hidden_by?: string;
+  /** A guest link's crossed-out row (backend.web.core.guests): the server
+   * sent title and status only, and every call on it is a 403. Never set
+   * for the owner. lib/guest.ts keeps these out of `useInstances()`. */
+  locked?: boolean;
   /** The id of the person the session was created for (GET /api/person;
    * docs/people.md). `""` for a session that predates people or one a peer
    * link made. Optional: an older server doesn't send it. */
@@ -930,6 +934,27 @@ export interface Config {
   onboarded: boolean;
   auth_mode: string;
   auth_enabled: boolean;
+  /** Set when this browser is signed in with a guest link: the owner's label
+   * for it and the session titles it opens. Null (or absent, older server)
+   * for the owner. */
+  guest?: GuestScope | null;
+}
+
+/** What a guest link opens (`/api/config` → `guest`). */
+export interface GuestScope {
+  label: string;
+  sessions: string[];
+}
+
+/** One guest link as the owner sees it (`GET /api/guests`): the URL carries
+ * the token; the row never does on its own. */
+export interface GuestLink {
+  id: string;
+  label: string;
+  sessions: string[];
+  created_at: number;
+  url: string;
+  phone_url: string;
 }
 
 /** One auth profile (Settings → Accounts): an identity a session's CLI can run

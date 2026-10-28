@@ -463,3 +463,45 @@
     margin-left: 0;
   }
 }
+
+/* Guest links: let someone into a few of this device's sessions. */
+.peer-guests {
+  margin-top: 18px;
+}
+.peer-guest-pick {
+  list-style: none;
+  margin: 6px 0 8px;
+  padding: 0;
+  max-height: 180px;
+  overflow: auto;
+}
+.peer-guest-pick li {
+  padding: 2px 0;
+}
+.peer-guest-pick label {
+  cursor: pointer;
+}
+.peer-guest-links {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+.peer-guest-links li {
+  padding: 3px 0;
+}
+.peer-guest-warn {
+  margin: 8px 0 6px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--red) 55%, var(--border));
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  color: var(--text);
+}
+.peer-guest-warn strong {
+  color: var(--red);
+}
+.peer-guest-ack {
+  display: block;
+  margin: 0 0 8px;
+  cursor: pointer;
+}
