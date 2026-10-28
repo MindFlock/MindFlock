@@ -38162,7 +38162,7 @@ function slowLevel(prev, level, dtMs) {
 }
 var HEARING_HOLD_MS = 700;
 var STALE_MS = 250;
-var POLL_MS$3 = 85;
+var POLL_MS$4 = 85;
 function noiseFloor(floor, rms) {
 	return floor === 0 ? rms : Math.min(rms, floor * 1.05 + .001);
 }
@@ -38216,7 +38216,7 @@ function paint$1() {
 function frame(t) {
 	raf = 0;
 	const now = Date.now();
-	if (poll && now - lastPoll >= POLL_MS$3) {
+	if (poll && now - lastPoll >= POLL_MS$4) {
 		lastPoll = now;
 		meterFeed(poll(), now);
 	}
@@ -50786,6 +50786,473 @@ function AssistantRowChip() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AssistantChip, {});
 }
 //#endregion
+//#region src/lib/gateOn.ts
+var GATE_ON_NOTE = "Access gate on. Your other devices sign in with your devices' key, so they keep working; a phone signs in again by scanning the QR in Settings → Your phone.";
+async function turnGateOn(call = api) {
+	const t = await call("/api/settings/auth-token");
+	if (t?.token) await call("/api/auth", { json: { token: t.token } });
+	await call("/api/settings", { json: { general: { auth_mode: "on" } } });
+}
+//#endregion
+//#region src/components/settings/screens/peer/useAct.ts
+function errText$2(e) {
+	return e instanceof Error ? e.message : String(e);
+}
+function useAct(reload) {
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [err, setErr] = (0, import_react.useState)("");
+	const act = async (what, fn, ok) => {
+		setBusy(what);
+		setErr("");
+		let done = false;
+		try {
+			const r = await fn();
+			done = true;
+			const text = typeof ok === "function" ? ok(r) : ok;
+			if (text) toast(text);
+		} catch (e) {
+			setErr(errText$2(e));
+		}
+		setBusy("");
+		reload();
+		return done;
+	};
+	return {
+		busy,
+		err,
+		setErr,
+		act
+	};
+}
+//#endregion
+//#region src/components/settings/screens/peer/GuestLinks.tsx
+function guestLinkLine(l) {
+	const who = l.label || "Guest";
+	const n = l.sessions.length;
+	return `${who} · ${n} session${n === 1 ? "" : "s"}: ${l.sessions.join(", ")}`;
+}
+function tunnelLine(t, links) {
+	if (!t) return "";
+	if (t.state === "up") return "Public link up — anyone with a link reaches these sessions from anywhere.";
+	if (t.state === "starting") return "Starting the public link… (Cloudflare is minting its address)";
+	if (t.state === "failed") return t.error || "The public link could not be started.";
+	if (!t.installed) return "The public link needs cloudflared on this computer (free, no account).";
+	return links > 0 ? "Public link off." : "";
+}
+function killedText(revoked) {
+	return revoked === 0 ? "Guest access cut — public link closed." : `Guest access cut — ${revoked} link${revoked === 1 ? "" : "s"} revoked, public link closed.`;
+}
+function GuestLinks() {
+	const { data: config } = useConfig();
+	const { data: instances } = useInstances();
+	const [links, setLinks] = (0, import_react.useState)(null);
+	const [tunnel, setTunnel] = (0, import_react.useState)(null);
+	const [gateOn, setGateOn] = (0, import_react.useState)(null);
+	const [picked, setPicked] = (0, import_react.useState)(() => /* @__PURE__ */ new Set());
+	const [label, setLabel] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [err, setErr] = (0, import_react.useState)("");
+	const [made, setMade] = (0, import_react.useState)(null);
+	const [install, setInstall] = (0, import_react.useState)([]);
+	const [understood, setUnderstood] = (0, import_react.useState)(false);
+	const sessions = (0, import_react.useMemo)(() => (instances || []).filter((i) => !i.device && !i.hidden_by && !i.pending && !i.locked), [instances]);
+	const load = (0, import_react.useCallback)(async () => {
+		try {
+			const r = await api("/api/guests");
+			setLinks(r.links || []);
+			setTunnel(r.tunnel || null);
+			setGateOn(!!r.gate_on);
+			setErr("");
+		} catch (e) {
+			setErr(errText$2(e));
+		}
+	}, []);
+	(0, import_react.useEffect)(() => {
+		load();
+	}, [load]);
+	const starting = tunnel?.state === "starting";
+	(0, import_react.useEffect)(() => {
+		if (!starting) return;
+		const t = setInterval(() => void load(), 2e3);
+		return () => clearInterval(t);
+	}, [starting, load]);
+	const needsInstall = !!tunnel && !tunnel.installed && (links?.length || 0) > 0;
+	(0, import_react.useEffect)(() => {
+		if (!needsInstall) {
+			setInstall([]);
+			return;
+		}
+		let live = true;
+		reprobeDoctor().then((d) => live && setInstall(d.install?.steps || [])).catch(() => live && setInstall([]));
+		return () => {
+			live = false;
+		};
+	}, [needsInstall]);
+	const toggle = (title) => setPicked((prev) => {
+		const next = new Set(prev);
+		if (next.has(title)) next.delete(title);
+		else next.add(title);
+		return next;
+	});
+	const create = async () => {
+		setBusy(true);
+		setErr("");
+		try {
+			const row = await api("/api/guests", { json: {
+				label: label.trim(),
+				sessions: sessions.map((s) => s.title).filter((t) => picked.has(t))
+			} });
+			setMade(row.id);
+			setPicked(/* @__PURE__ */ new Set());
+			setLabel("");
+			await load();
+			if (row.url) toast(await copyText(row.url) ? "Guest link copied — send it to them" : "Guest link made — press Copy to send it");
+			else if (row.tunnel?.installed === false) toast("Guest link made — install cloudflared below to get its public address");
+			else toast("Guest link made — its public address appears in a few seconds");
+		} catch (e) {
+			setErr(errText$2(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+	const revoke = async (id) => {
+		setBusy(true);
+		try {
+			await api("/api/guests/" + encodeURIComponent(id), { method: "DELETE" });
+			if (made === id) setMade(null);
+			await load();
+			toast("Guest link revoked");
+		} catch (e) {
+			setErr(errText$2(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+	const kill = async () => {
+		setBusy(true);
+		try {
+			const r = await api("/api/guests/tunnel", { method: "DELETE" });
+			setMade(null);
+			await load();
+			toast(killedText(r.revoked || 0));
+		} catch (e) {
+			setErr(errText$2(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+	const retryTunnel = async () => {
+		setBusy(true);
+		setErr("");
+		try {
+			setTunnel(await api("/api/guests/tunnel", { json: {} }));
+			await load();
+		} catch (e) {
+			setErr(errText$2(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+	const gate = async () => {
+		setBusy(true);
+		setErr("");
+		try {
+			await turnGateOn();
+			toast(GATE_ON_NOTE);
+			await refreshConfig();
+			await load();
+		} catch (e) {
+			setErr(errText$2(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+	const copy = (l) => {
+		if (!l.url) {
+			toast("No public address yet — wait for the public link, or copy the on-your-network link");
+			return;
+		}
+		copyText(l.url).then((ok) => toast(ok ? "Guest link copied — send it to them" : "Copy failed"));
+	};
+	const copyLocal = (l) => void copyText(l.local_url).then((ok) => toast(ok ? "On-your-network link copied" : "Copy failed"));
+	const off = gateOn === false || gateOn === null && config?.auth_enabled === false;
+	const live = (links?.length || 0) > 0 || tunnel?.state === "up" || tunnel?.state === "starting";
+	const madeRow = made ? links?.find((l) => l.id === made) || null : null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "peer-guests",
+		id: "peer-guests",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+				className: "set-subtitle",
+				children: "Let someone into a few of your sessions"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				children: "No second MindFlock needed: they open the link in a browser — from anywhere, it goes through a Cloudflare tunnel to this computer — and type into the sessions you pick. Every other session is crossed out for them."
+			}),
+			live && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-row peer-guest-kill",
+				id: "peer-guests-kill",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "set-hint",
+					children: [tunnelLine(tunnel, links?.length || 0), tunnel?.state === "failed" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						disabled: busy,
+						onClick: () => void retryTunnel(),
+						children: "Try again"
+					})] })]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn peer-danger",
+					id: "peer-guests-kill-btn",
+					disabled: busy,
+					title: "Revoke every guest link and close the public address — open guest terminals close at once",
+					onClick: () => void kill(),
+					children: "⏻ Kill the connection"
+				})]
+			}),
+			off ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-row",
+				id: "peer-guests-gate",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "A guest link only limits anything while every visitor needs a token — turn the access gate on first."
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					id: "peer-guests-gate-on",
+					disabled: busy,
+					onClick: () => void gate(),
+					children: busy ? "Turning on…" : "Turn the gate on"
+				})]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-guest-make",
+				id: "peer-guests-make",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "peer-danger peer-guest-warn",
+						id: "peer-guests-warn",
+						role: "alert",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "This gives another person access to your computer, from anywhere on the internet." }),
+							" In those sessions they type at your agent and your shell: they can read and change the files in that worktree, run commands as you, and spend your agent's credits. Only send a link to someone you would hand your keyboard to, and press ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("em", { children: "Kill the connection" }),
+							" when you're done."
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "peer-guest-ack",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "checkbox",
+								id: "peer-guests-ack",
+								checked: understood,
+								onChange: (e) => setUnderstood(e.target.checked)
+							}),
+							" ",
+							"I understand this lets them act on my machine"
+						]
+					}),
+					sessions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Start a session first — a link opens sessions that exist."
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+						className: "peer-guest-pick",
+						children: sessions.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "checkbox",
+								checked: picked.has(s.title),
+								onChange: () => toggle(s.title),
+								"data-session": s.title
+							}),
+							" ",
+							displayName(s.title),
+							s.branch && s.branch !== s.title ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "set-hint",
+								children: [" · ", s.branch]
+							}) : null
+						] }) }, s.title))
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "set-row",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							id: "peer-guests-label",
+							placeholder: "who it's for (optional)",
+							value: label,
+							maxLength: 80,
+							onChange: (e) => setLabel(e.target.value)
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "btn-primary",
+							id: "peer-guests-create",
+							disabled: busy || picked.size === 0 || !understood,
+							title: understood ? void 0 : "Tick the warning above first",
+							onClick: () => void create(),
+							children: busy ? "Making…" : "Make a link"
+						})]
+					})
+				]
+			}),
+			needsInstall && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-needs",
+				id: "peer-guests-install",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "set-hint",
+					children: [
+						"To reach someone on another network this computer needs ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "cloudflared" }),
+						" (free, no account; MindFlock never downloads it for you). Install it and the public address appears by itself."
+					]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InstallMissing, {
+					steps: install,
+					onDone: () => void retryTunnel()
+				})]
+			}),
+			madeRow && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-invite",
+				id: "peer-guests-made",
+				children: [
+					madeRow.url ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+						readOnly: true,
+						rows: 2,
+						value: madeRow.url,
+						onClick: (e) => e.target.select()
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						id: "peer-guests-made-wait",
+						children: tunnel?.state === "starting" ? "Its public address appears here in a few seconds…" : "No public address yet — see above."
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn",
+								id: "peer-guests-copy",
+								disabled: !madeRow.url,
+								onClick: () => copy(madeRow),
+								children: "Copy link"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn",
+								onClick: () => copyLocal(madeRow),
+								children: "Copy on-your-network link"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn",
+								onClick: () => setMade(null),
+								children: "Done"
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "set-hint",
+						children: [guestLinkLine(madeRow), ". On a phone the same link opens the phone page. Anyone with the link is in — send it to the one person it's for. The address changes when this server restarts; copy it again from here."]
+					})
+				]
+			}),
+			err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error",
+				id: "peer-guests-error",
+				children: err
+			}),
+			links && links.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "peer-guest-links",
+				id: "peer-guests-list",
+				children: links.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					"data-guest": l.id,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: guestLinkLine(l)
+						}),
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							disabled: busy,
+							onClick: () => copy(l),
+							children: "Copy"
+						}),
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							disabled: busy,
+							onClick: () => void revoke(l.id),
+							children: "Revoke"
+						})
+					]
+				}, l.id))
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/sidebar/GuestBar.tsx
+var POLL_MS$3 = 1e4;
+function guestBarText(links, tunnel) {
+	const who = links === 1 ? "1 guest link" : links + " guest links";
+	if (tunnel?.state === "up") return who + " · public link up";
+	if (tunnel?.state === "starting") return who + " · public link starting…";
+	return who;
+}
+function GuestBar() {
+	const { data: config } = useConfig();
+	const [links, setLinks] = (0, import_react.useState)([]);
+	const [tunnel, setTunnel] = (0, import_react.useState)(null);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const owner = !!config && !config.guest;
+	(0, import_react.useEffect)(() => {
+		if (!owner) return;
+		let live = true;
+		const tick = () => api("/api/guests").then((r) => {
+			if (!live) return;
+			setLinks(r.links || []);
+			setTunnel(r.tunnel || null);
+		}).catch(() => {});
+		tick();
+		const t = setInterval(() => void tick(), POLL_MS$3);
+		return () => {
+			live = false;
+			clearInterval(t);
+		};
+	}, [owner]);
+	if (!(owner && (links.length > 0 || tunnel?.state === "up" || tunnel?.state === "starting"))) return null;
+	const kill = async () => {
+		setBusy(true);
+		try {
+			const r = await api("/api/guests/tunnel", { method: "DELETE" });
+			setLinks([]);
+			setTunnel(null);
+			toast(killedText(r.revoked || 0));
+		} catch (e) {
+			toast(e instanceof Error ? e.message : String(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "guest-bar",
+		role: "group",
+		"aria-label": "Guest links",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "gb-text",
+			children: guestBarText(links.length, tunnel)
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "gb-kill",
+			disabled: busy,
+			title: "Revoke every guest link and close the public address — open guest terminals close at once",
+			onClick: () => void kill(),
+			children: "⏻ Kill"
+		})]
+	});
+}
+//#endregion
 //#region src/components/sidebar/SessionFilter.tsx
 function SessionFilter() {
 	const filter = useUi((s) => s.filter);
@@ -53760,6 +54227,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 						searchVisible && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionFilter, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BulkBar, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(OfflineBar, {}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GuestBar, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerSharedRows, {}),
 						config?.guest && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 							className: "guest-note",
@@ -94362,288 +94830,6 @@ function PeerAdvanced({ on, onToggle, st, busy, error }) {
 						})
 					] })
 				]
-			})
-		]
-	});
-}
-//#endregion
-//#region src/lib/gateOn.ts
-var GATE_ON_NOTE = "Access gate on. Your other devices sign in with your devices' key, so they keep working; a phone signs in again by scanning the QR in Settings → Your phone.";
-async function turnGateOn(call = api) {
-	const t = await call("/api/settings/auth-token");
-	if (t?.token) await call("/api/auth", { json: { token: t.token } });
-	await call("/api/settings", { json: { general: { auth_mode: "on" } } });
-}
-//#endregion
-//#region src/components/settings/screens/peer/useAct.ts
-function errText$2(e) {
-	return e instanceof Error ? e.message : String(e);
-}
-function useAct(reload) {
-	const [busy, setBusy] = (0, import_react.useState)("");
-	const [err, setErr] = (0, import_react.useState)("");
-	const act = async (what, fn, ok) => {
-		setBusy(what);
-		setErr("");
-		let done = false;
-		try {
-			const r = await fn();
-			done = true;
-			const text = typeof ok === "function" ? ok(r) : ok;
-			if (text) toast(text);
-		} catch (e) {
-			setErr(errText$2(e));
-		}
-		setBusy("");
-		reload();
-		return done;
-	};
-	return {
-		busy,
-		err,
-		setErr,
-		act
-	};
-}
-//#endregion
-//#region src/components/settings/screens/peer/GuestLinks.tsx
-function guestLinkLine(l) {
-	const who = l.label || "Guest";
-	const n = l.sessions.length;
-	return `${who} · ${n} session${n === 1 ? "" : "s"}: ${l.sessions.join(", ")}`;
-}
-function GuestLinks() {
-	const { data: config } = useConfig();
-	const { data: instances } = useInstances();
-	const [links, setLinks] = (0, import_react.useState)(null);
-	const [gateOn, setGateOn] = (0, import_react.useState)(null);
-	const [picked, setPicked] = (0, import_react.useState)(() => /* @__PURE__ */ new Set());
-	const [label, setLabel] = (0, import_react.useState)("");
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const [err, setErr] = (0, import_react.useState)("");
-	const [made, setMade] = (0, import_react.useState)(null);
-	const [understood, setUnderstood] = (0, import_react.useState)(false);
-	const sessions = (0, import_react.useMemo)(() => (instances || []).filter((i) => !i.device && !i.hidden_by && !i.pending && !i.locked), [instances]);
-	const load = (0, import_react.useCallback)(async () => {
-		try {
-			const r = await api("/api/guests");
-			setLinks(r.links || []);
-			setGateOn(!!r.gate_on);
-			setErr("");
-		} catch (e) {
-			setErr(errText$2(e));
-		}
-	}, []);
-	(0, import_react.useEffect)(() => {
-		load();
-	}, [load]);
-	const toggle = (title) => setPicked((prev) => {
-		const next = new Set(prev);
-		if (next.has(title)) next.delete(title);
-		else next.add(title);
-		return next;
-	});
-	const create = async () => {
-		setBusy(true);
-		setErr("");
-		try {
-			const row = await api("/api/guests", { json: {
-				label: label.trim(),
-				sessions: sessions.map((s) => s.title).filter((t) => picked.has(t))
-			} });
-			setMade(row);
-			setPicked(/* @__PURE__ */ new Set());
-			setLabel("");
-			await load();
-			toast(await copyText(row.url) ? "Guest link copied — send it to them" : "Guest link made — press Copy to send it");
-		} catch (e) {
-			setErr(errText$2(e));
-		} finally {
-			setBusy(false);
-		}
-	};
-	const revoke = async (id) => {
-		setBusy(true);
-		try {
-			await api("/api/guests/" + encodeURIComponent(id), { method: "DELETE" });
-			if (made?.id === id) setMade(null);
-			await load();
-			toast("Guest link revoked");
-		} catch (e) {
-			setErr(errText$2(e));
-		} finally {
-			setBusy(false);
-		}
-	};
-	const gate = async () => {
-		setBusy(true);
-		setErr("");
-		try {
-			await turnGateOn();
-			toast(GATE_ON_NOTE);
-			await refreshConfig();
-			await load();
-		} catch (e) {
-			setErr(errText$2(e));
-		} finally {
-			setBusy(false);
-		}
-	};
-	const copy = (l) => copyText(l.url).then((ok) => toast(ok ? "Guest link copied — send it to them" : "Copy failed"));
-	const off = gateOn === false || gateOn === null && config?.auth_enabled === false;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "peer-guests",
-		id: "peer-guests",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
-				className: "set-subtitle",
-				children: "Let someone into a few of your sessions"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "set-hint",
-				children: "No second MindFlock needed: they open the link in a browser and type into the sessions you pick, here on this device. Every other session is crossed out for them. Revoke the link whenever you like."
-			}),
-			off ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "peer-row",
-				id: "peer-guests-gate",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "set-hint",
-					children: "A guest link only limits anything while every visitor needs a token — turn the access gate on first."
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn",
-					id: "peer-guests-gate-on",
-					disabled: busy,
-					onClick: () => void gate(),
-					children: busy ? "Turning on…" : "Turn the gate on"
-				})]
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "peer-guest-make",
-				id: "peer-guests-make",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "peer-danger peer-guest-warn",
-						id: "peer-guests-warn",
-						role: "alert",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "This gives another person access to your computer." }), " In those sessions they type at your agent and your shell: they can read and change the files in that worktree, run commands as you, and spend your agent's credits. Only send a link to someone you would hand your keyboard to, and revoke it when you're done."]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "peer-guest-ack",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-								type: "checkbox",
-								id: "peer-guests-ack",
-								checked: understood,
-								onChange: (e) => setUnderstood(e.target.checked)
-							}),
-							" ",
-							"I understand this lets them act on my machine"
-						]
-					}),
-					sessions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "set-hint",
-						children: "Start a session first — a link opens sessions that exist."
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-						className: "peer-guest-pick",
-						children: sessions.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-								type: "checkbox",
-								checked: picked.has(s.title),
-								onChange: () => toggle(s.title),
-								"data-session": s.title
-							}),
-							" ",
-							displayName(s.title),
-							s.branch && s.branch !== s.title ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-								className: "set-hint",
-								children: [" · ", s.branch]
-							}) : null
-						] }) }, s.title))
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "set-row",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							id: "peer-guests-label",
-							placeholder: "who it's for (optional)",
-							value: label,
-							maxLength: 80,
-							onChange: (e) => setLabel(e.target.value)
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "btn-primary",
-							id: "peer-guests-create",
-							disabled: busy || picked.size === 0 || !understood,
-							title: understood ? void 0 : "Tick the warning above first",
-							onClick: () => void create(),
-							children: busy ? "Making…" : "Make a link"
-						})]
-					})
-				]
-			}),
-			made && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "peer-invite",
-				id: "peer-guests-made",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-						readOnly: true,
-						rows: 2,
-						value: made.url,
-						onClick: (e) => e.target.select()
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "set-row",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
-							id: "peer-guests-copy",
-							onClick: () => void copy(made),
-							children: "Copy link"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
-							onClick: () => setMade(null),
-							children: "Done"
-						})]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "set-hint",
-						children: [guestLinkLine(made), ". On a phone the same link opens the phone page. Anyone with the link is in — send it to the one person it's for."]
-					})
-				]
-			}),
-			err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "error",
-				id: "peer-guests-error",
-				children: err
-			}),
-			links && links.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-				className: "peer-guest-links",
-				id: "peer-guests-list",
-				children: links.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-					"data-guest": l.id,
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-hint",
-							children: guestLinkLine(l)
-						}),
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
-							disabled: busy,
-							onClick: () => void copy(l),
-							children: "Copy"
-						}),
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn",
-							disabled: busy,
-							onClick: () => void revoke(l.id),
-							children: "Revoke"
-						})
-					]
-				}, l.id))
 			})
 		]
 	});

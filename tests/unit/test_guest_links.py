@@ -21,8 +21,22 @@ TOKEN = "owner-token-abc123"
 
 @pytest.fixture(autouse=True)
 def _isolated_store(tmp_path, monkeypatch):
+    from backend.web.core import guest_tunnel
+
     monkeypatch.setattr(guests, "_path", lambda: str(tmp_path / "guest_links.json"))
     monkeypatch.setattr(guests, "_LINKS", None)
+    # Never a real cloudflared here: a route that ensures the tunnel must not
+    # start a process (or touch the real config dir) under pytest.
+    monkeypatch.setattr(guest_tunnel, "_binary", lambda: None)
+    for k, v in {
+        "_TUNNEL": None,
+        "_TASK": None,
+        "_HOST": "",
+        "_ERROR": "",
+        "_REASON": "",
+        "_WANTED": False,
+    }.items():
+        monkeypatch.setattr(guest_tunnel, k, v)
     yield
     monkeypatch.setattr(guests, "_LINKS", None)
 
@@ -267,14 +281,16 @@ def test_owner_creates_lists_and_revokes(owner, monkeypatch):
     assert r.status_code == 201, r.text
     row = r.json()
     assert row["label"] == "Pat" and row["sessions"] == ["alpha"]
-    assert row["url"].endswith("/?token=" + guests.token_of(row["id"]))
-    assert row["phone_url"].endswith("/m?token=" + guests.token_of(row["id"]))
+    # No tunnel in tests: the public URLs are null, the on-your-network one
+    # carries the token (test_urls_come_from_the_tunnel covers the tunnel).
+    assert row["url"] is None and row["phone_url"] is None
+    assert row["local_url"].endswith("/?token=" + guests.token_of(row["id"]))
     assert "token" not in row
 
     r = owner.get("/api/guests")
     assert r.status_code == 200 and r.json()["gate_on"] is True
     assert [l["id"] for l in r.json()["links"]] == [row["id"]]
-    assert r.json()["links"][0]["url"] == row["url"]
+    assert r.json()["links"][0]["local_url"] == row["local_url"]
 
     r = owner.post("/api/guests/" + row["id"], json={"sessions": ["alpha", "beta"]})
     assert r.status_code == 200 and r.json()["sessions"] == ["alpha", "beta"]
@@ -306,3 +322,195 @@ def test_create_refused_while_the_gate_is_off(monkeypatch):
 def test_relayed_device_cannot_manage_links(owner):
     r = owner.get("/api/guests", headers={"X-MindFlock-Remote": "1"})
     assert r.status_code in (403,)
+
+
+# --------------------------------------------------------------------------- #
+# the public address and the kill switch
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def no_tunnel(monkeypatch):
+    """No cloudflared, no process: the tunnel module reports 'off/not installed'."""
+    from backend.web.core import guest_tunnel
+
+    monkeypatch.setattr(guest_tunnel, "_binary", lambda: None)
+    monkeypatch.setattr(guest_tunnel, "_HOST", "")
+    monkeypatch.setattr(guest_tunnel, "_ERROR", "")
+    monkeypatch.setattr(guest_tunnel, "_TASK", None)
+    monkeypatch.setattr(guest_tunnel, "_WANTED", False)
+    yield guest_tunnel
+    monkeypatch.setattr(guest_tunnel, "_HOST", "")
+
+
+def test_urls_come_from_the_tunnel(owner, no_tunnel, monkeypatch):
+    async def _yes(scope):
+        return True
+
+    monkeypatch.setattr(auth, "may_configure", _yes)
+    r = owner.post("/api/guests", json={"sessions": ["alpha"]})
+    assert r.status_code == 201, r.text
+    row = r.json()
+    tok = guests.token_of(row["id"])
+    # No tunnel: no public URL, the on-your-network one, and why.
+    assert row["url"] is None and row["phone_url"] is None
+    assert row["local_url"].endswith("/?token=" + tok)
+    assert row["tunnel"]["installed"] is False
+    # The tunnel up: the public address carries the token, at / and /m.
+    monkeypatch.setattr(no_tunnel, "_HOST", "quiet-fox-1234.trycloudflare.com")
+    r = owner.get("/api/guests").json()
+    assert (
+        r["tunnel"]["state"] == "up"
+        and r["tunnel"]["url"] == "https://quiet-fox-1234.trycloudflare.com/"
+    )
+    assert (
+        r["links"][0]["url"] == "https://quiet-fox-1234.trycloudflare.com/?token=" + tok
+    )
+    assert (
+        r["links"][0]["phone_url"]
+        == "https://quiet-fox-1234.trycloudflare.com/m?token=" + tok
+    )
+
+
+def test_kill_revokes_everything_and_stops_the_tunnel(owner, no_tunnel, monkeypatch):
+    async def _yes(scope):
+        return True
+
+    monkeypatch.setattr(auth, "may_configure", _yes)
+    stopped = []
+
+    async def _stop():
+        stopped.append(True)
+
+    monkeypatch.setattr(no_tunnel, "stop", _stop)
+    a = guests.create("a", ["alpha"])
+    b = guests.create("b", ["beta"])
+    ca, cb = _guest_client(a["token"]), _guest_client(b["token"])
+    assert ca.get("/api/config").status_code == 200
+    r = owner.delete("/api/guests/tunnel")
+    assert r.status_code == 200 and r.json() == {"ok": True, "revoked": 2}
+    assert stopped == [True]
+    assert guests.list_links() == []
+    assert (
+        ca.get("/api/config", headers={"accept": "application/json"}).status_code == 401
+    )
+    assert (
+        cb.get("/api/config", headers={"accept": "application/json"}).status_code == 401
+    )
+
+
+def test_tunnel_start_route_wants_and_reports(owner, no_tunnel, monkeypatch):
+    async def _yes(scope):
+        return True
+
+    monkeypatch.setattr(auth, "may_configure", _yes)
+    r = owner.post("/api/guests/tunnel", json={})
+    assert r.status_code == 200
+    assert r.json()["installed"] is False and r.json()["state"] in ("off", "failed")
+    assert no_tunnel.wanted() is True
+
+
+def test_tunnel_refused_while_gate_off(monkeypatch, no_tunnel):
+    monkeypatch.delenv("MINDFLOCK_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("MINDFLOCK_AUTH", raising=False)
+    monkeypatch.delenv("CS_WEB_MODE", raising=False)
+
+    async def _yes(scope):
+        return True
+
+    monkeypatch.setattr(auth, "may_configure", _yes)
+    assert TestClient(server.app).post("/api/guests/tunnel", json={}).status_code == 409
+
+
+def test_revoke_closes_an_open_guest_socket(link):
+    """The middleware's socket guard: a revoked link's terminal closes on the
+    next frame in either direction, with the unauthorized close code."""
+    import asyncio
+
+    from starlette.websockets import WebSocketDisconnect
+
+    rec, tok = link
+    guest = guests.guest_for(tok)
+    sent = []
+
+    async def receive():
+        return {"type": "websocket.receive", "text": "x"}
+
+    async def send(msg):
+        sent.append(msg)
+
+    g_recv, g_send = auth._guest_socket_guard(
+        "/api/instances/alpha/terminal", guest, receive, send
+    )
+
+    async def run():
+        await g_send({"type": "websocket.send", "text": "out"})
+        assert (await g_recv())["text"] == "x"
+        guests.revoke(rec["id"])
+        with pytest.raises(WebSocketDisconnect):
+            await g_send({"type": "websocket.send", "text": "more"})
+        with pytest.raises(WebSocketDisconnect):
+            await g_recv()
+
+    asyncio.run(run())
+    assert sent[0]["type"] == "websocket.send"
+    assert sent[1] == {"type": "websocket.close", "code": 4401}
+    assert len(sent) == 2  # closed once, "more" never went out
+
+
+def test_narrowing_a_link_closes_the_socket_it_lost(link):
+    import asyncio
+
+    from starlette.websockets import WebSocketDisconnect
+
+    rec, tok = link
+    guest = guests.guest_for(tok)
+
+    async def receive():
+        return {"type": "websocket.receive", "text": "x"}
+
+    async def send(msg):
+        pass
+
+    g_recv, _ = auth._guest_socket_guard(
+        "/api/instances/beta/terminal", guest, receive, send
+    )
+
+    async def run():
+        await g_recv()
+        guests.update(rec["id"], sessions=["alpha"])  # beta dropped
+        with pytest.raises(WebSocketDisconnect):
+            await g_recv()
+
+    asyncio.run(run())
+
+
+def test_public_scope_never_carries_the_token(link):
+    _, tok = link
+    g = guests.guest_for(tok)
+    assert g["_token"] == tok
+    scope = {"state": {"guest": g}}
+    assert guests.public_scope(scope) == {
+        "label": "Mauricio",
+        "sessions": ["alpha", "beta"],
+    }
+
+
+def test_doctor_wants_cloudflared_for_guest_links(monkeypatch):
+    from backend import doctor
+    from backend.web.core import guest_tunnel
+
+    monkeypatch.setattr(
+        doctor, "_peer_settings", lambda: {"relay": "auto", "enabled": False}
+    )
+    monkeypatch.setattr(
+        "backend.peer.tunnel.find_cloudflared", lambda configured="": None
+    )
+    monkeypatch.setattr(
+        doctor,
+        "_cloudflared_install",
+        lambda: ("brew install cloudflared", "cloudflared"),
+    )
+    monkeypatch.setattr(guest_tunnel, "_WANTED", False)
+    assert doctor.check_cloudflared().status == "info"
+    guests.create("x", ["alpha"])
+    c = doctor.check_cloudflared()
+    assert c.status == "warn" and c.install is True and "guest link" in c.detail

@@ -136,23 +136,40 @@ through the things both of you already use.
 ### Guest links — someone else in a few of your sessions
 
 The simplest way to work with someone: no second MindFlock, no sandbox. They
-open a link in a browser and type into the sessions you picked, on **your**
-device, at your agent, in your worktree; every other session on the rail is
-crossed out for them.
+open a link in a browser — **from anywhere**: the link is a public address, a
+Cloudflare quick tunnel to this server (`backend/web/core/guest_tunnel.py`,
+the same `cloudflared` peer links use, free, no account) — and type into the
+sessions you picked, on **your** device, at your agent, in your worktree;
+every other session on the rail is crossed out for them.
 
-**This is access to your computer.** In those sessions the guest types at
-your agent and your shell: they can read and change the files in that
-worktree, run commands as you, and spend your agent's credits. The block
-says so in red and won't make a link until you tick *I understand*; send one
-only to someone you would hand your keyboard to, and revoke it when done.
+**This is access to your computer, from the internet.** In those sessions
+the guest types at your agent and your shell: they can read and change the
+files in that worktree, run commands as you, and spend your agent's credits.
+The block says so in red and won't make a link until you tick *I
+understand*; send one only to someone you would hand your keyboard to.
+
+**Kill the connection.** The red ⏻ button — on the People block, and on the
+rail (a "N guest links · public link up" bar) whenever a link or the tunnel
+is live — revokes every link and closes the public address at once
+(`DELETE /api/guests/tunnel`). A guest's open terminal closes on its next
+frame, not at their next page load; the same happens to one link's sockets
+when you **Revoke** it alone, or narrow it to fewer sessions.
 
 Settings → **People** → *Let someone into a few of your sessions*: tick the
-sessions, name who it's for, **Make a link** (it is copied). Send them the
-URL (`https://<your host>/?token=…`; the same link opens the phone page at
-`/m`). The block lists every link with **Copy** and **Revoke**; a revoked link
-signs that browser out on its next request. The access gate must be on
-(Settings → Security) — with it off there is nothing to limit, so the block
-offers to turn it on first.
+sessions, name who it's for, **Make a link**. The public address takes a few
+seconds (Cloudflare mints a random `https://<label>.trycloudflare.com` name;
+the block polls and copies the link when it's there), and needs
+`cloudflared` — missing, the block offers the doctor's one-click install.
+Send them the URL (`https://<label>.trycloudflare.com/?token=…`; the same
+link opens the phone page at `/m`). The name is minted per server process:
+after a restart the URL changes, so copy it again from the block (the token
+inside is the credential; the hostname is only where it is presented). A
+*Copy on-your-network link* beside it is the tailnet/LAN address, for
+someone already on your network. The block lists every link with **Copy**
+and **Revoke**; the last revoke takes the tunnel down. The access gate must
+be on (Settings → Security) — with it off a tunnel would be this whole
+machine on the internet, so links and the tunnel are refused until it is,
+and the block offers to turn it on first.
 
 What the link holds, exactly (`backend/web/core/guests.py`):
 
@@ -174,6 +191,11 @@ What the link holds, exactly (`backend/web/core/guests.py`):
   signs in with its own keyed cookie, never the plain `mf_auth`. Links name
   sessions by title, so a session closed and recreated under the same title
   is open to the link again.
+- **The tunnel fronts the whole server** — the gate is the only thing
+  between the internet and this machine, which is why links need it on.
+  Anyone who finds the random hostname without a token gets the login page
+  or a 401; the owner's token works there like anywhere. `host_ok` lets the
+  name through only while the tunnel is up (`auth.allow_fronted_host`).
 
 `GET/POST /api/guests`, `POST/DELETE /api/guests/<id>` — [web-api.md](web-api.md#guest-links).
 

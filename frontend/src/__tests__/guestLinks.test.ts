@@ -13,7 +13,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { Instance } from "../api/types";
 import { _resetLockedRows, guestNote, lockedRows, splitLockedRows } from "../lib/guest";
-import { guestLinkLine } from "../components/settings/screens/peer/GuestLinks";
+import { guestLinkLine, killedText, tunnelLine } from "../components/settings/screens/peer/GuestLinks";
+import { guestBarText } from "../components/sidebar/GuestBar";
 
 const SIDEBAR = Object.values(
   import.meta.glob<string>("../components/sidebar/Sidebar.tsx", { query: "?raw", import: "default", eager: true })
@@ -92,6 +93,19 @@ describe("the wiring", () => {
     expect(PEOPLE).toContain("<GuestLinks />");
   });
 
+  it("the kill switch is on the People block and on the rail, both DELETE /api/guests/tunnel", () => {
+    expect(GUESTS).toMatch(/id="peer-guests-kill-btn"[\s\S]{0,600}Kill the connection/);
+    expect(GUESTS).toMatch(/api<\{ revoked: number \}>\("\/api\/guests\/tunnel", \{ method: "DELETE" \}\)/);
+    expect(SIDEBAR).toContain('import { GuestBar } from "./GuestBar";');
+    expect(SIDEBAR).toMatch(/<OfflineBar \/>\s*<GuestBar \/>/);
+  });
+
+  it("the link's public address comes from the tunnel and the block polls while it starts", () => {
+    expect(GUESTS).toMatch(/tunnel\?\.state === "starting"/);
+    expect(GUESTS).toMatch(/setInterval\(\(\) => void load\(\), 2000\)/);
+    expect(GUESTS).toContain("<InstallMissing steps={install}");
+  });
+
   it("the maker warns that a link is access to this computer, and the warning gates the button", () => {
     expect(GUESTS).toMatch(/id="peer-guests-warn" role="alert"[\s\S]{0,120}access to your computer/);
     expect(GUESTS).toMatch(/id="peer-guests-ack"/);
@@ -108,6 +122,20 @@ describe("the words", () => {
     expect(guestNote(null)).toBe("");
     expect(guestNote({ label: "Pat", sessions: ["a"] })).toBe("Guest link for Pat — one session");
     expect(guestNote({ label: "", sessions: ["a", "b"] })).toBe("Guest link — 2 sessions");
+  });
+
+  it("tunnelLine / killedText / guestBarText", () => {
+    const t = (state: string, extra = {}) => ({ state, url: "", installed: true, error: "", reason: "", ...extra });
+    expect(tunnelLine(t("up"), 1)).toMatch(/^Public link up/);
+    expect(tunnelLine(t("starting"), 1)).toMatch(/^Starting the public link/);
+    expect(tunnelLine(t("failed", { error: "rate limited" }), 1)).toBe("rate limited");
+    expect(tunnelLine(t("off", { installed: false }), 0)).toMatch(/needs cloudflared/);
+    expect(tunnelLine(t("off"), 0)).toBe("");
+    expect(killedText(0)).toBe("Guest access cut — public link closed.");
+    expect(killedText(2)).toBe("Guest access cut — 2 links revoked, public link closed.");
+    expect(guestBarText(1, t("up"))).toBe("1 guest link · public link up");
+    expect(guestBarText(2, t("starting"))).toBe("2 guest links · public link starting…");
+    expect(guestBarText(1, null)).toBe("1 guest link");
   });
 
   it("guestLinkLine", () => {

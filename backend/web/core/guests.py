@@ -45,6 +45,11 @@ from backend.web.core import title_store
 
 _LOCK = threading.Lock()
 _LINKS: Optional[Dict[str, dict]] = None  # id -> link record
+#: Bumped on every revoke / edit. A guest websocket remembers the value it
+#: connected under and re-checks its token when it moves (auth middleware),
+#: so Revoke / Kill cuts an open terminal within a frame, not at the next
+#: page load.
+_REVISION = 0
 
 #: Longest label / most sessions one link carries — bounds, not features.
 MAX_LABEL = 80
@@ -206,6 +211,8 @@ def update(
             if not titles:
                 raise ValueError("pick at least one session")
             rec["sessions"] = titles
+            global _REVISION
+            _REVISION += 1  # a narrowed link drops the sockets it lost
         if label is not None:
             rec["label"] = str(label or "").strip()[:MAX_LABEL]
         _persist()
@@ -213,14 +220,34 @@ def update(
 
 
 def revoke(link_id: str) -> bool:
-    """Forget a link: its token stops working on the next request."""
+    """Forget a link: its token stops working on the next request, and its
+    open sockets close (:func:`revision`)."""
+    global _REVISION
     with _LOCK:
         links = _load()
         if link_id not in links:
             return False
         links.pop(link_id)
         _persist()
+        _REVISION += 1
         return True
+
+
+def kill_all() -> int:
+    """The kill switch: revoke every link at once. Returns how many."""
+    global _REVISION
+    with _LOCK:
+        links = _load()
+        n = len(links)
+        if n:
+            links.clear()
+            _persist()
+        _REVISION += 1
+        return n
+
+
+def revision() -> int:
+    return _REVISION
 
 
 def list_links() -> List[dict]:
@@ -252,10 +279,13 @@ def guest_for(candidate: Optional[str]) -> Optional[dict]:
         with _LOCK:
             for link_id, rec in _load().items():
                 if hmac.compare_digest(cand, rec["token"]):
+                    # ``_token`` is for the middleware's socket guard only:
+                    # public_scope never copies it out.
                     return {
                         "id": link_id,
                         "label": rec["label"],
                         "sessions": list(rec["sessions"]),
+                        "_token": rec["token"],
                     }
     except Exception:  # noqa: BLE001 — a broken store is "no guest", never a 500
         return None

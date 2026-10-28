@@ -173,6 +173,7 @@ from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirnam
 # Core modules the monolith was split into (see backend.web/core/).
 from backend.web.core import aliases as _aliases
 from backend.web.core import guests as _guests
+from backend.web.core import guest_tunnel as _guest_tunnel
 from backend.web.core import hidden_sessions as _hidden_sessions
 from backend.web.core import person_sessions as _person_sessions
 from backend.web.core import shared_branch as _shared_branch
@@ -905,9 +906,22 @@ async def lifespan(app: FastAPI):
         except Exception as err:  # noqa: BLE001
             if log.ErrorLog is not None:
                 log.ErrorLog.Printf("addon %s startup failed: %v", _addon.id, err)
+    # Guest links on disk: bring their public address (a cloudflared quick
+    # tunnel, core.guest_tunnel) back up — the name changes per process, so
+    # the People screen shows the new URL to copy. Only with the gate on: a
+    # tunnel to a gate-off server would be the whole machine on the internet.
+    try:
+        if _auth.auth_enabled() and _guests.any_links():
+            _guest_tunnel.ensure()
+    except Exception:  # noqa: BLE001 — the tunnel is best effort
+        pass
     try:
         yield
     finally:
+        try:
+            await _guest_tunnel.stop()
+        except Exception:  # noqa: BLE001
+            pass
         # Addon shutdown hooks (reverse order), then cancel background tasks.
         for _addon in reversed(ADDONS):
             try:

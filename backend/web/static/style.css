@@ -2290,6 +2290,9 @@
   margin: 0 0 8px;
   cursor: pointer;
 }
+.peer-guest-kill {
+  margin: 8px 0;
+}
 /* Settings → Your devices ("Your devices"). Rows are a dot + name/status stack +
    buttons pinned right, the same shape as the sidebar's device rows, so a
    computer reads the same wherever it is listed. */
@@ -4620,6 +4623,36 @@ body.narrow .sidebar-resizer {
 
 .device-forget-confirm .del-acts button.danger {
   border-color: var(--red);
+}
+
+/* The guest-link kill switch (GuestBar): shown while a link or the public
+   tunnel is live, never to a guest. */
+#guest-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 8px 2px;
+  padding: 4px 8px;
+  font-size: 11px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--red) 55%, var(--border));
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+}
+#guest-bar .gb-text {
+  flex: 1;
+  color: var(--text);
+}
+#guest-bar .gb-kill {
+  font: inherit;
+  padding: 2px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--red);
+  color: var(--red);
+  background: transparent;
+  cursor: pointer;
+}
+#guest-bar .gb-kill:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 15%, transparent);
 }
 }
 

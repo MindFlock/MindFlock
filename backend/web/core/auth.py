@@ -648,6 +648,61 @@ def _guest_from(*groups: Iterable[Optional[str]]) -> Optional[dict]:
         return None
 
 
+def _guest_socket_guard(path: str, guest: dict, receive, send):
+    """Wrap a guest websocket's ``receive``/``send`` so that a revoked (or
+    narrowed) link closes the socket on its next frame either way — a
+    terminal streams output constantly, so "next frame" is now. Without this
+    Revoke / Kill would only bite at the guest's next page load while the
+    open terminal kept typing."""
+    from starlette.websockets import WebSocketDisconnect
+
+    from backend.web.core import guests as _guests
+
+    seen = _guests.revision()
+    token = guest.get("_token")
+    state = {"closed": False, "revoked": False}
+
+    def _still_allowed() -> bool:
+        nonlocal seen
+        if state["revoked"]:
+            return False  # once cut, cut: every later frame is refused too
+        rev = _guests.revision()
+        if rev == seen:
+            return True
+        seen = rev
+        now = _guests.guest_for(token)
+        ok = now is not None and _guests.path_allowed("GET", path, now)
+        if not ok:
+            state["revoked"] = True
+        return ok
+
+    async def _cut() -> None:
+        if not state["closed"]:
+            state["closed"] = True
+            try:
+                await send({"type": "websocket.close", "code": _WS_CLOSE_UNAUTHORIZED})
+            except Exception:  # noqa: BLE001 — already gone
+                pass
+        raise WebSocketDisconnect(_WS_CLOSE_UNAUTHORIZED)
+
+    async def guarded_receive():
+        if not _still_allowed():
+            await _cut()
+        msg = await receive()
+        if not _still_allowed():
+            await _cut()
+        return msg
+
+    async def guarded_send(message):
+        if message.get("type") == "websocket.close":
+            state["closed"] = True
+        elif not _still_allowed():
+            await _cut()
+        await send(message)
+
+    return guarded_receive, guarded_send
+
+
 def request_guest(request) -> Optional[dict]:
     """The guest link a request is signed in with (``{id, label, sessions}``),
     None for the owner. Takes a Request, a WebSocket or an ASGI scope."""
@@ -1124,6 +1179,8 @@ class AuthMiddleware:
                 state = scope.setdefault("state", {})
                 if isinstance(state, dict):
                     state["guest"] = guest
+                if scope["type"] == "websocket":
+                    receive, send = _guest_socket_guard(path, guest, receive, send)
                 await self.app(scope, receive, send)
                 return
             await _deny(

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Guest links reach anyone.** A guest link is now a public address — a
+  Cloudflare quick tunnel to this server, the same free `cloudflared` peer
+  links use — so the person you invite can be on any network, not just your
+  tailnet. The People block starts it with the first link, offers the
+  cloudflared install when it's missing, and shows the current address
+  (it changes when the server restarts); a *Copy on-your-network link* keeps
+  the old tailnet/LAN form.
+- **Kill the connection.** One red button — on the People block and on the
+  rail while a guest link is live — revokes every guest link and closes the
+  public address. A guest's open terminal closes at once, not at their next
+  page load; the same when you revoke one link or narrow it.
+
 ## [0.10.4] - 2026-10-28
 
 ### Added
