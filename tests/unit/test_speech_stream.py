@@ -332,6 +332,45 @@ class TestSilenceWords:
         st._tail = [("x", 0.0, 0.1)]  # force a pass on the quiet chunk
         assert st.feed(_secs(1, level=0.0)) == ("", "")
 
+    def test_the_edge_is_in_stream_time_after_a_window_trim(self):
+        # 8 s loud fills the window; the quiet second after it trims 1 s off
+        # the front, so the second pass's times are 1 s behind the stream's.
+        # The last loud frame ends at 8.0: the edge is 8.4 in STREAM time.
+        fake = Script(
+            [("a", 7.5, 7.9)],
+            [("a", 6.5, 6.9), ("out", 7.3, 7.6), ("Never.", 7.5, 7.6)],
+        )
+        st = ss.Stream(fake)
+        assert st.feed(_secs(8)) == ("", "a")
+        assert st._offset == 0.0
+        assert st.feed(_secs(1, level=0.0)) == ("a", "out")
+        assert fake.calls[1][0] == int(ss.WINDOW_SECONDS * RATE)  # trimmed
+        assert st._loud_end == pytest.approx(8.0)
+        # "out" at 7.3 in the window is 8.3 in the stream: kept. "Never." at
+        # 7.5 would pass a window-time check (7.5 <= 8.4) but is 8.5: dropped.
+        assert st.text == "a"
+
+
+class TestFrames:
+    """``_frames``: the loud samples of a chunk in 100 ms frames and where
+    the last loud frame ends (the silence mark)."""
+
+    def test_quiet_audio_has_no_loud_frame(self):
+        assert ss._frames(array("f")) == (0, -1)
+        assert ss._frames(_secs(1, level=0.0)) == (0, -1)
+        assert ss._frames(array("f", [0.005, -0.005] * 800)) == (0, -1)
+
+    def test_the_end_of_the_last_loud_frame(self):
+        chunk = array("f", [0.0] * RATE)
+        loud = array("f", [0.1] * ss._FRAME)
+        chunk[2 * ss._FRAME : 3 * ss._FRAME] = loud
+        chunk[7 * ss._FRAME : 8 * ss._FRAME] = loud
+        assert ss._frames(chunk) == (2 * ss._FRAME, 8 * ss._FRAME)
+
+    def test_a_short_last_frame_counts_whole(self):
+        assert ss._frames(_secs(0.25)) == (4000, 4000)
+        assert ss._voiced(_secs(0.25)) == pytest.approx(0.25)
+
 
 class TestDecodeWav:
     @staticmethod
@@ -566,6 +605,15 @@ class TestFlushSkip:
             st.feed(_secs(1))
         assert st.finish()["committed"] == "late"
 
+    def test_a_waiting_tail_is_heard_again(self):
+        fake = Script(_words("over"), _words("over"))
+        st = ss.Stream(fake)
+        assert st.feed(_secs(1)) == ("", "over")
+        assert st._unheard is False  # that pass heard the chunk
+        # Nothing loud since, but "over" waits uncommitted: the flush hears.
+        assert st.finish() == {"committed": "over", "partial": ""}
+        assert len(fake.calls) == 2
+
 
 class TestEarly:
     """The accurate pass starts on the quiet chunk that ends the speech, so
@@ -691,6 +739,60 @@ class TestEarly:
         for _ in range(ss.STATS_MIN):
             ss._record(int(ss.FINAL_TIMEOUT_S * 1000) + 500)
         assert ss.final_stats()["expect_ms"] == int(ss.FINAL_TIMEOUT_S * 1000)
+
+    def test_a_phrase_past_the_buffer_starts_none(self, monkeypatch):
+        monkeypatch.setattr(ss, "PHRASE_MAX_SECONDS", 3.0)
+        acc = Accurate("x")
+        st = ss.Stream(Script(_words("x"), _words("x")), acc)
+        st.feed(_secs(4))
+        assert st.phrase_trimmed is True
+        st.feed(_secs(0.3, level=0.0))
+        assert acc.calls == [] and st._early is None
+        assert st.finish() == {"committed": "", "partial": ""}
+        assert acc.calls == []
+
+    def test_a_running_stale_pass_is_not_doubled(self):
+        import threading
+
+        gate = threading.Event()
+        acc = Accurate("x y", gate=gate)
+        st = ss.Stream(Script(*([_words("x y")] * 5)), acc)
+        st.feed(_secs(1))
+        st.feed(_secs(0.3, level=0.0))  # the early pass starts and blocks
+        st.feed(_secs(1))  # the person went on: stale
+        st.feed(_secs(0.3, level=0.0))  # still running: no second thread
+        assert len(acc.calls) == 1
+        assert st._early is not None and st._early.stale is True
+        gate.set()
+        out = st.finish()  # stale: a fresh pass over the whole phrase
+        assert acc.calls == [int(1.3 * RATE), int(2.6 * RATE)]
+        assert out["final"] == "x y" and out["final_early"] is False
+        assert out["final_wait_ms"] == out["final_ms"]
+
+    def test_the_percentiles_and_the_budget(self):
+        timeout = int(ss.FINAL_TIMEOUT_S * 1000)
+        ss._record(500)
+        one = ss.final_stats()
+        assert (one["samples"], one["typical_ms"], one["p95_ms"]) == (1, 500, 500)
+        assert one["expect_ms"] == ss.FINAL_EXPECT_MS and one["timeout_ms"] == timeout
+        ss._record(100)
+        two = ss.final_stats()
+        assert (two["samples"], two["typical_ms"], two["p95_ms"]) == (2, 100, 500)
+        assert two["expect_ms"] == ss.FINAL_EXPECT_MS  # measured, but too few
+        ss._record(300)
+        three = ss.final_stats()
+        assert (three["typical_ms"], three["p95_ms"]) == (300, 500)
+        assert three["expect_ms"] == 500  # STATS_MIN in: the measured p95
+        ss.clear()
+        assert ss.final_stats()["samples"] == 0
+        for ms in range(10, 210, 10):  # 20 waits: 10, 20, ... 200
+            ss._record(ms)
+        full = ss.final_stats()
+        assert full["samples"] == ss.STATS_KEEP == 20
+        assert full["typical_ms"] == 110
+        assert full["p95_ms"] == 190 == full["expect_ms"]
+        ss._record(1000)  # the oldest goes
+        assert list(ss._WAITS)[0] == 20 and ss.final_stats()["samples"] == 20
 
 
 class TestRegistry:

@@ -10,6 +10,7 @@ the idle clock is ``_now``.
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import urllib.error
@@ -748,6 +749,159 @@ class TestHints:
             "earlier",
         ]
         assert speech._HOTWORDS[_Old] is False
+
+    def test_at_most_twelve_titles_the_newest_first(self):
+        assert speech.HINT_TITLES == 12
+        titles = ["t%d" % i for i in range(13)]
+        parts = speech.recognition_hints(self.WORDS, titles).split(", ")
+        assert parts[8:20] == ["t %d" % i for i in range(12)]
+        assert "t 12" not in parts  # the 13th
+        assert parts[20] == "session"  # the vocabulary still follows
+
+    def test_a_title_that_is_a_voice_phrase_is_one_entry(self):
+        titles = ["Disregard", "Over", "stop", "Window"]
+        parts = speech.recognition_hints(self.WORDS, titles).split(", ")
+        low = [p.lower() for p in parts]
+        assert low.count("disregard") == 1 and low.count("over") == 1
+        assert low.count("stop") == 1 and low.count("window") == 1
+        # The first spelling in (the voice phrase's) stands.
+        assert "disregard" in parts and "Disregard" not in parts
+        assert "Window" in parts and "window" not in parts  # the title came first
+
+    def test_a_phrase_that_does_not_fit_is_skipped_not_the_rest(self):
+        words = {"send": ["a", "x" * 30, "b"]}
+        assert speech.recognition_hints(words, (), limit=10, vocabulary=False) == "a, b"
+        assert speech.recognition_hints(words, (), limit=0, vocabulary=False) == ""
+
+    def test_session_titles_fall_back_on_created_at_and_drop_repeats(self, monkeypatch):
+        import datetime as dt
+        import sys
+
+        import backend.web as web_pkg
+
+        def at(minute):
+            return dt.datetime(2026, 10, 27, 12, minute, tzinfo=dt.timezone.utc)
+
+        inst = SimpleNamespace
+        engine = SimpleNamespace(
+            instances={
+                # Never updated: CreatedAt stands in.
+                "a": inst(Title="created", UpdatedAt=None, CreatedAt=at(8)),
+                "b": inst(Title="updated", UpdatedAt=at(5), CreatedAt=at(1)),
+                # Not a datetime: counts as the oldest.
+                "c": inst(Title="odd", UpdatedAt="yesterday"),
+                # A copy window on the same title: once, at its newest.
+                "d": inst(Title="updated", UpdatedAt=at(9)),
+                "e": inst(Title=None, UpdatedAt=at(7)),
+                "f": inst(Title="  padded  ", UpdatedAt=at(6)),
+                "g": inst(UpdatedAt=at(4)),  # no Title at all
+            }
+        )
+        fake = SimpleNamespace(ENGINE=engine)
+        monkeypatch.setitem(sys.modules, "backend.web.server", fake)
+        monkeypatch.setattr(web_pkg, "server", fake, raising=False)
+        assert speech.session_titles() == ["updated", "created", "padded", "odd"]
+
+
+class TestHotwords:
+    """``_hotwords_supported`` and ``_bias``: how the hints reach a
+    ``transcribe`` call, by the installed faster-whisper's signature."""
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self, monkeypatch):
+        monkeypatch.setattr(speech, "_HOTWORDS", {})
+
+    def test_a_named_or_a_star_kwargs_parameter_counts(self):
+        class _Named:
+            def transcribe(self, audio, hotwords=None):
+                pass
+
+        class _Star:
+            def transcribe(self, audio, **kw):
+                pass
+
+        class _Old:
+            def transcribe(self, audio, initial_prompt=None):
+                pass
+
+        assert speech._hotwords_supported(_Named()) is True
+        assert speech._hotwords_supported(_Star()) is True
+        assert speech._hotwords_supported(_Old()) is False
+
+    def test_an_unreadable_signature_reads_as_no(self, monkeypatch):
+        class _Opaque:
+            def transcribe(self, audio, **kw):
+                pass
+
+        def boom(obj):
+            raise ValueError("no signature found for builtin")
+
+        monkeypatch.setattr(
+            speech,
+            "inspect",
+            SimpleNamespace(signature=boom, Parameter=inspect.Parameter),
+        )
+        model = _Opaque()
+        assert speech._hotwords_supported(model) is False
+        assert speech._HOTWORDS == {_Opaque: False}
+        # The hints ride the prompt instead.
+        assert speech._bias(model, "over, out", "earlier") == {
+            "initial_prompt": "over, out. earlier"
+        }
+
+    def test_the_answer_is_cached_per_class(self, monkeypatch):
+        seen: list = []
+
+        def counted(obj):
+            seen.append(obj)
+            return inspect.signature(obj)
+
+        monkeypatch.setattr(
+            speech,
+            "inspect",
+            SimpleNamespace(signature=counted, Parameter=inspect.Parameter),
+        )
+
+        class _New:
+            def transcribe(self, audio, hotwords=None):
+                pass
+
+        class _Old:
+            def transcribe(self, audio):
+                pass
+
+        assert speech._hotwords_supported(_New()) is True
+        assert speech._hotwords_supported(_New()) is True
+        assert len(seen) == 1  # once per class, not per model or call
+        assert speech._hotwords_supported(_Old()) is False
+        assert speech._hotwords_supported(_Old()) is False
+        assert len(seen) == 2
+        assert speech._HOTWORDS == {_New: True, _Old: False}
+
+    @pytest.mark.parametrize(
+        "hints,prompt,hotwords,want",
+        [
+            (
+                "over, out",
+                "earlier",
+                True,
+                {"hotwords": "over, out", "initial_prompt": "earlier"},
+            ),
+            ("over, out", "", True, {"hotwords": "over, out"}),
+            ("over, out", "earlier", False, {"initial_prompt": "over, out. earlier"}),
+            ("over, out", "", False, {"initial_prompt": "over, out"}),
+            ("", "earlier", True, {"initial_prompt": "earlier"}),
+            ("", "earlier", False, {"initial_prompt": "earlier"}),
+            ("", "", True, {}),  # no keys at all, never None
+            ("", "", False, {}),
+        ],
+    )
+    def test_bias(self, hints, prompt, hotwords, want):
+        class _New:
+            def transcribe(self, audio, hotwords=None, initial_prompt=None):
+                pass
+
+        assert speech._bias(_New(), hints, prompt, hotwords) == want
 
 
 class TestLocalFinal:

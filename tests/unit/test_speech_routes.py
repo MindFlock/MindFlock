@@ -95,6 +95,22 @@ class TestGet:
         }
         assert sr["final_ms"] == speech_stream.FINAL_EXPECT_MS
 
+    def test_reports_the_measured_end_waits(self, streaming):
+        streaming.final_transcriber = lambda lang="", hints="": lambda a: "Hello."
+        for _ in range(3):
+            sid = _open().json()["id"]
+            streaming.passes += [_words("hello world")] * 3
+            _chunk(sid)
+            _chunk(sid)
+            assert "final" in client.post("/api/voice/stream/%s/end" % sid).json()
+        body = client.get("/api/voice").json()
+        final = body["final"]
+        assert final["samples"] == 3
+        assert final["timeout_ms"] == int(speech_stream.FINAL_TIMEOUT_S * 1000)
+        assert 0 <= final["typical_ms"] <= final["p95_ms"] <= final["timeout_ms"]
+        assert final["expect_ms"] == final["p95_ms"]  # measured, not the bench's
+        assert body["server_ready"]["final_ms"] == final["expect_ms"]
+
     def test_reflects_settings_and_readiness(self, fakes):
         _voice(stt="server", approve_dialogs=False, tts_backend="fake")
         S.update_settings(notifications={"ntfy_agent_words": False})
@@ -704,6 +720,8 @@ class TestStream:
         assert body["final"] == "Run the tests."
         assert body["same"] is False and isinstance(body["final_ms"], int)
         assert body["final_early"] is False  # no quiet chunk came first
+        assert isinstance(body["final_wait_ms"], int) and body["final_wait_ms"] >= 0
+        assert isinstance(body["final_early"], bool)
         assert body["final_wait_ms"] == body["final_ms"]
         # The whole phrase: both chunks.
         assert heard[-1] == ("final", 16000)
@@ -748,6 +766,18 @@ class TestStream:
         assert "sitecheck bot 7, b, MindFlock" in hints
         assert len(hints) <= speech.HINT_CHARS
         assert r.json()["hints"] == len(hints)
+
+    def test_open_survives_a_hint_builder_failure(self, streaming, monkeypatch):
+        def boom(*a, **kw):
+            raise RuntimeError("no words today")
+
+        monkeypatch.setattr(speech, "recognition_hints", boom)
+        heard: list = []
+        streaming.final_transcriber = lambda lang="", hints="": heard.append(hints)
+        r = _open()
+        assert r.status_code == 200
+        assert r.json()["hints"] == 0 and r.json()["ready"] is True
+        assert heard == [""] and streaming.hints == ""
 
     def test_a_quiet_tail_starts_the_final_early(self, streaming):
         heard: list = []
@@ -892,6 +922,45 @@ class TestSayAll:
         assert voice.say_all() is False and pins == [1]  # off needs no re-pin
         assert client.post("/api/voice/say-all", json={"on": "yes"}).status_code == 400
         assert client.post("/api/voice/say-all", json={}).status_code == 400
+
+
+# --------------------------------------------------------------------------- #
+# The effective voice words the routes judge by
+# --------------------------------------------------------------------------- #
+class TestWords:
+    """``_words``: the effective voice words, ours when the settings can't be
+    read — the wake route and the hints still answer."""
+
+    def test_the_persons_words_then_ours_when_unreadable(self, fakes, monkeypatch):
+        from backend.web.core import voice_words
+
+        _voice(words={"wake": "Hey Jarvis"})
+        assert routes._words()["wake"] == "hey jarvis"
+        assert routes._wake_word() == "hey jarvis"
+
+        def boom():
+            raise OSError("settings.json unreadable")
+
+        monkeypatch.setattr(routes, "_settings", boom)
+        assert routes._words() == voice_words.effective({})
+        assert routes._wake_word() == voice_words.DEFAULTS["wake"] == "mindflock"
+        assert routes._hints().startswith("mindflock, over, over and out, over out")
+        # The wake route judges against ours, not the unreadable person's.
+        fakes.stt.text = "Hey, Jarvis!"
+        r = client.post(
+            "/api/voice/wake?lang=en",
+            content=b"RIFFclip",
+            headers={"Content-Type": "audio/wav"},
+        )
+        assert r.status_code == 200 and r.json()["wake"] is False
+        fakes.stt.text = "Mind flock."
+        body = client.post(
+            "/api/voice/wake?lang=en",
+            content=b"RIFFclip",
+            headers={"Content-Type": "audio/wav"},
+        ).json()
+        assert body["wake"] is True and body["word"] == "mindflock"
+        assert fakes.stt.calls[-1][3:] == ("en", "MindFlock")
 
 
 # --------------------------------------------------------------------------- #
