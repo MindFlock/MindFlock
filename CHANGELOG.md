@@ -54,6 +54,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cached, the mic ring reacts at once with a slow release, *Listening…*
   lands in the frame of the press, the start chime no longer clips, and
   speaking over a reply on the desktop cuts it and keeps the word you said.
+- **A switch says the session's name, nothing more.** Moving to a session
+  by voice said *Now on hackathon-2, idle: explain how to add …* — the
+  state word and the task headline, every time. It now says *hackathon-2.*
+  and stops; a reply still follows only when it is news. The state is on
+  the screen, and "what is it doing" / "what did it say" ask for the rest.
+- **No more spoken echoes of what you did.** The confirmations — *Sent.*
+  after "over", *Sent. Over and out.*, *Cleared.* — are off unless you turn
+  them on (Settings → Voice / the phone's ⚙ sheet → *Spoken
+  confirmations*); phones and desktops that had them on go quiet without
+  touching a setting. The chimes answer a start and a stop, a switch says
+  the name either way, and a send's *Sent to …* is shown, never spoken.
 - **"Stop listening" says nothing back.** A stop phrase was answered with a
   spoken *Stopped.*, heard as the mic saying stop back, every time. The
   falling chime alone answers it now, on the phone and the desktop; *Sent.*,
