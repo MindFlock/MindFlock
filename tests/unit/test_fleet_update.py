@@ -262,7 +262,13 @@ async def test_this_device_updates_itself_last(monkeypatch):
             break
     assert order == ["mini", "self"]
     # Installing: the rollout is NOT done yet — it is this device's turn.
-    await asyncio.sleep(0.01)
+    # The step turns "updating" a tick or two after start_update returns;
+    # a fixed 10 ms was not always enough on a loaded macOS runner (the
+    # 0.10.3 release PR failed on it, 2026-10-28), so wait for it, bounded.
+    for _ in range(2000):
+        if me()["step"] == "updating":
+            break
+        await asyncio.sleep(0.001)
     assert fleet_update.status()["state"] == "running"
     assert me()["step"] == "updating"
     # Installed: restarting onto it.
