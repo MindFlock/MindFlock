@@ -79,10 +79,15 @@ TOOL_HOOK_TAG_PREFIX = "# mindflock-activity tool-hook"
 #: ``backend.web.core.spoken.INSTRUCTION``; the /send route types the same
 #: sentence after a prompt for a CLI whose hooks cannot inject it.
 VOICE_INSTRUCTION = (
-    "Voice mode is on: the person is listening, not reading. End your reply "
-    "with one final line that starts with `Say:` followed by at most two short "
-    "plain sentences a person can hear — no code, paths or markdown — saying "
-    "what you did or will do and, if you need something from them, the question."
+    "Voice mode is on: the person is listening, not reading, and may have been "
+    "away. End your reply with one final line that starts with `Say:` followed "
+    "by up to three short plain sentences a person can hear, under about 50 "
+    "words — no code, paths or markdown: first the context (what you were "
+    "working on, the feature or area in plain words, and the project when more "
+    "than one could be meant), then what you did or will do, then, if you need "
+    "something from them, the question. For example: We were working on "
+    "MindFlock's settings screen, and the voice install button now sits in the "
+    "Try-it row. Should I add it to the phone page too?"
 )
 VOICE_FLAG_DIR_ENV = "MINDFLOCK_VOICE_FLAG_DIR"
 VOICE_FLAG_SUBDIR = (".mindflock-assistant", ".voice")

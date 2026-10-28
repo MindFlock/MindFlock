@@ -533,15 +533,18 @@ def test_mobile_js_reply_lines_name_another_session_only():
     their own."""
     js = _js()
     reply = _fn(js, "voiceReply")
-    assert "speakLine(say, false, voice.session)" in reply
+    # A reply line (the 5th argument): the queue adds where it is from when
+    # that is not obvious (voiceReplyText, test_mobile_speech_queue).
+    assert "speakLine(say, false, voice.session, 0, true)" in reply
     assert 'speakLine(name + " finished.")' in reply
     assert "speakLine(line, true, title)" in _fn(js, "voiceAckTick")
     assert "var parts = [stripMarkdown(d.question" in _fn(js, "voiceDialogSpeech")
     assert "speakLine(voiceDialogSpeech(d), false, voice.session)" in _fn(
         js, "voiceReadDialog"
     )
-    assert "var said = voiceLineText(line, current, nameOf);" in _fn(
-        js, "voiceSpeechPump"
+    assert (
+        "var said = line.reply ? voiceReplyText(line) : voiceLineText(line, current, nameOf);"
+        in _fn(js, "voiceSpeechPump")
     )
     assert "voiceReply({" in _fn(js, "voiceOnPoll")
 

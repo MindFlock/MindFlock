@@ -1826,18 +1826,18 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     check("everything: the first tap anywhere primes speech", await page9.evaluate(() => window.mfVoice.primed === true));
     const turn9 = (t, say, ev, ts) => page9.evaluate((a) => window.mfVoice.onEvent({ seq: 0, event: a[2] || "session.activity_changed", session: a[0], old: "working", new: "idle", ts: a[3] || Date.now() / 1000, data: { title: a[0], say: a[1] } }), [t, say, ev, ts]);
     await turn9("invoice-parser", "Parsed all twelve files.");
-    await waitFor(page9, () => window.__spoken.indexOf("Invoice parser: Parsed all twelve files.") >= 0, 3000, "another session's turn");
-    check("everything: another session's finished turn is read, its name first (voice off)", await said(page9, "Invoice parser: Parsed all twelve files."));
+    await waitFor(page9, () => window.__spoken.indexOf("In Invoice parser: Parsed all twelve files.") >= 0, 3000, "another session's turn");
+    check("everything: another session's finished turn is read, where it is from first — In <name>: (voice off)", await said(page9, "In Invoice parser: Parsed all twelve files."));
     await turn9("invoice-parser", "Parsed all twelve files.", "session.turn_ended");
     await sleep(300);
-    check("everything: …once (turn_ended with the same line is not read again)", (await spoken(page9)).filter((t) => t === "Invoice parser: Parsed all twelve files.").length === 1);
+    check("everything: …once (turn_ended with the same line is not read again)", (await spoken(page9)).filter((t) => t === "In Invoice parser: Parsed all twelve files.").length === 1);
     await turn9("login-fix", "Login works again.");
     await waitFor(page9, () => window.__spoken.indexOf("Login works again.") >= 0, 3000, "own turn");
     check("everything: the phone's own session is read bare", (await said(page9, "Login works again.")) && !(await said(page9, "Login fix: Login works again.")));
     await page9.evaluate(() => window.mfVoice.onEvent({ seq: 0, event: "session.activity_changed", session: "invoice-parser", old: "idle", new: "working", ts: Date.now() / 1000, data: {} }));
     await turn9("invoice-parser", "Parsed all twelve files.");
-    await waitFor(page9, () => window.__spoken.filter((t) => t === "Invoice parser: Parsed all twelve files.").length === 2, 3000, "a new turn, same words");
-    check("everything: a new turn with the same words is read again", (await spoken(page9)).filter((t) => t === "Invoice parser: Parsed all twelve files.").length === 2);
+    await waitFor(page9, () => window.__spoken.filter((t) => t === "In Invoice parser: Parsed all twelve files.").length === 2, 3000, "a new turn, same words");
+    check("everything: a new turn with the same words is read again", (await spoken(page9)).filter((t) => t === "In Invoice parser: Parsed all twelve files.").length === 2);
     // A turn whose frame is two minutes old (a reconnect's replay): dropped, not said late.
     await page9.evaluate(() => { window.mfVoice.serverSkew = 0; });
     await turn9("api-docs", "Old news from before.", "session.turn_ended", Date.now() / 1000 - 120);
@@ -1851,7 +1851,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await waitFor(page9, () => window.__speakLog.length >= 3 && window.__speakLog.every((x) => x.end), 5000, "three lines said");
     const log9 = await page9.evaluate(() => window.__speakLog.map((x) => [x.t, x.start, x.end]));
     const overlap = log9.some((x, i) => i > 0 && x[1] < log9[i - 1][2]);
-    check("queue: three sessions' lines said one at a time, in arrival order, never over each other", JSON.stringify(log9.map((x) => x[0])) === JSON.stringify(["Invoice parser: Tests pass.", "API docs: Docs are built.", "Pushed the fix."]) && !overlap, JSON.stringify(log9));
+    check("queue: three sessions' lines said one at a time, in arrival order, never over each other", JSON.stringify(log9.map((x) => x[0])) === JSON.stringify(["In Invoice parser: Tests pass.", "In API docs: Docs are built.", "Pushed the fix."]) && !overlap, JSON.stringify(log9));
     // Typed prompts ask for a Say line with Everything — voice off: through /send.
     const sends9 = posts("/send").length;
     await page9.fill("#compose", "list the files");
@@ -1871,7 +1871,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await sleep(300);
     await turn9("api-docs", "Deployed to staging.");
     await sleep(120);
-    check("continuous: a line queued in the quiet plays at once, over the listen", (await said(page9, "API docs: Deployed to staging.")) && (await vstate(page9)) === "listening", await vstate(page9));
+    check("continuous: a line queued in the quiet plays at once, over the listen", (await said(page9, "In API docs: Deployed to staging.")) && (await vstate(page9)) === "listening", await vstate(page9));
     check("continuous: …the recorder is muted while it plays, the listen still on", (await page9.evaluate(() => window.mfVoice.micMuted() && window.mfVoice.speech.playing && window.mfVoice.speech.playing.over === true)));
     await waitFor(page9, () => !window.mfVoice.speech.playing, 3000, "line over");
     await sleep(200);
@@ -1880,17 +1880,17 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await page9.evaluate(() => window.__hear("fix the", true));
     await turn9("invoice-parser", "Parsed the last file.");
     await sleep(60);
-    check("continuous: mid-sentence the line waits", !(await said(page9, "Invoice parser: Parsed the last file.")));
-    await waitFor(page9, () => window.__spoken.indexOf("Invoice parser: Parsed the last file.") >= 0, 3000, "said in the quiet");
+    check("continuous: mid-sentence the line waits", !(await said(page9, "In Invoice parser: Parsed the last file.")));
+    await waitFor(page9, () => window.__spoken.indexOf("In Invoice parser: Parsed the last file.") >= 0, 3000, "said in the quiet");
     check("continuous: …then plays once the voice has been quiet, still listening", (await vstate(page9)) === "listening");
     await waitFor(page9, () => !window.mfVoice.speech.playing, 3000, "line 2 over");
     await page9.evaluate(() => { window.__speakMs = 15; window.mfVoice.listen.cont = false; });   // as an answer-listen is
     await turn9("api-docs", "Deployed again.");
     await sleep(500);
-    check("queue: a listen that is not continuous holds it", !(await said(page9, "API docs: Deployed again.")) && (await page9.evaluate(() => window.mfVoice.speech.q.length)) === 1);
+    check("queue: a listen that is not continuous holds it", !(await said(page9, "In API docs: Deployed again.")) && (await page9.evaluate(() => window.mfVoice.speech.q.length)) === 1);
     await page9.evaluate(() => window.__hear("hello, that's all"));
-    await waitFor(page9, () => window.__spoken.indexOf("API docs: Deployed again.") >= 0, 3000, "said after listening");
-    check("queue: …and says it once listening stops", await said(page9, "API docs: Deployed again."));
+    await waitFor(page9, () => window.__spoken.indexOf("In API docs: Deployed again.") >= 0, 3000, "said after listening");
+    check("queue: …and says it once listening stops", await said(page9, "In API docs: Deployed again."));
     await page9.evaluate(() => { document.getElementById("compose").value = ""; });
     await waitFor(page9, () => window.mfVoice.state === "idle", 3000, "idle again");
     await page9.evaluate(() => { window.__speakMs = 300; window.__speakLog = []; });
@@ -1900,7 +1900,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await waitFor(page9, () => window.mfVoice.state === "awaiting" && window.__rec && window.__rec.started, 6000, "awaiting after the queue drained");
     const log9b = await page9.evaluate(() => window.__speakLog.map((x) => [x.t, x.end]));
     const recAt = await page9.evaluate(() => window.__recStartAt);
-    check("queue: the answer-listen after a read-out starts only once the queue has drained", JSON.stringify(log9b.map((x) => x[0])) === JSON.stringify(["Invoice parser: Coverage is ninety percent.", "Should I push it?", "API docs: Index rebuilt again."]) && recAt >= Math.max.apply(null, log9b.map((x) => x[1])), JSON.stringify(log9b) + " rec " + recAt);
+    check("queue: the answer-listen after a read-out starts only once the queue has drained", JSON.stringify(log9b.map((x) => x[0])) === JSON.stringify(["In Invoice parser: Coverage is ninety percent.", "Should I push it?", "In API docs: Index rebuilt again."]) && recAt >= Math.max.apply(null, log9b.map((x) => x[1])), JSON.stringify(log9b) + " rec " + recAt);
     await page9.evaluate(() => { window.__speakMs = 15; document.getElementById("voice-cancel").click(); });
     await sleep(200);
     // Typed with voice on, Everything → say:true; Mine → other sessions' turns stay quiet.
@@ -1917,6 +1917,84 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await page9.close();
     state.ntfy = { ask_popup: false, active: false };
     state.voiceCfg = null;
+
+    // ---- News only: nothing old is read by itself; context when it is not obvious
+    // A reply is read by itself only when it ended after the listener could
+    // have heard it (voice on, the page back, their last look at that
+    // session) and within ten minutes: voice on, the poll, coming back, an
+    // old frame and a switch say nothing old; a reply arriving now is read;
+    // a reply that ended after you left a session is read on the switch
+    // back; one from a session not heard from in a while says where it is
+    // from; mfVoice.sayLast reads it whatever its age.
+    {
+      const hourAgo = Date.now() / 1000 - 3600;
+      state.voiceCfg = { stt: "phone", tts: "phone", approve_dialogs: true };
+      state.routeStatus = 404;   // the page's own table: voiceSwitchTo
+      state.routeDelay = 0;
+      state.dialog = null;
+      state.dialogsBy = {};
+      state.rows = [
+        { title: "login-fix", name: "Login fix", activity: "idle", status: "running", last_turn: "", last_say: "Old login reply.", voice: false, activity_since: hourAgo, task_headline: "Fix the login redirect", asking: null },
+        { title: "invoice-parser", name: "Invoice parser", activity: "idle", status: "running", last_turn: "", last_say: "Old parser reply.", voice: false, activity_since: hourAgo, task_headline: "Parse the March invoices", asking: null },
+      ];
+      state.voiceGet = { on: true, say: "Old login reply, filed an hour ago.", has_question: false, source: "hook", ts: hourAgo };
+      const pg = await ctx.newPage();
+      pg.on("pageerror", (e) => errors.push(String(e)));
+      await pg.route("**/api/**", mock);
+      await pg.evaluate(() => { try { localStorage.removeItem("cs_voice"); } catch (e) {} }).catch(() => {});
+      await pg.goto(`http://127.0.0.1:${PORT}/mobile.html?s=login-fix`, { waitUntil: "load" });
+      await waitFor(pg, () => window.mfVoice && document.getElementById("picker-title").textContent === "Login fix", 5000, "news page loaded");
+      const old = async () => /Old (login|parser) reply/.test(await saidAll(pg));
+      await pg.click("#voice-btn");
+      await waitFor(pg, () => window.mfVoice.state === "listening", 3000, "news: listening");
+      await pg.click("#voice-cancel");
+      await waitFor(pg, () => window.mfVoice.state === "idle", 3000, "news: idle");
+      await sleep(4600);   // one 4 s poll
+      check("news: voice on a session whose reply is an hour old says nothing (the poll included)", !(await old()), await saidAll(pg));
+      await pg.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      await sleep(500);
+      check("news: …nor coming back to the page (GET /voice's stamp is an hour old)", !(await old()), await saidAll(pg));
+      await pg.evaluate((t) => window.mfVoice.onEvent({ seq: 0, event: "session.activity_changed", session: "login-fix", old: "working", new: "idle", ts: t, data: { say: "Old login reply, replayed." } }), hourAgo);
+      await pg.evaluate(() => window.mfVoice.onEvent({ seq: 0, event: "session.turn_ended", session: "login-fix", ts: Date.now() / 1000, data: { say: "Old login reply, idle an hour.", idle_for: 3600 } }));
+      await sleep(400);
+      check("news: …nor an hour-old frame (a replay), nor a turn_ended whose idle_for says it ended an hour ago", !(await old()), await saidAll(pg));
+      const fresh = "We were working on the login page, and the redirect loop is fixed.";
+      await pg.evaluate((s) => window.mfVoice.onEvent({ seq: 0, event: "session.activity_changed", session: "login-fix", old: "working", new: "idle", ts: Date.now() / 1000, data: { say: s } }), fresh);
+      await waitFor(pg, () => window.__spoken.join(" ").indexOf("the redirect loop is fixed.") >= 0, 3000, "news: the fresh reply");
+      check("news: a reply that ends while you are there is read — bare, its own context first", (await said(pg, fresh)) && !(await said(pg, "In Login fix")), await saidAll(pg));
+      await waitFor(pg, () => window.mfVoice.state === "idle", 3000, "news: idle after the reply");
+      const hear = async (words, label) => {
+        await pg.click("#voice-btn");
+        await waitFor(pg, () => window.mfVoice.state === "listening" && window.__rec && window.__rec.started, 3000, label);
+        await pg.evaluate((w) => window.__hear(w), words);
+      };
+      await hear("switch to invoice parser", "news: listening to switch");
+      await waitFor(pg, () => window.mfVoice.session === "invoice-parser" && window.mfVoice.state === "idle", 4000, "news: switched");
+      check("news: switching to a session whose reply is an hour old says only 'Now on Invoice parser.'", (await said(pg, "Now on Invoice parser.")) && !(await old()), await saidAll(pg));
+      await hear("switch to login fix", "news: listening to switch back");
+      await waitFor(pg, () => window.mfVoice.session === "login-fix" && window.mfVoice.state === "idle", 4000, "news: switched back");
+      check("news: …and back to one whose reply you heard: 'Now on Login fix.' only", (await said(pg, "Now on Login fix.")) && !(await said(pg, "Now on Login fix. We were")), await saidAll(pg));
+      // Invoice parser finishes after you left it: news on the switch back.
+      Object.assign(state.rows[1], { last_say: "Parsed the March invoices.", activity_since: Date.now() / 1000 });
+      await sleep(4300);   // the rows refresh
+      await hear("switch to invoice parser", "news: listening to switch again");
+      await waitFor(pg, () => window.__spoken.join(" ").indexOf("Parsed the March invoices.") >= 0, 4000, "news: switch with news");
+      check("news: switching to a session that finished after you left it reads that reply", await said(pg, "Now on Invoice parser. Parsed the March invoices."), await saidAll(pg));
+      await waitFor(pg, () => window.mfVoice.state === "idle", 3000, "news: idle after the switch");
+      // Not heard from in eleven minutes: the reply says where it is from.
+      await pg.evaluate(() => { window.mfVoice.heardAt["invoice-parser"] = Date.now() - 11 * 60000; });
+      await pg.evaluate(() => window.mfVoice.onEvent({ seq: 0, event: "session.activity_changed", session: "invoice-parser", old: "working", new: "idle", ts: Date.now() / 1000, data: { say: "We were working on the invoices, and all twelve are parsed." } }));
+      await waitFor(pg, () => window.__spoken.join(" ").indexOf("all twelve are parsed") >= 0, 3000, "news: the reply after a while");
+      check("context: a session not heard from in ten minutes → 'In <name>, on <its task>: …'", await said(pg, "In Invoice parser, on parse the March invoices: We were working on the invoices, and all twelve are parsed."), await saidAll(pg));
+      await waitFor(pg, () => window.mfVoice.state === "idle", 3000, "news: idle again");
+      // Asked for: read whatever its age, with where it is from.
+      const n0 = (await spoken(pg)).length;
+      const ok = await pg.evaluate(() => window.mfVoice.sayLast("login-fix"));
+      check("on demand: mfVoice.sayLast reads an hour-old reply, 'In Login fix, on fix the login redirect: …'", ok === true && (await spoken(pg)).slice(n0).join(" ").indexOf("In Login fix, on fix the login redirect: Old login reply, filed an hour ago.") >= 0, await saidAll(pg));
+      await pg.close();
+      state.routeStatus = 0;
+      state.voiceCfg = null;
+    }
 
     // ---- Speech stops when you act; barge-in; "stop talking"; say-all -----------
     // A hand on the ask sheet cuts what is read about that ask (other lines

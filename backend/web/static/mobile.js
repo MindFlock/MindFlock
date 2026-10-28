@@ -4402,6 +4402,9 @@
     asked: false,                // that say asked a question: "yes" / "no" answer it (voiceAsks)
     lastLine: "",                // "say that again": the last line said, as said
     heard: {},                   // Everything: title → the Say line read for its last turn (voiceTurnLine)
+    heardAt: {},                 // title → when the listener last heard from / looked at it (ms): news is what ended after (voiceHeardAt)
+    awaitAt: {},                 // title → when a prompt sent from here went to it, until its reply is read: that reply is news whatever came between
+    newsFrom: Date.now(),        // the page loaded, voice turned on / the page came back (ms): nothing that ended before is news
     lastError: "",
     caption: "",                 // the loop's caption (voiceCaption): the ask sheet's mirror and Diagnostics read it; the strip shows one word
     quietUntil: 0,               // "Quiet." on the strip until then (voiceQuiet)
@@ -4727,6 +4730,9 @@
   //              another session's ask or turn): the strip keeps its state
   //   title      the session the line is about: its name goes first when
   //              the phone is on another one (voiceLineText)
+  //   reply      a session's reply: it opens with where it is from when that
+  //              is not obvious (voiceReplyText), and once said the listener
+  //              has heard that session (voiceHeardNow)
   // Recognition is stopped while a line is said (the phone must not
   // transcribe its own voice) and the queue holds while the mic listens.
   var voiceSpeakSeq = 0;   // bumped by every stop: a conversation line queued before it is not said
@@ -4734,7 +4740,7 @@
   voice.speech = voiceSpeech;   // tests read the queue
   // at: when the line came to be (default now) — a turn replayed after a
   // reconnect is as old as its frame, so the age rule can drop it.
-  function speakLine(text, keepState, title, at) {
+  function speakLine(text, keepState, title, at, reply) {
     text = String(text || "").trim();
     if (!text) return Promise.resolve(true);
     var bg = !!keepState || voice.state === "off";
@@ -4744,7 +4750,7 @@
       voiceSetState("speaking");
     }
     return new Promise(function (resolve) {
-      voiceSpeech.q.push({ text: text, title: String(title || ""), at: Math.min(Date.now(), Number(at) || Date.now()), bg: bg, seq: voiceSpeakSeq, resolve: resolve });
+      voiceSpeech.q.push({ text: text, title: String(title || ""), at: Math.min(Date.now(), Number(at) || Date.now()), bg: bg, seq: voiceSpeakSeq, reply: !!reply && !!title, resolve: resolve });
       voiceSpeechPump();
     });
   }
@@ -4808,7 +4814,8 @@
     S.playing = line;
     voiceHushShow();
     var tok = line.tok = (line.tok || 0) + 1;   // a line stopped and said again: the old play's end is not this one's
-    var said = voiceLineText(line, current, nameOf);
+    var said = line.reply ? voiceReplyText(line) : voiceLineText(line, current, nameOf);
+    if (line.reply) voiceHeardNow(line.title);
     voice.lastLine = said;
     if ((line.over = voiceIsListening())) {
       // A confirmation, or any line in continuous listening, is said over a
@@ -6173,6 +6180,7 @@
         return r.json().catch(function () { return {}; }).then(function (j) {
           if (voice.state !== "sending") return;
           if (r.ok && other) {
+            voiceHeardNow(title, true);
             var to2 = j && j.queued ? "Queued for " + name + "." : "Sent to " + name + ".";
             speakLine(to2).then(function (ok) { if (ok) voiceIdle(vbox().value.trim() ? voiceKept() : undefined); });
             return;
@@ -6190,6 +6198,7 @@
             // one word for word ("All tests pass." twice). The dedupe below
             // only has to stop idle + turn_ended speaking ONE reply twice.
             voice.lastSay = { text: "", ts: 0 };
+            voiceHeardNow(title, true);   // its reply is news, whatever comes between
             voiceSetState("working", "");
             // No baseline (the read failed): no ack poll, or the first poll
             // would read out the PREVIOUS reply's opening sentence.
@@ -6258,6 +6267,7 @@
           voice.pendingSay = null;
           voice.asked = false;
           voice.lastSay = { text: "", ts: 0 };
+          voiceHeardNow(title, true);
           voiceCaption(j && j.queued ? "Queued for " + name + " — it is on a prompt." : "Sent to " + name + ".");
           return;
         }
@@ -6306,6 +6316,107 @@
     });
   }
 
+  // --- news: nothing is said by itself unless the listener hasn't heard it --------
+  // A reply is NEWS only when it ended after the listener could have heard
+  // it — after voice was turned on or the page came back (voice.newsFrom),
+  // after they last switched to, sent to or heard that session
+  // (voice.heardAt) — and no more than VOICE_NEWS_MS ago. A prompt sent from
+  // here and still waiting (voice.awaitAt) moves the line back to its send:
+  // its reply is news even across a hidden page. Every path that speaks a
+  // reply by itself — voice on, the poll, the events (and their replay),
+  // the page coming back, a switch, Everything — asks voiceIsNews; asking
+  // ("what did it say", voiceSayLast) does not.
+  var VOICE_NEWS_MS = 10 * 60000;          // a reply older than this is never news
+  var VOICE_CONTEXT_GAP_MS = 10 * 60000;   // not heard from this long: the reply opens with where it is from
+  var VOICE_AWAIT_MAX_MS = 30 * 60000;     // a prompt's reply is waited on this long
+  var VOICE_STAMP_SLACK_MS = 5000;         // the server's stamps and this phone's clock may disagree a little
+  // Pure: a reply that ended at `endedAt` (ms, this phone's clock; 0 =
+  // unknown) is news to a listener who could last have heard its session at
+  // `heardAt` (ms) — it ended after that, and within VOICE_NEWS_MS of `now`.
+  // An unknown end is never news.
+  function voiceIsNews(endedAt, heardAt, now) {
+    var e = Number(endedAt) || 0;
+    return e > 0 && e > (Number(heardAt) || 0) && now - e <= VOICE_NEWS_MS;
+  }
+  // When the listener could last have heard `title` (ms): voice on / the page
+  // back, or the session's own mark, whichever is later — or, while a prompt
+  // sent from here waits on its reply, that send.
+  function voiceHeardAt(title) {
+    var sent = voice.awaitAt[title] || 0;
+    if (sent && Date.now() - sent < VOICE_AWAIT_MAX_MS) return sent - VOICE_STAMP_SLACK_MS;
+    return Math.max(voice.heardAt[title] || 0, voice.newsFrom || 0);
+  }
+  // Pure: when a turn ended (unix seconds) from an "it finished" frame — its
+  // stamp less the dwell session.turn_ended carries (idle_for); 0 unknown.
+  function voiceTurnEnded(ts, idleFor) {
+    var t = Number(ts) || 0;
+    return t ? t - Math.max(0, Number(idleFor) || 0) : 0;
+  }
+  // A server stamp (unix seconds) on this phone's clock (ms); 0 when unknown.
+  function voicePhoneMs(serverSec) {
+    var t = Number(serverSec) || 0;
+    if (!t) return 0;
+    return (t + (typeof voice.serverSkew === "number" ? voice.serverSkew : 0)) * 1000;
+  }
+  // The listener heard from / looked at `title` now. `sent`: a prompt went
+  // to it from here — its reply is awaited.
+  function voiceHeardNow(title, sent) {
+    if (!title) return;
+    var now = Date.now();
+    voice.heardAt[title] = now;
+    if (sent) voice.awaitAt[title] = now; else delete voice.awaitAt[title];
+  }
+  // Pure: what a reply opens with so the listener knows where it is from —
+  // "In Login fix, on fix the pin bar: " — when it is about another session
+  // than `here`, or one not heard from in VOICE_CONTEXT_GAP_MS (`lastAt` 0:
+  // never); "" for the session being talked to right along, a line already
+  // naming it, or no name. o: {title, here, name, headline, lastAt, now, text}.
+  function voiceContextLead(o) {
+    var name = String(o.name || "").trim();
+    if (!name || !o.title) return "";
+    var away = !o.lastAt || o.now - o.lastAt > VOICE_CONTEXT_GAP_MS;
+    if (o.title === o.here && !away) return "";
+    var t = voiceNorm(o.text);
+    if (t.indexOf(voiceNorm(name)) === 0 || t.indexOf(voiceNorm("In " + name)) === 0) return "";
+    var task = String(o.headline || "").replace(/\s+/g, " ").trim().replace(/[\s.,;:!?]+$/, "");
+    // "Fix pin bar" → "fix pin bar" (said mid-sentence); "API docs" stays.
+    if (task && !/^.[A-Z]/.test(task)) task = task.charAt(0).toLowerCase() + task.slice(1);
+    return "In " + name + (task ? ", on " + task : "") + ": ";
+  }
+  // A reply line as said (voiceSpeechPump, line.reply): the context lead,
+  // then the words. Read when its turn comes, so `here` is the screen then.
+  function voiceReplyText(line) {
+    var inst = instByTitle(line.title) || {};
+    var text = String(line.text || "").trim();
+    return voiceContextLead({
+      title: line.title, here: current, name: nameOf(line.title), headline: inst.task_headline,
+      lastAt: voice.heardAt[line.title] || 0, now: Date.now(), text: text,
+    }) + text;
+  }
+  // The switch line's news (voiceSwitchTo): " " + the session's last Say line
+  // when it ended unheard and recent, else "". A row stamps no reply: an idle
+  // session's activity_since is when its turn ended.
+  function voiceSwitchNews(title) {
+    var inst = instByTitle(title) || {};
+    if (inst.activity !== "idle" || !inst.last_say) return "";
+    if (!voiceIsNews(voicePhoneMs(inst.activity_since), voiceHeardAt(title), Date.now())) return "";
+    return " " + endSentence(stripMarkdown(String(inst.last_say)));
+  }
+  // On demand ("what did it say", "read it", "repeat it" — the router's
+  // answer calls this): `title`'s newest reply, said whatever its age, with
+  // where it is from when that is not obvious. Resolves true once said;
+  // false when there was nothing to say or it was cut off.
+  function voiceSayLast(title) {
+    title = title || voice.session || current;
+    if (!title) return Promise.resolve(false);
+    return voiceFetchSay(title).then(function (j) {
+      var say = String((j && j.say) || "").trim();
+      if (!say) return speakLine(nameOf(title) + " has nothing to say yet.").then(function () { return false; });
+      return speakLine(say, false, title, 0, true);
+    });
+  }
+  voice.sayLast = voiceSayLast;
+
   // --- the reply: the session's Say: line ---------------------------------------
   function voiceFetchSay(title) {
     return fetch("/api/instances/" + encodeURIComponent(title) + "/voice")
@@ -6321,6 +6432,13 @@
     if (voice.state === "off") return;
     var say = String((data && data.say) || "").trim();
     if (say && voiceSaidAlready(say, Number(data.ts) || 0)) return;
+    // Not news (it ended before the listener could have heard it, or long
+    // ago): noted, so the poll does not bring it back — never read by itself
+    // (data.demand: asked for — the deep link's "Tap to hear").
+    if (!(data && data.demand) && !voiceIsNews(voiceReplyEnded(data), voiceHeardAt(voice.session), Date.now())) {
+      if (say) voice.lastSay = { text: say, ts: Number(data.at) || Number(data.ts) || Infinity };
+      return;
+    }
     var busy = (voice.state === "listening" && !voiceListen_.cont) || voice.state === "sending" ||
                voice.state === "awaiting" || voice.state === "dialog";
     if (busy) { voice.pendingSay = data; return; }
@@ -6346,7 +6464,14 @@
     voice.lastSay = { text: say, ts: Number(data.at) || Number(data.ts) || Infinity };
     var q = !!(data && data.has_question);
     voice.asked = q;
-    speakLine(say, false, voice.session).then(function (ok) { if (ok) voiceAfterReply(q); });
+    speakLine(say, false, voice.session, 0, true).then(function (ok) { if (ok) voiceAfterReply(q); });
+  }
+  // When the reply `data` describes ended, on this phone's clock (ms): its
+  // frame's or its file's server stamp; none known while a prompt from here
+  // is being worked on → now (it is that prompt's); else 0 (never news).
+  function voiceReplyEnded(data) {
+    var t = voicePhoneMs((data && (Number(data.at) || Number(data.ts))) || 0);
+    return t || (voice.state === "working" ? Date.now() : 0);
   }
   function voiceAfterReply(hasQuestion) {
     if (voice.state === "off") return;
@@ -6363,7 +6488,7 @@
   function voiceGotIdle(data, frameTs) {
     var title = voice.session;
     if (data && data.say) {
-      voiceReply({ say: data.say, has_question: data.has_question, ts: 0, at: Number(frameTs) || 0 });
+      voiceReply({ say: data.say, has_question: data.has_question, ts: 0, at: voiceTurnEnded(frameTs, data.idle_for) });
       return;
     }
     voiceFetchSay(title).then(function (j) {
@@ -6474,9 +6599,10 @@
     if (f.event === "session.activity_changed" && f.new === "working" && t) delete voice.heard[t];
     var line = voiceTurnLine(f, voice.prefs.replies, voice.state !== "off" ? voice.session : "", voice.heard);
     if (!line) return;
+    if (!voiceIsNews(voicePhoneMs(voiceTurnEnded(f.ts, (f.data || {}).idle_for)), voiceHeardAt(line.title), Date.now())) return;
     voice.heard[line.title] = line.say;
     var at = Number(f.ts) && typeof voice.serverSkew === "number" ? (Number(f.ts) + voice.serverSkew) * 1000 : 0;
-    speakLine(line.say, true, line.title, at);
+    speakLine(line.say, true, line.title, at, true);
   }
   // Everything with voice off: a page speaks only after a tap — the first
   // one anywhere unlocks it.
@@ -6790,10 +6916,10 @@
   // Voice follows the selection (voiceOnSelect), as a tap on the row would
   // — the sheet closes the same way.
   function voiceSwitchTo(title) {
-    var inst = instByTitle(title) || {};
+    var inst = instByTitle(title) || {}, news = voiceSwitchNews(title);   // before select() marks it heard
     closeSheet(sessionsSheet);
     select(title);
-    speakLine("Now on " + nameOf(title) + "." + (inst.last_say ? " " + endSentence(inst.last_say) : "")).then(function (ok) {
+    speakLine("Now on " + nameOf(title) + "." + news).then(function (ok) {
       if (!ok) return;
       if (inst.activity === "clarify") { voice.dialogKey = ""; voiceDialog(); } else voiceIdle();
     });
@@ -7025,6 +7151,8 @@
     // whatever its stamp (a phone clock is not the server's): until the
     // first send, that text is never spoken.
     voice.lastSay = { text: String(inst.last_say || ""), ts: Infinity };
+    voice.newsFrom = Date.now();   // nothing that ended before this is news (voiceIsNews)
+    voiceHeardNow(title);
     voice.pendingSay = null;
     voice.expectSay = null;
     voice.dialogKey = "";
@@ -7046,6 +7174,8 @@
     voice.stt.stop();
     voiceSpeechStop(false);
     voiceAckStop();
+    if (voice.session) voice.heardAt[voice.session] = Date.now();   // looked at until now
+    voiceHeardNow(title);
     voice.session = title;
     voice.lastSay = { text: String(inst.last_say || ""), ts: Infinity };
     voice.pendingSay = null;
@@ -7419,14 +7549,16 @@
     voiceHearHide();
     if (run) run();
   });
-  function voiceHearNow(title) {
+  // newsOnly (resuming voice, not the deep link's "Tap to hear"): an old
+  // reply is not read — the same as nothing to hear (voiceIsNews).
+  function voiceHearNow(title, newsOnly) {
     var inst = instByTitle(title) || {};
     if (inst.activity === "clarify") { voice.dialogKey = ""; voiceDialog(); return; }
     voiceFetchSay(title).then(function (j) {
       if (voice.session !== title || voice.state === "off") return;
-      if (j && j.say) {
+      if (j && j.say && (!newsOnly || voiceIsNews(voicePhoneMs(j.ts), voiceHeardAt(title), Date.now()))) {
         voice.lastSay = { text: "", ts: 0 };   // the deep link's whole point is hearing it
-        voiceReply({ say: j.say, has_question: j.has_question, ts: j.ts, at: j.ts });
+        voiceReply({ say: j.say, has_question: j.has_question, ts: j.ts, at: j.ts, demand: true });
       } else {
         // Nothing to hear (no turn yet, or no words came out of it): say so
         // rather than go quiet, and listen — the tap was for a conversation.
@@ -7440,6 +7572,7 @@
   // remembered voice session get their one-tap offer on the first selection.
   function voiceOnSelect(title) {
     if (!title) return;
+    voice.heardAt[title] = Date.now();   // on screen: what ended before is not news, and its replies need no "In …:"
     if (voice.state !== "off") {
       if (title !== voice.session) voiceMoveTo(title);
       return;
@@ -7457,13 +7590,14 @@
       voice.resumeOffered = true;
       voiceHearShow("Tap to resume voice", function () {
         voiceTurnOn(title, false);
-        voiceHearNow(title);
+        voiceHearNow(title, true);
       });
     }
   }
 
   // --- hidden / visible -----------------------------------------------------------------
   document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) voice.newsFrom = Date.now();   // the page is back: what ended meanwhile is not news (voiceHeardAt)
     if (voice.state === "off") {
       // Everything with voice off: the socket and the queue follow the page.
       if (document.hidden) { voiceSpeechStop(true); voiceEventsClose(); }

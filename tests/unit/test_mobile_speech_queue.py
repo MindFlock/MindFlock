@@ -128,7 +128,12 @@ console.log(JSON.stringify(out));
     # A new turn ("working") clears the memory, so the same words are read again.
     on_turn = _whole(_js(), "voiceOnTurn")
     assert 'f.new === "working"' in on_turn and "delete voice.heard[t];" in on_turn
-    assert "speakLine(line.say, true, line.title, at);" in on_turn
+    # Only news is read (voiceIsNews, below), as a reply line (its context).
+    assert (
+        "if (!voiceIsNews(voicePhoneMs(voiceTurnEnded(f.ts, (f.data || {}).idle_for)), voiceHeardAt(line.title), Date.now())) return;"
+        in on_turn
+    )
+    assert "speakLine(line.say, true, line.title, at, true);" in on_turn
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
@@ -324,3 +329,129 @@ def test_a_stop_never_cuts_its_own_confirmation():
     rec = _whole(js, "voiceRecStart")
     assert 'if (voice.stt.name === "phone" && p && p.nod && p.over) {' in rec
     assert "}, VOICE_REC_WAIT_MS);" in rec
+
+
+# --------------------------------------------------------------------------- #
+# News only: what is said by itself, and where it is from
+# --------------------------------------------------------------------------- #
+_MIN = 60000
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_is_news_table():
+    """A reply is news only when it ended after the listener could have
+    heard it and no more than ten minutes ago; an unknown end never is."""
+    script = "var VOICE_NEWS_MS = 10 * 60000;\n" + _fns("voiceIsNews") + """
+var NOW = 100 * 60000, M = 60000;
+console.log(JSON.stringify({
+  justNow:        voiceIsNews(NOW - 5000,    NOW - M,      NOW),
+  beforeHeard:    voiceIsNews(NOW - 2 * M,   NOW - M,      NOW),
+  atHeard:        voiceIsNews(NOW - M,       NOW - M,      NOW),
+  neverHeard:     voiceIsNews(NOW - 3 * M,   0,            NOW),
+  nineMin:        voiceIsNews(NOW - 9 * M,   NOW - 20 * M, NOW),
+  tenMin:         voiceIsNews(NOW - 10 * M,  NOW - 20 * M, NOW),
+  elevenMin:      voiceIsNews(NOW - 11 * M,  NOW - 20 * M, NOW),
+  hourOld:        voiceIsNews(NOW - 60 * M,  0,            NOW),
+  unknown:        voiceIsNews(0,             0,            NOW),
+  garbage:        voiceIsNews("x",           0,            NOW),
+}));
+"""
+    out = _run(script)
+    assert out == {
+        "justNow": True,
+        "beforeHeard": False,  # ended before voice on / the switch / the page back
+        "atHeard": False,
+        "neverHeard": True,
+        "nineMin": True,
+        "tenMin": True,
+        "elevenMin": False,  # too old, heard or not
+        "hourOld": False,  # "done for a while": never read by itself
+        "unknown": False,
+        "garbage": False,
+    }
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_context_lead_table():
+    """A reply opens with "In <name>, on <task>:" when it is about another
+    session than the one on screen, or one not heard from in ten minutes (or
+    ever); bare for the session talked to right along."""
+    script = (
+        "var VOICE_CONTEXT_GAP_MS = 10 * 60000;\n"
+        + _fns("voiceNorm", "voiceContextLead")
+        + """
+var NOW = 100 * 60000, M = 60000;
+function lead(o) {
+  return voiceContextLead(Object.assign({title: "a", here: "a", name: "Login fix",
+    headline: "Fix the pin bar", lastAt: NOW - M, now: NOW, text: "Fixed it."}, o));
+}
+console.log(JSON.stringify({
+  ownRecent:   lead({}),
+  ownAway:     lead({lastAt: NOW - 11 * M}),
+  ownNever:    lead({lastAt: 0}),
+  other:       lead({here: "b"}),
+  otherNoTask: lead({here: "b", headline: null}),
+  acronym:     lead({here: "b", headline: "API docs cleanup."}),
+  named:       lead({here: "b", text: "Login fix: fixed it."}),
+  alreadyIn:   lead({here: "b", text: "In Login fix, all done."}),
+  noName:      lead({here: "b", name: ""}),
+  noTitle:     lead({title: "", here: "b"}),
+}));
+"""
+    )
+    out = _run(script)
+    assert out == {
+        "ownRecent": "",
+        "ownAway": "In Login fix, on fix the pin bar: ",
+        "ownNever": "In Login fix, on fix the pin bar: ",
+        "other": "In Login fix, on fix the pin bar: ",
+        "otherNoTask": "In Login fix: ",
+        "acronym": "In Login fix, on API docs cleanup: ",
+        "named": "",
+        "alreadyIn": "",
+        "noName": "",
+        "noTitle": "",
+    }
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+def test_turn_ended_less_its_dwell():
+    script = _fns("voiceTurnEnded") + """
+console.log(JSON.stringify([voiceTurnEnded(1000), voiceTurnEnded(1000, 12), voiceTurnEnded("1000", "12.5"),
+  voiceTurnEnded(1000, -3), voiceTurnEnded(0, 12), voiceTurnEnded(null, 12)]));
+"""
+    assert _run(script) == [1000, 988, 987.5, 1000, 0, 0]
+
+
+def test_every_unasked_reply_path_asks_is_news():
+    """Voice on, the poll, the events (and their replay), the page coming
+    back, a switch, Everything, resuming voice: each goes through voiceIsNews
+    (voiceReply for the session voice is on); the deep link and
+    voiceSayLast are asked for, so they do not."""
+    js = _js()
+    reply = _whole(js, "voiceReply")
+    assert (
+        "if (!(data && data.demand) && !voiceIsNews(voiceReplyEnded(data), voiceHeardAt(voice.session), Date.now()))"
+        in reply
+    )
+    # The gate comes before anything is said.
+    assert reply.index("voiceIsNews(") < reply.index("speakLine(")
+    for fn in ("voiceOnPoll", "voiceGotIdle"):
+        assert "voiceReply({" in _whole(js, fn)
+    assert "at: voiceTurnEnded(frameTs, data.idle_for)" in _whole(js, "voiceGotIdle")
+    assert "voiceIsNews(" in _whole(js, "voiceOnTurn")
+    switch = _whole(js, "voiceSwitchTo")
+    assert "news = voiceSwitchNews(title);" in switch
+    assert switch.index("voiceSwitchNews(") < switch.index("select(title)")
+    assert "last_say" not in switch
+    assert "voiceIsNews(" in _whole(js, "voiceSwitchNews")
+    hear = _whole(js, "voiceHearNow")
+    assert "(!newsOnly || voiceIsNews(" in hear and "demand: true" in hear
+    assert "voiceHearNow(title, true);" in js  # the resume offer: news only
+    # The lines: voice on / the page back move the boundary; a send makes its
+    # reply news whatever comes between.
+    assert "voice.newsFrom = Date.now();" in _whole(js, "voiceTurnOn")
+    assert "if (!document.hidden) voice.newsFrom = Date.now();" in js
+    assert js.count("voiceHeardNow(title, true)") == 3  # voiceSend ×2, voiceSendOn
+    say_last = _whole(js, "voiceSayLast")
+    assert "voiceIsNews" not in say_last and "voice.sayLast = voiceSayLast;" in js

@@ -284,10 +284,13 @@ a session first*).
   sentence is shown (and read, with replies on).
 - **Replies read aloud** are **off** by default here (the phone is the
   hands-free surface). Turned on, a draft the mic submits asks the session for
-  a closing `Say:` line, and when that turn ends the line is read once,
-  prefixed with the session's name (*“Login fix: Fixed the login bug. Should I
-  push it?”*) — only for drafts this mic submitted, never for prompts typed or
-  sent from the phone. Nothing is read while the mic listens; queued lines
+  a closing `Say:` line, and when that turn ends the line is read once —
+  bare for the session you are on and talking to, and opening with where it
+  is from for any other, or one you have not heard from in ten minutes
+  (*“In Login fix, on fix the login redirect: We were working on the login
+  page, and the redirect loop is fixed. Should I push it?”*) — only for drafts
+  this mic submitted, never for prompts typed or sent from the phone. Only
+  **news** is read by itself (see [Voice input](#voice-input)). Nothing is read while the mic listens; queued lines
   wait. **Hands-free**, with the same switch on (no other setting): a dialog
   that comes up on the focused session is read out name first in the phone's
   words (*“Login fix: Allow git push? Say yes, no, or always.”*), and a reply
@@ -6109,9 +6112,19 @@ session for a `Say:` line, read once when that turn ends), or **Everything,
 every session** — every finished turn that carries a `Say:` line or a digest
 (`session.turn_ended` / `activity_changed new="idle"` `data.say`) is read
 once, deduplicated across the two events, and this app's typed sends (the ask
-card's answer box, the Thread composer) carry `say: true` too. A line leads
-with its session's name — *"vc-frontend: Pushed the fix."* — unless that
-session is the focused one when it is read, which is spoken bare. Everything
+card's answer box, the Thread composer) carry `say: true` too. A reply says
+where it is from first — *"In vc-frontend, on fix the build: Pushed the
+fix."* (`In <name>, on <its task headline>:`, or `In <name>:` when the row
+has no headline) — when its session is not the focused one when it is read,
+or is one you have not heard from (been read a reply, sent a draft to, or
+focused) in the last ten minutes; the session you are on and talking to is
+spoken bare. **Only news is read by itself**: a turn is read only when it
+ended (the event's stamp, less `turn_ended`'s `idle_for`) after the listener
+could have heard it — after this page opened or *Read replies aloud* was
+turned on, after they last focused that session — and no more than ten
+minutes ago; a reply to a draft this mic sent is always news.
+`isNews` / `contextLead` / `HeardClock` in `lib/voiceDesktop.ts` hold the
+rules (the twin of the phone's). Everything
 the desktop says — replies, ask read-outs, the router's answers — goes
 through **one queue, one line at a time** (`SpeechQueue`): never two over each
 other, never the browser's voice and the server's at once; a burst from
@@ -6927,12 +6940,18 @@ opens with "I'll …"); nothing else is narrated unless you ask. A Codex
 session gets no such sentence (its screen fallback is skipped), only the line
 at the end. When the turn ends — `session.activity_changed` → `idle` over
 `WS /api/events`, with the page's 4 s session poll as the fallback — the
-page speaks the session's **`Say:` line**. A line about the session the
-phone is on is spoken bare — *Fixed the login bug. Should I push it?*; a line
-about any other session starts with its name — *Invoice parser: Parsed all
-twelve files.* — so a voice from elsewhere is never a surprise (the name is
-decided when the line is said, so after a switch the new session is the bare
-one). If that line asks a question the
+page speaks the session's **`Say:` line**. The line itself opens with its
+context (see *Where the line comes from*): *We were working on the login
+page, and the redirect loop is fixed. Should I push it?* A reply from the
+session the phone is on, and talked to lately, is spoken bare; a reply from
+any other session, or from one not heard from in ten minutes (or ever —
+read a reply, sent a prompt, switched to or selected), says where it is from
+first — *In Invoice parser, on parse the March invoices: Parsed all twelve
+files.* (`In <name>, on <its task headline>:`, or `In <name>:` with no
+headline) — so a voice from elsewhere is never a surprise (decided when the
+line is said, so after a switch the new session is the bare one). Other
+lines (confirmations, dialogs, asks) keep the plain name first —
+*Invoice parser: …*. If that line asks a question the
 mic reopens — 12 s for a first word, then the same radio rules (one *Still
 there? <line>* re-prompt when nothing was said, then idle); otherwise it goes
 quiet — or, with **Hands-free** on, listens 8 s for a first word after every
@@ -6950,8 +6969,8 @@ reply. A turn that ends with no line at all says *<name> finished.*
 - **Everything** — every session's finished turn is read: the spoken line
   the `session.activity_changed` (`new: "idle"`) / `session.turn_ended`
   frame carries, from any session, once per reply (the two frames carry the
-  same line; a new turn clears it), name first unless the phone is on that
-  session. It works with voice **off** too: the events socket stays open
+  same line; a new turn clears it), and only when it is **news** (below), with
+  where it is from first unless the phone is on that session. It works with voice **off** too: the events socket stays open
   while the page is visible (one connection, push — cheaper than polling
   every session's `GET /voice`; a turn replayed after a reconnect is as old
   as its frame, so the one-minute rule below drops the stale ones), and the
@@ -7093,13 +7112,38 @@ new prompt is sent; a line you have already heard is never repeated (the
 events compare by text, `GET /voice` by its stamp, and the line on screen
 when voice was turned on counts as heard).
 
+**News only.** Nothing is read by itself unless it is news: a reply is news
+only when it **ended after the listener could have heard it** — after voice
+was turned on or the page came back (loaded, or visible again), after they
+last switched to, selected, sent to or heard that session — and **no more
+than ten minutes ago**. A prompt sent from the phone moves that line back to
+its send: its reply is news even across a hidden page or a switch away. So
+turning voice on, *Tap to resume voice*, switching sessions, the 4 s poll,
+the events socket (and its replay after a reconnect), coming back to the
+page and *Everything* never read a session that has been done for a while;
+it is still on the screen, and asking reads it. When a turn ended is the
+frame's stamp (less `turn_ended`'s `idle_for`) or the reply file's
+(`GET /voice` `ts`), on the phone's clock (the socket's `hello` gives the
+skew); a reply with no stamp is news only while a prompt from here is being
+worked on. The deep link's *Tap to hear <name>* is asking, so it reads the
+reply whatever its age, and so does `mfVoice.sayLast(title)` (with where it
+is from) for the router's "what did it say". The rule is one pure function,
+`voiceIsNews(endedAt, heardAt, now)` in `mobile.js`, with
+`voiceContextLead` for the *In <name>, on …:* lead; the desktop's twins are
+`isNews` / `contextLead` in `lib/voiceDesktop.ts`.
+
 **Where the line comes from.** The `Say:` line is asked for **per
 prompt**: the page sends `say: true` on `POST /send` only for a prompt that
 was dictated (a phrase you said landed in the box) while Spoken replies is
 on, so a typed prompt costs no Say tokens. That prompt carries one
 instruction asking the session to end its reply with one final line
-starting `Say:` — at most two short plain sentences a person can hear,
-saying what it did or will do and any question it has. Claude Code
+starting `Say:` — up to three short plain sentences (under about 50 words)
+a person can hear, no code, paths or markdown: **first the context** — what
+it was working on, the feature or area in plain words, and the project when
+more than one could be meant — then what it did or will do, then any
+question (*We were working on MindFlock's settings screen, and the voice
+install button now sits in the Try-it row. Should I add it to the phone page
+too?*), so a listener who was away hears where they are. Claude Code
 receives it invisibly from the hook MindFlock installs in the worktree
 (nothing shows in the terminal; turning voice on re-pins the hook on a
 running session and Claude Code hot-reloads it); Codex and the other CLIs
@@ -7128,7 +7172,7 @@ or "please" in front:
 | *cancel* · *never mind* · *scratch that* · *forget it* | drops the dictated text |
 | *session two* · *go to session 3* · *focus (on) session number four* | moves voice to that row of the Sessions sheet, numbered as shown (the router: `{kind: "switch_index", index}`); past the last row, *There is no session N.* |
 | *next session* · *previous session* · *switch to the next one* | one row down / up from the current session's, round the ends (`{kind: "switch_rel", delta: ±1}`) |
-| *switch to <name>* · *go to <name>* · *change to* · *jump (over) to* | moves voice to that session — by name or title: a prefix, then word overlap, then loose containment. A tie asks *Which one: a, b?*; a miss says *No session called X. Sessions: …*; a hit says *Now on <name>.* plus its last line, and reads its dialog when it is on one |
+| *switch to <name>* · *go to <name>* · *change to* · *jump (over) to* | moves voice to that session — by name or title: a prefix, then word overlap, then loose containment. A tie asks *Which one: a, b?*; a miss says *No session called X. Sessions: …*; a hit says *Now on <name>.* plus its last line only when that is **news** (it ended unheard, after you were last on that session, within ten minutes), and reads its dialog when it is on one |
 | *focus (on) <name>* · *open <name>* · *show <name>* · *select <name>* | the same, but only for a session whose name (or title) is said or starts so — *open the readme* stays a prompt |
 | *what is it asking* · *what's it asking (me)* · *what does it want* · *what's the question* | the current session's question: its dialog read out again (and listened for), or the question its last line asked; the router's `{kind: "question", say}` is said name first |
 | *what needs me* · *who needs me* · *what needs (my) attention* | the sessions in the bell, attention first, at most three: *<name> is asking: <its line>.* or *<name> is <state word>.* — else *Nothing needs you.* |

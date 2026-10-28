@@ -589,8 +589,11 @@ describe("the wiring around it", () => {
     const mic = code("components/TopBarMic.tsx");
     expect(mic).toContain('if (mode === "all" && inline) {');
     expect(mic).toContain("if (!heard.fresh(title, inline, Number(data.ts) || null)) return;");
-    // The name first only when that session isn't the focused one — decided at speak time.
-    expect(mic).toContain("queue.say(() => spokenLine(voiceName(title, useUi.getState().focused, displayName(title)), words), { title })");
+    // Where it is from ("In Login fix, on …:") only when that session isn't
+    // the focused one or hasn't been heard from lately — decided at speak time.
+    expect(mic).toContain("const said = queue.say(() => {");
+    expect(mic).toContain("const line = replyText({");
+    expect(mic).toContain("focused: useUi.getState().focused,");
     // The mic listens for a question only on a prompt it sent ("mine").
     expect(mic).toContain("speak(inline, data.has_question ? inline : \"\", mine);");
     expect(mic).toContain("drained: () => queue.drained(),");

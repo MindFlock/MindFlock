@@ -50,8 +50,50 @@ def test_instruction_is_the_contracts_text_and_shared_with_the_hook():
     assert spoken.INSTRUCTION is am.VOICE_INSTRUCTION
     assert spoken.INSTRUCTION.startswith("Voice mode is on: the person is listening")
     assert "`Say:`" in spoken.INSTRUCTION
-    assert spoken.INSTRUCTION.endswith("the question.")
     assert "\n" not in spoken.INSTRUCTION  # one line: a hook prints it as one
+
+
+def test_instruction_asks_for_the_context_first_then_the_work_then_the_question():
+    """The Say line opens with what was being worked on (a listener who was
+    away hears where they are), then what was done, then the question — up
+    to three short sentences, still no code, paths or markdown."""
+    text = spoken.INSTRUCTION
+    assert spoken.INSTRUCTION == (
+        "Voice mode is on: the person is listening, not reading, and may have "
+        "been away. End your reply with one final line that starts with `Say:` "
+        "followed by up to three short plain sentences a person can hear, under "
+        "about 50 words — no code, paths or markdown: first the context (what "
+        "you were working on, the feature or area in plain words, and the "
+        "project when more than one could be meant), then what you did or will "
+        "do, then, if you need something from them, the question. For example: "
+        "We were working on MindFlock's settings screen, and the voice install "
+        "button now sits in the Try-it row. Should I add it to the phone page too?"
+    )
+    order = [text.index(w) for w in ("the context", "what you did", "the question")]
+    assert order == sorted(order)
+    # The example is mid-line: a reply that quotes the instruction does not
+    # hand the reader a Say line.
+    assert spoken.extract_say(text) is None
+
+
+def test_extract_say_keeps_a_three_sentence_line_with_its_context_whole():
+    reply = (
+        "Moved the button and updated the tests.\n\n"
+        "Say: We were working on MindFlock's settings screen, and the voice "
+        "install button now sits in the Try-it row. The phone page still has "
+        "the old one. Should I move it there too?"
+    )
+    got = spoken.extract_say(reply)
+    assert got == (
+        "We were working on MindFlock's settings screen, and the voice install "
+        "button now sits in the Try-it row. The phone page still has the old "
+        "one. Should I move it there too?"
+    )
+    assert spoken.has_question(got)
+    # Fifty words of three sentences fit under the cap: the question at the
+    # end is never the part cut off.
+    fifty = " ".join(["word"] * 46) + ". Should I push?"
+    assert spoken.extract_say("Say: " + fifty) == fifty
 
 
 # --------------------------------------------------------------------------- #

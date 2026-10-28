@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Voice says only what is news.** Switching sessions, turning voice on,
+  resuming it, coming back to the page, the poll and *Everything* no longer
+  read a reply from a session that has been done for a while. A reply is read
+  by itself only when it ended after you could have heard it — after voice
+  went on or the page came back, after you last switched to, selected or sent
+  to that session — and within the last ten minutes; a reply to a prompt you
+  sent is always read. Asking still reads it: the notification's *Tap to
+  hear*, and the phone's `mfVoice.sayLast` for "what did it say". The same
+  rule holds on the phone and on the desktop mic.
+- **Spoken replies give their context.** The `Say:` line a session is asked
+  for now opens with what it was working on, then what it did, then the
+  question — up to three short sentences (*We were working on MindFlock's
+  settings screen, and the voice install button now sits in the Try-it row.
+  Should I add it to the phone page too?*). And a reply from a session you
+  are not on, or have not heard from in ten minutes, says where it is from
+  first: *In Invoice parser, on parse the March invoices: …*. Claude Code
+  sessions pick the new instruction up when their hook is re-pinned (turning
+  voice on does it).
 - **Only a real prompt raises a Question.** A reply that merely ends with a
   question in plain words ("Should I also add them?") no longer puts a
   Question on the session's row, in the bell, the toast, the push or the
