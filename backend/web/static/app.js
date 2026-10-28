@@ -24182,7 +24182,7 @@ function instApi(title, suffix, opts) {
 //#endregion
 //#region src/lib/guest.ts
 var locked = [];
-var listeners$6 = /* @__PURE__ */ new Set();
+var listeners$7 = /* @__PURE__ */ new Set();
 function splitLockedRows(list) {
 	if (!Array.isArray(list)) {
 		setLocked([]);
@@ -24206,7 +24206,7 @@ function splitLockedRows(list) {
 function setLocked(rows) {
 	if (rows.length === locked.length && rows.every((r, i) => r.title === locked[i].title && r.status === locked[i].status && r.device === locked[i].device)) return;
 	locked = rows;
-	for (const l of listeners$6) l();
+	for (const l of listeners$7) l();
 }
 function guestNote(guest) {
 	if (!guest) return "";
@@ -27526,7 +27526,7 @@ function rememberNewSessionChoice(repo, choice, kv = lsKV()) {
 }
 //#endregion
 //#region src/lib/windowName.ts
-function snapshot$1() {
+function snapshot$2() {
 	const w = globalThis;
 	try {
 		const list = w.mindflock?.sessions?.();
@@ -27540,7 +27540,7 @@ function windowName(title) {
 	if (!raw) return "";
 	const alias = useUi.getState().aliases[raw];
 	if (alias) return alias;
-	const inst = snapshot$1().find((i) => i && (i.title === raw || i.display_title === raw));
+	const inst = snapshot$2().find((i) => i && (i.title === raw || i.display_title === raw));
 	if (!inst) return raw;
 	return sessionLabel(inst.display_title || inst.title || raw, inst.branch || "").text || raw;
 }
@@ -27553,12 +27553,12 @@ function slotNumber(title) {
 		if (rail.length) {
 			let idx = rail.indexOf(raw);
 			if (idx < 0) {
-				const inst = snapshot$1().find((i) => i && i.display_title === raw);
+				const inst = snapshot$2().find((i) => i && i.display_title === raw);
 				if (inst) idx = rail.indexOf(inst.title);
 			}
 			return idx >= 0 && idx < 9 ? String(idx + 1) : "";
 		}
-		const { rows } = orderedInstances(snapshot$1().filter((i) => i && !isVerifySession(i)), ui.order);
+		const { rows } = orderedInstances(snapshot$2().filter((i) => i && !isVerifySession(i)), ui.order);
 		const filtered = rows.filter((i) => matchesFilter(i, ui.filter, ui.aliases));
 		const local = filtered.filter((i) => !i.device);
 		const remote = filtered.filter((i) => i.device);
@@ -27571,7 +27571,7 @@ function slotNumber(title) {
 function nameTakenBy(title, name) {
 	const n = String(name || "").trim();
 	if (!n) return "";
-	for (const i of snapshot$1()) {
+	for (const i of snapshot$2()) {
 		const t = i?.title;
 		if (!t || t === title || i.device) continue;
 		if (n === t || n === windowName(t)) return t;
@@ -33368,7 +33368,7 @@ function cleanList(raw) {
 	return Array.isArray(raw) ? raw.filter((t) => t && typeof t.name === "string" && t.name.trim()).map((t) => ({ ...t })) : [];
 }
 var cache$1 = null;
-var loading = null;
+var loading$1 = null;
 var runsStatus = {
 	runs: {},
 	runs_here: true,
@@ -33380,7 +33380,7 @@ function templateRunsNow() {
 function runInfoFor(name) {
 	return runsStatus.runs[(name || "").trim().toLowerCase()] || {};
 }
-function notify$1() {
+function notify$2() {
 	if (typeof document !== "undefined") document.dispatchEvent(new Event(TEMPLATES_CHANGED));
 }
 function setTemplates(list, kv = storage$1()) {
@@ -33388,7 +33388,7 @@ function setTemplates(list, kv = storage$1()) {
 	try {
 		kv?.setItem(TEMPLATES_MIRROR_KEY, JSON.stringify(cache$1));
 	} catch {}
-	notify$1();
+	notify$2();
 	return cache$1;
 }
 function templatesNow(kv = storage$1()) {
@@ -33404,8 +33404,8 @@ function templatesLoaded() {
 }
 function ensureTemplates(force = false) {
 	if (cache$1 && !force) return Promise.resolve(cache$1);
-	if (loading) return loading;
-	loading = (async () => {
+	if (loading$1) return loading$1;
+	loading$1 = (async () => {
 		try {
 			const d = await api("/api/templates");
 			runsStatus = {
@@ -33418,10 +33418,10 @@ function ensureTemplates(force = false) {
 			if (await migratePresetsOnce(list)) list = setTemplates((await api("/api/templates")).templates || []);
 			return list;
 		} finally {
-			loading = null;
+			loading$1 = null;
 		}
 	})();
-	return loading;
+	return loading$1;
 }
 async function saveTemplate(t) {
 	return setTemplates((await api("/api/templates", { json: t })).templates || []);
@@ -33951,10 +33951,10 @@ var settleFirstPull = () => {};
 var firstPrefsPull = new Promise((r) => {
 	settleFirstPull = r;
 });
-var installed$1 = false;
+var installed$2 = false;
 function installPrefsSync() {
-	if (installed$1) return;
-	installed$1 = true;
+	if (installed$2) return;
+	installed$2 = true;
 	setRefusedListener((_fields, message) => toast(message, { duration: 1e4 }));
 	pullPrefs();
 	if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
@@ -33983,8 +33983,437 @@ function installPrefsSync() {
 	});
 }
 //#endregion
+//#region src/lib/peer.ts
+var CODE_RE = /mfp[12]:[a-z2-7]+-[a-z2-7]{4}/i;
+function codeCandidates(text) {
+	const t = text || "";
+	try {
+		return [t, decodeURIComponent(t)];
+	} catch {
+		return [t];
+	}
+}
+function isPeerCode(text) {
+	return codeCandidates(text).some((t) => CODE_RE.test(t));
+}
+function extractPeerCode(text) {
+	for (const t of codeCandidates(text)) {
+		const m = CODE_RE.exec(t);
+		if (m) return m[0].toLowerCase();
+	}
+	return "";
+}
+function inviteMessage(inv) {
+	const rest = inv.message || inv.code;
+	if (!inv.url || rest.includes(inv.url)) return rest;
+	return "Open this link to join me in MindFlock: " + inv.url + "\n\n" + rest;
+}
+function reconnectKind(text) {
+	const t = (text || "").trim();
+	if (!t) return null;
+	if (isPeerCode(t)) return "invite";
+	if (/^wss:\/\/[^\s]+$/i.test(t)) return "address";
+	if (/^(\[[0-9a-f:.]+\]|[A-Za-z0-9.-]+):[0-9]{1,5}$/.test(t)) return "address";
+	return null;
+}
+function newOpId() {
+	return "op" + Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
+}
+function joinPeerCode(code, opId) {
+	return api("/api/peer/join", { json: {
+		code: (code || "").trim(),
+		...opId ? { op_id: opId } : {}
+	} });
+}
+function fmtSecondsLeft(seconds) {
+	const s = Math.max(0, Math.floor(seconds));
+	return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+}
+function inviteExpiryText(secondsLeft) {
+	return secondsLeft > 0 ? "Expires in " + fmtSecondsLeft(secondsLeft) : "Expired — create a new one";
+}
+function roleText(role) {
+	return role === "listener" ? "You invited them" : "You joined them";
+}
+function carrierText(carrier) {
+	if (carrier === "relay") return "through the relay";
+	if (carrier === "tcp") return "directly (same network or Tailscale)";
+	return "";
+}
+var PEER_SCREEN = "peer";
+function peerChip(inst) {
+	if (!inst.peer_share) return null;
+	const w = inst.peer_with || null;
+	const name = String(w?.name || "").trim();
+	const connected = w ? !!w.connected : null;
+	const label = name ? "Shared with " + name : "Shared";
+	const state = connected === null ? "" : connected ? " — connected" : " — offline";
+	return {
+		label,
+		connected,
+		title: (name ? "A shared folder with " + name : "A shared folder") + state + ". It runs in a sandbox: ship, push, the terminal and the IDE are off — use Bring work home in People."
+	};
+}
+function peerEventNote(event, data) {
+	const d = data || {};
+	const name = String(d.peer_name || "").trim() || "Your peer";
+	switch (event) {
+		case "peer.link_added": {
+			const sas = String(d.sas || "");
+			const tail = sas ? " — compare safety number " + sas : "";
+			const text = (d.role === "dialer" ? (d.repaired ? "Reconnected to " : "Connected to ") + name : d.repaired ? name + " reconnected" : name + " joined") + tail;
+			return {
+				text,
+				cls: "n-done",
+				toast: d.role === "dialer" ? "" : text
+			};
+		}
+		case "peer.link_removed": {
+			if (d.by !== "peer") return null;
+			const kept = String(d.kept_folder || "").trim();
+			const text = kept ? name + " unlinked — your shared folder is kept at " + kept : name + " unlinked";
+			return {
+				text,
+				cls: "n-info",
+				toast: text
+			};
+		}
+		case "peer.state": {
+			if (!d.sas_changed) return null;
+			const text = "New safety number after reconnecting — confirm it with " + name + " again";
+			return {
+				text,
+				cls: "n-warn",
+				toast: text
+			};
+		}
+		case "peer.message": {
+			const text = d.stored === false ? name + " sent a message (your shared agent has it too)" : name + " sent you a message";
+			const preview = clip$4(String(d.text_head || d.text || "").replace(/\s+/g, " ").trim(), 200);
+			return {
+				text: preview ? text + ": " + preview : text,
+				cls: "n-info",
+				toast: name + " sent you a message"
+			};
+		}
+		case "peer.relay_changed": {
+			const peers = Array.isArray(d.peers) ? d.peers.map(String).filter(Boolean) : [];
+			const text = "Your relay address changed — send " + (peers.length ? peers.join(", ") : "the people you invited") + " a fresh invite to reconnect";
+			return {
+				text,
+				cls: "n-warn",
+				toast: text
+			};
+		}
+		case "peer.joint_proposed": {
+			const text = name + " proposes a joint task — accept in People";
+			const brief = String(d.brief || "").trim();
+			return {
+				text: brief ? text + ": " + clip$4(brief, 80) : text,
+				cls: "n-info",
+				toast: text
+			};
+		}
+		case "peer.joint_contract":
+			if (d.kind !== "proposal" || !d.open) return null;
+			if (d.by === "peer") {
+				const text = name + "'s agent proposes a contract change";
+				return {
+					text,
+					cls: "n-info",
+					toast: text
+				};
+			}
+			if (d.by === "agent") return {
+				text: "",
+				cls: "n-info",
+				toast: "Your agent proposes a contract change — review it in People"
+			};
+			return null;
+		case "peer.joint_state": {
+			if (d.by !== "peer") return null;
+			const state = String(d.state || "");
+			const text = state === "active" ? name + " accepted the joint task" : state === "done" ? name + " marked the joint task done" : state === "cancelled" ? name + " cancelled the joint task" : "";
+			if (!text) return null;
+			return {
+				text,
+				cls: state === "cancelled" ? "n-warn" : "n-done",
+				toast: text
+			};
+		}
+		case "peer.joint_check": {
+			if (!d.notify) return null;
+			const text = String(d.text || "").trim() || name + "'s joint check: " + String(d.verdict || "");
+			return {
+				text,
+				cls: d.verdict === "failed" ? "n-warn" : "n-done",
+				toast: text
+			};
+		}
+		case "peer.mirror_updated": {
+			const text = name + "'s work updated " + mirrorBranchText(d.branch) + " in " + repoText(d);
+			return {
+				text,
+				cls: "n-done",
+				toast: text
+			};
+		}
+		case "peer.mirror_failed": {
+			const err = String(d.error || "").trim();
+			return {
+				text: "Couldn't mirror " + name + "'s work into " + repoText(d) + (err ? ": " + err : ""),
+				cls: "n-warn",
+				toast: "Couldn't mirror " + name + "'s work into " + repoText(d)
+			};
+		}
+		default: return null;
+	}
+}
+function clip$4(s, n) {
+	return s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s;
+}
+function baseName$1(path) {
+	const parts = String(path || "").replace(/[\\/]+$/, "").split(/[\\/]/);
+	return parts[parts.length - 1] || String(path || "");
+}
+function repoText(d) {
+	return String(d.repo_name || "").trim() || baseName$1(String(d.repo_path || "")) || "your repo";
+}
+function mirrorBranchText(branch) {
+	return String(branch || "").trim() || "its peer/ branch";
+}
+var PEER_LIVE_EVENTS = [
+	"peer.link_added",
+	"peer.link_removed",
+	"peer.state",
+	"peer.message",
+	"peer.relay_changed",
+	"peer.joint_proposed",
+	"peer.joint_state",
+	"peer.joint_contract",
+	"peer.mirror_updated",
+	"peer.mirror_failed"
+];
+var PEER_NEWS_EVENTS = [
+	"peer.link_added",
+	"peer.link_removed",
+	"peer.state",
+	"peer.message",
+	"peer.relay_changed",
+	"peer.joint_proposed",
+	"peer.joint_state",
+	"peer.joint_contract",
+	"peer.mirror_updated",
+	"peer.mirror_failed",
+	"peer.joint_check"
+];
+function jointPhase(joint) {
+	if (!joint) return "none";
+	if (joint.state === "active") return "active";
+	if (joint.state === "proposed") return joint.proposed_by === "peer" ? "proposed-by-peer" : "proposed-by-me";
+	return "ended";
+}
+var CONTRACT_TEMPLATE = [
+	"## What we're building",
+	"",
+	"",
+	"## Interfaces between the halves",
+	"",
+	"",
+	"## Who owns what",
+	"",
+	"",
+	"## Done means",
+	""
+].join("\n");
+function openProposals(joint) {
+	return (joint?.proposals || []).filter((p) => p.state === "open");
+}
+function jointPath(linkId, tail = "") {
+	return "/api/peer/links/" + encodeURIComponent(linkId) + "/joint" + tail;
+}
+function defaultMirrorBranch(peerName) {
+	return "peer/" + ((peerName || "work").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "work");
+}
+function isoSeconds(iso) {
+	return iso ? Date.parse(iso) / 1e3 : NaN;
+}
+function mirrorStatusText(m, peerName, now = Date.now() / 1e3) {
+	const where = m.branch + " in " + baseName$1(m.repo_path);
+	if (!m.enabled) return "Mirror is off.";
+	if (m.updating) return "Mirroring " + peerName + "'s work into " + where + " — updating now…";
+	const t = isoSeconds(m.last_at);
+	if (!m.last_head || !Number.isFinite(t)) return "Mirroring " + peerName + "'s work into " + where + " — waiting for their first change.";
+	const ago = relTime(t, { now });
+	return "Mirroring " + peerName + "'s work into " + where + " — last updated " + ago + " (" + m.last_head.slice(0, 7) + ").";
+}
+function contractLineDiff(before, after) {
+	const a = String(before || "").replace(/\r\n?/g, "\n").split("\n");
+	const b = String(after || "").replace(/\r\n?/g, "\n").split("\n");
+	const n = a.length;
+	const m = b.length;
+	const lcs = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+	for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+	const out = [];
+	let i = 0;
+	let j = 0;
+	while (i < n || j < m) if (i < n && j < m && a[i] === b[j]) {
+		i++;
+		j++;
+	} else if (j < m && (i >= n || lcs[i][j + 1] > lcs[i + 1][j])) {
+		if (b[j].trim()) out.push({
+			op: "+",
+			text: b[j]
+		});
+		j++;
+	} else {
+		if (a[i].trim()) out.push({
+			op: "-",
+			text: a[i]
+		});
+		i++;
+	}
+	return out;
+}
+function isPeerSender(from) {
+	return String(from || "").startsWith("peer:");
+}
+function isCutOffInvite(text) {
+	return /mfp[12]:/i.test(text || "") && !isPeerCode(text);
+}
+function exportDoneText(r, repo) {
+	if (r?.commits === 0) return "Nothing new to bring home yet";
+	const branch = r?.branch || "the branch";
+	const where = baseName$1(r?.repo_path || r?.target || repo);
+	const n = r?.commits;
+	const count = typeof n === "number" ? " (" + n + (n === 1 ? " commit)" : " commits)") : "";
+	return "Brought home as " + branch + " in " + where + count;
+}
+function exportErrorText(raw) {
+	const orig = String(raw || "").trim();
+	let m = orig;
+	while (/^export failed:\s*/i.test(m)) m = m.replace(/^export failed:\s*/i, "");
+	const lower = m.toLowerCase();
+	let why = m;
+	if (/target_repo|not a git repository|is not a directory|bad target repo/.test(lower)) why = "that folder isn't a git repository — pick your repo";
+	else if (lower.includes("branch not updated")) why = "the branch didn't move — pick the repo you shared from (it must share history with the shared folder)";
+	else if (lower.includes("inside the peer")) why = "that folder is the shared copy itself — pick your own repo";
+	else if (lower.includes("checked out in the target")) why = m.replace(/in the target/, "in that repo") + " — switch branches there first";
+	else if (m === orig && /^[A-Z]/.test(m)) return /[.!?]$/.test(m) ? m : m + ".";
+	why = why.replace(/[.\s]+$/, "");
+	return "Couldn't bring work home: " + (why || "something went wrong") + ".";
+}
+function disableConfirmText(links) {
+	const names = links.map((l) => l.peer_name || "your peer");
+	const who = names.length <= 1 ? names[0] || "everyone" : names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
+	const open = links.filter((l) => l.share_open ?? l.shared).length;
+	const pause = open ? " and pause " + open + (open === 1 ? " shared session" : " shared sessions") : "";
+	return "Disconnect from " + who + pause + "?";
+}
+function shareClosed(link) {
+	return !!link.shared && link.share_open === false;
+}
+function listenText(listen) {
+	if (!listen) return "direct connections closed";
+	if (listen.bound) return "direct connections open at " + listen.bound;
+	if (listen.bound === null) return "direct connections closed";
+	return "direct connections " + (listen.listening ? "open" : "closed") + " (" + listen.host + ":" + listen.port + ")";
+}
+function viewerGateText(peerName) {
+	return "Confirm the safety number with " + peerName + " in People first — then their screen, files and changes show here.";
+}
+function isPeerShareRow(row) {
+	if (row.peer_share) return true;
+	return /^peer-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9a-f]{6}(?:-\d+)?$/.test(String(row.title || ""));
+}
+var SAS_SEEN_KEY = "mf_peer_sas_seen";
+var SAS_NEW_KEY = "mf_peer_sas_new";
+function readMap(key) {
+	try {
+		const v = JSON.parse(localStorage.getItem(key) || "{}");
+		return v && typeof v === "object" ? v : {};
+	} catch {
+		return {};
+	}
+}
+function writeMap(key, map) {
+	try {
+		localStorage.setItem(key, JSON.stringify(map));
+	} catch {}
+}
+function rememberSas(linkId, sas) {
+	const seen = readMap(SAS_SEEN_KEY);
+	const fresh = readMap(SAS_NEW_KEY);
+	if (linkId in fresh) {
+		delete fresh[linkId];
+		writeMap(SAS_NEW_KEY, fresh);
+	}
+	if (seen[linkId] === sas) return;
+	seen[linkId] = sas;
+	writeMap(SAS_SEEN_KEY, seen);
+}
+function noteSasChanged(linkId, sas) {
+	if (!linkId) return;
+	const fresh = readMap(SAS_NEW_KEY);
+	fresh[linkId] = sas || "?";
+	writeMap(SAS_NEW_KEY, fresh);
+}
+function sasChanged(link) {
+	if (link.sas_verified !== false) return false;
+	const announced = readMap(SAS_NEW_KEY)[link.link_id];
+	if (announced && (announced === "?" || announced === link.sas)) return true;
+	const before = readMap(SAS_SEEN_KEY)[link.link_id];
+	return !!before && before !== link.sas;
+}
+function syncedText(ok, r, peerName) {
+	return r && r.synced === false ? ok + " — will sync when " + peerName + " reconnects" : ok;
+}
+//#endregion
+//#region src/lib/openSettings.ts
+var DEFAULT_SETTINGS_SCREEN = "connections";
+function openSettings(screen) {
+	useUi.getState().openDialogFor("settings", screen ?? null);
+}
+//#endregion
+//#region src/lib/peerActions.ts
+var PEER_JOIN_EVENT = "mf-peer-join";
+var pending$2 = null;
+function takePendingPeerJoin() {
+	const p = pending$2;
+	pending$2 = null;
+	return p;
+}
+function openJoinWithCode(code = "") {
+	pending$2 = { code };
+	openSettings(PEER_SCREEN);
+	document.dispatchEvent(new CustomEvent(PEER_JOIN_EVENT, { detail: { code } }));
+}
+//#endregion
+//#region src/lib/joinLink.ts
+var EXACT_CODE_RE = /^mfp[12]:[a-z2-7]+-[a-z2-7]{4}$/;
+function joinCodeFromLocation(href) {
+	let hash;
+	try {
+		hash = new URL(href).hash;
+	} catch {
+		return "";
+	}
+	const code = (new URLSearchParams(hash.replace(/^#/, "")).get("join") || "").trim().toLowerCase();
+	return EXACT_CODE_RE.test(code) ? code : "";
+}
+function installJoinLink() {
+	const take = () => {
+		const code = joinCodeFromLocation(window.location.href);
+		if (!code) return;
+		history.replaceState(history.state, "", window.location.pathname + window.location.search);
+		openJoinWithCode(code);
+	};
+	take();
+	window.addEventListener("hashchange", take);
+}
+//#endregion
 //#region src/lib/aliasSync.ts
-var installed = false;
+var installed$1 = false;
 function adopt(aliases) {
 	try {
 		localStorage.setItem("mf_aliases", JSON.stringify(aliases));
@@ -33996,8 +34425,8 @@ async function pullAliases() {
 	if (r?.aliases) adopt(r.aliases);
 }
 function installAliasSync(guest) {
-	if (installed) return;
-	installed = true;
+	if (installed$1) return;
+	installed$1 = true;
 	if (guest) pullAliases().catch(() => {});
 	else {
 		const aliases = useUi.getState().aliases;
@@ -34082,11 +34511,11 @@ var records = /* @__PURE__ */ new Map();
 var known = /* @__PURE__ */ new Map();
 var epochCounter = 0;
 var version$1 = 0;
-var listeners$5 = /* @__PURE__ */ new Set();
+var listeners$6 = /* @__PURE__ */ new Set();
 function subscribeHost(cb) {
-	listeners$5.add(cb);
+	listeners$6.add(cb);
 	return () => {
-		listeners$5.delete(cb);
+		listeners$6.delete(cb);
 	};
 }
 function hostVersion() {
@@ -34094,7 +34523,7 @@ function hostVersion() {
 }
 function bump() {
 	version$1++;
-	for (const cb of listeners$5) cb();
+	for (const cb of listeners$6) cb();
 }
 function buildTarget(extId, surfaceId, ref) {
 	return extId + ":" + surfaceId + (ref ? ":" + ref : "");
@@ -36203,376 +36632,6 @@ function showGroup(runId) {
 	else selectSession(to.row);
 }
 //#endregion
-//#region src/lib/peer.ts
-var CODE_RE = /mfp[12]:[a-z2-7]+-[a-z2-7]{4}/i;
-function isPeerCode(text) {
-	return CODE_RE.test(text || "");
-}
-function extractPeerCode(text) {
-	const m = CODE_RE.exec(text || "");
-	return m ? m[0].toLowerCase() : "";
-}
-function reconnectKind(text) {
-	const t = (text || "").trim();
-	if (!t) return null;
-	if (isPeerCode(t)) return "invite";
-	if (/^wss:\/\/[^\s]+$/i.test(t)) return "address";
-	if (/^(\[[0-9a-f:.]+\]|[A-Za-z0-9.-]+):[0-9]{1,5}$/.test(t)) return "address";
-	return null;
-}
-function newOpId() {
-	return "op" + Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
-}
-function joinPeerCode(code, opId) {
-	return api("/api/peer/join", { json: {
-		code: (code || "").trim(),
-		...opId ? { op_id: opId } : {}
-	} });
-}
-function fmtSecondsLeft(seconds) {
-	const s = Math.max(0, Math.floor(seconds));
-	return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
-}
-function inviteExpiryText(secondsLeft) {
-	return secondsLeft > 0 ? "Expires in " + fmtSecondsLeft(secondsLeft) : "Expired — create a new one";
-}
-function roleText(role) {
-	return role === "listener" ? "You invited them" : "You joined them";
-}
-function carrierText(carrier) {
-	if (carrier === "relay") return "through the relay";
-	if (carrier === "tcp") return "directly (same network or Tailscale)";
-	return "";
-}
-var PEER_SCREEN = "peer";
-function peerChip(inst) {
-	if (!inst.peer_share) return null;
-	const w = inst.peer_with || null;
-	const name = String(w?.name || "").trim();
-	const connected = w ? !!w.connected : null;
-	const label = name ? "Shared with " + name : "Shared";
-	const state = connected === null ? "" : connected ? " — connected" : " — offline";
-	return {
-		label,
-		connected,
-		title: (name ? "A shared folder with " + name : "A shared folder") + state + ". It runs in a sandbox: ship, push, the terminal and the IDE are off — use Bring work home in People."
-	};
-}
-function peerEventNote(event, data) {
-	const d = data || {};
-	const name = String(d.peer_name || "").trim() || "Your peer";
-	switch (event) {
-		case "peer.link_added": {
-			const sas = String(d.sas || "");
-			const tail = sas ? " — compare safety number " + sas : "";
-			const text = (d.role === "dialer" ? (d.repaired ? "Reconnected to " : "Connected to ") + name : d.repaired ? name + " reconnected" : name + " joined") + tail;
-			return {
-				text,
-				cls: "n-done",
-				toast: d.role === "dialer" ? "" : text
-			};
-		}
-		case "peer.link_removed": {
-			if (d.by !== "peer") return null;
-			const kept = String(d.kept_folder || "").trim();
-			const text = kept ? name + " unlinked — your shared folder is kept at " + kept : name + " unlinked";
-			return {
-				text,
-				cls: "n-info",
-				toast: text
-			};
-		}
-		case "peer.state": {
-			if (!d.sas_changed) return null;
-			const text = "New safety number after reconnecting — confirm it with " + name + " again";
-			return {
-				text,
-				cls: "n-warn",
-				toast: text
-			};
-		}
-		case "peer.message": {
-			const text = d.stored === false ? name + " sent a message (your shared agent has it too)" : name + " sent you a message";
-			const preview = clip$4(String(d.text_head || d.text || "").replace(/\s+/g, " ").trim(), 200);
-			return {
-				text: preview ? text + ": " + preview : text,
-				cls: "n-info",
-				toast: name + " sent you a message"
-			};
-		}
-		case "peer.relay_changed": {
-			const peers = Array.isArray(d.peers) ? d.peers.map(String).filter(Boolean) : [];
-			const text = "Your relay address changed — send " + (peers.length ? peers.join(", ") : "the people you invited") + " a fresh invite to reconnect";
-			return {
-				text,
-				cls: "n-warn",
-				toast: text
-			};
-		}
-		case "peer.joint_proposed": {
-			const text = name + " proposes a joint task — accept in People";
-			const brief = String(d.brief || "").trim();
-			return {
-				text: brief ? text + ": " + clip$4(brief, 80) : text,
-				cls: "n-info",
-				toast: text
-			};
-		}
-		case "peer.joint_contract":
-			if (d.kind !== "proposal" || !d.open) return null;
-			if (d.by === "peer") {
-				const text = name + "'s agent proposes a contract change";
-				return {
-					text,
-					cls: "n-info",
-					toast: text
-				};
-			}
-			if (d.by === "agent") return {
-				text: "",
-				cls: "n-info",
-				toast: "Your agent proposes a contract change — review it in People"
-			};
-			return null;
-		case "peer.joint_state": {
-			if (d.by !== "peer") return null;
-			const state = String(d.state || "");
-			const text = state === "active" ? name + " accepted the joint task" : state === "done" ? name + " marked the joint task done" : state === "cancelled" ? name + " cancelled the joint task" : "";
-			if (!text) return null;
-			return {
-				text,
-				cls: state === "cancelled" ? "n-warn" : "n-done",
-				toast: text
-			};
-		}
-		case "peer.joint_check": {
-			if (!d.notify) return null;
-			const text = String(d.text || "").trim() || name + "'s joint check: " + String(d.verdict || "");
-			return {
-				text,
-				cls: d.verdict === "failed" ? "n-warn" : "n-done",
-				toast: text
-			};
-		}
-		case "peer.mirror_updated": {
-			const text = name + "'s work updated " + mirrorBranchText(d.branch) + " in " + repoText(d);
-			return {
-				text,
-				cls: "n-done",
-				toast: text
-			};
-		}
-		case "peer.mirror_failed": {
-			const err = String(d.error || "").trim();
-			return {
-				text: "Couldn't mirror " + name + "'s work into " + repoText(d) + (err ? ": " + err : ""),
-				cls: "n-warn",
-				toast: "Couldn't mirror " + name + "'s work into " + repoText(d)
-			};
-		}
-		default: return null;
-	}
-}
-function clip$4(s, n) {
-	return s.length > n ? s.slice(0, n - 1).trimEnd() + "…" : s;
-}
-function baseName$1(path) {
-	const parts = String(path || "").replace(/[\\/]+$/, "").split(/[\\/]/);
-	return parts[parts.length - 1] || String(path || "");
-}
-function repoText(d) {
-	return String(d.repo_name || "").trim() || baseName$1(String(d.repo_path || "")) || "your repo";
-}
-function mirrorBranchText(branch) {
-	return String(branch || "").trim() || "its peer/ branch";
-}
-var PEER_LIVE_EVENTS = [
-	"peer.link_added",
-	"peer.link_removed",
-	"peer.state",
-	"peer.message",
-	"peer.relay_changed",
-	"peer.joint_proposed",
-	"peer.joint_state",
-	"peer.joint_contract",
-	"peer.mirror_updated",
-	"peer.mirror_failed"
-];
-var PEER_NEWS_EVENTS = [
-	"peer.link_added",
-	"peer.link_removed",
-	"peer.state",
-	"peer.message",
-	"peer.relay_changed",
-	"peer.joint_proposed",
-	"peer.joint_state",
-	"peer.joint_contract",
-	"peer.mirror_updated",
-	"peer.mirror_failed",
-	"peer.joint_check"
-];
-function jointPhase(joint) {
-	if (!joint) return "none";
-	if (joint.state === "active") return "active";
-	if (joint.state === "proposed") return joint.proposed_by === "peer" ? "proposed-by-peer" : "proposed-by-me";
-	return "ended";
-}
-var CONTRACT_TEMPLATE = [
-	"## What we're building",
-	"",
-	"",
-	"## Interfaces between the halves",
-	"",
-	"",
-	"## Who owns what",
-	"",
-	"",
-	"## Done means",
-	""
-].join("\n");
-function openProposals(joint) {
-	return (joint?.proposals || []).filter((p) => p.state === "open");
-}
-function jointPath(linkId, tail = "") {
-	return "/api/peer/links/" + encodeURIComponent(linkId) + "/joint" + tail;
-}
-function defaultMirrorBranch(peerName) {
-	return "peer/" + ((peerName || "work").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "work");
-}
-function isoSeconds(iso) {
-	return iso ? Date.parse(iso) / 1e3 : NaN;
-}
-function mirrorStatusText(m, peerName, now = Date.now() / 1e3) {
-	const where = m.branch + " in " + baseName$1(m.repo_path);
-	if (!m.enabled) return "Mirror is off.";
-	if (m.updating) return "Mirroring " + peerName + "'s work into " + where + " — updating now…";
-	const t = isoSeconds(m.last_at);
-	if (!m.last_head || !Number.isFinite(t)) return "Mirroring " + peerName + "'s work into " + where + " — waiting for their first change.";
-	const ago = relTime(t, { now });
-	return "Mirroring " + peerName + "'s work into " + where + " — last updated " + ago + " (" + m.last_head.slice(0, 7) + ").";
-}
-function contractLineDiff(before, after) {
-	const a = String(before || "").replace(/\r\n?/g, "\n").split("\n");
-	const b = String(after || "").replace(/\r\n?/g, "\n").split("\n");
-	const n = a.length;
-	const m = b.length;
-	const lcs = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
-	for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
-	const out = [];
-	let i = 0;
-	let j = 0;
-	while (i < n || j < m) if (i < n && j < m && a[i] === b[j]) {
-		i++;
-		j++;
-	} else if (j < m && (i >= n || lcs[i][j + 1] > lcs[i + 1][j])) {
-		if (b[j].trim()) out.push({
-			op: "+",
-			text: b[j]
-		});
-		j++;
-	} else {
-		if (a[i].trim()) out.push({
-			op: "-",
-			text: a[i]
-		});
-		i++;
-	}
-	return out;
-}
-function isPeerSender(from) {
-	return String(from || "").startsWith("peer:");
-}
-function isCutOffInvite(text) {
-	return /mfp[12]:/i.test(text || "") && !isPeerCode(text);
-}
-function exportDoneText(r, repo) {
-	if (r?.commits === 0) return "Nothing new to bring home yet";
-	const branch = r?.branch || "the branch";
-	const where = baseName$1(r?.repo_path || r?.target || repo);
-	const n = r?.commits;
-	const count = typeof n === "number" ? " (" + n + (n === 1 ? " commit)" : " commits)") : "";
-	return "Brought home as " + branch + " in " + where + count;
-}
-function exportErrorText(raw) {
-	const orig = String(raw || "").trim();
-	let m = orig;
-	while (/^export failed:\s*/i.test(m)) m = m.replace(/^export failed:\s*/i, "");
-	const lower = m.toLowerCase();
-	let why = m;
-	if (/target_repo|not a git repository|is not a directory|bad target repo/.test(lower)) why = "that folder isn't a git repository — pick your repo";
-	else if (lower.includes("branch not updated")) why = "the branch didn't move — pick the repo you shared from (it must share history with the shared folder)";
-	else if (lower.includes("inside the peer")) why = "that folder is the shared copy itself — pick your own repo";
-	else if (lower.includes("checked out in the target")) why = m.replace(/in the target/, "in that repo") + " — switch branches there first";
-	else if (m === orig && /^[A-Z]/.test(m)) return /[.!?]$/.test(m) ? m : m + ".";
-	why = why.replace(/[.\s]+$/, "");
-	return "Couldn't bring work home: " + (why || "something went wrong") + ".";
-}
-function disableConfirmText(links) {
-	const names = links.map((l) => l.peer_name || "your peer");
-	const who = names.length <= 1 ? names[0] || "everyone" : names.slice(0, -1).join(", ") + " and " + names[names.length - 1];
-	const open = links.filter((l) => l.share_open ?? l.shared).length;
-	const pause = open ? " and pause " + open + (open === 1 ? " shared session" : " shared sessions") : "";
-	return "Disconnect from " + who + pause + "?";
-}
-function shareClosed(link) {
-	return !!link.shared && link.share_open === false;
-}
-function listenText(listen) {
-	if (!listen) return "direct connections closed";
-	if (listen.bound) return "direct connections open at " + listen.bound;
-	if (listen.bound === null) return "direct connections closed";
-	return "direct connections " + (listen.listening ? "open" : "closed") + " (" + listen.host + ":" + listen.port + ")";
-}
-function viewerGateText(peerName) {
-	return "Confirm the safety number with " + peerName + " in People first — then their screen, files and changes show here.";
-}
-function isPeerShareRow(row) {
-	if (row.peer_share) return true;
-	return /^peer-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9a-f]{6}(?:-\d+)?$/.test(String(row.title || ""));
-}
-var SAS_SEEN_KEY = "mf_peer_sas_seen";
-var SAS_NEW_KEY = "mf_peer_sas_new";
-function readMap(key) {
-	try {
-		const v = JSON.parse(localStorage.getItem(key) || "{}");
-		return v && typeof v === "object" ? v : {};
-	} catch {
-		return {};
-	}
-}
-function writeMap(key, map) {
-	try {
-		localStorage.setItem(key, JSON.stringify(map));
-	} catch {}
-}
-function rememberSas(linkId, sas) {
-	const seen = readMap(SAS_SEEN_KEY);
-	const fresh = readMap(SAS_NEW_KEY);
-	if (linkId in fresh) {
-		delete fresh[linkId];
-		writeMap(SAS_NEW_KEY, fresh);
-	}
-	if (seen[linkId] === sas) return;
-	seen[linkId] = sas;
-	writeMap(SAS_SEEN_KEY, seen);
-}
-function noteSasChanged(linkId, sas) {
-	if (!linkId) return;
-	const fresh = readMap(SAS_NEW_KEY);
-	fresh[linkId] = sas || "?";
-	writeMap(SAS_NEW_KEY, fresh);
-}
-function sasChanged(link) {
-	if (link.sas_verified !== false) return false;
-	const announced = readMap(SAS_NEW_KEY)[link.link_id];
-	if (announced && (announced === "?" || announced === link.sas)) return true;
-	const before = readMap(SAS_SEEN_KEY)[link.link_id];
-	return !!before && before !== link.sas;
-}
-function syncedText(ok, r, peerName) {
-	return r && r.synced === false ? ok + " — will sync when " + peerName + " reconnects" : ok;
-}
-//#endregion
 //#region src/lib/fleet.ts
 var CODE_ALPHABET = ["0123456789", "ABCDEFGHJKMNPQRSTVWXYZ"].join("");
 function normalizeCode(s) {
@@ -37119,26 +37178,6 @@ function approvableRequest(event, data) {
 		code: String(data.code || ""),
 		host: String(data.host || data.device || "A device")
 	};
-}
-//#endregion
-//#region src/lib/openSettings.ts
-var DEFAULT_SETTINGS_SCREEN = "connections";
-function openSettings(screen) {
-	useUi.getState().openDialogFor("settings", screen ?? null);
-}
-//#endregion
-//#region src/lib/peerActions.ts
-var PEER_JOIN_EVENT = "mf-peer-join";
-var pending$2 = null;
-function takePendingPeerJoin() {
-	const p = pending$2;
-	pending$2 = null;
-	return p;
-}
-function openJoinWithCode(code = "") {
-	pending$2 = { code };
-	openSettings(PEER_SCREEN);
-	document.dispatchEvent(new CustomEvent(PEER_JOIN_EVENT, { detail: { code } }));
 }
 //#endregion
 //#region src/lib/deviceActions.ts
@@ -37836,7 +37875,7 @@ var micState = {
 	caption: "",
 	unsure: ""
 };
-var listeners$4 = /* @__PURE__ */ new Set();
+var listeners$5 = /* @__PURE__ */ new Set();
 function publishMicState(patch) {
 	const next = {
 		...micState,
@@ -37844,15 +37883,15 @@ function publishMicState(patch) {
 	};
 	if (next.listening === micState.listening && next.title === micState.title && next.caption === micState.caption && next.unsure === micState.unsure) return;
 	micState = next;
-	listeners$4.forEach((l) => l());
+	listeners$5.forEach((l) => l());
 }
 function getMicState() {
 	return micState;
 }
 function subscribeMicState(cb) {
-	listeners$4.add(cb);
+	listeners$5.add(cb);
 	return () => {
-		listeners$4.delete(cb);
+		listeners$5.delete(cb);
 	};
 }
 //#endregion
@@ -38451,7 +38490,7 @@ function wordsFrom(raw, fallback) {
 var defaults = BUILTIN_VOICE_WORDS;
 var current$1 = BUILTIN_VOICE_WORDS;
 var version = 0;
-var listeners$3 = /* @__PURE__ */ new Set();
+var listeners$4 = /* @__PURE__ */ new Set();
 function voiceWords() {
 	return current$1;
 }
@@ -38465,11 +38504,11 @@ function setVoiceWords(words, wordsDefault) {
 	defaults = d;
 	current$1 = w;
 	version++;
-	for (const fn of [...listeners$3]) fn(w);
+	for (const fn of [...listeners$4]) fn(w);
 }
 function onVoiceWords(fn) {
-	listeners$3.add(fn);
-	return () => void listeners$3.delete(fn);
+	listeners$4.add(fn);
+	return () => void listeners$4.delete(fn);
 }
 function applyVoiceView(j) {
 	const v = j && typeof j === "object" ? j : {};
@@ -48632,7 +48671,7 @@ async function expectBackgroundJob(title, jobId, secs) {
 var KEY = "mf_codemap_seen";
 var MAX_TITLES = 200;
 var cache = null;
-var listeners$2 = /* @__PURE__ */ new Set();
+var listeners$3 = /* @__PURE__ */ new Set();
 function load() {
 	if (cache) return cache;
 	try {
@@ -48667,11 +48706,11 @@ function markCodemapSeen(title, ts) {
 	try {
 		localStorage.setItem(KEY, JSON.stringify(next));
 	} catch {}
-	listeners$2.forEach((l) => l());
+	listeners$3.forEach((l) => l());
 }
 function subscribeCodemapSeen(cb) {
-	listeners$2.add(cb);
-	return () => listeners$2.delete(cb);
+	listeners$3.add(cb);
+	return () => listeners$3.delete(cb);
 }
 function redZoneChip(rz, seenAt) {
 	if (!rz) return null;
@@ -49313,16 +49352,17 @@ function DriveButton({ inst, me }) {
 //#region src/lib/guestFocus.ts
 var focus = {};
 var following = null;
-var listeners$1 = /* @__PURE__ */ new Set();
-var bridged = false;
-function notify() {
-	for (const l of listeners$1) l();
+var listeners$2 = /* @__PURE__ */ new Set();
+var bridged$1 = false;
+function notify$1() {
+	for (const l of listeners$2) l();
 }
 function guestName(label) {
 	return (label || "").trim() || "Guest";
 }
 function focusFromLinks(prev, links) {
 	const next = {};
+	for (const f of Object.values(prev)) if (isPeerFocus(f.link)) next[f.link] = f;
 	for (const l of links || []) {
 		if (!l?.id || !l.focus?.title) continue;
 		next[l.id] = {
@@ -49342,11 +49382,22 @@ function feedGuestFocus(links) {
 	if (next === focus) return;
 	focus = next;
 	if (following && !focus[following]) following = null;
-	notify();
+	notify$1();
+}
+function isPeerFocus(link) {
+	return link.startsWith("peer:");
 }
 function applyFocusEvent(env) {
 	const d = env?.data || {};
 	const link = String(d.link || "");
+	if (link && d.left) {
+		if (!focus[link]) return "";
+		const { [link]: _gone, ...rest } = focus;
+		focus = rest;
+		if (following === link) following = null;
+		notify$1();
+		return "";
+	}
 	const title = String(d.title || env?.session || "");
 	if (!link || !title) return "";
 	focus = {
@@ -49358,14 +49409,14 @@ function applyFocusEvent(env) {
 			ts: Number(env.ts) || Date.now() / 1e3
 		}
 	};
-	notify();
+	notify$1();
 	if (following === link) selectSession(title, { noKeyboard: true });
 	return d.joined ? `${guestName(String(d.label || ""))} joined — on ${displayName(title)}` : "";
 }
 function installGuestFocusEvents() {
 	const ev = window.mindflock?.events;
-	if (bridged || !ev) return;
-	bridged = true;
+	if (bridged$1 || !ev) return;
+	bridged$1 = true;
 	ev.subscribe("guest.focus_changed", (env) => {
 		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
 		const say = applyFocusEvent(env);
@@ -49376,25 +49427,259 @@ function toggleFollow(link) {
 	following = following === link ? null : link;
 	const f = following ? focus[following] : null;
 	if (f) selectSession(f.title, { noKeyboard: true });
-	notify();
+	notify$1();
 	return following === link;
+}
+function subscribe$2(l) {
+	listeners$2.add(l);
+	return () => listeners$2.delete(l);
+}
+var snap$1 = {
+	focus,
+	following
+};
+function snapshot$1() {
+	if (snap$1.focus !== focus || snap$1.following !== following) snap$1 = {
+		focus,
+		following
+	};
+	return snap$1;
+}
+function useGuestFocus() {
+	return (0, import_react.useSyncExternalStore)(subscribe$2, snapshot$1, snapshot$1);
+}
+//#endregion
+//#region src/lib/chat.ts
+var EMPTY_CHAT = {
+	windows: [],
+	closedTitles: {},
+	noPop: {}
+};
+var CHAT_POLL_MS = 15e3;
+var CHAT_MAX = 2e3;
+function seq(id) {
+	return Number(String(id || "").replace(/^c/, "")) || 0;
+}
+function chatable(title) {
+	return !!title && !title.includes("::");
+}
+function put(s, w) {
+	const rest = s.windows.filter((x) => x.title !== w.title);
+	return {
+		...s,
+		windows: [...rest, w]
+	};
+}
+function openWindow(s, title, mode = "open") {
+	const cur = s.windows.find((w) => w.title === title);
+	if (mode === "min") {
+		if (cur) return s;
+		return put(s, {
+			title,
+			mode: "min",
+			unread: 0
+		});
+	}
+	if (cur && cur.mode === "open" && cur.unread === 0) return s;
+	return put(s, {
+		title,
+		mode: "open",
+		unread: 0
+	});
+}
+function minimizeWindow(s, title) {
+	const cur = s.windows.find((w) => w.title === title);
+	if (!cur || cur.mode === "min") return s;
+	return {
+		...s,
+		windows: s.windows.map((w) => w.title === title ? {
+			...w,
+			mode: "min"
+		} : w)
+	};
+}
+function closeWindow(s, title, people = []) {
+	const noPop = { ...s.noPop };
+	for (const p of people) if (p) noPop[p + "|" + title] = true;
+	return {
+		windows: s.windows.filter((w) => w.title !== title),
+		closedTitles: {
+			...s.closedTitles,
+			[title]: true
+		},
+		noPop
+	};
+}
+function onJoined(s, title, person) {
+	if (!chatable(title) || s.noPop[person + "|" + title]) return s;
+	return openWindow(s, title, s.closedTitles[title] ? "min" : "open");
+}
+function onMessage(s, title, opts = {}) {
+	if (!chatable(title)) return s;
+	const cur = s.windows.find((w) => w.title === title);
+	if (cur) {
+		if (cur.mode === "open") return s;
+		return {
+			...s,
+			windows: s.windows.map((w) => w.title === title ? {
+				...w,
+				unread: w.unread + 1
+			} : w)
+		};
+	}
+	if (opts.guest) return put(s, {
+		title,
+		mode: "open",
+		unread: 0
+	});
+	return put(s, {
+		title,
+		mode: "min",
+		unread: 1
+	});
+}
+function mergeMessages(prev, incoming) {
+	const have = new Set(prev.map((m) => m.id));
+	const added = [];
+	for (const m of incoming || []) {
+		if (!m?.id || have.has(m.id)) continue;
+		have.add(m.id);
+		added.push(m);
+	}
+	if (!added.length) return {
+		list: prev,
+		added
+	};
+	return {
+		list: [...prev, ...added].sort((a, b) => seq(a.id) - seq(b.id)),
+		added
+	};
+}
+var state = EMPTY_CHAT;
+var msgs = {};
+var me = null;
+var isGuest = false;
+var bridged = false;
+var loading = /* @__PURE__ */ new Map();
+var listeners$1 = /* @__PURE__ */ new Set();
+function notify() {
+	for (const l of listeners$1) l();
+}
+function setState(next) {
+	if (next === state) return;
+	state = next;
+	notify();
+}
+function loadChat(title, count = false) {
+	if (!chatable(title)) return Promise.resolve();
+	const busy = loading.get(title);
+	if (busy) return busy;
+	const prev = msgs[title];
+	const since = prev?.length ? prev[prev.length - 1].id : "";
+	const p = instApi(title, "/chat" + (since ? "?since=" + encodeURIComponent(since) : "")).then((r) => {
+		if (r?.me?.id) me = r.me;
+		const { list, added } = mergeMessages(msgs[title] || [], r?.messages || []);
+		if (list !== msgs[title]) msgs = {
+			...msgs,
+			[title]: list
+		};
+		if (count && prev) {
+			for (const m of added) if (m.from !== me?.id) state = onMessage(state, title, { guest: isGuest });
+		}
+		notify();
+	}).catch(() => {}).finally(() => loading.delete(title));
+	loading.set(title, p);
+	return p;
+}
+function openChat(title) {
+	if (!chatable(title)) return;
+	setState(openWindow(state, title, "open"));
+	loadChat(title);
+}
+function minimizeChat(title) {
+	setState(minimizeWindow(state, title));
+}
+function closeChat(title, people = []) {
+	setState(closeWindow(state, title, people));
+}
+async function sendChat(title, text) {
+	const body = String(text || "").trim();
+	if (!body) return "";
+	try {
+		const m = await instApi(title, "/chat", { json: { text: body } });
+		if (m?.from) me = me || {
+			id: m.from,
+			name: m.name
+		};
+		msgs = {
+			...msgs,
+			[title]: mergeMessages(msgs[title] || [], [m]).list
+		};
+		notify();
+		return "";
+	} catch (e) {
+		return e instanceof Error ? e.message : "Couldn't send that.";
+	}
+}
+async function applyChatEvent(env) {
+	const title = String(env?.session || "");
+	const m = env?.data || {};
+	if (!chatable(title) || !m?.id) return;
+	const known = !!msgs[title];
+	const isNew = !(msgs[title] || []).some((x) => x.id === m.id);
+	if (!known || !me) await loadChat(title);
+	msgs = {
+		...msgs,
+		[title]: mergeMessages(msgs[title] || [], [m]).list
+	};
+	if (isNew && m.from !== me?.id) state = onMessage(state, title, { guest: isGuest });
+	notify();
+}
+function applyJoinEvent(env) {
+	const d = env?.data || {};
+	const title = String(d.title || env?.session || "");
+	if (isGuest || !d.joined || !d.link || !title) return;
+	const next = onJoined(state, title, String(d.link));
+	if (next === state) return;
+	setState(next);
+	loadChat(title);
+}
+function installChatEvents(guest) {
+	isGuest = guest;
+	const ev = window.mindflock?.events;
+	if (bridged) return true;
+	if (!ev) return false;
+	bridged = true;
+	const live = (env) => !(typeof ev.isReplay === "function" && ev.isReplay(env));
+	ev.subscribe("session.chat", (env) => {
+		if (live(env)) applyChatEvent(env);
+	});
+	ev.subscribe("guest.focus_changed", (env) => {
+		if (live(env)) applyJoinEvent(env);
+	});
+	return true;
+}
+function pollChats() {
+	for (const w of state.windows) loadChat(w.title, true);
 }
 function subscribe$1(l) {
 	listeners$1.add(l);
 	return () => listeners$1.delete(l);
 }
 var snap = {
-	focus,
-	following
+	state,
+	msgs,
+	me
 };
 function snapshot() {
-	if (snap.focus !== focus || snap.following !== following) snap = {
-		focus,
-		following
+	if (snap.state !== state || snap.msgs !== msgs || snap.me !== me) snap = {
+		state,
+		msgs,
+		me
 	};
 	return snap;
 }
-function useGuestFocus() {
+function useChat() {
 	return (0, import_react.useSyncExternalStore)(subscribe$1, snapshot, snapshot);
 }
 //#endregion
@@ -49403,9 +49688,9 @@ function GuestPills({ title }) {
 	const { focus, following } = useGuestFocus();
 	const here = Object.values(focus).filter((f) => f.title === title);
 	if (!here.length) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 		className: "guest-pills",
-		children: here.map((f) => {
+		children: [here.map((f) => {
 			const name = guestName(f.label);
 			const on = following === f.link;
 			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
@@ -49421,8 +49706,138 @@ function GuestPills({ title }) {
 				onDoubleClick: (e) => e.stopPropagation(),
 				children: [on ? "▶ " : "", name]
 			}, f.link);
-		})
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "guest-pill guest-pill-chat",
+			title: "Open the chat for this session",
+			"aria-label": "Open the chat for this session",
+			onClick: (e) => {
+				e.stopPropagation();
+				openChat(title);
+			},
+			onDoubleClick: (e) => e.stopPropagation(),
+			children: "💬"
+		})]
 	});
+}
+//#endregion
+//#region src/lib/peerSessions.ts
+function isPeerRow(i) {
+	return !!i && !!i.remote_peer;
+}
+function modeWords(mode) {
+	return mode === "gated" ? "gated to its folder" : "full";
+}
+var MODE_CHOICES = [{
+	mode: "gated",
+	label: "Gated to its folder (sandboxed copy)",
+	hint: "They get a sandboxed session on a copy of its folder and branch — nothing else on this machine."
+}, {
+	mode: "full",
+	label: "Full join (they type into it as it is)",
+	hint: "They type into this very session, on this machine, as if they were you."
+}];
+function peerRowTooltip(i) {
+	return `shared by ${i.device_label || i.device || "them"} · ${modeWords(String(i.peer_mode || ""))}`;
+}
+function peerRowChip(i) {
+	const who = i.device_label || i.device || "them";
+	return {
+		label: `⇄ ${who} · ${i.peer_mode === "gated" ? "gated" : "full"}`,
+		connected: null,
+		title: `${peerRowTooltip(i)} — it runs on ${who}'s machine: open it to type into it; ship, push, rename and the rest are theirs.`
+	};
+}
+function peerGroups(rows) {
+	const out = [];
+	const byDev = /* @__PURE__ */ new Map();
+	for (const r of rows) {
+		if (!isPeerRow(r) || !r.device) continue;
+		let g = byDev.get(r.device);
+		if (!g) {
+			g = {
+				device: r.device,
+				label: r.device_label || r.device,
+				link: r.peer_link || "",
+				rows: []
+			};
+			byDev.set(r.device, g);
+			out.push(g);
+		}
+		g.rows.push(r);
+	}
+	return out;
+}
+function shareableSessions(instances) {
+	return (instances || []).filter((i) => !i.device && !i.hidden_by && !i.pending && !i.locked && !i.parent && !isPeerRow(i));
+}
+function canShare(opts) {
+	if (opts.busy || !opts.title) return false;
+	return opts.mode === "gated" || opts.understood;
+}
+function mineLine(m) {
+	const bits = [m.title, modeWords(m.mode)];
+	if (!m.live) bits.push("closed");
+	else if (m.open) bits.push("they have it open");
+	else if (m.focused) bits.push("they are looking at it");
+	return bits.join(" · ");
+}
+function theirsLine(t) {
+	const bits = [t.name || t.title, modeWords(t.mode)];
+	if (t.activity) bits.push(t.activity);
+	return bits.join(" · ");
+}
+function base$1(linkId) {
+	return "/api/peer/links/" + encodeURIComponent(linkId) + "/sessions";
+}
+function fetchPeerSessions(linkId) {
+	return api(base$1(linkId));
+}
+function sharePeerSession(linkId, title, mode) {
+	return api(base$1(linkId), { json: {
+		title,
+		mode
+	} });
+}
+function withdrawPeerSession(linkId, title) {
+	return api(base$1(linkId) + "/" + encodeURIComponent(title), { method: "DELETE" });
+}
+var FOCUS_HEARTBEAT_MS = 3e4;
+function peerRowTitle(title, rows) {
+	if (!title || !title.includes("::")) return "";
+	return rows().some((r) => r.title === title && isPeerRow(r)) ? title : "";
+}
+function post$1(title, body) {
+	api("/api/instances/" + encodeURIComponent(title) + "/focus", { json: body }).catch(() => {});
+}
+var installed = null;
+function installPeerFocus(rows) {
+	if (installed) return installed;
+	let current = "";
+	let timer = null;
+	const sync = (focused) => {
+		const next = peerRowTitle(focused, rows);
+		if (next === current) return;
+		if (current) post$1(current, { left: true });
+		if (timer) clearInterval(timer);
+		timer = null;
+		current = next;
+		if (next) {
+			post$1(next, {});
+			timer = setInterval(() => post$1(next, {}), FOCUS_HEARTBEAT_MS);
+		}
+	};
+	sync(useUi.getState().focused);
+	const unsub = useUi.subscribe((s) => sync(s.focused));
+	const stop = () => {
+		unsub();
+		if (timer) clearInterval(timer);
+		if (current) post$1(current, { left: true });
+		current = "";
+		installed = null;
+	};
+	installed = stop;
+	return stop;
 }
 //#endregion
 //#region src/components/dialogs/VerdictChip.tsx
@@ -50083,7 +50498,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 		leadAsks: !!lchip || isLead && !!leadRun && RUN_DONE_STATES.has(leadRun.state)
 	});
 	const rz = extra.rz;
-	const peer = peerChip(inst);
+	const peer = isPeerRow(inst) ? peerRowChip(inst) : peerChip(inst);
 	const bg = pending ? null : backgroundChip(inst);
 	const act = async (fn, e) => {
 		e?.stopPropagation();
@@ -50497,7 +50912,7 @@ var SidebarRow = (0, import_react.memo)(function SidebarRow({ inst, idx, numbere
 							"aria-hidden": "true"
 						}), peer.label]
 					}),
-					peer && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(JointVerdictChip, {
+					peer && !isPeerRow(inst) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(JointVerdictChip, {
 						linkId: inst.peer_with?.link_id,
 						peerName: inst.peer_with?.name,
 						where: "row"
@@ -54104,6 +54519,9 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 		return () => window.removeEventListener(MODAL_OPEN_EVENT, on);
 	}, []);
 	const { data: instances = [] } = useInstances();
+	const instancesRef = (0, import_react.useRef)(instances);
+	instancesRef.current = instances;
+	(0, import_react.useEffect)(() => installPeerFocus(() => instancesRef.current), []);
 	const { data: devices } = useDevices();
 	const ui = useUi();
 	const doctorWarn = useDoctorWarn();
@@ -54199,12 +54617,13 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 		ui.order
 	]);
 	const remoteDevs = devices?.devices || [];
-	const grouped = remoteDevs.length > 0;
+	const peers = (0, import_react.useMemo)(() => peerGroups(filtered), [filtered]);
+	const grouped = remoteDevs.length > 0 || peers.length > 0;
 	const localRows = filtered.filter((i) => !i.device);
 	const byDev = (0, import_react.useMemo)(() => {
 		const m = /* @__PURE__ */ new Map();
 		for (const i of filtered) {
-			if (!i.device) continue;
+			if (!i.device || isPeerRow(i)) continue;
 			if (!m.has(i.device)) m.set(i.device, []);
 			m.get(i.device).push(i);
 		}
@@ -54296,7 +54715,11 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 			rail: toRail(byDev.get(dkey) || [], [])
 		};
 	});
-	const displayedKeys = grouped ? (ui.collapsedDevices.has("__self") ? [] : splitKeys(localSplit)).concat(...devRails.map(({ dkey, rail }) => ui.collapsedDevices.has(dkey) ? [] : rail.map((r) => r.key))) : splitKeys(localSplit);
+	const peerRails = peers.map((g) => ({
+		dkey: "peer:" + g.device,
+		rail: toRail(g.rows, [])
+	}));
+	const displayedKeys = grouped ? (ui.collapsedDevices.has("__self") ? [] : splitKeys(localSplit)).concat(...devRails.map(({ dkey, rail }) => ui.collapsedDevices.has(dkey) ? [] : rail.map((r) => r.key)), ...peerRails.map(({ dkey, rail }) => ui.collapsedDevices.has(dkey) ? [] : rail.map((r) => r.key))) : splitKeys(localSplit);
 	const railSig = JSON.stringify(displayedKeys);
 	(0, import_react.useEffect)(() => {
 		useUi.getState().setRailOrder(displayedKeys);
@@ -54439,6 +54862,25 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 										action,
 										onToggle: () => ui.toggleDeviceCollapsed(dkey),
 										children: !collapsed && renderRail(devRails[di].rail)
+									}, dkey);
+								}),
+								peers.map((g, pi) => {
+									const dkey = peerRails[pi].dkey;
+									const collapsed = ui.collapsedDevices.has(dkey);
+									const modes = Array.from(new Set(g.rows.map((r) => modeWords(String(r.peer_mode || "")))));
+									return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DeviceSection, {
+										devKey: dkey,
+										label: g.label,
+										badge: String(g.rows.length),
+										badgeOff: false,
+										collapsed,
+										title: `Shared by ${g.label} over a peer link · ${modes.join(", ")}`,
+										showForget: false,
+										peer: g.label,
+										note: "",
+										action: null,
+										onToggle: () => ui.toggleDeviceCollapsed(dkey),
+										children: !collapsed && renderRail(peerRails[pi].rail)
 									}, dkey);
 								})
 							] }) : renderLocal(), ui.filter && !filtered.length && !winFiltered.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
@@ -54593,6 +55035,12 @@ function DeviceHeader(props) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "dev-name",
 					children: props.label
+				}),
+				props.peer && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "dev-peer",
+					title: `Shared by ${props.peer} over a peer link`,
+					"aria-label": `Shared by ${props.peer} over a peer link`,
+					children: "⇄"
 				}),
 				props.member && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "dev-member",
@@ -96029,6 +96477,264 @@ function MessageThread(props) {
 	});
 }
 //#endregion
+//#region src/components/settings/screens/peer/ShareSessions.tsx
+var EMPTY = {
+	mine: [],
+	theirs: [],
+	connected: false
+};
+function usePeerSessions(linkId, tick) {
+	const [view, setView] = (0, import_react.useState)(EMPTY);
+	const [err, setErr] = (0, import_react.useState)("");
+	const load = (0, import_react.useCallback)(async () => {
+		try {
+			setView(await fetchPeerSessions(linkId));
+			setErr("");
+		} catch (e) {
+			setErr(errText$2(e));
+		}
+	}, [linkId]);
+	(0, import_react.useEffect)(() => {
+		load();
+	}, [load, tick]);
+	return {
+		view,
+		setView,
+		err,
+		reload: load
+	};
+}
+function ShareSessionsDialog(props) {
+	const { link, sandbox, view, onChange, onClose } = props;
+	const { data: instances } = useInstances();
+	const sessions = (0, import_react.useMemo)(() => shareableSessions(instances), [instances]);
+	const [title, setTitle] = (0, import_react.useState)("");
+	const [mode, setMode] = (0, import_react.useState)(sandbox ? "gated" : "full");
+	const [understood, setUnderstood] = (0, import_react.useState)(false);
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [err, setErr] = (0, import_react.useState)("");
+	const shared = new Set(view.mine.map((m) => m.title));
+	const ok = canShare({
+		title,
+		mode,
+		understood,
+		busy: !!busy
+	});
+	const share = async () => {
+		if (!ok) return;
+		setBusy("share");
+		setErr("");
+		try {
+			onChange(await sharePeerSession(link.link_id, title, mode));
+			toast(mode === "full" ? `${link.peer_name} can open ${displayName(title)} now` : `Sharing a sandboxed copy of ${displayName(title)} with ${link.peer_name}`);
+			setTitle("");
+			setUnderstood(false);
+		} catch (e) {
+			setErr(errText$2(e));
+		} finally {
+			setBusy("");
+		}
+	};
+	const withdraw = async (t) => {
+		setBusy("withdraw:" + t);
+		setErr("");
+		try {
+			onChange(await withdrawPeerSession(link.link_id, t));
+		} catch (e) {
+			setErr(errText$2(e));
+		} finally {
+			setBusy("");
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		id: "peer-sessions-share",
+		role: "dialog",
+		"aria-modal": "true",
+		portal: true,
+		onClose,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+			id: "peer-sessions-share-form",
+			onSubmit: (e) => {
+				e.preventDefault();
+				share();
+			},
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h2", { children: ["Share a session with ", link.peer_name] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "set-hint",
+					children: [
+						"It shows on ",
+						link.peer_name,
+						"’s rail under your name; they open it and type into it. Withdraw it here whenever you like."
+					]
+				}),
+				sessions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "Start a session first — you share sessions that exist."
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "peer-guest-pick",
+					"aria-label": "Sessions",
+					children: sessions.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "radio",
+							name: "peer-share-session",
+							checked: title === s.title,
+							onChange: () => setTitle(s.title),
+							"data-session": s.title
+						}),
+						" ",
+						displayName(s.title),
+						s.branch && s.branch !== s.title ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "set-hint",
+							children: [" · ", s.branch]
+						}) : null,
+						shared.has(s.title) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: " · shared"
+						}) : null
+					] }) }, s.title))
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", {
+					className: "peer-share-modes",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("legend", {
+						className: "set-hint",
+						children: "How"
+					}), MODE_CHOICES.map((c) => {
+						const off = c.mode === "gated" && !sandbox;
+						return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: off ? "muted" : void 0,
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: "radio",
+									name: "peer-share-mode",
+									value: c.mode,
+									checked: mode === c.mode,
+									disabled: off,
+									onChange: () => setMode(c.mode)
+								}),
+								" ",
+								c.label,
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "set-hint peer-share-mode-hint",
+									children: off ? "Needs Linux or macOS (the sandbox)." : c.hint
+								})
+							]
+						}, c.mode);
+					})]
+				}),
+				mode === "gated" && link.shared && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "set-hint",
+					children: "This link already has a shared folder: a link carries one gated session, so withdraw it first — or share this one in full."
+				}),
+				mode === "full" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "peer-danger peer-guest-warn",
+					id: "peer-sessions-warn",
+					role: "alert",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("strong", { children: [
+						"This lets ",
+						link.peer_name,
+						" act on your computer."
+					] }), " In that session they type at your agent as you: they can read and change the files in its worktree, run commands, and spend your agent’s credits — exactly what a guest link gives. Only share a session with someone you would hand your keyboard to, and withdraw it when you’re done."]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "peer-guest-ack",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							type: "checkbox",
+							id: "peer-sessions-ack",
+							checked: understood,
+							onChange: (e) => setUnderstood(e.target.checked)
+						}),
+						" ",
+						"I understand this lets ",
+						link.peer_name,
+						" act on my machine"
+					]
+				})] }),
+				err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "error",
+					children: err
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "modal-actions",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "peer-sessions-cancel",
+						onClick: onClose,
+						children: "Close"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "submit",
+						className: "btn-primary",
+						id: "peer-sessions-share-btn",
+						disabled: !ok,
+						title: !title ? "Pick a session" : mode === "full" && !understood ? "Tick “I understand” first" : void 0,
+						children: busy === "share" ? "Sharing…" : "Share"
+					})]
+				}),
+				view.mine.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+					className: "peer-share-sub",
+					children: ["Shared with ", link.peer_name]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+					className: "peer-guest-links",
+					id: "peer-sessions-mine",
+					children: view.mine.map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+						className: "peer-row",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "peer-grow",
+							children: mineLine(m)
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn peer-danger",
+							disabled: !!busy,
+							"data-withdraw": m.title,
+							onClick: () => void withdraw(m.title),
+							children: busy === "withdraw:" + m.title ? "Withdrawing…" : "Withdraw"
+						})]
+					}, m.title))
+				})] })
+			]
+		})
+	});
+}
+function TheirSessions(props) {
+	const { link, view } = props;
+	if (view.their_unsupported) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+		className: "set-hint",
+		id: "peer-sessions-theirs",
+		children: [link.peer_name, " can’t share sessions yet — they need to update MindFlock."]
+	});
+	if (!view.theirs.length) return null;
+	const rowOf = (t) => (queryClient.getQueryData(["instances"]) || []).find((i) => isPeerRow(i) && i.peer_link === link.link_id && i.title.endsWith("::" + t));
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "peer-sessions-theirs",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "set-hint",
+			children: [link.peer_name, " shares with you:"]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+			className: "peer-guest-links",
+			children: view.theirs.map((t) => {
+				return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					className: "peer-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "peer-grow",
+						children: theirsLine(t)
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						title: "Open it on your rail",
+						onClick: () => {
+							const row = rowOf(t.title);
+							if (!row) return toast("It shows on your rail in a moment");
+							selectSession(row.title);
+							useUi.getState().closeDialog();
+						},
+						children: "Open"
+					})]
+				}, t.title);
+			})
+		})]
+	});
+}
+//#endregion
 //#region src/components/settings/screens/peer/PeerLinkCard.tsx
 var PERM_LABELS = [
 	["messages", "message me"],
@@ -96048,6 +96754,8 @@ function PeerLinkCard(props) {
 	const [exported, setExported] = (0, import_react.useState)(null);
 	const [busyExport, setBusyExport] = (0, import_react.useState)(false);
 	const [reopenErr, setReopenErr] = (0, import_react.useState)("");
+	const sessions = usePeerSessions(link.link_id, tick);
+	const [sharingOpen, setSharingOpen] = (0, import_react.useState)(false);
 	const [busyReopen, setBusyReopen] = (0, import_react.useState)(false);
 	const [confirm, setConfirm] = (0, import_react.useState)("");
 	const [deleteFiles, setDeleteFiles] = (0, import_react.useState)(false);
@@ -96415,6 +97123,36 @@ function PeerLinkCard(props) {
 					link.peer_name,
 					" and look at their changes; sharing a folder needs Linux or macOS."
 				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-row peer-sessions",
+				"data-tour": "people-share-session",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					id: "peer-share-session-" + link.link_id,
+					disabled: !verified,
+					title: verified ? `Put one of your sessions on ${link.peer_name}’s rail` : gate,
+					onClick: () => setSharingOpen(true),
+					children: "Share a session…"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: sessions.view.mine.length ? `${sessions.view.mine.length} shared with ${link.peer_name}` : `${link.peer_name} opens it on their rail and types into it.`
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TheirSessions, {
+				link,
+				view: sessions.view
+			}),
+			sharingOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShareSessionsDialog, {
+				link,
+				sandbox,
+				view: sessions.view,
+				onChange: (v) => {
+					sessions.setView(v);
+					reload();
+				},
+				onClose: () => setSharingOpen(false)
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(JointSection, {
 				link,
@@ -96862,10 +97600,26 @@ function PeerLinks(_) {
 								id: "peer-invite-fallback",
 								children: invite.fallback.text
 							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+							invite.url ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "set-row",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									id: "peer-invite-url",
+									readOnly: true,
+									value: invite.url,
+									"aria-label": "Invite link",
+									onClick: (e) => e.target.select()
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn",
+									id: "peer-invite-copy-link",
+									disabled: inviteLeft <= 0,
+									onClick: () => copyText(invite.url || "").then((ok) => toast(ok ? "Invite link copied — send it to them" : "Copy failed")),
+									children: "Copy link"
+								})]
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
 								readOnly: true,
 								rows: 5,
-								value: invite.message || invite.code,
+								value: inviteMessage(invite),
 								onClick: (e) => e.target.select()
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -96875,7 +97629,7 @@ function PeerLinks(_) {
 									className: "test-btn",
 									id: "peer-invite-copy",
 									disabled: inviteLeft <= 0,
-									onClick: () => copyText(invite.message || invite.code).then((ok) => toast(ok ? "Invite copied — send it to them" : "Copy failed")),
+									onClick: () => copyText(inviteMessage(invite)).then((ok) => toast(ok ? "Invite copied — send it to them" : "Copy failed")),
 									children: "Copy invite"
 								}), inviteLeft > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 									type: "button",
@@ -97013,7 +97767,7 @@ function PeerLinks(_) {
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 							id: "peer-join-code",
 							ref: joinInput,
-							placeholder: "paste the invite you were sent",
+							placeholder: "paste the link, the message or the code",
 							value: code,
 							onChange: (e) => setCode(e.target.value),
 							onKeyDown: (e) => {
@@ -97034,7 +97788,7 @@ function PeerLinks(_) {
 						children: joinStage || "Connecting…"
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "set-hint",
-						children: "Paste the whole message or just the code — either works. A fresh invite from someone you're already connected to reconnects you."
+						children: "Paste the link, the whole message or just the code — any of them works. A fresh invite from someone you're already connected to reconnects you."
 					}),
 					joinErr && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 						className: "error",
@@ -109284,6 +110038,170 @@ function AskMicRow({ title }) {
 	});
 }
 //#endregion
+//#region src/components/chat/ChatPanel.tsx
+function ChatPanel() {
+	const { data: config } = useConfig();
+	const guest = config ? !!config.guest : null;
+	const { state, msgs, me } = useChat();
+	const { focus } = useGuestFocus();
+	const focused = useUi((s) => s.focused) || "";
+	useUi((s) => s.aliases);
+	(0, import_react.useEffect)(() => {
+		if (guest === null) return;
+		if (installChatEvents(guest)) return;
+		const t = setInterval(() => {
+			if (installChatEvents(guest)) clearInterval(t);
+		}, 1e3);
+		return () => clearInterval(t);
+	}, [guest]);
+	const any = state.windows.length > 0;
+	(0, import_react.useEffect)(() => {
+		if (!any) return;
+		const t = setInterval(pollChats, CHAT_POLL_MS);
+		return () => clearInterval(t);
+	}, [any]);
+	const peopleOn = (title) => Object.values(focus).filter((f) => f.title === title);
+	const hasWindow = state.windows.some((w) => w.title === focused);
+	const showLauncher = guest !== null && !!focused && !focused.includes("::") && !hasWindow && (guest || peopleOn(focused).length > 0);
+	if (!any && !showLauncher) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "chat-dock",
+		"aria-label": "Session chat",
+		children: [state.windows.map((w) => w.mode === "open" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChatCard, {
+			title: w.title,
+			messages: msgs[w.title] || [],
+			me,
+			people: peopleOn(w.title).map((f) => guestName(f.label)),
+			onClose: () => closeChat(w.title, peopleOn(w.title).map((f) => f.link))
+		}, w.title) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChatPill, { w }, w.title)), showLauncher && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "chat-launcher",
+			title: "Chat with the people on " + windowName(focused),
+			onClick: () => openChat(focused),
+			children: "💬 Chat"
+		})]
+	});
+}
+function ChatPill({ w }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+		type: "button",
+		className: "chat-pill" + (w.unread ? " unread" : ""),
+		"data-chat": w.title,
+		title: w.unread ? `${w.unread} new — open the chat` : "Open the chat",
+		onClick: () => openChat(w.title),
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "chat-pill-name",
+			children: ["💬 ", windowName(w.title)]
+		}), w.unread > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "chat-unread",
+			children: w.unread
+		})]
+	});
+}
+function ChatCard({ title, messages, me, people, onClose }) {
+	const [draft, setDraft] = (0, import_react.useState)("");
+	const [error, setError] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const listRef = (0, import_react.useRef)(null);
+	const inputRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		const el = listRef.current;
+		if (el) el.scrollTop = el.scrollHeight;
+	}, [messages.length]);
+	const send = async () => {
+		if (busy || !draft.trim()) return;
+		setBusy(true);
+		const why = await sendChat(title, draft);
+		setBusy(false);
+		setError(why);
+		if (!why) setDraft("");
+		inputRef.current?.focus();
+	};
+	const onKey = (e) => {
+		e.stopPropagation();
+		if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+			e.preventDefault();
+			send();
+		} else if (e.key === "Escape") {
+			e.preventDefault();
+			minimizeChat(title);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "chat-card",
+		"data-chat": title,
+		"aria-label": "Chat on " + windowName(title),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
+				className: "chat-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "chat-title",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "chat-name",
+							children: windowName(title)
+						}), people.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "chat-people",
+							children: ["with ", people.join(", ")]
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "chat-btn",
+						title: "Minimize",
+						"aria-label": "Minimize",
+						onClick: () => minimizeChat(title),
+						children: "▁"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "chat-btn",
+						title: "Close",
+						"aria-label": "Close",
+						onClick: onClose,
+						children: "×"
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "chat-list",
+				ref: listRef,
+				children: [messages.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "chat-empty",
+					children: "Say hi — only the people on this session see this (agents don't)."
+				}), messages.map((m) => {
+					const mine = !!me && m.from === me.id;
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "chat-msg" + (mine ? " mine" : ""),
+						children: [!mine && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "chat-from",
+							children: m.name
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "chat-text",
+							children: m.text
+						})]
+					}, m.id);
+				})]
+			}),
+			error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "chat-error",
+				children: error
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+				ref: inputRef,
+				className: "chat-input",
+				rows: 1,
+				maxLength: CHAT_MAX,
+				placeholder: "Message…  (Enter sends)",
+				value: draft,
+				onChange: (e) => setDraft(e.target.value),
+				onKeyDown: onKey,
+				"aria-label": "Message"
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/dialogs/RenameDialog.tsx
 function RenameDialog() {
 	const open = useUi((s) => s.openDialog === "rename");
@@ -112784,6 +113702,7 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RedZonesDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ExtensionDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AskDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChatPanel, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommandPalette, { host }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ShortcutsSheet, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WelcomeTour, {}),
@@ -112815,4 +113734,5 @@ requestAnimationFrame(() => {
 	document.body.appendChild(s);
 });
 requestAnimationFrame(() => installPrefsSync());
+requestAnimationFrame(() => installJoinLink());
 //#endregion
