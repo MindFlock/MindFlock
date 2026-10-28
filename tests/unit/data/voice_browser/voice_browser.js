@@ -1548,14 +1548,14 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await page6.evaluate(() => window.__hear("disregard"));
     await sleep(150);
     check("ask: 'disregard' clears the field, still listening", (await fld()) === "" && (await page6.evaluate(() => window.mfVoice.state)) === "listening");
-    await waitFor(page6, () => !window.mfVoice.speech.playing && !window.mfVoice.speech.q.length, 3000, "nod said");
+    await waitFor(page6, () => !window.mfVoice.speech.playing && !window.mfVoice.speech.q.length && !window.mfVoice.micMuted(), 3000, "nod said, mic unmuted");
     await sleep(250);
     await page6.evaluate(() => window.__hear("call it parser"));
     await page6.evaluate(() => window.__hear("submit"));
     await sleep(150);
     check("ask: 'submit' is a word in the field too: typed, nothing sent", (await fld()) === "call it parser submit" && posts6("/send").length === sendsQ5 && (await open6()), await fld());
     await page6.evaluate(() => window.__hear("disregard"));
-    await waitFor(page6, () => !window.mfVoice.speech.playing && !window.mfVoice.speech.q.length, 3000, "nod said");
+    await waitFor(page6, () => !window.mfVoice.speech.playing && !window.mfVoice.speech.q.length && !window.mfVoice.micMuted(), 3000, "nod said, mic unmuted");
     await sleep(250);
     await page6.evaluate(() => window.__hear("call it parser two"));
     await page6.evaluate(() => window.__hear("over"));
@@ -1785,8 +1785,14 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     state.dialogsBy["login-fix"] = Q1("v1");
     ask8("login-fix", "v1");
     await waitFor(page8, () => document.getElementById("asking-name").textContent === "Login fix" && document.getElementById("asking-question").textContent === "Which database?" && !document.getElementById("asking-sheet").classList.contains("hidden"), 6000, "flow C pops");
+    // A tap on the sheet a moment ago (flow B's Send may or may not be
+    // inside its 3 s quiet window by now, depending on the poll): pinned to
+    // "just now", so the run never depends on that timing. The mic tap is
+    // the person turning to voice — the step voice moves to is still read.
+    await page8.evaluate(() => { window.mfAsk.handAt = Date.now(); });
     await page8.click("#asking-mic");
     await waitFor(page8, () => window.mfVoice.state === "dialog" && window.__rec && window.__rec.started, 4000, "listening on the select");
+    check("select by voice: the sheet's mic ends the hand's quiet window (a tap a moment ago)", (await page8.evaluate(() => window.mfAsk.handAt)) === 0);
     check("select by voice: the sheet's mic listens in the dialog mode", (await vstate(page8)) === "dialog");
     await page8.evaluate(() => window.__hear("the second one"));
     await waitFor(page8, () => window.mfVoice.state === "dialog" && document.getElementById("asking-question").textContent === "Which features?" && window.__rec && window.__rec.started, 6000, "Q2 read and listened for");
@@ -2135,10 +2141,19 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await sel10("all"); await sleep(200);
     check("say-all: away from Everything → {on:false}; mine → off posts nothing; back → {on:true}", JSON.stringify(sa()) === "[true,false,true]", JSON.stringify(sa()));
     state.sayAllStatus = 403;
+    // Every text the status line shows, not one sample: the terminal
+    // socket's "reconnecting…" shares the line and may replace the notice
+    // within the 200 ms.
+    await page10.evaluate(() => {
+      const el = document.getElementById("status");
+      window.__status = [el.textContent];
+      new MutationObserver(() => { if (window.__status[window.__status.length - 1] !== el.textContent) window.__status.push(el.textContent); }).observe(el, { childList: true, characterData: true, subtree: true });
+    });
     await sel10("mine"); await sleep(200);
-    const st10 = await page10.evaluate(() => document.getElementById("status").textContent);
+    const st10 = await page10.evaluate(() => window.__status.join(" | "));
     await sel10("all"); await sleep(200);
-    check("say-all: a 403 → said once, the pref kept", /can't change/.test(st10) && (await page10.evaluate(() => window.mfVoice.sayAll.denied && window.mfVoice.prefs.replies === "all")), st10);
+    const denied10 = await page10.evaluate(() => window.__status.filter((t) => /can't change/.test(t)).length);
+    check("say-all: a 403 → said once, the pref kept", denied10 === 1 && (await page10.evaluate(() => window.mfVoice.sayAll.denied && window.mfVoice.prefs.replies === "all")), st10);
     await page10.close();
     state.sayAllStatus = 0;
     state.sayAll = true;

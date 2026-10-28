@@ -9073,6 +9073,10 @@
     voiceHearHide();
     voiceBargeIn(e.title);   // reading it (or anything): cut first, then the mic
     if (!askVoiceOn(e.title)) return;
+    // The hand has gone to the mic: the step voice moves the sheet to is
+    // what the person asked for — read it, however soon after a tap on the
+    // sheet (askHandsOn's quiet window is for what the HAND moved).
+    ask.handAt = 0;
     askListenFor(e, false);
   }
   // `read`: say it first (name first), as the push's button does; a tap
