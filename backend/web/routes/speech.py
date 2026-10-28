@@ -26,15 +26,20 @@ Status codes, in the order they are checked:
 * ``stream`` (open) — 409 no recognition backend is ready, the ready one
   does not stream (only ``local`` does: the client sends one clip per phrase
   instead), or :data:`speech_stream.MAX_STREAMS` are open; 200
-  ``{"id", "ready": true}``.
+  ``{"id", "ready": true, "hints": chars}``. The new stream's accurate pass
+  is biased towards the voice words, the live session titles and the
+  MindFlock vocabulary (:func:`core.speech.recognition_hints`, built here
+  per open so a new session's title is heard right away); its fast tier
+  hears bare (see ``core.speech.HINT_CHARS``).
 * ``stream/{id}/chunk`` — 404 unknown or expired id; 415 not ``audio/wav``,
   or a WAV that is not 16 kHz mono 16-bit; 413 over
   :data:`MAX_AUDIO_BYTES`; 502 the pass failed (the chunk is kept); 200
   ``{"committed", "partial", "ms", "window_s", "audio_s"}``.
 * ``stream/{id}/end`` — 404 as above; 502 the last fast pass failed; 200
-  ``{"committed", "partial": ""}`` plus ``{"final", "final_ms", "same"}``
-  when the accurate pass ran (``core.speech_stream``'s two tiers), and the
-  stream is gone. ``DELETE stream/{id}`` — 204, always.
+  ``{"committed", "partial": ""}`` plus ``{"final", "final_ms",
+  "final_wait_ms", "final_early", "same"}`` when the accurate pass ran
+  (``core.speech_stream``'s two tiers), and the stream is gone.
+  ``DELETE stream/{id}`` — 204, always.
 * ``install-local`` — ``POST`` 403 not the owner; 409 already running; 200
   the status (``core.speech_install``). ``GET`` the status, for anyone.
 """
@@ -78,13 +83,31 @@ def _settings():
     return settings_store.load_settings()
 
 
-def _wake_word() -> str:
-    """The effective wake word (``core.voice_words``); ours when the
+def _words() -> dict:
+    """The effective voice words (``core.voice_words``); ours when the
     settings can't be read."""
     try:
-        return _voice_words.effective(_settings())["wake"]
-    except Exception:  # noqa: BLE001 — the wake route must still answer
-        return _voice_words.DEFAULTS["wake"]
+        return _voice_words.effective(_settings())
+    except Exception:  # noqa: BLE001 — the voice routes must still answer
+        return _voice_words.effective({})
+
+
+def _wake_word() -> str:
+    """The effective wake word (``core.voice_words``)."""
+    return _words()["wake"]
+
+
+def _hints() -> str:
+    """The accurate pass's hints for a stream opened now
+    (:func:`core.speech.recognition_hints`: the voice words, the live
+    sessions' titles newest first, the fixed vocabulary); ``""`` when even
+    that fails (the stream still works). The fast tier gets none: any
+    prompt beyond the committed text triples its pass time
+    (``core.speech.HINT_CHARS``)."""
+    try:
+        return _speech.recognition_hints(_words(), _speech.session_titles())
+    except Exception:  # noqa: BLE001 — a hint, never a failure
+        return ""
 
 
 def _refusal(kind: str) -> Tuple[Optional[_speech.Backend], Optional[JSONResponse]]:
@@ -148,6 +171,8 @@ def voice_get(allowed: bool = Depends(_auth.configure_allowed)) -> JSONResponse:
          "system": {"available": bool, "platform": str, "detail": str,
                     "voices": [names], "recognizers": [culture tags],
                     "stt_quality": "basic"|"good"|"none"},
+         "final": {"samples": int, "typical_ms": int, "p95_ms": int,
+                   "expect_ms": int, "timeout_ms": int},
          "configure_allowed": bool}
 
     Readable by any signed-in client (the phone page and the desktop app
@@ -159,7 +184,14 @@ def voice_get(allowed: bool = Depends(_auth.configure_allowed)) -> JSONResponse:
     once per process). ``words`` is :func:`core.voice_words.effective` —
     every kind present, the person's own where they changed it — and every
     client builds its matchers from it (``voice_words.phrase_regex``'s
-    contract); ``words_default`` is ours, for Settings' "reset"."""
+    contract); ``words_default`` is ours, for Settings' "reset". ``final``
+    is :func:`core.speech_stream.final_stats`: how long ``/end`` has been
+    waiting for the accurate pass lately (``typical_ms`` the median,
+    ``p95_ms``; 0 before the first), what to budget (``expect_ms``: the
+    measured p95, or the bench's figure before enough phrases) and the
+    server's own cap (``timeout_ms``); ``server_ready.final_ms`` repeats
+    ``expect_ms`` — the clients seed their wait for ``/end`` from it, not
+    from a fixed worst case."""
     # An engine rebuild that dropped the local models' packages: put them
     # back (once per boot; nothing when they are there or never were).
     _install.start_self_heal()
@@ -173,9 +205,12 @@ def voice_get(allowed: bool = Depends(_auth.configure_allowed)) -> JSONResponse:
         "say_all": _voice.say_all(),
         "words": _voice_words.effective(s),
         "words_default": copy.deepcopy(_voice_words.DEFAULTS),
+        "final": _stream.final_stats(),
         "configure_allowed": bool(allowed),
     }
     body.update(_speech.describe())
+    # The phone seeds its wait for /end's accurate pass from this.
+    body["server_ready"]["final_ms"] = body["final"]["expect_ms"]
     # A voice client is here: have the recognition models resident and the
     # voice warm before its first use (no-ops unless there is something to
     # load: see core.speech.warm_in_background).
@@ -297,9 +332,12 @@ async def voice_wake(request: Request, lang: str = "") -> JSONResponse:
 @router.post("/api/voice/stream")
 def voice_stream_open(payload: Optional[dict] = None) -> JSONResponse:
     """Open a streaming recognition (``core.speech_stream``):
-    ``{"lang": "en-US"}`` → ``{"id", "ready": true}``. Only a backend that
-    streams (``local``) can; ``GET /api/voice``'s ``server_ready.stt_stream``
-    says so beforehand. See the module doc for the status codes."""
+    ``{"lang": "en-US"}`` → ``{"id", "ready": true, "hints": n}`` (``n``
+    characters of vocabulary hints the accurate pass is biased towards: the
+    voice words, the live session titles, the MindFlock vocabulary — see
+    :func:`_hints`). Only a backend that streams (``local``) can; ``GET
+    /api/voice``'s ``server_ready.stt_stream`` says so beforehand. See the
+    module doc for the status codes."""
     body = payload if isinstance(payload, dict) else {}
     lang = body.get("lang")
     lang = lang.strip() if isinstance(lang, str) else ""
@@ -315,8 +353,9 @@ def voice_stream_open(payload: Optional[dict] = None) -> JSONResponse:
             },
             status_code=409,
         )
+    hints = _hints()
     sid = _stream.open_stream(
-        backend.stream_transcriber(lang), backend.final_transcriber(lang)
+        backend.stream_transcriber(lang), backend.final_transcriber(lang, hints)
     )
     if sid is None:
         return JSONResponse(
@@ -326,7 +365,7 @@ def voice_stream_open(payload: Optional[dict] = None) -> JSONResponse:
             },
             status_code=409,
         )
-    return JSONResponse({"id": sid, "ready": True})
+    return JSONResponse({"id": sid, "ready": True, "hints": len(hints)})
 
 
 def _no_stream() -> JSONResponse:
@@ -377,10 +416,13 @@ async def voice_stream_chunk(sid: str, request: Request) -> JSONResponse:
 
 @router.post("/api/voice/stream/{sid}/end")
 async def voice_stream_end(sid: str) -> JSONResponse:
-    """Finish a stream: one last fast pass, all of it committed →
-    ``{"committed": the words not committed before, "partial": ""}``; then
-    the accurate pass over the whole phrase adds ``"final"`` (the text to
-    replace the typed phrase with), ``"final_ms"`` and ``"same"`` (``final``
+    """Finish a stream: one last fast pass (skipped when it could hear
+    nothing new), all of it committed → ``{"committed": the words not
+    committed before, "partial": ""}``; then the accurate pass over the
+    whole phrase — usually started already, on the quiet chunk that ended
+    the speech — adds ``"final"`` (the text to replace the typed phrase
+    with), ``"final_ms"`` (the pass's time), ``"final_wait_ms"`` (how long
+    this call waited for it), ``"final_early"`` and ``"same"`` (``final``
     only differs in case, spacing or punctuation) — absent when it was off,
     skipped, failed or timed out (``core.speech_stream``). The stream is
     gone afterwards (404 for a second ``end``)."""
