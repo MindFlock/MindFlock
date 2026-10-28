@@ -73,6 +73,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import inspect
 import io
 import json
 import logging
@@ -96,6 +97,7 @@ __all__ = [
     "Backend",
     "SpeechError",
     "BACKENDS",
+    "HINT_CHARS",
     "IDLE_SECONDS",
     "backends",
     "choose",
@@ -104,7 +106,10 @@ __all__ = [
     "ids",
     "loaded",
     "mime_of",
+    "recognition_hints",
     "select",
+    "session_titles",
+    "speech_form",
     "sweep_idle",
     "unload_all",
     "voice_dir",
@@ -450,6 +455,187 @@ def whisper_language(lang: str) -> Optional[str]:
     return code if 2 <= len(code) <= 3 and code.isalpha() else None
 
 
+# --------------------------------------------------------------------------- #
+# The recognition hints: the vocabulary both whisper tiers are biased towards
+# --------------------------------------------------------------------------- #
+#: The hint string's cap, in characters. Whisper's prompt slot takes 224
+#: tokens and faster-whisper truncates ``hotwords`` there; 400 characters is
+#: ~100 tokens. Only the ACCURATE pass gets hints: its cost is the encoder's,
+#: the same with or without (bench: 1.27 s vs 1.28 s a pass on ``small``).
+#: The FAST pass cannot afford any — on ``base.en`` 400 characters of
+#: ``hotwords`` take a 2 s window from 0.43 s to 1.24 s a pass, and even 120
+#: characters of voice words at the front of its prompt trip whisper's
+#: temperature fallback often enough to triple the bench's median pass
+#: (1386 ms against 467 ms); a ``hotwords`` list on a lone word can loop
+#: ("mindflock, mindflock, …"). So the fast tier hears bare, and the
+#: accurate pass — which the clients read the radio words off — is where the
+#: vocabulary lands (``tests/bench/voice_bench.py``: 46/48 control words
+#: and 4.4 % WER against 41/48 and 10.3 % without).
+HINT_CHARS = 400
+#: How many live session titles the hints carry at most (the most recently
+#: active first: those are the ones a person switches to by voice).
+HINT_TITLES = 12
+#: The fixed MindFlock vocabulary: words whisper's priors spell wrong or
+#: hear as something else, after the voice words and the titles.
+HINT_VOCABULARY = (
+    "MindFlock",
+    "session",
+    "window",
+    "switch",
+    "autopilot",
+    "commit",
+    "push",
+    "pull request",
+    "ticket",
+    "worktree",
+    "branch",
+    "merge",
+    "rebase",
+    "diff",
+    "Claude",
+    "Codex",
+    "pytest",
+    "fence",
+    "orchestrator",
+    "inbox",
+    "terminal",
+    "submit",
+    "disregard",
+)
+_SPLIT_TITLE = re.compile(
+    r"[-_/.:\s]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Za-z])(?=[0-9])|(?<=[0-9])(?=[A-Za-z])"
+)
+
+
+def speech_form(title: str) -> str:
+    """A session title as it is said: ``sitecheck-bot7`` → ``sitecheck bot
+    7``, ``mapUx`` → ``map Ux``, ``feature/mcp-fences-order`` → ``feature
+    mcp fences order`` (split on ``-``, ``_``, ``/``, ``.``, ``:``, spaces,
+    camel-case and letter/digit boundaries; ``""`` for an empty title)."""
+    parts = [p for p in _SPLIT_TITLE.split(str(title or "")) if p]
+    return " ".join(parts)
+
+
+def session_titles() -> List[str]:
+    """The live sessions' titles, the most recently active first — read from
+    the server's engine (imported lazily: the server imports this module at
+    startup), ``[]`` without one (tests, the bench, a bare import)."""
+    try:
+        from backend.web import server as _server
+
+        instances = list(getattr(_server, "ENGINE").instances.values())
+    except Exception:  # noqa: BLE001 — no engine here
+        return []
+
+    def stamp(inst) -> float:
+        at = getattr(inst, "UpdatedAt", None) or getattr(inst, "CreatedAt", None)
+        try:
+            return at.timestamp() if at is not None else 0.0
+        except Exception:  # noqa: BLE001 — not a datetime
+            return 0.0
+
+    instances.sort(key=stamp, reverse=True)
+    out: List[str] = []
+    for inst in instances:
+        title = str(getattr(inst, "Title", "") or "").strip()
+        if title and title not in out:
+            out.append(title)
+    return out
+
+
+def recognition_hints(
+    words, titles=(), limit: int = HINT_CHARS, vocabulary: bool = True
+) -> str:
+    """The vocabulary a whisper pass is biased towards, one comma-separated
+    string of at most ``limit`` characters: the wake word and every voice
+    phrase of every kind (``words``: :func:`voice_words.effective`'s dict —
+    these must be heard right, so they come first), then up to
+    :data:`HINT_TITLES` session titles in :func:`speech_form` (``titles``,
+    newest first, as :func:`session_titles` orders them), then
+    :data:`HINT_VOCABULARY` (unless ``vocabulary`` is off). A phrase that
+    does not fit is skipped and the shorter ones after it still go in;
+    nothing repeats (compared lower-cased); a phrase's own comma is dropped.
+    Pure. ``LocalSTT.final_transcriber`` feeds it to faster-whisper as
+    ``hotwords``, built fresh on every stream open (``routes/speech.py``)
+    since the titles change; the fast tier gets none (:data:`HINT_CHARS`)."""
+    wanted: List[str] = []
+    words = words if isinstance(words, dict) else {}
+    wake = words.get("wake")
+    if isinstance(wake, str) and wake.strip():
+        wanted.append(wake.strip())
+    for kind in ("send", "end", "clear", "stop", "hush"):
+        got = words.get(kind)
+        for phrase in got if isinstance(got, (list, tuple)) else ():
+            if isinstance(phrase, str) and phrase.strip():
+                wanted.append(phrase.strip())
+    count = 0
+    for title in titles or ():
+        spoken = speech_form(title)
+        if spoken and count < HINT_TITLES:
+            wanted.append(spoken)
+            count += 1
+    if vocabulary:
+        wanted.extend(HINT_VOCABULARY)
+    out: List[str] = []
+    seen: set = set()
+    size = 0
+    for phrase in wanted:
+        # The list is comma-separated, so a phrase's own comma ("over, out",
+        # an optional pause) goes: "over out".
+        phrase = " ".join(phrase.replace(",", " ").split())
+        key = phrase.lower()
+        if not phrase or key in seen:
+            continue
+        add = len(phrase) + (2 if out else 0)
+        if size + add > limit:
+            continue
+        seen.add(key)
+        out.append(phrase)
+        size += add
+    return ", ".join(out)
+
+
+def _hotwords_supported(model) -> bool:
+    """Whether this faster-whisper's ``transcribe`` takes ``hotwords=``
+    (1.1+). Looked up once per model class; an unreadable signature reads as
+    no, and the hints ride the ``initial_prompt`` instead."""
+    cls = type(model)
+    cached = _HOTWORDS.get(cls)
+    if cached is None:
+        try:
+            params = inspect.signature(cls.transcribe).parameters
+            cached = "hotwords" in params or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+            )
+        except (TypeError, ValueError):
+            cached = False
+        _HOTWORDS[cls] = cached
+    return cached
+
+
+_HOTWORDS: Dict[type, bool] = {}
+
+
+def _bias(model, hints: str, prompt: str, hotwords: bool = True) -> dict:
+    """The decoder-biasing arguments of one ``transcribe`` call: ``hotwords``
+    for ``hints`` and ``initial_prompt`` for ``prompt`` when ``hotwords`` is
+    wanted and the installed faster-whisper has it (they share the prompt
+    slot, hints first); otherwise the hints open the prompt (``"<hints>.
+    <prompt>"``) — the fast tier's way (see :data:`HINT_CHARS`) and the old
+    versions'. Nothing for nothing: an absent key, not ``None``, keeps the
+    fakes' and the old versions' calls exact."""
+    kw: dict = {}
+    if hints and hotwords and _hotwords_supported(model):
+        kw["hotwords"] = hints
+        if prompt:
+            kw["initial_prompt"] = prompt
+    elif hints:
+        kw["initial_prompt"] = hints + ". " + prompt if prompt else hints
+    elif prompt:
+        kw["initial_prompt"] = prompt
+    return kw
+
+
 class Backend:
     """One speech engine of one kind. ``ready()`` is cheap and offline; the
     work methods raise :class:`SpeechError` with a sentence for the UI."""
@@ -483,15 +669,17 @@ class Backend:
     #: Whether :meth:`stream_transcriber` works (``POST /api/voice/stream``).
     streams: bool = False
 
-    def stream_transcriber(self, lang: str = "") -> Callable:
+    def stream_transcriber(self, lang: str = "", hints: str = "") -> Callable:
         """The ``transcribe(audio, prompt)`` a :class:`speech_stream.Stream`
-        is built on — only a backend whose :attr:`streams` is true has one."""
+        is built on — only a backend whose :attr:`streams` is true has one.
+        ``hints`` is :func:`recognition_hints`: the vocabulary to bias the
+        decoder towards, for a backend that can."""
         raise SpeechError("%s does not stream" % self.label)
 
-    def final_transcriber(self, lang: str = "") -> Optional[Callable]:
+    def final_transcriber(self, lang: str = "", hints: str = "") -> Optional[Callable]:
         """The ``accurate(audio) -> text`` a stream runs over the whole
         phrase at its end (``core.speech_stream``), or ``None``: no accurate
-        pass, the fast words stand."""
+        pass, the fast words stand. ``hints`` as above."""
         return None
 
 
@@ -846,32 +1034,37 @@ class LocalSTT(Backend):
                 pass
         return " ".join(w for w in words if w).strip()
 
-    def stream_transcriber(self, lang: str = "") -> Callable:
+    def stream_transcriber(self, lang: str = "", hints: str = "") -> Callable:
         """One pass of a stream (``core.speech_stream``): the float32 window
         straight into the streaming model (:meth:`stream_model_name`, not
         the one-shot one) with word timestamps, greedy decoding and the
-        committed text as the prompt → ``[(word, start_s, end_s)]``. The
-        model is fetched per pass, so an unload never strands a stream."""
+        committed text as the prompt — any ``hints`` lead it (never as
+        ``hotwords``; the server sends none to this tier, see
+        :data:`HINT_CHARS`; the bench's ``+fasthints`` does) →
+        ``[(word, start_s, end_s)]``. The model is fetched per pass, so an
+        unload never strands a stream."""
         language = whisper_language(lang)
         name = self.stream_model_name(lang)
+        hints = " ".join(str(hints or "").split())
 
         def run(audio, prompt: str) -> List[Tuple[str, float, float]]:
             model = self._model(name)
             np = _import("numpy")
             # A copy: the stream trims its buffer later, which a view would block.
             samples = np.frombuffer(bytes(audio), dtype=np.float32)
+            kw = _bias(model, hints, prompt, hotwords=False)
             try:
                 segments, _info = model.transcribe(
                     samples,
                     language=language,
                     beam_size=1,
                     word_timestamps=True,
-                    initial_prompt=prompt or None,
                     condition_on_previous_text=False,
                     # Silence in a window makes whisper invent "Thank you.";
                     # two passes would agree on it and commit it. The bundled
                     # VAD drops the quiet stretches before decoding.
                     vad_filter=True,
+                    **kw,
                 )
                 return [
                     (str(w.word), float(w.start), float(w.end))
@@ -883,20 +1076,24 @@ class LocalSTT(Backend):
 
         return run
 
-    def final_transcriber(self, lang: str = "") -> Optional[Callable]:
+    def final_transcriber(self, lang: str = "", hints: str = "") -> Optional[Callable]:
         """The accurate pass at a stream's end: the whole phrase (float32)
-        into :meth:`final_model_name` with a small beam, no prompt (the fast
-        words may be the wrong ones), no conditioning and the VAD → its
-        text. ``None`` when ``voice.stt_final`` is ``off``."""
+        into :meth:`final_model_name`, greedy, no conditioning, the VAD, and
+        ``hints`` (:func:`recognition_hints`) as the ``hotwords`` (the prompt
+        on a faster-whisper too old for them: :func:`_hotwords_supported`) —
+        the vocabulary, never the fast words (those may be the wrong ones) →
+        its text. ``None`` when ``voice.stt_final`` is ``off``."""
         name = self.final_model_name()
         if not name:
             return None
         language = whisper_language(lang)
+        hints = " ".join(str(hints or "").split())
 
         def run(audio) -> str:
             model = self._model(name)
             np = _import("numpy")
             samples = np.frombuffer(bytes(audio), dtype=np.float32)
+            kw = _bias(model, hints, "")
             try:
                 segments, _info = model.transcribe(
                     samples,
@@ -904,6 +1101,7 @@ class LocalSTT(Backend):
                     beam_size=1,
                     condition_on_previous_text=False,
                     vad_filter=True,
+                    **kw,
                 )
                 parts = [str(getattr(s, "text", "") or "").strip() for s in segments]
             except Exception as err:  # noqa: BLE001

@@ -86,6 +86,14 @@ class TestGet:
         assert sr["stt"] is True and sr["tts"] is True
         assert sr["stt_backend"] == "fake" and sr["stt_detail"] == "fake is ready"
         assert isinstance(sr["detail"], str) and "ready (fake)" in sr["detail"]
+        assert body["final"] == {
+            "samples": 0,
+            "typical_ms": 0,
+            "p95_ms": 0,
+            "expect_ms": speech_stream.FINAL_EXPECT_MS,
+            "timeout_ms": int(speech_stream.FINAL_TIMEOUT_S * 1000),
+        }
+        assert sr["final_ms"] == speech_stream.FINAL_EXPECT_MS
 
     def test_reflects_settings_and_readiness(self, fakes):
         _voice(stt="server", approve_dialogs=False, tts_backend="fake")
@@ -501,10 +509,11 @@ def streaming(fakes):
     """The fake recognizer streams: each pass answers with the next of
     ``stt.passes`` (an exception is raised)."""
     stt = fakes.stt
-    stt.streams, stt.passes, stt.langs = True, [], []
+    stt.streams, stt.passes, stt.langs, stt.hints = True, [], [], None
 
-    def stream_transcriber(lang=""):
+    def stream_transcriber(lang="", hints=""):
         stt.langs.append(lang)
+        stt.hints = hints  # the server sends the fast tier none
 
         def run(audio, prompt):
             stt.calls.append(("pass", len(audio), prompt))
@@ -533,8 +542,10 @@ def _wav(seconds=0.5, rate=16000, channels=1, sample=b"\x00\x10"):
     return buf.getvalue()
 
 
-def _words(text, step=0.5):
-    return [(w, i * step, i * step + 0.4) for i, w in enumerate(text.split())]
+def _words(text, step=0.2):
+    """``[(word, start, end)]``, one word every ``step`` s — inside the
+    audio fed (a word a pass places after the last loud frame is dropped)."""
+    return [(w, i * step, i * step + 0.15) for i, w in enumerate(text.split())]
 
 
 def _open(lang="en-US"):
@@ -575,6 +586,8 @@ class TestStream:
         assert r.status_code == 200
         body = r.json()
         assert body["ready"] is True and isinstance(body["id"], str) and body["id"]
+        # The accurate pass's hints; the fast tier gets none (its pass time).
+        assert body["hints"] > 0 and streaming.hints == ""
         sid = body["id"]
         assert streaming.langs == ["en-US"]
         streaming.passes += [
@@ -660,7 +673,7 @@ class TestStream:
     def test_end_adds_the_accurate_final(self, streaming):
         heard: list = []
 
-        def final_transcriber(lang=""):
+        def final_transcriber(lang="", hints=""):
             heard.append(("open", lang))
 
             def run(audio):
@@ -678,15 +691,27 @@ class TestStream:
         r = client.post("/api/voice/stream/%s/end" % sid)
         assert r.status_code == 200
         body = r.json()
-        assert set(body) == {"committed", "partial", "final", "final_ms", "same"}
+        assert set(body) == {
+            "committed",
+            "partial",
+            "final",
+            "final_ms",
+            "final_wait_ms",
+            "final_early",
+            "same",
+        }
         assert body["committed"] == "" and body["partial"] == ""
         assert body["final"] == "Run the tests."
         assert body["same"] is False and isinstance(body["final_ms"], int)
+        assert body["final_early"] is False  # no quiet chunk came first
+        assert body["final_wait_ms"] == body["final_ms"]
         # The whole phrase: both chunks.
         assert heard[-1] == ("final", 16000)
 
     def test_end_says_same_when_the_final_agrees(self, streaming):
-        streaming.final_transcriber = lambda lang="": lambda audio: "Hello, world."
+        streaming.final_transcriber = (
+            lambda lang="", hints="": lambda a: "Hello, world."
+        )
         sid = _open().json()["id"]
         streaming.passes += [_words("hello world")] * 3
         _chunk(sid)
@@ -698,7 +723,7 @@ class TestStream:
         def boom(audio):
             raise speech.SpeechError("faster-whisper failed: boom")
 
-        streaming.final_transcriber = lambda lang="": boom
+        streaming.final_transcriber = lambda lang="", hints="": boom
         sid = _open().json()["id"]
         streaming.passes += [_words("hello")] * 3
         _chunk(sid)
@@ -706,6 +731,46 @@ class TestStream:
         r = client.post("/api/voice/stream/%s/end" % sid)
         assert r.status_code == 200
         assert r.json() == {"committed": "", "partial": ""}
+
+    def test_open_builds_the_hints_from_the_words_and_the_sessions(
+        self, streaming, monkeypatch
+    ):
+        monkeypatch.setattr(speech, "session_titles", lambda: ["sitecheck-bot7", "b"])
+        _voice(words={"send": ["over", "send it"], "wake": "hey flock"})
+        heard: list = []
+        streaming.final_transcriber = lambda lang="", hints="": heard.append(hints)
+        r = _open()
+        assert streaming.hints == ""  # the fast tier hears bare
+        (hints,) = heard
+        assert hints.startswith(
+            "hey flock, over, send it, over and out, over out, disregard, stop"
+        )
+        assert "sitecheck bot 7, b, MindFlock" in hints
+        assert len(hints) <= speech.HINT_CHARS
+        assert r.json()["hints"] == len(hints)
+
+    def test_a_quiet_tail_starts_the_final_early(self, streaming):
+        heard: list = []
+
+        def final_transcriber(lang="", hints=""):
+            def run(audio):
+                heard.append(len(audio))
+                return "Over."
+
+            return run
+
+        streaming.final_transcriber = final_transcriber
+        sid = _open().json()["id"]
+        streaming.passes += [_words("over")] * 2
+        _chunk(sid)  # loud: "over" is the tail
+        _chunk(sid, body=_wav(0.3, sample=b"\x00\x00"))  # quiet: settles it
+        assert heard == [int(0.8 * 16000)]  # the pass started on that chunk
+        body = client.post("/api/voice/stream/%s/end" % sid).json()
+        assert body["final"] == "Over." and body["final_early"] is True
+        assert heard == [int(0.8 * 16000)]  # not run again
+        assert [c for c in streaming.calls if c[0] == "pass"][-1][1] == 12800
+        # No fast pass at the end either: nothing new to hear.
+        assert len([c for c in streaming.calls if c[0] == "pass"]) == 2
 
     def test_delete_abandons(self, streaming):
         sid = _open().json()["id"]

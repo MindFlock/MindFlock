@@ -1302,8 +1302,10 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     between speed and accuracy**: the live transcript types the fast
     model's words as the person speaks, then at the end of the phrase the
     accurate pass re-decodes the whole phrase and corrects it (blank = with
-    `stt_model`, i.e. `small`, ~1–1.5 s after the phrase ends; `"off"` = no
-    accurate pass — fastest, the fast words stand; any faster-whisper size
+    `stt_model`, i.e. `small`: the pass is ~1.1–1.3 s on an 8-core CPU
+    whatever the phrase's length, started on the first quiet chunk so the
+    correction usually lands within a second of the person stopping; `"off"`
+    = no accurate pass — fastest, the fast words stand; any faster-whisper size
     or `org/repo` id = that model, e.g. `medium.en` for more accuracy at
     more delay; a non-size name reads as blank). A third model is loaded and
     kept resident with the other two. The wake word ("MindFlock") is judged

@@ -6274,7 +6274,10 @@ showing a dialog or with no session focused; the phrase's end decides then.
 **The accurate final.** The fast pass that types as you speak trades some
 accuracy for speed, so at the phrase's end `POST /api/voice/stream/{id}/end`
 also answers `final` — the whole phrase heard again by the accurate model —
-with `final_ms` and `same` (true when it matches the fast words). When
+with `final_ms`, `final_wait_ms` (how long `/end` itself waited: the
+accurate pass usually started on the quiet chunk that ended the speech, so
+often little), `final_early` and `same` (true when it matches the fast
+words). When
 `final` differs, the whole phrase as typed (its committed words and the guess)
 is retyped to it, the same backspace-then-type correction as above and never
 before the phrase's start (a text box gets its value set once), before the
@@ -6923,7 +6926,8 @@ does (silence, the tap, the cap — 30 s here); the unsent rest goes out,
 opens a new stream; Cancel or voice off `DELETE`s it. **The accurate
 final:** a server with a slower, more accurate model besides the fast
 streaming one also answers `/end` with `final` (the whole phrase
-transcribed again by it), `final_ms` and `same` (true: no different). When
+transcribed again by it), `final_ms`, `final_wait_ms`, `final_early` and
+`same` (true: no different). When
 `final` is there and `same` is not true, the **whole phrase typed so far**
 (its committed words and the guess — never the words before it) is
 replaced in the box by `final`, the caret at the end, **before** the phrase
