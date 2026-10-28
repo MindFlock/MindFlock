@@ -48,8 +48,9 @@ import type { Dialog, VoiceHelp } from "../api/types";
 import { peekTerm } from "./terminals";
 import { toast } from "./toast";
 import { resamplerName, startWavRecording, type WavRecording } from "./wavRecorder";
-import { MicKeeper, isLoud, noiseFloor, pickupLine, voiceMark, voicePass, voiceSent } from "./voiceMic";
+import { MicKeeper, isLoud, noiseFloor, pickupLine, rmsOf, voiceMark, voicePass, voiceSent } from "./voiceMic";
 import { applyVoiceView, phraseWords, quoted, voiceWords, voiceWordsVersion, withKin, wordKey, type VoiceWords } from "./voiceWords";
+import { pronounce, setPronounce, shapeForSpeech } from "./spokenText";
 
 // --- the radio words -------------------------------------------------------- //
 
@@ -165,6 +166,10 @@ const bareWord = (w: string) => w.toLowerCase().replace(/[’`]/g, "'").replace(
 
 // --- the matchers, built from the current words (lib/voiceWords) ----------- //
 
+// The sound-alike tolerance (lib/voiceWords: `heard`, soundTail, soundsLikeAny),
+// imported here beside the matchers that use it.
+import { heardOf, soundTail, soundsLikeAny } from "./voiceWords";
+
 /** The radio words' optional tails: "disregard that", "over it". */
 const RADIO_TAILS = ["that", "it", "all", "everything"];
 /** Spoken before or after "stop talking" and still a hush: "okay, be quiet
@@ -183,16 +188,39 @@ const phraseRx = (p: string) =>
 const longestFirst = (a: string, b: string) => phraseWords(b).length - phraseWords(a).length || b.length - a.length;
 const keysOf = (p: string) => phraseWords(p).map(wordKey);
 
+/** A RegExp with a second hearing: when the pattern (the words as written
+ * and what the recogniser is known to write for them) misses, `also` may
+ * still answer — the last words SOUNDING like a phrase (lib/voiceWords
+ * soundTail / soundsLikeAny), which no pattern can say. It is a RegExp, so
+ * parseRadio and isHushPhrase read it as the one they always had; `test`
+ * goes through `exec`. */
+class SoundRegExp extends RegExp {
+  private readonly also: (text: string) => RegExpExecArray | null;
+  constructor(src: string, flags: string, also: (text: string) => RegExpExecArray | null) {
+    super(src, flags);
+    this.also = also;
+  }
+  exec(text: string): RegExpExecArray | null {
+    return super.exec(text) ?? this.also(text);
+  }
+}
+/** `exec`'s answer for a hearing: the whole text, the words before, the phrase. */
+const heardAs = (text: string, before: string, phrase: string): RegExpExecArray =>
+  Object.assign([text, before, phrase], { index: 0, input: text, groups: undefined }) as RegExpExecArray;
+
 export interface VoiceMatchers {
   /** The words they were built from ({@link voiceWordsVersion}). */
   v: number;
-  /** "<the words before> <a send / end / clear phrase>" at the end. */
+  /** "<the words before> <a send / end / clear phrase>" at the end — the
+   * phrase as written, as the recogniser writes it (`heard`), or as it
+   * sounds ({@link SoundRegExp}). */
   radio: RegExp;
   /** Which kind the matched phrase is: the first whole match, longest first. */
   radioKinds: Array<[RegExp, RadioKind]>;
-  /** The stop phrases (and their older wordings) of two words or more,
-   * longest first, as word keys: they end any committed words. A one-word one ("stop") is the router's, said as
-   * a whole phrase — at the end of words it is a word ("make it stop"). */
+  /** The stop phrases (their older wordings and heard forms too) of two
+   * words or more, longest first, as word keys: they end any committed
+   * words, word for word. A one-word one ("stop") is the router's, said
+   * as a whole phrase — at the end of words it is a word ("make it stop"). */
   stop: string[][];
   hush: RegExp;
   /** Every phrase the hold-back keeps whole while it may still be said. */
@@ -203,43 +231,65 @@ export interface VoiceMatchers {
   commands: string[][][];
 }
 
-/** The matchers for `w` (pure: the tests build their own). */
+/** The matchers for `w` (pure: the tests build their own). The phrases are
+ * `w`'s with their kin (lib/voiceWords PHRASE_KIN) and what is heard for
+ * them (`w.heard`); the send / end / clear and hush matchers also take the
+ * person's phrases a letter off (soundsLike), the stop tail does not. */
 export function buildMatchers(w: VoiceWords, v = -1): VoiceMatchers {
   const tails = "(?:[\\s,]+(?:" + RADIO_TAILS.join("|") + "))?";
+  const ends = [...w.end, ...heardOf(w, "end")];
+  const sends = [...w.send, ...heardOf(w, "send")];
+  const clears = [...w.clear, ...heardOf(w, "clear")];
   const entries: Array<{ p: string; kind: RadioKind; rx: string }> = [
-    ...w.end.map((p) => ({ p, kind: "out" as const, rx: phraseRx(p) })),
-    ...w.send.map((p) => ({ p, kind: "over" as const, rx: phraseRx(p) + tails })),
-    ...w.clear.map((p) => ({ p, kind: "disregard" as const, rx: phraseRx(p) + tails })),
+    ...ends.map((p) => ({ p, kind: "out" as const, rx: phraseRx(p) })),
+    ...sends.map((p) => ({ p, kind: "over" as const, rx: phraseRx(p) + tails })),
+    ...clears.map((p) => ({ p, kind: "disregard" as const, rx: phraseRx(p) + tails })),
   ]
     .filter((e) => e.rx)
     .sort((a, b) => longestFirst(a.p, b.p));
+  const sounded = (text: string): RegExpExecArray | null => {
+    // A clear phrase heard a little off must start with its letter unless
+    // said alone: a false clear throws the draft away ("… in this regard").
+    const hit = soundTail(text, w.end) || soundTail(text, w.send, RADIO_TAILS) || soundTail(text, w.clear, RADIO_TAILS, true);
+    return hit ? heardAs(text, hit.before, hit.phrase) : null;
+  };
   const radio = entries.length
-    ? new RegExp(
+    ? new SoundRegExp(
         "^(.*?)[\\s,.!?]*(?<![\\p{L}\\p{N}'])(" + entries.map((e) => "(?:" + e.rx + ")").join("|") + ")[.!?\\s]*$",
-        "iu"
+        "iu",
+        sounded
       )
     : /(?!)/;
   const radioKinds = entries.map((e) => [new RegExp("^(?:" + e.rx + ")$", "iu"), e.kind] as [RegExp, RadioKind]);
-  // The stop and stop-talking words with their older wordings (PHRASE_KIN).
-  const stops = withKin(w, "stop");
-  const hushes = withKin(w, "hush");
+  // The stop and stop-talking words with their older wordings (PHRASE_KIN)
+  // and what is heard for them.
+  const stops = [...new Set([...withKin(w, "stop"), ...heardOf(w, "stop")])];
+  const hushes = [...new Set([...withKin(w, "hush"), ...heardOf(w, "hush")])];
   const stopAll = [...stops].sort(longestFirst).map(keysOf);
   const stop = stopAll.filter((p) => p.length > 1);
   const hushKeys = [...hushes].sort(longestFirst).map((p) => keysOf(p).join(" "));
-  const hush = new RegExp(
+  // A hush a letter off: the whole phrase, its lead and tail word dropped.
+  const hushSounded = (keys: string): RegExpExecArray | null => {
+    let ws = keys.split(" ").filter(Boolean);
+    if (ws.length > 1 && HUSH_LEADS.includes(ws[0])) ws = ws.slice(1);
+    if (ws.length > 1 && HUSH_ENDS.includes(ws[ws.length - 1])) ws = ws.slice(0, -1);
+    return soundsLikeAny(ws.join(" "), w.hush) ? heardAs(keys, "", w.hush[0]) : null;
+  };
+  const hush = new SoundRegExp(
     "^(?:(?:" + HUSH_LEADS.join("|") + ") )?(?:" + (hushKeys.map(esc).join("|") || "(?!)") + ")(?: (?:" + HUSH_ENDS.join("|") + "))?$",
-    "u"
+    "u",
+    hushSounded
   );
   const radioPhrases = (ps: string[]) =>
     ps.map(keysOf).flatMap((k) => [k, ...RADIO_TAILS.map((t) => [...k, t])]);
   const control = [
     ...stopAll,
     ...hushes.map(keysOf),
-    ...radioPhrases(w.send),
-    ...radioPhrases(w.clear),
-    ...w.end.map(keysOf),
+    ...radioPhrases(sends),
+    ...radioPhrases(clears),
+    ...ends.map(keysOf),
     // "Over and out, that's all": the end phrase, then a stop phrase.
-    ...w.end.map(keysOf).flatMap((e) => stop.map((s) => [...e, ...s])),
+    ...ends.map(keysOf).flatMap((e) => stop.map((s) => [...e, ...s])),
   ].filter((p) => p.length);
   const commands = [...stops, ...hushes].map((p) => phraseWords(p).map((x) => [x, wordKey(x)]));
   return { v, radio, radioKinds, stop, hush, control, maxWords: Math.max(1, ...control.map((p) => p.length)), commands };
@@ -609,10 +659,52 @@ export type TailKind = "over" | "out" | "disregard" | "stop" | "hush" | "route";
 export const CONTROL_TAIL_MS = 250;
 /** How often the guess's tail is checked against the quiet. */
 export const CONTROL_POLL_MS = 50;
-/** "Over" from the guess ends the phrase and waits this long for its /end
- * (the accurate final, retyped first); then the fast words are sent and a
- * later final is ignored. */
-export const OVER_FINAL_WAIT_MS = 2500;
+/** "Over" from the guess ends the phrase and waits for its /end (the
+ * accurate final, retyped first) — at most this long, and less once the
+ * finals' round trip is known ({@link overWaitMs}); then the fast words are
+ * sent and a later final is ignored. */
+export const OVER_FINAL_WAIT_MS = 1500;
+/** The least "over" waits for the final (no round trip is under this). */
+export const OVER_FINAL_MIN_MS = 300;
+/** What a final's round trip costs beyond the server's own pass (/end's
+ * `final_ms`): the last chunk, the request, the typing. */
+export const FINAL_ROUND_TRIP_MS = 150;
+
+/** The wait for the final, from the finals' typical round trip (ms; null:
+ * none known yet — the most): half again as long plus a breath, so a final
+ * that takes its usual time is waited for and one that is late is not —
+ * within {@link OVER_FINAL_MIN_MS}..{@link OVER_FINAL_WAIT_MS}. The fast
+ * words are never held longer for a slow final: a late one is ignored. */
+export function overWaitMs(typical: number | null): number {
+  if (typical == null || !(typical > 0)) return OVER_FINAL_WAIT_MS;
+  return Math.min(OVER_FINAL_WAIT_MS, Math.max(OVER_FINAL_MIN_MS, Math.round(typical * 1.5 + 100)));
+}
+
+/** What the finals' round trip has been: from a phrase ended at the
+ * recognizer ({@link LiveHooks.endPhrase}) to its /end back ({@link
+ * LiveDictation.flush}), as an average that follows the last few (a slow
+ * moment is forgotten in a few phrases). Until one was measured, the
+ * server's own measure of its accurate pass ({@link LiveHooks.finalMs}) with
+ * {@link FINAL_ROUND_TRIP_MS} on top stands in. One per page: a dictation
+ * learns from the ones before it. */
+export class FinalClock {
+  private ema: number | null = null;
+  /** One final came back `ms` after its phrase was ended. */
+  note(ms: number): void {
+    if (!(ms >= 0) || ms > 60_000) return;
+    this.ema = this.ema == null ? ms : this.ema * 0.6 + ms * 0.4;
+  }
+  /** The typical round trip (ms); `seed`: the server's pass time, used while
+   * nothing was measured; null: unknown. */
+  typical(seed?: number | null): number | null {
+    if (this.ema != null) return Math.round(this.ema);
+    return seed != null && seed > 0 ? seed + FINAL_ROUND_TRIP_MS : null;
+  }
+  reset(): void {
+    this.ema = null;
+  }
+}
+export const finalClock = new FinalClock();
 /** A phrase taken from its guess: its own late words and end are ignored —
  * for at most this long (a phrase whose end never comes). */
 export const SWALLOW_MAX_MS = 5000;
@@ -963,6 +1055,10 @@ export interface LiveHooks {
   endPhrase?(): void;
   /** A send went through `ms` after the word's end ("over → sent"). */
   sentIn?(ms: number): void;
+  /** The server's measure of the last phrase's accurate pass (ms; /end's
+   * `final_ms`), if it has one: the first "over" of a page waits about that
+   * long for its final ({@link FinalClock}). */
+  finalMs?(): number | null;
 }
 
 /** The spoken confirmations of the dictation's actions — about what YOU did,
@@ -1039,6 +1135,11 @@ export class LiveDictation {
   private wordEnd = 0;
   /** When words last came in (ms) — or the mic was keyed. */
   private wordsAt = Date.now();
+  /** When the phrase was ended at the recognizer for a control word (ms):
+   * its /end back is one round trip for {@link finalClock}. */
+  private endedAt = 0;
+  /** When the person last talked over a line the app said (ms). */
+  private bargeAt = 0;
 
   constructor(
     private target: DictTarget | null,
@@ -1065,10 +1166,23 @@ export class LiveDictation {
    * waits (the queue's gate) until this is false. */
   midSentence(): boolean {
     if (this.done) return false;
-    const recent = Date.now() - this.wordsAt < MID_SENTENCE_MS;
+    const now = Date.now();
+    // Barged in: the person talks over a line (their words still on their
+    // way back) — the next line waits as for a sentence.
+    if (now - this.bargeAt < MID_SENTENCE_MS) return true;
+    const recent = now - this.wordsAt < MID_SENTENCE_MS;
     if (!this.heardAnything) return recent;
     const quiet = this.hooks.quietMs?.() ?? 0;
     return recent && !!(this.dict.held || this.dict.partial) && quiet < CONTROL_TAIL_MS;
+  }
+
+  /** The person started talking over a line the app was saying (the
+   * recognizer's barge-in; the caller cuts the line): the next line waits
+   * ({@link midSentence}) until their words are back and settled. */
+  bargedIn(): void {
+    if (this.done) return;
+    this.bargeAt = Date.now();
+    this.wordsAt = this.bargeAt;
   }
 
   hearing(t: string): Promise<void> {
@@ -1111,6 +1225,10 @@ export class LiveDictation {
   private phraseEnded(): boolean {
     clearTimeout(this.sendWait);
     this.sendWait = undefined;
+    if (this.endedAt) {
+      finalClock.note(Date.now() - this.endedAt);
+      this.endedAt = 0;
+    }
     if (!this.swallowing) return false;
     clearTimeout(this.swallowing);
     this.swallowing = undefined;
@@ -1149,14 +1267,19 @@ export class LiveDictation {
     clearInterval(this.tailTimer);
     this.tailTimer = undefined;
     this.wordEnd = Date.now() - Math.min(quiet, 60_000);
+    this.endedAt = Date.now();
     this.hooks.endPhrase?.();
     if (t.kind === "over" || t.kind === "out") {
-      // The accurate final, if /end brings it in time; else the fast words.
-      this.sendWait = setTimeout(() => {
-        this.sendWait = undefined;
-        this.swallow();
-        void this.step(() => this.dict.heard(t.text));
-      }, OVER_FINAL_WAIT_MS);
+      // The accurate final, if /end brings it within the finals' usual round
+      // trip (overWaitMs); else the fast words.
+      this.sendWait = setTimeout(
+        () => {
+          this.sendWait = undefined;
+          this.swallow();
+          void this.step(() => this.dict.heard(t.text));
+        },
+        overWaitMs(finalClock.typical(this.hooks.finalMs?.()))
+      );
       return;
     }
     // "Disregard", a stop, "stop talking", a switch: no accurate text needed.
@@ -1232,7 +1355,7 @@ export class LiveDictation {
     const field = this.target?.kind === "field";
     const base = this.opts.hint || (field ? "the words go into the text box" : dictHint());
     const lead = pickupLine(this.recording, this.hearingNow);
-    this.hooks.caption(lead ? lead + " · " + base : field ? "Listening — " + base : base, true);
+    this.hooks.caption(field && lead === "Listening…" ? "Listening — " + base : lead + " · " + base, true);
   }
 
   private step(next: () => DictOutcome): Promise<void> {
@@ -1299,7 +1422,9 @@ export class LiveDictation {
         const quiet = this.hooks.quietMs?.();
         const from = this.wordEnd || (quiet != null && quiet < 60_000 ? Date.now() - quiet : 0);
         this.wordEnd = 0;
-        const typedNow = !!(out.text || out.erase);
+        // A lone trailing space is not typed before Enter: nothing follows it
+        // in this message, and the keys would only have to settle first.
+        const typedNow = !!(out.erase || out.text.trim());
         if (typedNow && !(await this.put(out.text, true, out.erase))) return;
         if (this.done) return;
         // "Over and out" with nothing said since the last "over": just stop.
@@ -2220,7 +2345,7 @@ export const MID_SENTENCE_MS = 1500;
  * first use — the sentence rules are declared further down). */
 let confirmSentences: ReadonlySet<string> | null = null;
 const isConfirmSentence = (part: string) =>
-  (confirmSentences ||= new Set(Object.values(CONFIRM_LINES).flatMap((l) => speechSentences(l)))).has(part);
+  (confirmSentences ||= new Set(Object.values(CONFIRM_LINES).flatMap((l) => speechRequests(l)))).has(part);
 /** At most this many lines' audio kept (the five, plus switches). */
 export const SPEAK_CACHE_MAX = 32;
 
@@ -2323,7 +2448,7 @@ export class SpeechQueue {
    * never {@link last}; a {@link hold} (the mic keyed again) drops it
    * unplayed. Resolves once it has played (or was dropped). */
   cue(play: () => void, ms: number): Promise<void> {
-    const lead = this.speaking || this.lines.length ? CUE_GAP_MS : 0;
+    const lead = this.cueLead;
     return new Promise<void>((done) => {
       let at = 0;
       while (at < this.lines.length && this.lines[at].confirm) at++;
@@ -2350,6 +2475,18 @@ export class SpeechQueue {
 
   get busy(): boolean {
     return !!this.speaking;
+  }
+
+  /** The line being said is a confirmation ("Sent.") — the person's own
+   * action, played whole (a voice over it is not a barge-in). */
+  get confirming(): boolean {
+    return !!this.current?.confirm && !this.current.sound;
+  }
+
+  /** The quiet a {@link cue} queued now starts with: {@link CUE_GAP_MS} when
+   * something is being said or waits (the chime's recording skip covers it). */
+  get cueLead(): number {
+    return this.speaking || this.lines.length ? CUE_GAP_MS : 0;
   }
 
   get queued(): number {
@@ -2687,6 +2824,38 @@ export function speechSentences(text: string): string[] {
   return out;
 }
 
+/** About how many characters the voice says a second (a request's audio is
+ * guessed from its text). */
+export const SPEECH_CHARS_PER_S = 15;
+/** The server voice's one request costs at least this much speech's worth
+ * of time however short the text (Voice Lab: 1.4 s for "Sent.", as for
+ * 2.7 s of speech — synthesis ≈ max(1.4 s, 0.52 × the audio's length)): a
+ * request after the first is packed to at least this much speech. */
+export const SPEAK_REQUEST_MIN_S = 2.7;
+
+/** The server speaker's requests ({@link serverSpeaker}): the first
+ * sentence alone — the first sound is one short synthesis away — then the
+ * rest packed a few sentences at a time: each request at least
+ * {@link SPEAK_REQUEST_MIN_S} of speech (a short sentence alone costs the
+ * engine's floor for a fraction of the sound, and a gap before each) and at
+ * most about 1.5× the request before it, so it is back before that one has
+ * finished playing (the engine synthesises about twice as fast as it
+ * speaks). A long sentence stays a request of its own. */
+export function speechRequests(text: string): string[] {
+  const parts = speechSentences(text);
+  if (parts.length <= 2) return parts;
+  const out = [parts[0]];
+  const minChars = SPEAK_REQUEST_MIN_S * SPEECH_CHARS_PER_S;
+  let i = 1;
+  while (i < parts.length) {
+    const cap = Math.max(minChars, out[out.length - 1].length * 1.5);
+    let req = parts[i++];
+    while (i < parts.length && req.length < minChars && req.length + 1 + parts[i].length <= cap) req += " " + parts[i++];
+    out.push(req);
+  }
+  return out;
+}
+
 const WORD_MS = 400; // onend fallback: per word…
 const CHUNK_GRACE_MS = 1500; // …plus this per chunk
 
@@ -2705,7 +2874,8 @@ export function browserSpeaker(): Speaker & { available(): boolean } {
     available,
     speak(text) {
       return new Promise<void>((resolve) => {
-        const parts = sentenceChunks(text);
+        // Shaped for the voice only here: a caption shows the text as written.
+        const parts = sentenceChunks(shapeForSpeech(text, pronounce()));
         if (!available() || !parts.length) return resolve();
         const g = gen;
         let i = 0;
@@ -2772,13 +2942,14 @@ export function voiceAudioCtx(): AudioContext | null {
 }
 
 /** POST /api/voice/speak → audio bytes (Content-Type the backend's: mpeg for
- * a host, wav for piper) played through the one AudioContext — one request
- * per sentence ({@link speechSentences}), pipelined: the first sentence is
- * asked for at once and plays the moment it is back, the next is asked for
- * while it plays (one request in flight, never more — a CPU engine would
- * only share itself out), and each is scheduled to start the instant the
- * one before ends, so nothing waits on the whole line and there is no gap
- * when the next is ready in time. speak() resolves when the last sentence
+ * a host, wav for piper) played through the one AudioContext — a request
+ * for the first sentence, then a few sentences at a time
+ * ({@link speechRequests}), pipelined: the first is asked for at once and
+ * plays the moment it is back, the next is asked for while it plays (one
+ * request in flight, never more — a CPU engine would only share itself
+ * out), and each is scheduled to start the instant the one before ends, so
+ * nothing waits on the whole line and there is no gap when the next is
+ * ready in time. speak() resolves when the last request
  * has played; cancel() stops what plays, aborts the request and drops the
  * rest. Any failure — 409 (turned off), 502, the network, a clip that won't
  * decode, a context that isn't running — says the rest of the line with
@@ -2837,7 +3008,7 @@ export function serverSpeaker(
       const ctx = voiceAudioCtx();
       if (!ctx) return;
       for (const line of lines)
-        for (const part of speechSentences(line)) {
+        for (const part of speechRequests(line)) {
           if (cache.has(keyOf(part))) continue;
           const p = fetchAudio(ctx, part, new AbortController());
           remember(part, p);
@@ -2845,7 +3016,7 @@ export function serverSpeaker(
         }
     },
     async speak(text: string): Promise<void> {
-      const parts = speechSentences(text);
+      const parts = speechRequests(text);
       if (!parts.length) return;
       const g = gen;
       const ctx = voiceAudioCtx();
@@ -2970,6 +3141,11 @@ export interface RecognizerHandlers {
   onFlush?(text: string, final?: string): void;
   /** A passing line for the caption (streaming fell back to clips). */
   onNotice?(text: string): void;
+  /** The person talks over a line the app is saying (the server's
+   * recognizer, muted for it, heard a voice: {@link BargeDetector}). The
+   * line is the caller's to cut; the recorder's mute is lifted by that (its
+   * tail then the person's, not skipped). */
+  onBarge?(): void;
   /** `code`: the Web Speech error names, plus "server" / "nothing-recorded"
    * (`detail` is then the line to show). */
   onError(code: string, detail?: string): void;
@@ -3196,6 +3372,74 @@ export function chunkMinS(passMs: number | null): number {
  * (speech_stream.EXPIRE_SECONDS). */
 export const STREAM_FRESH_MS = 40_000;
 
+/** How long a clip's transcript may take after letting go (a whole phrase
+ * uploaded at once, transcribed whole). */
+export const CLIP_FINISH_WAIT_MS = 45_000;
+
+/** The toggle's second click / the hold's release waits for the phrase in
+ * flight this long before stopping with what it has: a streamed phrase's
+ * words are typed already — only its accurate final is awaited, the finals'
+ * usual round trip ({@link overWaitMs}); a clip's transcript is all of it
+ * ({@link CLIP_FINISH_WAIT_MS}); Web Speech's final {@link HOLD_FINAL_WAIT_MS}. */
+export function finishWaitMs(rec: { name: string; streaming?: boolean; finalMs?: number | null }): number {
+  if (rec.name !== "server") return HOLD_FINAL_WAIT_MS;
+  return rec.streaming ? overWaitMs(finalClock.typical(rec.finalMs)) : CLIP_FINISH_WAIT_MS;
+}
+
+/** Barge-in by voice, while the app says a line: the microphone's level is
+ * read this often (an analyser; the recorder drops muted blocks unmetered)… */
+export const BARGE_POLL_MS = 40;
+/** …and this many loud reads in a row (≈ {@link BARGE_POLL_MS} × this after
+ * the voice starts) are the person talking over the line. */
+export const BARGE_POLLS = 3;
+/** A read is loud over the app's voice from this RMS (twice {@link
+ * RMS_SPEECH}) — and three times what the microphone hears of the app's own
+ * voice ({@link BargeDetector.bleed}). */
+export const BARGE_RMS = 0.04;
+/** The mute lifted this soon after a barge-in is for it: the recorder's tail
+ * is the person's, not the voice dying away (no {@link BARGE_SKIP_MS}). */
+export const BARGE_FRESH_MS = 1000;
+/** A barge-in lifts the mute with this much of the muted audio kept: the
+ * detector's {@link BARGE_POLLS} reads plus the word's soft start. */
+export const BARGE_REWIND_MS = BARGE_POLL_MS * BARGE_POLLS + 150;
+
+/** Hears for the person while the app talks. What reaches the microphone
+ * of the app's own voice — what the browser's echo cancellation leaves of
+ * the speakers — is learnt as a floor ({@link bleed}: the first read seeds
+ * it, every read since moves it a little, kept from line to line, so a
+ * machine without cancellation never barges on its own voice); a read over
+ * {@link BARGE_RMS} and three times that floor is loud, and
+ * {@link BARGE_POLLS} loud reads in a row are a barge-in (then the run
+ * starts over). Pure, so it is pinned by tests. */
+export class BargeDetector {
+  /** The app's voice as the microphone hears it (a read's RMS, averaged). */
+  bleed = 0;
+  /** The last read was loud. */
+  loud = false;
+  private run = 0;
+  /** A barge-in was signalled this line: what follows is the person, not
+   * the app's voice — the floor learns nothing more until the next line. */
+  private barged = false;
+
+  /** A line starts (the recorder is muted for it). */
+  begin(): void {
+    this.run = 0;
+    this.loud = false;
+    this.barged = false;
+  }
+
+  /** One read's RMS while muted: true when it completes a barge-in. */
+  block(rms: number): boolean {
+    this.loud = this.bleed > 0 && rms > Math.max(BARGE_RMS, this.bleed * 3);
+    if (!this.barged) this.bleed = this.bleed > 0 ? this.bleed * 0.95 + rms * 0.05 : rms;
+    this.run = this.loud ? this.run + 1 : 0;
+    if (this.run < BARGE_POLLS) return false;
+    this.run = 0;
+    this.barged = true;
+    return true;
+  }
+}
+
 /** One phrase being recorded. `stream`: it streams (else it is a clip — clip
  * mode, or streaming fell back); `sid` the stream once open (`opened` when);
  * `busy` the one request in flight (the open, or a chunk); `fresh`: speech
@@ -3245,7 +3489,7 @@ const langTag = () => String(navigator.language || "en").split(";")[0];
  * given back by {@link Recognizer.release}. */
 export function serverRecognizer(
   opts: { stream?: () => boolean; mic?: MicKeeper } = {}
-): Recognizer & { lastError: string; mic: MicKeeper; passMs: number | null; finalMs: number | null } {
+): Recognizer & { lastError: string; mic: MicKeeper; passMs: number | null; finalMs: number | null; readonly streaming: boolean } {
   const mic = opts.mic || new MicKeeper();
   /** This dictation holds the microphone (one {@link MicKeeper.hold}). */
   let holding = false;
@@ -3266,8 +3510,47 @@ export function serverRecognizer(
   const open = new Set<string>();
   /** Barge-in: audio before this (ms) is the app's own voice dying away. */
   let skipUntil = 0;
-  /** A confirmation plays: the clips drop the audio ({@link Recognizer.mute}). */
+  /** The app says a line: its audio is not the person's — the recorder
+   * drops it ({@link Recognizer.mute}) while an analyser on the microphone
+   * listens for a voice over it ({@link BargeDetector} → onBarge). */
   let muted = false;
+  const barge = new BargeDetector();
+  let bargeTimer: ReturnType<typeof setInterval> | undefined;
+  let bargeTap: { src: MediaStreamAudioSourceNode; an: AnalyserNode; buf: Float32Array<ArrayBuffer>; stream: MediaStream } | null = null;
+  let lastBargeAt = 0;
+  /** The microphone and the context the phrase records with. */
+  let micStream: MediaStream | null = null;
+  let micCtx: AudioContext | null = null;
+  /** Muted: read the microphone's level every {@link BARGE_POLL_MS}. */
+  const listenOver = () => {
+    if (bargeTimer || !micStream || !micCtx) return;
+    try {
+      if (bargeTap?.stream !== micStream) {
+        bargeTap?.src.disconnect();
+        const src = micCtx.createMediaStreamSource(micStream);
+        const an = micCtx.createAnalyser();
+        an.fftSize = 2048;
+        src.connect(an);
+        bargeTap = { src, an, buf: new Float32Array(an.fftSize), stream: micStream };
+      }
+    } catch {
+      bargeTap = null;
+      return;
+    }
+    barge.begin();
+    bargeTimer = setInterval(() => {
+      const t = bargeTap;
+      if (!t || !muted || !h) return;
+      t.an.getFloatTimeDomainData(t.buf);
+      if (!barge.block(rmsOf(t.buf))) return;
+      lastBargeAt = Date.now();
+      h.onBarge?.();
+    }, BARGE_POLL_MS);
+  };
+  const unlistenOver = () => {
+    clearInterval(bargeTimer);
+    bargeTimer = undefined;
+  };
 
   const unhold = () => {
     if (!holding) return;
@@ -3612,6 +3895,8 @@ export function serverRecognizer(
     const ctx = voiceAudioCtx();
     if (ctx && ctx.state === "suspended") await ctx.resume().catch(() => {});
     if (token !== mine) return discard(c);
+    micStream = s;
+    micCtx = ctx;
     if (!want) {
       // finish() came between two phrases: nothing more to record.
       discard(c);
@@ -3685,9 +3970,18 @@ export function serverRecognizer(
     finalMs: null as number | null,
     mic,
     available: () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia && !!audioCtxCtor(),
+    /** The dictation streams (its words are typed as they come). */
+    get streaming(): boolean {
+      return streaming;
+    },
     mute(on: boolean) {
       muted = on;
-      cur?.rec?.mute?.(on, BARGE_SKIP_MS / 1000);
+      if (on) listenOver();
+      else unlistenOver();
+      // Lifted for a barge-in: the tail is the person's, kept — and so is
+      // the start of their word, heard while the detector was counting.
+      const barged = !on && Date.now() - lastBargeAt < BARGE_FRESH_MS;
+      cur?.rec?.mute?.(on, barged ? 0 : BARGE_SKIP_MS / 1000, barged ? BARGE_REWIND_MS / 1000 : 0);
     },
     endPhrase() {
       if (cur?.heard && want) endClip();
@@ -3721,6 +4015,13 @@ export function serverRecognizer(
       h = null;
       token = null;
       clearTimeout(capTimer);
+      unlistenOver();
+      try {
+        bargeTap?.src.disconnect();
+      } catch {
+        /* already gone */
+      }
+      bargeTap = null;
       const c = cur;
       cur = null;
       c?.rec?.cancel();
@@ -3780,8 +4081,10 @@ export const DEFAULT_VOICE_CFG: VoiceCfg = { stt: "phone", tts: "phone", server_
 export async function loadVoiceCfg(prev: VoiceCfg | null): Promise<VoiceCfg> {
   try {
     const j = await api<Partial<VoiceCfg>>("/api/voice");
-    // The voice words ride along: the matchers and hints use them from now.
+    // The voice words ride along: the matchers and hints use them from now;
+    // so do the person's pronunciations (the browser's own voice shapes with them).
     applyVoiceView(j);
+    setPronounce((j as { pronounce?: unknown } | null)?.pronounce);
     if (j && typeof j === "object") {
       return {
         stt: j.stt === "server" ? "server" : "phone",

@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { TAKE_MIN_S, encodeWav, resample, resampleTo, resamplerName, startWavRecording } from "../lib/wavRecorder";
+import { MUTE_HOLD_S, TAKE_MIN_S, encodeWav, resample, resampleTo, resamplerName, startWavRecording } from "../lib/wavRecorder";
 import { code } from "./sourceText";
 
 async function view(blob: Blob): Promise<DataView> {
@@ -499,5 +499,45 @@ describe("startWavRecording", () => {
     }).not.toThrow();
     expect(await second).toBe(a);
     expect(() => rec.cancel()).not.toThrow();
+  });
+});
+
+describe("mute rewind (barge-in)", () => {
+  it("keeps the last rewindS of the muted audio when the mute lifts for a barge-in", () => {
+    const g = fakeGraph(48000);
+    const rec = startWavRecording(STREAM, g.ctx, {});
+    g.fire(new Float32Array(4096).fill(0.25));
+    rec.mute!(true);
+    for (let i = 0; i < 8; i++) g.fire(new Float32Array(4096).fill(0.01 * (i + 1))); // a reply plays, then a word starts
+    expect(rec.seconds()).toBeCloseTo(4096 / 48000, 9);
+    // 0.2 s back = 9600 frames: the last two blocks (8192) and 1408 of the one before.
+    rec.mute!(false, 0.15, 0.2);
+    expect(rec.seconds()).toBeCloseTo((4096 + 9600) / 48000, 9);
+    // No tail skip rode along: the next block is recorded at once.
+    g.fire(new Float32Array(4096).fill(0.3));
+    expect(rec.seconds()).toBeCloseTo((4096 + 9600 + 4096) / 48000, 9);
+  });
+
+  it("holds at most MUTE_HOLD_S while muted and forgets it on the next mute", () => {
+    const g = fakeGraph(48000);
+    const rec = startWavRecording(STREAM, g.ctx, {});
+    rec.mute!(true);
+    for (let i = 0; i < 20; i++) g.fire(new Float32Array(4096).fill(0.1)); // 1.7 s, more than the hold
+    rec.mute!(false, 0, 5);
+    const held = rec.seconds() * 48000;
+    expect(held).toBeGreaterThanOrEqual(MUTE_HOLD_S * 48000 - 4096);
+    expect(held).toBeLessThan(MUTE_HOLD_S * 48000 + 4096);
+    rec.mute!(true);
+    rec.mute!(false, 0, 5);
+    expect(rec.seconds() * 48000).toBe(held);
+  });
+
+  it("a plain unmute (tail skip) keeps nothing of the muted audio", () => {
+    const g = fakeGraph(48000);
+    const rec = startWavRecording(STREAM, g.ctx, {});
+    rec.mute!(true);
+    g.fire(new Float32Array(4096).fill(0.9));
+    rec.mute!(false, 0);
+    expect(rec.seconds()).toBe(0);
   });
 });

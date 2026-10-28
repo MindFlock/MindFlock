@@ -40,6 +40,7 @@ import { applyVoiceView, quoted } from "../../../lib/voiceWords";
 import { useVoiceWords } from "../../../lib/useVoiceWords";
 import { replayTour } from "../../onboarding/replayTour";
 import { VoiceWordsBlock } from "./VoiceWords";
+import { PronounceBlock } from "./Pronounce";
 import type { ScreenProps } from "../SettingsDialog";
 import { SECRET_MASK, SettingField, useSettings, type SettingsModel } from "../useSettings";
 import "./voice.css";
@@ -77,6 +78,9 @@ export interface VoiceView {
    * (lib/voiceWords); absent on a server older than them. */
   words?: Record<string, unknown>;
   words_default?: Record<string, unknown>;
+  /** The person's own pronunciations (`voice.pronounce`, screens/Pronounce.tsx,
+   * lib/spokenText); absent on a server older than them. */
+  pronounce?: Array<{ say: string; as: string }>;
   /** Whether this viewer may change the server (auth.may_configure). Absent
    * means the server didn't say: assume yes — an owner-only POST answers a
    * refusal with its own 403 sentence anyway. */
@@ -407,6 +411,7 @@ export function VoiceSectionView({
       </div>
       <MicPrefs />
       <VoiceWordsBlock model={model} view={view} />
+      <PronounceBlock model={model} view={view} />
       <h3 className="set-section-title">Permission dialogs</h3>
       <div className="set-row set-switch-row" id="voice-approve-row">
         <span className="notif-rule-text">

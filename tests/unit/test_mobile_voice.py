@@ -214,7 +214,7 @@ def test_mobile_js_voice_state_machine_and_adapters():
         in tts
     )
     assert "return new Promise(function (resolve) {" in tts
-    assert "var parts = sentenceChunks(text);" in tts
+    assert "var parts = sentenceChunks(voiceShapeSpoken(text));" in tts
     assert "words * VOICE_WORD_MS + VOICE_CHUNK_GRACE_MS" in tts
     assert "var VOICE_WORD_MS = 400;" in v and "var VOICE_CHUNK_GRACE_MS = 1500;" in v
     assert "keep.push(u);" in tts
@@ -490,7 +490,11 @@ def test_mobile_js_spoken_replies_say_per_prompt():
     )
     assert "voice.expectSay = say;" in send and "voice.dictated = false;" in send
     assert 'var talk = voice.prefs.replies !== "off";' in send
-    assert "if (base !== null && talk) voiceAckStart(title, base);" in send
+    # The ack poll starts once the baseline is in — for this send, while it is working.
+    assert (
+        'if (talk) baseline.then(function (base) { if (base !== null && seq === voiceSendSeq && voice.state === "working") voiceAckStart(title, base); });'
+        in send
+    )
     assert "if (talk) speakLine(sent, true); else voiceCaption(sent);" in send
     # Everything with voice off: a typed prompt goes through /send too, say:true.
     every = _fn(js, "everythingTakesSend")
@@ -1018,8 +1022,9 @@ def test_mobile_js_server_recognizer_records_wav():
         "Math.min(streams() ? VOICE_STREAM_MAX_MS : VOICE_CLIP_MAX_MS, remaining)"
         in stt
     )
-    # The level is floor-relative (voiceLevelOf): a room's hum sits at zero.
-    assert "h.onLevel(voiceLevelOf(rms, g.floor))" in stt
+    # The level is floor-relative (voiceLevelOf): a room's hum sits at zero;
+    # under a chime's mute the ring sits it out (no word may start in it).
+    assert "h.onLevel(muted ? 0 : voiceLevelOf(rms, g.floor))" in stt
     # finish(): join, resample to 16 kHz (anti-aliased, async), encode,
     # upload as audio/wav. pending() covers the resample too.
     assert "var VOICE_WAV_RATE = 16000;" in v
@@ -1259,11 +1264,20 @@ def test_mobile_js_server_recognizer_starts_fast_and_shows_it_hears():
     assert 'step = voicePickup(v), s = ["0", "0.5", "1"][step]' in paint
     assert 'el.style.setProperty("--pick", s)' in paint and "--lvl" not in js
     assert "[voiceBtn, voiceLevelEl, askMicBtn]" in paint
-    assert "var VOICE_RING_SMOOTH_MS = 400;" in v
-    assert "Math.exp(-dt / VOICE_RING_SMOOTH_MS)" in _fn(js, "voiceLevelStep")
+    # Up fast (80 ms), down slower (300 ms): alive on the first syllable, no flicker between words.
+    assert (
+        "var VOICE_RING_ATTACK_MS = 80;" in v
+        and "var VOICE_RING_RELEASE_MS = 300;" in v
+    )
+    step = _fn(js, "voiceLevelStep")
+    assert (
+        "var tau = target > shown ? VOICE_RING_ATTACK_MS : VOICE_RING_RELEASE_MS;"
+        in step
+    )
+    assert "Math.exp(-dt / tau)" in step and "VOICE_RING_SMOOTH_MS" not in js
     assert "return v < 0.1 ? 0 : v < 0.5 ? 1 : 2;" in _fn(js, "voicePickup")
     ring = css.split("#voice-btn::after, #asking-mic::after {")[1].split("}")[0]
-    assert "transition: opacity 400ms ease;" in ring and "transform" not in ring
+    assert "transition: opacity 150ms ease;" in ring and "transform" not in ring
     assert "border: 2px solid var(--tone-broken);" in ring
     mic = css[css.index("#voice-btn, #asking-mic {") : css.index("#voice-strip {")]
     assert "scale(" not in mic and "animation" not in mic
@@ -1950,7 +1964,7 @@ def test_guess_control_under_node():
     v = _voice_section(js)
     assert (
         "var VOICE_CONTROL_TAIL_MS = 250;" in v
-        and "var VOICE_CONTROL_END_MS = 2500;" in v
+        and "var VOICE_CONTROL_END_MS = 1500;" in v
     )
     # The recorder fires it: quiet VOICE_CONTROL_TAIL_MS after a guess that
     # ends in one (the next guess may rule it out), never while loud.
@@ -1962,7 +1976,16 @@ def test_guess_control_under_node():
     fire = js[js.index("    function controlFire(g, mine) {") :]
     fire = fire[: fire.index("\n    }\n") + 6]
     assert "streamDrop(g);" in fire and "streamDone(g, mine, c.text);" in fire
-    assert "}, VOICE_CONTROL_END_MS);" in fire and "finish();" in fire
+    # The wait for /end is a budget that follows how long /end takes here
+    # (voiceEndBudgetMs), never a fixed 2.5 s; a late /end grows the next one.
+    assert "var budget = voiceEndBudgetMs(voice.rec.endMs);" in fire
+    assert "voice.rec.ctl.budget = budget;" in fire
+    assert "}, budget);" in fire and "finish();" in fire
+    assert (
+        "voice.rec.endMs = Math.round(((voice.rec.endMs || budget) + budget * 1.2) / 2);"
+        in fire
+    )
+    assert "}, VOICE_CONTROL_END_MS);" not in fire
     # The Enter is timed from the word's end: "over → sent 0.9 s".
     assert "voiceCtlSent();" in _fn(js, "voiceSendOn") and "voiceCtlSent();" in _fn(
         js, "voiceSend"

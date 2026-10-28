@@ -72,16 +72,17 @@ html, body {
 }
 
 /* --- top bar: activity dot + session picker + agent/shell tabs --- */
-/* Two rows: the session (dot, picker, ⋯, +) over the Agent / Terminal / Diff
-   tabs. One row no longer fits a 390px phone once the picker carries the
-   state chip and "Terminal" is spelled out. */
+/* ONE row, always (owner's rule): dot, picker, ⋯, +, then the Agent /
+   Terminal / Diff tabs. Nothing here may wrap — the picker is the only thing
+   that gives (min-width: 0, its title ellipsizes), the tabs are compact
+   (12px, 7px sides) so the three of them take ~170px of a 390px phone. */
 #bar {
   flex: 0 0 auto;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 8px;
-  padding: max(8px, env(safe-area-inset-top)) 10px 8px 10px;
+  gap: 6px;
+  padding: max(8px, env(safe-area-inset-top)) 8px 8px 8px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
@@ -114,6 +115,7 @@ html, body {
 #picker {
   flex: 1 1 auto;
   min-width: 0;
+  container-type: inline-size;   /* the chip asks how wide the picker is */
   display: flex;
   align-items: center;
   gap: 8px;
@@ -147,6 +149,10 @@ html, body {
   line-height: 1.5;
   white-space: nowrap;
 }
+/* On a one-row bar the chip is what gives first: under ~200px of picker (a
+   393px phone in portrait) it hides and the dot alone carries the tone; the
+   word is back in landscape and on a tablet. The name beats the state word. */
+@container (max-width: 200px) { .state-chip { display: none; } }
 
 #more-btn {
   flex: 0 0 auto;
@@ -154,7 +160,7 @@ html, body {
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 7px;
-  padding: 5px 10px;
+  padding: 5px 8px;
   font-size: 18px;
   line-height: 1.3;
   font-family: inherit;
@@ -163,21 +169,21 @@ html, body {
 #more-btn:active { background: var(--border); }
 
 #tabs {
-  flex: 1 1 100%;
-  order: 9;
+  flex: 0 0 auto;
   display: flex;
   border: 1px solid var(--border);
   border-radius: 7px;
   overflow: hidden;
 }
 .tab {
-  flex: 1 1 0;
+  flex: 0 0 auto;
   background: var(--bg);
   color: var(--muted);
   border: 0;
-  padding: 8px 12px;
-  font-size: 13px;
+  padding: 8px 7px;
+  font-size: 12px;
   font-family: inherit;
+  white-space: nowrap;
 }
 .tab.active { background: var(--accent); color: #fff; }
 
@@ -192,7 +198,7 @@ html, body {
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 7px;
-  padding: 5px 11px;
+  padding: 5px 9px;
   font-size: 20px;
   line-height: 1.2;
   font-family: inherit;
@@ -658,6 +664,11 @@ html, body {
   background: var(--panel);
   overflow-x: auto;
 }
+/* Keyboard up (mobile.js applyViewport sets #app.kb when the viewport has
+   lost >150px to it): the keyboard covers the home bar, but iOS keeps
+   reporting the inset, which left a dark band between the keys and the
+   keyboard. The inset belongs under the keys only while they are bottommost. */
+#app.kb #keys { padding-bottom: 6px; }
 .key {
   flex: 1 1 0;
   min-width: 42px;
@@ -872,8 +883,9 @@ html, body {
 #voice-btn:active, #asking-mic:active { background: var(--border); }
 /* Still, never bouncing: while it records, a constant thin red ring round
    the mic; mobile.js voiceRingPaint sets --pick (0 / 0.5 / 1: quiet,
-   hearing you, loud — the voice's level smoothed over ~400 ms) and only the
-   ring's opacity eases between those steps. No scale, no pulse, no halo. */
+   hearing you, loud — the voice's level, up in ~80 ms and down over
+   ~300 ms) and only the ring's opacity eases between those steps, quickly.
+   No scale, no pulse, no halo. */
 #voice-btn::after, #asking-mic::after {
   content: "";
   position: absolute;
@@ -881,7 +893,7 @@ html, body {
   border: 2px solid var(--tone-broken);
   border-radius: 10px;
   opacity: 0;
-  transition: opacity 400ms ease;
+  transition: opacity 150ms ease;
   pointer-events: none;
 }
 #voice-btn[data-state="listening"]::after, #asking-mic[data-state="listening"]::after {
@@ -918,11 +930,17 @@ html, body {
   border-top: 1px solid var(--border);
   font-size: 13px;
 }
+/* Typing (the compose box has focus, mobile.js sets #app.typing): the strip
+   — the "Tap to hear …" block included — leaves; the keyboard already has
+   half the screen and the mic button carries voice's state. Back on blur. */
+#app.typing #voice-strip { display: none !important; }
+/* As tall as its tallest button, always: Cancel and Stop talking come and
+   go without the strip (and the terminal under it) moving by a pixel. */
 #voice-strip-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 28px;
+  min-height: 36px;
 }
 /* One word (Listening… / Speaking… / Quiet.), one line: the strip never
    grows with what is heard or said — those words are in the box. */
@@ -936,17 +954,19 @@ html, body {
   text-overflow: ellipsis;
   line-height: 1.3;
 }
+/* Thumb-sized (36 px tall, the gear 36 wide): never smaller than the row. */
 #voice-hush, #voice-cancel, #voice-gear {
   flex: 0 0 auto;
+  min-height: 36px;
   background: var(--panel-2);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 7px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   font-size: 13px;
   font-family: inherit;
 }
-#voice-gear { font-size: 16px; padding: 3px 9px; }
+#voice-gear { font-size: 16px; padding: 3px 9px; min-width: 36px; }
 #voice-hush:active, #voice-cancel:active, #voice-gear:active { background: var(--border); }
 #voice-hush { border-color: var(--tone-waiting); color: var(--tone-waiting); }
 /* The level meter, only while the ⚙ sheet is open: --pick (set on
@@ -961,7 +981,7 @@ html, body {
   overflow: hidden;
   pointer-events: none;
 }
-#voice-level-bar { height: 100%; width: 100%; background: var(--tone-working); transform: scaleX(var(--pick, 0)); transform-origin: left center; transition: transform 400ms ease; }
+#voice-level-bar { height: 100%; width: 100%; background: var(--tone-working); transform: scaleX(var(--pick, 0)); transform-origin: left center; transition: transform 150ms ease; }
 #voice-hear {
   display: block;
   width: 100%;

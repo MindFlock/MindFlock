@@ -86,8 +86,8 @@ import {
   HUSH_CAPTION_MS,
   HUSH_LINE,
   DEFAULT_VOICE_CFG,
-  HOLD_FINAL_WAIT_MS,
   finalLine,
+  finishWaitMs,
   micPill,
   HandsFree,
   HeardTurns,
@@ -785,8 +785,9 @@ export function TopBarMic() {
     // ask being read drops the rest of its read-out — and the first moment
     // of audio (its voice dying away) is skipped.
     const skipMs = Math.max(bargeIn(queue, ask && opts.title === ask.title ? ask.title : ""), opts.skipMs || 0);
-    // The start chime is not the person: skipped like the app's own voice.
-    const chimeSkip = prefsRef.current.sounds !== false ? CHIME_MS + 30 : 0;
+    // The start chime is not the person: skipped like the app's own voice
+    // (with the breath it waits when something is queued).
+    const chimeSkip = prefsRef.current.sounds !== false ? queue.cueLead + CHIME_MS + 30 : 0;
     const continuous = opts.continuous !== false;
     idles.current = opts.idle ?? (!continuous || prefsRef.current.ptt === "hold");
     const d = new LiveDictation(
@@ -846,6 +847,9 @@ export function TopBarMic() {
           if (live.current === d) rec.current?.endPhrase?.();
         },
         sentIn: (ms) => void (lastSentMs = ms),
+        // The server's own measure of the last accurate pass: how long the
+        // first "over" waits for its final (lib/voiceDesktop FinalClock).
+        finalMs: () => (r === serverRec ? serverRec.finalMs : null),
       },
       { hint: opts.hint, continuous }
     );
@@ -907,6 +911,14 @@ export function TopBarMic() {
         },
         onNotice: (t) => {
           if (live.current === d) d.notice(t);
+        },
+        // The person talks over a line the app says (lib/voiceDesktop
+        // BargeDetector): a reply or a read-out is cut and the next line
+        // waits for their words; a confirmation ("Sent.") plays on.
+        onBarge: () => {
+          if (live.current !== d || !queue.busy || queue.confirming) return;
+          d.bargedIn();
+          queue.skip();
         },
         onError: (code, detail) => {
           if (live.current !== d) return;
@@ -983,8 +995,9 @@ export function TopBarMic() {
     });
 
   /** The toggle's second click / the hold's release: stop — once the
-   * recognizer has delivered the phrase in flight (up to HOLD_FINAL_WAIT_MS;
-   * a server clip until its transcript is back), which is typed like the rest. */
+   * recognizer has delivered the phrase in flight (lib/voiceDesktop
+   * finishWaitMs: a streamed phrase's final for its usual round trip, a
+   * server clip until its transcript is back), which is typed like the rest. */
   const finish = () => {
     const r = rec.current;
     const d = live.current;
@@ -1004,7 +1017,7 @@ export function TopBarMic() {
       void d.finish();
     };
     deciding.current = decide;
-    const timer = setTimeout(decide, r.name === "server" ? 45_000 : HOLD_FINAL_WAIT_MS);
+    const timer = setTimeout(decide, finishWaitMs(r === serverRec ? serverRec : { name: r.name }));
     r.finish();
   };
 

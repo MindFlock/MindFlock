@@ -299,11 +299,26 @@ const INIT = `
   }
   window.webkitSpeechRecognition = FakeRec;
   window.SpeechRecognition = FakeRec;
+  // A phrase "heard": delivered to the recognizer that is up. Between two
+  // recognizers (the page restarts one 250 ms after it ends, or once a
+  // confirmation said over the listen is over) it waits a little for the
+  // next — a real voice is not lost in that gap, and under load (five
+  // workers' Chromes) the gap stretches. False when none came up.
   window.__hear = function (text, interimOnly) {
-    const r = window.__rec; if (!r || !r.started) return false;
-    const res = [{ transcript: text }]; res.isFinal = !interimOnly;
-    r.onresult({ resultIndex: 0, results: [res] });
-    return true;
+    return new Promise((resolve) => {
+      const t0 = Date.now();
+      (function attempt() {
+        const r = window.__rec;
+        if (r && r.started) {
+          const res = [{ transcript: text }]; res.isFinal = !interimOnly;
+          r.onresult({ resultIndex: 0, results: [res] });
+          resolve(true);
+          return;
+        }
+        if (Date.now() - t0 > 600) { resolve(false); return; }
+        setTimeout(attempt, 20);
+      })();
+    });
   };
   window.__silence = function () { const r = window.__rec; if (!r || !r.started) return false; r.started = false; r.onerror && r.onerror({ error: "no-speech" }); r.onend && r.onend(); return true; };
   window.__netfail = function () { const r = window.__rec; if (!r || !r.started) return false; r.started = false; r.onerror && r.onerror({ error: "network" }); r.onend && r.onend(); return true; };
@@ -978,7 +993,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
       const b = document.getElementById("voice-btn"), cs = getComputedStyle(b), ring = getComputedStyle(b, "::after");
       return { anim: cs.animationName, tf: cs.transform, ringTf: ring.transform, ringOp: ring.opacity, ringTr: ring.transitionProperty + " " + ring.transitionDuration, meter: document.getElementById("voice-level").classList.contains("hidden") };
     });
-    check("the mic is still: no pulse, no scale — a thin ring whose opacity alone eases (400 ms)", still.anim === "none" && still.tf === "none" && still.ringTf === "none" && /opacity 0\.4s/.test(still.ringTr) && parseFloat(still.ringOp) > 0.5, JSON.stringify(still));
+    check("the mic is still: no pulse, no scale — a thin ring whose opacity alone eases (150 ms)", still.anim === "none" && still.tf === "none" && still.ringTf === "none" && /opacity 0\.15s/.test(still.ringTr) && parseFloat(still.ringOp) > 0.5, JSON.stringify(still));
     check("…and the level meter stays hidden while the ⚙ sheet is closed", still.meter, JSON.stringify(still));
     const capH = await page3.evaluate(() => window.mfVoice.caption);
     check("the loop's caption (the ask sheet's line) says 'Hearing you…' while the voice comes in — the strip only 'Listening…'", /^Hearing you…/.test(capH) && (await page3.evaluate(() => document.getElementById("voice-caption").textContent)) === "Listening…", capH);
@@ -1117,7 +1132,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await waitFor(page4, () => window.__boxes.some(Boolean), 3000, "phrase 1 in the box");
     const box1 = await page4.evaluate(() => window.__boxes.filter(Boolean));
     const caps1 = await page4.evaluate(() => window.__caps.slice());
-    const STRIP_WORDS = ["", "Listening…", "Speaking…", "Quiet."];
+    const STRIP_WORDS = ["", "Listening…", "Speaking…", "Sending…", "Quiet.", "Heard nothing."];
     const parts1 = await page4.evaluate(() => window.__parts.slice());
     check("…the strip never showed the words while they streamed — only its one word (no transcript, no 'Hearing you…', no greyed partial)", caps1.length >= 1 && caps1.every((c) => STRIP_WORDS.includes(c)) && caps1.includes("Listening…") && parts1.every((x) => x === null), JSON.stringify([caps1, parts1]));
     // The session's last Say: line asked a question, so "the" waits a word
@@ -2518,6 +2533,21 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await waitFor(pageS, () => window.mfVoice.state === "listening", 3000, "speak page listening");
     await pageS.click("#voice-cancel");
     await waitFor(pageS, () => window.mfVoice.state === "idle" && window.mfVoice.tts.name === "server", 3000, "server voice");
+    // ---- instant acknowledgement: the tap turns the strip, the mic and the
+    // state in the same tick as the click — before any network, any timer.
+    const ack = await pageS.evaluate(() => {
+      const b = document.getElementById("voice-btn"), c = document.getElementById("voice-caption"), t0 = performance.now();
+      b.click();
+      return { ms: Math.round((performance.now() - t0) * 10) / 10, state: window.mfVoice.state, strip: c.textContent, btn: b.dataset.state, cancel: !document.getElementById("voice-cancel").classList.contains("hidden") };
+    });
+    check("ack: a tap → state, strip ('Listening…'), the mic's colour and Cancel change in the same tick (" + ack.ms + " ms), before any network", ack.state === "listening" && ack.strip === "Listening…" && ack.btn === "listening" && ack.cancel && ack.ms < 50, JSON.stringify(ack));
+    // ---- a window that closes with nothing heard says so for a moment,
+    // instead of going blank: "Heard nothing." then nothing.
+    await pageS.evaluate(() => { window.mfVoice.listen.cont = false; window.mfVoice.listen.until = 0; window.__silence(); });
+    await waitFor(pageS, () => window.mfVoice.state === "idle", 3000, "window closed");
+    const nothing = await pageS.evaluate(() => document.getElementById("voice-caption").textContent);
+    await sleep(1700);
+    check("cue: a listen that closes with nothing heard shows 'Heard nothing.' for a moment, then the strip is blank again", nothing === "Heard nothing." && (await pageS.evaluate(() => document.getElementById("voice-caption").textContent)) === "", JSON.stringify([nothing, await pageS.evaluate(() => document.getElementById("voice-caption").textContent)]));
     const S = (fn, arg) => pageS.evaluate(fn, arg);
     const LINE = "I fixed the login bug in the auth module today. The token check was off by one. Should I push it now?";
     const SENTS = ["I fixed the login bug in the auth module today.", "The token check was off by one.", "Should I push it now?"];
@@ -2530,7 +2560,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     const firstSound = playsS.length ? playsS[0].at - t0S : -1, wholeMs = LINE.length * state.speakMsPerChar;
     check("speak: the first sound starts once sentence 1 is made — not the whole line (" + firstSound + " ms; the whole line takes " + wholeMs + " ms to make)", playsS.length === 3 && firstSound >= SENTS[0].length * state.speakMsPerChar - 20 && firstSound < SENTS[0].length * state.speakMsPerChar + 250 && firstSound < wholeMs - 300, JSON.stringify({ firstSound, wholeMs, plays: playsS }));
     console.log("  speak: first sound " + firstSound + " ms after speak() (sentence 1 takes " + SENTS[0].length * state.speakMsPerChar + " ms to make, the whole line " + wholeMs + " ms)");
-    check("speak: one ahead — sentence 2 asked for only as 1 starts playing, 3 as 2 does", sp.length === 3 && sp[1].at >= playsS[0].at - 60 && sp[2].at >= playsS[1].at - 60 && sp[1].at >= sp[0].done - 5, JSON.stringify({ sp, plays: playsS }));
+    check("speak: two ahead — sentences 1 and 2 asked for at once, 3 as 1 starts playing (a serial voice is never idle between sentences)", sp.length === 3 && sp[1].at - sp[0].at < 60 && sp[2].at >= playsS[0].at - 60 && sp[2].at < playsS[1].at, JSON.stringify({ sp, plays: playsS }));
     // Against the moment the sink reported the clip ended (headless Chrome's
     // timers can fire late or early; what matters is that the next clip
     // waited for `ended`), never the nominal at + duration.
@@ -2539,18 +2569,18 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     check("speak: speak() resolves once the whole line is said", (await S(() => window.__said)) >= playsS[2].at + playsS[2].dur * 1000 - 60);
     const diagS = await S(() => { window.mfVoice.diag && window.mfVoice.diag(); return window.mfVoice.rec.lastSpeak; });
     check("speak: Diagnostics has the first sound and the sentence count", diagS && diagS.first > 0 && diagS.parts === 3 && diagS.backend === "voicelab", JSON.stringify(diagS));
-    // Cancel while sentence 1 plays: it stops, 2 (asked for already) is
-    // aborted, 3 is never asked for, nothing else plays.
+    // Cancel while sentence 1 plays: it stops, 2 and 3 (asked for already:
+    // two ahead) are aborted, 4 is never asked for, nothing else plays.
     state.speaks = [];
     await S(() => { window.__plays = []; });
-    const LINE2 = "Starting the long deploy to staging right now. Then the database migration runs. Then the smoke tests run. Then I report back.";
+    const LINE2 = "Starting the long deploy to staging right now. Then the database migration runs. Then the smoke tests run there. Then I tidy up the branch. Then I report back.";
     await S((line) => { window.__said2 = 0; window.mfVoice.tts.speak(line).then(() => { window.__said2 = Date.now(); }); }, LINE2);
     await waitFor(pageS, () => window.__plays.length >= 1, 4000, "sentence 1 playing");
     await S(() => window.mfVoice.tts.cancel());
     await sleep(2500);
     const playsC = await S(() => window.__plays.slice());
     check("speak: cancel stops the sentence playing and drops the rest (one clip played, it was stopped)", playsC.length === 1 && playsC[0].stopped > 0, JSON.stringify(playsC));
-    check("speak: …sentence 3 was never asked for (only 1 and the one ahead)", state.speaks.length === 2, JSON.stringify(state.speaks.map((x) => x.text)));
+    check("speak: …sentence 4 was never asked for (only 1 and the two ahead)", state.speaks.length === 3, JSON.stringify(state.speaks.map((x) => x.text)));
     // Through the queue: the strip says Speaking… across the whole line —
     // never the line's text, never blank between sentences.
     await S(() => { window.__caps = []; window.__plays = []; });
@@ -2763,11 +2793,13 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
 
     // ---- control words act from the streamed guess: once the voice has been
     // quiet 250 ms after one (never before), "over" ends the phrase at once
-    // and goes with /end's final (or the fast words after 2.5 s);
-    // "disregard" acts on the guess alone.
+    // and goes with /end's final — or with the fast words once its budget
+    // has passed: as long as /end takes here, 1.5× + 100 ms (0.3–1.5 s),
+    // seeded by the server's advisory final_ms (900 here) and then
+    // measured; never a fixed 2.5 s. "disregard" acts on the guess alone.
     state.voiceCfg = {
       stt: "server", tts: "phone", approve_dialogs: true,
-      server_ready: { stt: true, tts: false, stt_backend: "whisper", stt_stream: true },
+      server_ready: { stt: true, tts: false, stt_backend: "whisper", stt_stream: true, final_ms: 900 },
       backends: { stt: ["whisper"], tts: [] },
     };
     state.voiceGet = { on: false, say: null, has_question: false, source: "none", ts: null };
@@ -2793,6 +2825,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await pageG.evaluate(() => { document.getElementById("compose").value = "draft:"; });
     await pageG.click("#voice-btn");
     await waitFor(pageG, () => window.mfVoice.state === "listening" && window.mfVoice.stt.name === "server" && window.__tone, 4000, "guess listening");
+    check("budget: GET /api/voice's final_ms seeds how long /end is expected to take (900 ms) before any /end was timed here", (await pageG.evaluate(() => window.mfVoice.rec.endMs)) === 900, String(await pageG.evaluate(() => window.mfVoice.rec.endMs)));
     // The next phrase's stream: wait for it to open, script it, speak.
     let usedG = 0;
     const nextSid = async () => {
@@ -2820,8 +2853,13 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await sleep(200);
     const diagG = await pageG.evaluate(() => document.getElementById("voice-diag").textContent);
     check("guess: Diagnostics says 'over → sent N s' (the word's end → the Enter)", /Last control: over → sent \d\.\d s/.test(diagG), diagG.replace(/\n/g, " | "));
+    check("budget: …and how long it would have waited for /end (the seed's 1.5× + 100 ms = 1.45 s), and what /end takes here now that one was timed", /waited for \/end up to 1\.[45] s; \/end takes ~0\.[0-9] s here/.test(diagG), diagG.replace(/\n/g, " | "));
+    const endMsGA = await pageG.evaluate(() => window.mfVoice.rec.endMs);
+    check("budget: /end's time is measured — the mean of the seed and this fast one, well under the seed", endMsGA > 0 && endMsGA < 700, String(endMsGA));
     await pageG.click("#voice-done");
-    // A slow accurate pass: past 2.5 s the fast words go, a late final is ignored.
+    // A slow accurate pass: once the budget has passed (now ~0.8 s: 1.5× the
+    // measured /end + 100 ms) the fast words go, a late final is ignored.
+    const budgetGB = Math.min(1500, Math.max(300, Math.round(endMsGA * 1.5 + 100)));
     const sidGB = await nextSid();
     state.streamScript[sidGB] = [{ committed: "", partial: "ship" }, { committed: "ship", partial: "it over" }, { committed: "it over", partial: "" }];
     state.streamEndReply[sidGB] = { committed: "", final: "skip it over", final_ms: 3900, same: false };
@@ -2835,7 +2873,9 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     for (let t = Date.now(); posts("/send").length === sendsG2 && Date.now() - t < 6000; ) await sleep(10);
     const tookGB = Date.now() - offGB;
     const sentGB = posts("/send").slice(sendsG2);
-    check("guess: /end slower than 2.5 s → the fast words sent at ~2.5 s (" + tookGB + " ms)", sentGB.length === 1 && sentGB[0].body.text === "ship it" && tookGB >= 2400 && tookGB < 3600, JSON.stringify([tookGB, sentGB.map((x) => x.body.text)]));
+    check("guess: /end slower than its budget (" + budgetGB + " ms) → the fast words sent as the budget runs out (" + tookGB + " ms after the voice stopped: the 250 ms tail, the last chunk, the budget) — not after a fixed 2.5 s", sentGB.length === 1 && sentGB[0].body.text === "ship it" && tookGB >= budgetGB + 200 && tookGB < budgetGB + 1100 && tookGB < 2400, JSON.stringify([tookGB, budgetGB, sentGB.map((x) => x.body.text)]));
+    const endMsGB = await pageG.evaluate(() => window.mfVoice.rec.endMs);
+    check("budget: a late /end grows the next budget (it took at least this long)", endMsGB > endMsGA, JSON.stringify([endMsGA, endMsGB]));
     await sleep(2000);
     check("guess: …and the late final changed nothing (no second send)", posts("/send").length === sendsG2 + 1 && (await vstate(pageG)) === "listening");
     // "disregard": acts on the guess, the stream dropped (never ended).
@@ -2954,7 +2994,7 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await sleep(200);
     await pageT.evaluate(() => window.__hear("then copy"));
     for (let t = Date.now(); posts("/send").length < sendsT2 + 1 && Date.now() - t < 3000; ) await sleep(30);
-    check("words: …'copy' sends, 'roger' is a word again", posts("/send").length === sendsT2 + 1 && posts("/send")[sendsT2].body.text === "fix it roger then", JSON.stringify(posts("/send").slice(sendsT2).map((x) => x.body)));
+    check("words: …'copy' sends, 'roger' is a word again", posts("/send").length === sendsT2 + 1 && posts("/send")[sendsT2].body.text === "fix it roger then", JSON.stringify([posts("/send").slice(sendsT2).map((x) => x.body), posts("/voice/route").slice(-2).map((x) => x.body), await pageT.evaluate(() => [window.mfVoice.lastRoute, window.mfVoice.state, window.mfVoice.caption, document.getElementById("compose").value])]));
     await pageT.click("#voice-cancel");
     // How to talk from the ⚙ sheet: the current words, Got it closes it.
     await pageT.click("#voice-gear");

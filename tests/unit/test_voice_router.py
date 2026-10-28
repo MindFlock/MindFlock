@@ -204,6 +204,64 @@ def test_a_kept_default_keeps_its_variants():
 def test_a_word_moved_from_stop_to_hush():
     w = _words(stop=["halt"], hush=["stop", "quiet"])
     assert ans("stop", words=w) == {"kind": "hush"}
+    # ...and it takes its heard forms along (core.voice_words.HEARD).
+    assert ans("stock", words=w) == {"kind": "hush"}
+    assert ans("quite", words=w) == {"kind": "hush"}
+
+
+@pytest.mark.parametrize(
+    "text, kind",
+    [
+        # What whisper writes for a default (HEARD): the whole phrase.
+        ("stop listing", "stop"),
+        ("Stock.", "stop"),
+        ("stopped", "stop"),
+        ("mike off", "stop"),
+        ("paws listening", "stop"),
+        ("be quite", "hush"),
+        ("quite", "hush"),
+        ("okay, enuf", "hush"),
+        ("a nuff please", "hush"),
+        ("stop torking", "hush"),
+        ("shadap", "hush"),
+        # Followed or preceded by other words: a prompt.
+        ("stop listing the files", "prompt"),
+        ("quite a few tests fail", "prompt"),
+        ("the room went quite", "prompt"),
+        ("stock prices", "prompt"),
+    ],
+)
+def test_heard_forms_of_the_default_words(text, kind):
+    assert ans(text)["kind"] == kind
+    assert ans(text, words=_words())["kind"] == kind
+
+
+def test_heard_forms_go_with_their_phrase():
+    w = _words(stop=["halt"], hush=["silence"])
+    assert ans("stop listing", words=w) == {"kind": "prompt"}
+    assert ans("be quite", words=w) == {"kind": "prompt"}
+
+
+@pytest.mark.parametrize(
+    "text, kind",
+    [
+        # The person's own words, heard a letter off (voice_words.sounds_like).
+        ("pipe town", "hush"),
+        ("okay pipe town please", "hush"),
+        ("hault listening", "stop"),
+        ("halt lissening", "stop"),
+        # The margin: a four-letter word is only ever itself; two letters off
+        # a short phrase, or another sound, is a prompt.
+        ("hault", "prompt"),
+        ("silents", "prompt"),
+        ("pipe gown", "prompt"),
+        ("halt the build", "prompt"),
+        ("pipe town now and then", "prompt"),
+    ],
+)
+def test_custom_words_a_letter_off(text, kind):
+    w = _words(stop=["halt", "halt listening"], hush=["silence", "pipe down"])
+    assert ans(text, words=w)["kind"] == kind
 
 
 # --- switch ---------------------------------------------------------------------
@@ -1403,6 +1461,89 @@ def test_find_sessions_prefers_the_whole_name():
     assert hit["title"] == "login-fix"
     assert vr.find_sessions("fix", FLEET, "strict") == (None, [])
     assert vr.find_sessions("the session", FLEET) == (None, [])
+
+
+# --- names as people SAY them --------------------------------------------------------
+NAMED = [
+    {"title": "sitecheck-bot7", "name": "sitecheck-bot7"},
+    {"title": "SiteCheck_bot7-copy-2", "name": "SiteCheck_bot7-copy-2"},
+    {"title": "login-fix", "name": "login-fix"},
+    {"title": "URLParser2", "name": "URLParser2"},
+    {"title": "voiceFixes", "name": "voiceFixes"},
+    {"title": "voice-say", "name": "voice-say"},
+    {"title": "vector-store", "name": "vector-store"},
+    {"title": "vecter-store", "name": "vecter-store"},
+]
+
+
+def test_toks_split_hyphens_underscores_camel_case_and_digits():
+    assert vr._toks("sitecheck-bot7") == ["sitecheck", "bot", "7"]
+    assert vr._toks("SiteCheck_bot7-copy-2") == [
+        "site",
+        "check",
+        "bot",
+        "7",
+        "copy",
+        "2",
+    ]
+    assert vr._toks("URLParser2") == ["url", "parser", "2"]
+    assert vr._toks("getHTMLNode") == ["get", "html", "node"]
+    assert vr._toks("bot-seven") == ["bot", "7"]  # a number word is its digit
+    assert vr._toks("don't-panic") == ["dont", "panic"]
+
+
+@pytest.mark.parametrize(
+    "said, title",
+    [
+        # Digits and number words, both ways; hyphens, underscores, camelCase.
+        ("sitecheck bot seven", "sitecheck-bot7"),
+        ("site check bot 7", "sitecheck-bot7"),
+        ("sitecheck bot 7", "sitecheck-bot7"),
+        ("sitecheck bot seven copy two", "SiteCheck_bot7-copy-2"),
+        ("site check bot seven copy 2", "SiteCheck_bot7-copy-2"),
+        ("url parser two", "URLParser2"),
+        ("url parser 2", "URLParser2"),
+        ("the url parser", "URLParser2"),
+        ("voice fixes", "voiceFixes"),
+        ("voice fix", "voiceFixes"),
+        ("login fixes", "login-fix"),
+        # Heard a little off: a sound-alike (voice_words.sounds_like), the
+        # whole name said.
+        ("sight check bot seven", "sitecheck-bot7"),
+        ("cite check bot 7", "sitecheck-bot7"),
+        ("sight check bot seven copy two", "SiteCheck_bot7-copy-2"),
+        ("logon fix", "login-fix"),
+        ("vecter store", "vecter-store"),
+        ("vector store", "vector-store"),
+    ],
+)
+def test_names_said_in_speech(said, title):
+    hit, cands = vr.find_sessions(said, NAMED)
+    assert hit is not None and hit["title"] == title, (said, cands)
+    assert cands == []
+
+
+@pytest.mark.parametrize(
+    "said, titles",
+    [
+        # A sound-alike never picks silently: two names it fits are asked.
+        ("vectar store", ["vector-store", "vecter-store"]),
+        ("sight check", ["sitecheck-bot7", "SiteCheck_bot7-copy-2"]),
+        ("bot seven", ["sitecheck-bot7", "SiteCheck_bot7-copy-2"]),
+        ("voice six", ["voiceFixes", "voice-say"]),
+    ],
+)
+def test_names_that_fit_two_sessions_ask(said, titles):
+    hit, cands = vr.find_sessions(said, NAMED)
+    assert hit is None and [c["title"] for c in cands] == titles
+
+
+def test_a_sound_alike_switch_says_which_one():
+    a = vr.answer("switch to the vectar store", "login-fix", NAMED, now=NOW)
+    assert a["kind"] == "ambiguous"
+    assert a["say"] == "Which one: vector-store or vecter-store?"
+    a = vr.answer("switch to sight check bot seven", "login-fix", NAMED, now=NOW)
+    assert (a["kind"], a["title"]) == ("switch", "sitecheck-bot7")
 
 
 # --- the pick: the next phrase after "Which one?" ------------------------------------------

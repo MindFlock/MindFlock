@@ -182,6 +182,63 @@ def test_mobile_css_composer_rules():
     assert "font-size: 16px" in css
 
 
+def test_mobile_top_bar_is_one_row():
+    # Owner's rule (2026-10-28): the top bar is ONE row, always. It wrapped
+    # the tabs under the picker once the state chip and "Terminal" arrived;
+    # now nothing may wrap — the picker gives (min-width: 0, ellipsis) and
+    # the tabs are compact.
+    css = client.get("/mobile.css").text
+    bar = css.split("#bar {")[1].split("}")[0]
+    assert "flex-wrap: nowrap" in bar
+    tabs = css.split("#tabs {")[1].split("}")[0]
+    assert "\n  order:" not in tabs and "100%" not in tabs
+    assert "flex: 0 0 auto" in tabs
+    tab = css.split("\n.tab {")[1].split("}")[0]
+    assert "white-space: nowrap" in tab
+    picker = css.split("#picker {")[1].split("}")[0]
+    assert "min-width: 0" in picker
+    # The state chip is what gives first: under ~200px of picker (a 393px
+    # phone in portrait) it hides and the dot carries the tone — the name
+    # beats the state word. The query must come AFTER .state-chip's own
+    # rule (equal specificity: the later one wins).
+    assert "container-type: inline-size" in picker
+    assert "@container (max-width: 200px) { .state-chip { display: none; } }" in css
+    assert css.index(".state-chip {") < css.index("@container (max-width: 200px)")
+    # The compose placeholder fits the one-line box beside Send and the mic;
+    # the long sentence wrapped and clipped at phone width.
+    html = client.get("/m").text
+    assert 'placeholder="Type here — Send adds ⏎"' in html
+
+
+def test_mobile_voice_strip_leaves_while_typing():
+    # The "Tap to hear …" block (and the rest of the voice strip) goes away
+    # while the compose box has focus: the keyboard already has half the
+    # screen. mobile.js toggles #app.typing on focus/blur; the CSS hides it.
+    js = client.get("/mobile.js").text
+    css = client.get("/mobile.css").text
+    assert "#app.typing #voice-strip { display: none !important; }" in css
+    assert 'classList.toggle("typing", on)' in js
+    assert 'composeEl.addEventListener("focus", function () { setTyping(true); })' in js
+    assert 'composeEl.addEventListener("blur", function () { setTyping(false); })' in js
+
+
+def test_mobile_keys_drop_the_home_bar_inset_under_the_keyboard():
+    # The keyboard covers the home bar, but iOS keeps reporting the
+    # safe-area inset, which left a band of panel between the keys and the
+    # keyboard. applyViewport sets #app.kb when the viewport has lost >150px
+    # (measured against the tallest it has been, not innerHeight — that
+    # shrinks too under interactive-widget=resizes-content); the CSS drops
+    # the inset while it is set.
+    js = client.get("/mobile.js").text
+    css = client.get("/mobile.css").text
+    assert "#app.kb #keys { padding-bottom: 6px; }" in css
+    assert "KB_UP_PX = 150" in js
+    assert 'classList.toggle("kb", tallestH - h > KB_UP_PX)' in js
+    assert "if (h > tallestH) tallestH = h;" in js
+    # A turn of the phone starts the measure over.
+    assert "tallestH = 0;" in js
+
+
 # --------------------------------------------------------------------------- #
 # /m mobile view — git workflow action bar (Commit / Push / PR / Merge)
 #

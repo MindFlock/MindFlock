@@ -138,8 +138,11 @@ export interface WavRecording {
   cancel(): void;
   /** `on`: drop the audio from now, unrecorded and unmetered (the app is
    * saying a confirmation); off again: recording goes on after `tailS` more
-   * seconds are dropped (the voice dying away). Nothing ends. */
-  mute?(on: boolean, tailS?: number): void;
+   * seconds are dropped (the voice dying away). `rewindS` instead keeps
+   * the last that-many seconds heard while muted (at most
+   * {@link MUTE_HOLD_S}): a barge-in is noticed ~100 ms into the person's
+   * first word, and that start is theirs, not the app's. Nothing ends. */
+  mute?(on: boolean, tailS?: number, rewindS?: number): void;
   /** Seconds recorded so far. */
   seconds(): number;
   /** The WAV of the last `s` seconds heard (at most what is kept: see
@@ -148,6 +151,10 @@ export interface WavRecording {
    * any audio — the wake word's standby sends a lone utterance this way. */
   last(s: number): Promise<Blob | null>;
 }
+
+/** How much of the muted audio {@link WavRecording.mute} keeps for a
+ * rewind, in seconds (whole blocks; the rest is dropped as it arrives). */
+export const MUTE_HOLD_S = 0.5;
 
 export interface WavRecorderOptions {
   /** Output sample rate (default 16000). */
@@ -188,10 +195,20 @@ export function startWavRecording(
   let result: Promise<Blob> | null = null;
   let skip = Math.max(0, Math.round((opts.skipS || 0) * ctx.sampleRate));
   let muted = false;
+  /** The last {@link MUTE_HOLD_S} heard while muted, for a rewind. */
+  let held: Float32Array[] = [];
+  let heldFrames = 0;
+  const hold = Math.round(MUTE_HOLD_S * ctx.sampleRate);
   const keep = opts.keepS ? Math.max(1, Math.round(opts.keepS * ctx.sampleRate)) : 0;
 
   processor.onaudioprocess = (e: AudioProcessingEvent) => {
-    if (done || muted) return;
+    if (done) return;
+    if (muted) {
+      held.push(e.inputBuffer.getChannelData(0).slice());
+      heldFrames += held[held.length - 1].length;
+      while (held.length > 1 && heldFrames - held[0].length >= hold) heldFrames -= held.shift()!.length;
+      return;
+    }
     if (skip > 0) {
       skip -= e.inputBuffer.getChannelData(0).length;
       return;
@@ -257,8 +274,29 @@ export function startWavRecording(
       blocks = [];
       fresh = 0;
     },
-    mute(on: boolean, tailS = 0) {
-      if (!on && muted) skip = Math.max(skip, Math.round(tailS * ctx.sampleRate));
+    mute(on: boolean, tailS = 0, rewindS = 0) {
+      if (!on && muted) {
+        if (rewindS > 0 && !skip) {
+          // The barging word's start: the held blocks that cover it, in order.
+          let want = Math.min(heldFrames, Math.round(rewindS * ctx.sampleRate));
+          const back: Float32Array[] = [];
+          for (let i = held.length - 1; i >= 0 && want > 0; i--) {
+            const b = held[i];
+            const part = b.length > want ? b.subarray(b.length - want) : b;
+            back.unshift(part);
+            want -= part.length;
+          }
+          for (const b of back) {
+            blocks.push(b);
+            frames += b.length;
+            fresh += b.length;
+          }
+        } else skip = Math.max(skip, Math.round(tailS * ctx.sampleRate));
+      }
+      if (on && !muted) {
+        held = [];
+        heldFrames = 0;
+      }
       muted = on;
     },
     seconds() {

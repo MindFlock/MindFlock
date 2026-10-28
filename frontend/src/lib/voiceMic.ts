@@ -11,7 +11,8 @@
  *  - The level meter: the recorder's RMS per audio block ({@link meterFeed};
  *    the browser recognizer has none, so an AnalyserNode is polled instead,
  *    {@link meterPoll}) smoothed against a noise floor — room noise sits near
- *    zero, speech fills it — then averaged over {@link LEVEL_SMOOTH_MS} and
+ *    zero, speech fills it — then averaged (a fast attack, {@link
+ *    LEVEL_ATTACK_MS}, a slow release, {@link LEVEL_RELEASE_MS}) and
  *    stepped (quiet / hearing / loud, {@link levelStep}), and only a step
  *    change is written, as the `--mic-step` CSS variable (an opacity) on the
  *    elements that draw it ({@link meterRef}): the top-bar mic's ring, the
@@ -162,9 +163,13 @@ export const RMS_SPEECH = 0.02;
 export const LEVEL_DECAY_MS = 150;
 /** RMS over the floor that fills the meter (a raised voice). */
 export const LEVEL_FULL_RMS = 0.12;
-/** The ring's level is smoothed over this long before it is stepped: a
- * word's syllables never flicker it. */
-export const LEVEL_SMOOTH_MS = 400;
+/** The ring's level is smoothed before it is stepped — asymmetrically: it
+ * rises with this time constant (the ring answers a word's first syllable
+ * within about a block)… */
+export const LEVEL_ATTACK_MS = 120;
+/** …and falls with this one (a word's gaps and syllables never flicker it;
+ * the step's hysteresis holds the rest). */
+export const LEVEL_RELEASE_MS = 400;
 /** The ring's three steps — quiet, hearing, loud — as its opacity: the only
  * thing the meter changes on the mic (never its size; CSS eases each step
  * over ≥300 ms). */
@@ -184,9 +189,11 @@ export function levelStep(prev: LevelStep, smoothed: number): LevelStep {
 }
 
 /** One frame of the slow average the step reads: `prev` moves toward
- * `level` with a {@link LEVEL_SMOOTH_MS} time constant. */
+ * `level` — up with the {@link LEVEL_ATTACK_MS} time constant (fast attack),
+ * down with {@link LEVEL_RELEASE_MS} (slow release). */
 export function slowLevel(prev: number, level: number, dtMs: number): number {
-  return prev + (level - prev) * (1 - Math.exp(-Math.max(0, dtMs) / LEVEL_SMOOTH_MS));
+  const tau = level > prev ? LEVEL_ATTACK_MS : LEVEL_RELEASE_MS;
+  return prev + (level - prev) * (1 - Math.exp(-Math.max(0, dtMs) / tau));
 }
 
 /** "Hearing you…" stays this long after the last loud block (a word's gaps). */
@@ -222,12 +229,12 @@ export function smoothLevel(prev: number, target: number, dtMs: number): number 
   return Math.max(target, prev * Math.exp(-Math.max(0, dtMs) / LEVEL_DECAY_MS));
 }
 
-/** The caption's first words before any word is recognised: nothing until
- * the mic records (`ready`), then "Hearing you…" while the level says speech,
- * else "Listening…". */
+/** The caption's first words before any word is recognised: "Listening…"
+ * from the press (the microphone is warm, or opening — nothing waits on it to
+ * say so), and "Hearing you…" while the mic records (`ready`) and the level
+ * says speech. */
 export function pickupLine(ready: boolean, hearing: boolean): string {
-  if (!ready) return "";
-  return hearing ? "Hearing you…" : "Listening…";
+  return ready && hearing ? "Hearing you…" : "Listening…";
 }
 
 /** The top bar's live caption length (settled words + the unsure tail): the

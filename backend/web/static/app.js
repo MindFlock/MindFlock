@@ -24843,7 +24843,7 @@ function formatSpan(secs) {
 	const h = Math.round((s - d * DAY) / HOUR);
 	return h ? d + "d " + h + "h" : d + "d";
 }
-var UNIT = {
+var UNIT$1 = {
 	s: 1,
 	m: MIN,
 	h: HOUR,
@@ -24864,7 +24864,7 @@ function parseDuration(input) {
 				"h",
 				"m",
 				"s"
-			].reduce((sum, u, i) => sum + (m[i + 1] ? parseFloat(m[i + 1]) * UNIT[u] : 0), 0);
+			].reduce((sum, u, i) => sum + (m[i + 1] ? parseFloat(m[i + 1]) * UNIT$1[u] : 0), 0);
 		}
 	}
 	if (!Number.isFinite(secs)) return null;
@@ -25505,7 +25505,7 @@ function workerLine(row, opts) {
 		state
 	};
 }
-var plural$7 = (n, word) => n + " " + word + (n === 1 ? "" : "s");
+var plural$8 = (n, word) => n + " " + word + (n === 1 ? "" : "s");
 function rollup(children, nameOf, actOf = rawActivity, now = Date.now() / 1e3) {
 	const n = children.length;
 	if (!n) return null;
@@ -25531,7 +25531,7 @@ function rollup(children, nameOf, actOf = rawActivity, now = Date.now() / 1e3) {
 		cls: "bad"
 	});
 	if (ask) parts.push({
-		text: plural$7(n, "worker"),
+		text: plural$8(n, "worker"),
 		cls: ""
 	});
 	else if (reported === n) parts.push({
@@ -25555,7 +25555,7 @@ function rollup(children, nameOf, actOf = rawActivity, now = Date.now() / 1e3) {
 		cls: ""
 	});
 	else parts.push({
-		text: plural$7(n, "worker") + " · no reports",
+		text: plural$8(n, "worker") + " · no reports",
 		cls: ""
 	});
 	return {
@@ -32079,7 +32079,7 @@ function pieceStatus(t, leadName, mode) {
 		};
 	}
 }
-function plural$6(n, one, many = one + "s") {
+function plural$7(n, one, many = one + "s") {
 	return n + " " + (n === 1 ? one : many);
 }
 function leadSubline(run, leadName) {
@@ -32091,16 +32091,16 @@ function leadSubline(run, leadName) {
 	if (run.state === "plan_ready") return [
 		{ text: leadName + " proposed " },
 		{
-			text: plural$6(n, "piece") + " with separate paths",
+			text: plural$7(n, "piece") + " with separate paths",
 			b: true
 		},
 		{ text: " — approve them and MindFlock starts the workers." }
 	];
 	const parts = split ? [{ text: "Split into " }, {
-		text: plural$6(n, "piece") + " with separate paths",
+		text: plural$7(n, "piece") + " with separate paths",
 		b: true
 	}] : [{
-		text: plural$6(n, "line") + ", one PR",
+		text: plural$7(n, "line") + ", one PR",
 		b: true
 	}];
 	const merged = tasks.filter((t) => t.state === "integrated").length;
@@ -32152,7 +32152,7 @@ function leadSubline(run, leadName) {
 	}
 	const conflicts = tasks.filter((t) => t.state === "integrating" && (t.reason === "conflict" || t.conflict)).length;
 	if (conflicts) parts.push({
-		text: " · " + plural$6(conflicts, "conflict") + " with " + leadName,
+		text: " · " + plural$7(conflicts, "conflict") + " with " + leadName,
 		cls: "needs"
 	});
 	const c = run.check;
@@ -32199,7 +32199,7 @@ function planRows(pieces) {
 	}));
 }
 function startWorkersLabel(n) {
-	return "Start " + plural$6(n, "worker");
+	return "Start " + plural$7(n, "worker");
 }
 function parsePaths(text) {
 	return String(text || "").split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
@@ -32225,14 +32225,14 @@ function releaseCard(run) {
 	const base = r.base || "the base branch";
 	const branch = r.branch || run.lead?.branch || "";
 	const files = Number(r.files) || 0;
-	const stat = files ? plural$6(files, "file") + " +" + (Number(r.add) || 0) + " −" + (Number(r.del) || 0) : "";
+	const stat = files ? plural$7(files, "file") + " +" + (Number(r.add) || 0) + " −" + (Number(r.del) || 0) : "";
 	const fixes = Number(r.conflict_fixes) || 0;
 	const split = !!run.split;
 	return {
 		title: r.title || run.name,
 		into: base + " ← " + (branch || "its branch"),
 		stat,
-		commits: (isSameFolder(run) ? "one per piece, committed by MindFlock with only its paths" : split ? "one per piece, kept as written" : "one per line, kept as written") + (fixes ? " + " + plural$6(fixes, "conflict fix", "conflict fixes") + " by the lead" : ""),
+		commits: (isSameFolder(run) ? "one per piece, committed by MindFlock with only its paths" : split ? "one per piece, kept as written" : "one per line, kept as written") + (fixes ? " + " + plural$7(fixes, "conflict fix", "conflict fixes") + " by the lead" : ""),
 		body: split ? "a section per piece: what changed, the tests it ran" : "a section per line: what changed, the tests it ran"
 	};
 }
@@ -37874,6 +37874,7 @@ async function resampleTo(samples, fromRate, toRate) {
 		return resample(samples, fromRate, toRate);
 	}
 }
+var MUTE_HOLD_S = .5;
 function startWavRecording(stream, ctx, opts = {}) {
 	const targetRate = opts.targetRate ?? DEFAULT_TARGET_RATE;
 	const onLevel = opts.onLevel;
@@ -37888,9 +37889,18 @@ function startWavRecording(stream, ctx, opts = {}) {
 	let result = null;
 	let skip = Math.max(0, Math.round((opts.skipS || 0) * ctx.sampleRate));
 	let muted = false;
+	let held = [];
+	let heldFrames = 0;
+	const hold = Math.round(MUTE_HOLD_S * ctx.sampleRate);
 	const keep = opts.keepS ? Math.max(1, Math.round(opts.keepS * ctx.sampleRate)) : 0;
 	processor.onaudioprocess = (e) => {
-		if (done || muted) return;
+		if (done) return;
+		if (muted) {
+			held.push(e.inputBuffer.getChannelData(0).slice());
+			heldFrames += held[held.length - 1].length;
+			while (held.length > 1 && heldFrames - held[0].length >= hold) heldFrames -= held.shift().length;
+			return;
+		}
 		if (skip > 0) {
 			skip -= e.inputBuffer.getChannelData(0).length;
 			return;
@@ -37947,8 +37957,28 @@ function startWavRecording(stream, ctx, opts = {}) {
 			blocks = [];
 			fresh = 0;
 		},
-		mute(on, tailS = 0) {
-			if (!on && muted) skip = Math.max(skip, Math.round(tailS * ctx.sampleRate));
+		mute(on, tailS = 0, rewindS = 0) {
+			if (!on && muted) {
+				if (rewindS > 0 && !skip) {
+					let want = Math.min(heldFrames, Math.round(rewindS * ctx.sampleRate));
+					const back = [];
+					for (let i = held.length - 1; i >= 0 && want > 0; i--) {
+						const b = held[i];
+						const part = b.length > want ? b.subarray(b.length - want) : b;
+						back.unshift(part);
+						want -= part.length;
+					}
+					for (const b of back) {
+						blocks.push(b);
+						frames += b.length;
+						fresh += b.length;
+					}
+				} else skip = Math.max(skip, Math.round(tailS * ctx.sampleRate));
+			}
+			if (on && !muted) {
+				held = [];
+				heldFrames = 0;
+			}
 			muted = on;
 		},
 		seconds() {
@@ -38066,7 +38096,8 @@ var MicKeeper = class {
 var RMS_SPEECH = .02;
 var LEVEL_DECAY_MS = 150;
 var LEVEL_FULL_RMS = .12;
-var LEVEL_SMOOTH_MS = 400;
+var LEVEL_ATTACK_MS = 120;
+var LEVEL_RELEASE_MS = 400;
 var STEP_OPACITY = [
 	.45,
 	.75,
@@ -38081,7 +38112,8 @@ function levelStep(prev, smoothed) {
 	return 0;
 }
 function slowLevel(prev, level, dtMs) {
-	return prev + (level - prev) * (1 - Math.exp(-Math.max(0, dtMs) / LEVEL_SMOOTH_MS));
+	const tau = level > prev ? LEVEL_ATTACK_MS : LEVEL_RELEASE_MS;
+	return prev + (level - prev) * (1 - Math.exp(-Math.max(0, dtMs) / tau));
 }
 var HEARING_HOLD_MS = 700;
 var STALE_MS = 250;
@@ -38101,8 +38133,7 @@ function smoothLevel(prev, target, dtMs) {
 	return Math.max(target, prev * Math.exp(-Math.max(0, dtMs) / LEVEL_DECAY_MS));
 }
 function pickupLine(ready, hearing) {
-	if (!ready) return "";
-	return hearing ? "Hearing you…" : "Listening…";
+	return ready && hearing ? "Hearing you…" : "Listening…";
 }
 function rmsOf(buf) {
 	let sum = 0;
@@ -38309,7 +38340,12 @@ var PHRASE_KIN = {
 function withKin(w, k) {
 	return [...new Set(w[k].flatMap((p) => [p, ...PHRASE_KIN[k]?.[p] || []]))];
 }
+function heardOf(w, k) {
+	const own = k === "wake" ? [w.wake] : w[k];
+	return (w.heard?.[k] || []).filter((f) => !own.includes(f));
+}
 var WORDS_MAX = 6;
+var HEARD_MAX = 24;
 var PHRASE_MAX_CHARS = 40;
 var WAKE_MAX_WORDS = 2;
 var WAKE_MIN_CHARS = 3;
@@ -38333,6 +38369,17 @@ function wordsFrom(raw, fallback) {
 	const wake = typeof r.wake === "string" ? normPhrase(r.wake) : "";
 	const n = phraseWords(wake).length;
 	if (n >= 1 && n <= WAKE_MAX_WORDS) out.wake = wake;
+	delete out.heard;
+	const h = r.heard && typeof r.heard === "object" ? r.heard : null;
+	if (h) {
+		const heard = {};
+		for (const k of [...PHRASE_KINDS, "wake"]) {
+			const v = h[k];
+			const list = Array.isArray(v) ? v.filter((p) => typeof p === "string").map(normPhrase).filter((p) => phraseWords(p).length) : [];
+			heard[k] = [...new Set(list)].slice(0, HEARD_MAX);
+		}
+		out.heard = heard;
+	}
 	return out;
 }
 var defaults = BUILTIN_VOICE_WORDS;
@@ -38383,6 +38430,1179 @@ function wakeError(wake) {
 	if (phraseWords(p).length > WAKE_MAX_WORDS) return "One or two words — a sentence never wakes it.";
 	if (p.length < WAKE_MIN_CHARS || p.length > WAKE_MAX_CHARS) return "3–20 characters.";
 	return "";
+}
+var SOUND_RULES = [
+	[/^[kgp]n/g, "n"],
+	[/^wr/g, "r"],
+	[/^x/g, "s"],
+	[/^wh/g, "w"],
+	[/mb$/g, "m"],
+	[/x/g, "ks"],
+	[/ph/g, "f"],
+	[/sch/g, "sk"],
+	[/ch/g, "X"],
+	[/sh/g, "X"],
+	[/th/g, "0"],
+	[/gh$/g, "f"],
+	[/gh/g, ""],
+	[/ck/g, "k"],
+	[/q/g, "k"],
+	[/c(?=[eiy])/g, "s"],
+	[/c/g, "k"],
+	[/dg(?=[eiy])/g, "j"],
+	[/g(?=[eiy])/g, "j"],
+	[/b/g, "p"],
+	[/d/g, "t"],
+	[/v/g, "f"],
+	[/z/g, "s"],
+	[/g/g, "k"]
+];
+var letters = (text) => String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+function soundKey(text) {
+	let s = letters(text);
+	if (!s) return "";
+	for (const [rx, to] of SOUND_RULES) s = s.replace(rx, to);
+	if (!s) return "";
+	return (s[0] + s.slice(1).replace(/[aeiouhwy]/g, "")).replace(/(.)\1+/g, "$1");
+}
+function edits(a, b) {
+	const d = [];
+	for (let i = 0; i <= a.length; i++) d.push([i, ...new Array(b.length).fill(0)]);
+	for (let j = 0; j <= b.length; j++) d[0][j] = j;
+	for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) {
+		const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+		d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+		if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+	}
+	return d[a.length][b.length];
+}
+var slack = (n) => n >= 8 ? 2 : n >= 5 ? 1 : 0;
+function soundsLike(said, phrase) {
+	const a = letters(said);
+	const b = letters(phrase);
+	if (!a || !b) return false;
+	if (a === b) return true;
+	const d = edits(a, b);
+	const n = slack(b.length);
+	const ka = soundKey(a);
+	const kb = soundKey(b);
+	if (d <= n) return ka === kb || kb.length >= 5 && edits(ka, kb) <= 1;
+	return b.length >= 8 && d === n + 1 && Math.abs(a.length - b.length) <= 1 && ka === kb;
+}
+function soundsLikeAny(text, phrases) {
+	return phrases.some((p) => soundsLike(text, p));
+}
+function soundTail(text, phrases, tails = [], lead = false) {
+	const toks = String(text || "").trim().split(/\s+/).filter(Boolean);
+	const idx = toks.flatMap((t, i) => letters(t) ? [i] : []);
+	if (!idx.length) return null;
+	const ordered = phrases.filter((p) => letters(p)).sort((a, b) => letters(b).length - letters(a).length);
+	if (!ordered.length) return null;
+	const most = Math.max(...ordered.map((p) => phraseWords(p).length)) + 1;
+	const ends = [idx.length];
+	if (idx.length > 1 && tails.includes(letters(toks[idx[idx.length - 1]]))) ends.push(idx.length - 1);
+	for (const end of ends) for (let k = Math.min(most, end); k >= 1; k--) {
+		const said = idx.slice(end - k, end).map((i) => letters(toks[i])).join("");
+		for (const p of ordered) {
+			if (lead && k < end && said[0] !== letters(p)[0]) continue;
+			if (soundsLike(said, p)) return {
+				before: toks.slice(0, idx[end - k]).join(" ").replace(/[\s,.!?]+$/, ""),
+				phrase: p
+			};
+		}
+	}
+	return null;
+}
+//#endregion
+//#region src/lib/spokenText.ts
+var MAX_IN = 4e3;
+var MAX_OUT = 2e3;
+var PRONOUNCE_MAX = 40;
+var PRONOUNCE_MAX_CHARS = 40;
+var TABLES = {
+	"tech": {
+		"sql": "sequel",
+		"json": "jayson",
+		"nginx": "engine x",
+		"tmux": "tee mux",
+		"uv": "you vee",
+		"npm": "N P M",
+		"npx": "N P X",
+		"api": "A P I",
+		"apis": "A P I's",
+		"cli": "C L I",
+		"url": "U R L",
+		"urls": "U R L's",
+		"ssh": "S S H",
+		"ci": "C I",
+		"pr": "P R",
+		"prs": "P R's",
+		"id": "I D",
+		"ids": "I D's",
+		"uuid": "U U I D",
+		"eta": "E T A",
+		"fyi": "F Y I",
+		"lgtm": "looks good to me",
+		"pytest": "pie test",
+		"regex": "rej ex",
+		"regexes": "rej exes",
+		"github": "git hub",
+		"sudo": "soo doo",
+		"chmod": "C H mod",
+		"chown": "C H own",
+		"venv": "vee env",
+		"k8s": "kubernetes",
+		"i18n": "i 18 n",
+		"a11y": "a 11 y",
+		"e2e": "end to end",
+		"oauth": "O auth",
+		"websocket": "web socket",
+		"websockets": "web sockets",
+		"enum": "ee num",
+		"enums": "ee nums",
+		"src": "source",
+		"kwargs": "kay wargs",
+		"tmp": "temp",
+		"usr": "user",
+		"msg": "message",
+		"msgs": "messages",
+		"pkg": "package",
+		"pkgs": "packages",
+		"ctx": "context",
+		"db": "dee bee",
+		"dbs": "dee bees",
+		"zsh": "zee shell",
+		"vitest": "vee test",
+		"tsc": "T S C",
+		"eslint": "E S lint",
+		"stdout": "standard out",
+		"stderr": "standard error",
+		"stdin": "standard in",
+		"localhost": "local host",
+		"e.g.": "for example",
+		"i.e.": "that is",
+		"etc.": "etcetera",
+		"etc": "etcetera",
+		"vs": "versus",
+		"vs.": "versus",
+		"ttl": "T T L",
+		"tls": "T L S",
+		"ssl": "S S L",
+		"http": "H T T P",
+		"https": "H T T P S",
+		"html": "H T M L",
+		"css": "C S S",
+		"js": "J S",
+		"ts": "T S",
+		"tsx": "T S X",
+		"jsx": "J S X",
+		"yaml": "yammel",
+		"yml": "yammel",
+		"toml": "tommel",
+		"csv": "C S V",
+		"ui": "U I",
+		"ux": "U X",
+		"cpu": "C P U",
+		"gpu": "G P U",
+		"ram": "ram",
+		"os": "O S",
+		"io": "I O",
+		"sdk": "S D K",
+		"cdn": "C D N",
+		"dns": "D N S",
+		"ip": "I P",
+		"tcp": "T C P",
+		"udp": "U D P",
+		"pty": "P T Y",
+		"mcp": "M C P",
+		"llm": "L L M",
+		"llms": "L L M's",
+		"stt": "S T T",
+		"tts": "T T S",
+		"wsl": "W S L",
+		"vm": "V M",
+		"vms": "V M's",
+		"qa": "Q A",
+		"ok": "okay",
+		"readme": "read me",
+		"dto": "D T O",
+		"orm": "O R M",
+		"jwt": "J W T",
+		"sha": "shah",
+		"utf": "U T F",
+		"ascii": "askey",
+		"iso": "I S O",
+		"lib": "lib",
+		"libs": "libs",
+		"cfg": "config",
+		"ptt": "push to talk"
+	},
+	"ext": {
+		"py": "pie",
+		"ts": "T S",
+		"tsx": "T S X",
+		"js": "J S",
+		"jsx": "J S X",
+		"mjs": "M J S",
+		"cjs": "C J S",
+		"md": "M D",
+		"json": "jayson",
+		"toml": "tommel",
+		"yml": "yammel",
+		"yaml": "yammel",
+		"css": "C S S",
+		"html": "H T M L",
+		"txt": "text",
+		"sh": "S H",
+		"zsh": "zee shell",
+		"cfg": "config",
+		"ini": "I N I",
+		"csv": "C S V",
+		"svg": "S V G",
+		"png": "P N G",
+		"jpg": "J P G",
+		"jpeg": "J P G",
+		"gif": "gif",
+		"pdf": "P D F",
+		"env": "env",
+		"log": "log",
+		"lock": "lock",
+		"sql": "sequel",
+		"xml": "X M L",
+		"rs": "R S",
+		"go": "go",
+		"rb": "R B",
+		"java": "java",
+		"kt": "K T",
+		"swift": "swift",
+		"c": "C",
+		"h": "H",
+		"cpp": "C plus plus",
+		"wav": "wave",
+		"mp3": "M P 3",
+		"zip": "zip",
+		"tar": "tar",
+		"gz": "G Z",
+		"exe": "E X E",
+		"dmg": "D M G",
+		"app": "app",
+		"plist": "P list",
+		"ipynb": "notebook",
+		"pyc": "pie C",
+		"egg": "egg",
+		"whl": "wheel",
+		"bak": "backup",
+		"tmp": "temp"
+	},
+	"units": {
+		"ms": ["millisecond", "milliseconds"],
+		"px": ["pixel", "pixels"],
+		"kb": ["kilobyte", "kilobytes"],
+		"mb": ["megabyte", "megabytes"],
+		"gb": ["gigabyte", "gigabytes"],
+		"tb": ["terabyte", "terabytes"],
+		"kib": ["kibibyte", "kibibytes"],
+		"mib": ["mebibyte", "mebibytes"],
+		"gib": ["gibibyte", "gibibytes"],
+		"fps": ["frame per second", "frames per second"]
+	},
+	"durations": {
+		"h": ["hour", "hours"],
+		"hr": ["hour", "hours"],
+		"hrs": ["hour", "hours"],
+		"m": ["minute", "minutes"],
+		"min": ["minute", "minutes"],
+		"mins": ["minute", "minutes"],
+		"s": ["second", "seconds"],
+		"sec": ["second", "seconds"],
+		"secs": ["second", "seconds"]
+	},
+	"heteronyms": [
+		{
+			"word": "live",
+			"as": "lyve",
+			"default": "respell",
+			"respell_prev": [
+				"go",
+				"goes",
+				"went",
+				"going",
+				"gone",
+				"is",
+				"are",
+				"was",
+				"were",
+				"be",
+				"been",
+				"being",
+				"it's",
+				"its",
+				"now",
+				"still",
+				"already",
+				"stay",
+				"stays",
+				"stayed",
+				"remain",
+				"remains",
+				"became",
+				"become",
+				"becomes",
+				"got",
+				"get",
+				"gets",
+				"back",
+				"fully",
+				"finally",
+				"officially",
+				"currently"
+			],
+			"keep_prev": [
+				"i",
+				"we",
+				"you",
+				"they",
+				"people",
+				"who",
+				"to",
+				"can't",
+				"cannot",
+				"couldn't",
+				"won't",
+				"wouldn't",
+				"don't",
+				"didn't",
+				"doesn't",
+				"must",
+				"may",
+				"might",
+				"will",
+				"would",
+				"could",
+				"should",
+				"shall",
+				"i'll",
+				"we'll",
+				"you'll",
+				"they'll",
+				"i'd",
+				"we'd",
+				"you'd",
+				"they'd",
+				"users",
+				"developers",
+				"teams",
+				"long",
+				"let",
+				"lets"
+			],
+			"keep_next": [
+				"with",
+				"here",
+				"there",
+				"alone",
+				"together",
+				"near",
+				"among",
+				"off",
+				"like",
+				"without",
+				"within",
+				"nearby",
+				"abroad",
+				"downtown",
+				"upstairs",
+				"downstairs",
+				"forever",
+				"happily",
+				"comfortably",
+				"longer",
+				"anywhere",
+				"somewhere",
+				"elsewhere"
+			],
+			"respell_next_re": "in (?:\\d|one|two|three|four|five|ten|a |an |about |under |less )",
+			"keep_next_re": "in (?![\\d]|one|two|three|four|five|ten|a |an |about |under |less )"
+		},
+		{
+			"word": "read",
+			"as": "red",
+			"default": "keep",
+			"respell_prev": [
+				"i",
+				"we",
+				"you",
+				"they",
+				"he",
+				"she",
+				"it",
+				"who",
+				"had",
+				"have",
+				"has",
+				"having",
+				"already",
+				"just",
+				"once",
+				"been",
+				"was",
+				"were",
+				"got",
+				"haven't",
+				"hasn't",
+				"hadn't",
+				"never",
+				"i've",
+				"we've",
+				"you've",
+				"they've",
+				"he's",
+				"she's",
+				"it's",
+				"all",
+				"both",
+				"everyone",
+				"everybody",
+				"somebody",
+				"someone",
+				"nobody"
+			]
+		},
+		{
+			"word": "record",
+			"as": "recorde",
+			"default": "keep",
+			"respell_prev": [
+				"to",
+				"will",
+				"can",
+				"could",
+				"should",
+				"would",
+				"must",
+				"may",
+				"might",
+				"please",
+				"let's",
+				"lets",
+				"don't",
+				"doesn't",
+				"didn't",
+				"won't",
+				"can't",
+				"cannot",
+				"and",
+				"or",
+				"then",
+				"we",
+				"i",
+				"you",
+				"they",
+				"also",
+				"now",
+				"just",
+				"always",
+				"never",
+				"still",
+				"not",
+				"shall"
+			]
+		},
+		{
+			"word": "present",
+			"as": "prezent",
+			"default": "keep",
+			"respell_prev": [
+				"to",
+				"will",
+				"can",
+				"could",
+				"should",
+				"would",
+				"must",
+				"may",
+				"might",
+				"please",
+				"let's",
+				"lets",
+				"don't",
+				"doesn't",
+				"didn't",
+				"won't",
+				"can't",
+				"cannot",
+				"we",
+				"i",
+				"you",
+				"they",
+				"also",
+				"now",
+				"then",
+				"and",
+				"or",
+				"shall"
+			],
+			"respell_next": [
+				"it",
+				"them",
+				"this",
+				"that",
+				"these",
+				"those",
+				"the",
+				"a",
+				"an",
+				"your",
+				"our",
+				"my",
+				"their",
+				"its",
+				"results",
+				"data",
+				"options",
+				"findings",
+				"each",
+				"every",
+				"both",
+				"all",
+				"some",
+				"two",
+				"three"
+			]
+		},
+		{
+			"word": "use",
+			"as": "yooz",
+			"default": "respell",
+			"keep_prev": [
+				"the",
+				"a",
+				"an",
+				"its",
+				"in",
+				"of",
+				"no",
+				"any",
+				"this",
+				"that",
+				"for",
+				"their",
+				"our",
+				"your",
+				"my",
+				"each",
+				"every",
+				"general",
+				"heavy",
+				"memory",
+				"cpu",
+				"disk",
+				"token",
+				"tokens",
+				"api",
+				"resource",
+				"resources",
+				"intended",
+				"actual",
+				"single",
+				"one",
+				"multiple",
+				"make",
+				"makes",
+				"made",
+				"making",
+				"little",
+				"much",
+				"more",
+				"less",
+				"some",
+				"into",
+				"under",
+				"without",
+				"daily",
+				"personal",
+				"internal",
+				"external",
+				"fair",
+				"common",
+				"wide",
+				"widespread",
+				"first",
+				"second",
+				"last",
+				"future",
+				"later",
+				"later"
+			],
+			"keep_next": [
+				"of",
+				"case",
+				"cases",
+				"by"
+			]
+		},
+		{
+			"word": "separate",
+			"as": "seperate",
+			"default": "keep",
+			"respell_prev": [
+				"to",
+				"will",
+				"can",
+				"could",
+				"should",
+				"would",
+				"must",
+				"please",
+				"let's",
+				"lets",
+				"we",
+				"i",
+				"you",
+				"they",
+				"and",
+				"then",
+				"also",
+				"don't",
+				"doesn't",
+				"didn't",
+				"won't",
+				"can't",
+				"cannot",
+				"shall"
+			],
+			"respell_next": [
+				"the",
+				"them",
+				"it",
+				"these",
+				"those",
+				"this",
+				"that",
+				"out",
+				"your",
+				"our",
+				"my",
+				"each",
+				"both",
+				"all"
+			]
+		},
+		{
+			"word": "estimate",
+			"as": "estimayt",
+			"default": "keep",
+			"respell_prev": [
+				"to",
+				"will",
+				"can",
+				"could",
+				"should",
+				"would",
+				"must",
+				"please",
+				"let's",
+				"lets",
+				"we",
+				"i",
+				"you",
+				"they",
+				"and",
+				"then",
+				"also",
+				"don't",
+				"doesn't",
+				"didn't",
+				"won't",
+				"can't",
+				"cannot",
+				"shall"
+			],
+			"respell_next": [
+				"the",
+				"them",
+				"it",
+				"these",
+				"those",
+				"this",
+				"that",
+				"how",
+				"when",
+				"what",
+				"your",
+				"our",
+				"my",
+				"each",
+				"both",
+				"all"
+			]
+		},
+		{
+			"word": "wind",
+			"as": "wined",
+			"default": "keep",
+			"respell_next": [
+				"down",
+				"up",
+				"back",
+				"through",
+				"around",
+				"forward"
+			]
+		},
+		{
+			"word": "tear",
+			"as": "tare",
+			"default": "respell",
+			"keep_prev": [
+				"a",
+				"the",
+				"this",
+				"that",
+				"one",
+				"every",
+				"no",
+				"any",
+				"another",
+				"single"
+			]
+		},
+		{
+			"word": "resume",
+			"as": "rezoomay",
+			"default": "keep",
+			"respell_prev": [
+				"my",
+				"your",
+				"his",
+				"her",
+				"their",
+				"our",
+				"attached",
+				"updated"
+			],
+			"keep_next": [
+				"the",
+				"a",
+				"an",
+				"it",
+				"them",
+				"this",
+				"that",
+				"where",
+				"from",
+				"at",
+				"on",
+				"in",
+				"after",
+				"work",
+				"working",
+				"session",
+				"sessions",
+				"run",
+				"runs",
+				"playback",
+				"listening",
+				"recording",
+				"feature",
+				"button",
+				"command",
+				"option",
+				"later",
+				"now",
+				"when",
+				"once",
+				"and",
+				"or",
+				"with",
+				"without",
+				"speaking",
+				"reading"
+			]
+		},
+		{
+			"word": "alternate",
+			"as": "alternayt",
+			"default": "keep",
+			"respell_prev": [
+				"to",
+				"will",
+				"can",
+				"could",
+				"should",
+				"would",
+				"must",
+				"let's",
+				"lets",
+				"we",
+				"i",
+				"you",
+				"they",
+				"and",
+				"then",
+				"also",
+				"don't",
+				"doesn't",
+				"didn't",
+				"shall"
+			],
+			"respell_next": [
+				"between",
+				"them",
+				"it",
+				"these",
+				"those"
+			]
+		},
+		{
+			"word": "permit",
+			"as": "permitt",
+			"default": "keep",
+			"respell_prev": [
+				"to",
+				"will",
+				"can",
+				"could",
+				"should",
+				"would",
+				"must",
+				"may",
+				"might",
+				"please",
+				"let's",
+				"lets",
+				"don't",
+				"doesn't",
+				"didn't",
+				"won't",
+				"can't",
+				"cannot",
+				"we",
+				"i",
+				"you",
+				"they",
+				"and",
+				"then",
+				"not",
+				"also",
+				"shall"
+			],
+			"respell_next": [
+				"it",
+				"them",
+				"this",
+				"that",
+				"the",
+				"a",
+				"an",
+				"us",
+				"me",
+				"you",
+				"any"
+			]
+		}
+	]
+};
+var HOLD_OPEN = "";
+var HOLD_CLOSE = "";
+var HOLD_DIGITS = "";
+var HOLD_RE = /([-]+)/g;
+var Shaper = class {
+	held = [];
+	hold(text) {
+		this.held.push(text);
+		const idx = String(this.held.length - 1);
+		let out = HOLD_OPEN;
+		for (const c of idx) out += HOLD_DIGITS[Number(c)];
+		return out + HOLD_CLOSE;
+	}
+	release(text) {
+		const back = (_m, digits) => {
+			let idx = "";
+			for (const c of digits) idx += String(HOLD_DIGITS.indexOf(c));
+			const i = Number(idx);
+			return i < this.held.length ? this.held[i] : "";
+		};
+		for (let round = 0; round < 4 && text.includes(HOLD_OPEN); round++) text = text.replace(HOLD_RE, back);
+		return text;
+	}
+};
+var esc$1 = (s) => s.replace(/[.*+?^${}()|[\]\\\/]/g, "\\$&");
+var bounded = (key) => "(^|[^A-Za-z0-9])(" + esc$1(key) + ")(?![A-Za-z0-9])";
+var isUpperWord = (w) => !/[a-z]/.test(w) && /[A-Z]/.test(w);
+function matchCase(original, spoken) {
+	const rest = original.slice(1);
+	if (/^[A-Z]/.test(original) && (original.length === 1 || !isUpperWord(rest))) return spoken.slice(0, 1).toUpperCase() + spoken.slice(1);
+	return spoken;
+}
+var PREV_RE = /([A-Za-z0-9']+)[ \t-]*$/;
+var NEXT_RE = /^[ \t-]*([A-Za-z0-9']+)/;
+var prevWord = (text, start) => {
+	const m = PREV_RE.exec(text.slice(Math.max(0, start - 48), start));
+	return m ? m[1].toLowerCase() : "";
+};
+var nextWord = (text, end) => {
+	const m = NEXT_RE.exec(text.slice(end, end + 48));
+	return m ? m[1].toLowerCase() : "";
+};
+var byLength = (keys) => keys.slice().sort((a, b) => b.length - a.length);
+var FENCE = /^[ \t]*(```|~~~)[^\n]*$/gm;
+var INLINE_CODE = /`([^`\n]*)`/g;
+var IMAGE = /!\[([^\]]*)\]\([^)]*\)/g;
+var LINK = /\[([^\]]+)\]\([^)]*\)/g;
+var URL_RE = /(^|[^A-Za-z0-9])((?:https?|ftp|wss?):\/\/[^\s)\]>"']+|www\.[^\s)\]>"']+)/g;
+var HTML = /<\/?[A-Za-z][^<>]*>/g;
+var HEADING = /^[ \t]{0,3}#{1,6}[ \t]+/gm;
+var LIST = /^[ \t]*(?:[-*+]|\d{1,3}[.)])[ \t]+/gm;
+var QUOTE = /^[ \t]*>[ \t]?/gm;
+var STRONG = /(^|[\s(])(\*\*|__)(\S(?:.*?\S)?)\2(?=[\s).,!?;:]|$)/g;
+var EM = /(^|[\s(])([*_])([^\s*_](?:.*?[^\s*_])?)\2(?=[\s).,!?;:]|$)/g;
+var STRIKE = /~~(\S(?:.*?\S)?)~~/g;
+var EMOJI = /[\u{1F000}-\u{1FAFF}\u{1F900}-\u{1F9FF}☀-➿⬀-⯿️‍←-⇿⌀-⏿■-◿\u{1F1E6}-\u{1F1FF}]/gu;
+function stripMarkup(text) {
+	text = text.replace(FENCE, "");
+	text = text.replace(INLINE_CODE, "$1");
+	text = text.replace(IMAGE, "$1");
+	text = text.replace(LINK, "$1");
+	text = text.replace(URL_RE, "$1a link");
+	text = text.replace(HTML, "");
+	text = text.replace(HEADING, "");
+	text = text.replace(LIST, "");
+	text = text.replace(QUOTE, "");
+	text = text.replace(STRONG, "$1$3");
+	text = text.replace(EM, "$1$3");
+	text = text.replace(STRIKE, "$1");
+	text = text.replace(EMOJI, "");
+	return text;
+}
+var SEG = "[A-Za-z0-9_.~@+-]+";
+var PATH = new RegExp("(^|[^A-Za-z0-9/.~])((?:~|\\.{1,2})?/" + SEG + "(?:/" + SEG + ")*/?|" + SEG + "(?:/" + SEG + ")+/?)(?::(\\d+))?(?![A-Za-z0-9/])", "g");
+var FILE = new RegExp("(^|[^A-Za-z0-9/.])([A-Za-z0-9_][A-Za-z0-9_-]*\\.(" + byLength(Object.keys(TABLES.ext)).join("|") + "))(?::(\\d+))?(?![A-Za-z0-9.])", "g");
+var SHA = /(^|[^A-Za-z0-9])([0-9a-f]{7,40})(?![A-Za-z0-9])/g;
+function spokenName(name) {
+	const hidden = name.startsWith(".");
+	const words = name.replace(/^\.+/, "").replace(/_/g, " ").replace(/-/g, " ").trim();
+	return hidden ? ("dot " + words).trim() : words;
+}
+function spokenSegment(seg, last) {
+	if (seg === "~") return "home";
+	if (seg === "..") return "dot dot";
+	if (last && seg.replace(/^\.+/, "").includes(".")) {
+		const i = seg.lastIndexOf(".");
+		const stem = seg.slice(0, i);
+		const ext = seg.slice(i + 1).toLowerCase();
+		const spokenExt = TABLES.ext[ext];
+		if (spokenExt !== void 0) return spokenName(stem) + " dot " + spokenExt;
+	}
+	return spokenName(seg);
+}
+function pathWords(path, line, s) {
+	const segs = path.split("/").filter((seg) => seg && seg !== ".");
+	let words = segs.map((seg, i) => spokenSegment(seg, i === segs.length - 1)).join(", ");
+	if (line) words += " line " + line;
+	return tech(words, s);
+}
+function isPath(token) {
+	if (/^(\/|~\/|\.\/|\.\.\/)/.test(token)) return true;
+	if ((token.match(/\//g) || []).length >= 2) return true;
+	const parts = token.replace(/\/+$/, "").split("/");
+	const tail = parts[parts.length - 1];
+	const ext = tail.includes(".") ? tail.slice(tail.lastIndexOf(".") + 1).toLowerCase() : "";
+	return !!ext && ext in TABLES.ext;
+}
+function paths(text, s) {
+	text = text.replace(PATH, (whole, pre, tokenIn, line) => {
+		let token = tokenIn;
+		let tail = "";
+		while (token.endsWith(".") || token.endsWith(",")) {
+			tail = token.slice(-1) + tail;
+			token = token.slice(0, -1);
+		}
+		if (!isPath(token) || !/[A-Za-z]/.test(token)) return whole;
+		return pre + s.hold(pathWords(token, line, s)) + tail;
+	});
+	text = text.replace(FILE, (_whole, pre, name, ext, line) => {
+		let spoken = spokenName(name.slice(0, name.length - ext.length - 1)) + " dot " + TABLES.ext[ext.toLowerCase()];
+		if (line) spoken += " line " + line;
+		return pre + s.hold(tech(spoken, s));
+	});
+	return text.replace(SHA, (whole, pre, h) => {
+		if (!/\d/.test(h) || !/[a-f]/.test(h)) return whole;
+		return pre + s.hold(h.slice(0, 7).split("").join(" "));
+	});
+}
+var VERSION = /(^|[^A-Za-z0-9])[vV](\d+(?:\.\d+)+)(?![A-Za-z0-9]|\.\d)/g;
+var DOTTED = /(^|[^A-Za-z0-9.])(\d+\.\d+(?:\.\d+)+)(?![A-Za-z0-9]|\.\d)/g;
+var PR = /(^|[^A-Za-z0-9])(?:PR|pr|Pr)[ \t]?#?(\d+)(?![A-Za-z0-9])/g;
+var ISSUE = /(^|[^A-Za-z0-9])(issue|Issue|ticket|Ticket)[ \t]?#(\d+)(?![A-Za-z0-9])/g;
+var HASH = /(^|[^A-Za-z0-9&#])#(\d+)(?![A-Za-z0-9])/g;
+var DURATION = /(^|[^A-Za-z0-9.])(\d+)(h|hr|hrs)(?:[ \t]?(\d+)(m|min|mins))?(?:[ \t]?(\d+)(s|sec|secs))?(?![A-Za-z0-9])|(^|[^A-Za-z0-9.])(\d+)(m|min|mins)[ \t]?(\d+)(s|sec|secs)(?![A-Za-z0-9])/g;
+var DURATION_ONE = /(^|[^A-Za-z0-9.])(\d+(?:\.\d+)?)(ms|h|hr|hrs|m|min|mins|s|sec|secs)(?![A-Za-z0-9])/g;
+var UNIT = new RegExp("(^|[^A-Za-z0-9.])(\\d+(?:\\.\\d+)?)[ \\t]?(" + byLength(Object.keys(TABLES.units)).join("|") + ")(?![A-Za-z0-9])", "gi");
+var THOUSANDS = /(^|[^A-Za-z0-9.,])(\d{1,3}(?:,\d{3})+)(?![A-Za-z0-9,])/g;
+var plural$6 = (n, pair) => n === "1" || n === "1.0" ? pair[0] : pair[1];
+function numbers(text) {
+	text = text.replace(VERSION, (_w, pre, v) => pre + "version " + v.split(".").join(" point "));
+	text = text.replace(DOTTED, (_w, pre, v) => pre + v.split(".").join(" point "));
+	text = text.replace(PR, (_w, pre, n) => pre + "P R " + n);
+	text = text.replace(ISSUE, (_w, pre, kind, n) => pre + kind + " " + n);
+	text = text.replace(HASH, (_w, pre, n) => pre + "number " + n);
+	text = text.replace(DURATION, (...g) => {
+		const d = TABLES.durations;
+		const a = g;
+		if (a[2] !== void 0) {
+			let out = a[1] + a[2] + " " + plural$6(a[2], d[a[3]]);
+			if (a[4]) out += " " + a[4] + " " + plural$6(a[4], d[a[5]]);
+			if (a[6]) out += " " + a[6] + " " + plural$6(a[6], d[a[7]]);
+			return out;
+		}
+		return a[8] + a[9] + " " + plural$6(a[9], d[a[10]]) + " " + a[11] + " " + plural$6(a[11], d[a[12]]);
+	});
+	text = text.replace(DURATION_ONE, (_w, pre, n, unit) => {
+		const pair = unit === "ms" ? TABLES.units.ms : TABLES.durations[unit];
+		return pre + n + " " + plural$6(n, pair);
+	});
+	text = text.replace(UNIT, (_w, pre, n, unit) => pre + n + " " + plural$6(n, TABLES.units[unit.toLowerCase()]));
+	return text;
+}
+var IDENT = /(^|[^A-Za-z0-9_'-])([A-Za-z0-9]+(?:[_-][A-Za-z0-9]+)*)(?![A-Za-z0-9_])/g;
+var CAMEL_LOWER_UPPER = /([a-z0-9])([A-Z])/g;
+var CAMEL_ACRONYM = /([A-Z]+)([A-Z][a-z])/g;
+var LETTER_DIGIT = /([A-Za-z])(\d)/g;
+var ALL_DIGITS = /^[\d_-]+$/;
+function splitPart(part) {
+	let split = part.replace(CAMEL_ACRONYM, "$1 $2");
+	split = split.replace(CAMEL_LOWER_UPPER, "$1 $2");
+	if (split !== part) split = split.split(" ").map((w) => isUpperWord(w) ? w : w.toLowerCase()).join(" ");
+	return split.replace(LETTER_DIGIT, "$1 $2");
+}
+function identifiers(text, s) {
+	const t = TABLES.tech;
+	return text.replace(IDENT, (whole, pre, token) => {
+		const low = token.toLowerCase();
+		if (low in t) return pre + s.hold(matchCase(token, t[low]));
+		if (ALL_DIGITS.test(token)) return whole;
+		const parts = token.split(/[_-]/);
+		if (parts.length === 1 && splitPart(token) === token) return whole;
+		const spoken = [];
+		for (const p of parts) {
+			if (!p) continue;
+			const pl = p.toLowerCase();
+			spoken.push(pl in t ? s.hold(matchCase(p, t[pl])) : splitPart(p));
+		}
+		return pre + spoken.join(" ");
+	});
+}
+function tableRegex(keys) {
+	return new RegExp("(^|[^A-Za-z0-9])(" + byLength(keys).map(esc$1).join("|") + ")(?![A-Za-z0-9])", "gi");
+}
+var TECH_RE = tableRegex(Object.keys(TABLES.tech));
+function tech(text, s) {
+	const t = TABLES.tech;
+	return text.replace(TECH_RE, (whole, pre, token) => {
+		const spoken = t[token.toLowerCase()];
+		if (spoken === void 0) return whole;
+		return pre + s.hold(matchCase(token, spoken));
+	});
+}
+function applyOverrides(text, rules, s) {
+	if (!rules.length) return text;
+	const table = {};
+	for (const r of rules) table[r.say] = r.as;
+	const alts = byLength(Object.keys(table)).map((k) => esc$1(k).replace(/ /g, "[ \\t]+")).join("|");
+	const pattern = new RegExp("(^|[^A-Za-z0-9])(" + alts + ")(?![A-Za-z0-9])", "gi");
+	return text.replace(pattern, (whole, pre, token) => {
+		const spoken = table[token.toLowerCase().replace(/[ \t]+/g, " ")];
+		if (spoken === void 0) return whole;
+		return pre + s.hold(matchCase(token, spoken));
+	});
+}
+var HETERONYMS = TABLES.heteronyms.map((rule) => ({
+	re: new RegExp(bounded(rule.word), "gi"),
+	as: rule.as,
+	respell: rule.default === "respell",
+	keepPrev: new Set(rule.keep_prev || []),
+	keepNext: new Set(rule.keep_next || []),
+	respellPrev: new Set(rule.respell_prev || []),
+	respellNext: new Set(rule.respell_next || []),
+	respellNextRe: rule.respell_next_re ? new RegExp("^[ \\t]*" + rule.respell_next_re, "i") : null,
+	keepNextRe: rule.keep_next_re ? new RegExp("^[ \\t]*" + rule.keep_next_re, "i") : null
+}));
+function decide(rule, prev, next, after) {
+	if (rule.respell) {
+		if (rule.keepPrev.has(prev)) return false;
+		if (rule.respellPrev.has(prev)) return true;
+		if (rule.respellNextRe && rule.respellNextRe.test(after)) return true;
+		if (rule.keepNext.has(next)) return false;
+		if (rule.keepNextRe && rule.keepNextRe.test(after)) return false;
+		return true;
+	}
+	if (rule.keepPrev.has(prev) || rule.keepNext.has(next)) return false;
+	if (rule.respellPrev.has(prev) || rule.respellNext.has(next)) return true;
+	if (rule.respellNextRe && rule.respellNextRe.test(after)) return true;
+	return false;
+}
+function heteronyms(text) {
+	for (const rule of HETERONYMS) {
+		const now = text;
+		text = now.replace(rule.re, (whole, pre, word, offset) => {
+			const start = offset + pre.length;
+			const end = start + word.length;
+			if (decide(rule, prevWord(now, start), nextWord(now, end), now.slice(end, end + 48))) return pre + matchCase(word, rule.as);
+			return whole;
+		});
+	}
+	return text;
+}
+var SAY_OK = /^[a-z0-9][a-z0-9 '.+#_-]*$/;
+var AS_BAD = /[\x00-\x1f\x7f<>`]/;
+function normalizePronounce(raw) {
+	if (!Array.isArray(raw)) return [];
+	const out = [];
+	const seen = /* @__PURE__ */ new Set();
+	for (const row of raw) {
+		if (!row || typeof row !== "object") continue;
+		const r = row;
+		if (typeof r.say !== "string" || typeof r.as !== "string") continue;
+		const say = r.say.replace(/’/g, "'").replace(/\s+/g, " ").trim().toLowerCase();
+		const spoken = r.as.replace(/’/g, "'").replace(/\s+/g, " ").trim();
+		if (!say || !spoken || say.length > PRONOUNCE_MAX_CHARS || spoken.length > PRONOUNCE_MAX_CHARS) continue;
+		if (!SAY_OK.test(say) || AS_BAD.test(spoken) || seen.has(say)) continue;
+		seen.add(say);
+		out.push({
+			say,
+			as: spoken
+		});
+		if (out.length === PRONOUNCE_MAX) break;
+	}
+	return out;
+}
+var served = [];
+function setPronounce(raw) {
+	served = normalizePronounce(raw);
+}
+function pronounce() {
+	return served;
+}
+function shapeForSpeech(text, overrides) {
+	if (typeof text !== "string" || !text) return "";
+	const s = new Shaper();
+	let t = text.slice(0, MAX_IN);
+	t = applyOverrides(t, normalizePronounce(overrides), s);
+	t = stripMarkup(t);
+	t = paths(t, s);
+	t = numbers(t);
+	t = identifiers(t, s);
+	t = tech(t, s);
+	t = heteronyms(t);
+	t = t.replace(THOUSANDS, (_w, pre, n) => pre + n.replace(/,/g, ""));
+	t = t.replace(/[ \t]+/g, " ").replace(/[ \t]*\n[ \t\n]*/g, "\n").trim();
+	t = s.release(t);
+	if (t.length > MAX_OUT) {
+		const cut = t.lastIndexOf(" ", 1999);
+		t = t.slice(0, cut > MAX_OUT / 2 ? cut : MAX_OUT).replace(/\s+$/, "");
+	}
+	return t;
 }
 //#endregion
 //#region src/lib/voiceDesktop.ts
@@ -38550,41 +39770,73 @@ var esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 var phraseRx = (p) => phraseWords(p).map((w) => esc(w).replace(/'/g, "['’`]?")).join("[\\s,.!?]+");
 var longestFirst = (a, b) => phraseWords(b).length - phraseWords(a).length || b.length - a.length;
 var keysOf = (p) => phraseWords(p).map(wordKey);
+var SoundRegExp = class extends RegExp {
+	also;
+	constructor(src, flags, also) {
+		super(src, flags);
+		this.also = also;
+	}
+	exec(text) {
+		return super.exec(text) ?? this.also(text);
+	}
+};
+var heardAs = (text, before, phrase) => Object.assign([
+	text,
+	before,
+	phrase
+], {
+	index: 0,
+	input: text,
+	groups: void 0
+});
 function buildMatchers(w, v = -1) {
 	const tails = "(?:[\\s,]+(?:" + RADIO_TAILS.join("|") + "))?";
+	const ends = [...w.end, ...heardOf(w, "end")];
+	const sends = [...w.send, ...heardOf(w, "send")];
+	const clears = [...w.clear, ...heardOf(w, "clear")];
 	const entries = [
-		...w.end.map((p) => ({
+		...ends.map((p) => ({
 			p,
 			kind: "out",
 			rx: phraseRx(p)
 		})),
-		...w.send.map((p) => ({
+		...sends.map((p) => ({
 			p,
 			kind: "over",
 			rx: phraseRx(p) + tails
 		})),
-		...w.clear.map((p) => ({
+		...clears.map((p) => ({
 			p,
 			kind: "disregard",
 			rx: phraseRx(p) + tails
 		}))
 	].filter((e) => e.rx).sort((a, b) => longestFirst(a.p, b.p));
-	const radio = entries.length ? new RegExp("^(.*?)[\\s,.!?]*(?<![\\p{L}\\p{N}'])(" + entries.map((e) => "(?:" + e.rx + ")").join("|") + ")[.!?\\s]*$", "iu") : /(?!)/;
+	const sounded = (text) => {
+		const hit = soundTail(text, w.end) || soundTail(text, w.send, RADIO_TAILS) || soundTail(text, w.clear, RADIO_TAILS, true);
+		return hit ? heardAs(text, hit.before, hit.phrase) : null;
+	};
+	const radio = entries.length ? new SoundRegExp("^(.*?)[\\s,.!?]*(?<![\\p{L}\\p{N}'])(" + entries.map((e) => "(?:" + e.rx + ")").join("|") + ")[.!?\\s]*$", "iu", sounded) : /(?!)/;
 	const radioKinds = entries.map((e) => [new RegExp("^(?:" + e.rx + ")$", "iu"), e.kind]);
-	const stops = withKin(w, "stop");
-	const hushes = withKin(w, "hush");
+	const stops = [.../* @__PURE__ */ new Set([...withKin(w, "stop"), ...heardOf(w, "stop")])];
+	const hushes = [.../* @__PURE__ */ new Set([...withKin(w, "hush"), ...heardOf(w, "hush")])];
 	const stopAll = [...stops].sort(longestFirst).map(keysOf);
 	const stop = stopAll.filter((p) => p.length > 1);
 	const hushKeys = [...hushes].sort(longestFirst).map((p) => keysOf(p).join(" "));
-	const hush = new RegExp("^(?:(?:" + HUSH_LEADS.join("|") + ") )?(?:" + (hushKeys.map(esc).join("|") || "(?!)") + ")(?: (?:" + HUSH_ENDS.join("|") + "))?$", "u");
+	const hushSounded = (keys) => {
+		let ws = keys.split(" ").filter(Boolean);
+		if (ws.length > 1 && HUSH_LEADS.includes(ws[0])) ws = ws.slice(1);
+		if (ws.length > 1 && HUSH_ENDS.includes(ws[ws.length - 1])) ws = ws.slice(0, -1);
+		return soundsLikeAny(ws.join(" "), w.hush) ? heardAs(keys, "", w.hush[0]) : null;
+	};
+	const hush = new SoundRegExp("^(?:(?:" + HUSH_LEADS.join("|") + ") )?(?:" + (hushKeys.map(esc).join("|") || "(?!)") + ")(?: (?:" + HUSH_ENDS.join("|") + "))?$", "u", hushSounded);
 	const radioPhrases = (ps) => ps.map(keysOf).flatMap((k) => [k, ...RADIO_TAILS.map((t) => [...k, t])]);
 	const control = [
 		...stopAll,
 		...hushes.map(keysOf),
-		...radioPhrases(w.send),
-		...radioPhrases(w.clear),
-		...w.end.map(keysOf),
-		...w.end.map(keysOf).flatMap((e) => stop.map((s) => [...e, ...s]))
+		...radioPhrases(sends),
+		...radioPhrases(clears),
+		...ends.map(keysOf),
+		...ends.map(keysOf).flatMap((e) => stop.map((s) => [...e, ...s]))
 	].filter((p) => p.length);
 	const commands = [...stops, ...hushes].map((p) => phraseWords(p).map((x) => [x, wordKey(x)]));
 	return {
@@ -38776,7 +40028,28 @@ function retype(before, after) {
 }
 var CONTROL_TAIL_MS = 250;
 var CONTROL_POLL_MS = 50;
-var OVER_FINAL_WAIT_MS = 2500;
+var OVER_FINAL_WAIT_MS = 1500;
+var OVER_FINAL_MIN_MS = 300;
+var FINAL_ROUND_TRIP_MS = 150;
+function overWaitMs(typical) {
+	if (typical == null || !(typical > 0)) return OVER_FINAL_WAIT_MS;
+	return Math.min(OVER_FINAL_WAIT_MS, Math.max(OVER_FINAL_MIN_MS, Math.round(typical * 1.5 + 100)));
+}
+var FinalClock = class {
+	ema = null;
+	note(ms) {
+		if (!(ms >= 0) || ms > 6e4) return;
+		this.ema = this.ema == null ? ms : this.ema * .6 + ms * .4;
+	}
+	typical(seed) {
+		if (this.ema != null) return Math.round(this.ema);
+		return seed != null && seed > 0 ? seed + FINAL_ROUND_TRIP_MS : null;
+	}
+	reset() {
+		this.ema = null;
+	}
+};
+var finalClock = new FinalClock();
 var SWALLOW_MAX_MS = 5e3;
 var withErase = (o, erase) => erase ? {
 	...o,
@@ -39075,6 +40348,8 @@ var LiveDictation = class {
 	swallowing;
 	wordEnd = 0;
 	wordsAt = Date.now();
+	endedAt = 0;
+	bargeAt = 0;
 	constructor(target, hooks, opts = {}) {
 		this.target = target;
 		this.hooks = hooks;
@@ -39088,10 +40363,17 @@ var LiveDictation = class {
 	}
 	midSentence() {
 		if (this.done) return false;
-		const recent = Date.now() - this.wordsAt < MID_SENTENCE_MS;
+		const now = Date.now();
+		if (now - this.bargeAt < MID_SENTENCE_MS) return true;
+		const recent = now - this.wordsAt < MID_SENTENCE_MS;
 		if (!this.heardAnything) return recent;
 		const quiet = this.hooks.quietMs?.() ?? 0;
 		return recent && !!(this.dict.held || this.dict.partial) && quiet < CONTROL_TAIL_MS;
+	}
+	bargedIn() {
+		if (this.done) return;
+		this.bargeAt = Date.now();
+		this.wordsAt = this.bargeAt;
 	}
 	hearing(t) {
 		if (t) this.heardAnything = true;
@@ -39121,6 +40403,10 @@ var LiveDictation = class {
 	phraseEnded() {
 		clearTimeout(this.sendWait);
 		this.sendWait = void 0;
+		if (this.endedAt) {
+			finalClock.note(Date.now() - this.endedAt);
+			this.endedAt = 0;
+		}
 		if (!this.swallowing) return false;
 		clearTimeout(this.swallowing);
 		this.swallowing = void 0;
@@ -39151,13 +40437,14 @@ var LiveDictation = class {
 		clearInterval(this.tailTimer);
 		this.tailTimer = void 0;
 		this.wordEnd = Date.now() - Math.min(quiet, 6e4);
+		this.endedAt = Date.now();
 		this.hooks.endPhrase?.();
 		if (t.kind === "over" || t.kind === "out") {
 			this.sendWait = setTimeout(() => {
 				this.sendWait = void 0;
 				this.swallow();
 				this.step(() => this.dict.heard(t.text));
-			}, OVER_FINAL_WAIT_MS);
+			}, overWaitMs(finalClock.typical(this.hooks.finalMs?.())));
 			return;
 		}
 		this.swallow();
@@ -39209,7 +40496,7 @@ var LiveDictation = class {
 		const field = this.target?.kind === "field";
 		const base = this.opts.hint || (field ? "the words go into the text box" : dictHint());
 		const lead = pickupLine(this.recording, this.hearingNow);
-		this.hooks.caption(lead ? lead + " · " + base : field ? "Listening — " + base : base, true);
+		this.hooks.caption(field && lead === "Listening…" ? "Listening — " + base : lead + " · " + base, true);
 	}
 	step(next) {
 		this.chain = this.chain.then(() => {
@@ -39265,7 +40552,7 @@ var LiveDictation = class {
 				const quiet = this.hooks.quietMs?.();
 				const from = this.wordEnd || (quiet != null && quiet < 6e4 ? Date.now() - quiet : 0);
 				this.wordEnd = 0;
-				const typedNow = !!(out.text || out.erase);
+				const typedNow = !!(out.erase || out.text.trim());
 				if (typedNow && !await this.put(out.text, true, out.erase)) return;
 				if (this.done) return;
 				if (out.out && !this.dict.typed) {
@@ -39852,7 +41139,7 @@ var CUE_GAP_MS = 120;
 var GATE_RETRY_MS = 50;
 var MID_SENTENCE_MS = 1500;
 var confirmSentences = null;
-var isConfirmSentence = (part) => (confirmSentences ||= new Set(Object.values(CONFIRM_LINES).flatMap((l) => speechSentences(l)))).has(part);
+var isConfirmSentence = (part) => (confirmSentences ||= new Set(Object.values(CONFIRM_LINES).flatMap((l) => speechRequests(l)))).has(part);
 var SPEAK_CACHE_MAX = 32;
 var SpeechQueue = class {
 	engine;
@@ -39904,7 +41191,7 @@ var SpeechQueue = class {
 		});
 	}
 	cue(play, ms) {
-		const lead = this.speaking || this.lines.length ? CUE_GAP_MS : 0;
+		const lead = this.cueLead;
 		return new Promise((done) => {
 			let at = 0;
 			while (at < this.lines.length && this.lines[at].confirm) at++;
@@ -39931,6 +41218,12 @@ var SpeechQueue = class {
 	}
 	get busy() {
 		return !!this.speaking;
+	}
+	get confirming() {
+		return !!this.current?.confirm && !this.current.sound;
+	}
+	get cueLead() {
+		return this.speaking || this.lines.length ? CUE_GAP_MS : 0;
 	}
 	get queued() {
 		return this.lines.length;
@@ -40182,6 +41475,22 @@ function speechSentences(text) {
 	}
 	return out;
 }
+var SPEECH_CHARS_PER_S = 15;
+var SPEAK_REQUEST_MIN_S = 2.7;
+function speechRequests(text) {
+	const parts = speechSentences(text);
+	if (parts.length <= 2) return parts;
+	const out = [parts[0]];
+	const minChars = SPEAK_REQUEST_MIN_S * SPEECH_CHARS_PER_S;
+	let i = 1;
+	while (i < parts.length) {
+		const cap = Math.max(minChars, out[out.length - 1].length * 1.5);
+		let req = parts[i++];
+		while (i < parts.length && req.length < minChars && req.length + 1 + parts[i].length <= cap) req += " " + parts[i++];
+		out.push(req);
+	}
+	return out;
+}
 var WORD_MS = 400;
 var CHUNK_GRACE_MS = 1500;
 function browserSpeaker() {
@@ -40197,7 +41506,7 @@ function browserSpeaker() {
 		available,
 		speak(text) {
 			return new Promise((resolve) => {
-				const parts = sentenceChunks(text);
+				const parts = sentenceChunks(shapeForSpeech(text, pronounce()));
 				if (!available() || !parts.length) return resolve();
 				const g = gen;
 				let i = 0;
@@ -40286,7 +41595,7 @@ function serverSpeaker(fallback, opts = {}) {
 		async prefetch(lines) {
 			const ctx = voiceAudioCtx();
 			if (!ctx) return;
-			for (const line of lines) for (const part of speechSentences(line)) {
+			for (const line of lines) for (const part of speechRequests(line)) {
 				if (cache.has(keyOf(part))) continue;
 				const p = fetchAudio(ctx, part, new AbortController());
 				remember(part, p);
@@ -40294,7 +41603,7 @@ function serverSpeaker(fallback, opts = {}) {
 			}
 		},
 		async speak(text) {
-			const parts = speechSentences(text);
+			const parts = speechRequests(text);
 			if (!parts.length) return;
 			const g = gen;
 			const ctx = voiceAudioCtx();
@@ -40528,6 +41837,36 @@ function chunkMinS(passMs) {
 	return Math.min(600, Math.max(150, passMs * .8)) / 1e3;
 }
 var STREAM_FRESH_MS = 4e4;
+var CLIP_FINISH_WAIT_MS = 45e3;
+function finishWaitMs(rec) {
+	if (rec.name !== "server") return HOLD_FINAL_WAIT_MS;
+	return rec.streaming ? overWaitMs(finalClock.typical(rec.finalMs)) : CLIP_FINISH_WAIT_MS;
+}
+var BARGE_POLL_MS = 40;
+var BARGE_POLLS = 3;
+var BARGE_RMS = .04;
+var BARGE_FRESH_MS = 1e3;
+var BARGE_REWIND_MS = 270;
+var BargeDetector = class {
+	bleed = 0;
+	loud = false;
+	run = 0;
+	barged = false;
+	begin() {
+		this.run = 0;
+		this.loud = false;
+		this.barged = false;
+	}
+	block(rms) {
+		this.loud = this.bleed > 0 && rms > Math.max(BARGE_RMS, this.bleed * 3);
+		if (!this.barged) this.bleed = this.bleed > 0 ? this.bleed * .95 + rms * .05 : rms;
+		this.run = this.loud ? this.run + 1 : 0;
+		if (this.run < BARGE_POLLS) return false;
+		this.run = 0;
+		this.barged = true;
+		return true;
+	}
+};
 var wordsOf = (v) => String((Array.isArray(v) ? v.join(" ") : v) || "").trim();
 var langTag$1 = () => String(navigator.language || "en").split(";")[0];
 function serverRecognizer(opts = {}) {
@@ -40546,6 +41885,46 @@ function serverRecognizer(opts = {}) {
 	const open = /* @__PURE__ */ new Set();
 	let skipUntil = 0;
 	let muted = false;
+	const barge = new BargeDetector();
+	let bargeTimer;
+	let bargeTap = null;
+	let lastBargeAt = 0;
+	let micStream = null;
+	let micCtx = null;
+	const listenOver = () => {
+		if (bargeTimer || !micStream || !micCtx) return;
+		try {
+			if (bargeTap?.stream !== micStream) {
+				bargeTap?.src.disconnect();
+				const src = micCtx.createMediaStreamSource(micStream);
+				const an = micCtx.createAnalyser();
+				an.fftSize = 2048;
+				src.connect(an);
+				bargeTap = {
+					src,
+					an,
+					buf: new Float32Array(an.fftSize),
+					stream: micStream
+				};
+			}
+		} catch {
+			bargeTap = null;
+			return;
+		}
+		barge.begin();
+		bargeTimer = setInterval(() => {
+			const t = bargeTap;
+			if (!t || !muted || !h) return;
+			t.an.getFloatTimeDomainData(t.buf);
+			if (!barge.block(rmsOf(t.buf))) return;
+			lastBargeAt = Date.now();
+			h.onBarge?.();
+		}, BARGE_POLL_MS);
+	};
+	const unlistenOver = () => {
+		clearInterval(bargeTimer);
+		bargeTimer = void 0;
+	};
 	const unhold = () => {
 		if (!holding) return;
 		holding = false;
@@ -40840,6 +42219,8 @@ function serverRecognizer(opts = {}) {
 		const ctx = voiceAudioCtx();
 		if (ctx && ctx.state === "suspended") await ctx.resume().catch(() => {});
 		if (token !== mine) return discard(c);
+		micStream = s;
+		micCtx = ctx;
 		if (!want) {
 			discard(c);
 			token = null;
@@ -40907,9 +42288,15 @@ function serverRecognizer(opts = {}) {
 		finalMs: null,
 		mic,
 		available: () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia && !!audioCtxCtor(),
+		get streaming() {
+			return streaming;
+		},
 		mute(on) {
 			muted = on;
-			cur?.rec?.mute?.(on, BARGE_SKIP_MS / 1e3);
+			if (on) listenOver();
+			else unlistenOver();
+			const barged = !on && Date.now() - lastBargeAt < BARGE_FRESH_MS;
+			cur?.rec?.mute?.(on, barged ? 0 : BARGE_SKIP_MS / 1e3, barged ? BARGE_REWIND_MS / 1e3 : 0);
 		},
 		endPhrase() {
 			if (cur?.heard && want) endClip();
@@ -40943,6 +42330,11 @@ function serverRecognizer(opts = {}) {
 			h = null;
 			token = null;
 			clearTimeout(capTimer);
+			unlistenOver();
+			try {
+				bargeTap?.src.disconnect();
+			} catch {}
+			bargeTap = null;
 			const c = cur;
 			cur = null;
 			c?.rec?.cancel();
@@ -40968,6 +42360,7 @@ async function loadVoiceCfg(prev) {
 	try {
 		const j = await api("/api/voice");
 		applyVoiceView(j);
+		setPronounce(j?.pronounce);
 		if (j && typeof j === "object") return {
 			stt: j.stt === "server" ? "server" : "phone",
 			tts: j.tts === "server" ? "server" : "phone",
@@ -42334,7 +43727,7 @@ function TopBarMic() {
 		const ctx = voiceAudioCtx();
 		confirmer.current?.prime();
 		const skipMs = Math.max(bargeIn(queue, ask && opts.title === ask.title ? ask.title : ""), opts.skipMs || 0);
-		const chimeSkip = prefsRef.current.sounds !== false ? CHIME_MS + 30 : 0;
+		const chimeSkip = prefsRef.current.sounds !== false ? queue.cueLead + CHIME_MS + 30 : 0;
 		const continuous = opts.continuous !== false;
 		idles.current = opts.idle ?? (!continuous || prefsRef.current.ptt === "hold");
 		const d = new LiveDictation(target(into, opts.title), {
@@ -42394,7 +43787,8 @@ function TopBarMic() {
 			endPhrase: () => {
 				if (live.current === d) rec.current?.endPhrase?.();
 			},
-			sentIn: (ms) => void (lastSentMs = ms)
+			sentIn: (ms) => void (lastSentMs = ms),
+			finalMs: () => r === serverRec ? serverRec.finalMs : null
 		}, {
 			hint: opts.hint,
 			continuous
@@ -42451,6 +43845,11 @@ function TopBarMic() {
 			},
 			onNotice: (t) => {
 				if (live.current === d) d.notice(t);
+			},
+			onBarge: () => {
+				if (live.current !== d || !queue.busy || queue.confirming) return;
+				d.bargedIn();
+				queue.skip();
 			},
 			onError: (code, detail) => {
 				if (live.current !== d) return;
@@ -42523,7 +43922,7 @@ function TopBarMic() {
 			d.finish();
 		};
 		deciding.current = decide;
-		const timer = setTimeout(decide, r.name === "server" ? 45e3 : HOLD_FINAL_WAIT_MS);
+		const timer = setTimeout(decide, finishWaitMs(r === serverRec ? serverRec : { name: r.name }));
 		r.finish();
 	};
 	(0, import_react.useEffect)(() => {
@@ -91156,6 +92555,270 @@ function WakeRow(p) {
 	});
 }
 //#endregion
+//#region src/components/settings/screens/Pronounce.tsx
+function savedPronounce(raw) {
+	return normalizePronounce(raw);
+}
+function pronounceError(say, as) {
+	const s = say.replace(/\s+/g, " ").trim();
+	const a = as.replace(/\s+/g, " ").trim();
+	if (!s) return "Type the word or phrase to change.";
+	if (!a) return "Type how to say it.";
+	if (s.length > PRONOUNCE_MAX_CHARS || a.length > PRONOUNCE_MAX_CHARS) return `At most ${PRONOUNCE_MAX_CHARS} characters a side.`;
+	if (!/^[a-z0-9][a-z0-9 '.+#_-]*$/i.test(s)) return "A word or phrase: letters, digits, spaces, and ' . + # _ -";
+	if (/[<>`]/.test(a)) return "The spoken form can't hold < > or `.";
+	return "";
+}
+function withRule(rows, rule) {
+	const [clean] = normalizePronounce([rule]);
+	if (!clean) return rows;
+	const i = rows.findIndex((r) => r.say === clean.say);
+	return (i >= 0 ? rows.map((r, j) => j === i ? clean : r) : [...rows, clean]).slice(0, PRONOUNCE_MAX);
+}
+function withoutRule(rows, say) {
+	return rows.filter((r) => r.say !== say);
+}
+async function speakAsWritten(ctx, text) {
+	if (!ctx) return "This browser can't play audio from the server.";
+	try {
+		const r = await apiRaw("/api/voice/speak", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				text,
+				shape: false
+			})
+		});
+		if (!r.ok) {
+			let why = r.statusText || String(r.status);
+			try {
+				const body = await r.json();
+				if (body?.error) why = body.error;
+			} catch {}
+			return "Couldn't speak: " + why.replace(/\.$/, "") + ".";
+		}
+		const audio = await ctx.decodeAudioData(await r.arrayBuffer());
+		const src = ctx.createBufferSource();
+		src.buffer = audio;
+		src.connect(ctx.destination);
+		src.start(0);
+		return "";
+	} catch (err) {
+		return "Couldn't speak: " + String(err?.message || err).replace(/\.$/, "") + ".";
+	}
+}
+function PronounceBlock({ model, view }) {
+	const rows = savedPronounce(model.get("voice", "pronounce"));
+	const locked = view?.configure_allowed === false;
+	const [say, setSay] = (0, import_react.useState)("");
+	const [as, setAs] = (0, import_react.useState)("");
+	const [error, setError] = (0, import_react.useState)("");
+	const [said, setSaid] = (0, import_react.useState)(null);
+	const [sent, setSent] = (0, import_react.useState)(null);
+	const full = rows.length >= PRONOUNCE_MAX;
+	const save = async (next) => {
+		setSent({
+			n: next.length,
+			doc: model.settings
+		});
+		await model.saveField("voice", "pronounce", next);
+	};
+	const add = () => {
+		const why = pronounceError(say, as);
+		setError(why);
+		if (why) return;
+		save(withRule(rows, {
+			say,
+			as
+		}));
+		setSay("");
+		setAs("");
+	};
+	const tryIt = async (key, text) => {
+		setSaid({
+			key,
+			text: "Speaking…"
+		});
+		const why = await speakAsWritten(voiceAudioCtx(), text);
+		setSaid({
+			key,
+			text: why || "Spoke it."
+		});
+	};
+	const kept = sent && sent.doc !== model.settings && sent.n !== rows.length ? rows.length : null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-section",
+		id: "voice-pronounce",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+				className: "set-subtitle",
+				children: "Say it as"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint",
+				id: "voice-pronounce-hint",
+				children: ["Words the voice gets wrong, respelled the way they should sound — \"live\" as \"lyve\", \"SQL\" as \"sequel\". They apply to everything read aloud, on every device, before the built-in rules; captions keep the real spelling. Whole words, any capitalisation.", rows.length > 0 && !locked && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					id: "voice-pronounce-reset",
+					onClick: () => void save([]),
+					children: "Remove all"
+				})] })]
+			}),
+			locked && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				id: "voice-pronounce-locked",
+				children: "Only the owner of this computer can change them."
+			}),
+			kept !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "set-hint voice-pronounce-kept",
+				role: "status",
+				children: [
+					"The server kept ",
+					kept,
+					" of them."
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "voice-pronounce-rows",
+				role: "list",
+				"aria-label": "Say it as",
+				children: rows.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "voice-pronounce-row",
+					role: "listitem",
+					"data-pronounce-say": r.say,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "voice-pronounce-say",
+							children: r.say
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "voice-pronounce-arrow",
+							"aria-hidden": "true",
+							children: "→"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "voice-pronounce-as",
+							children: r.as
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn voice-pronounce-try",
+							title: "Hear it through the current voice",
+							onClick: () => void tryIt(r.say, r.as),
+							children: "Try"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "voice-chip-x",
+							"aria-label": "Remove " + r.say,
+							title: "Remove",
+							disabled: locked,
+							onClick: () => void save(withoutRule(rows, r.say)),
+							children: "×"
+						}),
+						said?.key === r.say && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint voice-pronounce-said",
+							role: "status",
+							children: said.text
+						})
+					]
+				}, r.say))
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "voice-pronounce-row is-draft",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						id: "voice-pronounce-say",
+						type: "text",
+						autoComplete: "off",
+						spellCheck: false,
+						maxLength: PRONOUNCE_MAX_CHARS + 20,
+						disabled: locked || full,
+						placeholder: "Word or phrase",
+						"aria-label": "Word or phrase",
+						"aria-invalid": error ? true : void 0,
+						value: say,
+						onChange: (e) => {
+							setSay(e.target.value);
+							if (error) setError("");
+						},
+						onKeyDown: (e) => {
+							if (e.key === "Enter") {
+								e.preventDefault();
+								add();
+							}
+						}
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "voice-pronounce-arrow",
+						"aria-hidden": "true",
+						children: "→"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						id: "voice-pronounce-as",
+						type: "text",
+						autoComplete: "off",
+						spellCheck: false,
+						maxLength: PRONOUNCE_MAX_CHARS + 20,
+						disabled: locked || full,
+						placeholder: "Say it as",
+						"aria-label": "Say it as",
+						"aria-invalid": error ? true : void 0,
+						value: as,
+						onChange: (e) => {
+							setAs(e.target.value);
+							if (error) setError("");
+						},
+						onKeyDown: (e) => {
+							if (e.key === "Enter") {
+								e.preventDefault();
+								add();
+							}
+						}
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn voice-pronounce-try",
+						id: "voice-pronounce-try-draft",
+						title: "Hear the respelling through the current voice",
+						disabled: !as.trim(),
+						onClick: () => void tryIt("", as.trim()),
+						children: "Try"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						id: "voice-pronounce-add",
+						disabled: locked || full,
+						onClick: add,
+						children: "Add"
+					}),
+					said?.key === "" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint voice-pronounce-said",
+						role: "status",
+						children: said.text
+					})
+				]
+			}),
+			error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-field-error",
+				role: "alert",
+				children: error
+			}),
+			full && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint",
+				id: "voice-pronounce-full",
+				children: [
+					"That's the most (",
+					PRONOUNCE_MAX,
+					"); remove one to add another."
+				]
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/settings/screens/Voice.tsx
 var KIND_WORD = {
 	stt: "recognition",
@@ -91510,6 +93173,10 @@ function VoiceSectionView({ model, view, onClearKey, install, tryRow }) {
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MicPrefs, {}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VoiceWordsBlock, {
+				model,
+				view
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PronounceBlock, {
 				model,
 				view
 			}),

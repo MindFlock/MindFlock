@@ -18,10 +18,27 @@ from backend.web.core import wake
         "Mindflocked",  # a letter long
         "Mine flock",
         "MindFlock?",
+        # What whisper writes for it (core.voice_words.HEARD), however far
+        # from the letters: "my flock" is three off.
+        "My flock",
+        "mind flog.",
+        "Min flock",
+        "mindflocked",
     ],
 )
 def test_the_word_alone_wakes(heard):
     assert wake.is_wake(heard) is True
+
+
+def test_the_known_forms_are_the_shared_tables():
+    from backend.web.core import voice_words as vw
+
+    for form in vw.HEARD["mindflock"]:
+        assert wake.is_wake(form) is True, form
+        assert wake.is_wake(form + " please") is False, form
+    # A custom word has no table: the letter slack alone.
+    assert wake.is_wake("my flock", "jarvis") is False
+    assert wake.is_wake("mindful") is False  # a real word, not a form
 
 
 @pytest.mark.parametrize(

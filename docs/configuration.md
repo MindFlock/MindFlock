@@ -1220,8 +1220,28 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     case, trimmed, deduplicated, invalid phrases dropped, and a kind left
     empty — or equal to ours — is not written, so it follows the default.
     The router still hears a kept default's variants ("stop the
-    microphone", "that's enough"); a phrase you add is matched whole.
+    microphone", "that's enough") and what the recogniser writes for it
+    (`GET /api/voice` adds `words.heard`: "stop listing", "be quite", "ova",
+    "this regard", "mind lock" — a table keyed by phrase, so a default you
+    keep keeps its forms wherever you put it); a phrase you add is matched
+    whole, or a letter off by one shared sound rule (a phonetic key plus an
+    edit margin that shrinks with the phrase: "rodger" for "roger", never
+    "hover" for "over" — see [Voice words](web-api.md#voice-words)).
     Personal, so **synced** like `approve_dialogs`.
+  - `pronounce` (default `[]`) — your own pronunciations, editable in
+    Settings → Voice → **Say it as**: an ordered list of `{say, as}` rows
+    (`[{"say": "live", "as": "lyve"}, {"say": "mindflock", "as": "mind
+    flock"}]`). `say` is a whole word or phrase, matched case-insensitively
+    (letters, digits, spaces and `' . + # _ -`); `as` is spoken as written.
+    At most 40 rows, 40 characters a side; stored normalised
+    (`core.spoken_text.normalize_pronounce`): `say` lower case, both sides
+    trimmed, a repeated `say` dropped. **Every voice applies them first** —
+    the server inside `POST /api/voice/speak`, the desktop app and the phone
+    page before `speechSynthesis` (`GET /api/voice` serves them as
+    `pronounce`) — ahead of the built-in shaping (the tech words, the
+    heteronyms by context, paths and numbers: `backend/web/core/spoken_text.py`),
+    and a caption never shows the respelling. Personal, meant to **sync**
+    like `words`.
   - `stt` / `tts` — `"phone"` (default) or `"server"`: which engine the
     **phone page** prefers. Server recognition is what lets an iOS
     home-screen icon hear you (Web Speech recognition exists only in a Safari
@@ -1282,8 +1302,12 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     between speed and accuracy**: the live transcript types the fast
     model's words as the person speaks, then at the end of the phrase the
     accurate pass re-decodes the whole phrase and corrects it (blank = with
-    `stt_model`, i.e. `small`, ~1–1.5 s after the phrase ends; `"off"` = no
-    accurate pass — fastest, the fast words stand; any faster-whisper size
+    `stt_model`, i.e. `small`: the pass is ~1.1–1.3 s on an 8-core CPU
+    whatever the phrase's length, started on the first quiet chunk so the
+    correction usually lands within a second of the person stopping; it is
+    skipped only under 0.2 s of speech, so a lone "stop" is still corrected,
+    and waited for at most 1.5 s, after which the fast words stand; `"off"`
+    = no accurate pass — fastest, the fast words stand; any faster-whisper size
     or `org/repo` id = that model, e.g. `medium.en` for more accuracy at
     more delay; a non-size name reads as blank). A third model is loaded and
     kept resident with the other two. The wake word ("MindFlock") is judged

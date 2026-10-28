@@ -161,7 +161,13 @@ FastAPI app `backend.web.server:app`. Key pieces:
   streaming `base.en`) resident while configured, a piper voice unloaded
   after 30 idle minutes — and both kinds warmed at boot and whenever a voice
   client fetches `GET /api/voice` (`speech.warm_in_background`; a local
-  OpenAI-compatible voice host gets one throwaway synthesis). See
+  OpenAI-compatible voice host gets one throwaway synthesis). The
+  streaming recogniser's accurate pass is biased towards the voice words,
+  the open sessions' titles and a MindFlock vocabulary
+  (`speech.recognition_hints`); for the titles `speech.session_titles`
+  reads `backend.web.server.ENGINE` through a guarded lazy import — the one
+  place `core/` reaches back into `server.py` (`[]` without a server, so
+  tests and the bench import it bare). See
   [web-api.md](web-api.md#voice-talking-to-a-session-from-the-phone) and
   [providers.md](providers.md#activity-signal-activity_markerspy).
 - **`core/auth.py`** — shared bearer-token ASGI middleware gating HTTP + websockets

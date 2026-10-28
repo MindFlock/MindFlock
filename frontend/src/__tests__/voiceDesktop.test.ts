@@ -515,7 +515,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
       expect(sent.t1).toEqual(["run the tests"]);
       expect(mocks.instApi).not.toHaveBeenCalled(); // held: more words may follow
       await d.flush("tests over");
-      expect(sent.t1).toEqual(["run the tests", " "]);
+      expect(sent.t1).toEqual(["run the tests"]); // no trailing space before Enter
       expect(sent.t1.join("")).not.toContain("over");
       expect(mocks.instApi).toHaveBeenCalledWith("t1", "/send", { json: { enter: true, say: false } });
       expect(k.calls.halt).toBe(1);
@@ -528,7 +528,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
       const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
       await d.words("ship the fix");
       await d.flush("Over.");
-      expect(sent.t1).toEqual(["ship the fix", " "]);
+      expect(sent.t1).toEqual(["ship the fix"]);
       expect(mocks.instApi).toHaveBeenCalledTimes(1);
       const sent2 = terms();
       const d2 = new LiveDictation(sessionTarget("t2", "Billing"), hooks().h);
@@ -537,7 +537,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
       await d2.stream("over and", "out");
       expect(sent2.t2).toEqual(["deploy it"]);
       await d2.flush("out");
-      expect(sent2.t2).toEqual(["deploy it", " "]);
+      expect(sent2.t2).toEqual(["deploy it"]);
       expect(mocks.instApi).toHaveBeenCalledTimes(2);
       // "submit" is a word: typed as it comes, nothing sent.
       const sent3 = terms();
@@ -682,7 +682,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
   it("before a word, the caption names the radio words", () => {
     const k = hooks();
     new LiveDictation(sessionTarget("t1", "Login fix"), k.h).show();
-    expect(k.last()).toBe(dictHint());
+    expect(k.last()).toBe("Listening… · " + dictHint()); // "Listening…" from the press, before the mic records
     expect(dictHint()).toBe("Say “over” to send, “over and out” to stop, “disregard” to start over");
   });
 });
@@ -790,7 +790,7 @@ describe("typing as you speak: the guess and its corrections", () => {
       await d.hearing("and run");
       await d.hearing("and run the tests over");
       await d.heard("and run the tests over");
-      expect(sent.slice(5)).toEqual(["and run", " the tests", " "]);
+      expect(sent.slice(5)).toEqual(["and run", " the tests"]);
       expect(d.active).toBe(false);
       expect(MIC_SRC).toContain("void d.hearing(t)");
     } finally {

@@ -342,7 +342,8 @@ describe("the level and the pickup line (pure)", () => {
   });
 
   it("“Hearing you…” while the level says speech, “Listening…” when quiet, nothing before the mic records", () => {
-    expect(pickupLine(false, true)).toBe("");
+    expect(pickupLine(false, true)).toBe("Listening…"); // from the press, before the mic records
+    expect(pickupLine(false, false)).toBe("Listening…");
     expect(pickupLine(true, false)).toBe("Listening…");
     expect(pickupLine(true, true)).toBe("Hearing you…");
     expect(HEARING_HOLD_MS).toBeGreaterThanOrEqual(300);
@@ -390,12 +391,13 @@ describe("the caption: what it hears before what it types", () => {
     return { h, captions, last: () => captions[captions.length - 1] };
   }
 
-  it("“Listening…” once the mic records, “Hearing you…” at speech, back when quiet — until a word", () => {
+  it("“Listening…” from the press, “Hearing you…” at speech once the mic records, back when quiet — until a word", () => {
     mocks.peekTerm.mockReturnValue({ send: () => true });
     const k = hooks();
     const d = new LiveDictation({ kind: "session", title: "t1", name: "Login fix", type: () => true, erase: () => true }, k.h);
     d.show();
-    expect(k.last()[0]).toBe("Say “over” to send, “over and out” to stop, “disregard” to start over");
+    // From the press — nothing waits on the microphone to say so.
+    expect(k.last()[0]).toBe("Listening… · Say “over” to send, “over and out” to stop, “disregard” to start over");
     d.ready();
     expect(k.last()[0]).toBe("Listening… · Say “over” to send, “over and out” to stop, “disregard” to start over");
     d.loud(true);
@@ -462,7 +464,7 @@ describe("wiring: warm, measured, and off React's render path", () => {
     const css = src("components/TopBarMic.css");
     // Still: the ring's opacity is the level's step, eased; never a size.
     expect(cssRule(css, ".mic-ring.listening::after")).toContain("opacity: var(--mic-step, 0.45)");
-    expect(cssRule(css, ".mic-ring::after")).toContain("transition: opacity 400ms ease");
+    expect(cssRule(css, ".mic-ring::after")).toContain("transition: opacity 150ms ease-out");
     expect(css).not.toMatch(/scale\(/);
     expect(css).not.toMatch(/animation:/);
     const lib = code("lib/voiceMic.ts");

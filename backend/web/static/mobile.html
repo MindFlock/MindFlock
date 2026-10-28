@@ -142,7 +142,7 @@
          preference); both stay visible while typing because applyViewport
          clamps + polls the app height while the keyboard settles. -->
     <div id="composer">
-      <textarea id="compose" rows="1" placeholder="Type here — Send delivers it with Enter"
+      <textarea id="compose" rows="1" placeholder="Type here — Send adds ⏎"
                 autocomplete="on" autocapitalize="none" spellcheck="false"
                 aria-label="Compose input"></textarea>
       <button type="button" id="send" aria-label="Send">Send</button>
@@ -495,6 +495,9 @@
 
   <script src="/vendor/xterm.js"></script>
   <script src="/vendor/xterm-addon-fit.js"></script>
+  <!-- The phone's own voice reads text shaped by this (GET /api/voice pronounce
+       + the shared tables); a caption shows the text as written. -->
+  <script src="/spoken-text.js"></script>
   <script src="/mobile.js"></script>
 </body>
 </html>

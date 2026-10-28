@@ -24,8 +24,9 @@
 /* The ring (this mic and the ask pop-up's, both .mic-ring): constant and
    thin while listening. The only thing the sound changes is its opacity, in
    three steps — quiet / hearing / loud — that lib/voiceMic writes as
-   --mic-step only when the step changes (the level smoothed over ~400 ms
-   first), eased here over 400 ms. Never a scale, never a halo. */
+   --mic-step only when the step changes (the level smoothed first: a fast
+   attack, a slow release), eased here over 150 ms — quick enough to answer
+   a word, slow enough not to blink. Never a scale, never a halo. */
 .mic-ring {
   position: relative;
 }
@@ -38,7 +39,7 @@
   border: 1.5px solid var(--red);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 400ms ease;
+  transition: opacity 150ms ease-out;
 }
 
 .mic-ring.listening::after {

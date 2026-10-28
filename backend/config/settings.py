@@ -1879,9 +1879,13 @@ class VoiceSettings:
       hush phrases and the wake word), stored as
       :func:`backend.web.core.voice_words.normalize` keeps them: only the
       kinds that differ from the defaults; ``{}`` = all defaults.
+    * ``pronounce`` — the person's own pronunciations for what MindFlock says
+      out loud (``[{"say": "<word or phrase>", "as": "<respelling>"}]``,
+      applied first by :func:`backend.web.core.spoken_text.shape`), stored as
+      :func:`backend.web.core.spoken_text.normalize_pronounce` keeps them.
 
-    ``approve_dialogs`` and ``words`` are personal policy and sync across the
-    person's devices; everything else names THIS machine's backends and stays
+    ``approve_dialogs``, ``words`` and ``pronounce`` are personal policy and
+    sync across the person's devices; everything else names THIS machine's backends and stays
     local.
     """
 
@@ -1900,6 +1904,7 @@ class VoiceSettings:
     tts_model: str = ""
     tts_voice: str = ""
     words: dict = field(default_factory=dict)
+    pronounce: list = field(default_factory=list)
 
     _STR_FIELDS = (
         "stt_backend",
@@ -1929,11 +1934,13 @@ class VoiceSettings:
                 out[k] = v
         if self.words:
             out["words"] = dict(self.words)
+        if self.pronounce:
+            out["pronounce"] = list(self.pronounce)
         return out
 
     @classmethod
     def from_dict(cls, d: dict) -> "VoiceSettings":
-        from backend.web.core import voice_words
+        from backend.web.core import spoken_text, voice_words
 
         def _where(v: Any) -> str:
             v = str(v or "").strip().lower()
@@ -1944,6 +1951,7 @@ class VoiceSettings:
             stt=_where(d.get("stt")),
             tts=_where(d.get("tts")),
             words=voice_words.normalize(d.get("words")),
+            pronounce=spoken_text.normalize_pronounce(d.get("pronounce")),
             **{k: str(d.get(k, "") or "").strip() for k in cls._STR_FIELDS},
         )
 

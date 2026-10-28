@@ -14,12 +14,27 @@
  * then the server's. The matchers (lib/voiceDesktop.ts) rebuild when
  * {@link voiceWordsVersion} moves, and every hint that names a word reads
  * {@link voiceWords} when it is drawn — so a saved word works, and is shown,
- * at once. Pure but for that one store: no React, no DOM. */
+ * at once. Pure but for that one store: no React, no DOM.
+ *
+ * The recogniser does not always write the word said ("over" → "ova",
+ * "disregard" → "this regard"), so a match is tolerant in two ways, both
+ * the server's (backend/web/core/voice_words.py), so the phone and the
+ * router hear alike: `words.heard` lists what whisper writes for each
+ * default phrase ({@link heardOf} folds it in beside {@link withKin}), and
+ * {@link soundsLike} — a small phonetic key ({@link soundKey}) with an
+ * edit-distance margin — lets a phrase the person added ("roger") be heard
+ * a letter off ("rodger"), whole, at the end of an utterance only
+ * ({@link soundTail}). tests/unit/data/voice_sounds.json pins all three. */
 
 import { api } from "../api/client";
 
 export type PhraseKind = "send" | "end" | "clear" | "stop" | "hush";
 export const PHRASE_KINDS: readonly PhraseKind[] = ["send", "end", "clear", "stop", "hush"];
+
+/** What the recogniser writes for the phrases of each kind (and the wake
+ * word): the server's `words.heard`, matching only — never shown, never
+ * saved. Absent until GET /api/voice says (and from an older server). */
+export type HeardWords = Record<PhraseKind | "wake", string[]>;
 
 export interface VoiceWords {
   send: string[];
@@ -28,6 +43,7 @@ export interface VoiceWords {
   stop: string[];
   hush: string[];
   wake: string;
+  heard?: HeardWords;
 }
 
 /** Until the server says: the same defaults as its `words_default`
@@ -63,9 +79,18 @@ export function withKin(w: VoiceWords, k: PhraseKind): string[] {
   return [...new Set(w[k].flatMap((p) => [p, ...(PHRASE_KIN[k]?.[p] || [])]))];
 }
 
+/** What the recogniser writes for `w`'s phrases of kind `k` (the server's
+ * `words.heard`, {@link HeardWords}), none that is a phrase itself. */
+export function heardOf(w: VoiceWords, k: PhraseKind | "wake"): string[] {
+  const own: readonly string[] = k === "wake" ? [w.wake] : w[k];
+  return (w.heard?.[k] || []).filter((f) => !own.includes(f));
+}
+
 /** The server's limits (the editor refuses past them): phrases per kind, and
- * characters per phrase; the wake word is one or two words. */
+ * characters per phrase; the wake word is one or two words; heard forms
+ * per kind. */
 export const WORDS_MAX = 6;
+export const HEARD_MAX = 24;
 export const PHRASE_MAX_CHARS = 40;
 export const WAKE_MAX_WORDS = 2;
 export const WAKE_MIN_CHARS = 3;
@@ -109,6 +134,18 @@ export function wordsFrom(raw: unknown, fallback: VoiceWords): VoiceWords {
   const wake = typeof r.wake === "string" ? normPhrase(r.wake) : "";
   const n = phraseWords(wake).length;
   if (n >= 1 && n <= WAKE_MAX_WORDS) out.wake = wake;
+  // The heard forms are the server's for THESE words: never a fallback's.
+  delete out.heard;
+  const h = r.heard && typeof r.heard === "object" ? (r.heard as Record<string, unknown>) : null;
+  if (h) {
+    const heard = {} as HeardWords;
+    for (const k of [...PHRASE_KINDS, "wake"] as const) {
+      const v = h[k];
+      const list = Array.isArray(v) ? v.filter((p) => typeof p === "string").map(normPhrase).filter((p) => phraseWords(p).length) : [];
+      heard[k] = [...new Set(list)].slice(0, HEARD_MAX);
+    }
+    out.heard = heard;
+  }
   return out;
 }
 
@@ -209,4 +246,133 @@ export function wakeError(wake: string): string {
   if (p.length < WAKE_MIN_CHARS || p.length > WAKE_MAX_CHARS)
     return WAKE_MIN_CHARS + "–" + WAKE_MAX_CHARS + " characters.";
   return "";
+}
+
+// --- the sound of a phrase (backend/web/core/voice_words.py, kept identical) -- //
+
+/** The key's rewrites, in order, on the lower-cased letters and digits of a
+ * phrase run together — the server's `_SOUND_RULES`, pattern for pattern:
+ * silent starts, "ph" → f, the sh/ch class → X, "th" → 0, c/q/x/g resolved,
+ * voiced consonants folded onto their unvoiced twins. */
+const SOUND_RULES: ReadonlyArray<[RegExp, string]> = [
+  [/^[kgp]n/g, "n"],
+  [/^wr/g, "r"],
+  [/^x/g, "s"],
+  [/^wh/g, "w"],
+  [/mb$/g, "m"],
+  [/x/g, "ks"],
+  [/ph/g, "f"],
+  [/sch/g, "sk"],
+  [/ch/g, "X"],
+  [/sh/g, "X"],
+  [/th/g, "0"],
+  [/gh$/g, "f"],
+  [/gh/g, ""],
+  [/ck/g, "k"],
+  [/q/g, "k"],
+  [/c(?=[eiy])/g, "s"],
+  [/c/g, "k"],
+  [/dg(?=[eiy])/g, "j"],
+  [/g(?=[eiy])/g, "j"],
+  [/b/g, "p"],
+  [/d/g, "t"],
+  [/v/g, "f"],
+  [/z/g, "s"],
+  [/g/g, "k"],
+];
+
+/** The lower-cased letters and digits of `text`, run together ("Over,
+ * out!" → "overout"). */
+const letters = (text: string) => String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+
+/** A compact phonetic key of one word or a phrase (the server's
+ * `sound_key`): "over" → "ofr", "roger" and "rodger" → "rjr", "this regard"
+ * → "0srkrt". Letters that sound alike share a key; vowels after the first
+ * letter do not count. "" for no letters. */
+export function soundKey(text: string): string {
+  let s = letters(text);
+  if (!s) return "";
+  for (const [rx, to] of SOUND_RULES) s = s.replace(rx, to);
+  if (!s) return "";
+  return (s[0] + s.slice(1).replace(/[aeiouhwy]/g, "")).replace(/(.)\1+/g, "$1");
+}
+
+/** Damerau–Levenshtein distance (adjacent letters swapped count one). */
+function edits(a: string, b: string): number {
+  const d: number[][] = [];
+  for (let i = 0; i <= a.length; i++) d.push([i, ...new Array<number>(b.length).fill(0)]);
+  for (let j = 0; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++)
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+    }
+  return d[a.length][b.length];
+}
+
+/** How many letters may differ for a phrase of `n` letters: two from eight
+ * up, one from five, none below — a four-letter word is only ever itself. */
+const slack = (n: number) => (n >= 8 ? 2 : n >= 5 ? 1 : 0);
+
+/** Is `said` (the last words of an utterance) `phrase` heard a little off
+ * (the server's `sounds_like`)? Their letters run together within
+ * {@link slack} edits AND one {@link soundKey} (one key edit allowed from
+ * five key letters): "rodger" is "roger", "pipe town" is "pipe down" —
+ * "hover" and "ever" are not "over", "hold" is not "halt". A phrase of
+ * eight letters or more also takes a homophone one letter further off —
+ * about as long, with the same key ("sight check" for sitecheck; never a
+ * phrase cut short: "over and" is not "over and out"). */
+export function soundsLike(said: string, phrase: string): boolean {
+  const a = letters(said);
+  const b = letters(phrase);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  const d = edits(a, b);
+  const n = slack(b.length);
+  const ka = soundKey(a);
+  const kb = soundKey(b);
+  if (d <= n) return ka === kb || (kb.length >= 5 && edits(ka, kb) <= 1);
+  return b.length >= 8 && d === n + 1 && Math.abs(a.length - b.length) <= 1 && ka === kb;
+}
+
+/** The whole of `text` (its words) sounds like one of `phrases`. */
+export function soundsLikeAny(text: string, phrases: readonly string[]): boolean {
+  return phrases.some((p) => soundsLike(text, p));
+}
+
+/** The last words of `text` that sound like one of `phrases` (the longest
+ * phrase tried first, one word more than it has allowed for a split like
+ * "rod ger") → the phrase as the person set it and the words said before
+ * it (trailing punctuation dropped), else null. `tails`: words that may
+ * follow a phrase and still count ("disregard that"); `lead`: a tail that
+ * is not the whole utterance must also start with the phrase's first letter
+ * (the clear words — a false hit throws a draft away: "in this regard" is
+ * dictation, "dis regards" clears). The server's `sound_tail`. */
+export function soundTail(
+  text: string,
+  phrases: readonly string[],
+  tails: readonly string[] = [],
+  lead = false,
+): { before: string; phrase: string } | null {
+  const toks = String(text || "").trim().split(/\s+/).filter(Boolean);
+  const idx = toks.flatMap((t, i) => (letters(t) ? [i] : []));
+  if (!idx.length) return null;
+  const ordered = phrases.filter((p) => letters(p)).sort((a, b) => letters(b).length - letters(a).length);
+  if (!ordered.length) return null;
+  const most = Math.max(...ordered.map((p) => phraseWords(p).length)) + 1;
+  const ends = [idx.length];
+  if (idx.length > 1 && tails.includes(letters(toks[idx[idx.length - 1]]))) ends.push(idx.length - 1);
+  for (const end of ends)
+    for (let k = Math.min(most, end); k >= 1; k--) {
+      const said = idx.slice(end - k, end).map((i) => letters(toks[i])).join("");
+      for (const p of ordered) {
+        if (lead && k < end && said[0] !== letters(p)[0]) continue;
+        if (soundsLike(said, p)) {
+          const before = toks.slice(0, idx[end - k]).join(" ").replace(/[\s,.!?]+$/, "");
+          return { before, phrase: p };
+        }
+      }
+    }
+  return null;
 }

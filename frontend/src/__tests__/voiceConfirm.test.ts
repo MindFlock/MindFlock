@@ -9,7 +9,8 @@
  *    their audio cached per voice and made ahead only for a local voice;
  *  - snappy control words: one at the end of the GUESS acts after
  *    CONTROL_TAIL_MS of quiet (the phrase ended at the recognizer at once);
- *    "over" waits for /end's accurate final up to OVER_FINAL_WAIT_MS;
+ *    "over" waits for /end's accurate final up to OVER_FINAL_WAIT_MS (less
+ *    once the finals' round trip is known — voiceSnappy.test.ts);
  *  - the wiring in TopBarMic and Settings → Voice, and the copy. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +22,7 @@ import {
   CONTROL_TAIL_MS,
   CUE_GAP_MS,
   OVER_FINAL_WAIT_MS,
+  finalClock,
   isSwitchCommand,
   sentLine,
   Confirmer,
@@ -486,6 +488,7 @@ describe("snappy control words: acted on from the guess after a moment's quiet",
     quiet = 0;
     ends = 0;
     sentIn.length = 0;
+    finalClock.reset(); // no round trip known: "over" waits the most
     mocks.instApi.mockResolvedValue({ ok: true });
   });
   const fast = (over: Partial<LiveHooks> = {}) =>
@@ -567,8 +570,8 @@ describe("snappy control words: acted on from the guess after a moment's quiet",
     expect(mocks.instApi).toHaveBeenCalledTimes(1);
   });
 
-  it("“over”: no /end within 2.5 s — the fast words go, and the late final is ignored", async () => {
-    expect(OVER_FINAL_WAIT_MS).toBe(2500);
+  it("“over”: no /end within 1.5 s — the fast words go, and the late final is ignored", async () => {
+    expect(OVER_FINAL_WAIT_MS).toBe(1500);
     const t = session();
     const k = fast();
     const d = new LiveDictation(t, k.h, { continuous: true });
@@ -579,9 +582,9 @@ describe("snappy control words: acted on from the guess after a moment's quiet",
     expect(mocks.instApi).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(400);
     expect(mocks.instApi).toHaveBeenCalledTimes(1);
-    expect(t.keys).toEqual(["ship it", " "]);
+    expect(t.keys).toEqual(["ship it"]); // no trailing space before Enter (nothing settles)
     await d.flush("", "ship it over and over");
-    expect(t.keys).toHaveLength(2);
+    expect(t.keys).toHaveLength(1);
     expect(mocks.instApi).toHaveBeenCalledTimes(1);
   });
 
@@ -659,7 +662,8 @@ describe("the mic's chimes: rising at every start, falling at every stop", () =>
       /void queue\.cue\(\(\) => chime\(voiceAudioCtx\(\), kind\), kind === "stop" \? STOP_CHIME_MS : CHIME_MS\);/
     );
     expect(sound).not.toMatch(/speakingListeners/);
-    expect(MIC).toMatch(/const chimeSkip = prefsRef\.current\.sounds !== false \? CHIME_MS \+ 30 : 0;/);
+    // …with the breath the cue waits when something is queued (SpeechQueue.cueLead).
+    expect(MIC).toMatch(/const chimeSkip = prefsRef\.current\.sounds !== false \? queue\.cueLead \+ CHIME_MS \+ 30 : 0;/);
     const voice = code("components/settings/screens/Voice.tsx");
     expect(voice).toContain('id="voice-sounds"');
     expect(voice).toMatch(/checked=\{prefs\.sounds !== false\}/);

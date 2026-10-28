@@ -184,8 +184,8 @@ SYNCED: Dict[str, Tuple[str, ...]] = {
     ),
     "extensions": ("disabled",),
     # Personal policy (may a spoken "yes" answer a dialog; the person's own
-    # voice keywords), not machine facts.
-    "voice": ("approve_dialogs", "words"),
+    # voice keywords and pronunciations), not machine facts.
+    "voice": ("approve_dialogs", "words", "pronounce"),
     "prefs": (
         "keymap",
         "prompt_presets",
@@ -425,6 +425,7 @@ LABELS: Dict[str, str] = {
     "notifications.prose_questions": "Questions in plain words",
     "voice.approve_dialogs": "Approve dialogs by voice",
     "voice.words": "Voice words",
+    "voice.pronounce": "Say it as (pronunciations)",
     "notifications.ntfy_token": "ntfy token",
     "extensions.disabled": "Disabled extensions",
     "prefs.keymap": "Keyboard shortcuts",
