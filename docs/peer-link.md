@@ -406,6 +406,10 @@ follows `diff`, `mirror_pull` follows `read_file`; `status` is always allowed). 
 | `joint_proposal` | `{"id", "proposal": {"id": "cp_<8 hex>", "by", "text": text 1..10000, "at": iso, "state": "open"\|"accepted"\|"rejected"}}` | `{"ok": bool}` |
 | `joint_state` | `{"id"}` | `{"joint": null \| view}` — see [Joint tasks](#joint-tasks--contract-jointpy) |
 | `joint_check` | `{"id", "rev": int 1..2^31, "side_results": side, "steps"?: [step ≤25], "by"?: "me"\|"peer"}` (`steps` and `by` together) | `{"ok": bool, "rev": int}` — the receiver's checklist rev afterwards; see [Joint check](#joint-check--contract-joint_checkpy) |
+| `sessions` | `{}` | `{"sessions": [item ≤50]}` — the sessions the answering side shares on this link; see [Shared sessions](#shared-sessions--contract-sessions_bridgepy-routespeer_sessionspy) |
+| `term_open` | `{"title": line 1..200, "cols": int 1..1000, "rows": int 1..1000}` | `{"ok": true, "term_id": hex16}` |
+| `term_close` | `{"term_id": hex16}` | `{"ok": bool}` |
+| `session_focus` | `{"title": line 0..200}` (`""` = moved off) | `{"ok": bool}` |
 
 `half` is `{"repo_name": line ≤128, "branch": line ≤200, "program": line ≤64}`
 — a folder's NAME and the CLI's name, never a path or a command line. `by` is
@@ -485,7 +489,9 @@ Per-link state that grows with new features lives in its OWN file next to the
 links, never in `Link` (an older release's `validate()` that rejects a value
 moves the whole links file aside): the message log
 (`messages/<link_id>.json`, `inbox.py`) and the joint task
-(`joint/<link_id>.json`, `joint.py`). Both are dropped when the link goes.
+(`joint/<link_id>.json`, `joint.py`), and the sessions this side shares on
+the link (`sessions/<link_id>.json`, `store.SharedSessions`). All are dropped
+when the link goes.
 
 ## Joint tasks — CONTRACT (`joint.py`)
 
@@ -1225,6 +1231,174 @@ The HTTP messages route refuses any client-supplied `from` that starts with
 - CLI: `mindflock peer status | invite [--reach] | revoke <invite> | join <code> | links | unlink <id> |
   share <link> <repo> [--branch] | unshare <link> | export <link> <repo>
   <peer/branch> | address <link> <address>`.
+
+## Shared sessions — CONTRACT (`sessions_bridge.py`, `routes/peer_sessions.py`)
+
+A session I share with a peer **appears in their own MindFlock** as a row
+they open and type into; theirs appear in mine. Either side of a link shares
+with the other, any number of sessions, each one way:
+
+- **gated** (the default — "folder gating on"): the link's sandboxed shared
+  folder ([The shared folder](#the-shared-folder--contract-sharepy), [The
+  sandbox](#the-sandbox--contract-sandboxpy-egresspy-bridgepy-sandbox_execpy)).
+  Sharing an ordinary session gated cuts the link's ONE shared folder from
+  its folder and branch (`share()`, as Settings → People → Share a folder
+  does) and shares the sandboxed session that starts there; sharing the
+  link's shared-folder session itself is always gated. A link that already
+  has a shared folder refuses a second gated share (409) — withdraw it, or
+  share in full.
+- **full**: one of my sessions as it is — no sandbox, no copy. The peer types
+  into my agent, in my worktree, on my machine. **This is the guest-link
+  trust level** ([people.md](people.md#guest-links--someone-else-in-a-few-of-your-sessions)):
+  whoever you share a session with in full can do anything that session's
+  agent can — read and change its files, run commands as you, spend its
+  credits. The UI says so in red and makes you tick *I understand*.
+
+### Ops and pushes (`wire.py`)
+
+Four request ops (the table in [Frames](#frames--contract-wirepy)):
+`sessions`, `term_open`, `term_close`, `session_focus`. A `sessions` item is
+`{title, name, status, activity, stage, branch, folder, mode?, program?}` —
+`name` is the owner's display name for it (`aliases.display_name`),
+`folder` the folder's NAME (never a path), every string a "line" (no control
+characters). No link perm grants them (sharing a session IS the grant, one
+session at a time); `sessions`, `term_open` and `session_focus` are refused
+`not permitted: safety number not confirmed` until *It matches* on the
+answering side, like the folder's content. `term_open` for a title not shared
+on THIS link (or a gated record whose session is no longer this link's
+shared-folder session) is `err: "not shared"`.
+
+A terminal is a stream, not request-sized, so it rides **push frames** —
+`{"t":"push","op":<op>,"p":{…}}`, one way, never answered:
+
+| push | from | p |
+|---|---|---|
+| `term_out` | sharer | `{"term_id", "data": base64 ≤ 32 KiB raw}` — the terminal's bytes |
+| `term_end` | sharer | `{"term_id", "reason": line ≤200}` — `withdrawn`, `replaced`, `closed`, … |
+| `term_in` | opener | `{"term_id", "data": base64 ≤ 32 KiB raw}` — keystrokes / paste |
+| `term_resize` | opener | `{"term_id", "cols": 1..1000, "rows": 1..1000}` |
+| `sessions_changed` | sharer | `{}` — my share list changed: ask `sessions` again |
+
+Evolving the wire: an older peer closes the connection on an unknown frame
+type, so a push only ever goes to a peer that **proved** it speaks them — it
+asked us `sessions`, opened a terminal, or pushed to us. An older peer
+answers `sessions` with `err: "unsupported"` (People says they need to
+update) and is not asked again until it reconnects. A well-formed push for
+an op this version doesn't know (`wire.UnsupportedPush`) is dropped without
+closing. `wire.CAPS = ("sessions",)` is what the handshake advertises.
+
+The transport hands push frames to the handler's `handle_push(link_id, op,
+p)` in order, on its read loop, under their own per-connection window
+(`transport.PUSH_RATE`, not the request rate), and sends them with
+`send_push(link_id, op, p)` (strict outbound).
+
+### The terminal (`sessions_bridge.py`)
+
+- **The sharer** (`SharerTerm`): one terminal per (link, title); a new
+  `term_open` replaces the old one (`term_end "replaced"`). It wakes the
+  session the way the web terminal does (`server.ensure_terminal_session`:
+  a sleeping agent wakes, a dead one relaunches, a paused one is refused)
+  and attaches a **read-only** tmux client (`tmux attach-session -r`) whose
+  output goes out as `term_out` (gathered ~20 ms, so a redraw is a few
+  frames, not dozens), through the web terminal's own PTY pump
+  (`core.terminal.pump_pty`). The peer's keystrokes **never** reach that
+  client: they are typed into the pane with `tmux send-keys -l` (Ctrl+Space,
+  which argv can't carry, as the key `C-Space`), straight to the program in
+  the pane and past tmux's key table — on a writable client the prefix key
+  would hand the peer tmux itself (`prefix c` opens a window running an
+  UNSANDBOXED shell; `prefix :` runs `run-shell`). Only the terminal
+  emulator's answers to tmux's probes (`terminal.is_terminal_reply`) reach
+  the client. Keystrokes are dropped while the session is budget-locked.
+- **The opener** (`OpenerTerm`): one remote terminal per (link, title), fanned
+  out to every browser socket here that opened the row; the last to leave
+  sends `term_close`. `term_out` / `term_end` are only ever applied to an
+  opener term of the SAME link (and `term_in` / `term_resize` to a sharer
+  term of the same link): a term id from another link, or the wrong
+  direction, is dropped.
+- Every terminal of a link ends when the connection drops, when the link is
+  re-paired or its safety number un-confirmed (the peer is told,
+  `term_end`), and when it is unlinked.
+
+### Rows on the opener's rail (`routes/peer_sessions.py`)
+
+`GET /api/instances` carries, for every connected link whose peer shares
+sessions with us, a row per session shaped like a tailnet device's:
+
+- `title` `<peer>::<title>`, `device` `<peer>` (the peer's display name,
+  numbered `Bob (2)` when it collides with a device's key or another
+  peer's name), `device_label`, `display_title` (their name for it);
+- `peer_link`, `peer_mode` (`gated`|`full`), `remote_peer: true`;
+- `peer_share: true`, so every owner-only action the web UI already gates for
+  shared sessions (ship, push, PR, rename, Fast-track, the shell…) is off.
+
+No network on that path: the service caches each peer's list — asked on
+connect, on `sessions_changed`, on `GET …/sessions`, and every 15 s while
+connected — and never persists it. Another MindFlock asking (the remote
+header) gets none of them.
+
+`PeerRowsMiddleware` (inside the auth gate, outside the device proxy)
+rewrites `/api/instances/<peer>::<title>/…` for a connected peer to
+`/api/peer/rows/<link id>/<title>/…` (a prefix that is no peer's still goes
+to `core.remote` as a device):
+
+| route | |
+|---|---|
+| `GET /api/instances/<peer>::<title>` | the row (404 when not shared with us) |
+| `WS /api/instances/<peer>::<title>/terminal` | the terminal: `term_open` (80×24, then the browser's resize), bytes both ways; closes 4404 when they withdrew it or refuse it, 4409 on another refusal, 1000 (reconnect) otherwise |
+| `POST /api/instances/<peer>::<title>/focus` | `{}` = this page selected the row (every 30 s while it stays selected), `{"left": true}` = moved off → `session_focus` |
+| anything else | **409** "This session lives on <peer>'s machine" (`send` may come later) |
+
+All refuse a request relayed by another MindFlock (X-MindFlock-Remote) and a
+guest link.
+
+### Management (People)
+
+| route | |
+|---|---|
+| `GET /api/peer/links/{id}/sessions` | `{mine: [{title, mode, since, source, live, open, focused}], theirs: [item], connected, their_unsupported}` — theirs asked afresh (≤ 5 s) when connected |
+| `POST /api/peer/links/{id}/sessions` | `{title, mode: "gated"\|"full"}` → the view. 404 unknown session, 409 before *It matches*, for another link's shared folder, or a second gated share |
+| `DELETE /api/peer/links/{id}/sessions/{title}` | withdraw: their terminal ends (`term_end "withdrawn"`); a full session is untouched, a gated one is closed like *Stop sharing* (agent stopped, folder kept) |
+
+Refused like every peer route: not from a remote device (403), writes need
+`auth.may_configure`. Persisted per link in `sessions/<link_id>.json`
+(`store.SharedSessions`: `{title: {mode, since, source}}`); forgotten when
+the link goes (the sessions themselves are untouched).
+
+### Events and presence
+
+- `peer.session_shared` / `peer.session_unshared` — data `{link_id,
+  peer_name, title, mode, by: "you"|"peer", theirs: bool}` (`mode` is `""`
+  on unshare). The sharer emits `by: "you", theirs: false` when it shares or
+  withdraws; the opener emits `by: "peer", theirs: true` when a refreshed
+  list differs from the last one (not for the first list after a start).
+- **Presence on my session**: while the peer has its terminal open, or
+  their page reported it selected in the last 90 s (`session_focus`), my
+  rail shows a pill with their name on the row — `guest.focus_changed`
+  exactly as a guest link emits it (`core.guests.note_focus`), with `link:
+  "peer:<link id>"` and `label` the peer's name; follow works the same. When
+  they leave (moved off, the terminal closed and the heartbeat lapsed, the
+  link dropped) the event carries their last title, `new: ""` and
+  `left: true`, which takes the pill away.
+
+### Threat-model delta
+
+- **Full share = guest-link trust.** A peer you share a session with in full
+  acts as you in that session: everything its agent can do on this machine.
+  The sandbox, the egress allow-list and the shared folder's blast radius do
+  not apply to it. Only share in full with someone you'd hand your keyboard
+  to; withdraw when done (the terminal closes at once).
+- **Gated share = the shared folder's model, plus a keyboard.** The peer
+  types into the sandboxed session; the read-only attach + `send-keys -l`
+  design keeps tmux's own commands (a new window, `run-shell`) out of reach,
+  so the keyboard reaches only the sandboxed program.
+- **Rows are untrusted text.** Every string in a `sessions` item is a wire
+  "line" (no control characters, length-capped); the rail renders them as
+  text. A peer's row can't name a local session: requests for it are
+  rewritten to its link and answered here, never proxied, and anything
+  beyond the row, its terminal and focus is a 409.
+- **Their screen is their screen.** `term_out` is terminal output from the
+  peer's machine rendered by xterm.js — the same exposure as a tailnet
+  device's terminal.
 
 ## Residual risks
 

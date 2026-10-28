@@ -23,6 +23,7 @@ import { SidebarResizer } from "./SidebarResizer";
 import { BulkBar } from "./BulkBar";
 import { OfflineBar } from "./OfflineBar";
 import { PeerSharedRows } from "./PeerSharedRows";
+import { installPeerFocus, isPeerRow, modeWords, peerGroups } from "../../lib/peerSessions";
 import { useExtensionBarDefs } from "../../extensions/ExtensionBar";
 import { BarSlot, barContent, SECTION_MIME } from "./SidebarBars";
 import { orderedSections, SESSIONS_KEY } from "./barDefs";
@@ -91,6 +92,10 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
     return () => window.removeEventListener(MODAL_OPEN_EVENT, on);
   }, []);
   const { data: instances = [] } = useInstances();
+  // Selecting a peer's row tells that peer (their rail shows our name on it).
+  const instancesRef = useRef(instances);
+  instancesRef.current = instances;
+  useEffect(() => installPeerFocus(() => instancesRef.current), []);
   const { data: devices } = useDevices();
   const ui = useUi();
   const doctorWarn = useDoctorWarn();
@@ -245,14 +250,17 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
     [instances, ui.hidden, ui.viewMode, ui.narrow, ui.mru, ui.order]
   );
 
-  // Device grouping: only when other MindFlock devices exist on the tailnet.
+  // Device grouping: only when other MindFlock devices exist on the tailnet,
+  // or a peer link shares sessions with us (one group per peer, after the
+  // devices — lib/peerSessions).
   const remoteDevs = devices?.devices || [];
-  const grouped = remoteDevs.length > 0;
+  const peers = useMemo(() => peerGroups(filtered), [filtered]);
+  const grouped = remoteDevs.length > 0 || peers.length > 0;
   const localRows = filtered.filter((i) => !i.device);
   const byDev = useMemo(() => {
     const m = new Map<string, Instance[]>();
     for (const i of filtered) {
-      if (!i.device) continue;
+      if (!i.device || isPeerRow(i)) continue;
       if (!m.has(i.device)) m.set(i.device, []);
       m.get(i.device)!.push(i);
     }
@@ -379,6 +387,8 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
     const dkey = dev.device;
     return { dkey, rail: toRail(byDev.get(dkey) || [], []) };
   });
+  // A peer's group folds under its own key, never a device's.
+  const peerRails = peers.map((g) => ({ dkey: "peer:" + g.device, rail: toRail(g.rows, []) }));
   // PUBLISH the rendered row order — grouping, collapse and filter applied,
   // i.e. exactly the sequence renderRail numbers below. The keymap's
   // Alt+N / Ctrl+Tab and the notification "[N]" prefixes read railOrder
@@ -387,6 +397,9 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
   const displayedKeys: string[] = grouped
     ? (ui.collapsedDevices.has("__self") ? [] : splitKeys(localSplit)).concat(
         ...devRails.map(({ dkey, rail }) =>
+          ui.collapsedDevices.has(dkey) ? [] : rail.map((r) => r.key)
+        ),
+        ...peerRails.map(({ dkey, rail }) =>
           ui.collapsedDevices.has(dkey) ? [] : rail.map((r) => r.key)
         )
       )
@@ -598,6 +611,29 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
                         </DeviceSection>
                       );
                     })}
+                    {peers.map((g, pi) => {
+                      const dkey = peerRails[pi].dkey;
+                      const collapsed = ui.collapsedDevices.has(dkey);
+                      const modes = Array.from(new Set(g.rows.map((r) => modeWords(String(r.peer_mode || "")))));
+                      return (
+                        <DeviceSection
+                          key={dkey}
+                          devKey={dkey}
+                          label={g.label}
+                          badge={String(g.rows.length)}
+                          badgeOff={false}
+                          collapsed={collapsed}
+                          title={`Shared by ${g.label} over a peer link · ${modes.join(", ")}`}
+                          showForget={false}
+                          peer={g.label}
+                          note=""
+                          action={null}
+                          onToggle={() => ui.toggleDeviceCollapsed(dkey)}
+                        >
+                          {!collapsed && renderRail(peerRails[pi].rail)}
+                        </DeviceSection>
+                      );
+                    })}
                   </>
                 ) : (
                   renderLocal()
@@ -733,6 +769,8 @@ function DeviceHeader(props: {
   devKey?: string;
   /** One of "Your devices" (Settings → Your devices). */
   member?: boolean;
+  /** A peer link's group: the peer's name (the ⇄ marker says so). */
+  peer?: string;
   onToggle(): void;
 }) {
   // The ✕ forgets the device's token — pairing it again is the only way
@@ -766,6 +804,15 @@ function DeviceHeader(props: {
             {props.collapsed ? "▸" : "▾"}
           </span>
           <span className="dev-name">{props.label}</span>
+          {props.peer && (
+            <span
+              className="dev-peer"
+              title={`Shared by ${props.peer} over a peer link`}
+              aria-label={`Shared by ${props.peer} over a peer link`}
+            >
+              ⇄
+            </span>
+          )}
           {props.member && (
             <span className="dev-member" aria-label="One of your devices">
               yours
@@ -817,6 +864,7 @@ function DeviceSection(props: {
   title: string;
   showForget: boolean;
   member?: boolean;
+  peer?: string;
   note: string;
   /** "add": Add to my devices… (Settings → Your devices on it); "connect":
    * Your devices → Advanced's pasted-token pairing with this device

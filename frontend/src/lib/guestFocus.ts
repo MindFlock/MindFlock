@@ -9,6 +9,11 @@
  * is gone (the guest closed the tab): the server drops it from the rows, and
  * the poll drops it here.
  *
+ * A PEER on one of my sessions shared over a peer link (docs/peer-link.md
+ * "Shared sessions") is a pill too, keyed `peer:<link id>`: only the event
+ * bus feeds it (the guest poll knows nothing of peers and keeps them), and
+ * the server says `left: true` when they are gone.
+ *
  * Follow is per link and lives in this browser only: following Pat means
  * every `guest.focus_changed` for Pat's link also selects that session here
  * (lib/sessionActions.selectSession, the one selection authority). Clicking
@@ -50,6 +55,8 @@ export function guestName(label: string): string {
  * when nothing changed (every quiet poll). */
 export function focusFromLinks(prev: Record<string, GuestFocus>, links: GuestLink[]): Record<string, GuestFocus> {
   const next: Record<string, GuestFocus> = {};
+  // Peers are not guest links: only their own events move or end them.
+  for (const f of Object.values(prev)) if (isPeerFocus(f.link)) next[f.link] = f;
   for (const l of links || []) {
     if (!l?.id || !l.focus?.title) continue;
     next[l.id] = { link: l.id, label: l.name || l.label || "", title: l.focus.title, ts: Number(l.focus.ts) || 0 };
@@ -72,12 +79,26 @@ export function feedGuestFocus(links: GuestLink[]): void {
   notify();
 }
 
+/** A pill for a peer (shared session over a peer link), not a guest link. */
+export function isPeerFocus(link: string): boolean {
+  return link.startsWith("peer:");
+}
+
 /** One `guest.focus_changed` envelope: move the pill, and the owner's
  * selection with it when following that guest. Returns what to toast ("" for
- * nothing): a guest arriving is worth a line, a click of theirs is not. */
+ * nothing): a guest arriving is worth a line, a click of theirs is not.
+ * `left: true` (a peer gone) takes the pill away and ends following it. */
 export function applyFocusEvent(env: EventEnvelope): string {
-  const d = (env?.data || {}) as { link?: string; label?: string; title?: string; joined?: boolean };
+  const d = (env?.data || {}) as { link?: string; label?: string; title?: string; joined?: boolean; left?: boolean };
   const link = String(d.link || "");
+  if (link && d.left) {
+    if (!focus[link]) return "";
+    const { [link]: _gone, ...rest } = focus;
+    focus = rest;
+    if (following === link) following = null;
+    notify();
+    return "";
+  }
   const title = String(d.title || env?.session || "");
   if (!link || !title) return "";
   focus = { ...focus, [link]: { link, label: String(d.label || ""), title, ts: Number(env.ts) || Date.now() / 1000 } };

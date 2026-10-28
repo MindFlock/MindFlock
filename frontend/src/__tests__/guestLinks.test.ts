@@ -30,6 +30,7 @@ import {
   guestName,
   guestsOn,
   isFollowing,
+  isPeerFocus,
   toggleFollow,
 } from "../lib/guestFocus";
 
@@ -217,6 +218,33 @@ describe("guest focus (the pill and follow)", () => {
     // Toggle off by hand.
     expect(toggleFollow("g2")).toBe(true);
     expect(toggleFollow("g2")).toBe(false);
+  });
+
+  it("a peer on a shared session: event-fed, kept by the guest poll, gone on left: true", () => {
+    _resetGuestFocus();
+    const ev = (data: Record<string, unknown>) => ({
+      seq: 9,
+      event: "guest.focus_changed",
+      session: String(data.title || ""),
+      old: "",
+      new: String(data.title || ""),
+      ts: 8,
+      data,
+    });
+    expect(applyFocusEvent(ev({ link: "peer:ab", label: "Bob", title: "api", joined: true }))).toBe(
+      "Bob joined — on api"
+    );
+    expect(isPeerFocus("peer:ab")).toBe(true);
+    expect(isPeerFocus("g1")).toBe(false);
+    // The guest-links poll knows nothing of peers: the pill stays.
+    feedGuestFocus([link("g1", "Pat", { title: "a", ts: 1 })]);
+    expect(guestsOn("api").map((f) => f.label)).toEqual(["Bob"]);
+    expect(toggleFollow("peer:ab")).toBe(true);
+    // They left: the pill goes, follow ends.
+    expect(applyFocusEvent(ev({ link: "peer:ab", label: "Bob", title: "api", joined: false, left: true }))).toBe("");
+    expect(guestsOn("api")).toEqual([]);
+    expect(isFollowing("peer:ab")).toBe(false);
+    expect(guestsOn("a").length).toBe(1);
   });
 
   it("guestName", () => {

@@ -563,3 +563,60 @@
 .peer-guest-kill {
   margin: 8px 0;
 }
+
+/* Shared sessions (peer/ShareSessions.tsx): the same card as the guest
+   picker; one session (radio), how (gated / full), the full-join warning. */
+#peer-sessions-share-form {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px;
+  width: 500px;
+  max-width: 92vw;
+  max-height: 85vh;
+  overflow: auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--text);
+}
+#peer-sessions-share-form h2 {
+  margin: 0;
+  font-size: 16px;
+}
+#peer-sessions-share-form > .set-hint {
+  margin: 0;
+  font-size: 12px;
+}
+#peer-sessions-share-form .peer-guest-pick {
+  max-height: 30vh;
+  font-size: 13px;
+}
+.peer-share-modes {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.peer-share-modes label {
+  cursor: pointer;
+}
+.peer-share-mode-hint {
+  display: block;
+  margin-left: 22px;
+  font-size: 12px;
+}
+.peer-share-sub {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+.peer-sessions {
+  margin-top: 10px;
+}
+#peer-sessions-theirs {
+  margin-top: 6px;
+}

@@ -72,6 +72,7 @@ import { PresenceDots } from "../presence/Presence";
 import { GuestPills } from "../presence/GuestPill";
 import { useMe } from "../../lib/presence";
 import { PEER_SCREEN, peerChip } from "../../lib/peer";
+import { isPeerRow, peerRowChip } from "../../lib/peerSessions";
 import { actionCtx, sessionAction } from "../../lib/sessionActionTable";
 import { openSettings } from "../../lib/openSettings";
 import { VerdictChip } from "../dialogs/VerdictChip";
@@ -424,7 +425,8 @@ export const SidebarRow = memo(function SidebarRow({
   const rz = extra.rz;
   // A shared-folder (peer-link) session: its chip, and the actions the
   // server refuses for it left out of the menu below.
-  const peer = peerChip(inst);
+  // A PEER's session (theirs, shared with us over a link): who and how.
+  const peer = isPeerRow(inst) ? peerRowChip(inst) : peerChip(inst);
   // A job the agent backgrounded and left behind: waiting (will wake it) or
   // stuck (never will; the chip stops it). lib/backgroundJobs.
   const bg = pending ? null : backgroundChip(inst);
@@ -930,7 +932,7 @@ export const SidebarRow = memo(function SidebarRow({
             </button>
           )}
           {/* The joint check's verdict, when this shared session's link has one. */}
-          {peer && <JointVerdictChip linkId={inst.peer_with?.link_id} peerName={inst.peer_with?.name} where="row" />}
+          {peer && !isPeerRow(inst) && <JointVerdictChip linkId={inst.peer_with?.link_id} peerName={inst.peer_with?.name} where="row" />}
           {rz && !pending && (
             <button
               type="button"
