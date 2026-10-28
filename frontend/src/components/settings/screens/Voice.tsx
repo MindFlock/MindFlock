@@ -559,8 +559,8 @@ export function MicPrefs() {
             Spoken confirmations
           </span>
           <span className="set-hint notif-rule-desc" id="voice-confirm-hint">
-            Say “Sent.”, “Cleared.”, “Stopped.” or the session you switched to, in the reply voice — about what you
-            did, so even with Read replies aloud off.
+            Say “Sent.” or “Cleared.” in the reply voice for what you did, even with Read replies aloud off. Off
+            unless you want them: the chimes answer a start and a stop, and a switch says the session's name anyway.
           </span>
         </span>
         <label className="ca-switch">

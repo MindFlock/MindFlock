@@ -852,9 +852,13 @@ describe("streaming helpers", () => {
 });
 
 describe("prefs: cs_voice_desktop", () => {
-  it("defaults to click-to-talk with replies OFF and no wake-word standby", () => {
-    expect(DEFAULT_VOICE_PREFS).toEqual({ ptt: "toggle", replies: "off", wake: false, confirm: true, sounds: true });
-    expect(loadVoicePrefs(memKV())).toEqual({ ptt: "toggle", replies: "off", wake: false, confirm: true, sounds: true });
+  it("defaults to click-to-talk with replies OFF, no wake-word standby and no spoken confirmations", () => {
+    expect(DEFAULT_VOICE_PREFS).toEqual({ ptt: "toggle", replies: "off", wake: false, confirm: false, sounds: true });
+    expect(loadVoicePrefs(memKV())).toEqual({ ptt: "toggle", replies: "off", wake: false, confirm: false, sounds: true });
+    // Stored as `nods`; the old `confirm` key (true in every saved copy) is
+    // ignored — the owner heard "Sent." after "over and out" as an echo.
+    expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: '{"confirm":true}' })).confirm).toBe(false);
+    expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: '{"nods":true}' })).confirm).toBe(true);
     expect(loadVoicePrefs(null)).toEqual(DEFAULT_VOICE_PREFS);
   });
 
@@ -862,8 +866,8 @@ describe("prefs: cs_voice_desktop", () => {
     for (const replies of ["off", "mine", "all"] as const) {
       const kv = memKV();
       saveVoicePrefs({ ptt: "hold", replies }, kv);
-      expect(JSON.parse(kv.m.get(VOICE_PREFS_KEY)!)).toEqual({ ptt: "hold", replies, wake: false, confirm: true, sounds: true });
-      expect(loadVoicePrefs(kv)).toEqual({ ptt: "hold", replies, wake: false, confirm: true, sounds: true });
+      expect(JSON.parse(kv.m.get(VOICE_PREFS_KEY)!)).toEqual({ ptt: "hold", replies, wake: false, nods: false, sounds: true });
+      expect(loadVoicePrefs(kv)).toEqual({ ptt: "hold", replies, wake: false, confirm: false, sounds: true });
     }
     expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: "{nope" }))).toEqual(DEFAULT_VOICE_PREFS);
     expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: '{"ptt":"sideways","replies":"yes"}' }))).toEqual(
@@ -872,8 +876,8 @@ describe("prefs: cs_voice_desktop", () => {
   });
 
   it("the old switch loads as its meaning: true is 'mine' (replies to what you said), false 'off'", () => {
-    expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: '{"ptt":"hold","replies":true}' }))).toEqual({ ptt: "hold", replies: "mine", wake: false, confirm: true, sounds: true });
-    expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: '{"ptt":"toggle","replies":false}' }))).toEqual({ ptt: "toggle", replies: "off", wake: false, confirm: true, sounds: true });
+    expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: '{"ptt":"hold","replies":true}' }))).toEqual({ ptt: "hold", replies: "mine", wake: false, confirm: false, sounds: true });
+    expect(loadVoicePrefs(memKV({ [VOICE_PREFS_KEY]: '{"ptt":"toggle","replies":false}' }))).toEqual({ ptt: "toggle", replies: "off", wake: false, confirm: false, sounds: true });
     expect(repliesMode(true)).toBe("mine");
     expect(repliesMode("all")).toBe("all");
     expect(repliesMode(undefined)).toBe("off");
@@ -888,7 +892,7 @@ describe("prefs: cs_voice_desktop", () => {
   it("the wake-word standby: on only when saved true, kept through a save, absent reads as off", () => {
     const kv = memKV();
     saveVoicePrefs({ ptt: "toggle", replies: "off", wake: true, confirm: true, sounds: true }, kv);
-    expect(JSON.parse(kv.m.get(VOICE_PREFS_KEY)!)).toEqual({ ptt: "toggle", replies: "off", wake: true, confirm: true, sounds: true });
+    expect(JSON.parse(kv.m.get(VOICE_PREFS_KEY)!)).toEqual({ ptt: "toggle", replies: "off", wake: true, nods: true, sounds: true });
     expect(loadVoicePrefs(kv).wake).toBe(true);
     saveVoicePrefs({ ...loadVoicePrefs(kv), replies: "mine" }, kv);
     expect(loadVoicePrefs(kv)).toEqual({ ptt: "toggle", replies: "mine", wake: true, confirm: true, sounds: true });
@@ -2044,7 +2048,7 @@ describe("the router's new answers", () => {
     expect((await routePhrase("switch to the sitecheck session", "t1", held)).kind).toBe("ambiguous");
     expect(mocks.api.mock.calls[0][1]).toEqual({ json: { text: "switch to the sitecheck session", session: "t1" } });
     // The next phrase carries the choice; the switch answer drops it.
-    mocks.api.mockResolvedValueOnce({ kind: "switch", title: "sitecheck-bot7-copy-2", say: "Now on sitecheck-bot7-copy-2, idle." });
+    mocks.api.mockResolvedValueOnce({ kind: "switch", title: "sitecheck-bot7-copy-2", say: "sitecheck-bot7-copy-2." });
     await routePhrase("copy two", "t1", held);
     expect(mocks.api.mock.calls[1][1]).toEqual({
       json: { text: "copy two", session: "t1", pending: { kind: "pick", candidates: which } },
@@ -2086,7 +2090,7 @@ describe("the router's new answers", () => {
     const { d, out } = deps();
     expect(await runVoiceCommand({ kind: "switch_index", index: 3 }, "focus three", d)).toBe(true);
     expect(out.selected).toEqual(["t2"]);
-    expect(out.said).toEqual(["Now talking to Billing."]);
+    expect(out.said).toEqual(["Billing."]); // the name alone
     await runVoiceCommand({ kind: "switch_index", index: 7 }, "focus seven", d);
     expect(out.said[1]).toBe("There is no session 7");
     await runVoiceCommand({ kind: "switch_index", index: 2 }, "focus two", d);
@@ -2355,8 +2359,8 @@ describe("voice prefs are shared between the popover and Settings → Voice", ()
       const off = mod.onVoicePrefs((p) => seen.push(p));
       const kv = { store: {} as Record<string, string>, getItem(k: string) { return this.store[k] ?? null; }, setItem(k: string, v: string) { this.store[k] = v; } };
       mod.saveVoicePrefs({ ptt: "hold", replies: "all" }, kv);
-      expect(seen).toEqual([{ ptt: "hold", replies: "all", wake: false, confirm: true, sounds: true }]);
-      expect(JSON.parse(kv.store[mod.VOICE_PREFS_KEY])).toEqual({ ptt: "hold", replies: "all", wake: false, confirm: true, sounds: true });
+      expect(seen).toEqual([{ ptt: "hold", replies: "all", wake: false, confirm: false, sounds: true }]);
+      expect(JSON.parse(kv.store[mod.VOICE_PREFS_KEY])).toEqual({ ptt: "hold", replies: "all", wake: false, nods: false, sounds: true });
       off();
       mod.saveVoicePrefs({ ptt: "toggle", replies: "off" }, kv);
       expect(seen).toHaveLength(1);

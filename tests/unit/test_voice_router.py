@@ -271,11 +271,11 @@ def test_switch_the_phones_cases():
         "kind": "switch",
         "title": "invoice-parser",
         "name": "invoice-parser",
-        "say": "Now on invoice-parser, working.",
+        "say": "invoice-parser.",
     }
     a = ans("go to API docs")
     assert (a["kind"], a["title"], a["name"]) == ("switch", "docs", "API docs")
-    assert a["say"] == "Now on API docs, waiting on a question."
+    assert a["say"] == "API docs."
     # Word overlap: "api" is in one session's name only.
     assert ans("go to the api")["title"] == "docs"
     assert ans("jump over to docs")["title"] == "docs"
@@ -284,7 +284,7 @@ def test_switch_the_phones_cases():
 
 def test_switch_reaches_other_devices_but_never_hidden_rows():
     a = ans("switch to billing")
-    assert a["title"] == "mac::billing" and a["say"] == "Now on billing, idle."
+    assert a["title"] == "mac::billing" and a["say"] == "billing."
     assert ans("go to verify")["kind"] == "no-session"
 
 
@@ -583,7 +583,7 @@ def test_title_maps_a_number_to_the_full_switch():
         "kind": "switch",
         "title": "docs",
         "name": "API docs",
-        "say": "Now on API docs, waiting on a question.",
+        "say": "API docs.",
     }
     assert ans("next one", title="login-fix")["title"] == "login-fix"
     assert ans("session two", title="gone") == {
@@ -985,7 +985,7 @@ def test_route_switch_and_list(env):
         "kind": "switch",
         "title": "invoice-parser",
         "name": "invoice-parser",
-        "say": "Now on invoice-parser, working.",
+        "say": "invoice-parser.",
     }
     assert route("list my sessions")["say"].startswith(
         "Sessions: invoice-parser (working), "
@@ -1058,7 +1058,7 @@ def test_session_rows_are_the_instances_listing(monkeypatch):
         "kind": "switch",
         "title": "mac::billing",
         "name": "billing",
-        "say": "Now on billing, idle.",
+        "say": "billing.",
     }
 
 
@@ -1125,9 +1125,7 @@ def test_route_question(env):
 def test_route_switch_by_number(env):
     assert route("session three") == {"kind": "switch_index", "index": 3}
     assert route("next one") == {"kind": "switch_rel", "delta": 1}
-    assert route("session three", title="docs")["say"] == (
-        "Now on API docs, waiting on a question."
-    )
+    assert route("session three", title="docs")["say"] == ("API docs.")
     assert route("stop recording") == {"kind": "stop"}
 
 
@@ -1606,46 +1604,30 @@ def test_pick_narrows_but_still_ties():
     assert a["kind"] == "ambiguous" and a["candidates"] == SITECHECK
 
 
-# --- the switch announcement: the last reply only when it is news -----------------------------
+# --- the switch announcement: the name, and the last reply only when it is news ---------------
 def test_switch_reads_a_reply_only_while_it_is_news():
     row = dict(FLEET[1])
-    assert (
-        vr.switch_line(row, NOW)
-        == "Now on sitecheck-bot7-copy-2, idle. Done. The tests pass."
-    )
+    assert vr.switch_line(row, NOW) == "sitecheck-bot7-copy-2. Done. The tests pass."
     # Two minutes is the edge; past it the reply is old news.
     assert vr.switch_line(row, NOW - 30 + vr.FRESH_REPLY_S).endswith("The tests pass.")
-    assert (
-        vr.switch_line(row, NOW - 29 + vr.FRESH_REPLY_S)
-        == "Now on sitecheck-bot7-copy-2, idle."
-    )
+    assert vr.switch_line(row, NOW - 29 + vr.FRESH_REPLY_S) == "sitecheck-bot7-copy-2."
     # No turn-end stamp: never news.
-    assert (
-        vr.switch_line(dict(row, activity_since=0), NOW)
-        == "Now on sitecheck-bot7-copy-2, idle."
-    )
+    assert vr.switch_line(dict(row, activity_since=0), NOW) == "sitecheck-bot7-copy-2."
 
 
-def test_switch_says_the_state_and_the_task_never_a_stale_reply():
-    # Working: its previous turn's line is not read.
-    assert (
-        fleet("go to sitecheck bot seven")["say"]
-        == "Now on sitecheck-bot7, working: Fix settings screen."
-    )
+def test_switch_says_the_name_alone_never_a_stale_reply():
+    # The name only — no state word, no task headline (the owner heard
+    # "Now on hackathon-2, idle: explain how to …" as the whole thing on
+    # every switch, 2026-10-28). Working: its previous turn's line is not read.
+    assert fleet("go to sitecheck bot seven")["say"] == "sitecheck-bot7."
     # Done an hour ago: the state and the task, nothing more.
-    assert (
-        fleet("put me on the login fix")["say"]
-        == "Now on login-fix, idle: Fix login redirect."
-    )
-    assert (
-        fleet("switch to the invoice parser")["say"]
-        == "Now on Invoice parser, waiting on a question."
-    )
+    assert fleet("put me on the login fix")["say"] == "login-fix."
+    assert fleet("switch to the invoice parser")["say"] == "Invoice parser."
     assert fleet(
         "session two",
     ) == {"kind": "switch_index", "index": 2}
     assert vr.answer("session two", "", FLEET, now=NOW, title="login-fix")["say"] == (
-        "Now on login-fix, idle: Fix login redirect."
+        "login-fix."
     )
 
 
