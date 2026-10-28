@@ -23,6 +23,14 @@
   "build": {
     "appId": "ai.mindflock.desktop",
     "productName": "MindFlock",
+    "protocols": [
+      {
+        "name": "MindFlock join link",
+        "schemes": [
+          "mindflock"
+        ]
+      }
+    ],
     "files": [
       "main.js",
       "preload.js",

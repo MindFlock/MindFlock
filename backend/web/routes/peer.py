@@ -96,10 +96,21 @@ _JOIN_PAGE = Path(__file__).resolve().parent.parent / "static" / "join.html"
 
 def _invite_base(request: Request) -> str:
     """Where an invite link points: the public tunnel guest links use when it
-    is up, else this device's own tailnet / LAN address."""
+    is up, else this device's own tailnet / LAN address. With the access gate
+    on, asking for an invite asks for the tunnel too (the joiner is a
+    stranger elsewhere): the first invite may still carry the local address
+    while Cloudflare mints the name — the code in the message works either
+    way, and the next invite carries the public link."""
+    from backend.web.core import auth as _auth
     from backend.web.core import guest_tunnel as _tunnel
     from backend.web.routes.guests import _local_base
 
+    try:
+        if _auth.auth_enabled() and not _tunnel.url():
+            _tunnel.want()
+            _tunnel.ensure()
+    except Exception:  # noqa: BLE001 — a link is still a link without it
+        pass
     return _tunnel.url() or _local_base(request)
 
 
