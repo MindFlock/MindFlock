@@ -615,6 +615,47 @@ def set_auth_cookies(response, *, secure: bool = False, extra: Iterable[str] = (
     return response
 
 
+def set_guest_cookie(response, token: str, *, secure: bool = False):
+    """Sign a guest link's browser in: that token's keyed ``mf_auth_<hash>``
+    cookie and nothing else. The plain ``mf_auth`` cookie carries the OWNER's
+    token (:func:`set_auth_cookies`), which a guest must never be handed."""
+    if token and _COOKIE_SAFE.match(token):
+        response.set_cookie(
+            key=cookie_name_for(token),
+            value=token,
+            httponly=True,
+            samesite="lax",
+            secure=secure,
+            path="/",
+            max_age=60 * 60 * 24 * 365,
+        )
+    return response
+
+
+def _guest_from(*groups: Iterable[Optional[str]]) -> Optional[dict]:
+    """The guest link one of the presented credentials is the token of, or
+    None. Skipped entirely while no link exists; never raises."""
+    try:
+        from backend.web.core import guests as _guests
+
+        if not _guests.any_links():
+            return None
+        cands: List[Optional[str]] = []
+        for g in groups:
+            cands.extend(g or [])
+        return _guests.guest_for_any(cands, limit=_MAX_CANDIDATES)
+    except Exception:  # noqa: BLE001 — the request path must never break
+        return None
+
+
+def request_guest(request) -> Optional[dict]:
+    """The guest link a request is signed in with (``{id, label, sessions}``),
+    None for the owner. Takes a Request, a WebSocket or an ASGI scope."""
+    from backend.web.core import guests as _guests
+
+    return _guests.scope_guest(request)
+
+
 def allow_fronted_host(host: str) -> None:
     """Accept ``host`` as this server's name in local mode (see
     :data:`_FRONTED_HOSTS`)."""
@@ -1070,6 +1111,31 @@ class AuthMiddleware:
             await self.app(scope, receive, send)
             return
 
+        # A guest link (backend.web.core.guests): signed in, but only to the
+        # sessions on the link. The owner's token above wins when a browser
+        # holds both. A websocket may carry it as ?token= like any token.
+        guest = _guest_from(
+            cookies, [bearer], qtoks if scope["type"] == "websocket" else []
+        )
+        if guest is not None:
+            from backend.web.core import guests as _guests
+
+            if _guests.path_allowed(scope.get("method", ""), path, guest):
+                state = scope.setdefault("state", {})
+                if isinstance(state, dict):
+                    state["guest"] = guest
+                await self.app(scope, receive, send)
+                return
+            await _deny(
+                scope,
+                receive,
+                send,
+                status=403,
+                message=_guests.REFUSAL,
+                ws_code=_WS_CLOSE_FORBIDDEN,
+            )
+            return
+
         # The user's own Tailscale devices (Settings → Security → Trusted
         # Tailscale accounts) need no token — see backend.web.core.tailnet_trust.
         from backend.web.core import tailnet_trust as _tailnet_trust
@@ -1115,6 +1181,16 @@ class AuthMiddleware:
                 resp,
                 secure=scope.get("scheme") in ("https", "wss"),
                 extra=qtoks,
+            )
+            await resp(scope, receive, send)
+            return
+        # A guest link's ?token= : the same redirect, but ONLY that token's
+        # keyed cookie — never the plain mf_auth, which is the owner's token.
+        guest_tok = next((t for t in qtoks if _guest_from([t]) is not None), None)
+        if guest_tok is not None:
+            resp = RedirectResponse(url=path or "/", status_code=302)
+            set_guest_cookie(
+                resp, guest_tok, secure=scope.get("scheme") in ("https", "wss")
             )
             await resp(scope, receive, send)
             return

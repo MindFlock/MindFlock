@@ -16,6 +16,7 @@ import { canDisconnect } from "../../lib/devices";
 import { viewCap } from "../grid/layout";
 import { SidebarRow } from "./SidebarRow";
 import { windowRows, WindowRowItem, type WindowRow } from "./WindowList";
+import { guestNote, useLockedRows } from "../../lib/guest";
 import { SessionFilter } from "./SessionFilter";
 import { SidebarResizer } from "./SidebarResizer";
 import { BulkBar } from "./BulkBar";
@@ -89,6 +90,9 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
     return () => window.removeEventListener(MODAL_OPEN_EVENT, on);
   }, []);
   const { data: instances = [] } = useInstances();
+  // A guest link's crossed-out sessions (lib/guest.ts): drawn after this
+  // device's rows, never numbered, never selectable. Empty for the owner.
+  const lockedRows = useLockedRows();
   const { data: devices } = useDevices();
   const ui = useUi();
   const doctorWarn = useDoctorWarn();
@@ -469,6 +473,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
       {renderRail(localSplit.families, familyTaskOf)}
       {localSplit.groups.length + localSplit.families.length > 0 && localSplit.own.length > 0 && <OwnHeader />}
       {renderRail(localSplit.own, familyTaskOf)}
+      <LockedRows rows={lockedRows.filter((r) => !r.device)} />
     </>
   );
 
@@ -526,6 +531,11 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
               <BulkBar />
               <OfflineBar />
               <PeerSharedRows />
+              {config?.guest && (
+                <div className="guest-note" id="guest-note" title="Sessions not on the link are crossed out">
+                  {guestNote(config.guest)}
+                </div>
+              )}
               <ul id="instance-list">
                 {grouped ? (
                   <>
@@ -849,6 +859,29 @@ function DeviceSection(props: {
         </li>
       )}
       {props.children}
+    </>
+  );
+}
+
+/** A guest link's crossed-out sessions: the title the owner kept from the
+ * guest, nothing to click. Not a SidebarRow — no number, no menu, no drag, no
+ * terminal behind it — so none of the rail's keys or drops reach them. */
+function LockedRows({ rows }: { rows: Array<{ title: string; status: string }> }) {
+  if (!rows.length) return null;
+  return (
+    <>
+      {rows.map((r) => (
+        <li key={"locked:" + r.title} className="inst locked" data-title={r.title} aria-disabled="true">
+          <div className="inst-row" title="Not part of your invite">
+            <span className="idx locked-x" aria-hidden="true">
+              ✕
+            </span>
+            <span className="meta">
+              <span className="title">{r.title}</span>
+            </span>
+          </div>
+        </li>
+      ))}
     </>
   );
 }

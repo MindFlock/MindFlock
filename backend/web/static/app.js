@@ -24180,6 +24180,51 @@ function instApi(title, suffix, opts) {
 	return api("/api/instances/" + encodeURIComponent(title) + suffix, opts);
 }
 //#endregion
+//#region src/lib/guest.ts
+var locked = [];
+var listeners$5 = /* @__PURE__ */ new Set();
+function splitLockedRows(list) {
+	if (!Array.isArray(list)) {
+		setLocked([]);
+		return list;
+	}
+	if (!list.some((i) => i.locked)) {
+		if (locked.length) setLocked([]);
+		return list;
+	}
+	const keep = [];
+	const out = [];
+	for (const i of list) if (i.locked) out.push({
+		title: i.title,
+		status: i.status,
+		device: i.device
+	});
+	else keep.push(i);
+	setLocked(out);
+	return keep;
+}
+function setLocked(rows) {
+	if (rows.length === locked.length && rows.every((r, i) => r.title === locked[i].title && r.status === locked[i].status && r.device === locked[i].device)) return;
+	locked = rows;
+	for (const l of listeners$5) l();
+}
+function subscribe$1(l) {
+	listeners$5.add(l);
+	return () => listeners$5.delete(l);
+}
+function snapshot$1() {
+	return locked;
+}
+function useLockedRows() {
+	return (0, import_react.useSyncExternalStore)(subscribe$1, snapshot$1, snapshot$1);
+}
+function guestNote(guest) {
+	if (!guest) return "";
+	const n = guest.sessions.length;
+	const where = n === 1 ? "one session" : `${n} sessions`;
+	return guest.label ? `Guest link for ${guest.label} — ${where}` : `Guest link — ${where}`;
+}
+//#endregion
 //#region src/lib/usageRefresh.ts
 var USAGE_COALESCE_MS = 5e3;
 function nudgeUsage(now, lastRefreshAt, trailingQueued, coalesceMs = USAGE_COALESCE_MS) {
@@ -24375,7 +24420,7 @@ function useInstances() {
 	return useQuery({
 		queryKey: ["instances"],
 		queryFn: async () => {
-			const list = await api("/api/instances");
+			const list = splitLockedRows(await api("/api/instances"));
 			window.mindflock?.__setSessions?.(list);
 			return list;
 		},
@@ -53428,6 +53473,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 		return () => window.removeEventListener(MODAL_OPEN_EVENT, on);
 	}, []);
 	const { data: instances = [] } = useInstances();
+	const lockedRows = useLockedRows();
 	const { data: devices } = useDevices();
 	const ui = useUi();
 	const doctorWarn = useDoctorWarn();
@@ -53679,7 +53725,8 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 		] }, "run:" + g.id)),
 		renderRail(localSplit.families, familyTaskOf),
 		localSplit.groups.length + localSplit.families.length > 0 && localSplit.own.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OwnHeader, {}),
-		renderRail(localSplit.own, familyTaskOf)
+		renderRail(localSplit.own, familyTaskOf),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(LockedRows, { rows: lockedRows.filter((r) => !r.device) })
 	] });
 	const cap = viewCap(effectiveViewMode(ui));
 	const shownCount = listed.filter((i) => !ui.hidden.has(i.title)).length;
@@ -53714,6 +53761,12 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BulkBar, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(OfflineBar, {}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerSharedRows, {}),
+						config?.guest && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "guest-note",
+							id: "guest-note",
+							title: "Sessions not on the link are crossed out",
+							children: guestNote(config.guest)
+						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
 							id: "instance-list",
 							children: [grouped ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -53991,6 +54044,29 @@ function DeviceSection(props) {
 		}),
 		props.children
 	] });
+}
+function LockedRows({ rows }) {
+	if (!rows.length) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_jsx_runtime.Fragment, { children: rows.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+		className: "inst locked",
+		"data-title": r.title,
+		"aria-disabled": "true",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "inst-row",
+			title: "Not part of your invite",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "idx locked-x",
+				"aria-hidden": "true",
+				children: "✕"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "meta",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "title",
+					children: r.title
+				})
+			})]
+		})
+	}, "locked:" + r.title)) });
 }
 //#endregion
 //#region src/lib/paneHistory.ts
@@ -94291,6 +94367,288 @@ function PeerAdvanced({ on, onToggle, st, busy, error }) {
 	});
 }
 //#endregion
+//#region src/lib/gateOn.ts
+var GATE_ON_NOTE = "Access gate on. Your other devices sign in with your devices' key, so they keep working; a phone signs in again by scanning the QR in Settings → Your phone.";
+async function turnGateOn(call = api) {
+	const t = await call("/api/settings/auth-token");
+	if (t?.token) await call("/api/auth", { json: { token: t.token } });
+	await call("/api/settings", { json: { general: { auth_mode: "on" } } });
+}
+//#endregion
+//#region src/components/settings/screens/peer/useAct.ts
+function errText$2(e) {
+	return e instanceof Error ? e.message : String(e);
+}
+function useAct(reload) {
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [err, setErr] = (0, import_react.useState)("");
+	const act = async (what, fn, ok) => {
+		setBusy(what);
+		setErr("");
+		let done = false;
+		try {
+			const r = await fn();
+			done = true;
+			const text = typeof ok === "function" ? ok(r) : ok;
+			if (text) toast(text);
+		} catch (e) {
+			setErr(errText$2(e));
+		}
+		setBusy("");
+		reload();
+		return done;
+	};
+	return {
+		busy,
+		err,
+		setErr,
+		act
+	};
+}
+//#endregion
+//#region src/components/settings/screens/peer/GuestLinks.tsx
+function guestLinkLine(l) {
+	const who = l.label || "Guest";
+	const n = l.sessions.length;
+	return `${who} · ${n} session${n === 1 ? "" : "s"}: ${l.sessions.join(", ")}`;
+}
+function GuestLinks() {
+	const { data: config } = useConfig();
+	const { data: instances } = useInstances();
+	const [links, setLinks] = (0, import_react.useState)(null);
+	const [gateOn, setGateOn] = (0, import_react.useState)(null);
+	const [picked, setPicked] = (0, import_react.useState)(() => /* @__PURE__ */ new Set());
+	const [label, setLabel] = (0, import_react.useState)("");
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [err, setErr] = (0, import_react.useState)("");
+	const [made, setMade] = (0, import_react.useState)(null);
+	const [understood, setUnderstood] = (0, import_react.useState)(false);
+	const sessions = (0, import_react.useMemo)(() => (instances || []).filter((i) => !i.device && !i.hidden_by && !i.pending && !i.locked), [instances]);
+	const load = (0, import_react.useCallback)(async () => {
+		try {
+			const r = await api("/api/guests");
+			setLinks(r.links || []);
+			setGateOn(!!r.gate_on);
+			setErr("");
+		} catch (e) {
+			setErr(errText$2(e));
+		}
+	}, []);
+	(0, import_react.useEffect)(() => {
+		load();
+	}, [load]);
+	const toggle = (title) => setPicked((prev) => {
+		const next = new Set(prev);
+		if (next.has(title)) next.delete(title);
+		else next.add(title);
+		return next;
+	});
+	const create = async () => {
+		setBusy(true);
+		setErr("");
+		try {
+			const row = await api("/api/guests", { json: {
+				label: label.trim(),
+				sessions: sessions.map((s) => s.title).filter((t) => picked.has(t))
+			} });
+			setMade(row);
+			setPicked(/* @__PURE__ */ new Set());
+			setLabel("");
+			await load();
+			toast(await copyText(row.url) ? "Guest link copied — send it to them" : "Guest link made — press Copy to send it");
+		} catch (e) {
+			setErr(errText$2(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+	const revoke = async (id) => {
+		setBusy(true);
+		try {
+			await api("/api/guests/" + encodeURIComponent(id), { method: "DELETE" });
+			if (made?.id === id) setMade(null);
+			await load();
+			toast("Guest link revoked");
+		} catch (e) {
+			setErr(errText$2(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+	const gate = async () => {
+		setBusy(true);
+		setErr("");
+		try {
+			await turnGateOn();
+			toast(GATE_ON_NOTE);
+			await refreshConfig();
+			await load();
+		} catch (e) {
+			setErr(errText$2(e));
+		} finally {
+			setBusy(false);
+		}
+	};
+	const copy = (l) => copyText(l.url).then((ok) => toast(ok ? "Guest link copied — send it to them" : "Copy failed"));
+	const off = gateOn === false || gateOn === null && config?.auth_enabled === false;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "peer-guests",
+		id: "peer-guests",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", {
+				className: "set-subtitle",
+				children: "Let someone into a few of your sessions"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "set-hint",
+				children: "No second MindFlock needed: they open the link in a browser and type into the sessions you pick, here on this device. Every other session is crossed out for them. Revoke the link whenever you like."
+			}),
+			off ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-row",
+				id: "peer-guests-gate",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "set-hint",
+					children: "A guest link only limits anything while every visitor needs a token — turn the access gate on first."
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn",
+					id: "peer-guests-gate-on",
+					disabled: busy,
+					onClick: () => void gate(),
+					children: busy ? "Turning on…" : "Turn the gate on"
+				})]
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-guest-make",
+				id: "peer-guests-make",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "peer-danger peer-guest-warn",
+						id: "peer-guests-warn",
+						role: "alert",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "This gives another person access to your computer." }), " In those sessions they type at your agent and your shell: they can read and change the files in that worktree, run commands as you, and spend your agent's credits. Only send a link to someone you would hand your keyboard to, and revoke it when you're done."]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "peer-guest-ack",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "checkbox",
+								id: "peer-guests-ack",
+								checked: understood,
+								onChange: (e) => setUnderstood(e.target.checked)
+							}),
+							" ",
+							"I understand this lets them act on my machine"
+						]
+					}),
+					sessions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "set-hint",
+						children: "Start a session first — a link opens sessions that exist."
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+						className: "peer-guest-pick",
+						children: sessions.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "checkbox",
+								checked: picked.has(s.title),
+								onChange: () => toggle(s.title),
+								"data-session": s.title
+							}),
+							" ",
+							displayName(s.title),
+							s.branch && s.branch !== s.title ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "set-hint",
+								children: [" · ", s.branch]
+							}) : null
+						] }) }, s.title))
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "set-row",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							id: "peer-guests-label",
+							placeholder: "who it's for (optional)",
+							value: label,
+							maxLength: 80,
+							onChange: (e) => setLabel(e.target.value)
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "btn-primary",
+							id: "peer-guests-create",
+							disabled: busy || picked.size === 0 || !understood,
+							title: understood ? void 0 : "Tick the warning above first",
+							onClick: () => void create(),
+							children: busy ? "Making…" : "Make a link"
+						})]
+					})
+				]
+			}),
+			made && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "peer-invite",
+				id: "peer-guests-made",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+						readOnly: true,
+						rows: 2,
+						value: made.url,
+						onClick: (e) => e.target.select()
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "set-row",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							id: "peer-guests-copy",
+							onClick: () => void copy(made),
+							children: "Copy link"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							onClick: () => setMade(null),
+							children: "Done"
+						})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "set-hint",
+						children: [guestLinkLine(made), ". On a phone the same link opens the phone page. Anyone with the link is in — send it to the one person it's for."]
+					})
+				]
+			}),
+			err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error",
+				id: "peer-guests-error",
+				children: err
+			}),
+			links && links.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "peer-guest-links",
+				id: "peer-guests-list",
+				children: links.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					"data-guest": l.id,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "set-hint",
+							children: guestLinkLine(l)
+						}),
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							disabled: busy,
+							onClick: () => void copy(l),
+							children: "Copy"
+						}),
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn",
+							disabled: busy,
+							onClick: () => void revoke(l.id),
+							children: "Revoke"
+						})
+					]
+				}, l.id))
+			})
+		]
+	});
+}
+//#endregion
 //#region src/components/PathField.tsx
 function pathFieldRequest(opts) {
 	const start = opts.value.trim();
@@ -94470,37 +94828,6 @@ function ContractMarkdown({ text, id, empty = "No contract yet." }) {
 			}
 		})
 	});
-}
-//#endregion
-//#region src/components/settings/screens/peer/useAct.ts
-function errText$2(e) {
-	return e instanceof Error ? e.message : String(e);
-}
-function useAct(reload) {
-	const [busy, setBusy] = (0, import_react.useState)("");
-	const [err, setErr] = (0, import_react.useState)("");
-	const act = async (what, fn, ok) => {
-		setBusy(what);
-		setErr("");
-		let done = false;
-		try {
-			const r = await fn();
-			done = true;
-			const text = typeof ok === "function" ? ok(r) : ok;
-			if (text) toast(text);
-		} catch (e) {
-			setErr(errText$2(e));
-		}
-		setBusy("");
-		reload();
-		return done;
-	};
-	return {
-		busy,
-		err,
-		setErr,
-		act
-	};
 }
 //#endregion
 //#region src/components/settings/screens/peer/JointContract.tsx
@@ -96396,6 +96723,7 @@ function PeerLinks(_) {
 			className: "error",
 			children: error
 		}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GuestLinks, {}),
 		st && !st.sandbox.available && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "peer-needs",
 			id: "peer-needs",
@@ -99362,14 +99690,6 @@ function Security(p) {
 			]
 		})
 	] });
-}
-//#endregion
-//#region src/lib/gateOn.ts
-var GATE_ON_NOTE = "Access gate on. Your other devices sign in with your devices' key, so they keep working; a phone signs in again by scanning the QR in Settings → Your phone.";
-async function turnGateOn(call = api) {
-	const t = await call("/api/settings/auth-token");
-	if (t?.token) await call("/api/auth", { json: { token: t.token } });
-	await call("/api/settings", { json: { general: { auth_mode: "on" } } });
 }
 //#endregion
 //#region src/components/settings/useServerRestart.ts

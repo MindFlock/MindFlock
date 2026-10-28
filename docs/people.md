@@ -133,6 +133,50 @@ through the things both of you already use.
   outside a green one, gets the breach card at **Commit** with **Commit
   anyway** — a warning, never a block on your keyboard.
 
+### Guest links — someone else in a few of your sessions
+
+The simplest way to work with someone: no second MindFlock, no sandbox. They
+open a link in a browser and type into the sessions you picked, on **your**
+device, at your agent, in your worktree; every other session on the rail is
+crossed out for them.
+
+**This is access to your computer.** In those sessions the guest types at
+your agent and your shell: they can read and change the files in that
+worktree, run commands as you, and spend your agent's credits. The block
+says so in red and won't make a link until you tick *I understand*; send one
+only to someone you would hand your keyboard to, and revoke it when done.
+
+Settings → **People** → *Let someone into a few of your sessions*: tick the
+sessions, name who it's for, **Make a link** (it is copied). Send them the
+URL (`https://<your host>/?token=…`; the same link opens the phone page at
+`/m`). The block lists every link with **Copy** and **Revoke**; a revoked link
+signs that browser out on its next request. The access gate must be on
+(Settings → Security) — with it off there is nothing to limit, so the block
+offers to turn it on first.
+
+What the link holds, exactly (`backend/web/core/guests.py`):
+
+- **Their sessions, as yours.** Everything under `/api/instances/<title>`
+  for a title on the link — the terminal and shell, prompts, answers, the
+  queue, voice, find, the family thread, waking, the diff and history — with
+  the owner's calls held back: close/delete, copy, commit, push, PR, merge,
+  fast-track, branch, fences, zones, owner/parent/order/profile answer 403.
+- **Every other session: a stub.** `GET /api/instances` lists it as
+  `{title, status, locked: true}` — the rail draws it crossed out, the phone
+  page leaves it out — and every call on it is `403 {"error": "not part of
+  your invite"}`. The event stream carries only their sessions' events.
+- **Nothing else.** No creating sessions, no settings, no token, no devices,
+  no links — a few read-only boot calls (`/api/config` says `guest:
+  {label, sessions}`, which is what crosses the rail out) and the speech
+  endpoints their own typing needs.
+- **Not a device, not a person.** A guest token is never the access token
+  (rotating yours leaves the links alone) and never the devices' key; it
+  signs in with its own keyed cookie, never the plain `mf_auth`. Links name
+  sessions by title, so a session closed and recreated under the same title
+  is open to the link again.
+
+`GET/POST /api/guests`, `POST/DELETE /api/guests/<id>` — [web-api.md](web-api.md#guest-links).
+
 ## Git identity
 
 `backend.web.core.person.git_identity_args()` returns

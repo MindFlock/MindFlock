@@ -2248,6 +2248,48 @@
     margin-left: 0;
   }
 }
+
+/* Guest links: let someone into a few of this device's sessions. */
+.peer-guests {
+  margin-top: 18px;
+}
+.peer-guest-pick {
+  list-style: none;
+  margin: 6px 0 8px;
+  padding: 0;
+  max-height: 180px;
+  overflow: auto;
+}
+.peer-guest-pick li {
+  padding: 2px 0;
+}
+.peer-guest-pick label {
+  cursor: pointer;
+}
+.peer-guest-links {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+.peer-guest-links li {
+  padding: 3px 0;
+}
+.peer-guest-warn {
+  margin: 8px 0 6px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--red) 55%, var(--border));
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  color: var(--text);
+}
+.peer-guest-warn strong {
+  color: var(--red);
+}
+.peer-guest-ack {
+  display: block;
+  margin: 0 0 8px;
+  cursor: pointer;
+}
 /* Settings → Your devices ("Your devices"). Rows are a dot + name/status stack +
    buttons pinned right, the same shape as the sidebar's device rows, so a
    computer reads the same wherever it is listed. */
@@ -8068,6 +8110,31 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 
 .inst-tail .close-confirm .del-acts button.danger {
   border-color: var(--red);
+}
+
+/* A guest link's crossed-out rows (lib/guest.ts): not yours to open. */
+.inst.locked .inst-row {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.inst.locked .inst-row:hover {
+  background: transparent;
+}
+.inst.locked .title {
+  text-decoration: line-through;
+}
+.inst.locked .locked-x {
+  opacity: 1;
+  color: var(--danger, #c0392b);
+  font-weight: 600;
+}
+.guest-note {
+  margin: 4px 8px 2px;
+  padding: 4px 8px;
+  font-size: 11px;
+  border-radius: 6px;
+  color: var(--fg-muted, #9aa);
+  background: var(--panel-2, rgba(255, 255, 255, 0.05));
 }
 }
 

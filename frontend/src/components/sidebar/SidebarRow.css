@@ -1028,3 +1028,28 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 .inst-tail .close-confirm .del-acts button.danger {
   border-color: var(--red);
 }
+
+/* A guest link's crossed-out rows (lib/guest.ts): not yours to open. */
+.inst.locked .inst-row {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.inst.locked .inst-row:hover {
+  background: transparent;
+}
+.inst.locked .title {
+  text-decoration: line-through;
+}
+.inst.locked .locked-x {
+  opacity: 1;
+  color: var(--danger, #c0392b);
+  font-weight: 600;
+}
+.guest-note {
+  margin: 4px 8px 2px;
+  padding: 4px 8px;
+  font-size: 11px;
+  border-radius: 6px;
+  color: var(--fg-muted, #9aa);
+  background: var(--panel-2, rgba(255, 255, 255, 0.05));
+}

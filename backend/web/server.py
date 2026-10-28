@@ -172,6 +172,7 @@ from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirnam
 
 # Core modules the monolith was split into (see backend.web/core/).
 from backend.web.core import aliases as _aliases
+from backend.web.core import guests as _guests
 from backend.web.core import hidden_sessions as _hidden_sessions
 from backend.web.core import person_sessions as _person_sessions
 from backend.web.core import shared_branch as _shared_branch
@@ -645,6 +646,7 @@ from backend.web.core.red_zone_driver import (
 )
 from backend.web.addons import AppContext as _AddonContext, register_addons
 from backend.web.routes import peer as _peer_routes
+from backend.web.routes import guests as _guest_routes
 from backend.web.routes import team_runs as _team_runs_routes
 from backend.web.core import voice_actions as _voice_actions
 from backend.web.routes import speech as _speech_routes
@@ -1906,7 +1908,7 @@ def list_instances(request: Request) -> JSONResponse:
             _fresh_lineage(cached)
             _ownership.overlay(cached)
             _aliases.overlay(cached)
-            return JSONResponse(cached + remote + _pending_rows())
+            return JSONResponse(_guest_rows(request, cached + remote + _pending_rows()))
     queues = _prompt_queue.snapshot()
     by_title = {d.get("title"): d for d in cached}
     snap = [
@@ -1916,7 +1918,14 @@ def list_instances(request: Request) -> JSONResponse:
     _lanes.fill_duplicates(snap)
     _ownership.overlay(snap)
     _aliases.overlay(snap)
-    return JSONResponse(snap + remote + _pending_rows())
+    return JSONResponse(_guest_rows(request, snap + remote + _pending_rows()))
+
+
+def _guest_rows(request: Request, rows: list) -> list:
+    """A guest link (backend.web.core.guests) sees its own sessions whole and
+    every other row as a crossed-out stub; the owner sees the list as is."""
+    guest = _guests.scope_guest(request)
+    return _guests.stub_rows(rows, guest) if guest is not None else rows
 
 
 # ---- Tailnet multi-device control (backend.web.core.remote) -------------- #
@@ -3113,7 +3122,7 @@ def _no_git_response() -> JSONResponse:
 
 
 @app.get("/api/config")
-def get_config() -> JSONResponse:
+def get_config(request: Request) -> JSONResponse:
     """Client bootstrap config: default program, optional-integration
     capabilities, home dir, linked IDE name, first-run + auth-gate state."""
     return JSONResponse(
@@ -3150,6 +3159,9 @@ def get_config() -> JSONResponse:
             # Start together): a rung, or "off" — which the resolved rung above
             # can never say.
             "fasttrack_default": _fasttrack_default(),
+            # A guest link (backend.web.core.guests): {label, sessions} — the
+            # rail crosses out every other session; None for the owner.
+            "guest": _guests.public_scope(request),
         }
     )
 
@@ -11514,6 +11526,7 @@ _serve_pty = pump_pty
 # Peer links (docs/peer-link.md): routes/peer.py
 # --------------------------------------------------------------------------- #
 app.include_router(_peer_routes.router)
+app.include_router(_guest_routes.router)
 
 
 @app.websocket("/api/instances/{title}/shell")
@@ -12574,6 +12587,8 @@ async def events_ws(ws: WebSocket) -> None:
     unsubscribe = _events.BUS.subscribe(_enqueue)
     reader = asyncio.create_task(_events_ws_reader(ws))
     getter = None
+    # A guest link hears its own sessions and the session-less frames only.
+    guest = _guests.scope_guest(ws)
     try:
         # L4: hello frame FIRST (before the backlog) carrying the server's
         # clock, so clients can robustly tell replayed one-shot events (their
@@ -12600,8 +12615,10 @@ async def events_ws(ws: WebSocket) -> None:
         # so each event reaches the client exactly once.
         last_seq = since
         for env in _events.BUS.backlog(since):
-            await ws.send_json(env)
             last_seq = max(last_seq, int(env.get("seq") or 0))
+            if guest is not None and not _guests.event_allowed(env, guest):
+                continue
+            await ws.send_json(env)
         while True:
             getter = asyncio.create_task(queue.get())
             done, _pending = await asyncio.wait(
@@ -12615,6 +12632,8 @@ async def events_ws(ws: WebSocket) -> None:
             if seq and seq <= last_seq:
                 continue  # already delivered via the backlog replay
             last_seq = max(last_seq, seq)
+            if guest is not None and not _guests.event_allowed(env, guest):
+                continue
             await ws.send_json(env)
     except WebSocketDisconnect:
         pass

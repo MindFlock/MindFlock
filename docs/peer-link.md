@@ -11,6 +11,11 @@ two people's agents code together.
 You and a collaborator each run MindFlock. One of you **invites**, the other
 **joins**; then each of you may **share one folder** with that link.
 
+> Just want someone to type into a few of *your* sessions, on your device,
+> with no MindFlock of their own? That is a **guest link** — Settings →
+> People → *Let someone into a few of your sessions* — see
+> [people.md](people.md#guest-links--someone-else-in-a-few-of-your-sessions).
+
 1. **Invite.** Settings → People (once "People"; or the command
    palette's *People…*) → **Create invite**, or `mindflock peer invite`. There is
    nothing to turn on or configure first: inviting turns peer links on. Without
