@@ -5850,6 +5850,8 @@ labels above the inputs.
     which replays [the Voice tour](#the-voice-tour).
   - **Voice words** (`#voice-words`): the words that send, stop and start
     over, and the wake word — [Voice words](#voice-words).
+  - **Say it as** (`#voice-pronounce`, a sub-block right after the words):
+    words the voice gets wrong, respelled — [Say it as](#say-it-as).
   - **Permission dialogs**: the **Approve dialogs by voice** switch (*A
     spoken yes or no answers a permission dialog after its command is read
     aloud. 'Always' is only accepted when you say the word.*).
@@ -6345,6 +6347,41 @@ every save), then the server's.
   and *Listen for “MindFlock”* switch, Settings → Voice's hints and the Voice
   tour all name the current words (`dictHint`, `answerHint`,
   `wakeSwitchLabel`, `wakeSwitchHint`).
+
+### Say it as
+
+Everything MindFlock says out loud goes through one shaping step right
+before it reaches a voice — and never what a caption shows. The engines
+(piper's espeak-ng, the OS voices, a neural host such as F5-TTS, the
+browsers' `speechSynthesis`) take plain text and no SSML, so the portable fix
+for a word they get wrong is a plain-ASCII **respelling**: *everything goes
+live* is said as *lyve* (the adjective, as in "we go live in 3, 2, 1"), while
+*I live in Boston* keeps the verb; *I read the file* becomes *red*; `SQL` is
+*sequel*, `JSON` *jayson*, `nginx` *engine x*, `tmux` *tee mux*, `k8s`
+*kubernetes*, `npm` / `API` / `PR` letters; `askMicTap` is *ask mic tap*,
+`backend/web/core/speech.py:404` *backend, web, core, speech dot pie line
+404*, `v0.10.2` *version 0 point 10 point 2*, `1m23s` *1 minute 23 seconds*;
+Markdown, emoji and URLs ("a link") are dropped. The rule table lives once —
+`backend/web/core/spoken_text.py` (`shape(text, overrides)`), its TypeScript
+twin `lib/spokenText.ts` (`shapeForSpeech(text, overrides)`) and the phone
+page's build-free `static/spoken-text.js` (`window.MindFlockSpokenText.
+shape`) carry the same JSON literal — and `tests/unit/data/spoken_text.json`
+runs every case through all three. The server shapes inside `POST
+/api/voice/speak` (which also caches repeats: `X-Voice-Cache`); a client
+shapes just before `speechSynthesis.speak`.
+
+The person's own rows come first. **Settings → Voice → Say it as**
+(`#voice-pronounce`, `screens/Pronounce.tsx`, the sub-block right after
+*Voice words*): one line per pronunciation — the word, an arrow, how to say
+it, **Try** (hears the respelling through the current server voice: `POST
+/api/voice/speak` with `shape: false`), **×** — and a draft line (*Word or
+phrase* → *Say it as*, Enter or **Add**; its own **Try** plays a draft before
+it is saved). Adding a word that already has a row replaces that row; at
+most 40 rows of 40 characters a side; the editor refuses what the server
+would (`pronounceError`), inline, with no `prompt()` or `alert()`. Saved as
+`voice.pronounce` (owner-only; `GET /api/voice` serves it as `pronounce`,
+normalised); **Remove all** clears it. *Only the owner of this computer can
+change them* for a viewer the server won't let configure.
 
 ### The Voice tour
 

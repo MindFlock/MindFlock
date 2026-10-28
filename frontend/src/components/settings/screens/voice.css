@@ -93,3 +93,44 @@
   flex: 1;
   min-width: 140px;
 }
+
+/* Say it as (screens/Pronounce.tsx): one line per pronunciation — the word,
+   an arrow, how to say it, Try, × — and the draft line's two fields the same
+   way, so the eye reads every row alike. */
+.voice-pronounce-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.voice-pronounce-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+.voice-pronounce-say,
+.voice-pronounce-as {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-2);
+  font-size: 12px;
+}
+.voice-pronounce-as {
+  font-style: italic;
+}
+.voice-pronounce-arrow {
+  color: var(--muted);
+}
+.voice-pronounce-row input {
+  flex: 1;
+  min-width: 120px;
+  max-width: 220px;
+}
+.voice-pronounce-said,
+.voice-pronounce-kept {
+  flex-basis: 100%;
+}
