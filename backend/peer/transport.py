@@ -98,6 +98,9 @@ MAX_IN_FLIGHT = 8
 MSG_RATE = 30
 REQ_RATE = 120
 FRAME_RATE = 600  # any inbound frame, per connection: caps ping/res floods
+# Push frames (a shared session's terminal, both ways): their own window, per
+# connection — a live terminal is many small frames, never request-sized.
+PUSH_RATE = 6000
 RATE_WINDOW = 60.0
 BACKOFF_INITIAL = 1.0
 BACKOFF_MAX = 60.0
@@ -125,6 +128,12 @@ _OP_PERM = {
     "mirror_pull": "read_file",
     # Joint tasks talk, like messages (backend.peer.joint).
     **{op: "messages" for op in wire.OPS if op.startswith("joint_")},
+    # Shared sessions: sharing a session IS the grant (the handler checks it
+    # is shared on this link); no link perm says more.
+    "sessions": None,
+    "term_open": None,
+    "term_close": None,
+    "session_focus": None,
 }
 # Ops that hand over the shared folder's content: refused until the safety
 # number is confirmed on THIS side (``link.sas_verified``), whatever the
@@ -273,6 +282,7 @@ class _Conn:
         self._wlock = asyncio.Lock()
         self._out_sem = asyncio.Semaphore(owner.max_in_flight)
         self._frames = _Window(owner.frame_rate, owner.rate_window, owner.clock)
+        self._pushes = _Window(owner.push_rate, owner.rate_window, owner.clock)
         self._pending: dict[int, tuple[asyncio.Future, str, dict]] = {}
         self._inbound: dict[int, asyncio.Task] = {}
         self._next_id = 0
@@ -383,7 +393,8 @@ class _Conn:
                 except TimeoutError:
                     reason = "idle timeout"
                     return
-                if not self._frames.hit():
+                window = self._pushes if obj.get("t") == "push" else self._frames
+                if not window.hit():
                     raise wire.ProtocolError("frame flood")
                 try:
                     t = wire.validate_message(obj)
@@ -393,6 +404,8 @@ class _Conn:
                     self.owner._limits_for(self.link_id).req.hit()
                     await self._reply_err(e.rid, "unsupported")
                     continue
+                except wire.UnsupportedPush:
+                    continue  # a newer peer's push: nobody waits for it
                 if t == "ping":
                     await self.send({"t": "pong"})
                 elif t == "bye":
@@ -407,6 +420,8 @@ class _Conn:
                     await self._on_req(obj)
                 elif t == "res":
                     self._on_res(obj)
+                elif t == "push":
+                    await self._on_push(obj)
         except asyncio.CancelledError:
             raise
         except wire.ConnectionClosed:
@@ -490,6 +505,22 @@ class _Conn:
         except Exception:
             self.teardown("write failed")
 
+    async def _on_push(self, obj: dict) -> None:
+        """A push frame: handed to the handler IN ORDER (a terminal's bytes)
+        on the read loop — the handler only queues, never blocks. A handler
+        without ``handle_push`` (or one that fails) drops it."""
+        fn = getattr(self.owner.handler, "handle_push", None)
+        if fn is None:
+            return
+        try:
+            res = fn(self.link_id, obj["op"], obj["p"])
+            if inspect.isawaitable(res):
+                await res
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning("peer: push %s failed: %s", obj["op"], type(e).__name__)
+
     def _on_res(self, obj: dict) -> None:
         entry = self._pending.pop(obj["id"], None)
         if entry is None:
@@ -540,6 +571,7 @@ class PeerTransport:
         msg_rate: int = MSG_RATE,
         req_rate: int = REQ_RATE,
         frame_rate: int = FRAME_RATE,
+        push_rate: int = PUSH_RATE,
         rate_window: float = RATE_WINDOW,
         backoff_initial: float = BACKOFF_INITIAL,
         backoff_max: float = BACKOFF_MAX,
@@ -565,6 +597,7 @@ class PeerTransport:
         self.msg_rate = msg_rate
         self.req_rate = req_rate
         self.frame_rate = frame_rate
+        self.push_rate = push_rate
         self.rate_window = rate_window
         self.backoff_initial = backoff_initial
         self.backoff_max = backoff_max
@@ -716,6 +749,7 @@ class PeerTransport:
                     writer,
                     {
                         "t": "pair",
+                        "caps": list(wire.CAPS),
                         "v": wire.PROTOCOL_VERSION,
                         "invite_id": info.invite_id,
                         "pub": self.identity.pub.hex(),
@@ -833,6 +867,22 @@ class PeerTransport:
         if conn is None or conn.dead:
             raise PeerUnavailable("peer not connected")
         return await conn.request(op, p, timeout)
+
+    async def send_push(self, link_id: str, op: str, p: dict) -> None:
+        """One push frame (no answer). The caller sends one only to a peer
+        that speaks pushes (an older one closes on the unknown frame type)."""
+        try:
+            wire.validate_push(op, p)
+        except wire.ProtocolError as e:
+            raise ValueError(f"invalid peer push: {e}") from None
+        conn = self._conns.get(link_id)
+        if conn is None or conn.dead:
+            raise PeerUnavailable("peer not connected")
+        try:
+            await conn.send({"t": "push", "op": op, "p": p})
+        except (OSError, TimeoutError, wire.ProtocolError, ssl.SSLError):
+            conn.teardown("write failed")
+            raise PeerUnavailable("connection lost") from None
 
     async def redial(self, link_id: str) -> None:
         """The link's address changed: if it is down, dial now (with the
@@ -1040,6 +1090,7 @@ class PeerTransport:
             writer,
             {
                 "t": "hello",
+                "caps": list(wire.CAPS),
                 "v": wire.PROTOCOL_VERSION,
                 "nonce": base64.b64encode(nonce).decode("ascii"),
                 "name": self.display_name,
@@ -1066,6 +1117,7 @@ class PeerTransport:
             writer,
             {
                 "t": "welcome",
+                "caps": list(wire.CAPS),
                 "link_id": link.link_id,
                 "name": self.display_name,
                 "sas": link.sas,
@@ -1202,6 +1254,7 @@ class PeerTransport:
                     writer,
                     {
                         "t": "auth",
+                        "caps": list(wire.CAPS),
                         "v": wire.PROTOCOL_VERSION,
                         "link_id": link.link_id,
                         "sig": self.identity.sign(transcript).hex(),
