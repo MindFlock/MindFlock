@@ -113,7 +113,11 @@ def test_verify_always_shows_in_the_top_bar():
         '{badge.count > 0 && <span className={"tb-count" + (badge.failing ? " is-failing" : "")}>{badge.count}</span>}'
         in src
     )
-    assert src.index('id="new-btn"') < src.index('id="flights-btn"') < src.index('id="settings-btn"')
+    assert (
+        src.index('id="new-btn"')
+        < src.index('id="flights-btn"')
+        < src.index('id="settings-btn"')
+    )
 
 
 def test_schedule_is_on_the_top_bar_and_sized_like_its_neighbours():
@@ -124,7 +128,9 @@ def test_schedule_is_on_the_top_bar_and_sized_like_its_neighbours():
     src = _code("components/TopBar.tsx")
     assert 'ui.openDialogFor("flights")' in src
     assert 'keys("intake")' in src
-    assert 'run: () => useUi.getState().openDialogFor("flights", "schedule"),' in _code("lib/keymap.ts")
+    assert 'run: () => useUi.getState().openDialogFor("flights", "schedule"),' in _code(
+        "lib/keymap.ts"
+    )
     css = (_SRC / "components" / "TopBar.css").read_text()
     assert "#topbar #flights-btn," in css
 
@@ -133,7 +139,10 @@ def test_the_bell_hosts_the_waiting_rows_and_drops_its_toggle():
     src = _code("components/NotificationsBell.tsx")
     assert 'import { WaitingRow } from "./outbox/WaitingRow";' in src
     # Flights parked on a you step join the waiting rows (lib/needsYou).
-    assert "needsAttention(attentionItems(instances), withFlightYou(outbox?.groups?.waiting, instances))" in src
+    assert (
+        "needsAttention(attentionItems(instances), withFlightYou(outbox?.groups?.waiting, instances))"
+        in src
+    )
     assert "NotifToggle" not in src and "mf-notify-state" not in src
     assert '"mf-open-bell"' in src and '"mf-close-bell"' in src
     # The badge counts the merged list; the heading keeps its name.

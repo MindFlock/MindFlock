@@ -107,7 +107,10 @@ def test_guided_next_step_has_a_quiet_variant():
         and 'act === "limit"' in pane
     )
     # ...and none while a flight drives the session (its strip is the next step).
-    assert 'flying || (ns && ns.label === "Commit…" && !hasUncommitted(inst)) ? null : ns' in pane
+    assert (
+        'flying || (ns && ns.label === "Commit…" && !hasUncommitted(inst)) ? null : ns'
+        in pane
+    )
     css = _read("components/grid/Pane.css")
     assert re.search(
         r"\.pane-head \.actions \.nextstep\.nextstep-quiet \{\s*background: transparent;\s*"
