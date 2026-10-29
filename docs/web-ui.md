@@ -32,47 +32,36 @@ keys, event names and MCP tool names keep their older names (`/api/instances`,
 the theme toggle 🌙, the notifications 🔔 bell, whose one amber badge counts
 everything that needs you (see [Notifications](#notifications-)), and the
 mic right after it (below: talk to the focused session). Then the menu,
-which carries only the daily loop — **New**, **Intake** (`Alt+I`; see
-[Intake](#intake)), **Verify** (`Alt+V`), **Schedule** (`Alt+S`; see
-[Schedule](#schedule)) and **Settings** — and ends in a
+which carries only the daily loop — **New**, **Flights** (`Alt+I`; see
+[Flights](#flights)) and **Settings** — and ends in a
 monochrome magnifier icon (`#palette-btn`, tooltip *Command palette — Ctrl+P /
-⌘P*) that opens the command palette (below). **Intake** sits beside **New**
+⌘P*) that opens the command palette (below). **Flights** sits beside **New**
 because both are about starting sessions — one from scratch, one from what came
-in. The **MindFlock** wordmark (carrying the *running engine's* version, plus a
+in. It replaced the three entries Intake, Verify and Schedule, which are its
+tabs now (Sources, Checklists, Schedule). The **MindFlock** wordmark (carrying the *running engine's* version, plus a
 red `-DEV` badge under a dev shell) sits centered, and the empty strip beside it
 is the drag region that moves the desktop shell's window.
 
 The bar never wraps and never clips (any width from 360 px up): it measures
 itself, before paint and on every resize, and gives things up in a fixed order
-(`fitTopBar` in `TopBar.tsx`). The wordmark goes first, then Settings, Schedule
-and Verify move, from the right, into one **⋯** (`#more-btn`) that sits where
-they stood, just before the magnifier. **New**, **Intake** and the magnifier
-never fold. The ⋯ carries the folded items' counts (Verify's red count rides on
-it while Verify is folded), and its menu lists the folded items with their own
-counts and tooltips (↑/↓ move, Esc closes). A folded item keeps its id
-(`#verify-btn` &c., hidden), its shortcut and its palette entry; the calm rule
-below still decides which items are on the bar at all.
+(`fitTopBar` in `TopBar.tsx`). The wordmark goes first, then Settings moves
+into one **⋯** (`#more-btn`) that sits where it stood, just before the
+magnifier. **New**, **Flights** and the magnifier never fold. The ⋯'s menu lists
+the folded items with their tooltips (↑/↓ move, Esc closes); a folded item
+keeps its id (`#settings-btn`, hidden), its shortcut and its palette entry.
 
-**Verify** is always on the bar once the [calm first hour](#layout) is over
-(or its first checklist exists — before that it waits, and so does
-**Schedule** until its first template; Alt+V / Alt+S and the palette work
-throughout). Its badge counts the checklists under **Needs
-you** and **Failed** (the dialog's first two groups) and says nothing at zero;
-it turns **red** when any of them failed, and the tooltip's second line says
-what it counts (*3 checklists need you or failed — 1 failed*). Everywhere Verify is described in passing
-(this tooltip, the palette, the shortcut sheet) it is one sentence,
+**Flights** is always on the bar (`#flights-btn`, tooltip *Flights — where
+every ticket, PR and scheduled job is on its way from arrival to merge
+(Alt+I)*; `lib/calm.ts` `topBarShows`). Its one badge counts what waits on
+you there — flights parked on a *you* step, Verify's checklists that need you
+or failed, and arrivals no auto-start switch will take — and says nothing at
+zero; it turns **red** when a checklist failed or a flight halted. The tooltip
+lists the three counts (*1 flight waits on you · 2 checklists to check · 0
+arrivals to start by hand*) plus a line when a scheduled template's last run
+failed (`lib/flights.ts` `flightBadgeCount` / `badgeLines`; the arrivals are
+read from Intake's cached lists, never fetched by the bar). Everywhere Verify
+is described in passing (the palette, the shortcut sheet) it is one sentence,
 `lib/vocab.ts`'s *check that pushed changes work*.
-
-**Schedule** is always on the bar too (`#schedule-btn`, tooltip *Schedule —
-templates that start sessions on their own (Alt+S)*). Its only mark is a red
-count of the scheduled templates whose **last run failed** — exactly the
-Schedule cards that say *Last run failed*, so it clears when the next run
-starts fine — with the tooltip's second line saying so (*1 scheduled
-template's last run failed*). A schedule that is merely set, a paused one, or
-a run skipped because the previous one was still going gets no mark: those
-are the feature working. It refreshes on `template.run_started` /
-`template.run_failed` (`lib/useScheduleStatus.ts`). Under 520 px the worded
-items close up so the palette icon stays on the bar.
 
 **The bar's tooltips read their shortcuts off the live keymap**
 (`shortcutLabels`), rebinds included — and in a browser tab they leave out
@@ -80,10 +69,12 @@ keys the browser keeps for itself, so **New** says *Alt+N* there (Ctrl+N opens
 a browser window) and *Ctrl+N / Alt+N* in the desktop app. Under 560 px the
 wordmark steps aside rather than being clipped.
 
-**Each surface has a URL.** Opening **New**, **Intake**, **Verify**,
-**Schedule** or **Settings** puts it in the hash (`#new`, `#intake/tickets`,
-`#verify`, `#schedule`, `#settings/accounts`; an old `#templates` link opens
-Schedule) with one history entry, so the
+**Each surface has a URL.** Opening **New**, **Flights** or **Settings** puts
+it in the hash (`#new`, `#flights`, `#flights/plans`,
+`#flights/checklists/<branch>`, `#settings/accounts`) with one history entry —
+and the old links still land: `#intake/tickets` opens Flights → Sources on
+Tickets, `#verify` Checklists, `#schedule` and `#templates` Schedule (rewritten
+in place to their `#flights/…` address), so the
 browser's **Back** closes it instead of leaving the app, and a link (or a
 reload) opens it (`lib/surfaceHash.ts`). Moving from one surface to another
 replaces that entry, so Back still lands on the grid; closing a surface in the
@@ -2622,9 +2613,9 @@ built-in alias.
 | `Ctrl+P` / `Ctrl+Shift+P` | Command palette (fuzzy: focus session, rename, send/queue, commit/push/PR/IDE, work, settings, doctor, shortcuts…) |
 | `Ctrl+B` | Toggle sidebar |
 | `Ctrl+N` / `Alt+N` | New-session dialog |
-| `Alt+I` | Intake — tickets, PRs and issues waiting to become sessions |
-| `Alt+V` | Verify — pushed changes nobody has checked |
-| `Alt+S` | Schedule — templates that start sessions on their own |
+| `Alt+I` | Flights — the Board: what needs you, what is in flight, what has arrived (its id is still `intake`, so an old rebind keeps working) |
+| `Alt+V` | Flights → Checklists — pushed changes nobody has checked |
+| `Alt+S` | Flights → Schedule — templates that start sessions on their own |
 | `Ctrl+T` (`Alt+Space` is the browser-safe alias: Chrome reserves Ctrl+T for a new tab) | Talk to the focused session through the top-bar mic — hold it (hold-to-talk) or press once to start and again to stop (click-to-talk), following the mic's push-to-talk mode. Works while a terminal has focus; the keystroke never reaches the terminal (no readline transpose; Option+Space on a Mac types no non-breaking space either). Key-repeat while held is ignored, and letting go of either key — or switching away from the window — ends a hold. The keymap only reports the key: it fires a `mindflock:voice-talk` window event with `detail.phase` `"down"` / `"up"`, and the mic decides what that means. Rebindable like the rest; a rebind applies to the release as well as the press |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` (also `Ctrl+PgDn` / `Ctrl+PgUp`) | Next / previous window — sessions and open windows (assistant, logs, extension panes), one list |
 | `Ctrl+1…9` / `Alt+1…9` | Focus the Nth sidebar row — a session or a window, matching the number badges |
@@ -2851,8 +2842,9 @@ session would run on another device.
 Closing Schedule brings New back **as it was left**, with the list
 reloaded.
 
-<a id="schedule"></a>**Schedule** (top bar, `Alt+S`, `#schedule`; `TemplatesDialog.tsx`, store key
-`schedule` — `openDialogFor("templates")` still opens it) is the home of
+<a id="schedule"></a>**Schedule** (the Schedule tab of [Flights](#flights) now — `Alt+S`,
+`#schedule`; `TemplatesDialog.tsx` mounted embedded; `openDialogFor("schedule"
+| "templates")` opens Flights on it) is the home of
 templates and of what starts by itself. It opens on two lines: *Templates
 start a **new** session — when you run one, or by themselves on a schedule.*
 and *To send text to a session that's already running, use Prompts.*, with
@@ -3676,7 +3668,115 @@ count, so the number is checkable against what is on screen. When it finds
 nothing it says why: how many are in use, how many were used this week, how many
 are repositories it will never touch.
 
+## Flights
+
+**One route from arrival to merge** (`docs/flights.md` is the design
+contract). A ticket, a pull request, an issue or a scheduled job is a
+**flight**: one run of a **plan**, bound to one session. A plan is a row of
+**blocks** (steps): a *robot* block MindFlock carries out by itself (the agent
+works, commit, push, open a PR, wait for reviews to settle, wait for checks,
+verify, a shell command, move the ticket, notify), or a *you* block where the
+flight parks, pings you, and waits until you press **Done**. Intake, Verify and
+Schedule were three sides of that journey; they are tabs here now.
+
+Top-bar **Flights** (`#flights-btn`, `Alt+I`, the palette's **Flights…**),
+dialog `#flights-dialog` / panel `#flights-panel`, from
+`frontend/src/components/flights/` (`FlightsDialog`, `Board`, `FlightStrip`,
+`PlanEditor`, `useArrivals`; CSS prefix `fl-`), with the pure rules in
+`lib/flights.ts` and the routes in `lib/flightsApi.ts`. The tab rides in the
+store's `dialogTarget` as `<tab>[/<the tab's own deep link>]`, so the URL
+follows it and every old deep link lands on its tab:
+`openDialogFor("intake", "tickets:jira")` → Sources, `("verify", <branch>)` →
+Checklists with that checklist open, `("schedule" | "templates", …)` →
+Schedule. Tabs, in order:
+
+1. **Board** — the live view, loudest first:
+   - **Needs you** — flights parked on a *you* step (its text, its checklist as
+     tick boxes — ticking them all enables **Done** — and **Skip**), halted
+     flights (**Retry** / **Skip**, and the reason), and Verify's checklists
+     that need you or failed, one line each that opens it on Checklists.
+   - **In flight** — one strip per flight: the subject's headline, the plan,
+     its session, then the blocks as chips (✓ done · ● current, pulsing · ○
+     pending · ✗ failed · – skipped; *you* blocks outlined in the needs-you
+     gold), the current step and how long it has been there, and a ⋯ (**Open
+     session** · **Pause** / **Resume** · **Jump to…** (the chips turn into
+     buttons; press one) · **Cancel**, asked inline — the session is kept).
+     Clicking the strip opens its session and closes the dialog.
+   - **Arrivals** — Intake's eligible items with no session yet (the
+     Auto-start tab's own list, `intake/queue.ts`), grouped by source, each
+     an Intake row with a **Plan** picker (default: the source's own plan,
+     else the built-in for its kind) and **Start**. Start posts the same route
+     and body as Intake (`/api/tickets/start`, `/api/github/prs/review`,
+     `/api/github/issues/start`) plus `plan` when one was picked, then selects
+     the new session as soon as its row exists.
+   - **Landed** — finished flights, folded.
+2. **Plans** — the plan list on the left (built-ins marked; **+ New plan**)
+   and the editor on the right. The plan is a horizontal row of blocks read
+   left to right, no wires: drag a block to reorder it (or focus it and press
+   ← / →), press **+** between blocks (or at the end) for the palette — the
+   server's step registry (`GET /api/flights/kinds`), robot and *you* kinds in
+   two groups with their one-line summaries. Under the row, the selected
+   block's form, generated from its kind's fields (text, textarea, number,
+   switch, select), its title and **If it fails** (stop and tell me · hand it
+   to the agent · skip it · ask me), plus ← → **Duplicate** **Delete**. Then
+   **Starts from** (manual · ticket · pull request · issue · schedule — a
+   schedule uses Schedule's own days / time / cron editor and its preview
+   line) and, for manual and scheduled plans, the session defaults
+   (repository with Browse…, agent, model). **Describe a step…** at the end of
+   the row sends a sentence to `POST /api/flights/describe` and appends the
+   blocks it answers with, highlighted *added by description* until **Save**.
+   **Take off** saves if needed and starts a flight right away — straight into
+   the plan's repository, or, when it has none, an inline row asks for a
+   repository or an open session to fly on. **Reset to default** puts a
+   built-in back; a plan of your own has **Delete** (asked inline). Leaving
+   the tab, picking another plan or closing with unsaved changes asks first,
+   inline (*Discard unsaved changes?* — **Discard** / **Keep editing**).
+3. **Sources** — the [Intake](#intake) tabs, mounted as they are (Tickets ·
+   GitHub PRs · GitHub issues · Auto-start, with + Add source).
+4. **Schedule** — the [Schedule](#schedule) templates view, mounted as it is.
+   A half-edited template is guarded the same way as a plan.
+5. **Checklists** — the [Verify](#verify) list, mounted as it is.
+
+**The pane strip.** A session a flight drives shows one line above its
+terminal, in its own row under the pane header (not inside it: the header
+hides chips): `✈ Ticket to merge · ●●●○○○ · Reviews settle (4m)`, gold when
+the flight waits on you, with **Done** / **Skip** (and the step's tick boxes)
+inline on a *you* step and a ⋯ for **Pause** / **Resume**, **Jump to…** and
+**Cancel**. While the flight is in the air the guided next-step button is
+hidden — the strip is the next step — and it comes back when the flight lands.
+It reads the session row's `flight` field, and the full flight from the
+flights query for the elapsed time and the blocks.
+
+**The rail and the bell.** A flight parked on a *you* step is a Needs-you
+state (`lib/sessionState.ts`, reason `flight_you`, notify rule
+`flight_needs_you`): the row's chip says **You: <step title>** in the gold, and
+the bell lists it with **Done**, **Skip** and **Open ↗** (`outbox/WaitingRow`;
+`lib/needsYou.ts` `withFlightYou` adds the row from the session's own `flight`
+field until the server's outbox lists it).
+
+**Every start opens its session** — an arrival's Start, Take off, a template's
+Run now: `selectSession(title)` as soon as the row exists.
+
+**Live.** `useFlights` / `useFlightPlans` / `useFlightKinds`
+(`state/queries.ts`) poll every 5 s while a flight is in the air (30 s
+otherwise, 2 min on a server without the routes), and `flight.changed`,
+`flight.needs_you` and `flight.finished` refetch at once.
+
+**Keys and the palette.** `Alt+I` opens the Board, `Alt+V` Checklists, `Alt+S`
+Schedule; the palette has **Flights…**, **Flights: Plans**, and keeps
+**Intake…** (and each Intake tab), **Verify…** and **Schedule…** as ways onto
+their tabs.
+
+**The Flights tour** (`lib/tours/flights.ts`, the ? in the header): the Board,
+a strip, the Plans editor, Describe a step — it switches to the Plans tab for
+its last two steps.
+
 ## Intake
+
+> **Intake is the Sources tab of [Flights](#flights) now** (`Alt+I` opens
+> Flights' Board; the palette's **Intake…** and an old `#intake/…` link open
+> Sources). Everything below still holds inside that tab; its eligible items
+> are also the Board's **Arrivals**.
 
 **Where your sessions come from.** Ticketing, PR review and issue handling used
 to be three screens in Settings, and they never belonged there: Settings is
@@ -4585,6 +4685,11 @@ and a prompt is never announced twice (the session's own "Needs you" row
 covers it). At most one team run toast per 30 seconds.
 
 ## Verify
+
+> **Verify is the Checklists tab of [Flights](#flights) now** (`Alt+V`, the
+> palette's **Verify…**, `#verify`). Its due and failing checklists also show
+> under the Board's **Needs you**, and its count is part of the Flights badge.
+> A plan's **Verify** block makes and waits on a checklist like the ones below.
 
 **What shipped, and does it work?** Intake is the front of the pipeline; Verify
 is the back of it. The pipeline's last honest checkpoint is "the PR merged", and

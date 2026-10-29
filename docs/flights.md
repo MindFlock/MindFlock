@@ -270,6 +270,29 @@ row exists, the way `templateRun.ts` already does.
 **Tours.** A short `flights` CoachTour (`lib/tours/flights.ts`): Board, a
 strip, Plans, Describe a step.
 
+### Frontend notes (not contract: what the UI does where the contract is open)
+
+- **Pause / Resume.** The flight `state` has no `paused`; the ⋯ offers
+  **Pause** while a flight is `running` or `waiting_you` and **Resume** while it
+  is `halted` (so a paused flight is expected to read `halted`, with `reason`
+  saying so).
+- **Halted flights** sit under *Needs you* with **Retry** (`/steps/{sid}/retry`)
+  and **Skip** for the current step, and the `reason`.
+- **Take off** on a plan with no `session.repo_path` (or a ticket / PR / issue
+  plan) opens an inline row in the editor — a repository field with Browse…
+  and an "on a session that is open" picker — rather than the New dialog; it
+  posts `repo_path` or `title`.
+- **Arrivals' plan picker** sends `plan` only when one is picked: the empty
+  choice ("<built-in> (default)", or "Source's plan" when the source names
+  one) leaves the server's own resolution — and so the depth cut — in charge.
+- **Select fields** in `GET /api/flights/kinds` may list `options` as plain
+  strings or `{value, label}`; both are read.
+- **Badge.** A flight parked on a `verify` step is counted once, as Verify's
+  due checklist, not again as a flight waiting on you.
+- **Bell.** Until the outbox lists a `flight_you` row for a session, the UI
+  makes one from the session row's `flight` field (Done / Skip post the step
+  routes with that row's `flight.id` / `flight.step.id`).
+
 ## Built-in plans (seeded on first read, editable, resettable)
 
 - **Ticket to merge** (`builtin:ticket`, trigger ticket): Agent works the ticket → Commit → Push → Verify (agent) → Open PR → Reviews settle (10 min) → Checks → You: approve the merge → Merge → Ticket: comment "Merged by MindFlock" (state left alone unless the source has a done state configured).
