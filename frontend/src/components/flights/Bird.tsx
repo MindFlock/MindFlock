@@ -1,9 +1,51 @@
-/** The Flights glyph: a small bird in flight (a flight is a flock's, never a
- * plane's). currentColor, ~16px, inline wherever a flight or a flyway is
- * named — the top bar, the pane strip, the Board, the tabs. */
+/** The Flights glyph and the bird on a line: the MindFlock bird — the raven
+ * of the website's hero and the app's flock (lib/flock.ts, `/bird.png`), not
+ * a drawn gull. The sprite is one frame, white stripped to alpha, so it is
+ * used as a CSS MASK over `currentColor`: the bird takes the colour of
+ * wherever it sits (the top bar, the pane strip, the Sky, a tone). Its wings
+ * are the part above the hinge line, so the marker flaps by scaling that band
+ * about the hinge — the same beat flock.ts draws on its canvas. */
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import "./SkyFlock.css";
 
+/** The sprite (backend/web/static/bird.png) and its wing hinge, as flock.ts
+ * reads them. */
+export const SPRITE_URL = "/bird.png";
+export const SPRITE_W = 216;
+export const SPRITE_H = 160;
+export const HINGE = 0.56;
+
+/** The sprite at `width` px: its height, and the wing band (above the hinge)
+ * and body band (below it) the marker draws as two masked halves. */
+export function spriteBox(width: number): { w: number; h: number; wings: number; body: number } {
+  const h = Math.round(((width * SPRITE_H) / SPRITE_W) * 10) / 10;
+  const wings = Math.round(h * HINGE * 10) / 10;
+  return { w: width, h, wings, body: Math.round((h - wings) * 10) / 10 };
+}
+
+/** `currentColor` through the sprite: the mask, at `size` / `position`. */
+export function spriteMask(size: string, position: string): CSSProperties {
+  const img = "url(" + SPRITE_URL + ")";
+  return {
+    backgroundColor: "currentColor",
+    WebkitMaskImage: img,
+    maskImage: img,
+    WebkitMaskRepeat: "no-repeat",
+    maskRepeat: "no-repeat",
+    WebkitMaskSize: size,
+    maskSize: size,
+    WebkitMaskPosition: position,
+    maskPosition: position,
+  };
+}
+
+/** The viewer asked for no motion (false on a server render). */
+export function prefersReducedMotion(): boolean {
+  return typeof window !== "undefined" && typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+/** The still bird, ~16px, inline wherever a flight or a flyway is named. */
 export function Bird({ size = 16, className = "" }: { size?: number; className?: string }) {
   return (
     <svg
@@ -11,28 +53,36 @@ export function Bird({ size = 16, className = "" }: { size?: number; className?:
       width={size}
       height={size}
       viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
+      style={spriteMask("contain", "center")}
       aria-hidden="true"
       focusable="false"
-    >
-      {/* A gull on the wing: two swept wings meeting at the body. */}
-      <path d="M2 9.5c3.4-2.8 6.8-2.3 10 2 3.2-4.3 6.6-4.8 10-2" />
-    </svg>
+    />
   );
 }
 
-/** The bird on a line (the Sky, the pane's Flight tab): the glyph, bigger,
- * standing on the box the flight is at. It bobs while the flock works, sits
- * gold and still when perched on you, red when halted; placed by `left` /
- * `top` so a move to the next box is a hop (a CSS transition), not a jump. */
-export function BirdMarker({ tone, x, y, label }: { tone: string; x: number; y: number; label: string }) {
+/** The marker's look for a tone: the class the canvas colours it by
+ * (FlywayCanvas.css: working green, `you` gold, halted red, paused grey), the
+ * sprite's class, and whether its wings beat — only while the flock works,
+ * and never for a viewer who asked for no motion. */
+export function birdLook(tone: string, reduced = prefersReducedMotion()): { className: string; sprite: string; flaps: boolean } {
+  const flaps = tone === "working" && !reduced;
+  return { className: "fl-bird-marker tone-" + tone, sprite: "fl-bird-big fl-sprite-bird" + (flaps ? " fl-flapping" : ""), flaps };
+}
+
+/** The bird on a line (the Sky, the pane's Flight tab), standing on the box
+ * the flight is at: flapping while the flock works, still and gold when
+ * perched on you, red when halted, grey when paused. Placed by `left` / `top`
+ * so a move to the next box is a hop (a CSS transition), not a jump. */
+export function BirdMarker({ tone, x, y, label, size = 24 }: { tone: string; x: number; y: number; label: string; size?: number }) {
+  const look = birdLook(tone);
+  const box = spriteBox(size);
+  const whole = box.w + "px " + box.h + "px";
   return (
-    <span className={"fl-bird-marker tone-" + tone} style={{ left: x, top: y }} role="img" aria-label={label} title={label} data-tour="flights-bird">
-      <Bird size={22} className="fl-bird-big" />
+    <span className={look.className} style={{ left: x, top: y }} role="img" aria-label={label} title={label} data-tour="flights-bird">
+      <span className={look.sprite} style={{ width: box.w, height: box.h }}>
+        <span className="fl-sprite-wings" style={{ top: 0, height: box.wings, ...spriteMask(whole, "0 0") }} />
+        <span className="fl-sprite-body" style={{ top: box.wings, height: box.body, ...spriteMask(whole, "0 " + -box.wings + "px") }} />
+      </span>
     </span>
   );
 }

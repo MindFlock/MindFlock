@@ -1,0 +1,56 @@
+/* The Sky's birds: the ambient flock behind the plane (SkyFlock.tsx) and the
+   sprite bird every glyph and marker draws (Bird.tsx). */
+
+/* --- The ambient flock ---------------------------------------------------------- */
+
+/* Decoration only: behind the plane, never in the way of a click. */
+.sky-flock {
+  position: absolute;
+  inset: 0 auto auto 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.55;
+}
+
+:root.light .sky-flock {
+  opacity: 0.32;
+}
+
+/* --- The sprite bird ------------------------------------------------------------ */
+
+.fl-sprite-bird {
+  position: relative;
+}
+
+.fl-sprite-wings,
+.fl-sprite-body {
+  position: absolute;
+  left: 0;
+  width: 100%;
+}
+
+/* The wings beat about the hinge (the band's bottom edge), the way the flock
+   draws them: full spread down to a quarter, about once a second. */
+.fl-sprite-wings {
+  transform-origin: 50% 100%;
+}
+
+.fl-sprite-bird.fl-flapping .fl-sprite-wings {
+  animation: fl-sprite-flap 0.95s ease-in-out infinite;
+}
+
+@keyframes fl-sprite-flap {
+  0%,
+  100% {
+    transform: scaleY(1.05);
+  }
+  50% {
+    transform: scaleY(0.25);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fl-sprite-bird.fl-flapping .fl-sprite-wings {
+    animation: none;
+  }
+}

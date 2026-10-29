@@ -1,0 +1,148 @@
+/* The flyway shelf (FlywayShelf.tsx): saved flyways as chips along the
+   bottom of the Sky. */
+
+.sky-shelf {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
+}
+
+.sky-shelf-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sky-shelf-head:hover,
+.sky-shelf-head:focus-visible {
+  background: var(--panel-2);
+}
+
+.sky-shelf-caret {
+  width: 10px;
+  color: var(--muted);
+}
+
+.sky-shelf-count {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.sky-shelf-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.sky-shelf-chip {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  cursor: grab;
+}
+
+.sky-shelf-chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.sky-shelf-chip:active {
+  cursor: grabbing;
+}
+
+.sky-shelf-open,
+.sky-shelf-fly,
+.sky-shelf-new {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.sky-shelf-open {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 4px 6px 4px 11px;
+}
+
+.sky-shelf-name {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sky-shelf-chip.builtin .sky-shelf-name {
+  color: var(--muted);
+}
+
+.sky-shelf-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  line-height: 0;
+}
+
+.sky-shelf-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--tone-working);
+}
+
+.sky-shelf-dot.perch {
+  background: var(--tone-attention);
+}
+
+.sky-shelf-more {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.sky-shelf-fly {
+  align-self: stretch;
+  padding: 0 11px 0 8px;
+  border-left: 1px solid var(--border);
+  border-radius: 0 999px 999px 0;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sky-shelf-fly:hover,
+.sky-shelf-fly:focus-visible {
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+.sky-shelf-new {
+  padding: 6px 12px;
+  border-style: dashed;
+  color: var(--accent);
+  cursor: pointer;
+}

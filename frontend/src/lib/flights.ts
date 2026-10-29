@@ -442,6 +442,33 @@ export function blankPlan(): FlightPlan {
   };
 }
 
+/** A flyway from a line's stops ("Save as flyway" on a live line, a card
+ * seeded from one): only what a stop IS — kind, title, config, on_fail —
+ * never what a run did to it (step_states live beside the steps; a config key
+ * with a leading `_` is the driver's, not the stop's), and re-numbered s1..sN
+ * so the server sees a fresh flyway. A manual trigger unless one is given. */
+export function planFromSteps(
+  name: string,
+  steps: readonly FlightStep[],
+  trigger?: FlightPlan["trigger"]
+): Omit<FlightPlan, "id" | "updated"> {
+  return {
+    name: name.trim() || "New flyway",
+    description: "",
+    builtin: false,
+    trigger: trigger ? { ...trigger } : { kind: "manual", schedule: null, paused: false },
+    session: { repo_path: "", program: "", model: "", in_place: false },
+    steps: steps.map((s, i) => {
+      const config: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(s.config || {})) {
+        if (k.startsWith("_") || v === undefined) continue;
+        config[k] = Array.isArray(v) ? v.slice() : v && typeof v === "object" ? JSON.parse(JSON.stringify(v)) : v;
+      }
+      return { id: "s" + (i + 1), kind: s.kind, title: s.title, config, on_fail: s.on_fail || "halt" };
+    }),
+  };
+}
+
 /** The trigger chips' words. */
 export const TRIGGER_LABEL: Record<TriggerKind, string> = {
   manual: "By hand",

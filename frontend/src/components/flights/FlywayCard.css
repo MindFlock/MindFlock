@@ -1,0 +1,56 @@
+/* A flyway made on the Sky (FlywayCard.tsx): a card floating over the plane.
+   The canvas, the palette, the inspector and Describe bring their own styles
+   (FlywayCanvas.css / FlightsDialog.css); this is the card around them. */
+
+.sky-flyway-card {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(78vh, 720px);
+  overflow: auto;
+  padding: 12px 14px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.28);
+  cursor: auto;
+}
+
+.sky-flyway-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sky-flyway-card-head > .fl-bird {
+  flex: none;
+  color: var(--accent);
+}
+
+.sky-flyway-card-head > .fl-input {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.sky-flyway-card-error {
+  color: var(--red);
+}
+
+.sky-flyway-card-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.sky-flyway-card-ask {
+  margin-right: auto;
+  font-size: 12.5px;
+}

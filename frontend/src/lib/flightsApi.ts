@@ -143,6 +143,11 @@ export async function takeOff(body: StartBody): Promise<Flight | null> {
   }
 }
 
+/** Fly a saved flyway on an existing session (a line on the Sky). */
+export function startFlightOn(title: string, planId: string): Promise<Flight | null> {
+  return takeOff({ plan_id: planId, title });
+}
+
 /** What a waiting item's Fly posts: the Intake start routes with their bodies
  * as today, plus `plan` when one was picked ("" = the source's own plan, which
  * the server resolves — so a source with only a depth behaves as before). */
