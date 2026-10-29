@@ -49,23 +49,25 @@ draws every session as a line, a bird on the stop each flight is at.
 
 ### What stays, what folds in
 
-Nothing is deleted. The three old surfaces become tabs of the Flights dialog
-and their stores are untouched:
+Nothing is deleted, and nothing is nested: Intake, Verify and Schedule stay
+the flat top-bar dialogs they always were, their stores untouched, and each
+carries its side of the journey. Flights are drawn in the Sky.
 
-| Old surface | In Flights | Store (unchanged) |
+| Surface | Its part in a flight | Store (unchanged) |
 |---|---|---|
 | Intake lists (tickets / PRs / issues ready to start) | **Sky → the intake lane and the drawer's Waiting to fly**: each eligible item is a flight that has not taken off, under its kind's heading with a kind badge, a **Fly** button and the flyway as chips | pipeline `state.json`, settings sources |
-| Intake source cards + Auto-start switches | **Sources** tab (the existing tab components, mounted as they are) | settings |
-| Verify checklists | a **Verify** stop on a flyway; the checklists list is the **Checklists** tab; open checklist items perch the flight (the Sky's drawer lists it) | `test_plans.json` |
-| Schedule (templates) | **Schedule** tab (the existing templates view); a flyway may also carry its own schedule trigger | `session_templates.json` |
+| Intake source cards + Auto-start switches | the **Intake** dialog, each source card with its **Flyway** chips | settings |
+| Verify checklists | a **Verify** stop on a flyway; the checklists stay in the **Verify** dialog; open checklist items perch the flight (the Sky's drawer lists it) | `test_plans.json` |
+| Schedule (templates) | the **Schedule** dialog; a flyway may carry its own schedule trigger, and Schedule lists those under **Scheduled flyways** | `session_templates.json` |
 | Fast-track depth (off→commit→push→pr→merge) | the **ship** stops of a flyway; a per-source depth still works and maps to the plain ship ladder at that rung (the agent, then commit → … → the depth — nothing else); an armed ⏩ is drawn as rung boxes on the session's line ([The session diagram](#the-session-diagram)) | `autopilot.json` |
 
-The top bar shows **Flights** where Intake / Verify / Schedule were. `Alt+I`
-opens Flights (on Flyways), `Alt+V` opens it on Checklists, `Alt+S` on
-Schedule; the sky is the main area's other view (the top bar's Grid · Sky
-toggle, `Alt+Y`).
-The badge counts what waits on you: flights perched on you, plus Verify's
-due/failing checklists, plus items waiting to fly that will not auto-start.
+The top bar is **New · Grid / Sky · Intake · Verify · Schedule · Settings**:
+`Alt+I` / `Alt+V` / `Alt+S` open the three dialogs, `Alt+Y` switches to the
+sky (the main area's other view). The Sky half of the toggle counts the
+flights perched on you. Flyways are made, edited and flown from the Sky's
+**flyway shelf**. (Sky rounds 4–7 put Intake / Verify / Schedule behind one
+Flights button as tabs of a Flights dialog; round 8 retired it — see
+[Round 8: flat again](#round-8-flat-again).)
 
 ## Using Flights
 
@@ -109,8 +111,8 @@ A start whose session can't be created cancels its flight with the reason.
 
 A plan whose trigger is **Schedule** starts itself, like a template: daily or
 weekdays at a time, a cron expression, or once at a date and time — the same
-editor (and the same `GET /api/templates/cron-preview` previews) as the
-Schedule tab, and the same rules (`core/template_schedule.py`): a schedule
+editor (and the same `GET /api/templates/cron-preview` previews) as
+Schedule, and the same rules (`core/template_schedule.py`): a schedule
 counts from when it was set, after downtime only the most recent missed run
 fires, a paused trigger fires nothing, and in a group of devices only the
 automation device fires. Each run takes off like **Take off** — a new session
@@ -126,13 +128,15 @@ flights. A run that can't take off (no folder set, the agent not installed) is
 a failed run with the reason. The plans list (`GET /api/flights/plans`) shows a
 scheduled plan's next run, last run and history under `runs`; the record is
 `~/.mindflock/flights/schedule_runs.json`, on this device only (the plans
-themselves sync). The Schedule tab keeps listing templates.
+themselves sync). The Schedule dialog lists templates and, under **Scheduled
+flyways**, these plans — with that record (next run, last result, history),
+**Fly now** and **Edit in the Sky**.
 
 ### Verify steps
 
 A verify step asks for the session's checklist through Verify's own button
 path and parks the flight on you while human items are open. Ticking them off
-in the Checklists tab moves the flight on at once (`session.test_plan_settled`
+in the Verify dialog moves the flight on at once (`session.test_plan_settled`
 wakes the driver); **Done** on the step records them as passed. A checklist the
 push watcher makes for the same branch is the same checklist — Verify keys
 them by (repo, branch).
@@ -327,11 +331,14 @@ source's `plan` (a team run's `"off"` must stay off) — the full order is in
 stop, perch; the glyph is a small bird (`components/flights/Bird.tsx`). The
 wire keeps its names; only what a person reads changed.
 
-**Top bar.** One entry, **Flights** (the bird before the word; replaces
-Intake / Verify / Schedule; the palette keeps "Intake…", "Verify…",
-"Schedule…" entries that open the matching tab). Badge = flights perched on
-you + Verify due/failing + items waiting to fly that will not auto-start.
-Tooltip lists the three counts.
+**Top bar.** Flat: **New · Grid / Sky · Intake · Verify · Schedule ·
+Settings**, each with its own badge, tooltip, calm-hour rule and shortcut
+(`Alt+I` / `Alt+V` / `Alt+S`, ids `intake` / `verify` / `schedule`). No
+Flights entry. The Grid / Sky toggle's Sky half carries the badge of flights
+perched on you (a flight perched on a Verify stop is Verify's count, not this
+one; red when one halted — `perchBadge`). The palette has "Intake…",
+"Verify…", "Schedule…", "Switch to the Sky / grid" and "Flyways…" (the Sky
+with its shelf open).
 
 **The flyway canvas** (`components/flights/FlywayCanvas.tsx`, model
 `lib/flightDiagram.ts`). Stops are boxes on a canvas laid left to right with
@@ -358,32 +365,44 @@ are the New dialog's segmented control or a chip row, free text the New
 dialog's field look, a prompt its prompt box, a number a field with its unit
 ("10 min"), a yes/no a switch chip (`components/flights/controls.tsx`).
 
-**Dialog** `#flights-dialog` (`frontend/src/components/flights/`, CSS prefix
-`fl-`), tabs (the top-bar button and `Alt+I` open it on Flyways):
+**No dialog.** There is no Flights dialog (`DialogName "flights"` is only
+an alias the store routes, below). Where each part lives:
 
-1. **Flyways** — the editor (tab id `plans`; `#flights`). Left: the flyway list
-   (built-ins marked). Right: the flyway on the canvas, the stop palette, the
-   inspector for the selected stop (its fields in the controls above, `on_fail`
-   as chips), the trigger (by hand / ticket / PR / issue / schedule with its
-   days as chips and its time, date or cron as fields), and the session
-   defaults for by-hand and scheduled flyways. **Describe a stop…** under the
-   canvas sends a sentence to `/api/flights/describe` and appends the result,
-   highlighted until saved. **Fly this flyway** starts a flight of it right
-   away (an inline row asks for a repository or an open session when the
-   flyway has none).
-2. **Sources** — the existing Intake tab components (Tickets / Pull requests /
-   Issues source cards and switches), mounted unchanged, each card with its
-   **Flyway** chips.
-3. **Schedule** — the existing templates view, mounted unchanged.
-4. **Checklists** — the existing Verify list, mounted unchanged.
+1. **Flyways** — on the Sky's **flyway shelf** (`FlywayShelf`): every saved
+   flyway as a chip; a chip opens its **card** (`FlywayCard`): the flyway on
+   the canvas, the stop palette, the inspector for the selected stop (its
+   fields in the controls above, `on_fail` as chips), **Describe a stop…**
+   (`/api/flights/describe`, highlighted until saved), the trigger under
+   **Takes off** (by hand / ticket / PR / issue / schedule with its days as
+   chips and its time, date or cron as fields, Paused) and the session
+   defaults for by-hand and scheduled flyways (`FlywayInspector`). Save /
+   Save & fly on… / Cancel; its ⋯ holds **Reset to default** (built-ins) and
+   **Delete flyway…** (yours, asked inline). **+ New flyway** opens a fresh
+   card; a chip's **Fly** or a drag onto a line flies it.
+2. **Sources** — the **Intake** dialog, each source card with its **Flyway**
+   chips (`PlanSelect`).
+3. **Scheduled flyways** — listed in the **Schedule** dialog under their own
+   heading (name, schedule line, next run, last result, **Fly now**, **Edit in
+   the Sky** → the card).
+4. **Checklists** — the **Verify** dialog.
 
-**The sky is a view, not a tab.** It was the dialog's first tab (and before
-it the Board); it is the main area's second view now, beside the grid
-([The Sky](#the-sky), docs/web-ui.md "Two views: the grid and the sky").
-Every address that named the tab — `sky`, `sky/<title>`, `board`,
-`#flights/sky/<title>`, `#flights/board` — opens the view (`skyRouteOf`,
-routed by the store's `openDialogFor`), and the URL becomes `#sky` /
-`#sky/<title>`.
+**Addresses.** The retired dialog's links still land
+(`lib/flights.ts` `legacyFlightsRoute`, routed by the store's
+`openDialogFor("flights", …)` and by `lib/surfaceHash.ts`, which rewrites the
+URL in place):
+
+| Old link / target | Lands on |
+|---|---|
+| `#flights`, `sky`, `sky/<title>`, `board` | the Sky (`#sky`, `#sky/<title>`) |
+| `flyways[/<id>]`, `plans[/<id>]` | the Sky with the shelf open (and that flyway's card) — `useUi.showFlyways(id)` |
+| `sources[/<x>]` | Intake, target `<x>` (`#intake/<x>`) |
+| `checklists[/<branch>]` | Verify, that checklist (`#verify/<branch>`) |
+| `schedule[/<x>]` | Schedule, target `<x>` (`#schedule`) |
+| anything else | the Sky |
+
+**The sky is a view, not a tab.** It is the main area's second view, beside
+the grid ([The Sky](#the-sky), docs/web-ui.md "Two views: the grid and the
+sky"); `#sky` / `#sky/<title>` are its addresses.
 
 **Pane strip.** A session in a flight shows, above its pane body, a one-line
 strip: the bird · `Ticket to merge · ●●●○○○ · Reviews settle (4m)` — a button
@@ -408,17 +427,20 @@ session's `title`).
 gold when a flight is perched on you (via `deriveSessionState`: a perch is a
 Needs-you state, in the bell, where its row reads `Perched on you: <stop>`).
 
-**Starting opens the session.** Every start (Waiting to fly's Fly, Fly this
-flyway, a template run, a manual flight) ends in `selectSession(title)` as
+**Starting opens the session.** Every start (Waiting to fly's Fly, a flyway
+flown from the shelf or Schedule's Fly now, a template run, a manual flight)
+ends in `selectSession(title)` as
 soon as the row exists, the way `templateRun.ts` already does.
 
 **Phone.** No canvas: a session perched on you gets a card with the bird,
 `<flyway> · Perch: <stop>`, and **Done** / **Skip**.
 
-**Tours.** A short `flights` CoachTour (`lib/tours/flights.ts`): the top
-bar's Grid · Sky toggle (`data-tour="view-sky"`), the bird (`flights-bird`,
-falling back to the toggle), + New session (`flights-newblock`, likewise),
-Flyways, Describe a stop.
+**Tours.** A short `sky` CoachTour (`lib/tours/sky.ts`; it was the `flights`
+tour): the top bar's Grid · Sky toggle (`data-tour="view-sky"`), a line
+(`sky-line`), the bird (`flights-bird`), the shelf (`sky-shelf`), each
+falling back to the toggle. Its **?** ends the Sky's toolbar; it opens by
+itself the first time the Sky is shown in the calm first hour. The Intake,
+Verify and Schedule tours walk their own dialogs again.
 
 ### The Sky
 
@@ -576,10 +598,10 @@ workers), is each card under the Sky drawer's *Landed*.
   starts with "Perch:" (or the old "You:", any case), which is read without
   it. The rail chip is capped in width with an ellipsis; its tooltip has the
   whole text.
-- **Fly this flyway** on a flyway with no `session.repo_path` (or a ticket /
-  PR / issue flyway) opens an inline row in the editor — a repository field
-  with Browse… and the open sessions as chips — rather than the New dialog; it
-  posts `repo_path` or `title`.
+- **Flying a flyway from the shelf** with no line focused shows the line
+  picker (a row of chips) and posts `title`; Schedule's **Fly now** posts
+  `{plan_id}` alone, so the server creates the session from the flyway's
+  session defaults.
 - **A waiting item's flyway chips** send `plan` only when one is picked: the
   default chip ("Default · <built-in>", which the server cuts at the source's
   depth) leaves the server's own resolution in charge. The built-in it names
@@ -587,7 +609,7 @@ workers), is each card under the Sky drawer's *Landed*.
   `builtin:ticket`. A row's chips start on its source's `plan` when one is
   set; picking the default chip there then sends the built-in's id, since ""
   would mean the source's flyway.
-- **The source cards' Flyway chips** (Sources tab) write `plan` with the
+- **The source cards' Flyway chips** (Intake's source cards) write `plan` with the
   card's existing save: on the ticketing source via `PUT
   /api/settings/ticketing/sources`, under `github.repo_settings[repo]` /
   `github.issue_repo_settings[repo]` via `POST /api/settings`. The default chip
@@ -600,8 +622,8 @@ workers), is each card under the Sky drawer's *Landed*.
   an `int` a field with its unit (`*minutes` → "min", `max_rounds` →
   "rounds"), a `textarea` the prompt box (a perch's `items` one per line,
   stored as a list), a `text` the field look.
-- **Badge.** A flight perched on a `verify` stop is counted once, as Verify's
-  due checklist, not again as a flight waiting on you.
+- **Badge.** A flight perched on a `verify` stop is counted once, by Verify's
+  badge as its due checklist, not again on the Sky toggle's perch count.
 - **Bell.** Until the outbox lists a `flight_you` row for a session, the UI
   makes one from the session row's `flight` field (Done / Skip post the step
   routes with that row's `flight.id` / `flight.step.id`).
@@ -782,7 +804,7 @@ had to choose. Field and route names are unchanged.
 | Routes | `backend/web/routes/flights.py` |
 | Describe-a-step one-shot | `backend/web/core/flight_describe.py` |
 | Intake / schedule / verify hooks | `ticket_start.launch`, `pr_review.launch`, `issue_start.launch`, `server.py` (`_intake_plan`, `_arm_intake`, the result route's `session.test_plan_settled`), `ticket_ingestion/session_runner.py` (`_arm`), `template_schedule.py` (`tick_flights`), `pending.py` (the provisioning row's `flight`) |
-| Frontend | `frontend/src/components/flights/` (SkyView + SkyDrawer = the sky view, with SkyLine / SkyFlock / FlywayShelf / FlywayCard, IntakeLane, NewSessionBlock, FlywayCanvas, SessionFlight, useSessionLine, PlanEditor = the Flyways editor, StopParts, controls, Bird, useWaiting), `frontend/src/lib/flights.ts`, `flightDiagram.ts` (the canvas's model, the session diagram and `birdPerch`), `skyLayout.ts` (the sky's placement, camera, views, layout store), `viewMode.ts` (grid ⇄ sky), `flightsApi.ts`, `tours/flights.ts`; the pane's Flight tab in `components/grid/Pane.tsx` |
+| Frontend | `frontend/src/components/flights/` (SkyView + SkyDrawer = the sky view, with SkyLine / SkyFlock / FlywayShelf / FlywayCard, IntakeLane, NewSessionBlock, FlywayCanvas, SessionFlight, useSessionLine, FlywayInspector = the card's trigger, StopParts, controls, Bird, useWaiting; CSS `Flights.css` + `FlywayInspector.css`), `frontend/src/lib/flights.ts`, `flightDiagram.ts` (the canvas's model, the session diagram and `birdPerch`), `skyLayout.ts` (the sky's placement, camera, views, layout store), `viewMode.ts` (grid ⇄ sky), `flightsApi.ts`, `tours/sky.ts`; Schedule's scheduled flyways in `components/dialogs/TemplatesDialog.tsx`; the pane's Flight tab in `components/grid/Pane.tsx` |
 | Tests | `tests/unit/test_flights*.py`, `frontend/src/__tests__/flights*.test.ts`, `flightDiagram.test.ts` |
 | CLI | `mindflock flights` (list), `mindflock flight flyways` (alias `plans`), `mindflock flight start <flyway> [--repo …] [--title …]`, `mindflock flight done\|skip\|cancel <id>` (`backend/cli.py`) |
 
@@ -844,8 +866,8 @@ from then on hangs off the block as a stub pointing at its line.
 - **Waiting items** — up to six chips (reference + headline + **Fly**), then
   "n more". A source with nothing waiting says *Nothing waiting*. A refused
   Fly shows the server's sentence under its chip.
-- **⋯** — opens the source on Flights → Sources
-  (`openDialogFor("flights", "sources/<kind>:<id>")`).
+- **⋯** — opens the source in Intake
+  (`openDialogFor("intake", "<kind>:<id>")`).
 
 An item from a source the settings document does not name (an older server,
 a source removed between polls) still gets a block, so nothing waiting is ever
@@ -1087,15 +1109,23 @@ past ten, "+N").
 
 ## The flyway card
 
-`FlywayCard {x, y, plans, initial?, onSaved, onCancel}`: a flyway made on the
-sky, floating at (x, y). The Flyways tab's editor cut to what a card holds:
+`FlywayCard {x, y, plans, initial?, onSaved, onCancel}`: a flyway made or
+edited on the sky, floating at (x, y) (in the list on a phone). Since round 8
+it is THE flyway editor (the Flights dialog's Flyways tab is retired):
 
 - the **name** (a fresh "New flyway", "New flyway 2"… that the shelf doesn't
   have yet, unless `initial` names it);
 - the stops on `FlywayCanvas` in editor mode — drag to reorder, ← → / Delete,
   `+` between boxes or at the end for the stop palette — with the selected
-  stop in the shared `StopInspector` (Earlier / Later / Remove) and
-  **Describe a stop…** under the canvas (all from `StopParts.tsx`);
+  stop in the shared `StopInspector` (Earlier / Later / Duplicate / Remove)
+  and **Describe a stop…** under the canvas (all from `StopParts.tsx`);
+- **Takes off: <how>** — the trigger and, for by-hand and scheduled flyways,
+  the session defaults (`FlywayTrigger` in `FlywayInspector.tsx`), folded to
+  that line; open from the start on a scheduled flyway;
+- its **⋯** — **Reset to default** on a built-in (`POST
+  /api/flights/plans/{id}/reset`, the card reloads on it) or **Delete
+  flyway…** on one of yours (asked inline; `DELETE /api/flights/plans/{id}`,
+  then the card closes); a new, unsaved card has no ⋯;
 - **Save & fly on…** — saves, then `onSaved(plan)`: the host offers the line
   picker and flies it (`startFlightOn(title, planId)` in `lib/flightsApi.ts`);
 - **Save** — `POST /api/flights/plans` (`savePlan`; an `id` in `initial`, or
@@ -1105,9 +1135,13 @@ sky, floating at (x, y). The Flyways tab's editor cut to what a card holds:
   desktop app has no `confirm()`); Escape does the same.
 
 A refusal shows the server's sentence and selects the stop its `field` names.
-The trigger and the session defaults stay in the Flyways tab: a card makes a
-manual flyway (or keeps the trigger it was given). `saveCard(draft, andFly,
-onSaved)` is the card's save, exported for the tests.
+A new card makes a manual flyway unless its trigger is changed. `saveCard(draft,
+andFly, onSaved)` is the card's save, exported for the tests.
+
+The host (`SkyView`) also opens the shelf — and a card — on request:
+`useUi.showFlyways(planId?)` sets `skyShelf {plan, n}` and switches to the
+sky; the sky opens the shelf, then (once the flyways have loaded) the card of
+`plan` (`"new"` = a fresh one) and clears the request (`takeSkyShelf`).
 
 ## Save as flyway
 
@@ -1118,3 +1152,36 @@ on_fail — re-numbered `s1..sN`, a deep copy of each config with the driver's
 `_`-prefixed keys dropped, and a manual trigger unless one is passed. Runtime
 state never rides along (`step_states`, `detail.performing`, the cursor live
 beside the steps, not in them).
+
+## Round 8: flat again
+
+The owner, after round 7: *"i dont know how much i love sources (intake)
+schedule and verify tabs within the flight thing … menus within menus within
+menus can get very tricky very fast."* So:
+
+- **The top bar is flat**: New · Grid / Sky · Intake · Verify · Schedule ·
+  Settings — the three buttons with their own badges, tooltips, calm-hour
+  rule (`lib/calm.ts` `topBarShows`: Verify after the first checklist,
+  Schedule after the first template), fold order (Settings, Schedule, Verify,
+  then the toggle) and shortcuts (`Alt+I` / `Alt+V` / `Alt+S`, the old ids).
+  The Flights button is gone; the Sky toggle counts the flights perched on
+  you (`perchBadge`).
+- **The Flights dialog is retired** (`FlightsDialog.tsx`, `PlanEditor.tsx`,
+  `FlightsDialog.css` deleted; the kit CSS lives on as `Flights.css`, the
+  palette / inspector / trigger CSS as `FlywayInspector.css`). The store
+  opens Intake / Verify / Schedule directly again (`"templates"` →
+  Schedule). `"flights"` stays in `DialogName` only as an alias the store
+  routes (`legacyFlightsRoute`; the table under [Contract: the UI](#contract-the-ui))
+  — `SkyLine`'s **Show only this line** still calls
+  `openDialogFor("flights", "sky/<title>")`, which lands on `#sky/<title>`.
+- **Flyways live in the Sky**: the shelf lists, makes and flies them; the
+  card edits, resets and deletes them and carries the trigger and session
+  defaults that were the Flyways tab's.
+- **Scheduled flyways show in Schedule** (`scheduledFlyways`,
+  `flywayNextLine` in `TemplatesDialog.tsx`), with **Fly now** and **Edit in
+  the Sky**; nothing scheduled, no section.
+- **The drawer** keeps Perched on you / Waiting to fly / Landed; its
+  checklist rows open Verify, its *Intake ›* opens Intake. The intake lane's
+  ⋯ opens the source in Intake (`<kind>:<id>`, Intake's own deep link).
+- **Tours**: `flights` became `sky` (toggle, a line, the bird, the shelf);
+  Intake / Verify / Schedule walk their dialogs.
