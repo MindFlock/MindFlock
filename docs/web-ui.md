@@ -2695,7 +2695,7 @@ Asking a session to hand its task to MindFlock workers takes no typing
 - **`Alt+Shift+G` — Workers on every prompt (Flock).** A per-session switch:
   while on, the server adds the request to every prompt submitted in that
   session (`POST /api/instances/{title}/flock {on}`; rows carry `flock`), so
-  you type nothing extra. The pane header's **🐦 Flock** control (filled when
+  you type nothing extra. The pane header's **Flock** control (the MindFlock raven, filled (filled when
   on), the row's ⋯ menu (**Workers on every prompt**, ✓ when on, under
   Session) and the palette flip the same switch. Offered on this machine's own
   sessions only — not a peer's, a shared folder, another device's, or to a
