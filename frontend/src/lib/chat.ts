@@ -21,7 +21,11 @@
  * `openChat(title)` opens one by hand — the panel's own launcher does, and
  * the rail's guest pill may later. Rows of another device (`<device>::…`)
  * never get one: their chat lives on that device, whose events don't reach
- * this page. */
+ * this page. A PEER's shared session (`<peer>::<title>`, a row with
+ * `remote_peer`) does: my server carries its chat over the peer link
+ * (backend.peer.chat_bridge) and emits `session.chat` for the row, so it is
+ * a chat like any other — the panel registers those rows (`setPeerRows`),
+ * and the card pops open when the sharer writes (a pill once I closed it). */
 
 import { useSyncExternalStore } from "react";
 import { instApi } from "../api/client";
@@ -70,9 +74,26 @@ function seq(id: string): number {
   return Number(String(id || "").replace(/^c/, "")) || 0;
 }
 
-/** A session this page can chat on: not another device's row. */
+/** `<peer>::<title>` rows on this rail → the peer's name (`setPeerRows`). */
+let peerRows: Record<string, string> = {};
+
+/** The peers' shared sessions on this rail right now (rows with
+ * `remote_peer`): their chats ride the peer link. */
+export function setPeerRows(rows: { title: string; name: string }[]): void {
+  const next: Record<string, string> = {};
+  for (const r of rows) if (r.title) next[r.title] = r.name || r.title.split("::")[0];
+  peerRows = next;
+}
+
+/** The peer whose shared session `title` is, or "" (a session of mine). */
+export function peerChatName(title: string): string {
+  return peerRows[title] || "";
+}
+
+/** A session this page can chat on: mine, or a peer's shared session — not
+ * another device's row. */
 export function chatable(title: string): boolean {
-  return !!title && !title.includes("::");
+  return !!title && (!title.includes("::") || title in peerRows);
 }
 
 function put(s: ChatState, w: ChatWindow): ChatState {
@@ -118,15 +139,16 @@ export function onJoined(s: ChatState, title: string, person: string): ChatState
 
 /** A new message on `title` that isn't mine: one more unread on a
  * minimized window; a missing window opens minimized with it — or, in a
- * guest's browser, opens outright. */
-export function onMessage(s: ChatState, title: string, opts: { guest?: boolean } = {}): ChatState {
+ * guest's browser, opens outright; on a peer's shared session (`peer`) too,
+ * unless I closed it in this page load. */
+export function onMessage(s: ChatState, title: string, opts: { guest?: boolean; peer?: boolean } = {}): ChatState {
   if (!chatable(title)) return s;
   const cur = s.windows.find((w) => w.title === title);
   if (cur) {
     if (cur.mode === "open") return s;
     return { ...s, windows: s.windows.map((w) => (w.title === title ? { ...w, unread: w.unread + 1 } : w)) };
   }
-  if (opts.guest) return put(s, { title, mode: "open", unread: 0 });
+  if (opts.guest || (opts.peer && !s.closedTitles[title])) return put(s, { title, mode: "open", unread: 0 });
   return put(s, { title, mode: "min", unread: 1 });
 }
 
@@ -183,7 +205,7 @@ export function loadChat(title: string, count = false): Promise<void> {
       if (r?.me?.id) me = r.me;
       const { list, added } = mergeMessages(msgs[title] || [], r?.messages || []);
       if (list !== msgs[title]) msgs = { ...msgs, [title]: list };
-      if (count && prev) for (const m of added) if (m.from !== me?.id) state = onMessage(state, title, { guest: isGuest });
+      if (count && prev) for (const m of added) if (m.from !== me?.id) state = onMessage(state, title, popOpts(title));
       notify();
     })
     .catch(() => {})
@@ -222,16 +244,26 @@ export async function sendChat(title: string, text: string): Promise<string> {
   }
 }
 
+function popOpts(title: string): { guest: boolean; peer: boolean } {
+  return { guest: isGuest, peer: !!peerRows[title] };
+}
+
 /** One `session.chat` envelope. */
 export async function applyChatEvent(env: EventEnvelope): Promise<void> {
   const title = String(env?.session || "");
   const m = (env?.data || {}) as unknown as ChatMessage;
-  if (!chatable(title) || !m?.id) return;
+  if (!title || !m?.id) return;
+  // My own server emits `session.chat` for a `::` title only for a peer's
+  // shared session (its copy of their chat): one the rail hasn't listed yet.
+  if (title.includes("::") && !peerRows[title] && !isGuest) {
+    peerRows = { ...peerRows, [title]: title.split("::")[0] };
+  }
+  if (!chatable(title)) return;
   const known = !!msgs[title];
   const isNew = !(msgs[title] || []).some((x) => x.id === m.id);
   if (!known || !me) await loadChat(title); // who I am, and what came before
   msgs = { ...msgs, [title]: mergeMessages(msgs[title] || [], [m]).list };
-  if (isNew && m.from !== me?.id) state = onMessage(state, title, { guest: isGuest });
+  if (isNew && m.from !== me?.id) state = onMessage(state, title, popOpts(title));
   notify();
 }
 
@@ -303,6 +335,7 @@ export function _resetChat(): void {
   me = null;
   isGuest = false;
   bridged = false;
+  peerRows = {};
   loading.clear();
   notify();
 }

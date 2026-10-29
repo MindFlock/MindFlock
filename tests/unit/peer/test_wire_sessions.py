@@ -39,6 +39,7 @@ def test_new_ops_are_on_the_allow_list():
         "term_in",
         "term_resize",
         "sessions_changed",
+        "chat_out",
     }
     assert "sessions" in wire.CAPS
 
@@ -190,3 +191,76 @@ def test_encode_round_trip():
     frame = {"t": "push", "op": "term_out", "p": {"term_id": TID, "data": B64}}
     body = wire.encode(frame)[4:]
     assert wire.decode(body) == frame
+
+
+# -- the chat across the link ---------------------------------------------
+
+
+def chat_line(**kw):
+    base = {"id": "c12", "from": "you", "name": "Erik", "text": "hi", "ts": 1.5}
+    base.update(kw)
+    return base
+
+
+def test_chat_ops_are_listed():
+    assert "chat_msg" in wire.OPS and "chat_msg" in wire.CAPS
+    assert "chat_out" in wire.PUSH_OPS
+
+
+def test_chat_msg_request_and_answer():
+    p = {"title": "api-fix", "text": "hello\nthere", "from_name": "Pat"}
+    assert wire.validate_request("chat_msg", dict(p)) == p
+    assert wire.validate_response("chat_msg", {"ok": True, "id": "c7"}, p) == {
+        "ok": True,
+        "id": "c7",
+    }
+
+
+@pytest.mark.parametrize(
+    "p",
+    [
+        {"title": "api-fix", "text": "", "from_name": ""},
+        {"title": "api-fix", "text": "x" * 2001, "from_name": ""},
+        {"title": "api-fix", "text": "a\x1b[2Jb", "from_name": ""},
+        {"title": "", "text": "hi", "from_name": ""},
+        {"title": "api-fix", "text": "hi", "from_name": "n" * 65},
+        {"title": "api-fix", "text": "hi"},
+        {"title": "api-fix", "text": "hi", "from_name": "", "from": "owner"},
+    ],
+)
+def test_chat_msg_refused(p):
+    with pytest.raises(wire.ProtocolError):
+        wire.validate_request("chat_msg", p)
+
+
+@pytest.mark.parametrize("res", [{"ok": True, "id": "x1"}, {"ok": False, "id": "c1"}])
+def test_chat_msg_bad_answers(res):
+    with pytest.raises(wire.ProtocolError):
+        wire.validate_response("chat_msg", res, {})
+
+
+def test_chat_out_push():
+    p = {"title": "api-fix", "msg": chat_line(text="x" * 2000)}
+    assert wire.validate_push("chat_out", p) == p
+    # Tolerant inbound drops a newer peer's extra keys, inside msg too.
+    got = wire.validate_push(
+        "chat_out", {"title": "api-fix", "msg": chat_line(extra=1)}, strict=False
+    )
+    assert got["msg"] == chat_line()
+
+
+@pytest.mark.parametrize(
+    "msg",
+    [
+        chat_line(id="12"),
+        chat_line(text=""),
+        chat_line(text="x" * 2001),
+        chat_line(name="n" * 65),
+        chat_line(ts=True),
+        chat_line(ts="1"),
+        chat_line(text="\x07"),
+    ],
+)
+def test_chat_out_refused(msg):
+    with pytest.raises(wire.ProtocolError):
+        wire.validate_push("chat_out", {"title": "api-fix", "msg": msg})

@@ -1,8 +1,9 @@
 """Session chat (:mod:`backend.web.core.chat`, docs/people.md "A small chat"):
 the store (ids, since, caps, stripping, forget on delete), the
 ``session.chat`` event, and ``/api/instances/{title}/chat`` for the owner
-(a remote row 409, an unknown session 404). The guest's side is in
-test_guest_links.py.
+(a remote row 409, an unknown session 404), and ``receive`` (another
+machine's lines kept under a peer row). The guest's side is in
+test_guest_links.py; the peer link's in tests/unit/peer/test_chat_bridge.py.
 """
 
 from __future__ import annotations
@@ -149,3 +150,28 @@ def test_unknown_session_is_404_and_remote_row_409(client):
     assert r.status_code not in (200, 201)
     assert routes._refusal("mac::alpha").status_code == 409
     assert chat.messages("mac::alpha") == []
+
+
+# --------------------------------------------------------------------------- #
+# receive: another machine's lines (a peer row's copy)
+# --------------------------------------------------------------------------- #
+def test_receive_keeps_ids_dedupes_and_orders():
+    seen, unsub = _events("session.chat")
+    try:
+        line = {"id": "c40", "from": "x", "name": "Bob", "text": "hi\x07", "ts": 5.0}
+        got = chat.receive("Bob::alpha", line)
+        assert got == {**line, "text": "hi"}
+        assert chat.receive("Bob::alpha", line) is None  # already here
+        chat.receive("Bob::alpha", {**line, "id": "c38"})
+        assert chat.receive("Bob::alpha", {**line, "id": "c41", "text": " "}) is None
+        assert chat.receive("Bob::alpha", {**line, "id": "nope"}) is None
+    finally:
+        unsub()
+    assert [m["id"] for m in chat.messages("Bob::alpha")] == ["c38", "c40"]
+    assert [m["id"] for m in chat.messages("Bob::alpha", "c38")] == ["c40"]
+    assert [(e["session"], e["data"]["id"]) for e in seen] == [
+        ("Bob::alpha", "c40"),
+        ("Bob::alpha", "c38"),
+    ]
+    # Its ids are the other machine's: my own counter is untouched.
+    assert chat.post("alpha", {"id": "p1", "name": "Erik"}, "mine")["id"] == "c1"
