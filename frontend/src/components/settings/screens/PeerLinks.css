@@ -593,6 +593,38 @@
   max-height: 30vh;
   font-size: 13px;
 }
+/* The invite picker (peer/InviteSessions.tsx): the same card as the guest
+   picker. */
+#peer-invite-pick-form {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px;
+  width: 500px;
+  max-width: 92vw;
+  max-height: 85vh;
+  overflow: auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--text);
+}
+#peer-invite-pick-form h2 {
+  margin: 0;
+  font-size: 16px;
+}
+#peer-invite-pick-form > .set-hint {
+  margin: 0;
+  font-size: 12px;
+}
+#peer-invite-pick-form .peer-guest-pick {
+  max-height: 30vh;
+  font-size: 13px;
+}
+#peer-invite-pick-form .peer-guest-pick select {
+  margin-left: 22px;
+}
 .peer-share-modes {
   border: 0;
   margin: 0;

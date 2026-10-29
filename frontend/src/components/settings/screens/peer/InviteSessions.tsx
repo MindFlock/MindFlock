@@ -17,7 +17,7 @@
  * The invite code — and the link that carries it — is shown only in the
  * response that made it (the server never lists it again). */
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../../../api/client";
 import type { Instance } from "../../../../api/types";
 import { copyText } from "../../../../lib/clipboard";
@@ -39,24 +39,6 @@ import { displayName } from "../../../../state/store";
 import { InstallMissing, type InstallStep } from "../../../dialogs/InstallTerminal";
 import { Modal } from "../../../Modal";
 import { errText } from "./useAct";
-
-/** The picker's card: the look of #peer-guests-pick-form (PeerLinks.css),
- * which is keyed to that form's id. */
-const CARD: CSSProperties = {
-  background: "var(--panel)",
-  border: "1px solid var(--border)",
-  borderRadius: 12,
-  padding: 22,
-  width: 500,
-  maxWidth: "92vw",
-  maxHeight: "85vh",
-  overflow: "auto",
-  boxSizing: "border-box",
-  display: "flex",
-  flexDirection: "column",
-  gap: 12,
-  color: "var(--text)",
-};
 
 export type MadeInvite = PeerInvite & { at: number };
 
@@ -294,7 +276,6 @@ export function InviteSessions(props: {
         <Modal id="peer-invite-pick" role="dialog" aria-modal="true" portal onClose={cancelPick}>
           <form
             id="peer-invite-pick-form"
-            style={CARD}
             onSubmit={(e) => {
               e.preventDefault();
               void create();

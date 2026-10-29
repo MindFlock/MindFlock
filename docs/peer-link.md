@@ -443,6 +443,7 @@ follows `diff`, `mirror_pull` follows `read_file`; `status` is always allowed). 
 | `term_close` | `{"term_id": hex16}` | `{"ok": bool}` |
 | `session_focus` | `{"title": line 0..200}` (`""` = moved off) | `{"ok": bool}` |
 | `agent_msg` | `{"title": line 1..200, "text": text 1..20000, "from_title": line 1..200, "from_name": line ≤200, "msg_id": id, "reply_to"?: id, "hop"?: int 0..1000}` | `{"ok": true, "id": id}` — the receiver's mailbox id; see [Agent messages across the link](#agent-messages-across-the-link) |
+| `chat_msg` | `{"title": line 1..200, "text": text 1..2000, "from_name": line ≤64}` | `{"ok": true, "id": "c<digits>"}` — the line's id in the receiver's chat for `title` (its `chat_out` echo carries the same id); see [The chat across the link](#the-chat-across-the-link) |
 
 `half` is `{"repo_name": line ≤128, "branch": line ≤200, "program": line ≤64}`
 — a folder's NAME and the CLI's name, never a path or a command line. `by` is
@@ -1318,6 +1319,7 @@ A terminal is a stream, not request-sized, so it rides **push frames** —
 | `term_in` | opener | `{"term_id", "data": base64 ≤ 32 KiB raw}` — keystrokes / paste |
 | `term_resize` | opener | `{"term_id", "cols": 1..1000, "rows": 1..1000}` |
 | `sessions_changed` | sharer | `{}` — my share list changed: ask `sessions` again |
+| `chat_out` | sharer | `{"title": line 1..200, "msg": {"id": "c<digits>", "from": line ≤128, "name": line ≤64, "text": text 1..2000, "ts": number}}` — one line of my chat for a session I share on this link; `from` is `"you"` on the receiver's own lines |
 
 Evolving the wire: an older peer closes the connection on an unknown frame
 type, so a push only ever goes to a peer that **proved** it speaks them — it
@@ -1388,6 +1390,8 @@ to `core.remote` as a device):
 | `POST /api/instances/<peer>::<title>/focus` | `{}` = this page selected the row (every 30 s while it stays selected), `{"left": true}` = moved off → `session_focus` |
 | `POST /api/instances/<peer>::<title>/messages` | an agent's message to their session: `agent_msg` (below) → **202** |
 | `GET /api/instances/<peer>::<title>/messages` | **409** "their inbox lives on their machine" — never proxied |
+| `GET /api/instances/<peer>::<title>/chat` | `{messages, me}`: my copy of their chat for the session (`chat_out` lines since the row appeared) — **409** not shared with me, **503** offline |
+| `POST /api/instances/<peer>::<title>/chat` | `{text}` → `chat_msg` → **202** the message as kept here; 400 blank, 409 not shared, 503 offline |
 | anything else | **409** "This session lives on <peer>'s machine" (`send` may come later) |
 
 All refuse a request relayed by another MindFlock (X-MindFlock-Remote) and a
@@ -1405,8 +1409,9 @@ with me through the ordinary MindFlock MCP `send_message(to="<peer>::<title>")`
   its display name; `msg_id` the sender's id for it (`x<ms>_<8 hex>`), which
   a reply names as `reply_to`; `hop` the reply chain's depth. Text is capped
   at `MAX_MSG_TEXT` (20000) and is "text" (tab/newline/CR only).
-  `wire.CAPS = ("sessions", "agent_msg")`; an older peer answers
-  `err: "unsupported"` and the sender is told they need to update.
+  `wire.CAPS = ("sessions", "agent_msg", "chat_msg")`; an older peer answers
+  `err: "unsupported"` and the sender is told they need to update
+  (`chat_out` goes only to a peer whose handshake advertised `chat_msg`).
 - **The receiver** (`PeerService._inbound_agent_msg`). No link perm grants
   it (`transport._OP_PERM` is `None`); sharing the session is the grant, so
   it is refused `not permitted: safety number not confirmed` before *It
@@ -1444,6 +1449,38 @@ with me through the ordinary MindFlock MCP `send_message(to="<peer>::<title>")`
   `not shared` → 409 "stopped sharing …" (and their list is re-asked).
   Refused like the other row routes when relayed by another MindFlock or
   from a guest link (403), and a write needs `auth.may_configure`.
+
+### The chat across the link
+
+The session chat (people.md "A small chat") of a shared session is one chat,
+on the sharer's machine; the opener talks in it from the `<peer>::<title>`
+row. Agents are never in it — no line reaches either terminal or mailbox.
+`backend/peer/chat_bridge.py`:
+
+- **The op.** `chat_msg {title, text, from_name}` → `{ok, id}`. No link perm
+  grants it (`_OP_PERM["chat_msg"] = None`); like the other session ops it
+  waits for *It matches* (`_SESSION_SAS_OPS`). The receiver
+  (`chat_bridge.inbound_chat`) refuses a title not shared on THIS link
+  (`err: "not shared"`), else posts it into its chat for `title` as
+  `peer:<link id>`, named `from_name` (or the link's name for the peer).
+- **The push.** Every line of a shared session's chat — the owner's, a
+  guest's, the peer's own — goes as `chat_out {title, msg}` to each
+  connected link that session is shared on whose peer advertised
+  `chat_msg` (`chat_bridge.fan_out`, from a `session.chat` subscription
+  installed at service start). Link ids are per side, so on the receiver's
+  own lines `from` is `"you"`.
+- **The opener** (`chat_bridge.inbound_out`) keeps a `chat_out` only for a
+  session that peer shares with it, under the row's title
+  (`chat.receive`: the sharer's id, deduped, in id order), and emits
+  `session.chat` for the row so the panel shows it. `from` is rewritten:
+  `"you"` → my own id, anything else `peer:<link id>:<their id>`. Sending
+  (`chat_bridge.send`, `POST …/chat`) asks `chat_msg` and keeps the answer's
+  line under the same id, so the echo is no second line. The copies are
+  forgotten on `peer.state` disconnected, `peer.link_removed`, and their
+  `peer.session_unshared` for that session.
+- **Older peers.** One that doesn't know `chat_msg` answers
+  `"unsupported"` → 409 "their MindFlock is too old"; it never gets a
+  `chat_out` (no `chat_msg` in its caps).
 
 ### Management (People)
 
