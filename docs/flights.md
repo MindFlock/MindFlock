@@ -34,7 +34,7 @@ The words are birds', never planes' — MindFlock is a flock:
 | **flight** | one run of a flyway — one ticket, one PR, one scheduled job, or something you started by hand | a *flight* |
 | **stop** | one box on the line: a *robot* stop the server carries out by itself | a *step* |
 | **perch** | a stop that waits on you: the flight perches, pings you, and flies on when you press **Done** | a step of kind `you` |
-| **sky** | the open space where every flight is drawn: Flights' first tab, a pannable, zoomable plane | (UI only) |
+| **sky** | the open space where every flight is drawn: the main area's second view beside the grid (the same sessions as lines), a pannable, zoomable plane | (UI only) |
 | **line** | one session's row of blocks in the sky: its session box, its workers, its stops or rungs, and the trailing + | (UI only) |
 
 Glossary in one line: *flyway* = the route, *flight* = one run, *stop* = one
@@ -61,7 +61,9 @@ and their stores are untouched:
 | Fast-track depth (off→commit→push→pr→merge) | the **ship** stops of a flyway; a per-source depth still works and maps to the plain ship ladder at that rung (the agent, then commit → … → the depth — nothing else); an armed ⏩ is drawn as rung boxes on the session's line ([The session diagram](#the-session-diagram)) | `autopilot.json` |
 
 The top bar shows **Flights** where Intake / Verify / Schedule were. `Alt+I`
-opens Flights (the Sky), `Alt+V` opens it on Checklists, `Alt+S` on Schedule.
+opens Flights (on Flyways), `Alt+V` opens it on Checklists, `Alt+S` on
+Schedule; the sky is the main area's other view (the top bar's Grid · Sky
+toggle, `Alt+Y`).
 The badge counts what waits on you: flights perched on you, plus Verify's
 due/failing checklists, plus items waiting to fly that will not auto-start.
 
@@ -357,13 +359,9 @@ dialog's field look, a prompt its prompt box, a number a field with its unit
 ("10 min"), a yes/no a switch chip (`components/flights/controls.tsx`).
 
 **Dialog** `#flights-dialog` (`frontend/src/components/flights/`, CSS prefix
-`fl-`), tabs:
+`fl-`), tabs (the top-bar button and `Alt+I` open it on Flyways):
 
-1. **Sky** — the open expanse ([The Sky](#the-sky)); it replaced the Board
-   (`board` / `#flights/board` still land here) and the Board's groups live
-   on in its drawer. On this tab the dialog takes the whole window
-   (`.sky-full`).
-2. **Flyways** — the editor (tab id `plans`). Left: the flyway list
+1. **Flyways** — the editor (tab id `plans`; `#flights`). Left: the flyway list
    (built-ins marked). Right: the flyway on the canvas, the stop palette, the
    inspector for the selected stop (its fields in the controls above, `on_fail`
    as chips), the trigger (by hand / ticket / PR / issue / schedule with its
@@ -373,11 +371,19 @@ dialog's field look, a prompt its prompt box, a number a field with its unit
    highlighted until saved. **Fly this flyway** starts a flight of it right
    away (an inline row asks for a repository or an open session when the
    flyway has none).
-3. **Sources** — the existing Intake tab components (Tickets / Pull requests /
+2. **Sources** — the existing Intake tab components (Tickets / Pull requests /
    Issues source cards and switches), mounted unchanged, each card with its
    **Flyway** chips.
-4. **Schedule** — the existing templates view, mounted unchanged.
-5. **Checklists** — the existing Verify list, mounted unchanged.
+3. **Schedule** — the existing templates view, mounted unchanged.
+4. **Checklists** — the existing Verify list, mounted unchanged.
+
+**The sky is a view, not a tab.** It was the dialog's first tab (and before
+it the Board); it is the main area's second view now, beside the grid
+([The Sky](#the-sky), docs/web-ui.md "Two views: the grid and the sky").
+Every address that named the tab — `sky`, `sky/<title>`, `board`,
+`#flights/sky/<title>`, `#flights/board` — opens the view (`skyRouteOf`,
+routed by the store's `openDialogFor`), and the URL becomes `#sky` /
+`#sky/<title>`.
 
 **Pane strip.** A session in a flight shows, above its pane body, a one-line
 strip: the bird · `Ticket to merge · ●●●○○○ · Reviews settle (4m)` — a button
@@ -391,8 +397,8 @@ Map (header item `flight`), drawing [the session diagram](#the-session-diagram)
 full width. It shows once the session has anything to draw (a flight, workers,
 a parent, an armed fast-track), badged **!** while perched on you or halted;
 the session ⋯ menu's **Fly a flyway…** opens it on any session, **Show in the
-Sky** opens the Sky on it, and the tab's own **Open in the Sky** does the same
-(`#flights/sky/<title>`). The bird stands on the line's active box. With
+Sky** switches to the sky on its line alone, and the tab's own **Open in the
+Sky** does the same (`showInSky`, `#sky/<title>`). The bird stands on the line's active box. With
 nothing on the line it also offers the flyways as cards (**Fly this flyway**,
 built-ins first, the stops as tiny boxes) and **Describe a flyway…** (describe
 `want=plan` → `POST /api/flights/plans` → `POST /api/flights/start` with this
@@ -409,45 +415,79 @@ soon as the row exists, the way `templateRun.ts` already does.
 **Phone.** No canvas: a session perched on you gets a card with the bird,
 `<flyway> · Perch: <stop>`, and **Done** / **Skip**.
 
-**Tours.** A short `flights` CoachTour (`lib/tours/flights.ts`): the sky
-(`data-tour="flights-sky"`), the bird (`flights-bird`), + New session
-(`flights-newblock`), Flyways, Describe a stop.
+**Tours.** A short `flights` CoachTour (`lib/tours/flights.ts`): the top
+bar's Grid · Sky toggle (`data-tour="view-sky"`), the bird (`flights-bird`,
+falling back to the toggle), + New session (`flights-newblock`, likewise),
+Flyways, Describe a stop.
 
 ### The Sky
 
-Flights' first tab (`components/flights/Sky.tsx`, the pure rules in
-`lib/skyLayout.ts`) — the big open expanse where every session floats:
+The main area's second view, beside the grid (`components/flights/SkyView.tsx`,
+the switch in `lib/viewMode.ts`, the pure rules in `lib/skyLayout.ts`): the
+same sessions as the grid, each drawn as a line on one open expanse. The rail,
+top bar, bell and dialogs stay; App renders it in the grid's place while
+`useUi.view === "sky"` (`mf_view`, per device).
 
+- **An isomorphism of the grid**: one selection (`useUi.focused`) — a press
+  on a line selects its session, a selection anywhere brings its line into
+  view; a line's session box opens into the session's real `Pane`, which reads
+  the same `lastTab[title]` as the grid's; terminals come from the
+  `lib/terminals` registry, never re-attached; the grid's View 1 is the sky's
+  "fit the focused line" and This session, 2 / 4 / 9 its Fit; the bell's
+  needs-you rows are the drawer's Perched on you; New is a new-session card on
+  the sky. The full table is in docs/web-ui.md.
+- **Switch points**: the top bar's Grid · Sky toggle (`data-tour="view-sky"`),
+  the sidebar View row's **Sky** chip (a number returns to the grid), `Alt+Y`,
+  the palette, `#sky` / `#sky/<title>`. Switching keeps the selection, the
+  camera, the drawer and the shelf; each pane's ghost flies to its line and
+  back (~250 ms; none under `prefers-reduced-motion`).
 - **One plane**, panned and zoomed as a whole: one `translate(x, y)
   scale(z)` container, no library. Drag on empty sky pans (mouse and touch),
   the wheel scrolls, Ctrl/⌘+wheel and a pinch zoom (0.4×–2×) about the
-  pointer, Space+drag pans from anywhere, 0 fits; the toolbar has the zoom
-  readout, **Fit** and **100%**. A faint dot grid scales with it, in both
-  themes (a white expanse in the light one).
-- **Every session is a line**: its [session diagram](#the-session-diagram)
-  (the same canvas, live, with its + / palette / inspector — `useSessionLine`,
-  shared with the pane's Flight tab) under a title bar (name, state chip, ⋯:
-  Open session · Show only this line · Fly a flyway… · Close session) that
-  drags it anywhere. A dragged line's spot is remembered per device
-  (`localStorage` `mf_sky_pos`, `{title: {x, y}}`); the rest are auto-placed
-  by `placeLines(lines, saved, area)` — rows, newest at the top, never
-  overlapping. A new session appears on the next poll; a closed one's line
+  pointer, Space+drag pans from anywhere; keys: arrows pan, + / − zoom, 0
+  fits all, 1 the focused line, T tidies, Enter opens the focused line's box,
+  Esc closes it. A faint dot grid scales with it, in both themes, the flock
+  (`SkyFlock {width, height, zoom, paused?, density?}`) drifting behind.
+- **Every session is a line** (`SkyLine {title, rows, plans, layout,
+  onLayout, focused, onFocus, zoom, onDragStart?, onMeasure?, dropFlyway?}`):
+  its title bar (drag handle, size control, ⋯), its
+  [session diagram](#the-session-diagram) (the same canvas, live, with its
+  + / palette / inspector — `useSessionLine`, shared with the pane's Flight
+  tab) and its session box, which expands into the real pane when
+  `layout.open`. A new session appears on the next poll; a closed one's line
   fades out. Hidden helpers (`hidden_by`) are never drawn.
+- **The layout store** (`localStorage` `mf_sky_layout`, `{title:
+  SkyLineLayout}` where `SkyLineLayout = {x, y, size: compact | normal |
+  wide, open, paneW?, paneH?, pinned?}`; the old `mf_sky_pos` positions are
+  read once as pinned lines). A dragged line is pinned where it was dropped;
+  the rest are auto-placed by `placeLines(lines, pinnedPositions(layout),
+  area)` at their measured size (`onMeasure`, else `estimateLine`) — rows,
+  newest at the top, never overlapping. **Tidy** (toolbar, `T`) clears every
+  pin and the lines glide back; a line's `onLayout({pinned: false})` is "Tidy
+  this line".
 - **The bird** (`birdPerch(diagram) -> {nodeId, tone} | null`, the canvas's
   `bird` prop): on the flight's current stop, else the fast-track's current
   rung, else the session box while its agent works (or asks you); none when
   it idles with nothing armed. It bobs while working, sits gold and still
   perched on you, red halted, and hops (a left/top transition) to the next
   box.
-- **Build from the space**: a double-click on empty sky, or **+ New
-  session**, opens a `NewSessionBlock` card there (`{x, y, plans, onCreated,
-  onCancel}`) that creates the session through the New dialog's path, then
-  — a flyway picked — `POST /api/flights/start {plan_id, title}`; the new
-  line takes the card's spot.
+- **Build from the space**: a double-click on empty sky, **+ New session**
+  or `Ctrl/Alt+N` opens a `NewSessionBlock` card there (`{x, y, plans,
+  onCreated, onCancel}`) that creates the session through the New dialog's
+  path, then — a flyway picked — `POST /api/flights/start {plan_id, title}`;
+  the new line takes the card's spot, pinned.
+- **Flyways from the sky**: the folding shelf at the foot (`FlywayShelf
+  {plans, onNew, onFly, onEdit}`, remembered as `mf_sky_shelf`). `onFly(plan,
+  title?)` → `POST /api/flights/start {plan_id, title}` on that line, else the
+  focused one, else a chip row to pick a line; a chip dragged onto a line
+  (`dataTransfer` `application/x-mindflock-flyway` = the plan id; the host
+  passes `dropFlyway` to the line under the pointer) flies there on drop.
+  `onNew` / `onEdit(plan)` open a `FlywayCard {x, y, plans, initial?, onSaved,
+  onCancel}` mid-view.
 - **Views** (toolbar chips): **All** (every session, workers on their own
   lines), **Mine** (default: top-level sessions, workers folded into their
-  parent's line), **Perched on you**, **This session** (one line, fit —
-  `#flights/sky/<title>`); a find field filters by name or task.
+  parent's line), **Perched on you**, **This session** (the focused session's
+  line alone, fit — `#sky/<title>`); a find field filters by name or task.
 - **The intake lane** (`IntakeLane {rows, plans, onFly, width?}`) pinned at
   the plane's left edge: the sources as blocks with their waiting items and
   arrows to the lines they started.
@@ -507,6 +547,16 @@ diagram, compact and on one row (no family; the session box counts its
 workers), is each card under the Sky drawer's *Landed*.
 
 ### Frontend notes (not contract: what the UI does where the contract is open)
+
+- **The sky's parts, as built in round 7.** The view host (`SkyView.tsx`)
+  imports `SkyLine`, `SkyFlock`, `FlywayShelf` and `FlywayCard` from one seam,
+  `components/flights/skyContracts.tsx`, which carries their contracts as
+  placeholders (the line as the Sky drew it before, plus the opened box as the
+  real `Pane`; no flock; no shelf; a card that only closes) until their own
+  files land — then that module becomes four `export *` re-exports. The host
+  keeps the camera (across a trip to the grid), the layout store, the drag
+  (`onDragStart` → window pointer listeners, a 4px threshold, a plain press
+  selects), the fit, the keys and the flyway drop; `SkyLine` draws.
 
 - **Pause / Resume.** The ⋯ offers **Pause** while a flight is `running` or
   `waiting_you`, and **Resume** while it is `paused` or `halted`. A `paused`
@@ -732,15 +782,15 @@ had to choose. Field and route names are unchanged.
 | Routes | `backend/web/routes/flights.py` |
 | Describe-a-step one-shot | `backend/web/core/flight_describe.py` |
 | Intake / schedule / verify hooks | `ticket_start.launch`, `pr_review.launch`, `issue_start.launch`, `server.py` (`_intake_plan`, `_arm_intake`, the result route's `session.test_plan_settled`), `ticket_ingestion/session_runner.py` (`_arm`), `template_schedule.py` (`tick_flights`), `pending.py` (the provisioning row's `flight`) |
-| Frontend | `frontend/src/components/flights/` (Sky + SkyDrawer = the Sky, IntakeLane, NewSessionBlock, FlywayCanvas, SessionFlight, useSessionLine, PlanEditor = the Flyways editor, StopParts, controls, Bird, useWaiting), `frontend/src/lib/flights.ts`, `flightDiagram.ts` (the canvas's model, the session diagram and `birdPerch`), `skyLayout.ts` (the Sky's placement, camera, views), `flightsApi.ts`, `tours/flights.ts`; the pane's Flight tab in `components/grid/Pane.tsx` |
+| Frontend | `frontend/src/components/flights/` (SkyView + SkyDrawer = the sky view, with SkyLine / SkyFlock / FlywayShelf / FlywayCard, IntakeLane, NewSessionBlock, FlywayCanvas, SessionFlight, useSessionLine, PlanEditor = the Flyways editor, StopParts, controls, Bird, useWaiting), `frontend/src/lib/flights.ts`, `flightDiagram.ts` (the canvas's model, the session diagram and `birdPerch`), `skyLayout.ts` (the sky's placement, camera, views, layout store), `viewMode.ts` (grid ⇄ sky), `flightsApi.ts`, `tours/flights.ts`; the pane's Flight tab in `components/grid/Pane.tsx` |
 | Tests | `tests/unit/test_flights*.py`, `frontend/src/__tests__/flights*.test.ts`, `flightDiagram.test.ts` |
 | CLI | `mindflock flights` (list), `mindflock flight flyways` (alias `plans`), `mindflock flight start <flyway> [--repo …] [--title …]`, `mindflock flight done\|skip\|cancel <id>` (`backend/cli.py`) |
 
 
 ## The Sky: the intake lane and the new-session block
 
-Two pieces of **the Sky**, the full-window canvas of Flights where every
-session is a line and work starts from the white space. The owner's ask:
+Two pieces of **the Sky**, the main area's canvas view where every session
+is a line and work starts from the white space. The owner's ask:
 
 > "I want to be able to see all agents/sessions that exist and be able to
 > start and build agent sessions using this white space. … The ticket
