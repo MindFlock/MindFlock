@@ -31762,6 +31762,70 @@ function focusQueueInput(title) {
 	setTimeout(tick, 0);
 }
 //#endregion
+//#region src/lib/workersRequest.ts
+var DEFAULT_WORKERS_MODEL = "claude-opus-5-5";
+var DEFAULT_WORKERS_TEMPLATE = "Use MindFlock workers for this: spawn as many MindFlock agents as the work needs (model {model}), each fenced to disjoint files with a self-contained brief; wait for them, review and merge their branches, then report. Do the small connecting pieces yourself.";
+var ASK_WORKERS_KEYS = "Alt+G";
+var FLOCK_KEYS = "Alt+Shift+G";
+function fillWorkersTemplate(template, model) {
+	const m = (model || "").trim() || DEFAULT_WORKERS_MODEL;
+	return template.split("{model}").join(m);
+}
+function workersRequestText(config) {
+	const req = (config?.flock?.request || "").trim();
+	if (req) return req;
+	return fillWorkersTemplate(DEFAULT_WORKERS_TEMPLATE, config?.flock?.model);
+}
+function cachedConfig() {
+	return queryClient.getQueryData(["config"]);
+}
+function flockAvailable(inst, config) {
+	if (!inst || inst.pending) return false;
+	if (config?.guest) return false;
+	if (inst.peer_share || isRemote(inst)) return false;
+	return !inst.remote_peer;
+}
+function flockChipLabel() {
+	return "🐦 Flock";
+}
+function flockTooltip(on, keys = [FLOCK_KEYS, ASK_WORKERS_KEYS]) {
+	return `Workers on every prompt — the request is added to everything you send here (${keys[0]} to toggle; ${keys[1]} to add it once)` + (on ? "\nOn: click to turn it off" : "\nOff: click to turn it on");
+}
+function flockActionLabel(on) {
+	return on ? "Workers on every prompt: turn off" : "Workers on every prompt: turn on";
+}
+function flockToast(name, on) {
+	return on ? `${name}: Flock on — the workers request is added to every prompt` : `${name}: Flock off — prompts go as typed`;
+}
+function insertWorkersRequest(title, config = cachedConfig()) {
+	const h = peekTerm(title, "agent");
+	if (!h || h.state !== "connected") {
+		toast(`${displayName(title)}: its terminal isn’t connected — open the session first`);
+		return false;
+	}
+	h.term.paste(workersRequestText(config));
+	h.send(" ");
+	h.term.focus();
+	if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => h.term.focus());
+	return true;
+}
+async function toggleFlock(title, on) {
+	const want = on ?? !instances$2().find((r) => r.title === title)?.flock;
+	const name = displayName(title);
+	try {
+		const r = await instApi(title, "/flock", { json: { on: want } });
+		const now = typeof r?.flock === "boolean" ? r.flock : want;
+		patchInstance(title, { flock: now });
+		toast(flockToast(name, now));
+		return now;
+	} catch (err) {
+		toast(`${name}: Flock — ${errMsg(err)}`, { duration: 6e3 });
+		return null;
+	} finally {
+		refreshInstances();
+	}
+}
+//#endregion
 //#region src/lib/sessionActionTable.ts
 var DEFAULT_CAPS = {
 	git: true,
@@ -31783,6 +31847,7 @@ function actionCtx(title, opts = {}) {
 		hidden: opts.hidden ?? useUi.getState().hidden.has(title)
 	};
 }
+var cfg = () => queryClient.getQueryData(["config"]);
 var git = (c) => c.caps.git !== false;
 var gitHere = (c) => git(c) && !c.shared;
 var settled = (c) => !!c.inst && !c.inst.pending;
@@ -31868,6 +31933,20 @@ var SESSION_ACTIONS = {
 			const name = displayName(t);
 			splitSession(inst, name).then((said) => toast(said, { duration: 5e3 })).catch((err) => toast(`${name}: ${errMsg(err)}`, { duration: 6e3 }));
 		}
+	},
+	askWorkers: {
+		label: "Ask for workers",
+		keys: ASK_WORKERS_KEYS,
+		note: "types the workers request into its terminal",
+		enabled: (c) => flockAvailable(c.inst, cfg()) && c.inst.status !== "paused",
+		run: (t) => void insertWorkersRequest(t)
+	},
+	flock: {
+		label: (c) => flockActionLabel(!!c.inst?.flock),
+		keys: FLOCK_KEYS,
+		note: "adds the workers request to everything you send here",
+		enabled: (c) => flockAvailable(c.inst, cfg()),
+		run: (t) => void toggleFlock(t)
 	},
 	thread: {
 		label: "Thread",
@@ -31974,6 +32053,7 @@ function chordDesc(id) {
 	if (id === "ide") return "Open in your code editor";
 	if (id === "hide") return "Hide / show window";
 	if (id === "thread") return "Thread — " + actionNote(id, {});
+	if (id === "flock") return "Workers on every prompt";
 	const l = sessionAction(id).label;
 	return typeof l === "string" ? l : id;
 }
@@ -32959,6 +33039,11 @@ function _handleChordKey(e) {
 	}
 	chord.run(focused);
 }
+function workersKeyAllowed() {
+	if (!useUi.getState().focused) return false;
+	if (overlayOpen()) return false;
+	return terminalFocused() || !isEditingTarget(document.activeElement);
+}
 function closeFocused() {
 	const f = useUi.getState().focused;
 	if (f) sessionAction("close").run(f);
@@ -33156,6 +33241,37 @@ var KEYMAP = [
 		aliasOf: "close",
 		when: () => endShortcutAllowed(),
 		run: () => closeFocused()
+	},
+	{
+		key: "g",
+		alt: true,
+		id: "workers",
+		help: [
+			"Focused session",
+			ASK_WORKERS_KEYS,
+			"Ask for workers — types the workers request into the focused session (finish it, or press Enter)"
+		],
+		when: () => workersKeyAllowed(),
+		run: () => {
+			const f = useUi.getState().focused;
+			if (f) runChordAction("askWorkers", f);
+		}
+	},
+	{
+		key: "g",
+		alt: true,
+		shift: true,
+		id: "flock",
+		help: [
+			"Focused session",
+			FLOCK_KEYS,
+			"Workers on every prompt — turn the focused session's Flock on or off"
+		],
+		when: () => workersKeyAllowed(),
+		run: () => {
+			const f = useUi.getState().focused;
+			if (f) runChordAction("flock", f);
+		}
 	},
 	{
 		key: "t",
@@ -49565,7 +49681,17 @@ function sessionMenu(inst, ctx, opts = {}) {
 		disabled: !!next.disabled,
 		run: () => void next.run()
 	}, ...ship] : ship;
-	const session = keep([fromTable("rename"), fromTable("resume", { note: actionNote("resume", ctx) })]);
+	const flockOn = !!inst.flock;
+	const session = keep([
+		fromTable("rename"),
+		fromTable("resume", { note: actionNote("resume", ctx) }),
+		fromTable("flock", {
+			label: (flockOn ? "✓ " : "") + "Workers on every prompt",
+			checked: flockOn,
+			note: flockOn ? "on — the workers request is added to everything you send" : actionNote("flock", ctx),
+			title: flockTooltip(flockOn)
+		})
+	]);
 	const splitWhy = remote ? "" : splitBlockReason(ctx.caps, inst);
 	const group = remote ? null : detachableGroup(inst);
 	const folder = inst.folder || inst.path || "";
@@ -77708,6 +77834,8 @@ function Pane({ inst, drag, dragging }) {
 	const sharedFolder = !!inst.peer_share;
 	const ns = nextStep$1(inst);
 	const ft = fastTrackStep(inst);
+	const flockShown = flockAvailable(inst, config);
+	const flockOn = !!inst.flock;
 	const rs = theirs ? null : resetStep(inst);
 	const step = liveStep(inst);
 	const q = inst.queue;
@@ -78089,6 +78217,18 @@ function Pane({ inst, drag, dragging }) {
 								inst,
 								me
 							}),
+							flockShown && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								className: "nextstep nextstep-flock" + (flockOn ? " is-on" : ""),
+								type: "button",
+								"aria-pressed": flockOn,
+								"aria-label": "Workers on every prompt: " + (flockOn ? "on" : "off"),
+								title: flockTooltip(flockOn, [shortcutLabels("flock")[0] || FLOCK_KEYS, shortcutLabels("workers")[0] || ASK_WORKERS_KEYS]),
+								onClick: (ev) => {
+									ev.stopPropagation();
+									toggleFlock(title);
+								},
+								children: flockChipLabel()
+							}, "flock"),
 							items.buttons.map((id) => buttonEls[id])
 						]
 					}),
@@ -79123,6 +79263,22 @@ var SETTINGS_SEARCH = [
 	},
 	{
 		key: "general",
+		label: "General → Workers request",
+		sub: "What Alt+G types, and Flock mode adds to every prompt",
+		terms: [
+			"workers",
+			"worker",
+			"mindflock agents",
+			"flock",
+			"spawn",
+			"orchestrate",
+			"workers model",
+			"every prompt"
+		],
+		anchor: "#general-workers"
+	},
+	{
+		key: "general",
 		label: "General → Budgets, resume and sleep",
 		sub: "Cost alerts, carrying on after a usage reset, idle agents",
 		terms: [
@@ -79634,6 +79790,8 @@ var PALETTE_ACTIONS = [
 	"rename",
 	"message",
 	"queue",
+	"askWorkers",
+	"flock",
 	"fastTrack",
 	"split",
 	"thread",
@@ -79651,6 +79809,10 @@ var PALETTE_ACTIONS = [
 	"map",
 	"merge"
 ];
+var ACTION_KEYWORDS = {
+	askWorkers: "mindflock agents workers spawn team parallel flock request",
+	flock: "mindflock agents workers spawn team parallel flock every prompt sticky"
+};
 var OUTWARD = /* @__PURE__ */ new Set([
 	"commit",
 	"push",
@@ -79877,6 +80039,7 @@ function CommandPalette({ host }) {
 				acts.push({
 					label: `${actionLabel(id, c)} — ${name}`,
 					hint: actionHint(id, c),
+					keywords: ACTION_KEYWORDS[id],
 					outward: OUTWARD.has(id),
 					run: () => sessionAction(id).run(t)
 				});
@@ -92971,6 +93134,7 @@ function SettingsSearch({ onPick }) {
 function General(_) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScrollSpeedRow, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkersRows, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(AdvancedFold, {
 			id: "general-advanced",
 			summary: "Budgets, resume and sleep",
@@ -93021,6 +93185,69 @@ function General(_) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Tours, {})
 	] });
+}
+function WorkersRows() {
+	const s = useSettings();
+	const stored = s.get("general", "workers_request");
+	const display = typeof stored === "string" ? stored : "";
+	const [value, setValue] = (0, import_react.useState)(display);
+	(0, import_react.useEffect)(() => setValue(display), [display]);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row",
+		id: "general-workers",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Workers request"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+				className: "workers-request",
+				"data-group": "general",
+				"data-field": "workers_request",
+				rows: 4,
+				style: {
+					resize: "vertical",
+					lineHeight: 1.45
+				},
+				spellCheck: false,
+				placeholder: DEFAULT_WORKERS_TEMPLATE,
+				value,
+				onChange: (e) => setValue(e.target.value),
+				onBlur: () => {
+					if (value !== display) s.saveField("general", "workers_request", value);
+				}
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "set-hint",
+				children: [
+					"Added to a prompt by the hotkey (",
+					ASK_WORKERS_KEYS,
+					"), or to every prompt while a session's Flock is on (",
+					FLOCK_KEYS,
+					"). ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: "{model}" }),
+					" becomes the model below; empty uses the default."
+				]
+			})
+		]
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Workers model"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingField, {
+				group: "general",
+				field: "workers_model",
+				placeholder: DEFAULT_WORKERS_MODEL
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: "The model the request asks workers to run on."
+			})
+		]
+	})] });
 }
 function ResumeOnUsageResetRow() {
 	const s = useSettings();

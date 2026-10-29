@@ -11608,6 +11608,30 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   color: #fff;
 }
 
+/* Flock (🐦): workers on every prompt. Off it is a quiet outline — a switch you
+   reach for now and then, never competing with the guided button or ⏩. On it
+   fills, so a session that sends the workers request with every prompt is
+   recognisable across a grid without hovering. Clicking flips it. */
+.pane-head .actions .nextstep.nextstep-flock {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  font-weight: 600;
+  padding: 3px 7px;
+}
+
+.pane-head .actions .nextstep.nextstep-flock:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  filter: none;
+}
+
+.pane-head .actions .nextstep.nextstep-flock.is-on {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
 /* Back to idle (↺): a TERTIARY control — it undoes nothing and starts nothing,
    it only stops the header asking for the next rung on a branch its owner has
    finished with. So it is the quietest thing in the group: muted, no accent, no
@@ -11945,6 +11969,12 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   .pane-head .actions .nextstep.nextstep-reset {
     display: none !important;
   }
+
+  /* Flock off gives way early (the ⋯ menu and Alt+Shift+G still flip it);
+     on, it stays — it says every prompt here carries the workers request. */
+  .pane-head .actions .nextstep.nextstep-flock:not(.is-on) {
+    display: none !important;
+  }
 }
 
 @container (max-width: 300px) {
@@ -11967,6 +11997,12 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 @container (max-width: 340px) {
   .pane-head .actions .nextstep:not(.nextstep-fast) {
     display: none !important;
+  }
+
+  /* …but Flock ON keeps its glyph-width place, like a set ⏩. */
+  .pane-head .actions .nextstep.nextstep-flock.is-on {
+    display: inline-block !important;
+    padding: 3px 4px;
   }
 }
 
