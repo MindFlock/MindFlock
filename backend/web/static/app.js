@@ -31810,19 +31810,20 @@ function insertWorkersRequest(title, config = cachedConfig()) {
 	return true;
 }
 async function toggleFlock(title, on) {
-	const want = on ?? !instances$2().find((r) => r.title === title)?.flock;
+	const before = !!instances$2().find((r) => r.title === title)?.flock;
+	const want = on ?? !before;
 	const name = displayName(title);
+	patchInstance(title, { flock: want });
 	try {
 		const r = await instApi(title, "/flock", { json: { on: want } });
 		const now = typeof r?.flock === "boolean" ? r.flock : want;
-		patchInstance(title, { flock: now });
+		if (now !== want) patchInstance(title, { flock: now });
 		toast(flockToast(name, now));
 		return now;
 	} catch (err) {
+		patchInstance(title, { flock: before });
 		toast(`${name}: Flock — ${errMsg(err)}`, { duration: 6e3 });
 		return null;
-	} finally {
-		refreshInstances();
 	}
 }
 //#endregion

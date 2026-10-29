@@ -19,7 +19,7 @@
 
 import type { Config, Instance } from "../api/types";
 import { instApi } from "../api/client";
-import { patchInstance, queryClient, refreshInstances } from "../state/queries";
+import { patchInstance, queryClient } from "../state/queries";
 import { displayName } from "../state/store";
 import { instances } from "./sessionActions";
 import { peekTerm } from "./terminals";
