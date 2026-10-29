@@ -156,9 +156,12 @@ async def peer_disable(request: Request) -> JSONResponse:
 
 @router.post("/api/peer/invites")
 async def peer_create_invite(request: Request) -> JSONResponse:
-    """``{ttl_s?, advertise_host?, reach?, op_id?}`` → ``{invite_id, code,
-    url, message, expires_in, host, port, direct, relay?, fallback?}``.
-    ``url`` is ``<base>/join#<code>`` (:func:`_invite_base`).
+    """``{ttl_s?, advertise_host?, reach?, op_id?, sessions?}`` → ``{invite_id,
+    code, url, message, expires_in, host, port, direct, sessions, relay?,
+    fallback?}``. ``url`` is ``<base>/join#<code>`` (:func:`_invite_base`).
+    ``sessions`` (``[{title, mode: "gated"|"full"}]``, at most 50, each a
+    live root session here, one gated; 400 otherwise) are shared with
+    whoever joins, the moment they do — before It matches.
     ``reach`` is ``auto`` (default) | ``tunnel`` | ``direct``;
     ``advertise_host`` overrides the address a direct code carries (setting
     ``peer.advertise_host``, else Tailscale, else LAN); ``op_id`` names the
@@ -173,6 +176,8 @@ async def peer_create_invite(request: Request) -> JSONResponse:
             str(body.get("advertise_host") or body.get("host") or ""),
             str(body.get("reach") or "auto"),
             str(body.get("op_id") or ""),
+            # Only when asked: a service from before invites carried sessions.
+            **({"sessions": body["sessions"]} if body.get("sessions") else {}),
         )
         if asyncio.iscoroutine(out):
             out = await out
