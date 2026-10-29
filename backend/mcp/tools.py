@@ -718,6 +718,8 @@ _COMPACT_KEYS = (
 #: (an idle session with a ``waiting`` job is not finished yet).
 #: ``sleeping``: its agent was put to sleep to free memory (its activity
 #: reads offline meanwhile); a message or a prompt wakes it.
+#: ``flight``: the row's flight (docs/flights.md) — where it is in its flow,
+#: ``join`` (its workers outstanding), ``branch`` (a worker of a flying parent).
 _COMPACT_OPTIONAL = (
     "task_headline",
     "autopilot",
@@ -730,6 +732,7 @@ _COMPACT_OPTIONAL = (
     "behind",
     "background",
     "sleeping",
+    "flight",
 )
 _MESSAGE_KEYS = ("id", "kind", "from", "ts", "text", "data", "reply_to", "state")
 

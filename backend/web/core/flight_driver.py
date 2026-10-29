@@ -476,14 +476,110 @@ async def observe(flight: dict, now: float) -> dict:
         with _JOBS_LOCK:
             job = _JOBS.get((flight["id"], step["id"]))
             obs["command"] = dict(job) if job else None
+    if kind == "join" or (kind == "agent" and step["config"].get("join", True)):
+        try:
+            obs["children"] = await asyncio.to_thread(_children_obs, flight, step)
+            sess["messages_pending"] = await asyncio.to_thread(
+                _messages_pending, flight["session"]
+            )
+        except Exception as err:  # noqa: BLE001 — unknown, never "no workers"
+            _log("flight %s: workers unreadable: %v", flight["id"], err)
+            obs["children"] = None
     return obs
+
+
+def _messages_pending(title: str) -> bool:
+    """Whether a message (a worker's report) still waits to be typed into
+    ``title``."""
+    from backend.web.core import mailbox as _mailbox
+
+    return bool(title) and _mailbox.next_pending(title) is not None
+
+
+def _epoch(inst) -> float:
+    created = getattr(inst, "CreatedAt", None)
+    try:
+        return float(created.timestamp()) if created is not None else 0.0
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _children_obs(flight: dict, step: dict) -> List[dict]:
+    """The facts a join judges each worker by (blocking): every live child of
+    the flight's session (hidden helpers left out), or — a join of ``spawned``
+    — the workers the split before it made, a deleted one as not present."""
+    from backend.mcp import tools as _mcp_tools
+    from backend.web.core import hidden_sessions as _hidden
+    from backend.web.core import lineage as _lineage
+    from backend.web.core import thread as _thread
+
+    srv = _server()
+    title = flight["session"]
+    if not title:
+        return []
+    insts = srv.ENGINE.instances
+    rows = {
+        str(r.get("title") or ""): r
+        for r in _events.sessions_snapshot()
+        if isinstance(r, dict)
+    }
+    if step["kind"] == "join" and step["config"].get("of") == "spawned":
+        titles = _flights.spawned_titles(flight)
+    else:
+        titles = _lineage.children_of(insts, title)
+    out: List[dict] = []
+    for t in titles:
+        inst = insts.get(t)
+        if inst is None:
+            out.append({"title": t, "present": False})
+            continue
+        row = rows.get(t) or {}
+        if _hidden.hidden_by(t) or row.get("hidden_by"):
+            continue  # a Verify helper or another feature's own session
+        status = str(row.get("status") or "")
+        if not row:
+            status = "loading"  # not published yet: it is starting
+        queue = row.get("queue") if isinstance(row.get("queue"), dict) else {}
+        order = row.get("order") if isinstance(row.get("order"), dict) else {}
+        provider = str(row.get("provider") or "") or _mcp_tools._provider_of_program(
+            str(row.get("program") or getattr(inst, "Program", "") or "")
+        )
+        try:
+            report = _thread.last_report(insts, t)
+        except Exception:  # noqa: BLE001
+            report = None
+        out.append(
+            {
+                "title": t,
+                "present": True,
+                "status": status,
+                "activity": str(row.get("activity") or ""),
+                "activity_since": row.get("activity_since") or 0.0,
+                "sleeping": bool(row.get("sleeping")),
+                "held": order.get("state") == "held",
+                "queue_pending": int(queue.get("pending") or 0) > 0,
+                "background_waiting": _mcp_tools.background_waiting(
+                    row.get("background")
+                ),
+                "messages_pending": _messages_pending(t),
+                "created": _epoch(inst),
+                "settle_s": _flights.child_settle_s(provider),
+                "report": report,
+            }
+        )
+    return out
 
 
 # --------------------------------------------------------------------------- #
 # Executors
 # --------------------------------------------------------------------------- #
 class _StepFailed(Exception):
-    """An executor's refusal: becomes a ``fail`` action with this reason."""
+    """An executor's refusal: becomes a ``fail`` action with this reason
+    (and ``detail``, what the step still records — a split's workers made)."""
+
+    def __init__(self, reason: str, detail: Optional[dict] = None) -> None:
+        super().__init__(reason)
+        self.detail = detail
 
 
 def _deliver(title: str, text: str) -> None:
@@ -771,6 +867,216 @@ async def _send_reviews(flight: dict, step: dict, action: dict, now: float) -> d
     )
 
 
+def _split_base(flight: dict, step: dict) -> Tuple[dict, str, str]:
+    """What every worker of a split is created with (blocking) — the payload
+    ``spawn_session`` builds for a worker of this session: forked from its
+    HEAD (a provisioned session's workers come from the same source), on its
+    CLI, under its fence — plus the workers' provider and title prefix."""
+    from backend.mcp import gitlocal as _gitlocal
+    from backend.mcp import tools as _mcp_tools
+
+    srv = _server()
+    parent = flight["session"]
+    inst = srv.ENGINE.instances.get(parent)
+    if inst is None:
+        raise _StepFailed("the session is gone")
+    row = _row(parent)
+    cfg = step["config"]
+    program = str(getattr(inst, "Program", "") or row.get("program") or "")
+    payload: dict = {"spawned": True, "parent": parent}
+    if program:
+        payload["program"] = program
+    try:
+        folder = inst.GetWorktreePath() or ""
+    except Exception:  # noqa: BLE001
+        folder = str(row.get("folder") or "")
+    path = str(getattr(inst, "Path", "") or row.get("path") or "")
+    if getattr(inst, "Provisioned", False):
+        if (
+            path
+            and path != "."
+            and os.path.isabs(path)
+            and not os.path.basename(os.path.normpath(path)).startswith("_base_")
+            and _gitlocal.head_sha(path)
+        ):
+            payload["repo_path"] = path
+        payload["provisioned"] = True
+        payload["workspace_strategy"] = str(
+            getattr(inst, "WorkspaceStrategy", "") or "worktree"
+        )
+    else:
+        root = _gitlocal.canonical_repo_root(folder) if folder else None
+        payload["repo_path"] = root or path or folder
+        sha = _gitlocal.head_sha(folder) if folder else None
+        if sha:
+            payload["base_ref"] = sha
+            branch = str(getattr(inst, "Branch", "") or row.get("branch") or "")
+            if branch:
+                payload["base_branch"] = branch
+    if cfg.get("model"):
+        payload["profile_model"] = cfg["model"]
+    only = [p.strip() for p in str(cfg.get("fence_only") or "").split(",") if p.strip()]
+    try:
+        fence = _mcp_tools._inherit_fence(
+            _mcp_tools.row_fence(row), {"only": only, "keep_out": []}, parent
+        )
+    except Exception as err:  # noqa: BLE001 — ToolError: only= outside the parent's
+        raise _StepFailed(str(err))
+    if fence is not None:
+        payload["fence"] = fence
+    provider = _mcp_tools._provider_of_program(program)
+    slug = _mcp_tools._slug(parent)[:40]
+    return payload, provider, (slug + "-w") if slug else "worker-"
+
+
+def _footer_ok(provider: str) -> bool:
+    """``spawn_session``'s footer rule: the worker gets a report_result tool
+    only when the MCP is attached to its CLI."""
+    caps = _server()._agent_mcp_caps()
+    return bool(caps.get("enabled")) and provider in (caps.get("providers") or [])
+
+
+def _free_worker_title(prefix: str, repo: str, branch_prefix: Optional[str]) -> str:
+    """The lowest free ``<prefix><N>`` — no live or starting title, no tmux
+    name and (when it can tell) no leftover branch: ``spawn_session``'s rule."""
+    from backend.mcp import gitlocal as _gitlocal
+    from backend.mcp import tools as _mcp_tools
+
+    srv = _server()
+    taken = set(srv.ENGINE.instances.keys())
+    try:
+        taken |= {str(r.get("title") or "") for r in srv._pending_rows()}
+    except Exception:  # noqa: BLE001
+        pass
+    tmux = {_mcp_tools._tmux_name(t) for t in taken}
+    n = 1
+    while True:
+        cand = "%s%d" % (prefix, n)
+        if (
+            cand not in taken
+            and _mcp_tools._tmux_name(cand) not in tmux
+            and not (
+                repo
+                and branch_prefix is not None
+                and _gitlocal.branch_exists(repo, branch_prefix + cand)
+            )
+        ):
+            return cand
+        n += 1
+
+
+def _adopted_workers(flight: dict, step: dict, prefix: str) -> List[str]:
+    """Workers an interrupted run of this split already made: live children
+    titled ``<prefix><N>``, created since the flight took off, that no other
+    split of the flight claims."""
+    import re as _re
+
+    from backend.web.core import lineage as _lineage
+
+    srv = _server()
+    claimed = set()
+    for s in flight["steps"]:
+        if s["kind"] == "split" and s["id"] != step["id"]:
+            claimed |= set(
+                flight["step_states"][s["id"]]["detail"].get("children") or []
+            )
+    pat = _re.compile("^%s\\d+$" % _re.escape(prefix))
+    out = []
+    for t in _lineage.children_of(srv.ENGINE.instances, flight["session"]):
+        inst = srv.ENGINE.instances.get(t)
+        if (
+            pat.match(t)
+            and t not in claimed
+            and _epoch(inst) >= float(flight["started"] or 0.0)
+        ):
+            out.append(t)
+    return out
+
+
+async def _run_split(flight: dict, step: dict, action: dict) -> dict:
+    """Spawn one worker per prompt as children of the flight's session
+    (``spawn_session``'s payload: ``parent``, ``spawned``, the session's HEAD
+    as ``base_ref``, its fence, the report-back footer). The spawn limits and
+    the memory guard are the create path's own: a refusal fails the step with
+    its sentence, keeping the workers already made."""
+    from backend.mcp import tools as _mcp_tools
+    from backend.web.core import lineage as _lineage
+    from backend.web.core import session_create as _session_create
+
+    srv = _server()
+    parent = flight["session"]
+    prompts = _flights.split_prompts(step["config"], flight)
+    if not prompts:
+        raise _StepFailed("the split has no prompts")
+    base, provider, prefix = await asyncio.to_thread(_split_base, flight, step)
+    made = await asyncio.to_thread(_adopted_workers, flight, step, prefix)
+    todo = prompts[len(made) :]
+    if todo:
+        insts = srv.ENGINE.instances
+        refused = _lineage.spawn_limit_error(insts, parent, True)
+        cap = _lineage.limit(_lineage.MAX_CHILDREN_ENV, _lineage.DEFAULT_MAX_CHILDREN)
+        have = len(_lineage.children_of(insts, parent))
+        if refused is None and have + len(todo) > cap:
+            refused = (
+                "%d more workers would give %s %d live children (limit %d, set in %s)"
+                % (
+                    len(todo),
+                    parent,
+                    have + len(todo),
+                    cap,
+                    _lineage.SETTINGS_PLACE,
+                )
+            )
+        if refused:
+            raise _StepFailed(refused)
+    footer = bool(step["config"].get("report_back", True)) and await asyncio.to_thread(
+        _footer_ok, provider
+    )
+    branch_prefix = _mcp_tools.Toolbox._branch_prefix(_row(parent), parent)
+    for text in todo:
+        payload = dict(base)
+        body: dict = {}
+        status = 0
+        for _attempt in range(8):
+            title = await asyncio.to_thread(
+                _free_worker_title,
+                prefix,
+                str(payload.get("repo_path") or ""),
+                branch_prefix,
+            )
+            payload["title"] = title
+            payload["prompt"] = text + (
+                _mcp_tools.report_footer(title, parent, provider) if footer else ""
+            )
+            status, body = await _session_create.create_result(payload)
+            err = str(body.get("error") or "")
+            if status == 409 and "exists" in err:
+                continue  # lost a race for the title: the next number
+            if status == 400 and "base_ref" in payload and "base" in err:
+                # Can't fork from the session's HEAD: its default base, as
+                # spawn_session falls back.
+                payload.pop("base_ref", None)
+                payload.pop("base_branch", None)
+                continue
+            break
+        if status >= 400 or not body.get("title"):
+            raise _StepFailed(
+                "%s (after %d of %d workers)"
+                % (
+                    str(body.get("error") or "could not create a worker"),
+                    len(made),
+                    len(prompts),
+                ),
+                {"children": made},
+            )
+        made.append(str(body["title"]))
+    return {
+        "action": "done",
+        "note": "spawned %d worker%s" % (len(made), "" if len(made) == 1 else "s"),
+        "detail": {"children": made},
+    }
+
+
 async def _perform(flight: dict, action: dict, now: float) -> dict:
     """Carry out ``action``'s side effect; return it amended (detail, or
     turned into done/fail/advance)."""
@@ -842,10 +1148,16 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
         if sk == "notify":
             await asyncio.to_thread(_run_notify, flight, step)
             return {"action": "done", "note": "sent"}
+        if sk == "split":
+            return await _run_split(flight, step, action)
+        if sk == "join":
+            return dict(action, detail={})
     except _StepFailed as err:
         out = _flights.fail_action(
             flight, str(err), {"session": {"present": bool(flight["session"])}}
         )
+        if err.detail:
+            out["detail"] = dict(err.detail)
         if out.get("then") == "agent":
             # Handed to the agent: tell it, or there is nobody to fix it.
             try:

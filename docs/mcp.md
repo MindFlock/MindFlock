@@ -1483,6 +1483,23 @@ Nothing on the failure path touches the existing branch. A background start
 that fails anyway leaves its reason in `GET /api/create_failures` for 10
 minutes.
 
+### Flights and workers
+
+A session flying a [flight](flights.md) carries it on its rows: `list_sessions`,
+`get_session` and `whoami` include `flight` — `{id, plan_name, cursor, total,
+state, reason, step: {id, kind, title, state, actor}, join, branch}` — so an
+orchestrator sees which stop it is at. Workers it spawns are branches of that
+stop: each worker's row has `flight.branch: {parent, step}` (a branch-only
+`flight` with `id: ""` when the worker flies nothing itself), and while the
+stop waits for them the parent's `flight.join` is `{waiting, total}`. An
+`agent` stop waits for its workers by default (`join`, "Wait for its
+workers"): it is done when the agent has settled **and** every live child has
+finished — reported (`report_result` after the stop began), idle-settled by
+`wait_for_session`'s gates, offline ≥ 30 s, or closed / deleted. A worker
+asking a question holds it. A flyway can also fan out by itself with a
+`split` stop (it spawns the workers the way `spawn_session` does) and a `join`
+stop. `wait_for_session` is unchanged.
+
 ## Scopes and policy
 
 The scope decides what an MCP server may **steer**. It never limits reading.

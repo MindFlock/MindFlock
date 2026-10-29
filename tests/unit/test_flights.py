@@ -61,6 +61,8 @@ def test_kinds_registry_drives_the_editor():
     kinds = [k["kind"] for k in dto["kinds"]]
     assert kinds == [
         "agent",
+        "split",
+        "join",
         "ship",
         "verify",
         "you",
@@ -925,6 +927,8 @@ def test_row_dto_and_event_data():
             "state": "waiting_you",
             "actor": "you",
         },
+        "join": None,
+        "branch": None,
     }
     ev = F.event_data(f)
     assert set(ev) >= {
