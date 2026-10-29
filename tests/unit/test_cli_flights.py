@@ -164,7 +164,7 @@ class TestList:
         assert cli.main(["flights"]) == 0
         assert srv.sent("GET") == [("/api/flights", None)]
         out = capsys.readouterr().out.splitlines()
-        assert out[0].split() == ["ID", "PLAN", "SUBJECT", "SESSION", "STATE", "STEP"]
+        assert out[0].split() == ["ID", "FLYWAY", "SUBJECT", "SESSION", "STATE", "STOP"]
         row = out[1]
         for cell in (
             "f_1a2b3c",
@@ -172,7 +172,7 @@ class TestList:
             "ticket 42 Fix it",
             "sc-42",
             "waiting_you",
-            "2/3 You: approve the merge (yours)",
+            "2/3 You: approve the merge (perched on you)",
         ):
             assert cell in row
 
@@ -215,6 +215,18 @@ class TestPlans:
         assert cli.main(["flight", "plans", "--json"]) == 0
         assert len(json.loads(capsys.readouterr().out)["plans"]) == 3
 
+    def test_flyways_is_the_same_list(self, srv, capsys):
+        assert cli.main(["flight", "flyways"]) == 0
+        out = capsys.readouterr().out
+        assert out.splitlines()[0].split() == [
+            "ID",
+            "NAME",
+            "TRIGGER",
+            "STOPS",
+            "SCHEDULE",
+        ]
+        assert "Ticket to merge *" in out and "Flyways tab" in out
+
 
 class TestStart:
     def test_by_name_any_case_with_the_plans_own_repo(self, srv, capsys):
@@ -242,9 +254,9 @@ class TestStart:
     def test_an_ambiguous_or_unknown_plan(self, srv, capsys):
         assert cli.main(["flight", "start", "nightly"]) == 1
         err = capsys.readouterr().err
-        assert "matches 2 plans" in err and "p_7f3a2c" in err and "p_7f9999" in err
+        assert "matches 2 flyways" in err and "p_7f3a2c" in err and "p_7f9999" in err
         assert cli.main(["flight", "start", "nope"]) == 1
-        assert "mindflock flight plans" in capsys.readouterr().err
+        assert "mindflock flight flyways" in capsys.readouterr().err
         assert srv.sent("POST") == []
 
     def test_a_refusal_reads_as_its_detail(self, srv, capsys):
@@ -283,7 +295,7 @@ class TestStepOps:
         assert cli.main(["flight", "done", "f_zz"]) == 1
         assert "mindflock flights" in capsys.readouterr().err
 
-    def test_a_landed_flight_has_no_step(self, srv, capsys):
+    def test_a_landed_flight_has_no_stop(self, srv, capsys):
         srv.gets["/api/flights?all=1"] = {"flights": [_flight(state="done", cursor=3)]}
         assert cli.main(["flight", "done", "f_1a2b3c"]) == 1
-        assert "no step left" in capsys.readouterr().err
+        assert "no stop left" in capsys.readouterr().err

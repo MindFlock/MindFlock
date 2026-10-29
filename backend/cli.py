@@ -500,7 +500,7 @@ def _build_parser() -> argparse.ArgumentParser:
     flights = sub.add_parser(
         "flights",
         parents=[server_opts],
-        help="list flights: plan, subject, session, state and the step each is on",
+        help="list flights: flyway, subject, session, state and the stop each is at",
     )
     flights.add_argument(
         "--all", action="store_true", help="include every landed flight"
@@ -512,15 +512,20 @@ def _build_parser() -> argparse.ArgumentParser:
     flight = sub.add_parser(
         "flight",
         parents=[server_opts],
-        help="take off on a flight plan, or tick off / skip / cancel a flight's step",
+        help="take off on a flyway, or tick off / skip / cancel a flight's stop",
         description=(
-            "A flight is one run of a flight plan (a row of steps) bound to one "
-            "session — see docs/flights.md. Needs a running server."
+            "A flight is one run of a flyway (the route: a line of stops) bound "
+            "to one session; a perch is a stop that waits on you — see "
+            "docs/flights.md. Needs a running server."
         ),
     )
     fl_sub = flight.add_subparsers(dest="flight_command")
+    # `plans` is the old word (kept: scripts call it); `flyways` the new one.
     fl_plans = fl_sub.add_parser(
-        "plans", parents=[server_opts_nested], help="list the flight plans"
+        "plans",
+        aliases=["flyways"],
+        parents=[server_opts_nested],
+        help="list the flyways",
     )
     fl_plans.add_argument(
         "--json", action="store_true", dest="as_json", help="raw JSON for scripting"
@@ -528,14 +533,14 @@ def _build_parser() -> argparse.ArgumentParser:
     fl_start = fl_sub.add_parser(
         "start",
         parents=[server_opts_nested],
-        help="take off: a new session from the plan, or attach it to --title",
+        help="take off: a new session flies the flyway, or attach it to --title",
     )
-    fl_start.add_argument("plan", metavar="PLAN", help="plan id or name (any case)")
+    fl_start.add_argument("plan", metavar="FLYWAY", help="flyway id or name (any case)")
     fl_start.add_argument(
         "--repo",
         default=None,
         metavar="PATH",
-        help="folder for the new session (default: the plan's, else here)",
+        help="folder for the new session (default: the flyway's, else here)",
     )
     fl_start.add_argument(
         "--title",
@@ -544,8 +549,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="fly an existing session instead (unambiguous prefix ok)",
     )
     for verb, text in (
-        ("done", "tick off the step the flight waits on you for"),
-        ("skip", "skip the flight's current step"),
+        ("done", "tick off the perch the flight waits on you at"),
+        ("skip", "skip the flight's current stop"),
         ("cancel", "cancel the flight (its session stays)"),
     ):
         p_verb = fl_sub.add_parser(verb, parents=[server_opts_nested], help=text)
@@ -1922,7 +1927,7 @@ def _cmd_flights(args: argparse.Namespace) -> int:
         return 0
     items = [f for f in data.get("flights") or [] if isinstance(f, dict)]
     if not items:
-        print("no flights — start one with `mindflock flight start PLAN`")
+        print("no flights — start one with `mindflock flight start FLYWAY`")
         return 0
     rows = []
     for f in items:
@@ -1946,7 +1951,7 @@ def _cmd_flights(args: argparse.Namespace) -> int:
                 step.get("title") or step.get("kind") or "",
             )
             if state == "waiting_you":
-                where += " (yours)"
+                where += " (perched on you)"
         state = str(f.get("state") or "")
         if f.get("reason") and state not in ("running", "waiting_you"):
             state += ": " + str(f["reason"])
@@ -1960,12 +1965,12 @@ def _cmd_flights(args: argparse.Namespace) -> int:
                 where,
             ]
         )
-    print(_render_table(rows, ["ID", "PLAN", "SUBJECT", "SESSION", "STATE", "STEP"]))
+    print(_render_table(rows, ["ID", "FLYWAY", "SUBJECT", "SESSION", "STATE", "STOP"]))
     return 0
 
 
 def _resolve_plan(plans: List[dict], needle: str) -> dict:
-    """A plan by id, then by name (any case), then by a unique id or name
+    """A flyway by id, then by name (any case), then by a unique id or name
     prefix. Raises ``client.ClientError`` naming the choices otherwise."""
     want = needle.strip()
     low = want.lower()
@@ -1986,10 +1991,10 @@ def _resolve_plan(plans: List[dict], needle: str) -> dict:
         return hits[0]
     if not hits:
         raise client.ClientError(
-            "no flight plan %r (run `mindflock flight plans`)" % needle
+            "no flyway %r (run `mindflock flight flyways`)" % needle
         )
     raise client.ClientError(
-        "%r matches %d plans — say which: %s"
+        "%r matches %d flyways — say which: %s"
         % (needle, len(hits), ", ".join(str(p.get("id")) for p in hits))
     )
 
@@ -2032,7 +2037,7 @@ def _cmd_flight(args: argparse.Namespace) -> int:
     """``mindflock flight …`` — thin client over ``/api/flights``."""
     base = client.discover(args.host, args.port)
     cmd = args.flight_command or "plans"
-    if cmd == "plans":
+    if cmd in ("plans", "flyways"):
         data = client.get(base, "/api/flights/plans") or {}
         data = data if isinstance(data, dict) else {}
         if getattr(args, "as_json", False):
@@ -2059,8 +2064,8 @@ def _cmd_flight(args: argparse.Namespace) -> int:
                     when,
                 ]
             )
-        print(_render_table(rows, ["ID", "NAME", "TRIGGER", "STEPS", "SCHEDULE"]))
-        print("* built-in (editable; reset from the Plans tab)")
+        print(_render_table(rows, ["ID", "NAME", "TRIGGER", "STOPS", "SCHEDULE"]))
+        print("* built-in (editable; reset from the Flyways tab)")
         return 0
     if cmd == "start":
         plans = (client.get(base, "/api/flights/plans") or {}).get("plans") or []
@@ -2103,7 +2108,7 @@ def _cmd_flight(args: argparse.Namespace) -> int:
     step = _flight_step(f)
     if not step:
         raise client.ClientError(
-            "%s has no step left (it is %s)" % (fid, f.get("state"))
+            "%s has no stop left (it is %s)" % (fid, f.get("state"))
         )
     payload = {"note": args.note} if cmd == "done" and args.note else {}
     after = _flight_api(

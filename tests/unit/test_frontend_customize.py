@@ -108,7 +108,7 @@ def test_verify_always_shows_in_the_top_bar():
     assert "showVerify" not in src
     assert "useVerifySettings" not in src
     assert "mf_tb_verify" not in src
-    assert "flightBadgeCount(flights, due, failing, arrivals)" in src
+    assert "flightBadgeCount(flights, due, failing, waiting)" in src
     assert (
         '{badge.count > 0 && <span className={"tb-count" + (badge.failing ? " is-failing" : "")}>{badge.count}</span>}'
         in src

@@ -939,7 +939,7 @@
   //   state      tone       label
   //   starting   muted      Starting
   //   working    working    Working
-  //   needs_you  attention  Question · You: <step> (a flight parked on a you step,
+  //   needs_you  attention  Question · Perch: <stop> (a flight perched on you,
   //                         docs/flights.md) · Pre-commit failed · Checks failing ·
   //                         Setup failed
   //   idle       neutral    Idle
@@ -960,7 +960,7 @@
   };
   var REASON_LABEL = {
     question: "Question",
-    flight_you: "You",
+    flight_you: "Perch",
     precommit_failed: "Pre-commit failed",
     checks_failing: "Checks failing",
     setup_failed: "Setup failed",
@@ -983,14 +983,13 @@
   function needsYou(reason, hint) {
     return st("needs_you", { reason: reason, label: REASON_LABEL[reason], inBell: true, hint: hint });
   }
-  // "You: Approve the merge" — once: a step already titled "You: …" is left
-  // as it is (lib/flights.ts youStepLabel).
+  // "Perch: Approve the merge" — once: a stop already titled "Perch: …" (or
+  // the old "You: …") is read without it (lib/flights.ts perchLabel).
   function youStepLabel(title) {
-    var t = String(title || "").trim();
-    if (!t) return REASON_LABEL.flight_you;
-    return /^you:/i.test(t) ? t : REASON_LABEL.flight_you + ": " + t;
+    var t = String(title || "").trim().replace(/^(you|perch):\s*/i, "");
+    return t ? REASON_LABEL.flight_you + ": " + t : REASON_LABEL.flight_you;
   }
-  // The row's `flight` is parked on a you step (lib/flights.ts rowWaitsOnYou).
+  // The row's `flight` is perched on you (lib/flights.ts rowWaitsOnYou).
   function flightWaitsOnYou(inst) {
     var fl = inst && inst.flight;
     return !!fl && fl.state === "waiting_you" && !!fl.step && fl.step.actor === "you";
@@ -1018,10 +1017,10 @@
     if (asking && (asking.kind === "dialog" || asking.kind === "question"))
       return needsYou("question", "The agent asked you a question" + (asking.text ? ": " + String(asking.text) : ""));
     if (act === "clarify") return needsYou("question", "The agent asked you a question");
-    // A flight parked on a you step waits for Done, whatever the agent does.
+    // A flight perched on you waits for Done, whatever the agent does.
     if (flightWaitsOnYou(inst)) {
       var you = youStepLabel(inst.flight.step.title);
-      var flHint = you + " — flight “" + (inst.flight.plan_name || "") + "” waits on you; press Done";
+      var flHint = you + " — flight “" + (inst.flight.plan_name || "") + "” is perched on you; press Done";
       return st("needs_you", { reason: "flight_you", label: you, inBell: true, hint: flHint });
     }
     if (act === "working") return st("working", { hint: "Agent is working" });
@@ -1359,10 +1358,11 @@
     planButtons();
     fitSoon();
   }
-  // --- a flight parked on a you step (docs/flights.md) -----------------------
-  // The row's `flight` says the session's flight waits on a *you* step: a card
-  // under the plan card names it ("✈ Ticket to merge · You: Approve the
-  // merge") with the desktop strip's two buttons, Done and Skip (POST
+  // --- a flight perched on you (docs/flights.md) -----------------------------
+  // The row's `flight` says the session's flight is perched on you (a `you`
+  // stop): a card under the plan card names it (the bird, "Ticket to merge ·
+  // Perch: Approve the merge") with the desktop strip's two buttons, Done and
+  // Skip (POST
   // /api/flights/<id>/steps/<step>/done | /skip). Built here, like the plan
   // card; the checklist ticks stay on the desktop.
   var flightEl = document.createElement("div");
@@ -1392,7 +1392,14 @@
     card.className = "approve-card flight-card";
     var head = document.createElement("div");
     head.className = "flight-head";
-    head.textContent = "✈ " + (fl.plan_name || "Flight") + " · " + youStepLabel(fl.step.title);
+    // The bird (the desktop's glyph, lib Bird.tsx), never a plane.
+    head.innerHTML =
+      '<svg class="flight-bird" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+      'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M2 9.5c3.4-2.8 6.8-2.3 10 2 3.2-4.3 6.6-4.8 10-2"/></svg>';
+    var words = document.createElement("span");
+    words.textContent = (fl.plan_name || "Flight") + " · " + youStepLabel(fl.step.title);
+    head.appendChild(words);
     card.appendChild(head);
     var btns = document.createElement("div");
     btns.className = "approve-btns";
@@ -1422,7 +1429,7 @@
         if (!r.ok) return r.json().catch(function () { return {}; }).then(function (j) {
           throw new Error((j && (j.detail || j.error)) || "request failed (" + r.status + ")");
         });
-        flashStatus(verb === "done" ? "done — the flight goes on" : "skipped — the flight goes on");
+        flashStatus(verb === "done" ? "done — the flight flies on" : "skipped — the flight flies on");
         setTimeout(poll, 600);
       })
       .catch(function (err) { flashStatus((verb === "done" ? "Done" : "Skip") + " failed: " + err.message); })

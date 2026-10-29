@@ -206,7 +206,7 @@ STEP_KINDS: Dict[str, dict] = {
                 default="",
                 placeholder="What should the agent do? {ticket} {pr} {branch} {subject} are filled in.",
             ),
-            _f("fresh", "bool", "Start a new session for this step", default=False),
+            _f("fresh", "bool", "Start a new session for this stop", default=False),
         ],
     },
     "ship": {
@@ -228,7 +228,7 @@ STEP_KINDS: Dict[str, dict] = {
     "verify": {
         "label": "Verify",
         "actor": "robot",
-        "summary": "Write the branch's checklist and work through it; your items park the flight.",
+        "summary": "Write the branch's checklist and work through it; your items perch the flight on you.",
         "default_title": "Verify",
         "fields": [
             _f("who", "select", "Who checks", default="both", options=VERIFY_WHO),
@@ -236,9 +236,9 @@ STEP_KINDS: Dict[str, dict] = {
         ],
     },
     "you": {
-        "label": "You",
+        "label": "Perch",
         "actor": "you",
-        "summary": "Park the flight and ask you to do something; it goes on when you press Done.",
+        "summary": "The flight perches until you are done: it asks you to do something and flies on when you press Done.",
         "default_title": "Check it",
         "fields": [
             _f(
@@ -276,14 +276,14 @@ STEP_KINDS: Dict[str, dict] = {
     "checks": {
         "label": "Checks",
         "actor": "robot",
-        "summary": "Wait for the PR's checks to pass; a failing check fails the step.",
+        "summary": "Wait for the PR's checks to pass; a failing check fails the stop.",
         "default_title": "Checks",
         "fields": [_f("timeout_minutes", "int", "Give up after (minutes)", default=60)],
     },
     "command": {
         "label": "Command",
         "actor": "robot",
-        "summary": "Run a shell command in the session's folder; a non-zero exit fails the step.",
+        "summary": "Run a shell command in the session's folder; a non-zero exit fails the stop.",
         "default_title": "Run a command",
         "fields": [
             _f("command", "textarea", "Command", default="", placeholder="make test"),
@@ -548,8 +548,8 @@ def normalize_plan(raw, strict: bool = True) -> dict:
     name = _text(raw.get("name"), 120)
     if not name:
         if strict:
-            raise PlanError("a plan needs a name", "name")
-        name = "Untitled plan"
+            raise PlanError("a flyway needs a name", "name")
+        name = "Untitled flyway"
     trig = raw.get("trigger") if isinstance(raw.get("trigger"), dict) else {}
     tkind = _text(trig.get("kind"), 16).lower() or "manual"
     if tkind not in TRIGGER_KINDS:
