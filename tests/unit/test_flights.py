@@ -39,6 +39,13 @@ def fly(*steps, session="s", subject=None, **kw):
     return F.take_off(p, session=session, subject=subject, now=NOW, **kw)
 
 
+def ap(f, lane, **kw):
+    """An autopilot record THIS flight armed for ``lane``."""
+    rec = {"source": "flight", "item": f["id"], "lane": lane, "depth": lane}
+    rec.update(kw)
+    return rec
+
+
 def run_step(f, now=NOW):
     """Apply a ``run`` for the current pending step (what the driver does)."""
     a = F.next_action(f, {"session": sess()}, now)
@@ -404,26 +411,20 @@ def test_ship_step_follows_the_autopilot_record():
         F.next_action(f, {"session": sess(), "autopilot": None}, NOW)["action"]
         == "fail"
     )
-    running = {
-        "state": "running",
-        "step": "push",
-        "note": "pushing",
-        "lane": "push",
-        "depth": "push",
-    }
+    running = ap(f, "push", state="running", step="push", note="pushing")
     assert (
         F.next_action(f, {"session": sess(), "autopilot": running}, NOW)["note"]
         == "pushing"
     )
-    held = {"state": "done", "lane": "push", "depth": "commit", "ask_first": True}
+    held = ap(f, "push", state="done", depth="commit", ask_first=True)
     assert (
         "your go"
         in F.next_action(f, {"session": sess(), "autopilot": held}, NOW)["note"]
     )
-    halted = {"state": "halted", "reason": "hooks failed"}
+    halted = ap(f, "push", state="halted", reason="hooks failed")
     a = F.next_action(f, {"session": sess(), "autopilot": halted}, NOW)
     assert a["action"] == "fail" and a["reason"] == "hooks failed"
-    done = {"state": "done", "lane": "push", "depth": "push", "url": ""}
+    done = ap(f, "push", state="done", url="")
     a = F.next_action(f, {"session": sess(), "autopilot": done}, NOW)
     assert a["action"] == "done"
     f = F.apply(f, a, NOW)
@@ -582,10 +583,12 @@ def test_reviews_step_rounds():
     assert a["action"] == "run" and a["phase"] == "push"
     f = F.apply(f, dict(a, detail={"phase": "push"}), NOW + 120)
     a = F.next_action(
-        f, dict(o, autopilot={"state": "running", "note": "pushing"}), NOW + 130
+        f, dict(o, autopilot=ap(f, "push", state="running", note="pushing")), NOW + 130
     )
     assert a["note"] == "pushing"
-    a = F.next_action(f, dict(o, autopilot={"state": "done"}), NOW + 140)
+    mine = {"state": "done", "source": "session", "lane": "push"}
+    assert F.next_action(f, dict(o, autopilot=mine), NOW + 135)["note"] == F._BUSY_NOTE
+    a = F.next_action(f, dict(o, autopilot=ap(f, "push", state="done")), NOW + 140)
     assert a["detail"]["phase"] == "watch" and a["detail"]["quiet_since"] == NOW + 140
     f = F.apply(f, a, NOW + 140)
     assert (
@@ -808,7 +811,9 @@ def test_restart_reconciles_from_the_stored_cursor(_store):
     # A "new server": everything re-read from disk.
     again = F.get(f["id"])
     assert again["cursor"] == 1 and again["step_states"]["s2"]["state"] == "running"
-    a = F.next_action(again, {"session": sess(), "autopilot": {"state": "done"}}, NOW)
+    a = F.next_action(
+        again, {"session": sess(), "autopilot": ap(again, "commit", state="done")}, NOW
+    )
     assert a["action"] == "done"
     again = F.apply(again, a, NOW)
     assert again["cursor"] == 2 and again["step_states"]["s3"]["state"] == "pending"
@@ -966,3 +971,111 @@ def test_builtin_you_steps_carry_no_you_prefix():
             assert not s["title"].lower().startswith("you:"), (pid, s["title"])
     assert F.STEP_KINDS["you"]["default_title"] == "Check it"
     assert F.get_plan("builtin:ticket")["steps"][7]["title"] == "Approve the merge"
+
+
+# --------------------------------------------------------------------------- #
+# Review fixes
+# --------------------------------------------------------------------------- #
+def test_ship_ignores_a_persons_own_fast_track_run():
+    """Review #7: only the record this flight armed (source, item, lane) is
+    this step's outcome."""
+    f = run_step(fly(step("ship", lane="pr"), session="own"))
+    for rec in (
+        {"state": "done", "source": "session", "item": "", "lane": "pr", "depth": "pr"},
+        ap(f, "pr", state="done", item="f_other"),
+        ap(f, "merge", state="halted", reason="x"),
+    ):
+        a = F.next_action(f, {"session": sess(), "autopilot": rec}, NOW)
+        assert a == {"action": "wait", "note": "Fast-track is busy with your own run"}
+    assert (
+        F.next_action(
+            f, {"session": sess(), "autopilot": ap(f, "pr", state="done")}, NOW
+        )["action"]
+        == "done"
+    )
+
+
+def test_empty_command_fails_at_start_and_never_indexes():
+    """Review #8: a synced plan can carry ``command: ""`` (lenient)."""
+    plan = F.put_plan(
+        "p_sync",
+        {"name": "x", "steps": [{"kind": "command", "config": {"command": ""}}]},
+    )
+    f = F.take_off(plan, session="cmd", now=NOW)
+    a = F.next_action(f, {"session": sess()}, NOW)
+    assert a["action"] == "fail" and a["reason"] == "no command" and a["then"] == "halt"
+    # A running one (an older record) never IndexErrors either.
+    f = F.apply(f, {"action": "run", "detail": {}}, NOW)
+    assert (
+        F.next_action(f, {"session": sess(), "command": {"running": True}}, NOW)["note"]
+        == "running: the command"
+    )
+
+
+def test_a_performing_mark_blocks_a_second_effect_until_stale():
+    """Review #1: an effect recorded as under way is never started again,
+    unless its mark is so old the server that set it must have died."""
+    f = fly(step("notify"), session="perf")
+    f["step_states"]["s1"]["detail"]["performing"] = {"token": "t", "at": NOW}
+    assert F.next_action(f, {}, NOW + 5) == {
+        "action": "wait",
+        "note": "carrying out Notify me",
+    }
+    assert F.next_action(f, {}, NOW + F.PERFORM_STALE_S + 1)["action"] == "run"
+
+
+def test_bad_start_at_is_refused_before_anything_exists():
+    """Review #3 (the pure half): start_cursor validates without creating."""
+    plan = plan_of(step("agent"), step("notify"))
+    with pytest.raises(F.FlightError) as err:
+        F.start_cursor(plan, "zz")
+    assert err.value.error == "unknown_step"
+    assert F.start_cursor(plan, "", attach=True) == 1
+    assert F.start_cursor(plan, "s2") == 1 and F.start_cursor(plan) == 0
+    assert F.list_flights() == []
+
+
+def test_replaced_halted_flight_is_reported_to_the_caller():
+    """Review #4: the caller gets the flight it replaced, to announce."""
+    f1 = fly(step("checks"), session="rep")
+    F.mutate(
+        f1["id"],
+        lambda f: F.apply(f, {"action": "fail", "reason": "x", "then": "halt"}, NOW),
+    )
+    replaced = []
+    fly(step("notify"), session="rep", replaced=replaced)
+    assert [r["id"] for r in replaced] == [f1["id"]]
+    assert (
+        replaced[0]["state"] == "cancelled"
+        and replaced[0]["reason"] == "replaced by a new flight"
+    )
+
+
+def test_the_store_is_read_once_per_change(monkeypatch):
+    """Review #5: N session rows asking for_session cost one parse."""
+    fly(step("notify"), session="c1")
+    reads = []
+    real = F.read_json
+    monkeypatch.setattr(
+        F, "read_json", lambda *a, **kw: reads.append(1) or real(*a, **kw)
+    )
+    F._CACHE["key"] = None  # as if another process had written it
+    assert F.for_session("c1") is not None
+    assert F.for_session("nobody") is None
+    assert F.row_dto("c1")["state"] == "running"
+    assert F.get(F.for_session("c1")["id"])["session"] == "c1"
+    assert len(reads) == 1
+    # A write invalidates (and re-primes) it; what readers get is a copy.
+    got = F.for_session("c1")
+    got["session"] = "mutated"
+    assert F.for_session("c1")["session"] == "c1"
+    F.mutate(got["id"], lambda x: F.op_pause(x, now=NOW))
+    assert F.for_session("c1")["state"] == "paused"
+    assert len(reads) == 1
+
+
+def test_builtin_ticket_step_only_comments():
+    """Review #2: the built-in's last step comments; it moves nothing."""
+    last = F.get_plan("builtin:ticket")["steps"][-1]
+    assert last["title"] == "Ticket: comment"
+    assert last["config"] == {"state": "", "comment": "Merged by MindFlock"}

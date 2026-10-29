@@ -317,7 +317,7 @@ strip, Plans, Describe a step.
 
 ## Built-in plans (seeded on first read, editable, resettable)
 
-- **Ticket to merge** (`builtin:ticket`, trigger ticket): Agent works the ticket → Commit → Push → Verify (agent) → Open PR → Reviews settle (10 min) → Checks → You: Approve the merge (step title "Approve the merge") → Merge → Ticket: comment "Merged by MindFlock" (state left alone unless the source has a done state configured).
+- **Ticket to merge** (`builtin:ticket`, trigger ticket): Agent works the ticket → Commit → Push → Verify (agent) → Open PR → Reviews settle (10 min) → Checks → You: Approve the merge (step title "Approve the merge") → Merge → Ticket: comment (step title "Ticket: comment"; it posts "Merged by MindFlock" and moves the ticket nowhere — set the step's `state` to move it).
 - **Pull request** (`builtin:pr`, trigger pr): Agent addresses the review comments → Commit → Push → Reviews settle → Checks.
 - **Scheduled task** (`builtin:schedule`, trigger schedule): Agent → Commit → Push → Open PR.
 - **Verify on live** (`builtin:verify`, trigger manual): Verify (both, wait_live).
@@ -344,6 +344,29 @@ had to choose. Field and route names are unchanged.
   whose flight is `running`/`waiting_you`/`paused` is 409 `in_flight`; a
   `halted` one is cancelled ("replaced by a new flight") and the new one takes
   off. `DELETE /api/flights/{id}` refuses the same three states (cancel first).
+- **A side effect happens once.** A step's effect (a prompt, an armed lane,
+  a command, a tracker call, a fix note) is first recorded as an intent
+  (`step_states[sid].detail.performing = {token, at, action, phase}`, the
+  step set running) under the store lock, only if no route moved the flight
+  since it was read; then carried out; then its outcome recorded against that
+  token. A pass that finds a mark waits ("carrying out …") instead of
+  repeating it; a mark older than 10 minutes (a server that died mid-effect)
+  no longer blocks a retry. A pause landing mid-effect keeps the outcome and
+  stays paused; a skip / jump / cancel drops it. A pass that changes nothing
+  but the clock writes nothing and announces nothing.
+- **A ship step reads only its own record.** It (and the reviews step's
+  push) judges the autopilot record only when `source == "flight"`, `item`
+  is this flight's id and the lane is the step's; any other record on the
+  session (your own ⏩ run) is a visible wait: "Fast-track is busy with your
+  own run".
+- **Start refuses before it creates.** `start_at`, the plan and the folder are
+  checked before a session is created, so a refusal leaves nothing behind. A
+  halted flight a start replaces is announced (`flight.finished`, reason
+  "replaced by a new flight"); the driver's pass also announces, once, any
+  finish from the last hour nobody announced (intake's `arm_pending` replacing
+  one).
+- **An empty `command`** (a synced plan's lenient normalisation lets one
+  through) fails its step at start with "no command".
 - **Errors** are `{"error": "<word>", "detail": "<sentence>"}` (plan
   validation keeps `{"error", "field"}`).
 - **`GET /api/flights/kinds`** also returns `on_fail: [halt, agent, skip, you]`.
@@ -371,8 +394,12 @@ had to choose. Field and route names are unchanged.
   session (plan `session` defaults, the flight's repo) and moves the flight to
   it.
 - **`ticket` step** whose source is not configured on this machine is
-  skipped (not failed); a provider error fails it. With no `state` it moves
-  nothing (there is no per-source done state yet).
+  skipped (not failed); a provider error fails it. `state` is what a person
+  types — the state's exact id, or its name / unqualified label (any case) —
+  resolved through the provider's `list_states()` to the id `set_state`
+  takes; no match fails the step naming the states the tracker has. With no
+  `state` it only comments (there is no per-source done state, so the
+  built-in's last step is "Ticket: comment").
 - **`command` step** runs `/bin/sh -c` in the session's folder with the
   server's environment plus `MINDFLOCK_FLIGHT` and `MINDFLOCK_SESSION_TITLE`;
   a server restart mid-command runs it again.
@@ -390,10 +417,12 @@ had to choose. Field and route names are unchanged.
 
 ### Hand-off hooks for the integration work
 
-- `flights.arm_pending(title, plan_id, subject, by="intake") -> Flight` —
+- `flights.arm_pending(title, plan_id, subject, by="intake", replaced=None) -> Flight` —
   a `running` flight on `title` before the session exists, its first agent
   step recorded as already running (the intake prompt is that step). Raises
-  `flights.FlightError` (`unknown_plan` 404, `in_flight` 409).
+  `flights.FlightError` (`unknown_plan` 404, `in_flight` 409). A halted flight
+  it replaces on that title is appended to `replaced` (pass a list to
+  announce it right away; otherwise the driver's next pass does).
 - `flights.plan_for_depth(kind, depth) -> str` — see "Depth cuts" above;
   `""` for `off`/`agent`.
 - `flight_driver.on_session_created(title)` — already subscribed to

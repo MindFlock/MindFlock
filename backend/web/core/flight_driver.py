@@ -24,11 +24,13 @@ same one, every flight wrapped so one bad flight cannot stop the pass.
 from __future__ import annotations
 
 import asyncio
+import copy
 import datetime as _dt
 import os
 import subprocess
 import threading
 import time
+import uuid
 from typing import Dict, List, Optional, Tuple
 
 from backend.web.core import autopilot as _autopilot
@@ -683,17 +685,43 @@ async def _run_ticket(flight: dict, step: dict) -> str:
     if src is None:
         return "skipped"
     provider = get_provider(src)
-    state = step["config"].get("state") or str(getattr(src, "done_state", "") or "")
+    want = str(step["config"].get("state") or "").strip()
     try:
-        if state:
-            await provider.set_state(str(subj["id"]), state)
+        if want:
+            state_id = await _resolve_state(provider, want)
+            await provider.set_state(str(subj["id"]), state_id)
         if step["config"].get("comment"):
             await provider.add_comment(
                 str(subj["id"]), _flights.fill_prompt(step["config"]["comment"], flight)
             )
+    except _StepFailed:
+        raise
     except Exception as err:  # noqa: BLE001
         raise _StepFailed("the tracker refused: %s" % err)
     return "done"
+
+
+async def _resolve_state(provider, want: str) -> str:
+    """The provider's state ID for what a person typed: an id as is, else a
+    name (or unqualified label) matched case-insensitively. ``set_state`` takes
+    an ID on every provider (Shortcut ``int()``s it), so a name passed through
+    used to halt the flight on its last step."""
+    states = [s for s in (await provider.list_states() or []) if isinstance(s, dict)]
+    for s in states:
+        if str(s.get("id") or "") == want:
+            return want
+    low = want.casefold()
+    for s in states:
+        if low in (
+            str(s.get("name") or "").strip().casefold(),
+            str(s.get("label") or "").strip().casefold(),
+        ):
+            return str(s.get("id") or "")
+    names = ", ".join(str(s.get("name") or s.get("id") or "") for s in states[:12])
+    raise _StepFailed(
+        "the tracker has no state %r%s"
+        % (want, (" (it has: %s)" % names) if names else " (it lists no states)")
+    )
 
 
 def _run_notify(flight: dict, step: dict) -> None:
@@ -751,14 +779,9 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
         return action
     try:
         if kind == "fail" and action.get("then") == "agent":
-            note = (
-                "[MindFlock flight] %s failed: %s\nFix it; the flight retries the step once you are done."
-                % (
-                    step["title"],
-                    action.get("reason") or "failed",
-                )
+            await asyncio.to_thread(
+                _deliver, flight["session"], _fix_note(step, action)
             )
-            await asyncio.to_thread(_deliver, flight["session"], note)
             return action
         if kind != "run":
             return action
@@ -819,10 +842,26 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
             await asyncio.to_thread(_run_notify, flight, step)
             return {"action": "done", "note": "sent"}
     except _StepFailed as err:
-        return _flights.fail_action(
+        out = _flights.fail_action(
             flight, str(err), {"session": {"present": bool(flight["session"])}}
         )
+        if out.get("then") == "agent":
+            # Handed to the agent: tell it, or there is nobody to fix it.
+            try:
+                await asyncio.to_thread(
+                    _deliver, flight["session"], _fix_note(step, out)
+                )
+            except Exception:  # noqa: BLE001
+                out = dict(out, then="halt")
+        return out
     return action
+
+
+def _fix_note(step: dict, action: dict) -> str:
+    return (
+        "[MindFlock flight] %s failed: %s\nFix it; the flight retries the step "
+        "once you are done." % (step["title"], action.get("reason") or "failed")
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -835,12 +874,103 @@ class _Stale(Exception):
 def _apply_if_unchanged(
     fid: str, seen: dict, action: dict, now: float
 ) -> Optional[dict]:
-    """Apply ``action`` unless a route moved the flight since it was read."""
+    """Apply an effect-free ``action`` unless a route moved the flight since it
+    was read. None when stale; the stored record when applying it changed
+    nothing but the clock (no write — see :func:`_same`)."""
+    out: dict = {}
 
     def fn(f: dict) -> None:
         if _view_key(f)[:3] != _view_key(seen)[:3]:
             raise _Stale()
+        before = copy.deepcopy(f)
         _flights.apply(f, action, now)
+        if _same(before, f):
+            out["unchanged"] = before
+            raise _Stale()
+
+    try:
+        return _flights.mutate(fid, fn)
+    except _Stale:
+        return out.get("unchanged")
+
+
+def _same(a: dict, b: dict) -> bool:
+    """Equal but for ``updated`` — a pass that only re-observed the same wait."""
+    return {k: v for k, v in a.items() if k != "updated"} == {
+        k: v for k, v in b.items() if k != "updated"
+    }
+
+
+def _needs_effect(action: dict) -> bool:
+    return action["action"] == "run" or (
+        action["action"] == "fail" and action.get("then") == "agent"
+    )
+
+
+def _mark_intent(
+    fid: str, seen: dict, action: dict, now: float, token: str
+) -> Optional[dict]:
+    """Record, under the lock and only if nobody moved the flight, that this
+    step's side effect is about to be carried out (``detail.performing``). A
+    fresh ``run`` also records the step running here, so a route that pauses,
+    skips or cancels meanwhile sees the truth, and no pass starts it twice."""
+
+    def fn(f: dict) -> None:
+        if _view_key(f)[:3] != _view_key(seen)[:3]:
+            raise _Stale()
+        cur = _flights._current(f)
+        if cur is None or f["step_states"][cur["id"]]["detail"].get("performing"):
+            raise _Stale()
+        if action["action"] == "run" and not action.get("phase"):
+            _flights.apply(f, dict(action, detail={}), now)
+        f["step_states"][cur["id"]]["detail"]["performing"] = {
+            "token": token,
+            "at": now,
+            "action": action["action"],
+            "phase": str(action.get("phase") or ""),
+        }
+
+    try:
+        return _flights.mutate(fid, fn)
+    except _Stale:
+        return None
+
+
+def _record_outcome(
+    fid: str, sid: str, token: str, action: dict, now: float
+) -> Optional[dict]:
+    """Record a carried-out effect's outcome against its intent ``token``. The
+    effect has happened whatever a route did meanwhile, so: a flight moved past
+    the step (skipped, jumped, cancelled) only drops the mark; a paused one
+    keeps the outcome AND stays paused."""
+
+    def fn(f: dict) -> None:
+        ss = f["step_states"].get(sid)
+        mark = (ss or {}).get("detail", {}).get("performing")
+        if not isinstance(mark, dict) or mark.get("token") != token:
+            raise _Stale()
+        ss["detail"].pop("performing", None)
+        cur = _flights._current(f)
+        if f["state"] in _flights.FINAL or cur is None or cur["id"] != sid:
+            return
+        if f["state"] == "halted":
+            return
+        paused = f["state"] == "paused"
+        if paused:
+            f["state"] = "running"
+        if action["action"] == "run":
+            for key in ("session", "repo_root", "branch"):
+                if action.get(key):
+                    f[key] = str(action[key])
+            upd = action.get("detail") if isinstance(action.get("detail"), dict) else {}
+            ss["detail"].update(upd)
+            if action.get("note"):
+                ss["note"] = str(action["note"])
+            f["updated"] = now
+        else:
+            _flights.apply(f, action, now)
+        if paused and f["state"] in _flights.ACTIVE:
+            f["state"] = "paused"
 
     try:
         return _flights.mutate(fid, fn)
@@ -854,7 +984,14 @@ _CHAIN = 4
 
 
 async def step_flight(fid: str) -> None:
-    """One decision pass over one flight. Never raises."""
+    """One decision pass over one flight. Never raises.
+
+    Effect-free verdicts are applied only if nothing moved the flight since it
+    was read, and not written at all when they change nothing. A verdict with
+    a side effect (a prompt, an armed lane, a command, a tracker call) is
+    recorded as an INTENT first (:func:`_mark_intent`), carried out, then its
+    outcome recorded against that intent (:func:`_record_outcome`) — so a
+    pause / skip / cancel landing mid-effect never makes the effect repeat."""
     srv = _server()
     try:
         now = time.time()
@@ -876,19 +1013,25 @@ async def step_flight(fid: str) -> None:
             if sess.get("branch") and sess["branch"] != f["branch"]:
                 action["branch"] = sess["branch"]
             cur = _flights._current(f)
-            if (
-                action["action"] == "wait"
-                and not action.get("detail")
-                and cur is not None
-                and f["step_states"][cur["id"]]["note"] == action.get("note")
-                and not action.get("repo_root")
-                and not action.get("branch")
-            ):
-                return  # nothing changed; no write
-            action = await _perform(f, action, now)
-            after = await asyncio.to_thread(_apply_if_unchanged, fid, f, action, now)
-            if after is None:
-                return
+            if _needs_effect(action) and cur is not None:
+                token = uuid.uuid4().hex
+                marked = await asyncio.to_thread(
+                    _mark_intent, fid, f, action, now, token
+                )
+                if marked is None:
+                    return
+                action = await _perform(marked, action, now)
+                after = await asyncio.to_thread(
+                    _record_outcome, fid, cur["id"], token, action, now
+                )
+                before = f
+            else:
+                after = await asyncio.to_thread(
+                    _apply_if_unchanged, fid, f, action, now
+                )
+                before = f
+            if after is None or _same(before, after):
+                return  # stale, or nothing changed: no write, nothing to say
             if (
                 cur is not None
                 and cur["kind"] == "command"
@@ -896,8 +1039,11 @@ async def step_flight(fid: str) -> None:
             ):
                 with _JOBS_LOCK:
                     _JOBS.pop((fid, cur["id"]), None)
-            await asyncio.to_thread(_announce, f, after)
-            if action["action"] not in ("done", "advance"):
+            await asyncio.to_thread(_announce, before, after)
+            if (
+                action["action"] not in ("done", "advance")
+                or after["state"] not in _flights.ACTIVE
+            ):
                 return
             f = after
     except Exception as err:  # noqa: BLE001 — one flight never stops a pass
@@ -924,9 +1070,15 @@ async def run_pass() -> None:
     except Exception as err:  # noqa: BLE001
         _log("flights prune failed: %v", err)
     try:
-        flights = await asyncio.to_thread(_flights.list_flights, False)
+        everything = await asyncio.to_thread(_flights.list_flights, True)
     except Exception:  # noqa: BLE001 — an unreadable store: next pass
         return
+    for f in everything:
+        if _unannounced_finish(f, now):
+            # Finished somewhere that does not announce (a flight replaced by
+            # intake's arm_pending, a take-off already at its end).
+            await asyncio.to_thread(_announce, None, f)
+    flights = [f for f in everything if f["state"] not in _flights.FINAL]
     for f in flights:
         if f["state"] in _flights.ACTIVE:
             await step_flight(f["id"])
@@ -935,6 +1087,18 @@ async def run_pass() -> None:
     for cache in (_REVIEWS, _CHECKS):
         for k in [k for k in cache if k not in live]:
             cache.pop(k, None)
+
+
+#: How far back the finish sweep looks (older finishes predate the sweep).
+_FINISH_SWEEP_S = 3600.0
+
+
+def _unannounced_finish(f: dict, now: float) -> bool:
+    return (
+        f["state"] in _flights.FINAL
+        and now - float(f["finished"] or 0.0) < _FINISH_SWEEP_S
+        and not any(str(k).startswith("finished:") for k in f["announced"])
+    )
 
 
 async def run_loop() -> None:
@@ -1026,6 +1190,10 @@ async def start(body: dict) -> dict:
     by = str(body.get("by") or "user")
     title = str(body.get("title") or "").strip()
     start_at = str(body.get("start_at") or "").strip()
+    # Everything that can refuse is checked BEFORE a session is created: a
+    # bad step id used to leave an orphan session with no flight.
+    _flights.start_cursor(plan, start_at, attach=bool(title))
+    replaced: list = []
     if title:
         if title not in srv.ENGINE.instances:
             raise _flights.FlightError("unknown_session", 404, "no session %s" % title)
@@ -1038,6 +1206,7 @@ async def start(body: dict) -> dict:
                 attach=True,
                 start_at=start_at,
                 repo_root=_repo_root(title),
+                replaced=replaced,
             )
         )
     else:
@@ -1063,6 +1232,7 @@ async def start(body: dict) -> dict:
                 by=by,
                 start_at=start_at,
                 seeded=first_agent and bool(prompt),
+                replaced=replaced,
             )
         )
         if first_agent and not prompt:
@@ -1074,6 +1244,8 @@ async def start(body: dict) -> dict:
                     no_prompt=True
                 ),
             )
+    for old in replaced:
+        await asyncio.to_thread(_announce, None, old)
     _emit("flight.changed", flight)
     wake()
     return flight

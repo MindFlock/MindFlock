@@ -154,7 +154,15 @@ def test_ship_step_arms_the_lane_with_source_flight(srv, row, monkeypatch):
     assert F.get(f["id"])["step_states"]["s1"]["detail"] == {"armed_at": 123.0}
     # Observed done on the next pass → step done → flight landed.
     monkeypatch.setattr(
-        D._autopilot, "get", lambda t: {"state": "done", "lane": "pr", "depth": "pr"}
+        D._autopilot,
+        "get",
+        lambda t: {
+            "state": "done",
+            "lane": "pr",
+            "depth": "pr",
+            "source": "flight",
+            "item": f["id"],
+        },
     )
     run(D.step_flight(f["id"]))
     assert F.get(f["id"])["state"] == "done"
@@ -221,6 +229,12 @@ def test_ticket_step_calls_the_provider(srv, row, monkeypatch):
     calls = []
 
     class Prov:
+        async def list_states(self):
+            return [
+                {"id": "500", "name": "Dev · Done", "label": "Done"},
+                {"id": "400", "name": "In progress"},
+            ]
+
         async def set_state(self, tid, state):
             calls.append(("state", tid, state))
 
@@ -241,7 +255,8 @@ def test_ticket_step_calls_the_provider(srv, row, monkeypatch):
         subject={"kind": "ticket", "source": "sc", "id": "42"},
     )
     run(D.step_flight(f["id"]))
-    assert calls == [("state", "42", "Done"), ("comment", "42", "Merged 42")]
+    # "Done" is a label; set_state gets the provider's ID.
+    assert calls == [("state", "42", "500"), ("comment", "42", "Merged 42")]
     assert F.get(f["id"])["state"] == "done"
     g = fly(
         {"kind": "ticket", "config": {"comment": "x"}},
@@ -527,3 +542,221 @@ def test_list_dto_keeps_twenty_finished(srv):
     out = D.list_dto()
     assert out[0]["id"] == live["id"] and len(out) == 21
     assert len(D.list_dto(True)) == 24
+
+
+# --------------------------------------------------------------------------- #
+# Review fixes
+# --------------------------------------------------------------------------- #
+def test_pause_during_an_effect_neither_repeats_nor_unpauses(srv, row, monkeypatch):
+    """Review #1: a pause landing between the intent and the outcome keeps
+    the effect's outcome, stays paused, and the prompt is sent ONCE."""
+    sent = []
+
+    def deliver(title, text):
+        sent.append(text)
+        # A person presses Pause while the prompt is being delivered.
+        D.operate(f["id"], "pause")
+
+    monkeypatch.setattr(D, "_deliver", deliver)
+    f = fly({"kind": "agent", "config": {"prompt": "go"}})
+    run(D.step_flight(f["id"]))
+    got = F.get(f["id"])
+    assert sent == ["go"] and got["state"] == "paused"
+    ss = got["step_states"]["s1"]
+    assert ss["state"] == "running" and ss["detail"] == {"sent": True}
+    D.operate(f["id"], "resume")
+    run(D.step_flight(f["id"]))
+    run(D.step_flight(f["id"]))
+    assert sent == ["go"]
+
+
+def test_cancel_during_an_effect_drops_the_outcome(srv, row, monkeypatch):
+    """Review #1: the flight was cancelled mid-effect — nothing is applied on
+    top of it and nothing runs again."""
+    from backend.web.core import lanes
+
+    armed = []
+
+    def fake_arm(title, lane, **kw):
+        armed.append(lane)
+        D.operate(f["id"], "cancel")
+        return {"started": 1.0}
+
+    monkeypatch.setattr(lanes, "arm_session", fake_arm)
+    f = fly({"kind": "ship", "config": {"lane": "push"}})
+    run(D.step_flight(f["id"]))
+    got = F.get(f["id"])
+    assert armed == ["push"] and got["state"] == "cancelled"
+    assert "performing" not in got["step_states"]["s1"]["detail"]
+    run(D.step_flight(f["id"]))
+    assert armed == ["push"]
+
+
+def test_a_flight_moved_before_the_intent_is_not_performed(srv, row, monkeypatch):
+    """Review #1: the intent is only recorded if the flight is as it was read."""
+    sent = []
+    monkeypatch.setattr(D, "_deliver", lambda t, x: sent.append(x))
+    f = fly({"kind": "agent", "config": {"prompt": "go"}})
+    real = D.observe
+
+    async def observe_then_skip(flight, now):
+        out = await real(flight, now)
+        D.operate(f["id"], "skip", "s1")
+        return out
+
+    monkeypatch.setattr(D, "observe", observe_then_skip)
+    run(D.step_flight(f["id"]))
+    assert sent == [] and F.get(f["id"])["state"] == "done"
+
+
+def test_an_unchanged_wait_writes_nothing(srv, row, monkeypatch):
+    """Review #6: an hour-long agent step must not rewrite flights.json (nor
+    announce) every pass once its wait has stopped changing."""
+    monkeypatch.setattr(D, "_deliver", lambda t, x: None)
+    f = fly({"kind": "agent", "config": {"prompt": "go"}})
+    run(D.step_flight(f["id"]))
+    row["activity"] = "working"
+    run(D.step_flight(f["id"]))  # records worked_at
+    saves = []
+    real = F._save_flights_locked
+    monkeypatch.setattr(
+        F, "_save_flights_locked", lambda fl: saves.append(1) or real(fl)
+    )
+    run(D.step_flight(f["id"]))
+    run(D.step_flight(f["id"]))
+    # Only the lease refresh writes (claim); the step's wait does not.
+    assert len(saves) == 2
+
+
+def test_ticket_state_must_exist(srv, row, monkeypatch):
+    """Review #2: an unknown state fails clearly, naming the real ones."""
+
+    class Prov:
+        async def list_states(self):
+            return [{"id": "1", "name": "Started"}, {"id": "2", "name": "Shipped"}]
+
+        async def set_state(self, tid, state):
+            raise AssertionError("never called")
+
+        async def add_comment(self, tid, body):
+            raise AssertionError("never called")
+
+    import backend.ticket_ingestion.config as cfg_mod
+    import backend.ticket_ingestion.providers as prov_mod
+
+    monkeypatch.setattr(
+        cfg_mod,
+        "config_for_launch",
+        lambda _: SimpleNamespace(source_for=lambda k: object()),
+    )
+    monkeypatch.setattr(prov_mod, "get_provider", lambda src: Prov())
+    f = fly(
+        {"kind": "ticket", "config": {"state": "Done"}},
+        subject={"kind": "ticket", "source": "sc", "id": "9"},
+    )
+    run(D.step_flight(f["id"]))
+    got = F.get(f["id"])
+    assert got["state"] == "halted"
+    assert got["reason"] == "the tracker has no state 'Done' (it has: Started, Shipped)"
+    assert "performing" not in got["step_states"]["s1"]["detail"]
+
+
+def test_ticket_with_no_state_only_comments(srv, row, monkeypatch):
+    calls = []
+
+    class Prov:
+        async def list_states(self):
+            raise AssertionError("not needed")
+
+        async def set_state(self, tid, state):
+            calls.append("state")
+
+        async def add_comment(self, tid, body):
+            calls.append(body)
+
+    import backend.ticket_ingestion.config as cfg_mod
+    import backend.ticket_ingestion.providers as prov_mod
+
+    monkeypatch.setattr(
+        cfg_mod,
+        "config_for_launch",
+        lambda _: SimpleNamespace(
+            source_for=lambda k: SimpleNamespace(start_state="x")
+        ),
+    )
+    monkeypatch.setattr(prov_mod, "get_provider", lambda src: Prov())
+    f = fly(
+        *F.get_plan("builtin:ticket")["steps"][-1:],
+        subject={"kind": "ticket", "source": "sc", "id": "9"},
+    )
+    run(D.step_flight(f["id"]))
+    assert calls == ["Merged by MindFlock"] and F.get(f["id"])["state"] == "done"
+
+
+def test_start_with_a_bad_step_creates_no_session(srv, monkeypatch):
+    """Review #3."""
+    import backend.web.core.session_create as sc
+
+    created = []
+
+    async def fake_create(payload, **kw):
+        created.append(payload)
+        return 202, {"title": "orphan"}
+
+    monkeypatch.setattr(sc, "create_result", fake_create)
+    plan = F.save_plan(
+        {"name": "P", "steps": [{"kind": "notify"}], "session": {"repo_path": "/r"}}
+    )
+    with pytest.raises(F.FlightError) as err:
+        run(D.start({"plan_id": plan["id"], "start_at": "nope"}))
+    assert err.value.error == "unknown_step" and created == []
+
+
+def test_start_announces_the_halted_flight_it_replaces(srv, emitted):
+    """Review #4."""
+    plan = F.save_plan({"name": "P", "steps": [{"kind": "notify"}]})
+    old = run(D.start({"plan_id": plan["id"], "title": "s", "start_at": "s1"}))
+    F.mutate(
+        old["id"],
+        lambda f: F.apply(f, {"action": "fail", "reason": "x", "then": "halt"}, NOW),
+    )
+    emitted.clear()
+    run(D.start({"plan_id": plan["id"], "title": "s", "start_at": "s1"}))
+    fin = [e for e in emitted if e["event"] == "flight.finished"]
+    assert [e["data"]["id"] for e in fin] == [old["id"]]
+    assert fin[0]["data"]["reason"] == "replaced by a new flight"
+    assert any(k.startswith("finished:") for k in F.get(old["id"])["announced"])
+
+
+def test_the_pass_sweeps_a_finish_nobody_announced(srv, emitted):
+    """Review #4: intake's arm_pending replaces without announcing; the pass
+    says it once."""
+    f = F.arm_pending("s", "builtin:schedule", {"kind": "schedule"})
+    F.mutate(
+        f["id"],
+        lambda x: F.apply(x, {"action": "fail", "reason": "x", "then": "halt"}, NOW),
+    )
+    F.arm_pending("s", "builtin:schedule", {"kind": "schedule"})
+    emitted.clear()
+    run(D.run_pass())
+    run(D.run_pass())
+    fin = [
+        e
+        for e in emitted
+        if e["event"] == "flight.finished" and e["data"]["id"] == f["id"]
+    ]
+    assert len(fin) == 1
+
+
+def test_an_effect_that_fails_with_on_fail_agent_tells_the_agent(srv, row, monkeypatch):
+    sent = []
+    monkeypatch.setattr(D, "_deliver", lambda t, x: sent.append(x))
+    monkeypatch.setattr(
+        D,
+        "_ensure_checklist",
+        lambda f: (_ for _ in ()).throw(D._StepFailed("no checklist")),
+    )
+    f = fly({"kind": "verify", "title": "Verify", "config": {}, "on_fail": "agent"})
+    run(D.step_flight(f["id"]))
+    assert sent and sent[0].startswith("[MindFlock flight] Verify failed: no checklist")
+    assert F.get(f["id"])["step_states"]["s1"]["detail"]["phase"] == "fix"

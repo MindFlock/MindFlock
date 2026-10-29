@@ -115,6 +115,10 @@ AGENT_START_DEADLINE_S = 7200.0
 VERIFY_WRITE_DEADLINE_S = 3600.0
 #: A reviews step with no pull request to watch gives up after this.
 NO_PR_DEADLINE_S = 1800.0
+#: A step's side effect is recorded as ``detail.performing`` BEFORE it is
+#: carried out; a mark older than this (a server that died mid-effect) no
+#: longer stops the step from being tried again.
+PERFORM_STALE_S = 600.0
 #: Right after a push a PR can report no checks for a moment; "none" only
 #: counts as "nothing to wait for" once this has passed.
 CHECKS_NONE_GRACE_S = 120.0
@@ -292,7 +296,13 @@ STEP_KINDS: Dict[str, dict] = {
         "summary": "Move the flight's ticket and/or comment on it (skipped without a ticket).",
         "default_title": "Ticket: update",
         "fields": [
-            _f("state", "text", "Move to state", default="", placeholder="Done"),
+            _f(
+                "state",
+                "text",
+                "Move to state (its exact name or id; empty = comment only)",
+                default="",
+                placeholder="Done",
+            ),
             _f("comment", "textarea", "Comment", default=""),
         ],
     },
@@ -604,7 +614,7 @@ def _builtin_defaults() -> Dict[str, dict]:
                     text="Look over the pull request and press Done to merge it.",
                 ),
                 _s("s9", "ship", "Merge", lane="merge"),
-                _s("s10", "ticket", "Ticket: Done", comment="Merged by MindFlock"),
+                _s("s10", "ticket", "Ticket: comment", comment="Merged by MindFlock"),
             ],
         },
         "builtin:pr": {
@@ -876,8 +886,29 @@ def reset_plan(plan_id: str) -> Optional[dict]:
 
 
 # --- flights.json -------------------------------------------------------------
-def _load_flights_locked() -> Dict[str, dict]:
-    data = read_json(flights_path(), {}, expect=dict)
+#: The parsed flights.json, keyed on the file's identity: every session row
+#: of every instances snapshot asks :func:`for_session`, and N rows must cost
+#: one read, not N. ``(path, ino, mtime_ns, size)`` -> {id: flight}. Never
+#: handed out: readers copy what they return. Guarded by :data:`_LOCK`.
+_CACHE: Dict[str, object] = {"key": None, "flights": {}}
+
+
+def _file_key(path: str):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return (path, None)
+    return (path, st.st_ino, st.st_mtime_ns, st.st_size)
+
+
+def _cached_flights_locked() -> Dict[str, dict]:
+    """The parsed store (shared — callers must not mutate it). Re-read only
+    when the file changed (another process, an atomic replace)."""
+    path = flights_path()
+    key = _file_key(path)
+    if _CACHE["key"] == key and key[1] is not None:
+        return _CACHE["flights"]  # type: ignore[return-value]
+    data = read_json(path, {}, expect=dict)
     items = data.get("flights") if isinstance(data, dict) else None
     out: Dict[str, dict] = {}
     if isinstance(items, dict):
@@ -885,11 +916,21 @@ def _load_flights_locked() -> Dict[str, dict]:
             f = _normalize_flight(fid, raw)
             if f is not None:
                 out[f["id"]] = f
+    _CACHE["key"] = key
+    _CACHE["flights"] = out
     return out
 
 
+def _load_flights_locked() -> Dict[str, dict]:
+    """A private, mutable copy of the store (for read-modify-write)."""
+    return copy.deepcopy(_cached_flights_locked())
+
+
 def _save_flights_locked(flights: Dict[str, dict]) -> None:
-    atomic_write_json(flights_path(), {"flights": flights}, prefix=".flf.")
+    path = flights_path()
+    atomic_write_json(path, {"flights": flights}, prefix=".flf.")
+    _CACHE["key"] = _file_key(path)
+    _CACHE["flights"] = copy.deepcopy(flights)
 
 
 def _blank_step_state() -> dict:
@@ -980,14 +1021,19 @@ def _normalize_flight(fid, raw) -> Optional[dict]:
 def list_flights(include_finished: bool = True) -> List[dict]:
     """Every flight, newest first."""
     with _LOCK:
-        flights = _load_flights_locked()
-    out = [f for f in flights.values() if include_finished or f["state"] not in FINAL]
+        flights = _cached_flights_locked()
+        out = [
+            copy.deepcopy(f)
+            for f in flights.values()
+            if include_finished or f["state"] not in FINAL
+        ]
     return sorted(out, key=lambda f: -(f["started"] or 0.0))
 
 
 def get(flight_id: str) -> Optional[dict]:
     with _LOCK:
-        return _load_flights_locked().get(str(flight_id or ""))
+        f = _cached_flights_locked().get(str(flight_id or ""))
+        return copy.deepcopy(f) if f is not None else None
 
 
 def for_session(title: str, unfinished_only: bool = True) -> Optional[dict]:
@@ -995,14 +1041,15 @@ def for_session(title: str, unfinished_only: bool = True) -> Optional[dict]:
     if not title:
         return None
     best = None
-    for f in list_flights():
-        if f["session"] != title:
-            continue
-        if unfinished_only and f["state"] not in UNFINISHED:
-            continue
-        if best is None or f["started"] > best["started"]:
-            best = f
-    return best
+    with _LOCK:
+        for f in _cached_flights_locked().values():
+            if f["session"] != title:
+                continue
+            if unfinished_only and f["state"] not in UNFINISHED:
+                continue
+            if best is None or f["started"] > best["started"]:
+                best = f
+        return copy.deepcopy(best) if best is not None else None
 
 
 def mutate(flight_id: str, fn: Callable[[dict], None]) -> Optional[dict]:
@@ -1029,10 +1076,12 @@ def delete(flight_id: str) -> bool:
     return True
 
 
-def _put_new(flight: dict) -> dict:
+def _put_new(flight: dict, replaced: Optional[list] = None) -> dict:
     """Store a new flight (caller-built), enforcing one unfinished flight per
-    session: a running/waiting one is a 409 ``in_flight``; a halted one is
-    cancelled ("replaced") so a parked flight never blocks a fresh start."""
+    session: a running/waiting/paused one is a 409 ``in_flight``; a halted one
+    is cancelled ("replaced") so a parked flight never blocks a fresh start.
+    Each replaced flight is appended to ``replaced`` (the caller announces
+    it; the driver's pass also sweeps any it missed)."""
     with _LOCK:
         flights = _load_flights_locked()
         title = flight["session"]
@@ -1047,6 +1096,8 @@ def _put_new(flight: dict) -> dict:
                 )
             if f["state"] == "halted":
                 _finish(f, "cancelled", "replaced by a new flight", flight["started"])
+                if replaced is not None:
+                    replaced.append(copy.deepcopy(f))
         flight["id"] = _new_id("f_", flights)
         flights[flight["id"]] = flight
         _keep_finished(flights)
@@ -1094,6 +1145,23 @@ def _first_agent_index(steps: List[dict]) -> Optional[int]:
     return None
 
 
+def start_cursor(plan: dict, start_at: str = "", attach: bool = False) -> int:
+    """Where a flight of ``plan`` starts: ``start_at``'s index, the first
+    non-agent step when attaching, else 0. Raises :class:`FlightError`
+    ``unknown_step`` — call it BEFORE creating anything for the flight."""
+    steps = plan["steps"]
+    if start_at:
+        ids = [s["id"] for s in steps]
+        if start_at not in ids:
+            raise FlightError("unknown_step", 400, "no step %s in this plan" % start_at)
+        return ids.index(start_at)
+    if attach:
+        return next(
+            (i for i, s in enumerate(steps) if s["kind"] != "agent"), len(steps)
+        )
+    return 0
+
+
 def take_off(
     plan: dict,
     *,
@@ -1106,6 +1174,7 @@ def take_off(
     repo_root: str = "",
     branch: str = "",
     now: Optional[float] = None,
+    replaced: Optional[list] = None,
 ) -> dict:
     """Create a ``running`` flight of ``plan`` bound to ``session``.
 
@@ -1117,20 +1186,12 @@ def take_off(
     * otherwise the cursor is at 0, pending.
 
     Steps before the cursor are recorded ``skipped`` (history ``jumped``).
+    A halted flight it replaces on ``session`` is appended to ``replaced``.
     Raises :class:`FlightError` (``in_flight`` 409, ``unknown_step`` 400).
     """
     ts = float(now if now is not None else time.time())
     steps = copy.deepcopy(plan["steps"])
-    cursor = 0
-    if start_at:
-        ids = [s["id"] for s in steps]
-        if start_at not in ids:
-            raise FlightError("unknown_step", 400, "no step %s in this plan" % start_at)
-        cursor = ids.index(start_at)
-    elif attach:
-        cursor = next(
-            (i for i, s in enumerate(steps) if s["kind"] != "agent"), len(steps)
-        )
+    cursor = start_cursor(plan, start_at, attach)
     flight = _normalize_flight(
         "pending",
         {
@@ -1172,10 +1233,16 @@ def take_off(
         _hist(flight, ts, steps[cursor]["id"], "started", "the session's first prompt")
     if cursor >= len(steps):
         _finish(flight, "done", "", ts)
-    return _put_new(flight)
+    return _put_new(flight, replaced)
 
 
-def arm_pending(title: str, plan_id: str, subject, by: str = "intake") -> dict:
+def arm_pending(
+    title: str,
+    plan_id: str,
+    subject,
+    by: str = "intake",
+    replaced: Optional[list] = None,
+) -> dict:
     """The intake hook: a ``running`` flight for ``title`` BEFORE its session
     exists (keyed like autopilot — an intake title is deterministic). The plan's
     first agent step is the session's initial prompt (the intake-built one), so
@@ -1195,6 +1262,7 @@ def arm_pending(title: str, plan_id: str, subject, by: str = "intake") -> dict:
         subject=_normalize_subject(subject),
         by=who,
         seeded=True,
+        replaced=replaced,
     )
 
 
@@ -1475,6 +1543,19 @@ def _judge_agent(flight, step, ss, obs, now) -> dict:
     return {"action": "done", "note": "the agent's turn settled"}
 
 
+def _ours(flight: dict, rec: dict, lane: str) -> bool:
+    """Whether an autopilot record is the one THIS flight armed for ``lane`` —
+    a person's own ⏩ run on the same session is not this step's outcome."""
+    return (
+        rec.get("source") == "flight"
+        and rec.get("item") == flight["id"]
+        and (rec.get("lane") or rec.get("depth")) == lane
+    )
+
+
+_BUSY_NOTE = "Fast-track is busy with your own run"
+
+
 def _judge_ship(flight, step, ss, obs, now) -> dict:
     rec = obs.get("autopilot")
     lane = step["config"]["lane"]
@@ -1483,6 +1564,8 @@ def _judge_ship(flight, step, ss, obs, now) -> dict:
             "action": "fail",
             "reason": "Fast-track was turned off before %s finished" % step["title"],
         }
+    if not _ours(flight, rec, lane):
+        return _wait(_BUSY_NOTE)
     state = rec.get("state")
     if state == "done" and _awaiting_go(rec):
         return _wait("waiting for your go — Fast-track asks before it ships")
@@ -1602,6 +1685,8 @@ def _judge_reviews(flight, step, ss, obs, now) -> dict:
                 "action": "fail",
                 "reason": "Fast-track was turned off before the review fixes were pushed",
             }
+        if not _ours(flight, rec, "push"):
+            return _wait(_BUSY_NOTE)
         if rec.get("state") == "halted":
             return {"action": "fail", "reason": rec.get("reason") or "the push stopped"}
         if rec.get("state") == "done":
@@ -1682,7 +1767,8 @@ def _judge_command(flight, step, ss, obs, now) -> dict:
             "note": "running the command again (it was interrupted)",
         }
     if c.get("running"):
-        return _wait("running: %s" % step["config"]["command"].splitlines()[0][:80])
+        lines = str(step["config"].get("command") or "").splitlines() or ["the command"]
+        return _wait("running: %s" % lines[0][:80])
     out = str(c.get("output") or "")
     if c.get("exit") == 0:
         return {"action": "done", "note": "exit 0", "detail": {"output": out}}
@@ -1763,6 +1849,14 @@ def next_action(flight: dict, obs: dict, now: float) -> dict:
     ss = flight["step_states"][step["id"]]
     sess = obs.get("session") or {}
     st = ss["state"]
+    performing = ss["detail"].get("performing")
+    if (
+        isinstance(performing, dict)
+        and now - float(performing.get("at") or 0.0) < PERFORM_STALE_S
+    ):
+        # A side effect for this step is being carried out (by this pass or
+        # another server's): never start it a second time.
+        return _wait("carrying out %s" % step["title"])
     if st in ("done", "skipped"):
         return {"action": "advance", "note": "", "keep": True}
     if st == "failed":
@@ -1783,6 +1877,14 @@ def next_action(flight: dict, obs: dict, now: float) -> dict:
             }
         if hold is not None:
             return hold
+        if (
+            step["kind"] == "command"
+            and not str(step["config"].get("command") or "").strip()
+        ):
+            # A synced plan's lenient normalisation lets an empty one through.
+            return _resolve_fail(
+                flight, step, ss, {"action": "fail", "reason": "no command"}, sess
+            )
         return {"action": "run", "note": "starting %s" % step["title"]}
     if hold is not None:
         return hold
