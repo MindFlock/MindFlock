@@ -151,14 +151,17 @@ def test_operations():
         == 404
     )
     assert (
-        client.post("/api/flights/%s/pause" % fid).json()["flight"]["state"] == "halted"
+        client.post("/api/flights/%s/pause" % fid).json()["flight"]["state"] == "paused"
     )
-    assert client.delete("/api/flights/" + fid).status_code == 204  # halted: deletable
+    assert client.delete("/api/flights/" + fid).json()["error"] == "in_flight"
+    assert client.post("/api/flights/%s/cancel" % fid).status_code == 200
+    assert client.delete("/api/flights/" + fid).status_code == 204
     f = client.post("/api/flights/start", json={"plan_id": p["id"], "title": "sess"})
     fid = f.json()["flight"]["id"]
     assert (
-        client.post("/api/flights/%s/pause" % fid).json()["flight"]["state"] == "halted"
+        client.post("/api/flights/%s/pause" % fid).json()["flight"]["state"] == "paused"
     )
+    assert server._flight_dto("sess")["state"] == "paused"
     assert (
         client.post("/api/flights/%s/resume" % fid).json()["flight"]["state"]
         == "running"

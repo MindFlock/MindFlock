@@ -119,11 +119,15 @@ NO_PR_DEADLINE_S = 1800.0
 #: counts as "nothing to wait for" once this has passed.
 CHECKS_NONE_GRACE_S = 120.0
 
-#: Flight states. ``halted`` is parked (failed or paused) and resumable;
+#: Flight states. ``paused`` is held by a person (resume carries on where it
+#: was); ``halted`` is stopped on a failure (retry / skip / resume);
 #: ``done``/``cancelled`` are final.
-STATES = ("running", "waiting_you", "halted", "done", "cancelled")
+STATES = ("running", "waiting_you", "paused", "halted", "done", "cancelled")
+#: States the driver moves.
 ACTIVE = frozenset({"running", "waiting_you"})
-UNFINISHED = frozenset({"running", "waiting_you", "halted"})
+#: States that hold their session (a new start is 409 ``in_flight``).
+HOLDING = frozenset({"running", "waiting_you", "paused"})
+UNFINISHED = frozenset({"running", "waiting_you", "paused", "halted"})
 FINAL = frozenset({"done", "cancelled"})
 STEP_STATES = ("pending", "running", "waiting_you", "done", "skipped", "failed")
 HISTORY_EVENTS = (
@@ -133,6 +137,7 @@ HISTORY_EVENTS = (
     "skipped",
     "you",
     "halted",
+    "paused",
     "resumed",
     "jumped",
 )
@@ -230,7 +235,7 @@ STEP_KINDS: Dict[str, dict] = {
         "label": "You",
         "actor": "you",
         "summary": "Park the flight and ask you to do something; it goes on when you press Done.",
-        "default_title": "You: check it",
+        "default_title": "Check it",
         "fields": [
             _f(
                 "text",
@@ -595,7 +600,7 @@ def _builtin_defaults() -> Dict[str, dict]:
                 _s(
                     "s8",
                     "you",
-                    "You: approve the merge",
+                    "Approve the merge",
                     text="Look over the pull request and press Done to merge it.",
                 ),
                 _s("s9", "ship", "Merge", lane="merge"),
@@ -957,8 +962,6 @@ def _normalize_flight(fid, raw) -> Optional[dict]:
         "updated": _float(raw.get("updated")),
         "finished": _float(raw.get("finished")),
         "by": by,
-        # Paused by a person (a halted flight that resume carries on as-is).
-        "paused": bool(raw.get("paused")),
         # When this flight's session was first seen missing (prune's clock).
         "gone_since": _float(raw.get("gone_since")),
         # What has been announced already, so a restart never repeats a
@@ -1036,7 +1039,7 @@ def _put_new(flight: dict) -> dict:
         for f in flights.values():
             if not title or f["session"] != title:
                 continue
-            if f["state"] in ACTIVE:
+            if f["state"] in HOLDING:
                 raise FlightError(
                     "in_flight",
                     409,
@@ -1343,6 +1346,8 @@ def event_data(flight: dict) -> dict:
     if flight["state"] == "waiting_you":
         text, _items_ = you_text(flight)
         detail = "%s: %s" % (flight["session"] or flight["plan_name"], text)
+    elif flight["state"] == "paused":
+        detail = "%s: paused" % (flight["session"] or flight["plan_name"])
     elif flight["state"] in ("halted", "cancelled") and flight["reason"]:
         detail = "%s: %s" % (flight["plan_name"], flight["reason"])
     elif flight["state"] == "done":
@@ -1828,7 +1833,6 @@ def _finish(flight: dict, state: str, reason: str, now: float) -> None:
     flight["reason"] = reason
     flight["finished"] = now
     flight["updated"] = now
-    flight["paused"] = False
 
 
 def _advance(flight: dict, now: float) -> None:
@@ -1978,11 +1982,19 @@ def op_done(
     ss["note"] = str(note or "")[:1000]
     ss["detail"].pop("failed_reason", None)
     _hist(flight, ts, sid, "done", note or "you pressed Done")
-    flight["paused"] = False
     flight["reason"] = ""
     flight["updated"] = ts
-    _advance(flight, ts)
+    _advance_keeping_pause(flight, ts)
     return flight
+
+
+def _advance_keeping_pause(flight: dict, now: float) -> None:
+    """:func:`_advance`, but a paused flight stays paused: ticking a step off
+    is not the same as pressing Resume."""
+    paused = flight["state"] == "paused"
+    _advance(flight, now)
+    if paused and flight["state"] not in FINAL:
+        flight["state"] = "paused"
 
 
 def op_skip(flight: dict, sid: str, now: Optional[float] = None) -> dict:
@@ -1999,9 +2011,8 @@ def op_skip(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     _hist(flight, ts, sid, "skipped", "skipped by you")
     flight["updated"] = ts
     if i == flight["cursor"]:
-        flight["paused"] = False
         flight["reason"] = ""
-        _advance(flight, ts)
+        _advance_keeping_pause(flight, ts)
     return flight
 
 
@@ -2023,7 +2034,6 @@ def op_retry(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     flight["step_states"][sid] = dict(_blank_step_state(), since=ts)
     flight["state"] = "running"
     flight["reason"] = ""
-    flight["paused"] = False
     flight["updated"] = ts
     _hist(flight, ts, sid, "resumed", "retry")
     return flight
@@ -2050,20 +2060,20 @@ def op_jump(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     flight["cursor"] = i
     flight["state"] = "running"
     flight["reason"] = ""
-    flight["paused"] = False
     flight["updated"] = ts
     return flight
 
 
 def op_pause(flight: dict, now: Optional[float] = None) -> dict:
+    """Hold a running / waiting flight where it is (``paused``). A halted one
+    is already stopped and stays halted; pausing twice is a no-op."""
     ts = float(now if now is not None else time.time())
     _not_final(flight)
-    if flight["state"] != "halted":
+    if flight["state"] in ACTIVE:
         cur = _current(flight)
-        flight["state"] = "halted"
-        flight["paused"] = True
-        flight["reason"] = "paused"
-        _hist(flight, ts, cur["id"] if cur else "", "halted", "paused by you")
+        flight["state"] = "paused"
+        flight["reason"] = ""
+        _hist(flight, ts, cur["id"] if cur else "", "paused", "paused by you")
     flight["updated"] = ts
     return flight
 
@@ -2082,7 +2092,6 @@ def op_resume(flight: dict, now: Optional[float] = None) -> dict:
         flight["step_states"][cur["id"]] = dict(_blank_step_state(), since=ts)
         ss = flight["step_states"][cur["id"]]
     flight["state"] = "waiting_you" if ss["state"] == "waiting_you" else "running"
-    flight["paused"] = False
     flight["reason"] = ""
     flight["updated"] = ts
     ss["detail"].pop("idle_since", None)

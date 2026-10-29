@@ -838,9 +838,7 @@ def _apply_if_unchanged(
     """Apply ``action`` unless a route moved the flight since it was read."""
 
     def fn(f: dict) -> None:
-        if _view_key(f)[:3] != _view_key(seen)[:3] or f.get("paused") != seen.get(
-            "paused"
-        ):
+        if _view_key(f)[:3] != _view_key(seen)[:3]:
             raise _Stale()
         _flights.apply(f, action, now)
 
@@ -1148,11 +1146,12 @@ def operate(flight_id: str, op: str, step: str = "", note: str = "") -> dict:
 
 
 def remove(flight_id: str) -> None:
-    """``DELETE /api/flights/{id}``: finished (or halted) flights only."""
+    """``DELETE /api/flights/{id}``: finished (or halted) flights only — a
+    running, waiting or paused one must be cancelled first."""
     f = _flights.get(flight_id)
     if f is None:
         raise _flights.FlightError("unknown_flight", 404, "no such flight")
-    if f["state"] in _flights.ACTIVE:
+    if f["state"] in _flights.HOLDING:
         raise _flights.FlightError("in_flight", 409, "cancel the flight first")
     _flights.delete(flight_id)
     with _JOBS_LOCK:
