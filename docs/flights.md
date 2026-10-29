@@ -221,7 +221,7 @@ issue flights the server-built intake prompt is used and the step's own
   "cursor": 0,                    // index into steps of the current step
   "step_states": {"s1": {"state": "pending"|"running"|"waiting_you"|"done"|"skipped"|"failed", "since": 0.0, "note": "", "detail": {}, "rounds": 0}},
   "reason": "",                   // why halted / cancelled (human-readable)
-  "history": [{"at": 0.0, "step": "s1", "event": "started"|"done"|"failed"|"skipped"|"you"|"halted"|"paused"|"resumed"|"jumped", "note": ""}],  // ≤200
+  "history": [{"at": 0.0, "step": "s1", "event": "started"|"done"|"failed"|"skipped"|"you"|"halted"|"paused"|"resumed"|"jumped"|"added"|"edited"|"removed", "note": ""}],  // ≤200
   "started": 0.0, "updated": 0.0, "finished": 0.0,
   "by": "user" | "intake" | "schedule" | "agent:<title>",
   "boot": "", "owner": "", "owner_at": 0.0   // lease, as autopilot.json
@@ -232,6 +232,11 @@ Rules:
 
 - One flight per session at a time (`POST /api/flights/start` on a title
   that already has a running flight → 409 `in_flight`).
+- A flight's `steps` snapshot is never changed by its plan, but **can be
+  changed in the air** through the step routes: a step can be added after the
+  current one, and a step still ahead (pending) edited or removed. The planner
+  lands a flight only when its cursor has passed every step, so a step added to
+  a flight whose last step is finishing is flown.
 - A flight's position **is** stored (`cursor`), unlike autopilot: the steps
   are a script the owner drew, not a target. What is *re-derived* on every
   pass is whether the current step is done (git, GitHub, the checklist store,
@@ -280,7 +285,10 @@ No model installed → 409 `no_model`.
 | `POST /api/flights/describe` | `{text, want}` | `{"steps": [Step]}` |
 | `GET /api/flights` | `?all=1` to include finished (default: unfinished + last 20 finished) | `{"flights": [Flight]}` |
 | `GET /api/flights/{id}` | | `{"flight": Flight}` |
-| `POST /api/flights/start` | `{"plan_id", "title"?: "<existing session to attach to>", "subject"?: {kind, source, id}, "repo_path"?, "prompt"?, "start_at"?: "<step id>"}` | 202 `{"flight": Flight}`. Attaching to an existing session (`title`) starts at `start_at` or the first non-`agent` step. Without `title` the server creates the session from `plan.session` (+ `repo_path` / `prompt` overrides) through `session_create.create_result` — the same path as the New dialog. A ticket/PR/issue `subject` goes through the Intake start path (`ticket_start.launch` / the PR and issue force-start bodies) with `plan_id`, which arms the flight on the deterministic title before the session exists. |
+| `POST /api/flights/start` | `{"plan_id"?, "title"?: "<existing session to attach to>", "subject"?: {kind, source, id}, "repo_path"?, "prompt"?, "start_at"?: "<step id>", "steps"?: [Step], "absorb_fasttrack"?: bool}` | 202 `{"flight": Flight, "absorbed": [lane]}`. **`steps`** (1..40, validated like a plan's; 400 `bad_step` with `field`) draws the flight here: alone, the flight is `plan_id: "adhoc"`, `plan_name` = the subject's headline or "Flight on <title>", its steps numbered `s1..sN`; with `plan_id`, the plan's steps then the given ones (next free `sN`). An ad-hoc flight needs `title` or `repo_path` (400 `needs_title`). **`absorb_fasttrack`** (default true with `title`): the session's own fast-track run (autopilot record `running` or `halted`, `source != "flight"`) becomes the flight's leading `ship` steps — the rungs after the one the session's stage (`committed`/`pushed`/`pr`) proves, up to the run's lane, in `autopilot.DEPTH_ORDER` order — placed where the flight starts, and the record is disarmed so the ladder carries on under the flight; `absorbed` lists their lanes. A `done` run is left alone; a `halted` one is absorbed (its first step starts `pending`, the halt reason goes into the flight's history). Attaching to an existing session (`title`) starts at `start_at` or the first non-`agent` step. Without `title` the server creates the session from `plan.session` (+ `repo_path` / `prompt` overrides) through `session_create.create_result` — the same path as the New dialog. A ticket/PR/issue `subject` goes through the Intake start path (`ticket_start.launch` / the PR and issue force-start bodies) with `plan_id`, which arms the flight on the deterministic title before the session exists. |
+| `POST /api/flights/{id}/steps` | `{"step": Step, "at"?: int}` | `{"flight"}` — appended, or inserted at index `at`, which must be after the current step (409 `in_progress`); the flight must be `running`/`waiting_you`/`paused` (409 `finished`). The new step takes the next free `sN`. History `added`. |
+| `PATCH /api/flights/{id}/steps/{sid}` | `{title?, config?, on_fail?}` | `{"flight"}` — only a pending step after the current one (409 `in_progress`); validated like a plan step. History `edited`. |
+| `DELETE /api/flights/{id}/steps/{sid}` | | `{"flight"}` — only a pending step after the current one (409 `in_progress`). History `removed`. |
 | `POST /api/flights/{id}/steps/{sid}/done` | `{"note"?}` | `{"flight"}` — only for a `you` step (or a `verify` step waiting on you: it marks the open human checklist items as passed) |
 | `POST /api/flights/{id}/steps/{sid}/skip` | | `{"flight"}` |
 | `POST /api/flights/{id}/steps/{sid}/retry` | | `{"flight"}` — a failed/halted step runs again |
@@ -506,6 +514,41 @@ had to choose. Field and route names are unchanged.
   the `POST /api/test-plans/{id}/run` route body. `who: agent` is done once
   the agent's items are answered (human items stay on the checklist); open
   agent items left after a run become yours under `both`.
+
+- **Steps changed in the air.** The three step routes are pure operations
+  (`flights.op_add_step` / `op_edit_step` / `op_remove_step`) run through the
+  store's `mutate`, checked against the flight *as stored* under the lock (a
+  driver pass that moved the cursor meanwhile wins and the route gets its
+  409); each emits `flight.changed` (even when the cursor did not move) and
+  wakes the driver. A step "still ahead" is one after the cursor whose state is
+  `pending` with nothing recorded on it — a later step already marked
+  `skipped` is not. PATCH's `config` **replaces** the step's config (send the
+  whole thing, as the plan editor does); `kind` and `id` never change; an
+  empty `title` falls back to the kind's default. The new step's id is one
+  past the highest `sN` the flight's steps *or history* name, so a removed
+  step's id is never handed out again. `at` is 400 `bad_at` when it is not an
+  index `0..len(steps)`; a flight already at 40 steps is 409 `too_many_steps`.
+  A bad step is 400 `{"error": "bad_step", "detail", "field"}` with `field`
+  like `step.config.lane` (`steps[i]…` on `/start`). The planner side: an
+  `apply(finish)` that meets a current step (one added after the pass read the
+  flight) advances instead of landing.
+- **Absorbing a fast-track.** The stage is read the way the autopilot driver
+  reads it (`server._session_stage(inst)`, uncached), else the published row's
+  `stage`. The absorbed steps go where the flight *starts* — after an attach's
+  skipped agent step(s), before the plan's own steps from there — and the
+  flight starts on the first of them; their ids follow the plan's (`s3, s4`
+  after `s1, s2`; for a steps-only flight the given steps are `s1..sN` and the
+  absorbed ones follow on, though they fly first). `ask_first` lands on the
+  one step the run would have asked before — the commit for a commit lane,
+  else the push — and only while that ask is still ahead (the record held
+  short of its lane), so a run that asks once still asks once. The run's
+  commit `message` rides along as the steps' `message` unless it was a
+  placeholder (`message_auto` / `message_written`). A run whose rungs are all
+  behind it (or a `leave` run) is still disarmed, with nothing absorbed. The
+  history gets one `added` event on the first absorbed step ("taken over from
+  Fast-track: Push → Open PR", plus "(it had stopped: <reason>)" for a halted
+  run). The disarm happens after the flight is stored and skips a record the
+  flight's own first step has armed by then.
 
 ### Hand-off hooks for the integration work
 

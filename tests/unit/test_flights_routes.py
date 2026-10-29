@@ -20,6 +20,7 @@ def _isolated(tmp_path, monkeypatch):
     monkeypatch.setenv("MINDFLOCK_FLIGHTS_DIR", str(tmp_path / "flights"))
     monkeypatch.setenv("MINDFLOCK_SETTINGS_FILE", str(tmp_path / "settings.json"))
     monkeypatch.setenv("MINDFLOCK_TEST_PLANS_FILE", str(tmp_path / "test_plans.json"))
+    monkeypatch.setenv("MINDFLOCK_AUTOPILOT_FILE", str(tmp_path / "autopilot.json"))
     monkeypatch.setenv("MINDFLOCK_AUTH", "0")
     monkeypatch.delenv("CS_WEB_MODE", raising=False)
     # A copy of the registry, never the live state.json's dict.
@@ -278,3 +279,138 @@ def test_autopilot_accepts_the_flight_source():
 
     assert "flight" in autopilot.SOURCES
     assert autopilot._normalize({"source": "flight"})["source"] == "flight"
+
+
+# --------------------------------------------------------------------------- #
+# Live flights: ad-hoc starts, absorbing a fast-track, steps changed in the air
+# --------------------------------------------------------------------------- #
+def _adhoc(**kw):
+    body = {"title": "sess", "steps": [{"kind": "agent"}, {"kind": "notify"}]}
+    body.update(kw)
+    return client.post("/api/flights/start", json=body)
+
+
+def test_start_with_steps_and_no_plan():
+    r = _adhoc()
+    assert r.status_code == 202
+    body = r.json()
+    f = body["flight"]
+    assert body["absorbed"] == []
+    assert (f["plan_id"], f["plan_name"], f["session"]) == (
+        "adhoc",
+        "Flight on sess",
+        "sess",
+    )
+    assert [s["id"] for s in f["steps"]] == ["s1", "s2"] and f["cursor"] == 1
+
+
+def test_start_with_steps_refusals():
+    r = client.post("/api/flights/start", json={"steps": [{"kind": "notify"}]})
+    assert (r.status_code, r.json()["error"]) == (400, "needs_title")
+    r = _adhoc(steps=[{"kind": "ship", "config": {"lane": "moon"}}])
+    assert r.status_code == 400
+    assert r.json()["error"] == "bad_step"
+    assert r.json()["field"] == "steps[0].config.lane"
+    r = _adhoc(steps={"kind": "notify"})
+    assert (r.status_code, r.json()["field"]) == (400, "steps")
+    r = _adhoc(steps=[])
+    assert r.status_code == 400
+    r = _adhoc(plan_id="p_nope")
+    assert (r.status_code, r.json()["error"]) == (404, "unknown_plan")
+    r = _adhoc(title="ghost")
+    assert (r.status_code, r.json()["error"]) == (404, "unknown_session")
+
+
+def test_start_with_plan_and_steps_appends_them():
+    p = _plan().json()["plan"]
+    r = _adhoc(plan_id=p["id"], steps=[{"kind": "wait", "config": {"minutes": 1}}])
+    assert r.status_code == 202
+    f = r.json()["flight"]
+    assert f["plan_id"] == p["id"] and f["plan_name"] == "Mine"
+    assert [(s["id"], s["kind"]) for s in f["steps"]] == [
+        ("s1", "agent"),
+        ("s2", "you"),
+        ("s3", "wait"),
+    ]
+
+
+def test_start_absorbs_the_sessions_fast_track():
+    from backend.web.core import autopilot
+
+    autopilot.arm("sess", "push", source="session", lane="push")
+    r = _adhoc()
+    assert r.status_code == 202
+    body = r.json()
+    assert body["absorbed"] == ["commit", "push"]
+    f = body["flight"]
+    assert [s["kind"] for s in f["steps"]] == ["agent", "ship", "ship", "notify"]
+    assert f["steps"][f["cursor"]]["config"]["lane"] == "commit"
+    assert autopilot.get("sess") is None
+
+
+def test_start_leaves_the_fast_track_when_asked():
+    from backend.web.core import autopilot
+
+    autopilot.arm("sess", "push", source="session", lane="push")
+    r = _adhoc(absorb_fasttrack=False)
+    assert r.status_code == 202 and r.json()["absorbed"] == []
+    assert autopilot.get("sess")["depth"] == "push"
+
+
+def test_add_edit_remove_steps():
+    f = _adhoc().json()["flight"]
+    base = "/api/flights/%s/steps" % f["id"]
+    r = client.post(base, json={"step": {"kind": "wait", "config": {"minutes": 4}}})
+    assert r.status_code == 200
+    got = r.json()["flight"]
+    assert [s["id"] for s in got["steps"]] == ["s1", "s2", "s3"]
+    assert got["history"][-1]["event"] == "added"
+    r = client.post(base, json={"step": {"kind": "notify", "title": "Ping"}, "at": 2})
+    assert [s["id"] for s in r.json()["flight"]["steps"]] == ["s1", "s2", "s4", "s3"]
+    r = client.patch(base + "/s4", json={"title": "Pong", "on_fail": "skip"})
+    assert r.status_code == 200
+    s4 = r.json()["flight"]["steps"][2]
+    assert (s4["title"], s4["on_fail"]) == ("Pong", "skip")
+    r = client.delete(base + "/s4")
+    assert r.status_code == 200
+    assert [s["id"] for s in r.json()["flight"]["steps"]] == ["s1", "s2", "s3"]
+    assert r.json()["flight"]["history"][-1]["event"] == "removed"
+
+
+def test_step_changes_refuse_what_has_started():
+    f = _adhoc().json()["flight"]
+    base = "/api/flights/%s/steps" % f["id"]
+    r = client.post(base, json={"step": {"kind": "notify"}, "at": 1})
+    assert (r.status_code, r.json()["error"]) == (409, "in_progress")
+    r = client.post(base, json={"step": {"kind": "notify"}, "at": 7})
+    assert (r.status_code, r.json()["error"]) == (400, "bad_at")
+    r = client.post(base, json={"step": {"kind": "moon"}})
+    assert (r.status_code, r.json()["error"], r.json()["field"]) == (
+        400,
+        "bad_step",
+        "step.kind",
+    )
+    assert client.post(base, json={}).status_code == 400
+    for path in ("/s1", "/s2"):
+        # s1 is behind the flight, s2 is the current step.
+        r = client.patch(base + path, json={"title": "x"})
+        assert (r.status_code, r.json()["error"]) == (409, "in_progress")
+        r = client.delete(base + path)
+        assert (r.status_code, r.json()["error"]) == (409, "in_progress")
+    r = client.patch(base + "/s9", json={"title": "x"})
+    assert (r.status_code, r.json()["error"]) == (404, "unknown_step")
+    assert (
+        client.post(
+            "/api/flights/f_nope/steps", json={"step": {"kind": "notify"}}
+        ).status_code
+        == 404
+    )
+    assert client.delete("/api/flights/f_nope/steps/s1").status_code == 404
+    client.post(base, json={"step": {"kind": "notify"}})
+    client.post("/api/flights/%s/cancel" % f["id"])
+    r = client.post(base, json={"step": {"kind": "notify"}})
+    assert (r.status_code, r.json()["error"]) == (409, "finished")
+    r = client.patch(base + "/s3", json={"title": "x"})
+    assert (r.status_code, r.json()["error"]) == (409, "finished")
+    r = client.delete(base + "/s3")
+    assert (r.status_code, r.json()["error"]) == (409, "finished")
