@@ -11556,7 +11556,7 @@ function systemSetTimeoutZero(callback) {
 //#endregion
 //#region node_modules/@tanstack/query-core/build/modern/utils.js
 var isServer$1 = typeof window === "undefined" || "Deno" in globalThis;
-function noop() {}
+function noop$1() {}
 function functionalUpdate(updater, input) {
 	return typeof updater === "function" ? updater(input) : updater;
 }
@@ -11930,7 +11930,7 @@ function createRetryer(config) {
 		promiseResolve = resolve;
 		promiseReject = reject;
 	});
-	promise.catch(noop);
+	promise.catch(noop$1);
 	const isResolved = () => status !== "pending";
 	const cancel = (cancelOptions) => {
 		if (!isResolved()) {
@@ -12192,7 +12192,7 @@ var Query = class extends Removable {
 	cancel(options) {
 		const promise = this.#retryer?.promise;
 		this.#retryer?.cancel(options);
-		return promise ? promise.then(noop).catch(noop) : Promise.resolve();
+		return promise ? promise.then(noop$1).catch(noop$1) : Promise.resolve();
 	}
 	destroy() {
 		super.destroy();
@@ -12627,7 +12627,7 @@ var QueryObserver = class extends Subscribable {
 	#executeFetch(fetchOptions) {
 		this.#updateQuery();
 		let promise = this.#currentQuery.fetch(this.options, fetchOptions);
-		if (!fetchOptions?.throwOnError) promise = promise.catch(noop);
+		if (!fetchOptions?.throwOnError) promise = promise.catch(noop$1);
 		return promise;
 	}
 	#shouldScheduleTimer(timeout) {
@@ -13141,7 +13141,7 @@ var MutationCache = class extends Subscribable {
 	}
 	resumePausedMutations() {
 		const pausedMutations = this.getAll().filter((x) => x.state.isPaused);
-		return notifyManager.batch(() => Promise.all(pausedMutations.map((mutation) => mutation.continue().catch(noop))));
+		return notifyManager.batch(() => Promise.all(pausedMutations.map((mutation) => mutation.continue().catch(noop$1))));
 	}
 };
 function scopeFor(mutation) {
@@ -13356,7 +13356,7 @@ var QueryClient = class {
 			...cancelOptions
 		};
 		const promises = notifyManager.batch(() => this.#queryCache.findAll(filters).map((query) => query.cancel(defaultedCancelOptions)));
-		return Promise.all(promises).then(noop).catch(noop);
+		return Promise.all(promises).then(noop$1).catch(noop$1);
 	}
 	invalidateQueries(filters, options = {}) {
 		return notifyManager.batch(() => {
@@ -13377,10 +13377,10 @@ var QueryClient = class {
 		};
 		const promises = notifyManager.batch(() => this.#queryCache.findAll(filters).filter((query) => !query.isDisabled() && !query.isStatic()).map((query) => {
 			let promise = query.fetch(void 0, fetchOptions);
-			if (!fetchOptions.throwOnError) promise = promise.catch(noop);
+			if (!fetchOptions.throwOnError) promise = promise.catch(noop$1);
 			return query.state.fetchStatus === "paused" ? Promise.resolve() : promise;
 		}));
-		return Promise.all(promises).then(noop);
+		return Promise.all(promises).then(noop$1);
 	}
 	async query(options) {
 		const defaultedOptions = this.defaultQueryOptions(options);
@@ -13398,7 +13398,7 @@ var QueryClient = class {
 		return query.isStaleByTime(resolveQueryValue(defaultedOptions.staleTime, query)) ? query.fetch(defaultedOptions) : Promise.resolve(query.state.data);
 	}
 	prefetchQuery(options) {
-		return this.fetchQuery(options).then(noop).catch(noop);
+		return this.fetchQuery(options).then(noop$1).catch(noop$1);
 	}
 	infiniteQuery(options) {
 		options._type = "infinite";
@@ -13409,7 +13409,7 @@ var QueryClient = class {
 		return this.fetchQuery(options);
 	}
 	prefetchInfiniteQuery(options) {
-		return this.fetchInfiniteQuery(options).then(noop).catch(noop);
+		return this.fetchInfiniteQuery(options).then(noop$1).catch(noop$1);
 	}
 	ensureInfiniteQueryData(options) {
 		options._type = "infinite";
@@ -13559,7 +13559,7 @@ function useBaseQuery(options, Observer, queryClient) {
 	const result = observer.getOptimisticResult(defaultedOptions);
 	const shouldSubscribe = !isRestoring && subscribed;
 	import_react.useSyncExternalStore(import_react.useCallback((onStoreChange) => {
-		const unsubscribe = shouldSubscribe ? observer.subscribe(notifyManager.batchCalls(onStoreChange)) : noop;
+		const unsubscribe = shouldSubscribe ? observer.subscribe(notifyManager.batchCalls(onStoreChange)) : noop$1;
 		observer.updateResult();
 		return unsubscribe;
 	}, [observer, shouldSubscribe]), () => observer.getCurrentResult(), () => observer.getCurrentResult());
@@ -25371,14 +25371,14 @@ var ON_FAIL_LABEL = {
 	you: "Ask me"
 };
 var FLIGHTS_TABS = [
-	"board",
+	"sky",
 	"plans",
 	"sources",
 	"schedule",
 	"checklists"
 ];
 var FLIGHTS_TAB_LABEL = {
-	board: "Board",
+	sky: "Sky",
 	plans: "Flyways",
 	sources: "Sources",
 	schedule: "Schedule",
@@ -25387,19 +25387,20 @@ var FLIGHTS_TAB_LABEL = {
 function parseFlightsTarget(target) {
 	const raw = String(target || "").trim();
 	const cut = raw.indexOf("/");
-	const head = cut < 0 ? raw : raw.slice(0, cut);
+	const word = cut < 0 ? raw : raw.slice(0, cut);
+	const head = word === "board" ? "sky" : word;
 	const rest = cut < 0 ? "" : raw.slice(cut + 1);
 	return FLIGHTS_TABS.includes(head) ? {
 		tab: head,
 		rest
 	} : {
-		tab: "board",
+		tab: "sky",
 		rest: ""
 	};
 }
 function flightsTargetFor(name, target) {
 	const t = String(target || "");
-	if (name === "intake") return t ? "sources/" + t : "board";
+	if (name === "intake") return t ? "sources/" + t : "sky";
 	if (name === "verify") return t ? "checklists/" + t : "checklists";
 	return t ? "schedule/" + t : "schedule";
 }
@@ -26400,11 +26401,11 @@ function attentionItems(instances) {
 }
 //#endregion
 //#region src/lib/sessionLabel.ts
-function escapeRe(s) {
+function escapeRe$1(s) {
 	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 function featureBranchName(branch, slug) {
-	const m = new RegExp(`^feature/${escapeRe(slug)}/(.+)$`).exec(branch);
+	const m = new RegExp(`^feature/${escapeRe$1(slug)}/(.+)$`).exec(branch);
 	return m ? m[1] : "";
 }
 function branchTail(branch) {
@@ -27068,7 +27069,7 @@ function permanent(e) {
 	const st = e?.status;
 	return typeof st === "number" && st >= 400 && st < 500 && st !== 401 && st !== 408 && st !== 409 && st !== 429;
 }
-function bodyFor(fields, kv) {
+function bodyFor$1(fields, kv) {
 	const body = {};
 	for (const f of fields) {
 		const v = readLocal(f, kv);
@@ -27085,7 +27086,7 @@ async function flushPrefWrites(kv = storage$2()) {
 	const sentGen = writeGens(fields);
 	let res;
 	try {
-		res = await sender(bodyFor(fields, kv));
+		res = await sender(bodyFor$1(fields, kv));
 	} catch (e) {
 		const refused = refusedFields(e);
 		if (refused) {
@@ -27116,7 +27117,7 @@ function flushPrefsOnHide(kv = storage$2()) {
 	pending$3.clear();
 	if (!fields.size) return;
 	const sentGen = writeGens(fields);
-	beacon(bodyFor(fields, kv)).then((res) => settleExcept(fields, refusedFields(res) || [], sentGen, kv, res), (e) => {
+	beacon(bodyFor$1(fields, kv)).then((res) => settleExcept(fields, refusedFields(res) || [], sentGen, kv, res), (e) => {
 		const refused = refusedFields(e);
 		if (refused) settleExcept(fields, refused, sentGen, kv, e);
 		else if (permanent(e)) settleFields(fields, sentGen, kv);
@@ -33500,10 +33501,10 @@ var KEYMAP = [
 		help: [
 			"Navigation",
 			"Alt+I",
-			"Flights — the Board: what needs you, what is in flight, what is waiting to fly"
+			"Flights — the Sky: every session's line, the bird where each one is, what is perched on you"
 		],
 		when: () => !isEditingTarget(document.activeElement),
-		run: () => useUi.getState().openDialogFor("flights", "board")
+		run: () => useUi.getState().openDialogFor("flights", "sky")
 	},
 	{
 		key: "v",
@@ -35871,6 +35872,23 @@ function Bird({ size = 16, className = "" }) {
 		"aria-hidden": "true",
 		focusable: "false",
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M2 9.5c3.4-2.8 6.8-2.3 10 2 3.2-4.3 6.6-4.8 10-2" })
+	});
+}
+function BirdMarker({ tone, x, y, label }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "fl-bird-marker tone-" + tone,
+		style: {
+			left: x,
+			top: y
+		},
+		role: "img",
+		"aria-label": label,
+		title: label,
+		"data-tour": "flights-bird",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, {
+			size: 22,
+			className: "fl-bird-big"
+		})
 	});
 }
 function StopIcon({ kind, size = 15 }) {
@@ -44541,16 +44559,22 @@ var FLIGHTS_TOUR = {
 	title: "Flights",
 	steps: [
 		{
-			target: "[data-tour=\"flights-board\"], #flights-tab-board",
-			title: "Everything on its flyway",
-			body: "The Board shows what is perched on you, what is in flight, what is waiting to fly (tickets, PRs, issues) and what landed.",
-			screen: "board"
+			target: "[data-tour=\"flights-sky\"], #flights-tab-sky",
+			title: "Every session in the sky",
+			body: "Each session is a line of blocks — drag empty sky to pan, Ctrl+wheel to zoom, and drag a line by its bar.",
+			screen: "sky"
 		},
 		{
-			target: "[data-tour=\"flights-strip\"], #fl-group-flying",
-			title: "Every flight, live",
-			body: "Each box is a stop — ✓ done, glowing where the flight is now, outlined still to come; click a card to open its session.",
-			screen: "board"
+			target: "[data-tour=\"flights-bird\"], [data-tour=\"flights-sky\"], #flights-tab-sky",
+			title: "The bird is where it is",
+			body: "It stands on the stop each flight is at: bobbing while the flock works, gold when perched on you.",
+			screen: "sky"
+		},
+		{
+			target: "[data-tour=\"flights-newblock\"], #flights-tab-sky",
+			title: "Build from the space",
+			body: "Double-click the sky (or + New session) to start one right there, and press + on any line to tack on a stop.",
+			screen: "sky"
 		},
 		{
 			target: "[data-tour=\"flights-plans\"], #flights-tab-plans",
@@ -44740,7 +44764,7 @@ function openTourOnFirstUse(id) {
 //#region src/components/onboarding/replayTour.ts
 var SURFACE = {
 	new: ["new-session", null],
-	flights: ["flights", "board"],
+	flights: ["flights", "sky"],
 	intake: ["flights", "sources"],
 	verify: ["flights", "checklists"],
 	schedule: ["flights", "schedule"]
@@ -50428,6 +50452,207 @@ function openChecklist(branch) {
 	useUi.getState().openDialogFor("verify", b);
 }
 //#endregion
+//#region src/lib/skyLayout.ts
+var SKY_GAP = 36;
+var SKY_MARGIN = 40;
+var INTAKE_W = 300;
+var LINES_LEFT = 404;
+var ZOOM_MIN = .4;
+var ZOOM_MAX = 2;
+var hits = (a, b, gap) => a.x < b.x + b.w + gap && b.x < a.x + a.w + gap && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap;
+function placeLines(lines, saved, area) {
+	const out = {};
+	const taken = [];
+	for (const l of lines) {
+		const s = saved[l.id];
+		if (s && Number.isFinite(s.x) && Number.isFinite(s.y)) {
+			out[l.id] = {
+				x: s.x,
+				y: s.y
+			};
+			taken.push({
+				x: s.x,
+				y: s.y,
+				w: l.w,
+				h: l.h
+			});
+		}
+	}
+	const x0 = area.left ?? SKY_MARGIN;
+	const y0 = area.top ?? SKY_MARGIN;
+	const right = Math.max(area.width, x0 + 1);
+	let cx = x0;
+	let cy = y0;
+	let rowH = 0;
+	for (const l of lines) {
+		if (out[l.id]) continue;
+		for (let guard = 0; guard < 1e4; guard++) {
+			if (cx > x0 && cx + l.w > right) {
+				cx = x0;
+				cy += (rowH || 0) + SKY_GAP;
+				rowH = 0;
+			}
+			const at = {
+				x: cx,
+				y: cy,
+				w: l.w,
+				h: l.h
+			};
+			const hit = taken.find((t) => hits(at, t, 35));
+			if (hit) {
+				cx = hit.x + hit.w + SKY_GAP;
+				continue;
+			}
+			out[l.id] = {
+				x: cx,
+				y: cy
+			};
+			taken.push(at);
+			cx += l.w + SKY_GAP;
+			rowH = Math.max(rowH, l.h);
+			break;
+		}
+	}
+	return out;
+}
+function boundsOf(rects) {
+	if (!rects.length) return null;
+	const x = Math.min(...rects.map((r) => r.x));
+	const y = Math.min(...rects.map((r) => r.y));
+	return {
+		x,
+		y,
+		w: Math.max(...rects.map((r) => r.x + r.w)) - x,
+		h: Math.max(...rects.map((r) => r.y + r.h)) - y
+	};
+}
+var clampZoom = (z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Number.isFinite(z) ? z : 1));
+function zoomAt(c, z, px, py) {
+	const nz = clampZoom(z);
+	const k = nz / c.z;
+	return {
+		z: nz,
+		x: px - (px - c.x) * k,
+		y: py - (py - c.y) * k
+	};
+}
+function toPlane(c, px, py) {
+	return {
+		x: (px - c.x) / c.z,
+		y: (py - c.y) / c.z
+	};
+}
+function fitCamera(b, vw, vh, maxZ = 1.25, pad = 40) {
+	if (!b || b.w <= 0 || b.h <= 0 || vw <= 0 || vh <= 0) return {
+		x: 0,
+		y: 0,
+		z: 1
+	};
+	const z = clampZoom(Math.min(maxZ, (vw - 2 * pad) / b.w, (vh - 2 * pad) / b.h));
+	return {
+		x: (vw - b.w * z) / 2 - b.x * z,
+		y: b.h * z + 2 * pad <= vh ? (vh - b.h * z) / 2 - b.y * z : pad - b.y * z,
+		z
+	};
+}
+function centerOn(r, vw, vh, z) {
+	const nz = clampZoom(z);
+	return {
+		z: nz,
+		x: vw / 2 - (r.x + r.w / 2) * nz,
+		y: Math.max(24, vh / 2 - r.h * nz / 2) - r.y * nz
+	};
+}
+var SKY_POS_KEY = "mf_sky_pos";
+var POS_CAP = 400;
+var local = () => {
+	try {
+		return typeof localStorage === "undefined" ? null : localStorage;
+	} catch {
+		return null;
+	}
+};
+function readSkyPos(raw) {
+	const out = {};
+	if (!raw) return out;
+	let doc;
+	try {
+		doc = JSON.parse(raw);
+	} catch {
+		return out;
+	}
+	if (!doc || typeof doc !== "object" || Array.isArray(doc)) return out;
+	for (const [k, v] of Object.entries(doc)) {
+		const p = v;
+		if (k && p && typeof p === "object" && Number.isFinite(p.x) && Number.isFinite(p.y)) out[k] = {
+			x: Math.round(p.x),
+			y: Math.round(p.y)
+		};
+	}
+	return out;
+}
+function loadSkyPos(store = local()) {
+	try {
+		return readSkyPos(store?.getItem(SKY_POS_KEY));
+	} catch {
+		return {};
+	}
+}
+function rememberSkyPos(all, title, p, store = local()) {
+	const next = { ...all };
+	delete next[title];
+	next[title] = {
+		x: Math.round(p.x),
+		y: Math.round(p.y)
+	};
+	const keys = Object.keys(next);
+	for (const k of keys.slice(0, Math.max(0, keys.length - POS_CAP))) delete next[k];
+	try {
+		store?.setItem(SKY_POS_KEY, JSON.stringify(next));
+	} catch {}
+	return next;
+}
+var SKY_MODES = [
+	{
+		id: "all",
+		label: "All",
+		title: "Every session on its own line, workers too"
+	},
+	{
+		id: "mine",
+		label: "Mine",
+		title: "Your top-level sessions, their workers folded into their line"
+	},
+	{
+		id: "perched",
+		label: "Perched on you",
+		title: "Only the lines waiting on you"
+	},
+	{
+		id: "one",
+		label: "This session",
+		title: "One line, filling the sky"
+	}
+];
+var inSky = (r) => !r.hidden_by;
+function linePerched(r) {
+	const fl = r.flight;
+	if (rowWaitsOnYou(fl) || fl?.state === "halted") return true;
+	return deriveSessionState(r).state === "needs_you";
+}
+var lineFamily = (mode) => mode === "mine" || mode === "one";
+function skyLineTitles(rows, mode, opts = {}) {
+	const shown = rows.filter(inSky);
+	if (mode === "one") return shown.some((r) => r.title === opts.focus) ? [opts.focus] : [];
+	const titles = new Set(shown.map((r) => r.title));
+	const top = (r) => !r.parent || !titles.has(r.parent);
+	let pick = mode === "all" ? shown : mode === "mine" ? shown.filter(top) : shown.filter(linePerched);
+	const q = String(opts.query || "").trim().toLowerCase();
+	if (q) pick = pick.filter((r) => r.title.toLowerCase().includes(q) || String(r.task_headline || r.task || "").toLowerCase().includes(q));
+	return pick.map((r) => r.title).reverse();
+}
+var skyTarget = (title = "") => title ? "sky/" + title : "sky";
+//#endregion
 //#region src/lib/sessionMenu.ts
 function hasUncommitted(inst) {
 	const u = inst?.diff_stat?.uncommitted;
@@ -50597,6 +50822,12 @@ function sessionMenu(inst, ctx, opts = {}) {
 			label: "Fly a flyway…",
 			title: "Open this session's Flight tab: tack stops onto its line, or fly a whole flyway",
 			run: () => openTab(title, "flight")
+		},
+		!remote && !peer && !inst.pending && {
+			key: "sky",
+			label: "Show in the Sky",
+			title: "Open Flights → Sky on this session's line, with the bird where it is",
+			run: () => useUi.getState().openDialogFor("flights", skyTarget(title))
 		},
 		fromTable("thread", { note: actionNote("thread", ctx) }),
 		opts.onHistory && {
@@ -78598,6 +78829,35 @@ function hasSessionDiagram(rows, title) {
 	const fl = row.flight;
 	return !!(fl && isLive(fl)) || ladderRungs(row).length > 0 || !!row.parent || rows.some((r) => r.parent === title);
 }
+var STOP_TONE = {
+	current: "working",
+	perched: "you",
+	halted: "halted",
+	paused: "paused"
+};
+function birdPerch(d) {
+	const main = d.nodes.filter((n) => n.row === "main");
+	const stop = main.find((n) => n.kind === "stop" && STOP_TONE[n.state]);
+	if (stop) return {
+		nodeId: stop.id,
+		tone: STOP_TONE[stop.state]
+	};
+	const rung = main.find((n) => n.kind === "rung" && (n.state === "current" || n.state === "halted"));
+	if (rung) return {
+		nodeId: rung.id,
+		tone: rung.state === "halted" ? "halted" : "working"
+	};
+	const me = main.find((n) => n.kind === "session");
+	if (me?.chip?.tone === "working") return {
+		nodeId: me.id,
+		tone: "working"
+	};
+	if (me?.chip?.tone === "attention") return {
+		nodeId: me.id,
+		tone: "you"
+	};
+	return null;
+}
 function boxMetrics(compact = false) {
 	return compact ? {
 		box: {
@@ -78954,6 +79214,8 @@ function FlywayCanvas(p) {
 		}
 	}
 	const pad = 6;
+	const top = p.bird ? 26 : pad;
+	const perch = p.bird ? shown.boxes.find((b) => b.node.id === p.bird.nodeId) : void 0;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		ref: rootRef,
 		className: "fl-canvas" + (p.compact || vertical ? " fl-canvas-compact" : "") + (vertical ? " fl-canvas-vertical" : "") + (drag?.moved ? " fl-dragging" : "") + (p.className ? " " + p.className : ""),
@@ -78964,7 +79226,7 @@ function FlywayCanvas(p) {
 			className: "fl-stage",
 			style: {
 				width: shown.width + 12,
-				height: shown.height + 12
+				height: shown.height + top + pad
 			},
 			onPointerDown: onStageDown,
 			onPointerMove: onStageMove,
@@ -78974,7 +79236,7 @@ function FlywayCanvas(p) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
 					className: "fl-wires",
 					width: shown.width + 12,
-					height: shown.height + 12,
+					height: shown.height + top + pad,
 					"aria-hidden": "true",
 					focusable: "false",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("defs", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("marker", {
@@ -78990,7 +79252,7 @@ function FlywayCanvas(p) {
 							className: "fl-arrowhead"
 						})
 					}) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("g", {
-						transform: `translate(${pad} ${pad})`,
+						transform: `translate(${pad} ${top})`,
 						children: shown.wires.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
 							className: "fl-wire fl-wire-" + w.kind,
 							d: w.d,
@@ -79003,7 +79265,7 @@ function FlywayCanvas(p) {
 					const lifted = drag?.moved && drag.id === n.id;
 					const own = lifted ? base.boxes.find((x) => x.node.id === n.id) : null;
 					const x = (own ? own.x + (vertical ? 0 : drag.delta) : b.x) + pad;
-					const y = (own ? own.y + (vertical ? drag.delta : 0) : b.y) + pad;
+					const y = (own ? own.y + (vertical ? drag.delta : 0) : b.y) + top;
 					const glyph = STATE_GLYPH[n.state];
 					const cls = "fl-box fl-box-" + n.kind + " fl-st-" + n.state + (n.perch ? " fl-perch" : "") + (p.selected === n.id ? " selected" : "") + (p.highlight?.has(n.id) ? " fl-described" : "") + (lifted ? " fl-lifted" : "") + (canDrag(n) ? " fl-draggable" : "");
 					const said = n.kind === "add" ? n.title : n.title + (n.kind === "stop" || n.kind === "rung" ? ", " + (STATE_WORD[n.state] || "") : "") + (n.chip ? ", " + n.chip.label : "");
@@ -79089,12 +79351,18 @@ function FlywayCanvas(p) {
 				gaps.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "fl-gap-add",
-					style: { transform: `translate(${g.x + pad}px, ${g.y + pad}px) translate(-50%, -50%)` },
+					style: { transform: `translate(${g.x + pad}px, ${g.y + top}px) translate(-50%, -50%)` },
 					"aria-label": "Add a stop here (before stop " + (g.at + 1) + ")",
 					title: "Add a stop here",
 					onClick: () => p.onInsert?.(g.at),
 					children: "+"
-				}, "gap" + g.at))
+				}, "gap" + g.at)),
+				perch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMarker, {
+					tone: p.bird.tone,
+					x: perch.x + pad + perch.w / 2,
+					y: perch.y + top,
+					label: "The bird: " + (p.bird.tone === "you" ? "perched on you at " : p.bird.tone === "halted" ? "halted at " : p.bird.tone === "paused" ? "paused at " : "flying ") + perch.node.title
+				})
 			]
 		})
 	});
@@ -79919,48 +80187,11 @@ function DescribeField({ want = "step", taken, onStops, placeholder = "Describe 
 	});
 }
 //#endregion
-//#region src/components/flights/SessionFlight.tsx
-function FlywayCard({ plan, kinds, onFly, busy }) {
-	const d = flywayDiagram(plan.steps, kinds);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "fl-flyway-card",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "fl-flyway-card-head",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 14 }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: plan.name }),
-					plan.builtin && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "fl-builtin-tag",
-						children: "Built-in"
-					})
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
-				className: "fl-mini-line",
-				"aria-label": plan.name + "'s stops",
-				children: d.nodes.filter((n) => n.kind === "stop").map((n) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
-					className: "fl-mini-box" + (n.perch ? " fl-perch" : ""),
-					title: n.title + " — " + n.sub,
-					children: n.title
-				}, n.id))
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "btn-primary fl-btn",
-				disabled: busy,
-				onClick: onFly,
-				children: "Fly this flyway"
-			})
-		]
-	});
-}
-function SessionFlight({ inst, active = true }) {
-	const title = inst.title;
-	const rows = useInstances().data || [];
-	const flights = useFlights(active).data;
-	const kinds = useFlightKinds(active).data || [];
-	const plans = useFlightPlans(active).data || [];
+//#region src/components/flights/useSessionLine.tsx
+var orderedPlans = (plans) => [...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)];
+function useSessionLine(title, src, opts) {
+	const { rows, flights, kinds, plans } = src;
+	const family = opts.family !== false;
 	const [selected, setSelected] = (0, import_react.useState)(null);
 	const [paletteAt, setPaletteAt] = (0, import_react.useState)(null);
 	const [draft, setDraft] = (0, import_react.useState)(null);
@@ -79971,12 +80202,14 @@ function SessionFlight({ inst, active = true }) {
 	const flight = flRow && isLive(flRow) ? flights?.find((f) => f.id === flRow.id) || null : null;
 	const diagram = (0, import_react.useMemo)(() => sessionDiagram(rows, title, {
 		flights,
-		kinds
+		kinds,
+		family
 	}), [
 		rows,
 		title,
 		flights,
-		kinds
+		kinds,
+		family
 	]);
 	const cancel = useCancelAsk(flight);
 	const parts = liveBoxParts(flight, true, cancel.ask);
@@ -79998,10 +80231,6 @@ function SessionFlight({ inst, active = true }) {
 			setDraft(null);
 		}
 	}, [selected, sel]);
-	if (!row) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-		className: "fl-note muted",
-		children: "This session isn't listed right now."
-	});
 	const tackOne = async (def, at) => {
 		const step = newStep(def, flight ? flight.steps.map((s) => s.id) : []);
 		setBusy(true);
@@ -80048,7 +80277,12 @@ function SessionFlight({ inst, active = true }) {
 			config: { ...n.step.config }
 		} : null);
 	};
-	const ordered = [...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)];
+	const togglePalette = (open) => {
+		setSelected(null);
+		setDraft(null);
+		setPaletteAt(open ?? !(paletteAt !== null && paletteAt >= end) ? end : null);
+	};
+	const ordered = orderedPlans(plans);
 	const flywayChips = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "fl-palette-flyways",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -80066,113 +80300,197 @@ function SessionFlight({ inst, active = true }) {
 			}, p.id))
 		})]
 	});
-	const prog = flight ? flightProgress(flight) : null;
 	const editable = !!sel?.editable && !!draft && !!flight;
 	const dirtyStop = !!draft && !!sel?.step && JSON.stringify(draft) !== JSON.stringify(sel.step);
+	const canvas = {
+		selected: paletteAt !== null && paletteAt >= end ? "add" : selected,
+		onSelect,
+		onOpen: (n) => {
+			if (n.kind === "add") togglePalette();
+			else if (n.session && n.session !== title) opts.onSession(n.session);
+		},
+		onInsert: flight ? (at) => setPaletteAt(paletteAt === at ? null : at) : void 0,
+		onRemove: flight ? (n) => n.editable && n.step && void dropStop(flight.id, n.step.id) : void 0,
+		renderInBox: parts.renderInBox,
+		sizeOf: parts.sizeOf,
+		reveal: currentNodeId(diagram, flight)
+	};
+	const palette = paletteAt !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopPalette, {
+		kinds,
+		title: paletteAt >= end ? "Tack on a stop" : "Add a stop before “" + (flight?.steps[paletteAt]?.title || "") + "”",
+		onPick: (k) => void tackOne(k, paletteAt),
+		onClose: () => setPaletteAt(null),
+		extra: paletteAt >= end && ordered.length > 0 ? flywayChips : void 0
+	}) : null;
+	const inspector = sel && draft ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopInspector, {
+		step: draft,
+		def: kindOf.get(draft.kind),
+		readOnly: !editable,
+		onChange: (p) => setDraft((d) => d ? {
+			...d,
+			...p
+		} : d),
+		note: !editable ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "fl-note muted",
+			children: sel.state === "done" || sel.state === "skipped" ? "This stop has flown — it can't change now." : "The flight is at this stop — it can't change while it is here."
+		}) : null,
+		actions: editable ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "btn-primary fl-btn",
+			disabled: !dirtyStop || busy,
+			onClick: async () => {
+				setBusy(true);
+				try {
+					await patchStop(flight.id, draft.id, {
+						title: draft.title,
+						config: draft.config,
+						on_fail: draft.on_fail
+					});
+				} finally {
+					setBusy(false);
+				}
+			},
+			children: "Save stop"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "test-btn fl-btn danger",
+			disabled: busy,
+			onClick: async () => {
+				setBusy(true);
+				try {
+					if (await dropStop(flight.id, draft.id)) {
+						setSelected(null);
+						setDraft(null);
+					}
+				} finally {
+					setBusy(false);
+				}
+			},
+			children: "Remove stop"
+		})] }) : void 0
+	}) : null;
+	return {
+		row,
+		flight,
+		diagram,
+		busy,
+		setBusy,
+		ordered,
+		flyFlyway,
+		togglePalette,
+		editing: palette !== null || inspector !== null,
+		canvas,
+		palette,
+		inspector,
+		cancel
+	};
+}
+//#endregion
+//#region src/components/flights/SessionFlight.tsx
+function FlywayCard({ plan, kinds, onFly, busy }) {
+	const d = flywayDiagram(plan.steps, kinds);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "fl-flyway-card",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fl-flyway-card-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 14 }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: plan.name }),
+					plan.builtin && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "fl-builtin-tag",
+						children: "Built-in"
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+				className: "fl-mini-line",
+				"aria-label": plan.name + "'s stops",
+				children: d.nodes.filter((n) => n.kind === "stop").map((n) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+					className: "fl-mini-box" + (n.perch ? " fl-perch" : ""),
+					title: n.title + " — " + n.sub,
+					children: n.title
+				}, n.id))
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "btn-primary fl-btn",
+				disabled: busy,
+				onClick: onFly,
+				children: "Fly this flyway"
+			})
+		]
+	});
+}
+function SessionFlight({ inst, active = true }) {
+	const title = inst.title;
+	const rows = useInstances().data || [];
+	const flights = useFlights(active).data;
+	const kinds = useFlightKinds(active).data || [];
+	const line = useSessionLine(title, {
+		rows,
+		flights,
+		kinds,
+		plans: useFlightPlans(active).data || []
+	}, { onSession: (t) => selectSession(t) });
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const { row, flight, diagram, ordered, cancel } = line;
+	if (!row) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "fl-note muted",
+		children: "This session isn't listed right now."
+	});
+	const prog = flight ? flightProgress(flight) : null;
+	const working = busy || line.busy;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "fl-session",
 		"data-tour": "flights-session",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "fl-session-head",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 15 }), flight ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: flight.plan_name }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 15 }),
+					flight ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: flight.plan_name }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "muted",
+							children: [
+								prog.done,
+								"/",
+								prog.total,
+								" stops",
+								flight.state === "paused" ? " · paused" : flight.state === "halted" ? " · halted" : flight.state === "waiting_you" ? " · perched on you" : ""
+							]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlightMenu, {
+							flight,
+							onCancelAsk: cancel.ask,
+							openSession: false
+						})
+					] }) : diagram.mode === "ladder" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Fast-track" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "muted",
-						children: [
-							prog.done,
-							"/",
-							prog.total,
-							" stops",
-							flight.state === "paused" ? " · paused" : flight.state === "halted" ? " · halted" : flight.state === "waiting_you" ? " · perched on you" : ""
-						]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlightMenu, {
-						flight,
-						onCancelAsk: cancel.ask,
-						openSession: false
+						children: "tack a stop on and the flight takes over its rungs"
+					})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "No flight yet" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: "tack a stop onto the line, or fly a flyway below"
+					})] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike fl-open-sky",
+						title: "Show this session's line in the Sky, with the bird where it is",
+						onClick: () => useUi.getState().openDialogFor("flights", skyTarget(title)),
+						children: "Open in the Sky"
 					})
-				] }) : diagram.mode === "ladder" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Fast-track" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "muted",
-					children: "tack a stop on and the flight takes over its rungs"
-				})] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "No flight yet" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "muted",
-					children: "tack a stop onto the line, or fly a flyway below"
-				})] })]
+				]
 			}),
 			cancel.node,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlywayCanvas, {
 				diagram,
 				label: "What " + title + " is doing and will do",
-				selected: paletteAt !== null && paletteAt >= end ? "add" : selected,
-				onSelect,
-				onOpen: (n) => {
-					if (n.kind === "add") {
-						setSelected(null);
-						setDraft(null);
-						setPaletteAt(paletteAt !== null && paletteAt >= end ? null : end);
-					} else if (n.session && n.session !== title) selectSession(n.session);
-				},
-				onInsert: flight ? (at) => setPaletteAt(paletteAt === at ? null : at) : void 0,
-				onRemove: flight ? (n) => n.editable && n.step && void dropStop(flight.id, n.step.id) : void 0,
-				renderInBox: parts.renderInBox,
-				sizeOf: parts.sizeOf,
-				reveal: currentNodeId(diagram, flight)
+				bird: birdPerch(diagram),
+				...line.canvas
 			}),
-			paletteAt !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopPalette, {
-				kinds,
-				title: paletteAt >= end ? "Tack on a stop" : "Add a stop before “" + (flight?.steps[paletteAt]?.title || "") + "”",
-				onPick: (k) => void tackOne(k, paletteAt),
-				onClose: () => setPaletteAt(null),
-				extra: paletteAt >= end && ordered.length > 0 ? flywayChips : void 0
-			}),
-			sel && draft && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopInspector, {
-				step: draft,
-				def: kindOf.get(draft.kind),
-				readOnly: !editable,
-				onChange: (p) => setDraft((d) => d ? {
-					...d,
-					...p
-				} : d),
-				note: !editable ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "fl-note muted",
-					children: sel.state === "done" || sel.state === "skipped" ? "This stop has flown — it can't change now." : "The flight is at this stop — it can't change while it is here."
-				}) : null,
-				actions: editable ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "btn-primary fl-btn",
-					disabled: !dirtyStop || busy,
-					onClick: async () => {
-						setBusy(true);
-						try {
-							await patchStop(flight.id, draft.id, {
-								title: draft.title,
-								config: draft.config,
-								on_fail: draft.on_fail
-							});
-						} finally {
-							setBusy(false);
-						}
-					},
-					children: "Save stop"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "test-btn fl-btn danger",
-					disabled: busy,
-					onClick: async () => {
-						setBusy(true);
-						try {
-							if (await dropStop(flight.id, draft.id)) {
-								setSelected(null);
-								setDraft(null);
-							}
-						} finally {
-							setBusy(false);
-						}
-					},
-					children: "Remove stop"
-				})] }) : void 0
-			}),
+			line.palette,
+			line.inspector,
 			!hasSessionDiagram(rows, title) && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 				className: "fl-flyway-cards",
 				"aria-label": "Fly a flyway",
@@ -80186,8 +80504,8 @@ function SessionFlight({ inst, active = true }) {
 						children: ordered.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlywayCard, {
 							plan: p,
 							kinds,
-							busy,
-							onFly: () => void flyFlyway(p)
+							busy: working,
+							onFly: () => void line.flyFlyway(p)
 						}, p.id))
 					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 						className: "fl-note muted",
@@ -82814,8 +83132,8 @@ function CommandPalette({ host }) {
 			label: "Flights…",
 			hint: "Alt+I",
 			top: TOP.flights,
-			keywords: "board waiting to fly in flight flyways stops perch intake verify schedule",
-			run: () => ui.openDialogFor("flights", "board")
+			keywords: "sky board canvas bird lines waiting to fly in flight flyways stops perch intake verify schedule",
+			run: () => ui.openDialogFor("flights", "sky")
 		});
 		acts.push({
 			label: "Flights: Flyways",
@@ -97381,7 +97699,7 @@ function PronounceBlock({ model, view }) {
 }
 //#endregion
 //#region src/components/settings/screens/Voice.tsx
-var KIND_WORD = {
+var KIND_WORD$1 = {
 	stt: "recognition",
 	tts: "voice"
 };
@@ -97434,7 +97752,7 @@ function readinessLine(kind, view, where, backend = "") {
 		ok: false,
 		text: ""
 	};
-	const word = KIND_WORD[kind];
+	const word = KIND_WORD$1[kind];
 	if (!view) return {
 		ok: false,
 		text: "Checking the server…"
@@ -111221,33 +111539,705 @@ function VerifyDialog({ embedded = false, target: embeddedTarget = null } = {}) 
 	});
 }
 //#endregion
-//#region src/components/flights/Board.tsx
+//#region src/lib/skyIntake.ts
+var LANE_POLL_DEFAULT = {
+	tickets: 20,
+	prs: 60,
+	issues: 60
+};
+var LANE_WAITING_SHOWN = 6;
+var KIND_WORD = {
+	tickets: "Tickets",
+	prs: "PRs",
+	issues: "Issues"
+};
+function everyWords(seconds) {
+	const s = Math.max(1, Math.round(seconds));
+	if (s < 60) return "every " + s + " s";
+	if (s === 60) return "every minute";
+	return "every " + Math.round(s / 60) + " min";
+}
+function positive(v) {
+	const n = Number(v);
+	return Number.isFinite(n) && n > 0 ? n : 0;
+}
+function repoSlugName(repo) {
+	return (repo.replace(/\/+$/, "").split("/").pop() || "").replace(/[^A-Za-z0-9._-]/g, "-");
+}
+function titlePrefix(kind, repo) {
+	return (kind === "prs" ? "pr-" : "issue-") + repoSlugName(repo) + "-";
+}
+function bareTitle(title) {
+	const cut = title.indexOf("::");
+	return cut < 0 ? title : title.slice(cut + 2);
+}
+function ticketSourceLabel(source, providers, panelLabel = "") {
+	const provider = String(source.provider || "");
+	const prov = providers?.find((p) => p.id === provider)?.label || panelLabel || provider || "Tickets";
+	const detail = String(source.label || "").trim();
+	if (!detail) return prov;
+	return [prov, provider].some((n) => !!n && detail.toLowerCase().startsWith(n.toLowerCase()) && !/[a-z0-9]/i.test(detail.charAt(n.length))) ? detail : prov + " · " + detail;
+}
+function flywayOf(kind, own, plans) {
+	if (own) return {
+		id: own,
+		name: plans?.find((p) => p.id === own)?.name || own,
+		own: true
+	};
+	const id = builtinPlanFor(kind, plans);
+	return {
+		id,
+		name: plans?.find((p) => p.id === id)?.name || "built-in flyway",
+		own: false
+	};
+}
+var sameRepo = (a, b) => a.toLowerCase() === b.toLowerCase();
+function sourceBlocks(settings, waiting, rows, opts = {}) {
+	const s = settings || {};
+	const gh = s.github || {};
+	const status = opts.status || null;
+	const plans = opts.plans || null;
+	const labels = opts.panels?.tickets?.source_labels || {};
+	const blocks = [];
+	const make = (kind, id, label, every, own, stray = false) => {
+		const auto = waitingAuto(kind, status);
+		return {
+			key: kind + ":" + id,
+			kind,
+			id,
+			label,
+			target: "sources/" + kind + ":" + id,
+			auto,
+			every,
+			autoText: auto ? "auto-start on · " + everyWords(every) : "manual",
+			flyway: flywayOf(kind, own, plans),
+			waiting: [],
+			started: [],
+			...stray ? { stray: true } : {}
+		};
+	};
+	for (const src of s.ticketing?.sources || []) {
+		const id = String(src.id || "");
+		if (!id) continue;
+		blocks.push(make("tickets", id, ticketSourceLabel(src, opts.providers, labels[id]), positive(src.poll_interval_seconds) || LANE_POLL_DEFAULT.tickets, String(src.plan || "")));
+	}
+	const repoBlocks = (kind, repos, every, per) => {
+		for (const r of Array.isArray(repos) ? repos : []) {
+			const repo = String(r || "").trim();
+			if (!repo || blocks.some((b) => b.kind === kind && sameRepo(b.id, repo))) continue;
+			blocks.push(make(kind, repo, KIND_WORD[kind] + " · " + repo, every, per?.[repo]?.plan || ""));
+		}
+	};
+	repoBlocks("prs", gh.repos, positive(gh.poll_interval_seconds) || LANE_POLL_DEFAULT.prs, gh.repo_settings);
+	repoBlocks("issues", gh.issue_repos, positive(gh.issue_poll_interval_seconds) || LANE_POLL_DEFAULT.issues, gh.issue_repo_settings);
+	for (const w of waiting) {
+		const t = w.item.target;
+		const id = t.kind === "tickets" ? t.source : t.repo;
+		let block = blocks.find((b) => b.kind === t.kind && (t.kind === "tickets" ? b.id === id : sameRepo(b.id, id)));
+		if (!block) {
+			const kind = t.kind;
+			const every = kind === "tickets" ? LANE_POLL_DEFAULT.tickets : positive(kind === "prs" ? gh.poll_interval_seconds : gh.issue_poll_interval_seconds) || LANE_POLL_DEFAULT[kind];
+			block = make(kind, id, kind === "tickets" ? w.item.group : KIND_WORD[kind] + " · " + id, every, "", true);
+			blocks.push(block);
+		}
+		block.waiting.push({
+			item: w.item,
+			auto: w.auto
+		});
+	}
+	const live = rows.filter((r) => !r.hidden_by && !r.locked);
+	const byTitle = /* @__PURE__ */ new Map();
+	for (const r of live) {
+		byTitle.set(r.title, r);
+		if (!byTitle.has(bareTitle(r.title))) byTitle.set(bareTitle(r.title), r);
+	}
+	const claimed = /* @__PURE__ */ new Set();
+	const claim = (block, row, reference) => {
+		if (claimed.has(row.title)) return;
+		claimed.add(row.title);
+		block.started.push({
+			title: row.title,
+			reference
+		});
+	};
+	const blockFor = (kind, id) => blocks.find((b) => b.kind === kind && (kind === "tickets" ? b.id === id : sameRepo(b.id, id)));
+	for (const t of opts.panels?.tickets?.tickets || []) {
+		const row = t.session ? byTitle.get(t.session) : void 0;
+		const block = row && blockFor("tickets", t.source || "");
+		if (row && block) claim(block, row, t.slug || t.id || "");
+	}
+	for (const kind of ["prs", "issues"]) {
+		const list = kind === "prs" ? opts.panels?.prs?.prs : opts.panels?.issues?.issues;
+		for (const p of list || []) {
+			const row = p.session ? byTitle.get(p.session) : void 0;
+			const block = row && blockFor(kind, p.repo || "");
+			if (row && block) claim(block, row, (p.repo || "") + "#" + (p.number ?? "?"));
+		}
+	}
+	for (const row of live) {
+		if (claimed.has(row.title)) continue;
+		const title = bareTitle(row.title);
+		for (const b of blocks) {
+			if (b.kind === "tickets") {
+				if (row.branch && new RegExp("(^|/)" + escapeRe(b.id) + "-", "i").test(row.branch) && looksLikeTicket(title)) {
+					claim(b, row, "");
+					break;
+				}
+				continue;
+			}
+			const m = new RegExp("^" + escapeRe(titlePrefix(b.kind, b.id)) + "(\\d+)$").exec(title);
+			if (m) {
+				claim(b, row, b.id + "#" + m[1]);
+				break;
+			}
+		}
+	}
+	return blocks;
+}
+function escapeRe(s) {
+	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+function looksLikeTicket(title) {
+	return /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(title);
+}
+function laneCount(block) {
+	return block.waiting.length;
+}
+function shownWaiting(block, max = LANE_WAITING_SHOWN) {
+	return {
+		shown: block.waiting.slice(0, max),
+		more: Math.max(0, block.waiting.length - max)
+	};
+}
+//#endregion
+//#region src/components/flights/IntakeLane.tsx
+var COLLAPSED_LS_KEY = "mf_sky_lane_collapsed";
+function loadCollapsed() {
+	try {
+		return localStorage.getItem(COLLAPSED_LS_KEY) === "1";
+	} catch {
+		return false;
+	}
+}
+function saveCollapsed(v) {
+	try {
+		if (v) localStorage.setItem(COLLAPSED_LS_KEY, "1");
+		else localStorage.removeItem(COLLAPSED_LS_KEY);
+	} catch {}
+}
+var RAIL_GLYPH = {
+	tickets: "T",
+	prs: "PR",
+	issues: "I"
+};
+async function flyLaneItem(w, block) {
+	const t = w.item.target;
+	const req = flyRequest(t, block.flyway.own ? block.flyway.id : "");
+	try {
+		const r = await api(req.path, { json: req.body });
+		refreshFlights();
+		return r?.title || (t.kind === "tickets" ? w.item.reference : "");
+	} finally {
+		refreshInstances();
+	}
+}
+function WaitingChip({ w, block, onFly }) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [error, setError] = (0, import_react.useState)("");
+	const fly = async () => {
+		setBusy(true);
+		setError("");
+		try {
+			const title = await flyLaneItem(w, block);
+			if (title) onFly(title);
+		} catch (err) {
+			setError(errMsg(err));
+		} finally {
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+		className: "sky-lane-item",
+		"data-waiting": w.item.key,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "sky-lane-item-row",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "sky-lane-item-words",
+				title: w.item.reference + " — " + w.item.title,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sky-lane-item-ref",
+					children: w.item.reference
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sky-lane-item-headline",
+					children: w.item.title
+				})]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "btn-primary fl-btn sky-lane-fly",
+				disabled: busy,
+				title: "Take off on " + w.item.reference + " · " + block.flyway.name,
+				onClick: () => void fly(),
+				children: busy ? "…" : "Fly"
+			})]
+		}), error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "error fl-error sky-lane-error",
+			role: "alert",
+			children: error
+		})]
+	});
+}
+function Block({ block, onFly }) {
+	const { shown, more } = shownWaiting(block);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "sky-lane-block sky-lane-block-" + block.kind,
+		"data-lane-source": block.key,
+		"aria-label": block.label,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
+				className: "sky-lane-block-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "fl-kind-badge fl-kind-badge-" + block.kind,
+						children: WAITING_KIND_BADGE[block.kind]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-lane-block-name",
+						title: block.label,
+						children: block.label
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "sky-lane-more",
+						"aria-label": "Open " + block.label + " on Sources",
+						title: "Open this source on Flights → Sources",
+						onClick: () => useUi.getState().openDialogFor("flights", block.target),
+						children: "⋯"
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sky-lane-chips",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sky-lane-auto" + (block.auto ? " on" : ""),
+					children: block.autoText
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sky-lane-flyway" + (block.flyway.own ? " own" : ""),
+					title: block.flyway.own ? "This source's flyway" : "The built-in flyway for " + WAITING_KIND_HEAD[block.kind].toLowerCase(),
+					children: block.flyway.name
+				})]
+			}),
+			block.waiting.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "sky-lane-empty muted",
+				children: "Nothing waiting"
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
+				className: "sky-lane-items",
+				children: [shown.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WaitingChip, {
+					w,
+					block,
+					onFly
+				}, w.item.key)), more > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					className: "sky-lane-n-more muted",
+					children: [more, " more"]
+				})]
+			}),
+			block.started.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "sky-lane-stubs",
+				"aria-label": "Started sessions",
+				children: block.started.map((s) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					className: "sky-lane-stub",
+					"data-lane-target": s.title,
+					title: s.reference ? s.reference + " → " + s.title : s.title,
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-lane-stub-line",
+						"aria-hidden": "true"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-lane-stub-name",
+						children: s.title
+					})]
+				}, s.title))
+			})
+		]
+	});
+}
+function IntakeLane({ rows, plans, onFly, width = 260 }) {
+	const settings = useSettingsDoc(true).data;
+	const status = useMindflockStatus().data;
+	const providers = useTicketingCatalog(true).data;
+	const { waiting } = useWaiting(true);
+	const tickets = usePanelQuery("tickets").data;
+	const prs = usePanelQuery("github-prs").data;
+	const issues = usePanelQuery("github-issues").data;
+	const [collapsed, setCollapsed] = (0, import_react.useState)(loadCollapsed);
+	if (!settings) return null;
+	const blocks = sourceBlocks(settings, waiting, rows, {
+		plans,
+		status,
+		providers,
+		panels: {
+			tickets: tickets ?? null,
+			prs: prs ?? null,
+			issues: issues ?? null
+		}
+	});
+	const fold = (v) => {
+		setCollapsed(v);
+		saveCollapsed(v);
+	};
+	const total = blocks.reduce((n, b) => n + laneCount(b), 0);
+	if (collapsed) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
+		className: "sky-lane sky-lane-rail",
+		"aria-label": "Intake",
+		"data-collapsed": "true",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "sky-lane-toggle",
+			"aria-expanded": false,
+			title: "Open the intake lane",
+			onClick: () => fold(false),
+			children: "›"
+		}), blocks.map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			type: "button",
+			className: "sky-lane-rail-icon fl-kind-badge fl-kind-badge-" + b.kind,
+			"data-lane-source": b.key,
+			title: b.label + " — " + (b.waiting.length ? b.waiting.length + " waiting" : "nothing waiting"),
+			onClick: () => fold(false),
+			children: [RAIL_GLYPH[b.kind], laneCount(b) > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sky-lane-rail-count",
+				children: laneCount(b)
+			})]
+		}, b.key))]
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
+		className: "sky-lane",
+		"aria-label": "Intake",
+		style: { width },
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "sky-lane-head",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sky-lane-title",
+					children: "Intake"
+				}),
+				total > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-count",
+					children: total
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "sky-lane-toggle",
+					"aria-expanded": true,
+					title: "Fold the intake lane",
+					onClick: () => fold(true),
+					children: "‹"
+				})
+			]
+		}), blocks.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+			className: "sky-lane-empty muted",
+			children: [
+				"No sources yet.",
+				" ",
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "linklike",
+					onClick: () => useUi.getState().openDialogFor("flights", "sources"),
+					children: "Sources ›"
+				})
+			]
+		}) : blocks.map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Block, {
+			block: b,
+			onFly
+		}, b.key))]
+	});
+}
+//#endregion
+//#region src/components/flights/NewSessionBlock.tsx
+var REPO_CHIPS = 6;
+function flywayChoices(plans) {
+	return [{
+		value: "",
+		label: "No flyway"
+	}, ...[...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)].map((p) => ({
+		value: p.id,
+		label: p.name
+	}))];
+}
+function repoChoices(suggestions, max = REPO_CHIPS) {
+	const rank = (s) => s.source === "recent" ? 0 : s.source === "cwd" ? 1 : 2;
+	const seen = /* @__PURE__ */ new Set();
+	const out = [];
+	for (const s of [...suggestions].sort((a, b) => rank(a) - rank(b))) {
+		if (!s.path || seen.has(s.path)) continue;
+		seen.add(s.path);
+		out.push({
+			value: s.path,
+			label: s.name || s.path.split("/").filter(Boolean).pop() || s.path,
+			title: s.path
+		});
+		if (out.length >= max) break;
+	}
+	return out;
+}
+function flyBlocked(repo) {
+	if (!repo.trim()) return "Pick a repository first";
+	if (isNameQuery(repo)) return "Type a full path starting with / or ~ (Browse… fills one in)";
+	return "";
+}
+function cardKey(e, onCancel) {
+	if (e.key !== "Escape") return;
+	e.preventDefault();
+	e.stopPropagation();
+	onCancel();
+}
+function promptKey(e, fly) {
+	if (e.key !== "Enter" || e.shiftKey || e.nativeEvent?.isComposing) return;
+	e.preventDefault();
+	fly();
+}
+var noop = () => {};
+function bodyFor(opts) {
+	const ref = (v) => ({ current: v });
+	return newSessionSubmit({
+		title: "",
+		repoPath: opts.repo,
+		prompt: opts.prompt,
+		program: opts.program,
+		planFirst: false,
+		planOk: false,
+		launchArgs: opts.launchArgs,
+		profileId: "",
+		profileModel: "",
+		strategy: "worktree",
+		inPlace: false,
+		initRepo: false,
+		provision: false,
+		baseBranch: "",
+		baseIsRemote: false,
+		continueOn: "",
+		activeTemplate: "",
+		maxPieces: 0,
+		splitLimit: 0,
+		runMode: false,
+		splitOn: false,
+		laneNeedsWorktree: false,
+		newFolderBlocked: "",
+		provisionBlocked: "",
+		draft: null,
+		laneAtPress: ref({
+			lane: "leave",
+			askFirst: false
+		}),
+		deviceRef: ref(""),
+		failedReopen: ref(false),
+		submitArmAt: ref(0),
+		setError: noop,
+		setPlanError: noop,
+		setPromptOpen: noop,
+		setPage: noop,
+		planFolderDo: noop,
+		closeDialog: noop
+	}).buildBody({
+		title: "",
+		repoPath: opts.repo,
+		prompt: opts.prompt,
+		inPlace: false,
+		initRepo: false,
+		provisioned: false
+	});
+}
+function NewSessionBlock({ x, y, plans, onCreated, onCancel }) {
+	const [repo, setRepo] = (0, import_react.useState)("");
+	const [prompt, setPrompt] = (0, import_react.useState)("");
+	const [plan, setPlan] = (0, import_react.useState)("");
+	const [picked, setPicked] = (0, import_react.useState)(null);
+	const [suggestions, setSuggestions] = (0, import_react.useState)([]);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [error, setError] = (0, import_react.useState)("");
+	const [made, setMade] = (0, import_react.useState)("");
+	const cardRef = (0, import_react.useRef)(null);
+	const agents = useAgentChoices$1().data;
+	const settings = useSettingsDoc(true).data;
+	const names = agents?.names || [];
+	const program = picked ?? (agents?.fallback || names[0] || "");
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		api("/api/repos/suggest").then((d) => {
+			if (!live) return;
+			const sug = d?.suggestions || [];
+			setSuggestions(sug);
+			setRepo((cur) => cur || sug[0]?.path || "");
+		}).catch(() => {});
+		return () => {
+			live = false;
+		};
+	}, []);
+	(0, import_react.useEffect)(() => {
+		cardRef.current?.querySelector("textarea")?.focus();
+	}, []);
+	const repoChips = (0, import_react.useMemo)(() => repoChoices(suggestions), [suggestions]);
+	const blocked = flyBlocked(repo);
+	const launchArgs = (() => {
+		const raw = settings?.coding_cli?.default_launch_args || {};
+		const hit = Object.keys(raw).find((k) => k.toLowerCase() === program.trim().toLowerCase());
+		return hit ? String(raw[hit] || "").trim() : "";
+	})();
+	const fly = async () => {
+		if (busy || blocked) return;
+		if (made) return onCreated(made);
+		setBusy(true);
+		setError("");
+		const body = bodyFor({
+			repo,
+			prompt,
+			program,
+			launchArgs
+		});
+		const guess = addPendingSession(titleFromPrompt(prompt) || repo.split("/").filter(Boolean).pop() || "untitled");
+		let title = "";
+		try {
+			title = (await api("/api/instances", { json: body })).title;
+			rememberNewSessionChoice(String(body.repo_path || ""), {
+				template: "",
+				program: String(body.program || ""),
+				profile_id: ""
+			});
+			clearStaleAlias(title);
+			await refreshInstances();
+		} catch (err) {
+			failPendingSession(guess);
+			setError(errMsg(err));
+			setBusy(false);
+			return;
+		}
+		if (plan) try {
+			await api("/api/flights/start", { json: {
+				plan_id: plan,
+				title
+			} });
+			refreshFlights();
+		} catch (err) {
+			setMade(title);
+			setError("“" + title + "” started, but the flyway didn't take off: " + errMsg(err));
+			setBusy(false);
+			return;
+		}
+		setBusy(false);
+		onCreated(title);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		ref: cardRef,
+		className: "sky-new fl-form",
+		role: "dialog",
+		"aria-label": "New session",
+		style: {
+			left: x,
+			top: y
+		},
+		onKeyDown: (e) => cardKey(e, onCancel),
+		onDoubleClick: (e) => e.stopPropagation(),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "sky-new-head",
+				children: "New session"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fl-fld fl-fld-wide",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "fl-fld-label",
+						children: "Repository"
+					}),
+					repoChips.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+						className: "sky-new-repos",
+						label: "Repository",
+						value: repo,
+						options: repoChips,
+						onChange: setRepo
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
+						className: "sky-new-path",
+						value: repo,
+						onChange: setRepo,
+						pickerTitle: "Pick the repository",
+						"aria-label": "Repository folder",
+						placeholder: "/path/to/repo"
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fl-fld fl-fld-wide",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-fld-label",
+					children: "Task"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+					className: "fl-prompt sky-new-prompt",
+					"aria-label": "Task",
+					rows: 3,
+					value: prompt,
+					placeholder: "What should the agent do? Enter flies, Shift+Enter for a new line.",
+					onChange: (e) => setPrompt(e.target.value),
+					onKeyDown: (e) => promptKey(e, () => void fly())
+				})]
+			}),
+			plans.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fl-fld fl-fld-wide",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-fld-label",
+					children: "Flyway"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+					className: "sky-new-flyway",
+					label: "Flyway",
+					value: plan,
+					options: flywayChoices(plans),
+					onChange: setPlan
+				})]
+			}),
+			names.length > 1 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fl-fld fl-fld-wide",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-fld-label",
+					children: "Agent"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+					className: "sky-new-agent",
+					label: "Agent",
+					value: program,
+					options: names.map((n) => ({
+						value: n,
+						label: n,
+						title: n === agents?.fallback ? "Your default agent" : void 0
+					})),
+					onChange: setPicked
+				})]
+			}),
+			error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "error fl-error sky-new-error",
+				role: "alert",
+				children: error
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sky-new-actions",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "btn-secondary fl-btn",
+					onClick: onCancel,
+					children: "Cancel"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "btn-primary fl-btn sky-new-fly",
+					disabled: busy || !!blocked,
+					title: blocked || (plan ? "Start the session and fly the flyway" : "Start the session"),
+					onClick: () => void fly(),
+					children: busy ? "Taking off…" : made ? "Open session" : "Fly"
+				})]
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/flights/SkyDrawer.tsx
 function sourcePlan(settings, t) {
 	const s = settings || {};
 	if (t.kind === "tickets") return (s.ticketing?.sources || []).find((x) => x.id === t.source)?.plan || "";
 	return (t.kind === "prs" ? s.github?.repo_settings : s.github?.issue_repo_settings)?.[t.repo]?.plan || "";
-}
-function Group({ id, title, count, hint, children }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-		className: "fl-group fl-group-" + id,
-		id: "fl-group-" + id,
-		"aria-labelledby": "fl-group-" + id + "-h",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
-			id: "fl-group-" + id + "-h",
-			className: "fl-group-head",
-			children: [
-				title,
-				count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "fl-count",
-					children: count
-				}),
-				hint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "fl-group-hint muted",
-					children: hint
-				})
-			]
-		}), children]
-	});
 }
 function ChecklistRow({ plan, onOpen }) {
 	const failing = isFailing(plan);
@@ -111391,7 +112381,29 @@ var KIND_ORDER = [
 	"prs",
 	"issues"
 ];
-function Board({ onTab }) {
+function PerchRow({ flight, kinds, onFocus }) {
+	const step = flight.steps[flight.cursor];
+	const halted = flight.state === "halted";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sky-perch" + (halted ? " is-halted" : ""),
+		"data-flight": flight.id,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "sky-perch-name",
+				title: flight.session ? "Show " + flight.session + "'s line" : void 0,
+				onClick: () => onFocus(flight.session),
+				children: flightHeadline(flight)
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sky-perch-step muted",
+				children: [step ? stepActor(step, kinds) === "you" ? perchLabel(step.title) : step.title : "", halted && flight.reason ? " — " + flight.reason : ""]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(YouStepActions, { flight })
+		]
+	});
+}
+function SkyDrawer({ open, onToggle, onFocus, onTab }) {
 	const flightsQ = useFlights();
 	const plans = useFlightPlans().data || [];
 	const kinds = useFlightKinds().data;
@@ -111401,115 +112413,853 @@ function Board({ onTab }) {
 	const [landedOpen, setLandedOpen] = (0, import_react.useState)(false);
 	const flights = flightsQ.data || [];
 	const needs = needsYouFlights(flights);
-	const inFlight = flights.filter((f) => isLive(f) && !needs.includes(f));
 	const landed = flights.filter((f) => !isLive(f)).sort((a, b) => (b.finished || b.updated) - (a.finished || a.updated)).slice(0, 20);
 	const dueChecklists = (0, import_react.useMemo)(() => testPlans.filter((p) => isFailing(p) || isWaitingOnYou(p)), [testPlans]);
-	const noRoute = flightsQ.data === null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "fl-board",
-		"data-tour": "flights-board",
-		children: [
-			noRoute && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "fl-note muted",
-				role: "status",
-				children: "This server has no flights yet — update MindFlock to fly flyways. Waiting items and checklists still work."
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Group, {
-				id: "needs",
-				title: "Needs you",
-				count: needs.length + dueChecklists.length,
-				children: needs.length + dueChecklists.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "fl-empty muted",
-					children: "Nothing is perched on you."
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [needs.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlightCard, {
-					flight: f,
-					kinds,
-					expand: true
-				}, f.id)), dueChecklists.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChecklistRow, {
-					plan: p,
-					onOpen: (b) => onTab("checklists", b)
-				}, p.id))] })
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Group, {
-				id: "flying",
-				title: "In flight",
-				count: inFlight.length,
-				children: inFlight.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "fl-empty muted",
-					children: [
-						"No flight in the air.",
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "linklike",
-							onClick: () => onTab("plans"),
-							children: "Flyways ›"
-						})
-					]
-				}) : inFlight.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlightCard, {
-					flight: f,
-					kinds
-				}, f.id))
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Group, {
-				id: "waiting",
-				title: "Waiting to fly",
-				count: waiting.length,
-				hint: "Not started yet, oldest first",
-				children: waiting.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "fl-empty muted",
-					children: [
-						"Nothing is waiting to fly.",
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "linklike",
-							onClick: () => onTab("sources"),
-							children: "Sources ›"
-						}),
-						" ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "linklike",
-							onClick: refresh,
-							children: "Refresh"
-						})
-					]
-				}) : KIND_ORDER.map((k) => {
-					const list = waiting.filter((w) => w.item.kind === k);
-					if (!list.length) return null;
-					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "fl-waiting-kind fl-waiting-kind-" + k,
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", {
-							className: "fl-waiting-head",
-							children: [WAITING_KIND_HEAD[k], /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "fl-count muted",
-								children: list.length
-							})]
-						}), list.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WaitingRow, {
-							w,
-							plans,
-							settings
-						}, w.item.key))]
-					}, k);
-				})
-			}),
-			landed.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-				className: "fl-group fl-group-landed",
-				open: landedOpen,
-				onToggle: (e) => setLandedOpen(e.target.open),
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", {
-					className: "fl-group-head",
-					children: ["Landed", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "fl-count muted",
-						children: landed.length
+	const count = needs.length + dueChecklists.length;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
+		className: "sky-drawer" + (open ? " open" : ""),
+		"aria-label": "Perched on you",
+		"data-tour": "flights-drawer",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			type: "button",
+			className: "sky-drawer-tab",
+			"aria-expanded": open,
+			title: open ? "Fold the drawer away" : "What is perched on you",
+			onClick: onToggle,
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sky-drawer-tab-word",
+				children: "Perched on you"
+			}), count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "fl-count fl-count-you",
+				children: count
+			})]
+		}), open && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "sky-drawer-body",
+			children: [
+				flightsQ.data === null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "fl-note muted",
+					role: "status",
+					children: "This server has no flights yet — update MindFlock to fly flyways. Waiting items and checklists still work."
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+					className: "fl-group fl-group-needs",
+					id: "fl-group-needs",
+					"aria-labelledby": "fl-group-needs-h",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+						id: "fl-group-needs-h",
+						className: "fl-group-head",
+						children: ["Perched on you", count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fl-count",
+							children: count
+						})]
+					}), count === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "fl-empty muted",
+						children: "Nothing is perched on you."
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [needs.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PerchRow, {
+						flight: f,
+						kinds,
+						onFocus
+					}, f.id)), dueChecklists.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChecklistRow, {
+						plan: p,
+						onOpen: (b) => onTab("checklists", b)
+					}, p.id))] })]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+					className: "fl-group fl-group-waiting",
+					id: "fl-group-waiting",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", {
+						className: "fl-group-head",
+						children: ["Waiting to fly", waiting.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fl-count",
+							children: waiting.length
+						})]
+					}), waiting.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "fl-empty muted",
+						children: [
+							"Nothing is waiting to fly.",
+							" ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "linklike",
+								onClick: () => onTab("sources"),
+								children: "Sources ›"
+							}),
+							" ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "linklike",
+								onClick: refresh,
+								children: "Refresh"
+							})
+						]
+					}) : KIND_ORDER.map((k) => {
+						const list = waiting.filter((w) => w.item.kind === k);
+						if (!list.length) return null;
+						return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "fl-waiting-kind fl-waiting-kind-" + k,
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h4", {
+								className: "fl-waiting-head",
+								children: [WAITING_KIND_HEAD[k], /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "fl-count muted",
+									children: list.length
+								})]
+							}), list.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WaitingRow, {
+								w,
+								plans,
+								settings
+							}, w.item.key))]
+						}, k);
 					})]
-				}), landedOpen && landed.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlightCard, {
-					flight: f,
-					kinds
-				}, f.id))]
+				}),
+				landed.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+					className: "fl-group fl-group-landed",
+					open: landedOpen,
+					onToggle: (e) => setLandedOpen(e.target.open),
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", {
+						className: "fl-group-head",
+						children: ["Landed", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fl-count muted",
+							children: landed.length
+						})]
+					}), landedOpen && landed.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlightCard, {
+						flight: f,
+						kinds
+					}, f.id))]
+				})
+			]
+		})]
+	});
+}
+//#endregion
+//#region src/components/flights/Sky.tsx
+var BAR_H = 34;
+var LINE_MIN_W = 280;
+var GRID = 24;
+var MODE_KEY = "mf_sky_view";
+var DRAWER_KEY = "mf_sky_drawer";
+var readPref = (key) => {
+	try {
+		return typeof localStorage === "undefined" ? null : localStorage.getItem(key);
+	} catch {
+		return null;
+	}
+};
+var writePref = (key, v) => {
+	try {
+		localStorage.setItem(key, v);
+	} catch {}
+};
+var typing = (el) => !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable === true);
+function useNarrowWindow() {
+	const [narrow, setNarrow] = (0, import_react.useState)(() => typeof window !== "undefined" && !!window.matchMedia?.("(max-width: 600px)").matches);
+	(0, import_react.useEffect)(() => {
+		const mq = typeof window !== "undefined" ? window.matchMedia?.("(max-width: 600px)") : void 0;
+		if (!mq) return;
+		const on = () => setNarrow(mq.matches);
+		mq.addEventListener?.("change", on);
+		return () => mq.removeEventListener?.("change", on);
+	}, []);
+	return narrow;
+}
+function lineSize(d, flight) {
+	const lay = layoutDiagram(d, { sizeOf: liveBoxParts(flight, true, () => {}).sizeOf });
+	return {
+		w: Math.max(LINE_MIN_W, lay.width + 12 + 20 + 4),
+		h: lay.height + 32 + BAR_H + 20
+	};
+}
+function SkyLine(p) {
+	const line = useSessionLine(p.id, p.src, {
+		family: p.family,
+		onSession: (t) => openFlightSession(t)
+	});
+	const grab = (0, import_react.useRef)(null);
+	const row = line.row;
+	if (!row) return null;
+	const ss = deriveSessionState(row);
+	const placed = !!p.pos;
+	const z = p.zoom || 1;
+	const at = (e, g) => ({
+		x: g.x + (e.clientX - g.sx) / z,
+		y: g.y + (e.clientY - g.sy) / z
+	});
+	const onBarDown = (e) => {
+		if (!placed || e.button !== 0) return;
+		if (e.target.closest("button, summary, a, input, [data-no-drag]")) return;
+		e.stopPropagation();
+		grab.current = {
+			id: e.pointerId,
+			sx: e.clientX,
+			sy: e.clientY,
+			x: p.pos.x,
+			y: p.pos.y,
+			moved: false
+		};
+		try {
+			e.currentTarget.setPointerCapture(e.pointerId);
+		} catch {}
+	};
+	const onBarMove = (e) => {
+		const g = grab.current;
+		if (!g || g.id !== e.pointerId) return;
+		if (!g.moved && Math.hypot(e.clientX - g.sx, e.clientY - g.sy) < 4) return;
+		g.moved = true;
+		p.onMove?.(p.id, at(e, g));
+	};
+	const onBarUp = (e) => {
+		const g = grab.current;
+		if (!g || g.id !== e.pointerId) return;
+		grab.current = null;
+		if (g.moved) p.onDrop?.(p.id, at(e, g));
+		else p.onPress(p.id);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sky-line" + (placed ? "" : " sky-line-flow") + (line.editing ? " is-editing" : "") + (p.dragging ? " is-dragging" : "") + (p.flash ? " is-flash" : "") + (p.chosen ? " is-chosen" : ""),
+		style: placed ? {
+			transform: `translate(${p.pos.x}px, ${p.pos.y}px)`,
+			width: p.w
+		} : void 0,
+		"data-line": p.id,
+		role: "group",
+		"aria-label": p.id + "'s line",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sky-line-bar",
+				title: placed ? "Drag to move this line" : void 0,
+				onPointerDown: onBarDown,
+				onPointerMove: onBarMove,
+				onPointerUp: onBarUp,
+				onPointerCancel: onBarUp,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 13 }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-line-name",
+						children: p.id
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "fl-box-chip sky-line-chip tone-" + ss.tone,
+						title: ss.hint,
+						children: ss.label
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-line-menu",
+						"data-no-drag": true,
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
+							label: "Actions for " + p.id,
+							items: [
+								{
+									key: "open",
+									label: "Open session",
+									title: "Close the sky and open this session",
+									onSelect: () => openFlightSession(p.id)
+								},
+								{
+									key: "only",
+									label: "Show only this line",
+									title: "This session: one line, filling the sky",
+									onSelect: () => p.onOnly(p.id)
+								},
+								{
+									key: "flyway",
+									label: "Fly a flyway…",
+									title: "Tack a stop, or a whole flyway, onto this line",
+									onSelect: () => line.togglePalette(true)
+								},
+								{
+									key: "close",
+									label: "Close session",
+									danger: true,
+									title: "Stops the agent and moves it to Recently closed",
+									onSelect: () => void closeSession(p.id)
+								}
+							]
+						})
+					})
+				]
+			}),
+			line.cancel.node,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlywayCanvas, {
+				diagram: line.diagram,
+				label: "What " + p.id + " is doing and will do",
+				vertical: placed ? false : void 0,
+				bird: birdPerch(line.diagram),
+				className: "sky-canvas",
+				...line.canvas
+			}),
+			line.editing && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sky-line-panels sky-own-scroll",
+				"data-no-drag": true,
+				children: [line.palette, line.inspector]
 			})
 		]
+	});
+}
+function GhostLine({ id, pos, w, diagram }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sky-line sky-line-leaving",
+		style: {
+			transform: `translate(${pos.x}px, ${pos.y}px)`,
+			width: w
+		},
+		"aria-hidden": "true",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "sky-line-bar",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 13 }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sky-line-name",
+				children: id
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlywayCanvas, {
+			diagram,
+			label: id,
+			vertical: false,
+			className: "sky-canvas"
+		})]
+	});
+}
+function Sky({ focus, onTab }) {
+	const instQ = useInstances();
+	const rows = (0, import_react.useMemo)(() => instQ.data || [], [instQ.data]);
+	const flights = useFlights().data;
+	const kinds = useFlightKinds().data || [];
+	const plans = useFlightPlans().data || [];
+	const openDialogFor = useUi((s) => s.openDialogFor);
+	const narrow = useNarrowWindow();
+	const [pick, setPick] = (0, import_react.useState)(() => {
+		const m = readPref(MODE_KEY);
+		return m === "all" || m === "perched" ? m : "mine";
+	});
+	const mode = focus ? "one" : pick;
+	const [query, setQuery] = (0, import_react.useState)("");
+	const [saved, setSaved] = (0, import_react.useState)(() => loadSkyPos());
+	const [drag, setDrag] = (0, import_react.useState)(null);
+	const [cam, setCam] = (0, import_react.useState)({
+		x: 0,
+		y: 0,
+		z: 1
+	});
+	const camRef = (0, import_react.useRef)(cam);
+	camRef.current = cam;
+	const [vp, setVp] = (0, import_react.useState)({
+		w: 0,
+		h: 0
+	});
+	const vpRef = (0, import_react.useRef)(null);
+	const [newAt, setNewAt] = (0, import_react.useState)(null);
+	const [drawerPref, setDrawerPref] = (0, import_react.useState)(() => readPref(DRAWER_KEY));
+	const [chosen, setChosen] = (0, import_react.useState)("");
+	const [flash, setFlash] = (0, import_react.useState)("");
+	const [spaceHeld, setSpaceHeld] = (0, import_react.useState)(false);
+	const space = (0, import_react.useRef)(false);
+	const src = (0, import_react.useMemo)(() => ({
+		rows,
+		flights,
+		kinds,
+		plans
+	}), [
+		rows,
+		flights,
+		kinds,
+		plans
+	]);
+	const family = lineFamily(mode);
+	const titles = (0, import_react.useMemo)(() => skyLineTitles(rows, mode, {
+		query,
+		focus
+	}), [
+		rows,
+		mode,
+		query,
+		focus
+	]);
+	const lines = (0, import_react.useMemo)(() => titles.map((t) => {
+		const fl = rows.find((r) => r.title === t)?.flight;
+		const full = fl && isLive(fl) ? flights?.find((f) => f.id === fl.id) || null : null;
+		const diagram = sessionDiagram(rows, t, {
+			flights,
+			kinds,
+			family
+		});
+		return {
+			id: t,
+			diagram,
+			...lineSize(diagram, full)
+		};
+	}), [
+		titles,
+		rows,
+		flights,
+		kinds,
+		family
+	]);
+	const place = (0, import_react.useMemo)(() => mode === "one" ? Object.fromEntries(lines.map((l) => [l.id, {
+		x: SKY_MARGIN,
+		y: SKY_MARGIN
+	}])) : placeLines(lines, saved, {
+		width: Math.max(vp.w, LINES_LEFT + 900),
+		left: LINES_LEFT,
+		top: SKY_MARGIN
+	}), [
+		lines,
+		saved,
+		vp.w,
+		mode
+	]);
+	const posOf = (0, import_react.useCallback)((id) => drag?.id === id ? drag.pos : place[id] || {
+		x: LINES_LEFT,
+		y: SKY_MARGIN
+	}, [drag, place]);
+	const drawerOpen = drawerPref !== "0";
+	(0, import_react.useEffect)(() => {
+		const el = vpRef.current;
+		if (!el) return;
+		const measure = () => setVp({
+			w: el.clientWidth,
+			h: el.clientHeight
+		});
+		measure();
+		if (typeof ResizeObserver === "undefined") return;
+		const ro = new ResizeObserver(measure);
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, [narrow]);
+	const touched = (0, import_react.useRef)(false);
+	const fit = (0, import_react.useCallback)(() => {
+		touched.current = false;
+		const rects = lines.map((l) => ({
+			...posOf(l.id),
+			w: l.w,
+			h: l.h
+		}));
+		if (mode !== "one") rects.push({
+			x: SKY_MARGIN,
+			y: SKY_MARGIN,
+			w: INTAKE_W,
+			h: 1
+		});
+		setCam(fitCamera(boundsOf(rects), vp.w, vp.h, mode === "one" ? 1.5 : 1));
+	}, [
+		lines,
+		posOf,
+		mode,
+		vp.w,
+		vp.h
+	]);
+	const fitted = (0, import_react.useRef)("");
+	const fitKey = mode + "\0" + focus;
+	const shape = lines.map((l) => l.id + ":" + l.w + "x" + l.h).join("|");
+	(0, import_react.useEffect)(() => {
+		if (!vp.w || !vp.h || instQ.data === void 0) return;
+		if (fitted.current === fitKey && touched.current) return;
+		fitted.current = fitKey;
+		fit();
+	}, [
+		vp.w,
+		vp.h,
+		instQ.data,
+		fitKey,
+		shape
+	]);
+	const last = (0, import_react.useRef)(/* @__PURE__ */ new Map());
+	const alive = (0, import_react.useRef)(true);
+	const [ghosts, setGhosts] = (0, import_react.useState)([]);
+	(0, import_react.useEffect)(() => {
+		alive.current = true;
+		return () => {
+			alive.current = false;
+		};
+	}, []);
+	(0, import_react.useEffect)(() => {
+		const now = new Map(lines.map((l) => [l.id, {
+			id: l.id,
+			pos: place[l.id],
+			w: l.w,
+			diagram: l.diagram
+		}]));
+		const gone = [...last.current.values()].filter((g) => !now.has(g.id) && !rows.some((r) => r.title === g.id && inSky(r)));
+		last.current = now;
+		if (!gone.length || narrow) return;
+		const ids = new Set(gone.map((g) => g.id));
+		setGhosts((cur) => [...cur.filter((g) => !ids.has(g.id)), ...gone]);
+		setTimeout(() => alive.current && setGhosts((cur) => cur.filter((g) => !ids.has(g.id))), 450);
+	}, [
+		lines,
+		place,
+		rows,
+		narrow
+	]);
+	const flyTo = (0, import_react.useCallback)((id) => {
+		const l = lines.find((x) => x.id === id);
+		if (!l) {
+			if (rows.some((r) => r.title === id && inSky(r))) openDialogFor("flights", skyTarget(id));
+			return;
+		}
+		touched.current = true;
+		setCam(centerOn({
+			...posOf(id),
+			w: l.w,
+			h: l.h
+		}, vp.w, vp.h, Math.max(camRef.current.z, .85)));
+		setChosen(id);
+		setFlash(id);
+		setTimeout(() => alive.current && setFlash((f) => f === id ? "" : f), 1400);
+	}, [
+		lines,
+		rows,
+		posOf,
+		vp.w,
+		vp.h,
+		openDialogFor
+	]);
+	const setMode = (m) => {
+		if (m === "one") {
+			const t = focus || chosen || titles[0];
+			if (t) openDialogFor("flights", skyTarget(t));
+			return;
+		}
+		setPick(m);
+		writePref(MODE_KEY, m);
+		if (focus) openDialogFor("flights", skyTarget());
+	};
+	const zoomBy = (k) => {
+		touched.current = true;
+		setCam((c) => zoomAt(c, c.z * k, vp.w / 2, vp.h / 2));
+	};
+	const newHere = () => {
+		const c = toPlane(camRef.current, vp.w / 2, vp.h / 3);
+		setNewAt({
+			x: Math.round(c.x - 170),
+			y: Math.round(c.y)
+		});
+	};
+	const pointers = (0, import_react.useRef)(/* @__PURE__ */ new Map());
+	const pan = (0, import_react.useRef)(null);
+	const pinch = (0, import_react.useRef)(null);
+	const ground = (t) => t instanceof Element && (t === vpRef.current || t.classList.contains("sky-plane") || t.classList.contains("sky-ground"));
+	const startPan = (e) => {
+		touched.current = true;
+		pointers.current.set(e.pointerId, {
+			x: e.clientX,
+			y: e.clientY
+		});
+		try {
+			e.currentTarget.setPointerCapture(e.pointerId);
+		} catch {}
+		if (pointers.current.size >= 2) {
+			const [a, b] = [...pointers.current.values()];
+			pinch.current = {
+				d: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+				z: camRef.current.z
+			};
+			pan.current = null;
+		} else pan.current = {
+			id: e.pointerId,
+			x: e.clientX,
+			y: e.clientY,
+			cx: camRef.current.x,
+			cy: camRef.current.y
+		};
+	};
+	const onDownCapture = (e) => {
+		if (!space.current || e.pointerType === "mouse" && e.button !== 0) return;
+		e.stopPropagation();
+		e.preventDefault();
+		startPan(e);
+	};
+	const onDown = (e) => {
+		if (!ground(e.target) || e.pointerType === "mouse" && e.button !== 0 && e.button !== 1) return;
+		e.preventDefault();
+		startPan(e);
+	};
+	const onMove = (e) => {
+		if (!pointers.current.has(e.pointerId)) return;
+		pointers.current.set(e.pointerId, {
+			x: e.clientX,
+			y: e.clientY
+		});
+		const pn = pinch.current;
+		if (pn && pointers.current.size >= 2) {
+			const [a, b] = [...pointers.current.values()];
+			const r = vpRef.current?.getBoundingClientRect();
+			const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+			setCam(zoomAt(camRef.current, pn.z * d / pn.d, (a.x + b.x) / 2 - (r?.left || 0), (a.y + b.y) / 2 - (r?.top || 0)));
+			return;
+		}
+		const pa = pan.current;
+		if (pa && pa.id === e.pointerId) setCam({
+			...camRef.current,
+			x: pa.cx + (e.clientX - pa.x),
+			y: pa.cy + (e.clientY - pa.y)
+		});
+	};
+	const onUp = (e) => {
+		pointers.current.delete(e.pointerId);
+		if (pointers.current.size < 2) pinch.current = null;
+		if (pan.current?.id === e.pointerId) pan.current = null;
+	};
+	const onDouble = (e) => {
+		if (!ground(e.target)) return;
+		const r = vpRef.current.getBoundingClientRect();
+		const at = toPlane(camRef.current, e.clientX - r.left, e.clientY - r.top);
+		setNewAt({
+			x: Math.round(at.x),
+			y: Math.round(at.y)
+		});
+	};
+	(0, import_react.useEffect)(() => {
+		const el = vpRef.current;
+		if (!el) return;
+		const onWheel = (e) => {
+			if (e.target?.closest?.(".sky-own-scroll")) return;
+			e.preventDefault();
+			touched.current = true;
+			const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientHeight : 1;
+			const dx = e.deltaX * unit;
+			const dy = e.deltaY * unit;
+			if (e.ctrlKey || e.metaKey) {
+				const r = el.getBoundingClientRect();
+				setCam((c) => zoomAt(c, c.z * Math.exp(-dy * .0022), e.clientX - r.left, e.clientY - r.top));
+			} else if (e.shiftKey && !dx) setCam((c) => ({
+				...c,
+				x: c.x - dy
+			}));
+			else setCam((c) => ({
+				...c,
+				x: c.x - dx,
+				y: c.y - dy
+			}));
+		};
+		el.addEventListener("wheel", onWheel, { passive: false });
+		return () => el.removeEventListener("wheel", onWheel);
+	}, [narrow]);
+	(0, import_react.useEffect)(() => {
+		if (narrow) return;
+		const down = (e) => {
+			const el = document.activeElement;
+			if (e.key === "Escape" && newAt) {
+				e.preventDefault();
+				setNewAt(null);
+				return;
+			}
+			if (typing(el) || e.ctrlKey || e.metaKey || e.altKey) return;
+			if (e.key === " " && !e.repeat && !el?.closest?.("button, summary, a, [role=listitem]")) {
+				e.preventDefault();
+				space.current = true;
+				setSpaceHeld(true);
+			} else if (e.key === "0") {
+				e.preventDefault();
+				fit();
+			}
+		};
+		const up = (e) => {
+			if (e.key !== " ") return;
+			space.current = false;
+			setSpaceHeld(false);
+		};
+		window.addEventListener("keydown", down, true);
+		window.addEventListener("keyup", up, true);
+		return () => {
+			window.removeEventListener("keydown", down, true);
+			window.removeEventListener("keyup", up, true);
+		};
+	}, [
+		narrow,
+		fit,
+		newAt
+	]);
+	const onLineMove = (0, import_react.useCallback)((id, p) => setDrag({
+		id,
+		pos: p
+	}), []);
+	const onLineDrop = (0, import_react.useCallback)((id, p) => {
+		setSaved((s) => rememberSkyPos(s, id, p));
+		setDrag(null);
+	}, []);
+	const onOnly = (0, import_react.useCallback)((id) => openDialogFor("flights", skyTarget(id)), [openDialogFor]);
+	const empty = lines.length > 0 ? "" : mode === "one" ? focus ? "“" + focus + "” isn't in the sky right now." : "Pick a line first." : query ? "No line matches “" + query + "”." : mode === "perched" ? "Nothing is perched on you." : instQ.data === void 0 ? "" : "No sessions in the sky yet — double-click anywhere, or + New session, to start one.";
+	const toolbar = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sky-toolbar",
+		role: "toolbar",
+		"aria-label": "The sky",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+				className: "sky-modes",
+				label: "Which lines",
+				value: mode,
+				options: SKY_MODES.map((m) => ({
+					value: m.id,
+					label: m.label,
+					title: m.title
+				})),
+				onChange: setMode
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sky-search",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
+					value: query,
+					onChange: setQuery,
+					label: "Find a line",
+					placeholder: "Find a line…",
+					onEnter: () => titles[0] && flyTo(titles[0])
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "btn-primary fl-btn sky-new",
+				"data-tour": "flights-newblock",
+				title: "Start a session here (or double-click the sky)",
+				onClick: newHere,
+				children: "+ New session"
+			}),
+			!narrow && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "sky-zoom",
+				role: "group",
+				"aria-label": "Zoom",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "sky-zoom-btn",
+						"aria-label": "Zoom out",
+						disabled: cam.z <= ZOOM_MIN + .001,
+						onClick: () => zoomBy(1 / 1.2),
+						children: "−"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "sky-zoom-read",
+						"aria-live": "polite",
+						children: [Math.round(cam.z * 100), "%"]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "sky-zoom-btn",
+						"aria-label": "Zoom in",
+						disabled: cam.z >= ZOOM_MAX - .001,
+						onClick: () => zoomBy(1.2),
+						children: "+"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "sky-zoom-btn sky-fit",
+						title: "Fit every line in the window (0)",
+						onClick: fit,
+						children: "Fit"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "sky-zoom-btn",
+						title: "Back to 100%",
+						onClick: () => zoomBy(1 / cam.z),
+						children: "100%"
+					})
+				]
+			})
+		]
+	});
+	const drawer = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyDrawer, {
+		open: drawerOpen,
+		onToggle: () => {
+			const v = drawerOpen ? "0" : "1";
+			setDrawerPref(v);
+			writePref(DRAWER_KEY, v);
+		},
+		onFocus: flyTo,
+		onTab
+	});
+	const newBlock = newAt && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewSessionBlock, {
+		x: newAt.x,
+		y: newAt.y,
+		plans,
+		onCancel: () => setNewAt(null),
+		onCreated: (title) => {
+			setSaved((s) => rememberSkyPos(s, title, newAt));
+			setNewAt(null);
+			setChosen(title);
+		}
+	});
+	if (narrow) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sky sky-narrow",
+		"data-tour": "flights-sky",
+		children: [
+			toolbar,
+			drawer,
+			newBlock,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sky-list",
+				children: [empty && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "fl-empty muted",
+					children: empty
+				}), lines.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyLine, {
+					id: l.id,
+					src,
+					family,
+					onPress: setChosen,
+					onOnly
+				}, l.id))]
+			})
+		]
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sky",
+		children: [toolbar, /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "sky-main",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				ref: vpRef,
+				className: "sky-viewport" + (spaceHeld ? " is-grab" : ""),
+				"data-tour": "flights-sky",
+				role: "application",
+				"aria-roledescription": "canvas",
+				"aria-label": "The sky: every session as a line of blocks — drag empty space to pan, Ctrl+wheel to zoom, double-click to start a session",
+				style: {
+					backgroundSize: `${GRID * cam.z}px ${GRID * cam.z}px`,
+					backgroundPosition: `${cam.x}px ${cam.y}px`
+				},
+				onPointerDownCapture: onDownCapture,
+				onPointerDown: onDown,
+				onPointerMove: onMove,
+				onPointerUp: onUp,
+				onPointerCancel: onUp,
+				onDoubleClick: onDouble,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "sky-plane",
+					style: { transform: `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})` },
+					children: [
+						mode !== "one" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "sky-intake",
+							style: {
+								transform: `translate(${SKY_MARGIN}px, ${SKY_MARGIN}px)`,
+								width: INTAKE_W
+							},
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(IntakeLane, {
+								rows,
+								plans,
+								onFly: flyTo,
+								width: INTAKE_W
+							})
+						}),
+						lines.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyLine, {
+							id: l.id,
+							src,
+							family,
+							pos: posOf(l.id),
+							w: l.w,
+							zoom: cam.z,
+							dragging: drag?.id === l.id,
+							flash: flash === l.id,
+							chosen: chosen === l.id,
+							onPress: setChosen,
+							onOnly,
+							onMove: onLineMove,
+							onDrop: onLineDrop
+						}, l.id)),
+						ghosts.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GhostLine, { ...g }, "ghost:" + g.id)),
+						newBlock
+					]
+				}), empty && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "sky-empty muted",
+					role: "status",
+					children: empty
+				})]
+			}), drawer]
+		})]
 	});
 }
 //#endregion
@@ -112172,7 +113922,7 @@ function FlightsDialog() {
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "flights-dialog",
-		className: "top-dialog",
+		className: "top-dialog" + (tab === "sky" ? " sky-full" : ""),
 		role: "dialog",
 		"aria-modal": "true",
 		"aria-labelledby": "flights-title",
@@ -112237,7 +113987,7 @@ function FlightsDialog() {
 						"data-flights-tab": t,
 						onClick: () => switchTab(t),
 						onKeyDown: (e) => onTabKey(e, i),
-						children: [FLIGHTS_TAB_LABEL[t], t === "board" && waiting > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						children: [FLIGHTS_TAB_LABEL[t], t === "sky" && waiting > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "fl-count fl-count-you",
 							children: waiting
 						})]
@@ -112267,7 +114017,10 @@ function FlightsDialog() {
 						role: "tabpanel",
 						"aria-labelledby": "flights-tab-" + tab,
 						children: [
-							tab === "board" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Board, { onTab: (t, deep) => switchTab(t, deep) }),
+							tab === "sky" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Sky, {
+								focus: rest,
+								onTab: (t, deep) => switchTab(t, deep)
+							}),
 							tab === "plans" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Plans, {
 								initialPlan: rest,
 								onDirty
@@ -118281,7 +120034,7 @@ function hashFor(name, target) {
 	if (!h) return "";
 	if (h === "flights") {
 		const t = String(target || "").replace(/^schedule\/new$/, "schedule");
-		if (!t || t === "board") return "#flights";
+		if (!t || t === "sky" || t === "board") return "#flights";
 		const cut = t.indexOf("/");
 		return "#flights/" + (cut < 0 ? encodeURIComponent(t) : encodeURIComponent(t.slice(0, cut)) + "/" + encodeURIComponent(t.slice(cut + 1)));
 	}
