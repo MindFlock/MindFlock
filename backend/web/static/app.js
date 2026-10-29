@@ -24653,10 +24653,11 @@ var PANELS = {
 	"github-prs": "/api/github/prs",
 	"github-issues": "/api/github/issues"
 };
-function usePanelQuery(key) {
+function usePanelQuery(key, opts = {}) {
 	const q = useQuery({
 		queryKey: [key],
 		queryFn: () => api(PANELS[key]),
+		enabled: opts.enabled ?? true,
 		staleTime: PANEL_STALE_MS,
 		gcTime: PANEL_GC_MS,
 		placeholderData: (prev) => prev,
@@ -24848,6 +24849,65 @@ function useCachedLiveBranch() {
 }
 function refreshTestPlans() {
 	return queryClient.invalidateQueries({ queryKey: ["test-plans"] });
+}
+var FLIGHTS_LIVE_MS = 5e3;
+var FLIGHTS_IDLE_MS = 3e4;
+var FLIGHTS_MISSING_MS = 12e4;
+var routeMissing = (e) => !!e && typeof e === "object" && "status" in e && (e.status === 404 || e.status === 405);
+async function orNull(p) {
+	try {
+		return await p;
+	} catch (e) {
+		if (routeMissing(e)) return null;
+		throw e;
+	}
+}
+var flightsBridged = false;
+function bridgeFlightEvents() {
+	const ev = window.mindflock?.events;
+	if (flightsBridged || !ev) return;
+	flightsBridged = true;
+	const bump = () => {
+		queryClient.invalidateQueries({ queryKey: ["flights"] });
+		queryClient.invalidateQueries({ queryKey: ["instances"] });
+	};
+	for (const name of [
+		"flight.changed",
+		"flight.needs_you",
+		"flight.finished"
+	]) ev.subscribe(name, bump);
+}
+function useFlights(enabled = true) {
+	(0, import_react.useEffect)(bridgeFlightEvents, []);
+	return useQuery({
+		queryKey: ["flights"],
+		queryFn: () => orNull(api("/api/flights").then((d) => d?.flights || [])),
+		enabled,
+		refetchInterval: (q) => q.state.data === null ? FLIGHTS_MISSING_MS : (q.state.data || []).some((f) => f.state === "running" || f.state === "waiting_you") && !document.hidden ? FLIGHTS_LIVE_MS : FLIGHTS_IDLE_MS,
+		refetchIntervalInBackground: true,
+		placeholderData: (prev) => prev,
+		retry: false
+	});
+}
+function useFlightPlans(enabled = true) {
+	(0, import_react.useEffect)(bridgeFlightEvents, []);
+	return useQuery({
+		queryKey: ["flight-plans"],
+		queryFn: () => orNull(api("/api/flights/plans").then((d) => d?.plans || [])),
+		enabled,
+		staleTime: 3e4,
+		placeholderData: (prev) => prev,
+		retry: false
+	});
+}
+function useFlightKinds(enabled = true) {
+	return useQuery({
+		queryKey: ["flight-kinds"],
+		queryFn: () => orNull(api("/api/flights/kinds").then((d) => d?.kinds || [])),
+		enabled,
+		staleTime: 6e5,
+		retry: false
+	});
 }
 //#endregion
 //#region src/lib/jobExpectation.ts
@@ -25048,6 +25108,361 @@ function agentName(provider) {
 	return AGENT_NAMES[provider] || (provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : "Agent");
 }
 //#endregion
+//#region src/lib/format.ts
+function errMsg(err) {
+	return err?.message || "error";
+}
+function fmtTokens(n) {
+	n = n || 0;
+	if (n < 1e3) return String(n);
+	if (n < 1e6) return (n / 1e3).toFixed(n < 1e4 ? 1 : 0) + "k";
+	return (n / 1e6).toFixed(1) + "M";
+}
+function fmtUsd(u) {
+	u = u || 0;
+	if (u <= 0) return "$0";
+	if (u < .01) return "<$0.01";
+	if (u < 10) return "$" + u.toFixed(2);
+	if (u < 1e3) return "$" + u.toFixed(1);
+	return "$" + (u / 1e3).toFixed(1) + "k";
+}
+var PROV_LABELS = {
+	claude: "Claude",
+	codex: "Codex",
+	aider: "Aider"
+};
+function provLabel(name) {
+	if (!name) return "";
+	return PROV_LABELS[name] || name.charAt(0).toUpperCase() + name.slice(1);
+}
+function relTime(ts, opts = {}) {
+	const suffix = opts.suffix ?? " ago";
+	const secs = Math.max(0, Math.floor((opts.now ?? Date.now() / 1e3) - ts));
+	if (secs < 60) return secs + "s" + suffix;
+	if (secs < 3600) return Math.floor(secs / 60) + "m" + suffix;
+	if (secs < 86400) return Math.floor(secs / 3600) + "h" + suffix;
+	return Math.floor(secs / 86400) + "d" + suffix;
+}
+function fmtDurationShort(ms) {
+	const mm = Math.max(1, Math.round(ms / 6e4));
+	return mm >= 60 ? Math.floor(mm / 60) + "h " + mm % 60 + "m" : "~" + mm + "m";
+}
+function displayBranch(inst) {
+	const full = inst.branch || "";
+	let m = full.match(/^feature\/sc-\d+\/(.+)$/);
+	if (m) return m[1];
+	m = full.match(/^mindflock\/(.+)$/);
+	if (m) return m[1];
+	return full || inst.program || "";
+}
+function humanSize(bytes) {
+	if (bytes < 1024) return bytes + " B";
+	if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
+	if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + " MB";
+	return (bytes / 1073741824).toFixed(2) + " GB";
+}
+function pathBasename(p) {
+	const s = (p || "").replace(/[\\/]+$/, "");
+	const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
+	return i >= 0 ? s.slice(i + 1) : s;
+}
+function firstLine$1(text) {
+	for (const l of String(text || "").split("\n")) {
+		const t = l.trim();
+		if (t) return t;
+	}
+	return "";
+}
+//#endregion
+//#region src/lib/flights.ts
+function isLive(f) {
+	return f.state === "running" || f.state === "waiting_you" || f.state === "paused" || f.state === "halted";
+}
+function flightDrives(f) {
+	return !!f && (f.state === "running" || f.state === "waiting_you" || f.state === "paused");
+}
+function youStepLabel(title) {
+	const t = String(title || "").trim();
+	if (!t) return "You";
+	return /^you:/i.test(t) ? t : "You: " + t;
+}
+function stepGlyph(state) {
+	switch (state) {
+		case "done": return "✓";
+		case "running":
+		case "waiting_you": return "●";
+		case "failed": return "✗";
+		case "skipped": return "–";
+		default: return "○";
+	}
+}
+function stepStateOf(f, step, index) {
+	const rec = f.step_states?.[step.id]?.state;
+	if (rec) return rec;
+	if (index < f.cursor) return "done";
+	if (index === f.cursor && isLive(f)) return f.state === "waiting_you" ? "waiting_you" : f.state === "paused" ? "pending" : "running";
+	return "pending";
+}
+function flightProgress(f) {
+	const states = f.steps.map((s, i) => stepStateOf(f, s, i));
+	const current = f.steps[f.cursor] || null;
+	return {
+		done: states.filter((s) => s === "done" || s === "skipped").length,
+		total: f.steps.length,
+		current,
+		currentState: current ? f.step_states?.[current.id] || null : null,
+		states
+	};
+}
+function stepActor(step, kinds) {
+	const def = kinds?.find((k) => k.kind === step.kind);
+	if (def) return def.actor;
+	return step.kind === "you" ? "you" : "robot";
+}
+function needsYouFlights(flights) {
+	return flights.filter((f) => f.state === "waiting_you" || f.state === "halted");
+}
+function currentElapsed(f, now = Date.now()) {
+	const cur = f.steps[f.cursor];
+	const since = cur ? Number(f.step_states?.[cur.id]?.since) || 0 : 0;
+	return since > 0 ? relTime(since, {
+		now: now / 1e3,
+		suffix: ""
+	}) : "";
+}
+function stripDots(f) {
+	if ("steps" in f) return flightProgress(f).states.map((s) => s === "failed" ? "✗" : s === "skipped" ? "–" : s === "pending" ? "○" : "●").join("");
+	const total = Math.max(0, Number(f.total) || 0);
+	let out = "";
+	for (let i = 0; i < total; i++) out += i <= f.cursor ? i === f.cursor && f.step?.state === "failed" ? "✗" : "●" : "○";
+	return out;
+}
+function stripLabel(f, now = Date.now()) {
+	const title = "steps" in f ? f.steps[f.cursor]?.title || "" : f.step?.title || "";
+	const elapsed = "steps" in f ? currentElapsed(f, now) : "";
+	const tail = f.state === "done" ? "Landed" : f.state === "cancelled" ? "Cancelled" : (f.state === "paused" ? "Paused · " : "") + title + (elapsed ? " (" + elapsed + ")" : "");
+	return [
+		"✈ " + f.plan_name,
+		stripDots(f),
+		tail
+	].filter((x) => x.trim()).join(" · ");
+}
+function rowWaitsOnYou(row) {
+	return !!row && row.state === "waiting_you" && row.step?.actor === "you";
+}
+function youItems(step) {
+	const raw = step?.config?.items;
+	return Array.isArray(raw) ? raw.map((x) => String(x)).filter((x) => x.trim()) : [];
+}
+function youText(f) {
+	const cur = f.steps[f.cursor];
+	return String(cur?.config?.text ?? "").trim() || (cur ? f.step_states?.[cur.id]?.note || "" : "") || f.reason || "";
+}
+function flightBadgeCount(flights, dueVerify, failingVerify, arrivals) {
+	const you = needsYouFlights(flights).filter((f) => f.steps[f.cursor]?.kind !== "verify").length;
+	const verify = Math.max(0, dueVerify || 0);
+	const manual = arrivals.filter((a) => !a.auto).length;
+	const halted = flights.some((f) => f.state === "halted");
+	return {
+		count: you + verify + manual,
+		you,
+		verify,
+		arrivals: manual,
+		failing: (failingVerify || 0) > 0 || halted
+	};
+}
+function badgeLines(b) {
+	const n = (k, one, many) => k + " " + (k === 1 ? one : many);
+	return [
+		n(b.you, "flight waits on you", "flights wait on you"),
+		n(b.verify, "checklist to check", "checklists to check"),
+		n(b.arrivals, "arrival to start by hand", "arrivals to start by hand")
+	];
+}
+function arrivalAuto(kind, status) {
+	if (!status) return false;
+	if (kind === "tickets") return !!status.available && !!(status.desired ?? status.running);
+	if (kind === "prs") return status.pr_enabled === true;
+	return status.issues_enabled === true;
+}
+function builtinPlanFor(kind, plans) {
+	const own = kind === "prs" || kind === "pr" ? "builtin:pr" : kind === "issues" || kind === "issue" ? "builtin:issue" : kind === "tickets" || kind === "ticket" ? "builtin:ticket" : "builtin:" + kind;
+	if (plans) return plans.some((p) => p.id === own) ? own : "builtin:ticket";
+	return own === "builtin:issue" ? "builtin:ticket" : own;
+}
+function fieldOptions(f) {
+	return (f.options || []).map((o) => typeof o === "string" ? {
+		value: o,
+		label: o
+	} : {
+		value: String(o.value),
+		label: String(o.label || o.value)
+	});
+}
+function newStep(def, taken) {
+	const config = {};
+	for (const f of def.fields) if (f.default !== void 0) config[f.name] = f.default;
+	let n = taken.length + 1;
+	while (taken.includes("s" + n)) n++;
+	return {
+		id: "s" + n,
+		kind: def.kind,
+		title: def.default_title || def.label,
+		config,
+		on_fail: "halt"
+	};
+}
+function moveStep(steps, from, to) {
+	if (from === to || from < 0 || from >= steps.length) return steps.slice();
+	const out = steps.slice();
+	const [it] = out.splice(from, 1);
+	out.splice(Math.max(0, Math.min(out.length, to)), 0, it);
+	return out;
+}
+function duplicateStep(steps, index) {
+	const src = steps[index];
+	if (!src) return steps.slice();
+	const taken = steps.map((s) => s.id);
+	let n = steps.length + 1;
+	while (taken.includes("s" + n)) n++;
+	const copy = {
+		...src,
+		id: "s" + n,
+		config: { ...src.config }
+	};
+	const out = steps.slice();
+	out.splice(index + 1, 0, copy);
+	return out;
+}
+function planDirty(a, b) {
+	if (!a || !b) return a !== b;
+	const strip = (p) => JSON.stringify({
+		...p,
+		updated: 0
+	});
+	return strip(a) !== strip(b);
+}
+function blankPlan() {
+	return {
+		id: "",
+		name: "New plan",
+		description: "",
+		builtin: false,
+		trigger: {
+			kind: "manual",
+			schedule: null,
+			paused: false
+		},
+		session: {
+			repo_path: "",
+			program: "",
+			model: "",
+			in_place: false
+		},
+		steps: [],
+		updated: 0
+	};
+}
+var TRIGGER_LABEL = {
+	manual: "Manual",
+	ticket: "Ticket",
+	pr: "Pull request",
+	issue: "Issue",
+	schedule: "Schedule"
+};
+var ON_FAIL_LABEL = {
+	halt: "Stop and tell me",
+	agent: "Hand it to the agent",
+	skip: "Skip it",
+	you: "Ask me"
+};
+var FLIGHTS_TABS = [
+	"board",
+	"plans",
+	"sources",
+	"schedule",
+	"checklists"
+];
+var FLIGHTS_TAB_LABEL = {
+	board: "Board",
+	plans: "Plans",
+	sources: "Sources",
+	schedule: "Schedule",
+	checklists: "Checklists"
+};
+function parseFlightsTarget(target) {
+	const raw = String(target || "").trim();
+	const cut = raw.indexOf("/");
+	const head = cut < 0 ? raw : raw.slice(0, cut);
+	const rest = cut < 0 ? "" : raw.slice(cut + 1);
+	return FLIGHTS_TABS.includes(head) ? {
+		tab: head,
+		rest
+	} : {
+		tab: "board",
+		rest: ""
+	};
+}
+function flightsTargetFor(name, target) {
+	const t = String(target || "");
+	if (name === "intake") return t ? "sources/" + t : "board";
+	if (name === "verify") return t ? "checklists/" + t : "checklists";
+	return t ? "schedule/" + t : "schedule";
+}
+function whenFormOf(s) {
+	const base = {
+		days: "daily",
+		at: "21:00",
+		date: "",
+		cron: "0 21 * * 1-5",
+		seeded: ""
+	};
+	if (!s) return base;
+	if ("once" in s && s.once) return {
+		...base,
+		days: "once",
+		at: s.once.slice(11, 16),
+		date: s.once.slice(0, 10)
+	};
+	if ("cron" in s && s.cron) return {
+		...base,
+		days: "cron",
+		cron: s.cron
+	};
+	if ("at" in s && s.at) return {
+		...base,
+		days: s.days === "weekdays" ? "weekdays" : "daily",
+		at: s.at
+	};
+	return base;
+}
+function scheduleOfWhen(f) {
+	if (f.days === "cron") return f.cron.trim() ? { cron: f.cron.trim() } : null;
+	if (f.days === "once") return f.date && f.at ? { once: f.date + "T" + f.at } : null;
+	return f.at ? {
+		at: f.at,
+		days: f.days
+	} : null;
+}
+function planChoices(plans, kind, value = "") {
+	const builtin = plans.find((p) => p.id === builtinPlanFor(kind, plans));
+	const ordered = [...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)];
+	const out = [{
+		value: "",
+		label: (builtin?.name || "Built-in plan") + " (default)"
+	}];
+	for (const p of ordered) out.push({
+		value: p.id,
+		label: p.name + (p.builtin ? " (built-in)" : "")
+	});
+	if (value && !plans.some((p) => p.id === value)) out.push({
+		value,
+		label: value + " (not found)"
+	});
+	return out;
+}
+var PLAN_FIELD = "plan";
+//#endregion
 //#region src/lib/sessionState.ts
 var actShown = /* @__PURE__ */ new Map();
 var actPending = /* @__PURE__ */ new Map();
@@ -25100,6 +25515,7 @@ var STATE_LABEL = {
 };
 var REASON_LABEL = {
 	question: "Question",
+	flight_you: "You",
 	precommit_failed: "Pre-commit failed",
 	checks_failing: "Checks failing",
 	setup_failed: "Setup failed",
@@ -25107,6 +25523,7 @@ var REASON_LABEL = {
 };
 var NOTIFY_RULE = {
 	question: "needs_input",
+	flight_you: "flight_needs_you",
 	precommit_failed: "precommit_failed",
 	setup_failed: "setup_failed",
 	checks_failing: "checks_failing",
@@ -25153,6 +25570,10 @@ function needsYou(reason, hint) {
 		hint
 	};
 }
+function flightYouLabel(stepTitle) {
+	return youStepLabel(stepTitle);
+}
+var PAUSED_FLIGHT_LABEL = "Paused flight";
 var SLEEPING_LABEL = "Sleeping";
 function sleepingState(info, now) {
 	const since = Number(info.since) || 0;
@@ -25209,6 +25630,11 @@ function deriveSessionState(inst, extras) {
 	if (inst.setup && inst.setup.state === "failed") return needsYou("setup_failed", "Worktree setup failed — prompts are held; re-run it from the actions menu (log: .mindflock_setup.log)");
 	const act = extras?.activity ?? effectiveActivity(inst);
 	if (act === "clarify") return needsYou("question", "The agent asked you a question — answer it in its pane or from the bell");
+	const fl = inst.flight;
+	if (fl && fl.state === "waiting_you" && fl.step?.actor === "you") return {
+		...needsYou("flight_you", flightYouLabel(fl.step.title) + " — flight “" + fl.plan_name + "” waits on you; press Done on its strip, the Board or the bell"),
+		label: flightYouLabel(fl.step.title)
+	};
 	const bgHint = backgroundHint(inst);
 	if (act === "working") return {
 		state: "working",
@@ -25248,6 +25674,14 @@ function deriveSessionState(inst, extras) {
 		return needsYou("precommit_failed", step ? "Pre-commit failed at: " + step : "Pre-commit failed");
 	}
 	if (inst.check && inst.check.state === "failed" && !inst.check.stale) return needsYou("checks_failing", "Checks failed — push is gated until they pass (or push anyway)");
+	if (inst.flight?.state === "paused") return {
+		state: "idle",
+		label: PAUSED_FLIGHT_LABEL,
+		tone: "neutral",
+		inBell: false,
+		restartable: false,
+		hint: "Flight “" + inst.flight.plan_name + "” is paused at " + (inst.flight.step?.title || "its current step") + " — Resume it from its strip's ⋯"
+	};
 	const since = Number(inst.activity_since) || 0;
 	const idleFor = since > 0 ? now / 1e3 - since : 0;
 	if (idleFor > STUCK_IDLE_S && uncommittedWork(inst)) return {
@@ -25274,6 +25708,10 @@ function needsYouAction(ss, prUrl) {
 		case "question": return {
 			act: "bell",
 			aria: "Question — answer it in the bell"
+		};
+		case "flight_you": return {
+			act: "bell",
+			aria: ss.label + " — press Done in the bell"
 		};
 		case "precommit_failed": return {
 			act: "terminal",
@@ -25348,72 +25786,6 @@ function agentBlockedState(b) {
 }
 function agentBlockedLine(b) {
 	return b.why === "missing" ? "Failed: " + b.name + " isn't installed" : "Not signed in";
-}
-//#endregion
-//#region src/lib/format.ts
-function errMsg(err) {
-	return err?.message || "error";
-}
-function fmtTokens(n) {
-	n = n || 0;
-	if (n < 1e3) return String(n);
-	if (n < 1e6) return (n / 1e3).toFixed(n < 1e4 ? 1 : 0) + "k";
-	return (n / 1e6).toFixed(1) + "M";
-}
-function fmtUsd(u) {
-	u = u || 0;
-	if (u <= 0) return "$0";
-	if (u < .01) return "<$0.01";
-	if (u < 10) return "$" + u.toFixed(2);
-	if (u < 1e3) return "$" + u.toFixed(1);
-	return "$" + (u / 1e3).toFixed(1) + "k";
-}
-var PROV_LABELS = {
-	claude: "Claude",
-	codex: "Codex",
-	aider: "Aider"
-};
-function provLabel(name) {
-	if (!name) return "";
-	return PROV_LABELS[name] || name.charAt(0).toUpperCase() + name.slice(1);
-}
-function relTime(ts, opts = {}) {
-	const suffix = opts.suffix ?? " ago";
-	const secs = Math.max(0, Math.floor((opts.now ?? Date.now() / 1e3) - ts));
-	if (secs < 60) return secs + "s" + suffix;
-	if (secs < 3600) return Math.floor(secs / 60) + "m" + suffix;
-	if (secs < 86400) return Math.floor(secs / 3600) + "h" + suffix;
-	return Math.floor(secs / 86400) + "d" + suffix;
-}
-function fmtDurationShort(ms) {
-	const mm = Math.max(1, Math.round(ms / 6e4));
-	return mm >= 60 ? Math.floor(mm / 60) + "h " + mm % 60 + "m" : "~" + mm + "m";
-}
-function displayBranch(inst) {
-	const full = inst.branch || "";
-	let m = full.match(/^feature\/sc-\d+\/(.+)$/);
-	if (m) return m[1];
-	m = full.match(/^mindflock\/(.+)$/);
-	if (m) return m[1];
-	return full || inst.program || "";
-}
-function humanSize(bytes) {
-	if (bytes < 1024) return bytes + " B";
-	if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
-	if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + " MB";
-	return (bytes / 1073741824).toFixed(2) + " GB";
-}
-function pathBasename(p) {
-	const s = (p || "").replace(/[\\/]+$/, "");
-	const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
-	return i >= 0 ? s.slice(i + 1) : s;
-}
-function firstLine$1(text) {
-	for (const l of String(text || "").split("\n")) {
-		const t = l.trim();
-		if (t) return t;
-	}
-	return "";
 }
 //#endregion
 //#region src/lib/agentMessages.ts
@@ -27374,8 +27746,11 @@ var useUi = create((set, get) => ({
 		save("cs_lasttab", lastTab);
 		set({ lastTab });
 	},
-	openDialogFor: (name, target = null) => set({
-		openDialog: name === "templates" ? "schedule" : name,
+	openDialogFor: (name, target = null) => set(name === "intake" || name === "verify" || name === "schedule" || name === "templates" ? {
+		openDialog: "flights",
+		dialogTarget: flightsTargetFor(name, target)
+	} : {
+		openDialog: name,
 		dialogTarget: target
 	}),
 	closeDialog: () => set({
@@ -30164,11 +30539,6 @@ function isNoCommits(plan) {
 function dueCount(plans) {
 	return (plans || []).filter((p) => isFailing(p) || isWaitingOnYou(p)).length;
 }
-function verifyCountLine(due, failing) {
-	if (!due) return "Checklists that need you or failed: none right now";
-	const what = due + " checklist" + (due === 1 ? "" : "s") + " need" + (due === 1 ? "s" : "") + " you or failed";
-	return failing ? what + " — " + failing + " failed" : what;
-}
 function failingCount(plans) {
 	return (plans || []).filter(isFailing).length;
 }
@@ -30747,6 +31117,7 @@ function stateChip(ss) {
 	if (ss.label === "Paused") cls = "s-paused";
 	else if (ss.label === SLEEPING_LABEL) cls = "s-sleeping";
 	else if (ss.label === "Missing") cls = "s-missing";
+	if (ss.reason === "flight_you" || ss.label === PAUSED_FLIGHT_LABEL) cls += " chip-flight";
 	return {
 		label: ss.label,
 		cls: cls + " tone-" + ss.tone,
@@ -32714,10 +33085,31 @@ function withPlanReady(rows, instances) {
 }
 //#endregion
 //#region src/lib/needsYou.ts
+function withFlightYou(waiting, instances) {
+	const out = (waiting || []).slice();
+	const listed = new Set(out.filter((w) => w.kind === "flight_you").map((w) => w.title));
+	for (const inst of instances) {
+		const fl = inst.flight;
+		if (!rowWaitsOnYou(fl) || listed.has(inst.title)) continue;
+		out.push({
+			key: "flight:" + fl.id,
+			title: inst.title,
+			kind: "flight_you",
+			reason: flightYouLabel(fl.step.title),
+			text: "✈ " + fl.plan_name,
+			actions: [
+				"done",
+				"skip",
+				"open"
+			]
+		});
+	}
+	return out;
+}
 function needsYouTitles(instances, waiting) {
 	const live = new Set(instances.map((i) => i.title));
 	const out = [];
-	for (const r of needsAttention(attentionItems(instances), waiting)) if (r.title && live.has(r.title) && !out.includes(r.title)) out.push(r.title);
+	for (const r of needsAttention(attentionItems(instances), withFlightYou(waiting, instances))) if (r.title && live.has(r.title) && !out.includes(r.title)) out.push(r.title);
 	return out;
 }
 function nextNeedsYou(order, current) {
@@ -33020,10 +33412,10 @@ var KEYMAP = [
 		help: [
 			"Navigation",
 			"Alt+I",
-			"Intake — tickets, PRs and issues"
+			"Flights — the Board: what needs you, what is in flight, what has arrived"
 		],
 		when: () => !isEditingTarget(document.activeElement),
-		run: () => useUi.getState().openDialogFor("intake")
+		run: () => useUi.getState().openDialogFor("flights", "board")
 	},
 	{
 		key: "v",
@@ -33032,10 +33424,10 @@ var KEYMAP = [
 		help: [
 			"Navigation",
 			"Alt+V",
-			"Verify — " + VERIFY_BLURB
+			"Flights → Checklists — " + VERIFY_BLURB
 		],
 		when: () => !isEditingTarget(document.activeElement),
-		run: () => useUi.getState().openDialogFor("verify")
+		run: () => useUi.getState().openDialogFor("flights", "checklists")
 	},
 	{
 		key: "s",
@@ -33044,10 +33436,10 @@ var KEYMAP = [
 		help: [
 			"Navigation",
 			"Alt+S",
-			"Schedule — templates that start sessions on their own"
+			"Flights → Schedule — templates that start sessions on their own"
 		],
 		when: () => !isEditingTarget(document.activeElement),
-		run: () => useUi.getState().openDialogFor("schedule")
+		run: () => useUi.getState().openDialogFor("flights", "schedule")
 	},
 	{
 		key: "t",
@@ -34749,6 +35141,113 @@ function ExtensionDialog() {
 	});
 }
 //#endregion
+//#region src/components/intake/queue.ts
+function isQueued(item) {
+	return item.eligible === true && !item.has_session;
+}
+function oldestFirst(rows) {
+	return rows.slice().sort((a, b) => {
+		const ta = Date.parse(a.created_at || "");
+		const tb = Date.parse(b.created_at || "");
+		if (!isFinite(ta) && !isFinite(tb)) return 0;
+		if (!isFinite(ta)) return 1;
+		if (!isFinite(tb)) return -1;
+		return ta - tb;
+	});
+}
+function ref(repo, number) {
+	return (repo || "") + "#" + (number ?? "?");
+}
+function queuedOf(kind, payloads) {
+	if (kind === "tickets") {
+		const labels = payloads.tickets?.source_labels || {};
+		return oldestFirst((payloads.tickets?.tickets || []).filter(isQueued)).map((t) => ({
+			kind,
+			key: "tickets:" + (t.source || "") + ":" + (t.id ?? t.slug ?? ""),
+			reference: t.slug || String(t.id ?? ""),
+			title: t.name || "",
+			url: t.url,
+			group: labels[t.source || ""] || t.source || "Tickets",
+			created_at: t.created_at,
+			state: t.bucket,
+			assignee: t.mine === false ? t.assignee || "someone else" : void 0,
+			route: t.route,
+			target: {
+				kind: "tickets",
+				source: t.source || "",
+				id: String(t.id ?? "")
+			}
+		}));
+	}
+	return oldestFirst((kind === "prs" ? payloads.prs?.prs || [] : payloads.issues?.issues || []).filter(isQueued)).map((r) => ({
+		kind,
+		key: kind + ":" + (r.repo || "") + ":" + (r.number ?? ""),
+		reference: ref(r.repo, r.number),
+		title: r.title || "",
+		url: r.url,
+		group: r.repo || (kind === "prs" ? "Pull requests" : "Issues"),
+		created_at: r.created_at,
+		target: {
+			kind,
+			repo: r.repo || "",
+			number: r.number ?? 0
+		}
+	}));
+}
+function collectQueued(payloads) {
+	return [
+		...queuedOf("tickets", payloads),
+		...queuedOf("prs", payloads),
+		...queuedOf("issues", payloads)
+	];
+}
+function runState(opts) {
+	if (!opts.engineAvailable || !opts.configured) return "unset";
+	if (opts.runsElsewhere) return "elsewhere";
+	if (!opts.switchOn) return "off-switch";
+	if (!opts.engineOn) return "off-engine";
+	return "on";
+}
+function runsOnText(device) {
+	return "Runs on " + (device || "another of your devices");
+}
+function byGroup(items) {
+	const out = [];
+	for (const item of items) {
+		const found = out.find((g) => g.group === item.group);
+		if (found) found.items.push(item);
+		else out.push({
+			group: item.group,
+			items: [item]
+		});
+	}
+	return out;
+}
+//#endregion
+//#region src/components/flights/useArrivals.ts
+function useArrivals(fetch = true) {
+	const tickets = usePanelQuery("tickets", { enabled: fetch });
+	const prs = usePanelQuery("github-prs", { enabled: fetch });
+	const issues = usePanelQuery("github-issues", { enabled: fetch });
+	const status = useMindflockStatus().data;
+	return {
+		arrivals: collectQueued({
+			tickets: tickets.data ?? null,
+			prs: prs.data ?? null,
+			issues: issues.data ?? null
+		}).map((item) => ({
+			item,
+			auto: arrivalAuto(item.kind, status)
+		})),
+		loaded: !!(tickets.data || prs.data || issues.data),
+		refresh: () => {
+			tickets.refresh();
+			prs.refresh();
+			issues.refresh();
+		}
+	};
+}
+//#endregion
 //#region src/lib/flockActions.ts
 var obj$3 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
 var str$3 = (v, d = "") => typeof v === "string" ? v : v == null ? d : String(v);
@@ -35823,6 +36322,132 @@ function AnswerStrip({ title, activity, variant, question, onOpen, onReply, onRe
 	});
 }
 //#endregion
+//#region src/lib/flightsApi.ts
+var enc$1 = encodeURIComponent;
+var flightPath = (id, rest = "") => "/api/flights/" + enc$1(id) + rest;
+var stepPath = (id, step, verb) => flightPath(id, "/steps/" + enc$1(step) + "/" + verb);
+function refreshFlights() {
+	queryClient.invalidateQueries({ queryKey: ["flight-plans"] });
+	return queryClient.invalidateQueries({ queryKey: ["flights"] });
+}
+async function flightAction(what, path, body = {}, done = "") {
+	try {
+		await api(path, { json: body });
+		if (done) toast(done);
+		return true;
+	} catch (err) {
+		errorPop(what + " failed", errMsg(err));
+		return false;
+	} finally {
+		refreshFlights();
+		refreshInstances();
+	}
+}
+function stepDone(flightId, stepId, note = "") {
+	return flightAction("Done", stepPath(flightId, stepId, "done"), note ? { note } : {});
+}
+function stepSkip(flightId, stepId) {
+	return flightAction("Skip", stepPath(flightId, stepId, "skip"));
+}
+function stepRetry(flightId, stepId) {
+	return flightAction("Retry", stepPath(flightId, stepId, "retry"));
+}
+function jumpFlight(flightId, stepId, title = "") {
+	return flightAction("Jump", flightPath(flightId, "/jump"), { step: stepId }, title ? "Jumped to " + title : "");
+}
+function controlFlight(flightId, verb) {
+	const said = verb === "pause" ? "Flight paused" : verb === "resume" ? "Flight resumed" : "Flight cancelled — its session is kept";
+	return flightAction(verb[0].toUpperCase() + verb.slice(1), flightPath(flightId, "/" + verb), {}, said);
+}
+async function openWhenReady(title, tries = 8, waitMs = 750) {
+	if (!title) return false;
+	for (let i = 0; i < tries; i++) {
+		await refreshInstances();
+		if ((queryClient.getQueryData(["instances"]) || []).some((r) => r.title === title)) {
+			selectSession(title);
+			return true;
+		}
+		await new Promise((r) => setTimeout(r, waitMs));
+	}
+	return false;
+}
+async function takeOff(body) {
+	try {
+		const flight = (await api("/api/flights/start", { json: body }))?.flight || null;
+		refreshFlights();
+		if (flight?.session) {
+			toast("Took off: " + flight.plan_name);
+			openWhenReady(flight.session);
+		}
+		return flight;
+	} catch (err) {
+		errorPop("Take off failed", errMsg(err));
+		return null;
+	}
+}
+function arrivalStartRequest(t, plan, extra = {}) {
+	const picks = {};
+	for (const [k, v] of Object.entries(extra)) if (v) picks[k] = v;
+	if (plan) picks.plan = plan;
+	if (t.kind === "tickets") return {
+		path: "/api/tickets/start",
+		body: {
+			source: t.source,
+			id: t.id,
+			...picks
+		}
+	};
+	if (t.kind === "prs") return {
+		path: "/api/github/prs/review",
+		body: {
+			repo: t.repo,
+			number: t.number,
+			...picks
+		}
+	};
+	return {
+		path: "/api/github/issues/start",
+		body: {
+			repo: t.repo,
+			number: t.number,
+			...picks
+		}
+	};
+}
+async function startArrival(t, plan, extra = {}, fallbackTitle = "") {
+	const req = arrivalStartRequest(t, plan, extra);
+	try {
+		const title = (await api(req.path, { json: req.body }))?.title || fallbackTitle;
+		refreshFlights();
+		if (title) openWhenReady(title);
+		return title;
+	} finally {
+		refreshInstances();
+	}
+}
+async function savePlan(plan) {
+	const body = { ...plan };
+	if (!body.id) delete body.id;
+	const d = await api("/api/flights/plans", { json: body });
+	refreshFlights();
+	return d.plan;
+}
+async function deletePlan(id) {
+	await api("/api/flights/plans/" + enc$1(id), { method: "DELETE" });
+	refreshFlights();
+}
+async function resetPlan(id) {
+	const d = await api("/api/flights/plans/" + enc$1(id) + "/reset", { method: "POST" });
+	refreshFlights();
+	return d.plan;
+}
+async function describeSteps(text, want = "step") {
+	return (await api("/api/flights/describe", { json: {
+		text,
+		want
+	} }))?.steps || [];
+}
+//#endregion
 //#region src/components/outbox/WaitingRow.tsx
 function openSession(title, tab) {
 	selectSession(title);
@@ -35882,6 +36507,11 @@ function WaitingRow({ w, row, shown, group, runInfo }) {
 	if (w.kind === "budget") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BudgetRow, {
 		w,
 		runInfo
+	});
+	if (w.kind === "flight_you") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlightYouRow, {
+		w,
+		row,
+		shown
 	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "pr-open-item ob-item ob-" + (escalation ? "escalation" : w.kind),
@@ -36152,6 +36782,63 @@ function ApprovePreview({ w, row }) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: thenText(w.step, lane) })
 			]
 		})
+	});
+}
+function FlightYouRow({ w, row, shown }) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const fl = row?.flight;
+	const run = async (fn) => {
+		setBusy(true);
+		try {
+			await fn();
+		} finally {
+			setBusy(false);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pr-open-item ob-item ob-flight_you",
+		"data-outbox-row": w.title,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RowMain, {
+				title: w.title,
+				text: w.text,
+				shown,
+				row
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "pr-open-meta",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "pr-open-chip warn",
+					children: w.reason || flightYouLabel(fl?.step?.title)
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "ik-item-start",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "ob-acts",
+					children: [fl && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "btn-primary pr-review-btn",
+						disabled: busy,
+						title: "Mark “" + fl.step.title + "” done — the flight goes on",
+						onClick: () => void run(() => stepDone(fl.id, fl.step.id)),
+						children: "Done"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						disabled: busy,
+						title: "Skip “" + fl.step.title + "” — the flight goes on without it",
+						onClick: () => void run(() => stepSkip(fl.id, fl.step.id)),
+						children: "Skip"
+					})] }), row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						onClick: () => openSession(w.title),
+						children: "Open ↗"
+					})]
+				})
+			})
+		]
 	});
 }
 //#endregion
@@ -37444,7 +38131,7 @@ function NotificationsBell() {
 	}, [open]);
 	const families = (0, import_react.useMemo)(() => childrenByParent(instances), [instances]);
 	const byTitle = (0, import_react.useMemo)(() => new Map(instances.map((i) => [i.title, i])), [instances]);
-	const attn = withPlanReady(needsAttention(attentionItems(instances), outbox?.groups?.waiting), instances);
+	const attn = withPlanReady(needsAttention(attentionItems(instances), withFlightYou(outbox?.groups?.waiting, instances)), instances);
 	const familyOf = (title) => {
 		const inst = byTitle.get(title);
 		if (!inst || inst.device) return null;
@@ -43013,131 +43700,174 @@ var VERIFY_TOUR = {
 	]
 };
 //#endregion
+//#region src/lib/tours/schedule.ts
+var SCHEDULE_TOUR = {
+	id: "schedule",
+	title: "Schedule",
+	steps: [
+		{
+			target: "#schedule-btn, #more-btn, [data-tour=\"schedule-new\"], #templates-new, #schedule-empty-create",
+			title: "Sessions you'll want again",
+			body: "Schedule keeps templates — a folder, an agent and a task — so a session starts with one click, or by itself."
+		},
+		{
+			target: "[data-tour=\"schedule-new\"], #templates-new, #schedule-empty-create",
+			title: "Create a template",
+			body: "Start with a job you repeat, like a nightly test run or a dependency bump."
+		},
+		{
+			target: "[data-tour=\"schedule-name\"], [data-tour=\"schedule-folder\"]",
+			title: "Name it and pick the repo",
+			body: "The folder is what makes a template runnable — every session from it works there."
+		},
+		{
+			target: "[data-tour=\"schedule-task\"]",
+			title: "Say what to do",
+			body: "Every session from this template is told this task first."
+		},
+		{
+			target: "[data-tour=\"schedule-when\"]",
+			title: "Let it start by itself",
+			body: "Tick Run on a schedule — daily, weekdays, once or on a cron — and the line below it shows exactly when it runs next."
+		},
+		{
+			target: "[data-tour=\"schedule-run\"]",
+			title: "Try it once now",
+			body: "▶ Run now starts a new session in the sidebar, and the card logs it under Last run."
+		}
+	]
+};
+//#endregion
+//#region src/lib/tours/settings.ts
+var SETTINGS_TOUR = {
+	id: "settings",
+	title: "Settings",
+	steps: [
+		{
+			target: "[data-tour=\"settings-status\"]",
+			screen: "connections",
+			title: "Your status page",
+			body: "Connections lists everything MindFlock talks to: what is connected and what needs you."
+		},
+		{
+			target: "[data-tour=\"settings-github\"]",
+			screen: "connections",
+			title: "Connect GitHub when you need PRs",
+			body: "Agents need GitHub to open pull requests; pushing already works without it."
+		},
+		{
+			target: "#settings-search",
+			screen: "connections",
+			title: "Search finds any setting",
+			body: "Type a word like dark, phone or parallel and jump straight to it."
+		},
+		{
+			target: "[data-tour=\"settings-default-agent\"], #default-provider-select",
+			screen: "coding",
+			title: "Pick your default agent",
+			body: "New sessions start with this agent; you can still pick another one when you start a session."
+		},
+		{
+			target: "[data-tour=\"settings-worktrees\"], #workspace-paths",
+			screen: "workspace",
+			title: "Where your worktrees live",
+			body: "Each session gets a separate worktree, its own branch and copy of your repo, kept in these folders."
+		},
+		{
+			target: "[data-tour=\"settings-advanced\"], #settings-advanced-toggle",
+			title: "The rest waits here",
+			body: "Phones, other computers, local models and troubleshooting live behind Show advanced settings."
+		},
+		{
+			target: "[data-tour=\"settings-tours\"], #general-tours",
+			screen: "general",
+			title: "Replay any tour",
+			body: "Every tour lives here under Help, next to the switch for hints."
+		}
+	]
+};
+//#endregion
+//#region src/lib/tours/people.ts
+var PEOPLE_TOUR = {
+	id: "people",
+	title: "People",
+	steps: [
+		{
+			target: "[data-tour=\"people-invite\"]",
+			title: "Invite someone",
+			body: "Create invite makes a one-time code — send it to the person you want to work with."
+		},
+		{
+			target: "[data-tour=\"people-join\"]",
+			title: "Or join them",
+			body: "Got an invite instead? Paste the whole message here and press Join."
+		},
+		{
+			target: "[data-tour=\"people-safety\"]",
+			title: "Check the safety number",
+			body: "Read it to each other: if it matches press It matches, if it differs unlink."
+		},
+		{
+			target: "[data-tour=\"people-share\"]",
+			title: "Share a folder",
+			body: "An agent works in one shared folder inside a sandbox and talks to their agent."
+		},
+		{
+			target: "[data-tour=\"people-joint\"]",
+			title: "Build one feature together",
+			body: "Start a joint task to agree a contract, then watch their session and mirror their work into your repo."
+		}
+	]
+};
+//#endregion
+//#region src/lib/tours/flights.ts
+var FLIGHTS_TOUR = {
+	id: "flights",
+	title: "Flights",
+	steps: [
+		{
+			target: "[data-tour=\"flights-board\"], #flights-tab-board",
+			title: "Everything on its way",
+			body: "The Board shows what needs you, what is in flight, what has arrived and not started, and what landed.",
+			screen: "board"
+		},
+		{
+			target: "[data-tour=\"flights-strip\"], #fl-group-flying",
+			title: "One strip per flight",
+			body: "Each block is a step: ✓ done, ● where it is now, ○ still to come — click the strip to open its session.",
+			screen: "board"
+		},
+		{
+			target: "[data-tour=\"flights-plans\"], #flights-tab-plans",
+			title: "Plans are rows of blocks",
+			body: "Drag blocks to reorder them, press + to add one, and add a You step wherever the flight should wait for you.",
+			screen: "plans"
+		},
+		{
+			target: "[data-tour=\"flights-describe\"], #flights-tab-plans",
+			title: "Describe a step",
+			body: "Say what should happen in a sentence and the blocks are added for you to check and save.",
+			screen: "plans"
+		}
+	]
+};
+//#endregion
 //#region src/lib/tours/index.ts
 var TOURS = {
 	welcome: WELCOME_TOUR,
 	new: NEW_TOUR,
+	flights: FLIGHTS_TOUR,
 	intake: INTAKE_TOUR,
 	verify: VERIFY_TOUR,
-	schedule: {
-		id: "schedule",
-		title: "Schedule",
-		steps: [
-			{
-				target: "#schedule-btn, #more-btn, [data-tour=\"schedule-new\"], #templates-new, #schedule-empty-create",
-				title: "Sessions you'll want again",
-				body: "Schedule keeps templates — a folder, an agent and a task — so a session starts with one click, or by itself."
-			},
-			{
-				target: "[data-tour=\"schedule-new\"], #templates-new, #schedule-empty-create",
-				title: "Create a template",
-				body: "Start with a job you repeat, like a nightly test run or a dependency bump."
-			},
-			{
-				target: "[data-tour=\"schedule-name\"], [data-tour=\"schedule-folder\"]",
-				title: "Name it and pick the repo",
-				body: "The folder is what makes a template runnable — every session from it works there."
-			},
-			{
-				target: "[data-tour=\"schedule-task\"]",
-				title: "Say what to do",
-				body: "Every session from this template is told this task first."
-			},
-			{
-				target: "[data-tour=\"schedule-when\"]",
-				title: "Let it start by itself",
-				body: "Tick Run on a schedule — daily, weekdays, once or on a cron — and the line below it shows exactly when it runs next."
-			},
-			{
-				target: "[data-tour=\"schedule-run\"]",
-				title: "Try it once now",
-				body: "▶ Run now starts a new session in the sidebar, and the card logs it under Last run."
-			}
-		]
-	},
-	settings: {
-		id: "settings",
-		title: "Settings",
-		steps: [
-			{
-				target: "[data-tour=\"settings-status\"]",
-				screen: "connections",
-				title: "Your status page",
-				body: "Connections lists everything MindFlock talks to: what is connected and what needs you."
-			},
-			{
-				target: "[data-tour=\"settings-github\"]",
-				screen: "connections",
-				title: "Connect GitHub when you need PRs",
-				body: "Agents need GitHub to open pull requests; pushing already works without it."
-			},
-			{
-				target: "#settings-search",
-				screen: "connections",
-				title: "Search finds any setting",
-				body: "Type a word like dark, phone or parallel and jump straight to it."
-			},
-			{
-				target: "[data-tour=\"settings-default-agent\"], #default-provider-select",
-				screen: "coding",
-				title: "Pick your default agent",
-				body: "New sessions start with this agent; you can still pick another one when you start a session."
-			},
-			{
-				target: "[data-tour=\"settings-worktrees\"], #workspace-paths",
-				screen: "workspace",
-				title: "Where your worktrees live",
-				body: "Each session gets a separate worktree, its own branch and copy of your repo, kept in these folders."
-			},
-			{
-				target: "[data-tour=\"settings-advanced\"], #settings-advanced-toggle",
-				title: "The rest waits here",
-				body: "Phones, other computers, local models and troubleshooting live behind Show advanced settings."
-			},
-			{
-				target: "[data-tour=\"settings-tours\"], #general-tours",
-				screen: "general",
-				title: "Replay any tour",
-				body: "Every tour lives here under Help, next to the switch for hints."
-			}
-		]
-	},
-	people: {
-		id: "people",
-		title: "People",
-		steps: [
-			{
-				target: "[data-tour=\"people-invite\"]",
-				title: "Invite someone",
-				body: "Create invite makes a one-time code — send it to the person you want to work with."
-			},
-			{
-				target: "[data-tour=\"people-join\"]",
-				title: "Or join them",
-				body: "Got an invite instead? Paste the whole message here and press Join."
-			},
-			{
-				target: "[data-tour=\"people-safety\"]",
-				title: "Check the safety number",
-				body: "Read it to each other: if it matches press It matches, if it differs unlink."
-			},
-			{
-				target: "[data-tour=\"people-share\"]",
-				title: "Share a folder",
-				body: "An agent works in one shared folder inside a sandbox and talks to their agent."
-			},
-			{
-				target: "[data-tour=\"people-joint\"]",
-				title: "Build one feature together",
-				body: "Start a joint task to agree a contract, then watch their session and mirror their work into your repo."
-			}
-		]
-	},
+	schedule: SCHEDULE_TOUR,
+	settings: SETTINGS_TOUR,
+	people: PEOPLE_TOUR,
 	voice: VOICE_TOUR
 };
 var TOUR_IDS = [
 	"welcome",
 	"new",
+	"flights",
 	"intake",
 	"verify",
 	"schedule",
@@ -43214,11 +43944,8 @@ var CALM_HIDDEN_BARS = ["usage", "assistant"];
 function calmHidesBar(key) {
 	return CALM_HIDDEN_BARS.includes(key) || key.startsWith("ext:");
 }
-function topBarShows(o) {
-	return {
-		verify: !o.calm || o.checklists > 0,
-		schedule: !o.calm || o.templates > 0
-	};
+function topBarShows() {
+	return { flights: true };
 }
 function firstLaunchTour(opts) {
 	if (opts.seen || opts.sessions !== 0) return false;
@@ -43297,10 +44024,11 @@ function openTourOnFirstUse(id) {
 //#endregion
 //#region src/components/onboarding/replayTour.ts
 var SURFACE = {
-	new: "new-session",
-	intake: "intake",
-	verify: "verify",
-	schedule: "schedule"
+	new: ["new-session", null],
+	flights: ["flights", "board"],
+	intake: ["flights", "sources"],
+	verify: ["flights", "checklists"],
+	schedule: ["flights", "schedule"]
 };
 function replayTour(id) {
 	const ui = useUi.getState();
@@ -43313,7 +44041,10 @@ function replayTour(id) {
 	if (id === "settings") openSettings("connections");
 	else if (id === "people") openSettings("peer");
 	else if (id === "voice") ui.closeDialog();
-	else ui.openDialogFor(SURFACE[id]);
+	else {
+		const [name, target] = SURFACE[id];
+		ui.openDialogFor(name, target);
+	}
 	useUi.getState().openCoachTour(id);
 }
 //#endregion
@@ -45790,24 +46521,6 @@ function useScheduleStatus() {
 	};
 }
 //#endregion
-//#region src/lib/useCalm.ts
-function useCalm() {
-	const { data: instances } = useInstances();
-	const { data: setup } = useSetup();
-	const { data: config } = useConfig();
-	const sessions = instances ? instances.filter((i) => !i.device && !isVerifySession(i)).length : null;
-	const decided = sessions === null ? null : calmDecision({
-		sessions,
-		status: setup,
-		onboarded: config?.onboarded
-	});
-	(0, import_react.useEffect)(() => {
-		if (decided !== null) writeCalmHint(decided);
-	}, [decided]);
-	if (decided !== null) return decided;
-	return undecidedCalm(readCalmHint());
-}
-//#endregion
 //#region src/components/TopBar.tsx
 function engineVersion(raw) {
 	const v = (raw || "").trim();
@@ -45840,11 +46553,10 @@ function TopBar() {
 	const failing = failingCount(testPlans?.plans || []);
 	const sched = useScheduleStatus();
 	const schedFailing = failingSchedules(sched.templates, sched.status).length;
-	const shows = topBarShows({
-		calm: useCalm(),
-		checklists: testPlans?.plans?.length ?? 0,
-		templates: sched.templates.length
-	});
+	const flights = useFlights().data || [];
+	const { arrivals } = useArrivals(false);
+	const badge = flightBadgeCount(flights, due, failing, arrivals);
+	const shows = topBarShows();
 	const [mac] = (0, import_react.useState)(hasNativeWindowControls);
 	const [fullScreen, setFullScreen] = (0, import_react.useState)(false);
 	(0, import_react.useEffect)(() => {
@@ -45875,34 +46587,15 @@ function TopBar() {
 		const k = usableShortcuts(id, tab);
 		return k.length ? " (" + k.join(" / ") + ")" : "";
 	};
-	const verifyTitle = "Verify — " + VERIFY_BLURB + keys("verify") + "\n" + verifyCountLine(due, failing);
-	const scheduleTitle = "Schedule — templates; starts sessions on a timer" + keys("schedule") + (schedFailing > 0 ? "\n" + (schedFailing === 1 ? "1 scheduled template's last run failed" : schedFailing + " scheduled templates' last runs failed") : "");
-	const foldable = [
-		shows.verify && {
-			key: "verify",
-			label: "Verify",
-			title: verifyTitle,
-			count: due,
-			failing: failing > 0,
-			open: () => ui.openDialogFor("verify")
-		},
-		shows.schedule && {
-			key: "schedule",
-			label: "Schedule",
-			title: scheduleTitle,
-			count: schedFailing,
-			failing: true,
-			open: () => ui.openDialogFor("schedule")
-		},
-		{
-			key: "settings",
-			label: "Settings",
-			title: "Settings",
-			count: 0,
-			failing: false,
-			open: () => openSettings()
-		}
-	].filter((f) => !!f);
+	const flightsTitle = "Flights — where every ticket, PR and scheduled job is on its way from arrival to merge" + keys("intake") + "\n" + badgeLines(badge).join("\n") + (schedFailing > 0 ? "\n" + (schedFailing === 1 ? "1 scheduled template's last run failed" : schedFailing + " scheduled templates' last runs failed") : "");
+	const foldable = [{
+		key: "settings",
+		label: "Settings",
+		title: "Settings",
+		count: 0,
+		failing: false,
+		open: () => openSettings()
+	}];
 	const [fit, setFit] = (0, import_react.useState)({
 		brand: true,
 		shown: Infinity
@@ -46083,36 +46776,15 @@ function TopBar() {
 							onClick: () => ui.openDialogFor("new-session"),
 							children: "New"
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							id: "intake-btn",
+						shows.flights && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							id: "flights-btn",
 							className: "tb-item",
 							type: "button",
-							title: "Intake — tickets, pull requests and issues; starts sessions when work arrives" + keys("intake"),
-							onClick: () => ui.openDialogFor("intake"),
-							children: "Intake"
-						}),
-						shows.verify && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							id: "verify-btn",
-							className: "tb-item" + (isFolded("verify") ? " tb-folded" : ""),
-							"data-fold": "verify",
-							type: "button",
-							title: verifyTitle,
-							onClick: () => ui.openDialogFor("verify"),
-							children: ["Verify", due > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "tb-count" + (failing > 0 ? " is-failing" : ""),
-								children: due
-							})]
-						}),
-						shows.schedule && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							id: "schedule-btn",
-							className: "tb-item" + (isFolded("schedule") ? " tb-folded" : ""),
-							"data-fold": "schedule",
-							type: "button",
-							title: scheduleTitle,
-							onClick: () => ui.openDialogFor("schedule"),
-							children: ["Schedule", schedFailing > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "tb-count is-failing",
-								children: schedFailing
+							title: flightsTitle,
+							onClick: () => ui.openDialogFor("flights"),
+							children: ["Flights", badge.count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "tb-count" + (badge.failing ? " is-failing" : ""),
+								children: badge.count
 							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -53916,6 +54588,24 @@ function SetupChip() {
 		onClick: () => useUi.getState().openDialogFor("setup"),
 		children: chipLabel(status)
 	});
+}
+//#endregion
+//#region src/lib/useCalm.ts
+function useCalm() {
+	const { data: instances } = useInstances();
+	const { data: setup } = useSetup();
+	const { data: config } = useConfig();
+	const sessions = instances ? instances.filter((i) => !i.device && !isVerifySession(i)).length : null;
+	const decided = sessions === null ? null : calmDecision({
+		sessions,
+		status: setup,
+		onboarded: config?.onboarded
+	});
+	(0, import_react.useEffect)(() => {
+		if (decided !== null) writeCalmHint(decided);
+	}, [decided]);
+	if (decided !== null) return decided;
+	return undecidedCalm(readCalmHint());
 }
 //#endregion
 //#region src/components/sidebar/Sidebar.tsx
@@ -76326,6 +77016,433 @@ function PaneMoreMenu({ children, btnRef }) {
 	}), document.body)] });
 }
 //#endregion
+//#region src/components/OverflowMenu.tsx
+function OverflowMenu({ label, items, boundaryId }) {
+	const ref = (0, import_react.useRef)(null);
+	const [open, setOpen] = (0, import_react.useState)(false);
+	const [up, setUp] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		const onDown = (e) => {
+			if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+		};
+		const onKey = (e) => {
+			if (e.key !== "Escape") return;
+			setOpen(false);
+			e.stopPropagation();
+			e.preventDefault();
+		};
+		document.addEventListener("mousedown", onDown);
+		document.addEventListener("keydown", onKey, true);
+		return () => {
+			document.removeEventListener("mousedown", onDown);
+			document.removeEventListener("keydown", onKey, true);
+		};
+	}, [open]);
+	if (!items.length) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+		className: "vf-menu" + (up ? " vf-menu-up" : ""),
+		open,
+		ref,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", {
+			"aria-label": label,
+			title: label,
+			onClick: (e) => {
+				e.preventDefault();
+				const next = !open;
+				if (next && ref.current) {
+					const here = ref.current.getBoundingClientRect();
+					const body = boundaryId ? document.getElementById(boundaryId) : null;
+					const floor = body ? body.getBoundingClientRect().bottom : window.innerHeight;
+					setUp(floor - here.bottom < 24 * items.length + 40);
+				}
+				setOpen(next);
+			},
+			children: "⋯"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "vf-menu-list",
+			children: items.map((item) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "vf-menu-item" + (item.danger ? " vf-menu-danger" : "") + (item.className ? " " + item.className : ""),
+				title: item.title,
+				onClick: () => {
+					setOpen(false);
+					item.onSelect();
+				},
+				children: item.label
+			}, item.key))
+		})]
+	});
+}
+//#endregion
+//#region src/components/flights/FlightStrip.tsx
+var stop = (e) => e.stopPropagation();
+function openFlightSession(title) {
+	if (!title) return;
+	useUi.getState().closeDialog();
+	selectSession(title);
+}
+function flightHeadline(f) {
+	const s = f.subject;
+	if (s?.title) return s.title;
+	if (s?.id) return (s.kind === "pr" || s.kind === "issue" ? "#" : "") + s.id;
+	return f.session || f.plan_name;
+}
+function BlockChips({ flight, kinds, onJump }) {
+	const { states } = flightProgress(flight);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+		className: "fl-chips" + (onJump ? " fl-chips-jump" : ""),
+		"aria-label": "Steps",
+		children: flight.steps.map((s, i) => {
+			const st = states[i];
+			const you = stepActor(s, kinds) === "you";
+			const cls = "fl-chip fl-chip-" + st + (you ? " fl-chip-you" : " fl-chip-robot") + (i === flight.cursor && isLive(flight) ? " fl-chip-current" : "");
+			const label = s.title + " — " + (you ? "you" : "robot") + ", " + st.replace("_", " ");
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+				className: cls,
+				title: label,
+				children: onJump ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "fl-chip-btn",
+					"aria-label": "Jump to " + s.title,
+					onClick: (e) => {
+						e.stopPropagation();
+						onJump(s.id, s.title);
+					},
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "fl-chip-glyph",
+						"aria-hidden": "true",
+						children: stepGlyph(st)
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "fl-chip-text",
+						children: s.title
+					})]
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-chip-glyph",
+					"aria-hidden": "true",
+					children: stepGlyph(st)
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-chip-text",
+					children: s.title
+				})] })
+			}, s.id);
+		})
+	});
+}
+function YouStepActions({ flight, compact = false }) {
+	const step = flight.steps[flight.cursor];
+	const items = youItems(step);
+	const [ticked, setTicked] = (0, import_react.useState)({});
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	if (!step || flight.state !== "waiting_you" && flight.state !== "halted") return null;
+	const run = async (fn) => {
+		setBusy(true);
+		try {
+			await fn();
+		} finally {
+			setBusy(false);
+		}
+	};
+	const key = (i) => flight.id + ":" + step.id + ":" + i;
+	const allTicked = items.every((_, i) => ticked[key(i)]);
+	const halted = flight.state === "halted";
+	const text = youText(flight);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "fl-you" + (compact ? " fl-you-compact" : ""),
+		onClick: stop,
+		children: [
+			!compact && text && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "fl-you-text",
+				children: text
+			}),
+			!halted && items.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "fl-you-items",
+				children: items.map((it, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					type: "checkbox",
+					checked: !!ticked[key(i)],
+					onChange: (e) => setTicked((t) => ({
+						...t,
+						[key(i)]: e.target.checked
+					}))
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: it })] }) }, key(i)))
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fl-you-acts",
+				children: [halted ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "btn-primary fl-btn",
+					disabled: busy,
+					title: "Run this step again",
+					onClick: () => void run(() => stepRetry(flight.id, step.id)),
+					children: "Retry"
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "btn-primary fl-btn fl-done",
+					disabled: busy || !allTicked,
+					title: allTicked ? "Mark “" + step.title + "” done — the flight goes on" : "Tick every item first",
+					onClick: () => void run(() => stepDone(flight.id, step.id)),
+					children: "Done"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "test-btn fl-btn fl-skip",
+					disabled: busy,
+					title: "Skip “" + step.title + "” — the flight goes on without it",
+					onClick: () => void run(() => stepSkip(flight.id, step.id)),
+					children: "Skip"
+				})]
+			})
+		]
+	});
+}
+function FlightMenu({ flight, onJumpMode, onCancelAsk, openSession = true }) {
+	const live = isLive(flight);
+	const items = [];
+	if (openSession && flight.session) items.push({
+		key: "open",
+		label: "Open session",
+		onSelect: () => openFlightSession(flight.session)
+	});
+	if (live) {
+		items.push(flight.state === "halted" || flight.state === "paused" ? {
+			key: "resume",
+			label: "Resume",
+			title: "Carry on from the current step",
+			onSelect: () => void controlFlight(flight.id, "resume")
+		} : {
+			key: "pause",
+			label: "Pause",
+			title: "Hold the flight at its current step",
+			onSelect: () => void controlFlight(flight.id, "pause")
+		});
+		items.push({
+			key: "jump",
+			label: "Jump to…",
+			title: "Move the flight to another block",
+			onSelect: onJumpMode
+		});
+		items.push({
+			key: "cancel",
+			label: "Cancel",
+			danger: true,
+			title: "End this flight — its session is kept",
+			onSelect: onCancelAsk
+		});
+	}
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		onClick: stop,
+		className: "fl-menu",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
+			label: "Flight actions",
+			items
+		})
+	});
+}
+function useStripControls(flight) {
+	const [jumping, setJumping] = (0, import_react.useState)(false);
+	const [asking, setAsking] = (0, import_react.useState)(false);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	return {
+		onJump: jumping ? (stepId, title) => {
+			setJumping(false);
+			jumpFlight(flight.id, stepId, title);
+		} : void 0,
+		extra: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [jumping && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "fl-jump-row",
+			onClick: stop,
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Jump to… pick a block above." }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "test-btn fl-btn",
+				onClick: () => setJumping(false),
+				children: "Cancel"
+			})]
+		}), asking && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			onClick: stop,
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+				title: "Cancel this flight?",
+				body: "It stops where it is. Its session, branch and work are kept.",
+				confirmLabel: "Cancel",
+				cancelLabel: "Keep it",
+				busy,
+				onCancel: () => setAsking(false),
+				onConfirm: async () => {
+					setBusy(true);
+					try {
+						await controlFlight(flight.id, "cancel");
+					} finally {
+						setBusy(false);
+						setAsking(false);
+					}
+				}
+			})
+		})] }),
+		jumpMode: () => setJumping(true),
+		cancelAsk: () => setAsking(true)
+	};
+}
+function FlightCard({ flight, kinds }) {
+	const now = useNow(isLive(flight) ? 3e4 : false);
+	const c = useStripControls(flight);
+	const prog = flightProgress(flight);
+	const step = prog.current;
+	const elapsed = currentElapsed(flight, now);
+	const waiting = flight.state === "waiting_you" || flight.state === "halted";
+	const you = step ? stepActor(step, kinds) === "you" : false;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "fl-strip-card fl-state-" + flight.state + (waiting ? " fl-needs" : ""),
+		"data-flight": flight.id,
+		"data-tour": "flights-strip",
+		role: "group",
+		"aria-label": flightHeadline(flight),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fl-strip-body",
+				role: "button",
+				tabIndex: 0,
+				title: flight.session ? "Open " + flight.session : void 0,
+				onClick: () => openFlightSession(flight.session),
+				onKeyDown: (e) => {
+					if (e.key === "Enter" || e.key === " ") {
+						e.preventDefault();
+						openFlightSession(flight.session);
+					}
+				},
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "fl-strip-head",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-strip-title",
+								children: flightHeadline(flight)
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+								className: "fl-strip-plan",
+								children: ["✈ ", flight.plan_name]
+							}),
+							flight.session && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-strip-session",
+								children: flight.session
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlightMenu, {
+								flight,
+								onJumpMode: c.jumpMode,
+								onCancelAsk: c.cancelAsk
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockChips, {
+						flight,
+						kinds,
+						onJump: c.onJump
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "fl-strip-now",
+						children: [flight.state === "done" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fl-landed",
+							children: "Landed"
+						}) : flight.state === "cancelled" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "muted",
+							children: ["Cancelled", flight.reason ? " — " + flight.reason : ""]
+						}) : step ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-now-dot" + (you ? " fl-now-you" : ""),
+								"aria-hidden": "true"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-now-title",
+								children: you ? youStepLabel(step.title) : step.title
+							}),
+							elapsed && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-now-elapsed",
+								children: elapsed
+							}),
+							flight.state === "paused" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-now-paused",
+								children: "Paused"
+							}),
+							flight.state === "halted" && flight.reason && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-now-reason",
+								children: flight.reason
+							})
+						] }) : null, /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "fl-progress muted",
+							children: [
+								prog.done,
+								"/",
+								prog.total
+							]
+						})]
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(YouStepActions, { flight }),
+			c.extra
+		]
+	});
+}
+function PaneFlightStrip({ inst }) {
+	const row = inst.flight;
+	const live = !!row && isLive(row);
+	const flights = useFlights(live).data;
+	const kinds = useFlightKinds(live).data;
+	const now = useNow(live ? 3e4 : false);
+	const full = flights?.find((f) => f.id === row?.id) || null;
+	if (!row || !live) return null;
+	return full ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneStripFull, {
+		flight: full,
+		kinds,
+		now
+	}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneStripRow, { row });
+}
+function PaneStripRow({ row }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "fl-strip fl-state-" + row.state + (rowWaitsOnYou(row) ? " fl-needs" : ""),
+		"data-tour": "flights-strip",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "fl-strip-line",
+			title: stripLabel(row),
+			children: stripLabel(row)
+		})
+	});
+}
+function PaneStripFull({ flight, kinds, now }) {
+	const c = useStripControls(flight);
+	const step = flight.steps[flight.cursor];
+	const waiting = flight.state === "waiting_you" || flight.state === "halted";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "fl-strip fl-state-" + flight.state + (waiting ? " fl-needs" : ""),
+		"data-tour": "flights-strip",
+		onMouseDown: stop,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fl-strip-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "fl-strip-line",
+						title: stripLabel(flight, now) + "\n" + flight.steps.map((s) => s.title).join(" → "),
+						children: stripLabel(flight, now)
+					}),
+					waiting && step && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(YouStepActions, {
+						flight,
+						compact: true
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlightMenu, {
+						flight,
+						onJumpMode: c.jumpMode,
+						onCancelAsk: c.cancelAsk,
+						openSession: false
+					})
+				]
+			}),
+			c.onJump && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockChips, {
+				flight,
+				kinds,
+				onJump: c.onJump
+			}),
+			c.extra
+		]
+	});
+}
+//#endregion
 //#region src/components/grid/Pane.tsx
 var GIT_TABS = /* @__PURE__ */ new Set(["diff", "map"]);
 var MAP_PREFETCH_MS = 1500;
@@ -76638,7 +77755,7 @@ function Pane({ inst, drag, dragging }) {
 			drag.commit();
 		}
 	};
-	const ftGone = missing || loading || !fastTrackStep(inst);
+	const ftGone = missing || loading || flightDrives(inst.flight) || !fastTrackStep(inst);
 	(0, import_react.useEffect)(() => {
 		if (ftMenu && ftGone) useUi.getState().setFastTrackMenu(null);
 	}, [ftMenu, ftGone]);
@@ -76813,7 +77930,8 @@ function Pane({ inst, drag, dragging }) {
 	const chip = chipState(inst);
 	const sharedFolder = !!inst.peer_share;
 	const ns = nextStep$1(inst);
-	const ft = fastTrackStep(inst);
+	const flying = flightDrives(inst.flight);
+	const ft = flying ? null : fastTrackStep(inst);
 	const rs = resetStep(inst);
 	const step = liveStep(inst);
 	const q = inst.queue;
@@ -76846,7 +77964,7 @@ function Pane({ inst, drag, dragging }) {
 	const copyHistory = () => {
 		if (termTab) copyPaneHistory(title, termTab);
 	};
-	const shownStep = ns && ns.label === "Commit…" && !hasUncommitted(inst) ? null : ns;
+	const shownStep = flying || ns && ns.label === "Commit…" && !hasUncommitted(inst) ? null : ns;
 	const openHistory = () => setHistPane({
 		kind: tab === "shell" ? "shell" : "agent",
 		dragSel: null
@@ -77237,6 +78355,7 @@ function Pane({ inst, drag, dragging }) {
 				block: noAgent,
 				title
 			}),
+			inst.flight && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneFlightStrip, { inst }),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "pane-body",
 				ref: bodyRef,
@@ -78765,7 +79884,7 @@ var NEEDS_TOP = -1;
 var TOP = {
 	new: 0,
 	recent: 1,
-	intake: 2,
+	flights: 2,
 	verify: 3,
 	schedule: 4,
 	setup: 5,
@@ -78816,10 +79935,21 @@ function CommandPalette({ host }) {
 			run: () => ui.openDialogFor("new-session")
 		});
 		acts.push({
-			label: "Open Intake",
+			label: "Flights…",
 			hint: "Alt+I",
-			top: TOP.intake,
-			run: () => ui.openDialogFor("intake")
+			top: TOP.flights,
+			keywords: "board arrivals in flight plans blocks intake verify schedule",
+			run: () => ui.openDialogFor("flights", "board")
+		});
+		acts.push({
+			label: "Flights: Plans",
+			keywords: "flight plan blocks steps editor",
+			run: () => ui.openDialogFor("flights", "plans")
+		});
+		acts.push({
+			label: "Intake…",
+			hint: "Flights → Sources",
+			run: () => ui.openDialogFor("intake", "tickets")
 		});
 		acts.push({
 			label: "Intake: Tickets",
@@ -78839,9 +79969,10 @@ function CommandPalette({ host }) {
 			run: () => ui.openDialogFor("intake", "autostart")
 		});
 		acts.push({
-			label: "Verify — " + VERIFY_BLURB,
+			label: "Verify…",
 			hint: "Alt+V",
 			top: TOP.verify,
+			keywords: VERIFY_BLURB + " checklists flights",
 			run: () => ui.openDialogFor("verify")
 		});
 		acts.push({
@@ -81457,6 +82588,9 @@ function TourButton({ tour }) {
 	});
 }
 //#endregion
+//#region src/components/flights/embedGuard.ts
+var embeddedGuard = { current: null };
+//#endregion
 //#region src/components/dialogs/TemplatesDialog.tsx
 function localZone() {
 	try {
@@ -81910,185 +83044,199 @@ function TemplatesDialogView(p) {
 	const up = nextUp(templates, runs);
 	const elsewhere = !runs.runs_here && !!runs.runs_on;
 	const empty = loaded && templates.length === 0 && ui.editing !== "";
+	const onEscape = () => {
+		if (ui.discarding) {
+			p.dispatch({ t: "keep-editing" });
+			return true;
+		}
+		if (ui.editing !== null && escapeRef.current?.()) return true;
+		if (ui.editing === null && !ui.confirming) return false;
+		p.dispatch(ui.editing !== null ? { t: "dismiss" } : { t: "cancel" });
+		return true;
+	};
+	const body = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "templates-card",
+		role: p.embedded ? void 0 : "dialog",
+		"aria-modal": p.embedded ? void 0 : "true",
+		"aria-labelledby": p.embedded ? void 0 : "templates-title",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "tpl-head",
+				children: [p.embedded ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "tpl-head-title muted",
+					children: "Templates"
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+					id: "templates-title",
+					children: "Schedule"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "tpl-head-acts",
+					children: [
+						ui.editing !== "" && !empty && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "templates-new",
+							className: "tpl-new",
+							"data-tour": "schedule-new",
+							onClick: () => p.dispatch({ t: "new" }),
+							children: "+ New template"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TourButton, { tour: "schedule" }),
+						!p.embedded && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "templates-close",
+							onClick: p.onClose,
+							children: "Close"
+						})
+					]
+				})]
+			}),
+			!empty && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "tpl-intro muted",
+				children: [
+					"Templates start a ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "new" }),
+					" session — when you run one, or by themselves on a schedule.",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "tpl-intro-aside",
+						children: "To send text to a session that's already running, use Prompts."
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "tpl-list",
+				id: "templates-list",
+				children: [
+					ui.editing === "" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "tpl-card tpl-card-editing tpl-card-new",
+						children: [discardRow, editor]
+					}),
+					loadError && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+						className: "error tpl-load-error",
+						role: "alert",
+						children: ["Could not load templates: ", loadError]
+					}),
+					!loaded && !loadError && templates.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+						className: "tpl-empty muted",
+						children: "Loading templates…"
+					}),
+					empty && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "sch-empty",
+						id: "schedule-empty",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "sch-empty-mark",
+								"aria-hidden": "true",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+									viewBox: "0 0 24 24",
+									width: "22",
+									height: "22",
+									fill: "none",
+									stroke: "currentColor",
+									strokeWidth: "1.8",
+									strokeLinecap: "round",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+										cx: "12",
+										cy: "13",
+										r: "8"
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 9v4l2.5 2.5M9 2.5h6" })]
+								})
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Save a session as a template once, then start it with one click — or every night by itself." }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								id: "schedule-empty-create",
+								className: "tpl-btn tpl-run",
+								"data-tour": "schedule-new",
+								onClick: () => p.dispatch({ t: "new" }),
+								children: "Create a template"
+							})
+						]
+					}),
+					templates.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						(up || elsewhere) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "sch-next-up",
+							id: "schedule-next",
+							children: elsewhere ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+								"Schedules start on ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: runs.runs_on }),
+								" — the computer that runs schedules."
+							] }) : up && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "sch-next-label",
+									children: "Next"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: up.name }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: inLabel(up.at, now) }),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "muted",
+									children: ["— ", whenLabel(up.at, now)]
+								})
+							] })
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+							className: "sch-section",
+							id: "schedule-scheduled",
+							"aria-labelledby": "schedule-scheduled-h",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+								id: "schedule-scheduled-h",
+								children: ["Scheduled", scheduledList.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "sch-count",
+									children: scheduledList.length
+								})]
+							}), scheduledList.length ? scheduledList.map(card) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+								className: "sch-none muted",
+								children: [
+									"Nothing runs by itself yet — ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Schedule…" }),
+									" on a template below starts it every day, weekday, once or on any cron."
+								]
+							})]
+						}),
+						saved.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+							className: "sch-section",
+							id: "schedule-saved",
+							"aria-labelledby": "schedule-saved-h",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+								id: "schedule-saved-h",
+								children: [
+									"Not scheduled",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "sch-count",
+										children: saved.length
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "sch-section-hint",
+										children: "run now or add a schedule"
+									})
+								]
+							}), saved.map(card)]
+						})
+					] })
+				]
+			})
+		]
+	});
+	if (p.embedded) {
+		embeddedGuard.current = {
+			escape: onEscape,
+			dirty: () => !!p.dirty
+		};
+		return body;
+	}
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 		id: "templates-dialog",
 		className: "top-dialog",
 		onClose: p.onClose,
 		closeOnBackdrop: !p.dirty,
-		onEscape: () => {
-			if (ui.discarding) {
-				p.dispatch({ t: "keep-editing" });
-				return true;
-			}
-			if (ui.editing !== null && escapeRef.current?.()) return true;
-			if (ui.editing === null && !ui.confirming) return false;
-			p.dispatch(ui.editing !== null ? { t: "dismiss" } : { t: "cancel" });
-			return true;
-		},
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			id: "templates-card",
-			role: "dialog",
-			"aria-modal": "true",
-			"aria-labelledby": "templates-title",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "tpl-head",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-						id: "templates-title",
-						children: "Schedule"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "tpl-head-acts",
-						children: [
-							ui.editing !== "" && !empty && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								id: "templates-new",
-								className: "tpl-new",
-								"data-tour": "schedule-new",
-								onClick: () => p.dispatch({ t: "new" }),
-								children: "+ New template"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TourButton, { tour: "schedule" }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								id: "templates-close",
-								onClick: p.onClose,
-								children: "Close"
-							})
-						]
-					})]
-				}),
-				!empty && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-					className: "tpl-intro muted",
-					children: [
-						"Templates start a ",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "new" }),
-						" session — when you run one, or by themselves on a schedule.",
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "tpl-intro-aside",
-							children: "To send text to a session that's already running, use Prompts."
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "tpl-list",
-					id: "templates-list",
-					children: [
-						ui.editing === "" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "tpl-card tpl-card-editing tpl-card-new",
-							children: [discardRow, editor]
-						}),
-						loadError && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-							className: "error tpl-load-error",
-							role: "alert",
-							children: ["Could not load templates: ", loadError]
-						}),
-						!loaded && !loadError && templates.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "tpl-empty muted",
-							children: "Loading templates…"
-						}),
-						empty && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "sch-empty",
-							id: "schedule-empty",
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-									className: "sch-empty-mark",
-									"aria-hidden": "true",
-									children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-										viewBox: "0 0 24 24",
-										width: "22",
-										height: "22",
-										fill: "none",
-										stroke: "currentColor",
-										strokeWidth: "1.8",
-										strokeLinecap: "round",
-										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-											cx: "12",
-											cy: "13",
-											r: "8"
-										}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 9v4l2.5 2.5M9 2.5h6" })]
-									})
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Save a session as a template once, then start it with one click — or every night by itself." }),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									id: "schedule-empty-create",
-									className: "tpl-btn tpl-run",
-									"data-tour": "schedule-new",
-									onClick: () => p.dispatch({ t: "new" }),
-									children: "Create a template"
-								})
-							]
-						}),
-						templates.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-							(up || elsewhere) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "sch-next-up",
-								id: "schedule-next",
-								children: elsewhere ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-									"Schedules start on ",
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: runs.runs_on }),
-									" — the computer that runs schedules."
-								] }) : up && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "sch-next-label",
-										children: "Next"
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: up.name }),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: inLabel(up.at, now) }),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-										className: "muted",
-										children: ["— ", whenLabel(up.at, now)]
-									})
-								] })
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-								className: "sch-section",
-								id: "schedule-scheduled",
-								"aria-labelledby": "schedule-scheduled-h",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
-									id: "schedule-scheduled-h",
-									children: ["Scheduled", scheduledList.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "sch-count",
-										children: scheduledList.length
-									})]
-								}), scheduledList.length ? scheduledList.map(card) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-									className: "sch-none muted",
-									children: [
-										"Nothing runs by itself yet — ",
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Schedule…" }),
-										" on a template below starts it every day, weekday, once or on any cron."
-									]
-								})]
-							}),
-							saved.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-								className: "sch-section",
-								id: "schedule-saved",
-								"aria-labelledby": "schedule-saved-h",
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
-									id: "schedule-saved-h",
-									children: [
-										"Not scheduled",
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "sch-count",
-											children: saved.length
-										}),
-										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-											className: "sch-section-hint",
-											children: "run now or add a schedule"
-										})
-									]
-								}), saved.map(card)]
-							})
-						] })
-					]
-				})
-			]
-		})
+		onEscape,
+		children: body
 	});
 }
-function TemplatesDialog() {
-	const open = useUi((s) => s.openDialog === "schedule");
+function TemplatesDialog({ embedded = false, target: embeddedTarget = null } = {}) {
+	const storeOpen = useUi((s) => s.openDialog === "schedule");
+	const open = embedded || storeOpen;
 	useAutoTour("schedule", open);
-	const target = useUi((s) => s.dialogTarget);
+	const storeTarget = useUi((s) => s.dialogTarget);
+	const target = embedded ? embeddedTarget : storeTarget;
 	const closeDialog = useUi((s) => s.closeDialog);
 	const [templates, setList] = (0, import_react.useState)(() => templatesNow());
 	const [loaded, setLoaded] = (0, import_react.useState)(false);
@@ -82168,7 +83316,7 @@ function TemplatesDialog() {
 	(0, import_react.useEffect)(() => {
 		if (!open) return;
 		dispatch({ t: "cancel" });
-		const want = readTemplatesTarget(useUi.getState().dialogTarget).schedule;
+		const want = readTemplatesTarget(embedded ? embeddedTarget : useUi.getState().dialogTarget).schedule;
 		if (want !== null) {
 			setScheduleFocus(true);
 			dispatch(want ? {
@@ -82207,7 +83355,7 @@ function TemplatesDialog() {
 			live = false;
 			document.removeEventListener(TEMPLATES_CHANGED, reload);
 		};
-	}, [open]);
+	}, [open, embedded ? embeddedTarget : null]);
 	(0, import_react.useEffect)(() => {
 		if (ui.editing === editingRef.current) return;
 		if (ui.editing === null) {
@@ -82356,6 +83504,7 @@ function TemplatesDialog() {
 			dispatch(a);
 		},
 		dirty,
+		embedded,
 		onDiscard: () => {
 			const then = ui.discarding?.then;
 			if (!then) return;
@@ -85817,6 +86966,35 @@ function countInBuckets(tickets, visible, mineOnly = false) {
 	return shownTickets(tickets, visible, mineOnly).length;
 }
 //#endregion
+//#region src/components/flights/PlanSelect.tsx
+function PlanSelect({ kind, value, onChange, className, field }) {
+	const plans = useFlightPlans().data;
+	if (!plans) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "set-row fl-source-plan",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Plan"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+				className,
+				[field.attr]: "plan",
+				value,
+				onChange: (e) => onChange(e.target.value),
+				children: planChoices(plans, kind, value).map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+					value: o.value,
+					children: o.label
+				}, o.value || "default"))
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint",
+				children: "The flight its items follow. Fast-track sets how far the default plan goes."
+			})
+		]
+	});
+}
+//#endregion
 //#region src/lib/failureText.ts
 var CHIP_BUDGET = 58;
 function shortReason(reason, budget = CHIP_BUDGET) {
@@ -87885,87 +89063,96 @@ function RepoFields({ use, repo, liveBranch }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "ik-fields",
 		"data-use": use,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "ik-grid ik-grid-3",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "set-row",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-label",
-							children: "Agent"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-							"data-repo-field": "agent",
-							value: agent,
-							onChange: (e) => save("agent", e.target.value),
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-								value: "",
-								children: defaults.agent ? `Inherit (${defaults.agent})` : "Inherit (app default)"
-							}), agents.names.map((n) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-								value: n,
-								children: n
-							}, n))]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-hint",
-							children: "Works this repository's sessions."
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "set-row",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-label",
-							children: "Fast-track to"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-							"data-repo-field": "depth",
-							value: depth,
-							onChange: (e) => save("depth", e.target.value),
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-								value: "",
-								children: LANE_LABEL.leave
-							}), SOURCE_DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-								value: d,
-								children: LANE_LABEL[d]
-							}, d))]
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "set-hint",
-							children: "After the agent finishes."
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
-					label: use === "pr" ? "Min PR age (minutes)" : "Min issue age (minutes)",
-					field: "min_age_minutes",
-					type: "number",
-					value: text("min_age_minutes"),
-					placeholder: defaults.minAge || "15",
-					hint: "Blank uses " + (defaults.minAge || "15") + ".",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ik-grid ik-grid-3",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Agent"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+								"data-repo-field": "agent",
+								value: agent,
+								onChange: (e) => save("agent", e.target.value),
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: "",
+									children: defaults.agent ? `Inherit (${defaults.agent})` : "Inherit (app default)"
+								}), agents.names.map((n) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: n,
+									children: n
+								}, n))]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "Works this repository's sessions."
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "set-row",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-label",
+								children: "Fast-track to"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+								"data-repo-field": "depth",
+								value: depth,
+								onChange: (e) => save("depth", e.target.value),
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: "",
+									children: LANE_LABEL.leave
+								}), SOURCE_DEPTHS.map((d) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: d,
+									children: LANE_LABEL[d]
+								}, d))]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "set-hint",
+								children: "After the agent finishes."
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
+						label: use === "pr" ? "Min PR age (minutes)" : "Min issue age (minutes)",
+						field: "min_age_minutes",
+						type: "number",
+						value: text("min_age_minutes"),
+						placeholder: defaults.minAge || "15",
+						hint: "Blank uses " + (defaults.minAge || "15") + ".",
+						onSave: save
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlanSelect, {
+				kind: use === "pr" ? "prs" : "issues",
+				field: { attr: "data-repo-field" },
+				value: o.plan || "",
+				onChange: (id) => save(PLAN_FIELD, id)
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ik-grid " + (use === "pr" ? "ik-grid-2" : "ik-grid-1"),
+				children: [use === "pr" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
+					label: "Base branch",
+					field: "base_branch",
+					value: text("base_branch"),
+					placeholder: defaults.baseBranch || "the repo's default branch",
+					hint: "Only PRs into this branch auto-start.",
 					onSave: save
-				})
-			]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "ik-grid " + (use === "pr" ? "ik-grid-2" : "ik-grid-1"),
-			children: [use === "pr" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
-				label: "Base branch",
-				field: "base_branch",
-				value: text("base_branch"),
-				placeholder: defaults.baseBranch || "the repo's default branch",
-				hint: "Only PRs into this branch auto-start.",
-				onSave: save
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
-				label: use === "pr" ? "Ignore comments from" : "Ignore issues from",
-				field: "skip_authors",
-				value: text("skip_authors"),
-				placeholder: defaults.skipAuthors || "e.g. dependabot, renovate",
-				hint: "GitHub logins, comma-separated.",
-				onSave: save
-			})]
-		})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BlockInput, {
+					label: use === "pr" ? "Ignore comments from" : "Ignore issues from",
+					field: "skip_authors",
+					value: text("skip_authors"),
+					placeholder: defaults.skipAuthors || "e.g. dependabot, renovate",
+					hint: "GitHub logins, comma-separated.",
+					onSave: save
+				})]
+			})
+		]
 	}, repo);
 }
 function UseTicks({ repo, fixed, value, onChange, disabledUses = [] }) {
@@ -90297,6 +91484,13 @@ function TicketSourceEditor({ section, source, catalog, agents, fieldErrors, sav
 						]
 					})]
 				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlanSelect, {
+					kind: "tickets",
+					className: "tk-plan",
+					field: { attr: "data-tk-field" },
+					value: source.plan || "",
+					onChange: (plan) => onChange({ plan })
+				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
 					className: "tk-advanced",
 					"data-tk-advanced": source.id,
@@ -91274,89 +92468,6 @@ function ScheduledTemplates() {
 	});
 }
 //#endregion
-//#region src/components/intake/queue.ts
-function isQueued(item) {
-	return item.eligible === true && !item.has_session;
-}
-function oldestFirst(rows) {
-	return rows.slice().sort((a, b) => {
-		const ta = Date.parse(a.created_at || "");
-		const tb = Date.parse(b.created_at || "");
-		if (!isFinite(ta) && !isFinite(tb)) return 0;
-		if (!isFinite(ta)) return 1;
-		if (!isFinite(tb)) return -1;
-		return ta - tb;
-	});
-}
-function ref(repo, number) {
-	return (repo || "") + "#" + (number ?? "?");
-}
-function queuedOf(kind, payloads) {
-	if (kind === "tickets") {
-		const labels = payloads.tickets?.source_labels || {};
-		return oldestFirst((payloads.tickets?.tickets || []).filter(isQueued)).map((t) => ({
-			kind,
-			key: "tickets:" + (t.source || "") + ":" + (t.id ?? t.slug ?? ""),
-			reference: t.slug || String(t.id ?? ""),
-			title: t.name || "",
-			url: t.url,
-			group: labels[t.source || ""] || t.source || "Tickets",
-			created_at: t.created_at,
-			state: t.bucket,
-			assignee: t.mine === false ? t.assignee || "someone else" : void 0,
-			route: t.route,
-			target: {
-				kind: "tickets",
-				source: t.source || "",
-				id: String(t.id ?? "")
-			}
-		}));
-	}
-	return oldestFirst((kind === "prs" ? payloads.prs?.prs || [] : payloads.issues?.issues || []).filter(isQueued)).map((r) => ({
-		kind,
-		key: kind + ":" + (r.repo || "") + ":" + (r.number ?? ""),
-		reference: ref(r.repo, r.number),
-		title: r.title || "",
-		url: r.url,
-		group: r.repo || (kind === "prs" ? "Pull requests" : "Issues"),
-		created_at: r.created_at,
-		target: {
-			kind,
-			repo: r.repo || "",
-			number: r.number ?? 0
-		}
-	}));
-}
-function collectQueued(payloads) {
-	return [
-		...queuedOf("tickets", payloads),
-		...queuedOf("prs", payloads),
-		...queuedOf("issues", payloads)
-	];
-}
-function runState(opts) {
-	if (!opts.engineAvailable || !opts.configured) return "unset";
-	if (opts.runsElsewhere) return "elsewhere";
-	if (!opts.switchOn) return "off-switch";
-	if (!opts.engineOn) return "off-engine";
-	return "on";
-}
-function runsOnText(device) {
-	return "Runs on " + (device || "another of your devices");
-}
-function byGroup(items) {
-	const out = [];
-	for (const item of items) {
-		const found = out.find((g) => g.group === item.group);
-		if (found) found.items.push(item);
-		else out.push({
-			group: item.group,
-			items: [item]
-		});
-	}
-	return out;
-}
-//#endregion
 //#region src/components/intake/QueueTab.tsx
 function StateChip({ state, device }) {
 	if (state === "unset") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -91822,10 +92933,12 @@ function AutoStartOn() {
 	const p = useIntakeSwitches((useTicketingSources(true).data || []).length);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutoStartCount, { on: p.onKinds.length > 0 });
 }
-function IntakeDialog() {
-	const open = useUi((s) => s.openDialog === "intake");
+function IntakeDialog({ embedded = false, target: embeddedTarget = null } = {}) {
+	const storeOpen = useUi((s) => s.openDialog === "intake");
+	const open = embedded || storeOpen;
 	useAutoTour("intake", open);
-	const target = useUi((s) => s.dialogTarget);
+	const storeTarget = useUi((s) => s.dialogTarget);
+	const target = embedded ? embeddedTarget : storeTarget;
 	const closeDialog = useUi((s) => s.closeDialog);
 	const [tab, setTab] = (0, import_react.useState)("tickets");
 	const [focus, setFocus] = (0, import_react.useState)("");
@@ -91891,83 +93004,88 @@ function IntakeDialog() {
 		switchTab(TABS[to].key);
 		tabRefs.current[TABS[to].key]?.focus();
 	};
+	const panel = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "intake-panel",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ws-head",
+				children: [
+					!embedded && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Intake" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ik-subtitle",
+						children: "Where your sessions come from"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "intake-add-source",
+						className: "btn-primary",
+						disabled: !!adding,
+						title: "Connect a tracker, or watch a GitHub repository",
+						onClick: () => {
+							const [intent, on] = addFrom();
+							startAdd(intent, on);
+						},
+						children: "+ Add source"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TourButton, { tour: "intake" }),
+					!embedded && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "intake-close",
+						onClick: closeDialog,
+						children: "Close"
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutoStartLine, {
+				ticketSources: savedSources.length,
+				gotoTab: switchTab
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				id: "intake-tabs",
+				role: "tablist",
+				"aria-label": "Intake",
+				children: TABS.map((t, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					ref: (el) => {
+						tabRefs.current[t.key] = el;
+					},
+					type: "button",
+					role: "tab",
+					id: "intake-tab-" + t.key,
+					"aria-selected": tab === t.key,
+					"aria-controls": panelId(t),
+					tabIndex: tab === t.key ? 0 : -1,
+					className: "ik-tab" + (tab === t.key ? " active" : ""),
+					"data-intake-tab": t.key,
+					onClick: () => switchTab(t.key),
+					onKeyDown: (e) => onTabKey(e, i),
+					children: [t.label, t.key === "autostart" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutoStartOn, {}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabCount, { tab: t.key })]
+				}, t.key))
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				id: "intake-body",
+				children: TABS.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
+					className: "ik-panel" + (tab === t.key ? " active" : ""),
+					"data-intake-tab": t.key,
+					id: panelId(t),
+					"data-caps-need": t.caps,
+					role: "tabpanel",
+					"aria-labelledby": "intake-tab-" + t.key,
+					children: tab === t.key && t.el(props)
+				}, t.key))
+			})
+		]
+	});
+	if (embedded) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsCtx.Provider, {
+		value: model,
+		children: panel
+	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsCtx.Provider, {
 		value: model,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
 			id: "intake-dialog",
 			className: "top-dialog",
 			onClose: closeDialog,
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				id: "intake-panel",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "ws-head",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { children: "Intake" }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "ik-subtitle",
-								children: "Where your sessions come from"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								id: "intake-add-source",
-								className: "btn-primary",
-								disabled: !!adding,
-								title: "Connect a tracker, or watch a GitHub repository",
-								onClick: () => {
-									const [intent, on] = addFrom();
-									startAdd(intent, on);
-								},
-								children: "+ Add source"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TourButton, { tour: "intake" }),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								id: "intake-close",
-								onClick: closeDialog,
-								children: "Close"
-							})
-						]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutoStartLine, {
-						ticketSources: savedSources.length,
-						gotoTab: switchTab
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						id: "intake-tabs",
-						role: "tablist",
-						"aria-label": "Intake",
-						children: TABS.map((t, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							ref: (el) => {
-								tabRefs.current[t.key] = el;
-							},
-							type: "button",
-							role: "tab",
-							id: "intake-tab-" + t.key,
-							"aria-selected": tab === t.key,
-							"aria-controls": panelId(t),
-							tabIndex: tab === t.key ? 0 : -1,
-							className: "ik-tab" + (tab === t.key ? " active" : ""),
-							"data-intake-tab": t.key,
-							onClick: () => switchTab(t.key),
-							onKeyDown: (e) => onTabKey(e, i),
-							children: [t.label, t.key === "autostart" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(AutoStartOn, {}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabCount, { tab: t.key })]
-						}, t.key))
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-						id: "intake-body",
-						children: TABS.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
-							className: "ik-panel" + (tab === t.key ? " active" : ""),
-							"data-intake-tab": t.key,
-							id: panelId(t),
-							"data-caps-need": t.caps,
-							role: "tabpanel",
-							"aria-labelledby": "intake-tab-" + t.key,
-							children: tab === t.key && t.el(props)
-						}, t.key))
-					})
-				]
-			})
+			children: panel
 		})
 	});
 }
@@ -92260,6 +93378,7 @@ function Tours() {
 var TOUR_HINT = {
 	welcome: "The three steps to your first session.",
 	new: "Starting a session: the task, the repo, Start.",
+	flights: "Where every ticket, PR and scheduled job is on its way from arrival to merge.",
 	intake: "Turning tickets, pull requests and issues into sessions.",
 	verify: "Checking that a change actually works.",
 	schedule: "Templates, and sessions that start by themselves.",
@@ -104284,792 +105403,6 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 	});
 }
 //#endregion
-//#region src/components/customize/CustomizeRow.tsx
-var ROW_MIME = "application/x-mf-customize-row";
-function CustomizeRow({ id, list, label, note, on, locked, lockedWhy, onToggle, onMove, onDropBefore, first, last }) {
-	const [over, setOver] = (0, import_react.useState)(false);
-	const inputId = "cz-" + list + "-" + id;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-		className: "cz-row" + (on ? "" : " is-off") + (over ? " drop-over" : ""),
-		"data-item": id,
-		onDragOver: (e) => {
-			if (!e.dataTransfer.types.includes(ROW_MIME + "/" + list)) return;
-			e.preventDefault();
-			e.dataTransfer.dropEffect = "move";
-			setOver(true);
-		},
-		onDragLeave: () => setOver(false),
-		onDrop: (e) => {
-			setOver(false);
-			const dragged = e.dataTransfer.getData(ROW_MIME + "/" + list);
-			if (!dragged) return;
-			e.preventDefault();
-			if (dragged !== id) onDropBefore(dragged);
-		},
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "cz-grip",
-				draggable: true,
-				title: "Drag to reorder",
-				"aria-hidden": "true",
-				onDragStart: (e) => {
-					e.dataTransfer.setData(ROW_MIME + "/" + list, id);
-					e.dataTransfer.effectAllowed = "move";
-				},
-				children: "⠿"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-				className: "cz-switch",
-				htmlFor: inputId,
-				title: locked ? lockedWhy : on ? "Shown — click to hide" : "Hidden — click to show",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					id: inputId,
-					type: "checkbox",
-					role: "switch",
-					checked: on,
-					disabled: locked,
-					onChange: onToggle
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "cz-track",
-					"aria-hidden": "true"
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "cz-text",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
-					className: "cz-name",
-					htmlFor: inputId,
-					children: label
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "cz-note",
-					children: note
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "cz-move",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					"aria-label": "Move " + label + " up",
-					title: "Move up",
-					disabled: first,
-					onClick: () => onMove(-1),
-					children: "↑"
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					"aria-label": "Move " + label + " down",
-					title: "Move down",
-					disabled: last,
-					onClick: () => onMove(1),
-					children: "↓"
-				})]
-			})
-		]
-	});
-}
-//#endregion
-//#region src/components/customize/SidebarBarsPicker.tsx
-var NOTES = {
-	usage: { text: "What your sessions cost" },
-	ingestion: {
-		text: "Appears once a ticket source is connected",
-		link: {
-			label: "Intake → Tickets",
-			dialog: "intake",
-			target: "tickets"
-		}
-	},
-	"pr-review": {
-		text: "Appears once a repository is added",
-		link: {
-			label: "Intake → GitHub PRs",
-			dialog: "intake",
-			target: "prs"
-		}
-	},
-	"issue-handling": {
-		text: "Appears once a repository is added",
-		link: {
-			label: "Intake → GitHub issues",
-			dialog: "intake",
-			target: "issues"
-		}
-	},
-	verify: {
-		text: "Appears once Verify tracks a repository or has a checklist",
-		link: {
-			label: "Open Verify",
-			dialog: "verify"
-		}
-	},
-	assistant: { text: "Chat, a todo list, and its editable agent file" },
-	prompts: {
-		text: "Your saved prompts — pick one to paste it into the session you are in",
-		link: {
-			label: "Manage prompts",
-			dialog: "prompts"
-		}
-	}
-};
-var EXTENSION_NOTE = { text: "From an extension" };
-function SidebarBarsPicker() {
-	const hiddenBars = useUi((s) => s.hiddenBars);
-	const toggleBarHidden = useUi((s) => s.toggleBarHidden);
-	const barOrder = useUi((s) => s.barOrder);
-	const setBarOrder = useUi((s) => s.setBarOrder);
-	const openDialogFor = useUi((s) => s.openDialogFor);
-	const showFilter = useUi((s) => s.showFilter);
-	const setShowFilter = useUi((s) => s.setShowFilter);
-	const extBars = useExtensionBarDefs();
-	const extKeys = extBars.map((b) => b.key);
-	const bars = orderedBars(barOrder, extBars);
-	const byKey = new Map(bars.map((b) => [b.key, b]));
-	const sections = orderedSections(barOrder, extKeys);
-	const move = (key, dir) => {
-		const next = [...sections];
-		const i = next.indexOf(key);
-		const j = i + dir;
-		if (i < 0 || j < 0 || j >= next.length) return;
-		[next[i], next[j]] = [next[j], next[i]];
-		setBarOrder(next);
-	};
-	const dropBefore = (dragged, before) => {
-		const next = sections.filter((k) => k !== dragged);
-		next.splice(next.indexOf(before), 0, dragged);
-		setBarOrder(next);
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		id: "customize-sidebar",
-		className: "cz-page",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-				className: "cz-heading",
-				children: "Show in the sidebar"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-				className: "cz-list",
-				"aria-label": "Sidebar bars",
-				children: sections.map((key, i) => {
-					if (key === SESSIONS_KEY) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
-						className: "cz-anchor",
-						"aria-label": "The session list",
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Your sessions" })
-					}, key);
-					const b = byKey.get(key);
-					if (!b) return null;
-					const note = NOTES[b.key] || EXTENSION_NOTE;
-					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CustomizeRow, {
-						id: b.key,
-						list: "bars",
-						label: b.label,
-						on: !hiddenBars.has(b.key),
-						onToggle: () => toggleBarHidden(b.key),
-						onMove: (dir) => move(b.key, dir),
-						onDropBefore: (dragged) => dropBefore(dragged, b.key),
-						first: i === 0,
-						last: i === sections.length - 1,
-						note: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [note.text, note.link && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" · ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "linklike cz-link",
-							onClick: () => openDialogFor(note.link.dialog, note.link.target ?? null),
-							children: note.link.label
-						})] })] })
-					}, b.key);
-				})
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-				className: "cz-heading",
-				children: "Session list"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-				className: "cz-list",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
-					className: "cz-row cz-row-plain",
-					"data-item": "session-filter",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-						className: "cz-switch",
-						htmlFor: "cz-session-filter",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							id: "cz-session-filter",
-							type: "checkbox",
-							role: "switch",
-							checked: showFilter,
-							onChange: () => setShowFilter(!showFilter)
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "cz-track",
-							"aria-hidden": "true"
-						})]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "cz-text",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
-							className: "cz-name",
-							htmlFor: "cz-session-filter",
-							children: "Filter box"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "cz-note",
-							children: [
-								"Filter sessions by name or branch · hidden, ",
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "/" }),
-								" still opens it"
-							]
-						})]
-					})]
-				})
-			})
-		]
-	});
-}
-//#endregion
-//#region src/components/customize/PaneHeaderPicker.tsx
-var ICON = {
-	width: 12,
-	height: 12,
-	viewBox: "0 0 24 24",
-	fill: "none",
-	stroke: "currentColor",
-	strokeWidth: 2,
-	strokeLinecap: "round",
-	strokeLinejoin: "round",
-	"aria-hidden": true
-};
-function previewButton(id) {
-	switch (id) {
-		case "next": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "nextstep",
-			children: "Commit…"
-		}, id);
-		case "fasttrack": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "nextstep nextstep-fast",
-			children: "⏩"
-		}, id);
-		case "copy": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "act copy-history",
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-				className: "btn-icon",
-				...ICON,
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-					x: "8",
-					y: "2",
-					width: "8",
-					height: "4",
-					rx: "1"
-				})]
-			})
-		}, id);
-		case "history": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-			className: "act pane-hist",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-				className: "btn-icon",
-				...ICON,
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 8v4l2 2" }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3.05 11a9 9 0 1 1 .5 4" }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3 22v-6h6" })
-				]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "btn-label",
-				children: "History"
-			})]
-		}, id);
-		case "cost": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "tok usage-trigger",
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "usage-head",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "uh-cost",
-					children: "~$0.62"
-				})
-			})
-		}, id);
-		case "diffstat": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-			className: "ctxline",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "ctx-add",
-					children: "+12"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "ctx-del",
-					children: "−3"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "ctx-files",
-					children: "· 2 files"
-				})
-			]
-		}, id);
-		case "hide": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: "act pane-close",
-			children: "−"
-		}, id);
-		default: return null;
-	}
-}
-function PreviewHead({ tabs, buttons, icons }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "pane-head pane-head-fit cz-preview-head" + (icons ? " head-icons" : ""),
-		"aria-hidden": "true",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "grip",
-				children: "⠿"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "title",
-				children: "fix-login-redirect"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "tabs",
-				children: tabs.map((id) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-					type: "button",
-					tabIndex: -1,
-					className: id === "agent" ? "active" : "",
-					"data-tab": id,
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: id }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "tab-label",
-						children: paneItemDef(id).label
-					})]
-				}, id))
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "head-spacer" }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "actions",
-				children: buttons.map(previewButton)
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "head-tail",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "act pane-more",
-					children: "⋯"
-				})
-			})
-		]
-	});
-}
-function PaneHeaderPicker() {
-	const pref = useUi((s) => s.paneHeader);
-	const setPaneHeader = useUi((s) => s.setPaneHeader);
-	const r = resolvePaneHeader(pref);
-	const shownTabs = r.tabs.filter((id) => r.shown.has(id));
-	const shownButtons = r.buttons.filter((id) => r.shown.has(id));
-	const rows = (ids, list) => ids.map((id, i) => {
-		const d = paneItemDef(id);
-		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CustomizeRow, {
-			id,
-			list,
-			label: d.label,
-			note: d.note,
-			on: r.shown.has(id),
-			locked: d.locked,
-			lockedWhy: "Every header shows the agent",
-			onToggle: () => setPaneHeader(togglePaneItem(pref, id)),
-			onMove: (dir) => setPaneHeader(movePaneItem(pref, id, dir)),
-			onDropBefore: (dragged) => setPaneHeader(placePaneItem(pref, dragged, id)),
-			first: i === 0,
-			last: i === ids.length - 1
-		}, id);
-	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		id: "customize-pane",
-		className: "cz-page",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "cz-preview",
-				"aria-label": "Preview of a pane header with your choice",
-				role: "img",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "cz-preview-row",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "cz-preview-tag",
-						children: "Room to spare"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PreviewHead, {
-						tabs: shownTabs,
-						buttons: shownButtons,
-						icons: false
-					})]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "cz-preview-row cz-preview-narrow",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "cz-preview-tag",
-						children: "Too narrow for words"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PreviewHead, {
-						tabs: shownTabs,
-						buttons: shownButtons,
-						icons: true
-					})]
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
-				className: "cz-heading",
-				children: ["Tabs", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InfoTip, {
-					label: "About hidden tabs",
-					children: "A hidden tab still shows while you are on it — opened from ⋯, a shortcut or a link — and ⋯ always lists it. Terminal never shows for a shared folder, Diff and Map only for a session in a git repository, Thread only once a session has workers or messages."
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-				className: "cz-list",
-				"aria-label": "Pane header tabs",
-				children: rows(r.tabs, "tabs")
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
-				className: "cz-heading",
-				children: ["Buttons", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InfoTip, {
-					label: "About hidden buttons",
-					children: "Everything you switch off here is still one click away in the header's ⋯ menu: the next step (Commit…, Push, Open PR), Fast-track…, Browse history, Copy entire history and Hide window. The cost and the diff stats are read out at the top of ⋯. During the calm first hour an untouched header also leaves Queue and ⏩ to ⋯; once you change anything here it shows exactly your choice."
-				})]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
-				className: "cz-list",
-				"aria-label": "Pane header buttons",
-				children: rows(r.buttons, "buttons")
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "cz-foot",
-				children: "⋯ is always last: it holds everything switched off here."
-			})
-		]
-	});
-}
-//#endregion
-//#region src/components/customize/CustomizeDialog.tsx
-var PAGES = [{
-	id: "sidebar",
-	label: "Sidebar",
-	intro: "Choose which bars sit around your session list, and in what order."
-}, {
-	id: "pane",
-	label: "Pane header",
-	intro: "Choose the tabs and buttons along the top of every session window. The rest stay in its ⋯ menu."
-}];
-function CustomizeDialog() {
-	const open = useUi((s) => s.openDialog === "customize");
-	const closeDialog = useUi((s) => s.closeDialog);
-	const page = useUi((s) => s.customizePage);
-	const setPage = useUi((s) => s.setCustomizePage);
-	const resetSidebarBars = useUi((s) => s.resetSidebarBars);
-	const setPaneHeader = useUi((s) => s.setPaneHeader);
-	const paneCustomized = useUi((s) => s.paneHeader !== null);
-	const barsCustomized = useUi((s) => s.barsExplicit || s.barOrder.length > 0 || !s.showFilter);
-	if (!open) return null;
-	const cur = PAGES.find((p) => p.id === page) || PAGES[0];
-	const canReset = cur.id === "pane" ? paneCustomized : barsCustomized;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
-		id: "customize-dialog",
-		role: "dialog",
-		"aria-modal": "true",
-		"aria-labelledby": "customize-title",
-		onClose: closeDialog,
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			id: "customize-panel",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "ws-head",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-							id: "customize-title",
-							children: "Customize"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-							className: "customize-tabs",
-							role: "tablist",
-							"aria-label": "What to customize",
-							children: PAGES.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								role: "tab",
-								id: "customize-tab-" + p.id,
-								"aria-selected": p.id === cur.id,
-								"aria-controls": "customize-body",
-								className: p.id === cur.id ? "active" : "",
-								onClick: () => setPage(p.id),
-								children: p.label
-							}, p.id))
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "customize-close",
-							onClick: closeDialog,
-							children: "Close"
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "cz-intro",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: cur.intro }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "customize-reset",
-						className: "linklike",
-						disabled: !canReset,
-						title: canReset ? "Back to what a fresh install shows" : "Already the default",
-						onClick: () => cur.id === "pane" ? setPaneHeader(null) : resetSidebarBars(),
-						children: "Reset to default"
-					})]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					id: "customize-body",
-					"data-tab": cur.id,
-					role: "tabpanel",
-					"aria-labelledby": "customize-tab-" + cur.id,
-					children: cur.id === "pane" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneHeaderPicker, {}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SidebarBarsPicker, {})
-				})
-			]
-		})
-	});
-}
-//#endregion
-//#region src/components/dialogs/PromptsDialog.tsx
-function PromptsPanel({ onUse } = {}) {
-	const closeDialog = useUi((s) => s.closeDialog);
-	const focused = useUi((s) => s.focused);
-	const railOrder = useUi((s) => s.railOrder);
-	const aliases = useUi((s) => s.aliases);
-	const { data: instances } = useInstances();
-	const [picked, setPicked] = (0, import_react.useState)(null);
-	const [saved, setSaved] = (0, import_react.useState)([]);
-	const [name, setName] = (0, import_react.useState)("");
-	const [text, setText] = (0, import_react.useState)("");
-	const [pop, setPop] = (0, import_react.useState)(null);
-	const listRef = (0, import_react.useRef)(null);
-	(0, import_react.useEffect)(() => {
-		setSaved(loadUserPresets());
-		setPop(null);
-	}, []);
-	(0, import_react.useEffect)(() => {
-		const closePop = () => setPop(null);
-		const list = listRef.current;
-		list?.addEventListener("scroll", closePop);
-		window.addEventListener("resize", closePop);
-		return () => {
-			list?.removeEventListener("scroll", closePop);
-			window.removeEventListener("resize", closePop);
-		};
-	}, []);
-	(0, import_react.useEffect)(() => {
-		if (!pop) return;
-		const onKey = (e) => {
-			if (e.key !== "Escape") return;
-			e.preventDefault();
-			setPop(null);
-		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
-	}, [pop]);
-	const running = (0, import_react.useMemo)(() => runningTitles(instances, railOrder), [instances, railOrder]);
-	const options = (0, import_react.useMemo)(() => promptTargets(focused, running, (t) => aliases[t] || windowName(t)), [
-		focused,
-		running,
-		aliases
-	]);
-	const target = resolveTarget(picked, focused, options);
-	const pastePrompt$1 = async (prompt) => {
-		if (!await pastePrompt(target, running, prompt)) return;
-		setPop(null);
-		if (useUi.getState().openDialog === "prompts") closeDialog();
-	};
-	const addPrompt = () => {
-		const n = name.trim();
-		const t = text.trim();
-		if (!n) {
-			toast("Give the prompt a name");
-			return;
-		}
-		if (!t) {
-			toast("Enter the prompt text");
-			return;
-		}
-		const { replaced } = upsertUserPreset(n, t);
-		setSaved(loadUserPresets());
-		setName("");
-		setText("");
-		toast(replaced ? `Saved prompt “${n}” — it replaced “${replaced}” (names ignore case)` : `Added prompt “${n}”`);
-	};
-	const section = (label, items, deletable, kind) => items.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-		className: "prompts-group-label",
-		children: label
-	}), items.map((p) => {
-		const key = kind + ":" + p.name;
-		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "prompt-card",
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "prompt-card-row",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "prompt-card-main",
-						title: onUse ? "Put it in the new session's Task box" : target === ALL_RUNNING ? "Paste into every running session" : "Paste into the chosen session",
-						onClick: () => onUse ? onUse(p.prompt) : pastePrompt$1(p.prompt),
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "prompt-card-name",
-							children: p.name
-						})
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "prompt-card-expand" + (pop?.key === key ? " open" : ""),
-						title: "Show the full prompt",
-						"aria-expanded": pop?.key === key,
-						onClick: (e) => {
-							e.stopPropagation();
-							const anchor = e.currentTarget.getBoundingClientRect();
-							setPop((cur) => cur?.key === key ? null : {
-								anchor,
-								text: p.prompt,
-								key
-							});
-						},
-						children: "⋮"
-					}),
-					deletable && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "prompt-card-del",
-						title: "Delete this saved prompt",
-						onClick: (e) => {
-							e.stopPropagation();
-							setPop(null);
-							const list = loadUserPresets().filter((q) => q.name !== p.name);
-							saveUserPresets(list);
-							setSaved(list);
-						},
-						children: "✕"
-					})
-				]
-			})
-		}, key);
-	})] }, label) : null;
-	const popStyle = pop ? (() => {
-		const w = Math.min(380, window.innerWidth - 24);
-		const left = Math.max(12, Math.min(pop.anchor.right - w, window.innerWidth - w - 12));
-		return {
-			width: w + "px",
-			left: left + "px",
-			top: pop.anchor.bottom + 6 + "px"
-		};
-	})() : void 0;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		id: "prompts-panel",
-		onClick: () => {
-			if (pop) setPop(null);
-		},
-		children: [
-			!onUse && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "cz-tab-head",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
-					className: "prompts-target-wrap",
-					onClick: (e) => e.stopPropagation(),
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "muted",
-						children: "Paste into"
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
-						id: "prompts-target",
-						className: !target ? "prompts-notarget" : "",
-						value: target,
-						disabled: !options.length,
-						onChange: (e) => setPicked(e.target.value || null),
-						children: [!target && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: "",
-							children: "no session selected"
-						}), options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
-							value: o.value,
-							children: o.label
-						}, o.value))]
-					})]
-				})
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "prompts-hint",
-				children: onUse ? "Click a prompt to put it in the new session's Task box." : "Click a prompt to paste it into the chosen session — nothing is sent until you press Enter there."
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				id: "prompts-list",
-				ref: listRef,
-				children: [section("Built-in", BUILTIN_PRESETS, false, "b"), section("Saved", saved, true, "u")]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "prompts-add",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "text",
-						id: "prompts-add-name",
-						autoComplete: "off",
-						spellCheck: false,
-						placeholder: "New prompt name…",
-						value: name,
-						onChange: (e) => setName(e.target.value)
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
-						id: "prompts-add-text",
-						rows: 3,
-						placeholder: "Prompt text…",
-						value: text,
-						onChange: (e) => setText(e.target.value),
-						onKeyDown: (e) => {
-							if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-								e.preventDefault();
-								addPrompt();
-							}
-						}
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "prompts-add-btn",
-						onClick: addPrompt,
-						children: "Add prompt"
-					})
-				]
-			}),
-			pop && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "prompt-pop",
-				style: popStyle,
-				onClick: (e) => e.stopPropagation(),
-				children: pop.text
-			}), document.body)
-		]
-	});
-}
-function PromptsDialog() {
-	const open = useUi((s) => s.openDialog === "prompts");
-	const target = useUi((s) => s.dialogTarget);
-	const closeUi = useUi((s) => s.closeDialog);
-	const closeDialog = () => {
-		closeUi();
-		if (target === "new") {
-			newSessionResume.keep = true;
-			useUi.getState().openDialogFor("new-session");
-		}
-	};
-	if (!open) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
-		id: "prompts-dialog",
-		role: "dialog",
-		"aria-modal": "true",
-		"aria-labelledby": "prompts-title",
-		onClose: closeDialog,
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			id: "prompts-dialog-panel",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "ws-head",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-						id: "prompts-title",
-						children: "Prompts"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "ik-subtitle",
-						children: "Saved text you send to a running session. To start a new session from a saved setup, use Templates."
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						id: "prompts-close",
-						onClick: closeDialog,
-						children: "Close"
-					})
-				]
-			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptsPanel, { onUse: target === "new" ? (text) => {
-				newSessionResume.prompt = text;
-				closeDialog();
-			} : void 0 })]
-		})
-	});
-}
-//#endregion
 //#region src/lib/verifyActions.ts
 function planPath(id) {
 	return "/api/test-plans/" + encodeURIComponent(id);
@@ -105367,65 +105700,6 @@ function BulkRowBar({ count, hiddenCount, noun, onClear, children }) {
 				onClick: onClear,
 				children: "Clear"
 			})]
-		})]
-	});
-}
-//#endregion
-//#region src/components/OverflowMenu.tsx
-function OverflowMenu({ label, items, boundaryId }) {
-	const ref = (0, import_react.useRef)(null);
-	const [open, setOpen] = (0, import_react.useState)(false);
-	const [up, setUp] = (0, import_react.useState)(false);
-	(0, import_react.useEffect)(() => {
-		if (!open) return;
-		const onDown = (e) => {
-			if (ref.current && !ref.current.contains(e.target)) setOpen(false);
-		};
-		const onKey = (e) => {
-			if (e.key !== "Escape") return;
-			setOpen(false);
-			e.stopPropagation();
-			e.preventDefault();
-		};
-		document.addEventListener("mousedown", onDown);
-		document.addEventListener("keydown", onKey, true);
-		return () => {
-			document.removeEventListener("mousedown", onDown);
-			document.removeEventListener("keydown", onKey, true);
-		};
-	}, [open]);
-	if (!items.length) return null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-		className: "vf-menu" + (up ? " vf-menu-up" : ""),
-		open,
-		ref,
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", {
-			"aria-label": label,
-			title: label,
-			onClick: (e) => {
-				e.preventDefault();
-				const next = !open;
-				if (next && ref.current) {
-					const here = ref.current.getBoundingClientRect();
-					const body = boundaryId ? document.getElementById(boundaryId) : null;
-					const floor = body ? body.getBoundingClientRect().bottom : window.innerHeight;
-					setUp(floor - here.bottom < 24 * items.length + 40);
-				}
-				setOpen(next);
-			},
-			children: "⋯"
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "vf-menu-list",
-			children: items.map((item) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "vf-menu-item" + (item.danger ? " vf-menu-danger" : "") + (item.className ? " " + item.className : ""),
-				title: item.title,
-				onClick: () => {
-					setOpen(false);
-					item.onSelect();
-				},
-				children: item.label
-			}, item.key))
 		})]
 	});
 }
@@ -107021,10 +107295,12 @@ function VerifyMoments({ liveBranch, overridden = false }) {
 }
 //#endregion
 //#region src/components/dialogs/VerifyDialog.tsx
-function VerifyDialog() {
-	const open = useUi((s) => s.openDialog === "verify");
+function VerifyDialog({ embedded = false, target: embeddedTarget = null } = {}) {
+	const storeOpen = useUi((s) => s.openDialog === "verify");
+	const open = embedded || storeOpen;
 	useAutoTour("verify", open);
-	const target = useUi((s) => s.openDialog === "verify" ? s.dialogTarget : null) || "";
+	const storeTarget = useUi((s) => s.openDialog === "verify" ? s.dialogTarget : null);
+	const target = (embedded ? embeddedTarget : storeTarget) || "";
 	const closeDialog = useUi((s) => s.closeDialog);
 	const plansQ = useTestPlans(open);
 	const instancesQ = useInstances();
@@ -107261,6 +107537,114 @@ function VerifyDialog() {
 			}) : null
 		] })
 	}, "work");
+	const panel = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "verify-panel",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "ws-head",
+			children: [
+				!embedded && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+					id: "verify-title",
+					children: "Verify"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "ik-subtitle",
+					children: ["Does the change work?", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(InfoTip, {
+						id: "verify-how",
+						label: "How Verify works",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyMoments, {
+								liveBranch,
+								overridden
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+								className: "vf-legend-once",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "vf-step-who vf-who-you",
+										children: "you"
+									}),
+									" = a person checks it ·",
+									" ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "vf-step-who",
+										children: "agent"
+									}),
+									" = the agent does. Pass, Fail and Can't check are all answers; only Pass says it works. On a step:",
+									" ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "1" }),
+									" ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "2" }),
+									" ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "3" }),
+									" answer, ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "u" }),
+									" undo,",
+									" ",
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "n" }),
+									" note."
+								]
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "linklike vf-replay-tour",
+								onClick: () => replayTour("verify"),
+								children: "Replay the Verify tour"
+							})
+						]
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TourButton, { tour: "verify" }),
+				!embedded && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					id: "verify-close",
+					onClick: closeDialog,
+					children: "Close"
+				})
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: "verify-body",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifySwitch, {}),
+				sources,
+				checklists,
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyNewChecklist, {
+					targets,
+					reason: noTargetsReason(instancesQ.data || [], plans, closed),
+					plans,
+					preselect,
+					open: newOpen,
+					onToggle: setNewOpen,
+					onReveal: (planId, addStep) => {
+						setQuery("");
+						setReveal({
+							planId,
+							nonce: Date.now(),
+							addStep
+						});
+					}
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+					className: "pr-advanced vf-watch-fold",
+					open: showAdd || void 0,
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Watch a GitHub repository for every push" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "pr-advanced-body",
+						children: showAdd ? addFlow : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "vf-repo-add-btn",
+							className: "test-btn",
+							title: "Each new branch pushed to it gets a checklist",
+							onClick: () => setAddingRepo(true),
+							children: "+ Add repository"
+						})
+					})]
+				})
+			]
+		})]
+	});
+	if (embedded) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsCtx.Provider, {
+		value: model,
+		children: panel
+	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsCtx.Provider, {
 		value: model,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
@@ -107270,110 +107654,2009 @@ function VerifyDialog() {
 			"aria-modal": "true",
 			"aria-labelledby": "verify-title",
 			onClose: closeDialog,
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				id: "verify-panel",
+			children: panel
+		})
+	});
+}
+//#endregion
+//#region src/components/flights/Board.tsx
+function sourcePlan(settings, t) {
+	const s = settings || {};
+	if (t.kind === "tickets") return (s.ticketing?.sources || []).find((x) => x.id === t.source)?.plan || "";
+	return (t.kind === "prs" ? s.github?.repo_settings : s.github?.issue_repo_settings)?.[t.repo]?.plan || "";
+}
+function Group({ id, title, count, hint, children }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "fl-group fl-group-" + id,
+		id: "fl-group-" + id,
+		"aria-labelledby": "fl-group-" + id + "-h",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+			id: "fl-group-" + id + "-h",
+			className: "fl-group-head",
+			children: [
+				title,
+				count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-count",
+					children: count
+				}),
+				hint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-group-hint muted",
+					children: hint
+				})
+			]
+		}), children]
+	});
+}
+function ChecklistRow({ plan, onOpen }) {
+	const failing = isFailing(plan);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+		type: "button",
+		className: "fl-check-row" + (failing ? " is-failing" : ""),
+		title: "Open this checklist on the Checklists tab",
+		onClick: () => onOpen(plan.branch || plan.id),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "fl-check-glyph",
+				"aria-hidden": "true",
+				children: failing ? "✗" : "☐"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "fl-check-name",
+				children: planName(plan)
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "fl-check-state",
+				children: failing ? "Failed" : "Waiting on you"
+			}),
+			plan.branch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+				className: "fl-check-branch",
+				children: plan.branch
+			})
+		]
+	});
+}
+function ArrivalRow({ a, plans, settings }) {
+	const t = a.item.target;
+	const own = sourcePlan(settings, t);
+	const [picked, setPlan] = (0, import_react.useState)(null);
+	const plan = picked ?? own;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "fl-arrival",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WorkItemRow, {
+			reference: a.item.reference,
+			url: a.item.url,
+			title: a.item.title,
+			linkTitle: "Open " + a.item.reference,
+			tooltip: a.item.reference + (a.item.title ? " — " + a.item.title : "") + "\nfrom " + a.item.group,
+			meta: [
+				a.item.state,
+				ageText(a.item.created_at),
+				a.item.assignee
+			].filter(Boolean).join(" · "),
+			route: a.item.route,
+			eligible: true,
+			eligibleOn: a.auto,
+			eligibleLabel: a.auto ? "will auto-start" : "auto-start off",
+			actionLabel: "Start",
+			failPrefix: "Start failed",
+			onStart: async ({ agent, depth, effort, repo }) => {
+				const send = plan || (own ? builtinPlanFor(a.item.kind, plans) : "");
+				const title = await startArrival(t, send, {
+					agent,
+					depth,
+					effort,
+					repo
+				}, a.item.kind === "tickets" ? a.item.reference : "");
+				useUi.getState().closeDialog();
+				return {
+					message: title ? "Session " + title : "Session for " + a.item.reference,
+					title
+				};
+			},
+			actionExtra: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "fl-plan-pick",
+				title: "The plan this flight follows",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-plan-pick-label",
+					children: "Plan"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+					value: plan,
+					onChange: (e) => setPlan(e.target.value),
+					"aria-label": "Plan",
+					children: planChoices(plans, a.item.kind, plan).map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+						value: o.value,
+						children: o.label
+					}, o.value || "default"))
+				})]
+			})
+		})
+	});
+}
+function Board({ onTab }) {
+	const flightsQ = useFlights();
+	const plans = useFlightPlans().data || [];
+	const kinds = useFlightKinds().data;
+	const settings = useSettingsDoc(true).data;
+	const testPlans = useTestPlans().data?.plans || [];
+	const { arrivals, refresh } = useArrivals(true);
+	const [landedOpen, setLandedOpen] = (0, import_react.useState)(false);
+	const flights = flightsQ.data || [];
+	const needs = needsYouFlights(flights);
+	const inFlight = flights.filter((f) => isLive(f) && !needs.includes(f));
+	const landed = flights.filter((f) => !isLive(f)).sort((a, b) => (b.finished || b.updated) - (a.finished || a.updated)).slice(0, 20);
+	const dueChecklists = (0, import_react.useMemo)(() => testPlans.filter((p) => isFailing(p) || isWaitingOnYou(p)), [testPlans]);
+	const groups = byGroup(arrivals.map((a) => a.item));
+	const byKey = new Map(arrivals.map((a) => [a.item.key, a]));
+	const noRoute = flightsQ.data === null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "fl-board",
+		"data-tour": "flights-board",
+		children: [
+			noRoute && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "fl-note muted",
+				role: "status",
+				children: "This server has no flights yet — update MindFlock to fly plans. Arrivals and checklists still work."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Group, {
+				id: "needs",
+				title: "Needs you",
+				count: needs.length + dueChecklists.length,
+				children: needs.length + dueChecklists.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "fl-empty muted",
+					children: "Nothing waits on you."
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [needs.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlightCard, {
+					flight: f,
+					kinds
+				}, f.id)), dueChecklists.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChecklistRow, {
+					plan: p,
+					onOpen: (b) => onTab("checklists", b)
+				}, p.id))] })
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Group, {
+				id: "flying",
+				title: "In flight",
+				count: inFlight.length,
+				children: inFlight.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "fl-empty muted",
+					children: [
+						"No flight in the air.",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike",
+							onClick: () => onTab("plans"),
+							children: "Plans ›"
+						})
+					]
+				}) : inFlight.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlightCard, {
+					flight: f,
+					kinds
+				}, f.id))
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Group, {
+				id: "arrivals",
+				title: "Arrivals",
+				count: arrivals.length,
+				hint: "Ready to start, oldest first",
+				children: arrivals.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+					className: "fl-empty muted",
+					children: [
+						"Nothing waiting to start.",
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike",
+							onClick: () => onTab("sources"),
+							children: "Sources ›"
+						}),
+						" ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike",
+							onClick: refresh,
+							children: "Refresh"
+						})
+					]
+				}) : groups.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "fl-arrival-group",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "fl-arrival-source",
+						children: g.group
+					}), g.items.map((it) => {
+						const a = byKey.get(it.key);
+						return a ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ArrivalRow, {
+							a,
+							plans,
+							settings
+						}, it.key) : null;
+					})]
+				}, g.group))
+			}),
+			landed.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+				className: "fl-group fl-group-landed",
+				open: landedOpen,
+				onToggle: (e) => setLandedOpen(e.target.open),
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", {
+					className: "fl-group-head",
+					children: ["Landed", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "fl-count muted",
+						children: landed.length
+					})]
+				}), landedOpen && landed.map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlightCard, {
+					flight: f,
+					kinds
+				}, f.id))]
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/flights/PlanEditor.tsx
+var clonePlan = (p) => JSON.parse(JSON.stringify(p));
+function blockOfField(field, steps) {
+	const idx = /steps\[?\.?(\d+)/.exec(field);
+	if (idx) return Number(idx[1]);
+	return steps.findIndex((s) => field === s.id || field.startsWith(s.id + "."));
+}
+function Palette({ kinds, onPick, onClose }) {
+	const groups = [["Robot steps — MindFlock does them", kinds.filter((k) => k.actor === "robot")], ["You steps — the flight waits for you", kinds.filter((k) => k.actor === "you")]];
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "fl-palette",
+		role: "dialog",
+		"aria-label": "Add a block",
+		onKeyDown: (e) => {
+			if (e.key === "Escape") {
+				e.stopPropagation();
+				e.preventDefault();
+				onClose();
+			}
+		},
+		children: [groups.map(([title, list]) => list.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "fl-palette-group",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "fl-palette-head",
+				children: title
+			}), list.map((k, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				className: "fl-palette-item fl-kind-" + k.actor,
+				autoFocus: i === 0 && title.startsWith("Robot"),
+				onClick: () => onPick(k),
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-palette-label",
+					children: k.label
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-palette-summary",
+					children: k.summary
+				})]
+			}, k.kind))]
+		}, title) : null), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "linklike fl-palette-close",
+			onClick: onClose,
+			children: "Close"
+		})]
+	});
+}
+function FieldInput({ f, value, onChange }) {
+	const id = "fl-field-" + f.name;
+	const v = value === void 0 ? f.default : value;
+	if (f.type === "bool") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "fl-field fl-field-bool",
+		htmlFor: id,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+			id,
+			type: "checkbox",
+			checked: !!v,
+			onChange: (e) => onChange(e.target.checked)
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: f.label })]
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+		className: "fl-field",
+		htmlFor: id,
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "fl-field-label",
+			children: f.label
+		}), f.type === "textarea" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+			id,
+			rows: 3,
+			value: String(v ?? ""),
+			placeholder: f.placeholder,
+			onChange: (e) => onChange(e.target.value)
+		}) : f.type === "select" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+			id,
+			value: String(v ?? ""),
+			onChange: (e) => onChange(e.target.value),
+			children: fieldOptions(f).map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+				value: o.value,
+				children: o.label
+			}, o.value))
+		}) : f.type === "int" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+			id,
+			type: "number",
+			inputMode: "numeric",
+			value: v === void 0 || v === null || v === "" ? "" : String(v),
+			placeholder: f.placeholder,
+			onChange: (e) => onChange(e.target.value === "" ? "" : Math.trunc(Number(e.target.value)))
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+			id,
+			type: "text",
+			value: String(v ?? ""),
+			placeholder: f.placeholder,
+			onChange: (e) => onChange(e.target.value)
+		})]
+	});
+}
+function Plans({ initialPlan, onDirty }) {
+	const plansQ = useFlightPlans();
+	const kinds = useFlightKinds().data || [];
+	const plans = plansQ.data || [];
+	const instances = useInstances().data || [];
+	const agents = useAgentChoices();
+	const closeDialog = useUi((s) => s.closeDialog);
+	const first = plans.find((p) => p.id === initialPlan) || plans[0] || null;
+	const [selected, setSelected] = (0, import_react.useState)(() => first ? first.id : null);
+	const [draft, setDraft] = (0, import_react.useState)(() => first ? clonePlan(first) : null);
+	const [seed, setSeed] = (0, import_react.useState)(() => first ? clonePlan(first) : null);
+	const [block, setBlock] = (0, import_react.useState)(() => first?.steps.length ? 0 : null);
+	const [paletteAt, setPaletteAt] = (0, import_react.useState)(null);
+	const [described, setDescribed] = (0, import_react.useState)(/* @__PURE__ */ new Set());
+	const [error, setError] = (0, import_react.useState)("");
+	const [pending, setPending] = (0, import_react.useState)(null);
+	const [busy, setBusy] = (0, import_react.useState)("");
+	const [confirmDelete, setConfirmDelete] = (0, import_react.useState)(false);
+	const [askTakeOff, setAskTakeOff] = (0, import_react.useState)(false);
+	const [takeOffRepo, setTakeOffRepo] = (0, import_react.useState)("");
+	const [takeOffTitle, setTakeOffTitle] = (0, import_react.useState)("");
+	const [describeText, setDescribeText] = (0, import_react.useState)("");
+	const [describeNote, setDescribeNote] = (0, import_react.useState)("");
+	const [preview, setPreview] = (0, import_react.useState)(null);
+	const dragFrom = (0, import_react.useRef)(null);
+	const [dragOver, setDragOver] = (0, import_react.useState)(null);
+	const blockRefs = (0, import_react.useRef)([]);
+	(0, import_react.useEffect)(() => {
+		const el = block !== null ? blockRefs.current[block] : null;
+		if (el && typeof el.scrollIntoView === "function") el.scrollIntoView({
+			inline: "nearest",
+			block: "nearest"
+		});
+	}, [block, draft?.steps.length]);
+	const dirty = planDirty(draft, seed);
+	(0, import_react.useEffect)(() => onDirty(dirty), [dirty, onDirty]);
+	const load = (p) => {
+		const copy = p ? clonePlan(p) : blankPlan();
+		setSelected(p ? p.id : "");
+		setDraft(copy);
+		setSeed(clonePlan(copy));
+		setBlock(copy.steps.length ? 0 : null);
+		setPaletteAt(null);
+		setDescribed(/* @__PURE__ */ new Set());
+		setError("");
+		setConfirmDelete(false);
+		setAskTakeOff(false);
+		setDescribeNote("");
+	};
+	(0, import_react.useEffect)(() => {
+		if (selected !== null || !plans.length) return;
+		load(plans.find((p) => p.id === initialPlan) || plans[0]);
+	}, [plans.length, initialPlan]);
+	const when = whenFormOf(draft?.trigger.schedule);
+	const cronText = draft?.trigger.kind === "schedule" ? (when.days === "cron" ? when.cron : when.days === "once" ? onceOf(when.date, when.at) : cronOf(when.at, when.days)).trim() : "";
+	(0, import_react.useEffect)(() => {
+		if (!cronText) {
+			setPreview(null);
+			return;
+		}
+		let live = true;
+		const t = setTimeout(() => {
+			cronPreview(cronText).then((pv) => live && setPreview(pv)).catch(() => live && setPreview(null));
+		}, 300);
+		return () => {
+			live = false;
+			clearTimeout(t);
+		};
+	}, [cronText]);
+	const kindOf = (0, import_react.useMemo)(() => new Map(kinds.map((k) => [k.kind, k])), [kinds]);
+	if (plansQ.data === null) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "fl-note muted",
+		children: "This server has no flight plans yet — update MindFlock to edit them."
+	});
+	if (!draft) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "fl-note muted",
+		children: plansQ.error ? "Could not load the plans: " + errMsg(plansQ.error) : "Loading plans…"
+	});
+	const patch = (p) => setDraft((d) => d ? {
+		...d,
+		...p
+	} : d);
+	const setSteps = (steps) => patch({ steps });
+	const patchStep = (i, p) => setSteps(draft.steps.map((s, j) => j === i ? {
+		...s,
+		...p
+	} : s));
+	const sel = block !== null ? draft.steps[block] : null;
+	const selKind = sel ? kindOf.get(sel.kind) : void 0;
+	const builtinPlan = plans.find((p) => p.id === draft.id)?.builtin || draft.builtin;
+	const needsSession = draft.trigger.kind === "manual" || draft.trigger.kind === "schedule";
+	const pick = (id) => {
+		if (id === selected) return;
+		if (dirty) {
+			setPending(id);
+			return;
+		}
+		load(id ? plans.find((p) => p.id === id) || null : null);
+	};
+	const move = (from, to) => {
+		if (to < 0 || to >= draft.steps.length) return;
+		setSteps(moveStep(draft.steps, from, to));
+		setBlock(to);
+		requestAnimationFrame(() => blockRefs.current[to]?.focus());
+	};
+	const insert = (at, def) => {
+		const step = newStep(def, draft.steps.map((s) => s.id));
+		const steps = draft.steps.slice();
+		steps.splice(at, 0, step);
+		setSteps(steps);
+		setBlock(at);
+		setPaletteAt(null);
+	};
+	const remove = (i) => {
+		setSteps(draft.steps.filter((_, j) => j !== i));
+		setBlock(draft.steps.length > 1 ? Math.max(0, i - 1) : null);
+	};
+	const save = async () => {
+		setBusy("save");
+		setError("");
+		try {
+			const saved = await savePlan(draft);
+			load(saved);
+			toast("Saved “" + saved.name + "”");
+			return saved;
+		} catch (err) {
+			const body = err instanceof ApiError ? err.body : null;
+			setError(errMsg(err));
+			if (body?.field) {
+				const at = blockOfField(body.field, draft.steps);
+				if (at >= 0) setBlock(at);
+			}
+			return null;
+		} finally {
+			setBusy("");
+		}
+	};
+	const fly = async (opts) => {
+		let id = draft.id;
+		if (dirty || !id) {
+			const saved = await save();
+			if (!saved) return;
+			id = saved.id;
+		}
+		setBusy("takeoff");
+		try {
+			if (await takeOff({
+				plan_id: id,
+				...opts.title ? { title: opts.title } : {},
+				...opts.repo_path ? { repo_path: opts.repo_path } : {}
+			})) closeDialog();
+		} finally {
+			setBusy("");
+		}
+	};
+	const onTakeOff = () => {
+		if (needsSession && draft.session.repo_path) {
+			fly({});
+			return;
+		}
+		setTakeOffRepo(draft.session.repo_path);
+		setAskTakeOff(true);
+	};
+	const describe = async () => {
+		const text = describeText.trim();
+		if (!text) return;
+		setBusy("describe");
+		setDescribeNote("");
+		try {
+			const got = await describeSteps(text, "step");
+			if (!got.length) {
+				setDescribeNote("No block came back — try saying it another way.");
+				return;
+			}
+			const taken = draft.steps.map((s) => s.id);
+			const added = got.map((s) => {
+				let n = taken.length + 1;
+				while (taken.includes("s" + n)) n++;
+				const id = taken.includes(s.id) || !s.id ? "s" + n : s.id;
+				taken.push(id);
+				return {
+					...s,
+					id,
+					config: s.config || {},
+					on_fail: s.on_fail || "halt"
+				};
+			});
+			setSteps([...draft.steps, ...added]);
+			setDescribed((d) => /* @__PURE__ */ new Set([...d, ...added.map((s) => s.id)]));
+			setBlock(draft.steps.length);
+			setDescribeText("");
+		} catch (err) {
+			const st = err instanceof ApiError ? err.status : 0;
+			const code = err instanceof ApiError ? err.body?.error : "";
+			setDescribeNote(code === "no_model" || st === 409 ? "No agent CLI is set up to describe steps — add one in Settings, or pick blocks with +." : code === "could_not_describe" || st === 422 ? "Couldn't turn that into blocks — try saying it another way." : errMsg(err));
+		} finally {
+			setBusy("");
+		}
+	};
+	const onBlockKey = (e, i) => {
+		if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+			e.preventDefault();
+			move(i, i + (e.key === "ArrowLeft" ? -1 : 1));
+		} else if (e.key === "Enter" || e.key === " ") {
+			e.preventDefault();
+			setBlock(i);
+		}
+	};
+	const onDrop = (e, to) => {
+		e.preventDefault();
+		const from = dragFrom.current;
+		dragFrom.current = null;
+		setDragOver(null);
+		if (from === null) return;
+		move(from, from < to ? to - 1 : to);
+	};
+	const addButton = (at) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "fl-add" + (paletteAt === at ? " active" : "") + (dragOver === at ? " fl-drop" : ""),
+		"aria-label": at === draft.steps.length ? "Add a block at the end" : "Add a block here",
+		title: "Add a block",
+		onClick: () => setPaletteAt(paletteAt === at ? null : at),
+		onDragOver: (e) => {
+			if (dragFrom.current === null) return;
+			e.preventDefault();
+			setDragOver(at);
+		},
+		onDragLeave: () => setDragOver(null),
+		onDrop: (e) => onDrop(e, at),
+		children: "+"
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "fl-plans",
+		"data-tour": "flights-plans",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
+			className: "fl-plan-list",
+			"aria-label": "Plans",
+			children: [plans.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				className: "fl-plan-item" + (p.id === selected ? " active" : ""),
+				"aria-current": p.id === selected ? "true" : void 0,
+				onClick: () => pick(p.id),
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-plan-name",
+					children: p.name
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "fl-plan-meta muted",
+					children: [
+						p.builtin ? "Built-in · " : "",
+						TRIGGER_LABEL[p.trigger?.kind] || "Manual",
+						" · ",
+						p.steps.length,
+						" ",
+						p.steps.length === 1 ? "block" : "blocks"
+					]
+				})]
+			}, p.id)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "fl-plan-item fl-plan-new" + (selected === "" ? " active" : ""),
+				onClick: () => pick(""),
+				children: "+ New plan"
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "fl-editor",
+			children: [
+				pending !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+					title: "Discard changes to “" + draft.name + "”?",
+					body: "They haven't been saved.",
+					confirmLabel: "Discard",
+					cancelLabel: "Keep editing",
+					onCancel: () => setPending(null),
+					onConfirm: () => {
+						const id = pending;
+						setPending(null);
+						load(id ? plans.find((p) => p.id === id) || null : null);
+					}
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "fl-editor-head",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							className: "fl-plan-title",
+							"aria-label": "Plan name",
+							value: draft.name,
+							onChange: (e) => patch({ name: e.target.value })
+						}),
+						builtinPlan && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fl-builtin-tag",
+							children: "Built-in"
+						}),
+						dirty && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fl-unsaved muted",
+							children: "Unsaved"
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "fl-row-scroll",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "fl-row",
+						role: "list",
+						"aria-label": "Blocks — drag, or ← → on a focused block, to reorder",
+						children: [
+							addButton(0),
+							draft.steps.map((s, i) => {
+								const you = stepActor(s, kinds) === "you";
+								return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "fl-row-cell",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+										ref: (el) => {
+											blockRefs.current[i] = el;
+										},
+										role: "listitem",
+										tabIndex: 0,
+										draggable: true,
+										className: "fl-block" + (you ? " fl-block-you" : " fl-block-robot") + (block === i ? " selected" : "") + (described.has(s.id) ? " fl-described" : ""),
+										title: (kindOf.get(s.kind)?.summary || s.kind) + (described.has(s.id) ? " — added by description" : ""),
+										"aria-label": s.title + (you ? " (you)" : "") + ", block " + (i + 1) + " of " + draft.steps.length,
+										onClick: () => setBlock(i),
+										onKeyDown: (e) => onBlockKey(e, i),
+										onDragStart: (e) => {
+											dragFrom.current = i;
+											e.dataTransfer.effectAllowed = "move";
+											e.dataTransfer.setData("text/plain", s.id);
+										},
+										onDragEnd: () => {
+											dragFrom.current = null;
+											setDragOver(null);
+										},
+										onDragOver: (e) => {
+											if (dragFrom.current === null) return;
+											e.preventDefault();
+											setDragOver(i);
+										},
+										onDrop: (e) => onDrop(e, i),
+										children: [
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "fl-block-kind",
+												children: you ? "You" : kindOf.get(s.kind)?.label || s.kind
+											}),
+											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "fl-block-title",
+												children: s.title
+											}),
+											described.has(s.id) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "fl-block-new",
+												children: "added by description"
+											})
+										]
+									}), addButton(i + 1)]
+								}, s.id);
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "fl-describe",
+								"data-tour": "flights-describe",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+									"aria-label": "Describe a step",
+									placeholder: "Describe a step… e.g. wait 5 minutes, then ask me to approve",
+									rows: 2,
+									value: describeText,
+									onChange: (e) => setDescribeText(e.target.value),
+									onKeyDown: (e) => {
+										if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+											e.preventDefault();
+											describe();
+										}
+									}
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn fl-btn",
+									disabled: !describeText.trim() || busy === "describe",
+									onClick: () => void describe(),
+									children: busy === "describe" ? "Describing…" : "Describe a step"
+								})]
+							})
+						]
+					})
+				}),
+				describeNote && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "fl-note fl-describe-note",
+					role: "status",
+					children: describeNote
+				}),
+				paletteAt !== null && (kinds.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Palette, {
+					kinds,
+					onPick: (k) => insert(paletteAt, k),
+					onClose: () => setPaletteAt(null)
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "fl-note muted",
+					children: "The block list didn't load — this server may not know Flights yet."
+				})),
+				sel && block !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "fl-block-form",
+					"aria-label": "Block: " + sel.title,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "fl-block-form-head",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: selKind?.label || sel.kind }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "muted",
+								children: selKind?.summary
+							})]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "fl-field",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-field-label",
+								children: "Block title"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+								type: "text",
+								value: sel.title,
+								onChange: (e) => patchStep(block, { title: e.target.value })
+							})]
+						}),
+						(selKind?.fields || []).map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FieldInput, {
+							f,
+							value: sel.config?.[f.name],
+							onChange: (v) => patchStep(block, { config: {
+								...sel.config,
+								[f.name]: v
+							} })
+						}, f.name)),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "fl-field",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-field-label",
+								children: "If it fails"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+								value: sel.on_fail,
+								onChange: (e) => patchStep(block, { on_fail: e.target.value }),
+								children: Object.keys(ON_FAIL_LABEL).map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: k,
+									children: ON_FAIL_LABEL[k]
+								}, k))
+							})]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "fl-block-acts",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn fl-btn",
+									disabled: block === 0,
+									onClick: () => move(block, block - 1),
+									"aria-label": "Move left",
+									children: "←"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn fl-btn",
+									disabled: block === draft.steps.length - 1,
+									onClick: () => move(block, block + 1),
+									"aria-label": "Move right",
+									children: "→"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn fl-btn",
+									onClick: () => setSteps(duplicateStep(draft.steps, block)),
+									children: "Duplicate"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn fl-btn danger",
+									onClick: () => remove(block),
+									children: "Delete"
+								})
+							]
+						})
+					]
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "fl-note muted",
+					children: draft.steps.length ? "Pick a block to edit it." : "Press + to add the first block."
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "fl-section",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "fl-field fl-field-inline",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-field-label",
+								children: "Starts from"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("select", {
+								"aria-label": "Trigger",
+								value: draft.trigger.kind,
+								onChange: (e) => {
+									const kind = e.target.value;
+									patch({ trigger: {
+										...draft.trigger,
+										kind,
+										schedule: kind === "schedule" ? draft.trigger.schedule || {
+											at: "21:00",
+											days: "daily"
+										} : null
+									} });
+								},
+								children: Object.keys(TRIGGER_LABEL).map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: k,
+									children: TRIGGER_LABEL[k]
+								}, k))
+							})]
+						}),
+						draft.trigger.kind === "schedule" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "fl-when",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScheduleWhen, {
+								form: {
+									...formFromTemplate(null),
+									...when
+								},
+								onForm: (p) => patch({ trigger: {
+									...draft.trigger,
+									schedule: scheduleOfWhen({
+										...when,
+										...p
+									})
+								} }),
+								cronPreview: preview
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+								className: "fl-field fl-field-bool",
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+									type: "checkbox",
+									checked: draft.trigger.paused,
+									onChange: (e) => patch({ trigger: {
+										...draft.trigger,
+										paused: e.target.checked
+									} })
+								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Paused" })]
+							})]
+						}),
+						needsSession && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "fl-session-defaults",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+									className: "fl-field",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "fl-field-label",
+										children: "Repository"
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
+										id: "fl-plan-repo",
+										value: draft.session.repo_path,
+										placeholder: "Ask when it takes off",
+										pickerTitle: "The repository this plan's sessions start in",
+										onChange: (v) => patch({ session: {
+											...draft.session,
+											repo_path: v
+										} })
+									})]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+									className: "fl-field",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "fl-field-label",
+										children: "Agent"
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+										value: draft.session.program,
+										onChange: (e) => patch({ session: {
+											...draft.session,
+											program: e.target.value
+										} }),
+										children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+											value: "",
+											children: agents.fallback ? "Default (" + agents.fallback + ")" : "Default"
+										}), agents.names.map((n) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+											value: n,
+											children: n
+										}, n))]
+									})]
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+									className: "fl-field",
+									children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "fl-field-label",
+										children: "Model"
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+										type: "text",
+										value: draft.session.model,
+										placeholder: "The agent's default",
+										onChange: (e) => patch({ session: {
+											...draft.session,
+											model: e.target.value
+										} })
+									})]
+								})
+							]
+						})
+					]
+				}),
+				error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "error fl-error",
+					role: "alert",
+					children: error
+				}),
+				askTakeOff && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "fl-takeoff-ask",
+					role: "group",
+					"aria-label": "Take off",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "fl-field",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-field-label",
+								children: "In a new session, in this repository"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
+								id: "fl-takeoff-repo",
+								value: takeOffRepo,
+								onChange: setTakeOffRepo,
+								placeholder: "/path/to/repo"
+							})]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+							className: "fl-field",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-field-label",
+								children: "Or on a session that is open"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+								value: takeOffTitle,
+								onChange: (e) => setTakeOffTitle(e.target.value),
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: "",
+									children: "—"
+								}), instances.filter((i) => !i.flight).map((i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+									value: i.title,
+									children: i.title
+								}, i.title))]
+							})]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "fl-block-acts",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "btn-primary fl-btn",
+								disabled: busy !== "" || !takeOffRepo.trim() && !takeOffTitle,
+								onClick: () => void fly(takeOffTitle ? { title: takeOffTitle } : { repo_path: takeOffRepo.trim() }),
+								children: "Take off"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn fl-btn",
+								onClick: () => setAskTakeOff(false),
+								children: "Cancel"
+							})]
+						})
+					]
+				}),
+				confirmDelete && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+					title: "Delete “" + draft.name + "”?",
+					body: "Flights already in the air keep their own copy of its blocks.",
+					confirmLabel: "Delete",
+					busy: busy === "delete",
+					onCancel: () => setConfirmDelete(false),
+					onConfirm: async () => {
+						setBusy("delete");
+						try {
+							await deletePlan(draft.id);
+							toast("Deleted “" + draft.name + "”");
+							setSelected(null);
+							setDraft(null);
+							setSeed(null);
+						} catch (err) {
+							setError(errMsg(err));
+						} finally {
+							setBusy("");
+							setConfirmDelete(false);
+						}
+					}
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "fl-editor-foot",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "btn-primary fl-btn",
+							disabled: !dirty || busy !== "",
+							onClick: () => void save(),
+							children: busy === "save" ? "Saving…" : "Save"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn fl-btn fl-takeoff",
+							disabled: busy !== "" || !draft.steps.length,
+							title: dirty ? "Saves the plan, then starts a flight of it" : "Start a flight of this plan now",
+							onClick: onTakeOff,
+							children: busy === "takeoff" ? "Taking off…" : "Take off"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "fl-foot-spacer" }),
+						builtinPlan ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn fl-btn",
+							disabled: busy !== "",
+							title: "Put this built-in plan back the way MindFlock ships it",
+							onClick: async () => {
+								setBusy("reset");
+								try {
+									const p = await resetPlan(draft.id);
+									load(p);
+									toast("“" + p.name + "” is back to its default");
+								} catch (err) {
+									setError(errMsg(err));
+								} finally {
+									setBusy("");
+								}
+							},
+							children: "Reset to default"
+						}) : draft.id ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn fl-btn danger",
+							onClick: () => setConfirmDelete(true),
+							children: "Delete"
+						}) : null
+					]
+				})
+			]
+		})]
+	});
+}
+//#endregion
+//#region src/components/flights/FlightsDialog.tsx
+function FlightsDialog() {
+	const open = useUi((s) => s.openDialog === "flights");
+	useAutoTour("flights", open);
+	const target = useUi((s) => s.openDialog === "flights" ? s.dialogTarget : null);
+	const openDialogFor = useUi((s) => s.openDialogFor);
+	const closeDialog = useUi((s) => s.closeDialog);
+	const { tab, rest } = parseFlightsTarget(target);
+	const [plansDirty, setPlansDirty] = (0, import_react.useState)(false);
+	const [leaving, setLeaving] = (0, import_react.useState)(null);
+	const tabRefs = (0, import_react.useRef)({});
+	const waiting = needsYouFlights(useFlights(open).data || []).length;
+	const onDirty = (0, import_react.useCallback)((d) => setPlansDirty(d), []);
+	(0, import_react.useEffect)(() => {
+		if (!open) {
+			setLeaving(null);
+			setPlansDirty(false);
+			return;
+		}
+		prefetchIntakePanels();
+		prefetchIntakeMeta();
+	}, [open]);
+	const tourScreen = useUi((s) => s.coachTour?.id === "flights" ? FLIGHTS_TOUR.steps[s.coachTour.step]?.screen || "" : "");
+	(0, import_react.useEffect)(() => {
+		if (!open || !tourScreen || tourScreen === tab) return;
+		if (FLIGHTS_TABS.includes(tourScreen)) openDialogFor("flights", tourScreen);
+	}, [
+		open,
+		tourScreen,
+		tab,
+		openDialogFor
+	]);
+	if (!open) return null;
+	const go = (next, deep = "") => openDialogFor("flights", deep ? next + "/" + deep : next);
+	const unsaved = () => tab === "plans" && plansDirty || tab === "schedule" && !!embeddedGuard.current?.dirty();
+	const switchTab = (next, deep = "") => {
+		if (next === tab && !deep) return;
+		if (unsaved()) {
+			setLeaving(next);
+			return;
+		}
+		go(next, deep);
+	};
+	const close = () => {
+		if (unsaved()) {
+			setLeaving("close");
+			return;
+		}
+		closeDialog();
+	};
+	const onTabKey = (e, i) => {
+		const n = FLIGHTS_TABS.length;
+		const to = e.key === "ArrowRight" ? (i + 1) % n : e.key === "ArrowLeft" ? (i - 1 + n) % n : e.key === "Home" ? 0 : e.key === "End" ? n - 1 : -1;
+		if (to < 0) return;
+		e.preventDefault();
+		switchTab(FLIGHTS_TABS[to]);
+		tabRefs.current[FLIGHTS_TABS[to]]?.focus();
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		id: "flights-dialog",
+		className: "top-dialog",
+		role: "dialog",
+		"aria-modal": "true",
+		"aria-labelledby": "flights-title",
+		onClose: close,
+		closeOnBackdrop: true,
+		onEscape: () => {
+			if (leaving) {
+				setLeaving(null);
+				return true;
+			}
+			if (tab === "schedule" && embeddedGuard.current?.escape()) return true;
+			if (unsaved()) {
+				setLeaving("close");
+				return true;
+			}
+			return false;
+		},
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: "flights-panel",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "ws-head fl-head",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+							id: "flights-title",
+							children: "Flights"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "ik-subtitle",
+							children: "Every ticket, PR and scheduled job, from arrival to merge"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TourButton, { tour: "flights" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							id: "flights-close",
+							onClick: close,
+							children: "Close"
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					id: "flights-tabs",
+					className: "fl-tabs",
+					role: "tablist",
+					"aria-label": "Flights",
+					children: FLIGHTS_TABS.map((t, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						ref: (el) => {
+							tabRefs.current[t] = el;
+						},
+						type: "button",
+						role: "tab",
+						id: "flights-tab-" + t,
+						"aria-selected": tab === t,
+						"aria-controls": "flights-tabpanel-" + t,
+						tabIndex: tab === t ? 0 : -1,
+						className: "fl-tab" + (tab === t ? " active" : ""),
+						"data-flights-tab": t,
+						onClick: () => switchTab(t),
+						onKeyDown: (e) => onTabKey(e, i),
+						children: [FLIGHTS_TAB_LABEL[t], t === "board" && waiting > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fl-count fl-count-you",
+							children: waiting
+						})]
+					}, t))
+				}),
+				leaving && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+					id: "fl-leave-confirm",
+					title: "Discard unsaved changes?",
+					body: "They haven't been saved.",
+					confirmLabel: "Discard",
+					cancelLabel: "Keep editing",
+					onCancel: () => setLeaving(null),
+					onConfirm: () => {
+						const to = leaving;
+						setLeaving(null);
+						setPlansDirty(false);
+						if (to === "close") closeDialog();
+						else go(to);
+					}
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					id: "flights-body",
+					className: "fl-body fl-body-" + tab,
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+						id: "flights-tabpanel-" + tab,
+						className: "fl-panel",
+						role: "tabpanel",
+						"aria-labelledby": "flights-tab-" + tab,
+						children: [
+							tab === "board" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Board, { onTab: (t, deep) => switchTab(t, deep) }),
+							tab === "plans" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Plans, {
+								initialPlan: rest,
+								onDirty
+							}),
+							tab === "sources" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(IntakeDialog, {
+								embedded: true,
+								target: rest || null
+							}),
+							tab === "schedule" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TemplatesDialog, {
+								embedded: true,
+								target: rest || null
+							}),
+							tab === "checklists" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyDialog, {
+								embedded: true,
+								target: rest || null
+							})
+						]
+					}, tab)
+				})
+			]
+		})
+	});
+}
+//#endregion
+//#region src/components/customize/CustomizeRow.tsx
+var ROW_MIME = "application/x-mf-customize-row";
+function CustomizeRow({ id, list, label, note, on, locked, lockedWhy, onToggle, onMove, onDropBefore, first, last }) {
+	const [over, setOver] = (0, import_react.useState)(false);
+	const inputId = "cz-" + list + "-" + id;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+		className: "cz-row" + (on ? "" : " is-off") + (over ? " drop-over" : ""),
+		"data-item": id,
+		onDragOver: (e) => {
+			if (!e.dataTransfer.types.includes(ROW_MIME + "/" + list)) return;
+			e.preventDefault();
+			e.dataTransfer.dropEffect = "move";
+			setOver(true);
+		},
+		onDragLeave: () => setOver(false),
+		onDrop: (e) => {
+			setOver(false);
+			const dragged = e.dataTransfer.getData(ROW_MIME + "/" + list);
+			if (!dragged) return;
+			e.preventDefault();
+			if (dragged !== id) onDropBefore(dragged);
+		},
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "cz-grip",
+				draggable: true,
+				title: "Drag to reorder",
+				"aria-hidden": "true",
+				onDragStart: (e) => {
+					e.dataTransfer.setData(ROW_MIME + "/" + list, id);
+					e.dataTransfer.effectAllowed = "move";
+				},
+				children: "⠿"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "cz-switch",
+				htmlFor: inputId,
+				title: locked ? lockedWhy : on ? "Shown — click to hide" : "Hidden — click to show",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					id: inputId,
+					type: "checkbox",
+					role: "switch",
+					checked: on,
+					disabled: locked,
+					onChange: onToggle
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "cz-track",
+					"aria-hidden": "true"
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "cz-text",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+					className: "cz-name",
+					htmlFor: inputId,
+					children: label
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "cz-note",
+					children: note
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "cz-move",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					"aria-label": "Move " + label + " up",
+					title: "Move up",
+					disabled: first,
+					onClick: () => onMove(-1),
+					children: "↑"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					"aria-label": "Move " + label + " down",
+					title: "Move down",
+					disabled: last,
+					onClick: () => onMove(1),
+					children: "↓"
+				})]
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/customize/SidebarBarsPicker.tsx
+var NOTES = {
+	usage: { text: "What your sessions cost" },
+	ingestion: {
+		text: "Appears once a ticket source is connected",
+		link: {
+			label: "Intake → Tickets",
+			dialog: "intake",
+			target: "tickets"
+		}
+	},
+	"pr-review": {
+		text: "Appears once a repository is added",
+		link: {
+			label: "Intake → GitHub PRs",
+			dialog: "intake",
+			target: "prs"
+		}
+	},
+	"issue-handling": {
+		text: "Appears once a repository is added",
+		link: {
+			label: "Intake → GitHub issues",
+			dialog: "intake",
+			target: "issues"
+		}
+	},
+	verify: {
+		text: "Appears once Verify tracks a repository or has a checklist",
+		link: {
+			label: "Open Verify",
+			dialog: "verify"
+		}
+	},
+	assistant: { text: "Chat, a todo list, and its editable agent file" },
+	prompts: {
+		text: "Your saved prompts — pick one to paste it into the session you are in",
+		link: {
+			label: "Manage prompts",
+			dialog: "prompts"
+		}
+	}
+};
+var EXTENSION_NOTE = { text: "From an extension" };
+function SidebarBarsPicker() {
+	const hiddenBars = useUi((s) => s.hiddenBars);
+	const toggleBarHidden = useUi((s) => s.toggleBarHidden);
+	const barOrder = useUi((s) => s.barOrder);
+	const setBarOrder = useUi((s) => s.setBarOrder);
+	const openDialogFor = useUi((s) => s.openDialogFor);
+	const showFilter = useUi((s) => s.showFilter);
+	const setShowFilter = useUi((s) => s.setShowFilter);
+	const extBars = useExtensionBarDefs();
+	const extKeys = extBars.map((b) => b.key);
+	const bars = orderedBars(barOrder, extBars);
+	const byKey = new Map(bars.map((b) => [b.key, b]));
+	const sections = orderedSections(barOrder, extKeys);
+	const move = (key, dir) => {
+		const next = [...sections];
+		const i = next.indexOf(key);
+		const j = i + dir;
+		if (i < 0 || j < 0 || j >= next.length) return;
+		[next[i], next[j]] = [next[j], next[i]];
+		setBarOrder(next);
+	};
+	const dropBefore = (dragged, before) => {
+		const next = sections.filter((k) => k !== dragged);
+		next.splice(next.indexOf(before), 0, dragged);
+		setBarOrder(next);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "customize-sidebar",
+		className: "cz-page",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+				className: "cz-heading",
+				children: "Show in the sidebar"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "cz-list",
+				"aria-label": "Sidebar bars",
+				children: sections.map((key, i) => {
+					if (key === SESSIONS_KEY) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("li", {
+						className: "cz-anchor",
+						"aria-label": "The session list",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Your sessions" })
+					}, key);
+					const b = byKey.get(key);
+					if (!b) return null;
+					const note = NOTES[b.key] || EXTENSION_NOTE;
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CustomizeRow, {
+						id: b.key,
+						list: "bars",
+						label: b.label,
+						on: !hiddenBars.has(b.key),
+						onToggle: () => toggleBarHidden(b.key),
+						onMove: (dir) => move(b.key, dir),
+						onDropBefore: (dragged) => dropBefore(dragged, b.key),
+						first: i === 0,
+						last: i === sections.length - 1,
+						note: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [note.text, note.link && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [" · ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "linklike cz-link",
+							onClick: () => openDialogFor(note.link.dialog, note.link.target ?? null),
+							children: note.link.label
+						})] })] })
+					}, b.key);
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+				className: "cz-heading",
+				children: "Session list"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "cz-list",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+					className: "cz-row cz-row-plain",
+					"data-item": "session-filter",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+						className: "cz-switch",
+						htmlFor: "cz-session-filter",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+							id: "cz-session-filter",
+							type: "checkbox",
+							role: "switch",
+							checked: showFilter,
+							onChange: () => setShowFilter(!showFilter)
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "cz-track",
+							"aria-hidden": "true"
+						})]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "cz-text",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("label", {
+							className: "cz-name",
+							htmlFor: "cz-session-filter",
+							children: "Filter box"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "cz-note",
+							children: [
+								"Filter sessions by name or branch · hidden, ",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "/" }),
+								" still opens it"
+							]
+						})]
+					})]
+				})
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/customize/PaneHeaderPicker.tsx
+var ICON = {
+	width: 12,
+	height: 12,
+	viewBox: "0 0 24 24",
+	fill: "none",
+	stroke: "currentColor",
+	strokeWidth: 2,
+	strokeLinecap: "round",
+	strokeLinejoin: "round",
+	"aria-hidden": true
+};
+function previewButton(id) {
+	switch (id) {
+		case "next": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "nextstep",
+			children: "Commit…"
+		}, id);
+		case "fasttrack": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "nextstep nextstep-fast",
+			children: "⏩"
+		}, id);
+		case "copy": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "act copy-history",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+				className: "btn-icon",
+				...ICON,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+					x: "8",
+					y: "2",
+					width: "8",
+					height: "4",
+					rx: "1"
+				})]
+			})
+		}, id);
+		case "history": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "act pane-hist",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+				className: "btn-icon",
+				...ICON,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 8v4l2 2" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3.05 11a9 9 0 1 1 .5 4" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3 22v-6h6" })
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "btn-label",
+				children: "History"
+			})]
+		}, id);
+		case "cost": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "tok usage-trigger",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "usage-head",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "uh-cost",
+					children: "~$0.62"
+				})
+			})
+		}, id);
+		case "diffstat": return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "ctxline",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "ctx-add",
+					children: "+12"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "ctx-del",
+					children: "−3"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "ctx-files",
+					children: "· 2 files"
+				})
+			]
+		}, id);
+		case "hide": return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "act pane-close",
+			children: "−"
+		}, id);
+		default: return null;
+	}
+}
+function PreviewHead({ tabs, buttons, icons }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "pane-head pane-head-fit cz-preview-head" + (icons ? " head-icons" : ""),
+		"aria-hidden": "true",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "grip",
+				children: "⠿"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "title",
+				children: "fix-login-redirect"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "tabs",
+				children: tabs.map((id) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					tabIndex: -1,
+					className: id === "agent" ? "active" : "",
+					"data-tab": id,
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TabIcon, { name: id }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "tab-label",
+						children: paneItemDef(id).label
+					})]
+				}, id))
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "head-spacer" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "actions",
+				children: buttons.map(previewButton)
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "head-tail",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "act pane-more",
+					children: "⋯"
+				})
+			})
+		]
+	});
+}
+function PaneHeaderPicker() {
+	const pref = useUi((s) => s.paneHeader);
+	const setPaneHeader = useUi((s) => s.setPaneHeader);
+	const r = resolvePaneHeader(pref);
+	const shownTabs = r.tabs.filter((id) => r.shown.has(id));
+	const shownButtons = r.buttons.filter((id) => r.shown.has(id));
+	const rows = (ids, list) => ids.map((id, i) => {
+		const d = paneItemDef(id);
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(CustomizeRow, {
+			id,
+			list,
+			label: d.label,
+			note: d.note,
+			on: r.shown.has(id),
+			locked: d.locked,
+			lockedWhy: "Every header shows the agent",
+			onToggle: () => setPaneHeader(togglePaneItem(pref, id)),
+			onMove: (dir) => setPaneHeader(movePaneItem(pref, id, dir)),
+			onDropBefore: (dragged) => setPaneHeader(placePaneItem(pref, dragged, id)),
+			first: i === 0,
+			last: i === ids.length - 1
+		}, id);
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "customize-pane",
+		className: "cz-page",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "cz-preview",
+				"aria-label": "Preview of a pane header with your choice",
+				role: "img",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "cz-preview-row",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "cz-preview-tag",
+						children: "Room to spare"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PreviewHead, {
+						tabs: shownTabs,
+						buttons: shownButtons,
+						icons: false
+					})]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "cz-preview-row cz-preview-narrow",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "cz-preview-tag",
+						children: "Too narrow for words"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PreviewHead, {
+						tabs: shownTabs,
+						buttons: shownButtons,
+						icons: true
+					})]
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+				className: "cz-heading",
+				children: ["Tabs", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InfoTip, {
+					label: "About hidden tabs",
+					children: "A hidden tab still shows while you are on it — opened from ⋯, a shortcut or a link — and ⋯ always lists it. Terminal never shows for a shared folder, Diff and Map only for a session in a git repository, Thread only once a session has workers or messages."
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "cz-list",
+				"aria-label": "Pane header tabs",
+				children: rows(r.tabs, "tabs")
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+				className: "cz-heading",
+				children: ["Buttons", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InfoTip, {
+					label: "About hidden buttons",
+					children: "Everything you switch off here is still one click away in the header's ⋯ menu: the next step (Commit…, Push, Open PR), Fast-track…, Browse history, Copy entire history and Hide window. The cost and the diff stats are read out at the top of ⋯. During the calm first hour an untouched header also leaves Queue and ⏩ to ⋯; once you change anything here it shows exactly your choice."
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", {
+				className: "cz-list",
+				"aria-label": "Pane header buttons",
+				children: rows(r.buttons, "buttons")
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "cz-foot",
+				children: "⋯ is always last: it holds everything switched off here."
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/customize/CustomizeDialog.tsx
+var PAGES = [{
+	id: "sidebar",
+	label: "Sidebar",
+	intro: "Choose which bars sit around your session list, and in what order."
+}, {
+	id: "pane",
+	label: "Pane header",
+	intro: "Choose the tabs and buttons along the top of every session window. The rest stay in its ⋯ menu."
+}];
+function CustomizeDialog() {
+	const open = useUi((s) => s.openDialog === "customize");
+	const closeDialog = useUi((s) => s.closeDialog);
+	const page = useUi((s) => s.customizePage);
+	const setPage = useUi((s) => s.setCustomizePage);
+	const resetSidebarBars = useUi((s) => s.resetSidebarBars);
+	const setPaneHeader = useUi((s) => s.setPaneHeader);
+	const paneCustomized = useUi((s) => s.paneHeader !== null);
+	const barsCustomized = useUi((s) => s.barsExplicit || s.barOrder.length > 0 || !s.showFilter);
+	if (!open) return null;
+	const cur = PAGES.find((p) => p.id === page) || PAGES[0];
+	const canReset = cur.id === "pane" ? paneCustomized : barsCustomized;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		id: "customize-dialog",
+		role: "dialog",
+		"aria-modal": "true",
+		"aria-labelledby": "customize-title",
+		onClose: closeDialog,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: "customize-panel",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "ws-head",
 					children: [
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-							id: "verify-title",
-							children: "Verify"
+							id: "customize-title",
+							children: "Customize"
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "ik-subtitle",
-							children: ["Does the change work?", /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(InfoTip, {
-								id: "verify-how",
-								label: "How Verify works",
-								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyMoments, {
-										liveBranch,
-										overridden
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-										className: "vf-legend-once",
-										children: [
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "vf-step-who vf-who-you",
-												children: "you"
-											}),
-											" = a person checks it ·",
-											" ",
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-												className: "vf-step-who",
-												children: "agent"
-											}),
-											" = the agent does. Pass, Fail and Can't check are all answers; only Pass says it works. On a step:",
-											" ",
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "1" }),
-											" ",
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "2" }),
-											" ",
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "3" }),
-											" answer, ",
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "u" }),
-											" undo,",
-											" ",
-											/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "n" }),
-											" note."
-										]
-									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-										type: "button",
-										className: "linklike vf-replay-tour",
-										onClick: () => replayTour("verify"),
-										children: "Replay the Verify tour"
-									})
-								]
-							})]
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "customize-tabs",
+							role: "tablist",
+							"aria-label": "What to customize",
+							children: PAGES.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								role: "tab",
+								id: "customize-tab-" + p.id,
+								"aria-selected": p.id === cur.id,
+								"aria-controls": "customize-body",
+								className: p.id === cur.id ? "active" : "",
+								onClick: () => setPage(p.id),
+								children: p.label
+							}, p.id))
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TourButton, { tour: "verify" }),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
-							id: "verify-close",
+							id: "customize-close",
 							onClick: closeDialog,
 							children: "Close"
 						})
 					]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					id: "verify-body",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifySwitch, {}),
-						sources,
-						checklists,
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyNewChecklist, {
-							targets,
-							reason: noTargetsReason(instancesQ.data || [], plans, closed),
-							plans,
-							preselect,
-							open: newOpen,
-							onToggle: setNewOpen,
-							onReveal: (planId, addStep) => {
-								setQuery("");
-								setReveal({
-									planId,
-									nonce: Date.now(),
-									addStep
-								});
-							}
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
-							className: "pr-advanced vf-watch-fold",
-							open: showAdd || void 0,
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { children: "Watch a GitHub repository for every push" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "pr-advanced-body",
-								children: showAdd ? addFlow : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									id: "vf-repo-add-btn",
-									className: "test-btn",
-									title: "Each new branch pushed to it gets a checklist",
-									onClick: () => setAddingRepo(true),
-									children: "+ Add repository"
-								})
-							})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "cz-intro",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: cur.intro }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "customize-reset",
+						className: "linklike",
+						disabled: !canReset,
+						title: canReset ? "Back to what a fresh install shows" : "Already the default",
+						onClick: () => cur.id === "pane" ? setPaneHeader(null) : resetSidebarBars(),
+						children: "Reset to default"
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					id: "customize-body",
+					"data-tab": cur.id,
+					role: "tabpanel",
+					"aria-labelledby": "customize-tab-" + cur.id,
+					children: cur.id === "pane" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneHeaderPicker, {}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SidebarBarsPicker, {})
+				})
+			]
+		})
+	});
+}
+//#endregion
+//#region src/components/dialogs/PromptsDialog.tsx
+function PromptsPanel({ onUse } = {}) {
+	const closeDialog = useUi((s) => s.closeDialog);
+	const focused = useUi((s) => s.focused);
+	const railOrder = useUi((s) => s.railOrder);
+	const aliases = useUi((s) => s.aliases);
+	const { data: instances } = useInstances();
+	const [picked, setPicked] = (0, import_react.useState)(null);
+	const [saved, setSaved] = (0, import_react.useState)([]);
+	const [name, setName] = (0, import_react.useState)("");
+	const [text, setText] = (0, import_react.useState)("");
+	const [pop, setPop] = (0, import_react.useState)(null);
+	const listRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		setSaved(loadUserPresets());
+		setPop(null);
+	}, []);
+	(0, import_react.useEffect)(() => {
+		const closePop = () => setPop(null);
+		const list = listRef.current;
+		list?.addEventListener("scroll", closePop);
+		window.addEventListener("resize", closePop);
+		return () => {
+			list?.removeEventListener("scroll", closePop);
+			window.removeEventListener("resize", closePop);
+		};
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (!pop) return;
+		const onKey = (e) => {
+			if (e.key !== "Escape") return;
+			e.preventDefault();
+			setPop(null);
+		};
+		document.addEventListener("keydown", onKey);
+		return () => document.removeEventListener("keydown", onKey);
+	}, [pop]);
+	const running = (0, import_react.useMemo)(() => runningTitles(instances, railOrder), [instances, railOrder]);
+	const options = (0, import_react.useMemo)(() => promptTargets(focused, running, (t) => aliases[t] || windowName(t)), [
+		focused,
+		running,
+		aliases
+	]);
+	const target = resolveTarget(picked, focused, options);
+	const pastePrompt$1 = async (prompt) => {
+		if (!await pastePrompt(target, running, prompt)) return;
+		setPop(null);
+		if (useUi.getState().openDialog === "prompts") closeDialog();
+	};
+	const addPrompt = () => {
+		const n = name.trim();
+		const t = text.trim();
+		if (!n) {
+			toast("Give the prompt a name");
+			return;
+		}
+		if (!t) {
+			toast("Enter the prompt text");
+			return;
+		}
+		const { replaced } = upsertUserPreset(n, t);
+		setSaved(loadUserPresets());
+		setName("");
+		setText("");
+		toast(replaced ? `Saved prompt “${n}” — it replaced “${replaced}” (names ignore case)` : `Added prompt “${n}”`);
+	};
+	const section = (label, items, deletable, kind) => items.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "prompts-group-label",
+		children: label
+	}), items.map((p) => {
+		const key = kind + ":" + p.name;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "prompt-card",
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "prompt-card-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "prompt-card-main",
+						title: onUse ? "Put it in the new session's Task box" : target === ALL_RUNNING ? "Paste into every running session" : "Paste into the chosen session",
+						onClick: () => onUse ? onUse(p.prompt) : pastePrompt$1(p.prompt),
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "prompt-card-name",
+							children: p.name
 						})
-					]
-				})]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "prompt-card-expand" + (pop?.key === key ? " open" : ""),
+						title: "Show the full prompt",
+						"aria-expanded": pop?.key === key,
+						onClick: (e) => {
+							e.stopPropagation();
+							const anchor = e.currentTarget.getBoundingClientRect();
+							setPop((cur) => cur?.key === key ? null : {
+								anchor,
+								text: p.prompt,
+								key
+							});
+						},
+						children: "⋮"
+					}),
+					deletable && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "prompt-card-del",
+						title: "Delete this saved prompt",
+						onClick: (e) => {
+							e.stopPropagation();
+							setPop(null);
+							const list = loadUserPresets().filter((q) => q.name !== p.name);
+							saveUserPresets(list);
+							setSaved(list);
+						},
+						children: "✕"
+					})
+				]
 			})
+		}, key);
+	})] }, label) : null;
+	const popStyle = pop ? (() => {
+		const w = Math.min(380, window.innerWidth - 24);
+		const left = Math.max(12, Math.min(pop.anchor.right - w, window.innerWidth - w - 12));
+		return {
+			width: w + "px",
+			left: left + "px",
+			top: pop.anchor.bottom + 6 + "px"
+		};
+	})() : void 0;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "prompts-panel",
+		onClick: () => {
+			if (pop) setPop(null);
+		},
+		children: [
+			!onUse && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "cz-tab-head",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "prompts-target-wrap",
+					onClick: (e) => e.stopPropagation(),
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: "Paste into"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("select", {
+						id: "prompts-target",
+						className: !target ? "prompts-notarget" : "",
+						value: target,
+						disabled: !options.length,
+						onChange: (e) => setPicked(e.target.value || null),
+						children: [!target && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: "",
+							children: "no session selected"
+						}), options.map((o) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", {
+							value: o.value,
+							children: o.label
+						}, o.value))]
+					})]
+				})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "prompts-hint",
+				children: onUse ? "Click a prompt to put it in the new session's Task box." : "Click a prompt to paste it into the chosen session — nothing is sent until you press Enter there."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				id: "prompts-list",
+				ref: listRef,
+				children: [section("Built-in", BUILTIN_PRESETS, false, "b"), section("Saved", saved, true, "u")]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "prompts-add",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "text",
+						id: "prompts-add-name",
+						autoComplete: "off",
+						spellCheck: false,
+						placeholder: "New prompt name…",
+						value: name,
+						onChange: (e) => setName(e.target.value)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("textarea", {
+						id: "prompts-add-text",
+						rows: 3,
+						placeholder: "Prompt text…",
+						value: text,
+						onChange: (e) => setText(e.target.value),
+						onKeyDown: (e) => {
+							if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+								e.preventDefault();
+								addPrompt();
+							}
+						}
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "prompts-add-btn",
+						onClick: addPrompt,
+						children: "Add prompt"
+					})
+				]
+			}),
+			pop && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "prompt-pop",
+				style: popStyle,
+				onClick: (e) => e.stopPropagation(),
+				children: pop.text
+			}), document.body)
+		]
+	});
+}
+function PromptsDialog() {
+	const open = useUi((s) => s.openDialog === "prompts");
+	const target = useUi((s) => s.dialogTarget);
+	const closeUi = useUi((s) => s.closeDialog);
+	const closeDialog = () => {
+		closeUi();
+		if (target === "new") {
+			newSessionResume.keep = true;
+			useUi.getState().openDialogFor("new-session");
+		}
+	};
+	if (!open) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		id: "prompts-dialog",
+		role: "dialog",
+		"aria-modal": "true",
+		"aria-labelledby": "prompts-title",
+		onClose: closeDialog,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: "prompts-dialog-panel",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "ws-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+						id: "prompts-title",
+						children: "Prompts"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "ik-subtitle",
+						children: "Saved text you send to a running session. To start a new session from a saved setup, use Templates."
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "prompts-close",
+						onClick: closeDialog,
+						children: "Close"
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptsPanel, { onUse: target === "new" ? (text) => {
+				newSessionResume.prompt = text;
+				closeDialog();
+			} : void 0 })]
 		})
 	});
 }
@@ -111587,7 +113870,7 @@ function useFirstLaunchTour() {
 function WelcomeTour() {
 	useFirstLaunchTour();
 	const open = useUi((s) => s.tourOpen);
-	const covered = useUi((s) => s.openDialog === "settings" || s.openDialog === "intake" || s.openDialog === "setup");
+	const covered = useUi((s) => s.openDialog === "settings" || s.openDialog === "flights" || s.openDialog === "setup");
 	const finishTour = useUi((s) => s.finishTour);
 	if (!open || covered) return null;
 	const letsGo = () => {
@@ -112300,6 +114583,7 @@ function FolderPickerWindow() {
 //#region src/lib/surfaceHash.ts
 var BY_HASH = {
 	new: "new-session",
+	flights: "flights",
 	intake: "intake",
 	verify: "verify",
 	settings: "settings",
@@ -112314,6 +114598,12 @@ var BY_DIALOG = {
 function hashFor(name, target) {
 	const h = name ? BY_DIALOG[name] : void 0;
 	if (!h) return "";
+	if (h === "flights") {
+		const t = String(target || "").replace(/^schedule\/new$/, "schedule");
+		if (!t || t === "board") return "#flights";
+		const cut = t.indexOf("/");
+		return "#flights/" + (cut < 0 ? encodeURIComponent(t) : encodeURIComponent(t.slice(0, cut)) + "/" + encodeURIComponent(t.slice(cut + 1)));
+	}
 	const t = target && !(h === "schedule" && target === "new") ? "/" + encodeURIComponent(target) : "";
 	return "#" + h + t;
 }
@@ -112339,7 +114629,14 @@ function installSurfaceHash(win = window) {
 	let pendingClose = false;
 	const urlWith = (hash) => loc.pathname + loc.search + hash;
 	const first = parseHash(loc.hash);
-	if (first) useUi.getState().openDialogFor(first.name, first.target);
+	if (first) {
+		useUi.getState().openDialogFor(first.name, first.target);
+		const s = useUi.getState();
+		const now = hashFor(s.openDialog, s.dialogTarget);
+		if (now && now !== loc.hash) try {
+			hist.replaceState(null, "", urlWith(now));
+		} catch {}
+	}
 	const unsub = useUi.subscribe((s, prev) => {
 		if (s.openDialog === prev.openDialog && s.dialogTarget === prev.dialogTarget) return;
 		const want = hashFor(s.openDialog, s.dialogTarget);
@@ -112531,10 +114828,9 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TerminalGrid, { specialPanes }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewSessionDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsDialog, { onOpenSysLogsPane: () => toggleSpecial("syslogs") }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(IntakeDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlightsDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CustomizeDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptsDialog, {}),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommitDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerSessionViewer, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MakePrDialog, {}),

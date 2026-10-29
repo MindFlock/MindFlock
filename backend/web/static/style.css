@@ -2758,6 +2758,1011 @@
 .devices-advanced #pair-by-token input {
   min-width: 240px;
 }
+/* Flights (FlightsDialog.tsx) — prefix fl-.
+ *
+ * One card with a tab strip over one scrolling body, Intake's anatomy: the
+ * three surfaces it absorbed keep their own markup inside it, stripped of their
+ * card chrome (border, shadow, fixed width) so they read as tabs, not as cards
+ * in a card. Robot blocks are solid, *you* blocks are outlined in the
+ * needs-you gold, the current block pulses. The block row scrolls inside its
+ * own container, so a phone never scrolls the page sideways. */
+
+#flights-panel {
+  width: 900px;
+  max-width: 94vw;
+  /* Top edge and ceiling: the top-bar dialogs' shared ones (Modal.css). */
+  min-height: min(460px, var(--dlg-max-h));
+  padding: 18px 22px 20px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-sizing: border-box;
+}
+
+#flights-panel .fl-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+#flights-panel .fl-head h2 {
+  margin: 0;
+  font-size: 14.5px;
+}
+
+.fl-tabs {
+  display: flex;
+  gap: 4px;
+  flex: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.fl-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  padding: 6px 11px;
+  margin-bottom: -1px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.fl-tab:hover {
+  color: var(--text);
+}
+
+.fl-tab.active {
+  color: var(--text);
+  font-weight: 600;
+  border-bottom-color: var(--accent);
+}
+
+.fl-count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  border-radius: 999px;
+  padding: 1px 7px;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  margin-left: 6px;
+}
+
+.fl-count.fl-count-you {
+  color: var(--gold-ink);
+  background: var(--gold-fill);
+  border-color: var(--gold-fill);
+  margin-left: 0;
+}
+
+.fl-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+}
+
+.fl-note {
+  font-size: 12.5px;
+  margin: 6px 0;
+}
+
+.fl-empty {
+  font-size: 12.5px;
+  margin: 4px 0 2px;
+}
+
+.fl-btn {
+  white-space: nowrap;
+}
+
+/* --- The embedded surfaces: their card chrome off ------------------------ */
+
+#flights-panel #intake-panel,
+#flights-panel #verify-panel,
+#flights-panel #templates-card {
+  width: auto;
+  max-width: none;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+#flights-panel #intake-body,
+#flights-panel #verify-body {
+  overflow: visible;
+}
+
+.tpl-head-title {
+  font-size: 12px;
+}
+
+/* --- Board ----------------------------------------------------------------- */
+
+.fl-board {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.fl-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fl-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.fl-group-needs > .fl-group-head {
+  color: var(--gold);
+}
+
+.fl-group-hint {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+details.fl-group-landed > summary {
+  cursor: pointer;
+  list-style: revert;
+}
+
+/* A flight's strip on the Board. */
+.fl-strip-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.fl-strip-card.fl-needs {
+  border-color: var(--tone-attention);
+  box-shadow: inset 3px 0 0 var(--tone-attention);
+}
+
+.fl-strip-card.fl-state-done,
+.fl-strip-card.fl-state-cancelled {
+  opacity: 0.8;
+}
+
+.fl-strip-body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 12px;
+  cursor: pointer;
+  border-radius: 10px;
+  min-width: 0;
+}
+
+.fl-strip-body:hover {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.fl-strip-body:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.fl-strip-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fl-strip-title {
+  font-weight: 600;
+  font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.fl-strip-plan,
+.fl-strip-session {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.fl-strip-session {
+  font-family: var(--mono, ui-monospace, monospace);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fl-menu {
+  flex: none;
+}
+
+/* The block chips: a row that scrolls inside itself. */
+.fl-chips {
+  display: flex;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0 0 2px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.fl-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  border-radius: 999px;
+  padding: 2px 9px 2px 7px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.fl-chip-robot.fl-chip-done {
+  background: color-mix(in srgb, var(--green) 14%, var(--panel));
+  border-color: color-mix(in srgb, var(--green) 40%, var(--border));
+  color: var(--text);
+}
+
+/* You steps: outlined in the needs-you gold, whatever their state. */
+.fl-chip-you {
+  border: 1.5px solid var(--tone-attention);
+  background: transparent;
+}
+
+.fl-chip-you.fl-chip-done {
+  color: var(--text);
+}
+
+.fl-chip-failed {
+  border-color: var(--red);
+  color: var(--red);
+}
+
+.fl-chip-skipped {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.fl-chip-current {
+  color: var(--text);
+  font-weight: 600;
+  border-color: var(--accent);
+}
+
+.fl-chip-current.fl-chip-you,
+.fl-chip-waiting_you {
+  border-color: var(--tone-attention);
+  background: color-mix(in srgb, var(--tone-attention) 18%, transparent);
+}
+
+.fl-chip-current .fl-chip-glyph {
+  animation: fl-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes fl-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fl-chip-current .fl-chip-glyph {
+    animation: none;
+  }
+}
+
+.fl-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.fl-chips-jump .fl-chip {
+  border-style: dashed;
+  border-color: var(--accent);
+}
+
+.fl-strip-now {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.fl-now-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tone-working);
+  flex: none;
+}
+
+.fl-now-dot.fl-now-you {
+  background: var(--tone-attention);
+}
+
+.fl-now-title {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fl-now-elapsed {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.fl-now-paused {
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+/* Paused: the current block is marked, but nothing pulses. */
+.fl-state-paused .fl-chip-current .fl-chip-glyph {
+  animation: none;
+}
+
+.fl-now-reason {
+  color: var(--red);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fl-progress {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.fl-landed {
+  color: var(--green);
+  font-weight: 600;
+}
+
+/* A parked you step: its text, its tick boxes, Done / Skip. */
+.fl-you {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 12px 10px;
+}
+
+.fl-you-text {
+  margin: 0;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+}
+
+.fl-you-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12.5px;
+}
+
+.fl-you-items label {
+  display: inline-flex;
+  gap: 6px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.fl-you-acts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.fl-jump-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Verify's due / failing checklists, one line each. */
+.fl-check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.fl-check-row:hover {
+  border-color: var(--accent);
+}
+
+.fl-check-row.is-failing {
+  border-color: color-mix(in srgb, var(--red) 55%, var(--border));
+}
+
+.fl-check-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fl-check-state {
+  color: var(--gold);
+  white-space: nowrap;
+}
+
+.fl-check-row.is-failing .fl-check-state,
+.fl-check-row.is-failing .fl-check-glyph {
+  color: var(--red);
+}
+
+.fl-check-branch {
+  font-size: 11px;
+  color: var(--muted);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Arrivals: Intake's rows, grouped by source. */
+.fl-arrival-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fl-arrival-source {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.fl-plan-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  margin-top: 4px;
+}
+
+.fl-plan-pick .fl-plan-pick-label {
+  color: var(--muted);
+}
+
+.fl-plan-pick select {
+  max-width: 170px;
+  font-size: 11.5px;
+}
+
+/* --- Plans ----------------------------------------------------------------- */
+
+.fl-plans {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.fl-plan-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fl-plan-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 7px 9px;
+  cursor: pointer;
+}
+
+.fl-plan-item:hover {
+  background: var(--panel-2);
+}
+
+.fl-plan-item.active {
+  background: var(--panel-2);
+  border-color: var(--accent);
+}
+
+.fl-plan-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.fl-plan-meta {
+  font-size: 11px;
+}
+
+.fl-plan-new {
+  color: var(--accent);
+}
+
+.fl-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.fl-editor-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fl-editor-head .fl-plan-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 3px 6px;
+  color: var(--text);
+}
+
+.fl-editor-head .fl-plan-title:hover,
+.fl-editor-head .fl-plan-title:focus {
+  border-color: var(--border);
+}
+
+.fl-builtin-tag {
+  font-size: 10.5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 7px;
+  color: var(--muted);
+}
+
+.fl-unsaved {
+  font-size: 11.5px;
+}
+
+/* The row of blocks: scrolls inside itself, never the page. */
+.fl-row-scroll {
+  overflow-x: auto;
+  padding: 6px 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.fl-row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  width: max-content;
+  padding: 0 8px;
+}
+
+.fl-row-cell {
+  display: flex;
+  align-items: center;
+}
+
+.fl-block {
+  width: 132px;
+  min-height: 58px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  padding: 7px 10px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  cursor: grab;
+  user-select: none;
+}
+
+.fl-block-robot {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.fl-block-you {
+  border: 2px dashed var(--tone-attention);
+}
+
+.fl-block.selected {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.fl-block:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.fl-block.fl-described {
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+}
+
+.fl-block-kind {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.fl-block-you .fl-block-kind {
+  color: var(--gold);
+}
+
+.fl-block-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.fl-block-new {
+  font-size: 10px;
+  color: var(--accent);
+}
+
+/* The + between blocks doubles as the arrow from one to the next. */
+.fl-add {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin: 0 6px;
+  border-radius: 50%;
+  border: 1px dashed var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+}
+
+.fl-add:hover,
+.fl-add.active {
+  border-style: solid;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.fl-add.fl-drop {
+  width: 34px;
+  border: 2px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+}
+
+.fl-describe {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 230px;
+  margin-left: 8px;
+}
+
+.fl-describe textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  font: inherit;
+  font-size: 12px;
+}
+
+.fl-describe .fl-btn {
+  align-self: flex-start;
+}
+
+.fl-palette {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.fl-palette-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fl-palette-head {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.fl-palette-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 9px;
+  cursor: pointer;
+}
+
+.fl-palette-item.fl-kind-you {
+  border: 1.5px dashed var(--tone-attention);
+}
+
+.fl-palette-item:hover {
+  border-color: var(--accent);
+}
+
+.fl-palette-label {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.fl-palette-summary {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.fl-palette-close {
+  grid-column: 1 / -1;
+  justify-self: end;
+}
+
+.fl-block-form,
+.fl-section,
+.fl-takeoff-ask {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.fl-block-form-head {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12.5px;
+}
+
+.fl-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.fl-field .fl-field-label {
+  color: var(--muted);
+}
+
+/* Two classes deep: a field's control is outranked by `.set-row input` in
+   a host that wraps it. */
+.fl-field textarea,
+.fl-field input[type="text"],
+.fl-field input[type="number"],
+.fl-field select {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+}
+
+.fl-field.fl-field-bool {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.fl-field.fl-field-inline {
+  max-width: 260px;
+}
+
+.fl-when,
+.fl-session-defaults {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px 14px;
+}
+
+.fl-when .tpl-cron-preview {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.fl-block-acts {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.fl-editor-foot {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.fl-foot-spacer {
+  flex: 1;
+}
+
+.fl-error {
+  margin: 0;
+}
+
+/* --- The pane strip (Pane.tsx, its own row above the terminal) ----------- */
+
+.fl-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+  font-size: 12px;
+  min-width: 0;
+}
+
+.fl-strip.fl-needs {
+  background: color-mix(in srgb, var(--tone-attention) 14%, var(--panel-2));
+  box-shadow: inset 3px 0 0 var(--tone-attention);
+}
+
+.fl-strip-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fl-strip-line {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.fl-strip .fl-you.fl-you-compact {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 0;
+}
+
+.fl-strip .fl-you-compact .fl-you-items {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+}
+
+.fl-strip .fl-btn {
+  padding: 1px 9px;
+  font-size: 11.5px;
+}
+
+.fl-strip .fl-jump-row,
+.fl-strip .fl-chips {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* --- Narrow (phone / side panel) ------------------------------------------ */
+
+@media (max-width: 600px) {
+  #flights-panel {
+    padding: 14px 12px;
+    max-width: 100vw;
+  }
+  .fl-tabs {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .fl-tab {
+    flex: none;
+  }
+  .fl-plans {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .fl-plan-list {
+    flex-direction: row;
+    overflow-x: auto;
+  }
+  .fl-plan-item {
+    flex: none;
+  }
+  .fl-strip-session {
+    display: none;
+  }
+  #flights-panel .pr-open-item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
 /* The ask pop-up (AskDialog.tsx): a small card in the middle of the screen
    — the plain centred `.modal`, never `.top-dialog` — gold-edged like every
    "needs your answer" surface (the answer strip, the bell's Needs you). */
@@ -7439,6 +8444,19 @@ p.set-hint {
   max-width: none;
   flex: 0 1 auto;
   min-width: 0;
+}
+
+/* A flight's chip names its step ("You: Approve the merge", "Paused flight"):
+   capped, with a real ellipsis, so the session's name beside it stays
+   readable. The whole text is the chip's title. Two classes deep to outrank
+   the content-sized rule above. */
+.inst .stagechip.chip-flight {
+  display: inline-block;
+  max-width: 9.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
 }
 
 /* A force-start the server accepted but hasn't turned into a session yet: it
