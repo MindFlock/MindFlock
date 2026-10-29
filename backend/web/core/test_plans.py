@@ -133,6 +133,8 @@ __all__ = [
     "upsert",
     "ensure_plan_for",
     "owner_for_branch",
+    "is_settled",
+    "open_human_steps",
     "intent_from_prompt",
     "session_intent",
     "refresh_for_push",
@@ -871,6 +873,29 @@ def _current_run(plan: dict) -> Optional[dict]:
     if plan["live_at"] and run.get("prelive"):
         return None
     return run
+
+
+def is_settled(plan: dict) -> bool:
+    """Public :func:`_all_settled`: every step of the plan's current run has
+    an answer nobody is still owed (the Flights verify step's done test)."""
+    return _all_settled(plan)
+
+
+def open_human_steps(plan: dict) -> list:
+    """The steps of the plan's current run a PERSON still owes an answer: a
+    human step with no settled answer, or an agent step the agent marked
+    ``blocked`` (its handover — see :func:`_settled`). With no current run,
+    every human step is open."""
+    run = _current_run(plan)
+    results = (run or {}).get("results") or {}
+    out = []
+    for step in plan["steps"]:
+        entry = results.get(step["id"]) or {}
+        if _settled(entry):
+            continue
+        if step.get("actor") == "human" or entry.get("result") == "blocked":
+            out.append(step)
+    return out
 
 
 def _unshipped(plan: dict) -> bool:

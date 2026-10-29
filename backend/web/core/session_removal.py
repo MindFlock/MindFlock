@@ -213,6 +213,19 @@ def _disarm_removed_session(title: str) -> None:
 _SESSION_REMOVED_HOOKS.append(_disarm_removed_session)
 
 
+def _cancel_removed_flight(title: str) -> None:
+    """Cancel the flight a removed session was on (core.flight_driver says
+    ``flight.finished``). Deleting the session ends its flight; a flight never
+    deletes a session. Titles come straight back, so the flight must not wait
+    for ``flights.prune``'s grace and hand its cursor to a namesake."""
+    from backend.web.core import flight_driver as _flight_driver
+
+    _flight_driver.on_session_removed(title)
+
+
+_SESSION_REMOVED_HOOKS.append(_cancel_removed_flight)
+
+
 def _release_tracker_claim(title: str) -> None:
     """Take the ``mindflock:working`` label off the ticket a closed (or
     shipped) session had claimed on its tracker — on a background thread, the

@@ -294,6 +294,59 @@ def providers_delete(key: str) -> None:
         pass
 
 
+# --------------------------------------------------------------------------- #
+# flight plans (core.flights; flights.json itself is local, never synced)
+# --------------------------------------------------------------------------- #
+def _flights():
+    from backend.web.core import flights
+
+    return flights
+
+
+def flight_plans_list() -> Dict[str, dict]:
+    return _flights().read_plans_strict()
+
+
+def flight_plans_canon(value: object) -> object:
+    if not isinstance(value, dict):
+        return value
+    out = dict(value)
+    # When it was last saved is this device's fact, not the plan's: hashing it
+    # would make two devices holding the same plan disagree forever.
+    out.pop("updated", None)
+    sess = out.get("session")
+    if isinstance(sess, dict) and sess.get("repo_path"):
+        out["session"] = dict(
+            sess, repo_path=settings_sync.canonical_url(sess["repo_path"])
+        )
+    return out
+
+
+def flight_plans_localize(incoming: object, current: object) -> object:
+    if not isinstance(incoming, dict):
+        return incoming
+    out = dict(incoming)
+    sess = out.get("session")
+    if isinstance(sess, dict) and sess.get("repo_path"):
+        cur = current.get("session") if isinstance(current, dict) else None
+        cur_path = cur.get("repo_path") if isinstance(cur, dict) else ""
+        out["session"] = dict(
+            sess,
+            repo_path=settings_sync.localize_url(sess["repo_path"], cur_path or ""),
+        )
+    return out
+
+
+def flight_plans_write(key: str, value: object) -> None:
+    if not isinstance(value, dict):
+        raise ValueError("a flight plan must be an object")
+    _flights().put_plan(key, value)
+
+
+def flight_plans_delete(key: str) -> None:
+    _flights().delete_plan(key)
+
+
 settings_sync.register_store(
     "templates",
     templates_list,
@@ -309,6 +362,15 @@ settings_sync.register_store(
     red_zones_write,
     red_zones_delete,
     label="Red zones",
+)
+settings_sync.register_store(
+    "flight_plans",
+    flight_plans_list,
+    flight_plans_write,
+    flight_plans_delete,
+    canon_fn=flight_plans_canon,
+    localize_fn=flight_plans_localize,
+    label="Flight plans",
 )
 settings_sync.register_store(
     "providers",
