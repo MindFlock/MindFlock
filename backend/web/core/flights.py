@@ -83,6 +83,12 @@ __all__ = [
     "op_pause",
     "op_resume",
     "op_cancel",
+    "adhoc_plan",
+    "with_lead",
+    "absorb_steps",
+    "op_add_step",
+    "op_edit_step",
+    "op_remove_step",
 ]
 
 _LOCK = threading.Lock()
@@ -144,6 +150,9 @@ HISTORY_EVENTS = (
     "paused",
     "resumed",
     "jumped",
+    "added",
+    "edited",
+    "removed",
 )
 ON_FAIL = ("halt", "agent", "skip", "you")
 TRIGGER_KINDS = ("manual", "ticket", "pr", "issue", "schedule")
@@ -1282,6 +1291,147 @@ def arm_pending(
     )
 
 
+#: The ``plan_id`` of a flight drawn at take-off rather than from a saved plan.
+ADHOC_PLAN_ID = "adhoc"
+
+
+def adhoc_plan(raw_steps, base: Optional[dict] = None, name: str = "") -> dict:
+    """The plan an ad-hoc ``POST /api/flights/start`` flies: ``raw_steps``
+    validated like a plan's (strict: :class:`PlanError` with ``steps[i]…``),
+    after ``base``'s steps when a ``plan_id`` came too — those keep their ids,
+    the given ones take the next free ``sN``. Alone, the given steps are
+    numbered ``s1..sN`` and the plan is :data:`ADHOC_PLAN_ID`."""
+    if not isinstance(raw_steps, list):
+        raise PlanError("steps is a list", "steps")
+    stripped = [dict(s, id="") if isinstance(s, dict) else s for s in raw_steps]
+    given = normalize_steps(stripped, strict=True)
+    if base is None:
+        return {
+            "id": ADHOC_PLAN_ID,
+            "name": _text(name, 120) or "Ad-hoc flight",
+            "session": _blank_session(),
+            "steps": given,
+        }
+    steps = copy.deepcopy(base["steps"])
+    if len(steps) + len(given) > MAX_STEPS:
+        raise PlanError("a flight has at most %d steps" % MAX_STEPS, "steps")
+    _renumber_after(steps, given)
+    return dict(copy.deepcopy(base), steps=steps + given)
+
+
+def _blank_session() -> dict:
+    return {"repo_path": "", "program": "", "model": "", "in_place": False}
+
+
+def _sid_number(sid: str) -> int:
+    m = re.match(r"^s(\d+)$", str(sid or ""))
+    return int(m.group(1)) if m else 0
+
+
+def _renumber_after(existing: List[dict], new: List[dict], used=()) -> None:
+    """Give each of ``new`` the next free ``sN`` after every id in
+    ``existing`` (and ``used``: ids history still names), in place."""
+    n = max(
+        [_sid_number(s["id"]) for s in existing] + [_sid_number(u) for u in used] + [0]
+    )
+    for s in new:
+        n += 1
+        s["id"] = "s%d" % n
+
+
+def with_lead(
+    plan: dict, lead: List[dict], start_at: str = "", attach: bool = False
+) -> Tuple[dict, str]:
+    """``plan`` with ``lead`` (absorbed ship steps) placed where its flight
+    starts — before the plan's own steps from that point — and the
+    ``start_at`` that makes the flight begin on the first of them. Steps
+    before the start are recorded skipped either way. Raises
+    :class:`FlightError` ``unknown_step`` / :class:`PlanError` (over 40)."""
+    if not lead:
+        return plan, start_at
+    cursor = start_cursor(plan, start_at, attach)
+    steps = copy.deepcopy(plan["steps"])
+    if len(steps) + len(lead) > MAX_STEPS:
+        raise PlanError("a flight has at most %d steps" % MAX_STEPS, "steps")
+    lead = copy.deepcopy(lead)
+    _renumber_after(steps, lead)
+    return (
+        dict(plan, steps=steps[:cursor] + lead + steps[cursor:]),
+        lead[0]["id"],
+    )
+
+
+#: Which ship rung a session stage proves done (``autopilot._STAGE_ACHIEVED``).
+_STAGE_RUNG = {"committed": "commit", "pushed": "push", "pr": "pr"}
+
+
+def absorb_steps(rec: Optional[dict], stage: str) -> List[dict]:
+    """The ship steps that carry on an armed fast-track run ``rec`` (the
+    autopilot record) from the observed session ``stage``: every rung after
+    the one the stage proves, up to the run's target (its ``lane``, else its
+    ``depth``), in :data:`_DEPTH_ORDER` order. ``merge`` is never proven by a
+    stage. ``ask_first`` lands on the one step the run would have asked
+    before — the commit for a commit lane, else the push — and only while
+    that ask is still ahead (the record is held short of its lane). The run's
+    own commit message rides along unless it was a placeholder. Pure."""
+    if not rec:
+        return []
+    lane = str(rec.get("lane") or "")
+    depth = str(rec.get("depth") or "")
+    target = lane if lane in SHIP_LANES else depth
+    if target not in SHIP_LANES:
+        return []
+    got = _STAGE_RUNG.get(str(stage or ""), "")
+    first = _DEPTH_ORDER.index(got) + 1 if got else _DEPTH_ORDER.index("commit")
+    rungs = [
+        r
+        for r in _DEPTH_ORDER[first : _DEPTH_ORDER.index(target) + 1]
+        if r in SHIP_LANES
+    ]
+    held = (
+        bool(rec.get("ask_first"))
+        and depth in _DEPTH_ORDER
+        and _DEPTH_ORDER.index(depth) < _DEPTH_ORDER.index(target)
+    )
+    ask_at = "commit" if target == "commit" else "push"
+    message = (
+        ""
+        if rec.get("message_auto") or rec.get("message_written")
+        else _text(rec.get("message"), 500)
+    )
+    return [
+        normalize_step(
+            {
+                "kind": "ship",
+                "config": {
+                    "lane": r,
+                    "ask_first": held and r == ask_at,
+                    "message": message,
+                },
+            },
+            i,
+        )
+        for i, r in enumerate(rungs)
+    ]
+
+
+def note_absorbed(
+    flight: dict, lead_ids: List[str], halted: str = "", now: Optional[float] = None
+) -> dict:
+    """History for the steps a start took over from a fast-track run (an
+    ``added`` event on the first of them; a run that had stopped keeps its
+    reason there)."""
+    ts = float(now if now is not None else time.time())
+    titles = [s["title"] for s in flight["steps"] if s["id"] in lead_ids]
+    if not titles:
+        return flight
+    note = "taken over from Fast-track: %s" % " → ".join(titles)
+    if halted:
+        note += " (it had stopped: %s)" % halted
+    _hist(flight, ts, lead_ids[0], "added", note)
+    return flight
+
+
 # --------------------------------------------------------------------------- #
 # Lease, prune
 # --------------------------------------------------------------------------- #
@@ -1975,6 +2125,10 @@ def apply(flight: dict, action: dict, now: float) -> dict:
         if action.get(key):
             flight[key] = str(action[key])
     step = _current(flight)
+    if kind == "finish" and step is not None:
+        # A step was added after the pass read the flight: never land over it.
+        _advance(flight, now)
+        return flight
     if kind == "finish" or step is None:
         if flight["state"] not in FINAL:
             _finish(flight, "done", "", now)
@@ -2225,6 +2379,116 @@ def op_cancel(
     cur = _current(flight)
     _hist(flight, ts, cur["id"] if cur else "", "halted", reason)
     _finish(flight, "cancelled", reason, ts)
+    return flight
+
+
+def _editable(flight: dict) -> None:
+    """Steps change only on a flight in the air (running, waiting, paused)."""
+    if flight["state"] not in HOLDING:
+        raise FlightError(
+            "finished",
+            409,
+            "this flight is %s — its steps can't change"
+            % {"halted": "halted", "done": "landed"}.get(flight["state"], "over"),
+        )
+
+
+def _pending_index(flight: dict, sid: str) -> int:
+    """The index of ``sid`` if it is still ahead of the flight and untouched,
+    else 409 ``in_progress``."""
+    i = _step_index(flight, sid)
+    ss = flight["step_states"][sid]
+    if i <= flight["cursor"] or ss["state"] != "pending" or ss["detail"]:
+        raise FlightError(
+            "in_progress",
+            409,
+            "%s has already started — only a step still ahead can change"
+            % flight["steps"][i]["title"],
+        )
+    return i
+
+
+def _one_step(raw, index: int, taken) -> dict:
+    """A single body step validated like a plan's (``field`` names ``step…``)."""
+    try:
+        return normalize_step(raw, index, strict=True, taken=taken)
+    except PlanError as err:
+        raise PlanError(err.message, re.sub(r"^steps\[\d+\]", "step", err.field))
+
+
+def op_add_step(
+    flight: dict, raw, at: Optional[int] = None, now: Optional[float] = None
+) -> dict:
+    """Add a step to a flight in the air: appended, or inserted at index
+    ``at`` (which must be after the current step — 409 ``in_progress``). It
+    takes the next free ``sN``. A flight whose last step is finishing gains
+    a step to go on to (the planner only lands with nothing left ahead)."""
+    ts = float(now if now is not None else time.time())
+    _editable(flight)
+    steps = flight["steps"]
+    if len(steps) >= MAX_STEPS:
+        raise FlightError(
+            "too_many_steps", 409, "a flight has at most %d steps" % MAX_STEPS
+        )
+    if at is None:
+        i = len(steps)
+    else:
+        try:
+            if isinstance(at, bool):
+                raise TypeError(at)
+            i = int(at)
+        except (TypeError, ValueError):
+            raise FlightError("bad_at", 400, "at is a step index")
+        if i < 0 or i > len(steps):
+            raise FlightError("bad_at", 400, "at is 0..%d" % len(steps))
+        if i <= flight["cursor"]:
+            raise FlightError(
+                "in_progress", 409, "a step can only be added after the current one"
+            )
+    step = _one_step(
+        dict(raw, id="") if isinstance(raw, dict) else raw,
+        i,
+        {s["id"] for s in steps},
+    )
+    _renumber_after(steps, [step], [h["step"] for h in flight["history"]])
+    steps.insert(i, step)
+    flight["step_states"][step["id"]] = _blank_step_state()
+    where = "at the end" if i == len(steps) - 1 else "before %s" % steps[i + 1]["title"]
+    _hist(flight, ts, step["id"], "added", "%s, %s" % (step["title"], where))
+    flight["updated"] = ts
+    return flight
+
+
+def op_edit_step(flight: dict, sid: str, patch, now: Optional[float] = None) -> dict:
+    """Change a step still ahead of the flight: ``title`` / ``config`` (the
+    whole config, validated like a plan step's) / ``on_fail``; its kind and
+    id stay."""
+    ts = float(now if now is not None else time.time())
+    _editable(flight)
+    i = _pending_index(flight, sid)
+    patch = patch if isinstance(patch, dict) else {}
+    raw = copy.deepcopy(flight["steps"][i])
+    for key in ("title", "config", "on_fail"):
+        if key in patch:
+            raw[key] = patch[key]
+    step = _one_step(raw, i, {s["id"] for s in flight["steps"]} - {sid})
+    if step == flight["steps"][i]:
+        return flight
+    flight["steps"][i] = step
+    _hist(flight, ts, sid, "edited", step["title"])
+    flight["updated"] = ts
+    return flight
+
+
+def op_remove_step(flight: dict, sid: str, now: Optional[float] = None) -> dict:
+    """Take a step still ahead of the flight out of it."""
+    ts = float(now if now is not None else time.time())
+    _editable(flight)
+    i = _pending_index(flight, sid)
+    step = flight["steps"].pop(i)
+    flight["step_states"].pop(sid, None)
+    _hist(flight, ts, sid, "removed", step["title"])
+    flight["updated"] = ts
     return flight
 
 

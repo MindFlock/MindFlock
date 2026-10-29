@@ -19,6 +19,8 @@ NOW = time.time()
 @pytest.fixture(autouse=True)
 def _store(tmp_path, monkeypatch):
     monkeypatch.setenv("MINDFLOCK_FLIGHTS_DIR", str(tmp_path / "flights"))
+    # A start reads (and may disarm) the session's fast-track record.
+    monkeypatch.setenv("MINDFLOCK_AUTOPILOT_FILE", str(tmp_path / "autopilot.json"))
     monkeypatch.setattr(D, "_JOBS", {})
     monkeypatch.setattr(D, "_REVIEWS", {})
     monkeypatch.setattr(D, "_CHECKS", {})
@@ -774,3 +776,182 @@ def test_an_effect_that_fails_with_on_fail_agent_tells_the_agent(srv, row, monke
     run(D.step_flight(f["id"]))
     assert sent and sent[0].startswith("[MindFlock flight] Verify failed: no checklist")
     assert F.get(f["id"])["step_states"]["s1"]["detail"]["phase"] == "fix"
+
+
+# --------------------------------------------------------------------------- #
+# Live flights: ad-hoc starts, absorbing a fast-track, steps changed in the air
+# --------------------------------------------------------------------------- #
+def _own_run(title="s", **kw):
+    rec = D._autopilot.arm(
+        title, kw.pop("depth", "pr"), source="session", lane="pr", message="Fix it"
+    )
+    if kw:
+        rec = D._autopilot.update(title, **kw)
+    return rec
+
+
+def test_absorbed_ship_steps_drive_lanes_like_normal_ones(srv, row, monkeypatch):
+    from backend.web.core import lanes
+
+    srv._session_stage = lambda inst: {"stage": "committed"}
+    published = []
+    srv._publish_autopilot = published.append
+    _own_run()
+    plan = F.save_plan({"name": "P", "steps": [{"kind": "agent"}, {"kind": "notify"}]})
+    absorbed = []
+    f = run(D.start({"plan_id": plan["id"], "title": "s"}, absorbed))
+    assert absorbed == ["push", "pr"]
+    assert [(s["id"], s["kind"]) for s in f["steps"]] == [
+        ("s1", "agent"),
+        ("s3", "ship"),
+        ("s4", "ship"),
+        ("s2", "notify"),
+    ]
+    assert f["cursor"] == 1 and f["steps"][1]["config"]["message"] == "Fix it"
+    assert f["history"][-1]["event"] == "added"
+    # The run is disarmed: the flight carries the ladder on, alone.
+    assert D._autopilot.get("s") is None and published == ["s"]
+    armed = []
+
+    def fake_arm(title, lane, **kw):
+        armed.append((title, lane, kw["source"], kw["item"]))
+        return {"started": 1.0}
+
+    monkeypatch.setattr(lanes, "arm_session", fake_arm)
+    run(D.step_flight(f["id"]))
+    assert armed == [("s", "push", "flight", f["id"])]
+    rec = {"state": "done", "lane": "push", "depth": "push"}
+    rec.update(source="flight", item=f["id"])
+    monkeypatch.setattr(D._autopilot, "get", lambda t: dict(rec))
+    run(D.step_flight(f["id"]))
+    assert armed[-1] == ("s", "pr", "flight", f["id"])
+    assert F.get(f["id"])["cursor"] == 2
+
+
+def test_a_halted_run_is_absorbed_with_its_reason(srv):
+    srv._session_stage = lambda inst: {"stage": "agent"}
+    _own_run(state="halted", reason="pre-commit failed")
+    f = run(D.start({"title": "s", "steps": [{"kind": "notify"}]}))
+    assert f["plan_id"] == "adhoc" and f["plan_name"] == "Flight on s"
+    assert [(s["id"], s["kind"], s["config"].get("lane")) for s in f["steps"]] == [
+        ("s2", "ship", "commit"),
+        ("s3", "ship", "push"),
+        ("s4", "ship", "pr"),
+        ("s1", "notify", None),
+    ]
+    assert f["cursor"] == 0
+    assert f["step_states"][f["steps"][0]["id"]]["state"] == "pending"
+    assert "pre-commit failed" in f["history"][-1]["note"]
+    assert D._autopilot.get("s") is None
+
+
+def test_runs_that_are_not_absorbed_are_left_alone(srv):
+    srv._session_stage = lambda inst: {"stage": ""}
+    plan = F.save_plan({"name": "P", "steps": [{"kind": "notify"}]})
+    for kw in ({"state": "done"}, {}):
+        _own_run(**kw)
+        body = {"plan_id": plan["id"], "title": "s"}
+        if not kw:
+            body["absorb_fasttrack"] = False
+        absorbed = []
+        f = run(D.start(body, absorbed))
+        assert absorbed == [] and [s["kind"] for s in f["steps"]] == ["notify"]
+        assert D._autopilot.get("s") is not None
+        F.mutate(f["id"], lambda x: F.op_cancel(x))
+    # A flight's own record is never taken for the session's run.
+    D._autopilot.arm("s", "push", source="flight", item="f_old")
+    f = run(D.start({"plan_id": plan["id"], "title": "s"}))
+    assert len(f["steps"]) == 1 and D._autopilot.get("s")["item"] == "f_old"
+
+
+def test_adhoc_start_needs_a_session_or_a_folder(srv, monkeypatch):
+    with pytest.raises(F.FlightError) as err:
+        run(D.start({"steps": [{"kind": "notify"}]}))
+    assert (err.value.status, err.value.error) == (400, "needs_title")
+    with pytest.raises(F.PlanError):
+        run(D.start({"title": "s", "steps": [{"kind": "moon"}]}))
+    with pytest.raises(F.FlightError) as err:
+        run(D.start({"plan_id": "p_nope", "title": "s", "steps": []}))
+    assert err.value.error == "unknown_plan"
+    import backend.web.core.session_create as sc
+
+    created = []
+
+    async def fake_create(payload, **kw):
+        created.append(payload)
+        return 202, {"title": "new-1"}
+
+    monkeypatch.setattr(sc, "create_result", fake_create)
+    f = run(
+        D.start(
+            {
+                "steps": [{"kind": "agent", "config": {"prompt": "go"}}],
+                "repo_path": "/r",
+            }
+        )
+    )
+    assert created == [{"repo_path": "/r", "prompt": "go"}]
+    assert (f["session"], f["plan_name"], f["plan_id"]) == (
+        "new-1",
+        "Flight on new-1",
+        "adhoc",
+    )
+    assert f["step_states"]["s1"]["detail"] == {"seeded": True}
+    # A subject's headline names the flight; plan + steps = both, in order.
+    plan = F.save_plan({"name": "P", "steps": [{"kind": "agent"}, {"kind": "notify"}]})
+    srv.ENGINE.instances["t"] = FakeInst()
+    g = run(
+        D.start(
+            {
+                "plan_id": plan["id"],
+                "title": "t",
+                "steps": [{"kind": "wait", "config": {"minutes": 1}}],
+                "subject": {"kind": "manual", "title": "Login bug"},
+            }
+        )
+    )
+    assert g["plan_id"] == plan["id"] and g["plan_name"] == "P"
+    assert [s["kind"] for s in g["steps"]] == ["agent", "notify", "wait"]
+    srv.ENGINE.instances["u"] = FakeInst()
+    h = run(
+        D.start(
+            {
+                "title": "u",
+                "steps": [{"kind": "notify"}],
+                "subject": {"kind": "manual", "title": "Login bug"},
+            }
+        )
+    )
+    assert h["plan_name"] == "Login bug"
+
+
+def test_change_steps_announces_and_wakes(srv, row, emitted, monkeypatch):
+    woke = []
+    monkeypatch.setattr(D, "wake", lambda: woke.append(1))
+    f = fly({"kind": "agent"}, {"kind": "notify"})
+    after = D.change_steps(
+        f["id"], "add", raw={"kind": "wait", "config": {"minutes": 2}}
+    )
+    assert [s["id"] for s in after["steps"]] == ["s1", "s2", "s3"]
+    after = D.change_steps(f["id"], "edit", "s3", {"title": "Breathe"})
+    assert after["steps"][2]["title"] == "Breathe"
+    after = D.change_steps(f["id"], "remove", "s2")
+    assert [s["id"] for s in after["steps"]] == ["s1", "s3"]
+    assert [e["event"] for e in emitted] == ["flight.changed"] * 3
+    assert len(woke) == 3
+    with pytest.raises(F.FlightError) as err:
+        D.change_steps("f_nope", "add", raw={"kind": "notify"})
+    assert err.value.status == 404
+    with pytest.raises(F.FlightError) as err:
+        D.change_steps(f["id"], "remove", "s1")
+    assert err.value.error == "in_progress"
+
+
+def test_a_step_added_to_a_finishing_flight_is_flown(srv, row, monkeypatch):
+    sent = []
+    monkeypatch.setattr(D, "_run_notify", lambda flight, step: sent.append(step["id"]))
+    f = fly({"kind": "notify"})
+    D.change_steps(f["id"], "add", raw={"kind": "notify"})
+    run(D.step_flight(f["id"]))
+    got = F.get(f["id"])
+    assert sent == ["s1", "s2"] and got["state"] == "done"

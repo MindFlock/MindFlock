@@ -1170,24 +1170,47 @@ def _subject_of(raw) -> dict:
     return _flights._normalize_subject(raw if isinstance(raw, dict) else {})
 
 
-async def start(body: dict) -> dict:
-    """``POST /api/flights/start``. Raises :class:`flights.FlightError`."""
+async def start(body: dict, absorbed: Optional[list] = None) -> dict:
+    """``POST /api/flights/start``. Raises :class:`flights.FlightError`, and
+    :class:`flights.PlanError` for a bad ad-hoc ``steps`` list. The lanes of
+    a fast-track run it took over are appended to ``absorbed``."""
     srv = _server()
     body = body or {}
-    plan = _flights.get_plan(str(body.get("plan_id") or ""))
-    if plan is None:
-        raise _flights.FlightError("unknown_plan", 404, "no such plan")
+    plan_id = str(body.get("plan_id") or "")
     subject = _subject_of(body.get("subject"))
     by = str(body.get("by") or "user")
     title = str(body.get("title") or "").strip()
     start_at = str(body.get("start_at") or "").strip()
+    adhoc = body.get("steps") is not None
+    plan = _flights.get_plan(plan_id) if plan_id or not adhoc else None
+    if plan is None and (plan_id or not adhoc):
+        raise _flights.FlightError("unknown_plan", 404, "no such plan")
+    if adhoc:
+        if plan is None and not title and not str(body.get("repo_path") or "").strip():
+            raise _flights.FlightError(
+                "needs_title", 400, "an ad-hoc flight needs a session (or a folder)"
+            )
+        plan = _flights.adhoc_plan(
+            body.get("steps"),
+            plan,
+            subject.get("title") or ("Flight on %s" % title if title else ""),
+        )
+    if title and title not in srv.ENGINE.instances:
+        raise _flights.FlightError("unknown_session", 404, "no session %s" % title)
     # Everything that can refuse is checked BEFORE a session is created: a
     # bad step id used to leave an orphan session with no flight.
     _flights.start_cursor(plan, start_at, attach=bool(title))
+    take = body.get("absorb_fasttrack")
+    rec = None
+    if title and (take is None or bool(take)):
+        rec = await asyncio.to_thread(_fasttrack_to_absorb, title)
+    lead: List[dict] = []
+    if rec is not None:
+        stage = await asyncio.to_thread(_stage_of, title)
+        lead = _flights.absorb_steps(rec, stage)
+        plan, start_at = _flights.with_lead(plan, lead, start_at, attach=True)
     replaced: list = []
     if title:
-        if title not in srv.ENGINE.instances:
-            raise _flights.FlightError("unknown_session", 404, "no session %s" % title)
         flight = await asyncio.to_thread(
             lambda: _flights.take_off(
                 plan,
@@ -1215,6 +1238,8 @@ async def start(body: dict) -> dict:
         new_title = await _create_session(
             _session_payload(plan["session"], repo, prompt)
         )
+        if adhoc and not plan_id and not subject.get("title"):
+            plan = dict(plan, name="Flight on %s" % new_title)
         flight = await asyncio.to_thread(
             lambda: _flights.take_off(
                 plan,
@@ -1235,11 +1260,63 @@ async def start(body: dict) -> dict:
                     no_prompt=True
                 ),
             )
+    if rec is not None:
+        flight = await asyncio.to_thread(_take_over, flight, rec, lead)
+        if absorbed is not None:
+            absorbed.extend(s["config"]["lane"] for s in lead)
     for old in replaced:
         await asyncio.to_thread(_announce, None, old)
     _emit("flight.changed", flight)
     wake()
     return flight
+
+
+def _fasttrack_to_absorb(title: str) -> Optional[dict]:
+    """The session's own fast-track run a flight takes over: one still
+    running, or one that stopped (``halted``) — never a finished one, nor a
+    flight's own (blocking)."""
+    rec = _autopilot.get(title)
+    if not rec or rec.get("source") == "flight":
+        return None
+    return rec if rec.get("state") in ("running", "halted") else None
+
+
+def _stage_of(title: str) -> str:
+    """The session's git stage (``committed`` / ``pushed`` / ``pr`` …), read
+    fresh the way the autopilot driver reads it, else off the published row."""
+    srv = _server()
+    inst = srv.ENGINE.instances.get(title)
+    if inst is not None:
+        try:
+            return str((srv._session_stage(inst) or {}).get("stage") or "")
+        except Exception:  # noqa: BLE001
+            pass
+    return str(_row(title).get("stage") or "")
+
+
+def _take_over(flight: dict, rec: dict, lead: List[dict]) -> dict:
+    """After a start absorbed ``rec``: say so in the flight's history and
+    disarm the run, so the flight's ship steps carry the ladder on with no
+    second driver (blocking). A record the flight's own step has armed in
+    the meantime (``source == "flight"``) is left alone."""
+    title = flight["session"]
+    ids = [s["id"] for s in flight["steps"][flight["cursor"] :][: len(lead)]]
+    halted = (
+        str(rec.get("reason") or "Fast-track stopped")
+        if rec.get("state") == "halted"
+        else ""
+    )
+    after = _flights.mutate(
+        flight["id"], lambda x: _flights.note_absorbed(x, ids, halted)
+    )
+    still = _autopilot.get(title)
+    if still is not None and still.get("source") != "flight":
+        _autopilot.disarm(title)
+        try:
+            _server()._publish_autopilot(title)
+        except Exception:  # noqa: BLE001
+            pass
+    return after or flight
 
 
 _OPS = {
@@ -1303,6 +1380,35 @@ def operate(flight_id: str, op: str, step: str = "", note: str = "") -> dict:
     after = _flights.mutate(flight_id, _do)
     if after is None:
         raise _flights.FlightError("unknown_flight", 404, "no such flight")
+    _announce(before, after)
+    wake()
+    return after
+
+
+def change_steps(
+    flight_id: str, op: str, step: str = "", raw=None, at: Optional[int] = None
+) -> dict:
+    """Add / edit / remove a step of a flight in the air (blocking): the
+    change is checked against the flight as stored, under the lock, so a
+    driver pass that moved it meanwhile wins and the route gets its 409.
+    Raises :class:`flights.FlightError` / :class:`flights.PlanError`."""
+    before = _flights.get(flight_id)
+    if before is None:
+        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+
+    def _do(f: dict) -> None:
+        if op == "add":
+            _flights.op_add_step(f, raw, at)
+        elif op == "edit":
+            _flights.op_edit_step(f, step, raw)
+        else:
+            _flights.op_remove_step(f, step)
+
+    after = _flights.mutate(flight_id, _do)
+    if after is None:
+        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+    if _view_key(before) == _view_key(after):
+        _emit("flight.changed", after)
     _announce(before, after)
     wake()
     return after

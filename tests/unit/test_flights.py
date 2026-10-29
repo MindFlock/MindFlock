@@ -1107,3 +1107,220 @@ def test_builtin_ticket_step_only_comments():
     last = F.get_plan("builtin:ticket")["steps"][-1]
     assert last["title"] == "Ticket: comment"
     assert last["config"] == {"state": "", "comment": "Merged by MindFlock"}
+
+
+# --------------------------------------------------------------------------- #
+# Live flights: ad-hoc steps, absorbing a fast-track, steps changed in the air
+# --------------------------------------------------------------------------- #
+def test_adhoc_plan_normalises_and_renumbers():
+    p = F.adhoc_plan(
+        [step("notify", sid="zz"), step("ship", sid="zz", lane="pr")], name="Fix it"
+    )
+    assert p["id"] == "adhoc" and p["name"] == "Fix it"
+    assert [s["id"] for s in p["steps"]] == ["s1", "s2"]
+    assert p["steps"][1]["title"] == "Open PR"
+    assert p["steps"][1]["config"] == {"lane": "pr", "ask_first": False, "message": ""}
+    with pytest.raises(F.PlanError) as err:
+        F.adhoc_plan([step("ship", lane="moon")])
+    assert err.value.field == "steps[0].config.lane"
+    with pytest.raises(F.PlanError):
+        F.adhoc_plan([])
+    with pytest.raises(F.PlanError):
+        F.adhoc_plan("notify")
+    # After a plan's steps: the plan's ids stay, the given ones follow.
+    base = plan_of(step("agent"), step("notify"))
+    both = F.adhoc_plan([step("wait", minutes=5)], base)
+    assert both["id"] == base["id"] and both["name"] == "P"
+    assert [(s["id"], s["kind"]) for s in both["steps"]] == [
+        ("s1", "agent"),
+        ("s2", "notify"),
+        ("s3", "wait"),
+    ]
+    with pytest.raises(F.PlanError):
+        F.adhoc_plan([step("notify")] * 39, base)
+
+
+def _rec(**kw):
+    out = {"state": "running", "source": "session", "depth": "pr", "lane": "pr"}
+    out.update(kw)
+    return out
+
+
+@pytest.mark.parametrize(
+    "stage,lanes",
+    [
+        ("agent", ["commit", "push", "pr"]),
+        ("", ["commit", "push", "pr"]),
+        ("committed", ["push", "pr"]),
+        ("pushed", ["pr"]),
+        ("pr", []),
+    ],
+)
+def test_absorb_takes_the_rungs_still_ahead(stage, lanes):
+    got = F.absorb_steps(_rec(), stage)
+    assert [s["config"]["lane"] for s in got] == lanes
+    assert all(s["kind"] == "ship" for s in got)
+
+
+def test_absorb_merge_is_never_proven_by_a_stage():
+    got = F.absorb_steps(_rec(depth="merge", lane="merge"), "pr")
+    assert [s["config"]["lane"] for s in got] == ["merge"]
+    assert F.absorb_steps(_rec(depth="agent", lane="leave"), "") == []
+    assert F.absorb_steps(None, "") == []
+    # A record from before lanes: its depth is its target.
+    got = F.absorb_steps(_rec(depth="push", lane=""), "committed")
+    assert [s["config"]["lane"] for s in got] == ["push"]
+
+
+def test_absorb_carries_ask_first_to_the_one_step_that_asks():
+    # Held at commit, asking before the push.
+    got = F.absorb_steps(_rec(depth="commit", ask_first=True, message="Fix"), "")
+    assert [(s["config"]["lane"], s["config"]["ask_first"]) for s in got] == [
+        ("commit", False),
+        ("push", True),
+        ("pr", False),
+    ]
+    assert {s["config"]["message"] for s in got} == {"Fix"}
+    # A commit lane asks before the commit itself.
+    got = F.absorb_steps(_rec(depth="agent", lane="commit", ask_first=True), "agent")
+    assert [(s["config"]["lane"], s["config"]["ask_first"]) for s in got] == [
+        ("commit", True)
+    ]
+    # Already approved (raised to its lane): nothing asks any more; a
+    # placeholder message is not carried as if someone had typed it.
+    got = F.absorb_steps(
+        _rec(ask_first=True, message="Work on x", message_auto=True), ""
+    )
+    assert not any(s["config"]["ask_first"] for s in got)
+    assert {s["config"]["message"] for s in got} == {""}
+
+
+def test_with_lead_places_the_absorbed_steps_where_the_flight_starts():
+    base = plan_of(step("agent"), step("ship", lane="push"), step("notify"))
+    lead = F.absorb_steps(_rec(), "committed")
+    plan, start_at = F.with_lead(base, lead, attach=True)
+    assert [(s["id"], s["kind"]) for s in plan["steps"]] == [
+        ("s1", "agent"),
+        ("s4", "ship"),
+        ("s5", "ship"),
+        ("s2", "ship"),
+        ("s3", "notify"),
+    ]
+    assert start_at == "s4"
+    f = F.take_off(plan, session="s", attach=True, start_at=start_at, now=NOW)
+    assert f["cursor"] == 1 and f["step_states"]["s1"]["state"] == "skipped"
+    assert F.with_lead(base, [], "s2") == (base, "s2")
+    F.note_absorbed(f, ["s4", "s5"], "pre-commit failed", now=NOW)
+    assert f["history"][-1]["event"] == "added"
+    assert "Push → Open PR" in f["history"][-1]["note"]
+    assert "pre-commit failed" in f["history"][-1]["note"]
+
+
+def test_planner_does_not_finish_with_a_step_added_after_the_cursor():
+    f = fly(step("notify"))
+    F.op_add_step(f, step("wait", minutes=5), now=NOW)
+    assert [s["id"] for s in f["steps"]] == ["s1", "s2"]
+    # The last original step finishes: the flight goes on to the added one.
+    f = F.apply(f, {"action": "done", "note": ""}, NOW)
+    assert f["state"] == "running" and f["cursor"] == 1
+    # A "finish" decided before the step was added never lands over it.
+    g = fly(step("notify"), session="g")
+    g = F.apply(g, {"action": "done", "note": ""}, NOW)
+    assert g["state"] == "done"
+    h = fly(step("notify"), session="h")
+    h["step_states"]["s1"]["state"] = "done"
+    F.op_add_step(h, step("notify"), now=NOW)
+    out = F.apply(h, {"action": "finish", "note": ""}, NOW)
+    assert out["state"] == "running" and out["cursor"] == 1
+    assert F.next_action(out, {"session": sess()}, NOW)["action"] == "run"
+
+
+def test_op_add_step_rules():
+    f = fly(step("agent"), dict(step("notify"), title="Ping"), step("notify"))
+    with pytest.raises(F.FlightError) as err:
+        F.op_add_step(f, step("notify"), at=0, now=NOW)
+    assert (err.value.status, err.value.error) == (409, "in_progress")
+    with pytest.raises(F.FlightError) as err:
+        F.op_add_step(f, step("notify"), at=9, now=NOW)
+    assert (err.value.status, err.value.error) == (400, "bad_at")
+    with pytest.raises(F.FlightError):
+        F.op_add_step(f, step("notify"), at=True, now=NOW)
+    with pytest.raises(F.PlanError) as perr:
+        F.op_add_step(f, step("ship", lane="moon"), now=NOW)
+    assert perr.value.field == "step.config.lane"
+    F.op_add_step(f, step("wait", sid="s1", minutes=3), at=1, now=NOW)
+    assert [s["id"] for s in f["steps"]] == ["s1", "s4", "s2", "s3"]
+    assert f["step_states"]["s4"]["state"] == "pending"
+    assert f["history"][-1]["event"] == "added"
+    assert f["history"][-1]["note"] == "Wait 3 min, before Ping"
+    # A removed id is never handed out again.
+    F.op_remove_step(f, "s4", now=NOW)
+    F.op_add_step(f, step("notify"), now=NOW)
+    assert f["steps"][-1]["id"] == "s5"
+    # Paused flights take steps; finished / halted ones refuse.
+    F.op_pause(f, now=NOW)
+    F.op_add_step(f, step("notify"), now=NOW)
+    for state in ("halted", "done", "cancelled"):
+        g = copy.deepcopy(f)
+        g["state"] = state
+        with pytest.raises(F.FlightError) as err:
+            F.op_add_step(g, step("notify"), now=NOW)
+        assert (err.value.status, err.value.error) == (409, "finished")
+    full = fly(*[step("notify")] * F.MAX_STEPS, session="full")
+    with pytest.raises(F.FlightError) as err:
+        F.op_add_step(full, step("notify"), now=NOW)
+    assert err.value.error == "too_many_steps"
+
+
+def test_op_edit_and_remove_only_touch_pending_steps_ahead():
+    f = fly(step("agent"), step("wait", minutes=5), step("notify"))
+    with pytest.raises(F.FlightError) as err:
+        F.op_edit_step(f, "s1", {"title": "x"}, now=NOW)
+    assert (err.value.status, err.value.error) == (409, "in_progress")
+    with pytest.raises(F.FlightError) as err:
+        F.op_remove_step(f, "s1", now=NOW)
+    assert err.value.error == "in_progress"
+    with pytest.raises(F.FlightError) as err:
+        F.op_edit_step(f, "s9", {}, now=NOW)
+    assert err.value.status == 404
+    F.op_edit_step(
+        f,
+        "s2",
+        {"title": "Coffee", "config": {"minutes": 10}, "on_fail": "skip"},
+        now=NOW,
+    )
+    s2 = f["steps"][1]
+    assert (s2["id"], s2["kind"], s2["title"], s2["on_fail"]) == (
+        "s2",
+        "wait",
+        "Coffee",
+        "skip",
+    )
+    assert s2["config"]["minutes"] == 10
+    assert f["history"][-1]["event"] == "edited"
+    n = len(f["history"])
+    F.op_edit_step(f, "s2", {}, now=NOW)  # nothing changes: nothing said
+    assert len(f["history"]) == n
+    with pytest.raises(F.PlanError) as perr:
+        F.op_edit_step(f, "s2", {"on_fail": "explode"}, now=NOW)
+    assert perr.value.field == "step.on_fail"
+    # A step marked ahead (skipped) is no longer pending.
+    F.op_skip(f, "s3", now=NOW)
+    with pytest.raises(F.FlightError):
+        F.op_remove_step(f, "s3", now=NOW)
+    F.op_remove_step(f, "s2", now=NOW)
+    assert [s["id"] for s in f["steps"]] == ["s1", "s3"]
+    assert "s2" not in f["step_states"]
+    assert f["history"][-1]["event"] == "removed"
+    assert f["history"][-1]["note"] == "Coffee"
+
+
+def test_step_history_events_survive_the_store():
+    f = fly(step("agent"), step("notify"))
+    F.mutate(f["id"], lambda x: F.op_add_step(x, step("notify"), now=NOW))
+    F.mutate(f["id"], lambda x: F.op_edit_step(x, "s3", {"title": "Ping"}, now=NOW))
+    F.mutate(f["id"], lambda x: F.op_remove_step(x, "s2", now=NOW))
+    got = F.get(f["id"])
+    assert [h["event"] for h in got["history"]][-3:] == ["added", "edited", "removed"]
+    assert [s["id"] for s in got["steps"]] == ["s1", "s3"]
+    assert set(got["step_states"]) == {"s1", "s3"}

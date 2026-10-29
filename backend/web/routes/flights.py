@@ -142,11 +142,21 @@ async def _start_intake(body: dict, subject: dict) -> JSONResponse:
     )
 
 
+def _bad_step(err: _flights.PlanError) -> JSONResponse:
+    return JSONResponse(
+        {"error": "bad_step", "detail": err.message, "field": err.field},
+        status_code=400,
+    )
+
+
 @router.post("/api/flights/start")
 async def flights_start(payload: Optional[dict] = None) -> JSONResponse:
-    """Take off → 202 ``{"flight"}``. ``title`` attaches to an existing
-    session; without it the session is created from the plan. A ticket / PR
-    / issue ``subject`` (``{kind, source, id}``) starts through Intake."""
+    """Take off → 202 ``{"flight", "absorbed"}``. ``title`` attaches to an
+    existing session; without it the session is created from the plan.
+    ``steps`` draws the flight here (after the plan's when ``plan_id`` comes
+    too); the session's own running fast-track becomes its leading ship
+    steps unless ``absorb_fasttrack`` is false. A ticket / PR / issue
+    ``subject`` (``{kind, source, id}``) starts through Intake."""
     body = payload or {}
     subject = body.get("subject")
     if (
@@ -154,11 +164,16 @@ async def flights_start(payload: Optional[dict] = None) -> JSONResponse:
         and str(subject.get("kind") or "").strip().lower() in _INTAKE_SUBJECTS
     ):
         return await _start_intake(body, subject)
+    if "steps" in body and not isinstance(body["steps"], list):
+        return _bad_step(_flights.PlanError("steps is a list", "steps"))
+    absorbed: list = []
     try:
-        flight = await _driver.start(body)
+        flight = await _driver.start(body, absorbed)
+    except _flights.PlanError as err:
+        return _bad_step(err)
     except _flights.FlightError as err:
         return _err(err)
-    return JSONResponse({"flight": flight}, status_code=202)
+    return JSONResponse({"flight": flight, "absorbed": absorbed}, status_code=202)
 
 
 @router.get("/api/flights/{flight_id}")
@@ -185,6 +200,41 @@ def _op(flight_id: str, op: str, step: str = "", note: str = "") -> JSONResponse
     except _flights.FlightError as err:
         return _err(err)
     return JSONResponse({"flight": flight})
+
+
+def _change(flight_id: str, op: str, step: str = "", raw=None, at=None) -> JSONResponse:
+    try:
+        flight = _driver.change_steps(flight_id, op, step, raw, at)
+    except _flights.PlanError as err:
+        return _bad_step(err)
+    except _flights.FlightError as err:
+        return _err(err)
+    return JSONResponse({"flight": flight})
+
+
+@router.post("/api/flights/{flight_id}/steps")
+def flights_step_add(flight_id: str, payload: Optional[dict] = None) -> JSONResponse:
+    """``{"step": Step, "at"?: int}`` → ``{"flight"}``: appended, or inserted
+    at ``at`` (after the current step: 409 ``in_progress``); 409 ``finished``
+    unless the flight is running, waiting on you or paused."""
+    body = payload or {}
+    if not isinstance(body.get("step"), dict):
+        return _bad_step(_flights.PlanError("step is an object", "step"))
+    return _change(flight_id, "add", raw=body["step"], at=body.get("at"))
+
+
+@router.patch("/api/flights/{flight_id}/steps/{step_id}")
+def flights_step_edit(
+    flight_id: str, step_id: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """``{title?, config?, on_fail?}`` on a step still ahead → ``{"flight"}``."""
+    return _change(flight_id, "edit", step_id, raw=payload or {})
+
+
+@router.delete("/api/flights/{flight_id}/steps/{step_id}")
+def flights_step_remove(flight_id: str, step_id: str) -> JSONResponse:
+    """A step still ahead out of the flight → ``{"flight"}``."""
+    return _change(flight_id, "remove", step_id)
 
 
 @router.post("/api/flights/{flight_id}/steps/{step_id}/done")
