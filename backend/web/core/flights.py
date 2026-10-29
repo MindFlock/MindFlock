@@ -1255,12 +1255,14 @@ def arm_pending(
     subject,
     by: str = "intake",
     replaced: Optional[list] = None,
+    branch: str = "",
 ) -> dict:
     """The intake hook: a ``running`` flight for ``title`` BEFORE its session
     exists (keyed like autopilot — an intake title is deterministic). The plan's
     first agent step is the session's initial prompt (the intake-built one), so
-    it is recorded as already running. Raises :class:`FlightError`
-    (``unknown_plan`` 404, ``in_flight`` 409)."""
+    it is recorded as already running. ``branch``: the branch the start will
+    cut (fills ``{branch}``). Raises :class:`FlightError` (``unknown_plan``
+    404, ``in_flight`` 409)."""
     plan = get_plan(plan_id)
     if plan is None:
         raise FlightError("unknown_plan", 404, "no such plan: %s" % plan_id)
@@ -1276,6 +1278,7 @@ def arm_pending(
         by=who,
         seeded=True,
         replaced=replaced,
+        branch=str(branch or ""),
     )
 
 

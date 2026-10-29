@@ -104,7 +104,10 @@ Schedule tab, and the same rules (`core/template_schedule.py`): a schedule
 counts from when it was set, after downtime only the most recent missed run
 fires, a paused trigger fires nothing, and in a group of devices only the
 automation device fires. Each run takes off like **Take off** — a new session
-from the plan's session defaults — recorded with `by: "schedule"`.
+from the plan's session defaults — recorded with `by: "schedule"`. Scheduled
+plans fire from the **templates addon's schedule loop** (`template_schedule.
+run_loop`, beside the templates' own schedules), so they stop with it: a server
+with that addon disabled fires neither.
 
 A run is **skipped** (and says so in the plan's history, with a refetch of the
 Board) while the plan's previous flight is still in the air or its session is

@@ -887,7 +887,13 @@ async def fire_flight(
     }
     try:
         flight = await start(body)
-    except flights.FlightError as err:
+    except (
+        Exception
+    ) as err:  # noqa: BLE001 — one plan's failure never costs the rest of the tick
+        if not isinstance(err, flights.FlightError):
+            err = flights.FlightError(
+                "start_failed", 500, str(err) or type(err).__name__
+            )
         msg = err.detail or err.error
         await asyncio.to_thread(
             record_run,

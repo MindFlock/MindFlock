@@ -22,6 +22,8 @@ from backend.web import server
 from backend.web.core import flights as F
 
 client = TestClient(server.app)
+#: The real arming, for the tests that need an autopilot record to exist.
+_REAL_ARM_AUTOPILOT = server._arm_intake_autopilot
 
 
 class _Stop(Exception):
@@ -741,3 +743,165 @@ def test_pipeline_create_failure_cancels_and_a_retry_reuses(tmp_path, monkeypatc
     )
     assert F.for_session("sc-42")["id"] == left["id"]
     assert armed == []
+
+
+# --------------------------------------------------------------------------- #
+# Review round: stale depth records, {branch}, source vs monitor issues
+# --------------------------------------------------------------------------- #
+def test_a_flight_drops_a_stale_autopilot_record(launch, monkeypatch):
+    """A failed start at depth pr left an autopilot record (here: the flight
+    couldn't be armed, so the depth was); the retry with a plan must not let it
+    ship the session beside the flight — and the failed create drops it too."""
+    from backend.web.core import autopilot
+
+    _stub_ticket(monkeypatch)
+    monkeypatch.setattr(server, "_arm_intake_autopilot", _REAL_ARM_AUTOPILOT)
+    real_arm = F.arm_pending
+
+    def _broken(*a, **k):
+        raise OSError("flights store unreadable")
+
+    monkeypatch.setattr(F, "arm_pending", _broken)
+    r = client.post(
+        "/api/tickets/start", json={"source": "sc", "id": "1", "depth": "pr"}
+    )
+    assert r.status_code == 202
+    assert autopilot.get("sc-1")["depth"] == "pr"
+    launch.run()  # the create fails
+    assert autopilot.get("sc-1") is None
+    # A record from anywhere else (an older start, the pipeline) on a free title…
+    autopilot.arm("sc-1", "pr", source="tix", item="1")
+    monkeypatch.setattr(F, "arm_pending", real_arm)
+    r = client.post(
+        "/api/tickets/start", json={"source": "sc", "id": "1", "plan": "builtin:ticket"}
+    )
+    assert r.status_code == 202
+    assert F.for_session("sc-1")["plan_id"] == "builtin:ticket"
+    assert autopilot.get("sc-1") is None
+
+
+def test_branch_fills_the_first_agent_prompt(launch, monkeypatch):
+    _stub_ticket(monkeypatch)
+    _stub_pr(monkeypatch)
+    _stub_issue(monkeypatch)
+    pid = _plan(
+        [
+            {"kind": "agent", "config": {"prompt": "Work on {branch}."}},
+            {"kind": "notify"},
+        ]
+    )
+    client.post("/api/tickets/start", json={"source": "sc", "id": "1", "plan": pid})
+    client.post(
+        "/api/github/prs/review", json={"repo": "o/r", "number": 7, "plan": pid}
+    )
+    client.post(
+        "/api/github/issues/start", json={"repo": "o/r", "number": 9, "plan": pid}
+    )
+    assert F.for_session("sc-1")["branch"] == "feature/sc-1"
+    assert F.for_session("pr-repo-7")["branch"] == "feature/x"
+    assert F.for_session("issue-r-9")["branch"] == "feature/issue-9"
+    launch.run()
+    prompts = [o.prompt for o in launch.opts]
+    assert any(p.endswith("Work on feature/sc-1.") for p in prompts)
+    assert any(p.endswith("Work on feature/x.") for p in prompts)
+    assert any(p.endswith("Work on feature/issue-9.") for p in prompts)
+
+
+def test_pipeline_fills_branch(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock, patch
+
+    from backend.ticket_ingestion.provisioner import _branch_name_for
+
+    runner, armed = _runner(tmp_path, monkeypatch)
+    pid = _plan(
+        [{"kind": "agent", "config": {"prompt": "On {branch}."}}, {"kind": "notify"}]
+    )
+    _settings(
+        {"ticketing": {"sources": [{"id": "sc", "provider": "shortcut", "plan": pid}]}}
+    )
+    story = _story()
+    with patch.object(
+        runner, "_create_instance", return_value=MagicMock(GetWorktreePath=lambda: None)
+    ) as create:
+        asyncio.run(runner.run(story))
+    assert create.call_args.args[2].endswith("On %s." % _branch_name_for(story))
+    assert F.for_session("sc-42")["branch"] == _branch_name_for(story)
+
+
+def test_pipeline_a_github_issues_source_flies_its_source_plan(tmp_path, monkeypatch):
+    """A story from a github_issues TICKETING SOURCE resolves like its row
+    start: that source's plan — never the issue-repo card's."""
+    from backend.ticket_ingestion.session_runner import _issue_repo
+
+    runner, armed = _runner(tmp_path, monkeypatch)
+    mine = _plan([{"kind": "agent"}, {"kind": "ship", "config": {"lane": "commit"}}])
+    _settings(
+        {
+            "ticketing": {
+                "sources": [{"id": "gh-o-r", "provider": "github_issues", "plan": mine}]
+            },
+            "github": {"issue_repo_settings": {"o/r": {"plan": "builtin:ticket"}}},
+        }
+    )
+    story = SimpleNamespace(
+        provider="github_issues",
+        source_key="gh-o-r",
+        app_url="https://github.com/o/r/issues/9",
+    )
+    assert _issue_repo(story) == ""
+    monitor = SimpleNamespace(provider="github_issues", app_url=story.app_url)
+    assert _issue_repo(monitor) == "o/r"
+    runner._arm(
+        "issue-9",
+        "tix",
+        "gh-o-r",
+        "9",
+        "x",
+        subject={"kind": "ticket", "source": "gh-o-r", "id": "9"},
+    )
+    assert F.for_session("issue-9")["plan_id"] == mine
+
+
+def test_pipeline_monitor_issue_depth_is_its_repo_cards(tmp_path, monkeypatch):
+    runner, armed = _runner(tmp_path, monkeypatch)
+    _settings(
+        {
+            # A same-provider ticketing source's depth must not leak in…
+            "ticketing": {
+                "sources": [{"id": "gh", "provider": "github_issues", "depth": "pr"}]
+            },
+            "github": {"issue_repo_settings": {"o/r": {"depth": "push"}}},
+        }
+    )
+    runner._arm(
+        "issue-r-9",
+        "tix",
+        "github_issues",
+        "9",
+        "x",
+        subject={"kind": "issue", "source": "o/r", "id": "9"},
+    )
+    assert F.for_session("issue-r-9")["plan_id"] == "builtin:ticket@push"
+    # …and a repo with no card flies nothing.
+    runner._arm(
+        "issue-q-1",
+        "tix",
+        "github_issues",
+        "1",
+        "x",
+        subject={"kind": "issue", "source": "o/q", "id": "1"},
+    )
+    assert F.for_session("issue-q-1") is None
+
+
+def test_pipeline_a_failed_create_drops_the_autopilot_record(tmp_path, monkeypatch):
+    from unittest.mock import patch
+
+    from backend.web.core import autopilot
+
+    runner, armed = _runner(tmp_path, monkeypatch)
+    autopilot.arm("sc-42", "push", source="tix", item="42")
+    with patch.object(runner, "_create_instance", side_effect=RuntimeError("no tmux")):
+        with pytest.raises(RuntimeError):
+            asyncio.run(runner.run(_story()))
+    assert autopilot.get("sc-42") is None
