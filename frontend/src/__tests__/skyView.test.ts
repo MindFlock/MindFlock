@@ -179,12 +179,9 @@ describe("the switch points", () => {
     expect(app).toContain('{view === "sky" ? <SkyView /> : <TerminalGrid specialPanes={specialPanes} />}');
     expect(app).toContain("useEffect(() => installViewFlip(), []);");
     expect(app).toContain("<TopBar />");
-    expect(app).toContain("<FlightsDialog />");
-  });
-
-  it("the Flights dialog has no Sky tab any more", () => {
-    expect(code("components/flights/FlightsDialog.tsx")).not.toContain("SkyView");
-    expect(code("lib/flights.ts")).toContain('export const FLIGHTS_TABS: readonly FlightsTab[] = ["plans", "sources", "schedule", "checklists"];');
+    // The flat dialogs, each its own; no Flights dialog any more.
+    for (const d of ["<IntakeDialog />", "<VerifyDialog />"]) expect(app).toContain(d);
+    expect(app).not.toContain("FlightsDialog");
   });
 });
 

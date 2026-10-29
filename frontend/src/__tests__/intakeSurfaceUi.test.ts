@@ -67,14 +67,13 @@ function rule(raw: string, selector: string): string {
 }
 
 describe("the Intake dialog shell", () => {
-  it("is the Sources tab of Flights (the top-bar entry is Flights now)", () => {
-    expect(TOPBAR).not.toContain('id="intake-btn"');
-    expect(TOPBAR).toMatch(/id="flights-btn"[^>]*onClick=\{\(\) => ui\.openDialogFor\("flights"\)\}/);
+  it("is a top-bar surface of its own again (the Flights dialog is retired)", () => {
+    expect(TOPBAR).toContain('id="intake-btn"'); // the top-bar entry
+    expect(TOPBAR).toMatch(/id="intake-btn"[^>]*onClick=\{\(\) => ui\.openDialogFor\("intake"\)\}/);
+    expect(TOPBAR).not.toContain('id="flights-btn"');
     expect(DIALOG).toContain('<div id="intake-panel">');
-    // Embedded, Flights is its Modal; standalone it is still a blocking modal:
-    // its cards carry Remove buttons, so a stray Ctrl+W / Delete must not kill
-    // the session behind it instead.
-    expect(DIALOG).toContain("if (embedded) return <SettingsCtx.Provider value={model}>{panel}</SettingsCtx.Provider>;");
+    // A blocking modal: its cards carry Remove buttons, so a stray Ctrl+W /
+    // Delete must not kill the session behind it instead.
     expect(DIALOG).toContain('<Modal id="intake-dialog"');
   });
 

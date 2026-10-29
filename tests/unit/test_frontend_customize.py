@@ -99,40 +99,40 @@ def test_the_top_bar_has_no_outbox_prompts_or_recent_and_keeps_the_palette_title
 
 def test_verify_always_shows_in_the_top_bar():
     """The owner: Verify should "always show" — no earn-its-slot rule, no
-    per-device memory of it. Verify is the Checklists tab of Flights now, and
-    Flights is always on the bar: its badge counts Verify's due checklists
-    (red when one failed) and still says nothing on zero."""
+    per-device memory of it; the badge still says nothing on zero. (Sky round
+    8 put it back on the bar after its stint as a tab of Flights.)"""
     src = _code("components/TopBar.tsx")
-    for gone in ('id="intake-btn"', 'id="verify-btn"', 'id="schedule-btn"'):
-        assert gone not in src
+    assert 'id="verify-btn"' in src
+    assert 'id="flights-btn"' not in src
     assert "showVerify" not in src
     assert "useVerifySettings" not in src
     assert "mf_tb_verify" not in src
-    assert "flightBadgeCount(flights, due, failing, waiting)" in src
     assert (
-        '{badge.count > 0 && <span className={"tb-count" + (badge.failing ? " is-failing" : "")}>{badge.count}</span>}'
+        '{due > 0 && <span className={"tb-count" + (failing > 0 ? " is-failing" : "")}>{due}</span>}'
         in src
     )
     assert (
-        src.index('id="new-btn"')
-        < src.index('id="flights-btn"')
+        src.index('id="intake-btn"')
+        < src.index('id="verify-btn"')
+        < src.index('id="schedule-btn"')
         < src.index('id="settings-btn"')
     )
 
 
 def test_schedule_is_on_the_top_bar_and_sized_like_its_neighbours():
     """The owner couldn't find templates ("only through the command prompt"):
-    Schedule is a tab of Flights, which sits on the bar beside New and wears
-    the worded items' type (by id in TopBar.css, or it reads as fine print
-    beside them); Alt+S opens Flights on Schedule."""
+    Schedule sits on the bar between Verify and Settings, opens on Alt+S, and
+    wears the worded items' type (by id in TopBar.css, or it reads as fine
+    print beside them)."""
     src = _code("components/TopBar.tsx")
-    assert 'ui.openDialogFor("flights")' in src
-    assert 'keys("intake")' in src
-    assert 'run: () => useUi.getState().openDialogFor("flights", "schedule"),' in _code(
+    assert 'ui.openDialogFor("schedule")' in src
+    assert 'keys("schedule")' in src
+    assert 'run: () => useUi.getState().openDialogFor("schedule"),' in _code(
         "lib/keymap.ts"
     )
     css = (_SRC / "components" / "TopBar.css").read_text()
-    assert "#topbar #flights-btn," in css
+    assert "#topbar #schedule-btn," in css
+    assert "#flights-btn" not in css
 
 
 def test_the_bell_hosts_the_waiting_rows_and_drops_its_toggle():
@@ -254,7 +254,7 @@ def test_the_palette_lists_commands_before_focus_rows():
     src = _src("components/palette/CommandPalette.tsx")
     order = [
         'label: "New session…"',
-        'label: "Flights…"',
+        'label: "Intake…"',
         'label: "Customize…"',
         "label: `${actionLabel(id, c)} — ${name}`",
         'label: "Focus: " + windowName(inst.title)',
