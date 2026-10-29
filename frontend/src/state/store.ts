@@ -18,6 +18,7 @@ import { notePrefWrite } from "../lib/prefs";
 import { asPaneHeaderPref, type PaneHeaderPref } from "../lib/paneHeader";
 import { toast } from "../lib/toast";
 import type { TourId } from "../lib/tours";
+import { flightsTargetFor } from "../lib/flights";
 
 export type ViewMode = "auto" | "2" | "4" | "9";
 
@@ -121,6 +122,14 @@ export function windowKey(
 export type DialogName =
   | "new-session"
   | "settings"
+  // Flights (components/flights/FlightsDialog): one route from arrival to
+  // merge — Board · Plans · Sources · Schedule · Checklists. dialogTarget is
+  // "<tab>" or "<tab>/<the embedded surface's own deep link>"
+  // (lib/flights parseFlightsTarget).
+  | "flights"
+  // Intake, Verify and Schedule are tabs of Flights now. Their names are still
+  // accepted by openDialogFor (every old call site, a saved #intake/… link)
+  // and opened as "flights" on the matching tab — the store never holds them.
   | "intake"
   // Customize (CustomizeDialog): "customize" opens its Sidebar tab, and
   // "prompts" below opens it on that tab.
@@ -140,13 +149,12 @@ export type DialogName =
   | "shortcuts"
   // Repo-level red zones + Plan-first, managed outside any one session.
   | "red-zones"
-  // Schedule (TemplatesDialog): the top bar's Schedule (Alt+S), New's
-  // templates strip, the palette's "Schedule…" / "Templates…". dialogTarget
-  // "new" = reopen New on close (lib/templates' readTemplatesTarget).
+  // Schedule (TemplatesDialog, the Flights Schedule tab): Alt+S, New's
+  // templates strip, the palette's "Schedule…" / "Templates…". Its target
+  // "new" = reopen New on close (lib/templates' readTemplatesTarget) rides on
+  // as "schedule/new". Opened as "flights", like "intake" and "verify".
   | "schedule"
-  // The surface's name before it was Schedule. Still accepted by
-  // openDialogFor (old call sites, a saved #templates link) and opened as
-  // "schedule" — the store never holds it.
+  // The surface's name before it was Schedule: opened as Flights → Schedule.
   | "templates"
   // The one dialog every extension's dialog surfaces share; the extension id +
   // surface ride in dialogTarget ("<ext>:<surface>[:<ref>]").
@@ -798,7 +806,11 @@ export const useUi = create<UiState>((set, get) => ({
     set({ lastTab });
   },
   openDialogFor: (name, target = null) =>
-    set({ openDialog: name === "templates" ? "schedule" : name, dialogTarget: target }),
+    set(
+      name === "intake" || name === "verify" || name === "schedule" || name === "templates"
+        ? { openDialog: "flights", dialogTarget: flightsTargetFor(name, target) }
+        : { openDialog: name, dialogTarget: target }
+    ),
   closeDialog: () => set({ openDialog: null, dialogTarget: null }),
   setPrBase: (repo, base) => {
     if (!repo) return;

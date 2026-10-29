@@ -75,6 +75,7 @@ import {
 } from "./TemplateEditor";
 import { TourButton } from "../onboarding/TourButton";
 import { useAutoTour } from "../onboarding/useAutoTour";
+import { embeddedGuard } from "../flights/embedGuard";
 
 // The editor's form and its helpers live with the editor; the dialog's tests
 // (and anything else) keep importing them from here.
@@ -342,6 +343,8 @@ interface ViewProps {
   dirty?: boolean;
   /** "Discard changes?" → Discard: drop the edits and do what was asked. */
   onDiscard?: () => void;
+  /** Drawn inside Flights → Schedule: no Modal of its own and no Close. */
+  embedded?: boolean;
 }
 
 /** Markup only: everything it shows comes in as props. */
@@ -685,31 +688,25 @@ export function TemplatesDialogView(p: ViewProps) {
   const elsewhere = !runs.runs_here && !!runs.runs_on;
   const empty = loaded && templates.length === 0 && ui.editing !== "";
 
-  return (
-    <Modal
-      id="templates-dialog"
-      // The top-bar dialogs' shared fixed top edge (Modal.css): opening the
-      // editor grows the card down instead of re-centring it.
-      className="top-dialog"
-      onClose={p.onClose}
-      // A press outside never throws away a half-edited template.
-      closeOnBackdrop={!p.dirty}
-      // Escape withdraws an open editor or delete question first; on "Discard
-      // changes?" it keeps editing.
-      onEscape={() => {
-        if (ui.discarding) {
-          p.dispatch({ t: "keep-editing" });
-          return true;
-        }
-        if (ui.editing !== null && escapeRef.current?.()) return true;
-        if (ui.editing === null && !ui.confirming) return false;
-        p.dispatch(ui.editing !== null ? { t: "dismiss" } : { t: "cancel" });
-        return true;
-      }}
-    >
-      <div id="templates-card" role="dialog" aria-modal="true" aria-labelledby="templates-title">
+  const onEscape = () => {
+    if (ui.discarding) {
+      p.dispatch({ t: "keep-editing" });
+      return true;
+    }
+    if (ui.editing !== null && escapeRef.current?.()) return true;
+    if (ui.editing === null && !ui.confirming) return false;
+    p.dispatch(ui.editing !== null ? { t: "dismiss" } : { t: "cancel" });
+    return true;
+  };
+  const body = (
+      <div
+        id="templates-card"
+        role={p.embedded ? undefined : "dialog"}
+        aria-modal={p.embedded ? undefined : "true"}
+        aria-labelledby={p.embedded ? undefined : "templates-title"}
+      >
         <div className="tpl-head">
-          <h2 id="templates-title">Schedule</h2>
+          {p.embedded ? <span className="tpl-head-title muted">Templates</span> : <h2 id="templates-title">Schedule</h2>}
           <div className="tpl-head-acts">
             {ui.editing !== "" && !empty && (
               <button
@@ -723,9 +720,11 @@ export function TemplatesDialogView(p: ViewProps) {
               </button>
             )}
             <TourButton tour="schedule" />
-            <button type="button" id="templates-close" onClick={p.onClose}>
-              Close
-            </button>
+            {!p.embedded && (
+              <button type="button" id="templates-close" onClick={p.onClose}>
+                Close
+              </button>
+            )}
           </div>
         </div>
         {!empty && (
@@ -813,14 +812,39 @@ export function TemplatesDialogView(p: ViewProps) {
           )}
         </div>
       </div>
+  );
+  // Embedded, the host (Flights) is the Modal: it asks this view about
+  // Escape and about leaving with unsaved edits (embedGuard).
+  if (p.embedded) {
+    embeddedGuard.current = { escape: onEscape, dirty: () => !!p.dirty };
+    return body;
+  }
+  return (
+    <Modal
+      id="templates-dialog"
+      // The top-bar dialogs' shared fixed top edge (Modal.css): opening the
+      // editor grows the card down instead of re-centring it.
+      className="top-dialog"
+      onClose={p.onClose}
+      // A press outside never throws away a half-edited template.
+      closeOnBackdrop={!p.dirty}
+      // Escape withdraws an open editor or delete question first; on "Discard
+      // changes?" it keeps editing.
+      onEscape={onEscape}
+    >
+      {body}
     </Modal>
   );
 }
 
-export function TemplatesDialog() {
-  const open = useUi((s) => s.openDialog === "schedule");
+/** `embedded`: drawn inside Flights → Schedule — its deep link ("new",
+ * "schedule:<name>", …) comes in as `target` rather than from the store. */
+export function TemplatesDialog({ embedded = false, target: embeddedTarget = null }: { embedded?: boolean; target?: string | null } = {}) {
+  const storeOpen = useUi((s) => s.openDialog === "schedule");
+  const open = embedded || storeOpen;
   useAutoTour("schedule", open);
-  const target = useUi((s) => s.dialogTarget);
+  const storeTarget = useUi((s) => s.dialogTarget);
+  const target = embedded ? embeddedTarget : storeTarget;
   const closeDialog = useUi((s) => s.closeDialog);
   const [templates, setList] = useState<Template[]>(() => templatesNow());
   const [loaded, setLoaded] = useState(false);
@@ -925,7 +949,7 @@ export function TemplatesDialog() {
     // The palette's "Schedule a session…" opens straight onto a NEW template's
     // editor with its schedule already switched on; a template chip's ⏰ in
     // New opens that template's.
-    const want = readTemplatesTarget(useUi.getState().dialogTarget).schedule;
+    const want = readTemplatesTarget(embedded ? embeddedTarget : useUi.getState().dialogTarget).schedule;
     if (want !== null) {
       setScheduleFocus(true);
       dispatch(want ? { t: "schedule", name: want } : { t: "new" });
@@ -969,7 +993,7 @@ export function TemplatesDialog() {
       live = false;
       document.removeEventListener(TEMPLATES_CHANGED, reload);
     };
-  }, [open]);
+  }, [open, embedded ? embeddedTarget : null]);
 
   // Opening an editor seeds the form from the card it is for.
   useEffect(() => {
@@ -1148,6 +1172,7 @@ export function TemplatesDialog() {
         dispatch(a);
       }}
       dirty={dirty}
+      embedded={embedded}
       onDiscard={() => {
         const then = ui.discarding?.then;
         if (!then) return;

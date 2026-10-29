@@ -63,22 +63,12 @@ function view(over: Partial<Parameters<typeof TemplatesDialogView>[0]> = {}) {
 }
 
 describe("the top-bar item", () => {
-  it("sits between Verify and Settings, like Intake and Verify", () => {
-    const v = TOPBAR.indexOf('id="verify-btn"');
-    const sc = TOPBAR.indexOf('id="schedule-btn"');
-    const se = TOPBAR.indexOf('id="settings-btn"');
-    expect(v).toBeGreaterThan(0);
-    expect(v < sc && sc < se).toBe(true);
-    const btn = TOPBAR.slice(sc, se);
-    // The bar's item look, folded into ⋯ on a narrow window (TopBar's
-    // fitTopBar); its tooltip is the one the ⋯ row wears too.
-    expect(btn).toContain('className={"tb-item" + (isFolded("schedule") ? " tb-folded" : "")}');
-    expect(btn).toContain("title={scheduleTitle}");
-    expect(TOPBAR).toMatch(/const scheduleTitle =\s*"Schedule — templates; starts sessions on a timer" \+\s*keys\("schedule"\)/);
-    expect(btn).toContain('ui.openDialogFor("schedule")');
-    // A count only for failures, in the failure red, nothing at zero.
-    expect(btn).toContain('{schedFailing > 0 && <span className="tb-count is-failing">{schedFailing}</span>}');
+  it("is a tab of Flights now: no button of its own, its failures in Flights' tooltip", () => {
+    expect(TOPBAR).not.toContain('id="schedule-btn"');
+    expect(TOPBAR).toContain('id="flights-btn"');
+    // A failed scheduled run still says so on the bar, in the Flights tooltip.
     expect(TOPBAR).toContain("failingSchedules(sched.templates, sched.status).length");
+    expect(TOPBAR).toMatch(/const flightsTitle =[\s\S]*schedFailing > 0/);
   });
 
   it("opens on Alt+S, guarded like Alt+I / Alt+V, and nothing else takes Alt+S", () => {
@@ -89,16 +79,19 @@ describe("the top-bar item", () => {
     expect(KEYMAP.filter((k) => k.alt === true && !k.mod && String(k.key).toLowerCase() === "s").length).toBe(1);
     useUi.getState().closeDialog();
     e?.run({} as KeyboardEvent);
-    expect(useUi.getState().openDialog).toBe("schedule");
+    expect(useUi.getState().openDialog).toBe("flights");
+    expect(useUi.getState().dialogTarget).toBe("schedule");
     useUi.getState().closeDialog();
   });
 });
 
 describe("the old name still lands", () => {
-  it('openDialogFor("templates") opens Schedule, keeping the target', () => {
+  it('openDialogFor("templates") opens Flights → Schedule, keeping the target', () => {
     useUi.getState().openDialogFor("templates", "new");
-    expect(useUi.getState().openDialog).toBe("schedule");
-    expect(useUi.getState().dialogTarget).toBe("new");
+    expect(useUi.getState().openDialog).toBe("flights");
+    expect(useUi.getState().dialogTarget).toBe("schedule/new");
+    useUi.getState().openDialogFor("schedule");
+    expect(useUi.getState().dialogTarget).toBe("schedule");
     useUi.getState().closeDialog();
   });
 

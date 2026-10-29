@@ -1,5 +1,6 @@
-/** The four top-bar dialogs — New, Intake, Verify, Schedule — open at the SAME
- * place: one fixed top edge, written once on the modal shell (Modal.css,
+/** The top-bar dialogs — New and Flights, plus Intake, Verify and Schedule
+ * standalone (they are Flights' tabs now) — open at the SAME place: one fixed
+ * top edge, written once on the modal shell (Modal.css,
  * `.modal.top-dialog`), so hopping between them with Alt+N / I / V / S never
  * jumps and a tab, fold or editor inside one never moves its top. The owner
  * asked for it after New and Intake sat high while Verify and Schedule sat
@@ -13,6 +14,7 @@ const MODAL_CSS = src("components/Modal.css");
 /** [dialog source, the shell's id, the card's id, the card's own sheet(s)] */
 const DIALOGS: [string, string, string, string[]][] = [
   ["components/dialogs/NewSessionDialog.tsx", "new-dialog", "new-form", ["components/dialogs/NewSessionDialog.css"]],
+  ["components/flights/FlightsDialog.tsx", "flights-dialog", "flights-panel", ["components/flights/FlightsDialog.css"]],
   ["components/intake/IntakeDialog.tsx", "intake-dialog", "intake-panel", ["components/intake/IntakeDialog.css"]],
   ["components/dialogs/VerifyDialog.tsx", "verify-dialog", "verify-panel", ["components/dialogs/VerifyDialog.css"]],
   [

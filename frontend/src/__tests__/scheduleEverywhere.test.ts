@@ -89,7 +89,10 @@ describe("wiring", () => {
     expect(PALETTE).toContain('ui.openDialogFor("schedule", "schedule")');
     // "schedule" = a new template; New's ⏰ on a chip names one (lib/templates'
     // readTemplatesTarget, pinned in newSessionDraft.test.ts).
-    expect(TEMPLATES_DIALOG).toContain("const want = readTemplatesTarget(useUi.getState().dialogTarget).schedule;");
+    // Embedded in Flights, the target comes in as a prop ("schedule/schedule").
+    expect(TEMPLATES_DIALOG).toContain(
+      "const want = readTemplatesTarget(embedded ? embeddedTarget : useUi.getState().dialogTarget).schedule;"
+    );
     expect(TEMPLATES_DIALOG).toMatch(/setScheduleFocus\(true\);\s*dispatch\(want \? \{ t: "schedule", name: want \} : \{ t: "new" \}\);/);
   });
 });

@@ -42,8 +42,8 @@ const { topBarShows } = await import("../lib/calm");
 const { useUi } = await import("../state/store");
 
 describe("the tours registry", () => {
-  it("has the eight tours, each under its own id", () => {
-    expect([...TOUR_IDS]).toEqual(["welcome", "new", "intake", "verify", "schedule", "settings", "people", "voice"]);
+  it("has the nine tours, each under its own id", () => {
+    expect([...TOUR_IDS]).toEqual(["welcome", "new", "flights", "intake", "verify", "schedule", "settings", "people", "voice"]);
     expect(Object.keys(TOURS).sort()).toEqual([...TOUR_IDS].sort());
     for (const id of TOUR_IDS) expect(TOURS[id].id).toBe(id);
     expect(isTourId("intake")).toBe(true);
@@ -146,10 +146,12 @@ describe("the tours registry", () => {
     expect(steps[1].target).not.toContain("data-conn");
   });
 
-  it("only Settings' tour switches screens (the others live on one surface) — and Voice opens the mic's options", () => {
+  it("only Settings' and Flights' tours switch screens (the others live on one surface) — and Voice opens the mic's options", () => {
     for (const id of TOUR_IDS)
-      if (id !== "settings" && id !== "voice") for (const s of TOURS[id].steps) expect(s.screen, id).toBeUndefined();
+      if (id !== "settings" && id !== "voice" && id !== "flights") for (const s of TOURS[id].steps) expect(s.screen, id).toBeUndefined();
     for (const s of TOURS.voice.steps) expect([undefined, "mic-pop"], s.title).toContain(s.screen);
+    // Flights walks its Board and Plans tabs, by their tab keys.
+    expect(TOURS.flights.steps.map((s) => s.screen)).toEqual(["board", "board", "plans", "plans"]);
   });
 });
 
@@ -418,19 +420,13 @@ describe("the ? button and the replays", () => {
 });
 
 describe("the top bar in the calm first hour", () => {
-  it("hides Verify until a checklist exists and Schedule until a template does", () => {
-    expect(topBarShows({ calm: true, checklists: 0, templates: 0 })).toEqual({ verify: false, schedule: false });
-    expect(topBarShows({ calm: true, checklists: 1, templates: 0 })).toEqual({ verify: true, schedule: false });
-    expect(topBarShows({ calm: true, checklists: 0, templates: 2 })).toEqual({ verify: false, schedule: true });
+  it("always shows Flights — Verify and Schedule are its tabs, so nothing waits for a first checklist", () => {
+    expect(topBarShows()).toEqual({ flights: true });
   });
 
-  it("shows both whenever the first hour is over", () => {
-    expect(topBarShows({ calm: false, checklists: 0, templates: 0 })).toEqual({ verify: true, schedule: true });
-  });
-
-  it("wires the rule to the two buttons only (Alt+V / Alt+S and the palette don't depend on them)", () => {
-    expect(TOPBAR_SRC).toMatch(/\{shows\.verify && \(\s*<button\s+id="verify-btn"/);
-    expect(TOPBAR_SRC).toMatch(/\{shows\.schedule && \(\s*<button\s+id="schedule-btn"/);
-    expect(TOPBAR_SRC).toContain("calm: useCalm(),");
+  it("wires the rule to the Flights button (Alt+I / V / S and the palette open it regardless)", () => {
+    expect(TOPBAR_SRC).toMatch(/\{shows\.flights && \(\s*<button\s+id="flights-btn"/);
+    expect(TOPBAR_SRC).not.toContain('id="verify-btn"');
+    expect(TOPBAR_SRC).not.toContain('id="schedule-btn"');
   });
 });

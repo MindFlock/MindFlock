@@ -284,7 +284,8 @@ describe("first-run state has exactly one authority", () => {
     expect(auto.text).toContain("calmDecision(");
     expect(auto.text).toContain("firstPrefsPull");
     expect(auto.text).toMatch(/seen\.includes\(o\.id\)/);
-    // Exactly the five top-bar dialogs call it, each for its own tour.
+    // Exactly the top-bar dialogs call it, each for its own tour — Flights,
+    // and the three surfaces it embeds (each still walks its own tab).
     const users = sources
       .filter((f) => /\buseAutoTour\("/.test(f.text))
       .map((f) => [f.path, (f.text.match(/useAutoTour\("([a-z]+)"/) || [])[1]])
@@ -293,6 +294,7 @@ describe("first-run state has exactly one authority", () => {
       ["components/dialogs/NewSessionDialog.tsx", "new"],
       ["components/dialogs/TemplatesDialog.tsx", "schedule"],
       ["components/dialogs/VerifyDialog.tsx", "verify"],
+      ["components/flights/FlightsDialog.tsx", "flights"],
       ["components/intake/IntakeDialog.tsx", "intake"],
       ["components/settings/SettingsDialog.tsx", "settings"],
     ]);

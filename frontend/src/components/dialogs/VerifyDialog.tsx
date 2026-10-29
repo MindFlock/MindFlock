@@ -131,10 +131,14 @@ import { useAutoTour } from "../onboarding/useAutoTour";
 // The deep link — `openDialogFor("verify", <branch>)` — is resolved by
 // `verifyDeepLinkPlan` in verify.ts; its contract is documented there.
 
-export function VerifyDialog() {
-  const open = useUi((s) => s.openDialog === "verify");
+/** `embedded`: drawn inside Flights → Checklists — no Modal, no Close, and
+ * the deep link (a branch) comes in as `target`. */
+export function VerifyDialog({ embedded = false, target: embeddedTarget = null }: { embedded?: boolean; target?: string | null } = {}) {
+  const storeOpen = useUi((s) => s.openDialog === "verify");
+  const open = embedded || storeOpen;
   useAutoTour("verify", open);
-  const target = useUi((s) => (s.openDialog === "verify" ? s.dialogTarget : null)) || "";
+  const storeTarget = useUi((s) => (s.openDialog === "verify" ? s.dialogTarget : null));
+  const target = (embedded ? embeddedTarget : storeTarget) || "";
   const closeDialog = useUi((s) => s.closeDialog);
   // Polls only while the dialog is up; the top bar's badge keeps its own copy
   // of the same query alive for the count.
@@ -538,23 +542,10 @@ export function VerifyDialog() {
     </WorkListPanel>
   );
 
-  return (
-    <SettingsCtx.Provider value={model}>
-      {/* The shared shell: backdrop PRESS and Escape dismiss, Escape only for
-          the topmost modal (so a ⋯ menu or a note box spends it first). */}
-      <Modal
-        id="verify-dialog"
-        // The top-bar dialogs' shared fixed top edge (Modal.css): opening a
-        // plan or adding a repository grows the card down, never moves it.
-        className="top-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="verify-title"
-        onClose={closeDialog}
-      >
+  const panel = (
         <div id="verify-panel">
           <div className="ws-head">
-            <h2 id="verify-title">Verify</h2>
+            {!embedded && <h2 id="verify-title">Verify</h2>}
             <span className="ik-subtitle">
               Does the change work?
               {/* How it works, the legend and the tour — what a first visit
@@ -578,9 +569,11 @@ export function VerifyDialog() {
               </InfoTip>
             </span>
             <TourButton tour="verify" />
-            <button type="button" id="verify-close" onClick={closeDialog}>
-              Close
-            </button>
+            {!embedded && (
+              <button type="button" id="verify-close" onClick={closeDialog}>
+                Close
+              </button>
+            )}
           </div>
 
           <div id="verify-body">
@@ -629,6 +622,24 @@ export function VerifyDialog() {
             </details>
           </div>
         </div>
+  );
+  // Embedded, the host (Flights) is the Modal.
+  if (embedded) return <SettingsCtx.Provider value={model}>{panel}</SettingsCtx.Provider>;
+  return (
+    <SettingsCtx.Provider value={model}>
+      {/* The shared shell: backdrop PRESS and Escape dismiss, Escape only for
+          the topmost modal (so a ⋯ menu or a note box spends it first). */}
+      <Modal
+        id="verify-dialog"
+        // The top-bar dialogs' shared fixed top edge (Modal.css): opening a
+        // plan or adding a repository grows the card down, never moves it.
+        className="top-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="verify-title"
+        onClose={closeDialog}
+      >
+        {panel}
       </Modal>
     </SettingsCtx.Provider>
   );

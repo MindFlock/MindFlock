@@ -269,10 +269,16 @@ function AutoStartOn() {
   return <AutoStartCount on={p.onKinds.length > 0} />;
 }
 
-export function IntakeDialog() {
-  const open = useUi((s) => s.openDialog === "intake");
+/** `embedded`: drawn inside another dialog (Flights → Sources) — no Modal of
+ * its own, no Close, and its deep link comes in as `target` rather than from
+ * the store. Standalone it opens on the store's "intake" (which the store now
+ * maps to Flights, so in the app it is always the embedded one). */
+export function IntakeDialog({ embedded = false, target: embeddedTarget = null }: { embedded?: boolean; target?: string | null } = {}) {
+  const storeOpen = useUi((s) => s.openDialog === "intake");
+  const open = embedded || storeOpen;
   useAutoTour("intake", open);
-  const target = useUi((s) => s.dialogTarget);
+  const storeTarget = useUi((s) => s.dialogTarget);
+  const target = embedded ? embeddedTarget : storeTarget;
   const closeDialog = useUi((s) => s.closeDialog);
   const [tab, setTab] = useState<IntakeTabKey>("tickets");
   const [focus, setFocus] = useState("");
@@ -356,12 +362,10 @@ export function IntakeDialog() {
     tabRefs.current[TABS[to].key]?.focus();
   };
 
-  return (
-    <SettingsCtx.Provider value={model}>
-      <Modal id="intake-dialog" className="top-dialog" onClose={closeDialog}>
+  const panel = (
         <div id="intake-panel">
           <div className="ws-head">
-            <h2>Intake</h2>
+            {!embedded && <h2>Intake</h2>}
             <span className="ik-subtitle">Where your sessions come from</span>
             {/* ONE door for every kind of source — a tracker, or a repository
                 with its uses as ticks. It replaced four "+ Add" buttons at the
@@ -380,9 +384,11 @@ export function IntakeDialog() {
               + Add source
             </button>
             <TourButton tour="intake" />
-            <button type="button" id="intake-close" onClick={closeDialog}>
-              Close
-            </button>
+            {!embedded && (
+              <button type="button" id="intake-close" onClick={closeDialog}>
+                Close
+              </button>
+            )}
           </div>
           <AutoStartLine ticketSources={savedSources.length} gotoTab={switchTab} />
           <div id="intake-tabs" role="tablist" aria-label="Intake">
@@ -430,6 +436,13 @@ export function IntakeDialog() {
             ))}
           </div>
         </div>
+  );
+  // Embedded, the host (Flights) is the Modal.
+  if (embedded) return <SettingsCtx.Provider value={model}>{panel}</SettingsCtx.Provider>;
+  return (
+    <SettingsCtx.Provider value={model}>
+      <Modal id="intake-dialog" className="top-dialog" onClose={closeDialog}>
+        {panel}
       </Modal>
     </SettingsCtx.Provider>
   );
