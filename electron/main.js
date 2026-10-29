@@ -2276,11 +2276,13 @@ function markFirstLaunchDone() {
 
 // The app URL to load: carries `?setup=1` while the first-run hand-off is
 // still owed (see firstRunDeps) and this launch never reached the app before.
+// A join link still owed to the app (see openDeepLink) rides as `#join=`.
 function appUrl(extra) {
   const u = new URL(APP_URL)
   const q = fl.setupQuery(firstRunDeps, isFirstLaunchDone())
   for (const k of Object.keys(q)) u.searchParams.set(k, q[k])
   for (const k of Object.keys(extra || {})) u.searchParams.set(k, extra[k])
+  if (pendingJoinCode) u.hash = 'join=' + encodeURIComponent(pendingJoinCode)
   return u.toString()
 }
 
@@ -2378,6 +2380,8 @@ function createWindow() {
       if (win.webContents.getTitle() !== SIGN_IN_TITLE) {
         firstRunDeps = false
         markFirstLaunchDone()
+        // ...and the join link (an offline or sign-in page kept it owed).
+        pendingJoinCode = ''
       }
     }
     // Query stripped: a refused auto sign-in leaves `?token=` in the URL.
@@ -2653,7 +2657,82 @@ function claimUpdateNotice(version) {
   return true
 }
 
+// Join by link: the server's /join page (an invite link) has an "Open in
+// MindFlock" button, mindflock://join?code=<code>. The OS hands that URL to
+// this shell — macOS as `open-url`, Windows / Linux on the command line of a
+// launch: a second one (the single-instance lock forwards its argv here) or
+// the first. The window then loads the app with `#join=<code>`, which opens
+// People → Join someone prefilled (frontend/src/lib/joinLink.ts); joining is
+// still the person's click. Any other mindflock:// link is ignored.
+const PROTOCOL = 'mindflock'
+const JOIN_CODE_RE = /^mfp[12]:[a-z2-7]+-[a-z2-7]{4}$/
+let pendingJoinCode = ''
+
+// The code of a mindflock://join?code=… link, lowercased, or ''.
+function joinCodeFromDeepLink(raw) {
+  let u
+  try { u = new URL(String(raw || '')) } catch (e) { return '' }
+  if (u.protocol !== PROTOCOL + ':' || u.hostname.toLowerCase() !== 'join' || !/^\/?$/.test(u.pathname)) return ''
+  const code = String(u.searchParams.get('code') || '').trim().toLowerCase()
+  return JOIN_CODE_RE.test(code) ? code : ''
+}
+
+function deepLinkFromArgv(argv) {
+  return (argv || []).find((a) => typeof a === 'string' && a.toLowerCase().startsWith(PROTOCOL + '://')) || ''
+}
+
+function openDeepLink(raw) {
+  const code = joinCodeFromDeepLink(raw)
+  if (!code) {
+    console.log('[mindflock] ignored a mindflock:// link that is not a join link')
+    return
+  }
+  console.log('[mindflock] join link received')
+  pendingJoinCode = code
+  if (!win || win.isDestroyed()) return // the window's first load carries it
+  focusWindow()
+  // On the app already: only the hash changes (no reload) and the page's
+  // hashchange takes it, with no did-finish-load to clear it — so clear here.
+  const onApp = win.webContents.getURL().startsWith(APP_URL) && win.webContents.getTitle() !== SIGN_IN_TITLE
+  win.loadURL(appUrl()).catch(() => {})
+  if (onApp) pendingJoinCode = ''
+}
+
+// An unpackaged `electron <app dir>` run (the dev launcher) is registered the
+// way it was started, or the OS would open a bare Electron.
+function registerProtocol() {
+  try {
+    const ok = process.defaultApp && process.argv.length >= 2
+      ? app.setAsDefaultProtocolClient(PROTOCOL, process.execPath,
+        [path.resolve(process.argv[1])].concat(DEV ? ['--mindflock-dev'] : []))
+      : app.setAsDefaultProtocolClient(PROTOCOL)
+    if (!ok) console.log('[mindflock] mindflock:// links not registered (the OS refused)')
+  } catch (e) {
+    console.log('[mindflock] mindflock:// links not registered:', e && e.message)
+  }
+}
+
+// One shell per profile (dev keeps its own userData, so dev and prod still
+// run side by side): a second launch — a join link clicked while open —
+// hands its argv to this one and quits.
+const singleInstance = app.requestSingleInstanceLock()
+if (!singleInstance) {
+  app.quit()
+} else {
+  app.on('second-instance', (_e, argv) => {
+    const link = deepLinkFromArgv(argv)
+    if (link) openDeepLink(link)
+    else focusWindow()
+  })
+}
+// Before 'ready' too: a cold start from a link on macOS arrives this way.
+app.on('open-url', (e, url) => {
+  e.preventDefault()
+  openDeepLink(url)
+})
+
 app.whenReady().then(() => {
+  if (!singleInstance) return
   // Drop Electron's default application menu: it carries devtools
   // (Ctrl+Shift+I / F12) and reload (Ctrl+R) accelerators — the first is a
   // user-facing hole, the second steals bash reverse-i-search from the
@@ -2677,6 +2756,11 @@ app.whenReady().then(() => {
   // After logger.init: this one logs whether it took, and a first dev run on a
   // fresh machine is exactly when that line is worth having in main.log.
   ensureDevToastName()
+  registerProtocol()
+  // Started BY a join link (Windows / Linux): createWindow's first load
+  // carries it.
+  const first = deepLinkFromArgv(process.argv)
+  if (first) openDeepLink(first)
   createWindow()
   startUpdateChecks()
 })

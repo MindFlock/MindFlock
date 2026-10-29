@@ -16,8 +16,14 @@
  * cards change as links connect, drop or get messages. No protocol words on
  * screen — "safety number", "You invited them", never SAS / listener / dialer.
  *
- * Everything goes through /api/peer*. The invite code is shown only in the
- * response that created it (the server never lists it again).
+ * Everything goes through /api/peer*. The invite code — and the invite link
+ * that carries it (`…/join#<code>`) — is shown only in the response that
+ * created it (the server never lists it again).
+ *
+ * Inviting is the guest link's flow (peer/InviteSessions): a red warning,
+ * "I understand", a picker of sessions and how each is shared — the moment
+ * the other person joins, those are shared with them (on their rail at
+ * once). The moment of joining, on either side, is peer/JoinedCard.
  *
  * This file is the screen and the invite / join half. Each link is a
  * peer/PeerLinkCard (with its joint task, peer/JointTask, and the Mirror
@@ -26,7 +32,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../../api/client";
-import { copyText } from "../../../lib/clipboard";
 import { toast } from "../../../lib/toast";
 import { useNow } from "../../../lib/useNow";
 import { reprobeDoctor, type EventEnvelope } from "../../../state/queries";
@@ -35,18 +40,18 @@ import type { ScreenProps } from "../SettingsDialog";
 import { InstallMissing, type InstallStep } from "../../dialogs/InstallTerminal";
 import { TourButton } from "../../onboarding/TourButton";
 import {
-  inviteExpiryText,
   isCutOffInvite,
   joinPeerCode,
   newOpId,
   PEER_LIVE_EVENTS,
-  type PeerInvite,
-  type PeerReach,
+  type PeerInviteSession,
   type PeerStatus,
 } from "../../../lib/peer";
 import { PEER_JOIN_EVENT, takePendingPeerJoin } from "../../../lib/peerActions";
 import { PeerAdvanced } from "./peer/PeerAdvanced";
 import { GuestLinks } from "./peer/GuestLinks";
+import { InviteSessions, type MadeInvite } from "./peer/InviteSessions";
+import { JoinedCard, type Joined } from "./peer/JoinedCard";
 import { PeerLinkCard } from "./peer/PeerLinkCard";
 import { errText } from "./peer/useAct";
 import "./PeerLinks.css";
@@ -66,14 +71,11 @@ export function PeerLinks(_: ScreenProps) {
   const [install, setInstall] = useState<InstallStep[]>([]);
   const [doctorTick, setDoctorTick] = useState(0);
 
-  // Invite side.
-  const [invite, setInvite] = useState<(PeerInvite & { at: number }) | null>(null);
-  const [joined, setJoined] = useState<{ link_id: string; name: string; sas: string; repaired: boolean } | null>(null);
-  const [inviteBusy, setInviteBusy] = useState(false);
+  // Invite side: the invite made (peer/InviteSessions), then who joined it.
+  const [invite, setInvite] = useState<MadeInvite | null>(null);
+  const [joined, setJoined] = useState<Joined | null>(null);
   const [inviteErr, setInviteErr] = useState("");
-  const [inviteStage, setInviteStage] = useState("");
   const [remoteChosen, setRemoteChosen] = useState(false);
-  const inviteOp = useRef("");
 
   // Join side.
   const [code, setCode] = useState("");
@@ -81,6 +83,8 @@ export function PeerLinks(_: ScreenProps) {
   const [joinErr, setJoinErr] = useState("");
   const [joinStage, setJoinStage] = useState("");
   const [joinNote, setJoinNote] = useState("");
+  // The link just joined (not a reconnect): the "you're connected" card.
+  const [joinedThem, setJoinedThem] = useState<Joined | null>(null);
   const joinOp = useRef("");
   const joinInput = useRef<HTMLInputElement | null>(null);
   // The connection just joined: its card scrolls into view and lights up once.
@@ -113,13 +117,14 @@ export function PeerLinks(_: ScreenProps) {
         if (name === "peer.link_added") {
           const d = (env.data || {}) as Record<string, unknown>;
           // The person we just invited arrived: the invite box becomes "B
-          // joined — read them your safety number".
+          // joined — fix-login is open to them · safety number".
           if (d.role === "listener" && inviteRef.current) {
             setJoined({
               link_id: String(d.link_id || ""),
               name: String(d.peer_name || "Your peer"),
               sas: String(d.sas || ""),
               repaired: !!d.repaired,
+              sessions: Array.isArray(d.sessions) ? (d.sessions as PeerInviteSession[]) : [],
             });
           }
         }
@@ -130,9 +135,7 @@ export function PeerLinks(_: ScreenProps) {
       ev.subscribe("peer.progress", (env: EventEnvelope) => {
         const d = (env.data || {}) as Record<string, unknown>;
         const op = String(d.op_id || "");
-        const text = String(d.text || "");
-        if (op && op === inviteOp.current) setInviteStage(text);
-        if (op && op === joinOp.current) setJoinStage(text);
+        if (op && op === joinOp.current) setJoinStage(String(d.text || ""));
       })
     );
     return () => offs.forEach((off) => off());
@@ -198,26 +201,6 @@ export function PeerLinks(_: ScreenProps) {
     load();
   };
 
-  const createInvite = async (reach: PeerReach) => {
-    const op = newOpId();
-    inviteOp.current = op;
-    setInviteBusy(true);
-    setInviteErr("");
-    setInviteStage("");
-    setJoined(null);
-    try {
-      const inv = await api<PeerInvite>("/api/peer/invites", { json: { reach, op_id: op } });
-      setInvite({ ...inv, at: nowSec() });
-      afterPair();
-    } catch (e) {
-      setInviteErr(errText(e));
-    }
-    inviteOp.current = "";
-    setInviteStage("");
-    setInviteBusy(false);
-    load();
-  };
-
   // "They're somewhere else": turn peer links on (no invite yet) so the
   // install plan offers cloudflared, then create the invite through it.
   const chooseRemote = async () => {
@@ -232,16 +215,6 @@ export function PeerLinks(_: ScreenProps) {
     }
   };
 
-  const cancelInvite = async (id: string) => {
-    try {
-      await api("/api/peer/invites/" + encodeURIComponent(id), { method: "DELETE" });
-      if (invite?.invite_id === id) setInvite(null);
-    } catch (e) {
-      toast(errText(e));
-    }
-    load();
-  };
-
   const join = async () => {
     if (isCutOffInvite(code)) {
       setJoinErr("This invite is cut off — copy the whole message again.");
@@ -253,17 +226,21 @@ export function PeerLinks(_: ScreenProps) {
     setJoinErr("");
     setJoinStage("");
     setJoinNote("");
+    setJoinedThem(null);
     try {
       const link = await joinPeerCode(code, op);
       setCode("");
       afterPair();
-      setJoinNote(
-        link.reconnected
-          ? `Reconnected to ${link.peer_name}` +
-              (link.shared ? " — your shared folder is kept" : "") +
-              (link.sas_verified ? "." : `. Compare the safety number ${link.sas} again — it's new.`)
-          : `Connected to ${link.peer_name}. Compare the safety number ${link.sas} on their card below.`
-      );
+      if (link.reconnected) {
+        setJoinNote(
+          `Reconnected to ${link.peer_name}` +
+            (link.shared ? " — your shared folder is kept" : "") +
+            (link.sas_verified ? "." : `. Compare the safety number ${link.sas} again — it's new.`)
+        );
+      } else {
+        // What their invite opened lands on the rail as it is shared.
+        setJoinedThem({ link_id: link.link_id, name: link.peer_name, sas: link.sas });
+      }
       setFresh(link.link_id);
     } catch (e) {
       setJoinErr(errText(e));
@@ -274,19 +251,16 @@ export function PeerLinks(_: ScreenProps) {
     load();
   };
 
+  // It matches. The "joined" cards stay (✓, then Share a session… / Done).
   const markVerified = async (linkId: string) => {
     try {
       await api("/api/peer/links/" + encodeURIComponent(linkId) + "/verified", { json: { verified: true } });
-      setJoined(null);
-      setInvite(null);
     } catch (e) {
       toast(errText(e));
     }
     load();
   };
-
-  const inviteLeft = invite ? invite.expires_in - (now - invite.at) : 0;
-  const otherInvites = (st?.invites || []).filter((i) => i.invite_id !== invite?.invite_id);
+  const linkOf = (id: string) => st?.links.find((l) => l.link_id === id) || null;
 
   return (
     <>
@@ -304,165 +278,41 @@ export function PeerLinks(_: ScreenProps) {
           <h4 className="set-subtitle">Invite someone</h4>
           {joined ? (
             <div id="peer-joined" className="peer-invite" data-tour="people-safety">
-              <p>
-                <strong>{joined.name}</strong> {joined.repaired ? "reconnected" : "joined"} — read them your
-                safety number <code className="peer-sas">{joined.sas}</code>. If theirs is different, press It
-                doesn't match on their card below.
-              </p>
-              <div className="set-row">
-                <button type="button" className="test-btn" id="peer-joined-match" onClick={() => markVerified(joined.link_id)}>
-                  It matches
-                </button>
-                <button
-                  type="button"
-                  className="test-btn"
-                  onClick={() => {
-                    setJoined(null);
-                    setInvite(null);
-                  }}
-                >
-                  Later
-                </button>
-              </div>
-            </div>
-          ) : invite ? (
-            <div id="peer-invite-code" className="peer-invite">
-              {invite.fallback && (
-                <p className="peer-warn" id="peer-invite-fallback">
-                  {invite.fallback.text}
-                </p>
-              )}
-              <textarea
-                readOnly
-                rows={5}
-                value={invite.message || invite.code}
-                onClick={(e) => (e.target as HTMLTextAreaElement).select()}
+              <JoinedCard
+                side="inviter"
+                joined={joined}
+                link={linkOf(joined.link_id)}
+                sandbox={!!st?.sandbox.available}
+                tick={tick}
+                onMatch={() => markVerified(joined.link_id)}
+                onDone={() => {
+                  setJoined(null);
+                  setInvite(null);
+                }}
               />
-              <div className="set-row">
-                <button
-                  type="button"
-                  className="test-btn"
-                  id="peer-invite-copy"
-                  disabled={inviteLeft <= 0}
-                  onClick={() =>
-                    copyText(invite.message || invite.code).then((ok) =>
-                      toast(ok ? "Invite copied — send it to them" : "Copy failed")
-                    )
-                  }
-                >
-                  Copy invite
-                </button>
-                {inviteLeft > 0 ? (
-                  <button type="button" className="test-btn" onClick={() => cancelInvite(invite.invite_id)}>
-                    Cancel invite
-                  </button>
-                ) : (
-                  <button type="button" className="test-btn" onClick={() => setInvite(null)}>
-                    Dismiss
-                  </button>
-                )}
-              </div>
-              <span className="set-hint" id="peer-invite-expiry">
-                {inviteExpiryText(inviteLeft)}
-                {inviteLeft > 0 && " · works once. "}
-                {inviteLeft > 0 &&
-                  (invite.relay && !invite.direct
-                    ? "They can be anywhere — it connects through a relay that can't read your traffic."
-                    : `They connect to ${invite.host}:${invite.port}, so they need to be on your network or Tailscale.`)}
-              </span>
-              <span className="set-hint">Waiting for them to join — this updates by itself.</span>
-            </div>
-          ) : cloudflaredMissing ? (
-            <div id="peer-reach" className="peer-invite">
-              <span className="set-hint">Where is the person you're inviting?</span>
-              <button
-                type="button"
-                className="test-btn"
-                id="peer-reach-direct"
-                disabled={inviteBusy}
-                onClick={() => createInvite("direct")}
-              >
-                They're on my network or Tailscale
-              </button>
-              <button
-                type="button"
-                className="test-btn"
-                id="peer-reach-remote"
-                disabled={inviteBusy}
-                onClick={chooseRemote}
-              >
-                They're somewhere else
-              </button>
-              {remoteChosen && (
-                <>
-                  <span className="set-hint">
-                    To reach someone on another network this computer needs <strong>cloudflared</strong> (free,
-                    no account; MindFlock never downloads it for you). Install it, then create the invite.
-                  </span>
-                  <InstallMissing steps={install} onDone={() => load()} />
-                  <button
-                    type="button"
-                    className="test-btn"
-                    id="peer-invite"
-                    disabled={inviteBusy}
-                    onClick={() => createInvite("tunnel")}
-                  >
-                    {inviteBusy ? "Creating…" : "Create invite"}
-                  </button>
-                </>
-              )}
             </div>
           ) : (
-            <>
-              <button
-                type="button"
-                className="btn-primary"
-                id="peer-invite"
-                disabled={inviteBusy}
-                onClick={() => createInvite("auto")}
-              >
-                {inviteBusy ? "Creating…" : "Create invite"}
-              </button>
-              {/* With the relay off every invite is already direct. */}
-              {st?.relay?.setting !== "off" && (
-                <button
-                  type="button"
-                  className="linklike"
-                  id="peer-invite-direct"
-                  disabled={inviteBusy}
-                  onClick={() => createInvite("direct")}
-                >
-                  Same network or Tailscale? Make a direct invite
-                </button>
-              )}
-            </>
-          )}
-          {inviteBusy && inviteStage && (
-            <span className="set-hint peer-stage" id="peer-invite-stage">
-              {inviteStage}
-            </span>
+            <InviteSessions
+              st={st}
+              invite={invite}
+              setInvite={(inv) => {
+                setInvite(inv);
+                setJoined(null);
+              }}
+              now={now}
+              loadedAt={loadedAt}
+              cloudflaredMissing={cloudflaredMissing}
+              install={install}
+              remoteChosen={remoteChosen}
+              onRemote={chooseRemote}
+              afterPair={afterPair}
+              reload={load}
+            />
           )}
           {inviteErr && (
             <p className="error" id="peer-invite-error">
               {inviteErr}
             </p>
-          )}
-          {otherInvites.length > 0 && (
-            <ul className="peer-invites" id="peer-invites">
-              {otherInvites.map((i) => {
-                const left = (i.expires_in ?? 0) - (now - loadedAt);
-                return (
-                  <li key={i.invite_id}>
-                    <span className="set-hint">
-                      {i.direct ? "Same-network invite" : "Invite"} waiting · {inviteExpiryText(left)}
-                    </span>{" "}
-                    <button type="button" className="test-btn" onClick={() => cancelInvite(i.invite_id)}>
-                      Cancel
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
           )}
         </div>
         <div className="peer-action" data-tour="people-join">
@@ -471,7 +321,7 @@ export function PeerLinks(_: ScreenProps) {
             <input
               id="peer-join-code"
               ref={joinInput}
-              placeholder="paste the invite you were sent"
+              placeholder="paste the link, the message or the code"
               value={code}
               onChange={(e) => setCode(e.target.value)}
               onKeyDown={(e) => {
@@ -488,8 +338,8 @@ export function PeerLinks(_: ScreenProps) {
             </span>
           ) : (
             <span className="set-hint">
-              Paste the whole message or just the code — either works. A fresh invite from someone you're
-              already connected to reconnects you.
+              Paste the link, the whole message or just the code — any of them works. A fresh invite from
+              someone you're already connected to reconnects you.
             </span>
           )}
           {joinErr && (
@@ -501,6 +351,19 @@ export function PeerLinks(_: ScreenProps) {
             <p className="set-hint" id="peer-join-note">
               {joinNote}
             </p>
+          )}
+          {joinedThem && (
+            <div id="peer-joined-them" className="peer-invite">
+              <JoinedCard
+                side="joiner"
+                joined={joinedThem}
+                link={linkOf(joinedThem.link_id)}
+                sandbox={!!st?.sandbox.available}
+                tick={tick}
+                onMatch={() => markVerified(joinedThem.link_id)}
+                onDone={() => setJoinedThem(null)}
+              />
+            </div>
           )}
         </div>
       </div>

@@ -9,6 +9,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import PEOPLE_SRC from "../components/settings/screens/PeerLinks.tsx?raw";
+import INVITE_SRC from "../components/settings/screens/peer/InviteSessions.tsx?raw";
 import ADV_SRC from "../components/settings/screens/peer/PeerAdvanced.tsx?raw";
 import VIEWER_SRC from "../components/PeerSessionViewer.tsx?raw";
 import TOASTS_SRC from "../components/EventToasts.tsx?raw";
@@ -208,13 +209,14 @@ describe("Talk: the conversation where you are", () => {
 describe("the screen", () => {
   it("says in one line what it is for, and leads with Invite", () => {
     expect(PEOPLE_SRC).toContain("one of you invites, the other joins");
-    expect(PEOPLE_SRC).toMatch(/className="btn-primary"\s+id="peer-invite"/);
+    // The invite is made in the picker (peer/InviteSessions), its primary button.
+    expect(INVITE_SRC).toMatch(/className="btn-primary"\s+id="peer-invite"/);
     expect(PEOPLE_SRC).toContain('<h4 className="set-subtitle">Join someone</h4>');
     expect(PEOPLE_SRC).not.toContain("Join a peer</h4>");
   });
 
   it("only offers a direct invite when the relay isn't already off", () => {
-    expect(PEOPLE_SRC).toMatch(/st\?\.relay\?\.setting !== "off" && \(\s*<button[\s\S]{0,200}id="peer-invite-direct"/);
+    expect(INVITE_SRC).toMatch(/st\?\.relay\?\.setting !== "off" \? \(\s*<label>[\s\S]{0,200}id="peer-invite-direct"/);
   });
 
   it("catches a cut-off invite before asking the server", () => {

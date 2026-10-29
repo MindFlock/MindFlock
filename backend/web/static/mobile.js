@@ -154,7 +154,8 @@
       // Backend reboots a dead agent session on reconnect, so retry — except
       // when the instance / workspace is truly gone.
       if (ev && (ev.code === 4404 || ev.code === 4409)) {
-        setStatus(ev.code === 4404 ? "session gone" : "workspace gone");
+        // A peer's row: they withdrew it — said plainly, not as an error.
+        setStatus(ev.code === 4404 ? (isPeerRow(currentInst()) ? "no longer shared" : "session gone") : "workspace gone");
         return;
       }
       // Paused (the pause just landed, or the list is a tick behind): no
@@ -183,6 +184,18 @@
     if (!title) { emptyEl.classList.remove("hidden"); setStatus(""); return; }
     emptyEl.classList.add("hidden");
     try { localStorage.setItem("cs_mobile_last", title); } catch (e) {}
+    // A peer's row has only its agent: no Terminal (an unsandboxed shell on
+    // their machine) and no Diff (their machine answers 409 for it).
+    if (isPeerRow(instByTitle(title)) && view !== "agent") {
+      view = tab = "agent";
+      document.querySelectorAll(".tab").forEach(function (b) {
+        b.classList.toggle("active", b.dataset.tab === "agent");
+      });
+      diffWrap.classList.add("hidden");
+      termWrap.classList.remove("hidden");
+      document.getElementById("composer").classList.remove("hidden");
+      document.getElementById("keys").classList.remove("hidden");
+    }
     buildTerm();
     fitSoon();
     // THE LOADING GUARD. Attaching to an instance whose workspace is still
@@ -275,8 +288,29 @@
   // is still addressed by `title`.
   function nameOf(title) {
     for (var i = 0; i < instances.length; i++)
-      if (instances[i].title === title) return instances[i].name || title;
+      if (instances[i].title === title) return rowName(instances[i]);
     return title;
+  }
+  // A row's name: the rename, else (a peer's row) the sharer's own name for
+  // it — never the raw "<peer>::<title>".
+  function rowName(inst) {
+    return inst.name || inst.display_title || inst.title;
+  }
+
+  // A session someone shared with you over a peer link (docs/peer-link.md
+  // "Shared sessions"): "<peer>::<title>", listed like another device's row
+  // and opened the same way — its terminal is the usual
+  // /api/instances/<row>/terminal, bridged over the link by this server.
+  // Everything else on it (commit, push, the Terminal tab, close, delete…)
+  // is the sharer's: hidden here as the rail hides it (`peer_share`).
+  function isPeerRow(inst) {
+    return !!(inst && inst.remote_peer);
+  }
+  function peerWho(inst) {
+    return inst.device_label || inst.device || "them";
+  }
+  function peerModeWords(inst) {
+    return inst.peer_mode === "gated" ? "gated to its folder" : "full join";
   }
 
   // The `?s=` deep link a notification taps through to. On the shared phone
@@ -356,9 +390,20 @@
   var rowOrder = [];
   function renderRows() {
     sessionListEl.innerHTML = "";
-    var sorted = instances.slice().sort(function (a, b) {
+    var ranked = instances.slice().sort(function (a, b) {
       return attnRank(a) - attnRank(b);
-    }).map(function (inst) { return inst.title; });
+    });
+    // A peer's shared rows go last, one group per peer (first seen first),
+    // under their name — the rail's grouping.
+    var peerDevs = [];
+    ranked.forEach(function (inst) {
+      if (isPeerRow(inst) && peerDevs.indexOf(inst.device) < 0) peerDevs.push(inst.device);
+    });
+    var sorted = ranked.filter(function (inst) { return !isPeerRow(inst); });
+    peerDevs.forEach(function (dev) {
+      sorted = sorted.concat(ranked.filter(function (inst) { return isPeerRow(inst) && inst.device === dev; }));
+    });
+    sorted = sorted.map(function (inst) { return inst.title; });
     var open = !!sessionsSheet && !sessionsSheet.classList.contains("hidden");
     if (open && rowOrder.length) {
       var kept = rowOrder.filter(function (t) { return sorted.indexOf(t) >= 0; });
@@ -370,8 +415,13 @@
       sessionListEl.appendChild(folderNote("No open sessions."));
       return;
     }
+    var lastGroup = "";
     rowOrder.forEach(function (title, i) {
       var row = sessionRow(instByTitle(title));
+      var inst = instByTitle(title);
+      var group = isPeerRow(inst) ? inst.device : "";
+      if (group && group !== lastGroup) sessionListEl.appendChild(peerGroupHead(inst));
+      lastGroup = group;
       var main = row.querySelector(".sess-main");
       var num = document.createElement("span");
       num.className = "sess-num";
@@ -382,6 +432,15 @@
     });
   }
 
+  // "Erik · shared with you" over a peer's rows.
+  function peerGroupHead(inst) {
+    var h = document.createElement("div");
+    h.className = "sess-group sess-group-peer";
+    h.textContent = peerWho(inst) + " · shared with you";
+    h.title = "Sessions " + peerWho(inst) + " shares with you over a peer link — they run on their machine";
+    return h;
+  }
+
   // How long a press must be held to count as a long press (and not a tap).
   var LONG_PRESS_MS = 500;
 
@@ -389,7 +448,7 @@
     var title = inst.title;
     var ss = sessionState(inst);
     var row = document.createElement("div");
-    row.className = "sess-row" + (title === current ? " current" : "");
+    row.className = "sess-row" + (title === current ? " current" : "") + (isPeerRow(inst) ? " sess-peer" : "");
     row.setAttribute("data-title", title);
     var main = document.createElement("button");
     main.type = "button";
@@ -402,6 +461,8 @@
     var name = document.createElement("span");
     name.className = "sess-name";
     name.textContent = inst.name || title;
+    // A peer's row carries no rename here: the sharer's own name for it.
+    if (isPeerRow(inst)) name.textContent = rowName(inst);
     var sub = document.createElement("span");
     sub.className = "sess-sub";
     var word = document.createElement("span");
@@ -418,7 +479,9 @@
       sub.appendChild(document.createTextNode(" "));
       sub.appendChild(chip);
     }
-    if (inst.repo) sub.appendChild(document.createTextNode("  ·  " + inst.repo));
+    // A peer's row says how you are in it (the mode), not their folder.
+    if (isPeerRow(inst)) sub.appendChild(document.createTextNode("  ·  " + peerModeWords(inst)));
+    else if (inst.repo) sub.appendChild(document.createTextNode("  ·  " + inst.repo));
     text.appendChild(name);
     text.appendChild(sub);
     // What it asks, under the state word: the Question chip says THAT it
@@ -526,7 +589,14 @@
 
   function updateActions() {
     var inst = currentInst();
-    var next = nextAct(inst);
+    // Commit / Push / PR / Merge and the Terminal / Diff tabs are the
+    // owner's: none of them on a peer's shared session.
+    var peer = isPeerRow(inst);
+    actionsEl.classList.toggle("hidden", peer);
+    document.querySelectorAll('.tab[data-tab="shell"], .tab[data-tab="diff"]').forEach(function (b) {
+      b.classList.toggle("hidden", peer);
+    });
+    var next = peer ? null : nextAct(inst);
     actionsEl.querySelectorAll(".act").forEach(function (btn) {
       var act = btn.dataset.act;
       btn.classList.toggle("is-next", act === next);
@@ -2273,23 +2343,29 @@
         h.textContent = "  " + ss.hint;
         actStateEl.appendChild(h);
       }
-      if (ss.restartable)
-        actListEl.appendChild(actRow("Restart", "relaunches the agent, resuming the conversation",
-          function () { sessionCall(title, "revive", "Restarting " + nameOf(title) + "…", "Restart failed"); }));
-      if (inst.sleeping && !inst.device && inst.status !== "paused")
-        actListEl.appendChild(actRow("Wake", "relaunches the sleeping agent, resuming the conversation",
-          function () { sessionCall(title, "wake", "Waking " + nameOf(title) + "…", "Wake failed"); }));
-      // No Pause here, as on the desktop's menus (the palette, the CLI and the
-      // API still pause); a paused session is resumed from this sheet.
-      if (inst.status === "paused")
-        actListEl.appendChild(actRow("Resume session", "starts the agent again in the same worktree",
-          function () { sessionCall(title, "resume", "Resuming " + nameOf(title) + "…", "Resume failed"); }));
-      actListEl.appendChild(actRow("Close", "stops the agent and moves it to Recently closed",
-        function () { closeSession(title); }));
-      // A peer (sandboxed shared-folder) session is unshared, never deleted —
-      // the rail hides Delete for it too.
-      if (!inst.peer_share)
-        actListEl.appendChild(actRow("Delete…", "", function (btn) { askDelete(title, btn); }, "act-danger"));
+      if (isPeerRow(inst)) {
+        // Theirs: say whose it is; Restart, Close, Delete… are the sharer's.
+        actListEl.appendChild(folderNote(peerWho(inst) + "'s session · " + peerModeWords(inst) +
+          " — it runs on their machine; closing it, pushing and the rest are theirs."));
+      } else {
+        if (ss.restartable)
+          actListEl.appendChild(actRow("Restart", "relaunches the agent, resuming the conversation",
+            function () { sessionCall(title, "revive", "Restarting " + nameOf(title) + "…", "Restart failed"); }));
+        if (inst.sleeping && !inst.device && inst.status !== "paused")
+          actListEl.appendChild(actRow("Wake", "relaunches the sleeping agent, resuming the conversation",
+            function () { sessionCall(title, "wake", "Waking " + nameOf(title) + "…", "Wake failed"); }));
+        // No Pause here, as on the desktop's menus (the palette, the CLI and the
+        // API still pause); a paused session is resumed from this sheet.
+        if (inst.status === "paused")
+          actListEl.appendChild(actRow("Resume session", "starts the agent again in the same worktree",
+            function () { sessionCall(title, "resume", "Resuming " + nameOf(title) + "…", "Resume failed"); }));
+        actListEl.appendChild(actRow("Close", "stops the agent and moves it to Recently closed",
+          function () { closeSession(title); }));
+        // A peer (sandboxed shared-folder) session is unshared, never deleted —
+        // the rail hides Delete for it too.
+        if (!inst.peer_share)
+          actListEl.appendChild(actRow("Delete…", "", function (btn) { askDelete(title, btn); }, "act-danger"));
+      }
     } else if (title) {
       actListEl.appendChild(folderNote("This session is no longer open."));
     }

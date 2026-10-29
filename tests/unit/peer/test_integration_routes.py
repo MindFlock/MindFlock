@@ -27,9 +27,10 @@ class FakeInvites:
     def __init__(self):
         self.book = {}
 
-    def create(self, host, port, ttl_s=600):
+    def create(self, host, port, ttl_s=600, sessions=()):
         inv = FakeInvite("%016x" % (len(self.book) + 1))
         inv.host, inv.port = host, port
+        inv.sessions = tuple(sessions)
         self.book[inv.invite_id] = inv
         return inv
 
@@ -215,10 +216,66 @@ def test_invite_code_only_in_create_response(svc, client):
     assert SECRET.hex() not in text
     assert "ee" * 32 not in text  # the peer's pinned key
     assert status.json()["invites"][0]["invite_id"] == body["invite_id"]
-    assert set(status.json()["invites"][0]) == {"invite_id", "expires_in", "direct"}
+    assert set(status.json()["invites"][0]) == {
+        "invite_id",
+        "expires_in",
+        "direct",
+        "sessions",
+    }
     assert status.json()["fingerprint"] == "07" * 16
     assert status.json()["links"][0]["sas"] == "482-019-337-5"
     assert "peer_pub" not in status.json()["links"][0]
+
+
+@pytest.fixture
+def sessions_here(monkeypatch, tmp_path):
+    from backend.web import server
+    from tests.unit.peer._integration_helpers import mk_inst
+
+    monkeypatch.setattr(server.ENGINE, "instances", {})
+    (tmp_path / "wt").mkdir()
+    for title in ("fix-login", "api"):
+        server.ENGINE.instances[title] = mk_inst(title, str(tmp_path / "wt"))
+
+
+def test_invite_with_sessions(svc, client, sessions_here):
+    want = [{"title": "fix-login", "mode": "full"}, {"title": "api", "mode": "full"}]
+    r = client.post("/api/peer/invites", json={"sessions": want})
+    assert r.status_code == 201, r.text
+    assert r.json()["sessions"] == want and r.json()["url"].endswith(CODE)
+    (row,) = client.get("/api/peer").json()["invites"]
+    assert row["sessions"] == want  # listed, the code still not
+
+
+@pytest.mark.parametrize(
+    "sessions",
+    [
+        [{"title": "nope", "mode": "full"}],
+        [{"title": "api", "mode": "sideways"}],
+        "api",
+        [{"title": "x%d" % i, "mode": "full"} for i in range(51)],
+    ],
+)
+def test_invite_with_a_bad_session_is_400(svc, client, sessions_here, sessions):
+    r = client.post("/api/peer/invites", json={"sessions": sessions})
+    assert r.status_code == 400, r.text
+    assert not svc.invites.book  # nothing minted
+
+
+def test_link_rows_carry_the_invite_fields(svc, client, tmp_path, monkeypatch):
+    monkeypatch.setenv("MINDFLOCK_PEER_HOME", str(tmp_path / "peer-home"))
+    ss = svc.shared_sessions
+    ss.set_invite("ab" * 16, "00000000000000aa")
+    ss.add_invite_share("ab" * 16, "fix-login")
+    ss.set_invite_errors(
+        "ab" * 16, [{"title": "api", "mode": "gated", "error": "no sandbox"}]
+    )
+    (row,) = client.get("/api/peer").json()["links"]
+    assert row["from_invite"] == "00000000000000aa"
+    assert row["invite_shares"] == ["fix-login"]
+    assert row["share_errors"] == [
+        {"title": "api", "mode": "gated", "error": "no sandbox"}
+    ]
 
 
 def _switched_off(svc, monkeypatch):

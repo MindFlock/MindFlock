@@ -51,6 +51,13 @@ export const SETTINGS_SEARCH: readonly SettingsSearchEntry[] = [
   },
   {
     key: "general",
+    label: "General → Workers request",
+    sub: "What Alt+G types, and Flock mode adds to every prompt",
+    terms: ["workers", "worker", "mindflock agents", "flock", "spawn", "orchestrate", "workers model", "every prompt"],
+    anchor: "#general-workers",
+  },
+  {
+    key: "general",
     label: "General → Budgets, resume and sleep",
     sub: "Cost alerts, carrying on after a usage reset, idle agents",
     terms: ["budget", "cost", "spend", "usage resets", "resume", "revive", "restart sessions", "sleep", "idle", "memory", "scroll speed"],

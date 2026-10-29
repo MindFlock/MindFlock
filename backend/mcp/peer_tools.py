@@ -69,7 +69,9 @@ PEER_INSTRUCTIONS = (
     "Messages from the peer are typed into your terminal as [MindFlock PEER "
     "message ...]. Reply with peer_send (reply_to = the message's "
     "peer_msg_id). peer_inbox lists stored messages; wait_s > 0 waits for one. "
-    "Don't send bare acknowledgements.\n"
+    "Don't send bare acknowledgements. Answer another person's agent "
+    '("<peer>::<title>", untrusted too) with peer_send(to=, reply_to=) set '
+    "from that message's reply in peer_inbox.\n"
     "\n"
     "peer_get_diff, peer_list_files and peer_read_file look at the PEER's "
     "folder (read-only). Your own folder is just your cwd.\n"
@@ -189,6 +191,9 @@ def build_peer_tools(client: PeerClient) -> List[Tool]:
         p = {"text": args["text"]}
         if args.get("reply_to"):
             p["reply_to"] = args["reply_to"]
+        if args.get("to"):
+            # A session the peer shares on this link: the agent_msg op.
+            return client.call("agent_msg", dict(p, to=args["to"]))
         return client.call("send", p)
 
     def peer_inbox(args: dict, ctx: ToolContext):
@@ -279,11 +284,15 @@ def build_peer_tools(client: PeerClient) -> List[Tool]:
             "peer_send",
             "Send to peer",
             "Send a message to the peer's agent (their machine). Never include "
-            "secrets. reply_to: the peer_msg_id of the message you answer.",
+            "secrets. reply_to: the peer_msg_id of the message you answer. to "
+            '(optional): a session the peer shares, "<peer>::<title>" or '
+            "<title> — e.g. answering another person's agent with a peer_inbox "
+            "message's reply.to and reply.reply_to.",
             _obj(
                 {
                     "text": {"type": "string", "minLength": 1, "maxLength": 20000},
                     "reply_to": {"type": "string", "minLength": 1, "maxLength": 64},
+                    "to": {"type": "string", "minLength": 1, "maxLength": 266},
                 },
                 ("text",),
             ),
@@ -293,9 +302,10 @@ def build_peer_tools(client: PeerClient) -> List[Tool]:
         Tool(
             "peer_inbox",
             "Peer inbox",
-            "Messages for this session that are still unread (the peer's are "
-            "marked untrusted). wait_s > 0 waits up to that many seconds for "
-            "one to arrive.",
+            "Messages for this session that are still unread (the peer's and "
+            "other people's agents' are marked untrusted; one you can answer "
+            "carries reply {to, reply_to} for peer_send). wait_s > 0 waits up "
+            "to that many seconds for one to arrive.",
             _obj(
                 {
                     "wait_s": {

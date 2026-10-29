@@ -62,6 +62,29 @@ class FakeService:
             "list_files": {"files": ["a"], "truncated": False},
         }
         self.exc = None
+        self.prefixes = {}
+        self.agent_msg_exc = None
+
+    async def send_agent_msg(self, link_id, title, text, from_title, reply_to=None):
+        self.calls.append(
+            (
+                link_id,
+                "agent_msg",
+                {
+                    "title": title,
+                    "text": text,
+                    "from_title": from_title,
+                    "reply_to": reply_to,
+                },
+                None,
+            )
+        )
+        if self.agent_msg_exc is not None:
+            raise self.agent_msg_exc
+        return {"ok": True, "id": "x1_abcd", "their_id": "m9_1", "peer": True}
+
+    def row_prefixes(self):
+        return dict(self.prefixes)
 
     async def request(self, link_id, op, p, timeout=60):
         self.calls.append((link_id, op, p, timeout))
@@ -380,6 +403,16 @@ BAD_ARGS = [
     ("checkpoint", {"message": 5}),
     ("checkpoint", {"message": "x" * 2001}),
     ("checkpoint", {"share_id": "cd" * 16}),
+    ("agent_msg", {"text": "hi"}),
+    ("agent_msg", {"to": "Bob::planner"}),
+    ("agent_msg", {"to": "", "text": "hi"}),
+    ("agent_msg", {"to": "Bob::" + "t" * 261, "text": "hi"}),
+    ("agent_msg", {"to": 5, "text": "hi"}),
+    ("agent_msg", {"to": "Bob::planner", "text": "x" * 20001}),
+    ("agent_msg", {"to": "Bob::planner", "text": ""}),
+    ("agent_msg", {"to": "Bob::planner", "text": "hi", "reply_to": "a b"}),
+    ("agent_msg", {"to": "Bob::planner", "text": "hi", "from_title": VICTIM}),
+    ("agent_msg", {"to": "Bob::planner", "text": "hi", "link_id": "cd" * 16}),
 ]
 
 
@@ -414,6 +447,12 @@ def test_validate_args_defaults():
         "contract",
         "joint",
         "check",
+        "agent_msg",
+    }
+    assert aa.validate_args("agent_msg", {"to": "t", "text": "a"}) == {
+        "to": "t",
+        "text": "a",
+        "reply_to": None,
     }
 
 
@@ -457,6 +496,68 @@ async def test_send(api, svc):
     import re
 
     assert re.match(r"^[A-Za-z0-9_-]{1,64}$", res["msg_id"])
+
+
+# Another person's agent in a session THEY share on this link (agent_msg):
+# as from this session, over this link only.
+@pytest.mark.parametrize("to", ["Bob::planner", "planner", "bob::planner"])
+async def test_agent_msg_to_their_session(api, svc, to):
+    resp = await call(api, "agent_msg", {"to": to, "text": "on it", "reply_to": "m3_1"})
+    assert resp == {
+        "ok": True,
+        "result": {"msg_id": "x1_abcd", "to": "Bob::planner", "delivered": True},
+    }
+    ((link, op, p, _),) = svc.calls
+    assert link == LINK and op == "agent_msg"
+    assert p == {
+        "title": "planner",
+        "text": "on it",
+        "from_title": TITLE,
+        "reply_to": "m3_1",
+    }
+
+
+async def test_agent_msg_by_the_rail_prefix(api, svc):
+    # A peer whose name collides is "Bob-2" on the rail: its messages come
+    # from Bob-2::<title>, so that address answers it too — not another
+    # link's prefix.
+    svc.prefixes = {"Bob-2": LINK, "Eve": "cd" * 16}
+    assert (await call(api, "agent_msg", {"to": "Bob-2::planner", "text": "x"}))["ok"]
+    assert svc.calls[-1][2]["title"] == "planner"
+    resp = await call(api, "agent_msg", {"to": "Eve::planner", "text": "x"})
+    assert is_error(resp, "not Bob's")
+    assert len(svc.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "to,want",
+    [
+        ("Eve::planner", "not Bob's"),
+        (VICTIM + "::x", "not Bob's"),
+        ("::planner", "not Bob's"),
+        ("Bob::", "<peer>::<title>"),
+        ("Bob::a::b", "<peer>::<title>"),
+        ("Bob::" + "t" * 201, "<peer>::<title>"),
+        ("Bob::a\nb", "control characters"),
+        ("a\u202eb", "control characters"),
+    ],
+)
+async def test_agent_msg_refuses_rows_not_on_this_link(api, svc, to, want):
+    resp = await call(api, "agent_msg", {"to": to, "text": "x"})
+    assert is_error(resp, want)
+    assert "\n" not in resp["error"]
+    assert svc.calls == []
+
+
+async def test_agent_msg_passes_the_services_refusal(api, svc):
+    from backend.peer.service import PeerServiceError
+
+    svc.agent_msg_exc = PeerServiceError("Bob doesn't share 'planner' with you", 409)
+    resp = await call(api, "agent_msg", {"to": "planner", "text": "x"})
+    assert is_error(resp, "doesn't share 'planner'")
+    svc.agent_msg_exc = KeyError("/home/secret")
+    resp = await call(api, "agent_msg", {"to": "planner", "text": "x"})
+    assert is_error(resp) and "\n" not in resp["error"]
 
 
 async def test_send_not_accepted(api, svc):
@@ -562,6 +663,50 @@ async def test_inbox_returns_only_own_messages(api):
     assert mailbox.unread_count(TITLE) == 0
     assert mailbox.unread_count(VICTIM) == 1
     assert (await call(api, "inbox", {}))["result"]["messages"] == []
+
+
+def _cross_user(text, link_id=LINK, reply_ok=True, sender="Bob::planner"):
+    """As the service's _inbound_agent_msg stores another person's agent's
+    message for this session."""
+    return mailbox.post(
+        TITLE,
+        text,
+        sender=sender,
+        data={
+            "peer": True,
+            "link_id": link_id,
+            "peer_name": "Bob",
+            "from_title": sender.split("::", 1)[-1],
+            "from_name": "",
+            "peer_msg_id": "x1700000000000_abcd1234",
+            "mode": "gated",
+            "reply_ok": reply_ok,
+        },
+        delivery="inbox",
+    )
+
+
+async def test_inbox_lists_another_persons_agent_untrusted_with_reply(api):
+    mine = _cross_user("please rebase")
+    msgs = (await call(api, "inbox", {}))["result"]["messages"]
+    assert [m["text"] for m in msgs] == ["please rebase"]
+    (m,) = msgs
+    assert m["untrusted"] is True and m["from"] == "Bob::planner"
+    # reply_to is OUR copy's id (the service maps it to theirs), never theirs.
+    assert m["reply"] == {"to": "Bob::planner", "reply_to": mine["id"]}
+    assert "peer_msg_id" not in m
+
+
+async def test_inbox_no_reply_address_unless_answerable(api):
+    _cross_user("not shared back", reply_ok=False)
+    _cross_user("another link", link_id="cd" * 16)
+    msgs = (await call(api, "inbox", {}))["result"]["messages"]
+    assert [m["text"] for m in msgs] == ["not shared back", "another link"]
+    assert all(m["untrusted"] is True and "reply" not in m for m in msgs)
+    # A local sender that merely carries data.peer is not another person's.
+    mailbox.post(TITLE, "local", sender="orch", data={"peer": True})
+    (m,) = (await call(api, "inbox", {}))["result"]["messages"]
+    assert m["untrusted"] is False and "reply" not in m
 
 
 @pytest.mark.parametrize(

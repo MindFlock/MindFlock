@@ -8,6 +8,7 @@ overrides; tests point it at ``tmp_path``)::
       links.json                0600  persisted links (store.py)
       messages/<link_id>.json   0600  the link's message log (inbox.py)
       joint/<link_id>.json      0600  the link's joint task (joint.py)
+      sessions/<link_id>.json   0600  the sessions I share on the link (store.py)
       shares/<share_id>/        0700  ONE shared folder's whole blast radius
         work/                   the folder both agents work in (rw in sandbox)
         work/.git               gitfile -> ../repo.git (read-only in sandbox)
@@ -30,6 +31,7 @@ __all__ = [
     "peer_root",
     "identity_dir",
     "links_file",
+    "shared_sessions_file",
     "shares_dir",
     "share_root",
     "share_paths",
@@ -67,6 +69,13 @@ def identity_dir() -> str:
 
 def links_file() -> str:
     return os.path.join(peer_root(), "links.json")
+
+
+def shared_sessions_file(link_id: str) -> str:
+    """The sessions this side shares on ``link_id`` (store.SharedSessions)."""
+    if not re.match(r"^[0-9a-f]{32}\Z", link_id or ""):
+        raise ValueError("bad link id")
+    return os.path.join(peer_root(), "sessions", link_id + ".json")
 
 
 def shares_dir() -> str:

@@ -11,6 +11,11 @@ It is also the transport's handler: an inbound ``msg`` is logged per link
 ``peer:<name>`` — or, with no shared session, waits in the link's messages
 for the people (and for a share bound later); ``diff`` / ``read_file`` /
 ``list_files`` / ``status`` read OUR share, after OUR ``link.perms`` say yes.
+The shared-session ops (``sessions``, ``term_open``, ``term_close``,
+``session_focus``, ``agent_msg``) and the terminal pushes serve the sessions this side
+shares on the link (:mod:`backend.peer.sessions_bridge`, docs/peer-link.md
+"Shared sessions — CONTRACT"); what the peer shares with us is asked over
+the wire and shown as ``<peer>::<title>`` rows (:meth:`PeerService.peer_rows`).
 
 The TLS listener runs only while peer links are enabled AND an invite or a
 listener-role link exists (:meth:`sync_listener`). With ``peer.relay`` on
@@ -84,6 +89,22 @@ _PERM_LABEL = {
 #: the perms say. ``msg`` stays open: people read the number to each other
 #: over it. Keep in step with transport._SAS_OPS.
 _SAS_OPS = frozenset(("diff", "read_file", "list_files", "screen", "mirror_pull"))
+#: Shared sessions (docs/peer-link.md "Shared sessions — CONTRACT"): no
+#: link perm grants them — sharing a session IS the grant, one session at a
+#: time — but all of them wait for *It matches* on this side, like the
+#: folder's content (``term_close`` only ends what is open). One exception:
+#: a link made from an invite that listed sessions reaches THOSE before It
+#: matches (handle_request; "Invite with sessions" in the doc).
+_SESSION_OPS = frozenset(
+    ("sessions", "term_open", "term_close", "session_focus", "agent_msg", "chat_msg")
+)
+_SESSION_SAS_OPS = frozenset(
+    ("sessions", "term_open", "session_focus", "agent_msg", "chat_msg")
+)
+#: How often connected peers' share lists (their rows' status and activity)
+#: are re-read, and stale focus swept.
+_SESSIONS_POLL_S = 15.0
+_LINE_BAD_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\ud800-\udfff]")
 #: The refusal those ops get before *It matches* (the requester's UI words it).
 NOT_VERIFIED_ERR = "not permitted: safety number not confirmed"
 #: Seconds a peer's reported share status is reused before re-asking.
@@ -329,6 +350,25 @@ class PeerService:
         self._direct_invites: set = set()
         # Joint tasks (backend.peer.joint), built on first use.
         self._joint = None
+        # Shared sessions (backend.peer.sessions_bridge), built on first use:
+        # what I share per link (persisted), the terminals both ways, and the
+        # peers' presence on my sessions.
+        self._shared_store = None
+        self._bridge = None
+        self._focus = None
+        # What each connected peer shares with US: link_id -> (monotonic
+        # time, [session items]) — asked over the wire, never persisted —
+        # and the titles last seen per link (to say what changed).
+        self._their_sessions: Dict[str, tuple] = {}
+        self._their_known: Dict[str, dict] = {}
+        self._their_inflight: set = set()
+        self._peer_names: Dict[str, str] = {}
+        # Links whose peer proved it speaks the shared-session ops (asked us
+        # for ``sessions``, opened a terminal, pushed): only they get pushes.
+        self._sessions_aware: set = set()
+        # Links whose peer answered ``sessions`` "unsupported" (older).
+        self._sessions_unsupported: set = set()
+        self._sessions_task: Optional[asyncio.Task] = None
 
     # ------------------------------------------------------------------ #
     # Collaborators (lazy)
@@ -428,6 +468,10 @@ class PeerService:
                     except Exception as err:  # noqa: BLE001
                         _log.warning("peer: share runtime not restored: %s", err)
             self._mirror_watch()
+            self._sessions_watch()
+            from backend.peer import chat_bridge
+
+            chat_bridge.install(self)
         except Exception as err:  # noqa: BLE001 — never block the server
             _log.warning("peer: service start failed: %s", err)
 
@@ -451,6 +495,13 @@ class PeerService:
         task, self._mirror_task = self._mirror_task, None
         if task is not None:
             task.cancel()
+        task, self._sessions_task = self._sessions_task, None
+        if task is not None:
+            task.cancel()
+        if self._bridge is not None:
+            with contextlib.suppress(Exception):
+                await self._bridge.close_all()
+        self._their_sessions.clear()
         for share_id in list(self._runtimes):
             await self._stop_runtime(share_id)
         await self._stop_relay()
@@ -870,7 +921,7 @@ class PeerService:
 
     @staticmethod
     def _permitted(link, op: str) -> bool:
-        if op == "status":
+        if op == "status" or op in _SESSION_OPS:
             return True
         key = _OP_PERM.get(op)
         if key is None:
@@ -884,7 +935,9 @@ class PeerService:
         perms, then the safety-number rule (:data:`_SAS_OPS`)."""
         if not cls._permitted(link, op):
             return "not permitted"
-        if op in _SAS_OPS and _get(link, "sas_verified") is not True:
+        if (op in _SAS_OPS or op in _SESSION_SAS_OPS) and _get(
+            link, "sas_verified"
+        ) is not True:
             return NOT_VERIFIED_ERR
         return ""
 
@@ -936,8 +989,18 @@ class PeerService:
         transport. Raises the transport's ``PeerOpError`` to refuse."""
         link = self._fresh_link(link)
         refused = self._refusal(link, op)
+        if (
+            refused == NOT_VERIFIED_ERR
+            and op in _SESSION_SAS_OPS
+            and self._invite_record(_get(link, "link_id"))["invite_id"]
+        ):
+            # A link made from an invite reaches the sessions that invite
+            # opened before It matches — only those (_my_shared).
+            refused = ""
         if refused:
             raise _peer_op_error(refused)
+        if op in _SESSION_OPS:
+            return await self._session_op(link, op, p)
         if op == "msg":
             return await self._in_thread(link, self._inbound_msg, link, p)
         if op.startswith("joint_"):
@@ -1143,26 +1206,108 @@ class PeerService:
                 out["head"] = share_mod.head_sha(self._share_obj(share_id))
         return out
 
-    def _link_event(self, link, repaired: bool) -> dict:
+    def _link_event(self, link, repaired: bool, sessions=()) -> dict:
         return {
             "link_id": _get(link, "link_id"),
             "peer_name": str(_get(link, "peer_name") or "peer"),
             "sas": str(_get(link, "sas") or ""),
             "role": _get(link, "role"),
             "repaired": bool(repaired),
+            # What the invite they joined opens ([{title, mode}]), being
+            # shared now: each says peer.session_shared, a failure lands in
+            # the link's share_errors (and a peer.state).
+            "sessions": [dict(i) for i in sessions],
         }
 
     def on_link_added(self, link) -> None:
-        self._emit("peer.link_added", self._link_event(link, False))
+        # A new link: everything its first sessions list carries is news
+        # (only the first list after a START is quiet).
+        self._their_known.setdefault(str(_get(link, "link_id") or ""), {})
+        sessions = self._claim_invite(link, False)
+        self._emit("peer.link_added", self._link_event(link, False, sessions))
         self._schedule(self.sync_listener())
+
+    def _claim_invite(self, link, repaired: bool) -> list:
+        """The invite a link I listen on was just made from (InviteBook
+        .take_consumed): remembered in the link's invite record
+        (``SharedSessions.invite``), and the sessions it
+        lists shared over the link at once (:meth:`_share_from_invite`) —
+        no It matches first: making the invite was the owner's yes. A
+        re-pair starts the allowance over. Returns those sessions."""
+        if _get(link, "role") != "listener":
+            return []
+        got = None
+        take = getattr(self._invites, "take_consumed", None)
+        if take is not None:
+            with contextlib.suppress(Exception):
+                got = take(str(_get(link, "peer_pub") or ""))
+        lid = str(_get(link, "link_id") or "")
+        if got is None and not repaired:
+            return []
+        try:
+            self.shared_sessions.set_invite(
+                lid, str((got or {}).get("invite_id") or "")
+            )
+        except Exception as err:  # noqa: BLE001
+            _log.warning("peer: invite not recorded on the link: %s", err)
+            return []
+        sessions = list((got or {}).get("sessions") or [])
+        if sessions:
+            self._schedule(self._share_from_invite(lid, sessions))
+        return sessions
+
+    async def _share_from_invite(self, link_id: str, sessions: list) -> None:
+        """Share each session the invite listed (share_session's own path,
+        gated first cutting the sandboxed folder). One that fails doesn't
+        stop the rest or the link: it lands in the link's ``share_errors``
+        and a ``peer.state`` carrying them."""
+        errors = []
+        for item in sessions:
+            title, mode = str(item.get("title") or ""), str(item.get("mode") or "")
+            try:
+                await self.share_session(link_id, title, mode, from_invite=True)
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # noqa: BLE001
+                text = err.message if isinstance(err, PeerServiceError) else ""
+                if not text:
+                    _log.warning("peer: invite share failed: %s", type(err).__name__)
+                errors.append(
+                    {
+                        "title": title,
+                        "mode": mode if mode in ("gated", "full") else "full",
+                        "error": (text or "could not share it")[:300],
+                    }
+                )
+        if not errors:
+            return  # each one said so: peer.session_shared
+        with contextlib.suppress(Exception):
+            self.shared_sessions.set_invite_errors(link_id, errors)
+        # No peer.session_shared for these: the People card reads the
+        # link's share_errors (peer.state is a refresh, not news).
+        self._emit(
+            "peer.state",
+            {
+                "link_id": link_id,
+                "peer_name": self.peer_name(link_id),
+                "connected": self.is_connected(link_id),
+                "share_errors": errors,
+            },
+        )
 
     def on_link_repaired(self, link) -> None:
         """The same person paired again: same link (share and perms kept),
         new safety number to compare. The transport already reset
         ``sas_verified``, so the folder's content is refused to them again
-        until both press It matches (_SAS_OPS)."""
-        self._emit("peer.link_added", self._link_event(link, True))
+        until both press It matches (_SAS_OPS). A fresh invite's sessions
+        are shared again (:meth:`_claim_invite`)."""
+        sessions = self._claim_invite(link, True)
+        self._emit("peer.link_added", self._link_event(link, True, sessions))
         self._sas_changed(link)
+        # Shared terminals wait for It matches again.
+        self._schedule(
+            self._sessions_link_down(str(_get(link, "link_id") or ""), "re-paired")
+        )
         self._schedule(self.sync_listener())
 
     def _sas_changed(self, link) -> None:
@@ -1193,6 +1338,7 @@ class PeerService:
             self.joint.store.drop(lid)
         except Exception:  # noqa: BLE001
             pass
+        await self._sessions_link_gone(lid)
         share_id = _get(link, "share_id")
         kept = None
         if share_id:
@@ -1267,6 +1413,12 @@ class PeerService:
         if connected:
             # Catch up on a joint task's state, contract and proposals.
             self._schedule(self.joint.resync(link_id))
+            # …and on what they share with us (a newer MindFlock may have
+            # come back: ask again even if they once said "unsupported").
+            self._sessions_unsupported.discard(link_id)
+            self._schedule(self.refresh_their_sessions(link_id))
+        else:
+            self._schedule(self._sessions_link_down(link_id, "disconnected"))
 
     def _emit(self, event: str, data: dict) -> None:
         try:
@@ -1518,6 +1670,7 @@ class PeerService:
         if self._transport is not None:
             with contextlib.suppress(Exception):
                 info = self._transport.peer_info(lid) or {}
+        invite = self._invite_record(lid)
         return {
             "link_id": _get(link, "link_id"),
             "peer_name": _get(link, "peer_name") or "peer",
@@ -1542,6 +1695,12 @@ class PeerService:
             "mirror": self._mirror_view(lid),
             "carrier": self._carrier_of(link),
             "sas_verified": _get(link, "sas_verified") is True,
+            # The invite this link was made from ("" = none), what it shared
+            # (open to them before It matches), and what it couldn't
+            # ([{title, mode, error}]).
+            "from_invite": invite["invite_id"],
+            "invite_shares": invite["shares"],
+            "share_errors": invite["errors"],
             "unread": unread,
             # What the peer said it runs (newer peers only; else None).
             "peer_app": info.get("app") or None,
@@ -1559,7 +1718,11 @@ class PeerService:
         elif isinstance(exp, (int, float)):
             now = time.time() if exp > 1e9 else time.monotonic()
             expires_in = max(0, int(exp - now))
-        return {"invite_id": str(iid), "expires_in": expires_in}
+        sessions = [
+            {"title": str(_get(i, "title") or ""), "mode": str(_get(i, "mode") or "")}
+            for i in _get(inv, "sessions") or ()
+        ]
+        return {"invite_id": str(iid), "expires_in": expires_in, "sessions": sessions}
 
     def invite_views(self) -> list:
         out = []
@@ -1797,14 +1960,22 @@ class PeerService:
         }
 
     async def create_invite(
-        self, ttl_s=None, host: str = "", reach: str = "auto", op_id: str = ""
+        self,
+        ttl_s=None,
+        host: str = "",
+        reach: str = "auto",
+        op_id: str = "",
+        sessions=None,
     ) -> dict:
         """A single-use invite. ``reach`` (:data:`REACH_MODES`) picks how it
         reaches the other person; see :meth:`_create_relay_invite` for the
-        labelled fallback to a direct invite."""
+        labelled fallback to a direct invite. ``sessions`` (``[{title,
+        mode}]``, :meth:`_invite_sessions`) are shared with whoever joins it,
+        the moment they do."""
         reach = str(reach or "auto").strip().lower()
         if reach not in REACH_MODES:
             raise PeerServiceError("reach must be auto, tunnel or direct")
+        sessions = self._invite_sessions(sessions)
         op_id = self._op_id(op_id)
         self._turn_on()
         try:
@@ -1820,11 +1991,62 @@ class PeerService:
                 409,
             )
         if reach != "direct" and self.relay_mode() != "off":
-            return await self._create_relay_invite(ttl, host, reach, op_id)
-        return await self._create_direct_invite(ttl, host, op_id)
+            out = await self._create_relay_invite(ttl, host, reach, op_id, sessions)
+        else:
+            out = await self._create_direct_invite(ttl, host, op_id, None, sessions)
+        out["sessions"] = [dict(i) for i in sessions]
+        return out
+
+    def _invite_sessions(self, sessions) -> list:
+        """An invite's ``sessions``, checked as :meth:`share_session` would
+        check them now (400 in words): each a live root session here, not
+        a peer's row nor another link's shared folder, one gated — and a
+        gated one needs the sandbox. The link still re-checks at join."""
+        from backend.peer.invite import clean_sessions
+
+        try:
+            items = list(clean_sessions(sessions))
+        except ValueError as err:
+            raise PeerServiceError(str(err)) from err
+        instances = self.server.ENGINE.instances if items else {}
+        for item in items:
+            title = item["title"]
+            inst = instances.get(title) if "::" not in title else None
+            if inst is None:
+                raise PeerServiceError("no session called %s here" % title)
+            if getattr(inst, "Parent", "") or "":
+                raise PeerServiceError(
+                    "%s is a sub-session — invite them to its parent" % title
+                )
+            if getattr(inst, "PeerShare", "") or "":
+                raise PeerServiceError(
+                    "%s is another link's shared folder — it can't go on an invite"
+                    % title
+                )
+            if item["mode"] == "gated":
+                try:
+                    peer_launch.check_sandbox()
+                except peer_launch.PeerLaunchError as err:
+                    raise PeerServiceError(
+                        "%s can't be shared gated here (%s) — share it in full"
+                        % (title, err)
+                    ) from err
+        return items
+
+    def _make_invite(self, host: str, port: int, ttl: int, sessions, **kw):
+        """``invites.create`` — with ``sessions`` only when there are some
+        (a book from before invites carried them takes none)."""
+        if sessions:
+            kw["sessions"] = sessions
+        return self.invites.create(host, port, ttl, **kw)
 
     async def _create_direct_invite(
-        self, ttl: int, host: str = "", op_id: str = "", fallback: Optional[dict] = None
+        self,
+        ttl: int,
+        host: str = "",
+        op_id: str = "",
+        fallback: Optional[dict] = None,
+        sessions=(),
     ) -> dict:
         """An ``mfp1:`` invite naming this machine (Tailscale IP, else LAN):
         it only reaches someone on the same network or tailnet."""
@@ -1832,7 +2054,7 @@ class PeerService:
         port = int(self.settings()["listen_port"])
         await self._ensure_transport()
         try:
-            inv = self.invites.create(adv, port, ttl)
+            inv = self._make_invite(adv, port, ttl, sessions)
         except ValueError as err:  # a bad host, or too many live invites
             raise PeerServiceError(
                 "could not create the invite: %s" % err, 409
@@ -1865,7 +2087,12 @@ class PeerService:
         return out
 
     async def _create_relay_invite(
-        self, ttl: int, host: str = "", reach: str = "auto", op_id: str = ""
+        self,
+        ttl: int,
+        host: str = "",
+        reach: str = "auto",
+        op_id: str = "",
+        sessions=(),
     ) -> dict:
         """An ``mfp2:`` invite whose code carries the relay address. The
         relay comes up first (a quick tunnel needs a few seconds for its
@@ -1879,7 +2106,9 @@ class PeerService:
             self._progress(op_id, "invite", "relay")
         try:
             addr = await self._ensure_relay()
-            inv = self.invites.create(addr.host, addr.port, ttl, relay_path=addr.path)
+            inv = self._make_invite(
+                addr.host, addr.port, ttl, sessions, relay_path=addr.path
+            )
         except ValueError as err:
             await self.sync_listener()
             raise PeerServiceError(
@@ -1896,7 +2125,9 @@ class PeerService:
                     "text": "Relay unavailable (%s). This invite only works for "
                     "someone on your network or tailnet." % FAILURE_TEXT[reason],
                 }
-                return await self._create_direct_invite(ttl, host, op_id, fallback)
+                return await self._create_direct_invite(
+                    ttl, host, op_id, fallback, sessions
+                )
             await self.sync_listener()
             raise
         await self.sync_listener()
@@ -2056,6 +2287,11 @@ class PeerService:
         if not isinstance(verified, bool):
             raise PeerServiceError("verified must be true or false")
         self.store.update(link_id, sas_verified=verified)
+        if not verified:
+            # Their terminals on my sessions wait for It matches again.
+            self._schedule(
+                self._sessions_link_down(link_id, "safety number unconfirmed")
+            )
         return self.link_view(self.store.get(link_id))
 
     async def set_address(self, link_id: str, address) -> dict:
@@ -2121,6 +2357,7 @@ class PeerService:
             self.joint.store.drop(link_id)
         except Exception:  # noqa: BLE001
             pass
+        await self._sessions_link_gone(link_id)
         self._emit(
             "peer.link_removed",
             {
@@ -2247,15 +2484,19 @@ class PeerService:
         program: str = "",
         prompt: str = "",
         seed: Optional[Callable[[Any], None]] = None,
+        from_invite: bool = False,
     ) -> dict:
         """Clone ``repo_path`` into a fresh share for ``link_id`` and start its
         sandboxed session. Refused (nothing created) without a working
         sandbox or for a CLI without a sandbox profile. ``seed(share)`` runs
-        before the session starts (a joint task writes CONTRACT.md there)."""
+        before the session starts (a joint task writes CONTRACT.md there).
+        ``from_invite``: an invite's gated session, shared before It
+        matches (:meth:`_share_from_invite`)."""
         self._require_enabled()
         async with self._lock:
             link = self._link_or_404(link_id)
-            self._require_verified(link)
+            if not from_invite:
+                self._require_verified(link)
             if _get(link, "share_id"):
                 raise PeerServiceError(
                     "this link already has a shared folder — unshare it first", 409
@@ -2611,6 +2852,757 @@ class PeerService:
                 if self.store.get(lid) is not None:
                     self._their_share_view(lid, self.is_connected(lid))
             await asyncio.sleep(_THEIR_STATUS_TTL)
+
+    # ------------------------------------------------------------------ #
+    # Shared sessions (docs/peer-link.md "Shared sessions — CONTRACT")
+    # ------------------------------------------------------------------ #
+    @property
+    def shared_sessions(self):
+        """What I share per link (:class:`backend.peer.store.SharedSessions`)."""
+        if self._shared_store is None:
+            from backend.peer.store import SharedSessions
+
+            self._shared_store = SharedSessions()
+        return self._shared_store
+
+    @property
+    def bridge(self):
+        """Every shared-session terminal, both ways
+        (:class:`backend.peer.sessions_bridge.SessionsBridge`)."""
+        if self._bridge is None:
+            from backend.peer.sessions_bridge import SessionsBridge
+
+            self._bridge = SessionsBridge(self._push, self._term_request)
+        return self._bridge
+
+    @property
+    def focus(self):
+        """The peers' presence on my shared sessions (the rail's pill)."""
+        if self._focus is None:
+            from backend.peer.sessions_bridge import PeerFocus
+
+            self._focus = PeerFocus(self._emit_bus)
+        return self._focus
+
+    def _emit_bus(self, event: str, **kw) -> None:
+        try:
+            from backend.web.core import events
+
+            events.BUS.emit(event, **kw)
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def _push(self, link_id: str, op: str, p: dict) -> None:
+        """One push frame to the peer (a terminal chunk, "my list changed")."""
+        t = self._transport
+        send = getattr(t, "send_push", None) if t is not None else None
+        if send is None:
+            raise PeerServiceError(
+                "this MindFlock's peer link can't carry a terminal yet", 409
+            )
+        await _maybe_await(send(link_id, op, p))
+
+    async def _term_request(self, link_id: str, op: str, p: dict) -> dict:
+        return await self.request(link_id, op, p, timeout=30.0)
+
+    def _session_event(self, link_id: str, title: str, mode: str, by: str, theirs):
+        self._emit(
+            "peer.session_unshared" if mode == "" else "peer.session_shared",
+            {
+                "link_id": link_id,
+                "peer_name": self._peer_names.get(link_id) or self.peer_name(link_id),
+                "title": title,
+                "mode": mode,
+                "by": by,
+                "theirs": bool(theirs),
+            },
+        )
+
+    @staticmethod
+    def _line(value, limit: int) -> str:
+        """A wire "line" string: no control characters, at most ``limit``."""
+        return _LINE_BAD_RE.sub("", str(value or ""))[:limit]
+
+    # -- mine: what I share --------------------------------------------- #
+    def _my_shared(self, link) -> dict:
+        """``{title: record}`` I share on ``link`` that is live now: the
+        session exists, and a gated one is still THIS link's shared-folder
+        session (never an ordinary session that took its title later)."""
+        lid = str(_get(link, "link_id") or "")
+        try:
+            items = self.shared_sessions.get(lid)
+        except Exception:  # noqa: BLE001
+            return {}
+        out = {}
+        instances = self.server.ENGINE.instances
+        for title, rec in items.items():
+            inst = instances.get(title)
+            if inst is None:
+                continue
+            share = getattr(inst, "PeerShare", "") or ""
+            if rec["mode"] == "gated":
+                if not share or share != (_get(link, "share_id") or ""):
+                    continue
+            elif share:
+                continue  # a sandboxed folder is never shared "full"
+            out[title] = rec
+        if _get(link, "sas_verified") is not True:
+            # Before It matches: only what their invite opened.
+            allowed = set(self._invite_record(lid)["shares"])
+            out = {t: r for t, r in out.items() if t in allowed}
+        return out
+
+    def _invite_record(self, link_id) -> dict:
+        """The link's invite record (``SharedSessions.invite``), empty when
+        unreadable."""
+        try:
+            return self.shared_sessions.invite(str(link_id or ""))
+        except Exception:  # noqa: BLE001
+            return {"invite_id": "", "shares": [], "errors": []}
+
+    def _my_session_items(self, link) -> list:
+        """The ``sessions`` answer: names and states only."""
+        srv = self.server
+        rows = {}
+        try:
+            from backend.web.core import events as _events
+
+            rows = {d.get("title"): d for d in _events.sessions_snapshot()}
+        except Exception:  # noqa: BLE001
+            rows = {}
+        out = []
+        for title, rec in sorted(self._my_shared(link).items()):
+            inst = srv.ENGINE.instances.get(title)
+            if inst is None:
+                continue
+            row = rows.get(title) or {}
+            branch = getattr(inst, "Branch", "") or ""
+            try:
+                from backend.web.core import aliases
+
+                name = aliases.display_name(title, branch)
+                source = str(rec.get("source") or "")
+                if source and source != title and aliases.label_for(title) == title:
+                    # The sandboxed copy of ``source`` (a gated share): called
+                    # what that session is called, as the invite named it.
+                    name = aliases.display_name(source, branch)
+            except Exception:  # noqa: BLE001
+                name = title
+            try:
+                from backend import providers
+
+                program = providers.resolve(getattr(inst, "Program", "") or "").name
+            except Exception:  # noqa: BLE001
+                program = ""
+            folder = row.get("folder_label") or os.path.basename(
+                (row.get("folder") or getattr(inst, "Path", "") or "").rstrip("/")
+            )
+            status = row.get("status") or getattr(
+                getattr(inst, "Status", None), "name", ""
+            )
+            out.append(
+                {
+                    "title": title,
+                    "name": self._line(name, 200),
+                    "status": self._line(str(status).lower(), 32),
+                    "activity": self._line(row.get("activity"), 200),
+                    "stage": self._line(row.get("stage"), 32),
+                    "branch": self._line(branch, 200),
+                    "folder": self._line(folder, 128),
+                    "mode": rec["mode"],
+                    "program": self._line(program, 64),
+                }
+            )
+        return out
+
+    def _mine_view(self, link) -> list:
+        """What I share on ``link``, for People: every record, live or not."""
+        lid = str(_get(link, "link_id") or "")
+        live = self._my_shared(link)
+        try:
+            items = self.shared_sessions.get(lid)
+        except Exception:  # noqa: BLE001
+            items = {}
+        opened = set(self._bridge.mine_open(lid)) if self._bridge else set()
+        focus = self._focus.of(lid) if self._focus else None
+        return [
+            {
+                "title": title,
+                "mode": rec["mode"],
+                "since": rec["since"],
+                "source": rec.get("source") or "",
+                "live": title in live,
+                # The peer has its terminal open / its row selected now.
+                "open": title in opened,
+                "focused": bool(focus and focus.get("title") == title),
+            }
+            for title, rec in sorted(items.items())
+        ]
+
+    async def _session_op(self, link, op: str, p: dict) -> dict:
+        """The peer asking about / opening the sessions I share with it
+        (perms and the safety number were checked by the caller)."""
+        lid = str(_get(link, "link_id") or "")
+        self._sessions_aware.add(lid)
+        if op == "sessions":
+            items = await self._in_thread(link, self._my_session_items, link)
+            return {"sessions": items}
+        if op == "term_open":
+            return await self._open_my_term(link, p)
+        if op == "term_close":
+            await self.bridge.close_mine(lid, str(p.get("term_id") or ""))
+            return {"ok": True}
+        if op == "agent_msg":
+            return await self._in_thread(link, self._inbound_agent_msg, link, p)
+        if op == "chat_msg":
+            from backend.peer import chat_bridge
+
+            return chat_bridge.inbound_chat(self, link, p)
+        # session_focus: where their page is ("" = it moved off my sessions).
+        title = str(p.get("title") or "")
+        name = str(_get(link, "peer_name") or "peer")
+        if title and title in self._my_shared(link):
+            self.focus.note(lid, name, title)
+        elif not title:
+            held = self._bridge.mine_open(lid) if self._bridge else []
+            if held:
+                self.focus.note(lid, name, held[0])
+            else:
+                self.focus.leave(lid)
+        return {"ok": True}
+
+    async def _open_my_term(self, link, p: dict) -> dict:
+        lid = str(_get(link, "link_id") or "")
+        title = str(p.get("title") or "")
+        if title not in self._my_shared(link):
+            raise _peer_op_error("not shared")
+        srv = self.server
+        inst = srv.ENGINE.instances.get(title)
+        if inst is None:
+            raise _peer_op_error("not shared")
+        name, err = await asyncio.to_thread(srv.ensure_terminal_session, inst, title)
+        if err is not None:
+            raise _peer_op_error("the session can't start: %s" % str(err)[:200])
+
+        def may_type() -> bool:
+            try:
+                return not srv._budget_locked(title)
+            except Exception:  # noqa: BLE001
+                return True
+
+        try:
+            term_id = await self.bridge.open_mine(
+                lid, title, name, int(p["cols"]), int(p["rows"]), may_type=may_type
+            )
+        except Exception as err:  # noqa: BLE001
+            _log.warning("peer: shared terminal not attached: %s", type(err).__name__)
+            raise _peer_op_error("could not attach to the session") from err
+        self.focus.note(lid, str(_get(link, "peer_name") or "peer"), title)
+        return {"ok": True, "term_id": term_id}
+
+    # -- agent messages across the link ------------------------------------ #
+    def _row_prefix(self, link_id: str) -> str:
+        """The ``<prefix>`` of this peer's rows on my rail (its name,
+        numbered on a collision) — the peer's name when it shares nothing."""
+        for prefix, lid in self.row_prefixes().items():
+            if lid == link_id:
+                return prefix
+        return self._peer_names.get(link_id) or self.peer_name(link_id)
+
+    def _inbound_agent_msg(self, link, p: dict) -> dict:
+        """An agent in the peer's session ``from_title`` messaging ``title``,
+        a session I share on this link: into its mailbox as
+        ``<peer>::<from_title>`` with ``data.peer`` (typed as another
+        person's untrusted agent). Never a session not shared on this link."""
+        from backend.web.core import events, mailbox
+
+        lid = str(_get(link, "link_id") or "")
+        title = str(p.get("title") or "")
+        rec = self._my_shared(link).get(title)
+        if rec is None:
+            raise _peer_op_error("not shared")
+        from_title = str(p.get("from_title") or "")
+        peer_name = str(_get(link, "peer_name") or "peer")
+        sender = self._row_prefix(lid) + "::" + from_title
+        data = {
+            "peer": True,
+            "link_id": lid,
+            "peer_name": peer_name,
+            "from_title": from_title,
+            "from_name": str(p.get("from_name") or ""),
+            "peer_msg_id": str(p.get("msg_id") or ""),
+            "mode": rec["mode"],
+            # Their session is a row on my rail: my agent can answer it.
+            "reply_ok": any(
+                i.get("title") == from_title for i in self.their_sessions(lid)
+            ),
+        }
+        text = str(p.get("text") or "")
+        try:
+            msg = mailbox.post(
+                title,
+                text,
+                sender=sender,
+                data=data,
+                reply_to=p.get("reply_to") or None,
+                delivery="auto",
+                min_hop=int(p.get("hop") or 0),
+            )
+        except ValueError as err:
+            raise _peer_op_error("refused: %s" % err) from err
+        with contextlib.suppress(Exception):  # the event is enrichment only
+            events.BUS.emit(
+                "session.message",
+                session=title,
+                data={
+                    "id": msg["id"],
+                    "from": sender,
+                    "kind": "message",
+                    "text": mailbox.sanitize(text)[:200],
+                    "delivery": "held" if msg["state"] == "held" else "pending",
+                },
+            )
+        return {"ok": True, "id": msg["id"]}
+
+    async def send_agent_msg(
+        self, link_id: str, title: str, text, from_title, reply_to=None
+    ) -> dict:
+        """My session ``from_title``'s agent messaging THEIR shared session
+        ``title`` (a ``<peer>::<title>`` row) → ``{ok, id, their_id, peer}``
+        (``id`` is the one a reply names); raises
+        :class:`PeerServiceError` in words: 409 not shared with me, 503 the
+        peer is offline."""
+        link = self._link_or_404(link_id)
+        name = str(_get(link, "peer_name") or "they")
+        text = str(text or "")
+        if not text.strip():
+            raise PeerServiceError("empty message")
+        if len(text) > 20000:
+            raise PeerServiceError("message too long (%d chars; max 20000)" % len(text))
+        if _CTRL_RE.search(text):
+            raise PeerServiceError("the message has control characters in it")
+        from_title = str(from_title or "")
+        inst = self.server.ENGINE.instances.get(from_title) if from_title else None
+        if inst is None:
+            raise PeerServiceError(
+                "a message to another person's session must come from one of "
+                "your sessions (from: <your session title>)"
+            )
+        if not self.is_connected(link_id):
+            raise PeerServiceError(
+                "%s isn't connected right now — the message was not sent" % name, 503
+            )
+        if not any(i.get("title") == title for i in self.their_sessions(link_id)):
+            raise PeerServiceError("%s doesn't share %r with you" % (name, title), 409)
+        p = {
+            "title": title,
+            "text": text,
+            "from_title": self._line(from_title, 200),
+            "from_name": "",
+            "msg_id": "x%d_%s" % (int(time.time() * 1000), secrets.token_hex(4)),
+        }
+        try:
+            from backend.web.core import aliases
+
+            p["from_name"] = self._line(
+                aliases.display_name(from_title, getattr(inst, "Branch", "") or ""),
+                200,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        if reply_to:
+            # The id my agent answers is MY copy of their message: the wire
+            # names their id for it, and the chain's depth goes along.
+            from backend.web.core import mailbox
+
+            parent = await asyncio.to_thread(mailbox.get, from_title, str(reply_to))
+            pdata = (parent or {}).get("data") or {}
+            if (
+                parent is not None
+                and mailbox.is_cross_user(parent)
+                and pdata.get("link_id") == link_id
+                and _OP_ID_RE.match(str(pdata.get("peer_msg_id") or ""))
+            ):
+                p["reply_to"] = pdata["peer_msg_id"]
+                p["hop"] = min(int(parent.get("hop") or 0) + 1, 1000)
+        try:
+            res = await self.request(link_id, "agent_msg", p, timeout=30.0)
+        except Exception as err:  # noqa: BLE001 — PeerUnavailable, PeerOpError
+            if "not shared" in str(err):
+                self._schedule(self.refresh_their_sessions(link_id))
+                raise PeerServiceError(
+                    "%s stopped sharing %r — the message was not sent" % (name, title),
+                    409,
+                ) from err
+            mapped = self._peer_error(link, err, "agent_msg")
+            if mapped.status == 502 and "isn't connected" in mapped.message:
+                mapped.status = 503
+            raise mapped from err
+        # ``id`` is in MY namespace: their agent's reply names it as reply_to.
+        return {
+            "ok": True,
+            "id": p["msg_id"],
+            "their_id": str(_get(res or {}, "id", "") or ""),
+            "peer": True,
+        }
+
+    async def handle_push(self, link, op: str, p: dict) -> None:
+        """One push frame from the peer (schema-checked by the transport;
+        nobody waits for an answer). ``link`` is the link or its id."""
+        lid = str(_get(link, "link_id") or link or "")
+        self._sessions_aware.add(lid)
+        if op == "sessions_changed":
+            self._schedule(self.refresh_their_sessions(lid))
+            return
+        if op == "chat_out":
+            from backend.peer import chat_bridge
+
+            await chat_bridge.inbound_out(self, lid, p)
+            return
+        self.bridge.on_push(lid, op, p)
+
+    async def _tell_sessions_changed(self, link_id: str) -> None:
+        """Best effort: a peer that speaks the ops re-asks at once (the others
+        see the change on their next poll — or never, being older)."""
+        if link_id not in self._sessions_aware or not self.is_connected(link_id):
+            return
+        with contextlib.suppress(Exception):
+            await self._push(link_id, "sessions_changed", {})
+
+    async def share_session(
+        self, link_id: str, title, mode, *, from_invite: bool = False
+    ) -> dict:
+        """Share one of my sessions with the link's peer: ``full`` — the
+        session as it is (the guest-link trust level: they type into my
+        agent, on my machine); ``gated`` — a sandboxed shared folder cut
+        from its folder and branch (the link's one shared folder, :meth:`share`),
+        or the link's shared-folder session itself. → the People view.
+        ``from_invite``: listed on the invite the link was made from — no
+        It matches first, and open to them before it (the invite record's
+        ``shares``)."""
+        self._require_enabled()
+        link = self._link_or_404(link_id)
+        if not from_invite:
+            self._require_verified(link)
+        if mode not in ("gated", "full"):
+            raise PeerServiceError('mode must be "gated" or "full"')
+        title = str(title or "").strip()
+        srv = self.server
+        inst = srv.ENGINE.instances.get(title) if title else None
+        if inst is None or "::" in title:
+            raise PeerServiceError("no session called %s here" % (title or "that"), 404)
+        own_share = _get(link, "share_id") or ""
+        inst_share = getattr(inst, "PeerShare", "") or ""
+        if inst_share and inst_share != own_share:
+            raise PeerServiceError(
+                "That session is another link's shared folder — share it there.", 409
+            )
+        source = ""
+        if inst_share or mode == "gated":
+            mode = "gated"
+            if not inst_share:
+                if own_share:
+                    raise PeerServiceError(
+                        "This link already has a shared folder (%s) — a link "
+                        "carries one gated session: withdraw that one first, or "
+                        "share this session in full."
+                        % (_get(link, "session_title") or "closed"),
+                        409,
+                    )
+                source = title
+                try:
+                    folder = inst.GetWorktreePath() if inst.Started() else ""
+                except Exception:  # noqa: BLE001
+                    folder = ""
+                try:
+                    program = peer_launch.provider_name(
+                        getattr(inst, "Program", "") or ""
+                    )
+                except Exception:  # noqa: BLE001 — no sandbox profile: the default
+                    program = ""
+                await self.share(
+                    link_id,
+                    folder or getattr(inst, "Path", "") or "",
+                    branch=getattr(inst, "Branch", "") or None,
+                    program=program,
+                    **({"from_invite": True} if from_invite else {}),
+                )
+                title = _get(self.store.get(link_id), "session_title") or ""
+                if not title:
+                    raise PeerServiceError("the shared session did not start", 500)
+        try:
+            self.shared_sessions.add(link_id, title, mode, source)
+        except ValueError as err:
+            raise PeerServiceError(str(err), 409) from err
+        if from_invite:
+            # Before the push below: their re-ask must already reach it.
+            self.shared_sessions.add_invite_share(link_id, title)
+        self._session_event(link_id, title, mode, "you", False)
+        await self._tell_sessions_changed(link_id)
+        return self.sessions_view(link_id)
+
+    async def unshare_session(self, link_id: str, title) -> dict:
+        """Withdraw a shared session: their terminal on it ends; a full
+        session is left exactly as it is, a gated one is closed like Stop
+        sharing (agent stopped, folder kept)."""
+        link = self._link_or_404(link_id)
+        title = str(title or "")
+        rec = self.shared_sessions.remove(link_id, title)
+        if rec is None:
+            raise PeerServiceError(
+                "%s isn't shared on this link" % (title or "That"), 404
+            )
+        if self._bridge is not None:
+            await self._bridge.close_title(link_id, title, "withdrawn")
+        focus = self._focus.of(link_id) if self._focus else None
+        if focus and focus.get("title") == title:
+            self._focus.leave(link_id)
+        if (
+            rec["mode"] == "gated"
+            and _get(link, "share_id")
+            and _get(link, "session_title") == title
+        ):
+            await self.unshare(link_id, delete_files=False)
+        self._session_event(link_id, title, "", "you", False)
+        await self._tell_sessions_changed(link_id)
+        return self.sessions_view(link_id)
+
+    # -- theirs: what they share with me ---------------------------------- #
+    async def refresh_their_sessions(self, link_id: str):
+        """Ask the peer what it shares with us; cache it for the rail and say
+        what changed since last time (``peer.session_shared`` /
+        ``peer.session_unshared``, ``by: "peer"``, ``theirs: true``)."""
+        if link_id in self._their_inflight or link_id in self._sessions_unsupported:
+            return None
+        self._their_inflight.add(link_id)
+        try:
+            try:
+                res = await self.request(link_id, "sessions", {}, timeout=15.0)
+            except Exception as err:  # noqa: BLE001
+                text = str(err)
+                if "unsupported" in text:
+                    self._sessions_unsupported.add(link_id)
+                if "not permitted" in text or "unsupported" in text:
+                    self._their_sessions.pop(link_id, None)
+                elif not self.is_connected(link_id):
+                    self._their_sessions.pop(link_id, None)
+                return None
+            items = list(res.get("sessions") or [])
+            self._sessions_aware.add(link_id)
+            with contextlib.suppress(Exception):
+                self._peer_names[link_id] = self.peer_name(link_id)
+            self._their_sessions[link_id] = (time.monotonic(), items)
+            now = {i["title"]: i.get("mode") or "full" for i in items}
+            before = self._their_known.get(link_id)
+            self._their_known[link_id] = now
+            if before is not None:
+                for t, m in now.items():
+                    if before.get(t) != m:
+                        self._session_event(link_id, t, m, "peer", True)
+                for t in before:
+                    if t not in now:
+                        self._session_event(link_id, t, "", "peer", True)
+            return items
+        finally:
+            self._their_inflight.discard(link_id)
+
+    def their_sessions(self, link_id: str) -> list:
+        got = self._their_sessions.get(link_id)
+        return [dict(i) for i in got[1]] if got else []
+
+    def sessions_view(self, link_id: str) -> dict:
+        """``{mine, theirs, connected}`` for People: what I share on the link
+        and what they share with me (as last asked)."""
+        link = self._link_or_404(link_id)
+        return {
+            "mine": self._mine_view(link),
+            "theirs": self.their_sessions(link_id),
+            "connected": self.is_connected(link_id),
+            # Their MindFlock answered "unsupported": it needs an update.
+            "their_unsupported": link_id in self._sessions_unsupported,
+        }
+
+    def row_prefixes(self) -> Dict[str, str]:
+        """``{rail prefix: link_id}`` for every connected peer that shares
+        sessions with us: the peer's name, numbered when it would collide
+        with a tailnet device's key or another peer's name."""
+        try:
+            from backend.web.core import remote as _remote
+
+            taken = {str(k).lower() for k in getattr(_remote, "_DEVICES", {})}
+        except Exception:  # noqa: BLE001
+            taken = set()
+        out: Dict[str, str] = {}
+        links = sorted(
+            self._their_sessions,
+            key=lambda lid: (self._peer_names.get(lid) or "peer", lid),
+        )
+        for lid in links:
+            if not self.is_connected(lid):
+                continue
+            base = self._peer_names.get(lid) or "peer"
+            prefix, n = base, 2
+            while prefix.lower() in taken or prefix in out:
+                prefix = "%s (%d)" % (base, n)
+                n += 1
+            out[prefix] = lid
+        return out
+
+    def resolve_row(self, prefix: str, title: str):
+        """``(link_id, item)`` for the row ``<prefix>::<title>``, else None."""
+        lid = self.row_prefixes().get(prefix)
+        if lid is None:
+            return None
+        for item in self.their_sessions(lid):
+            if item.get("title") == title:
+                return lid, item
+        return None
+
+    def peer_rows(self) -> list:
+        """Every connected peer's shared sessions as rail rows, shaped like a
+        tailnet device's: ``<peer>::<title>`` with ``device`` = the peer, plus
+        ``peer_link``, ``peer_mode`` and ``remote_peer``. ``peer_share`` is
+        set so every owner-only action the web UI gates for shared sessions
+        (ship, push, rename, Fast-track, the shell …) stays off. No I/O: the
+        cache refreshed in the background."""
+        out = []
+        for prefix, lid in self.row_prefixes().items():
+            name = self._peer_names.get(lid) or "peer"
+            for item in self.their_sessions(lid):
+                out.append(self._peer_row(lid, prefix, name, item))
+        return out
+
+    @staticmethod
+    def _peer_row(link_id: str, prefix: str, peer_name: str, item: dict) -> dict:
+        folder = item.get("folder") or ""
+        program = item.get("program") or ""
+        return {
+            "title": prefix + "::" + item["title"],
+            "display_title": item.get("name") or item["title"],
+            "branch": item.get("branch") or "",
+            "repo": folder,
+            "folder": "",
+            "folder_label": folder,
+            "program": program,
+            "provider": program,
+            "path": "",
+            "status": item.get("status") or "running",
+            "started": True,
+            "tmux_name": "",
+            "provisioned": False,
+            "workspace_strategy": "worktree",
+            "in_place": False,
+            "git_repo": True,
+            "diff_stat": None,
+            "workspace_missing": False,
+            "sleeping": None,
+            "has_origin": False,
+            "stage": item.get("stage") or "agent",
+            "activity": item.get("activity") or "",
+            "hidden_by": "",
+            "person": "",
+            "parent": "",
+            "spawned": False,
+            "peer_share": True,
+            "peer_with": None,
+            "queue": None,
+            "lane": None,
+            "run": None,
+            "redzone": None,
+            "last_report": None,
+            "device": prefix,
+            "device_label": peer_name,
+            "peer_link": link_id,
+            "peer_mode": item.get("mode") or "full",
+            "remote_peer": True,
+        }
+
+    async def open_their_term(self, link_id: str, title: str, cols: int, rows: int):
+        """Join the terminal of THEIR shared session ``title`` → (term,
+        sink); raises :class:`PeerServiceError` in words."""
+        link = self._link_or_404(link_id)
+        try:
+            return await self.bridge.attach_theirs(link_id, title, cols, rows)
+        except PeerServiceError:
+            raise
+        except ValueError as err:
+            raise PeerServiceError(str(err), 409) from err
+        except Exception as err:  # noqa: BLE001
+            if "not shared" in str(err):
+                self._schedule(self.refresh_their_sessions(link_id))
+                raise PeerServiceError(
+                    "%s stopped sharing that session"
+                    % (_get(link, "peer_name") or "they"),
+                    404,
+                ) from err
+            raise self._peer_error(link, err, "term_open") from err
+
+    async def focus_their(self, link_id: str, title: str) -> dict:
+        """My page selected their row ``title`` (``""``: moved off their
+        sessions) — so their rail shows my name on it."""
+        link = self._link_or_404(link_id)
+        try:
+            await self.request(
+                link_id, "session_focus", {"title": str(title or "")}, timeout=10.0
+            )
+        except Exception as err:  # noqa: BLE001
+            raise self._peer_error(link, err, "session_focus") from err
+        return {"ok": True}
+
+    # -- the link's lifecycle ---------------------------------------------- #
+    async def _sessions_link_down(self, link_id: str, reason: str) -> None:
+        """The connection dropped (or the safety number must be compared
+        again): every terminal of the link ends, their presence goes, their
+        rows go (until the next ``sessions`` answer)."""
+        if self._bridge is not None:
+            with contextlib.suppress(Exception):
+                await self._bridge.close_link(
+                    link_id, reason, notify=self.is_connected(link_id)
+                )
+        if self._focus is not None:
+            self._focus.leave(link_id)
+        self._their_sessions.pop(link_id, None)
+        if not self.is_connected(link_id):
+            self._sessions_aware.discard(link_id)
+
+    async def _sessions_link_gone(self, link_id: str) -> None:
+        """The link itself is gone: everything above, and what I shared on
+        it is forgotten (the sessions themselves are untouched)."""
+        await self._sessions_link_down(link_id, "unlinked")
+        self._their_known.pop(link_id, None)
+        self._peer_names.pop(link_id, None)
+        self._sessions_unsupported.discard(link_id)
+        with contextlib.suppress(Exception):
+            self.shared_sessions.drop(link_id)
+
+    def _sessions_watch(self) -> None:
+        if self._sessions_task is not None and not self._sessions_task.done():
+            return
+        try:
+            self._sessions_task = asyncio.get_running_loop().create_task(
+                self._sessions_loop()
+            )
+        except RuntimeError:
+            self._sessions_task = None
+
+    async def _sessions_loop(self) -> None:
+        """Re-read connected peers' share lists (their rows' status and
+        activity are not pushed) and forget presence gone quiet."""
+        while True:
+            await asyncio.sleep(_SESSIONS_POLL_S)
+            if self._focus is not None:
+                bridge = self._bridge
+
+                def holding(lid: str) -> str:
+                    open_titles = bridge.mine_open(lid) if bridge else []
+                    return open_titles[0] if open_titles else ""
+
+                self._focus.sweep(holding)
+            for lid in list(set(self._their_sessions) | self._sessions_aware):
+                if self.is_connected(lid):
+                    await self.refresh_their_sessions(lid)
+                else:
+                    await self._sessions_link_down(lid, "disconnected")
 
 
 _SERVICE: Optional[PeerService] = None

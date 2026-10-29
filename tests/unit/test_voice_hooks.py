@@ -378,3 +378,58 @@ def test_the_say_all_marker_prints_for_every_prompt_and_is_never_consumed(dirs):
     assert voice.set_say_all(False) is False
     assert voice.set_say_all(False) is False  # idempotent
     assert _fire(cmd, _PROMPT).stdout == b""
+
+
+# --------------------------------------------------------------------------- #
+# Flock mode: the sticky <session>.flock request, after the voice line
+# --------------------------------------------------------------------------- #
+def _flock(dirs, text, session="mindflock_voice"):
+    p = dirs["v"] / (session + am.FLOCK_FLAG_SUFFIX)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def test_the_flock_file_prints_its_content_on_every_prompt(dirs):
+    cmd = am.hook_command("working")
+    p = _flock(dirs, "  Use MindFlock workers for this.\n")
+    for _ in range(2):  # sticky: never consumed
+        r = _fire(cmd, _PROMPT)
+        assert r.returncode == 0
+        assert r.stdout.decode("utf-8") == "Use MindFlock workers for this.\n"
+    assert p.exists()
+    # Per session: another window prints nothing.
+    assert _fire(cmd, _PROMPT, session="mindflock_other").stdout == b""
+
+
+def test_the_flock_request_follows_the_voice_line(dirs):
+    cmd = am.hook_command("working")
+    _flock(dirs, "Use MindFlock workers for this.")
+    _arm(dirs)
+    out = _fire(cmd, _PROMPT).stdout.decode("utf-8")
+    assert out == am.VOICE_INSTRUCTION + "\nUse MindFlock workers for this.\n"
+
+
+@pytest.mark.parametrize("body", ["", "  \n\n"])
+def test_an_absent_or_blank_flock_file_prints_nothing(dirs, body):
+    cmd = am.hook_command("working")
+    assert _fire(cmd, _PROMPT).stdout == b""
+    _flock(dirs, body)
+    r = _fire(cmd, _PROMPT)
+    assert r.returncode == 0 and r.stdout == b""
+
+
+def test_the_flock_file_is_what_core_flock_mode_writes(dirs):
+    from backend.web.core import flock_mode
+
+    cmd = am.hook_command("working")
+    assert flock_mode.set_on("mindflock_voice", True, "Spawn workers.") is True
+    assert _fire(cmd, _PROMPT).stdout == b"Spawn workers.\n"
+    assert flock_mode.set_on("mindflock_voice", False) is False
+    assert _fire(cmd, _PROMPT).stdout == b""
+
+
+def test_codex_never_prints_the_flock_request(dirs):
+    _flock(dirs, "Use MindFlock workers for this.")
+    cmd = am.hook_command("working", record_thread=False)
+    assert _fire(cmd, _PROMPT).stdout == b""

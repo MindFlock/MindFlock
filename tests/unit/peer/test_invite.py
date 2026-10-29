@@ -269,7 +269,7 @@ def test_active_and_reprs_never_show_secret():
     inv = book.create("127.0.0.1", 9000)
     secret = invite.parse_code(inv.code).secret
     listed = book.active()
-    assert set(listed[0]) == {"invite_id", "expires_at", "expires_in"}
+    assert set(listed[0]) == {"invite_id", "expires_at", "expires_in", "sessions"}
     for text in (repr(listed), repr(inv), repr(book.__dict__)):
         assert inv.code not in text and secret.hex() not in text
 

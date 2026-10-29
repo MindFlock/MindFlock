@@ -1332,3 +1332,13 @@ html, body {
 }
 .ask-notify { margin-top: 10px; }
 .ask-notify .new-muted:empty { display: none; }
+
+/* A peer's shared sessions (mobile.js isPeerRow): grouped under their name
+   after your own, the mode on the sub-line. */
+.sess-group {
+  margin: 8px 2px 0;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+.sess-row.sess-peer .sess-main { border-style: dashed; }

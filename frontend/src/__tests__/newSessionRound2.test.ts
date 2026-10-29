@@ -13,6 +13,7 @@ import TEMPLATES_DIALOG from "../components/dialogs/TemplatesDialog.tsx?raw";
 import PROMPTS_DIALOG from "../components/dialogs/PromptsDialog.tsx?raw";
 import AGENT from "../components/dialogs/newSession/AgentAccount.tsx?raw";
 import {
+  titleFromFolder,
   DESCRIBE_CAP_MS,
   agentMissingReason,
   plannedName,
@@ -63,6 +64,13 @@ describe("Works in: a separate worktree by default", () => {
     expect(plannedName({ prefix: "me/", title: "", prompt: "Fix the login bug", taken: none }).branch).toBe("me/fix-login-bug");
     expect(plannedName({ prefix: "me/", title: "My Thing", prompt: "x", taken: none }).branch).toBe("me/my-thing");
     expect(plannedName({ prefix: "", title: "", prompt: "", taken: none }).branch).toBe("untitled");
+    // No task but a folder: named for the folder, as the server does
+    // (session_create.title_from_place); numbered past a taken one.
+    const inFolder = plannedName({ prefix: "me/", title: "", prompt: "", taken: none, folder: "/home/me/Allure/sitecheck-bot7/" });
+    expect([inFolder.title, inFolder.branch, inFolder.from]).toEqual(["sitecheck-bot7", "me/sitecheck-bot7", "folder"]);
+    expect(plannedName({ prefix: "", title: "", prompt: "", taken: new Set(["app"]), folder: "C:\\\\work\\\\App" }).title).toBe("app-2");
+    expect(titleFromFolder("")).toBe("");
+    expect(titleFromFolder("/tmp/---")).toBe("");
     expect(sanitizeBranch("--A b//")).toBe("a-b");
   });
 

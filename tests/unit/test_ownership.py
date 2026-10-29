@@ -26,9 +26,13 @@ from backend.web.core import person_sessions
 from backend.web.core.terminal import is_terminal_reply
 from tests.unit.test_mailbox_routes import _mk_inst
 
+#: The module's own naming, before the fixtures stub it with NAMES.
+_NAME_OF = own.name_of
+
 A = "00000000-0000-4000-8000-00000000000a"
 B = "ffffffff-ffff-4fff-8fff-fffffffffffb"
 NAMES = {A: "Alice", B: "Bob"}
+_REAL_NAME_OF = own.name_of  # the clk fixture stubs it
 
 
 class Clock:
@@ -124,6 +128,36 @@ def test_take_tells_the_previous_driver_and_release_frees_it(clk, seen):
     assert own.driver("s") == ""
 
 
+def test_a_peer_attaches_under_the_name_it_was_given(clk, seen, monkeypatch):
+    """A peer typing through a shared session (peer.sessions_bridge) is the
+    person ``peer:<link>``, named after the peer while its terminal is open —
+    as driver, as viewer, and in the events that tell the previous driver."""
+    monkeypatch.setattr(own, "_own_id", lambda: A)
+    monkeypatch.setattr(own, "name_of", _NAME_OF)
+    peer = "peer:" + "ab" * 16
+    c = own.attach("s", peer, "Mauricio", name="Mauricio")
+    assert own.name_of(peer) == "Mauricio"
+    assert own.mode("s", peer) == {
+        "type": "driver",
+        "driving": True,
+        "driver": peer,
+        "driver_name": "Mauricio",
+    }
+    assert own.viewers("s")[peer]["name"] == "Mauricio"
+    mine = own.attach("s", B, "desk")
+    own.take("s", B, "desk")
+    ev = _names(seen, "session.driver_changed")[-1]
+    assert ev["data"]["previous_name"] == "Mauricio"
+    assert own.may_type(c)[0] is False
+    own.detach(c)
+    assert own.name_of(peer) == ""  # gone with its last terminal
+    assert set(own.viewers("s")) == {B}
+    own.detach(mine)
+    # a name is never taken from a person attaching without one
+    own.attach("s", B, "desk", name="")
+    assert own.viewers("s")[B]["name"] == ""
+
+
 def test_the_lock_lapses_after_ten_idle_minutes_and_input_refreshes_it(clk, seen):
     own.attach("s", A, "laptop")
     clk.t += own.IDLE_RELEASE_S - 1
@@ -211,6 +245,35 @@ def test_caller_reads_the_person_and_the_relaying_device():
         "state": {"person": A},
     }
     assert own.caller(scope) == (A, "mini")
+
+
+def test_a_guest_link_is_its_own_person_not_the_owner(clk):
+    # Join trial 2026-10-28: a guest's terminal took the keyboard as the
+    # owner's person id, so the owner and the guest typed at once and the
+    # rail named the owner as the driver while the guest typed.
+    scope = {
+        "type": "websocket",
+        "headers": [],
+        "state": {"person": A, "guest": {"id": "g1", "name": "Gita"}},
+    }
+    pid, _device = own.caller(scope)
+    assert pid == "guest:g1"
+    own.attach("s", pid, "laptop")
+    assert own.driver("s") == "guest:g1"
+    assert own._NAMES["guest:g1"] == "Gita"
+    assert own.mode("s", A)["driving"] is False
+
+
+def test_a_guest_is_named_what_they_pick_after_attaching(clk, monkeypatch):
+    # The guest page attaches its terminal while it still asks for a name:
+    # the driver is "Guest" at first and the name they then pick after it.
+    from backend.web.core import guests
+
+    link = {"id": "g1", "label": "", "name": ""}
+    monkeypatch.setattr(guests, "list_links", lambda: [dict(link)])
+    assert _REAL_NAME_OF("guest:g1") == "Guest"
+    link["name"] = "Gita"
+    assert _REAL_NAME_OF("guest:g1") == "Gita"
 
 
 def test_terminal_replies_are_not_keystrokes():

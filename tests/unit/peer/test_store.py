@@ -272,3 +272,70 @@ def test_find_by_pub(tmp_path):
         s.find_by_pub(pub, "listener" if _link().role == "dialer" else "dialer") == []
     )
     assert s.find_by_pub("zz", "dialer") == []
+
+
+# --------------------------------------------------------------------------- #
+# SharedSessions: what I share per link (docs/peer-link.md "Shared sessions")
+# --------------------------------------------------------------------------- #
+LID = "ab" * 16
+
+
+def test_shared_sessions_round_trip(peer_home):
+    s = store.SharedSessions()
+    assert s.get(LID) == {}
+    rec = s.add(LID, "api-fix", "full")
+    assert rec["mode"] == "full" and rec["since"] > 0 and rec["source"] == ""
+    s.add(LID, "peer-bob-1234", "gated", source="api-fix")
+    # A fresh instance reads the same file (it is persisted, 0600).
+    again = store.SharedSessions().get(LID)
+    assert set(again) == {"api-fix", "peer-bob-1234"}
+    assert again["peer-bob-1234"]["source"] == "api-fix"
+    path = os.path.join(str(peer_home), "sessions", LID + ".json")
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    assert s.remove(LID, "api-fix")["mode"] == "full"
+    assert s.remove(LID, "api-fix") is None
+    assert set(s.get(LID)) == {"peer-bob-1234"}
+    s.drop(LID)
+    assert s.get(LID) == {} and not os.path.exists(path)
+
+
+def test_shared_sessions_is_not_a_link_field(peer_home, tmp_path):
+    # Its own file: the links file (and an older release's validator) never
+    # sees it.
+    links = LinkStore(str(tmp_path / "links.json"))
+    store.SharedSessions().add(LID, "t", "full")
+    assert "shared_sessions" not in {
+        f.name for f in __import__("dataclasses").fields(Link)
+    }
+    assert links.list() == []
+
+
+@pytest.mark.parametrize(
+    "title,mode",
+    [("", "full"), ("a\nb", "full"), ("x" * 201, "full"), ("t", "root")],
+)
+def test_shared_sessions_validates(peer_home, title, mode):
+    with pytest.raises(ValueError):
+        store.SharedSessions().add(LID, title, mode)
+
+
+def test_shared_sessions_bad_link_id(peer_home):
+    with pytest.raises(ValueError):
+        store.SharedSessions().add("../../etc", "t", "full")
+    assert store.SharedSessions().get("../../etc") == {}
+
+
+def test_shared_sessions_malformed_entries_dropped_not_the_file(peer_home):
+    s = store.SharedSessions()
+    s.add(LID, "good", "full")
+    path = os.path.join(str(peer_home), "sessions", LID + ".json")
+    doc = json.load(open(path))
+    doc["sessions"]["bad"] = {"mode": "root"}
+    doc["sessions"]["\x1b[2J"] = {"mode": "full"}
+    doc["sessions"]["odd"] = {"mode": "gated", "since": "x", "source": 5}
+    json.dump(doc, open(path, "w"))
+    got = s.get(LID)
+    assert set(got) == {"good", "odd"}
+    assert got["odd"] == {"mode": "gated", "since": 0.0, "source": ""}
+    open(path, "w").write("{nope")
+    assert s.get(LID) == {}

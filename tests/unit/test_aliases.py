@@ -74,6 +74,26 @@ def test_post_delta_and_get():
     assert client.get("/api/aliases").json()["aliases"] == {}
 
 
+def test_post_delta_announces_the_rename():
+    # Every open page re-reads the map on this: the owner's other browsers
+    # and a guest's see the new name at once.
+    seen = []
+    unsub = server._events.BUS.subscribe(
+        lambda e: seen.append(e) if e["event"] == "session.renamed" else None
+    )
+    try:
+        client.post("/api/aliases", json={"title": "s1", "alias": "renamed"})
+        client.post("/api/aliases", json={"title": "s1", "alias": ""})
+        # The boot-time seed is not a rename.
+        client.post("/api/aliases", json={"aliases": {"other": "o"}})
+    finally:
+        unsub()
+    assert [(e["session"], e["new"], e["data"]) for e in seen] == [
+        ("s1", "renamed", {"name": "renamed"}),
+        ("s1", "", {"name": ""}),
+    ]
+
+
 def test_post_bulk_seed_merges_only():
     client.post("/api/aliases", json={"title": "mine", "alias": "mine-label"})
     r = client.post("/api/aliases", json={"aliases": {"other": "other-label"}})

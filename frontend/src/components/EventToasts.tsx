@@ -26,6 +26,17 @@ import { openAsk } from "../lib/ask";
 import { ruleOn, runLookups } from "../state/runs";
 import { showGroup } from "../lib/showGroup";
 import { PEER_NEWS_EVENTS, PEER_SCREEN, isPeerSender, noteSasChanged, peerEventNote } from "../lib/peer";
+import {
+  forgetPeerRow,
+  installPeerRowMemory,
+  peerBackToast,
+  peerLinkDown,
+  peerLinkUp,
+  peerRowKey,
+  peerSessionName,
+  peerSessionNote,
+  type PeerSessionEventData,
+} from "../lib/peerSessions";
 import { deviceEventNote, updateNote, updateToastWanted } from "../lib/fleet";
 import { desktopNotify, installDesktopNotifyClicks } from "../lib/desktopNotify";
 import { pushFailedNote } from "../lib/onboarding";
@@ -89,6 +100,18 @@ function openAskFromToast(title: string) {
 
 function instByTitle(title: string): Instance | null {
   return instances().find((i) => i.title === title) || null;
+}
+
+/** Open a session a peer just shared with me: its row once the list has it
+ * (the event can beat the poll by a few seconds — ask now, then select). */
+function openPeerShare(d: PeerSessionEventData): void {
+  const pick = () => {
+    const key = peerRowKey(d, instances());
+    if (!instByTitle(key)) return false;
+    selectSession(key);
+    return true;
+  };
+  if (!pick()) void refreshInstances().then(pick);
 }
 
 /** Jump to a session's Map — where every red-zone event is explained — on
@@ -487,6 +510,60 @@ export function EventToasts() {
           notifyOnce("*peer:" + String(env.data?.link_id || ""), name, n.toast, {
             onClick: () => openSettings(PEER_SCREEN),
             duration: 7000,
+          });
+        })
+      );
+    }
+    // Sessions shared over a peer link (lib/peerSessions). A peer's share is a
+    // toast whose click opens its row; mine and every withdrawal are quiet
+    // bell rows (NotificationsBell) — a withdrawn row just leaves the rail,
+    // never with an error. Their rows are kept a minute, greyed, while their
+    // link is down (the memory below rides the instances cache), and their
+    // return says so when they had sessions here.
+    const peerRows = installPeerRowMemory(queryClient);
+    unsubs.push(peerRows.stop);
+    unsubs.push(
+      ev.subscribe("peer.state", (env) => {
+        if (isReplay(env)) return;
+        const d = (env.data || {}) as PeerSessionEventData;
+        const link = String(d.link_id || "");
+        if (d.connected === false) {
+          peerLinkDown(link);
+          peerRows.apply();
+          return;
+        }
+        if (!d.connected || !peerLinkUp(link)) return;
+        void refreshInstances();
+        notifyOnce("*peer:" + link, "peer.back", peerBackToast(String(d.peer_name || "")), {
+          onClick: () => {
+            const row = instances().find((i) => (i as { peer_link?: string }).peer_link === link);
+            if (row) selectSession(row.title);
+          },
+          duration: 6000,
+        });
+      })
+    );
+    for (const name of ["peer.session_shared", "peer.session_unshared"]) {
+      unsubs.push(
+        ev.subscribe(name, (env) => {
+          if (isReplay(env)) return;
+          const d = (env.data || {}) as PeerSessionEventData;
+          const link = String(d.link_id || "");
+          if (d.theirs) {
+            // Theirs changed: the list catches up now, not at the next poll;
+            // a withdrawn one is never remembered across a drop.
+            if (name === "peer.session_unshared") forgetPeerRow(link, String(d.title || ""));
+            void refreshInstances();
+          }
+          const rows = instances();
+          const n = peerSessionNote(name, d, {
+            name: d.theirs ? peerSessionName(d, rows) : displayName(String(d.title || "")),
+            rowKey: d.theirs ? peerRowKey(d, rows) : "",
+          });
+          if (!n?.toast) return;
+          notifyOnce("*peer-share:" + link + ":" + String(d.title || ""), name, n.toast, {
+            onClick: () => openPeerShare(d),
+            duration: 8000,
           });
         })
       );

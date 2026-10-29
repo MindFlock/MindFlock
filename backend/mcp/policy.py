@@ -26,7 +26,9 @@ session; a merge additionally needs ``confirm_merge`` and, under
 ``children``, a target that is a descendant (never the caller itself).
 
 Messaging (delivery ``auto``/``inbox``) to any local session is allowed in
-every scope but ``readonly``.
+every scope but ``readonly`` — and to a ``<peer>::<title>`` row another
+person shares with this server's person (``remote_peer``): their MindFlock
+decides whether it is shared. Such a row is never managed.
 """
 
 from __future__ import annotations
@@ -36,7 +38,14 @@ from typing import Dict, Iterable, List, Optional, Set
 from backend.mcp.identity import is_local_row
 from backend.mcp.protocol import ToolError
 
-__all__ = ["SCOPES", "DEFAULT_SCOPE", "Flock", "Policy", "parse_scope"]
+__all__ = [
+    "SCOPES",
+    "DEFAULT_SCOPE",
+    "Flock",
+    "Policy",
+    "parse_scope",
+    "is_peer_row",
+]
 
 SCOPES = ("readonly", "children", "all")
 DEFAULT_SCOPE = "children"
@@ -50,6 +59,13 @@ def parse_scope(value: Optional[str]) -> Optional[str]:
     if not v:
         return DEFAULT_SCOPE
     return v if v in SCOPES else None
+
+
+def is_peer_row(row: dict) -> bool:
+    """A ``<peer>::<title>`` row: a session another PERSON shares with this
+    server over a peer link (unlike a ``device::title`` row of one's own
+    other device)."""
+    return "::" in str(row.get("title") or "") and row.get("remote_peer") is True
 
 
 class Flock:
@@ -165,6 +181,11 @@ class Policy:
             raise ToolError(
                 "no session named %r (call list_sessions to see the titles)" % title
             )
+        if is_peer_row(row):
+            raise ToolError(
+                "%r is a session another person shares with you over a peer "
+                "link; only send_message reaches it" % title
+            )
         if "::" in title:
             raise ToolError(
                 "%r is a session on another device; remote sessions are read-only "
@@ -176,6 +197,12 @@ class Policy:
 
     def require_message(self, flock: Flock, title: str) -> dict:
         self.require_write(flock, "messaging")
+        row = flock.row(title)
+        if row is not None and is_peer_row(row):
+            # Another person's session shared with this server's person: a
+            # message goes there (their MindFlock checks it is shared) — and
+            # nothing else does, it is never anyone's descendant.
+            return row
         row = self.require_local(flock, title)
         if flock.self_title and title == flock.self_title:
             raise ToolError("you cannot message yourself")

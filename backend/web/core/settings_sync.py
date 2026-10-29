@@ -170,6 +170,9 @@ SYNCED: Dict[str, Tuple[str, ...]] = {
         "agent_max_children",
         "agent_max_spawn_depth",
         "agent_max_spawned",
+        # Flock mode's words (core.flock_mode): the person's, not the machine's.
+        "workers_request",
+        "workers_model",
     ),
     "notifications": (
         "muted_rules",
@@ -415,6 +418,8 @@ LABELS: Dict[str, str] = {
     "general.agent_max_children": "Agent limit: children",
     "general.agent_max_spawn_depth": "Agent limit: spawn depth",
     "general.agent_max_spawned": "Agent limit: total spawned",
+    "general.workers_request": "Workers request",
+    "general.workers_model": "Workers model",
     "notifications.muted_rules": "Muted notifications",
     "notifications.enabled_rules": "Enabled notifications",
     "notifications.ntfy_enabled": "Phone notifications on/off",
@@ -1745,6 +1750,15 @@ def merge(remote: dict) -> List[str]:
 def _after_change(
     units: List[str], source: str, pipeline_before: Optional[tuple] = None
 ) -> None:
+    if any(str(u).startswith("general.workers_") for u in units):
+        # Flock mode's words changed on another device: re-write every
+        # session's .flock file so its next prompt carries them.
+        try:
+            from backend.web.core import flock_mode
+
+            flock_mode.rewrite_all()
+        except Exception as err:  # noqa: BLE001
+            _log_error("settings sync: flock rewrite failed: %v", err)
     try:
         from backend.web.core import settings_hooks
 

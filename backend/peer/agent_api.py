@@ -12,9 +12,12 @@ is the WHOLE surface a prompt-injected agent can drive:
   be ours (``SO_PEERCRED``), at most :data:`MAX_CONNS` connections at a time,
   a :data:`READ_DEADLINE_S` deadline for the request line;
 * a fixed op table with strict per-op argument checks (exact types, bounds,
-  no unknown keys). Nothing in a request names a session, a path outside the
-  share, or a link: ``session_title`` and ``link_id`` are fixed at
-  construction, so a request can never reach another session's mailbox.
+  no unknown keys). Nothing in a request names a path outside the share, a
+  link, or a session of THIS side: ``session_title`` and ``link_id`` are fixed
+  at construction, so a request can never reach another session's mailbox.
+  The one name a request carries is ``agent_msg``'s ``to``: a session the
+  PEER shares on this link (``<peer>::<title>`` or a bare ``<title>``), sent
+  as from this session over this link only.
 
 Errors never carry tracebacks: share errors pass their (peer-safe) message,
 peer/service errors their sanitized text, anything else is "internal error".
@@ -58,7 +61,9 @@ WRITE_DEADLINE_S = 30.0
 POLL_S = 0.5
 MAX_WAIT_S = 1500
 PEER_TIMEOUT_S = 60.0
-MAX_TEXT = 20000
+MAX_TEXT = 20000  # wire.MAX_MSG_TEXT
+MAX_TITLE = 200  # wire.MAX_SESSION_TITLE
+MAX_TO = 64 + len("::") + MAX_TITLE  # a peer-name prefix, then their title
 MAX_PROPOSAL = 10000  # wire.MAX_JOINT_PROPOSAL
 MAX_CHECK_STEPS = 25  # wire.MAX_CHECK_STEPS
 MAX_CHECK_ANSWER = 60000  # a checklist written as text (a fenced JSON list)
@@ -107,6 +112,14 @@ def _str(v: Any, name: str, lo: int, hi: int) -> str:
 _SPEC: Dict[str, Dict[str, tuple]] = {
     "whoami": {},
     "send": {
+        "text": (True, None, lambda v: _str(v, "text", 1, MAX_TEXT)),
+        "reply_to": (False, None, lambda v: _msg_id(v, "reply_to")),
+    },
+    # Another person's agent in a session THEY share on this link (the
+    # service's send_agent_msg, as from this session): ``to`` is
+    # ``<peer>::<title>`` or a bare ``<title>`` of theirs.
+    "agent_msg": {
+        "to": (True, None, lambda v: _str(v, "to", 1, MAX_TO)),
         "text": (True, None, lambda v: _str(v, "text", 1, MAX_TEXT)),
         "reply_to": (False, None, lambda v: _msg_id(v, "reply_to")),
     },
@@ -238,8 +251,10 @@ class AgentApi:
     """Serve the agent API for ONE share / link / session.
 
     ``service`` is duck-typed: ``async request(link_id, op, p, timeout=60) ->
-    dict``, ``is_connected(link_id) -> bool``, ``peer_name(link_id) -> str``;
-    its errors are raised as exceptions. ``mailbox`` defaults to
+    dict``, ``is_connected(link_id) -> bool``, ``peer_name(link_id) -> str``,
+    ``async send_agent_msg(link_id, title, text, from_title, reply_to=None) ->
+    {id, ...}`` and optionally ``row_prefixes() -> {prefix: link_id}``; its
+    errors are raised as exceptions. ``mailbox`` defaults to
     :mod:`backend.web.core.mailbox` (tests may pass a stand-in)."""
 
     def __init__(
@@ -496,6 +511,71 @@ class AgentApi:
         )
         return {"msg_id": msg_id, "delivered": res.get("accepted") is True}
 
+    def _row_prefixes(self) -> set:
+        """The prefixes a ``<prefix>::<title>`` row of THIS link's peer goes
+        by (casefolded): its name, and its rail prefix (numbered when the
+        name collides — the sender of a message it sent us)."""
+        out = set()
+        try:
+            out.add(str(self.service.peer_name(self.link_id)).casefold())
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            prefixes = self.service.row_prefixes()
+        except Exception:  # noqa: BLE001 — optional on the service
+            prefixes = {}
+        for prefix, lid in dict(prefixes or {}).items():
+            if lid == self.link_id:
+                out.add(str(prefix).casefold())
+        out.discard("")
+        return out
+
+    def _their_title(self, to: str) -> str:
+        """``to`` as the title of a session of THIS link's peer; any other
+        row is refused (this session talks over its own link only)."""
+        prefix, sep, title = to.partition("::")
+        if not sep:
+            title = to
+        elif prefix.casefold() not in self._row_prefixes():
+            name = self._peer_name()
+            raise _PeerError(
+                "%r is not %s's: this session reaches only %s's sessions "
+                "(%s::<title>, or just <title>)"
+                % (_CTRL_RE.sub("", prefix)[:64], name, name, name)
+            )
+        if not title or len(title) > MAX_TITLE or "::" in title:
+            raise _PeerError(
+                "to must be <peer>::<title> or <title> (max %d)" % MAX_TITLE
+            )
+        if _CTRL_RE.search(title):
+            raise _PeerError("to must not contain control characters")
+        return title
+
+    async def _op_agent_msg(self, args: dict, reader) -> dict:
+        title = self._their_title(args["to"])
+        try:
+            res = await self.service.send_agent_msg(
+                self.link_id,
+                title,
+                args["text"],
+                self.session_title,
+                reply_to=args["reply_to"],
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 — PeerServiceError's sentence
+            msg = getattr(e, "message", None)
+            raise _PeerError(
+                _clean_err(Exception(msg) if isinstance(msg, str) and msg else e)
+            ) from None
+        if not isinstance(res, dict) or not res.get("id"):
+            raise _PeerError("bad response from peer")
+        return {
+            "msg_id": str(res["id"]),
+            "to": "%s::%s" % (self._peer_name(), title),
+            "delivered": True,
+        }
+
     async def _op_peer_diff(self, args: dict, reader) -> dict:
         return await self._peer("diff", {"max_chars": args["max_chars"]})
 
@@ -596,7 +676,7 @@ class AgentApi:
             if gone is not None and not gone.done():
                 gone.cancel()
         return {
-            "messages": [_public_msg(m) for m in result["messages"]],
+            "messages": [_public_msg(m, self.link_id) for m in result["messages"]],
             "unread": result.get("unread", 0),
         }
 
@@ -605,16 +685,25 @@ class _PeerError(Exception):
     """A peer-side or service failure; args[0] is already sanitized."""
 
 
-def _public_msg(m: dict) -> dict:
+def _public_msg(m: dict, link_id: str = "") -> dict:
     data = m.get("data") if isinstance(m.get("data"), dict) else {}
     sender = m.get("from") or ""
+    # Another person's agent over a peer link (a ``<peer>::<title>`` sender
+    # with ``data.peer``: only the service posts one) — mailbox.is_cross_user.
+    cross = data.get("peer") is True and "::" in sender
     out = {
         "id": m.get("id"),
         "from": sender,
         "text": m.get("text", ""),
         "ts": m.get("ts"),
-        "untrusted": sender.startswith("peer:"),
+        "untrusted": sender.startswith("peer:") or cross,
     }
-    if data.get("peer_msg_id"):
+    if cross:
+        # Answered with peer_send(to=..., reply_to=...): reply_to is OUR copy's
+        # id (the service maps it to theirs) — only over the link it came on,
+        # and only while their session was shared back when it arrived.
+        if data.get("link_id") == link_id and data.get("reply_ok") is True:
+            out["reply"] = {"to": sender, "reply_to": m.get("id")}
+    elif data.get("peer_msg_id"):
         out["peer_msg_id"] = data["peer_msg_id"]  # pass as reply_to to peer_send
     return out

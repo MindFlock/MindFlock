@@ -1095,6 +1095,20 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
   `GET /api/config` reports each one's effective value, default and source
   (`env` / `settings` / `default`) as `caps.orchestration`, and a refusal
   names the limit and where to raise it.
+- **Workers request** (`general.workers_request`, `general.workers_model`;
+  synced): the words Flock mode adds to a prompt to ask the session for
+  MindFlock workers (`core/flock_mode.py`). `workers_request` is a template
+  whose `{model}` is replaced by `workers_model` (default
+  `claude-opus-5-5`); the default request is *"Use MindFlock workers for
+  this: spawn as many MindFlock agents as the work needs (model {model}),
+  each fenced to disjoint files with a self-contained brief; wait for them,
+  review and merge their branches, then report. Do the small connecting
+  pieces yourself."* Blank reads as the default, and the default is never
+  written to `settings.json`. Owner-only writes (`auth.may_configure`, like
+  every synced field: the text reaches an agent's prompt). A save — or one
+  adopted from another device by settings sync — re-writes every session's
+  `.flock` flag so its next prompt carries the new words. `GET /api/config`
+  serves the filled-in text as `flock.request`.
 - **Fast-track** (`repository.*`, synced; Settings → Workspace):
   `fasttrack_depth` is the rung new batches start on (`commit` · `push` ·
   `pr` · `merge` · `off`; blank = the built-in default).

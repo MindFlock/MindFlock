@@ -4,12 +4,15 @@
  * click (DELETE /api/guests/tunnel) revokes every link and closes the public
  * address; a guest's open terminal closes on its next frame. Never shown to
  * a guest (config.guest) — they have no links of their own to see. Polled
- * every 10 s: the state is tiny and the bar is the owner's reassurance. */
+ * every 10 s: the state is tiny and the bar is the owner's reassurance. The
+ * same poll feeds where each guest is (lib/guestFocus: the pill on the rail
+ * row they are looking at), and the bus moves it between polls. */
 
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import type { GuestLink, GuestTunnel } from "../../api/types";
 import { toast } from "../../lib/toast";
+import { feedGuestFocus, installGuestFocusEvents } from "../../lib/guestFocus";
 import { useConfig } from "../../state/queries";
 import { killedText } from "../settings/screens/peer/GuestLinks";
 
@@ -33,12 +36,14 @@ export function GuestBar() {
   useEffect(() => {
     if (!owner) return;
     let live = true;
+    installGuestFocusEvents();
     const tick = () =>
       api<{ links: GuestLink[]; tunnel: GuestTunnel }>("/api/guests")
         .then((r) => {
           if (!live) return;
           setLinks(r.links || []);
           setTunnel(r.tunnel || null);
+          feedGuestFocus(r.links || []);
         })
         .catch(() => {
           /* a 403 on a gate-off tailnet caller, a blip: nothing to show */

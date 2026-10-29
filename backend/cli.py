@@ -29,8 +29,8 @@ Installed via ``[project.scripts]``::
     mindflock inbox TITLE [--all] # read a session's messages (doesn't mark them read)
 
     mindflock peer status         # peer links: pair-code with another MindFlock user
-    mindflock peer invite         # …make a one-time invite code (you listen)
-    mindflock peer join CODE      # …pair using their code (you dial)
+    mindflock peer invite         # …make a one-time invite link + code (you listen)
+    mindflock peer join CODE      # …pair using their link or code (you dial)
     mindflock peer revoke ID      # …cancel an unused invite
     mindflock peer share LINK REPO [--branch B] [--program P]   # share ONE folder
     mindflock peer export LINK TARGET_REPO peer/BRANCH          # bring work home
@@ -530,9 +530,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_rev.add_argument("invite", metavar="INVITE", help="invite id (from status)")
     p_join = peer_sub.add_parser(
-        "join", parents=[server_opts_nested], help="pair using a peer's code"
+        "join",
+        parents=[server_opts_nested],
+        help="pair using a peer's invite link or code",
     )
-    p_join.add_argument("code", metavar="CODE")
+    p_join.add_argument(
+        "code",
+        metavar="CODE",
+        help="the invite link (…/join#mfp…), a mindflock://join link, or the code",
+    )
     peer_sub.add_parser(
         "links", parents=[server_opts_nested], help="list links with their SAS"
     )
@@ -2433,20 +2439,22 @@ def _cmd_peer(args: argparse.Namespace) -> int:
         if args.reach != "auto":
             body["reach"] = args.reach
         inv = client.post(base, "/api/peer/invites", body, timeout=90.0) or {}
+        if inv.get("url"):
+            print(inv["url"])
         print(inv.get("code") or "")
         if (inv.get("fallback") or {}).get("text"):
             print(inv["fallback"]["text"], file=sys.stderr)
         if inv.get("relay"):
             print(
-                "Give this code to your peer (valid %ss, single use). They connect "
-                "through the relay at %s — nothing to set up on their side."
-                % (inv.get("expires_in"), inv.get("host")),
+                "Send the link (or the code) to your peer (valid %ss, single use). "
+                "They connect through the relay at %s — nothing to set up on "
+                "their side." % (inv.get("expires_in"), inv.get("host")),
                 file=sys.stderr,
             )
         else:
             print(
-                "Give this code to your peer (valid %ss, single use). They must "
-                "reach %s:%s — Tailscale recommended."
+                "Send the link (or the code) to your peer (valid %ss, single use). "
+                "They must reach %s:%s — Tailscale recommended."
                 % (inv.get("expires_in"), inv.get("host"), inv.get("port")),
                 file=sys.stderr,
             )
@@ -3090,10 +3098,13 @@ def _cmd_join(args: argparse.Namespace) -> int:
     """``mindflock join CODE`` — route any pasted code by its format
     (:func:`backend.web.core.fleet.classify_code`): a peer invite goes to
     ``peer join``, one of your devices' codes to ``devices join``."""
+    from backend.peer.invite import code_from_text
     from backend.web.core.fleet import classify_code
 
     text = " ".join(args.text)
-    hit = classify_code(text)
+    # An invite link too, URL-encoded or not (…/join#mfp2%3A…).
+    peer_code = code_from_text(text)
+    hit = {"kind": "peer", "code": peer_code} if peer_code else classify_code(text)
     if hit["kind"] == "peer":
         return _cmd_peer(
             argparse.Namespace(

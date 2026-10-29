@@ -79,9 +79,10 @@ export function _resetLockedRows(): void {
 
 /** What the rail's guest note says: who the owner made the link for and how
  * much of the rail it opens. */
-export function guestNote(guest: { label: string; sessions: string[] } | null | undefined): string {
+export function guestNote(guest: { label: string; name?: string; sessions: string[] } | null | undefined): string {
   if (!guest) return "";
   const n = guest.sessions.length;
   const where = n === 1 ? "one session" : `${n} sessions`;
-  return guest.label ? `Guest link for ${guest.label} — ${where}` : `Guest link — ${where}`;
+  const who = guest.name || guest.label;
+  return who ? `You're here as ${who} — ${where}` : `Guest link — ${where}`;
 }

@@ -240,6 +240,15 @@ body.narrow .sidebar-resizer {
   background: var(--panel-2) !important;
 }
 
+/* ⇄ beside a peer's name: their sessions, shared over a peer link
+   (lib/peerSessions) — not one of this person's devices. */
+.device-group .dev-peer {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 /* A device group's header is a real button (its fold toggle, aria-expanded)
    that reads exactly like the header text did; the ✕ beside it stays its
    own button. */
@@ -330,4 +339,22 @@ body.narrow .sidebar-resizer {
 }
 #guest-bar .gb-kill:hover:not(:disabled) {
   background: color-mix(in srgb, var(--red) 15%, transparent);
+}
+
+/* A peer's group header: a dot (connected / offline) before "Erik ·
+   connected". While their link is down the group and its remembered rows
+   stay a minute, greyed (lib/peerSessions installPeerRowMemory). */
+.device-group .dev-peer-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  flex: none;
+}
+.device-group .dev-peer-dot.off {
+  background: var(--muted);
+}
+.device-group.peer-offline .dev-name {
+  color: var(--muted);
+  font-style: italic;
 }

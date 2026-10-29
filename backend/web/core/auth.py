@@ -98,8 +98,10 @@ _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 # Paths reachable without a token (the login page posts here; the favicon keeps
 # the tab from 404-spamming the login page; the remote hello is the tailnet
 # device-discovery identity ping — tiny, read-only, and it must answer before
-# any pairing has happened, see backend.web.core.remote).
-_PUBLIC_PATHS = frozenset({"/api/auth", "/favicon.ico", "/api/remote/hello"})
+# any pairing has happened, see backend.web.core.remote; /join is the static
+# page a peer invite link opens — the joiner is a stranger with no token, and
+# the code stays in the URL fragment, so the page holds nothing of ours).
+_PUBLIC_PATHS = frozenset({"/api/auth", "/favicon.ico", "/api/remote/hello", "/join"})
 
 # The device-to-device half of joining "Your devices" (backend.web.core.fleet):
 # a device that is not yet a member holds no credential here, so redeeming a

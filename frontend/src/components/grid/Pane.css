@@ -753,6 +753,45 @@
   color: #fff;
 }
 
+/* Flock (the raven): workers on every prompt. Off it is a quiet outline — a switch you
+   reach for now and then, never competing with the guided button or ⏩. On it
+   fills, so a session that sends the workers request with every prompt is
+   recognisable across a grid without hovering. Clicking flips it. */
+.pane-head .actions .nextstep.nextstep-flock {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  font-weight: 600;
+  padding: 3px 7px;
+}
+
+/* The MindFlock raven (the same /bird.png the rail's flock flies, an
+   alpha-only silhouette) drawn as a mask filled with currentColor, so it is
+   muted when Flock is off, white on the accent when on, and follows the
+   light/dark theme with the button's own colour. */
+.pane-head .actions .nextstep.nextstep-flock .flock-bird {
+  display: inline-block;
+  width: 18px;
+  height: 13px;
+  margin-right: 5px;
+  vertical-align: -2px;
+  background-color: currentColor;
+  -webkit-mask: url(/bird.png) center / contain no-repeat;
+  mask: url(/bird.png) center / contain no-repeat;
+}
+
+.pane-head .actions .nextstep.nextstep-flock:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  filter: none;
+}
+
+.pane-head .actions .nextstep.nextstep-flock.is-on {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
 /* Back to idle (↺): a TERTIARY control — it undoes nothing and starts nothing,
    it only stops the header asking for the next rung on a branch its owner has
    finished with. So it is the quietest thing in the group: muted, no accent, no
@@ -1090,6 +1129,12 @@
   .pane-head .actions .nextstep.nextstep-reset {
     display: none !important;
   }
+
+  /* Flock off gives way early (the ⋯ menu and Alt+Shift+G still flip it);
+     on, it stays — it says every prompt here carries the workers request. */
+  .pane-head .actions .nextstep.nextstep-flock:not(.is-on) {
+    display: none !important;
+  }
 }
 
 @container (max-width: 300px) {
@@ -1112,6 +1157,12 @@
 @container (max-width: 340px) {
   .pane-head .actions .nextstep:not(.nextstep-fast) {
     display: none !important;
+  }
+
+  /* …but Flock ON keeps its glyph-width place, like a set ⏩. */
+  .pane-head .actions .nextstep.nextstep-flock.is-on {
+    display: inline-block !important;
+    padding: 3px 4px;
   }
 }
 
@@ -1282,4 +1333,29 @@
 .pane-menu-hook {
   display: inline-flex;
   align-items: center;
+}
+
+/* The thin strip above a shared session's terminal (lib/peerSessions):
+   "Erik's session · full join — you type as them" on a peer's row, "Erik is
+   offline — the terminal reconnects when they're back" while their link is
+   down, "Bob is here" on one of mine a peer is on. One line, never taller:
+   it must not resize the terminal as people come and go more than once. */
+.pane .peer-strip {
+  flex: none;
+  padding: 2px 10px;
+  font-size: 11.5px;
+  line-height: 18px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pane .peer-strip.here {
+  color: var(--text);
+}
+.pane .peer-strip.off {
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  font-style: italic;
 }

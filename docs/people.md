@@ -174,14 +174,37 @@ and the block offers to turn it on first.
 What the link holds, exactly (`backend/web/core/guests.py`):
 
 - **Their sessions, as yours.** Everything under `/api/instances/<title>`
-  for a title on the link — the terminal and shell, prompts, answers, the
-  queue, voice, find, the family thread, waking, the diff and history — with
-  the owner's calls held back: close/delete, copy, commit, push, PR, merge,
-  fast-track, branch, fences, zones, owner/parent/order/profile answer 403.
-- **Every other session: a stub.** `GET /api/instances` lists it as
-  `{title, status, locked: true}` — the rail draws it crossed out, the phone
-  page leaves it out — and every call on it is `403 {"error": "not part of
-  your invite"}`. The event stream carries only their sessions' events.
+  for a title the link reaches — the terminal and shell, prompts, answers,
+  the queue, voice, find, the family thread, waking, the diff and history —
+  with the owner's calls held back: close/delete, copy, commit, push, PR,
+  merge, fast-track, branch, fences, zones, owner/parent/order/profile answer
+  403. A link **reaches its named sessions and their sub-sessions**: anything
+  whose parent chain leads to a named title, spawned before the link or
+  after it (`guests.reach`, per request). The picker lists root sessions
+  only — a sub-session is never picked on its own, it comes with its parent.
+- **Under your names.** A session the owner renamed is called that for the
+  guest too, now and after any later rename: `GET /api/aliases` is on the
+  guest's read-only list (filtered to the link's reach) and a rename is
+  `session.renamed` on the bus, which every open page — the owner's other
+  devices, the guest's tab — answers by re-reading the map
+  (`frontend/src/lib/aliasSync.ts`). A guest cannot rename (the POST is
+  403; the UI reverts).
+- **Every other session: absent.** `GET /api/instances` lists only what the
+  link reaches — nothing crossed out, nothing to wonder about — and every
+  call on another session is `403 {"error": "not part of your invite"}`.
+  The event stream carries only their sessions' events.
+- **Their own name.** The owner does not name the link. The guest's first
+  screen asks *What should we call you?* (`POST /api/guest/name`, required
+  before their pill shows; unique on this rail — another guest's name or the
+  owner's own is refused) and the name is kept on the link, so a reload
+  doesn't ask again.
+- **Where they are.** The guest's page reports the session it has selected
+  (`POST /api/instances/<title>/focus`, on every change and every 30 s) and
+  the owner's rail shows a **pill with the guest's name** on that row; it
+  moves as they click (`guest.focus_changed`; `GET /api/guests` rows carry
+  `focus` for a fresh page) and a toast says when they arrive. Press the
+  pill to **follow** them — your selection then moves with theirs — press
+  again to stop. A page silent for 90 s has left (`guests.FOCUS_TTL_S`).
 - **Nothing else.** No creating sessions, no settings, no token, no devices,
   no links — a few read-only boot calls (`/api/config` says `guest:
   {label, sessions}`, which is what crosses the rail out) and the speech
@@ -198,6 +221,44 @@ What the link holds, exactly (`backend/web/core/guests.py`):
   name through only while the tunnel is up (`auth.allow_fronted_host`).
 
 `GET/POST /api/guests`, `POST/DELETE /api/guests/<id>` — [web-api.md](web-api.md#guest-links).
+
+### A small chat
+
+When someone is on one of your sessions, a little chat window pops up
+bottom-right for that session — a full-width sheet on a phone. It is for the
+**people** on the session: you, a guest who came in through a guest link,
+and a peer who has the session open from their own MindFlock. **Agents are
+not in it** — nothing typed there reaches the terminal.
+
+- **It opens by itself** when someone arrives on one of your sessions (the
+  guest's pill appears) and, minimized with an unread count, when someone
+  writes on a session whose chat isn't open. A guest's own page opens it
+  when you write to them. Close it and it stays closed for that person on
+  that session for the rest of the page load; someone else arriving brings
+  it back as a pill, not a window. **💬 Chat** in the corner opens it by
+  hand for the session in focus while someone else is on it.
+- **One per session**, the session's name in the header, **▁** to minimize
+  (the pill carries the unread count), **×** to close. Enter sends,
+  Shift+Enter is a new line; messages are up to 2000 characters.
+- **Nothing is kept.** The server holds the last 200 messages per session
+  in memory (`backend/web/core/chat.py`); a restart or deleting the session
+  forgets them. A chat lives where its session lives — another device's row
+  has none here.
+- **Across a peer link, both ways.** When you share a session with a peer
+  (People → Share a session), they and you talk in the same little window:
+  on their rail your session is a `<you>::<title>` row whose chat card says
+  "with <you>", and it pops open when you write (a pill once they closed
+  it); **💬 Chat** opens it by hand while that row is in focus. What they
+  type arrives in your chat for the session under their name, like a
+  guest's line. The chat itself lives on the sharer's machine: the peer's
+  copy holds what was said since the row appeared and is forgotten when the
+  link drops or you stop sharing. Agents are never in it, on either side —
+  the chat never reaches either terminal. (`chat_msg` and `chat_out` over
+  the link: `backend/peer/chat_bridge.py`.)
+
+`GET/POST /api/instances/<title>/chat` (a guest may use it on a session
+their link reaches; on a peer's row the same routes go over the link);
+every message is `session.chat` on the bus.
 
 ## Git identity
 
@@ -226,7 +287,11 @@ soft lock that keeps two people from typing into one agent at once, never an
 access control: the token and pairing still gate every request, and anyone
 who can reach a session can take its keyboard. All of one person's devices
 share an id, so a person alone with their sessions never meets any of this —
-their laptop and their mac mini are the same driver.
+their laptop and their mac mini are the same driver. A guest link's browser
+is its own person, `guest:<link id>`, named what the guest picked (also when
+they pick it after their terminal attached), and a peer typing into a session
+you share is `peer:<link id>` under the peer's name — never you, so you and
+they never both hold the keyboard.
 
 `backend/web/core/ownership.py` keeps it, as web metadata keyed by title (never
 the engine's Instance JSON):

@@ -2,8 +2,8 @@
 
 A peer link (docs/peer-link.md) joins two MindFlocks. This is the simpler
 thing: one person, one MindFlock, and a collaborator who opens a link in a
-browser and works in the sessions the owner picked — the rest of the rail is
-crossed out for them. No second install, no sandbox: they sit at the owner's
+browser and works in the sessions the owner picked — the rest of the rail
+simply isn't there for them. No second install, no sandbox: they sit at the owner's
 agent, in the owner's worktree, on the owner's machine, which is exactly what
 "come look at this with me" means.
 
@@ -15,9 +15,17 @@ link it is and :func:`path_allowed` decides per request: anything under
 boot calls the web UI needs, the live event stream (filtered to those
 sessions by the server), and the static page itself. Everything else — other
 sessions, creating sessions, settings, the owner's token, these links — is a
-403 that says so. ``GET /api/instances`` still lists every row, but a row the
-guest may not open is a stub (``locked: true``, title and status only), so the
-rail can cross it out without leaking what it is doing.
+403 that says so. ``GET /api/instances`` lists only the rows the link
+reaches: a session the guest may not open is not a crossed-out stub, it is
+absent (nothing to leak, nothing to wonder about).
+
+The guest's FOCUS — which session their page has selected — is reported by
+their browser (``POST /api/instances/<title>/focus``, heartbeat every half
+minute) and kept here per link (:func:`note_focus`, :func:`focus_of`), so
+the owner's rail can show a pill with the guest's name on the row they are
+looking at and follow them from session to session (``guest.focus_changed``
+on the bus; ``GET /api/guests`` rows carry ``focus`` for a fresh page). A
+focus older than :data:`FOCUS_TTL_S` is forgotten: the guest left.
 
 The gate must be ON for any of this to mean anything (with it off, a link is
 just the URL everyone can already open), so creating a link needs it on, and
@@ -29,6 +37,17 @@ Persisted as ``<config dir>/guest_links.json`` (the title_store pattern):
 ``token_urlsafe``; comparisons are constant-time. Links name sessions by
 title, so a session closed and later recreated under the same title is open
 to the link again — the owner made the title the unit of sharing.
+
+A link reaches its named sessions AND their sub-sessions: anything whose
+live parent chain (:mod:`backend.web.core.lineage`) leads to a named title,
+whether it existed when the link was made or an agent spawns it later
+(:func:`reach`, computed per request, so a worker that appears mid-visit is
+open to the guest at once). Sub-sessions are never named on a link
+themselves — they belong to their parent, and the picker leaves them out.
+The owner's RENAMES are what the guest sees too: ``GET /api/aliases`` is
+in the read-only set (filtered to the link's reach) and ``session.renamed``
+reaches the guest's stream, so the shared session is called what the owner
+calls it, now and after any later rename.
 """
 
 from __future__ import annotations
@@ -41,6 +60,7 @@ import time
 from typing import Dict, Iterable, List, Optional
 
 from backend import config
+from backend.web.core import lineage as _lineage
 from backend.web.core import title_store
 
 _LOCK = threading.Lock()
@@ -58,7 +78,8 @@ MAX_SESSIONS = 50
 #: The session sub-routes a guest may change (anything else under their
 #: session answers GET only): the typing surface — the terminal and shell
 #: sockets, prompts, answers, the queue, voice, find, the family thread,
-#: waking a sleeping agent, background-job expectations, the map's ask-plan.
+#: waking a sleeping agent, background-job expectations, the map's ask-plan,
+#: the session chat (core.chat).
 #: Not: closing, deleting, copying, committing, pushing, PRs, fast-track,
 #: branches, fences, zones, owner/parent/order/profile — the owner's calls.
 SESSION_WRITE_OK = frozenset(
@@ -79,8 +100,16 @@ SESSION_WRITE_OK = frozenset(
         "jobs",
         "background",
         "code-map",
+        "focus",
+        "chat",
     }
 )
+
+#: How long a guest's last focus report stands for "they are here" (their
+#: page re-reports every 30 s while open).
+FOCUS_TTL_S = 90.0
+#: link id -> {"title", "ts"}: where each guest's page is, in memory only.
+_FOCUS: Dict[str, dict] = {}
 
 #: Read-only routes the SPA needs to boot and draw a rail. Each one is checked
 #: for what it reveals: nothing about sessions the guest may not open, no
@@ -107,8 +136,17 @@ GLOBAL_GET_OK = frozenset(
 #: Global POSTs that only serve the guest's own typing: speech in and out,
 #: and an image pasted into a pane.
 GLOBAL_POST_OK = frozenset(
-    {"/api/voice/transcribe", "/api/voice/speak", "/api/paste-image"}
+    {
+        "/api/voice/transcribe",
+        "/api/voice/speak",
+        "/api/paste-image",
+        # The guest introducing themselves (:func:`set_name`).
+        "/api/guest/name",
+    }
 )
+
+#: Longest name a guest may pick.
+MAX_NAME = 40
 
 REFUSAL = "not part of your invite"
 
@@ -132,6 +170,7 @@ def _clean(d: dict) -> Dict[str, dict]:
         out[str(k)] = {
             "token": v["token"],
             "label": str(v.get("label") or "")[:MAX_LABEL],
+            "name": str(v.get("name") or "").strip()[:MAX_NAME],
             "sessions": _titles(v.get("sessions")),
             "created_at": float(v.get("created_at") or 0),
         }
@@ -164,13 +203,129 @@ def _titles(v) -> List[str]:
 
 
 def _public(link_id: str, rec: dict) -> dict:
-    """The row the owner sees: everything but the token (the URL carries it)."""
+    """The row the owner sees: everything but the token (the URL carries it),
+    plus where the guest's page is right now (``focus``, None when they are
+    not here)."""
     return {
         "id": link_id,
         "label": rec["label"],
+        "name": rec.get("name", ""),
         "sessions": list(rec["sessions"]),
         "created_at": rec["created_at"],
+        "focus": focus_of(link_id),
     }
+
+
+def display_name(rec: dict) -> str:
+    """What a guest is called: the name they picked, else the owner's label
+    for the link (older links), else "Guest"."""
+    return str(rec.get("name") or rec.get("label") or "").strip() or "Guest"
+
+
+def _owner_name() -> str:
+    try:
+        from backend.web.core import person as _person
+
+        return str(_person.current().get("name") or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def name_taken_by(name: str, exclude: str = "") -> str:
+    """Who already goes by ``name`` (case-insensitively): another link's
+    guest (its id), the owner ("owner"), or "" when it is free. Two people
+    on one rail may not share a pill."""
+    want = str(name or "").strip().casefold()
+    if not want:
+        return ""
+    if want == _owner_name().strip().casefold():
+        return "owner"
+    with _LOCK:
+        for link_id, rec in _load().items():
+            if link_id != exclude and display_name(rec).casefold() == want:
+                return link_id
+    return ""
+
+
+def set_name(link_id: str, name: str) -> str:
+    """The guest picks what they are called on the owner's rail. Required
+    before they are shown anywhere; must be unique among the people on this
+    rail. ``ValueError`` says why not. Returns the name as stored."""
+    clean = " ".join(str(name or "").split())[:MAX_NAME]
+    if not clean:
+        raise ValueError("pick a name")
+    taken = name_taken_by(clean, exclude=link_id)
+    if taken:
+        raise ValueError(
+            "someone here already goes by “%s” — pick another name" % clean
+        )
+    with _LOCK:
+        links = _load()
+        rec = links.get(link_id)
+        if rec is None:
+            raise ValueError("this link is gone")
+        rec["name"] = clean
+        _persist()
+    # A pill already on the rail changes its text at once.
+    cur = focus_of(link_id)
+    if cur is not None:
+        _emit_focus(link_id, clean, "", cur["title"], joined=False)
+    return clean
+
+
+# --------------------------------------------------------------------------- #
+# Focus: where each guest's page is
+# --------------------------------------------------------------------------- #
+def focus_of(link_id: str) -> Optional[dict]:
+    """``{title, ts}`` of the guest's last focus report, None when there is
+    none or it is older than :data:`FOCUS_TTL_S` (they left)."""
+    rec = _FOCUS.get(link_id)
+    if not rec or time.time() - float(rec.get("ts") or 0) > FOCUS_TTL_S:
+        return None
+    return {"title": rec["title"], "ts": rec["ts"]}
+
+
+def note_focus(guest: dict, title: str) -> dict:
+    """The guest's page selected ``title`` (or is still on it: the heartbeat).
+    Emits ``guest.focus_changed`` when the session changed or they had been
+    away — so the owner's rail moves the pill the moment it happens, and the
+    first report after a while reads as "joined" (``data.joined``)."""
+    link_id = str(guest.get("id") or "")
+    before = focus_of(link_id)
+    rec = {"title": str(title or ""), "ts": time.time()}
+    _FOCUS[link_id] = rec
+    if before is None or before["title"] != rec["title"]:
+        _emit_focus(
+            link_id,
+            display_name(guest),
+            before["title"] if before else "",
+            rec["title"],
+            joined=before is None,
+        )
+    return {"title": rec["title"], "ts": rec["ts"]}
+
+
+def _emit_focus(link_id: str, who: str, old: str, new: str, *, joined: bool) -> None:
+    try:
+        from backend.web.core import events as _events
+
+        _events.BUS.emit(
+            "guest.focus_changed",
+            session=new,
+            old=old,
+            new=new,
+            data={"link": link_id, "label": who, "title": new, "joined": joined},
+        )
+    except Exception:  # noqa: BLE001 — a pill is never worth a 500
+        pass
+
+
+def forget_focus(link_id: str = "") -> None:
+    """Drop one link's focus (revoked), or every link's."""
+    if link_id:
+        _FOCUS.pop(link_id, None)
+    else:
+        _FOCUS.clear()
 
 
 def create(label: str, sessions: Iterable[str]) -> dict:
@@ -183,6 +338,7 @@ def create(label: str, sessions: Iterable[str]) -> dict:
     rec = {
         "token": secrets.token_urlsafe(20),
         "label": str(label or "").strip()[:MAX_LABEL],
+        "name": "",
         "sessions": titles,
         "created_at": time.time(),
     }
@@ -230,6 +386,7 @@ def revoke(link_id: str) -> bool:
         links.pop(link_id)
         _persist()
         _REVISION += 1
+        forget_focus(link_id)
         return True
 
 
@@ -243,6 +400,7 @@ def kill_all() -> int:
             links.clear()
             _persist()
         _REVISION += 1
+        forget_focus()
         return n
 
 
@@ -284,6 +442,7 @@ def guest_for(candidate: Optional[str]) -> Optional[dict]:
                     return {
                         "id": link_id,
                         "label": rec["label"],
+                        "name": rec.get("name", ""),
                         "sessions": list(rec["sessions"]),
                         "_token": rec["token"],
                     }
@@ -316,6 +475,36 @@ def any_links() -> bool:
 # --------------------------------------------------------------------------- #
 # Authorization: what a link may reach
 # --------------------------------------------------------------------------- #
+def _live_instances() -> dict:
+    """This server's live sessions (``title -> Instance``), a snapshot; ``{}``
+    when the engine is not up (unit tests of the pure policy). Never raises."""
+    try:
+        from backend.web import server as _srv
+
+        return dict(_srv.ENGINE.instances)
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def reach(guest: dict, instances: Optional[dict] = None) -> List[str]:
+    """Every title the link opens: the named sessions, then (sorted) every
+    live session whose parent chain leads to one of them — a sub-session
+    rides with its parent, whenever it was spawned. ``instances`` defaults to
+    the engine's live sessions."""
+    named = [str(t) for t in guest.get("sessions", ()) if t]
+    if not named:
+        return []
+    live = _live_instances() if instances is None else instances
+    is_named = set(named)
+    extra = sorted(
+        t
+        for t in live
+        if t not in is_named
+        and any(a in is_named for a in _lineage.ancestors_of(live, t))
+    )
+    return named + extra
+
+
 def _session_of(path: str):
     """``(title, first sub-segment)`` for ``/api/instances/<title>[/...]``,
     else None. ``scope["path"]`` is already percent-decoded."""
@@ -338,7 +527,7 @@ def path_allowed(method: str, path: str, guest: dict) -> bool:
     sess = _session_of(path)
     if sess is not None:
         title, action = sess
-        if title not in guest.get("sessions", ()):
+        if title not in reach(guest):
             return False
         if method in ("GET", "HEAD", "OPTIONS"):
             return True
@@ -363,40 +552,41 @@ def scope_guest(scope) -> Optional[dict]:
 
 
 def public_scope(scope) -> Optional[dict]:
-    """What ``/api/config`` tells the SPA: ``{label, sessions}`` for a guest,
-    None for the owner."""
+    """What ``/api/config`` tells the SPA: ``{label, sessions}`` for a guest
+    (``sessions`` = the link's whole reach, sub-sessions included), None for
+    the owner."""
     g = scope_guest(scope)
     if g is None:
         return None
-    return {"label": g.get("label", ""), "sessions": list(g.get("sessions", []))}
+    return {
+        "label": g.get("label", ""),
+        "name": g.get("name", ""),
+        "sessions": reach(g),
+    }
+
+
+def aliases_for(guest: dict, aliases: Dict[str, str]) -> Dict[str, str]:
+    """The owner's renames a guest may read: those of the sessions the link
+    reaches, nothing about the crossed-out rows."""
+    allowed = set(reach(guest))
+    return {t: a for t, a in aliases.items() if t in allowed}
 
 
 def stub_rows(rows: List[dict], guest: dict) -> List[dict]:
-    """``GET /api/instances`` for a guest: every row the link names, as is;
-    every other row cut down to what the rail needs to cross it out."""
-    allowed = set(guest.get("sessions", ()))
-    out: List[dict] = []
-    for r in rows:
-        if not isinstance(r, dict):
-            continue
-        if r.get("title") in allowed and not r.get("device"):
-            out.append(r)
-        else:
-            out.append(
-                {
-                    "title": r.get("title", ""),
-                    "status": r.get("status", ""),
-                    "device": r.get("device", ""),
-                    "hidden_by": r.get("hidden_by", ""),
-                    "pending": r.get("pending", False),
-                    "locked": True,
-                }
-            )
-    return out
+    """``GET /api/instances`` for a guest: the rows the link reaches (named
+    sessions and their sub-sessions), as is — and nothing else. A session
+    the guest may not open is left out, not crossed out: their rail is their
+    sessions, full stop. Another device's rows are never theirs."""
+    allowed = set(reach(guest))
+    return [
+        r
+        for r in rows
+        if isinstance(r, dict) and r.get("title") in allowed and not r.get("device")
+    ]
 
 
 def event_allowed(env: dict, guest: dict) -> bool:
     """Whether one ``/api/events`` envelope may reach a guest: its own
     sessions' events and the session-less ones (hello, server-wide)."""
     s = env.get("session") or ""
-    return not s or s in guest.get("sessions", ())
+    return not s or s in reach(guest)

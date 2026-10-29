@@ -105,5 +105,21 @@ def test_blank_title_with_a_task_is_named_from_it(reg, monkeypatch):
     s3, b3 = asyncio.run(session_create.create_result(dict(body)))
     assert (s1, b1["title"]) == (202, "fix-login-bug")
     assert (s2, b2["title"]) == (202, "fix-login-bug-2")
-    # No task either: still the "untitled" quick launch.
-    assert (s3, b3["title"]) == (202, "untitled")
+    # No task either: named for the folder it works in (/tmp/x → "x").
+    assert (s3, b3["title"]) == (202, "x")
+
+
+def test_title_from_place():
+    assert (
+        session_create.title_from_place("/home/me/Allure/sitecheck-bot7")
+        == "sitecheck-bot7"
+    )
+    assert session_create.title_from_place("/home/me/My Repo.git/") == "my-repo-git"
+    assert session_create.title_from_place("C:\\\\work\\\\App") == "app"
+    # No folder, or nothing nameable in it: the caller falls back to untitled.
+    assert session_create.title_from_place("") == ""
+    assert session_create.title_from_place("/tmp/---") == ""
+    assert (
+        len(session_create.title_from_place("/x/" + "a" * 80))
+        == session_create.TITLE_FROM_PROMPT_MAX
+    )

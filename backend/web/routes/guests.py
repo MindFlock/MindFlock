@@ -121,6 +121,43 @@ async def create_guest(
     )
 
 
+@router.post("/api/instances/{title}/focus")
+async def guest_focus(request: Request, title: str) -> JSONResponse:
+    """A GUEST's page says which session it has selected (on every change,
+    and every 30 s while it stays open) — the one call here that is the
+    guest's, not the owner's; the gate has already checked ``title`` is on
+    their link. The owner's rail shows a pill with their name on that row
+    (``guest.focus_changed``). From the owner's own browser it is a no-op:
+    where the owner looks is nobody's business."""
+    guest = _guests.scope_guest(request)
+    if guest is None:
+        return JSONResponse({"ok": True, "guest": False})
+    return JSONResponse(
+        {"ok": True, "guest": True, "focus": _guests.note_focus(guest, title)}
+    )
+
+
+@router.post("/api/guest/name")
+async def guest_name(request: Request, payload: Optional[dict] = None) -> JSONResponse:
+    """The GUEST introduces themselves: ``{name}`` → ``{name}``. Required
+    before their pill shows on the owner's rail (the page asks on open), and
+    unique among the people on it — another guest's name or the owner's own
+    is **409** ``{error, taken: true}``; empty is 400. The owner's browser
+    has no link to name: 403."""
+    guest = _guests.scope_guest(request)
+    if guest is None:
+        return JSONResponse({"error": "not a guest link"}, status_code=403)
+    name = str((payload or {}).get("name") or "")
+    try:
+        stored = _guests.set_name(str(guest.get("id") or ""), name)
+    except ValueError as err:
+        taken = "already goes by" in str(err)
+        return JSONResponse(
+            {"error": str(err), "taken": taken}, status_code=409 if taken else 400
+        )
+    return JSONResponse({"name": stored})
+
+
 @router.post("/api/guests/tunnel")
 async def start_tunnel(request: Request) -> JSONResponse:
     """Ask for the public address (start the tunnel, or say what is missing:
