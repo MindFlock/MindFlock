@@ -28,6 +28,12 @@ Installed via ``[project.scripts]``::
     mindflock msg TITLE "text…"   # message a session's agent (typed in when idle)
     mindflock inbox TITLE [--all] # read a session's messages (doesn't mark them read)
 
+    mindflock flights             # flights in the air (plan, subject, session, step)
+    mindflock flights --all       # …and every landed one
+    mindflock flight plans        # the flight plans (scheduled ones say when next)
+    mindflock flight start PLAN [--repo PATH] [--title SESSION]   # take off (id or name)
+    mindflock flight done FLIGHT  # tick off the step it waits on you for (skip / cancel too)
+
     mindflock peer status         # peer links: pair-code with another MindFlock user
     mindflock peer invite         # …make a one-time invite code (you listen)
     mindflock peer join CODE      # …pair using their code (you dial)
@@ -491,6 +497,64 @@ def _build_parser() -> argparse.ArgumentParser:
         "--json", action="store_true", dest="as_json", help="raw JSON for scripting"
     )
 
+    flights = sub.add_parser(
+        "flights",
+        parents=[server_opts],
+        help="list flights: plan, subject, session, state and the step each is on",
+    )
+    flights.add_argument(
+        "--all", action="store_true", help="include every landed flight"
+    )
+    flights.add_argument(
+        "--json", action="store_true", dest="as_json", help="raw JSON for scripting"
+    )
+
+    flight = sub.add_parser(
+        "flight",
+        parents=[server_opts],
+        help="take off on a flight plan, or tick off / skip / cancel a flight's step",
+        description=(
+            "A flight is one run of a flight plan (a row of steps) bound to one "
+            "session — see docs/flights.md. Needs a running server."
+        ),
+    )
+    fl_sub = flight.add_subparsers(dest="flight_command")
+    fl_plans = fl_sub.add_parser(
+        "plans", parents=[server_opts_nested], help="list the flight plans"
+    )
+    fl_plans.add_argument(
+        "--json", action="store_true", dest="as_json", help="raw JSON for scripting"
+    )
+    fl_start = fl_sub.add_parser(
+        "start",
+        parents=[server_opts_nested],
+        help="take off: a new session from the plan, or attach it to --title",
+    )
+    fl_start.add_argument("plan", metavar="PLAN", help="plan id or name (any case)")
+    fl_start.add_argument(
+        "--repo",
+        default=None,
+        metavar="PATH",
+        help="folder for the new session (default: the plan's, else here)",
+    )
+    fl_start.add_argument(
+        "--title",
+        default=None,
+        metavar="SESSION",
+        help="fly an existing session instead (unambiguous prefix ok)",
+    )
+    for verb, text in (
+        ("done", "tick off the step the flight waits on you for"),
+        ("skip", "skip the flight's current step"),
+        ("cancel", "cancel the flight (its session stays)"),
+    ):
+        p_verb = fl_sub.add_parser(verb, parents=[server_opts_nested], help=text)
+        p_verb.add_argument(
+            "flight", metavar="FLIGHT", help="flight id (prefix ok) or its session"
+        )
+        if verb == "done":
+            p_verb.add_argument("--note", default="", help="a note for the history")
+
     peer = sub.add_parser(
         "peer",
         parents=[server_opts],
@@ -893,6 +957,8 @@ _HELP_GROUPS = (
             "inbox",
             "run",
             "templates",
+            "flights",
+            "flight",
             "pause",
             "resume",
             "sleep",
@@ -1831,6 +1897,227 @@ def _cmd_templates(args: argparse.Namespace) -> int:
     )
     if data.get("runs_here") is False and data.get("runs_on"):
         print("schedules fire on %s (the automation device)" % data["runs_on"])
+    return 0
+
+
+def _flight_step(f: dict) -> dict:
+    steps = f.get("steps") or []
+    cur = int(f.get("cursor") or 0)
+    return steps[cur] if 0 <= cur < len(steps) else {}
+
+
+def _cmd_flights(args: argparse.Namespace) -> int:
+    """GET /api/flights — what is in the air (``--all``: landed too)."""
+    base = client.discover(args.host, args.port)
+    data = client.get(base, "/api/flights%s" % ("?all=1" if args.all else "")) or {}
+    data = data if isinstance(data, dict) else {}
+    if args.as_json:
+        print(json.dumps(data, indent=2))
+        return 0
+    items = [f for f in data.get("flights") or [] if isinstance(f, dict)]
+    if not items:
+        print("no flights — start one with `mindflock flight start PLAN`")
+        return 0
+    rows = []
+    for f in items:
+        subj = f.get("subject") or {}
+        subject = str(subj.get("title") or subj.get("id") or "")
+        if subj.get("kind") in ("ticket", "pr", "issue") and subj.get("id"):
+            subject = "%s %s%s" % (
+                subj["kind"],
+                "#" if subj["kind"] != "ticket" else "",
+                subj["id"],
+            ) + (" " + str(subj.get("title")) if subj.get("title") else "")
+        step = _flight_step(f)
+        where = ""
+        if step:
+            state = ((f.get("step_states") or {}).get(step.get("id")) or {}).get(
+                "state"
+            ) or ""
+            where = "%d/%d %s" % (
+                int(f.get("cursor") or 0) + 1,
+                len(f.get("steps") or []),
+                step.get("title") or step.get("kind") or "",
+            )
+            if state == "waiting_you":
+                where += " (yours)"
+        state = str(f.get("state") or "")
+        if f.get("reason") and state not in ("running", "waiting_you"):
+            state += ": " + str(f["reason"])
+        rows.append(
+            [
+                str(f.get("id") or ""),
+                str(f.get("plan_name") or f.get("plan_id") or ""),
+                subject[:50],
+                str(f.get("session") or ""),
+                state,
+                where,
+            ]
+        )
+    print(_render_table(rows, ["ID", "PLAN", "SUBJECT", "SESSION", "STATE", "STEP"]))
+    return 0
+
+
+def _resolve_plan(plans: List[dict], needle: str) -> dict:
+    """A plan by id, then by name (any case), then by a unique id or name
+    prefix. Raises ``client.ClientError`` naming the choices otherwise."""
+    want = needle.strip()
+    low = want.lower()
+    for match in (
+        lambda p: p.get("id") == want,
+        lambda p: str(p.get("name") or "").lower() == low,
+    ):
+        hits = [p for p in plans if match(p)]
+        if len(hits) == 1:
+            return hits[0]
+    hits = [
+        p
+        for p in plans
+        if str(p.get("id") or "").lower().startswith(low)
+        or str(p.get("name") or "").lower().startswith(low)
+    ]
+    if len(hits) == 1:
+        return hits[0]
+    if not hits:
+        raise client.ClientError(
+            "no flight plan %r (run `mindflock flight plans`)" % needle
+        )
+    raise client.ClientError(
+        "%r matches %d plans — say which: %s"
+        % (needle, len(hits), ", ".join(str(p.get("id")) for p in hits))
+    )
+
+
+def _resolve_flight(flights: List[dict], needle: str) -> dict:
+    """A flight by id, by its session's title, or by a unique id prefix."""
+    want = needle.strip()
+    for match in (
+        lambda f: f.get("id") == want,
+        lambda f: f.get("session") == want
+        and f.get("state") not in ("done", "cancelled"),
+    ):
+        hits = [f for f in flights if match(f)]
+        if hits:
+            return hits[0]
+    hits = [f for f in flights if str(f.get("id") or "").startswith(want)]
+    if len(hits) == 1:
+        return hits[0]
+    if not hits:
+        raise client.ClientError("no flight %r (run `mindflock flights`)" % needle)
+    raise client.ClientError(
+        "%r matches %d flights — say which: %s"
+        % (needle, len(hits), ", ".join(str(f.get("id")) for f in hits))
+    )
+
+
+def _flight_api(call):
+    """Run one flights call; its ``{error, detail}`` refusal becomes the
+    detail sentence (the word alone — "in_flight" — says little)."""
+    try:
+        return call()
+    except client.AuthRejected:
+        raise
+    except client.ApiError as err:
+        detail = (err.payload or {}).get("detail") or ""
+        raise client.ClientError(detail or err.message) from None
+
+
+def _cmd_flight(args: argparse.Namespace) -> int:
+    """``mindflock flight …`` — thin client over ``/api/flights``."""
+    base = client.discover(args.host, args.port)
+    cmd = args.flight_command or "plans"
+    if cmd == "plans":
+        data = client.get(base, "/api/flights/plans") or {}
+        data = data if isinstance(data, dict) else {}
+        if getattr(args, "as_json", False):
+            print(json.dumps(data, indent=2))
+            return 0
+        rows = []
+        for p in data.get("plans") or []:
+            trig = p.get("trigger") or {}
+            kind = str(trig.get("kind") or "manual")
+            runs = p.get("runs") or {}
+            when = ""
+            if kind == "schedule":
+                when = str(runs.get("schedule_label") or "no schedule set")
+                if trig.get("paused") or runs.get("paused"):
+                    when += " (paused)"
+                elif runs.get("next_at"):
+                    when += " — next " + _fmt_when(runs["next_at"])
+            rows.append(
+                [
+                    str(p.get("id") or ""),
+                    str(p.get("name") or "") + (" *" if p.get("builtin") else ""),
+                    kind,
+                    str(len(p.get("steps") or [])),
+                    when,
+                ]
+            )
+        print(_render_table(rows, ["ID", "NAME", "TRIGGER", "STEPS", "SCHEDULE"]))
+        print("* built-in (editable; reset from the Plans tab)")
+        return 0
+    if cmd == "start":
+        plans = (client.get(base, "/api/flights/plans") or {}).get("plans") or []
+        plan = _resolve_plan([p for p in plans if isinstance(p, dict)], args.plan)
+        body: dict = {"plan_id": plan["id"]}
+        if args.title:
+            inst = _resolve_title(client.get(base, "/api/instances") or [], args.title)
+            body["title"] = str(inst.get("title", ""))
+        repo = args.repo
+        if (
+            not repo
+            and not args.title
+            and not (plan.get("session") or {}).get("repo_path")
+        ):
+            repo = os.getcwd()
+        if repo:
+            body["repo_path"] = os.path.abspath(os.path.expanduser(repo))
+        made = _flight_api(lambda: client.post(base, "/api/flights/start", body))
+        f = (made or {}).get("flight") or {}
+        step = _flight_step(f)
+        print(
+            "%s took off on %s — %s, at %s"
+            % (
+                f.get("id") or "a flight",
+                f.get("plan_name") or plan.get("name"),
+                f.get("session") or "a new session",
+                step.get("title") or "the end",
+            )
+        )
+        return 0
+    flights = (client.get(base, "/api/flights?all=1") or {}).get("flights") or []
+    f = _resolve_flight([x for x in flights if isinstance(x, dict)], args.flight)
+    fid = str(f.get("id") or "")
+    if cmd == "cancel":
+        _flight_api(
+            lambda: client.post(base, "/api/flights/%s/cancel" % _quote_title(fid), {})
+        )
+        print("cancelled %s (%s stays open)" % (fid, f.get("session") or "its session"))
+        return 0
+    step = _flight_step(f)
+    if not step:
+        raise client.ClientError(
+            "%s has no step left (it is %s)" % (fid, f.get("state"))
+        )
+    payload = {"note": args.note} if cmd == "done" and args.note else {}
+    after = _flight_api(
+        lambda: client.post(
+            base,
+            "/api/flights/%s/steps/%s/%s"
+            % (_quote_title(fid), _quote_title(str(step.get("id"))), cmd),
+            payload,
+        )
+    )
+    nxt = _flight_step((after or {}).get("flight") or {})
+    print(
+        "%s %s on %s — now at %s"
+        % (
+            "done:" if cmd == "done" else "skipped",
+            step.get("title") or step.get("kind"),
+            fid,
+            nxt.get("title") or "the end",
+        )
+    )
     return 0
 
 
@@ -3424,6 +3711,8 @@ _SESSION_COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "inbox": _cmd_inbox,
     "run": _cmd_run,
     "templates": _cmd_templates,
+    "flights": _cmd_flights,
+    "flight": _cmd_flight,
     "peer": _cmd_peer,
     "devices": _cmd_devices,
     "join": _cmd_join,
@@ -3445,7 +3734,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     hooks: startup cost matters, and its command's flags must pass through).
     ``doctor``, ``mcp`` and the J1 session commands
     (new/ls/attach/close/delete/rm/pause/resume/sleep/wake/open/events/msg/inbox/run/
-    templates) run in-process; any other invocation — including no subcommand at all — falls
+    templates/flights/flight) run in-process; any other invocation — including no subcommand at all — falls
     through to ``serve``. A session command that can't reach a server turns the
     :class:`client.ServerNotFound` / :class:`client.ClientError` into a one-line
     stderr message and exit 1, never a traceback.
