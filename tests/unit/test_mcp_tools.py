@@ -160,6 +160,14 @@ class TestWhoamiAndList:
         out = box.whoami({}, _ctx(clock))
         assert out["session"] is None and out["external"] is True
         assert out["parent"] is None and out["children"] == []
+        assert out["flock"] is False
+
+    def test_whoami_carries_the_rows_flock_mode(self):
+        box, _, clock = make_box(_tree())
+        assert box.whoami({}, _ctx(clock))["flock"] is False
+        tree = [r if r["title"] != "orch" else {**r, "flock": True} for r in _tree()]
+        box, _, clock = make_box(tree)
+        assert box.whoami({}, _ctx(clock))["flock"] is True
 
     def test_whoami_managed_marker_unresolved_is_readonly(self):
         box, _, clock = make_box(_tree(), me=None, managed_marker=True)

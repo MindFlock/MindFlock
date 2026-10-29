@@ -540,6 +540,28 @@ def test_an_edit_on_either_side_reaches_the_other(devices, clock):
     assert devices.get("ui", "accent") == "red"
 
 
+def test_the_workers_request_syncs_and_rewrites_the_flock_flags(
+    devices, clock, tmp_path, monkeypatch
+):
+    from backend.web.core import flock_mode
+
+    assert "workers_request" in settings_sync.SYNCED["general"]
+    assert "workers_model" in settings_sync.SYNCED["general"]
+    monkeypatch.setenv("MINDFLOCK_VOICE_FLAG_DIR", str(tmp_path / "voice"))
+    flock_mode.set_on("mindflock_w", True)  # this laptop's session in Flock mode
+    devices.all_on("rig")
+    clock.tick()
+    with devices.on("rig"):
+        store.update_settings(
+            general={"workers_request": "Split it ({model})", "workers_model": "m-9"}
+        )
+    run(settings_sync.sync_once())
+    assert devices.get("general", "workers_request") == "Split it ({model})"
+    assert devices.get("general", "workers_model") == "m-9"
+    # The adopted words reach the session's next prompt.
+    assert flock_mode.flag_path("mindflock_w").read_text() == "Split it (m-9)\n"
+
+
 def test_the_later_edit_wins_a_conflict(devices, clock):
     devices.all_on("rig")
     clock.tick()

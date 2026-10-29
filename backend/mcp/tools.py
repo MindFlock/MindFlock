@@ -199,8 +199,9 @@ _D_WHOAMI = (
     "whether you are an external client (not inside a MindFlock session), your "
     "scope (readonly | children | all — what you may steer), your parent, your "
     "children, your unread message count and the person you work for "
-    "(person: {id, name} — shared by all of that person's devices). Call this "
-    "first."
+    "(person: {id, name} — shared by all of that person's devices). flock: true "
+    "means the person wants this session's work split across MindFlock workers "
+    "by default. Call this first."
 )
 _D_LIST = (
     "List MindFlock sessions as compact rows: title, status (running | ready | "
@@ -1104,6 +1105,8 @@ class Toolbox(_ship.ShipTools, _runs.RunTools):
             out["you_drive"] = row.get("driver") == person["id"]
         else:
             out["you_drive"] = None
+        # Flock mode: the person wants this session's work done by workers.
+        out["flock"] = bool(row.get("flock")) if isinstance(row, dict) else False
         fence = fence_view(row_fence(row))
         if fence is not None:
             out["fence"] = fence

@@ -410,7 +410,10 @@ first result per 10 minutes skips the rate limit (see
 ### `whoami`
 
 No arguments. → `{session, external, scope, parent, children, unread, server,
-person, you_drive, fence?, note?}`. `fence` (a fenced worker only) is `{only,
+person, you_drive, flock, fence?, note?}`. `flock` is true when the person
+has Flock mode on for your session: they want its work split across
+MindFlock workers by default, so orchestrate unless a prompt says otherwise.
+`fence` (a fenced worker only) is `{only,
 keep_out, by?, reason?, rule}`; `rule` is the contract in one sentence — *Work
 in `<only>`; read outside only to understand callers; never edit outside.
 Never edit: `<keep_out>`. Need a file outside? Finish the in-scope work, then

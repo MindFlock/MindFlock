@@ -1461,6 +1461,12 @@ class SettingsAddon(Addon):
             except Exception as err:  # noqa: BLE001
                 return JSONResponse({"error": str(err)}, status_code=400)
             _stamp_for_sync(*wrote)
+            if any(p.startswith("general.workers_") for p in wrote):
+                # Flock mode's words: every session already in Flock mode
+                # gets them on its next prompt (core.flock_mode).
+                from backend.web.core import flock_mode
+
+                flock_mode.rewrite_all()
             if sig_before is not None and wrote:
                 _settings_hooks.after_settings_change(
                     wrote, source="", pipeline_before=sig_before

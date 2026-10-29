@@ -394,6 +394,7 @@ from backend.web.core import spoken as _spoken
 from backend.web.core import asking as _asking
 from backend.web.core import update_watch as _update_watch
 from backend.web.core import voice as _voice
+from backend.web.core import flock_mode as _flock_mode
 from backend.web.core.mobile_access import (
     _local_only_mode,
     _mobile_banner,
@@ -655,6 +656,7 @@ from backend.web.routes import team_runs as _team_runs_routes
 from backend.web.core import voice_actions as _voice_actions
 from backend.web.routes import speech as _speech_routes
 from backend.web.routes import voice as _voice_routes
+from backend.web.routes import flock as _flock_routes
 from backend.web.routes.peer import (
     _peer_body,
     _peer_call,
@@ -1401,6 +1403,14 @@ def _voice_on(title: str) -> bool:
         return False
 
 
+def _flock_on(title: str) -> bool:
+    """Whether Flock mode is on for ``title`` (``core.flock_mode``; one stat)."""
+    try:
+        return _flock_mode.is_on(tmux.to_mindflock_tmux_name(title))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _session_last_prompt_cached(inst) -> Optional[str]:
     """``_session_last_prompt(inst)`` memoized per session."""
     return _probe_cached("last_prompt", inst, lambda: _session_last_prompt(inst))
@@ -1726,6 +1736,8 @@ def _session_snapshot(i, queues: dict) -> dict:
     # the session is being talked to (its prompts carry the instruction).
     d["last_say"] = _session_last_say_cached(i)
     d["voice"] = _voice_on(i.Title)
+    # Flock mode: every prompt asks for MindFlock workers (core.flock_mode).
+    d["flock"] = _flock_on(i.Title)
     # The newest USER prompt (first line) — the panes pin it above the
     # terminal — and its whole body for the pin's hover/click expansion.
     d["last_prompt"] = _session_last_prompt_cached(i)
@@ -1824,6 +1836,7 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     d["last_turn"] = None
     d["last_say"] = None
     d["voice"] = _voice_on(i.Title)  # one stat: fresh on both paths
+    d["flock"] = _flock_on(i.Title)
     d["last_prompt"] = None
     d["last_prompt_full"] = None
     d["task"] = getattr(i, "Task", "") or None
@@ -3191,8 +3204,23 @@ def get_config(request: Request) -> JSONResponse:
             # A guest link (backend.web.core.guests): {label, sessions} — the
             # rail crosses out every other session; None for the owner.
             "guest": _guests.public_scope(request),
+            # Flock mode's words (core.flock_mode): the request with its model
+            # filled in — what the hotkey types and Flock mode injects.
+            "flock": _flock_config(),
         }
     )
+
+
+def _flock_config() -> dict:
+    """``{request, model}`` for ``/api/config`` — never raises."""
+    from backend.config.settings import DEFAULT_WORKERS_MODEL, load_settings
+
+    model = DEFAULT_WORKERS_MODEL
+    try:
+        model = load_settings().general.workers_model or model
+    except Exception:  # noqa: BLE001 — the defaults still ask for workers
+        pass
+    return {"request": _flock_mode.request_text(), "model": model}
 
 
 def _is_onboarded() -> bool:
@@ -5865,7 +5893,7 @@ _ENTER_ASLEEP = "It is asleep — open it, then dictate again"
 _ENTER_NOT_RUNNING = "the agent isn't running — open the session to start it"
 
 
-def _enter_on_agent(inst, title: str, *, say: bool = False):
+def _enter_on_agent(inst, title: str, *, say: bool = False, extra: str = ""):
     """Press Enter on whatever is in ``title``'s input field → ``(told,
     reason)`` like :func:`_deliver_to_agent` (``told`` is ``"sent"`` or
     False). ``/send``'s ``{"enter": true}`` form: the desktop app types live
@@ -5881,7 +5909,8 @@ def _enter_on_agent(inst, title: str, *, say: bool = False):
     (:func:`_voice_say` on an empty text: Claude's ``.next``, or the
     instruction typed after the draft for a hook-less CLI) right before the
     keystroke; the Enter is :func:`_send_to_agent`'s own, so a TUI sees a
-    real Enter a beat after the last key. Blocking — call via
+    real Enter a beat after the last key. ``extra`` is typed after the draft
+    first (Flock mode's request, :func:`_flock_suffix`). Blocking — call via
     ``asyncio.to_thread``."""
     if getattr(inst, "Status", None) == Paused:
         return False, PAUSED_REFUSED
@@ -5901,7 +5930,7 @@ def _enter_on_agent(inst, title: str, *, say: bool = False):
     ):
         return False, _SEND_IN_DIALOG
     _note_human_input(title)
-    typed = _voice_say(inst, title, "") if say else ""
+    typed = _voice_say(inst, title, extra) if say else extra
     if not _send_to_agent(name, typed, True):
         if say:
             _voice_say_cancel(title)
@@ -6047,6 +6076,32 @@ def _voice_say_cancel(title: str) -> None:
         pass
 
 
+def _flock_suffix(text: str) -> str:
+    """``text`` with Flock mode's workers request typed after it
+    (``core.flock_mode.request_text``). Idempotent like :func:`_voice_suffix`."""
+    req = _flock_mode.request_text()
+    if not req or text.rstrip().endswith(req):
+        return text
+    return text.rstrip("\n") + "\n\n" + req
+
+
+def _flock_typed(inst, title: str, one_shot: bool) -> bool:
+    """Whether ``/send`` types the workers request after this prompt: the
+    sticky Flock mode is on and the CLI has no prompt hook to inject it
+    (``voice_prompt_hook``; Claude's hook prints the ``.flock`` file on every
+    prompt itself), or the prompt asked once (``flock: true``) and the hook
+    is not already doing it. Never raises."""
+    sticky = _flock_on(title)
+    if not (sticky or one_shot):
+        return False
+    try:
+        prov = providers.resolve(getattr(inst, "Program", "") or "")
+        hook = bool(prov.voice_prompt_hook())
+    except Exception:  # noqa: BLE001 — unknown CLI: type it
+        hook = False
+    return not (hook and sticky)
+
+
 @app.post("/api/instances/{title}/send")
 async def instance_send(
     title: str, payload: dict, request: Request = None
@@ -6074,6 +6129,13 @@ async def instance_send(
     A queued message keeps it in its queue entry and is armed when the
     drain types it. Absent/false, or ``submit=false``: never asked for.
 
+    ``flock=true`` (with ``submit``) asks THIS prompt for MindFlock workers:
+    Flock mode's request (``core.flock_mode``) is typed after the text. A
+    session in Flock mode (``POST …/flock``) gets it on every prompt without
+    asking — injected by Claude's prompt hook, typed after the text for any
+    other CLI (:func:`_flock_typed`). Applied before any queueing, so a
+    queued prompt carries it in its text.
+
     ``{"enter": true}`` with NO (or empty) ``text``: press Enter on what is
     already in the input field — the desktop app types live dictation into
     the terminal itself, then submits through here so ``say`` is armed the
@@ -6100,6 +6162,12 @@ async def instance_send(
     # "Read everything" on: every prompt asks for its Say line, not only the
     # ones a client marks (core.voice.say_all).
     say = submit and ((payload or {}).get("say") is True or _voice.say_all())
+    extra = ""
+    if submit and _flock_typed(inst, title, (payload or {}).get("flock") is True):
+        if enter:
+            extra = _flock_suffix("")
+        else:
+            text = _flock_suffix(text)
     busy = _driven_elsewhere(request, title, payload)
     if busy is not None:
         return busy
@@ -6114,7 +6182,7 @@ async def instance_send(
     asleep = _sleep.is_sleeping(title)
     if enter:
         told, reason = await asyncio.to_thread(
-            lambda: _enter_on_agent(inst, title, say=say)
+            lambda: _enter_on_agent(inst, title, say=say, extra=extra)
         )
     else:
         told, reason = await asyncio.to_thread(
@@ -8818,6 +8886,9 @@ app.include_router(_speech_routes.router)
 
 # --- Voice mode (talking to a session from the phone): routes/voice.py --------
 app.include_router(_voice_routes.router)
+
+# --- Flock mode (every prompt asks for MindFlock workers): routes/flock.py -----
+app.include_router(_flock_routes.router)
 
 
 # --- Forced PR review (Intake → Pull requests) ----------------------------------
