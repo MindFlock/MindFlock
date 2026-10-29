@@ -281,6 +281,77 @@ A per-source `depth` of `commit|push|pr|merge` with no `plan` set uses the
 built-in for that kind cut after the matching ship step (so `pr` =
 agent→commit→push→verify→open PR).
 
+## As built: where the backend differs from (or adds to) the contract
+
+Everything above holds; these are the additions and the places the backend
+had to choose. Field and route names are unchanged.
+
+- **Flight record extras.** `paused` (bool), `gone_since` (prune's clock) and
+  `announced` (the needs-you / finished keys already said, so a restart never
+  repeats a push). **Pause** is `state: "halted"` with `paused: true` and
+  `reason: "paused"` (the state list has no `paused`); **Resume** carries on
+  where it was (back to `waiting_you` if parked; a failed step runs again).
+- **Halted flights don't block.** `POST /api/flights/start` on a session whose
+  flight is `running`/`waiting_you` is 409 `in_flight`; a `halted` one is
+  cancelled ("replaced by a new flight") and the new one takes off.
+- **Errors** are `{"error": "<word>", "detail": "<sentence>"}` (plan
+  validation keeps `{"error", "field"}`).
+- **`GET /api/flights/kinds`** also returns `on_fail: [halt, agent, skip, you]`.
+  The `you` step's `items` field is a `textarea` (one item per line); the
+  stored config is a list either way.
+- **Row `flight`** also carries `reason` (why it halted).
+- **Event data** also carries `detail` (the human sentence the ntfy body
+  uses). `flight.needs_you` is said once per (step, fix round); a `you` step
+  with `notify: false` still parks the flight and makes the bell row, but
+  emits no `flight.needs_you`.
+- **Bell row** (`GET /api/outbox` `waiting`): `kind: "flight_you"`, `key:
+  "flight::<id>::<sid>"`, `reason`/`text` = what to do, `actions: ["done",
+  "skip", "open"]`, `flight: {id, plan_name, step, step_title, kind, items}`.
+- **Depth cuts are virtual plans.** `flights.plan_for_depth(kind, depth)`
+  returns `builtin:<kind>@<lane>` (e.g. `builtin:ticket@pr`); `get_plan` and
+  `/start` resolve it to the built-in (as edited) cut after that ship step. An
+  issue uses `builtin:ticket`. `merge`, and a depth whose ship step is the
+  plan's last or missing (`pr` for `builtin:pr`), is the whole built-in.
+- **Sleeping sessions don't hold a flight.** The sleep sweep only stops an
+  idle agent, so a sleeping session counts as idle for the settle gate, and a
+  step that types into it wakes it first (`sleep.ensure_awake`). Paused /
+  missing / provisioning sessions are visible waits as written.
+- **`agent` step with an empty prompt** sends nothing and is done when the
+  current turn settles (no work evidence needed). `fresh: true` creates a new
+  session (plan `session` defaults, the flight's repo) and moves the flight to
+  it.
+- **`ticket` step** whose source is not configured on this machine is
+  skipped (not failed); a provider error fails it. With no `state` it moves
+  nothing (there is no per-source done state yet).
+- **`command` step** runs `/bin/sh -c` in the session's folder with the
+  server's environment plus `MINDFLOCK_FLIGHT` and `MINDFLOCK_SESSION_TITLE`;
+  a server restart mid-command runs it again.
+- **`reviews` step**: comments already on the PR when the step starts are
+  treated as seen; each batch of new ones goes to the agent as the pipeline's
+  consolidated prompt (which leaves the changes uncommitted), then a `push`
+  lane is armed. `include_bots: false` drops `*[bot]` and CodeRabbit authors.
+- **`checks` step**: `none` (nothing reports) counts as passed only after 2
+  minutes; the failing names come from the check-runs API.
+- **`verify` step** asks for the checklist through Verify's own manual path
+  (`_ensure_test_plan(title, manual=True)`) and starts the agent's run through
+  the `POST /api/test-plans/{id}/run` route body. `who: agent` is done once
+  the agent's items are answered (human items stay on the checklist); open
+  agent items left after a run become yours under `both`.
+
+### Hand-off hooks for the integration work
+
+- `flights.arm_pending(title, plan_id, subject, by="intake") -> Flight` —
+  a `running` flight on `title` before the session exists, its first agent
+  step recorded as already running (the intake prompt is that step). Raises
+  `flights.FlightError` (`unknown_plan` 404, `in_flight` 409).
+- `flights.plan_for_depth(kind, depth) -> str` — see "Depth cuts" above;
+  `""` for `off`/`agent`.
+- `flight_driver.on_session_created(title)` — already subscribed to
+  `session.created`; attaches the pending flight (repo root, gone clock) and
+  wakes the loop.
+- `POST /api/flights/start` with a ticket/PR/issue `subject` answers 501
+  `not_wired` until the Intake start paths take `plan`.
+
 ## Where it lives
 
 | What | Where |

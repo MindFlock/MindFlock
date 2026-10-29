@@ -2112,6 +2112,43 @@ detail}`; its tasks add `head_sha`, `commits`, `conflict`, `conflict_fixed`,
 checking → release_ready → releasing → done`; lanes `leave`/`commit` end at
 `done` right after the check.
 
+### Flights
+
+One route from arrival to merge (design + data model: `docs/flights.md`). A
+**plan** is a row of steps; a **flight** is one run of a plan bound to one
+session. Stores: `~/.mindflock/flights/plans.json` (synced across devices as
+the `flight_plans` store) and `flights.json` (local); `MINDFLOCK_FLIGHTS_DIR`
+overrides the folder. Routes in `backend/web/routes/flights.py`, logic in
+`core/flights.py` (stores + pure planner), `core/flight_driver.py` (the 5 s
+loop, executors, events) and `core/flight_describe.py`. Errors are
+`{"error": "<word>", "detail": "<sentence>"}` unless stated.
+
+| Method | Path | What |
+|---|---|---|
+| GET | `/api/flights/kinds` | The step registry → `{kinds: [{kind, label, actor: robot\|you, summary, fields: [{name, type: text\|textarea\|int\|bool\|select, label, options?, default?, placeholder?}], default_title}], on_fail: [halt, agent, skip, you]}` |
+| GET | `/api/flights/plans` | `{plans: [Plan]}`, built-ins first (`builtin:ticket`, `builtin:pr`, `builtin:schedule`, `builtin:verify`) |
+| POST | `/api/flights/plans` | Plan without `id` = create (`p_xxxxxx`), with `id` = replace → `{plan}`. **400** `{error, field}` (`field` like `steps[2].config.lane`); **404** unknown id. 1–40 steps |
+| DELETE | `/api/flights/plans/{id}` | **204**; a built-in is reset to its default instead; **404** unknown |
+| POST | `/api/flights/plans/{id}/reset` | A built-in back to its default → `{plan}`; **404** for a non-built-in |
+| POST | `/api/flights/describe` | `{text, want: step\|plan}` → `{steps: [Step], model}` (one-shot CLI, ≤60 s; normalised by the plan validator). **409** `no_model`, **422** `could_not_describe` |
+| GET | `/api/flights` | `{flights: [Flight]}`: unfinished (running, waiting_you, halted) + the last 20 finished; `?all=1` every stored flight (at most 200 finished are kept) |
+| GET | `/api/flights/{id}` | `{flight}`; **404** `unknown_flight` |
+| POST | `/api/flights/start` | `{plan_id, title?, subject?, repo_path?, prompt?, start_at?, by?}` → **202** `{flight}`. `title` attaches to that live session (cursor at `start_at` or the first non-agent step). Without `title` the session is created through `session_create.create_result` from the plan's `session` (`repo_path`/`prompt` override; `model` is `profile_model`); a plan whose first step is an agent step seeds that step's prompt (placeholders filled) as the session's first prompt. **404** `unknown_plan` / `unknown_session`, **409** `in_flight` (a running or waiting flight on that session; a halted one is cancelled and replaced), **400** `no_repo` / `unknown_step`, the create's own status + error when it refuses, **501** `not_wired` for a `ticket`/`pr`/`issue` subject (Intake starts those) |
+| POST | `/api/flights/{id}/steps/{sid}/done` | `{note?}` → `{flight}`. Only the current step while it waits on you (a *you* step, a verify step with open human items — they are recorded `pass` by `human` — or a failure handed to you); else **409** `not_waiting` |
+| POST | `/api/flights/{id}/steps/{sid}/skip` | → `{flight}`. The current step moves the flight on; a later step is marked to be passed over; **409** `behind` for one already passed |
+| POST | `/api/flights/{id}/steps/{sid}/retry` | → `{flight}`: the current failed step (or the step of a halted flight) runs again; **409** `not_failed` |
+| POST | `/api/flights/{id}/jump` | `{step}` → `{flight}`: forward skips the steps between, backward resets the target and everything after it; **400** without `step`, **404** unknown step |
+| POST | `/api/flights/{id}/pause` · `/resume` · `/cancel` | → `{flight}`. Pause = `halted` with `paused: true`, `reason: "paused"`; resume carries on (back to waiting on you when parked; a failed step runs again); cancel ends it (the session stays). **409** `finished` on a done/cancelled flight |
+| DELETE | `/api/flights/{id}` | **204**; **409** `in_flight` while running or waiting on you (cancel first) |
+
+The session row (`GET /api/instances`) carries `flight`: `{id, plan_name,
+cursor, total, state, reason, step: {id, kind, title, state, actor}}` for the
+session's unfinished flight, else `null`. A flight waiting on you is also a
+`waiting` row of `GET /api/outbox` with `kind: "flight_you"`, `actions: ["done",
+"skip", "open"]` and `flight: {id, plan_name, step, step_title, kind, items}`.
+Events: `flight.changed`, `flight.needs_you`, `flight.finished` (see
+`docs/extensions.md`); notify rules `flight_needs_you` and `flight_finished`.
+
 ### Session budget (J5)
 
 | Method | Path | Behavior |
