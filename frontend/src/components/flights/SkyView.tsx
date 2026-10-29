@@ -1,0 +1,850 @@
+/** The sky — the main area's second view, beside the grid (docs/web-ui.md
+ * "Two views: the grid and the sky", docs/flights.md "The Sky"). The same
+ * sessions as the grid, drawn as lines on one open canvas: the rail, the top
+ * bar, the bell and every dialog stay; only the main area changes
+ * (App renders this in the grid's place while `useUi.view === "sky"`).
+ *
+ * One plane, panned and zoomed as a whole — one `translate(x, y) scale(z)` on
+ * one container, no library. Drag on empty sky pans it (mouse and touch), so
+ * does the wheel or a trackpad; Ctrl/⌘+wheel and a pinch zoom it (40%–200%);
+ * Space+drag pans from anywhere. The keyboard: arrows pan, + / − zoom, 0 fits
+ * every line, 1 fits the focused one, T tidies, Enter opens the focused
+ * line's box, Esc closes it. A faint dot grid scales with it, the flock
+ * (SkyFlock) drifts behind it.
+ *
+ * Every session is a LINE (SkyLine): its title bar, its session diagram and
+ * its session box, which opens into the session's pane right there. The
+ * focused pane is the focused line (`useUi.focused`, one selection for both
+ * views): a press on a line selects it, selecting a session anywhere brings
+ * its line into view. Where a line sits, its size and whether its box is open
+ * are the layout store's (lib/skyLayout, `mf_sky_layout`, per device): lines
+ * flow into rows newest first at their measured size until dragged (pinned),
+ * and Tidy forgets the pins. The camera, the drawer and the shelf survive a
+ * trip to the grid and back.
+ *
+ * Built from the space: a double-click on empty sky, + New session or
+ * Ctrl/Alt+N opens a NewSessionBlock there; the shelf of flyways at the foot
+ * (FlywayShelf) flies one onto the focused line, or onto the line a chip is
+ * dropped on. The intake lane (IntakeLane) sits at the plane's left edge; the
+ * drawer at the right (SkyDrawer) holds what is perched on you. A phone gets
+ * the lines as a plain list — no pan, no zoom. */
+
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useFlightKinds, useFlightPlans, useFlights, useInstances } from "../../state/queries";
+import { effectiveViewMode, useUi } from "../../state/store";
+import { selectSession } from "../../lib/sessionActions";
+import { overlayOpen } from "../../lib/keymap";
+import { layoutDiagram, sessionDiagram, type Diagram } from "../../lib/flightDiagram";
+import { isLive, type Flight, type FlightPlan, type FlightRow } from "../../lib/flights";
+import { takeOff } from "../../lib/flightsApi";
+import { reducedMotion, registerSkyHost, type Box, type SkyHost } from "../../lib/viewMode";
+import {
+  FLYWAY_MIME,
+  INTAKE_W,
+  LINES_LEFT,
+  SKY_MARGIN,
+  SKY_MODES,
+  ZOOM_MAX,
+  ZOOM_MIN,
+  boundsOf,
+  centerOn,
+  estimateLine,
+  fitCamera,
+  inSky,
+  lineLayout,
+  loadSkyLayout,
+  patchSkyLine,
+  pinnedPositions,
+  placeLines,
+  skyLineTitles,
+  tidySkyLayout,
+  toPlane,
+  zoomAt,
+  type Pos,
+  type Rect,
+  type SkyCamera,
+  type SkyLineLayout,
+  type SkyMode,
+} from "../../lib/skyLayout";
+import { ChipRow, TextField } from "./controls";
+import { liveBoxParts } from "./FlightStrip";
+import { FlywayCanvas } from "./FlywayCanvas";
+import { IntakeLane } from "./IntakeLane";
+import { NewSessionBlock } from "./NewSessionBlock";
+import { SkyDrawer } from "./SkyDrawer";
+import { FlywayCard, FlywayShelf, SkyFlock, SkyLine } from "./skyContracts";
+import { Bird } from "./Bird";
+import "./Sky.css";
+
+/** A line's chrome around its canvas: the title bar and the card's padding. */
+const BAR_H = 34;
+const LINE_PAD = 10;
+const LINE_MIN_W = 280;
+/** The dot grid's spacing at 100%. */
+const GRID = 24;
+/** One arrow press pans this far (screen px); Shift: four times. */
+const PAN_STEP = 80;
+const DRAWER_KEY = "mf_sky_drawer";
+const SHELF_KEY = "mf_sky_shelf";
+
+const readPref = (key: string): string | null => {
+  try {
+    return typeof localStorage === "undefined" ? null : localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+const writePref = (key: string, v: string) => {
+  try {
+    localStorage.setItem(key, v);
+  } catch {
+    /* a private window: the choice lasts this visit */
+  }
+};
+
+/** Typing in a field (or a contenteditable, or a terminal) owns the keyboard. */
+const typing = (el: Element | null) =>
+  !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || (el as HTMLElement).isContentEditable === true);
+
+/** The sky's own keys apply: nothing that takes keys itself has the focus —
+ * a field, a button (Enter / Space press it), a chip row or a menu (arrows),
+ * a flyway canvas (← / → move its stop), an opened box's pane. */
+export function skyKeysOwn(el: Element | null): boolean {
+  if (!el || el === document.body) return true;
+  if (typing(el)) return false;
+  return !el.closest("button, a, summary, select, [role=menu], [role=menuitem], [role=radiogroup], [role=listbox], [role=tablist], .fl-canvas, .pane");
+}
+
+/** A phone-narrow window: the lines as a list, no pan or zoom. */
+function useNarrowWindow(): boolean {
+  const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && !!window.matchMedia?.("(max-width: 600px)").matches);
+  useEffect(() => {
+    const mq = typeof window !== "undefined" ? window.matchMedia?.("(max-width: 600px)") : undefined;
+    if (!mq) return;
+    const on = () => setNarrow(mq.matches);
+    mq.addEventListener?.("change", on);
+    return () => mq.removeEventListener?.("change", on);
+  }, []);
+  return narrow;
+}
+
+/** The size a line is drawn at (plane px) before SkyLine has measured it: its
+ * canvas — perches opened wide, the bird's headroom — plus the title bar and
+ * padding. */
+export function lineSize(d: Diagram, flight: Flight | null): { w: number; h: number } {
+  const lay = layoutDiagram(d, { sizeOf: liveBoxParts(flight, true, () => {}).sizeOf });
+  // + 12: the canvas's own padding; + 4: the card's border and a hair.
+  return { w: Math.max(LINE_MIN_W, lay.width + 12 + LINE_PAD * 2 + 4), h: lay.height + 32 + BAR_H + LINE_PAD * 2 };
+}
+
+/** A closed session's line on its way out: the last picture of it, fading. */
+function GhostLine({ id, pos, diagram }: { id: string; pos: Pos; diagram: Diagram }) {
+  return (
+    <div className="sky-line sky-line-leaving" style={{ transform: `translate(${pos.x}px, ${pos.y}px)` }} aria-hidden="true">
+      <div className="sky-line-bar">
+        <Bird size={13} />
+        <span className="sky-line-name">{id}</span>
+      </div>
+      <FlywayCanvas diagram={diagram} label={id} vertical={false} className="sky-canvas" />
+    </div>
+  );
+}
+
+interface Ghost {
+  id: string;
+  pos: Pos;
+  diagram: Diagram;
+}
+
+/** The camera across a trip to the grid and back: where it was, whether the
+ * owner had moved it (then no auto-fit takes it over), and which view it was
+ * fitted for. */
+let memo: { cam: SkyCamera; touched: boolean; key: string } | null = null;
+
+export function SkyView() {
+  const instQ = useInstances();
+  const rows = useMemo(() => instQ.data || [], [instQ.data]);
+  const flights = useFlights().data;
+  const kinds = useFlightKinds().data || [];
+  const plans = useFlightPlans().data || [];
+  const openDialogFor = useUi((s) => s.openDialogFor);
+  const focused = useUi((s) => s.focused);
+  const mode = useUi((s) => s.skyMode);
+  const setSkyMode = useUi((s) => s.setSkyMode);
+  const gridOne = useUi((s) => (effectiveViewMode(s) as string) === "1");
+  const motionOff = useUi((s) => s.reduceMotion) || reducedMotion();
+  const narrow = useNarrowWindow();
+
+  const [query, setQuery] = useState("");
+  const [layout, setLayout] = useState(() => loadSkyLayout());
+  const [measured, setMeasured] = useState<Record<string, { w: number; h: number }>>({});
+  const [drag, setDrag] = useState<{ id: string; pos: Pos } | null>(null);
+  const [cam, setCam] = useState<SkyCamera>(() => memo?.cam || { x: 0, y: 0, z: 1 });
+  const camRef = useRef(cam);
+  camRef.current = cam;
+  const [vp, setVp] = useState({ w: 0, h: 0 });
+  const vpRef = useRef<HTMLDivElement>(null);
+  const [newAt, setNewAt] = useState<Pos | null>(null);
+  const [card, setCard] = useState<{ at: Pos; initial?: FlightPlan } | null>(null);
+  const [drawerPref, setDrawerPref] = useState(() => readPref(DRAWER_KEY));
+  const [shelfOpen, setShelfOpen] = useState(() => readPref(SHELF_KEY) !== "0");
+  const [flyPick, setFlyPick] = useState<FlightPlan | null>(null);
+  const [drop, setDrop] = useState<{ title: string; plan: FlightPlan } | null>(null);
+  const dropPlan = useRef<FlightPlan | null>(null);
+  const [flash, setFlash] = useState("");
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  const space = useRef(false);
+
+  const titles = useMemo(() => skyLineTitles(rows, mode, { query, focus: focused || "" }), [rows, mode, query, focused]);
+  const lines = useMemo(
+    () =>
+      titles.map((t) => {
+        const fl = rows.find((r) => r.title === t)?.flight as FlightRow | null | undefined;
+        const full = fl && isLive(fl) ? flights?.find((f) => f.id === fl.id) || null : null;
+        const diagram = sessionDiagram(rows, t, { flights, kinds, family: mode === "mine" || mode === "one" });
+        return { id: t, diagram, ...(measured[t] || estimateLine(lineSize(diagram, full), layout[t])) };
+      }),
+    [titles, rows, flights, kinds, mode, measured, layout]
+  );
+  const place = useMemo(
+    () =>
+      mode === "one"
+        ? Object.fromEntries(lines.map((l) => [l.id, { x: SKY_MARGIN, y: SKY_MARGIN }]))
+        : placeLines(lines, pinnedPositions(layout), { width: Math.max(vp.w, LINES_LEFT + 900), left: LINES_LEFT, top: SKY_MARGIN }),
+    [lines, layout, vp.w, mode]
+  );
+  const posOf = useCallback((id: string): Pos => (drag?.id === id ? drag.pos : place[id] || { x: LINES_LEFT, y: SKY_MARGIN }), [drag, place]);
+  const rectOf = useCallback((id: string): Rect | null => {
+    const l = lines.find((x) => x.id === id);
+    return l ? { ...posOf(id), w: l.w, h: l.h } : null;
+  }, [lines, posOf]);
+  // Open until folded away (then remembered per device).
+  const drawerOpen = drawerPref !== "0";
+  // The line a selection lands on: the focused session's, else its parent's
+  // (a worker folded into its lead's line in Mine).
+  const focusLine = useMemo(() => {
+    if (!focused) return "";
+    if (titles.includes(focused)) return focused;
+    const parent = rows.find((r) => r.title === focused)?.parent || "";
+    return titles.includes(parent) ? parent : "";
+  }, [focused, titles, rows]);
+
+  // The window's size, for fitting and for where the auto-layout wraps.
+  useEffect(() => {
+    const el = vpRef.current;
+    if (!el) return;
+    const measure = () => setVp({ w: el.clientWidth, h: el.clientHeight });
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [narrow]);
+
+  // The owner has panned or zoomed since the last fit: leave the camera be.
+  const touched = useRef(memo?.touched ?? false);
+  const fitAll = useCallback(() => {
+    touched.current = false;
+    const rects = lines.map((l) => ({ ...posOf(l.id), w: l.w, h: l.h }));
+    if (mode !== "one") rects.push({ x: SKY_MARGIN, y: SKY_MARGIN, w: INTAKE_W, h: 1 });
+    setCam(fitCamera(boundsOf(rects), vp.w, vp.h, mode === "one" ? 1.5 : 1));
+  }, [lines, posOf, mode, vp.w, vp.h]);
+  /** The grid's "1": the focused line filling the window. */
+  const fitFocused = useCallback(() => {
+    const r = focusLine ? rectOf(focusLine) : null;
+    if (!r) return fitAll();
+    touched.current = true;
+    setCam(fitCamera(r, vp.w, vp.h, 1.5));
+  }, [focusLine, rectOf, fitAll, vp.w, vp.h]);
+
+  // Fit once the window and the sessions are known, again on a new view, and
+  // whenever the lines change shape (the flights load and a perch opens wide,
+  // a session comes or goes) until the owner moves the camera. The first fit
+  // follows the grid's view: "1" fits the focused line, the rest fit all.
+  const fitted = useRef(memo?.key || "");
+  const fitKey = mode + "\u0000" + (mode === "one" ? focused : "");
+  const shape = lines.map((l) => l.id + ":" + l.w + "x" + l.h).join("|");
+  useEffect(() => {
+    if (!vp.w || !vp.h || instQ.data === undefined) return;
+    if (fitted.current === fitKey && touched.current) return;
+    const first = !fitted.current;
+    fitted.current = fitKey;
+    if (first && gridOne && mode !== "one") fitFocused();
+    else fitAll();
+  }, [vp.w, vp.h, instQ.data, fitKey, shape]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(
+    () => () => {
+      memo = { cam: camRef.current, touched: touched.current, key: fitted.current };
+    },
+    []
+  );
+
+  // Selecting a session anywhere (the rail, the bell, a shortcut) brings its
+  // line into view: centred if it is off screen, flashed either way.
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  const lastFocus = useRef(focusLine);
+  useEffect(() => {
+    if (!focusLine || focusLine === lastFocus.current || !vp.w) {
+      lastFocus.current = focusLine;
+      return;
+    }
+    lastFocus.current = focusLine;
+    const r = rectOf(focusLine);
+    if (!r) return;
+    const c = camRef.current;
+    const sx = c.x + r.x * c.z;
+    const sy = c.y + r.y * c.z;
+    const inView = sx >= 0 && sy >= 0 && sx + r.w * c.z <= vp.w && sy + Math.min(r.h, 240) * c.z <= vp.h;
+    if (!inView) {
+      touched.current = true;
+      setCam(centerOn(r, vp.w, vp.h, Math.max(c.z, 0.85)));
+    }
+    setFlash(focusLine);
+    setTimeout(() => alive.current && setFlash((f) => (f === focusLine ? "" : f)), 1400);
+  }, [focusLine, rectOf, vp.w, vp.h]);
+
+  // A closed (or deleted) session's line leaves: the last picture fades out.
+  const last = useRef(new Map<string, Ghost>());
+  const [ghosts, setGhosts] = useState<Ghost[]>([]);
+  useEffect(() => {
+    const now = new Map<string, Ghost>(lines.map((l) => [l.id, { id: l.id, pos: place[l.id], diagram: l.diagram }]));
+    const gone = [...last.current.values()].filter((g) => !now.has(g.id) && !rows.some((r) => r.title === g.id && inSky(r)));
+    last.current = now;
+    if (!gone.length || narrow) return;
+    const ids = new Set(gone.map((g) => g.id));
+    setGhosts((cur) => [...cur.filter((g) => !ids.has(g.id)), ...gone]);
+    setTimeout(() => alive.current && setGhosts((cur) => cur.filter((g) => !ids.has(g.id))), 450);
+  }, [lines, place, rows, narrow]);
+
+  /** Select a line's session — the same selection a pane click makes. */
+  const focusOn = useCallback((id: string) => selectSession(id, { noKeyboard: true }), []);
+
+  const setMode = (m: SkyMode) => {
+    if (m === "one" && !focused) {
+      if (!titles[0]) return;
+      focusOn(titles[0]);
+    }
+    setSkyMode(m);
+  };
+
+  const zoomBy = (k: number) => {
+    touched.current = true;
+    setCam((c) => zoomAt(c, c.z * k, vp.w / 2, vp.h / 2));
+  };
+  const panBy = (dx: number, dy: number) => {
+    touched.current = true;
+    setCam((c) => ({ ...c, x: c.x + dx, y: c.y + dy }));
+  };
+  /** A point in the middle of what is on screen (a card's top-left). */
+  const middle = (): Pos => {
+    const c = toPlane(camRef.current, vp.w / 2, vp.h / 3);
+    return { x: Math.round(c.x - 170), y: Math.round(c.y) };
+  };
+  const newHere = () => setNewAt(middle());
+
+  // --- The layout store -----------------------------------------------------------
+
+  const onLayout = useCallback((id: string, patch: Partial<SkyLineLayout>) => {
+    // `{ pinned: false }` is "Tidy this line": its spot is forgotten.
+    setLayout((l) => (patch.pinned === false ? tidySkyLayout(l, id) : patchSkyLine(l, id, patch)));
+  }, []);
+  /** Every line back to its organized spot: they slide there (the line's
+   * transform transition), and an untouched camera refits around them. */
+  const tidy = () => setLayout((l) => tidySkyLayout(l));
+  const onMeasure = useCallback((id: string, w: number, h: number) => {
+    setMeasured((m) => {
+      const o = m[id];
+      if (o && Math.abs(o.w - w) < 2 && Math.abs(o.h - h) < 2) return m;
+      return { ...m, [id]: { w: Math.round(w), h: Math.round(h) } };
+    });
+  }, []);
+
+  // --- Dragging a line by its bar ----------------------------------------------------
+
+  const onDragStart = (id: string, e: ReactPointerEvent) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    const from = posOf(id);
+    const g = { pid: e.pointerId, sx: e.clientX, sy: e.clientY, moved: false };
+    const at = (ev: PointerEvent): Pos => ({ x: from.x + (ev.clientX - g.sx) / camRef.current.z, y: from.y + (ev.clientY - g.sy) / camRef.current.z });
+    const move = (ev: PointerEvent) => {
+      if (ev.pointerId !== g.pid) return;
+      if (!g.moved && Math.hypot(ev.clientX - g.sx, ev.clientY - g.sy) < 4) return;
+      g.moved = true;
+      setDrag({ id, pos: at(ev) });
+    };
+    const up = (ev: PointerEvent) => {
+      if (ev.pointerId !== g.pid) return;
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      setDrag(null);
+      if (g.moved) {
+        const p = at(ev);
+        onLayout(id, { x: p.x, y: p.y, pinned: true });
+      } else focusOn(id);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  };
+
+  // --- Flyways onto lines ---------------------------------------------------------------
+
+  /** Fly `plan` on `title` — or on the focused line; with neither, a row of
+   * the lines to pick from. */
+  const onFly = (plan: FlightPlan, title?: string) => {
+    const t = title || focusLine;
+    if (!t) {
+      setFlyPick(plan);
+      return;
+    }
+    setFlyPick(null);
+    void takeOff({ plan_id: plan.id, title: t });
+  };
+  /** The line under a screen point (the shelf chip being dragged over it). */
+  const lineAt = (clientX: number, clientY: number): string => {
+    const r = vpRef.current?.getBoundingClientRect();
+    if (!r) return "";
+    const p = toPlane(camRef.current, clientX - r.left, clientY - r.top);
+    for (const l of [...lines].reverse()) {
+      const q = posOf(l.id);
+      if (p.x >= q.x && p.x <= q.x + l.w && p.y >= q.y && p.y <= q.y + l.h) return l.id;
+    }
+    return "";
+  };
+  const onShelfDragStart = (e: ReactDragEvent) => {
+    let id = "";
+    try {
+      id = e.dataTransfer?.getData(FLYWAY_MIME) || "";
+    } catch {
+      id = "";
+    }
+    dropPlan.current = id ? plans.find((p) => p.id === id) || null : null;
+  };
+  const onSkyDragOver = (e: ReactDragEvent) => {
+    const plan = dropPlan.current;
+    if (!plan) return;
+    e.preventDefault();
+    const t = lineAt(e.clientX, e.clientY);
+    setDrop((d) => (t ? (d?.title === t ? d : { title: t, plan }) : null));
+  };
+  const onSkyDrop = (e: ReactDragEvent) => {
+    const plan = dropPlan.current;
+    if (!plan) return;
+    e.preventDefault();
+    const t = lineAt(e.clientX, e.clientY);
+    dropPlan.current = null;
+    setDrop(null);
+    if (t) onFly(plan, t);
+  };
+  const onShelfDragEnd = () => {
+    dropPlan.current = null;
+    setDrop(null);
+  };
+
+  // --- What the view switch reads -----------------------------------------------------
+
+  const hostRef = useRef<SkyHost>({ newHere, ready: () => false, lineRects: () => new Map<string, Box>() });
+  hostRef.current.newHere = newHere;
+  hostRef.current.ready = () => !narrow && vp.w > 0 && fitted.current !== "";
+  hostRef.current.lineRects = () => {
+    const out = new Map<string, Box>();
+    const r = vpRef.current?.getBoundingClientRect();
+    if (!r) return out;
+    const c = camRef.current;
+    for (const l of lines) {
+      const p = posOf(l.id);
+      out.set(l.id, { x: r.left + c.x + p.x * c.z, y: r.top + c.y + p.y * c.z, w: l.w * c.z, h: Math.min(l.h, 260) * c.z });
+    }
+    return out;
+  };
+  useEffect(
+    () =>
+      registerSkyHost({
+        newHere: () => hostRef.current.newHere(),
+        ready: () => hostRef.current.ready(),
+        lineRects: () => hostRef.current.lineRects(),
+      }),
+    []
+  );
+
+  // --- Pan, pinch, wheel, keys ---------------------------------------------------
+
+  const pointers = useRef(new Map<number, Pos>());
+  const pan = useRef<{ id: number; x: number; y: number; cx: number; cy: number } | null>(null);
+  const pinch = useRef<{ d: number; z: number } | null>(null);
+  const ground = (t: EventTarget | null) =>
+    t instanceof Element && (t === vpRef.current || t.classList.contains("sky-plane") || t.classList.contains("sky-ground"));
+
+  const startPan = (e: ReactPointerEvent<HTMLDivElement>) => {
+    touched.current = true;
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* a synthetic event has no capture */
+    }
+    if (pointers.current.size >= 2) {
+      const [a, b] = [...pointers.current.values()];
+      pinch.current = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, z: camRef.current.z };
+      pan.current = null;
+    } else pan.current = { id: e.pointerId, x: e.clientX, y: e.clientY, cx: camRef.current.x, cy: camRef.current.y };
+  };
+  const onDownCapture = (e: ReactPointerEvent<HTMLDivElement>) => {
+    // Space held: a drag anywhere pans, even over a line.
+    if (!space.current || (e.pointerType === "mouse" && e.button !== 0)) return;
+    e.stopPropagation();
+    e.preventDefault();
+    startPan(e);
+  };
+  const onDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!ground(e.target) || (e.pointerType === "mouse" && e.button !== 0 && e.button !== 1)) return;
+    e.preventDefault();
+    // The keyboard comes to the sky (arrows, + / −, T), out of a terminal.
+    vpRef.current?.focus({ preventScroll: true });
+    startPan(e);
+  };
+  const onMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!pointers.current.has(e.pointerId)) return;
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const pn = pinch.current;
+    if (pn && pointers.current.size >= 2) {
+      const [a, b] = [...pointers.current.values()];
+      const r = vpRef.current?.getBoundingClientRect();
+      const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      setCam(zoomAt(camRef.current, (pn.z * d) / pn.d, (a.x + b.x) / 2 - (r?.left || 0), (a.y + b.y) / 2 - (r?.top || 0)));
+      return;
+    }
+    const pa = pan.current;
+    if (pa && pa.id === e.pointerId) setCam({ ...camRef.current, x: pa.cx + (e.clientX - pa.x), y: pa.cy + (e.clientY - pa.y) });
+  };
+  const onUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    pointers.current.delete(e.pointerId);
+    if (pointers.current.size < 2) pinch.current = null;
+    if (pan.current?.id === e.pointerId) pan.current = null;
+  };
+  const onDouble = (e: ReactMouseEvent<HTMLDivElement>) => {
+    if (!ground(e.target)) return;
+    const r = vpRef.current!.getBoundingClientRect();
+    const at = toPlane(camRef.current, e.clientX - r.left, e.clientY - r.top);
+    setNewAt({ x: Math.round(at.x), y: Math.round(at.y) });
+  };
+
+  // The wheel: a native listener, since React's is passive and can't keep the
+  // page from scrolling.
+  useEffect(() => {
+    const el = vpRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if ((e.target as Element | null)?.closest?.(".sky-own-scroll")) return;
+      e.preventDefault();
+      touched.current = true;
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientHeight : 1;
+      const dx = e.deltaX * unit;
+      const dy = e.deltaY * unit;
+      if (e.ctrlKey || e.metaKey) {
+        const r = el.getBoundingClientRect();
+        setCam((c) => zoomAt(c, c.z * Math.exp(-dy * 0.0022), e.clientX - r.left, e.clientY - r.top));
+      } else if (e.shiftKey && !dx) setCam((c) => ({ ...c, x: c.x - dy }));
+      else setCam((c) => ({ ...c, x: c.x - dx, y: c.y - dy }));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [narrow]);
+
+  // The sky's keys. Esc folds an open card first, then closes the focused
+  // line's box; the rest only while nothing that takes keys has the focus
+  // and no dialog is over the sky.
+  const keys = useRef<(e: KeyboardEvent) => void>(() => {});
+  keys.current = (e: KeyboardEvent) => {
+    const el = document.activeElement;
+    if (overlayOpen()) return;
+    if (e.key === "Escape" && (newAt || card || flyPick)) {
+      e.preventDefault();
+      setNewAt(null);
+      setCard(null);
+      setFlyPick(null);
+      return;
+    }
+    if (!skyKeysOwn(el) || e.ctrlKey || e.metaKey || e.altKey) return;
+    const k = e.key;
+    const handled = () => e.preventDefault();
+    if (k === " " && !e.repeat) {
+      handled();
+      space.current = true;
+      setSpaceHeld(true);
+    } else if (k === "0") {
+      handled();
+      fitAll();
+    } else if (k === "1") {
+      handled();
+      fitFocused();
+    } else if (k === "+" || k === "=") {
+      handled();
+      zoomBy(1.2);
+    } else if (k === "-" || k === "_") {
+      handled();
+      zoomBy(1 / 1.2);
+    } else if (k === "t" || k === "T") {
+      handled();
+      tidy();
+    } else if (k.startsWith("Arrow")) {
+      handled();
+      const d = PAN_STEP * (e.shiftKey ? 4 : 1);
+      panBy(k === "ArrowLeft" ? d : k === "ArrowRight" ? -d : 0, k === "ArrowUp" ? d : k === "ArrowDown" ? -d : 0);
+    } else if (k === "Enter" && focusLine) {
+      handled();
+      onLayout(focusLine, { open: true });
+    } else if (k === "Escape" && focusLine && layout[focusLine]?.open) {
+      handled();
+      onLayout(focusLine, { open: false });
+    }
+  };
+  useEffect(() => {
+    if (narrow) return;
+    const down = (e: KeyboardEvent) => keys.current(e);
+    const up = (e: KeyboardEvent) => {
+      if (e.key !== " ") return;
+      space.current = false;
+      setSpaceHeld(false);
+    };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up, true);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up, true);
+    };
+  }, [narrow]);
+
+  // --- Drawing ----------------------------------------------------------------------
+
+  const empty =
+    lines.length > 0
+      ? ""
+      : mode === "one"
+        ? focused
+          ? "“" + focused + "” isn't in the sky right now."
+          : "Pick a line first."
+        : query
+          ? "No line matches “" + query + "”."
+          : mode === "perched"
+            ? "Nothing is perched on you."
+            : instQ.data === undefined
+              ? ""
+              : "No sessions in the sky yet — double-click anywhere, or + New session, to start one.";
+
+  const toolbar = (
+    <div className="sky-toolbar" role="toolbar" aria-label="The sky">
+      <ChipRow<SkyMode>
+        className="sky-modes"
+        label="Which lines"
+        value={mode}
+        options={SKY_MODES.map((m) => ({ value: m.id, label: m.label, title: m.title }))}
+        onChange={setMode}
+      />
+      <span className="sky-search">
+        <TextField value={query} onChange={setQuery} label="Find a line" placeholder="Find a line…" onEnter={() => titles[0] && focusOn(titles[0])} />
+      </span>
+      <button type="button" className="btn-primary fl-btn sky-new" data-tour="flights-newblock" title="Start a session here (Ctrl+N, or double-click the sky)" onClick={newHere}>
+        + New session
+      </button>
+      {!narrow && (
+        <button type="button" className="fl-btn sky-tidy" title="Put every line back in its organized spot (T)" onClick={tidy}>
+          Tidy
+        </button>
+      )}
+      {!narrow && (
+        <span className="sky-zoom" role="group" aria-label="Zoom">
+          <button type="button" className="sky-zoom-btn" aria-label="Zoom out" title="Zoom out (−)" disabled={cam.z <= ZOOM_MIN + 0.001} onClick={() => zoomBy(1 / 1.2)}>
+            −
+          </button>
+          <span className="sky-zoom-read" aria-live="polite">
+            {Math.round(cam.z * 100)}%
+          </span>
+          <button type="button" className="sky-zoom-btn" aria-label="Zoom in" title="Zoom in (+)" disabled={cam.z >= ZOOM_MAX - 0.001} onClick={() => zoomBy(1.2)}>
+            +
+          </button>
+          <button type="button" className="sky-zoom-btn sky-fit-one" title="Fit the focused line — the grid's 1 (1)" disabled={!focusLine} onClick={fitFocused}>
+            1
+          </button>
+          <button type="button" className="sky-zoom-btn sky-fit" title="Fit every line in the window — the grid's 4 / 9 (0)" onClick={fitAll}>
+            Fit
+          </button>
+          <button type="button" className="sky-zoom-btn" title="Back to 100%" onClick={() => zoomBy(1 / cam.z)}>
+            100%
+          </button>
+        </span>
+      )}
+    </div>
+  );
+
+  const pick = flyPick && (
+    <div className="sky-flypick" role="group" aria-label={"Fly " + flyPick.name + " on which line?"}>
+      <span className="muted">Fly {flyPick.name} on</span>
+      {titles.slice(0, 12).map((t) => (
+        <button key={t} type="button" className="fl-chip" onClick={() => onFly(flyPick, t)}>
+          {t}
+        </button>
+      ))}
+      <button type="button" className="linklike" onClick={() => setFlyPick(null)}>
+        Cancel
+      </button>
+    </div>
+  );
+
+  const drawer = (
+    <SkyDrawer
+      open={drawerOpen}
+      onToggle={() => {
+        const v = drawerOpen ? "0" : "1";
+        setDrawerPref(v);
+        writePref(DRAWER_KEY, v);
+      }}
+      onFocus={focusOn}
+      onTab={(t, rest) => openDialogFor("flights", rest ? t + "/" + rest : t)}
+    />
+  );
+
+  const shelf = (
+    <div className={"sky-shelf" + (shelfOpen ? " open" : "")} onDragStart={onShelfDragStart} onDragEnd={onShelfDragEnd}>
+      <button
+        type="button"
+        className="sky-shelf-fold"
+        aria-expanded={shelfOpen}
+        title={shelfOpen ? "Fold the flyways away" : "Your flyways — fly one onto a line"}
+        onClick={() => {
+          setShelfOpen(!shelfOpen);
+          writePref(SHELF_KEY, shelfOpen ? "0" : "1");
+        }}
+      >
+        <Bird size={12} /> Flyways {shelfOpen ? "▾" : "▴"}
+      </button>
+      {shelfOpen && (
+        <FlywayShelf
+          plans={plans}
+          onNew={() => setCard({ at: middle() })}
+          onFly={onFly}
+          onEdit={(plan) => setCard({ at: middle(), initial: plan })}
+        />
+      )}
+    </div>
+  );
+
+  const newBlock = newAt && (
+    <NewSessionBlock
+      x={newAt.x}
+      y={newAt.y}
+      plans={plans}
+      onCancel={() => setNewAt(null)}
+      onCreated={(title) => {
+        setLayout((l) => patchSkyLine(l, title, { x: newAt.x, y: newAt.y, pinned: true }));
+        setNewAt(null);
+        focusOn(title);
+      }}
+    />
+  );
+
+  const lineFor = (id: string, at?: Pos) => (
+    <SkyLine
+      key={id}
+      title={id}
+      rows={rows}
+      plans={plans}
+      layout={lineLayout(layout[id], at || { x: 0, y: 0 })}
+      onLayout={(patch) => onLayout(id, patch)}
+      focused={focused === id}
+      onFocus={() => focusOn(id)}
+      zoom={cam.z}
+      onDragStart={at ? (e) => onDragStart(id, e) : undefined}
+      onMeasure={at ? (w, h) => onMeasure(id, w, h) : undefined}
+      dropFlyway={drop?.title === id ? drop.plan : null}
+    />
+  );
+
+  if (narrow)
+    return (
+      <main id="sky-view" className="sky sky-narrow" data-tour="flights-sky">
+        {toolbar}
+        {pick}
+        {drawer}
+        {newBlock}
+        <div className="sky-list">
+          {empty && <p className="fl-empty muted">{empty}</p>}
+          {lines.map((l) => lineFor(l.id))}
+        </div>
+      </main>
+    );
+
+  return (
+    <main id="sky-view" className="sky" onDragOver={onSkyDragOver} onDrop={onSkyDrop}>
+      {toolbar}
+      {pick}
+      <div className="sky-main">
+        <div className="sky-stage">
+          <div
+            ref={vpRef}
+            className={"sky-viewport" + (spaceHeld ? " is-grab" : "")}
+            data-tour="flights-sky"
+            tabIndex={-1}
+            role="application"
+            aria-roledescription="canvas"
+            aria-label="The sky: every session as a line — drag empty space or use the arrows to pan, Ctrl+wheel or + / − to zoom, double-click to start a session"
+            style={{ backgroundSize: `${GRID * cam.z}px ${GRID * cam.z}px`, backgroundPosition: `${cam.x}px ${cam.y}px` }}
+            onPointerDownCapture={onDownCapture}
+            onPointerDown={onDown}
+            onPointerMove={onMove}
+            onPointerUp={onUp}
+            onPointerCancel={onUp}
+            onDoubleClick={onDouble}
+          >
+            <SkyFlock width={vp.w} height={vp.h} zoom={cam.z} paused={motionOff || !!drag} />
+            <div
+              className="sky-plane"
+              data-dragging={drag ? "" : undefined}
+              style={{ transform: `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})` }}
+            >
+              {mode !== "one" && (
+                <div className="sky-intake" style={{ transform: `translate(${SKY_MARGIN}px, ${SKY_MARGIN}px)`, width: INTAKE_W }}>
+                  <IntakeLane rows={rows} plans={plans} onFly={focusOn} width={INTAKE_W} />
+                </div>
+              )}
+              {lines.map((l) => (
+                <div key={l.id} className={"sky-line-slot" + (flash === l.id ? " is-flash" : "")}>
+                  {lineFor(l.id, posOf(l.id))}
+                </div>
+              ))}
+              {ghosts.map((g) => (
+                <GhostLine key={"ghost:" + g.id} {...g} />
+              ))}
+              {newBlock}
+              {card && (
+                <FlywayCard
+                  x={card.at.x}
+                  y={card.at.y}
+                  plans={plans}
+                  initial={card.initial}
+                  onSaved={() => setCard(null)}
+                  onCancel={() => setCard(null)}
+                />
+              )}
+            </div>
+            {empty && (
+              <p className="sky-empty muted" role="status">
+                {empty}
+              </p>
+            )}
+          </div>
+          {shelf}
+        </div>
+        {drawer}
+      </div>
+    </main>
+  );
+}

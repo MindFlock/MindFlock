@@ -1,4 +1,4 @@
-/** Flights → Sky: the drawer at the sky's right edge — what the old Board
+/** The sky view: the drawer at the sky's right edge — what the old Board
  * listed, so nothing it showed is lost now that the Sky replaced it:
  *
  *  - Perched on you — every flight perched on you (its perch's checklist and

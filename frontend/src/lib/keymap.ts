@@ -29,6 +29,7 @@ import { notePrefWrite } from "./prefs";
 import { useUi } from "../state/store";
 import { VERIFY_BLURB } from "./vocab";
 import { jumpToNeedsYou } from "./needsYou";
+import { newSession, toggleView } from "./viewMode";
 
 /** One key combination as matched by the dispatcher and stored in the
  * "mf_keymap" overrides ({key, mod, shift, alt}). `mod` true = Ctrl/⌘;
@@ -510,11 +511,11 @@ export const KEYMAP: KeymapEntry[] = [
     key: "n",
     mod: true,
     id: "new",
-    help: ["Navigation", "Ctrl+N / Alt+N", "New session"],
-    run: () => useUi.getState().openDialogFor("new-session"),
+    help: ["Navigation", "Ctrl+N / Alt+N", "New session — in the sky, a new-session card in the middle of the view"],
+    run: () => newSession(),
   },
   // browser-safe alias
-  { key: "n", alt: true, aliasOf: "new", run: () => useUi.getState().openDialogFor("new-session") },
+  { key: "n", alt: true, aliasOf: "new", run: () => newSession() },
   {
     // Alt rather than Ctrl: Ctrl+I *is* Tab at the terminal, and every other
     // free Ctrl+letter either belongs to the shell or to the browser. Alt+I is
@@ -523,12 +524,28 @@ export const KEYMAP: KeymapEntry[] = [
     alt: true,
     // The id stays "intake" so a rebind made before Flights survives.
     id: "intake",
-    help: ["Navigation", "Alt+I", "Flights — the Sky: every session's line, the bird where each one is, what is perched on you"],
+    help: ["Navigation", "Alt+I", "Flights — flyways, sources, the schedule and checklists"],
     // Guarded unlike Alt+N: on macOS Option+I types a dead-key accent, and a
     // surface you open a few times an hour is not worth eating a keystroke
     // someone meant for a text field or a terminal.
     when: () => !isEditingTarget(document.activeElement),
-    run: () => useUi.getState().openDialogFor("flights", "sky"),
+    run: () => useUi.getState().openDialogFor("flights"),
+  },
+  {
+    // The main area's two views (lib/viewMode): the grid of panes ⇄ the sky
+    // of lines. Alt like its neighbours, and Y because the rest are taken —
+    // I / V / S / G / N / 1-9 here, W / C / R in the pane find bar, F is
+    // Chrome's menu on Windows and D its address bar; "skY". Like Alt+G it
+    // fires FROM a terminal (switching views is something you do while
+    // working; readline's M-y yank-pop is rarely used), but a text field
+    // outside one keeps the keystroke (Option+Y types ¥), and nothing
+    // happens behind a dialog.
+    key: "y",
+    alt: true,
+    id: "view",
+    help: ["Navigation", "Alt+Y", "Switch views — the grid of panes ⇄ the sky of lines (the same sessions, the same focus)"],
+    when: () => !overlayOpen() && (terminalFocused() || !isEditingTarget(document.activeElement)),
+    run: () => toggleView(),
   },
   {
     // Alt for the same reasons as Alt+I next door — Ctrl+V is paste and always

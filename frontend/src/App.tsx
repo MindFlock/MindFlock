@@ -52,6 +52,8 @@ import { Breaks } from "./components/breaks/Breaks";
 import { openSettings } from "./lib/openSettings";
 import { FolderPickerWindow } from "./components/FolderPickerWindow";
 import { installSurfaceHash } from "./lib/surfaceHash";
+import { installViewFlip } from "./lib/viewMode";
+import { SkyView } from "./components/flights/SkyView";
 
 /** At or under this window width the main screen goes single-column. */
 const NARROW_PX = 760;
@@ -299,6 +301,9 @@ export default function App() {
   // New / Flights (and its old names) / Settings in the URL hash: browser
   // Back closes the open one, a link opens it (lib/surfaceHash).
   useEffect(() => installSurfaceHash(), []);
+  // Grid ⇄ sky: each session's pane flies to its line and back (lib/viewMode).
+  useEffect(() => installViewFlip(), []);
+  const view = useUi((s) => s.view);
 
   return (
     <>
@@ -310,7 +315,9 @@ export default function App() {
         onOpenChat={() => toggleSpecial("chat")}
         onOpenTodo={() => useUi.getState().openDialogFor("todo")}
       />
-      <TerminalGrid specialPanes={specialPanes} />
+      {/* The main area: the grid of panes, or the sky — the same sessions,
+          the same focused one, drawn as lines (lib/viewMode.ts). */}
+      {view === "sky" ? <SkyView /> : <TerminalGrid specialPanes={specialPanes} />}
 
       {/* Dialogs (each renders null unless open) */}
       <NewSessionDialog />

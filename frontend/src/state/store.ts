@@ -18,9 +18,21 @@ import { notePrefWrite } from "../lib/prefs";
 import { asPaneHeaderPref, type PaneHeaderPref } from "../lib/paneHeader";
 import { toast } from "../lib/toast";
 import type { TourId } from "../lib/tours";
-import { flightsTargetFor } from "../lib/flights";
+import { flightsTargetFor, skyRouteOf } from "../lib/flights";
+import type { SkyMode } from "../lib/skyLayout";
 
 export type ViewMode = "auto" | "2" | "4" | "9";
+
+/** The main area's two views of the same sessions (lib/viewMode.ts): the grid
+ * of panes, or the sky — every session a line on one pannable plane
+ * (components/flights/SkyView.tsx). Per device, `mf_view`. */
+export type MainView = "grid" | "sky";
+/** Which lines the sky draws (lib/skyLayout SKY_MODES); "one" is the focused
+ * session alone — never remembered, the `#sky/<title>` hash carries it. */
+const loadSkyMode = (): SkyMode => {
+  const m = load<string>("mf_sky_view", "mine", false);
+  return m === "all" || m === "perched" ? m : "mine";
+};
 
 /** Sidebar width bounds (px).
  *
@@ -123,9 +135,10 @@ export type DialogName =
   | "new-session"
   | "settings"
   // Flights (components/flights/FlightsDialog): one route from arrival to
-  // merge — Board · Plans · Sources · Schedule · Checklists. dialogTarget is
+  // merge — Flyways · Sources · Schedule · Checklists. dialogTarget is
   // "<tab>" or "<tab>/<the embedded surface's own deep link>"
-  // (lib/flights parseFlightsTarget).
+  // (lib/flights parseFlightsTarget). A target naming the old Sky tab
+  // (`sky[/<title>]`, `board`) opens the sky VIEW instead (showSky).
   | "flights"
   // Intake, Verify and Schedule are tabs of Flights now. Their names are still
   // accepted by openDialogFor (every old call site, a saved #intake/… link)
@@ -171,6 +184,11 @@ interface UiState {
   focused: string | null;
   /** Grid view cap. */
   viewMode: ViewMode;
+  /** The main area's view: the grid, or the sky (lib/viewMode.ts). */
+  view: MainView;
+  /** The sky's lines: All · Mine · Perched on you · This session (the
+   * focused session alone). */
+  skyMode: SkyMode;
   /** Persisted row layout: array of arrays of titles. */
   gridRows: string[][];
   sidebarHidden: boolean;
@@ -347,6 +365,13 @@ interface UiState {
   /** Replace the MRU wholesale (the capped-view swap-in-place demotion). */
   setOrderlessMru(mru: string[]): void;
   setViewMode(v: ViewMode): void;
+  /** Switch the main area (lib/viewMode's setView / toggleView are the
+   * callers' door: they bring the focused session along). */
+  setView(v: MainView): void;
+  setSkyMode(m: SkyMode): void;
+  /** The sky view, on `focus` alone ("" = whichever lines the view shows):
+   * `#sky`, `#sky/<title>`, and every old Flights → Sky address. */
+  showSky(focus?: string): void;
   setGridRows(rows: string[][]): void;
   toggleSidebar(): void;
   /** Set the sidebar width (clamped + persisted). */
@@ -469,6 +494,8 @@ let _focusSeq = 0;
 export const useUi = create<UiState>((set, get) => ({
   focused: null,
   viewMode: load<ViewMode>("cs_viewmode", "auto", false),
+  view: load<string>("mf_view", "grid", false) === "sky" ? "sky" : "grid",
+  skyMode: loadSkyMode(),
   gridRows: load<string[][]>("cs_gridrows", []),
   sidebarHidden: load<string>("cs_sidebar", "", false) === "hidden",
   sidebarWidth: clampSidebarWidth(load<number>("mf_sidebar_w", SIDEBAR_DEFAULT_W)),
@@ -539,6 +566,29 @@ export const useUi = create<UiState>((set, get) => ({
   setViewMode: (v) => {
     save("cs_viewmode", v, false);
     set({ viewMode: v });
+  },
+  setView: (v) => {
+    if (v === get().view) return;
+    save("mf_view", v, false);
+    set({ view: v });
+    // The session focused in the sky is the one focused in the grid: select
+    // it again so a capped grid ("1", "4") gives it a slot instead of the
+    // grid re-focusing whatever it happens to show.
+    const f = get().focused;
+    if (v === "grid" && f && _selectSession) _selectSession(f, { noKeyboard: true });
+  },
+  setSkyMode: (m) => {
+    if (m !== "one") save("mf_sky_view", m, false);
+    set({ skyMode: m });
+  },
+  showSky: (focus = "") => {
+    if (get().openDialog) set({ openDialog: null, dialogTarget: null });
+    if (focus) {
+      if (_selectSession) _selectSession(focus, { noKeyboard: true });
+      else get().setFocused(focus);
+      get().setSkyMode("one");
+    } else if (get().skyMode === "one") set({ skyMode: loadSkyMode() });
+    get().setView("sky");
   },
   setGridRows: (rows) => {
     save("cs_gridrows", rows);
@@ -805,12 +855,14 @@ export const useUi = create<UiState>((set, get) => ({
     save("cs_lasttab", lastTab);
     set({ lastTab });
   },
-  openDialogFor: (name, target = null) =>
-    set(
-      name === "intake" || name === "verify" || name === "schedule" || name === "templates"
-        ? { openDialog: "flights", dialogTarget: flightsTargetFor(name, target) }
-        : { openDialog: name, dialogTarget: target }
-    ),
+  openDialogFor: (name, target = null) => {
+    const legacy = name === "intake" || name === "verify" || name === "schedule" || name === "templates";
+    // The Sky was Flights' first tab: an address that still names it is the
+    // sky view now, not a dialog.
+    const sky = name === "flights" ? skyRouteOf(target) : null;
+    if (sky) get().showSky(sky.focus);
+    else set(legacy ? { openDialog: "flights", dialogTarget: flightsTargetFor(name, target) } : { openDialog: name, dialogTarget: target });
+  },
   closeDialog: () => set({ openDialog: null, dialogTarget: null }),
   setPrBase: (repo, base) => {
     if (!repo) return;

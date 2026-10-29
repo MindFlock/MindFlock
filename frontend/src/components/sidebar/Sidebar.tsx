@@ -6,6 +6,7 @@
  * + Shortcuts). */
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { setView } from "../../lib/viewMode";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Instance, RunTask } from "../../api/types";
 import { api } from "../../api/client";
@@ -718,24 +719,38 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
           </span>
         </div>
         {/* A set-once preference that means nothing with one or two panes:
-            the calm first hour leaves it out unless it was already changed. */}
-        {(!calm || ui.viewMode !== "auto") && (
+            the calm first hour leaves it out unless it was already changed.
+            Its last chip is the other view (lib/viewMode): the sky; a number
+            is the grid at that many panes, so picking one comes back. */}
+        {(!calm || ui.viewMode !== "auto" || ui.view === "sky") && (
         <div
           id="view-modes"
-          title="Grid view — Auto grows with sessions; 1/2/4/9 show only the top N panes, the rest stay running but hidden until reordered into the top slots"
+          title="Grid view — Auto grows with sessions; 1/2/4/9 show only the top N panes, the rest stay running but hidden until reordered into the top slots. Sky — the same sessions as lines on one canvas."
         >
           <span className="vm-label">View</span>
           {VIEW_MODES.map((v) => (
             <button
               key={v}
               type="button"
-              className={"vm" + (ui.viewMode === v ? " active" : "")}
+              className={"vm" + (ui.view === "grid" && ui.viewMode === v ? " active" : "")}
               data-view={v}
-              onClick={() => ui.setViewMode(v)}
+              onClick={() => {
+                ui.setViewMode(v);
+                setView("grid");
+              }}
             >
               {v === "auto" ? "Auto" : v}
             </button>
           ))}
+          <button
+            type="button"
+            className={"vm vm-sky" + (ui.view === "sky" ? " active" : "")}
+            data-view="sky"
+            title="The sky — every session as a line on one canvas (Alt+Y)"
+            onClick={() => setView("sky")}
+          >
+            Sky
+          </button>
         </div>
         )}
         {/* "Add more bars" is the opposite of what a first hour needs. */}

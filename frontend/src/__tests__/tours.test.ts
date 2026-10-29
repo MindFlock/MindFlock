@@ -150,8 +150,11 @@ describe("the tours registry", () => {
     for (const id of TOUR_IDS)
       if (id !== "settings" && id !== "voice" && id !== "flights") for (const s of TOURS[id].steps) expect(s.screen, id).toBeUndefined();
     for (const s of TOURS.voice.steps) expect([undefined, "mic-pop"], s.title).toContain(s.screen);
-    // Flights walks its Sky and Plans tabs, by their tab keys.
-    expect(TOURS.flights.steps.map((s) => s.screen)).toEqual(["sky", "sky", "sky", "plans", "plans"]);
+    // Flights' sky steps name no tab (the sky is a view, pointed at by the
+    // top bar's toggle), then it walks Flyways by its tab key.
+    expect(TOURS.flights.steps.map((s) => s.screen)).toEqual([undefined, undefined, undefined, "plans", "plans"]);
+    expect(TOURS.flights.steps[0].target).toBe('[data-tour="view-sky"]');
+    expect(TOURS.flights.steps.some((s) => s.target.includes("flights-tab-sky"))).toBe(false);
   });
 });
 

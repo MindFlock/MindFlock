@@ -763,6 +763,12 @@
   color: #fff;
 }
 
+/* The sky is the other view, not a fifth grid size: set a hair apart. */
+#view-modes .vm.vm-sky {
+  flex: 1.4;
+  margin-left: 4px;
+}
+
 
 /* A finished group's lead: its PR, or the compare page when the release had
    to hand the PR over to the browser. */

@@ -27,11 +27,10 @@
 import { useState } from "react";
 import type { Instance } from "../../api/types";
 import { useFlightKinds, useFlightPlans, useFlights, useInstances } from "../../state/queries";
-import { useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
 import { flightProgress, type FlightPlan, type StepKindDef } from "../../lib/flights";
 import { birdPerch, flywayDiagram, hasSessionDiagram } from "../../lib/flightDiagram";
-import { skyTarget } from "../../lib/skyLayout";
+import { showInSky } from "../../lib/viewMode";
 import { savePlan, takeOff } from "../../lib/flightsApi";
 import { FlywayCanvas } from "./FlywayCanvas";
 import { FlightMenu } from "./FlightStrip";
@@ -108,8 +107,8 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
         <button
           type="button"
           className="linklike fl-open-sky"
-          title="Show this session's line in the Sky, with the bird where it is"
-          onClick={() => useUi.getState().openDialogFor("flights", skyTarget(title))}
+          title="Switch to the sky on this session's line, with the bird where it is"
+          onClick={() => showInSky(title)}
         >
           Open in the Sky
         </button>
