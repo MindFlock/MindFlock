@@ -13,6 +13,7 @@ import { errorPop } from "../lib/errorPop";
 import { isVerifySession } from "../components/dialogs/verifySession";
 import type { EffortCap } from "../lib/effort";
 import type { PeerStatus } from "../lib/peer";
+import type { Flight, FlightPlan, StepKindDef } from "../lib/flights";
 import type { ExtensionInfo, ExtensionSpec } from "../extensions/types";
 import type {
   AuthProfilesResponse,
@@ -500,10 +501,13 @@ export type PanelKey = keyof typeof PANELS;
  * so reopening a screen shows the last list immediately instead of blanking.
  * `refresh()` is the Refresh button: `?fresh=1` tells the server to skip its
  * cache and actually sweep, so the click means what it says. */
-export function usePanelQuery<T extends { stale?: boolean }>(key: PanelKey) {
+export function usePanelQuery<T extends { stale?: boolean }>(key: PanelKey, opts: { enabled?: boolean } = {}) {
   const q = useQuery<T>({
     queryKey: [key],
     queryFn: () => api<T>(PANELS[key]),
+    // false = read the cache only (the top bar's Flights badge counts what the
+    // lists already hold; it never fans out upstream itself).
+    enabled: opts.enabled ?? true,
     staleTime: PANEL_STALE_MS,
     gcTime: PANEL_GC_MS,
     placeholderData: (prev) => prev,
@@ -948,4 +952,86 @@ export function useCachedLiveBranch(): string {
  * just wrote, but the list is shared with the top bar's badge. */
 export function refreshTestPlans() {
   return queryClient.invalidateQueries({ queryKey: ["test-plans"] });
+}
+
+/* --------------------------------------------------------------------------
+ * Flights (docs/flights.md): the flights in the air, the plans and the step
+ * registry. A server that predates the routes answers 404, read as "none"
+ * (null) and asked rarely. `flight.changed | needs_you | finished` refetch,
+ * the pattern of the run events (state/runs.ts).
+ * ------------------------------------------------------------------------ */
+
+/** While a flight is live: the driver's own 5 s cadence. */
+export const FLIGHTS_LIVE_MS = 5_000;
+/** Nothing live (or the tab hidden): enough to notice a new one. */
+export const FLIGHTS_IDLE_MS = 30_000;
+const FLIGHTS_MISSING_MS = 120_000;
+
+const routeMissing = (e: unknown) =>
+  !!e && typeof e === "object" && "status" in e && ((e as { status: number }).status === 404 || (e as { status: number }).status === 405);
+
+async function orNull<T>(p: Promise<T>): Promise<T | null> {
+  try {
+    return await p;
+  } catch (e) {
+    if (routeMissing(e)) return null;
+    throw e;
+  }
+}
+
+let flightsBridged = false;
+function bridgeFlightEvents() {
+  const ev = window.mindflock?.events;
+  if (flightsBridged || !ev) return; // events.js may not have loaded yet
+  flightsBridged = true;
+  const bump = () => {
+    void queryClient.invalidateQueries({ queryKey: ["flights"] });
+    void queryClient.invalidateQueries({ queryKey: ["instances"] });
+  };
+  for (const name of ["flight.changed", "flight.needs_you", "flight.finished"]) ev.subscribe(name, bump);
+}
+
+/** The flights (unfinished + the last 20 finished). `data` null = this server
+ * has no flights route. */
+export function useFlights(enabled = true) {
+  useEffect(bridgeFlightEvents, []);
+  return useQuery({
+    queryKey: ["flights"],
+    queryFn: () => orNull(api<{ flights?: Flight[] }>("/api/flights").then((d) => d?.flights || [])),
+    enabled,
+    refetchInterval: (q) =>
+      q.state.data === null
+        ? FLIGHTS_MISSING_MS
+        : (q.state.data || []).some((f) => f.state === "running" || f.state === "waiting_you") && !document.hidden
+          ? FLIGHTS_LIVE_MS
+          : FLIGHTS_IDLE_MS,
+    refetchIntervalInBackground: true,
+    placeholderData: (prev) => prev,
+    retry: false,
+  });
+}
+
+/** The plans, built-ins first. null = no flights route. */
+export function useFlightPlans(enabled = true) {
+  useEffect(bridgeFlightEvents, []);
+  return useQuery({
+    queryKey: ["flight-plans"],
+    queryFn: () => orNull(api<{ plans?: FlightPlan[] }>("/api/flights/plans").then((d) => d?.plans || [])),
+    enabled,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+    retry: false,
+  });
+}
+
+/** The step registry (`STEP_KINDS`): the palette's blocks and their forms.
+ * Fixed for the life of a server, so read once. */
+export function useFlightKinds(enabled = true) {
+  return useQuery({
+    queryKey: ["flight-kinds"],
+    queryFn: () => orNull(api<{ kinds?: StepKindDef[] }>("/api/flights/kinds").then((d) => d?.kinds || [])),
+    enabled,
+    staleTime: 10 * 60_000,
+    retry: false,
+  });
 }

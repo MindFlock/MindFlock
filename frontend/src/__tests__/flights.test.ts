@@ -1,0 +1,300 @@
+/** Flights' pure rules (lib/flights.ts): a step's glyph and state, a flight's
+ * progress, who waits on whom, the top-bar badge, the pane strip's line, the
+ * plan editor's block moves, the trigger's schedule round trip, and the
+ * dialog's address (the tab + the old surfaces' deep links). */
+
+import { describe, expect, it } from "vitest";
+import {
+  arrivalAuto,
+  badgeLines,
+  blankPlan,
+  builtinPlanFor,
+  currentElapsed,
+  duplicateStep,
+  fieldOptions,
+  flightBadgeCount,
+  flightProgress,
+  flightsTargetFor,
+  isLive,
+  moveStep,
+  needsYouFlights,
+  newStep,
+  parseFlightsTarget,
+  planDirty,
+  rowWaitsOnYou,
+  scheduleOfWhen,
+  stepActor,
+  stepGlyph,
+  stepStateOf,
+  stripDots,
+  stripLabel,
+  whenFormOf,
+  youItems,
+  youText,
+  type Flight,
+  type FlightRow,
+  type FlightStep,
+  type StepKindDef,
+} from "../lib/flights";
+
+const NOW_S = 1_800_000_000;
+const NOW_MS = NOW_S * 1000;
+
+const step = (id: string, kind: string, title: string, config: Record<string, unknown> = {}): FlightStep => ({
+  id,
+  kind,
+  title,
+  config,
+  on_fail: "halt",
+});
+
+const STEPS: FlightStep[] = [
+  step("s1", "agent", "Work the ticket"),
+  step("s2", "ship", "Commit", { lane: "commit" }),
+  step("s3", "ship", "Push", { lane: "push" }),
+  step("s4", "reviews", "Reviews settle"),
+  step("s5", "you", "Approve the merge", { text: "Look at the PR", items: ["Read the diff", "Checks green"] }),
+  step("s6", "ship", "Merge", { lane: "merge" }),
+];
+
+function flight(over: Partial<Flight> = {}): Flight {
+  return {
+    id: "f_1",
+    plan_id: "builtin:ticket",
+    plan_name: "Ticket to merge",
+    steps: STEPS,
+    subject: { kind: "ticket", source: "sc", id: "sc-12", title: "Fix the login", url: "" },
+    session: "sc-12-fix-login",
+    repo_root: "/r",
+    branch: "sc-12",
+    state: "running",
+    cursor: 3,
+    step_states: {
+      s1: { state: "done", since: NOW_S - 3600, note: "", detail: {}, rounds: 0 },
+      s2: { state: "done", since: NOW_S - 1800, note: "", detail: {}, rounds: 0 },
+      s3: { state: "skipped", since: NOW_S - 1700, note: "", detail: {}, rounds: 0 },
+      s4: { state: "running", since: NOW_S - 240, note: "", detail: {}, rounds: 0 },
+    },
+    reason: "",
+    history: [],
+    started: NOW_S - 3600,
+    updated: NOW_S - 240,
+    finished: 0,
+    by: "intake",
+    ...over,
+  };
+}
+
+describe("a step's glyph and state", () => {
+  it("done ✓ · current ● · pending ○ · failed ✗ · skipped –", () => {
+    expect(stepGlyph("done")).toBe("✓");
+    expect(stepGlyph("running")).toBe("●");
+    expect(stepGlyph("waiting_you")).toBe("●");
+    expect(stepGlyph("pending")).toBe("○");
+    expect(stepGlyph("failed")).toBe("✗");
+    expect(stepGlyph("skipped")).toBe("–");
+  });
+
+  it("reads the driver's record first, else the cursor", () => {
+    const f = flight({ step_states: {} });
+    expect(stepStateOf(f, STEPS[0], 0)).toBe("done");
+    expect(stepStateOf(f, STEPS[3], 3)).toBe("running");
+    expect(stepStateOf({ ...f, state: "waiting_you" }, STEPS[3], 3)).toBe("waiting_you");
+    expect(stepStateOf(f, STEPS[4], 4)).toBe("pending");
+    expect(stepStateOf(flight(), STEPS[2], 2)).toBe("skipped");
+  });
+
+  it("knows who acts: the registry's word, else only a `you` block is yours", () => {
+    const kinds = [{ kind: "verify", actor: "you" }] as unknown as StepKindDef[];
+    expect(stepActor({ kind: "you" })).toBe("you");
+    expect(stepActor({ kind: "verify" })).toBe("robot");
+    expect(stepActor({ kind: "verify" }, kinds)).toBe("you");
+  });
+});
+
+describe("a flight's progress", () => {
+  it("counts done and skipped, names the current step and its record", () => {
+    const p = flightProgress(flight());
+    expect(p.done).toBe(3);
+    expect(p.total).toBe(6);
+    expect(p.current?.title).toBe("Reviews settle");
+    expect(p.currentState?.since).toBe(NOW_S - 240);
+    expect(p.states).toEqual(["done", "done", "skipped", "running", "pending", "pending"]);
+  });
+
+  it("says how long the current step has been current, with the app's one formatter", () => {
+    expect(currentElapsed(flight(), NOW_MS)).toBe("4m");
+    expect(currentElapsed(flight({ step_states: {} }), NOW_MS)).toBe("");
+  });
+
+  it("is live while running, parked on you or halted", () => {
+    expect(isLive({ state: "running" })).toBe(true);
+    expect(isLive({ state: "waiting_you" })).toBe(true);
+    expect(isLive({ state: "halted" })).toBe(true);
+    expect(isLive({ state: "done" })).toBe(false);
+    expect(isLive({ state: "cancelled" })).toBe(false);
+  });
+});
+
+describe("what waits on you", () => {
+  const parked = flight({ id: "f_2", state: "waiting_you", cursor: 4 });
+  const halted = flight({ id: "f_3", state: "halted", reason: "Checks failed" });
+  const onVerify = flight({
+    id: "f_4",
+    state: "waiting_you",
+    cursor: 0,
+    steps: [step("v1", "verify", "Verify")],
+  });
+
+  it("is the flights parked on a you step or halted", () => {
+    expect(needsYouFlights([flight(), parked, halted]).map((f) => f.id)).toEqual(["f_2", "f_3"]);
+  });
+
+  it("the badge adds flights on you + Verify's due checklists + arrivals no switch starts", () => {
+    const b = flightBadgeCount([flight(), parked], 2, 0, [{ auto: true }, { auto: false }, { auto: false }]);
+    expect(b).toEqual({ count: 5, you: 1, verify: 2, arrivals: 2, failing: false });
+  });
+
+  it("never counts a flight parked on a verify step twice (Verify already does)", () => {
+    expect(flightBadgeCount([onVerify], 1, 0, []).count).toBe(1);
+  });
+
+  it("turns red for a failed checklist or a halted flight; nothing at all on zero", () => {
+    expect(flightBadgeCount([], 1, 1, []).failing).toBe(true);
+    expect(flightBadgeCount([halted], 0, 0, []).failing).toBe(true);
+    expect(flightBadgeCount([flight()], 0, 0, [{ auto: true }])).toEqual({
+      count: 0,
+      you: 0,
+      verify: 0,
+      arrivals: 0,
+      failing: false,
+    });
+  });
+
+  it("the tooltip names the three counts", () => {
+    expect(badgeLines({ count: 3, you: 1, verify: 2, arrivals: 0, failing: false })).toEqual([
+      "1 flight waits on you",
+      "2 checklists to check",
+      "0 arrivals to start by hand",
+    ]);
+  });
+
+  it("a you step's items and text", () => {
+    expect(youItems(STEPS[4])).toEqual(["Read the diff", "Checks green"]);
+    expect(youItems(STEPS[0])).toEqual([]);
+    expect(youText(parked)).toBe("Look at the PR");
+    expect(youText(halted)).toBe("Checks failed");
+  });
+});
+
+describe("the pane strip's line", () => {
+  it("✈ plan · dots · step (elapsed) from a full flight", () => {
+    expect(stripLabel(flight(), NOW_MS)).toBe("✈ Ticket to merge · ●●–●○○ · Reviews settle (4m)");
+  });
+
+  it("from a session row: the cursor fills the dots, no elapsed", () => {
+    const row: FlightRow = {
+      id: "f_1",
+      plan_name: "Ticket to merge",
+      cursor: 2,
+      total: 6,
+      state: "running",
+      step: { id: "s3", kind: "ship", title: "Push", state: "running", actor: "robot" },
+    };
+    expect(stripDots(row)).toBe("●●●○○○");
+    expect(stripLabel(row)).toBe("✈ Ticket to merge · ●●●○○○ · Push");
+    expect(rowWaitsOnYou(row)).toBe(false);
+    expect(rowWaitsOnYou({ ...row, state: "waiting_you", step: { ...row.step, actor: "you" } })).toBe(true);
+    expect(rowWaitsOnYou(null)).toBe(false);
+  });
+
+  it("says Landed once it is done", () => {
+    expect(stripLabel(flight({ state: "done", cursor: 6 }), NOW_MS)).toMatch(/· Landed$/);
+  });
+});
+
+describe("arrivals", () => {
+  it("start by themselves on the engine (tickets) or their own switch (PRs, issues)", () => {
+    expect(arrivalAuto("tickets", { available: true, desired: true })).toBe(true);
+    expect(arrivalAuto("tickets", { available: true, desired: false, running: true })).toBe(false);
+    expect(arrivalAuto("prs", { pr_enabled: true })).toBe(true);
+    expect(arrivalAuto("issues", { issues_enabled: false })).toBe(false);
+    expect(arrivalAuto("prs", null)).toBe(false);
+  });
+
+  it("default to the built-in plan of their kind (an issue is worked like a ticket)", () => {
+    expect(builtinPlanFor("tickets")).toBe("builtin:ticket");
+    expect(builtinPlanFor("prs")).toBe("builtin:pr");
+    expect(builtinPlanFor("issues")).toBe("builtin:ticket");
+    expect(builtinPlanFor("schedule")).toBe("builtin:schedule");
+  });
+});
+
+describe("the plan editor's blocks", () => {
+  const KIND: StepKindDef = {
+    kind: "wait",
+    label: "Wait",
+    actor: "robot",
+    summary: "Waits a while",
+    default_title: "Wait",
+    fields: [
+      { name: "minutes", type: "int", label: "Minutes", default: 5 },
+      { name: "until", type: "text", label: "Until" },
+    ],
+  };
+
+  it("a new block takes its kind's default title and field defaults, under a free id", () => {
+    expect(newStep(KIND, ["s1", "s2"])).toEqual({ id: "s3", kind: "wait", title: "Wait", config: { minutes: 5 }, on_fail: "halt" });
+    expect(newStep(KIND, ["s1", "s3"]).id).toBe("s4");
+  });
+
+  it("moves, duplicates and compares", () => {
+    const ids = (xs: FlightStep[]) => xs.map((s) => s.id);
+    expect(ids(moveStep(STEPS, 0, 2))).toEqual(["s2", "s3", "s1", "s4", "s5", "s6"]);
+    expect(ids(moveStep(STEPS, 5, 0))).toEqual(["s6", "s1", "s2", "s3", "s4", "s5"]);
+    expect(moveStep(STEPS, 9, 0)).toEqual(STEPS);
+    const dup = duplicateStep(STEPS, 1);
+    expect(ids(dup)).toEqual(["s1", "s2", "s7", "s3", "s4", "s5", "s6"]);
+    expect(dup[2].config).not.toBe(STEPS[1].config);
+    const p = blankPlan();
+    expect(planDirty(p, { ...p, updated: 99 })).toBe(false);
+    expect(planDirty(p, { ...p, name: "x" })).toBe(true);
+  });
+
+  it("reads a select's options as plain values or value/label pairs", () => {
+    expect(
+      fieldOptions({ name: "lane", type: "select", label: "Lane", options: ["commit", { value: "pr", label: "Open PR" }] })
+    ).toEqual([
+      { value: "commit", label: "commit" },
+      { value: "pr", label: "Open PR" },
+    ]);
+  });
+});
+
+describe("the schedule trigger, through Schedule's own editor", () => {
+  it("round-trips every shape normalize_schedule stores", () => {
+    for (const s of [{ at: "07:30", days: "weekdays" as const }, { cron: "*/30 * * * *" }, { once: "2026-11-02T21:00" }])
+      expect(scheduleOfWhen(whenFormOf(s))).toEqual(s);
+    expect(whenFormOf(null).days).toBe("daily");
+    expect(scheduleOfWhen({ ...whenFormOf(null), days: "cron", cron: " " })).toBeNull();
+  });
+});
+
+describe("the dialog's address", () => {
+  it("is <tab>[/<deep link>], unknown = the Board", () => {
+    expect(parseFlightsTarget(null)).toEqual({ tab: "board", rest: "" });
+    expect(parseFlightsTarget("plans")).toEqual({ tab: "plans", rest: "" });
+    expect(parseFlightsTarget("checklists/feature/x")).toEqual({ tab: "checklists", rest: "feature/x" });
+    expect(parseFlightsTarget("sources/tickets:jira")).toEqual({ tab: "sources", rest: "tickets:jira" });
+    expect(parseFlightsTarget("nope/x")).toEqual({ tab: "board", rest: "" });
+  });
+
+  it("carries the old surfaces' deep links onto their tabs", () => {
+    expect(flightsTargetFor("intake", null)).toBe("board");
+    expect(flightsTargetFor("intake", "tickets")).toBe("sources/tickets");
+    expect(flightsTargetFor("verify", null)).toBe("checklists");
+    expect(flightsTargetFor("verify", "feature/x")).toBe("checklists/feature/x");
+    expect(flightsTargetFor("schedule", "new")).toBe("schedule/new");
+    expect(flightsTargetFor("templates", null)).toBe("schedule");
+  });
+});

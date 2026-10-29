@@ -3,6 +3,8 @@
  * settings payloads stay loose (Record) — they are round-tripped, not
  * interpreted, by the UI. */
 
+import type { FlightRow } from "../lib/flights";
+
 export interface DiffStat {
   files: number;
   additions: number;
@@ -371,6 +373,10 @@ export interface Instance {
   /** For a shared session: who it is shared with, and whether they are
    * connected now. null/absent otherwise. */
   peer_with?: { link_id: string; name: string; connected: boolean } | null;
+  /** The flight driving this session (docs/flights.md), or null for none —
+   * all the pane strip and the rail read. Optional: an older server doesn't
+   * send it. */
+  flight?: FlightRow | null;
 }
 
 /** A fence an orchestrator set on one worker: the only paths it may change
