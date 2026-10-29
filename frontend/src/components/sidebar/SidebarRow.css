@@ -1076,3 +1076,14 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   color: var(--fg-muted, #9aa);
   background: var(--panel-2, rgba(255, 255, 255, 0.05));
 }
+
+/* A peer's row whose link dropped: remembered a minute, greyed, not
+   clickable (lib/peerSessions; its group header says "offline —
+   reconnecting"). */
+.inst.peer-gone .inst-row {
+  opacity: 0.55;
+  cursor: default;
+}
+.inst.peer-gone .title {
+  color: var(--muted);
+}

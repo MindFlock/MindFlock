@@ -247,6 +247,31 @@ describe("guest focus (the pill and follow)", () => {
     expect(guestsOn("a").length).toBe(1);
   });
 
+  it("a peer's focus from the replayed backlog: the pill only, no toast, no follow", () => {
+    // A peer who only SELECTED my row (session_focus, no terminal yet) is
+    // announced once; a page opened after that has only the backlog.
+    const ev = (data: Record<string, unknown>) => ({
+      seq: 11,
+      event: "guest.focus_changed",
+      session: String(data.title || ""),
+      old: "",
+      new: String(data.title || ""),
+      ts: 9,
+      data,
+    });
+    toggleFollow("peer:cd");
+    vi.mocked(selectSession).mockClear();
+    expect(applyFocusEvent(ev({ link: "peer:cd", label: "Ann", title: "web", joined: true }), { replay: true })).toBe("");
+    expect(guestsOn("web").map((f) => f.label)).toEqual(["Ann"]);
+    expect(selectSession).not.toHaveBeenCalled();
+    // Live, follow moves the selection with them.
+    applyFocusEvent(ev({ link: "peer:cd", label: "Ann", title: "api", joined: false }));
+    expect(selectSession).toHaveBeenCalledWith("api", { noKeyboard: true });
+    applyFocusEvent(ev({ link: "peer:cd", label: "Ann", title: "api", left: true }), { replay: true });
+    expect(guestsOn("api")).toEqual([]);
+    expect(isFollowing("peer:cd")).toBe(false);
+  });
+
   it("guestName", () => {
     expect(guestName("Pat")).toBe("Pat");
     expect(guestName("  ")).toBe("Guest");

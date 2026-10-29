@@ -5683,6 +5683,38 @@ labels above the inputs.
   by their side is the server's own sentence (*<name> hasn't confirmed the
   safety number yet…*, or the switch they turned off: *<name> turned off “see
   my changes” on this link…*).
+- **Sessions a peer shares with you** (`lib/peerSessions.ts`; contract in
+  [peer-link.md → Shared sessions](peer-link.md#shared-sessions--contract-sessions_bridgepy-routespeer_sessionspy)):
+  each is a rail row `<peer>::<title>` (`remote_peer`), grouped under the
+  peer like another device's rows. The group header has a dot and says
+  **Erik · connected**; the row is named by the sharer's own name for it
+  (`display_title`, their rename — never the raw title), its ⇄ chip's
+  tooltip gives the mode (*full* / *gated to its folder*), and its status
+  reads like any row's. Rename, the IDE and every owner-only action are off
+  (`peer_share`). When their link drops, the server stops listing the rows;
+  the page keeps them for 60 s (`installPeerRowMemory`, which puts them back
+  into the instances cache flagged `peer_offline`): the group reads
+  **Erik · offline — reconnecting**, the rows are greyed and not clickable,
+  and an open pane stays, its terminal retrying until the row is served
+  again. A withdrawn session just leaves — never remembered, no error.
+  **The pane** shows one thin line above the terminal: *Erik's session ·
+  full join — you type as them* / *· gated to its folder*, or *Erik is
+  offline — the terminal reconnects when they're back*; on one of **your**
+  sessions a peer has open or selected (their `session_focus`, a terminal
+  not needed) it says *Bob is here* — the names on the rail's pill, which
+  follow works on as for a guest (a page opened later rebuilds a peer's
+  pill from the event backlog, quietly). **Bell and toasts**
+  (`peer.session_shared` / `peer.session_unshared`, replay-guarded, never
+  a push): their share is a toast *Erik shared fix-login with you — click
+  to open* (selects the row) and a bell row named by that row; your own
+  share is a quiet bell row (*You shared fix-login with Bob (full)*); a
+  withdrawal is a bell row (*Erik withdrew fix-login*); `peer.state`
+  connected after an outage, while their rows were on your rail, toasts
+  *Erik is back — your shared sessions are live*. **The phone** (`/m`)
+  lists them after your own under *Erik · shared with you*, the mode on
+  the sub-line, opened on the same `/api/instances/<row>/terminal`; the
+  git bar, the Terminal and Diff tabs and the ⋯ sheet's verbs are hidden
+  for them (a withdrawn one says *no longer shared*).
 - **People** (screen key `peer`; was People; the Peer links screen, `/api/peer*`,
   `backend/peer`) — pair-coding with another MindFlock user. It leads with
   **Invite someone** (**Copy invite** copies a ready-to-send message with the

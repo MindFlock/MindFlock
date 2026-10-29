@@ -18,7 +18,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useInstances, type EventEnvelope } from "../state/queries";
+import { queryClient, useInstances, type EventEnvelope } from "../state/queries";
+import type { Instance } from "../api/types";
 import { displayName, useUi } from "../state/store";
 import { relTime } from "../lib/format";
 import { selectSession } from "../lib/sessionActions";
@@ -37,6 +38,7 @@ import { showGroup } from "../lib/showGroup";
 import { approvableRequest, deviceEventNote, updateNote } from "../lib/fleet";
 import { approveJoinRequest } from "../lib/deviceActions";
 import { PEER_SCREEN, peerEventNote } from "../lib/peer";
+import { peerRowKey, peerSessionName, peerSessionNote, type PeerSessionEventData } from "../lib/peerSessions";
 import { openSettings, type SettingsScreen } from "../lib/openSettings";
 import { jobPastExpectedRow } from "../lib/jobExpectation";
 
@@ -108,6 +110,9 @@ const STAGE_WORDS: Record<string, string> = {
 export interface NotifRow {
   text: string;
   cls: string;
+  /** The session the row is about, when the event names none (a peer's
+   * shared row, "<peer>::<title>"): its name and its click. */
+  session?: string;
   run?: string;
   lead?: string;
   dedupe?: string;
@@ -296,6 +301,20 @@ export function notifFromEvent(env: EventEnvelope): NotifRow | null {
       const n = peerEventNote(env.event, d);
       // A toast-only note (your own agent's contract proposal) has no row.
       return n?.text ? { text: n.text, cls: n.cls, peer: true } : null;
+    }
+    // A session shared over a peer link (lib/peerSessions): theirs is a row
+    // named by, and opening, the session on your rail; mine and every
+    // withdrawal are quiet rows that open People. Never a push.
+    case "peer.session_shared":
+    case "peer.session_unshared": {
+      const sd = d as PeerSessionEventData;
+      const rows = queryClient.getQueryData<Instance[]>(["instances"]) || [];
+      const n = peerSessionNote(env.event, sd, {
+        name: sd.theirs ? peerSessionName(sd, rows) : displayName(String(sd.title || "")),
+        rowKey: sd.theirs ? peerRowKey(sd, rows) : "",
+      });
+      if (!n?.text) return null;
+      return n.select ? { text: n.text, cls: n.cls, session: n.select } : { text: n.text, cls: n.cls, peer: true };
     }
     // A newer release, and which of your devices are behind it: the click
     // opens where the Update button is (Devices when others are behind).
