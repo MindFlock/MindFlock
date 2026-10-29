@@ -1,0 +1,64 @@
+/* The Sky's new-session block (NewSessionBlock.tsx): a card at the spot the
+ * owner double-clicked. Its fields are Flights' form controls (.fl-form), so
+ * they wear the New dialog's look. */
+
+.sky-new.fl-form {
+  position: absolute;
+  z-index: 20;
+  box-sizing: border-box;
+  width: 380px;
+  max-width: calc(100vw - 24px);
+  grid-template-columns: 1fr;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+}
+
+.sky-new-head {
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+.sky-new-path {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sky-new-path input {
+  flex: 1 1 auto;
+  min-width: 0;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 7px 9px;
+  font-size: 12.5px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  outline: none;
+}
+
+.sky-new-path input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+}
+
+.sky-new-repos {
+  margin-bottom: 2px;
+}
+
+.sky-new-error {
+  margin: 0;
+  font-size: 12px;
+}
+
+.sky-new-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

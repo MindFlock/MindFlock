@@ -1,0 +1,255 @@
+/* The Sky's intake lane (IntakeLane.tsx): a column of source blocks pinned to
+ * the sky's left edge; the Sky positions it, this styles what is inside. */
+
+.sky-lane {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  max-height: 100%;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border-right: 1px solid var(--border);
+}
+
+.sky-lane-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sky-lane-title {
+  flex: 1 1 auto;
+}
+
+.sky-lane-toggle,
+.sky-lane-more {
+  flex: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-size: 14px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.sky-lane-toggle:hover,
+.sky-lane-more:hover {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--panel-2);
+}
+
+/* --- A source block -------------------------------------------------------- */
+
+.sky-lane-block {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.sky-lane-block-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.sky-lane-block-head .fl-kind-badge {
+  margin-top: 0;
+}
+
+.sky-lane-block-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.sky-lane-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.sky-lane-auto,
+.sky-lane-flyway {
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sky-lane-auto.on {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 45%, transparent);
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+}
+
+.sky-lane-flyway.own {
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb), 0.45);
+  background: rgba(var(--accent-rgb), 0.1);
+}
+
+.sky-lane-empty {
+  font-size: 12px;
+  margin: 0;
+}
+
+/* --- Waiting items --------------------------------------------------------- */
+
+.sky-lane-items,
+.sky-lane-stubs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sky-lane-item-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 7px;
+  border-radius: 7px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.sky-lane-item-words {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  gap: 5px;
+  font-size: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.sky-lane-item-ref {
+  flex: none;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.sky-lane-item-headline {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
+.sky-lane-fly.fl-btn {
+  flex: none;
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+.sky-lane-error {
+  font-size: 11.5px;
+  margin: 3px 0 0;
+}
+
+.sky-lane-n-more {
+  font-size: 11.5px;
+  padding-left: 7px;
+}
+
+/* --- Started sessions: a stub out of the block's right edge ---------------- */
+
+.sky-lane-stub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: -10px;
+  font-size: 11.5px;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.sky-lane-stub-name {
+  order: -1;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  margin-left: auto;
+}
+
+.sky-lane-stub-line {
+  flex: none;
+  width: 22px;
+  height: 0;
+  border-top: 1.5px solid rgba(var(--accent-rgb), 0.7);
+  position: relative;
+}
+
+.sky-lane-stub-line::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  top: -4.5px;
+  border: 4px solid transparent;
+  border-left: 6px solid rgba(var(--accent-rgb), 0.7);
+  border-right: 0;
+}
+
+/* --- Folded: one icon per source with its count ---------------------------- */
+
+.sky-lane-rail {
+  width: 44px;
+  align-items: center;
+  padding: 8px 4px;
+  gap: 8px;
+}
+
+.sky-lane-rail-icon.fl-kind-badge {
+  position: relative;
+  margin: 0;
+  min-width: 28px;
+  padding: 6px 4px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.sky-lane-rail-count {
+  position: absolute;
+  top: -6px;
+  right: -7px;
+  min-width: 15px;
+  padding: 2px 3px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  line-height: 1;
+  color: var(--bg);
+  background: var(--accent);
+  box-sizing: border-box;
+}
