@@ -259,8 +259,13 @@ def test_the_view_buttons_and_footer_icons_are_back():
     glyphs on Customize and Shortcuts."""
     side = _code("components/sidebar/Sidebar.tsx")
     assert 'id="view-modes"' in side
-    assert 'className={"vm" + (ui.viewMode === v ? " active" : "")}' in side
-    assert "onClick={() => ui.setViewMode(v)}" in side
+    # The Sky joined the row: a number is the grid's mode and lights only in the grid.
+    assert (
+        'className={"vm" + (ui.view === "grid" && ui.viewMode === v ? " active" : "")}'
+        in side
+    )
+    # A number picks the grid mode AND returns to the grid view.
+    assert 'ui.setViewMode(v);\n                setView("grid");' in side
     assert 'id="view-mode-select"' not in side
     assert "⌨ Shortcuts" in side
     css = _src("components/sidebar/SidebarRow.css")

@@ -240,7 +240,7 @@ describe("the line", () => {
     expect(src).toContain("p.onLayout({ open: !p.layout.open })");
     expect(src).toContain("g.w + (e.clientX - g.sx) / z");
     expect(src).toContain('<Pane key={inst.title} inst={inst} embedded />');
-    expect(src).toContain('useUi.getState().openDialogFor("flights", "sky/" + p.title)');
+    expect(src).toContain('showInSky(p.title)');
     // A card is measured, so the connectors follow it.
     const canvas = code("components/flights/FlywayCanvas.tsx");
     expect(canvas).toContain("if (o) return measured[n.id] || o.size;");

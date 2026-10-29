@@ -20,9 +20,9 @@
  * line); it reaches the host only as the line growing. */
 
 import { useEffect, useMemo, useRef, useState, type JSX, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { showInSky } from "../../lib/viewMode";
 import type { Instance } from "../../api/types";
 import { useFlightKinds, useFlights } from "../../state/queries";
-import { useUi } from "../../state/store";
 import { closeSession, selectSession } from "../../lib/sessionActions";
 import { deriveSessionState } from "../../lib/sessionState";
 import { firstLine } from "../../lib/format";
@@ -228,7 +228,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
 
   const items: MenuItem[] = [
     { key: "open", label: "Open session", title: "Open this session", onSelect: () => selectSession(p.title) },
-    { key: "only", label: "Show only this line", title: "This session: one line, filling the sky", onSelect: () => useUi.getState().openDialogFor("flights", "sky/" + p.title) },
+    { key: "only", label: "Show only this line", title: "This session: one line, filling the sky", onSelect: () => showInSky(p.title) },
     { key: "flyway", label: "Fly a flyway…", title: "Tack a stop, or a whole flyway, onto this line", onSelect: () => line.togglePalette(true) },
     { key: "close", label: "Close session", danger: true, title: "Stops the agent and moves it to Recently closed", onSelect: () => void closeSession(p.title) },
   ];

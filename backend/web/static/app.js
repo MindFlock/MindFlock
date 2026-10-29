@@ -25242,26 +25242,12 @@ function youText(f) {
 	const cur = f.steps[f.cursor];
 	return String(cur?.config?.text ?? "").trim() || (cur ? f.step_states?.[cur.id]?.note || "" : "") || f.reason || "";
 }
-function flightBadgeCount(flights, dueVerify, failingVerify, waiting) {
-	const you = needsYouFlights(flights).filter((f) => f.steps[f.cursor]?.kind !== "verify").length;
-	const verify = Math.max(0, dueVerify || 0);
-	const manual = waiting.filter((a) => !a.auto).length;
-	const halted = flights.some((f) => f.state === "halted");
+function perchBadge(flights) {
+	const perched = needsYouFlights(flights).filter((f) => f.state === "halted" || f.steps[f.cursor]?.kind !== "verify");
 	return {
-		count: you + verify + manual,
-		you,
-		verify,
-		waiting: manual,
-		failing: (failingVerify || 0) > 0 || halted
+		count: perched.length,
+		failing: perched.some((f) => f.state === "halted")
 	};
-}
-function badgeLines(b) {
-	const n = (k, one, many) => k + " " + (k === 1 ? one : many);
-	return [
-		n(b.you, "flight perched on you", "flights perched on you"),
-		n(b.verify, "checklist to check", "checklists to check"),
-		n(b.waiting, "item waiting to fly by hand", "items waiting to fly by hand")
-	];
 }
 var WAITING_KIND_HEAD = {
 	tickets: "Tickets",
@@ -25370,43 +25356,31 @@ var ON_FAIL_LABEL = {
 	skip: "Skip it",
 	you: "Ask me"
 };
-var FLIGHTS_TABS = [
-	"plans",
-	"sources",
-	"schedule",
-	"checklists"
-];
-var FLIGHTS_TAB_LABEL = {
-	plans: "Flyways",
-	sources: "Sources",
-	schedule: "Schedule",
-	checklists: "Checklists"
-};
-function parseFlightsTarget(target) {
+function legacyFlightsRoute(target) {
 	const raw = String(target || "").trim();
 	const cut = raw.indexOf("/");
 	const word = cut < 0 ? raw : raw.slice(0, cut);
 	const rest = cut < 0 ? "" : raw.slice(cut + 1);
-	return FLIGHTS_TABS.includes(word) ? {
-		tab: word,
-		rest
-	} : {
-		tab: "plans",
-		rest: ""
+	if (word === "flyways" || word === "plans") return {
+		to: "flyways",
+		plan: rest
 	};
-}
-function skyRouteOf(target) {
-	const raw = String(target || "").trim();
-	const cut = raw.indexOf("/");
-	const word = cut < 0 ? raw : raw.slice(0, cut);
-	if (word !== "sky" && word !== "board") return null;
-	return { focus: word === "sky" && cut >= 0 ? raw.slice(cut + 1) : "" };
-}
-function flightsTargetFor(name, target) {
-	const t = String(target || "");
-	if (name === "intake") return t ? "sources/" + t : "sources";
-	if (name === "verify") return t ? "checklists/" + t : "checklists";
-	return t ? "schedule/" + t : "schedule";
+	if (word === "sources") return {
+		to: "intake",
+		target: rest || null
+	};
+	if (word === "checklists") return {
+		to: "verify",
+		target: rest || null
+	};
+	if (word === "schedule") return {
+		to: "schedule",
+		target: rest || null
+	};
+	return {
+		to: "sky",
+		focus: word === "sky" ? rest : ""
+	};
 }
 function whenFormOf(s) {
 	const base = {
@@ -27398,6 +27372,7 @@ var useUi = create((set, get) => ({
 	viewMode: load$1("cs_viewmode", "auto", false),
 	view: load$1("mf_view", "grid", false) === "sky" ? "sky" : "grid",
 	skyMode: loadSkyMode(),
+	skyShelf: null,
 	gridRows: load$1("cs_gridrows", []),
 	sidebarHidden: load$1("cs_sidebar", "", false) === "hidden",
 	sidebarWidth: clampSidebarWidth(load$1("mf_sidebar_w", SIDEBAR_DEFAULT_W)),
@@ -27484,6 +27459,14 @@ var useUi = create((set, get) => ({
 		} else if (get().skyMode === "one") set({ skyMode: loadSkyMode() });
 		get().setView("sky");
 	},
+	showFlyways: (plan = "") => {
+		get().showSky();
+		set({ skyShelf: {
+			plan,
+			n: (get().skyShelf?.n || 0) + 1
+		} });
+	},
+	takeSkyShelf: () => set({ skyShelf: null }),
 	setGridRows: (rows) => {
 		save("cs_gridrows", rows);
 		set({ gridRows: rows });
@@ -27783,15 +27766,19 @@ var useUi = create((set, get) => ({
 		set({ lastTab });
 	},
 	openDialogFor: (name, target = null) => {
-		const legacy = name === "intake" || name === "verify" || name === "schedule" || name === "templates";
-		const sky = name === "flights" ? skyRouteOf(target) : null;
-		if (sky) get().showSky(sky.focus);
-		else set(legacy ? {
-			openDialog: "flights",
-			dialogTarget: flightsTargetFor(name, target)
-		} : {
-			openDialog: name,
-			dialogTarget: target
+		if (name !== "flights") {
+			set({
+				openDialog: name === "templates" ? "schedule" : name,
+				dialogTarget: target
+			});
+			return;
+		}
+		const r = legacyFlightsRoute(target);
+		if (r.to === "sky") get().showSky(r.focus);
+		else if (r.to === "flyways") get().showFlyways(r.plan);
+		else set({
+			openDialog: r.to,
+			dialogTarget: r.target
 		});
 	},
 	closeDialog: () => set({
@@ -30579,6 +30566,11 @@ function isNoCommits(plan) {
 }
 function dueCount(plans) {
 	return (plans || []).filter((p) => isFailing(p) || isWaitingOnYou(p)).length;
+}
+function verifyCountLine(due, failing) {
+	if (!due) return "Checklists that need you or failed: none right now";
+	const what = due + " checklist" + (due === 1 ? "" : "s") + " need" + (due === 1 ? "s" : "") + " you or failed";
+	return failing ? what + " — " + failing + " failed" : what;
 }
 function failingCount(plans) {
 	return (plans || []).filter(isFailing).length;
@@ -33665,10 +33657,10 @@ var KEYMAP = [
 		help: [
 			"Navigation",
 			"Alt+I",
-			"Flights — flyways, sources, the schedule and checklists"
+			"Intake — tickets, PRs and issues"
 		],
 		when: () => !isEditingTarget(document.activeElement),
-		run: () => useUi.getState().openDialogFor("flights")
+		run: () => useUi.getState().openDialogFor("intake")
 	},
 	{
 		key: "y",
@@ -33689,10 +33681,10 @@ var KEYMAP = [
 		help: [
 			"Navigation",
 			"Alt+V",
-			"Flights → Checklists — " + VERIFY_BLURB
+			"Verify — " + VERIFY_BLURB
 		],
 		when: () => !isEditingTarget(document.activeElement),
-		run: () => useUi.getState().openDialogFor("flights", "checklists")
+		run: () => useUi.getState().openDialogFor("verify")
 	},
 	{
 		key: "s",
@@ -33701,10 +33693,10 @@ var KEYMAP = [
 		help: [
 			"Navigation",
 			"Alt+S",
-			"Flights → Schedule — templates that start sessions on their own"
+			"Schedule — templates that start sessions on their own"
 		],
 		when: () => !isEditingTarget(document.activeElement),
-		run: () => useUi.getState().openDialogFor("flights", "schedule")
+		run: () => useUi.getState().openDialogFor("schedule")
 	},
 	{
 		key: "t",
@@ -35924,113 +35916,6 @@ function ExtensionDialog() {
 			})]
 		})
 	});
-}
-//#endregion
-//#region src/components/intake/queue.ts
-function isQueued(item) {
-	return item.eligible === true && !item.has_session;
-}
-function oldestFirst(rows) {
-	return rows.slice().sort((a, b) => {
-		const ta = Date.parse(a.created_at || "");
-		const tb = Date.parse(b.created_at || "");
-		if (!isFinite(ta) && !isFinite(tb)) return 0;
-		if (!isFinite(ta)) return 1;
-		if (!isFinite(tb)) return -1;
-		return ta - tb;
-	});
-}
-function ref(repo, number) {
-	return (repo || "") + "#" + (number ?? "?");
-}
-function queuedOf(kind, payloads) {
-	if (kind === "tickets") {
-		const labels = payloads.tickets?.source_labels || {};
-		return oldestFirst((payloads.tickets?.tickets || []).filter(isQueued)).map((t) => ({
-			kind,
-			key: "tickets:" + (t.source || "") + ":" + (t.id ?? t.slug ?? ""),
-			reference: t.slug || String(t.id ?? ""),
-			title: t.name || "",
-			url: t.url,
-			group: labels[t.source || ""] || t.source || "Tickets",
-			created_at: t.created_at,
-			state: t.bucket,
-			assignee: t.mine === false ? t.assignee || "someone else" : void 0,
-			route: t.route,
-			target: {
-				kind: "tickets",
-				source: t.source || "",
-				id: String(t.id ?? "")
-			}
-		}));
-	}
-	return oldestFirst((kind === "prs" ? payloads.prs?.prs || [] : payloads.issues?.issues || []).filter(isQueued)).map((r) => ({
-		kind,
-		key: kind + ":" + (r.repo || "") + ":" + (r.number ?? ""),
-		reference: ref(r.repo, r.number),
-		title: r.title || "",
-		url: r.url,
-		group: r.repo || (kind === "prs" ? "Pull requests" : "Issues"),
-		created_at: r.created_at,
-		target: {
-			kind,
-			repo: r.repo || "",
-			number: r.number ?? 0
-		}
-	}));
-}
-function collectQueued(payloads) {
-	return [
-		...queuedOf("tickets", payloads),
-		...queuedOf("prs", payloads),
-		...queuedOf("issues", payloads)
-	];
-}
-function runState(opts) {
-	if (!opts.engineAvailable || !opts.configured) return "unset";
-	if (opts.runsElsewhere) return "elsewhere";
-	if (!opts.switchOn) return "off-switch";
-	if (!opts.engineOn) return "off-engine";
-	return "on";
-}
-function runsOnText(device) {
-	return "Runs on " + (device || "another of your devices");
-}
-function byGroup(items) {
-	const out = [];
-	for (const item of items) {
-		const found = out.find((g) => g.group === item.group);
-		if (found) found.items.push(item);
-		else out.push({
-			group: item.group,
-			items: [item]
-		});
-	}
-	return out;
-}
-//#endregion
-//#region src/components/flights/useWaiting.ts
-function useWaiting(fetch = true) {
-	const tickets = usePanelQuery("tickets", { enabled: fetch });
-	const prs = usePanelQuery("github-prs", { enabled: fetch });
-	const issues = usePanelQuery("github-issues", { enabled: fetch });
-	const status = useMindflockStatus().data;
-	return {
-		waiting: collectQueued({
-			tickets: tickets.data ?? null,
-			prs: prs.data ?? null,
-			issues: issues.data ?? null
-		}).map((item) => ({
-			item,
-			auto: waitingAuto(item.kind, status)
-		})),
-		loaded: !!(tickets.data || prs.data || issues.data),
-		refresh: () => {
-			tickets.refresh();
-			prs.refresh();
-			issues.refresh();
-		}
-	};
 }
 //#endregion
 //#region src/components/flights/Bird.tsx
@@ -44663,177 +44548,158 @@ var VERIFY_TOUR = {
 	]
 };
 //#endregion
-//#region src/lib/tours/schedule.ts
-var SCHEDULE_TOUR = {
-	id: "schedule",
-	title: "Schedule",
-	steps: [
-		{
-			target: "#schedule-btn, #more-btn, [data-tour=\"schedule-new\"], #templates-new, #schedule-empty-create",
-			title: "Sessions you'll want again",
-			body: "Schedule keeps templates — a folder, an agent and a task — so a session starts with one click, or by itself."
-		},
-		{
-			target: "[data-tour=\"schedule-new\"], #templates-new, #schedule-empty-create",
-			title: "Create a template",
-			body: "Start with a job you repeat, like a nightly test run or a dependency bump."
-		},
-		{
-			target: "[data-tour=\"schedule-name\"], [data-tour=\"schedule-folder\"]",
-			title: "Name it and pick the repo",
-			body: "The folder is what makes a template runnable — every session from it works there."
-		},
-		{
-			target: "[data-tour=\"schedule-task\"]",
-			title: "Say what to do",
-			body: "Every session from this template is told this task first."
-		},
-		{
-			target: "[data-tour=\"schedule-when\"]",
-			title: "Let it start by itself",
-			body: "Tick Run on a schedule — daily, weekdays, once or on a cron — and the line below it shows exactly when it runs next."
-		},
-		{
-			target: "[data-tour=\"schedule-run\"]",
-			title: "Try it once now",
-			body: "▶ Run now starts a new session in the sidebar, and the card logs it under Last run."
-		}
-	]
-};
-//#endregion
-//#region src/lib/tours/settings.ts
-var SETTINGS_TOUR = {
-	id: "settings",
-	title: "Settings",
-	steps: [
-		{
-			target: "[data-tour=\"settings-status\"]",
-			screen: "connections",
-			title: "Your status page",
-			body: "Connections lists everything MindFlock talks to: what is connected and what needs you."
-		},
-		{
-			target: "[data-tour=\"settings-github\"]",
-			screen: "connections",
-			title: "Connect GitHub when you need PRs",
-			body: "Agents need GitHub to open pull requests; pushing already works without it."
-		},
-		{
-			target: "#settings-search",
-			screen: "connections",
-			title: "Search finds any setting",
-			body: "Type a word like dark, phone or parallel and jump straight to it."
-		},
-		{
-			target: "[data-tour=\"settings-default-agent\"], #default-provider-select",
-			screen: "coding",
-			title: "Pick your default agent",
-			body: "New sessions start with this agent; you can still pick another one when you start a session."
-		},
-		{
-			target: "[data-tour=\"settings-worktrees\"], #workspace-paths",
-			screen: "workspace",
-			title: "Where your worktrees live",
-			body: "Each session gets a separate worktree, its own branch and copy of your repo, kept in these folders."
-		},
-		{
-			target: "[data-tour=\"settings-advanced\"], #settings-advanced-toggle",
-			title: "The rest waits here",
-			body: "Phones, other computers, local models and troubleshooting live behind Show advanced settings."
-		},
-		{
-			target: "[data-tour=\"settings-tours\"], #general-tours",
-			screen: "general",
-			title: "Replay any tour",
-			body: "Every tour lives here under Help, next to the switch for hints."
-		}
-	]
-};
-//#endregion
-//#region src/lib/tours/people.ts
-var PEOPLE_TOUR = {
-	id: "people",
-	title: "People",
-	steps: [
-		{
-			target: "[data-tour=\"people-invite\"]",
-			title: "Invite someone",
-			body: "Create invite makes a one-time code — send it to the person you want to work with."
-		},
-		{
-			target: "[data-tour=\"people-join\"]",
-			title: "Or join them",
-			body: "Got an invite instead? Paste the whole message here and press Join."
-		},
-		{
-			target: "[data-tour=\"people-safety\"]",
-			title: "Check the safety number",
-			body: "Read it to each other: if it matches press It matches, if it differs unlink."
-		},
-		{
-			target: "[data-tour=\"people-share\"]",
-			title: "Share a folder",
-			body: "An agent works in one shared folder inside a sandbox and talks to their agent."
-		},
-		{
-			target: "[data-tour=\"people-joint\"]",
-			title: "Build one feature together",
-			body: "Start a joint task to agree a contract, then watch their session and mirror their work into your repo."
-		}
-	]
-};
-//#endregion
-//#region src/lib/tours/flights.ts
-var FLIGHTS_TOUR = {
-	id: "flights",
-	title: "Flights",
-	steps: [
-		{
-			target: "[data-tour=\"view-sky\"]",
-			title: "Every session in the sky",
-			body: "Grid · Sky (Alt+Y) shows the same sessions as lines — drag empty sky to pan, Ctrl+wheel to zoom, Tidy to put lines back."
-		},
-		{
-			target: "[data-tour=\"flights-bird\"], [data-tour=\"view-sky\"]",
-			title: "The bird is where it is",
-			body: "It stands on the stop each flight is at: bobbing while the flock works, gold when perched on you."
-		},
-		{
-			target: "[data-tour=\"flights-newblock\"], [data-tour=\"view-sky\"]",
-			title: "Build from the space",
-			body: "In the sky, double-click (or + New session, Ctrl+N) to start one right there, and press + on any line to tack on a stop."
-		},
-		{
-			target: "[data-tour=\"flights-plans\"], #flights-tab-plans",
-			title: "Flyways are stops on a line",
-			body: "Drag boxes to reorder them, press + to add a stop, and add a perch wherever the flight should wait for you.",
-			screen: "plans"
-		},
-		{
-			target: "[data-tour=\"flights-describe\"], #flights-tab-plans",
-			title: "Describe a stop",
-			body: "Say what should happen in a sentence and the stops are added for you to check and save.",
-			screen: "plans"
-		}
-	]
-};
-//#endregion
 //#region src/lib/tours/index.ts
 var TOURS = {
 	welcome: WELCOME_TOUR,
 	new: NEW_TOUR,
-	flights: FLIGHTS_TOUR,
+	sky: {
+		id: "sky",
+		title: "Sky",
+		steps: [
+			{
+				target: "[data-tour=\"view-sky\"]",
+				title: "Every session in the sky",
+				body: "Grid · Sky (Alt+Y) shows the same sessions as lines — drag empty sky to pan, Ctrl+wheel to zoom, Tidy to put lines back."
+			},
+			{
+				target: "[data-tour=\"sky-line\"], [data-tour=\"view-sky\"]",
+				title: "One line per session",
+				body: "Its blocks are the session, its workers and its flight's stops — the session box opens its pane, + tacks on a stop."
+			},
+			{
+				target: "[data-tour=\"flights-bird\"], [data-tour=\"view-sky\"]",
+				title: "The bird is where it is",
+				body: "It stands on the stop each flight is at: bobbing while the flock works, gold when perched on you."
+			},
+			{
+				target: "[data-tour=\"sky-shelf\"], [data-tour=\"view-sky\"]",
+				title: "Flyways live on the shelf",
+				body: "Drag a flyway onto a line to fly it there, press one to edit its stops and schedule, or + New flyway to make one."
+			}
+		]
+	},
 	intake: INTAKE_TOUR,
 	verify: VERIFY_TOUR,
-	schedule: SCHEDULE_TOUR,
-	settings: SETTINGS_TOUR,
-	people: PEOPLE_TOUR,
+	schedule: {
+		id: "schedule",
+		title: "Schedule",
+		steps: [
+			{
+				target: "#schedule-btn, #more-btn, [data-tour=\"schedule-new\"], #templates-new, #schedule-empty-create",
+				title: "Sessions you'll want again",
+				body: "Schedule keeps templates — a folder, an agent and a task — so a session starts with one click, or by itself."
+			},
+			{
+				target: "[data-tour=\"schedule-new\"], #templates-new, #schedule-empty-create",
+				title: "Create a template",
+				body: "Start with a job you repeat, like a nightly test run or a dependency bump."
+			},
+			{
+				target: "[data-tour=\"schedule-name\"], [data-tour=\"schedule-folder\"]",
+				title: "Name it and pick the repo",
+				body: "The folder is what makes a template runnable — every session from it works there."
+			},
+			{
+				target: "[data-tour=\"schedule-task\"]",
+				title: "Say what to do",
+				body: "Every session from this template is told this task first."
+			},
+			{
+				target: "[data-tour=\"schedule-when\"]",
+				title: "Let it start by itself",
+				body: "Tick Run on a schedule — daily, weekdays, once or on a cron — and the line below it shows exactly when it runs next."
+			},
+			{
+				target: "[data-tour=\"schedule-run\"]",
+				title: "Try it once now",
+				body: "▶ Run now starts a new session in the sidebar, and the card logs it under Last run."
+			}
+		]
+	},
+	settings: {
+		id: "settings",
+		title: "Settings",
+		steps: [
+			{
+				target: "[data-tour=\"settings-status\"]",
+				screen: "connections",
+				title: "Your status page",
+				body: "Connections lists everything MindFlock talks to: what is connected and what needs you."
+			},
+			{
+				target: "[data-tour=\"settings-github\"]",
+				screen: "connections",
+				title: "Connect GitHub when you need PRs",
+				body: "Agents need GitHub to open pull requests; pushing already works without it."
+			},
+			{
+				target: "#settings-search",
+				screen: "connections",
+				title: "Search finds any setting",
+				body: "Type a word like dark, phone or parallel and jump straight to it."
+			},
+			{
+				target: "[data-tour=\"settings-default-agent\"], #default-provider-select",
+				screen: "coding",
+				title: "Pick your default agent",
+				body: "New sessions start with this agent; you can still pick another one when you start a session."
+			},
+			{
+				target: "[data-tour=\"settings-worktrees\"], #workspace-paths",
+				screen: "workspace",
+				title: "Where your worktrees live",
+				body: "Each session gets a separate worktree, its own branch and copy of your repo, kept in these folders."
+			},
+			{
+				target: "[data-tour=\"settings-advanced\"], #settings-advanced-toggle",
+				title: "The rest waits here",
+				body: "Phones, other computers, local models and troubleshooting live behind Show advanced settings."
+			},
+			{
+				target: "[data-tour=\"settings-tours\"], #general-tours",
+				screen: "general",
+				title: "Replay any tour",
+				body: "Every tour lives here under Help, next to the switch for hints."
+			}
+		]
+	},
+	people: {
+		id: "people",
+		title: "People",
+		steps: [
+			{
+				target: "[data-tour=\"people-invite\"]",
+				title: "Invite someone",
+				body: "Create invite makes a one-time code — send it to the person you want to work with."
+			},
+			{
+				target: "[data-tour=\"people-join\"]",
+				title: "Or join them",
+				body: "Got an invite instead? Paste the whole message here and press Join."
+			},
+			{
+				target: "[data-tour=\"people-safety\"]",
+				title: "Check the safety number",
+				body: "Read it to each other: if it matches press It matches, if it differs unlink."
+			},
+			{
+				target: "[data-tour=\"people-share\"]",
+				title: "Share a folder",
+				body: "An agent works in one shared folder inside a sandbox and talks to their agent."
+			},
+			{
+				target: "[data-tour=\"people-joint\"]",
+				title: "Build one feature together",
+				body: "Start a joint task to agree a contract, then watch their session and mirror their work into your repo."
+			}
+		]
+	},
 	voice: VOICE_TOUR
 };
 var TOUR_IDS = [
 	"welcome",
 	"new",
-	"flights",
+	"sky",
 	"intake",
 	"verify",
 	"schedule",
@@ -44910,8 +44776,11 @@ var CALM_HIDDEN_BARS = ["usage", "assistant"];
 function calmHidesBar(key) {
 	return CALM_HIDDEN_BARS.includes(key) || key.startsWith("ext:");
 }
-function topBarShows() {
-	return { flights: true };
+function topBarShows(o) {
+	return {
+		verify: !o.calm || o.checklists > 0,
+		schedule: !o.calm || o.templates > 0
+	};
 }
 function firstLaunchTour(opts) {
 	if (opts.seen || opts.sessions !== 0) return false;
@@ -44990,11 +44859,10 @@ function openTourOnFirstUse(id) {
 //#endregion
 //#region src/components/onboarding/replayTour.ts
 var SURFACE = {
-	new: ["new-session", null],
-	flights: ["flights", "plans"],
-	intake: ["flights", "sources"],
-	verify: ["flights", "checklists"],
-	schedule: ["flights", "schedule"]
+	new: "new-session",
+	intake: "intake",
+	verify: "verify",
+	schedule: "schedule"
 };
 function replayTour(id) {
 	const ui = useUi.getState();
@@ -45006,11 +44874,9 @@ function replayTour(id) {
 	}
 	if (id === "settings") openSettings("connections");
 	else if (id === "people") openSettings("peer");
+	else if (id === "sky") ui.showSky();
 	else if (id === "voice") ui.closeDialog();
-	else {
-		const [name, target] = SURFACE[id];
-		ui.openDialogFor(name, target);
-	}
+	else ui.openDialogFor(SURFACE[id]);
 	useUi.getState().openCoachTour(id);
 }
 //#endregion
@@ -47536,6 +47402,24 @@ function useScheduleStatus() {
 	};
 }
 //#endregion
+//#region src/lib/useCalm.ts
+function useCalm() {
+	const { data: instances } = useInstances();
+	const { data: setup } = useSetup();
+	const { data: config } = useConfig();
+	const sessions = instances ? instances.filter((i) => !i.device && !isVerifySession(i)).length : null;
+	const decided = sessions === null ? null : calmDecision({
+		sessions,
+		status: setup,
+		onboarded: config?.onboarded
+	});
+	(0, import_react.useEffect)(() => {
+		if (decided !== null) writeCalmHint(decided);
+	}, [decided]);
+	if (decided !== null) return decided;
+	return undecidedCalm(readCalmHint());
+}
+//#endregion
 //#region src/components/TopBar.tsx
 function engineVersion(raw) {
 	const v = (raw || "").trim();
@@ -47620,10 +47504,12 @@ function TopBar() {
 	const failing = failingCount(testPlans?.plans || []);
 	const sched = useScheduleStatus();
 	const schedFailing = failingSchedules(sched.templates, sched.status).length;
-	const flights = useFlights().data || [];
-	const { waiting } = useWaiting(false);
-	const badge = flightBadgeCount(flights, due, failing, waiting);
-	const shows = topBarShows();
+	const perch = perchBadge(useFlights().data || []);
+	const shows = topBarShows({
+		calm: useCalm(),
+		checklists: testPlans?.plans?.length ?? 0,
+		templates: sched.templates.length
+	});
 	const [mac] = (0, import_react.useState)(hasNativeWindowControls);
 	const [fullScreen, setFullScreen] = (0, import_react.useState)(false);
 	(0, import_react.useEffect)(() => {
@@ -47654,23 +47540,44 @@ function TopBar() {
 		const k = usableShortcuts(id, tab);
 		return k.length ? " (" + k.join(" / ") + ")" : "";
 	};
-	const flightsTitle = "Flights — every ticket, PR and scheduled job on its flyway, from waiting to fly to landed" + keys("intake") + "\n" + badgeLines(badge).join("\n") + (schedFailing > 0 ? "\n" + (schedFailing === 1 ? "1 scheduled template's last run failed" : schedFailing + " scheduled templates' last runs failed") : "");
+	const verifyTitle = "Verify — " + VERIFY_BLURB + keys("verify") + "\n" + verifyCountLine(due, failing);
+	const scheduleTitle = "Schedule — templates and scheduled flyways; starts sessions on a timer" + keys("schedule") + (schedFailing > 0 ? "\n" + (schedFailing === 1 ? "1 scheduled template's last run failed" : schedFailing + " scheduled templates' last runs failed") : "");
 	const otherView = ui.view === "sky" ? "grid" : "sky";
-	const foldable = [{
-		key: "view",
-		label: "Switch to the " + viewLabel(otherView),
-		title: viewLabel(otherView) + " — " + VIEW_BLURB[otherView] + keys("view"),
-		count: 0,
-		failing: false,
-		open: () => toggleView()
-	}, {
-		key: "settings",
-		label: "Settings",
-		title: "Settings",
-		count: 0,
-		failing: false,
-		open: () => openSettings()
-	}];
+	const perchLine = perch.count > 0 ? "\n" + perch.count + (perch.count === 1 ? " flight perched on you" : " flights perched on you") : "";
+	const foldable = [
+		{
+			key: "view",
+			label: "Switch to the " + viewLabel(otherView),
+			title: viewLabel(otherView) + " — " + VIEW_BLURB[otherView] + keys("view") + perchLine,
+			count: perch.count,
+			failing: perch.failing,
+			open: () => toggleView()
+		},
+		shows.verify && {
+			key: "verify",
+			label: "Verify",
+			title: verifyTitle,
+			count: due,
+			failing: failing > 0,
+			open: () => ui.openDialogFor("verify")
+		},
+		shows.schedule && {
+			key: "schedule",
+			label: "Schedule",
+			title: scheduleTitle,
+			count: schedFailing,
+			failing: true,
+			open: () => ui.openDialogFor("schedule")
+		},
+		{
+			key: "settings",
+			label: "Settings",
+			title: "Settings",
+			count: 0,
+			failing: false,
+			open: () => openSettings()
+		}
+	].filter((f) => !!f);
 	const [fit, setFit] = (0, import_react.useState)({
 		brand: true,
 		shown: Infinity
@@ -47851,24 +47758,6 @@ function TopBar() {
 							onClick: () => newSession(),
 							children: "New"
 						}),
-						shows.flights && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-							id: "flights-btn",
-							className: "tb-item",
-							type: "button",
-							title: flightsTitle,
-							onClick: () => ui.openDialogFor("flights"),
-							children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, {
-									size: 13,
-									className: "tb-bird"
-								}),
-								"Flights",
-								badge.count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "tb-count" + (badge.failing ? " is-failing" : ""),
-									children: badge.count
-								})
-							]
-						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "tb-views" + (isFolded("view") ? " tb-folded" : ""),
 							"data-fold": "view",
@@ -47882,14 +47771,53 @@ function TopBar() {
 								"data-tour": v === "sky" ? "view-sky" : void 0,
 								title: viewLabel(v) + " — " + VIEW_BLURB[v] + keys("view"),
 								onClick: () => setView(v),
-								children: [v === "sky" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, {
-									size: 12,
-									className: "tb-view-icon"
-								}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GridGlyph, {}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "tb-view-word",
-									children: viewLabel(v)
-								})]
+								children: [
+									v === "sky" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, {
+										size: 12,
+										className: "tb-view-icon"
+									}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GridGlyph, {}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "tb-view-word",
+										children: viewLabel(v)
+									}),
+									v === "sky" && perch.count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "tb-count" + (perch.failing ? " is-failing" : ""),
+										children: perch.count
+									})
+								]
 							}, v))
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							id: "intake-btn",
+							className: "tb-item",
+							type: "button",
+							title: "Intake — tickets, pull requests and issues; starts sessions when work arrives" + keys("intake"),
+							onClick: () => ui.openDialogFor("intake"),
+							children: "Intake"
+						}),
+						shows.verify && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							id: "verify-btn",
+							className: "tb-item" + (isFolded("verify") ? " tb-folded" : ""),
+							"data-fold": "verify",
+							type: "button",
+							title: verifyTitle,
+							onClick: () => ui.openDialogFor("verify"),
+							children: ["Verify", due > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "tb-count" + (failing > 0 ? " is-failing" : ""),
+								children: due
+							})]
+						}),
+						shows.schedule && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							id: "schedule-btn",
+							className: "tb-item" + (isFolded("schedule") ? " tb-folded" : ""),
+							"data-fold": "schedule",
+							type: "button",
+							title: scheduleTitle,
+							onClick: () => ui.openDialogFor("schedule"),
+							children: ["Schedule", schedFailing > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "tb-count is-failing",
+								children: schedFailing
+							})]
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							id: "settings-btn",
@@ -56142,24 +56070,6 @@ function SetupChip() {
 		onClick: () => useUi.getState().openDialogFor("setup"),
 		children: chipLabel(status)
 	});
-}
-//#endregion
-//#region src/lib/useCalm.ts
-function useCalm() {
-	const { data: instances } = useInstances();
-	const { data: setup } = useSetup();
-	const { data: config } = useConfig();
-	const sessions = instances ? instances.filter((i) => !i.device && !isVerifySession(i)).length : null;
-	const decided = sessions === null ? null : calmDecision({
-		sessions,
-		status: setup,
-		onboarded: config?.onboarded
-	});
-	(0, import_react.useEffect)(() => {
-		if (decided !== null) writeCalmHint(decided);
-	}, [decided]);
-	if (decided !== null) return decided;
-	return undecidedCalm(readCalmHint());
 }
 //#endregion
 //#region src/components/sidebar/Sidebar.tsx
@@ -78721,6 +78631,12 @@ function stopSummary(step) {
 			const t = String(c.text ?? "").trim();
 			return t ? clip(t) : "a ping";
 		}
+		case "split": {
+			const lines = (Array.isArray(c.prompts) ? c.prompts.map(String) : String(c.prompts ?? "").split("\n")).filter((l) => l.trim()).length;
+			const n = lines > 1 ? lines : Math.max(1, num(c.count, 1));
+			return n + (n === 1 ? " worker" : " workers") + " in parallel";
+		}
+		case "join": return (c.of === "spawned" ? "waits for its split's workers" : "waits for every worker") + (c.on_failed === "continue" ? " · goes on past a failure" : "");
 		default: return step.kind;
 	}
 }
@@ -78946,8 +78862,39 @@ function sessionDiagram(rows, title, opts = {}) {
 		}
 	}
 	line.push(addNode("Tack on a stop"));
-	chain(nodes, edges, line);
-	if (family) for (const k of kids) {
+	const fans = family && mode === "flight" && fl ? branchesOf(title, kids, line, fl, opts.flights?.find((f) => f.id === fl.id)) : null;
+	if (fans) {
+		nodes.push(...line);
+		for (let i = 1; i < line.length; i++) {
+			const a = line[i - 1];
+			const b = line[i];
+			if (!fans.out.has(a.id)) edges.push({
+				from: a.id,
+				to: b.id,
+				kind: b.kind === "add" ? "add" : "line"
+			});
+			for (const c of fans.out.get(a.id) || []) {
+				nodes.push(c);
+				edges.push({
+					from: a.id,
+					to: c.id,
+					kind: "fan"
+				});
+				const done = c.branch.state === "done" || fans.letGo.has(b.id);
+				edges.push(done ? {
+					from: c.id,
+					to: b.id,
+					kind: "join",
+					done
+				} : {
+					from: c.id,
+					to: b.id,
+					kind: "join"
+				});
+			}
+		}
+	} else chain(nodes, edges, line);
+	if (family) for (const k of fans ? fans.below : kids) {
 		const c = sessionBox(k, "child", "below");
 		nodes.push(c);
 		edges.push({
@@ -78962,6 +78909,137 @@ function sessionDiagram(rows, title, opts = {}) {
 		flightId,
 		mode,
 		insertFrom
+	};
+}
+function branchOf(row) {
+	const b = row.flight?.branch;
+	return b && typeof b.step === "string" && b.step ? b : null;
+}
+function joinOf(row) {
+	const j = row.flight?.join;
+	return j && Number.isFinite(Number(j.total)) ? {
+		waiting: Math.max(0, Number(j.waiting) || 0),
+		total: Number(j.total) || 0
+	} : null;
+}
+function joinLabel(j) {
+	return "waiting for " + j.waiting + " of " + j.total;
+}
+var REPORT_STATE = {
+	done: "done",
+	failed: "failed",
+	blocked: "asking"
+};
+function branchState(child, listed) {
+	const ss = deriveSessionState(child);
+	if (ss.state === "working") return "working";
+	if (ss.state === "needs_you") return "asking";
+	const rep = REPORT_STATE[String(child.last_report?.status || "")];
+	if (rep) return rep;
+	if (listed?.state) return listed.state;
+	if (ss.tone === "broken") return "failed";
+	return "working";
+}
+var BRANCH_CHIP = {
+	working: {
+		label: "Working",
+		tone: "working"
+	},
+	asking: {
+		label: "Asking",
+		tone: "attention"
+	},
+	done: {
+		label: "Done",
+		tone: "neutral"
+	},
+	failed: {
+		label: "Failed",
+		tone: "broken"
+	},
+	gone: {
+		label: "Gone",
+		tone: "muted"
+	}
+};
+var BRANCH_NODE_STATE = {
+	working: "current",
+	asking: "perched",
+	done: "done",
+	failed: "failed",
+	gone: "skipped"
+};
+function innerSummary(row) {
+	const fl = row.flight;
+	if (fl && isLive(fl) && Number(fl.total) > 0) return Math.min(fl.cursor, fl.total) + "/" + fl.total + " stops" + (fl.step?.title ? " · " + fl.step.title : "");
+	const rungs = ladderRungs(row);
+	if (!rungs.length) return "";
+	const done = rungs.filter((r) => r.state === "done").length;
+	const cur = rungs.find((r) => r.state !== "done");
+	return done + "/" + rungs.length + " stops" + (cur ? " · " + LANE_LABEL[cur.lane] : "");
+}
+function joinChildren(full) {
+	const out = /* @__PURE__ */ new Map();
+	if (!full) return out;
+	for (const rec of Object.values(full.step_states || {})) {
+		const list = (rec?.detail)?.children;
+		if (!Array.isArray(list)) continue;
+		for (const c of list) if (c && typeof c.title === "string") out.set(c.title, c);
+	}
+	return out;
+}
+function branchesOf(title, kids, line, fl, full) {
+	const out = /* @__PURE__ */ new Map();
+	const below = [];
+	const letGo = /* @__PURE__ */ new Set();
+	const listed = joinChildren(full);
+	const at = (step) => line.findIndex((n) => n.kind === "stop" && (n.step ? n.step.id === step : n.index === fl.cursor && fl.step?.id === step));
+	for (const k of kids) {
+		const b = branchOf(k);
+		const i = b && (!b.parent || b.parent === title) ? at(b.step) : -1;
+		if (i < 0 || i + 1 >= line.length) {
+			below.push(k);
+			continue;
+		}
+		const entry = listed.get(k.title);
+		if (entry?.state === "gone") continue;
+		const state = branchState(k, entry);
+		const from = line[i];
+		const to = line[i + 1];
+		const inner = innerSummary(k);
+		const c = {
+			id: "branch:" + k.title,
+			kind: "branch",
+			row: "branch",
+			title: k.title,
+			sub: inner || (entry?.report ? clip(String(entry.report)) : k.last_report?.summary ? clip(k.last_report.summary) : ""),
+			state: BRANCH_NODE_STATE[state],
+			icon: "session",
+			session: k.title,
+			chip: BRANCH_CHIP[state],
+			branch: {
+				from: from.id,
+				to: to.id,
+				state,
+				inner
+			}
+		};
+		out.set(from.id, [...out.get(from.id) || [], c]);
+	}
+	const join = joinOf({ flight: fl });
+	const ci = line.findIndex((n) => n.kind === "stop" && n.index === fl.cursor);
+	if (join && ci >= 0) {
+		const point = fl.step?.kind === "join" ? line[ci] : line[ci + 1];
+		if (point) {
+			point.join = join;
+			if (join.waiting === 0) letGo.add(point.id);
+		}
+	}
+	for (const n of line) if (n.state === "done" || n.state === "skipped") letGo.add(n.id);
+	return {
+		out,
+		below,
+		letGo
 	};
 }
 function hasSessionDiagram(rows, title) {
@@ -78979,6 +79057,18 @@ var STOP_TONE = {
 function birdPerch(d) {
 	const main = d.nodes.filter((n) => n.row === "main");
 	const stop = main.find((n) => n.kind === "stop" && STOP_TONE[n.state]);
+	if (stop && (stop.state === "halted" || stop.state === "paused")) return {
+		nodeId: stop.id,
+		tone: STOP_TONE[stop.state]
+	};
+	const point = main.find((n) => n.join && n.join.waiting > 0);
+	if (point) {
+		const asking = d.nodes.some((n) => n.branch?.to === point.id && n.branch.state === "asking");
+		return {
+			nodeId: point.id,
+			tone: asking ? "you" : "working"
+		};
+	}
 	if (stop) return {
 		nodeId: stop.id,
 		tone: STOP_TONE[stop.state]
@@ -79009,8 +79099,13 @@ function boxMetrics(compact = false) {
 			w: 44,
 			h: 44
 		},
+		branch: {
+			w: 124,
+			h: 46
+		},
 		gap: 34,
 		vgap: 22,
+		bgap: 8,
 		indent: 22,
 		anchor: 31
 	} : {
@@ -79022,8 +79117,13 @@ function boxMetrics(compact = false) {
 			w: 148,
 			h: 40
 		},
+		branch: {
+			w: 156,
+			h: 52
+		},
 		gap: 46,
 		vgap: 30,
+		bgap: 10,
 		indent: 26,
 		anchor: 38
 	};
@@ -79034,8 +79134,15 @@ function layoutDiagram(d, opts = {}) {
 		w: m.box.w,
 		h: 36
 	};
+	if (opts.vertical) m.branch = {
+		w: m.box.w - m.indent,
+		h: m.branch.h
+	};
 	const size = (n) => {
-		const base = n.kind === "add" ? m.add : {
+		const base = n.kind === "add" ? m.add : n.kind === "branch" ? {
+			w: m.branch.w,
+			h: m.branch.h + (n.sub ? 16 : 0)
+		} : {
 			w: m.box.w,
 			h: m.box.h + (n.chip ? 18 : 0) + (n.dots ? 14 : 0)
 		};
@@ -79044,6 +79151,8 @@ function layoutDiagram(d, opts = {}) {
 	const above = d.nodes.filter((n) => n.row === "above");
 	const main = d.nodes.filter((n) => n.row === "main");
 	const below = d.nodes.filter((n) => n.row === "below");
+	const fans = /* @__PURE__ */ new Map();
+	for (const n of d.nodes) if (n.row === "branch" && n.branch) fans.set(n.branch.from, [...fans.get(n.branch.from) || [], n]);
 	const at = /* @__PURE__ */ new Map();
 	const boxes = [];
 	const put = (node, x, y) => {
@@ -79063,14 +79172,27 @@ function layoutDiagram(d, opts = {}) {
 	if (!opts.vertical) {
 		const top = above.length ? m.box.h + m.vgap : 0;
 		let x = 0;
+		let fanBottom = 0;
 		for (const n of main) {
 			const s = size(n);
 			put(n, x, top + (n.kind === "add" ? m.anchor - s.h / 2 : 0));
 			x += s.w + m.gap;
+			const col = fans.get(n.id);
+			if (!col?.length) continue;
+			const sizes = col.map(size);
+			const colH = sizes.reduce((h, c) => h + c.h, 0) + m.bgap * (col.length - 1);
+			let y = top + Math.max(0, m.anchor - colH / 2);
+			col.forEach((c, i) => {
+				put(c, x, y);
+				y += sizes[i].h + m.bgap;
+			});
+			fanBottom = Math.max(fanBottom, y - m.bgap);
+			x += Math.max(...sizes.map((c) => c.w)) + m.gap;
 		}
 		const sp = session ? at.get(session.id) : void 0;
 		for (const n of above) put(n, sp ? sp.x : 0, 0);
-		let y = top + Math.max(m.box.h, ...main.map((n) => size(n).h)) + m.vgap;
+		const lineH = Math.max(m.box.h, ...main.map((n) => size(n).h));
+		let y = Math.max(top + lineH, fanBottom) + m.vgap;
 		for (const n of below) {
 			put(n, (sp ? sp.x : 0) + m.indent, y);
 			y += size(n).h + 12;
@@ -79085,6 +79207,13 @@ function layoutDiagram(d, opts = {}) {
 			const s = size(n);
 			put(n, n.kind === "add" ? (m.box.w - s.w) / 2 : 0, y);
 			y += s.h + m.vgap;
+			const col = fans.get(n.id);
+			if (!col?.length) continue;
+			for (const c of col) {
+				put(c, m.indent, y);
+				y += size(c).h + m.bgap;
+			}
+			y += m.vgap - m.bgap;
 		}
 		const sp = session ? at.get(session.id) : void 0;
 		let cy = sp ? sp.y : 0;
@@ -79096,16 +79225,23 @@ function layoutDiagram(d, opts = {}) {
 	const rank = {
 		above: 0,
 		main: 1,
+		branch: 1,
 		below: 2
 	};
 	boxes.sort((p, q) => rank[p.node.row] - rank[q.node.row]);
+	const anchorOf = (p) => p.node.kind === "add" ? p.h / 2 : p.node.kind === "branch" ? Math.min(p.h, m.box.h) / 2 : m.anchor;
 	const wires = [];
 	for (const e of d.edges) {
 		const a = at.get(e.from);
 		const b = at.get(e.to);
 		if (!a || !b) continue;
 		let path = "";
-		if (e.kind === "up") path = `M ${a.x + Math.min(a.w, b.w) / 2} ${a.y + a.h} V ${b.y - 2}`;
+		if (opts.vertical && e.kind === "fan") path = `M ${a.x + m.indent / 2} ${a.y + a.h} V ${b.y + anchorOf(b)} H ${b.x}`;
+		else if (opts.vertical && e.kind === "join") {
+			const rx = Math.max(a.x + a.w, b.x + b.w) + 8;
+			const y2 = b.y + anchorOf(b);
+			path = `M ${a.x + a.w} ${a.y + anchorOf(a)} H ${rx} V ${y2} H ${b.x + b.w + 2}`;
+		} else if (e.kind === "up") path = `M ${a.x + Math.min(a.w, b.w) / 2} ${a.y + a.h} V ${b.y - 2}`;
 		else if (e.kind === "branch") {
 			if (!opts.vertical) {
 				const x = a.x + m.indent / 2;
@@ -79118,10 +79254,10 @@ function layoutDiagram(d, opts = {}) {
 				path = `M ${a.x + a.w} ${y1} H ${mx} V ${y2} H ${b.x - 2}`;
 			}
 		} else if (!opts.vertical) {
-			const y1 = a.y + (a.node.kind === "add" ? a.h / 2 : m.anchor);
-			const y2 = b.y + (b.node.kind === "add" ? b.h / 2 : m.anchor);
+			const y1 = a.y + anchorOf(a);
+			const y2 = b.y + anchorOf(b);
 			const x1 = a.x + a.w;
-			const x2 = b.x - 2;
+			const x2 = b.x - (e.kind === "fan" ? 0 : 2);
 			const mx = (x1 + x2) / 2;
 			path = y1 === y2 ? `M ${x1} ${y1} H ${x2}` : `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
 		} else {
@@ -79132,7 +79268,13 @@ function layoutDiagram(d, opts = {}) {
 			const my = (y1 + y2) / 2;
 			path = x1 === x2 ? `M ${x1} ${y1} V ${y2}` : `M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`;
 		}
-		wires.push({
+		wires.push(e.done ? {
+			from: e.from,
+			to: e.to,
+			kind: e.kind,
+			d: path,
+			done: true
+		} : {
 			from: e.from,
 			to: e.to,
 			kind: e.kind,
@@ -79160,15 +79302,35 @@ function reorderDiagram(d, from, to) {
 	let k = 0;
 	const line = main.map((n) => n.kind === "stop" ? moved[k++] : n);
 	const lineIds = new Set(line.map((n) => n.id));
-	const edges = d.edges.filter((e) => !(lineIds.has(e.from) && lineIds.has(e.to) && (e.kind === "line" || e.kind === "add")));
-	for (let i = 1; i < line.length; i++) edges.push({
+	const next = new Map(line.slice(0, -1).map((n, i) => [n.id, line[i + 1].id]));
+	const joinDone = new Map(d.edges.filter((e) => e.kind === "join").map((e) => [e.from, !!e.done]));
+	const branches = d.nodes.filter((n) => n.row === "branch").map((n) => n.branch && next.has(n.branch.from) ? {
+		...n,
+		branch: {
+			...n.branch,
+			to: next.get(n.branch.from)
+		}
+	} : n);
+	const fanned = new Set(branches.map((n) => n.branch?.from));
+	const edges = d.edges.filter((e) => e.kind !== "join" && !(lineIds.has(e.from) && lineIds.has(e.to) && (e.kind === "line" || e.kind === "add")));
+	for (let i = 1; i < line.length; i++) if (!fanned.has(line[i - 1].id)) edges.push({
 		from: line[i - 1].id,
 		to: line[i].id,
 		kind: line[i].kind === "add" ? "add" : "line"
 	});
+	for (const b of branches) if (b.branch) edges.push({
+		from: b.id,
+		to: b.branch.to,
+		kind: "join",
+		...joinDone.get(b.id) ? { done: true } : {}
+	});
 	return {
 		...d,
-		nodes: [...d.nodes.filter((n) => n.row !== "main"), ...line],
+		nodes: [
+			...d.nodes.filter((n) => n.row !== "main" && n.row !== "branch"),
+			...line,
+			...branches
+		],
 		edges
 	};
 }
@@ -79192,6 +79354,13 @@ function boxDetail(n) {
 }
 function sizedBox(size, n, base, detail = "") {
 	if (n.kind === "add" || size === "normal") return base;
+	if (n.kind === "branch") return size === "compact" ? {
+		w: 110,
+		h: 40
+	} : {
+		w: 210,
+		h: base.h + 16
+	};
 	if (size === "compact") return {
 		w: 110,
 		h: 62
@@ -79414,10 +79583,11 @@ function FlywayCanvas(p) {
 	const gaps = [];
 	if (p.onInsert && !drag) {
 		const mainBoxes = shown.boxes.filter((b) => b.node.row === "main");
+		const fanned = new Set(shown.boxes.map((b) => b.node.branch?.from));
 		for (let j = 1; j < mainBoxes.length; j++) {
 			const b = mainBoxes[j];
 			const a = mainBoxes[j - 1];
-			if (b.node.kind !== "stop" || b.node.index === void 0 || b.node.index < p.diagram.insertFrom || a.node.kind === "add") continue;
+			if (b.node.kind !== "stop" || b.node.index === void 0 || b.node.index < p.diagram.insertFrom || a.node.kind === "add" || fanned.has(a.node.id)) continue;
 			gaps.push(vertical ? {
 				at: b.node.index,
 				x: b.x + b.w / 2,
@@ -79470,9 +79640,9 @@ function FlywayCanvas(p) {
 					}) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("g", {
 						transform: `translate(${pad} ${top})`,
 						children: shown.wires.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
-							className: "fl-wire fl-wire-" + w.kind,
+							className: "fl-wire fl-wire-" + w.kind + (w.done ? " fl-wire-done" : ""),
 							d: w.d,
-							markerEnd: w.kind === "add" ? void 0 : `url(#${uid}-arrow)`
+							markerEnd: w.kind === "add" || w.kind === "fan" ? void 0 : `url(#${uid}-arrow)`
 						}, w.from + ">" + w.to))
 					})]
 				}),
@@ -79486,9 +79656,10 @@ function FlywayCanvas(p) {
 					const open = opened.get(n.id);
 					const drop = n.kind === "add" && !!p.dropLabel;
 					const more = detail(n);
+					const waiting = n.join && n.join.waiting > 0 ? n.join : null;
 					const cls = "fl-box fl-box-" + n.kind + (open ? " fl-box-open" : "") + (drop ? " fl-drop" : "") + " fl-st-" + n.state + (n.perch ? " fl-perch" : "") + (p.selected === n.id ? " selected" : "") + (p.highlight?.has(n.id) ? " fl-described" : "") + (lifted ? " fl-lifted" : "") + (canDrag(n) ? " fl-draggable" : "");
-					const said = n.kind === "add" ? drop ? p.dropLabel : n.title : n.title + (n.kind === "stop" || n.kind === "rung" ? ", " + (STATE_WORD[n.state] || "") : "") + (n.chip ? ", " + n.chip.label : "");
-					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					const said = n.kind === "add" ? drop ? p.dropLabel : n.title : n.title + (n.kind === "stop" || n.kind === "rung" ? ", " + (STATE_WORD[n.state] || "") : "") + (n.chip ? ", " + n.chip.label : "") + (waiting ? ", " + joinLabel(waiting) : "");
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						ref: (el) => {
 							boxRefs.current[n.id] = el;
 						},
@@ -79510,7 +79681,39 @@ function FlywayCanvas(p) {
 						onPointerCancel: onBoxUp,
 						onClick: (e) => open && e.target !== e.currentTarget ? void 0 : activate(n),
 						onKeyDown: (e) => onBoxKey(e, n),
-						children: open ? open.body : n.kind === "add" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						children: [waiting && !open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fl-join-pill",
+							title: "The line goes on once its workers are done: " + joinLabel(waiting),
+							"aria-hidden": "true",
+							children: waiting.waiting + " of " + waiting.total
+						}), open ? open.body : n.kind === "branch" && size !== "compact" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "fl-box-head",
+								children: [
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "fl-box-dot tone-" + (n.chip?.tone || "neutral"),
+										"aria-hidden": "true"
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "fl-box-title",
+										children: n.title
+									}),
+									glyph && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "fl-box-glyph fl-glyph-" + n.state,
+										"aria-hidden": "true",
+										children: glyph
+									})
+								]
+							}),
+							n.chip && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-box-chip tone-" + n.chip.tone,
+								children: n.chip.label
+							}),
+							n.sub && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "fl-box-sub",
+								children: n.sub
+							})
+						] }) : n.kind === "add" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "fl-add-plus",
 							"aria-hidden": "true",
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopIcon, {
@@ -79598,7 +79801,7 @@ function FlywayCanvas(p) {
 								children: n.dots
 							}),
 							p.renderInBox?.(n)
-						] })
+						] })]
 					}, n.id);
 				}),
 				gaps.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -80441,6 +80644,16 @@ function DescribeField({ want = "step", taken, onStops, placeholder = "Describe 
 }
 //#endregion
 //#region src/components/flights/useSessionLine.tsx
+function promptLines(v) {
+	return (Array.isArray(v) ? v.map(String) : String(v ?? "").split("\n")).filter((l) => l.trim()).length;
+}
+function inspectorDef(def, step) {
+	if (!def || step.kind !== "split" || promptLines(step.config?.prompts) <= 1) return def;
+	return {
+		...def,
+		fields: def.fields.filter((f) => f.name !== "count")
+	};
+}
 var orderedPlans = (plans) => [...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)];
 function useSessionLine(title, src, opts) {
 	const { rows, flights, kinds, plans } = src;
@@ -80499,6 +80712,19 @@ function useSessionLine(title, src, opts) {
 					setSelectIndex(f.steps.length - 1);
 				}
 			}
+		} finally {
+			setBusy(false);
+		}
+	};
+	const joinDef = kindOf.get("join");
+	const splitAt = sel?.step?.kind === "split" && sel.index !== void 0 ? sel.index : -1;
+	const offerJoin = !!flight && !!joinDef && splitAt >= 0 && flight.steps[splitAt + 1]?.kind !== "join";
+	const addJoin = async () => {
+		if (!flight || !joinDef) return;
+		const at = splitAt + 1;
+		setBusy(true);
+		try {
+			await tackOn(flight.id, newStep(joinDef, flight.steps.map((s) => s.id)), at < end ? at : void 0);
 		} finally {
 			setBusy(false);
 		}
@@ -80577,16 +80803,33 @@ function useSessionLine(title, src, opts) {
 	}) : null;
 	const inspector = sel && draft ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopInspector, {
 		step: draft,
-		def: kindOf.get(draft.kind),
+		def: inspectorDef(kindOf.get(draft.kind), draft),
 		readOnly: !editable,
 		onChange: (p) => setDraft((d) => d ? {
 			...d,
 			...p
 		} : d),
-		note: !editable ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-			className: "fl-note muted",
-			children: sel.state === "done" || sel.state === "skipped" ? "This stop has flown — it can't change now." : "The flight is at this stop — it can't change while it is here."
-		}) : null,
+		note: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+			!editable && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "fl-note muted",
+				children: sel.state === "done" || sel.state === "skipped" ? "This stop has flown — it can't change now." : "The flight is at this stop — it can't change while it is here."
+			}),
+			draft.kind === "split" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "fl-note muted fl-split-hint",
+				children: "Prompts: one worker per line — each line starts a worker. One line (or none) and Count says how many."
+			}),
+			offerJoin && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "fl-chiprow fl-join-offer",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "fl-pick",
+					disabled: busy,
+					title: "Put a Join right after this Split: the line waits until every worker is done",
+					onClick: () => void addJoin(),
+					children: "+ Join"
+				})
+			})
+		] }),
 		actions: editable ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			type: "button",
 			className: "btn-primary fl-btn",
@@ -83362,7 +83605,7 @@ var NEEDS_TOP = -1;
 var TOP = {
 	new: 0,
 	recent: 1,
-	flights: 2,
+	intake: 2,
 	verify: 3,
 	schedule: 4,
 	setup: 5,
@@ -83413,32 +83656,11 @@ function CommandPalette({ host }) {
 			run: () => newSession()
 		});
 		acts.push({
-			label: "Flights…",
-			hint: "Alt+I",
-			top: TOP.flights,
-			keywords: "flyways stops perch waiting to fly in flight intake verify schedule checklists",
-			run: () => ui.openDialogFor("flights")
-		});
-		acts.push(ui.view === "sky" ? {
-			label: "Switch to the grid",
-			hint: "Alt+Y",
-			keywords: "view panes terminals grid",
-			run: () => setView("grid")
-		} : {
-			label: "Switch to the Sky",
-			hint: "Alt+Y",
-			keywords: "view sky canvas lines bird board flock map",
-			run: () => setView("sky")
-		});
-		acts.push({
-			label: "Flights: Flyways",
-			keywords: "flyway plan stops canvas editor",
-			run: () => ui.openDialogFor("flights", "plans")
-		});
-		acts.push({
 			label: "Intake…",
-			hint: "Flights → Sources",
-			run: () => ui.openDialogFor("intake", "tickets")
+			hint: "Alt+I",
+			top: TOP.intake,
+			keywords: "sources tickets pull requests issues waiting to fly",
+			run: () => ui.openDialogFor("intake")
 		});
 		acts.push({
 			label: "Intake: Tickets",
@@ -83461,7 +83683,7 @@ function CommandPalette({ host }) {
 			label: "Verify…",
 			hint: "Alt+V",
 			top: TOP.verify,
-			keywords: VERIFY_BLURB + " checklists flights",
+			keywords: VERIFY_BLURB + " checklists",
 			run: () => ui.openDialogFor("verify")
 		});
 		acts.push({
@@ -83470,6 +83692,23 @@ function CommandPalette({ host }) {
 			top: TOP.schedule,
 			keywords: "templates cron recurring nightly timer daily weekly",
 			run: () => ui.openDialogFor("schedule")
+		});
+		acts.push(ui.view === "sky" ? {
+			label: "Switch to the grid",
+			hint: "Alt+Y",
+			keywords: "view panes terminals grid",
+			run: () => setView("grid")
+		} : {
+			label: "Switch to the Sky",
+			hint: "Alt+Y",
+			keywords: "view sky canvas lines bird board flock map flights",
+			run: () => setView("sky")
+		});
+		acts.push({
+			label: "Flyways…",
+			hint: "on the Sky's shelf",
+			keywords: "flights flyway plan stops perch canvas editor new",
+			run: () => ui.showFlyways()
 		});
 		acts.push({
 			label: "Customize…",
@@ -86208,6 +86447,23 @@ function scheduledOrder(templates, status) {
 		r: rank(t)
 	})).sort((a, b) => a.r[0] - b.r[0] || a.r[1] - b.r[1] || a.i - b.i).map((x) => x.t);
 }
+function scheduledFlyways(plans) {
+	const rank = (p) => {
+		if (p.trigger.paused || p.runs?.paused) return [2, 0];
+		const at = Number(p.runs?.next_at) || 0;
+		return at ? [0, at] : [1, 0];
+	};
+	return (plans || []).filter((p) => p.trigger?.kind === "schedule").map((p) => ({
+		p,
+		r: rank(p)
+	})).sort((a, b) => a.r[0] - b.r[0] || a.r[1] - b.r[1]).map((x) => x.p);
+}
+function flywayNextLine(p, now = /* @__PURE__ */ new Date()) {
+	const r = p.runs || {};
+	if (p.trigger.paused || r.paused) return "Paused";
+	if (r.runs_here === false && r.runs_on) return "Starts on " + r.runs_on;
+	return r.next_at ? inLabel(r.next_at, now) : "";
+}
 function TemplatesDialogView(p) {
 	const { templates, ui, form, busy, loaded } = p;
 	const runs = p.runs || {
@@ -86416,7 +86672,7 @@ function TemplatesDialogView(p) {
 			})]
 		});
 	};
-	const outcome = (t, info) => {
+	const outcome = (info) => {
 		const last = lastLine(info, now);
 		const session = info.last_session || "";
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [lastRunFailed(info) ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -86477,7 +86733,7 @@ function TemplatesDialogView(p) {
 					className: "tpl-sched-row",
 					children: [discardRow, scheduleEditor(t)]
 				}) : scheduled && strip(t, info),
-				outcome(t, info),
+				outcome(info),
 				t.prompt && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "tpl-prompt",
 					children: t.prompt
@@ -86533,6 +86789,70 @@ function TemplatesDialogView(p) {
 			]
 		}, t.name);
 	};
+	const flywayCard = (f) => {
+		const info = f.runs || {};
+		const paused = !!(f.trigger.paused || info.paused);
+		const next = flywayNextLine(f, now);
+		const stops = f.steps.length + (f.steps.length === 1 ? " stop" : " stops");
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "tpl-card is-scheduled sch-flyway" + (paused ? " is-paused" : "") + (!paused && lastRunFailed(info) ? " is-failing" : ""),
+			"data-plan": f.id,
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "tpl-card-top",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "tpl-card-text",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "tpl-name",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, {
+								size: 12,
+								className: "sch-flyway-bird"
+							}), f.name]
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "tpl-meta",
+							title: f.session?.repo_path || void 0,
+							children: [
+								stops,
+								f.session?.repo_path ? leafName(f.session.repo_path) : "",
+								f.session?.program || ""
+							].filter(Boolean).join(" · ")
+						})]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "tpl-actions",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "tpl-btn tpl-run sch-flyway-fly",
+							disabled: !!p.flying,
+							title: "Fly now — a flight takes off on this flyway in a new session",
+							onClick: () => p.onFlyFlyway?.(f),
+							children: p.flying === f.id ? "Taking off…" : "Fly now"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "tpl-btn sch-flyway-edit",
+							title: "Open its card on the Sky's flyway shelf — its stops and its schedule",
+							onClick: () => p.onEditFlyway?.(f),
+							children: "Edit in the Sky"
+						})]
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "sch-strip" + (paused ? " is-paused" : ""),
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "sch-when",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sch-cadence",
+							children: info.schedule_label || "No schedule set"
+						}), next && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sch-next" + (paused ? " sch-paused-chip" : ""),
+							children: next
+						})]
+					})
+				}),
+				outcome(info)
+			]
+		}, f.id);
+	};
+	const flywayList = scheduledFlyways(p.flyways);
 	const scheduledList = scheduledOrder(templates, runs);
 	const saved = templates.filter((t) => !hasSchedule(t));
 	const up = nextUp(templates, runs);
@@ -86704,7 +87024,26 @@ function TemplatesDialogView(p) {
 								]
 							}), saved.map(card)]
 						})
-					] })
+					] }),
+					flywayList.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+						className: "sch-section",
+						id: "schedule-flyways",
+						"aria-labelledby": "schedule-flyways-h",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
+							id: "schedule-flyways-h",
+							children: [
+								"Scheduled flyways",
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "sch-count",
+									children: flywayList.length
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "sch-section-hint",
+									children: "flyways that take off by themselves"
+								})
+							]
+						}), flywayList.map(flywayCard)]
+					})
 				]
 			})
 		]
@@ -86742,6 +87081,8 @@ function TemplatesDialog({ embedded = false, target: embeddedTarget = null } = {
 	const [runs, setRuns] = (0, import_react.useState)(() => templateRunsNow());
 	const [running, setRunning] = (0, import_react.useState)("");
 	const [flagging, setFlagging] = (0, import_react.useState)("");
+	const flyways = useFlightPlans(open).data;
+	const [flying, setFlying] = (0, import_react.useState)("");
 	const [agents, setAgents] = (0, import_react.useState)([]);
 	const [installed, setInstalled] = (0, import_react.useState)(null);
 	const [otherDevices, setOtherDevices] = (0, import_react.useState)(false);
@@ -87032,7 +87373,21 @@ function TemplatesDialog({ embedded = false, target: embeddedTarget = null } = {
 			closeDialog();
 			selectSession(title);
 		},
-		otherDevices
+		otherDevices,
+		flyways,
+		flying,
+		onFlyFlyway: (f) => {
+			if (flying) return;
+			setFlying(f.id);
+			takeOff({ plan_id: f.id }).then((flight) => {
+				setFlying("");
+				if (flight) closeDialog();
+			});
+		},
+		onEditFlyway: (f) => {
+			closeDialog();
+			useUi.getState().showFlyways(f.id);
+		}
 	});
 }
 //#endregion
@@ -95910,6 +96265,89 @@ function ScheduledTemplates() {
 	});
 }
 //#endregion
+//#region src/components/intake/queue.ts
+function isQueued(item) {
+	return item.eligible === true && !item.has_session;
+}
+function oldestFirst(rows) {
+	return rows.slice().sort((a, b) => {
+		const ta = Date.parse(a.created_at || "");
+		const tb = Date.parse(b.created_at || "");
+		if (!isFinite(ta) && !isFinite(tb)) return 0;
+		if (!isFinite(ta)) return 1;
+		if (!isFinite(tb)) return -1;
+		return ta - tb;
+	});
+}
+function ref(repo, number) {
+	return (repo || "") + "#" + (number ?? "?");
+}
+function queuedOf(kind, payloads) {
+	if (kind === "tickets") {
+		const labels = payloads.tickets?.source_labels || {};
+		return oldestFirst((payloads.tickets?.tickets || []).filter(isQueued)).map((t) => ({
+			kind,
+			key: "tickets:" + (t.source || "") + ":" + (t.id ?? t.slug ?? ""),
+			reference: t.slug || String(t.id ?? ""),
+			title: t.name || "",
+			url: t.url,
+			group: labels[t.source || ""] || t.source || "Tickets",
+			created_at: t.created_at,
+			state: t.bucket,
+			assignee: t.mine === false ? t.assignee || "someone else" : void 0,
+			route: t.route,
+			target: {
+				kind: "tickets",
+				source: t.source || "",
+				id: String(t.id ?? "")
+			}
+		}));
+	}
+	return oldestFirst((kind === "prs" ? payloads.prs?.prs || [] : payloads.issues?.issues || []).filter(isQueued)).map((r) => ({
+		kind,
+		key: kind + ":" + (r.repo || "") + ":" + (r.number ?? ""),
+		reference: ref(r.repo, r.number),
+		title: r.title || "",
+		url: r.url,
+		group: r.repo || (kind === "prs" ? "Pull requests" : "Issues"),
+		created_at: r.created_at,
+		target: {
+			kind,
+			repo: r.repo || "",
+			number: r.number ?? 0
+		}
+	}));
+}
+function collectQueued(payloads) {
+	return [
+		...queuedOf("tickets", payloads),
+		...queuedOf("prs", payloads),
+		...queuedOf("issues", payloads)
+	];
+}
+function runState(opts) {
+	if (!opts.engineAvailable || !opts.configured) return "unset";
+	if (opts.runsElsewhere) return "elsewhere";
+	if (!opts.switchOn) return "off-switch";
+	if (!opts.engineOn) return "off-engine";
+	return "on";
+}
+function runsOnText(device) {
+	return "Runs on " + (device || "another of your devices");
+}
+function byGroup(items) {
+	const out = [];
+	for (const item of items) {
+		const found = out.find((g) => g.group === item.group);
+		if (found) found.items.push(item);
+		else out.push({
+			group: item.group,
+			items: [item]
+		});
+	}
+	return out;
+}
+//#endregion
 //#region src/components/intake/QueueTab.tsx
 function StateChip({ state, device }) {
 	if (state === "unset") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -96884,7 +97322,7 @@ function Tours() {
 var TOUR_HINT = {
 	welcome: "The three steps to your first session.",
 	new: "Starting a session: the task, the repo, Start.",
-	flights: "Flyways, flights and perches: every ticket, PR and scheduled job from waiting to landed.",
+	sky: "The sky: every session a line, the bird on its stop, and the flyway shelf.",
 	intake: "Turning tickets, pull requests and issues into sessions.",
 	verify: "Checking that a change actually works.",
 	schedule: "Templates, and sessions that start by themselves.",
@@ -111834,780 +112272,6 @@ function VerifyDialog({ embedded = false, target: embeddedTarget = null } = {}) 
 	});
 }
 //#endregion
-//#region src/components/flights/PlanEditor.tsx
-var clonePlan = (p) => JSON.parse(JSON.stringify(p));
-function stopOfField$1(field, steps) {
-	const idx = /steps\[?\.?(\d+)/.exec(field);
-	if (idx) return Number(idx[1]);
-	return steps.findIndex((s) => field === s.id || field.startsWith(s.id + "."));
-}
-var DAYS = [
-	{
-		v: "daily",
-		label: "Every day"
-	},
-	{
-		v: "weekdays",
-		label: "Weekdays"
-	},
-	{
-		v: "once",
-		label: "Once"
-	},
-	{
-		v: "cron",
-		label: "Custom"
-	}
-];
-function ScheduleChips({ when, onWhen, preview }) {
-	const line = cronPreviewLine(preview, /* @__PURE__ */ new Date());
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "fl-schedule",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
-				label: "Which days",
-				value: when.days,
-				options: DAYS,
-				onChange: (days) => onWhen({
-					...when,
-					days
-				})
-			}),
-			when.days === "cron" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
-				label: "Cron expression",
-				mono: true,
-				value: when.cron,
-				placeholder: "0 21 * * 1-5",
-				onChange: (cron) => onWhen({
-					...when,
-					cron
-				})
-			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "fl-schedule-at",
-				children: [
-					when.days === "once" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "date",
-						className: "fl-input fl-date",
-						"aria-label": "Date",
-						value: when.date,
-						onChange: (e) => onWhen({
-							...when,
-							date: e.target.value
-						})
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "muted",
-						children: "at"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						type: "time",
-						className: "fl-input fl-time",
-						"aria-label": "Time",
-						value: when.at,
-						onChange: (e) => onWhen({
-							...when,
-							at: e.target.value
-						})
-					})
-				]
-			}),
-			line && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "fl-fld-hint",
-				children: line
-			})
-		]
-	});
-}
-function Plans({ initialPlan, onDirty }) {
-	const plansQ = useFlightPlans();
-	const kinds = useFlightKinds().data || [];
-	const plans = plansQ.data || [];
-	const instances = useInstances().data || [];
-	const agents = useAgentChoices();
-	const closeDialog = useUi((s) => s.closeDialog);
-	const first = plans.find((p) => p.id === initialPlan) || plans[0] || null;
-	const [selected, setSelected] = (0, import_react.useState)(() => first ? first.id : null);
-	const [draft, setDraft] = (0, import_react.useState)(() => first ? clonePlan(first) : null);
-	const [seed, setSeed] = (0, import_react.useState)(() => first ? clonePlan(first) : null);
-	const [stop, setStop] = (0, import_react.useState)(() => first?.steps.length ? 0 : null);
-	const [paletteAt, setPaletteAt] = (0, import_react.useState)(null);
-	const [described, setDescribed] = (0, import_react.useState)(/* @__PURE__ */ new Set());
-	const [error, setError] = (0, import_react.useState)("");
-	const [pending, setPending] = (0, import_react.useState)(null);
-	const [busy, setBusy] = (0, import_react.useState)("");
-	const [confirmDelete, setConfirmDelete] = (0, import_react.useState)(false);
-	const [askTakeOff, setAskTakeOff] = (0, import_react.useState)(false);
-	const [takeOffRepo, setTakeOffRepo] = (0, import_react.useState)("");
-	const [takeOffTitle, setTakeOffTitle] = (0, import_react.useState)("");
-	const [preview, setPreview] = (0, import_react.useState)(null);
-	const dirty = planDirty(draft, seed);
-	(0, import_react.useEffect)(() => onDirty(dirty), [dirty, onDirty]);
-	const load = (p) => {
-		const copy = p ? clonePlan(p) : blankPlan();
-		setSelected(p ? p.id : "");
-		setDraft(copy);
-		setSeed(clonePlan(copy));
-		setStop(copy.steps.length ? 0 : null);
-		setPaletteAt(copy.steps.length ? null : 0);
-		setDescribed(/* @__PURE__ */ new Set());
-		setError("");
-		setConfirmDelete(false);
-		setAskTakeOff(false);
-	};
-	(0, import_react.useEffect)(() => {
-		if (selected !== null || !plans.length) return;
-		load(plans.find((p) => p.id === initialPlan) || plans[0]);
-	}, [plans.length, initialPlan]);
-	const when = whenFormOf(draft?.trigger.schedule);
-	const cronText = draft?.trigger.kind === "schedule" ? (when.days === "cron" ? when.cron : when.days === "once" ? onceOf(when.date, when.at) : cronOf(when.at, when.days)).trim() : "";
-	(0, import_react.useEffect)(() => {
-		if (!cronText) {
-			setPreview(null);
-			return;
-		}
-		let live = true;
-		const t = setTimeout(() => {
-			cronPreview(cronText).then((pv) => live && setPreview(pv)).catch(() => live && setPreview(null));
-		}, 300);
-		return () => {
-			live = false;
-			clearTimeout(t);
-		};
-	}, [cronText]);
-	const kindOf = (0, import_react.useMemo)(() => new Map(kinds.map((k) => [k.kind, k])), [kinds]);
-	const diagram = (0, import_react.useMemo)(() => flywayDiagram(draft?.steps || [], kinds), [draft?.steps, kinds]);
-	if (plansQ.data === null) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-		className: "fl-note muted",
-		children: "This server has no flyways yet — update MindFlock to edit them."
-	});
-	if (!draft) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-		className: "fl-note muted",
-		children: plansQ.error ? "Could not load the flyways: " + errMsg(plansQ.error) : "Loading flyways…"
-	});
-	const patch = (p) => setDraft((d) => d ? {
-		...d,
-		...p
-	} : d);
-	const setSteps = (steps) => patch({ steps });
-	const patchStep = (i, p) => setSteps(draft.steps.map((s, j) => j === i ? {
-		...s,
-		...p
-	} : s));
-	const sel = stop !== null ? draft.steps[stop] : null;
-	const builtinPlan = plans.find((p) => p.id === draft.id)?.builtin || draft.builtin;
-	const needsSession = draft.trigger.kind === "manual" || draft.trigger.kind === "schedule";
-	const pick = (id) => {
-		if (id === selected) return;
-		if (dirty) {
-			setPending(id);
-			return;
-		}
-		load(id ? plans.find((p) => p.id === id) || null : null);
-	};
-	const move = (from, to) => {
-		if (to < 0 || to >= draft.steps.length) return;
-		setSteps(moveStep(draft.steps, from, to));
-		setStop(to);
-	};
-	const insert = (at, def) => {
-		const step = newStep(def, draft.steps.map((s) => s.id));
-		const steps = draft.steps.slice();
-		steps.splice(at, 0, step);
-		setSteps(steps);
-		setStop(at);
-		setPaletteAt(null);
-	};
-	const remove = (i) => {
-		setSteps(draft.steps.filter((_, j) => j !== i));
-		setStop(draft.steps.length > 1 ? Math.max(0, i - 1) : null);
-	};
-	const save = async () => {
-		setBusy("save");
-		setError("");
-		try {
-			const saved = await savePlan(draft);
-			load(saved);
-			toast("Saved “" + saved.name + "”");
-			return saved;
-		} catch (err) {
-			const body = err instanceof ApiError ? err.body : null;
-			setError(errMsg(err));
-			if (body?.field) {
-				const at = stopOfField$1(body.field, draft.steps);
-				if (at >= 0) setStop(at);
-			}
-			return null;
-		} finally {
-			setBusy("");
-		}
-	};
-	const fly = async (opts) => {
-		let id = draft.id;
-		if (dirty || !id) {
-			const saved = await save();
-			if (!saved) return;
-			id = saved.id;
-		}
-		setBusy("takeoff");
-		try {
-			if (await takeOff({
-				plan_id: id,
-				...opts.title ? { title: opts.title } : {},
-				...opts.repo_path ? { repo_path: opts.repo_path } : {}
-			})) closeDialog();
-		} finally {
-			setBusy("");
-		}
-	};
-	const onTakeOff = () => {
-		if (needsSession && draft.session.repo_path) {
-			fly({});
-			return;
-		}
-		setTakeOffRepo(draft.session.repo_path);
-		setAskTakeOff(true);
-	};
-	const nodeIndex = (n) => n.index === void 0 ? -1 : n.index;
-	const openSessions = instances.filter((i) => !i.flight && !i.pending);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "fl-plans",
-		"data-tour": "flights-plans",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("aside", {
-			className: "fl-plan-list",
-			"aria-label": "Flyways",
-			children: [plans.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-				type: "button",
-				className: "fl-plan-item" + (p.id === selected ? " active" : ""),
-				"aria-current": p.id === selected ? "true" : void 0,
-				onClick: () => pick(p.id),
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "fl-plan-name",
-					children: p.name
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "fl-plan-meta muted",
-					children: [
-						p.builtin ? "Built-in · " : "",
-						TRIGGER_LABEL[p.trigger?.kind] || "By hand",
-						" · ",
-						p.steps.length,
-						" ",
-						p.steps.length === 1 ? "stop" : "stops"
-					]
-				})]
-			}, p.id)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "fl-plan-item fl-plan-new" + (selected === "" ? " active" : ""),
-				onClick: () => pick(""),
-				children: "+ New flyway"
-			})]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "fl-editor",
-			children: [
-				pending !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
-					title: "Discard changes to “" + draft.name + "”?",
-					body: "They haven't been saved.",
-					confirmLabel: "Discard",
-					cancelLabel: "Keep editing",
-					onCancel: () => setPending(null),
-					onConfirm: () => {
-						const id = pending;
-						setPending(null);
-						load(id ? plans.find((p) => p.id === id) || null : null);
-					}
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "fl-editor-head",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "fl-editor-bird",
-							"aria-hidden": "true",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 18 })
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							className: "fl-input fl-plan-title",
-							"aria-label": "Flyway name",
-							value: draft.name,
-							onChange: (e) => patch({ name: e.target.value })
-						}),
-						builtinPlan && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "fl-builtin-tag",
-							children: "Built-in"
-						}),
-						dirty && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "fl-unsaved",
-							children: "Unsaved"
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlywayCanvas, {
-					diagram,
-					label: "The flyway's stops",
-					selected: sel ? diagram.nodes.find((n) => n.index === stop)?.id : paletteAt !== null && paletteAt >= draft.steps.length ? "add" : null,
-					highlight: new Set(diagram.nodes.filter((n) => n.step && described.has(n.step.id)).map((n) => n.id)),
-					onSelect: (n) => {
-						setStop(nodeIndex(n));
-						setPaletteAt(null);
-					},
-					onOpen: (n) => {
-						if (n.kind === "add") setPaletteAt(paletteAt === draft.steps.length ? null : draft.steps.length);
-					},
-					onMove: move,
-					onRemove: (n) => remove(nodeIndex(n)),
-					onInsert: (at) => setPaletteAt(paletteAt === at ? null : at)
-				}),
-				paletteAt !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopPalette, {
-					kinds,
-					title: paletteAt >= draft.steps.length ? "Add a stop at the end" : "Add a stop before “" + (draft.steps[paletteAt]?.title || "") + "”",
-					onPick: (k) => insert(paletteAt, k),
-					onClose: () => setPaletteAt(null)
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(DescribeField, {
-					dataTour: "flights-describe",
-					taken: draft.steps.map((s) => s.id),
-					onStops: (added) => {
-						setSteps([...draft.steps, ...added]);
-						setDescribed((d) => /* @__PURE__ */ new Set([...d, ...added.map((s) => s.id)]));
-						setStop(draft.steps.length);
-						setPaletteAt(null);
-					}
-				}),
-				sel && stop !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopInspector, {
-					step: sel,
-					def: kindOf.get(sel.kind),
-					onChange: (p) => patchStep(stop, p),
-					note: described.has(sel.id) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						className: "fl-note fl-described-note",
-						children: "Added by your description — check it, then Save."
-					}) : null,
-					actions: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn fl-btn",
-							disabled: stop === 0,
-							onClick: () => move(stop, stop - 1),
-							"aria-label": "Move earlier",
-							children: "← Earlier"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn fl-btn",
-							disabled: stop === draft.steps.length - 1,
-							onClick: () => move(stop, stop + 1),
-							"aria-label": "Move later",
-							children: "Later →"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn fl-btn",
-							onClick: () => setSteps(duplicateStep(draft.steps, stop)),
-							children: "Duplicate"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn fl-btn danger",
-							onClick: () => remove(stop),
-							children: "Remove"
-						})
-					] })
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "fl-note muted",
-					children: draft.steps.length ? "Pick a stop to edit it." : "Press + to add the first stop."
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
-					className: "fl-section",
-					"aria-label": "Where its flights come from",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "fl-form",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
-								label: "Takes off",
-								wide: true,
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
-									label: "Takes off",
-									value: draft.trigger.kind,
-									options: Object.keys(TRIGGER_LABEL).map((k) => ({
-										v: k,
-										label: TRIGGER_LABEL[k]
-									})),
-									onChange: (kind) => patch({ trigger: {
-										...draft.trigger,
-										kind,
-										schedule: kind === "schedule" ? draft.trigger.schedule || {
-											at: "21:00",
-											days: "daily"
-										} : null
-									} })
-								})
-							}),
-							draft.trigger.kind === "schedule" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(FlField, {
-								label: "When",
-								wide: true,
-								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScheduleChips, {
-									when,
-									preview,
-									onWhen: (w) => patch({ trigger: {
-										...draft.trigger,
-										schedule: scheduleOfWhen(w)
-									} })
-								}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Toggle, {
-									on: draft.trigger.paused,
-									onChange: (paused) => patch({ trigger: {
-										...draft.trigger,
-										paused
-									} }),
-									label: "Paused",
-									title: "A paused schedule takes off nothing"
-								})]
-							}),
-							needsSession && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
-									label: "Repository",
-									wide: true,
-									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
-										id: "fl-plan-repo",
-										value: draft.session.repo_path,
-										placeholder: "Ask when it takes off",
-										pickerTitle: "The repository this flyway's sessions start in",
-										onChange: (v) => patch({ session: {
-											...draft.session,
-											repo_path: v
-										} })
-									})
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
-									label: "Agent",
-									wide: true,
-									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
-										label: "Agent",
-										value: draft.session.program,
-										options: [{
-											value: "",
-											label: agents.fallback ? "Default · " + agents.fallback : "Default"
-										}, ...agents.names.map((n) => ({
-											value: n,
-											label: n
-										}))],
-										onChange: (program) => patch({ session: {
-											...draft.session,
-											program
-										} })
-									})
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
-									label: "Model",
-									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
-										label: "Model",
-										value: draft.session.model,
-										placeholder: "The agent's default",
-										onChange: (model) => patch({ session: {
-											...draft.session,
-											model
-										} })
-									})
-								})
-							] })
-						]
-					})
-				}),
-				error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "error fl-error",
-					role: "alert",
-					children: error
-				}),
-				askTakeOff && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "fl-takeoff-ask",
-					role: "group",
-					"aria-label": "Fly this flyway",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "fl-form",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
-							label: "In a new session, in this repository",
-							wide: true,
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
-								id: "fl-takeoff-repo",
-								value: takeOffRepo,
-								onChange: setTakeOffRepo,
-								placeholder: "/path/to/repo"
-							})
-						}), openSessions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
-							label: "Or on a session that is open",
-							wide: true,
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
-								label: "Or on a session that is open",
-								value: takeOffTitle,
-								options: [{
-									value: "",
-									label: "A new session"
-								}, ...openSessions.map((i) => ({
-									value: i.title,
-									label: i.title
-								}))],
-								onChange: setTakeOffTitle
-							})
-						})]
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "fl-inspector-acts",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "btn-primary fl-btn",
-							disabled: busy !== "" || !takeOffRepo.trim() && !takeOffTitle,
-							onClick: () => void fly(takeOffTitle ? { title: takeOffTitle } : { repo_path: takeOffRepo.trim() }),
-							children: "Take off"
-						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn fl-btn",
-							onClick: () => setAskTakeOff(false),
-							children: "Cancel"
-						})]
-					})]
-				}),
-				confirmDelete && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
-					title: "Delete “" + draft.name + "”?",
-					body: "Flights already in the air keep their own copy of its stops.",
-					confirmLabel: "Delete",
-					busy: busy === "delete",
-					onCancel: () => setConfirmDelete(false),
-					onConfirm: async () => {
-						setBusy("delete");
-						try {
-							await deletePlan(draft.id);
-							toast("Deleted “" + draft.name + "”");
-							setSelected(null);
-							setDraft(null);
-							setSeed(null);
-						} catch (err) {
-							setError(errMsg(err));
-						} finally {
-							setBusy("");
-							setConfirmDelete(false);
-						}
-					}
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "fl-editor-foot",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "btn-primary fl-btn",
-							disabled: !dirty || busy !== "",
-							onClick: () => void save(),
-							children: busy === "save" ? "Saving…" : "Save"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn fl-btn fl-takeoff",
-							disabled: busy !== "" || !draft.steps.length,
-							title: dirty ? "Saves the flyway, then a flight takes off on it" : "A flight takes off on this flyway now",
-							onClick: onTakeOff,
-							children: busy === "takeoff" ? "Taking off…" : "Fly this flyway"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "fl-foot-spacer" }),
-						builtinPlan ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn fl-btn",
-							disabled: busy !== "",
-							title: "Put this built-in flyway back the way MindFlock ships it",
-							onClick: async () => {
-								setBusy("reset");
-								try {
-									const p = await resetPlan(draft.id);
-									load(p);
-									toast("“" + p.name + "” is back to its default");
-								} catch (err) {
-									setError(errMsg(err));
-								} finally {
-									setBusy("");
-								}
-							},
-							children: "Reset to default"
-						}) : draft.id ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn fl-btn danger",
-							onClick: () => setConfirmDelete(true),
-							children: "Delete"
-						}) : null
-					]
-				})
-			]
-		})]
-	});
-}
-//#endregion
-//#region src/components/flights/FlightsDialog.tsx
-function FlightsDialog() {
-	const open = useUi((s) => s.openDialog === "flights");
-	useAutoTour("flights", open);
-	const target = useUi((s) => s.openDialog === "flights" ? s.dialogTarget : null);
-	const openDialogFor = useUi((s) => s.openDialogFor);
-	const closeDialog = useUi((s) => s.closeDialog);
-	const { tab, rest } = parseFlightsTarget(target);
-	const [plansDirty, setPlansDirty] = (0, import_react.useState)(false);
-	const [leaving, setLeaving] = (0, import_react.useState)(null);
-	const tabRefs = (0, import_react.useRef)({});
-	const onDirty = (0, import_react.useCallback)((d) => setPlansDirty(d), []);
-	(0, import_react.useEffect)(() => {
-		if (!open) {
-			setLeaving(null);
-			setPlansDirty(false);
-			return;
-		}
-		prefetchIntakePanels();
-		prefetchIntakeMeta();
-	}, [open]);
-	const tourScreen = useUi((s) => s.coachTour?.id === "flights" ? FLIGHTS_TOUR.steps[s.coachTour.step]?.screen || "" : "");
-	(0, import_react.useEffect)(() => {
-		if (!open || !tourScreen || tourScreen === tab) return;
-		if (FLIGHTS_TABS.includes(tourScreen)) openDialogFor("flights", tourScreen);
-	}, [
-		open,
-		tourScreen,
-		tab,
-		openDialogFor
-	]);
-	if (!open) return null;
-	const go = (next, deep = "") => openDialogFor("flights", deep ? next + "/" + deep : next);
-	const unsaved = () => tab === "plans" && plansDirty || tab === "schedule" && !!embeddedGuard.current?.dirty();
-	const switchTab = (next, deep = "") => {
-		if (next === tab && !deep) return;
-		if (unsaved()) {
-			setLeaving(next);
-			return;
-		}
-		go(next, deep);
-	};
-	const close = () => {
-		if (unsaved()) {
-			setLeaving("close");
-			return;
-		}
-		closeDialog();
-	};
-	const onTabKey = (e, i) => {
-		const n = FLIGHTS_TABS.length;
-		const to = e.key === "ArrowRight" ? (i + 1) % n : e.key === "ArrowLeft" ? (i - 1 + n) % n : e.key === "Home" ? 0 : e.key === "End" ? n - 1 : -1;
-		if (to < 0) return;
-		e.preventDefault();
-		switchTab(FLIGHTS_TABS[to]);
-		tabRefs.current[FLIGHTS_TABS[to]]?.focus();
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
-		id: "flights-dialog",
-		className: "top-dialog",
-		role: "dialog",
-		"aria-modal": "true",
-		"aria-labelledby": "flights-title",
-		onClose: close,
-		closeOnBackdrop: true,
-		onEscape: () => {
-			if (leaving) {
-				setLeaving(null);
-				return true;
-			}
-			if (tab === "schedule" && embeddedGuard.current?.escape()) return true;
-			if (unsaved()) {
-				setLeaving("close");
-				return true;
-			}
-			return false;
-		},
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			id: "flights-panel",
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "ws-head fl-head",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "fl-head-bird",
-							"aria-hidden": "true",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 17 })
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-							id: "flights-title",
-							children: "Flights"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "ik-subtitle",
-							children: "Every ticket, PR and scheduled job, from waiting to fly to landed"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TourButton, { tour: "flights" }),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							id: "flights-close",
-							onClick: close,
-							children: "Close"
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					id: "flights-tabs",
-					className: "fl-tabs",
-					role: "tablist",
-					"aria-label": "Flights",
-					children: FLIGHTS_TABS.map((t, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						ref: (el) => {
-							tabRefs.current[t] = el;
-						},
-						type: "button",
-						role: "tab",
-						id: "flights-tab-" + t,
-						"aria-selected": tab === t,
-						"aria-controls": "flights-tabpanel-" + t,
-						tabIndex: tab === t ? 0 : -1,
-						className: "fl-tab" + (tab === t ? " active" : ""),
-						"data-flights-tab": t,
-						onClick: () => switchTab(t),
-						onKeyDown: (e) => onTabKey(e, i),
-						children: FLIGHTS_TAB_LABEL[t]
-					}, t))
-				}),
-				leaving && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
-					id: "fl-leave-confirm",
-					title: "Discard unsaved changes?",
-					body: "They haven't been saved.",
-					confirmLabel: "Discard",
-					cancelLabel: "Keep editing",
-					onCancel: () => setLeaving(null),
-					onConfirm: () => {
-						const to = leaving;
-						setLeaving(null);
-						setPlansDirty(false);
-						if (to === "close") closeDialog();
-						else go(to);
-					}
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					id: "flights-body",
-					className: "fl-body fl-body-" + tab,
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-						id: "flights-tabpanel-" + tab,
-						className: "fl-panel",
-						role: "tabpanel",
-						"aria-labelledby": "flights-tab-" + tab,
-						children: [
-							tab === "plans" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Plans, {
-								initialPlan: rest,
-								onDirty
-							}),
-							tab === "sources" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(IntakeDialog, {
-								embedded: true,
-								target: rest || null
-							}),
-							tab === "schedule" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TemplatesDialog, {
-								embedded: true,
-								target: rest || null
-							}),
-							tab === "checklists" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyDialog, {
-								embedded: true,
-								target: rest || null
-							})
-						]
-					}, tab)
-				})
-			]
-		})
-	});
-}
-//#endregion
 //#region src/components/customize/CustomizeRow.tsx
 var ROW_MIME = "application/x-mf-customize-row";
 function CustomizeRow({ id, list, label, note, on, locked, lockedWhy, onToggle, onMove, onDropBefore, first, last }) {
@@ -117867,7 +117531,7 @@ function useFirstLaunchTour() {
 function WelcomeTour() {
 	useFirstLaunchTour();
 	const open = useUi((s) => s.tourOpen);
-	const covered = useUi((s) => s.openDialog === "settings" || s.openDialog === "flights" || s.openDialog === "setup");
+	const covered = useUi((s) => s.openDialog === "settings" || s.openDialog === "intake" || s.openDialog === "setup");
 	const finishTour = useUi((s) => s.finishTour);
 	if (!open || covered) return null;
 	const letsGo = () => {
@@ -118580,7 +118244,6 @@ function FolderPickerWindow() {
 //#region src/lib/surfaceHash.ts
 var BY_HASH = {
 	new: "new-session",
-	flights: "flights",
 	intake: "intake",
 	verify: "verify",
 	settings: "settings",
@@ -118595,12 +118258,6 @@ var BY_DIALOG = {
 function hashFor(name, target) {
 	const h = name ? BY_DIALOG[name] : void 0;
 	if (!h) return "";
-	if (h === "flights") {
-		const t = String(target || "").replace(/^schedule\/new$/, "schedule");
-		if (!t || t === "plans") return "#flights";
-		const cut = t.indexOf("/");
-		return "#flights/" + (cut < 0 ? encodeURIComponent(t) : encodeURIComponent(t.slice(0, cut)) + "/" + encodeURIComponent(t.slice(cut + 1)));
-	}
 	const t = target && !(h === "schedule" && target === "new") ? "/" + encodeURIComponent(target) : "";
 	return "#" + h + t;
 }
@@ -118617,6 +118274,15 @@ function parseHash(hash) {
 		name: BY_HASH[m[1]],
 		target
 	};
+}
+function parseFlightsHash(hash) {
+	const m = /^#flights(?:\/(.*))?$/.exec(hash || "");
+	if (!m) return null;
+	try {
+		return m[1] ? decodeURIComponent(m[1]) : "";
+	} catch {
+		return "";
+	}
 }
 function viewHash(s) {
 	if (s.view !== "sky") return "";
@@ -118651,8 +118317,10 @@ function installSurfaceHash(win = window) {
 	};
 	const first = parseHash(loc.hash);
 	const firstView = parseViewHash(loc.hash);
+	const firstFlights = parseFlightsHash(loc.hash);
 	if (firstView) useUi.getState().showSky(firstView.focus);
-	if (first || firstView || !loc.hash) {
+	if (firstFlights !== null) useUi.getState().openDialogFor("flights", firstFlights);
+	if (first || firstView || firstFlights !== null || !loc.hash) {
 		if (first) useUi.getState().openDialogFor(first.name, first.target);
 		const now = urlHash(useUi.getState());
 		if (now !== loc.hash && (now || loc.hash)) try {
@@ -118698,6 +118366,16 @@ function installSurfaceHash(win = window) {
 			stepping = false;
 			const v = viewHash(ui);
 			if (v !== loc.hash) replace(v);
+			return;
+		}
+		const old = parseFlightsHash(loc.hash);
+		if (old !== null) {
+			pushed = false;
+			const r = legacyFlightsRoute(old);
+			if (r.to !== "sky" && r.to !== "flyways") replace(hashFor(r.to, r.target));
+			ui.openDialogFor("flights", old);
+			const now = urlHash(useUi.getState());
+			if (now !== loc.hash) replace(now);
 			return;
 		}
 		const want = parseHash(loc.hash);
@@ -119079,7 +118757,7 @@ function sourceBlocks(settings, waiting, rows, opts = {}) {
 			kind,
 			id,
 			label,
-			target: "sources/" + kind + ":" + id,
+			target: kind + ":" + id,
 			auto,
 			every,
 			autoText: auto ? "auto-start on · " + everyWords(every) : "manual",
@@ -119183,6 +118861,30 @@ function shownWaiting(block, max = LANE_WAITING_SHOWN) {
 	};
 }
 //#endregion
+//#region src/components/flights/useWaiting.ts
+function useWaiting(fetch = true) {
+	const tickets = usePanelQuery("tickets", { enabled: fetch });
+	const prs = usePanelQuery("github-prs", { enabled: fetch });
+	const issues = usePanelQuery("github-issues", { enabled: fetch });
+	const status = useMindflockStatus().data;
+	return {
+		waiting: collectQueued({
+			tickets: tickets.data ?? null,
+			prs: prs.data ?? null,
+			issues: issues.data ?? null
+		}).map((item) => ({
+			item,
+			auto: waitingAuto(item.kind, status)
+		})),
+		loaded: !!(tickets.data || prs.data || issues.data),
+		refresh: () => {
+			tickets.refresh();
+			prs.refresh();
+			issues.refresh();
+		}
+	};
+}
+//#endregion
 //#region src/components/flights/IntakeLane.tsx
 var COLLAPSED_LS_KEY = "mf_sky_lane_collapsed";
 function loadCollapsed() {
@@ -119281,9 +118983,9 @@ function Block({ block, onFly }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "sky-lane-more",
-						"aria-label": "Open " + block.label + " on Sources",
-						title: "Open this source on Flights → Sources",
-						onClick: () => useUi.getState().openDialogFor("flights", block.target),
+						"aria-label": "Open " + block.label + " in Intake",
+						title: "Open this source in Intake",
+						onClick: () => useUi.getState().openDialogFor("intake", block.target),
 						children: "⋯"
 					})
 				]
@@ -119412,8 +119114,8 @@ function IntakeLane({ rows, plans, onFly, width = 260 }) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
 					className: "linklike",
-					onClick: () => useUi.getState().openDialogFor("flights", "sources"),
-					children: "Sources ›"
+					onClick: () => useUi.getState().openDialogFor("intake"),
+					children: "Intake ›"
 				})
 			]
 		}) : blocks.map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Block, {
@@ -119717,7 +119419,7 @@ function ChecklistRow({ plan, onOpen }) {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 		type: "button",
 		className: "fl-check-row" + (failing ? " is-failing" : ""),
-		title: "Open this checklist on the Checklists tab",
+		title: "Open this checklist in Verify",
 		onClick: () => onOpen(plan.branch || plan.id),
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -119876,7 +119578,8 @@ function PerchRow({ flight, kinds, onFocus }) {
 		]
 	});
 }
-function SkyDrawer({ open, onToggle, onFocus, onTab }) {
+function SkyDrawer({ open, onToggle, onFocus }) {
+	const openDialogFor = useUi((s) => s.openDialogFor);
 	const flightsQ = useFlights();
 	const plans = useFlightPlans().data || [];
 	const kinds = useFlightKinds().data;
@@ -119934,7 +119637,7 @@ function SkyDrawer({ open, onToggle, onFocus, onTab }) {
 						onFocus
 					}, f.id)), dueChecklists.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChecklistRow, {
 						plan: p,
-						onOpen: (b) => onTab("checklists", b)
+						onOpen: (b) => openDialogFor("verify", b)
 					}, p.id))] })]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
@@ -119954,8 +119657,8 @@ function SkyDrawer({ open, onToggle, onFocus, onTab }) {
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
 								className: "linklike",
-								onClick: () => onTab("sources"),
-								children: "Sources ›"
+								onClick: () => openDialogFor("intake"),
+								children: "Intake ›"
 							}),
 							" ",
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -120176,7 +119879,7 @@ function SkyLine(p) {
 			paneW: w,
 			paneH: h
 		}), () => p.onLayout({ open: false }));
-		const kid = n.kind === "child" ? rowOf(n.session) : void 0;
+		const kid = n.kind === "child" || n.kind === "branch" ? rowOf(n.session) : void 0;
 		const ks = kid ? kids[kid.title] : void 0;
 		if (kid && ks) return card(kid, ks.w, ks.h, (w, h) => setKids((k) => ({
 			...k,
@@ -120189,7 +119892,7 @@ function SkyLine(p) {
 	};
 	const onOpen = (n) => {
 		if (n.kind === "session") p.onLayout({ open: !p.layout.open });
-		else if (n.kind === "child" && n.session) {
+		else if ((n.kind === "child" || n.kind === "branch") && n.session) {
 			const t = n.session;
 			if (kids[t]) foldKid(t);
 			else setKids((k) => ({
@@ -120265,7 +119968,7 @@ function SkyLine(p) {
 									key: "only",
 									label: "Show only this line",
 									title: "This session: one line, filling the sky",
-									onSelect: () => useUi.getState().openDialogFor("flights", "sky/" + p.title)
+									onSelect: () => showInSky(p.title)
 								},
 								{
 									key: "flyway",
@@ -120633,6 +120336,210 @@ function FlywayShelf({ plans, onNew, onFly, onEdit, collapsed, onCollapse }) {
 	});
 }
 //#endregion
+//#region src/components/flights/FlywayInspector.tsx
+var DAYS = [
+	{
+		v: "daily",
+		label: "Every day"
+	},
+	{
+		v: "weekdays",
+		label: "Weekdays"
+	},
+	{
+		v: "once",
+		label: "Once"
+	},
+	{
+		v: "cron",
+		label: "Custom"
+	}
+];
+function triggerCron(plan) {
+	if (plan.trigger.kind !== "schedule") return "";
+	const when = whenFormOf(plan.trigger.schedule);
+	return (when.days === "cron" ? when.cron : when.days === "once" ? onceOf(when.date, when.at) : cronOf(when.at, when.days)).trim();
+}
+function useCronPreview(cron) {
+	const [preview, setPreview] = (0, import_react.useState)(null);
+	(0, import_react.useEffect)(() => {
+		if (!cron) {
+			setPreview(null);
+			return;
+		}
+		let live = true;
+		const t = setTimeout(() => {
+			cronPreview(cron).then((pv) => live && setPreview(pv)).catch(() => live && setPreview(null));
+		}, 300);
+		return () => {
+			live = false;
+			clearTimeout(t);
+		};
+	}, [cron]);
+	return preview;
+}
+function ScheduleChips({ when, onWhen, preview }) {
+	const line = cronPreviewLine(preview, /* @__PURE__ */ new Date());
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "fl-schedule",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
+				label: "Which days",
+				value: when.days,
+				options: DAYS,
+				onChange: (days) => onWhen({
+					...when,
+					days
+				})
+			}),
+			when.days === "cron" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
+				label: "Cron expression",
+				mono: true,
+				value: when.cron,
+				placeholder: "0 21 * * 1-5",
+				onChange: (cron) => onWhen({
+					...when,
+					cron
+				})
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "fl-schedule-at",
+				children: [
+					when.days === "once" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "date",
+						className: "fl-input fl-date",
+						"aria-label": "Date",
+						value: when.date,
+						onChange: (e) => onWhen({
+							...when,
+							date: e.target.value
+						})
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: "at"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "time",
+						className: "fl-input fl-time",
+						"aria-label": "Time",
+						value: when.at,
+						onChange: (e) => onWhen({
+							...when,
+							at: e.target.value
+						})
+					})
+				]
+			}),
+			line && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "fl-fld-hint",
+				children: line
+			})
+		]
+	});
+}
+function FlywayTrigger({ plan, onChange }) {
+	const agents = useAgentChoices();
+	const preview = useCronPreview(triggerCron(plan));
+	const when = whenFormOf(plan.trigger.schedule);
+	const needsSession = plan.trigger.kind === "manual" || plan.trigger.kind === "schedule";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", {
+		className: "fl-section fl-trigger",
+		"aria-label": "Where its flights come from",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "fl-form",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+					label: "Takes off",
+					wide: true,
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
+						label: "Takes off",
+						value: plan.trigger.kind,
+						options: Object.keys(TRIGGER_LABEL).map((k) => ({
+							v: k,
+							label: TRIGGER_LABEL[k]
+						})),
+						onChange: (kind) => onChange({ trigger: {
+							...plan.trigger,
+							kind,
+							schedule: kind === "schedule" ? plan.trigger.schedule || {
+								at: "21:00",
+								days: "daily"
+							} : null
+						} })
+					})
+				}),
+				plan.trigger.kind === "schedule" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(FlField, {
+					label: "When",
+					wide: true,
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ScheduleChips, {
+						when,
+						preview,
+						onWhen: (w) => onChange({ trigger: {
+							...plan.trigger,
+							schedule: scheduleOfWhen(w)
+						} })
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Toggle, {
+						on: plan.trigger.paused,
+						onChange: (paused) => onChange({ trigger: {
+							...plan.trigger,
+							paused
+						} }),
+						label: "Paused",
+						title: "A paused schedule takes off nothing"
+					})]
+				}),
+				needsSession && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+						label: "Repository",
+						wide: true,
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
+							id: "fl-plan-repo",
+							value: plan.session.repo_path,
+							placeholder: "Ask when it takes off",
+							pickerTitle: "The repository this flyway's sessions start in",
+							onChange: (v) => onChange({ session: {
+								...plan.session,
+								repo_path: v
+							} })
+						})
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+						label: "Agent",
+						wide: true,
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+							label: "Agent",
+							value: plan.session.program,
+							options: [{
+								value: "",
+								label: agents.fallback ? "Default · " + agents.fallback : "Default"
+							}, ...agents.names.map((n) => ({
+								value: n,
+								label: n
+							}))],
+							onChange: (program) => onChange({ session: {
+								...plan.session,
+								program
+							} })
+						})
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+						label: "Model",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
+							label: "Model",
+							value: plan.session.model,
+							placeholder: "The agent's default",
+							onChange: (model) => onChange({ session: {
+								...plan.session,
+								model
+							} })
+						})
+					})
+				] })
+			]
+		})
+	});
+}
+//#endregion
 //#region src/components/flights/FlywayCard.tsx
 var clone = (v) => JSON.parse(JSON.stringify(v));
 function freshFlywayName(plans, base = "New flyway") {
@@ -120687,6 +120594,8 @@ function FlywayCard({ x, y, plans, initial, onSaved, onCancel }) {
 	const [error, setError] = (0, import_react.useState)("");
 	const [busy, setBusy] = (0, import_react.useState)("");
 	const [askDiscard, setAskDiscard] = (0, import_react.useState)(false);
+	const [askDelete, setAskDelete] = (0, import_react.useState)(false);
+	const [triggerOpen] = (0, import_react.useState)(() => draft.trigger.kind === "schedule");
 	const kindOf = (0, import_react.useMemo)(() => new Map(kinds.map((k) => [k.kind, k])), [kinds]);
 	const diagram = (0, import_react.useMemo)(() => flywayDiagram(draft.steps, kinds), [draft.steps, kinds]);
 	const dirty = planDirty(draft, seed) || !draft.id;
@@ -120709,7 +120618,7 @@ function FlywayCard({ x, y, plans, initial, onSaved, onCancel }) {
 		setStop(at);
 		setPaletteAt(null);
 	};
-	const remove = (i) => {
+	const removeStop = (i) => {
 		setSteps(draft.steps.filter((_, j) => j !== i));
 		setStop(draft.steps.length > 1 ? Math.max(0, i - 1) : null);
 	};
@@ -120728,6 +120637,48 @@ function FlywayCard({ x, y, plans, initial, onSaved, onCancel }) {
 		setError(r.error);
 		if (r.stop >= 0) setStop(r.stop);
 	};
+	const reset = async () => {
+		if (busy || !draft.id) return;
+		setBusy("reset");
+		setError("");
+		try {
+			const p = await resetPlan(draft.id);
+			setDraft(clone(p));
+			setSeed(clone(p));
+			setStop(p.steps.length ? 0 : null);
+			setDescribed(/* @__PURE__ */ new Set());
+			toast("“" + p.name + "” is back to its default");
+		} catch (err) {
+			setError(errMsg(err));
+		} finally {
+			setBusy("");
+		}
+	};
+	const remove = async () => {
+		if (busy || !draft.id) return;
+		setBusy("delete");
+		try {
+			await deletePlan(draft.id);
+			toast("Deleted “" + draft.name + "”");
+			onCancel();
+		} catch (err) {
+			setError(errMsg(err));
+			setAskDelete(false);
+		} finally {
+			setBusy("");
+		}
+	};
+	const menu = draft.id ? draft.builtin ? [{
+		key: "reset",
+		label: "Reset to default",
+		title: "Put this built-in flyway back the way MindFlock ships it",
+		onSelect: () => void reset()
+	}] : [{
+		key: "delete",
+		label: "Delete flyway…",
+		danger: true,
+		onSelect: () => setAskDelete(true)
+	}] : [];
 	const cancel = () => {
 		if (dirty && draft.steps.length && !askDiscard) setAskDiscard(true);
 		else onCancel();
@@ -120771,6 +120722,10 @@ function FlywayCard({ x, y, plans, initial, onSaved, onCancel }) {
 						className: "fl-unsaved",
 						children: "Unsaved"
 					}),
+					menu.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
+						label: "More for “" + draft.name + "”",
+						items: menu
+					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "fl-icon-btn",
@@ -120780,6 +120735,15 @@ function FlywayCard({ x, y, plans, initial, onSaved, onCancel }) {
 						children: "✕"
 					})
 				]
+			}),
+			askDelete && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+				id: "sky-flyway-delete",
+				title: "Delete “" + draft.name + "”?",
+				body: "Flights already in the air keep their own copy of its stops.",
+				confirmLabel: "Delete",
+				busy: busy === "delete",
+				onCancel: () => setAskDelete(false),
+				onConfirm: () => void remove()
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlywayCanvas, {
 				compact: true,
@@ -120795,7 +120759,7 @@ function FlywayCard({ x, y, plans, initial, onSaved, onCancel }) {
 					if (n.kind === "add") setPaletteAt(paletteAt === draft.steps.length ? null : draft.steps.length);
 				},
 				onMove: move,
-				onRemove: (n) => remove(nodeIndex(n)),
+				onRemove: (n) => removeStop(nodeIndex(n)),
 				onInsert: (at) => setPaletteAt(paletteAt === at ? null : at)
 			}),
 			paletteAt !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopPalette, {
@@ -120843,14 +120807,31 @@ function FlywayCard({ x, y, plans, initial, onSaved, onCancel }) {
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
+						className: "test-btn fl-btn",
+						onClick: () => setSteps(duplicateStep(draft.steps, stop)),
+						children: "Duplicate"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
 						className: "test-btn fl-btn danger",
-						onClick: () => remove(stop),
+						onClick: () => removeStop(stop),
 						children: "Remove"
 					})
 				] })
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "fl-note muted",
 				children: draft.steps.length ? "Pick a stop to edit it." : "Press + to add the first stop, or describe it above."
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", {
+				className: "sky-flyway-card-trigger",
+				open: triggerOpen || void 0,
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("summary", { children: ["Takes off: ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: TRIGGER_LABEL[draft.trigger.kind] || "By hand" })] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlywayTrigger, {
+					plan: draft,
+					onChange: (p) => setDraft((d) => ({
+						...d,
+						...p
+					}))
+				})]
 			}),
 			error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "fl-note sky-flyway-card-error",
@@ -120977,8 +120958,8 @@ function SkyView() {
 	const rows = (0, import_react.useMemo)(() => instQ.data || [], [instQ.data]);
 	const flights = useFlights().data;
 	const kinds = useFlightKinds().data || [];
-	const plans = useFlightPlans().data || [];
-	const openDialogFor = useUi((s) => s.openDialogFor);
+	const plansQ = useFlightPlans();
+	const plans = plansQ.data || [];
 	const focused = useUi((s) => s.focused);
 	const mode = useUi((s) => s.skyMode);
 	const setSkyMode = useUi((s) => s.setSkyMode);
@@ -121005,6 +120986,8 @@ function SkyView() {
 	const [card, setCard] = (0, import_react.useState)(null);
 	const [drawerPref, setDrawerPref] = (0, import_react.useState)(() => readPref(DRAWER_KEY));
 	const [shelfOpen, setShelfOpen] = (0, import_react.useState)(() => readPref(SHELF_KEY) !== "0");
+	const shelfAsk = useUi((s) => s.skyShelf);
+	useAutoTour("sky", true);
 	const [flyPick, setFlyPick] = (0, import_react.useState)(null);
 	const [drop, setDrop] = (0, import_react.useState)(null);
 	const dropPlan = (0, import_react.useRef)(null);
@@ -121228,6 +121211,24 @@ function SkyView() {
 			y: Math.round(c.y)
 		};
 	};
+	const plansLoaded = plansQ.data !== void 0;
+	(0, import_react.useEffect)(() => {
+		if (!shelfAsk) return;
+		if (!shelfOpen) {
+			setShelfOpen(true);
+			writePref(SHELF_KEY, "1");
+		}
+		if (shelfAsk.plan && !plansLoaded) return;
+		useUi.getState().takeSkyShelf();
+		if (shelfAsk.plan === "new") setCard({ at: middle() });
+		else if (shelfAsk.plan) {
+			const plan = plans.find((p) => p.id === shelfAsk.plan);
+			if (plan) setCard({
+				at: middle(),
+				initial: plan
+			});
+		}
+	}, [shelfAsk, plansLoaded]);
 	const newHere = () => setNewAt(middle());
 	const onLayout = (0, import_react.useCallback)((id, patch) => {
 		setLayout((l) => patch.pinned === false ? tidySkyLayout(l, id) : patchSkyLine(l, id, patch));
@@ -121624,7 +121625,8 @@ function SkyView() {
 						children: "100%"
 					})
 				]
-			})
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TourButton, { tour: "sky" })
 		]
 	});
 	const pick = flyPick && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -121661,8 +121663,7 @@ function SkyView() {
 			setDrawerPref(v);
 			writePref(DRAWER_KEY, v);
 		},
-		onFocus: focusOn,
-		onTab: (t, rest) => t === "sources" ? openDialogFor("intake", rest || null) : t === "checklists" ? openDialogFor("verify", rest || null) : openDialogFor("flights", t)
+		onFocus: focusOn
 	});
 	const shelf = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "sky-shelf" + (shelfOpen ? " open" : ""),
@@ -121691,6 +121692,17 @@ function SkyView() {
 				initial: plan
 			})
 		})]
+	});
+	const flywayCard = card && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlywayCard, {
+		x: card.at.x,
+		y: card.at.y,
+		plans,
+		initial: card.initial,
+		onSaved: (plan) => {
+			setCard(null);
+			setFlyPick(plan);
+		},
+		onCancel: () => setCard(null)
 	});
 	const newBlock = newAt && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewSessionBlock, {
 		x: newAt.x,
@@ -121732,13 +121744,15 @@ function SkyView() {
 			pick,
 			drawer,
 			newBlock,
+			flywayCard,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "sky-list",
 				children: [empty && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "fl-empty muted",
 					children: empty
 				}), lines.map((l) => lineFor(l.id))]
-			})
+			}),
+			shelf
 		]
 	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", {
@@ -121798,18 +121812,12 @@ function SkyView() {
 									}),
 									lines.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 										className: "sky-line-slot" + (flash === l.id ? " is-flash" : ""),
+										"data-tour": "sky-line",
 										children: lineFor(l.id, posOf(l.id))
 									}, l.id)),
 									ghosts.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GhostLine, { ...g }, "ghost:" + g.id)),
 									newBlock,
-									card && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlywayCard, {
-										x: card.at.x,
-										y: card.at.y,
-										plans,
-										initial: card.initial,
-										onSaved: () => setCard(null),
-										onCancel: () => setCard(null)
-									})
+									flywayCard
 								]
 							}),
 							empty && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -121977,9 +121985,10 @@ function App() {
 		view === "sky" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyView, {}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TerminalGrid, { specialPanes }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(NewSessionDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SettingsDialog, { onOpenSysLogsPane: () => toggleSpecial("syslogs") }),
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlightsDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(IntakeDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CustomizeDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PromptsDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(VerifyDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(CommitDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerSessionViewer, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MakePrDialog, {}),
