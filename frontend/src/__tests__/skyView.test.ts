@@ -1,0 +1,363 @@
+/** The sky as the main area's second view (lib/viewMode.ts, docs/web-ui.md
+ * "Two views: the grid and the sky"): the view store, every switch point
+ * (top bar, sidebar View row, Alt+Y, the palette, the hash), the isomorphism's
+ * invariants (one focused session, one open tab per session, This session =
+ * the focused one alone, the grid's 1 ↔ the sky's 1), the layout store (sizes,
+ * Tidy, the mf_sky_pos migration) and the transition's pairing. */
+
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { code, css } from "./sourceText";
+
+/** A Map-backed localStorage, installed BEFORE the store module loads. */
+const storage = new Map<string, string>();
+vi.stubGlobal("localStorage", {
+  getItem: (k: string) => (storage.has(k) ? storage.get(k)! : null),
+  setItem: (k: string, v: string) => void storage.set(k, String(v)),
+  removeItem: (k: string) => void storage.delete(k),
+  clear: () => storage.clear(),
+});
+vi.mock("../api/client", () => ({ api: vi.fn(), ApiError: class extends Error {} }));
+vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
+
+const { useUi, setSessionSelector } = await import("../state/store");
+const { VIEWS, flipPairs, newSession, registerSkyHost, setView, showInSky, toggleView, viewLabel } = await import("../lib/viewMode");
+const { installSurfaceHash, parseViewHash, viewHash } = await import("../lib/surfaceHash");
+const { KEYMAP } = await import("../lib/keymap");
+const sky = await import("../lib/skyLayout");
+
+afterEach(() => {
+  useUi.setState({ view: "grid", skyMode: "mine", focused: null, openDialog: null, dialogTarget: null } as never);
+  setSessionSelector(null);
+});
+
+describe("the view store", () => {
+  it("is the grid by default, remembered per device as mf_view", () => {
+    expect(VIEWS).toEqual(["grid", "sky"]);
+    expect(useUi.getState().view).toBe("grid");
+    setView("sky");
+    expect(useUi.getState().view).toBe("sky");
+    expect(storage.get("mf_view")).toBe("sky");
+    toggleView();
+    expect(useUi.getState().view).toBe("grid");
+    expect(storage.get("mf_view")).toBe("grid");
+    expect([viewLabel("grid"), viewLabel("sky")]).toEqual(["Grid", "Sky"]);
+  });
+
+  it("the sky's lines are remembered too — except This session, which the hash carries", () => {
+    useUi.getState().setSkyMode("all");
+    expect(storage.get("mf_sky_view")).toBe("all");
+    useUi.getState().setSkyMode("one");
+    expect(storage.get("mf_sky_view")).toBe("all");
+    expect(useUi.getState().skyMode).toBe("one");
+  });
+});
+
+describe("the isomorphism", () => {
+  it("one focused session for both views: switching keeps it, and the grid re-selects it so a capped view gives it a slot", () => {
+    const picked: string[] = [];
+    setSessionSelector((t) => {
+      picked.push(t);
+      useUi.getState().setFocused(t);
+    });
+    useUi.setState({ focused: "fix-login" } as never);
+    setView("sky");
+    expect(useUi.getState().focused).toBe("fix-login");
+    expect(picked).toEqual([]);
+    setView("grid");
+    expect(useUi.getState().focused).toBe("fix-login");
+    expect(picked).toEqual(["fix-login"]);
+  });
+
+  it("This session is the focused pane alone: Show in the Sky selects the session and shows it by itself", () => {
+    const picked: string[] = [];
+    setSessionSelector((t, o) => {
+      picked.push(t + (o?.noKeyboard ? ":quiet" : ""));
+      useUi.getState().setFocused(t);
+    });
+    showInSky("worker-2");
+    const s = useUi.getState();
+    expect([s.view, s.skyMode, s.focused]).toEqual(["sky", "one", "worker-2"]);
+    expect(picked).toEqual(["worker-2:quiet"]);
+    // The whole sky again: the remembered pick, not "one".
+    useUi.getState().showSky();
+    expect(useUi.getState().skyMode).not.toBe("one");
+    // The sky's This session is skyLineTitles' "one" on the focused title.
+    expect(code("components/flights/SkyView.tsx")).toContain("skyLineTitles(rows, mode, { query, focus: focused || \"\" })");
+  });
+
+  it("the pane's open tab is the line's open box: the box IS the session's Pane, which reads lastTab per title", () => {
+    const parts = code("components/flights/skyContracts.tsx");
+    expect(parts).toContain("<Pane inst={row} drag={NO_DRAG} dragging={false} />");
+    expect(code("components/grid/Pane.tsx")).toContain("const lastTab = useUi((s) => s.lastTab[title]);");
+    // A line is keyed by its title, so its box (and the terminal it adopts
+    // from lib/terminals' registry) is the same session's either way.
+    expect(code("components/flights/SkyView.tsx")).toContain("key={id}\n      title={id}");
+  });
+
+  it("selecting a line is selecting the session (a pane click's selectSession), and a selection anywhere brings its line into view", () => {
+    const v = code("components/flights/SkyView.tsx");
+    expect(v).toContain("const focusOn = useCallback((id: string) => selectSession(id, { noKeyboard: true }), []);");
+    expect(v).toContain("focused={focused === id}");
+    expect(v).toContain("setCam(centerOn(r, vp.w, vp.h, Math.max(c.z, 0.85)));");
+  });
+
+  it("the grid's 1 is the sky's 1 (fit the focused line), its 4 / 9 the sky's Fit (all of them)", () => {
+    const v = code("components/flights/SkyView.tsx");
+    expect(v).toContain("if (first && gridOne && mode !== \"one\") fitFocused();");
+    expect(v).toContain('} else if (k === "1") {');
+    expect(v).toMatch(/className="sky-zoom-btn sky-fit-one"[^>]*onClick=\{fitFocused\}/);
+  });
+
+  it("New is the sky's new-session card: Ctrl/Alt+N and the top bar's New open it mid-view in the sky, the dialog in the grid", () => {
+    const here = vi.fn();
+    const off = registerSkyHost({ newHere: here, ready: () => true, lineRects: () => new Map() });
+    newSession();
+    expect(useUi.getState().openDialog).toBe("new-session");
+    useUi.getState().closeDialog();
+    setView("sky");
+    newSession();
+    expect(here).toHaveBeenCalledTimes(1);
+    expect(useUi.getState().openDialog).toBeNull();
+    off();
+    newSession();
+    expect(useUi.getState().openDialog).toBe("new-session");
+    for (const k of KEYMAP.filter((e) => e.id === "new" || e.aliasOf === "new")) {
+      useUi.getState().closeDialog();
+      here.mockClear();
+      const off2 = registerSkyHost({ newHere: here, ready: () => true, lineRects: () => new Map() });
+      k.run({} as KeyboardEvent);
+      expect(here, k.key + (k.alt ? " alt" : "")).toHaveBeenCalledTimes(1);
+      off2();
+    }
+    expect(code("components/TopBar.tsx")).toContain("onClick={() => newSession()}");
+  });
+});
+
+describe("the switch points", () => {
+  it("the top bar: a Grid · Sky pair beside Flights, the sky's half the tour's target, the shortcut in the tooltip", () => {
+    const top = code("components/TopBar.tsx");
+    expect(top.indexOf('id="flights-btn"')).toBeLessThan(top.indexOf('<span className="tb-views" role="group" aria-label="View">'));
+    expect(top).toContain('data-tour={v === "sky" ? "view-sky" : undefined}');
+    expect(top).toContain('title={viewLabel(v) + " — " + VIEW_BLURB[v] + keys("view")}');
+    expect(top).toContain("onClick={() => setView(v)}");
+    expect(top).toContain("aria-pressed={ui.view === v}");
+    // Never folded (no data-fold), the words go on a phone.
+    expect(top).not.toMatch(/tb-views[^>]*data-fold/);
+    expect(css("components/TopBar.css")).toMatch(/body\.narrow #topbar \.tb-view-word \{[^}]*display: none;/);
+  });
+
+  it("the sidebar's View row: Auto · 1 · 2 · 4 · 9 · Sky — a number returns to the grid", () => {
+    const side = code("components/sidebar/Sidebar.tsx");
+    expect(side).toContain('className={"vm vm-sky" + (ui.view === "sky" ? " active" : "")}');
+    expect(side).toContain('data-view="sky"');
+    expect(side).toMatch(/ui\.setViewMode\(v\);\s*setView\("grid"\);/);
+    expect(side).toContain('className={"vm" + (ui.view === "grid" && ui.viewMode === v ? " active" : "")}');
+  });
+
+  it("Alt+Y toggles, in the Navigation group, on a letter no other binding uses", () => {
+    const y = KEYMAP.find((k) => k.id === "view")!;
+    expect(y).toMatchObject({ key: "y", alt: true });
+    expect(y.help?.[0]).toBe("Navigation");
+    expect(y.help?.[1]).toBe("Alt+Y");
+    expect(KEYMAP.filter((k) => k.alt && !k.shift && k.key === "y")).toHaveLength(1);
+    y.run({} as KeyboardEvent);
+    expect(useUi.getState().view).toBe("sky");
+    y.run({} as KeyboardEvent);
+    expect(useUi.getState().view).toBe("grid");
+  });
+
+  it("the palette offers the other view", () => {
+    const p = code("components/palette/CommandPalette.tsx");
+    expect(p).toContain('label: "Switch to the grid", hint: "Alt+Y"');
+    expect(p).toContain('label: "Switch to the Sky", hint: "Alt+Y"');
+  });
+
+  it("App draws the sky in the grid's place — nothing else on the page changes", () => {
+    const app = code("App.tsx");
+    expect(app).toContain('{view === "sky" ? <SkyView /> : <TerminalGrid specialPanes={specialPanes} />}');
+    expect(app).toContain("useEffect(() => installViewFlip(), []);");
+    expect(app).toContain("<TopBar />");
+    expect(app).toContain("<FlightsDialog />");
+  });
+
+  it("the Flights dialog has no Sky tab any more", () => {
+    expect(code("components/flights/FlightsDialog.tsx")).not.toContain("SkyView");
+    expect(code("lib/flights.ts")).toContain('export const FLIGHTS_TABS: readonly FlightsTab[] = ["plans", "sources", "schedule", "checklists"];');
+  });
+});
+
+describe("the hash", () => {
+  const fakeWin = (hash: string) => {
+    const loc = { pathname: "/", search: "", hash };
+    const calls: string[] = [];
+    const listeners: Array<() => void> = [];
+    const win = {
+      location: loc,
+      history: {
+        pushState: (_d: unknown, _u: string, url: string) => {
+          calls.push("push " + url);
+          loc.hash = url.includes("#") ? url.slice(url.indexOf("#")) : "";
+        },
+        replaceState: (_d: unknown, _u: string, url: string) => {
+          calls.push("replace " + url);
+          loc.hash = url.includes("#") ? url.slice(url.indexOf("#")) : "";
+        },
+        back: () => {
+          calls.push("back");
+          loc.hash = "";
+          listeners.forEach((f) => f());
+        },
+      },
+      addEventListener: (_t: string, f: () => void) => void listeners.push(f),
+      removeEventListener: () => {},
+    } as unknown as Window;
+    return { win, loc, calls, pop: () => listeners.forEach((f) => f()) };
+  };
+
+  it("#sky and #sky/<title> say the view; the grid has no hash", () => {
+    expect(viewHash({ view: "grid", skyMode: "mine", focused: "a" })).toBe("");
+    expect(viewHash({ view: "sky", skyMode: "all", focused: "a" })).toBe("#sky");
+    expect(viewHash({ view: "sky", skyMode: "one", focused: "a b" })).toBe("#sky/a%20b");
+    expect(parseViewHash("#sky/a%20b")).toEqual({ view: "sky", focus: "a b" });
+    expect(parseViewHash("#flights")).toBeNull();
+  });
+
+  it("an old #flights/sky/<title> link opens the view on that session and is rewritten in place", () => {
+    const w = fakeWin("#flights/sky/fix-login");
+    const off = installSurfaceHash(w.win);
+    const s = useUi.getState();
+    expect([s.view, s.skyMode, s.focused, s.openDialog]).toEqual(["sky", "one", "fix-login", null]);
+    expect(w.calls).toEqual(["replace /#sky/fix-login"]);
+    off();
+  });
+
+  it("a switch replaces the entry (Back is for surfaces), a surface over the sky closes back onto #sky, Back to no hash is the grid", async () => {
+    const w = fakeWin("");
+    const off = installSurfaceHash(w.win);
+    setView("sky");
+    expect(w.calls).toEqual(["replace /#sky"]);
+    useUi.getState().openDialogFor("settings", "accounts");
+    expect(w.calls.at(-1)).toBe("push /#settings/accounts");
+    useUi.getState().closeDialog();
+    await Promise.resolve();
+    // Stepped back over the surface's entry, then said the view again.
+    expect(w.calls.slice(-2)).toEqual(["back", "replace /#sky"]);
+    expect(useUi.getState().view).toBe("sky");
+    // A link's #sky (Back / Forward between views) — and no hash is the grid.
+    w.loc.hash = "";
+    w.pop();
+    expect(useUi.getState().view).toBe("grid");
+    w.loc.hash = "#sky";
+    w.pop();
+    expect(useUi.getState().view).toBe("sky");
+    off();
+  });
+
+  it("a remembered sky with no hash says so in the URL at load", () => {
+    useUi.setState({ view: "sky" } as never);
+    const w = fakeWin("");
+    const off = installSurfaceHash(w.win);
+    expect(w.calls).toEqual(["replace /#sky"]);
+    off();
+  });
+});
+
+describe("the layout store", () => {
+  const mem = () => {
+    const m = new Map<string, string>();
+    return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), m };
+  };
+
+  it("migrates mf_sky_pos once: every remembered spot becomes a pinned line", () => {
+    const s = mem();
+    s.m.set(sky.SKY_POS_KEY, JSON.stringify({ a: { x: 10, y: 20 }, b: { x: "junk" } }));
+    expect(sky.loadSkyLayout(s)).toEqual({ a: { x: 10, y: 20, pinned: true } });
+    expect(JSON.parse(s.m.get(sky.SKY_LAYOUT_KEY)!)).toEqual({ a: { x: 10, y: 20, pinned: true } });
+    // The new record wins from then on.
+    s.m.set(sky.SKY_LAYOUT_KEY, "{}");
+    expect(sky.loadSkyLayout(s)).toEqual({});
+  });
+
+  it("Tidy clears the pins — all, or one line — and keeps sizes and open boxes", () => {
+    const s = mem();
+    const all = { a: { x: 1, y: 2, pinned: true, size: "wide" as const }, b: { x: 3, y: 4, pinned: true }, c: { open: true } };
+    expect(sky.tidySkyLayout(all, undefined, s)).toEqual({ a: { size: "wide" }, c: { open: true } });
+    expect(sky.tidySkyLayout(all, "b", s)).toEqual({ a: all.a, c: { open: true } });
+    expect(sky.pinnedPositions(all)).toEqual({ a: { x: 1, y: 2 }, b: { x: 3, y: 4 } });
+    // The host reads `{ pinned: false }` from a line as "Tidy this line".
+    expect(code("components/flights/SkyView.tsx")).toContain("patch.pinned === false ? tidySkyLayout(l, id) : patchSkyLine(l, id, patch)");
+  });
+
+  it("sizes cycle compact → normal → wide, and a line's layout fills the defaults", () => {
+    expect([sky.cycleSize("compact"), sky.cycleSize("normal"), sky.cycleSize("wide"), sky.cycleSize(undefined)]).toEqual(["normal", "wide", "compact", "wide"]);
+    expect(sky.lineLayout(undefined, { x: 5, y: 6 })).toEqual({ x: 5, y: 6, size: "normal", open: false, paneW: undefined, paneH: undefined, pinned: false });
+    expect(sky.lineLayout({ size: "wide", open: true, paneW: 900 }, { x: 0, y: 0 })).toMatchObject({ size: "wide", open: true, paneW: 900 });
+  });
+
+  it("placeLines honours sizes: a wider, opened line takes more room and nothing overlaps", () => {
+    const base = { w: 400, h: 160 };
+    const wide = sky.estimateLine(base, { size: "wide" });
+    const compact = sky.estimateLine(base, { size: "compact" });
+    const open = sky.estimateLine(base, { open: true });
+    expect(wide.w).toBeGreaterThan(base.w);
+    expect(compact.w).toBeLessThan(base.w);
+    expect(open.w).toBeGreaterThanOrEqual(sky.PANE_W);
+    expect(open.h).toBeGreaterThan(base.h + sky.PANE_H);
+    const lines = [
+      { id: "a", ...open },
+      { id: "b", ...wide },
+      { id: "c", ...compact },
+    ];
+    const pos = sky.placeLines(lines, {}, { width: 1600, left: 0, top: 0 });
+    expect(pos.b.x).toBeGreaterThanOrEqual(open.w + sky.SKY_GAP);
+    const r = lines.map((l) => ({ ...pos[l.id], w: l.w, h: l.h }));
+    for (let i = 0; i < r.length; i++)
+      for (let j = i + 1; j < r.length; j++)
+        expect(r[i].x < r[j].x + r[j].w && r[j].x < r[i].x + r[i].w && r[i].y < r[j].y + r[j].h && r[j].y < r[i].y + r[i].h).toBe(false);
+  });
+
+  it("measured sizes win over the estimate, and the Tidy button and T run it", () => {
+    const v = code("components/flights/SkyView.tsx");
+    expect(v).toContain("...(measured[t] || estimateLine(lineSize(diagram, full), layout[t]))");
+    expect(v).toContain("placeLines(lines, pinnedPositions(layout),");
+    expect(v).toMatch(/className="fl-btn sky-tidy"[^>]*onClick=\{tidy\}/);
+    expect(v).toContain('} else if (k === "t" || k === "T") {');
+  });
+});
+
+describe("the transition", () => {
+  const b = (x: number, w = 200) => ({ x, y: 10, w, h: 100 });
+
+  it("flies only sessions on screen in both views, the focused one first, capped", () => {
+    vi.stubGlobal("window", { innerWidth: 1200, innerHeight: 800 });
+    const from = new Map([
+      ["a", b(0)],
+      ["b", b(300)],
+      ["gone", b(600)],
+      ["off", b(5000)],
+    ]);
+    const to = new Map([
+      ["a", b(10)],
+      ["b", b(310)],
+      ["off", b(20)],
+    ]);
+    expect(flipPairs(from, to, "b").map((p) => p.title)).toEqual(["b", "a"]);
+    expect(flipPairs(from, to, null, 1)).toHaveLength(1);
+    vi.unstubAllGlobals();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => (storage.has(k) ? storage.get(k)! : null),
+      setItem: (k: string, v: string) => void storage.set(k, String(v)),
+      removeItem: (k: string) => void storage.delete(k),
+      clear: () => storage.clear(),
+    });
+  });
+
+  it("honours prefers-reduced-motion and fades the incoming view", () => {
+    const vm = code("lib/viewMode.ts");
+    expect(vm).toContain('window.matchMedia?.("(prefers-reduced-motion: reduce)").matches');
+    expect(vm).toContain("const from = calm ? new Map<string, Box>() : toSky ? paneRects() : _sky?.lineRects() || new Map<string, Box>();");
+    const sheet = css("components/flights/Sky.css");
+    expect(sheet).toMatch(/body\.view-switch #grid,\s*body\.view-switch #sky-view \{[^}]*animation: view-in/);
+    expect(sheet).toMatch(/\.view-ghost \{[^}]*position: fixed;[^}]*pointer-events: none;/);
+  });
+});
