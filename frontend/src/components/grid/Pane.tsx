@@ -109,6 +109,33 @@ function paneTab(t: string, git: boolean): Tab {
  * else (the rail row, a special window's head), so this one wears a minus. */
 const HIDE_TITLE = "Hide window — the session keeps running (show it again from its row)";
 
+/** A Sky card's pane (`embedded`) holds its session's terminals while it is
+ * open: the grid's pane for the same title leaves them where they are (its
+ * ref re-runs on every render and would pull them back), and adopts them
+ * again the moment the last card closes. */
+const embedHolds = new Map<string, number>();
+const embedSubs = new Set<() => void>();
+const notifyHolds = () => embedSubs.forEach((f) => f());
+const subscribeHolds = (f: () => void) => {
+  embedSubs.add(f);
+  return () => {
+    embedSubs.delete(f);
+  };
+};
+function holdTerms(title: string): () => void {
+  embedHolds.set(title, (embedHolds.get(title) || 0) + 1);
+  notifyHolds();
+  return () => {
+    const n = (embedHolds.get(title) || 1) - 1;
+    if (n > 0) embedHolds.set(title, n);
+    else embedHolds.delete(title);
+    notifyHolds();
+  };
+}
+
+/** No-op drag wiring for an embedded pane: it isn't a grid slot. */
+const NO_DRAG: DragCtx = { dragTitle: null, start: () => {}, hover: () => {}, commit: () => {}, end: () => {} };
+
 function queueRelTime(ms: number): string {
   const m = Math.ceil(ms / 60000);
   if (m < 60) return m + "m";
@@ -118,14 +145,26 @@ function queueRelTime(ms: number): string {
 
 export function Pane({
   inst,
-  drag,
-  dragging,
+  drag = NO_DRAG,
+  dragging = false,
+  embedded = false,
 }: {
   inst: Instance;
-  drag: DragCtx;
-  dragging: boolean;
+  drag?: DragCtx;
+  dragging?: boolean;
+  /** Drawn inside a Sky card (flights/SkyLine), not a grid slot: no grip, no
+   * drag, no hide −; the tabs, their bodies and the terminals are the grid's
+   * own (the same per-title tab, the same registry terminals). */
+  embedded?: boolean;
 }) {
   const title = inst.title;
+  // A grid pane whose terminals a Sky card holds right now (holdTerms).
+  const held = useSyncExternalStore(
+    subscribeHolds,
+    () => !embedded && (embedHolds.get(title) || 0) > 0,
+    () => false
+  );
+  useLayoutEffect(() => (embedded ? holdTerms(title) : undefined), [embedded, title]);
   const { data: config } = useConfig();
   const focused = useUi((s) => s.focused === title);
   const alias = useUi((s) => s.aliases[title]);
@@ -156,10 +195,8 @@ export function Pane({
   const newestReport = newestReportTs(family.children);
   // The Map tab's badge: the rail row's zone chip (a breach, an unseen block,
   // the guard off…), else a quiet count of changed files (lib/mapEntry).
-  const mapSeen = useSyncExternalStore(
-    subscribeCodemapSeen,
-    useCallback(() => codemapSeenAt(title), [title])
-  );
+  const seenAt = useCallback(() => codemapSeenAt(title), [title]);
+  const mapSeen = useSyncExternalStore(subscribeCodemapSeen, seenAt, seenAt);
   const rzChip = redZoneChip(inst.redzone, mapSeen);
   const mapBadge = mapTabBadge(rzChip, inst.diff_stat?.files || 0);
   // What the Diff tab reloads on: the session's diff stats moving.
@@ -299,6 +336,7 @@ export function Pane({
   const adopt = useCallback(
     (kind: "agent" | "shell") => (el: HTMLDivElement | null) => {
       if (!el || missing || loading || (kind === "agent" && paused)) return;
+      if (held) return;
       const handle = getTerm(title, kind);
       if (!el.contains(handle.container)) el.appendChild(handle.container);
       handle.onHistoryDrag = (sel, edge, ctx) =>
@@ -325,7 +363,7 @@ export function Pane({
       }
       requestAnimationFrame(() => handle.doFit());
     },
-    [title, missing, loading, paused]
+    [title, missing, loading, paused, held]
   );
 
   // Pausing with the pane open: drop the agent terminal (its socket would
@@ -537,7 +575,7 @@ export function Pane({
 
   // Header drag wiring (shared semantics with special panes).
   const paneRef = useRef<HTMLElement | null>(null);
-  const headDrag = {
+  const headDrag = embedded ? {} : {
     draggable: true,
     onDragStart: (ev: React.DragEvent) => {
       const t = ev.target as HTMLElement;
@@ -551,7 +589,7 @@ export function Pane({
     },
     onDragEnd: () => drag.end(),
   };
-  const paneDrag = {
+  const paneDrag = embedded ? {} : {
     onDragOver: (ev: React.DragEvent) => {
       if (!drag.dragTitle) return;
       ev.preventDefault();
@@ -621,31 +659,33 @@ export function Pane({
     return (
       <section
         ref={paneRef as React.RefObject<HTMLElement>}
-        className={"pane missing-pane" + (focused ? " focused" : "")}
+        className={"pane missing-pane" + (focused ? " focused" : "") + (embedded ? " pane-embedded" : "")}
         data-title={title}
         {...paneDrag}
       >
         <div className="pane-head" {...headDrag}>
-          <span className="grip" title="Drag to move this window">⠿</span>
+          {!embedded && <span className="grip" title="Drag to move this window">⠿</span>}
           <span className="title" title={nameTip}>{titleText}</span>
           <span className="stagechip s-missing" title="Workspace directory no longer exists">
             missing workspace
           </span>
           <span className="state">workspace gone</span>
-          <div className="head-tail">
-            <button
-              className="act pane-close"
-              type="button"
-              aria-label="Hide window"
-              title={HIDE_TITLE}
-              onClick={(e) => {
-                e.stopPropagation();
-                useUi.getState().setHidden(title, true);
-              }}
-            >
-              −
-            </button>
-          </div>
+          {!embedded && (
+            <div className="head-tail">
+              <button
+                className="act pane-close"
+                type="button"
+                aria-label="Hide window"
+                title={HIDE_TITLE}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  useUi.getState().setHidden(title, true);
+                }}
+              >
+                −
+              </button>
+            </div>
+          )}
         </div>
         <div className="pane-body">
           <div className="missing-body">
@@ -680,24 +720,26 @@ export function Pane({
         {...paneDrag}
       >
         <div className="pane-head" {...headDrag}>
-          <span className="grip" title="Drag to move this window">⠿</span>
+          {!embedded && <span className="grip" title="Drag to move this window">⠿</span>}
           <span className="title" title={nameTip}>{titleText}</span>
           <span className="branch">{inst.branch ? "(" + displayBranch(inst) + ")" : ""}</span>
           <span className="state">provisioning…</span>
-          <div className="head-tail">
-            <button
-              className="act pane-close"
-              type="button"
-              aria-label="Hide window"
-              title={HIDE_TITLE}
-              onClick={(e) => {
-                e.stopPropagation();
-                useUi.getState().setHidden(title, true);
-              }}
-            >
-              −
-            </button>
-          </div>
+          {!embedded && (
+            <div className="head-tail">
+              <button
+                className="act pane-close"
+                type="button"
+                aria-label="Hide window"
+                title={HIDE_TITLE}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  useUi.getState().setHidden(title, true);
+                }}
+              >
+                −
+              </button>
+            </div>
+          )}
         </div>
         <div className="pane-body">
           <div className="provisioning">
@@ -1102,7 +1144,8 @@ export function Pane({
     ),
     cost: <SessionUsageChip key="cost" inst={inst} />,
     diffstat: hasDiffStat ? <CtxLine key="diffstat" inst={inst} /> : null,
-    hide: (
+    // A Sky card isn't a grid slot: nothing to hide it from.
+    hide: embedded ? null : (
       <button
         key="hide"
         className="act pane-close"
@@ -1122,9 +1165,11 @@ export function Pane({
   return (
     <section
       ref={paneRef as React.RefObject<HTMLElement>}
-      className={"pane" + (focused ? " focused" : "") + (dragging ? " dragging" : "")}
+      className={"pane" + (focused ? " focused" : "") + (dragging ? " dragging" : "") + (embedded ? " pane-embedded" : "")}
       data-title={title}
-      onMouseDown={() => selectSession(title, { noKeyboard: true })}
+      // In a Sky card a press makes it the session the keyboard is in, without
+      // rearranging the grid behind the sky (selectSession's MRU/unhide).
+      onMouseDown={() => (embedded ? useUi.getState().setFocused(title) : selectSession(title, { noKeyboard: true }))}
       {...paneDrag}
     >
       <div
@@ -1133,7 +1178,7 @@ export function Pane({
         data-fit-key={fitKeyNow}
         {...headDrag}
       >
-        <span className="grip" title="Drag to move this window">⠿</span>
+        {!embedded && <span className="grip" title="Drag to move this window">⠿</span>}
         <span className="title" title={nameTip}>
           {titleText}
         </span>
