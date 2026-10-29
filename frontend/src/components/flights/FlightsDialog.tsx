@@ -3,8 +3,11 @@
  * Intake, Verify and Schedule were three top-bar surfaces that were really one
  * journey seen from three sides; this dialog is the journey. Its tabs:
  *
- *   Board       the live view: what needs you, what is in flight, what is
- *               waiting to fly, what landed
+ *   Sky         the open expanse: every session a line of blocks floating in
+ *               it (pan, zoom, drag a line anywhere), the bird on each
+ *               line's active box, a new session started from the space, and
+ *               the drawer of what is perched on you (Sky.tsx). On this tab
+ *               the dialog takes the whole window (`.sky-full`).
  *   Flyways     the flyways (the wire's `plans`) on the canvas, and the editor
  *   Sources     Intake's tabs, mounted as they are (IntakeDialog embedded)
  *   Schedule    the templates view, mounted as it is (TemplatesDialog embedded)
@@ -12,7 +15,9 @@
  *
  * The tab lives in the store's dialogTarget (`<tab>[/<deep link>]`, lib/flights
  * parseFlightsTarget), so the URL hash follows it and every old deep link —
- * openDialogFor("intake" | "verify" | "schedule", …) — lands on its tab. */
+ * openDialogFor("intake" | "verify" | "schedule", …) — lands on its tab, and
+ * the old Board's (`board`) lands on the Sky. `sky/<title>` is the Sky on one
+ * session (the pane's "Open in the Sky", the session ⋯ "Show in the Sky"). */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useUi } from "../../state/store";
@@ -26,7 +31,7 @@ import { TemplatesDialog } from "../dialogs/TemplatesDialog";
 import { prefetchIntakeMeta, prefetchIntakePanels, useFlights } from "../../state/queries";
 import { FLIGHTS_TABS, FLIGHTS_TAB_LABEL, needsYouFlights, parseFlightsTarget, type FlightsTab } from "../../lib/flights";
 import { FLIGHTS_TOUR } from "../../lib/tours/flights";
-import { Board } from "./Board";
+import { Sky } from "./Sky";
 import { Plans } from "./PlanEditor";
 import { embeddedGuard } from "./embedGuard";
 import { Bird } from "./Bird";
@@ -100,7 +105,9 @@ export function FlightsDialog() {
   return (
     <Modal
       id="flights-dialog"
-      className="top-dialog"
+      // The Sky fills the window (no card margins); every other tab is the
+      // top-bar card (Modal.css).
+      className={"top-dialog" + (tab === "sky" ? " sky-full" : "")}
       role="dialog"
       aria-modal="true"
       aria-labelledby="flights-title"
@@ -151,7 +158,7 @@ export function FlightsDialog() {
               onKeyDown={(e) => onTabKey(e, i)}
             >
               {FLIGHTS_TAB_LABEL[t]}
-              {t === "board" && waiting > 0 && <span className="fl-count fl-count-you">{waiting}</span>}
+              {t === "sky" && waiting > 0 && <span className="fl-count fl-count-you">{waiting}</span>}
             </button>
           ))}
         </div>
@@ -174,7 +181,7 @@ export function FlightsDialog() {
         )}
         <div id="flights-body" className={"fl-body fl-body-" + tab}>
           <section key={tab} id={"flights-tabpanel-" + tab} className="fl-panel" role="tabpanel" aria-labelledby={"flights-tab-" + tab}>
-            {tab === "board" && <Board onTab={(t, deep) => switchTab(t, deep)} />}
+            {tab === "sky" && <Sky focus={rest} onTab={(t, deep) => switchTab(t, deep)} />}
             {tab === "plans" && <Plans initialPlan={rest} onDirty={onDirty} />}
             {tab === "sources" && <IntakeDialog embedded target={rest || null} />}
             {tab === "schedule" && <TemplatesDialog embedded target={rest || null} />}

@@ -1,9 +1,10 @@
 /** Flights on screen (server-rendered, mocked API): the flyway canvas (boxes
  * in order, connectors = stops − 1, live states, a perch's Done / Skip inside
- * its box), a flight's card on the Board, the pane's one-line strip and its
- * Flight tab (the session diagram), the dialog's tabs, the Board's groups
- * (Waiting to fly, kind badges, flyway chips — never a <select>), and the
- * Flyways editor. Bird words throughout, never a plane. */
+ * its box), a flight's card (the drawer's Landed), the pane's one-line strip
+ * and its Flight tab (the session diagram), the dialog's tabs, the Sky (every
+ * session a line, the bird, the drawer of what is perched on you, Waiting to
+ * fly with kind badges and flyway chips — never a <select>), and the Flyways
+ * editor. Bird words throughout, never a plane. */
 
 /// <reference types="vite/client" />
 import { createElement, type ReactElement } from "react";
@@ -157,7 +158,7 @@ describe("the flyway canvas", () => {
   });
 });
 
-describe("a flight's card on the Board", () => {
+describe("a flight's card", () => {
   const card = (f: Flight, expand = false) => withClient(createElement(FlightCard, { flight: f, kinds: KINDS, expand }), (c) => c.setQueryData(["flights"], [f]));
   const html = card(flight(), true);
 
@@ -304,6 +305,9 @@ describe("the pane's Flight tab: the session diagram", () => {
     expect(html).toContain(">Fly this flyway</button>");
     expect(html).toContain('class="fl-mini-box fl-perch"');
     expect(html).toContain(">Describe a flyway</button>");
+    // Its line in the Sky, one press away; no bird while the session idles.
+    expect(html).toMatch(/class="linklike fl-open-sky"[^>]*>Open in the Sky<\/button>/);
+    expect(html).not.toContain("fl-bird-marker");
   });
 });
 
@@ -313,7 +317,12 @@ describe("the dialog", () => {
     // A server render reads the store's initial state (getServerSnapshot).
     Object.assign(useUi.getInitialState(), useUi.getState());
     return withClient(createElement(FlightsDialog), (c) => {
-      c.setQueryData(["flights"], [flight(), flight({ id: "f_2", state: "running", cursor: 1, step_states: {}, subject: { ...flight().subject, title: "Second" } })]);
+      c.setQueryData(["instances"], [
+        { title: "sc-12-fix-login", status: "running", activity: "idle", stage: "pushed", task_headline: "Fix the login", parent: "", autopilot: null, flight: { id: "f_1", plan_name: "Ticket to merge", cursor: 2, total: 4, state: "waiting_you", step: { id: "s3", kind: "you", title: "Approve the merge", state: "waiting_you", actor: "you" } } },
+        { title: "second", status: "running", activity: "working", stage: "agent", task_headline: "Second", parent: "", autopilot: null, flight: { id: "f_2", plan_name: "Ticket to merge", cursor: 1, total: 4, state: "running", step: { id: "s2", kind: "ship", title: "Push", state: "running", actor: "robot" } } },
+        { title: "verify-helper", status: "running", activity: "idle", stage: "agent", parent: "", hidden_by: "verify", flight: null, autopilot: null },
+      ]);
+      c.setQueryData(["flights"], [flight(), flight({ id: "f_2", session: "second", state: "running", cursor: 1, step_states: {}, subject: { ...flight().subject, title: "Second" } })]);
       c.setQueryData(["flight-plans"], [PLAN]);
       c.setQueryData(["flight-kinds"], KINDS);
       c.setQueryData(["test-plans"], { plans: [] });
@@ -324,26 +333,53 @@ describe("the dialog", () => {
   it("has the five tabs, in the contract's order — the second one is Flyways", () => {
     const html = render(null);
     const tabs = [...html.matchAll(/data-flights-tab="([a-z]+)"/g)].map((m) => m[1]);
-    expect(tabs).toEqual(["board", "plans", "sources", "schedule", "checklists"]);
+    expect(tabs).toEqual(["sky", "plans", "sources", "schedule", "checklists"]);
+    expect(html).toMatch(/data-flights-tab="sky"[^>]*>Sky</);
     expect(html).toContain('id="flights-tab-plans"');
     expect(html).toMatch(/data-flights-tab="plans"[^>]*>Flyways</);
     expect(html).toContain('id="flights-dialog"');
     expect(html).toContain(">Flights</h2>");
   });
 
-  it("the Board: Needs you, In flight, Waiting to fly — loudest first; no Arrivals, no plane", () => {
-    const html = render("board");
-    const n = html.indexOf("Needs you");
-    const f = html.indexOf("In flight");
-    const w = html.indexOf("Waiting to fly");
-    expect(n).toBeGreaterThan(0);
-    expect(n < f && f < w).toBe(true);
-    expect(html).not.toContain("Arrivals");
+  it("the Sky: the whole window, every session a line with the bird on its active box — hidden helpers left out", () => {
+    const html = render(null);
+    expect(html).toMatch(/<div id="flights-dialog"[^>]*class="modal top-dialog sky-full"/);
+    expect(html).toContain('data-tour="flights-sky"');
+    // One line per session, newest first; the verify helper has none.
+    expect([...html.matchAll(/data-line="([^"]+)"/g)].map((m) => m[1])).toEqual(["second", "sc-12-fix-login"]);
+    expect(html).not.toContain('data-line="verify-helper"');
+    // Each line: its bar (name, state chip, ⋯), its diagram, the trailing +.
+    const line = html.slice(html.indexOf('data-line="sc-12-fix-login"'));
+    expect(line).toContain('class="sky-line-name">sc-12-fix-login<');
+    expect(line).toContain('aria-label="Actions for sc-12-fix-login"');
+    expect(line).toContain(">Tack on a stop<");
+    // The bird: gold on the perch, flying on the running stop.
+    expect(line).toMatch(/class="fl-bird-marker tone-you"[^>]*aria-label="The bird: perched on you at Perch: Approve the merge"/);
+    expect(html.slice(html.indexOf('data-line="second"'))).toContain('class="fl-bird-marker tone-working"');
+    // The toolbar: the views, find, + New session, the zoom.
+    for (const w of [">All<", ">Mine<", ">Perched on you<", ">This session<", ">+ New session<", ">Fit<", ">100%<", 'aria-label="Find a line"'])
+      expect(html).toContain(w);
+    expect(html).toContain('data-tour="flights-newblock"');
     expect(html).not.toContain("✈");
-    expect(html).toContain('data-tour="flights-board"');
-    // The perched flight is under Needs you, the running one under In flight.
-    expect(html.indexOf("Fix the login")).toBeLessThan(f);
-    expect(html.indexOf("Second")).toBeGreaterThan(f);
+  });
+
+  it("the drawer keeps what the Board showed: Perched on you with the perch's Done / Skip, then Waiting to fly", () => {
+    const html = render("board");
+    expect(html).toContain('data-tour="flights-sky"');
+    const drawer = html.slice(html.indexOf('class="sky-drawer open"'));
+    expect(drawer).toContain('id="fl-group-needs-h"');
+    expect(drawer).toContain(">Fix the login</button>");
+    expect(drawer).toContain("Perch: Approve the merge");
+    expect(drawer).toMatch(/class="btn-primary fl-btn fl-done"[^>]*>Done<\/button>/);
+    expect(drawer.indexOf("Perched on you")).toBeLessThan(drawer.indexOf("Waiting to fly"));
+    // The running flight isn't perched: not in the drawer.
+    expect(drawer).not.toContain(">Second</button>");
+  });
+
+  it("one session's sky: only its line, its workers folded in", () => {
+    const html = render("sky/second");
+    expect([...html.matchAll(/data-line="([^"]+)"/g)].map((m) => m[1])).toEqual(["second"]);
+    expect(html).toMatch(/aria-checked="true" class="fl-pick on"[^>]*data-value="one">This session</);
   });
 
   it("the Flyways editor: the canvas, + between stops, Describe a stop, the inspector — and not one native <select>", () => {
@@ -413,7 +449,7 @@ describe("the stylesheets", () => {
 
 describe("no native <select> in Flights", () => {
   it("not one in its components", () => {
-    for (const f of ["Board", "PlanEditor", "PlanSelect", "FlightStrip", "SessionFlight", "StopParts", "FlywayCanvas", "controls"])
+    for (const f of ["Sky", "SkyDrawer", "useSessionLine", "PlanEditor", "PlanSelect", "FlightStrip", "SessionFlight", "StopParts", "FlywayCanvas", "controls"])
       expect(code("components/flights/" + f + ".tsx"), f).not.toMatch(/<select/);
   });
 });
@@ -465,8 +501,8 @@ describe("a source's flyway chips (Flights → Sources)", () => {
     expect(code("components/intake/RepoSources.tsx")).toContain('kind={use === "pr" ? "prs" : "issues"}');
   });
 
-  it("the Board's waiting rows: a kind heading, a badge on every row, Fly, and the flyway chips on the source's flyway", () => {
-    useUi.setState({ openDialog: "flights", dialogTarget: "board" } as never);
+  it("the drawer's waiting rows: a kind heading, a badge on every row, Fly, and the flyway chips on the source's flyway", () => {
+    useUi.setState({ openDialog: "flights", dialogTarget: "sky" } as never);
     Object.assign(useUi.getInitialState(), useUi.getState());
     const html = withClient(createElement(FlightsDialog), (c) => {
       c.setQueryData(["flights"], []);
@@ -499,9 +535,11 @@ describe("the wiring outside Flights", () => {
     expect(code("lib/paneHeader.ts")).toContain('!(id === "flight" && !ctx.flight && ctx.active !== "flight")');
   });
 
-  it("the session ⋯ offers Fly a flyway…, which opens that tab", () => {
+  it("the session ⋯ offers Fly a flyway…, which opens that tab, and Show in the Sky", () => {
     const menu = code("lib/sessionMenu.ts");
     expect(menu).toContain('label: "Fly a flyway…"');
     expect(menu).toContain('run: () => openTab(title, "flight")');
+    expect(menu).toContain('label: "Show in the Sky"');
+    expect(menu).toContain('run: () => useUi.getState().openDialogFor("flights", skyTarget(title))');
   });
 });

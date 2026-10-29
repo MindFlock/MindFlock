@@ -25,6 +25,18 @@ export function Bird({ size = 16, className = "" }: { size?: number; className?:
   );
 }
 
+/** The bird on a line (the Sky, the pane's Flight tab): the glyph, bigger,
+ * standing on the box the flight is at. It bobs while the flock works, sits
+ * gold and still when perched on you, red when halted; placed by `left` /
+ * `top` so a move to the next box is a hop (a CSS transition), not a jump. */
+export function BirdMarker({ tone, x, y, label }: { tone: string; x: number; y: number; label: string }) {
+  return (
+    <span className={"fl-bird-marker tone-" + tone} style={{ left: x, top: y }} role="img" aria-label={label} title={label} data-tour="flights-bird">
+      <Bird size={22} className="fl-bird-big" />
+    </span>
+  );
+}
+
 /** A stop's icon by its kind (the palette, the boxes, the inspector's head).
  * Stroke icons in the pane tabs' hand; a perch is the bird on its branch. */
 export function StopIcon({ kind, size = 15 }: { kind: string; size?: number }) {

@@ -48,7 +48,8 @@ export function hashFor(name: DialogName | null, target: string | null): string 
     // (#flights/checklists/feature%2Fx); Schedule's internal "new" is left
     // out, as it always was.
     const t = String(target || "").replace(/^schedule\/new$/, "schedule");
-    if (!t || t === "board") return "#flights";
+    // The Sky is the landing tab (the old Board's `board` lands there too).
+    if (!t || t === "sky" || t === "board") return "#flights";
     const cut = t.indexOf("/");
     return "#flights/" + (cut < 0 ? encodeURIComponent(t) : encodeURIComponent(t.slice(0, cut)) + "/" + encodeURIComponent(t.slice(cut + 1)));
   }

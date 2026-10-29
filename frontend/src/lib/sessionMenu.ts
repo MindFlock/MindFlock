@@ -43,6 +43,7 @@ import { flockTooltip } from "./workersRequest";
 import { errorPop } from "./errorPop";
 import { errMsg } from "./format";
 import { toast } from "./toast";
+import { skyTarget } from "./skyLayout";
 
 export interface MenuItem {
   /** Stable id (data-menu): tests and the pane/row tell items apart by it. */
@@ -298,6 +299,16 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
         label: "Fly a flyway…",
         title: "Open this session's Flight tab: tack stops onto its line, or fly a whole flyway",
         run: () => openTab(title, "flight"),
+      },
+    // The Sky on this one session: its line filling the sky, the bird where
+    // it is (docs/flights.md "The Sky").
+    !remote &&
+      !peer &&
+      !inst.pending && {
+        key: "sky",
+        label: "Show in the Sky",
+        title: "Open Flights → Sky on this session's line, with the bird where it is",
+        run: () => useUi.getState().openDialogFor("flights", skyTarget(title)),
       },
     fromTable("thread", { note: actionNote("thread", ctx) }),
     opts.onHistory && {
