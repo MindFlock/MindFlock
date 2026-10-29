@@ -57,7 +57,7 @@ def test_no_reply_address_when_not_shared_back_or_sandboxed():
     assert "send_message" not in line
     # A gated (sandboxed) session answers with peer_send — when shared back.
     line, _ = mailbox.render_delivery(_post(mode="gated"), "codex")
-    assert 'peer_send to="' in line and 'reply_to="' in line
+    assert "peer_send" in line and 'to="Bob::fix-login" reply_to="' in line
     assert "send_message" not in line
     line, _ = mailbox.render_delivery(_post(mode="gated", reply_ok=False), "codex")
     assert "No reply address: their session is not shared with you." in line
