@@ -152,7 +152,10 @@ def test_never_to_a_session_not_shared_on_the_link(svc, engine):
     assert mailbox.fetch("api-fix", unread_only=False)["messages"] == []
 
 
-def test_gated_session_has_no_reply_address(svc, engine):
+def test_gated_session_reply_address_follows_reply_ok(svc, engine):
+    """A gated session answers with peer_send (its MCP's agent_msg op) —
+    when the sender's session is shared back; otherwise it is told so, the
+    same way a full session is. Never send_message: it has no host tools."""
     lnk = link(share_id=SHARE_ID, session_title="peer-bob-abab")
     svc.store.links[LID] = lnk
     svc.shared_sessions.add(LID, "peer-bob-abab", "gated")
@@ -160,8 +163,12 @@ def test_gated_session_has_no_reply_address(svc, engine):
     msg = mailbox.get("peer-bob-abab", out["id"])
     assert msg["data"]["mode"] == "gated"
     line, _ = mailbox.render_delivery(msg, "claude")
-    assert "No reply address from this sandboxed session" in line
     assert "send_message" not in line
+    if msg["data"].get("reply_ok") is True:
+        assert 'mcp__mindflock__peer_send to="' in line and 'reply_to="' in line
+    else:
+        assert "No reply address: their session is not shared with you" in line
+        assert "peer_send" not in line
 
 
 def test_the_sandboxed_session_answers_over_its_link(theirs, engine):

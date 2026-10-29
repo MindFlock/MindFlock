@@ -55,8 +55,13 @@ def test_no_reply_address_when_not_shared_back_or_sandboxed():
     line, _ = mailbox.render_delivery(_post(reply_ok=False), "codex")
     assert "No reply address: their session is not shared with you." in line
     assert "send_message" not in line
+    # A gated (sandboxed) session answers with peer_send — when shared back.
     line, _ = mailbox.render_delivery(_post(mode="gated"), "codex")
-    assert "No reply address from this sandboxed session." in line
+    assert 'peer_send to="' in line and 'reply_to="' in line
+    assert "send_message" not in line
+    line, _ = mailbox.render_delivery(_post(mode="gated", reply_ok=False), "codex")
+    assert "No reply address: their session is not shared with you." in line
+    assert "peer_send" not in line
 
 
 def test_no_reply_hint_deep_in_a_chain():
@@ -70,7 +75,7 @@ def test_long_body_is_a_notice():
     line, full = mailbox.render_delivery(_post("y" * 3000), "claude")
     assert not full and "mcp__mindflock__check_inbox" in line
     line, full = mailbox.render_delivery(_post("y" * 3000, mode="gated"), "claude")
-    assert not full and "ask your user" in line
+    assert not full and "mcp__mindflock__peer_inbox" in line
 
 
 def test_neither_half_alone_borrows_the_framing():
