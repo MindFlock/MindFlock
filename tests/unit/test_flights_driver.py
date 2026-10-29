@@ -460,9 +460,23 @@ def test_start_attach_and_create(srv, monkeypatch):
     with pytest.raises(F.FlightError) as err:
         run(D.start({"plan_id": "nope"}))
     assert err.value.status == 404
-    with pytest.raises(F.FlightError) as err:
-        run(D.start({"plan_id": plan["id"], "subject": {"kind": "ticket", "id": "1"}}))
-    assert (err.value.status, err.value.error) == (501, "not_wired")
+    # No 501 any more: a subject of any kind is recorded on the flight.
+    srv.ENGINE.instances["t1"] = FakeInst()
+    tf = run(
+        D.start(
+            {
+                "plan_id": plan["id"],
+                "title": "t1",
+                "subject": {
+                    "kind": "ticket",
+                    "source": "sc",
+                    "id": "1",
+                    "title": "Fix",
+                },
+            }
+        )
+    )
+    assert tf["subject"]["kind"] == "ticket" and tf["subject"]["id"] == "1"
 
     created = []
     import backend.web.core.session_create as sc

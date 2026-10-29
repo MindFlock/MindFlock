@@ -1178,16 +1178,6 @@ async def start(body: dict) -> dict:
     if plan is None:
         raise _flights.FlightError("unknown_plan", 404, "no such plan")
     subject = _subject_of(body.get("subject"))
-    if isinstance(body.get("subject"), dict) and subject["kind"] in (
-        "ticket",
-        "pr",
-        "issue",
-    ):
-        raise _flights.FlightError(
-            "not_wired",
-            501,
-            "starting a ticket, PR or issue flight goes through Intake (not wired yet)",
-        )
     by = str(body.get("by") or "user")
     title = str(body.get("title") or "").strip()
     start_at = str(body.get("start_at") or "").strip()

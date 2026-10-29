@@ -757,9 +757,8 @@ def list_plans() -> List[dict]:
 
 
 def get_plan(plan_id: str) -> Optional[dict]:
-    """A plan by id. ``builtin:<kind>@<lane>`` is a VIRTUAL plan: that
-    built-in (as edited) cut after its matching ship step — what a per-source
-    depth means (see :func:`plan_for_depth`)."""
+    """A plan by id. ``builtin:<kind>@<lane>`` is a VIRTUAL plan: the ship
+    ladder a per-source fast-track depth means (see :func:`plan_for_depth`)."""
     pid = str(plan_id or "")
     m = _CUT_RE.match(pid)
     with _LOCK:
@@ -770,41 +769,55 @@ def get_plan(plan_id: str) -> Optional[dict]:
     base = plans.get(m.group(1))
     if base is None:
         return None
-    cut = _cut_index(base["steps"], m.group(2))
-    plan = copy.deepcopy(base)
-    if cut is not None:
-        plan["steps"] = plan["steps"][: cut + 1]
-        label = {"commit": "Commit", "push": "Push", "pr": "Open PR", "merge": "Merge"}
-        plan["name"] = "%s (to %s)" % (base["name"], label[m.group(2)])
-    plan["id"] = pid
-    return plan
+    return _ladder_plan(pid, base, m.group(2))
 
 
-def _cut_index(steps: List[dict], lane: str) -> Optional[int]:
-    for i, s in enumerate(steps):
-        if s["kind"] == "ship" and s["config"].get("lane") == lane:
-            return i
-    return None
+_LANE_LABEL = {"commit": "Commit", "push": "Push", "pr": "Open PR", "merge": "Merge"}
+
+
+def _ladder_plan(pid: str, base: dict, depth: str) -> dict:
+    """The SHIP LADDER for ``depth``: ``base``'s first agent step (as edited),
+    then commit → push → pr → merge cut at ``depth``, nothing else. This is
+    what a per-source depth did before Flights existed (a fast-track), so an
+    existing setup gains no verify / reviews / checks / you / ticket step it
+    never asked for; the full built-in is opt-in (pick it as the plan)."""
+    steps: List[dict] = []
+    agent = next((s for s in base["steps"] if s["kind"] == "agent"), None)
+    if agent is not None:
+        steps.append(dict(copy.deepcopy(agent), id="s1", on_fail="halt"))
+    for lane in SHIP_LANES[: SHIP_LANES.index(depth) + 1]:
+        steps.append(
+            {
+                "id": "s%d" % (len(steps) + 1),
+                "kind": "ship",
+                "title": _LANE_LABEL[lane],
+                "config": {"lane": lane, "ask_first": False, "message": ""},
+                "on_fail": "halt",
+            }
+        )
+    return {
+        "id": pid,
+        "name": "Fast-track to %s" % _LANE_LABEL[depth],
+        "description": "The plain fast-track ladder: the agent, then %s."
+        % " → ".join(_LANE_LABEL[l] for l in SHIP_LANES[: SHIP_LANES.index(depth) + 1]),
+        "builtin": True,
+        "trigger": copy.deepcopy(base["trigger"]),
+        "session": copy.deepcopy(base["session"]),
+        "steps": steps,
+        "updated": base["updated"],
+    }
 
 
 def plan_for_depth(kind: str, depth: str) -> str:
     """The plan a per-source fast-track ``depth`` means for an intake ``kind``
-    (``ticket``/``pr``/``issue``/``schedule``): the built-in cut after the
-    matching ship step, ``""`` for ``off``/``agent``/unknown. ``merge`` — and
-    a depth the built-in has no ship step for, or whose step is its last — is
-    the whole built-in (a merged ticket still gets its closing comment)."""
+    (``ticket``/``pr``/``issue``/``schedule``): ``builtin:<kind>@<depth>``,
+    the ship ladder only (:func:`_ladder_plan`) — every existing setup behaves
+    exactly as before. ``""`` for ``off``/``agent``/unknown. An issue uses
+    the ticket built-in's agent step."""
     base = _BUILTIN_FOR_KIND.get(str(kind or "").strip().lower())
     depth = str(depth or "").strip().lower()
     if base is None or depth not in SHIP_LANES:
         return ""
-    if depth == "merge":
-        return base
-    plan = get_plan(base)
-    if plan is None:
-        return ""
-    cut = _cut_index(plan["steps"], depth)
-    if cut is None or cut == len(plan["steps"]) - 1:
-        return base
     return "%s@%s" % (base, depth)
 
 
