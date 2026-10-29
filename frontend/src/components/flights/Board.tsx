@@ -16,7 +16,7 @@ import { byGroup } from "../intake/queue";
 import { isFailing, isWaitingOnYou, planName } from "../dialogs/verify";
 import { FlightCard } from "./FlightStrip";
 import { useArrivals, type Arrival } from "./useArrivals";
-import { builtinPlanFor, isLive, needsYouFlights, type Flight, type FlightPlan } from "../../lib/flights";
+import { builtinPlanFor, isLive, planChoices, needsYouFlights, type Flight, type FlightPlan } from "../../lib/flights";
 import { startArrival, type ArrivalTarget } from "../../lib/flightsApi";
 
 /** The plan a source names for its flights (`TicketingSource.plan`,
@@ -89,11 +89,12 @@ function ArrivalRow({
   settings: Record<string, unknown> | undefined;
 }) {
   const t = a.item.target as ArrivalTarget;
+  // The source's own plan (its card's Plan picker) is the default; a pick
+  // here overrides it for this start only. `null` = follow the source, so a
+  // settings document that loads after the row still decides.
   const own = sourcePlan(settings, t);
-  const [plan, setPlan] = useState(own);
-  // The kind's own built-in when the server has one (builtin:issue may ship),
-  // else the ticket plan.
-  const builtin = plans.find((p) => p.id === builtinPlanFor(a.item.kind, plans));
+  const [picked, setPlan] = useState<string | null>(null);
+  const plan = picked ?? own;
   return (
     <div className="fl-arrival">
       <WorkItemRow
@@ -110,7 +111,10 @@ function ArrivalRow({
         actionLabel="Start"
         failPrefix="Start failed"
         onStart={async ({ agent, depth, effort, repo }) => {
-          const title = await startArrival(t, plan, { agent, depth, effort, repo }, a.item.kind === "tickets" ? a.item.reference : "");
+          // The empty choice is the kind's built-in: sent as such when the
+          // source names a plan of its own (else the server would use that).
+          const send = plan || (own ? builtinPlanFor(a.item.kind, plans) : "");
+          const title = await startArrival(t, send, { agent, depth, effort, repo }, a.item.kind === "tickets" ? a.item.reference : "");
           // Starting opens the session (startArrival selects it as soon as its
           // row exists): the dialog steps aside, as a template's Run now does.
           useUi.getState().closeDialog();
@@ -120,11 +124,9 @@ function ArrivalRow({
           <label className="fl-plan-pick" title="The plan this flight follows">
             <span className="fl-plan-pick-label">Plan</span>
             <select value={plan} onChange={(e) => setPlan(e.target.value)} aria-label="Plan">
-              <option value="">{own ? "Source's plan" : (builtin?.name || "Built-in plan") + " (default)"}</option>
-              {plans.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                  {p.builtin ? " (built-in)" : ""}
+              {planChoices(plans, a.item.kind, plan).map((o) => (
+                <option key={o.value || "default"} value={o.value}>
+                  {o.label}
                 </option>
               ))}
             </select>

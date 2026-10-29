@@ -297,7 +297,16 @@ strip, Plans, Describe a step.
   choice ("<built-in> (default)", or "Source's plan" when the source names
   one) leaves the server's own resolution — and so the depth cut — in charge.
   The built-in it names is `builtin:<kind>` (ticket / pr / issue) when the
-  plans list has it, else `builtin:ticket`.
+  plans list has it, else `builtin:ticket`. An arrival's picker starts on its
+  source's `plan` when one is set; picking the empty choice there then sends
+  the built-in's id, since "" would mean the source's plan.
+- **The source cards' Plan picker** (Sources tab) writes `plan` with the
+  card's existing save: on the ticketing source via `PUT
+  /api/settings/ticketing/sources`, under `github.repo_settings[repo]` /
+  `github.issue_repo_settings[repo]` via `POST /api/settings`. Empty clears the
+  key. A stored plan id the list no longer has stays selectable as
+  "<id> (not found)". The Fast-track picker stays beside it (it is the default
+  plan's cut).
 - **Select fields** in `GET /api/flights/kinds` may list `options` as plain
   strings or `{value, label}`; both are read.
 - **Badge.** A flight parked on a `verify` step is counted once, as Verify's

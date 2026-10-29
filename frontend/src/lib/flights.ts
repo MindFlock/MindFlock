@@ -500,3 +500,27 @@ export function scheduleOfWhen(f: WhenForm): FlightSchedule | null {
   if (f.days === "once") return f.date && f.at ? { once: f.date + "T" + f.at } : null;
   return f.at ? { at: f.at, days: f.days } : null;
 }
+
+// --- A source's plan picker ----------------------------------------------------
+
+/** The options of a source's Plan picker (and an arrival's): the empty choice
+ * first — "<the kind's built-in> (default)", which the server cuts at the
+ * source's Fast-track depth — then every plan, built-ins first. A stored plan
+ * the list no longer has is kept as its own option, so a save never drops it
+ * silently. */
+export function planChoices(
+  plans: readonly Pick<FlightPlan, "id" | "name" | "builtin">[],
+  kind: ArrivalKind,
+  value = ""
+): Array<{ value: string; label: string }> {
+  const builtin = plans.find((p) => p.id === builtinPlanFor(kind, plans));
+  const ordered = [...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)];
+  const out = [{ value: "", label: (builtin?.name || "Built-in plan") + " (default)" }];
+  for (const p of ordered) out.push({ value: p.id, label: p.name + (p.builtin ? " (built-in)" : "") });
+  if (value && !plans.some((p) => p.id === value)) out.push({ value, label: value + " (not found)" });
+  return out;
+}
+
+/** The per-source setting's key: `TicketingSource.plan`,
+ * `github.repo_settings[repo].plan`, `github.issue_repo_settings[repo].plan`. */
+export const PLAN_FIELD = "plan";

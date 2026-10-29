@@ -8,7 +8,7 @@
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { css } from "./sourceText";
+import { code, css } from "./sourceText";
 import type { Flight, FlightPlan, FlightStep, StepKindDef } from "../lib/flights";
 
 vi.mock("../api/client", () => ({ api: vi.fn(() => new Promise(() => {})), ApiError: class extends Error {} }));
@@ -20,6 +20,10 @@ const { useUi } = await import("../state/store");
 const { BlockChips, FlightCard, PaneFlightStrip } = await import("../components/flights/FlightStrip");
 const { FlightsDialog } = await import("../components/flights/FlightsDialog");
 const { Plans } = await import("../components/flights/PlanEditor");
+const { PlanSelect } = await import("../components/flights/PlanSelect");
+const { planChoices } = await import("../lib/flights");
+const { putBody } = await import("../components/intake/sourceForm");
+const { fieldPatch } = await import("../components/intake/repoUses");
 
 // The queries' poll intervals read `document.hidden`; a server render has no
 // document, so a quiet one stands in (after the imports: some modules probe
@@ -283,5 +287,75 @@ describe("the stylesheet", () => {
   it("scrolls the block row inside itself, never the page", () => {
     expect(sheet).toMatch(/\.fl-row-scroll \{[^}]*overflow-x: auto/);
     expect(sheet).toMatch(/\.fl-body \{[^}]*overflow-x: hidden/);
+  });
+});
+
+describe("a source's Plan picker (Flights → Sources)", () => {
+  const PLANS: FlightPlan[] = [
+    { ...PLAN, id: "builtin:ticket", name: "Ticket to merge" },
+    { ...PLAN, id: "p_mine", name: "Mine", builtin: false },
+    { ...PLAN, id: "builtin:pr", name: "Pull request" },
+  ];
+
+  it("offers the kind's built-in as the default, then every plan, built-ins first", () => {
+    expect(planChoices(PLANS, "tickets")).toEqual([
+      { value: "", label: "Ticket to merge (default)" },
+      { value: "builtin:ticket", label: "Ticket to merge (built-in)" },
+      { value: "builtin:pr", label: "Pull request (built-in)" },
+      { value: "p_mine", label: "Mine" },
+    ]);
+    expect(planChoices(PLANS, "prs")[0].label).toBe("Pull request (default)");
+    // An issue repo without builtin:issue on this server: the ticket plan.
+    expect(planChoices(PLANS, "issues")[0].label).toBe("Ticket to merge (default)");
+    // A stored plan the list lost is kept, never silently dropped.
+    expect(planChoices(PLANS, "tickets", "p_gone").at(-1)).toEqual({ value: "p_gone", label: "p_gone (not found)" });
+  });
+
+  it("renders on the card with the stored plan selected, and nothing on a server without flights", () => {
+    const html = withClient(
+      createElement(PlanSelect, { kind: "tickets", value: "p_mine", onChange: () => {}, className: "tk-plan", field: { attr: "data-tk-field" } }),
+      (c) => c.setQueryData(["flight-plans"], PLANS)
+    );
+    expect(html).toContain('data-tk-field="plan"');
+    expect(html).toMatch(/<option value="p_mine" selected="">Mine<\/option>/);
+    expect(html).toContain("Ticket to merge (default)");
+    const none = withClient(
+      createElement(PlanSelect, { kind: "prs", value: "", onChange: () => {}, field: { attr: "data-repo-field" } }),
+      (c) => c.setQueryData(["flight-plans"], null)
+    );
+    expect(none).toBe("");
+  });
+
+  it("round-trips: a ticket source saves `plan` on the source, a repo card under its override map", () => {
+    expect(putBody([{ id: "sc", provider: "shortcut", plan: "p_mine" }]).sources[0]).toMatchObject({ plan: "p_mine" });
+    const pr = fieldPatch({}, "pr", "acme/api", "plan", "p_mine");
+    expect(pr.patch).toEqual({ github: { repo_settings: { "acme/api": { plan: "p_mine" } } } });
+    const issue = fieldPatch({ "acme/api": { depth: "push" } }, "issue", "acme/api", "plan", "p_mine");
+    expect(issue.patch).toEqual({ github: { issue_repo_settings: { "acme/api": { depth: "push", plan: "p_mine" } } } });
+    // Back to the default: the key goes, the depth stays.
+    expect(fieldPatch(issue.blocks, "issue", "acme/api", "plan", "").blocks).toEqual({ "acme/api": { depth: "push" } });
+    // The cards wire it: the ticket card beside Fast-track, the repo card too.
+    expect(code("components/intake/TicketsTab.tsx")).toContain("onChange={(plan) => onChange({ plan })}");
+    expect(code("components/intake/RepoSources.tsx")).toContain("onChange={(id) => save(PLAN_FIELD, id)}");
+    expect(code("components/intake/RepoSources.tsx")).toContain('kind={use === "pr" ? "prs" : "issues"}');
+  });
+
+  it("the Board's arrival picker defaults to the source's plan", () => {
+    useUi.setState({ openDialog: "flights", dialogTarget: "board" } as never);
+    Object.assign(useUi.getInitialState(), useUi.getState());
+    const html = withClient(createElement(FlightsDialog), (c) => {
+      c.setQueryData(["flights"], []);
+      c.setQueryData(["flight-plans"], PLANS);
+      c.setQueryData(["flight-kinds"], KINDS);
+      c.setQueryData(["test-plans"], { plans: [] });
+      c.setQueryData(["settings"], { ticketing: { sources: [{ id: "sc", plan: "p_mine" }] } });
+      c.setQueryData(["mindflock-status"], { available: true, desired: true });
+      c.setQueryData(["tickets"], {
+        tickets: [{ source: "sc", id: "1", slug: "sc-1", name: "Fix it", eligible: true }],
+        source_labels: { sc: "Shortcut" },
+      });
+    });
+    const pick = html.slice(html.indexOf('class="fl-plan-pick"'));
+    expect(pick).toMatch(/<option value="p_mine" selected="">Mine<\/option>/);
   });
 });

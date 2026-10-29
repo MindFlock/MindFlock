@@ -3733,7 +3733,15 @@ Schedule. Tabs, in order:
    the tab, picking another plan or closing with unsaved changes asks first,
    inline (*Discard unsaved changes?* — **Discard** / **Keep editing**).
 3. **Sources** — the [Intake](#intake) tabs, mounted as they are (Tickets ·
-   GitHub PRs · GitHub issues · Auto-start, with + Add source).
+   GitHub PRs · GitHub issues · Auto-start, with + Add source). Each ticket
+   source card (under *Where it goes*, beside Fast-track) and each PR / issue
+   repository card has a **Plan** picker: the flight plan its items follow —
+   *<the kind's built-in> (default)*, cut at the card's Fast-track, or any
+   other plan. It saves as `plan` on the source (`PUT
+   /api/settings/ticketing/sources`) or as `github.repo_settings[repo].plan` /
+   `github.issue_repo_settings[repo].plan`, and the Board's arrivals from that
+   source start on it unless their own picker says otherwise
+   (`components/flights/PlanSelect.tsx`; hidden on a server without flights).
 4. **Schedule** — the [Schedule](#schedule) templates view, mounted as it is.
    A half-edited template is guarded the same way as a plan.
 5. **Checklists** — the [Verify](#verify) list, mounted as it is.

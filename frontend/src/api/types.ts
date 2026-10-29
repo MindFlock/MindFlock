@@ -1425,7 +1425,13 @@ export interface TicketingCatalogEntry {
  * non-string passenger is `last_test` (a `TicketingLastTest`), read through
  * `components/intake/sourceForm.ts::lastTestOf` rather than typed here, so the
  * form's string fields stay string-typed. */
-export type TicketingSource = Record<string, string> & { id: string; provider: string };
+export type TicketingSource = Record<string, string> & {
+  id: string;
+  provider: string;
+  /** The flight plan this source's tickets follow (a plan id; "" or absent =
+   * the built-in ticket plan cut at `depth`; docs/flights.md). */
+  plan?: string;
+};
 
 /** GET /api/traffic (backend/web/addons/traffic.py) — GitHub stars/forks,
  * per-release download counts, and click totals for the mindflock.ai/go/
