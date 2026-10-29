@@ -10,9 +10,15 @@ restart and when the session is deleted (``session.deleted`` on the bus,
 comparison), ``from`` the person id, ``"guest:<link id>"`` or
 ``"peer:<link id>"`` — and :func:`post` emits ``session.chat`` with it.
 
-The peer service posts for a peer directly::
+The peer link carries a shared session's chat both ways
+(:mod:`backend.peer.chat_bridge`). On the sharer's side a peer's line is an
+ordinary post::
 
     chat.post(title, {"id": "peer:<link id>", "name": peer_name}, text)
+
+On the opener's side the sharer's lines are copies, kept under the row's
+``<peer>::<title>`` and added with :func:`receive` (their ids are the
+sharer's, so ``since`` still compares within that chat).
 """
 
 from __future__ import annotations
@@ -78,6 +84,47 @@ def post(title: str, who: dict, text: object) -> dict:
     except Exception:  # noqa: BLE001 — the message is kept either way
         pass
     return dict(msg)
+
+
+def receive(title: str, msg: dict) -> Optional[dict]:
+    """Keep a copy of another machine's message (``{id, from, name, text,
+    ts}``, id included) in ``title``'s chat, in id order, and emit
+    ``session.chat`` with it. None — and no event — when that id is already
+    here or the message is blank."""
+    body = clean_text(msg.get("text"))
+    mid = str(msg.get("id") or "")
+    if not body or not _seq_of(mid):
+        return None
+    try:
+        ts = float(msg.get("ts") or 0) or time.time()
+    except (TypeError, ValueError):
+        ts = time.time()
+    copy = {
+        "id": mid,
+        "from": str(msg.get("from") or ""),
+        "name": clean_text(msg.get("name")).replace("\n", " ")[:64] or "Someone",
+        "text": body,
+        "ts": ts,
+    }
+    title = str(title or "")
+    with _LOCK:
+        chat = _CHATS.setdefault(title, deque(maxlen=KEEP))
+        if any(m["id"] == mid for m in chat):
+            return None
+        seq = _seq_of(mid)
+        if chat and _seq_of(chat[-1]["id"]) > seq:
+            rows = sorted([*chat, copy], key=lambda m: _seq_of(m["id"]))
+            chat.clear()
+            chat.extend(rows[-KEEP:])
+        else:
+            chat.append(copy)
+    try:
+        from backend.web.core import events as _events
+
+        _events.BUS.emit("session.chat", session=title, data=dict(copy))
+    except Exception:  # noqa: BLE001 — the message is kept either way
+        pass
+    return dict(copy)
 
 
 def messages(title: str, since_id: str = "") -> List[dict]:

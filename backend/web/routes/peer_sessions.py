@@ -10,8 +10,9 @@ are. Requests for them never reach the device proxy: :class:`PeerRowsMiddleware`
 where the row answers, its terminal socket rides the peer link
 (``term_open`` / ``term_in`` / ``term_out``), ``/focus`` tells the peer
 which row this page selected, ``POST …/messages`` sends an agent's message
-over the link (``agent_msg``) — and every other call is a 409: the session
-lives on the peer's machine.
+over the link (``agent_msg``), ``…/chat`` is the session's people chat
+(``chat_msg`` out, ``chat_out`` copies in: ``backend.peer.chat_bridge``) —
+and every other call is a 409: the session lives on the peer's machine.
 
 Like the other peer routes, none of this answers another MindFlock relaying
 (X-MindFlock-Remote) or a guest link, and a change needs the owner
@@ -277,6 +278,60 @@ async def peer_row_messages(request: Request, link_id: str, title: str):
         {"error": "their inbox lives on their machine (%s's)" % name},
         status_code=409,
     )
+
+
+@router.get(ROWS_PREFIX + "{link_id}/{title}/chat")
+async def peer_row_chat(request: Request, link_id: str, title: str, since: str = ""):
+    """``GET /api/instances/<peer>::<title>/chat``: ``{messages, me}`` like
+    a local session's — my copy of their chat (``chat_out`` lines since the
+    row appeared; the chat itself lives on their machine). 409 not shared
+    with me, 503 the peer is offline."""
+    why = _refused_here(request.scope)
+    if why:
+        return JSONResponse({"error": why}, status_code=403)
+    from backend.peer import chat_bridge
+    from backend.web.core import chat as _chat
+
+    svc = _service()
+    if not svc.is_connected(link_id):
+        return JSONResponse(
+            {"error": "%s isn't connected right now" % svc.peer_name(link_id)}, 503
+        )
+    if _row(link_id, title) is None:
+        return JSONResponse({"error": "not shared with you"}, status_code=409)
+    return JSONResponse(
+        {
+            "messages": chat_bridge.messages(svc, link_id, title, since),
+            "me": _chat.owner_identity(),
+        }
+    )
+
+
+@router.post(ROWS_PREFIX + "{link_id}/{title}/chat")
+async def peer_row_chat_post(request: Request, link_id: str, title: str):
+    """``POST /api/instances/<peer>::<title>/chat``: ``{text}`` → sent over
+    the link (``chat_msg``) into THEIR chat for the session — 202 the message
+    as kept here (``session.chat`` on the row tells my other windows; their
+    echo carries the same id). 400 blank, 409 not shared with me, 503 the
+    peer is offline."""
+    why = _refused_here(request.scope)
+    if why:
+        return JSONResponse({"error": why}, status_code=403)
+    refused = await _peer_remote_refusal(request)
+    if refused is not None:
+        return refused
+    body = await _peer_body(request)
+    text = body.get("text", "")
+    if not isinstance(text, str):
+        return JSONResponse({"error": "text must be a string"}, 400)
+    from backend.peer import chat_bridge
+    from backend.peer.service import PeerServiceError
+
+    try:
+        msg = await chat_bridge.send(_service(), link_id, title, text)
+    except PeerServiceError as err:
+        return JSONResponse({"error": err.message}, status_code=err.status)
+    return JSONResponse(msg, status_code=202)
 
 
 @router.websocket(ROWS_PREFIX + "{link_id}/{title}/terminal")

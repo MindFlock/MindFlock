@@ -244,9 +244,21 @@ not in it** — nothing typed there reaches the terminal.
   in memory (`backend/web/core/chat.py`); a restart or deleting the session
   forgets them. A chat lives where its session lives — another device's row
   has none here.
+- **Across a peer link, both ways.** When you share a session with a peer
+  (People → Share a session), they and you talk in the same little window:
+  on their rail your session is a `<you>::<title>` row whose chat card says
+  "with <you>", and it pops open when you write (a pill once they closed
+  it); **💬 Chat** opens it by hand while that row is in focus. What they
+  type arrives in your chat for the session under their name, like a
+  guest's line. The chat itself lives on the sharer's machine: the peer's
+  copy holds what was said since the row appeared and is forgotten when the
+  link drops or you stop sharing. Agents are never in it, on either side —
+  the chat never reaches either terminal. (`chat_msg` and `chat_out` over
+  the link: `backend/peer/chat_bridge.py`.)
 
 `GET/POST /api/instances/<title>/chat` (a guest may use it on a session
-their link reaches); every message is `session.chat` on the bus.
+their link reaches; on a peer's row the same routes go over the link);
+every message is `session.chat` on the bus.
 
 ## Git identity
 

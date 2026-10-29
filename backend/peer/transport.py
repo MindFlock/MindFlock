@@ -137,6 +137,8 @@ _OP_PERM = {
     # An agent's message to a session shared on this link: the share is the
     # grant (the handler checks it, and It matches).
     "agent_msg": None,
+    # A person's chat line on a session shared on this link: the same grant.
+    "chat_msg": None,
 }
 # Ops that hand over the shared folder's content: refused until the safety
 # number is confirmed on THIS side (``link.sas_verified``), whatever the

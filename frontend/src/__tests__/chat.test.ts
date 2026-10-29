@@ -9,6 +9,9 @@
  *  - arrivals pop the chat — minimized after a close, and never again for
  *    the person who was on it when it was closed; a guest's browser opens
  *    outright when spoken to; another device's rows never get one;
+ *  - a peer's shared session (`<peer>::<title>`) is a chat like mine: it
+ *    pops open when the sharer writes (a pill after a close), and an event
+ *    for one the rail hasn't listed yet still lands;
  *  - message merging dedupes by id and keeps id order;
  *  - the live store: an event for an unknown title loads it first, my own
  *    messages never count, replays are skipped by the bridge;
@@ -29,6 +32,8 @@ import {
   onJoined,
   onMessage,
   openWindow,
+  peerChatName,
+  setPeerRows,
   totalUnread,
   type ChatMessage,
 } from "../lib/chat";
@@ -95,6 +100,39 @@ describe("windows", () => {
     expect(chatable("")).toBe(false);
     expect(onJoined(EMPTY_CHAT, "mac::alpha", "L1")).toBe(EMPTY_CHAT);
     expect(onMessage(EMPTY_CHAT, "mac::alpha")).toBe(EMPTY_CHAT);
+  });
+});
+
+describe("a peer's shared session", () => {
+  it("is chatable once the rail lists it, and says whose it is", () => {
+    expect(chatable("Erik::alpha")).toBe(false);
+    setPeerRows([{ title: "Erik::alpha", name: "Erik" }]);
+    expect(chatable("Erik::alpha")).toBe(true);
+    expect(peerChatName("Erik::alpha")).toBe("Erik");
+    expect(chatable("mac::alpha")).toBe(false); // a device's row still isn't
+    expect(peerChatName("alpha")).toBe("");
+  });
+
+  it("pops open when the sharer writes; a pill once I closed it", () => {
+    setPeerRows([{ title: "Erik::alpha", name: "Erik" }]);
+    const s = onMessage(EMPTY_CHAT, "Erik::alpha", { peer: true });
+    expect(s.windows).toEqual([{ title: "Erik::alpha", mode: "open", unread: 0 }]);
+    const closed = closeWindow(s, "Erik::alpha");
+    expect(onMessage(closed, "Erik::alpha", { peer: true }).windows).toEqual([
+      { title: "Erik::alpha", mode: "min", unread: 1 },
+    ]);
+  });
+
+  it("an event for a row not listed yet loads its chat and opens it", async () => {
+    const mod = await import("../lib/chat");
+    vi.mocked(instApi).mockResolvedValue({ messages: [msg("c4", "peer:L:owner")], me: { id: "o", name: "Pat" } });
+    await applyChatEvent(env("session.chat", "Erik::alpha", msg("c4", "peer:L:owner")));
+    expect(vi.mocked(instApi)).toHaveBeenCalledWith("Erik::alpha", "/chat");
+    expect(mod.peekChat().windows).toEqual([{ title: "Erik::alpha", mode: "open", unread: 0 }]);
+    // My own line echoed back never pops anything.
+    mod.closeChat("Erik::alpha");
+    await applyChatEvent(env("session.chat", "Erik::alpha", msg("c5", "o")));
+    expect(mod.peekChat().windows).toEqual([]);
   });
 });
 

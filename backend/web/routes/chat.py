@@ -8,6 +8,8 @@ The routes only translate (:mod:`backend.web.core.chat` keeps the messages).
 has already limited a guest to the sessions their link reaches (``chat`` is
 in ``guests.SESSION_WRITE_OK``). A chat lives where its session lives: a
 ``<device>::<title>`` row is 409, a session this device doesn't have 404.
+A peer's shared session (``<peer>::<title>``) never reaches here: the peer
+rows middleware answers it (routes/peer_sessions.py, over the peer link).
 """
 
 from __future__ import annotations

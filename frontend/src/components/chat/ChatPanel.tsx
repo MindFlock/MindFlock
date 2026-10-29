@@ -3,27 +3,32 @@
  * unread count when minimized; a full-width bottom sheet on a phone. They
  * pop up by themselves (someone arrived on one of my sessions, someone
  * wrote); the small "Chat" launcher opens one by hand for the session in
- * focus while someone else is on it (a guest's browser: always). Mounted
- * once in App.tsx. Styles: ChatPanel.css. */
+ * focus while someone else is on it (a guest's browser: always; a peer's
+ * shared session on my rail: always — its sharer is on it, and the header
+ * says "with <peer>"). Mounted once in App.tsx. Styles: ChatPanel.css. */
 
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import {
   CHAT_MAX,
   CHAT_POLL_MS,
+  chatable,
   closeChat,
   installChatEvents,
   minimizeChat,
   openChat,
+  peerChatName,
   pollChats,
   sendChat,
+  setPeerRows,
   useChat,
   type ChatMe,
   type ChatMessage,
   type ChatWindow,
 } from "../../lib/chat";
 import { guestName, useGuestFocus } from "../../lib/guestFocus";
+import { isPeerRow } from "../../lib/peerSessions";
 import { windowName } from "../../lib/windowName";
-import { useConfig } from "../../state/queries";
+import { useConfig, useInstances } from "../../state/queries";
 import { useUi } from "../../state/store";
 import "./ChatPanel.css";
 
@@ -32,6 +37,7 @@ export function ChatPanel() {
   const guest = config ? !!config.guest : null;
   const { state, msgs, me } = useChat();
   const { focus } = useGuestFocus();
+  const { data: instances } = useInstances();
   const focused = useUi((s) => s.focused) || "";
   useUi((s) => s.aliases); // re-render on a rename: headers use windowName
 
@@ -45,6 +51,17 @@ export function ChatPanel() {
     return () => clearInterval(t);
   }, [guest]);
 
+  // A peer's shared sessions on my rail chat over the peer link.
+  const peerNames = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const r of (instances || []).filter(isPeerRow)) out[r.title] = r.device_label || r.device || "";
+    return out;
+  }, [instances]);
+  useEffect(() => {
+    setPeerRows(Object.entries(peerNames).map(([title, name]) => ({ title, name })));
+  }, [peerNames]);
+  const peerOf = (title: string) => (title in peerNames ? peerNames[title] || title.split("::")[0] : peerChatName(title));
+
   const any = state.windows.length > 0;
   useEffect(() => {
     if (!any) return;
@@ -53,9 +70,19 @@ export function ChatPanel() {
   }, [any]);
 
   const peopleOn = (title: string) => Object.values(focus).filter((f) => f.title === title);
+  // Who the header says I'm with: the peer whose session it is, then
+  // whoever else is on it.
+  const withWhom = (title: string) => {
+    const peer = peerOf(title);
+    return [...(peer ? [peer] : []), ...peopleOn(title).map((f) => guestName(f.label))];
+  };
   const hasWindow = state.windows.some((w) => w.title === focused);
   const showLauncher =
-    guest !== null && !!focused && !focused.includes("::") && !hasWindow && (guest || peopleOn(focused).length > 0);
+    guest !== null &&
+    !!focused &&
+    (chatable(focused) || !!peerOf(focused)) &&
+    !hasWindow &&
+    (guest || !!peerOf(focused) || peopleOn(focused).length > 0);
 
   if (!any && !showLauncher) return null;
   return (
@@ -67,7 +94,7 @@ export function ChatPanel() {
             title={w.title}
             messages={msgs[w.title] || []}
             me={me}
-            people={peopleOn(w.title).map((f) => guestName(f.label))}
+            people={withWhom(w.title)}
             onClose={() => closeChat(w.title, peopleOn(w.title).map((f) => f.link))}
           />
         ) : (

@@ -96,15 +96,27 @@ OPS = (
     # An agent's message to a shared session (docs/peer-link.md "Agent
     # messages across the link").
     "agent_msg",
+    # A person's line in a shared session's chat (docs/peer-link.md "Shared
+    # sessions — CONTRACT"; backend.peer.chat_bridge).
+    "chat_msg",
 )
 #: One-way frames (``t: "push"``): the sharer's terminal output and its end,
-#: "my share list changed" — and the opener's keystrokes and resizes.
-PUSH_OPS = ("term_out", "term_end", "term_in", "term_resize", "sessions_changed")
+#: "my share list changed", a line of a shared session's chat — and the
+#: opener's keystrokes and resizes.
+PUSH_OPS = (
+    "term_out",
+    "term_end",
+    "term_in",
+    "term_resize",
+    "sessions_changed",
+    "chat_out",
+)
 #: What this version can do beyond the original ops, for the handshake's
 #: ``caps`` (sent by the transport; a peer advertising ``sessions`` speaks
 #: the shared-session ops and push frames, ``agent_msg`` takes an agent's
-#: message to a session it shares).
-CAPS = ("sessions", "agent_msg")
+#: message to a session it shares, ``chat_msg`` talks in a shared session's
+#: chat and takes its ``chat_out`` lines).
+CAPS = ("sessions", "agent_msg", "chat_msg")
 
 MAX_NAME = 128  # on the wire; stores sanitize further to 32
 MAX_MSG_TEXT = 20_000
@@ -147,6 +159,11 @@ SESSION_MODES = ("gated", "full")
 #: ``agent_msg``'s reply-chain depth: the mailbox holds far shallower chains
 #: (backend.web.core.mailbox.max_hops); this only bounds the number.
 MAX_AGENT_HOP = 1000
+#: A chat line, in characters (backend.web.core.chat.MAX_TEXT), and the
+#: name shown on it.
+MAX_CHAT_TEXT = 2000
+MAX_CHAT_NAME = 64
+MAX_CHAT_FROM = 128
 
 
 class ProtocolError(Exception):
@@ -187,6 +204,7 @@ _BAD_PATH = re.compile(r"[\x00\ud800-\udfff]")
 # Anchored with \Z, never $ ($ also matches before a trailing newline), and
 # [0-9] rather than \d (which matches every Unicode digit).
 _MSG_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
+_CHAT_ID_RE = re.compile(r"^c[0-9]{1,15}\Z")
 _B64_32_RE = re.compile(r"^[A-Za-z0-9+/]{43}=\Z")
 _B64_RE = re.compile(r"^[A-Za-z0-9+/]*={0,2}\Z")
 _SAS_RE = re.compile(r"^[0-9]{3}-[0-9]{3}-[0-9]{3}-[0-9]\Z")
@@ -632,6 +650,28 @@ def _req_agent_msg(p, strict) -> dict:
     return p
 
 
+def _chat_text(v) -> None:
+    if not _str(v, 1, MAX_CHAT_TEXT, _BAD_TEXT):
+        _fail("bad text")
+
+
+def _chat_id(v) -> None:
+    if not isinstance(v, str) or not _CHAT_ID_RE.match(v):
+        _fail("bad id")
+
+
+def _req_chat_msg(p, strict) -> dict:
+    """``{title, text, from_name}`` — the opener's line for the chat of
+    ``title``, a session the receiver shares; ``from_name`` is what the
+    opener calls itself (``""``: the receiver names it)."""
+    p = _keys(p, ("title", "text", "from_name"), (), strict)
+    _session_title(p["title"])
+    _chat_text(p["text"])
+    if not _str(p["from_name"], 0, MAX_CHAT_NAME):
+        _fail("bad from_name")
+    return p
+
+
 _REQUESTS = {
     "msg": _req_msg,
     "diff": _req_diff,
@@ -652,6 +692,7 @@ _REQUESTS = {
     "term_close": _req_term_close,
     "session_focus": _req_session_focus,
     "agent_msg": _req_agent_msg,
+    "chat_msg": _req_chat_msg,
 }
 
 
@@ -942,6 +983,16 @@ def _res_agent_msg(p, req, strict) -> dict:
     return p
 
 
+def _res_chat_msg(p, req, strict) -> dict:
+    """``{ok: true, id}`` — ``id`` is the line's id in the receiver's chat
+    (``c<seq>``; its ``chat_out`` echo carries the same one)."""
+    p = _keys(p, ("ok", "id"), (), strict)
+    if p["ok"] is not True:
+        _fail("bad ok")
+    _chat_id(p["id"])
+    return p
+
+
 _RESPONSES = {
     "msg": _res_msg,
     "diff": _res_diff,
@@ -962,6 +1013,7 @@ _RESPONSES = {
     "term_close": _res_joint_ok,
     "session_focus": _res_joint_ok,
     "agent_msg": _res_agent_msg,
+    "chat_msg": _res_chat_msg,
 }
 
 
@@ -1000,12 +1052,33 @@ def _push_term_resize(p, strict) -> dict:
     return p
 
 
+def _push_chat_out(p, strict) -> dict:
+    """``{title, msg: {id, from, name, text, ts}}`` — one line of the
+    sender's chat on ``title``, a session it shares with the receiver.
+    ``from`` is ``"you"`` on the receiver's own lines."""
+    p = _keys(p, ("title", "msg"), (), strict)
+    _session_title(p["title"])
+    m = _keys(p["msg"], ("id", "from", "name", "text", "ts"), (), strict)
+    _chat_id(m["id"])
+    if not _str(m["from"], 0, MAX_CHAT_FROM):
+        _fail("bad from")
+    if not _str(m["name"], 0, MAX_CHAT_NAME):
+        _fail("bad name")
+    _chat_text(m["text"])
+    ts = m["ts"]
+    if isinstance(ts, bool) or not isinstance(ts, (int, float)) or not 0 <= ts < 1e11:
+        _fail("bad ts")
+    p["msg"] = m
+    return p
+
+
 _PUSHES = {
     "term_out": _push_term_data,
     "term_in": _push_term_data,
     "term_end": _push_term_end,
     "term_resize": _push_term_resize,
     "sessions_changed": _req_empty,
+    "chat_out": _push_chat_out,
 }
 
 
