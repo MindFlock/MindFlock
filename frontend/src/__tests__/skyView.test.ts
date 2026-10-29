@@ -86,8 +86,9 @@ describe("the isomorphism", () => {
   });
 
   it("the pane's open tab is the line's open box: the box IS the session's Pane, which reads lastTab per title", () => {
-    const parts = code("components/flights/skyContracts.tsx");
-    expect(parts).toContain("<Pane inst={row} drag={NO_DRAG} dragging={false} />");
+    // The seam re-exports the real line, whose open card is the session's Pane.
+    expect(code("components/flights/skyContracts.tsx")).toContain('export * from "./SkyLine";');
+    expect(code("components/flights/SkyLine.tsx")).toContain("<Pane key={inst.title} inst={inst} embedded />");
     expect(code("components/grid/Pane.tsx")).toContain("const lastTab = useUi((s) => s.lastTab[title]);");
     // A line is keyed by its title, so its box (and the terminal it adopts
     // from lib/terminals' registry) is the same session's either way.

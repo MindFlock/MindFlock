@@ -1,3 +1,59 @@
+/* The Sky's birds: the ambient flock behind the plane (SkyFlock.tsx) and the
+   sprite bird every glyph and marker draws (Bird.tsx). */
+
+/* --- The ambient flock ---------------------------------------------------------- */
+
+/* Decoration only: behind the plane, never in the way of a click. */
+.sky-flock {
+  position: absolute;
+  inset: 0 auto auto 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.55;
+}
+
+:root.light .sky-flock {
+  opacity: 0.32;
+}
+
+/* --- The sprite bird ------------------------------------------------------------ */
+
+.fl-sprite-bird {
+  position: relative;
+}
+
+.fl-sprite-wings,
+.fl-sprite-body {
+  position: absolute;
+  left: 0;
+  width: 100%;
+}
+
+/* The wings beat about the hinge (the band's bottom edge), the way the flock
+   draws them: full spread down to a quarter, about once a second. */
+.fl-sprite-wings {
+  transform-origin: 50% 100%;
+}
+
+.fl-sprite-bird.fl-flapping .fl-sprite-wings {
+  animation: fl-sprite-flap 0.95s ease-in-out infinite;
+}
+
+@keyframes fl-sprite-flap {
+  0%,
+  100% {
+    transform: scaleY(1.05);
+  }
+  50% {
+    transform: scaleY(0.25);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fl-sprite-bird.fl-flapping .fl-sprite-wings {
+    animation: none;
+  }
+}
 /* Connect GitHub (ConnectGitHub.tsx) and the login terminals it shares a look
    with: the GitHub CLI sign-in, an agent's sign-in (AgentSignIn.tsx) and the
    installer (InstallTerminal.tsx) — all import this sheet. */
@@ -2136,6 +2192,71 @@
   .fl-bird-marker.tone-working .fl-bird-big {
     animation: none;
   }
+}
+
+/* --- A line's box size (the Sky's ◧) --------------------------------------- */
+
+/* Compact: the title alone, on one line, centred in its box. */
+.fl-size-compact .fl-box:not(.fl-box-add):not(.fl-box-open) {
+  justify-content: center;
+  padding: 6px 9px;
+  font-size: 12px;
+}
+
+.fl-box-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* Wide: the full title (two lines), the summary on two, and the detail. */
+.fl-size-wide .fl-box-title {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.3;
+}
+
+.fl-size-wide .fl-box-sub {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.3;
+}
+
+.fl-box-detail {
+  color: var(--text);
+  opacity: 0.82;
+  font-size: 11.5px;
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* A flyway dragged over the line: the + is where it lands. */
+.fl-box-add.fl-drop {
+  border-style: solid;
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.16);
+  box-shadow: 0 0 0 2px var(--accent), 0 0 18px rgba(var(--accent-rgb), 0.45);
+}
+
+/* An open box: a card around whatever it holds (the Sky's pane). */
+.fl-box.fl-box-open {
+  padding: 0;
+  gap: 0;
+  cursor: default;
+  overflow: visible;
+}
+
+.fl-box.fl-box-open {
+  user-select: text;
 }
 /* Flights (FlightsDialog.tsx) — prefix fl-.
  *
@@ -4883,842 +5004,6 @@ a.fl-waiting-ref:hover {
 .devices-advanced #pair-by-token input {
   min-width: 240px;
 }
-/* The Sky's intake lane (IntakeLane.tsx): a column of source blocks pinned to
- * the sky's left edge; the Sky positions it, this styles what is inside. */
-
-.sky-lane {
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 10px;
-  max-height: 100%;
-  overflow-y: auto;
-  background: color-mix(in srgb, var(--panel) 92%, transparent);
-  border-right: 1px solid var(--border);
-}
-
-.sky-lane-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.sky-lane-title {
-  flex: 1 1 auto;
-}
-
-.sky-lane-toggle,
-.sky-lane-more {
-  flex: none;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--muted);
-  border-radius: 6px;
-  padding: 2px 7px;
-  font-size: 14px;
-  line-height: 1.2;
-  cursor: pointer;
-}
-
-.sky-lane-toggle:hover,
-.sky-lane-more:hover {
-  color: var(--text);
-  border-color: var(--border);
-  background: var(--panel-2);
-}
-
-/* --- A source block -------------------------------------------------------- */
-
-.sky-lane-block {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  padding: 9px 10px;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: 9px;
-}
-
-.sky-lane-block-head {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-}
-
-.sky-lane-block-head .fl-kind-badge {
-  margin-top: 0;
-}
-
-.sky-lane-block-name {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-}
-
-.sky-lane-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.sky-lane-auto,
-.sky-lane-flyway {
-  font-size: 11px;
-  line-height: 1;
-  padding: 4px 7px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  color: var(--muted);
-  white-space: nowrap;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sky-lane-auto.on {
-  color: var(--green);
-  border-color: color-mix(in srgb, var(--green) 45%, transparent);
-  background: color-mix(in srgb, var(--green) 10%, transparent);
-}
-
-.sky-lane-flyway.own {
-  color: var(--accent);
-  border-color: rgba(var(--accent-rgb), 0.45);
-  background: rgba(var(--accent-rgb), 0.1);
-}
-
-.sky-lane-empty {
-  font-size: 12px;
-  margin: 0;
-}
-
-/* --- Waiting items --------------------------------------------------------- */
-
-.sky-lane-items,
-.sky-lane-stubs {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.sky-lane-item-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 4px 4px 7px;
-  border-radius: 7px;
-  background: var(--bg);
-  border: 1px solid var(--border);
-}
-
-.sky-lane-item-words {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  gap: 5px;
-  font-size: 12px;
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-.sky-lane-item-ref {
-  flex: none;
-  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 11.5px;
-  color: var(--muted);
-}
-
-.sky-lane-item-headline {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--text);
-}
-
-.sky-lane-fly.fl-btn {
-  flex: none;
-  padding: 3px 10px;
-  font-size: 12px;
-}
-
-.sky-lane-error {
-  font-size: 11.5px;
-  margin: 3px 0 0;
-}
-
-.sky-lane-n-more {
-  font-size: 11.5px;
-  padding-left: 7px;
-}
-
-/* --- Started sessions: a stub out of the block's right edge ---------------- */
-
-.sky-lane-stub {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-right: -10px;
-  font-size: 11.5px;
-  color: var(--muted);
-  min-width: 0;
-}
-
-.sky-lane-stub-name {
-  order: -1;
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  margin-left: auto;
-}
-
-.sky-lane-stub-line {
-  flex: none;
-  width: 22px;
-  height: 0;
-  border-top: 1.5px solid rgba(var(--accent-rgb), 0.7);
-  position: relative;
-}
-
-.sky-lane-stub-line::after {
-  content: "";
-  position: absolute;
-  right: -1px;
-  top: -4.5px;
-  border: 4px solid transparent;
-  border-left: 6px solid rgba(var(--accent-rgb), 0.7);
-  border-right: 0;
-}
-
-/* --- Folded: one icon per source with its count ---------------------------- */
-
-.sky-lane-rail {
-  width: 44px;
-  align-items: center;
-  padding: 8px 4px;
-  gap: 8px;
-}
-
-.sky-lane-rail-icon.fl-kind-badge {
-  position: relative;
-  margin: 0;
-  min-width: 28px;
-  padding: 6px 4px;
-  cursor: pointer;
-  text-align: center;
-}
-
-.sky-lane-rail-count {
-  position: absolute;
-  top: -6px;
-  right: -7px;
-  min-width: 15px;
-  padding: 2px 3px;
-  border-radius: 999px;
-  font-size: 9.5px;
-  line-height: 1;
-  color: var(--bg);
-  background: var(--accent);
-  box-sizing: border-box;
-}
-/* The Sky's new-session block (NewSessionBlock.tsx): a card at the spot the
- * owner double-clicked. Its fields are Flights' form controls (.fl-form), so
- * they wear the New dialog's look. */
-
-.sky-new.fl-form {
-  position: absolute;
-  z-index: 20;
-  box-sizing: border-box;
-  width: 380px;
-  max-width: calc(100vw - 24px);
-  grid-template-columns: 1fr;
-  gap: 10px;
-  padding: 12px 14px;
-  background: var(--panel);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 11px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
-}
-
-.sky-new-head {
-  font-size: 13.5px;
-  font-weight: 700;
-}
-
-.sky-new-path {
-  display: flex;
-  gap: 6px;
-  min-width: 0;
-}
-
-.sky-new-path input {
-  flex: 1 1 auto;
-  min-width: 0;
-  box-sizing: border-box;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 7px;
-  padding: 7px 9px;
-  font-size: 12.5px;
-  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  outline: none;
-}
-
-.sky-new-path input:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
-}
-
-.sky-new-repos {
-  margin-bottom: 2px;
-}
-
-.sky-new-error {
-  margin: 0;
-  font-size: 12px;
-}
-
-.sky-new-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-/* Flights → Sky (Sky.tsx) — prefix sky-.
- *
- * The open expanse: on this tab the Flights dialog takes the whole window
- * under the top bar (`.sky-full` on the modal shell), its head and tab strip
- * one slim toolbar row. Below them the sky — one plane under one
- * translate+scale, a faint dot grid that scales with it (dark sky in the dark
- * theme, a white expanse in the light one) — and the drawer at its right
- * edge. Every line is a card on the plane; the canvas inside it never scrolls
- * (the sky pans instead). A phone gets the lines as a plain list. */
-
-/* --- The dialog, full-window ------------------------------------------------ */
-
-.modal.top-dialog.sky-full {
-  padding: var(--topbar-h, 40px) 0 0;
-  align-items: stretch;
-  justify-content: stretch;
-}
-
-.modal.top-dialog.sky-full > * {
-  max-height: none;
-}
-
-.sky-full #flights-panel {
-  width: 100vw;
-  max-width: none;
-  height: calc(100vh - var(--topbar-h, 40px));
-  min-height: 0;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  padding: 4px 12px 0;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  grid-template-rows: auto auto minmax(0, 1fr);
-  grid-template-areas:
-    "head tabs"
-    "confirm confirm"
-    "body body";
-  column-gap: 18px;
-  row-gap: 0;
-}
-
-.sky-full #flights-panel .fl-head {
-  grid-area: head;
-  align-items: center;
-}
-
-.sky-full #flights-panel .ik-subtitle {
-  display: none;
-}
-
-.sky-full #flights-panel .fl-tabs {
-  grid-area: tabs;
-  border-bottom: 0;
-  align-self: end;
-}
-
-.sky-full #flights-panel .fl-tab {
-  padding: 5px 10px 6px;
-  font-size: 12.5px;
-}
-
-.sky-full #fl-leave-confirm {
-  grid-area: confirm;
-}
-
-.sky-full #flights-panel .fl-body {
-  grid-area: body;
-}
-
-.fl-body-sky {
-  overflow: hidden;
-  padding-right: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.fl-body-sky > .fl-panel {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-/* --- The sky ---------------------------------------------------------------- */
-
-.sky {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  --sky-bg: var(--bg);
-  --sky-dot: color-mix(in srgb, var(--text) 17%, transparent);
-}
-
-.light .sky {
-  --sky-bg: #ffffff;
-  --sky-dot: color-mix(in srgb, var(--text) 13%, transparent);
-}
-
-.sky-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px 10px;
-  flex-wrap: wrap;
-  padding: 6px 0;
-}
-
-.sky-search .fl-input {
-  width: 190px;
-  padding: 4px 9px;
-  font-size: 12.5px;
-}
-
-.sky-new {
-  padding: 4px 11px;
-  font-size: 12.5px;
-}
-
-.sky-zoom {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 1px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 1px;
-  background: var(--panel);
-}
-
-.sky-zoom-btn {
-  background: transparent;
-  border: 0;
-  color: var(--text);
-  padding: 3px 8px;
-  font: inherit;
-  font-size: 12px;
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.sky-zoom-btn:hover:not(:disabled) {
-  background: var(--panel-2);
-}
-
-.sky-zoom-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.sky-zoom-read {
-  min-width: 44px;
-  text-align: center;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  color: var(--muted);
-}
-
-.sky-main {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  margin: 0 -12px;
-  border-top: 1px solid var(--border);
-}
-
-.sky-viewport {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  touch-action: none;
-  cursor: grab;
-  user-select: none;
-  background-color: var(--sky-bg);
-  background-image: radial-gradient(circle, var(--sky-dot) 1px, transparent 1.4px);
-}
-
-.sky-viewport:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
-}
-
-.sky-viewport.is-grab,
-.sky-viewport.is-grab * {
-  cursor: grab !important;
-}
-
-.sky-plane {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 0;
-  height: 0;
-  transform-origin: 0 0;
-}
-
-.sky-intake {
-  position: absolute;
-  left: 0;
-  top: 0;
-}
-
-.sky-empty {
-  position: absolute;
-  left: 50%;
-  top: 42%;
-  transform: translate(-50%, -50%);
-  max-width: 440px;
-  margin: 0;
-  text-align: center;
-  font-size: 13.5px;
-  pointer-events: none;
-}
-
-/* --- A line ------------------------------------------------------------------ */
-
-.sky-line {
-  position: absolute;
-  left: 0;
-  top: 0;
-  box-sizing: border-box;
-  padding: 0 10px 10px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--panel);
-  color: var(--text);
-  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.18);
-  cursor: default;
-  user-select: text;
-  transition:
-    transform 0.35s ease,
-    box-shadow 0.2s ease,
-    border-color 0.2s ease;
-  animation: sky-in 0.35s ease both;
-}
-
-.light .sky-line {
-  box-shadow: 0 4px 16px rgba(20, 30, 60, 0.1);
-}
-
-.sky-line.is-chosen {
-  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
-}
-
-.sky-line.is-flash {
-  box-shadow:
-    0 0 0 2px var(--accent),
-    0 0 26px rgba(var(--accent-rgb), 0.45);
-}
-
-.sky-line.is-dragging {
-  transition: none;
-  z-index: 4;
-  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.3);
-}
-
-.sky-line.is-editing {
-  z-index: 5;
-}
-
-.sky-line-bar {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  height: 34px;
-  margin: 0 -10px 4px;
-  padding: 0 6px 0 12px;
-  border-bottom: 1px solid var(--border);
-  font-size: 12.5px;
-  cursor: move;
-  touch-action: none;
-  user-select: none;
-}
-
-.sky-line.is-dragging .sky-line-bar {
-  cursor: grabbing;
-}
-
-.sky-line-bar > .fl-bird {
-  flex: none;
-  color: var(--accent);
-}
-
-.sky-line-name {
-  flex: 0 1 auto;
-  min-width: 0;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sky-line-chip {
-  flex: none;
-  align-self: center;
-}
-
-.sky-line-menu {
-  margin-left: auto;
-  flex: none;
-}
-
-/* The canvas inside a line never scrolls: the sky pans. */
-.sky-line .fl-canvas.sky-canvas {
-  overflow: visible;
-  max-width: none;
-  padding: 0;
-}
-
-.sky-line .fl-canvas.sky-canvas .fl-stage {
-  cursor: default;
-}
-
-/* What the + or a stop opened: a card hanging under the line. */
-.sky-line-panels {
-  position: absolute;
-  left: -1px;
-  top: calc(100% + 6px);
-  width: max(100%, 440px);
-  max-height: 560px;
-  overflow-y: auto;
-  box-sizing: border-box;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--panel);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.sky-line-leaving {
-  animation: sky-out 0.42s ease forwards;
-  pointer-events: none;
-}
-
-@keyframes sky-in {
-  from {
-    opacity: 0;
-  }
-}
-
-@keyframes sky-out {
-  to {
-    opacity: 0;
-    filter: blur(1.5px);
-  }
-}
-
-/* --- The drawer: perched on you ------------------------------------------------- */
-
-.sky-drawer {
-  flex: none;
-  display: flex;
-  min-height: 0;
-  border-left: 1px solid var(--border);
-  background: var(--panel);
-}
-
-.sky-drawer.open {
-  width: 360px;
-}
-
-.sky-drawer-tab {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  padding: 12px 6px;
-  writing-mode: vertical-rl;
-  background: transparent;
-  border: 0;
-  border-right: 1px solid transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  cursor: pointer;
-}
-
-.sky-drawer.open .sky-drawer-tab {
-  border-right-color: var(--border);
-}
-
-.sky-drawer-tab:hover {
-  color: var(--text);
-}
-
-.sky-drawer-tab .fl-count {
-  writing-mode: horizontal-tb;
-}
-
-.sky-drawer-body {
-  flex: 1;
-  min-width: 0;
-  overflow-y: auto;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-details.fl-group-waiting > summary {
-  cursor: pointer;
-  list-style: revert;
-}
-
-.sky-perch {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 8px 10px;
-  border: 1px solid var(--tone-attention);
-  border-radius: 10px;
-  background: var(--panel-2);
-}
-
-.sky-perch.is-halted {
-  border-color: var(--red);
-}
-
-.sky-perch-name {
-  align-self: flex-start;
-  background: none;
-  border: 0;
-  padding: 0;
-  color: var(--text);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  text-align: left;
-  cursor: pointer;
-}
-
-.sky-perch-name:hover {
-  text-decoration: underline;
-}
-
-.sky-perch-step {
-  font-size: 12px;
-}
-
-/* --- A phone: the lines as a list ------------------------------------------------ */
-
-.sky-narrow {
-  gap: 12px;
-}
-
-.sky-narrow .sky-drawer {
-  flex-direction: column;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-}
-
-.sky-narrow .sky-drawer.open {
-  width: auto;
-}
-
-.sky-narrow .sky-drawer-tab {
-  writing-mode: horizontal-tb;
-  padding: 8px 10px;
-  border-right: 0;
-}
-
-.sky-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.sky-line.sky-line-flow {
-  position: relative;
-  width: auto;
-  animation: none;
-}
-
-.sky-line-flow .sky-line-bar {
-  cursor: default;
-}
-
-.sky-line-flow .sky-line-panels {
-  position: static;
-  width: auto;
-  max-height: none;
-  margin-top: 8px;
-  box-shadow: none;
-}
-
-@media (max-width: 600px) {
-  .sky-full #flights-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 10px 10px 0;
-  }
-  .sky-full .fl-body-sky {
-    overflow-y: auto;
-  }
-  .sky-search .fl-input {
-    width: 140px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sky-line {
-    transition: none;
-    animation: none;
-  }
-  .sky-line-leaving {
-    animation: none;
-    opacity: 0;
-  }
-}
 /* The ask pop-up (AskDialog.tsx): a small card in the middle of the screen
    — the plain centred `.modal`, never `.top-dialog` — gold-edged like every
    "needs your answer" surface (the answer strip, the bell's Needs you). */
@@ -6601,6 +5886,1356 @@ details.fl-group-waiting > summary {
 .wt-btn.wt-go {
   min-width: 140px;
   padding: 9px 22px;
+}
+/* The Sky's intake lane (IntakeLane.tsx): a column of source blocks pinned to
+ * the sky's left edge; the Sky positions it, this styles what is inside. */
+
+.sky-lane {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  max-height: 100%;
+  overflow-y: auto;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border-right: 1px solid var(--border);
+}
+
+.sky-lane-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sky-lane-title {
+  flex: 1 1 auto;
+}
+
+.sky-lane-toggle,
+.sky-lane-more {
+  flex: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-size: 14px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+
+.sky-lane-toggle:hover,
+.sky-lane-more:hover {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--panel-2);
+}
+
+/* --- A source block -------------------------------------------------------- */
+
+.sky-lane-block {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+
+.sky-lane-block-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.sky-lane-block-head .fl-kind-badge {
+  margin-top: 0;
+}
+
+.sky-lane-block-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.sky-lane-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.sky-lane-auto,
+.sky-lane-flyway {
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sky-lane-auto.on {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 45%, transparent);
+  background: color-mix(in srgb, var(--green) 10%, transparent);
+}
+
+.sky-lane-flyway.own {
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb), 0.45);
+  background: rgba(var(--accent-rgb), 0.1);
+}
+
+.sky-lane-empty {
+  font-size: 12px;
+  margin: 0;
+}
+
+/* --- Waiting items --------------------------------------------------------- */
+
+.sky-lane-items,
+.sky-lane-stubs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sky-lane-item-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 4px 4px 7px;
+  border-radius: 7px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.sky-lane-item-words {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  gap: 5px;
+  font-size: 12px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.sky-lane-item-ref {
+  flex: none;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.sky-lane-item-headline {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
+.sky-lane-fly.fl-btn {
+  flex: none;
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+.sky-lane-error {
+  font-size: 11.5px;
+  margin: 3px 0 0;
+}
+
+.sky-lane-n-more {
+  font-size: 11.5px;
+  padding-left: 7px;
+}
+
+/* --- Started sessions: a stub out of the block's right edge ---------------- */
+
+.sky-lane-stub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: -10px;
+  font-size: 11.5px;
+  color: var(--muted);
+  min-width: 0;
+}
+
+.sky-lane-stub-name {
+  order: -1;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  margin-left: auto;
+}
+
+.sky-lane-stub-line {
+  flex: none;
+  width: 22px;
+  height: 0;
+  border-top: 1.5px solid rgba(var(--accent-rgb), 0.7);
+  position: relative;
+}
+
+.sky-lane-stub-line::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  top: -4.5px;
+  border: 4px solid transparent;
+  border-left: 6px solid rgba(var(--accent-rgb), 0.7);
+  border-right: 0;
+}
+
+/* --- Folded: one icon per source with its count ---------------------------- */
+
+.sky-lane-rail {
+  width: 44px;
+  align-items: center;
+  padding: 8px 4px;
+  gap: 8px;
+}
+
+.sky-lane-rail-icon.fl-kind-badge {
+  position: relative;
+  margin: 0;
+  min-width: 28px;
+  padding: 6px 4px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.sky-lane-rail-count {
+  position: absolute;
+  top: -6px;
+  right: -7px;
+  min-width: 15px;
+  padding: 2px 3px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  line-height: 1;
+  color: var(--bg);
+  background: var(--accent);
+  box-sizing: border-box;
+}
+/* The Sky's new-session block (NewSessionBlock.tsx): a card at the spot the
+ * owner double-clicked. Its fields are Flights' form controls (.fl-form), so
+ * they wear the New dialog's look. */
+
+.sky-new.fl-form {
+  position: absolute;
+  z-index: 20;
+  box-sizing: border-box;
+  width: 380px;
+  max-width: calc(100vw - 24px);
+  grid-template-columns: 1fr;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+}
+
+.sky-new-head {
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+.sky-new-path {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sky-new-path input {
+  flex: 1 1 auto;
+  min-width: 0;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 7px 9px;
+  font-size: 12.5px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  outline: none;
+}
+
+.sky-new-path input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+}
+
+.sky-new-repos {
+  margin-bottom: 2px;
+}
+
+.sky-new-error {
+  margin: 0;
+  font-size: 12px;
+}
+
+.sky-new-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+/* One session's line in the Sky (SkyLine.tsx). The host places it (absolute,
+   at its layout's x/y); the line sizes itself to its diagram and reports
+   that size, so it is in flow inside the host's box. */
+
+.skl {
+  position: relative;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 280px;
+  padding: 0 10px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.18);
+}
+
+.light .skl {
+  box-shadow: 0 4px 16px rgba(20, 30, 60, 0.1);
+}
+
+.skl.is-focused {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 2px rgba(var(--accent-rgb), 0.35),
+    0 6px 22px rgba(0, 0, 0, 0.18);
+}
+
+.skl.is-editing,
+.skl.is-open {
+  z-index: 5;
+}
+
+/* --- The title bar: the handle the host drags the line by ----------------- */
+
+.skl-bar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  margin: 0 -10px 4px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+
+.skl-bar > .fl-bird {
+  flex: none;
+  color: var(--accent);
+}
+
+.skl-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skl-chip {
+  flex: none;
+  align-self: center;
+}
+
+.skl-pin {
+  flex: none;
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.skl-size {
+  flex: none;
+  margin-left: auto;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.skl-size:hover,
+.skl-size:focus-visible {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.skl-menu {
+  flex: none;
+}
+
+.skl-gone {
+  margin: 8px 2px 0;
+  font-size: 12px;
+}
+
+/* --- The diagram: the sky pans, the canvas never scrolls ------------------- */
+
+.skl .fl-canvas.skl-canvas {
+  overflow: visible;
+  max-width: none;
+  padding: 0;
+}
+
+.skl .fl-canvas.skl-canvas .fl-stage {
+  cursor: default;
+}
+
+/* What the + or a stop opened: a card hanging under the line. */
+.skl-panels {
+  position: absolute;
+  left: -1px;
+  top: calc(100% + 6px);
+  width: max(100%, 440px);
+  max-height: 560px;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* --- An open box: the session's real pane ---------------------------------- */
+
+.skl-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  box-sizing: content-box;
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+}
+
+.skl-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  box-sizing: border-box;
+  padding: 0 6px 0 11px;
+  font-size: 12px;
+}
+
+.skl-card-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skl-card-fold {
+  flex: none;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.skl-card-fold:hover,
+.skl-card-fold:focus-visible {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.skl-card-pane {
+  display: flex;
+  min-height: 0;
+}
+
+.skl-card-pane > .pane {
+  flex: 1;
+  min-width: 0;
+}
+
+.skl-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  touch-action: none;
+  z-index: 2;
+  background:
+    linear-gradient(135deg, transparent 0 55%, var(--muted) 55% 62%, transparent 62% 72%, var(--muted) 72% 79%, transparent 79%);
+  border-bottom-right-radius: 10px;
+  opacity: 0.7;
+}
+
+.skl-resize:hover {
+  opacity: 1;
+}
+/* The flyway shelf (FlywayShelf.tsx): saved flyways as chips along the
+   bottom of the Sky. */
+
+.sky-shelf {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.16);
+}
+
+.sky-shelf-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sky-shelf-head:hover,
+.sky-shelf-head:focus-visible {
+  background: var(--panel-2);
+}
+
+.sky-shelf-caret {
+  width: 10px;
+  color: var(--muted);
+}
+
+.sky-shelf-count {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.sky-shelf-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.sky-shelf-chip {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  cursor: grab;
+}
+
+.sky-shelf-chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.sky-shelf-chip:active {
+  cursor: grabbing;
+}
+
+.sky-shelf-open,
+.sky-shelf-fly,
+.sky-shelf-new {
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.sky-shelf-open {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 4px 6px 4px 11px;
+}
+
+.sky-shelf-name {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sky-shelf-chip.builtin .sky-shelf-name {
+  color: var(--muted);
+}
+
+.sky-shelf-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  line-height: 0;
+}
+
+.sky-shelf-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--tone-working);
+}
+
+.sky-shelf-dot.perch {
+  background: var(--tone-attention);
+}
+
+.sky-shelf-more {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.sky-shelf-fly {
+  align-self: stretch;
+  padding: 0 11px 0 8px;
+  border-left: 1px solid var(--border);
+  border-radius: 0 999px 999px 0;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sky-shelf-fly:hover,
+.sky-shelf-fly:focus-visible {
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+.sky-shelf-new {
+  padding: 6px 12px;
+  border-style: dashed;
+  color: var(--accent);
+  cursor: pointer;
+}
+/* A flyway made on the Sky (FlywayCard.tsx): a card floating over the plane.
+   The canvas, the palette, the inspector and Describe bring their own styles
+   (FlywayCanvas.css / FlightsDialog.css); this is the card around them. */
+
+.sky-flyway-card {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(78vh, 720px);
+  overflow: auto;
+  padding: 12px 14px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.28);
+  cursor: auto;
+}
+
+.sky-flyway-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sky-flyway-card-head > .fl-bird {
+  flex: none;
+  color: var(--accent);
+}
+
+.sky-flyway-card-head > .fl-input {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.sky-flyway-card-error {
+  color: var(--red);
+}
+
+.sky-flyway-card-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.sky-flyway-card-ask {
+  margin-right: auto;
+  font-size: 12.5px;
+}
+/* The sky (SkyView.tsx) — prefix sky-.
+ *
+ * The main area's second view, in the grid's place (#sky-view is the body
+ * grid's second column, like #grid): a slim toolbar, then the sky — one plane
+ * under one translate+scale, a faint dot grid that scales with it (dark sky in
+ * the dark theme, a white expanse in the light one), the shelf of flyways
+ * folding at its foot — and the drawer at its right edge. Every line is a
+ * card on the plane; the canvas inside it never scrolls (the sky pans
+ * instead). A phone gets the lines as a plain list. */
+
+/* --- The view in the main area ---------------------------------------------- */
+
+#sky-view {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0 0 0 12px;
+}
+
+#sky-view.sky-narrow {
+  overflow-y: auto;
+  padding: 8px 10px;
+}
+
+/* Grid ⇄ sky (lib/viewMode): the incoming view fades in while a ghost of each
+   session flies from its pane to its line (or back). */
+body.view-switch #grid,
+body.view-switch #sky-view {
+  animation: view-in 0.15s ease-out both;
+}
+
+@keyframes view-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.view-ghost {
+  position: fixed;
+  z-index: 40;
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.22);
+}
+
+.view-ghost.is-focused {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--accent),
+    0 10px 30px rgba(var(--accent-rgb), 0.3);
+}
+
+/* --- The sky ---------------------------------------------------------------- */
+
+.sky {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  --sky-bg: var(--bg);
+  --sky-dot: color-mix(in srgb, var(--text) 17%, transparent);
+}
+
+.light .sky {
+  --sky-bg: #ffffff;
+  --sky-dot: color-mix(in srgb, var(--text) 13%, transparent);
+}
+
+.sky-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px 10px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+}
+
+.sky-search .fl-input {
+  width: 190px;
+  padding: 4px 9px;
+  font-size: 12.5px;
+}
+
+.sky-new {
+  padding: 4px 11px;
+  font-size: 12.5px;
+}
+
+.sky-zoom {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1px;
+  background: var(--panel);
+}
+
+.sky-zoom-btn {
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  padding: 3px 8px;
+  font: inherit;
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.sky-zoom-btn:hover:not(:disabled) {
+  background: var(--panel-2);
+}
+
+.sky-zoom-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.sky-zoom-read {
+  min-width: 44px;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+}
+
+.sky-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  margin-left: -12px;
+  border-top: 1px solid var(--border);
+}
+
+/* The sky over its shelf. */
+.sky-stage {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sky-tidy {
+  padding: 4px 11px;
+  font-size: 12.5px;
+}
+
+/* Fly a flyway with no line focused: which line. */
+.sky-flypick {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 0 6px;
+  font-size: 12.5px;
+}
+
+/* --- The shelf of flyways (FlywayShelf), folding at the sky's foot ----------- */
+
+.sky-shelf {
+  flex: none;
+  position: relative;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.sky-shelf-fold {
+  position: absolute;
+  left: 12px;
+  top: -25px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: var(--panel);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.sky-shelf-fold:hover {
+  color: var(--text);
+}
+
+.sky-viewport {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+  background-color: var(--sky-bg);
+  background-image: radial-gradient(circle, var(--sky-dot) 1px, transparent 1.4px);
+}
+
+/* Focused by a press on empty sky (so the arrows and + / − reach it), never
+   tabbed to: no ring. */
+.sky-viewport:focus {
+  outline: none;
+}
+
+.sky-viewport.is-grab,
+.sky-viewport.is-grab * {
+  cursor: grab !important;
+}
+
+.sky-plane {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+}
+
+.sky-intake {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+.sky-empty {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  transform: translate(-50%, -50%);
+  max-width: 440px;
+  margin: 0;
+  text-align: center;
+  font-size: 13.5px;
+  pointer-events: none;
+}
+
+/* --- A line ------------------------------------------------------------------ */
+
+.sky-line {
+  position: absolute;
+  left: 0;
+  top: 0;
+  box-sizing: border-box;
+  padding: 0 10px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.18);
+  cursor: default;
+  user-select: text;
+  transition:
+    transform 0.35s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease;
+  animation: sky-in 0.35s ease both;
+}
+
+.light .sky-line {
+  box-shadow: 0 4px 16px rgba(20, 30, 60, 0.1);
+}
+
+.sky-line.is-chosen {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+}
+
+.sky-line.is-flash {
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 0 26px rgba(var(--accent-rgb), 0.45);
+}
+
+.sky-line.is-dragging {
+  transition: none;
+  z-index: 4;
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.3);
+}
+
+.sky-line.is-editing {
+  z-index: 5;
+}
+
+.sky-line-bar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  margin: 0 -10px 4px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+
+.sky-line.is-dragging .sky-line-bar {
+  cursor: grabbing;
+}
+
+.sky-line-bar > .fl-bird {
+  flex: none;
+  color: var(--accent);
+}
+
+.sky-line-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sky-line-chip {
+  flex: none;
+  align-self: center;
+}
+
+.sky-line-menu {
+  margin-left: auto;
+  flex: none;
+}
+
+/* The canvas inside a line never scrolls: the sky pans. */
+.sky-line .fl-canvas.sky-canvas {
+  overflow: visible;
+  max-width: none;
+  padding: 0;
+}
+
+.sky-line .fl-canvas.sky-canvas .fl-stage {
+  cursor: default;
+}
+
+/* What the + or a stop opened: a card hanging under the line. */
+.sky-line-panels {
+  position: absolute;
+  left: -1px;
+  top: calc(100% + 6px);
+  width: max(100%, 440px);
+  max-height: 560px;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sky-line-leaving {
+  animation: sky-out 0.42s ease forwards;
+  pointer-events: none;
+}
+
+@keyframes sky-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes sky-out {
+  to {
+    opacity: 0;
+    filter: blur(1.5px);
+  }
+}
+
+/* --- A line's host-side states ------------------------------------------------ */
+
+/* No line glides while one is being dragged (the dragged one follows the
+   pointer; Tidy and a reflow still glide). */
+.sky-plane[data-dragging] .sky-line {
+  transition: none;
+}
+
+.sky-line {
+  width: max-content;
+  min-width: 280px;
+}
+
+.sky-line-slot.is-flash .sky-line {
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 0 26px rgba(var(--accent-rgb), 0.45);
+}
+
+.sky-line.is-drop-target {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 12px 32px rgba(var(--accent-rgb), 0.3);
+}
+
+.sky-line-drop {
+  margin: 6px 0 2px;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.sky-line-pin {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+/* An opened box: the session's own pane, right on the line. */
+.sky-line-pane {
+  display: flex;
+  margin-top: 10px;
+  min-width: 0;
+}
+
+.sky-line-pane > .pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.sky-flyway-card {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 6;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+
+.sky-flyway-card p {
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.sky-list .sky-line {
+  position: relative;
+  transform: none !important;
+  width: auto;
+  min-width: 0;
+  animation: none;
+}
+
+/* --- The drawer: perched on you ------------------------------------------------- */
+
+.sky-drawer {
+  flex: none;
+  display: flex;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.sky-drawer.open {
+  width: 360px;
+}
+
+.sky-drawer-tab {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 12px 6px;
+  writing-mode: vertical-rl;
+  background: transparent;
+  border: 0;
+  border-right: 1px solid transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+
+.sky-drawer.open .sky-drawer-tab {
+  border-right-color: var(--border);
+}
+
+.sky-drawer-tab:hover {
+  color: var(--text);
+}
+
+.sky-drawer-tab .fl-count {
+  writing-mode: horizontal-tb;
+}
+
+.sky-drawer-body {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+details.fl-group-waiting > summary {
+  cursor: pointer;
+  list-style: revert;
+}
+
+.sky-perch {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--tone-attention);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.sky-perch.is-halted {
+  border-color: var(--red);
+}
+
+.sky-perch-name {
+  align-self: flex-start;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sky-perch-name:hover {
+  text-decoration: underline;
+}
+
+.sky-perch-step {
+  font-size: 12px;
+}
+
+/* --- A phone: the lines as a list ------------------------------------------------ */
+
+.sky-narrow {
+  gap: 12px;
+}
+
+.sky-narrow .sky-drawer {
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.sky-narrow .sky-drawer.open {
+  width: auto;
+}
+
+.sky-narrow .sky-drawer-tab {
+  writing-mode: horizontal-tb;
+  padding: 8px 10px;
+  border-right: 0;
+}
+
+.sky-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sky-line.sky-line-flow {
+  position: relative;
+  width: auto;
+  animation: none;
+}
+
+.sky-line-flow .sky-line-bar {
+  cursor: default;
+}
+
+.sky-line-flow .sky-line-panels {
+  position: static;
+  width: auto;
+  max-height: none;
+  margin-top: 8px;
+  box-shadow: none;
+}
+
+@media (max-width: 600px) {
+  .sky-search .fl-input {
+    width: 140px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sky-line {
+    transition: none;
+    animation: none;
+  }
+  .sky-line-leaving {
+    animation: none;
+    opacity: 0;
+  }
 }
 
 @layer tokens, base, components, theme;
@@ -7502,6 +8137,41 @@ body #mf-winctl {
 #topbar .tb-more-menu .tb-more-item:focus-visible {
   background: var(--app-panel-2, var(--panel-2));
   outline: none;
+}
+
+/* Grid · Sky: the main area's two views (lib/viewMode), a segmented pair of
+   .tb-items beside Flights. The active one is filled, like a pressed key; on
+   a phone-narrow window the words go and the glyphs stay. */
+#topbar .tb-views {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 2px;
+  padding: 1px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  gap: 1px;
+}
+
+#topbar .tb-views .tb-view {
+  height: 20px;
+  gap: 4px;
+  padding: 0 6px;
+  border-radius: 4px;
+  color: var(--muted);
+}
+
+#topbar .tb-views .tb-view.active {
+  background: var(--panel-2);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+#topbar .tb-view-icon {
+  flex: none;
+}
+
+body.narrow #topbar .tb-view-word {
+  display: none;
 }
 }
 
@@ -11091,6 +11761,12 @@ p.set-hint {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
+}
+
+/* The sky is the other view, not a fifth grid size: set a hair apart. */
+#view-modes .vm.vm-sky {
+  flex: 1.4;
+  margin-left: 4px;
 }
 
 
@@ -15051,6 +15727,20 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 .pane .peer-strip.off {
   background: color-mix(in srgb, var(--muted) 12%, transparent);
   font-style: italic;
+}
+
+/* A pane inside a Sky card (flights/SkyLine — `embedded`): the card is its
+   frame, so it fills it; nothing to grab, the header isn't a drag handle. */
+.pane.pane-embedded {
+  width: 100%;
+  height: 100%;
+  border-radius: 0 0 10px 10px;
+  border-width: 1px 0 0;
+}
+
+.pane-embedded .pane-head,
+.pane-embedded .pane-head:active {
+  cursor: default;
 }
 }
 

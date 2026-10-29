@@ -357,7 +357,7 @@ describe("the dialog", () => {
     expect(html).not.toContain('data-line="verify-helper"');
     // Each line: its bar (name, state chip, ⋯), its diagram, the trailing +.
     const line = html.slice(html.indexOf('data-line="sc-12-fix-login"'));
-    expect(line).toContain('class="sky-line-name">sc-12-fix-login<');
+    expect(line).toContain('class="skl-name">sc-12-fix-login<');
     expect(line).toContain('aria-label="Actions for sc-12-fix-login"');
     expect(line).toContain(">Tack on a stop<");
     // The bird: gold on the perch, flying on the running stop.
