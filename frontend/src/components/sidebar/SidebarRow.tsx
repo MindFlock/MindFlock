@@ -69,8 +69,10 @@ import { MidName } from "./MidName";
 import { TaskLine, taskLineOf } from "./TaskLine";
 import { sessionMenu } from "../../lib/sessionMenu";
 import { PresenceDots } from "../presence/Presence";
+import { GuestPills } from "../presence/GuestPill";
 import { useMe } from "../../lib/presence";
 import { PEER_SCREEN, peerChip } from "../../lib/peer";
+import { isOfflinePeerRow, isPeerRow, peerRowChip } from "../../lib/peerSessions";
 import { actionCtx, sessionAction } from "../../lib/sessionActionTable";
 import { openSettings } from "../../lib/openSettings";
 import { VerdictChip } from "../dialogs/VerdictChip";
@@ -423,7 +425,8 @@ export const SidebarRow = memo(function SidebarRow({
   const rz = extra.rz;
   // A shared-folder (peer-link) session: its chip, and the actions the
   // server refuses for it left out of the menu below.
-  const peer = peerChip(inst);
+  // A PEER's session (theirs, shared with us over a link): who and how.
+  const peer = isPeerRow(inst) ? peerRowChip(inst) : peerChip(inst);
   // A job the agent backgrounded and left behind: waiting (will wake it) or
   // stuck (never will; the chip stops it). lib/backgroundJobs.
   const bg = pending ? null : backgroundChip(inst);
@@ -466,8 +469,13 @@ export const SidebarRow = memo(function SidebarRow({
    * (A click on the row that is already selected used to arm this after a
    * pause — a re-select read as "rename", so going back to a session's
    * terminal from its row started an edit instead.) */
+  // A peer's session (theirs, shared with us): its name is theirs — no
+  // rename, no IDE here. Remembered after their link dropped: greyed and
+  // not clickable until they are back (lib/peerSessions).
+  const theirs = isPeerRow(inst);
+  const offlinePeer = isOfflinePeerRow(inst);
   const startRename = () => {
-    if (pending || picking) return;
+    if (pending || picking || theirs) return;
     cancelled.current = false;
     setEditing(true);
   };
@@ -510,6 +518,7 @@ export const SidebarRow = memo(function SidebarRow({
     (hidden ? " is-hidden" : "") +
     (missing ? " ws-missing" : "") +
     (pending ? " is-pending" : "") +
+    (offlinePeer ? " peer-gone" : "") +
     (picked ? " bulk-picked" : "") +
     (menuAt ? " menu-open" : "") +
     (dropCue ? ` drop-${dropCue}` : "");
@@ -577,7 +586,9 @@ export const SidebarRow = memo(function SidebarRow({
             // Shift-click picks a range; don't let it select text on the way.
             if (e.shiftKey) e.preventDefault();
           }}
+          aria-disabled={offlinePeer || undefined}
           onClick={(e) => {
+            if (offlinePeer) return;
             if (editing || Date.now() - editEndedAt.current < DBLCLICK_MS + 100) return;
             // Picking rows for the bulk bar: Ctrl/⌘ toggles one, Shift takes the
             // range from the last pick, and in select mode a plain click toggles.
@@ -591,7 +602,7 @@ export const SidebarRow = memo(function SidebarRow({
           }}
           onDoubleClick={() => {
             if (picking) return;
-            if (!missing && !pending) ideSession(title, true);
+            if (!missing && !pending && !theirs) ideSession(title, true);
           }}
           onContextMenu={onRowContextMenu}
         >
@@ -869,6 +880,9 @@ export const SidebarRow = memo(function SidebarRow({
           {inst.shared_branch && (
             <span className="shared-branch-mark" title={"Shared branch " + (inst.branch || "") + " — others push to it too"} aria-label="shared branch">⑂</span>
           )}
+          {/* A guest link's visitor looking at this session (lib/guestFocus):
+              their name, click to follow them around. */}
+          {!pending && <GuestPills title={inst.title} />}
           {extra.check && (
             <span className={"stagechip checkchip " + extra.check.cls} title={extra.check.title}>
               {extra.check.label}
@@ -926,7 +940,7 @@ export const SidebarRow = memo(function SidebarRow({
             </button>
           )}
           {/* The joint check's verdict, when this shared session's link has one. */}
-          {peer && <JointVerdictChip linkId={inst.peer_with?.link_id} peerName={inst.peer_with?.name} where="row" />}
+          {peer && !isPeerRow(inst) && <JointVerdictChip linkId={inst.peer_with?.link_id} peerName={inst.peer_with?.name} where="row" />}
           {rz && !pending && (
             <button
               type="button"

@@ -166,6 +166,8 @@ its flag file). Both are served on the cheap snapshot path too (`last_say`
 carried over, `voice` read fresh). See
 [Voice](#voice-talking-to-a-session-from-the-phone) for where the line comes
 from and the routes that set the flag.
+`flock` is whether [Flock mode](#flock-mode-every-prompt-asks-for-workers) is
+on for the session (one stat on its `.flock` file; read fresh on both paths).
 `asking` is the first-class **"it is asking you something"** signal
 (`core/asking.py`), `null` when it is not, else one shape for both ways an
 agent waits on a person:
@@ -294,7 +296,8 @@ appears as `loading` until ready.
 {
   "title": "sc-19815",          // optional: with story_id defaults to sc-<id>; else
                                 //   named from "prompt" (add-readme-section-about-setup,
-                                //   -2 when taken), else "untitled" / "untitled-N"
+                                //   -2 when taken), else from repo_path's folder name
+                                //   (sitecheck-bot7), else "untitled" / "untitled-N"
   "program": "claude",          // optional; default from ~/.mindflock/config.json
   "repo_path": "/path/to/repo", // base repo (plain sessions; optional for provisioned)
   "in_place": false,            // run directly in repo_path, no worktree
@@ -1214,7 +1217,7 @@ row, unless it is waived here). The per-session zones read also answers
 
 | Method | Path | Behavior |
 |---|---|---|
-| POST | `/api/instances/{title}/send` | Body `{text, submit?, dialog_safe?, say?}` — or `{enter: true, say?}` (below). Types `text` into the **agent** window and (default) presses Enter, booting/resuming the agent tmux first if it isn't running — so one call kicks a fresh session into motion (max token use). `submit:false` types without submitting. Enter is a separate keystroke a beat after the text so an agent TUI doesn't read the burst as a paste. A **sleeping** agent is woken and the text put at the front of its prompt queue instead of typed into the booting CLI → `{sent: false, queued: true, submitted: false, woke: true}`; an unsubmitted paste (or a looping queue) only wakes it → **409** `{error, waking: true}` — send again in a moment. `dialog_safe:true` (the web UI's Thread "Send now" and every playbook paste) re-probes the agent's live, uncached activity first — and checks the screen for a dialog, which outranks the reading (see the screen-evidence guard under [Inter-agent messages](#inter-agent-messages)) — and never types into a prompt or the usage-limit menu (a digit or an Enter there would answer it): on `clarify`/`limit`, a dialog on screen (or an activity that can't be read) a submitted message is **queued** instead → `{sent: false, queued: true, submitted: false}` (the drain delivers it once the agent is free), and an unsubmitted paste is **409** `{error, in_dialog: true}` with nothing typed (queueing it would submit it later). A working agent is still typed into. **`say`** (boolean, default `false`; anything but JSON `true` reads as false) asks for a spoken reply to *this* prompt: the session ends this one reply with the `Say:` line [voice mode](#voice-talking-to-a-session-from-the-phone) speaks. The client decides per prompt — the phone's dictation sends `true`, typing sends nothing, the desktop mic sends `true` only while "read replies aloud" is on; the server never guesses from the device or from the voice flag, because the line costs tokens. It is applied right before the keystrokes, after every dialog/queue decision: for a CLI whose prompt hook injects the instruction (`provider.voice_prompt_hook()`: Claude) the delivery re-pins the worktree's hooks (a session launched by an older build gets the hook that knows the request; Claude Code hot-reloads it) and arms the one-shot `<voice dir>/<tmux session>.next` that hook consumes; for every other CLI (Codex, the config-driven ones), or when the file can't be written, `"\n\n"` + `core.spoken.INSTRUCTION` is typed after the text. A failed send disarms it again. A **queued** prompt (dialog_safe on a prompt, an asleep agent) keeps `say: true` on its queue item and is armed only when the drain or Send now types it; queue items without the field (all older entries) read as false. `submit:false` (a paste left for review) never asks. Absent/false: no instruction, whatever the voice flag says. → `{sent, submitted}` (409 if the workspace is gone, `{paused: true}` when the session is paused — nothing typed, the agent not relaunched — or `{budget_locked: true}` when the session is over budget, 502 if the send fails). **`{"enter": true}`** with no (or empty) `text` presses Enter on what is already in the agent's input field — live dictation: the desktop app types recognised phrases straight into the terminal over its own websocket (the server never sees that text), then submits through here so `say` is armed exactly as for a text send: Claude's one-shot `.next` right before the keystroke, or, for a hook-less CLI, `"\n\n"` + the instruction typed after the draft (as a paste) before the Enter. The Enter is the same separate keystroke a text send ends with. Always dialog-safe, never queued and never booting (there is no text to queue, and a fresh CLI has no draft): a dialog or the usage-limit menu on screen, or an activity that can't be read → **409** `{error, in_dialog: true}` with nothing pressed (an Enter would answer it); asleep → **409** `{error}` (not woken); agent not running → **409** `{error}` (not relaunched); paused, over budget and driven-elsewhere as above. A working agent is pressed (the CLI queues the prompt itself). → `{sent: true, submitted: true, entered: true}`; **400** for `enter` with a non-empty `text` or with `submit: false` (and `enter` is JSON `true` only — anything else is a plain send with no text, 400 `empty message`) |
+| POST | `/api/instances/{title}/send` | Body `{text, submit?, dialog_safe?, say?, flock?}` — or `{enter: true, say?, flock?}` (below). Types `text` into the **agent** window and (default) presses Enter, booting/resuming the agent tmux first if it isn't running — so one call kicks a fresh session into motion (max token use). `submit:false` types without submitting. Enter is a separate keystroke a beat after the text so an agent TUI doesn't read the burst as a paste. A **sleeping** agent is woken and the text put at the front of its prompt queue instead of typed into the booting CLI → `{sent: false, queued: true, submitted: false, woke: true}`; an unsubmitted paste (or a looping queue) only wakes it → **409** `{error, waking: true}` — send again in a moment. `dialog_safe:true` (the web UI's Thread "Send now" and every playbook paste) re-probes the agent's live, uncached activity first — and checks the screen for a dialog, which outranks the reading (see the screen-evidence guard under [Inter-agent messages](#inter-agent-messages)) — and never types into a prompt or the usage-limit menu (a digit or an Enter there would answer it): on `clarify`/`limit`, a dialog on screen (or an activity that can't be read) a submitted message is **queued** instead → `{sent: false, queued: true, submitted: false}` (the drain delivers it once the agent is free), and an unsubmitted paste is **409** `{error, in_dialog: true}` with nothing typed (queueing it would submit it later). A working agent is still typed into. **`say`** (boolean, default `false`; anything but JSON `true` reads as false) asks for a spoken reply to *this* prompt: the session ends this one reply with the `Say:` line [voice mode](#voice-talking-to-a-session-from-the-phone) speaks. The client decides per prompt — the phone's dictation sends `true`, typing sends nothing, the desktop mic sends `true` only while "read replies aloud" is on; the server never guesses from the device or from the voice flag, because the line costs tokens. It is applied right before the keystrokes, after every dialog/queue decision: for a CLI whose prompt hook injects the instruction (`provider.voice_prompt_hook()`: Claude) the delivery re-pins the worktree's hooks (a session launched by an older build gets the hook that knows the request; Claude Code hot-reloads it) and arms the one-shot `<voice dir>/<tmux session>.next` that hook consumes; for every other CLI (Codex, the config-driven ones), or when the file can't be written, `"\n\n"` + `core.spoken.INSTRUCTION` is typed after the text. A failed send disarms it again. A **queued** prompt (dialog_safe on a prompt, an asleep agent) keeps `say: true` on its queue item and is armed only when the drain or Send now types it; queue items without the field (all older entries) read as false. `submit:false` (a paste left for review) never asks. Absent/false: no instruction, whatever the voice flag says. **`flock`** (boolean, JSON `true` only; with `submit`) asks *this* prompt for MindFlock workers: `"\n\n"` + the workers request ([Flock mode](#flock-mode-every-prompt-asks-for-workers)) is typed after the text — before the voice instruction when both apply. A session in Flock mode gets the same without asking: its hook CLI (Claude) injects the request itself, so nothing is appended there (and a `flock: true` adds no duplicate); any other CLI gets it appended to every sent text. Applied at request time, so a queued prompt carries it in its text; with `enter` it is typed after the draft. → `{sent, submitted}` (409 if the workspace is gone, `{paused: true}` when the session is paused — nothing typed, the agent not relaunched — or `{budget_locked: true}` when the session is over budget, 502 if the send fails). **`{"enter": true}`** with no (or empty) `text` presses Enter on what is already in the agent's input field — live dictation: the desktop app types recognised phrases straight into the terminal over its own websocket (the server never sees that text), then submits through here so `say` is armed exactly as for a text send: Claude's one-shot `.next` right before the keystroke, or, for a hook-less CLI, `"\n\n"` + the instruction typed after the draft (as a paste) before the Enter. The Enter is the same separate keystroke a text send ends with. Always dialog-safe, never queued and never booting (there is no text to queue, and a fresh CLI has no draft): a dialog or the usage-limit menu on screen, or an activity that can't be read → **409** `{error, in_dialog: true}` with nothing pressed (an Enter would answer it); asleep → **409** `{error}` (not woken); agent not running → **409** `{error}` (not relaunched); paused, over budget and driven-elsewhere as above. A working agent is pressed (the CLI queues the prompt itself). → `{sent: true, submitted: true, entered: true}`; **400** for `enter` with a non-empty `text` or with `submit: false` (and `enter` is JSON `true` only — anything else is a plain send with no text, 400 `empty message`) |
 | POST | `/api/instances/{title}/driver` | Take or release the session's keyboard ([people.md](people.md#owner-driver-viewers)). `{"take": true}` makes the caller's person the driver — anyone who can reach the session may; the previous driver hears it as a `session.driver_changed` event and their open terminals turn read-only. `{"release": true}` gives it up (**409** `{error: "driven by <name>", driver}` when another person holds it). → `{owner, driver, driver_name, viewers}` (+ `previous`, the old driver's id, on a take). **400** neither, **404** unknown. A remote row (`<device>::<title>`) is forwarded like every per-session route, carrying the caller's person |
 | POST | `/api/instances/{title}/owner` | `{"person": "<id>"}` — give the session to another person. The owner otherwise never changes (it defaults to the person the session was created for). This device's owner only (`may_configure`, **403**; so not through a gateway). → the presence fields; **400** not a person id, **404** unknown |
 | GET | `/api/instances/{title}/queue` | `{items: [{id, text, added}], pending, enabled, loop, loop_interval, wait_for_limit, limited_until, last_sent}` |
@@ -1800,6 +1803,26 @@ saying that*; `enough` *that's enough*, *enough of that*) and its `heard`
 forms; a phrase the person adds is matched whole, or a letter off
 (`sounds_like`, above).
 
+### Flock mode: every prompt asks for workers
+
+`backend/web/routes/flock.py` over `core/flock_mode.py`. While a session's
+Flock mode is on, every prompt the person submits to it carries the
+**workers request** — `general.workers_request` with `{model}` replaced by
+`general.workers_model` ([configuration](configuration.md)), the same text
+`GET /api/config` serves as `flock.request` — without them typing it. The
+flag is the file `<voice flag dir>/<tmux session>.flock` (the voice flags'
+directory and keying), and its **content is the request text**: Claude's
+`UserPromptSubmit` hook (`provider.voice_prompt_hook()`) prints it on every
+prompt, after the voice instruction — terminal-typed prompts included —
+and Claude Code injects that as context. Every other CLI gets `"\n\n"` +
+the request typed after each `/send` text instead. A settings change re-writes
+every `.flock` file. No event: clients read the row's `flock` (the SPA polls
+rows every 4 s).
+
+| Method | Path | Behavior |
+|---|---|---|
+| POST | `/api/instances/{title}/flock` | Body `{"on": true\|false}` → `{flock: bool}`, read back after the write. **On** writes the `.flock` file with the current request text and, for a hook CLI, re-runs `install_activity_hooks` so a session launched by an older build gets the hook that prints it (Claude Code hot-reloads it). **Off** removes the file. **400** without a boolean `on`, **404** unknown session, **409** for a `<device>::<title>` row or a request another MindFlock relayed (the flag is the session device's file), **500** when the file can't be written. Owner-only: a guest link gets the gate's 403 (`flock` is not a guest session write) |
+
 ### Inter-agent messages
 
 A message one session's agent (through the MindFlock MCP), the CLI
@@ -1816,7 +1839,9 @@ The full semantics are in [mcp.md](mcp.md#messages).
 
 | Method | Path | Behavior |
 |---|---|---|
-| POST | `/api/instances/{title}/messages` → 201 | Leave a message for `title`. Body `{text, from?, reply_to?, delivery?, kind?, data?}`, described below the table. → **201** `{message, delivery: "delivered"\|"pending"\|"held", detail?}` and a `session.message` event on the recipient. **400**: empty or non-string `text`, `text` > 20000 chars, an unknown `from`, `from` == the recipient, a bad `delivery`/`kind`, `data` not an object or > 8192 bytes serialized, a non-string `reply_to`. **404**: unknown recipient |
+| POST | `/api/instances/{title}/messages` → 201 | Leave a message for `title`. Body `{text, from?, reply_to?, delivery?, kind?, data?}`, described below the table. → **201** `{message, delivery: "delivered"\|"pending"\|"held", detail?}` and a `session.message` event on the recipient. **400**: empty or non-string `text`, `text` > 20000 chars, an unknown `from`, `from` == the recipient, a bad `delivery`/`kind`, `data` not an object or > 8192 bytes serialized or carrying `peer` (reserved for agent messages over a peer link), a non-string `reply_to`. **404**: unknown recipient |
+| POST | `/api/instances/<peer>::<title>/messages` → 202 | On a session a peer shares with you ([peer-link.md](peer-link.md#agent-messages-across-the-link)): body `{text, from, reply_to?}` — `from` one of your sessions — is sent over the link (`agent_msg`), stored in THAT session's inbox on their machine and typed in there as another person's agent → **202** `{ok, id, their_id, peer: true}` (`id` is what their reply names as `reply_to`; a `delivery` other than `auto` is sent as `auto` with a `detail`). **400**: no/unknown `from`, empty or over-long `text`, a `kind` other than `message`. **409**: not shared with you (or they stopped sharing it). **503**: the peer is offline. **403**: relayed by another MindFlock, or a guest link. `GET` on a peer row is **409** "their inbox lives on their machine" |
+| GET/POST | `/api/instances/<peer>::<title>/chat` | The people chat of a session a peer shares with you (docs/people.md "A small chat"; the chat lives on THEIR machine). GET `?since=<id>` → `{messages, me}` like a local session's: your copy of their chat — each line they push over the link (`chat_out`) since the row appeared, ids theirs, `from` your own id on your lines and `peer:<link>:<their id>` on everyone else's. POST `{text}` → sent over the link (`chat_msg`) into their chat for that session → **202** the message as kept here (its echo carries the same id; `session.chat` on the row). **400**: blank text. **409**: not shared with you (or they stopped sharing it, or their MindFlock is too old). **503**: the peer is offline. **403**: relayed by another MindFlock, or a guest link. Forgotten when the link drops |
 | GET | `/api/instances/{title}/messages` | The inbox → `{messages: [...oldest→newest], unread, version}`. Query parameters are described below the table. **400** for a non-numeric `limit`/`wait`, a bad `kind` or an unparseable `after` id. **404** for an unknown session |
 | POST | `/api/instances/{title}/messages/read` | Body `{ids: [...]}` or `{all: true}`. Marks those messages `read`; only `pending`/`held` ones change, and a pending message marked read is never typed. → `{marked, unread}` |
 
@@ -2424,12 +2449,14 @@ Let someone else type into a few of this device's sessions through a link
 ([people.md](people.md#guest-links--someone-else-in-a-few-of-your-sessions)).
 A guest signs in like the owner (`?token=` → cookie), but the gate records the
 link and allows per request: anything on `/api/instances/<title>` for a title
-on the link (writes only on the typing routes: terminal, shell, send, answer,
-asking, dialog, prompt, queue, voice, find, messages, thread, wake, jobs,
-background, code-map), `GET /api/instances` (every other row a stub:
-`{title, status, device, hidden_by, pending, locked: true}`), `WS /api/events`
-(their sessions' envelopes only), a few read-only boot calls (`/api/config`
-carries `guest: {label, sessions}`; `/api/prefs`, `/api/aliases`,
+the link reaches — the named sessions and their live sub-sessions, whenever
+spawned (`guests.reach`) — (writes only on the typing routes: terminal, shell,
+send, answer, asking, dialog, prompt, queue, voice, find, messages, thread,
+wake, jobs, background, code-map, focus), `GET /api/instances` (only the rows
+the link reaches; every other session is absent), `WS /api/events` (their
+sessions' envelopes only), a few read-only boot calls (`/api/config` carries
+`guest: {label, sessions}` — the whole reach; `/api/prefs`, `/api/aliases`
+(the owner's renames, filtered to the reach),
 `/api/addons`, `/api/devices`, `/api/providers[/status]`, `/api/setup`,
 `/api/person`, `/api/voice[/help]`, `/api/mindflock/status`) and the speech
 POSTs (`/api/voice/transcribe`, `/api/voice/speak`, `/api/paste-image`).
@@ -2445,6 +2472,9 @@ device 403, a change needs `may_configure`.
 | DELETE | `/api/guests/tunnel` | **Kill the connection**: every link revoked, the tunnel stopped → `{ok, revoked}`. A guest's open websockets close on their next frame (close code 4401) |
 | POST | `/api/guests/{id}` | `{label?, sessions?}` — change what the link opens; the URL stays; sockets on a session the link lost close; 400 for an empty list, 404 unknown |
 | DELETE | `/api/guests/{id}` | Revoke: the link's open sockets close on their next frame and its token stops working; the last link takes the tunnel down; 404 unknown |
+| POST | `/api/guest/name` | **The guest's**: `{name}` → `{name}` — what they are called on the owner's rail (the page asks on open; required before the pill shows). Unique on this rail: another guest's name or the owner's own → **409** `{error, taken: true}`; empty → 400; from the owner's browser → 403. Kept on the link (`GET /api/guests` rows carry `name`; `/api/config` → `guest.name`) |
+| GET/POST | `/api/instances/{title}/chat` | The session's chat between the PEOPLE on it (docs/people.md "A small chat"; in memory, last 200). GET `?since=<id>` → `{messages: [{id, from, name, text, ts}], me: {id, name}}`; POST `{text}` → 201 the message (≤2000 chars, control characters stripped; blank → 400), emits `session.chat`. A guest may read and write the chat of a session their link reaches (`from` is `guest:<link>`); unknown session 404; a `<device>::<title>` row 409 (chat lives where the session lives — a peer's `<peer>::<title>` row has its own routes, above) |
+| POST | `/api/instances/{title}/focus` | **The guest's** other call here: its page selected `title` (sent on every change and every 30 s) → `{ok, guest: true, focus: {title, ts}}`; emits `guest.focus_changed` when the session changed or they had been away. `GET /api/guests` rows carry `focus: {title, ts} \| null` (null after 90 s of silence). From the owner's own browser a no-op `{ok, guest: false}` |
 
 ### Peer links — the safety number, unlinking, the off switch, export
 
@@ -2486,6 +2516,29 @@ the rules a client must expect from them:
   repo you shared from, or a clone of it."
 - `GET /api/peer` → `listen.bound`: where the listener really is now
   (`"host:port"`, or `null`); a changed `peer.listen_port` re-binds it.
+
+### Peer links — join by link
+
+An invite is a link to send; the code (single use, 10 minutes, the safety
+number, the handshake — unchanged) rides inside it.
+
+- `POST /api/peer/invites` also answers `url`: `<base>/join#<code>`, where
+  `<base>` is the public tunnel address guest links use
+  (`guest_tunnel.url()`) while it is up, else this device's own tailnet/LAN
+  address (the one guest links call `local_url`). The code is in the
+  **fragment**, never the query, so it never reaches a server log. `GET
+  /api/peer` never repeats `url` (it holds the code), as it never repeats the
+  code.
+- `GET /join` (no token — see [Authentication](#authentication)):
+  "You've been invited to work together in MindFlock", an **Open in
+  MindFlock** button (`mindflock://join?code=<code>`, which the desktop app
+  turns into its own URL with `#join=<code>`: People → Join someone opens
+  prefilled), the code with **Copy code**, and the install fallback. No code
+  in the fragment → "This invite link is incomplete".
+- `POST /api/peer/join {code}` takes anything holding a code
+  (`invite.code_from_text`): the bare code, the whole invite message, the
+  invite link (`…/join#<code>`) or `mindflock://join?code=<code>`, either
+  link URL-encoded or not. Nothing found → the service's sentence as before.
 
 ### Peer links — joint tasks
 
@@ -2532,7 +2585,7 @@ ask: {state: ""|"asking"|"failed", at, until, error}, theirs_unsupported, link_i
 
 | Method | Path | Returns / accepts |
 |---|---|---|
-| GET | `/api/config` | `{default_program, provisioning_available, caps: {git, tailscale, ticketing, github, agent_mcp, team_runs}, home, repo_root, ide_name, onboarded, auth_mode, auth_enabled, fasttrack_depth, fasttrack_default}` — `fasttrack_default` is THE fast-track default batches start on — a list in New, Intake's Start together, and `POST /api/runs` with no `policy.lane` (Settings → Workspace "Fast-track goes as far as": a rung, or `off`, which is also what UNSET reads as; a single new session always starts Off and never reads it); `fasttrack_depth` is the rung an explicit depth-less `POST /fast-track` arms (never `off` — unset or Off reads as `pr` there, an explicit-arm convenience only). `caps` reports which optional integrations are usable right now; the UI hides absent features and shows "connect X" guidance wherever they are configured (a Settings screen, or an Intake tab via its `data-caps-need`). `caps.github` is true when **either** credential exists (`gh` authenticated **or** a token resolves) and is cached ~60 s (unlike its PATH-stat siblings it shells out to `gh auth status`, and this endpoint is hit on every page load); it gates one-click **Open PR** / **Merge**, and when false those buttons take the browser-URL path rather than disappearing — pushing is unaffected either way. `caps.agent_mcp` is the one non-boolean cap: `{"enabled": bool, "providers": ["claude", "codex"]}`. `enabled` says whether new launches attach the MindFlock MCP (`general.agent_mcp` and the `MINDFLOCK_AGENT_MCP` kill switch). `providers` lists the CLIs that get it automatically. On any error it reads `{enabled: false, providers: []}`. The MCP's `spawn_session` reads it to decide whether a worker can report back (see [mcp.md](mcp.md)). `caps.team_runs` is `{"split": bool, "together": bool, "max_pieces": int}` — `split` / `together` say which team-run shapes `POST /api/runs` accepts yet (both `false` until splits and one-for-all land; the create refuses them with a 400 off the same table); `max_pieces` (an int ≥ 2) is the most pieces a split may have (`MINDFLOCK_MAX_CHILDREN`, the cap on New's "Auto-split into up to N"). The UI shows the One-for-all PR choice, the split box and the Split into parallel pieces… action disabled with "coming next" while they are false |
+| GET | `/api/config` | `{default_program, provisioning_available, caps: {git, tailscale, ticketing, github, agent_mcp, team_runs}, home, repo_root, ide_name, onboarded, auth_mode, auth_enabled, fasttrack_depth, fasttrack_default, guest, flock}` — `fasttrack_default` is THE fast-track default batches start on — a list in New, Intake's Start together, and `POST /api/runs` with no `policy.lane` (Settings → Workspace "Fast-track goes as far as": a rung, or `off`, which is also what UNSET reads as; a single new session always starts Off and never reads it); `flock: {request, model}` is the workers request with `{model}` filled in and the model ([Flock mode](#flock-mode-every-prompt-asks-for-workers); also served to a guest — it is just text). `fasttrack_depth` is the rung an explicit depth-less `POST /fast-track` arms (never `off` — unset or Off reads as `pr` there, an explicit-arm convenience only). `caps` reports which optional integrations are usable right now; the UI hides absent features and shows "connect X" guidance wherever they are configured (a Settings screen, or an Intake tab via its `data-caps-need`). `caps.github` is true when **either** credential exists (`gh` authenticated **or** a token resolves) and is cached ~60 s (unlike its PATH-stat siblings it shells out to `gh auth status`, and this endpoint is hit on every page load); it gates one-click **Open PR** / **Merge**, and when false those buttons take the browser-URL path rather than disappearing — pushing is unaffected either way. `caps.agent_mcp` is the one non-boolean cap: `{"enabled": bool, "providers": ["claude", "codex"]}`. `enabled` says whether new launches attach the MindFlock MCP (`general.agent_mcp` and the `MINDFLOCK_AGENT_MCP` kill switch). `providers` lists the CLIs that get it automatically. On any error it reads `{enabled: false, providers: []}`. The MCP's `spawn_session` reads it to decide whether a worker can report back (see [mcp.md](mcp.md)). `caps.team_runs` is `{"split": bool, "together": bool, "max_pieces": int}` — `split` / `together` say which team-run shapes `POST /api/runs` accepts yet (both `false` until splits and one-for-all land; the create refuses them with a 400 off the same table); `max_pieces` (an int ≥ 2) is the most pieces a split may have (`MINDFLOCK_MAX_CHILDREN`, the cap on New's "Auto-split into up to N"). The UI shows the One-for-all PR choice, the split box and the Split into parallel pieces… action disabled with "coming next" while they are false |
 | GET | `/api/providers` | `{providers: [{name, aliases, profiles: [{id, label}], default_selector}], default}` |
 | GET | `/api/usage` | Rolling day/week/month/year token+cost totals per provider (Claude, Codex, …) |
 | GET/POST | `/api/scroll-speed` | `{speed}` 1–20, applied live to tmux |
@@ -2600,8 +2653,12 @@ usage_restored|turn_ended|question|message|presence_changed|driver_changed|
 pr_state_changed|pr_review_changed|test_plan_ready|
 test_plan_failed|test_plan_due|test_plan_checked|test_plan_step_failed|
 test_plan_gave_up|
-red_zone_blocked|red_zone_breached|red_zone_tampered`
-(plus addon-originated `addon.*`). `session.pr_review_changed` reports a
+red_zone_blocked|red_zone_breached|red_zone_tampered|renamed`,
+`guest.focus_changed` (plus addon-originated `addon.*`). `session.renamed`
+is the owner renaming a session (`POST /api/aliases` delta; `new` = the name,
+`""` when cleared): every open page re-reads `/api/aliases` on it.
+`guest.focus_changed` is a guest link's page selecting a session (`data:
+{link, label, title, joined}`): the owner's rail moves the guest's pill. `session.pr_review_changed` reports a
 *reviewer's* verdict on the branch's open PR (`"" → approved →
 changes_requested`), read off the PR's review list rather than from
 `mergeable_state`, which cannot express "approved"; like `pr_state_changed` it
@@ -3254,6 +3311,12 @@ websockets alike — via one ASGI middleware (`web/core/auth.py`).
   one key (`core/voice_actions.py`). POST only, exactly that path shape
   (`auth._PUBLIC_VOICE_ACT`), so nothing else under `/api/notify` opens up.
   See [Addon routes](#addon-routes).
+- **The join page.** `GET /join` (exactly that path, `auth._PUBLIC_PATHS`)
+  passes the gate with no credential: it is the page a peer invite link opens,
+  and the person opening it is a stranger. It is a static file
+  (`static/join.html`) that asks the server for nothing; the code it shows is
+  in the URL fragment, which the browser never sends. See
+  [Peer links — join by link](#peer-links--join-by-link).
 - **Changing what runs on your devices (gate on or off).** Routes that write
   what agents run with — `POST /api/settings` (every field except
   `general.onboarded`, `general.last_repo_path`, `ui.surface` and `ui.accent`; `general.setup` is written only by the server's own hooks and `POST /api/setup/<step>/skip`), `PUT

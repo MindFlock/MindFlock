@@ -173,6 +173,7 @@ from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirnam
 # Core modules the monolith was split into (see backend.web/core/).
 from backend.web.core import aliases as _aliases
 from backend.web.core import guests as _guests
+from backend.web.core import guest_terminal as _guest_terminal
 from backend.web.core import guest_tunnel as _guest_tunnel
 from backend.web.core import hidden_sessions as _hidden_sessions
 from backend.web.core import person_sessions as _person_sessions
@@ -393,6 +394,7 @@ from backend.web.core import spoken as _spoken
 from backend.web.core import asking as _asking
 from backend.web.core import update_watch as _update_watch
 from backend.web.core import voice as _voice
+from backend.web.core import flock_mode as _flock_mode
 from backend.web.core.mobile_access import (
     _local_only_mode,
     _mobile_banner,
@@ -647,11 +649,14 @@ from backend.web.core.red_zone_driver import (
 )
 from backend.web.addons import AppContext as _AddonContext, register_addons
 from backend.web.routes import peer as _peer_routes
+from backend.web.routes import peer_sessions as _peer_session_routes
+from backend.web.routes import chat as _chat_routes
 from backend.web.routes import guests as _guest_routes
 from backend.web.routes import team_runs as _team_runs_routes
 from backend.web.core import voice_actions as _voice_actions
 from backend.web.routes import speech as _speech_routes
 from backend.web.routes import voice as _voice_routes
+from backend.web.routes import flock as _flock_routes
 from backend.web.routes.peer import (
     _peer_body,
     _peer_call,
@@ -1089,6 +1094,12 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 # token check before it can be proxied anywhere.
 app.add_middleware(_remote.RemoteProxyMiddleware)
 
+# Peer-link rows (`<peer>::<title>`, routes/peer_sessions.py): answered here
+# (their terminal rides the peer link) instead of being proxied to a tailnet
+# device of that name. Between the two: inside the auth gate, outside the
+# device proxy.
+app.add_middleware(_peer_session_routes.PeerRowsMiddleware)
+
 # Bearer-token auth gate (covers HTTP + websockets). Added AFTER the cache
 # middleware so it sits OUTERMOST — auth is checked before anything else runs.
 # No-op unless enabled (tailnet exposure / configured token / MINDFLOCK_AUTH=1).
@@ -1390,6 +1401,25 @@ def _voice_on(title: str) -> bool:
         return _voice.is_on(tmux.to_mindflock_tmux_name(title))
     except Exception:  # noqa: BLE001
         return False
+
+
+def _flock_on(title: str) -> bool:
+    """Whether Flock mode is on for ``title`` (``core.flock_mode``; one stat)."""
+    try:
+        return _flock_mode.is_on(tmux.to_mindflock_tmux_name(title))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _flock_overlay(rows) -> None:
+    """Stamp the LIVE ``flock`` flag on this device's rows of a listing, in
+    place. The listing serves the tick's cached snapshot for seconds at a
+    time, and a flag the person just flipped must show on the very next poll
+    — not on the next tick — or the pane control snaps back to its old state
+    and looks slow. One stat per row; never raises."""
+    for r in rows:
+        if isinstance(r, dict) and r.get("title") and not r.get("device"):
+            r["flock"] = _flock_on(str(r["title"]))
 
 
 def _session_last_prompt_cached(inst) -> Optional[str]:
@@ -1717,6 +1747,8 @@ def _session_snapshot(i, queues: dict) -> dict:
     # the session is being talked to (its prompts carry the instruction).
     d["last_say"] = _session_last_say_cached(i)
     d["voice"] = _voice_on(i.Title)
+    # Flock mode: every prompt asks for MindFlock workers (core.flock_mode).
+    d["flock"] = _flock_on(i.Title)
     # The newest USER prompt (first line) — the panes pin it above the
     # terminal — and its whole body for the pin's hover/click expansion.
     d["last_prompt"] = _session_last_prompt_cached(i)
@@ -1815,6 +1847,7 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     d["last_turn"] = None
     d["last_say"] = None
     d["voice"] = _voice_on(i.Title)  # one stat: fresh on both paths
+    d["flock"] = _flock_on(i.Title)
     d["last_prompt"] = None
     d["last_prompt_full"] = None
     d["task"] = getattr(i, "Task", "") or None
@@ -1911,17 +1944,24 @@ def list_instances(request: Request) -> JSONResponse:
 
     Connected tailnet devices' sessions ride along, title-namespaced as
     ``<device>::<title>`` (cached by :func:`_remote.instances_loop` — no
-    network on this path). Another MindFlock asking (the remote header) gets
+    network on this path), and so do the sessions connected peer links share
+    with us, as ``<peer>::<title>`` (routes/peer_sessions.py — the peer
+    service's cache, no network either). Another MindFlock asking (the remote header) gets
     this device's OWN sessions only: the rows it mirrors belong to their own
     devices, and handing them on is how two paired devices echoed each
     other's sessions back as ``a::b::title``."""
-    remote = [] if _remote.from_remote(request) else _remote.merged_instances()
+    remote = (
+        []
+        if _remote.from_remote(request)
+        else _remote.merged_instances() + _peer_session_routes.peer_rows()
+    )
     cached = _events.sessions_snapshot()
     if time.time() - _SNAPSHOT_AT <= _INSTANCES_TICK_INTERVAL * 2.5:
         if {d.get("title") for d in cached} == set(ENGINE.instances.keys()):
             _fresh_lineage(cached)
             _ownership.overlay(cached)
             _aliases.overlay(cached)
+            _flock_overlay(cached)
             return JSONResponse(_guest_rows(request, cached + remote + _pending_rows()))
     queues = _prompt_queue.snapshot()
     by_title = {d.get("title"): d for d in cached}
@@ -1932,6 +1972,7 @@ def list_instances(request: Request) -> JSONResponse:
     _lanes.fill_duplicates(snap)
     _ownership.overlay(snap)
     _aliases.overlay(snap)
+    _flock_overlay(snap)
     return JSONResponse(_guest_rows(request, snap + remote + _pending_rows()))
 
 
@@ -3176,8 +3217,23 @@ def get_config(request: Request) -> JSONResponse:
             # A guest link (backend.web.core.guests): {label, sessions} — the
             # rail crosses out every other session; None for the owner.
             "guest": _guests.public_scope(request),
+            # Flock mode's words (core.flock_mode): the request with its model
+            # filled in — what the hotkey types and Flock mode injects.
+            "flock": _flock_config(),
         }
     )
+
+
+def _flock_config() -> dict:
+    """``{request, model}`` for ``/api/config`` — never raises."""
+    from backend.config.settings import DEFAULT_WORKERS_MODEL, load_settings
+
+    model = DEFAULT_WORKERS_MODEL
+    try:
+        model = load_settings().general.workers_model or model
+    except Exception:  # noqa: BLE001 — the defaults still ask for workers
+        pass
+    return {"request": _flock_mode.request_text(), "model": model}
 
 
 def _is_onboarded() -> bool:
@@ -3875,12 +3931,17 @@ def list_create_failures(title: str = "") -> JSONResponse:
 
 
 @app.get("/api/aliases")
-def get_aliases() -> JSONResponse:
+def get_aliases(request: Request) -> JSONResponse:
     """The synced session display aliases (title -> label). See core.aliases:
-    the browser owns renames; this mirror only feeds server-originated text
-    (ntfy pushes) so a phone notification names the tab the way the sidebar
-    does."""
-    return JSONResponse({"aliases": _aliases.all_aliases()})
+    the owner's browsers own renames; this mirror feeds server-originated
+    text (ntfy pushes) and is the ONLY source of names for a guest link's
+    browser — the owner's renames are what a guest sees, filtered to the
+    sessions the link reaches."""
+    aliases = _aliases.all_aliases()
+    guest = _guests.scope_guest(request)
+    if guest is not None:
+        aliases = _guests.aliases_for(guest, aliases)
+    return JSONResponse({"aliases": aliases})
 
 
 @app.post("/api/aliases")
@@ -3921,6 +3982,10 @@ def post_aliases(payload: dict) -> JSONResponse:
             status_code=409,
         )
     _aliases.set_alias(title, alias)
+    # Every open browser re-reads the map on this — the owner's other devices
+    # and a guest's — so the rename shows everywhere at once, not at their
+    # next page load.
+    _events.BUS.emit("session.renamed", session=title, new=alias, data={"name": alias})
     return JSONResponse({"aliases": _aliases.all_aliases()})
 
 
@@ -5841,7 +5906,7 @@ _ENTER_ASLEEP = "It is asleep — open it, then dictate again"
 _ENTER_NOT_RUNNING = "the agent isn't running — open the session to start it"
 
 
-def _enter_on_agent(inst, title: str, *, say: bool = False):
+def _enter_on_agent(inst, title: str, *, say: bool = False, extra: str = ""):
     """Press Enter on whatever is in ``title``'s input field → ``(told,
     reason)`` like :func:`_deliver_to_agent` (``told`` is ``"sent"`` or
     False). ``/send``'s ``{"enter": true}`` form: the desktop app types live
@@ -5857,7 +5922,8 @@ def _enter_on_agent(inst, title: str, *, say: bool = False):
     (:func:`_voice_say` on an empty text: Claude's ``.next``, or the
     instruction typed after the draft for a hook-less CLI) right before the
     keystroke; the Enter is :func:`_send_to_agent`'s own, so a TUI sees a
-    real Enter a beat after the last key. Blocking — call via
+    real Enter a beat after the last key. ``extra`` is typed after the draft
+    first (Flock mode's request, :func:`_flock_suffix`). Blocking — call via
     ``asyncio.to_thread``."""
     if getattr(inst, "Status", None) == Paused:
         return False, PAUSED_REFUSED
@@ -5877,7 +5943,7 @@ def _enter_on_agent(inst, title: str, *, say: bool = False):
     ):
         return False, _SEND_IN_DIALOG
     _note_human_input(title)
-    typed = _voice_say(inst, title, "") if say else ""
+    typed = _voice_say(inst, title, extra) if say else extra
     if not _send_to_agent(name, typed, True):
         if say:
             _voice_say_cancel(title)
@@ -6023,6 +6089,32 @@ def _voice_say_cancel(title: str) -> None:
         pass
 
 
+def _flock_suffix(text: str) -> str:
+    """``text`` with Flock mode's workers request typed after it
+    (``core.flock_mode.request_text``). Idempotent like :func:`_voice_suffix`."""
+    req = _flock_mode.request_text()
+    if not req or text.rstrip().endswith(req):
+        return text
+    return text.rstrip("\n") + "\n\n" + req
+
+
+def _flock_typed(inst, title: str, one_shot: bool) -> bool:
+    """Whether ``/send`` types the workers request after this prompt: the
+    sticky Flock mode is on and the CLI has no prompt hook to inject it
+    (``voice_prompt_hook``; Claude's hook prints the ``.flock`` file on every
+    prompt itself), or the prompt asked once (``flock: true``) and the hook
+    is not already doing it. Never raises."""
+    sticky = _flock_on(title)
+    if not (sticky or one_shot):
+        return False
+    try:
+        prov = providers.resolve(getattr(inst, "Program", "") or "")
+        hook = bool(prov.voice_prompt_hook())
+    except Exception:  # noqa: BLE001 — unknown CLI: type it
+        hook = False
+    return not (hook and sticky)
+
+
 @app.post("/api/instances/{title}/send")
 async def instance_send(
     title: str, payload: dict, request: Request = None
@@ -6050,6 +6142,13 @@ async def instance_send(
     A queued message keeps it in its queue entry and is armed when the
     drain types it. Absent/false, or ``submit=false``: never asked for.
 
+    ``flock=true`` (with ``submit``) asks THIS prompt for MindFlock workers:
+    Flock mode's request (``core.flock_mode``) is typed after the text. A
+    session in Flock mode (``POST …/flock``) gets it on every prompt without
+    asking — injected by Claude's prompt hook, typed after the text for any
+    other CLI (:func:`_flock_typed`). Applied before any queueing, so a
+    queued prompt carries it in its text.
+
     ``{"enter": true}`` with NO (or empty) ``text``: press Enter on what is
     already in the input field — the desktop app types live dictation into
     the terminal itself, then submits through here so ``say`` is armed the
@@ -6076,6 +6175,12 @@ async def instance_send(
     # "Read everything" on: every prompt asks for its Say line, not only the
     # ones a client marks (core.voice.say_all).
     say = submit and ((payload or {}).get("say") is True or _voice.say_all())
+    extra = ""
+    if submit and _flock_typed(inst, title, (payload or {}).get("flock") is True):
+        if enter:
+            extra = _flock_suffix("")
+        else:
+            text = _flock_suffix(text)
     busy = _driven_elsewhere(request, title, payload)
     if busy is not None:
         return busy
@@ -6090,7 +6195,7 @@ async def instance_send(
     asleep = _sleep.is_sleeping(title)
     if enter:
         told, reason = await asyncio.to_thread(
-            lambda: _enter_on_agent(inst, title, say=say)
+            lambda: _enter_on_agent(inst, title, say=say, extra=extra)
         )
     else:
         told, reason = await asyncio.to_thread(
@@ -6567,6 +6672,10 @@ async def post_message(title: str, payload: dict) -> JSONResponse:
     if data is not None:
         if not isinstance(data, dict):
             return bad("data must be an object")
+        if "peer" in data:
+            # Only the peer service posts another person's agent message
+            # (mailbox.is_cross_user): a client must not borrow its framing.
+            return bad('"data.peer" is reserved for messages over a peer link')
         size = len(json.dumps(data, ensure_ascii=False).encode("utf-8"))
         if size > _MSG_DATA_MAX_BYTES:
             return bad(
@@ -8790,6 +8899,9 @@ app.include_router(_speech_routes.router)
 
 # --- Voice mode (talking to a session from the phone): routes/voice.py --------
 app.include_router(_voice_routes.router)
+
+# --- Flock mode (every prompt asks for MindFlock workers): routes/flock.py -----
+app.include_router(_flock_routes.router)
 
 
 # --- Forced PR review (Intake → Pull requests) ----------------------------------
@@ -11540,6 +11652,8 @@ _serve_pty = pump_pty
 # Peer links (docs/peer-link.md): routes/peer.py
 # --------------------------------------------------------------------------- #
 app.include_router(_peer_routes.router)
+app.include_router(_peer_session_routes.router)
+app.include_router(_chat_routes.router)
 app.include_router(_guest_routes.router)
 
 
@@ -11570,16 +11684,28 @@ async def shell_ws(ws: WebSocket, title: str) -> None:
         await ws.close(code=4500)
         return
 
+    # A guest link's browser never holds a writable tmux client (the prefix
+    # key would hand them tmux itself): read-only attach for output, their
+    # keystrokes by send-keys into the pane (core.guest_terminal).
+    guest = _guests.scope_guest(ws) is not None
     try:
-        proc = ptyprocess.PtyProcess.spawn(
-            ["tmux", "attach-session", "-t", name],
-            dimensions=(24, 80),
-            env={**os.environ, "TERM": "xterm-256color"},
-        )
+        if guest:
+            proc = _guest_terminal.spawn_readonly_attach(name, 24, 80)
+        else:
+            proc = ptyprocess.PtyProcess.spawn(
+                ["tmux", "attach-session", "-t", name],
+                dimensions=(24, 80),
+                env={**os.environ, "TERM": "xterm-256color"},
+            )
     except Exception as err:  # noqa: BLE001
         await ws.send_text(json.dumps({"type": "error", "message": str(err)}))
         await ws.close(code=4500)
         return
+    typist = (
+        _guest_terminal.Typist(name, _guest_terminal.send_keys).start()
+        if guest
+        else None
+    )
     # Typing in the session's shell is presence at the window too — a person
     # running git commands there does not need a push about this session. Same
     # post-attach grace as the agent terminal: tmux's client probes are
@@ -11600,24 +11726,35 @@ async def shell_ws(ws: WebSocket, title: str) -> None:
     conn = _ownership.attach(title, person, device, notify=_tell)
     out_q.put_nowait(json.dumps(_ownership.mode(title, person)))
 
-    def _gate(_data):
+    def _presence() -> None:
+        if time.time() - attached_at > _ATTACH_PROBE_GRACE_S:
+            _note_human_input(title, person, device)
+
+    def _gate(data):
         ok, notice = _ownership.may_type(conn)
-        return None if ok else notice
+        if not ok:
+            return notice
+        if typist is None:
+            return None
+        # A guest's: delivered by send-keys, never through the attach client
+        # (so pump_pty drops it — and does not stamp presence: done here).
+        _presence()
+        typist.type(data if isinstance(data, bytes) else data.encode("utf-8"))
+        return ""
 
     try:
         await _serve_pty(
             ws,
             proc,
             allow_input=True,
-            on_input=lambda: (
-                time.time() - attached_at > _ATTACH_PROBE_GRACE_S
-                and _note_human_input(title, person, device)
-            ),
+            on_input=_presence,
             gate=_gate,
             out_q=out_q,
         )
     finally:
         _ownership.detach(conn)
+        if typist is not None:
+            typist.close()
 
 
 @app.get("/api/instances/{title}/prompt")
@@ -12364,6 +12501,19 @@ async def pane_find_step(title: str, payload: dict) -> JSONResponse:
     return JSONResponse(res)
 
 
+def ensure_terminal_session(inst, title: str):
+    """What opening a session's terminal does first (blocking — call it in a
+    thread): wake a SLEEPING agent, then make sure its tmux session exists,
+    relaunching a dead agent. → ``(tmux name, None)`` or ``(None, error)``
+    (:data:`PAUSED_REFUSED` for a paused one). Shared with the peer-link
+    terminal bridge (backend.peer.sessions_bridge), which attaches to the
+    same tmux session for a peer."""
+    _woke, err = _sleep.ensure_awake(inst, title, "terminal opened")
+    if err is not None:
+        return None, err
+    return _ensure_agent_session(inst, title)
+
+
 @app.websocket("/api/instances/{title}/terminal")
 async def terminal_ws(ws: WebSocket, title: str) -> None:
     """Live agent terminal: attach a per-connection PTY to the session's tmux
@@ -12387,11 +12537,7 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
     # does not: both helpers refuse to relaunch it (PAUSED_REFUSED), and the
     # socket closes with 4423 so the pane shows its Paused placeholder and
     # does not reconnect. (Its agent still alive somehow → just attached.)
-    _woke, err = await asyncio.to_thread(
-        _sleep.ensure_awake, inst, title, "terminal opened"
-    )
-    if err is None:
-        name, err = await asyncio.to_thread(_ensure_agent_session, inst, title)
+    name, err = await asyncio.to_thread(ensure_terminal_session, inst, title)
     if err is not None:
         paused = err == PAUSED_REFUSED
         frame = {"type": "error", "message": err}
@@ -12403,16 +12549,37 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
     # tmux mouse stays ON (wheel scroll / copy-mode). Browser selection is via
     # Shift+drag (xterm.js shouldForceSelection), copied by copy-on-select.
     # Each browser connection gets its own attach client (tmux multiplexes).
+    # A guest link's is READ-ONLY and their keystrokes go into the pane by
+    # send-keys (core.guest_terminal): on a writable client the tmux prefix
+    # would hand them tmux itself — a new window with a plain shell, another
+    # session, run-shell. The owner's own browsers keep the writable attach.
+    guest = _guests.scope_guest(ws) is not None
     try:
-        proc = ptyprocess.PtyProcess.spawn(
-            ["tmux", "attach-session", "-t", name],
-            dimensions=(24, 80),
-            env={**os.environ, "TERM": "xterm-256color"},
-        )
+        if guest:
+            proc = _guest_terminal.spawn_readonly_attach(name, 24, 80)
+        else:
+            proc = ptyprocess.PtyProcess.spawn(
+                ["tmux", "attach-session", "-t", name],
+                dimensions=(24, 80),
+                env={**os.environ, "TERM": "xterm-256color"},
+            )
     except Exception as err:  # noqa: BLE001
         await ws.send_text(json.dumps({"type": "error", "message": str(err)}))
         await ws.close(code=4500)
         return
+    typist = (
+        _guest_terminal.Typist(name, _guest_terminal.send_keys).start()
+        if guest
+        else None
+    )
+
+    def into_pane(data: bytes) -> None:
+        """Input for the pane: through the attach client (the owner, and
+        every terminal's answers to tmux's probes), else send-keys."""
+        if typist is None or is_terminal_reply(data):
+            os.write(fd, data)
+        else:
+            typist.type(data)
 
     loop = asyncio.get_event_loop()
     out_q: "asyncio.Queue[Optional[bytes | str]]" = asyncio.Queue()
@@ -12500,7 +12667,7 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
                 # half). Resize control frames (text/JSON) still pass below.
                 if _budget_locked(title) or not driving(b):
                     continue
-                os.write(fd, b)
+                into_pane(b)
                 continue
             t = msg.get("text")
             if t is not None:
@@ -12511,7 +12678,7 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
                     note_presence(t)
                     if _budget_locked(title) or not driving(t):
                         continue
-                    os.write(fd, t.encode("utf-8"))
+                    into_pane(t.encode("utf-8"))
                     continue
                 if isinstance(j, dict) and j.get("type") == "resize":
                     # NOT presence: resizes fire on layout changes with nobody
@@ -12526,11 +12693,13 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
                     # two input branches — presence is about the person.
                     note_presence(t)
                     if not _budget_locked(title) and driving(t):
-                        os.write(fd, t.encode("utf-8"))
+                        into_pane(t.encode("utf-8"))
     except WebSocketDisconnect:
         pass
     finally:
         _ownership.detach(conn)
+        if typist is not None:
+            typist.close()
         try:
             loop.remove_reader(fd)
         except Exception:  # noqa: BLE001

@@ -21,6 +21,15 @@ Handshake frames may carry an optional ``app`` (the peer's MindFlock version)
 and ``caps`` (capability names), validated when present. What WE send is
 always checked against the exact schema (``strict=True``), because a peer one
 release older still rejects anything extra.
+
+**Push frames** (``{"t":"push","op":…,"p":{…}}``) carry a shared session's
+terminal both ways and "my share list changed" — one-way, never answered, so
+a live terminal is not a request round trip per keystroke. A peer one
+release older closes the connection on an unknown frame type, so a push only
+ever goes to a peer that proved it speaks them: it asked us for ``sessions``
+or opened a terminal (docs/peer-link.md, "Shared sessions — CONTRACT"). A
+well-formed push for an op this version doesn't know raises
+:class:`UnsupportedPush`, which the transport drops without closing.
 """
 
 from __future__ import annotations
@@ -40,12 +49,16 @@ __all__ = [
     "ProtocolError",
     "ConnectionClosed",
     "UnsupportedOp",
+    "UnsupportedPush",
+    "PUSH_OPS",
+    "CAPS",
     "peer_info",
     "encode",
     "decode",
     "read_frame",
     "validate_request",
     "validate_response",
+    "validate_push",
     "validate_message",
     "validate_hello",
     "validate_pair",
@@ -75,7 +88,35 @@ OPS = (
     "joint_proposal",
     "joint_state",
     "joint_check",
+    # Shared sessions (docs/peer-link.md "Shared sessions — CONTRACT").
+    "sessions",
+    "term_open",
+    "term_close",
+    "session_focus",
+    # An agent's message to a shared session (docs/peer-link.md "Agent
+    # messages across the link").
+    "agent_msg",
+    # A person's line in a shared session's chat (docs/peer-link.md "Shared
+    # sessions — CONTRACT"; backend.peer.chat_bridge).
+    "chat_msg",
 )
+#: One-way frames (``t: "push"``): the sharer's terminal output and its end,
+#: "my share list changed", a line of a shared session's chat — and the
+#: opener's keystrokes and resizes.
+PUSH_OPS = (
+    "term_out",
+    "term_end",
+    "term_in",
+    "term_resize",
+    "sessions_changed",
+    "chat_out",
+)
+#: What this version can do beyond the original ops, for the handshake's
+#: ``caps`` (sent by the transport; a peer advertising ``sessions`` speaks
+#: the shared-session ops and push frames, ``agent_msg`` takes an agent's
+#: message to a session it shares, ``chat_msg`` talks in a shared session's
+#: chat and takes its ``chat_out`` lines).
+CAPS = ("sessions", "agent_msg", "chat_msg")
 
 MAX_NAME = 128  # on the wire; stores sanitize further to 32
 MAX_MSG_TEXT = 20_000
@@ -106,6 +147,23 @@ MAX_CHECK_NOTE = 300
 CHECK_ACTORS = ("agent", "human")
 CHECK_SIDES = ("mine", "theirs")
 CHECK_RESULTS = ("pass", "fail", "blocked", "")
+# Shared sessions (backend.peer.sessions_bridge): a terminal chunk is at most
+# MAX_TERM_CHUNK raw bytes, base64 on the wire; a share list is bounded.
+MAX_TERM_CHUNK = 32 * 1024
+MAX_TERM_B64 = 4 * ((MAX_TERM_CHUNK + 2) // 3)
+MAX_TERM_DIM = 1000
+MAX_SESSION_TITLE = 200
+MAX_SESSIONS = 50
+MAX_ACTIVITY = 200
+SESSION_MODES = ("gated", "full")
+#: ``agent_msg``'s reply-chain depth: the mailbox holds far shallower chains
+#: (backend.web.core.mailbox.max_hops); this only bounds the number.
+MAX_AGENT_HOP = 1000
+#: A chat line, in characters (backend.web.core.chat.MAX_TEXT), and the
+#: name shown on it.
+MAX_CHAT_TEXT = 2000
+MAX_CHAT_NAME = 64
+MAX_CHAT_FROM = 128
 
 
 class ProtocolError(Exception):
@@ -114,6 +172,15 @@ class ProtocolError(Exception):
 
 class ConnectionClosed(ProtocolError):
     """The connection ended (EOF at a frame boundary, reset, TLS error)."""
+
+
+class UnsupportedPush(ProtocolError):
+    """A well-formed push for an op this version doesn't implement (a newer
+    peer). Not fatal: nobody waits for an answer, so it is dropped."""
+
+    def __init__(self, op: str):
+        super().__init__("unsupported push")
+        self.op = op
 
 
 class UnsupportedOp(ProtocolError):
@@ -137,6 +204,7 @@ _BAD_PATH = re.compile(r"[\x00\ud800-\udfff]")
 # Anchored with \Z, never $ ($ also matches before a trailing newline), and
 # [0-9] rather than \d (which matches every Unicode digit).
 _MSG_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}\Z")
+_CHAT_ID_RE = re.compile(r"^c[0-9]{1,15}\Z")
 _B64_32_RE = re.compile(r"^[A-Za-z0-9+/]{43}=\Z")
 _B64_RE = re.compile(r"^[A-Za-z0-9+/]*={0,2}\Z")
 _SAS_RE = re.compile(r"^[0-9]{3}-[0-9]{3}-[0-9]{3}-[0-9]\Z")
@@ -146,6 +214,7 @@ _JOINT_ID_RE = re.compile(r"^jt_[0-9a-f]{12}\Z")
 _PROPOSAL_ID_RE = re.compile(r"^cp_[0-9a-f]{8}\Z")
 _ISO_RE = re.compile(r"^[0-9][0-9T:.+Z-]{0,39}\Z")
 _STEP_ID_RE = re.compile(r"^s[0-9]{1,3}\Z")
+_TERM_ID_RE = re.compile(r"^[0-9a-f]{16}\Z")
 JOINT_STATES = ("proposed", "active", "done", "cancelled")
 PROPOSAL_STATES = ("open", "accepted", "rejected")
 JOINT_BYS = ("me", "peer")
@@ -506,6 +575,103 @@ def _req_joint_check(p, strict) -> dict:
     return p
 
 
+# -- shared sessions (docs/peer-link.md "Shared sessions — CONTRACT") ---------
+
+
+def _session_title(v, lo: int = 1) -> None:
+    if not _str(v, lo, MAX_SESSION_TITLE):
+        _fail("bad title")
+
+
+def _term_id(v) -> None:
+    if not isinstance(v, str) or not _TERM_ID_RE.match(v):
+        _fail("bad term_id")
+
+
+def _term_size(p) -> None:
+    if not _int(p["cols"], 1, MAX_TERM_DIM) or not _int(p["rows"], 1, MAX_TERM_DIM):
+        _fail("bad size")
+
+
+def _term_data(v) -> None:
+    if (
+        not isinstance(v, str)
+        or not 0 < len(v) <= MAX_TERM_B64
+        or len(v) % 4
+        or not _B64_RE.match(v)
+    ):
+        _fail("bad data")
+
+
+def _req_term_open(p, strict) -> dict:
+    p = _keys(p, ("title", "cols", "rows"), (), strict)
+    _session_title(p["title"])
+    _term_size(p)
+    return p
+
+
+def _req_term_close(p, strict) -> dict:
+    p = _keys(p, ("term_id",), (), strict)
+    _term_id(p["term_id"])
+    return p
+
+
+def _req_session_focus(p, strict) -> dict:
+    """``{title}`` — the row the opener's page selected; ``""`` = it left."""
+    p = _keys(p, ("title",), (), strict)
+    _session_title(p["title"], 0)
+    return p
+
+
+def _req_agent_msg(p, strict) -> dict:
+    """``{title, text, from_title, from_name, msg_id, reply_to?, hop?}`` — an
+    agent in the sender's session ``from_title`` messaging the shared session
+    ``title``; ``reply_to`` is the id of the message it answers (one the
+    receiver sent), ``hop`` how deep that reply chain is."""
+    p = _keys(
+        p,
+        ("title", "text", "from_title", "from_name", "msg_id"),
+        ("reply_to", "hop"),
+        strict,
+    )
+    _session_title(p["title"])
+    _session_title(p["from_title"])
+    if not _str(p["from_name"], 0, MAX_SESSION_TITLE):
+        _fail("bad from_name")
+    if not _str(p["msg_id"], 1, 64) or not _MSG_ID_RE.match(p["msg_id"]):
+        _fail("bad msg_id")
+    if not _str(p["text"], 1, MAX_MSG_TEXT, _BAD_TEXT):
+        _fail("bad text")
+    rt = p.get("reply_to")
+    if rt is not None and (not _str(rt, 1, 64) or not _MSG_ID_RE.match(rt)):
+        _fail("bad reply_to")
+    if "hop" in p and not _int(p["hop"], 0, MAX_AGENT_HOP):
+        _fail("bad hop")
+    return p
+
+
+def _chat_text(v) -> None:
+    if not _str(v, 1, MAX_CHAT_TEXT, _BAD_TEXT):
+        _fail("bad text")
+
+
+def _chat_id(v) -> None:
+    if not isinstance(v, str) or not _CHAT_ID_RE.match(v):
+        _fail("bad id")
+
+
+def _req_chat_msg(p, strict) -> dict:
+    """``{title, text, from_name}`` — the opener's line for the chat of
+    ``title``, a session the receiver shares; ``from_name`` is what the
+    opener calls itself (``""``: the receiver names it)."""
+    p = _keys(p, ("title", "text", "from_name"), (), strict)
+    _session_title(p["title"])
+    _chat_text(p["text"])
+    if not _str(p["from_name"], 0, MAX_CHAT_NAME):
+        _fail("bad from_name")
+    return p
+
+
 _REQUESTS = {
     "msg": _req_msg,
     "diff": _req_diff,
@@ -521,6 +687,12 @@ _REQUESTS = {
     "joint_proposal": _req_joint_proposal,
     "joint_state": _req_joint_state,
     "joint_check": _req_joint_check,
+    "sessions": _req_empty,
+    "term_open": _req_term_open,
+    "term_close": _req_term_close,
+    "session_focus": _req_session_focus,
+    "agent_msg": _req_agent_msg,
+    "chat_msg": _req_chat_msg,
 }
 
 
@@ -753,6 +925,74 @@ def _res_joint_state(p, req, strict) -> dict:
     return p
 
 
+def _session_item(v, strict) -> dict:
+    """One session the sender shares: names and states only — the folder's
+    NAME, never a path."""
+    v = _keys(
+        v,
+        ("title", "name", "status", "activity", "stage", "branch", "folder"),
+        ("mode", "program"),
+        strict,
+    )
+    _session_title(v["title"])
+    if not _str(v["name"], 0, MAX_SESSION_TITLE):
+        _fail("bad name")
+    for k in ("status", "stage"):
+        if not _str(v[k], 0, 32):
+            _fail("bad " + k)
+    if not _str(v["activity"], 0, MAX_ACTIVITY):
+        _fail("bad activity")
+    if not _str(v["branch"], 0, 200):
+        _fail("bad branch")
+    if not _str(v["folder"], 0, MAX_NAME):
+        _fail("bad folder")
+    if "mode" in v and v["mode"] not in SESSION_MODES:
+        _fail("bad mode")
+    if "program" in v and not _str(v["program"], 0, 64):
+        _fail("bad program")
+    return v
+
+
+def _res_sessions(p, req, strict) -> dict:
+    p = _keys(p, ("sessions",), (), strict)
+    items = p["sessions"]
+    if not isinstance(items, list) or len(items) > MAX_SESSIONS:
+        _fail("bad sessions")
+    p["sessions"] = [_session_item(x, strict) for x in items]
+    if len({x["title"] for x in p["sessions"]}) != len(p["sessions"]):
+        _fail("duplicate session title")
+    return p
+
+
+def _res_term_open(p, req, strict) -> dict:
+    p = _keys(p, ("ok", "term_id"), (), strict)
+    if p["ok"] is not True:
+        _fail("bad ok")
+    _term_id(p["term_id"])
+    return p
+
+
+def _res_agent_msg(p, req, strict) -> dict:
+    """``{ok: true, id}`` — ``id`` is the message's id in the receiver's
+    mailbox."""
+    p = _keys(p, ("ok", "id"), (), strict)
+    if p["ok"] is not True:
+        _fail("bad ok")
+    if not _str(p["id"], 1, 64) or not _MSG_ID_RE.match(p["id"]):
+        _fail("bad id")
+    return p
+
+
+def _res_chat_msg(p, req, strict) -> dict:
+    """``{ok: true, id}`` — ``id`` is the line's id in the receiver's chat
+    (``c<seq>``; its ``chat_out`` echo carries the same one)."""
+    p = _keys(p, ("ok", "id"), (), strict)
+    if p["ok"] is not True:
+        _fail("bad ok")
+    _chat_id(p["id"])
+    return p
+
+
 _RESPONSES = {
     "msg": _res_msg,
     "diff": _res_diff,
@@ -768,6 +1008,12 @@ _RESPONSES = {
     "joint_proposal": _res_joint_ok,
     "joint_state": _res_joint_state,
     "joint_check": _res_joint_contract,
+    "sessions": _res_sessions,
+    "term_open": _res_term_open,
+    "term_close": _res_joint_ok,
+    "session_focus": _res_joint_ok,
+    "agent_msg": _res_agent_msg,
+    "chat_msg": _res_chat_msg,
 }
 
 
@@ -779,6 +1025,70 @@ def validate_response(op, p, req: dict | None = None, strict: bool = True) -> di
     if check is None:
         _fail("unknown op")
     return check(p, req, strict)
+
+
+# -- push frames ----------------------------------------------------------------
+
+
+def _push_term_data(p, strict) -> dict:
+    p = _keys(p, ("term_id", "data"), (), strict)
+    _term_id(p["term_id"])
+    _term_data(p["data"])
+    return p
+
+
+def _push_term_end(p, strict) -> dict:
+    p = _keys(p, ("term_id", "reason"), (), strict)
+    _term_id(p["term_id"])
+    if not _str(p["reason"], 0, MAX_BYE):
+        _fail("bad reason")
+    return p
+
+
+def _push_term_resize(p, strict) -> dict:
+    p = _keys(p, ("term_id", "cols", "rows"), (), strict)
+    _term_id(p["term_id"])
+    _term_size(p)
+    return p
+
+
+def _push_chat_out(p, strict) -> dict:
+    """``{title, msg: {id, from, name, text, ts}}`` — one line of the
+    sender's chat on ``title``, a session it shares with the receiver.
+    ``from`` is ``"you"`` on the receiver's own lines."""
+    p = _keys(p, ("title", "msg"), (), strict)
+    _session_title(p["title"])
+    m = _keys(p["msg"], ("id", "from", "name", "text", "ts"), (), strict)
+    _chat_id(m["id"])
+    if not _str(m["from"], 0, MAX_CHAT_FROM):
+        _fail("bad from")
+    if not _str(m["name"], 0, MAX_CHAT_NAME):
+        _fail("bad name")
+    _chat_text(m["text"])
+    ts = m["ts"]
+    if isinstance(ts, bool) or not isinstance(ts, (int, float)) or not 0 <= ts < 1e11:
+        _fail("bad ts")
+    p["msg"] = m
+    return p
+
+
+_PUSHES = {
+    "term_out": _push_term_data,
+    "term_in": _push_term_data,
+    "term_end": _push_term_end,
+    "term_resize": _push_term_resize,
+    "sessions_changed": _req_empty,
+    "chat_out": _push_chat_out,
+}
+
+
+def validate_push(op, p, strict: bool = True) -> dict:
+    """Raise ProtocolError unless ``(op, p)`` is an allowed push; returns
+    ``p`` (with unknown keys dropped when not ``strict``)."""
+    check = _PUSHES.get(op) if isinstance(op, str) else None
+    if check is None:
+        _fail("unknown push")
+    return check(p, strict)
 
 
 # -- frames after the handshake ---------------------------------------------
@@ -814,6 +1124,14 @@ def validate_message(obj) -> str:
             _fail("bad ok")
         if not _int(obj["id"], 1, MAX_ID):
             _fail("bad id")
+    elif t == "push":
+        _keys(obj, ("t", "op", "p"), (), strict=False)
+        op = obj["op"]
+        if not isinstance(op, str) or not _OP_NAME_RE.match(op):
+            _fail("bad op")
+        if op not in _PUSHES:
+            raise UnsupportedPush(op)
+        obj["p"] = validate_push(op, obj["p"], strict=False)
     elif t in ("ping", "pong"):
         _keys(obj, ("t",), (), strict=False)
     elif t == "bye":

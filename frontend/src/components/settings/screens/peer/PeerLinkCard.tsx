@@ -9,7 +9,9 @@
  *    Bring work home with its result next to the button (branch, repo and
  *    commit count, or the server's one sentence), the joint task (JointTask)
  *    and the Mirror row. Share, Reopen, Export and Mirror are off until the
- *    safety number is confirmed — the server refuses them too.
+ *    safety number is confirmed — the server refuses them too. Then
+ *    **Share a session…** (ShareSessions: one of your sessions on their rail,
+ *    gated or full) and what THEY share with you, each with Open.
  *  - Talk — the conversation (MessageThread) with its send box, Watch their
  *    session, Their changes.
  *
@@ -43,6 +45,7 @@ import { AgentSelect } from "./AgentSelect";
 import { JointSection } from "./JointTask";
 import { MessageThread } from "./MessageThread";
 import { MirrorRow } from "./MirrorRow";
+import { ShareSessionsDialog, TheirSessions, usePeerSessions } from "./ShareSessions";
 import { errText, useAct } from "./useAct";
 
 const PERM_LABELS: Array<[keyof PeerLink["perms"], string]> = [
@@ -78,6 +81,10 @@ export function PeerLinkCard(props: {
   const [exported, setExported] = useState<{ ok: boolean; text: string } | null>(null);
   const [busyExport, setBusyExport] = useState(false);
   const [reopenErr, setReopenErr] = useState("");
+  // Shared sessions (docs/peer-link.md "Shared sessions"): what I share on
+  // this link and what they share with me; the dialog that picks.
+  const sessions = usePeerSessions(link.link_id, tick);
+  const [sharingOpen, setSharingOpen] = useState(false);
   const [busyReopen, setBusyReopen] = useState(false);
   const [confirm, setConfirm] = useState<Confirm>("");
   const [deleteFiles, setDeleteFiles] = useState(false);
@@ -332,6 +339,37 @@ export function PeerLinkCard(props: {
         <p className="set-hint" data-tour="people-share">
           Here you can message {link.peer_name} and look at their changes; sharing a folder needs Linux or macOS.
         </p>
+      )}
+
+      <div className="peer-row peer-sessions" data-tour="people-share-session">
+        <button
+          type="button"
+          className="test-btn"
+          id={"peer-share-session-" + link.link_id}
+          disabled={!verified}
+          title={verified ? `Put one of your sessions on ${link.peer_name}’s rail` : gate}
+          onClick={() => setSharingOpen(true)}
+        >
+          Share a session…
+        </button>
+        <span className="set-hint">
+          {sessions.view.mine.length
+            ? `${sessions.view.mine.length} shared with ${link.peer_name}`
+            : `${link.peer_name} opens it on their rail and types into it.`}
+        </span>
+      </div>
+      <TheirSessions link={link} view={sessions.view} />
+      {sharingOpen && (
+        <ShareSessionsDialog
+          link={link}
+          sandbox={sandbox}
+          view={sessions.view}
+          onChange={(v) => {
+            sessions.setView(v);
+            reload();
+          }}
+          onClose={() => setSharingOpen(false)}
+        />
       )}
 
       <JointSection link={link} agents={agents} sandbox={sandbox} tick={tick} reload={reload} />

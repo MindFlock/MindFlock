@@ -648,7 +648,10 @@ class BaseProvider:
         every other CLI the delivery types the instruction after a ``say:
         true`` prompt instead — so a provider must answer True only when the
         hook really does it, or the agent never hears the request (an armed
-        file nobody consumes) or reads the sentence twice. Default: False."""
+        file nobody consumes) or reads the sentence twice. The same hook prints
+        Flock mode's workers request (the session's ``.flock`` file) on every
+        prompt, so a True here also means /send never types that request.
+        Default: False."""
         return False
 
     def last_assistant_text(

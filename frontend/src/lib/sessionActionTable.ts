@@ -49,6 +49,14 @@ import { focusQueueInput, isRemote } from "./playbooks";
 import { errMsg } from "./format";
 import { toast } from "./toast";
 import { errorPop } from "./errorPop";
+import {
+  ASK_WORKERS_KEYS,
+  FLOCK_KEYS,
+  flockActionLabel,
+  flockAvailable,
+  insertWorkersRequest,
+  toggleFlock,
+} from "./workersRequest";
 
 export interface ActionCtx {
   title: string;
@@ -101,6 +109,7 @@ export interface SessionAction {
   run(title: string): void;
 }
 
+const cfg = () => queryClient.getQueryData<Config>(["config"]);
 const git = (c: ActionCtx) => c.caps.git !== false;
 const gitHere = (c: ActionCtx) => git(c) && !c.shared;
 const settled = (c: ActionCtx) => !!c.inst && !c.inst.pending;
@@ -193,6 +202,24 @@ export const SESSION_ACTIONS = {
         .catch((err) => toast(`${name}: ${errMsg(err)}`, { duration: 6000 }));
     },
   },
+  // MindFlock workers without typing the ask (lib/workersRequest): once, typed
+  // into the terminal for you to finish; or Flock mode, where the server adds
+  // it to every prompt. This machine's own settled sessions only, never a
+  // guest's — the same rows Pause/Resume act on.
+  askWorkers: {
+    label: "Ask for workers",
+    keys: ASK_WORKERS_KEYS,
+    note: "types the workers request into its terminal",
+    enabled: (c) => flockAvailable(c.inst, cfg()) && c.inst!.status !== "paused",
+    run: (t) => void insertWorkersRequest(t),
+  },
+  flock: {
+    label: (c) => flockActionLabel(!!c.inst?.flock),
+    keys: FLOCK_KEYS,
+    note: "adds the workers request to everything you send here",
+    enabled: (c) => flockAvailable(c.inst, cfg()),
+    run: (t) => void toggleFlock(t),
+  },
   thread: {
     label: "Thread",
     keys: "Ctrl+K T",
@@ -258,7 +285,11 @@ export const SESSION_ACTIONS = {
   resume: {
     label: "Resume session",
     note: "starts the agent again in the same worktree",
-    enabled: (c) => settled(c) && c.inst!.status === "paused",
+    // A peer's session on my rail (remote_peer) is theirs to resume: the
+    // server answers 409, so the verb is not offered. My own sandboxed share
+    // (peer_share, not remote) is still resumable.
+    enabled: (c) =>
+      settled(c) && c.inst!.status === "paused" && !(c.inst as { remote_peer?: boolean }).remote_peer,
     run: (t) => void resumeSession(t),
   },
   // The two ways a session ends, and only these two.
@@ -322,6 +353,7 @@ export function chordDesc(id: SessionActionId): string {
   if (id === "ide") return "Open in your code editor";
   if (id === "hide") return "Hide / show window";
   if (id === "thread") return "Thread — " + actionNote(id, {} as ActionCtx);
+  if (id === "flock") return "Workers on every prompt";
   const l = sessionAction(id).label;
   return typeof l === "string" ? l : id;
 }

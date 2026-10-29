@@ -2509,6 +2509,23 @@ approval, Claude's question menu — raises a Question; on, a reply ending
 with a question also puts a Question on the row, in the bell, the toast and
 the push, answered with Reply.
 
+## The session chat (people, not agents)
+
+When a guest (or a peer) is on one of your sessions — their name pill on
+the rail row — a small floating chat for that session pops up bottom-right
+(`components/chat/ChatPanel.tsx`, `lib/chat.ts`; a bottom sheet at phone
+width). It is between the people on the session only; agents never see it.
+It opens by itself when someone arrives (`guest.focus_changed`, `joined`),
+and as a minimized pill with an unread count when someone writes on a
+session whose chat isn't open (`session.chat`); a guest's page opens it when
+the owner writes. ▁ minimizes, × closes (and that person arriving again on
+that session doesn't reopen it this page load); **💬 Chat** opens it by hand
+for the focused session while someone is on it, and `openChat(title)` is
+what any other surface (the guest pill) calls. Messages load from
+`GET /api/instances/<title>/chat`, follow `session.chat` live and re-read
+every 15 s while a window is up; nothing is persisted — see
+[people.md](people.md#a-small-chat).
+
 ## Diff → instruction
 
 Select any text in a pane's **Diff** tab and a floating **✦ Ask agent** button
@@ -2647,6 +2664,8 @@ built-in alias.
 | `Ctrl+W` / `Delete` | Close the focused session — moves it to Recently closed (reopen with `Ctrl+Shift+T`). Neither fires while **any** dialog or overlay is open (detected generically: the store's dialog slot, or any visible `[role="dialog"]`, `.modal`, `.dialog`, `.palette` or `[data-modal]` element, plus the bell, ⏩ picker, Prompts menu and break screen), nor while the keyboard is in an input, textarea, select, contenteditable or a terminal — `Ctrl+W` at a shell is delete-word, not "close this session". Never fires for a selected non-session window — those close from their ✕ |
 | `Ctrl+V` (in a terminal) | Paste into the PTY: an image or file on the clipboard uploads and pastes its path, plain text pastes with a "Pasted N chars" toast, and an empty clipboard event falls back to reading `navigator.clipboard`. Same in session panes and the Assistant |
 | `Ctrl+F` (in a terminal) | Find across the pane's **whole** scrollback, prefilled with a one-line terminal selection — **in the live pane**: a find bar floats top-right with an `n / total` count, the pane itself jumps to each hit, every visible hit yellow, the current one orange. It searches whatever scrollback the pane's mouse wheel moves, decided per pane, so it holds for every agent CLI. Where the app leaves the mouse to tmux (shells, codex, aider, gemini, cursor-agent, goose) it's tmux's copy-mode search. Where the app scrolls itself (Claude Code, opencode, cline) the server **indexes** everything the app would show the moment the bar opens — the window is briefly made tall at the same width, read top to bottom (PageUp/PageDown where the app pages with keys, measured wheel bursts where it doesn't), and put back — while the pane shows a frozen snapshot, so none of it is seen; the count is then instant, each step is one jump, and reopening find on an unchanged pane reuses the index. The server also keeps indexes current as the agent writes (one screen read every 1.5 s, nothing moves), and builds a missing one ahead of time for a pane nobody is using — agent idle (never while it waits on a question), no input from you for 30 s, screen still for 20 s, at most one screen attached — with that pane frozen meanwhile; any input into it cancels and snaps back. Claude Code's own pinned `❯ prompt` row is hidden the frame it's drawn (the prompt bar above mirrors it), so jumping never flashes it. Only rows that move with the content are indexed — never the input box, a status bar, a pinned prompt row or a floating hint. Only a pane that scrolls from neither (a pager on the alternate screen) opens the full-history view's find instead. Options, as in an editor: **Aa** match case (`Alt+C`), **ab** whole word (`Alt+W`), **.\*** regular expression (`Alt+R`), and **near** — a second term that must be on the same line or within N lines (1–50) of the first; both terms are highlighted and the options apply to both (matching is server-side, `core/find_query`, and painted with the same rules in the browser; the tmux path reads tmux's history rather than using tmux's own search, which can't do these). You start at the newest hit at or above what you were looking at: `Enter` / `F3` / `Ctrl+G` step **up** to older hits, add `Shift` to step back down, wrapping at the ends; `Esc` returns to live. Literal and case-insensitive unless the options say otherwise |
+| `Alt+G` | Ask for workers — types the workers request into the focused session's terminal (see [Asking for workers](#asking-for-workers)) |
+| `Alt+Shift+G` | Workers on every prompt — turn the focused session's Flock on or off |
 | `Ctrl+Shift+T` | Reopen the last-closed session |
 | `Ctrl+Enter` | Submit the commit dialog |
 
@@ -2661,6 +2680,36 @@ PR** is deliberately unbound — palette/menu only, behind an in-app confirm.
 `Alt+O` is unbound: it opened the Outbox, which is gone. A rebind saved for it
 (id `outbox` in `mf_keymap`) is dropped the next time the app loads, so it
 neither counts as a customization nor holds its old combo.
+
+### Asking for workers
+
+Asking a session to hand its task to MindFlock workers takes no typing
+(`lib/workersRequest.ts`):
+
+- **`Alt+G` — Ask for workers.** Types the workers request into the focused
+  session's terminal as one pasted chunk, then a space — never Enter — and
+  gives the terminal the keyboard: type the task after it, or press Enter if
+  the task is already above. Works from the terminal; a text field elsewhere
+  keeps the keystroke, and nothing happens behind a dialog. Also in the
+  palette (**Ask for workers — <session>**).
+- **`Alt+Shift+G` — Workers on every prompt (Flock).** A per-session switch:
+  while on, the server adds the request to every prompt submitted in that
+  session (`POST /api/instances/{title}/flock {on}`; rows carry `flock`), so
+  you type nothing extra. The pane header's **Flock** control (the MindFlock raven, filled (filled when
+  on), the row's ⋯ menu (**Workers on every prompt**, ✓ when on, under
+  Session) and the palette flip the same switch. Offered on this machine's own
+  sessions only — not a peer's, a shared folder, another device's, or to a
+  guest.
+- **Settings → General → Workers request / Workers model.** The request is a
+  template: `{model}` becomes the model (default `claude-opus-5-5`); empty uses
+  the built-in request. The server serves the filled-in text as
+  `/api/config` → `flock.request`; an older server sends none and the app
+  falls back to the default.
+
+`Alt+G` because `Alt+W` is the pane find bar's whole-word switch, `Ctrl+G` its
+next-match key, and `Alt+F` opens Chrome's menu on Windows; Alt+G is free in
+Chrome, the desktop app and the find bar on Windows, macOS and Linux. Both are
+rebindable in the `?` sheet (ids `workers` and `flock`).
 
 ## New-session dialog
 
@@ -2800,9 +2849,11 @@ task, fast-track) to run again or schedule.* — then **Folder** and **Agent**,
 its Task: the first line's first few words, filler dropped, lowercased and
 hyphenated, at most 32 characters (*Add a README section about setup* →
 `add-readme-section-about-setup`; `-2`, `-3`… when taken). With no Task either
-it is the `untitled` quick launch. The server does this
-(`session_create.title_from_prompt`), so a create from anywhere — the form,
-page 1, the API — gets the same name; the Name placeholder previews it.
+it is named for the **folder** it works in (`sitecheck-bot7`, `app-2`…), and
+only a launch with neither is the `untitled` quick launch. The server does
+this (`session_create.title_from_prompt`, `title_from_place`), so a create
+from anywhere — the form, page 1, the API — gets the same name; the Name
+placeholder previews it (`newSession.ts`: titleFromPrompt, titleFromFolder).
 
 **The by-hand path costs nothing.** The form is pre-filled with the template,
 agent and account the last session in that folder was started with — so
@@ -5664,6 +5715,38 @@ labels above the inputs.
   by their side is the server's own sentence (*<name> hasn't confirmed the
   safety number yet…*, or the switch they turned off: *<name> turned off “see
   my changes” on this link…*).
+- **Sessions a peer shares with you** (`lib/peerSessions.ts`; contract in
+  [peer-link.md → Shared sessions](peer-link.md#shared-sessions--contract-sessions_bridgepy-routespeer_sessionspy)):
+  each is a rail row `<peer>::<title>` (`remote_peer`), grouped under the
+  peer like another device's rows. The group header has a dot and says
+  **Erik · connected**; the row is named by the sharer's own name for it
+  (`display_title`, their rename — never the raw title), its ⇄ chip's
+  tooltip gives the mode (*full* / *gated to its folder*), and its status
+  reads like any row's. Rename, the IDE and every owner-only action are off
+  (`peer_share`). When their link drops, the server stops listing the rows;
+  the page keeps them for 60 s (`installPeerRowMemory`, which puts them back
+  into the instances cache flagged `peer_offline`): the group reads
+  **Erik · offline — reconnecting**, the rows are greyed and not clickable,
+  and an open pane stays, its terminal retrying until the row is served
+  again. A withdrawn session just leaves — never remembered, no error.
+  **The pane** shows one thin line above the terminal: *Erik's session ·
+  full join — you type as them* / *· gated to its folder*, or *Erik is
+  offline — the terminal reconnects when they're back*; on one of **your**
+  sessions a peer has open or selected (their `session_focus`, a terminal
+  not needed) it says *Bob is here* — the names on the rail's pill, which
+  follow works on as for a guest (a page opened later rebuilds a peer's
+  pill from the event backlog, quietly). **Bell and toasts**
+  (`peer.session_shared` / `peer.session_unshared`, replay-guarded, never
+  a push): their share is a toast *Erik shared fix-login with you — click
+  to open* (selects the row) and a bell row named by that row; your own
+  share is a quiet bell row (*You shared fix-login with Bob (full)*); a
+  withdrawal is a bell row (*Erik withdrew fix-login*); `peer.state`
+  connected after an outage, while their rows were on your rail, toasts
+  *Erik is back — your shared sessions are live*. **The phone** (`/m`)
+  lists them after your own under *Erik · shared with you*, the mode on
+  the sub-line, opened on the same `/api/instances/<row>/terminal`; the
+  git bar, the Terminal and Diff tabs and the ⋯ sheet's verbs are hidden
+  for them (a withdrawn one says *no longer shared*).
 - **People** (screen key `peer`; was People; the Peer links screen, `/api/peer*`,
   `backend/peer`) — pair-coding with another MindFlock user. It leads with
   **Invite someone** (**Copy invite** copies a ready-to-send message with the

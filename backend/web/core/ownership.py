@@ -22,6 +22,11 @@ byte-exact Instance JSON):
   (title, person, device) underneath — the same person on two devices is
   one viewer with two devices.
 
+A peer typing into a session I share with them
+(:mod:`backend.peer.sessions_bridge`) holds a seat here too, as the person
+``peer:<link id>`` named after the peer (``attach(..., name=)``): the same
+one keyboard, and the peer's name on the owner's rail as driver or viewer.
+
 The driver is a PERSON, not a device: all of one person's devices share an
 id, so a person never locks themselves out from their own laptop. Nothing
 here is access control — the bearer token and device pairing still gate
@@ -64,6 +69,8 @@ _DRIVERS: Dict[str, dict] = {}
 _CONNS: Dict[int, dict] = {}
 #: (title, person, device) -> last input epoch — the per-viewer presence.
 _INPUT_AT: Dict[Tuple[str, str, str], float] = {}
+#: person id -> the name a terminal attached with (a peer's), while it has one.
+_NAMES: Dict[str, str] = {}
 _IDS = itertools.count(1)
 
 _DEVICE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$")
@@ -89,10 +96,26 @@ def _own_id() -> str:
 
 def name_of(pid: str) -> str:
     """How MindFlock names ``pid``: this device's person's name when it is
-    them, else ``""`` (another person's name never travels — the UI falls
-    back to their device). Never raises."""
+    them, the name its terminal attached with (a peer, :func:`attach`), else
+    ``""`` (another person's name never travels — the UI falls back to their
+    device). Never raises."""
     if not pid:
         return ""
+    if pid.startswith("guest:"):
+        # The name they pick now, also after their terminal attached (the
+        # page attaches while it still asks "What should we call you?").
+        try:
+            from backend.web.core import guests as _guests
+
+            for rec in _guests.list_links():
+                if "guest:" + rec["id"] == pid:
+                    return _guests.display_name(rec)
+        except Exception:  # noqa: BLE001
+            pass
+    with _LOCK:
+        named = _NAMES.get(pid)
+    if named:
+        return named
     try:
         if pid == _own_id():
             from backend.config import settings as _settings
@@ -113,12 +136,21 @@ def caller(scope) -> Tuple[str, str]:
     """``(person id, device)`` a request or websocket comes from: the person
     :func:`backend.web.core.auth.request_person` names, and the device key in
     the ``X-MindFlock-Remote`` marker — this device's own key for a browser or
-    CLI here. Never raises."""
+    CLI here. A guest link's browser is its own person, ``guest:<link id>``
+    under the guest's name — never the owner it signs in beside. Never
+    raises."""
     pid = ""
     try:
         from backend.web.core import auth as _auth
+        from backend.web.core import guests as _guests
 
-        pid = _auth.request_person(scope)
+        guest = _guests.scope_guest(scope)
+        if guest is not None:
+            pid = "guest:" + str(guest.get("id") or "")
+            with _LOCK:
+                _NAMES[pid] = _guests.display_name(guest)
+        else:
+            pid = _auth.request_person(scope)
     except Exception:  # noqa: BLE001
         pass
     device = ""
@@ -331,13 +363,18 @@ def attach(
     pid: str,
     device: str,
     notify: Optional[Callable[[dict], None]] = None,
+    name: str = "",
 ) -> int:
     """Register a terminal websocket on ``title``; its connection id. The
     first person to attach to a session nobody drives takes the keyboard.
     ``notify`` (optional, any thread) receives :func:`mode` frames when the
-    driver changes from now on — the caller sends the first one itself."""
+    driver changes from now on — the caller sends the first one itself.
+    ``name``: what to call ``pid`` while it has a terminal open (a peer —
+    :func:`name_of` knows nobody else's name)."""
     with _LOCK:
         cid = next(_IDS)
+        if pid and name:
+            _NAMES[pid] = name
         _CONNS[cid] = {
             "title": title,
             "person": pid,
@@ -365,9 +402,11 @@ def detach(cid: int) -> None:
             return
         title, pid = c["title"], c["person"]
         still = any(o["title"] == title and o["person"] == pid for o in _CONNS.values())
-    if not still and pid and release(title, pid, reason="left"):
-        return  # release already announced presence
-    _presence_changed(title)
+    if still or not pid or not release(title, pid, reason="left"):
+        _presence_changed(title)  # (a release announced it already)
+    with _LOCK:
+        if not any(o["person"] == pid for o in _CONNS.values()):
+            _NAMES.pop(pid, None)
 
 
 def may_type(cid: int) -> Tuple[bool, str]:
@@ -578,3 +617,4 @@ def _reset_for_tests() -> None:
         _DRIVERS.clear()
         _CONNS.clear()
         _INPUT_AT.clear()
+        _NAMES.clear()

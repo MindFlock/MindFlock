@@ -16,13 +16,14 @@ import { canDisconnect } from "../../lib/devices";
 import { viewCap } from "../grid/layout";
 import { SidebarRow } from "./SidebarRow";
 import { windowRows, WindowRowItem, type WindowRow } from "./WindowList";
-import { guestNote, useLockedRows } from "../../lib/guest";
+import { guestNote } from "../../lib/guest";
 import { GuestBar } from "./GuestBar";
 import { SessionFilter } from "./SessionFilter";
 import { SidebarResizer } from "./SidebarResizer";
 import { BulkBar } from "./BulkBar";
 import { OfflineBar } from "./OfflineBar";
 import { PeerSharedRows } from "./PeerSharedRows";
+import { installPeerFocus, isPeerRow, peerGroups, peerGroupWords } from "../../lib/peerSessions";
 import { useExtensionBarDefs } from "../../extensions/ExtensionBar";
 import { BarSlot, barContent, SECTION_MIME } from "./SidebarBars";
 import { orderedSections, SESSIONS_KEY } from "./barDefs";
@@ -91,9 +92,10 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
     return () => window.removeEventListener(MODAL_OPEN_EVENT, on);
   }, []);
   const { data: instances = [] } = useInstances();
-  // A guest link's crossed-out sessions (lib/guest.ts): drawn after this
-  // device's rows, never numbered, never selectable. Empty for the owner.
-  const lockedRows = useLockedRows();
+  // Selecting a peer's row tells that peer (their rail shows our name on it).
+  const instancesRef = useRef(instances);
+  instancesRef.current = instances;
+  useEffect(() => installPeerFocus(() => instancesRef.current), []);
   const { data: devices } = useDevices();
   const ui = useUi();
   const doctorWarn = useDoctorWarn();
@@ -248,14 +250,17 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
     [instances, ui.hidden, ui.viewMode, ui.narrow, ui.mru, ui.order]
   );
 
-  // Device grouping: only when other MindFlock devices exist on the tailnet.
+  // Device grouping: only when other MindFlock devices exist on the tailnet,
+  // or a peer link shares sessions with us (one group per peer, after the
+  // devices — lib/peerSessions).
   const remoteDevs = devices?.devices || [];
-  const grouped = remoteDevs.length > 0;
+  const peers = useMemo(() => peerGroups(filtered), [filtered]);
+  const grouped = remoteDevs.length > 0 || peers.length > 0;
   const localRows = filtered.filter((i) => !i.device);
   const byDev = useMemo(() => {
     const m = new Map<string, Instance[]>();
     for (const i of filtered) {
-      if (!i.device) continue;
+      if (!i.device || isPeerRow(i)) continue;
       if (!m.has(i.device)) m.set(i.device, []);
       m.get(i.device)!.push(i);
     }
@@ -382,6 +387,8 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
     const dkey = dev.device;
     return { dkey, rail: toRail(byDev.get(dkey) || [], []) };
   });
+  // A peer's group folds under its own key, never a device's.
+  const peerRails = peers.map((g) => ({ dkey: "peer:" + g.device, rail: toRail(g.rows, []) }));
   // PUBLISH the rendered row order — grouping, collapse and filter applied,
   // i.e. exactly the sequence renderRail numbers below. The keymap's
   // Alt+N / Ctrl+Tab and the notification "[N]" prefixes read railOrder
@@ -390,6 +397,9 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
   const displayedKeys: string[] = grouped
     ? (ui.collapsedDevices.has("__self") ? [] : splitKeys(localSplit)).concat(
         ...devRails.map(({ dkey, rail }) =>
+          ui.collapsedDevices.has(dkey) ? [] : rail.map((r) => r.key)
+        ),
+        ...peerRails.map(({ dkey, rail }) =>
           ui.collapsedDevices.has(dkey) ? [] : rail.map((r) => r.key)
         )
       )
@@ -474,7 +484,6 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
       {renderRail(localSplit.families, familyTaskOf)}
       {localSplit.groups.length + localSplit.families.length > 0 && localSplit.own.length > 0 && <OwnHeader />}
       {renderRail(localSplit.own, familyTaskOf)}
-      <LockedRows rows={lockedRows.filter((r) => !r.device)} />
     </>
   );
 
@@ -534,7 +543,7 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
               <GuestBar />
               <PeerSharedRows />
               {config?.guest && (
-                <div className="guest-note" id="guest-note" title="Sessions not on the link are crossed out">
+                <div className="guest-note" id="guest-note" title="Only the sessions on your link are listed">
                   {guestNote(config.guest)}
                 </div>
               )}
@@ -599,6 +608,32 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
                           onToggle={() => ui.toggleDeviceCollapsed(dkey)}
                         >
                           {!collapsed && renderRail(devRails[di].rail)}
+                        </DeviceSection>
+                      );
+                    })}
+                    {peers.map((g, pi) => {
+                      const dkey = peerRails[pi].dkey;
+                      const collapsed = ui.collapsedDevices.has(dkey);
+                      // "Erik · connected", or — the link dropped, its rows
+                      // remembered for a minute — "Erik · offline — reconnecting".
+                      const words = peerGroupWords(g);
+                      return (
+                        <DeviceSection
+                          key={dkey}
+                          devKey={dkey}
+                          label={words.text}
+                          badge={String(g.rows.length)}
+                          badgeOff={words.offline}
+                          collapsed={collapsed}
+                          title={words.title}
+                          showForget={false}
+                          peer={g.label}
+                          peerOffline={words.offline}
+                          note=""
+                          action={null}
+                          onToggle={() => ui.toggleDeviceCollapsed(dkey)}
+                        >
+                          {!collapsed && renderRail(peerRails[pi].rail)}
                         </DeviceSection>
                       );
                     })}
@@ -737,6 +772,10 @@ function DeviceHeader(props: {
   devKey?: string;
   /** One of "Your devices" (Settings → Your devices). */
   member?: boolean;
+  /** A peer link's group: the peer's name (the ⇄ marker says so). */
+  peer?: string;
+  /** That peer's link is down (its rows are remembered, greyed). */
+  peerOffline?: boolean;
   onToggle(): void;
 }) {
   // The ✕ forgets the device's token — pairing it again is the only way
@@ -757,7 +796,7 @@ function DeviceHeader(props: {
   };
   return (
     <>
-      <li className="device-group" title={props.title}>
+      <li className={"device-group" + (props.peerOffline ? " peer-offline" : "")} title={props.title}>
         {/* The header is the fold toggle: a real button, so Tab reaches it and
             a screen reader hears whether the group is open. */}
         <button
@@ -769,7 +808,20 @@ function DeviceHeader(props: {
           <span className="dev-caret" aria-hidden="true">
             {props.collapsed ? "▸" : "▾"}
           </span>
+          {props.peer && (
+            // Connected / offline, before the name — the row chips' dot.
+            <span className={"dev-peer-dot" + (props.peerOffline ? " off" : "")} aria-hidden="true" />
+          )}
           <span className="dev-name">{props.label}</span>
+          {props.peer && (
+            <span
+              className="dev-peer"
+              title={`Shared by ${props.peer} over a peer link`}
+              aria-label={`Shared by ${props.peer} over a peer link`}
+            >
+              ⇄
+            </span>
+          )}
           {props.member && (
             <span className="dev-member" aria-label="One of your devices">
               yours
@@ -821,6 +873,8 @@ function DeviceSection(props: {
   title: string;
   showForget: boolean;
   member?: boolean;
+  peer?: string;
+  peerOffline?: boolean;
   note: string;
   /** "add": Add to my devices… (Settings → Your devices on it); "connect":
    * Your devices → Advanced's pasted-token pairing with this device
@@ -865,25 +919,3 @@ function DeviceSection(props: {
   );
 }
 
-/** A guest link's crossed-out sessions: the title the owner kept from the
- * guest, nothing to click. Not a SidebarRow — no number, no menu, no drag, no
- * terminal behind it — so none of the rail's keys or drops reach them. */
-function LockedRows({ rows }: { rows: Array<{ title: string; status: string }> }) {
-  if (!rows.length) return null;
-  return (
-    <>
-      {rows.map((r) => (
-        <li key={"locked:" + r.title} className="inst locked" data-title={r.title} aria-disabled="true">
-          <div className="inst-row" title="Not part of your invite">
-            <span className="idx locked-x" aria-hidden="true">
-              ✕
-            </span>
-            <span className="meta">
-              <span className="title">{r.title}</span>
-            </span>
-          </div>
-        </li>
-      ))}
-    </>
-  );
-}

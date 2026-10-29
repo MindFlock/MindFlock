@@ -371,6 +371,10 @@ export interface Instance {
   /** For a shared session: who it is shared with, and whether they are
    * connected now. null/absent otherwise. */
   peer_with?: { link_id: string; name: string; connected: boolean } | null;
+  /** Flock mode ("Workers on every prompt"): while true the server adds the
+   * workers request to every prompt submitted in this session. Optional: an
+   * older server doesn't send it (lib/workersRequest). */
+  flock?: boolean;
 }
 
 /** A fence an orchestrator set on one worker: the only paths it may change
@@ -938,11 +942,19 @@ export interface Config {
    * for it and the session titles it opens. Null (or absent, older server)
    * for the owner. */
   guest?: GuestScope | null;
+  /** The workers request (Settings → General "Workers request", `{model}`
+   * already filled in) and the model it names. Absent on an older server:
+   * lib/workersRequest falls back to its default. */
+  flock?: { request: string; model: string };
 }
 
 /** What a guest link opens (`/api/config` → `guest`). */
 export interface GuestScope {
+  /** What the owner called the link when making it (older links; ""). */
   label: string;
+  /** The name this guest picked for themselves (`POST /api/guest/name`) —
+   * "" until they have, and the page asks before anything else. */
+  name: string;
   sessions: string[];
 }
 
@@ -951,6 +963,8 @@ export interface GuestScope {
 export interface GuestLink {
   id: string;
   label: string;
+  /** The name the guest picked when they opened the link ("" until then). */
+  name: string;
   sessions: string[];
   created_at: number;
   /** The link to send: the public tunnel address with the token, or null
@@ -960,6 +974,10 @@ export interface GuestLink {
   /** The same link on this device's tailnet/LAN address — only for someone
    * already on your network. */
   local_url: string;
+  /** Where the guest's page is right now — the session it has selected —
+   * or null when they are not here (no report for 90 s). lib/guestFocus
+   * draws it as a pill on that rail row. */
+  focus?: { title: string; ts: number } | null;
 }
 
 /** The public address guest links are opened at (`GET /api/guests` →

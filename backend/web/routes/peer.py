@@ -5,16 +5,21 @@ The work lives in ``backend.peer.service``; these routes only translate. Every
 one refuses a request proxied by another MindFlock device (X-MindFlock-Remote):
 tailnet remote control must never manage peer links. No response carries a
 key or secret, except the invite code in POST /api/peer/invites — the one
-value the user must pass on.
+value the user must pass on — and its link (``url``, the same code in a
+``/join#`` fragment). GET /api/peer never repeats either.
+
+``GET /join`` is the page that link opens: static, public (the joiner is a
+stranger), and it learns the code from the fragment alone.
 """
 
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from backend import log
 from backend.web.core import auth as _auth
@@ -86,11 +91,51 @@ async def _peer_body(request: Request) -> dict:
     return body if isinstance(body, dict) else {}
 
 
+_JOIN_PAGE = Path(__file__).resolve().parent.parent / "static" / "join.html"
+
+
+def _invite_base(request: Request) -> str:
+    """Where an invite link points: the public tunnel guest links use when it
+    is up, else this device's own tailnet / LAN address. With the access gate
+    on, asking for an invite asks for the tunnel too (the joiner is a
+    stranger elsewhere): the first invite may still carry the local address
+    while Cloudflare mints the name — the code in the message works either
+    way, and the next invite carries the public link."""
+    from backend.web.core import auth as _auth
+    from backend.web.core import guest_tunnel as _tunnel
+    from backend.web.routes.guests import _local_base
+
+    try:
+        if _auth.auth_enabled() and not _tunnel.url():
+            _tunnel.want()
+            _tunnel.ensure()
+    except Exception:  # noqa: BLE001 — a link is still a link without it
+        pass
+    return _tunnel.url() or _local_base(request)
+
+
+def _with_invite_url(request: Request, out):
+    """A created invite, plus ``url``: the link the joiner opens."""
+    if not isinstance(out, dict) or not out.get("code") or not out.get("invite_id"):
+        return out
+    from backend.peer.invite import invite_url
+
+    return {**out, "url": invite_url(_invite_base(request), str(out["code"]))}
+
+
+@router.get("/join", include_in_schema=False)
+async def join_page() -> FileResponse:
+    """The page an invite link opens (no auth: auth._PUBLIC_PATHS). It reads
+    the code from ``location.hash`` and offers ``mindflock://join?code=…``,
+    the code to copy, and the install link."""
+    return FileResponse(str(_JOIN_PAGE), headers={"Cache-Control": "no-store"})
+
+
 @router.get("/api/peer")
 async def peer_status(request: Request) -> JSONResponse:
     """Peer-link status: sandbox availability, this instance's identity
     fingerprint, the listen address, links (no keys) and active invites (id and
-    expiry only — never the code)."""
+    expiry only — never the code, so never its ``url`` either)."""
     return await _peer_call(request, lambda: _service().status())
 
 
@@ -111,8 +156,12 @@ async def peer_disable(request: Request) -> JSONResponse:
 
 @router.post("/api/peer/invites")
 async def peer_create_invite(request: Request) -> JSONResponse:
-    """``{ttl_s?, advertise_host?, reach?, op_id?}`` → ``{invite_id, code,
-    message, expires_in, host, port, direct, relay?, fallback?}``.
+    """``{ttl_s?, advertise_host?, reach?, op_id?, sessions?}`` → ``{invite_id,
+    code, url, message, expires_in, host, port, direct, sessions, relay?,
+    fallback?}``. ``url`` is ``<base>/join#<code>`` (:func:`_invite_base`).
+    ``sessions`` (``[{title, mode: "gated"|"full"}]``, at most 50, each a
+    live root session here, one gated; 400 otherwise) are shared with
+    whoever joins, the moment they do — before It matches.
     ``reach`` is ``auto`` (default) | ``tunnel`` | ``direct``;
     ``advertise_host`` overrides the address a direct code carries (setting
     ``peer.advertise_host``, else Tailscale, else LAN); ``op_id`` names the
@@ -120,15 +169,21 @@ async def peer_create_invite(request: Request) -> JSONResponse:
     invite made because the tunnel wouldn't start. The only response that
     ever contains an invite code; starts the listener."""
     body = await _peer_body(request)
-    return await _peer_call(
-        request,
-        _service().create_invite,
-        body.get("ttl_s"),
-        str(body.get("advertise_host") or body.get("host") or ""),
-        str(body.get("reach") or "auto"),
-        str(body.get("op_id") or ""),
-        status=201,
-    )
+
+    async def create():
+        out = _service().create_invite(
+            body.get("ttl_s"),
+            str(body.get("advertise_host") or body.get("host") or ""),
+            str(body.get("reach") or "auto"),
+            str(body.get("op_id") or ""),
+            # Only when asked: a service from before invites carried sessions.
+            **({"sessions": body["sessions"]} if body.get("sessions") else {}),
+        )
+        if asyncio.iscoroutine(out):
+            out = await out
+        return _with_invite_url(request, out)
+
+    return await _peer_call(request, create, status=201)
 
 
 @router.delete("/api/peer/invites/{invite_id}")
@@ -140,12 +195,18 @@ async def peer_revoke_invite(invite_id: str, request: Request) -> JSONResponse:
 async def peer_join(request: Request) -> JSONResponse:
     """``{code, op_id?}`` → the link (with its safety number to compare out
     of band) and ``reconnected`` — true when the code re-paired someone
-    already linked (same link, share kept)."""
+    already linked (same link, share kept). ``code`` is anything holding
+    one (``invite.code_from_text``): the bare code, the invite message, the
+    invite link (``…/join#<code>``) or ``mindflock://join?code=…``."""
+    from backend.peer.invite import code_from_text
+
     body = await _peer_body(request)
+    text = str(body.get("code") or "")
     return await _peer_call(
         request,
         _service().join,
-        str(body.get("code") or ""),
+        # No code found: the raw text, so the service says what's wrong with it.
+        code_from_text(text) or text,
         str(body.get("op_id") or ""),
         status=201,
     )

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 from typing import Optional, Tuple
 
@@ -397,10 +398,13 @@ async def create(
     # typed a name at all.
     auto_title = not title
     # An empty Name with a task is named FROM the task ("add-readme-section-
-    # setup"), so the row says what it is doing; with no task either it is an
-    # "untitled" quick launch. Either way numbered to stay unique (titles key
-    # ENGINE.instances).
-    title_base = "" if title else title_from_prompt(prompt)
+    # setup"), so the row says what it is doing; with no task either it is
+    # named for the folder it works in ("sitecheck-bot7"), and only a launch
+    # with neither is "untitled". Either way numbered to stay unique (titles
+    # key ENGINE.instances).
+    title_base = (
+        "" if title else (title_from_prompt(prompt) or title_from_place(repo_path))
+    )
     if not title:
         title = free_title(title_base) if title_base else srv._free_untitled()
         # Provisioned sessions derive their branch from the title; the empty
@@ -884,6 +888,20 @@ def title_from_prompt(prompt: str) -> str:
     if not out and kept:
         out = kept[0][:TITLE_FROM_PROMPT_MAX]
     return out
+
+
+def title_from_place(repo_path: str) -> str:
+    """A session name made from WHERE it works when it has no task to be named
+    from: the folder's own name, lowercased, non-word runs hyphenated —
+    ``/home/me/Allure/sitecheck-bot7`` → ``sitecheck-bot7``. "" for no folder
+    or one with no letters or digits in its name (the caller then falls back
+    to ``untitled``). The New dialog previews the same rule
+    (``newSession.ts``: titleFromFolder)."""
+    # Split on both separators: a Windows path from the desktop app's folder
+    # picker names its folder the same way.
+    name = re.split(r"[\\/]", str(repo_path or "").rstrip("/\\"))[-1]
+    words = re.findall(r"[a-z0-9]+", name.lower())
+    return "-".join(words)[:TITLE_FROM_PROMPT_MAX].strip("-")
 
 
 def free_title(base: str) -> str:

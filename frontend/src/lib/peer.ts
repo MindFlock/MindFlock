@@ -42,6 +42,26 @@ export interface PeerLink {
   joint?: PeerJointSummary | null;
   /** The standing mirror of their work into one of my repos (null: off). */
   mirror?: PeerMirror | null;
+  /** Links I listen on: the invite they joined with ("" = none), the
+   * sessions it shared (open to them before It matches), and the ones it
+   * listed but couldn't share. Optional: an older server sends none. */
+  from_invite?: string;
+  invite_shares?: string[];
+  share_errors?: PeerShareError[];
+}
+
+/** A session an invite opens: shared with whoever joins, the moment they do
+ * (docs/peer-link.md "Invite with sessions"). */
+export interface PeerInviteSession {
+  title: string;
+  mode: "gated" | "full";
+}
+
+/** A session an invite listed that could not be shared when they joined. */
+export interface PeerShareError {
+  title: string;
+  mode: "gated" | "full";
+  error: string;
 }
 
 /** Whose side something came from, as the side reading it sees it. */
@@ -154,6 +174,8 @@ export interface PeerInviteRow {
   expires_in: number | null;
   /** A same-network / tailnet invite (not through the relay). */
   direct?: boolean;
+  /** What it opens when someone joins it. */
+  sessions?: PeerInviteSession[];
 }
 
 export interface PeerStatus {
@@ -174,6 +196,9 @@ export interface PeerStatus {
 export interface PeerInvite {
   invite_id: string;
   code: string;
+  /** The link to send: `<this device or its public address>/join#<code>`
+   * (the code in the fragment, never the query). An older server sends none. */
+  url?: string;
   /** Ready to send: the code plus what to do with it. */
   message?: string;
   expires_in: number;
@@ -184,6 +209,8 @@ export interface PeerInvite {
   /** The relay failed in automatic mode, so this is a direct invite that only
    * works on your network or tailnet — `text` says so in plain words. */
   fallback?: { reason: string; text: string };
+  /** What it opens when someone joins it (an older server sends none). */
+  sessions?: PeerInviteSession[];
 }
 
 export type PeerJoinResult = PeerLink & { reconnected?: boolean };
@@ -203,16 +230,87 @@ export type PeerReach = "auto" | "tunnel" | "direct";
 
 const CODE_RE = /mfp[12]:[a-z2-7]+-[a-z2-7]{4}/i;
 
-/** Whether pasted text carries a peer-link invite code anywhere in it (the
- * bare code, the whole invite message, a link). */
-export function isPeerCode(text: string): boolean {
-  return CODE_RE.test(text || "");
+/** The text as pasted, then URL-decoded (a link may carry `mfp2%3A…`). */
+function codeCandidates(text: string): string[] {
+  const t = text || "";
+  try {
+    return [t, decodeURIComponent(t)];
+  } catch {
+    return [t];
+  }
 }
 
-/** The code inside pasted text, lowercased, or "". */
+/** Whether pasted text carries a peer-link invite code anywhere in it (the
+ * bare code, the whole invite message, the invite link, a mindflock:// link). */
+export function isPeerCode(text: string): boolean {
+  return codeCandidates(text).some((t) => CODE_RE.test(t));
+}
+
+/** The code inside pasted text, lowercased, or "" — the same forms the
+ * server takes (backend/peer/invite.py code_from_text). */
 export function extractPeerCode(text: string): string {
-  const m = CODE_RE.exec(text || "");
-  return m ? m[0].toLowerCase() : "";
+  for (const t of codeCandidates(text)) {
+    const m = CODE_RE.exec(t);
+    if (m) return m[0].toLowerCase();
+  }
+  return "";
+}
+
+/** What "Copy invite" puts on the clipboard: the link first (one click for
+ * them), what it opens, then the server's message — the code and how to
+ * paste it — for when the link can't open MindFlock. */
+export function inviteMessage(inv: Pick<PeerInvite, "code" | "message" | "url" | "sessions">): string {
+  const rest = inv.message || inv.code;
+  const opens = inv.sessions?.length
+    ? "It opens my sessions " + sessionListText(inv.sessions) + " — they show up on your rail as soon as you join.\n\n"
+    : "";
+  if (!inv.url || rest.includes(inv.url)) return opens + rest;
+  return "Open this link to join me in MindFlock: " + inv.url + "\n\n" + opens + rest;
+}
+
+/** "a", "a and b", "a, b and c". */
+export function andList(items: string[]): string {
+  if (items.length <= 1) return items[0] || "";
+  return items.slice(0, -1).join(", ") + " and " + items[items.length - 1];
+}
+
+/** "fix-login (full) and api (gated)". */
+export function sessionListText(sessions: { title: string; mode?: string }[]): string {
+  return andList(sessions.map((s) => `${s.title} (${s.mode === "gated" ? "gated" : "full"})`));
+}
+
+/** The invite card's line under the link: what it opens. */
+export function inviteOpensText(sessions: PeerInviteSession[] | undefined): string {
+  if (!sessions?.length) return "Opens no sessions — you just connect, and share later from their card.";
+  return "Opens: " + sessions.map((s) => `${s.title} (${s.mode})`).join(", ") + " — they appear on their rail the moment they join.";
+}
+
+/** The inviter's "they joined" line: who, and what is open to them now
+ * (what the invite listed, less what couldn't be shared). */
+export function joinedText(
+  name: string,
+  sessions: PeerInviteSession[] | undefined,
+  errors: PeerShareError[] | undefined,
+  repaired = false
+): string {
+  const failed = new Set((errors || []).map((e) => e.title));
+  const open = (sessions || []).filter((s) => !failed.has(s.title)).map((s) => s.title);
+  const head = `${name} ${repaired ? "reconnected" : "joined"}`;
+  if (!open.length) return head;
+  return `${head} — ${andList(open)} ${open.length === 1 ? "is" : "are"} open to them`;
+}
+
+/** The joiner's "you're connected" line: what they share with me now. */
+export function connectedText(name: string, theirs: { title: string; name?: string; mode?: string }[]): string {
+  const head = `You're connected to ${name}`;
+  if (!theirs.length) return head;
+  const list = sessionListText(theirs.map((t) => ({ title: t.name || t.title, mode: t.mode })));
+  return `${head} — ${list} ${theirs.length === 1 ? "is" : "are"} on your rail`;
+}
+
+/** One line per invite session that couldn't be shared. */
+export function shareErrorText(e: PeerShareError): string {
+  return `Couldn't open ${e.title}: ${e.error}`;
 }
 
 /** What a Reconnect box holds: a fresh invite (re-pair, same link), a new

@@ -2253,6 +2253,61 @@
 .peer-guests {
   margin-top: 18px;
 }
+/* The picker dialog (opened by ticking "I understand"): the same card as
+   #rename-form — a Modal is only the backdrop, its child is the card. */
+#peer-guests-pick-form {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px;
+  width: 460px;
+  max-width: 92vw;
+  max-height: 85vh;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--text);
+}
+#peer-guests-pick-form h2 {
+  margin: 0;
+  font-size: 16px;
+}
+#peer-guests-pick-form > .set-hint {
+  margin: 0;
+  font-size: 12px;
+}
+#peer-guests-pick-form > label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+#peer-guests-pick-form > label input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 9px 12px;
+  font-size: 13px;
+}
+#peer-guests-pick-form > label input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+#peer-guests-pick-form .peer-guest-pick {
+  max-height: 40vh;
+  font-size: 13px;
+  color: var(--text);
+}
+#peer-guests-pick-form .peer-guest-pick li {
+  padding: 4px 0;
+}
+#peer-guests-pick-form .modal-actions {
+  margin-top: 4px;
+}
+
 .peer-guest-pick {
   list-style: none;
   margin: 6px 0 8px;
@@ -2292,6 +2347,95 @@
 }
 .peer-guest-kill {
   margin: 8px 0;
+}
+
+/* Shared sessions (peer/ShareSessions.tsx): the same card as the guest
+   picker; one session (radio), how (gated / full), the full-join warning. */
+#peer-sessions-share-form {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px;
+  width: 500px;
+  max-width: 92vw;
+  max-height: 85vh;
+  overflow: auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--text);
+}
+#peer-sessions-share-form h2 {
+  margin: 0;
+  font-size: 16px;
+}
+#peer-sessions-share-form > .set-hint {
+  margin: 0;
+  font-size: 12px;
+}
+#peer-sessions-share-form .peer-guest-pick {
+  max-height: 30vh;
+  font-size: 13px;
+}
+/* The invite picker (peer/InviteSessions.tsx): the same card as the guest
+   picker. */
+#peer-invite-pick-form {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px;
+  width: 500px;
+  max-width: 92vw;
+  max-height: 85vh;
+  overflow: auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: var(--text);
+}
+#peer-invite-pick-form h2 {
+  margin: 0;
+  font-size: 16px;
+}
+#peer-invite-pick-form > .set-hint {
+  margin: 0;
+  font-size: 12px;
+}
+#peer-invite-pick-form .peer-guest-pick {
+  max-height: 30vh;
+  font-size: 13px;
+}
+#peer-invite-pick-form .peer-guest-pick select {
+  margin-left: 22px;
+}
+.peer-share-modes {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+.peer-share-modes label {
+  cursor: pointer;
+}
+.peer-share-mode-hint {
+  display: block;
+  margin-left: 22px;
+  font-size: 12px;
+}
+.peer-share-sub {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+.peer-sessions {
+  margin-top: 10px;
+}
+#peer-sessions-theirs {
+  margin-top: 6px;
 }
 /* Settings → Your devices ("Your devices"). Rows are a dot + name/status stack +
    buttons pinned right, the same shape as the sidebar's device rows, so a
@@ -3202,6 +3346,224 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+/* The session chat's floating windows (ChatPanel.tsx). Above the grid and
+   the sidebar, under the folder picker (900) and every notice/toast. */
+.chat-dock {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 850;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: calc(100vw - 32px);
+  pointer-events: none;
+}
+.chat-dock > * {
+  pointer-events: auto;
+}
+
+.chat-card {
+  width: 300px;
+  height: 380px;
+  max-height: calc(100vh - 80px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  overflow: hidden;
+}
+
+.chat-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 6px 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(var(--accent-rgb), 0.12);
+}
+.chat-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.chat-name {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-people {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-btn {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.chat-btn:hover {
+  background: rgba(var(--accent-rgb), 0.2);
+  color: var(--text);
+}
+
+.chat-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.chat-empty {
+  margin: auto 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--muted);
+}
+.chat-msg {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: 85%;
+}
+.chat-msg.mine {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+.chat-from {
+  font-size: 10.5px;
+  color: var(--muted);
+  margin: 0 0 1px 4px;
+}
+.chat-text {
+  padding: 5px 9px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.chat-msg.mine .chat-text {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg, #fff);
+}
+
+.chat-error {
+  margin: 0;
+  padding: 0 10px 4px;
+  font-size: 12px;
+  color: var(--red);
+  overflow-wrap: anywhere;
+}
+.chat-input {
+  margin: 0 8px 8px;
+  resize: none;
+  min-height: 34px;
+  max-height: 96px;
+  padding: 7px 9px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.chat-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.chat-pill,
+.chat-launcher {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 200px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--accent-rgb), 0.6);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+}
+.chat-pill:hover,
+.chat-launcher:hover {
+  background: rgba(var(--accent-rgb), 0.25);
+}
+.chat-pill.unread {
+  border-color: var(--accent);
+}
+.chat-pill-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-unread {
+  flex: none;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-fg, #fff);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+
+/* A phone: the open chat is a full-width bottom sheet, pills ride above. */
+@media (max-width: 600px) {
+  .chat-dock {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-width: none;
+    flex-direction: column-reverse;
+    align-items: stretch;
+    gap: 6px;
+  }
+  .chat-pill,
+  .chat-launcher {
+    align-self: flex-end;
+    margin-right: 16px;
+  }
+  .chat-dock > .chat-pill:first-child,
+  .chat-dock > .chat-launcher:first-child {
+    margin-bottom: 16px;
+  }
+  .chat-card {
+    width: 100%;
+    height: 55vh;
+    border-radius: 12px 12px 0 0;
+    border-bottom: 0;
+  }
 }
 /* Connect GitHub's numbered token steps (components/dialogs/ConnectGitHub.tsx):
    1 make a token → 2 paste it → 3 Save & test, the answer under step 3. The
@@ -4563,6 +4925,15 @@ body.narrow .sidebar-resizer {
   background: var(--panel-2) !important;
 }
 
+/* ⇄ beside a peer's name: their sessions, shared over a peer link
+   (lib/peerSessions) — not one of this person's devices. */
+.device-group .dev-peer {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
 /* A device group's header is a real button (its fold toggle, aria-expanded)
    that reads exactly like the header text did; the ✕ beside it stays its
    own button. */
@@ -4653,6 +5024,24 @@ body.narrow .sidebar-resizer {
 }
 #guest-bar .gb-kill:hover:not(:disabled) {
   background: color-mix(in srgb, var(--red) 15%, transparent);
+}
+
+/* A peer's group header: a dot (connected / offline) before "Erik ·
+   connected". While their link is down the group and its remembered rows
+   stay a minute, greyed (lib/peerSessions installPeerRowMemory). */
+.device-group .dev-peer-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  flex: none;
+}
+.device-group .dev-peer-dot.off {
+  background: var(--muted);
+}
+.device-group.peer-offline .dev-name {
+  color: var(--muted);
+  font-style: italic;
 }
 }
 
@@ -8145,21 +8534,44 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   border-color: var(--red);
 }
 
-/* A guest link's crossed-out rows (lib/guest.ts): not yours to open. */
-.inst.locked .inst-row {
-  opacity: 0.45;
-  cursor: not-allowed;
+/* A guest's pill (lib/guestFocus, presence/GuestPill): their name on the
+   row their page has selected; pressed = you are following them. */
+.inst .guest-pills {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 3px;
+  margin-left: 4px;
 }
-.inst.locked .inst-row:hover {
+.inst .guest-pill {
+  appearance: none;
+  border: 1px solid rgba(var(--accent-rgb), 0.6);
+  background: rgba(var(--accent-rgb), 0.18);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 0 7px;
+  height: 16px;
+  line-height: 14px;
+  font-size: 9.5px;
+  font-weight: 600;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.inst .guest-pill:hover {
+  background: rgba(var(--accent-rgb), 0.3);
+}
+.inst .guest-pill.guest-pill-chat {
+  padding: 0 5px;
+  font-size: 10px;
   background: transparent;
 }
-.inst.locked .title {
-  text-decoration: line-through;
-}
-.inst.locked .locked-x {
-  opacity: 1;
-  color: var(--danger, #c0392b);
-  font-weight: 600;
+.inst .guest-pill.following {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg, #fff);
 }
 .guest-note {
   margin: 4px 8px 2px;
@@ -8168,6 +8580,17 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   border-radius: 6px;
   color: var(--fg-muted, #9aa);
   background: var(--panel-2, rgba(255, 255, 255, 0.05));
+}
+
+/* A peer's row whose link dropped: remembered a minute, greyed, not
+   clickable (lib/peerSessions; its group header says "offline —
+   reconnecting"). */
+.inst.peer-gone .inst-row {
+  opacity: 0.55;
+  cursor: default;
+}
+.inst.peer-gone .title {
+  color: var(--muted);
 }
 }
 
@@ -11185,6 +11608,45 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   color: #fff;
 }
 
+/* Flock (the raven): workers on every prompt. Off it is a quiet outline — a switch you
+   reach for now and then, never competing with the guided button or ⏩. On it
+   fills, so a session that sends the workers request with every prompt is
+   recognisable across a grid without hovering. Clicking flips it. */
+.pane-head .actions .nextstep.nextstep-flock {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  font-weight: 600;
+  padding: 3px 7px;
+}
+
+/* The MindFlock raven (the same /bird.png the rail's flock flies, an
+   alpha-only silhouette) drawn as a mask filled with currentColor, so it is
+   muted when Flock is off, white on the accent when on, and follows the
+   light/dark theme with the button's own colour. */
+.pane-head .actions .nextstep.nextstep-flock .flock-bird {
+  display: inline-block;
+  width: 18px;
+  height: 13px;
+  margin-right: 5px;
+  vertical-align: -2px;
+  background-color: currentColor;
+  -webkit-mask: url(/bird.png) center / contain no-repeat;
+  mask: url(/bird.png) center / contain no-repeat;
+}
+
+.pane-head .actions .nextstep.nextstep-flock:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  filter: none;
+}
+
+.pane-head .actions .nextstep.nextstep-flock.is-on {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
 /* Back to idle (↺): a TERTIARY control — it undoes nothing and starts nothing,
    it only stops the header asking for the next rung on a branch its owner has
    finished with. So it is the quietest thing in the group: muted, no accent, no
@@ -11522,6 +11984,12 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   .pane-head .actions .nextstep.nextstep-reset {
     display: none !important;
   }
+
+  /* Flock off gives way early (the ⋯ menu and Alt+Shift+G still flip it);
+     on, it stays — it says every prompt here carries the workers request. */
+  .pane-head .actions .nextstep.nextstep-flock:not(.is-on) {
+    display: none !important;
+  }
 }
 
 @container (max-width: 300px) {
@@ -11544,6 +12012,12 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 @container (max-width: 340px) {
   .pane-head .actions .nextstep:not(.nextstep-fast) {
     display: none !important;
+  }
+
+  /* …but Flock ON keeps its glyph-width place, like a set ⏩. */
+  .pane-head .actions .nextstep.nextstep-flock.is-on {
+    display: inline-block !important;
+    padding: 3px 4px;
   }
 }
 
@@ -11714,6 +12188,31 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
 .pane-menu-hook {
   display: inline-flex;
   align-items: center;
+}
+
+/* The thin strip above a shared session's terminal (lib/peerSessions):
+   "Erik's session · full join — you type as them" on a peer's row, "Erik is
+   offline — the terminal reconnects when they're back" while their link is
+   down, "Bob is here" on one of mine a peer is on. One line, never taller:
+   it must not resize the terminal as people come and go more than once. */
+.pane .peer-strip {
+  flex: none;
+  padding: 2px 10px;
+  font-size: 11.5px;
+  line-height: 18px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pane .peer-strip.here {
+  color: var(--text);
+}
+.pane .peer-strip.off {
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  font-style: italic;
 }
 }
 
@@ -20343,7 +20842,9 @@ button.ct-chip:hover {
   cursor: not-allowed;
 }
 
-/* Rename dialog (single-line display name; same card style as #commit-form) */
+/* Rename dialog (single-line display name; same card style as #commit-form),
+   and the guest's "what should we call you?" (GuestNameDialog), one card. */
+#guest-name-form,
 #rename-form {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -20356,11 +20857,18 @@ button.ct-chip:hover {
   gap: 12px;
 }
 
+#guest-name-form h2,
 #rename-form h2 {
   margin: 0 0 4px;
   font-size: 16px;
 }
 
+#guest-name-form > .set-hint {
+  margin: 0;
+  font-size: 12px;
+}
+
+#guest-name-form label,
 #rename-form label {
   display: flex;
   flex-direction: column;
@@ -20369,6 +20877,7 @@ button.ct-chip:hover {
   color: var(--muted);
 }
 
+#guest-name-form .rename-taken,
 #rename-form .rename-taken {
   margin: 0;
   font-size: 12px;
@@ -20376,10 +20885,12 @@ button.ct-chip:hover {
   overflow-wrap: anywhere;
 }
 
+#guest-name-form input[aria-invalid="true"],
 #rename-form input[aria-invalid="true"] {
   border-color: var(--red);
 }
 
+#guest-name-form input,
 #rename-form input {
   background: var(--bg);
   border: 1px solid var(--border);
@@ -20389,6 +20900,7 @@ button.ct-chip:hover {
   font-size: 14px;
 }
 
+#guest-name-form input:focus,
 #rename-form input:focus {
   outline: none;
   border-color: var(--accent);

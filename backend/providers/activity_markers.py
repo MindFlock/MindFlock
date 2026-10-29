@@ -98,6 +98,10 @@ VOICE_NEXT_MAX_AGE_S = 120
 #: prompts typed straight into the terminal included, which no ``.next`` can
 #: reach. ``core.voice.set_say_all`` owns it; the hook only looks.
 VOICE_SAY_ALL_FILE = "say-all"
+#: ``<voice dir>/<session>.flock``: while it exists, EVERY prompt in that
+#: session gets the file's content (the workers request, Flock mode) printed
+#: as context, after the voice instruction. ``core.flock_mode`` owns it.
+FLOCK_FLAG_SUFFIX = ".flock"
 #: Cap on the reply text the Stop hook files (characters).
 REPLY_TEXT_MAX = 8000
 
@@ -317,7 +321,9 @@ def hook_command(
     session's reply file (every CLI; best effort where the payload lacks the
     field), and on ``UserPromptSubmit`` it consumes the session's one-shot
     ``.next`` request (printing the instruction when the request is younger
-    than :data:`VOICE_NEXT_MAX_AGE_S`, deleting it always) — only when
+    than :data:`VOICE_NEXT_MAX_AGE_S`, deleting it always), then prints the
+    session's ``.flock`` file (:data:`FLOCK_FLAG_SUFFIX`, Flock mode's
+    workers request) when it exists and is not blank — only when
     ``prompt_context`` is true, which
     defaults to ``record_thread``: the Claude install. Claude Code documents a
     prompt hook's stdout as injected context; a CLI without that channel gets
@@ -429,6 +435,11 @@ def hook_command(
             "                w=True",
             "        if w:",
             "            print(%s)" % json.dumps(VOICE_INSTRUCTION),
+            "        fp=os.path.join(vd,s+%s)" % json.dumps(FLOCK_FLAG_SUFFIX),
+            "        if os.path.exists(fp):",
+            "            ft=open(fp).read().strip()",
+            "            if ft:",
+            "                print(ft)",
             "    except Exception:",
             "        pass",
         ]

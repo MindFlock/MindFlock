@@ -1111,6 +1111,20 @@ class PlatformSettings:
         )
 
 
+#: Flock mode's request (``general.workers_request``): what a session is told
+#: on each prompt while the person wants MindFlock workers by default
+#: (:mod:`backend.web.core.flock_mode`). ``{model}`` is replaced by
+#: ``general.workers_model``.
+DEFAULT_WORKERS_REQUEST = (
+    "Use MindFlock workers for this: spawn as many MindFlock agents as the work "
+    "needs (model {model}), each fenced to disjoint files with a self-contained "
+    "brief; wait for them, review and merge their branches, then report. Do the "
+    "small connecting pieces yourself."
+)
+#: The model Flock mode's request names for the workers (``general.workers_model``).
+DEFAULT_WORKERS_MODEL = "claude-opus-5-5"
+
+
 @dataclass
 class GeneralSettings:
     """Cross-cutting knobs that don't belong to one integration.
@@ -1257,6 +1271,14 @@ class GeneralSettings:
     below ~32 GB, else 2); ``MINDFLOCK_HEAVY_SLOTS`` and ``--max`` win. Per
     device (RAM is), so settings sync leaves it alone. ``backend.slot`` reads
     the file directly, never through this layer — it wraps every commit.
+
+    ``workers_request`` / ``workers_model``: Flock mode's words
+    (:mod:`backend.web.core.flock_mode`) — the request a session gets with
+    each prompt while its Flock mode is on (or with one ``/send {flock:
+    true}``), ``{model}`` replaced by the model. Default
+    :data:`DEFAULT_WORKERS_REQUEST` / :data:`DEFAULT_WORKERS_MODEL`; a blank
+    value reads as the default, and the default is never written to disk.
+    Synced: they are the person's words, not this machine's.
     """
 
     session_budget_usd: Optional[float] = None
@@ -1283,6 +1305,8 @@ class GeneralSettings:
     agent_max_spawned: Optional[int] = None  # None = lineage default (24)
     heavy_slots: Optional[int] = None  # None = by RAM (see docstring)
     mcp_shared_servers: List[str] = field(default_factory=list)
+    workers_request: str = DEFAULT_WORKERS_REQUEST
+    workers_model: str = DEFAULT_WORKERS_MODEL
 
     def to_dict(self) -> dict:
         d: dict = {}
@@ -1333,6 +1357,10 @@ class GeneralSettings:
             d["heavy_slots"] = self.heavy_slots
         if self.mcp_shared_servers:
             d["mcp_shared_servers"] = list(self.mcp_shared_servers)
+        if self.workers_request and self.workers_request != DEFAULT_WORKERS_REQUEST:
+            d["workers_request"] = self.workers_request
+        if self.workers_model and self.workers_model != DEFAULT_WORKERS_MODEL:
+            d["workers_model"] = self.workers_model
         return d
 
     @classmethod
@@ -1369,6 +1397,10 @@ class GeneralSettings:
             agent_max_spawned=_opt_nonneg_int(d.get("agent_max_spawned")),
             heavy_slots=_opt_pos_int(d.get("heavy_slots")),
             mcp_shared_servers=_mcp_server_names(d.get("mcp_shared_servers")),
+            workers_request=str(d.get("workers_request", "") or "").strip()
+            or DEFAULT_WORKERS_REQUEST,
+            workers_model=str(d.get("workers_model", "") or "").strip()
+            or DEFAULT_WORKERS_MODEL,
         )
 
 

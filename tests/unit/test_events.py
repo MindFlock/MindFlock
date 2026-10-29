@@ -118,6 +118,7 @@ def test_event_names_vocabulary_is_complete():
         "session.message",
         "session.presence_changed",
         "session.driver_changed",
+        "session.renamed",
         "session.job_past_expected",
         "session.red_zone_blocked",
         "session.red_zone_breached",
@@ -147,6 +148,10 @@ def test_event_names_vocabulary_is_complete():
         "peer.joint_contract",
         "peer.joint_check",
         "update.available",
+        "guest.focus_changed",
+        "session.chat",
+        "peer.session_shared",
+        "peer.session_unshared",
         "system.memory_changed",
     }
 

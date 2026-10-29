@@ -68,6 +68,17 @@ import { usageHeadline } from "../usage/usageModel";
 import { codemapSeenAt, redZoneChip, subscribeCodemapSeen } from "../../lib/codemapSeen";
 import { mapHasState, mapTabBadge } from "../../lib/mapEntry";
 import { TabIcon } from "./TabIcon";
+import { hereWords, isPeerRow, peerPaneStrip } from "../../lib/peerSessions";
+import { guestName, isPeerFocus, useGuestFocus } from "../../lib/guestFocus";
+import { shortcutLabels } from "../../lib/keymap";
+import {
+  ASK_WORKERS_KEYS,
+  FLOCK_KEYS,
+  flockAvailable,
+  flockChipLabel,
+  flockTooltip,
+  toggleFlock,
+} from "../../lib/workersRequest";
 
 /** "thread" is the Thread tab (the session's workers and what was said
  * between them), opened by its own button or store.threadOpen. */
@@ -238,6 +249,21 @@ export function Pane({
     inst.branch || ""
   );
   const displayName = alias || label.text;
+  // The strip above the terminal (lib/peerSessions): on a peer's session,
+  // whose it is and how you are in it (or that they are offline); on one of
+  // MY sessions a peer is on, who is here — the rail pill's names.
+  const { focus: presence } = useGuestFocus();
+  const theirs = isPeerRow(inst);
+  const strip = theirs
+    ? peerPaneStrip(inst)
+    : (() => {
+        const here = hereWords(
+          Object.values(presence)
+            .filter((f) => f.title === title && isPeerFocus(f.link))
+            .map((f) => guestName(f.label))
+        );
+        return here ? { text: here, offline: false } : null;
+      })();
   // A session on another tailnet device says which one. Local sessions say
   // nothing: a row only carries `device` once a second device is in play.
   const deviceName = inst.device ? inst.device_label || inst.device : "";
@@ -693,7 +719,12 @@ export function Pane({
   const sharedFolder = !!inst.peer_share;
   const ns = nextStep(inst);
   const ft = fastTrackStep(inst);
-  const rs = resetStep(inst);
+  // Flock (workers on every prompt): this machine's own sessions, never a
+  // guest's, a peer's, a shared folder or another device's.
+  const flockShown = flockAvailable(inst, config);
+  const flockOn = !!inst.flock;
+  // ↺ is the owner's: never on a peer's session.
+  const rs = theirs ? null : resetStep(inst);
   const step = liveStep(inst);
   const q = inst.queue;
   const pending = q?.pending || 0;
@@ -1140,6 +1171,28 @@ export function Pane({
           {/* The keyboard is one person's at a time (lib/presence): "Driving"
               / "Watching — take control", only once someone else is here. */}
           <DriveButton inst={inst} me={me} />
+          {/* Flock: workers on every prompt (lib/workersRequest). A CONTROL
+              like ⏩, never a .stagechip (those are hidden in a pane head). */}
+          {flockShown && (
+            <button
+              key="flock"
+              className={"nextstep nextstep-flock" + (flockOn ? " is-on" : "")}
+              type="button"
+              aria-pressed={flockOn}
+              aria-label={"Workers on every prompt: " + (flockOn ? "on" : "off")}
+              title={flockTooltip(flockOn, [
+                shortcutLabels("flock")[0] || FLOCK_KEYS,
+                shortcutLabels("workers")[0] || ASK_WORKERS_KEYS,
+              ])}
+              onClick={(ev) => {
+                ev.stopPropagation();
+                void toggleFlock(title);
+              }}
+            >
+              <span className="flock-bird" aria-hidden="true" />
+              {flockChipLabel()}
+            </button>
+          )}
           {/* The person's buttons, in their order (Customize → Pane header). */}
           {items.buttons.map((id) => buttonEls[id])}
         </div>
@@ -1186,6 +1239,14 @@ export function Pane({
         </div>
       </div>
       <AgentBlockedBanner block={noAgent} title={title} />
+      {strip && (
+        <div
+          className={"peer-strip" + (strip.offline ? " off" : "") + (theirs ? " theirs" : " here")}
+          role="note"
+        >
+          {strip.text}
+        </div>
+      )}
       <div className="pane-body" ref={bodyRef}>
         {paused ? (
           <PausedBody key="paused" title={title} hidden={tab !== "agent"} />

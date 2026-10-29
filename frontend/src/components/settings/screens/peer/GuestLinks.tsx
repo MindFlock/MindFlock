@@ -1,7 +1,13 @@
 /** Settings → People → "Let someone into a few of your sessions" (guest
  * links, docs/people.md): pick sessions on THIS device, name who it's for,
  * and hand them a link. They open it in a browser and work in those
- * sessions — on the rail every other session is crossed out for them.
+ * sessions — their rail lists those and nothing else. Sub-sessions are not
+ * picked: they come with their parent, spawned before or after the link.
+ *
+ * The flow is warning first: ticking "I understand" opens the picker (a
+ * dialog: root sessions, Make a link); cancelling it unticks. The owner does
+ * not name the guest — the guest picks their own name when they open the
+ * link (GuestNameDialog), unique on this rail.
  *
  * The link is opened at a PUBLIC address — a Cloudflare quick tunnel to this
  * server (backend.web.core.guest_tunnel) — because the guest is on some
@@ -29,11 +35,13 @@ import { toast } from "../../../../lib/toast";
 import { refreshConfig, reprobeDoctor, useConfig, useInstances } from "../../../../state/queries";
 import { displayName } from "../../../../state/store";
 import { InstallMissing, type InstallStep } from "../../../dialogs/InstallTerminal";
+import { Modal } from "../../../Modal";
 import { errText } from "./useAct";
 
-/** One line per link: who, which sessions. */
-export function guestLinkLine(l: { label: string; sessions: string[] }): string {
-  const who = l.label || "Guest";
+/** One line per link: who (the name they picked when they opened it, else
+ * "Guest · not opened yet"), which sessions. */
+export function guestLinkLine(l: { label: string; name?: string; sessions: string[] }): string {
+  const who = l.name || l.label || "Guest · not opened yet";
   const n = l.sessions.length;
   return `${who} · ${n} session${n === 1 ? "" : "s"}: ${l.sessions.join(", ")}`;
 }
@@ -68,21 +76,31 @@ export function GuestLinks() {
   const [tunnel, setTunnel] = useState<GuestTunnel | null>(null);
   const [gateOn, setGateOn] = useState<boolean | null>(null);
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
-  const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [made, setMade] = useState<string | null>(null);
   const [install, setInstall] = useState<InstallStep[]>([]);
-  // The owner must read the warning once per visit: a link is access to
-  // this machine, not to a web page.
+  // The owner must read the warning before every link: a link is access to
+  // this machine, not to a web page. Ticking it opens the picker.
   const [understood, setUnderstood] = useState(false);
+  const [pickOpen, setPickOpen] = useState(false);
 
-  // Sessions a link can name: this device's own work (not another device's
-  // rows, not a verify run, not one still being created).
+  // Sessions a link can name: this device's own ROOT sessions (not another
+  // device's rows, not a verify run, not one still being created, and not a
+  // sub-session — those always come with their parent).
   const sessions = useMemo(
-    () => (instances || []).filter((i) => !i.device && !i.hidden_by && !i.pending && !i.locked),
+    () => (instances || []).filter((i) => !i.device && !i.hidden_by && !i.pending && !i.locked && !i.parent),
     [instances]
   );
+
+  const ack = (on: boolean) => {
+    setUnderstood(on);
+    setPickOpen(on);
+  };
+  const cancelPick = () => {
+    setPickOpen(false);
+    setUnderstood(false);
+  };
 
   const load = useCallback(async () => {
     try {
@@ -136,11 +154,12 @@ export function GuestLinks() {
     setErr("");
     try {
       const row = await api<GuestLink & { tunnel: GuestTunnel }>("/api/guests", {
-        json: { label: label.trim(), sessions: sessions.map((s) => s.title).filter((t) => picked.has(t)) },
+        json: { label: "", sessions: sessions.map((s) => s.title).filter((t) => picked.has(t)) },
       });
       setMade(row.id);
       setPicked(new Set());
-      setLabel("");
+      setPickOpen(false);
+      setUnderstood(false);
       await load();
       if (row.url) {
         const ok = await copyText(row.url);
@@ -232,7 +251,8 @@ export function GuestLinks() {
       <h4 className="set-subtitle">Let someone into a few of your sessions</h4>
       <p className="set-hint">
         No second MindFlock needed: they open the link in a browser — from anywhere, it goes through a Cloudflare
-        tunnel to this computer — and type into the sessions you pick. Every other session is crossed out for them.
+        tunnel to this computer — and type into the sessions you pick, under the names you gave them. Sub-sessions
+        come with their parent. They see those sessions and nothing else.
       </p>
 
       {live && (
@@ -283,50 +303,64 @@ export function GuestLinks() {
               type="checkbox"
               id="peer-guests-ack"
               checked={understood}
-              onChange={(e) => setUnderstood(e.target.checked)}
+              onChange={(e) => ack(e.target.checked)}
             />{" "}
-            I understand this lets them act on my machine
+            I understand this lets them act on my machine — pick the sessions
           </label>
-          {sessions.length === 0 ? (
-            <span className="set-hint">Start a session first — a link opens sessions that exist.</span>
-          ) : (
-            <ul className="peer-guest-pick">
-              {sessions.map((s) => (
-                <li key={s.title}>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={picked.has(s.title)}
-                      onChange={() => toggle(s.title)}
-                      data-session={s.title}
-                    />{" "}
-                    {displayName(s.title)}
-                    {s.branch && s.branch !== s.title ? <span className="set-hint"> · {s.branch}</span> : null}
-                  </label>
-                </li>
-              ))}
-            </ul>
-          )}
-          <div className="set-row">
-            <input
-              id="peer-guests-label"
-              placeholder="who it's for (optional)"
-              value={label}
-              maxLength={80}
-              onChange={(e) => setLabel(e.target.value)}
-            />
-            <button
-              type="button"
-              className="btn-primary"
-              id="peer-guests-create"
-              disabled={busy || picked.size === 0 || !understood}
-              title={understood ? undefined : "Tick the warning above first"}
-              onClick={() => void create()}
-            >
-              {busy ? "Making…" : "Make a link"}
-            </button>
-          </div>
         </div>
+      )}
+
+      {pickOpen && (
+        <Modal id="peer-guests-pick" role="dialog" aria-modal="true" portal onClose={cancelPick}>
+          <form
+            id="peer-guests-pick-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (picked.size > 0 && understood) void create();
+            }}
+          >
+            <h2>Which sessions?</h2>
+            <p className="set-hint">
+              The guest works in the sessions you tick, under the names you see here. Sub-sessions aren't listed —
+              they always come with their parent, whether they exist now or get spawned later. They pick their own
+              name when they open the link; that's the pill you'll see them as.
+            </p>
+            {sessions.length === 0 ? (
+              <span className="set-hint">Start a session first — a link opens sessions that exist.</span>
+            ) : (
+              <ul className="peer-guest-pick">
+                {sessions.map((s) => (
+                  <li key={s.title}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={picked.has(s.title)}
+                        onChange={() => toggle(s.title)}
+                        data-session={s.title}
+                      />{" "}
+                      {displayName(s.title)}
+                      {s.branch && s.branch !== s.title ? <span className="set-hint"> · {s.branch}</span> : null}
+                    </label>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="modal-actions">
+              <button type="button" id="peer-guests-cancel" onClick={cancelPick}>
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="btn-primary"
+                id="peer-guests-create"
+                disabled={busy || picked.size === 0 || !understood}
+                title={picked.size === 0 ? "Tick at least one session" : undefined}
+              >
+                {busy ? "Making…" : "Make a link"}
+              </button>
+            </div>
+          </form>
+        </Modal>
       )}
 
       {needsInstall && (

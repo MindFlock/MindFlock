@@ -20,6 +20,14 @@ code.
 invite. Each invite is single use, expires on ``time.monotonic``, and dies
 after 5 wrong proofs; a global rate limit caps proof attempts across all
 invites. Nothing here ever logs, reprs or echoes a secret or a code.
+
+An invite may carry SESSIONS (``[{title, mode}]``, docs/peer-link.md "Invite
+with sessions"): what the inviter shares with whoever joins it. The book only
+checks their shape; the service checks they exist. When a proof consumes an
+invite, the book remembers which one under the joiner's key (a pair
+transcript ends with it, see ``transport.pair_transcript``) for
+:meth:`InviteBook.take_consumed`, so the new link can be told which invite
+it came from and what to share.
 """
 
 from __future__ import annotations
@@ -31,6 +39,7 @@ import re
 import secrets
 import threading
 import time
+import urllib.parse
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -40,9 +49,12 @@ __all__ = [
     "CODE_PREFIX",
     "CODE_PREFIX_V2",
     "CodeInfo",
+    "clean_sessions",
     "Invite",
     "InviteBook",
+    "code_from_text",
     "encode_code",
+    "invite_url",
     "parse_code",
 ]
 
@@ -60,11 +72,21 @@ MAX_FAILURES = 5
 PAIR_RATE_LIMIT = 10
 PAIR_RATE_WINDOW_S = 60.0
 MAX_ACTIVE = 32
+#: Sessions one invite may carry, and how they may be shared.
+MAX_INVITE_SESSIONS = 50
+SESSION_MODES = ("gated", "full")
+_TITLE_MAX = 200
+_TITLE_BAD = re.compile(r"[\x00-\x1f\x7f-\x9f\ud800-\udfff]")
+#: How long a consumed invite waits for its link to claim it.
+CONSUMED_TTL_S = 120.0
+_PUB_LEN = 32
 
 _TAIL = INVITE_ID_LEN + SECRET_LEN + FP_LEN
 _MAX_PAYLOAD = 1 + 1 + 253 + 2 + 1 + 255 + _TAIL
 _B32_RE = re.compile(r"^[a-z2-7]+\Z")
 _HEX16_RE = re.compile(r"^[0-9a-f]{16}\Z")
+#: A pairing code anywhere in text: prefix, base32 payload, 4-char checksum.
+_CODE_IN_TEXT_RE = re.compile(r"mfp[12]:[a-z2-7]+-[a-z2-7]{4}", re.I)
 
 
 def _b32enc(data: bytes) -> str:
@@ -224,11 +246,68 @@ def parse_code(code: str) -> CodeInfo:
     )
 
 
+def code_from_text(text) -> str:
+    """The pairing code inside whatever the joiner pasted, lowercased: the
+    bare code, the whole invite message, the invite link
+    (``https://<host>/join#<code>``) or the app link
+    (``mindflock://join?code=<code>``) — either link URL-encoded or not.
+    ``""`` when there is none. Shape only: :func:`parse_code` validates."""
+    if not isinstance(text, str) or len(text) > 4096:
+        return ""
+    for candidate in (text, urllib.parse.unquote(text)):
+        m = _CODE_IN_TEXT_RE.search(candidate)
+        if m:
+            return m.group(0).lower()
+    return ""
+
+
+def invite_url(base: str, code: str) -> str:
+    """The link an invite travels as: ``<base>/join#<code>``. The code rides
+    in the fragment, which a browser never sends, so it never reaches a
+    server log (a code's alphabet needs no escaping there)."""
+    return base.rstrip("/") + "/join#" + code
+
+
+def clean_sessions(sessions) -> tuple:
+    """``sessions`` as ``({"title", "mode"}, …)``, or ``ValueError`` in words:
+    at most :data:`MAX_INVITE_SESSIONS`, each title once, a mode of
+    :data:`SESSION_MODES`, and one ``gated`` (a link has one shared folder)."""
+    if sessions is None:
+        return ()
+    if not isinstance(sessions, (list, tuple)):
+        raise ValueError("sessions must be a list of {title, mode}")
+    if len(sessions) > MAX_INVITE_SESSIONS:
+        raise ValueError("an invite opens at most %d sessions" % MAX_INVITE_SESSIONS)
+    out, seen = [], set()
+    for item in sessions:
+        if not isinstance(item, dict):
+            raise ValueError("sessions must be a list of {title, mode}")
+        title = item.get("title")
+        mode = item.get("mode") or "gated"
+        if (
+            not isinstance(title, str)
+            or not 0 < len(title.strip()) <= _TITLE_MAX
+            or _TITLE_BAD.search(title)
+        ):
+            raise ValueError("bad session title")
+        title = title.strip()
+        if mode not in SESSION_MODES:
+            raise ValueError('mode must be "gated" or "full"')
+        if title in seen:
+            raise ValueError("%s is listed twice" % title)
+        seen.add(title)
+        out.append({"title": title, "mode": mode})
+    if sum(1 for i in out if i["mode"] == "gated") > 1:
+        raise ValueError("a link carries one gated session — share the others in full")
+    return tuple(out)
+
+
 @dataclass(frozen=True)
 class Invite:
     invite_id: str
     code: str = field(repr=False)
     expires_at: float  # time.monotonic() deadline (the book's clock)
+    sessions: tuple = ()  # ({"title", "mode"}, …) shared with whoever joins
 
 
 @dataclass
@@ -236,6 +315,7 @@ class _Entry:
     secret: bytes = field(repr=False)
     expires_at: float
     failures: int = 0
+    sessions: tuple = ()
 
 
 class InviteBook:
@@ -261,6 +341,8 @@ class InviteBook:
         self._pair_window = pair_window_s
         self._max_active = max_active
         self._entries: dict[str, _Entry] = {}
+        # joiner key (hex) -> (invite_id, sessions, consumed at)
+        self._consumed: dict[str, tuple] = {}
         self._attempts: deque[float] = deque()
         self._lock = threading.Lock()
         self._dummy_key = secrets.token_bytes(SECRET_LEN)
@@ -268,6 +350,10 @@ class InviteBook:
     def _purge(self, now: float) -> None:
         for iid in [i for i, e in self._entries.items() if e.expires_at <= now]:
             del self._entries[iid]
+        for pub in [
+            p for p, c in self._consumed.items() if c[2] <= now - CONSUMED_TTL_S
+        ]:
+            del self._consumed[pub]
 
     def create(
         self,
@@ -276,13 +362,16 @@ class InviteBook:
         ttl_s: float = DEFAULT_TTL_S,
         *,
         relay_path: str | None = None,
+        sessions=None,
     ) -> Invite:
+        """A new invite; ``sessions`` (:func:`clean_sessions`) ride on it."""
         if (
             isinstance(ttl_s, bool)
             or not isinstance(ttl_s, (int, float))
             or not 0 < ttl_s <= MAX_TTL_S
         ):
             raise ValueError(f"ttl_s must be in (0, {int(MAX_TTL_S)}]")
+        items = clean_sessions(sessions)
         with self._lock:
             now = self._clock()
             self._purge(now)
@@ -291,16 +380,21 @@ class InviteBook:
             iid = secrets.token_bytes(INVITE_ID_LEN)
             secret = secrets.token_bytes(SECRET_LEN)
             code = encode_code(host, port, iid, secret, self._fp, relay_path=relay_path)
-            entry = _Entry(secret=secret, expires_at=now + float(ttl_s))
+            entry = _Entry(secret=secret, expires_at=now + float(ttl_s), sessions=items)
             self._entries[iid.hex()] = entry
-            return Invite(invite_id=iid.hex(), code=code, expires_at=entry.expires_at)
+            return Invite(
+                invite_id=iid.hex(),
+                code=code,
+                expires_at=entry.expires_at,
+                sessions=items,
+            )
 
     def revoke(self, invite_id: str) -> bool:
         with self._lock:
             return self._entries.pop(invite_id, None) is not None
 
     def active(self) -> list[dict]:
-        """Live invites: id and expiry only, never the secret or code."""
+        """Live invites: id, expiry and sessions, never the secret or code."""
         with self._lock:
             now = self._clock()
             self._purge(now)
@@ -309,6 +403,7 @@ class InviteBook:
                     "invite_id": iid,
                     "expires_at": e.expires_at,
                     "expires_in": max(0.0, e.expires_at - now),
+                    "sessions": [dict(i) for i in e.sessions],
                 }
                 for iid, e in self._entries.items()
             ]
@@ -341,8 +436,21 @@ class InviteBook:
                 return False
             if ok:
                 del self._entries[invite_id]
+                pub = bytes(transcript)[-_PUB_LEN:].hex()
+                self._consumed[pub] = (invite_id, entry.sessions, now)
                 return True
             entry.failures += 1
             if entry.failures >= self._max_failures:
                 del self._entries[invite_id]
             return False
+
+    def take_consumed(self, peer_pub: str) -> dict | None:
+        """``{invite_id, sessions}`` of the invite the joiner with key
+        ``peer_pub`` (hex) just used, once; None when there is none (an
+        older pairing, or it was taken already)."""
+        with self._lock:
+            self._purge(self._clock())
+            got = self._consumed.pop(str(peer_pub or "").lower(), None)
+        if got is None:
+            return None
+        return {"invite_id": got[0], "sessions": [dict(i) for i in got[1]]}
