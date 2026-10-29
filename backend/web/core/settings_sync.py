@@ -121,6 +121,8 @@ NUDGE_DELAY = 1.0
 #: Shareable fields per group — the same everywhere once sync is on.
 SYNCED: Dict[str, Tuple[str, ...]] = {
     "coding_cli": ("default_provider", "assistant_provider", "default_launch_args"),
+    # A source's fields (``depth``, its flight ``plan``…) ride the source: one
+    # keyed unit per source, never classified one by one.
     "ticketing": ("sources",),
     "repository": (
         "url",
@@ -153,6 +155,8 @@ SYNCED: Dict[str, Tuple[str, ...]] = {
         "issue_skip_authors",
         "agent",
         "issue_agent",
+        # Per-repo blocks (REPO_OVERRIDE_KEYS: agent, depth, flight plan…)
+        # sync whole, like the plans they name (store:flight_plans).
         "repo_settings",
         "issue_repo_settings",
         "automation_device",

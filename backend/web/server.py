@@ -2954,6 +2954,22 @@ def _start_depth_override(payload: dict) -> str:
     return depth
 
 
+def _start_plan_override(payload: dict) -> str:
+    """A validated per-start flight plan id from a force-start body, or ``""``
+    (the server's own resolution, :func:`_intake_plan`). The third sibling of
+    :func:`_start_agent_override` / :func:`_start_depth_override`: a plan that
+    does not exist is refused, never quietly replaced by the default."""
+    raw = (payload or {}).get("plan", "")
+    if raw in (None, ""):
+        return ""
+    if not isinstance(raw, str):
+        raise ValueError("plan must be a plan id")
+    plan = raw.strip()
+    if plan and _flights.get_plan(plan) is None:
+        raise ValueError("unknown plan %r — see GET /api/flights/plans" % plan)
+    return plan
+
+
 def _start_effort_override(payload: dict) -> str:
     """A validated per-start thinking-effort rung from a force-start body, or ``""``.
 
@@ -3071,6 +3087,148 @@ def _arm_intake_autopilot(
             by=by,
         )
     except Exception:  # noqa: BLE001 — never fail a launch over the autopilot
+        pass
+
+
+def _source_intake_plan(source_id: str) -> str:
+    """The flight plan configured for a ticketing source (``plan``), or ``""``.
+    Matched like :func:`_source_intake_depth`: the exact source key first."""
+    from backend.config import settings as _settings
+
+    try:
+        sources = list(_settings.load_settings().ticketing.sources)
+        for match in ("id", "provider"):
+            for src in sources:
+                if getattr(src, match, "") == source_id:
+                    return str(getattr(src, "plan", "") or "").strip()
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+def _repo_intake_plan(repo: str, kind: str) -> str:
+    """The flight plan configured for a GitHub repo's PRs or issues (``kind``
+    ``"prs"`` / ``"issues"``, the two override maps), or ``""``."""
+    from backend.config import settings as _settings
+
+    try:
+        gh = _settings.load_settings().github
+        table = gh.issue_repo_settings if kind == "issues" else gh.repo_settings
+        return str(((table or {}).get(repo) or {}).get("plan", "") or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _intake_plan(
+    kind: str,
+    plan: str = "",
+    depth_override: str = "",
+    configured: str = "",
+    depth: str = "",
+) -> str:
+    """The flight plan an intake start of ``kind`` (``ticket``/``pr``/``issue``)
+    flies, ``""`` for none (docs/flights.md "How a ticket becomes a flight").
+
+    In order: the start's explicit ``plan``; a per-start ``depth_override``
+    (a row's pick, a team run's ``"off"``, an agent's ``autopilot=``) cut from
+    the built-in — a choice made for THIS start outranks the source's
+    standing one; the source's ``plan`` setting, when that plan still exists;
+    the built-in cut at the source's ``depth``. ``off``/``agent`` is no flight,
+    which is today's behaviour exactly. Never raises."""
+    if plan:
+        return plan
+    try:
+        if depth_override:
+            return _flights.plan_for_depth(kind, depth_override)
+        if configured and _flights.get_plan(configured) is not None:
+            return configured
+        return _flights.plan_for_depth(kind, depth)
+    except Exception:  # noqa: BLE001 — an unreadable store is "no flight"
+        return ""
+
+
+def _arm_intake_flight(
+    title: str, plan_id: str, subject: dict, by: str = "user"
+) -> Optional[dict]:
+    """:func:`flights.arm_pending` for an intake title, or None when it could
+    not be armed (logged). A flight left on the title by an earlier start whose
+    session never appeared is cancelled first: no session, nothing to keep."""
+    who = by if str(by).startswith("agent:") else "intake"
+    for attempt in (1, 2):
+        try:
+            flight = _flights.arm_pending(title, plan_id, subject, by=who)
+        except _flights.FlightError as err:
+            stale = _flights.for_session(title)
+            if (
+                attempt == 1
+                and err.error == "in_flight"
+                and stale is not None
+                and title not in ENGINE.instances
+            ):
+                _cancel_intake_flight(title, "replaced by a new start")
+                continue
+            if log.ErrorLog is not None:
+                log.ErrorLog.Printf("flight for %s not armed: %v", title, err.detail)
+        except Exception as err:  # noqa: BLE001 — never fail a launch over it
+            if log.ErrorLog is not None:
+                log.ErrorLog.Printf("flight for %s not armed: %v", title, err)
+        else:
+            try:
+                # On the Board from second one (flight.changed is a refetch).
+                _flight_driver._announce(None, flight)
+            except Exception:  # noqa: BLE001
+                pass
+            return flight
+        return None
+    return None
+
+
+def _arm_intake(
+    title: str,
+    depth: str,
+    source: str,
+    item: str,
+    message: str = "",
+    by: str = "user",
+    *,
+    plan: str = "",
+    subject: Optional[dict] = None,
+) -> str:
+    """What an intake start arms before its session exists: the flight of
+    ``plan`` (resolved by :func:`_intake_plan`) when there is one, else the
+    autopilot ``depth`` (:func:`_arm_intake_autopilot`). A flight's ship steps
+    arm their own lanes, so the depth is armed beside a flight only when its
+    plan has none.
+
+    Returns the text to append to the intake prompt: the plan's first agent
+    step's own ``prompt`` (placeholders filled), ``""`` without one."""
+    flight = _arm_intake_flight(title, plan, subject or {}, by) if plan else None
+    if flight is None or not any(s["kind"] == "ship" for s in flight["steps"]):
+        _arm_intake_autopilot(title, depth, source, item, message=message, by=by)
+    if flight is None:
+        return ""
+    first = next((s for s in flight["steps"] if s["kind"] == "agent"), None)
+    text = _flights.fill_prompt(
+        (first or {}).get("config", {}).get("prompt") or "", flight
+    )
+    return "\n\n" + text.strip() if text.strip() else ""
+
+
+def _cancel_intake_flight(title: str, reason: str) -> None:
+    """Cancel the flight armed for ``title`` whose session could not be
+    created (``session.create_failed``) — and say so. A title that has a live
+    session (this launch lost a race to another) keeps its flight."""
+    try:
+        if title in ENGINE.instances:
+            return
+        before = _flights.for_session(title)
+        if before is None:
+            return
+        after = _flights.mutate(
+            before["id"], lambda f: _flights.op_cancel(f, reason[:300])
+        )
+        _flight_driver._announce(before, after)
+    except Exception:  # noqa: BLE001 — a failed launch is already being reported
         pass
 
 
@@ -9105,7 +9263,9 @@ async def github_open_prs(fresh: bool = False) -> JSONResponse:
 
 @app.post("/api/github/prs/review")
 async def github_force_review(payload: dict) -> JSONResponse:
-    """Force-start a review session for one open PR, bypassing auto filters."""
+    """Force-start a review session for one open PR, bypassing auto filters.
+    The launch itself is ``core.pr_review.launch`` (``POST /api/flights/start``
+    with a ``pr`` subject runs the same code); ``plan`` picks its flight."""
     if not git_available():
         return _no_git_response()
     payload = payload or {}
@@ -9120,133 +9280,29 @@ async def github_force_review(payload: dict) -> JSONResponse:
         agent_override = _start_agent_override(payload)
         depth_override = _start_depth_override(payload)
         effort_override = _start_effort_override(payload)
+        plan_override = _start_plan_override(payload)
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=400)
-
-    # The provisioning row goes up BEFORE the GitHub lookup below, which is the
-    # last thing standing between the click and the sidebar showing anything.
-    # The panel's cached list already carries the title this PR maps to, so no
-    # slug re-derivation is involved; a cold cache just falls back to the
-    # post-lookup registration further down.
-    early = _cached_session_title(
-        _OPEN_PRS_CACHE,
-        "prs",
-        lambda p: p.get("repo") == repo and p.get("number") == number,
+    # This start's own pick, then this repo's card, then Intake → Pull
+    # requests' screen-wide Agent CLI (same chain the auto monitor uses), then
+    # the app-wide default. Mirrors the issue force-start below, which reads
+    # the same chain. Resolved here because this start's effort has to be
+    # translated into THAT CLI's spelling.
+    program = (
+        agent_override or _pr_review.review_agent(repo) or ENGINE.default_program()
     )
-    if early:
-        if early in ENGINE.instances or _pending_has(early):
-            return JSONResponse(
-                {
-                    "error": "session %s already exists — close it to re-review"
-                    % early,
-                    "title": early,
-                },
-                status_code=409,
-            )
-        _pending_add(early, "pr", repo=repo)
-
     try:
-        pr = await _pr_review.find_pr(repo, number)
-    except LookupError as err:
-        _pending_drop(early)
-        return JSONResponse({"error": str(err)}, status_code=404)
-    except Exception as err:  # noqa: BLE001
-        _pending_drop(early)
-        return JSONResponse({"error": str(err)}, status_code=502)
-
-    title = _pr_review.session_title(pr)
-    if title != early:
-        _pending_drop(early)  # stale cache entry — keep only the real title
-        if title in ENGINE.instances or _pending_has(title):
-            return JSONResponse(
-                {
-                    "error": "session %s already exists — close it to re-review"
-                    % title,
-                    "title": title,
-                },
-                status_code=409,
-            )
-    # Re-registered with the branch now that it's known (add() keeps `since`).
-    _pending_add(title, "pr", branch=pr.head_ref, repo=repo)
-    _arm_intake_autopilot(
-        title,
-        depth_override or _repo_intake_depth(repo, "prs"),
-        "pr",
-        "%s#%s" % (repo, number),
-        message=str(getattr(pr, "title", "") or ""),
-    )
-
-    async def _bg_review() -> None:
-        # Provision first (slow: clone/fetch of the PR head), then register the
-        # adopted workspace as a live session — same shape as the pipeline's
-        # SessionRunner.run_pr, but against THIS server's engine so the session
-        # shows up in the grid without a reload.
-        try:
-            directory, prompt, n_comments = await _pr_review.prepare_review(pr)
-            # This start's own pick, then this repo's card, then Intake → Pull
-            # requests' screen-wide Agent CLI (same chain the auto monitor uses),
-            # then the app-wide default. Mirrors the issue force-start below,
-            # which reads the same chain. Resolved first because this start's
-            # effort has to be translated into THAT CLI's spelling.
-            program = (
-                agent_override
-                or _pr_review.review_agent(repo)
-                or ENGINE.default_program()
-            )
-            prompt = _provider_effort.decorate_prompt(prompt, program, effort_override)
-            # The review workspace already exists here: decorate against it.
-            prompt = await asyncio.to_thread(
-                _red_zone_prompt, prompt, program, [str(directory)], None
-            )
-            inst = session.NewInstance(
-                session.InstanceOptions(
-                    title=title,
-                    path=".",
-                    program=program,
-                    provisioned=True,
-                    workspace_strategy="clone",
-                    new_branch=pr.head_ref,
-                    prompt=prompt,
-                    workspace_path=str(directory),
-                    launch_args=_start_launch_args(program, effort_override),
-                )
-            )
-            inst.ExtraEnv = _ports.env_for(title)
-            inst.SetStatus(Loading)
-            with ENGINE.lock:
-                ENGINE.instances[title] = inst
-            _seed_event_snapshot(title)
-            _events.BUS.emit(
-                "session.created",
-                session=title,
-                new="loading",
-                data={"program": inst.Program, "provisioned": True, "pr": pr.number},
-            )
-            try:
-                await asyncio.to_thread(inst.Start, True)
-                ENGINE.save()
-            except Exception:
-                # By identity: this task may be the loser of a re-start, and
-                # popping by name would delete the LIVE session's record.
-                _drop_failed_start(title, inst)
-                raise
-            # Ledger the PR so auto review doesn't run it a second time.
-            _pr_review.record_reviewed(pr)
-            if log.InfoLog is not None:
-                log.InfoLog.Printf(
-                    "forced PR review %s live (%d comments)", title, n_comments
-                )
-        except Exception as err:  # noqa: BLE001
-            if log.ErrorLog is not None:
-                log.ErrorLog.Printf("forced PR review %s failed: %v", title, err)
-            _events.BUS.emit(
-                "session.create_failed", session=title, data={"error": str(err)}
-            )
-        finally:
-            _pending_drop(title)
-
-    _register_task(_bg_review())
-    return JSONResponse({"started": True, "title": title}, status_code=202)
+        body = await _pr_review.launch(
+            repo,
+            number,
+            program=program,
+            depth=depth_override,
+            effort=effort_override,
+            plan=plan_override,
+        )
+    except _pr_review.LaunchError as err:
+        return JSONResponse(err.body, status_code=err.status)
+    return JSONResponse(body, status_code=202)
 
 
 # --- Ticket force-start (Intake → Tickets) --------------------------------
@@ -9435,6 +9491,7 @@ async def ticket_force_start(payload: dict, request: Request) -> JSONResponse:
         agent_override = _start_agent_override(payload)
         depth_override = _start_depth_override(payload)
         effort_override = _start_effort_override(payload)
+        plan_override = _start_plan_override(payload)
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=400)
     # A multi-repo source's ticket, started in a repo picked on the row
@@ -9469,6 +9526,7 @@ async def ticket_force_start(payload: dict, request: Request) -> JSONResponse:
             lineage=lineage,
             override_claim=override_claim,
             repo=repo,
+            plan=plan_override,
         )
     except _ticket_start.LaunchError as err:
         return JSONResponse(err.body, status_code=err.status)
@@ -9703,7 +9761,10 @@ async def github_open_issues(fresh: bool = False) -> JSONResponse:
 
 @app.post("/api/github/issues/start")
 async def github_issue_force_start(payload: dict) -> JSONResponse:
-    """Force-start a coding session for one open issue, bypassing auto filters."""
+    """Force-start a coding session for one open issue, bypassing auto filters.
+    The launch itself is ``core.issue_start.launch`` (``POST
+    /api/flights/start`` with an ``issue`` subject runs the same code);
+    ``plan`` picks its flight."""
     if not git_available():
         return _no_git_response()
     payload = payload or {}
@@ -9718,139 +9779,21 @@ async def github_issue_force_start(payload: dict) -> JSONResponse:
         agent_override = _start_agent_override(payload)
         depth_override = _start_depth_override(payload)
         effort_override = _start_effort_override(payload)
+        plan_override = _start_plan_override(payload)
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=400)
-
-    # Row first, GitHub lookup second (see the PR endpoint above).
-    early = _cached_session_title(
-        _OPEN_ISSUES_CACHE,
-        "issues",
-        lambda i: i.get("repo") == repo and i.get("number") == number,
-    )
-    if early:
-        if early in ENGINE.instances or _pending_has(early):
-            return JSONResponse(
-                {
-                    "error": "session %s already exists — close it to re-run" % early,
-                    "title": early,
-                },
-                status_code=409,
-            )
-        _pending_add(early, "iss", repo=repo)
-
     try:
-        issue = await _issue_start.find_issue(repo, number)
-    except LookupError as err:
-        _pending_drop(early)
-        return JSONResponse({"error": str(err)}, status_code=404)
-    except Exception as err:  # noqa: BLE001
-        _pending_drop(early)
-        return JSONResponse({"error": str(err)}, status_code=502)
-
-    title = _issue_start.session_title(issue)
-    if title != early:
-        _pending_drop(early)  # stale cache entry — keep only the real title
-        if title in ENGINE.instances or _pending_has(title):
-            return JSONResponse(
-                {
-                    "error": "session %s already exists — close it to re-run" % title,
-                    "title": title,
-                },
-                status_code=409,
-            )
-    _pending_add(
-        title,
-        "iss",
-        branch=_issue_start.branch_for(issue),
-        repo=repo,
-        workspace_strategy=_issue_start.workspace_mode(),
-    )
-    _arm_intake_autopilot(
-        title,
-        depth_override or _repo_intake_depth(repo, "issues"),
-        "iss",
-        "%s#%s" % (repo, number),
-        message=str(getattr(issue, "title", "") or ""),
-    )
-
-    async def _bg_start() -> None:
-        # Same shape as the pipeline's issue loop (issue → Ticket → engine
-        # session on a fresh branch), but against THIS server's engine so the
-        # session shows up in the grid without a reload. The engine owns
-        # provisioning (inside Instance.Start), like the ticket path.
-        try:
-            story, prompt, branch = await _issue_start.prepare_start(issue)
-            # Same leftover-worktree reclaim as the ticket path above.
-            await asyncio.to_thread(
-                _worktree_reclaim.reclaim_for_launch,
-                getattr(story, "repo_url", "") or "",
-                branch,
-            )
-            # This start's own pick outranks the repo card's Agent CLI, which
-            # prepare_start already resolved onto the story. Resolved before the
-            # options because this start's effort has to be translated into THAT
-            # CLI's spelling.
-            program = (
-                agent_override
-                or getattr(story, "agent", "")
-                or ENGINE.default_program()
-            )
-            prompt = _provider_effort.decorate_prompt(prompt, program, effort_override)
-            prompt = await asyncio.to_thread(
-                lambda p=prompt: _red_zone_prompt(
-                    p,
-                    program,
-                    _repo_url_workdirs(getattr(story, "repo_url", "") or ""),
-                    None,
-                )
-            )
-            inst = session.NewInstance(
-                session.InstanceOptions(
-                    title=title,
-                    path=".",
-                    program=program,
-                    provisioned=True,
-                    workspace_strategy=_issue_start.workspace_mode(),
-                    new_branch=branch,
-                    prompt=prompt,
-                    provision_repo_url=getattr(story, "repo_url", "") or "",
-                    launch_args=_start_launch_args(program, effort_override),
-                )
-            )
-            inst.ExtraEnv = _ports.env_for(title)
-            inst.SetStatus(Loading)
-            with ENGINE.lock:
-                ENGINE.instances[title] = inst
-            _seed_event_snapshot(title)
-            _events.BUS.emit(
-                "session.created",
-                session=title,
-                new="loading",
-                data={"program": inst.Program, "provisioned": True, "issue": number},
-            )
-            try:
-                await asyncio.to_thread(inst.Start, True)
-                ENGINE.save()
-            except Exception:
-                # By identity: this task may be the loser of a re-start, and
-                # popping by name would delete the LIVE session's record.
-                _drop_failed_start(title, inst)
-                raise
-            # Ledger the issue so auto handling doesn't run it a second time.
-            _issue_start.record_handled(issue)
-            if log.InfoLog is not None:
-                log.InfoLog.Printf("forced issue session %s live", title)
-        except Exception as err:  # noqa: BLE001
-            if log.ErrorLog is not None:
-                log.ErrorLog.Printf("forced issue session %s failed: %v", title, err)
-            _events.BUS.emit(
-                "session.create_failed", session=title, data={"error": str(err)}
-            )
-        finally:
-            _pending_drop(title)
-
-    _register_task(_bg_start())
-    return JSONResponse({"started": True, "title": title}, status_code=202)
+        body = await _issue_start.launch(
+            repo,
+            number,
+            agent=agent_override,
+            depth=depth_override,
+            effort=effort_override,
+            plan=plan_override,
+        )
+    except _issue_start.LaunchError as err:
+        return JSONResponse(err.body, status_code=err.status)
+    return JSONResponse(body, status_code=202)
 
 
 # --- Intake reopen (all three panels) -------------------------------------
@@ -11009,7 +10952,9 @@ def record_test_plan_result(plan_id: str, payload: dict) -> JSONResponse:
     step_id = str(payload.get("step_id", "") or "").strip()
     result = str(payload.get("result", "") or "").strip()
     note = str(payload.get("note", "") or "")
-    was_failing = bool(_test_plans.failed_steps(_test_plans.get(plan_id) or {}))
+    before = _test_plans.get(plan_id) or {}
+    was_failing = bool(_test_plans.failed_steps(before))
+    was_open = bool(before) and bool(_test_plans.open_human_steps(before))
     try:
         plan = _test_plans.record_result(plan_id, step_id, result, note, by="human")
     except ValueError as err:
@@ -11024,7 +10969,41 @@ def record_test_plan_result(plan_id: str, payload: dict) -> JSONResponse:
         )
     if result == "fail" and not was_failing:
         _announce_step_failed(plan, step_id)
+    if was_open and not _test_plans.open_human_steps(plan):
+        _announce_settled(plan)
     return JSONResponse({"ok": True, "plan": plan})
+
+
+def _announce_settled(plan: dict) -> None:
+    """``session.test_plan_settled``: a person just answered the last open
+    human item of a checklist a flight's verify step is waiting on — the
+    flight driver's cue to move on now (``session`` is that flight's
+    session). Nothing waits on it otherwise, so nothing is said."""
+    pid = str(plan.get("id") or "")
+
+    def _waits(f: dict) -> bool:
+        step = _flights.step_view(f)
+        if f["state"] != "waiting_you" or step.get("kind") != "verify":
+            return False
+        return str(f["step_states"][step["id"]]["detail"].get("plan") or "") == pid
+
+    try:
+        flights = _flights.list_flights(include_finished=False)
+        waiting = next((f for f in flights if _waits(f)), None)
+        if waiting is None:
+            return
+        _events.BUS.emit(
+            "session.test_plan_settled",
+            session=waiting["session"],
+            data={
+                "plan": pid,
+                "title": plan.get("title") or pid,
+                "branch": plan.get("branch") or "",
+                "flight": waiting["id"],
+            },
+        )
+    except Exception:  # noqa: BLE001 — an announcement never fails the answer
+        pass
 
 
 def _announce_step_failed(plan: dict, step_id: str) -> None:

@@ -691,6 +691,7 @@ async def launch(
     run_id: str = "",
     override_claim: bool = False,
     repo: str = "",
+    plan: str = "",
 ) -> dict:
     """Start a coding session for one ticket and return the 202 body.
 
@@ -714,6 +715,10 @@ async def launch(
       device's claim is never overridable here.
     * ``repo``: on a source with several repos, start in this one (URL or
       short name) instead of routing — the Intake row's Repo pick.
+    * ``plan``: the flight plan to fly (docs/flights.md); ``""`` = the
+      server's resolution (``server._intake_plan``: a ``depth`` given here,
+      the source's ``plan``, the built-in cut at the source's depth). A flight
+      is armed on the title before the session exists, in place of the depth.
 
     Raises :class:`LaunchError` (400 a ``repo`` the source doesn't have,
     404 unknown ticket / source, 409 a session
@@ -829,13 +834,28 @@ async def launch(
         parent=lineage["parent"],
         spawned=lineage["spawned"],
     )
-    srv._arm_intake_autopilot(
+    source_depth = srv._source_intake_depth(source)
+    flight_tail = srv._arm_intake(
         title,
-        depth_override or srv._source_intake_depth(source),
+        depth_override or source_depth,
         "tix",
         str(getattr(story, "id", "") or ticket_id),
         message=str(getattr(story, "name", "") or ""),
         by=("agent:" + lineage["parent"]) if lineage.get("parent") else "user",
+        plan=srv._intake_plan(
+            "ticket",
+            plan,
+            depth_override,
+            srv._source_intake_plan(source),
+            source_depth,
+        ),
+        subject={
+            "kind": "ticket",
+            "source": source,
+            "id": str(getattr(story, "id", "") or ticket_id),
+            "title": str(getattr(story, "name", "") or ""),
+            "url": str(getattr(story, "app_url", "") or ""),
+        },
     )
     # The ticket's source may pin its own agent CLI; empty falls back to this
     # app's default program. Resolved before the 202 (not in the launch) so an
@@ -847,6 +867,9 @@ async def launch(
     )
     if extra_prompt:
         prompt_tail = "\n\n" + extra_prompt.strip() + prompt_tail
+    # The flight's first agent step's own words go after the ticket (and a
+    # run's brief), before an agent-spawned worker's footer.
+    prompt_tail = flight_tail + prompt_tail
 
     async def _bg_start() -> None:
         # Same shape as the pipeline's SessionRunner.run, but against THIS
@@ -978,6 +1001,9 @@ async def launch(
             srv._note_create_failure(title, str(err))
             srv._events.BUS.emit(
                 "session.create_failed", session=title, data={"error": str(err)}
+            )
+            srv._cancel_intake_flight(
+                title, "the session could not be created: %s" % err
             )
         finally:
             srv._pending_drop(title)

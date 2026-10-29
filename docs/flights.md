@@ -1,8 +1,9 @@
 # Flights — one route from arrival to merge
 
-> DESIGN CONTRACT (branch `emandel2630/flights`). The sections marked *contract*
-> are what the backend, the frontend and the integration work are built
-> against in parallel; change them only by editing this file first.
+> How Flights work — for people using them (start at [Using Flights](#using-flights))
+> and for code. The sections marked *contract* are what the backend, the
+> frontend and the integration are built against; change them only by editing
+> this file first.
 
 ## The idea
 
@@ -55,6 +56,85 @@ The top bar shows **Flights** where Intake / Verify / Schedule were. `Alt+I`
 opens Flights (Board), `Alt+V` opens it on Checklists, `Alt+S` on Schedule.
 The badge counts what waits on you: flights parked on a *you* step, plus
 Verify's due/failing checklists, plus arrivals that will not auto-start.
+
+## Using Flights
+
+### How a ticket becomes a flight
+
+Every way work arrives ends in the same start path, and every one of them can
+put the new session on a flight:
+
+- **Intake / the Board's Arrivals** — **Start** on a ticket, pull request or
+  issue (`POST /api/tickets/start`, `/api/github/prs/review`,
+  `/api/github/issues/start`, or `POST /api/flights/start` with a `subject`,
+  which runs the very same code). The plan picker sends `plan`; leaving it on
+  the default leaves the choice to the server.
+- **The pipeline** — a ticket, PR or issue it auto-starts.
+- **An agent** — `spawn_ticket_session` from another session.
+
+Which plan, in order:
+
+1. the start's own `plan`;
+2. a fast-track **depth picked for this start** (the row's ⏩ pick, a team
+   run's "off", an agent's `autopilot=`) — the built-in plan cut at that rung;
+3. the **source's plan** — Intake's source card (`TicketingSource.plan`) or the
+   repo card (`github.repo_settings[repo].plan` for PRs,
+   `github.issue_repo_settings[repo].plan` for issues), while that plan exists;
+4. the built-in plan for the kind **cut at the source's depth** — so a source
+   set to "carry it to a PR" flies *Agent works → Commit → Push → Verify → Open
+   PR*;
+5. **no flight** — a source with no plan and a depth of off/agent starts its
+   sessions exactly as it always did.
+
+The flight is armed on the session's title **before the session exists** (an
+intake title is deterministic), so the item is "in flight" on the Board and in
+the sidebar's provisioning row from the first second, and survives a server
+restart mid-launch. Its first agent step is the session's first prompt — the
+ticket / PR / issue prompt Intake always built — with the step's own text (if
+any) appended. The flight's ship steps arm the fast-track lanes themselves, so
+the source's depth is not armed beside it (unless the plan has no ship steps).
+A start whose session can't be created cancels its flight with the reason.
+
+### Scheduled plans
+
+A plan whose trigger is **Schedule** starts itself, like a template: daily or
+weekdays at a time, a cron expression, or once at a date and time — the same
+editor (and the same `GET /api/templates/cron-preview` previews) as the
+Schedule tab, and the same rules (`core/template_schedule.py`): a schedule
+counts from when it was set, after downtime only the most recent missed run
+fires, a paused trigger fires nothing, and in a group of devices only the
+automation device fires. Each run takes off like **Take off** — a new session
+from the plan's session defaults — recorded with `by: "schedule"`.
+
+A run is **skipped** (and says so in the plan's history, with a refetch of the
+Board) while the plan's previous flight is still in the air or its session is
+working, asking a question or at a usage limit — a schedule never stacks
+flights. A run that can't take off (no folder set, the agent not installed) is
+a failed run with the reason. The plans list (`GET /api/flights/plans`) shows a
+scheduled plan's next run, last run and history under `runs`; the record is
+`~/.mindflock/flights/schedule_runs.json`, on this device only (the plans
+themselves sync). The Schedule tab keeps listing templates.
+
+### Verify steps
+
+A verify step asks for the session's checklist through Verify's own button
+path and parks the flight on you while human items are open. Ticking them off
+in the Checklists tab moves the flight on at once (`session.test_plan_settled`
+wakes the driver); **Done** on the step records them as passed. A checklist the
+push watcher makes for the same branch is the same checklist — Verify keys
+them by (repo, branch).
+
+### The CLI
+
+```
+mindflock flights [--all]                 # what is in the air: plan, subject, session, state, step
+mindflock flight plans                    # the plans (scheduled ones say when next)
+mindflock flight start PLAN [--repo PATH] [--title SESSION]
+mindflock flight done FLIGHT [--note …]   # the step waiting on you; also skip / cancel
+```
+
+`PLAN` is an id or a name (a unique prefix is enough); `FLIGHT` is a flight id
+(prefix) or its session's title. See [cli.md](cli.md).
 
 ## Contract: the data model
 
@@ -162,8 +242,8 @@ Rules:
 - The driver (`backend/web/core/flight_driver.py`) is a 5 s loop registered
   in the lifespan next to the autopilot loop, plus `BUS.subscribe` taps on
   `session.turn_ended`, `session.autopilot_changed`, `session.deleted`,
-  `session.pushed`, `session.test_plan_checked`, `session.pr_review_changed`
-  that `wake()` it. Its planner is a **pure function**
+  `session.pushed`, `session.test_plan_checked`, `session.test_plan_settled`,
+  `session.pr_review_changed` that `wake()` it. Its planner is a **pure function**
   `next_action(flight, obs, now)` in `flights.py` returning one of
   `wait | run | done | fail | you | advance | finish`, unit-tested without I/O.
 - A `ship` step arms `lanes.arm_session(title, lane, ask_first, source="flight", item=<flight id>)`; `autopilot.SOURCES` gains `"flight"`. While a flight drives a session, its ⏩ fast-track button is the flight's (the pane strip replaces the guided next-step button).
@@ -214,7 +294,10 @@ Intake's start routes (`POST /api/tickets/start`, `/api/github/prs/review`,
 auto-start reads a per-source `plan` setting (`TicketingSource.plan`,
 `github.repo_settings[repo].plan`, `issue_repo_settings[repo].plan`; empty =
 the built-in plan for that kind cut at the source's `depth`, which keeps every
-existing setup behaving exactly as before).
+existing setup behaving exactly as before). A per-start `depth` outranks the
+source's `plan` (a team run's `"off"` must stay off) — the full order is in
+[How a ticket becomes a flight](#how-a-ticket-becomes-a-flight). An unknown
+`plan` is a 400.
 
 ## Contract: the UI
 
@@ -428,8 +511,12 @@ had to choose. Field and route names are unchanged.
 - `flight_driver.on_session_created(title)` — already subscribed to
   `session.created`; attaches the pending flight (repo root, gone clock) and
   wakes the loop.
-- `POST /api/flights/start` with a ticket/PR/issue `subject` answers 501
-  `not_wired` until the Intake start paths take `plan`.
+- `POST /api/flights/start` with a ticket/PR/issue `subject` (`{kind, source,
+  id}`) runs that kind's Intake start body (`ticket_start.launch` /
+  `pr_review.launch` / `issue_start.launch`) with `plan` = `plan_id` and
+  answers 202 `{flight, title}`. The Intake routes' `plan` resolution lives in
+  `server._intake_plan` / `_arm_intake` (the pipeline's twin is
+  `SessionRunner._arm` / `_plan_for`).
 
 ## Where it lives
 
@@ -439,7 +526,7 @@ had to choose. Field and route names are unchanged.
 | Driver loop, step executors, bus taps, events | `backend/web/core/flight_driver.py` |
 | Routes | `backend/web/routes/flights.py` |
 | Describe-a-step one-shot | `backend/web/core/flight_describe.py` |
-| Intake / schedule / verify hooks | `ticket_start.py`, `server.py` (PR/issue start), `template_schedule.py`, `test_plans_driver.py` |
+| Intake / schedule / verify hooks | `ticket_start.launch`, `pr_review.launch`, `issue_start.launch`, `server.py` (`_intake_plan`, `_arm_intake`, the result route's `session.test_plan_settled`), `ticket_ingestion/session_runner.py` (`_arm`), `template_schedule.py` (`tick_flights`), `pending.py` (the provisioning row's `flight`) |
 | Frontend | `frontend/src/components/flights/`, `frontend/src/lib/flights.ts`, `flightsApi.ts`, `tours/flights.ts` |
 | Tests | `tests/unit/test_flights*.py`, `frontend/src/__tests__/flights*.test.ts` |
-| CLI | `mindflock flights` (list), `mindflock flight start <plan> [--repo …]`, `mindflock flight done <id>` |
+| CLI | `mindflock flights` (list), `mindflock flight plans`, `mindflock flight start <plan> [--repo …] [--title …]`, `mindflock flight done\|skip\|cancel <id>` (`backend/cli.py`) |

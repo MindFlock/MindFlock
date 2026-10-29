@@ -132,6 +132,17 @@ def _pending_lane(title: str):
         return _lanes.lane_dto(title)
 
 
+def _pending_flight(title: str):
+    """The row's ``flight`` (``flights.row_dto``): intake arms it before the
+    session exists, so the Board shows the item in flight from second one."""
+    try:
+        from backend.web.core import flights as _flights
+
+        return _flights.row_dto(title)
+    except Exception:  # noqa: BLE001 — enrichment only
+        return None
+
+
 def _pending_run(title: str):
     try:
         from backend.web import server
@@ -217,6 +228,8 @@ def rows(engine=None) -> list:
                 # …and the team run it belongs to (a run's ticket task is a
                 # provisioning row first).
                 "run": _pending_run(title),
+                # …and the flight it was started on, for the same reason.
+                "flight": _pending_flight(title),
                 # An intake start is nobody's worker: no order to keep.
                 "order": None,
                 "queue": None,

@@ -272,6 +272,12 @@ class TicketingSource:
     # every future ticket with no human in the loop, and merging cannot be
     # undone; the consumer enforces that.
     depth: str = ""
+    # The flight plan a ticket from this source flies (a plan id from
+    # ``~/.mindflock/flights/plans.json``, e.g. ``builtin:ticket`` or
+    # ``p_7f3a2c``). Blank = the built-in ticket plan cut at ``depth`` above —
+    # which, with no depth either, is no flight at all: every source saved
+    # before this field existed behaves exactly as it did. See docs/flights.md.
+    plan: str = ""
     # Whose tickets this source ingests: "" / "mine" (assigned to member_id) or
     # "anyone" (every ticket in the configured workflow states, whoever owns it —
     # the QA queue). "anyone" is only honoured alongside an ingest-state filter.
@@ -334,6 +340,7 @@ class TicketingSource:
             "agent",
             "effort",
             "depth",
+            "plan",
             "assignee_scope",
             "ingest_labels",
             "start_state",
@@ -380,6 +387,7 @@ class TicketingSource:
             # provider knows would be forwarded to a CLI that rejects it.
             effort=_effort_level(d.get("effort")),
             depth=str(d.get("depth", "") or ""),
+            plan=str(d.get("plan", "") or "").strip(),
             assignee_scope=str(d.get("assignee_scope", "") or ""),
             ingest_labels=str(d.get("ingest_labels", "") or ""),
             start_state=str(d.get("start_state", "") or ""),
@@ -896,8 +904,9 @@ class GithubSettings:
     #: Same, for issue-handling sessions. Independent of ``agent`` exactly as
     #: ``issue_repos`` is independent of ``repos``.
     issue_agent: str = ""
-    #: ``{"owner/name": {agent?, base_branch?, min_age_minutes?, skip_authors?}}``
-    #: — per-repo overrides of the PR-review knobs. Absent key = inherit.
+    #: ``{"owner/name": {agent?, base_branch?, min_age_minutes?, skip_authors?,
+    #: depth?, plan?}}`` — per-repo overrides of the PR-review knobs (``plan``:
+    #: the flight plan its items fly, docs/flights.md). Absent key = inherit.
     repo_settings: Dict[str, dict] = field(default_factory=dict)
     #: The issue-handling twin, keyed by a repo in ``issue_repos``.
     #: ``base_branch`` is accepted but unused (issue work branches off the
@@ -2356,6 +2365,9 @@ REPO_OVERRIDE_KEYS = (
     # with no human in the loop, and merging cannot be undone. The consumer
     # enforces that; this list only decides what round-trips.
     "depth",
+    # The flight plan an item from this repo flies (docs/flights.md). Blank =
+    # the built-in plan for that kind cut at ``depth`` (none without a depth).
+    "plan",
 )
 
 

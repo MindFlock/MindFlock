@@ -657,11 +657,11 @@ class TestStartEffortOverride:
         import inspect
         import re
 
-        fn = (
-            server._ticket_start.launch  # the route's launch, shared with runs
-            if route == "ticket_force_start"
-            else getattr(server, route)
-        )
+        fn = {  # each route's launch body, shared with runs / flights
+            "ticket_force_start": server._ticket_start.launch,
+            "github_force_review": server._pr_review.launch,
+            "github_issue_force_start": server._issue_start.launch,
+        }[route]
         src = inspect.getsource(fn)
         flags = re.search(r"_start_launch_args\(program, (\w+)\)", src)
         keyword = re.search(r"decorate_prompt\(prompt, program, (\w+)\)", src)
