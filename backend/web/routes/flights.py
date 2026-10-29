@@ -90,13 +90,69 @@ def flights_list(all: int = 0) -> JSONResponse:  # noqa: A002 — the query name
     return JSONResponse({"flights": _driver.list_dto(bool(all))})
 
 
+#: Subject kinds that take off through an Intake start path.
+_INTAKE_SUBJECTS = ("ticket", "pr", "issue")
+
+
+async def _start_intake(body: dict, subject: dict) -> JSONResponse:
+    """A ticket / PR / issue flight: the Intake start body for that kind
+    (``ticket_start.launch`` / ``pr_review.launch`` / ``issue_start.launch``)
+    with ``plan`` = the plan, which arms the flight on the deterministic title
+    before the session exists → 202 ``{"flight", "title"}`` (the start's own
+    refusals pass through as they are: 404 / 409 / 502)."""
+    from backend.web import server as srv
+    from backend.web.core import issue_start, pr_review, ticket_start
+
+    plan_id = str(body.get("plan_id") or "")
+    if _flights.get_plan(plan_id) is None:
+        return _err(_flights.FlightError("unknown_plan", 404, "no such plan"))
+    if not srv.git_available():
+        return srv._no_git_response()
+    kind = str(subject.get("kind") or "").strip().lower()
+    source = str(subject.get("source") or "").strip()
+    ident = str(subject.get("id") or "").strip()
+    if not source or not ident:
+        return _err(
+            _flights.FlightError(
+                "bad_subject", 400, "a %s subject needs its source and id" % kind
+            )
+        )
+    try:
+        if kind == "ticket":
+            out = await ticket_start.launch(source, ident, plan=plan_id)
+        else:
+            try:
+                number = int(ident.lstrip("#"))
+            except ValueError:
+                return _err(
+                    _flights.FlightError(
+                        "bad_subject", 400, "%s is not a number" % ident
+                    )
+                )
+            launch = pr_review.launch if kind == "pr" else issue_start.launch
+            out = await launch(source, number, plan=plan_id)
+    except ticket_start.LaunchError as err:
+        return JSONResponse(err.body, status_code=err.status)
+    title = str(out.get("title") or "")
+    return JSONResponse(
+        {"flight": _flights.for_session(title), "title": title}, status_code=202
+    )
+
+
 @router.post("/api/flights/start")
 async def flights_start(payload: Optional[dict] = None) -> JSONResponse:
     """Take off → 202 ``{"flight"}``. ``title`` attaches to an existing
     session; without it the session is created from the plan. A ticket / PR
-    / issue ``subject`` is 501 ``not_wired`` until Intake passes ``plan``."""
+    / issue ``subject`` (``{kind, source, id}``) starts through Intake."""
+    body = payload or {}
+    subject = body.get("subject")
+    if (
+        isinstance(subject, dict)
+        and str(subject.get("kind") or "").strip().lower() in _INTAKE_SUBJECTS
+    ):
+        return await _start_intake(body, subject)
     try:
-        flight = await _driver.start(payload or {})
+        flight = await _driver.start(body)
     except _flights.FlightError as err:
         return _err(err)
     return JSONResponse({"flight": flight}, status_code=202)

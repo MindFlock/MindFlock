@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import sys
 import time
 from pathlib import Path
@@ -189,6 +190,41 @@ def _decorate_red_zones(prompt: str, program: str, workdirs) -> str:
         return prompt
 
 
+def _fresh_settings():
+    """``settings.json`` as it is on disk NOW. The settings cache is
+    per-process and the pipeline is a separate one from the server, so a save
+    made in the UI is only seen here when the read drops the cache first."""
+    from backend.config import settings as _settings
+
+    _settings.invalidate()
+    return _settings.load_settings()
+
+
+def _issue_repo(story) -> str:
+    """``owner/name`` for a ticket made from a GitHub issue (its ``app_url``
+    is the issue's page), ``""`` for any other ticket."""
+    if getattr(story, "provider", "") != "github_issues":
+        return ""
+    m = re.match(
+        r"^https?://[^/]+/([^/\s]+/[^/\s]+)/issues/",
+        str(getattr(story, "app_url", "") or ""),
+    )
+    return m.group(1) if m else ""
+
+
+def _cancel_flight(title: str, reason: str) -> None:
+    """The session for ``title`` could not be created: cancel the flight armed
+    for it (if any), so it never waits for a session that won't come."""
+    try:
+        from backend.web.core import flights as _flights
+
+        f = _flights.for_session(title)
+        if f is not None and f["state"] != "cancelled":
+            _flights.mutate(f["id"], lambda x: _flights.op_cancel(x, reason[:300]))
+    except Exception:  # noqa: BLE001
+        logger.warning("Could not cancel the flight for %s", title, exc_info=True)
+
+
 class SessionRunner:
     """Launches a story as an engine provisioned ``Instance`` (in-process)."""
 
@@ -233,12 +269,20 @@ class SessionRunner:
         # (two Jira projects, a Shortcut workspace per team). Looking it up by
         # ``story.provider`` matched whichever source of that provider came
         # first, so the second project silently ran at the first one's rung.
-        self._arm_autopilot(
+        issue_repo = _issue_repo(story)
+        prompt += self._arm(
             title,
             "tix",
             source_key_of(story),
             str(getattr(story, "id", "") or story.slug),
             str(getattr(story, "name", "") or ""),
+            subject={
+                "kind": "issue" if issue_repo else "ticket",
+                "source": issue_repo or source_key_of(story),
+                "id": str(getattr(story, "id", "") or story.slug),
+                "title": str(getattr(story, "name", "") or ""),
+                "url": str(getattr(story, "app_url", "") or ""),
+            },
         )
         logger.info(
             "Launching ticket %s via MindFlock (agent=%s, effort=%s, mode=%s, "
@@ -265,11 +309,15 @@ class SessionRunner:
                 timeout=_INSTANCE_START_TIMEOUT,
             )
         except asyncio.TimeoutError:
+            _cancel_flight(title, "the session start timed out")
             raise RuntimeError(
                 f"MindFlock instance start for ticket {story.slug} timed out "
                 f"after {_INSTANCE_START_TIMEOUT:.0f}s (the worker thread may "
                 "still be running; the story is marked failed)"
             ) from None
+        except Exception as err:
+            _cancel_flight(title, "the session could not be created: %s" % err)
+            raise
 
         # Best-effort post-launch: drop attachments into the live workspace, and
         # move the ticket into its source's start state so the board stops
@@ -301,12 +349,19 @@ class SessionRunner:
         workspace = await self._pr_provisioner.provision(pr, launch_cursor=False)
         prompt = build_consolidated_pr_prompt(pr, comments, workspace.directory)
         title = f"pr-{pr_slug(pr)}"
-        self._arm_autopilot(
+        prompt += self._arm(
             title,
             "pr",
             str(getattr(pr, "repo", "") or ""),
             "%s#%s" % (getattr(pr, "repo", ""), pr.number),
             str(getattr(pr, "title", "") or ""),
+            subject={
+                "kind": "pr",
+                "source": str(getattr(pr, "repo", "") or ""),
+                "id": str(pr.number),
+                "title": str(getattr(pr, "title", "") or ""),
+                "url": str(getattr(pr, "url", "") or ""),
+            },
         )
         logger.info(
             "Launching PR #%d via MindFlock (%d comments, session=%s, branch=%s)",
@@ -328,11 +383,15 @@ class SessionRunner:
                 timeout=_INSTANCE_START_TIMEOUT,
             )
         except asyncio.TimeoutError:
+            _cancel_flight(title, "the session start timed out")
             raise RuntimeError(
                 f"MindFlock instance start for PR #{pr.number} timed out "
                 f"after {_INSTANCE_START_TIMEOUT:.0f}s (the worker thread may "
                 "still be running)"
             ) from None
+        except Exception as err:
+            _cancel_flight(title, "the session could not be created: %s" % err)
+            raise
         logger.info(
             "PR #%d is live in MindFlock session 'mindflock_%s'.",
             pr.number,
@@ -380,6 +439,111 @@ class SessionRunner:
         if stamped:
             return stamped
         return source_effort_now(getattr(story, "provider", ""))
+
+    def _arm(
+        self,
+        title: str,
+        kind: str,
+        lookup: str,
+        item: str,
+        message: str,
+        subject: dict,
+    ) -> str:
+        """Arm what an AUTO-ingested item carries itself with, before its
+        session exists: the flight its plan resolves to (docs/flights.md), else
+        the autopilot depth (:meth:`_arm_autopilot`) — the server's
+        ``_arm_intake`` for this process. A flight whose plan has ship steps
+        arms its own lanes, so the depth is armed beside one only when its plan
+        has none. Returns the text to append to the prompt: the plan's first
+        agent step's own ``prompt``. Never raises.
+
+        The flights store is a lock-guarded file keyed by session title, like
+        autopilot.json, so arming here is picked up by the server's driver."""
+        flight = None
+        plan_id = self._plan_for(subject.get("kind") or "ticket", lookup, subject)
+        if plan_id:
+            try:
+                from backend.web.core import flights as _flights
+
+                try:
+                    flight = _flights.arm_pending(title, plan_id, subject, by="intake")
+                except _flights.FlightError as err:
+                    if err.error != "in_flight":
+                        raise
+                    # A retry of an item whose last attempt died mid-launch:
+                    # its flight is still waiting for this very title.
+                    flight = _flights.for_session(title)
+                logger.info("Flight armed for %s (%s)", title, plan_id)
+            except Exception:  # noqa: BLE001 — never stop an ingestion over it
+                logger.warning(
+                    "Could not arm a flight for %s — falling back to its depth",
+                    title,
+                    exc_info=True,
+                )
+        if flight is None or not any(s["kind"] == "ship" for s in flight["steps"]):
+            self._arm_autopilot(title, kind, lookup, item, message)
+        if flight is None:
+            return ""
+        from backend.web.core import flights as _flights
+
+        first = next((s for s in flight["steps"] if s["kind"] == "agent"), None)
+        text = _flights.fill_prompt(
+            (first or {}).get("config", {}).get("prompt") or "", flight
+        )
+        return "\n\n" + text.strip() if text.strip() else ""
+
+    def _plan_for(self, kind: str, lookup: str, subject: dict) -> str:
+        """The flight plan an auto-ingested item flies, ``""`` for none: the
+        source's (``TicketingSource.plan``) or repo's (``plan`` in
+        ``github.repo_settings`` / ``issue_repo_settings``) setting when that
+        plan exists, else the built-in cut at :meth:`_depth_for` — the same
+        chain as the server's ``_intake_plan`` minus a per-start pick, which an
+        auto start never has. Read fresh (see :func:`_fresh_settings`)."""
+        try:
+            from backend.web.core import autopilot as _autopilot
+            from backend.web.core import flights as _flights
+
+            st = _fresh_settings()
+            configured = ""
+            if kind == "pr":
+                block = (st.github.repo_settings or {}).get(lookup) or {}
+                configured = str(block.get("plan") or "")
+            elif kind == "issue":
+                repo = str(subject.get("source") or "")
+                block = (st.github.issue_repo_settings or {}).get(repo) or {}
+                configured = str(block.get("plan") or "")
+            else:
+                sources = list(st.ticketing.sources)
+                for match in ("id", "provider"):
+                    src = next(
+                        (
+                            x
+                            for x in sources
+                            if lookup and getattr(x, match, "") == lookup
+                        ),
+                        None,
+                    )
+                    if src is not None:
+                        configured = str(getattr(src, "plan", "") or "")
+                        break
+            configured = configured.strip()
+            if configured and _flights.get_plan(configured) is not None:
+                return configured
+            if configured:
+                logger.warning(
+                    "Flight plan %s (set for %s) no longer exists — using the depth",
+                    configured,
+                    lookup,
+                )
+            depth = _autopilot.normalize_depth(self._depth_for(lookup))
+            if depth not in _autopilot.SOURCE_DEPTHS:
+                return ""
+            return _flights.plan_for_depth(kind, depth)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "Could not resolve a flight plan for %s", lookup, exc_info=True
+            )
+            return ""
 
     def _arm_autopilot(
         self, title: str, kind: str, lookup: str, item: str, message: str
@@ -452,9 +616,7 @@ class SessionRunner:
         default has exactly one definition regardless of which process acts on it.
         """
         try:
-            from backend.config.settings import load_settings
-
-            st = load_settings()
+            st = _fresh_settings()
             # The source's own key first: a provider name is only a fallback
             # for an unkeyed source (or a ticket built before ``source_key``
             # existed), and must never shadow a later source's exact id.

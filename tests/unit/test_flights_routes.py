@@ -178,14 +178,18 @@ def test_start_refusals():
     assert (
         client.post("/api/flights/start", json={"plan_id": "nope"}).status_code == 404
     )
+    # A ticket / PR / issue subject goes through Intake (test_flights_intake.py
+    # drives it end to end); what it refuses before reaching Intake:
     r = client.post(
         "/api/flights/start",
-        json={
-            "plan_id": "builtin:ticket",
-            "subject": {"kind": "ticket", "source": "sc", "id": "1"},
-        },
+        json={"plan_id": "nope", "subject": {"kind": "pr", "source": "o/r", "id": "1"}},
     )
-    assert r.status_code == 501 and r.json()["error"] == "not_wired"
+    assert r.status_code == 404 and r.json()["error"] == "unknown_plan"
+    r = client.post(
+        "/api/flights/start",
+        json={"plan_id": "builtin:pr", "subject": {"kind": "pr", "source": "o/r"}},
+    )
+    assert r.status_code == 400 and r.json()["error"] == "bad_subject"
     r = client.post(
         "/api/flights/start", json={"plan_id": "builtin:ticket", "title": "ghost"}
     )

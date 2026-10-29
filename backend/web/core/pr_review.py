@@ -18,11 +18,16 @@ it works even while ingestion is stopped. ``server.py`` owns the engine side
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
+from backend.providers import effort as _provider_effort
 from backend.web.core import pipeline_root
+from backend.web.core.ticket_start import LaunchError
+
+__all__ = ["LaunchError", "launch"]
 
 _logger = logging.getLogger(__name__)
 
@@ -43,6 +48,15 @@ def _load_config():
     """The pipeline's config, ``workspace_dir`` anchored at :data:`_REPO_ROOT`
     (:func:`backend.web.core.pipeline_root.load_config`)."""
     return pipeline_root.load_config(_REPO_ROOT)
+
+
+def _server():
+    """The ``backend.web.server`` module, imported lazily (circular import) —
+    :func:`launch` registers the session in its live engine, and calling back
+    through its namespace keeps ``monkeypatch.setattr(server, …)`` working."""
+    from backend.web import server
+
+    return server
 
 
 def review_agent(repo: str = "") -> str:
@@ -269,3 +283,168 @@ def record_reviewed(pr) -> None:
             repo=pr.repo,
         ),
     )
+
+
+async def launch(
+    repo: str,
+    number: int,
+    *,
+    program: str = "",
+    depth: str = "",
+    effort: str = "",
+    plan: str = "",
+) -> dict:
+    """Start a review session for one open PR and return the 202 body.
+
+    The body of ``POST /api/github/prs/review`` (which validates its payload
+    and calls this), callable without HTTP: ``POST /api/flights/start`` with a
+    ``pr`` subject calls it too. The workspace is provisioned and the session
+    registered on a background task; a launch failure is reported as
+    ``session.create_failed``.
+
+    * ``program``: the CLI to run; ``""`` = this repo's review agent, then the
+      app default (the route resolves the chain itself, with its own pick
+      first).
+    * ``depth`` / ``effort``: per-start overrides (``""`` = the repo's).
+    * ``plan``: the flight plan to fly; ``""`` = ``server._intake_plan``.
+
+    Raises :class:`LaunchError` (404 no such open PR, 409 a session for it
+    already exists, 502 GitHub failed).
+    """
+    srv = _server()
+    chosen = str(program or "")
+    effort_override = str(effort or "")
+    # The provisioning row goes up BEFORE the GitHub lookup below, which is the
+    # last thing standing between the click and the sidebar showing anything.
+    # The panel's cached list already carries the title this PR maps to, so no
+    # slug re-derivation is involved; a cold cache just falls back to the
+    # post-lookup registration further down.
+    early = srv._cached_session_title(
+        srv._OPEN_PRS_CACHE,
+        "prs",
+        lambda p: p.get("repo") == repo and p.get("number") == number,
+    )
+    if early:
+        if early in srv.ENGINE.instances or srv._pending_has(early):
+            raise LaunchError(
+                409,
+                {
+                    "error": "session %s already exists — close it to re-review"
+                    % early,
+                    "title": early,
+                },
+            )
+        srv._pending_add(early, "pr", repo=repo)
+
+    try:
+        pr = await find_pr(repo, number)
+    except LookupError as err:
+        srv._pending_drop(early)
+        raise LaunchError(404, {"error": str(err)}) from None
+    except Exception as err:  # noqa: BLE001
+        srv._pending_drop(early)
+        raise LaunchError(502, {"error": str(err)}) from None
+
+    title = session_title(pr)
+    if title != early:
+        srv._pending_drop(early)  # stale cache entry — keep only the real title
+        if title in srv.ENGINE.instances or srv._pending_has(title):
+            raise LaunchError(
+                409,
+                {
+                    "error": "session %s already exists — close it to re-review"
+                    % title,
+                    "title": title,
+                },
+            )
+    # Re-registered with the branch now that it's known (add() keeps `since`).
+    srv._pending_add(title, "pr", branch=pr.head_ref, repo=repo)
+    repo_depth = srv._repo_intake_depth(repo, "prs")
+    flight_tail = srv._arm_intake(
+        title,
+        depth or repo_depth,
+        "pr",
+        "%s#%s" % (repo, number),
+        message=str(getattr(pr, "title", "") or ""),
+        plan=srv._intake_plan(
+            "pr", plan, depth, srv._repo_intake_plan(repo, "prs"), repo_depth
+        ),
+        subject={
+            "kind": "pr",
+            "source": repo,
+            "id": str(number),
+            "title": str(getattr(pr, "title", "") or ""),
+            "url": str(getattr(pr, "url", "") or ""),
+        },
+    )
+
+    async def _bg_review() -> None:
+        # Provision first (slow: clone/fetch of the PR head), then register the
+        # adopted workspace as a live session — same shape as the pipeline's
+        # SessionRunner.run_pr, but against THIS server's engine so the session
+        # shows up in the grid without a reload.
+        try:
+            directory, prompt, n_comments = await prepare_review(pr)
+            # The route's pick (its own, this repo's card, Intake → Pull
+            # requests' Agent CLI), else the same chain without a pick.
+            # Resolved first because this start's effort has to be translated
+            # into THAT CLI's spelling.
+            program = chosen or review_agent(repo) or srv.ENGINE.default_program()
+            prompt += flight_tail
+            prompt = _provider_effort.decorate_prompt(prompt, program, effort_override)
+            # The review workspace already exists here: decorate against it.
+            prompt = await asyncio.to_thread(
+                srv._red_zone_prompt, prompt, program, [str(directory)], None
+            )
+            inst = srv.session.NewInstance(
+                srv.session.InstanceOptions(
+                    title=title,
+                    path=".",
+                    program=program,
+                    provisioned=True,
+                    workspace_strategy="clone",
+                    new_branch=pr.head_ref,
+                    prompt=prompt,
+                    workspace_path=str(directory),
+                    launch_args=srv._start_launch_args(program, effort_override),
+                )
+            )
+            inst.ExtraEnv = srv._ports.env_for(title)
+            inst.SetStatus(srv.Loading)
+            with srv.ENGINE.lock:
+                srv.ENGINE.instances[title] = inst
+            srv._seed_event_snapshot(title)
+            srv._events.BUS.emit(
+                "session.created",
+                session=title,
+                new="loading",
+                data={"program": inst.Program, "provisioned": True, "pr": pr.number},
+            )
+            try:
+                await asyncio.to_thread(inst.Start, True)
+                srv.ENGINE.save()
+            except Exception:
+                # By identity: this task may be the loser of a re-start, and
+                # popping by name would delete the LIVE session's record.
+                srv._drop_failed_start(title, inst)
+                raise
+            # Ledger the PR so auto review doesn't run it a second time.
+            record_reviewed(pr)
+            if srv.log.InfoLog is not None:
+                srv.log.InfoLog.Printf(
+                    "forced PR review %s live (%d comments)", title, n_comments
+                )
+        except Exception as err:  # noqa: BLE001
+            if srv.log.ErrorLog is not None:
+                srv.log.ErrorLog.Printf("forced PR review %s failed: %v", title, err)
+            srv._events.BUS.emit(
+                "session.create_failed", session=title, data={"error": str(err)}
+            )
+            srv._cancel_intake_flight(
+                title, "the session could not be created: %s" % err
+            )
+        finally:
+            srv._pending_drop(title)
+
+    srv._register_task(_bg_review())
+    return {"started": True, "title": title}
