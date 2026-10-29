@@ -75,6 +75,7 @@ from backend.fsutil import atomic_write_json, read_json
 from backend.web.core import cronspec
 
 _FileName = "template_runs.json"
+_FLIGHT_RUNS_FILE = "schedule_runs.json"
 _LOCK = threading.Lock()
 
 #: Seconds between loop ticks. A slot fires within this of its minute.
@@ -351,27 +352,37 @@ def runs_path() -> str:
     return guard(env or os.path.join(GetConfigDir(), _FileName), "template runs")
 
 
-def load_runs() -> Dict[str, dict]:
+def flight_runs_path() -> str:
+    """The run record of scheduled flight plans:
+    ``<flights dir>/schedule_runs.json`` (local, never synced — the plans
+    sync, where they ran is this device's). Same shape as the templates'."""
+    from backend.web.core import flights
+
+    return os.path.join(flights.flights_dir(), _FLIGHT_RUNS_FILE)
+
+
+# Every run-record accessor takes the file (``path``); None = the templates'.
+def load_runs(path: Optional[str] = None) -> Dict[str, dict]:
     with _LOCK:
-        data = read_json(runs_path(), {}, expect=dict)
+        data = read_json(path or runs_path(), {}, expect=dict)
     runs = data.get("runs")
     return dict(runs) if isinstance(runs, dict) else {}
 
 
-def _save_runs(runs: Dict[str, dict]) -> None:
-    atomic_write_json(runs_path(), {"runs": runs}, prefix=".tplrun.")
+def _save_runs(runs: Dict[str, dict], path: Optional[str] = None) -> None:
+    atomic_write_json(path or runs_path(), {"runs": runs}, prefix=".tplrun.")
 
 
-def save_runs(runs: Dict[str, dict]) -> None:
+def save_runs(runs: Dict[str, dict], path: Optional[str] = None) -> None:
     with _LOCK:
-        _save_runs(runs)
+        _save_runs(runs, path)
 
 
-def record_run(key: str, entry: dict, **fields) -> None:
+def record_run(key: str, entry: dict, *, path: Optional[str] = None, **fields) -> None:
     """Merge ``fields`` into one template's run record AND put ``entry`` at
     the head of its history (newest first, :data:`HISTORY_MAX` kept)."""
     with _LOCK:
-        data = read_json(runs_path(), {}, expect=dict)
+        data = read_json(path or runs_path(), {}, expect=dict)
         runs = data.get("runs") if isinstance(data.get("runs"), dict) else {}
         rec = dict(runs.get(key) or {})
         rec.update(fields)
@@ -380,7 +391,7 @@ def record_run(key: str, entry: dict, **fields) -> None:
             :HISTORY_MAX
         ]
         runs[key] = rec
-        _save_runs(runs)
+        _save_runs(runs, path)
 
 
 def _key(name: str) -> str:
@@ -785,37 +796,261 @@ async def tick(now: Optional[float] = None, here: Optional[bool] = None) -> List
 
 
 async def run_loop() -> None:
-    """Forever: :func:`tick` every :data:`TICK_SECONDS` (the addon's startup
-    registers it; off under pytest)."""
+    """Forever: :func:`tick` and :func:`tick_flights` every
+    :data:`TICK_SECONDS` (the addon's startup registers it; off under
+    pytest)."""
     while True:
-        try:
-            await tick()
-        except asyncio.CancelledError:
-            raise
-        except Exception as err:  # noqa: BLE001 — one bad tick never stops it
+        for what, step in (("template", tick), ("flight", tick_flights)):
             try:
-                from backend import log
+                await step()
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:  # noqa: BLE001 — one bad tick never stops it
+                try:
+                    from backend import log
 
-                if log.ErrorLog is not None:
-                    log.ErrorLog.Printf("template schedule tick failed: %v", err)
-            except Exception:  # noqa: BLE001
-                pass
+                    if log.ErrorLog is not None:
+                        log.ErrorLog.Printf("%s schedule tick failed: %v", what, err)
+                except Exception:  # noqa: BLE001
+                    pass
         await asyncio.sleep(TICK_SECONDS)
+
+
+# --------------------------------------------------------------------------- #
+# Scheduled flight plans (docs/flights.md "Scheduled plans")
+# --------------------------------------------------------------------------- #
+#: A previous flight in one of these keeps a scheduled one from taking off
+#: (``paused`` is the state the flights model is moving pause to).
+FLIGHT_BUSY_STATES = ("running", "waiting_you", "paused")
+
+
+def flight_plan_rows(plans: List[dict]) -> List[dict]:
+    """The flight plans whose trigger is ``schedule``, in the shape
+    :func:`plan_tick` reads: ``{"name": <plan id>, "schedule", "plan"}``.
+    The trigger's own ``paused`` switch is the schedule's ``paused``."""
+    rows = []
+    for plan in plans or []:
+        trig = plan.get("trigger") if isinstance(plan, dict) else None
+        if not isinstance(trig, dict) or trig.get("kind") != "schedule":
+            continue
+        sched = trig.get("schedule")
+        if isinstance(sched, dict) and trig.get("paused"):
+            sched = dict(sched, paused=True)
+        rows.append(
+            {"name": str(plan.get("id") or ""), "schedule": sched, "plan": plan}
+        )
+    return rows
+
+
+def flight_busy_reason(rec: Optional[dict]) -> str:
+    """Why a scheduled flight plan's last run keeps the next from taking off
+    ("" = it doesn't): its flight is still in the air, or its session is
+    working / asking / at a limit (:func:`busy_reason`)."""
+    rec = rec or {}
+    fid = str(rec.get("last_flight") or "")
+    if fid:
+        try:
+            from backend.web.core import flights
+
+            f = flights.get(fid)
+        except Exception:  # noqa: BLE001
+            f = None
+        if f is not None and f.get("state") in FLIGHT_BUSY_STATES:
+            return "the previous flight is still in the air"
+    return busy_reason(str(rec.get("last_session") or ""))
+
+
+async def _default_flight_start(body: dict) -> dict:
+    from backend.web.core import flight_driver
+
+    return await flight_driver.start(body)
+
+
+async def fire_flight(
+    plan: dict, trigger: str, *, now: Optional[float] = None, start=None
+) -> Tuple[int, dict]:
+    """Take off a flight of ``plan`` through the same call ``POST
+    /api/flights/start`` makes (no title, no subject of an intake kind: the
+    session is created from the plan) with ``by="schedule"``, and record it.
+    ``(status, {"flight"})`` or the refusal's ``(status, {error, detail})``,
+    recorded as a FAILED run."""
+    from backend.web.core import flights
+
+    now = time.time() if now is None else now
+    start = start or _default_flight_start
+    key = _key(plan.get("id"))
+    path = await asyncio.to_thread(flight_runs_path)
+    body = {
+        "plan_id": plan.get("id"),
+        "by": "schedule" if trigger == "schedule" else "user",
+        "subject": {"kind": "schedule", "title": plan.get("name") or ""},
+    }
+    try:
+        flight = await start(body)
+    except flights.FlightError as err:
+        msg = err.detail or err.error
+        await asyncio.to_thread(
+            record_run,
+            key,
+            {"at": now, "trigger": trigger, "error": msg},
+            path=path,
+            last_error=msg,
+            last_error_at=now,
+        )
+        _emit_flight_plan(
+            plan,
+            trigger,
+            error=err.error,
+            detail="Scheduled flight “%s” couldn't take off: %s"
+            % (plan.get("name") or "", msg),
+        )
+        return err.status, {"error": err.error, "detail": err.detail}
+    await asyncio.to_thread(
+        record_run,
+        key,
+        {
+            "at": now,
+            "trigger": trigger,
+            "session": flight.get("session") or "",
+            "flight": flight.get("id") or "",
+        },
+        path=path,
+        last_run_at=now,
+        last_session=flight.get("session") or "",
+        last_flight=flight.get("id") or "",
+        last_trigger=trigger,
+        last_error="",
+    )
+    return 202, {"flight": flight}
+
+
+def _emit_flight_plan(plan: dict, trigger: str, **data) -> None:
+    """``flight.changed`` for a scheduled run that made no flight (skipped or
+    refused): a refetch of the plans' ``runs`` (data: ``{"plan_id",
+    "plan_name", "trigger", "skipped"|"error", "detail"}``). Never raises."""
+    try:
+        from backend.web.core import events
+
+        events.BUS.emit(
+            "flight.changed",
+            session=str(data.pop("session", "") or ""),
+            data={
+                "id": "",
+                "plan_id": str(plan.get("id") or ""),
+                "plan_name": str(plan.get("name") or ""),
+                "trigger": trigger,
+                **data,
+            },
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def tick_flights(
+    now: Optional[float] = None, here: Optional[bool] = None, start=None
+) -> List[str]:
+    """One pass over the scheduled flight plans — :func:`tick`'s rules
+    (:func:`plan_tick`: armed-at, one missed slot, paused, skip-next, only
+    the automation device fires) with their own run record. A slot whose
+    previous flight is still in the air (or whose session is busy) is
+    skipped, in the history. Returns the plan ids fired (tests)."""
+    from backend.web.core import flights
+
+    now = time.time() if now is None else now
+    if here is None:
+        here = await asyncio.to_thread(automation_here)
+    rows = flight_plan_rows(await asyncio.to_thread(flights.list_plans))
+    if not rows:
+        return []
+    path = await asyncio.to_thread(flight_runs_path)
+    async with _fire_lock():
+        runs = await asyncio.to_thread(load_runs, path)
+        to_fire, new_runs = plan_tick(now, rows, runs, here)
+        if new_runs != runs:
+            # Persisted BEFORE anything starts: the slot is spent even if the
+            # take-off below crashes the process.
+            await asyncio.to_thread(save_runs, new_runs, path)
+        fired = []
+        for row, _slot in to_fire:
+            key = _key(row["name"])
+            rec = new_runs.get(key) or {}
+            busy = await asyncio.to_thread(flight_busy_reason, rec)
+            if busy:
+                prev = str(rec.get("last_session") or "")
+                await asyncio.to_thread(
+                    record_run,
+                    key,
+                    {
+                        "at": now,
+                        "trigger": "schedule",
+                        "skipped": busy,
+                        "session": prev,
+                    },
+                    path=path,
+                    last_skip_at=now,
+                    last_skip=busy,
+                )
+                _emit_flight_plan(
+                    row["plan"],
+                    "schedule",
+                    skipped=busy,
+                    session=prev,
+                    detail="Skipped a scheduled flight of “%s”: %s"
+                    % (row["plan"].get("name") or "", busy),
+                )
+                continue
+            await fire_flight(row["plan"], "schedule", now=now, start=start)
+            fired.append(row["name"])
+    return fired
+
+
+def flight_plans_status(plans: List[dict], now: Optional[float] = None) -> List[dict]:
+    """``plans`` (``GET /api/flights/plans``) with ``runs`` on each scheduled
+    one — :func:`status_for`'s row (``next_at``, ``last_at`` (also as
+    ``last_run_at``), ``last_session``, ``last_error``, ``history``,
+    ``schedule_label``, ``paused``…) plus ``runs_here`` / ``runs_on``. Never
+    raises: a plan list is never refused over its schedule."""
+    try:
+        rows = flight_plan_rows(plans)
+        if not rows:
+            return plans
+        st = status_for(rows, now, runs=load_runs(flight_runs_path()))
+    except Exception:  # noqa: BLE001
+        return plans
+    out = []
+    for plan in plans:
+        if (plan.get("trigger") or {}).get("kind") == "schedule":
+            row = dict(st["runs"].get(_key(plan.get("id"))) or {})
+            row.setdefault("next_at", None)
+            row.setdefault("last_session", "")
+            row.setdefault("last_error", "")
+            row.setdefault("history", [])
+            row["last_run_at"] = row.get("last_at")
+            row["runs_here"] = st["runs_here"]
+            row["runs_on"] = st["runs_on"]
+            plan = dict(plan, runs=row)
+        out.append(plan)
+    return out
 
 
 # --------------------------------------------------------------------------- #
 # What the UI shows
 # --------------------------------------------------------------------------- #
-def status_for(templates_list: List[dict], now: Optional[float] = None) -> dict:
+def status_for(
+    templates_list: List[dict],
+    now: Optional[float] = None,
+    runs: Optional[Dict[str, dict]] = None,
+) -> dict:
     """``{runs: {<name lower>: {next_at, last_at, last_session, last_trigger,
     last_error, paused?, skipping_at?}}, runs_here, runs_on}`` for ``GET
     /api/templates``. A paused schedule has no ``next_at``; one told to skip
     its next run names that slot (``skipping_at``) and ``next_at`` is the one
     after it. A spent one-off has none either, and says how its one slot
     went (``once_done``: ran / skipped / failed) — its label reads "Ran once
-    on …"."""
+    on …". ``runs``: another run record (scheduled flight plans') instead of
+    the templates'."""
     now = time.time() if now is None else now
-    runs = load_runs()
+    runs = load_runs() if runs is None else runs
     here = automation_here()
     out: Dict[str, dict] = {}
     for tpl in templates_list:

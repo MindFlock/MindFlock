@@ -37,8 +37,11 @@ def flights_kinds() -> JSONResponse:
 
 @router.get("/api/flights/plans")
 def flights_plans() -> JSONResponse:
-    """``{"plans": [Plan]}``, built-ins first."""
-    return JSONResponse({"plans": _flights.list_plans()})
+    """``{"plans": [Plan]}``, built-ins first; a scheduled plan carries
+    ``runs`` (``template_schedule.flight_plans_status``)."""
+    from backend.web.core import template_schedule as _schedule
+
+    return JSONResponse({"plans": _schedule.flight_plans_status(_flights.list_plans())})
 
 
 @router.post("/api/flights/plans")
