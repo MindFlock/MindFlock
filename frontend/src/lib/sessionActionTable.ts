@@ -258,7 +258,11 @@ export const SESSION_ACTIONS = {
   resume: {
     label: "Resume session",
     note: "starts the agent again in the same worktree",
-    enabled: (c) => settled(c) && c.inst!.status === "paused",
+    // A peer's session on my rail (remote_peer) is theirs to resume: the
+    // server answers 409, so the verb is not offered. My own sandboxed share
+    // (peer_share, not remote) is still resumable.
+    enabled: (c) =>
+      settled(c) && c.inst!.status === "paused" && !(c.inst as { remote_peer?: boolean }).remote_peer,
     run: (t) => void resumeSession(t),
   },
   // The two ways a session ends, and only these two.
