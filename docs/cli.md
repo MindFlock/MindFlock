@@ -590,6 +590,37 @@ and the last run (or why it failed / was skipped), plus which device fires
 schedules when it isn't this one. The same list, with Run now, Pause and Skip
 next, is the web UI's **Schedule** (top bar, `Alt+S`). `--json` prints `GET /api/templates` as is.
 
+### `mindflock flights [--all] [--json]`
+
+The flights in the air ([flights.md](flights.md)) — one row each: `ID`,
+`PLAN`, `SUBJECT` (*ticket 42 Fix it*, *pr #7 …*, a scheduled plan's name),
+`SESSION`, `STATE` (`halted: <reason>` / `cancelled: <reason>` say why) and
+`STEP` (*2/3 You: approve the merge (yours)* — the step it is on, and whether
+it waits on you). Unfinished flights plus the last 20 that landed; `--all`
+lists every stored one. `--json` prints `GET /api/flights` as is.
+
+### `mindflock flight [plans|start|done|skip|cancel]`
+
+* `flight plans [--json]` (the default) — the flight plans: id, name (`*` =
+  built-in), trigger, number of steps, and for a scheduled plan its schedule
+  in words and next run (or *paused*).
+* `flight start PLAN [--repo PATH] [--title SESSION]` — take off. `PLAN` is a
+  plan id or name (any case; a unique prefix of either is enough, an
+  ambiguous one lists the matches). `--title` flies an open session (an
+  unambiguous title prefix is fine; the flight starts at the plan's first
+  non-agent step), otherwise a new session is created from the plan in
+  `--repo`, else the plan's own folder, else the current directory. Prints the
+  flight id, its session and the step it starts on. `POST /api/flights/start`.
+* `flight done FLIGHT [--note TEXT]` / `flight skip FLIGHT` — tick off (or
+  skip) the step the flight is on, the Board's **Done** / **Skip**: a *you*
+  step, or a verify step waiting on you (its open human checklist items are
+  recorded as passed). `flight cancel FLIGHT` cancels the flight; its session
+  stays open. `FLIGHT` is a flight id (a unique prefix is enough) or its
+  session's title.
+
+A refusal prints the server's sentence (`error: sc-42 is already on a flight
+(Ticket to merge)`) and exits 1.
+
 ### `mindflock peer [status|invite|join|links|unlink|share|unshare|export|address]`
 
 [Peer links](peer-link.md) over `/api/peer` (needs a running server; `invite`

@@ -211,6 +211,13 @@ FastAPI app `backend.web.server:app`. Key pieces:
   `/m` URL names no machine and opens on whichever device is up; withdrawn on
   clean shutdown. Sign-in carries across devices through `core/auth.py`'s
   cookie-per-token scheme.
+- **`core/flights.py` + `core/flight_driver.py`** — Flights
+  ([flights.md](flights.md)): plans (rows of steps) and flights (one run of a
+  plan bound to one session), driven by a 5 s loop in the lifespan beside the
+  autopilot's plus bus taps. Every Intake start path (the three force-start
+  routes, the pipeline's auto-start in its own process) arms a flight on the
+  deterministic title before the session exists; scheduled plans fire from
+  `core/template_schedule.py`'s loop (the templates' loop, its own run record).
 - **`core/prompt_queue.py`** — per-session FIFO of prompts drained into idle
   agents by a background loop (self-driving runs; state in
   `~/.mindflock/prompt_queues.json`).
@@ -575,6 +582,7 @@ independent cadences, so each side has to tolerate the other being older. See
 | `~/.mindflock/mailbox.json` (+ `.lock`) | web (`core/mailbox.py`) | inter-agent messages per recipient, with exactly-once states; dropped per session on removal |
 | `~/.mindflock/run/` | engine/providers | per-launch files: `<tmux name>.env` (an auth profile's credentials) and `mcp-<tmux name>.json` (Claude's `--mcp-config` for the MindFlock MCP). Mode 0600, directory 0700; removed with the session |
 | `~/.mindflock/session_templates.json` | web (templates addon) | saved new-session templates |
+| `~/.mindflock/flights/` | web (`core/flights.py`) + pipeline | `plans.json` (flight plans, synced as `store:flight_plans`), `flights.json` (flights, local; the pipeline arms intake flights here too), `schedule_runs.json` (scheduled plans' run record, local) |
 | `~/.mindflock/remote_devices.json` | web (remote) | paired tailnet devices + tokens |
 | `~/.mindflock/settings.json` | web (settings addon) | the web settings store |
 | `~/.mindflock/settings_sync.json` | web (`core/settings_sync.py`) | settings-sync stamps: which device last changed each synced field, pins kept separate |

@@ -549,6 +549,47 @@ Shortcut search ──► dedup ──► validate ──┬─ valid ──► 
    The assignment is never undone. Best-effort like the move: a refused write
    is a warning, never a failed launch.
 
+### Which flight a started item flies
+
+Every start — the pipeline's auto-start (`SessionRunner.run` / `run_pr`) and
+the three Intake force-starts (`POST /api/tickets/start`,
+`/api/github/prs/review`, `/api/github/issues/start`) — decides, **before the
+session exists**, how far the item carries itself. That is a **flight plan**
+([flights.md](flights.md)) resolved in this order (`server._intake_plan`; the
+pipeline's `SessionRunner._plan_for` is the same chain minus the per-start
+picks, which an auto-start never has):
+
+1. the start's explicit `plan` (a plan id; the Flights Board's Arrivals picker,
+   or an API caller) — an unknown id is a **400**;
+2. a per-start `depth` (the row's fast-track pick, a team run's `"off"`, an
+   agent's `spawn_ticket_session(autopilot=…)`): the built-in plan for that
+   kind cut at that rung — a choice made for *this* start outranks the
+   source's standing one;
+3. the source's `plan` setting — `TicketingSource.plan` for a ticket,
+   `github.repo_settings[repo].plan` for a PR,
+   `github.issue_repo_settings[repo].plan` for an issue — while that plan
+   still exists (a deleted plan falls through, with a warning in the
+   pipeline log);
+4. the built-in plan cut at the source's `depth` (`flights.plan_for_depth`:
+   `commit|push|pr` → `builtin:ticket@<lane>` / `builtin:pr@<lane>`; an issue
+   flies `builtin:ticket`);
+5. none — a source with no `plan` and a depth of off/agent behaves exactly as
+   it did before Flights existed.
+
+When a plan resolves, `flights.arm_pending` puts a `running` flight on the
+item's **deterministic session title** (the same key autopilot.json uses — the
+pipeline is a separate process and writes the lock-guarded
+`~/.mindflock/flights/flights.json` exactly as it writes autopilot.json), with
+its first agent step recorded as already running: the intake prompt *is* that
+step, and the step's own `prompt` text (placeholders filled) is appended to it.
+The flight's ship steps arm their own lanes, so the autopilot depth is **not**
+armed beside it — unless the plan has no ship steps, in which case the depth is
+armed as before. If the session can't be created (`session.create_failed`, a
+pipeline launch that raises or times out), the flight is cancelled with that
+reason. The provisioning row in the sidebar carries the `flight` field from
+the first second. Settings are read fresh on every pipeline launch (the
+settings cache is per-process, so the pipeline drops it first).
+
 ### A source spanning several repos
 
 A ticketing source can point at a SET of repos instead of one — a board whose
@@ -682,6 +723,13 @@ provisioning.
 A PR is processed **once per head**; to re-run it, delete its entry from
 `state.json`'s `processed_prs`.
 
+The flight a PR session flies is resolved as in
+[Which flight a started item flies](#which-flight-a-started-item-flies), from
+the repo's `github.repo_settings[repo].plan` and `depth` (`builtin:pr` cut at
+the depth when no plan is set). The forced start's body is
+`core.pr_review.launch`, which `POST /api/flights/start` with a `pr` subject
+also runs.
+
 GitHub auth resolution is the ONE chain every consumer uses
 (`backend/web/core/github_auth.resolve_token`; the pipeline's
 `ticket_ingestion/github_auth.py` only delegates to it): `github.token` in
@@ -725,7 +773,13 @@ The **Intake → GitHub issues** tab surfaces this live (`/api/github/issues`), 
 the running server's engine — bypassing the age / already-handled filters — so
 the session shows up in the grid without a reload. That start takes the row's
 own Agent CLI picker if one was used, then the repository's own, then
-`issue_agent`'s chain above.
+`issue_agent`'s chain above. Its body is `core.issue_start.launch` (also run
+by `POST /api/flights/start` with an `issue` subject), and the flight it flies
+is resolved as in
+[Which flight a started item flies](#which-flight-a-started-item-flies) from
+`github.issue_repo_settings[repo].plan` (the pipeline reads the repo off the
+issue's URL) — an issue is worked like a ticket, so its built-in is
+`builtin:ticket`.
 
 ## What the sweeps will pick up next
 

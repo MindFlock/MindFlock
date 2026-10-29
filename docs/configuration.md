@@ -475,6 +475,20 @@ Notes on individual keys:
   the process lifetime (the pipeline and the server each keep their own), so a
   renamed account needs the pipeline restarted — and the server too, for
   **Run ticket**.
+- `plan` (per ticket source in `settings.json`, and per repo in
+  `github.repo_settings` / `github.issue_repo_settings`; optional) — the
+  **flight plan** an item started from there flies ([flights.md](flights.md)):
+  a plan id from `GET /api/flights/plans` (`builtin:ticket`, `p_7f3a2c`…).
+  Blank = the built-in plan for that kind (`builtin:ticket` for tickets and
+  issues, `builtin:pr` for PRs) cut at the source's `depth`, which is no flight
+  at all while `depth` is blank/off/agent — so a source saved before the field
+  existed behaves exactly as before. A plan id that no longer exists falls
+  back to the depth. A per-start `plan` or `depth` (the Intake row, the Flights
+  Board, an agent's `spawn_ticket_session`) outranks it; the full order is in
+  [ingestion-pipeline.md](ingestion-pipeline.md#which-flight-a-started-item-flies).
+  Synced with the rest of the source / repo block (the plans themselves sync
+  as `store:flight_plans`). Changing it restarts the pipeline like any source
+  field, and the pipeline also reads it fresh at every launch.
 - `workflow_state` (per source) — the state a ticket must be in to be ingested.
   In the web UI this is a live dropdown (Intake → Tickets) populated from the
   provider, so you rarely need the raw id. For Shortcut you can also list ids with
@@ -529,8 +543,8 @@ Notes on individual keys:
 - `github.repo_settings` / `github.issue_repo_settings` — the per-repo override
   tables, spelled as nested tables whose key is the quoted repo slug
   (`[github.repo_settings."owner/name"]`). Each block accepts `agent`,
-  `min_age_minutes`, `skip_authors` and — PR review only — `base_branch`; any
-  other key is dropped, and so is any key whose value is blank or empty, which
+  `min_age_minutes`, `skip_authors`, `depth`, `plan` (see below) and — PR
+  review only — `base_branch`; any other key is dropped, and so is any key whose value is blank or empty, which
   is how a card's cleared field means "inherit the flat field above" rather than
   "set it to nothing". `0` is a real value (no grace period at all), not blank.
   Both tables go through the same normalizer the Intake tab's cards save
