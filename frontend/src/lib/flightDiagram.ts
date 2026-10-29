@@ -17,6 +17,12 @@
  *                     flight) or the flight's stops, and always a trailing +
  *                     ("Tack on a stop").
  *
+ * A child spawned DURING one of the flight's stops (its row's `flight.branch`
+ * names that stop) is drawn as a BRANCH instead of below the session: the
+ * line fans out from that stop to one box per child, stacked in a column,
+ * and fans back in at the next box — the join point, which reads "waiting for
+ * 2 of 5" while the parent's flight waits on them (docs/flights-branches.md).
+ *
  * `layoutDiagram` places the boxes and draws the connectors as SVG paths from
  * fixed box sizes, so the markup (and a test of it) needs no DOM measuring. */
 
@@ -38,7 +44,7 @@ import {
 
 // --- The model ----------------------------------------------------------------
 
-export type DiagramNodeKind = "parent" | "session" | "child" | "rung" | "stop" | "add";
+export type DiagramNodeKind = "parent" | "session" | "child" | "branch" | "rung" | "stop" | "add";
 
 /** What a box shows. `edit` is a flyway's stop being drawn (no run yet). */
 export type DiagramNodeState =
@@ -53,9 +59,20 @@ export type DiagramNodeState =
   | "failed"
   | "session";
 
-/** Where a box sits: on the line, above the session (its parent), or on the
- * branch below it (its children). */
-export type DiagramRow = "main" | "above" | "below";
+/** Where a box sits: on the line, above the session (its parent), on the
+ * branch below it (its children), or in a column of parallel branches between
+ * two boxes of the line (children spawned at a stop, joining at the next). */
+export type DiagramRow = "main" | "above" | "below" | "branch";
+
+/** How a branch (a child working in parallel) is doing. `gone` children leave
+ * the diagram; the word is the join detail's. */
+export type BranchState = "working" | "asking" | "done" | "failed" | "gone";
+
+/** The join's count, from the parent's `flight.join`. */
+export interface JoinCount {
+  waiting: number;
+  total: number;
+}
 
 export interface DiagramNode {
   id: string;
@@ -83,14 +100,23 @@ export interface DiagramNode {
   editable?: boolean;
   /** Why it stopped (a halted stop or rung). */
   reason?: string;
+  /** A branch box: the stop it fans out of, the box it joins at, its state
+   * and its own line in brief ("2/4 stops · Push"). */
+  branch?: { from: string; to: string; state: BranchState; inner: string };
+  /** A join point while its branches are out: "waiting for 2 of 5". */
+  join?: JoinCount;
 }
 
-export type DiagramEdgeKind = "line" | "up" | "branch" | "add";
+/** `fan` runs from a stop out to a branch, `join` from a branch into the
+ * join point. */
+export type DiagramEdgeKind = "line" | "up" | "branch" | "add" | "fan" | "join";
 
 export interface DiagramEdge {
   from: string;
   to: string;
   kind: DiagramEdgeKind;
+  /** A fan-in whose branch has arrived (or whose join let go): drawn done. */
+  done?: boolean;
 }
 
 export interface Diagram {
@@ -158,6 +184,14 @@ export function stopSummary(step: Pick<FlightStep, "kind" | "config">): string {
       const t = String(c.text ?? "").trim();
       return t ? clip(t) : "a ping";
     }
+    case "split": {
+      const list = Array.isArray(c.prompts) ? c.prompts.map(String) : String(c.prompts ?? "").split("\n");
+      const lines = list.filter((l) => l.trim()).length;
+      const n = lines > 1 ? lines : Math.max(1, num(c.count, 1));
+      return n + (n === 1 ? " worker" : " workers") + " in parallel";
+    }
+    case "join":
+      return (c.of === "spawned" ? "waits for its split's workers" : "waits for every worker") + (c.on_failed === "continue" ? " · goes on past a failure" : "");
     default:
       return step.kind;
   }
@@ -375,15 +409,180 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
     }
   }
   line.push(addNode("Tack on a stop"));
-  chain(nodes, edges, line);
+
+  const fans = family && mode === "flight" && fl ? branchesOf(title, kids, line, fl, opts.flights?.find((f) => f.id === fl.id)) : null;
+  if (fans) {
+    nodes.push(...line);
+    for (let i = 1; i < line.length; i++) {
+      const a = line[i - 1];
+      const b = line[i];
+      // A stop with branches reaches the next box THROUGH them.
+      if (!fans.out.has(a.id)) edges.push({ from: a.id, to: b.id, kind: b.kind === "add" ? "add" : "line" });
+      for (const c of fans.out.get(a.id) || []) {
+        nodes.push(c);
+        edges.push({ from: a.id, to: c.id, kind: "fan" });
+        const done = c.branch!.state === "done" || fans.letGo.has(b.id);
+        edges.push(done ? { from: c.id, to: b.id, kind: "join", done } : { from: c.id, to: b.id, kind: "join" });
+      }
+    }
+  } else chain(nodes, edges, line);
 
   if (family)
-    for (const k of kids) {
+    for (const k of fans ? fans.below : kids) {
       const c = sessionBox(k, "child", "below");
       nodes.push(c);
       edges.push({ from: me.id, to: c.id, kind: "branch" });
     }
   return { nodes, edges, flightId, mode, insertFrom };
+}
+
+// --- Branches: children working in parallel between two stops ----------------------
+
+/** What a child row's `flight` dto says about where it was spawned (the
+ * parent's title and the stop it was spawned during). */
+export interface BranchRef {
+  parent: string;
+  step: string;
+}
+
+/** The parent's `flight` dto's join and a child's `flight.branch` — optional:
+ * an older server sends neither. */
+type BranchedRow = FlightRow & { join?: JoinCount | null; branch?: BranchRef | null };
+
+/** One child, as a join step's `detail.children[]` lists it. */
+interface JoinChild {
+  title: string;
+  state: BranchState;
+  report?: string;
+}
+
+export function branchOf(row: Pick<Instance, "flight">): BranchRef | null {
+  const b = (row.flight as BranchedRow | null | undefined)?.branch;
+  return b && typeof b.step === "string" && b.step ? b : null;
+}
+
+/** The parent flight's join count, when it waits on its workers. */
+export function joinOf(row: Pick<Instance, "flight">): JoinCount | null {
+  const j = (row.flight as BranchedRow | null | undefined)?.join;
+  return j && Number.isFinite(Number(j.total)) ? { waiting: Math.max(0, Number(j.waiting) || 0), total: Number(j.total) || 0 } : null;
+}
+
+/** "waiting for 2 of 5" — a join point's words. */
+export function joinLabel(j: JoinCount): string {
+  return "waiting for " + j.waiting + " of " + j.total;
+}
+
+const REPORT_STATE: Record<string, BranchState> = { done: "done", failed: "failed", blocked: "asking" };
+
+/** A branch's state: the child's live activity first (working, or asking —
+ * a question, a perch), then its last report (done / failed / blocked), then
+ * what the join's detail says, else still working (the join waits on it). */
+export function branchState(child: Instance, listed?: JoinChild | null): BranchState {
+  const ss = deriveSessionState(child);
+  if (ss.state === "working") return "working";
+  if (ss.state === "needs_you") return "asking";
+  const rep = REPORT_STATE[String(child.last_report?.status || "")];
+  if (rep) return rep;
+  if (listed?.state) return listed.state;
+  if (ss.tone === "broken") return "failed";
+  return "working";
+}
+
+const BRANCH_CHIP: Record<BranchState, { label: string; tone: string }> = {
+  working: { label: "Working", tone: "working" },
+  asking: { label: "Asking", tone: "attention" },
+  done: { label: "Done", tone: "neutral" },
+  failed: { label: "Failed", tone: "broken" },
+  gone: { label: "Gone", tone: "muted" },
+};
+
+const BRANCH_NODE_STATE: Record<BranchState, DiagramNodeState> = {
+  working: "current",
+  asking: "perched",
+  done: "done",
+  failed: "failed",
+  gone: "skipped",
+};
+
+/** A child's own line in brief: "2/4 stops · Push" (its flight, else its
+ * fast-track's rungs), "" when it has neither. */
+export function innerSummary(row: Instance): string {
+  const fl = row.flight as FlightRow | null | undefined;
+  if (fl && isLive(fl) && Number(fl.total) > 0) return Math.min(fl.cursor, fl.total) + "/" + fl.total + " stops" + (fl.step?.title ? " · " + fl.step.title : "");
+  const rungs = ladderRungs(row);
+  if (!rungs.length) return "";
+  const done = rungs.filter((r) => r.state === "done").length;
+  const cur = rungs.find((r) => r.state !== "done");
+  return done + "/" + rungs.length + " stops" + (cur ? " · " + LANE_LABEL[cur.lane] : "");
+}
+
+/** The join detail's children, by title (a join step's, or an agent step's
+ * that waits for its workers). */
+function joinChildren(full: Flight | undefined): Map<string, JoinChild> {
+  const out = new Map<string, JoinChild>();
+  if (!full) return out;
+  for (const rec of Object.values(full.step_states || {})) {
+    const list = (rec?.detail as { children?: unknown } | undefined)?.children;
+    if (!Array.isArray(list)) continue;
+    for (const c of list as JoinChild[]) if (c && typeof c.title === "string") out.set(c.title, c);
+  }
+  return out;
+}
+
+/** Split the children into branches (spawned during a stop of THIS flight)
+ * and the rest (drawn below, as before), and find the join point: the box
+ * after the spawning stop, or the current stop itself when it is a `join`
+ * step. `out` maps a stop's id to its branch boxes; `letGo` holds the join
+ * points whose fan-in draws done (the join let go, or the flight is past). */
+function branchesOf(title: string, kids: readonly Instance[], line: DiagramNode[], fl: FlightRow, full: Flight | undefined) {
+  const out = new Map<string, DiagramNode[]>();
+  const below: Instance[] = [];
+  const letGo = new Set<string>();
+  const listed = joinChildren(full);
+  // A stop's place on the line, by its step id (the full flight's), or —
+  // drawn from the row alone — the current stop by the row's step id.
+  const at = (step: string) => line.findIndex((n) => n.kind === "stop" && (n.step ? n.step.id === step : n.index === fl.cursor && fl.step?.id === step));
+  for (const k of kids) {
+    const b = branchOf(k);
+    // Spawned under another parent (re-parented since): not this line's.
+    const i = b && (!b.parent || b.parent === title) ? at(b.step) : -1;
+    if (i < 0 || i + 1 >= line.length) {
+      below.push(k);
+      continue;
+    }
+    const entry = listed.get(k.title);
+    if (entry?.state === "gone") continue;
+    const state = branchState(k, entry);
+    const from = line[i];
+    const to = line[i + 1];
+    const inner = innerSummary(k);
+    const c: DiagramNode = {
+      id: "branch:" + k.title,
+      kind: "branch",
+      row: "branch",
+      title: k.title,
+      sub: inner || (entry?.report ? clip(String(entry.report)) : k.last_report?.summary ? clip(k.last_report.summary) : ""),
+      state: BRANCH_NODE_STATE[state],
+      icon: "session",
+      session: k.title,
+      chip: BRANCH_CHIP[state],
+      branch: { from: from.id, to: to.id, state, inner },
+    };
+    out.set(from.id, [...(out.get(from.id) || []), c]);
+  }
+  // The join point: the parent's current step waits on its workers — a join
+  // step at itself, an agent step at the box after it.
+  const join = joinOf({ flight: fl });
+  const ci = line.findIndex((n) => n.kind === "stop" && n.index === fl.cursor);
+  if (join && ci >= 0) {
+    const point = fl.step?.kind === "join" ? line[ci] : line[ci + 1];
+    if (point) {
+      point.join = join;
+      if (join.waiting === 0) letGo.add(point.id);
+    }
+  }
+  for (const n of line) if (n.state === "done" || n.state === "skipped") letGo.add(n.id);
+  return { out, below, letGo };
 }
 
 /** Whether a session has anything for its Flight tab to draw beyond itself: a
@@ -413,12 +612,20 @@ const STOP_TONE: Partial<Record<DiagramNodeState, BirdTone>> = {
   paused: "paused",
 };
 
-/** Where the bird sits on a line: the flight's current stop, else the
- * fast-track's current rung, else the session box while its agent works (or
- * waits on you); nowhere when the session is idle with nothing armed. */
+/** Where the bird sits on a line: the flight's current stop — but while a
+ * join waits on its branches, at the join point (gold when a branch asks),
+ * unless the flight is halted or paused — else the fast-track's current rung,
+ * else the session box while its agent works (or waits on you); nowhere when
+ * the session is idle with nothing armed. */
 export function birdPerch(d: Diagram): BirdPerch | null {
   const main = d.nodes.filter((n) => n.row === "main");
   const stop = main.find((n) => n.kind === "stop" && STOP_TONE[n.state]);
+  if (stop && (stop.state === "halted" || stop.state === "paused")) return { nodeId: stop.id, tone: STOP_TONE[stop.state]! };
+  const point = main.find((n) => n.join && n.join.waiting > 0);
+  if (point) {
+    const asking = d.nodes.some((n) => n.branch?.to === point.id && n.branch.state === "asking");
+    return { nodeId: point.id, tone: asking ? "you" : "working" };
+  }
   if (stop) return { nodeId: stop.id, tone: STOP_TONE[stop.state]! };
   const rung = main.find((n) => n.kind === "rung" && (n.state === "current" || n.state === "halted"));
   if (rung) return { nodeId: rung.id, tone: rung.state === "halted" ? "halted" : "working" };
@@ -456,8 +663,10 @@ export interface Wire {
   from: string;
   to: string;
   kind: DiagramEdgeKind;
-  /** The SVG path, arrowhead at its end. */
+  /** The SVG path, arrowhead at its end (none on a fan-out). */
   d: string;
+  /** A fan-in drawn done (its branch arrived, or the join let go). */
+  done?: boolean;
 }
 
 export interface Layout {
@@ -469,30 +678,45 @@ export interface Layout {
   gap: number;
 }
 
-/** The base box and the line's spacing. */
-export function boxMetrics(compact = false): { box: BoxSize; add: BoxSize; gap: number; vgap: number; indent: number; anchor: number } {
+/** The base box and the line's spacing; `branch` is a branch box (smaller:
+ * the child's title, its chip, its line in brief) and `bgap` the space
+ * between two branches of a column. */
+export function boxMetrics(compact = false): { box: BoxSize; add: BoxSize; branch: BoxSize; gap: number; vgap: number; bgap: number; indent: number; anchor: number } {
   return compact
-    ? { box: { w: 140, h: 62 }, add: { w: 44, h: 44 }, gap: 34, vgap: 22, indent: 22, anchor: 31 }
-    : { box: { w: 178, h: 76 }, add: { w: 148, h: 40 }, gap: 46, vgap: 30, indent: 26, anchor: 38 };
+    ? { box: { w: 140, h: 62 }, add: { w: 44, h: 44 }, branch: { w: 124, h: 46 }, gap: 34, vgap: 22, bgap: 8, indent: 22, anchor: 31 }
+    : { box: { w: 178, h: 76 }, add: { w: 148, h: 40 }, branch: { w: 156, h: 52 }, gap: 46, vgap: 30, bgap: 10, indent: 26, anchor: 38 };
 }
 
 /** Place every box and draw every connector. Horizontal: the line left to
  * right, the parent above the session, the children stacked below it on a
- * branch from its left edge. Vertical: the line top to bottom, the children in
- * a column to the session's right. */
+ * branch from its left edge, and a stop's branches in a column between it and
+ * the next box (centred on the line, hanging down when there are many).
+ * Vertical: the line top to bottom, the children in a column to the
+ * session's right, a stop's branches an indented group under it. */
 export function layoutDiagram(d: Diagram, opts: LayoutOpts = {}): Layout {
   // A phone (or a narrow pane) draws two columns at most: compact boxes,
   // and the + as wide as a box.
   const m = boxMetrics(!!opts.compact || !!opts.vertical);
   if (opts.vertical) m.add = { w: m.box.w, h: 36 };
+  // On a phone a branch group fits the line's column, indented.
+  if (opts.vertical) m.branch = { w: m.box.w - m.indent, h: m.branch.h };
   const size = (n: DiagramNode): BoxSize => {
-    // A session box also carries its state chip, a child its mini ladder.
-    const base = n.kind === "add" ? m.add : { w: m.box.w, h: m.box.h + (n.chip ? 18 : 0) + (n.dots ? 14 : 0) };
+    // A session box also carries its state chip, a child its mini ladder, a
+    // branch its line in brief.
+    const base =
+      n.kind === "add"
+        ? m.add
+        : n.kind === "branch"
+          ? { w: m.branch.w, h: m.branch.h + (n.sub ? 16 : 0) }
+          : { w: m.box.w, h: m.box.h + (n.chip ? 18 : 0) + (n.dots ? 14 : 0) };
     return opts.sizeOf ? opts.sizeOf(n, base) : base;
   };
   const above = d.nodes.filter((n) => n.row === "above");
   const main = d.nodes.filter((n) => n.row === "main");
   const below = d.nodes.filter((n) => n.row === "below");
+  // A stop's branches, by the stop they fan out of.
+  const fans = new Map<string, DiagramNode[]>();
+  for (const n of d.nodes) if (n.row === "branch" && n.branch) fans.set(n.branch.from, [...(fans.get(n.branch.from) || []), n]);
   const at = new Map<string, Placed>();
   const boxes: Placed[] = [];
   const put = (node: DiagramNode, x: number, y: number) => {
@@ -507,16 +731,28 @@ export function layoutDiagram(d: Diagram, opts: LayoutOpts = {}): Layout {
   if (!opts.vertical) {
     const top = above.length ? m.box.h + m.vgap : 0;
     let x = 0;
+    let fanBottom = 0;
     for (const n of main) {
       const s = size(n);
       // A smaller box (the +) sits centred on the line's anchor.
       put(n, x, top + (n.kind === "add" ? m.anchor - s.h / 2 : 0));
       x += s.w + m.gap;
+      const col = fans.get(n.id);
+      if (!col?.length) continue;
+      const sizes = col.map(size);
+      const colH = sizes.reduce((h, c) => h + c.h, 0) + m.bgap * (col.length - 1);
+      let y = top + Math.max(0, m.anchor - colH / 2);
+      col.forEach((c, i) => {
+        put(c, x, y);
+        y += sizes[i].h + m.bgap;
+      });
+      fanBottom = Math.max(fanBottom, y - m.bgap);
+      x += Math.max(...sizes.map((c) => c.w)) + m.gap;
     }
     const sp = session ? at.get(session.id) : undefined;
     for (const n of above) put(n, sp ? sp.x : 0, 0);
     const lineH = Math.max(m.box.h, ...main.map((n) => size(n).h));
-    let y = top + lineH + m.vgap;
+    let y = Math.max(top + lineH, fanBottom) + m.vgap;
     for (const n of below) {
       put(n, (sp ? sp.x : 0) + m.indent, y);
       y += size(n).h + 12;
@@ -531,6 +767,13 @@ export function layoutDiagram(d: Diagram, opts: LayoutOpts = {}): Layout {
       const s = size(n);
       put(n, n.kind === "add" ? (m.box.w - s.w) / 2 : 0, y);
       y += s.h + m.vgap;
+      const col = fans.get(n.id);
+      if (!col?.length) continue;
+      for (const c of col) {
+        put(c, m.indent, y);
+        y += size(c).h + m.bgap;
+      }
+      y += m.vgap - m.bgap;
     }
     const sp = session ? at.get(session.id) : undefined;
     let cy = sp ? sp.y : 0;
@@ -540,17 +783,31 @@ export function layoutDiagram(d: Diagram, opts: LayoutOpts = {}): Layout {
     }
   }
 
-  // Reading (and tab) order: the parent, the line, then the branch.
-  const rank: Record<DiagramRow, number> = { above: 0, main: 1, below: 2 };
+  // Reading (and tab) order: the parent, the line (a stop's branches right
+  // after it — the sort keeps the order they were placed in), then the
+  // children below.
+  const rank: Record<DiagramRow, number> = { above: 0, main: 1, branch: 1, below: 2 };
   boxes.sort((p, q) => rank[p.node.row] - rank[q.node.row]);
 
+  // Where a connector meets a box's side: the line's anchor, a small box's
+  // middle (the +, a branch).
+  const anchorOf = (p: Placed) => (p.node.kind === "add" ? p.h / 2 : p.node.kind === "branch" ? Math.min(p.h, m.box.h) / 2 : m.anchor);
   const wires: Wire[] = [];
   for (const e of d.edges) {
     const a = at.get(e.from);
     const b = at.get(e.to);
     if (!a || !b) continue;
     let path = "";
-    if (e.kind === "up") {
+    if (opts.vertical && e.kind === "fan") {
+      // Down the group's left side, into each branch.
+      const x = a.x + m.indent / 2;
+      path = `M ${x} ${a.y + a.h} V ${b.y + anchorOf(b)} H ${b.x}`;
+    } else if (opts.vertical && e.kind === "join") {
+      // Out of each branch's right edge, down its right side, into the join.
+      const rx = Math.max(a.x + a.w, b.x + b.w) + 8;
+      const y2 = b.y + anchorOf(b);
+      path = `M ${a.x + a.w} ${a.y + anchorOf(a)} H ${rx} V ${y2} H ${b.x + b.w + 2}`;
+    } else if (e.kind === "up") {
       const x = a.x + Math.min(a.w, b.w) / 2;
       path = `M ${x} ${a.y + a.h} V ${b.y - 2}`;
     } else if (e.kind === "branch") {
@@ -565,10 +822,11 @@ export function layoutDiagram(d: Diagram, opts: LayoutOpts = {}): Layout {
         path = `M ${a.x + a.w} ${y1} H ${mx} V ${y2} H ${b.x - 2}`;
       }
     } else if (!opts.vertical) {
-      const y1 = a.y + (a.node.kind === "add" ? a.h / 2 : m.anchor);
-      const y2 = b.y + (b.node.kind === "add" ? b.h / 2 : m.anchor);
+      const y1 = a.y + anchorOf(a);
+      const y2 = b.y + anchorOf(b);
       const x1 = a.x + a.w;
-      const x2 = b.x - 2;
+      // A fan-out has no arrowhead to leave room for.
+      const x2 = b.x - (e.kind === "fan" ? 0 : 2);
       const mx = (x1 + x2) / 2;
       path = y1 === y2 ? `M ${x1} ${y1} H ${x2}` : `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
     } else {
@@ -579,7 +837,7 @@ export function layoutDiagram(d: Diagram, opts: LayoutOpts = {}): Layout {
       const my = (y1 + y2) / 2;
       path = x1 === x2 ? `M ${x1} ${y1} V ${y2}` : `M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`;
     }
-    wires.push({ from: e.from, to: e.to, kind: e.kind, d: path });
+    wires.push(e.done ? { from: e.from, to: e.to, kind: e.kind, d: path, done: true } : { from: e.from, to: e.to, kind: e.kind, d: path });
   }
 
   const width = Math.max(0, ...boxes.map((p) => p.x + p.w));
@@ -607,8 +865,17 @@ export function reorderDiagram(d: Diagram, from: number, to: number): Diagram {
   let k = 0;
   const line = main.map((n) => (n.kind === "stop" ? moved[k++] : n));
   const lineIds = new Set(line.map((n) => n.id));
-  const edges = d.edges.filter((e) => !(lineIds.has(e.from) && lineIds.has(e.to) && (e.kind === "line" || e.kind === "add")));
+  // Branches follow the stop they fan out of and join at its new next box.
+  const next = new Map(line.slice(0, -1).map((n, i) => [n.id, line[i + 1].id]));
+  const joinDone = new Map(d.edges.filter((e) => e.kind === "join").map((e) => [e.from, !!e.done]));
+  const branches = d.nodes
+    .filter((n) => n.row === "branch")
+    .map((n) => (n.branch && next.has(n.branch.from) ? { ...n, branch: { ...n.branch, to: next.get(n.branch.from)! } } : n));
+  const fanned = new Set(branches.map((n) => n.branch?.from));
+  const edges = d.edges.filter((e) => e.kind !== "join" && !(lineIds.has(e.from) && lineIds.has(e.to) && (e.kind === "line" || e.kind === "add")));
   for (let i = 1; i < line.length; i++)
-    edges.push({ from: line[i - 1].id, to: line[i].id, kind: line[i].kind === "add" ? "add" : "line" });
-  return { ...d, nodes: [...d.nodes.filter((n) => n.row !== "main"), ...line], edges };
+    if (!fanned.has(line[i - 1].id)) edges.push({ from: line[i - 1].id, to: line[i].id, kind: line[i].kind === "add" ? "add" : "line" });
+  for (const b of branches)
+    if (b.branch) edges.push({ from: b.id, to: b.branch.to, kind: "join", ...(joinDone.get(b.id) ? { done: true } : {}) });
+  return { ...d, nodes: [...d.nodes.filter((n) => n.row !== "main" && n.row !== "branch"), ...line, ...branches], edges };
 }

@@ -833,3 +833,80 @@
 .fl-box.fl-box-open {
   user-select: text;
 }
+
+/* --- Branches: workers spawned at a stop, joining at the next box ---------- */
+
+/* A branch: smaller than the line's boxes — the worker's title, its chip,
+ * its own line in brief — with the family's accent edge. */
+.fl-box-branch {
+  gap: 3px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  font-size: 12px;
+  border-left: 3px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: var(--panel);
+}
+
+.fl-box-branch .fl-box-sub {
+  font-size: 11px;
+}
+
+.fl-box-dot.tone-working {
+  color: var(--tone-working);
+}
+
+.fl-box-dot.tone-attention {
+  color: var(--tone-attention);
+}
+
+.fl-box-dot.tone-broken {
+  color: var(--tone-broken);
+}
+
+.fl-box-dot.tone-neutral,
+.fl-box-dot.tone-muted {
+  color: var(--tone-muted);
+}
+
+/* Out of the stop to each branch, and back in to the join point: dashed
+ * while that worker is still out, solid once it (or the join) is done. */
+.fl-wire-fan,
+.fl-wire-join {
+  stroke: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.fl-wire-join:not(.fl-wire-done) {
+  stroke-dasharray: 4 3;
+}
+
+.fl-wire-join.fl-wire-done {
+  stroke: color-mix(in srgb, var(--green) 70%, transparent);
+}
+
+/* The join point while it waits: "2 of 5" on its top edge. */
+.fl-join-pill {
+  position: absolute;
+  top: -9px;
+  right: 10px;
+  z-index: 1;
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--tone-working);
+  color: var(--tone-working);
+  background: var(--panel);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Five workers at once glow quietly: a ring, no pulse. */
+.fl-box-branch.fl-st-current {
+  animation: none;
+  box-shadow: 0 0 0 1px var(--tone-working);
+}
+
+.fl-box-branch.fl-st-perched {
+  animation: none;
+  box-shadow: 0 0 0 1px var(--tone-attention);
+}

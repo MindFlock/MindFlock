@@ -12,7 +12,10 @@
  *    reason), skipped struck through, pending outlined;
  *  - a session's live diagram — its parent above, the session box, its
  *    children branching below, the fast-track's rungs or the flight's stops,
- *    and the trailing + ("Tack on a stop");
+ *    and the trailing + ("Tack on a stop"); children spawned at a stop run as
+ *    a column of small branch boxes between it and the next box, fanning
+ *    out of the stop and back in at the join point, which wears a "2 of 5"
+ *    pill while it waits (an indented group on a phone);
  *  - a line in the Sky — the same diagram, with the bird (`bird`) standing
  *    on the box the flight is at, its boxes at the line's size (`size`:
  *    compact = the title alone, wide = the full title, the summary and a
@@ -26,6 +29,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 import {
+  joinLabel,
   layoutDiagram,
   reorderDiagram,
   type BoxSize,
@@ -74,9 +78,11 @@ export function boxDetail(n: DiagramNode): string {
 
 /** A box at a line's size, from the layout's normal one: compact is ~110px
  * and one line (the title; the + a bare circle), wide is 260px with room for
- * a two-line title, the summary on two lines and the detail line. */
+ * a two-line title, the summary on two lines and the detail line. A branch
+ * stays smaller than the line's boxes at every size. */
 export function sizedBox(size: BoxSizeName, n: DiagramNode, base: BoxSize, detail = ""): BoxSize {
   if (n.kind === "add" || size === "normal") return base;
+  if (n.kind === "branch") return size === "compact" ? { w: 110, h: 40 } : { w: 210, h: base.h + 16 };
   if (size === "compact") return { w: 110, h: 62 };
   return { w: 260, h: base.h + 18 + (n.sub ? 15 : 0) + (detail ? 32 : 0) };
 }
@@ -336,10 +342,12 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
   const gaps: Array<{ at: number; x: number; y: number }> = [];
   if (p.onInsert && !drag) {
     const mainBoxes = shown.boxes.filter((b) => b.node.row === "main");
+    // Not across a column of branches: the join point is the next box.
+    const fanned = new Set(shown.boxes.map((b) => b.node.branch?.from));
     for (let j = 1; j < mainBoxes.length; j++) {
       const b = mainBoxes[j];
       const a = mainBoxes[j - 1];
-      if (b.node.kind !== "stop" || b.node.index === undefined || b.node.index < p.diagram.insertFrom || a.node.kind === "add") continue;
+      if (b.node.kind !== "stop" || b.node.index === undefined || b.node.index < p.diagram.insertFrom || a.node.kind === "add" || fanned.has(a.node.id)) continue;
       gaps.push(
         vertical
           ? { at: b.node.index, x: b.x + b.w / 2, y: (a.y + a.h + b.y) / 2 }
@@ -385,9 +393,10 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
             {shown.wires.map((w) => (
               <path
                 key={w.from + ">" + w.to}
-                className={"fl-wire fl-wire-" + w.kind}
+                className={"fl-wire fl-wire-" + w.kind + (w.done ? " fl-wire-done" : "")}
                 d={w.d}
-                markerEnd={w.kind === "add" ? undefined : `url(#${uid}-arrow)`}
+                // Arrowheads only where the line arrives: a fan-out has none.
+                markerEnd={w.kind === "add" || w.kind === "fan" ? undefined : `url(#${uid}-arrow)`}
               />
             ))}
           </g>
@@ -402,6 +411,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
           const open = opened.get(n.id);
           const drop = n.kind === "add" && !!p.dropLabel;
           const more = detail(n);
+          const waiting = n.join && n.join.waiting > 0 ? n.join : null;
           const cls =
             "fl-box fl-box-" + n.kind +
             (open ? " fl-box-open" : "") +
@@ -417,7 +427,10 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
               ? drop
                 ? p.dropLabel!
                 : n.title
-              : n.title + (n.kind === "stop" || n.kind === "rung" ? ", " + (STATE_WORD[n.state] || "") : "") + (n.chip ? ", " + n.chip.label : "");
+              : n.title +
+                (n.kind === "stop" || n.kind === "rung" ? ", " + (STATE_WORD[n.state] || "") : "") +
+                (n.chip ? ", " + n.chip.label : "") +
+                (waiting ? ", " + joinLabel(waiting) : "");
           return (
             <div
               key={n.id}
@@ -442,8 +455,27 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
               onClick={(e) => (open && e.target !== e.currentTarget ? undefined : activate(n))}
               onKeyDown={(e) => onBoxKey(e, n)}
             >
+              {waiting && !open && (
+                <span className="fl-join-pill" title={"The line goes on once its workers are done: " + joinLabel(waiting)} aria-hidden="true">
+                  {waiting.waiting + " of " + waiting.total}
+                </span>
+              )}
               {open ? (
                 open.body
+              ) : n.kind === "branch" && size !== "compact" ? (
+                <>
+                  <div className="fl-box-head">
+                    <span className={"fl-box-dot tone-" + (n.chip?.tone || "neutral")} aria-hidden="true" />
+                    <span className="fl-box-title">{n.title}</span>
+                    {glyph && (
+                      <span className={"fl-box-glyph fl-glyph-" + n.state} aria-hidden="true">
+                        {glyph}
+                      </span>
+                    )}
+                  </div>
+                  {n.chip && <span className={"fl-box-chip tone-" + n.chip.tone}>{n.chip.label}</span>}
+                  {n.sub && <div className="fl-box-sub">{n.sub}</div>}
+                </>
               ) : n.kind === "add" ? (
                 <>
                   <span className="fl-add-plus" aria-hidden="true">

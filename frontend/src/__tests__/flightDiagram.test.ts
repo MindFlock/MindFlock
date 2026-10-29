@@ -219,6 +219,19 @@ describe("the session diagram", () => {
     expect(bare.nodes.filter((n) => n.kind === "stop").map((n) => n.state)).toEqual(["done", "current", "pending", "pending"]);
   });
 
+  it("a live flight's worker spawned at one of its stops is a branch there, not a child below (skyBranches.test.ts)", () => {
+    const f = flight();
+    const flying = inst("me", { flight: flightRow(f) });
+    const spawned = inst("w1", { parent: "me", flight: { branch: { parent: "me", step: "s2" } } as unknown as FlightRow });
+    const d = sessionDiagram([flying, spawned, kid2], "me", { flights: [f], kinds: KINDS });
+    expect(d.nodes.filter((n) => n.kind === "branch").map((n) => [n.id, n.branch!.from, n.branch!.to])).toEqual([["branch:w1", "stop:s2", "stop:s3"]]);
+    expect(d.nodes.filter((n) => n.row === "below").map((n) => n.id)).toEqual(["child:w2"]);
+    // The line itself is the same boxes, in the same order.
+    expect(d.nodes.filter((n) => n.row === "main").map((n) => n.id)).toEqual(["session:me", "stop:s1", "stop:s2", "stop:s3", "stop:s4", "add"]);
+    // Without a flight the same row stays below.
+    expect(sessionDiagram([inst("me"), spawned], "me").nodes.map((n) => n.id)).toEqual(["session:me", "add", "child:w1"]);
+  });
+
   it("family: false keeps one row and counts the workers on the session box", () => {
     const d = sessionDiagram(rows, "me", { family: false });
     expect(d.nodes.every((n) => n.row === "main")).toBe(true);

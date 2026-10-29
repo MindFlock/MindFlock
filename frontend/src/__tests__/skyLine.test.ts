@@ -161,6 +161,21 @@ describe("the line", () => {
     expect(html).not.toContain("pane-embedded");
   });
 
+  it("a worker spawned at a stop is a branch there — drawn once, never also below — and opens the same way", () => {
+    const lead = rowOf("me", {
+      activity: "working",
+      flight: { id: "f_1", plan_name: "Fan", cursor: 0, total: 2, state: "running", step: { id: "s1", kind: "agent", title: "Fan out", state: "running", actor: "robot" }, join: { waiting: 1, total: 1 } },
+    });
+    const html = line({}, {}, [lead, rowOf("w1", { parent: "me", activity: "working", flight: { branch: { parent: "me", step: "s1" } } }), rowOf("w2", { parent: "me" })]);
+    expect(html).toContain('data-node="branch:w1"');
+    expect(html).not.toContain('data-node="child:w1"');
+    expect(html).toContain('data-node="child:w2"');
+    expect(html).toContain(">1 of 1</span>");
+    const src = code("components/flights/SkyLine.tsx");
+    expect(src).toContain('const kid = n.kind === "child" || n.kind === "branch" ? rowOf(n.session) : undefined;');
+    expect(src).toContain('else if ((n.kind === "child" || n.kind === "branch") && n.session) {');
+  });
+
   it("the size control cycles compact → normal → wide → compact", () => {
     expect(nextSize("compact")).toBe("normal");
     expect(nextSize("normal")).toBe("wide");

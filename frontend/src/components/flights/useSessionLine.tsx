@@ -9,7 +9,12 @@
  * line in the Sky (Sky.tsx). Tacking a stop onto a session with no flight yet
  * starts an ad-hoc one that takes over the fast-track's remaining rungs
  * (`POST /api/flights/start {title, steps, absorb_fasttrack}`), so the
- * ladder's boxes turn into the flight's. */
+ * ladder's boxes turn into the flight's.
+ *
+ * The palette is the registry's (`GET /api/flights/kinds`), so Split and Join
+ * show under "The flock does" once the server lists them; a Split in the
+ * inspector offers "+ Join" — one click puts a Join right after it — and
+ * hides its `count` once its prompts name more than one worker. */
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Instance } from "../../api/types";
@@ -33,6 +38,19 @@ export interface SessionLineOpts {
   family?: boolean;
   /** A parent / child box pressed: go to that session. */
   onSession(title: string): void;
+}
+
+/** How many workers a Split's `prompts` name (one per non-empty line). */
+export function promptLines(v: unknown): number {
+  const list = Array.isArray(v) ? v.map(String) : String(v ?? "").split("\n");
+  return list.filter((l) => l.trim()).length;
+}
+
+/** A stop's kind as its inspector draws it: a Split whose prompts name more
+ * than one worker has no `count` to ask (each line is a worker). */
+export function inspectorDef(def: StepKindDef | undefined, step: FlightStep): StepKindDef | undefined {
+  if (!def || step.kind !== "split" || promptLines(step.config?.prompts) <= 1) return def;
+  return { ...def, fields: def.fields.filter((f) => f.name !== "count") };
 }
 
 /** Built-ins first, then the owner's own. */
@@ -91,6 +109,21 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
           setSelectIndex(f.steps.length - 1);
         }
       }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // "+ Join" on a Split: a Join right after it, one click.
+  const joinDef = kindOf.get("join");
+  const splitAt = sel?.step?.kind === "split" && sel.index !== undefined ? sel.index : -1;
+  const offerJoin = !!flight && !!joinDef && splitAt >= 0 && flight.steps[splitAt + 1]?.kind !== "join";
+  const addJoin = async () => {
+    if (!flight || !joinDef) return;
+    const at = splitAt + 1;
+    setBusy(true);
+    try {
+      await tackOn(flight.id, newStep(joinDef, flight.steps.map((s) => s.id)), at < end ? at : undefined);
     } finally {
       setBusy(false);
     }
@@ -173,13 +206,25 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     sel && draft ? (
       <StopInspector
         step={draft}
-        def={kindOf.get(draft.kind)}
+        def={inspectorDef(kindOf.get(draft.kind), draft)}
         readOnly={!editable}
         onChange={(p) => setDraft((d) => (d ? { ...d, ...p } : d))}
         note={
-          !editable ? (
-            <p className="fl-note muted">{sel.state === "done" || sel.state === "skipped" ? "This stop has flown — it can't change now." : "The flight is at this stop — it can't change while it is here."}</p>
-          ) : null
+          <>
+            {!editable && (
+              <p className="fl-note muted">{sel.state === "done" || sel.state === "skipped" ? "This stop has flown — it can't change now." : "The flight is at this stop — it can't change while it is here."}</p>
+            )}
+            {draft.kind === "split" && (
+              <p className="fl-note muted fl-split-hint">Prompts: one worker per line — each line starts a worker. One line (or none) and Count says how many.</p>
+            )}
+            {offerJoin && (
+              <div className="fl-chiprow fl-join-offer">
+                <button type="button" className="fl-pick" disabled={busy} title="Put a Join right after this Split: the line waits until every worker is done" onClick={() => void addJoin()}>
+                  + Join
+                </button>
+              </div>
+            )}
+          </>
         }
         actions={
           editable ? (

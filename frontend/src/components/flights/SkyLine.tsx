@@ -7,8 +7,11 @@
  * worker's) and it opens in place into a card holding the SAME Pane the grid
  * draws for that title (`embedded`: no grip, no hide −) — Agent · Terminal ·
  * Diff · Queue · Map · Flight, the registry's terminals, the per-title tab —
- * resizable from its corner, ▣ folds it back into a box. ◧ cycles how much
- * each box shows (compact → normal → wide).
+ * resizable from its corner, ▣ folds it back into a box. A worker spawned
+ * at one of the flight's stops is a BRANCH between that stop and the next
+ * (docs/flights-branches.md) — it opens the same way, and is drawn only
+ * there, never also below. ◧ cycles how much each box shows (compact →
+ * normal → wide).
  *
  * The host (Sky.tsx) places the line at `layout.x/y`, drags it by the title
  * bar (`onDragStart`), persists `layout` (`onLayout`) and gives it room from
@@ -196,7 +199,8 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   const openBox = (n: DiagramNode) => {
     if (n.kind === "session" && p.layout.open && row)
       return card(row, p.layout.paneW ?? PANE_W, p.layout.paneH ?? PANE_H, (w, h) => p.onLayout({ paneW: w, paneH: h }), () => p.onLayout({ open: false }));
-    const kid = n.kind === "child" ? rowOf(n.session) : undefined;
+    // A worker below the session or a branch between two stops: its pane.
+    const kid = n.kind === "child" || n.kind === "branch" ? rowOf(n.session) : undefined;
     const ks = kid ? kids[kid.title] : undefined;
     if (kid && ks)
       return card(kid, ks.w, ks.h, (w, h) => setKids((k) => ({ ...k, [kid.title]: { w, h } })), () => foldKid(kid.title));
@@ -204,7 +208,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   };
   const onOpen = (n: DiagramNode) => {
     if (n.kind === "session") p.onLayout({ open: !p.layout.open });
-    else if (n.kind === "child" && n.session) {
+    else if ((n.kind === "child" || n.kind === "branch") && n.session) {
       const t = n.session;
       if (kids[t]) foldKid(t);
       else setKids((k) => ({ ...k, [t]: { w: PANE_W, h: PANE_H } }));
