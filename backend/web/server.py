@@ -173,6 +173,7 @@ from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirnam
 # Core modules the monolith was split into (see backend.web/core/).
 from backend.web.core import aliases as _aliases
 from backend.web.core import guests as _guests
+from backend.web.core import guest_terminal as _guest_terminal
 from backend.web.core import guest_tunnel as _guest_tunnel
 from backend.web.core import hidden_sessions as _hidden_sessions
 from backend.web.core import person_sessions as _person_sessions
@@ -11599,16 +11600,28 @@ async def shell_ws(ws: WebSocket, title: str) -> None:
         await ws.close(code=4500)
         return
 
+    # A guest link's browser never holds a writable tmux client (the prefix
+    # key would hand them tmux itself): read-only attach for output, their
+    # keystrokes by send-keys into the pane (core.guest_terminal).
+    guest = _guests.scope_guest(ws) is not None
     try:
-        proc = ptyprocess.PtyProcess.spawn(
-            ["tmux", "attach-session", "-t", name],
-            dimensions=(24, 80),
-            env={**os.environ, "TERM": "xterm-256color"},
-        )
+        if guest:
+            proc = _guest_terminal.spawn_readonly_attach(name, 24, 80)
+        else:
+            proc = ptyprocess.PtyProcess.spawn(
+                ["tmux", "attach-session", "-t", name],
+                dimensions=(24, 80),
+                env={**os.environ, "TERM": "xterm-256color"},
+            )
     except Exception as err:  # noqa: BLE001
         await ws.send_text(json.dumps({"type": "error", "message": str(err)}))
         await ws.close(code=4500)
         return
+    typist = (
+        _guest_terminal.Typist(name, _guest_terminal.send_keys).start()
+        if guest
+        else None
+    )
     # Typing in the session's shell is presence at the window too — a person
     # running git commands there does not need a push about this session. Same
     # post-attach grace as the agent terminal: tmux's client probes are
@@ -11629,24 +11642,35 @@ async def shell_ws(ws: WebSocket, title: str) -> None:
     conn = _ownership.attach(title, person, device, notify=_tell)
     out_q.put_nowait(json.dumps(_ownership.mode(title, person)))
 
-    def _gate(_data):
+    def _presence() -> None:
+        if time.time() - attached_at > _ATTACH_PROBE_GRACE_S:
+            _note_human_input(title, person, device)
+
+    def _gate(data):
         ok, notice = _ownership.may_type(conn)
-        return None if ok else notice
+        if not ok:
+            return notice
+        if typist is None:
+            return None
+        # A guest's: delivered by send-keys, never through the attach client
+        # (so pump_pty drops it — and does not stamp presence: done here).
+        _presence()
+        typist.type(data if isinstance(data, bytes) else data.encode("utf-8"))
+        return ""
 
     try:
         await _serve_pty(
             ws,
             proc,
             allow_input=True,
-            on_input=lambda: (
-                time.time() - attached_at > _ATTACH_PROBE_GRACE_S
-                and _note_human_input(title, person, device)
-            ),
+            on_input=_presence,
             gate=_gate,
             out_q=out_q,
         )
     finally:
         _ownership.detach(conn)
+        if typist is not None:
+            typist.close()
 
 
 @app.get("/api/instances/{title}/prompt")
@@ -12441,16 +12465,37 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
     # tmux mouse stays ON (wheel scroll / copy-mode). Browser selection is via
     # Shift+drag (xterm.js shouldForceSelection), copied by copy-on-select.
     # Each browser connection gets its own attach client (tmux multiplexes).
+    # A guest link's is READ-ONLY and their keystrokes go into the pane by
+    # send-keys (core.guest_terminal): on a writable client the tmux prefix
+    # would hand them tmux itself — a new window with a plain shell, another
+    # session, run-shell. The owner's own browsers keep the writable attach.
+    guest = _guests.scope_guest(ws) is not None
     try:
-        proc = ptyprocess.PtyProcess.spawn(
-            ["tmux", "attach-session", "-t", name],
-            dimensions=(24, 80),
-            env={**os.environ, "TERM": "xterm-256color"},
-        )
+        if guest:
+            proc = _guest_terminal.spawn_readonly_attach(name, 24, 80)
+        else:
+            proc = ptyprocess.PtyProcess.spawn(
+                ["tmux", "attach-session", "-t", name],
+                dimensions=(24, 80),
+                env={**os.environ, "TERM": "xterm-256color"},
+            )
     except Exception as err:  # noqa: BLE001
         await ws.send_text(json.dumps({"type": "error", "message": str(err)}))
         await ws.close(code=4500)
         return
+    typist = (
+        _guest_terminal.Typist(name, _guest_terminal.send_keys).start()
+        if guest
+        else None
+    )
+
+    def into_pane(data: bytes) -> None:
+        """Input for the pane: through the attach client (the owner, and
+        every terminal's answers to tmux's probes), else send-keys."""
+        if typist is None or is_terminal_reply(data):
+            os.write(fd, data)
+        else:
+            typist.type(data)
 
     loop = asyncio.get_event_loop()
     out_q: "asyncio.Queue[Optional[bytes | str]]" = asyncio.Queue()
@@ -12538,7 +12583,7 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
                 # half). Resize control frames (text/JSON) still pass below.
                 if _budget_locked(title) or not driving(b):
                     continue
-                os.write(fd, b)
+                into_pane(b)
                 continue
             t = msg.get("text")
             if t is not None:
@@ -12549,7 +12594,7 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
                     note_presence(t)
                     if _budget_locked(title) or not driving(t):
                         continue
-                    os.write(fd, t.encode("utf-8"))
+                    into_pane(t.encode("utf-8"))
                     continue
                 if isinstance(j, dict) and j.get("type") == "resize":
                     # NOT presence: resizes fire on layout changes with nobody
@@ -12564,11 +12609,13 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
                     # two input branches — presence is about the person.
                     note_presence(t)
                     if not _budget_locked(title) and driving(t):
-                        os.write(fd, t.encode("utf-8"))
+                        into_pane(t.encode("utf-8"))
     except WebSocketDisconnect:
         pass
     finally:
         _ownership.detach(conn)
+        if typist is not None:
+            typist.close()
         try:
             loop.remove_reader(fd)
         except Exception:  # noqa: BLE001

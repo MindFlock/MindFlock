@@ -26,6 +26,9 @@ from backend.web.core import person_sessions
 from backend.web.core.terminal import is_terminal_reply
 from tests.unit.test_mailbox_routes import _mk_inst
 
+#: The module's own naming, before the fixtures stub it with NAMES.
+_NAME_OF = own.name_of
+
 A = "00000000-0000-4000-8000-00000000000a"
 B = "ffffffff-ffff-4fff-8fff-fffffffffffb"
 NAMES = {A: "Alice", B: "Bob"}
@@ -122,6 +125,36 @@ def test_take_tells_the_previous_driver_and_release_frees_it(clk, seen):
     assert own.release("s", A) is False  # not hers to release
     assert own.release("s", B) is True
     assert own.driver("s") == ""
+
+
+def test_a_peer_attaches_under_the_name_it_was_given(clk, seen, monkeypatch):
+    """A peer typing through a shared session (peer.sessions_bridge) is the
+    person ``peer:<link>``, named after the peer while its terminal is open —
+    as driver, as viewer, and in the events that tell the previous driver."""
+    monkeypatch.setattr(own, "_own_id", lambda: A)
+    monkeypatch.setattr(own, "name_of", _NAME_OF)
+    peer = "peer:" + "ab" * 16
+    c = own.attach("s", peer, "Mauricio", name="Mauricio")
+    assert own.name_of(peer) == "Mauricio"
+    assert own.mode("s", peer) == {
+        "type": "driver",
+        "driving": True,
+        "driver": peer,
+        "driver_name": "Mauricio",
+    }
+    assert own.viewers("s")[peer]["name"] == "Mauricio"
+    mine = own.attach("s", B, "desk")
+    own.take("s", B, "desk")
+    ev = _names(seen, "session.driver_changed")[-1]
+    assert ev["data"]["previous_name"] == "Mauricio"
+    assert own.may_type(c)[0] is False
+    own.detach(c)
+    assert own.name_of(peer) == ""  # gone with its last terminal
+    assert set(own.viewers("s")) == {B}
+    own.detach(mine)
+    # a name is never taken from a person attaching without one
+    own.attach("s", B, "desk", name="")
+    assert own.viewers("s")[B]["name"] == ""
 
 
 def test_the_lock_lapses_after_ten_idle_minutes_and_input_refreshes_it(clk, seen):

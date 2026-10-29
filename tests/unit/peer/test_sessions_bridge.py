@@ -15,9 +15,24 @@ import pytest
 
 from backend.peer import sessions_bridge as sb
 from backend.peer import wire
+from backend.web.core import guest_terminal
 
 LID = "ab" * 16
 OTHER = "cd" * 16
+PEER = "peer:" + LID
+OWNER = "00000000-0000-4000-8000-00000000000a"
+
+
+@pytest.fixture(autouse=True)
+def _keyboard(monkeypatch, tmp_path):
+    """Every shared term takes a seat at the session's one keyboard
+    (core.ownership): a fresh book per test, no owner file of the machine's."""
+    from backend.web.core import ownership
+
+    ownership._reset_for_tests()
+    monkeypatch.setattr(ownership, "_path", lambda: str(tmp_path / "owners.json"))
+    yield ownership
+    ownership._reset_for_tests()
 
 
 class FakeProc:
@@ -386,3 +401,107 @@ def test_focus_sweep_keeps_an_open_terminal_and_drops_the_quiet():
     assert f.of(LID)["title"] == "api-fix"
     assert f.of(OTHER) is None
     assert bus.events[-1][1]["data"]["left"] is True
+
+
+def test_the_helpers_are_the_shared_guest_terminal_ones():
+    """One discipline for every visitor's keystrokes (core.guest_terminal)."""
+    term = sb.SharerTerm(link_id=LID, title="t", tmux_name="mf_t", push=None)
+    assert term._spawn is guest_terminal.spawn_readonly_attach
+    assert term._typist._send is guest_terminal.send_keys
+
+
+# --------------------------------------------------------------------------- #
+# one keyboard (core.ownership)
+# --------------------------------------------------------------------------- #
+def _type(bridge, tid, data: bytes):
+    bridge.on_push(
+        LID, "term_in", {"term_id": tid, "data": base64.b64encode(data).decode()}
+    )
+
+
+def test_a_peer_on_a_free_session_drives_under_their_own_name(_keyboard):
+    own = _keyboard
+
+    async def main():
+        w, procs, keys = Wire(), [], []
+        bridge, open_ = sharer(w, procs, keys, peer_name="Mauricio")
+        tid = await open_()
+        assert own.driver("api-fix") == PEER
+        row = own.row_fields("api-fix")
+        assert row["driver_name"] == "Mauricio"
+        assert row["viewers"][PEER]["name"] == "Mauricio"
+        _type(bridge, tid, b"ls\r")
+        await until(lambda: keys == [("mf_api-fix", b"ls\r")])
+        assert own.viewers("api-fix")[PEER]["typing"] is True
+        await bridge.close_mine(LID, tid)
+        # closing the term gives the keyboard back and forgets the name
+        assert own.driver("api-fix") == "" and own.viewers("api-fix") == {}
+        assert own.name_of(PEER) == ""
+
+    run(main())
+
+
+def test_a_peer_watches_while_the_owner_drives_and_is_told_why(_keyboard):
+    own = _keyboard
+
+    async def main():
+        w, procs, keys = Wire(), [], []
+        mine = own.attach("api-fix", OWNER, "laptop")
+        bridge, open_ = sharer(w, procs, keys, peer_name="Mauricio")
+        tid = await open_()
+        assert own.driver("api-fix") == OWNER
+        assert set(own.viewers("api-fix")) == {OWNER, PEER}
+        _type(bridge, tid, b"rm -rf ~\r")
+        await until(lambda: b"you can type once they let go" in w.out())
+        notice = w.out()
+        # drawn on the bottom row with the cursor saved and restored
+        assert notice.startswith(b"\x1b7\x1b[999;1H\x1b[2K") and notice.endswith(
+            b"\x1b8"
+        )
+        # the terminal's answer to tmux's probe still reaches the client
+        _type(bridge, tid, b"\x1b[?1;2c")
+        await until(lambda: procs[0].written() == b"\x1b[?1;2c")
+        _type(bridge, tid, b"again")
+        await asyncio.sleep(0.1)
+        assert keys == []
+        assert w.out() == notice  # the notice does not repeat every keystroke
+        # the owner closes their terminal: the peer may type (and drives)
+        own.detach(mine)
+        _type(bridge, tid, b"ok")
+        await until(lambda: keys == [("mf_api-fix", b"ok")])
+        assert own.driver("api-fix") == PEER
+        await bridge.close_all()
+
+    run(main())
+
+
+def test_a_peer_is_told_when_the_owner_takes_the_keyboard(_keyboard):
+    own = _keyboard
+
+    async def main():
+        w, procs, keys = Wire(), [], []
+        bridge, open_ = sharer(w, procs, keys, peer_name="Mauricio")
+        tid = await open_()
+        assert own.driver("api-fix") == PEER
+        own.take("api-fix", OWNER, "laptop")
+        await until(lambda: b"took the keyboard" in w.out())
+        _type(bridge, tid, b"x")
+        await asyncio.sleep(0.1)
+        assert keys == []
+        await bridge.close_all()
+        assert own.driver("api-fix") == OWNER  # the peer leaving takes nothing
+
+    run(main())
+
+
+def test_the_bridge_names_the_peer_as_the_link_does(monkeypatch, _keyboard):
+    monkeypatch.setattr(sb, "_peer_name", lambda lid: "Pat" if lid == LID else "")
+
+    async def main():
+        w, procs, keys = Wire(), [], []
+        bridge, open_ = sharer(w, procs, keys)
+        await open_()
+        assert _keyboard.row_fields("api-fix")["driver_name"] == "Pat"
+        await bridge.close_all()
+
+    run(main())

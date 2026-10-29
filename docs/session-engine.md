@@ -216,6 +216,40 @@ every stored tmux session as a side effect of changing one field.
 - CLI attach (`Attach()`): Ctrl-Q detaches; a resize monitor uses `SIGWINCH` on
   Unix and 250 ms polling on Windows (WSL follows the Unix path).
 
+### Other people's keystrokes
+
+The owner's own browsers attach a writable `tmux attach-session` client per
+terminal socket — their own machine. Anyone else who types into a pane never
+holds one: a guest link's browser (the agent terminal and shell sockets,
+[people.md](people.md) "Guest links") and a peer typing into a session shared
+over a peer link (`peer/sessions_bridge.py`). On a writable client the tmux
+prefix key hands the typist tmux itself — `prefix c` opens a new window running
+a plain shell outside the session's agent, `prefix s` switches to any other
+session on the server, `prefix :` runs `run-shell`. So their terminal is split
+(`web/core/guest_terminal.py`, shared by both):
+
+- **Output** comes from a READ-ONLY client (`attach-session -r`), which tmux
+  also marks `ignore-size`: it sizes the window while it is the only client and
+  leaves the owner's size alone while the owner's client is attached. The only
+  bytes written to it are the terminal's own answers to tmux's probes
+  (`terminal.is_terminal_reply`: DA1/DSR/CPR…), so the pane never waits on a
+  probe.
+- **Input** goes into the exact pane (`=<name>:`) with `tmux send-keys -l`,
+  straight to the program and never through tmux's key table; NUL goes as the
+  key `C-Space`, and a long paste is cut into calls under tmux's ~16 KiB
+  command cap. Mouse reports (the web terminal's wheel) are routed the way the
+  root wheel binding would: to the program when it has the mouse (SGR only),
+  else the wheel scrolls copy mode; clicks are dropped.
+
+Peers type under the session's **one keyboard** too
+([people.md](people.md) "Owner, driver, viewers"): the bridge's term holds a
+seat as the person `peer:<link id>`, named after the peer, so the owner's rail
+shows the peer as driver or viewer by name. The peer drives only when nobody
+else does; a refused keystroke is dropped with a notice drawn on the peer's
+bottom row (the opener renders only the byte stream, so the notice is output:
+cursor saved, last row cleared, reverse video, cursor restored). The seat goes
+when the term closes.
+
 ### Layered activity classification
 
 `working` / `clarify` / `idle` / `limit` / `offline` is decided by
