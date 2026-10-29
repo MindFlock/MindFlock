@@ -1,8 +1,9 @@
-/** Flights on screen (server-rendered, mocked API): a flight's strip on the
- * Board — robot and *you* blocks told apart, the current one marked, Done held
- * until every item is ticked — the pane's one-line strip, the dialog's five
- * tabs, the Board's groups, and the Plans editor's row of blocks with + between
- * them and Describe a step at its end. */
+/** Flights on screen (server-rendered, mocked API): the flyway canvas (boxes
+ * in order, connectors = stops − 1, live states, a perch's Done / Skip inside
+ * its box), a flight's card on the Board, the pane's one-line strip and its
+ * Flight tab (the session diagram), the dialog's tabs, the Board's groups
+ * (Waiting to fly, kind badges, flyway chips — never a <select>), and the
+ * Flyways editor. Bird words throughout, never a plane. */
 
 /// <reference types="vite/client" />
 import { createElement, type ReactElement } from "react";
@@ -17,7 +18,10 @@ vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
 
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 const { useUi } = await import("../state/store");
-const { BlockChips, FlightCard, PaneFlightStrip } = await import("../components/flights/FlightStrip");
+const { FlightCard, PaneFlightStrip } = await import("../components/flights/FlightStrip");
+const { FlywayCanvas } = await import("../components/flights/FlywayCanvas");
+const { SessionFlight } = await import("../components/flights/SessionFlight");
+const { flightDiagram, flywayDiagram } = await import("../lib/flightDiagram");
 const { FlightsDialog } = await import("../components/flights/FlightsDialog");
 const { Plans } = await import("../components/flights/PlanEditor");
 const { PlanSelect } = await import("../components/flights/PlanSelect");
@@ -53,7 +57,7 @@ const STEPS = [
 const KINDS: StepKindDef[] = [
   { kind: "agent", label: "Agent", actor: "robot", summary: "The agent works", fields: [{ name: "prompt", type: "textarea", label: "Prompt" }], default_title: "Agent works" },
   { kind: "ship", label: "Ship", actor: "robot", summary: "Commit, push, PR or merge", fields: [{ name: "lane", type: "select", label: "Lane", options: ["commit", "push", "pr", "merge"] }], default_title: "Ship" },
-  { kind: "you", label: "You", actor: "you", summary: "Waits for you to press Done", fields: [{ name: "text", type: "textarea", label: "What to do" }], default_title: "You" },
+  { kind: "you", label: "Perch", actor: "you", summary: "Waits for you to press Done", fields: [{ name: "text", type: "textarea", label: "What to do" }], default_title: "Check it" },
 ];
 
 function flight(over: Partial<Flight> = {}): Flight {
@@ -105,70 +109,118 @@ afterEach(() => {
   Object.assign(useUi.getInitialState(), useUi.getState());
 });
 
-describe("a flight's strip on the Board", () => {
-  const html = renderToStaticMarkup(createElement(FlightCard, { flight: flight(), kinds: KINDS }));
+const boxes = (html: string) => [...html.matchAll(/class="(fl-box [^"]*)"[^>]*data-node="([^"]+)"/g)].map((m) => [m[2], m[1]]);
+const lines = (html: string) => (html.match(/class="fl-wire fl-wire-line"/g) || []).length;
 
-  it("leads with the subject and the plan, and is the session's door", () => {
+describe("the flyway canvas", () => {
+  it("draws the stops in order, joined by connectors — stops − 1 of them — and a + at the end", () => {
+    const html = renderToStaticMarkup(createElement(FlywayCanvas, { diagram: flywayDiagram(STEPS, KINDS), label: "Stops", onMove: () => {}, onInsert: () => {} }));
+    expect(boxes(html).map(([id]) => id)).toEqual(["stop:s1", "stop:s2", "stop:s3", "stop:s4", "add"]);
+    expect(lines(html)).toBe(STEPS.length - 1);
+    expect(html).toContain('class="fl-wire fl-wire-add"');
+    expect(html).toMatch(/<marker id="[^"]+-arrow"/);
+    // + between boxes (on hover), one per gap.
+    expect(html.match(/class="fl-gap-add"/g)?.length).toBe(STEPS.length - 1);
+    // Draggable stops; the perch drawn as one.
+    expect(boxes(html).filter(([, c]) => c.includes("fl-draggable"))).toHaveLength(4);
+    expect(boxes(html).find(([id]) => id === "stop:s3")![1]).toContain("fl-perch");
+    expect(html).toContain(">Perch: Approve the merge<");
+    expect(html).toContain('aria-label="Stops — drag a stop, or ← → on a selected one, to reorder it"');
+  });
+
+  it("live: done dimmed ✓, the perch glowing gold, pending outlined", () => {
+    const html = renderToStaticMarkup(createElement(FlywayCanvas, { diagram: flightDiagram(flight(), KINDS), label: "Live" }));
+    expect(boxes(html).map(([, c]) => c.split(" ").find((x) => x.startsWith("fl-st-")))).toEqual([
+      "fl-st-done",
+      "fl-st-done",
+      "fl-st-perched",
+      "fl-st-pending",
+      "fl-st-pending",
+    ]);
+    expect(html).toMatch(/fl-box-glyph fl-glyph-done" aria-hidden="true">✓/);
+    expect(html).toContain('class="fl-box-pulse"');
+    // No drag without onMove.
+    expect(html).not.toContain("fl-draggable");
+  });
+
+  it("halted: the box is red and says why", () => {
+    const html = renderToStaticMarkup(
+      createElement(FlywayCanvas, { diagram: flightDiagram(flight({ state: "halted", cursor: 1, reason: "Checks failed" }), KINDS), label: "Live" })
+    );
+    expect(boxes(html)[1][1]).toContain("fl-st-halted");
+    expect(html).toContain('class="fl-box-reason">Checks failed<');
+  });
+
+  it("a phone draws it top to bottom", () => {
+    const html = renderToStaticMarkup(createElement(FlywayCanvas, { diagram: flywayDiagram(STEPS, KINDS), label: "Stops", vertical: true }));
+    expect(html).toContain("fl-canvas fl-canvas-compact fl-canvas-vertical");
+  });
+});
+
+describe("a flight's card on the Board", () => {
+  const card = (f: Flight, expand = false) => withClient(createElement(FlightCard, { flight: f, kinds: KINDS, expand }), (c) => c.setQueryData(["flights"], [f]));
+  const html = card(flight(), true);
+
+  it("leads with the subject and the bird's flyway, never a plane, and is the session's door", () => {
     expect(html).toContain('class="fl-strip-title">Fix the login<');
-    expect(html).toContain("✈ Ticket to merge");
+    expect(html).toMatch(/class="fl-strip-plan"><svg class="fl-bird"[^]*?<\/svg>Ticket to merge</);
+    expect(html).not.toContain("✈");
     expect(html).toContain('data-tour="flights-strip"');
     expect(html).toContain('title="Open sc-12-fix-login"');
   });
 
-  it("draws the blocks as chips: robot vs you, done ✓, current ●, pending ○", () => {
-    const chips = [...html.matchAll(/<li class="(fl-chip[^"]*)"/g)].map((m) => m[1]);
-    expect(chips).toEqual([
-      "fl-chip fl-chip-done fl-chip-robot",
-      "fl-chip fl-chip-done fl-chip-robot",
-      "fl-chip fl-chip-waiting_you fl-chip-you fl-chip-current",
-      "fl-chip fl-chip-pending fl-chip-robot",
-    ]);
-    expect(html).toMatch(/fl-chip-glyph" aria-hidden="true">✓/);
-    expect(html).toMatch(/fl-chip-glyph" aria-hidden="true">●/);
-    expect(html).toMatch(/fl-chip-glyph" aria-hidden="true">○/);
+  it("is a compact live canvas: one box per stop, the perch where the flight is", () => {
+    expect(html).toContain("fl-canvas fl-canvas-compact");
+    expect(boxes(html).filter(([id]) => id.startsWith("stop:"))).toHaveLength(4);
+    expect(lines(html)).toBe(3);
   });
 
-  it("says the current step and how long, and offers Done (held until every item is ticked) and Skip", () => {
-    expect(html).toContain("You: Approve the merge");
+  it("perched on you (Needs you): the perch opens wide — its checklist, Done held until every item is ticked, Skip", () => {
+    expect(html).toContain("Perch: Approve the merge");
     expect(html).toContain('class="fl-now-elapsed">5m<');
     expect(html).toContain("Look at the PR first");
     expect(html).toContain("Read the diff");
     expect(html).toMatch(/<button[^>]*class="btn-primary fl-btn fl-done"[^>]*disabled=""[^>]*>Done<\/button>/);
     expect(html).toMatch(/>Skip<\/button>/);
+    // Inside the perch's own box.
+    const perch = html.slice(html.indexOf('data-node="stop:s3"'));
+    expect(perch.indexOf(">Done</button>")).toBeLessThan(perch.indexOf('data-node="stop:s4"'));
+  });
+
+  it("every live box has a ⋯: Jump here, the flight's Pause, Cancel", () => {
+    const pending = html.slice(html.indexOf('data-node="stop:s4"'));
+    expect(pending).toContain('aria-label="Actions for Merge"');
+    expect(pending).toContain(">Jump here</button>");
+    expect(html).toContain(">Cancel flight</button>");
   });
 
   it("a halted flight offers Retry, not Done", () => {
-    const h = renderToStaticMarkup(createElement(FlightCard, { flight: flight({ state: "halted", reason: "Checks failed" }), kinds: KINDS }));
+    const h = card(flight({ state: "halted", cursor: 1, reason: "Checks failed" }), true);
     expect(h).toContain(">Retry</button>");
     expect(h).not.toContain(">Done</button>");
     expect(h).toContain("Checks failed");
   });
 
   it("a paused flight says so, offers Resume in its ⋯, and nothing pulses", () => {
-    const p = renderToStaticMarkup(createElement(FlightCard, { flight: flight({ state: "paused", cursor: 1 }), kinds: KINDS }));
+    const p = card(flight({ state: "paused", cursor: 1, step_states: {} }));
     expect(p).toContain('class="fl-now-paused">Paused<');
     expect(p).toContain(">Resume</button>");
     expect(p).not.toContain(">Pause</button>");
     expect(p).not.toContain(">Done</button>");
-    expect(css("components/flights/FlightsDialog.css")).toMatch(/\.fl-state-paused \.fl-chip-current \.fl-chip-glyph \{\s*animation: none;/);
+    expect(p).not.toContain("fl-box-pulse");
   });
 
-  it("never says You: twice", () => {
-    const steps = STEPS.map((s) => (s.id === "s3" ? { ...s, title: "You: approve the merge" } : s));
-    const h = renderToStaticMarkup(createElement(FlightCard, { flight: flight({ steps }), kinds: KINDS }));
-    expect(h).toContain(">You: approve the merge<");
-    expect(h).not.toContain("You: You:");
+  it("never says Perch: twice", () => {
+    const steps = STEPS.map((s) => (s.id === "s3" ? { ...s, title: "Perch: approve the merge" } : s));
+    const h = card(flight({ steps }));
+    expect(h).toContain(">Perch: approve the merge<");
+    expect(h).not.toContain("Perch: Perch:");
   });
 
-  it("a robot step running has no Done / Skip", () => {
-    const r = renderToStaticMarkup(createElement(FlightCard, { flight: flight({ state: "running", cursor: 1 }), kinds: KINDS }));
+  it("a robot stop running has no Done / Skip", () => {
+    const r = card(flight({ state: "running", cursor: 1, step_states: {} }), true);
     expect(r).not.toContain(">Done</button>");
     expect(r).not.toContain(">Skip</button>");
-  });
-
-  it("in jump mode every chip is a button", () => {
-    const j = renderToStaticMarkup(createElement(BlockChips, { flight: flight(), kinds: KINDS, onJump: () => {} }));
-    expect(j.match(/aria-label="Jump to /g)?.length).toBe(4);
   });
 });
 
@@ -182,25 +234,76 @@ describe("the pane strip", () => {
     step: { id: "s3", kind: "you", title: "Approve the merge", state: "waiting_you" as const, actor: "you" as const },
   };
 
-  it("is ✈ plan · dots · step (elapsed), with Done / Skip on a you step", () => {
+  it("is bird · flyway · dots · stop (elapsed) — a button to the Flight tab — with Done / Skip on a perch", () => {
     const html = withClient(createElement(PaneFlightStrip, { inst: { title: "sc-12-fix-login", flight: row } }), (c) => {
       c.setQueryData(["flights"], [flight()]);
       c.setQueryData(["flight-kinds"], KINDS);
     });
-    expect(html).toContain("✈ Ticket to merge · ●●●○ · Approve the merge (5m)");
+    expect(html).toContain('class="fl-strip-text">Ticket to merge · ●●●○ · Approve the merge (5m)<');
+    expect(html).toMatch(/<button type="button" class="fl-strip-line" title="Open the Flight tab — [^"]*"><svg class="fl-bird"/);
     expect(html).toContain('class="fl-strip fl-state-waiting_you fl-needs"');
     expect(html).toContain(">Done</button>");
     expect(html).toContain(">Skip</button>");
+    expect(html).not.toContain("✈");
   });
 
   it("before the full flight has loaded, reads the session row alone", () => {
     const html = withClient(createElement(PaneFlightStrip, { inst: { title: "x", flight: { ...row, state: "running" } } }));
-    expect(html).toContain("✈ Ticket to merge · ●●●○ · Approve the merge");
+    expect(html).toContain("Ticket to merge · ●●●○ · Approve the merge");
   });
 
   it("is gone once the flight has landed", () => {
     expect(withClient(createElement(PaneFlightStrip, { inst: { title: "x", flight: { ...row, state: "done" } } }))).toBe("");
     expect(withClient(createElement(PaneFlightStrip, { inst: { title: "x", flight: null } }))).toBe("");
+  });
+});
+
+describe("the pane's Flight tab: the session diagram", () => {
+  const rowOf = (title: string, over: Record<string, unknown> = {}) => ({
+    title,
+    status: "running",
+    activity: "idle",
+    stage: "agent",
+    task_headline: "Do " + title,
+    parent: "",
+    flight: null,
+    autopilot: null,
+    ...over,
+  });
+  const render = (rows: unknown[], title: string) =>
+    withClient(createElement(SessionFlight, { inst: { title } }), (c) => {
+      c.setQueryData(["instances"], rows);
+      c.setQueryData(["flights"], [flight({ session: "me" })]);
+      c.setQueryData(["flight-kinds"], KINDS);
+      c.setQueryData(["flight-plans"], [PLAN]);
+    });
+
+  it("draws the parent, the session, its workers, the flight's stops and the trailing +", () => {
+    const fRow = { id: "f_1", plan_name: "Ticket to merge", cursor: 2, total: 4, state: "waiting_you", step: { id: "s3", kind: "you", title: "Approve the merge", state: "waiting_you", actor: "you" } };
+    const html = render([rowOf("lead"), rowOf("me", { parent: "lead", flight: fRow }), rowOf("w1", { parent: "me" })], "me");
+    expect(boxes(html).map(([id]) => id)).toEqual(["parent:lead", "session:me", "stop:s1", "stop:s2", "stop:s3", "stop:s4", "add", "child:w1"]);
+    expect(html).toContain('class="fl-wire fl-wire-up"');
+    expect(html).toContain('class="fl-wire fl-wire-branch"');
+    expect(html).toContain(">Tack on a stop<");
+    expect(html).toContain('data-tour="flights-session"');
+    // The perch where the flight is, opened wide.
+    expect(html).toContain(">Done</button>");
+    // Nothing to fly when something already is.
+    expect(html).not.toContain("Fly this flyway");
+  });
+
+  it("an armed fast-track's rungs are boxes on the line", () => {
+    const html = render([rowOf("me", { stage: "committed", autopilot: { depth: "pr", state: "running", step: "", reason: "", source: "user", item: "" } })], "me");
+    expect(boxes(html).map(([id]) => id)).toEqual(["session:me", "rung:commit", "rung:push", "rung:pr", "add"]);
+    expect(html).toContain(">Fast-track<");
+  });
+
+  it("with nothing on the line: the session, the +, and the flyways as cards with Describe a flyway", () => {
+    const html = render([rowOf("me")], "me");
+    expect(boxes(html).map(([id]) => id)).toEqual(["session:me", "add"]);
+    expect(html).toContain(">Fly this flyway</button>");
+    expect(html).toContain('class="fl-mini-box fl-perch"');
+    expect(html).toContain(">Describe a flyway</button>");
   });
 });
 
@@ -210,7 +313,7 @@ describe("the dialog", () => {
     // A server render reads the store's initial state (getServerSnapshot).
     Object.assign(useUi.getInitialState(), useUi.getState());
     return withClient(createElement(FlightsDialog), (c) => {
-      c.setQueryData(["flights"], [flight(), flight({ id: "f_2", state: "running", cursor: 1, subject: { ...flight().subject, title: "Second" } })]);
+      c.setQueryData(["flights"], [flight(), flight({ id: "f_2", state: "running", cursor: 1, step_states: {}, subject: { ...flight().subject, title: "Second" } })]);
       c.setQueryData(["flight-plans"], [PLAN]);
       c.setQueryData(["flight-kinds"], KINDS);
       c.setQueryData(["test-plans"], { plans: [] });
@@ -218,53 +321,56 @@ describe("the dialog", () => {
     });
   };
 
-  it("has the five tabs, in the contract's order", () => {
+  it("has the five tabs, in the contract's order — the second one is Flyways", () => {
     const html = render(null);
     const tabs = [...html.matchAll(/data-flights-tab="([a-z]+)"/g)].map((m) => m[1]);
     expect(tabs).toEqual(["board", "plans", "sources", "schedule", "checklists"]);
+    expect(html).toContain('id="flights-tab-plans"');
+    expect(html).toMatch(/data-flights-tab="plans"[^>]*>Flyways</);
     expect(html).toContain('id="flights-dialog"');
     expect(html).toContain(">Flights</h2>");
   });
 
-  it("the Board: Needs you, In flight, Arrivals — loudest first", () => {
+  it("the Board: Needs you, In flight, Waiting to fly — loudest first; no Arrivals, no plane", () => {
     const html = render("board");
     const n = html.indexOf("Needs you");
     const f = html.indexOf("In flight");
-    const a = html.indexOf("Arrivals");
+    const w = html.indexOf("Waiting to fly");
     expect(n).toBeGreaterThan(0);
-    expect(n < f && f < a).toBe(true);
+    expect(n < f && f < w).toBe(true);
+    expect(html).not.toContain("Arrivals");
+    expect(html).not.toContain("✈");
     expect(html).toContain('data-tour="flights-board"');
-    // The parked flight is under Needs you, the running one under In flight.
+    // The perched flight is under Needs you, the running one under In flight.
     expect(html.indexOf("Fix the login")).toBeLessThan(f);
     expect(html.indexOf("Second")).toBeGreaterThan(f);
   });
 
-  it("the Plans editor: the row of blocks, + between them, Describe a step at the end", () => {
+  it("the Flyways editor: the canvas, + between stops, Describe a stop, the inspector — and not one native <select>", () => {
     const html = render("plans");
     expect(html).toContain('data-tour="flights-plans"');
     expect(html).toContain('data-tour="flights-describe"');
-    const blocks = [...html.matchAll(/class="(fl-block [^"]*)"/g)].map((m) => m[1]);
-    expect(blocks).toEqual([
-      "fl-block fl-block-robot selected",
-      "fl-block fl-block-robot",
-      "fl-block fl-block-you",
-      "fl-block fl-block-robot",
-    ]);
-    expect(html.match(/class="fl-add"/g)?.length).toBe(5);
-    expect(html).toMatch(/draggable="true"/);
-    expect(html).toContain(">Describe a step</button>");
+    expect(boxes(html).map(([id, c]) => id + (c.includes("selected") ? "*" : ""))).toEqual(["stop:s1*", "stop:s2", "stop:s3", "stop:s4", "add"]);
+    expect(lines(html)).toBe(3);
+    expect(html.match(/class="fl-gap-add"/g)?.length).toBe(3);
+    expect(html).toContain(">Describe</button>");
     expect(html).toContain(">Save</button>");
-    expect(html).toContain(">Take off</button>");
+    expect(html).toContain(">Fly this flyway</button>");
     expect(html).toContain(">Reset to default</button>");
     expect(html).toContain("Built-in");
-    // The selected block's form, from its kind's fields.
+    // The selected stop's inspector, from its kind's fields, in the app's controls.
+    expect(html).toContain('class="fl-inspector"');
     expect(html).toContain("Prompt");
     expect(html).toContain("If it fails");
+    expect(html).toContain('class="rt-seg"');
+    expect(html).toContain('aria-label="Flyway name"');
+    expect(html).not.toMatch(/<select/);
+    expect(html).not.toMatch(/>[^<]*\bplans?\b[^<]*</i);
   });
 });
 
 describe("the editor on its own", () => {
-  it("opens on the plan a deep link named", () => {
+  it("opens on the flyway a deep link named", () => {
     const other = { ...PLAN, id: "p_2", name: "Other", builtin: false, steps: [STEPS[0]] };
     const html = withClient(createElement(Plans, { initialPlan: "p_2", onDirty: () => {} }), (c) => {
       c.setQueryData(["flight-plans"], [PLAN, other]);
@@ -273,52 +379,71 @@ describe("the editor on its own", () => {
     expect(html).toContain('value="Other"');
     expect(html).toContain(">Delete</button>");
     expect(html).not.toContain(">Reset to default</button>");
+    expect(html).toContain("+ New flyway");
   });
 });
 
-describe("the stylesheet", () => {
+describe("the stylesheets", () => {
   const sheet = css("components/flights/FlightsDialog.css");
-  it("outlines you blocks in the needs-you gold and pulses the current one", () => {
-    expect(sheet).toMatch(/\.fl-chip-you \{[^}]*var\(--tone-attention\)/);
-    expect(sheet).toMatch(/\.fl-block-you \{[^}]*var\(--tone-attention\)/);
-    expect(sheet).toContain("animation: fl-pulse");
+  const canvas = css("components/flights/FlywayCanvas.css");
+  it("a perch is gold and rounder, the current box pulses, a halted one is red", () => {
+    expect(canvas).toMatch(/\.fl-perch \{[^}]*border-radius: 18px;[^}]*var\(--tone-attention\)/);
+    expect(canvas).toMatch(/\.fl-st-perched \{[^}]*var\(--tone-attention\)/);
+    expect(canvas).toMatch(/\.fl-st-current \{[^}]*var\(--tone-working\)/);
+    expect(canvas).toMatch(/\.fl-st-halted,\s*\.fl-st-failed \{[^}]*var\(--red\)/);
+    expect(canvas).toContain("animation: fl-pulse");
+    expect(canvas).toMatch(/\.fl-st-skipped \.fl-box-title \{[^}]*line-through/);
   });
 
-  it("scrolls the block row inside itself, never the page", () => {
-    expect(sheet).toMatch(/\.fl-row-scroll \{[^}]*overflow-x: auto/);
+  it("scrolls the canvas inside itself, never the page", () => {
+    expect(canvas).toMatch(/\.fl-canvas \{[^}]*overflow: auto/);
+    expect(canvas).toMatch(/\.fl-canvas-vertical \{[^}]*overflow-x: hidden/);
     expect(sheet).toMatch(/\.fl-body \{[^}]*overflow-x: hidden/);
   });
+
+  it("Flights' fields are the New dialog's: its border, radius, background and focus ring", () => {
+    expect(canvas).toMatch(/\.fl-input\.fl-input,\s*\.fl-prompt\.fl-prompt \{[^}]*background: var\(--bg\);[^}]*border: 1px solid var\(--border\);[^}]*border-radius: 7px;/);
+    expect(canvas).toMatch(/\.fl-input\.fl-input:focus,\s*\.fl-prompt\.fl-prompt:focus \{[^}]*border-color: var\(--accent\)/);
+  });
+
+  it("every row waiting to fly wears its kind's badge", () => {
+    for (const k of ["tickets", "prs", "issues"]) expect(sheet).toContain(".fl-kind-badge-" + k + " {");
+  });
 });
 
-describe("a source's Plan picker (Flights → Sources)", () => {
+describe("no native <select> in Flights", () => {
+  it("not one in its components", () => {
+    for (const f of ["Board", "PlanEditor", "PlanSelect", "FlightStrip", "SessionFlight", "StopParts", "FlywayCanvas", "controls"])
+      expect(code("components/flights/" + f + ".tsx"), f).not.toMatch(/<select/);
+  });
+});
+
+describe("a source's flyway chips (Flights → Sources)", () => {
   const PLANS: FlightPlan[] = [
     { ...PLAN, id: "builtin:ticket", name: "Ticket to merge" },
     { ...PLAN, id: "p_mine", name: "Mine", builtin: false },
     { ...PLAN, id: "builtin:pr", name: "Pull request" },
   ];
 
-  it("offers the kind's built-in as the default, then every plan, built-ins first", () => {
-    expect(planChoices(PLANS, "tickets")).toEqual([
-      { value: "", label: "Ticket to merge (default)" },
-      { value: "builtin:ticket", label: "Ticket to merge (built-in)" },
-      { value: "builtin:pr", label: "Pull request (built-in)" },
-      { value: "p_mine", label: "Mine" },
-    ]);
-    expect(planChoices(PLANS, "prs")[0].label).toBe("Pull request (default)");
-    // An issue repo without builtin:issue on this server: the ticket plan.
-    expect(planChoices(PLANS, "issues")[0].label).toBe("Ticket to merge (default)");
-    // A stored plan the list lost is kept, never silently dropped.
+  it("offers 'Default · <the kind's built-in>' first, then every flyway, built-ins first", () => {
+    expect(planChoices(PLANS, "tickets").map((o) => o.label)).toEqual(["Default · Ticket to merge", "Ticket to merge", "Pull request", "Mine"]);
+    expect(planChoices(PLANS, "tickets").map((o) => o.value)).toEqual(["", "builtin:ticket", "builtin:pr", "p_mine"]);
+    expect(planChoices(PLANS, "prs")[0].label).toBe("Default · Pull request");
+    // An issue repo without builtin:issue on this server: the ticket flyway.
+    expect(planChoices(PLANS, "issues")[0].label).toBe("Default · Ticket to merge");
+    // A stored flyway the list lost is kept, never silently dropped.
     expect(planChoices(PLANS, "tickets", "p_gone").at(-1)).toEqual({ value: "p_gone", label: "p_gone (not found)" });
   });
 
-  it("renders on the card with the stored plan selected, and nothing on a server without flights", () => {
+  it("renders on the card as chips with the stored flyway on, and nothing on a server without flights", () => {
     const html = withClient(
       createElement(PlanSelect, { kind: "tickets", value: "p_mine", onChange: () => {}, className: "tk-plan", field: { attr: "data-tk-field" } }),
       (c) => c.setQueryData(["flight-plans"], PLANS)
     );
     expect(html).toContain('data-tk-field="plan"');
-    expect(html).toMatch(/<option value="p_mine" selected="">Mine<\/option>/);
-    expect(html).toContain("Ticket to merge (default)");
+    expect(html).toMatch(/<button type="button" role="radio" aria-checked="true" class="fl-pick on"[^>]*data-value="p_mine">Mine<\/button>/);
+    expect(html).toContain(">Default · Ticket to merge<");
+    expect(html).not.toContain("<select");
     const none = withClient(
       createElement(PlanSelect, { kind: "prs", value: "", onChange: () => {}, field: { attr: "data-repo-field" } }),
       (c) => c.setQueryData(["flight-plans"], null)
@@ -340,7 +465,7 @@ describe("a source's Plan picker (Flights → Sources)", () => {
     expect(code("components/intake/RepoSources.tsx")).toContain('kind={use === "pr" ? "prs" : "issues"}');
   });
 
-  it("the Board's arrival picker defaults to the source's plan", () => {
+  it("the Board's waiting rows: a kind heading, a badge on every row, Fly, and the flyway chips on the source's flyway", () => {
     useUi.setState({ openDialog: "flights", dialogTarget: "board" } as never);
     Object.assign(useUi.getInitialState(), useUi.getState());
     const html = withClient(createElement(FlightsDialog), (c) => {
@@ -355,7 +480,28 @@ describe("a source's Plan picker (Flights → Sources)", () => {
         source_labels: { sc: "Shortcut" },
       });
     });
-    const pick = html.slice(html.indexOf('class="fl-plan-pick"'));
-    expect(pick).toMatch(/<option value="p_mine" selected="">Mine<\/option>/);
+    expect(html).toMatch(/class="fl-waiting-head">Tickets</);
+    expect(html).toContain('class="fl-kind-badge fl-kind-badge-tickets">Ticket<');
+    expect(html).toContain(">Fly</button>");
+    expect(html).toContain("flies by itself");
+    const pick = html.slice(html.indexOf('class="fl-chiprow fl-plan-pick"'));
+    expect(pick).toMatch(/aria-checked="true" class="fl-pick on"[^>]*data-value="p_mine">Mine</);
+    expect(html).not.toContain("<select");
+  });
+});
+
+describe("the wiring outside Flights", () => {
+  it("the pane has a Flight tab that draws the session diagram", () => {
+    const pane = code("components/grid/Pane.tsx");
+    expect(pane).toContain('data-tab="flight"');
+    expect(pane).toContain("<SessionFlight inst={inst} />");
+    expect(pane).toContain("const flightShown = hasSessionDiagram(allRows ?? [], title);");
+    expect(code("lib/paneHeader.ts")).toContain('!(id === "flight" && !ctx.flight && ctx.active !== "flight")');
+  });
+
+  it("the session ⋯ offers Fly a flyway…, which opens that tab", () => {
+    const menu = code("lib/sessionMenu.ts");
+    expect(menu).toContain('label: "Fly a flyway…"');
+    expect(menu).toContain('run: () => openTab(title, "flight")');
   });
 });

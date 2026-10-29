@@ -384,7 +384,7 @@ export function RepoFields({
           onSave={save}
         />
       </div>
-      {/* Beside Fast-track: the flight plan this repo's PRs / issues follow
+      {/* Beside Fast-track: the flyway this repo's PRs / issues fly
           ("" = the built-in, cut at that depth). */}
       <PlanSelect
         kind={use === "pr" ? "prs" : "issues"}

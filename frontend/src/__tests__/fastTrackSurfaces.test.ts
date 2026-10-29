@@ -577,7 +577,7 @@ describe("the Thread tab", () => {
   it("the pane draws the thread tab and falls back to Agent", () => {
     const pane = mod(PANE);
     expect(pane).toContain(
-      'const BODY_TABS: ReadonlySet<string> = new Set(["agent", "shell", "diff", "queue", "map", "thread"]);'
+      'const BODY_TABS: ReadonlySet<string> = new Set(["agent", "shell", "diff", "queue", "map", "flight", "thread"]);'
     );
     expect(fn("paneTab")).toContain('if (!BODY_TABS.has(t)) return "agent";');
   });

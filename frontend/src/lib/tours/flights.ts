@@ -1,5 +1,5 @@
-/** The Flights tour: the Board, a flight's strip, the Plans editor and
- * Describe a step — the four things the surface is. Each step names its
+/** The Flights tour: the Board, a flight's live canvas, the Flyways editor
+ * and Describe a stop — the four things the surface is. Each step names its
  * data-tour hook first; a step whose hook isn't on screen (no flight in the
  * air yet) falls back to the tab button or centres. `screen` is the Flights
  * tab the step shows (FlightsDialog follows the store's coachTour step). */
@@ -11,26 +11,26 @@ export const FLIGHTS_TOUR: TourDef = {
   steps: [
     {
       target: '[data-tour="flights-board"], #flights-tab-board',
-      title: "Everything on its way",
-      body: "The Board shows what needs you, what is in flight, what has arrived and not started, and what landed.",
+      title: "Everything on its flyway",
+      body: "The Board shows what is perched on you, what is in flight, what is waiting to fly (tickets, PRs, issues) and what landed.",
       screen: "board",
     },
     {
       target: '[data-tour="flights-strip"], #fl-group-flying',
-      title: "One strip per flight",
-      body: "Each block is a step: ✓ done, ● where it is now, ○ still to come — click the strip to open its session.",
+      title: "Every flight, live",
+      body: "Each box is a stop — ✓ done, glowing where the flight is now, outlined still to come; click a card to open its session.",
       screen: "board",
     },
     {
       target: '[data-tour="flights-plans"], #flights-tab-plans',
-      title: "Plans are rows of blocks",
-      body: "Drag blocks to reorder them, press + to add one, and add a You step wherever the flight should wait for you.",
+      title: "Flyways are stops on a line",
+      body: "Drag boxes to reorder them, press + to add a stop, and add a perch wherever the flight should wait for you.",
       screen: "plans",
     },
     {
       target: '[data-tour="flights-describe"], #flights-tab-plans',
-      title: "Describe a step",
-      body: "Say what should happen in a sentence and the blocks are added for you to check and save.",
+      title: "Describe a stop",
+      body: "Say what should happen in a sentence and the stops are added for you to check and save.",
       screen: "plans",
     },
   ],

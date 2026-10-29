@@ -2,7 +2,7 @@
  * header (components/customize/PaneHeaderPicker.tsx), read by grid/Pane.tsx.
  *
  * Two kinds of item, each ordered among its own kind: TABS (Agent, Terminal,
- * Diff, Queue, Map, Thread) sit after the session's name, BUTTONS (⏩
+ * Diff, Queue, Map, Flight, Thread) sit after the session's name, BUTTONS (⏩
  * Fast-track, Copy entire history, History, the Commit…/next-step button,
  * the cost chip, the diff-stat, Hide −) after them. ⋯ is not an item: it is
  * always the far-right element, and everything hidden here stays reachable
@@ -31,7 +31,7 @@
  *
  * Also here: `fitDecision`, the text → icons switch (see there). Pure. */
 
-export type PaneTabId = "agent" | "shell" | "diff" | "queue" | "map" | "thread";
+export type PaneTabId = "agent" | "shell" | "diff" | "queue" | "map" | "flight" | "thread";
 export type PaneButtonId = "fasttrack" | "copy" | "history" | "next" | "cost" | "diffstat" | "hide";
 export type PaneItemId = PaneTabId | PaneButtonId;
 
@@ -53,6 +53,13 @@ export const PANE_TABS: PaneItemDef[] = [
   { id: "diff", kind: "tab", label: "Diff", note: "What the session changed (git sessions)", on: true },
   { id: "queue", kind: "tab", label: "Queue", note: "Send a message now or queue prompts to run when idle", on: true },
   { id: "map", kind: "tab", label: "Map", note: "The worktree as a tree: agents, zones, blast radius (git sessions)", on: true },
+  {
+    id: "flight",
+    kind: "tab",
+    label: "Flight",
+    note: "The session's live diagram: its flight or fast-track, its workers — once it has one (⋯ → Fly a flyway… always opens it)",
+    on: true,
+  },
   { id: "thread", kind: "tab", label: "Thread", note: "Workers and what passed between them — only once a session has some", on: false },
 ];
 
@@ -191,6 +198,10 @@ export interface PaneHeaderCtx {
   /** Map state worth seeing: changed files or any zone state (lib/mapEntry
    * mapHasState). Absent = none. */
   mapBusy?: boolean;
+  /** The session has a live diagram worth a tab (lib/flightDiagram
+   * hasSessionDiagram: a flight, workers, a parent, an armed fast-track).
+   * Absent = none — the tab then shows only while you are on it. */
+  flight?: boolean;
 }
 
 /** The items this pane's header draws, in order: the person's choice, less
@@ -198,7 +209,10 @@ export interface PaneHeaderCtx {
 export function headerItems(pref: PaneHeaderPref | null, ctx: PaneHeaderCtx): { tabs: PaneTabId[]; buttons: PaneButtonId[] } {
   const r = resolvePaneHeader(pref);
   const possible = (id: PaneItemId) =>
-    !(id === "shell" && ctx.sharedFolder) && !((id === "diff" || id === "map") && !ctx.git) && !(id === "thread" && !ctx.thread);
+    !(id === "shell" && ctx.sharedFolder) &&
+    !((id === "diff" || id === "map") && !ctx.git) &&
+    !(id === "thread" && !ctx.thread) &&
+    !(id === "flight" && !ctx.flight && ctx.active !== "flight");
   // Calm folds Queue, Map and ⏩ — only while the header is the default,
   // and never what is state rather than an option.
   const calmFolds = (id: PaneItemId) =>

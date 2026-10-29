@@ -1,28 +1,42 @@
 /** Flights → Board: the live view, loudest first.
  *
- *  - Needs you — flights parked on a *you* step (or halted), and Verify's due
- *    or failing checklists (a compact row that opens the Checklists tab).
- *  - In flight — one strip per flight; clicking it opens the session.
- *  - Arrivals — Intake's eligible items with no session, grouped by source,
- *    each with a plan picker and Start (which opens the new session).
+ *  - Needs you — flights perched on you (the perch's box opened wide with its
+ *    checklist and Done / Skip) or halted, and Verify's due or failing
+ *    checklists (a compact row that opens the Checklists tab).
+ *  - In flight — one card per flight: the session's live diagram on one
+ *    compact row; its head opens the session.
+ *  - Waiting to fly — the tickets, pull requests and issues that are eligible
+ *    and have no session, under their own sub-headings, a kind badge on every
+ *    row, the flyway as a chip row and one action: Fly.
  *  - Landed — finished flights, folded. */
 
 import { useMemo, useState } from "react";
 import type { TestPlan } from "../../api/types";
 import { useFlightKinds, useFlightPlans, useFlights, useSettingsDoc, useTestPlans } from "../../state/queries";
-import { WorkItemRow, ageText } from "../intake/kit";
+import { ageText } from "../intake/kit";
 import { useUi } from "../../state/store";
-import { byGroup } from "../intake/queue";
+import { errMsg } from "../../lib/format";
 import { isFailing, isWaitingOnYou, planName } from "../dialogs/verify";
 import { FlightCard } from "./FlightStrip";
-import { useArrivals, type Arrival } from "./useArrivals";
-import { builtinPlanFor, isLive, planChoices, needsYouFlights, type Flight, type FlightPlan } from "../../lib/flights";
-import { startArrival, type ArrivalTarget } from "../../lib/flightsApi";
+import { useWaiting, type Waiting } from "./useWaiting";
+import {
+  WAITING_KIND_BADGE,
+  WAITING_KIND_HEAD,
+  builtinPlanFor,
+  isLive,
+  needsYouFlights,
+  planChoices,
+  type Flight,
+  type FlightPlan,
+  type WaitingKind,
+} from "../../lib/flights";
+import { flyWaiting, type WaitingTarget } from "../../lib/flightsApi";
+import { ChipRow } from "./controls";
 
-/** The plan a source names for its flights (`TicketingSource.plan`,
+/** The flyway a source names for its flights (`TicketingSource.plan`,
  * `github.repo_settings[repo].plan`, `issue_repo_settings[repo].plan`), "" =
  * none (the server then uses the built-in cut at the source's depth). */
-export function sourcePlan(settings: Record<string, unknown> | undefined, t: ArrivalTarget): string {
+export function sourcePlan(settings: Record<string, unknown> | undefined, t: WaitingTarget): string {
   const s = (settings || {}) as {
     ticketing?: { sources?: Array<{ id?: string; plan?: string }> };
     github?: {
@@ -78,64 +92,90 @@ function ChecklistRow({ plan, onOpen }: { plan: TestPlan; onOpen(branch: string)
   );
 }
 
-/** One arrival: Intake's row, with a plan picker beside Start. */
-function ArrivalRow({
-  a,
-  plans,
-  settings,
-}: {
-  a: Arrival;
-  plans: FlightPlan[];
-  settings: Record<string, unknown> | undefined;
-}) {
-  const t = a.item.target as ArrivalTarget;
-  // The source's own plan (its card's Plan picker) is the default; a pick
-  // here overrides it for this start only. `null` = follow the source, so a
+/** Where an item will go: the repo (a PR's / issue's own, a ticket's routed
+ * one when the source knows it). */
+function whereTo(w: Waiting): string {
+  const it = w.item;
+  if (it.kind !== "tickets") return it.group;
+  const repos = it.route?.repos || [];
+  return repos.length === 1 ? repos[0] : repos.length > 1 ? repos.length + " repos" : "";
+}
+
+/** One item waiting to fly: its badge, reference and headline, where it will
+ * go, the flyway as chips, and Fly. */
+function WaitingRow({ w, plans, settings }: { w: Waiting; plans: FlightPlan[]; settings: Record<string, unknown> | undefined }) {
+  const t = w.item.target as WaitingTarget;
+  // The source's own flyway (its card's chips) is the default; a pick here
+  // overrides it for this flight only. `null` = follow the source, so a
   // settings document that loads after the row still decides.
   const own = sourcePlan(settings, t);
-  const [picked, setPlan] = useState<string | null>(null);
+  const [picked, setPicked] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
   const plan = picked ?? own;
+  const kind = w.item.kind as WaitingKind;
+  const where = whereTo(w);
+  const meta = [w.item.kind === "tickets" ? w.item.group : "", w.item.state, ageText(w.item.created_at), w.item.assignee ? "assigned to " + w.item.assignee : ""]
+    .filter(Boolean)
+    .join(" · ");
+  const fly = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      // The empty chip is the kind's built-in: sent as such when the source
+      // names a flyway of its own (else the server would use that).
+      const send = plan || (own ? builtinPlanFor(kind, plans) : "");
+      await flyWaiting(t, send, {}, kind === "tickets" ? w.item.reference : "");
+      // Flying opens the session (flyWaiting selects it as soon as its row
+      // exists): the dialog steps aside, as a template's Run now does.
+      useUi.getState().closeDialog();
+    } catch (err) {
+      setError(errMsg(err));
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
-    <div className="fl-arrival">
-      <WorkItemRow
-        reference={a.item.reference}
-        url={a.item.url}
-        title={a.item.title}
-        linkTitle={"Open " + a.item.reference}
-        tooltip={a.item.reference + (a.item.title ? " — " + a.item.title : "") + "\nfrom " + a.item.group}
-        meta={[a.item.state, ageText(a.item.created_at), a.item.assignee].filter(Boolean).join(" · ")}
-        route={a.item.route}
-        eligible
-        eligibleOn={a.auto}
-        eligibleLabel={a.auto ? "will auto-start" : "auto-start off"}
-        actionLabel="Start"
-        failPrefix="Start failed"
-        onStart={async ({ agent, depth, effort, repo }) => {
-          // The empty choice is the kind's built-in: sent as such when the
-          // source names a plan of its own (else the server would use that).
-          const send = plan || (own ? builtinPlanFor(a.item.kind, plans) : "");
-          const title = await startArrival(t, send, { agent, depth, effort, repo }, a.item.kind === "tickets" ? a.item.reference : "");
-          // Starting opens the session (startArrival selects it as soon as its
-          // row exists): the dialog steps aside, as a template's Run now does.
-          useUi.getState().closeDialog();
-          return { message: title ? "Session " + title : "Session for " + a.item.reference, title };
-        }}
-        actionExtra={
-          <label className="fl-plan-pick" title="The plan this flight follows">
-            <span className="fl-plan-pick-label">Plan</span>
-            <select value={plan} onChange={(e) => setPlan(e.target.value)} aria-label="Plan">
-              {planChoices(plans, a.item.kind, plan).map((o) => (
-                <option key={o.value || "default"} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        }
-      />
+    <div className={"fl-waiting fl-waiting-" + kind} data-waiting={w.item.key}>
+      <div className="fl-waiting-main">
+        <span className={"fl-kind-badge fl-kind-badge-" + kind}>{WAITING_KIND_BADGE[kind]}</span>
+        <div className="fl-waiting-words">
+          <div className="fl-waiting-title">
+            {w.item.url ? (
+              <a className="fl-waiting-ref" href={w.item.url} target="_blank" rel="noreferrer" title={"Open " + w.item.reference}>
+                {w.item.reference}
+              </a>
+            ) : (
+              <span className="fl-waiting-ref">{w.item.reference}</span>
+            )}
+            <span className="fl-waiting-headline">{w.item.title}</span>
+          </div>
+          <div className="fl-waiting-meta muted">
+            {where && <span className="fl-waiting-where">→ {where}</span>}
+            {meta && <span>{meta}</span>}
+            <span className={"fl-auto" + (w.auto ? " on" : "")}>{w.auto ? "flies by itself" : "flies when you say"}</span>
+          </div>
+        </div>
+        <button type="button" className="btn-primary fl-btn fl-fly" disabled={busy} title={"Take off on " + w.item.reference} onClick={() => void fly()}>
+          {busy ? "Taking off…" : "Fly"}
+        </button>
+      </div>
+      {plans.length > 0 && (
+        <div className="fl-waiting-flyway">
+          <span className="fl-fld-label">Flyway</span>
+          <ChipRow className="fl-plan-pick" label="Flyway" value={plan} options={planChoices(plans, kind, plan)} onChange={setPicked} />
+        </div>
+      )}
+      {error && (
+        <p className="error fl-error" role="alert">
+          {error}
+        </p>
+      )}
     </div>
   );
 }
+
+const KIND_ORDER: readonly WaitingKind[] = ["tickets", "prs", "issues"];
 
 export function Board({ onTab }: { onTab(tab: "plans" | "sources" | "checklists", rest?: string): void }) {
   const flightsQ = useFlights();
@@ -143,7 +183,7 @@ export function Board({ onTab }: { onTab(tab: "plans" | "sources" | "checklists"
   const kinds = useFlightKinds().data;
   const settings = useSettingsDoc(true).data as Record<string, unknown> | undefined;
   const testPlans = useTestPlans().data?.plans || [];
-  const { arrivals, refresh } = useArrivals(true);
+  const { waiting, refresh } = useWaiting(true);
   const [landedOpen, setLandedOpen] = useState(false);
 
   const flights: Flight[] = flightsQ.data || [];
@@ -151,24 +191,22 @@ export function Board({ onTab }: { onTab(tab: "plans" | "sources" | "checklists"
   const inFlight = flights.filter((f) => isLive(f) && !needs.includes(f));
   const landed = flights.filter((f) => !isLive(f)).sort((a, b) => (b.finished || b.updated) - (a.finished || a.updated)).slice(0, 20);
   const dueChecklists = useMemo(() => testPlans.filter((p) => isFailing(p) || isWaitingOnYou(p)), [testPlans]);
-  const groups = byGroup(arrivals.map((a) => a.item));
-  const byKey = new Map(arrivals.map((a) => [a.item.key, a]));
   const noRoute = flightsQ.data === null;
 
   return (
     <div className="fl-board" data-tour="flights-board">
       {noRoute && (
         <p className="fl-note muted" role="status">
-          This server has no flights yet — update MindFlock to fly plans. Arrivals and checklists still work.
+          This server has no flights yet — update MindFlock to fly flyways. Waiting items and checklists still work.
         </p>
       )}
       <Group id="needs" title="Needs you" count={needs.length + dueChecklists.length}>
         {needs.length + dueChecklists.length === 0 ? (
-          <p className="fl-empty muted">Nothing waits on you.</p>
+          <p className="fl-empty muted">Nothing is perched on you.</p>
         ) : (
           <>
             {needs.map((f) => (
-              <FlightCard key={f.id} flight={f} kinds={kinds} />
+              <FlightCard key={f.id} flight={f} kinds={kinds} expand />
             ))}
             {dueChecklists.map((p) => (
               <ChecklistRow key={p.id} plan={p} onOpen={(b) => onTab("checklists", b)} />
@@ -181,17 +219,17 @@ export function Board({ onTab }: { onTab(tab: "plans" | "sources" | "checklists"
           <p className="fl-empty muted">
             No flight in the air.{" "}
             <button type="button" className="linklike" onClick={() => onTab("plans")}>
-              Plans ›
+              Flyways ›
             </button>
           </p>
         ) : (
           inFlight.map((f) => <FlightCard key={f.id} flight={f} kinds={kinds} />)
         )}
       </Group>
-      <Group id="arrivals" title="Arrivals" count={arrivals.length} hint="Ready to start, oldest first">
-        {arrivals.length === 0 ? (
+      <Group id="waiting" title="Waiting to fly" count={waiting.length} hint="Not started yet, oldest first">
+        {waiting.length === 0 ? (
           <p className="fl-empty muted">
-            Nothing waiting to start.{" "}
+            Nothing is waiting to fly.{" "}
             <button type="button" className="linklike" onClick={() => onTab("sources")}>
               Sources ›
             </button>{" "}
@@ -200,15 +238,21 @@ export function Board({ onTab }: { onTab(tab: "plans" | "sources" | "checklists"
             </button>
           </p>
         ) : (
-          groups.map((g) => (
-            <div className="fl-arrival-group" key={g.group}>
-              <div className="fl-arrival-source">{g.group}</div>
-              {g.items.map((it) => {
-                const a = byKey.get(it.key);
-                return a ? <ArrivalRow key={it.key} a={a} plans={plans} settings={settings} /> : null;
-              })}
-            </div>
-          ))
+          KIND_ORDER.map((k) => {
+            const list = waiting.filter((w) => w.item.kind === k);
+            if (!list.length) return null;
+            return (
+              <div className={"fl-waiting-kind fl-waiting-kind-" + k} key={k}>
+                <h4 className="fl-waiting-head">
+                  {WAITING_KIND_HEAD[k]}
+                  <span className="fl-count muted">{list.length}</span>
+                </h4>
+                {list.map((w) => (
+                  <WaitingRow key={w.item.key} w={w} plans={plans} settings={settings} />
+                ))}
+              </div>
+            );
+          })
         )}
       </Group>
       {landed.length > 0 && (

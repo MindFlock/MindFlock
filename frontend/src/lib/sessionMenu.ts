@@ -289,6 +289,16 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
     ctx.caps.git !== false &&
       !tabs.has("diff") && { key: "diff", label: "Diff", title: "What this session changed", run: () => useUi.getState().openDiff(title) },
     ctx.caps.git !== false && !tabs.has("map") && fromTable("map"),
+    // Flights: the session's Flight tab — its live diagram, with + to tack a
+    // stop on and the flyways to fly (docs/flights.md "The session diagram").
+    !remote &&
+      !peer &&
+      !inst.pending && {
+        key: "flyway",
+        label: "Fly a flyway…",
+        title: "Open this session's Flight tab: tack stops onto its line, or fly a whole flyway",
+        run: () => openTab(title, "flight"),
+      },
     fromTable("thread", { note: actionNote("thread", ctx) }),
     opts.onHistory && {
       key: "history",

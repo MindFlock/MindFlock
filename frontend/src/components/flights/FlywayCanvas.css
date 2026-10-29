@@ -1,0 +1,709 @@
+/* The flyway canvas (FlywayCanvas.tsx) and Flights' form controls
+ * (controls.tsx) — prefix fl-.
+ *
+ * Boxes sit absolutely on a stage at the positions lib/flightDiagram's
+ * layout gives them; an SVG under them draws the connectors. Robot stops are
+ * solid panels, a perch (a stop that waits on you) is rounder with a gold
+ * outline and a branch, the current box pulses — gold perched on you, green
+ * while the flock works, red halted. The canvas scrolls inside itself, so a
+ * phone never scrolls the page sideways. Colours are the app's tokens, so
+ * both themes follow. */
+
+.fl-canvas {
+  position: relative;
+  overflow: auto;
+  max-width: 100%;
+  min-width: 0;
+  padding: 2px 0 8px;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+
+.fl-stage {
+  position: relative;
+  cursor: grab;
+  touch-action: pan-x pan-y;
+}
+
+.fl-canvas-vertical {
+  overflow-x: hidden;
+}
+
+.fl-dragging .fl-stage,
+.fl-dragging .fl-box {
+  cursor: grabbing;
+}
+
+.fl-wires {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.fl-wire {
+  fill: none;
+  stroke: color-mix(in srgb, var(--muted) 70%, transparent);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: d 0.18s ease;
+}
+
+.fl-wire-branch,
+.fl-wire-up {
+  stroke: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.fl-wire-add {
+  stroke-dasharray: 3 4;
+  stroke: color-mix(in srgb, var(--muted) 55%, transparent);
+}
+
+.fl-arrowhead {
+  fill: color-mix(in srgb, var(--muted) 80%, transparent);
+}
+
+/* --- A box ---------------------------------------------------------------- */
+
+.fl-box {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 11px 9px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12.5px;
+  cursor: pointer;
+  user-select: none;
+  transition: transform 0.18s ease, box-shadow 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  outline: none;
+}
+
+.fl-box:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.fl-box:focus-visible,
+.fl-box.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.35);
+}
+
+.fl-draggable {
+  cursor: grab;
+  touch-action: none;
+}
+
+.fl-lifted {
+  z-index: 3;
+  transition: box-shadow 0.15s ease;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.4), 0 0 0 2px rgba(var(--accent-rgb), 0.45);
+}
+
+.fl-box-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.fl-box-icon {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.13);
+}
+
+.fl-box-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fl-box-sub {
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fl-box-reason {
+  color: var(--red);
+  font-size: 11.5px;
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.fl-box-glyph {
+  flex: none;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.fl-glyph-done {
+  color: var(--green);
+}
+
+.fl-glyph-failed,
+.fl-glyph-halted {
+  color: var(--red);
+}
+
+.fl-box-pulse {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tone-working);
+  animation: fl-pulse 1.4s ease-in-out infinite;
+}
+
+.fl-box-chip {
+  align-self: flex-start;
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  color: var(--tone-neutral);
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fl-box-chip.tone-working {
+  color: var(--tone-working);
+}
+
+.fl-box-chip.tone-attention {
+  color: var(--tone-attention-ink);
+  background: var(--tone-attention);
+  border-color: var(--tone-attention);
+}
+
+.fl-box-chip.tone-broken {
+  color: var(--tone-broken);
+}
+
+.fl-box-chip.tone-waiting {
+  color: var(--tone-waiting);
+}
+
+.fl-box-chip.tone-muted {
+  color: var(--tone-muted);
+}
+
+.fl-box-dots {
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--muted);
+}
+
+/* The session and its family: an accent edge on the left. */
+.fl-box-session,
+.fl-box-parent,
+.fl-box-child {
+  border-left: 3px solid var(--accent);
+  background: var(--panel);
+}
+
+.fl-box-parent,
+.fl-box-child {
+  border-left-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.fl-box-session .fl-box-icon,
+.fl-box-parent .fl-box-icon,
+.fl-box-child .fl-box-icon {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+}
+
+/* A fast-track rung: the same box as a ship stop. */
+.fl-box-rung .fl-box-sub {
+  font-style: italic;
+}
+
+/* A perch: rounder, gold, the bird on its branch. */
+.fl-perch {
+  border-radius: 18px;
+  border: 1.5px solid var(--tone-attention);
+  background: color-mix(in srgb, var(--tone-attention) 7%, var(--panel-2));
+}
+
+.fl-perch .fl-box-icon {
+  color: var(--tone-attention);
+  background: color-mix(in srgb, var(--tone-attention) 16%, transparent);
+  border-radius: 50%;
+}
+
+.fl-perch::after {
+  content: "";
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--tone-attention) 55%, transparent);
+}
+
+/* --- Live states ------------------------------------------------------------ */
+
+.fl-st-done {
+  opacity: 0.55;
+}
+
+.fl-st-done:hover,
+.fl-st-done:focus-visible {
+  opacity: 0.85;
+}
+
+.fl-st-skipped {
+  opacity: 0.5;
+}
+
+.fl-st-skipped .fl-box-title {
+  text-decoration: line-through;
+}
+
+.fl-st-pending {
+  background: transparent;
+  border-style: dashed;
+  box-shadow: none;
+}
+
+.fl-st-pending.fl-perch {
+  border-style: dashed;
+  background: transparent;
+}
+
+.fl-st-current {
+  border-color: var(--tone-working);
+  box-shadow: 0 0 0 1px var(--tone-working), 0 0 14px color-mix(in srgb, var(--tone-working) 35%, transparent);
+  animation: fl-box-glow 1.8s ease-in-out infinite;
+}
+
+.fl-st-perched {
+  border-color: var(--tone-attention);
+  box-shadow: 0 0 0 1px var(--tone-attention), 0 0 14px color-mix(in srgb, var(--tone-attention) 35%, transparent);
+  animation: fl-box-glow 1.8s ease-in-out infinite;
+}
+
+.fl-st-perched .fl-box-pulse {
+  background: var(--tone-attention);
+}
+
+.fl-st-halted,
+.fl-st-failed {
+  border-color: var(--red);
+  box-shadow: 0 0 0 1px var(--red);
+}
+
+.fl-st-paused {
+  border-color: var(--muted);
+  box-shadow: 0 0 0 1px var(--muted);
+}
+
+.fl-st-paused .fl-box-sub::after {
+  content: " · paused";
+}
+
+.fl-described {
+  box-shadow: 0 0 0 2px var(--accent), 0 0 18px rgba(var(--accent-rgb), 0.45);
+}
+
+@keyframes fl-box-glow {
+  0%,
+  100% {
+    filter: none;
+  }
+  50% {
+    filter: brightness(1.12);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fl-st-current,
+  .fl-st-perched,
+  .fl-box-pulse {
+    animation: none;
+  }
+  .fl-box,
+  .fl-wire {
+    transition: none;
+  }
+}
+
+/* --- The + ------------------------------------------------------------------ */
+
+.fl-box-add {
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+  border: 1.5px dashed color-mix(in srgb, var(--accent) 60%, var(--border));
+  background: transparent;
+  color: var(--accent);
+  box-shadow: none;
+}
+
+.fl-box-add:hover,
+.fl-box-add:focus-visible,
+.fl-box-add.selected {
+  border-style: solid;
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+.fl-add-plus {
+  display: inline-grid;
+  place-items: center;
+}
+
+.fl-add-label {
+  white-space: nowrap;
+}
+
+.fl-canvas-compact .fl-box-add {
+  padding: 0;
+  border-radius: 50%;
+}
+
+.fl-gap-add {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--accent);
+  background: var(--panel);
+  color: var(--accent);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.fl-canvas:hover .fl-gap-add,
+.fl-gap-add:focus-visible {
+  opacity: 1;
+}
+
+.fl-gap-add:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* Touch has no hover: the gaps' + always show there. */
+@media (hover: none) {
+  .fl-gap-add {
+    opacity: 1;
+  }
+}
+
+/* --- Compact (the Board's cards) ------------------------------------------- */
+
+.fl-canvas-compact .fl-box {
+  padding: 7px 9px;
+  font-size: 12px;
+  gap: 2px;
+}
+
+.fl-canvas-compact .fl-box-icon {
+  width: 19px;
+  height: 19px;
+}
+
+.fl-canvas-compact .fl-box-sub {
+  font-size: 11px;
+}
+
+/* --- Inside a box: a perch's checklist and its Done / Skip ------------------ */
+
+.fl-box .fl-you {
+  margin-top: 4px;
+  cursor: default;
+}
+
+.fl-box .fl-you-items {
+  margin: 2px 0 4px;
+}
+
+/* The box's ⋯: out of the title's way until the box is hovered or focused
+   (touch has no hover: always there). */
+.fl-box-menu {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.fl-box:hover .fl-box-menu,
+.fl-box:focus-within .fl-box-menu,
+.fl-box-menu:has(details[open]) {
+  opacity: 1;
+}
+
+.fl-box-menu .vf-menu summary {
+  background: var(--panel);
+}
+
+@media (hover: none) {
+  .fl-box-menu {
+    opacity: 1;
+  }
+}
+
+.fl-box-menu .vf-menu summary {
+  padding: 0 5px;
+  line-height: 18px;
+  border-radius: 6px;
+}
+
+/* --- Flights' form controls (controls.tsx): the New dialog's look ---------- */
+
+.fl-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px 16px;
+  align-items: start;
+}
+
+.fl-fld {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.fl-fld-wide {
+  grid-column: 1 / -1;
+}
+
+.fl-fld-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.fl-fld-hint {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.fl-input.fl-input,
+.fl-prompt.fl-prompt {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 13.5px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.fl-prompt.fl-prompt {
+  resize: vertical;
+  min-height: 64px;
+  line-height: 1.45;
+}
+
+.fl-input.fl-input:focus,
+.fl-prompt.fl-prompt:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+}
+
+.fl-input::placeholder,
+.fl-prompt::placeholder {
+  color: color-mix(in srgb, var(--muted) 80%, transparent);
+}
+
+.fl-mono.fl-mono {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12.5px;
+}
+
+.fl-num {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fl-num .fl-num-input.fl-input {
+  width: 76px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.fl-num-unit {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* The segmented control (Seg), in Flights' forms. */
+.fl-form .rt-seg,
+.fl-seg-host .rt-seg {
+  flex-wrap: wrap;
+  max-width: 100%;
+  background: var(--bg);
+}
+
+.fl-form .rt-seg button,
+.fl-seg-host .rt-seg button {
+  border: none;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  background: none;
+  color: var(--text);
+  font-size: 12.5px;
+  font-family: inherit;
+  padding: 6px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.fl-form .rt-seg button:first-child,
+.fl-seg-host .rt-seg button:first-child {
+  border-left: none;
+}
+
+.fl-form .rt-seg button:hover:not(.on),
+.fl-seg-host .rt-seg button:hover:not(.on) {
+  background: var(--panel-2);
+}
+
+.fl-form .rt-seg button.on,
+.fl-seg-host .rt-seg button.on {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* A switch chip. */
+.fl-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 5px 12px 5px 6px;
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.fl-toggle:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.fl-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.fl-toggle-track {
+  position: relative;
+  width: 26px;
+  height: 15px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 45%, transparent);
+  transition: background 0.12s;
+}
+
+.fl-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.12s;
+}
+
+.fl-toggle.on .fl-toggle-track {
+  background: var(--accent);
+}
+
+.fl-toggle.on .fl-toggle-knob {
+  transform: translateX(11px);
+}
+
+/* A wrapping row of pill chips, one highlighted (the flyway choice). */
+.fl-chiprow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fl-pick {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 4px 11px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fl-pick:hover:not(.on) {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.fl-pick:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.fl-pick.on {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.16);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.fl-pick-default:not(.on) {
+  color: var(--muted);
+}

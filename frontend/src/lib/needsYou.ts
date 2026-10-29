@@ -11,11 +11,10 @@ import { needsAttention } from "../components/outbox/outbox";
 import { selectSession } from "./sessionActions";
 import { windowName } from "./windowName";
 import { toast } from "./toast";
-import { rowWaitsOnYou } from "./flights";
-import { flightYouLabel } from "./sessionState";
+import { perchedOnYou, rowWaitsOnYou } from "./flights";
 
 /** The server's waiting rows plus a `flight_you` row for every session whose
- * flight is parked on a *you* step and that the outbox doesn't list yet (it
+ * flight is perched on you (a `you` stop) and that the outbox doesn't list yet (it
  * lists them once its notify hook has run; the session row says so first).
  * The bell draws these with Done / Skip (outbox/WaitingRow), so a you step can
  * be ticked off from wherever you are. */
@@ -32,8 +31,8 @@ export function withFlightYou(
       key: "flight:" + fl!.id,
       title: inst.title,
       kind: "flight_you",
-      reason: flightYouLabel(fl!.step.title),
-      text: "✈ " + fl!.plan_name,
+      reason: perchedOnYou(fl!.step.title),
+      text: fl!.plan_name,
       actions: ["done", "skip", "open"],
     });
   }

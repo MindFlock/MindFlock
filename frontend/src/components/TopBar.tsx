@@ -20,7 +20,8 @@ import { useUi } from "../state/store";
 import { useDoctor, useFlights, useTestPlans } from "../state/queries";
 import { dueCount, failingCount } from "./dialogs/verify";
 import { badgeLines, flightBadgeCount } from "../lib/flights";
-import { useArrivals } from "./flights/useArrivals";
+import { useWaiting } from "./flights/useWaiting";
+import { Bird } from "./flights/Bird";
 import { rethemeAll } from "../lib/terminals";
 import { NotificationsBell } from "./NotificationsBell";
 import { TopBarMic } from "./TopBarMic";
@@ -103,13 +104,13 @@ export function TopBar() {
   // feature working and gets no mark.
   const sched = useScheduleStatus();
   const schedFailing = failingSchedules(sched.templates, sched.status).length;
-  // Flights' badge: what waits on you — flights parked on a you step, Verify's
-  // due checklists, and arrivals no switch will start (lib/flights
-  // flightBadgeCount). The arrivals are read from Intake's cached lists; the
-  // bar never fans out upstream itself.
+  // Flights' badge: what waits on you — flights perched on you, Verify's due
+  // checklists, and items waiting to fly that no switch will start
+  // (lib/flights flightBadgeCount). The waiting items are read from Intake's
+  // cached lists; the bar never fans out upstream itself.
   const flights = useFlights().data || [];
-  const { arrivals } = useArrivals(false);
-  const badge = flightBadgeCount(flights, due, failing, arrivals);
+  const { waiting } = useWaiting(false);
+  const badge = flightBadgeCount(flights, due, failing, waiting);
   // lib/calm.ts topBarShows: Flights is always on the bar (it replaced Intake,
   // which always was).
   const shows = topBarShows();
@@ -161,7 +162,7 @@ export function TopBar() {
   // The button's tooltip: what Flights is, its key, and the three counts the
   // badge adds up (plus a failed scheduled run, which the Schedule tab shows).
   const flightsTitle =
-    "Flights — where every ticket, PR and scheduled job is on its way from arrival to merge" +
+    "Flights — every ticket, PR and scheduled job on its flyway, from waiting to fly to landed" +
     keys("intake") +
     "\n" +
     badgeLines(badge).join("\n") +
@@ -385,6 +386,7 @@ export function TopBar() {
             /* No aria-label: the visible "Flights" IS the name. */
             onClick={() => ui.openDialogFor("flights")}
           >
+            <Bird size={13} className="tb-bird" />
             Flights
             {badge.count > 0 && <span className={"tb-count" + (badge.failing ? " is-failing" : "")}>{badge.count}</span>}
           </button>

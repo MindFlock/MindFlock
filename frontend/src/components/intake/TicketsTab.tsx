@@ -2569,8 +2569,8 @@ function TicketSourceEditor({
               <span className="set-hint">After the agent finishes. Merge is per ticket only.</span>
             </label>
           </div>
-          {/* The flight plan this source's tickets follow (docs/flights.md):
-              "" = the built-in ticket plan, cut at the Fast-track above. */}
+          {/* The flyway this source's tickets fly (docs/flights.md):
+              "" = the built-in ticket flyway, cut at the Fast-track above. */}
           <PlanSelect
             kind="tickets"
             className="tk-plan"

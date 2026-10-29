@@ -1,11 +1,11 @@
-/** Flights — one route from arrival to merge (docs/flights.md).
+/** Flights — one route from waiting to landed (docs/flights.md).
  *
  * Intake, Verify and Schedule were three top-bar surfaces that were really one
  * journey seen from three sides; this dialog is the journey. Its tabs:
  *
- *   Board       the live view: what needs you, what is in flight, what has
- *               arrived and not started, what landed
- *   Plans       the plans as rows of blocks, and the editor
+ *   Board       the live view: what needs you, what is in flight, what is
+ *               waiting to fly, what landed
+ *   Flyways     the flyways (the wire's `plans`) on the canvas, and the editor
  *   Sources     Intake's tabs, mounted as they are (IntakeDialog embedded)
  *   Schedule    the templates view, mounted as it is (TemplatesDialog embedded)
  *   Checklists  Verify's list, mounted as it is (VerifyDialog embedded)
@@ -29,6 +29,7 @@ import { FLIGHTS_TOUR } from "../../lib/tours/flights";
 import { Board } from "./Board";
 import { Plans } from "./PlanEditor";
 import { embeddedGuard } from "./embedGuard";
+import { Bird } from "./Bird";
 import "./FlightsDialog.css";
 
 export function FlightsDialog() {
@@ -38,7 +39,7 @@ export function FlightsDialog() {
   const openDialogFor = useUi((s) => s.openDialogFor);
   const closeDialog = useUi((s) => s.closeDialog);
   const { tab, rest } = parseFlightsTarget(target);
-  // The plan editor's unsaved changes: leaving the Plans tab (or the dialog)
+  // The flyway editor's unsaved changes: leaving the Flyways tab (or the dialog)
   // asks first, inline.
   const [plansDirty, setPlansDirty] = useState(false);
   const [leaving, setLeaving] = useState<FlightsTab | "close" | null>(null);
@@ -52,7 +53,7 @@ export function FlightsDialog() {
       setPlansDirty(false);
       return;
     }
-    // Arrivals are Intake's lists: warm them on the way in (App's
+    // Waiting to fly is Intake's lists: warm them on the way in (App's
     // useIntakeWarm normally has already).
     prefetchIntakePanels();
     prefetchIntakeMeta();
@@ -68,7 +69,7 @@ export function FlightsDialog() {
   if (!open) return null;
 
   const go = (next: FlightsTab, deep = "") => openDialogFor("flights", deep ? next + "/" + deep : next);
-  // Unsaved work on the tab showing: the plan editor's, or an embedded
+  // Unsaved work on the tab showing: the flyway editor's, or an embedded
   // surface's (Schedule's template editor registers through embedGuard).
   const unsaved = () => (tab === "plans" && plansDirty) || (tab === "schedule" && !!embeddedGuard.current?.dirty());
   const switchTab = (next: FlightsTab, deep = "") => {
@@ -104,7 +105,7 @@ export function FlightsDialog() {
       aria-modal="true"
       aria-labelledby="flights-title"
       onClose={close}
-      // A press outside never throws away a half-edited plan (close() asks).
+      // A press outside never throws away a half-edited flyway (close() asks).
       closeOnBackdrop
       onEscape={() => {
         if (leaving) {
@@ -121,8 +122,11 @@ export function FlightsDialog() {
     >
       <div id="flights-panel">
         <div className="ws-head fl-head">
+          <span className="fl-head-bird" aria-hidden="true">
+            <Bird size={17} />
+          </span>
           <h2 id="flights-title">Flights</h2>
-          <span className="ik-subtitle">Every ticket, PR and scheduled job, from arrival to merge</span>
+          <span className="ik-subtitle">Every ticket, PR and scheduled job, from waiting to fly to landed</span>
           <TourButton tour="flights" />
           <button type="button" id="flights-close" onClick={close}>
             Close

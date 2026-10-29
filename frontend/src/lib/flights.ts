@@ -1,8 +1,10 @@
-/** Flights — one route from arrival to merge (docs/flights.md).
+/** Flights — one route from waiting to landed (docs/flights.md).
  *
- * A PLAN is a row of blocks (steps); a FLIGHT is one run of a plan bound to
- * one session; a STEP is a robot step the server carries out, or a *you* step
- * that parks the flight until somebody presses Done. The types below mirror
+ * The words are birds', never planes': a FLYWAY is the route a flock follows
+ * (the wire calls it a plan: `plans`, `plan_id`, `FlightPlan`); a FLIGHT is one
+ * run of a flyway bound to one session; a STOP is one box on the flyway (the
+ * wire's step) — a robot stop the server carries out, or a PERCH (a `you`
+ * step) where the flight waits until somebody presses Done. The types below mirror
  * the contract's data model field for field (the backend serves exactly these
  * shapes) and the helpers are pure, so the Board, the pane strip, the rail and
  * the top-bar badge read one rule each and are pinned by tests without a DOM. */
@@ -108,7 +110,7 @@ export interface StepKindField {
   placeholder?: string;
 }
 
-/** One entry of `GET /api/flights/kinds` — what the palette and the block
+/** One entry of `GET /api/flights/kinds` — what the stop palette and the stop
  * forms are generated from. */
 export interface StepKindDef {
   kind: string;
@@ -145,11 +147,21 @@ export function flightDrives(f: Pick<Flight, "state"> | null | undefined): boole
   return !!f && (f.state === "running" || f.state === "waiting_you" || f.state === "paused");
 }
 
-/** "You: <step>" — once: a title that already says "You:" is left as it is. */
-export function youStepLabel(title: string | null | undefined): string {
-  const t = String(title || "").trim();
-  if (!t) return "You";
-  return /^you:/i.test(t) ? t : "You: " + t;
+/** "Perch: <stop>" — once: a title that already says "Perch:" (or the old
+ * "You:") is read without it, so it never doubles. */
+export function perchLabel(title: string | null | undefined): string {
+  const t = String(title || "")
+    .trim()
+    .replace(/^(you|perch):\s*/i, "");
+  return t ? "Perch: " + t : "Perch";
+}
+
+/** The bell's words for a flight perched on you: "Perched on you: <stop>". */
+export function perchedOnYou(stepTitle: string | null | undefined): string {
+  const t = String(stepTitle || "")
+    .trim()
+    .replace(/^(you|perch):\s*/i, "");
+  return "Perched on you" + (t ? ": " + t : "");
 }
 
 /** A step's chip glyph: done ✓ · current ● · pending ○ · failed ✗ · skipped –. */
@@ -204,7 +216,7 @@ export function flightProgress(f: Flight): FlightProgress {
 }
 
 /** Who acts on a step: the registry's word when we have it, else the kind's
- * own (a `you` block is the only *you* kind; `verify` is a robot that can
+ * own (a `you` stop — a perch — is the only *you* kind; `verify` is a robot that can
  * park on you, which its state says). */
 export function stepActor(step: Pick<FlightStep, "kind">, kinds?: readonly StepKindDef[] | null): StepActor {
   const def = kinds?.find((k) => k.kind === step.kind);
@@ -243,9 +255,9 @@ export function stripDots(f: Flight | FlightRow): string {
   return out;
 }
 
-/** The pane strip's line: `✈ Ticket to merge · ●●●○○○ · Reviews settle (4m)`.
- * A full flight carries the step's `since`; a session row does not, so its
- * line has no elapsed. */
+/** The pane strip's line: `Ticket to merge · ●●●○○○ · Reviews settle (4m)`
+ * (the strip draws the bird glyph before it). A full flight carries the
+ * step's `since`; a session row does not, so its line has no elapsed. */
 export function stripLabel(f: Flight | FlightRow, now = Date.now()): string {
   const title = "steps" in f ? f.steps[f.cursor]?.title || "" : f.step?.title || "";
   const elapsed = "steps" in f ? currentElapsed(f, now) : "";
@@ -255,7 +267,7 @@ export function stripLabel(f: Flight | FlightRow, now = Date.now()): string {
       : f.state === "cancelled"
         ? "Cancelled"
         : (f.state === "paused" ? "Paused · " : "") + title + (elapsed ? " (" + elapsed + ")" : "");
-  return ["✈ " + f.plan_name, stripDots(f), tail].filter((x) => x.trim()).join(" · ");
+  return [f.plan_name, stripDots(f), tail].filter((x) => x.trim()).join(" · ");
 }
 
 /** The row's flight is parked on a *you* step: what the rail, the bell and the
@@ -264,10 +276,12 @@ export function rowWaitsOnYou(row: FlightRow | null | undefined): boolean {
   return !!row && row.state === "waiting_you" && row.step?.actor === "you";
 }
 
-/** The checklist items of a *you* step (`config.items`). */
-export function youItems(step: FlightStep | null | undefined): string[] {
+/** The checklist items of a perch (`config.items`): a list, or the editor's
+ * text with one item per line (the server stores a list either way). */
+export function youItems(step: Pick<FlightStep, "config"> | null | undefined): string[] {
   const raw = step?.config?.items;
-  return Array.isArray(raw) ? raw.map((x) => String(x)).filter((x) => x.trim()) : [];
+  const list = Array.isArray(raw) ? raw : typeof raw === "string" ? raw.split("\n") : [];
+  return list.map((x) => String(x).trim()).filter(Boolean);
 }
 
 /** What a *you* step asks (`config.text`), or the parked step's note. */
@@ -286,31 +300,32 @@ export interface FlightBadge {
   you: number;
   /** Verify's due checklists (failing ones included). */
   verify: number;
-  /** Arrivals that will not start on their own. */
-  arrivals: number;
+  /** Items waiting to fly that will not start on their own. */
+  waiting: number;
   /** Any of it failed: the badge turns red. */
   failing: boolean;
 }
 
-/** What waits on you, the top bar's one number: flights parked on you, plus
- * Verify's due checklists, plus arrivals no switch will start. A flight parked
+/** What waits on you, the top bar's one number: flights perched on you, plus
+ * Verify's due checklists, plus items waiting to fly that no switch will
+ * start. A flight parked
  * on a VERIFY step is already one of Verify's due checklists, so it is counted
  * there and not twice. */
 export function flightBadgeCount(
   flights: readonly Flight[],
   dueVerify: number,
   failingVerify: number,
-  arrivals: readonly { auto: boolean }[]
+  waiting: readonly { auto: boolean }[]
 ): FlightBadge {
   const you = needsYouFlights(flights).filter((f) => f.steps[f.cursor]?.kind !== "verify").length;
   const verify = Math.max(0, dueVerify || 0);
-  const manual = arrivals.filter((a) => !a.auto).length;
+  const manual = waiting.filter((a) => !a.auto).length;
   const halted = flights.some((f) => f.state === "halted");
   return {
     count: you + verify + manual,
     you,
     verify,
-    arrivals: manual,
+    waiting: manual,
     failing: (failingVerify || 0) > 0 || halted,
   };
 }
@@ -319,22 +334,27 @@ export function flightBadgeCount(
 export function badgeLines(b: FlightBadge): string[] {
   const n = (k: number, one: string, many: string) => k + " " + (k === 1 ? one : many);
   return [
-    n(b.you, "flight waits on you", "flights wait on you"),
+    n(b.you, "flight perched on you", "flights perched on you"),
     n(b.verify, "checklist to check", "checklists to check"),
-    n(b.arrivals, "arrival to start by hand", "arrivals to start by hand"),
+    n(b.waiting, "item waiting to fly by hand", "items waiting to fly by hand"),
   ];
 }
 
-// --- Arrivals ----------------------------------------------------------------
+// --- Waiting to fly ----------------------------------------------------------
 
-export type ArrivalKind = "tickets" | "prs" | "issues";
+export type WaitingKind = "tickets" | "prs" | "issues";
 
-/** Whether an arrival of this kind starts by itself (the Board's chip and the
+/** The Board's sub-heading and every row's badge for each kind — a row always
+ * says whether it is a ticket, a pull request or an issue. */
+export const WAITING_KIND_HEAD: Record<WaitingKind, string> = { tickets: "Tickets", prs: "Pull requests", issues: "Issues" };
+export const WAITING_KIND_BADGE: Record<WaitingKind, string> = { tickets: "Ticket", prs: "PR", issues: "Issue" };
+
+/** Whether an item of this kind starts by itself (the Board's chip and the
  * badge). Read from the one status call the Auto-start tab reads: tickets go
  * when the engine runs, PR comments and issues on their own switches (a switch
  * that runs on another of your devices still starts them). */
-export function arrivalAuto(
-  kind: ArrivalKind,
+export function waitingAuto(
+  kind: WaitingKind,
   status: { available?: boolean; running?: boolean; desired?: boolean; pr_enabled?: boolean; issues_enabled?: boolean } | null | undefined
 ): boolean {
   if (!status) return false;
@@ -343,9 +363,9 @@ export function arrivalAuto(
   return status.issues_enabled === true;
 }
 
-/** The built-in plan a kind's flights use when its source names none. The
+/** The built-in flyway a kind's flights use when its source names none. The
  * contract has no issue built-in: an issue is worked like a ticket. */
-export function builtinPlanFor(kind: ArrivalKind | TriggerKind, plans?: readonly Pick<FlightPlan, "id">[] | null): string {
+export function builtinPlanFor(kind: WaitingKind | TriggerKind, plans?: readonly Pick<FlightPlan, "id">[] | null): string {
   const own =
     kind === "prs" || kind === "pr"
       ? "builtin:pr"
@@ -369,7 +389,7 @@ export function fieldOptions(f: StepKindField): Array<{ value: string; label: st
   );
 }
 
-/** A new block of a kind: its default title and every field's default. The id
+/** A new stop of a kind: its default title and every field's default. The id
  * is local until saved (the server keeps or reassigns it). */
 export function newStep(def: StepKindDef, taken: readonly string[]): FlightStep {
   const config: Record<string, unknown> = {};
@@ -379,7 +399,7 @@ export function newStep(def: StepKindDef, taken: readonly string[]): FlightStep 
   return { id: "s" + n, kind: def.kind, title: def.default_title || def.label, config, on_fail: "halt" };
 }
 
-/** Move a block from one index to another (drag and ← →). */
+/** Move a stop from one index to another (drag and ← →). */
 export function moveStep<T>(steps: readonly T[], from: number, to: number): T[] {
   if (from === to || from < 0 || from >= steps.length) return steps.slice();
   const out = steps.slice();
@@ -388,7 +408,7 @@ export function moveStep<T>(steps: readonly T[], from: number, to: number): T[] 
   return out;
 }
 
-/** A copy of a block, placed right after it, under a fresh id. */
+/** A copy of a stop, placed right after it, under a fresh id. */
 export function duplicateStep(steps: readonly FlightStep[], index: number): FlightStep[] {
   const src = steps[index];
   if (!src) return steps.slice();
@@ -401,18 +421,18 @@ export function duplicateStep(steps: readonly FlightStep[], index: number): Flig
   return out;
 }
 
-/** Plans compare by what Save would send (the server's `updated` aside). */
+/** Flyways compare by what Save would send (the server's `updated` aside). */
 export function planDirty(a: FlightPlan | null, b: FlightPlan | null): boolean {
   if (!a || !b) return a !== b;
   const strip = (p: FlightPlan) => JSON.stringify({ ...p, updated: 0 });
   return strip(a) !== strip(b);
 }
 
-/** A blank manual plan for "+ New plan". */
+/** A blank manual flyway for "+ New flyway". */
 export function blankPlan(): FlightPlan {
   return {
     id: "",
-    name: "New plan",
+    name: "New flyway",
     description: "",
     builtin: false,
     trigger: { kind: "manual", schedule: null, paused: false },
@@ -422,16 +442,16 @@ export function blankPlan(): FlightPlan {
   };
 }
 
-/** The trigger picker's words. */
+/** The trigger chips' words. */
 export const TRIGGER_LABEL: Record<TriggerKind, string> = {
-  manual: "Manual",
+  manual: "By hand",
   ticket: "Ticket",
   pr: "Pull request",
   issue: "Issue",
   schedule: "Schedule",
 };
 
-/** The `on_fail` picker's words. */
+/** The `on_fail` chips' words. */
 export const ON_FAIL_LABEL: Record<OnFail, string> = {
   halt: "Stop and tell me",
   agent: "Hand it to the agent",
@@ -445,7 +465,7 @@ export type FlightsTab = "board" | "plans" | "sources" | "schedule" | "checklist
 export const FLIGHTS_TABS: readonly FlightsTab[] = ["board", "plans", "sources", "schedule", "checklists"];
 export const FLIGHTS_TAB_LABEL: Record<FlightsTab, string> = {
   board: "Board",
-  plans: "Plans",
+  plans: "Flyways",
   sources: "Sources",
   schedule: "Schedule",
   checklists: "Checklists",
@@ -453,7 +473,8 @@ export const FLIGHTS_TAB_LABEL: Record<FlightsTab, string> = {
 
 /** A Flights dialog target: `<tab>` or `<tab>/<rest>` — rest is the embedded
  * surface's own deep link (an Intake tab, a branch for Verify, Schedule's
- * "new" / "schedule:<name>", a plan id). Unknown or empty = the Board. */
+ * "new" / "schedule:<name>", a flyway id). Unknown or empty = the Board. The
+ * Flyways tab keeps its wire name `plans` (and its `#flights/plans` link). */
 export function parseFlightsTarget(target: string | null | undefined): { tab: FlightsTab; rest: string } {
   const raw = String(target || "").trim();
   const cut = raw.indexOf("/");
@@ -501,22 +522,24 @@ export function scheduleOfWhen(f: WhenForm): FlightSchedule | null {
   return f.at ? { at: f.at, days: f.days } : null;
 }
 
-// --- A source's plan picker ----------------------------------------------------
+// --- A source's flyway chips ---------------------------------------------------
 
-/** The options of a source's Plan picker (and an arrival's): the empty choice
- * first — "<the kind's built-in> (default)", which the server cuts at the
- * source's Fast-track depth — then every plan, built-ins first. A stored plan
- * the list no longer has is kept as its own option, so a save never drops it
- * silently. */
+/** The chips of a source's flyway choice (and a waiting item's): the empty
+ * choice first — "Default · <the kind's built-in>", which the server cuts at
+ * the source's Fast-track depth — then every flyway, built-ins first. A stored
+ * flyway the list no longer has is kept as its own chip, so a save never drops
+ * it silently. */
 export function planChoices(
   plans: readonly Pick<FlightPlan, "id" | "name" | "builtin">[],
-  kind: ArrivalKind,
+  kind: WaitingKind,
   value = ""
-): Array<{ value: string; label: string }> {
+): Array<{ value: string; label: string; builtin?: boolean }> {
   const builtin = plans.find((p) => p.id === builtinPlanFor(kind, plans));
   const ordered = [...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)];
-  const out = [{ value: "", label: (builtin?.name || "Built-in plan") + " (default)" }];
-  for (const p of ordered) out.push({ value: p.id, label: p.name + (p.builtin ? " (built-in)" : "") });
+  const out: Array<{ value: string; label: string; builtin?: boolean }> = [
+    { value: "", label: "Default · " + (builtin?.name || "built-in flyway") },
+  ];
+  for (const p of ordered) out.push({ value: p.id, label: p.name, builtin: p.builtin });
   if (value && !plans.some((p) => p.id === value)) out.push({ value, label: value + " (not found)" });
   return out;
 }

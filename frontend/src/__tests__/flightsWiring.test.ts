@@ -20,7 +20,7 @@ const { hashFor, parseHash } = await import("../lib/surfaceHash");
 const { deriveSessionState, flightYouLabel, needsYouAction, notifyRuleFor } = await import("../lib/sessionState");
 const { chipState } = await import("../lib/stage");
 const { withFlightYou } = await import("../lib/needsYou");
-const { arrivalStartRequest } = await import("../lib/flightsApi");
+const { flyRequest } = await import("../lib/flightsApi");
 const { sourcePlan } = await import("../components/flights/Board");
 
 afterEach(() => useUi.getState().closeDialog());
@@ -104,7 +104,7 @@ describe("the palette", () => {
     const p = code("components/palette/CommandPalette.tsx");
     expect(p).toContain('label: "Flights…"');
     expect(p).toContain('run: () => ui.openDialogFor("flights", "board")');
-    expect(p).toContain('label: "Flights: Plans"');
+    expect(p).toContain('label: "Flights: Flyways"');
     expect(p).toContain('label: "Intake…"');
     expect(p).toContain('label: "Verify…"');
     expect(p).toContain('label: "Schedule…"');
@@ -115,18 +115,21 @@ describe("the top bar", () => {
   const top = code("components/TopBar.tsx");
   it("is one Flights button with the waiting-on-you badge", () => {
     expect(top).toContain('id="flights-btn"');
-    expect(top).toContain('"Flights — where every ticket, PR and scheduled job is on its way from arrival to merge"');
+    expect(top).toContain('"Flights — every ticket, PR and scheduled job on its flyway, from waiting to fly to landed"');
+    // The bird, never a plane.
+    expect(top).toContain('<Bird size={13} className="tb-bird" />');
+    expect(top).not.toContain("✈");
     expect(top).toContain('keys("intake")');
-    expect(top).toContain("flightBadgeCount(flights, due, failing, arrivals)");
+    expect(top).toContain("flightBadgeCount(flights, due, failing, waiting)");
     expect(top).toContain("badgeLines(badge)");
     // Nothing at zero, red on a failure.
     expect(top).toContain('{badge.count > 0 && <span className={"tb-count" + (badge.failing ? " is-failing" : "")}>{badge.count}</span>}');
-    // The arrivals come from the cache only: the bar never fans out upstream.
-    expect(top).toContain("useArrivals(false)");
+    // The waiting items come from the cache only: the bar never fans out upstream.
+    expect(top).toContain("useWaiting(false)");
   });
 });
 
-describe("a flight parked on a you step is Needs you", () => {
+describe("a flight perched on you is Needs you", () => {
   const row = (fl: FlightRow | null): Partial<Instance> => ({ title: "s", status: "running", activity: "idle", flight: fl });
   const fl: FlightRow = {
     id: "f_1",
@@ -137,21 +140,22 @@ describe("a flight parked on a you step is Needs you", () => {
     step: { id: "s5", kind: "you", title: "Approve the merge", state: "waiting_you", actor: "you" },
   };
 
-  it("on the rail, labelled You: <step title>, in the bell, under its own notify rule", () => {
+  it("on the rail, labelled Perch: <stop title>, in the bell, under its own notify rule", () => {
     const ss = deriveSessionState(row(fl), { activity: "idle" });
-    expect(ss).toMatchObject({ state: "needs_you", reason: "flight_you", label: "You: Approve the merge", inBell: true });
+    expect(ss).toMatchObject({ state: "needs_you", reason: "flight_you", label: "Perch: Approve the merge", inBell: true });
     expect(notifyRuleFor(ss)).toBe("flight_needs_you");
-    expect(flightYouLabel("")).toBe("You");
+    expect(flightYouLabel("")).toBe("Perch");
     // A robot step running, or a flight that is merely in the air, is not.
     expect(deriveSessionState(row({ ...fl, state: "running" }), { activity: "idle" }).reason).toBeUndefined();
     expect(deriveSessionState(row({ ...fl, step: { ...fl.step, actor: "robot" } }), { activity: "idle" }).reason).toBeUndefined();
-    // A step already titled "You: …" is not prefixed again.
-    expect(deriveSessionState(row({ ...fl, step: { ...fl.step, title: "You: approve" } }), { activity: "idle" }).label).toBe("You: approve");
+    // A stop already titled "Perch: …" (or the old "You: …") is not prefixed again.
+    expect(deriveSessionState(row({ ...fl, step: { ...fl.step, title: "Perch: approve" } }), { activity: "idle" }).label).toBe("Perch: approve");
+    expect(deriveSessionState(row({ ...fl, step: { ...fl.step, title: "You: approve" } }), { activity: "idle" }).label).toBe("Perch: approve");
     // Its chip is capped with an ellipsis (the full words in its title), and
     // a click opens the bell, where Done is.
     const chip = chipState(row(fl) as Instance, ss);
     expect(chip.cls).toContain("chip-flight");
-    expect(chip.title).toContain("You: Approve the merge");
+    expect(chip.title).toContain("Perch: Approve the merge");
     expect(needsYouAction(ss)?.act).toBe("bell");
     expect(css("components/sidebar/SidebarRow.css")).toMatch(
       /\.inst \.stagechip\.chip-flight \{[^}]*max-width: 9\.5em;[^}]*text-overflow: ellipsis;/
@@ -174,28 +178,29 @@ describe("a flight parked on a you step is Needs you", () => {
         key: "flight:f_1",
         title: "a",
         kind: "flight_you",
-        reason: "You: Approve the merge",
-        text: "✈ Ticket to merge",
+        reason: "Perched on you: Approve the merge",
+        text: "Ticket to merge",
         actions: ["done", "skip", "open"],
       },
     ]);
     const listed: OutboxWaiting[] = [{ title: "a", kind: "flight_you" }];
     expect(withFlightYou(listed, [inst])).toEqual(listed);
     expect(code("components/outbox/WaitingRow.tsx")).toContain('if (w.kind === "flight_you") return <FlightYouRow');
+    expect(code("components/outbox/WaitingRow.tsx")).toContain("{perchedOnYou(");
   });
 });
 
-describe("an arrival's Start", () => {
+describe("a waiting item's Fly", () => {
   it("posts the old route and body, plus the picked plan and the row's own picks", () => {
-    expect(arrivalStartRequest({ kind: "tickets", source: "sc", id: "12" }, "")).toEqual({
+    expect(flyRequest({ kind: "tickets", source: "sc", id: "12" }, "")).toEqual({
       path: "/api/tickets/start",
       body: { source: "sc", id: "12" },
     });
-    expect(arrivalStartRequest({ kind: "prs", repo: "acme/api", number: 7 }, "builtin:pr", { agent: "codex", depth: "" })).toEqual({
+    expect(flyRequest({ kind: "prs", repo: "acme/api", number: 7 }, "builtin:pr", { agent: "codex", depth: "" })).toEqual({
       path: "/api/github/prs/review",
       body: { repo: "acme/api", number: 7, agent: "codex", plan: "builtin:pr" },
     });
-    expect(arrivalStartRequest({ kind: "issues", repo: "acme/api", number: 9 }, "p_1")).toEqual({
+    expect(flyRequest({ kind: "issues", repo: "acme/api", number: 9 }, "p_1")).toEqual({
       path: "/api/github/issues/start",
       body: { repo: "acme/api", number: 9, plan: "p_1" },
     });

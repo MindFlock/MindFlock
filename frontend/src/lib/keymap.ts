@@ -523,7 +523,7 @@ export const KEYMAP: KeymapEntry[] = [
     alt: true,
     // The id stays "intake" so a rebind made before Flights survives.
     id: "intake",
-    help: ["Navigation", "Alt+I", "Flights — the Board: what needs you, what is in flight, what has arrived"],
+    help: ["Navigation", "Alt+I", "Flights — the Board: what needs you, what is in flight, what is waiting to fly"],
     // Guarded unlike Alt+N: on macOS Option+I types a dead-key accent, and a
     // surface you open a few times an hour is not worth eating a keystroke
     // someone meant for a text field or a terminal.

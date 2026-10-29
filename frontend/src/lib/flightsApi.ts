@@ -7,9 +7,13 @@
  *  - Jump to…              POST /api/flights/{id}/jump {step}
  *  - Pause / Resume / Cancel  POST /api/flights/{id}/pause · /resume · /cancel
  *  - Take off              POST /api/flights/start {plan_id, repo_path?}
- *  - Start (an arrival)    the Intake start routes, with `plan`
- *  - Plans                 GET/POST /api/flights/plans · DELETE /{id} · POST /{id}/reset
- *  - Describe a step       POST /api/flights/describe {text, want}
+ *  - Fly (waiting to fly)  the Intake start routes, with `plan`
+ *  - Flyways               GET/POST /api/flights/plans · DELETE /{id} · POST /{id}/reset
+ *  - Describe a stop       POST /api/flights/describe {text, want}
+ *  - Tack on a stop        a session with no flight: POST /api/flights/start
+ *                          {title, steps, absorb_fasttrack: true}; a live flight:
+ *                          POST /api/flights/{id}/steps {step, at?}
+ *  - Edit / drop a stop    PATCH · DELETE /api/flights/{id}/steps/{sid} (pending only)
  *
  * Every start ends in `selectSession(title)` as soon as the row exists — the
  * way lib/templateRun.ts does. */
@@ -139,16 +143,16 @@ export async function takeOff(body: StartBody): Promise<Flight | null> {
   }
 }
 
-/** What an arrival's Start posts: the Intake start routes with their bodies
+/** What a waiting item's Fly posts: the Intake start routes with their bodies
  * as today, plus `plan` when one was picked ("" = the source's own plan, which
  * the server resolves — so a source with only a depth behaves as before). */
-export type ArrivalTarget =
+export type WaitingTarget =
   | { kind: "tickets"; source: string; id: string }
   | { kind: "prs"; repo: string; number: number }
   | { kind: "issues"; repo: string; number: number };
 
-export function arrivalStartRequest(
-  t: ArrivalTarget,
+export function flyRequest(
+  t: WaitingTarget,
   plan: string,
   extra: Record<string, string> = {}
 ): { path: string; body: Record<string, unknown> } {
@@ -161,16 +165,16 @@ export function arrivalStartRequest(
   return { path: "/api/github/issues/start", body: { repo: t.repo, number: t.number, ...picks } };
 }
 
-/** Start an arrival and open its session as soon as its row exists. Resolves
- * to the session title; a refusal throws the server's sentence (the row that
- * pressed Start shows it). */
-export async function startArrival(
-  t: ArrivalTarget,
+/** Fly a waiting item and open its session as soon as its row exists.
+ * Resolves to the session title; a refusal throws the server's sentence (the
+ * row that pressed Fly shows it). */
+export async function flyWaiting(
+  t: WaitingTarget,
   plan: string,
   extra: Record<string, string> = {},
   fallbackTitle = ""
 ): Promise<string> {
-  const req = arrivalStartRequest(t, plan, extra);
+  const req = flyRequest(t, plan, extra);
   try {
     const r = await api<{ title?: string }>(req.path, { json: req.body });
     const title = r?.title || fallbackTitle;
@@ -182,10 +186,10 @@ export async function startArrival(
   }
 }
 
-// --- Plans -------------------------------------------------------------------
+// --- Flyways -----------------------------------------------------------------
 
-/** Save a plan (no id = create). Throws the server's refusal ({error, field})
- * so the editor can point at the block. */
+/** Save a flyway (no id = create). Throws the server's refusal ({error, field})
+ * so the editor can point at the stop. */
 export async function savePlan(plan: FlightPlan): Promise<FlightPlan> {
   const body: Partial<FlightPlan> = { ...plan };
   if (!body.id) delete body.id;
@@ -205,9 +209,76 @@ export async function resetPlan(id: string): Promise<FlightPlan> {
   return d.plan;
 }
 
-/** Describe a step (or a plan) in a sentence; the server's one-shot model
- * answers with blocks already through the plan validator. */
+/** Describe a stop (or a whole flyway) in a sentence; the server's one-shot
+ * model answers with stops already through the flyway validator. */
 export async function describeSteps(text: string, want: "step" | "plan" = "step"): Promise<FlightStep[]> {
   const d = await api<{ steps?: FlightStep[] }>("/api/flights/describe", { json: { text, want } });
   return d?.steps || [];
+}
+
+
+// --- Tacking stops onto a session's line ------------------------------------------
+
+/** The step a stop posts: its kind, title, config and on_fail — the id is the
+ * server's to give. */
+function wireStep(step: FlightStep): Omit<FlightStep, "id"> {
+  return { kind: step.kind, title: step.title, config: step.config, on_fail: step.on_fail };
+}
+
+/** The `+` at the end of a session's line, on a session with no flight yet: an
+ * ad-hoc flight of these stops (no saved flyway), which takes over an armed
+ * fast-track — its remaining rungs become the leading ship stops — so the
+ * ladder's boxes turn into the flight's without a jump. */
+export async function tackOnNew(title: string, steps: FlightStep[]): Promise<Flight | null> {
+  try {
+    const d = await api<{ flight?: Flight }>("/api/flights/start", {
+      json: { title, steps: steps.map(wireStep), absorb_fasttrack: true },
+    });
+    return d?.flight || null;
+  } catch (err) {
+    errorPop("Tack on failed", errMsg(err));
+    return null;
+  } finally {
+    void refreshFlights();
+    void refreshInstances();
+  }
+}
+
+/** Tack one stop onto a live flight: appended, or at `at` (only after its
+ * current stop — the server refuses anything earlier). */
+export function tackOn(flightId: string, step: FlightStep, at?: number): Promise<boolean> {
+  return flightAction("Tack on", flightPath(flightId, "/steps"), { step: wireStep(step), ...(at === undefined ? {} : { at }) });
+}
+
+/** Every stop of a flyway, appended to a live flight in order. */
+export async function tackOnAll(flightId: string, steps: FlightStep[]): Promise<boolean> {
+  for (const s of steps) if (!(await tackOn(flightId, s))) return false;
+  return true;
+}
+
+/** Edit a pending stop of a live flight in place (title / config / on_fail). */
+export async function patchStop(flightId: string, stepId: string, patch: Partial<Pick<FlightStep, "title" | "config" | "on_fail">>): Promise<boolean> {
+  try {
+    await api(flightPath(flightId, "/steps/" + enc(stepId)), { method: "PATCH", json: patch });
+    return true;
+  } catch (err) {
+    errorPop("Saving the stop failed", errMsg(err));
+    return false;
+  } finally {
+    void refreshFlights();
+  }
+}
+
+/** Take a pending stop off a live flight. */
+export async function dropStop(flightId: string, stepId: string): Promise<boolean> {
+  try {
+    await api(flightPath(flightId, "/steps/" + enc(stepId)), { method: "DELETE" });
+    return true;
+  } catch (err) {
+    errorPop("Removing the stop failed", errMsg(err));
+    return false;
+  } finally {
+    void refreshFlights();
+    void refreshInstances();
+  }
 }

@@ -41,7 +41,7 @@
 import type { Instance } from "../api/types";
 import { backgroundHint } from "./backgroundJobs";
 import { agentName } from "./agentNames";
-import { youStepLabel } from "./flights";
+import { perchLabel } from "./flights";
 
 // --- Live agent activity, debounced across 2 polls (events push instantly) --
 
@@ -138,8 +138,8 @@ export const STATE_LABEL: Record<Exclude<SessionStateKey, "needs_you">, string> 
 /** The label of each reason a session can need you. */
 export const REASON_LABEL: Record<SessionReason, string> = {
   question: "Question",
-  // "You: <the step's title>" when the row names it (flightYouLabel).
-  flight_you: "You",
+  // "Perch: <the stop's title>" when the row names it (flightYouLabel).
+  flight_you: "Perch",
   precommit_failed: "Pre-commit failed",
   checks_failing: "Checks failing",
   setup_failed: "Setup failed",
@@ -206,10 +206,10 @@ function needsYou(reason: SessionReason, hint?: string): SessionState {
   return { state: "needs_you", reason, label: REASON_LABEL[reason], tone: "attention", inBell: true, restartable: false, hint };
 }
 
-/** "You: Approve the merge" — a flight's *you* step as the chip says it (never
- * "You: You: …" for a step whose title already says so). */
+/** "Perch: Approve the merge" — a flight perched on you, as the rail chip says
+ * it (never "Perch: Perch: …" for a stop whose title already says so). */
 export function flightYouLabel(stepTitle: string | null | undefined): string {
-  return youStepLabel(stepTitle);
+  return perchLabel(stepTitle);
 }
 
 /** The rail chip of a session whose flight is paused: a calm idle state,
@@ -264,14 +264,14 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
   const act = extras?.activity ?? effectiveActivity(inst);
   if (act === "clarify")
     return needsYou("question", "The agent asked you a question — answer it in its pane or from the bell");
-  // A flight parked on a *you* step: the flight waits for Done, whatever the
+  // A flight perched on you (a `you` stop): it waits for Done, whatever the
   // agent is doing — so ahead of Working.
   const fl = inst.flight;
   if (fl && fl.state === "waiting_you" && fl.step?.actor === "you")
     return {
       ...needsYou(
         "flight_you",
-        flightYouLabel(fl.step.title) + " — flight “" + fl.plan_name + "” waits on you; press Done on its strip, the Board or the bell"
+        flightYouLabel(fl.step.title) + " — flight “" + fl.plan_name + "” is perched on you; press Done on its strip, the Board or the bell"
       ),
       label: flightYouLabel(fl.step.title),
     };

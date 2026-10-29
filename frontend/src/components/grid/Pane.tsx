@@ -52,7 +52,9 @@ import { useCalm } from "../../lib/useCalm";
 import { agentBlocked } from "../../lib/sessionState";
 import { AgentBlockedBanner } from "../setup/AgentBlocked";
 import { PaneFlightStrip } from "../flights/FlightStrip";
-import { flightDrives } from "../../lib/flights";
+import { SessionFlight } from "../flights/SessionFlight";
+import { hasSessionDiagram } from "../../lib/flightDiagram";
+import { flightDrives, rowWaitsOnYou } from "../../lib/flights";
 import { useSetup } from "../setup/useSetup";
 import { VerdictChip } from "../dialogs/VerdictChip";
 import { JointVerdictChip } from "../settings/screens/peer/JointCheck";
@@ -84,7 +86,7 @@ import {
 
 /** "thread" is the Thread tab (the session's workers and what was said
  * between them), opened by its own button or store.threadOpen. */
-type Tab = "agent" | "shell" | "diff" | "queue" | "map" | "thread";
+type Tab = "agent" | "shell" | "diff" | "queue" | "map" | "flight" | "thread";
 
 /** Tabs that need git (the Map reads the worktree's files, diff and imports). */
 const GIT_TABS: ReadonlySet<string> = new Set(["diff", "map"]);
@@ -93,7 +95,7 @@ const MAP_PREFETCH_MS = 1500;
 
 /** Tabs this pane can draw a body for. A saved or requested tab outside it
  * shows the Agent tab instead of an empty pane. */
-const BODY_TABS: ReadonlySet<string> = new Set(["agent", "shell", "diff", "queue", "map", "thread"]);
+const BODY_TABS: ReadonlySet<string> = new Set(["agent", "shell", "diff", "queue", "map", "flight", "thread"]);
 
 /** The tab a pane actually shows for a saved/requested one: a git tab without
  * git, or a tab with no body here, falls back to Agent. */
@@ -145,6 +147,12 @@ export function Pane({
     threadOpened || lastTab === "thread"
   );
   const badge = threadBadge(family.children, threadSeen, effectiveActivity);
+  // The Flight tab: shown once the session has a live diagram worth drawing
+  // (a flight, workers, a parent, an armed fast-track — lib/flightDiagram);
+  // ⋯ → "Fly a flyway…" opens it on any session. Its badge: perched on you,
+  // or halted.
+  const flightShown = hasSessionDiagram(allRows ?? [], title);
+  const flightNeeds = rowWaitsOnYou(inst.flight) || inst.flight?.state === "halted";
   const newestReport = newestReportTs(family.children);
   // The Map tab's badge: the rail row's zone chip (a breach, an unseen block,
   // the guard off…), else a quiet count of changed files (lib/mapEntry).
@@ -763,6 +771,7 @@ export function Pane({
     calm,
     queueBusy: pending > 0 || holding,
     mapBusy: mapHasState(inst, rzChip),
+    flight: flightShown,
     ftBusy: !!ft && (ft.lane !== "leave" || ft.halted || ft.active || !!ftMenu),
   });
   const shows = (id: PaneButtonId) => items.buttons.includes(id);
@@ -913,6 +922,28 @@ export function Pane({
         {(pending > 0 || holding) && (
           <span className="queue-tab-badge">
             {holding ? "⏳" : pending > 99 ? "99+" : String(pending)}
+          </span>
+        )}
+      </button>
+    ),
+    flight: (
+      <button
+        key="flight"
+        data-tab="flight"
+        role="tab"
+        aria-selected={tab === "flight"}
+        className={"flight-tab" + (tab === "flight" ? " active" : "")}
+        title={
+          "Flight — this session's live diagram: its workers, its fast-track or flight, and + to tack a stop on" +
+          (flightNeeds ? "\n" + (inst.flight?.state === "halted" ? "The flight halted — it needs you" : "The flight is perched on you") : "")
+        }
+        onClick={(e) => { e.stopPropagation(); showTab("flight"); }}
+      >
+        <TabIcon name="flight" />
+        <span className="tab-label">Flight</span>
+        {flightNeeds && (
+          <span className="queue-tab-badge flight-badge needs" aria-hidden="true">
+            !
           </span>
         )}
       </button>
@@ -1248,7 +1279,8 @@ export function Pane({
       </div>
       <AgentBlockedBanner block={noAgent} title={title} />
       {/* Its own row, not in .pane-head (which hides chips): the flight's
-          ✈ plan · ●●●○○ · step (elapsed), with Done / Skip on a you step. */}
+          bird · flyway · ●●●○○ · stop (elapsed), with Done / Skip on a perch;
+          the line itself opens the Flight tab. */}
       {inst.flight && <PaneFlightStrip inst={inst} />}
       {strip && (
         <div
@@ -1332,6 +1364,11 @@ export function Pane({
         <div className={"pane-queue" + (tab !== "queue" ? " hidden" : "")}>
           <QueueTab title={title} active={tab === "queue"} />
         </div>
+        {tab === "flight" && (
+          <div className="pane-flight">
+            <SessionFlight inst={inst} />
+          </div>
+        )}
         {threadShown && (
           <div className={"pane-thread" + (tab !== "thread" ? " hidden" : "")}>
             <ThreadTab title={title} active={tab === "thread"} />

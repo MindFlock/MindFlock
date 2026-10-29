@@ -37,7 +37,7 @@ import {
 import { cancelRun, raiseBudget, runAction as act, runPath, suggestedBudget, taskPath } from "../../lib/runsApi";
 import { releaseChoices } from "../../lib/splitRun";
 import { stepDone, stepSkip } from "../../lib/flightsApi";
-import { flightYouLabel } from "../../lib/sessionState";
+import { perchedOnYou } from "../../lib/flights";
 import type { RunInfo } from "../../lib/runs";
 
 /** Take the user to a session's pane (optionally a tab of it), closing any
@@ -425,7 +425,7 @@ function ApprovePreview({ w, row }: { w: OutboxWaiting; row?: Instance }) {
   );
 }
 
-/** A flight parked on a *you* step (docs/flights.md): Done / Skip right here,
+/** A flight perched on you (a `you` stop, docs/flights.md): Done / Skip right here,
  * from the session row's `flight` (its id and the step's), and Open ↗ to go
  * look first. */
 function FlightYouRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; shown: (t: string) => string }) {
@@ -443,7 +443,9 @@ function FlightYouRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; sho
     <div className="pr-open-item ob-item ob-flight_you" data-outbox-row={w.title}>
       <RowMain title={w.title} text={w.text} shown={shown} row={row} />
       <div className="pr-open-meta">
-        <span className="pr-open-chip warn">{w.reason || flightYouLabel(fl?.step?.title)}</span>
+        <span className="pr-open-chip warn" title={w.reason || undefined}>
+          {perchedOnYou(fl?.step?.title || (w as { flight?: { step_title?: string } }).flight?.step_title || "")}
+        </span>
       </div>
       <div className="ik-item-start">
         <div className="ob-acts">

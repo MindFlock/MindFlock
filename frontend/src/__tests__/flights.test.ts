@@ -5,7 +5,6 @@
 
 import { describe, expect, it } from "vitest";
 import {
-  arrivalAuto,
   badgeLines,
   blankPlan,
   builtinPlanFor,
@@ -30,8 +29,10 @@ import {
   stripDots,
   stripLabel,
   whenFormOf,
+  waitingAuto,
   youItems,
-  youStepLabel,
+  perchLabel,
+  perchedOnYou,
   youText,
   type Flight,
   type FlightRow,
@@ -152,9 +153,9 @@ describe("what waits on you", () => {
     expect(needsYouFlights([flight(), parked, halted]).map((f) => f.id)).toEqual(["f_2", "f_3"]);
   });
 
-  it("the badge adds flights on you + Verify's due checklists + arrivals no switch starts", () => {
+  it("the badge adds flights perched on you + Verify's due checklists + items waiting to fly that no switch starts", () => {
     const b = flightBadgeCount([flight(), parked], 2, 0, [{ auto: true }, { auto: false }, { auto: false }]);
-    expect(b).toEqual({ count: 5, you: 1, verify: 2, arrivals: 2, failing: false });
+    expect(b).toEqual({ count: 5, you: 1, verify: 2, waiting: 2, failing: false });
   });
 
   it("never counts a flight parked on a verify step twice (Verify already does)", () => {
@@ -168,16 +169,16 @@ describe("what waits on you", () => {
       count: 0,
       you: 0,
       verify: 0,
-      arrivals: 0,
+      waiting: 0,
       failing: false,
     });
   });
 
   it("the tooltip names the three counts", () => {
-    expect(badgeLines({ count: 3, you: 1, verify: 2, arrivals: 0, failing: false })).toEqual([
-      "1 flight waits on you",
+    expect(badgeLines({ count: 3, you: 1, verify: 2, waiting: 0, failing: false })).toEqual([
+      "1 flight perched on you",
       "2 checklists to check",
-      "0 arrivals to start by hand",
+      "0 items waiting to fly by hand",
     ]);
   });
 
@@ -205,22 +206,33 @@ describe("a paused flight", () => {
   });
 
   it("says Paused on the strip", () => {
-    expect(stripLabel(paused, NOW_MS)).toBe("✈ Ticket to merge · ●●–●○○ · Paused · Reviews settle (4m)");
+    expect(stripLabel(paused, NOW_MS)).toBe("Ticket to merge · ●●–●○○ · Paused · Reviews settle (4m)");
   });
 });
 
-describe("the You: prefix", () => {
-  it("is added once, never twice", () => {
-    expect(youStepLabel("Approve the merge")).toBe("You: Approve the merge");
-    expect(youStepLabel("You: approve the merge")).toBe("You: approve the merge");
-    expect(youStepLabel("you:check it")).toBe("you:check it");
-    expect(youStepLabel("")).toBe("You");
+describe("a perch's words", () => {
+  it("Perch: is added once, never twice (nor after the old You:)", () => {
+    expect(perchLabel("Approve the merge")).toBe("Perch: Approve the merge");
+    expect(perchLabel("Perch: approve the merge")).toBe("Perch: approve the merge");
+    expect(perchLabel("You: approve the merge")).toBe("Perch: approve the merge");
+    expect(perchLabel("you:check it")).toBe("Perch: check it");
+    expect(perchLabel("")).toBe("Perch");
+  });
+
+  it("the bell says Perched on you", () => {
+    expect(perchedOnYou("Approve the merge")).toBe("Perched on you: Approve the merge");
+    expect(perchedOnYou("Perch: approve")).toBe("Perched on you: approve");
+    expect(perchedOnYou("")).toBe("Perched on you");
+  });
+
+  it("a perch's checklist reads a list or the editor's lines", () => {
+    expect(youItems({ config: { items: "Read the diff\n\n  Checks green " } })).toEqual(["Read the diff", "Checks green"]);
   });
 });
 
 describe("the pane strip's line", () => {
-  it("✈ plan · dots · step (elapsed) from a full flight", () => {
-    expect(stripLabel(flight(), NOW_MS)).toBe("✈ Ticket to merge · ●●–●○○ · Reviews settle (4m)");
+  it("flyway · dots · stop (elapsed) from a full flight — no plane glyph, the strip draws the bird", () => {
+    expect(stripLabel(flight(), NOW_MS)).toBe("Ticket to merge · ●●–●○○ · Reviews settle (4m)");
   });
 
   it("from a session row: the cursor fills the dots, no elapsed", () => {
@@ -233,7 +245,7 @@ describe("the pane strip's line", () => {
       step: { id: "s3", kind: "ship", title: "Push", state: "running", actor: "robot" },
     };
     expect(stripDots(row)).toBe("●●●○○○");
-    expect(stripLabel(row)).toBe("✈ Ticket to merge · ●●●○○○ · Push");
+    expect(stripLabel(row)).toBe("Ticket to merge · ●●●○○○ · Push");
     expect(rowWaitsOnYou(row)).toBe(false);
     expect(rowWaitsOnYou({ ...row, state: "waiting_you", step: { ...row.step, actor: "you" } })).toBe(true);
     expect(rowWaitsOnYou(null)).toBe(false);
@@ -244,13 +256,13 @@ describe("the pane strip's line", () => {
   });
 });
 
-describe("arrivals", () => {
+describe("waiting to fly", () => {
   it("start by themselves on the engine (tickets) or their own switch (PRs, issues)", () => {
-    expect(arrivalAuto("tickets", { available: true, desired: true })).toBe(true);
-    expect(arrivalAuto("tickets", { available: true, desired: false, running: true })).toBe(false);
-    expect(arrivalAuto("prs", { pr_enabled: true })).toBe(true);
-    expect(arrivalAuto("issues", { issues_enabled: false })).toBe(false);
-    expect(arrivalAuto("prs", null)).toBe(false);
+    expect(waitingAuto("tickets", { available: true, desired: true })).toBe(true);
+    expect(waitingAuto("tickets", { available: true, desired: false, running: true })).toBe(false);
+    expect(waitingAuto("prs", { pr_enabled: true })).toBe(true);
+    expect(waitingAuto("issues", { issues_enabled: false })).toBe(false);
+    expect(waitingAuto("prs", null)).toBe(false);
   });
 
   it("default to the built-in plan of their kind (an issue is worked like a ticket)", () => {

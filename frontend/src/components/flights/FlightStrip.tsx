@@ -1,17 +1,18 @@
-/** A flight drawn as one strip: its headline, its blocks as a row of chips
- * (done ✓ · current ● pulsing · pending ○ · failed ✗ · skipped –; *you* blocks
- * outlined in the needs-you gold), the current step and how long it has been
- * there, Done / Skip on a parked *you* step, and a ⋯ (Open session · Pause /
- * Resume · Jump to… · Cancel).
+/** A flight, live: its stops on the canvas (FlywayCanvas) with what each one
+ * is doing — done ✓ dimmed, the current one pulsing (gold perched on you,
+ * green while the flock works, red halted with the reason), skipped struck
+ * through, pending outlined — a perch's checklist and Done / Skip inside its
+ * box, and a ⋯ on every box (Jump here · Retry · Pause / Resume · Cancel).
  *
- * Two homes, one set of parts: the Board's strip (`FlightCard`, a click on it
- * opens the session and closes the dialog) and the pane's one-line strip
- * (`PaneFlightStrip`, above the terminal, where the guided next-step button
- * was). Every action posts through lib/flightsApi. */
+ * Two homes here, one set of parts: the Board's card (`FlightCard` — the
+ * session's live diagram on one compact row; a click on its head opens the
+ * session) and the pane's one-line strip (`PaneFlightStrip`, above the pane
+ * body: a button that opens the session's Flight tab). The Flight tab itself
+ * is SessionFlight.tsx. Every action posts through lib/flightsApi. */
 
 import { useState, type MouseEvent, type ReactNode } from "react";
 import type { Instance } from "../../api/types";
-import { useFlightKinds, useFlights } from "../../state/queries";
+import { useFlightKinds, useFlights, useInstances } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
 import { useNow } from "../../lib/useNow";
@@ -21,18 +22,20 @@ import {
   currentElapsed,
   flightProgress,
   isLive,
+  perchLabel,
   rowWaitsOnYou,
   stepActor,
-  stepGlyph,
   stripLabel,
   youItems,
-  youStepLabel,
   youText,
   type Flight,
   type FlightRow,
   type StepKindDef,
 } from "../../lib/flights";
+import { flightDiagram, sessionDiagram, type BoxSize, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { controlFlight, jumpFlight, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { FlywayCanvas } from "./FlywayCanvas";
+import { Bird } from "./Bird";
 
 const stop = (e: MouseEvent) => e.stopPropagation();
 
@@ -44,7 +47,16 @@ export function openFlightSession(title: string) {
   selectSession(title);
 }
 
-/** The headline a strip leads with: the subject's title, else its reference,
+/** Open a session on its Flight tab (the pane strip, the ⋯ "Fly a flyway…",
+ * a Board card's +). */
+export function openFlightTab(title: string) {
+  if (!title) return;
+  useUi.getState().closeDialog();
+  selectSession(title);
+  useUi.getState().setLastTab(title, "flight");
+}
+
+/** The headline a card leads with: the subject's title, else its reference,
  * else the session. */
 export function flightHeadline(f: Flight): string {
   const s = f.subject;
@@ -53,57 +65,8 @@ export function flightHeadline(f: Flight): string {
   return f.session || f.plan_name;
 }
 
-/** The row of block chips. In jump mode each chip is a button that moves the
- * cursor there. */
-export function BlockChips({
-  flight,
-  kinds,
-  onJump,
-}: {
-  flight: Flight;
-  kinds?: readonly StepKindDef[] | null;
-  /** Jump mode: pressing a chip jumps to it. */
-  onJump?: (stepId: string, title: string) => void;
-}) {
-  const { states } = flightProgress(flight);
-  return (
-    <ol className={"fl-chips" + (onJump ? " fl-chips-jump" : "")} aria-label="Steps">
-      {flight.steps.map((s, i) => {
-        const st = states[i];
-        const you = stepActor(s, kinds) === "you";
-        const cls =
-          "fl-chip fl-chip-" + st + (you ? " fl-chip-you" : " fl-chip-robot") + (i === flight.cursor && isLive(flight) ? " fl-chip-current" : "");
-        const label = s.title + " — " + (you ? "you" : "robot") + ", " + st.replace("_", " ");
-        return (
-          <li key={s.id} className={cls} title={label}>
-            {onJump ? (
-              <button
-                type="button"
-                className="fl-chip-btn"
-                aria-label={"Jump to " + s.title}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onJump(s.id, s.title);
-                }}
-              >
-                <span className="fl-chip-glyph" aria-hidden="true">{stepGlyph(st)}</span>
-                <span className="fl-chip-text">{s.title}</span>
-              </button>
-            ) : (
-              <>
-                <span className="fl-chip-glyph" aria-hidden="true">{stepGlyph(st)}</span>
-                <span className="fl-chip-text">{s.title}</span>
-              </>
-            )}
-          </li>
-        );
-      })}
-    </ol>
-  );
-}
-
-/** Done / Skip on a parked *you* step, its checklist as tick boxes (ticking
- * them all is what enables Done); Retry / Skip on a halted one. */
+/** Done / Skip on a perch, its checklist as tick boxes (ticking them all is
+ * what enables Done); Retry / Skip on a halted stop. */
 export function YouStepActions({ flight, compact = false }: { flight: Flight; compact?: boolean }) {
   const step = flight.steps[flight.cursor];
   const items = youItems(step);
@@ -123,13 +86,13 @@ export function YouStepActions({ flight, compact = false }: { flight: Flight; co
   const halted = flight.state === "halted";
   const text = youText(flight);
   return (
-    <div className={"fl-you" + (compact ? " fl-you-compact" : "")} onClick={stop}>
-      {!compact && text && <p className="fl-you-text">{text}</p>}
+    <div className={"fl-you" + (compact ? " fl-you-compact" : "")} onClick={stop} data-no-drag>
+      {!compact && text && !halted && <p className="fl-you-text">{text}</p>}
       {!halted && items.length > 0 && (
         <ul className="fl-you-items">
           {items.map((it, i) => (
             <li key={key(i)}>
-              <label>
+              <label className="fl-tick">
                 <input
                   type="checkbox"
                   checked={!!ticked[key(i)]}
@@ -147,7 +110,7 @@ export function YouStepActions({ flight, compact = false }: { flight: Flight; co
             type="button"
             className="btn-primary fl-btn"
             disabled={busy}
-            title="Run this step again"
+            title="Run this stop again"
             onClick={() => void run(() => stepRetry(flight.id, step.id))}
           >
             Retry
@@ -157,7 +120,7 @@ export function YouStepActions({ flight, compact = false }: { flight: Flight; co
             type="button"
             className="btn-primary fl-btn fl-done"
             disabled={busy || !allTicked}
-            title={allTicked ? "Mark “" + step.title + "” done — the flight goes on" : "Tick every item first"}
+            title={allTicked ? "Mark “" + step.title + "” done — the flight flies on" : "Tick every item first"}
             onClick={() => void run(() => stepDone(flight.id, step.id))}
           >
             Done
@@ -167,7 +130,7 @@ export function YouStepActions({ flight, compact = false }: { flight: Flight; co
           type="button"
           className="test-btn fl-btn fl-skip"
           disabled={busy}
-          title={"Skip “" + step.title + "” — the flight goes on without it"}
+          title={"Skip “" + step.title + "” — the flight flies on without it"}
           onClick={() => void run(() => stepSkip(flight.id, step.id))}
         >
           Skip
@@ -177,18 +140,16 @@ export function YouStepActions({ flight, compact = false }: { flight: Flight; co
   );
 }
 
-/** The ⋯: Open session · Pause / Resume · Jump to… · Cancel. Cancel asks
+/** The flight's own ⋯: Open session · Pause / Resume · Cancel. Cancel asks
  * inline first (it ends the flight; the session is kept). */
 export function FlightMenu({
   flight,
-  onJumpMode,
   onCancelAsk,
   openSession = true,
 }: {
   flight: Flight;
-  onJumpMode(): void;
   onCancelAsk(): void;
-  /** The pane strip is already in the session: no "Open session". */
+  /** The pane is already in the session: no "Open session". */
   openSession?: boolean;
 }) {
   const live = isLive(flight);
@@ -198,75 +159,126 @@ export function FlightMenu({
   if (live) {
     items.push(
       flight.state === "halted" || flight.state === "paused"
-        ? { key: "resume", label: "Resume", title: "Carry on from the current step", onSelect: () => void controlFlight(flight.id, "resume") }
-        : { key: "pause", label: "Pause", title: "Hold the flight at its current step", onSelect: () => void controlFlight(flight.id, "pause") }
+        ? { key: "resume", label: "Resume", title: "Fly on from the current stop", onSelect: () => void controlFlight(flight.id, "resume") }
+        : { key: "pause", label: "Pause", title: "Hold the flight at its current stop", onSelect: () => void controlFlight(flight.id, "pause") }
     );
-    items.push({ key: "jump", label: "Jump to…", title: "Move the flight to another block", onSelect: onJumpMode });
     items.push({ key: "cancel", label: "Cancel", danger: true, title: "End this flight — its session is kept", onSelect: onCancelAsk });
   }
   return (
-    <span onClick={stop} className="fl-menu">
+    <span onClick={stop} className="fl-menu" data-no-drag>
       <OverflowMenu label="Flight actions" items={items} />
     </span>
   );
 }
 
-/** The jump row and the cancel question, under a strip. */
-function useStripControls(flight: Flight) {
-  const [jumping, setJumping] = useState(false);
-  const [asking, setAsking] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const onJump = jumping
-    ? (stepId: string, title: string) => {
-        setJumping(false);
-        void jumpFlight(flight.id, stepId, title);
-      }
-    : undefined;
-  const extra: ReactNode = (
-    <>
-      {jumping && (
-        <div className="fl-jump-row" onClick={stop}>
-          <span>Jump to… pick a block above.</span>
-          <button type="button" className="test-btn fl-btn" onClick={() => setJumping(false)}>
-            Cancel
-          </button>
-        </div>
-      )}
-      {asking && (
-        <div onClick={stop}>
-          <InlineConfirm
-            title="Cancel this flight?"
-            body="It stops where it is. Its session, branch and work are kept."
-            confirmLabel="Cancel"
-            cancelLabel="Keep it"
-            busy={busy}
-            onCancel={() => setAsking(false)}
-            onConfirm={async () => {
-              setBusy(true);
-              try {
-                await controlFlight(flight.id, "cancel");
-              } finally {
-                setBusy(false);
-                setAsking(false);
-              }
-            }}
-          />
-        </div>
-      )}
-    </>
-  );
-  return { onJump, extra, jumpMode: () => setJumping(true), cancelAsk: () => setAsking(true) };
+/** A box's ⋯ on a live flight: Jump here (any stop but the current one),
+ * Retry (the halted or failed one), and the flight's Pause / Resume / Cancel. */
+export function stopMenuItems(flight: Flight, n: DiagramNode, onCancelAsk: () => void): MenuItem[] {
+  if (!isLive(flight) || n.kind !== "stop" || n.index === undefined) return [];
+  const step = flight.steps[n.index];
+  if (!step) return [];
+  const items: MenuItem[] = [];
+  const atCursor = n.index === flight.cursor;
+  if (!atCursor) items.push({ key: "jump", label: "Jump here", title: "Move the flight to this stop", onSelect: () => void jumpFlight(flight.id, step.id, step.title) });
+  if (n.state === "halted" || n.state === "failed")
+    items.push({ key: "retry", label: "Retry", title: "Run this stop again", onSelect: () => void stepRetry(flight.id, step.id) });
+  if (atCursor)
+    items.push(
+      flight.state === "halted" || flight.state === "paused"
+        ? { key: "resume", label: "Resume", title: "Fly on from here", onSelect: () => void controlFlight(flight.id, "resume") }
+        : { key: "pause", label: "Pause", title: "Hold the flight at this stop", onSelect: () => void controlFlight(flight.id, "pause") }
+    );
+  items.push({ key: "cancel", label: "Cancel flight", danger: true, title: "End this flight — its session is kept", onSelect: onCancelAsk });
+  return items;
 }
 
-/** One flight on the Board. Clicking the strip body opens its session. */
-export function FlightCard({ flight, kinds }: { flight: Flight; kinds?: readonly StepKindDef[] | null }) {
+/** The cancel question, under a card or the pane's diagram. */
+export function useCancelAsk(flight: Flight | null) {
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const node: ReactNode =
+    asking && flight ? (
+      <div onClick={stop}>
+        <InlineConfirm
+          title="Cancel this flight?"
+          body="It stops where it is. Its session, branch and work are kept."
+          confirmLabel="Cancel flight"
+          cancelLabel="Keep flying"
+          busy={busy}
+          onCancel={() => setAsking(false)}
+          onConfirm={async () => {
+            setBusy(true);
+            try {
+              await controlFlight(flight.id, "cancel");
+            } finally {
+              setBusy(false);
+              setAsking(false);
+            }
+          }}
+        />
+      </div>
+    ) : null;
+  return { node, ask: () => setAsking(true) };
+}
+
+/** What goes inside a live flight's boxes: the ⋯, and — when `expand` — a
+ * perch's checklist with Done / Skip (or a halted stop's Retry / Skip) in the
+ * current box, which is drawn bigger to hold them. */
+export function liveBoxParts(flight: Flight | null, expand: boolean, onCancelAsk: () => void) {
+  const cur = flight ? flight.steps[flight.cursor] : null;
+  const expanded = (n: DiagramNode) =>
+    !!flight && expand && n.kind === "stop" && n.index === flight.cursor && (n.state === "perched" || n.state === "halted");
+  const renderInBox = (n: DiagramNode): ReactNode => {
+    if (!flight || n.kind !== "stop") return null;
+    const items = stopMenuItems(flight, n, onCancelAsk);
+    return (
+      <>
+        {items.length > 0 && (
+          <span className="fl-box-menu" onClick={stop} data-no-drag>
+            <OverflowMenu label={"Actions for " + n.title} items={items} />
+          </span>
+        )}
+        {expanded(n) && <YouStepActions flight={flight} />}
+      </>
+    );
+  };
+  const sizeOf = (n: DiagramNode, base: BoxSize): BoxSize => {
+    if (!expanded(n)) return base;
+    const items = n.state === "perched" ? youItems(cur).length : 0;
+    const text = n.state === "perched" && youText(flight!) ? 24 : 0;
+    return { w: Math.max(base.w, 250), h: base.h + text + items * 23 + 38 };
+  };
+  return { renderInBox, sizeOf };
+}
+
+/** The box of the stop a flight is at (the canvas scrolls it into view). */
+export function currentNodeId(d: Diagram, flight: Flight | null): string | null {
+  if (!flight) return null;
+  return d.nodes.find((n) => n.kind === "stop" && n.index === flight.cursor)?.id || null;
+}
+
+/** One flight on the Board: its headline, the bird and its flyway, the
+ * session; then the session's live diagram on one compact row. A click on
+ * the head opens its session; on a box, it opens that box's ⋯ or acts. */
+export function FlightCard({ flight, kinds, expand = false }: { flight: Flight; kinds?: readonly StepKindDef[] | null; expand?: boolean }) {
   const now = useNow(isLive(flight) ? 30_000 : false);
-  const c = useStripControls(flight);
+  const rows = useInstances().data || [];
+  const flights = useFlights().data;
+  const cancel = useCancelAsk(flight);
   const prog = flightProgress(flight);
   const step = prog.current;
   const elapsed = currentElapsed(flight, now);
   const waiting = flight.state === "waiting_you" || flight.state === "halted";
   const you = step ? stepActor(step, kinds) === "you" : false;
+  const live = isLive(flight);
+  // The session's live diagram when its row says it is flying this flight;
+  // otherwise (landed, or the session is gone) the flight's own stops.
+  const row = rows.find((r) => r.title === flight.session);
+  const fromRow = live && row && (row.flight as FlightRow | null | undefined)?.id === flight.id;
+  const diagram: Diagram = fromRow
+    ? sessionDiagram(rows, flight.session, { flights: flights || [flight], kinds, family: false })
+    : flightDiagram(flight, kinds);
+  const parts = liveBoxParts(flight, expand, cancel.ask);
   return (
     <div
       className={"fl-strip-card fl-state-" + flight.state + (waiting ? " fl-needs" : "")}
@@ -282,6 +294,7 @@ export function FlightCard({ flight, kinds }: { flight: Flight; kinds?: readonly
         title={flight.session ? "Open " + flight.session : undefined}
         onClick={() => openFlightSession(flight.session)}
         onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             openFlightSession(flight.session);
@@ -290,11 +303,13 @@ export function FlightCard({ flight, kinds }: { flight: Flight; kinds?: readonly
       >
         <div className="fl-strip-head">
           <span className="fl-strip-title">{flightHeadline(flight)}</span>
-          <span className="fl-strip-plan">✈ {flight.plan_name}</span>
+          <span className="fl-strip-plan">
+            <Bird size={13} />
+            {flight.plan_name}
+          </span>
           {flight.session && <span className="fl-strip-session">{flight.session}</span>}
-          <FlightMenu flight={flight} onJumpMode={c.jumpMode} onCancelAsk={c.cancelAsk} />
+          <FlightMenu flight={flight} onCancelAsk={cancel.ask} />
         </div>
-        <BlockChips flight={flight} kinds={kinds} onJump={c.onJump} />
         <div className="fl-strip-now">
           {flight.state === "done" ? (
             <span className="fl-landed">Landed</span>
@@ -302,8 +317,8 @@ export function FlightCard({ flight, kinds }: { flight: Flight; kinds?: readonly
             <span className="muted">Cancelled{flight.reason ? " — " + flight.reason : ""}</span>
           ) : step ? (
             <>
-              <span className={"fl-now-dot" + (you ? " fl-now-you" : "")} aria-hidden="true" />
-              <span className="fl-now-title">{you ? youStepLabel(step.title) : step.title}</span>
+              <span className={"fl-now-dot" + (you ? " fl-now-you" : "") + (flight.state === "halted" ? " fl-now-halted" : "")} aria-hidden="true" />
+              <span className="fl-now-title">{you ? perchLabel(step.title) : step.title}</span>
               {elapsed && <span className="fl-now-elapsed">{elapsed}</span>}
               {flight.state === "paused" && <span className="fl-now-paused">Paused</span>}
               {flight.state === "halted" && flight.reason && <span className="fl-now-reason">{flight.reason}</span>}
@@ -314,52 +329,54 @@ export function FlightCard({ flight, kinds }: { flight: Flight; kinds?: readonly
           </span>
         </div>
       </div>
-      <YouStepActions flight={flight} />
-      {c.extra}
+      <FlywayCanvas
+        diagram={diagram}
+        compact
+        vertical={false}
+        label={"Where “" + flightHeadline(flight) + "” is"}
+        onSelect={() => openFlightTab(flight.session)}
+        onOpen={(n) => (n.kind === "add" ? openFlightTab(flight.session) : n.session ? openFlightSession(n.session) : undefined)}
+        renderInBox={parts.renderInBox}
+        sizeOf={parts.sizeOf}
+        reveal={currentNodeId(diagram, flight)}
+      />
+      {cancel.node}
     </div>
   );
 }
 
-/** The pane's strip: `✈ Ticket to merge · ●●●○○○ · Reviews settle (4m)`, with
- * Done / Skip for a *you* step and a ⋯ for Jump / Cancel. Reads the session
- * row's `flight` field, and the full flight from the shared flights query
- * when it is there (for the elapsed time, the checklist and Jump's blocks). */
+/** The pane's strip: `<bird> Ticket to merge · ●●●○○○ · Reviews settle (4m)` —
+ * a button that opens the session's Flight tab — with Done / Skip for a perch
+ * and a ⋯. Reads the session row's `flight` field, and the full flight from
+ * the shared flights query when it is there (for the elapsed time and the
+ * checklist). */
 export function PaneFlightStrip({ inst }: { inst: Pick<Instance, "title" | "flight"> }) {
   const row = inst.flight as FlightRow | null | undefined;
   const live = !!row && isLive(row);
   const flights = useFlights(live).data;
-  const kinds = useFlightKinds(live).data;
+  useFlightKinds(live);
   const now = useNow(live ? 30_000 : false);
   const full = flights?.find((f) => f.id === row?.id) || null;
+  const cancel = useCancelAsk(full);
   if (!row || !live) return null;
-  return full ? <PaneStripFull flight={full} kinds={kinds} now={now} /> : <PaneStripRow row={row} />;
-}
-
-function PaneStripRow({ row }: { row: FlightRow }) {
+  const line = full ? stripLabel(full, now) : stripLabel(row);
+  const waiting = row.state === "waiting_you" || row.state === "halted";
   return (
-    <div className={"fl-strip fl-state-" + row.state + (rowWaitsOnYou(row) ? " fl-needs" : "")} data-tour="flights-strip">
-      <span className="fl-strip-line" title={stripLabel(row)}>
-        {stripLabel(row)}
-      </span>
-    </div>
-  );
-}
-
-function PaneStripFull({ flight, kinds, now }: { flight: Flight; kinds?: readonly StepKindDef[] | null; now: number }) {
-  const c = useStripControls(flight);
-  const step = flight.steps[flight.cursor];
-  const waiting = flight.state === "waiting_you" || flight.state === "halted";
-  return (
-    <div className={"fl-strip fl-state-" + flight.state + (waiting ? " fl-needs" : "")} data-tour="flights-strip" onMouseDown={stop}>
+    <div className={"fl-strip fl-state-" + row.state + (waiting || rowWaitsOnYou(row) ? " fl-needs" : "")} data-tour="flights-strip" onMouseDown={stop}>
       <div className="fl-strip-row">
-        <span className="fl-strip-line" title={stripLabel(flight, now) + "\n" + flight.steps.map((s) => s.title).join(" → ")}>
-          {stripLabel(flight, now)}
-        </span>
-        {waiting && step && <YouStepActions flight={flight} compact />}
-        <FlightMenu flight={flight} onJumpMode={c.jumpMode} onCancelAsk={c.cancelAsk} openSession={false} />
+        <button
+          type="button"
+          className="fl-strip-line"
+          title={"Open the Flight tab — " + line + (full ? "\n" + full.steps.map((s) => s.title).join(" → ") : "")}
+          onClick={() => openFlightTab(inst.title)}
+        >
+          <Bird size={13} />
+          <span className="fl-strip-text">{line}</span>
+        </button>
+        {full && waiting && <YouStepActions flight={full} compact />}
+        {full && <FlightMenu flight={full} onCancelAsk={cancel.ask} openSession={false} />}
       </div>
-      {c.onJump && <BlockChips flight={flight} kinds={kinds} onJump={c.onJump} />}
-      {c.extra}
+      {cancel.node}
     </div>
   );
 }

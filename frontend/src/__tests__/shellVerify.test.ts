@@ -86,7 +86,7 @@ describe("the top bar's Verify count", () => {
   });
 
   it("turns red when a checklist failed (on the Flights badge, which counts them)", () => {
-    expect(code("components/TopBar.tsx")).toContain("flightBadgeCount(flights, due, failing, arrivals)");
+    expect(code("components/TopBar.tsx")).toContain("flightBadgeCount(flights, due, failing, waiting)");
     expect(code("components/TopBar.tsx")).toContain('"tb-count" + (badge.failing ? " is-failing" : "")');
     expect(css("components/TopBar.css")).toContain("#topbar .tb-count.is-failing {");
   });

@@ -44,6 +44,8 @@ const TAB_ICONS: Record<PaneTabId, ReactNode> = {
       <circle cx="4.5" cy="18" r="1" />
     </>
   ),
+  // A bird in flight: the session's flight and its line.
+  flight: <path d="M2 9.5c3.4-2.8 6.8-2.3 10 2 3.2-4.3 6.6-4.8 10-2" />,
   // Two speech bubbles: what passed between the workers.
   thread: (
     <>

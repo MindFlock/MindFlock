@@ -3,9 +3,11 @@
  * One card with a tab strip over one scrolling body, Intake's anatomy: the
  * three surfaces it absorbed keep their own markup inside it, stripped of their
  * card chrome (border, shadow, fixed width) so they read as tabs, not as cards
- * in a card. Robot blocks are solid, *you* blocks are outlined in the
- * needs-you gold, the current block pulses. The block row scrolls inside its
- * own container, so a phone never scrolls the page sideways. */
+ * in a card. Flights are drawn on the flyway canvas (FlywayCanvas.css); this
+ * sheet is everything around it — the Board's groups and cards, the waiting
+ * rows with their kind badges, the Flyways editor's list, palette, inspector
+ * and describe field, the pane's strip and its Flight tab. Nothing here
+ * scrolls the page sideways: the canvas scrolls inside itself. */
 
 #flights-panel {
   width: 900px;
@@ -237,6 +239,16 @@ details.fl-group-landed > summary {
   white-space: nowrap;
 }
 
+.fl-strip-plan {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.fl-strip-plan .fl-bird {
+  color: var(--accent);
+}
+
 .fl-strip-session {
   font-family: var(--mono, ui-monospace, monospace);
   max-width: 180px;
@@ -248,73 +260,6 @@ details.fl-group-landed > summary {
   flex: none;
 }
 
-/* The block chips: a row that scrolls inside itself. */
-.fl-chips {
-  display: flex;
-  gap: 4px;
-  list-style: none;
-  margin: 0;
-  padding: 0 0 2px;
-  overflow-x: auto;
-  scrollbar-width: thin;
-}
-
-.fl-chip {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11.5px;
-  border-radius: 999px;
-  padding: 2px 9px 2px 7px;
-  border: 1px solid var(--border);
-  background: var(--panel);
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.fl-chip-robot.fl-chip-done {
-  background: color-mix(in srgb, var(--green) 14%, var(--panel));
-  border-color: color-mix(in srgb, var(--green) 40%, var(--border));
-  color: var(--text);
-}
-
-/* You steps: outlined in the needs-you gold, whatever their state. */
-.fl-chip-you {
-  border: 1.5px solid var(--tone-attention);
-  background: transparent;
-}
-
-.fl-chip-you.fl-chip-done {
-  color: var(--text);
-}
-
-.fl-chip-failed {
-  border-color: var(--red);
-  color: var(--red);
-}
-
-.fl-chip-skipped {
-  text-decoration: line-through;
-  opacity: 0.7;
-}
-
-.fl-chip-current {
-  color: var(--text);
-  font-weight: 600;
-  border-color: var(--accent);
-}
-
-.fl-chip-current.fl-chip-you,
-.fl-chip-waiting_you {
-  border-color: var(--tone-attention);
-  background: color-mix(in srgb, var(--tone-attention) 18%, transparent);
-}
-
-.fl-chip-current .fl-chip-glyph {
-  animation: fl-pulse 1.4s ease-in-out infinite;
-}
-
 @keyframes fl-pulse {
   0%,
   100% {
@@ -323,29 +268,6 @@ details.fl-group-landed > summary {
   50% {
     opacity: 0.25;
   }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .fl-chip-current .fl-chip-glyph {
-    animation: none;
-  }
-}
-
-.fl-chip-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  background: none;
-  border: 0;
-  padding: 0;
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-}
-
-.fl-chips-jump .fl-chip {
-  border-style: dashed;
-  border-color: var(--accent);
 }
 
 .fl-strip-now {
@@ -368,6 +290,10 @@ details.fl-group-landed > summary {
   background: var(--tone-attention);
 }
 
+.fl-now-dot.fl-now-halted {
+  background: var(--red);
+}
+
 .fl-now-title {
   font-weight: 500;
   overflow: hidden;
@@ -386,11 +312,6 @@ details.fl-group-landed > summary {
   border-radius: 999px;
   padding: 0 7px;
   font-size: 11px;
-}
-
-/* Paused: the current block is marked, but nothing pulses. */
-.fl-state-paused .fl-chip-current .fl-chip-glyph {
-  animation: none;
 }
 
 .fl-now-reason {
@@ -447,15 +368,6 @@ details.fl-group-landed > summary {
   flex-wrap: wrap;
 }
 
-.fl-jump-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px 10px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
 /* Verify's due / failing checklists, one line each. */
 .fl-check-row {
   display: flex;
@@ -509,36 +421,7 @@ details.fl-group-landed > summary {
   white-space: nowrap;
 }
 
-/* Arrivals: Intake's rows, grouped by source. */
-.fl-arrival-group {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.fl-arrival-source {
-  font-size: 11.5px;
-  color: var(--muted);
-}
-
-.fl-plan-pick {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11.5px;
-  margin-top: 4px;
-}
-
-.fl-plan-pick .fl-plan-pick-label {
-  color: var(--muted);
-}
-
-.fl-plan-pick select {
-  max-width: 170px;
-  font-size: 11.5px;
-}
-
-/* --- Plans ----------------------------------------------------------------- */
+/* --- Flyways ---------------------------------------------------------------- */
 
 .fl-plans {
   display: grid;
@@ -632,273 +515,6 @@ details.fl-group-landed > summary {
   font-size: 11.5px;
 }
 
-/* The row of blocks: scrolls inside itself, never the page. */
-.fl-row-scroll {
-  overflow-x: auto;
-  padding: 6px 2px 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--panel-2);
-}
-
-.fl-row {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  width: max-content;
-  padding: 0 8px;
-}
-
-.fl-row-cell {
-  display: flex;
-  align-items: center;
-}
-
-.fl-block {
-  width: 132px;
-  min-height: 58px;
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 3px;
-  padding: 7px 10px;
-  border-radius: 9px;
-  border: 1px solid var(--border);
-  background: var(--panel);
-  cursor: grab;
-  user-select: none;
-}
-
-.fl-block-robot {
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
-}
-
-.fl-block-you {
-  border: 2px dashed var(--tone-attention);
-}
-
-.fl-block.selected {
-  box-shadow: 0 0 0 2px var(--accent);
-}
-
-.fl-block:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.fl-block.fl-described {
-  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
-}
-
-.fl-block-kind {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--muted);
-}
-
-.fl-block-you .fl-block-kind {
-  color: var(--gold);
-}
-
-.fl-block-title {
-  font-size: 12.5px;
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-}
-
-.fl-block-new {
-  font-size: 10px;
-  color: var(--accent);
-}
-
-/* The + between blocks doubles as the arrow from one to the next. */
-.fl-add {
-  flex: none;
-  width: 22px;
-  height: 22px;
-  margin: 0 6px;
-  border-radius: 50%;
-  border: 1px dashed var(--border);
-  background: var(--panel);
-  color: var(--muted);
-  font-size: 14px;
-  line-height: 1;
-  padding: 0;
-  cursor: pointer;
-}
-
-.fl-add:hover,
-.fl-add.active {
-  border-style: solid;
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.fl-add.fl-drop {
-  width: 34px;
-  border: 2px solid var(--accent);
-  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
-}
-
-.fl-describe {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  width: 230px;
-  margin-left: 8px;
-}
-
-.fl-describe textarea {
-  width: 100%;
-  box-sizing: border-box;
-  resize: vertical;
-  font: inherit;
-  font-size: 12px;
-}
-
-.fl-describe .fl-btn {
-  align-self: flex-start;
-}
-
-.fl-palette {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--panel);
-  padding: 10px;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 10px;
-}
-
-.fl-palette-group {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.fl-palette-head {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--muted);
-}
-
-.fl-palette-item {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 1px;
-  text-align: left;
-  font: inherit;
-  color: var(--text);
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 6px 9px;
-  cursor: pointer;
-}
-
-.fl-palette-item.fl-kind-you {
-  border: 1.5px dashed var(--tone-attention);
-}
-
-.fl-palette-item:hover {
-  border-color: var(--accent);
-}
-
-.fl-palette-label {
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-.fl-palette-summary {
-  font-size: 11.5px;
-  color: var(--muted);
-}
-
-.fl-palette-close {
-  grid-column: 1 / -1;
-  justify-self: end;
-}
-
-.fl-block-form,
-.fl-section,
-.fl-takeoff-ask {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 10px 14px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 12px;
-}
-
-.fl-block-form-head {
-  grid-column: 1 / -1;
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-  font-size: 12.5px;
-}
-
-.fl-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  min-width: 0;
-}
-
-.fl-field .fl-field-label {
-  color: var(--muted);
-}
-
-/* Two classes deep: a field's control is outranked by `.set-row input` in
-   a host that wraps it. */
-.fl-field textarea,
-.fl-field input[type="text"],
-.fl-field input[type="number"],
-.fl-field select {
-  width: 100%;
-  box-sizing: border-box;
-  font: inherit;
-}
-
-.fl-field.fl-field-bool {
-  flex-direction: row;
-  align-items: center;
-  gap: 6px;
-}
-
-.fl-field.fl-field-inline {
-  max-width: 260px;
-}
-
-.fl-when,
-.fl-session-defaults {
-  grid-column: 1 / -1;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 10px 14px;
-}
-
-.fl-when .tpl-cron-preview {
-  grid-column: 1 / -1;
-  margin: 0;
-}
-
-.fl-block-acts {
-  grid-column: 1 / -1;
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
 .fl-editor-foot {
   display: flex;
   gap: 8px;
@@ -912,6 +528,563 @@ details.fl-group-landed > summary {
 
 .fl-error {
   margin: 0;
+}
+
+/* --- Waiting to fly: badged rows under their kind's heading ---------------- */
+
+.fl-waiting-kind {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.fl-waiting-head {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+}
+
+.fl-waiting {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  min-width: 0;
+}
+
+.fl-waiting-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.fl-waiting-words {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.fl-waiting-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.fl-waiting-ref {
+  flex: none;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a.fl-waiting-ref:hover {
+  text-decoration: underline;
+}
+
+.fl-waiting-headline {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.fl-waiting-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 11.5px;
+}
+
+.fl-waiting-where {
+  color: var(--text);
+}
+
+.fl-auto {
+  color: var(--muted);
+}
+
+.fl-auto.on {
+  color: var(--green);
+}
+
+.fl-waiting-flyway {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.fl-waiting-flyway .fl-fld-label {
+  flex: none;
+}
+
+.fl-fly {
+  flex: none;
+  min-width: 64px;
+}
+
+/* The kind badge on every row: a ticket, a PR, an issue — never a guess. */
+.fl-kind-badge {
+  flex: none;
+  margin-top: 1px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 6px;
+  border: 1px solid currentColor;
+}
+
+.fl-kind-badge-tickets {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+.fl-kind-badge-prs {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+}
+
+.fl-kind-badge-issues {
+  color: var(--tone-waiting);
+  background: color-mix(in srgb, var(--tone-waiting) 12%, transparent);
+}
+
+/* --- The stop palette, the inspector, describe ------------------------------- */
+
+.fl-palette {
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 12px;
+  background: var(--panel);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.fl-palette-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.fl-icon-btn {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.fl-icon-btn:hover {
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+.fl-palette-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fl-palette-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 6px;
+  align-content: start;
+}
+
+.fl-palette-head {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.fl-palette-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.fl-palette-item:hover,
+.fl-palette-item:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.fl-palette-item.fl-kind-you {
+  border-radius: 16px;
+  border-color: color-mix(in srgb, var(--tone-attention) 60%, var(--border));
+}
+
+.fl-palette-item.fl-kind-you:hover {
+  border-color: var(--tone-attention);
+}
+
+.fl-palette-icon {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.13);
+}
+
+.fl-kind-you .fl-palette-icon {
+  color: var(--tone-attention);
+  background: color-mix(in srgb, var(--tone-attention) 16%, transparent);
+  border-radius: 50%;
+}
+
+.fl-palette-words {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fl-palette-label {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.fl-palette-summary {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.fl-palette-flyways {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.fl-inspector,
+.fl-section,
+.fl-takeoff-ask {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-2);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.fl-inspector-perch {
+  border-color: color-mix(in srgb, var(--tone-attention) 55%, var(--border));
+}
+
+.fl-inspector-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fl-inspector-head .fl-box-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.fl-inspector-perch .fl-inspector-head .fl-box-icon {
+  color: var(--tone-attention);
+  background: color-mix(in srgb, var(--tone-attention) 16%, transparent);
+  border-radius: 50%;
+}
+
+.fl-inspector-kind {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.fl-inspector-kind strong {
+  font-size: 13px;
+}
+
+.fl-inspector-acts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.fl-readonly .fl-form {
+  opacity: 0.75;
+}
+
+.fl-described-note {
+  color: var(--accent);
+  margin: 0;
+}
+
+.fl-describe {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fl-describe-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.fl-describe-row .fl-prompt {
+  flex: 1;
+  min-height: 44px;
+}
+
+.fl-schedule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.fl-schedule-at {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fl-schedule .fl-time.fl-input {
+  width: 110px;
+}
+
+.fl-schedule .fl-date.fl-input {
+  width: 150px;
+}
+
+.fl-schedule > .fl-input {
+  width: 180px;
+}
+
+#flights-panel .fl-head-bird,
+.fl-editor-bird {
+  display: inline-flex;
+  align-self: center;
+  color: var(--accent);
+}
+
+.fl-editor-head .fl-plan-title.fl-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+  background: transparent;
+  border-color: transparent;
+  padding: 4px 8px;
+}
+
+.fl-editor-head .fl-plan-title.fl-input:hover {
+  border-color: var(--border);
+}
+
+.fl-editor-head .fl-plan-title.fl-input:focus {
+  background: var(--bg);
+  border-color: var(--accent);
+}
+
+.fl-unsaved {
+  color: var(--tone-attention);
+}
+
+/* A perch's tick boxes: the New dialog's accent box. */
+.fl-tick {
+  display: inline-flex;
+  gap: 8px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.fl-tick input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin: 1px 0 0;
+  border: 1.5px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  cursor: pointer;
+}
+
+.fl-tick input[type="checkbox"]:hover {
+  border-color: var(--tone-attention);
+}
+
+.fl-tick input[type="checkbox"]:checked {
+  border-color: var(--tone-attention);
+  background: var(--tone-attention)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%231a1a1a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='M2.5 6.3 5 8.8l4.5-5'/%3E%3C/svg%3E")
+    center / 11px no-repeat;
+}
+
+.fl-tick input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* --- The pane's Flight tab (SessionFlight.tsx) ------------------------------ */
+
+.pane-flight {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 12px 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.fl-session {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.fl-session-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.fl-session-head > .fl-bird {
+  color: var(--accent);
+}
+
+.fl-flyway-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.fl-flyway-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.fl-flyway-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-2);
+}
+
+.fl-flyway-card-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+}
+
+.fl-flyway-card-head .fl-bird {
+  color: var(--accent);
+}
+
+.fl-flyway-card .fl-btn {
+  align-self: flex-start;
+}
+
+.fl-mini-line {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 0;
+}
+
+.fl-mini-box {
+  font-size: 10.5px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fl-mini-box:not(:last-child) {
+  margin-right: 12px;
+  position: relative;
+}
+
+.fl-mini-box:not(:last-child)::after {
+  content: "›";
+  position: absolute;
+  right: -10px;
+  color: var(--muted);
+}
+
+.fl-mini-box.fl-perch {
+  border-radius: 10px;
+  border-color: var(--tone-attention);
+  border-width: 1px;
+}
+
+.flight-badge.needs {
+  color: var(--tone-attention-ink);
+  background: var(--tone-attention);
 }
 
 /* --- The pane strip (Pane.tsx, its own row above the terminal) ----------- */
@@ -934,18 +1107,43 @@ details.fl-group-landed > summary {
 
 .fl-strip-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 2px 8px;
   min-width: 0;
 }
 
 .fl-strip-line {
-  flex: 1;
+  flex: 1 1 180px;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  padding: 2px 0;
+  cursor: pointer;
+}
+
+.fl-strip-line:hover .fl-strip-text {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--text) 40%, transparent);
+}
+
+.fl-strip-line .fl-bird {
+  flex: none;
+  color: var(--accent);
+}
+
+.fl-strip-text {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-variant-numeric: tabular-nums;
 }
 
 .fl-strip .fl-you.fl-you-compact {
@@ -966,15 +1164,17 @@ details.fl-group-landed > summary {
   font-size: 11.5px;
 }
 
-.fl-strip .fl-jump-row,
-.fl-strip .fl-chips {
-  padding-left: 0;
-  padding-right: 0;
-}
-
 /* --- Narrow (phone / side panel) ------------------------------------------ */
 
 @media (max-width: 600px) {
+  .fl-waiting-flyway {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .fl-describe-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
   #flights-panel {
     padding: 14px 12px;
     max-width: 100vw;

@@ -302,6 +302,16 @@ body #mf-winctl {
   padding: 0 8px;
 }
 
+/* Flights' bird, before its word. */
+#topbar #flights-btn {
+  gap: 5px;
+}
+
+#topbar #flights-btn .tb-bird {
+  flex: none;
+  opacity: 0.85;
+}
+
 #topbar #new-btn.tb-new:hover {
   background: var(--panel-2);
   border-color: var(--border);
