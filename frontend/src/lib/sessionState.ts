@@ -15,6 +15,8 @@
  *   working    working    the agent  no        Working
  *   needs_you  attention  you        yes       the reason: Question (a dialog, or
  *                                              a reply that asks in plain words) ·
+ *                                              You: <step> (a flight parked on a
+ *                                              *you* step, docs/flights.md) ·
  *                                              Pre-commit failed · Checks failing ·
  *                                              Setup failed
  *   idle       neutral    nobody     no        Idle (the ship-stage chip shows
@@ -94,7 +96,7 @@ export function effectiveActivity(inst: Partial<Instance>): string {
 // --- The state ----------------------------------------------------------------
 
 export type SessionStateKey = "starting" | "working" | "needs_you" | "idle" | "limit" | "offline";
-export type SessionReason = "question" | "precommit_failed" | "checks_failing" | "setup_failed" | "stuck";
+export type SessionReason = "question" | "flight_you" | "precommit_failed" | "checks_failing" | "setup_failed" | "stuck";
 export type SessionTone = "muted" | "working" | "attention" | "neutral" | "waiting" | "broken";
 
 export interface SessionState {
@@ -135,6 +137,8 @@ export const STATE_LABEL: Record<Exclude<SessionStateKey, "needs_you">, string> 
 /** The label of each reason a session can need you. */
 export const REASON_LABEL: Record<SessionReason, string> = {
   question: "Question",
+  // "You: <the step's title>" when the row names it (flightYouLabel).
+  flight_you: "You",
   precommit_failed: "Pre-commit failed",
   checks_failing: "Checks failing",
   setup_failed: "Setup failed",
@@ -147,6 +151,7 @@ export const REASON_LABEL: Record<SessionReason, string> = {
  * a switch that does not exist yet is harmless. "" = never gated. */
 export const NOTIFY_RULE: Record<SessionReason | "offline", string> = {
   question: "needs_input",
+  flight_you: "flight_needs_you",
   precommit_failed: "precommit_failed",
   setup_failed: "setup_failed",
   checks_failing: "checks_failing",
@@ -200,6 +205,12 @@ function needsYou(reason: SessionReason, hint?: string): SessionState {
   return { state: "needs_you", reason, label: REASON_LABEL[reason], tone: "attention", inBell: true, restartable: false, hint };
 }
 
+/** "You: Approve the merge" — a flight's *you* step as the chip says it. */
+export function flightYouLabel(stepTitle: string | null | undefined): string {
+  const t = String(stepTitle || "").trim();
+  return t ? REASON_LABEL.flight_you + ": " + t : REASON_LABEL.flight_you;
+}
+
 /** The rail's word for a sleeping session. */
 export const SLEEPING_LABEL = "Sleeping";
 
@@ -248,6 +259,14 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
   const act = extras?.activity ?? effectiveActivity(inst);
   if (act === "clarify")
     return needsYou("question", "The agent asked you a question — answer it in its pane or from the bell");
+  // A flight parked on a *you* step: the flight waits for Done, whatever the
+  // agent is doing — so ahead of Working.
+  const fl = inst.flight;
+  if (fl && fl.state === "waiting_you" && fl.step?.actor === "you")
+    return {
+      ...needsYou("flight_you", "Flight “" + fl.plan_name + "” waits on you — press Done on its strip, the Board or the bell"),
+      label: flightYouLabel(fl.step.title),
+    };
   const bgHint = backgroundHint(inst);
   if (act === "working")
     return { state: "working", label: STATE_LABEL.working, tone: "working", inBell: false, restartable: false, hint: bgHint || "Agent is working" };

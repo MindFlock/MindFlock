@@ -36,6 +36,8 @@ import {
 } from "./outbox";
 import { cancelRun, raiseBudget, runAction as act, runPath, suggestedBudget, taskPath } from "../../lib/runsApi";
 import { releaseChoices } from "../../lib/splitRun";
+import { stepDone, stepSkip } from "../../lib/flightsApi";
+import { flightYouLabel } from "../../lib/sessionState";
 import type { RunInfo } from "../../lib/runs";
 
 /** Take the user to a session's pane (optionally a tab of it), closing any
@@ -133,6 +135,7 @@ export function WaitingRow({
   };
   const escalation = w.kind !== "prompt" && w.kind !== "approve";
   if (w.kind === "budget") return <BudgetRow w={w} runInfo={runInfo} />;
+  if (w.kind === "flight_you") return <FlightYouRow w={w} row={row} shown={shown} />;
   return (
     <div className={"pr-open-item ob-item ob-" + (escalation ? "escalation" : w.kind)} data-outbox-row={w.title}>
       <RowMain title={w.title} text={w.text} shown={shown} row={row} />
@@ -417,6 +420,61 @@ function ApprovePreview({ w, row }: { w: OutboxWaiting; row?: Instance }) {
         )}
         <span>Then</span>
         <span>{thenText(w.step, lane)}</span>
+      </div>
+    </div>
+  );
+}
+
+/** A flight parked on a *you* step (docs/flights.md): Done / Skip right here,
+ * from the session row's `flight` (its id and the step's), and Open ↗ to go
+ * look first. */
+function FlightYouRow({ w, row, shown }: { w: OutboxWaiting; row?: Instance; shown: (t: string) => string }) {
+  const [busy, setBusy] = useState(false);
+  const fl = row?.flight;
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await fn();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="pr-open-item ob-item ob-flight_you" data-outbox-row={w.title}>
+      <RowMain title={w.title} text={w.text} shown={shown} row={row} />
+      <div className="pr-open-meta">
+        <span className="pr-open-chip warn">{w.reason || flightYouLabel(fl?.step?.title)}</span>
+      </div>
+      <div className="ik-item-start">
+        <div className="ob-acts">
+          {fl && (
+            <>
+              <button
+                type="button"
+                className="btn-primary pr-review-btn"
+                disabled={busy}
+                title={"Mark “" + fl.step.title + "” done — the flight goes on"}
+                onClick={() => void run(() => stepDone(fl.id, fl.step.id))}
+              >
+                Done
+              </button>
+              <button
+                type="button"
+                className="test-btn"
+                disabled={busy}
+                title={"Skip “" + fl.step.title + "” — the flight goes on without it"}
+                onClick={() => void run(() => stepSkip(fl.id, fl.step.id))}
+              >
+                Skip
+              </button>
+            </>
+          )}
+          {row && (
+            <button type="button" className="test-btn" onClick={() => openSession(w.title)}>
+              Open ↗
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

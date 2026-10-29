@@ -33,6 +33,7 @@ import { ruleOn, runLookups, useNotifyConfig, useOutbox, useRuns } from "../stat
 import { needsAttention, withPlanReady } from "./outbox/outbox";
 import { REASON_LABEL, STATE_LABEL } from "../lib/sessionState";
 import { WaitingRow } from "./outbox/WaitingRow";
+import { withFlightYou } from "../lib/needsYou";
 import { showGroup } from "../lib/showGroup";
 import { approvableRequest, deviceEventNote, updateNote } from "../lib/fleet";
 import { approveJoinRequest } from "../lib/deviceActions";
@@ -405,7 +406,7 @@ export function NotificationsBell() {
   // one row per session (outbox.ts `needsAttention` says how they merge).
   // A plan waiting for Go joins it (withPlanReady), so Plan first is seen
   // with the Map closed.
-  const attn = withPlanReady(needsAttention(attentionItems(instances), outbox?.groups?.waiting), instances);
+  const attn = withPlanReady(needsAttention(attentionItems(instances), withFlightYou(outbox?.groups?.waiting, instances)), instances);
   // MindFlock MCP families: a worker's (or an orchestrator's) "needs your
   // answer" item names whose worker it is, and its strip can redirect the
   // question to the lead's Thread — answerable from any screen, two clicks.

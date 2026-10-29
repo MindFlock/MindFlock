@@ -70,14 +70,16 @@ describe("fitTopBar: what a narrow bar gives up, and in which order", () => {
 
 describe("TopBar wiring around the fold", () => {
   it("keeps every id on its own bar button, and folds by class, not by unmounting", () => {
-    for (const id of ["new-btn", "intake-btn", "verify-btn", "schedule-btn", "settings-btn", "palette-btn"])
+    for (const id of ["new-btn", "flights-btn", "settings-btn", "palette-btn"])
       expect(TOPBAR, id).toContain(`id="${id}"`);
-    for (const key of ["verify", "schedule", "settings"]) {
+    // Intake, Verify and Schedule are tabs of Flights: no buttons of their own.
+    for (const id of ["intake-btn", "verify-btn", "schedule-btn"]) expect(TOPBAR, id).not.toContain(`id="${id}"`);
+    for (const key of ["settings"]) {
       expect(TOPBAR).toContain(`className={"tb-item" + (isFolded("${key}") ? " tb-folded" : "")}`);
       expect(TOPBAR).toContain(`data-fold="${key}"`);
     }
-    // New, Intake and the palette never fold.
-    for (const id of ["new-btn", "intake-btn", "palette-btn"]) {
+    // New, Flights and the palette never fold.
+    for (const id of ["new-btn", "flights-btn", "palette-btn"]) {
       const at = TOPBAR.indexOf(`id="${id}"`);
       expect(TOPBAR.slice(at, at + 200), id).not.toContain("tb-folded");
     }
@@ -99,19 +101,17 @@ describe("TopBar wiring around the fold", () => {
   });
 
   it("the calm rule still decides what is on the bar; the fold only lays it out", () => {
-    expect(TOPBAR).toMatch(/\{shows\.verify && \(\s*<button\s+id="verify-btn"/);
-    expect(TOPBAR).toMatch(/\{shows\.schedule && \(\s*<button\s+id="schedule-btn"/);
-    expect(TOPBAR).toMatch(/shows\.verify && \{\s*key: "verify"/);
-    expect(TOPBAR).toMatch(/shows\.schedule && \{\s*key: "schedule"/);
+    // Flights is always shown (lib/calm topBarShows) and never in the fold.
+    expect(TOPBAR).toMatch(/\{shows\.flights && \(\s*<button\s+id="flights-btn"/);
+    expect(TOPBAR).not.toMatch(/key: "flights"/);
   });
 
   it("⋯ carries the folded items' counts and opens a real menu", () => {
     expect(TOPBAR).toContain("{foldedCount > 0 && (");
     expect(TOPBAR).toContain('aria-haspopup="menu"');
     expect(TOPBAR).toContain('role="menuitem"');
-    // Each row wears its bar button's tooltip (shortcut and count line).
-    expect(TOPBAR).toContain("title: verifyTitle,");
-    expect(TOPBAR).toContain("title: scheduleTitle,");
+    // Each row wears its bar button's tooltip.
+    expect(TOPBAR).toContain('title: "Settings",');
   });
 
   it("measures before paint and on resize — no breakpoint list", () => {

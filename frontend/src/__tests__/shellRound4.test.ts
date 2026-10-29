@@ -148,7 +148,10 @@ describe("the pane header", () => {
     expect(pane).not.toContain("❚❚");
     expect(pane).toContain('const canResume = sessionAction("resume").enabled(menuCtx);');
     expect(pane).toMatch(/\{canResume && \(\s*<button\s+className="act pane-resume"/);
-    expect(pane).toContain('ns && ns.label === "Commit…" && !hasUncommitted(inst) ? null : ns');
+    // ...and none while a flight drives the session: its strip is the next step.
+    expect(pane).toContain(
+      '(inst.flight && isLive(inst.flight)) || (ns && ns.label === "Commit…" && !hasUncommitted(inst)) ? null : ns'
+    );
   });
 });
 
@@ -170,6 +173,14 @@ describe("surfaces in the URL hash", () => {
     expect(parseHash("#new")).toEqual({ name: "new-session", target: null });
     expect(parseHash("#nope")).toBeNull();
     expect(parseHash("")).toBeNull();
+    // Flights: its tab and the tab's own deep link after a slash.
+    expect(hashFor("flights", null)).toBe("#flights");
+    expect(hashFor("flights", "board")).toBe("#flights");
+    expect(hashFor("flights", "plans")).toBe("#flights/plans");
+    expect(hashFor("flights", "checklists/feature/x")).toBe("#flights/checklists/feature%2Fx");
+    expect(hashFor("flights", "schedule/new")).toBe("#flights/schedule");
+    expect(parseHash("#flights/plans")).toEqual({ name: "flights", target: "plans" });
+    expect(parseHash("#flights/checklists/feature%2Fx")).toEqual({ name: "flights", target: "checklists/feature/x" });
   });
 
   it("Back closes a surface; closing it steps back over its entry; a link opens one", async () => {
@@ -198,17 +209,19 @@ describe("surfaces in the URL hash", () => {
     } as unknown as Window;
     useUi.getState().closeDialog();
     const off = installSurfaceHash(win);
-    // The link opened Intake on its tab, without a new history entry.
-    expect(useUi.getState().openDialog).toBe("intake");
-    expect(useUi.getState().dialogTarget).toBe("prs");
-    expect(calls).toEqual([]);
+    // The old link opened Flights on Intake's tab (Sources → GitHub PRs),
+    // rewritten in place to where it landed — no new history entry.
+    expect(useUi.getState().openDialog).toBe("flights");
+    expect(useUi.getState().dialogTarget).toBe("sources/prs");
+    expect(calls).toEqual(["replace /#flights/sources/prs"]);
     // Closing it in the app strips the hash.
     useUi.getState().closeDialog();
-    expect(calls).toEqual(["replace /"]);
-    // Opening Settings pushes one entry; switching to Verify replaces it.
+    expect(calls).toEqual(["replace /#flights/sources/prs", "replace /"]);
+    // Opening Settings pushes one entry; switching to Verify (Flights →
+    // Checklists) replaces it.
     useUi.getState().openDialogFor("settings", "accounts");
     useUi.getState().openDialogFor("verify");
-    expect(calls.slice(1)).toEqual(["push /#settings/accounts", "replace /#verify"]);
+    expect(calls.slice(2)).toEqual(["push /#settings/accounts", "replace /#flights/checklists"]);
     // Browser Back: the hash goes, the surface closes.
     loc.hash = "";
     listeners.forEach((f) => f());
@@ -221,13 +234,13 @@ describe("surfaces in the URL hash", () => {
     expect(useUi.getState().openDialog).toBeNull();
     // Close and open the next surface in one tick (Schedule → back to New):
     // a switch — the entry is replaced, never stepped back over. New's strip
-    // still asks for "templates"; the store opens Schedule.
+    // still asks for "templates"; the store opens Flights → Schedule.
     useUi.getState().openDialogFor("templates", "new");
-    expect(useUi.getState().openDialog).toBe("schedule");
+    expect(useUi.getState().openDialog).toBe("flights");
     useUi.getState().closeDialog();
     useUi.getState().openDialogFor("new-session");
     await Promise.resolve();
-    expect(calls.slice(-2)).toEqual(["push /#schedule", "replace /#new"]);
+    expect(calls.slice(-2)).toEqual(["push /#flights/schedule", "replace /#new"]);
     expect(useUi.getState().openDialog).toBe("new-session");
     off();
   });
@@ -269,9 +282,10 @@ describe("a quieter main screen", () => {
   });
 
   it("Verify is described one way", () => {
-    expect(code("components/TopBar.tsx")).toContain('"Verify — " + VERIFY_BLURB');
-    expect(code("components/palette/CommandPalette.tsx")).toContain('"Verify — " + VERIFY_BLURB');
-    expect(code("lib/keymap.ts")).toContain('"Verify — " + VERIFY_BLURB');
+    // The top bar's entry is Flights now; Verify (its Checklists tab) keeps
+    // the one blurb in the palette and the shortcut sheet.
+    expect(code("components/palette/CommandPalette.tsx")).toContain("keywords: VERIFY_BLURB");
+    expect(code("lib/keymap.ts")).toContain('"Flights → Checklists — " + VERIFY_BLURB');
     // The welcome card no longer describes Verify; the Verify tour does.
   });
 

@@ -51,6 +51,8 @@ import { errorPop } from "../../lib/errorPop";
 import { useCalm } from "../../lib/useCalm";
 import { agentBlocked } from "../../lib/sessionState";
 import { AgentBlockedBanner } from "../setup/AgentBlocked";
+import { PaneFlightStrip } from "../flights/FlightStrip";
+import { isLive } from "../../lib/flights";
 import { useSetup } from "../setup/useSetup";
 import { VerdictChip } from "../dialogs/VerdictChip";
 import { JointVerdictChip } from "../settings/screens/peer/JointCheck";
@@ -743,7 +745,9 @@ export function Pane({
   };
   // "Commit…" only once there is something to commit; until then the header
   // has no lead button (the agent's state chip says what it is doing).
-  const shownStep = ns && ns.label === "Commit…" && !hasUncommitted(inst) ? null : ns;
+  // A flight drives this session: its strip (above the terminal) is the next
+  // step while it is in the air, and the guided button comes back after.
+  const shownStep = (inst.flight && isLive(inst.flight)) || (ns && ns.label === "Commit…" && !hasUncommitted(inst)) ? null : ns;
   const openHistory = () => setHistPane({ kind: tab === "shell" ? "shell" : "agent", dragSel: null });
   // SHIP carries Verify's verdict beside Open PR, and asks first on a
   // failed checklist (lib/stage.ts withVerifyVerdict).
@@ -1186,6 +1190,9 @@ export function Pane({
         </div>
       </div>
       <AgentBlockedBanner block={noAgent} title={title} />
+      {/* Its own row, not in .pane-head (which hides chips): the flight's
+          ✈ plan · ●●●○○ · step (elapsed), with Done / Skip on a you step. */}
+      {inst.flight && <PaneFlightStrip inst={inst} />}
       <div className="pane-body" ref={bodyRef}>
         {paused ? (
           <PausedBody key="paused" title={title} hidden={tab !== "agent"} />

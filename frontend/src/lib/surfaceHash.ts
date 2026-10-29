@@ -1,20 +1,24 @@
-/** Top-bar surfaces in the URL: New, Intake, Verify, Schedule and Settings
- * each get a hash (#new, #intake/tickets, #verify, #schedule,
- * #settings/accounts), so browser Back closes the open one instead of leaving the
- * app, and a link opens it. The store's openDialog stays the one truth; this
- * only mirrors it into history and back.
+/** Top-bar surfaces in the URL: New, Flights and Settings each get a hash
+ * (#new, #flights, #flights/plans, #settings/accounts), so browser Back
+ * closes the open one instead of leaving the app, and a link opens it. The
+ * old surfaces' links still land — #intake/tickets, #verify, #schedule,
+ * #templates open Flights on the matching tab (the store maps the names; see
+ * openDialogFor). The store's openDialog stays the one truth; this only
+ * mirrors it into history and back.
  *
  *   open a surface        push one history entry with its hash
  *   switch to another     replace that entry (Back still goes to the grid)
  *   close it in the app   step back over our entry (or strip the hash)
  *   Back / Forward        close / open whatever the hash now says
  *
- * Only these five: a commit dialog or the palette is a moment, not a place. */
+ * Only these: a commit dialog or the palette is a moment, not a place. */
 
 import { useUi, type DialogName } from "../state/store";
 
 const BY_HASH: Record<string, DialogName> = {
   new: "new-session",
+  flights: "flights",
+  // Flights' tabs by their old names: opened as "flights" by the store.
   intake: "intake",
   verify: "verify",
   settings: "settings",
@@ -39,6 +43,15 @@ export interface Surface {
 export function hashFor(name: DialogName | null, target: string | null): string {
   const h = name ? BY_DIALOG[name] : undefined;
   if (!h) return "";
+  if (h === "flights") {
+    // "<tab>/<deep link>": the tab and its first slash stay readable
+    // (#flights/checklists/feature%2Fx); Schedule's internal "new" is left
+    // out, as it always was.
+    const t = String(target || "").replace(/^schedule\/new$/, "schedule");
+    if (!t || t === "board") return "#flights";
+    const cut = t.indexOf("/");
+    return "#flights/" + (cut < 0 ? encodeURIComponent(t) : encodeURIComponent(t.slice(0, cut)) + "/" + encodeURIComponent(t.slice(cut + 1)));
+  }
   const t = target && !(h === "schedule" && target === "new") ? "/" + encodeURIComponent(target) : "";
   return "#" + h + t;
 }
@@ -73,9 +86,22 @@ export function installSurfaceHash(win: Window = window): () => void {
   let pendingClose = false;
   const urlWith = (hash: string) => loc.pathname + loc.search + hash;
 
-  // A link (or a reload) that names a surface opens it.
+  // A link (or a reload) that names a surface opens it — and an old one
+  // (#intake/tickets) is rewritten in place to where it landed
+  // (#flights/sources/tickets), so Back from it closes rather than re-opens.
   const first = parseHash(loc.hash);
-  if (first) useUi.getState().openDialogFor(first.name, first.target);
+  if (first) {
+    useUi.getState().openDialogFor(first.name, first.target);
+    const s = useUi.getState();
+    const now = hashFor(s.openDialog, s.dialogTarget);
+    if (now && now !== loc.hash) {
+      try {
+        hist.replaceState(null, "", urlWith(now));
+      } catch {
+        /* a sandboxed frame: the app still works */
+      }
+    }
+  }
 
   const unsub = useUi.subscribe((s, prev) => {
     if (s.openDialog === prev.openDialog && s.dialogTarget === prev.dialogTarget) return;

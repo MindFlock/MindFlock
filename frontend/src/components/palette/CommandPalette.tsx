@@ -69,7 +69,7 @@ const NEEDS_TOP = -1;
 const TOP = {
   new: 0,
   recent: 1, // + 0.1 per place in the MRU (the last three looked at)
-  intake: 2,
+  flights: 2,
   verify: 3,
   schedule: 4,
   setup: 5,
@@ -123,10 +123,19 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     acts.push({ label: "New session…", hint: "Alt+N", top: TOP.new, run: () => ui.openDialogFor("new-session") });
 
     // --- Dialog openers ----------------------------------------------------
-    // Each Intake tab gets its own entry: the queue you want is the thing you
-    // have in mind, and typing "issues" should land on it directly rather than
-    // on a dialog you then have to navigate.
-    acts.push({ label: "Open Intake", hint: "Alt+I", top: TOP.intake, run: () => ui.openDialogFor("intake") });
+    // Flights, then each of its tabs by the name people learned: Intake's
+    // tabs (now Flights → Sources), Verify (Checklists) and Schedule — the
+    // queue you want is the thing you have in mind, and typing "issues" should
+    // land on it directly rather than on a dialog you then have to navigate.
+    acts.push({
+      label: "Flights…",
+      hint: "Alt+I",
+      top: TOP.flights,
+      keywords: "board arrivals in flight plans blocks intake verify schedule",
+      run: () => ui.openDialogFor("flights", "board"),
+    });
+    acts.push({ label: "Flights: Plans", keywords: "flight plan blocks steps editor", run: () => ui.openDialogFor("flights", "plans") });
+    acts.push({ label: "Intake…", hint: "Flights → Sources", run: () => ui.openDialogFor("intake", "tickets") });
     acts.push({ label: "Intake: Tickets", run: () => ui.openDialogFor("intake", "tickets") });
     acts.push({ label: "Intake: GitHub PRs", run: () => ui.openDialogFor("intake", "prs") });
     acts.push({ label: "Intake: GitHub issues", run: () => ui.openDialogFor("intake", "issues") });
@@ -135,12 +144,11 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       hint: "what starts on its own",
       run: () => ui.openDialogFor("intake", "autostart"),
     });
-    // The other end of the same arc, so it sits with the Intake entries rather
-    // than down among the settings screens.
     acts.push({
-      label: "Verify — " + VERIFY_BLURB,
+      label: "Verify…",
       hint: "Alt+V",
       top: TOP.verify,
+      keywords: VERIFY_BLURB + " checklists flights",
       run: () => ui.openDialogFor("verify"),
     });
     acts.push({
@@ -158,7 +166,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       run: () => ui.setBulkMode(true),
     });
     acts.push({ label: "Prompts…", hint: "manage saved prompts", run: () => ui.openDialogFor("prompts") });
-    // Schedule is the top bar's; "Templates…" is the name it had, kept as a
+    // Schedule is a tab of Flights; "Templates…" is the name it had, kept as a
     // row so the word people learned still finds it.
     acts.push({ label: "Templates…", hint: "your templates — in Schedule", run: () => ui.openDialogFor("schedule") });
     // A NEW template's form with its schedule on — it says template, because

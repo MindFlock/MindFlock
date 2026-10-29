@@ -1,7 +1,8 @@
 /** Top bar (port of the 030 partial + section 17's chrome wiring):
- * sidebar/theme cluster, notifications bell and mic, the main menu (New / Intake /
- * Verify / Schedule / Settings, then the command palette as an icon), centered
- * wordmark, and the Electron drag region.
+ * sidebar/theme cluster, notifications bell and mic, the main menu (New /
+ * Flights / Settings, then the command palette as an icon), centered wordmark,
+ * and the Electron drag region. Flights took the place of Intake, Verify and
+ * Schedule, which are its tabs now.
  *
  * Only the daily loop is on the bar. Everything that waits on you is the
  * bell's (one badge); saved prompts are a tab of Customize (the sidebar
@@ -16,8 +17,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { useUi } from "../state/store";
-import { useDoctor, useTestPlans } from "../state/queries";
-import { dueCount, failingCount, verifyCountLine } from "./dialogs/verify";
+import { useDoctor, useFlights, useTestPlans } from "../state/queries";
+import { dueCount, failingCount } from "./dialogs/verify";
+import { badgeLines, flightBadgeCount } from "../lib/flights";
+import { useArrivals } from "./flights/useArrivals";
 import { rethemeAll } from "../lib/terminals";
 import { NotificationsBell } from "./NotificationsBell";
 import { TopBarMic } from "./TopBarMic";
@@ -29,10 +32,8 @@ import { openSettings } from "../lib/openSettings";
 import { inShell } from "../lib/shell";
 import { keymapVersion, subscribeKeymap } from "../lib/keymap";
 import { usableShortcuts } from "./palette/ShortcutsSheet";
-import { VERIFY_BLURB } from "../lib/vocab";
 import { useScheduleStatus } from "../lib/useScheduleStatus";
 import { failingSchedules } from "../lib/templates";
-import { useCalm } from "../lib/useCalm";
 import { topBarShows } from "../lib/calm";
 
 /* The wordmark carries the RUNNING ENGINE's version (GET /api/doctor), not the
@@ -51,10 +52,8 @@ function engineVersion(raw: string | undefined): string {
 }
 
 /** What a narrow bar gives up, in order: the wordmark first (it is a label,
- * not a control), then the foldable items from the RIGHT end (Settings, then
- * Schedule, then Verify — Verify's count is the reason it earns a slot, so it
- * goes last) into one ⋯ that sits where they were. New, Intake and the palette
- * never fold. Every argument is a measured width in px, gaps included:
+ * not a control), then the foldable items from the RIGHT end (Settings) into
+ * one ⋯ that sits where they were. New, Flights and the palette never fold. Every argument is a measured width in px, gaps included:
  * `room` the bar's content box, `fixed` everything that always shows,
  * `brand` the wordmark, `items` the foldable items left to right, `more` the ⋯.
  * Pure, so the rule is pinned by a test rather than by a screenshot. */
@@ -104,14 +103,16 @@ export function TopBar() {
   // feature working and gets no mark.
   const sched = useScheduleStatus();
   const schedFailing = failingSchedules(sched.templates, sched.status).length;
-  // The calm first hour (lib/calm.ts topBarShows): Verify waits for its first
-  // checklist and Schedule for its first template. Their shortcuts, the
-  // palette and the #verify / #schedule links keep working meanwhile.
-  const shows = topBarShows({
-    calm: useCalm(),
-    checklists: testPlans?.plans?.length ?? 0,
-    templates: sched.templates.length,
-  });
+  // Flights' badge: what waits on you — flights parked on a you step, Verify's
+  // due checklists, and arrivals no switch will start (lib/flights
+  // flightBadgeCount). The arrivals are read from Intake's cached lists; the
+  // bar never fans out upstream itself.
+  const flights = useFlights().data || [];
+  const { arrivals } = useArrivals(false);
+  const badge = flightBadgeCount(flights, due, failing, arrivals);
+  // lib/calm.ts topBarShows: Flights is always on the bar (it replaced Intake,
+  // which always was).
+  const shows = topBarShows();
   // Evaluated once: the shell can't grow or lose its title bar mid-run.
   const [mac] = useState(hasNativeWindowControls);
   // macOS hides the traffic lights in fullscreen — stop reserving their room.
@@ -157,11 +158,13 @@ export function TopBar() {
     return k.length ? " (" + k.join(" / ") + ")" : "";
   };
 
-  // One tooltip per item, worn by the bar button and by its row in ⋯ alike.
-  const verifyTitle = "Verify — " + VERIFY_BLURB + keys("verify") + "\n" + verifyCountLine(due, failing);
-  const scheduleTitle =
-    "Schedule — templates; starts sessions on a timer" +
-    keys("schedule") +
+  // The button's tooltip: what Flights is, its key, and the three counts the
+  // badge adds up (plus a failed scheduled run, which the Schedule tab shows).
+  const flightsTitle =
+    "Flights — where every ticket, PR and scheduled job is on its way from arrival to merge" +
+    keys("intake") +
+    "\n" +
+    badgeLines(badge).join("\n") +
     (schedFailing > 0
       ? "\n" +
         (schedFailing === 1
@@ -176,27 +179,11 @@ export function TopBar() {
   // breakpoints: the words' widths change with the font, the theme set, a
   // badge, a rebound shortcut's absence, the mac lights' gap.
   //
-  // The foldable items, in bar order; Verify / Schedule only once the calm
-  // rule above lets them on the bar at all (this never overrides it).
+  // The foldable items, in bar order. Flights never folds: its badge is the
+  // reason it is on the bar.
   const foldable = [
-    shows.verify && {
-      key: "verify",
-      label: "Verify",
-      title: verifyTitle,
-      count: due,
-      failing: failing > 0,
-      open: () => ui.openDialogFor("verify"),
-    },
-    shows.schedule && {
-      key: "schedule",
-      label: "Schedule",
-      title: scheduleTitle,
-      count: schedFailing,
-      failing: true,
-      open: () => ui.openDialogFor("schedule"),
-    },
     { key: "settings", label: "Settings", title: "Settings", count: 0, failing: false, open: () => openSettings() },
-  ].filter((f) => !!f);
+  ];
   const [fit, setFit] = useState<BarFit>({ brand: true, shown: Infinity });
   const folded = foldable.slice(fit.shown);
   const isFolded = (key: string) => folded.some((f) => f.key === key);
@@ -382,65 +369,24 @@ export function TopBar() {
           >
             New
           </button>
-          {/* Intake sits next to New because both are about starting sessions —
-              one from scratch, one from what came in. */}
+          {/* Flights sits next to New because both are about starting sessions —
+              one from scratch, one from what came in — and it is where all of
+              that work is on its way to merge (Intake, Verify and Schedule are
+              its tabs). The badge is everything that waits on you there,
+              nothing at zero: a "0" that becomes "3" a moment later reads as
+              "nothing to do", which a badge must never say while it is still
+              finding out. */}
+          {shows.flights && (
           <button
-            id="intake-btn"
+            id="flights-btn"
             className="tb-item"
             type="button"
-            title={"Intake — tickets, pull requests and issues; starts sessions when work arrives" + keys("intake")}
-            /* No aria-label: the visible "Intake" IS the name. The old one still
-               said "Open work", the surface's name two renames ago, so a screen
-               reader announced a button nobody could see. */
-            onClick={() => ui.openDialogFor("intake")}
+            title={flightsTitle}
+            /* No aria-label: the visible "Flights" IS the name. */
+            onClick={() => ui.openDialogFor("flights")}
           >
-            Intake
-          </button>
-          {/* Verify closes the loop Intake opens: work came in there, and this is
-              where it comes back once it has actually shipped. The count is the
-              whole reason it earns a slot on the bar — work that ships while you
-              are elsewhere is exactly the thing nobody remembers to go and look
-              for. It counts SHIPPED CHANGES NOBODY HAS FINISHED CHECKING, which
-              is the same rule the dialog's first heading renders (`dueCount` and
-              the "Not checked yet" group are one predicate) — deliberately not
-              "things waiting on you personally", since one of them may be an
-              agent mid-run. */}
-          {shows.verify && (
-          <button
-            id="verify-btn"
-            className={"tb-item" + (isFolded("verify") ? " tb-folded" : "")}
-            data-fold="verify"
-            type="button"
-            title={verifyTitle}
-            /* No aria-label, for the same reason as Intake above: the visible
-               "Verify" IS the name, and a second wording would be the one a
-               screen reader announced. */
-            onClick={() => ui.openDialogFor("verify")}
-          >
-            Verify
-            {/* Nothing at all on zero, the way the Intake tab counts do it: a "0"
-                that becomes "3" a moment later reads as "nothing to do", which is
-                the one thing this badge must never say while it is still finding
-                out. */}
-            {due > 0 && <span className={"tb-count" + (failing > 0 ? " is-failing" : "")}>{due}</span>}
-          </button>
-          )}
-          {/* Schedule: what starts by itself (and the saved setups it starts
-              from). Before it had a slot here, the only ways in were the
-              palette and New's strip — the owner couldn't find it. */}
-          {shows.schedule && (
-          <button
-            id="schedule-btn"
-            className={"tb-item" + (isFolded("schedule") ? " tb-folded" : "")}
-            data-fold="schedule"
-            type="button"
-            title={scheduleTitle}
-            onClick={() => ui.openDialogFor("schedule")}
-          >
-            Schedule
-            {/* Only a failure, in the failure red, and nothing at zero — the
-                rule Verify's count keeps. */}
-            {schedFailing > 0 && <span className="tb-count is-failing">{schedFailing}</span>}
+            Flights
+            {badge.count > 0 && <span className={"tb-count" + (badge.failing ? " is-failing" : "")}>{badge.count}</span>}
           </button>
           )}
           <button
