@@ -191,7 +191,7 @@ def test_resolution_order():
     # 2. a per-start depth (a row's pick, a run's "off", an agent's autopilot=)
     assert r("ticket", "", "pr", mine, "commit") == "builtin:ticket@pr"
     assert r("ticket", "", "off", mine, "commit") == ""
-    assert r("ticket", "", "merge", mine, "") == "builtin:ticket"
+    assert r("ticket", "", "merge", mine, "") == "builtin:ticket@merge"
     # 3. the source's plan setting, while that plan exists
     assert r("ticket", "", "", mine, "commit") == mine
     assert r("ticket", "", "", "p_gone00", "commit") == "builtin:ticket@commit"
