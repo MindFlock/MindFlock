@@ -2170,8 +2170,14 @@ loop, executors, events) and `core/flight_describe.py`. Errors are
 | DELETE | `/api/flights/{id}` | **204**; **409** `in_flight` while running, waiting on you or paused (cancel first) |
 
 The session row (`GET /api/instances`) carries `flight`: `{id, plan_name,
-cursor, total, state, reason, step: {id, kind, title, state, actor}}` for the
-session's unfinished flight, else `null`. A flight waiting on you is also a
+cursor, total, state, reason, step: {id, kind, title, state, actor}, join,
+branch}` for the session's unfinished flight, else `null`. `join` is `{waiting,
+total}` while the current step (an `agent` step with `join`, or a `join` step)
+waits on workers, else `null`. `branch` is `{parent, step}` when the session's
+live parent is in a flight — the parent step the worker was spawned during —
+else `null`; a worker with no flight of its own then gets a branch-only
+`flight` (`id: ""`, `state: ""`, `step: null`, `total: 0`, `plan_name` its
+parent's), which no live-flight check matches. A flight waiting on you is also a
 `waiting` row of `GET /api/outbox` with `kind: "flight_you"`, `actions: ["done",
 "skip", "open"]` and `flight: {id, plan_name, step, step_title, kind, items}`.
 Events: `flight.changed`, `flight.needs_you`, `flight.finished` (see

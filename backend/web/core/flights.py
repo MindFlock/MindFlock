@@ -89,6 +89,12 @@ __all__ = [
     "op_add_step",
     "op_edit_step",
     "op_remove_step",
+    "join_view",
+    "child_state",
+    "split_prompts",
+    "spawned_titles",
+    "branch_step",
+    "join_dto",
 ]
 
 _LOCK = threading.Lock()
@@ -159,6 +165,12 @@ TRIGGER_KINDS = ("manual", "ticket", "pr", "issue", "schedule")
 SUBJECT_KINDS = ("ticket", "pr", "issue", "schedule", "manual")
 SHIP_LANES = ("commit", "push", "pr", "merge")
 VERIFY_WHO = ("agent", "you", "both")
+#: A join waits for every live child of the session, or only the workers the
+#: nearest split before it spawned.
+JOIN_OF = ("all", "spawned")
+JOIN_ON_FAILED = ("halt", "continue")
+#: At most this many workers per split (``wait_for_session``'s target cap).
+MAX_SPLIT = 20
 
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 _HHMM_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
@@ -216,6 +228,48 @@ STEP_KINDS: Dict[str, dict] = {
                 placeholder="What should the agent do? {ticket} {pr} {branch} {subject} are filled in.",
             ),
             _f("fresh", "bool", "Start a new session for this stop", default=False),
+            _f("join", "bool", "Wait for its workers", default=True),
+        ],
+    },
+    "split": {
+        "label": "Split",
+        "actor": "robot",
+        "summary": "Spawn workers in parallel, one per prompt — follow it with a Join.",
+        "default_title": "Split",
+        "fields": [
+            _f(
+                "prompts",
+                "textarea",
+                "Prompts (one worker per line)",
+                default="",
+                placeholder="Each line is one worker's task. {index} and {n} are filled in.",
+            ),
+            _f("count", "int", "Workers (when there is one prompt)", default=1),
+            _f("model", "text", "Model (empty = the CLI's default)", default=""),
+            _f(
+                "fence_only",
+                "text",
+                "Each worker may only change (comma-separated paths)",
+                default="",
+                placeholder="src/api/, tests/api/",
+            ),
+            _f("report_back", "bool", "Workers report back when done", default=True),
+        ],
+    },
+    "join": {
+        "label": "Join",
+        "actor": "robot",
+        "summary": "Wait until every worker has finished.",
+        "default_title": "Join",
+        "fields": [
+            _f("of", "select", "Wait for", default="all", options=JOIN_OF),
+            _f(
+                "on_failed",
+                "select",
+                "When a worker failed",
+                default="halt",
+                options=JOIN_ON_FAILED,
+            ),
         ],
     },
     "ship": {
@@ -324,7 +378,9 @@ STEP_KINDS: Dict[str, dict] = {
     },
 }
 #: Kinds that need the flight's session to exist (and not be paused).
-SESSION_KINDS = frozenset({"agent", "ship", "verify", "reviews", "checks", "command"})
+SESSION_KINDS = frozenset(
+    {"agent", "ship", "verify", "reviews", "checks", "command", "split", "join"}
+)
 #: Kinds that type into the session's agent (the driver wakes it first).
 AGENT_KINDS = frozenset({"agent", "reviews"})
 
@@ -390,7 +446,39 @@ def _step_config(kind: str, raw: dict, strict: bool, where: str) -> dict:
     strict mode) for the few things that make a step meaningless."""
     c = raw if isinstance(raw, dict) else {}
     if kind == "agent":
-        return {"prompt": _text(c.get("prompt")), "fresh": _bool(c.get("fresh"), False)}
+        return {
+            "prompt": _text(c.get("prompt")),
+            "fresh": _bool(c.get("fresh"), False),
+            "join": _bool(c.get("join"), True),
+        }
+    if kind == "split":
+        prompts = c.get("prompts")
+        if isinstance(prompts, list):
+            prompts = "\n".join(str(p) for p in prompts)
+        prompts = _text(prompts)
+        if not prompts.strip() and strict:
+            raise PlanError(
+                "a split step needs at least one prompt", where + ".prompts"
+            )
+        return {
+            "prompts": prompts,
+            "count": _int(c.get("count"), 1, 1, MAX_SPLIT),
+            "model": _text(c.get("model"), 200),
+            "fence_only": _text(c.get("fence_only"), 2000),
+            "report_back": _bool(c.get("report_back"), True),
+        }
+    if kind == "join":
+        of = _text(c.get("of"), 16).lower() or "all"
+        if of not in JOIN_OF:
+            if strict:
+                raise PlanError("of is all or spawned", where + ".of")
+            of = "all"
+        on_failed = _text(c.get("on_failed"), 16).lower() or "halt"
+        if on_failed not in JOIN_ON_FAILED:
+            if strict:
+                raise PlanError("on_failed is halt or continue", where + ".on_failed")
+            on_failed = "halt"
+        return {"of": of, "on_failed": on_failed}
     if kind == "ship":
         lane = _text(c.get("lane"), 16).lower() or "push"
         if lane not in SHIP_LANES:
@@ -1530,11 +1618,77 @@ def step_view(flight: dict) -> dict:
     }
 
 
-def row_dto(title: str) -> Optional[dict]:
-    """The ``flight`` field of a session's ``/api/instances`` row, or None."""
-    f = for_session(title)
-    if f is None:
+def join_dto(flight: dict) -> Optional[dict]:
+    """``{waiting, total}`` while the current step (an agent step that waits
+    for its workers, or a join) has workers outstanding, else None."""
+    cur = _current(flight)
+    if cur is None or flight["state"] not in UNFINISHED:
         return None
+    if cur["kind"] != "join" and not (
+        cur["kind"] == "agent" and cur["config"].get("join", True)
+    ):
+        return None
+    d = flight["step_states"][cur["id"]]["detail"]
+    waiting = _int(d.get("waiting"), 0, 0, 10000)
+    if not waiting:
+        return None
+    return {"waiting": waiting, "total": _int(d.get("total"), waiting, waiting, 10000)}
+
+
+def branch_step(flight: dict, child: str, created: Optional[float] = None) -> str:
+    """The step of ``flight`` during which worker ``child`` was spawned: the
+    split that names it, else the step whose ``since`` ≤ ``created`` < the
+    next started step's ``since``, else the current step."""
+    for s in flight["steps"]:
+        if s["kind"] == "split" and child in (
+            flight["step_states"][s["id"]]["detail"].get("children") or []
+        ):
+            return s["id"]
+    cur = _current(flight) or flight["steps"][-1]
+    if not created:
+        return cur["id"]
+    found = ""
+    for s in flight["steps"]:
+        since = flight["step_states"][s["id"]]["since"]
+        if since <= 0:
+            continue
+        if since <= created:
+            found = s["id"]
+        else:
+            break
+    return found or cur["id"]
+
+
+def row_dto(
+    title: str, parent: str = "", created: Optional[float] = None
+) -> Optional[dict]:
+    """The ``flight`` field of a session's ``/api/instances`` row, or None.
+
+    ``parent`` (the row's live parent) adds ``branch: {parent, step}`` while
+    the parent is in a flight — a worker drawn as a branch of that flight. A
+    worker with no flight of its own then gets a dto with only that: ``id``
+    ``""``, ``state`` ``""`` (never live, so nothing reads it as a flight)."""
+    f = for_session(title)
+    pf = for_session(parent) if parent and parent != title else None
+    branch = (
+        {"parent": parent, "step": branch_step(pf, title, created)}
+        if pf is not None
+        else None
+    )
+    if f is None:
+        if branch is None:
+            return None
+        return {
+            "id": "",
+            "plan_name": pf["plan_name"],
+            "cursor": 0,
+            "total": 0,
+            "state": "",
+            "reason": "",
+            "step": None,
+            "join": None,
+            "branch": branch,
+        }
     step = step_view(f)
     return {
         "id": f["id"],
@@ -1548,6 +1702,8 @@ def row_dto(title: str) -> Optional[dict]:
             if step
             else None
         ),
+        "join": join_dto(f),
+        "branch": branch,
     }
 
 
@@ -1703,10 +1859,260 @@ def _merge_detail(action: dict, upd: dict) -> dict:
 def _judge_agent(flight, step, ss, obs, now) -> dict:
     d = ss["detail"]
     need = not d.get("no_prompt")
-    held = _settle(d, obs.get("session") or {}, ss["since"], now, need_work=need)
+    sess = obs.get("session") or {}
+    held = _settle(d, sess, ss["since"], now, need_work=need)
+    kids = obs.get("children")
+    if not step["config"].get("join", True) or not isinstance(kids, list):
+        if held is not None:
+            return held
+        return {"action": "done", "note": "the agent's turn settled"}
+    view = join_view(kids, d, ss["since"], now)
+    upd = view["detail"] if (view["total"] or "children" in d) else {}
     if held is not None:
-        return held
-    return {"action": "done", "note": "the agent's turn settled"}
+        return _merge_detail(held, upd)
+    if view["waiting"]:
+        return _wait(view["note"], **upd)
+    if sess.get("messages_pending"):
+        # A worker's report is typed into the agent once it is idle: the agent
+        # has not read it yet, so its turn is not over.
+        return _wait(
+            "a worker's report is on its way to the agent", idle_since=None, **upd
+        )
+    if view["last_finish"] and float(d.get("idle_since") or 0.0) < view["last_finish"]:
+        # The last worker finished after the agent went idle: give the agent
+        # one settle window to pick its report up before calling it done.
+        return _wait("the agent is reading its workers' reports", idle_since=now, **upd)
+    return _merge_detail(
+        {
+            "action": "done",
+            "note": (
+                "the agent and its %d worker%s are done"
+                % (view["total"], "" if view["total"] == 1 else "s")
+                if view["total"]
+                else "the agent's turn settled"
+            ),
+        },
+        upd,
+    )
+
+
+# --- Fan-out and join ---------------------------------------------------------
+#: A worker's idle-settle gates — ``wait_for_session``'s (``backend/mcp/
+#: tools.py`` SETTLE_CLAUDE_S / SETTLE_OTHER_S / OFFLINE_DONE_S /
+#: DISPATCH_QUIET_S), so a join and an orchestrator's wait agree on "finished".
+CHILD_SETTLE_CLAUDE_S = 8.0
+CHILD_SETTLE_OTHER_S = 30.0
+CHILD_OFFLINE_DONE_S = 30.0
+#: A worker this young that idles has not visibly started its task yet.
+CHILD_QUIET_S = 60.0
+#: Child states: still going (``working``, ``asking``) or finished.
+CHILD_OPEN = ("working", "asking")
+
+
+def child_settle_s(provider: str) -> float:
+    return CHILD_SETTLE_CLAUDE_S if provider == "claude" else CHILD_SETTLE_OTHER_S
+
+
+def child_state(child: dict, prev: Optional[dict], since: float, now: float) -> dict:
+    """One worker's join entry ``{title, state, report?}`` from its observed
+    facts (``present``, ``status``, ``activity``, ``activity_since``,
+    ``sleeping``, ``held``, ``queue_pending``, ``background_waiting``,
+    ``messages_pending``, ``created``, ``settle_s``, ``report``). ``state`` is
+    ``working | asking | done | failed | gone``.
+
+    Finished = a report newer than ``since`` (``failed`` when it says so), or
+    idle-settled by ``wait_for_session``'s gates, or offline long enough, or
+    closed / deleted. A ``blocked`` report is a question: ``asking`` until the
+    worker works again (``prev`` remembers that it did)."""
+    out: dict = {"title": str(child.get("title") or "")}
+    if not child.get("present") or child.get("status") == "paused":
+        out["state"] = "gone"
+        return out
+    activity = str(child.get("activity") or "")
+    if child.get("sleeping") and activity == "offline":
+        activity = "idle"  # asleep: stopped only once its turn was over
+    act_since = _float(child.get("activity_since"))
+    rep = child.get("report") if isinstance(child.get("report"), dict) else None
+    if rep is not None and _float(rep.get("ts")) <= since:
+        rep = None  # an earlier step's report
+    if rep is not None:
+        rts = _float(rep.get("ts"))
+        out["report"] = {
+            "id": str(rep.get("id") or ""),
+            "status": str(rep.get("status") or ""),
+            "summary": str(rep.get("summary") or ""),
+            "ts": rts,
+        }
+        busy_again = activity not in ("idle", "offline") and act_since > rts
+        status = out["report"]["status"]
+        if status == "blocked":
+            resumed = busy_again or (
+                isinstance(prev, dict)
+                and prev.get("state") in ("working", "done")
+                and ((prev.get("report") or {}).get("id") == out["report"]["id"])
+            )
+            if not resumed:
+                out["state"] = "asking"
+                return out
+        elif not busy_again:
+            out["state"] = "failed" if status == "failed" else "done"
+            return out
+    out["state"] = _activity_state(child, activity, act_since, now)
+    return out
+
+
+def _activity_state(child: dict, activity: str, act_since: float, now: float) -> str:
+    """``wait_for_session``'s observed verdict for a worker with no report:
+    ``done`` once idle-settled (or offline long enough), else open."""
+    if activity == "clarify":
+        return "asking"
+    if child.get("status") == "loading" or child.get("held"):
+        return "working"
+    if activity == "offline":
+        if act_since > 0 and now - act_since >= CHILD_OFFLINE_DONE_S:
+            return "done"
+        return "working"
+    if activity != "idle":
+        return "working"
+    if (
+        child.get("queue_pending")
+        or child.get("background_waiting")
+        or child.get("messages_pending")
+    ):
+        return "working"
+    if act_since <= 0:
+        return "working"  # a placeholder idle the tick has not probed yet
+    settle = _float(child.get("settle_s"), CHILD_SETTLE_OTHER_S)
+    if now - act_since < settle:
+        return "working"
+    if now - _float(child.get("created")) < CHILD_QUIET_S:
+        return "working"
+    return "done"
+
+
+def join_view(children: List[dict], detail: dict, since: float, now: float) -> dict:
+    """The join over ``children`` (observed facts, see :func:`child_state`):
+    ``{detail: {waiting, total, children}, waiting, total, note, failed,
+    last_finish}``. ``detail`` is the step's own (its last entries are the
+    ``prev`` each worker is judged against)."""
+    prev = {
+        str(e.get("title") or ""): e
+        for e in detail.get("children") or []
+        if isinstance(e, dict)
+    }
+    kids = [c for c in children if isinstance(c, dict) and c.get("title")]
+    entries = [child_state(c, prev.get(str(c["title"])), since, now) for c in kids]
+    open_ = [e for e in entries if e["state"] in CHILD_OPEN]
+    asking = [e["title"] for e in entries if e["state"] == "asking"]
+    failed = [e for e in entries if e["state"] == "failed"]
+    # When the last worker finished (its report, else when it went idle): the
+    # agent step gives its agent one settle window after it.
+    last = 0.0
+    for e, c in zip(entries, kids):
+        if e["state"] in ("done", "failed"):
+            at = _float((e.get("report") or {}).get("ts")) or _float(
+                c.get("activity_since")
+            )
+            last = max(last, at)
+    if asking:
+        note = "worker%s %s %s asking" % (
+            "" if len(asking) == 1 else "s",
+            ", ".join(asking[:4]) + (" …" if len(asking) > 4 else ""),
+            "is" if len(asking) == 1 else "are",
+        )
+    elif open_:
+        note = "waiting for %d of %d worker%s" % (
+            len(open_),
+            len(entries),
+            "" if len(entries) == 1 else "s",
+        )
+    else:
+        note = ""
+    return {
+        "detail": {"waiting": len(open_), "total": len(entries), "children": entries},
+        "waiting": len(open_),
+        "total": len(entries),
+        "note": note,
+        "failed": failed,
+        "last_finish": last,
+    }
+
+
+def split_step_before(flight: dict, index: Optional[int] = None) -> Optional[dict]:
+    """The nearest ``split`` step before ``index`` (default: the cursor)."""
+    i = flight["cursor"] if index is None else index
+    for s in reversed(flight["steps"][: max(0, i)]):
+        if s["kind"] == "split":
+            return s
+    return None
+
+
+def spawned_titles(flight: dict, index: Optional[int] = None) -> List[str]:
+    """The workers the nearest split before ``index`` spawned (``of: spawned``)."""
+    s = split_step_before(flight, index)
+    if s is None:
+        return []
+    kids = flight["step_states"][s["id"]]["detail"].get("children") or []
+    return [str(t) for t in kids if isinstance(t, str) and t]
+
+
+def join_since(flight: dict) -> float:
+    """What a join step counts reports from: the step before it began (the
+    agent or split that put the workers to work), else the join itself."""
+    i = flight["cursor"]
+    own = flight["step_states"][flight["steps"][i]["id"]]["since"]
+    if i > 0:
+        before = flight["step_states"][flight["steps"][i - 1]["id"]]["since"]
+        if before > 0:
+            return min(before, own) if own else before
+    return own
+
+
+def split_prompts(config: dict, flight: dict) -> List[str]:
+    """A split step's worker prompts: one per non-empty line, or the one line
+    ``count`` times; ``{index}`` (1-based) and ``{n}`` filled, plus the
+    flight's own placeholders."""
+    lines = [
+        ln.strip() for ln in str(config.get("prompts") or "").splitlines() if ln.strip()
+    ][:MAX_SPLIT]
+    if len(lines) == 1:
+        lines = lines * _int(config.get("count"), 1, 1, MAX_SPLIT)
+    n = len(lines)
+    return [
+        fill_prompt(ln, flight).replace("{index}", str(i + 1)).replace("{n}", str(n))
+        for i, ln in enumerate(lines)
+    ]
+
+
+def _judge_join(flight, step, ss, obs, now) -> dict:
+    kids = obs.get("children")
+    if not isinstance(kids, list):
+        return _wait("looking for the workers")
+    view = join_view(kids, ss["detail"], join_since(flight), now)
+    upd = view["detail"]
+    if step["config"].get("on_failed", "halt") == "halt" and view["failed"]:
+        bad = view["failed"][0]
+        return {
+            "action": "fail",
+            "reason": "worker %s failed: %s"
+            % (
+                bad["title"],
+                (bad.get("report") or {}).get("summary") or "no summary",
+            ),
+            "detail": upd,
+        }
+    if view["waiting"]:
+        return _wait(view["note"], **upd)
+    return {
+        "action": "done",
+        "note": (
+            "all %d worker%s finished"
+            % (view["total"], "" if view["total"] == 1 else "s")
+            if view["total"]
+            else "no workers to wait for"
+        ),
+        "detail": upd,
+    }
 
 
 def _ours(flight: dict, rec: dict, lane: str) -> bool:
@@ -1961,6 +2367,10 @@ _JUDGES = {
     "ticket": _judge_rerun,
     "notify": _judge_rerun,
     "you": _judge_rerun,
+    # A split interrupted mid-spawn runs again; the executor adopts the
+    # workers it already made instead of spawning them twice.
+    "split": _judge_rerun,
+    "join": _judge_join,
 }
 
 

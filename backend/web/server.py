@@ -1721,7 +1721,7 @@ def _session_snapshot(i, queues: dict) -> dict:
     # A dict read off an already-loaded store, so it is computed fresh on BOTH
     # snapshot paths and therefore never needs a _SNAPSHOT_PROBE_KEYS carry-over.
     d["autopilot"] = _autopilot_dto(i.Title)
-    d["flight"] = _flight_dto(i.Title)
+    d["flight"] = _flight_dto(i.Title, i)
     # A killed agent coming back by itself, or left Offline and why
     # (core.revive.auto_state) — a dict read, fresh on both snapshot paths.
     d["auto_revive"] = _revive.auto_state(i.Title)
@@ -1849,7 +1849,7 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     d["merge_state"] = None
     d["queue"] = _queue_summary(i.Title, queues)
     d["autopilot"] = _autopilot_dto(i.Title)
-    d["flight"] = _flight_dto(i.Title)
+    d["flight"] = _flight_dto(i.Title, i)
     d["auto_revive"] = _revive.auto_state(i.Title)
     d["tokens"] = d["tokens_in"] = 0
     d["tokens_cache_read"] = d["tokens_cache_write"] = 0
@@ -2275,11 +2275,17 @@ async def _find_index_loop() -> None:
 _TEAM_RUN_LOOP_ENABLED: Optional[bool] = None
 
 
-def _flight_dto(title: str):
+def _flight_dto(title: str, inst=None):
     """The row's ``flight`` field (core.flights.row_dto), None on any error —
-    a row build never fails on the flights store."""
+    a row build never fails on the flights store. ``inst`` gives its live
+    parent and creation time, so a worker of a flying session is a branch."""
     try:
-        return _flights.row_dto(title)
+        parent, created = "", None
+        if inst is not None:
+            parent = _lineage.live_parent(ENGINE.instances, title)
+            at = getattr(inst, "CreatedAt", None)
+            created = float(at.timestamp()) if at is not None else None
+        return _flights.row_dto(title, parent, created)
     except Exception:  # noqa: BLE001 — enrichment only
         return None
 

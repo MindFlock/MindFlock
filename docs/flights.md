@@ -205,7 +205,9 @@ editor's palette and forms are driven by the server):
 
 | kind | robot/you | config | done when |
 |---|---|---|---|
-| `agent` | robot | `prompt` (text; placeholders `{ticket}`, `{pr}`, `{branch}`, `{subject}` filled by the server), `fresh` (bool: start a new session for this step instead of reusing the flight's) | the session's turn ended and settled (same gates as autopilot's `_agent_settled`: idle ≥30s, nothing queued, no background job, not usage-limited; plus `worked_at` evidence) |
+| `agent` | robot | `prompt` (text; placeholders `{ticket}`, `{pr}`, `{branch}`, `{subject}` filled by the server), `fresh` (bool: start a new session for this step instead of reusing the flight's), `join` (bool, default true, "Wait for its workers") | the session's turn ended and settled (same gates as autopilot's `_agent_settled`: idle ≥30s, nothing queued, no background job, not usage-limited; plus `worked_at` evidence) — and, with `join`, every live child of the session has finished ([Fan-out and join](#fan-out-and-join)) |
+| `split` | robot | `prompts` (textarea: one worker per non-empty line; `{index}` / `{n}` and the flight's placeholders filled), `count` (int, default 1: a single line is spawned this many times), `model` (text, optional: the workers' `profile_model`), `fence_only` (text, optional: comma-separated paths each worker may change → its fence's `only`), `report_back` (bool, default true: the `spawn_session` report footer) | every worker was created as a child of the session (`parent`, `spawned`, forked from the session's HEAD); their titles are in `step_states[sid].detail.children`. Follow it with a `join` |
+| `join` | robot | `of`: `all` (every live child, default) \| `spawned` (only the workers the nearest `split` before it made); `on_failed`: `halt` (default: a worker whose report is `failed` fails the step with its summary) \| `continue` | every worker in the set has finished ([Fan-out and join](#fan-out-and-join)) |
 | `ship` | robot | `lane`: `commit` \| `push` \| `pr` \| `merge`; `ask_first` (bool); `message` (optional commit message hint) | the autopilot record armed with `source="flight"` reaches `done`; a `halted` record fails the step with its reason (the autopilot's own fix hand-off runs first) |
 | `verify` | robot (+you) | `who`: `agent` \| `you` \| `both` (default both); `wait_live` (bool: wait until the branch is on the live branch + deploy delay, default false) | the checklist exists for (repo, branch) and every step is settled; open *you* items park the flight as waiting on you with a deep link to the checklist |
 | `you` | you | `text` (what to do), `items` (list of strings, optional checklist), `notify` (bool, default true) | you press **Done** (or **Skip**) in the Sky (its box, or the drawer), the pane strip, or the bell |
@@ -312,8 +314,13 @@ No model installed → 409 `no_model`.
 | `DELETE /api/flights/{id}` | | 204 (finished flights only; a running one must be cancelled first) |
 
 The session row (`/api/instances` payload) gains a `flight` field:
-`{"id", "plan_name", "cursor", "total", "state", "step": {id, kind, title, state, actor}}`
-or `null` — the pane strip and the rail read only this.
+`{"id", "plan_name", "cursor", "total", "state", "step": {id, kind, title, state, actor}, "join", "branch"}`
+or `null` — the pane strip and the rail read only this. `join` is `{waiting,
+total}` while the current step (an `agent` step with `join`, or a `join` step)
+has workers outstanding, else `null`. `branch` is `{parent, step}` on a
+worker's row while its parent is in a flight: the parent's step during which it
+was spawned (the `split` that names it, else the step whose `since` ≤ the
+worker's creation < the next step's `since`, else the current step).
 
 Intake's start routes (`POST /api/tickets/start`, `/api/github/prs/review`,
 `/api/github/issues/start`) accept an optional `plan` (plan id); the pipeline's
@@ -638,6 +645,11 @@ workers), is each card under the Sky drawer's *Landed*.
 - **Scheduled task** (`builtin:schedule`, trigger schedule): Agent → Commit → Push → Open PR.
 - **Verify on live** (`builtin:verify`, trigger manual): Verify (both, wait_live).
 
+Every built-in's agent step keeps `join` on (the default), so a ticket agent
+that spawns workers is waited for automatically: its next stop starts only
+once the agent and all its workers are done. None of them uses `split` /
+`join` stops; those are for flyways you draw.
+
 A per-source `depth` of `commit|push|pr|merge` with no `plan` set is the
 **ship ladder only** — exactly what that fast-track did before Flights: the
 kind's agent step, then commit → push → pr → merge cut at the depth, with no
@@ -771,6 +783,61 @@ had to choose. Field and route names are unchanged.
   Fast-track: Push → Open PR", plus "(it had stopped: <reason>)" for a halted
   run). The disarm happens after the flight is stored and skips a record the
   flight's own first step has armed by then.
+
+### Fan-out and join
+
+The owner: *"if an agent spawns multiple agents in its flow it should have 5
+branches in the flow and then they converge at the next step … have process
+join only when they all are done. agents can spin up and down."*
+
+- **The set.** An `agent` step with `join` (and a `join` of `all`) waits on
+  every live child of the flight's session (`lineage.children_of`, stored
+  `Parent == title`), hidden helpers (`hidden_by`, Verify's sessions) left
+  out. It is re-read on every pass: a worker spawned mid-step joins the set
+  (nothing resets), a deleted one leaves it. A `join` of `spawned` waits on
+  the titles the nearest `split` before it recorded; one deleted since reads
+  `gone`.
+- **Finished** (`flights.child_state`, pure): a `kind == "result"` report
+  (`thread.last_report`) newer than the step's `since` — `failed` when its
+  status says so; or idle-settled by `wait_for_session`'s own gates (idle ≥
+  8 s for claude / 30 s for other CLIs, nothing queued, no waiting background
+  job, no message pending for it, not held by worker order, and at least 60 s
+  old); or offline ≥ 30 s (asleep counts as idle); or closed (`paused`) /
+  deleted (`gone`). A worker in a dialog (`clarify`), or whose newest report
+  is `blocked`, is `asking` and holds the join with a note ("worker X is
+  asking") until it works again. A report followed by new work is superseded.
+  A `join` step counts reports from the `since` of the step before it (the
+  agent or split that set the workers going).
+- **The agent step** is done only when the agent has settled *and* no worker
+  is open. Workers' reports are typed into the agent, so the agent waits while
+  a message for it is still pending, and once the last worker finished after
+  the agent went idle it gets one more settle window to pick the report up. A
+  `failed` worker counts as finished here — the agent decides what to do.
+- **Detail.** The step's `detail` carries `{waiting, total, children: [{title,
+  state: working|asking|done|failed|gone, report?: {id, status, summary,
+  ts}}]}`, written only when it changed; an agent step with no workers writes
+  none. The row's `flight.join` mirrors `{waiting, total}`.
+- **The split executor** builds `spawn_session`'s payload server-side
+  (`flight_driver._split_base`): `parent` = the session, `spawned`, the
+  session's CLI, `repo_path` = its canonical repo with `base_ref` = its HEAD
+  and `base_branch` (a provisioned session's workers are provisioned from the
+  same source instead), `profile_model`, the fence (`fence_only` kept inside
+  the session's own fence, as `spawn_session` does), titles `<slug>-w<N>` (the
+  lowest free one: no live or starting title, tmux name or leftover branch),
+  and the report footer when `report_back` and the MCP is attached to the
+  workers' CLI. The workers go through `session_create.create_result`, so the
+  spawn limits and the memory guard are the create path's own; the children
+  cap is also checked for the whole split before the first create. A refusal
+  fails the step with its sentence ("… (after 1 of 3 workers)"), keeping the
+  workers already made in `detail.children`; a split run again (Retry, or a
+  restart mid-spawn) adopts its live `<slug>-w<N>` children made since take-off
+  that no other split claims, and spawns only the rest.
+- **Worker rows.** A worker of a flying parent with no flight of its own gets a
+  branch-only `flight` — `{id: "", state: "", step: null, total: 0, join:
+  null, branch, plan_name: <the parent's>}` — so `flight.branch` is always
+  there to draw; `isLive` never matches it.
+- **MCP.** `list_sessions`, `get_session` and `whoami` rows carry the row's
+  `flight` (docs/mcp.md "Flights and workers"). No new tools.
 
 ### Hand-off hooks for the integration work
 
