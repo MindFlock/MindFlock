@@ -30,7 +30,8 @@ import { CommandPalette } from "./components/palette/CommandPalette";
 import { ShortcutsSheet } from "./components/palette/ShortcutsSheet";
 import { NewSessionDialog } from "./components/dialogs/NewSessionDialog";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
-import { FlightsDialog } from "./components/flights/FlightsDialog";
+import { IntakeDialog } from "./components/intake/IntakeDialog";
+import { VerifyDialog } from "./components/dialogs/VerifyDialog";
 import { CustomizeDialog } from "./components/customize/CustomizeDialog";
 import { PromptsDialog } from "./components/dialogs/PromptsDialog";
 import { CommitDialog } from "./components/dialogs/CommitDialog";
@@ -298,7 +299,8 @@ export default function App() {
   }, []);
 
   useEffect(() => installKeymap(host), [host]);
-  // New / Flights (and its old names) / Settings in the URL hash: browser
+  // New / Intake / Verify / Schedule / Settings (and the old #flights links)
+  // in the URL hash: browser
   // Back closes the open one, a link opens it (lib/surfaceHash).
   useEffect(() => installSurfaceHash(), []);
   // Grid ⇄ sky: each session's pane flies to its line and back (lib/viewMode).
@@ -322,11 +324,10 @@ export default function App() {
       {/* Dialogs (each renders null unless open) */}
       <NewSessionDialog />
       <SettingsDialog onOpenSysLogsPane={() => toggleSpecial("syslogs")} />
-      {/* Flights: Intake, Verify and Schedule are its tabs (Sources,
-          Checklists, Schedule) — their own dialogs render only embedded. */}
-      <FlightsDialog />
+      <IntakeDialog />
       <CustomizeDialog />
       <PromptsDialog />
+      <VerifyDialog />
       <CommitDialog />
       <PeerSessionViewer />
       <MakePrDialog />

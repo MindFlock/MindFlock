@@ -522,14 +522,13 @@ export const KEYMAP: KeymapEntry[] = [
     // free and spells the thing.
     key: "i",
     alt: true,
-    // The id stays "intake" so a rebind made before Flights survives.
     id: "intake",
-    help: ["Navigation", "Alt+I", "Flights — flyways, sources, the schedule and checklists"],
+    help: ["Navigation", "Alt+I", "Intake — tickets, PRs and issues"],
     // Guarded unlike Alt+N: on macOS Option+I types a dead-key accent, and a
     // surface you open a few times an hour is not worth eating a keystroke
     // someone meant for a text field or a terminal.
     when: () => !isEditingTarget(document.activeElement),
-    run: () => useUi.getState().openDialogFor("flights"),
+    run: () => useUi.getState().openDialogFor("intake"),
   },
   {
     // The main area's two views (lib/viewMode): the grid of panes ⇄ the sky
@@ -555,9 +554,9 @@ export const KEYMAP: KeymapEntry[] = [
     key: "v",
     alt: true,
     id: "verify",
-    help: ["Navigation", "Alt+V", "Flights → Checklists — " + VERIFY_BLURB],
+    help: ["Navigation", "Alt+V", "Verify — " + VERIFY_BLURB],
     when: () => !isEditingTarget(document.activeElement),
-    run: () => useUi.getState().openDialogFor("flights", "checklists"),
+    run: () => useUi.getState().openDialogFor("verify"),
   },
   {
     // The top bar's next word, on the same terms as Alt+I / Alt+V: Ctrl+S is
@@ -567,9 +566,9 @@ export const KEYMAP: KeymapEntry[] = [
     key: "s",
     alt: true,
     id: "schedule",
-    help: ["Navigation", "Alt+S", "Flights → Schedule — templates that start sessions on their own"],
+    help: ["Navigation", "Alt+S", "Schedule — templates that start sessions on their own"],
     when: () => !isEditingTarget(document.activeElement),
-    run: () => useUi.getState().openDialogFor("flights", "schedule"),
+    run: () => useUi.getState().openDialogFor("schedule"),
   },
   {
     // Talk to the focused session through the top-bar mic. Unlike Alt+I / V /

@@ -1,10 +1,11 @@
 /** Flights on screen (server-rendered, mocked API): the flyway canvas (boxes
  * in order, connectors = stops − 1, live states, a perch's Done / Skip inside
  * its box), a flight's card (the drawer's Landed), the pane's one-line strip
- * and its Flight tab (the session diagram), the dialog's tabs, the Sky (every
- * session a line, the bird, the drawer of what is perched on you, Waiting to
- * fly with kind badges and flyway chips — never a <select>), and the Flyways
- * editor. Bird words throughout, never a plane. */
+ * and its Flight tab (the session diagram), the Sky (every session a line,
+ * the bird, the drawer of what is perched on you, Waiting to fly with kind
+ * badges and flyway chips — never a <select>), and the flyway card on the
+ * Sky's shelf, where flyways are edited now (the Flights dialog is retired).
+ * Bird words throughout, never a plane. */
 
 /// <reference types="vite/client" />
 import { createElement, type ReactElement } from "react";
@@ -23,9 +24,8 @@ const { FlightCard, PaneFlightStrip } = await import("../components/flights/Flig
 const { FlywayCanvas } = await import("../components/flights/FlywayCanvas");
 const { SessionFlight } = await import("../components/flights/SessionFlight");
 const { flightDiagram, flywayDiagram } = await import("../lib/flightDiagram");
-const { FlightsDialog } = await import("../components/flights/FlightsDialog");
 const { SkyView } = await import("../components/flights/SkyView");
-const { Plans } = await import("../components/flights/PlanEditor");
+const { FlywayCard } = await import("../components/flights/FlywayCard");
 const { PlanSelect } = await import("../components/flights/PlanSelect");
 const { planChoices } = await import("../lib/flights");
 const { putBody } = await import("../components/intake/sourceForm");
@@ -313,16 +313,14 @@ describe("the pane's Flight tab: the session diagram", () => {
   });
 });
 
-describe("the dialog", () => {
-  /** The dialog on `target`, or — `sky` / `sky/<title>` — the sky view (on
-   * that session alone). */
-  const render = (target: string | null) => {
-    const one = target?.startsWith("sky/") ? target.slice(4) : "";
-    if (target === "sky" || one) useUi.setState({ view: "sky", skyMode: one ? "one" : "mine", focused: one || null } as never);
-    else useUi.setState({ openDialog: "flights", dialogTarget: target } as never);
+describe("the sky", () => {
+  /** The sky view — `sky/<title>`: on that session alone. */
+  const render = (target: "sky" | `sky/${string}`) => {
+    const one = target.startsWith("sky/") ? target.slice(4) : "";
+    useUi.setState({ view: "sky", skyMode: one ? "one" : "mine", focused: one || null } as never);
     // A server render reads the store's initial state (getServerSnapshot).
     Object.assign(useUi.getInitialState(), useUi.getState());
-    return withClient(createElement(target === "sky" || one ? SkyView : FlightsDialog), (c) => {
+    return withClient(createElement(SkyView), (c) => {
       c.setQueryData(["instances"], [
         { title: "sc-12-fix-login", status: "running", activity: "idle", stage: "pushed", task_headline: "Fix the login", parent: "", autopilot: null, flight: { id: "f_1", plan_name: "Ticket to merge", cursor: 2, total: 4, state: "waiting_you", step: { id: "s3", kind: "you", title: "Approve the merge", state: "waiting_you", actor: "you" } } },
         { title: "second", status: "running", activity: "working", stage: "agent", task_headline: "Second", parent: "", autopilot: null, flight: { id: "f_2", plan_name: "Ticket to merge", cursor: 1, total: 4, state: "running", step: { id: "s2", kind: "ship", title: "Push", state: "running", actor: "robot" } } },
@@ -336,16 +334,13 @@ describe("the dialog", () => {
     });
   };
 
-  it("has the four tabs, in the contract's order — Flyways first; the Sky is a view now, not a tab", () => {
-    const html = render(null);
-    const tabs = [...html.matchAll(/data-flights-tab="([a-z]+)"/g)].map((m) => m[1]);
-    expect(tabs).toEqual(["plans", "sources", "schedule", "checklists"]);
-    expect(html).not.toContain('data-flights-tab="sky"');
-    expect(html).toContain('id="flights-tab-plans"');
-    expect(html).toMatch(/aria-selected="true"[^>]*data-flights-tab="plans"/);
-    expect(html).toMatch(/data-flights-tab="plans"[^>]*>Flyways</);
-    expect(html).toContain('id="flights-dialog"');
-    expect(html).toContain(">Flights</h2>");
+  it("carries the flyway shelf at its foot — the flyways as chips, + New flyway — and its tour's ?", () => {
+    const html = render("sky");
+    expect(html).toContain('data-tour="sky-shelf"');
+    expect(html).toMatch(/class="sky-shelf-chip builtin" data-plan="builtin:ticket"/);
+    expect(html).toContain(">+ New flyway</button>");
+    expect(html).toContain('data-tour-id="sky"');
+    expect(html).toContain('data-tour="sky-line"');
   });
 
   it("the sky view: the main area, every session a line with the bird on its active box — hidden helpers left out", () => {
@@ -389,45 +384,74 @@ describe("the dialog", () => {
     expect(html).toMatch(/aria-checked="true" class="fl-pick on"[^>]*data-value="one">This session</);
   });
 
-  it("the Flyways editor: the canvas, + between stops, Describe a stop, the inspector — and not one native <select>", () => {
-    const html = render("plans");
-    expect(html).toContain('data-tour="flights-plans"');
-    expect(html).toContain('data-tour="flights-describe"');
+});
+
+describe("the flyway card (the shelf's editor)", () => {
+  const card = (initial: Partial<FlightPlan>, plans: FlightPlan[] = [PLAN]) =>
+    withClient(createElement(FlywayCard, { x: 0, y: 0, plans, initial, onSaved: () => {}, onCancel: () => {} }), (c) => {
+      c.setQueryData(["flight-plans"], plans);
+      c.setQueryData(["flight-kinds"], KINDS);
+    });
+
+  it("a built-in: the canvas, + between stops, Describe a stop, the inspector, Reset to default — and not one native <select>", () => {
+    const html = card(PLAN);
+    expect(html).toContain('data-tour="sky-flyway-card"');
     expect(boxes(html).map(([id, c]) => id + (c.includes("selected") ? "*" : ""))).toEqual(["stop:s1*", "stop:s2", "stop:s3", "stop:s4", "add"]);
     expect(lines(html)).toBe(3);
     expect(html.match(/class="fl-gap-add"/g)?.length).toBe(3);
     expect(html).toContain(">Describe</button>");
-    expect(html).toContain(">Save</button>");
-    expect(html).toContain(">Fly this flyway</button>");
+    expect(html).toContain(">Saved</button>");
+    expect(html).toContain(">Save &amp; fly on…</button>");
     expect(html).toContain(">Reset to default</button>");
+    expect(html).not.toContain(">Delete flyway…</button>");
     expect(html).toContain("Built-in");
     // The selected stop's inspector, from its kind's fields, in the app's controls.
     expect(html).toContain('class="fl-inspector"');
     expect(html).toContain("Prompt");
     expect(html).toContain("If it fails");
+    expect(html).toContain(">Duplicate</button>");
     expect(html).toContain('class="rt-seg"');
     expect(html).toContain('aria-label="Flyway name"');
+    // Its trigger, folded under one line (a ticket flyway: closed).
+    expect(html).toMatch(/<details class="sky-flyway-card-trigger">\s*<summary>Takes off: <strong>Ticket<\/strong>/);
     expect(html).not.toMatch(/<select/);
     expect(html).not.toMatch(/>[^<]*\bplans?\b[^<]*</i);
   });
-});
 
-describe("the editor on its own", () => {
-  it("opens on the flyway a deep link named", () => {
-    const other = { ...PLAN, id: "p_2", name: "Other", builtin: false, steps: [STEPS[0]] };
-    const html = withClient(createElement(Plans, { initialPlan: "p_2", onDirty: () => {} }), (c) => {
-      c.setQueryData(["flight-plans"], [PLAN, other]);
-      c.setQueryData(["flight-kinds"], KINDS);
-    });
+  it("one of yours: Delete in its ⋯, no Reset", () => {
+    const other: FlightPlan = { ...PLAN, id: "p_2", name: "Other", builtin: false, steps: [STEPS[0]] };
+    const html = card(other, [PLAN, other]);
     expect(html).toContain('value="Other"');
-    expect(html).toContain(">Delete</button>");
+    expect(html).toContain(">Delete flyway…</button>");
     expect(html).not.toContain(">Reset to default</button>");
-    expect(html).toContain("+ New flyway");
+  });
+
+  it("a scheduled one opens on its schedule: the days as chips, the time, Paused", () => {
+    const nightly: FlightPlan = {
+      ...PLAN,
+      id: "p_n",
+      name: "Nightly",
+      builtin: false,
+      trigger: { kind: "schedule", schedule: { at: "21:00", days: "weekdays" }, paused: false },
+    };
+    const html = card(nightly, [nightly]);
+    expect(html).toMatch(/<details class="sky-flyway-card-trigger" open="">/);
+    expect(html).toContain('class="fl-schedule"');
+    expect(html).toContain(">Weekdays<");
+    expect(html).toContain('value="21:00"');
+    expect(html).toContain("Paused");
+    expect(html).toContain('id="fl-plan-repo"');
+  });
+
+  it("a new one has no ⋯ (nothing saved to reset or delete)", () => {
+    const html = card({});
+    expect(html).toContain('value="New flyway"');
+    expect(html).not.toContain("vf-menu");
   });
 });
 
 describe("the stylesheets", () => {
-  const sheet = css("components/flights/FlightsDialog.css");
+  const sheet = css("components/flights/Flights.css");
   const canvas = css("components/flights/FlywayCanvas.css");
   it("a perch is gold and rounder, the current box pulses, a halted one is red", () => {
     expect(canvas).toMatch(/\.fl-perch \{[^}]*border-radius: 18px;[^}]*var\(--tone-attention\)/);
@@ -441,7 +465,7 @@ describe("the stylesheets", () => {
   it("scrolls the canvas inside itself, never the page", () => {
     expect(canvas).toMatch(/\.fl-canvas \{[^}]*overflow: auto/);
     expect(canvas).toMatch(/\.fl-canvas-vertical \{[^}]*overflow-x: hidden/);
-    expect(sheet).toMatch(/\.fl-body \{[^}]*overflow-x: hidden/);
+    expect(css("components/flights/FlywayCard.css")).toMatch(/\.sky-flyway-card \{[^}]*overflow: auto/);
   });
 
   it("Flights' fields are the New dialog's: its border, radius, background and focus ring", () => {
@@ -456,12 +480,12 @@ describe("the stylesheets", () => {
 
 describe("no native <select> in Flights", () => {
   it("not one in its components", () => {
-    for (const f of ["SkyView", "skyContracts", "SkyDrawer", "useSessionLine", "PlanEditor", "PlanSelect", "FlightStrip", "SessionFlight", "StopParts", "FlywayCanvas", "controls"])
+    for (const f of ["SkyView", "skyContracts", "SkyDrawer", "useSessionLine", "FlywayCard", "FlywayInspector", "FlywayShelf", "PlanSelect", "FlightStrip", "SessionFlight", "StopParts", "FlywayCanvas", "controls"])
       expect(code("components/flights/" + f + ".tsx"), f).not.toMatch(/<select/);
   });
 });
 
-describe("a source's flyway chips (Flights → Sources)", () => {
+describe("a source's flyway chips (on Intake's source cards)", () => {
   const PLANS: FlightPlan[] = [
     { ...PLAN, id: "builtin:ticket", name: "Ticket to merge" },
     { ...PLAN, id: "p_mine", name: "Mine", builtin: false },

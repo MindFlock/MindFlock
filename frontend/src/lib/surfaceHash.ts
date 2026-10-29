@@ -1,10 +1,8 @@
-/** Top-bar surfaces in the URL: New, Flights and Settings each get a hash
- * (#new, #flights, #flights/plans, #settings/accounts), so browser Back
- * closes the open one instead of leaving the app, and a link opens it. The
- * old surfaces' links still land — #intake/tickets, #verify, #schedule,
- * #templates open Flights on the matching tab (the store maps the names; see
- * openDialogFor). The store's openDialog stays the one truth; this only
- * mirrors it into history and back.
+/** Top-bar surfaces in the URL: New, Intake, Verify, Schedule and Settings
+ * each get a hash (#new, #intake/tickets, #verify, #schedule,
+ * #settings/accounts), so browser Back closes the open one instead of leaving
+ * the app, and a link opens it. The store's openDialog stays the one truth;
+ * this only mirrors it into history and back.
  *
  *   open a surface        push one history entry with its hash
  *   switch to another     replace that entry (Back still goes to the grid)
@@ -17,17 +15,21 @@
  * sky, `#sky/<title>` the sky on that session alone, no hash the grid. A view
  * switch replaces the entry rather than pushing one (Back is for leaving a
  * surface, not for undoing a toggle); closing a surface lands back on the
- * view's hash. Old links that named the Sky as a Flights tab
- * (`#flights/sky/<title>`, `#flights/board`) open the view (the store's
- * openDialogFor routes them) and are rewritten to `#sky…`. */
+ * view's hash.
+ *
+ * The Flights dialog is retired; its links still land (lib/flights
+ * legacyFlightsRoute) and are rewritten in place to where they landed:
+ * `#flights`, `#flights/sky/<title>`, `#flights/board` → `#sky…`;
+ * `#flights/flyways[/<id>]` → the sky with the flyway shelf open;
+ * `#flights/sources/<x>` → `#intake/<x>`; `#flights/checklists/<b>` →
+ * `#verify/<b>`; `#flights/schedule` → `#schedule`. */
 
 import { useUi, type DialogName, type MainView } from "../state/store";
+import { legacyFlightsRoute } from "./flights";
 import type { SkyMode } from "./skyLayout";
 
 const BY_HASH: Record<string, DialogName> = {
   new: "new-session",
-  flights: "flights",
-  // Flights' tabs by their old names: opened as "flights" by the store.
   intake: "intake",
   verify: "verify",
   settings: "settings",
@@ -52,16 +54,6 @@ export interface Surface {
 export function hashFor(name: DialogName | null, target: string | null): string {
   const h = name ? BY_DIALOG[name] : undefined;
   if (!h) return "";
-  if (h === "flights") {
-    // "<tab>/<deep link>": the tab and its first slash stay readable
-    // (#flights/checklists/feature%2Fx); Schedule's internal "new" is left
-    // out, as it always was.
-    const t = String(target || "").replace(/^schedule\/new$/, "schedule");
-    // Flyways is the landing tab.
-    if (!t || t === "plans") return "#flights";
-    const cut = t.indexOf("/");
-    return "#flights/" + (cut < 0 ? encodeURIComponent(t) : encodeURIComponent(t.slice(0, cut)) + "/" + encodeURIComponent(t.slice(cut + 1)));
-  }
   const t = target && !(h === "schedule" && target === "new") ? "/" + encodeURIComponent(target) : "";
   return "#" + h + t;
 }
@@ -79,6 +71,18 @@ export function parseHash(hash: string): Surface | null {
     }
   }
   return { name: BY_HASH[m[1]], target };
+}
+
+/** An old `#flights[/…]` link's target ("" for a bare `#flights`), or null
+ * when the hash is not one. */
+export function parseFlightsHash(hash: string): string | null {
+  const m = /^#flights(?:\/(.*))?$/.exec(hash || "");
+  if (!m) return null;
+  try {
+    return m[1] ? decodeURIComponent(m[1]) : "";
+  } catch {
+    return "";
+  }
 }
 
 /** The view's own hash: "" for the grid, `#sky`, or `#sky/<title>` for the
@@ -130,13 +134,17 @@ export function installSurfaceHash(win: Window = window): () => void {
   };
 
   // A link (or a reload) that names a surface opens it — and an old one
-  // (#intake/tickets) is rewritten in place to where it landed
-  // (#flights/sources/tickets), so Back from it closes rather than re-opens.
-  // A view hash sets the view; no hash keeps the one this device remembers.
+  // (#flights/sources/tickets, #templates) is rewritten in place to where it
+  // landed (#intake/tickets, #schedule), so Back from it closes rather than
+  // re-opens. A view hash sets the view; no hash keeps the one this device
+  // remembers.
   const first = parseHash(loc.hash);
   const firstView = parseViewHash(loc.hash);
+  const firstFlights = parseFlightsHash(loc.hash);
   if (firstView) useUi.getState().showSky(firstView.focus);
-  if (first || firstView || !loc.hash) {
+  // The store routes the retired name (lib/flights legacyFlightsRoute).
+  if (firstFlights !== null) useUi.getState().openDialogFor("flights", firstFlights);
+  if (first || firstView || firstFlights !== null || !loc.hash) {
     if (first) useUi.getState().openDialogFor(first.name, first.target);
     const now = urlHash(useUi.getState());
     if (now !== loc.hash && (now || loc.hash)) {
@@ -196,6 +204,20 @@ export function installSurfaceHash(win: Window = window): () => void {
       // say the view as it is now.
       const v = viewHash(ui);
       if (v !== loc.hash) replace(v);
+      return;
+    }
+    const old = parseFlightsHash(loc.hash);
+    if (old !== null) {
+      // An old Flights link pasted into this tab: open where it lands, and
+      // say that address instead.
+      pushed = false;
+      // A dialog's own address first, so opening it replaces rather than
+      // pushes a second entry.
+      const r = legacyFlightsRoute(old);
+      if (r.to !== "sky" && r.to !== "flyways") replace(hashFor(r.to, r.target));
+      ui.openDialogFor("flights", old);
+      const now = urlHash(useUi.getState());
+      if (now !== loc.hash) replace(now);
       return;
     }
     const want = parseHash(loc.hash);

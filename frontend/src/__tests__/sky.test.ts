@@ -36,8 +36,8 @@ import {
   type Pos,
 } from "../lib/skyLayout";
 import { birdPerch, sessionDiagram, type Diagram, type DiagramNode } from "../lib/flightDiagram";
-import { skyRouteOf } from "../lib/flights";
-import { parseHash, parseViewHash, viewHash } from "../lib/surfaceHash";
+import { legacyFlightsRoute } from "../lib/flights";
+import { parseFlightsHash, parseViewHash, viewHash } from "../lib/surfaceHash";
 
 const overlap = (a: Pos & { w: number; h: number }, b: Pos & { w: number; h: number }) =>
   a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
@@ -267,9 +267,9 @@ describe("the address", () => {
     expect(parseViewHash(h)).toEqual({ view: "sky", focus: "fix login/x" });
     expect(parseViewHash("#sky")).toEqual({ view: "sky", focus: "" });
     expect(viewHash({ view: "grid", skyMode: "one", focused: "x" })).toBe("");
-    const old = parseHash("#flights/sky/fix%20login%2Fx")!;
-    expect(skyRouteOf(old.target)).toEqual({ focus: "fix login/x" });
-    expect(skyRouteOf(parseHash("#flights/board")!.target)).toEqual({ focus: "" });
+    const old = parseFlightsHash("#flights/sky/fix%20login%2Fx");
+    expect(legacyFlightsRoute(old)).toEqual({ to: "sky", focus: "fix login/x" });
+    expect(legacyFlightsRoute(parseFlightsHash("#flights/board"))).toEqual({ to: "sky", focus: "" });
   });
 });
 

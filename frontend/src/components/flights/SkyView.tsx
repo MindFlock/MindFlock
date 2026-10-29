@@ -24,10 +24,14 @@
  *
  * Built from the space: a double-click on empty sky, + New session or
  * Ctrl/Alt+N opens a NewSessionBlock there; the shelf of flyways at the foot
- * (FlywayShelf) flies one onto the focused line, or onto the line a chip is
- * dropped on. The intake lane (IntakeLane) sits at the plane's left edge; the
- * drawer at the right (SkyDrawer) holds what is perched on you. A phone gets
- * the lines as a plain list — no pan, no zoom. */
+ * (FlywayShelf) is where flyways live — it flies one onto the focused line,
+ * or onto the line a chip is dropped on, and a chip (or + New flyway) opens
+ * its card (FlywayCard) to edit, reset or delete it. `useUi.skyShelf` asks
+ * for the shelf from outside — the palette's Flyways…, Schedule's Edit in the
+ * Sky, an old `#flights/flyways/<id>` link. The intake lane (IntakeLane) sits
+ * at the plane's left edge; the drawer at the right (SkyDrawer) holds what is
+ * perched on you. A phone gets the lines as a plain list — no pan, no zoom —
+ * with the shelf under it and the card in the list. */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useFlightKinds, useFlightPlans, useFlights, useInstances } from "../../state/queries";
@@ -74,6 +78,8 @@ import { NewSessionBlock } from "./NewSessionBlock";
 import { SkyDrawer } from "./SkyDrawer";
 import { FlywayCard, FlywayShelf, SkyFlock, SkyLine } from "./skyContracts";
 import { Bird } from "./Bird";
+import { TourButton } from "../onboarding/TourButton";
+import { useAutoTour } from "../onboarding/useAutoTour";
 import "./Sky.css";
 
 /** A line's chrome around its canvas: the title bar and the card's padding. */
@@ -166,8 +172,8 @@ export function SkyView() {
   const rows = useMemo(() => instQ.data || [], [instQ.data]);
   const flights = useFlights().data;
   const kinds = useFlightKinds().data || [];
-  const plans = useFlightPlans().data || [];
-  const openDialogFor = useUi((s) => s.openDialogFor);
+  const plansQ = useFlightPlans();
+  const plans = plansQ.data || [];
   const focused = useUi((s) => s.focused);
   const mode = useUi((s) => s.skyMode);
   const setSkyMode = useUi((s) => s.setSkyMode);
@@ -188,6 +194,9 @@ export function SkyView() {
   const [card, setCard] = useState<{ at: Pos; initial?: FlightPlan } | null>(null);
   const [drawerPref, setDrawerPref] = useState(() => readPref(DRAWER_KEY));
   const [shelfOpen, setShelfOpen] = useState(() => readPref(SHELF_KEY) !== "0");
+  const shelfAsk = useUi((s) => s.skyShelf);
+  // The Sky tour opens by itself the first time the sky is shown (once).
+  useAutoTour("sky", true);
   const [flyPick, setFlyPick] = useState<FlightPlan | null>(null);
   const [drop, setDrop] = useState<{ title: string; plan: FlightPlan } | null>(null);
   const dropPlan = useRef<FlightPlan | null>(null);
@@ -350,6 +359,25 @@ export function SkyView() {
     const c = toPlane(camRef.current, vp.w / 2, vp.h / 3);
     return { x: Math.round(c.x - 170), y: Math.round(c.y) };
   };
+
+  // Asked for the shelf (useUi.showFlyways): open it, and the named flyway's
+  // card ("new" = a fresh one) once the flyways have loaded.
+  const plansLoaded = plansQ.data !== undefined;
+  useEffect(() => {
+    if (!shelfAsk) return;
+    if (!shelfOpen) {
+      setShelfOpen(true);
+      writePref(SHELF_KEY, "1");
+    }
+    if (shelfAsk.plan && !plansLoaded) return;
+    useUi.getState().takeSkyShelf();
+    if (shelfAsk.plan === "new") setCard({ at: middle() });
+    else if (shelfAsk.plan) {
+      const plan = plans.find((p) => p.id === shelfAsk.plan);
+      if (plan) setCard({ at: middle(), initial: plan });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shelfAsk, plansLoaded]);
   const newHere = () => setNewAt(middle());
 
   // --- The layout store -----------------------------------------------------------
@@ -688,6 +716,7 @@ export function SkyView() {
           </button>
         </span>
       )}
+      <TourButton tour="sky" />
     </div>
   );
 
@@ -714,9 +743,6 @@ export function SkyView() {
         writePref(DRAWER_KEY, v);
       }}
       onFocus={focusOn}
-      // By the surfaces' own names (Intake → Sources, Verify → Checklists), so
-      // the drawer keeps working whatever hosts them.
-      onTab={(t, rest) => (t === "sources" ? openDialogFor("intake", rest || null) : t === "checklists" ? openDialogFor("verify", rest || null) : openDialogFor("flights", t))}
     />
   );
 
@@ -743,6 +769,21 @@ export function SkyView() {
         />
       )}
     </div>
+  );
+
+  const flywayCard = card && (
+    <FlywayCard
+      x={card.at.x}
+      y={card.at.y}
+      plans={plans}
+      initial={card.initial}
+      // Save & fly on…: the card closes and the line picker asks where.
+      onSaved={(plan) => {
+        setCard(null);
+        setFlyPick(plan);
+      }}
+      onCancel={() => setCard(null)}
+    />
   );
 
   const newBlock = newAt && (
@@ -783,10 +824,12 @@ export function SkyView() {
         {pick}
         {drawer}
         {newBlock}
+        {flywayCard}
         <div className="sky-list">
           {empty && <p className="fl-empty muted">{empty}</p>}
           {lines.map((l) => lineFor(l.id))}
         </div>
+        {shelf}
       </main>
     );
 
@@ -824,7 +867,7 @@ export function SkyView() {
                 </div>
               )}
               {lines.map((l) => (
-                <div key={l.id} className={"sky-line-slot" + (flash === l.id ? " is-flash" : "")}>
+                <div key={l.id} className={"sky-line-slot" + (flash === l.id ? " is-flash" : "")} data-tour="sky-line">
                   {lineFor(l.id, posOf(l.id))}
                 </div>
               ))}
@@ -832,16 +875,7 @@ export function SkyView() {
                 <GhostLine key={"ghost:" + g.id} {...g} />
               ))}
               {newBlock}
-              {card && (
-                <FlywayCard
-                  x={card.at.x}
-                  y={card.at.y}
-                  plans={plans}
-                  initial={card.initial}
-                  onSaved={() => setCard(null)}
-                  onCancel={() => setCard(null)}
-                />
-              )}
+              {flywayCard}
             </div>
             {empty && (
               <p className="sky-empty muted" role="status">

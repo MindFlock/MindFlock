@@ -1,9 +1,8 @@
-/** Flights' wiring: the store opens the old surfaces as its tabs (and the old
- * Sky tab as the sky VIEW), the URL hash follows, Alt+I / V / S land on
- * Flyways / Checklists / Schedule (Alt+I keeps its id so a rebind survives), the palette keeps Intake… / Verify… / Schedule…,
- * the top bar is ONE Flights button, the rail and the bell read a flight
- * parked on a *you* step as Needs you, and an arrival's Start posts the old
- * route with its plan. */
+/** Flights' wiring outside the sky: the rail and the bell read a flight
+ * parked on a *you* step as Needs you, and an arrival's Fly posts the old
+ * route with its plan. (The top bar, the keys, the palette, the hash and the
+ * store's routing of the retired Flights dialog's addresses are
+ * flatTopBar.test.ts's.) */
 
 /// <reference types="vite/client" />
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,8 +14,6 @@ vi.mock("../api/client", () => ({ api: vi.fn(), ApiError: class extends Error {}
 vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
 
 const { useUi } = await import("../state/store");
-const { KEYMAP } = await import("../lib/keymap");
-const { hashFor, parseHash } = await import("../lib/surfaceHash");
 const { deriveSessionState, flightYouLabel, needsYouAction, notifyRuleFor } = await import("../lib/sessionState");
 const { chipState } = await import("../lib/stage");
 const { withFlightYou } = await import("../lib/needsYou");
@@ -26,126 +23,6 @@ const { sourcePlan } = await import("../components/flights/SkyDrawer");
 afterEach(() => {
   useUi.getState().closeDialog();
   useUi.getState().setView("grid");
-});
-
-const open = () => [useUi.getState().openDialog, useUi.getState().dialogTarget];
-
-describe("the store opens the old surfaces as tabs of Flights", () => {
-  it("maps each name, keeping its deep link", () => {
-    useUi.getState().openDialogFor("intake");
-    expect(open()).toEqual(["flights", "sources"]);
-    useUi.getState().openDialogFor("flights");
-    expect(open()).toEqual(["flights", null]);
-    // The old Sky tab (and the Board before it) is the sky view: no dialog.
-    useUi.getState().openDialogFor("flights", "board");
-    expect(open()).toEqual([null, null]);
-    expect(useUi.getState().view).toBe("sky");
-    useUi.getState().setView("grid");
-    useUi.getState().openDialogFor("intake", "tickets:jira");
-    expect(open()).toEqual(["flights", "sources/tickets:jira"]);
-    useUi.getState().openDialogFor("verify", "feature/x");
-    expect(open()).toEqual(["flights", "checklists/feature/x"]);
-    useUi.getState().openDialogFor("schedule", "new");
-    expect(open()).toEqual(["flights", "schedule/new"]);
-    useUi.getState().openDialogFor("templates");
-    expect(open()).toEqual(["flights", "schedule"]);
-    useUi.getState().openDialogFor("flights", "plans");
-    expect(open()).toEqual(["flights", "plans"]);
-    // Anything else is untouched.
-    useUi.getState().openDialogFor("settings", "accounts");
-    expect(open()).toEqual(["settings", "accounts"]);
-  });
-
-  it("is the one DialogName the app mounts for them", () => {
-    const app = code("App.tsx");
-    expect(app).toContain("<FlightsDialog />");
-    expect(app).not.toContain("<IntakeDialog />");
-    expect(app).not.toContain("<VerifyDialog />");
-    const dlg = code("components/flights/FlightsDialog.tsx");
-    expect(dlg).toContain('useUi((s) => s.openDialog === "flights")');
-    expect(dlg).toContain('<Modal\n      id="flights-dialog"');
-    // The top-bar card; the Sky is no longer a tab, so nothing goes full-window.
-    expect(dlg).toContain('className="top-dialog"');
-    expect(dlg).not.toContain("sky-full");
-    expect(dlg).not.toContain("<Sky ");
-    expect(dlg).toContain('<TourButton tour="flights" />');
-    for (const mount of [
-      "<IntakeDialog embedded target={rest || null} />",
-      "<TemplatesDialog embedded target={rest || null} />",
-      "<VerifyDialog embedded target={rest || null} />",
-    ])
-      expect(dlg).toContain(mount);
-  });
-});
-
-describe("the URL hash", () => {
-  it("#flights, #flights/plans, and the old links still resolve", () => {
-    // Flyways is the landing tab; the old Sky links still parse (the store
-    // turns them into the sky view — skyView.test.ts).
-    expect(hashFor("flights", null)).toBe("#flights");
-    expect(hashFor("flights", "plans")).toBe("#flights");
-    expect(parseHash("#flights/sky/fix-login")).toEqual({ name: "flights", target: "sky/fix-login" });
-    expect(parseHash("#flights/board")).toEqual({ name: "flights", target: "board" });
-    expect(hashFor("flights", "sources")).toBe("#flights/sources");
-    expect(parseHash("#flights")).toEqual({ name: "flights", target: null });
-    expect(parseHash("#flights/plans")).toEqual({ name: "flights", target: "plans" });
-    for (const [hash, want] of [
-      ["#intake/tickets", ["flights", "sources/tickets"]],
-      ["#verify", ["flights", "checklists"]],
-      ["#schedule", ["flights", "schedule"]],
-      ["#templates", ["flights", "schedule"]],
-    ] as const) {
-      const s = parseHash(hash)!;
-      useUi.getState().openDialogFor(s.name, s.target);
-      expect(open(), hash).toEqual(want);
-    }
-  });
-});
-
-describe("the keys", () => {
-  const run = (id: string) => KEYMAP.find((k) => k.id === id)!.run({} as KeyboardEvent);
-
-  it("Alt+I opens Flights on Flyways (its id stays intake, so a rebind survives), Alt+V Checklists, Alt+S Schedule", () => {
-    const i = KEYMAP.find((k) => k.id === "intake")!;
-    expect(i).toMatchObject({ key: "i", alt: true });
-    expect(i.help?.[2]).toMatch(/^Flights — flyways/);
-    run("intake");
-    expect(open()).toEqual(["flights", null]);
-    run("verify");
-    expect(open()).toEqual(["flights", "checklists"]);
-    run("schedule");
-    expect(open()).toEqual(["flights", "schedule"]);
-  });
-});
-
-describe("the palette", () => {
-  it("has Flights… and keeps Intake… / Verify… / Schedule… on their tabs", () => {
-    const p = code("components/palette/CommandPalette.tsx");
-    expect(p).toContain('label: "Flights…"');
-    expect(p).toContain('run: () => ui.openDialogFor("flights"),');
-    expect(p).toContain('label: "Flights: Flyways"');
-    expect(p).toContain('label: "Intake…"');
-    expect(p).toContain('label: "Verify…"');
-    expect(p).toContain('label: "Schedule…"');
-  });
-});
-
-describe("the top bar", () => {
-  const top = code("components/TopBar.tsx");
-  it("is one Flights button with the waiting-on-you badge", () => {
-    expect(top).toContain('id="flights-btn"');
-    expect(top).toContain('"Flights — every ticket, PR and scheduled job on its flyway, from waiting to fly to landed"');
-    // The bird, never a plane.
-    expect(top).toContain('<Bird size={13} className="tb-bird" />');
-    expect(top).not.toContain("✈");
-    expect(top).toContain('keys("intake")');
-    expect(top).toContain("flightBadgeCount(flights, due, failing, waiting)");
-    expect(top).toContain("badgeLines(badge)");
-    // Nothing at zero, red on a failure.
-    expect(top).toContain('{badge.count > 0 && <span className={"tb-count" + (badge.failing ? " is-failing" : "")}>{badge.count}</span>}');
-    // The waiting items come from the cache only: the bar never fans out upstream.
-    expect(top).toContain("useWaiting(false)");
-  });
 });
 
 describe("a flight perched on you is Needs you", () => {

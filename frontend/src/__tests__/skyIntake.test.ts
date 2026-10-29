@@ -62,11 +62,11 @@ describe("sourceBlocks: one block per source, in pipeline order", () => {
     expect(blocks.map((b) => b.key)).toEqual(["tickets:sc", "tickets:jira", "prs:acme/app", "prs:acme/site", "issues:acme/app"]);
     expect(blocks.map((b) => b.label)).toEqual(["Shortcut · quickpay", "Jira", "PRs · acme/app", "PRs · acme/site", "Issues · acme/app"]);
     expect(blocks.map((b) => b.target)).toEqual([
-      "sources/tickets:sc",
-      "sources/tickets:jira",
-      "sources/prs:acme/app",
-      "sources/prs:acme/site",
-      "sources/issues:acme/app",
+      "tickets:sc",
+      "tickets:jira",
+      "prs:acme/app",
+      "prs:acme/site",
+      "issues:acme/app",
     ]);
   });
 

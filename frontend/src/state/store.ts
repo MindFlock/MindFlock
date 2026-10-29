@@ -18,8 +18,8 @@ import { notePrefWrite } from "../lib/prefs";
 import { asPaneHeaderPref, type PaneHeaderPref } from "../lib/paneHeader";
 import { toast } from "../lib/toast";
 import type { TourId } from "../lib/tours";
-import { flightsTargetFor, skyRouteOf } from "../lib/flights";
 import type { SkyMode } from "../lib/skyLayout";
+import { legacyFlightsRoute } from "../lib/flights";
 
 export type ViewMode = "auto" | "2" | "4" | "9";
 
@@ -134,15 +134,7 @@ export function windowKey(
 export type DialogName =
   | "new-session"
   | "settings"
-  // Flights (components/flights/FlightsDialog): one route from arrival to
-  // merge — Flyways · Sources · Schedule · Checklists. dialogTarget is
-  // "<tab>" or "<tab>/<the embedded surface's own deep link>"
-  // (lib/flights parseFlightsTarget). A target naming the old Sky tab
-  // (`sky[/<title>]`, `board`) opens the sky VIEW instead (showSky).
-  | "flights"
-  // Intake, Verify and Schedule are tabs of Flights now. Their names are still
-  // accepted by openDialogFor (every old call site, a saved #intake/… link)
-  // and opened as "flights" on the matching tab — the store never holds them.
+  // Intake (IntakeDialog): Alt+I; dialogTarget = its tab / source.
   | "intake"
   // Customize (CustomizeDialog): "customize" opens its Sidebar tab, and
   // "prompts" below opens it on that tab.
@@ -162,13 +154,19 @@ export type DialogName =
   | "shortcuts"
   // Repo-level red zones + Plan-first, managed outside any one session.
   | "red-zones"
-  // Schedule (TemplatesDialog, the Flights Schedule tab): Alt+S, New's
-  // templates strip, the palette's "Schedule…" / "Templates…". Its target
-  // "new" = reopen New on close (lib/templates' readTemplatesTarget) rides on
-  // as "schedule/new". Opened as "flights", like "intake" and "verify".
+  // Schedule (TemplatesDialog): Alt+S, New's templates strip, the palette's
+  // "Schedule…" / "Templates…". Its target "new" = reopen New on close
+  // (lib/templates' readTemplatesTarget).
   | "schedule"
-  // The surface's name before it was Schedule: opened as Flights → Schedule.
+  // The surface's name before it was Schedule. Still accepted by
+  // openDialogFor (old call sites, a saved #templates link) and opened as
+  // "schedule" — the store never holds it.
   | "templates"
+  // The retired Flights dialog. Still accepted by openDialogFor (an old call
+  // site, a saved #flights/… link) and routed where it lands now (lib/flights
+  // legacyFlightsRoute): the sky, the sky's flyway shelf, or Intake / Verify
+  // / Schedule — the store never holds it.
+  | "flights"
   // The one dialog every extension's dialog surfaces share; the extension id +
   // surface ride in dialogTarget ("<ext>:<surface>[:<ref>]").
   | "extension"
@@ -189,6 +187,10 @@ interface UiState {
   /** The sky's lines: All · Mine · Perched on you · This session (the
    * focused session alone). */
   skyMode: SkyMode;
+  /** A request for the sky's flyway shelf (showFlyways): open it, and the
+   * card of `plan` when one is named ("new" = a fresh card). The sky takes
+   * it once (takeSkyShelf); `n` makes a repeat of the same request new. */
+  skyShelf: { plan: string; n: number } | null;
   /** Persisted row layout: array of arrays of titles. */
   gridRows: string[][];
   sidebarHidden: boolean;
@@ -372,6 +374,12 @@ interface UiState {
   /** The sky view, on `focus` alone ("" = whichever lines the view shows):
    * `#sky`, `#sky/<title>`, and every old Flights → Sky address. */
   showSky(focus?: string): void;
+  /** The sky with its flyway shelf open — and `plan`'s card ("new" = a new
+   * flyway): the palette's "Flyways…", Schedule's "Edit in the Sky", an old
+   * `#flights/flyways/<id>` link. */
+  showFlyways(plan?: string): void;
+  /** The sky took the shelf request: clear it. */
+  takeSkyShelf(): void;
   setGridRows(rows: string[][]): void;
   toggleSidebar(): void;
   /** Set the sidebar width (clamped + persisted). */
@@ -496,6 +504,7 @@ export const useUi = create<UiState>((set, get) => ({
   viewMode: load<ViewMode>("cs_viewmode", "auto", false),
   view: load<string>("mf_view", "grid", false) === "sky" ? "sky" : "grid",
   skyMode: loadSkyMode(),
+  skyShelf: null,
   gridRows: load<string[][]>("cs_gridrows", []),
   sidebarHidden: load<string>("cs_sidebar", "", false) === "hidden",
   sidebarWidth: clampSidebarWidth(load<number>("mf_sidebar_w", SIDEBAR_DEFAULT_W)),
@@ -590,6 +599,11 @@ export const useUi = create<UiState>((set, get) => ({
     } else if (get().skyMode === "one") set({ skyMode: loadSkyMode() });
     get().setView("sky");
   },
+  showFlyways: (plan = "") => {
+    get().showSky();
+    set({ skyShelf: { plan, n: (get().skyShelf?.n || 0) + 1 } });
+  },
+  takeSkyShelf: () => set({ skyShelf: null }),
   setGridRows: (rows) => {
     save("cs_gridrows", rows);
     set({ gridRows: rows });
@@ -856,12 +870,14 @@ export const useUi = create<UiState>((set, get) => ({
     set({ lastTab });
   },
   openDialogFor: (name, target = null) => {
-    const legacy = name === "intake" || name === "verify" || name === "schedule" || name === "templates";
-    // The Sky was Flights' first tab: an address that still names it is the
-    // sky view now, not a dialog.
-    const sky = name === "flights" ? skyRouteOf(target) : null;
-    if (sky) get().showSky(sky.focus);
-    else set(legacy ? { openDialog: "flights", dialogTarget: flightsTargetFor(name, target) } : { openDialog: name, dialogTarget: target });
+    if (name !== "flights") {
+      set({ openDialog: name === "templates" ? "schedule" : name, dialogTarget: target });
+      return;
+    }
+    const r = legacyFlightsRoute(target);
+    if (r.to === "sky") get().showSky(r.focus);
+    else if (r.to === "flyways") get().showFlyways(r.plan);
+    else set({ openDialog: r.to, dialogTarget: r.target });
   },
   closeDialog: () => set({ openDialog: null, dialogTarget: null }),
   setPrBase: (repo, base) => {

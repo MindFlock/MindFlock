@@ -1,6 +1,5 @@
-/** The top-bar dialogs — New and Flights, plus Intake, Verify and Schedule
- * standalone (they are Flights' tabs now) — open at the SAME place: one fixed
- * top edge, written once on the modal shell (Modal.css,
+/** The four top-bar dialogs — New, Intake, Verify, Schedule — open at the SAME
+ * place: one fixed top edge, written once on the modal shell (Modal.css,
  * `.modal.top-dialog`), so hopping between them with Alt+N / I / V / S never
  * jumps and a tab, fold or editor inside one never moves its top. The owner
  * asked for it after New and Intake sat high while Verify and Schedule sat
@@ -14,7 +13,6 @@ const MODAL_CSS = src("components/Modal.css");
 /** [dialog source, the shell's id, the card's id, the card's own sheet(s)] */
 const DIALOGS: [string, string, string, string[]][] = [
   ["components/dialogs/NewSessionDialog.tsx", "new-dialog", "new-form", ["components/dialogs/NewSessionDialog.css"]],
-  ["components/flights/FlightsDialog.tsx", "flights-dialog", "flights-panel", ["components/flights/FlightsDialog.css"]],
   ["components/intake/IntakeDialog.tsx", "intake-dialog", "intake-panel", ["components/intake/IntakeDialog.css"]],
   ["components/dialogs/VerifyDialog.tsx", "verify-dialog", "verify-panel", ["components/dialogs/VerifyDialog.css"]],
   [
@@ -49,11 +47,8 @@ describe("the shared top-bar dialog placement", () => {
   it.each(DIALOGS)("%s carries it, and its card sets no top, centring or ceiling", (file, shell, card, sheets) => {
     const tags = tagsWithId(src(file), shell);
     expect(tags).toHaveLength(1);
-    // A literal, or an expression that always includes it (Flights used to
-    // add `sky-full` on its Sky tab; the sky is a main-area view now).
     const cls = attr(tags[0], "className") ?? "";
-    expect(cls.replace(/["'`{}()+?:]/g, " ").split(/\s+/)).toContain("top-dialog");
-    if (cls.includes("?")) expect(cls).toMatch(/^"top-dialog" \+ /);
+    expect(cls.split(/\s+/)).toContain("top-dialog");
     for (const sheet of sheets) {
       const css = src(sheet);
       for (const sel of ["#" + card, "#" + shell + " > #" + card, "#" + shell]) {

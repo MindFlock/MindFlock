@@ -291,25 +291,17 @@ body #mf-winctl {
   cursor: pointer;
 }
 
-/* The worded actions (New, Flights, Settings) read at the wordmark's size;
-   11px (the icon-button default above) made them look like fine print. By id
-   so the palette icon, which shares .tb-item, keeps its box. */
+/* The five worded actions read at the wordmark's size; 11px (the icon-button
+   default above) made them look like fine print. By id so the palette icon,
+   which shares .tb-item, keeps its box. */
 #topbar #new-btn.tb-new,
-#topbar #flights-btn,
+#topbar #intake-btn,
+#topbar #verify-btn,
+#topbar #schedule-btn,
 #topbar #settings-btn {
   font-size: 13px;
   height: 28px;
   padding: 0 8px;
-}
-
-/* Flights' bird, before its word. */
-#topbar #flights-btn {
-  gap: 5px;
-}
-
-#topbar #flights-btn .tb-bird {
-  flex: none;
-  opacity: 0.85;
 }
 
 #topbar #new-btn.tb-new:hover {
@@ -391,7 +383,7 @@ body #mf-winctl {
 }
 
 /* Grid · Sky: the main area's two views (lib/viewMode), a segmented pair of
-   .tb-items beside Flights. The active one is filled, like a pressed key; on
+   .tb-items beside New. The active one is filled, like a pressed key; on
    a phone-narrow window the words go and the glyphs stay. */
 #topbar .tb-views {
   display: inline-flex;
@@ -419,6 +411,12 @@ body #mf-winctl {
 
 #topbar .tb-view-icon {
   flex: none;
+}
+
+/* The Sky half's count of flights perched on you: the bar's badge, sized
+   for the pair's shorter keys. */
+#topbar .tb-views .tb-view .tb-count {
+  margin-left: 2px;
 }
 
 body.narrow #topbar .tb-view-word {

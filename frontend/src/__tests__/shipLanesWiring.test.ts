@@ -116,17 +116,16 @@ describe("the rail: railOrder stays the numbering authority", () => {
 describe("no Outbox: the bell and the group header", () => {
   it("the top bar carries only the daily loop", () => {
     // The Outbox, Prompts and Recent buttons are gone (dropped, Customize, the
-    // session list), and Intake / Verify / Schedule are tabs of Flights; the
-    // palette is the last item, after Settings.
+    // session list), and so is the Flights button (Intake / Verify / Schedule
+    // are back on the bar); the palette is the last item, after Settings.
     const top = fn("components/TopBar.tsx", "TopBar");
-    for (const gone of ['"outbox-btn"', '"prompts-btn"', '"recent-btn"', '"intake-btn"', '"verify-btn"', '"schedule-btn"'])
-      expect(top, gone).not.toContain(gone);
-    const n = top.indexOf('id="new-btn"');
-    const f = top.indexOf('id="flights-btn"');
+    for (const gone of ['"outbox-btn"', '"prompts-btn"', '"recent-btn"', '"flights-btn"']) expect(top, gone).not.toContain(gone);
+    const i = top.indexOf('id="intake-btn"');
+    const v = top.indexOf('id="verify-btn"');
     const s = top.indexOf('id="settings-btn"');
     const p = top.indexOf('id="palette-btn"');
-    expect(f).toBeGreaterThanOrEqual(0);
-    expect(n < f && f < s && s < p).toBe(true);
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(i < v && v < s && s < p).toBe(true);
     // The shortcut comes from the live keymap, never a hand-typed string.
     expect(has(top, 'title={"Command palette" + keys("palette")}')).toBe(true);
     expect(top).not.toContain("waitingCount");

@@ -47,7 +47,8 @@ export interface SourceBlock {
   id: string;
   /** "Shortcut · quickpay", "PRs · owner/name", "Issues · owner/name". */
   label: string;
-  /** Flights → Sources deep link for the block's ⋯ ("sources/tickets:sc"). */
+  /** Intake's deep link for the block's ⋯ ("tickets:sc": the tab and the
+   * source). */
   target: string;
   /** Its items start by themselves (the Board's "flies by itself"). */
   auto: boolean;
@@ -173,7 +174,7 @@ export function sourceBlocks(
       kind,
       id,
       label,
-      target: "sources/" + kind + ":" + id,
+      target: kind + ":" + id,
       auto,
       every,
       autoText: auto ? "auto-start on · " + everyWords(every) : "manual",

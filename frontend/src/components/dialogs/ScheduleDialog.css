@@ -356,3 +356,16 @@
 .new-templates .nt-act.nt-sched .nt-sched-at {
   font-variant-numeric: tabular-nums;
 }
+
+/* Scheduled flyways (a flyway whose trigger is a schedule): a template card
+   with the flyway's bird before its name. */
+.sch-flyway .tpl-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sch-flyway-bird {
+  flex: none;
+  color: var(--accent);
+}

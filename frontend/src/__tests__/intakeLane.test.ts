@@ -106,8 +106,8 @@ describe("the intake lane", () => {
     expect(prs).toContain("Nothing waiting");
   });
 
-  it("the ⋯ opens the source on Flights → Sources", () => {
-    expect(code("components/flights/IntakeLane.tsx")).toContain('useUi.getState().openDialogFor("flights", block.target)');
+  it("the ⋯ opens the source in Intake (its own deep link: <tab>:<source>)", () => {
+    expect(code("components/flights/IntakeLane.tsx")).toContain('useUi.getState().openDialogFor("intake", block.target)');
   });
 
   it("folds to a rail: one icon per source with its waiting count", () => {

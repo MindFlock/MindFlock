@@ -1,0 +1,263 @@
+/* The stop palette, the stop inspector, Describe a stop…, and a flyway's
+ * trigger (FlywayInspector.tsx) — prefix fl-. Shared by the flyway card on
+ * the Sky's shelf (FlywayCard) and the pane's Flight tab (useSessionLine's
+ * palette and inspector, through StopParts). */
+
+/* --- The stop palette, the inspector, describe ------------------------------- */
+
+.fl-palette {
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 12px;
+  background: var(--panel);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.fl-palette-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.fl-icon-btn {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.fl-icon-btn:hover {
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+.fl-palette-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.fl-palette-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 6px;
+  align-content: start;
+}
+
+.fl-palette-head {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.fl-palette-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+.fl-palette-item:hover,
+.fl-palette-item:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.fl-palette-item.fl-kind-you {
+  border-radius: 16px;
+  border-color: color-mix(in srgb, var(--tone-attention) 60%, var(--border));
+}
+
+.fl-palette-item.fl-kind-you:hover {
+  border-color: var(--tone-attention);
+}
+
+.fl-palette-icon {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.13);
+}
+
+.fl-kind-you .fl-palette-icon {
+  color: var(--tone-attention);
+  background: color-mix(in srgb, var(--tone-attention) 16%, transparent);
+  border-radius: 50%;
+}
+
+.fl-palette-words {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fl-palette-label {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.fl-palette-summary {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.fl-palette-flyways {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.fl-inspector,
+.fl-section {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-2);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.fl-inspector-perch {
+  border-color: color-mix(in srgb, var(--tone-attention) 55%, var(--border));
+}
+
+.fl-inspector-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fl-inspector-head .fl-box-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.fl-inspector-perch .fl-inspector-head .fl-box-icon {
+  color: var(--tone-attention);
+  background: color-mix(in srgb, var(--tone-attention) 16%, transparent);
+  border-radius: 50%;
+}
+
+.fl-inspector-kind {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.fl-inspector-kind strong {
+  font-size: 13px;
+}
+
+.fl-inspector-acts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.fl-readonly .fl-form {
+  opacity: 0.75;
+}
+
+.fl-described-note {
+  color: var(--accent);
+  margin: 0;
+}
+
+.fl-describe {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fl-describe-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.fl-describe-row .fl-prompt {
+  flex: 1;
+  min-height: 44px;
+}
+
+.fl-schedule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.fl-schedule-at {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fl-schedule .fl-time.fl-input {
+  width: 110px;
+}
+
+.fl-schedule .fl-date.fl-input {
+  width: 150px;
+}
+
+.fl-schedule > .fl-input {
+  width: 180px;
+}
+
+.fl-builtin-tag {
+  font-size: 10.5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 7px;
+  color: var(--muted);
+}
+
+.fl-unsaved {
+  font-size: 11.5px;
+}
+
+.fl-unsaved {
+  color: var(--tone-attention);
+}
+
+@media (max-width: 600px) {
+  .fl-describe-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}

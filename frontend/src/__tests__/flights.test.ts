@@ -1,26 +1,23 @@
 /** Flights' pure rules (lib/flights.ts): a step's glyph and state, a flight's
- * progress, who waits on whom, the top-bar badge, the pane strip's line, the
- * plan editor's block moves, the trigger's schedule round trip, and the
- * dialog's address (the tab + the old surfaces' deep links). */
+ * progress, who waits on whom, the Sky toggle's perch badge, the pane strip's
+ * line, the flyway card's block moves, the trigger's schedule round trip, and
+ * where the retired Flights dialog's addresses land now. */
 
 import { describe, expect, it } from "vitest";
 import {
-  badgeLines,
   blankPlan,
   builtinPlanFor,
   currentElapsed,
   flightDrives,
   duplicateStep,
   fieldOptions,
-  flightBadgeCount,
   flightProgress,
-  flightsTargetFor,
   isLive,
   moveStep,
   needsYouFlights,
   newStep,
-  parseFlightsTarget,
-  skyRouteOf,
+  legacyFlightsRoute,
+  perchBadge,
   planDirty,
   rowWaitsOnYou,
   scheduleOfWhen,
@@ -154,33 +151,18 @@ describe("what waits on you", () => {
     expect(needsYouFlights([flight(), parked, halted]).map((f) => f.id)).toEqual(["f_2", "f_3"]);
   });
 
-  it("the badge adds flights perched on you + Verify's due checklists + items waiting to fly that no switch starts", () => {
-    const b = flightBadgeCount([flight(), parked], 2, 0, [{ auto: true }, { auto: false }, { auto: false }]);
-    expect(b).toEqual({ count: 5, you: 1, verify: 2, waiting: 2, failing: false });
+  it("the Sky toggle's badge counts the flights perched on you (or halted)", () => {
+    expect(perchBadge([flight(), parked, halted])).toEqual({ count: 2, failing: true });
+    expect(perchBadge([flight(), parked])).toEqual({ count: 1, failing: false });
   });
 
-  it("never counts a flight parked on a verify step twice (Verify already does)", () => {
-    expect(flightBadgeCount([onVerify], 1, 0, []).count).toBe(1);
+  it("never counts a flight parked on a verify step (Verify's own badge does)", () => {
+    expect(perchBadge([onVerify]).count).toBe(0);
   });
 
-  it("turns red for a failed checklist or a halted flight; nothing at all on zero", () => {
-    expect(flightBadgeCount([], 1, 1, []).failing).toBe(true);
-    expect(flightBadgeCount([halted], 0, 0, []).failing).toBe(true);
-    expect(flightBadgeCount([flight()], 0, 0, [{ auto: true }])).toEqual({
-      count: 0,
-      you: 0,
-      verify: 0,
-      waiting: 0,
-      failing: false,
-    });
-  });
-
-  it("the tooltip names the three counts", () => {
-    expect(badgeLines({ count: 3, you: 1, verify: 2, waiting: 0, failing: false })).toEqual([
-      "1 flight perched on you",
-      "2 checklists to check",
-      "0 items waiting to fly by hand",
-    ]);
+  it("says nothing at all on zero", () => {
+    expect(perchBadge([])).toEqual({ count: 0, failing: false });
+    expect(perchBadge([flight()])).toEqual({ count: 0, failing: false });
   });
 
   it("a you step's items and text", () => {
@@ -197,7 +179,7 @@ describe("a paused flight", () => {
   it("is in the air but waits on nobody: In flight, not Needs you, not the badge", () => {
     expect(isLive(paused)).toBe(true);
     expect(needsYouFlights([paused])).toEqual([]);
-    expect(flightBadgeCount([paused], 0, 0, [])).toMatchObject({ count: 0, failing: false });
+    expect(perchBadge([paused])).toEqual({ count: 0, failing: false });
   });
 
   it("still owns the ship ladder, as running and waiting_you do; halted, done and cancelled give it back", () => {
@@ -332,27 +314,22 @@ describe("the schedule trigger, through Schedule's own editor", () => {
   });
 });
 
-describe("the dialog's address", () => {
-  it("is <tab>[/<deep link>], unknown = Flyways; the old Sky and Board are the sky view now", () => {
-    expect(parseFlightsTarget(null)).toEqual({ tab: "plans", rest: "" });
-    expect(parseFlightsTarget("board")).toEqual({ tab: "plans", rest: "" });
-    expect(skyRouteOf("board")).toEqual({ focus: "" });
-    expect(skyRouteOf("sky")).toEqual({ focus: "" });
-    expect(skyRouteOf("sky/fix-login/x")).toEqual({ focus: "fix-login/x" });
-    expect(skyRouteOf("plans")).toBeNull();
-    expect(skyRouteOf(null)).toBeNull();
-    expect(parseFlightsTarget("plans")).toEqual({ tab: "plans", rest: "" });
-    expect(parseFlightsTarget("checklists/feature/x")).toEqual({ tab: "checklists", rest: "feature/x" });
-    expect(parseFlightsTarget("sources/tickets:jira")).toEqual({ tab: "sources", rest: "tickets:jira" });
-    expect(parseFlightsTarget("nope/x")).toEqual({ tab: "plans", rest: "" });
-  });
-
-  it("carries the old surfaces' deep links onto their tabs", () => {
-    expect(flightsTargetFor("intake", null)).toBe("sources");
-    expect(flightsTargetFor("intake", "tickets")).toBe("sources/tickets");
-    expect(flightsTargetFor("verify", null)).toBe("checklists");
-    expect(flightsTargetFor("verify", "feature/x")).toBe("checklists/feature/x");
-    expect(flightsTargetFor("schedule", "new")).toBe("schedule/new");
-    expect(flightsTargetFor("templates", null)).toBe("schedule");
+describe("the retired Flights dialog's addresses", () => {
+  it("land on the sky, the sky's shelf, or the flat dialog they named", () => {
+    expect(legacyFlightsRoute(null)).toEqual({ to: "sky", focus: "" });
+    expect(legacyFlightsRoute("")).toEqual({ to: "sky", focus: "" });
+    expect(legacyFlightsRoute("board")).toEqual({ to: "sky", focus: "" });
+    expect(legacyFlightsRoute("sky")).toEqual({ to: "sky", focus: "" });
+    expect(legacyFlightsRoute("sky/fix-login/x")).toEqual({ to: "sky", focus: "fix-login/x" });
+    expect(legacyFlightsRoute("flyways")).toEqual({ to: "flyways", plan: "" });
+    expect(legacyFlightsRoute("flyways/p_1")).toEqual({ to: "flyways", plan: "p_1" });
+    expect(legacyFlightsRoute("plans/builtin:ticket")).toEqual({ to: "flyways", plan: "builtin:ticket" });
+    expect(legacyFlightsRoute("sources")).toEqual({ to: "intake", target: null });
+    expect(legacyFlightsRoute("sources/tickets:jira")).toEqual({ to: "intake", target: "tickets:jira" });
+    expect(legacyFlightsRoute("checklists")).toEqual({ to: "verify", target: null });
+    expect(legacyFlightsRoute("checklists/feature/x")).toEqual({ to: "verify", target: "feature/x" });
+    expect(legacyFlightsRoute("schedule")).toEqual({ to: "schedule", target: null });
+    expect(legacyFlightsRoute("schedule/new")).toEqual({ to: "schedule", target: "new" });
+    expect(legacyFlightsRoute("nope/x")).toEqual({ to: "sky", focus: "" });
   });
 });
