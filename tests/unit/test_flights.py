@@ -292,7 +292,11 @@ def test_one_flight_per_session_and_halted_ones_are_replaced():
     with pytest.raises(F.FlightError) as err:
         fly(step("notify"), session="t")
     assert err.value.status == 409 and err.value.error == "in_flight"
-    F.mutate(f1["id"], lambda f: F.op_pause(f, now=NOW))
+    F.mutate(
+        f1["id"],
+        lambda f: F.apply(f, {"action": "fail", "reason": "x", "then": "halt"}, NOW),
+    )
+    assert F.get(f1["id"])["state"] == "halted"
     f2 = fly(step("notify"), session="t")
     assert F.get(f1["id"])["state"] == "cancelled"
     assert F.for_session("t")["id"] == f2["id"]
@@ -768,10 +772,12 @@ def test_skip_retry_jump_pause_resume_cancel():
         f["step_states"][s]["state"] == "pending" for s in ("s2", "s3", "s4")
     )
     f = F.op_pause(f, now=NOW)
-    assert f["state"] == "halted" and f["paused"]
-    assert F.next_action(f, {}, NOW)["action"] == "wait"
+    assert f["state"] == "paused" and f["reason"] == "" and "paused" not in f
+    assert f["history"][-1]["event"] == "paused"
+    assert F.next_action(f, {"session": sess()}, NOW)["action"] == "wait"
+    assert F.op_pause(f, now=NOW)["state"] == "paused"  # twice: a no-op
     f = F.op_resume(f, now=NOW)
-    assert f["state"] == "running" and not f["paused"]
+    assert f["state"] == "running" and f["history"][-1]["event"] == "resumed"
     f = F.op_cancel(f, now=NOW)
     assert f["state"] == "cancelled" and f["finished"] == NOW
     with pytest.raises(F.FlightError) as err:
@@ -882,7 +888,7 @@ def test_row_dto_and_event_data():
         "step": {
             "id": "s1",
             "kind": "you",
-            "title": "You: check it",
+            "title": "Check it",
             "state": "waiting_you",
             "actor": "you",
         },
@@ -901,7 +907,7 @@ def test_row_dto_and_event_data():
     assert ev["step"] == {
         "id": "s1",
         "kind": "you",
-        "title": "You: check it",
+        "title": "Check it",
         "state": "waiting_you",
     }
     assert ev["detail"] == "row: Approve"
@@ -919,3 +925,44 @@ def test_list_flights_keeps_at_most_keep_finished(monkeypatch):
     fly(step("notify"), session="k9")
     kept = {f["id"] for f in F.list_flights()}
     assert ids[0] not in kept and ids[1] not in kept and ids[3] in kept
+
+
+def test_paused_is_a_real_state():
+    assert "paused" in F.STATES and "paused" not in F.ACTIVE
+    # A paused you-step: Done ticks it off but the flight stays paused.
+    f = fly(step("you", text="ok"), step("notify"), step("notify"), session="pz")
+    f = F.apply(f, F.next_action(f, {}, NOW), NOW)
+    f = F.op_pause(f, now=NOW)
+    assert f["state"] == "paused"
+    assert F.next_action(f, {}, NOW) == {"action": "wait", "note": ""}
+    f = F.op_done(f, "s1", now=NOW)
+    assert f["cursor"] == 1 and f["state"] == "paused"
+    f = F.op_skip(f, "s2", now=NOW)
+    assert f["cursor"] == 2 and f["state"] == "paused"
+    # Jump / retry are a "go": the flight runs again.
+    assert F.op_jump(copy.deepcopy(f), "s3", now=NOW)["state"] == "running"
+    # A halted flight is not paused by Pause.
+    g = run_step(fly(step("checks"), session="ph"))
+    g = F.apply(g, {"action": "fail", "reason": "x", "then": "halt"}, NOW)
+    assert F.op_pause(g, now=NOW)["state"] == "halted"
+
+
+def test_a_paused_flight_holds_its_session_and_shows_on_the_row():
+    f = fly(step("notify"), session="hold")
+    F.mutate(f["id"], lambda x: F.op_pause(x, now=NOW))
+    with pytest.raises(F.FlightError) as err:
+        fly(step("notify"), session="hold")
+    assert err.value.error == "in_flight"
+    assert F.row_dto("hold")["state"] == "paused"
+    assert F.event_data(F.get(f["id"]))["detail"] == "hold: paused"
+    # A paused flight whose session is gone is still cancelled by prune.
+    F.prune(set(), NOW)
+    assert F.prune(set(), NOW + F.GONE_GRACE_S + F.ARM_GRACE_S + 1)[0]["id"] == f["id"]
+
+
+def test_builtin_you_steps_carry_no_you_prefix():
+    for pid in F.BUILTIN_IDS:
+        for s in F.get_plan(pid)["steps"]:
+            assert not s["title"].lower().startswith("you:"), (pid, s["title"])
+    assert F.STEP_KINDS["you"]["default_title"] == "Check it"
+    assert F.get_plan("builtin:ticket")["steps"][7]["title"] == "Approve the merge"

@@ -94,7 +94,8 @@ accessor (the pattern of `core/autopilot.py`).
 {"id": "s1", "kind": "agent", "title": "Work the ticket", "config": {...}, "on_fail": "halt" | "agent" | "skip" | "you"}
 ```
 
-`title` is the user-visible block label (defaults per kind). `on_fail` says
+`title` is the user-visible block label (defaults per kind). A *you* step's
+title carries no "You:" prefix (the UI adds it): "Approve the merge". `on_fail` says
 what the driver does when the step fails: `halt` parks the flight with the
 reason (default), `agent` hands the failure text to the session's agent and
 retries the step once it settles (≤2 rounds), `skip` moves on, `you` turns it
@@ -133,11 +134,11 @@ issue flights the server-built intake prompt is used and the step's own
   "subject": {"kind": "ticket"|"pr"|"issue"|"schedule"|"manual", "source": "<source id or repo>", "id": "<ticket id / PR number / issue number>", "title": "<headline>", "url": ""},
   "session": "<session title>",   // the flight's session; set before the session exists for intake flights (keyed like autopilot)
   "repo_root": "", "branch": "",
-  "state": "running" | "waiting_you" | "halted" | "done" | "cancelled",
+  "state": "running" | "waiting_you" | "paused" | "halted" | "done" | "cancelled",   // paused = held by you (Resume carries on); halted = stopped on a failure (retry / skip / resume)
   "cursor": 0,                    // index into steps of the current step
   "step_states": {"s1": {"state": "pending"|"running"|"waiting_you"|"done"|"skipped"|"failed", "since": 0.0, "note": "", "detail": {}, "rounds": 0}},
   "reason": "",                   // why halted / cancelled (human-readable)
-  "history": [{"at": 0.0, "step": "s1", "event": "started"|"done"|"failed"|"skipped"|"you"|"halted"|"resumed"|"jumped", "note": ""}],  // ≤200
+  "history": [{"at": 0.0, "step": "s1", "event": "started"|"done"|"failed"|"skipped"|"you"|"halted"|"paused"|"resumed"|"jumped", "note": ""}],  // ≤200
   "started": 0.0, "updated": 0.0, "finished": 0.0,
   "by": "user" | "intake" | "schedule" | "agent:<title>",
   "boot": "", "owner": "", "owner_at": 0.0   // lease, as autopilot.json
@@ -307,7 +308,7 @@ strip, Plans, Describe a step.
 
 ## Built-in plans (seeded on first read, editable, resettable)
 
-- **Ticket to merge** (`builtin:ticket`, trigger ticket): Agent works the ticket → Commit → Push → Verify (agent) → Open PR → Reviews settle (10 min) → Checks → You: approve the merge → Merge → Ticket: comment "Merged by MindFlock" (state left alone unless the source has a done state configured).
+- **Ticket to merge** (`builtin:ticket`, trigger ticket): Agent works the ticket → Commit → Push → Verify (agent) → Open PR → Reviews settle (10 min) → Checks → You: Approve the merge (step title "Approve the merge") → Merge → Ticket: comment "Merged by MindFlock" (state left alone unless the source has a done state configured).
 - **Pull request** (`builtin:pr`, trigger pr): Agent addresses the review comments → Commit → Push → Reviews settle → Checks.
 - **Scheduled task** (`builtin:schedule`, trigger schedule): Agent → Commit → Push → Open PR.
 - **Verify on live** (`builtin:verify`, trigger manual): Verify (both, wait_live).
@@ -321,14 +322,19 @@ agent→commit→push→verify→open PR).
 Everything above holds; these are the additions and the places the backend
 had to choose. Field and route names are unchanged.
 
-- **Flight record extras.** `paused` (bool), `gone_since` (prune's clock) and
-  `announced` (the needs-you / finished keys already said, so a restart never
-  repeats a push). **Pause** is `state: "halted"` with `paused: true` and
-  `reason: "paused"` (the state list has no `paused`); **Resume** carries on
-  where it was (back to `waiting_you` if parked; a failed step runs again).
-- **Halted flights don't block.** `POST /api/flights/start` on a session whose
-  flight is `running`/`waiting_you` is 409 `in_flight`; a `halted` one is
-  cancelled ("replaced by a new flight") and the new one takes off.
+- **Flight record extras.** `gone_since` (prune's clock) and `announced` (the
+  needs-you / finished keys already said, so a restart never repeats a push).
+- **Paused vs halted.** Pause sets `state: "paused"` (`reason` stays empty;
+  history event `paused`) on a running or waiting flight — a halted one stays
+  halted. A paused flight is not driven. **Resume** goes back to `running`, or
+  to `waiting_you` when the step is parked; on a halted flight it runs the
+  failed step again. Done / Skip on a paused flight tick the step off and the
+  flight stays paused; Retry and Jump are a "go" and set it running.
+  `flight.finished` is never said for a pause.
+- **Which flights hold their session.** `POST /api/flights/start` on a session
+  whose flight is `running`/`waiting_you`/`paused` is 409 `in_flight`; a
+  `halted` one is cancelled ("replaced by a new flight") and the new one takes
+  off. `DELETE /api/flights/{id}` refuses the same three states (cancel first).
 - **Errors** are `{"error": "<word>", "detail": "<sentence>"}` (plan
   validation keeps `{"error", "field"}`).
 - **`GET /api/flights/kinds`** also returns `on_fail: [halt, agent, skip, you]`.
