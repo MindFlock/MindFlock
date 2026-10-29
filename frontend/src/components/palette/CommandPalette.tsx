@@ -41,6 +41,8 @@ const PALETTE_ACTIONS: SessionActionId[] = [
   "rename",
   "message",
   "queue",
+  "askWorkers",
+  "flock",
   "fastTrack",
   "split",
   "thread",
@@ -58,6 +60,12 @@ const PALETTE_ACTIONS: SessionActionId[] = [
   "map",
   "merge",
 ];
+
+/** Words people type for a verb whose label doesn't hold them. */
+const ACTION_KEYWORDS: Partial<Record<SessionActionId, string>> = {
+  askWorkers: "mindflock agents workers spawn team parallel flock request",
+  flock: "mindflock agents workers spawn team parallel flock every prompt sticky",
+};
 
 /** The verbs that act outside this screen — git, a remote, ending a session:
  * listed, but never the Enter default (palette/paletteRank.ts). */
@@ -262,6 +270,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
         acts.push({
           label: `${actionLabel(id, c)} — ${name}`,
           hint: actionHint(id, c),
+          keywords: ACTION_KEYWORDS[id],
           outward: OUTWARD.has(id),
           run: () => sessionAction(id).run(t),
         });
