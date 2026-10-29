@@ -173,9 +173,8 @@ describe("surfaces in the URL hash", () => {
     expect(parseHash("")).toBeNull();
     // Flights: its tab and the tab's own deep link after a slash.
     expect(hashFor("flights", null)).toBe("#flights");
-    expect(hashFor("flights", "sky")).toBe("#flights");
-    expect(hashFor("flights", "board")).toBe("#flights");
-    expect(hashFor("flights", "plans")).toBe("#flights/plans");
+    expect(hashFor("flights", "plans")).toBe("#flights");
+    expect(hashFor("flights", "sources/tickets")).toBe("#flights/sources/tickets");
     expect(hashFor("flights", "checklists/feature/x")).toBe("#flights/checklists/feature%2Fx");
     expect(hashFor("flights", "schedule/new")).toBe("#flights/schedule");
     expect(parseHash("#flights/plans")).toEqual({ name: "flights", target: "plans" });

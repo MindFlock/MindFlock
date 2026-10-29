@@ -1,17 +1,19 @@
-/** The Sky's geometry and its lines — pure, so the Sky (components/flights/
- * Sky.tsx) and the tests read one rule (docs/flights.md "The Sky").
+/** The Sky's geometry and its lines — pure, so the sky view (components/
+ * flights/SkyView.tsx) and the tests read one rule (docs/flights.md "The Sky").
  *
  * The sky is one plane, panned and zoomed as a whole: a point on it maps to
  * the screen as `plane * z + (x, y)` (one `translate(x, y) scale(z)` on one
  * container). Every session is a LINE on it — its row of blocks — at a
- * position the owner dragged it to (remembered per device, keyed by session
- * title) or, until then, one `placeLines` picks: rows of lines left to right,
- * newest first, wrapping at the sky's width, never on top of another line.
+ * position the owner dragged it to (pinned, in the per-device layout store
+ * `mf_sky_layout` with the line's size and its open box, keyed by session
+ * title) or, until then or after a Tidy, one `placeLines` picks at its
+ * measured size: rows of lines left to right, newest first, wrapping at the
+ * sky's width, never on top of another line.
  *
  * Which sessions get a line is the view's (`skyLineTitles`): All (every
  * session, workers too, each on its own line), Mine (top-level sessions, their
  * workers folded into their parent's line), Perched on you (lines waiting on
- * you), This session (one line). Hidden helpers (`hidden_by`, a verify run)
+ * you), This session (the focused session's line alone). Hidden helpers (`hidden_by`, a verify run)
  * never get one. */
 
 import type { Instance } from "../api/types";
@@ -157,11 +159,46 @@ export function centerOn(r: Rect, vw: number, vh: number, z: number): SkyCamera 
   return { z: nz, x: vw / 2 - (r.x + r.w / 2) * nz, y: Math.max(24, vh / 2 - (r.h * nz) / 2) - r.y * nz };
 }
 
-// --- Remembered positions (per device) ------------------------------------------
+// --- The layout store (per device) ----------------------------------------------
 
+/** One line's layout: where it sits on the plane, how big its box is drawn
+ * (`size` cycles compact → normal → wide, `cycleSize`), whether its session
+ * box is opened into the session's pane (and that pane's size), and whether
+ * the owner put it there by hand (`pinned`: Tidy forgets it). The shape
+ * SkyLine (components/flights/SkyLine.tsx) takes as its `layout`. */
+export interface SkyLineLayout {
+  x: number;
+  y: number;
+  size: "compact" | "normal" | "wide";
+  open: boolean;
+  paneW?: number;
+  paneH?: number;
+  pinned?: boolean;
+}
+
+/** What a flyway chip on the sky's shelf carries while dragged (its
+ * `dataTransfer`, the flyway's id): dropped on a line, that flyway flies on
+ * that line's session. */
+export const FLYWAY_MIME = "application/x-mindflock-flyway";
+
+export type SkyLineSize = SkyLineLayout["size"];
+export const SKY_SIZES: readonly SkyLineSize[] = ["compact", "normal", "wide"];
+export const cycleSize = (s: SkyLineSize | undefined): SkyLineSize => SKY_SIZES[(SKY_SIZES.indexOf(s || "normal") + 1) % SKY_SIZES.length];
+
+/** What a device remembers per line: only what differs from "auto-placed,
+ * normal, closed" — so a line nobody touched has no entry. */
+export type StoredLine = Partial<SkyLineLayout>;
+export type SkyLayoutMap = Record<string, StoredLine>;
+
+export const SKY_LAYOUT_KEY = "mf_sky_layout";
+/** The positions-only record it replaced (`{title: {x, y}}`): read once, as
+ * pinned lines, when there is no layout yet. */
 export const SKY_POS_KEY = "mf_sky_pos";
 /** The most lines remembered; the oldest drop off past it. */
-const POS_CAP = 400;
+const LAYOUT_CAP = 400;
+/** An opened box's pane, unless the owner resized it. */
+export const PANE_W = 720;
+export const PANE_H = 420;
 
 type Store = Pick<Storage, "getItem" | "setItem">;
 const local = (): Store | null => {
@@ -172,47 +209,140 @@ const local = (): Store | null => {
   }
 };
 
-/** `{ [session title]: { x, y } }`, whatever was stored cleaned of anything
- * that isn't a pair of finite numbers. */
+const parseObj = (raw: string | null | undefined): Record<string, unknown> | null => {
+  if (!raw) return null;
+  try {
+    const doc: unknown = JSON.parse(raw);
+    return doc && typeof doc === "object" && !Array.isArray(doc) ? (doc as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+};
+
+/** `{ [session title]: { x, y } }` (the old `mf_sky_pos`), cleaned of
+ * anything that isn't a pair of finite numbers. */
 export function readSkyPos(raw: string | null | undefined): Record<string, Pos> {
   const out: Record<string, Pos> = {};
-  if (!raw) return out;
-  let doc: unknown;
-  try {
-    doc = JSON.parse(raw);
-  } catch {
-    return out;
-  }
-  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return out;
-  for (const [k, v] of Object.entries(doc as Record<string, unknown>)) {
+  for (const [k, v] of Object.entries(parseObj(raw) || {})) {
     const p = v as Partial<Pos> | null;
     if (k && p && typeof p === "object" && Number.isFinite(p.x) && Number.isFinite(p.y)) out[k] = { x: Math.round(p.x!), y: Math.round(p.y!) };
   }
   return out;
 }
 
-export function loadSkyPos(store: Store | null = local()): Record<string, Pos> {
+/** One stored line, cleaned: a position only as a finite pair, a size only
+ * as one of the three, pane sizes only positive; null when nothing is left. */
+function cleanLine(v: unknown): StoredLine | null {
+  if (!v || typeof v !== "object") return null;
+  const p = v as Record<string, unknown>;
+  const out: StoredLine = {};
+  if (Number.isFinite(p.x) && Number.isFinite(p.y)) {
+    out.x = Math.round(p.x as number);
+    out.y = Math.round(p.y as number);
+    if (p.pinned === true) out.pinned = true;
+  }
+  if (SKY_SIZES.includes(p.size as SkyLineSize) && p.size !== "normal") out.size = p.size as SkyLineSize;
+  if (p.open === true) out.open = true;
+  for (const k of ["paneW", "paneH"] as const) if (Number.isFinite(p[k]) && (p[k] as number) > 0) out[k] = Math.round(p[k] as number);
+  return Object.keys(out).length ? out : null;
+}
+
+export function readSkyLayout(raw: string | null | undefined): SkyLayoutMap {
+  const out: SkyLayoutMap = {};
+  for (const [k, v] of Object.entries(parseObj(raw) || {})) {
+    const line = k ? cleanLine(v) : null;
+    if (line) out[k] = line;
+  }
+  return out;
+}
+
+/** The device's layout — or, on the first visit after the upgrade, the old
+ * positions as pinned lines (written straight back as the new record). */
+export function loadSkyLayout(store: Store | null = local()): SkyLayoutMap {
   try {
-    return readSkyPos(store?.getItem(SKY_POS_KEY));
+    const raw = store?.getItem(SKY_LAYOUT_KEY);
+    if (raw != null) return readSkyLayout(raw);
+    const old = readSkyPos(store?.getItem(SKY_POS_KEY));
+    const out: SkyLayoutMap = {};
+    for (const [k, p] of Object.entries(old)) out[k] = { x: p.x, y: p.y, pinned: true };
+    if (Object.keys(out).length) saveSkyLayout(out, store);
+    return out;
   } catch {
     return {};
   }
 }
 
-/** Remember one line's spot (a drop, a new session made where its card was);
- * returns the new map. Never throws: a private window just doesn't remember. */
-export function rememberSkyPos(all: Readonly<Record<string, Pos>>, title: string, p: Pos, store: Store | null = local()): Record<string, Pos> {
-  const next: Record<string, Pos> = { ...all };
-  delete next[title];
-  next[title] = { x: Math.round(p.x), y: Math.round(p.y) };
+/** Write the whole map (oldest entries past the cap dropped). Never throws: a
+ * private window just doesn't remember. */
+export function saveSkyLayout(all: Readonly<SkyLayoutMap>, store: Store | null = local()): SkyLayoutMap {
+  const next: SkyLayoutMap = { ...all };
   const keys = Object.keys(next);
-  for (const k of keys.slice(0, Math.max(0, keys.length - POS_CAP))) delete next[k];
+  for (const k of keys.slice(0, Math.max(0, keys.length - LAYOUT_CAP))) delete next[k];
   try {
-    store?.setItem(SKY_POS_KEY, JSON.stringify(next));
+    store?.setItem(SKY_LAYOUT_KEY, JSON.stringify(next));
   } catch {
-    /* storage full or blocked: the spot lasts this visit */
+    /* storage full or blocked: the layout lasts this visit */
   }
   return next;
+}
+
+/** Change one line (a drop pins it, the size control, the box opening, a new
+ * session made where its card was); returns the new map, remembered. The
+ * line moves to the end, so the cap drops the least recently touched. */
+export function patchSkyLine(all: Readonly<SkyLayoutMap>, title: string, patch: Partial<SkyLineLayout>, store: Store | null = local()): SkyLayoutMap {
+  const next: SkyLayoutMap = { ...all };
+  const merged = cleanLine({ ...next[title], ...patch });
+  delete next[title];
+  if (merged) next[title] = merged;
+  return saveSkyLayout(next, store);
+}
+
+/** Tidy: forget where lines were put by hand — every line, or just `title`
+ * — so the auto-layout places them again. Sizes and open boxes stay. */
+export function tidySkyLayout(all: Readonly<SkyLayoutMap>, title?: string, store: Store | null = local()): SkyLayoutMap {
+  const next: SkyLayoutMap = {};
+  for (const [k, v] of Object.entries(all)) {
+    if (title !== undefined && k !== title) {
+      next[k] = v;
+      continue;
+    }
+    const { x: _x, y: _y, pinned: _p, ...rest } = v;
+    if (Object.keys(rest).length) next[k] = rest;
+  }
+  return saveSkyLayout(next, store);
+}
+
+/** The positions placeLines keeps: the pinned lines'. */
+export function pinnedPositions(all: Readonly<SkyLayoutMap>): Record<string, Pos> {
+  const out: Record<string, Pos> = {};
+  for (const [k, v] of Object.entries(all)) if (v.pinned && Number.isFinite(v.x) && Number.isFinite(v.y)) out[k] = { x: v.x!, y: v.y! };
+  return out;
+}
+
+/** A line's whole layout: what is stored, at the spot it was placed. */
+export function lineLayout(stored: StoredLine | undefined, at: Pos): SkyLineLayout {
+  return {
+    x: at.x,
+    y: at.y,
+    size: stored?.size || "normal",
+    open: !!stored?.open,
+    paneW: stored?.paneW,
+    paneH: stored?.paneH,
+    pinned: !!stored?.pinned,
+  };
+}
+
+/** The room a line needs before it has been measured: its drawn size scaled
+ * by its `size`, and an opened box's pane below it. */
+export function estimateLine(base: { w: number; h: number }, stored: StoredLine | undefined): { w: number; h: number } {
+  const k = stored?.size === "compact" ? 0.75 : stored?.size === "wide" ? 1.4 : 1;
+  let w = Math.round(base.w * k);
+  let h = Math.round(base.h * (stored?.size === "compact" ? 0.85 : 1));
+  if (stored?.open) {
+    w = Math.max(w, (stored.paneW || PANE_W) + 24);
+    h += (stored.paneH || PANE_H) + 12;
+  }
+  return { w, h };
 }
 
 // --- Which sessions get a line ------------------------------------------------------
@@ -255,8 +385,3 @@ export function skyLineTitles(rows: readonly Instance[], mode: SkyMode, opts: { 
   if (q) pick = pick.filter((r) => r.title.toLowerCase().includes(q) || String(r.task_headline || r.task || "").toLowerCase().includes(q));
   return pick.map((r) => r.title).reverse();
 }
-
-// --- The address ------------------------------------------------------------------
-
-/** The Flights target that opens the sky on one session (`#flights/sky/<title>`). */
-export const skyTarget = (title = "") => (title ? "sky/" + title : "sky");

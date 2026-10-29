@@ -3,6 +3,7 @@
  * typed text filters (substring beats subsequence). */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { newSession, setView } from "../../lib/viewMode";
 import { useConfig, useExtensions } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { Modal } from "../Modal";
@@ -128,7 +129,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     // Order: New, then the places you open, then what acts on the focused
     // session, then Focus rows, then extensions — commands before sessions, so
     // an empty query reads as a menu rather than as the session list again.
-    acts.push({ label: "New session…", hint: "Alt+N", top: TOP.new, run: () => ui.openDialogFor("new-session") });
+    acts.push({ label: "New session…", hint: "Alt+N", top: TOP.new, run: () => newSession() });
 
     // --- Dialog openers ----------------------------------------------------
     // Flights, then each of its tabs by the name people learned: Intake's
@@ -139,9 +140,16 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       label: "Flights…",
       hint: "Alt+I",
       top: TOP.flights,
-      keywords: "sky board canvas bird lines waiting to fly in flight flyways stops perch intake verify schedule",
-      run: () => ui.openDialogFor("flights", "sky"),
+      keywords: "flyways stops perch waiting to fly in flight intake verify schedule checklists",
+      run: () => ui.openDialogFor("flights"),
     });
+    // The main area's other view (lib/viewMode): the same sessions as panes
+    // or as lines on the sky.
+    acts.push(
+      ui.view === "sky"
+        ? { label: "Switch to the grid", hint: "Alt+Y", keywords: "view panes terminals grid", run: () => setView("grid") }
+        : { label: "Switch to the Sky", hint: "Alt+Y", keywords: "view sky canvas lines bird board flock map", run: () => setView("sky") }
+    );
     acts.push({ label: "Flights: Flyways", keywords: "flyway plan stops canvas editor", run: () => ui.openDialogFor("flights", "plans") });
     acts.push({ label: "Intake…", hint: "Flights → Sources", run: () => ui.openDialogFor("intake", "tickets") });
     acts.push({ label: "Intake: Tickets", run: () => ui.openDialogFor("intake", "tickets") });

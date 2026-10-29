@@ -389,3 +389,38 @@ body #mf-winctl {
   background: var(--app-panel-2, var(--panel-2));
   outline: none;
 }
+
+/* Grid · Sky: the main area's two views (lib/viewMode), a segmented pair of
+   .tb-items beside Flights. The active one is filled, like a pressed key; on
+   a phone-narrow window the words go and the glyphs stay. */
+#topbar .tb-views {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 2px;
+  padding: 1px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  gap: 1px;
+}
+
+#topbar .tb-views .tb-view {
+  height: 20px;
+  gap: 4px;
+  padding: 0 6px;
+  border-radius: 4px;
+  color: var(--muted);
+}
+
+#topbar .tb-views .tb-view.active {
+  background: var(--panel-2);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+#topbar .tb-view-icon {
+  flex: none;
+}
+
+body.narrow #topbar .tb-view-word {
+  display: none;
+}

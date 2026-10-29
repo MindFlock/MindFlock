@@ -43,7 +43,7 @@ import { flockTooltip } from "./workersRequest";
 import { errorPop } from "./errorPop";
 import { errMsg } from "./format";
 import { toast } from "./toast";
-import { skyTarget } from "./skyLayout";
+import { showInSky } from "./viewMode";
 
 export interface MenuItem {
   /** Stable id (data-menu): tests and the pane/row tell items apart by it. */
@@ -307,8 +307,8 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
       !inst.pending && {
         key: "sky",
         label: "Show in the Sky",
-        title: "Open Flights → Sky on this session's line, with the bird where it is",
-        run: () => useUi.getState().openDialogFor("flights", skyTarget(title)),
+        title: "Switch to the sky on this session's line alone, with the bird where it is",
+        run: () => showInSky(title),
       },
     fromTable("thread", { note: actionNote("thread", ctx) }),
     opts.onHistory && {

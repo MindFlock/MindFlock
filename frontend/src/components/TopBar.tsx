@@ -36,6 +36,7 @@ import { usableShortcuts } from "./palette/ShortcutsSheet";
 import { useScheduleStatus } from "../lib/useScheduleStatus";
 import { failingSchedules } from "../lib/templates";
 import { topBarShows } from "../lib/calm";
+import { VIEWS, VIEW_BLURB, newSession, setView, toggleView, viewLabel } from "../lib/viewMode";
 
 /* The wordmark carries the RUNNING ENGINE's version (GET /api/doctor), not the
  * desktop shell's: this frontend ships inside the engine wheel, so that string
@@ -80,6 +81,18 @@ export function fitTopBar({ room, fixed, brand, items, more }: BarWidths): BarFi
   let shown = items.length - 1;
   while (shown > 0 && !fits(upTo(shown) + more)) shown--;
   return { brand: false, shown };
+}
+
+/** The grid view's glyph: four panes. */
+function GridGlyph() {
+  return (
+    <svg className="tb-view-icon" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
+      <rect x="0.75" y="0.75" width="4.5" height="4.5" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <rect x="6.75" y="0.75" width="4.5" height="4.5" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <rect x="0.75" y="6.75" width="4.5" height="4.5" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <rect x="6.75" y="6.75" width="4.5" height="4.5" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
+  );
 }
 
 export function TopBar() {
@@ -181,8 +194,19 @@ export function TopBar() {
   // badge, a rebound shortcut's absence, the mac lights' gap.
   //
   // The foldable items, in bar order. Flights never folds: its badge is the
-  // reason it is on the bar.
+  // reason it is on the bar. The Grid · Sky toggle folds last, only on a
+  // phone-narrow bar (its ⋯ row switches to the other view; the sidebar's
+  // View row and Alt+Y still do too).
+  const otherView = ui.view === "sky" ? "grid" : "sky";
   const foldable = [
+    {
+      key: "view",
+      label: "Switch to the " + viewLabel(otherView),
+      title: viewLabel(otherView) + " — " + VIEW_BLURB[otherView] + keys("view"),
+      count: 0,
+      failing: false,
+      open: () => toggleView(),
+    },
     { key: "settings", label: "Settings", title: "Settings", count: 0, failing: false, open: () => openSettings() },
   ];
   const [fit, setFit] = useState<BarFit>({ brand: true, shown: Infinity });
@@ -366,7 +390,7 @@ export function TopBar() {
             id="new-btn"
             className="tb-new"
             title={"New session" + keys("new")}
-            onClick={() => ui.openDialogFor("new-session")}
+            onClick={() => newSession()}
           >
             New
           </button>
@@ -391,6 +415,26 @@ export function TopBar() {
             {badge.count > 0 && <span className={"tb-count" + (badge.failing ? " is-failing" : "")}>{badge.count}</span>}
           </button>
           )}
+          {/* The main area's two views of the same sessions (lib/viewMode):
+              the grid of panes or the sky of lines. Glyphs alone on a phone,
+              and the last thing a narrow bar folds (after Settings). */}
+          <span className={"tb-views" + (isFolded("view") ? " tb-folded" : "")} data-fold="view" role="group" aria-label="View">
+            {VIEWS.map((v) => (
+              <button
+                key={v}
+                id={"view-" + v + "-btn"}
+                type="button"
+                className={"tb-item tb-view" + (ui.view === v ? " active" : "")}
+                aria-pressed={ui.view === v}
+                data-tour={v === "sky" ? "view-sky" : undefined}
+                title={viewLabel(v) + " — " + VIEW_BLURB[v] + keys("view")}
+                onClick={() => setView(v)}
+              >
+                {v === "sky" ? <Bird size={12} className="tb-view-icon" /> : <GridGlyph />}
+                <span className="tb-view-word">{viewLabel(v)}</span>
+              </button>
+            ))}
+          </span>
           <button
             id="settings-btn"
             className={"tb-item" + (isFolded("settings") ? " tb-folded" : "")}

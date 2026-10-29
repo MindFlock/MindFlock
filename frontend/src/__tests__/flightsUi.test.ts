@@ -24,6 +24,7 @@ const { FlywayCanvas } = await import("../components/flights/FlywayCanvas");
 const { SessionFlight } = await import("../components/flights/SessionFlight");
 const { flightDiagram, flywayDiagram } = await import("../lib/flightDiagram");
 const { FlightsDialog } = await import("../components/flights/FlightsDialog");
+const { SkyView } = await import("../components/flights/SkyView");
 const { Plans } = await import("../components/flights/PlanEditor");
 const { PlanSelect } = await import("../components/flights/PlanSelect");
 const { planChoices } = await import("../lib/flights");
@@ -107,6 +108,7 @@ function withClient(el: ReactElement, prime: (c: InstanceType<typeof QueryClient
 
 afterEach(() => {
   useUi.getState().closeDialog();
+  useUi.setState({ view: "grid", skyMode: "mine", focused: null } as never);
   Object.assign(useUi.getInitialState(), useUi.getState());
 });
 
@@ -312,11 +314,15 @@ describe("the pane's Flight tab: the session diagram", () => {
 });
 
 describe("the dialog", () => {
+  /** The dialog on `target`, or — `sky` / `sky/<title>` — the sky view (on
+   * that session alone). */
   const render = (target: string | null) => {
-    useUi.setState({ openDialog: "flights", dialogTarget: target } as never);
+    const one = target?.startsWith("sky/") ? target.slice(4) : "";
+    if (target === "sky" || one) useUi.setState({ view: "sky", skyMode: one ? "one" : "mine", focused: one || null } as never);
+    else useUi.setState({ openDialog: "flights", dialogTarget: target } as never);
     // A server render reads the store's initial state (getServerSnapshot).
     Object.assign(useUi.getInitialState(), useUi.getState());
-    return withClient(createElement(FlightsDialog), (c) => {
+    return withClient(createElement(target === "sky" || one ? SkyView : FlightsDialog), (c) => {
       c.setQueryData(["instances"], [
         { title: "sc-12-fix-login", status: "running", activity: "idle", stage: "pushed", task_headline: "Fix the login", parent: "", autopilot: null, flight: { id: "f_1", plan_name: "Ticket to merge", cursor: 2, total: 4, state: "waiting_you", step: { id: "s3", kind: "you", title: "Approve the merge", state: "waiting_you", actor: "you" } } },
         { title: "second", status: "running", activity: "working", stage: "agent", task_headline: "Second", parent: "", autopilot: null, flight: { id: "f_2", plan_name: "Ticket to merge", cursor: 1, total: 4, state: "running", step: { id: "s2", kind: "ship", title: "Push", state: "running", actor: "robot" } } },
@@ -330,20 +336,21 @@ describe("the dialog", () => {
     });
   };
 
-  it("has the five tabs, in the contract's order — the second one is Flyways", () => {
+  it("has the four tabs, in the contract's order — Flyways first; the Sky is a view now, not a tab", () => {
     const html = render(null);
     const tabs = [...html.matchAll(/data-flights-tab="([a-z]+)"/g)].map((m) => m[1]);
-    expect(tabs).toEqual(["sky", "plans", "sources", "schedule", "checklists"]);
-    expect(html).toMatch(/data-flights-tab="sky"[^>]*>Sky</);
+    expect(tabs).toEqual(["plans", "sources", "schedule", "checklists"]);
+    expect(html).not.toContain('data-flights-tab="sky"');
     expect(html).toContain('id="flights-tab-plans"');
+    expect(html).toMatch(/aria-selected="true"[^>]*data-flights-tab="plans"/);
     expect(html).toMatch(/data-flights-tab="plans"[^>]*>Flyways</);
     expect(html).toContain('id="flights-dialog"');
     expect(html).toContain(">Flights</h2>");
   });
 
-  it("the Sky: the whole window, every session a line with the bird on its active box — hidden helpers left out", () => {
-    const html = render(null);
-    expect(html).toMatch(/<div id="flights-dialog"[^>]*class="modal top-dialog sky-full"/);
+  it("the sky view: the main area, every session a line with the bird on its active box — hidden helpers left out", () => {
+    const html = render("sky");
+    expect(html).toMatch(/^<main id="sky-view" class="sky"/);
     expect(html).toContain('data-tour="flights-sky"');
     // One line per session, newest first; the verify helper has none.
     expect([...html.matchAll(/data-line="([^"]+)"/g)].map((m) => m[1])).toEqual(["second", "sc-12-fix-login"]);
@@ -356,15 +363,15 @@ describe("the dialog", () => {
     // The bird: gold on the perch, flying on the running stop.
     expect(line).toMatch(/class="fl-bird-marker tone-you"[^>]*aria-label="The bird: perched on you at Perch: Approve the merge"/);
     expect(html.slice(html.indexOf('data-line="second"'))).toContain('class="fl-bird-marker tone-working"');
-    // The toolbar: the views, find, + New session, the zoom.
-    for (const w of [">All<", ">Mine<", ">Perched on you<", ">This session<", ">+ New session<", ">Fit<", ">100%<", 'aria-label="Find a line"'])
+    // The toolbar: the views, find, + New session, Tidy, the zoom.
+    for (const w of [">All<", ">Mine<", ">Perched on you<", ">This session<", ">+ New session<", ">Tidy<", ">Fit<", ">100%<", 'aria-label="Find a line"'])
       expect(html).toContain(w);
     expect(html).toContain('data-tour="flights-newblock"');
     expect(html).not.toContain("✈");
   });
 
   it("the drawer keeps what the Board showed: Perched on you with the perch's Done / Skip, then Waiting to fly", () => {
-    const html = render("board");
+    const html = render("sky");
     expect(html).toContain('data-tour="flights-sky"');
     const drawer = html.slice(html.indexOf('class="sky-drawer open"'));
     expect(drawer).toContain('id="fl-group-needs-h"');
@@ -376,7 +383,7 @@ describe("the dialog", () => {
     expect(drawer).not.toContain(">Second</button>");
   });
 
-  it("one session's sky: only its line, its workers folded in", () => {
+  it("one session's sky (This session — the focused one alone): only its line, its workers folded in", () => {
     const html = render("sky/second");
     expect([...html.matchAll(/data-line="([^"]+)"/g)].map((m) => m[1])).toEqual(["second"]);
     expect(html).toMatch(/aria-checked="true" class="fl-pick on"[^>]*data-value="one">This session</);
@@ -449,7 +456,7 @@ describe("the stylesheets", () => {
 
 describe("no native <select> in Flights", () => {
   it("not one in its components", () => {
-    for (const f of ["Sky", "SkyDrawer", "useSessionLine", "PlanEditor", "PlanSelect", "FlightStrip", "SessionFlight", "StopParts", "FlywayCanvas", "controls"])
+    for (const f of ["SkyView", "skyContracts", "SkyDrawer", "useSessionLine", "PlanEditor", "PlanSelect", "FlightStrip", "SessionFlight", "StopParts", "FlywayCanvas", "controls"])
       expect(code("components/flights/" + f + ".tsx"), f).not.toMatch(/<select/);
   });
 });
@@ -502,9 +509,9 @@ describe("a source's flyway chips (Flights → Sources)", () => {
   });
 
   it("the drawer's waiting rows: a kind heading, a badge on every row, Fly, and the flyway chips on the source's flyway", () => {
-    useUi.setState({ openDialog: "flights", dialogTarget: "sky" } as never);
+    useUi.setState({ view: "sky", skyMode: "mine" } as never);
     Object.assign(useUi.getInitialState(), useUi.getState());
-    const html = withClient(createElement(FlightsDialog), (c) => {
+    const html = withClient(createElement(SkyView), (c) => {
       c.setQueryData(["flights"], []);
       c.setQueryData(["flight-plans"], PLANS);
       c.setQueryData(["flight-kinds"], KINDS);
@@ -540,6 +547,6 @@ describe("the wiring outside Flights", () => {
     expect(menu).toContain('label: "Fly a flyway…"');
     expect(menu).toContain('run: () => openTab(title, "flight")');
     expect(menu).toContain('label: "Show in the Sky"');
-    expect(menu).toContain('run: () => useUi.getState().openDialogFor("flights", skyTarget(title))');
+    expect(menu).toContain("run: () => showInSky(title),");
   });
 });

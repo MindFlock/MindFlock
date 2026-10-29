@@ -1,85 +1,55 @@
-/* Flights → Sky (Sky.tsx) — prefix sky-.
+/* The sky (SkyView.tsx) — prefix sky-.
  *
- * The open expanse: on this tab the Flights dialog takes the whole window
- * under the top bar (`.sky-full` on the modal shell), its head and tab strip
- * one slim toolbar row. Below them the sky — one plane under one
- * translate+scale, a faint dot grid that scales with it (dark sky in the dark
- * theme, a white expanse in the light one) — and the drawer at its right
- * edge. Every line is a card on the plane; the canvas inside it never scrolls
- * (the sky pans instead). A phone gets the lines as a plain list. */
+ * The main area's second view, in the grid's place (#sky-view is the body
+ * grid's second column, like #grid): a slim toolbar, then the sky — one plane
+ * under one translate+scale, a faint dot grid that scales with it (dark sky in
+ * the dark theme, a white expanse in the light one), the shelf of flyways
+ * folding at its foot — and the drawer at its right edge. Every line is a
+ * card on the plane; the canvas inside it never scrolls (the sky pans
+ * instead). A phone gets the lines as a plain list. */
 
-/* --- The dialog, full-window ------------------------------------------------ */
+/* --- The view in the main area ---------------------------------------------- */
 
-.modal.top-dialog.sky-full {
-  padding: var(--topbar-h, 40px) 0 0;
-  align-items: stretch;
-  justify-content: stretch;
-}
-
-.modal.top-dialog.sky-full > * {
-  max-height: none;
-}
-
-.sky-full #flights-panel {
-  width: 100vw;
-  max-width: none;
-  height: calc(100vh - var(--topbar-h, 40px));
+#sky-view {
+  min-width: 0;
   min-height: 0;
-  border: 0;
-  border-radius: 0;
-  box-shadow: none;
-  padding: 4px 12px 0;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  grid-template-rows: auto auto minmax(0, 1fr);
-  grid-template-areas:
-    "head tabs"
-    "confirm confirm"
-    "body body";
-  column-gap: 18px;
-  row-gap: 0;
-}
-
-.sky-full #flights-panel .fl-head {
-  grid-area: head;
-  align-items: center;
-}
-
-.sky-full #flights-panel .ik-subtitle {
-  display: none;
-}
-
-.sky-full #flights-panel .fl-tabs {
-  grid-area: tabs;
-  border-bottom: 0;
-  align-self: end;
-}
-
-.sky-full #flights-panel .fl-tab {
-  padding: 5px 10px 6px;
-  font-size: 12.5px;
-}
-
-.sky-full #fl-leave-confirm {
-  grid-area: confirm;
-}
-
-.sky-full #flights-panel .fl-body {
-  grid-area: body;
-}
-
-.fl-body-sky {
   overflow: hidden;
-  padding-right: 0;
-  display: flex;
-  flex-direction: column;
+  padding: 0 0 0 12px;
 }
 
-.fl-body-sky > .fl-panel {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
+#sky-view.sky-narrow {
+  overflow-y: auto;
+  padding: 8px 10px;
+}
+
+/* Grid ⇄ sky (lib/viewMode): the incoming view fades in while a ghost of each
+   session flies from its pane to its line (or back). */
+body.view-switch #grid,
+body.view-switch #sky-view {
+  animation: view-in 0.15s ease-out both;
+}
+
+@keyframes view-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.view-ghost {
+  position: fixed;
+  z-index: 40;
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.22);
+}
+
+.view-ghost.is-focused {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--accent),
+    0 10px 30px rgba(var(--accent-rgb), 0.3);
 }
 
 /* --- The sky ---------------------------------------------------------------- */
@@ -160,14 +130,70 @@
   flex: 1;
   min-height: 0;
   display: flex;
-  margin: 0 -12px;
+  margin-left: -12px;
   border-top: 1px solid var(--border);
+}
+
+/* The sky over its shelf. */
+.sky-stage {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.sky-tidy {
+  padding: 4px 11px;
+  font-size: 12.5px;
+}
+
+/* Fly a flyway with no line focused: which line. */
+.sky-flypick {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 0 6px;
+  font-size: 12.5px;
+}
+
+/* --- The shelf of flyways (FlywayShelf), folding at the sky's foot ----------- */
+
+.sky-shelf {
+  flex: none;
+  position: relative;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.sky-shelf-fold {
+  position: absolute;
+  left: 12px;
+  top: -25px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: var(--panel);
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.sky-shelf-fold:hover {
+  color: var(--text);
 }
 
 .sky-viewport {
   position: relative;
   flex: 1;
   min-width: 0;
+  min-height: 0;
   overflow: hidden;
   touch-action: none;
   cursor: grab;
@@ -176,9 +202,10 @@
   background-image: radial-gradient(circle, var(--sky-dot) 1px, transparent 1.4px);
 }
 
-.sky-viewport:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+/* Focused by a press on empty sky (so the arrows and + / − reach it), never
+   tabbed to: no ring. */
+.sky-viewport:focus {
+  outline: none;
 }
 
 .sky-viewport.is-grab,
@@ -349,6 +376,85 @@
   }
 }
 
+/* --- A line's host-side states ------------------------------------------------ */
+
+/* No line glides while one is being dragged (the dragged one follows the
+   pointer; Tidy and a reflow still glide). */
+.sky-plane[data-dragging] .sky-line {
+  transition: none;
+}
+
+.sky-line {
+  width: max-content;
+  min-width: 280px;
+}
+
+.sky-line-slot.is-flash .sky-line {
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 0 26px rgba(var(--accent-rgb), 0.45);
+}
+
+.sky-line.is-drop-target {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 12px 32px rgba(var(--accent-rgb), 0.3);
+}
+
+.sky-line-drop {
+  margin: 6px 0 2px;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.sky-line-pin {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+/* An opened box: the session's own pane, right on the line. */
+.sky-line-pane {
+  display: flex;
+  margin-top: 10px;
+  min-width: 0;
+}
+
+.sky-line-pane > .pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.sky-flyway-card {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 6;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+
+.sky-flyway-card p {
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.sky-list .sky-line {
+  position: relative;
+  transform: none !important;
+  width: auto;
+  min-width: 0;
+  animation: none;
+}
+
 /* --- The drawer: perched on you ------------------------------------------------- */
 
 .sky-drawer {
@@ -491,15 +597,6 @@ details.fl-group-waiting > summary {
 }
 
 @media (max-width: 600px) {
-  .sky-full #flights-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 10px 10px 0;
-  }
-  .sky-full .fl-body-sky {
-    overflow-y: auto;
-  }
   .sky-search .fl-input {
     width: 140px;
   }

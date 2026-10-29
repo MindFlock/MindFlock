@@ -83,6 +83,11 @@ describe("TopBar wiring around the fold", () => {
       const at = TOPBAR.indexOf(`id="${id}"`);
       expect(TOPBAR.slice(at, at + 200), id).not.toContain("tb-folded");
     }
+    // The Grid · Sky toggle folds last: it is left of Settings in bar order,
+    // and the fold takes items from the right end.
+    expect(TOPBAR).toContain('<span className={"tb-views" + (isFolded("view") ? " tb-folded" : "")} data-fold="view"');
+    expect(TOPBAR.indexOf('key: "view"')).toBeLessThan(TOPBAR.indexOf('{ key: "settings"'));
+    expect(fitTopBar({ ...BAR, items: [90, 60], room: 270 + 60 + 30 }).shown).toBe(0);
     // ⋯ sits after Settings and before the palette.
     const se = TOPBAR.indexOf('id="settings-btn"');
     const mo = TOPBAR.indexOf('id="more-btn"');

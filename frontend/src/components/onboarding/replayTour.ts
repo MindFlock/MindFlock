@@ -12,7 +12,7 @@ import type { DialogName } from "../../state/store";
  * Sources tab of Flights, Verify's Checklists, Schedule's Schedule. */
 const SURFACE: Partial<Record<TourId, [DialogName, string | null]>> = {
   new: ["new-session", null],
-  flights: ["flights", "sky"],
+  flights: ["flights", "plans"],
   intake: ["flights", "sources"],
   verify: ["flights", "checklists"],
   schedule: ["flights", "schedule"],

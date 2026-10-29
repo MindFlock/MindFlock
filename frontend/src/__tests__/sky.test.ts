@@ -1,11 +1,12 @@
-/** The Sky (Flights → Sky, docs/flights.md "The Sky"): where lines go
- * (lib/skyLayout placeLines — rows, newest first, no overlaps, a dragged line
- * stays put), what is remembered per device (`mf_sky_pos`), the camera
- * (zoom about a point, fit, clamped 40%–200%), which sessions get a line in
- * each view, where the bird sits (lib/flightDiagram birdPerch), the address
- * (`#flights/sky/<title>`), and the wiring the source text pins: one
- * transformed plane, no library, the wheel listener not passive, the intake
- * lane and the new-session card mounted with their contracts. */
+/** The Sky (the main area's sky view, docs/flights.md "The Sky"): where lines
+ * go (lib/skyLayout placeLines — rows, newest first, no overlaps, a dragged
+ * line stays put), what is remembered per device (`mf_sky_layout`, read from
+ * the old `mf_sky_pos` once), the camera (zoom about a point, fit, clamped
+ * 40%–200%), which sessions get a line in each view, where the bird sits
+ * (lib/flightDiagram birdPerch), the address (`#sky/<title>`), and the wiring
+ * the source text pins: one transformed plane, no library, the wheel listener
+ * not passive, the intake lane and the new-session card mounted with their
+ * contracts. The view switch itself is skyView.test.ts. */
 
 import { describe, expect, it } from "vitest";
 import type { Instance } from "../api/types";
@@ -14,7 +15,7 @@ import {
   INTAKE_W,
   LINES_LEFT,
   SKY_GAP,
-  SKY_POS_KEY,
+  SKY_LAYOUT_KEY,
   ZOOM_MAX,
   ZOOM_MIN,
   boundsOf,
@@ -23,20 +24,20 @@ import {
   fitCamera,
   lineFamily,
   linePerched,
-  loadSkyPos,
+  loadSkyLayout,
+  patchSkyLine,
   placeLines,
+  readSkyLayout,
   readSkyPos,
-  rememberSkyPos,
   skyLineTitles,
-  skyTarget,
   toPlane,
   zoomAt,
   type LineBox,
   type Pos,
 } from "../lib/skyLayout";
 import { birdPerch, sessionDiagram, type Diagram, type DiagramNode } from "../lib/flightDiagram";
-import { parseFlightsTarget } from "../lib/flights";
-import { hashFor, parseHash } from "../lib/surfaceHash";
+import { skyRouteOf } from "../lib/flights";
+import { parseHash, parseViewHash, viewHash } from "../lib/surfaceHash";
 
 const overlap = (a: Pos & { w: number; h: number }, b: Pos & { w: number; h: number }) =>
   a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
@@ -86,25 +87,29 @@ describe("placing the lines", () => {
   });
 });
 
-describe("what a device remembers (mf_sky_pos)", () => {
+describe("what a device remembers (mf_sky_layout)", () => {
   const mem = () => {
     const m = new Map<string, string>();
     return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), m };
   };
 
-  it("is { title: {x, y} } under one key, rounded", () => {
+  it("is { title: {x, y, pinned, size, open, …} } under one key, rounded, defaults left out", () => {
     const s = mem();
-    const next = rememberSkyPos({}, "fix-login", { x: 10.4, y: 20.6 }, s);
-    expect(next).toEqual({ "fix-login": { x: 10, y: 21 } });
-    expect(JSON.parse(s.m.get(SKY_POS_KEY)!)).toEqual({ "fix-login": { x: 10, y: 21 } });
-    expect(loadSkyPos(s)).toEqual({ "fix-login": { x: 10, y: 21 } });
+    const next = patchSkyLine({}, "fix-login", { x: 10.4, y: 20.6, pinned: true, size: "normal", open: false }, s);
+    expect(next).toEqual({ "fix-login": { x: 10, y: 21, pinned: true } });
+    expect(JSON.parse(s.m.get(SKY_LAYOUT_KEY)!)).toEqual({ "fix-login": { x: 10, y: 21, pinned: true } });
+    expect(loadSkyLayout(s)).toEqual({ "fix-login": { x: 10, y: 21, pinned: true } });
   });
 
-  it("reads back only finite pairs; junk is nothing", () => {
+  it("reads back only finite pairs and known sizes; junk is nothing", () => {
     expect(readSkyPos('{"a":{"x":1,"y":2},"b":{"x":"1"},"c":null,"d":{"x":1,"y":null}}')).toEqual({ a: { x: 1, y: 2 } });
-    expect(readSkyPos("not json")).toEqual({});
-    expect(readSkyPos("[1,2]")).toEqual({});
-    expect(readSkyPos(null)).toEqual({});
+    expect(readSkyLayout('{"a":{"x":1,"y":2,"pinned":true},"b":{"size":"huge"},"c":null,"d":{"size":"wide","paneW":-3}}')).toEqual({
+      a: { x: 1, y: 2, pinned: true },
+      d: { size: "wide" },
+    });
+    expect(readSkyLayout("not json")).toEqual({});
+    expect(readSkyLayout("[1,2]")).toEqual({});
+    expect(readSkyLayout(null)).toEqual({});
   });
 
   it("never throws: a blocked store just doesn't remember", () => {
@@ -116,9 +121,9 @@ describe("what a device remembers (mf_sky_pos)", () => {
         throw new Error("blocked");
       },
     };
-    expect(loadSkyPos(broken)).toEqual({});
-    expect(rememberSkyPos({}, "x", { x: 1, y: 1 }, broken)).toEqual({ x: { x: 1, y: 1 } });
-    expect(loadSkyPos(null)).toEqual({});
+    expect(loadSkyLayout(broken)).toEqual({});
+    expect(patchSkyLine({}, "x", { x: 1, y: 1, pinned: true }, broken)).toEqual({ x: { x: 1, y: 1, pinned: true } });
+    expect(loadSkyLayout(null)).toEqual({});
   });
 });
 
@@ -255,24 +260,25 @@ describe("the bird", () => {
 });
 
 describe("the address", () => {
-  it("#flights is the Sky; #flights/sky/<title> one session's; the Board's old link lands on the Sky", () => {
-    expect(skyTarget()).toBe("sky");
-    expect(skyTarget("fix login/x")).toBe("sky/fix login/x");
-    expect(parseFlightsTarget(skyTarget("fix login/x"))).toEqual({ tab: "sky", rest: "fix login/x" });
-    expect(parseFlightsTarget("board")).toEqual({ tab: "sky", rest: "" });
-    expect(hashFor("flights", "sky")).toBe("#flights");
-    const h = hashFor("flights", skyTarget("fix login/x"));
-    expect(h).toBe("#flights/sky/fix%20login%2Fx");
-    expect(parseHash(h)).toEqual({ name: "flights", target: "sky/fix login/x" });
+  it("#sky is the sky; #sky/<title> one session's; the old Flights → Sky and Board links still land there", () => {
+    expect(viewHash({ view: "sky", skyMode: "mine", focused: "fix login/x" })).toBe("#sky");
+    const h = viewHash({ view: "sky", skyMode: "one", focused: "fix login/x" });
+    expect(h).toBe("#sky/fix%20login%2Fx");
+    expect(parseViewHash(h)).toEqual({ view: "sky", focus: "fix login/x" });
+    expect(parseViewHash("#sky")).toEqual({ view: "sky", focus: "" });
+    expect(viewHash({ view: "grid", skyMode: "one", focused: "x" })).toBe("");
+    const old = parseHash("#flights/sky/fix%20login%2Fx")!;
+    expect(skyRouteOf(old.target)).toEqual({ focus: "fix login/x" });
+    expect(skyRouteOf(parseHash("#flights/board")!.target)).toEqual({ focus: "" });
   });
 });
 
 describe("the wiring", () => {
-  const sky = code("components/flights/Sky.tsx");
+  const sky = code("components/flights/SkyView.tsx");
   const sheet = css("components/flights/Sky.css");
 
   it("is one transformed plane, no library: translate + scale on one container, the grid scaled with it", () => {
-    expect(sky).toContain('<div className="sky-plane" style={{ transform: `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})` }}>');
+    expect(sky).toMatch(/className="sky-plane"[^>]*\n?[^>]*style=\{\{ transform: `translate\(\$\{cam\.x\}px, \$\{cam\.y\}px\) scale\(\$\{cam\.z\}\)` \}\}/);
     expect(sky).toContain("backgroundSize: `${GRID * cam.z}px ${GRID * cam.z}px`");
     expect(sheet).toMatch(/\.sky-plane \{[^}]*transform-origin: 0 0;/);
     expect(sheet).toMatch(/\.sky-viewport \{[^}]*touch-action: none;[^}]*radial-gradient/);
@@ -285,21 +291,22 @@ describe("the wiring", () => {
     expect(sky).toContain("if (e.ctrlKey || e.metaKey) {");
     expect(sky).toContain("pinch.current = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, z: camRef.current.z };");
     expect(sky).toContain("onPointerDownCapture={onDownCapture}");
-    expect(sky).toContain('} else if (e.key === "0") {');
+    expect(sky).toContain('} else if (k === "0") {');
     expect(sky).toContain("onDoubleClick={onDouble}");
   });
 
-  it("a line drags by its bar and its spot is remembered; a closed one fades out", () => {
-    expect(sky).toContain("setSaved((s) => rememberSkyPos(s, id, p));");
+  it("a line drags by its bar (SkyLine's onDragStart) and its spot is remembered, pinned; a closed one fades out", () => {
+    expect(sky).toContain("onLayout(id, { x: p.x, y: p.y, pinned: true });");
+    expect(sky).toContain("onDragStart={at ? (e) => onDragStart(id, e) : undefined}");
     expect(sky).toContain('className="sky-line-bar"');
     expect(sky).toContain('"sky-line sky-line-leaving"');
     expect(sheet).toMatch(/\.sky-line-leaving \{[^}]*animation: sky-out/);
   });
 
   it("mounts the intake lane on the plane and the new-session card where it was asked for", () => {
-    expect(sky).toContain("<IntakeLane rows={rows} plans={plans} onFly={flyTo} width={INTAKE_W} />");
+    expect(sky).toContain("<IntakeLane rows={rows} plans={plans} onFly={focusOn} width={INTAKE_W} />");
     expect(sky).toMatch(/<NewSessionBlock\s+x=\{newAt\.x\}\s+y=\{newAt\.y\}\s+plans=\{plans\}/);
-    expect(sky).toContain("setSaved((s) => rememberSkyPos(s, title, newAt));");
+    expect(sky).toContain("setLayout((l) => patchSkyLine(l, title, { x: newAt.x, y: newAt.y, pinned: true }));");
   });
 
   it("the bird hops (a transition on left / top) and bobs only while the flock works", () => {
@@ -310,14 +317,15 @@ describe("the wiring", () => {
     expect(canvas).toMatch(/\.fl-bird-marker\.tone-halted \{[^}]*var\(--red\)/);
   });
 
-  it("the full window: .sky-full under the top bar; a phone gets the list", () => {
-    expect(sheet).toMatch(/\.modal\.top-dialog\.sky-full \{[^}]*padding: var\(--topbar-h, 40px\) 0 0;/);
-    expect(sky).toContain('if (narrow)\n    return (\n      <div className="sky sky-narrow" data-tour="flights-sky">');
+  it("the main area, in the grid's place; a phone gets the list", () => {
+    expect(sheet).toMatch(/#sky-view \{[^}]*min-height: 0;/);
+    expect(sheet).not.toContain("sky-full");
+    expect(sky).toContain('if (narrow)\n    return (\n      <main id="sky-view" className="sky sky-narrow" data-tour="flights-sky">');
     expect(sheet).toContain(".light .sky {");
   });
 
   it("the pane's Flight tab opens it on its session", () => {
-    expect(code("components/flights/SessionFlight.tsx")).toContain('onClick={() => useUi.getState().openDialogFor("flights", skyTarget(title))}');
+    expect(code("components/flights/SessionFlight.tsx")).toContain("onClick={() => showInSky(title)}");
   });
 });
 
