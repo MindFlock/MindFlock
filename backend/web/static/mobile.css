@@ -298,6 +298,22 @@ html, body {
 .plan-card .plan-intent { color: var(--muted); }
 .plan-card .plan-flag .plan-path { color: var(--tone-broken); }
 
+/* --- a flight parked on a you step (built by mobile.js under the plan card) */
+#flight-card {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+#flight-card.hidden { display: none; }
+.flight-card { border-color: var(--tone-attention); }
+.flight-card .flight-head {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* The rail's zone chip on a session row (redZoneChip's tones). */
 .rz-chip {
   display: inline-block;
