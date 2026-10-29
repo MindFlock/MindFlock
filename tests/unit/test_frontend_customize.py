@@ -99,40 +99,41 @@ def test_the_top_bar_has_no_outbox_prompts_or_recent_and_keeps_the_palette_title
 
 def test_verify_always_shows_in_the_top_bar():
     """The owner: Verify should "always show" — no earn-its-slot rule, no
-    per-device memory of it; the badge still says nothing on zero."""
+    per-device memory of it. Verify is the Checklists tab of Flights now, and
+    Flights is always on the bar: its badge counts Verify's due checklists
+    (red when one failed) and still says nothing on zero."""
     src = _code("components/TopBar.tsx")
-    assert 'id="verify-btn"' in src
+    for gone in ('id="intake-btn"', 'id="verify-btn"', 'id="schedule-btn"'):
+        assert gone not in src
     assert "showVerify" not in src
     assert "useVerifySettings" not in src
     assert "mf_tb_verify" not in src
+    assert "flightBadgeCount(flights, due, failing, arrivals)" in src
     assert (
-        '{due > 0 && <span className={"tb-count" + (failing > 0 ? " is-failing" : "")}>{due}</span>}'
+        '{badge.count > 0 && <span className={"tb-count" + (badge.failing ? " is-failing" : "")}>{badge.count}</span>}'
         in src
     )
-    assert (
-        src.index('id="intake-btn"')
-        < src.index('id="verify-btn"')
-        < src.index('id="schedule-btn"')
-        < src.index('id="settings-btn"')
-    )
+    assert src.index('id="new-btn"') < src.index('id="flights-btn"') < src.index('id="settings-btn"')
 
 
 def test_schedule_is_on_the_top_bar_and_sized_like_its_neighbours():
     """The owner couldn't find templates ("only through the command prompt"):
-    Schedule sits on the bar between Verify and Settings, opens on Alt+S, and
-    wears the worded items' type (by id in TopBar.css, or it reads as fine
-    print beside them)."""
+    Schedule is a tab of Flights, which sits on the bar beside New and wears
+    the worded items' type (by id in TopBar.css, or it reads as fine print
+    beside them); Alt+S opens Flights on Schedule."""
     src = _code("components/TopBar.tsx")
-    assert 'ui.openDialogFor("schedule")' in src
-    assert 'keys("schedule")' in src
+    assert 'ui.openDialogFor("flights")' in src
+    assert 'keys("intake")' in src
+    assert 'run: () => useUi.getState().openDialogFor("flights", "schedule"),' in _code("lib/keymap.ts")
     css = (_SRC / "components" / "TopBar.css").read_text()
-    assert "#topbar #schedule-btn," in css
+    assert "#topbar #flights-btn," in css
 
 
 def test_the_bell_hosts_the_waiting_rows_and_drops_its_toggle():
     src = _code("components/NotificationsBell.tsx")
     assert 'import { WaitingRow } from "./outbox/WaitingRow";' in src
-    assert "needsAttention(attentionItems(instances), outbox?.groups?.waiting)" in src
+    # Flights parked on a you step join the waiting rows (lib/needsYou).
+    assert "needsAttention(attentionItems(instances), withFlightYou(outbox?.groups?.waiting, instances))" in src
     assert "NotifToggle" not in src and "mf-notify-state" not in src
     assert '"mf-open-bell"' in src and '"mf-close-bell"' in src
     # The badge counts the merged list; the heading keeps its name.
@@ -244,7 +245,7 @@ def test_the_palette_lists_commands_before_focus_rows():
     src = _src("components/palette/CommandPalette.tsx")
     order = [
         'label: "New session…"',
-        'label: "Open Intake"',
+        'label: "Flights…"',
         'label: "Customize…"',
         "label: `${actionLabel(id, c)} — ${name}`",
         'label: "Focus: " + windowName(inst.title)',
@@ -257,7 +258,8 @@ def test_the_palette_lists_commands_before_focus_rows():
         'label: "Recently closed…", hint: "reopen or delete closed sessions"',
         '  "pr",\n',
         '  "merge",\n',
-        'label: "Verify — " + VERIFY_BLURB',
+        'label: "Verify…"',
+        "keywords: VERIFY_BLURB",
         'label: "Customize…", hint: "choose sidebar bars"',
     ):
         assert label in src, label

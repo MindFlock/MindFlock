@@ -218,6 +218,7 @@
     }
     updateActions();
     updatePlanCard();
+    updateFlightCard();
     voiceOnSelect(title);
     if (view === "diff") loadDiff();
   }
@@ -938,7 +939,9 @@
   //   state      tone       label
   //   starting   muted      Starting
   //   working    working    Working
-  //   needs_you  attention  Question · Pre-commit failed · Checks failing · Setup failed
+  //   needs_you  attention  Question · You: <step> (a flight parked on a you step,
+  //                         docs/flights.md) · Pre-commit failed · Checks failing ·
+  //                         Setup failed
   //   idle       neutral    Idle
   //   limit      waiting    Waiting on limit[, resumes HH:MM]
   //   offline    broken     Offline (actions: Restart)
@@ -957,6 +960,7 @@
   };
   var REASON_LABEL = {
     question: "Question",
+    flight_you: "You",
     precommit_failed: "Pre-commit failed",
     checks_failing: "Checks failing",
     setup_failed: "Setup failed",
@@ -978,6 +982,18 @@
   }
   function needsYou(reason, hint) {
     return st("needs_you", { reason: reason, label: REASON_LABEL[reason], inBell: true, hint: hint });
+  }
+  // "You: Approve the merge" — once: a step already titled "You: …" is left
+  // as it is (lib/flights.ts youStepLabel).
+  function youStepLabel(title) {
+    var t = String(title || "").trim();
+    if (!t) return REASON_LABEL.flight_you;
+    return /^you:/i.test(t) ? t : REASON_LABEL.flight_you + ": " + t;
+  }
+  // The row's `flight` is parked on a you step (lib/flights.ts rowWaitsOnYou).
+  function flightWaitsOnYou(inst) {
+    var fl = inst && inst.flight;
+    return !!fl && fl.state === "waiting_you" && !!fl.step && fl.step.actor === "you";
   }
 
   function sessionState(inst) {
@@ -1002,6 +1018,12 @@
     if (asking && (asking.kind === "dialog" || asking.kind === "question"))
       return needsYou("question", "The agent asked you a question" + (asking.text ? ": " + String(asking.text) : ""));
     if (act === "clarify") return needsYou("question", "The agent asked you a question");
+    // A flight parked on a you step waits for Done, whatever the agent does.
+    if (flightWaitsOnYou(inst)) {
+      var you = youStepLabel(inst.flight.step.title);
+      var flHint = you + " — flight “" + (inst.flight.plan_name || "") + "” waits on you; press Done";
+      return st("needs_you", { reason: "flight_you", label: you, inBell: true, hint: flHint });
+    }
     if (act === "working") return st("working", { hint: "Agent is working" });
     if (act === "limit") {
       var until = Number(inst.queue && inst.queue.limited_until) || 0;
@@ -1022,6 +1044,10 @@
     var idleFor = since > 0 ? Date.now() / 1000 - since : 0;
     var un = inst.diff_stat && inst.diff_stat.uncommitted;
     var dirty = un && (Number(un.additions) || 0) + (Number(un.deletions) || 0) > 0;
+    // A paused flight: calm and out of the bell (sessionState.ts).
+    if (inst.flight && inst.flight.state === "paused")
+      return st("idle", { label: "Paused flight",
+                          hint: "Flight “" + (inst.flight.plan_name || "") + "” is paused — resume it from the desktop" });
     if (idleFor > STUCK_IDLE_S && dirty)
       return st("idle", { reason: "stuck", inBell: true, hint: "Idle with unfinished work — possibly stuck" });
     return st("idle", { hint: "Agent is idle — waiting for input" });
@@ -1121,6 +1147,7 @@
         updateDot();
         updateActions();
         updatePlanCard();
+        updateFlightCard();
         voiceOnPoll();
         askOnPoll();
       })
@@ -1332,6 +1359,80 @@
     planButtons();
     fitSoon();
   }
+  // --- a flight parked on a you step (docs/flights.md) -----------------------
+  // The row's `flight` says the session's flight waits on a *you* step: a card
+  // under the plan card names it ("✈ Ticket to merge · You: Approve the
+  // merge") with the desktop strip's two buttons, Done and Skip (POST
+  // /api/flights/<id>/steps/<step>/done | /skip). Built here, like the plan
+  // card; the checklist ticks stay on the desktop.
+  var flightEl = document.createElement("div");
+  flightEl.id = "flight-card";
+  flightEl.className = "hidden";
+  flightEl.setAttribute("aria-live", "polite");
+  if (planEl.parentNode) planEl.parentNode.insertBefore(flightEl, planEl.nextSibling);
+  var flightKey = "";
+  var flightBusy = false;
+  function updateFlightCard() {
+    var inst = currentInst();
+    if (!flightWaitsOnYou(inst)) {
+      flightKey = "";
+      if (!flightEl.classList.contains("hidden")) {
+        flightEl.classList.add("hidden");
+        flightEl.innerHTML = "";
+        fitSoon();
+      }
+      return;
+    }
+    var fl = inst.flight;
+    var key = inst.title + "|" + fl.id + "|" + fl.step.id;
+    if (key === flightKey) return;
+    flightKey = key;
+    flightEl.innerHTML = "";
+    var card = document.createElement("div");
+    card.className = "approve-card flight-card";
+    var head = document.createElement("div");
+    head.className = "flight-head";
+    head.textContent = "✈ " + (fl.plan_name || "Flight") + " · " + youStepLabel(fl.step.title);
+    card.appendChild(head);
+    var btns = document.createElement("div");
+    btns.className = "approve-btns";
+    [["done", "Done"], ["skip", "Skip"]].forEach(function (b) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "act flight-act" + (b[0] === "done" ? " is-next" : "");
+      btn.textContent = b[1];
+      btn.addEventListener("click", function () { flightStep(fl.id, fl.step.id, b[0]); });
+      btns.appendChild(btn);
+    });
+    card.appendChild(btns);
+    flightEl.appendChild(card);
+    flightEl.classList.remove("hidden");
+    fitSoon();
+  }
+  function flightStep(id, step, verb) {
+    if (flightBusy) return;
+    flightBusy = true;
+    flightEl.querySelectorAll(".flight-act").forEach(function (b) { b.disabled = true; });
+    fetch("/api/flights/" + encodeURIComponent(id) + "/steps/" + encodeURIComponent(step) + "/" + verb, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    })
+      .then(function (r) {
+        if (!r.ok) return r.json().catch(function () { return {}; }).then(function (j) {
+          throw new Error((j && (j.detail || j.error)) || "request failed (" + r.status + ")");
+        });
+        flashStatus(verb === "done" ? "done — the flight goes on" : "skipped — the flight goes on");
+        setTimeout(poll, 600);
+      })
+      .catch(function (err) { flashStatus((verb === "done" ? "Done" : "Skip") + " failed: " + err.message); })
+      .then(function () {
+        flightBusy = false;
+        flightKey = "";
+        flightEl.querySelectorAll(".flight-act").forEach(function (b) { b.disabled = false; });
+      });
+  }
+
   // Like the Map's: no Go while the agent waits on a question in the terminal.
   function planButtons() {
     var inst = currentInst();
@@ -4517,6 +4618,7 @@
   // sessionState's label as a voice says it ("Question" is a chip, not a sentence).
   function voiceStateWord(ss) {
     if (ss.reason === "question") return "waiting on a question";
+    if (ss.reason === "flight_you") return "waiting on you: " + String(ss.label || "").replace(/^you:\s*/i, "");
     if (ss.reason === "precommit_failed") return "stuck on a failed pre-commit";
     if (ss.reason === "checks_failing") return "waiting on failing checks";
     if (ss.reason === "setup_failed") return "stuck on a failed setup";
