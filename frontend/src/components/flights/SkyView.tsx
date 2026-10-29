@@ -288,9 +288,13 @@ export function SkyView() {
       alive.current = false;
     };
   }, []);
-  const lastFocus = useRef(focusLine);
+  // A first visit fits (the effect above), so the first line focused then is
+  // already in the picture; back from the grid, the focused session may have
+  // changed there, so it is checked.
+  const lastFocus = useRef(memo ? "" : null as string | null);
   useEffect(() => {
-    if (!focusLine || focusLine === lastFocus.current || !vp.w) {
+    if (!vp.w || !focusLine) return;
+    if (lastFocus.current === null || focusLine === lastFocus.current) {
       lastFocus.current = focusLine;
       return;
     }
@@ -565,14 +569,16 @@ export function SkyView() {
   const keys = useRef<(e: KeyboardEvent) => void>(() => {});
   keys.current = (e: KeyboardEvent) => {
     const el = document.activeElement;
-    if (overlayOpen()) return;
-    if (e.key === "Escape" && (newAt || card || flyPick)) {
+    // The sky's own cards are dialogs too (role="dialog"): Esc folds them
+    // unless a real dialog is over the whole sky.
+    if (e.key === "Escape" && (newAt || card || flyPick) && !useUi.getState().openDialog) {
       e.preventDefault();
       setNewAt(null);
       setCard(null);
       setFlyPick(null);
       return;
     }
+    if (overlayOpen()) return;
     if (!skyKeysOwn(el) || e.ctrlKey || e.metaKey || e.altKey) return;
     const k = e.key;
     const handled = () => e.preventDefault();
@@ -708,7 +714,9 @@ export function SkyView() {
         writePref(DRAWER_KEY, v);
       }}
       onFocus={focusOn}
-      onTab={(t, rest) => openDialogFor("flights", rest ? t + "/" + rest : t)}
+      // By the surfaces' own names (Intake → Sources, Verify → Checklists), so
+      // the drawer keeps working whatever hosts them.
+      onTab={(t, rest) => (t === "sources" ? openDialogFor("intake", rest || null) : t === "checklists" ? openDialogFor("verify", rest || null) : openDialogFor("flights", t))}
     />
   );
 

@@ -144,7 +144,16 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
       </div>
       {p.dropFlyway && <div className="sky-line-drop">Drop to fly {p.dropFlyway.name}</div>}
       {line.cancel.node}
-      <FlywayCanvas diagram={line.diagram} label={"What " + p.title + " is doing and will do"} vertical={false} bird={birdPerch(line.diagram)} className="sky-canvas" {...line.canvas} />
+      {/* On the plane the line runs left to right; in the phone's list (no
+          drag handle) the canvas picks its own direction by its width. */}
+      <FlywayCanvas
+        diagram={line.diagram}
+        label={"What " + p.title + " is doing and will do"}
+        vertical={p.onDragStart ? false : undefined}
+        bird={birdPerch(line.diagram)}
+        className="sky-canvas"
+        {...line.canvas}
+      />
       {line.editing && (
         <div className="sky-line-panels sky-own-scroll" data-no-drag>
           {line.palette}

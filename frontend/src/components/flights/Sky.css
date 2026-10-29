@@ -202,9 +202,10 @@ body.view-switch #sky-view {
   background-image: radial-gradient(circle, var(--sky-dot) 1px, transparent 1.4px);
 }
 
-.sky-viewport:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -2px;
+/* Focused by a press on empty sky (so the arrows and + / − reach it), never
+   tabbed to: no ring. */
+.sky-viewport:focus {
+  outline: none;
 }
 
 .sky-viewport.is-grab,

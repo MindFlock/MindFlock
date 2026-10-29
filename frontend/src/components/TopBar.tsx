@@ -36,7 +36,7 @@ import { usableShortcuts } from "./palette/ShortcutsSheet";
 import { useScheduleStatus } from "../lib/useScheduleStatus";
 import { failingSchedules } from "../lib/templates";
 import { topBarShows } from "../lib/calm";
-import { VIEWS, VIEW_BLURB, newSession, setView, viewLabel } from "../lib/viewMode";
+import { VIEWS, VIEW_BLURB, newSession, setView, toggleView, viewLabel } from "../lib/viewMode";
 
 /* The wordmark carries the RUNNING ENGINE's version (GET /api/doctor), not the
  * desktop shell's: this frontend ships inside the engine wheel, so that string
@@ -194,8 +194,19 @@ export function TopBar() {
   // badge, a rebound shortcut's absence, the mac lights' gap.
   //
   // The foldable items, in bar order. Flights never folds: its badge is the
-  // reason it is on the bar.
+  // reason it is on the bar. The Grid · Sky toggle folds last, only on a
+  // phone-narrow bar (its ⋯ row switches to the other view; the sidebar's
+  // View row and Alt+Y still do too).
+  const otherView = ui.view === "sky" ? "grid" : "sky";
   const foldable = [
+    {
+      key: "view",
+      label: "Switch to the " + viewLabel(otherView),
+      title: viewLabel(otherView) + " — " + VIEW_BLURB[otherView] + keys("view"),
+      count: 0,
+      failing: false,
+      open: () => toggleView(),
+    },
     { key: "settings", label: "Settings", title: "Settings", count: 0, failing: false, open: () => openSettings() },
   ];
   const [fit, setFit] = useState<BarFit>({ brand: true, shown: Infinity });
@@ -405,9 +416,9 @@ export function TopBar() {
           </button>
           )}
           {/* The main area's two views of the same sessions (lib/viewMode):
-              the grid of panes or the sky of lines. Never folds — it is how
-              you get back — and goes to icons alone on a phone. */}
-          <span className="tb-views" role="group" aria-label="View">
+              the grid of panes or the sky of lines. Glyphs alone on a phone,
+              and the last thing a narrow bar folds (after Settings). */}
+          <span className={"tb-views" + (isFolded("view") ? " tb-folded" : "")} data-fold="view" role="group" aria-label="View">
             {VIEWS.map((v) => (
               <button
                 key={v}

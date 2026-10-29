@@ -47,8 +47,9 @@ The bar never wraps and never clips (any width from 360 px up): it measures
 itself, before paint and on every resize, and gives things up in a fixed order
 (`fitTopBar` in `TopBar.tsx`). The wordmark goes first, then Settings moves
 into one **⋯** (`#more-btn`) that sits where it stood, just before the
-magnifier. **New**, **Flights**, the **Grid · Sky** toggle (its words drop
-to glyphs on a phone) and the magnifier never fold. The ⋯'s menu lists
+magnifier. Next the **Grid · Sky** toggle (its words already dropped to
+glyphs on a phone) folds into the same ⋯ as *Switch to the Sky / grid*.
+**New**, **Flights** and the magnifier never fold. The ⋯'s menu lists
 the folded items with their tooltips (↑/↓ move, Esc closes); a folded item
 keeps its id (`#settings-btn`, hidden), its shortcut and its palette entry.
 
@@ -3935,8 +3936,13 @@ Every row is a rule the code keeps true (pinned in `skyView.test.ts`):
 | the bell's needs-you rows | the drawer's **Perched on you** | the same data (flights perched on you or halted, due checklists) |
 | New session dialog | a new-session card on the sky | `Ctrl/Alt+N` and the top bar's **New** open the card mid-view in the sky (`NewSessionBlock`), the dialog in the grid |
 | the ⏩ fast-track | the ladder's boxes on the line | arming ⏩ draws its rungs on the line; tacking a stop on takes them over |
-| Flights › Sources | the intake lane | the same sources and waiting items, at the plane's left edge |
+| Intake's sources | the intake lane | the same sources and waiting items, at the plane's left edge |
 | a grid with one pane (View 1) | **This session** | the sky's This session is exactly the focused session's line alone |
+
+None of it rests on the Flights dialog: the view is `useUi.view`, the switch
+is `lib/viewMode.ts`, `#sky` is parsed on its own (`parseViewHash`), and the
+drawer opens Sources and Checklists by their own names (`intake`, `verify`).
+Only the old `#flights/sky…` links go through the store's `openDialogFor`.
 
 Switching keeps the selection, the sky's camera (where you had panned and
 zoomed — only an untouched camera refits), the drawer and the shelf, and the
@@ -3957,7 +3963,8 @@ All through `lib/viewMode.ts` (`setView`, `toggleView`, `showInSky`):
 
 - **The top bar's Grid · Sky toggle**, beside Flights — a glyph and a word
   each (the words drop on a phone), the active one filled, the shortcut in the
-  tooltip. The Sky half is `data-tour="view-sky"`.
+  tooltip; the last thing a narrow bar folds (into ⋯, after Settings). The
+  Sky half is `data-tour="view-sky"`.
 - **The sidebar's View row**: Auto · 1 · 2 · 4 · 9 · **Sky**. A number is the
   grid at that many panes, so picking one comes back to the grid.
 - **`Alt+Y`** — from anywhere but a text field or behind a dialog (a terminal

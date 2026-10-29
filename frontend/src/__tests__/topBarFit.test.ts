@@ -78,16 +78,16 @@ describe("TopBar wiring around the fold", () => {
       expect(TOPBAR).toContain(`className={"tb-item" + (isFolded("${key}") ? " tb-folded" : "")}`);
       expect(TOPBAR).toContain(`data-fold="${key}"`);
     }
-    // New, Flights, the Grid · Sky toggle and the palette never fold (the
-    // toggle carries no data-fold, so the fit counts it as fixed width).
+    // New, Flights and the palette never fold.
     for (const id of ["new-btn", "flights-btn", "palette-btn"]) {
       const at = TOPBAR.indexOf(`id="${id}"`);
       expect(TOPBAR.slice(at, at + 200), id).not.toContain("tb-folded");
     }
-    const views = TOPBAR.slice(TOPBAR.indexOf('<span className="tb-views"'), TOPBAR.indexOf("</span>", TOPBAR.indexOf('className="tb-view-word"')));
-    expect(views).toContain('id={"view-" + v + "-btn"}');
-    expect(views).not.toContain("data-fold");
-    expect(views).not.toContain("tb-folded");
+    // The Grid · Sky toggle folds last: it is left of Settings in bar order,
+    // and the fold takes items from the right end.
+    expect(TOPBAR).toContain('<span className={"tb-views" + (isFolded("view") ? " tb-folded" : "")} data-fold="view"');
+    expect(TOPBAR.indexOf('key: "view"')).toBeLessThan(TOPBAR.indexOf('{ key: "settings"'));
+    expect(fitTopBar({ ...BAR, items: [90, 60], room: 270 + 60 + 30 }).shown).toBe(0);
     // ⋯ sits after Settings and before the palette.
     const se = TOPBAR.indexOf('id="settings-btn"');
     const mo = TOPBAR.indexOf('id="more-btn"');

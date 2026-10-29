@@ -136,13 +136,14 @@ describe("the isomorphism", () => {
 describe("the switch points", () => {
   it("the top bar: a Grid · Sky pair beside Flights, the sky's half the tour's target, the shortcut in the tooltip", () => {
     const top = code("components/TopBar.tsx");
-    expect(top.indexOf('id="flights-btn"')).toBeLessThan(top.indexOf('<span className="tb-views" role="group" aria-label="View">'));
+    expect(top.indexOf('id="flights-btn"')).toBeLessThan(top.indexOf('<span className={"tb-views"'));
     expect(top).toContain('data-tour={v === "sky" ? "view-sky" : undefined}');
     expect(top).toContain('title={viewLabel(v) + " — " + VIEW_BLURB[v] + keys("view")}');
     expect(top).toContain("onClick={() => setView(v)}");
     expect(top).toContain("aria-pressed={ui.view === v}");
-    // Never folded (no data-fold), the words go on a phone.
-    expect(top).not.toMatch(/tb-views[^>]*data-fold/);
+    // The words go on a phone; the pair folds only after Settings, into ⋯.
+    expect(top).toContain('<span className={"tb-views" + (isFolded("view") ? " tb-folded" : "")} data-fold="view"');
+    expect(top.indexOf('key: "view"')).toBeLessThan(top.indexOf('{ key: "settings"'));
     expect(css("components/TopBar.css")).toMatch(/body\.narrow #topbar \.tb-view-word \{[^}]*display: none;/);
   });
 
