@@ -8,35 +8,54 @@ two people's agents code together.
 
 ## How to use
 
-You and a collaborator each run MindFlock. One of you **invites**, the other
-**joins**; then each of you may **share one folder** with that link.
+You and a collaborator each run MindFlock. One of you **invites** — picking
+which of your sessions they get — the other **joins**, and those sessions
+appear on their rail at once. Then either of you can share more sessions, or
+**one folder**, with that link.
 
 > Just want someone to type into a few of *your* sessions, on your device,
 > with no MindFlock of their own? That is a **guest link** — Settings →
 > People → *Let someone into a few of your sessions* — see
 > [people.md](people.md#guest-links--someone-else-in-a-few-of-your-sessions).
 
-1. **Invite.** Settings → People (once "People"; or the command
-   palette's *People…*) → **Create invite**, or `mindflock peer invite`. There is
-   nothing to turn on or configure first: inviting turns peer links on. Without
-   cloudflared the screen first asks where the other person is — *on my
-   network or tailnet* (a direct invite now) or *somewhere else* (install
-   cloudflared from right there, then invite). Press **Copy invite** and send
-   the message over any channel you trust — it carries the code (`mfp1:…` or
-   `mfp2:…`) and says what to do with it (open Settings → People — or
-   Ctrl+P, "people" — press **Join someone** and paste it; a direct invite
-   adds that it only works on the same network or Tailscale). A code is single use and expires
-   after 10 minutes; the screen counts it down, lists unused invites with
-   **Cancel**, and turns into "*B* joined — read them your safety number" the
-   moment they join. The listener only runs while an invite or a link that you
-   accepted exists.
-2. **Join.** The other person pastes the message — all of it, or just the
-   code — into People → **Join someone**, the palette's *Paste a
-   code…*, or `mindflock peer join <code>`. Joining turns peer links on too,
-   and needs nothing installed. A relay join can take up to a minute (a new
-   tunnel's name has to appear in DNS); the screen shows each stage, and a
-   failure says what to do next.
-3. **How the joiner reaches you** is chosen for you (`peer.relay = "auto"`,
+1. **Invite — with the sessions you want them in.** Settings → People
+   (or the command palette's *People…*) → **Invite someone**. It works like
+   a guest link: a red warning says what an invite gives away; tick **I
+   understand** and a picker opens with this device's root sessions. Tick the
+   ones they should get and, per session, how — **Gated to its folder** (a
+   sandboxed copy of its folder and branch; a link carries one) or **Full
+   join** (they type into that session as it is, on this machine) — say where
+   they are when it matters (without cloudflared: *on my network or
+   Tailscale* or *somewhere else*, which installs cloudflared from right
+   there; with a relay: a tick for a direct invite anyway), then **Make an
+   invite**. No sessions ticked is fine — **Make an invite without
+   sessions** just connects you, and you share later from their card.
+   `mindflock peer invite` makes one from a terminal (no sessions). There is
+   nothing to turn on or configure first: inviting turns peer links on.
+2. **Send the link.** The card shows the invite LINK
+   (`https://…/join#mfp2:…`) with **Copy link** and **Copy invite message**,
+   and under it what it opens — "Opens: fix-login (full), api (gated) — they
+   appear on their rail the moment they join." The message leads with the
+   link, says which sessions it opens, and carries the code (`mfp1:…` or
+   `mfp2:…`) with what to do with it, for when the link can't open
+   MindFlock. Send it over any channel you trust. An invite works once and
+   expires after 10 minutes; the screen counts it down and lists unused
+   invites (with what they open) with **Cancel**. The listener only runs
+   while an invite or a link that you accepted exists.
+3. **They join — the sessions appear.** The other person opens the link, or
+   pastes the message (all of it, or just the code) into People → **Join
+   someone**, the palette's *Paste a code…*, or `mindflock peer join <code>`.
+   Joining turns peer links on too, and needs nothing installed. A relay join
+   can take up to a minute (a new tunnel's name has to appear in DNS); the
+   screen shows each stage, and a failure says what to do next. The moment
+   they're in, the invite's sessions are shared with them — no second step
+   on either side: their People card says "You're connected to Erik —
+   fix-login (full) and api (gated) are on your rail" with an **Open** per
+   session, and your invite card turns into "Bob joined — fix-login and api
+   are open to them" with the safety number. A session that couldn't be
+   shared (it was deleted, the sandbox is missing) says why on your card;
+   the others, and the link, are fine.
+4. **How the joiner reaches you** is chosen for you (`peer.relay = "auto"`,
    the default): with [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)
    installed, invites go through a Cloudflare quick tunnel, so your peer can be
    on any network; the encryption stays end to end (see
@@ -53,7 +72,7 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
    firewall), you still get an invite: a direct one, labelled "Relay
    unavailable (…). This invite only works for someone on your network or
    tailnet."
-4. **Shared sessions** need Linux with
+5. **Shared folders** need Linux with
    [bubblewrap](https://github.com/containers/bubblewrap) (`bwrap`), or macOS
    (`sandbox-exec`, built in); Peer links and `mindflock doctor` say whether
    the sandbox works here and install it if it's missing. (macOS caps a
@@ -64,15 +83,18 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
    other side's shared-folder diff, read-only). A message that arrives while
    no shared session exists here waits in Messages, and is handed to the
    shared session once you share a folder.
-5. **Verify the safety number.** Both sides show one like `482-019-337-5`
+6. **Verify the safety number.** Both sides show one like `482-019-337-5`
    (People, `mindflock peer links`). Read it to each other by
    voice or chat and press **It matches**. If it differs, someone is in the
    middle: **unlink now**. Until *you* press it, nothing in your shared
    folder goes to them — its diff, files, screen and mirror answer "safety
    number not confirmed" — and you can't share, mirror or export on that link
    ("Confirm the safety number with *B* first"); messages work, so you can
-   compare the number over them.
-6. **Share a folder.** On the link: the folder (type it, or **Browse…** —
+   compare the number over them. The one exception is the sessions your
+   invite listed: you picked those when you made it, so they are shared the
+   moment the other person joins and reachable before *It matches* — only
+   those (see [Invite with sessions](#invite-with-sessions)).
+7. **Share a folder.** On the link: the folder (type it, or **Browse…** —
    any folder: a git repository is cloned, anything else is shared as a
    snapshot of its files, see [The shared folder](#the-shared-folder--contract-sharepy)),
    optional branch, the agent
@@ -89,7 +111,7 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
    and team runs are switched off. The sidebar row says **Shared with
    *B*** (with their connection state), the actions it refuses aren't
    offered, and the link card's **Open session** jumps to it.
-7. **Watch theirs.** When the person on the other end shares a folder, a
+8. **Watch theirs.** When the person on the other end shares a folder, a
    **Shared with you** row appears at the top of your rail (and **Watch their
    session** on their link card). It opens their session: **Session** — their
    terminal as it looks now, refreshed every 1.5 s, colours only, read-only;
@@ -97,9 +119,9 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
    their diff. A line at the bottom messages them (their agent sees it too).
    Their permissions decide each tab: the screen follows *see my diff*, the
    files *read my files*. Both of you need this MindFlock version or newer.
-8. **Choose what the peer may do to you.** Per link: *send messages*, *see my
+9. **Choose what the peer may do to you.** Per link: *send messages*, *see my
    diff*, *read my files* (`POST /api/peer/links/<id>/perms`).
-9. **Bring the work home.** *Export* (or `mindflock peer export <link>
+10. **Bring the work home.** *Export* (or `mindflock peer export <link>
    <your repo> peer/<branch>`) checkpoints the shared folder and fetches it into
    your own repo as a `peer/…` branch, and says how many commits came (0:
    nothing new yet). Pick the repo you shared from (or a clone of it): a git
@@ -120,7 +142,7 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
    need this MindFlock version or newer — an older peer never reports a
    head, so its mirror simply never updates. **Stop mirroring** keeps the
    branch.
-10. **Stop.** *Unshare* closes the shared session — its agent stops, its
+11. **Stop.** *Unshare* closes the shared session — its agent stops, its
    folder stays, like Close — unless you tick *delete*; *Unlink* does the
    same and also forgets the peer's key and closes the connection. Either
    side can unlink at any time, and **an unlink never destroys the other
@@ -133,7 +155,7 @@ You and a collaborator each run MindFlock. One of you **invites**, the other
     link and its shared folder stay listed. Turning them on again reopens
     nothing by itself — **Reopen** on the card starts a new session in the
     kept folder (`POST /api/peer/links/<id>/share/reopen`).
-11. **Reconnect.** If a link you joined stays offline (the inviter restarted
+12. **Reconnect.** If a link you joined stays offline (the inviter restarted
     and their quick tunnel got a new address — they get a bell item saying
     so), paste a fresh invite from them into the link's **Reconnect** box (or
     **Join**, or `peer join`). Pairing again with someone you're already
@@ -233,7 +255,8 @@ session, credential (beyond the sandboxed agent's own model-API credential, see
 | Host features executing folder content | Shared sessions refuse: ship/push/PR/Fast-track, worktree setup scripts, IDE launch, spawning, team runs, and an unsandboxed shell pane. No other session may be created on a path under the peer root. |
 | An untrusted relay in the path (`peer.relay`) | The same pinned-key TLS 1.3 runs end to end *inside* the relay's WebSocket; the relay's own TLS is not trusted. A 128-bit ingress token in the relay path keeps scanners off the handshake, and everything else gets one constant `404`. See [Connecting across networks](#connecting-across-networks). |
 | Stale or leaked links | Either side can unlink. The unlinking side sends an authenticated `bye "unlinked"`; the receiving side then removes the link and its pinned key too, stops dialing, and closes that link's shared session (agent stopped, folder kept — never deleted). Links have an idle expiry (30 days). |
-| A safety number nobody compared | The pinned key already stops a MITM after the first connection, but only the people comparing the number prove the *first* one was them. So the shared folder's content (`diff`, `read_file`, `list_files`, `screen`, `mirror_pull`) is refused — `err: "not permitted: safety number not confirmed"` — to a peer whose link is not `sas_verified` on the serving side, whatever the perms say; share, mirror and export answer 409 until it is. Pairing again resets it on both sides. `msg` and `status` stay open: the number is compared over them. |
+| A safety number nobody compared | The pinned key already stops a MITM after the first connection, but only the people comparing the number prove the *first* one was them. So the shared folder's content (`diff`, `read_file`, `list_files`, `screen`, `mirror_pull`) is refused — `err: "not permitted: safety number not confirmed"` — to a peer whose link is not `sas_verified` on the serving side, whatever the perms say; share, mirror and export answer 409 until it is. Pairing again resets it on both sides. `msg` and `status` stay open: the number is compared over them. The sessions an invite listed are the one exception — open to whoever used the invite, as soon as they join ([Invite with sessions](#invite-with-sessions)). |
+| An invite link in the wrong hands | It opens exactly the sessions it lists, like a guest link — once, for 10 minutes. The People screen gates making any invite behind a red warning and an *I understand* tick; Cancel revokes it; unlinking ends the access. |
 
 ## Components
 
@@ -298,9 +321,18 @@ join them; a relay invite needs a peer that understands `mfp2:`.
 
 `InviteBook` lives in memory only; restarting the server kills every invite:
 
-- `create(host, port, ttl_s=600) -> Invite(invite_id, code, expires_at)`
+- `create(host, port, ttl_s=600, *, relay_path=None, sessions=None) ->
+  Invite(invite_id, code, expires_at, sessions)` — `sessions` is
+  `[{title, mode}]` (`invite.clean_sessions`: at most 50, each title once,
+  `mode` `gated`|`full` — default `gated` — and at most one `gated`;
+  `ValueError` in words otherwise). The book only checks their shape; the
+  service checks they exist ([Invite with sessions](#invite-with-sessions)).
 - `revoke(invite_id)`
-- `active() -> list` (id and expiry only, never the secret)
+- `active() -> list` (id, expiry and `sessions`, never the secret or code)
+- `take_consumed(peer_pub_hex) -> {invite_id, sessions} | None`: the
+  invite the joiner with that key just used, once. `check()` remembers it
+  on success under the key a pair transcript ends with (the joiner's —
+  `transport.pair_transcript`), for 120 s.
 - `check(invite_id, proof, transcript) -> bool`:
   - compares `hmac.compare_digest(HMAC-SHA256(secret, transcript), proof)` in
     constant time;
@@ -491,8 +523,10 @@ links, never in `Link` (an older release's `validate()` that rejects a value
 moves the whole links file aside): the message log
 (`messages/<link_id>.json`, `inbox.py`) and the joint task
 (`joint/<link_id>.json`, `joint.py`), and the sessions this side shares on
-the link (`sessions/<link_id>.json`, `store.SharedSessions`). All are dropped
-when the link goes.
+the link (`sessions/<link_id>.json`, `store.SharedSessions`) — the same
+file keeps the link's invite record, `invite: {invite_id, shares, errors}`
+([Invite with sessions](#invite-with-sessions)). All are dropped when the
+link goes.
 
 ## Joint tasks — CONTRACT (`joint.py`)
 
@@ -1154,7 +1188,7 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   | Method | Path | Notes |
   |---|---|---|
   | `GET` | `/api/peer` | status: sandbox availability, identity fingerprint, listen address, links (no keys), active invites (no secrets) |
-  | `POST` | `/api/peer/invites` | `{ttl_s?}` → `{invite_id, code, expires_in}`; the only response that contains the code |
+  | `POST` | `/api/peer/invites` | `{ttl_s?, sessions?: [{title, mode}]}` → `{invite_id, code, url, expires_in, sessions}`; the only response that contains the code. A bad `sessions` is 400 and mints nothing ([Invite with sessions](#invite-with-sessions)) |
   | `DELETE` | `/api/peer/invites/{id}` | |
   | `POST` | `/api/peer/join` | `{code}` → link with SAS |
   | `DELETE` | `/api/peer/links/{id}` | closes my shared session (folder kept); `?delete_files=1` deletes it and the folder |
@@ -1209,7 +1243,12 @@ The HTTP messages route refuses any client-supplied `from` that starts with
   `peer.mirror_failed` (docs/extensions.md); none carries a key, code or
   relay token. Each link in `GET /api/peer` also carries `share_open` (its
   shared session exists now), and `listen.bound` is where the listener
-  really is (a changed `listen_port` re-binds it).
+  really is (a changed `listen_port` re-binds it). Each invite row carries
+  `sessions` (`[{title, mode}]`) and each link `from_invite` (the invite id
+  a listener link was made from, `""` for none), `invite_shares` (the
+  titles that invite shared) and `share_errors` (`[{title, mode, error}]`:
+  listed, not shared); `peer.link_added` carries the invite's `sessions`
+  (`[]` for none) — see [Invite with sessions](#invite-with-sessions).
   `peer.message`, `peer.relay_changed` (docs/extensions.md), and for joint
   tasks (each with `link_id`, `peer_name`, `joint_id`):
   `peer.joint_proposed` (+ `brief`, 200 chars — bell: "<name> proposes a
@@ -1435,8 +1474,67 @@ the link goes (the sessions themselves are untouched).
   link dropped) the event carries their last title, `new: ""` and
   `left: true`, which takes the pill away.
 
+### Invite with sessions
+
+An invite can carry the sessions it opens (`POST /api/peer/invites
+{sessions: [{title, mode}]}`), so the person who joins finds them on their
+rail at once — the guest link's experience, between two MindFlocks.
+
+- **At create** the service checks each one as `share_session` would now:
+  a live ROOT session here (not a sub-session, not a `<peer>::<title>` row,
+  not another link's shared folder), at most 50, one `gated` (a link
+  carries one shared folder), and a `gated` one needs a working sandbox.
+  Anything else is **400** in words and no invite is minted. The invite
+  keeps them in memory with its secret (`InviteBook`), and `GET /api/peer`
+  lists them on the invite row.
+- **At join**, on the INVITER's side: the transport's `on_link_added` (or
+  `on_link_repaired`) reaches `PeerService._claim_invite`, which takes the
+  consumed invite (`InviteBook.take_consumed(peer_pub)`), records it in
+  the link's invite record (`SharedSessions.set_invite`, beside the link's
+  shared sessions — never a `Link` field), and schedules
+  `_share_from_invite`: each session through `share_session(...,
+  from_invite=True)` — the same path as a manual share (a `gated` one first
+  cuts the sandboxed shared folder with `share()`), minus the *It matches*
+  requirement. Each one shared emits `peer.session_shared` (`by: "you"`)
+  and pushes `sessions_changed`, so the joiner's rail updates without a
+  poll. `peer.link_added` carries the invite's `sessions`.
+- **A failure never fails the join.** A session that can't be shared (it
+  was deleted, the sandbox broke since) fires no `peer.session_shared`; it
+  lands in the link's `share_errors` (`[{title, mode, error}]`, `GET
+  /api/peer`) and one `peer.state` carrying `share_errors` refreshes People,
+  whose card says "Couldn't open api: …". The link and the other sessions
+  are fine.
+- **Before *It matches*** the joiner reaches exactly the sessions the
+  invite shared (`invite_shares`): `sessions` lists only those, and
+  `term_open`, `agent_msg` and `session_focus` refuse anything else ("not
+  shared"). Withdrawing one takes it out of `invite_shares`. Everything
+  else stays as before: the shared folder's content (`diff`, `read_file`,
+  `list_files`, `screen`, `mirror_pull`) still waits for *It matches*, a
+  manual share still answers 409 until then, and `sas_verified` is recorded
+  exactly as before.
+- **A re-pair starts over.** The same person pairing again (a fresh invite)
+  resets the invite record: the new invite's sessions are shared and
+  reachable early; with an invite that lists none, nothing is reachable
+  before *It matches* again.
+- **The joiner's card** reads `GET /api/peer/links/{id}/sessions` after the
+  join and again on every `peer.session_shared` / `peer.session_unshared`
+  for the link (an invite's sessions can land a moment after the join), each
+  with **Open** (its `<peer>::<title>` row).
+
 ### Threat-model delta
 
+- **An invite link is a guest link to the sessions it names.** Whoever
+  opens it first — within its 10 minutes, once — gets those sessions the
+  moment they join, before anyone compares a safety number: a full one is
+  your keyboard in that session, a gated one the sandboxed folder. That is
+  the owner's choice made when ticking the sessions (the single-use code IS
+  the trust), which is why the People screen puts the red warning and its
+  *I understand* tick in front of making ANY invite, and why the code still
+  pins the inviter's key (no MITM can stand in for you). The safety number
+  is still worth comparing: it is what proves the person who joined is the
+  person you meant — if it doesn't match, unlink, and their access ends.
+  An invite with no sessions changes nothing: everything waits for *It
+  matches* as before.
 - **Full share = guest-link trust.** A peer you share a session with in full
   acts as you in that session: everything its agent can do on this machine.
   The sandbox, the egress allow-list and the shared folder's blast radius do

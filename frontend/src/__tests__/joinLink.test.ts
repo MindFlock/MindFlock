@@ -4,6 +4,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import PEOPLE_SRC from "../components/settings/screens/PeerLinks.tsx?raw";
+import INVITE_SRC from "../components/settings/screens/peer/InviteSessions.tsx?raw";
 
 vi.mock("../lib/peerActions", () => ({ openJoinWithCode: vi.fn() }));
 vi.mock("../api/client", () => ({ api: vi.fn(async () => ({})) }));
@@ -49,10 +50,11 @@ describe("the invite message", () => {
     expect(inviteMessage({ code: CODE })).toBe(CODE);
   });
 
-  it("Copy invite copies the whole message; the card shows the link", () => {
-    expect(PEOPLE_SRC).toContain("copyText(inviteMessage(invite))");
-    expect(PEOPLE_SRC).toMatch(/id="peer-invite-url"\s+readOnly\s+value=\{invite\.url\}/);
-    expect(PEOPLE_SRC).toContain("Copy link");
+  it("Copy invite message copies the whole message; the card shows the link", () => {
+    expect(INVITE_SRC).toContain("copyText(inviteMessage(invite))");
+    expect(INVITE_SRC).toMatch(/id="peer-invite-url"\s+readOnly\s+value=\{invite\.url\}/);
+    expect(INVITE_SRC).toContain("Copy link");
+    expect(INVITE_SRC).toContain("Copy invite message");
   });
 });
 

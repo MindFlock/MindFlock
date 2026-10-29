@@ -65,6 +65,10 @@ _TITLE_MAX = 200
 SESSION_MODES = ("gated", "full")
 _MAX_SHARED_SESSIONS = 50
 _TITLE_BAD = re.compile(r"[\x00-\x1f\x7f-\x9f\ud800-\udfff]")
+_INVITE_ID_RE = re.compile(r"^[0-9a-f]{16}\Z")
+_ERROR_MAX = 300
+#: "Keep what the file holds" for SharedSessions._save's invite.
+_KEEP = object()
 
 
 def sanitize_name(name) -> str:
@@ -75,6 +79,10 @@ def sanitize_name(name) -> str:
 
 def _is_num(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _is_title(v) -> bool:
+    return isinstance(v, str) and 0 < len(v) <= _TITLE_MAX and not _TITLE_BAD.search(v)
 
 
 @dataclass
@@ -357,6 +365,14 @@ class SharedSessions:
     would move the whole links file aside). What the PEER shares with us is
     never persisted: it is asked over the wire (the service caches it).
 
+    The same file keeps the link's INVITE record (listener links made from
+    an invite, docs/peer-link.md "Invite with sessions"): ``{"invite_id",
+    "shares", "errors"}`` — the invite the peer joined with, the titles it
+    shared (the only sessions they reach before It matches) and the ones it
+    could not share (``{title, mode, error}``). An older release keeps
+    reading the sessions and drops the record when it next writes — which
+    only takes the early access away.
+
     A malformed entry is dropped on load, not the file. Single process (the
     server's one PeerService): a thread lock plus atomic writes."""
 
@@ -393,7 +409,37 @@ class SharedSessions:
             }
         return out
 
-    def _load(self, link_id: str) -> dict:
+    @staticmethod
+    def _clean_invite(doc) -> dict:
+        raw = doc.get("invite") if isinstance(doc, dict) else None
+        if not isinstance(raw, dict):
+            return {}
+        iid = raw.get("invite_id")
+        shares = raw.get("shares")
+        errors = raw.get("errors")
+        out = {
+            "invite_id": (
+                iid if isinstance(iid, str) and _INVITE_ID_RE.match(iid) else ""
+            ),
+            "shares": [
+                t for t in (shares if isinstance(shares, list) else []) if _is_title(t)
+            ][:_MAX_SHARED_SESSIONS],
+            "errors": [
+                {
+                    "title": e["title"],
+                    "mode": e["mode"],
+                    "error": e["error"][:_ERROR_MAX],
+                }
+                for e in (errors if isinstance(errors, list) else [])
+                if isinstance(e, dict)
+                and _is_title(e.get("title"))
+                and e.get("mode") in SESSION_MODES
+                and isinstance(e.get("error"), str)
+            ][:_MAX_SHARED_SESSIONS],
+        }
+        return out if out["invite_id"] or out["shares"] or out["errors"] else {}
+
+    def _read(self, link_id: str) -> dict:
         try:
             fd = os.open(
                 paths.shared_sessions_file(link_id), os.O_RDONLY | os.O_NOFOLLOW
@@ -405,18 +451,24 @@ class SharedSessions:
                 doc = json.loads(f.read(_MAX_FILE).decode("utf-8"))
         except (OSError, ValueError, UnicodeDecodeError, RecursionError):
             return {}
-        return self._clean(doc)
+        return doc if isinstance(doc, dict) else {}
 
-    def _save(self, link_id: str, items: dict) -> None:
+    def _load(self, link_id: str) -> dict:
+        return self._clean(self._read(link_id))
+
+    def _save(self, link_id: str, items: dict, invite=_KEEP) -> None:
         path = paths.shared_sessions_file(link_id)
         paths.ensure_dir(os.path.dirname(path))
-        if not items:
+        if invite is _KEEP:
+            invite = self._clean_invite(self._read(link_id))
+        if not items and not invite:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(path)
             return
-        data = json.dumps(
-            {"version": 1, "sessions": items}, indent=1, sort_keys=True
-        ).encode("utf-8")
+        doc = {"version": 1, "sessions": items}
+        if invite:
+            doc["invite"] = invite
+        data = json.dumps(doc, indent=1, sort_keys=True).encode("utf-8")
         tmp = f"{path}.tmp-{os.getpid()}-{os.urandom(4).hex()}"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         try:
@@ -458,8 +510,56 @@ class SharedSessions:
             items = self._load(link_id)
             rec = items.pop(title, None)
             if rec is not None:
-                self._save(link_id, items)
+                invite = self._clean_invite(self._read(link_id))
+                if title in invite.get("shares", ()):
+                    invite["shares"].remove(title)  # not open early again
+                self._save(link_id, items, invite)
             return rec
+
+    def invite(self, link_id: str) -> dict:
+        """The link's invite record: ``{invite_id, shares, errors}`` (all
+        empty for a link not made from an invite)."""
+        with self._lock:
+            got = self._clean_invite(self._read(link_id))
+        return {
+            "invite_id": got.get("invite_id", ""),
+            "shares": list(got.get("shares", [])),
+            "errors": [dict(e) for e in got.get("errors", [])],
+        }
+
+    def set_invite(self, link_id: str, invite_id: str = "") -> None:
+        """Start the link's invite record over: made from ``invite_id``
+        (``""``: from none — the record goes), nothing shared yet."""
+        if invite_id and not _INVITE_ID_RE.match(invite_id):
+            raise ValueError("bad invite id")
+        with self._lock:
+            items = self._load(link_id)
+            rec = {"invite_id": invite_id, "shares": [], "errors": []}
+            self._save(link_id, items, rec if invite_id else {})
+
+    def add_invite_share(self, link_id: str, title: str) -> None:
+        """``title`` was shared from the link's invite."""
+        if not _is_title(title):
+            raise ValueError("bad title")
+        with self._lock:
+            doc = self._read(link_id)
+            invite = self._clean_invite(doc)
+            if not invite.get("invite_id"):
+                raise ValueError("this link has no invite")
+            if title not in invite["shares"]:
+                invite["shares"].append(title)
+            self._save(link_id, self._clean(doc), invite)
+
+    def set_invite_errors(self, link_id: str, errors: list) -> None:
+        """What the link's invite listed but could not share
+        (``[{title, mode, error}]``; malformed entries are dropped)."""
+        with self._lock:
+            doc = self._read(link_id)
+            invite = self._clean_invite(doc)
+            if not invite.get("invite_id"):
+                raise ValueError("this link has no invite")
+            invite = self._clean_invite({"invite": {**invite, "errors": errors}})
+            self._save(link_id, self._clean(doc), invite)
 
     def drop(self, link_id: str) -> None:
         """Forget everything shared on the link (it is gone)."""
