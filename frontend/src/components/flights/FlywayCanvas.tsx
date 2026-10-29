@@ -12,7 +12,9 @@
  *    reason), skipped struck through, pending outlined;
  *  - a session's live diagram — its parent above, the session box, its
  *    children branching below, the fast-track's rungs or the flight's stops,
- *    and the trailing + ("Tack on a stop").
+ *    and the trailing + ("Tack on a stop");
+ *  - a line in the Sky — the same diagram, with the bird (`bird`) standing
+ *    on the box the flight is at.
  *
  * Empty space pans the line sideways (scroll, or drag it). Positions and
  * connectors come from `layoutDiagram` (fixed box sizes), so the markup needs
@@ -23,11 +25,12 @@ import {
   layoutDiagram,
   reorderDiagram,
   dropIndex,
+  type BirdPerch,
   type Diagram,
   type DiagramNode,
   type LayoutOpts,
 } from "../../lib/flightDiagram";
-import { StopIcon } from "./Bird";
+import { BirdMarker, StopIcon } from "./Bird";
 import "./FlywayCanvas.css";
 
 /** Below this width the line runs top to bottom. */
@@ -60,6 +63,8 @@ export interface FlywayCanvasProps {
   sizeOf?: LayoutOpts["sizeOf"];
   /** Scroll the line so this box (the flight's current stop) is in view. */
   reveal?: string | null;
+  /** The bird: standing on this box (lib/flightDiagram `birdPerch`). */
+  bird?: BirdPerch | null;
   dataTour?: string;
   className?: string;
 }
@@ -246,6 +251,9 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
   }
 
   const pad = 6;
+  // Headroom over the top row for the bird to stand in.
+  const top = p.bird ? 26 : pad;
+  const perch = p.bird ? shown.boxes.find((b) => b.node.id === p.bird!.nodeId) : undefined;
   return (
     <div
       ref={rootRef}
@@ -258,19 +266,19 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
     >
       <div
         className="fl-stage"
-        style={{ width: shown.width + pad * 2, height: shown.height + pad * 2 }}
+        style={{ width: shown.width + pad * 2, height: shown.height + top + pad }}
         onPointerDown={onStageDown}
         onPointerMove={onStageMove}
         onPointerUp={onStageUp}
         onPointerCancel={onStageUp}
       >
-        <svg className="fl-wires" width={shown.width + pad * 2} height={shown.height + pad * 2} aria-hidden="true" focusable="false">
+        <svg className="fl-wires" width={shown.width + pad * 2} height={shown.height + top + pad} aria-hidden="true" focusable="false">
           <defs>
             <marker id={uid + "-arrow"} viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M 0 0 L 10 5 L 0 10 z" className="fl-arrowhead" />
             </marker>
           </defs>
-          <g transform={`translate(${pad} ${pad})`}>
+          <g transform={`translate(${pad} ${top})`}>
             {shown.wires.map((w) => (
               <path
                 key={w.from + ">" + w.to}
@@ -286,7 +294,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
           const lifted = drag?.moved && drag.id === n.id;
           const own = lifted ? base.boxes.find((x) => x.node.id === n.id) : null;
           const x = (own ? own.x + (vertical ? 0 : drag!.delta) : b.x) + pad;
-          const y = (own ? own.y + (vertical ? drag!.delta : 0) : b.y) + pad;
+          const y = (own ? own.y + (vertical ? drag!.delta : 0) : b.y) + top;
           const glyph = STATE_GLYPH[n.state];
           const cls =
             "fl-box fl-box-" + n.kind +
@@ -361,7 +369,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
             key={"gap" + g.at}
             type="button"
             className="fl-gap-add"
-            style={{ transform: `translate(${g.x + pad}px, ${g.y + pad}px) translate(-50%, -50%)` }}
+            style={{ transform: `translate(${g.x + pad}px, ${g.y + top}px) translate(-50%, -50%)` }}
             aria-label={"Add a stop here (before stop " + (g.at + 1) + ")"}
             title="Add a stop here"
             onClick={() => p.onInsert?.(g.at)}
@@ -369,6 +377,14 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
             +
           </button>
         ))}
+        {perch && (
+          <BirdMarker
+            tone={p.bird!.tone}
+            x={perch.x + pad + perch.w / 2}
+            y={perch.y + top}
+            label={"The bird: " + (p.bird!.tone === "you" ? "perched on you at " : p.bird!.tone === "halted" ? "halted at " : p.bird!.tone === "paused" ? "paused at " : "flying ") + perch.node.title}
+          />
+        )}
       </div>
     </div>
   );

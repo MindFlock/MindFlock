@@ -707,3 +707,64 @@
 .fl-pick-default:not(.on) {
   color: var(--muted);
 }
+
+/* --- The bird (the Sky's lines, lib/flightDiagram birdPerch) ------------------ */
+
+/* It stands on the top edge of the box the flight is at; a move to the next
+   box is a hop (left / top transition), never a jump. */
+.fl-bird-marker {
+  position: absolute;
+  z-index: 3;
+  transform: translate(-50%, -78%);
+  transition: left 0.5s cubic-bezier(0.34, 1.4, 0.64, 1), top 0.5s cubic-bezier(0.34, 1.4, 0.64, 1);
+  color: var(--tone-working);
+  line-height: 0;
+  pointer-events: auto;
+  /* A small disc behind it, so it reads on any box and any sky. */
+  padding: 3px;
+  border-radius: 50%;
+  background: var(--panel);
+  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+}
+
+.fl-bird-marker .fl-bird-big {
+  display: block;
+}
+
+/* While the flock works it bobs; perched on you it sits gold and still;
+   halted, red. */
+.fl-bird-marker.tone-working .fl-bird-big {
+  animation: fl-bird-bob 1.6s ease-in-out infinite;
+}
+
+.fl-bird-marker.tone-you {
+  color: var(--tone-attention);
+}
+
+.fl-bird-marker.tone-halted {
+  color: var(--red);
+}
+
+.fl-bird-marker.tone-paused {
+  color: var(--muted);
+}
+
+@keyframes fl-bird-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fl-bird-marker {
+    transition: none;
+  }
+  .fl-bird-marker.tone-working .fl-bird-big {
+    animation: none;
+  }
+}

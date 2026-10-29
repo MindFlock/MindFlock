@@ -1,6 +1,6 @@
-/** The flyway canvas's model — pure, so the Flyways editor, the Board, the
+/** The flyway canvas's model — pure, so the Flyways editor, the Sky, the
  * pane's Flight tab and the tests all read one rule (docs/flights.md "The
- * session diagram").
+ * session diagram"). `birdPerch` says where the Sky's bird sits on a line.
  *
  * A canvas is a list of BOXES on a line, read left to right (top to bottom on
  * a phone), joined by drawn connectors — no ports and no manual wiring: the
@@ -393,6 +393,39 @@ export function hasSessionDiagram(rows: readonly Instance[], title: string): boo
   if (!row) return false;
   const fl = row.flight as FlightRow | null | undefined;
   return !!(fl && isLive(fl)) || ladderRungs(row).length > 0 || !!row.parent || rows.some((r) => r.parent === title);
+}
+
+// --- The bird -------------------------------------------------------------------
+
+/** How the bird sits: bobbing while the flock works, gold and still perched on
+ * you, red when halted, still when paused. */
+export type BirdTone = "working" | "you" | "halted" | "paused";
+
+export interface BirdPerch {
+  nodeId: string;
+  tone: BirdTone;
+}
+
+const STOP_TONE: Partial<Record<DiagramNodeState, BirdTone>> = {
+  current: "working",
+  perched: "you",
+  halted: "halted",
+  paused: "paused",
+};
+
+/** Where the bird sits on a line: the flight's current stop, else the
+ * fast-track's current rung, else the session box while its agent works (or
+ * waits on you); nowhere when the session is idle with nothing armed. */
+export function birdPerch(d: Diagram): BirdPerch | null {
+  const main = d.nodes.filter((n) => n.row === "main");
+  const stop = main.find((n) => n.kind === "stop" && STOP_TONE[n.state]);
+  if (stop) return { nodeId: stop.id, tone: STOP_TONE[stop.state]! };
+  const rung = main.find((n) => n.kind === "rung" && (n.state === "current" || n.state === "halted"));
+  if (rung) return { nodeId: rung.id, tone: rung.state === "halted" ? "halted" : "working" };
+  const me = main.find((n) => n.kind === "session");
+  if (me?.chip?.tone === "working") return { nodeId: me.id, tone: "working" };
+  if (me?.chip?.tone === "attention") return { nodeId: me.id, tone: "you" };
+  return null;
 }
 
 // --- Layout -------------------------------------------------------------------
