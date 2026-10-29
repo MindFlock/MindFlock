@@ -760,6 +760,10 @@ def _compact_message(m: dict) -> dict:
     data = m.get("data") if isinstance(m.get("data"), dict) else {}
     if data.get("peer") is True and "::" in str(m.get("from") or ""):
         out["untrusted"] = _CROSS_USER_NOTE
+        # Answerable only while their session is shared back with me (as
+        # when it was typed in: mailbox.render_delivery).
+        if data.get("reply_ok") is True and m.get("id"):
+            out["reply"] = {"to": m["from"], "reply_to": m["id"]}
     return out
 
 

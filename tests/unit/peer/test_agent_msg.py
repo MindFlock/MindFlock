@@ -164,6 +164,42 @@ def test_gated_session_has_no_reply_address(svc, engine):
     assert "send_message" not in line
 
 
+def test_the_sandboxed_session_answers_over_its_link(theirs, engine):
+    """A gated session's agent (its MCP's agent_msg op) answers another
+    person's agent: the reply leaves as from the shared-folder session and
+    names their id."""
+    from types import SimpleNamespace
+
+    from backend.peer import agent_api
+
+    theirs.transport.answers["sessions"] = {"sessions": [item("bob-a")]}
+    run(theirs.refresh_their_sessions(LID))
+    lnk = link(share_id=SHARE_ID, session_title="peer-bob-abab")
+    theirs.store.links[LID] = lnk
+    theirs.shared_sessions.add(LID, "peer-bob-abab", "gated")
+    got = op(theirs, lnk, "agent_msg", req(title="peer-bob-abab", from_title="bob-a"))
+    api = agent_api.AgentApi(
+        SimpleNamespace(run="/nonexistent"),
+        LID,
+        "t" * 32,
+        theirs,
+        "peer-bob-abab",
+    )
+    (pub,) = [
+        agent_api._public_msg(m, LID)
+        for m in mailbox.fetch("peer-bob-abab", unread_only=False)["messages"]
+    ]
+    assert pub["untrusted"] is True
+    assert pub["reply"] == {"to": "Bob::bob-a", "reply_to": got["id"]}
+    args = agent_api.validate_args("agent_msg", dict(pub["reply"], text="done"))
+    out = run(api._op_agent_msg(args, None))
+    assert out["to"] == "Bob::bob-a" and out["delivered"] is True
+    p = [p for _l, o, p in theirs.transport.requests if o == "agent_msg"][-1]
+    assert p["title"] == "bob-a" and p["from_title"] == "peer-bob-abab"
+    assert p["reply_to"] == req()["msg_id"] and p["msg_id"] == out["msg_id"]
+    wire.validate_request("agent_msg", p)
+
+
 def test_the_chain_depth_crosses_the_link(svc, engine, monkeypatch):
     monkeypatch.setenv("MINDFLOCK_MSG_MAX_HOPS", "6")
     svc.shared_sessions.add(LID, "api-fix", "full")

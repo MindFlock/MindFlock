@@ -140,3 +140,21 @@ def test_check_inbox_says_a_cross_user_message_is_untrusted():
     by = {m["from"]: m for m in msgs}
     assert "ANOTHER PERSON" in by["Bob::fix-login"]["untrusted"]
     assert "untrusted" not in by["w1"]
+
+
+def test_check_inbox_gives_the_reply_address_only_when_answerable():
+    box, api, clock = _box()
+    shared = api.deliver(
+        "orch", "Bob::fix-login", "a", data={"peer": True, "reply_ok": True}
+    )
+    api.deliver("orch", "Bob::private", "b", data={"peer": True, "reply_ok": False})
+    api.deliver("orch", "w1", "c", data={"peer": True, "reply_ok": True})
+    msgs = box.check_inbox({}, FakeCtx(clock))["messages"]
+    by = {m["from"]: m for m in msgs}
+    assert by["Bob::fix-login"]["reply"] == {
+        "to": "Bob::fix-login",
+        "reply_to": shared["id"],
+    }
+    # Their session is not shared with me: a reply would be refused.
+    assert "reply" not in by["Bob::private"]
+    assert "reply" not in by["w1"]

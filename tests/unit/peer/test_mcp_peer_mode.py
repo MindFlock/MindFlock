@@ -251,6 +251,8 @@ def test_instructions():
         "secret",
     ):
         assert needle in low, needle
+    # Another person's agent ("<peer>::<title>") is answered with peer_send.
+    assert "<peer>::<title>" in text and "peer_send(to=" in text
     h = peer_harness({"MINDFLOCK_MCP_MODE": "peer"})
     assert h.init()["result"]["instructions"] == text
     h.close()
@@ -378,6 +380,46 @@ def test_all_tools_over_unix_socket_only(env, live, share, svc, no_network):
     h.close()
 
 
+def test_peer_send_to_a_row_answers_another_persons_agent(env, svc, no_network):
+    """A gated session answers "Bob::planner" (another person's agent in a
+    session Bob shares on this link): peer_inbox gives the reply address,
+    peer_send(to=...) sends it as the agent_msg op — still 10 tools."""
+    got = mailbox.post(
+        TITLE,
+        "can you rebase?",
+        sender="Bob::planner",
+        data={"peer": True, "link_id": LINK, "reply_ok": True, "mode": "gated"},
+        delivery="inbox",
+    )
+    h = peer_harness(env)
+    h.init()
+    assert len(h.request("tools/list")["result"]["tools"]) == 10
+    (m,) = json.loads(text_of(h.call("peer_inbox", {})))["messages"]
+    assert m["untrusted"] is True
+    assert m["reply"] == {"to": "Bob::planner", "reply_to": got["id"]}
+
+    sent = json.loads(text_of(h.call("peer_send", dict(m["reply"], text="done"))))
+    assert sent == {"msg_id": "x1_abcd", "to": "Bob::planner", "delivered": True}
+    assert svc.calls[-1][:3] == (
+        LINK,
+        "agent_msg",
+        {
+            "title": "planner",
+            "text": "done",
+            "from_title": TITLE,
+            "reply_to": got["id"],
+        },
+    )
+    # Without to: today's message to the peer's shared-folder session.
+    h.call("peer_send", {"text": "plain"})
+    assert svc.calls[-1][1] == "msg"
+    # A row of another person (not this link's peer) is refused.
+    resp = h.call("peer_send", {"text": "x", "to": "Eve::planner"})
+    assert resp["result"]["isError"] is True and "not Bob's" in text_of(resp)
+    assert no_network == []
+    h.close()
+
+
 def test_peer_errors_surface_as_tool_errors(env, svc):
     svc.connected = False
     h = peer_harness(env)
@@ -404,7 +446,9 @@ def test_wrong_token_is_unauthorized(env):
         ("peer_send", {}),
         ("peer_send", {"text": ""}),
         ("peer_send", {"text": "x" * 20001}),
-        ("peer_send", {"text": "x", "to": "orchestrator"}),
+        ("peer_send", {"text": "x", "to": ""}),
+        ("peer_send", {"text": "x", "to": "x" * 267}),
+        ("peer_send", {"text": "x", "link_id": "cd" * 16}),
         ("peer_inbox", {"wait_s": 5000}),
         ("peer_inbox", {"title": "orchestrator"}),
         ("peer_get_diff", {"max_chars": 10}),
