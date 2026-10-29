@@ -18,6 +18,7 @@
  * open/closed state is per source.
  */
 
+import { PlanSelect } from "../flights/PlanSelect";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api } from "../../api/client";
 import {
@@ -2568,6 +2569,15 @@ function TicketSourceEditor({
               <span className="set-hint">After the agent finishes. Merge is per ticket only.</span>
             </label>
           </div>
+          {/* The flight plan this source's tickets follow (docs/flights.md):
+              "" = the built-in ticket plan, cut at the Fast-track above. */}
+          <PlanSelect
+            kind="tickets"
+            className="tk-plan"
+            field={{ attr: "data-tk-field" }}
+            value={source.plan || ""}
+            onChange={(plan) => onChange({ plan })}
+          />
           {/* BASIC vs ADVANCED. Everything above is what a first setup needs to
               get tickets flowing; the per-queue tuning and the catalog's
               `advanced` extras (claim label, move on start…) fold away here.
