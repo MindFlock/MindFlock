@@ -34,15 +34,18 @@ The words are birds', never planes' — MindFlock is a flock:
 | **flight** | one run of a flyway — one ticket, one PR, one scheduled job, or something you started by hand | a *flight* |
 | **stop** | one box on the line: a *robot* stop the server carries out by itself | a *step* |
 | **perch** | a stop that waits on you: the flight perches, pings you, and flies on when you press **Done** | a step of kind `you` |
+| **sky** | the open space where every flight is drawn: Flights' first tab, a pannable, zoomable plane | (UI only) |
+| **line** | one session's row of blocks in the sky: its session box, its workers, its stops or rungs, and the trailing + | (UI only) |
 
 Glossary in one line: *flyway* = the route, *flight* = one run, *stop* = one
-box, *perch* = a stop that waits on you. "Take off", "In flight" and "Landed"
+box, *perch* = a stop that waits on you, *sky* = the open space where every
+flight is drawn, *line* = one session's row of blocks. "Take off", "In flight" and "Landed"
 are what they sound like. The glyph is a small bird, never ✈. Only the words
 changed: every field and route keeps its name (`plans`, `steps`,
 `/api/flights/...`).
 
-Every flight has exactly one session (a worktree + an agent) and the Board
-shows where on its flyway each flight is. Clicking a flight opens its session.
+Every flight has exactly one session (a worktree + an agent) and the Sky
+draws every session as a line, a bird on the stop each flight is at.
 
 ### What stays, what folds in
 
@@ -51,14 +54,14 @@ and their stores are untouched:
 
 | Old surface | In Flights | Store (unchanged) |
 |---|---|---|
-| Intake lists (tickets / PRs / issues ready to start) | **Board → Waiting to fly**: each eligible item is a flight that has not taken off, under its kind's heading with a kind badge, a **Fly** button and the flyway as chips | pipeline `state.json`, settings sources |
+| Intake lists (tickets / PRs / issues ready to start) | **Sky → the intake lane and the drawer's Waiting to fly**: each eligible item is a flight that has not taken off, under its kind's heading with a kind badge, a **Fly** button and the flyway as chips | pipeline `state.json`, settings sources |
 | Intake source cards + Auto-start switches | **Sources** tab (the existing tab components, mounted as they are) | settings |
-| Verify checklists | a **Verify** stop on a flyway; the checklists list is the **Checklists** tab; open checklist items perch the flight on the Board | `test_plans.json` |
+| Verify checklists | a **Verify** stop on a flyway; the checklists list is the **Checklists** tab; open checklist items perch the flight (the Sky's drawer lists it) | `test_plans.json` |
 | Schedule (templates) | **Schedule** tab (the existing templates view); a flyway may also carry its own schedule trigger | `session_templates.json` |
 | Fast-track depth (off→commit→push→pr→merge) | the **ship** stops of a flyway; a per-source depth still works and maps to the plain ship ladder at that rung (the agent, then commit → … → the depth — nothing else); an armed ⏩ is drawn as rung boxes on the session's line ([The session diagram](#the-session-diagram)) | `autopilot.json` |
 
 The top bar shows **Flights** where Intake / Verify / Schedule were. `Alt+I`
-opens Flights (Board), `Alt+V` opens it on Checklists, `Alt+S` on Schedule.
+opens Flights (the Sky), `Alt+V` opens it on Checklists, `Alt+S` on Schedule.
 The badge counts what waits on you: flights perched on you, plus Verify's
 due/failing checklists, plus items waiting to fly that will not auto-start.
 
@@ -69,7 +72,7 @@ due/failing checklists, plus items waiting to fly that will not auto-start.
 Every way work arrives ends in the same start path, and every one of them can
 put the new session on a flight:
 
-- **Intake / the Board's Waiting to fly** — **Fly** on a ticket, pull
+- **Intake / the Sky's Waiting to fly** (its intake lane and drawer) — **Fly** on a ticket, pull
   request or issue (`POST /api/tickets/start`, `/api/github/prs/review`,
   `/api/github/issues/start`, or `POST /api/flights/start` with a `subject`,
   which runs the very same code). The flyway chips send `plan`; leaving them
@@ -92,7 +95,7 @@ Which flyway (`plan`), in order:
    sessions exactly as it always did.
 
 The flight is armed on the session's title **before the session exists** (an
-intake title is deterministic), so the item is "in flight" on the Board and in
+intake title is deterministic), so the item is "in flight" in the Sky and in
 the sidebar's provisioning row from the first second, and survives a server
 restart mid-launch. Its first agent step is the session's first prompt — the
 ticket / PR / issue prompt Intake always built — with the step's own text (if
@@ -115,7 +118,7 @@ run_loop`, beside the templates' own schedules), so they stop with it: a server
 with that addon disabled fires neither.
 
 A run is **skipped** (and says so in the plan's history, with a refetch of the
-Board) while the plan's previous flight is still in the air or its session is
+Sky) while the plan's previous flight is still in the air or its session is
 working, asking a question or at a usage limit — a schedule never stacks
 flights. A run that can't take off (no folder set, the agent not installed) is
 a failed run with the reason. The plans list (`GET /api/flights/plans`) shows a
@@ -199,7 +202,7 @@ editor's palette and forms are driven by the server):
 | `agent` | robot | `prompt` (text; placeholders `{ticket}`, `{pr}`, `{branch}`, `{subject}` filled by the server), `fresh` (bool: start a new session for this step instead of reusing the flight's) | the session's turn ended and settled (same gates as autopilot's `_agent_settled`: idle ≥30s, nothing queued, no background job, not usage-limited; plus `worked_at` evidence) |
 | `ship` | robot | `lane`: `commit` \| `push` \| `pr` \| `merge`; `ask_first` (bool); `message` (optional commit message hint) | the autopilot record armed with `source="flight"` reaches `done`; a `halted` record fails the step with its reason (the autopilot's own fix hand-off runs first) |
 | `verify` | robot (+you) | `who`: `agent` \| `you` \| `both` (default both); `wait_live` (bool: wait until the branch is on the live branch + deploy delay, default false) | the checklist exists for (repo, branch) and every step is settled; open *you* items park the flight as waiting on you with a deep link to the checklist |
-| `you` | you | `text` (what to do), `items` (list of strings, optional checklist), `notify` (bool, default true) | you press **Done** (or **Skip**) on the Board, the pane strip, or the bell |
+| `you` | you | `text` (what to do), `items` (list of strings, optional checklist), `notify` (bool, default true) | you press **Done** (or **Skip**) in the Sky (its box, or the drawer), the pane strip, or the bell |
 | `wait` | robot | `minutes` (int) or `until` ("HH:MM" local) | the time has passed |
 | `reviews` | robot | `quiet_minutes` (default 10), `max_rounds` (default 5), `include_bots` (default true) | the PR has had no new unresolved review comments for `quiet_minutes`; each batch of new comments is sent to the agent (the pipeline's consolidated PR prompt) followed by an automatic push; `max_rounds` reached → fail |
 | `checks` | robot | `timeout_minutes` (default 60) | the PR's checks are all passing; a failing check → fail (so `on_fail: agent` hands the failing check names to the agent and re-waits) |
@@ -356,23 +359,10 @@ dialog's field look, a prompt its prompt box, a number a field with its unit
 **Dialog** `#flights-dialog` (`frontend/src/components/flights/`, CSS prefix
 `fl-`), tabs:
 
-1. **Board** — the live view. Four groups, loudest first:
-   - *Needs you*: flights perched on you (the card's canvas opens the perch
-     with its checklist, **Done** / **Skip**), halted flights (**Retry** /
-     **Skip**), Verify checklists due or failing (a row that opens it on
-     Checklists).
-   - *In flight*: one card per flight — the subject headline, the bird and
-     the flyway, the session, the current stop and its time, a ⋯ (Open
-     session, Pause/Resume, Cancel) — and the session's live diagram,
-     compact, on one row. Clicking the card **opens the session**
-     (`selectSession`, dialog closes).
-   - *Waiting to fly*: the Intake items that are eligible and have no
-     session, grouped by kind under **Tickets** (badge "Ticket", tracker +
-     id), **Pull requests** (badge "PR", repo + #number) and **Issues** (badge
-     "Issue", repo + #number); each row: the headline, where it will go, the
-     badge, the flyway as a chip row (default = the source's flyway) and one
-     action, **Fly**. Flying selects the new session as soon as it exists.
-   - *Landed* (collapsed): finished flights, last 20.
+1. **Sky** — the open expanse ([The Sky](#the-sky)); it replaced the Board
+   (`board` / `#flights/board` still land here) and the Board's groups live
+   on in its drawer. On this tab the dialog takes the whole window
+   (`.sky-full`).
 2. **Flyways** — the editor (tab id `plans`). Left: the flyway list
    (built-ins marked). Right: the flyway on the canvas, the stop palette, the
    inspector for the selected stop (its fields in the controls above, `on_fail`
@@ -400,8 +390,10 @@ finishes.
 Map (header item `flight`), drawing [the session diagram](#the-session-diagram)
 full width. It shows once the session has anything to draw (a flight, workers,
 a parent, an armed fast-track), badged **!** while perched on you or halted;
-the session ⋯ menu's **Fly a flyway…** opens it on any session. With nothing
-on the line it also offers the flyways as cards (**Fly this flyway**,
+the session ⋯ menu's **Fly a flyway…** opens it on any session, **Show in the
+Sky** opens the Sky on it, and the tab's own **Open in the Sky** does the same
+(`#flights/sky/<title>`). The bird stands on the line's active box. With
+nothing on the line it also offers the flyways as cards (**Fly this flyway**,
 built-ins first, the stops as tiny boxes) and **Describe a flyway…** (describe
 `want=plan` → `POST /api/flights/plans` → `POST /api/flights/start` with this
 session's `title`).
@@ -417,8 +409,54 @@ soon as the row exists, the way `templateRun.ts` already does.
 **Phone.** No canvas: a session perched on you gets a card with the bird,
 `<flyway> · Perch: <stop>`, and **Done** / **Skip**.
 
-**Tours.** A short `flights` CoachTour (`lib/tours/flights.ts`): Board, a
-flight's live canvas, Flyways, Describe a stop.
+**Tours.** A short `flights` CoachTour (`lib/tours/flights.ts`): the sky
+(`data-tour="flights-sky"`), the bird (`flights-bird`), + New session
+(`flights-newblock`), Flyways, Describe a stop.
+
+### The Sky
+
+Flights' first tab (`components/flights/Sky.tsx`, the pure rules in
+`lib/skyLayout.ts`) — the big open expanse where every session floats:
+
+- **One plane**, panned and zoomed as a whole: one `translate(x, y)
+  scale(z)` container, no library. Drag on empty sky pans (mouse and touch),
+  the wheel scrolls, Ctrl/⌘+wheel and a pinch zoom (0.4×–2×) about the
+  pointer, Space+drag pans from anywhere, 0 fits; the toolbar has the zoom
+  readout, **Fit** and **100%**. A faint dot grid scales with it, in both
+  themes (a white expanse in the light one).
+- **Every session is a line**: its [session diagram](#the-session-diagram)
+  (the same canvas, live, with its + / palette / inspector — `useSessionLine`,
+  shared with the pane's Flight tab) under a title bar (name, state chip, ⋯:
+  Open session · Show only this line · Fly a flyway… · Close session) that
+  drags it anywhere. A dragged line's spot is remembered per device
+  (`localStorage` `mf_sky_pos`, `{title: {x, y}}`); the rest are auto-placed
+  by `placeLines(lines, saved, area)` — rows, newest at the top, never
+  overlapping. A new session appears on the next poll; a closed one's line
+  fades out. Hidden helpers (`hidden_by`) are never drawn.
+- **The bird** (`birdPerch(diagram) -> {nodeId, tone} | null`, the canvas's
+  `bird` prop): on the flight's current stop, else the fast-track's current
+  rung, else the session box while its agent works (or asks you); none when
+  it idles with nothing armed. It bobs while working, sits gold and still
+  perched on you, red halted, and hops (a left/top transition) to the next
+  box.
+- **Build from the space**: a double-click on empty sky, or **+ New
+  session**, opens a `NewSessionBlock` card there (`{x, y, plans, onCreated,
+  onCancel}`) that creates the session through the New dialog's path, then
+  — a flyway picked — `POST /api/flights/start {plan_id, title}`; the new
+  line takes the card's spot.
+- **Views** (toolbar chips): **All** (every session, workers on their own
+  lines), **Mine** (default: top-level sessions, workers folded into their
+  parent's line), **Perched on you**, **This session** (one line, fit —
+  `#flights/sky/<title>`); a find field filters by name or task.
+- **The intake lane** (`IntakeLane {rows, plans, onFly, width?}`) pinned at
+  the plane's left edge: the sources as blocks with their waiting items and
+  arrows to the lines they started.
+- **The drawer** (`SkyDrawer.tsx`) at the right edge, foldable: *Perched on
+  you* (each perched or halted flight with its perch block — checklist,
+  **Done** / **Skip**, or **Retry** — and Verify's due or failing checklists),
+  *Waiting to fly* (folded; kind badges, flyway chips, **Fly**) and *Landed*
+  (folded).
+- **Phone**: no pan or zoom — the lines as a list, each canvas top to bottom.
 
 ### The session diagram
 
@@ -466,7 +504,7 @@ Toggling ⏩ fast-track on a session therefore shows up as rung boxes appearing
 on its line (the ⏩ code path itself is unchanged), and adding a ship stop
 through + when no fast-track is armed just works through the flight. The same
 diagram, compact and on one row (no family; the session box counts its
-workers), is each card of the Board's *In flight* and *Needs you* groups.
+workers), is each card under the Sky drawer's *Landed*.
 
 ### Frontend notes (not contract: what the UI does where the contract is open)
 
@@ -694,6 +732,6 @@ had to choose. Field and route names are unchanged.
 | Routes | `backend/web/routes/flights.py` |
 | Describe-a-step one-shot | `backend/web/core/flight_describe.py` |
 | Intake / schedule / verify hooks | `ticket_start.launch`, `pr_review.launch`, `issue_start.launch`, `server.py` (`_intake_plan`, `_arm_intake`, the result route's `session.test_plan_settled`), `ticket_ingestion/session_runner.py` (`_arm`), `template_schedule.py` (`tick_flights`), `pending.py` (the provisioning row's `flight`) |
-| Frontend | `frontend/src/components/flights/` (FlywayCanvas, SessionFlight, Board, PlanEditor = the Flyways editor, StopParts, controls, Bird, useWaiting), `frontend/src/lib/flights.ts`, `flightDiagram.ts` (the canvas's model and the session diagram), `flightsApi.ts`, `tours/flights.ts`; the pane's Flight tab in `components/grid/Pane.tsx` |
+| Frontend | `frontend/src/components/flights/` (Sky + SkyDrawer = the Sky, IntakeLane, NewSessionBlock, FlywayCanvas, SessionFlight, useSessionLine, PlanEditor = the Flyways editor, StopParts, controls, Bird, useWaiting), `frontend/src/lib/flights.ts`, `flightDiagram.ts` (the canvas's model, the session diagram and `birdPerch`), `skyLayout.ts` (the Sky's placement, camera, views), `flightsApi.ts`, `tours/flights.ts`; the pane's Flight tab in `components/grid/Pane.tsx` |
 | Tests | `tests/unit/test_flights*.py`, `frontend/src/__tests__/flights*.test.ts`, `flightDiagram.test.ts` |
 | CLI | `mindflock flights` (list), `mindflock flight flyways` (alias `plans`), `mindflock flight start <flyway> [--repo …] [--title …]`, `mindflock flight done\|skip\|cancel <id>` (`backend/cli.py`) |
