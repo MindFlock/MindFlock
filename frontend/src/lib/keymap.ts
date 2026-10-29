@@ -23,6 +23,7 @@
 
 import { selectRailKey, undoLastClose } from "./sessionActions";
 import { CHORD_ACTIONS, chordDesc, runChordAction, sessionAction, type SessionActionId } from "./sessionActionTable";
+import { ASK_WORKERS_KEYS, FLOCK_KEYS } from "./workersRequest";
 import { toast } from "./toast";
 import { notePrefWrite } from "./prefs";
 import { useUi } from "../state/store";
@@ -474,6 +475,14 @@ function _handleChordKey(e: KeyboardEvent) {
 
 // --- The keymap table --------------------------------------------------------
 
+/** Alt+G / Alt+Shift+G: a focused session, no dialog over it, and the keyboard
+ * in its terminal or nowhere in particular — never a text field's keystroke. */
+export function workersKeyAllowed(): boolean {
+  if (!useUi.getState().focused) return false;
+  if (overlayOpen()) return false;
+  return terminalFocused() || !isEditingTarget(document.activeElement);
+}
+
 /** Ctrl+W / Delete: the table's Close, on the focused session. */
 function closeFocused() {
   const f = useUi.getState().focused;
@@ -643,6 +652,40 @@ export const KEYMAP: KeymapEntry[] = [
     aliasOf: "close", // browser-safe alias
     when: () => endShortcutAllowed(),
     run: () => closeFocused(),
+  },
+  {
+    // MindFlock workers without typing the ask (lib/workersRequest). Alt, like
+    // Alt+I / V / S: Ctrl+G is the pane find bar's "next match" and Ctrl+W is
+    // Close; Alt+W is already that find bar's "whole word" while it is open,
+    // and Alt+F opens Chrome's menu on Windows. Alt+G is free in Chrome,
+    // Electron and the pane find bar on Windows, macOS and Linux (Option+G
+    // types © on a Mac, and bash's rarely used M-g glob-complete — both
+    // prevented here). Unlike Alt+I it fires FROM a terminal — that is where
+    // you are when you want workers — but a text field outside one keeps the
+    // keystroke, and nothing happens behind a dialog.
+    key: "g",
+    alt: true,
+    id: "workers",
+    help: ["Focused session", ASK_WORKERS_KEYS, "Ask for workers — types the workers request into the focused session (finish it, or press Enter)"],
+    when: () => workersKeyAllowed(),
+    run: () => {
+      const f = useUi.getState().focused;
+      if (f) runChordAction("askWorkers", f);
+    },
+  },
+  {
+    // Its sticky twin: Flock mode adds the request to every prompt sent there.
+    // Its own id (not a pairOf) so the sheet lists and rebinds it on its own.
+    key: "g",
+    alt: true,
+    shift: true,
+    id: "flock",
+    help: ["Focused session", FLOCK_KEYS, "Workers on every prompt — turn the focused session's Flock on or off"],
+    when: () => workersKeyAllowed(),
+    run: () => {
+      const f = useUi.getState().focused;
+      if (f) runChordAction("flock", f);
+    },
   },
   {
     key: "t",

@@ -70,6 +70,15 @@ import { mapHasState, mapTabBadge } from "../../lib/mapEntry";
 import { TabIcon } from "./TabIcon";
 import { hereWords, isPeerRow, peerPaneStrip } from "../../lib/peerSessions";
 import { guestName, isPeerFocus, useGuestFocus } from "../../lib/guestFocus";
+import { shortcutLabels } from "../../lib/keymap";
+import {
+  ASK_WORKERS_KEYS,
+  FLOCK_KEYS,
+  flockAvailable,
+  flockChipLabel,
+  flockTooltip,
+  toggleFlock,
+} from "../../lib/workersRequest";
 
 /** "thread" is the Thread tab (the session's workers and what was said
  * between them), opened by its own button or store.threadOpen. */
@@ -710,6 +719,10 @@ export function Pane({
   const sharedFolder = !!inst.peer_share;
   const ns = nextStep(inst);
   const ft = fastTrackStep(inst);
+  // Flock (workers on every prompt): this machine's own sessions, never a
+  // guest's, a peer's, a shared folder or another device's.
+  const flockShown = flockAvailable(inst, config);
+  const flockOn = !!inst.flock;
   // ↺ is the owner's: never on a peer's session.
   const rs = theirs ? null : resetStep(inst);
   const step = liveStep(inst);
@@ -1158,6 +1171,27 @@ export function Pane({
           {/* The keyboard is one person's at a time (lib/presence): "Driving"
               / "Watching — take control", only once someone else is here. */}
           <DriveButton inst={inst} me={me} />
+          {/* Flock: workers on every prompt (lib/workersRequest). A CONTROL
+              like ⏩, never a .stagechip (those are hidden in a pane head). */}
+          {flockShown && (
+            <button
+              key="flock"
+              className={"nextstep nextstep-flock" + (flockOn ? " is-on" : "")}
+              type="button"
+              aria-pressed={flockOn}
+              aria-label={"Workers on every prompt: " + (flockOn ? "on" : "off")}
+              title={flockTooltip(flockOn, [
+                shortcutLabels("flock")[0] || FLOCK_KEYS,
+                shortcutLabels("workers")[0] || ASK_WORKERS_KEYS,
+              ])}
+              onClick={(ev) => {
+                ev.stopPropagation();
+                void toggleFlock(title);
+              }}
+            >
+              {flockChipLabel()}
+            </button>
+          )}
           {/* The person's buttons, in their order (Customize → Pane header). */}
           {items.buttons.map((id) => buttonEls[id])}
         </div>

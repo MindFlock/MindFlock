@@ -371,6 +371,10 @@ export interface Instance {
   /** For a shared session: who it is shared with, and whether they are
    * connected now. null/absent otherwise. */
   peer_with?: { link_id: string; name: string; connected: boolean } | null;
+  /** Flock mode ("Workers on every prompt"): while true the server adds the
+   * workers request to every prompt submitted in this session. Optional: an
+   * older server doesn't send it (lib/workersRequest). */
+  flock?: boolean;
 }
 
 /** A fence an orchestrator set on one worker: the only paths it may change
@@ -938,6 +942,10 @@ export interface Config {
    * for it and the session titles it opens. Null (or absent, older server)
    * for the owner. */
   guest?: GuestScope | null;
+  /** The workers request (Settings → General "Workers request", `{model}`
+   * already filled in) and the model it names. Absent on an older server:
+   * lib/workersRequest falls back to its default. */
+  flock?: { request: string; model: string };
 }
 
 /** What a guest link opens (`/api/config` → `guest`). */

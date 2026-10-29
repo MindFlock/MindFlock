@@ -8,7 +8,8 @@
  *   Ship     Commit… (only once there is something to commit), Push, Open PR,
  *            Merge PR, View PR, Fast-track…, Verify checklist…, Run checks now
  *   Session  Rename…, Resume (only on a paused session: there is no Pause
- *            here — the palette, `mindflock pause` and the API still pause)
+ *            here — the palette, `mindflock pause` and the API still pause),
+ *            Workers on every prompt (a ✓ switch: Flock mode)
  *   More ▸   the rare ones, folded: Terminal, Diff, Code map, Thread, Browse
  *            history, Copy entire history (pane only), Split into parallel
  *            pieces…, Duplicate, Open in the IDE,
@@ -38,6 +39,7 @@ import { openChecklist } from "./checklistLink";
 import { openSettings } from "./openSettings";
 import { PEER_SCREEN } from "./peer";
 import { copyText } from "./clipboard";
+import { flockTooltip } from "./workersRequest";
 import { errorPop } from "./errorPop";
 import { errMsg } from "./format";
 import { toast } from "./toast";
@@ -52,6 +54,8 @@ export interface MenuItem {
   title?: string;
   /** Ends in the browser: drawn with ↗. */
   external?: boolean;
+  /** A switch's state (Workers on every prompt): the label carries the ✓. */
+  checked?: boolean;
   /** Drawn, greyed, and says why in its title. */
   disabled?: boolean;
   danger?: boolean;
@@ -263,7 +267,19 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
   // No Pause here (the owner found the button pointless; the palette, the
   // CLI and the API still pause). A session that IS paused — from those, or
   // by an older build — must still come back from the menu: Resume.
-  const session = keep([fromTable("rename"), fromTable("resume", { note: actionNote("resume", ctx) })]);
+  // Workers on every prompt (Flock mode) is a switch: the ✓ says it is on,
+  // the note what it does. Same rows as Resume — this machine's own, settled.
+  const flockOn = !!inst.flock;
+  const session = keep([
+    fromTable("rename"),
+    fromTable("resume", { note: actionNote("resume", ctx) }),
+    fromTable("flock", {
+      label: (flockOn ? "✓ " : "") + "Workers on every prompt",
+      checked: flockOn,
+      note: flockOn ? "on — the workers request is added to everything you send" : actionNote("flock", ctx),
+      title: flockTooltip(flockOn),
+    }),
+  ]);
 
   const splitWhy = remote ? "" : splitBlockReason(ctx.caps, inst);
   const group = remote ? null : detachableGroup(inst);

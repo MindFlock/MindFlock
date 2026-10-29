@@ -2664,6 +2664,8 @@ built-in alias.
 | `Ctrl+W` / `Delete` | Close the focused session — moves it to Recently closed (reopen with `Ctrl+Shift+T`). Neither fires while **any** dialog or overlay is open (detected generically: the store's dialog slot, or any visible `[role="dialog"]`, `.modal`, `.dialog`, `.palette` or `[data-modal]` element, plus the bell, ⏩ picker, Prompts menu and break screen), nor while the keyboard is in an input, textarea, select, contenteditable or a terminal — `Ctrl+W` at a shell is delete-word, not "close this session". Never fires for a selected non-session window — those close from their ✕ |
 | `Ctrl+V` (in a terminal) | Paste into the PTY: an image or file on the clipboard uploads and pastes its path, plain text pastes with a "Pasted N chars" toast, and an empty clipboard event falls back to reading `navigator.clipboard`. Same in session panes and the Assistant |
 | `Ctrl+F` (in a terminal) | Find across the pane's **whole** scrollback, prefilled with a one-line terminal selection — **in the live pane**: a find bar floats top-right with an `n / total` count, the pane itself jumps to each hit, every visible hit yellow, the current one orange. It searches whatever scrollback the pane's mouse wheel moves, decided per pane, so it holds for every agent CLI. Where the app leaves the mouse to tmux (shells, codex, aider, gemini, cursor-agent, goose) it's tmux's copy-mode search. Where the app scrolls itself (Claude Code, opencode, cline) the server **indexes** everything the app would show the moment the bar opens — the window is briefly made tall at the same width, read top to bottom (PageUp/PageDown where the app pages with keys, measured wheel bursts where it doesn't), and put back — while the pane shows a frozen snapshot, so none of it is seen; the count is then instant, each step is one jump, and reopening find on an unchanged pane reuses the index. The server also keeps indexes current as the agent writes (one screen read every 1.5 s, nothing moves), and builds a missing one ahead of time for a pane nobody is using — agent idle (never while it waits on a question), no input from you for 30 s, screen still for 20 s, at most one screen attached — with that pane frozen meanwhile; any input into it cancels and snaps back. Claude Code's own pinned `❯ prompt` row is hidden the frame it's drawn (the prompt bar above mirrors it), so jumping never flashes it. Only rows that move with the content are indexed — never the input box, a status bar, a pinned prompt row or a floating hint. Only a pane that scrolls from neither (a pager on the alternate screen) opens the full-history view's find instead. Options, as in an editor: **Aa** match case (`Alt+C`), **ab** whole word (`Alt+W`), **.\*** regular expression (`Alt+R`), and **near** — a second term that must be on the same line or within N lines (1–50) of the first; both terms are highlighted and the options apply to both (matching is server-side, `core/find_query`, and painted with the same rules in the browser; the tmux path reads tmux's history rather than using tmux's own search, which can't do these). You start at the newest hit at or above what you were looking at: `Enter` / `F3` / `Ctrl+G` step **up** to older hits, add `Shift` to step back down, wrapping at the ends; `Esc` returns to live. Literal and case-insensitive unless the options say otherwise |
+| `Alt+G` | Ask for workers — types the workers request into the focused session's terminal (see [Asking for workers](#asking-for-workers)) |
+| `Alt+Shift+G` | Workers on every prompt — turn the focused session's Flock on or off |
 | `Ctrl+Shift+T` | Reopen the last-closed session |
 | `Ctrl+Enter` | Submit the commit dialog |
 
@@ -2678,6 +2680,36 @@ PR** is deliberately unbound — palette/menu only, behind an in-app confirm.
 `Alt+O` is unbound: it opened the Outbox, which is gone. A rebind saved for it
 (id `outbox` in `mf_keymap`) is dropped the next time the app loads, so it
 neither counts as a customization nor holds its old combo.
+
+### Asking for workers
+
+Asking a session to hand its task to MindFlock workers takes no typing
+(`lib/workersRequest.ts`):
+
+- **`Alt+G` — Ask for workers.** Types the workers request into the focused
+  session's terminal as one pasted chunk, then a space — never Enter — and
+  gives the terminal the keyboard: type the task after it, or press Enter if
+  the task is already above. Works from the terminal; a text field elsewhere
+  keeps the keystroke, and nothing happens behind a dialog. Also in the
+  palette (**Ask for workers — <session>**).
+- **`Alt+Shift+G` — Workers on every prompt (Flock).** A per-session switch:
+  while on, the server adds the request to every prompt submitted in that
+  session (`POST /api/instances/{title}/flock {on}`; rows carry `flock`), so
+  you type nothing extra. The pane header's **🐦 Flock** control (filled when
+  on), the row's ⋯ menu (**Workers on every prompt**, ✓ when on, under
+  Session) and the palette flip the same switch. Offered on this machine's own
+  sessions only — not a peer's, a shared folder, another device's, or to a
+  guest.
+- **Settings → General → Workers request / Workers model.** The request is a
+  template: `{model}` becomes the model (default `claude-opus-5-5`); empty uses
+  the built-in request. The server serves the filled-in text as
+  `/api/config` → `flock.request`; an older server sends none and the app
+  falls back to the default.
+
+`Alt+G` because `Alt+W` is the pane find bar's whole-word switch, `Ctrl+G` its
+next-match key, and `Alt+F` opens Chrome's menu on Windows; Alt+G is free in
+Chrome, the desktop app and the find bar on Windows, macOS and Linux. Both are
+rebindable in the `?` sheet (ids `workers` and `flock`).
 
 ## New-session dialog
 
