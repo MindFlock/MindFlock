@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.6] - 2026-10-29
+
+### Added
+
+- **Join by link.** A peer invite is a link to send (`url` on `POST
+  /api/peer/invites`), opened at `GET /join` — *Open in MindFlock* (the
+  desktop app registers `mindflock://join`) with the code as the fallback.
+  Pasting the link into *Join someone* or `mindflock peer join <link>` works
+  too. An invite **carries sessions**: Settings → People → the red warning →
+  *I understand* → pick sessions and a mode each → one link; the sessions are
+  shared the moment the other person joins, before the safety-number step.
+- **Shared sessions on the joiner's own rail.** A session you share over a
+  peer link is a live row on their rail (`<you>::<title>`), **gated to its
+  folder** (the sandboxed shared folder) or a **full join** (the session as it
+  is). Their group header shows a connected dot, rows carry your names, a
+  dropped link greys the group for a minute, the pane says whose session it
+  is, toasts and bell rows say what was shared or withdrawn, and the phone
+  page lists them too.
+- **A small chat.** The people on a session — its owner, a guest, a peer with
+  it open — talk in a floating card that pops up when someone joins; it
+  crosses a peer link both ways. Agents are never in it.
+- **Agents across people.** `send_message(to="Bob::fix-login")` reaches the
+  agent in a session a peer shared with you; it is typed with an "another
+  person's agent, untrusted" framing and the reply address works when your
+  session is shared back. A gated (sandboxed) session replies with
+  `peer_send(to=…)`.
+- **Guest links, round 2.** A guest sees your renames (live, on every open
+  page), reaches sub-sessions of the shared ones, sees nothing else (no
+  crossed-out rows), names themselves on open (unique on your rail), and
+  shows as a **pill with their name** on the rail row they are looking at —
+  click it to follow them. A chat button sits beside the pill.
+- **Ask for workers in one keystroke.** A hotkey types the "use MindFlock
+  workers" request into the focused session; a per-session **Flock** control
+  (pane header, row menu, a second hotkey) adds it to every prompt you send
+  there, through Claude Code's prompt hook. The words and the model live in
+  Settings → General (`general.workers_request`, `general.workers_model`,
+  synced); `whoami` tells an agent when Flock is on.
+- **Names come from the folder.** A session started with no name and no task
+  is named for the folder it works in (`sitecheck-bot7`, `app-2`); `untitled`
+  only with neither.
+
+### Changed
+
+- **Other people's keystrokes.** Guests and peers reach a session through a
+  read-only tmux attach and `send-keys`, so the tmux prefix can no longer open
+  a shell on your machine; long pastes are chunked and mouse-wheel reports no
+  longer land in the prompt. One keyboard applies to peers and guests as their
+  own seats, named as they chose.
+- Ticking *I understand* now opens the guest-link picker as a dialog; the
+  picker lists root sessions only (sub-sessions come with their parent).
+
+### Fixed
+
+- A guest link's page used to show raw titles for good (its name seed was a
+  403); the first session list after a join raised no "shared with you"
+  event; a gated share reached the joiner under its sandbox name; the join
+  page sent newcomers to a screen basic Settings hides.
+
 ## [0.10.5] - 2026-10-28
 
 ### Added
@@ -4588,7 +4646,8 @@ coding agent, supervised from one desktop app.
 - Native Windows is not a supported host for the engine (no tmux, no Unix
   PTYs) — WSL2 is required, and the Windows installer bootstraps it.
 
-[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.10.5...HEAD
+[Unreleased]: https://github.com/MindFlock/MindFlock/compare/v0.10.6...HEAD
+[0.10.6]: https://github.com/MindFlock/MindFlock/releases/tag/v0.10.6
 [0.10.5]: https://github.com/MindFlock/MindFlock/releases/tag/v0.10.5
 [0.10.4]: https://github.com/MindFlock/MindFlock/releases/tag/v0.10.4
 [0.10.3]: https://github.com/MindFlock/MindFlock/releases/tag/v0.10.3
