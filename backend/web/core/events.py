@@ -140,6 +140,12 @@ EVENT_NAMES = (
     # runs say the same through ``test_plan_checked``; this is the hand-answered
     # half, so the bell hears about every failed checklist. Once per transition.
     "session.test_plan_step_failed",
+    # A PERSON answered the last open human item of a checklist (data:
+    # {"plan", "title", "branch"}). The hand-answered twin of
+    # ``test_plan_checked``: once per transition from "something is yours" to
+    # "nothing is", so a flight's verify step waiting on you moves on at once
+    # rather than at the driver's next pass.
+    "session.test_plan_settled",
     # A run was RELEASED without ever reporting (data: {"plan", "title",
     # "run_session", "hours", "reason"}). Two things end a run this way — an
     # agent window that died, and the two-hour deadline — and both used to be
@@ -241,7 +247,10 @@ EVENT_NAMES = (
     #
     # Any state / cursor / step change of a flight (data: {"id", "plan_name",
     # "session", "state", "cursor", "step": {"id", "kind", "title", "state"},
-    # "reason", "detail"}). For UI refetch only; no rule notifies on it.
+    # "reason", "detail"}). Also, from core.template_schedule, a scheduled
+    # plan's run that made NO flight — skipped or refused (data: {"id": "",
+    # "plan_id", "plan_name", "trigger", "skipped"|"error", "detail"}). For UI
+    # refetch only; no rule notifies on it.
     "flight.changed",
     # A flight parked on a *you* step (or a verify step with open human
     # checklist items, or a failure handed to you), once per step and round —

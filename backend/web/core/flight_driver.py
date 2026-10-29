@@ -86,6 +86,7 @@ WAKE_EVENTS = frozenset(
         "session.deleted",
         "session.pushed",
         "session.test_plan_checked",
+        "session.test_plan_settled",
         "session.pr_review_changed",
         "session.created",
     }

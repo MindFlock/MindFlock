@@ -10840,7 +10840,9 @@ def record_test_plan_result(plan_id: str, payload: dict) -> JSONResponse:
     step_id = str(payload.get("step_id", "") or "").strip()
     result = str(payload.get("result", "") or "").strip()
     note = str(payload.get("note", "") or "")
-    was_failing = bool(_test_plans.failed_steps(_test_plans.get(plan_id) or {}))
+    before = _test_plans.get(plan_id) or {}
+    was_failing = bool(_test_plans.failed_steps(before))
+    was_open = bool(before) and bool(_test_plans.open_human_steps(before))
     try:
         plan = _test_plans.record_result(plan_id, step_id, result, note, by="human")
     except ValueError as err:
@@ -10855,7 +10857,41 @@ def record_test_plan_result(plan_id: str, payload: dict) -> JSONResponse:
         )
     if result == "fail" and not was_failing:
         _announce_step_failed(plan, step_id)
+    if was_open and not _test_plans.open_human_steps(plan):
+        _announce_settled(plan)
     return JSONResponse({"ok": True, "plan": plan})
+
+
+def _announce_settled(plan: dict) -> None:
+    """``session.test_plan_settled``: a person just answered the last open
+    human item of a checklist a flight's verify step is waiting on — the
+    flight driver's cue to move on now (``session`` is that flight's
+    session). Nothing waits on it otherwise, so nothing is said."""
+    pid = str(plan.get("id") or "")
+
+    def _waits(f: dict) -> bool:
+        step = _flights.step_view(f)
+        if f["state"] != "waiting_you" or step.get("kind") != "verify":
+            return False
+        return str(f["step_states"][step["id"]]["detail"].get("plan") or "") == pid
+
+    try:
+        flights = _flights.list_flights(include_finished=False)
+        waiting = next((f for f in flights if _waits(f)), None)
+        if waiting is None:
+            return
+        _events.BUS.emit(
+            "session.test_plan_settled",
+            session=waiting["session"],
+            data={
+                "plan": pid,
+                "title": plan.get("title") or pid,
+                "branch": plan.get("branch") or "",
+                "flight": waiting["id"],
+            },
+        )
+    except Exception:  # noqa: BLE001 — an announcement never fails the answer
+        pass
 
 
 def _announce_step_failed(plan: dict, step_id: str) -> None:
