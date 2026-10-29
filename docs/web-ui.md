@@ -3721,105 +3721,184 @@ are repositories it will never touch.
 
 ## Flights
 
-**One route from arrival to merge** (`docs/flights.md` is the design
-contract). A ticket, a pull request, an issue or a scheduled job is a
-**flight**: one run of a **plan**, bound to one session. A plan is a row of
-**blocks** (steps): a *robot* block MindFlock carries out by itself (the agent
-works, commit, push, open a PR, wait for reviews to settle, wait for checks,
-verify, a shell command, move the ticket, notify), or a *you* block where the
-flight parks, pings you, and waits until you press **Done**. Intake, Verify and
-Schedule were three sides of that journey; they are tabs here now.
+**One route from waiting to landed** (`docs/flights.md` is the design
+contract). The words are birds', never planes': a **flyway** is the route a
+flock follows — a line of **stops** (the wire's *plan* and *steps*); a
+**flight** is one run of a flyway bound to one session (a ticket, a pull
+request, an issue, a scheduled job, or something you started by hand); a
+**stop** is one box on the line — a *robot* stop MindFlock carries out by
+itself (the agent works, commit, push, open a PR, wait for reviews to settle,
+wait for checks, verify, a shell command, move the ticket, notify) — or a
+**perch**, where the flight perches until you are done and goes on when you
+press **Done**. Glossary: *flyway* = the route, *flight* = one run, *stop* =
+one box, *perch* = a stop that waits on you. The glyph is a small bird
+(`components/flights/Bird.tsx`), never ✈. Intake, Verify and Schedule were
+three sides of that journey; they are tabs here now.
 
-Top-bar **Flights** (`#flights-btn`, `Alt+I`, the palette's **Flights…**),
-dialog `#flights-dialog` / panel `#flights-panel`, from
-`frontend/src/components/flights/` (`FlightsDialog`, `Board`, `FlightStrip`,
-`PlanEditor`, `useArrivals`; CSS prefix `fl-`), with the pure rules in
-`lib/flights.ts` and the routes in `lib/flightsApi.ts`. The tab rides in the
-store's `dialogTarget` as `<tab>[/<the tab's own deep link>]`, so the URL
-follows it and every old deep link lands on its tab:
-`openDialogFor("intake", "tickets:jira")` → Sources, `("verify", <branch>)` →
-Checklists with that checklist open, `("schedule" | "templates", …)` →
-Schedule. Tabs, in order:
+Top-bar **Flights** (`#flights-btn`, the bird before the word, `Alt+I`, the
+palette's **Flights…**), dialog `#flights-dialog` / panel `#flights-panel`,
+from `frontend/src/components/flights/` (`FlightsDialog`, `Board`,
+`FlywayCanvas`, `FlightStrip`, `SessionFlight`, `PlanEditor` — the Flyways
+editor — `StopParts`, `controls`, `useWaiting`; CSS prefix `fl-`), with the
+pure rules in `lib/flights.ts` and `lib/flightDiagram.ts` and the routes in
+`lib/flightsApi.ts`. The tab rides in the store's `dialogTarget` as
+`<tab>[/<the tab's own deep link>]` (the Flyways tab keeps its wire name,
+`#flights/plans`), so the URL follows it and every old deep link lands on its
+tab: `openDialogFor("intake", "tickets:jira")` → Sources, `("verify",
+<branch>)` → Checklists with that checklist open, `("schedule" | "templates",
+…)` → Schedule.
+
+**The flyway canvas** (`FlywayCanvas.tsx`, its model in
+`lib/flightDiagram.ts`). Every flyway and every flight is drawn the same way:
+stops as boxes on a line, read left to right, with the connectors drawn
+between them (curved lines with an arrowhead) — no ports, no manual wiring:
+the order *is* the sequence. Each box has its kind's icon, its title and one
+line of config (*push*, *10 min quiet*, *who: agent*, *2 items to tick*); a
+perch is rounder, outlined in gold, with the bird on its branch. Empty space
+pans the line (scroll, or drag it with the mouse); below ~520px wide (a phone,
+a narrow pane) the line runs top to bottom with compact boxes. Live, the same
+boxes say where the flight is: done boxes dimmed with ✓, the current one
+glowing — gold when perched on you, green while the flock works, red when
+halted with the reason in the box — skipped ones struck through, pending ones
+outlined. A perch that is waiting on you opens wide in its box: its text, its
+checklist (ticking every item enables **Done**) and **Skip** (a halted stop:
+**Retry** / **Skip**). Every live box has a ⋯ (shown on hover): **Jump here**,
+**Retry** on a halted one, the flight's **Pause** / **Resume**, and **Cancel
+flight** (asked inline; the session is kept).
+
+**The session diagram.** A flight is not only a list of stops: each session's
+canvas is a *systems diagram* of what it is and what it is about to do,
+composed from the `/api/instances` rows alone
+(`lib/flightDiagram.ts` `sessionDiagram(rows, title)`): its **parent** above
+(click = go up), the **session box** (its state chip — Working, Idle, Perch:
+…, Needs you — and its headline), its **children** branching below on a
+vertical branch, each with its own state and a mini ladder (its flight's or
+its fast-track's dots; click = open it), then the line: the **fast-track's
+rungs** as boxes when ⏩ is armed and there is no flight (commit → push → PR →
+merge up to its depth, done rungs ticked from the session's git stage, the
+next one glowing, a halted one red with the reason — the same boxes as ship
+stops), or the **flight's stops** when it flies one, and always a trailing
+**+ Tack on a stop**. The + opens the stop palette and also offers **Fly a
+flyway** (all of a flyway's stops). Tacking a stop on a session with no flight
+starts an ad-hoc flight of it (`POST /api/flights/start {title, steps,
+absorb_fasttrack: true}`) that takes over the armed fast-track's remaining
+rungs, so the ladder's boxes become the flight's without a jump; on a live
+flight it appends (`POST /api/flights/{id}/steps`), and a **+** between two
+pending stops inserts there (only after the current stop). A pending stop
+opens in the inspector and is edited in place (**Save stop** — `PATCH
+/api/flights/{id}/steps/{sid}` — or **Remove stop** — `DELETE`; Delete on the
+box too); done and current ones open read-only. Toggling ⏩ on a session
+therefore shows up as boxes appearing on its line.
+
+**No native controls.** Nothing in Flights is a native `<select>` or a bare
+field: enum choices are the New dialog's segmented control (`Seg`, `.rt-seg`)
+or a wrapping chip row (the flyway choice, the agent), free text uses the New
+dialog's field look (`.fl-input` — its radius, border, background and focus
+ring), a prompt its prompt box (`.fl-prompt`), a number a field with its unit
+beside it (*10 min*), a yes/no a switch chip (`components/flights/controls.tsx`,
+styled in `FlywayCanvas.css`).
+
+Tabs, in order:
 
 1. **Board** — the live view, loudest first:
-   - **Needs you** — flights parked on a *you* step (its text, its checklist as
-     tick boxes — ticking them all enables **Done** — and **Skip**), halted
+   - **Needs you** — flights perched on you (the card's canvas opens the perch
+     wide, scrolled to it, with its checklist, **Done** and **Skip**), halted
      flights (**Retry** / **Skip**, and the reason), and Verify's checklists
      that need you or failed, one line each that opens it on Checklists.
-   - **In flight** — one strip per flight: the subject's headline, the plan,
-     its session, then the blocks as chips (✓ done · ● current, pulsing · ○
-     pending · ✗ failed · – skipped; *you* blocks outlined in the needs-you
-     gold), the current step and how long it has been there (a paused flight
-     says **Paused**), and a ⋯ (**Open session** · **Pause** / **Resume** ·
-     **Jump to…** (the chips turn into buttons; press one) · **Cancel**, asked
-     inline — the session is kept).
-     Clicking the strip opens its session and closes the dialog.
-   - **Arrivals** — Intake's eligible items with no session yet (the
-     Auto-start tab's own list, `intake/queue.ts`), grouped by source, each
-     an Intake row with a **Plan** picker (default: the source's own plan,
-     else the built-in for its kind) and **Start**. Start posts the same route
-     and body as Intake (`/api/tickets/start`, `/api/github/prs/review`,
+   - **In flight** — one card per flight: the subject's headline, the bird and
+     its flyway, its session, the current stop and how long it has been there
+     (a paused flight says **Paused**), a ⋯ (**Open session** · **Pause** /
+     **Resume** · **Cancel**), and the session's live diagram on one compact
+     row (boxes ~140px, scrolled to the current stop; the session box counts
+     its workers). Clicking the card's head opens its session and closes the
+     dialog; a box or the + opens the session on its **Flight** tab.
+   - **Waiting to fly** — Intake's eligible items with no session yet (the
+     Auto-start tab's own list, `intake/queue.ts`, read by `useWaiting`),
+     under a sub-heading per kind — **Tickets**, **Pull requests**,
+     **Issues** — with a kind badge on every row (*Ticket* · *PR* · *Issue*,
+     each in its own colour). Each row: the reference (a link) and headline,
+     where it will go (→ repo), its tracker / state / age, whether it flies by
+     itself, the **flyway** as a chip row (*Default · <built-in>* first, then
+     every flyway, built-ins first; it starts on the source's own flyway) and
+     one action, **Fly**. Fly posts the same route and body as Intake
+     (`/api/tickets/start`, `/api/github/prs/review`,
      `/api/github/issues/start`) plus `plan` when one was picked, then selects
      the new session as soon as its row exists.
    - **Landed** — finished flights, folded.
-2. **Plans** — the plan list on the left (built-ins marked; **+ New plan**)
-   and the editor on the right. The plan is a horizontal row of blocks read
-   left to right, no wires: drag a block to reorder it (or focus it and press
-   ← / →), press **+** between blocks (or at the end) for the palette — the
-   server's step registry (`GET /api/flights/kinds`), robot and *you* kinds in
-   two groups with their one-line summaries. Under the row, the selected
-   block's form, generated from its kind's fields (text, textarea, number,
-   switch, select), its title and **If it fails** (stop and tell me · hand it
-   to the agent · skip it · ask me), plus ← → **Duplicate** **Delete**. Then
-   **Starts from** (manual · ticket · pull request · issue · schedule — a
-   schedule uses Schedule's own days / time / cron editor and its preview
-   line) and, for manual and scheduled plans, the session defaults
-   (repository with Browse…, agent, model). **Describe a step…** at the end of
-   the row sends a sentence to `POST /api/flights/describe` and appends the
-   blocks it answers with, highlighted *added by description* until **Save**.
-   **Take off** saves if needed and starts a flight right away — straight into
-   the plan's repository, or, when it has none, an inline row asks for a
-   repository or an open session to fly on. **Reset to default** puts a
-   built-in back; a plan of your own has **Delete** (asked inline). Leaving
-   the tab, picking another plan or closing with unsaved changes asks first,
-   inline (*Discard unsaved changes?* — **Discard** / **Keep editing**).
+2. **Flyways** — the flyway list on the left (built-ins marked; **+ New
+   flyway**) and the editor on the right: the name, then the flyway on the
+   canvas. Drag a box to reorder it (pointer events, mouse and touch: the
+   picked box lifts, the others slide, the drop snaps into the line and the
+   connectors redraw), or select it and press ← / →; **Delete** removes it,
+   **Enter** opens it. **+** between boxes (on hover) or at the end opens the
+   stop palette, inline under the canvas: **The flock does** (robot stops) and
+   **You do** (perches), each with its kind's summary. **Describe a stop…**
+   under the canvas sends a sentence to `POST /api/flights/describe` and
+   appends the stops it answers with, highlighted until **Save**. The selected
+   stop's **inspector** (beside the canvas's foot, never a modal): its title,
+   its kind's fields in the controls above, **If it fails** (stop and tell me
+   · hand it to the agent · skip it · ask me), and **← Earlier** / **Later →**
+   / **Duplicate** / **Remove**. Then **Takes off** (by hand · ticket · pull
+   request · issue · schedule — a schedule's days as chips, its time / date /
+   cron as fields with the server's preview line, and a **Paused** switch)
+   and, for by-hand and scheduled flyways, the session defaults (repository
+   with Browse…, agent as chips, model). **Fly this flyway** saves if needed
+   and takes off right away — straight into the flyway's repository, or, when
+   it has none, an inline row asks for a repository or an open session (chips)
+   to fly on. **Reset to default** puts a built-in back; a flyway of your own
+   has **Delete** (asked inline). Leaving the tab, picking another flyway or
+   closing with unsaved changes asks first, inline (*Discard unsaved
+   changes?* — **Discard** / **Keep editing**).
 3. **Sources** — the [Intake](#intake) tabs, mounted as they are (Tickets ·
    GitHub PRs · GitHub issues · Auto-start, with + Add source). Each ticket
    source card (under *Where it goes*, beside Fast-track) and each PR / issue
-   repository card has a **Plan** picker: the flight plan its items follow —
-   *<the kind's built-in> (default)*, cut at the card's Fast-track, or any
-   other plan. It saves as `plan` on the source (`PUT
+   repository card has a **Flyway** chip row: the flyway its items fly —
+   *Default · <the kind's built-in>*, cut at the card's Fast-track, or any
+   other flyway. It saves as `plan` on the source (`PUT
    /api/settings/ticketing/sources`) or as `github.repo_settings[repo].plan` /
-   `github.issue_repo_settings[repo].plan`, and the Board's arrivals from that
-   source start on it unless their own picker says otherwise
+   `github.issue_repo_settings[repo].plan`, and the Board's waiting items from
+   that source start on it unless their own chips say otherwise
    (`components/flights/PlanSelect.tsx`; hidden on a server without flights).
 4. **Schedule** — the [Schedule](#schedule) templates view, mounted as it is.
-   A half-edited template is guarded the same way as a plan.
+   A half-edited template is guarded the same way as a flyway.
 5. **Checklists** — the [Verify](#verify) list, mounted as it is.
 
-**The pane strip.** A session a flight drives shows one line above its
-terminal, in its own row under the pane header (not inside it: the header
-hides chips): `✈ Ticket to merge · ●●●○○○ · Reviews settle (4m)`, gold when
-the flight waits on you, with **Done** / **Skip** (and the step's tick boxes)
-inline on a *you* step and a ⋯ for **Pause** / **Resume**, **Jump to…** and
-**Cancel**. While the flight drives the session (running, waiting on you or
-paused) the guided next-step button and the ⏩ fast-track toggle are hidden —
-the flight owns the ship ladder and the strip is the next step — and both come
-back once it halts or lands.
-It reads the session row's `flight` field, and the full flight from the
-flights query for the elapsed time and the blocks.
+**The pane's Flight tab** (`SessionFlight.tsx`; header item `flight` in
+Customize → Pane header, after Map). It shows once the session has a diagram
+worth drawing — a flight in the air, workers, a parent, or an armed
+fast-track (`hasSessionDiagram`) — with a gold **!** badge while the flight is
+perched on you or halted; the session ⋯ menu's **Fly a flyway…** opens it on
+any session. It draws the session diagram full width (the perch where the
+flight is opens wide, with its checklist and Done / Skip), the flight's name,
+progress and ⋯ above it, the palette and the inspector under it. With nothing
+on the line yet it also lists the flyways as cards (**Fly this flyway**,
+built-ins first, the stops as tiny boxes) and **Describe a flyway…**, which
+turns a sentence into a flyway (`describe want=plan` → saved → flown on this
+session right away).
 
-**The rail and the bell.** A flight parked on a *you* step is a Needs-you
-state (`lib/sessionState.ts`, reason `flight_you`, notify rule
-`flight_needs_you`): the row's chip says **You: <step title>** in the gold
-(width-capped with an ellipsis so the row's name stays readable; clicking it
-opens the bell), a paused flight's chip is a calm **Paused flight**, and
-the bell lists it with **Done**, **Skip** and **Open ↗** (`outbox/WaitingRow`;
-`lib/needsYou.ts` `withFlightYou` adds the row from the session's own `flight`
-field until the server's outbox lists it).
+**The pane strip.** A session in a flight shows one line above its pane body,
+in its own row under the pane header (not inside it: the header hides chips):
+the bird · `Ticket to merge · ●●●○○○ · Reviews settle (4m)` — a button that
+opens the **Flight** tab — gold when the flight is perched on you, with
+**Done** / **Skip** (and the perch's tick boxes) inline and a ⋯ for **Pause** /
+**Resume** and **Cancel**. While the flight drives the session (running,
+perched on you or paused) the guided next-step button and the ⏩ fast-track
+toggle are hidden — the flight owns the ship ladder and the strip is the next
+step — and both come back once it halts or lands. It reads the session row's
+`flight` field, and the full flight from the flights query for the elapsed
+time and the checklist.
 
-**Every start opens its session** — an arrival's Start, Take off, a template's
-Run now: `selectSession(title)` as soon as the row exists.
+**The rail and the bell.** A flight perched on you is a Needs-you state
+(`lib/sessionState.ts`, reason `flight_you`, notify rule `flight_needs_you`):
+the row's chip says **Perch: <stop title>** in the gold (width-capped with an
+ellipsis so the row's name stays readable; clicking it opens the bell), a
+paused flight's chip is a calm **Paused flight**, and the bell lists it as
+**Perched on you: <stop>** with **Done**, **Skip** and **Open ↗**
+(`outbox/WaitingRow`; `lib/needsYou.ts` `withFlightYou` adds the row from the
+session's own `flight` field until the server's outbox lists it).
+
+**Every start opens its session** — a waiting item's Fly, Fly this flyway, a
+template's Run now: `selectSession(title)` as soon as the row exists.
 
 **Live.** `useFlights` / `useFlightPlans` / `useFlightKinds`
 (`state/queries.ts`) poll every 5 s while a flight is in the air (30 s
@@ -3827,20 +3906,24 @@ otherwise, 2 min on a server without the routes), and `flight.changed`,
 `flight.needs_you` and `flight.finished` refetch at once.
 
 **Keys and the palette.** `Alt+I` opens the Board, `Alt+V` Checklists, `Alt+S`
-Schedule; the palette has **Flights…**, **Flights: Plans**, and keeps
+Schedule; the palette has **Flights…**, **Flights: Flyways**, and keeps
 **Intake…** (and each Intake tab), **Verify…** and **Schedule…** as ways onto
 their tabs.
 
 **The Flights tour** (`lib/tours/flights.ts`, the ? in the header): the Board,
-a strip, the Plans editor, Describe a step — it switches to the Plans tab for
-its last two steps.
+a flight's live canvas, the Flyways editor, Describe a stop — it switches to
+the Flyways tab for its last two steps.
+
+**The phone** (`/m`) has no canvas: a session perched on you gets a card under
+its plan card — the bird, *Ticket to merge · Perch: Approve the merge* — with
+**Done** and **Skip**.
 
 ## Intake
 
 > **Intake is the Sources tab of [Flights](#flights) now** (`Alt+I` opens
 > Flights' Board; the palette's **Intake…** and an old `#intake/…` link open
 > Sources). Everything below still holds inside that tab; its eligible items
-> are also the Board's **Arrivals**.
+> are also the Board's **Waiting to fly**.
 
 **Where your sessions come from.** Ticketing, PR review and issue handling used
 to be three screens in Settings, and they never belonged there: Settings is
