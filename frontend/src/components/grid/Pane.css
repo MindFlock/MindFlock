@@ -1359,3 +1359,17 @@
   background: color-mix(in srgb, var(--muted) 12%, transparent);
   font-style: italic;
 }
+
+/* A pane inside a Sky card (flights/SkyLine — `embedded`): the card is its
+   frame, so it fills it; nothing to grab, the header isn't a drag handle. */
+.pane.pane-embedded {
+  width: 100%;
+  height: 100%;
+  border-radius: 0 0 10px 10px;
+  border-width: 1px 0 0;
+}
+
+.pane-embedded .pane-head,
+.pane-embedded .pane-head:active {
+  cursor: default;
+}

@@ -768,3 +768,68 @@
     animation: none;
   }
 }
+
+/* --- A line's box size (the Sky's ◧) --------------------------------------- */
+
+/* Compact: the title alone, on one line, centred in its box. */
+.fl-size-compact .fl-box:not(.fl-box-add):not(.fl-box-open) {
+  justify-content: center;
+  padding: 6px 9px;
+  font-size: 12px;
+}
+
+.fl-box-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* Wide: the full title (two lines), the summary on two, and the detail. */
+.fl-size-wide .fl-box-title {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.3;
+}
+
+.fl-size-wide .fl-box-sub {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.3;
+}
+
+.fl-box-detail {
+  color: var(--text);
+  opacity: 0.82;
+  font-size: 11.5px;
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* A flyway dragged over the line: the + is where it lands. */
+.fl-box-add.fl-drop {
+  border-style: solid;
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.16);
+  box-shadow: 0 0 0 2px var(--accent), 0 0 18px rgba(var(--accent-rgb), 0.45);
+}
+
+/* An open box: a card around whatever it holds (the Sky's pane). */
+.fl-box.fl-box-open {
+  padding: 0;
+  gap: 0;
+  cursor: default;
+  overflow: visible;
+}
+
+.fl-box.fl-box-open {
+  user-select: text;
+}

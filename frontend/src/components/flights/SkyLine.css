@@ -1,0 +1,213 @@
+/* One session's line in the Sky (SkyLine.tsx). The host places it (absolute,
+   at its layout's x/y); the line sizes itself to its diagram and reports
+   that size, so it is in flow inside the host's box. */
+
+.skl {
+  position: relative;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 280px;
+  padding: 0 10px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.18);
+}
+
+.light .skl {
+  box-shadow: 0 4px 16px rgba(20, 30, 60, 0.1);
+}
+
+.skl.is-focused {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 2px rgba(var(--accent-rgb), 0.35),
+    0 6px 22px rgba(0, 0, 0, 0.18);
+}
+
+.skl.is-editing,
+.skl.is-open {
+  z-index: 5;
+}
+
+/* --- The title bar: the handle the host drags the line by ----------------- */
+
+.skl-bar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  margin: 0 -10px 4px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+
+.skl-bar > .fl-bird {
+  flex: none;
+  color: var(--accent);
+}
+
+.skl-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skl-chip {
+  flex: none;
+  align-self: center;
+}
+
+.skl-pin {
+  flex: none;
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.skl-size {
+  flex: none;
+  margin-left: auto;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.skl-size:hover,
+.skl-size:focus-visible {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.skl-menu {
+  flex: none;
+}
+
+.skl-gone {
+  margin: 8px 2px 0;
+  font-size: 12px;
+}
+
+/* --- The diagram: the sky pans, the canvas never scrolls ------------------- */
+
+.skl .fl-canvas.skl-canvas {
+  overflow: visible;
+  max-width: none;
+  padding: 0;
+}
+
+.skl .fl-canvas.skl-canvas .fl-stage {
+  cursor: default;
+}
+
+/* What the + or a stop opened: a card hanging under the line. */
+.skl-panels {
+  position: absolute;
+  left: -1px;
+  top: calc(100% + 6px);
+  width: max(100%, 440px);
+  max-height: 560px;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* --- An open box: the session's real pane ---------------------------------- */
+
+.skl-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  box-sizing: content-box;
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+}
+
+.skl-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  box-sizing: border-box;
+  padding: 0 6px 0 11px;
+  font-size: 12px;
+}
+
+.skl-card-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skl-card-fold {
+  flex: none;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.skl-card-fold:hover,
+.skl-card-fold:focus-visible {
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.skl-card-pane {
+  display: flex;
+  min-height: 0;
+}
+
+.skl-card-pane > .pane {
+  flex: 1;
+  min-width: 0;
+}
+
+.skl-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  touch-action: none;
+  z-index: 2;
+  background:
+    linear-gradient(135deg, transparent 0 55%, var(--muted) 55% 62%, transparent 62% 72%, var(--muted) 72% 79%, transparent 79%);
+  border-bottom-right-radius: 10px;
+  opacity: 0.7;
+}
+
+.skl-resize:hover {
+  opacity: 1;
+}

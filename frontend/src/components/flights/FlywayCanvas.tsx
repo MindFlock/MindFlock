@@ -14,16 +14,21 @@
  *    children branching below, the fast-track's rungs or the flight's stops,
  *    and the trailing + ("Tack on a stop");
  *  - a line in the Sky — the same diagram, with the bird (`bird`) standing
- *    on the box the flight is at.
+ *    on the box the flight is at, its boxes at the line's size (`size`:
+ *    compact = the title alone, wide = the full title, the summary and a
+ *    second line of detail), and a box opened into a card (`openBox` — the
+ *    session's real pane), measured, so its connectors follow it.
  *
  * Empty space pans the line sideways (scroll, or drag it). Positions and
  * connectors come from `layoutDiagram` (fixed box sizes), so the markup needs
- * no measuring and a server render draws the same picture. */
+ * no measuring and a server render draws the same picture — an open card
+ * alone is measured (it starts at the size it asks for). */
 
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 import {
   layoutDiagram,
   reorderDiagram,
+  type BoxSize,
   dropIndex,
   type BirdPerch,
   type Diagram,
@@ -35,6 +40,46 @@ import "./FlywayCanvas.css";
 
 /** Below this width the line runs top to bottom. */
 const VERTICAL_BELOW_PX = 520;
+
+/** How much of each box a line shows (the Sky's ◧): normal is the editor's. */
+export type BoxSizeName = "compact" | "normal" | "wide";
+
+const firstOf = (v: unknown) =>
+  String(v ?? "")
+    .split("\n")
+    .map((l) => l.trim())
+    .find(Boolean) || "";
+
+/** A wide box's second line: the agent's prompt, a perch's text (or its
+ * items), a ship stop's commit message, the command it runs, the ping. */
+export function boxDetail(n: DiagramNode): string {
+  const c = n.step?.config || {};
+  switch (n.step?.kind) {
+    case "agent":
+      return firstOf(c.prompt);
+    case "you": {
+      const items = Array.isArray(c.items) ? (c.items as unknown[]).map(String).filter(Boolean) : [];
+      return firstOf(c.text) || items.join(" · ");
+    }
+    case "ship":
+      return firstOf(c.message);
+    case "command":
+      return firstOf(c.command);
+    case "notify":
+      return firstOf(c.text);
+    default:
+      return "";
+  }
+}
+
+/** A box at a line's size, from the layout's normal one: compact is ~110px
+ * and one line (the title; the + a bare circle), wide is 260px with room for
+ * a two-line title, the summary on two lines and the detail line. */
+export function sizedBox(size: BoxSizeName, n: DiagramNode, base: BoxSize, detail = ""): BoxSize {
+  if (n.kind === "add" || size === "normal") return base;
+  if (size === "compact") return { w: 110, h: 62 };
+  return { w: 260, h: base.h + 18 + (n.sub ? 15 : 0) + (detail ? 32 : 0) };
+}
 
 export interface FlywayCanvasProps {
   diagram: Diagram;
@@ -65,6 +110,16 @@ export interface FlywayCanvasProps {
   reveal?: string | null;
   /** The bird: standing on this box (lib/flightDiagram `birdPerch`). */
   bird?: BirdPerch | null;
+  /** How much each box shows (default normal — the editor, the Flight tab). */
+  size?: BoxSizeName;
+  /** A box's wide second line, where the stop's own (boxDetail) has none
+   * (the Sky: a session's last prompt). */
+  detailOf?(n: DiagramNode): string;
+  /** A flyway dragged over the line: the + lights up, saying this. */
+  dropLabel?: string | null;
+  /** A box drawn open as a card — `body` replaces its insides, `size` is its
+   * size until the card is measured (then the layout follows the card). */
+  openBox?(n: DiagramNode): { body: ReactNode; size: BoxSize } | null;
   dataTour?: string;
   className?: string;
 }
@@ -120,9 +175,52 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
   const justDragged = useRef(false);
   const pan = useRef<{ x: number; y: number; left: number; top: number; id: number } | null>(null);
   const boxRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const size: BoxSizeName = p.size || "normal";
+  const small = !!p.compact || size === "compact";
+  const detail = (n: DiagramNode) => (size === "wide" ? boxDetail(n) || p.detailOf?.(n) || "" : "");
 
-  const opts = { compact: p.compact, vertical, sizeOf: p.sizeOf };
-  const base = useMemo(() => layoutDiagram(p.diagram, opts), [p.diagram, p.compact, vertical, p.sizeOf]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Cards (an open box): what each draws, and its size as last measured.
+  const opened = new Map<string, { body: ReactNode; size: BoxSize }>();
+  if (p.openBox)
+    for (const n of p.diagram.nodes) {
+      const o = p.openBox(n);
+      if (o) opened.set(n.id, o);
+    }
+  const openKey = [...opened.keys()].join("|");
+  const [measured, setMeasured] = useState<Record<string, BoxSize>>({});
+  useEffect(() => {
+    const ids = openKey ? openKey.split("|") : [];
+    if (!ids.length || typeof ResizeObserver === "undefined") return;
+    const read = () =>
+      setMeasured((cur) => {
+        let next: Record<string, BoxSize> | null = null;
+        for (const id of ids) {
+          const el = boxRefs.current[id];
+          if (!el || !el.offsetWidth || !el.offsetHeight) continue;
+          // Layout px: the Sky's zoom (a transform) doesn't change them.
+          const m = { w: el.offsetWidth, h: el.offsetHeight };
+          if (cur[id]?.w !== m.w || cur[id]?.h !== m.h) (next ??= { ...cur })[id] = m;
+        }
+        return next ?? cur;
+      });
+    const ro = new ResizeObserver(read);
+    for (const id of ids) {
+      const el = boxRefs.current[id];
+      if (el) ro.observe(el);
+    }
+    read();
+    return () => ro.disconnect();
+  }, [openKey]);
+
+  const sizeOf = (n: DiagramNode, b: BoxSize): BoxSize => {
+    const o = opened.get(n.id);
+    if (o) return measured[n.id] || o.size;
+    if (n.kind === "add" && p.dropLabel) return { w: Math.max(b.w, 60 + p.dropLabel.length * 7), h: Math.max(b.h, 40) };
+    const s = sizedBox(size, n, b, detail(n));
+    return p.sizeOf ? p.sizeOf(n, s) : s;
+  };
+  const opts = { compact: small, vertical, sizeOf };
+  const base = useMemo(() => layoutDiagram(p.diagram, opts), [p.diagram, small, vertical, p.sizeOf, size, p.dropLabel, measured, p.openBox, p.detailOf]); // eslint-disable-line react-hooks/exhaustive-deps
   const shown = useMemo(
     () => (drag && drag.moved && drag.to !== drag.from ? layoutDiagram(reorderDiagram(p.diagram, drag.from, drag.to), opts) : base),
     [drag, base, p.diagram] // eslint-disable-line react-hooks/exhaustive-deps
@@ -258,7 +356,12 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
     <div
       ref={rootRef}
       className={
-        "fl-canvas" + (p.compact || vertical ? " fl-canvas-compact" : "") + (vertical ? " fl-canvas-vertical" : "") + (drag?.moved ? " fl-dragging" : "") + (p.className ? " " + p.className : "")
+        "fl-canvas" +
+        (p.compact || vertical ? " fl-canvas-compact" : "") +
+        (size !== "normal" ? " fl-size-" + size : "") +
+        (vertical ? " fl-canvas-vertical" : "") +
+        (drag?.moved ? " fl-dragging" : "") +
+        (p.className ? " " + p.className : "")
       }
       role="list"
       aria-label={p.label + (p.onMove ? " — drag a stop, or ← → on a selected one, to reorder it" : "")}
@@ -296,8 +399,13 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
           const x = (own ? own.x + (vertical ? 0 : drag!.delta) : b.x) + pad;
           const y = (own ? own.y + (vertical ? drag!.delta : 0) : b.y) + top;
           const glyph = STATE_GLYPH[n.state];
+          const open = opened.get(n.id);
+          const drop = n.kind === "add" && !!p.dropLabel;
+          const more = detail(n);
           const cls =
             "fl-box fl-box-" + n.kind +
+            (open ? " fl-box-open" : "") +
+            (drop ? " fl-drop" : "") +
             " fl-st-" + n.state +
             (n.perch ? " fl-perch" : "") +
             (p.selected === n.id ? " selected" : "") +
@@ -306,7 +414,9 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
             (canDrag(n) ? " fl-draggable" : "");
           const said =
             n.kind === "add"
-              ? n.title
+              ? drop
+                ? p.dropLabel!
+                : n.title
               : n.title + (n.kind === "stop" || n.kind === "rung" ? ", " + (STATE_WORD[n.state] || "") : "") + (n.chip ? ", " + n.chip.label : "");
           return (
             <div
@@ -320,27 +430,52 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
               data-node={n.id}
               aria-label={said}
               aria-current={p.selected === n.id ? "true" : undefined}
-              title={n.kind === "add" ? n.title : n.reason ? n.title + " — " + n.reason : n.sub ? n.title + " — " + n.sub : n.title}
-              style={{ transform: `translate(${x}px, ${y}px)`, width: b.w, minHeight: b.h }}
+              title={open ? undefined : n.kind === "add" ? (drop ? p.dropLabel! : n.title) : n.reason ? n.title + " — " + n.reason : n.sub ? n.title + " — " + n.sub : n.title}
+              // A card sizes itself (and is measured); a box takes the layout's.
+              style={open ? { transform: `translate(${x}px, ${y}px)` } : { transform: `translate(${x}px, ${y}px)`, width: b.w, minHeight: b.h }}
               onPointerDown={(e) => onBoxDown(e, n)}
               onPointerMove={onBoxMove}
               onPointerUp={onBoxUp}
               onPointerCancel={onBoxUp}
-              onClick={() => activate(n)}
+              // Inside a card, a click is the card's (the pane's tabs, its
+              // terminal): only the box itself, or Enter on it, acts.
+              onClick={(e) => (open && e.target !== e.currentTarget ? undefined : activate(n))}
               onKeyDown={(e) => onBoxKey(e, n)}
             >
-              {n.kind === "add" ? (
+              {open ? (
+                open.body
+              ) : n.kind === "add" ? (
                 <>
                   <span className="fl-add-plus" aria-hidden="true">
-                    <StopIcon kind="add" size={p.compact ? 16 : 17} />
+                    <StopIcon kind="add" size={small ? 16 : 17} />
                   </span>
-                  {!p.compact && <span className="fl-add-label">{n.title}</span>}
+                  {drop ? <span className="fl-add-label">{p.dropLabel}</span> : !small && <span className="fl-add-label">{n.title}</span>}
+                </>
+              ) : size === "compact" ? (
+                <>
+                <div className="fl-box-head">
+                  {n.chip ? (
+                    <span className={"fl-box-dot tone-" + n.chip.tone} aria-hidden="true" />
+                  ) : (
+                    <span className="fl-box-icon">
+                      <StopIcon kind={n.perch ? "perch" : n.icon} size={13} />
+                    </span>
+                  )}
+                  <span className="fl-box-title">{n.title}</span>
+                  {glyph && (
+                    <span className={"fl-box-glyph fl-glyph-" + n.state} aria-hidden="true">
+                      {glyph}
+                    </span>
+                  )}
+                  {(n.state === "current" || n.state === "perched") && <span className="fl-box-pulse" aria-hidden="true" />}
+                </div>
+                {p.renderInBox?.(n)}
                 </>
               ) : (
                 <>
                   <div className="fl-box-head">
                     <span className="fl-box-icon">
-                      <StopIcon kind={n.perch ? "perch" : n.icon} size={p.compact ? 13 : 15} />
+                      <StopIcon kind={n.perch ? "perch" : n.icon} size={small ? 13 : 15} />
                     </span>
                     <span className="fl-box-title">{n.title}</span>
                     {glyph && (
@@ -352,6 +487,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                   </div>
                   {n.chip && <span className={"fl-box-chip tone-" + n.chip.tone}>{n.chip.label}</span>}
                   {n.sub && <div className="fl-box-sub">{n.sub}</div>}
+                  {more && <div className="fl-box-detail">{more}</div>}
                   {n.reason && <div className="fl-box-reason">{n.reason}</div>}
                   {n.dots && (
                     <div className="fl-box-dots" aria-label="Its line">
