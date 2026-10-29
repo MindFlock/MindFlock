@@ -376,6 +376,7 @@ async def launch(
             "title": str(getattr(pr, "title", "") or ""),
             "url": str(getattr(pr, "url", "") or ""),
         },
+        branch=str(getattr(pr, "head_ref", "") or ""),
     )
 
     async def _bg_review() -> None:

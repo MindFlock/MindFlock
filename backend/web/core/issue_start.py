@@ -315,6 +315,7 @@ async def launch(
             "title": str(getattr(issue, "title", "") or ""),
             "url": str(getattr(issue, "url", "") or ""),
         },
+        branch=branch_for(issue),
     )
 
     async def _bg_start() -> None:

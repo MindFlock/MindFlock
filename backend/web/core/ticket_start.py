@@ -856,6 +856,7 @@ async def launch(
             "title": str(getattr(story, "name", "") or ""),
             "url": str(getattr(story, "app_url", "") or ""),
         },
+        branch=branch,
     )
     # The ticket's source may pin its own agent CLI; empty falls back to this
     # app's default program. Resolved before the 202 (not in the launch) so an
@@ -867,8 +868,8 @@ async def launch(
     )
     if extra_prompt:
         prompt_tail = "\n\n" + extra_prompt.strip() + prompt_tail
-    # The flight's first agent step's own words go after the ticket (and a
-    # run's brief), before an agent-spawned worker's footer.
+    # The flight's first agent step's own words go right after the ticket —
+    # before a run's brief and an agent-spawned worker's footer.
     prompt_tail = flight_tail + prompt_tail
 
     async def _bg_start() -> None:

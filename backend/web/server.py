@@ -3148,7 +3148,7 @@ def _intake_plan(
 
 
 def _arm_intake_flight(
-    title: str, plan_id: str, subject: dict, by: str = "user"
+    title: str, plan_id: str, subject: dict, by: str = "user", branch: str = ""
 ) -> Optional[dict]:
     """:func:`flights.arm_pending` for an intake title, or None when it could
     not be armed (logged). A flight left on the title by an earlier start whose
@@ -3156,7 +3156,9 @@ def _arm_intake_flight(
     who = by if str(by).startswith("agent:") else "intake"
     for attempt in (1, 2):
         try:
-            flight = _flights.arm_pending(title, plan_id, subject, by=who)
+            flight = _flights.arm_pending(
+                title, plan_id, subject, by=who, branch=branch
+            )
         except _flights.FlightError as err:
             stale = _flights.for_session(title)
             if (
@@ -3193,18 +3195,28 @@ def _arm_intake(
     *,
     plan: str = "",
     subject: Optional[dict] = None,
+    branch: str = "",
 ) -> str:
     """What an intake start arms before its session exists: the flight of
     ``plan`` (resolved by :func:`_intake_plan`) when there is one, else the
     autopilot ``depth`` (:func:`_arm_intake_autopilot`). A flight's ship steps
     arm their own lanes, so the depth is armed beside a flight only when its
-    plan has none.
+    plan has none — and an autopilot record left on the title by an earlier
+    start is dropped, so it can't ship the session beside the flight.
+    ``branch`` is the branch the start cuts (the plan's ``{branch}``).
 
     Returns the text to append to the intake prompt: the plan's first agent
     step's own ``prompt`` (placeholders filled), ``""`` without one."""
-    flight = _arm_intake_flight(title, plan, subject or {}, by) if plan else None
+    flight = (
+        _arm_intake_flight(title, plan, subject or {}, by, branch) if plan else None
+    )
     if flight is None or not any(s["kind"] == "ship" for s in flight["steps"]):
         _arm_intake_autopilot(title, depth, source, item, message=message, by=by)
+    else:
+        try:
+            _autopilot.disarm(title)
+        except Exception:  # noqa: BLE001
+            pass
     if flight is None:
         return ""
     first = next((s for s in flight["steps"] if s["kind"] == "agent"), None)
@@ -3216,11 +3228,13 @@ def _arm_intake(
 
 def _cancel_intake_flight(title: str, reason: str) -> None:
     """Cancel the flight armed for ``title`` whose session could not be
-    created (``session.create_failed``) — and say so. A title that has a live
-    session (this launch lost a race to another) keeps its flight."""
+    created (``session.create_failed``) — and say so — and drop the autopilot
+    record armed for it: neither may outlive the start that armed it. A title
+    that has a live session (this launch lost a race to another) keeps both."""
     try:
         if title in ENGINE.instances:
             return
+        _autopilot.disarm(title)
         before = _flights.for_session(title)
         if before is None:
             return

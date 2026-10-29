@@ -201,9 +201,13 @@ def _fresh_settings():
 
 
 def _issue_repo(story) -> str:
-    """``owner/name`` for a ticket made from a GitHub issue (its ``app_url``
-    is the issue's page), ``""`` for any other ticket."""
-    if getattr(story, "provider", "") != "github_issues":
+    """``owner/name`` for a ticket the Intake → Issues MONITOR made from a
+    GitHub issue (its ``app_url`` is the issue's page), ``""`` for any other
+    ticket — a ``github_issues`` TICKETING SOURCE's story included: it carries
+    a ``source_key`` and flies that source's plan, as its row start does."""
+    if getattr(story, "provider", "") != "github_issues" or getattr(
+        story, "source_key", ""
+    ):
         return ""
     m = re.match(
         r"^https?://[^/]+/([^/\s]+/[^/\s]+)/issues/",
@@ -212,9 +216,20 @@ def _issue_repo(story) -> str:
     return m.group(1) if m else ""
 
 
+def _disarm_autopilot(title: str) -> None:
+    try:
+        from backend.web.core import autopilot as _autopilot
+
+        _autopilot.disarm(title)
+    except Exception:  # noqa: BLE001
+        logger.warning("Could not disarm the autopilot for %s", title, exc_info=True)
+
+
 def _cancel_flight(title: str, reason: str) -> None:
     """The session for ``title`` could not be created: cancel the flight armed
-    for it (if any), so it never waits for a session that won't come."""
+    for it (if any) and drop its autopilot record, so neither waits for a
+    session that won't come."""
+    _disarm_autopilot(title)
     try:
         from backend.web.core import flights as _flights
 
@@ -283,6 +298,7 @@ class SessionRunner:
                 "title": str(getattr(story, "name", "") or ""),
                 "url": str(getattr(story, "app_url", "") or ""),
             },
+            branch=branch,
         )
         logger.info(
             "Launching ticket %s via MindFlock (agent=%s, effort=%s, mode=%s, "
@@ -362,6 +378,7 @@ class SessionRunner:
                 "title": str(getattr(pr, "title", "") or ""),
                 "url": str(getattr(pr, "url", "") or ""),
             },
+            branch=pr.head_ref,
         )
         logger.info(
             "Launching PR #%d via MindFlock (%d comments, session=%s, branch=%s)",
@@ -448,14 +465,17 @@ class SessionRunner:
         item: str,
         message: str,
         subject: dict,
+        branch: str = "",
     ) -> str:
         """Arm what an AUTO-ingested item carries itself with, before its
         session exists: the flight its plan resolves to (docs/flights.md), else
         the autopilot depth (:meth:`_arm_autopilot`) — the server's
         ``_arm_intake`` for this process. A flight whose plan has ship steps
         arms its own lanes, so the depth is armed beside one only when its plan
-        has none. Returns the text to append to the prompt: the plan's first
-        agent step's own ``prompt``. Never raises.
+        has none (and a leftover autopilot record on the title is dropped).
+        ``branch`` fills the plan's ``{branch}``. Returns the text to append to
+        the prompt: the plan's first agent step's own ``prompt``. Never
+        raises.
 
         The flights store is a lock-guarded file keyed by session title, like
         autopilot.json, so arming here is picked up by the server's driver."""
@@ -466,7 +486,9 @@ class SessionRunner:
                 from backend.web.core import flights as _flights
 
                 try:
-                    flight = _flights.arm_pending(title, plan_id, subject, by="intake")
+                    flight = _flights.arm_pending(
+                        title, plan_id, subject, by="intake", branch=branch
+                    )
                 except _flights.FlightError as err:
                     if err.error != "in_flight":
                         raise
@@ -482,6 +504,8 @@ class SessionRunner:
                 )
         if flight is None or not any(s["kind"] == "ship" for s in flight["steps"]):
             self._arm_autopilot(title, kind, lookup, item, message)
+        else:
+            _disarm_autopilot(title)
         if flight is None:
             return ""
         from backend.web.core import flights as _flights
@@ -505,13 +529,18 @@ class SessionRunner:
 
             st = _fresh_settings()
             configured = ""
+            depth = None
             if kind == "pr":
                 block = (st.github.repo_settings or {}).get(lookup) or {}
                 configured = str(block.get("plan") or "")
             elif kind == "issue":
+                # A monitor issue: its repo's card, plan AND depth — the
+                # lookup is the bare provider name, which must never pick up a
+                # same-provider ticketing source's depth.
                 repo = str(subject.get("source") or "")
                 block = (st.github.issue_repo_settings or {}).get(repo) or {}
                 configured = str(block.get("plan") or "")
+                depth = str(block.get("depth") or "")
             else:
                 sources = list(st.ticketing.sources)
                 for match in ("id", "provider"):
@@ -535,7 +564,9 @@ class SessionRunner:
                     configured,
                     lookup,
                 )
-            depth = _autopilot.normalize_depth(self._depth_for(lookup))
+            if depth is None:
+                depth = self._depth_for(lookup)
+            depth = _autopilot.normalize_depth(depth)
             if depth not in _autopilot.SOURCE_DEPTHS:
                 return ""
             return _flights.plan_for_depth(kind, depth)

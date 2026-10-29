@@ -204,3 +204,24 @@ def test_templates_keep_their_own_record(tmp_path):
     assert ts.load_runs()["tpl"]["last_run_at"] == 1.0
     assert ts.load_runs(ts.flight_runs_path()) == {}
     assert json.loads((tmp_path / "tpl_runs.json").read_text())["runs"]["tpl"]
+
+
+def test_one_plans_crash_never_costs_the_rest_of_the_tick():
+    a = _scheduled()
+    b = F.save_plan(dict(F.get_plan(a["id"]), id=None, name="Second"))
+    calls: list = []
+    good = _starter(calls)
+
+    async def start(body):
+        if body["plan_id"] == a["id"]:
+            raise RuntimeError("the engine fell over")
+        return await good(body)
+
+    _tick(_at(29, 8), start=start)
+    fired = _tick(_at(29, 9, 1), start=start)
+    assert sorted(fired) == sorted([a["id"], b["id"]])
+    assert [c["plan_id"] for c in calls] == [b["id"]]
+    runs = ts.load_runs(ts.flight_runs_path())
+    assert runs[a["id"]]["last_error"] == "the engine fell over"
+    assert runs[a["id"]]["history"][0]["error"] == "the engine fell over"
+    assert runs[b["id"]]["last_flight"]
