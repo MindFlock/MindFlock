@@ -143,7 +143,9 @@ export function toPlane(c: SkyCamera, px: number, py: number): Pos {
 export function fitCamera(b: Rect | null, vw: number, vh: number, maxZ = 1.25, pad = 40): SkyCamera {
   if (!b || b.w <= 0 || b.h <= 0 || vw <= 0 || vh <= 0) return { x: 0, y: 0, z: 1 };
   const z = clampZoom(Math.min(maxZ, (vw - 2 * pad) / b.w, (vh - 2 * pad) / b.h));
-  const x = (vw - b.w * z) / 2 - b.x * z;
+  // Wider than the window even at the zoom floor: start at its left edge (the
+  // intake lane), not its middle — centring would cut both ends off.
+  const x = b.w * z + 2 * pad <= vw ? (vw - b.w * z) / 2 - b.x * z : pad - b.x * z;
   // Taller than the window even at the floor: start at its top, not its middle.
   const y = b.h * z + 2 * pad <= vh ? (vh - b.h * z) / 2 - b.y * z : pad - b.y * z;
   return { x, y, z };

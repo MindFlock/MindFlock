@@ -320,3 +320,16 @@ describe("the wiring", () => {
     expect(code("components/flights/SessionFlight.tsx")).toContain('onClick={() => useUi.getState().openDialogFor("flights", skyTarget(title))}');
   });
 });
+
+describe("fitCamera at the zoom floor", () => {
+  it("starts wide content at its left edge instead of cutting both ends", () => {
+    // 6000px of plane in a 1000px window: the floor (0.4) still leaves 2400px.
+    const cam = fitCamera({ x: 40, y: 40, w: 6000, h: 300 }, 1000, 800);
+    expect(cam.z).toBe(0.4);
+    expect(cam.x).toBe(40 - 40 * 0.4); // pad - b.x * z: the lane at x=40 stays visible
+  });
+  it("still centres content that fits", () => {
+    const cam = fitCamera({ x: 0, y: 0, w: 500, h: 300 }, 1000, 800);
+    expect(cam.x).toBeGreaterThan(0);
+  });
+});

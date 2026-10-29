@@ -50550,7 +50550,7 @@ function fitCamera(b, vw, vh, maxZ = 1.25, pad = 40) {
 	};
 	const z = clampZoom(Math.min(maxZ, (vw - 2 * pad) / b.w, (vh - 2 * pad) / b.h));
 	return {
-		x: (vw - b.w * z) / 2 - b.x * z,
+		x: b.w * z + 2 * pad <= vw ? (vw - b.w * z) / 2 - b.x * z : pad - b.x * z,
 		y: b.h * z + 2 * pad <= vh ? (vh - b.h * z) / 2 - b.y * z : pad - b.y * z,
 		z
 	};
