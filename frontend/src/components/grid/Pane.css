@@ -753,7 +753,7 @@
   color: #fff;
 }
 
-/* Flock (🐦): workers on every prompt. Off it is a quiet outline — a switch you
+/* Flock (the raven): workers on every prompt. Off it is a quiet outline — a switch you
    reach for now and then, never competing with the guided button or ⏩. On it
    fills, so a session that sends the workers request with every prompt is
    recognisable across a grid without hovering. Clicking flips it. */
@@ -763,6 +763,21 @@
   border: 1px solid var(--border);
   font-weight: 600;
   padding: 3px 7px;
+}
+
+/* The MindFlock raven (the same /bird.png the rail's flock flies, an
+   alpha-only silhouette) drawn as a mask filled with currentColor, so it is
+   muted when Flock is off, white on the accent when on, and follows the
+   light/dark theme with the button's own colour. */
+.pane-head .actions .nextstep.nextstep-flock .flock-bird {
+  display: inline-block;
+  width: 18px;
+  height: 13px;
+  margin-right: 5px;
+  vertical-align: -2px;
+  background-color: currentColor;
+  -webkit-mask: url(/bird.png) center / contain no-repeat;
+  mask: url(/bird.png) center / contain no-repeat;
 }
 
 .pane-head .actions .nextstep.nextstep-flock:hover {

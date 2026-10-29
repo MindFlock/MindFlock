@@ -9,7 +9,8 @@
  *   Alt+Shift+G  "Workers on every prompt" — the sticky Flock mode: while on,
  *                the server adds the request to every prompt submitted in
  *                that session (`POST /api/instances/{title}/flock {on}`), so
- *                you type nothing extra. The pane's 🐦 Flock control and the
+ *                you type nothing extra. The pane's Flock control (the
+ *                MindFlock raven, lib/flock's sprite as a mask) and the
  *                row menu flip the same switch.
  *
  * The request text is the server's (`GET /api/config` → `flock.request`,
@@ -71,7 +72,7 @@ export function flockAvailable(inst: Instance | undefined, config?: Pick<Config,
 
 /** What the pane control says. */
 export function flockChipLabel(): string {
-  return "🐦 Flock";
+  return "Flock";
 }
 
 /** The pane control's tooltip, on or off. `keys`: the live combos for

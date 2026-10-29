@@ -1189,6 +1189,7 @@ export function Pane({
                 void toggleFlock(title);
               }}
             >
+              <span className="flock-bird" aria-hidden="true" />
               {flockChipLabel()}
             </button>
           )}

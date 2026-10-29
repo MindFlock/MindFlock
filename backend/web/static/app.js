@@ -31786,7 +31786,7 @@ function flockAvailable(inst, config) {
 	return !inst.remote_peer;
 }
 function flockChipLabel() {
-	return "🐦 Flock";
+	return "Flock";
 }
 function flockTooltip(on, keys = [FLOCK_KEYS, ASK_WORKERS_KEYS]) {
 	return `Workers on every prompt — the request is added to everything you send here (${keys[0]} to toggle; ${keys[1]} to add it once)` + (on ? "\nOn: click to turn it off" : "\nOff: click to turn it on");
@@ -78217,7 +78217,7 @@ function Pane({ inst, drag, dragging }) {
 								inst,
 								me
 							}),
-							flockShown && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							flockShown && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 								className: "nextstep nextstep-flock" + (flockOn ? " is-on" : ""),
 								type: "button",
 								"aria-pressed": flockOn,
@@ -78227,7 +78227,10 @@ function Pane({ inst, drag, dragging }) {
 									ev.stopPropagation();
 									toggleFlock(title);
 								},
-								children: flockChipLabel()
+								children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "flock-bird",
+									"aria-hidden": "true"
+								}), flockChipLabel()]
 							}, "flock"),
 							items.buttons.map((id) => buttonEls[id])
 						]

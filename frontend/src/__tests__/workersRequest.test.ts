@@ -1,7 +1,7 @@
 /** Asking for MindFlock workers without typing it (lib/workersRequest): the
  * request text and its fallback, typing it into the terminal, the Flock
  * toggle, and the surfaces that reach them — the Alt+G / Alt+Shift+G keys,
- * the pane's 🐦 Flock control, the row menu, the palette and Settings →
+ * the pane's Flock control (the raven mask + the word), the row menu, the palette and Settings →
  * General. */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -77,7 +77,7 @@ describe("the request text", () => {
 
 describe("the words", () => {
   it("the control, its tooltip and the toggle's label", () => {
-    expect(W.flockChipLabel()).toBe("🐦 Flock");
+    expect(W.flockChipLabel()).toBe("Flock");
     const tip = W.flockTooltip(false);
     expect(tip).toContain("Workers on every prompt — the request is added to everything you send here");
     expect(tip).toContain("(Alt+Shift+G to toggle; Alt+G to add it once)");
