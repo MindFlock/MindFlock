@@ -325,6 +325,19 @@
   min-width: 0;
 }
 
+/* A flight's chip names its step ("You: Approve the merge", "Paused flight"):
+   capped, with a real ellipsis, so the session's name beside it stays
+   readable. The whole text is the chip's title. Two classes deep to outrank
+   the content-sized rule above. */
+.inst .stagechip.chip-flight {
+  display: inline-block;
+  max-width: 9.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
 /* A force-start the server accepted but hasn't turned into a session yet: it
    carries the provisioning chip like any loading row, dimmed a touch because
    there is nothing to act on until the clone finishes. */

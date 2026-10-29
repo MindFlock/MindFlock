@@ -26,6 +26,7 @@ import {
   stepGlyph,
   stripLabel,
   youItems,
+  youStepLabel,
   youText,
   type Flight,
   type FlightRow,
@@ -196,7 +197,7 @@ export function FlightMenu({
     items.push({ key: "open", label: "Open session", onSelect: () => openFlightSession(flight.session) });
   if (live) {
     items.push(
-      flight.state === "halted"
+      flight.state === "halted" || flight.state === "paused"
         ? { key: "resume", label: "Resume", title: "Carry on from the current step", onSelect: () => void controlFlight(flight.id, "resume") }
         : { key: "pause", label: "Pause", title: "Hold the flight at its current step", onSelect: () => void controlFlight(flight.id, "pause") }
     );
@@ -302,8 +303,9 @@ export function FlightCard({ flight, kinds }: { flight: Flight; kinds?: readonly
           ) : step ? (
             <>
               <span className={"fl-now-dot" + (you ? " fl-now-you" : "")} aria-hidden="true" />
-              <span className="fl-now-title">{(you ? "You: " : "") + step.title}</span>
+              <span className="fl-now-title">{you ? youStepLabel(step.title) : step.title}</span>
               {elapsed && <span className="fl-now-elapsed">{elapsed}</span>}
+              {flight.state === "paused" && <span className="fl-now-paused">Paused</span>}
               {flight.state === "halted" && flight.reason && <span className="fl-now-reason">{flight.reason}</span>}
             </>
           ) : null}
@@ -336,7 +338,9 @@ export function PaneFlightStrip({ inst }: { inst: Pick<Instance, "title" | "flig
 function PaneStripRow({ row }: { row: FlightRow }) {
   return (
     <div className={"fl-strip fl-state-" + row.state + (rowWaitsOnYou(row) ? " fl-needs" : "")} data-tour="flights-strip">
-      <span className="fl-strip-line">{stripLabel(row)}</span>
+      <span className="fl-strip-line" title={stripLabel(row)}>
+        {stripLabel(row)}
+      </span>
     </div>
   );
 }
@@ -348,7 +352,7 @@ function PaneStripFull({ flight, kinds, now }: { flight: Flight; kinds?: readonl
   return (
     <div className={"fl-strip fl-state-" + flight.state + (waiting ? " fl-needs" : "")} data-tour="flights-strip" onMouseDown={stop}>
       <div className="fl-strip-row">
-        <span className="fl-strip-line" title={flight.steps.map((s) => s.title).join(" → ")}>
+        <span className="fl-strip-line" title={stripLabel(flight, now) + "\n" + flight.steps.map((s) => s.title).join(" → ")}>
           {stripLabel(flight, now)}
         </span>
         {waiting && step && <YouStepActions flight={flight} compact />}

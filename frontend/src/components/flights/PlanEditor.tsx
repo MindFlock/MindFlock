@@ -173,6 +173,12 @@ export function Plans({ initialPlan, onDirty }: { initialPlan?: string; onDirty(
   const [dragOver, setDragOver] = useState<number | null>(null);
   const blockRefs = useRef<Array<HTMLDivElement | null>>([]);
 
+  // A block picked or moved off the row's visible edge comes into view.
+  useEffect(() => {
+    const el = block !== null ? blockRefs.current[block] : null;
+    if (el && typeof el.scrollIntoView === "function") el.scrollIntoView({ inline: "nearest", block: "nearest" });
+  }, [block, draft?.steps.length]);
+
   const dirty = planDirty(draft, seed);
   useEffect(() => onDirty(dirty), [dirty, onDirty]);
 

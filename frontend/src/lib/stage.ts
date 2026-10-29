@@ -27,7 +27,7 @@ import {
 } from "./laneActions";
 import { autopilotChipTitle, mergeBlockerLabel } from "./autopilot";
 import { useUi } from "../state/store";
-import { deriveSessionState, SLEEPING_LABEL, type SessionState } from "./sessionState";
+import { deriveSessionState, PAUSED_FLIGHT_LABEL, SLEEPING_LABEL, type SessionState } from "./sessionState";
 import type { TestPlan, TestPlansResponse } from "../api/types";
 import type { SessionMenuModel } from "./sessionMenu";
 import { planForSession, planVerdict } from "../components/dialogs/verify";
@@ -190,6 +190,9 @@ export function stateChip(ss: SessionState): ChipState {
   if (ss.label === "Paused") cls = "s-paused";
   else if (ss.label === SLEEPING_LABEL) cls = "s-sleeping";
   else if (ss.label === "Missing") cls = "s-missing";
+  // A flight's chip carries the step's title, which can be long: it gets a
+  // width cap and an ellipsis (SidebarRow.css), the full words in its title.
+  if (ss.reason === "flight_you" || ss.label === PAUSED_FLIGHT_LABEL) cls += " chip-flight";
   return { label: ss.label, cls: cls + " tone-" + ss.tone, title: ss.hint || ss.label };
 }
 

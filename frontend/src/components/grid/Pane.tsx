@@ -52,7 +52,7 @@ import { useCalm } from "../../lib/useCalm";
 import { agentBlocked } from "../../lib/sessionState";
 import { AgentBlockedBanner } from "../setup/AgentBlocked";
 import { PaneFlightStrip } from "../flights/FlightStrip";
-import { isLive } from "../../lib/flights";
+import { flightDrives } from "../../lib/flights";
 import { useSetup } from "../setup/useSetup";
 import { VerdictChip } from "../dialogs/VerdictChip";
 import { JointVerdictChip } from "../settings/screens/peer/JointCheck";
@@ -534,7 +534,7 @@ export function Pane({
 
   // A picker whose ⏩ button has gone (the pane lost its workspace, is still
   // loading, or has no git) closes rather than waiting to reappear later.
-  const ftGone = missing || loading || !fastTrackStep(inst);
+  const ftGone = missing || loading || flightDrives(inst.flight) || !fastTrackStep(inst);
   useEffect(() => {
     if (ftMenu && ftGone) useUi.getState().setFastTrackMenu(null);
   }, [ftMenu, ftGone]);
@@ -694,7 +694,11 @@ export function Pane({
   // offer nothing for it, and its companion shell is refused (no tab).
   const sharedFolder = !!inst.peer_share;
   const ns = nextStep(inst);
-  const ft = fastTrackStep(inst);
+  // While a flight drives the session (running, parked on you, paused) the
+  // flight owns the ship ladder: no ⏩ toggle to fight it, no guided button —
+  // its strip is the next step. Both come back once it halts or lands.
+  const flying = flightDrives(inst.flight);
+  const ft = flying ? null : fastTrackStep(inst);
   const rs = resetStep(inst);
   const step = liveStep(inst);
   const q = inst.queue;
@@ -747,7 +751,7 @@ export function Pane({
   // has no lead button (the agent's state chip says what it is doing).
   // A flight drives this session: its strip (above the terminal) is the next
   // step while it is in the air, and the guided button comes back after.
-  const shownStep = (inst.flight && isLive(inst.flight)) || (ns && ns.label === "Commit…" && !hasUncommitted(inst)) ? null : ns;
+  const shownStep = flying || (ns && ns.label === "Commit…" && !hasUncommitted(inst)) ? null : ns;
   const openHistory = () => setHistPane({ kind: tab === "shell" ? "shell" : "agent", dragSel: null });
   // SHIP carries Verify's verdict beside Open PR, and asks first on a
   // failed checklist (lib/stage.ts withVerifyVerdict).

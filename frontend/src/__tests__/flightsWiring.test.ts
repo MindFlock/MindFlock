@@ -7,7 +7,7 @@
 
 /// <reference types="vite/client" />
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { code } from "./sourceText";
+import { code, css } from "./sourceText";
 import type { Instance, OutboxWaiting } from "../api/types";
 import type { FlightRow } from "../lib/flights";
 
@@ -17,7 +17,8 @@ vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
 const { useUi } = await import("../state/store");
 const { KEYMAP } = await import("../lib/keymap");
 const { hashFor, parseHash } = await import("../lib/surfaceHash");
-const { deriveSessionState, flightYouLabel, notifyRuleFor } = await import("../lib/sessionState");
+const { deriveSessionState, flightYouLabel, needsYouAction, notifyRuleFor } = await import("../lib/sessionState");
+const { chipState } = await import("../lib/stage");
 const { withFlightYou } = await import("../lib/needsYou");
 const { arrivalStartRequest } = await import("../lib/flightsApi");
 const { sourcePlan } = await import("../components/flights/Board");
@@ -144,6 +145,24 @@ describe("a flight parked on a you step is Needs you", () => {
     // A robot step running, or a flight that is merely in the air, is not.
     expect(deriveSessionState(row({ ...fl, state: "running" }), { activity: "idle" }).reason).toBeUndefined();
     expect(deriveSessionState(row({ ...fl, step: { ...fl.step, actor: "robot" } }), { activity: "idle" }).reason).toBeUndefined();
+    // A step already titled "You: …" is not prefixed again.
+    expect(deriveSessionState(row({ ...fl, step: { ...fl.step, title: "You: approve" } }), { activity: "idle" }).label).toBe("You: approve");
+    // Its chip is capped with an ellipsis (the full words in its title), and
+    // a click opens the bell, where Done is.
+    const chip = chipState(row(fl) as Instance, ss);
+    expect(chip.cls).toContain("chip-flight");
+    expect(chip.title).toContain("You: Approve the merge");
+    expect(needsYouAction(ss)?.act).toBe("bell");
+    expect(css("components/sidebar/SidebarRow.css")).toMatch(
+      /\.inst \.stagechip\.chip-flight \{[^}]*max-width: 9\.5em;[^}]*text-overflow: ellipsis;/
+    );
+  });
+
+  it("a paused flight is a calm Paused flight, out of the bell", () => {
+    const ss = deriveSessionState(row({ ...fl, state: "paused", step: { ...fl.step, state: "pending" } }), { activity: "idle" });
+    expect(ss).toMatchObject({ state: "idle", label: "Paused flight", tone: "neutral", inBell: false });
+    expect(ss.reason).toBeUndefined();
+    expect(withFlightYou([], [{ ...row({ ...fl, state: "paused" }), title: "a" } as Instance])).toEqual([]);
   });
 
   it("the bell gets a flight_you row for it unless the outbox already lists one", () => {
@@ -202,6 +221,13 @@ describe("an arrival's Start", () => {
 });
 
 describe("the pane strip replaces the guided next step while a flight is in the air", () => {
+  it("hides the guided button and the ⏩ toggle while the flight drives the session", () => {
+    const pane = code("components/grid/Pane.tsx");
+    expect(pane).toContain("const flying = flightDrives(inst.flight);");
+    expect(pane).toContain("const ft = flying ? null : fastTrackStep(inst);");
+    expect(pane).toContain('flying || (ns && ns.label === "Commit…" && !hasUncommitted(inst)) ? null : ns');
+  });
+
   it("renders in its own row above the terminal, never inside .pane-head", () => {
     const pane = code("components/grid/Pane.tsx");
     const head = pane.indexOf('className={"pane-head pane-head-fit"');

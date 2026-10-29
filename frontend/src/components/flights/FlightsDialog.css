@@ -380,6 +380,19 @@ details.fl-group-landed > summary {
   font-variant-numeric: tabular-nums;
 }
 
+.fl-now-paused {
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+/* Paused: the current block is marked, but nothing pulses. */
+.fl-state-paused .fl-chip-current .fl-chip-glyph {
+  animation: none;
+}
+
 .fl-now-reason {
   color: var(--red);
   overflow: hidden;

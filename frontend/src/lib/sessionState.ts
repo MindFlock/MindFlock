@@ -41,6 +41,7 @@
 import type { Instance } from "../api/types";
 import { backgroundHint } from "./backgroundJobs";
 import { agentName } from "./agentNames";
+import { youStepLabel } from "./flights";
 
 // --- Live agent activity, debounced across 2 polls (events push instantly) --
 
@@ -205,11 +206,15 @@ function needsYou(reason: SessionReason, hint?: string): SessionState {
   return { state: "needs_you", reason, label: REASON_LABEL[reason], tone: "attention", inBell: true, restartable: false, hint };
 }
 
-/** "You: Approve the merge" — a flight's *you* step as the chip says it. */
+/** "You: Approve the merge" — a flight's *you* step as the chip says it (never
+ * "You: You: …" for a step whose title already says so). */
 export function flightYouLabel(stepTitle: string | null | undefined): string {
-  const t = String(stepTitle || "").trim();
-  return t ? REASON_LABEL.flight_you + ": " + t : REASON_LABEL.flight_you;
+  return youStepLabel(stepTitle);
 }
+
+/** The rail chip of a session whose flight is paused: a calm idle state,
+ * not a needs-you one — whoever paused it resumes it. */
+export const PAUSED_FLIGHT_LABEL = "Paused flight";
 
 /** The rail's word for a sleeping session. */
 export const SLEEPING_LABEL = "Sleeping";
@@ -264,7 +269,10 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
   const fl = inst.flight;
   if (fl && fl.state === "waiting_you" && fl.step?.actor === "you")
     return {
-      ...needsYou("flight_you", "Flight “" + fl.plan_name + "” waits on you — press Done on its strip, the Board or the bell"),
+      ...needsYou(
+        "flight_you",
+        flightYouLabel(fl.step.title) + " — flight “" + fl.plan_name + "” waits on you; press Done on its strip, the Board or the bell"
+      ),
       label: flightYouLabel(fl.step.title),
     };
   const bgHint = backgroundHint(inst);
@@ -307,6 +315,16 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
   }
   if (inst.check && inst.check.state === "failed" && !(inst.check as { stale?: boolean }).stale)
     return needsYou("checks_failing", "Checks failed — push is gated until they pass (or push anyway)");
+  // A paused flight: calm, out of the bell, and said as what it is.
+  if (inst.flight?.state === "paused")
+    return {
+      state: "idle",
+      label: PAUSED_FLIGHT_LABEL,
+      tone: "neutral",
+      inBell: false,
+      restartable: false,
+      hint: "Flight “" + inst.flight.plan_name + "” is paused at " + (inst.flight.step?.title || "its current step") + " — Resume it from its strip's ⋯",
+    };
   // Idle. In the bell only once it has sat on uncommitted work for a while:
   // an agent that stopped in the middle of something with nobody typing. A
   // committed branch is not unfinished work — git considers it done.
@@ -341,6 +359,8 @@ export function needsYouAction(
   switch (ss.reason) {
     case "question":
       return { act: "bell", aria: "Question — answer it in the bell" };
+    case "flight_you":
+      return { act: "bell", aria: ss.label + " — press Done in the bell" };
     case "precommit_failed":
       return { act: "terminal", aria: "Pre-commit failed — open its Terminal" };
     case "setup_failed":

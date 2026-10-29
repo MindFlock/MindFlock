@@ -91,7 +91,9 @@ function ArrivalRow({
   const t = a.item.target as ArrivalTarget;
   const own = sourcePlan(settings, t);
   const [plan, setPlan] = useState(own);
-  const builtin = plans.find((p) => p.id === builtinPlanFor(a.item.kind));
+  // The kind's own built-in when the server has one (builtin:issue may ship),
+  // else the ticket plan.
+  const builtin = plans.find((p) => p.id === builtinPlanFor(a.item.kind, plans));
   return (
     <div className="fl-arrival">
       <WorkItemRow

@@ -272,12 +272,22 @@ strip, Plans, Describe a step.
 
 ### Frontend notes (not contract: what the UI does where the contract is open)
 
-- **Pause / Resume.** The flight `state` has no `paused`; the ⋯ offers
-  **Pause** while a flight is `running` or `waiting_you` and **Resume** while it
-  is `halted` (so a paused flight is expected to read `halted`, with `reason`
-  saying so).
+- **Pause / Resume.** The ⋯ offers **Pause** while a flight is `running` or
+  `waiting_you`, and **Resume** while it is `paused` or `halted`. A `paused`
+  flight stays under *In flight* with a "Paused" note (its current block
+  marked, not pulsing), is not in *Needs you* or the badge, its rail chip is
+  the calm idle-style **Paused flight** (out of the bell), and its pane strip
+  reads `✈ plan · ●●○○ · Paused · <step>`.
 - **Halted flights** sit under *Needs you* with **Retry** (`/steps/{sid}/retry`)
-  and **Skip** for the current step, and the `reason`.
+  and **Skip** for the current step, the `reason`, and **Resume** in the ⋯.
+- **The pane while a flight drives it** (`running`, `waiting_you`, `paused`):
+  the guided next-step button AND the ⏩ fast-track toggle are hidden — the
+  flight owns the ship ladder — and both come back once it is `halted`,
+  `done` or `cancelled`.
+- **"You:" once.** A *you* step is labelled `You: <title>` on the rail, the
+  bell and the Board, unless its title already starts with "You:" (any case).
+  The rail chip is capped in width with an ellipsis; its tooltip has the whole
+  text.
 - **Take off** on a plan with no `session.repo_path` (or a ticket / PR / issue
   plan) opens an inline row in the editor — a repository field with Browse…
   and an "on a session that is open" picker — rather than the New dialog; it
@@ -285,6 +295,8 @@ strip, Plans, Describe a step.
 - **Arrivals' plan picker** sends `plan` only when one is picked: the empty
   choice ("<built-in> (default)", or "Source's plan" when the source names
   one) leaves the server's own resolution — and so the depth cut — in charge.
+  The built-in it names is `builtin:<kind>` (ticket / pr / issue) when the
+  plans list has it, else `builtin:ticket`.
 - **Select fields** in `GET /api/flights/kinds` may list `options` as plain
   strings or `{value, label}`; both are read.
 - **Badge.** A flight parked on a `verify` step is counted once, as Verify's

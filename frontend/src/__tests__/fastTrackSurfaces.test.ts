@@ -275,7 +275,8 @@ describe("every item is a server call", () => {
 describe("the ⏩ button and its picker", () => {
   it("the button names the target and opens the picker", () => {
     const pane = mod(PANE);
-    expect(pane).toContain("const ft = fastTrackStep(inst);");
+    // …unless a flight drives the session: then the flight owns the ladder.
+    expect(pane).toContain("const ft = flying ? null : fastTrackStep(inst);");
     expect(
       has(
         pane,

@@ -140,6 +140,22 @@ describe("a flight's strip on the Board", () => {
     expect(h).toContain("Checks failed");
   });
 
+  it("a paused flight says so, offers Resume in its ⋯, and nothing pulses", () => {
+    const p = renderToStaticMarkup(createElement(FlightCard, { flight: flight({ state: "paused", cursor: 1 }), kinds: KINDS }));
+    expect(p).toContain('class="fl-now-paused">Paused<');
+    expect(p).toContain(">Resume</button>");
+    expect(p).not.toContain(">Pause</button>");
+    expect(p).not.toContain(">Done</button>");
+    expect(css("components/flights/FlightsDialog.css")).toMatch(/\.fl-state-paused \.fl-chip-current \.fl-chip-glyph \{\s*animation: none;/);
+  });
+
+  it("never says You: twice", () => {
+    const steps = STEPS.map((s) => (s.id === "s3" ? { ...s, title: "You: approve the merge" } : s));
+    const h = renderToStaticMarkup(createElement(FlightCard, { flight: flight({ steps }), kinds: KINDS }));
+    expect(h).toContain(">You: approve the merge<");
+    expect(h).not.toContain("You: You:");
+  });
+
   it("a robot step running has no Done / Skip", () => {
     const r = renderToStaticMarkup(createElement(FlightCard, { flight: flight({ state: "running", cursor: 1 }), kinds: KINDS }));
     expect(r).not.toContain(">Done</button>");

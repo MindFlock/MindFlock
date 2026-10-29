@@ -3698,9 +3698,10 @@ Schedule. Tabs, in order:
    - **In flight** — one strip per flight: the subject's headline, the plan,
      its session, then the blocks as chips (✓ done · ● current, pulsing · ○
      pending · ✗ failed · – skipped; *you* blocks outlined in the needs-you
-     gold), the current step and how long it has been there, and a ⋯ (**Open
-     session** · **Pause** / **Resume** · **Jump to…** (the chips turn into
-     buttons; press one) · **Cancel**, asked inline — the session is kept).
+     gold), the current step and how long it has been there (a paused flight
+     says **Paused**), and a ⋯ (**Open session** · **Pause** / **Resume** ·
+     **Jump to…** (the chips turn into buttons; press one) · **Cancel**, asked
+     inline — the session is kept).
      Clicking the strip opens its session and closes the dialog.
    - **Arrivals** — Intake's eligible items with no session yet (the
      Auto-start tab's own list, `intake/queue.ts`), grouped by source, each
@@ -3742,14 +3743,18 @@ terminal, in its own row under the pane header (not inside it: the header
 hides chips): `✈ Ticket to merge · ●●●○○○ · Reviews settle (4m)`, gold when
 the flight waits on you, with **Done** / **Skip** (and the step's tick boxes)
 inline on a *you* step and a ⋯ for **Pause** / **Resume**, **Jump to…** and
-**Cancel**. While the flight is in the air the guided next-step button is
-hidden — the strip is the next step — and it comes back when the flight lands.
+**Cancel**. While the flight drives the session (running, waiting on you or
+paused) the guided next-step button and the ⏩ fast-track toggle are hidden —
+the flight owns the ship ladder and the strip is the next step — and both come
+back once it halts or lands.
 It reads the session row's `flight` field, and the full flight from the
 flights query for the elapsed time and the blocks.
 
 **The rail and the bell.** A flight parked on a *you* step is a Needs-you
 state (`lib/sessionState.ts`, reason `flight_you`, notify rule
-`flight_needs_you`): the row's chip says **You: <step title>** in the gold, and
+`flight_needs_you`): the row's chip says **You: <step title>** in the gold
+(width-capped with an ellipsis so the row's name stays readable; clicking it
+opens the bell), a paused flight's chip is a calm **Paused flight**, and
 the bell lists it with **Done**, **Skip** and **Open ↗** (`outbox/WaitingRow`;
 `lib/needsYou.ts` `withFlightYou` adds the row from the session's own `flight`
 field until the server's outbox lists it).

@@ -10,6 +10,7 @@ import {
   blankPlan,
   builtinPlanFor,
   currentElapsed,
+  flightDrives,
   duplicateStep,
   fieldOptions,
   flightBadgeCount,
@@ -30,6 +31,7 @@ import {
   stripLabel,
   whenFormOf,
   youItems,
+  youStepLabel,
   youText,
   type Flight,
   type FlightRow,
@@ -187,6 +189,35 @@ describe("what waits on you", () => {
   });
 });
 
+describe("a paused flight", () => {
+  const paused = flight({ id: "f_9", state: "paused" });
+
+  it("is in the air but waits on nobody: In flight, not Needs you, not the badge", () => {
+    expect(isLive(paused)).toBe(true);
+    expect(needsYouFlights([paused])).toEqual([]);
+    expect(flightBadgeCount([paused], 0, 0, [])).toMatchObject({ count: 0, failing: false });
+  });
+
+  it("still owns the ship ladder, as running and waiting_you do; halted, done and cancelled give it back", () => {
+    for (const st of ["running", "waiting_you", "paused"] as const) expect(flightDrives({ state: st }), st).toBe(true);
+    for (const st of ["halted", "done", "cancelled"] as const) expect(flightDrives({ state: st }), st).toBe(false);
+    expect(flightDrives(null)).toBe(false);
+  });
+
+  it("says Paused on the strip", () => {
+    expect(stripLabel(paused, NOW_MS)).toBe("✈ Ticket to merge · ●●–●○○ · Paused · Reviews settle (4m)");
+  });
+});
+
+describe("the You: prefix", () => {
+  it("is added once, never twice", () => {
+    expect(youStepLabel("Approve the merge")).toBe("You: Approve the merge");
+    expect(youStepLabel("You: approve the merge")).toBe("You: approve the merge");
+    expect(youStepLabel("you:check it")).toBe("you:check it");
+    expect(youStepLabel("")).toBe("You");
+  });
+});
+
 describe("the pane strip's line", () => {
   it("✈ plan · dots · step (elapsed) from a full flight", () => {
     expect(stripLabel(flight(), NOW_MS)).toBe("✈ Ticket to merge · ●●–●○○ · Reviews settle (4m)");
@@ -227,6 +258,14 @@ describe("arrivals", () => {
     expect(builtinPlanFor("prs")).toBe("builtin:pr");
     expect(builtinPlanFor("issues")).toBe("builtin:ticket");
     expect(builtinPlanFor("schedule")).toBe("builtin:schedule");
+  });
+
+  it("use builtin:<kind> when the server ships it, else the ticket plan", () => {
+    const shipped = [{ id: "builtin:ticket" }, { id: "builtin:pr" }, { id: "builtin:issue" }];
+    expect(builtinPlanFor("issues", shipped)).toBe("builtin:issue");
+    expect(builtinPlanFor("issues", [{ id: "builtin:ticket" }])).toBe("builtin:ticket");
+    expect(builtinPlanFor("prs", [{ id: "builtin:ticket" }])).toBe("builtin:ticket");
+    expect(builtinPlanFor("prs", shipped)).toBe("builtin:pr");
   });
 });
 

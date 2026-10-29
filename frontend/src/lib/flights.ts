@@ -12,7 +12,7 @@ import { relTime } from "./format";
 // --- The contract's shapes ---------------------------------------------------
 
 export type StepActor = "robot" | "you";
-export type FlightState = "running" | "waiting_you" | "halted" | "done" | "cancelled";
+export type FlightState = "running" | "waiting_you" | "paused" | "halted" | "done" | "cancelled";
 export type StepState = "pending" | "running" | "waiting_you" | "done" | "skipped" | "failed";
 export type OnFail = "halt" | "agent" | "skip" | "you";
 export type TriggerKind = "manual" | "ticket" | "pr" | "issue" | "schedule";
@@ -134,7 +134,22 @@ export interface FlightRow {
 
 /** The flight is still in the air (the Board's *In flight* / *Needs you*). */
 export function isLive(f: Pick<Flight, "state">): boolean {
-  return f.state === "running" || f.state === "waiting_you" || f.state === "halted";
+  return f.state === "running" || f.state === "waiting_you" || f.state === "paused" || f.state === "halted";
+}
+
+/** The flight drives its session's ship ladder right now: running, parked on
+ * you, or paused. The pane hides its guided next-step button and its ⏩
+ * fast-track toggle meanwhile (a toggle mid-flight would fight the flight);
+ * once it is halted, done or cancelled both come back. */
+export function flightDrives(f: Pick<Flight, "state"> | null | undefined): boolean {
+  return !!f && (f.state === "running" || f.state === "waiting_you" || f.state === "paused");
+}
+
+/** "You: <step>" — once: a title that already says "You:" is left as it is. */
+export function youStepLabel(title: string | null | undefined): string {
+  const t = String(title || "").trim();
+  if (!t) return "You";
+  return /^you:/i.test(t) ? t : "You: " + t;
 }
 
 /** A step's chip glyph: done ✓ · current ● · pending ○ · failed ✗ · skipped –. */
@@ -160,7 +175,7 @@ export function stepStateOf(f: Pick<Flight, "cursor" | "step_states" | "state">,
   const rec = f.step_states?.[step.id]?.state;
   if (rec) return rec;
   if (index < f.cursor) return "done";
-  if (index === f.cursor && isLive(f)) return f.state === "waiting_you" ? "waiting_you" : "running";
+  if (index === f.cursor && isLive(f)) return f.state === "waiting_you" ? "waiting_you" : f.state === "paused" ? "pending" : "running";
   return "pending";
 }
 
@@ -198,7 +213,9 @@ export function stepActor(step: Pick<FlightStep, "kind">, kinds?: readonly StepK
 }
 
 /** Flights that wait on a person: parked on a *you* step (or a verify step's
- * human items), or halted until someone retries, skips or cancels. */
+ * human items), or halted until someone retries, skips or cancels. A paused
+ * flight waits on nobody — whoever paused it resumes it — so it stays under
+ * *In flight* and out of the badge. */
 export function needsYouFlights(flights: readonly Flight[]): Flight[] {
   return flights.filter((f) => f.state === "waiting_you" || f.state === "halted");
 }
@@ -232,7 +249,12 @@ export function stripDots(f: Flight | FlightRow): string {
 export function stripLabel(f: Flight | FlightRow, now = Date.now()): string {
   const title = "steps" in f ? f.steps[f.cursor]?.title || "" : f.step?.title || "";
   const elapsed = "steps" in f ? currentElapsed(f, now) : "";
-  const tail = f.state === "done" ? "Landed" : f.state === "cancelled" ? "Cancelled" : title + (elapsed ? " (" + elapsed + ")" : "");
+  const tail =
+    f.state === "done"
+      ? "Landed"
+      : f.state === "cancelled"
+        ? "Cancelled"
+        : (f.state === "paused" ? "Paused · " : "") + title + (elapsed ? " (" + elapsed + ")" : "");
   return ["✈ " + f.plan_name, stripDots(f), tail].filter((x) => x.trim()).join(" · ");
 }
 
@@ -323,10 +345,19 @@ export function arrivalAuto(
 
 /** The built-in plan a kind's flights use when its source names none. The
  * contract has no issue built-in: an issue is worked like a ticket. */
-export function builtinPlanFor(kind: ArrivalKind | TriggerKind): string {
-  if (kind === "prs" || kind === "pr") return "builtin:pr";
-  if (kind === "schedule") return "builtin:schedule";
-  return "builtin:ticket";
+export function builtinPlanFor(kind: ArrivalKind | TriggerKind, plans?: readonly Pick<FlightPlan, "id">[] | null): string {
+  const own =
+    kind === "prs" || kind === "pr"
+      ? "builtin:pr"
+      : kind === "issues" || kind === "issue"
+        ? "builtin:issue"
+        : kind === "tickets" || kind === "ticket"
+          ? "builtin:ticket"
+          : "builtin:" + kind;
+  // A kind's own built-in when the server has one (it may ship builtin:issue),
+  // else the ticket plan; with no list at hand, the contract's four.
+  if (plans) return plans.some((p) => p.id === own) ? own : "builtin:ticket";
+  return own === "builtin:issue" ? "builtin:ticket" : own;
 }
 
 // --- The editor --------------------------------------------------------------

@@ -149,9 +149,7 @@ describe("the pane header", () => {
     expect(pane).toContain('const canResume = sessionAction("resume").enabled(menuCtx);');
     expect(pane).toMatch(/\{canResume && \(\s*<button\s+className="act pane-resume"/);
     // ...and none while a flight drives the session: its strip is the next step.
-    expect(pane).toContain(
-      '(inst.flight && isLive(inst.flight)) || (ns && ns.label === "Commit…" && !hasUncommitted(inst)) ? null : ns'
-    );
+    expect(pane).toContain('flying || (ns && ns.label === "Commit…" && !hasUncommitted(inst)) ? null : ns');
   });
 });
 
