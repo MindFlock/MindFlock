@@ -12,7 +12,10 @@
  * A PEER on one of my sessions shared over a peer link (docs/peer-link.md
  * "Shared sessions") is a pill too, keyed `peer:<link id>`: only the event
  * bus feeds it (the guest poll knows nothing of peers and keeps them), and
- * the server says `left: true` when they are gone.
+ * the server says `left: true` when they are gone. With no poll behind it,
+ * a page opened while a peer is already on a session rebuilds the pill from
+ * the bus's replayed backlog (quietly: no toast, no follow) — the server only
+ * announces a peer's focus when it moves, not on every heartbeat.
  *
  * Follow is per link and lives in this browser only: following Pat means
  * every `guest.focus_changed` for Pat's link also selects that session here
@@ -87,8 +90,9 @@ export function isPeerFocus(link: string): boolean {
 /** One `guest.focus_changed` envelope: move the pill, and the owner's
  * selection with it when following that guest. Returns what to toast ("" for
  * nothing): a guest arriving is worth a line, a click of theirs is not.
- * `left: true` (a peer gone) takes the pill away and ends following it. */
-export function applyFocusEvent(env: EventEnvelope): string {
+ * `left: true` (a peer gone) takes the pill away and ends following it.
+ * `replay`: from the backlog — the pill only, never a selection or a toast. */
+export function applyFocusEvent(env: EventEnvelope, opts: { replay?: boolean } = {}): string {
   const d = (env?.data || {}) as { link?: string; label?: string; title?: string; joined?: boolean; left?: boolean };
   const link = String(d.link || "");
   if (link && d.left) {
@@ -103,6 +107,7 @@ export function applyFocusEvent(env: EventEnvelope): string {
   if (!link || !title) return "";
   focus = { ...focus, [link]: { link, label: String(d.label || ""), title, ts: Number(env.ts) || Date.now() / 1000 } };
   notify();
+  if (opts.replay) return "";
   if (following === link) selectSession(title, { noKeyboard: true });
   return d.joined ? `${guestName(String(d.label || ""))} joined — on ${displayName(title)}` : "";
 }
@@ -113,7 +118,11 @@ export function installGuestFocusEvents(): void {
   if (bridged || !ev) return;
   bridged = true;
   ev.subscribe("guest.focus_changed", (env: EventEnvelope) => {
-    if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
+    if (typeof ev.isReplay === "function" && ev.isReplay(env)) {
+      // A guest's pill comes back with GuestBar's poll; a peer's has only this.
+      if (isPeerFocus(String(env.data?.link || ""))) applyFocusEvent(env, { replay: true });
+      return;
+    }
     const say = applyFocusEvent(env);
     if (say) toast(say);
   });

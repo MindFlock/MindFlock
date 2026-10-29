@@ -23,7 +23,7 @@ import { SidebarResizer } from "./SidebarResizer";
 import { BulkBar } from "./BulkBar";
 import { OfflineBar } from "./OfflineBar";
 import { PeerSharedRows } from "./PeerSharedRows";
-import { installPeerFocus, isPeerRow, modeWords, peerGroups } from "../../lib/peerSessions";
+import { installPeerFocus, isPeerRow, peerGroups, peerGroupWords } from "../../lib/peerSessions";
 import { useExtensionBarDefs } from "../../extensions/ExtensionBar";
 import { BarSlot, barContent, SECTION_MIME } from "./SidebarBars";
 import { orderedSections, SESSIONS_KEY } from "./barDefs";
@@ -614,18 +614,21 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
                     {peers.map((g, pi) => {
                       const dkey = peerRails[pi].dkey;
                       const collapsed = ui.collapsedDevices.has(dkey);
-                      const modes = Array.from(new Set(g.rows.map((r) => modeWords(String(r.peer_mode || "")))));
+                      // "Erik · connected", or — the link dropped, its rows
+                      // remembered for a minute — "Erik · offline — reconnecting".
+                      const words = peerGroupWords(g);
                       return (
                         <DeviceSection
                           key={dkey}
                           devKey={dkey}
-                          label={g.label}
+                          label={words.text}
                           badge={String(g.rows.length)}
-                          badgeOff={false}
+                          badgeOff={words.offline}
                           collapsed={collapsed}
-                          title={`Shared by ${g.label} over a peer link · ${modes.join(", ")}`}
+                          title={words.title}
                           showForget={false}
                           peer={g.label}
+                          peerOffline={words.offline}
                           note=""
                           action={null}
                           onToggle={() => ui.toggleDeviceCollapsed(dkey)}
@@ -771,6 +774,8 @@ function DeviceHeader(props: {
   member?: boolean;
   /** A peer link's group: the peer's name (the ⇄ marker says so). */
   peer?: string;
+  /** That peer's link is down (its rows are remembered, greyed). */
+  peerOffline?: boolean;
   onToggle(): void;
 }) {
   // The ✕ forgets the device's token — pairing it again is the only way
@@ -791,7 +796,7 @@ function DeviceHeader(props: {
   };
   return (
     <>
-      <li className="device-group" title={props.title}>
+      <li className={"device-group" + (props.peerOffline ? " peer-offline" : "")} title={props.title}>
         {/* The header is the fold toggle: a real button, so Tab reaches it and
             a screen reader hears whether the group is open. */}
         <button
@@ -803,6 +808,10 @@ function DeviceHeader(props: {
           <span className="dev-caret" aria-hidden="true">
             {props.collapsed ? "▸" : "▾"}
           </span>
+          {props.peer && (
+            // Connected / offline, before the name — the row chips' dot.
+            <span className={"dev-peer-dot" + (props.peerOffline ? " off" : "")} aria-hidden="true" />
+          )}
           <span className="dev-name">{props.label}</span>
           {props.peer && (
             <span
@@ -865,6 +874,7 @@ function DeviceSection(props: {
   showForget: boolean;
   member?: boolean;
   peer?: string;
+  peerOffline?: boolean;
   note: string;
   /** "add": Add to my devices… (Settings → Your devices on it); "connect":
    * Your devices → Advanced's pasted-token pairing with this device

@@ -36,6 +36,9 @@ export interface PeerRowFields {
   peer_mode?: PeerMode | string;
   device_label?: string;
   display_title?: string;
+  /** Not served now — its link dropped; remembered for a minute
+   * (installPeerRowMemory below). Never set by the server. */
+  peer_offline?: boolean;
 }
 
 export type PeerRow = Instance & PeerRowFields;
@@ -110,12 +113,15 @@ export function peerRowTooltip(i: PeerRow): string {
 export function peerRowChip(i: PeerRow): { label: string; title: string; connected: boolean | null } {
   const who = i.device_label || i.device || "them";
   const gated = i.peer_mode === "gated";
+  const offline = !!i.peer_offline;
   return {
     label: `⇄ ${who} · ${gated ? "gated" : "full"}`,
-    connected: null,
-    title:
-      `${peerRowTooltip(i)} — it runs on ${who}'s machine: open it to type into it; ` +
-      "ship, push, rename and the rest are theirs.",
+    // The dot: connected, or (a remembered row) offline.
+    connected: !offline,
+    title: offline
+      ? `${peerRowTooltip(i)} — ${who} is offline; it comes back when they reconnect.`
+      : `${peerRowTooltip(i)} — it runs on ${who}'s machine: open it to type into it; ` +
+        "ship, push, rename and the rest are theirs.",
   };
 }
 
@@ -241,4 +247,246 @@ export function installPeerFocus(rows: () => Instance[]): () => void {
   };
   installed = stop;
   return stop;
+}
+
+// --------------------------------------------------------------------------- //
+// How a shared session FEELS on the joiner's side: the group header, the
+// pane strip, the words for the bell / toasts, and a short memory of a
+// peer's rows across a dropped link
+// --------------------------------------------------------------------------- //
+/** Who shared a row, as the rail names them. */
+export function peerWho(i: PeerRow): string {
+  return i.device_label || i.device || "them";
+}
+
+/** A row the server no longer lists because its link dropped, kept on the
+ * rail (greyed, not clickable) for {@link OFFLINE_KEEP_MS}. */
+export function isOfflinePeerRow(i: Instance | null | undefined): boolean {
+  return isPeerRow(i) && !!(i as PeerRow).peer_offline;
+}
+
+/** The peer group's header words: "Erik · connected" / "Erik · offline —
+ * reconnecting". A group is offline when every row in it is remembered. */
+export function peerGroupWords(g: PeerGroup): { text: string; offline: boolean; title: string } {
+  const offline = g.rows.length > 0 && g.rows.every(isOfflinePeerRow);
+  const modes = Array.from(new Set(g.rows.map((r) => modeWords(String(r.peer_mode || "")))));
+  return {
+    text: g.label + " · " + (offline ? "offline — reconnecting" : "connected"),
+    offline,
+    title:
+      `Shared by ${g.label} over a peer link · ${modes.join(", ")}` +
+      (offline ? ` — ${g.label} is offline; these come back when they reconnect` : ""),
+  };
+}
+
+/** The thin strip above a peer row's terminal. */
+export function peerPaneStrip(i: PeerRow): { text: string; offline: boolean } {
+  const who = peerWho(i);
+  if (isOfflinePeerRow(i)) return { text: `${who} is offline — the terminal reconnects when they're back`, offline: true };
+  return {
+    text: `${who}'s session · ` + (i.peer_mode === "gated" ? "gated to its folder" : "full join — you type as them"),
+    offline: false,
+  };
+}
+
+/** The strip on MY session while peers are on it: "Bob is here", "Bob and
+ * Ann are here", "Bob, Ann and Cy are here". "" for nobody. */
+export function hereWords(names: string[]): string {
+  const n = names.filter(Boolean);
+  if (!n.length) return "";
+  if (n.length === 1) return n[0] + " is here";
+  return n.slice(0, -1).join(", ") + " and " + n[n.length - 1] + " are here";
+}
+
+/** `peer.session_shared` / `peer.session_unshared` / `peer.state` data. */
+export interface PeerSessionEventData {
+  link_id?: string;
+  peer_name?: string;
+  title?: string;
+  mode?: string;
+  by?: string;
+  theirs?: boolean;
+  connected?: boolean;
+}
+
+/** The rail key of THEIR session `title` on link `link`: the row the server
+ * lists (its prefix may be numbered, "Bob (2)"), else `<peer name>::<title>`
+ * — what it will be once the list catches up. */
+export function peerRowKey(d: PeerSessionEventData, rows: Instance[]): string {
+  const title = String(d.title || "");
+  const link = String(d.link_id || "");
+  const hit = rows.find((r) => isPeerRow(r) && r.peer_link === link && r.title.endsWith("::" + title));
+  if (hit) return hit.title;
+  for (const r of lastSeen.get(link) || []) if (r.title.endsWith("::" + title)) return r.title;
+  return (String(d.peer_name || "").trim() || "peer") + "::" + title;
+}
+
+/** Their name for a shared session (what the rail shows), from the row or
+ * the memory; else the raw title. */
+export function peerSessionName(d: PeerSessionEventData, rows: Instance[]): string {
+  const key = peerRowKey(d, rows);
+  const row = rows.find((r) => r.title === key) || (lastSeen.get(String(d.link_id || "")) || []).find((r) => r.title === key);
+  return (
+    (row as PeerRow | undefined)?.display_title ||
+    seenNames.get(String(d.link_id || "") + "\n" + String(d.title || "")) ||
+    String(d.title || "")
+  );
+}
+
+/** One shared-session event as the bell's row (`text`, "" for none) and the
+ * toast (`toast`, "" for none); `select` is the row a click opens (theirs).
+ * `name` is the session's name as this side shows it (theirs: their name
+ * for it; mine: my alias). null: not news. */
+export function peerSessionNote(
+  event: string,
+  d: PeerSessionEventData | null | undefined,
+  ctx: { name: string; rowKey?: string }
+): { text: string; cls: string; toast: string; select: string } | null {
+  const data = d || {};
+  const who = String(data.peer_name || "").trim() || "Your peer";
+  const name = ctx.name || String(data.title || "");
+  if (event === "peer.session_shared") {
+    if (data.theirs) {
+      const text = `${who} shared ${name} with you (${modeWords(data.mode)})`;
+      return { text, cls: "n-info", toast: `${who} shared ${name} with you — click to open`, select: ctx.rowKey || "" };
+    }
+    return { text: `You shared ${name} with ${who} (${modeWords(data.mode)})`, cls: "n-info", toast: "", select: "" };
+  }
+  if (event === "peer.session_unshared") {
+    if (data.theirs) return { text: `${who} withdrew ${name}`, cls: "n-info", toast: "", select: "" };
+    return { text: `You stopped sharing ${name} with ${who}`, cls: "n-info", toast: "", select: "" };
+  }
+  return null;
+}
+
+/** The toast when a peer whose sessions were on this rail comes back. */
+export function peerBackToast(peerName: string): string {
+  return (String(peerName || "").trim() || "Your peer") + " is back — your shared sessions are live";
+}
+
+// ---- the memory ------------------------------------------------------------ //
+/** How long a dropped link's rows stay on the rail, greyed. */
+export const OFFLINE_KEEP_MS = 60_000;
+
+/** link → the peer rows the last list that had any carried. */
+const lastSeen = new Map<string, PeerRow[]>();
+/** link → when it dropped (cleared once its rows are listed again). */
+const offlineSince = new Map<string, number>();
+/** `link\n<their title>` → their name for it, kept past a withdrawal so
+ * "Erik withdrew API fix" names it the way the rail did. */
+const seenNames = new Map<string, string>();
+
+/** Record what the server lists now (ghosts ignored). A link with no rows in
+ * this list keeps its last rows: the poll may beat the `peer.state` that says
+ * why they went. A link listed again is back. */
+export function notePeerRows(rows: Instance[]): void {
+  const by = new Map<string, PeerRow[]>();
+  for (const r of rows) {
+    if (!isPeerRow(r) || r.peer_offline || !r.peer_link) continue;
+    const cut = r.title.indexOf("::");
+    if (r.display_title && cut > 0) seenNames.set(r.peer_link + "\n" + r.title.slice(cut + 2), r.display_title);
+    if (!by.has(r.peer_link)) by.set(r.peer_link, []);
+    by.get(r.peer_link)!.push(r);
+  }
+  for (const [link, list] of by) {
+    lastSeen.set(link, list);
+    offlineSince.delete(link);
+  }
+}
+
+/** The link dropped: its last rows stay, greyed, for {@link OFFLINE_KEEP_MS}. */
+export function peerLinkDown(link: string, now = Date.now()): void {
+  if (link && (lastSeen.get(link) || []).length && !offlineSince.has(link)) offlineSince.set(link, now);
+}
+
+/** The link is up again: true when it was down with rows on this rail (the
+ * "is back" toast). The rows stay greyed until the list carries them. */
+export function peerLinkUp(link: string): boolean {
+  return !!link && offlineSince.has(link) && (lastSeen.get(link) || []).length > 0;
+}
+
+/** They withdrew `title` (their raw title): never remember it. */
+export function forgetPeerRow(link: string, title: string): void {
+  const list = lastSeen.get(link);
+  if (!list) return;
+  const left = list.filter((r) => !r.title.endsWith("::" + title));
+  if (left.length) lastSeen.set(link, left);
+  else {
+    lastSeen.delete(link);
+    offlineSince.delete(link);
+  }
+}
+
+/** The remembered rows still within their minute, flagged `peer_offline`. */
+export function offlinePeerRows(now = Date.now()): PeerRow[] {
+  const out: PeerRow[] = [];
+  for (const [link, since] of offlineSince) {
+    if (now - since >= OFFLINE_KEEP_MS) continue;
+    for (const r of lastSeen.get(link) || []) out.push({ ...r, peer_offline: true, activity: "" });
+  }
+  return out;
+}
+
+/** `rows` with the remembered ones added (those the server doesn't list).
+ * Returns `rows` itself when that changes nothing — the cache listener below
+ * relies on it to stop. */
+export function withOfflinePeers(rows: Instance[], now = Date.now()): Instance[] {
+  const live = rows.filter((r) => !isOfflinePeerRow(r));
+  const have = new Set(live.map((r) => r.title));
+  const ghosts = offlinePeerRows(now).filter((r) => !have.has(r.title));
+  const before = rows.filter(isOfflinePeerRow).map((r) => r.title).join("\n");
+  if (before === ghosts.map((r) => r.title).join("\n")) return rows;
+  return [...live, ...ghosts];
+}
+
+/** When the next remembered row expires (ms from `now`), else null. */
+export function nextOfflineExpiry(now = Date.now()): number | null {
+  let soonest: number | null = null;
+  for (const since of offlineSince.values()) {
+    const left = since + OFFLINE_KEEP_MS - now;
+    if (left > 0 && (soonest === null || left < soonest)) soonest = left;
+  }
+  return soonest;
+}
+
+/** Keep the remembered rows in the instances cache, so the rail and an open
+ * pane both still have them while the link is down (the pane's terminal
+ * keeps retrying, and reattaches once the row is served again). Returns
+ * `apply`, to call after the memory changed; `stop` on `.stop`. */
+interface InstancesCache {
+  getQueryData<T>(key: readonly unknown[]): T | undefined;
+  setQueryData<T>(key: readonly unknown[], data: T): unknown;
+  getQueryCache(): {
+    subscribe(fn: (e: { type: string; query: { queryKey: readonly unknown[] }; action?: { type?: string } }) => void): () => void;
+  };
+}
+export function installPeerRowMemory(qc: InstancesCache): { apply: () => void; stop: () => void } {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const apply = () => {
+    const rows = qc.getQueryData<Instance[]>(["instances"]);
+    if (!rows) return;
+    notePeerRows(rows);
+    const next = withOfflinePeers(rows);
+    if (next !== rows) qc.setQueryData<Instance[]>(["instances"], next);
+    if (timer) clearTimeout(timer);
+    const wait = nextOfflineExpiry();
+    timer = wait === null ? null : setTimeout(apply, wait + 50);
+  };
+  const unsub = qc.getQueryCache().subscribe((e) => {
+    if (e.type === "updated" && e.query.queryKey[0] === "instances" && e.action?.type === "success") apply();
+  });
+  return {
+    apply,
+    stop: () => {
+      unsub();
+      if (timer) clearTimeout(timer);
+    },
+  };
+}
+
+/** Test seam. */
+export function _resetPeerMemory(): void {
+  lastSeen.clear();
+  offlineSince.clear();
+  seenNames.clear();
 }

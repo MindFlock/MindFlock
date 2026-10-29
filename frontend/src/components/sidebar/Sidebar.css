@@ -340,3 +340,21 @@ body.narrow .sidebar-resizer {
 #guest-bar .gb-kill:hover:not(:disabled) {
   background: color-mix(in srgb, var(--red) 15%, transparent);
 }
+
+/* A peer's group header: a dot (connected / offline) before "Erik ·
+   connected". While their link is down the group and its remembered rows
+   stay a minute, greyed (lib/peerSessions installPeerRowMemory). */
+.device-group .dev-peer-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  flex: none;
+}
+.device-group .dev-peer-dot.off {
+  background: var(--muted);
+}
+.device-group.peer-offline .dev-name {
+  color: var(--muted);
+  font-style: italic;
+}

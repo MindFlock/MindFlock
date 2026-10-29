@@ -68,6 +68,8 @@ import { usageHeadline } from "../usage/usageModel";
 import { codemapSeenAt, redZoneChip, subscribeCodemapSeen } from "../../lib/codemapSeen";
 import { mapHasState, mapTabBadge } from "../../lib/mapEntry";
 import { TabIcon } from "./TabIcon";
+import { hereWords, isPeerRow, peerPaneStrip } from "../../lib/peerSessions";
+import { guestName, isPeerFocus, useGuestFocus } from "../../lib/guestFocus";
 
 /** "thread" is the Thread tab (the session's workers and what was said
  * between them), opened by its own button or store.threadOpen. */
@@ -238,6 +240,21 @@ export function Pane({
     inst.branch || ""
   );
   const displayName = alias || label.text;
+  // The strip above the terminal (lib/peerSessions): on a peer's session,
+  // whose it is and how you are in it (or that they are offline); on one of
+  // MY sessions a peer is on, who is here — the rail pill's names.
+  const { focus: presence } = useGuestFocus();
+  const theirs = isPeerRow(inst);
+  const strip = theirs
+    ? peerPaneStrip(inst)
+    : (() => {
+        const here = hereWords(
+          Object.values(presence)
+            .filter((f) => f.title === title && isPeerFocus(f.link))
+            .map((f) => guestName(f.label))
+        );
+        return here ? { text: here, offline: false } : null;
+      })();
   // A session on another tailnet device says which one. Local sessions say
   // nothing: a row only carries `device` once a second device is in play.
   const deviceName = inst.device ? inst.device_label || inst.device : "";
@@ -693,7 +710,8 @@ export function Pane({
   const sharedFolder = !!inst.peer_share;
   const ns = nextStep(inst);
   const ft = fastTrackStep(inst);
-  const rs = resetStep(inst);
+  // ↺ is the owner's: never on a peer's session.
+  const rs = theirs ? null : resetStep(inst);
   const step = liveStep(inst);
   const q = inst.queue;
   const pending = q?.pending || 0;
@@ -1186,6 +1204,14 @@ export function Pane({
         </div>
       </div>
       <AgentBlockedBanner block={noAgent} title={title} />
+      {strip && (
+        <div
+          className={"peer-strip" + (strip.offline ? " off" : "") + (theirs ? " theirs" : " here")}
+          role="note"
+        >
+          {strip.text}
+        </div>
+      )}
       <div className="pane-body" ref={bodyRef}>
         {paused ? (
           <PausedBody key="paused" title={title} hidden={tab !== "agent"} />
