@@ -101,6 +101,17 @@ def name_of(pid: str) -> str:
     device). Never raises."""
     if not pid:
         return ""
+    if pid.startswith("guest:"):
+        # The name they pick now, also after their terminal attached (the
+        # page attaches while it still asks "What should we call you?").
+        try:
+            from backend.web.core import guests as _guests
+
+            for rec in _guests.list_links():
+                if "guest:" + rec["id"] == pid:
+                    return _guests.display_name(rec)
+        except Exception:  # noqa: BLE001
+            pass
     with _LOCK:
         named = _NAMES.get(pid)
     if named:
@@ -125,12 +136,21 @@ def caller(scope) -> Tuple[str, str]:
     """``(person id, device)`` a request or websocket comes from: the person
     :func:`backend.web.core.auth.request_person` names, and the device key in
     the ``X-MindFlock-Remote`` marker — this device's own key for a browser or
-    CLI here. Never raises."""
+    CLI here. A guest link's browser is its own person, ``guest:<link id>``
+    under the guest's name — never the owner it signs in beside. Never
+    raises."""
     pid = ""
     try:
         from backend.web.core import auth as _auth
+        from backend.web.core import guests as _guests
 
-        pid = _auth.request_person(scope)
+        guest = _guests.scope_guest(scope)
+        if guest is not None:
+            pid = "guest:" + str(guest.get("id") or "")
+            with _LOCK:
+                _NAMES[pid] = _guests.display_name(guest)
+        else:
+            pid = _auth.request_person(scope)
     except Exception:  # noqa: BLE001
         pass
     device = ""

@@ -186,6 +186,19 @@ def test_gated_session_listed_while_it_is_the_links_shared_folder(svc, engine):
     assert [(i["title"], i["mode"]) for i in out] == [("peer-bob-abab", "gated")]
 
 
+def test_a_gated_share_is_called_what_its_source_session_is(svc, engine):
+    # Join trial 2026-10-28: an invite opening "docs (gated)" put a row called
+    # "peer-bob-abab" on the joiner's rail — the sandboxed copy's title.
+    from backend.web.core import aliases
+
+    lnk = link(share_id=SHARE_ID, session_title="peer-bob-abab")
+    svc.store.links[LID] = lnk
+    svc.shared_sessions.add(LID, "peer-bob-abab", "gated", "docs")
+    (got,) = op(svc, lnk, "sessions", {})["sessions"]
+    assert got["title"] == "peer-bob-abab"
+    assert got["name"] == aliases.display_name("docs", "main") != "peer-bob-abab"
+
+
 def test_session_ops_need_the_safety_number_not_a_perm(svc, engine):
     off = {"messages": False, "diff": False, "read_file": False}
     svc.shared_sessions.add(LID, "api-fix", "full")
@@ -384,6 +397,17 @@ def test_their_sessions_cached_and_changes_announced(svc, bus):
     assert shared[0]["data"]["by"] == "peer" and shared[0]["data"]["theirs"] is True
     assert [e["data"]["title"] for e in unshared] == ["api-fix"]
     assert svc.their_sessions(LID)[0]["title"] == "docs"
+
+
+def test_a_new_links_first_list_is_news(svc, bus):
+    # Join trial 2026-10-28: the joiner's first list already held the
+    # invite's full session, so only the gated one (shared a moment later)
+    # got a peer.session_shared — one toast and bell row of the two.
+    svc.on_link_added(link(role="dialer"))
+    svc.transport.answers["sessions"] = {"sessions": [item()]}
+    run(svc.refresh_their_sessions(LID))
+    (ev,) = bus.named("peer.session_shared")
+    assert ev["data"]["title"] == "api-fix" and ev["data"]["theirs"] is True
 
 
 def test_an_older_peer_is_remembered_as_unsupported(svc):

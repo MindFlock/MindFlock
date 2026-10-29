@@ -136,5 +136,8 @@ def test_join_page_is_public(client, monkeypatch):
     assert "text/html" in r.headers["content-type"]
     assert "mindflock://join?code=" in r.text
     assert "Open in MindFlock" in r.text and "Copy code" in r.text
+    # People is an ADVANCED Settings screen: a fresh install's basic nav has
+    # no "Settings → People" (join trial 2026-10-28); the palette reaches it.
+    assert "Settings → People" not in r.text and "Ctrl+P" in r.text
     # Only /join itself opens up, not the API next to it.
     assert client.get("/api/peer").status_code == 401

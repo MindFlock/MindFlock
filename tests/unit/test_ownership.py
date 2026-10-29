@@ -32,6 +32,7 @@ _NAME_OF = own.name_of
 A = "00000000-0000-4000-8000-00000000000a"
 B = "ffffffff-ffff-4fff-8fff-fffffffffffb"
 NAMES = {A: "Alice", B: "Bob"}
+_REAL_NAME_OF = own.name_of  # the clk fixture stubs it
 
 
 class Clock:
@@ -244,6 +245,35 @@ def test_caller_reads_the_person_and_the_relaying_device():
         "state": {"person": A},
     }
     assert own.caller(scope) == (A, "mini")
+
+
+def test_a_guest_link_is_its_own_person_not_the_owner(clk):
+    # Join trial 2026-10-28: a guest's terminal took the keyboard as the
+    # owner's person id, so the owner and the guest typed at once and the
+    # rail named the owner as the driver while the guest typed.
+    scope = {
+        "type": "websocket",
+        "headers": [],
+        "state": {"person": A, "guest": {"id": "g1", "name": "Gita"}},
+    }
+    pid, _device = own.caller(scope)
+    assert pid == "guest:g1"
+    own.attach("s", pid, "laptop")
+    assert own.driver("s") == "guest:g1"
+    assert own._NAMES["guest:g1"] == "Gita"
+    assert own.mode("s", A)["driving"] is False
+
+
+def test_a_guest_is_named_what_they_pick_after_attaching(clk, monkeypatch):
+    # The guest page attaches its terminal while it still asks for a name:
+    # the driver is "Guest" at first and the name they then pick after it.
+    from backend.web.core import guests
+
+    link = {"id": "g1", "label": "", "name": ""}
+    monkeypatch.setattr(guests, "list_links", lambda: [dict(link)])
+    assert _REAL_NAME_OF("guest:g1") == "Guest"
+    link["name"] = "Gita"
+    assert _REAL_NAME_OF("guest:g1") == "Gita"
 
 
 def test_terminal_replies_are_not_keystrokes():

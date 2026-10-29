@@ -1220,6 +1220,9 @@ class PeerService:
         }
 
     def on_link_added(self, link) -> None:
+        # A new link: everything its first sessions list carries is news
+        # (only the first list after a START is quiet).
+        self._their_known.setdefault(str(_get(link, "link_id") or ""), {})
         sessions = self._claim_invite(link, False)
         self._emit("peer.link_added", self._link_event(link, False, sessions))
         self._schedule(self.sync_listener())
@@ -2978,6 +2981,11 @@ class PeerService:
                 from backend.web.core import aliases
 
                 name = aliases.display_name(title, branch)
+                source = str(rec.get("source") or "")
+                if source and source != title and aliases.label_for(title) == title:
+                    # The sandboxed copy of ``source`` (a gated share): called
+                    # what that session is called, as the invite named it.
+                    name = aliases.display_name(source, branch)
             except Exception:  # noqa: BLE001
                 name = title
             try:

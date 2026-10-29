@@ -1300,7 +1300,9 @@ with the other, any number of sessions, each one way:
 Four request ops (the table in [Frames](#frames--contract-wirepy)):
 `sessions`, `term_open`, `term_close`, `session_focus`. A `sessions` item is
 `{title, name, status, activity, stage, branch, folder, mode?, program?}` —
-`name` is the owner's display name for it (`aliases.display_name`),
+`name` is the owner's display name for it (`aliases.display_name`; a
+gated share's sandboxed session is called what the session it was cut from
+is called — the name the invite showed — unless it was renamed itself),
 `folder` the folder's NAME (never a path), every string a "line" (no control
 characters). No link perm grants them (sharing a session IS the grant, one
 session at a time); `sessions`, `term_open` and `session_focus` are refused
@@ -1501,7 +1503,9 @@ the link goes (the sessions themselves are untouched).
   peer_name, title, mode, by: "you"|"peer", theirs: bool}` (`mode` is `""`
   on unshare). The sharer emits `by: "you", theirs: false` when it shares or
   withdraws; the opener emits `by: "peer", theirs: true` when a refreshed
-  list differs from the last one (not for the first list after a start).
+  list differs from the last one (not for the first list after a start; a
+  link made since the start — a join — counts every session of its first
+  list as new).
 - **Presence on my session**: while the peer has its terminal open, or
   their page reported it selected in the last 90 s (`session_focus`), my
   rail shows a pill with their name on the row — `guest.focus_changed`
@@ -1589,6 +1593,47 @@ rail at once — the guest link's experience, between two MindFlocks.
 - **Their screen is their screen.** `term_out` is terminal output from the
   peer's machine rendered by xterm.js — the same exposure as a tailnet
   device's terminal.
+
+### Field trial (shared sessions)
+
+Run on 2026-10-28 with two real servers on one Linux machine (direct
+listener, `relay = "off"`, bubblewrap): Ana (access gate on) invited Ben
+with `alpha` in full and `beta` gated, both `bash` sessions; Ben shared one
+back. `tests/e2e/test_join_trial.py` replays the whole walk
+(`MINDFLOCK_E2E_JOIN=1`, ~40 s).
+
+- **What worked.** The invite link opened the join page, and joining with
+  the link took 0.06 s. Both rows were on Ben's rail with the first
+  `/api/instances` after the join. Ben's keystrokes reached Ana's pane and
+  echoed back. While Ana's own terminal held the keyboard his were dropped
+  with "… is driving"; once she closed it he typed again. The tmux prefix
+  opened no window. The pill came and went with focus and `left`. The chat
+  worked both ways. Agent messages worked both ways, before *It matches*
+  only to the invite's sessions, with replies keeping the chain's hop. The
+  gated agent reached Ben's session through its agent API socket. A
+  withdrawal closed Ben's open terminal (4404) and took the row. Killing
+  Ana's server took his rows (`peer.state` disconnected); they came back by
+  themselves within about 30 s of her restart. A guest link on Ana showed only `alpha`, asked a name,
+  typed, and opened no tmux window.
+- **Fixed after the trial.** A guest's terminal held the keyboard as the
+  OWNER (the same person id), so owner and guest typed at once and the rail
+  named the owner while the guest typed; a guest is now `guest:<link id>`
+  under the name they pick. The joiner heard `peer.session_shared` only for
+  the gated session (the full one was already in its first list), so one
+  toast of two; a new link's first list is now news. The gated session
+  reached Ben as `peer-ben-24cad1` although the invite said `beta`; it is
+  now called what its source is. The join page sent a newcomer to
+  "Settings → People", which basic Settings doesn't list; it now says
+  Ctrl+P, "people".
+- **Still open.** A gated session whose agent can't start (here: no Claude
+  login for the sandbox) shows the joiner only `[exited]`: the sandbox's
+  reason is printed, then wiped when tmux leaves the alternate screen, and
+  Ana's row just reads Offline. People are named three ways: the chat by
+  each side's person name (else the hostname), the pill and People by the
+  peer display name, and "… is driving" by the owner's person name, so on
+  one machine both people were "EthanLaptop2026" in the chat. The gated
+  share shows twice on Ben's rail: the folder share's *Shared with you* row
+  and the `beta` row.
 
 ## Residual risks
 

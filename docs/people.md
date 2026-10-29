@@ -287,7 +287,11 @@ soft lock that keeps two people from typing into one agent at once, never an
 access control: the token and pairing still gate every request, and anyone
 who can reach a session can take its keyboard. All of one person's devices
 share an id, so a person alone with their sessions never meets any of this —
-their laptop and their mac mini are the same driver.
+their laptop and their mac mini are the same driver. A guest link's browser
+is its own person, `guest:<link id>`, named what the guest picked (also when
+they pick it after their terminal attached), and a peer typing into a session
+you share is `peer:<link id>` under the peer's name — never you, so you and
+they never both hold the keyboard.
 
 `backend/web/core/ownership.py` keeps it, as web metadata keyed by title (never
 the engine's Instance JSON):
