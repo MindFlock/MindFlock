@@ -697,3 +697,118 @@ def test_doctor_wants_cloudflared_for_guest_links(monkeypatch):
     guests.create("x", ["alpha"])
     c = doctor.check_cloudflared()
     assert c.status == "warn" and c.install is True and "guest link" in c.detail
+
+
+# --------------------------------------------------------------------------- #
+# the guest's terminal: read-only attach, keystrokes by send-keys
+# --------------------------------------------------------------------------- #
+class _Pty:
+    """A PTY stand-in: the server reads/writes ``fd``; ``received`` is what
+    reached the attach client."""
+
+    def __init__(self, argv) -> None:
+        import socket
+
+        self.argv = argv
+        self.mine, self.peer = socket.socketpair()
+        self.fd = self.mine.fileno()
+        self.peer.setblocking(False)
+
+    def setwinsize(self, rows, cols):
+        pass
+
+    def terminate(self, force=False):
+        pass
+
+    def received(self, wait=0.3) -> bytes:
+        import time
+
+        end, got = time.time() + wait, b""
+        while time.time() < end:
+            try:
+                got += self.peer.recv(65536)
+            except BlockingIOError:
+                time.sleep(0.02)
+        return got
+
+
+class _Inst:
+    def GetWorktreePath(self):
+        return "/nonexistent/wt"
+
+
+@pytest.fixture
+def ptys(monkeypatch, tmp_path):
+    """Both attach kinds and send-keys captured; nothing reaches tmux."""
+    from backend.web.core import ownership
+
+    got = {"owner": [], "readonly": [], "keys": []}
+
+    def owner_spawn(argv, **kw):
+        got["owner"].append(_Pty(argv))
+        return got["owner"][-1]
+
+    def readonly_spawn(name, rows, cols):
+        got["readonly"].append(_Pty(["attach-session", "-r", "=" + name]))
+        return got["readonly"][-1]
+
+    monkeypatch.setattr(server.ptyprocess.PtyProcess, "spawn", owner_spawn)
+    monkeypatch.setattr(server._guest_terminal, "spawn_readonly_attach", readonly_spawn)
+    monkeypatch.setattr(
+        server._guest_terminal,
+        "send_keys",
+        lambda name, data: got["keys"].append((name, data)),
+    )
+    monkeypatch.setattr(server.ENGINE, "instances", {"alpha": _Inst()})
+    monkeypatch.setattr(guests, "_live_instances", lambda: {})
+    monkeypatch.setattr(
+        server, "ensure_terminal_session", lambda inst, t: ("mf_" + t, None)
+    )
+    monkeypatch.setattr(
+        server, "_ensure_shell_session", lambda t, wt: ("mf_" + t + "_sh", None)
+    )
+    monkeypatch.setattr(server, "_budget_locked", lambda title: False)
+    monkeypatch.setattr(server, "_note_human_input", lambda *a: None)
+    ownership._reset_for_tests()
+    monkeypatch.setattr(ownership, "_path", lambda: str(tmp_path / "owners.json"))
+    monkeypatch.setattr(ownership, "caller", lambda scope: ("", "laptop"))
+    yield got
+    ownership._reset_for_tests()
+
+
+def _until(cond, timeout=3.0):
+    import time
+
+    end = time.time() + timeout
+    while not cond():
+        assert time.time() < end, "timed out"
+        time.sleep(0.02)
+
+
+@pytest.mark.parametrize("pane", ["terminal", "shell"])
+def test_a_guests_socket_is_read_only_and_types_by_send_keys(link, ptys, pane):
+    """The tmux prefix on a writable client would hand a guest tmux itself
+    (prefix c: a new window running a plain shell). A guest's socket attaches
+    READ-ONLY; their keystrokes go into the exact pane by send-keys; only the
+    terminal's answers to tmux's probes reach the attach client."""
+    _, tok = link
+    name = "mf_alpha" if pane == "terminal" else "mf_alpha_sh"
+    with _guest_client(tok).websocket_connect("/api/instances/alpha/" + pane) as ws:
+        ws.receive_text()  # who drives
+        ws.send_bytes(b"\x02c")  # Ctrl+B c
+        ws.send_text("ls\r")
+        _until(lambda: b"".join(d for _n, d in ptys["keys"]) == b"\x02cls\r")
+        ws.send_bytes(b"\x1b[?1;2c")  # the browser answering tmux's DA1
+        assert ptys["readonly"][0].received() == b"\x1b[?1;2c"
+    assert ptys["owner"] == []
+    assert {n for n, _d in ptys["keys"]} == {name}
+
+
+@pytest.mark.parametrize("pane", ["terminal", "shell"])
+def test_the_owners_socket_keeps_its_writable_attach(owner, link, ptys, pane):
+    with owner.websocket_connect("/api/instances/alpha/" + pane) as ws:
+        ws.receive_text()
+        ws.send_bytes(b"pwd\r")
+        assert ptys["owner"][0].received() == b"pwd\r"
+    assert "-r" not in ptys["owner"][0].argv
+    assert ptys["readonly"] == [] and ptys["keys"] == []

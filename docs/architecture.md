@@ -97,6 +97,9 @@ FastAPI app `backend.web.server:app`. Key pieces:
 - **`core/terminal.py`** — the one PTY↔WebSocket bridge (`pump_pty`), tmux attach
   spawning, exit-marker bookkeeping (distinguishes clean quit from crash so a
   restart can `--continue`), and the tmux scroll-speed binding.
+  `core/guest_terminal.py` is the other half for terminals someone else types
+  into (guest links, peers): a read-only attach plus `send-keys -l` into the
+  pane — see [session-engine.md](session-engine.md#other-peoples-keystrokes).
 - **`core/git_ops.py`** — pure git queries (dirty? commits beyond base? upstream?
   origin SHA?) used to compute each session's **workflow stage**:
   `provisioning → agent → pre-commit → committed → pushed → PR open → merged`

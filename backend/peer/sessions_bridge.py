@@ -17,7 +17,13 @@ Two halves, one per side of a link, both owned by the PeerService:
   new window running an UNSANDBOXED shell, ``prefix :`` runs ``run-shell``):
   a gated share's sandbox would be one keystroke deep. Only the terminal's
   own answers to tmux's probes (:func:`terminal.is_terminal_reply`) reach the
-  client, as they do for any terminal.
+  client, as they do for any terminal. Both halves live in
+  :mod:`backend.web.core.guest_terminal`, shared with guest links' terminals.
+
+  The peer types under the session's ONE keyboard
+  (:mod:`backend.web.core.ownership`), as the person ``peer:<link id>``
+  named after the peer: they drive only when nobody else does, and a
+  refused keystroke is dropped with a notice drawn on their bottom row.
 
 * **The opener** (their session, my rail): :class:`OpenerTerm` is one remote
   terminal per (link, title), fanned out to every browser socket on this
@@ -36,13 +42,12 @@ import base64
 import contextlib
 import json
 import logging
-import os
 import secrets
-import subprocess
 import time
 from typing import Awaitable, Callable, Dict, Optional, Set, Tuple
 
 from backend.peer import wire
+from backend.web.core.guest_terminal import Typist, send_keys, spawn_readonly_attach
 
 __all__ = [
     "SessionsBridge",
@@ -81,14 +86,37 @@ def _term_id() -> str:
     return secrets.token_hex(8)
 
 
+def _peer_name(link_id: str) -> str:
+    """The link's peer name as the server's PeerService knows it (``""``
+    when there is none — tests, a bridge of its own)."""
+    try:
+        from backend.peer import service
+
+        svc = service._SERVICE
+        return svc.peer_name(link_id) if svc is not None else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 # --------------------------------------------------------------------------- #
 # The sharer: my session's pane, streamed to them
 # --------------------------------------------------------------------------- #
+def _notice_bytes(message: str) -> bytes:
+    """A notice for the peer, drawn on their terminal's bottom row: the opener
+    renders nothing but the byte stream (no text frames cross the link), so
+    the notice is terminal output — saved cursor and attributes, the last
+    row (``CUP 999`` clamps to it) cleared and written in reverse video, the
+    cursor restored, so tmux's next redraw lands where tmux thinks it does.
+    The pane's next redraw of that row paints over it."""
+    text = "".join(ch for ch in message if ch.isprintable())[:200]
+    return ("\x1b7\x1b[999;1H\x1b[2K\x1b[7m %s \x1b[0m\x1b8" % text).encode("utf-8")
+
+
 class _WireSocket:
     """What :func:`pump_pty` takes for a websocket: ``receive()`` yields the
     peer's input as websocket messages, ``send_bytes()`` gathers output into
-    ``term_out`` pushes. Text frames (the web terminal's driver / read-only
-    notices) do not cross the link."""
+    ``term_out`` pushes. Of the text frames, only the read-only notice crosses
+    the link, drawn as output (:func:`_notice_bytes`)."""
 
     def __init__(self, send: Callable[[bytes], Awaitable[None]]) -> None:
         self._send = send
@@ -124,8 +152,17 @@ class _WireSocket:
         if len(self._buf) > MAX_BUFFERED:
             await asyncio.shield(self._flusher)
 
-    async def send_text(self, _text: str) -> None:
-        return None
+    async def send_text(self, text: str) -> None:
+        """A text frame: the read-only notice is drawn into the stream
+        (:func:`_notice_bytes`); the driver frames have no place there."""
+        try:
+            frame = json.loads(text)
+        except (TypeError, ValueError):
+            return
+        if isinstance(frame, dict) and frame.get("type") == "readonly":
+            message = str(frame.get("message") or "")
+            if message:
+                await self.send_bytes(_notice_bytes(message))
 
     async def close(self) -> None:
         await self.flush()
@@ -147,42 +184,15 @@ class _WireSocket:
                 self.disconnect()
 
 
-def _spawn_readonly_attach(tmux_name: str, rows: int, cols: int):
-    """A READ-ONLY tmux client on the session (see the module docstring)."""
-    import ptyprocess
-
-    return ptyprocess.PtyProcess.spawn(
-        ["tmux", "attach-session", "-r", "-t", "=" + tmux_name],
-        dimensions=(rows, cols),
-        env={**os.environ, "TERM": "xterm-256color"},
-    )
-
-
-def _send_keys(tmux_name: str, data: bytes) -> None:
-    """Type ``data`` into the session's active pane, byte for byte, past
-    tmux's key bindings (``send-keys -l``). argv can't carry NUL, which is
-    what Ctrl+Space sends: those go as the key ``C-Space``."""
-    target = "=" + tmux_name + ":"
-    text = data.decode("utf-8", "replace")
-    for i, part in enumerate(text.split("\x00")):
-        if i:
-            subprocess.run(
-                ["tmux", "send-keys", "-t", target, "C-Space"],
-                capture_output=True,
-                timeout=5,
-                check=False,
-            )
-        if part:
-            subprocess.run(
-                ["tmux", "send-keys", "-t", target, "-l", "--", part],
-                capture_output=True,
-                timeout=5,
-                check=False,
-            )
-
-
 class SharerTerm:
-    """One peer's terminal on one of my shared sessions."""
+    """One peer's terminal on one of my shared sessions.
+
+    It holds a seat in the session's one keyboard (:mod:`backend.web.core.
+    ownership`) as the person ``peer:<link id>``, named ``peer_name``: the
+    peer drives only when nobody else does (or the driver let go), the
+    owner's rail shows the peer's name as driver or viewer, and the seat
+    goes with the term. A refused keystroke is dropped with a notice drawn
+    into the peer's stream (:func:`_notice_bytes`)."""
 
     def __init__(
         self,
@@ -192,23 +202,26 @@ class SharerTerm:
         tmux_name: str,
         push: Push,
         may_type: Callable[[], bool] = lambda: True,
-        spawn=_spawn_readonly_attach,
-        send_keys=_send_keys,
+        spawn=spawn_readonly_attach,
+        send_keys=send_keys,
+        peer_name: str = "",
         on_closed: Optional[Callable[["SharerTerm"], None]] = None,
     ) -> None:
         self.link_id = link_id
         self.title = title
         self.tmux_name = tmux_name
         self.term_id = _term_id()
+        self.person = "peer:" + link_id
+        self.peer_name = peer_name or "peer"
         self._push = push
         self._may_type = may_type
         self._spawn = spawn
-        self._send_keys = send_keys
+        self._typist = Typist(tmux_name, send_keys)
         self._on_closed = on_closed
         self._sock = _WireSocket(self._out)
-        self._keys: "asyncio.Queue[Optional[bytes]]" = asyncio.Queue()
         self._task: Optional[asyncio.Task] = None
-        self._typist: Optional[asyncio.Task] = None
+        self._seat: Optional[int] = None
+        self._driving = False
         self._reason = "closed"
         self._notify = True
         self.closed = False
@@ -220,36 +233,72 @@ class SharerTerm:
             )
 
     def start(self, cols: int, rows: int) -> None:
-        """Attach (raises when tmux can't) and start pumping."""
+        """Attach (raises when tmux can't), take a seat at the keyboard and
+        start pumping."""
         proc = self._spawn(self.tmux_name, rows, cols)
+        self._sit()
+        self._typist.start()
         self._task = asyncio.ensure_future(self._run(proc))
-        self._typist = asyncio.ensure_future(self._type_loop())
+
+    # -- the one keyboard ----------------------------------------------------
+    def _sit(self) -> None:
+        from backend.web.core import ownership
+
+        loop = asyncio.get_running_loop()
+
+        def told(frame: dict) -> None:  # any thread
+            with contextlib.suppress(RuntimeError):  # loop closing
+                loop.call_soon_threadsafe(self._driver_changed, frame)
+
+        self._seat = ownership.attach(
+            self.title, self.person, self.peer_name, notify=told, name=self.peer_name
+        )
+        self._driving = bool(ownership.mode(self.title, self.person)["driving"])
+
+    def _driver_changed(self, frame: dict) -> None:
+        """The keyboard moved: the peer is told when it moves away from them."""
+        was, self._driving = self._driving, bool(frame.get("driving"))
+        if was and not self._driving and not self.closed:
+            self._tell(
+                "%s took the keyboard — you are watching"
+                % (frame.get("driver_name") or "Someone")
+            )
+
+    def _tell(self, message: str) -> None:
+        frame = json.dumps({"type": "readonly", "message": message})
+        asyncio.ensure_future(self._sock.send_text(frame))
+
+    def _keyboard(self) -> Tuple[bool, str]:
+        """Whether the peer may type now (:func:`ownership.may_type`) — and
+        the notice for them when not (``""`` between repeats)."""
+        from backend.web.core import ownership
+
+        if self._seat is None:
+            return True, ""
+        ok, notice = ownership.may_type(self._seat)
+        if ok:
+            self._driving = True
+            ownership.note_input(self.title, self.person, self.peer_name)
+            return True, ""
+        if not notice:
+            return False, ""
+        who = ownership.mode(self.title, self.person)["driver_name"] or "Someone"
+        return False, "%s is driving — you can type once they let go" % who
 
     def _divert(self, data) -> str:
         """pump_pty's gate: the peer's keystrokes never reach the (read-only)
         attach client — they are queued for ``send-keys``. Dropped while the
-        session is budget-locked, like the web terminal's."""
+        session is budget-locked, like the web terminal's, or while somebody
+        else drives (with a notice: pump_pty sends it as a ``readonly`` text
+        frame, which :class:`_WireSocket` draws)."""
         if isinstance(data, str):
             data = data.encode("utf-8")
-        if data and self._may_type():
-            self._keys.put_nowait(bytes(data))
-        return ""
-
-    async def _type_loop(self) -> None:
-        while True:
-            data = await self._keys.get()
-            if data is None:
-                return
-            while not self._keys.empty():  # what queued meanwhile: one call
-                more = self._keys.get_nowait()
-                if more is None:
-                    self._keys.put_nowait(None)
-                    break
-                data += more
-            try:
-                await asyncio.to_thread(self._send_keys, self.tmux_name, data)
-            except Exception as err:  # noqa: BLE001
-                _log.warning("peer: keystrokes not delivered: %s", type(err).__name__)
+        if not data or not self._may_type():
+            return ""
+        ok, notice = self._keyboard()
+        if ok:
+            self._typist.type(data)
+        return notice
 
     async def _run(self, proc) -> None:
         from backend.web.core.terminal import pump_pty
@@ -265,7 +314,13 @@ class SharerTerm:
         if self.closed:
             return
         self.closed = True
-        self._keys.put_nowait(None)
+        self._typist.close()
+        if self._seat is not None:
+            from backend.web.core import ownership
+
+            with contextlib.suppress(Exception):
+                ownership.detach(self._seat)
+            self._seat = None
         if self._notify:
             with contextlib.suppress(Exception):
                 await self._sock.flush()
@@ -442,6 +497,7 @@ class SessionsBridge:
             term = self._mine.get((link_id, old))
             if term is not None:
                 await term.close("replaced")
+        term_kw.setdefault("peer_name", _peer_name(link_id))
         term = SharerTerm(
             link_id=link_id,
             title=title,
