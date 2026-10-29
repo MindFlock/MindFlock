@@ -24112,6 +24112,358 @@ var L = class {
 	}
 };
 //#endregion
+//#region src/lib/format.ts
+function errMsg(err) {
+	return err?.message || "error";
+}
+function fmtTokens(n) {
+	n = n || 0;
+	if (n < 1e3) return String(n);
+	if (n < 1e6) return (n / 1e3).toFixed(n < 1e4 ? 1 : 0) + "k";
+	return (n / 1e6).toFixed(1) + "M";
+}
+function fmtUsd(u) {
+	u = u || 0;
+	if (u <= 0) return "$0";
+	if (u < .01) return "<$0.01";
+	if (u < 10) return "$" + u.toFixed(2);
+	if (u < 1e3) return "$" + u.toFixed(1);
+	return "$" + (u / 1e3).toFixed(1) + "k";
+}
+var PROV_LABELS = {
+	claude: "Claude",
+	codex: "Codex",
+	aider: "Aider"
+};
+function provLabel(name) {
+	if (!name) return "";
+	return PROV_LABELS[name] || name.charAt(0).toUpperCase() + name.slice(1);
+}
+function relTime(ts, opts = {}) {
+	const suffix = opts.suffix ?? " ago";
+	const secs = Math.max(0, Math.floor((opts.now ?? Date.now() / 1e3) - ts));
+	if (secs < 60) return secs + "s" + suffix;
+	if (secs < 3600) return Math.floor(secs / 60) + "m" + suffix;
+	if (secs < 86400) return Math.floor(secs / 3600) + "h" + suffix;
+	return Math.floor(secs / 86400) + "d" + suffix;
+}
+function fmtDurationShort(ms) {
+	const mm = Math.max(1, Math.round(ms / 6e4));
+	return mm >= 60 ? Math.floor(mm / 60) + "h " + mm % 60 + "m" : "~" + mm + "m";
+}
+function displayBranch(inst) {
+	const full = inst.branch || "";
+	let m = full.match(/^feature\/sc-\d+\/(.+)$/);
+	if (m) return m[1];
+	m = full.match(/^mindflock\/(.+)$/);
+	if (m) return m[1];
+	return full || inst.program || "";
+}
+function humanSize(bytes) {
+	if (bytes < 1024) return bytes + " B";
+	if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
+	if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + " MB";
+	return (bytes / 1073741824).toFixed(2) + " GB";
+}
+function pathBasename(p) {
+	const s = (p || "").replace(/[\\/]+$/, "");
+	const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
+	return i >= 0 ? s.slice(i + 1) : s;
+}
+function firstLine$1(text) {
+	for (const l of String(text || "").split("\n")) {
+		const t = l.trim();
+		if (t) return t;
+	}
+	return "";
+}
+//#endregion
+//#region src/lib/flights.ts
+function isLive(f) {
+	return f.state === "running" || f.state === "waiting_you" || f.state === "paused" || f.state === "halted";
+}
+function flightDrives(f) {
+	return !!f && (f.state === "running" || f.state === "waiting_you" || f.state === "paused");
+}
+function perchLabel(title) {
+	const t = String(title || "").trim().replace(/^(you|perch):\s*/i, "");
+	return t ? "Perch: " + t : "Perch";
+}
+function perchedOnYou(stepTitle) {
+	const t = String(stepTitle || "").trim().replace(/^(you|perch):\s*/i, "");
+	return "Perched on you" + (t ? ": " + t : "");
+}
+function stepStateOf(f, step, index) {
+	const rec = f.step_states?.[step.id]?.state;
+	if (rec) return rec;
+	if (index < f.cursor) return "done";
+	if (index === f.cursor && isLive(f)) return f.state === "waiting_you" ? "waiting_you" : f.state === "paused" ? "pending" : "running";
+	return "pending";
+}
+function flightProgress(f) {
+	const states = f.steps.map((s, i) => stepStateOf(f, s, i));
+	const current = f.steps[f.cursor] || null;
+	return {
+		done: states.filter((s) => s === "done" || s === "skipped").length,
+		total: f.steps.length,
+		current,
+		currentState: current ? f.step_states?.[current.id] || null : null,
+		states
+	};
+}
+function stepActor(step, kinds) {
+	const def = kinds?.find((k) => k.kind === step.kind);
+	if (def) return def.actor;
+	return step.kind === "you" ? "you" : "robot";
+}
+function needsYouFlights(flights) {
+	return flights.filter((f) => f.state === "waiting_you" || f.state === "halted");
+}
+function currentElapsed(f, now = Date.now()) {
+	const cur = f.steps[f.cursor];
+	const since = cur ? Number(f.step_states?.[cur.id]?.since) || 0 : 0;
+	return since > 0 ? relTime(since, {
+		now: now / 1e3,
+		suffix: ""
+	}) : "";
+}
+function stripDots(f) {
+	if ("steps" in f) return flightProgress(f).states.map((s) => s === "failed" ? "✗" : s === "skipped" ? "–" : s === "pending" ? "○" : "●").join("");
+	const total = Math.max(0, Number(f.total) || 0);
+	let out = "";
+	for (let i = 0; i < total; i++) out += i <= f.cursor ? i === f.cursor && f.step?.state === "failed" ? "✗" : "●" : "○";
+	return out;
+}
+function stripLabel(f, now = Date.now()) {
+	const title = "steps" in f ? f.steps[f.cursor]?.title || "" : f.step?.title || "";
+	const elapsed = "steps" in f ? currentElapsed(f, now) : "";
+	const tail = f.state === "done" ? "Landed" : f.state === "cancelled" ? "Cancelled" : (f.state === "paused" ? "Paused · " : "") + title + (elapsed ? " (" + elapsed + ")" : "");
+	return [
+		f.plan_name,
+		stripDots(f),
+		tail
+	].filter((x) => x.trim()).join(" · ");
+}
+function rowWaitsOnYou(row) {
+	return !!row && row.state === "waiting_you" && row.step?.actor === "you";
+}
+function youItems(step) {
+	const raw = step?.config?.items;
+	return (Array.isArray(raw) ? raw : typeof raw === "string" ? raw.split("\n") : []).map((x) => String(x).trim()).filter(Boolean);
+}
+function youText(f) {
+	const cur = f.steps[f.cursor];
+	return String(cur?.config?.text ?? "").trim() || (cur ? f.step_states?.[cur.id]?.note || "" : "") || f.reason || "";
+}
+function perchBadge(flights) {
+	const perched = needsYouFlights(flights).filter((f) => f.state === "halted" || f.steps[f.cursor]?.kind !== "verify");
+	return {
+		count: perched.length,
+		failing: perched.some((f) => f.state === "halted")
+	};
+}
+var WAITING_KIND_HEAD = {
+	tickets: "Tickets",
+	prs: "Pull requests",
+	issues: "Issues"
+};
+var WAITING_KIND_BADGE = {
+	tickets: "Ticket",
+	prs: "PR",
+	issues: "Issue"
+};
+function waitingAuto(kind, status) {
+	if (!status) return false;
+	if (kind === "tickets") return !!status.available && !!(status.desired ?? status.running);
+	if (kind === "prs") return status.pr_enabled === true;
+	return status.issues_enabled === true;
+}
+function builtinPlanFor(kind, plans) {
+	const own = kind === "prs" || kind === "pr" ? "builtin:pr" : kind === "issues" || kind === "issue" ? "builtin:issue" : kind === "tickets" || kind === "ticket" ? "builtin:ticket" : "builtin:" + kind;
+	if (plans) return plans.some((p) => p.id === own) ? own : "builtin:ticket";
+	return own === "builtin:issue" ? "builtin:ticket" : own;
+}
+function fieldOptions(f) {
+	return (f.options || []).map((o) => typeof o === "string" ? {
+		value: o,
+		label: o
+	} : {
+		value: String(o.value),
+		label: String(o.label || o.value)
+	});
+}
+function newStep(def, taken) {
+	const config = {};
+	for (const f of def.fields) if (f.default !== void 0) config[f.name] = f.default;
+	let n = taken.length + 1;
+	while (taken.includes("s" + n)) n++;
+	return {
+		id: "s" + n,
+		kind: def.kind,
+		title: def.default_title || def.label,
+		config,
+		on_fail: "halt"
+	};
+}
+function moveStep(steps, from, to) {
+	if (from === to || from < 0 || from >= steps.length) return steps.slice();
+	const out = steps.slice();
+	const [it] = out.splice(from, 1);
+	out.splice(Math.max(0, Math.min(out.length, to)), 0, it);
+	return out;
+}
+function duplicateStep(steps, index) {
+	const src = steps[index];
+	if (!src) return steps.slice();
+	const taken = steps.map((s) => s.id);
+	let n = steps.length + 1;
+	while (taken.includes("s" + n)) n++;
+	const copy = {
+		...src,
+		id: "s" + n,
+		config: { ...src.config }
+	};
+	const out = steps.slice();
+	out.splice(index + 1, 0, copy);
+	return out;
+}
+function planDirty(a, b) {
+	if (!a || !b) return a !== b;
+	const strip = (p) => JSON.stringify({
+		...p,
+		updated: 0
+	});
+	return strip(a) !== strip(b);
+}
+function blankPlan() {
+	return {
+		id: "",
+		name: "New flyway",
+		description: "",
+		builtin: false,
+		trigger: {
+			kind: "manual",
+			schedule: null,
+			paused: false
+		},
+		session: {
+			repo_path: "",
+			program: "",
+			model: "",
+			in_place: false
+		},
+		steps: [],
+		updated: 0
+	};
+}
+var TRIGGER_LABEL = {
+	manual: "By hand",
+	ticket: "Ticket",
+	pr: "Pull request",
+	issue: "Issue",
+	schedule: "Schedule"
+};
+var ON_FAIL_LABEL = {
+	halt: "Stop and tell me",
+	agent: "Hand it to the agent",
+	skip: "Skip it",
+	you: "Ask me"
+};
+function legacyFlightsRoute(target) {
+	const raw = String(target || "").trim();
+	const cut = raw.indexOf("/");
+	const word = cut < 0 ? raw : raw.slice(0, cut);
+	const rest = cut < 0 ? "" : raw.slice(cut + 1);
+	if (word === "flyways" || word === "plans") return {
+		to: "flyways",
+		plan: rest
+	};
+	if (word === "sources") return {
+		to: "intake",
+		target: rest || null
+	};
+	if (word === "checklists") return {
+		to: "verify",
+		target: rest || null
+	};
+	if (word === "schedule") return {
+		to: "schedule",
+		target: rest || null
+	};
+	return {
+		to: "sky",
+		focus: word === "sky" ? rest : ""
+	};
+}
+function whenFormOf(s) {
+	const base = {
+		days: "daily",
+		at: "21:00",
+		date: "",
+		cron: "0 21 * * 1-5",
+		seeded: ""
+	};
+	if (!s) return base;
+	if ("once" in s && s.once) return {
+		...base,
+		days: "once",
+		at: s.once.slice(11, 16),
+		date: s.once.slice(0, 10)
+	};
+	if ("cron" in s && s.cron) return {
+		...base,
+		days: "cron",
+		cron: s.cron
+	};
+	if ("at" in s && s.at) return {
+		...base,
+		days: s.days === "weekdays" ? "weekdays" : "daily",
+		at: s.at
+	};
+	return base;
+}
+function scheduleOfWhen(f) {
+	if (f.days === "cron") return f.cron.trim() ? { cron: f.cron.trim() } : null;
+	if (f.days === "once") return f.date && f.at ? { once: f.date + "T" + f.at } : null;
+	return f.at ? {
+		at: f.at,
+		days: f.days
+	} : null;
+}
+function planChoices(plans, kind, value = "") {
+	const builtin = plans.find((p) => p.id === builtinPlanFor(kind, plans));
+	const ordered = [...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)];
+	const out = [{
+		value: "",
+		label: "Default · " + (builtin?.name || "built-in flyway")
+	}];
+	for (const p of ordered) out.push({
+		value: p.id,
+		label: p.name,
+		builtin: p.builtin
+	});
+	if (value && !plans.some((p) => p.id === value)) out.push({
+		value,
+		label: value + " (not found)"
+	});
+	return out;
+}
+var PLAN_FIELD = "plan";
+function normalizeFlightRows(rows) {
+	return rows.map((r) => {
+		const f = r.flight;
+		if (!f || f.id) return r;
+		return {
+			...r,
+			flight: null,
+			flight_branch: f.branch && f.branch.step ? {
+				parent: f.branch.parent,
+				step: f.branch.step
+			} : null
+		};
+	});
+}
+//#endregion
 //#region src/api/client.ts
 var ApiError = class extends Error {
 	status;
@@ -24411,7 +24763,7 @@ function useInstances() {
 	return useQuery({
 		queryKey: ["instances"],
 		queryFn: async () => {
-			const list = splitLockedRows(await api("/api/instances"));
+			const list = normalizeFlightRows(splitLockedRows(await api("/api/instances")));
 			window.mindflock?.__setSessions?.(list);
 			return list;
 		},
@@ -25098,344 +25450,6 @@ var AGENT_NAMES = {
 function agentName(provider) {
 	return AGENT_NAMES[provider] || (provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : "Agent");
 }
-//#endregion
-//#region src/lib/format.ts
-function errMsg(err) {
-	return err?.message || "error";
-}
-function fmtTokens(n) {
-	n = n || 0;
-	if (n < 1e3) return String(n);
-	if (n < 1e6) return (n / 1e3).toFixed(n < 1e4 ? 1 : 0) + "k";
-	return (n / 1e6).toFixed(1) + "M";
-}
-function fmtUsd(u) {
-	u = u || 0;
-	if (u <= 0) return "$0";
-	if (u < .01) return "<$0.01";
-	if (u < 10) return "$" + u.toFixed(2);
-	if (u < 1e3) return "$" + u.toFixed(1);
-	return "$" + (u / 1e3).toFixed(1) + "k";
-}
-var PROV_LABELS = {
-	claude: "Claude",
-	codex: "Codex",
-	aider: "Aider"
-};
-function provLabel(name) {
-	if (!name) return "";
-	return PROV_LABELS[name] || name.charAt(0).toUpperCase() + name.slice(1);
-}
-function relTime(ts, opts = {}) {
-	const suffix = opts.suffix ?? " ago";
-	const secs = Math.max(0, Math.floor((opts.now ?? Date.now() / 1e3) - ts));
-	if (secs < 60) return secs + "s" + suffix;
-	if (secs < 3600) return Math.floor(secs / 60) + "m" + suffix;
-	if (secs < 86400) return Math.floor(secs / 3600) + "h" + suffix;
-	return Math.floor(secs / 86400) + "d" + suffix;
-}
-function fmtDurationShort(ms) {
-	const mm = Math.max(1, Math.round(ms / 6e4));
-	return mm >= 60 ? Math.floor(mm / 60) + "h " + mm % 60 + "m" : "~" + mm + "m";
-}
-function displayBranch(inst) {
-	const full = inst.branch || "";
-	let m = full.match(/^feature\/sc-\d+\/(.+)$/);
-	if (m) return m[1];
-	m = full.match(/^mindflock\/(.+)$/);
-	if (m) return m[1];
-	return full || inst.program || "";
-}
-function humanSize(bytes) {
-	if (bytes < 1024) return bytes + " B";
-	if (bytes < 1048576) return (bytes / 1024).toFixed(1) + " KB";
-	if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + " MB";
-	return (bytes / 1073741824).toFixed(2) + " GB";
-}
-function pathBasename(p) {
-	const s = (p || "").replace(/[\\/]+$/, "");
-	const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
-	return i >= 0 ? s.slice(i + 1) : s;
-}
-function firstLine$1(text) {
-	for (const l of String(text || "").split("\n")) {
-		const t = l.trim();
-		if (t) return t;
-	}
-	return "";
-}
-//#endregion
-//#region src/lib/flights.ts
-function isLive(f) {
-	return f.state === "running" || f.state === "waiting_you" || f.state === "paused" || f.state === "halted";
-}
-function flightDrives(f) {
-	return !!f && (f.state === "running" || f.state === "waiting_you" || f.state === "paused");
-}
-function perchLabel(title) {
-	const t = String(title || "").trim().replace(/^(you|perch):\s*/i, "");
-	return t ? "Perch: " + t : "Perch";
-}
-function perchedOnYou(stepTitle) {
-	const t = String(stepTitle || "").trim().replace(/^(you|perch):\s*/i, "");
-	return "Perched on you" + (t ? ": " + t : "");
-}
-function stepStateOf(f, step, index) {
-	const rec = f.step_states?.[step.id]?.state;
-	if (rec) return rec;
-	if (index < f.cursor) return "done";
-	if (index === f.cursor && isLive(f)) return f.state === "waiting_you" ? "waiting_you" : f.state === "paused" ? "pending" : "running";
-	return "pending";
-}
-function flightProgress(f) {
-	const states = f.steps.map((s, i) => stepStateOf(f, s, i));
-	const current = f.steps[f.cursor] || null;
-	return {
-		done: states.filter((s) => s === "done" || s === "skipped").length,
-		total: f.steps.length,
-		current,
-		currentState: current ? f.step_states?.[current.id] || null : null,
-		states
-	};
-}
-function stepActor(step, kinds) {
-	const def = kinds?.find((k) => k.kind === step.kind);
-	if (def) return def.actor;
-	return step.kind === "you" ? "you" : "robot";
-}
-function needsYouFlights(flights) {
-	return flights.filter((f) => f.state === "waiting_you" || f.state === "halted");
-}
-function currentElapsed(f, now = Date.now()) {
-	const cur = f.steps[f.cursor];
-	const since = cur ? Number(f.step_states?.[cur.id]?.since) || 0 : 0;
-	return since > 0 ? relTime(since, {
-		now: now / 1e3,
-		suffix: ""
-	}) : "";
-}
-function stripDots(f) {
-	if ("steps" in f) return flightProgress(f).states.map((s) => s === "failed" ? "✗" : s === "skipped" ? "–" : s === "pending" ? "○" : "●").join("");
-	const total = Math.max(0, Number(f.total) || 0);
-	let out = "";
-	for (let i = 0; i < total; i++) out += i <= f.cursor ? i === f.cursor && f.step?.state === "failed" ? "✗" : "●" : "○";
-	return out;
-}
-function stripLabel(f, now = Date.now()) {
-	const title = "steps" in f ? f.steps[f.cursor]?.title || "" : f.step?.title || "";
-	const elapsed = "steps" in f ? currentElapsed(f, now) : "";
-	const tail = f.state === "done" ? "Landed" : f.state === "cancelled" ? "Cancelled" : (f.state === "paused" ? "Paused · " : "") + title + (elapsed ? " (" + elapsed + ")" : "");
-	return [
-		f.plan_name,
-		stripDots(f),
-		tail
-	].filter((x) => x.trim()).join(" · ");
-}
-function rowWaitsOnYou(row) {
-	return !!row && row.state === "waiting_you" && row.step?.actor === "you";
-}
-function youItems(step) {
-	const raw = step?.config?.items;
-	return (Array.isArray(raw) ? raw : typeof raw === "string" ? raw.split("\n") : []).map((x) => String(x).trim()).filter(Boolean);
-}
-function youText(f) {
-	const cur = f.steps[f.cursor];
-	return String(cur?.config?.text ?? "").trim() || (cur ? f.step_states?.[cur.id]?.note || "" : "") || f.reason || "";
-}
-function perchBadge(flights) {
-	const perched = needsYouFlights(flights).filter((f) => f.state === "halted" || f.steps[f.cursor]?.kind !== "verify");
-	return {
-		count: perched.length,
-		failing: perched.some((f) => f.state === "halted")
-	};
-}
-var WAITING_KIND_HEAD = {
-	tickets: "Tickets",
-	prs: "Pull requests",
-	issues: "Issues"
-};
-var WAITING_KIND_BADGE = {
-	tickets: "Ticket",
-	prs: "PR",
-	issues: "Issue"
-};
-function waitingAuto(kind, status) {
-	if (!status) return false;
-	if (kind === "tickets") return !!status.available && !!(status.desired ?? status.running);
-	if (kind === "prs") return status.pr_enabled === true;
-	return status.issues_enabled === true;
-}
-function builtinPlanFor(kind, plans) {
-	const own = kind === "prs" || kind === "pr" ? "builtin:pr" : kind === "issues" || kind === "issue" ? "builtin:issue" : kind === "tickets" || kind === "ticket" ? "builtin:ticket" : "builtin:" + kind;
-	if (plans) return plans.some((p) => p.id === own) ? own : "builtin:ticket";
-	return own === "builtin:issue" ? "builtin:ticket" : own;
-}
-function fieldOptions(f) {
-	return (f.options || []).map((o) => typeof o === "string" ? {
-		value: o,
-		label: o
-	} : {
-		value: String(o.value),
-		label: String(o.label || o.value)
-	});
-}
-function newStep(def, taken) {
-	const config = {};
-	for (const f of def.fields) if (f.default !== void 0) config[f.name] = f.default;
-	let n = taken.length + 1;
-	while (taken.includes("s" + n)) n++;
-	return {
-		id: "s" + n,
-		kind: def.kind,
-		title: def.default_title || def.label,
-		config,
-		on_fail: "halt"
-	};
-}
-function moveStep(steps, from, to) {
-	if (from === to || from < 0 || from >= steps.length) return steps.slice();
-	const out = steps.slice();
-	const [it] = out.splice(from, 1);
-	out.splice(Math.max(0, Math.min(out.length, to)), 0, it);
-	return out;
-}
-function duplicateStep(steps, index) {
-	const src = steps[index];
-	if (!src) return steps.slice();
-	const taken = steps.map((s) => s.id);
-	let n = steps.length + 1;
-	while (taken.includes("s" + n)) n++;
-	const copy = {
-		...src,
-		id: "s" + n,
-		config: { ...src.config }
-	};
-	const out = steps.slice();
-	out.splice(index + 1, 0, copy);
-	return out;
-}
-function planDirty(a, b) {
-	if (!a || !b) return a !== b;
-	const strip = (p) => JSON.stringify({
-		...p,
-		updated: 0
-	});
-	return strip(a) !== strip(b);
-}
-function blankPlan() {
-	return {
-		id: "",
-		name: "New flyway",
-		description: "",
-		builtin: false,
-		trigger: {
-			kind: "manual",
-			schedule: null,
-			paused: false
-		},
-		session: {
-			repo_path: "",
-			program: "",
-			model: "",
-			in_place: false
-		},
-		steps: [],
-		updated: 0
-	};
-}
-var TRIGGER_LABEL = {
-	manual: "By hand",
-	ticket: "Ticket",
-	pr: "Pull request",
-	issue: "Issue",
-	schedule: "Schedule"
-};
-var ON_FAIL_LABEL = {
-	halt: "Stop and tell me",
-	agent: "Hand it to the agent",
-	skip: "Skip it",
-	you: "Ask me"
-};
-function legacyFlightsRoute(target) {
-	const raw = String(target || "").trim();
-	const cut = raw.indexOf("/");
-	const word = cut < 0 ? raw : raw.slice(0, cut);
-	const rest = cut < 0 ? "" : raw.slice(cut + 1);
-	if (word === "flyways" || word === "plans") return {
-		to: "flyways",
-		plan: rest
-	};
-	if (word === "sources") return {
-		to: "intake",
-		target: rest || null
-	};
-	if (word === "checklists") return {
-		to: "verify",
-		target: rest || null
-	};
-	if (word === "schedule") return {
-		to: "schedule",
-		target: rest || null
-	};
-	return {
-		to: "sky",
-		focus: word === "sky" ? rest : ""
-	};
-}
-function whenFormOf(s) {
-	const base = {
-		days: "daily",
-		at: "21:00",
-		date: "",
-		cron: "0 21 * * 1-5",
-		seeded: ""
-	};
-	if (!s) return base;
-	if ("once" in s && s.once) return {
-		...base,
-		days: "once",
-		at: s.once.slice(11, 16),
-		date: s.once.slice(0, 10)
-	};
-	if ("cron" in s && s.cron) return {
-		...base,
-		days: "cron",
-		cron: s.cron
-	};
-	if ("at" in s && s.at) return {
-		...base,
-		days: s.days === "weekdays" ? "weekdays" : "daily",
-		at: s.at
-	};
-	return base;
-}
-function scheduleOfWhen(f) {
-	if (f.days === "cron") return f.cron.trim() ? { cron: f.cron.trim() } : null;
-	if (f.days === "once") return f.date && f.at ? { once: f.date + "T" + f.at } : null;
-	return f.at ? {
-		at: f.at,
-		days: f.days
-	} : null;
-}
-function planChoices(plans, kind, value = "") {
-	const builtin = plans.find((p) => p.id === builtinPlanFor(kind, plans));
-	const ordered = [...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)];
-	const out = [{
-		value: "",
-		label: "Default · " + (builtin?.name || "built-in flyway")
-	}];
-	for (const p of ordered) out.push({
-		value: p.id,
-		label: p.name,
-		builtin: p.builtin
-	});
-	if (value && !plans.some((p) => p.id === value)) out.push({
-		value,
-		label: value + " (not found)"
-	});
-	return out;
-}
-var PLAN_FIELD = "plan";
 //#endregion
 //#region src/lib/sessionState.ts
 var actShown = /* @__PURE__ */ new Map();
@@ -78912,7 +78926,7 @@ function sessionDiagram(rows, title, opts = {}) {
 	};
 }
 function branchOf(row) {
-	const b = row.flight?.branch;
+	const b = row.flight_branch ?? row.flight?.branch;
 	return b && typeof b.step === "string" && b.step ? b : null;
 }
 function joinOf(row) {

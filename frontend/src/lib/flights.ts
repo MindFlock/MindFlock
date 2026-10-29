@@ -539,3 +539,16 @@ export function planChoices(
 /** The per-source setting's key: `TicketingSource.plan`,
  * `github.repo_settings[repo].plan`, `github.issue_repo_settings[repo].plan`. */
 export const PLAN_FIELD = "plan";
+
+/** The server gives a worker with no flight of its own a branch-only `flight`
+ * dto (`id` "", `step` null, only `branch` set) so the diagram can find where
+ * it fans out from. Everything else in the app keys on "has a flight", so the
+ * rows are normalised once, where they enter: such a dto becomes
+ * `flight: null` + `flight_branch`. Real flights pass through untouched. */
+export function normalizeFlightRows<T extends { flight?: (FlightRow & { branch?: { parent: string; step: string } | null }) | null; flight_branch?: { parent: string; step: string } | null }>(rows: T[]): T[] {
+  return rows.map((r) => {
+    const f = r.flight;
+    if (!f || f.id) return r;
+    return { ...r, flight: null, flight_branch: f.branch && f.branch.step ? { parent: f.branch.parent, step: f.branch.step } : null };
+  });
+}

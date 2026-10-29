@@ -456,8 +456,10 @@ interface JoinChild {
   report?: string;
 }
 
-export function branchOf(row: Pick<Instance, "flight">): BranchRef | null {
-  const b = (row.flight as BranchedRow | null | undefined)?.branch;
+export function branchOf(row: Pick<Instance, "flight" | "flight_branch">): BranchRef | null {
+  // Lifted to `flight_branch` by normalizeFlightRows; raw rows still carry it
+  // inside the dto (tests, an older bundle).
+  const b = row.flight_branch ?? (row.flight as BranchedRow | null | undefined)?.branch;
   return b && typeof b.step === "string" && b.step ? b : null;
 }
 

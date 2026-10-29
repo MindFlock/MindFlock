@@ -992,6 +992,7 @@
   // The row's `flight` is perched on you (lib/flights.ts rowWaitsOnYou).
   function flightWaitsOnYou(inst) {
     var fl = inst && inst.flight;
+    if (fl && !fl.id) fl = null; // a worker's branch-only dto: not a flight of its own
     return !!fl && fl.state === "waiting_you" && !!fl.step && fl.step.actor === "you";
   }
 
@@ -1044,7 +1045,7 @@
     var un = inst.diff_stat && inst.diff_stat.uncommitted;
     var dirty = un && (Number(un.additions) || 0) + (Number(un.deletions) || 0) > 0;
     // A paused flight: calm and out of the bell (sessionState.ts).
-    if (inst.flight && inst.flight.state === "paused")
+    if (inst.flight && inst.flight.id && inst.flight.state === "paused")
       return st("idle", { label: "Paused flight",
                           hint: "Flight “" + (inst.flight.plan_name || "") + "” is paused — resume it from the desktop" });
     if (idleFor > STUCK_IDLE_S && dirty)

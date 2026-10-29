@@ -377,6 +377,11 @@ export interface Instance {
    * all the pane strip and the rail read. Optional: an older server doesn't
    * send it. */
   flight?: FlightRow | null;
+  /** A worker spawned during one of its parent's stops: where it branches
+   * from (docs/flights.md "Fan-out and join"). The server sends this inside
+   * a branch-only `flight` dto; lib/flights normalizeFlightRows lifts it here
+   * so `flight` stays "this session's own flight, or null". */
+  flight_branch?: { parent: string; step: string } | null;
   /** Flock mode ("Workers on every prompt"): while true the server adds the
    * workers request to every prompt submitted in this session. Optional: an
    * older server doesn't send it (lib/workersRequest). */
