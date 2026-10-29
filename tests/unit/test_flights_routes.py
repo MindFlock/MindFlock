@@ -181,6 +181,7 @@ def test_start_refusals():
     assert (
         client.post("/api/flights/start", json={"plan_id": "nope"}).status_code == 404
     )
+    # A ticket subject is no longer a 501: with no folder it's no_repo.
     r = client.post(
         "/api/flights/start",
         json={
@@ -188,7 +189,7 @@ def test_start_refusals():
             "subject": {"kind": "ticket", "source": "sc", "id": "1"},
         },
     )
-    assert r.status_code == 501 and r.json()["error"] == "not_wired"
+    assert r.status_code == 400 and r.json()["error"] == "no_repo"
     r = client.post(
         "/api/flights/start", json={"plan_id": "builtin:ticket", "title": "ghost"}
     )

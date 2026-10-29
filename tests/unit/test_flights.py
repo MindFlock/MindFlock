@@ -238,11 +238,11 @@ def test_put_plan_is_the_sync_write():
         ("ticket", "commit", "builtin:ticket@commit"),
         ("ticket", "push", "builtin:ticket@push"),
         ("ticket", "pr", "builtin:ticket@pr"),
-        ("ticket", "merge", "builtin:ticket"),
+        ("ticket", "merge", "builtin:ticket@merge"),
         ("issue", "pr", "builtin:ticket@pr"),
         ("pr", "push", "builtin:pr@push"),
-        ("pr", "pr", "builtin:pr"),
-        ("schedule", "pr", "builtin:schedule"),
+        ("pr", "pr", "builtin:pr@pr"),
+        ("schedule", "pr", "builtin:schedule@pr"),
         ("ticket", "off", ""),
         ("ticket", "agent", ""),
         ("nope", "pr", ""),
@@ -252,16 +252,44 @@ def test_plan_for_depth(kind, depth, want):
     assert F.plan_for_depth(kind, depth) == want
 
 
-def test_depth_cut_is_a_virtual_plan():
+def test_a_depth_is_the_ship_ladder_only():
+    """A per-source depth behaves exactly as the fast-track it replaced: the
+    agent, then commit → push → pr → merge cut at the depth — no verify,
+    reviews, checks, you or ticket step, and nothing asks first."""
     cut = F.get_plan("builtin:ticket@pr")
-    assert [s["title"] for s in cut["steps"]] == [
-        "Agent works the ticket",
+    assert [(s["kind"], s["title"]) for s in cut["steps"]] == [
+        ("agent", "Agent works the ticket"),
+        ("ship", "Commit"),
+        ("ship", "Push"),
+        ("ship", "Open PR"),
+    ]
+    assert [s["id"] for s in cut["steps"]] == ["s1", "s2", "s3", "s4"]
+    assert cut["id"] == "builtin:ticket@pr" and cut["name"] == "Fast-track to Open PR"
+    merge = F.get_plan("builtin:ticket@merge")
+    assert [s["config"].get("lane") for s in merge["steps"][1:]] == [
+        "commit",
+        "push",
+        "pr",
+        "merge",
+    ]
+    assert all(s["config"]["ask_first"] is False for s in merge["steps"][1:])
+    assert {s["kind"] for s in merge["steps"]} == {"agent", "ship"}
+    assert [s["kind"] for s in F.get_plan("builtin:schedule@commit")["steps"]] == [
+        "agent",
+        "ship",
+    ]
+    assert [s["title"] for s in F.get_plan("builtin:pr@push")["steps"]] == [
+        "Agent addresses the review comments",
         "Commit",
         "Push",
-        "Verify",
-        "Open PR",
     ]
-    assert cut["id"] == "builtin:ticket@pr" and "Open PR" in cut["name"]
+    # The agent step follows the built-in as edited; the built-in itself is
+    # unchanged by any of this.
+    t = F.get_plan("builtin:ticket")
+    t["steps"][0]["title"] = "My agent"
+    F.save_plan(t)
+    assert F.get_plan("builtin:ticket@commit")["steps"][0]["title"] == "My agent"
+    assert len(F.get_plan("builtin:ticket")["steps"]) == 10
     assert F.get_plan("builtin:nope@pr") is None
     with pytest.raises(F.PlanError):
         F.save_plan(dict(cut))

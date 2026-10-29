@@ -93,8 +93,8 @@ def flights_list(all: int = 0) -> JSONResponse:  # noqa: A002 — the query name
 @router.post("/api/flights/start")
 async def flights_start(payload: Optional[dict] = None) -> JSONResponse:
     """Take off → 202 ``{"flight"}``. ``title`` attaches to an existing
-    session; without it the session is created from the plan. A ticket / PR
-    / issue ``subject`` is 501 ``not_wired`` until Intake passes ``plan``."""
+    session; without it the session is created from the plan. The flight
+    records whatever ``subject`` it is given."""
     try:
         flight = await _driver.start(payload or {})
     except _flights.FlightError as err:

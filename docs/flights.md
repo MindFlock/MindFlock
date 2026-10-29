@@ -49,7 +49,7 @@ and their stores are untouched:
 | Intake source cards + Auto-start switches | **Sources** tab (the existing tab components, mounted as they are) | settings |
 | Verify checklists | a **Verify** step inside a plan; the checklists list is the **Checklists** tab; open checklist items are *you* steps on the Board | `test_plans.json` |
 | Schedule (templates) | **Schedule** tab (the existing templates view); a plan may also carry its own schedule trigger | `session_templates.json` |
-| Fast-track depth (off→commit→push→pr→merge) | the **ship** steps of a plan; a per-source depth still works and maps to the built-in plan cut at that rung | `autopilot.json` |
+| Fast-track depth (off→commit→push→pr→merge) | the **ship** steps of a plan; a per-source depth still works and maps to the plain ship ladder at that rung (the agent, then commit → … → the depth — nothing else) | `autopilot.json` |
 
 The top bar shows **Flights** where Intake / Verify / Schedule were. `Alt+I`
 opens Flights (Board), `Alt+V` opens it on Checklists, `Alt+S` on Schedule.
@@ -278,9 +278,13 @@ strip, Plans, Describe a step.
 - **Scheduled task** (`builtin:schedule`, trigger schedule): Agent → Commit → Push → Open PR.
 - **Verify on live** (`builtin:verify`, trigger manual): Verify (both, wait_live).
 
-A per-source `depth` of `commit|push|pr|merge` with no `plan` set uses the
-built-in for that kind cut after the matching ship step (so `pr` =
-agent→commit→push→verify→open PR).
+A per-source `depth` of `commit|push|pr|merge` with no `plan` set is the
+**ship ladder only** — exactly what that fast-track did before Flights: the
+kind's agent step, then commit → push → pr → merge cut at the depth, with no
+verify / reviews / checks / *you* / ticket step and nothing asking first (so
+`pr` = agent→commit→push→open PR, and `merge` is a plain merge with no approve
+step). The full built-in ("Ticket to merge" …) is opt-in: pick it as the
+source's `plan` or at start.
 
 ## As built: where the backend differs from (or adds to) the contract
 
@@ -336,11 +340,13 @@ had to choose. Field and route names are unchanged.
 - **Bell row** (`GET /api/outbox` `waiting`): `kind: "flight_you"`, `key:
   "flight::<id>::<sid>"`, `reason`/`text` = what to do, `actions: ["done",
   "skip", "open"]`, `flight: {id, plan_name, step, step_title, kind, items}`.
-- **Depth cuts are virtual plans.** `flights.plan_for_depth(kind, depth)`
-  returns `builtin:<kind>@<lane>` (e.g. `builtin:ticket@pr`); `get_plan` and
-  `/start` resolve it to the built-in (as edited) cut after that ship step. An
-  issue uses `builtin:ticket`. `merge`, and a depth whose ship step is the
-  plan's last or missing (`pr` for `builtin:pr`), is the whole built-in.
+- **Depth ladders are virtual plans.** `flights.plan_for_depth(kind, depth)`
+  returns `builtin:<kind>@<depth>` for every ship depth (e.g.
+  `builtin:ticket@pr`, `builtin:ticket@merge`); `get_plan` and `/start`
+  resolve it to "Fast-track to <rung>": the built-in's first agent step (as
+  edited) then the ship steps up to the depth (`ask_first` false). It is never
+  listed and can't be saved. An issue uses `builtin:ticket`'s agent step. The
+  built-ins themselves are unchanged.
 - **Sleeping sessions don't hold a flight.** The sleep sweep only stops an
   idle agent, so a sleeping session counts as idle for the settle gate, and a
   step that types into it wakes it first (`sleep.ensure_awake`). Paused /
@@ -384,8 +390,9 @@ had to choose. Field and route names are unchanged.
 - `flight_driver.on_session_created(title)` — already subscribed to
   `session.created`; attaches the pending flight (repo root, gone clock) and
   wakes the loop.
-- `POST /api/flights/start` with a ticket/PR/issue `subject` answers 501
-  `not_wired` until the Intake start paths take `plan`.
+- `flight_driver.start` records whatever `subject` it is given (the 501
+  `not_wired` branch is gone); routing a ticket/PR/issue subject through the
+  Intake start paths is the route's job.
 
 ## Where it lives
 
