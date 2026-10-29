@@ -3,8 +3,8 @@
  *
  *  - Perched on you — every flight perched on you (its perch's checklist and
  *    Done / Skip, the same block the line's box holds) or halted (Retry /
- *    Skip), and Verify's due or failing checklists (a row that opens the
- *    Checklists tab). A press on a flight's name flies the sky to its line.
+ *    Skip), and Verify's due or failing checklists (a row that opens it in
+ *    Verify). A press on a flight's name flies the sky to its line.
  *  - Waiting to fly — the tickets, pull requests and issues that are eligible
  *    and have no session, under their own sub-headings, a kind badge on every
  *    row, the flyway as a chip row and one action: Fly. Folded: the intake
@@ -36,6 +36,7 @@ import {
 } from "../../lib/flights";
 import { flyWaiting, type WaitingTarget } from "../../lib/flightsApi";
 import { ChipRow } from "./controls";
+import "./Flights.css";
 
 /** The flyway a source names for its flights (`TicketingSource.plan`,
  * `github.repo_settings[repo].plan`, `issue_repo_settings[repo].plan`), "" =
@@ -53,14 +54,14 @@ export function sourcePlan(settings: Record<string, unknown> | undefined, t: Wai
   return per?.[t.repo]?.plan || "";
 }
 
-/** A due / failing checklist: one line that opens it on the Checklists tab. */
+/** A due / failing checklist: one line that opens it in Verify. */
 export function ChecklistRow({ plan, onOpen }: { plan: TestPlan; onOpen(branch: string): void }) {
   const failing = isFailing(plan);
   return (
     <button
       type="button"
       className={"fl-check-row" + (failing ? " is-failing" : "")}
-      title="Open this checklist on the Checklists tab"
+      title="Open this checklist in Verify"
       onClick={() => onOpen(plan.branch || plan.id)}
     >
       <span className="fl-check-glyph" aria-hidden="true">{failing ? "✗" : "☐"}</span>
@@ -181,10 +182,11 @@ export interface SkyDrawerProps {
   onToggle(): void;
   /** Fly the sky to a session's line. */
   onFocus(title: string): void;
-  onTab(tab: "plans" | "sources" | "checklists", rest?: string): void;
 }
 
-export function SkyDrawer({ open, onToggle, onFocus, onTab }: SkyDrawerProps) {
+export function SkyDrawer({ open, onToggle, onFocus }: SkyDrawerProps) {
+  // Its links open the flat dialogs: a checklist in Verify, sources in Intake.
+  const openDialogFor = useUi((s) => s.openDialogFor);
   const flightsQ = useFlights();
   const plans = useFlightPlans().data || [];
   const kinds = useFlightKinds().data;
@@ -225,7 +227,7 @@ export function SkyDrawer({ open, onToggle, onFocus, onTab }: SkyDrawerProps) {
                   <PerchRow key={f.id} flight={f} kinds={kinds} onFocus={onFocus} />
                 ))}
                 {dueChecklists.map((p) => (
-                  <ChecklistRow key={p.id} plan={p} onOpen={(b) => onTab("checklists", b)} />
+                  <ChecklistRow key={p.id} plan={p} onOpen={(b) => openDialogFor("verify", b)} />
                 ))}
               </>
             )}
@@ -238,8 +240,8 @@ export function SkyDrawer({ open, onToggle, onFocus, onTab }: SkyDrawerProps) {
             {waiting.length === 0 ? (
               <p className="fl-empty muted">
                 Nothing is waiting to fly.{" "}
-                <button type="button" className="linklike" onClick={() => onTab("sources")}>
-                  Sources ›
+                <button type="button" className="linklike" onClick={() => openDialogFor("intake")}>
+                  Intake ›
                 </button>{" "}
                 <button type="button" className="linklike" onClick={refresh}>
                   Refresh

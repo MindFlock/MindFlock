@@ -131,8 +131,9 @@ import { useAutoTour } from "../onboarding/useAutoTour";
 // The deep link — `openDialogFor("verify", <branch>)` — is resolved by
 // `verifyDeepLinkPlan` in verify.ts; its contract is documented there.
 
-/** `embedded`: drawn inside Flights → Checklists — no Modal, no Close, and
- * the deep link (a branch) comes in as `target`. */
+/** `embedded`: drawn inside another dialog — no Modal, no Close, and the
+ * deep link (a branch) comes in as `target`. Nothing embeds it today: the top
+ * bar's Verify (Alt+V) opens it standalone. */
 export function VerifyDialog({ embedded = false, target: embeddedTarget = null }: { embedded?: boolean; target?: string | null } = {}) {
   const storeOpen = useUi((s) => s.openDialog === "verify");
   const open = embedded || storeOpen;
@@ -623,7 +624,7 @@ export function VerifyDialog({ embedded = false, target: embeddedTarget = null }
           </div>
         </div>
   );
-  // Embedded, the host (Flights) is the Modal.
+  // Embedded, the host is the Modal.
   if (embedded) return <SettingsCtx.Provider value={model}>{panel}</SettingsCtx.Provider>;
   return (
     <SettingsCtx.Provider value={model}>

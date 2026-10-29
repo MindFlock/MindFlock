@@ -8,14 +8,11 @@ import { openSettings } from "../../lib/openSettings";
 import type { TourId } from "../../lib/tours";
 import type { DialogName } from "../../state/store";
 
-/** Each tour's surface and the target it opens on: Intake's tour walks the
- * Sources tab of Flights, Verify's Checklists, Schedule's Schedule. */
-const SURFACE: Partial<Record<TourId, [DialogName, string | null]>> = {
-  new: ["new-session", null],
-  flights: ["flights", "plans"],
-  intake: ["flights", "sources"],
-  verify: ["flights", "checklists"],
-  schedule: ["flights", "schedule"],
+const SURFACE: Partial<Record<TourId, DialogName>> = {
+  new: "new-session",
+  intake: "intake",
+  verify: "verify",
+  schedule: "schedule",
 };
 
 export function replayTour(id: TourId): void {
@@ -32,12 +29,14 @@ export function replayTour(id: TourId): void {
   } else if (id === "people") {
     // People is a Settings screen (key "peer"), not a top-bar dialog.
     openSettings("peer");
+  } else if (id === "sky") {
+    // The sky is a view, not a dialog: show it, shelf and all.
+    ui.showSky();
   } else if (id === "voice") {
     // The top-bar mic: nothing over it (Settings → Voice's "Show me how").
     ui.closeDialog();
   } else {
-    const [name, target] = SURFACE[id]!;
-    ui.openDialogFor(name, target);
+    ui.openDialogFor(SURFACE[id]!);
   }
   useUi.getState().openCoachTour(id);
 }

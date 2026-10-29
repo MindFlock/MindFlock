@@ -36,6 +36,7 @@ import { flightDiagram, sessionDiagram, type BoxSize, type Diagram, type Diagram
 import { controlFlight, jumpFlight, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { FlywayCanvas } from "./FlywayCanvas";
 import { Bird } from "./Bird";
+import "./Flights.css";
 
 const stop = (e: MouseEvent) => e.stopPropagation();
 

@@ -78,7 +78,7 @@ const NEEDS_TOP = -1;
 const TOP = {
   new: 0,
   recent: 1, // + 0.1 per place in the MRU (the last three looked at)
-  flights: 2,
+  intake: 2,
   verify: 3,
   schedule: 4,
   setup: 5,
@@ -132,26 +132,16 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     acts.push({ label: "New session…", hint: "Alt+N", top: TOP.new, run: () => newSession() });
 
     // --- Dialog openers ----------------------------------------------------
-    // Flights, then each of its tabs by the name people learned: Intake's
-    // tabs (now Flights → Sources), Verify (Checklists) and Schedule — the
-    // queue you want is the thing you have in mind, and typing "issues" should
-    // land on it directly rather than on a dialog you then have to navigate.
+    // Each Intake tab gets its own entry: the queue you want is the thing you
+    // have in mind, and typing "issues" should land on it directly rather than
+    // on a dialog you then have to navigate.
     acts.push({
-      label: "Flights…",
+      label: "Intake…",
       hint: "Alt+I",
-      top: TOP.flights,
-      keywords: "flyways stops perch waiting to fly in flight intake verify schedule checklists",
-      run: () => ui.openDialogFor("flights"),
+      top: TOP.intake,
+      keywords: "sources tickets pull requests issues waiting to fly",
+      run: () => ui.openDialogFor("intake"),
     });
-    // The main area's other view (lib/viewMode): the same sessions as panes
-    // or as lines on the sky.
-    acts.push(
-      ui.view === "sky"
-        ? { label: "Switch to the grid", hint: "Alt+Y", keywords: "view panes terminals grid", run: () => setView("grid") }
-        : { label: "Switch to the Sky", hint: "Alt+Y", keywords: "view sky canvas lines bird board flock map", run: () => setView("sky") }
-    );
-    acts.push({ label: "Flights: Flyways", keywords: "flyway plan stops canvas editor", run: () => ui.openDialogFor("flights", "plans") });
-    acts.push({ label: "Intake…", hint: "Flights → Sources", run: () => ui.openDialogFor("intake", "tickets") });
     acts.push({ label: "Intake: Tickets", run: () => ui.openDialogFor("intake", "tickets") });
     acts.push({ label: "Intake: GitHub PRs", run: () => ui.openDialogFor("intake", "prs") });
     acts.push({ label: "Intake: GitHub issues", run: () => ui.openDialogFor("intake", "issues") });
@@ -160,11 +150,13 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       hint: "what starts on its own",
       run: () => ui.openDialogFor("intake", "autostart"),
     });
+    // The other end of the same arc, so it sits with the Intake entries rather
+    // than down among the settings screens.
     acts.push({
       label: "Verify…",
       hint: "Alt+V",
       top: TOP.verify,
-      keywords: VERIFY_BLURB + " checklists flights",
+      keywords: VERIFY_BLURB + " checklists",
       run: () => ui.openDialogFor("verify"),
     });
     acts.push({
@@ -174,6 +166,20 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       keywords: "templates cron recurring nightly timer daily weekly",
       run: () => ui.openDialogFor("schedule"),
     });
+    // The main area's other view (lib/viewMode): the same sessions as panes
+    // or as lines on the sky — and the sky's flyway shelf, where flyways are
+    // made, edited and flown.
+    acts.push(
+      ui.view === "sky"
+        ? { label: "Switch to the grid", hint: "Alt+Y", keywords: "view panes terminals grid", run: () => setView("grid") }
+        : { label: "Switch to the Sky", hint: "Alt+Y", keywords: "view sky canvas lines bird board flock map flights", run: () => setView("sky") }
+    );
+    acts.push({
+      label: "Flyways…",
+      hint: "on the Sky's shelf",
+      keywords: "flights flyway plan stops perch canvas editor new",
+      run: () => ui.showFlyways(),
+    });
     // Customize and its tabs: the extras you opt into.
     acts.push({ label: "Customize…", hint: "choose sidebar bars", run: () => ui.openDialogFor("customize") });
     acts.push({
@@ -182,7 +188,7 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       run: () => ui.setBulkMode(true),
     });
     acts.push({ label: "Prompts…", hint: "manage saved prompts", run: () => ui.openDialogFor("prompts") });
-    // Schedule is a tab of Flights; "Templates…" is the name it had, kept as a
+    // Schedule is the top bar's; "Templates…" is the name it had, kept as a
     // row so the word people learned still finds it.
     acts.push({ label: "Templates…", hint: "your templates — in Schedule", run: () => ui.openDialogFor("schedule") });
     // A NEW template's form with its schedule on — it says template, because

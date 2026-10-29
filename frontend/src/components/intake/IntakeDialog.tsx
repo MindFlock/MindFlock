@@ -269,10 +269,10 @@ function AutoStartOn() {
   return <AutoStartCount on={p.onKinds.length > 0} />;
 }
 
-/** `embedded`: drawn inside another dialog (Flights → Sources) — no Modal of
- * its own, no Close, and its deep link comes in as `target` rather than from
- * the store. Standalone it opens on the store's "intake" (which the store now
- * maps to Flights, so in the app it is always the embedded one). */
+/** `embedded`: drawn inside another dialog — no Modal of its own, no Close,
+ * and its deep link comes in as `target` rather than from the store. Nothing
+ * embeds it today: the top bar's Intake (Alt+I) opens it standalone on the
+ * store's "intake". */
 export function IntakeDialog({ embedded = false, target: embeddedTarget = null }: { embedded?: boolean; target?: string | null } = {}) {
   const storeOpen = useUi((s) => s.openDialog === "intake");
   const open = embedded || storeOpen;
@@ -437,7 +437,7 @@ export function IntakeDialog({ embedded = false, target: embeddedTarget = null }
           </div>
         </div>
   );
-  // Embedded, the host (Flights) is the Modal.
+  // Embedded, the host is the Modal.
   if (embedded) return <SettingsCtx.Provider value={model}>{panel}</SettingsCtx.Provider>;
   return (
     <SettingsCtx.Provider value={model}>

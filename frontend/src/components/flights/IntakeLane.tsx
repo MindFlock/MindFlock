@@ -7,8 +7,8 @@
  * looks (the auto-start chip), the flyway its items fly, the items that are
  * eligible and have no session yet (each with Fly), and a thin stub per
  * session it already started — `data-lane-target="<title>"` is where the
- * Sky's arrow to that session's line begins. ⋯ opens the source on Flights →
- * Sources. The lane folds to a rail of one icon per source with its count.
+ * Sky's arrow to that session's line begins. ⋯ opens the source in Intake.
+ * The lane folds to a rail of one icon per source with its count.
  *
  * The grouping, counts, default flyway and started-session matching are
  * lib/skyIntake.ts `sourceBlocks`; the Fly request is the Board's own
@@ -24,7 +24,7 @@ import { WAITING_KIND_BADGE, WAITING_KIND_HEAD, type FlightPlan } from "../../li
 import { flyRequest, refreshFlights, type WaitingTarget } from "../../lib/flightsApi";
 import { laneCount, shownWaiting, sourceBlocks, type LanePanels, type LaneWaiting, type SourceBlock } from "../../lib/skyIntake";
 import { useWaiting } from "./useWaiting";
-import "./FlightsDialog.css";
+import "./Flights.css";
 import "./IntakeLane.css";
 
 export interface IntakeLaneProps {
@@ -125,9 +125,9 @@ function Block({ block, onFly }: { block: SourceBlock; onFly(title: string): voi
         <button
           type="button"
           className="sky-lane-more"
-          aria-label={"Open " + block.label + " on Sources"}
-          title="Open this source on Flights → Sources"
-          onClick={() => useUi.getState().openDialogFor("flights", block.target)}
+          aria-label={"Open " + block.label + " in Intake"}
+          title="Open this source in Intake"
+          onClick={() => useUi.getState().openDialogFor("intake", block.target)}
         >
           ⋯
         </button>
@@ -222,8 +222,8 @@ export function IntakeLane({ rows, plans, onFly, width = 260 }: IntakeLaneProps)
       {blocks.length === 0 ? (
         <p className="sky-lane-empty muted">
           No sources yet.{" "}
-          <button type="button" className="linklike" onClick={() => useUi.getState().openDialogFor("flights", "sources")}>
-            Sources ›
+          <button type="button" className="linklike" onClick={() => useUi.getState().openDialogFor("intake")}>
+            Intake ›
           </button>
         </p>
       ) : (

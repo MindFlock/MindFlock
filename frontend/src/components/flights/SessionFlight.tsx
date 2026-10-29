@@ -22,7 +22,7 @@
  * ("Fly this flyway") and "Describe a flyway…" to make one from a sentence
  * and fly it right away. The line's editing (the +, the palette, the
  * inspector) is useSessionLine's, shared with the Sky's lines; "Open in the
- * Sky" shows this session's line there (`#flights/sky/<title>`). */
+ * Sky" shows this session's line there (`#sky/<title>`). */
 
 import { useState } from "react";
 import type { Instance } from "../../api/types";
@@ -37,7 +37,7 @@ import { FlightMenu } from "./FlightStrip";
 import { DescribeField } from "./StopParts";
 import { useSessionLine } from "./useSessionLine";
 import { Bird } from "./Bird";
-import "./FlightsDialog.css";
+import "./Flights.css";
 
 /** One flyway as a card: its name, its stops as tiny boxes, "Fly this flyway". */
 function FlywayCard({ plan, kinds, onFly, busy }: { plan: FlightPlan; kinds: readonly StepKindDef[]; onFly(): void; busy: boolean }) {

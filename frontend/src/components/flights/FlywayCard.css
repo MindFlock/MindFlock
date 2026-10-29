@@ -1,6 +1,7 @@
-/* A flyway made on the Sky (FlywayCard.tsx): a card floating over the plane.
-   The canvas, the palette, the inspector and Describe bring their own styles
-   (FlywayCanvas.css / FlightsDialog.css); this is the card around them. */
+/* A flyway made or edited on the Sky (FlywayCard.tsx): a card floating over
+   the plane. The canvas, the palette, the inspector, Describe and the trigger
+   bring their own styles (FlywayCanvas.css / FlywayInspector.css); this is
+   the card around them. */
 
 .sky-flyway-card {
   position: absolute;
@@ -53,4 +54,30 @@
 .sky-flyway-card-ask {
   margin-right: auto;
   font-size: 12.5px;
+}
+
+/* Takes off: the trigger, folded under its one-line summary. */
+.sky-flyway-card-trigger > summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--muted);
+  padding: 2px 0;
+}
+
+.sky-flyway-card-trigger[open] > summary {
+  margin-bottom: 8px;
+}
+
+.sky-flyway-card-trigger > summary strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* On the narrow sky the card sits in the list, not on a plane. */
+.sky-narrow .sky-flyway-card {
+  position: relative;
+  left: auto !important;
+  top: auto !important;
+  width: auto;
+  max-height: none;
 }

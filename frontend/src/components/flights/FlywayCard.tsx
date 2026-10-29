@@ -1,8 +1,11 @@
-/** A flyway made ON the Sky: a card floating at (x, y) over the plane — its
- * name, its stops on the editor canvas (drag to reorder, + for the stop
- * palette, the selected stop's inspector under it), **Describe a stop…**, and
- * Save / Save & fly on… / Cancel. The Flyways tab's editor, cut to what a
- * card can hold: the trigger and session defaults stay in that tab.
+/** A flyway made and edited ON the Sky: a card floating at (x, y) over the
+ * plane — its name, its stops on the editor canvas (drag to reorder, + for
+ * the stop palette, the selected stop's inspector under it), **Describe a
+ * stop…**, **Takes off** (its trigger: by hand, from intake, or on a
+ * schedule — FlywayInspector), and Save / Save & fly on… / Cancel. Its ⋯
+ * holds **Reset to default** (a built-in) and **Delete** (yours, asked
+ * inline). The shelf is where flyways live — the Flights dialog's Flyways
+ * tab is retired.
  *
  * `initial` seeds it — a flyway to edit (with an `id`: Save updates it), or a
  * live line's stops through `planFromSteps` ("Save as flyway"). **Save**
@@ -12,17 +15,21 @@
  * confirm()). */
 
 import { useMemo, useState, type JSX } from "react";
+import { OverflowMenu, type MenuItem } from "../OverflowMenu";
+import { InlineConfirm } from "../InlineConfirm";
 import { ApiError } from "../../api/client";
 import { useFlightKinds } from "../../state/queries";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
-import { blankPlan, moveStep, newStep, planDirty, type FlightPlan, type FlightStep, type StepKindDef } from "../../lib/flights";
+import { TRIGGER_LABEL, blankPlan, duplicateStep, moveStep, newStep, planDirty, type FlightPlan, type FlightStep, type StepKindDef } from "../../lib/flights";
 import { flywayDiagram, type DiagramNode } from "../../lib/flightDiagram";
-import { savePlan } from "../../lib/flightsApi";
+import { deletePlan, resetPlan, savePlan } from "../../lib/flightsApi";
 import { Bird } from "./Bird";
 import { FlywayCanvas } from "./FlywayCanvas";
 import { DescribeField, StopInspector, StopPalette } from "./StopParts";
 import { TextField } from "./controls";
+import { FlywayTrigger } from "./FlywayInspector";
+import "./Flights.css";
 import "./FlywayCard.css";
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
@@ -88,6 +95,7 @@ export function FlywayCard({
   plans: FlightPlan[];
   initial?: Partial<FlightPlan>;
   onSaved(plan: FlightPlan): void;
+  /** Closed: Cancel / ✕ / Escape, or the flyway was deleted. */
   onCancel(): void;
 }): JSX.Element {
   const kinds = useFlightKinds().data || [];
@@ -97,8 +105,11 @@ export function FlywayCard({
   const [paletteAt, setPaletteAt] = useState<number | null>(null);
   const [described, setDescribed] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState<"" | "save" | "fly">("");
+  const [busy, setBusy] = useState<"" | "save" | "fly" | "reset" | "delete">("");
   const [askDiscard, setAskDiscard] = useState(false);
+  const [askDelete, setAskDelete] = useState(false);
+  // Fixed at open: toggling the trigger inside must not fold its own section.
+  const [triggerOpen] = useState(() => draft.trigger.kind === "schedule");
 
   const kindOf = useMemo(() => new Map(kinds.map((k) => [k.kind, k])), [kinds]);
   const diagram = useMemo(() => flywayDiagram(draft.steps, kinds), [draft.steps, kinds]);
@@ -120,7 +131,7 @@ export function FlywayCard({
     setStop(at);
     setPaletteAt(null);
   };
-  const remove = (i: number) => {
+  const removeStop = (i: number) => {
     setSteps(draft.steps.filter((_, j) => j !== i));
     setStop(draft.steps.length > 1 ? Math.max(0, i - 1) : null);
   };
@@ -140,6 +151,48 @@ export function FlywayCard({
     setError(r.error);
     if (r.stop >= 0) setStop(r.stop);
   };
+
+  /** A built-in back the way MindFlock ships it (the card reloads on it). */
+  const reset = async () => {
+    if (busy || !draft.id) return;
+    setBusy("reset");
+    setError("");
+    try {
+      const p = await resetPlan(draft.id);
+      setDraft(clone(p));
+      setSeed(clone(p));
+      setStop(p.steps.length ? 0 : null);
+      setDescribed(new Set());
+      toast("“" + p.name + "” is back to its default");
+    } catch (err) {
+      setError(errMsg(err));
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const remove = async () => {
+    if (busy || !draft.id) return;
+    setBusy("delete");
+    try {
+      await deletePlan(draft.id);
+      toast("Deleted “" + draft.name + "”");
+      onCancel();
+    } catch (err) {
+      setError(errMsg(err));
+      setAskDelete(false);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  // The card's ⋯: Reset a built-in, Delete one of yours (asked inline — the
+  // desktop app has no confirm()).
+  const menu: MenuItem[] = draft.id
+    ? draft.builtin
+      ? [{ key: "reset", label: "Reset to default", title: "Put this built-in flyway back the way MindFlock ships it", onSelect: () => void reset() }]
+      : [{ key: "delete", label: "Delete flyway…", danger: true, onSelect: () => setAskDelete(true) }]
+    : [];
 
   const cancel = () => {
     if (dirty && draft.steps.length && !askDiscard) setAskDiscard(true);
@@ -167,10 +220,22 @@ export function FlywayCard({
         <TextField label="Flyway name" value={draft.name} placeholder="Name this flyway" onChange={(name) => setDraft((d) => ({ ...d, name }))} />
         {draft.builtin && <span className="fl-builtin-tag">Built-in</span>}
         {draft.id && dirty && <span className="fl-unsaved">Unsaved</span>}
+        {menu.length > 0 && <OverflowMenu label={"More for “" + draft.name + "”"} items={menu} />}
         <button type="button" className="fl-icon-btn" aria-label="Close" title="Close" onClick={cancel}>
           ✕
         </button>
       </header>
+      {askDelete && (
+        <InlineConfirm
+          id="sky-flyway-delete"
+          title={"Delete “" + draft.name + "”?"}
+          body="Flights already in the air keep their own copy of its stops."
+          confirmLabel="Delete"
+          busy={busy === "delete"}
+          onCancel={() => setAskDelete(false)}
+          onConfirm={() => void remove()}
+        />
+      )}
 
       <FlywayCanvas
         compact
@@ -186,7 +251,7 @@ export function FlywayCard({
           if (n.kind === "add") setPaletteAt(paletteAt === draft.steps.length ? null : draft.steps.length);
         }}
         onMove={move}
-        onRemove={(n) => remove(nodeIndex(n))}
+        onRemove={(n) => removeStop(nodeIndex(n))}
         onInsert={(at) => setPaletteAt(paletteAt === at ? null : at)}
       />
       {paletteAt !== null && (
@@ -220,7 +285,10 @@ export function FlywayCard({
               <button type="button" className="test-btn fl-btn" disabled={stop === draft.steps.length - 1} onClick={() => move(stop, stop + 1)} aria-label="Move later">
                 Later →
               </button>
-              <button type="button" className="test-btn fl-btn danger" onClick={() => remove(stop)}>
+              <button type="button" className="test-btn fl-btn" onClick={() => setSteps(duplicateStep(draft.steps, stop))}>
+                Duplicate
+              </button>
+              <button type="button" className="test-btn fl-btn danger" onClick={() => removeStop(stop)}>
                 Remove
               </button>
             </>
@@ -229,6 +297,15 @@ export function FlywayCard({
       ) : (
         <p className="fl-note muted">{draft.steps.length ? "Pick a stop to edit it." : "Press + to add the first stop, or describe it above."}</p>
       )}
+
+      {/* Where its flights come from: open on a scheduled flyway (Schedule's
+          "Edit in the Sky" lands here for its schedule). */}
+      <details className="sky-flyway-card-trigger" open={triggerOpen || undefined}>
+        <summary>
+          Takes off: <strong>{TRIGGER_LABEL[draft.trigger.kind] || "By hand"}</strong>
+        </summary>
+        <FlywayTrigger plan={draft} onChange={(p) => setDraft((d) => ({ ...d, ...p }))} />
+      </details>
 
       {error && (
         <p className="fl-note sky-flyway-card-error" role="alert">

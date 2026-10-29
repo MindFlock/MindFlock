@@ -293,51 +293,20 @@ export function youText(f: Flight): string {
 
 // --- The badge ---------------------------------------------------------------
 
-export interface FlightBadge {
-  /** The number on the top-bar button (0 = no badge). */
+export interface PerchBadge {
+  /** The number on the top bar's Sky toggle (0 = no badge). */
   count: number;
-  /** Flights waiting on you. */
-  you: number;
-  /** Verify's due checklists (failing ones included). */
-  verify: number;
-  /** Items waiting to fly that will not start on their own. */
-  waiting: number;
-  /** Any of it failed: the badge turns red. */
+  /** One of them halted: the badge turns red. */
   failing: boolean;
 }
 
-/** What waits on you, the top bar's one number: flights perched on you, plus
- * Verify's due checklists, plus items waiting to fly that no switch will
- * start. A flight parked
- * on a VERIFY step is already one of Verify's due checklists, so it is counted
- * there and not twice. */
-export function flightBadgeCount(
-  flights: readonly Flight[],
-  dueVerify: number,
-  failingVerify: number,
-  waiting: readonly { auto: boolean }[]
-): FlightBadge {
-  const you = needsYouFlights(flights).filter((f) => f.steps[f.cursor]?.kind !== "verify").length;
-  const verify = Math.max(0, dueVerify || 0);
-  const manual = waiting.filter((a) => !a.auto).length;
-  const halted = flights.some((f) => f.state === "halted");
-  return {
-    count: you + verify + manual,
-    you,
-    verify,
-    waiting: manual,
-    failing: (failingVerify || 0) > 0 || halted,
-  };
-}
-
-/** The tooltip's three lines under the button's name. */
-export function badgeLines(b: FlightBadge): string[] {
-  const n = (k: number, one: string, many: string) => k + " " + (k === 1 ? one : many);
-  return [
-    n(b.you, "flight perched on you", "flights perched on you"),
-    n(b.verify, "checklist to check", "checklists to check"),
-    n(b.waiting, "item waiting to fly by hand", "items waiting to fly by hand"),
-  ];
+/** The Sky toggle's badge: flights perched on you (or halted until someone
+ * retries, skips or cancels). A flight parked on a VERIFY step is one of
+ * Verify's due checklists, which Verify's own badge counts, so it is left
+ * out here rather than counted twice. */
+export function perchBadge(flights: readonly Flight[]): PerchBadge {
+  const perched = needsYouFlights(flights).filter((f) => f.state === "halted" || f.steps[f.cursor]?.kind !== "verify");
+  return { count: perched.length, failing: perched.some((f) => f.state === "halted") };
 }
 
 // --- Waiting to fly ----------------------------------------------------------
@@ -486,51 +455,36 @@ export const ON_FAIL_LABEL: Record<OnFail, string> = {
   you: "Ask me",
 };
 
-// --- The dialog's address ----------------------------------------------------
+// --- The old Flights addresses ---------------------------------------------
 
-export type FlightsTab = "plans" | "sources" | "schedule" | "checklists";
-export const FLIGHTS_TABS: readonly FlightsTab[] = ["plans", "sources", "schedule", "checklists"];
-export const FLIGHTS_TAB_LABEL: Record<FlightsTab, string> = {
-  plans: "Flyways",
-  sources: "Sources",
-  schedule: "Schedule",
-  checklists: "Checklists",
-};
+/** Where an old Flights address lands now that the dialog is retired: the
+ * Sky (on a session: `focus`), the Sky with the flyway shelf open (and one
+ * flyway's card: `plan`), or one of the flat dialogs with its own deep link. */
+export type LegacyFlightsRoute =
+  | { to: "sky"; focus: string }
+  | { to: "flyways"; plan: string }
+  | { to: "intake" | "verify" | "schedule"; target: string | null };
 
-/** A Flights dialog target: `<tab>` or `<tab>/<rest>` — rest is the embedded
- * surface's own deep link (an Intake tab, a branch for Verify, Schedule's
- * "new" / "schedule:<name>", a flyway id). Unknown or empty = Flyways. The
- * Flyways tab keeps its wire name `plans` (and its `#flights/plans` link). */
-export function parseFlightsTarget(target: string | null | undefined): { tab: FlightsTab; rest: string } {
+/** A `#flights[/<tab>[/<rest>]]` target (or an `openDialogFor("flights", …)`
+ * from an old caller), routed:
+ *
+ *   ""  sky[/<title>]  board        → the Sky (on that session)
+ *   flyways[/<id>]  plans[/<id>]    → the Sky, shelf open (that flyway's card)
+ *   sources[/<x>]                   → Intake (x = its tab / source)
+ *   checklists[/<branch>]           → Verify (that checklist)
+ *   schedule[/<x>]                  → Schedule (x = its own deep link)
+ *
+ * Anything else is the Sky. */
+export function legacyFlightsRoute(target: string | null | undefined): LegacyFlightsRoute {
   const raw = String(target || "").trim();
   const cut = raw.indexOf("/");
   const word = cut < 0 ? raw : raw.slice(0, cut);
   const rest = cut < 0 ? "" : raw.slice(cut + 1);
-  return FLIGHTS_TABS.includes(word as FlightsTab) ? { tab: word as FlightsTab, rest } : { tab: "plans", rest: "" };
-}
-
-/** The Sky was a Flights tab (and before it the Board): a target that still
- * names it — `sky`, `sky/<title>`, `board`, an old `#flights/sky/<title>`
- * link — is the sky VIEW now, on `focus` ("" = the whole sky). Null for any
- * other target. */
-export function skyRouteOf(target: string | null | undefined): { focus: string } | null {
-  const raw = String(target || "").trim();
-  const cut = raw.indexOf("/");
-  const word = cut < 0 ? raw : raw.slice(0, cut);
-  if (word !== "sky" && word !== "board") return null;
-  return { focus: word === "sky" && cut >= 0 ? raw.slice(cut + 1) : "" };
-}
-
-/** The legacy dialog names and the tab of Flights each one became, with its
- * old target carried in the new one: `intake` + "tickets:jira" →
- * "sources/tickets:jira"; `verify` + a branch → "checklists/<branch>";
- * `schedule` / `templates` + "new" → "schedule/new". Intake with no target is
- * its own tab, Sources. */
-export function flightsTargetFor(name: "intake" | "verify" | "schedule" | "templates", target: string | null | undefined): string {
-  const t = String(target || "");
-  if (name === "intake") return t ? "sources/" + t : "sources";
-  if (name === "verify") return t ? "checklists/" + t : "checklists";
-  return t ? "schedule/" + t : "schedule";
+  if (word === "flyways" || word === "plans") return { to: "flyways", plan: rest };
+  if (word === "sources") return { to: "intake", target: rest || null };
+  if (word === "checklists") return { to: "verify", target: rest || null };
+  if (word === "schedule") return { to: "schedule", target: rest || null };
+  return { to: "sky", focus: word === "sky" ? rest : "" };
 }
 
 // --- The trigger's schedule, as Schedule's own editor reads it ----------------

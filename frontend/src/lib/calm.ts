@@ -110,13 +110,17 @@ export function calmHidesBar(key: string): boolean {
   return CALM_HIDDEN_BARS.includes(key) || key.startsWith("ext:");
 }
 
-/** The top bar in the calm first hour. Flights is always on it: it replaced
- * Intake (which always was), and it is where Verify and Schedule live now —
- * their empty states are tabs inside it rather than words on the bar, so
- * there is nothing left to hold back. Alt+I / V / S, the palette and the
- * #flights links open it either way. */
-export function topBarShows(): { flights: true } {
-  return { flights: true };
+/** The top bar in the calm first hour: Verify appears with its first
+ * checklist and Schedule with its first template — until then each has only
+ * an empty state to offer, and both compete with "③ Start your first
+ * session". Hidden is not removed: Alt+V / Alt+S, the palette and the
+ * #verify / #schedule links still open them, and once calm ends (three
+ * sessions, or a week) both are always shown. */
+export function topBarShows(o: { calm: boolean; checklists: number; templates: number }): {
+  verify: boolean;
+  schedule: boolean;
+} {
+  return { verify: !o.calm || o.checklists > 0, schedule: !o.calm || o.templates > 0 };
 }
 
 /** The welcome tour opens by itself exactly once, on a genuinely first

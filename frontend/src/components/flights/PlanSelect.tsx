@@ -1,8 +1,8 @@
 /** A source's flyway choice: which flyway its items fly ("" = the kind's
  * built-in, cut at the source's Fast-track depth), as a row of chips —
  * built-ins first, the default chip reading "Default · <built-in>". On the
- * ticket source cards and the PR / issue repository cards (Flights →
- * Sources); the Board's waiting items default to what it holds. Draws nothing
+ * ticket source cards and the PR / issue repository cards (Intake); the
+ * Sky's waiting items default to what it holds. Draws nothing
  * on a server without the flights routes, so those cards look as they always
  * did there. */
 
