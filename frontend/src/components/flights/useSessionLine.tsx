@@ -1,0 +1,242 @@
+/** One session's line, editable: the session diagram (lib/flightDiagram
+ * `sessionDiagram`) with everything its boxes do — the trailing + opens the
+ * stop palette (and "Fly a flyway — all of its stops"), the + between two
+ * pending stops inserts one there, a stop opens in the inspector (a pending
+ * one is edited in place; done and current ones are read-only), Delete drops
+ * a pending stop, and the live flight's ⋯ / perch parts go inside its boxes.
+ *
+ * Two homes share it: the pane's Flight tab (SessionFlight.tsx) and every
+ * line in the Sky (Sky.tsx). Tacking a stop onto a session with no flight yet
+ * starts an ad-hoc one that takes over the fast-track's remaining rungs
+ * (`POST /api/flights/start {title, steps, absorb_fasttrack}`), so the
+ * ladder's boxes turn into the flight's. */
+
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import type { Instance } from "../../api/types";
+import { toast } from "../../lib/toast";
+import { isLive, newStep, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef } from "../../lib/flights";
+import { sessionDiagram, type DiagramNode } from "../../lib/flightDiagram";
+import { dropStop, patchStop, tackOn, tackOnAll, tackOnNew, takeOff } from "../../lib/flightsApi";
+import type { FlywayCanvasProps } from "./FlywayCanvas";
+import { currentNodeId, liveBoxParts, useCancelAsk } from "./FlightStrip";
+import { StopInspector, StopPalette } from "./StopParts";
+
+export interface LineSource {
+  rows: readonly Instance[];
+  flights: readonly Flight[] | null | undefined;
+  kinds: readonly StepKindDef[];
+  plans: readonly FlightPlan[];
+}
+
+export interface SessionLineOpts {
+  /** Draw the parent above and the workers below (default true). */
+  family?: boolean;
+  /** A parent / child box pressed: go to that session. */
+  onSession(title: string): void;
+}
+
+/** Built-ins first, then the owner's own. */
+export const orderedPlans = (plans: readonly FlightPlan[]) => [...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)];
+
+export function useSessionLine(title: string, src: LineSource, opts: SessionLineOpts) {
+  const { rows, flights, kinds, plans } = src;
+  const family = opts.family !== false;
+  const [selected, setSelected] = useState<string | null>(null);
+  const [paletteAt, setPaletteAt] = useState<number | null>(null);
+  const [draft, setDraft] = useState<FlightStep | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [selectIndex, setSelectIndex] = useState<number | null>(null);
+
+  const row = rows.find((r) => r.title === title);
+  const flRow = row?.flight as FlightRow | null | undefined;
+  const flight = flRow && isLive(flRow) ? flights?.find((f) => f.id === flRow.id) || null : null;
+  const diagram = useMemo(() => sessionDiagram(rows, title, { flights, kinds, family }), [rows, title, flights, kinds, family]);
+  const cancel = useCancelAsk(flight);
+  const parts = liveBoxParts(flight, true, cancel.ask);
+  const kindOf = useMemo(() => new Map(kinds.map((k) => [k.kind, k])), [kinds]);
+  const stops = diagram.nodes.filter((n) => n.kind === "stop");
+  const end = flight ? flight.steps.length : 0;
+  const sel = selected ? diagram.nodes.find((n) => n.id === selected) || null : null;
+
+  // A stop just tacked on opens in the inspector once the flight has it.
+  useEffect(() => {
+    if (selectIndex === null) return;
+    const n = stops.find((s) => s.index === selectIndex && s.step);
+    if (!n) return;
+    setSelected(n.id);
+    setDraft(n.step!);
+    setSelectIndex(null);
+  }, [selectIndex, stops]);
+
+  // The inspector follows the box; a box that left the line closes it.
+  useEffect(() => {
+    if (selected && !sel) {
+      setSelected(null);
+      setDraft(null);
+    }
+  }, [selected, sel]);
+
+  const tackOne = async (def: StepKindDef, at: number | null) => {
+    const step = newStep(def, flight ? flight.steps.map((s) => s.id) : []);
+    setBusy(true);
+    setPaletteAt(null);
+    try {
+      if (flight) {
+        const where = at !== null && at < end ? at : undefined;
+        if (await tackOn(flight.id, step, where)) setSelectIndex(where ?? end);
+      } else {
+        const f = await tackOnNew(title, [step]);
+        if (f) {
+          toast("Took off: " + (f.plan_name || "a new flight"));
+          setSelectIndex(f.steps.length - 1);
+        }
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const flyFlyway = async (plan: FlightPlan) => {
+    setBusy(true);
+    setPaletteAt(null);
+    try {
+      if (flight) {
+        if (await tackOnAll(flight.id, plan.steps)) toast("Added “" + plan.name + "”'s " + plan.steps.length + " stops");
+      } else await takeOff({ plan_id: plan.id, title });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onSelect = (n: DiagramNode) => {
+    setPaletteAt(null);
+    if (selected === n.id) {
+      setSelected(null);
+      setDraft(null);
+      return;
+    }
+    setSelected(n.id);
+    setDraft(n.step ? { ...n.step, config: { ...n.step.config } } : null);
+  };
+
+  /** The trailing +'s palette, open or shut (the line's ⋯ "Fly a flyway…"). */
+  const togglePalette = (open?: boolean) => {
+    setSelected(null);
+    setDraft(null);
+    const shown = paletteAt !== null && paletteAt >= end;
+    setPaletteAt(open ?? !shown ? end : null);
+  };
+
+  const ordered = orderedPlans(plans);
+  const flywayChips = (
+    <div className="fl-palette-flyways">
+      <div className="fl-palette-head">Fly a flyway — all of its stops</div>
+      <div className="fl-chiprow">
+        {ordered.map((p) => (
+          <button key={p.id} type="button" className="fl-pick" disabled={busy} title={p.steps.map((s) => s.title).join(" → ")} onClick={() => void flyFlyway(p)}>
+            {p.name}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  const editable = !!sel?.editable && !!draft && !!flight;
+  const dirtyStop = !!draft && !!sel?.step && JSON.stringify(draft) !== JSON.stringify(sel.step);
+
+  const canvas: Pick<FlywayCanvasProps, "selected" | "onSelect" | "onOpen" | "onInsert" | "onRemove" | "renderInBox" | "sizeOf" | "reveal"> = {
+    selected: paletteAt !== null && paletteAt >= end ? "add" : selected,
+    onSelect,
+    onOpen: (n) => {
+      if (n.kind === "add") togglePalette();
+      else if (n.session && n.session !== title) opts.onSession(n.session);
+    },
+    onInsert: flight ? (at) => setPaletteAt(paletteAt === at ? null : at) : undefined,
+    onRemove: flight ? (n) => n.editable && n.step && void dropStop(flight.id, n.step.id) : undefined,
+    renderInBox: parts.renderInBox,
+    sizeOf: parts.sizeOf,
+    reveal: currentNodeId(diagram, flight),
+  };
+
+  const palette: ReactNode =
+    paletteAt !== null ? (
+      <StopPalette
+        kinds={kinds}
+        title={paletteAt >= end ? "Tack on a stop" : "Add a stop before “" + (flight?.steps[paletteAt]?.title || "") + "”"}
+        onPick={(k) => void tackOne(k, paletteAt)}
+        onClose={() => setPaletteAt(null)}
+        extra={paletteAt >= end && ordered.length > 0 ? flywayChips : undefined}
+      />
+    ) : null;
+
+  const inspector: ReactNode =
+    sel && draft ? (
+      <StopInspector
+        step={draft}
+        def={kindOf.get(draft.kind)}
+        readOnly={!editable}
+        onChange={(p) => setDraft((d) => (d ? { ...d, ...p } : d))}
+        note={
+          !editable ? (
+            <p className="fl-note muted">{sel.state === "done" || sel.state === "skipped" ? "This stop has flown — it can't change now." : "The flight is at this stop — it can't change while it is here."}</p>
+          ) : null
+        }
+        actions={
+          editable ? (
+            <>
+              <button
+                type="button"
+                className="btn-primary fl-btn"
+                disabled={!dirtyStop || busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    await patchStop(flight!.id, draft.id, { title: draft.title, config: draft.config, on_fail: draft.on_fail });
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                Save stop
+              </button>
+              <button
+                type="button"
+                className="test-btn fl-btn danger"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    if (await dropStop(flight!.id, draft.id)) {
+                      setSelected(null);
+                      setDraft(null);
+                    }
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                Remove stop
+              </button>
+            </>
+          ) : undefined
+        }
+      />
+    ) : null;
+
+  return {
+    row,
+    flight,
+    diagram,
+    busy,
+    setBusy,
+    ordered,
+    flyFlyway,
+    togglePalette,
+    /** Something is open under the line (the palette or the inspector). */
+    editing: palette !== null || inspector !== null,
+    canvas,
+    palette,
+    inspector,
+    cancel,
+  };
+}

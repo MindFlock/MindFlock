@@ -461,10 +461,10 @@ export const ON_FAIL_LABEL: Record<OnFail, string> = {
 
 // --- The dialog's address ----------------------------------------------------
 
-export type FlightsTab = "board" | "plans" | "sources" | "schedule" | "checklists";
-export const FLIGHTS_TABS: readonly FlightsTab[] = ["board", "plans", "sources", "schedule", "checklists"];
+export type FlightsTab = "sky" | "plans" | "sources" | "schedule" | "checklists";
+export const FLIGHTS_TABS: readonly FlightsTab[] = ["sky", "plans", "sources", "schedule", "checklists"];
 export const FLIGHTS_TAB_LABEL: Record<FlightsTab, string> = {
-  board: "Board",
+  sky: "Sky",
   plans: "Flyways",
   sources: "Sources",
   schedule: "Schedule",
@@ -473,24 +473,27 @@ export const FLIGHTS_TAB_LABEL: Record<FlightsTab, string> = {
 
 /** A Flights dialog target: `<tab>` or `<tab>/<rest>` — rest is the embedded
  * surface's own deep link (an Intake tab, a branch for Verify, Schedule's
- * "new" / "schedule:<name>", a flyway id). Unknown or empty = the Board. The
- * Flyways tab keeps its wire name `plans` (and its `#flights/plans` link). */
+ * "new" / "schedule:<name>", a flyway id, the Sky's one session). Unknown or
+ * empty = the Sky, and so is the old Board (`board`, `#flights/board`), which
+ * the Sky replaced. The Flyways tab keeps its wire name `plans` (and its
+ * `#flights/plans` link). */
 export function parseFlightsTarget(target: string | null | undefined): { tab: FlightsTab; rest: string } {
   const raw = String(target || "").trim();
   const cut = raw.indexOf("/");
-  const head = (cut < 0 ? raw : raw.slice(0, cut)) as FlightsTab;
+  const word = cut < 0 ? raw : raw.slice(0, cut);
+  const head = (word === "board" ? "sky" : word) as FlightsTab;
   const rest = cut < 0 ? "" : raw.slice(cut + 1);
-  return FLIGHTS_TABS.includes(head) ? { tab: head, rest } : { tab: "board", rest: "" };
+  return FLIGHTS_TABS.includes(head) ? { tab: head, rest } : { tab: "sky", rest: "" };
 }
 
 /** The legacy dialog names and the tab of Flights each one became, with its
  * old target carried in the new one: `intake` + "tickets:jira" →
  * "sources/tickets:jira"; `verify` + a branch → "checklists/<branch>";
  * `schedule` / `templates` + "new" → "schedule/new". Intake with no target is
- * the Board (Alt+I's old landing was the work that came in). */
+ * the Sky (Alt+I's old landing was the work that came in). */
 export function flightsTargetFor(name: "intake" | "verify" | "schedule" | "templates", target: string | null | undefined): string {
   const t = String(target || "");
-  if (name === "intake") return t ? "sources/" + t : "board";
+  if (name === "intake") return t ? "sources/" + t : "sky";
   if (name === "verify") return t ? "checklists/" + t : "checklists";
   return t ? "schedule/" + t : "schedule";
 }

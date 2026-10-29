@@ -523,12 +523,12 @@ export const KEYMAP: KeymapEntry[] = [
     alt: true,
     // The id stays "intake" so a rebind made before Flights survives.
     id: "intake",
-    help: ["Navigation", "Alt+I", "Flights — the Board: what needs you, what is in flight, what is waiting to fly"],
+    help: ["Navigation", "Alt+I", "Flights — the Sky: every session's line, the bird where each one is, what is perched on you"],
     // Guarded unlike Alt+N: on macOS Option+I types a dead-key accent, and a
     // surface you open a few times an hour is not worth eating a keystroke
     // someone meant for a text field or a terminal.
     when: () => !isEditingTarget(document.activeElement),
-    run: () => useUi.getState().openDialogFor("flights", "board"),
+    run: () => useUi.getState().openDialogFor("flights", "sky"),
   },
   {
     // Alt for the same reasons as Alt+I next door — Ctrl+V is paste and always

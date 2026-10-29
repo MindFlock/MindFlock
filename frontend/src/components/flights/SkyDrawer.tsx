@@ -1,13 +1,14 @@
-/** Flights → Board: the live view, loudest first.
+/** Flights → Sky: the drawer at the sky's right edge — what the old Board
+ * listed, so nothing it showed is lost now that the Sky replaced it:
  *
- *  - Needs you — flights perched on you (the perch's box opened wide with its
- *    checklist and Done / Skip) or halted, and Verify's due or failing
- *    checklists (a compact row that opens the Checklists tab).
- *  - In flight — one card per flight: the session's live diagram on one
- *    compact row; its head opens the session.
+ *  - Perched on you — every flight perched on you (its perch's checklist and
+ *    Done / Skip, the same block the line's box holds) or halted (Retry /
+ *    Skip), and Verify's due or failing checklists (a row that opens the
+ *    Checklists tab). A press on a flight's name flies the sky to its line.
  *  - Waiting to fly — the tickets, pull requests and issues that are eligible
  *    and have no session, under their own sub-headings, a kind badge on every
- *    row, the flyway as a chip row and one action: Fly.
+ *    row, the flyway as a chip row and one action: Fly. Folded: the intake
+ *    lane at the sky's left edge draws them too.
  *  - Landed — finished flights, folded. */
 
 import { useMemo, useState } from "react";
@@ -17,7 +18,7 @@ import { ageText } from "../intake/kit";
 import { useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
 import { isFailing, isWaitingOnYou, planName } from "../dialogs/verify";
-import { FlightCard } from "./FlightStrip";
+import { FlightCard, YouStepActions, flightHeadline } from "./FlightStrip";
 import { useWaiting, type Waiting } from "./useWaiting";
 import {
   WAITING_KIND_BADGE,
@@ -25,9 +26,12 @@ import {
   builtinPlanFor,
   isLive,
   needsYouFlights,
+  perchLabel,
   planChoices,
+  stepActor,
   type Flight,
   type FlightPlan,
+  type StepKindDef,
   type WaitingKind,
 } from "../../lib/flights";
 import { flyWaiting, type WaitingTarget } from "../../lib/flightsApi";
@@ -49,33 +53,8 @@ export function sourcePlan(settings: Record<string, unknown> | undefined, t: Wai
   return per?.[t.repo]?.plan || "";
 }
 
-function Group({
-  id,
-  title,
-  count,
-  hint,
-  children,
-}: {
-  id: string;
-  title: string;
-  count: number;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className={"fl-group fl-group-" + id} id={"fl-group-" + id} aria-labelledby={"fl-group-" + id + "-h"}>
-      <h3 id={"fl-group-" + id + "-h"} className="fl-group-head">
-        {title}
-        {count > 0 && <span className="fl-count">{count}</span>}
-        {hint && <span className="fl-group-hint muted">{hint}</span>}
-      </h3>
-      {children}
-    </section>
-  );
-}
-
 /** A due / failing checklist: one line that opens it on the Checklists tab. */
-function ChecklistRow({ plan, onOpen }: { plan: TestPlan; onOpen(branch: string): void }) {
+export function ChecklistRow({ plan, onOpen }: { plan: TestPlan; onOpen(branch: string): void }) {
   const failing = isFailing(plan);
   return (
     <button
@@ -103,7 +82,7 @@ function whereTo(w: Waiting): string {
 
 /** One item waiting to fly: its badge, reference and headline, where it will
  * go, the flyway as chips, and Fly. */
-function WaitingRow({ w, plans, settings }: { w: Waiting; plans: FlightPlan[]; settings: Record<string, unknown> | undefined }) {
+export function WaitingRow({ w, plans, settings }: { w: Waiting; plans: FlightPlan[]; settings: Record<string, unknown> | undefined }) {
   const t = w.item.target as WaitingTarget;
   // The source's own flyway (its card's chips) is the default; a pick here
   // overrides it for this flight only. `null` = follow the source, so a
@@ -175,9 +154,37 @@ function WaitingRow({ w, plans, settings }: { w: Waiting; plans: FlightPlan[]; s
   );
 }
 
-const KIND_ORDER: readonly WaitingKind[] = ["tickets", "prs", "issues"];
+export const KIND_ORDER: readonly WaitingKind[] = ["tickets", "prs", "issues"];
 
-export function Board({ onTab }: { onTab(tab: "plans" | "sources" | "checklists", rest?: string): void }) {
+/** One flight perched on you (or halted): its headline (a press flies the
+ * sky to its line), where it stopped, and the perch block — the checklist
+ * with Done / Skip, or Retry / Skip. */
+function PerchRow({ flight, kinds, onFocus }: { flight: Flight; kinds?: readonly StepKindDef[] | null; onFocus(title: string): void }) {
+  const step = flight.steps[flight.cursor];
+  const halted = flight.state === "halted";
+  return (
+    <div className={"sky-perch" + (halted ? " is-halted" : "")} data-flight={flight.id}>
+      <button type="button" className="sky-perch-name" title={flight.session ? "Show " + flight.session + "'s line" : undefined} onClick={() => onFocus(flight.session)}>
+        {flightHeadline(flight)}
+      </button>
+      <div className="sky-perch-step muted">
+        {step ? (stepActor(step, kinds) === "you" ? perchLabel(step.title) : step.title) : ""}
+        {halted && flight.reason ? " — " + flight.reason : ""}
+      </div>
+      <YouStepActions flight={flight} />
+    </div>
+  );
+}
+
+export interface SkyDrawerProps {
+  open: boolean;
+  onToggle(): void;
+  /** Fly the sky to a session's line. */
+  onFocus(title: string): void;
+  onTab(tab: "plans" | "sources" | "checklists", rest?: string): void;
+}
+
+export function SkyDrawer({ open, onToggle, onFocus, onTab }: SkyDrawerProps) {
   const flightsQ = useFlights();
   const plans = useFlightPlans().data || [];
   const kinds = useFlightKinds().data;
@@ -188,81 +195,84 @@ export function Board({ onTab }: { onTab(tab: "plans" | "sources" | "checklists"
 
   const flights: Flight[] = flightsQ.data || [];
   const needs = needsYouFlights(flights);
-  const inFlight = flights.filter((f) => isLive(f) && !needs.includes(f));
   const landed = flights.filter((f) => !isLive(f)).sort((a, b) => (b.finished || b.updated) - (a.finished || a.updated)).slice(0, 20);
   const dueChecklists = useMemo(() => testPlans.filter((p) => isFailing(p) || isWaitingOnYou(p)), [testPlans]);
-  const noRoute = flightsQ.data === null;
+  const count = needs.length + dueChecklists.length;
 
   return (
-    <div className="fl-board" data-tour="flights-board">
-      {noRoute && (
-        <p className="fl-note muted" role="status">
-          This server has no flights yet — update MindFlock to fly flyways. Waiting items and checklists still work.
-        </p>
-      )}
-      <Group id="needs" title="Needs you" count={needs.length + dueChecklists.length}>
-        {needs.length + dueChecklists.length === 0 ? (
-          <p className="fl-empty muted">Nothing is perched on you.</p>
-        ) : (
-          <>
-            {needs.map((f) => (
-              <FlightCard key={f.id} flight={f} kinds={kinds} expand />
-            ))}
-            {dueChecklists.map((p) => (
-              <ChecklistRow key={p.id} plan={p} onOpen={(b) => onTab("checklists", b)} />
-            ))}
-          </>
-        )}
-      </Group>
-      <Group id="flying" title="In flight" count={inFlight.length}>
-        {inFlight.length === 0 ? (
-          <p className="fl-empty muted">
-            No flight in the air.{" "}
-            <button type="button" className="linklike" onClick={() => onTab("plans")}>
-              Flyways ›
-            </button>
-          </p>
-        ) : (
-          inFlight.map((f) => <FlightCard key={f.id} flight={f} kinds={kinds} />)
-        )}
-      </Group>
-      <Group id="waiting" title="Waiting to fly" count={waiting.length} hint="Not started yet, oldest first">
-        {waiting.length === 0 ? (
-          <p className="fl-empty muted">
-            Nothing is waiting to fly.{" "}
-            <button type="button" className="linklike" onClick={() => onTab("sources")}>
-              Sources ›
-            </button>{" "}
-            <button type="button" className="linklike" onClick={refresh}>
-              Refresh
-            </button>
-          </p>
-        ) : (
-          KIND_ORDER.map((k) => {
-            const list = waiting.filter((w) => w.item.kind === k);
-            if (!list.length) return null;
-            return (
-              <div className={"fl-waiting-kind fl-waiting-kind-" + k} key={k}>
-                <h4 className="fl-waiting-head">
-                  {WAITING_KIND_HEAD[k]}
-                  <span className="fl-count muted">{list.length}</span>
-                </h4>
-                {list.map((w) => (
-                  <WaitingRow key={w.item.key} w={w} plans={plans} settings={settings} />
+    <aside className={"sky-drawer" + (open ? " open" : "")} aria-label="Perched on you" data-tour="flights-drawer">
+      <button type="button" className="sky-drawer-tab" aria-expanded={open} title={open ? "Fold the drawer away" : "What is perched on you"} onClick={onToggle}>
+        <span className="sky-drawer-tab-word">Perched on you</span>
+        {count > 0 && <span className="fl-count fl-count-you">{count}</span>}
+      </button>
+      {open && (
+        <div className="sky-drawer-body">
+          {flightsQ.data === null && (
+            <p className="fl-note muted" role="status">
+              This server has no flights yet — update MindFlock to fly flyways. Waiting items and checklists still work.
+            </p>
+          )}
+          <section className="fl-group fl-group-needs" id="fl-group-needs" aria-labelledby="fl-group-needs-h">
+            <h3 id="fl-group-needs-h" className="fl-group-head">
+              Perched on you
+              {count > 0 && <span className="fl-count">{count}</span>}
+            </h3>
+            {count === 0 ? (
+              <p className="fl-empty muted">Nothing is perched on you.</p>
+            ) : (
+              <>
+                {needs.map((f) => (
+                  <PerchRow key={f.id} flight={f} kinds={kinds} onFocus={onFocus} />
                 ))}
-              </div>
-            );
-          })
-        )}
-      </Group>
-      {landed.length > 0 && (
-        <details className="fl-group fl-group-landed" open={landedOpen} onToggle={(e) => setLandedOpen((e.target as HTMLDetailsElement).open)}>
-          <summary className="fl-group-head">
-            Landed<span className="fl-count muted">{landed.length}</span>
-          </summary>
-          {landedOpen && landed.map((f) => <FlightCard key={f.id} flight={f} kinds={kinds} />)}
-        </details>
+                {dueChecklists.map((p) => (
+                  <ChecklistRow key={p.id} plan={p} onOpen={(b) => onTab("checklists", b)} />
+                ))}
+              </>
+            )}
+          </section>
+          <details className="fl-group fl-group-waiting" id="fl-group-waiting">
+            <summary className="fl-group-head">
+              Waiting to fly
+              {waiting.length > 0 && <span className="fl-count">{waiting.length}</span>}
+            </summary>
+            {waiting.length === 0 ? (
+              <p className="fl-empty muted">
+                Nothing is waiting to fly.{" "}
+                <button type="button" className="linklike" onClick={() => onTab("sources")}>
+                  Sources ›
+                </button>{" "}
+                <button type="button" className="linklike" onClick={refresh}>
+                  Refresh
+                </button>
+              </p>
+            ) : (
+              KIND_ORDER.map((k) => {
+                const list = waiting.filter((w) => w.item.kind === k);
+                if (!list.length) return null;
+                return (
+                  <div className={"fl-waiting-kind fl-waiting-kind-" + k} key={k}>
+                    <h4 className="fl-waiting-head">
+                      {WAITING_KIND_HEAD[k]}
+                      <span className="fl-count muted">{list.length}</span>
+                    </h4>
+                    {list.map((w) => (
+                      <WaitingRow key={w.item.key} w={w} plans={plans} settings={settings} />
+                    ))}
+                  </div>
+                );
+              })
+            )}
+          </details>
+          {landed.length > 0 && (
+            <details className="fl-group fl-group-landed" open={landedOpen} onToggle={(e) => setLandedOpen((e.target as HTMLDetailsElement).open)}>
+              <summary className="fl-group-head">
+                Landed<span className="fl-count muted">{landed.length}</span>
+              </summary>
+              {landedOpen && landed.map((f) => <FlightCard key={f.id} flight={f} kinds={kinds} />)}
+            </details>
+          )}
+        </div>
       )}
-    </div>
+    </aside>
   );
 }

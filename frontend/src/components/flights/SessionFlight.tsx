@@ -20,19 +20,23 @@
  *
  * With nothing on the line yet the tab also offers the flyways as cards
  * ("Fly this flyway") and "Describe a flyway…" to make one from a sentence
- * and fly it right away. */
+ * and fly it right away. The line's editing (the +, the palette, the
+ * inspector) is useSessionLine's, shared with the Sky's lines; "Open in the
+ * Sky" shows this session's line there (`#flights/sky/<title>`). */
 
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import type { Instance } from "../../api/types";
 import { useFlightKinds, useFlightPlans, useFlights, useInstances } from "../../state/queries";
+import { useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
-import { toast } from "../../lib/toast";
-import { flightProgress, isLive, newStep, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef } from "../../lib/flights";
-import { flywayDiagram, hasSessionDiagram, sessionDiagram, type DiagramNode } from "../../lib/flightDiagram";
-import { dropStop, patchStop, savePlan, tackOn, tackOnAll, tackOnNew, takeOff } from "../../lib/flightsApi";
+import { flightProgress, type FlightPlan, type StepKindDef } from "../../lib/flights";
+import { birdPerch, flywayDiagram, hasSessionDiagram } from "../../lib/flightDiagram";
+import { skyTarget } from "../../lib/skyLayout";
+import { savePlan, takeOff } from "../../lib/flightsApi";
 import { FlywayCanvas } from "./FlywayCanvas";
-import { FlightMenu, currentNodeId, liveBoxParts, useCancelAsk } from "./FlightStrip";
-import { DescribeField, StopInspector, StopPalette } from "./StopParts";
+import { FlightMenu } from "./FlightStrip";
+import { DescribeField } from "./StopParts";
+import { useSessionLine } from "./useSessionLine";
 import { Bird } from "./Bird";
 import "./FlightsDialog.css";
 
@@ -68,103 +72,14 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
   const flights = useFlights(active).data;
   const kinds = useFlightKinds(active).data || [];
   const plans = useFlightPlans(active).data || [];
-  const [selected, setSelected] = useState<string | null>(null);
-  const [paletteAt, setPaletteAt] = useState<number | null>(null);
-  const [draft, setDraft] = useState<FlightStep | null>(null);
+  const line = useSessionLine(title, { rows, flights, kinds, plans }, { onSession: (t) => selectSession(t) });
   const [busy, setBusy] = useState(false);
-  const [selectIndex, setSelectIndex] = useState<number | null>(null);
-
-  const row = rows.find((r) => r.title === title);
-  const flRow = row?.flight as FlightRow | null | undefined;
-  const flight = flRow && isLive(flRow) ? flights?.find((f) => f.id === flRow.id) || null : null;
-  const diagram = useMemo(() => sessionDiagram(rows, title, { flights, kinds }), [rows, title, flights, kinds]);
-  const cancel = useCancelAsk(flight);
-  const parts = liveBoxParts(flight, true, cancel.ask);
-  const kindOf = useMemo(() => new Map(kinds.map((k) => [k.kind, k])), [kinds]);
-  const stops = diagram.nodes.filter((n) => n.kind === "stop");
-  const end = flight ? flight.steps.length : 0;
-  const sel = selected ? diagram.nodes.find((n) => n.id === selected) || null : null;
-
-  // A stop just tacked on opens in the inspector once the flight has it.
-  useEffect(() => {
-    if (selectIndex === null) return;
-    const n = stops.find((s) => s.index === selectIndex && s.step);
-    if (!n) return;
-    setSelected(n.id);
-    setDraft(n.step!);
-    setSelectIndex(null);
-  }, [selectIndex, stops]);
-
-  // The inspector follows the box; a box that left the line closes it.
-  useEffect(() => {
-    if (selected && !sel) {
-      setSelected(null);
-      setDraft(null);
-    }
-  }, [selected, sel]);
+  const { row, flight, diagram, ordered, cancel } = line;
 
   if (!row) return <p className="fl-note muted">This session isn't listed right now.</p>;
 
-  const tackOne = async (def: StepKindDef, at: number | null) => {
-    const step = newStep(def, flight ? flight.steps.map((s) => s.id) : []);
-    setBusy(true);
-    setPaletteAt(null);
-    try {
-      if (flight) {
-        const where = at !== null && at < end ? at : undefined;
-        if (await tackOn(flight.id, step, where)) setSelectIndex(where ?? end);
-      } else {
-        const f = await tackOnNew(title, [step]);
-        if (f) {
-          toast("Took off: " + (f.plan_name || "a new flight"));
-          setSelectIndex(f.steps.length - 1);
-        }
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const flyFlyway = async (plan: FlightPlan) => {
-    setBusy(true);
-    setPaletteAt(null);
-    try {
-      if (flight) {
-        if (await tackOnAll(flight.id, plan.steps)) toast("Added “" + plan.name + "”'s " + plan.steps.length + " stops");
-      } else await takeOff({ plan_id: plan.id, title });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onSelect = (n: DiagramNode) => {
-    setPaletteAt(null);
-    if (selected === n.id) {
-      setSelected(null);
-      setDraft(null);
-      return;
-    }
-    setSelected(n.id);
-    setDraft(n.step ? { ...n.step, config: { ...n.step.config } } : null);
-  };
-
-  const ordered = [...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)];
-  const flywayChips = (
-    <div className="fl-palette-flyways">
-      <div className="fl-palette-head">Fly a flyway — all of its stops</div>
-      <div className="fl-chiprow">
-        {ordered.map((p) => (
-          <button key={p.id} type="button" className="fl-pick" disabled={busy} title={p.steps.map((s) => s.title).join(" → ")} onClick={() => void flyFlyway(p)}>
-            {p.name}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-
   const prog = flight ? flightProgress(flight) : null;
-  const editable = !!sel?.editable && !!draft && !!flight;
-  const dirtyStop = !!draft && !!sel?.step && JSON.stringify(draft) !== JSON.stringify(sel.step);
+  const working = busy || line.busy;
 
   return (
     <div className="fl-session" data-tour="flights-session">
@@ -190,94 +105,26 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
             <span className="muted">tack a stop onto the line, or fly a flyway below</span>
           </>
         )}
+        <button
+          type="button"
+          className="linklike fl-open-sky"
+          title="Show this session's line in the Sky, with the bird where it is"
+          onClick={() => useUi.getState().openDialogFor("flights", skyTarget(title))}
+        >
+          Open in the Sky
+        </button>
       </div>
       {cancel.node}
-      <FlywayCanvas
-        diagram={diagram}
-        label={"What " + title + " is doing and will do"}
-        selected={paletteAt !== null && paletteAt >= end ? "add" : selected}
-        onSelect={onSelect}
-        onOpen={(n) => {
-          if (n.kind === "add") {
-            setSelected(null);
-            setDraft(null);
-            setPaletteAt(paletteAt !== null && paletteAt >= end ? null : end);
-          } else if (n.session && n.session !== title) selectSession(n.session);
-        }}
-        onInsert={flight ? (at) => setPaletteAt(paletteAt === at ? null : at) : undefined}
-        onRemove={flight ? (n) => n.editable && n.step && void dropStop(flight.id, n.step.id) : undefined}
-        renderInBox={parts.renderInBox}
-        sizeOf={parts.sizeOf}
-        reveal={currentNodeId(diagram, flight)}
-      />
-      {paletteAt !== null && (
-        <StopPalette
-          kinds={kinds}
-          title={paletteAt >= end ? "Tack on a stop" : "Add a stop before “" + (flight?.steps[paletteAt]?.title || "") + "”"}
-          onPick={(k) => void tackOne(k, paletteAt)}
-          onClose={() => setPaletteAt(null)}
-          extra={paletteAt >= end && ordered.length > 0 ? flywayChips : undefined}
-        />
-      )}
-      {sel && draft && (
-        <StopInspector
-          step={draft}
-          def={kindOf.get(draft.kind)}
-          readOnly={!editable}
-          onChange={(p) => setDraft((d) => (d ? { ...d, ...p } : d))}
-          note={
-            !editable ? (
-              <p className="fl-note muted">{sel.state === "done" || sel.state === "skipped" ? "This stop has flown — it can't change now." : "The flight is at this stop — it can't change while it is here."}</p>
-            ) : null
-          }
-          actions={
-            editable ? (
-              <>
-                <button
-                  type="button"
-                  className="btn-primary fl-btn"
-                  disabled={!dirtyStop || busy}
-                  onClick={async () => {
-                    setBusy(true);
-                    try {
-                      await patchStop(flight!.id, draft.id, { title: draft.title, config: draft.config, on_fail: draft.on_fail });
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
-                >
-                  Save stop
-                </button>
-                <button
-                  type="button"
-                  className="test-btn fl-btn danger"
-                  disabled={busy}
-                  onClick={async () => {
-                    setBusy(true);
-                    try {
-                      if (await dropStop(flight!.id, draft.id)) {
-                        setSelected(null);
-                        setDraft(null);
-                      }
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
-                >
-                  Remove stop
-                </button>
-              </>
-            ) : undefined
-          }
-        />
-      )}
+      <FlywayCanvas diagram={diagram} label={"What " + title + " is doing and will do"} bird={birdPerch(diagram)} {...line.canvas} />
+      {line.palette}
+      {line.inspector}
       {!hasSessionDiagram(rows, title) && (
         <section className="fl-flyway-cards" aria-label="Fly a flyway">
           <h4 className="fl-group-head">Fly a flyway</h4>
           {ordered.length ? (
             <div className="fl-flyway-grid">
               {ordered.map((p) => (
-                <FlywayCard key={p.id} plan={p} kinds={kinds} busy={busy} onFly={() => void flyFlyway(p)} />
+                <FlywayCard key={p.id} plan={p} kinds={kinds} busy={working} onFly={() => void line.flyFlyway(p)} />
               ))}
             </div>
           ) : (

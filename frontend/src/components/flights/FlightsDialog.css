@@ -1005,6 +1005,12 @@ a.fl-waiting-ref:hover {
   color: var(--accent);
 }
 
+/* "Open in the Sky": this session's line in the Sky, at the head's far end. */
+.fl-open-sky {
+  margin-left: auto;
+  font-size: 12px;
+}
+
 .fl-flyway-cards {
   display: flex;
   flex-direction: column;

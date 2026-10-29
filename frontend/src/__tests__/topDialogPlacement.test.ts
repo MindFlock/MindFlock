@@ -49,8 +49,11 @@ describe("the shared top-bar dialog placement", () => {
   it.each(DIALOGS)("%s carries it, and its card sets no top, centring or ceiling", (file, shell, card, sheets) => {
     const tags = tagsWithId(src(file), shell);
     expect(tags).toHaveLength(1);
+    // A literal, or an expression that always includes it (Flights adds
+    // `sky-full` on its Sky tab, Sky.css).
     const cls = attr(tags[0], "className") ?? "";
-    expect(cls.split(/\s+/)).toContain("top-dialog");
+    expect(cls.replace(/["'`{}()+?:]/g, " ").split(/\s+/)).toContain("top-dialog");
+    if (cls.includes("?")) expect(cls).toMatch(/^"top-dialog" \+ /);
     for (const sheet of sheets) {
       const css = src(sheet);
       for (const sel of ["#" + card, "#" + shell + " > #" + card, "#" + shell]) {

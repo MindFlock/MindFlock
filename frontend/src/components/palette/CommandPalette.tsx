@@ -139,8 +139,8 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       label: "Flights…",
       hint: "Alt+I",
       top: TOP.flights,
-      keywords: "board waiting to fly in flight flyways stops perch intake verify schedule",
-      run: () => ui.openDialogFor("flights", "board"),
+      keywords: "sky board canvas bird lines waiting to fly in flight flyways stops perch intake verify schedule",
+      run: () => ui.openDialogFor("flights", "sky"),
     });
     acts.push({ label: "Flights: Flyways", keywords: "flyway plan stops canvas editor", run: () => ui.openDialogFor("flights", "plans") });
     acts.push({ label: "Intake…", hint: "Flights → Sources", run: () => ui.openDialogFor("intake", "tickets") });

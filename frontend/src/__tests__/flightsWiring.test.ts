@@ -1,5 +1,5 @@
 /** Flights' wiring: the store opens the old surfaces as its tabs, the URL hash
- * follows, Alt+I / V / S land on Board / Checklists / Schedule (Alt+I keeps its
+ * follows, Alt+I / V / S land on Sky / Checklists / Schedule (Alt+I keeps its
  * id so a rebind survives), the palette keeps Intake… / Verify… / Schedule…,
  * the top bar is ONE Flights button, the rail and the bell read a flight
  * parked on a *you* step as Needs you, and an arrival's Start posts the old
@@ -21,7 +21,7 @@ const { deriveSessionState, flightYouLabel, needsYouAction, notifyRuleFor } = aw
 const { chipState } = await import("../lib/stage");
 const { withFlightYou } = await import("../lib/needsYou");
 const { flyRequest } = await import("../lib/flightsApi");
-const { sourcePlan } = await import("../components/flights/Board");
+const { sourcePlan } = await import("../components/flights/SkyDrawer");
 
 afterEach(() => useUi.getState().closeDialog());
 
@@ -30,7 +30,7 @@ const open = () => [useUi.getState().openDialog, useUi.getState().dialogTarget];
 describe("the store opens the old surfaces as tabs of Flights", () => {
   it("maps each name, keeping its deep link", () => {
     useUi.getState().openDialogFor("intake");
-    expect(open()).toEqual(["flights", "board"]);
+    expect(open()).toEqual(["flights", "sky"]);
     useUi.getState().openDialogFor("intake", "tickets:jira");
     expect(open()).toEqual(["flights", "sources/tickets:jira"]);
     useUi.getState().openDialogFor("verify", "feature/x");
@@ -53,7 +53,9 @@ describe("the store opens the old surfaces as tabs of Flights", () => {
     expect(app).not.toContain("<VerifyDialog />");
     const dlg = code("components/flights/FlightsDialog.tsx");
     expect(dlg).toContain('useUi((s) => s.openDialog === "flights")');
-    expect(dlg).toContain('<Modal\n      id="flights-dialog"\n      className="top-dialog"');
+    expect(dlg).toContain('<Modal\n      id="flights-dialog"');
+    // The Sky takes the whole window; every other tab is the top-bar card.
+    expect(dlg).toContain('className={"top-dialog" + (tab === "sky" ? " sky-full" : "")}');
     expect(dlg).toContain('<TourButton tour="flights" />');
     for (const mount of [
       "<IntakeDialog embedded target={rest || null} />",
@@ -66,7 +68,12 @@ describe("the store opens the old surfaces as tabs of Flights", () => {
 
 describe("the URL hash", () => {
   it("#flights, #flights/plans, and the old links still resolve", () => {
+    expect(hashFor("flights", "sky")).toBe("#flights");
+    // The Board's old link lands on the Sky, and one session's sky has its own.
     expect(hashFor("flights", "board")).toBe("#flights");
+    expect(hashFor("flights", "sky/fix-login")).toBe("#flights/sky/fix-login");
+    expect(parseHash("#flights/sky/fix-login")).toEqual({ name: "flights", target: "sky/fix-login" });
+    expect(parseHash("#flights/board")).toEqual({ name: "flights", target: "board" });
     expect(hashFor("flights", "plans")).toBe("#flights/plans");
     expect(parseHash("#flights")).toEqual({ name: "flights", target: null });
     expect(parseHash("#flights/plans")).toEqual({ name: "flights", target: "plans" });
@@ -86,12 +93,12 @@ describe("the URL hash", () => {
 describe("the keys", () => {
   const run = (id: string) => KEYMAP.find((k) => k.id === id)!.run({} as KeyboardEvent);
 
-  it("Alt+I opens the Board (its id stays intake, so a rebind survives), Alt+V Checklists, Alt+S Schedule", () => {
+  it("Alt+I opens the Sky (its id stays intake, so a rebind survives), Alt+V Checklists, Alt+S Schedule", () => {
     const i = KEYMAP.find((k) => k.id === "intake")!;
     expect(i).toMatchObject({ key: "i", alt: true });
-    expect(i.help?.[2]).toMatch(/^Flights — the Board/);
+    expect(i.help?.[2]).toMatch(/^Flights — the Sky/);
     run("intake");
-    expect(open()).toEqual(["flights", "board"]);
+    expect(open()).toEqual(["flights", "sky"]);
     run("verify");
     expect(open()).toEqual(["flights", "checklists"]);
     run("schedule");
@@ -103,7 +110,7 @@ describe("the palette", () => {
   it("has Flights… and keeps Intake… / Verify… / Schedule… on their tabs", () => {
     const p = code("components/palette/CommandPalette.tsx");
     expect(p).toContain('label: "Flights…"');
-    expect(p).toContain('run: () => ui.openDialogFor("flights", "board")');
+    expect(p).toContain('run: () => ui.openDialogFor("flights", "sky")');
     expect(p).toContain('label: "Flights: Flyways"');
     expect(p).toContain('label: "Intake…"');
     expect(p).toContain('label: "Verify…"');

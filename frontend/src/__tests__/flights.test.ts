@@ -332,16 +332,18 @@ describe("the schedule trigger, through Schedule's own editor", () => {
 });
 
 describe("the dialog's address", () => {
-  it("is <tab>[/<deep link>], unknown = the Board", () => {
-    expect(parseFlightsTarget(null)).toEqual({ tab: "board", rest: "" });
+  it("is <tab>[/<deep link>], unknown = the Sky (and so is the old Board)", () => {
+    expect(parseFlightsTarget(null)).toEqual({ tab: "sky", rest: "" });
+    expect(parseFlightsTarget("board")).toEqual({ tab: "sky", rest: "" });
+    expect(parseFlightsTarget("sky/fix-login")).toEqual({ tab: "sky", rest: "fix-login" });
     expect(parseFlightsTarget("plans")).toEqual({ tab: "plans", rest: "" });
     expect(parseFlightsTarget("checklists/feature/x")).toEqual({ tab: "checklists", rest: "feature/x" });
     expect(parseFlightsTarget("sources/tickets:jira")).toEqual({ tab: "sources", rest: "tickets:jira" });
-    expect(parseFlightsTarget("nope/x")).toEqual({ tab: "board", rest: "" });
+    expect(parseFlightsTarget("nope/x")).toEqual({ tab: "sky", rest: "" });
   });
 
   it("carries the old surfaces' deep links onto their tabs", () => {
-    expect(flightsTargetFor("intake", null)).toBe("board");
+    expect(flightsTargetFor("intake", null)).toBe("sky");
     expect(flightsTargetFor("intake", "tickets")).toBe("sources/tickets");
     expect(flightsTargetFor("verify", null)).toBe("checklists");
     expect(flightsTargetFor("verify", "feature/x")).toBe("checklists/feature/x");

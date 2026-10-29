@@ -150,8 +150,8 @@ describe("the tours registry", () => {
     for (const id of TOUR_IDS)
       if (id !== "settings" && id !== "voice" && id !== "flights") for (const s of TOURS[id].steps) expect(s.screen, id).toBeUndefined();
     for (const s of TOURS.voice.steps) expect([undefined, "mic-pop"], s.title).toContain(s.screen);
-    // Flights walks its Board and Plans tabs, by their tab keys.
-    expect(TOURS.flights.steps.map((s) => s.screen)).toEqual(["board", "board", "plans", "plans"]);
+    // Flights walks its Sky and Plans tabs, by their tab keys.
+    expect(TOURS.flights.steps.map((s) => s.screen)).toEqual(["sky", "sky", "sky", "plans", "plans"]);
   });
 });
 
