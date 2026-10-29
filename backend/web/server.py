@@ -42,6 +42,11 @@ modules under
                      slots (DST-safe), describe
     cursor_windows   IDE window adoption/focus/close (Cursor & friends)
     engine           the Engine singleton: instance registry + state reload
+    flights          Flights (docs/flights.md): plan + flight stores, the step
+                     registry, built-in plans, the pure planner
+    flight_driver    Flights: the loop, bus taps, step executors, flight.*
+                     events, the operations behind /api/flights*
+    flight_describe  Flights: describe a step/plan with the one-shot CLI
     events           the event bus behind /api/events
     git_ops          git primitives (branch/sha/dirty/origin probes, caches)
     ide_launch       launching the configured IDE on a folder
@@ -116,6 +121,7 @@ and re-imports its helpers, so tests that patch ``server._x`` still reach it.
 
     peer             peer links: /api/peer* (backend.peer.service does the work)
     team_runs        team runs /api/runs* and GET /api/outbox
+    flights          Flights /api/flights* (plans, flights, describe, kinds)
 
 Convention: extracted modules call back through the server namespace for
 anything monkeypatched in tests (``_server()._foo(...)``), and this module
@@ -191,6 +197,8 @@ from backend.web.core import autopilot as _autopilot
 from backend.web.core import lanes as _lanes
 from backend.web.core import team_runs as _team_runs
 from backend.web.core import team_run_driver as _team_run_driver
+from backend.web.core import flight_driver as _flight_driver
+from backend.web.core import flights as _flights
 from backend.web.core import worker_order_driver as _worker_order_driver
 from backend.web.core import code_map as _code_map
 from backend.web.core import code_outline as _code_outline
@@ -649,6 +657,7 @@ from backend.web.addons import AppContext as _AddonContext, register_addons
 from backend.web.routes import peer as _peer_routes
 from backend.web.routes import guests as _guest_routes
 from backend.web.routes import team_runs as _team_runs_routes
+from backend.web.routes import flights as _flights_routes
 from backend.web.core import voice_actions as _voice_actions
 from backend.web.routes import speech as _speech_routes
 from backend.web.routes import voice as _voice_routes
@@ -773,6 +782,12 @@ async def lifespan(app: FastAPI):
     if _team_run_loop_enabled():
         _team_run_driver.subscribe()
         _register_task(_team_run_driver.run_loop())
+    # Flights: carry each flight along its plan (ship steps through the
+    # autopilot above, prompts through the queue). Off under pytest like the
+    # team-run loop — ENGINE is the developer's real state there.
+    if _team_run_loop_enabled():
+        _flight_driver.subscribe()
+        _register_task(_flight_driver.run_loop())
     # Worker order: release an orchestrator's held workers when their turn
     # comes, land their fences first (core.worker_order). Off under pytest
     # like the team-run loop.
@@ -1676,6 +1691,7 @@ def _session_snapshot(i, queues: dict) -> dict:
     # A dict read off an already-loaded store, so it is computed fresh on BOTH
     # snapshot paths and therefore never needs a _SNAPSHOT_PROBE_KEYS carry-over.
     d["autopilot"] = _autopilot_dto(i.Title)
+    d["flight"] = _flight_dto(i.Title)
     # A killed agent coming back by itself, or left Offline and why
     # (core.revive.auto_state) — a dict read, fresh on both snapshot paths.
     d["auto_revive"] = _revive.auto_state(i.Title)
@@ -1801,6 +1817,7 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     d["merge_state"] = None
     d["queue"] = _queue_summary(i.Title, queues)
     d["autopilot"] = _autopilot_dto(i.Title)
+    d["flight"] = _flight_dto(i.Title)
     d["auto_revive"] = _revive.auto_state(i.Title)
     d["tokens"] = d["tokens_in"] = 0
     d["tokens_cache_read"] = d["tokens_cache_write"] = 0
@@ -2215,6 +2232,15 @@ async def _find_index_loop() -> None:
 
 #: Test seam, like _RED_ZONE_LOOP_ENABLED: None = on except under pytest.
 _TEAM_RUN_LOOP_ENABLED: Optional[bool] = None
+
+
+def _flight_dto(title: str):
+    """The row's ``flight`` field (core.flights.row_dto), None on any error —
+    a row build never fails on the flights store."""
+    try:
+        return _flights.row_dto(title)
+    except Exception:  # noqa: BLE001 — enrichment only
+        return None
 
 
 def _team_run_loop_enabled() -> bool:
@@ -8786,6 +8812,8 @@ async def instance_fast_track_cancel(title: str) -> JSONResponse:
 
 # --- Team runs + the outbox: routes/team_runs.py ------------------------------
 app.include_router(_team_runs_routes.router)
+# --- Flights: routes/flights.py ------------------------------------------------
+app.include_router(_flights_routes.router)
 app.include_router(_speech_routes.router)
 
 # --- Voice mode (talking to a session from the phone): routes/voice.py --------

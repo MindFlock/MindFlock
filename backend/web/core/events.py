@@ -236,6 +236,21 @@ EVENT_NAMES = (
     # (data: {"run", "name", "shipped", "failed", "cost_usd", "duration_s",
     # "detail"}).
     "run.finished",
+    # Flights (core.flight_driver is their ONE emitter; ``session`` is the
+    # flight's session title, "" before it has one). docs/flights.md.
+    #
+    # Any state / cursor / step change of a flight (data: {"id", "plan_name",
+    # "session", "state", "cursor", "step": {"id", "kind", "title", "state"},
+    # "reason", "detail"}). For UI refetch only; no rule notifies on it.
+    "flight.changed",
+    # A flight parked on a *you* step (or a verify step with open human
+    # checklist items, or a failure handed to you), once per step and round —
+    # also a bell row (outbox kind ``flight_you``) (data: as flight.changed
+    # plus "text", "items").
+    "flight.needs_you",
+    # A flight landed, halted or was cancelled, once (data: as
+    # flight.changed).
+    "flight.finished",
     # Template runs (core.template_schedule is their one emitter). A template
     # started a fresh session — Run now or its schedule (``session`` is the
     # new one; data: {"template", "trigger": "manual"|"schedule"}). For UI

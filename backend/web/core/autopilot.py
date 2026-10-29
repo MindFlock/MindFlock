@@ -100,8 +100,9 @@ DEPTHS = DEPTH_ORDER[1:]
 SOURCE_DEPTHS = tuple(d for d in DEPTHS if d != "merge")
 
 #: Where an armed run came from: the ⏩ button / a lane ("session"), an
-#: intake ticket / PR / issue, or a server-driven team run ("run").
-SOURCES = ("session", "tix", "pr", "iss", "run")
+#: intake ticket / PR / issue, a server-driven team run ("run"), or a ship
+#: step of a flight ("flight", ``item`` = the flight id; core.flight_driver).
+SOURCES = ("session", "tix", "pr", "iss", "run", "flight")
 #: The stops an agent can fix itself (``detail["fix"]`` on a stop).
 FIX_KINDS = ("precommit", "check", "ci", "conflict")
 #: Lane names (core.lanes) a record may carry; "leave" is the agent rung.
@@ -200,7 +201,7 @@ def autopilot_path() -> str:
 # On-disk shape::
 #   {"<title>": {"depth": "pr", "state": "running"|"halted"|"done",
 #                "step": "agent", "reason": "",
-#                "source": "session"|"tix"|"pr"|"iss"|"run",
+#                "source": "session"|"tix"|"pr"|"iss"|"run"|"flight",
 #                "lane": "pr", "ask_first": false,
 #                "item": "sc-123", "message": "commit subject",
 #                "message_auto": false,
