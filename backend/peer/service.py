@@ -94,9 +94,11 @@ _SAS_OPS = frozenset(("diff", "read_file", "list_files", "screen", "mirror_pull"
 #: time — but all of them wait for *It matches* on this side, like the
 #: folder's content (``term_close`` only ends what is open).
 _SESSION_OPS = frozenset(
-    ("sessions", "term_open", "term_close", "session_focus", "agent_msg")
+    ("sessions", "term_open", "term_close", "session_focus", "agent_msg", "chat_msg")
 )
-_SESSION_SAS_OPS = frozenset(("sessions", "term_open", "session_focus", "agent_msg"))
+_SESSION_SAS_OPS = frozenset(
+    ("sessions", "term_open", "session_focus", "agent_msg", "chat_msg")
+)
 #: How often connected peers' share lists (their rows' status and activity)
 #: are re-read, and stale focus swept.
 _SESSIONS_POLL_S = 15.0
@@ -465,6 +467,9 @@ class PeerService:
                         _log.warning("peer: share runtime not restored: %s", err)
             self._mirror_watch()
             self._sessions_watch()
+            from backend.peer import chat_bridge
+
+            chat_bridge.install(self)
         except Exception as err:  # noqa: BLE001 — never block the server
             _log.warning("peer: service start failed: %s", err)
 
@@ -2861,6 +2866,10 @@ class PeerService:
             return {"ok": True}
         if op == "agent_msg":
             return await self._in_thread(link, self._inbound_agent_msg, link, p)
+        if op == "chat_msg":
+            from backend.peer import chat_bridge
+
+            return chat_bridge.inbound_chat(self, link, p)
         # session_focus: where their page is ("" = it moved off my sessions).
         title = str(p.get("title") or "")
         name = str(_get(link, "peer_name") or "peer")
@@ -3056,6 +3065,11 @@ class PeerService:
         self._sessions_aware.add(lid)
         if op == "sessions_changed":
             self._schedule(self.refresh_their_sessions(lid))
+            return
+        if op == "chat_out":
+            from backend.peer import chat_bridge
+
+            await chat_bridge.inbound_out(self, lid, p)
             return
         self.bridge.on_push(lid, op, p)
 
