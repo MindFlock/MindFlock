@@ -20,6 +20,7 @@ module at call time, so tests that patch ``server._x`` reach them.
 from __future__ import annotations
 
 import asyncio
+import threading
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -33,18 +34,29 @@ router = APIRouter()
 
 
 def _set(inst, title: str, on: bool) -> bool:
+    """Write the flag (the one thing the answer waits for). The hook re-pin
+    is enrichment and can take a moment (it rewrites the worktree's Claude
+    settings), so it runs after the answer — the control must flip the
+    instant it is clicked, and the flag is what the hook reads at fire time
+    anyway."""
     name = tmux.to_mindflock_tmux_name(title)
     state = _flock_mode.set_on(name, on)
     if on:
-        try:
-            prov = _server().providers.resolve(getattr(inst, "Program", "") or "")
-            if prov.voice_prompt_hook():
-                wt = inst.GetWorktreePath() or ""
-                if wt:
-                    prov.install_activity_hooks(wt, name)
-        except Exception:  # noqa: BLE001 — the flag is set; hooks are enrichment
-            pass
+        threading.Thread(
+            target=_repin_hooks, args=(inst, name), name="flock-repin", daemon=True
+        ).start()
     return state
+
+
+def _repin_hooks(inst, name: str) -> None:
+    try:
+        prov = _server().providers.resolve(getattr(inst, "Program", "") or "")
+        if prov.voice_prompt_hook():
+            wt = inst.GetWorktreePath() or ""
+            if wt:
+                prov.install_activity_hooks(wt, name)
+    except Exception:  # noqa: BLE001 — the flag is set; hooks are enrichment
+        pass
 
 
 @router.post("/api/instances/{title}/flock")

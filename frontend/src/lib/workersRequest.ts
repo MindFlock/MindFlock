@@ -120,19 +120,23 @@ export function insertWorkersRequest(title: string, config: Config | null | unde
 /** Flip a session's Flock mode (`on` given: set it). Resolves the server's
  * answer, or null when the call failed (already toasted). */
 export async function toggleFlock(title: string, on?: boolean): Promise<boolean | null> {
-  const want = on ?? !instances().find((r) => r.title === title)?.flock;
+  const before = !!instances().find((r) => r.title === title)?.flock;
+  const want = on ?? !before;
   const name = displayName(title);
+  // The control flips the instant it is clicked — the server's answer only
+  // confirms it, and the listing stamps the live flag on every poll, so no
+  // refetch is forced here (it used to race the cached snapshot and snap the
+  // control back for a tick, which read as "slow").
+  patchInstance(title, { flock: want });
   try {
     const r = await instApi<{ flock?: boolean }>(title, "/flock", { json: { on: want } });
     const now = typeof r?.flock === "boolean" ? r.flock : want;
-    // The 4 s poll would get there; the control flips now.
-    patchInstance(title, { flock: now });
+    if (now !== want) patchInstance(title, { flock: now });
     toast(flockToast(name, now));
     return now;
   } catch (err) {
+    patchInstance(title, { flock: before });
     toast(`${name}: Flock — ${errMsg(err)}`, { duration: 6000 });
     return null;
-  } finally {
-    void refreshInstances();
   }
 }

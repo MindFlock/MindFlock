@@ -336,3 +336,26 @@ def test_the_suffix_is_idempotent(cfg):
     once = server._flock_suffix("x")
     assert server._flock_suffix(once + "\n") == once + "\n"
     assert json.dumps(once).count("Use MindFlock workers") == 1
+
+
+def test_listing_stamps_the_live_flag_over_a_cached_snapshot(monkeypatch, tmp_path):
+    """The listing serves the tick's snapshot for seconds; a flag flipped a
+    moment ago must show on the very next poll, or the pane control snaps
+    back and looks slow."""
+    from backend.web import server
+    from backend.web.core import flock_mode
+
+    monkeypatch.setenv("MINDFLOCK_VOICE_FLAG_DIR", str(tmp_path))
+    rows = [
+        {"title": "alpha", "flock": False},
+        {"title": "mac::beta", "device": "mac", "flock": False},
+        "not a row",
+    ]
+    name = server.tmux.to_mindflock_tmux_name("alpha")
+    flock_mode.set_on(name, True, "go wide")
+    server._flock_overlay(rows)
+    assert rows[0]["flock"] is True
+    assert rows[1]["flock"] is False  # another device's row is theirs to say
+    flock_mode.set_on(name, False)
+    server._flock_overlay(rows)
+    assert rows[0]["flock"] is False

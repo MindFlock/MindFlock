@@ -1411,6 +1411,17 @@ def _flock_on(title: str) -> bool:
         return False
 
 
+def _flock_overlay(rows) -> None:
+    """Stamp the LIVE ``flock`` flag on this device's rows of a listing, in
+    place. The listing serves the tick's cached snapshot for seconds at a
+    time, and a flag the person just flipped must show on the very next poll
+    — not on the next tick — or the pane control snaps back to its old state
+    and looks slow. One stat per row; never raises."""
+    for r in rows:
+        if isinstance(r, dict) and r.get("title") and not r.get("device"):
+            r["flock"] = _flock_on(str(r["title"]))
+
+
 def _session_last_prompt_cached(inst) -> Optional[str]:
     """``_session_last_prompt(inst)`` memoized per session."""
     return _probe_cached("last_prompt", inst, lambda: _session_last_prompt(inst))
@@ -1950,6 +1961,7 @@ def list_instances(request: Request) -> JSONResponse:
             _fresh_lineage(cached)
             _ownership.overlay(cached)
             _aliases.overlay(cached)
+            _flock_overlay(cached)
             return JSONResponse(_guest_rows(request, cached + remote + _pending_rows()))
     queues = _prompt_queue.snapshot()
     by_title = {d.get("title"): d for d in cached}
@@ -1960,6 +1972,7 @@ def list_instances(request: Request) -> JSONResponse:
     _lanes.fill_duplicates(snap)
     _ownership.overlay(snap)
     _aliases.overlay(snap)
+    _flock_overlay(snap)
     return JSONResponse(_guest_rows(request, snap + remote + _pending_rows()))
 
 
