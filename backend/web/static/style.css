@@ -8445,6 +8445,17 @@ a.fl-waiting-ref:hover {
 .sky[data-tool="click"] .skl-bar {
   cursor: inherit;
 }
+
+/* Round 13: a grounded line dragged over this line by its bar — the drop
+   gives this session its stops (docs/flights.md "As built: round 13 sky"). */
+.skl.is-merge-target {
+  border-color: var(--accent);
+  border-style: solid;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  box-shadow:
+    0 0 0 4px rgba(var(--accent-rgb), 0.55),
+    0 6px 22px rgba(0, 0, 0, 0.18);
+}
 /* The Sky's readability overrides for parts drawn by SkyView (the toolbar,
    the drawer) whose own rules live in Sky.css. Imported by SkyLine.tsx; CSS
    is global. The sizes and contrast numbers are in docs/flights-visibility.md.
@@ -8743,25 +8754,55 @@ a.fl-waiting-ref:hover {
 .skl-grounded[data-lod="far"] .skl-grounded-head span {
   display: none;
 }
-/* All blocks (StopCatalog.tsx): the shelf's catalog in the app's Modal — the
-   same card as a stop's dialog (StopDialog.css, after #rename-form): a filter,
-   then Blocks and Multi-step, a row per block. */
+
+/* --- Round 13 (docs/flights.md "As built: round 13 sky") ------------------
+   Its name renames on a click (or F2): the text cursor says so, and the
+   field takes the name's place on the bar. Dragged over a session's line it
+   goes see-through, so the line it will merge into shows under it. */
+.skl-grounded .skl-name-edit {
+  cursor: text;
+  border-radius: 4px;
+}
+
+.skl-grounded .skl-name-edit:hover {
+  background: rgba(var(--accent-rgb), 0.1);
+}
+
+.skl-grounded .skl-name-input {
+  flex: 0 1 260px;
+  min-width: 120px;
+  height: 24px;
+  padding: 1px 6px;
+  font: inherit;
+  font-weight: 600;
+}
+
+.skl.skl-grounded.is-merging {
+  opacity: 0.72;
+  border-color: var(--accent);
+}
+/* All blocks (StopCatalog.tsx): the catalog in the app's Modal, sized to the
+   window (≈ 92vw × 86vh) — the head with the filter, then Blocks and
+   Multi-step, each a grid of cards. The card is a stop dialog's (panel,
+   border, radius 12). */
 
 .sky-catalog {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  width: min(560px, calc(100vw - 48px));
-  max-height: 80vh;
+  gap: 12px;
+  width: 92vw;
+  height: 86vh;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
   box-sizing: border-box;
-  padding: 18px 20px 14px;
+  padding: 18px 22px 14px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--panel);
   transition: opacity 0.12s;
 }
 
-/* A row is being dragged: the Modal lets the pointer through to the sky (its
+/* A card is being dragged: the Modal lets the pointer through to the sky (its
    backdrop would take the drop) and fades, so the lines under it show. */
 .modal.sky-catalog-modal.is-dragging {
   background: transparent;
@@ -8775,24 +8816,28 @@ a.fl-waiting-ref:hover {
 .sky-catalog-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
 }
 
 .sky-catalog-head h2 {
-  flex: 1;
+  flex: none;
   margin: 0;
-  font-size: 16px;
+  font-size: 17px;
 }
 
 .sky-catalog-filter.fl-input.fl-input {
-  flex: none;
+  flex: 1;
+  max-width: 420px;
+  margin-right: auto;
 }
 
 .sky-catalog-list {
   display: flex;
+  flex: 1;
   flex-direction: column;
-  gap: 10px;
+  gap: 16px;
   min-height: 0;
+  padding: 2px 2px 12px;
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -8800,13 +8845,13 @@ a.fl-waiting-ref:hover {
 .sky-catalog-section {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
 }
 
 /* The section's label: tiny and muted, like the shelf's region labels. */
 .sky-catalog-label {
-  margin: 0 0 3px;
-  padding: 0 8px;
+  margin: 0;
+  padding: 0 2px;
   color: var(--fl-ink-muted, var(--muted));
   font-size: 10.5px;
   font-weight: 600;
@@ -8814,71 +8859,114 @@ a.fl-waiting-ref:hover {
   text-transform: uppercase;
 }
 
-.sky-catalog-row {
-  display: flex;
-  align-items: center;
+/* The cards flow in as many columns as the window holds; the arrows read the
+   count back from the laid-out grid. */
+.sky-catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
   gap: 10px;
-  padding: 6px 8px;
-  border: 1px solid transparent;
-  border-radius: 8px;
+}
+
+.sky-catalog-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 10px 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
   cursor: grab;
   user-select: none;
 }
 
-.sky-catalog-row:active {
+.sky-catalog-card:active {
   cursor: grabbing;
 }
 
-/* The row ↑ / ↓ picked (and the one under the pointer): panel-2, as a menu
-   row's hover. */
-.sky-catalog-row.active {
-  border-color: var(--border);
+/* The card the arrows picked (and the one under the pointer): panel-2 and
+   the accent border, as a chip's hover. */
+.sky-catalog-card.active {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
   background: var(--panel-2);
+}
+
+.sky-catalog-card.perch {
+  border-color: color-mix(in srgb, var(--tone-attention) 45%, var(--border));
+}
+
+.sky-catalog-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
 }
 
 .sky-catalog-icon {
   display: inline-grid;
   flex: none;
   place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
   color: var(--fl-ink-accent, var(--accent));
   background: rgba(var(--accent-rgb), 0.14);
 }
 
-.sky-catalog-row.perch .sky-catalog-icon {
+.sky-catalog-card.perch .sky-catalog-icon {
   border-radius: 50%;
   color: var(--tone-attention);
   background: color-mix(in srgb, var(--tone-attention) 16%, transparent);
 }
 
-.sky-catalog-words {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-  gap: 1px;
-}
-
 .sky-catalog-name {
   display: flex;
+  flex: 1;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
 }
 
-.sky-catalog-summary {
+.sky-catalog-title {
   overflow: hidden;
-  color: var(--muted);
-  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* Rename on a card: the shelf's field (StopShelf.css), as wide as the name. */
+.sky-catalog-name .sky-saved-rename.fl-input.fl-input {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+  height: 26px;
+}
+
+.sky-catalog-name .sky-saved-err {
+  position: absolute;
+  left: 12px;
+  top: 40px;
+  z-index: 1;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--panel);
+}
+
+.sky-catalog-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .sky-catalog-badge {
+  flex: none;
   padding: 0 6px;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -8897,43 +8985,76 @@ a.fl-waiting-ref:hover {
   border-style: dashed;
 }
 
-/* A saved stop's sub-steps: a tiny box per step (a perch's gold). */
-.sky-catalog-boxes {
-  display: inline-flex;
+/* ★ / ☆ — on the shelf (and the floating palette) or not; the ★ in gold. */
+.sky-catalog-shelf.fl-icon-btn {
   flex: none;
+}
+
+.sky-catalog-shelf.on {
+  color: var(--tone-attention);
+}
+
+.sky-catalog-card .vf-menu {
+  flex: none;
+}
+
+/* A saved stop's sub-steps: a box per step joined by a thread, a perch's
+   round and gold. */
+.sky-catalog-boxes {
+  position: relative;
+  display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 2px;
-  width: 26px;
-  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 12px;
+}
+
+.sky-catalog-boxes::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 50%;
+  height: 1px;
+  background: var(--border);
 }
 
 .sky-catalog-boxes i {
-  width: 6px;
-  height: 6px;
-  border-radius: 2px;
+  position: relative;
+  width: 12px;
+  height: 10px;
+  border-radius: 3px;
   background: color-mix(in srgb, var(--accent) 70%, var(--muted));
 }
 
 .sky-catalog-boxes i.perch {
+  width: 10px;
   border-radius: 50%;
   background: var(--tone-attention);
 }
 
 .sky-catalog-more {
+  position: relative;
+  padding: 0 3px;
+  background: inherit;
   color: var(--muted);
-  font-size: 9.5px;
+  font-size: 10px;
 }
 
-/* Add: the secondary tier (.test-btn), shown on the picked row and under the
-   pointer so a long list stays calm. */
+.sky-catalog-card-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: auto;
+}
+
+/* Add: the secondary tier (.test-btn), shown on the picked card and under the
+   pointer so a full grid stays calm. */
 .sky-catalog-add.test-btn {
   flex: none;
   visibility: hidden;
 }
 
-.sky-catalog-row.active .sky-catalog-add,
-.sky-catalog-row:hover .sky-catalog-add {
+.sky-catalog-card.active .sky-catalog-add,
+.sky-catalog-card:hover .sky-catalog-add {
   visibility: visible;
 }
 
@@ -8943,14 +9064,35 @@ a.fl-waiting-ref:hover {
   }
 }
 
+/* Delete's question, on the card itself. */
+.sky-catalog-card .set-confirm {
+  margin: 2px 0 0;
+}
+
 .sky-catalog-empty {
-  margin: 4px 8px;
+  margin: 4px 2px;
   font-size: 12.5px;
 }
 
 .sky-catalog-hint {
   margin: 0;
   font-size: 11px;
+}
+
+/* A phone: the card fills the screen. */
+@media (max-width: 640px) {
+  .sky-catalog {
+    width: 100vw;
+    height: 100vh;
+    max-width: none;
+    max-height: none;
+    padding: 12px;
+    border-radius: 0;
+  }
+
+  .sky-catalog-head h2 {
+    display: none;
+  }
 }
 /* "Takes off…" (TakeoffDialog.tsx): the trigger's form inside the app's Modal.
    The fields' own look (.fl-form, .fl-schedule) is StopParts.css's. */
@@ -8971,7 +9113,8 @@ a.fl-waiting-ref:hover {
 }
 /* The shelf at the Sky's foot (StopShelf.tsx): one row, Stops — Blocks (the
    Session chip, the default kinds), Multi-step (the saved stops), then All
-   blocks… (the catalog) — folding to a thin handle. */
+   blocks… (the catalog) — folding to a thin handle. The chips' rules are
+   shared with the floating palette (SkyPalette.css lays them out in a grid). */
 
 .sky-shelf {
   flex: none;
@@ -8986,10 +9129,17 @@ a.fl-waiting-ref:hover {
   height: 4px;
 }
 
-.sky-shelf-fold {
+/* The tabs over the shelf's top edge: the fold handle, and ⤢ Float the blocks
+   (round 13: the shelf can become a palette on the board). */
+.sky-shelf-tabs {
   position: absolute;
   left: 12px;
   top: -25px;
+  display: inline-flex;
+  gap: 4px;
+}
+
+.sky-shelf-fold {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -9014,6 +9164,11 @@ a.fl-waiting-ref:hover {
 .sky-shelf-fold:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+.sky-shelf-fold.sky-shelf-float {
+  padding: 0 8px;
+  font-size: 13px;
 }
 
 /* --- The stops (StopShelf.tsx): its label, then chips scrolling sideways ----- */
@@ -9256,6 +9411,149 @@ a.fl-waiting-ref:hover {
 
 .sky-stops-confirm {
   padding-top: 6px;
+}
+/* The floating blocks palette (SkyPalette.tsx): a panel on the board, the
+   intake lane's kin — a head to drag it by, the shelf's chips (StopShelf.css)
+   flowing in a grid, a corner handle to size it. */
+
+.sky-palette {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  min-width: 240px;
+  min-height: 200px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+
+.sky-palette-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+  user-select: none;
+}
+
+.sky-palette-head.movable {
+  cursor: grab;
+}
+
+.sky-palette-head.movable:active {
+  cursor: grabbing;
+}
+
+.sky-palette-title {
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.sky-palette-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fl-ink-muted, var(--muted));
+  font-size: 10.5px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.sky-palette-all.test-btn {
+  margin-left: auto;
+  padding: 2px 9px;
+  font-size: 11.5px;
+}
+
+.sky-palette-head .vf-menu {
+  flex: none;
+}
+
+.sky-palette-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  padding: 10px 12px 18px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+/* A region: its tiny label across the top, then the chips as a grid that
+   wraps to the palette's width (the shelf's row scrolls sideways instead). */
+.sky-palette-region {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+  gap: 6px;
+}
+
+.sky-palette-region > .sky-stops-label {
+  grid-column: 1 / -1;
+}
+
+.sky-palette .sky-stop-chip {
+  width: 100%;
+  min-width: 0;
+}
+
+.sky-palette .sky-stop-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A saved stop takes two columns: its name and its dots. */
+.sky-palette .sky-saved-chip {
+  grid-column: span 2;
+  justify-content: space-between;
+}
+
+.sky-palette-hint {
+  margin: 0;
+  font-size: 11px;
+}
+
+@media (hover: none) {
+  .sky-palette-hint {
+    display: none;
+  }
+}
+
+.sky-palette-confirm .set-confirm {
+  margin: 0;
+}
+
+/* The corner handle: the intake lane's (SkyLine.css .skl-resize) — two
+   diagonal strokes, the quiet tier's hover and ring. */
+.sky-palette-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  width: 16px;
+  height: 16px;
+  border-bottom-right-radius: 11px;
+  background: linear-gradient(135deg, transparent 0 55%, var(--muted) 55% 62%, transparent 62% 72%, var(--muted) 72% 79%, transparent 79%);
+  cursor: nwse-resize;
+  opacity: 0.7;
+  touch-action: none;
+}
+
+.sky-palette-resize:hover {
+  opacity: 1;
+  background-color: var(--panel-2);
+}
+
+.sky-palette-resize:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 /* The sky (SkyView.tsx) — prefix sky-.
  *
@@ -9768,7 +10066,8 @@ body.view-switch #sky-view {
 }
 
 .sky-plane[data-tidying] .sky-line-slot,
-.sky-plane[data-tidying] .sky-intake {
+.sky-plane[data-tidying] .sky-intake,
+.sky-plane[data-tidying] .sky-palette-slot {
   transition: transform 0.28s ease;
 }
 
@@ -10028,7 +10327,8 @@ details.fl-group-waiting > summary {
 
 @media (prefers-reduced-motion: reduce) {
   .sky-plane[data-tidying] .sky-line-slot,
-  .sky-plane[data-tidying] .sky-intake {
+  .sky-plane[data-tidying] .sky-intake,
+  .sky-plane[data-tidying] .sky-palette-slot {
     transition: none;
   }
   .sky-line {
@@ -10075,6 +10375,21 @@ details.fl-group-waiting > summary {
 .sky[data-tool="click"] .sky-viewport.is-panning,
 .sky[data-tool="click"] .sky-viewport.is-panning * {
   cursor: grabbing !important;
+}
+
+/* --- Round 13: the floating palette (SkyPalette) as a sky object ---------
+   It sits at its spot like the intake lane (layout key "palette"), over the
+   lines it may cover, and lifts while it is dragged by its head. */
+.sky-palette-slot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 4;
+}
+
+.sky-palette-slot.is-dragging {
+  transition: none;
+  z-index: 7;
 }
 
 @layer tokens, base, components, theme;
