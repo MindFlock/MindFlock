@@ -238,6 +238,13 @@ export function StopForm({ step, def, onChange, readOnly }: { step: FlightStep; 
           onChange={(v) => onChange({ config: { ...step.config, [f.name]: v } })}
         />
       ))}
+      {step.kind === "agent" && (!!step.config?.program || !!step.config?.model) && !step.config?.fresh && (
+        // Switch pilot (docs/flights.md "Round 15"): another CLI or model
+        // only takes the controls in a new session.
+        <p className="fl-form-note muted" role="note">
+          The CLI and model apply only with “Start a new session for this stop”.
+        </p>
+      )}
       <WhenField value={step.when || ""} readOnly={readOnly} onChange={(w) => onChange({ when: w || undefined })} />
       <FlField label="If it fails" wide hint={def?.default_on_fail ? "Default for " + kindName(def) + ": " + ON_FAIL_LABEL[fallback] : undefined}>
         <Seg
