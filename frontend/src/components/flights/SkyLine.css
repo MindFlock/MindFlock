@@ -823,3 +823,14 @@
 .sky[data-tool="click"] .skl-bar {
   cursor: inherit;
 }
+
+/* Round 13: a grounded line dragged over this line by its bar — the drop
+   gives this session its stops (docs/flights.md "As built: round 13 sky"). */
+.skl.is-merge-target {
+  border-color: var(--accent);
+  border-style: solid;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  box-shadow:
+    0 0 0 4px rgba(var(--accent-rgb), 0.55),
+    0 6px 22px rgba(0, 0, 0, 0.18);
+}

@@ -65,3 +65,30 @@
 .skl-grounded[data-lod="far"] .skl-grounded-head span {
   display: none;
 }
+
+/* --- Round 13 (docs/flights.md "As built: round 13 sky") ------------------
+   Its name renames on a click (or F2): the text cursor says so, and the
+   field takes the name's place on the bar. Dragged over a session's line it
+   goes see-through, so the line it will merge into shows under it. */
+.skl-grounded .skl-name-edit {
+  cursor: text;
+  border-radius: 4px;
+}
+
+.skl-grounded .skl-name-edit:hover {
+  background: rgba(var(--accent-rgb), 0.1);
+}
+
+.skl-grounded .skl-name-input {
+  flex: 0 1 260px;
+  min-width: 120px;
+  height: 24px;
+  padding: 1px 6px;
+  font: inherit;
+  font-weight: 600;
+}
+
+.skl.skl-grounded.is-merging {
+  opacity: 0.72;
+  border-color: var(--accent);
+}

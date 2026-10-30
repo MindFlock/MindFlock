@@ -40,9 +40,17 @@ export function instances(): Instance[] {
  * touched. When the grid is full (capped view) and the session has no pane
  * yet, it takes the FOCUSED window's exact spot (the focused one is demoted
  * below every other visible window in the MRU, making it the eviction
- * candidate) rather than evicting whichever window is least-recently-used. */
-export function selectSession(title: string, opts?: { noKeyboard?: boolean }) {
+ * candidate) rather than evicting whichever window is least-recently-used.
+ *
+ * `null` selects nothing (the sky's empty-sky click and Esc — docs/flights.md
+ * "Round 13": selection may be empty): no session is focused, in either view;
+ * the MRU, the hidden set and the keyboard are left as they are. */
+export function selectSession(title: string | null, opts?: { noKeyboard?: boolean }) {
   const ui = useUi.getState();
+  if (title === null) {
+    ui.setFocused(null);
+    return;
+  }
   ui.setHidden(title, false);
   // Visibility is judged over the UNION the grid actually renders — sessions
   // AND open windows, one cap, one MRU (computeVisibleSlots, exactly as

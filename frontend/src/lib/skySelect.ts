@@ -312,3 +312,20 @@ export function nodeById<N extends { id: string; group?: { nodes: readonly N[] }
 /** Whether Delete may take this box off its line (what the canvas's own
  * Delete checks): a stop or a group the flight can still change. */
 export const removableBox = (n: { kind: string; editable?: boolean } | null): boolean => !!n && (n.kind === "stop" || n.kind === "group") && n.editable !== false;
+
+// --- Round 13: a grounded line dragged onto a session's line ----------------------
+
+/** The session line a grounded line being dragged by its bar would merge into
+ * (docs/flights.md "As built: round 13 sky"): the topmost of `lines` (drawn
+ * order: the last drawn is on top) whose rect holds `point` (plane px) and is
+ * a SESSION's line — never a grounded line (`flight:`), the intake lane, the
+ * floating palette, or the line being dragged (`except`). "" = none: the
+ * drop just moves it. */
+export function mergeTargetAt(point: Pos, lines: readonly { id: string; rect: Rect }[], except = ""): string {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const { id, rect: r } = lines[i];
+    if (!id || id === except || id === "intake" || id === "palette" || id.startsWith("flight:")) continue;
+    if (point.x >= r.x && point.x <= r.x + r.w && point.y >= r.y && point.y <= r.y + r.h) return id;
+  }
+  return "";
+}

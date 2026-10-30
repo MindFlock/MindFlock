@@ -147,7 +147,7 @@ describe("the grounded line", () => {
 
   it("its bar names it (the flight's plan_name) and says it has no session", () => {
     expect(html).toContain('data-flight="f_1"');
-    expect(html).toContain('class="skl-name">Ticket to merge<');
+    expect(html).toContain('class="skl-name skl-name-edit" title="Click to rename (F2)">Ticket to merge<');
     expect(html).toContain(">No session<");
     expect(html).toContain('aria-label="Ticket to merge — stops with no session yet"');
     expect(html).toContain('tabindex="0"');
@@ -169,7 +169,7 @@ describe("the grounded line", () => {
     expect(src).toContain("<InlineConfirm");
     expect(src).toContain("if (await deleteFlight(flight.id))");
     expect(src).toContain("const saved = await savePlan(plan);");
-    expect(src).toMatch(/if \(e\.target !== e\.currentTarget \|\| !isRemoveKey\(e\.key\)\) return;/);
+    expect(src).toMatch(/if \(e\.target !== e\.currentTarget\) return;[\s\S]*?if \(!isRemoveKey\(e\.key\)\) return;/);
     expect(src).not.toMatch(/\bwindow\.(prompt|alert|confirm)\(/);
   });
 
@@ -193,9 +193,9 @@ describe("the Sky hosts them", () => {
   });
 
   it("a chip on empty sky: stops with no session yet, pinned where it fell", () => {
-    expect(sky).toContain("f = await startGrounded({ plan_id: d.plan.id });");
-    expect(sky).toContain("f = await startGrounded({ steps: [defaultStepFor(def)] });");
-    expect(sky).toContain("setLayout((l) => patchSkyLine(l, id, { x: at.x, y: at.y, pinned: true }));");
+    expect(sky).toContain('if ("plan" in d) return startGrounded({ plan_id: d.plan.id });');
+    expect(sky).toContain("return def ? startGrounded({ steps: [defaultStepFor(def)] }) : null;");
+    expect(sky).toContain("setLayout((l) => patchSkyLine(l, groundedKey(f.id), { x: at.x, y: at.y, pinned: true }));");
   });
 
   it("a Session chip on one opens a block that makes its session; ⋯ Fly on a session… picks a line → attach", () => {
@@ -227,5 +227,32 @@ describe("a new session's box appears at once", () => {
     expect(sky).toContain("if (guess && guess !== title) setLayout((l) => tidySkyLayout(l, guess));");
     // A pending row is a line like any other (skyLineTitles keeps it).
     expect(code("lib/skyLayout.ts")).toContain("const inSky = (r: Pick<Instance, \"hidden_by\">) => !r.hidden_by;");
+  });
+});
+
+describe("round 13: renaming a grounded line", () => {
+  const src = code("components/flights/GroundedLine.tsx");
+
+  it("a click on its name (not the end of a drag) or F2 edits it inline; never prompt()", () => {
+    expect(src).toContain('className="skl-name skl-name-edit" title="Click to rename (F2)" onClick={onNameClick}');
+    expect(src).toContain("if (at && Math.hypot(e.clientX - at.x, e.clientY - at.y) >= 4) return;");
+    expect(src).toMatch(/if \(e\.key === "F2"\) \{\s*e\.preventDefault\(\);\s*e\.stopPropagation\(\);\s*startRename\(\);/);
+    expect(src).toContain('className="fl-input skl-name-input"');
+    expect(src).not.toMatch(/\bprompt\(/);
+  });
+
+  it("Enter and blur save through renameFlight, Esc cancels; the edit ends once", () => {
+    expect(src).toContain("onBlur={() => endRename(true)}");
+    expect(src).toMatch(/if \(e\.key === "Enter"\) \{\s*e\.preventDefault\(\);\s*endRename\(true\);/);
+    expect(src).toMatch(/else if \(e\.key === "Escape"\) \{\s*e\.preventDefault\(\);\s*endRename\(false\);/);
+    expect(src).toContain("if (save && next && next !== flight.plan_name) void renameFlight(flight.id, next);");
+    expect(src).toMatch(/if \(named\.current\) return;\s*named\.current = true;/);
+  });
+
+  it("the name is trimmed and capped at the server's 120", async () => {
+    const { cleanFlightName } = await import("../components/flights/GroundedLine");
+    expect(cleanFlightName("  Ship it  ")).toBe("Ship it");
+    expect(cleanFlightName("   ")).toBe("");
+    expect(cleanFlightName("x".repeat(200))).toHaveLength(120);
   });
 });
