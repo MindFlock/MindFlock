@@ -2597,3 +2597,77 @@ the intake lane's started stubs show `windowName(title)`.
 the stop palette's and inspector's stylesheet, imported by `StopParts.tsx`.
 The still-needed helpers moved to `lib/groundedLines.ts` (`checkRename`,
 `NAME_MAX`, `savedStopOrder`).
+
+### As built: round 11 style
+
+The owner: "the tidy button and a few other buttons are not in the correct
+style." Three were unstyled: **Tidy** (`.fl-btn sky-tidy`, and `.fl-btn` only
+sets `white-space`), the line picker's **`.fl-chip`** (no rule anywhere), and
+NewSessionBlock's **Cancel** (`btn-secondary`, a class that exists nowhere).
+Each fell back to the browser's grey button. Every `<button` in
+`components/flights` now wears one of the app's tiers, pinned by
+`flightsButtons.test.ts`.
+
+**The tiers** (the app's own rules; flights add only the focus ring):
+
+| Tier | House rule | Rule |
+|---|---|---|
+| primary | `.btn-primary` (settings/screens/screens.css) | accent fill and border, `#fff` text (4.66:1), 12px/600, `5px 12px`, radius 6px; hover `brightness(1.08)`; disabled opacity .45. The ONE action a surface is for. |
+| secondary | `.test-btn` (dialogs/SetupDialog.css) | `var(--panel-2)` fill, `1px solid var(--border)`, `var(--text)`, 12px, `5px 12px`, radius 6px; hover: the border turns `var(--accent)`; disabled opacity .4. |
+| quiet-icon | `.tb-item` (TopBar.css), `.vf-menu > summary` | no fill, `1px solid transparent`, muted glyph (`--fl-ink-muted`), radius 6px; hover: `var(--panel-2)` + `var(--border)` + `var(--text)`; disabled .4. |
+
+Shared by all three: `:focus-visible` = `outline: 2px solid var(--accent)`,
+offset 1px (−2px inside a clipped group). Two forms of the secondary tier:
+the **chip** (`.fl-pick`: pill, `var(--border)`, accent-mixed border on hover,
+`.on` = accent border + 16% wash) and the **segmented group** (the top bar's
+`.tb-views`: one bordered group, keys bare and muted, the chosen key
+`var(--panel-2)` with a border). Menu rows are `.vf-menu-item`'s
+(`5px 9px`, radius 5px, 12px/1.5, panel-2 under the pointer); links are
+`button.linklike`. Dialog actions sit in `.modal-actions`, whose house rule
+(NewSessionDialog.css: `8px 14px`, 13px, radius 7px) outranks the tier's size,
+so a dialog's buttons keep the dialog size and take the tier's colours.
+
+Tokens (FlywayCanvas.css, `:root` / `.light`): `--fl-btn-radius: 6px`,
+`--fl-ctl-h: 28px` (the Sky toolbar's controls), and `--fl-ink-accent`: the
+accent as TEXT, `color-mix(accent 62%, #fff)` on dark (≈6.7:1; the raw accent
+is 3.4–4:1 on the dark panels) and `var(--accent-deep)` on light (7.2:1).
+
+**What moved where:**
+
+- Sky toolbar (Sky.css; SkyView.tsx unchanged): Tidy = secondary at
+  `--fl-ctl-h`; the zoom group = a segmented secondary (Tidy's fill, border,
+  radius and height around the group, 1px dividers, the readout a muted
+  segment); All / Mine / Perched on you / This session = the `.tb-views` pair
+  at the same height; Find = `.fl-input` at that height and radius. The sizes
+  that SkyVisibility.css used to override live with the rules in Sky.css now.
+  The line picker's `.fl-chip` = the chip; its Cancel `linklike` in
+  `--fl-ink-accent`.
+- Stops shelf (StopShelf.css/.tsx): every chip = secondary (panel-2, border,
+  radius 6, 28px; accent border on hover); the **Session** chip is
+  primary-tinted (accent border, 16% accent wash, 600 weight, the icon tile
+  filled accent); a perch stays round and gold; a built-in stays dashed. The
+  fold handle = quiet (a tab). The rename field is `.fl-input` at chip size
+  (red border + ring when invalid). The saved-stop menu opens UP from the
+  pointer (it fell off the window's foot).
+- The line (SkyLine.css): ◧, the card's fold, the ⋯ summary = quiet with the
+  ring; the corner handles take the panel-2 hover (they are `<span>`s with no
+  `tabIndex`, so the ring rule waits for SkyLine.tsx to make them focusable);
+  a box's right-click menu reads at the ⋯'s size inside a line.
+- The canvas (FlywayCanvas.css, StopEditing.css): the hover toolbar's
+  `.fl-tool` = quiet (26px, transparent border); remove / pause / resume
+  hovers use the `--fl-ink-*` inks; the halt toggle's pressed state is a
+  border, not an inset shadow; the gap + and the trailing + use
+  `--fl-ink-accent` and ring on focus; the join pill is a status chip, not a
+  button (unchanged). StopMenu.css = `.vf-menu-item`'s rows.
+- Dialogs (StopDialog, TakeoffDialog, StopParts, NewSessionBlock): every action
+  names its tier — `test-btn` (Remove, Duplicate, Done, Retry, Skip, Ungroup,
+  Save to the shelf, Cancel / Close) or `btn-primary` (Save, Fly); Remove is a
+  secondary with the red ink; the sub-step ✎ / 🗑 are `.fl-icon-btn`
+  (🗑 red on hover); `.fl-icon-btn` itself gained the transparent border,
+  the hover border and the ring; `.fl-toggle`'s label aligns left when it
+  wraps.
+- FlightStrip / SessionFlight / SkyDrawer: already `btn-primary` / `test-btn`
+  (Done / Skip / Retry / Fly these stops / Fly); `.fl-btn`, `.fl-check-row`,
+  `.fl-strip-line`, `.sky-perch-name` and the drawer tab gained the ring; the
+  flights' `linklike`s (Open in the Sky, Intake ›, Refresh) use
+  `--fl-ink-accent`.
