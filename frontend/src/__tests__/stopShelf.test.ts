@@ -57,6 +57,7 @@ describe("the stops row", () => {
   it("a draggable chip per kind, its kind in data-kind, the perch gold and named Perch after a divider", () => {
     const html = render(createElement(StopShelf, { onTack() {} }));
     expect(html).toContain('aria-label="Stops"');
+    expect(html).toContain('<strong>Stops</strong> <span class="sky-stops-hint">— drag onto a line, or into a flyway</span>');
     expect(kindsIn(html)).toEqual(["agent", "ship", "split", "join", "you"]);
     expect(html.match(/draggable="true"/g)).toHaveLength(5);
     const perch = html.slice(html.indexOf('data-kind="you"'));
