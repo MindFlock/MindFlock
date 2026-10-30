@@ -3833,3 +3833,243 @@ from it); a double-click on a block adds it to the map as well.
   short pause) OR on double-click — never twice for one double-click
   (`clickOrDouble` helper: a click waits ~250 ms and is cancelled by a second
   click; the double-click places once).
+
+## Round 15: more kinds of block, and the manners of a dev tool (contract)
+
+The owner, after a brainstorm (2026-10-30): every robot stop today either
+runs the agent or waits on the outside world; nothing **judges**, nothing
+**undoes**, and the Sky says nothing about what a stop touches or what it
+did. Round 15 adds the stops a dev reaches for every day, a `when` on every
+stop instead of a branching gate, the sky objects that complete the metaphor
+(a landing strip on the right, people and devices to drop a line on, notes),
+and the looks that carry information (a risk stripe, receipts, time under a
+line, ageing, formation, weather). Five principles hold from round 13: nothing
+lands by itself, direct manipulation, every object has a name and can go,
+selection may be empty, palettes dock or float.
+
+### The seam: kinds as plug-ins (built, in this commit)
+
+`backend/web/core/flight_kinds/` is a package; every module in it registers
+one `Kind` (see the package docstring for the full dataclass): `spec` (the
+`STEP_KINDS` row + `risk`, `family`, `default_on_fail`), `config(raw, strict,
+where)`, `judge(flight, step, ss, obs, now)` (pure), `run(flight, step,
+action, now)` (async; raise `StepFailed`), optional `observe(flight, step,
+ss, sess, now)` (async → `obs[kind]`), `needs_session`, `types_to_agent`,
+`default_title(config)`, `ops` (behind `POST
+/api/flights/{id}/steps/{sid}/op/{name}`, via `flight_driver.step_op`) and
+`router` (included next to the flights routes). `flights.install_kinds()`
+merges them at import; the core falls through to the registry in
+`_step_config`, `_default_title`, `judge_for`, the driver's `observe` and
+`_perform`. Driver helpers for plug-ins: `run_shell(flight, step, cmd,
+timeout_s, folder, env_extra, keep)` + `job_of(flight, step)` (the command
+kind's own job machinery), `worktree_of(flight)`, `spawn_worker(flight, step,
+prompt, model, program, fence_only, report_back, title_prefix)` (one child of
+the session, as a split makes them), `_deliver(title, text)` (a prompt into
+the session's queue). `StepFailed` lives in the package;
+`flight_driver._StepFailed` is it.
+
+`GET /api/flights/kinds` rows now carry `risk` (list of `remote` — touches the
+shared remote, `irreversible` — Ctrl+Z cannot undo it, `spends` — money
+outside the agent's own usage), `family` (`work` | `ship` | `outside` |
+`people`; built-ins: agent/split/join/command = work, ship/checks/reviews =
+ship, wait/notify/ticket = outside, you/verify = people) and
+`default_on_fail`. `ship` and `ticket` are `remote`. A step's `on_fail`
+defaults to its kind's `default_on_fail`.
+
+**Receipts.** A judge sets `detail.receipt` (≤ 80 chars: "312 passed",
+"PR #291", "rebased 4 commits") on `done`; the box shows it once the stop has
+flown, and the stop dialog's "What it did" leads with it. Built-in kinds get
+theirs in this round too (the `receipts` task): ship "PR #291" / "merged" /
+"pushed" / "committed", checks "all green", reviews "2 rounds, quiet", command
+"exit 0", agent "settled after 12 min", split "3 workers", join "3 of 3
+done", wait "10 min", verify "k of n", ticket "→ Done", notify "sent".
+
+### `when`: a condition on every stop (task `when-judge`, core)
+
+A step may carry `when: "<expression>"` (≤ 300 chars; the normaliser
+canonicalises it or raises `PlanError(…, where + ".when")`; lenient mode
+drops an unparsable one). A pending step whose `when` is false is **skipped**
+by the planner (`step_states[sid].state = skipped`, note "skipped: <expr> —
+<the fact>", history `skipped`), never run. The grammar, words a dev would
+type, case-insensitive, `and` binding tighter than `or`, `not` prefix:
+
+| condition | true when |
+|---|---|
+| `diff touches <glob>[, <glob>…]` | a changed file (vs the flight's base) matches any glob (`frontend/**`, `*.sql`, `migrations/`) |
+| `diff lines > N` / `< N` | added + removed lines vs the base |
+| `files > N` / `< N` | changed files vs the base |
+| `weekday` / `weekend` | the server's local day |
+| `hour between H and H` | local hour in [H1, H2) (wrapping past midnight allowed) |
+| `branch matches <glob>` | the session's branch |
+| `label <name>` | the PR / issue carries that label (a flight without one: false) |
+| `judge is <value>` / `judge <sid> is <value>` | the nearest earlier Judge stop's value (or that stop's) equals it |
+| `always` / `never` | — |
+
+**The base** of a diff is the session's base branch when the row knows one,
+else the repo's default branch (`origin/HEAD`); the facts are gathered once
+per pass by the driver into `obs["facts"]` (`{files: [...], added, removed,
+branch, labels, hour, weekday, judges: {sid: value}}`), only when the
+current step has a `when` (cheap otherwise). `GET
+/api/flights/when?expr=…` → `{ok, canonical, error, field}` validates for the
+editor. `fill_prompt` gains `{preview}` (the latest Preview stop's url in
+the flight, "" when none) for the `preview-shots` task to fill.
+
+**Judge** (kind `judge`, family work, robot): config `question` (textarea),
+`options` (text: comma-separated answers, default "yes, no"), `by`: `model`
+(default: the one-shot describe model, `flight_describe`'s machinery, asked
+with the diff stat + the question) | `agent` (the session's agent answers:
+the prompt asks for one line `ANSWER: <option>`; the judge waits for the
+agent's turn to settle, then reads the last transcript line matching it).
+`detail.value` is the answer (one of the options, lower-cased), receipt the
+answer. `when` reads it. v1 `by: agent` may be a follow-up if the
+transcript read is not at hand: say so in "As built".
+
+Frontend part of this task is in `when-ui` below.
+
+### The new stops (one module each, `flight_kinds/<kind>.py`, tests `tests/unit/test_flight_kind_<kind>.py`)
+
+| kind | family / risk / actor | config | done when | receipt | task |
+|---|---|---|---|---|---|
+| `test` | work · — · robot | `command` (empty = auto: pytest when pyproject/pytest.ini/setup.cfg, `npm test` when package.json has a test script, `go test ./...`, `cargo test`), `expect` pass\|fail (default pass), `rerun_failures` bool (default true: rerun once when ≤ 3 failures), `timeout_minutes` 30 | the run ends; `expect pass`: exit 0 and no failures; `expect fail`: ≥ 1 failure (a pass "passed unexpectedly" fails the stop). Parses pytest's summary, vitest/jest "Tests: N passed, M failed", go `ok`/`FAIL`, cargo "test result: ok. N passed; M failed". `detail` {passed, failed, failures (≤ 20 names), runs, output tail}; `on_fail: agent` hands the failing names + tail to the agent | "312 passed" / "2 failed" / "failed as expected" | `test` |
+| `sync` | ship · — · robot | `with` (branch; empty = the default branch), `how` rebase\|merge (default rebase), `fetch` bool (default true) | HEAD contains `with`'s tip and no rebase/merge is in progress. A conflict is NOT aborted: the stop fails with the conflicting files and the fix note tells the agent to resolve and `git rebase --continue` / commit the merge; the retry re-checks. Refuses (fails) with uncommitted changes in the worktree | "up to date with main" / "rebased 4 commits" / "merged main" | `sync-checkpoint` |
+| `checkpoint` | ship · — · robot | `note` (text) | HEAD's sha and, for uncommitted work, a `git stash create` object are recorded (`detail.sha`, `detail.stash`) and kept alive under `refs/mindflock/flights/<fid>/<sid>`; ops `rewind` (`POST …/op/rewind`): the session idle (409 `working` otherwise) → `git reset --hard <sha>`, re-apply the stash, then the flight jumps to the step after the checkpoint (`op_jump`); the ref is dropped when the flight is deleted (`remove`) | "at a1b2c3d" | `sync-checkpoint` |
+| `land` | ship · irreversible · robot | `delete_branch` bool (true), `remote_branch` bool (true: delete on origin too), `close` delete\|close (default delete: `kill_session(mode="delete")` removes the worktree) | the branch is merged into the default branch (else fail "not merged"); the flight is finished `done` FIRST, then the session is closed on a thread a second later (the flight must not lose its session mid-step). Must be the LAST step of a plan (strict `PlanError` otherwise). `needs_session` true | "landed" | `land-budget` |
+| `budget` | outside · — · robot · `default_on_fail: you` | `max_usd` (float, 0 = none), `max_minutes` (the flight's elapsed, 0 = none), `max_tokens` (0 = none), `scope` here\|flight (default flight) | immediately when within budget; over → fail "over budget: $5.20 of $5" (so the default perches you with Carry on). `scope: flight`: the check is a **guard** — the core re-evaluates every done budget stop of the flight before judging the current step (`Kind.guard(flight, step, obs, now) -> action|None`, added to the registry by this task; the driver observes guard steps into `obs["guard"][sid]`); a guard that trips fails the CURRENT step with the budget's reason and `on_fail` of the budget stop. Cost from the session's usage (`session_stats`/the usage ledger) | "$1.20 of $5" | `land-budget` |
+| `review` | work · — · robot | `program` (CLI id, empty = the session's), `model`, `focus` (textarea appended to the review brief), `block` bool (true: findings fail the stop) | a worker spawned by `spawn_worker` with a brief: review `git diff <base>...HEAD` for correctness, report findings as a numbered list in its report (`report_result`, as children do); done when the worker has finished (the join machinery: `detail.children = [title]`); `detail.findings` (text), `block` + non-empty → fail with them (`on_fail: agent` hands them to the agent). The worker is killed (mode delete) when the stop is done unless `keep` bool (false) | "no findings" / "3 findings" | `review-pilot` |
+| (agent) | | `agent` gains `program` + `model` (used only with `fresh`: the new session's CLI and model — "switch pilot"); `_run_agent`'s fresh path passes them | | | `review-pilot` |
+| `call` | outside · remote · robot | `method` GET\|POST\|PUT (POST), `url`, `headers` (textarea, `K: V` lines), `body` (textarea; placeholders incl. `{receipt}` = the previous stop's receipt), `expect` (status prefix, default "2"), `timeout_minutes` 5 | the response status matches `expect`; `detail` {status, body tail ≤ 2000}; secrets: headers are stored as given (the plan is local) but never logged | "200" | `hooks` |
+| `listen` | outside · — · robot · `needs_session` false | `match` (substring the body must contain, optional), `timeout_minutes` (0 = forever) | an inbound `POST /api/hooks/flight/{token}` arrives (token = 32 hex minted at run, `detail.token`; the box shows the URL); `detail.payload` ≤ 8 KB; timeout → fail. The route is public (auth.py: `_PUBLIC_FLIGHT_HOOK = re.compile(r"/api/hooks/flight/[a-f0-9]{32}(/done)?")`, POST only) and answers 404 for an unknown or spent token | "heard" | `hooks` |
+| `someone` | people · — · **you** · `needs_session` false | `who` (text: a peer link's name, or empty = the webhook), `text`, `items` (checklist), `webhook` (URL; a Slack incoming webhook or any JSON POST) | the same perch state machine as `you` (waiting_you → Done/Skip), but the ask goes OUT: a peer by that name gets a MindFlock message (the mailbox) with the text and a one-tap link; the webhook gets `{text, items, done_url}`; the link is `GET /api/hooks/flight/{token}/done` (a tiny page with one Done button posting to itself) and `POST …/done` marks the perch done with `by: "someone"`. You can still press Done yourself | "done by Mauricio" | `hooks` |
+| `preview` | outside · remote · robot | `command` (prints the URL as its last line, or `MINDFLOCK_PREVIEW_URL=…`), `timeout_minutes` 20, `stop_command` (optional; run when the flight finishes or is cancelled) | the command exits 0 and a URL was found → `detail.url`; `{preview}` fills later prompts; the verify checklist's deep link carries it when present | the URL's host | `preview-shots` |
+| `screenshot` | outside · — · robot | `urls` (textarea, `{preview}` ok), `widths` ("1280, 390"), `timeout_minutes` 10, `comment_pr` bool (false: post the list of shots as a PR comment — text only) | every URL × width rendered with playwright-core + a Chrome/Chromium the server finds (`google-chrome`, `chromium`, `chromium-browser`; none → fail "no browser"); PNGs under `<flights dir>/shots/<fid>/<sid>/<n>.png`, served by the kind's router `GET /api/flights/{id}/shots/{sid}/{name}`; `detail.shots` [{name, url, width}] | "4 shots" | `preview-shots` |
+
+Every one: `fields` rows from `flights._f`, `summary` a sentence, a
+`default_title`; `StopIcon` glyphs for all of them are the `looks` task's.
+What a stop stores must survive a server restart (the judge re-reads the
+store, a lost thread → `run` again: see `_judge_command`).
+
+### Triggers (task `triggers`, full-stack)
+
+`TRIGGER_KINDS` grows `main_push` (the default branch moved), `main_red` (a
+check on the default branch's head is failing) and `hook` (an inbound
+`POST /api/hooks/flyway/{token}` — Grafana, Slack, CI; the plan's
+`trigger.token` is minted on save and shown in the inspector). `trigger.repo`
+(an absolute repo path) is required for `main_*`; `trigger.quiet_minutes`
+(default 60) stops a re-fire. `backend/web/core/flight_triggers.py` ticks
+every 60 s inside `template_schedule.run_loop` (next to `tick_flights`):
+`git fetch` + compare `origin/<default>` with the last seen sha
+(`<flights dir>/trigger_state.json`), the checks of that sha through the
+existing GitHub REST helpers; a fire = the schedule path's own
+`fly_plan`-style start (a session from the plan's `session` config, subject
+`{kind: "manual", title: "main moved to a1b2c3d"}`). Frontend: `TriggerKind`
++ `TRIGGER_LABEL`, the TakeoffDialog / inspector's "Takes off" section gains
+the three with their fields (repo via `PathField`, the hook URL with a copy
+button); the sky-side lives in `TakeoffDialog.tsx` only.
+
+### Built-in flyways and presets (task `builtins`, after `when-judge` merges)
+
+New built-ins (`_builtin_defaults`): **Bot PR** (trigger pr: Agent reads it →
+Test → Sync → Checks → Merge; no perch), **Red main** (trigger main_red:
+Agent investigates → Test → Commit → Push → Open PR → Perch), **Nightly
+chores** (trigger schedule 03:00: Agent updates deps → Test → Commit → Push →
+Open PR), **Release** (manual: Agent writes the notes → Commit → Push → Open PR
+→ Checks → Perch: approve → Merge → Agent tags and publishes the release →
+Land), **Bug report** (trigger ticket: Test `expect fail` "write the failing
+test first" → Agent → Test → Commit → Push → Verify → Open PR → Reviews →
+Checks → Perch → Merge → Ticket). Presets = saved stops of one agent step,
+trigger manual, ids `builtin:preset-docs` "Update the docs", `-tests` "Write
+tests", `-security` "Security pass", `-selfreview` "Self-review",
+`-explain` "Explain the diff", each with a real prompt. Every built-in stays
+resettable. Also this task: the **receipts** of the built-in kinds (above).
+
+### The frontend
+
+**`when-ui`** (`StopParts.tsx`, `StopDialog.tsx`, `lib/flights.ts` types,
+`lib/stopEditing.ts`): `FlightStep.when?: string`; the stop form gets a
+"Only when" field under the kind's fields with a ⓘ popover listing the
+grammar and live validation through `GET /api/flights/when` (debounced; the
+error under the field, the canonical form replacing the text on blur); a
+skipped stop reads "skipped: …" in its dialog; `kindName` says **Someone**
+for `someone`; the stop form shows the kind's `default_on_fail` as the
+unselected default. Tests in `stopWhen.test.ts`.
+
+**`looks`** (`FlywayCanvas.tsx/.css`, `SkyLine.tsx/.css`, `Bird.tsx`,
+`StopMenu.tsx`, `StopDialog.tsx` "What it did" only, `lib/flightDiagram.ts`,
+new `lib/stopRisk.ts`, `lib/lineTime.ts`): (1) the **risk stripe**: a 3px
+left edge on a box per tag (`riskOf(step, kinds)`: the kind's `risk`; ship
+`lane: merge` adds `irreversible`, `lane: commit` has none), tooltip names
+the tags, colours by token (remote = the ship tone, irreversible = the
+failed tone, spends = the perch gold); (2) **receipts**: a flown box shows
+`detail.receipt` under its title in the muted tone (mid and near bands), the
+dialog leads "What it did" with it and shows `detail.shots` thumbnails
+(`<img>` from their urls, click = open) when present; (3) a **`when`
+chip** ("if") on a box with one, tooltip the expression; (4) **time under
+the line**: a 4px ruler under the row of stops, one segment per flown stop
+proportional to its duration (from `history`), hover names "Checks · 12
+min"; the total at the right end; hidden far; (5) **ageing**: a session
+line whose row's `activity_since` is > 24 h → `data-age="old"` (the title
+bar yellows like paper), > 72 h → `"stale"` (and a "3 days still" word in
+the bar); (6) **formation**: a parent bird with worker branches draws the
+workers' birds in a V behind it (`birdPerches` gives the offsets; purely
+visual); (7) **icons** for test, sync, checkpoint, land, budget, review,
+judge, call, listen, someone, preview, screenshot in `StopIcon`; (8) the
+flown **checkpoint**'s menu gets "Rewind to here" (`POST …/op/rewind`,
+confirm inline since it resets the worktree; refused with the server's
+sentence when the session works). Tests `stopRisk.test.ts`,
+`lineTime.test.ts`, `skyLooks.test.ts`.
+
+**`objects`** (`SkyView.tsx`, new `LandingStrip.tsx/.css`, `PeopleBlocks.tsx`,
+`DeviceBlocks.tsx`, `StickyNote.tsx/.css`, `lib/skyObjects.ts`; backend
+`backend/web/core/landing.py` + `backend/web/routes/sky.py`, included from
+`server.py` next to the flights router): (1) the **landing strip**: a sky
+object (layout key `landing`, placed right of every line, drags by its head,
+folds) showing the default branch of each repo in the sky: its name, the
+checks of its head (green / red / none, from the GitHub helpers), the last
+merge's age, and **Landed today**: the flights finished `done` whose last
+ship was `merge` in the last 24 h (title, PR link) — `GET /api/sky/landing`
+`{repos: [{root, branch, head, checks, last_merge_at, landed: [{flight,
+title, pr_url, at}]}]}`; (2) **people blocks**: one per peer link (`GET
+/api/peer/links`), key `person:<id>`, dropping a session line on it shares
+the session (the existing share op, with its SAS gate — the block says
+"Shared" after); (3) **device blocks**: one per device of yours (`GET
+/api/devices`, not this one), key `device:<name>`; dropping a line on it
+moves the session (the existing `POST /api/instances/{title}/move`, after
+the inline confirm since it pauses the session); (4) **sticky notes**: ⋯ →
+"Add a note" / the palette's Note chip places one at `spotNear`; a note is a
+sky object (key `note:<id>`, resizable, inline-edited, Delete removes it with
+Undo) stored server-side in `<flights dir>/sky_notes.json` (`GET/PUT
+/api/sky/notes`, synced like layout is not — per server); a note dropped on
+a line attaches to it (`line` field) and moves with it. Registry
+`lib/skyObjects.ts`: `{key, frame(stored), place: "left"|"right"|"free",
+render(host)}` so SkyView iterates one list for intake, palette, landing,
+people, devices and notes (migrate intake + palette onto it). Tests
+`skyObjects.test.ts`, `landing.test.ts`, `tests/unit/test_sky_routes.py`.
+
+**`weather`** (`SkyFlock.tsx/.css`, new `useWeather.ts`): the flock canvas
+reads `/api/usage` (the top bar's window estimate): clouds drift in as the
+plan window passes 60 %, thicken past 85 % (soft radial blobs behind the
+birds, the `prefers-reduced-motion` rule respected); the sky dims (a
+night tint on the plane's background) during the notification quiet hours
+when they are set; a ☁ word in the Sky's title bar names the reason
+("usage 87 %"). Nothing moves a box. Test `weather.test.ts` (pure
+`weatherFor(usage, hour, quiet)`).
+
+**`palette-groups`** (after round 14's palette lands: `StopShelf.tsx`,
+`StopCatalog.tsx`, `SkyPalette.tsx`, `lib/stopCatalog.ts`): the chips group
+by `family` with a thin label (Work · Ship · Outside · People) in the
+palette and the catalog; the shelf stays the flat ★ pick.
+
+### Workers and fences
+
+Backend tasks: `test`, `sync-checkpoint`, `land-budget`, `review-pilot`,
+`hooks`, `preview-shots`, `when-judge`, `triggers`, `builtins` (last).
+Frontend: `looks`, `when-ui`, `objects`, `weather`, `palette-groups` (last).
+Each owns the files its row names plus its tests and an "As built: round 15
+<task>" section here; nothing else. Core edits outside the seam belong to
+`when-judge` (normalise/plan/next_action/driver facts), `land-budget`
+(`Kind.guard` + the guard pass), `review-pilot` (agent program/model),
+`preview-shots` (`fill_prompt` `{preview}`), `triggers`
+(`TRIGGER_KINDS`/normalise trigger/template_schedule tick), `builtins`
+(`_builtin_defaults` + the built-in judges' receipts). `tsc` and `vitest`
+run from `frontend/` (node_modules is linked); backend tests with
+`UV_PYTHON=3.12 uv run pytest tests/unit/test_flight*.py`.

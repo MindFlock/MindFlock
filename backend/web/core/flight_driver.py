@@ -35,8 +35,10 @@ from typing import Dict, List, Optional, Tuple
 
 from backend.web.core import autopilot as _autopilot
 from backend.web.core import events as _events
+from backend.web.core import flight_kinds as _kinds
 from backend.web.core import flights as _flights
 from backend.web.core import prompt_queue as _prompt_queue
+from backend.web.core.flight_kinds import StepFailed as _StepFailed
 
 __all__ = [
     "subscribe",
@@ -456,7 +458,12 @@ async def observe(flight: dict, now: float) -> dict:
         return {"now": now}
     kind = step["kind"]
     ss = flight["step_states"][step["id"]]
-    agent = kind in ("agent", "reviews") or ss["detail"].get("phase") == "fix"
+    plug = _kinds.get(kind)
+    agent = (
+        kind in ("agent", "reviews")
+        or ss["detail"].get("phase") == "fix"
+        or bool(plug is not None and plug.types_to_agent)
+    )
     sess = await asyncio.to_thread(_session_obs, flight, now, agent)
     obs: dict = {"now": now, "session": sess}
     if ss["state"] not in ("running", "waiting_you"):
@@ -489,6 +496,13 @@ async def observe(flight: dict, now: float) -> dict:
         except Exception as err:  # noqa: BLE001 — unknown, never "no workers"
             _log("flight %s: workers unreadable: %v", flight["id"], err)
             obs["children"] = None
+    if plug is not None and plug.observe is not None:
+        try:
+            obs[kind] = await plug.observe(flight, step, ss, sess, now)
+        except _StepFailed as err:
+            obs[kind] = {"failed": str(err), "detail": dict(err.detail or {})}
+        except Exception as err:  # noqa: BLE001 — unknown, the judge waits
+            _log("flight %s: %s unobservable: %v", flight["id"], kind, err)
     return obs
 
 
@@ -577,15 +591,6 @@ def _children_obs(flight: dict, step: dict) -> List[dict]:
 # --------------------------------------------------------------------------- #
 # Executors
 # --------------------------------------------------------------------------- #
-class _StepFailed(Exception):
-    """An executor's refusal: becomes a ``fail`` action with this reason
-    (and ``detail``, what the step still records — a split's workers made)."""
-
-    def __init__(self, reason: str, detail: Optional[dict] = None) -> None:
-        super().__init__(reason)
-        self.detail = detail
-
-
 def _deliver(title: str, text: str) -> None:
     """A prompt to a live session through its queue (the drain respects dialogs
     and idle), waking a sleeping agent first."""
@@ -733,15 +738,54 @@ async def _start_verify_run(plan_id: str) -> None:
 
 
 def _start_command(flight: dict, step: dict, folder: str) -> None:
+    run_shell(
+        flight,
+        step,
+        step["config"]["command"],
+        step["config"]["timeout_minutes"] * 60.0,
+        folder,
+    )
+
+
+def job_of(flight: dict, step: dict) -> Optional[dict]:
+    """The shell job :func:`run_shell` started for this step — ``{running,
+    exit, output}`` (``output`` is the last 2000 chars, ``exit`` -1 on a
+    timeout) — or None when none was started this server run."""
+    with _JOBS_LOCK:
+        job = _JOBS.get((flight["id"], step["id"]))
+        return dict(job) if job else None
+
+
+def worktree_of(flight: dict) -> str:
+    """The flight's session's working folder (its worktree), "" when the
+    session is gone."""
+    return str(_session_obs(flight, time.time(), False).get("folder") or "")
+
+
+def run_shell(
+    flight: dict,
+    step: dict,
+    cmd: str,
+    timeout_s: float,
+    folder: str,
+    env_extra: Optional[dict] = None,
+    keep: int = 2000,
+) -> None:
+    """Run ``cmd`` with ``/bin/sh -c`` in ``folder`` on a thread, as the
+    ``command`` kind does; :func:`job_of` reads the job and the loop is woken
+    when it ends. One job per (flight, step): a second call replaces the
+    record (the earlier process runs on to its end). ``keep`` is how much of
+    the output's tail the job keeps."""
     key = (flight["id"], step["id"])
-    cmd = step["config"]["command"]
-    timeout = step["config"]["timeout_minutes"] * 60.0
+    timeout = float(timeout_s)
     job = {"running": True, "exit": None, "output": ""}
     with _JOBS_LOCK:
         _JOBS[key] = job
     env = dict(os.environ)
     env["MINDFLOCK_FLIGHT"] = flight["id"]
     env["MINDFLOCK_SESSION_TITLE"] = flight["session"]
+    if env_extra:
+        env.update({str(k): str(v) for k, v in env_extra.items()})
 
     def _work() -> None:
         try:
@@ -764,7 +808,7 @@ def _start_command(flight: dict, step: dict, folder: str) -> None:
         except OSError as err:
             out, code = "could not run it: %s" % err, -1
         with _JOBS_LOCK:
-            job.update(running=False, exit=code, output=out[-2000:])
+            job.update(running=False, exit=code, output=out[-keep:])
         wake()
 
     threading.Thread(
@@ -871,7 +915,9 @@ async def _send_reviews(flight: dict, step: dict, action: dict, now: float) -> d
     )
 
 
-def _split_base(flight: dict, step: dict) -> Tuple[dict, str, str]:
+def _split_base(
+    flight: dict, step: dict, cfg: Optional[dict] = None
+) -> Tuple[dict, str, str]:
     """What every worker of a split is created with (blocking) — the payload
     ``spawn_session`` builds for a worker of this session: forked from its
     HEAD (a provisioned session's workers come from the same source), on its
@@ -885,8 +931,10 @@ def _split_base(flight: dict, step: dict) -> Tuple[dict, str, str]:
     if inst is None:
         raise _StepFailed("the session is gone")
     row = _row(parent)
-    cfg = step["config"]
-    program = str(getattr(inst, "Program", "") or row.get("program") or "")
+    cfg = step["config"] if cfg is None else cfg
+    program = str(
+        cfg.get("program") or getattr(inst, "Program", "") or row.get("program") or ""
+    )
     payload: dict = {"spawned": True, "parent": parent}
     if program:
         payload["program"] = program
@@ -1081,6 +1129,70 @@ async def _run_split(flight: dict, step: dict, action: dict) -> dict:
     }
 
 
+async def spawn_worker(
+    flight: dict,
+    step: dict,
+    prompt: str,
+    model: str = "",
+    program: str = "",
+    fence_only: str = "",
+    report_back: bool = True,
+    title_prefix: str = "",
+) -> str:
+    """One worker of the flight's session (a child: ``parent``, ``spawned``,
+    forked from the session's HEAD, under its fence), as a split makes them,
+    for a plug-in kind (a second-opinion review, a docs pass). ``program``
+    picks another CLI, ``model`` its model; ``fence_only`` is the
+    comma-separated paths it may change. Returns the worker's title; raises
+    :class:`StepFailed` with the create path's own refusal."""
+    from backend.mcp import tools as _mcp_tools
+    from backend.web.core import lineage as _lineage
+    from backend.web.core import session_create as _session_create
+
+    srv = _server()
+    parent = flight["session"]
+    cfg = {
+        "model": model,
+        "program": program,
+        "fence_only": fence_only,
+        "report_back": report_back,
+    }
+    base, provider, prefix = await asyncio.to_thread(_split_base, flight, step, cfg)
+    if title_prefix:
+        prefix = _mcp_tools._slug(title_prefix)[:40] + "-"
+    refused = _lineage.spawn_limit_error(srv.ENGINE.instances, parent, True)
+    if refused:
+        raise _StepFailed(refused)
+    footer = report_back and await asyncio.to_thread(_footer_ok, provider)
+    branch_prefix = _mcp_tools.Toolbox._branch_prefix(_row(parent), parent)
+    payload = dict(base)
+    body: dict = {}
+    status = 0
+    for _attempt in range(8):
+        title = await asyncio.to_thread(
+            _free_worker_title,
+            prefix,
+            str(payload.get("repo_path") or ""),
+            branch_prefix,
+        )
+        payload["title"] = title
+        payload["prompt"] = prompt + (
+            _mcp_tools.report_footer(title, parent, provider) if footer else ""
+        )
+        status, body = await _session_create.create_result(payload)
+        err = str(body.get("error") or "")
+        if status == 409 and "exists" in err:
+            continue
+        if status == 400 and "base_ref" in payload and "base" in err:
+            payload.pop("base_ref", None)
+            payload.pop("base_branch", None)
+            continue
+        break
+    if status >= 400 or not body.get("title"):
+        raise _StepFailed(str(body.get("error") or "could not create a worker"))
+    return str(body["title"])
+
+
 async def _perform(flight: dict, action: dict, now: float) -> dict:
     """Carry out ``action``'s side effect; return it amended (detail, or
     turned into done/fail/advance)."""
@@ -1156,6 +1268,9 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
             return await _run_split(flight, step, action)
         if sk == "join":
             return dict(action, detail={})
+        plug = _kinds.get(sk)
+        if plug is not None:
+            return await plug.run(flight, step, action, now)
     except _StepFailed as err:
         out = _flights.fail_action(
             flight, str(err), {"session": {"present": bool(flight["session"])}}
@@ -1922,6 +2037,31 @@ async def attach(flight_id: str, body: dict) -> dict:
     _emit("flight.changed", flight)
     wake()
     return flight
+
+
+def step_op(flight_id: str, step_id: str, name: str, body: Optional[dict]) -> dict:
+    """``POST /api/flights/{id}/steps/{sid}/op/{name}``: a plug-in kind's own
+    operation on one of its stops (``Kind.ops``), the store announced after
+    it and the loop woken. 404 ``unknown_flight`` / ``unknown_step`` /
+    ``unknown_op``."""
+    before = _flights.get(flight_id)
+    if before is None:
+        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+    step = next((s for s in before["steps"] if s["id"] == step_id), None)
+    if step is None:
+        raise _flights.FlightError("unknown_step", 404, "no such stop")
+    plug = _kinds.get(step["kind"])
+    op = plug.ops.get(name) if plug is not None else None
+    if op is None:
+        raise _flights.FlightError(
+            "unknown_op", 404, "%s has no operation %r" % (step["kind"], name)
+        )
+    out = op(copy.deepcopy(before), copy.deepcopy(step), dict(body or {}))
+    after = _flights.get(flight_id)
+    if after is not None and not _same(before, after):
+        _announce(before, after)
+    wake()
+    return out if isinstance(out, dict) else {"flight": after}
 
 
 def remove(flight_id: str) -> None:

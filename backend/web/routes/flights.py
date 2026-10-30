@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse, Response
 
 from backend.web.core import flight_describe as _describe
 from backend.web.core import flight_driver as _driver
+from backend.web.core import flight_kinds as _kinds
 from backend.web.core import flights as _flights
 
 router = APIRouter()
@@ -345,6 +346,20 @@ def flights_step_retry(flight_id: str, step_id: str) -> JSONResponse:
     return _op(flight_id, "retry", step_id)
 
 
+@router.post("/api/flights/{flight_id}/steps/{step_id}/op/{name}")
+def flights_step_op(
+    flight_id: str, step_id: str, name: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """A plug-in kind's own operation on one of its stops (docs/flights.md
+    "Round 15": ``Kind.ops``); the body is the operation's own."""
+    try:
+        return JSONResponse(_driver.step_op(flight_id, step_id, name, payload))
+    except _flights.PlanError as err:
+        return _bad_step(err)
+    except _flights.FlightError as err:
+        return _err(err)
+
+
 @router.post("/api/flights/{flight_id}/jump")
 def flights_jump(flight_id: str, payload: Optional[dict] = None) -> JSONResponse:
     step = str((payload or {}).get("step") or "")
@@ -372,3 +387,8 @@ def flights_cancel(flight_id: str) -> JSONResponse:
 def flights_rename(flight_id: str, payload: dict) -> JSONResponse:
     """The flight's own name (docs/flights.md "Round 13"): ``{plan_name}``."""
     return _op(flight_id, "rename", "", str((payload or {}).get("plan_name") or ""))
+
+
+# A plug-in kind's own routes (an inbound hook, a listing), next to these.
+for _plug_router in _kinds.routers():
+    router.include_router(_plug_router)

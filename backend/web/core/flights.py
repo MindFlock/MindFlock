@@ -42,9 +42,12 @@ from typing import Callable, Dict, List, Optional, Tuple
 from backend.config.config import GetConfigDir
 from backend.config.home_guard import guard
 from backend.fsutil import atomic_write_json, read_json
+from backend.web.core import flight_kinds as _kinds
 
 __all__ = [
     "STEP_KINDS",
+    "install_kinds",
+    "judge_for",
     "ON_FAIL",
     "TRIGGER_KINDS",
     "SUBJECT_KINDS",
@@ -294,6 +297,7 @@ STEP_KINDS: Dict[str, dict] = {
     },
     "ship": {
         "label": "Ship",
+        "risk": ["remote"],
         "actor": "robot",
         "summary": "Commit, push, open the PR or merge it — Fast-track carries it out.",
         "default_title": "Push",
@@ -375,6 +379,7 @@ STEP_KINDS: Dict[str, dict] = {
     },
     "ticket": {
         "label": "Ticket",
+        "risk": ["remote"],
         "actor": "robot",
         "summary": "Move the flight's ticket and/or comment on it (skipped without a ticket).",
         "default_title": "Ticket: update",
@@ -405,6 +410,26 @@ SESSION_KINDS = frozenset(
 AGENT_KINDS = frozenset({"agent", "reviews"})
 
 
+#: The palette's grouping (docs/flights.md "Round 15"): work (the agent and
+#: what judges its work), ship (the way to main), outside (the world beyond
+#: the worktree), people (perches). A plug-in names its own in ``spec``.
+_FAMILY = {
+    "agent": "work",
+    "split": "work",
+    "join": "work",
+    "command": "work",
+    "ship": "ship",
+    "checks": "ship",
+    "reviews": "ship",
+    "wait": "outside",
+    "notify": "outside",
+    "ticket": "outside",
+    "you": "people",
+    "verify": "people",
+}
+FAMILIES = ("work", "ship", "outside", "people")
+
+
 def kinds_dto() -> dict:
     """The ``GET /api/flights/kinds`` payload."""
     out = []
@@ -417,6 +442,9 @@ def kinds_dto() -> dict:
                 "summary": spec["summary"],
                 "fields": copy.deepcopy(spec["fields"]),
                 "default_title": spec["default_title"],
+                "risk": list(spec.get("risk") or []),
+                "family": spec.get("family") or _FAMILY.get(kind, "outside"),
+                "default_on_fail": spec.get("default_on_fail") or "halt",
             }
         )
     return {"kinds": out, "on_fail": list(ON_FAIL)}
@@ -557,6 +585,9 @@ def _step_config(kind: str, raw: dict, strict: bool, where: str) -> dict:
         return {"state": _text(c.get("state"), 200), "comment": _text(c.get("comment"))}
     if kind == "notify":
         return {"text": _text(c.get("text"), 1000)}
+    plug = _kinds.get(kind)
+    if plug is not None:
+        return plug.config(c, strict, where)
     return {}
 
 
@@ -598,7 +629,9 @@ def normalize_step(
             )
         return None
     config = _step_config(kind, raw.get("config"), strict, where + ".config")
-    on_fail = _text(raw.get("on_fail"), 8).lower() or "halt"
+    on_fail = _text(raw.get("on_fail"), 8).lower() or str(
+        STEP_KINDS[kind].get("default_on_fail") or "halt"
+    )
     if on_fail not in ON_FAIL:
         if strict:
             raise PlanError("on_fail is halt, agent, skip or you", where + ".on_fail")
@@ -643,6 +676,11 @@ def _default_title(kind: str, config: dict) -> str:
         if config.get("until"):
             return "Wait until %s" % config["until"]
         return "Wait %d min" % int(config.get("minutes") or 0)
+    plug = _kinds.get(kind)
+    if plug is not None and plug.default_title is not None:
+        return (
+            str(plug.default_title(config) or "") or STEP_KINDS[kind]["default_title"]
+        )
     return STEP_KINDS[kind]["default_title"]
 
 
@@ -2425,6 +2463,18 @@ _JUDGES = {
 }
 
 
+def judge_for(kind: str) -> Callable:
+    """The judge of a running step of ``kind``: a built-in's, else the
+    registered plug-in's (:mod:`backend.web.core.flight_kinds`)."""
+    judge = _JUDGES.get(kind)
+    if judge is not None:
+        return judge
+    plug = _kinds.get(kind)
+    if plug is None:
+        raise KeyError(kind)
+    return plug.judge
+
+
 def _resolve_fail(flight: dict, step: dict, ss: dict, action: dict, sess: dict) -> dict:
     """Attach ``then`` (what ``on_fail`` means right now) to a fail action."""
     then = step["on_fail"]
@@ -2540,7 +2590,7 @@ def next_action(flight: dict, obs: dict, now: float) -> dict:
             "retry": True,
             "note": "retrying %s after the agent's fix" % step["title"],
         }
-    out = _JUDGES[step["kind"]](flight, step, ss, obs, now)
+    out = judge_for(step["kind"])(flight, step, ss, obs, now)
     if out["action"] == "fail":
         out = _resolve_fail(flight, step, ss, out, sess)
     if out["action"] == "you" and st == "waiting_you":
@@ -3473,3 +3523,29 @@ def next_until(spec: str, now: float) -> float:
     if at.timestamp() <= now:
         at = at + _dt.timedelta(days=1)
     return at.timestamp()
+
+
+# --------------------------------------------------------------------------- #
+# Plug-in kinds (docs/flights.md "Round 15"): every module of
+# ``core/flight_kinds/`` registers one kind; installed here, after everything
+# a plug-in may use at import time is defined.
+# --------------------------------------------------------------------------- #
+def install_kinds() -> None:
+    """Merge the registered plug-in kinds into :data:`STEP_KINDS`,
+    :data:`SESSION_KINDS` and :data:`AGENT_KINDS` (idempotent; a test that
+    registers a fake kind calls it again)."""
+    global SESSION_KINDS, AGENT_KINDS
+    _kinds.load()
+    for plug in _kinds.all_kinds():
+        STEP_KINDS[plug.kind] = plug.spec
+        if plug.needs_session:
+            SESSION_KINDS = SESSION_KINDS | {plug.kind}
+        else:
+            SESSION_KINDS = SESSION_KINDS - {plug.kind}
+        if plug.types_to_agent:
+            AGENT_KINDS = AGENT_KINDS | {plug.kind}
+        else:
+            AGENT_KINDS = AGENT_KINDS - {plug.kind}
+
+
+install_kinds()

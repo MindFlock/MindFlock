@@ -135,6 +135,14 @@ export interface StepKindDef {
   summary: string;
   fields: StepKindField[];
   default_title: string;
+  /** What the stop touches outside the worktree (docs/flights.md "Round 15"):
+   * `remote` (the shared remote), `irreversible` (Ctrl+Z cannot undo it),
+   * `spends` (money outside the agent's own usage). Older servers omit it. */
+  risk?: string[];
+  /** The palette's grouping: work | ship | outside | people. Older servers omit it. */
+  family?: string;
+  /** What a new step of this kind does on failure when the plan says nothing. */
+  default_on_fail?: string;
 }
 
 /** The session row's `flight` field (`/api/instances`): all the pane strip
