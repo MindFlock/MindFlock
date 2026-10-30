@@ -574,7 +574,11 @@ def _normalize_group(raw) -> Optional[dict]:
 
 
 def normalize_step(
-    raw, index: int = 0, strict: bool = True, taken=None
+    raw,
+    index: int = 0,
+    strict: bool = True,
+    taken=None,
+    config_strict: Optional[bool] = None,
 ) -> Optional[dict]:
     """One step coerced to ``{id, kind, title, config, on_fail}`` plus
     ``halt: True`` on a halt point (omitted when false) and ``group`` on a
@@ -597,7 +601,10 @@ def normalize_step(
                 where + ".kind",
             )
         return None
-    config = _step_config(kind, raw.get("config"), strict, where + ".config")
+    # The config may be checked more gently than the shape (a block on the
+    # ground: its kind must be real, its prompts may still be empty).
+    cstrict = strict if config_strict is None else config_strict
+    config = _step_config(kind, raw.get("config"), cstrict, where + ".config")
     on_fail = _text(raw.get("on_fail"), 8).lower() or "halt"
     if on_fail not in ON_FAIL:
         if strict:
@@ -646,7 +653,9 @@ def _default_title(kind: str, config: dict) -> str:
     return STEP_KINDS[kind]["default_title"]
 
 
-def normalize_steps(raw, strict: bool = True) -> List[dict]:
+def normalize_steps(
+    raw, strict: bool = True, config_strict: Optional[bool] = None
+) -> List[dict]:
     """A step list, 1..:data:`MAX_STEPS` long in strict mode."""
     if not isinstance(raw, list):
         if strict:
@@ -659,7 +668,9 @@ def normalize_steps(raw, strict: bool = True) -> List[dict]:
     taken: set = set()
     out = []
     for i, s in enumerate(raw[:MAX_STEPS]):
-        step = normalize_step(s, i, strict=strict, taken=taken)
+        step = normalize_step(
+            s, i, strict=strict, taken=taken, config_strict=config_strict
+        )
         if step is not None:
             out.append(step)
     return out
@@ -2893,6 +2904,13 @@ def op_resume(flight: dict, now: Optional[float] = None) -> dict:
     return flight
 
 
+def validate_for_takeoff(flight: dict) -> None:
+    """Every step as strict as a plan's (``steps[i]…`` in the error), before a
+    grounded flight binds to a session: a Split with no prompts, a Wait with
+    no minutes… is refused here, with the field, not when it was placed."""
+    normalize_steps(copy.deepcopy(flight["steps"]), strict=True)
+
+
 def op_rename(flight: dict, name: str, now: Optional[float] = None) -> dict:
     """``PATCH /api/flights/{id} {plan_name}``: the flight's own name — its
     line's title (a grounded one's especially). Any unfinished state; empty
@@ -2958,10 +2976,19 @@ def _pending_index(flight: dict, sid: str) -> int:
     return i
 
 
-def _one_step(raw, index: int, taken) -> dict:
+def _lenient(flight: dict) -> bool:
+    """A block on the ground may be incomplete (a Split with no prompts yet):
+    the owner fills it in before it flies, and :func:`validate_for_takeoff`
+    checks it then. In the air every step is validated as a plan's."""
+    return flight["state"] == GROUNDED
+
+
+def _one_step(raw, index: int, taken, strict: bool = True) -> dict:
     """A single body step validated like a plan's (``field`` names ``step…``)."""
     try:
-        return normalize_step(raw, index, strict=True, taken=taken)
+        return normalize_step(
+            raw, index, strict=True, config_strict=strict, taken=taken
+        )
     except PlanError as err:
         raise PlanError(err.message, re.sub(r"^steps\[\d+\]", "step", err.field))
 
@@ -3035,7 +3062,15 @@ def op_add_step(
     _editable(flight)
     i = _insert_index(flight, at)
     step = _one_step(
-        dict(raw, id="") if isinstance(raw, dict) else raw,
+        (
+            dict(
+                raw,
+                id="",
+                strict=not _lenient(flight),
+            )
+            if isinstance(raw, dict)
+            else raw
+        ),
         i,
         {s["id"] for s in flight["steps"]},
     )
@@ -3074,7 +3109,7 @@ def op_add_steps(
     if not isinstance(raws, list):
         raise PlanError("steps is a list", "steps")
     stripped = [dict(r, id="") if isinstance(r, dict) else r for r in raws]
-    new = normalize_steps(stripped, strict=True)
+    new = normalize_steps(stripped, strict=True, config_strict=not _lenient(flight))
     i = _insert_index(flight, at, len(new))
     if group is not None:
         g = _fresh_group(flight, group.get("name") if isinstance(group, dict) else "")
@@ -3134,7 +3169,9 @@ def op_edit_step(flight: dict, sid: str, patch, now: Optional[float] = None) -> 
     for key in ("title", "config", "on_fail", "halt"):
         if key in patch:
             raw[key] = patch[key]
-    step = _one_step(raw, i, {s["id"] for s in flight["steps"]} - {sid})
+    step = _one_step(
+        raw, i, {s["id"] for s in flight["steps"]} - {sid}, strict=not _lenient(flight)
+    )
     if step == flight["steps"][i]:
         return flight
     was = bool(flight["steps"][i].get("halt"))
@@ -3358,7 +3395,9 @@ def ground(
         if not isinstance(raw_steps, list):
             raise PlanError("steps is a list", "steps")
         stripped = [dict(s, id="") if isinstance(s, dict) else s for s in raw_steps]
-        given = normalize_steps(stripped, strict=True)
+        # On the ground a block may be incomplete (its config); take-off
+        # validates. Its kind and shape are checked as always.
+        given = normalize_steps(stripped, strict=True, config_strict=False)
         if name:
             g = {"id": _new_id("g_", taken), "name": name[:80], "plan_id": ""}
             for s in given:

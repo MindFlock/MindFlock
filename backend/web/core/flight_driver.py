@@ -1867,6 +1867,7 @@ async def attach(flight_id: str, body: dict) -> dict:
         raise _flights.FlightError(
             "not_grounded", 409, "this flight already has a session"
         )
+    _flights.validate_for_takeoff(f)
     title = str(body.get("title") or "").strip()
     seeded = False
     no_prompt = False

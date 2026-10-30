@@ -311,6 +311,10 @@ async def flights_attach(
     "in_place"?, "prompt"?}`` creates the session first."""
     try:
         flight = await _driver.attach(flight_id, payload or {})
+    except _flights.PlanError as err:
+        # An incomplete block (a Split with no prompts): named by field, so
+        # the board can open that stop's dialog.
+        return _bad_step(err)
     except _flights.FlightError as err:
         return _err(err)
     return JSONResponse({"flight": flight})
