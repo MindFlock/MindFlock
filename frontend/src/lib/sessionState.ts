@@ -244,6 +244,10 @@ export function deriveSessionState(inst: Partial<Instance>, extras?: SessionStat
     };
   if (inst.status === "paused")
     return { state: "idle", label: "Paused", tone: "muted", inBell: false, restartable: false, hint: "Session paused" };
+  // Mid-move (lib/sessionActions moveSession → state/queries markMoving): the
+  // agent is paused while its folder travels; it resumes there by itself.
+  if ((inst as Instance & { moving?: boolean }).moving)
+    return { state: "starting", label: "Moving…", tone: "muted", inBell: false, restartable: false, hint: "Moving the session's folder — it resumes there when the move is done" };
   if (inst.pending || inst.status === "loading")
     return { state: "starting", label: STATE_LABEL.starting, tone: "muted", inBell: false, restartable: false, hint: "Provisioning workspace" };
   if (inst.sleeping) return sleepingState(inst.sleeping, now);

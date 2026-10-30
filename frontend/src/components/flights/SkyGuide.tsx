@@ -65,7 +65,7 @@ export const SKY_GUIDE_KEYS: readonly (readonly [string, string])[] = [
   ["Esc", "Clear the selection, fold an open session, cancel a pick"],
   ["Ctrl+A", "Select every line"],
   ["Enter", "Open the focused line's session; on a stop, its dialog"],
-  ["Alt+Y", "Switch between the grid and the sky"],
+  ["Ctrl+Y", "Switch between the grid and the sky"],
   ["Ctrl/Alt+N", "A new-session block (double-click empty sky does too)"],
 ];
 
@@ -245,7 +245,7 @@ const WORDS: Record<SkyGuideSection, ReactNode> = {
   what: (
     <>
       <p>The sky is the main area's second view. Every session is a line — the same sessions as the grid, with the same selection and the same open tabs; only the drawing changes.</p>
-      <p>Switch with <b>Grid · Sky</b> on the top bar, or <kbd>Alt+Y</kbd>. The chips on the sky's toolbar choose which lines show, and <b>Find a line…</b> jumps to one by name.</p>
+      <p>Switch with <b>Grid · Sky</b> on the top bar, or <kbd>Ctrl+Y</kbd>. The chips on the sky's toolbar choose which lines show, and <b>Find a line…</b> jumps to one by name.</p>
     </>
   ),
   lines: (

@@ -87,7 +87,7 @@ describe("the guide's sections", () => {
 describe("the keyboard table", () => {
   it("lists every Sky key, once", () => {
     const keys = SKY_GUIDE_KEYS.map(([k]) => k);
-    expect(keys).toEqual(["V", "H", "Space (held)", "0", "1", "+ / −", "T", "Arrows", "Delete", "Esc", "Ctrl+A", "Enter", "Alt+Y", "Ctrl/Alt+N"]);
+    expect(keys).toEqual(["V", "H", "Space (held)", "0", "1", "+ / −", "T", "Arrows", "Delete", "Esc", "Ctrl+A", "Enter", "Ctrl+Y", "Ctrl/Alt+N"]);
     for (const [, what] of SKY_GUIDE_KEYS) expect(what.trim()).not.toBe("");
   });
 

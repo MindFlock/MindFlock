@@ -89,8 +89,8 @@ describe("the palette", () => {
     expect(p).toContain('run: () => ui.openDialogFor("intake"),');
     expect(p).toContain('label: "Verify…"');
     expect(p).toContain('label: "Schedule…"');
-    expect(p).toContain('label: "Switch to the Sky", hint: "Alt+Y"');
-    expect(p).toContain('label: "Switch to the grid", hint: "Alt+Y"');
+    expect(p).toContain('label: "Switch to the Sky", hint: "Ctrl+Y"');
+    expect(p).toContain('label: "Switch to the grid", hint: "Ctrl+Y"');
     expect(p).toMatch(/label: "Stops…",[\s\S]{0,200}run: \(\) => ui\.showFlyways\(\),/);
     expect(p).not.toContain('label: "Flights…"');
     expect(p).not.toContain('"flights"');

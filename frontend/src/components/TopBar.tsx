@@ -187,7 +187,7 @@ export function TopBar() {
   // The foldable items, in bar order; Verify / Schedule only once the calm
   // rule above lets them on the bar at all (this never overrides it). The
   // Grid · Sky toggle folds last, only on a phone-narrow bar (its ⋯ row
-  // switches to the other view, carrying the perch count; Alt+Y still does
+  // switches to the other view, carrying the perch count; Ctrl+Y still does
   // too).
   //
   // The toggle's home is the sidebar's View row, beside the pane counts. The

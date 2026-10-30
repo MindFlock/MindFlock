@@ -62,7 +62,7 @@ carries its side of the journey. Flights are drawn in the Sky.
 | Fast-track depth (off→commit→push→pr→merge) | the **ship** stops of a flyway; a per-source depth still works and maps to the plain ship ladder at that rung (the agent, then commit → … → the depth — nothing else); an armed ⏩ is drawn as rung boxes on the session's line ([The session diagram](#the-session-diagram)) | `autopilot.json` |
 
 The top bar is **New · Grid / Sky · Intake · Verify · Schedule · Settings**:
-`Alt+I` / `Alt+V` / `Alt+S` open the three dialogs, `Alt+Y` switches to the
+`Alt+I` / `Alt+V` / `Alt+S` open the three dialogs, `Ctrl+Y` switches to the
 sky (the main area's other view). The Sky half of the toggle counts the
 flights perched on you. Flyways are made, edited and flown from the Sky's
 **flyway shelf**. (Sky rounds 4–7 put Intake / Verify / Schedule behind one
@@ -471,7 +471,7 @@ top bar, bell and dialogs stay; App renders it in the grid's place while
   needs-you rows are the drawer's Perched on you; New is a new-session card on
   the sky. The full table is in docs/web-ui.md.
 - **Switch points**: the top bar's Grid · Sky toggle (`data-tour="view-sky"`),
-  the sidebar View row's **Sky** chip (a number returns to the grid), `Alt+Y`,
+  the sidebar View row's **Sky** chip (a number returns to the grid), `Ctrl+Y`,
   the palette, `#sky` / `#sky/<title>`. Switching keeps the selection, the
   camera, the drawer and the shelf; each pane's ghost flies to its line and
   back (~250 ms; none under `prefers-reduced-motion`).
@@ -3043,7 +3043,7 @@ theme tokens). Exports:
   Selection · `keys` Tools and the keyboard · `intake` The intake lane ·
   `saved` Where things are saved.
 - `SKY_GUIDE_KEYS` — the keyboard table: V, H, Space (held), 0, 1, + / −, T,
-  Arrows, Delete, Esc, Ctrl+A, Enter, Alt+Y, Ctrl/Alt+N.
+  Arrows, Delete, Esc, Ctrl+A, Enter, Ctrl+Y, Ctrl/Alt+N.
 - `useSkyGuide` (zustand `create`, like `DoctorList`'s warn store):
   `{section: id | null, open(section?), close()}`; `openSkyGuide(section?)`
   / `closeSkyGuide()` call it. An unknown section opens the first.

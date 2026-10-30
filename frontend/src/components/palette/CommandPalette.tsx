@@ -41,6 +41,7 @@ import { replayPeopleTour } from "../settings/screens/peer/replayPeopleTour";
  * Merge is last — the most consequential, and deliberately unbound. */
 const PALETTE_ACTIONS: SessionActionId[] = [
   "rename",
+  "move",
   "message",
   "queue",
   "askWorkers",
@@ -172,8 +173,8 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     // made, edited and flown.
     acts.push(
       ui.view === "sky"
-        ? { label: "Switch to the grid", hint: "Alt+Y", keywords: "view panes terminals grid", run: () => setView("grid") }
-        : { label: "Switch to the Sky", hint: "Alt+Y", keywords: "view sky canvas lines bird board flock map flights", run: () => setView("sky") }
+        ? { label: "Switch to the grid", hint: "Ctrl+Y", keywords: "view panes terminals grid", run: () => setView("grid") }
+        : { label: "Switch to the Sky", hint: "Ctrl+Y", keywords: "view sky canvas lines bird board flock map flights", run: () => setView("sky") }
     );
     acts.push({
       label: "Stops…",

@@ -22,7 +22,7 @@ export const SKY_TOUR: TourDef = {
     {
       target: '[data-tour="view-sky"]',
       title: "The same sessions, as lines",
-      body: "Grid · Sky (Alt+Y) switches the main area between panes and the sky — the sessions are the same, only the drawing changes.",
+      body: "Grid · Sky (Ctrl+Y) switches the main area between panes and the sky — the sessions are the same, only the drawing changes.",
     },
     {
       target: '[data-tour="sky-line-bar"], [data-tour="sky-line"] .skl-bar',
