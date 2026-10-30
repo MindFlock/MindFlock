@@ -194,12 +194,29 @@ def _announce(before: Optional[dict], after: Optional[dict]) -> None:
         if key not in after["announced"]:
             keys.append(key)
             _emit("flight.finished", after)
+            _take_down_previews(after)
     if keys:
 
         def _mark(f: dict) -> None:
             f["announced"] = (f["announced"] + keys)[-20:]
 
         _flights.mutate(after["id"], _mark)
+
+
+def _take_down_previews(flight: dict) -> None:
+    """A finished (or removed) flight takes its previews down: every done
+    preview stop's ``stop_command`` (docs/flights.md "Round 15"), on a
+    thread — it blocks and is best effort."""
+    if not any(s.get("kind") == "preview" for s in flight.get("steps") or []):
+        return
+    from backend.web.core.flight_kinds import preview as _preview
+
+    threading.Thread(
+        target=_preview.stop_all,
+        args=(copy.deepcopy(flight),),
+        name="mf-flight-preview-stop-%s" % flight["id"],
+        daemon=True,
+    ).start()
 
 
 # --------------------------------------------------------------------------- #
@@ -2105,6 +2122,8 @@ def remove(flight_id: str) -> None:
         _checkpoint.forget(f)
     except Exception:  # noqa: BLE001 — the refs are a convenience, never a block
         pass
+    if f["state"] not in ("done", "halted", "cancelled"):
+        _take_down_previews(f)  # a grounded one never put a preview up; cheap
     _flights.delete(flight_id)
     with _JOBS_LOCK:
         for k in [k for k in _JOBS if k[0] == flight_id]:

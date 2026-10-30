@@ -180,4 +180,18 @@ def load() -> None:
         try:
             importlib.import_module("%s.%s" % (__name__, mod))
         except Exception as err:  # noqa: BLE001 — one bad kind, not no flights
-            log.ErrorLog.Printf("flight kind %s not loaded: %v", mod, err)
+            _warn("flight kind %s not loaded: %s" % (mod, err))
+
+
+def _warn(text: str) -> None:
+    """The server's error log when it is up, else Python's (the CLI, a
+    test): a failing plug-in must never take the registry down with it."""
+    try:
+        if getattr(log, "ErrorLog", None) is not None:
+            log.ErrorLog.Printf("%s", text)
+            return
+    except Exception:  # noqa: BLE001
+        pass
+    import logging
+
+    logging.getLogger(__name__).warning(text)
