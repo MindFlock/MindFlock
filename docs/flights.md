@@ -4063,3 +4063,15 @@ the palette worker's will):
   screen px inside the viewport (16 px from its right edge, centred top to
   bottom). The shelf hid, no modal opened, and the lines stayed visible to its
   left. Esc docked it and brought the shelf back.
+
+### Round 14 follow-ups (the owner, live, 2026-10-30)
+
+- **A block on the ground may be incomplete.** A Split with no prompts (any
+  step whose config a plan would refuse) can be placed and edited on the
+  board: `normalize_step(…, config_strict=False)` for grounded flights; its
+  kind and shape are checked as always. `validate_for_takeoff` runs on
+  attach and answers 400 `bad_step` with the field (`steps[i].config.prompts`).
+- **A session picked from outside the sky opens its box.** The sidebar row,
+  Alt+N, the palette: the focus effect in SkyView sees the pick was not a
+  press on the sky (`pressedLine`) and opens the line on its pane, once per
+  pick (`openedFor`), then pans it into view as before.

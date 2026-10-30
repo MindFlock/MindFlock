@@ -600,6 +600,15 @@ export function SkyView() {
     // never "whole in view", so moving it would jolt every click.
     const pressed = pressedLine.current === focusLine;
     pressedLine.current = "";
+    // Picked from OUTSIDE the sky (the sidebar row, Alt+N, the palette): the
+    // owner wants the input area, so the line's box opens on its real pane
+    // (round 14: "when I click that I pretty much always want to see the
+    // input area"). A press inside the sky keeps the box as it was. Once per
+    // pick — a viewport resize re-runs this effect and must not reopen it.
+    if (!pressed && openedFor.current !== focusLine && rows.some((row) => row.title === focusLine)) {
+      openedFor.current = focusLine;
+      if (!layout[focusLine]?.open) onLayout(focusLine, { open: true });
+    } else if (pressed) openedFor.current = focusLine;
     const c = camRef.current;
     const sx = c.x + r.x * c.z;
     const sy = c.y + r.y * c.z;
@@ -609,6 +618,7 @@ export function SkyView() {
     }
     setFlash(focusLine);
     setTimeout(() => alive.current && setFlash((f) => (f === focusLine ? "" : f)), 1400);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- layout/onLayout/rows are read once per pick
   }, [focusLine, rectOf, vp.w, vp.h]);
 
   // A closed (or deleted) session's line leaves: the last picture fades out.
@@ -628,6 +638,8 @@ export function SkyView() {
    * press on the line itself is remembered, so the selection effect above
    * leaves the camera alone for it. */
   const pressedLine = useRef("");
+  /** The line whose box the last outside pick opened (once per pick). */
+  const openedFor = useRef<string>("");
   const focusOn = useCallback((id: string, pressed = false) => {
     pressedLine.current = pressed ? id : "";
     setGroundFocus("");

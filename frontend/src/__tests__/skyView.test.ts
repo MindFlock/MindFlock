@@ -541,3 +541,12 @@ describe("round 14: Ctrl+Z, removals that don't ask, All blocks… on the board"
     expect(v).toContain('if (m === "shelf") setCatalogOpen(null);');
   });
 });
+
+describe("a session picked from outside the sky opens its box", () => {
+  it("the sidebar's pick (not a press on the sky) opens the line on its pane, once per pick", () => {
+    const src = code("components/flights/SkyView.tsx");
+    expect(src).toContain('const openedFor = useRef<string>("");');
+    expect(src).toContain("if (!pressed && openedFor.current !== focusLine && rows.some((row) => row.title === focusLine)) {");
+    expect(src).toContain("if (!layout[focusLine]?.open) onLayout(focusLine, { open: true });");
+  });
+});
