@@ -370,7 +370,8 @@ export function SkyView() {
       ...titles.map((t) => {
         const fl = rows.find((r) => r.title === t)?.flight as FlightRow | null | undefined;
         const full = fl && isLive(fl) ? flights?.find((f) => f.id === fl.id) || null : null;
-        const diagram = sessionDiagram(rows, t, { flights, kinds, family: mode === "mine" || mode === "one" });
+        // Its family too: a line draws its workers inside it in every view.
+        const diagram = sessionDiagram(rows, t, { flights, kinds, family: true });
         return { id: t, name: windowName(t), flight: null as Flight | null, diagram, ...(measured[t] || estimateLine(lineSize(diagram, full), layout[t])) };
       }),
       ...grounded.map((f) => {

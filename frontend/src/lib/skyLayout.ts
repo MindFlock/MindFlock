@@ -11,10 +11,11 @@
  * the sky's width, never on top of another line. It keeps that spot while it
  * grows or shrinks; only Tidy places it again.
  *
- * Which sessions get a line is the view's (`skyLineTitles`): All (every
- * session, workers too, each on its own line), Mine (top-level sessions, their
- * workers folded into their parent's line), Perched on you (lines waiting on
- * you), This session (the focused session's line alone). Hidden helpers (`hidden_by`, a verify run)
+ * Which sessions get a line is the view's (`skyLineTitles`): All and Mine
+ * (every session), Perched on you (lines waiting on you), This session (the
+ * focused session's line alone). In every view but This session a worker whose
+ * lead has a line is drawn INSIDE that line (a branch, its own bird), never
+ * as a line of its own (round 12). Hidden helpers (`hidden_by`, a verify run)
  * never get one. */
 
 import type { Instance } from "../api/types";
@@ -509,7 +510,7 @@ export function estimateLine(base: { w: number; h: number }, stored: StoredLine 
 export type SkyMode = "all" | "mine" | "perched" | "one";
 
 export const SKY_MODES: ReadonlyArray<{ id: SkyMode; label: string; title: string }> = [
-  { id: "all", label: "All", title: "Every session on its own line, workers too" },
+  { id: "all", label: "All", title: "Every session — a worker inside its lead's line" },
   { id: "mine", label: "Mine", title: "Your top-level sessions, their workers folded into their line" },
   { id: "perched", label: "Perched on you", title: "Only the lines waiting on you" },
   { id: "one", label: "This session", title: "One line, filling the sky" },
@@ -526,21 +527,30 @@ export function linePerched(r: Instance): boolean {
   return deriveSessionState(r).state === "needs_you";
 }
 
-/** A line draws its family (parent above, workers below) in the views where a
- * worker has no line of its own. */
-export const lineFamily = (mode: SkyMode) => mode === "mine" || mode === "one";
-
 /** The sessions that get a line, newest first (the rows' own order is oldest
- * first). `focus` is This session's title; `query` filters by name or task. */
+ * first). `focus` is This session's title; `query` filters by name or task.
+ *
+ * A worker whose parent is itself a line is not one: it is drawn inside its
+ * parent's line, beside the others (a line always draws its family). A worker
+ * whose parent is gone, hidden, filtered out, or itself folded into a line
+ * (a worker's worker) keeps a line of its own, its parent's box above it. This
+ * session shows its title's line alone, a worker's too. */
 export function skyLineTitles(rows: readonly Instance[], mode: SkyMode, opts: { query?: string; focus?: string } = {}): string[] {
   const shown = rows.filter(inSky);
   if (mode === "one") return shown.some((r) => r.title === opts.focus) ? [opts.focus!] : [];
-  const titles = new Set(shown.map((r) => r.title));
-  // A worker whose parent isn't drawn is top-level here (orphaned, or its
-  // parent is a hidden helper).
-  const top = (r: Instance) => !r.parent || !titles.has(r.parent);
-  let pick = mode === "all" ? shown : mode === "mine" ? shown.filter(top) : shown.filter(linePerched);
+  let pick = mode === "perched" ? shown.filter(linePerched) : shown;
   const q = String(opts.query || "").trim().toLowerCase();
   if (q) pick = pick.filter((r) => r.title.toLowerCase().includes(q) || String(r.task_headline || r.task || "").toLowerCase().includes(q));
-  return pick.map((r) => r.title).reverse();
+  const byTitle = new Map(pick.map((r) => [r.title, r]));
+  const isLine = new Map<string, boolean>();
+  const lineOf = (r: Instance, seen: Set<string>): boolean => {
+    const known = isLine.get(r.title);
+    if (known !== undefined) return known;
+    const up = r.parent && r.parent !== r.title ? byTitle.get(r.parent) : undefined;
+    // A cycle of parents (never meant to happen) draws them all.
+    const out = !up || seen.has(up.title) || !lineOf(up, new Set(seen).add(r.title));
+    isLine.set(r.title, out);
+    return out;
+  };
+  return pick.filter((r) => lineOf(r, new Set())).map((r) => r.title).reverse();
 }

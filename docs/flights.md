@@ -2987,3 +2987,17 @@ pans, Shift+drag draws the marquee (it takes the lane), a click on a grounded
 stop selects it and Delete removes it (`DELETE …/steps/s1` and the Undo toast);
 Delete after a click on a session line's bar shows the close question and sends
 nothing.
+
+**Workers live inside their lead's line** (the owner: "the subsessions … should
+all be in the MindFlock block in parallel, each with their own bird").
+`skyLineTitles` no longer gives a worker a line when its parent is itself a
+line in that view (All, Mine, Perched on you). It is drawn only inside the
+parent's line, as a branch (`sessionDiagram` with `family: true`; SkyLine
+always drew the family, and SkyView's size estimate now does too). A click on
+its box there opens it as before. The rule is a fixed point: a worker is a line
+exactly when its parent is not one. So a worker whose parent is gone, hidden,
+filtered out by Find, not perched (in Perched on you), or itself folded (a
+worker's worker) keeps its own line, with its parent's box above. This session
+still shows a worker's line alone. A folded worker's layout entry is simply
+unused. All and Mine now draw the same lines; `lineFamily` is gone (nothing
+read it).

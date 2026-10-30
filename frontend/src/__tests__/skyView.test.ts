@@ -396,3 +396,12 @@ describe("round 12: the intake lane on the sky, the tools' presses", () => {
     expect(v).toMatch(/if \(e\.type !== "pointercancel"\) clickOn\(pr\.el\);/);
   });
 });
+
+describe("round 12: workers live inside their lead's line", () => {
+  it("every view draws a line's family; the estimate does too", () => {
+    const v = code("components/flights/SkyView.tsx");
+    expect(v).toContain("const diagram = sessionDiagram(rows, t, { flights, kinds, family: true });");
+    expect(code("components/flights/SkyLine.tsx")).toContain("useSessionLine(p.title, src, { family: true,");
+    expect(sky.SKY_MODES.find((m) => m.id === "all")?.title).toContain("inside its lead's line");
+  });
+});

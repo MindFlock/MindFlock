@@ -23,7 +23,6 @@ import {
   centerOn,
   clampZoom,
   fitCamera,
-  lineFamily,
   linePerched,
   loadSkyLayout,
   patchSkyLine,
@@ -181,14 +180,36 @@ describe("which sessions get a line", () => {
     row("verify-run", { hidden_by: "verify" }),
   ];
 
-  it("All: every session, workers too, newest first; never a hidden helper", () => {
-    expect(skyLineTitles(rows, "all")).toEqual(["halted", "perched", "orphan", "worker", "lead", "old"]);
+  it("All: every session newest first, a worker inside its lead's line (round 12); never a hidden helper", () => {
+    expect(skyLineTitles(rows, "all")).toEqual(["halted", "perched", "orphan", "lead", "old"]);
   });
 
-  it("Mine: top-level sessions only (a worker folds into its parent's line; an orphan stands alone)", () => {
+  it("Mine: the same — a worker folds into its parent's line; an orphan stands alone", () => {
     expect(skyLineTitles(rows, "mine")).toEqual(["halted", "perched", "orphan", "lead", "old"]);
-    expect(lineFamily("mine")).toBe(true);
-    expect(lineFamily("all")).toBe(false);
+  });
+
+  it("a worker is a line only when its parent is not one: parent hidden, filtered out, or itself folded", () => {
+    const fam = [
+      row("lead"),
+      row("w1", { parent: "lead" }),
+      row("w2", { parent: "lead" }),
+      row("w1a", { parent: "w1" }),
+      row("helper", { hidden_by: "verify" }),
+      row("hw", { parent: "helper" }),
+      row("selfish", { parent: "selfish" }),
+    ];
+    // Both workers sit in lead's line; w1's own worker keeps a line (its
+    // parent w1 is folded); a hidden helper's worker stands alone.
+    expect(skyLineTitles(fam, "all")).toEqual(["selfish", "hw", "w1a", "lead"]);
+    // Find: a worker matched without its lead is a line, its lead's box above.
+    expect(skyLineTitles(fam, "all", { query: "w2" })).toEqual(["w2"]);
+    // Perched on you: a perched worker of a perched lead folds; of a calm lead
+    // it is a line.
+    const perch = { flight: { id: "f", plan_name: "p", cursor: 1, total: 3, state: "waiting_you", step: { id: "s", kind: "you", title: "Approve", state: "waiting_you", actor: "you" } } } as Record<string, unknown>;
+    expect(skyLineTitles([row("lead", perch), row("w", { parent: "lead", ...perch })], "perched")).toEqual(["lead"]);
+    expect(skyLineTitles([row("lead"), row("w", { parent: "lead", ...perch })], "perched")).toEqual(["w"]);
+    // A cycle of parents never loses them all.
+    expect(skyLineTitles([row("a", { parent: "b" }), row("b", { parent: "a" })], "all").length).toBeGreaterThan(0);
   });
 
   it("Perched on you: lines whose flight is perched on you or halted", () => {
@@ -200,7 +221,6 @@ describe("which sessions get a line", () => {
     expect(skyLineTitles(rows, "one", { focus: "worker" })).toEqual(["worker"]);
     expect(skyLineTitles(rows, "one", { focus: "nope" })).toEqual([]);
     expect(skyLineTitles(rows, "one", { focus: "verify-run" })).toEqual([]);
-    expect(lineFamily("one")).toBe(true);
   });
 
   it("find filters by name or task", () => {
