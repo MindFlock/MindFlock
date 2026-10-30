@@ -66,6 +66,10 @@ export interface SkyPaletteProps {
   onDock?(): void;
   /** A Session chip pressed. */
   onSession?(): void;
+  /** Round 14: the × that returns to the shelf (the host sets shelf mode). */
+  onClose?(): void;
+  /** Round 14: opened by "All blocks…" — start with the filter focused. */
+  focusFilter?: boolean;
 }
 
 /** A press on the head that is the head's own (not one of its buttons). */

@@ -421,6 +421,9 @@ export interface StopShelfProps {
   onPlace?(drop: CatalogDrop): void;
   /** The shelf's "Float the blocks" (the host switches `mf_sky_palette`). */
   onFloat?(): void;
+  /** Round 14: "All blocks…" opens the floating palette large over the board
+   * (the host floats it) instead of a window-sized dialog. */
+  onCatalog?(): void;
 }
 
 export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPlace, onFloat }: StopShelfProps): JSX.Element {

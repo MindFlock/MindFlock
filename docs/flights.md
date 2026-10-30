@@ -3783,3 +3783,53 @@ palette worker's version will):
   two steps and pinned the new line where the old one had been.
 - **Float:** `mf_sky_palette=float` hid the shelf and placed the palette slot
   (still the placeholder, so empty).
+
+## Round 14: undo, no needless questions, a palette that fills itself (contract)
+
+The owner, using round 13: Ctrl+Z must undo a block deletion; deletion must
+not ask unless something is actually running; the floating blocks panel must
+hold as many blocks as there is room, not just the starred ones; the All
+blocks screen must not take the whole screen (people can't tell they may drag
+from it); a double-click on a block adds it to the map as well.
+
+### Undo (frontend)
+
+- One sky-wide undo stack, `lib/skyUndo.ts`: `pushUndo({label, undo: () =>
+  Promise<unknown>})` (≤ 20 entries, each good for 10 minutes), `popUndo()`,
+  `undoCount()`. Every removal in the sky pushes one — a stop or group taken
+  off a line (the toast's Undo payload), a grounded line deleted (re-create
+  from its steps and name, pinned where it was), a merge onto a session (the
+  grounded line back), a closed session (reopen from Recently closed), a
+  selection's Remove (one entry for the lot). The toasts keep their Undo
+  button; it pops the same entry.
+- **Ctrl+Z / ⌘Z** in the sky, outside a text field and with no dialog open,
+  pops the stack (toast "Undid: <label>"); nothing to undo → a quiet toast.
+  Redo is not offered (Ctrl+Y is the view toggle).
+
+### Deletion asks only when something runs (frontend)
+
+- Delete / Backspace / the ⋯ Remove / the selection bar's Remove act at once
+  with an Undo toast — a grounded line, a stop, a group, a selection of stops
+  or grounded lines, a session line whose agent is **idle**.
+- They ask (the inline confirm as today) only when something is actually
+  running: a session whose agent is working or asking, a stop that is the
+  flight's current one while the flight runs, a selection holding any of
+  those. The question names what is running.
+
+### The palette fills itself (frontend)
+
+- `SkyPalette` shows EVERY block — the Session chip, every kind, every saved
+  stop — as a wrapped grid of chips/cards that fills its frame and scrolls
+  past it; its frame (corner drag) decides how many show. A filter field at
+  its head. The ★ pick governs only the bottom shelf; in the palette a ★/☆
+  on each item still sets that pick.
+- **All blocks…** no longer opens a window-sized dialog: it opens the
+  floating palette over the board (float mode, a large frame ≈ 60vw × 70vh
+  if the owner never sized it, placed to the right of the view), with a ×
+  that returns to the shelf. The board stays visible around it so a drag out
+  of it is the obvious move. `StopCatalog` becomes the palette's body (the
+  cards, the filter, the ⋯ menus) and is no longer a `Modal`.
+- **Double-click places too**: a chip or card places on single click (after a
+  short pause) OR on double-click — never twice for one double-click
+  (`clickOrDouble` helper: a click waits ~250 ms and is cancelled by a second
+  click; the double-click places once).
