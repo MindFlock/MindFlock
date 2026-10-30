@@ -713,6 +713,9 @@ def normalize_steps(raw, strict: bool = True) -> List[dict]:
     for i, s in enumerate(raw[:MAX_STEPS]):
         step = normalize_step(s, i, strict=strict, taken=taken)
         if step is not None:
+            if strict and step["kind"] == "land" and i != len(raw) - 1:
+                # It closes the session: nothing can fly after it.
+                raise PlanError("a Land stop is the last stop", "steps[%d].kind" % i)
             out.append(step)
     return out
 
@@ -2503,6 +2506,26 @@ def _resolve_fail(flight: dict, step: dict, ss: dict, action: dict, sess: dict) 
     return action
 
 
+def _guard_trip(flight: dict, ss: dict, obs: dict, now: float, sess: dict):
+    """The first guard that trips among the done steps before the cursor
+    (``Kind.guard``: a budget stop watching the whole flight), as an action
+    for the CURRENT step (``ss``) with ``guard`` = the guard step's id and a
+    fail resolved by the GUARD step's ``on_fail``; None when none trips."""
+    for gstep in flight["steps"][: flight["cursor"]]:
+        plug = _kinds.get(gstep["kind"])
+        if plug is None or plug.guard is None:
+            continue
+        if flight["step_states"][gstep["id"]]["state"] != "done":
+            continue
+        out = plug.guard(flight, gstep, obs, now)
+        if out is None:
+            continue
+        if out.get("action") == "fail":
+            out = _resolve_fail(flight, gstep, ss, out, sess)
+        return dict(out, guard=gstep["id"])
+    return None
+
+
 def fail_action(flight: dict, reason: str, obs: Optional[dict] = None) -> dict:
     """A ``fail`` action for the current step with its ``on_fail`` resolved —
     what the driver turns a side effect that raised into."""
@@ -2530,7 +2553,8 @@ def next_action(flight: dict, obs: dict, now: float) -> dict:
     worked_at, turn_ended_at, branch, pr_url), ``autopilot`` (the session's
     record or None), ``verify`` (checklist facts), ``reviews`` (``ids`` of the
     actionable comments, None = unknown), ``checks`` (``verdict``,
-    ``failing``), ``command`` (the running job or None). Pure: no I/O.
+    ``failing``), ``command`` (the running job or None), ``guard`` (guard
+    step id -> what its kind observed; see :func:`_guard_trip`). Pure: no I/O.
     """
     if flight["state"] not in ACTIVE:
         return _wait("")
@@ -2578,6 +2602,9 @@ def next_action(flight: dict, obs: dict, now: float) -> dict:
             return _resolve_fail(
                 flight, step, ss, {"action": "fail", "reason": "no command"}, sess
             )
+        tripped = _guard_trip(flight, ss, obs, now, sess)
+        if tripped is not None:
+            return tripped
         return {"action": "run", "note": "starting %s" % step["title"]}
     if hold is not None:
         return hold
@@ -2592,6 +2619,9 @@ def next_action(flight: dict, obs: dict, now: float) -> dict:
                 )
         return _wait("waiting on you")
     # running
+    tripped = _guard_trip(flight, ss, obs, now, sess)
+    if tripped is not None:
+        return tripped
     if ss["detail"].get("phase") == "fix":
         held = _settle(ss["detail"], sess, ss["since"], now)
         if held is not None:
@@ -2706,6 +2736,9 @@ def apply(flight: dict, action: dict, now: float) -> dict:
     ss = flight["step_states"][sid]
     note = str(action.get("note") or "")
     upd = action.get("detail") if isinstance(action.get("detail"), dict) else {}
+    gss = flight["step_states"].get(str(action.get("guard") or ""))
+    if gss is not None and isinstance(action.get("guard_detail"), dict):
+        gss["detail"].update(action["guard_detail"])  # a guard's high-water mark
     if kind == "hold":
         _hit_halt_point(flight, now)
     elif kind == "wait":

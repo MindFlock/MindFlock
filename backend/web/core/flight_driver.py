@@ -466,6 +466,8 @@ async def observe(flight: dict, now: float) -> dict:
     )
     sess = await asyncio.to_thread(_session_obs, flight, now, agent)
     obs: dict = {"now": now, "session": sess}
+    if ss["state"] in ("pending", "running"):
+        await _guard_obs(flight, sess, now, obs)
     if ss["state"] not in ("running", "waiting_you"):
         return obs
     if kind == "ship" or (kind == "reviews" and ss["detail"].get("phase") == "push"):
@@ -504,6 +506,26 @@ async def observe(flight: dict, now: float) -> dict:
         except Exception as err:  # noqa: BLE001 — unknown, the judge waits
             _log("flight %s: %s unobservable: %v", flight["id"], kind, err)
     return obs
+
+
+async def _guard_obs(flight: dict, sess: dict, now: float, obs: dict) -> None:
+    """``obs["guard"][sid]``: what each done guard step before the cursor
+    (``Kind.guard``, a budget watching the flight) observes this pass, for
+    :func:`flights.next_action` to ask its guard."""
+    for gstep in flight["steps"][: flight["cursor"]]:
+        gplug = _kinds.get(gstep["kind"])
+        gss = flight["step_states"][gstep["id"]]
+        if gplug is None or gplug.guard is None or gplug.observe is None:
+            continue
+        if gss["state"] != "done":
+            continue
+        guards = obs.setdefault("guard", {})
+        try:
+            guards[gstep["id"]] = await gplug.observe(flight, gstep, gss, sess, now)
+        except _StepFailed as err:
+            guards[gstep["id"]] = {"failed": str(err), "detail": dict(err.detail or {})}
+        except Exception as err:  # noqa: BLE001 — unknown, the guard holds its fire
+            _log("flight %s: %s unobservable: %v", flight["id"], gstep["kind"], err)
 
 
 def _messages_pending(title: str) -> bool:

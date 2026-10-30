@@ -4241,3 +4241,53 @@ once. The last stop leaves the cursor. Returns `{flight, sha}`.
 - `tests/unit/test_flights.py::test_kinds_registry_drives_the_editor` pins
   the whole kinds list to the 12 built-ins; with any round-15 kind loaded it
   fails. It should check the built-ins as a prefix (or list the new kinds).
+### As built: round 15 land-budget
+
+- **The guard seam.** `Kind.guard(flight, step, obs, now) -> action|None`.
+  `flights._guard_trip` runs in `next_action` right before a pending step
+  would start (`run`) and right before a running step is judged (also before
+  the fix phase). It looks at the done steps before the cursor that have a
+  guard, and the first non-None action wins. A fail is resolved by
+  `_resolve_fail` with the GUARD step's `on_fail` (and the current step's
+  `rounds`), and the action carries `guard: <sid>`. If it also carries
+  `guard_detail`, `apply` merges that into the guard step's own detail.
+  `flight_driver._guard_obs` fills `obs["guard"][sid]` from each such step's
+  `observe` while the current step is pending or running (not while it waits
+  on you). It handles errors the same way the plug-in observe does.
+- **`budget`** (`flight_kinds/budget.py`) reads the session's figures from
+  `session_stats._session_tokens`, the same cost estimate as the session
+  row. `usd` = `cost`. `tokens` = in + out + cache_write: cache reads are
+  left out because they would trip any limit within minutes. `elapsed_min`
+  = now − `flight.started`. A budget with no limit passes with "no limit
+  set" (a newly placed block is not refused). When the guard trips, it
+  records `detail.tripped_at = {measure: figure}` on the budget step. It
+  only fires again once that figure is ≥ 1.1× the recorded value, so Done
+  or Retry on the perched step lets the flight carry on.
+- **`land`** (`flight_kinds/land.py`) counts the branch as merged when
+  `git merge-base --is-ancestor refs/heads/<branch> origin/<default>` passes
+  after a fetch, or when `github_pr.find_pr_sync` reports a MERGED PR into
+  that default branch (this covers a squash merge). Otherwise the stop fails
+  with "not merged into <default>". `run` also refuses when the land step is
+  not the flight's last step. Strict `normalize_steps` raises "a Land stop is
+  the last stop"; lenient mode keeps the steps as stored. A `land` step found
+  running after a restart runs again; the check is idempotent.
+- **The tidy-up thread** (`_close_later`, a daemon thread) sleeps 2 s and
+  then waits up to 30 s for the flight to read `done`. If the flight is
+  cancelled, halted or gone, it leaves everything alone. It then runs `git
+  push origin --delete <branch>` when origin has the branch, and ends the
+  session through `session_end.end_session`, the path the routes behind
+  `kill_session` use. `close: delete` falls back to close, and the note says
+  why, when the MCP tool would refuse the delete: the session runs in place,
+  it has uncommitted or untracked files, or another session shares its
+  folder (also on `FolderInUse` at the time of the delete). The "spawned by
+  an agent" rule is not mirrored, because the owner's plan asked for the
+  delete. After a delete, `delete_branch` removes a branch that existed
+  before the session (Kill keeps those). `delete_branch: false` re-creates
+  the branch at its old sha. Close mode keeps the worktree and therefore the
+  branch. The result goes into the step's `detail.closed` ("deleted" /
+  "closed" / "failed: …"). **Failure mode:** if the server restarts between
+  the `done` and the thread, the session stays open (the stop is done; close
+  it by hand).
+- **Open:** `tests/unit/test_flights.py::test_kinds_registry_drives_the_editor`
+  pins the exact list of kinds, so it fails for every plug-in kind
+  (budget, land, …). The file is outside this task's fence.

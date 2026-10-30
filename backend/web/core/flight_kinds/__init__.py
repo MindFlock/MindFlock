@@ -11,7 +11,8 @@ registry wherever it used to consult its own tables:
   /api/flights/kinds`` lists it and the palette / forms show it),
 * ``flights._step_config`` falls through to ``Kind.config``,
 * ``flights._default_title`` to ``Kind.default_title``,
-* ``flights.next_action`` to ``Kind.judge`` for a running step,
+* ``flights.next_action`` to ``Kind.judge`` for a running step, and asks
+  ``Kind.guard`` of every done step before the cursor (a budget guard),
 * ``flight_driver.observe`` adds ``obs[kind] = await Kind.observe(...)``,
 * ``flight_driver._perform`` hands a ``run`` action to ``Kind.run``,
 * ``POST /api/flights/{id}/steps/{sid}/op/{name}`` calls ``Kind.ops[name]``,
@@ -55,6 +56,7 @@ Judge = Callable[[dict, dict, dict, dict, float], dict]
 Runner = Callable[[dict, dict, dict, float], Awaitable[dict]]
 Observer = Callable[[dict, dict, dict, dict, float], Awaitable[Any]]
 Op = Callable[[dict, dict, dict], dict]
+Guard = Callable[[dict, dict, dict, float], Optional[dict]]
 
 
 @dataclass(frozen=True)
@@ -104,6 +106,15 @@ class Kind:
     ``flights.mutate``; raise ``flights.FlightError`` to refuse). ``router``
     is a FastAPI ``APIRouter`` of the kind's own routes (an inbound hook, a
     listing), included next to the flights routes.
+
+    ``guard(flight, step, obs, now)`` (optional) keeps watching after the
+    step is done: before the CURRENT step is started or judged, the core asks
+    the guard of every done step before the cursor, and the first non-None
+    action (``{"action": "fail", "reason": …}``) is applied to the current
+    step, its fail resolved by the GUARD step's ``on_fail``. ``obs["guard"]
+    [sid]`` is what ``observe`` returned for the guard step this pass. A
+    ``guard_detail`` dict on the action is merged into the guard step's own
+    detail (a trip's high-water mark, so a resume does not trip it again).
     """
 
     kind: str
@@ -117,6 +128,7 @@ class Kind:
     default_title: Optional[Callable[[dict], str]] = None
     ops: Dict[str, Op] = field(default_factory=dict)
     router: Any = None
+    guard: Optional[Guard] = None
 
 
 _REGISTRY: Dict[str, Kind] = {}
