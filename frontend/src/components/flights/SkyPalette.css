@@ -1,0 +1,143 @@
+/* The floating blocks palette (SkyPalette.tsx): a panel on the board, the
+   intake lane's kin — a head to drag it by, the shelf's chips (StopShelf.css)
+   flowing in a grid, a corner handle to size it. */
+
+.sky-palette {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  min-width: 240px;
+  min-height: 200px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+
+.sky-palette-head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+  user-select: none;
+}
+
+.sky-palette-head.movable {
+  cursor: grab;
+}
+
+.sky-palette-head.movable:active {
+  cursor: grabbing;
+}
+
+.sky-palette-title {
+  color: var(--text);
+  font-size: 12.5px;
+}
+
+.sky-palette-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fl-ink-muted, var(--muted));
+  font-size: 10.5px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.sky-palette-all.test-btn {
+  margin-left: auto;
+  padding: 2px 9px;
+  font-size: 11.5px;
+}
+
+.sky-palette-head .vf-menu {
+  flex: none;
+}
+
+.sky-palette-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  padding: 10px 12px 18px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+/* A region: its tiny label across the top, then the chips as a grid that
+   wraps to the palette's width (the shelf's row scrolls sideways instead). */
+.sky-palette-region {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+  gap: 6px;
+}
+
+.sky-palette-region > .sky-stops-label {
+  grid-column: 1 / -1;
+}
+
+.sky-palette .sky-stop-chip {
+  width: 100%;
+  min-width: 0;
+}
+
+.sky-palette .sky-stop-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A saved stop takes two columns: its name and its dots. */
+.sky-palette .sky-saved-chip {
+  grid-column: span 2;
+  justify-content: space-between;
+}
+
+.sky-palette-hint {
+  margin: 0;
+  font-size: 11px;
+}
+
+@media (hover: none) {
+  .sky-palette-hint {
+    display: none;
+  }
+}
+
+.sky-palette-confirm .set-confirm {
+  margin: 0;
+}
+
+/* The corner handle: the intake lane's (SkyLine.css .skl-resize) — two
+   diagonal strokes, the quiet tier's hover and ring. */
+.sky-palette-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  width: 16px;
+  height: 16px;
+  border-bottom-right-radius: 11px;
+  background: linear-gradient(135deg, transparent 0 55%, var(--muted) 55% 62%, transparent 62% 72%, var(--muted) 72% 79%, transparent 79%);
+  cursor: nwse-resize;
+  opacity: 0.7;
+  touch-action: none;
+}
+
+.sky-palette-resize:hover {
+  opacity: 1;
+  background-color: var(--panel-2);
+}
+
+.sky-palette-resize:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

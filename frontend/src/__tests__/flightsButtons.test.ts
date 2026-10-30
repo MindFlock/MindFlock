@@ -71,6 +71,19 @@ describe("every flights button wears a tier", () => {
     });
   }
 
+  it("round 13: the palette's and the catalog's buttons name their tiers", () => {
+    const palette = SRC["components/flights/SkyPalette.tsx"];
+    expect(palette).toContain('className="test-btn sky-palette-all"');
+    const catalog = SRC["components/flights/StopCatalog.tsx"];
+    expect(catalog).toContain('className="test-btn sky-catalog-add"');
+    expect(catalog).toMatch(/className=\{"fl-icon-btn sky-catalog-shelf"/);
+    // ⤢ Float the blocks: the fold handle's quiet tab.
+    expect(SRC["components/flights/StopShelf.tsx"]).toContain('className="sky-shelf-fold sky-shelf-float"');
+    // The ⋯ are the house OverflowMenu (a <summary>, the quiet .vf-menu tier).
+    expect(palette).toContain("<OverflowMenu");
+    expect(catalog).toContain("<OverflowMenu");
+  });
+
   it("the spread chips are the chip tier", () => {
     const shelf = SRC["components/flights/StopShelf.tsx"];
     expect(shelf.match(/className: "sky-stop-chip[^"]*"/g)?.length).toBeGreaterThanOrEqual(3);
@@ -146,6 +159,7 @@ describe("quiet-icon: the house hover and the accent ring", () => {
     ["components/flights/IntakeLane.css", ".sky-lane-toggle"],
     ["components/flights/StopShelf.css", ".sky-shelf-fold"],
     ["components/flights/StopShelf.css", ".sky-stop-chip"],
+    ["components/flights/SkyPalette.css", ".sky-palette-resize"],
     ["components/flights/Sky.css", ".sky-toolbar .fl-btn.sky-tidy"],
     ["components/flights/Sky.css", ".sky-toolbar .sky-zoom-btn"],
   ];
@@ -188,6 +202,7 @@ describe("both themes: accent text holds 4.5:1", () => {
   it("the Session chip is primary-tinted, the rename field the house input", () => {
     const shelf = css("components/flights/StopShelf.css");
     expect(cssRule(shelf, ".sky-stop-chip.sky-session-chip")).toContain("background: rgba(var(--accent-rgb), 0.16)");
-    expect(SRC["components/flights/StopShelf.tsx"]).toContain('className="sky-saved-rename fl-input"');
+    // The field moved to StopCatalog's PlanNameField (the shelf's chips and the catalog's cards share it).
+    expect(SRC["components/flights/StopCatalog.tsx"]).toContain('className="sky-saved-rename fl-input"');
   });
 });

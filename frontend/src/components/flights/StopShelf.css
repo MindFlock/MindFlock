@@ -1,6 +1,7 @@
 /* The shelf at the Sky's foot (StopShelf.tsx): one row, Stops — Blocks (the
    Session chip, the default kinds), Multi-step (the saved stops), then All
-   blocks… (the catalog) — folding to a thin handle. */
+   blocks… (the catalog) — folding to a thin handle. The chips' rules are
+   shared with the floating palette (SkyPalette.css lays them out in a grid). */
 
 .sky-shelf {
   flex: none;
@@ -15,10 +16,17 @@
   height: 4px;
 }
 
-.sky-shelf-fold {
+/* The tabs over the shelf's top edge: the fold handle, and ⤢ Float the blocks
+   (round 13: the shelf can become a palette on the board). */
+.sky-shelf-tabs {
   position: absolute;
   left: 12px;
   top: -25px;
+  display: inline-flex;
+  gap: 4px;
+}
+
+.sky-shelf-fold {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -43,6 +51,11 @@
 .sky-shelf-fold:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+.sky-shelf-fold.sky-shelf-float {
+  padding: 0 8px;
+  font-size: 13px;
 }
 
 /* --- The stops (StopShelf.tsx): its label, then chips scrolling sideways ----- */

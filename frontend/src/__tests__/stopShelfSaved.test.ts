@@ -100,6 +100,14 @@ describe("the saved stops on the shelf", () => {
     expect(tap).toContain('aria-label="Add “Mine” to the focused line"');
   });
 
+  it("round 13 — with onPlace a click puts it on the board instead", () => {
+    const tap = render(createElement(StopShelf, { onPlace() {}, onTackPlan() {} }));
+    expect(tap).toMatch(/<button type="button" class="sky-stop-chip sky-saved-chip" data-plan="p_mine"/);
+    expect(tap).toContain('aria-label="Put “Mine” on the board"');
+    expect(tap).toContain("Click to put it on the board, or drag it onto a line or the sky — right-click for more");
+    expect(tap).not.toContain("to the focused line");
+  });
+
   it("no saved stops (or not loaded yet): no Multi-step region, one divider before All blocks…", () => {
     for (const none of [[], null]) {
       const h = render(createElement(StopShelf, {}), none);
@@ -123,15 +131,17 @@ describe("a saved stop's menu", () => {
     expect(src).toContain('if (e.key !== "ContextMenu" && !(e.shiftKey && e.key === "F10")) return;');
     expect(src).toContain("await resetPlan(plan.id);");
     expect(src).toContain("await deletePlan(deleting.id);");
-    expect(src).toContain("await savePlan({ ...plan, name: c.name });");
+    expect(code("components/flights/StopCatalog.tsx")).toContain("await savePlan({ ...plan, name: c.name });");
     expect(src).toContain("<InlineConfirm");
     expect(src).toContain("<TakeoffDialog plan={takeoff}");
     expect(src).not.toMatch(/\bwindow\.(prompt|alert|confirm)\(|\bprompt\(/);
   });
 
-  it("Rename is a field in the chip", () => {
-    const src = code("components/flights/StopShelf.tsx");
-    expect(src).toMatch(/className="sky-saved-rename fl-input"[\s\S]*?aria-label=\{"Rename “" \+ plan\.name \+ "”"\}/);
+  it("Rename is a field in the chip — the same field a catalog card uses (PlanNameField)", () => {
+    expect(code("components/flights/StopShelf.tsx")).toContain("<PlanNameField plan={plan} plans={plans} onDone={onRenamed} />");
+    const field = code("components/flights/StopCatalog.tsx");
+    expect(field).toMatch(/className="sky-saved-rename fl-input"[\s\S]*?aria-label=\{"Rename “" \+ plan\.name \+ "”"\}/);
+    expect(field).toMatch(/const c = checkRename\(name, plans, plan\.id\);/);
   });
 });
 

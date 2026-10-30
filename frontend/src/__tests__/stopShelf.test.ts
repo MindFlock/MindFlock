@@ -108,7 +108,34 @@ describe("the stops row", () => {
     expect(drag.match(/<button type="button" class="sky-stop-chip[^"]*"/g)).toEqual(['<button type="button" class="sky-stop-chip sky-catalog-chip"']);
     expect(drag).toMatch(/<span class="sky-stop-chip drag-only" data-kind="agent" draggable="true" title="Agent does its thing\nDrag onto a line or the sky — right-click for more"/);
     const src = code("components/flights/StopShelf.tsx");
-    expect(src).toMatch(/onClick=\{\(\) => onTack\(def\.kind\)\}/);
+    expect(src).toMatch(/onClick=\{\(\) => onClick\(def\.kind\)\}/);
+    expect(src).toContain("const clickKind = onPlace ? (kind: string) => onPlace({ kind }) : onTack;");
+  });
+
+  it("round 13 — with onPlace a click PUTS IT ON THE BOARD, never onto the focused line", () => {
+    const html = render(createElement(StopShelf, { onPlace() {}, onTack() {}, onTackPlan() {} }));
+    expect(html).toMatch(/<button type="button" class="sky-stop-chip" data-kind="agent" draggable="true"/);
+    expect(html).toContain('aria-label="Put “Ship” on the board"');
+    expect(html).not.toContain("onto the focused line");
+    expect(html).toContain('title="Ship does its thing\nClick to put it on the board, or drag it onto a line or the sky — right-click for more"');
+    const src = code("components/flights/StopShelf.tsx");
+    // The catalog's Add (and Enter) place too; onTack / onTackPlan stay for the host's drops.
+    expect(src).toMatch(/const add = \(d: CatalogDrop\) => \{\s*setCatalog\(false\);\s*if \(onPlace\) return onPlace\(d\);/);
+    expect(src).toContain("const clickPlan = onPlace ? (plan: FlightPlan) => onPlace({ planId: plan.id }) : onTackPlan;");
+    expect(src).toContain("onAdd={onPlace || onTack || onTackPlan ? add : undefined}");
+    expect(src).toContain("place={place}");
+  });
+
+  it("the fold handle's row: ⤢ Float the blocks (quiet, a tab) when the host can float them", () => {
+    const html = render(createElement(StopShelf, { onPlace() {}, onFloat() {} }));
+    expect(html).toContain(
+      '<span class="sky-shelf-tabs"><button type="button" class="sky-shelf-fold" aria-expanded="true" title="Fold the stops away">Stops ▾</button><button type="button" class="sky-shelf-fold sky-shelf-float" aria-label="Float the blocks"'
+    );
+    expect(render(createElement(StopShelf, { folded: true, onFloat() {} }))).toContain("sky-shelf-float");
+    expect(render(createElement(StopShelf, {}))).not.toContain("sky-shelf-float");
+    expect(code("components/flights/StopShelf.tsx")).toContain("onClick={onFloat}");
+    const css = cssOf("components/flights/StopShelf.css");
+    expect(css).toMatch(/\.sky-shelf-tabs \{\s*position: absolute;\s*left: 12px;\s*top: -25px;/);
   });
 
   it("zero kinds: a muted line that the stop list didn't load", () => {

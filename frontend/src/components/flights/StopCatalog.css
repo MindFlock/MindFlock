@@ -1,22 +1,25 @@
-/* All blocks (StopCatalog.tsx): the shelf's catalog in the app's Modal — the
-   same card as a stop's dialog (StopDialog.css, after #rename-form): a filter,
-   then Blocks and Multi-step, a row per block. */
+/* All blocks (StopCatalog.tsx): the catalog in the app's Modal, sized to the
+   window (≈ 92vw × 86vh) — the head with the filter, then Blocks and
+   Multi-step, each a grid of cards. The card is a stop dialog's (panel,
+   border, radius 12). */
 
 .sky-catalog {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  width: min(560px, calc(100vw - 48px));
-  max-height: 80vh;
+  gap: 12px;
+  width: 92vw;
+  height: 86vh;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
   box-sizing: border-box;
-  padding: 18px 20px 14px;
+  padding: 18px 22px 14px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--panel);
   transition: opacity 0.12s;
 }
 
-/* A row is being dragged: the Modal lets the pointer through to the sky (its
+/* A card is being dragged: the Modal lets the pointer through to the sky (its
    backdrop would take the drop) and fades, so the lines under it show. */
 .modal.sky-catalog-modal.is-dragging {
   background: transparent;
@@ -30,24 +33,28 @@
 .sky-catalog-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
 }
 
 .sky-catalog-head h2 {
-  flex: 1;
+  flex: none;
   margin: 0;
-  font-size: 16px;
+  font-size: 17px;
 }
 
 .sky-catalog-filter.fl-input.fl-input {
-  flex: none;
+  flex: 1;
+  max-width: 420px;
+  margin-right: auto;
 }
 
 .sky-catalog-list {
   display: flex;
+  flex: 1;
   flex-direction: column;
-  gap: 10px;
+  gap: 16px;
   min-height: 0;
+  padding: 2px 2px 12px;
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -55,13 +62,13 @@
 .sky-catalog-section {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 6px;
 }
 
 /* The section's label: tiny and muted, like the shelf's region labels. */
 .sky-catalog-label {
-  margin: 0 0 3px;
-  padding: 0 8px;
+  margin: 0;
+  padding: 0 2px;
   color: var(--fl-ink-muted, var(--muted));
   font-size: 10.5px;
   font-weight: 600;
@@ -69,71 +76,114 @@
   text-transform: uppercase;
 }
 
-.sky-catalog-row {
-  display: flex;
-  align-items: center;
+/* The cards flow in as many columns as the window holds; the arrows read the
+   count back from the laid-out grid. */
+.sky-catalog-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
   gap: 10px;
-  padding: 6px 8px;
-  border: 1px solid transparent;
-  border-radius: 8px;
+}
+
+.sky-catalog-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 10px 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
   cursor: grab;
   user-select: none;
 }
 
-.sky-catalog-row:active {
+.sky-catalog-card:active {
   cursor: grabbing;
 }
 
-/* The row ↑ / ↓ picked (and the one under the pointer): panel-2, as a menu
-   row's hover. */
-.sky-catalog-row.active {
-  border-color: var(--border);
+/* The card the arrows picked (and the one under the pointer): panel-2 and
+   the accent border, as a chip's hover. */
+.sky-catalog-card.active {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
   background: var(--panel-2);
+}
+
+.sky-catalog-card.perch {
+  border-color: color-mix(in srgb, var(--tone-attention) 45%, var(--border));
+}
+
+.sky-catalog-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
 }
 
 .sky-catalog-icon {
   display: inline-grid;
   flex: none;
   place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
   color: var(--fl-ink-accent, var(--accent));
   background: rgba(var(--accent-rgb), 0.14);
 }
 
-.sky-catalog-row.perch .sky-catalog-icon {
+.sky-catalog-card.perch .sky-catalog-icon {
   border-radius: 50%;
   color: var(--tone-attention);
   background: color-mix(in srgb, var(--tone-attention) 16%, transparent);
 }
 
-.sky-catalog-words {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-  gap: 1px;
-}
-
 .sky-catalog-name {
   display: flex;
+  flex: 1;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   color: var(--text);
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
 }
 
-.sky-catalog-summary {
+.sky-catalog-title {
   overflow: hidden;
-  color: var(--muted);
-  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* Rename on a card: the shelf's field (StopShelf.css), as wide as the name. */
+.sky-catalog-name .sky-saved-rename.fl-input.fl-input {
+  flex: 1;
+  width: auto;
+  min-width: 0;
+  height: 26px;
+}
+
+.sky-catalog-name .sky-saved-err {
+  position: absolute;
+  left: 12px;
+  top: 40px;
+  z-index: 1;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--panel);
+}
+
+.sky-catalog-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .sky-catalog-badge {
+  flex: none;
   padding: 0 6px;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -152,43 +202,76 @@
   border-style: dashed;
 }
 
-/* A saved stop's sub-steps: a tiny box per step (a perch's gold). */
-.sky-catalog-boxes {
-  display: inline-flex;
+/* ★ / ☆ — on the shelf (and the floating palette) or not; the ★ in gold. */
+.sky-catalog-shelf.fl-icon-btn {
   flex: none;
+}
+
+.sky-catalog-shelf.on {
+  color: var(--tone-attention);
+}
+
+.sky-catalog-card .vf-menu {
+  flex: none;
+}
+
+/* A saved stop's sub-steps: a box per step joined by a thread, a perch's
+   round and gold. */
+.sky-catalog-boxes {
+  position: relative;
+  display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 2px;
-  width: 26px;
-  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 12px;
+}
+
+.sky-catalog-boxes::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 50%;
+  height: 1px;
+  background: var(--border);
 }
 
 .sky-catalog-boxes i {
-  width: 6px;
-  height: 6px;
-  border-radius: 2px;
+  position: relative;
+  width: 12px;
+  height: 10px;
+  border-radius: 3px;
   background: color-mix(in srgb, var(--accent) 70%, var(--muted));
 }
 
 .sky-catalog-boxes i.perch {
+  width: 10px;
   border-radius: 50%;
   background: var(--tone-attention);
 }
 
 .sky-catalog-more {
+  position: relative;
+  padding: 0 3px;
+  background: inherit;
   color: var(--muted);
-  font-size: 9.5px;
+  font-size: 10px;
 }
 
-/* Add: the secondary tier (.test-btn), shown on the picked row and under the
-   pointer so a long list stays calm. */
+.sky-catalog-card-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: auto;
+}
+
+/* Add: the secondary tier (.test-btn), shown on the picked card and under the
+   pointer so a full grid stays calm. */
 .sky-catalog-add.test-btn {
   flex: none;
   visibility: hidden;
 }
 
-.sky-catalog-row.active .sky-catalog-add,
-.sky-catalog-row:hover .sky-catalog-add {
+.sky-catalog-card.active .sky-catalog-add,
+.sky-catalog-card:hover .sky-catalog-add {
   visibility: visible;
 }
 
@@ -198,12 +281,33 @@
   }
 }
 
+/* Delete's question, on the card itself. */
+.sky-catalog-card .set-confirm {
+  margin: 2px 0 0;
+}
+
 .sky-catalog-empty {
-  margin: 4px 8px;
+  margin: 4px 2px;
   font-size: 12.5px;
 }
 
 .sky-catalog-hint {
   margin: 0;
   font-size: 11px;
+}
+
+/* A phone: the card fills the screen. */
+@media (max-width: 640px) {
+  .sky-catalog {
+    width: 100vw;
+    height: 100vh;
+    max-width: none;
+    max-height: none;
+    padding: 12px;
+    border-radius: 0;
+  }
+
+  .sky-catalog-head h2 {
+    display: none;
+  }
 }

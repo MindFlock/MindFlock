@@ -1,5 +1,5 @@
 /** The shelf at the Sky's foot: ONE row, **Stops** (docs/flights.md "As built:
- * round 12 shelf"), always there, folding to a thin handle. Three regions,
+ * round 12 shelf" and "As built: round 13 palette"), always there, folding to a thin handle. Three regions,
  * each with a tiny label, split by thin dividers:
  *
  *  1. **Blocks**: the **Session** chip — drag it onto empty sky and the
@@ -17,19 +17,25 @@
  *     (yours; confirmed inline).
  *  3. **All blocks…**: opens `StopCatalog` — every kind (the rest of the
  *     registry lives only there) and every saved stop, each row dragged like
- *     its chip, with an Add that goes through the same `onTack` / `onTackPlan`.
+ *     its chip, with an Add that goes where a chip's click goes.
  *
  * Any chip dropped on empty sky becomes stops with no session yet (a grounded
  * line); dropped on a line it is tacked on there — the sky owns the drop.
  * CLICK a kind or a saved stop (or tap it on a phone, where nothing drags) →
- * `onTack(kind)` / `onTackPlan(plan)`: the host tacks it onto the focused
- * line. Without them a chip only drags. */
+ * `onPlace({kind} | {planId})`: the host puts it ON THE BOARD near the shelf
+ * (round 13: nothing lands in a session by itself). Without `onPlace` a click
+ * is `onTack(kind)` / `onTackPlan(plan)` (onto the focused line, as before);
+ * without any of them a chip only drags. The fold handle's ⤢ floats the
+ * blocks (`onFloat`: the host swaps the shelf for SkyPalette).
+ *
+ * The chips, the pick (`useShelfPick`) and a saved stop's menu
+ * (`useSavedActions`) are exported: the floating palette draws the same. */
 
 import { useEffect, useRef, useState, type DragEvent, type JSX, type KeyboardEvent, type MouseEvent } from "react";
 import type { FlightPlan, StepKindDef } from "../../lib/flights";
-import { deletePlan, resetPlan, savePlan } from "../../lib/flightsApi";
+import { deletePlan, resetPlan } from "../../lib/flightsApi";
 import { NEW_SESSION_MIME } from "../../lib/skyLayout";
-import { checkRename, planDots, savedStopOrder } from "../../lib/groundedLines";
+import { planDots, savedStopOrder } from "../../lib/groundedLines";
 import { SHELF_KEY, onShelf, readShelf, savedDragData, shelfKinds, shelfPlans, stopDragData, toggleShelf, type CatalogDrop, type ShelfPick } from "../../lib/stopCatalog";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
@@ -37,7 +43,7 @@ import { useFlightKinds, useFlightPlans } from "../../state/queries";
 import { InlineConfirm } from "../InlineConfirm";
 import { StopIcon } from "./Bird";
 import { kindName } from "./StopParts";
-import { StopCatalog } from "./StopCatalog";
+import { PlanNameField, StopCatalog } from "./StopCatalog";
 import { TakeoffDialog } from "./TakeoffDialog";
 import "./StopMenu.css";
 import "./StopShelf.css";
@@ -60,12 +66,19 @@ function onStopDrag(e: DragEvent, def: StepKindDef) {
   e.dataTransfer.effectAllowed = "copy";
 }
 
-function StopChip({ def, onTack, onMenu }: { def: StepKindDef; onTack?(kind: string): void; onMenu?(def: StepKindDef, x: number, y: number): void }) {
+/** What a click on a chip does, in its title: put it on the board (`place`),
+ * tack it onto the focused line, or nothing (it only drags). */
+const PLACE_HOW = "Click to put it on the board, or drag it onto a line or the sky";
+const clickHow = (click: boolean, place: boolean, tack: string) => (!click ? "Drag onto a line or the sky" : place ? PLACE_HOW : tack);
+
+/** A kind's chip (the shelf, the floating palette). `onClick` with `place`
+ * puts it on the board; without `place` it tacks onto the focused line. */
+export function StopChip({ def, onClick, place = false, onMenu }: { def: StepKindDef; onClick?(kind: string): void; place?: boolean; onMenu?(def: StepKindDef, x: number, y: number): void }) {
   const name = kindName(def);
   const perch = def.actor === "you";
-  const how = onTack ? "Click to tack it onto the focused line, or drag it onto a line or the sky" : "Drag onto a line or the sky";
+  const how = clickHow(!!onClick, place, "Click to tack it onto the focused line, or drag it onto a line or the sky");
   const props = {
-    className: "sky-stop-chip" + (perch ? " perch" : "") + (onTack ? "" : " drag-only"),
+    className: "sky-stop-chip" + (perch ? " perch" : "") + (onClick ? "" : " drag-only"),
     "data-kind": def.kind,
     draggable: true,
     title: (def.summary ? def.summary + "\n" : "") + how + (onMenu ? " — right-click for more" : ""),
@@ -87,8 +100,8 @@ function StopChip({ def, onTack, onMenu }: { def: StepKindDef; onTack?(kind: str
   );
   return (
     <span role="listitem" className="sky-stop-item">
-      {onTack ? (
-        <button type="button" {...props} aria-label={"Tack “" + name + "” onto the focused line"} onClick={() => onTack(def.kind)}>
+      {onClick ? (
+        <button type="button" {...props} aria-label={place ? "Put “" + name + "” on the board" : "Tack “" + name + "” onto the focused line"} onClick={() => onClick(def.kind)}>
           {body}
         </button>
       ) : (
@@ -98,7 +111,8 @@ function StopChip({ def, onTack, onMenu }: { def: StepKindDef; onTack?(kind: str
   );
 }
 
-function SessionChip({ onSession }: { onSession?(): void }) {
+/** The Session chip: drags the new-session type; a click opens the block. */
+export function SessionChip({ onSession }: { onSession?(): void }) {
   const props = {
     className: "sky-stop-chip sky-session-chip" + (onSession ? "" : " drag-only"),
     "data-tour": "flights-newblock",
@@ -191,12 +205,15 @@ function SavedMenu({ label, items, x, y, onPick, onClose }: { label: string; ite
   );
 }
 
-function SavedChip({
+/** A saved stop's chip: its name and a dot per step. `onClick` with `place`
+ * puts it on the board; without `place` it adds to the focused line. */
+export function SavedChip({
   plan,
   plans,
   kinds,
   renaming,
-  onTackPlan,
+  onClick,
+  place = false,
   onMenu,
   onRenamed,
 }: {
@@ -204,40 +221,12 @@ function SavedChip({
   plans: readonly FlightPlan[];
   kinds: readonly StepKindDef[];
   renaming: boolean;
-  onTackPlan?(plan: FlightPlan): void;
+  onClick?(plan: FlightPlan): void;
+  place?: boolean;
   onMenu(plan: FlightPlan, x: number, y: number): void;
   onRenamed(): void;
 }) {
   const { dots, more } = planDots(plan.steps, kinds);
-  const [name, setName] = useState(plan.name);
-  const [err, setErr] = useState("");
-  const done = useRef(false);
-  useEffect(() => {
-    if (!renaming) return;
-    setName(plan.name);
-    setErr("");
-    done.current = false;
-  }, [renaming, plan.name]);
-
-  const commit = async (leaving: boolean) => {
-    if (done.current) return;
-    const c = checkRename(name, plans, plan.id);
-    if (!c.ok) {
-      if (!leaving) return setErr(c.error);
-      done.current = true;
-      toast(c.error + " — kept “" + plan.name + "”");
-      return onRenamed();
-    }
-    done.current = true;
-    onRenamed();
-    if (c.name === plan.name) return;
-    try {
-      await savePlan({ ...plan, name: c.name });
-      toast("Renamed to “" + c.name + "”");
-    } catch (e) {
-      toast("Renaming failed: " + errMsg(e), { error: true });
-    }
-  };
 
   const menuAt = (e: MouseEvent) => {
     e.preventDefault();
@@ -252,36 +241,7 @@ function SavedChip({
 
   const body = (
     <>
-      {renaming ? (
-        <input
-          className="sky-saved-rename fl-input"
-          aria-label={"Rename “" + plan.name + "”"}
-          aria-invalid={!!err}
-          title={err || "Enter saves, Esc cancels"}
-          value={name}
-          autoFocus
-          maxLength={140}
-          onChange={(e) => {
-            setName(e.target.value);
-            setErr("");
-          }}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === "Enter") {
-              e.preventDefault();
-              void commit(false);
-            } else if (e.key === "Escape") {
-              e.preventDefault();
-              done.current = true;
-              onRenamed();
-            }
-          }}
-          onBlur={() => void commit(true)}
-          onClick={(e) => e.stopPropagation()}
-        />
-      ) : (
-        <span className="sky-stop-name">{plan.name}</span>
-      )}
+      {renaming ? <PlanNameField plan={plan} plans={plans} onDone={onRenamed} /> : <span className="sky-stop-name">{plan.name}</span>}
       <span className="sky-saved-dots" aria-hidden="true">
         {dots.map((d, i) => (
           <i key={i} className={d.perch ? "perch" : ""} />
@@ -290,9 +250,9 @@ function SavedChip({
       </span>
     </>
   );
-  const how = onTackPlan ? "Click to add it to the focused line, or drag it onto a line or the sky" : "Drag onto a line or the sky";
+  const how = clickHow(!!onClick, place, "Click to add it to the focused line, or drag it onto a line or the sky");
   const props = {
-    className: "sky-stop-chip sky-saved-chip" + (plan.builtin ? " builtin" : "") + (onTackPlan ? "" : " drag-only") + (renaming ? " is-renaming" : ""),
+    className: "sky-stop-chip sky-saved-chip" + (plan.builtin ? " builtin" : "") + (onClick ? "" : " drag-only") + (renaming ? " is-renaming" : ""),
     "data-plan": plan.id,
     draggable: !renaming,
     title: plan.steps.map((s) => s.title).join(" → ") + "\n" + how + " — right-click for more",
@@ -302,82 +262,76 @@ function SavedChip({
   };
   return (
     <span role="listitem" className="sky-stop-item">
-      {onTackPlan && !renaming ? (
-        <button type="button" {...props} aria-label={"Add “" + plan.name + "” to the focused line"} onClick={() => onTackPlan(plan)}>
+      {onClick && !renaming ? (
+        <button type="button" {...props} aria-label={place ? "Put “" + plan.name + "” on the board" : "Add “" + plan.name + "” to the focused line"} onClick={() => onClick(plan)}>
           {body}
         </button>
       ) : (
         <span {...props}>{body}</span>
       )}
-      {renaming && err && (
-        <span className="sky-saved-err" role="alert">
-          {err}
-        </span>
-      )}
     </span>
   );
 }
 
-export interface StopShelfProps {
-  onTack?(kind: string): void;
-  onTackPlan?(plan: FlightPlan): void;
-  /** The Session chip pressed: the new-session block in the sky's middle. */
-  onSession?(): void;
-  /** Folded to its handle (the host remembers it). */
-  folded?: boolean;
-  onFold?(folded: boolean): void;
-  /** Round 13 — a diagram tool's manners: a chip click / the catalog's Add
-   * PLACES the block on the board (a grounded line near the palette) instead
-   * of tacking it onto the focused line. When given, it replaces the
-   * tack-on-click paths; `onTack` / `onTackPlan` stay for the drops on a line. */
-  onPlace?(drop: CatalogDrop): void;
-  /** The shelf's "Float the blocks" (the host switches `mf_sky_palette`). */
-  onFloat?(): void;
+// --- The pick, and a saved stop's menu, shared by the shelf and the palette ---
+
+/** Fired on window with the new pick, so the shelf, the floating palette and
+ * the catalog they open always agree (another tab hears `storage`). */
+const SHELF_EVENT = "mf:sky-shelf";
+
+function storedShelf(): ShelfPick {
+  try {
+    return readShelf(localStorage.getItem(SHELF_KEY));
+  } catch {
+    return readShelf(null);
+  }
 }
 
-export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold }: StopShelfProps): JSX.Element {
-  const kinds = useFlightKinds().data;
-  const plans = useFlightPlans().data;
-  // What sits on the shelf is the owner's pick (per device): the default
-  // blocks to begin with, no multi-step block; the catalog's ★ adds, a chip's
-  // "Take off the shelf" removes.
-  const [shelf, setShelf] = useState<ShelfPick>(() => {
+/** What sits on the shelf (and in the floating palette): the owner's pick,
+ * per device (`mf_sky_shelf`) — the default blocks to begin with, no
+ * multi-step block; the catalog's ★ adds, a chip's "Take off the shelf"
+ * removes. */
+export function useShelfPick(): [ShelfPick, (next: (p: ShelfPick) => ShelfPick) => void] {
+  const [shelf, setShelf] = useState<ShelfPick>(storedShelf);
+  const now = useRef(shelf);
+  now.current = shelf;
+  useEffect(() => {
+    const heard = (e: Event) => setShelf((e as CustomEvent<ShelfPick>).detail);
+    const other = (e: StorageEvent) => {
+      if (e.key === SHELF_KEY) setShelf(storedShelf());
+    };
+    window.addEventListener(SHELF_EVENT, heard);
+    window.addEventListener("storage", other);
+    return () => {
+      window.removeEventListener(SHELF_EVENT, heard);
+      window.removeEventListener("storage", other);
+    };
+  }, []);
+  const change = (next: (p: ShelfPick) => ShelfPick) => {
+    const n = next(now.current);
+    now.current = n;
     try {
-      return readShelf(localStorage.getItem(SHELF_KEY));
+      localStorage.setItem(SHELF_KEY, JSON.stringify(n));
     } catch {
-      return readShelf(null);
+      /* a private window: the pick lives for the session */
     }
-  });
-  const changeShelf = (next: (p: ShelfPick) => ShelfPick) =>
-    setShelf((p) => {
-      const n = next(p);
-      try {
-        localStorage.setItem(SHELF_KEY, JSON.stringify(n));
-      } catch {
-        /* a private window: the pick lives for the session */
-      }
-      return n;
-    });
-  const blocks = shelfKinds(shelf, kinds || []);
-  const allSaved = savedStopOrder(plans || []);
-  const saved = shelfPlans(shelf, allSaved);
+    setShelf(n);
+    window.dispatchEvent(new CustomEvent(SHELF_EVENT, { detail: n }));
+  };
+  return [shelf, change];
+}
+
+/** A saved stop's right-click menu and a kind's (Take off the shelf), Rename
+ * in the chip, Takes off…, Reset, and Delete confirmed inline — the state and
+ * what they draw (`confirm` goes where the surface wants the question,
+ * `overlays` anywhere). */
+export function useSavedActions(changeShelf: (next: (p: ShelfPick) => ShelfPick) => void) {
   const [menu, setMenu] = useState<{ plan: FlightPlan; x: number; y: number } | null>(null);
   const [kindMenu, setKindMenu] = useState<{ def: StepKindDef; x: number; y: number } | null>(null);
   const [renaming, setRenaming] = useState("");
   const [takeoff, setTakeoff] = useState<FlightPlan | null>(null);
   const [deleting, setDeleting] = useState<FlightPlan | null>(null);
   const [busy, setBusy] = useState(false);
-  const [catalog, setCatalog] = useState(false);
-
-  /** The catalog's Add: through the same props as a chip's click. */
-  const add = (d: CatalogDrop) => {
-    setCatalog(false);
-    if ("kind" in d) onTack?.(d.kind);
-    else {
-      const plan = allSaved.find((p) => p.id === d.planId);
-      if (plan) onTackPlan?.(plan);
-    }
-  };
 
   const pick = async (key: MenuKey) => {
     const plan = menu?.plan;
@@ -411,17 +365,108 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
     }
   };
 
+  const confirm = deleting ? (
+    <InlineConfirm
+      title={"Delete “" + deleting.name + "”?"}
+      body="It leaves the shelf. Stops already on the board stay."
+      confirmLabel="Delete"
+      busy={busy}
+      onConfirm={() => void remove()}
+      onCancel={() => setDeleting(null)}
+    />
+  ) : null;
+
+  const overlays = (
+    <>
+      {menu && <SavedMenu label={menu.plan.name} items={savedMenuItems(menu.plan)} x={menu.x} y={menu.y} onPick={(k) => void pick(k)} onClose={() => setMenu(null)} />}
+      {kindMenu && (
+        <SavedMenu
+          label={kindName(kindMenu.def)}
+          items={[{ key: "unshelve", label: "Take off the shelf" }]}
+          x={kindMenu.x}
+          y={kindMenu.y}
+          onPick={() => {
+            changeShelf((p) => toggleShelf(p, { kind: kindMenu.def.kind }));
+            setKindMenu(null);
+          }}
+          onClose={() => setKindMenu(null)}
+        />
+      )}
+      {takeoff && <TakeoffDialog plan={takeoff} onClose={() => setTakeoff(null)} />}
+    </>
+  );
+
+  return {
+    renaming,
+    doneRenaming: () => setRenaming(""),
+    openMenu: (plan: FlightPlan, x: number, y: number) => setMenu({ plan, x, y }),
+    openKindMenu: (def: StepKindDef, x: number, y: number) => setKindMenu({ def, x, y }),
+    confirm,
+    overlays,
+  };
+}
+
+export interface StopShelfProps {
+  onTack?(kind: string): void;
+  onTackPlan?(plan: FlightPlan): void;
+  /** The Session chip pressed: the new-session block in the sky's middle. */
+  onSession?(): void;
+  /** Folded to its handle (the host remembers it). */
+  folded?: boolean;
+  onFold?(folded: boolean): void;
+  /** Round 13 — a diagram tool's manners: a chip click / the catalog's Add
+   * PLACES the block on the board (a grounded line near the palette) instead
+   * of tacking it onto the focused line. When given, it replaces the
+   * tack-on-click paths; `onTack` / `onTackPlan` stay for the drops on a line. */
+  onPlace?(drop: CatalogDrop): void;
+  /** The shelf's "Float the blocks" (the host switches `mf_sky_palette`). */
+  onFloat?(): void;
+}
+
+export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPlace, onFloat }: StopShelfProps): JSX.Element {
+  const kinds = useFlightKinds().data;
+  const plans = useFlightPlans().data;
+  const [shelf, changeShelf] = useShelfPick();
+  const blocks = shelfKinds(shelf, kinds || []);
+  const allSaved = savedStopOrder(plans || []);
+  const saved = shelfPlans(shelf, allSaved);
+  const acts = useSavedActions(changeShelf);
+  const [catalog, setCatalog] = useState(false);
+  // A click: onto the board when the host places (round 13), else tacked
+  // onto the focused line (the pane's Flight tab, and round 12's sky).
+  const place = !!onPlace;
+  const clickKind = onPlace ? (kind: string) => onPlace({ kind }) : onTack;
+  const clickPlan = onPlace ? (plan: FlightPlan) => onPlace({ planId: plan.id }) : onTackPlan;
+
+  /** The catalog's Add: through the same props as a chip's click. */
+  const add = (d: CatalogDrop) => {
+    setCatalog(false);
+    if (onPlace) return onPlace(d);
+    if ("kind" in d) onTack?.(d.kind);
+    else {
+      const plan = allSaved.find((p) => p.id === d.planId);
+      if (plan) onTackPlan?.(plan);
+    }
+  };
+
   return (
     <section className={"sky-shelf" + (folded ? " folded" : " open")} data-tour="sky-shelf" aria-label="The shelf of stops">
-      <button
-        type="button"
-        className="sky-shelf-fold"
-        aria-expanded={!folded}
-        title={folded ? "Show the stops" : "Fold the stops away"}
-        onClick={() => onFold?.(!folded)}
-      >
-        Stops {folded ? "▴" : "▾"}
-      </button>
+      <span className="sky-shelf-tabs">
+        <button
+          type="button"
+          className="sky-shelf-fold"
+          aria-expanded={!folded}
+          title={folded ? "Show the stops" : "Fold the stops away"}
+          onClick={() => onFold?.(!folded)}
+        >
+          Stops {folded ? "▴" : "▾"}
+        </button>
+        {onFloat && (
+          <button type="button" className="sky-shelf-fold sky-shelf-float" aria-label="Float the blocks" title="Float the blocks — a palette on the board you can move and size" onClick={onFloat}>
+            ⤢
+          </button>
+        )}
+      </span>
       {!folded && (
         <div className="sky-stops" role="group" aria-label="Stops">
           <span className="sky-stops-head">
@@ -437,7 +482,7 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
                 </span>
                 <SessionChip onSession={onSession} />
                 {blocks.map((k) => (
-                  <StopChip key={k.kind} def={k} onTack={onTack} onMenu={(def, x, y) => setKindMenu({ def, x, y })} />
+                  <StopChip key={k.kind} def={k} onClick={clickKind} place={place} onMenu={acts.openKindMenu} />
                 ))}
               </div>
               {saved.length > 0 && (
@@ -453,10 +498,11 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
                         plan={p}
                         plans={allSaved}
                         kinds={kinds || []}
-                        renaming={renaming === p.id}
-                        onTackPlan={onTackPlan}
-                        onMenu={(plan, x, y) => setMenu({ plan, x, y })}
-                        onRenamed={() => setRenaming("")}
+                        renaming={acts.renaming === p.id}
+                        onClick={clickPlan}
+                        place={place}
+                        onMenu={acts.openMenu}
+                        onRenamed={acts.doneRenaming}
                       />
                     ))}
                   </div>
@@ -481,43 +527,19 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
           )}
         </div>
       )}
-      {deleting && (
-        <div className="sky-stops-confirm">
-          <InlineConfirm
-            title={"Delete “" + deleting.name + "”?"}
-            body="It leaves the shelf. Stops already on the board stay."
-            confirmLabel="Delete"
-            busy={busy}
-            onConfirm={() => void remove()}
-            onCancel={() => setDeleting(null)}
-          />
-        </div>
-      )}
-      {menu && <SavedMenu label={menu.plan.name} items={savedMenuItems(menu.plan)} x={menu.x} y={menu.y} onPick={(k) => void pick(k)} onClose={() => setMenu(null)} />}
-      {kindMenu && (
-        <SavedMenu
-          label={kindName(kindMenu.def)}
-          items={[{ key: "unshelve", label: "Take off the shelf" }]}
-          x={kindMenu.x}
-          y={kindMenu.y}
-          onPick={() => {
-            changeShelf((p) => toggleShelf(p, { kind: kindMenu.def.kind }));
-            setKindMenu(null);
-          }}
-          onClose={() => setKindMenu(null)}
-        />
-      )}
+      {acts.confirm && <div className="sky-stops-confirm">{acts.confirm}</div>}
+      {acts.overlays}
       {catalog && (
         <StopCatalog
           kinds={kinds || []}
           plans={allSaved}
-          onAdd={onTack || onTackPlan ? add : undefined}
+          onAdd={onPlace || onTack || onTackPlan ? add : undefined}
+          place={place}
           onClose={() => setCatalog(false)}
           shelf={(d) => onShelf(shelf, d)}
           onShelfToggle={(d) => changeShelf((p) => toggleShelf(p, d))}
         />
       )}
-      {takeoff && <TakeoffDialog plan={takeoff} onClose={() => setTakeoff(null)} />}
     </section>
   );
 }
