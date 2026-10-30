@@ -65,6 +65,9 @@ import {
   ungroupStops,
 } from "../../lib/flightsApi";
 import { groupHaltStep, undoPayload, type StopDrop } from "../../lib/stopEditing";
+import { pushUndo, takeUndo } from "../../lib/skyUndo";
+import { removalNeedsAsk } from "../../lib/skySelect";
+import { InlineConfirm } from "../InlineConfirm";
 import { errMsg } from "../../lib/format";
 import type { FlywayCanvasProps } from "./FlywayCanvas";
 import { currentNodeId, liveBoxParts, useCancelAsk } from "./FlightStrip";
@@ -83,6 +86,18 @@ export interface SessionLineOpts {
   family?: boolean;
   /** A parent / child box pressed: go to that session. */
   onSession(title: string): void;
+  /** The sky (round 14): a stop the flight is at while it runs asks before
+   * it comes off (`removeAsk`, drawn by the line); everything else goes at
+   * once. Off (the pane's Flight tab): every stop goes at once, as before. */
+  askRunning?: boolean;
+}
+
+/** The flight's step indexes a box stands for: a stop its own, a group all
+ * of its sub-steps. */
+export function nodeIndexes(n: Pick<DiagramNode, "kind" | "index" | "group">): number[] {
+  if (n.index === undefined) return [];
+  if (n.kind !== "group") return [n.index];
+  return Array.from({ length: n.group?.total || 0 }, (_, k) => n.index! + k);
 }
 
 /** How many workers a Split's `prompts` name (one per non-empty line). */
@@ -307,14 +322,22 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     const wasHere = index === flight.cursor;
     const next = flight.steps[index + 1]?.title;
     if (!(await dropStop(id, step.id))) return false;
+    // One undo, two roads: the toast's button and Ctrl+Z in the sky (lib/skyUndo).
+    const entry = pushUndo({
+      label: "Remove “" + step.title + "”",
+      undo: () => {
+        const now = latest.current?.id === id ? latest.current : null;
+        const back = undoPayload(step, index, now);
+        return tackOn(id, back.step, back.at);
+      },
+    });
     toast(removedToast(step.title, wasHere, next), {
       action: {
         label: "Undo",
         ariaLabel: "Undo: put “" + step.title + "” back on the line",
+        // The same entry Ctrl+Z pops: whichever comes first runs it.
         onClick: () => {
-          const now = latest.current?.id === id ? latest.current : null;
-          const back = undoPayload(step, index, now);
-          void tackOn(id, back.step, back.at);
+          if (takeUndo(entry)) void entry.undo();
         },
       },
     });
@@ -331,14 +354,21 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     const wasHere = flight.cursor >= first && flight.cursor < first + g.total;
     const next = flight.steps[first + g.total]?.title;
     if (!(await dropGroup(id, g.steps[0].id))) return false;
+    const entry = pushUndo({
+      label: "Remove “" + g.name + "”",
+      undo: () => {
+        const now = latest.current?.id === id ? latest.current : null;
+        const back = undoPayload(g.steps[0], first, now);
+        return tackOnSteps(id, g.steps, back.at, g.name);
+      },
+    });
     toast(removedToast(g.name, wasHere, next), {
       action: {
         label: "Undo",
         ariaLabel: "Undo: put “" + g.name + "” back on the line",
+        // The same entry Ctrl+Z pops: whichever comes first runs it.
         onClick: () => {
-          const now = latest.current?.id === id ? latest.current : null;
-          const back = undoPayload(g.steps[0], first, now);
-          void tackOnSteps(id, g.steps, back.at, g.name);
+          if (takeUndo(entry)) void entry.undo();
         },
       },
     });
@@ -349,6 +379,32 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     if (n.kind === "group") return removeGroup(n);
     return n.step && n.index !== undefined ? removeStop(n.step, n.index) : false;
   };
+
+  // Delete / the ⋯ / 🗑 on the sky: at once, unless the flight is in the air
+  // at this very stop — then the line asks first (lib/skySelect
+  // `removalNeedsAsk`).
+  const [removeAsk, setRemoveAsk] = useState<DiagramNode | null>(null);
+  const requestRemove = (n: DiagramNode) => {
+    if (opts.askRunning && removalNeedsAsk({ kind: "stops", indexes: nodeIndexes(n), flight })) setRemoveAsk(n);
+    else void removeNode(n);
+  };
+  const askName = removeAsk ? (removeAsk.kind === "group" ? removeAsk.group?.name : removeAsk.step?.title) || "this stop" : "";
+  const removeAskNode: ReactNode = removeAsk ? (
+    <div className="skl-close-confirm skl-remove-confirm" data-no-drag>
+      <InlineConfirm
+        title={"Remove “" + askName + "”?"}
+        body={"The flight is at it right now: it pauses before what follows. Undo puts it back."}
+        confirmLabel="Remove"
+        busy={busy}
+        onConfirm={() => {
+          const n = removeAsk;
+          setRemoveAsk(null);
+          void act(() => removeNode(n));
+        }}
+        onCancel={() => setRemoveAsk(null)}
+      />
+    </div>
+  ) : null;
 
   // "+ Join" on a Split: a Join right after it, one click.
   const joinDef = kindOf.get("join");
@@ -440,7 +496,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
       else if (n.session && n.session !== title) opts.onSession(n.session);
     },
     onInsert: flight ? (at) => setPaletteAt(paletteAt === at ? null : at) : undefined,
-    onRemove: flight ? (n) => void removeNode(own(n)) : undefined,
+    onRemove: flight ? (n) => requestRemove(own(n)) : undefined,
     // Indexes among the line's stops are the flight's (drawnCanvas maps the
     // canvas's places onto them).
     onMove: flight
@@ -636,6 +692,8 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     palette,
     /** The open stop's dialog (StopDialog), or null. */
     inspector,
+    /** Asking before the stop the flight is at comes off (`askRunning`), or null. */
+    removeAsk: removeAskNode,
     cancel,
   };
 }

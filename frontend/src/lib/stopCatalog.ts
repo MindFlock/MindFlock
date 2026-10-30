@@ -134,7 +134,7 @@ export function shelfPlans<P extends Pick<FlightPlan, "id">>(pick: ShelfPick, pl
   return plans.filter((p) => pick.plans.includes(p.id));
 }
 
-// --- The big catalog's cards (round 13) -------------------------------------
+// --- The catalog's cards (round 13; the palette's too since round 14) ---------------
 
 /** A kind's card: its icon, name, a robot / you badge, its summary. */
 export interface KindCard<K> {
@@ -214,13 +214,15 @@ export function gridMove(at: number, key: string, sizes: readonly number[], cols
  * built-in's depth cut (`builtin:ticket@push`) is virtual and can't be edited. */
 export const renamable = (plan: Pick<FlightPlan, "id">): boolean => !/^builtin:[a-z]+@/.test(plan.id);
 
-export type CardMenuKey = "rename" | "shelf" | "reset" | "delete";
+export type CardMenuKey = "rename" | "takeoff" | "shelf" | "reset" | "delete";
 
-/** A saved-stop card's ⋯: Rename (when the server allows it), On the shelf
+/** A saved-stop card's ⋯: Rename (when the server allows it), Takes off…
+ * (the shelf chip's, so the palette alone still reaches it), On the shelf
  * (★ when it is, ☆ when not — a toggle), then Reset to default (a built-in) or Delete (yours). */
 export function cardMenu(plan: Pick<FlightPlan, "id" | "builtin">, shelved: boolean): Array<{ key: CardMenuKey; label: string; danger?: boolean }> {
   return [
     ...(renamable(plan) ? [{ key: "rename" as const, label: "Rename" }] : []),
+    { key: "takeoff", label: "Takes off…" },
     { key: "shelf", label: (shelved ? "★" : "☆") + " On the shelf" },
     plan.builtin ? { key: "reset", label: "Reset to default" } : { key: "delete", label: "Delete", danger: true },
   ];

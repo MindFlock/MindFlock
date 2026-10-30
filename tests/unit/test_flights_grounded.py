@@ -331,3 +331,23 @@ def test_routes_ground_list_attach_delete(engine):
     r = client.post("/api/flights/%s/attach" % f["id"], json={"title": "sess"})
     assert (r.status_code, r.json()["error"]) == (409, "not_grounded")
     assert client.delete("/api/flights/" + f["id"]).status_code == 409
+
+
+def test_an_incomplete_block_may_sit_on_the_ground_but_not_take_off():
+    """A Split with no prompts is fine on the board (the owner fills it in
+    later); attaching refuses it by field (400 bad_step) instead."""
+    import copy as _copy
+
+    from backend.web.core import flights as F
+
+    f = F.ground(None, [{"kind": "split", "title": "Fan out", "config": {}}], "")
+    assert f["state"] == "grounded" and f["steps"][0]["kind"] == "split"
+    # The same block on a flight in the air is refused as before.
+    live = _copy.deepcopy(f)
+    live["state"] = "running"
+    with pytest.raises(F.PlanError) as err:
+        F.op_add_step(live, {"kind": "split", "title": "x", "config": {}}, now=1.0)
+    assert err.value.field.endswith(".prompts")
+    with pytest.raises(F.PlanError) as err2:
+        F.validate_for_takeoff(f)
+    assert err2.value.field == "steps[0].config.prompts"

@@ -36034,7 +36034,7 @@ function extActivationError(extId) {
 }
 //#endregion
 //#region src/components/Modal.tsx
-var stack = [];
+var stack$1 = [];
 var MODAL_OPEN_EVENT = "mf:modal-open";
 function backdropPress(onClose) {
 	return (e) => {
@@ -36043,7 +36043,7 @@ function backdropPress(onClose) {
 }
 function modalEscape(token, e, p) {
 	if (e.key !== "Escape" || e.defaultPrevented) return false;
-	if (stack[stack.length - 1] !== token) return false;
+	if (stack$1[stack$1.length - 1] !== token) return false;
 	const spent = p.onEscape?.(e) === true;
 	if (!spent && p.closeOnEscape === false) return false;
 	e.preventDefault();
@@ -36052,10 +36052,10 @@ function modalEscape(token, e, p) {
 	return true;
 }
 function pushModal(token) {
-	stack.push(token);
+	stack$1.push(token);
 	return () => {
-		const i = stack.lastIndexOf(token);
-		if (i >= 0) stack.splice(i, 1);
+		const i = stack$1.lastIndexOf(token);
+		if (i >= 0) stack$1.splice(i, 1);
 	};
 }
 function Modal({ onClose, onEscape, closeOnBackdrop = true, closeOnEscape = true, escapeCapture = false, portal = false, className, children, ...rest }) {
@@ -51566,7 +51566,7 @@ var EMPTY_CHAT = {
 };
 var CHAT_POLL_MS = 15e3;
 var CHAT_MAX = 2e3;
-function seq(id) {
+function seq$1(id) {
 	return Number(String(id || "").replace(/^c/, "")) || 0;
 }
 var peerRows = {};
@@ -51669,7 +51669,7 @@ function mergeMessages(prev, incoming) {
 		added
 	};
 	return {
-		list: [...prev, ...added].sort((a, b) => seq(a.id) - seq(b.id)),
+		list: [...prev, ...added].sort((a, b) => seq$1(a.id) - seq$1(b.id)),
 		added
 	};
 }
@@ -80289,6 +80289,21 @@ var PALETTE_MAX = {
 };
 var paletteFrame$1 = (stored) => objectFrame(stored, PALETTE_MIN, PALETTE_MAX);
 var PLACE_GAP = 24;
+function catalogFrame(view, screen, z, size, pad = 16) {
+	const k = z > 0 ? z : 1;
+	const m = pad / k;
+	const fit = (want, room, lo, hi) => Math.round(Math.min(hi, Math.max(lo, Math.min(want, room))));
+	const w = size ? size.w : fit(screen.w * .6 / k, view.w - 2 * m, PALETTE_MIN.w, PALETTE_MAX.w);
+	const h = size ? size.h : fit(screen.h * .7 / k, view.h - 2 * m, PALETTE_MIN.h, PALETTE_MAX.h);
+	const x = Math.max(view.x + m, Math.min(view.x + view.w / 2 + PLACE_GAP, view.x + view.w - m - w));
+	const y = Math.max(view.y + m, view.y + (view.h - h) / 2);
+	return {
+		x: Math.round(x),
+		y: Math.round(y),
+		w,
+		h
+	};
+}
 function spotNear(want, taken, size, within) {
 	const step = PLACE_GAP;
 	const free = (x, y) => !taken.some((t) => hits({
@@ -83039,6 +83054,269 @@ function DescribeField({ want = "step", taken, onStops, placeholder = "Describe 
 	});
 }
 //#endregion
+//#region src/lib/skyUndo.ts
+var UNDO_MAX = 20;
+var UNDO_TTL_MS = 6e5;
+var stack = [];
+var seq = 0;
+var live = (e, now) => now - e.at < UNDO_TTL_MS && (!e.valid || e.valid());
+function prune(now) {
+	stack = stack.filter((e) => live(e, now));
+}
+function pushUndo(input, now = Date.now()) {
+	const e = {
+		...input,
+		id: ++seq,
+		at: now
+	};
+	prune(now);
+	stack.push(e);
+	if (stack.length > UNDO_MAX) stack = stack.slice(stack.length - UNDO_MAX);
+	return e;
+}
+function popUndo(now = Date.now()) {
+	prune(now);
+	return stack.pop() || null;
+}
+function takeUndo(entry, now = Date.now()) {
+	const i = stack.findIndex((e) => e.id === entry.id);
+	if (i < 0) return false;
+	const [e] = stack.splice(i, 1);
+	return live(e, now);
+}
+function undoAction(entry, ariaLabel) {
+	return {
+		label: "Undo",
+		...ariaLabel ? { ariaLabel } : {},
+		onClick: () => {
+			if (takeUndo(entry)) entry.undo();
+		}
+	};
+}
+//#endregion
+//#region src/lib/skySelect.ts
+var NO_SELECTION = {
+	lines: /* @__PURE__ */ new Set(),
+	stops: /* @__PURE__ */ new Map()
+};
+var WHOLE_LINE = .5;
+var MARQUEE_MIN = 4;
+function rectFrom(a, b) {
+	return {
+		x: Math.min(a.x, b.x),
+		y: Math.min(a.y, b.y),
+		w: Math.abs(a.x - b.x),
+		h: Math.abs(a.y - b.y)
+	};
+}
+function overlapArea(a, b) {
+	const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+	const h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+	return w > 0 && h > 0 ? w * h : 0;
+}
+var overlaps = (a, b) => overlapArea(a, b) > 0;
+function lineTouched(m, l) {
+	if (l.heads.some((h) => overlaps(m, h))) return true;
+	const area = l.rect.w * l.rect.h;
+	return area > 0 && overlapArea(m, l.rect) >= area * WHOLE_LINE;
+}
+var isStopNode = (id) => id.startsWith("stop:") || id.startsWith("group:");
+function select(m, items) {
+	const whole = new Set(items.lines.filter((l) => lineTouched(m, l)).map((l) => l.id));
+	const stops = /* @__PURE__ */ new Map();
+	for (const s of items.stops) {
+		if (!isStopNode(s.node) || !overlaps(m, s.rect)) continue;
+		const set = stops.get(s.line) || /* @__PURE__ */ new Set();
+		set.add(s.node);
+		stops.set(s.line, set);
+	}
+	if (!whole.size && stops.size === 1) return {
+		lines: /* @__PURE__ */ new Set(),
+		stops
+	};
+	for (const id of stops.keys()) whole.add(id);
+	return {
+		lines: whole,
+		stops: /* @__PURE__ */ new Map()
+	};
+}
+function addSelection(a, b) {
+	if (!a.lines.size && !b.lines.size) {
+		if ((/* @__PURE__ */ new Set([...a.stops.keys(), ...b.stops.keys()])).size <= 1) {
+			const out = /* @__PURE__ */ new Map();
+			for (const [line, set] of [...a.stops, ...b.stops]) out.set(line, /* @__PURE__ */ new Set([...out.get(line) || [], ...set]));
+			return {
+				lines: /* @__PURE__ */ new Set(),
+				stops: out
+			};
+		}
+	}
+	return {
+		lines: /* @__PURE__ */ new Set([
+			...a.lines,
+			...a.stops.keys(),
+			...b.lines,
+			...b.stops.keys()
+		]),
+		stops: /* @__PURE__ */ new Map()
+	};
+}
+var selectLines = (ids) => ({
+	lines: new Set(ids),
+	stops: /* @__PURE__ */ new Map()
+});
+function toggleLine(s, id) {
+	const lines = /* @__PURE__ */ new Set([...s.lines, ...s.stops.keys()]);
+	if (s.lines.has(id)) lines.delete(id);
+	else lines.add(id);
+	return {
+		lines,
+		stops: /* @__PURE__ */ new Map()
+	};
+}
+function toggleStop(s, line, node) {
+	const mine = s.stops.size === 1 && s.stops.has(line) && !s.lines.size ? new Set(s.stops.get(line)) : /* @__PURE__ */ new Set();
+	if (mine.has(node)) mine.delete(node);
+	else mine.add(node);
+	if (!mine.size) return NO_SELECTION;
+	return {
+		lines: /* @__PURE__ */ new Set(),
+		stops: /* @__PURE__ */ new Map([[line, mine]])
+	};
+}
+function pruneSelection(s, shown) {
+	if (![...s.lines, ...s.stops.keys()].some((id) => !shown.has(id))) return s;
+	return {
+		lines: new Set([...s.lines].filter((id) => shown.has(id))),
+		stops: new Map([...s.stops].filter(([id]) => shown.has(id)))
+	};
+}
+var selectionEmpty = (s) => !s.lines.size && !s.stops.size;
+function stopSelection(s) {
+	const first = [...s.stops][0];
+	return first && first[1].size ? {
+		line: first[0],
+		nodes: [...first[1]]
+	} : null;
+}
+function stepIndexesOf(node, steps) {
+	if (node.startsWith("stop:")) {
+		const id = node.slice(5);
+		const i = steps.findIndex((s, k) => (s.id || "i" + k) === id);
+		return i < 0 ? [] : [i];
+	}
+	if (!node.startsWith("group:")) return [];
+	const rest = node.slice(6);
+	const at = rest.lastIndexOf("@");
+	const gid = at >= 0 ? rest.slice(0, at) : rest;
+	const from = at >= 0 ? Number(rest.slice(at + 1)) : steps.findIndex((s) => s.group?.id === gid);
+	if (!Number.isInteger(from) || from < 0 || steps[from]?.group?.id !== gid) return [];
+	const out = [];
+	for (let i = from; i < steps.length && steps[i].group?.id === gid; i++) out.push(i);
+	return out;
+}
+function selectedIndexes(nodes, steps) {
+	const all = /* @__PURE__ */ new Set();
+	for (const n of nodes) for (const i of stepIndexesOf(n, steps)) all.add(i);
+	return [...all].sort((a, b) => a - b);
+}
+function consecutive(indexes) {
+	const s = [...new Set(indexes)].sort((a, b) => a - b);
+	return s.length > 0 && s[s.length - 1] - s[0] === s.length - 1;
+}
+function screenToPlane(cam, r) {
+	const z = cam.z || 1;
+	return {
+		x: (r.x - cam.x) / z,
+		y: (r.y - cam.y) / z,
+		w: r.w / z,
+		h: r.h / z
+	};
+}
+function planeToScreen(cam, r) {
+	return {
+		x: cam.x + r.x * cam.z,
+		y: cam.y + r.y * cam.z,
+		w: r.w * cam.z,
+		h: r.h * cam.z
+	};
+}
+var SKY_TOOLS = ["drag", "click"];
+var SKY_TOOL_KEY = "mf_sky_tool";
+function gestureFor(tool, target, mods = {}) {
+	if (mods.space) return "pan";
+	if (target === "control") return "none";
+	if (tool === "click") return mods.shift && !mods.touch ? "marquee" : "pan";
+	if (target === "ground") return mods.touch ? "pan" : "marquee";
+	return target === "line" ? "move-line" : "select";
+}
+function loadSkyTool(store = localStore()) {
+	try {
+		return store?.getItem(SKY_TOOL_KEY) === "click" ? "click" : "drag";
+	} catch {
+		return "drag";
+	}
+}
+function saveSkyTool(tool, store = localStore()) {
+	try {
+		store?.setItem(SKY_TOOL_KEY, tool);
+	} catch {}
+}
+function localStore() {
+	try {
+		return typeof localStorage === "undefined" ? null : localStorage;
+	} catch {
+		return null;
+	}
+}
+var deletableNode = (node) => isStopNode(node) || /^(session|child|branch):./.test(node);
+var nodeSession = (node) => {
+	const m = /^(session|child|branch):(.+)$/.exec(node);
+	return m ? m[2] : "";
+};
+function deleteFor(selection, focus, selectedBox) {
+	if (!selectionEmpty(selection)) return { kind: "selection" };
+	const at = focus || selectedBox;
+	if (!at) return { kind: "keymap" };
+	if (at.line === "intake") return { kind: "swallow" };
+	if (!at.node) return {
+		kind: "line",
+		line: at.line
+	};
+	return deletableNode(at.node) ? {
+		kind: "box",
+		line: at.line,
+		node: at.node
+	} : { kind: "swallow" };
+}
+function nodeById(nodes, id) {
+	for (const n of nodes) {
+		if (n.id === id) return n;
+		const sub = n.group?.nodes.find((s) => s.id === id);
+		if (sub) return sub;
+	}
+	return null;
+}
+var removableBox = (n) => !!n && (n.kind === "stop" || n.kind === "group") && n.editable !== false;
+function mergeTargetAt(point, lines, except = "") {
+	for (let i = lines.length - 1; i >= 0; i--) {
+		const { id, rect: r } = lines[i];
+		if (!id || id === except || id === "intake" || id === "palette" || id.startsWith("flight:")) continue;
+		if (point.x >= r.x && point.x <= r.x + r.w && point.y >= r.y && point.y <= r.y + r.h) return id;
+	}
+	return "";
+}
+var sessionRuns = (row) => !!row && (row.activity === "working" || row.activity === "clarify" || !!row.asking);
+var stopsRun = (indexes, flight) => !!flight && (flight.state === "running" || flight.state === "waiting_you") && indexes.includes(flight.cursor);
+function removalNeedsAsk(t) {
+	switch (t.kind) {
+		case "session": return sessionRuns(t.row);
+		case "stops": return stopsRun(t.indexes, t.flight);
+		case "grounded": return false;
+		case "selection": return t.items.some(removalNeedsAsk);
+	}
+}
+//#endregion
 //#region src/components/flights/StopDialog.tsx
 var STOP_STATE_WORD = {
 	done: "Done",
@@ -83352,6 +83630,11 @@ function GroupDialog(p) {
 }
 //#endregion
 //#region src/components/flights/useSessionLine.tsx
+function nodeIndexes(n) {
+	if (n.index === void 0) return [];
+	if (n.kind !== "group") return [n.index];
+	return Array.from({ length: n.group?.total || 0 }, (_, k) => n.index + k);
+}
 function promptLines(v) {
 	return (Array.isArray(v) ? v.map(String) : String(v ?? "").split("\n")).filter((l) => l.trim()).length;
 }
@@ -83535,12 +83818,18 @@ function useSessionLine(title, src, opts) {
 		const wasHere = index === flight.cursor;
 		const next = flight.steps[index + 1]?.title;
 		if (!await dropStop(id, step.id)) return false;
+		const entry = pushUndo({
+			label: "Remove “" + step.title + "”",
+			undo: () => {
+				const back = undoPayload(step, index, latest.current?.id === id ? latest.current : null);
+				return tackOn(id, back.step, back.at);
+			}
+		});
 		toast(removedToast(step.title, wasHere, next), { action: {
 			label: "Undo",
 			ariaLabel: "Undo: put “" + step.title + "” back on the line",
 			onClick: () => {
-				const back = undoPayload(step, index, latest.current?.id === id ? latest.current : null);
-				tackOn(id, back.step, back.at);
+				if (takeUndo(entry)) entry.undo();
 			}
 		} });
 		return true;
@@ -83553,13 +83842,19 @@ function useSessionLine(title, src, opts) {
 		const wasHere = flight.cursor >= first && flight.cursor < first + g.total;
 		const next = flight.steps[first + g.total]?.title;
 		if (!await dropGroup(id, g.steps[0].id)) return false;
+		const entry = pushUndo({
+			label: "Remove “" + g.name + "”",
+			undo: () => {
+				const now = latest.current?.id === id ? latest.current : null;
+				const back = undoPayload(g.steps[0], first, now);
+				return tackOnSteps(id, g.steps, back.at, g.name);
+			}
+		});
 		toast(removedToast(g.name, wasHere, next), { action: {
 			label: "Undo",
 			ariaLabel: "Undo: put “" + g.name + "” back on the line",
 			onClick: () => {
-				const now = latest.current?.id === id ? latest.current : null;
-				const back = undoPayload(g.steps[0], first, now);
-				tackOnSteps(id, g.steps, back.at, g.name);
+				if (takeUndo(entry)) entry.undo();
 			}
 		} });
 		return true;
@@ -83568,6 +83863,32 @@ function useSessionLine(title, src, opts) {
 		if (n.kind === "group") return removeGroup(n);
 		return n.step && n.index !== void 0 ? removeStop(n.step, n.index) : false;
 	};
+	const [removeAsk, setRemoveAsk] = (0, import_react.useState)(null);
+	const requestRemove = (n) => {
+		if (opts.askRunning && removalNeedsAsk({
+			kind: "stops",
+			indexes: nodeIndexes(n),
+			flight
+		})) setRemoveAsk(n);
+		else removeNode(n);
+	};
+	const askName = removeAsk ? (removeAsk.kind === "group" ? removeAsk.group?.name : removeAsk.step?.title) || "this stop" : "";
+	const removeAskNode = removeAsk ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "skl-close-confirm skl-remove-confirm",
+		"data-no-drag": true,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+			title: "Remove “" + askName + "”?",
+			body: "The flight is at it right now: it pauses before what follows. Undo puts it back.",
+			confirmLabel: "Remove",
+			busy,
+			onConfirm: () => {
+				const n = removeAsk;
+				setRemoveAsk(null);
+				act(() => removeNode(n));
+			},
+			onCancel: () => setRemoveAsk(null)
+		})
+	}) : null;
 	const joinDef = kindOf.get("join");
 	const splitAt = open?.step?.kind === "split" && open.index !== void 0 ? open.index : -1;
 	const offerJoin = !!flight && !!joinDef && splitAt >= 0 && flight.steps[splitAt + 1]?.kind !== "join";
@@ -83649,7 +83970,7 @@ function useSessionLine(title, src, opts) {
 			else if (n.session && n.session !== title) opts.onSession(n.session);
 		},
 		onInsert: flight ? (at) => setPaletteAt(paletteAt === at ? null : at) : void 0,
-		onRemove: flight ? (n) => void removeNode(own(n)) : void 0,
+		onRemove: flight ? (n) => requestRemove(own(n)) : void 0,
 		onMove: flight ? (from, to) => {
 			const step = flight.steps[from];
 			const n = stops.find((s) => s.index === from);
@@ -83796,6 +84117,7 @@ function useSessionLine(title, src, opts) {
 		canvas: shown.canvas,
 		palette,
 		inspector,
+		removeAsk: removeAskNode,
 		cancel
 	};
 }
@@ -122825,231 +123147,6 @@ function checkRename(raw, plans, selfId) {
 }
 var isRemoveKey = (key) => key === "Delete" || key === "Backspace";
 //#endregion
-//#region src/lib/skySelect.ts
-var NO_SELECTION = {
-	lines: /* @__PURE__ */ new Set(),
-	stops: /* @__PURE__ */ new Map()
-};
-var WHOLE_LINE = .5;
-var MARQUEE_MIN = 4;
-function rectFrom(a, b) {
-	return {
-		x: Math.min(a.x, b.x),
-		y: Math.min(a.y, b.y),
-		w: Math.abs(a.x - b.x),
-		h: Math.abs(a.y - b.y)
-	};
-}
-function overlapArea(a, b) {
-	const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
-	const h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
-	return w > 0 && h > 0 ? w * h : 0;
-}
-var overlaps = (a, b) => overlapArea(a, b) > 0;
-function lineTouched(m, l) {
-	if (l.heads.some((h) => overlaps(m, h))) return true;
-	const area = l.rect.w * l.rect.h;
-	return area > 0 && overlapArea(m, l.rect) >= area * WHOLE_LINE;
-}
-var isStopNode = (id) => id.startsWith("stop:") || id.startsWith("group:");
-function select(m, items) {
-	const whole = new Set(items.lines.filter((l) => lineTouched(m, l)).map((l) => l.id));
-	const stops = /* @__PURE__ */ new Map();
-	for (const s of items.stops) {
-		if (!isStopNode(s.node) || !overlaps(m, s.rect)) continue;
-		const set = stops.get(s.line) || /* @__PURE__ */ new Set();
-		set.add(s.node);
-		stops.set(s.line, set);
-	}
-	if (!whole.size && stops.size === 1) return {
-		lines: /* @__PURE__ */ new Set(),
-		stops
-	};
-	for (const id of stops.keys()) whole.add(id);
-	return {
-		lines: whole,
-		stops: /* @__PURE__ */ new Map()
-	};
-}
-function addSelection(a, b) {
-	if (!a.lines.size && !b.lines.size) {
-		if ((/* @__PURE__ */ new Set([...a.stops.keys(), ...b.stops.keys()])).size <= 1) {
-			const out = /* @__PURE__ */ new Map();
-			for (const [line, set] of [...a.stops, ...b.stops]) out.set(line, /* @__PURE__ */ new Set([...out.get(line) || [], ...set]));
-			return {
-				lines: /* @__PURE__ */ new Set(),
-				stops: out
-			};
-		}
-	}
-	return {
-		lines: /* @__PURE__ */ new Set([
-			...a.lines,
-			...a.stops.keys(),
-			...b.lines,
-			...b.stops.keys()
-		]),
-		stops: /* @__PURE__ */ new Map()
-	};
-}
-var selectLines = (ids) => ({
-	lines: new Set(ids),
-	stops: /* @__PURE__ */ new Map()
-});
-function toggleLine(s, id) {
-	const lines = /* @__PURE__ */ new Set([...s.lines, ...s.stops.keys()]);
-	if (s.lines.has(id)) lines.delete(id);
-	else lines.add(id);
-	return {
-		lines,
-		stops: /* @__PURE__ */ new Map()
-	};
-}
-function toggleStop(s, line, node) {
-	const mine = s.stops.size === 1 && s.stops.has(line) && !s.lines.size ? new Set(s.stops.get(line)) : /* @__PURE__ */ new Set();
-	if (mine.has(node)) mine.delete(node);
-	else mine.add(node);
-	if (!mine.size) return NO_SELECTION;
-	return {
-		lines: /* @__PURE__ */ new Set(),
-		stops: /* @__PURE__ */ new Map([[line, mine]])
-	};
-}
-function pruneSelection(s, shown) {
-	if (![...s.lines, ...s.stops.keys()].some((id) => !shown.has(id))) return s;
-	return {
-		lines: new Set([...s.lines].filter((id) => shown.has(id))),
-		stops: new Map([...s.stops].filter(([id]) => shown.has(id)))
-	};
-}
-var selectionEmpty = (s) => !s.lines.size && !s.stops.size;
-function stopSelection(s) {
-	const first = [...s.stops][0];
-	return first && first[1].size ? {
-		line: first[0],
-		nodes: [...first[1]]
-	} : null;
-}
-function stepIndexesOf(node, steps) {
-	if (node.startsWith("stop:")) {
-		const id = node.slice(5);
-		const i = steps.findIndex((s, k) => (s.id || "i" + k) === id);
-		return i < 0 ? [] : [i];
-	}
-	if (!node.startsWith("group:")) return [];
-	const rest = node.slice(6);
-	const at = rest.lastIndexOf("@");
-	const gid = at >= 0 ? rest.slice(0, at) : rest;
-	const from = at >= 0 ? Number(rest.slice(at + 1)) : steps.findIndex((s) => s.group?.id === gid);
-	if (!Number.isInteger(from) || from < 0 || steps[from]?.group?.id !== gid) return [];
-	const out = [];
-	for (let i = from; i < steps.length && steps[i].group?.id === gid; i++) out.push(i);
-	return out;
-}
-function selectedIndexes(nodes, steps) {
-	const all = /* @__PURE__ */ new Set();
-	for (const n of nodes) for (const i of stepIndexesOf(n, steps)) all.add(i);
-	return [...all].sort((a, b) => a - b);
-}
-function consecutive(indexes) {
-	const s = [...new Set(indexes)].sort((a, b) => a - b);
-	return s.length > 0 && s[s.length - 1] - s[0] === s.length - 1;
-}
-function removals(nodes, steps) {
-	const out = [];
-	for (const n of nodes) {
-		const idx = stepIndexesOf(n, steps);
-		if (!idx.length) continue;
-		out.push({
-			step: steps[idx[0]].id,
-			group: n.startsWith("group:")
-		});
-	}
-	return out;
-}
-function screenToPlane(cam, r) {
-	const z = cam.z || 1;
-	return {
-		x: (r.x - cam.x) / z,
-		y: (r.y - cam.y) / z,
-		w: r.w / z,
-		h: r.h / z
-	};
-}
-function planeToScreen(cam, r) {
-	return {
-		x: cam.x + r.x * cam.z,
-		y: cam.y + r.y * cam.z,
-		w: r.w * cam.z,
-		h: r.h * cam.z
-	};
-}
-var SKY_TOOLS = ["drag", "click"];
-var SKY_TOOL_KEY = "mf_sky_tool";
-function gestureFor(tool, target, mods = {}) {
-	if (mods.space) return "pan";
-	if (target === "control") return "none";
-	if (tool === "click") return mods.shift && !mods.touch ? "marquee" : "pan";
-	if (target === "ground") return mods.touch ? "pan" : "marquee";
-	return target === "line" ? "move-line" : "select";
-}
-function loadSkyTool(store = localStore()) {
-	try {
-		return store?.getItem(SKY_TOOL_KEY) === "click" ? "click" : "drag";
-	} catch {
-		return "drag";
-	}
-}
-function saveSkyTool(tool, store = localStore()) {
-	try {
-		store?.setItem(SKY_TOOL_KEY, tool);
-	} catch {}
-}
-function localStore() {
-	try {
-		return typeof localStorage === "undefined" ? null : localStorage;
-	} catch {
-		return null;
-	}
-}
-var deletableNode = (node) => isStopNode(node) || /^(session|child|branch):./.test(node);
-var nodeSession = (node) => {
-	const m = /^(session|child|branch):(.+)$/.exec(node);
-	return m ? m[2] : "";
-};
-function deleteFor(selection, focus, selectedBox) {
-	if (!selectionEmpty(selection)) return { kind: "selection" };
-	const at = focus || selectedBox;
-	if (!at) return { kind: "keymap" };
-	if (at.line === "intake") return { kind: "swallow" };
-	if (!at.node) return {
-		kind: "line",
-		line: at.line
-	};
-	return deletableNode(at.node) ? {
-		kind: "box",
-		line: at.line,
-		node: at.node
-	} : { kind: "swallow" };
-}
-function nodeById(nodes, id) {
-	for (const n of nodes) {
-		if (n.id === id) return n;
-		const sub = n.group?.nodes.find((s) => s.id === id);
-		if (sub) return sub;
-	}
-	return null;
-}
-var removableBox = (n) => !!n && (n.kind === "stop" || n.kind === "group") && n.editable !== false;
-function mergeTargetAt(point, lines, except = "") {
-	for (let i = lines.length - 1; i >= 0; i--) {
-		const { id, rect: r } = lines[i];
-		if (!id || id === except || id === "intake" || id === "palette" || id.startsWith("flight:")) continue;
-		if (point.x >= r.x && point.x <= r.x + r.w && point.y >= r.y && point.y <= r.y + r.h) return id;
-	}
-	return "";
-}
-//#endregion
 //#region src/lib/skyIntake.ts
 var LANE_POLL_DEFAULT = {
 	tickets: 20,
@@ -125015,6 +125112,23 @@ function SkyFlock({ width, height, zoom, paused = false, density = 1 }) {
 }
 //#endregion
 //#region src/components/flights/SkyLine.tsx
+var sessionOpen = (title) => (queryClient.getQueryData(["instances"]) || []).some((r) => r.title === title);
+async function reopenClosed(titles) {
+	for (const t of [...titles].reverse()) if (!sessionOpen(t)) await undoLastClose();
+}
+function pushCloseUndo(titles) {
+	if (!titles.length) return;
+	pushUndo({
+		label: titles.length === 1 ? "Close “" + windowName(titles[0]) + "”" : "Close " + titles.length + " sessions",
+		undo: () => reopenClosed(titles),
+		valid: () => titles.some((t) => !sessionOpen(t))
+	});
+}
+var runningWord = (row) => row?.activity === "working" ? "is working" : "is asking you something";
+async function closeLine(title) {
+	await closeSession(title);
+	if (!sessionOpen(title)) pushCloseUndo([title]);
+}
 var PANE_W = 720;
 var PANE_H = 460;
 var PANE_MIN_W = 360;
@@ -125147,6 +125261,7 @@ function SkyLine(p) {
 	]);
 	const line = useSessionLine(p.title, src, {
 		family: true,
+		askRunning: true,
 		onSession: (t) => selectSession(t)
 	});
 	useUi((s) => s.aliases[p.title]);
@@ -125311,14 +125426,22 @@ function SkyLine(p) {
 	};
 	const [closing, setClosing] = (0, import_react.useState)("");
 	const [closeBusy, setCloseBusy] = (0, import_react.useState)(false);
+	const askClose = (t) => {
+		if (removalNeedsAsk({
+			kind: "session",
+			row: p.rows.find((r) => r.title === t)
+		})) setClosing(t);
+		else closeLine(t);
+	};
 	const deleteBox = (node) => {
 		const t = node ? nodeSession(node) : p.title;
 		if (t) {
-			setClosing(t);
+			askClose(t);
 			return true;
 		}
 		const n = nodeById(shown.diagram.nodes, node);
-		if (!removableBox(n) || !shown.canvas.onRemove) return false;
+		const here = !!n && !!line.flight && (n.kind === "stop" || n.kind === "group") && nodeIndexes(n).includes(line.flight.cursor);
+		if (!(removableBox(n) || here) || !shown.canvas.onRemove) return false;
 		shown.canvas.onRemove(n);
 		return true;
 	};
@@ -125333,7 +125456,7 @@ function SkyLine(p) {
 	const closeNow = async () => {
 		setCloseBusy(true);
 		try {
-			await closeSession(closing);
+			await closeLine(closing);
 		} finally {
 			setCloseBusy(false);
 			setClosing("");
@@ -125447,7 +125570,7 @@ function SkyLine(p) {
 			danger: true,
 			className: "skl-mi-group",
 			title: "Stops the agent and moves it to Recently closed",
-			onSelect: () => void closeSession(p.title)
+			onSelect: () => askClose(p.title)
 		}
 	];
 	const where = row ? lineWhere(shown.diagram) : "";
@@ -125535,12 +125658,13 @@ function SkyLine(p) {
 				]
 			}),
 			line.cancel.node,
+			line.removeAsk,
 			closing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "skl-close-confirm",
 				"data-no-drag": true,
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
 					title: "Close “" + windowName(closing) + "”?",
-					body: "Its agent stops and it moves to Recently closed (Ctrl+Shift+T brings it back).",
+					body: "Its agent " + runningWord(p.rows.find((r) => r.title === closing)) + " right now: it stops, and the session moves to Recently closed (Ctrl+Z or Ctrl+Shift+T brings it back).",
 					confirmLabel: "Close session",
 					busy: closeBusy,
 					onConfirm: () => void closeNow(),
@@ -125608,7 +125732,30 @@ function SkyLine(p) {
 }
 //#endregion
 //#region src/components/flights/SkySelection.tsx
-var REMOVE_AT_ONCE = 3;
+function takenStops(nodes, steps) {
+	const out = [];
+	for (const n of nodes) {
+		const idx = stepIndexesOf(n, steps);
+		if (!idx.length) continue;
+		const group = n.startsWith("group:") ? steps[idx[0]].group?.name || "" : "";
+		out.push({
+			index: idx[0],
+			steps: group ? idx.map((i) => steps[i]) : [steps[idx[0]]],
+			group
+		});
+	}
+	return out.sort((a, b) => a.index - b.index);
+}
+function putBackAt(taken, flight) {
+	let len = flight.length;
+	let atEnd = false;
+	return taken.map((t) => {
+		atEnd ||= !(t.index > flight.cursor && t.index < len);
+		len += t.steps.length;
+		return atEnd ? void 0 : t.index;
+	});
+}
+var flightNow = (id) => (queryClient.getQueryData(["flights"]) || []).find((f) => f.id === id) || null;
 var NEW_STOPS = "New stops";
 var plural = (n, one, many = one + "s") => n + " " + (n === 1 ? one : many);
 function groupHint(f, idx, kinds) {
@@ -125647,18 +125794,79 @@ function SkySelectionBar(p) {
 			p.onClear();
 		}
 	};
+	const runningLines = removable.filter((id) => !isGroundedKey(id) && sessionRuns(p.rowOf?.(id)));
+	const runningStop = one && flight && stopsRun(idx, flight) ? flight.steps[flight.cursor]?.title || "a stop" : "";
+	const asks = one ? removalNeedsAsk({
+		kind: "stops",
+		indexes: idx,
+		flight
+	}) : removalNeedsAsk({
+		kind: "selection",
+		items: removable.map((id) => isGroundedKey(id) ? { kind: "grounded" } : {
+			kind: "session",
+			row: p.rowOf?.(id)
+		})
+	});
 	const removeLines = () => run(async () => {
-		let gone = 0;
+		const closed = [];
+		const gone = [];
 		for (const id of removable) if (isGroundedKey(id)) {
-			if (await deleteFlight(groundedIdOf(id))) gone++;
-		} else await closeSession(id);
-		if (gone) toast("Removed " + plural(gone, "line") + " of stops");
+			const f = p.flightOf(id);
+			const at = p.posOf?.(id);
+			if (await deleteFlight(groundedIdOf(id))) gone.push({
+				steps: f?.steps || [],
+				name: f?.plan_name || "",
+				at
+			});
+		} else {
+			await closeSession(id);
+			if (!sessionOpen(id)) closed.push(id);
+		}
+		const n = gone.length + closed.length;
+		if (!n) return;
+		const entry = pushUndo({
+			label: "Remove " + plural(n, "line"),
+			undo: async () => {
+				for (const g of gone) if (g.steps.length) await (p.restoreGrounded ? p.restoreGrounded(g.steps, g.name, g.at) : startGrounded({
+					steps: g.steps,
+					...g.name ? { name: g.name } : {}
+				}));
+				await reopenClosed(closed);
+			}
+		});
+		const said = [closed.length ? "closed " + plural(closed.length, "session") : "", gone.length ? "removed " + plural(gone.length, "line") + " of stops" : ""].filter(Boolean).join(", ");
+		toast(said.charAt(0).toUpperCase() + said.slice(1), { action: undoAction(entry, "Undo: put " + plural(n, "line") + " back") });
 	});
 	const removeStops = () => run(async () => {
 		if (!one || !flight) return;
-		let n = 0;
-		for (const r of removals(one.nodes, flight.steps)) if (await (r.group ? dropGroup(flight.id, r.step) : dropStop(flight.id, r.step))) n++;
-		if (n) toast("Removed " + plural(n, "stop"));
+		const fid = flight.id;
+		const title = isGroundedKey(one.line) ? "" : one.line;
+		const taken = takenStops(one.nodes, flight.steps);
+		const out = [];
+		for (const t of taken) if (await (t.group ? dropGroup(fid, t.steps[0].id) : dropStop(fid, t.steps[0].id))) out.push(t);
+		if (!out.length) return;
+		const n = out.length;
+		const entry = pushUndo({
+			label: "Remove " + plural(n, "stop"),
+			undo: async () => {
+				const now = flightNow(fid);
+				if (!now || !isLive(now) && now.state !== "grounded") {
+					const steps = out.flatMap((t) => t.steps);
+					if (title) return tackOnNew(title, steps);
+					return p.restoreGrounded ? p.restoreGrounded(steps, flight.plan_name || "", p.posOf?.(one.line)) : startGrounded({ steps });
+				}
+				const ats = putBackAt(out, {
+					cursor: now.cursor,
+					length: now.steps.length
+				});
+				for (let i = 0; i < out.length; i++) {
+					const t = out[i];
+					if (t.group) await tackOnSteps(fid, t.steps, ats[i], t.group);
+					else await tackOn(fid, t.steps[0], ats[i]);
+				}
+			}
+		});
+		toast("Removed " + plural(n, "stop"), { action: undoAction(entry, "Undo: put " + plural(n, "stop") + " back") });
 	});
 	const group = () => run(async () => {
 		if (!flight || hint) return;
@@ -125677,12 +125885,13 @@ function SkySelectionBar(p) {
 			toast("Saving to the shelf failed: " + errMsg(err), { error: true });
 		}
 	});
+	const removeNow = () => one ? removeStops() : removeLines();
 	const askRemove = () => {
-		if (one && one.nodes.length <= REMOVE_AT_ONCE) removeStops();
-		else p.setAsk("remove");
+		if (asks) p.setAsk("remove");
+		else removeNow();
 	};
 	(0, import_react.useEffect)(() => {
-		if (p.ask === "remove" && one && one.nodes.length <= REMOVE_AT_ONCE && !busy) removeStops();
+		if (p.ask === "remove" && !asks && !busy) removeNow();
 	}, [p.ask]);
 	if (!lines.length && !one) return null;
 	const what = one ? plural(one.nodes.length, "stop") + " selected" : plural(lines.length, "line") + " selected";
@@ -125748,9 +125957,9 @@ function SkySelectionBar(p) {
 							type: "button",
 							className: "test-btn fl-btn sky-selbar-danger",
 							disabled: busy,
-							title: "Close their sessions, remove their stops",
-							onClick: () => p.setAsk("remove"),
-							children: "Remove…"
+							title: "Close their sessions, remove their stops (Ctrl+Z puts them back)",
+							onClick: askRemove,
+							children: "Remove"
 						})
 					] }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -125792,8 +126001,8 @@ function SkySelectionBar(p) {
 					})
 				]
 			}),
-			p.ask === "remove" && !one && removable.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
-				title: "Remove " + plural(removable.length, "line") + "?",
+			p.ask === "remove" && asks && !one && removable.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+				title: "Remove " + plural(removable.length, "line") + "? " + names(runningLines) + (runningLines.length === 1 ? " " + runningWord(p.rowOf?.(runningLines[0])) : " are running") + ".",
 				body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [sessions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "sky-selbar-says",
 					children: [
@@ -125822,9 +126031,9 @@ function SkySelectionBar(p) {
 				onConfirm: () => void removeLines(),
 				onCancel: () => p.setAsk("")
 			}),
-			p.ask === "remove" && one && one.nodes.length > REMOVE_AT_ONCE && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
-				title: "Remove " + plural(one.nodes.length, "stop") + "?",
-				body: "They leave “" + p.nameOf(one.line) + "”. A stop that is flying halts the flight right before what follows.",
+			p.ask === "remove" && asks && one && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+				title: "Remove " + plural(one.nodes.length, "stop") + "? The flight is at “" + runningStop + "” right now.",
+				body: "They leave “" + p.nameOf(one.line) + "”, and the flight pauses right before what follows. Ctrl+Z puts them back.",
 				confirmLabel: "Remove",
 				busy,
 				onConfirm: () => void removeStops(),
@@ -126086,7 +126295,6 @@ function GroundedLine(p) {
 		kinds: p.kinds,
 		plans: p.plans
 	});
-	const [confirming, setConfirming] = (0, import_react.useState)(false);
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [naming, setNaming] = (0, import_react.useState)(null);
 	const pressAt = (0, import_react.useRef)(null);
@@ -126122,12 +126330,23 @@ function GroundedLine(p) {
 		}
 	};
 	const remove = async () => {
+		if (busy) return;
 		setBusy(true);
 		try {
-			if (await deleteFlight(flight.id)) toast("Removed “" + name + "”");
+			if (p.onRemove) await p.onRemove();
+			else if (await deleteFlight(flight.id)) {
+				const steps = flight.steps;
+				const entry = pushUndo({
+					label: "Remove “" + name + "”",
+					undo: () => startGrounded({
+						steps,
+						...flight.plan_name ? { name: flight.plan_name } : {}
+					})
+				});
+				toast("Removed “" + name + "”", { action: undoAction(entry, "Undo: put “" + name + "” back on the board") });
+			}
 		} finally {
 			setBusy(false);
-			setConfirming(false);
 		}
 	};
 	const updates = !!sourcePlanId(flight.steps, p.plans);
@@ -126156,8 +126375,8 @@ function GroundedLine(p) {
 			label: "Remove",
 			danger: true,
 			className: "skl-mi-group",
-			title: "Take these stops off the board",
-			onSelect: () => setConfirming(true)
+			title: "Take these stops off the board (Ctrl+Z puts them back)",
+			onSelect: () => void remove()
 		}
 	];
 	const named = (0, import_react.useRef)(false);
@@ -126197,7 +126416,7 @@ function GroundedLine(p) {
 			line.canvas.onRemove(n);
 			return true;
 		}
-		setConfirming(true);
+		remove();
 		return true;
 	};
 	const deleteRef = (0, import_react.useRef)(deleteBox);
@@ -126219,7 +126438,7 @@ function GroundedLine(p) {
 		if (!isRemoveKey(e.key)) return;
 		e.preventDefault();
 		e.stopPropagation();
-		setConfirming(true);
+		remove();
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		ref: rootRef,
@@ -126285,21 +126504,6 @@ function GroundedLine(p) {
 					})
 				]
 			}),
-			confirming && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "skl-grounded-confirm",
-				"data-no-drag": true,
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
-					title: "Remove “" + name + "”?",
-					body: "Its " + flight.steps.length + (flight.steps.length === 1 ? " stop leaves" : " stops leave") + " the board. A saved stop on the shelf stays.",
-					confirmLabel: "Remove",
-					busy,
-					onConfirm: () => void remove(),
-					onCancel: () => {
-						setConfirming(false);
-						rootRef.current?.focus({ preventScroll: true });
-					}
-				})
-			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "skl-grounded-body",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -126328,6 +126532,47 @@ function GroundedLine(p) {
 			})
 		]
 	});
+}
+//#endregion
+//#region src/lib/clickOrDouble.ts
+function clickOrDouble(place, { delay = 250, pair = 500 } = {}) {
+	let timer;
+	let armedAt = 0;
+	let placedFrom = -Infinity;
+	const cancel = () => {
+		if (timer !== void 0) clearTimeout(timer);
+		timer = void 0;
+	};
+	return {
+		onClick(e) {
+			if (e && e.detail === 0) {
+				cancel();
+				return place();
+			}
+			if (timer !== void 0) return cancel();
+			armedAt = Date.now();
+			timer = setTimeout(() => {
+				timer = void 0;
+				placedFrom = armedAt;
+				place();
+			}, delay);
+		},
+		onDoubleClick() {
+			cancel();
+			if (Date.now() - placedFrom < pair) return;
+			placedFrom = -Infinity;
+			place();
+		},
+		cancel
+	};
+}
+function useClickOrDouble(place, opts) {
+	const latest = (0, import_react.useRef)(place);
+	latest.current = place;
+	const cd = (0, import_react.useRef)(null);
+	if (!cd.current) cd.current = clickOrDouble(() => latest.current?.(), opts);
+	(0, import_react.useEffect)(() => () => cd.current?.cancel(), []);
+	return cd.current;
 }
 //#endregion
 //#region src/lib/stopCatalog.ts
@@ -126474,6 +126719,10 @@ function cardMenu(plan, shelved) {
 			label: "Rename"
 		}] : [],
 		{
+			key: "takeoff",
+			label: "Takes off…"
+		},
+		{
 			key: "shelf",
 			label: (shelved ? "★" : "☆") + " On the shelf"
 		},
@@ -126486,353 +126735,6 @@ function cardMenu(plan, shelved) {
 			danger: true
 		}
 	];
-}
-//#endregion
-//#region src/components/flights/StopCatalog.tsx
-function PlanNameField({ plan, plans, onDone }) {
-	const [name, setName] = (0, import_react.useState)(plan.name);
-	const [err, setErr] = (0, import_react.useState)("");
-	const done = (0, import_react.useRef)(false);
-	const commit = async (leaving) => {
-		if (done.current) return;
-		const c = checkRename(name, plans, plan.id);
-		if (!c.ok) {
-			if (!leaving) return setErr(c.error);
-			done.current = true;
-			toast(c.error + " — kept “" + plan.name + "”");
-			return onDone();
-		}
-		done.current = true;
-		onDone();
-		if (c.name === plan.name) return;
-		try {
-			await savePlan({
-				...plan,
-				name: c.name
-			});
-			toast("Renamed to “" + c.name + "”");
-		} catch (e) {
-			toast("Renaming failed: " + errMsg(e), { error: true });
-		}
-	};
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-		className: "sky-saved-rename fl-input",
-		"aria-label": "Rename “" + plan.name + "”",
-		"aria-invalid": !!err,
-		title: err || "Enter saves, Esc cancels",
-		value: name,
-		autoFocus: true,
-		maxLength: 140,
-		onChange: (e) => {
-			setName(e.target.value);
-			setErr("");
-		},
-		onKeyDown: (e) => {
-			e.stopPropagation();
-			if (e.key === "Enter") {
-				e.preventDefault();
-				commit(false);
-			} else if (e.key === "Escape") {
-				e.preventDefault();
-				done.current = true;
-				onDone();
-			}
-		},
-		onBlur: () => void commit(true),
-		onClick: (e) => e.stopPropagation(),
-		onDoubleClick: (e) => e.stopPropagation()
-	}), err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		className: "sky-saved-err",
-		role: "alert",
-		children: err
-	})] });
-}
-var rowId = (i) => "sky-catalog-row-" + i;
-function gridCols(list) {
-	const g = list?.querySelector(".sky-catalog-grid");
-	if (!g || typeof getComputedStyle === "undefined") return 1;
-	return getComputedStyle(g).gridTemplateColumns.split(" ").filter(Boolean).length || 1;
-}
-function StopCatalog({ kinds, plans, onAdd, place = false, onClose, portal = true, shelf, onShelfToggle }) {
-	const [query, setQuery] = (0, import_react.useState)("");
-	const [active, setActive] = (0, import_react.useState)(0);
-	const [dragging, setDragging] = (0, import_react.useState)(false);
-	const [renaming, setRenaming] = (0, import_react.useState)("");
-	const [deleting, setDeleting] = (0, import_react.useState)("");
-	const [busy, setBusy] = (0, import_react.useState)(false);
-	const listRef = (0, import_react.useRef)(null);
-	const cards = catalogCards(kinds, plans, query);
-	const rows = cards.all;
-	const at = Math.min(active, rows.length - 1);
-	(0, import_react.useEffect)(() => {
-		if (at >= 0) document.getElementById(rowId(at))?.scrollIntoView?.({ block: "nearest" });
-	}, [at]);
-	const add = (d) => onAdd?.(d);
-	const onFilterKey = (e) => {
-		const el = e.currentTarget;
-		const edge = e.key === "ArrowLeft" ? el.selectionStart === 0 && el.selectionEnd === 0 : e.key === "ArrowRight" ? el.selectionStart === el.value.length : true;
-		if ((e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "ArrowLeft" || e.key === "ArrowRight") && edge) {
-			e.preventDefault();
-			if (!rows.length) return;
-			setActive(gridMove(at, e.key, [cards.blocks.length, cards.multi.length], gridCols(listRef.current)));
-		} else if (e.key === "Enter") {
-			e.preventDefault();
-			if (at >= 0) add(rows[at].drop);
-		}
-	};
-	const onDragStart = (e, data) => {
-		for (const [type, value] of data) e.dataTransfer.setData(type, value);
-		e.dataTransfer.effectAllowed = "copy";
-		setTimeout(() => setDragging(true), 0);
-	};
-	const onDragEnd = (e) => {
-		setDragging(false);
-		if (e.dataTransfer && e.dataTransfer.dropEffect !== "none") onClose();
-	};
-	const reset = async (plan) => {
-		try {
-			await resetPlan(plan.id);
-			toast("“" + plan.name + "” is back to its default");
-		} catch (e) {
-			toast("Reset failed: " + errMsg(e), { error: true });
-		}
-	};
-	const remove = async (plan) => {
-		setBusy(true);
-		try {
-			await deletePlan(plan.id);
-			toast("Deleted “" + plan.name + "”");
-			setDeleting("");
-		} catch (e) {
-			toast("Deleting failed: " + errMsg(e), { error: true });
-		} finally {
-			setBusy(false);
-		}
-	};
-	const star = (d, name) => {
-		if (!onShelfToggle) return null;
-		const on = shelf ? shelf(d) : false;
-		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-			type: "button",
-			className: "fl-icon-btn sky-catalog-shelf" + (on ? " on" : ""),
-			tabIndex: -1,
-			"aria-pressed": on,
-			"aria-label": (on ? "Take “" : "Put “") + name + (on ? "” off the shelf" : "” on the shelf"),
-			title: on ? "On the shelf — click to take it off" : "Put it on the shelf (and in the floating palette)",
-			onClick: () => onShelfToggle(d),
-			children: on ? "★" : "☆"
-		});
-	};
-	const how = onAdd ? place ? "Drag onto a line or the sky, or Add it to the board" : "Drag onto a line or the sky, or Add it to the focused line" : "Drag onto a line or the sky";
-	const card = (c, n) => {
-		const plan = c.section === "multi" ? c.plan : null;
-		const def = c.section === "blocks" ? c.def : null;
-		const naming = !!plan && renaming === plan.id;
-		const asking = !!plan && deleting === plan.id;
-		const on = n === at;
-		const dblAdd = (e) => {
-			if (!onAdd || naming || asking || e.target.closest("button, input, summary, .vf-menu")) return;
-			add(c.drop);
-		};
-		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			id: rowId(n),
-			role: "option",
-			"aria-selected": on,
-			className: "sky-catalog-card" + (plan ? " sky-catalog-plan" : "") + (c.section === "blocks" && c.perch ? " perch" : "") + (on ? " active" : ""),
-			"data-kind": def?.kind,
-			"data-plan": plan?.id,
-			draggable: !naming && !asking,
-			title: how,
-			onDragStart: (e) => onDragStart(e, plan ? savedDragData(plan) : stopDragData(def)),
-			onDragEnd,
-			onMouseEnter: () => setActive(n),
-			onDoubleClick: dblAdd,
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "sky-catalog-card-head",
-					children: [
-						def && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "sky-catalog-icon",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopIcon, {
-								kind: def.actor === "you" ? "perch" : def.kind,
-								size: 18
-							})
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-							className: "sky-catalog-name",
-							children: [plan && naming ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlanNameField, {
-								plan,
-								plans,
-								onDone: () => setRenaming("")
-							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "sky-catalog-title",
-								children: c.name
-							}), c.section === "blocks" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "sky-catalog-badge actor-" + (c.perch ? "you" : "robot"),
-								children: c.perch ? "you" : "robot"
-							}) : c.builtin && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "sky-catalog-badge builtin",
-								children: "built-in"
-							})]
-						}),
-						star(c.drop, c.name),
-						plan && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
-							label: "“" + plan.name + "” — rename, delete, shelf",
-							boundaryId: "sky-catalog-list",
-							items: cardMenu(plan, shelf ? shelf(c.drop) : false).filter((it) => it.key !== "shelf" || onShelfToggle).map((it) => ({
-								key: it.key,
-								label: it.label,
-								danger: it.danger,
-								onSelect: () => {
-									if (it.key === "rename") setRenaming(plan.id);
-									else if (it.key === "shelf") onShelfToggle?.(c.drop);
-									else if (it.key === "reset") reset(plan);
-									else setDeleting(plan.id);
-								}
-							}))
-						})
-					]
-				}),
-				plan ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepBoxes, {
-					plan,
-					kinds
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "sky-catalog-summary",
-					children: c.section === "multi" && c.path ? c.path : "No steps yet"
-				})] }) : def?.summary && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "sky-catalog-summary",
-					children: def.summary
-				}),
-				asking && plan ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
-					title: "Delete “" + plan.name + "”?",
-					body: "It leaves the catalog and the shelf. Stops already on the board stay.",
-					confirmLabel: "Delete",
-					busy,
-					onConfirm: () => void remove(plan),
-					onCancel: () => setDeleting("")
-				}) : onAdd && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "sky-catalog-card-foot",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn sky-catalog-add",
-						tabIndex: -1,
-						"aria-label": "Add “" + c.name + "”",
-						onClick: () => add(c.drop),
-						children: "Add"
-					})
-				})
-			]
-		}, c.key);
-	};
-	let i = -1;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
-		id: "sky-catalog",
-		className: "sky-catalog-modal" + (dragging ? " is-dragging" : ""),
-		onClose,
-		onEscape: () => {
-			if (!deleting) return false;
-			setDeleting("");
-			return true;
-		},
-		portal,
-		role: "dialog",
-		"aria-modal": "true",
-		"aria-labelledby": "sky-catalog-title",
-		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "sky-catalog",
-			onKeyDown: (e) => e.key === "Escape" || e.stopPropagation(),
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "sky-catalog-head",
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
-							id: "sky-catalog-title",
-							children: "All blocks"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-							className: "fl-input sky-catalog-filter",
-							type: "text",
-							placeholder: "Filter blocks…",
-							"aria-label": "Filter blocks",
-							"aria-controls": "sky-catalog-list",
-							"aria-activedescendant": at >= 0 ? rowId(at) : void 0,
-							autoComplete: "off",
-							spellCheck: false,
-							autoFocus: true,
-							value: query,
-							onChange: (e) => {
-								setQuery(e.target.value);
-								setActive(0);
-							},
-							onKeyDown: onFilterKey
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "fl-icon-btn sky-catalog-close",
-							"aria-label": "Close",
-							title: "Close (Esc)",
-							onClick: onClose,
-							children: "×"
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "sky-catalog-list sky-own-scroll",
-					id: "sky-catalog-list",
-					role: "listbox",
-					"aria-label": "All blocks",
-					ref: listRef,
-					children: [
-						cards.blocks.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-							className: "sky-catalog-section",
-							"data-section": "blocks",
-							role: "group",
-							"aria-label": "Blocks",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-								className: "sky-catalog-label",
-								children: "Blocks"
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "sky-catalog-grid",
-								children: cards.blocks.map((c) => card(c, ++i))
-							})]
-						}),
-						cards.multi.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-							className: "sky-catalog-section",
-							"data-section": "multi",
-							role: "group",
-							"aria-label": "Multi-step",
-							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
-								className: "sky-catalog-label",
-								children: "Multi-step"
-							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "sky-catalog-grid",
-								children: cards.multi.map((c) => card(c, ++i))
-							})]
-						}),
-						rows.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-							className: "sky-catalog-empty muted",
-							children: query.trim() ? "Nothing matches “" + query.trim() + "”." : "No blocks yet — this server may not know Flights."
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "sky-catalog-hint muted",
-					children: onAdd ? "Drag a block onto a line or the sky · the arrows pick · Enter or a double-click " + (place ? "puts it on the board" : "adds it to the focused line") + " · Esc closes" : "Drag a block onto a line or the sky · Esc closes"
-				})
-			]
-		})
-	});
-}
-function StepBoxes({ plan, kinds }) {
-	const { dots, more } = planDots(plan.steps, kinds);
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-		className: "sky-catalog-boxes",
-		"aria-hidden": "true",
-		children: [dots.map((d, j) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: d.perch ? "perch" : "" }, j)), more > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-			className: "sky-catalog-more",
-			children: ["+", more]
-		})]
-	});
 }
 //#endregion
 //#region src/components/flights/TakeoffDialog.tsx
@@ -127111,6 +127013,402 @@ function TakeoffDialog({ plan, onClose }) {
 	});
 }
 //#endregion
+//#region src/components/flights/StopCatalog.tsx
+function PlanNameField({ plan, plans, onDone }) {
+	const [name, setName] = (0, import_react.useState)(plan.name);
+	const [err, setErr] = (0, import_react.useState)("");
+	const done = (0, import_react.useRef)(false);
+	const commit = async (leaving) => {
+		if (done.current) return;
+		const c = checkRename(name, plans, plan.id);
+		if (!c.ok) {
+			if (!leaving) return setErr(c.error);
+			done.current = true;
+			toast(c.error + " — kept “" + plan.name + "”");
+			return onDone();
+		}
+		done.current = true;
+		onDone();
+		if (c.name === plan.name) return;
+		try {
+			await savePlan({
+				...plan,
+				name: c.name
+			});
+			toast("Renamed to “" + c.name + "”");
+		} catch (e) {
+			toast("Renaming failed: " + errMsg(e), { error: true });
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+		className: "sky-saved-rename fl-input",
+		"aria-label": "Rename “" + plan.name + "”",
+		"aria-invalid": !!err,
+		title: err || "Enter saves, Esc cancels",
+		value: name,
+		autoFocus: true,
+		maxLength: 140,
+		onChange: (e) => {
+			setName(e.target.value);
+			setErr("");
+		},
+		onKeyDown: (e) => {
+			e.stopPropagation();
+			if (e.key === "Enter") {
+				e.preventDefault();
+				commit(false);
+			} else if (e.key === "Escape") {
+				e.preventDefault();
+				done.current = true;
+				onDone();
+			}
+		},
+		onBlur: () => void commit(true),
+		onClick: (e) => e.stopPropagation(),
+		onDoubleClick: (e) => e.stopPropagation()
+	}), err && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "sky-saved-err",
+		role: "alert",
+		children: err
+	})] });
+}
+function gridCols(list) {
+	const g = list?.querySelector(".sky-catalog-grid");
+	if (!g || typeof getComputedStyle === "undefined") return 1;
+	return getComputedStyle(g).gridTemplateColumns.split(" ").filter(Boolean).length || 1;
+}
+function reveal(list, el) {
+	if (!list || !el) return;
+	const l = list.getBoundingClientRect();
+	const r = el.getBoundingClientRect();
+	const scale = list.offsetHeight ? l.height / list.offsetHeight : 1;
+	if (r.top < l.top) list.scrollTop -= (l.top - r.top) / scale;
+	else if (r.bottom > l.bottom) list.scrollTop += (r.bottom - l.bottom) / scale;
+}
+var inner = (t) => !!t.closest?.("button, input, summary, .vf-menu, .set-confirm");
+function StopCatalogBody({ kinds, plans, onAdd, place = false, shelf, onShelfToggle, compact = false, idPrefix = "sky-catalog", listClass = "", head, lead, autoFocus = false, onDrag, escRef }) {
+	const [query, setQuery] = (0, import_react.useState)("");
+	const [active, setActive] = (0, import_react.useState)(0);
+	const [renaming, setRenaming] = (0, import_react.useState)("");
+	const [deleting, setDeleting] = (0, import_react.useState)("");
+	const [takeoff, setTakeoff] = (0, import_react.useState)(null);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const listRef = (0, import_react.useRef)(null);
+	const filterRef = (0, import_react.useRef)(null);
+	const keyed = (0, import_react.useRef)(false);
+	const cards = catalogCards(kinds, plans, query);
+	const rows = cards.all;
+	const at = Math.min(active, rows.length - 1);
+	const listId = idPrefix + "-list";
+	const rowId = (i) => idPrefix + "-row-" + i;
+	const leadEl = lead?.(query) ?? null;
+	const leads = leadEl ? 1 : 0;
+	(0, import_react.useEffect)(() => {
+		if (autoFocus) filterRef.current?.focus({ preventScroll: true });
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (!keyed.current || at < 0) return;
+		keyed.current = false;
+		reveal(listRef.current, document.getElementById(rowId(at)));
+	}, [at]);
+	if (escRef) escRef.current = () => {
+		if (!deleting) return false;
+		setDeleting("");
+		return true;
+	};
+	const addRef = (0, import_react.useRef)(onAdd);
+	addRef.current = onAdd;
+	const clicks = (0, import_react.useRef)(/* @__PURE__ */ new Map());
+	(0, import_react.useEffect)(() => () => clicks.current.forEach((c) => c.cancel()), []);
+	const clicker = (key, drop) => {
+		let c = clicks.current.get(key);
+		if (!c) clicks.current.set(key, c = clickOrDouble(() => addRef.current?.(drop)));
+		return c;
+	};
+	const add = (d) => onAdd?.(d);
+	const onFilterKey = (e) => {
+		const el = e.currentTarget;
+		const edge = e.key === "ArrowLeft" ? el.selectionStart === 0 && el.selectionEnd === 0 : e.key === "ArrowRight" ? el.selectionStart === el.value.length : true;
+		if ((e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "ArrowLeft" || e.key === "ArrowRight") && edge) {
+			e.preventDefault();
+			if (!rows.length) return;
+			keyed.current = true;
+			setActive(Math.max(0, gridMove(at + leads, e.key, [cards.blocks.length + leads, cards.multi.length], gridCols(listRef.current)) - leads));
+		} else if (e.key === "Enter") {
+			e.preventDefault();
+			if (at >= 0) add(rows[at].drop);
+		}
+	};
+	const onDragStart = (e, key, data) => {
+		clicks.current.get(key)?.cancel();
+		for (const [type, value] of data) e.dataTransfer.setData(type, value);
+		e.dataTransfer.effectAllowed = "copy";
+		if (onDrag) setTimeout(() => onDrag(true, false), 0);
+	};
+	const onDragEnd = (e) => onDrag?.(false, !!e.dataTransfer && e.dataTransfer.dropEffect !== "none");
+	const reset = async (plan) => {
+		try {
+			await resetPlan(plan.id);
+			toast("“" + plan.name + "” is back to its default");
+		} catch (e) {
+			toast("Reset failed: " + errMsg(e), { error: true });
+		}
+	};
+	const remove = async (plan) => {
+		setBusy(true);
+		try {
+			await deletePlan(plan.id);
+			toast("Deleted “" + plan.name + "”");
+			setDeleting("");
+		} catch (e) {
+			toast("Deleting failed: " + errMsg(e), { error: true });
+		} finally {
+			setBusy(false);
+		}
+	};
+	const star = (d, name) => {
+		if (!onShelfToggle) return null;
+		const on = shelf ? shelf(d) : false;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "fl-icon-btn sky-catalog-shelf" + (on ? " on" : ""),
+			tabIndex: -1,
+			"aria-pressed": on,
+			"aria-label": (on ? "Take “" : "Put “") + name + (on ? "” off the shelf" : "” on the shelf"),
+			title: on ? "On the bottom shelf — click to take it off" : "Put it on the bottom shelf",
+			onClick: () => onShelfToggle(d),
+			children: on ? "★" : "☆"
+		});
+	};
+	const how = onAdd ? place ? "Drag onto a line or the sky, or click to put it on the board" : "Drag onto a line or the sky, or click to add it to the focused line" : "Drag onto a line or the sky";
+	const card = (c, n) => {
+		const plan = c.section === "multi" ? c.plan : null;
+		const def = c.section === "blocks" ? c.def : null;
+		const naming = !!plan && renaming === plan.id;
+		const asking = !!plan && deleting === plan.id;
+		const on = n === at;
+		const cd = clicker(c.key, c.drop);
+		const mine = (e) => !!onAdd && !naming && !asking && !inner(e.target);
+		const about = plan ? c.section === "multi" && c.path ? c.path : "No steps yet" : def?.summary;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			id: rowId(n),
+			role: "option",
+			"aria-selected": on,
+			className: "sky-catalog-card" + (plan ? " sky-catalog-plan" : "") + (c.section === "blocks" && c.perch ? " perch" : "") + (on ? " active" : ""),
+			"data-kind": def?.kind,
+			"data-plan": plan?.id,
+			draggable: !naming && !asking,
+			title: compact && about ? about + "\n" + how : how,
+			onDragStart: (e) => onDragStart(e, c.key, plan ? savedDragData(plan) : stopDragData(def)),
+			onDragEnd,
+			onMouseEnter: () => setActive(n),
+			onClick: (e) => mine(e) && cd.onClick(e),
+			onDoubleClick: (e) => mine(e) && cd.onDoubleClick(),
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "sky-catalog-card-head",
+					children: [
+						def && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-catalog-icon",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopIcon, {
+								kind: def.actor === "you" ? "perch" : def.kind,
+								size: compact ? 14 : 18
+							})
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+							className: "sky-catalog-name",
+							children: [plan && naming ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlanNameField, {
+								plan,
+								plans,
+								onDone: () => setRenaming("")
+							}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-catalog-title",
+								children: c.name
+							}), compact ? null : c.section === "blocks" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-catalog-badge actor-" + (c.perch ? "you" : "robot"),
+								children: c.perch ? "you" : "robot"
+							}) : c.builtin && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-catalog-badge builtin",
+								children: "built-in"
+							})]
+						}),
+						star(c.drop, c.name),
+						plan && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
+							label: "“" + plan.name + "” — rename, delete, shelf",
+							boundaryId: listId,
+							items: cardMenu(plan, shelf ? shelf(c.drop) : false).filter((it) => it.key !== "shelf" || onShelfToggle).map((it) => ({
+								key: it.key,
+								label: it.label,
+								danger: it.danger,
+								onSelect: () => {
+									if (it.key === "rename") setRenaming(plan.id);
+									else if (it.key === "takeoff") setTakeoff(plan);
+									else if (it.key === "shelf") onShelfToggle?.(c.drop);
+									else if (it.key === "reset") reset(plan);
+									else setDeleting(plan.id);
+								}
+							}))
+						})
+					]
+				}),
+				plan ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StepBoxes, {
+					plan,
+					kinds
+				}), !compact && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sky-catalog-summary",
+					children: about
+				})] }) : about && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sky-catalog-summary",
+					children: about
+				}),
+				asking && plan ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+					title: "Delete “" + plan.name + "”?",
+					body: "It leaves the catalog and the shelf. Stops already on the board stay.",
+					confirmLabel: "Delete",
+					busy,
+					onConfirm: () => void remove(plan),
+					onCancel: () => setDeleting("")
+				}) : onAdd && !compact && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sky-catalog-card-foot",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn sky-catalog-add",
+						tabIndex: -1,
+						"aria-label": "Add “" + c.name + "”",
+						onClick: () => add(c.drop),
+						children: "Add"
+					})
+				})
+			]
+		}, c.key);
+	};
+	const filter = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+		ref: filterRef,
+		className: "fl-input sky-catalog-filter",
+		type: "text",
+		placeholder: "Filter blocks…",
+		"aria-label": "Filter blocks",
+		"aria-controls": listId,
+		"aria-activedescendant": at >= 0 ? rowId(at) : void 0,
+		autoComplete: "off",
+		spellCheck: false,
+		value: query,
+		onChange: (e) => {
+			setQuery(e.target.value);
+			setActive(0);
+		},
+		onKeyDown: onFilterKey
+	});
+	const what = place ? "puts it on the board" : "adds it to the focused line";
+	let i = -1;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		head(filter),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "sky-catalog-list sky-own-scroll" + (compact ? " compact" : "") + (listClass ? " " + listClass : ""),
+			id: listId,
+			role: "listbox",
+			"aria-label": "All blocks",
+			ref: listRef,
+			children: [
+				cards.blocks.length + leads > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+					className: "sky-catalog-section",
+					"data-section": "blocks",
+					role: "group",
+					"aria-label": "Blocks",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+						className: "sky-catalog-label",
+						children: "Blocks"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "sky-catalog-grid",
+						children: [leadEl, cards.blocks.map((c) => card(c, ++i))]
+					})]
+				}),
+				cards.multi.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+					className: "sky-catalog-section",
+					"data-section": "multi",
+					role: "group",
+					"aria-label": "Multi-step",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+						className: "sky-catalog-label",
+						children: "Multi-step"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: "sky-catalog-grid",
+						children: cards.multi.map((c) => card(c, ++i))
+					})]
+				}),
+				rows.length + leads === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "sky-catalog-empty muted",
+					children: query.trim() ? "Nothing matches “" + query.trim() + "”." : "No blocks yet — this server may not know Flights."
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "sky-catalog-hint muted",
+					children: onAdd ? "Drag a block onto a line or the sky · a click or a double-click " + what + " · the arrows pick, Enter " + what : "Drag a block onto a line or the sky"
+				})
+			]
+		}),
+		takeoff && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TakeoffDialog, {
+			plan: takeoff,
+			onClose: () => setTakeoff(null)
+		})
+	] });
+}
+function StopCatalog({ onClose, portal = true, ...body }) {
+	const [dragging, setDragging] = (0, import_react.useState)(false);
+	const esc = (0, import_react.useRef)(null);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		id: "sky-catalog",
+		className: "sky-catalog-modal" + (dragging ? " is-dragging" : ""),
+		onClose,
+		onEscape: () => esc.current?.() ?? false,
+		portal,
+		role: "dialog",
+		"aria-modal": "true",
+		"aria-labelledby": "sky-catalog-title",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "sky-catalog",
+			onKeyDown: (e) => e.key === "Escape" || e.stopPropagation(),
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopCatalogBody, {
+				...body,
+				autoFocus: true,
+				escRef: esc,
+				onDrag: (on, landed) => {
+					setDragging(on);
+					if (!on && landed) onClose();
+				},
+				head: (filter) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "sky-catalog-head",
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+							id: "sky-catalog-title",
+							children: "All blocks"
+						}),
+						filter,
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "fl-icon-btn sky-catalog-close",
+							"aria-label": "Close",
+							title: "Close (Esc)",
+							onClick: onClose,
+							children: "×"
+						})
+					]
+				})
+			})
+		})
+	});
+}
+function StepBoxes({ plan, kinds }) {
+	const { dots, more } = planDots(plan.steps, kinds);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "sky-catalog-boxes",
+		"aria-hidden": "true",
+		children: [dots.map((d, j) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: d.perch ? "perch" : "" }, j)), more > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "sky-catalog-more",
+			children: ["+", more]
+		})]
+	});
+}
+//#endregion
 //#region src/components/flights/StopShelf.tsx
 function sessionDragData() {
 	return [[NEW_SESSION_MIME, "session"], ["text/plain", "New session"]];
@@ -127129,12 +127427,16 @@ function StopChip({ def, onClick, place = false, onMenu }) {
 	const name = kindName(def);
 	const perch = def.actor === "you";
 	const how = clickHow(!!onClick, place, "Click to tack it onto the focused line, or drag it onto a line or the sky");
+	const cd = useClickOrDouble(onClick && (() => onClick(def.kind)));
 	const props = {
 		className: "sky-stop-chip" + (perch ? " perch" : "") + (onClick ? "" : " drag-only"),
 		"data-kind": def.kind,
 		draggable: true,
 		title: (def.summary ? def.summary + "\n" : "") + how + (onMenu ? " — right-click for more" : ""),
-		onDragStart: (e) => onStopDrag(e, def),
+		onDragStart: (e) => {
+			cd.cancel();
+			onStopDrag(e, def);
+		},
 		onContextMenu: onMenu ? (e) => {
 			e.preventDefault();
 			onMenu(def, e.clientX, e.clientY);
@@ -127157,7 +127459,8 @@ function StopChip({ def, onClick, place = false, onMenu }) {
 			type: "button",
 			...props,
 			"aria-label": place ? "Put “" + name + "” on the board" : "Tack “" + name + "” onto the focused line",
-			onClick: () => onClick(def.kind),
+			onClick: cd.onClick,
+			onDoubleClick: cd.onDoubleClick,
 			children: body
 		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			...props,
@@ -127166,12 +127469,16 @@ function StopChip({ def, onClick, place = false, onMenu }) {
 	});
 }
 function SessionChip({ onSession }) {
+	const cd = useClickOrDouble(onSession);
 	const props = {
 		className: "sky-stop-chip sky-session-chip" + (onSession ? "" : " drag-only"),
 		"data-tour": "flights-newblock",
 		draggable: true,
 		title: "A new session: drag it onto the sky (or onto stops with no session yet), or click — Ctrl+N, or double-click the sky",
-		onDragStart: (e) => carry(e, sessionDragData())
+		onDragStart: (e) => {
+			cd.cancel();
+			carry(e, sessionDragData());
+		}
 	};
 	const body = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: "sky-stop-icon",
@@ -127190,7 +127497,8 @@ function SessionChip({ onSession }) {
 			type: "button",
 			...props,
 			"aria-label": "Start a new session",
-			onClick: onSession,
+			onClick: cd.onClick,
+			onDoubleClick: cd.onDoubleClick,
 			children: body
 		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			...props,
@@ -127276,6 +127584,7 @@ function SavedMenu({ label, items, x, y, onPick, onClose }) {
 }
 function SavedChip({ plan, plans, kinds, renaming, onClick, place = false, onMenu, onRenamed }) {
 	const { dots, more } = planDots(plan.steps, kinds);
+	const cd = useClickOrDouble(onClick && (() => onClick(plan)));
 	const menuAt = (e) => {
 		e.preventDefault();
 		onMenu(plan, e.clientX, e.clientY);
@@ -127307,7 +127616,10 @@ function SavedChip({ plan, plans, kinds, renaming, onClick, place = false, onMen
 		"data-plan": plan.id,
 		draggable: !renaming,
 		title: plan.steps.map((s) => s.title).join(" → ") + "\n" + how + " — right-click for more",
-		onDragStart: (e) => carry(e, savedDragData(plan)),
+		onDragStart: (e) => {
+			cd.cancel();
+			carry(e, savedDragData(plan));
+		},
 		onContextMenu: menuAt,
 		onKeyDown: menuKey
 	};
@@ -127318,7 +127630,8 @@ function SavedChip({ plan, plans, kinds, renaming, onClick, place = false, onMen
 			type: "button",
 			...props,
 			"aria-label": place ? "Put “" + plan.name + "” on the board" : "Add “" + plan.name + "” to the focused line",
-			onClick: () => onClick(plan),
+			onClick: cd.onClick,
+			onDoubleClick: cd.onDoubleClick,
 			children: body
 		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 			...props,
@@ -127447,7 +127760,7 @@ function useSavedActions(changeShelf) {
 		] })
 	};
 }
-function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPlace, onFloat }) {
+function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPlace, onFloat, onCatalog }) {
 	const kinds = useFlightKinds().data;
 	const plans = useFlightPlans().data;
 	const [shelf, changeShelf] = useShelfPick();
@@ -127562,10 +127875,10 @@ function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPl
 							type: "button",
 							className: "sky-stop-chip sky-catalog-chip",
 							"data-tour": "sky-catalog",
-							"aria-haspopup": "dialog",
-							"aria-expanded": catalog,
-							title: "Every block and every multi-step block, in a list you can filter",
-							onClick: () => setCatalog(true),
+							"aria-haspopup": onCatalog ? void 0 : "dialog",
+							"aria-expanded": onCatalog ? void 0 : catalog,
+							title: onCatalog ? "Every block, in a palette on the board you can filter and drag from" : "Every block and every multi-step block, in a list you can filter",
+							onClick: () => onCatalog ? onCatalog() : setCatalog(true),
 							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "sky-stop-icon",
 								"aria-hidden": "true",
@@ -127615,15 +127928,48 @@ function dragFrame(start, dx, dy, zoom) {
 	return paletteFrame(start.w + dx / z, start.h + dy / z);
 }
 var headPress = (e) => e.button === 0 && !e.target.closest("button, a, input, summary, [data-no-drag]");
-function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = true, onResize, onMeasure, onPlace, onDock, onSession }) {
+function SessionCard({ onSession }) {
+	const cd = useClickOrDouble(onSession);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		role: "option",
+		"aria-selected": false,
+		className: "sky-catalog-card sky-catalog-session" + (onSession ? "" : " drag-only"),
+		"data-tour": "flights-newblock",
+		draggable: true,
+		title: "A new session: drag it onto the sky (or onto stops with no session yet)" + (onSession ? ", or click" : ""),
+		onDragStart: (e) => {
+			cd.cancel();
+			for (const [type, value] of sessionDragData()) e.dataTransfer.setData(type, value);
+			e.dataTransfer.effectAllowed = "copy";
+		},
+		onClick: (e) => cd.onClick(e),
+		onDoubleClick: () => cd.onDoubleClick(),
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "sky-catalog-card-head",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sky-catalog-icon",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopIcon, {
+					kind: "session",
+					size: 14
+				})
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sky-catalog-name",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sky-catalog-title",
+					children: "Session"
+				})
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "sky-catalog-summary",
+			children: "A new agent session, its own branch"
+		})]
+	});
+}
+function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = true, onResize, onMeasure, onPlace, onDock, onSession, onClose, focusFilter = false }) {
 	const kinds = useFlightKinds().data;
 	const plans = useFlightPlans().data;
 	const [shelf, changeShelf] = useShelfPick();
-	const blocks = shelfKinds(shelf, kinds || []);
 	const allSaved = savedStopOrder(plans || []);
-	const saved = shelfPlans(shelf, allSaved);
-	const acts = useSavedActions(changeShelf);
-	const [catalog, setCatalog] = (0, import_react.useState)(false);
 	const [live, setLive] = (0, import_react.useState)(null);
 	const grab = (0, import_react.useRef)(null);
 	const kept = paletteFrame(width, height);
@@ -127692,13 +128038,7 @@ function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = true, onR
 		if (draggable && onHeadDown && headPress(e)) onHeadDown(e);
 	};
 	const moveHint = draggable && onHeadDown ? "Drag to move the blocks" : void 0;
-	const clickKind = onPlace ? (kind) => onPlace({ kind }) : void 0;
-	const clickPlan = onPlace ? (plan) => onPlace({ planId: plan.id }) : void 0;
-	const count = blocks.length + saved.length;
-	const add = (d) => {
-		setCatalog(false);
-		onPlace?.(d);
-	};
+	const count = (kinds?.length || 0) + allSaved.length;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		ref: rootRef,
 		className: "sky-palette",
@@ -127708,8 +128048,19 @@ function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = true, onR
 			width: frame.w,
 			height: frame.h
 		},
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopCatalogBody, {
+			kinds: kinds || [],
+			plans: allSaved,
+			onAdd: onPlace,
+			place: true,
+			compact: true,
+			idPrefix: "sky-palette",
+			listClass: "sky-palette-body",
+			autoFocus: focusFilter,
+			shelf: (d) => onShelf(shelf, d),
+			onShelfToggle: (d) => changeShelf((p) => toggleShelf(p, d)),
+			lead: (q) => catalogMatch(q, "Session", "A new agent session") ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionCard, { onSession }, "session") : null,
+			head: (filter) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "sky-palette-head" + (moveHint ? " movable" : ""),
 				"data-sky-head": true,
 				title: moveHint,
@@ -127721,18 +128072,10 @@ function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = true, onR
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "sky-palette-count",
-						title: count + " on the palette — ☆ more in All blocks…",
+						title: count + " blocks — ★ puts one on the bottom shelf",
 						children: count
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-						type: "button",
-						className: "test-btn sky-palette-all",
-						"aria-haspopup": "dialog",
-						"aria-expanded": catalog,
-						title: "Every block and every multi-step block, in a list you can filter",
-						onClick: () => setCatalog(true),
-						children: "All blocks…"
-					}),
+					filter,
 					onDock && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
 						label: "The blocks palette — more",
 						items: [{
@@ -127741,88 +128084,30 @@ function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = true, onR
 							title: "Put the blocks back in the shelf at the sky's foot",
 							onSelect: onDock
 						}]
+					}),
+					onClose && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "fl-icon-btn sky-palette-close",
+						"aria-label": "Close the blocks palette",
+						title: "Close — back to the shelf",
+						onClick: onClose,
+						children: "×"
 					})
 				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "sky-palette-body sky-own-scroll",
-				children: [kinds !== void 0 && !kinds?.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-					className: "sky-stops-empty muted",
-					children: "The stop list didn't load — this server may not know Flights yet."
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "sky-palette-region",
-						"data-region": "blocks",
-						role: "list",
-						"aria-label": "Blocks",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "sky-stops-label",
-								"aria-hidden": "true",
-								children: "Blocks"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionChip, { onSession }),
-							blocks.map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopChip, {
-								def: k,
-								onClick: clickKind,
-								place: true,
-								onMenu: acts.openKindMenu
-							}, k.kind))
-						]
-					}),
-					saved.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						className: "sky-palette-region",
-						"data-region": "multi",
-						role: "list",
-						"aria-label": "Multi-step",
-						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "sky-stops-label",
-							"aria-hidden": "true",
-							children: "Multi-step"
-						}), saved.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SavedChip, {
-							plan: p,
-							plans: allSaved,
-							kinds: kinds || [],
-							renaming: acts.renaming === p.id,
-							onClick: clickPlan,
-							place: true,
-							onMenu: acts.openMenu,
-							onRenamed: acts.doneRenaming
-						}, p.id))]
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-						className: "sky-palette-hint muted",
-						children: "Click to put a block on the board, or drag it onto a line or the sky."
-					})
-				] }), acts.confirm && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "sky-palette-confirm",
-					children: acts.confirm
-				})]
-			}),
-			onResize && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "sky-palette-resize",
-				role: "separator",
-				tabIndex: 0,
-				"data-no-drag": true,
-				"aria-label": "Resize the blocks palette",
-				title: "Drag to resize the blocks (or the arrow keys)",
-				onPointerDown: resizeDown,
-				onPointerMove: resizeMove,
-				onPointerUp: resizeUp,
-				onPointerCancel: resizeUp,
-				onKeyDown: resizeKey
-			}),
-			acts.overlays,
-			catalog && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopCatalog, {
-				kinds: kinds || [],
-				plans: allSaved,
-				onAdd: onPlace ? add : void 0,
-				place: true,
-				onClose: () => setCatalog(false),
-				shelf: (d) => onShelf(shelf, d),
-				onShelfToggle: (d) => changeShelf((p) => toggleShelf(p, d))
 			})
-		]
+		}), onResize && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: "sky-palette-resize",
+			role: "separator",
+			tabIndex: 0,
+			"data-no-drag": true,
+			"aria-label": "Resize the blocks palette",
+			title: "Drag to resize the blocks (or the arrow keys)",
+			onPointerDown: resizeDown,
+			onPointerMove: resizeMove,
+			onPointerUp: resizeUp,
+			onPointerCancel: resizeUp,
+			onKeyDown: resizeKey
+		})]
 	});
 }
 //#endregion
@@ -127956,9 +128241,11 @@ function SkyView() {
 	const [sessionOver, setSessionOver] = (0, import_react.useState)("");
 	useAutoTour("sky", true);
 	const [paletteMode, setPaletteModeState] = (0, import_react.useState)(() => readPref(PALETTE_MODE_KEY) === "float" ? "float" : "shelf");
+	const [catalogOpen, setCatalogOpen] = (0, import_react.useState)(null);
 	const setPaletteMode = (m) => {
 		setPaletteModeState(m);
 		writePref(PALETTE_MODE_KEY, m);
+		if (m === "shelf") setCatalogOpen(null);
 	};
 	const paletteOn = paletteMode === "float" && !narrow;
 	const [mergeOver, setMergeOver] = (0, import_react.useState)("");
@@ -128048,10 +128335,14 @@ function SkyView() {
 			h: b.h
 		};
 	}, [layout, measured]);
-	const paletteBox = (0, import_react.useMemo)(() => paletteFrame$1(layout[PALETTE_KEY]) || measured[PALETTE_KEY] || {
+	const paletteBox = (0, import_react.useMemo)(() => paletteFrame$1(layout[PALETTE_KEY]) || (catalogOpen?.w ? catalogOpen : null) || measured[PALETTE_KEY] || {
 		w: PALETTE_W$1,
 		h: PALETTE_H$1
-	}, [layout, measured]);
+	}, [
+		layout,
+		measured,
+		catalogOpen
+	]);
 	const shownIds = (0, import_react.useMemo)(() => /* @__PURE__ */ new Set([...lines.map((l) => l.id), ...intakeOn ? [INTAKE_KEY] : []]), [lines, intakeOn]);
 	const sel = (0, import_react.useMemo)(() => pruneSelection(selRaw, shownIds), [selRaw, shownIds]);
 	const lineAlive = (0, import_react.useCallback)((id) => id === INTAKE_KEY ? intakeOn : id === PALETTE_KEY ? paletteOn : isGroundedKey(id) ? groundedIds.has(groundedIdOf(id)) : rows.some((r) => r.title === id && inSky(r)), [
@@ -128293,6 +128584,10 @@ function SkyView() {
 		if (!r) return;
 		const pressed = pressedLine.current === focusLine;
 		pressedLine.current = "";
+		if (!pressed && openedFor.current !== focusLine && rows.some((row) => row.title === focusLine)) {
+			openedFor.current = focusLine;
+			if (!layout[focusLine]?.open) onLayout(focusLine, { open: true });
+		} else if (pressed) openedFor.current = focusLine;
 		const c = camRef.current;
 		const sx = c.x + r.x * c.z;
 		const sy = c.y + r.y * c.z;
@@ -128327,6 +128622,7 @@ function SkyView() {
 		narrow
 	]);
 	const pressedLine = (0, import_react.useRef)("");
+	const openedFor = (0, import_react.useRef)("");
 	const focusOn = (0, import_react.useCallback)((id, pressed = false) => {
 		pressedLine.current = pressed ? id : "";
 		setGroundFocus("");
@@ -128648,6 +128944,40 @@ function SkyView() {
 		const m = useUi.getState().skyMode;
 		if (m === "one" || m === "perched") toast("“" + groundedName(f) + "” is on the board — All or Mine shows it");
 	};
+	const pinAt = (key, at) => {
+		if (alive.current) setLayout((l) => patchSkyLine(l, key, {
+			x: at.x,
+			y: at.y,
+			pinned: true
+		}));
+		else patchSkyLine(loadSkyLayout(), key, {
+			x: at.x,
+			y: at.y,
+			pinned: true
+		});
+	};
+	const reground = async (steps, name, was) => {
+		const g = await startGrounded({
+			steps,
+			...name ? { name } : {}
+		});
+		if (g && was) pinAt(groundedKey(g.id), was);
+		return g;
+	};
+	const removeGrounded = async (key) => {
+		const f = flights?.find((x) => x.id === groundedIdOf(key));
+		if (!f) return;
+		const was = posOf(key);
+		if (!await deleteFlight(f.id)) return;
+		const steps = f.steps;
+		const name = f.plan_name || "";
+		const shown = groundedName(f);
+		const entry = pushUndo({
+			label: "Remove “" + shown + "”",
+			undo: () => reground(steps, name, was)
+		});
+		toast("Removed “" + shown + "”", { action: undoAction(entry, "Undo: put “" + shown + "” back on the board") });
+	};
 	const mergeGrounded = async (key, title, was) => {
 		const f = flights?.find((x) => x.id === groundedIdOf(key));
 		if (!f) return;
@@ -128659,20 +128989,11 @@ function SkyView() {
 		else if (await tackOnSteps(live.id, steps, void 0, name || void 0)) ok = await deleteFlight(f.id);
 		if (!ok) return;
 		const n = steps.length;
-		toast("Moved " + n + (n === 1 ? " stop" : " stops") + " onto " + windowName(title), { action: {
-			label: "Undo",
-			ariaLabel: "Undo: put “" + (name || "the stops") + "” back on the board",
-			onClick: () => void startGrounded({
-				steps,
-				...name ? { name } : {}
-			}).then((g) => {
-				if (g && was && alive.current) setLayout((l) => patchSkyLine(l, groundedKey(g.id), {
-					x: was.x,
-					y: was.y,
-					pinned: true
-				}));
-			})
-		} });
+		const msg = "Moved " + n + (n === 1 ? " stop" : " stops") + " onto " + windowName(title);
+		toast(msg, { action: undoAction(pushUndo({
+			label: msg,
+			undo: () => reground(steps, name, was)
+		}), "Undo: put “" + (name || "the stops") + "” back on the board") });
 	};
 	const onShelfDragEnd = () => {
 		dragged.current = null;
@@ -129093,6 +129414,11 @@ function SkyView() {
 			setSelAsk("");
 			return;
 		}
+		if (e.key === "Escape" && catalogOpen && paletteOn && !typing(el) && el?.closest(".sky-palette-slot")) {
+			e.preventDefault();
+			setPaletteMode("shelf");
+			return;
+		}
 		if (!skyKeysOwn(el) || e.ctrlKey || e.metaKey || e.altKey) return;
 		const k = e.key;
 		const handled = () => e.preventDefault();
@@ -129131,6 +129457,9 @@ function SkyView() {
 		} else if (k === "Escape" && focusLine && layout[focusLine]?.open) {
 			handled();
 			onLayout(focusLine, { open: false });
+		} else if (k === "Escape" && catalogOpen && paletteOn) {
+			handled();
+			setPaletteMode("shelf");
 		} else if (k === "Escape" && (focused || groundFocus) && !marquee.current) {
 			handled();
 			unfocus();
@@ -129176,6 +129505,7 @@ function SkyView() {
 	};
 	const removeKeys = (0, import_react.useRef)(() => {});
 	removeKeys.current = (e) => {
+		if (undoKey(e)) return undoNow(e);
 		if (e.key !== "Delete" && e.key !== "Backspace" || e.ctrlKey || e.metaKey || e.altKey) return;
 		if (overlayOpen()) return;
 		const el = document.activeElement;
@@ -129187,6 +129517,22 @@ function SkyView() {
 		e.stopPropagation();
 		if (d.kind === "selection") setSelAsk("remove");
 		else if (d.kind === "box" || d.kind === "line") deleters.current.get(d.line)?.(d.kind === "box" ? d.node : "");
+	};
+	const undoKey = (e) => (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "z" || e.key === "Z");
+	const undoNow = (e) => {
+		const el = document.activeElement;
+		if (typing(el) || overlayOpen()) return;
+		if (el && el !== document.body && el.closest(".pane, .skl-card, [role=menu], [role=dialog], [role=alertdialog]")) return;
+		e.preventDefault();
+		e.stopPropagation();
+		if (drag || marquee.current || pan.current) return;
+		const entry = popUndo();
+		if (!entry) {
+			toast("Nothing to undo", { title: "Ctrl+Shift+T reopens the last closed session" });
+			return;
+		}
+		toast("Undid: " + entry.label);
+		entry.undo();
 	};
 	(0, import_react.useEffect)(() => {
 		if (narrow) return;
@@ -129358,6 +129704,34 @@ function SkyView() {
 		},
 		onFocus: focusOn
 	});
+	const openCatalog = () => {
+		const c = camRef.current;
+		const view = {
+			x: -c.x / c.z,
+			y: -c.y / c.z,
+			w: vp.w / c.z,
+			h: vp.h / c.z
+		};
+		const screen = {
+			w: typeof window !== "undefined" ? window.innerWidth : vp.w,
+			h: typeof window !== "undefined" ? window.innerHeight : vp.h
+		};
+		const stored = paletteFrame$1(layout[PALETTE_KEY]);
+		const f = catalogFrame(view, screen, c.z, stored);
+		setCatalogOpen(stored ? {
+			w: 0,
+			h: 0
+		} : {
+			w: f.w,
+			h: f.h
+		});
+		onLayout(PALETTE_KEY, {
+			x: f.x,
+			y: f.y,
+			pinned: true
+		});
+		setPaletteMode("float");
+	};
 	const shelf = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "sky-shelf-host",
 		onDragStart: onShelfDragStart,
@@ -129365,6 +129739,7 @@ function SkyView() {
 		children: [!paletteOn && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopShelf, {
 			onPlace: (d) => void placeGrounded(d, "shelf"),
 			onFloat: narrow ? void 0 : () => setPaletteMode("float"),
+			onCatalog: narrow ? void 0 : openCatalog,
 			onSession: newHere,
 			folded: shelfFolded,
 			onFold: foldShelf
@@ -129433,6 +129808,7 @@ function SkyView() {
 			draggable: liveTool === "drag",
 			registerDelete: at ? registerFor(id) : void 0,
 			onFlyOn: () => setAttachPick(f),
+			onRemove: () => removeGrounded(id),
 			sessionOver: sessionOver === id,
 			merging: !!mergeOver && !!drag?.from[id],
 			selected: at ? sel.lines.has(id) : void 0,
@@ -129493,7 +129869,10 @@ function SkyView() {
 		flightOf: (id) => lines.find((l) => l.id === id)?.flight || liveFlightOf(id),
 		kinds,
 		onTidy: tidyThese,
-		onClear: clearSel
+		onClear: clearSel,
+		rowOf: (id) => rows.find((r) => r.title === id),
+		posOf: (id) => lines.some((l) => l.id === id) ? posOf(id) : void 0,
+		restoreGrounded: reground
 	});
 	const intakeOpen = !!layout[INTAKE_KEY]?.open;
 	const intakeFrameNow = intakeFrame(layout[INTAKE_KEY]);
@@ -129609,8 +129988,8 @@ function SkyView() {
 										onDragStart: onShelfDragStart,
 										onDragEnd: onShelfDragEnd,
 										children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyPalette, {
-											width: paletteFrameNow?.w,
-											height: paletteFrameNow?.h,
+											width: paletteFrameNow?.w ?? (catalogOpen?.w || void 0),
+											height: paletteFrameNow?.h ?? (catalogOpen?.h || void 0),
 											zoom: cam.z,
 											onHeadDown: (e) => onDragStart(PALETTE_KEY, e),
 											draggable: liveTool === "drag",
@@ -129621,6 +130000,8 @@ function SkyView() {
 											onMeasure: (w, h) => onMeasure(PALETTE_KEY, w, h),
 											onPlace: (d) => void placeGrounded(d, "palette"),
 											onDock: () => setPaletteMode("shelf"),
+											onClose: () => setPaletteMode("shelf"),
+											focusFilter: !!catalogOpen,
 											onSession: newHere
 										})
 									}),

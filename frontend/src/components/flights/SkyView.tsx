@@ -70,7 +70,13 @@
  * state: the sky never picks a line itself; a click on empty sky or Esc
  * selects nothing (`selectSession(null)`). The blocks float as a sky object
  * too (`SkyPalette`, layout key "palette", `mf_sky_palette`), placed, dragged,
- * sized and tidied like the intake lane. */
+ * sized and tidied like the intake lane.
+ *
+ * Round 14 (docs/flights.md "As built: round 14 sky"): every removal pushes
+ * one entry on the sky's undo stack (lib/skyUndo) and Ctrl+Z / ⌘Z pops it
+ * ("Undid: …"); a removal asks only when something runs (lib/skySelect
+ * `removalNeedsAsk`); "All blocks…" floats the palette LARGE on the board
+ * (`catalogFrame`) instead of a window-sized dialog — Esc or its × docks it. */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useFlightKinds, useFlightPlans, useFlights, useInstances } from "../../state/queries";
@@ -78,10 +84,11 @@ import { effectiveViewMode, useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
 import { overlayOpen } from "../../lib/keymap";
 import { layoutDiagram, sessionDiagram, type Diagram } from "../../lib/flightDiagram";
-import { STOP_MIME, isLive, newStep, type Flight, type FlightPlan, type FlightRow } from "../../lib/flights";
+import { STOP_MIME, isLive, newStep, type Flight, type FlightPlan, type FlightRow, type FlightStep } from "../../lib/flights";
 import { attachGrounded, deleteFlight, startFlightOn, startGrounded, tackOn, tackOnNew, tackOnPlan, tackOnSteps } from "../../lib/flightsApi";
 import type { CatalogDrop } from "../../lib/stopCatalog";
 import { toast } from "../../lib/toast";
+import { popUndo, pushUndo, undoAction } from "../../lib/skyUndo";
 import { defaultStepFor, groundedDiagram, groundedFlights, groundedIdOf, groundedKey, isGroundedKey } from "../../lib/groundedLines";
 import { windowName } from "../../lib/windowName";
 import { reducedMotion, registerSkyHost, type Box, type SkyHost } from "../../lib/viewMode";
@@ -103,6 +110,7 @@ import {
   ZOOM_MIN,
   assignSpots,
   boundsOf,
+  catalogFrame,
   centerOn,
   estimateLine,
   firstFit,
@@ -349,9 +357,13 @@ export function SkyView() {
   // The blocks: the bottom shelf, or floating on the board (a sky object,
   // layout key "palette"), remembered per device. A phone keeps the shelf.
   const [paletteMode, setPaletteModeState] = useState<PaletteMode>(() => (readPref(PALETTE_MODE_KEY) === "float" ? "float" : "shelf"));
+  // Opened by the shelf's "All blocks…": the large frame it was given for
+  // this opening (when the owner never sized it), and Esc docks it again.
+  const [catalogOpen, setCatalogOpen] = useState<{ w: number; h: number } | null>(null);
   const setPaletteMode = (m: PaletteMode) => {
     setPaletteModeState(m);
     writePref(PALETTE_MODE_KEY, m);
+    if (m === "shelf") setCatalogOpen(null);
   };
   const paletteOn = paletteMode === "float" && !narrow;
   // A grounded line dragged by its bar: the session line under the pointer,
@@ -422,7 +434,10 @@ export function SkyView() {
     return { w: Math.max(b.w, INTAKE_W), h: b.h };
   }, [layout, measured]);
   // The floating palette's room: the frame its corner set, else its measure.
-  const paletteBox = useMemo(() => paletteFrame(layout[PALETTE_KEY]) || measured[PALETTE_KEY] || { w: PALETTE_W, h: PALETTE_H }, [layout, measured]);
+  const paletteBox = useMemo(
+    () => paletteFrame(layout[PALETTE_KEY]) || (catalogOpen?.w ? catalogOpen : null) || measured[PALETTE_KEY] || { w: PALETTE_W, h: PALETTE_H },
+    [layout, measured, catalogOpen]
+  );
   // The selection holds only lines still shown (a closed session drops out).
   const shownIds = useMemo(() => new Set([...lines.map((l) => l.id), ...(intakeOn ? [INTAKE_KEY] : [])]), [lines, intakeOn]);
   const sel = useMemo(() => pruneSelection(selRaw, shownIds), [selRaw, shownIds]);
@@ -585,6 +600,15 @@ export function SkyView() {
     // never "whole in view", so moving it would jolt every click.
     const pressed = pressedLine.current === focusLine;
     pressedLine.current = "";
+    // Picked from OUTSIDE the sky (the sidebar row, Alt+N, the palette): the
+    // owner wants the input area, so the line's box opens on its real pane
+    // (round 14: "when I click that I pretty much always want to see the
+    // input area"). A press inside the sky keeps the box as it was. Once per
+    // pick — a viewport resize re-runs this effect and must not reopen it.
+    if (!pressed && openedFor.current !== focusLine && rows.some((row) => row.title === focusLine)) {
+      openedFor.current = focusLine;
+      if (!layout[focusLine]?.open) onLayout(focusLine, { open: true });
+    } else if (pressed) openedFor.current = focusLine;
     const c = camRef.current;
     const sx = c.x + r.x * c.z;
     const sy = c.y + r.y * c.z;
@@ -594,6 +618,7 @@ export function SkyView() {
     }
     setFlash(focusLine);
     setTimeout(() => alive.current && setFlash((f) => (f === focusLine ? "" : f)), 1400);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- layout/onLayout/rows are read once per pick
   }, [focusLine, rectOf, vp.w, vp.h]);
 
   // A closed (or deleted) session's line leaves: the last picture fades out.
@@ -613,6 +638,8 @@ export function SkyView() {
    * press on the line itself is remembered, so the selection effect above
    * leaves the camera alone for it. */
   const pressedLine = useRef("");
+  /** The line whose box the last outside pick opened (once per pick). */
+  const openedFor = useRef<string>("");
   const focusOn = useCallback((id: string, pressed = false) => {
     pressedLine.current = pressed ? id : "";
     setGroundFocus("");
@@ -925,6 +952,32 @@ export function SkyView() {
     const m = useUi.getState().skyMode;
     if (m === "one" || m === "perched") toast("“" + groundedName(f) + "” is on the board — All or Mine shows it");
   };
+  /** Pin a line at `at` — through the layout store even when the sky has
+   * gone (an Undo pressed from the grid). */
+  const pinAt = (key: string, at: Pos) => {
+    if (alive.current) setLayout((l) => patchSkyLine(l, key, { x: at.x, y: at.y, pinned: true }));
+    else patchSkyLine(loadSkyLayout(), key, { x: at.x, y: at.y, pinned: true });
+  };
+  /** A grounded line made again from its stops and name, pinned where the
+   * old one sat (every Undo of a grounded line's removal or merge). */
+  const reground = async (steps: FlightStep[], name: string, was: Pos | undefined) => {
+    const g = await startGrounded({ steps, ...(name ? { name } : {}) });
+    if (g && was) pinAt(groundedKey(g.id), was);
+    return g;
+  };
+  /** Remove a grounded line (its ⋯ Remove, Delete): at once — it never runs —
+   * with Undo in the toast and on Ctrl+Z (one entry, lib/skyUndo). */
+  const removeGrounded = async (key: string) => {
+    const f = flights?.find((x) => x.id === groundedIdOf(key));
+    if (!f) return;
+    const was = posOf(key);
+    if (!(await deleteFlight(f.id))) return;
+    const steps = f.steps;
+    const name = f.plan_name || "";
+    const shown = groundedName(f);
+    const entry = pushUndo({ label: "Remove “" + shown + "”", undo: () => reground(steps, name, was) });
+    toast("Removed “" + shown + "”", { action: undoAction(entry, "Undo: put “" + shown + "” back on the board") });
+  };
   /** A grounded line dropped on a session's line: its stops go onto that
    * session — `attachGrounded` when it has no flight, else tacked on as one
    * group named after the grounded line, and the grounded flight goes. Undo
@@ -941,16 +994,10 @@ export function SkyView() {
     if (!ok) return;
     const n = steps.length;
     const msg = "Moved " + n + (n === 1 ? " stop" : " stops") + " onto " + windowName(title);
-    toast(msg, {
-      action: {
-        label: "Undo",
-        ariaLabel: "Undo: put “" + (name || "the stops") + "” back on the board",
-        onClick: () =>
-          void startGrounded({ steps, ...(name ? { name } : {}) }).then((g) => {
-            if (g && was && alive.current) setLayout((l) => patchSkyLine(l, groundedKey(g.id), { x: was.x, y: was.y, pinned: true }));
-          }),
-      },
-    });
+    // The grounded line back where it was (the stops stay on the session too:
+    // Undo makes the line again, it does not take them off).
+    const entry = pushUndo({ label: msg, undo: () => reground(steps, name, was) });
+    toast(msg, { action: undoAction(entry, "Undo: put “" + (name || "the stops") + "” back on the board") });
   };
   const onShelfDragEnd = () => {
     dragged.current = null;
@@ -1317,6 +1364,12 @@ export function SkyView() {
       setSelAsk("");
       return;
     }
+    // Esc inside the palette All blocks… opened (not in its filter): dock it.
+    if (e.key === "Escape" && catalogOpen && paletteOn && !typing(el) && el?.closest(".sky-palette-slot")) {
+      e.preventDefault();
+      setPaletteMode("shelf");
+      return;
+    }
     if (!skyKeysOwn(el) || e.ctrlKey || e.metaKey || e.altKey) return;
     const k = e.key;
     const handled = () => e.preventDefault();
@@ -1355,6 +1408,10 @@ export function SkyView() {
     } else if (k === "Escape" && focusLine && layout[focusLine]?.open) {
       handled();
       onLayout(focusLine, { open: false });
+    } else if (k === "Escape" && catalogOpen && paletteOn) {
+      // Opened by "All blocks…", nothing else to close: back to the shelf.
+      handled();
+      setPaletteMode("shelf");
     } else if (k === "Escape" && (focused || groundFocus) && !marquee.current) {
       // Nothing selected, no dialog, no marquee: Esc leaves nothing focused.
       handled();
@@ -1408,6 +1465,7 @@ export function SkyView() {
   };
   const removeKeys = useRef<(e: KeyboardEvent) => void>(() => {});
   removeKeys.current = (e: KeyboardEvent) => {
+    if (undoKey(e)) return undoNow(e);
     if ((e.key !== "Delete" && e.key !== "Backspace") || e.ctrlKey || e.metaKey || e.altKey) return;
     if (overlayOpen()) return;
     const el = document.activeElement;
@@ -1420,6 +1478,28 @@ export function SkyView() {
     e.stopPropagation();
     if (d.kind === "selection") setSelAsk("remove");
     else if (d.kind === "box" || d.kind === "line") deleters.current.get(d.line)?.(d.kind === "box" ? d.node : "");
+  };
+  /** Ctrl+Z / ⌘Z (no Shift, no Alt): undo. No redo — Ctrl+Y is the view switch. */
+  const undoKey = (e: KeyboardEvent) => (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "z" || e.key === "Z");
+  /** Ctrl+Z on the sky: the newest removal back (lib/skyUndo). Not in a
+   * field (its own undo), an open card's pane (the terminal's), a menu or a
+   * dialog, nor while a drag, a pan or a marquee runs. */
+  const undoNow = (e: KeyboardEvent) => {
+    const el = document.activeElement;
+    if (typing(el) || overlayOpen()) return;
+    if (el && el !== document.body && el.closest(".pane, .skl-card, [role=menu], [role=dialog], [role=alertdialog]")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (drag || marquee.current || pan.current) return;
+    const entry = popUndo();
+    if (!entry) {
+      // The sky takes Ctrl+Z from the app's keymap (where it reopens the last
+      // closed session): say where that road went.
+      toast("Nothing to undo", { title: "Ctrl+Shift+T reopens the last closed session" });
+      return;
+    }
+    toast("Undid: " + entry.label);
+    void entry.undo();
   };
   useEffect(() => {
     if (narrow) return;
@@ -1557,6 +1637,23 @@ export function SkyView() {
     />
   );
 
+  /** "All blocks…": the palette floats over the board, LARGE when the owner
+   * never sized it (`catalogFrame`: ≈ 60vw × 70vh at this zoom, right of the
+   * view's centre, inside the view) and pinned there — a sky object, not a
+   * modal: the board stays around it, so a drag out of it is the obvious
+   * move. Its × (or Esc) docks it back at the bottom. */
+  const openCatalog = () => {
+    const c = camRef.current;
+    const view: Rect = { x: -c.x / c.z, y: -c.y / c.z, w: vp.w / c.z, h: vp.h / c.z };
+    const screen = { w: typeof window !== "undefined" ? window.innerWidth : vp.w, h: typeof window !== "undefined" ? window.innerHeight : vp.h };
+    const stored = paletteFrame(layout[PALETTE_KEY]);
+    const f = catalogFrame(view, screen, c.z, stored);
+    // {0, 0}: opened by All blocks… at the owner's own frame.
+    setCatalogOpen(stored ? { w: 0, h: 0 } : { w: f.w, h: f.h });
+    onLayout(PALETTE_KEY, { x: f.x, y: f.y, pinned: true });
+    setPaletteMode("float");
+  };
+
   // The Stops shelf: the chips' drags are read here as they start (the sky
   // owns their drops). `display: contents`, so the shelf sits in the stage.
   // A click on a chip PLACES its block above the shelf; floating, the shelf
@@ -1567,6 +1664,7 @@ export function SkyView() {
         <StopShelf
           onPlace={(d) => void placeGrounded(d, "shelf")}
           onFloat={narrow ? undefined : () => setPaletteMode("float")}
+          onCatalog={narrow ? undefined : openCatalog}
           onSession={newHere}
           folded={shelfFolded}
           onFold={foldShelf}
@@ -1625,6 +1723,7 @@ export function SkyView() {
           draggable={liveTool === "drag"}
           registerDelete={at ? registerFor(id) : undefined}
           onFlyOn={() => setAttachPick(f)}
+          onRemove={() => removeGrounded(id)}
           sessionOver={sessionOver === id}
           merging={!!mergeOver && !!drag?.from[id]}
           selected={at ? sel.lines.has(id) : undefined}
@@ -1688,6 +1787,9 @@ export function SkyView() {
       kinds={kinds}
       onTidy={tidyThese}
       onClear={clearSel}
+      rowOf={(id) => rows.find((r) => r.title === id)}
+      posOf={(id) => (lines.some((l) => l.id === id) ? posOf(id) : undefined)}
+      restoreGrounded={reground}
     />
   );
 
@@ -1793,8 +1895,8 @@ export function SkyView() {
                   onDragEnd={onShelfDragEnd}
                 >
                   <SkyPalette
-                    width={paletteFrameNow?.w}
-                    height={paletteFrameNow?.h}
+                    width={paletteFrameNow?.w ?? (catalogOpen?.w || undefined)}
+                    height={paletteFrameNow?.h ?? (catalogOpen?.h || undefined)}
                     zoom={cam.z}
                     onHeadDown={(e) => onDragStart(PALETTE_KEY, e)}
                     draggable={liveTool === "drag"}
@@ -1802,6 +1904,8 @@ export function SkyView() {
                     onMeasure={(w, h) => onMeasure(PALETTE_KEY, w, h)}
                     onPlace={(d) => void placeGrounded(d, "palette")}
                     onDock={() => setPaletteMode("shelf")}
+                    onClose={() => setPaletteMode("shelf")}
+                    focusFilter={!!catalogOpen}
                     onSession={newHere}
                   />
                 </div>

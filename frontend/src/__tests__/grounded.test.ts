@@ -161,13 +161,18 @@ describe("the grounded line", () => {
     expect(html).toContain("Push");
   });
 
-  it("its ⋯: Add a stop…, Fly on a session…, Save to the shelf, Remove — Remove confirmed inline", () => {
+  it("its ⋯: Add a stop…, Fly on a session…, Save to the shelf, Remove — Remove at once, undoable (round 14: a grounded line never runs)", () => {
     const src = code("components/flights/GroundedLine.tsx");
     for (const l of ['label: "Add a stop…"', 'label: "Fly on a session…"', 'label: "Save to the shelf"', 'label: "Remove", danger: true'])
       expect(src).toContain(l);
-    expect(src).toContain("onSelect: () => setConfirming(true)");
-    expect(src).toContain("<InlineConfirm");
-    expect(src).toContain("if (await deleteFlight(flight.id))");
+    expect(src).toContain("onSelect: () => void remove() },");
+    expect(src).not.toContain("<InlineConfirm");
+    expect(src).not.toContain("setConfirming");
+    // The host removes it (and pins the Undo where it sat); alone, it deletes and pushes its own entry.
+    expect(src).toContain("if (p.onRemove) await p.onRemove();");
+    expect(src).toContain("else if (await deleteFlight(flight.id)) {");
+    expect(src).toMatch(/const entry = pushUndo\(\{ label: "Remove “" \+ name \+ "”", undo: \(\) => startGrounded\(/);
+    expect(src).toContain('toast("Removed “" + name + "”", { action: undoAction(entry,');
     expect(src).toContain("const saved = await savePlan(plan);");
     expect(src).toMatch(/if \(e\.target !== e\.currentTarget\) return;[\s\S]*?if \(!isRemoveKey\(e\.key\)\) return;/);
     expect(src).not.toMatch(/\bwindow\.(prompt|alert|confirm)\(/);

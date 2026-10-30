@@ -8784,17 +8784,34 @@ a.fl-waiting-ref:hover {
   opacity: 0.72;
   border-color: var(--accent);
 }
-/* All blocks (StopCatalog.tsx): the catalog in the app's Modal, sized to the
-   window (≈ 92vw × 86vh) — the head with the filter, then Blocks and
-   Multi-step, each a grid of cards. The card is a stop dialog's (panel,
-   border, radius 12). */
+/* "Takes off…" (TakeoffDialog.tsx): the trigger's form inside the app's Modal.
+   The fields' own look (.fl-form, .fl-schedule) is StopParts.css's. */
+
+.fl-takeoff {
+  width: min(560px, calc(100vw - 48px));
+}
+
+.fl-takeoff-lede {
+  margin: -4px 0 10px;
+  font-size: 12.5px;
+}
+
+.fl-takeoff .fl-trigger {
+  border: 0;
+  padding: 0;
+  background: none;
+}
+/* All blocks (StopCatalog.tsx): the catalog's body — Blocks and Multi-step,
+   each a grid of cards — in the app's Modal (a dialog-sized card, not the
+   window: the board shows around it, so a drag out of it reads as the move),
+   and, `.compact`, as the floating palette's whole body (SkyPalette.css). */
 
 .sky-catalog {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  width: 92vw;
-  height: 86vh;
+  width: min(920px, 70vw);
+  height: min(680px, 72vh);
   max-width: calc(100vw - 16px);
   max-height: calc(100vh - 16px);
   box-sizing: border-box;
@@ -9082,6 +9099,84 @@ a.fl-waiting-ref:hover {
   font-size: 11px;
 }
 
+/* --- Compact: the floating palette's cards (round 14) ---------------------
+   An icon, the name, one line; the ★ shows on the picked / hovered card (or
+   when the block is on the shelf), so a full palette stays calm. */
+.sky-catalog-list.compact {
+  gap: 10px;
+}
+
+.sky-catalog-list.compact .sky-catalog-grid {
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 6px;
+}
+
+.sky-catalog-list.compact .sky-catalog-card {
+  gap: 3px;
+  padding: 6px 4px 6px 8px;
+  border-radius: 8px;
+}
+
+/* A saved stop takes two columns: its name, its ⋯ and its boxes. */
+.sky-catalog-list.compact .sky-catalog-plan {
+  grid-column: span 2;
+}
+
+.sky-catalog-list.compact .sky-catalog-card-head {
+  gap: 6px;
+  min-height: 22px;
+}
+
+.sky-catalog-list.compact .sky-catalog-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+
+.sky-catalog-list.compact .sky-catalog-name {
+  font-size: 12.5px;
+}
+
+.sky-catalog-list.compact .sky-catalog-summary {
+  font-size: 11px;
+  -webkit-line-clamp: 1;
+}
+
+.sky-catalog-list.compact .sky-catalog-shelf.fl-icon-btn {
+  padding: 0 3px;
+}
+
+.sky-catalog-list.compact .sky-catalog-shelf:not(.on) {
+  opacity: 0;
+}
+
+.sky-catalog-list.compact .sky-catalog-card.active .sky-catalog-shelf,
+.sky-catalog-list.compact .sky-catalog-card:hover .sky-catalog-shelf,
+.sky-catalog-list.compact .sky-catalog-shelf:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .sky-catalog-list.compact .sky-catalog-shelf:not(.on) {
+    opacity: 1;
+  }
+}
+
+.sky-catalog-list.compact .sky-catalog-card .vf-menu summary {
+  padding: 0 4px;
+}
+
+/* The Session card (the palette's first): primary-tinted, as the shelf's
+   Session chip, since it starts something. */
+.sky-catalog-card.sky-catalog-session {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+.sky-catalog-card.sky-catalog-session:hover {
+  border-color: var(--accent);
+}
+
 /* A phone: the card fills the screen. */
 @media (max-width: 640px) {
   .sky-catalog {
@@ -9096,23 +9191,6 @@ a.fl-waiting-ref:hover {
   .sky-catalog-head h2 {
     display: none;
   }
-}
-/* "Takes off…" (TakeoffDialog.tsx): the trigger's form inside the app's Modal.
-   The fields' own look (.fl-form, .fl-schedule) is StopParts.css's. */
-
-.fl-takeoff {
-  width: min(560px, calc(100vw - 48px));
-}
-
-.fl-takeoff-lede {
-  margin: -4px 0 10px;
-  font-size: 12.5px;
-}
-
-.fl-takeoff .fl-trigger {
-  border: 0;
-  padding: 0;
-  background: none;
 }
 /* The shelf at the Sky's foot (StopShelf.tsx): one row, Stops — Blocks (the
    Session chip, the default kinds), Multi-step (the saved stops), then All
@@ -9416,8 +9494,9 @@ a.fl-waiting-ref:hover {
   padding-top: 6px;
 }
 /* The floating blocks palette (SkyPalette.tsx): a panel on the board, the
-   intake lane's kin — a head to drag it by, the shelf's chips (StopShelf.css)
-   flowing in a grid, a corner handle to size it. */
+   intake lane's kin — a head to drag it by (with the filter), every block as
+   the catalog's compact cards (StopCatalog.css) flowing in a grid, a corner
+   handle to size it. */
 
 .sky-palette {
   position: relative;
@@ -9468,68 +9547,46 @@ a.fl-waiting-ref:hover {
   text-align: center;
 }
 
-.sky-palette-all.test-btn {
-  margin-left: auto;
-  padding: 2px 9px;
-  font-size: 11.5px;
+/* The filter, in the head: as wide as the head leaves it. */
+.sky-palette-head .sky-catalog-filter.fl-input.fl-input {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+  height: 26px;
+  margin: 0;
+  font-size: 12px;
 }
 
-.sky-palette-head .vf-menu {
+.sky-palette-head .vf-menu,
+.sky-palette-close.fl-icon-btn {
   flex: none;
 }
 
-.sky-palette-body {
-  display: flex;
+.sky-palette-close.fl-icon-btn {
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* The body is the catalog's list (StopCatalog.css), compact: every block as
+   cards filling the frame, scrolling past it. */
+.sky-palette .sky-palette-body {
   flex: 1;
-  flex-direction: column;
   gap: 10px;
   min-height: 0;
-  padding: 10px 12px 18px;
+  padding: 10px 10px 18px;
   overflow-y: auto;
   scrollbar-width: thin;
 }
 
-/* A region: its tiny label across the top, then the chips as a grid that
-   wraps to the palette's width (the shelf's row scrolls sideways instead). */
-.sky-palette-region {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
-  gap: 6px;
-}
-
-.sky-palette-region > .sky-stops-label {
-  grid-column: 1 / -1;
-}
-
-.sky-palette .sky-stop-chip {
-  width: 100%;
-  min-width: 0;
-}
-
-.sky-palette .sky-stop-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* A saved stop takes two columns: its name and its dots. */
-.sky-palette .sky-saved-chip {
-  grid-column: span 2;
-  justify-content: space-between;
-}
-
-.sky-palette-hint {
+.sky-palette .sky-catalog-hint {
   margin: 0;
   font-size: 11px;
 }
 
 @media (hover: none) {
-  .sky-palette-hint {
+  .sky-palette .sky-catalog-hint {
     display: none;
   }
-}
-
-.sky-palette-confirm .set-confirm {
-  margin: 0;
 }
 
 /* The corner handle: the intake lane's (SkyLine.css .skl-resize) — two
