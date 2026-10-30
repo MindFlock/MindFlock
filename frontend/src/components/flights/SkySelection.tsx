@@ -59,13 +59,15 @@ export function takenStops(nodes: Iterable<string>, steps: readonly FlightStep[]
 /** Where Undo tacks each taken item back (in `takenStops` order): its old
  * index while that is still ahead of the flight's `cursor` and inside the
  * line as it grows back (`length` + what went back already), else the end
- * (undefined). */
+ * (undefined) — and once one goes to the end, so do the rest, so they keep
+ * their order and none lands inside another. */
 export function putBackAt(taken: readonly Pick<TakenStops, "index" | "steps">[], flight: { cursor: number; length: number }): Array<number | undefined> {
   let len = flight.length;
+  let atEnd = false;
   return taken.map((t) => {
-    const at = t.index > flight.cursor && t.index < len ? t.index : undefined;
+    atEnd ||= !(t.index > flight.cursor && t.index < len);
     len += t.steps.length;
-    return at;
+    return atEnd ? undefined : t.index;
   });
 }
 

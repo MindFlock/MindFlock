@@ -65,7 +65,7 @@ import {
   ungroupStops,
 } from "../../lib/flightsApi";
 import { groupHaltStep, undoPayload, type StopDrop } from "../../lib/stopEditing";
-import { pushUndo, undoAction } from "../../lib/skyUndo";
+import { pushUndo, takeUndo } from "../../lib/skyUndo";
 import { removalNeedsAsk } from "../../lib/skySelect";
 import { InlineConfirm } from "../InlineConfirm";
 import { errMsg } from "../../lib/format";
@@ -302,7 +302,16 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         return tackOn(id, back.step, back.at);
       },
     });
-    toast(removedToast(step.title, wasHere, next), { action: undoAction(entry, "Undo: put “" + step.title + "” back on the line") });
+    toast(removedToast(step.title, wasHere, next), {
+      action: {
+        label: "Undo",
+        ariaLabel: "Undo: put “" + step.title + "” back on the line",
+        // The same entry Ctrl+Z pops: whichever comes first runs it.
+        onClick: () => {
+          if (takeUndo(entry)) void entry.undo();
+        },
+      },
+    });
     return true;
   };
 
@@ -324,7 +333,16 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         return tackOnSteps(id, g.steps, back.at, g.name);
       },
     });
-    toast(removedToast(g.name, wasHere, next), { action: undoAction(entry, "Undo: put “" + g.name + "” back on the line") });
+    toast(removedToast(g.name, wasHere, next), {
+      action: {
+        label: "Undo",
+        ariaLabel: "Undo: put “" + g.name + "” back on the line",
+        // The same entry Ctrl+Z pops: whichever comes first runs it.
+        onClick: () => {
+          if (takeUndo(entry)) void entry.undo();
+        },
+      },
+    });
     return true;
   };
 

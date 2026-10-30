@@ -474,3 +474,67 @@ describe("round 13: nothing focused, place don't tack, the floating palette", ()
     expect(v).not.toContain("out.lines.push({ id: PALETTE_KEY");
   });
 });
+
+describe("round 14: Ctrl+Z, removals that don't ask, All blocks… on the board", () => {
+  const v = code("components/flights/SkyView.tsx");
+  const line = code("components/flights/SkyLine.tsx");
+  const grounded = code("components/flights/GroundedLine.tsx");
+  const hook = code("components/flights/useSessionLine.tsx");
+
+  it("Ctrl+Z / ⌘Z in the window's capture phase pops the sky's stack — never in a field, a pane, a menu or a dialog, nor mid-drag; no redo", () => {
+    expect(v).toContain("if (undoKey(e)) return undoNow(e);");
+    expect(v).toContain('const undoKey = (e: KeyboardEvent) => (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "z" || e.key === "Z");');
+    expect(v).toContain("if (typing(el) || overlayOpen()) return;");
+    expect(v).toContain('el.closest(".pane, .skl-card, [role=menu], [role=dialog], [role=alertdialog]")');
+    expect(v).toContain("if (drag || marquee.current || pan.current) return;");
+    expect(v).toContain('toast("Undid: " + entry.label);');
+    expect(v).toContain('toast("Nothing to undo"');
+    // Redo is not bound (Ctrl+Y stays the view toggle).
+    expect(v).not.toMatch(/key === "y"|redo/i);
+  });
+
+  it("a grounded line goes at once through the host: one entry, its toast takes it, Undo makes it again where it sat", () => {
+    expect(v).toContain("onRemove={() => removeGrounded(id)}");
+    expect(v).toContain('const entry = pushUndo({ label: "Remove “" + shown + "”", undo: () => reground(steps, name, was) });');
+    expect(v).toContain('toast("Removed “" + shown + "”", { action: undoAction(entry, ');
+    expect(grounded).not.toContain("InlineConfirm");
+  });
+
+  it("a session line closes at once when idle (Undo reopens it from Recently closed), asks while its agent works or asks", () => {
+    expect(line).toContain('if (removalNeedsAsk({ kind: "session", row: p.rows.find((r) => r.title === t) })) setClosing(t);');
+    expect(line).toContain("onSelect: () => askClose(p.title) },");
+    expect(line).toContain("if (!sessionOpen(title)) pushCloseUndo([title]);");
+    expect(line).toContain("for (const t of [...titles].reverse()) if (!sessionOpen(t)) await undoLastClose();");
+    expect(line).toContain("valid: () => titles.some((t) => !sessionOpen(t)),");
+    expect(line).toContain('"Its agent " + runningWord(');
+  });
+
+  it("a stop: Undo on the toast and on Ctrl+Z is the same entry; the stop a running flight is at asks first, on the sky only", () => {
+    expect(hook.match(/const entry = pushUndo\(\{/g)?.length).toBe(2);
+    expect(hook.match(/onClick: \(\) => \{\s*if \(takeUndo\(entry\)\) void entry\.undo\(\);\s*\}/g)?.length).toBe(2);
+    expect(hook).toContain('if (opts.askRunning && removalNeedsAsk({ kind: "stops", indexes: nodeIndexes(n), flight })) setRemoveAsk(n);');
+    expect(hook).toContain("onRemove: flight ? (n) => requestRemove(own(n)) : undefined,");
+    expect(line).toContain("askRunning: true");
+    expect(line).toContain("{line.removeAsk}");
+    // The pane's Flight tab doesn't ask (it draws no question).
+    expect(code("components/flights/SessionFlight.tsx")).not.toContain("askRunning");
+  });
+
+  it("the selection bar gets what it needs to ask and to put things back", () => {
+    expect(v).toContain("rowOf={(id) => rows.find((r) => r.title === id)}");
+    expect(v).toContain("restoreGrounded={reground}");
+  });
+
+  it("All blocks… floats the palette LARGE on the board (a sky object, not a modal); × and Esc dock it", () => {
+    expect(v).toContain("onCatalog={narrow ? undefined : openCatalog}");
+    expect(v).toContain("const f = catalogFrame(view, screen, c.z, stored);");
+    expect(v).toContain("onLayout(PALETTE_KEY, { x: f.x, y: f.y, pinned: true });");
+    expect(v).toContain('setPaletteMode("float");');
+    expect(v).toContain('onClose={() => setPaletteMode("shelf")}');
+    expect(v).toContain("focusFilter={!!catalogOpen}");
+    expect(v).toContain("width={paletteFrameNow?.w ?? (catalogOpen?.w || undefined)}");
+    expect(v).toMatch(/k === "Escape" && catalogOpen && paletteOn\) \{\s*handled\(\);\s*setPaletteMode\("shelf"\);/);
+    // Docking forgets the large frame (it was for that opening only).
+    expect(v).toContain('if (m === "shelf") setCatalogOpen(null);');
+  });
+});

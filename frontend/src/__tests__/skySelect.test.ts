@@ -24,7 +24,10 @@ import {
   pruneSelection,
   rectFrom,
   removals,
+  removalNeedsAsk,
   screenToPlane,
+  sessionRuns,
+  stopsRun,
   select,
   selectLines,
   selectedIndexes,
@@ -35,7 +38,8 @@ import {
   type SelectLine,
   type SelectStop,
 } from "../lib/skySelect";
-import { NEW_STOPS, SkySelectionBar, groupHint } from "../components/flights/SkySelection";
+import { NEW_STOPS, SkySelectionBar, groupHint, putBackAt, takenStops } from "../components/flights/SkySelection";
+import { nodeIndexes } from "../components/flights/useSessionLine";
 import type { Flight, FlightStep } from "../lib/flights";
 
 /** Two lines side by side, a 34px bar each, two stops on each. */
@@ -420,5 +424,76 @@ describe("Shift+click on a box (toggleStop)", () => {
     const fromLines = toggleStop(selectLines(["l1", "l2"]), "l1", "stop:s1");
     expect(fromLines.lines.size).toBe(0);
     expect([...fromLines.stops.get("l1")!]).toEqual(["stop:s1"]);
+  });
+});
+
+describe("round 14: removal asks only when something runs (removalNeedsAsk)", () => {
+  const running = { state: "running", cursor: 2 };
+
+  it("a session whose agent works or asks you something; never an idle, limited or offline one", () => {
+    for (const a of ["working", "clarify"]) expect(removalNeedsAsk({ kind: "session", row: { activity: a } })).toBe(true);
+    expect(removalNeedsAsk({ kind: "session", row: { activity: "idle", asking: { kind: "dialog" } } })).toBe(true);
+    for (const a of ["idle", "limit", "offline", ""]) expect(removalNeedsAsk({ kind: "session", row: { activity: a } })).toBe(false);
+    expect(removalNeedsAsk({ kind: "session", row: undefined })).toBe(false);
+    expect(sessionRuns({ activity: "idle", asking: null })).toBe(false);
+  });
+
+  it("the stop a running (or waiting-on-you) flight is at; not one ahead, not a flown one, not a paused or halted flight", () => {
+    expect(removalNeedsAsk({ kind: "stops", indexes: [2], flight: running })).toBe(true);
+    expect(removalNeedsAsk({ kind: "stops", indexes: [1, 2, 3], flight: { state: "waiting_you", cursor: 2 } })).toBe(true);
+    expect(removalNeedsAsk({ kind: "stops", indexes: [3], flight: running })).toBe(false);
+    expect(removalNeedsAsk({ kind: "stops", indexes: [0, 1], flight: running })).toBe(false);
+    for (const state of ["paused", "halted", "grounded", "done"]) expect(stopsRun([2], { state, cursor: 2 })).toBe(false);
+    expect(removalNeedsAsk({ kind: "stops", indexes: [2], flight: null })).toBe(false);
+  });
+
+  it("a grounded line never; a selection when anything in it runs", () => {
+    expect(removalNeedsAsk({ kind: "grounded" })).toBe(false);
+    const idle = { kind: "session" as const, row: { activity: "idle" } };
+    expect(removalNeedsAsk({ kind: "selection", items: [idle, { kind: "grounded" }] })).toBe(false);
+    expect(removalNeedsAsk({ kind: "selection", items: [idle, { kind: "session", row: { activity: "working" } }] })).toBe(true);
+    expect(removalNeedsAsk({ kind: "selection", items: [] })).toBe(false);
+  });
+
+  it("a box's step indexes: a stop its own, a group every sub-step", () => {
+    expect(nodeIndexes({ kind: "stop", index: 4 })).toEqual([4]);
+    expect(nodeIndexes({ kind: "group", index: 1, group: { total: 3 } as never })).toEqual([1, 2, 3]);
+    expect(nodeIndexes({ kind: "add" })).toEqual([]);
+  });
+});
+
+describe("round 14: the selection's Remove puts the lot back (one Undo)", () => {
+  it("what was taken, first index first: a group by all its steps and its name, a stop alone", () => {
+    const t = takenStops(["stop:s5", "group:g1", "stop:s1"], STEPS);
+    expect(t.map((x) => [x.index, x.steps.map((s) => s.id), x.group])).toEqual([
+      [0, ["s1"], ""],
+      [1, ["s2", "s3", "s4"], "G g1"],
+      [4, ["s5"], ""],
+    ]);
+    expect(takenStops(["add", "stop:nope"], STEPS)).toEqual([]);
+  });
+
+  it("each goes back at its old index while that is still ahead of the flight and inside the line growing back, else at the end", () => {
+    // s1 [g1: s2 s3 s4] s5 [g2: s6 s7]; g1 and s5 taken leaves s1 s6 s7.
+    const taken = takenStops(["group:g1", "stop:s5"], STEPS);
+    // Cursor still at s1: both where they were (the group at 1, then s5 at 4).
+    expect(putBackAt(taken, { cursor: 0, length: 3 })).toEqual([1, 4]);
+    // The flight has reached index 1 meanwhile: the group goes to the end,
+    // and s5 after it (at 4 it would land inside the group).
+    expect(putBackAt(taken, { cursor: 1, length: 3 })).toEqual([undefined, undefined]);
+    // A lone stop at the very end of the line: the end.
+    expect(putBackAt(takenStops(["stop:s1"], STEPS), { cursor: -1, length: 0 })).toEqual([undefined]);
+  });
+
+  it("the bar pushes ONE entry for the lot and its toast takes that entry", () => {
+    const bar = code("components/flights/SkySelection.tsx");
+    expect(bar.match(/pushUndo\(/g)?.length).toBe(2);
+    expect(bar).toContain('label: "Remove " + plural(n, "line"),');
+    expect(bar).toContain('label: "Remove " + plural(n, "stop"),');
+    expect(bar).toContain("await reopenClosed(closed);");
+    expect(bar).toMatch(/action: undoAction\(entry, "Undo: put " \+ plural\(n, "stop"\) \+ " back"\)/);
+    // The "past 3" question is gone: Remove goes at once unless something runs.
+    expect(bar).not.toContain("REMOVE_AT_ONCE");
+    expect(bar).toContain('if (p.ask === "remove" && !asks && !busy) void removeNow();');
   });
 });

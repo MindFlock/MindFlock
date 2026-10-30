@@ -30,6 +30,7 @@ import {
   PALETTE_MAX,
   PALETTE_MIN,
   PLACE_GAP,
+  catalogFrame,
   spotNear,
   loadSkyLayout,
   patchSkyLine,
@@ -411,5 +412,44 @@ describe("round 13: where a placed block lands, a sky object's frame", () => {
     expect(intakeFrame({ w: 50, h: 5000 })).toEqual({ w: 200, h: 1600 });
     expect(paletteFrame({ w: 1, h: 1 })).toEqual(PALETTE_MIN);
     expect(paletteFrame({ w: 99999, h: 99999 })).toEqual(PALETTE_MAX);
+  });
+});
+
+describe("round 14: All blocks… floats the palette large (catalogFrame)", () => {
+  const view = { x: 0, y: 0, w: 1600, h: 900 };
+  const screen = { w: 1920, h: 1080 };
+
+  it("≈ 60vw × 70vh at 100%, inside the view, its left edge right of the view's centre unless that pushes it out", () => {
+    const f = catalogFrame(view, screen, 1);
+    expect(f.w).toBe(1152);
+    expect(f.h).toBe(756);
+    expect(f.x + f.w).toBeLessThanOrEqual(1600 - 16);
+    expect(f.x).toBeGreaterThanOrEqual(16);
+    expect(f.y).toBe(72);
+    // A narrow frame sits just right of the centre.
+    const small = catalogFrame(view, { w: 600, h: 400 }, 1);
+    expect(small.x).toBe(800 + PLACE_GAP);
+  });
+
+  it("plane px at the current zoom: the same screen size, held to the palette's limits", () => {
+    const half = catalogFrame({ x: 0, y: 0, w: 3200, h: 1800 }, screen, 0.5);
+    expect(half.w).toBe(PALETTE_MAX.w);
+    expect(half.h).toBe(PALETTE_MAX.h);
+    const twice = catalogFrame({ x: 100, y: 50, w: 800, h: 450 }, screen, 2);
+    expect(twice.w).toBe(576);
+    expect(twice.h).toBe(378);
+    expect(twice.x + twice.w).toBeLessThanOrEqual(100 + 800 - 8);
+  });
+
+  it("a small window: the view's room minus the gutter, never under the palette's least", () => {
+    const f = catalogFrame({ x: -50, y: -20, w: 500, h: 300 }, { w: 500, h: 300 }, 1);
+    expect(f.w).toBe(300);
+    expect(f.h).toBe(210);
+    expect(catalogFrame({ x: 0, y: 0, w: 100, h: 100 }, { w: 100, h: 100 }, 1)).toMatchObject(PALETTE_MIN);
+  });
+
+  it("a frame the owner gave it stays; only its spot is chosen", () => {
+    const f = catalogFrame(view, screen, 1, { w: 400, h: 300 });
+    expect(f).toEqual({ x: 800 + PLACE_GAP, y: 300, w: 400, h: 300 });
   });
 });
