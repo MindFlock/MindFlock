@@ -33,7 +33,8 @@ the theme toggle 🌙, the notifications 🔔 bell, whose one amber badge counts
 everything that needs you (see [Notifications](#notifications-)), and the
 mic right after it (below: talk to the focused session). Then the menu,
 which carries only the daily loop — **New**, the **Grid · Sky** toggle
-(`Alt+Y`; see [Two views](#two-views-the-grid-and-the-sky)), **Intake**
+(`Alt+Y`; see [Two views](#two-views-the-grid-and-the-sky) — on the bar only
+while the sidebar, its home, is hidden or the window is phone-narrow), **Intake**
 (`Alt+I`; see [Intake](#intake)), **Verify** (`Alt+V`), **Schedule**
 (`Alt+S`; see [Schedule](#schedule)) and **Settings** — and ends in a
 monochrome magnifier icon (`#palette-btn`, tooltip *Command palette — Ctrl+P /
@@ -87,7 +88,9 @@ working. It refreshes on `template.run_started` / `template.run_failed`
 you** (parked on a *you* stop, or halted until someone retries or skips; a
 flight parked on a Verify stop is Verify's count, not this one) — nothing at
 zero, red when one halted (`lib/flights.ts` `perchBadge`). Its folded ⋯ row
-carries the same count.
+carries the same count, and so does the sidebar View row's Sky half — the
+toggle's home, where it lives whenever the sidebar is shown (see
+[Switching](#switching)).
 
 **The bar's tooltips read their shortcuts off the live keymap**
 (`shortcutLabels`), rebinds included — and in a browser tab they leave out
@@ -474,13 +477,14 @@ first session under a week old, read from the server's setup record (the
 `repo` step's date), so every device agrees — with fewer than three sessions
 sees only what the first hour needs: the sessions, **+ New** and **Setup**.
 The usage strip, the **Assistant** bar and every extension's bar (Database,
-Usage optimizer…) join the *default* hidden set; the **View** presets, the
+Usage optimizer…) join the *default* hidden set; the **View** row's pane
+counts (never its Grid · Sky toggle), the
 filter box (`/` still summons it), the "more bars" 💡 hint and the rows'
 Alt+N numbers wait too; and pane headers are calm unless you customized them (see
 [The pane header](#the-pane-header)). Three sessions, or a week, brings the
 full screen back by itself. A choice the person made always wins: bars set in
 Customize (here or synced from another device) are never touched, and a View
-preset other than Auto keeps the picker shown.
+preset other than Auto keeps the counts shown.
 
 The top bar is calm too (`topBarShows` in `lib/calm.ts`): **Verify** appears
 with the first checklist and **Schedule** with the first template — until
@@ -3787,7 +3791,7 @@ one box, *perch* = a stop that waits on you. The glyph is a small bird
 
 **Where it all is — no dialog of its own.** Flights are drawn in the
 [Sky](#two-views-the-grid-and-the-sky) (the main area's second view, the top
-bar's **Grid · Sky** toggle, `Alt+Y`): every session a line, the bird on the
+sidebar's **Grid · Sky** toggle, `Alt+Y`): every session a line, the bird on the
 stop each flight is at, what is perched on you in the drawer. **Flyways live
 on the Sky's shelf** (below). Intake, Verify and Schedule — three sides of the
 same journey — are the flat top-bar dialogs they always were: Intake's source
@@ -3956,7 +3960,8 @@ and **Schedule…**.
 
 **The Sky tour** (`lib/tours/sky.ts`, id `sky`; the ? at the end of the Sky's
 toolbar, and by itself once, the first time the Sky is shown in the calm
-first hour): the top bar's Grid · Sky toggle (`data-tour="view-sky"`), a line
+first hour): the Grid · Sky toggle's Sky half (`data-tour="view-sky"`: the
+sidebar's View row, or the top bar's while the sidebar is hidden), a line
 (`sky-line`), the bird (`flights-bird`), the shelf (`sky-shelf`) — each
 falling back to the toggle when it is not on screen.
 
@@ -4018,13 +4023,22 @@ one in ~250 ms while the new view fades in over 150 ms. With
 
 All through `lib/viewMode.ts` (`setView`, `toggleView`, `showInSky`):
 
-- **The top bar's Grid · Sky toggle**, beside New — a glyph and a word
-  each (the words drop on a phone), the active one filled, the shortcut in the
-  tooltip, the Sky half wearing the count of flights perched on you; the last
-  thing a narrow bar folds (into ⋯, after Settings, Schedule and Verify). The
-  Sky half is `data-tour="view-sky"`.
-- **The sidebar's View row**: Auto · 1 · 2 · 4 · 9 · **Sky**. A number is the
-  grid at that many panes, so picking one comes back to the grid.
+- **The sidebar's View row**, at its foot: `View  Auto 1 2 4 9 │ ⊞ Grid  🐦 Sky`
+  (`ViewRow` in `Sidebar.tsx`). A number is the grid at that many panes, so
+  picking one comes back to the grid; after a thin rule, the **Grid · Sky
+  toggle** — ⊞ the grid at the current count, the bird the sky — a glyph and
+  a word each (the words drop to the glyphs when the row is too narrow to hold
+  them beside the numbers), the active one filled, the view's blurb and the
+  shortcut in the tooltip, the Sky half wearing the count of flights perched on
+  you (nothing at zero, red when one halted). The Sky half is
+  `data-tour="view-sky"`. The row is always there: the calm first hour hides
+  only the numbers (unless a count other than Auto was picked), never the
+  toggle.
+- **The top bar's Grid · Sky toggle**, beside New — the same pair, worn only
+  while the View row is out of sight: the sidebar hidden, or a phone-narrow
+  window (glyphs only there, and the last thing a narrow bar folds — into ⋯,
+  after Settings, Schedule and Verify, as *Switch to the Sky / grid*). With the
+  sidebar shown there is exactly one toggle on screen, the sidebar's.
 - **`Alt+Y`** — from anywhere but a text field or behind a dialog (a terminal
   included).
 - **The palette**: *Switch to the Sky* / *Switch to the grid*.
