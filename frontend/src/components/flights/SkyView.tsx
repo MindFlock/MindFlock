@@ -319,11 +319,16 @@ export function SkyView() {
     lastFocus.current = focusLine;
     const r = rectOf(focusLine);
     if (!r) return;
+    // Pressed on the sky itself (its bar, a box): it is under the pointer
+    // already — the camera stays put, the line only flashes. A wide line is
+    // never "whole in view", so moving it would jolt every click.
+    const pressed = pressedLine.current === focusLine;
+    pressedLine.current = "";
     const c = camRef.current;
     const sx = c.x + r.x * c.z;
     const sy = c.y + r.y * c.z;
     const inView = sx >= 0 && sy >= 0 && sx + r.w * c.z <= vp.w && sy + Math.min(r.h, 240) * c.z <= vp.h;
-    if (!inView) {
+    if (!inView && !pressed) {
       touched.current = true;
       setCam(centerOn(r, vp.w, vp.h, Math.max(c.z, 0.85)));
     }
@@ -344,8 +349,14 @@ export function SkyView() {
     setTimeout(() => alive.current && setGhosts((cur) => cur.filter((g) => !ids.has(g.id))), 450);
   }, [lines, place, rows, narrow]);
 
-  /** Select a line's session — the same selection a pane click makes. */
-  const focusOn = useCallback((id: string) => selectSession(id, { noKeyboard: true }), []);
+  /** Select a line's session — the same selection a pane click makes. A
+   * press on the line itself is remembered, so the selection effect above
+   * leaves the camera alone for it. */
+  const pressedLine = useRef("");
+  const focusOn = useCallback((id: string, pressed = false) => {
+    pressedLine.current = pressed ? id : "";
+    selectSession(id, { noKeyboard: true });
+  }, []);
 
   const setMode = (m: SkyMode) => {
     if (m === "one" && !focused) {
@@ -429,7 +440,7 @@ export function SkyView() {
       if (g.moved) {
         const p = at(ev);
         onLayout(id, { x: p.x, y: p.y, pinned: true });
-      } else focusOn(id);
+      } else focusOn(id, true);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
@@ -588,6 +599,19 @@ export function SkyView() {
     pointers.current.delete(e.pointerId);
     if (pointers.current.size < 2) pinch.current = null;
     if (pan.current?.id === e.pointerId) pan.current = null;
+  };
+  // The viewport is overflow: hidden, but a browser still scrolls it to show
+  // a box that just took the focus (a click, Tab). The plane would slide out
+  // from under the camera: turn that scroll into a pan and zero it.
+  const onViewportScroll = () => {
+    const el = vpRef.current;
+    if (!el || (!el.scrollLeft && !el.scrollTop)) return;
+    const dx = el.scrollLeft;
+    const dy = el.scrollTop;
+    el.scrollLeft = 0;
+    el.scrollTop = 0;
+    touched.current = true;
+    setCam((c) => ({ ...c, x: c.x - dx, y: c.y - dy }));
   };
   const onDouble = (e: ReactMouseEvent<HTMLDivElement>) => {
     if (!ground(e.target)) return;
@@ -854,7 +878,7 @@ export function SkyView() {
       layout={lineLayout(layout[id], at || { x: 0, y: 0 })}
       onLayout={(patch) => onLayout(id, patch)}
       focused={focused === id}
-      onFocus={() => focusOn(id)}
+      onFocus={() => focusOn(id, true)}
       zoom={cam.z}
       onDragStart={at ? (e) => onDragStart(id, e) : undefined}
       onMeasure={at ? (w, h) => onMeasure(id, w, h) : undefined}
@@ -899,6 +923,7 @@ export function SkyView() {
             onPointerUp={onUp}
             onPointerCancel={onUp}
             onDoubleClick={onDouble}
+            onScroll={onViewportScroll}
           >
             <SkyFlock width={vp.w} height={vp.h} zoom={cam.z} paused={motionOff || !!drag} />
             <div

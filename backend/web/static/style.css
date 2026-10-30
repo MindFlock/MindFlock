@@ -1423,6 +1423,75 @@
     display: none;
   }
 }
+/* A box's right-click menu on the flyway canvas (StopMenu.tsx). It lives in
+ * the line's stage, so the Sky's zoom scales it: `--sky-z` (set on `.skl`)
+ * scales it back, about its top-left corner — the pointer. */
+
+.fl-stopmenu {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 170px;
+  max-width: 260px;
+  padding: 4px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.32);
+  font-size: 12.5px;
+  cursor: default;
+  transform: scale(calc(1 / var(--sky-z, 1)));
+  transform-origin: 0 0;
+}
+
+.fl-stopmenu-item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fl-stopmenu-item:hover:not(:disabled),
+.fl-stopmenu-item:focus-visible {
+  outline: none;
+  background: rgba(var(--accent-rgb), 0.14);
+}
+
+.fl-stopmenu-item:disabled {
+  color: var(--muted);
+  opacity: 0.6;
+  cursor: default;
+}
+
+.fl-stopmenu-item.danger {
+  color: var(--red);
+}
+
+.fl-stopmenu-item.danger:hover:not(:disabled),
+.fl-stopmenu-item.danger:focus-visible {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+}
+
+.fl-stopmenu-note {
+  padding: 6px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.fl-stopmenu-item + .fl-stopmenu-note {
+  margin-top: 3px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
 /* The flyway canvas (FlywayCanvas.tsx) and Flights' form controls
  * (controls.tsx) — prefix fl-.
  *
@@ -1823,23 +1892,58 @@
   top: 0;
   left: 0;
   z-index: 2;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   padding: 0;
   border-radius: 50%;
   border: 1px solid var(--accent);
   background: var(--panel);
   color: var(--accent);
-  font-size: 15px;
+  font-size: 17px;
   line-height: 1;
   cursor: pointer;
   opacity: 0;
   transition: opacity 0.12s ease;
+  /* The inline transform also counter-scales it by the Sky's --sky-z. */
+  transform-origin: 50% 50%;
 }
 
+/* Over the line (in the Sky the whole line, its title bar too), not just
+ * the canvas. */
 .fl-canvas:hover .fl-gap-add,
+.skl:hover .fl-gap-add,
 .fl-gap-add:focus-visible {
   opacity: 1;
+}
+
+/* A stop chip from the shelf, over the line: the gap it would land in grows
+ * and says so; the end + says "Tack on <Kind>" (the box's .fl-drop). */
+.fl-stop-over .fl-gap-add {
+  opacity: 0.55;
+}
+
+.fl-gap-add.fl-gap-lit {
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: auto;
+  height: 30px;
+  padding: 0 11px 0 9px;
+  border-radius: 15px;
+  border-width: 2px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 1;
+  box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0.25);
+  pointer-events: none;
+}
+
+.fl-gap-label {
+  font-size: 12px;
 }
 
 .fl-gap-add:hover {
@@ -1851,6 +1955,104 @@
 @media (hover: none) {
   .fl-gap-add {
     opacity: 1;
+  }
+}
+
+/* --- The hover toolbar (a stop that can change) ------------------------------
+ * Above the box on hover or keyboard focus. It is the box's child, so moving
+ * onto it keeps the box hovered; it lingers a moment after the pointer
+ * leaves (the transition delay) so it can be reached, and the Sky's
+ * `--sky-z` scales it back to screen size about its foot. */
+
+.fl-tools {
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  z-index: 5;
+  display: flex;
+  gap: 1px;
+  padding: 2px;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  white-space: nowrap;
+  cursor: default;
+  transform: translateX(-50%) scale(calc(1 / var(--sky-z, 1)));
+  transform-origin: 50% 100%;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease 0.25s, visibility 0s linear 0.37s;
+}
+
+/* The bridge: the 4px between the box and the toolbar still counts as the
+ * toolbar, so crossing it never drops the hover. */
+.fl-tools::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 6px;
+}
+
+.fl-box:hover > .fl-tools,
+.fl-box:focus-within > .fl-tools {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0s;
+}
+
+.fl-has-tools:hover,
+.fl-has-tools:focus-within {
+  z-index: 4;
+}
+
+.fl-dragging .fl-tools {
+  display: none;
+}
+
+/* .fl-icon-btn's look (FlywayInspector.css), here too for a canvas drawn
+ * without the inspector's sheet. */
+.fl-tool {
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 5px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.fl-tool:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+.fl-tool:disabled {
+  opacity: 0.35;
+  cursor: default;
+  background: transparent;
+}
+
+.fl-tool:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.fl-tool-remove:hover:not(:disabled) {
+  color: var(--red);
+  background: color-mix(in srgb, var(--red) 13%, transparent);
+}
+
+@media (hover: none) {
+  .fl-box.selected > .fl-tools {
+    opacity: 1;
+    visibility: visible;
   }
 }
 
@@ -5735,14 +5937,16 @@ a.fl-waiting-ref:hover {
   padding: 9px 22px;
 }
 /* The Sky's intake lane (IntakeLane.tsx): a column of source blocks pinned to
- * the sky's left edge; the Sky positions it, this styles what is inside. */
+ * the sky's left edge; the Sky positions it (INTAKE_W, 240 plane px), this
+ * styles what is inside — tight enough that an item's ref, its headline and
+ * Fly share one row at that width. */
 
 .sky-lane {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 10px;
+  gap: 8px;
+  padding: 8px;
   max-height: 100%;
   overflow-y: auto;
   background: color-mix(in srgb, var(--panel) 92%, transparent);
@@ -5790,8 +5994,8 @@ a.fl-waiting-ref:hover {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  padding: 9px 10px;
+  gap: 6px;
+  padding: 8px 9px;
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 9px;
@@ -5904,7 +6108,7 @@ a.fl-waiting-ref:hover {
 
 .sky-lane-fly.fl-btn {
   flex: none;
-  padding: 3px 10px;
+  padding: 3px 8px;
   font-size: 12px;
 }
 
@@ -5988,6 +6192,31 @@ a.fl-waiting-ref:hover {
   color: var(--bg);
   background: var(--accent);
   box-sizing: border-box;
+}
+
+/* --- Far (the sky zoomed out under 62%, lib/skyLayout lodFor) ---------------
+   The lane keeps its width; it shows its sources' names and counts in type
+   counter-scaled to stay readable, and leaves the item rows for nearer. */
+.sky-intake[data-lod="far"] {
+  --sky-far: clamp(1, calc(0.84 / var(--sky-z, 1)), 2.1);
+}
+
+.sky-intake[data-lod="far"] .sky-lane-head {
+  font-size: calc(12px * var(--sky-far));
+}
+
+.sky-intake[data-lod="far"] .sky-lane-block-name {
+  font-size: calc(13px * var(--sky-far));
+  font-weight: 700;
+}
+
+.sky-intake[data-lod="far"] .sky-lane-head .fl-count {
+  zoom: clamp(1, calc(0.6 / var(--sky-z, 1)), 1.4);
+}
+
+/* The name gets the block's width: its badge, menu and items wait for mid. */
+.sky-intake[data-lod="far"] :is(.sky-lane-block-head .fl-kind-badge, .sky-lane-block-head button, .sky-lane-block-head details, .sky-lane-chips, .sky-lane-items, .sky-lane-stubs, .sky-lane-error, .sky-lane-n-more) {
+  display: none;
 }
 /* The Sky's new-session block (NewSessionBlock.tsx): a card at the spot the
  * owner double-clicked. Its fields are Flights' form controls (.fl-form), so
@@ -6266,6 +6495,197 @@ a.fl-waiting-ref:hover {
 .skl-resize:hover {
   opacity: 1;
 }
+
+/* --- Semantic zoom (lib/skyLayout lodFor; docs/flights-zoom.md) -----------
+   The geometry never depends on the zoom: a box keeps its plane width and
+   height (the layout's), a line its measured size, the bar its 34px. What
+   changes is what is drawn inside and the type's size on screen.
+     far  (< 62%)   the icon and the title, counter-scaled so the title reads
+                    ~10.5px on screen; everything else is left out.
+     mid            today's box; under 80% its titles (and the bar's name)
+                    still grow a little, so the first picture (≥ 62%) reads.
+     near (≥ 115%)  the type counter-scaled back to ~12.5px on screen, so the
+                    same box holds more: the title on two lines, the summary,
+                    the detail and the reason wrapping (--sky-lines each), the
+                    perch's own parts. */
+
+.skl[data-lod="far"] {
+  /* The type's plane size over its mid size: 0.84 / zoom (~10.5px on screen),
+     from 1× up to 2.1× at the 40% floor. UI bits stop at 1.4× (the bar's
+     height is fixed). */
+  --sky-far: clamp(1, calc(0.84 / var(--sky-z, 1)), 2.1);
+  --sky-far-ui: clamp(1, calc(0.6 / var(--sky-z, 1)), 1.4);
+}
+
+.skl[data-lod="mid"] {
+  /* 0.8 / zoom: 1× from 80% up, 1.29× at 62% (titles ~10px on screen). */
+  --sky-mid: clamp(1, calc(0.8 / var(--sky-z, 1)), 1.3);
+}
+
+.skl[data-lod="near"] {
+  --sky-near: clamp(1, var(--sky-z, 1), 3);
+}
+
+/* The bar: the name and the state chip readable far; the bar's height fixed. */
+.skl-task {
+  display: none;
+}
+
+.skl[data-lod="far"] .skl-bar {
+  font-size: calc(12.5px * var(--sky-far));
+  gap: calc(7px * var(--sky-far-ui));
+}
+
+.skl[data-lod="far"] .skl-name {
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.skl[data-lod="far"] .skl-bar > .fl-bird,
+.skl[data-lod="far"] .skl-menu {
+  zoom: var(--sky-far-ui);
+}
+
+/* The chip's type grows, its padding doesn't: it stays inside the bar
+   (~28 of 34px at the floor). */
+.skl[data-lod="far"] .skl-chip {
+  font-size: calc(10.5px * var(--sky-far));
+  padding: 2px 6px;
+}
+
+/* Too small to aim at from far: the size control and the pin wait for mid. */
+.skl[data-lod="far"] .skl-size,
+.skl[data-lod="far"] .skl-pin {
+  display: none;
+}
+
+.skl[data-lod="far"] .skl-menu {
+  margin-left: auto;
+}
+
+.skl[data-lod="near"] .skl-bar {
+  flex-wrap: wrap;
+  align-content: center;
+  row-gap: calc(2px / var(--sky-near));
+  column-gap: calc(7px / var(--sky-near));
+  font-size: calc(12.5px / var(--sky-near));
+}
+
+.skl[data-lod="near"] .skl-bar > .fl-bird,
+.skl[data-lod="near"] .skl-chip,
+.skl[data-lod="near"] .skl-pin,
+.skl[data-lod="near"] .skl-size,
+.skl[data-lod="near"] .skl-menu {
+  zoom: calc(1 / var(--sky-near));
+}
+
+/* Near: what the session is on, a second row of the bar. */
+.skl[data-lod="near"] .skl-task {
+  display: block;
+  order: 10;
+  flex: 1 0 100%;
+  min-width: 0;
+  color: var(--muted);
+  font-size: calc(11.5px / var(--sky-near));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skl[data-lod="mid"] .skl-name {
+  font-size: calc(12.5px * var(--sky-mid));
+}
+
+/* The boxes. An open box (a card: the session's pane) is left alone. */
+.skl[data-lod="mid"] .fl-box:not(.fl-box-open) .fl-box-title,
+.skl[data-lod="mid"] .fl-box-add .fl-add-label {
+  font-size: calc(12.5px * var(--sky-mid));
+}
+
+.skl[data-lod="far"] .fl-box:not(.fl-box-open) {
+  gap: 0;
+  padding: 6px 8px;
+  justify-content: center;
+}
+
+.skl[data-lod="far"] .fl-box:not(.fl-box-open) .fl-box-head {
+  gap: 5px;
+}
+
+.skl[data-lod="far"] .fl-box:not(.fl-box-open) .fl-box-title {
+  font-size: calc(12.5px * var(--sky-far));
+  font-weight: 700;
+  line-height: 1.12;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+
+.skl[data-lod="far"] .fl-box-branch .fl-box-title {
+  -webkit-line-clamp: 1;
+}
+
+.skl[data-lod="far"] .fl-box:not(.fl-box-open) .fl-box-icon,
+.skl[data-lod="far"] .fl-box:not(.fl-box-open) .fl-box-glyph,
+.skl[data-lod="far"] .fl-box:not(.fl-box-open) .fl-box-dot,
+.skl[data-lod="far"] .fl-box-add .fl-add-plus {
+  zoom: var(--sky-far-ui);
+}
+
+.skl[data-lod="far"] .fl-box-add .fl-add-label {
+  font-size: calc(12.5px * var(--sky-far));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The canvas leaves these out at far too (its `lod`); until then, CSS does. */
+.skl[data-lod="far"] .fl-box:not(.fl-box-open) :is(.fl-box-chip, .fl-box-sub, .fl-box-detail, .fl-box-reason, .fl-box-dots, .fl-box-pulse, .fl-box-menu, .fl-you-text, .fl-you-items, .fl-you-acts) {
+  display: none;
+}
+
+.skl[data-lod="far"] .fl-join-pill {
+  zoom: var(--sky-far-ui);
+}
+
+.skl[data-lod="near"] .fl-box:not(.fl-box-open) {
+  gap: calc(3px / var(--sky-near));
+  padding: calc(9px / var(--sky-near)) calc(11px / var(--sky-near));
+  font-size: calc(12.5px / var(--sky-near));
+}
+
+.skl[data-lod="near"] .fl-box:not(.fl-box-open) .fl-box-head {
+  gap: calc(7px / var(--sky-near));
+}
+
+.skl[data-lod="near"] .fl-box:not(.fl-box-open) .fl-box-title {
+  font-size: calc(12.5px / var(--sky-near));
+  line-height: 1.25;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.skl[data-lod="near"] .fl-box:not(.fl-box-open) :is(.fl-box-sub, .fl-box-detail, .fl-box-reason) {
+  flex: 0 1 auto;
+  min-height: 0;
+  font-size: calc(11.5px / var(--sky-near));
+  line-height: 1.3;
+  white-space: normal;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: var(--sky-lines, 2);
+  -webkit-box-orient: vertical;
+}
+
+.skl[data-lod="near"] .fl-box:not(.fl-box-open) :is(.fl-box-icon, .fl-box-glyph, .fl-box-dot, .fl-box-pulse, .fl-box-chip, .fl-box-dots, .fl-box-menu, .fl-you-text, .fl-you-items, .fl-you-acts),
+.skl[data-lod="near"] .fl-box-add .fl-add-plus,
+.skl[data-lod="near"] .fl-join-pill {
+  zoom: calc(1 / var(--sky-near));
+}
 /* The flyway shelf (FlywayShelf.tsx): saved flyways as chips along the
    bottom of the Sky. */
 
@@ -6414,6 +6834,136 @@ a.fl-waiting-ref:hover {
   color: var(--accent);
   cursor: pointer;
 }
+
+/* --- Two rows: the flyways, then the stops (StopShelf.tsx) --------------------
+   Scoped to the shelf's own <section>: the host's wrapper is a `.sky-shelf`
+   too. A grid so both rows' labels share one column; each row scrolls
+   sideways instead of wrapping. */
+
+section.sky-shelf {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 5px;
+}
+
+.sky-stops {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  align-items: center;
+  min-width: 0;
+}
+
+.sky-stops-head {
+  display: inline-flex;
+  flex-direction: column;
+  padding: 0 6px 0 21px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.sky-stops-hint {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.sky-stops-chips {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.sky-stop-item {
+  display: contents;
+}
+
+.sky-stop-chip {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: grab;
+  user-select: none;
+}
+
+.sky-stop-chip:hover,
+.sky-stop-chip:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: var(--panel-2);
+}
+
+.sky-stop-chip:active {
+  cursor: grabbing;
+}
+
+.sky-stop-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+/* A perch: the gold perch tone, rounder, as in the stop palette. */
+.sky-stop-chip.perch {
+  border-radius: 999px;
+  border-color: color-mix(in srgb, var(--tone-attention) 60%, var(--border));
+}
+
+.sky-stop-chip.perch:hover,
+.sky-stop-chip.perch:focus-visible {
+  border-color: var(--tone-attention);
+}
+
+.sky-stop-chip.perch .sky-stop-icon {
+  border-radius: 50%;
+  color: var(--tone-attention);
+  background: color-mix(in srgb, var(--tone-attention) 16%, transparent);
+}
+
+.sky-stops-divider {
+  flex: none;
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: var(--border);
+}
+
+.sky-stops-empty {
+  margin: 0;
+  font-size: 12px;
+}
+
+/* A phone (nothing drags): the chips are tap-to-tack, so no drag hint. */
+@media (hover: none) {
+  .sky-stops-hint {
+    display: none;
+  }
+
+  .sky-stop-chip {
+    cursor: pointer;
+  }
+}
 /* A flyway made or edited on the Sky (FlywayCard.tsx): a card floating over
    the plane. The canvas, the palette, the inspector, Describe and the trigger
    bring their own styles (FlywayCanvas.css / FlywayInspector.css); this is
@@ -6558,6 +7108,8 @@ body.view-switch #sky-view {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* The toolbar folds its longer words by the room the main area has. */
+  container: sky / inline-size;
   --sky-bg: var(--bg);
   --sky-dot: color-mix(in srgb, var(--text) 17%, transparent);
 }
@@ -6567,22 +7119,48 @@ body.view-switch #sky-view {
   --sky-dot: color-mix(in srgb, var(--text) 13%, transparent);
 }
 
+/* One slim row (≤ 36px): the views, Find, + New session, Tidy, the zoom
+   group. Nothing wraps on a desktop: Find gives up width first. */
 .sky-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px 10px;
-  flex-wrap: wrap;
-  padding: 6px 0;
+  gap: 6px 8px;
+  flex-wrap: nowrap;
+  min-height: 0;
+  max-height: 36px;
+  box-sizing: border-box;
+  padding: 4px 8px 4px 0;
+}
+
+.sky-toolbar > * {
+  flex: none;
+}
+
+.sky-modes.fl-chiprow {
+  flex-wrap: nowrap;
+  gap: 3px;
+}
+
+.sky-modes .fl-pick {
+  padding: 3px 9px;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.sky-toolbar > .sky-search {
+  flex: 0 1 170px;
+  min-width: 84px;
 }
 
 .sky-search .fl-input {
-  width: 190px;
-  padding: 4px 9px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 3px 9px;
   font-size: 12.5px;
 }
 
 .sky-new {
-  padding: 4px 11px;
+  padding: 3px 10px;
   font-size: 12.5px;
 }
 
@@ -6601,7 +7179,7 @@ body.view-switch #sky-view {
   background: transparent;
   border: 0;
   color: var(--text);
-  padding: 3px 8px;
+  padding: 2px 7px;
   font: inherit;
   font-size: 12px;
   border-radius: 6px;
@@ -6618,7 +7196,7 @@ body.view-switch #sky-view {
 }
 
 .sky-zoom-read {
-  min-width: 44px;
+  min-width: 40px;
   text-align: center;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
@@ -6642,7 +7220,7 @@ body.view-switch #sky-view {
 }
 
 .sky-tidy {
-  padding: 4px 11px;
+  padding: 3px 10px;
   font-size: 12.5px;
 }
 
@@ -6888,6 +7466,27 @@ body.view-switch #sky-view {
   min-width: 280px;
 }
 
+/* A line's slot: placed on the plane at its spot. Lines glide to a new one
+   (Tidy, a reflow); the one being dragged follows the pointer. An open box or
+   an open editor lifts its line over its neighbours. */
+.sky-line-slot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transition: transform 0.28s ease;
+}
+
+.sky-line-slot.is-dragging {
+  transition: none;
+  z-index: 6;
+}
+
+.sky-line-slot:has(> .skl.is-open),
+.sky-line-slot:has(> .skl.is-editing) {
+  z-index: 5;
+}
+
+.sky-line-slot.is-flash .skl,
 .sky-line-slot.is-flash .sky-line {
   box-shadow:
     0 0 0 2px var(--accent),
@@ -6999,6 +7598,14 @@ body.view-switch #sky-view {
   writing-mode: horizontal-tb;
 }
 
+/* Folded with something perched: the tab wears the attention tone, so the
+   drawer starting folded never hides a perch. */
+.sky-drawer:not(.open) .sky-drawer-tab.has-perch {
+  color: var(--text);
+  background: color-mix(in srgb, var(--tone-attention) 14%, transparent);
+  box-shadow: inset 2px 0 0 var(--tone-attention);
+}
+
 .sky-drawer-body {
   flex: 1;
   min-width: 0;
@@ -7095,13 +7702,54 @@ details.fl-group-waiting > summary {
   box-shadow: none;
 }
 
+/* Beside the rail and the drawer's tab the main area can be ~700px on a
+   1000px window: the row sheds what it can spare before anything wraps —
+   the 100% button (the readout still says it) and the tour's ? — and
+   tightens. */
+@container sky (max-width: 860px) {
+  .sky-zoom-100,
+  .sky-toolbar > .tour-btn {
+    display: none;
+  }
+  .sky-modes .fl-pick {
+    padding: 3px 7px;
+  }
+  .sky-new,
+  .sky-tidy {
+    padding: 3px 8px;
+  }
+  .sky-toolbar {
+    gap: 5px;
+  }
+  .sky-toolbar > .sky-search {
+    min-width: 72px;
+  }
+}
+
+/* The drawer open on a small window: no room for one row, so it wraps. */
+@container sky (max-width: 640px) {
+  .sky-toolbar {
+    flex-wrap: wrap;
+    max-height: none;
+  }
+}
+
+/* A phone: the row may wrap (it scrolls with the list). */
+.sky-narrow .sky-toolbar {
+  flex-wrap: wrap;
+  max-height: none;
+}
+
 @media (max-width: 600px) {
-  .sky-search .fl-input {
-    width: 140px;
+  .sky-toolbar > .sky-search {
+    flex-basis: 140px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .sky-line-slot {
+    transition: none;
+  }
   .sky-line {
     transition: none;
     animation: none;
@@ -8409,6 +9057,105 @@ body.narrow .sidebar-resizer {
 .device-group.peer-offline .dev-name {
   color: var(--muted);
   font-style: italic;
+}
+
+/* The View row's Grid · Sky toggle (ViewRow in Sidebar.tsx), after the pane
+   counts and a thin rule. The .vm chips' family — height, radius, font, the
+   accent fill when active (SidebarRow.css) — with a glyph and a word. The
+   word drops to the glyph when the row is too narrow to hold it beside the
+   numbers (the container query); with the numbers hidden (the calm first
+   hour) the pair takes the row and keeps its words. */
+#view-modes {
+  container: view-row / inline-size;
+}
+
+#view-modes .vm-nums {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 4px;
+  padding-right: 6px;
+  margin-right: 2px;
+  border-right: 1px solid var(--border);
+}
+
+/* A little side padding, so a squeezed chip ("Auto" is a word among digits)
+   never runs its label into its border; Auto takes a bigger share. */
+#view-modes .vm-nums .vm {
+  padding: 4px 3px;
+}
+
+#view-modes .vm-nums .vm[data-view="auto"] {
+  flex: 1.6;
+}
+
+#view-modes .vt-pair {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+
+#view-modes .vm-label + .vt-pair {
+  flex: 1;
+}
+
+#view-modes .vm-label + .vt-pair .vt {
+  flex: 1;
+  justify-content: center;
+}
+
+#view-modes .vt {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#view-modes .vt:hover {
+  border-color: var(--accent);
+}
+
+#view-modes .vt.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#view-modes .vt-icon {
+  flex: none;
+}
+
+/* Flights perched on you: the top bar's count (TopBar.css .tb-count), a
+   hair shorter so the chip keeps the row's height. */
+#view-modes .vt-count {
+  min-width: 12px;
+  height: 12px;
+  padding: 0 3px;
+  border-radius: 6px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 12px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  background: var(--red);
+  color: #fff;
+}
+
+#view-modes .vt-count.is-failing {
+  background: var(--red);
+  color: #fff;
+}
+
+@container view-row (max-width: 319px) {
+  #view-modes .vm-nums ~ .vt-pair .vt-word {
+    display: none;
+  }
 }
 }
 
@@ -11633,12 +12380,6 @@ p.set-hint {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
-}
-
-/* The sky is the other view, not a fifth grid size: set a hair apart. */
-#view-modes .vm.vm-sky {
-  flex: 1.4;
-  margin-left: 4px;
 }
 
 

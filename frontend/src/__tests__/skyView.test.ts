@@ -97,9 +97,14 @@ describe("the isomorphism", () => {
 
   it("selecting a line is selecting the session (a pane click's selectSession), and a selection anywhere brings its line into view", () => {
     const v = code("components/flights/SkyView.tsx");
-    expect(v).toContain("const focusOn = useCallback((id: string) => selectSession(id, { noKeyboard: true }), []);");
+    expect(v).toContain("selectSession(id, { noKeyboard: true });");
     expect(v).toContain("focused={focused === id}");
     expect(v).toContain("setCam(centerOn(r, vp.w, vp.h, Math.max(c.z, 0.85)));");
+    // A press on the line itself never moves the camera (a wide line is never whole in view).
+    expect(v).toContain("if (!inView && !pressed) {");
+    expect(v).toContain("onFocus={() => focusOn(id, true)}");
+    // The browser's scroll-into-view on a focused box becomes a pan, never a slide of the plane.
+    expect(v).toContain("onScroll={onViewportScroll}");
   });
 
   it("the grid's 1 is the sky's 1 (fit the focused line), its 4 / 9 the sky's Fit (all of them)", () => {

@@ -24292,6 +24292,7 @@ function fieldOptions(f) {
 		label: String(o.label || o.value)
 	});
 }
+var STOP_MIME = "application/x-mindflock-stop";
 function newStep(def, taken) {
 	const config = {};
 	for (const f of def.fields) if (f.default !== void 0) config[f.name] = f.default;
@@ -36135,6 +36136,60 @@ function StopIcon({ kind, size = 15 }) {
 	});
 }
 //#endregion
+//#region src/components/ViewGlyphs.tsx
+function GridGlyph({ className = "tb-view-icon" }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+		className,
+		width: "12",
+		height: "12",
+		viewBox: "0 0 12 12",
+		"aria-hidden": "true",
+		focusable: "false",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				x: "0.75",
+				y: "0.75",
+				width: "4.5",
+				height: "4.5",
+				rx: "1",
+				fill: "none",
+				stroke: "currentColor",
+				strokeWidth: "1.3"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				x: "6.75",
+				y: "0.75",
+				width: "4.5",
+				height: "4.5",
+				rx: "1",
+				fill: "none",
+				stroke: "currentColor",
+				strokeWidth: "1.3"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				x: "0.75",
+				y: "6.75",
+				width: "4.5",
+				height: "4.5",
+				rx: "1",
+				fill: "none",
+				stroke: "currentColor",
+				strokeWidth: "1.3"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				x: "6.75",
+				y: "6.75",
+				width: "4.5",
+				height: "4.5",
+				rx: "1",
+				fill: "none",
+				stroke: "currentColor",
+				strokeWidth: "1.3"
+			})
+		]
+	});
+}
+//#endregion
 //#region src/lib/flockActions.ts
 var obj$3 = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : {};
 var str$3 = (v, d = "") => typeof v === "string" ? v : v == null ? d : String(v);
@@ -37392,6 +37447,9 @@ async function dropStop(flightId, stepId) {
 		refreshFlights();
 		refreshInstances();
 	}
+}
+function moveStop(flightId, stepId, at) {
+	return flightAction("Moving the stop", flightPath(flightId, "/steps/" + enc$1(stepId) + "/move"), { at });
 }
 //#endregion
 //#region src/components/outbox/WaitingRow.tsx
@@ -47457,58 +47515,6 @@ function fitTopBar({ room, fixed, brand, items, more }) {
 		shown
 	};
 }
-function GridGlyph() {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-		className: "tb-view-icon",
-		width: "12",
-		height: "12",
-		viewBox: "0 0 12 12",
-		"aria-hidden": "true",
-		focusable: "false",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				x: "0.75",
-				y: "0.75",
-				width: "4.5",
-				height: "4.5",
-				rx: "1",
-				fill: "none",
-				stroke: "currentColor",
-				strokeWidth: "1.3"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				x: "6.75",
-				y: "0.75",
-				width: "4.5",
-				height: "4.5",
-				rx: "1",
-				fill: "none",
-				stroke: "currentColor",
-				strokeWidth: "1.3"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				x: "0.75",
-				y: "6.75",
-				width: "4.5",
-				height: "4.5",
-				rx: "1",
-				fill: "none",
-				stroke: "currentColor",
-				strokeWidth: "1.3"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
-				x: "6.75",
-				y: "6.75",
-				width: "4.5",
-				height: "4.5",
-				rx: "1",
-				fill: "none",
-				stroke: "currentColor",
-				strokeWidth: "1.3"
-			})
-		]
-	});
-}
 function TopBar() {
 	const ui = useUi();
 	const light = useUi((s) => s.themeLight);
@@ -47556,10 +47562,11 @@ function TopBar() {
 	};
 	const verifyTitle = "Verify — " + VERIFY_BLURB + keys("verify") + "\n" + verifyCountLine(due, failing);
 	const scheduleTitle = "Schedule — templates and scheduled flyways; starts sessions on a timer" + keys("schedule") + (schedFailing > 0 ? "\n" + (schedFailing === 1 ? "1 scheduled template's last run failed" : schedFailing + " scheduled templates' last runs failed") : "");
+	const barViews = ui.sidebarHidden || ui.narrow;
 	const otherView = ui.view === "sky" ? "grid" : "sky";
 	const perchLine = perch.count > 0 ? "\n" + perch.count + (perch.count === 1 ? " flight perched on you" : " flights perched on you") : "";
 	const foldable = [
-		{
+		barViews && {
 			key: "view",
 			label: "Switch to the " + viewLabel(otherView),
 			title: viewLabel(otherView) + " — " + VIEW_BLURB[otherView] + keys("view") + perchLine,
@@ -47772,7 +47779,7 @@ function TopBar() {
 							onClick: () => newSession(),
 							children: "New"
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						barViews && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "tb-views" + (isFolded("view") ? " tb-folded" : ""),
 							"data-fold": "view",
 							role: "group",
@@ -56095,6 +56102,66 @@ var VIEW_MODES = [
 	"4",
 	"9"
 ];
+function ViewRow({ calm }) {
+	const ui = useUi();
+	const perch = perchBadge(useFlights().data || []);
+	(0, import_react.useSyncExternalStore)(subscribeKeymap, keymapVersion, keymapVersion);
+	const k = usableShortcuts("view");
+	const keys = k.length ? " (" + k.join(" / ") + ")" : "";
+	const perchLine = perch.count > 0 ? "\n" + perch.count + (perch.count === 1 ? " flight perched on you" : " flights perched on you") : "";
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		id: "view-modes",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "vm-label",
+				children: "View"
+			}),
+			(!calm || ui.viewMode !== "auto") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "vm-nums",
+				title: "Grid view — Auto grows with sessions; 1/2/4/9 show only the top N panes, the rest stay running but hidden until reordered into the top slots.",
+				children: VIEW_MODES.map((v) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "vm" + (ui.view === "grid" && ui.viewMode === v ? " active" : ""),
+					"data-view": v,
+					onClick: () => {
+						ui.setViewMode(v);
+						setView("grid");
+					},
+					children: v === "auto" ? "Auto" : v
+				}, v))
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "vt-pair",
+				role: "group",
+				"aria-label": "Grid or Sky",
+				children: VIEWS.map((v) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "vt" + (ui.view === v ? " active" : ""),
+					"aria-pressed": ui.view === v,
+					"aria-label": viewLabel(v) + (v === "sky" && perch.count > 0 ? ", " + perch.count + " perched on you" : ""),
+					"data-view": v,
+					"data-tour": v === "sky" ? "view-sky" : void 0,
+					title: viewLabel(v) + " — " + VIEW_BLURB[v] + keys + (v === "sky" ? perchLine : ""),
+					onClick: () => setView(v),
+					children: [
+						v === "sky" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, {
+							size: 12,
+							className: "vt-icon"
+						}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GridGlyph, { className: "vt-icon" }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "vt-word",
+							children: viewLabel(v)
+						}),
+						v === "sky" && perch.count > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "vt-count" + (perch.failing ? " is-failing" : ""),
+							children: perch.count
+						})
+					]
+				}, v))
+			})
+		]
+	});
+}
 function closeDrawerForModal() {
 	const ui = useUi.getState();
 	if (!ui.narrow || ui.sidebarHidden) return false;
@@ -56548,34 +56615,7 @@ function Sidebar({ onOpenChat, onOpenTodo }) {
 							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetupChip, {})
 						})]
 					}),
-					(!calm || ui.viewMode !== "auto" || ui.view === "sky") && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-						id: "view-modes",
-						title: "Grid view — Auto grows with sessions; 1/2/4/9 show only the top N panes, the rest stay running but hidden until reordered into the top slots. Sky — the same sessions as lines on one canvas.",
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "vm-label",
-								children: "View"
-							}),
-							VIEW_MODES.map((v) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "vm" + (ui.view === "grid" && ui.viewMode === v ? " active" : ""),
-								"data-view": v,
-								onClick: () => {
-									ui.setViewMode(v);
-									setView("grid");
-								},
-								children: v === "auto" ? "Auto" : v
-							}, v)),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-								type: "button",
-								className: "vm vm-sky" + (ui.view === "sky" ? " active" : ""),
-								"data-view": "sky",
-								title: "The sky — every session as a line on one canvas (Alt+Y)",
-								onClick: () => setView("sky"),
-								children: "Sky"
-							})
-						]
-					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ViewRow, { calm }),
 					!calm && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Hint, {
 						id: "customize",
 						className: "hint-footer",
@@ -79349,6 +79389,207 @@ function reorderDiagram(d, from, to) {
 	};
 }
 //#endregion
+//#region src/lib/stopEditing.ts
+function insertGaps(boxes, insertFrom, vertical) {
+	const main = boxes.filter((b) => b.node.row === "main");
+	const fanned = new Set(boxes.map((b) => b.node.branch?.from));
+	const gaps = [];
+	for (let j = 1; j < main.length; j++) {
+		const b = main[j];
+		const a = main[j - 1];
+		if (b.node.kind !== "stop" || b.node.index === void 0 || b.node.index < insertFrom || a.node.kind === "add" || fanned.has(a.node.id)) continue;
+		gaps.push(vertical ? {
+			at: b.node.index,
+			x: b.x + b.w / 2,
+			y: (a.y + a.h + b.y) / 2
+		} : {
+			at: b.node.index,
+			x: (a.x + a.w + b.x) / 2,
+			y: b.y + Math.min(b.h, a.h) / 2
+		});
+	}
+	return gaps;
+}
+function dropGapFor(boxes, point, insertFrom, vertical) {
+	const along = (p) => vertical ? p.y : p.x;
+	const gaps = insertGaps(boxes, insertFrom, vertical);
+	if (!gaps.length) return null;
+	const main = boxes.filter((b) => b.node.row === "main");
+	const add = main.find((b) => b.node.kind === "add");
+	const last = main.filter((b) => b.node.kind !== "add").pop();
+	const end = add ? along({
+		x: add.x + add.w / 2,
+		y: add.y + add.h / 2
+	}) : last ? along({
+		x: last.x + last.w,
+		y: last.y + last.h
+	}) : Infinity;
+	const at = along(point);
+	let best = null;
+	for (const g of gaps) if (!best || Math.abs(along(g) - at) < Math.abs(along(best) - at)) best = g;
+	return best && Math.abs(along(best) - at) < Math.abs(end - at) ? best.at : null;
+}
+function isStopDrag(types) {
+	return !!types && Array.from(types).includes(STOP_MIME);
+}
+function canShift(stops, i, dir, insertFrom) {
+	const to = i + dir;
+	return !!stops[i]?.editable && to >= insertFrom && to >= 0 && to < stops.length && !!stops[to].editable;
+}
+function undoPayload(step, index, flight) {
+	return !!flight && index > flight.cursor && index < flight.steps.length ? {
+		step,
+		at: index
+	} : { step };
+}
+var note = (label) => ({
+	key: "note",
+	label,
+	title: label,
+	note: true
+});
+function menuItemsFor(n, ctx) {
+	const { can } = ctx;
+	if (n.kind === "add") return can.open ? [{
+		key: "tackon",
+		label: "Tack on a stop",
+		title: "Pick a stop to tack onto the end of the line"
+	}] : [];
+	if (n.kind === "rung") return [note("A fast-track rung — it moves as the session ships")];
+	if (n.kind !== "stop") return can.open ? [{
+		key: "open",
+		label: "Open",
+		title: n.session ? "Go to " + n.session : "Open it"
+	}] : [];
+	if (n.editable) {
+		const items = [];
+		if (can.edit) items.push({
+			key: "edit",
+			label: "Edit",
+			title: "Open this stop in the inspector (Enter)"
+		});
+		if (can.move) {
+			items.push({
+				key: "earlier",
+				label: "Earlier",
+				title: "Move this stop one place earlier on the line (←)",
+				disabled: !ctx.earlier
+			});
+			items.push({
+				key: "later",
+				label: "Later",
+				title: "Move this stop one place later on the line (→)",
+				disabled: !ctx.later
+			});
+		}
+		if (can.duplicate) items.push({
+			key: "duplicate",
+			label: "Duplicate",
+			title: "The same stop again, right after this one"
+		});
+		if (can.remove) items.push({
+			key: "remove",
+			label: "Remove",
+			title: "Take this stop off the line (Delete)",
+			danger: true
+		});
+		return items;
+	}
+	if (n.state === "done" || n.state === "skipped" || n.state === "failed") return [note("This stop has flown")];
+	if (n.state === "pending" || n.state === "edit") return [note("Still to come — it can't change here")];
+	const items = [];
+	if (ctx.live) {
+		if (n.state === "perched") items.push({
+			key: "done",
+			label: "Done",
+			title: "Mark this perch done — the bird flies on"
+		});
+		if (n.state === "halted") items.push({
+			key: "retry",
+			label: "Retry",
+			title: "Run this stop again"
+		});
+		items.push({
+			key: "skip",
+			label: "Skip",
+			title: "Skip this stop — the bird flies on to the next"
+		});
+	}
+	items.push(note("The flight is here — it can't change now"));
+	return items;
+}
+//#endregion
+//#region src/components/flights/StopMenu.tsx
+function StopMenu(p) {
+	const ref = (0, import_react.useRef)(null);
+	const live = () => [...ref.current?.querySelectorAll("button[role=menuitem]:not(:disabled)") || []];
+	(0, import_react.useEffect)(() => {
+		live()[0]?.focus();
+		const onDown = (e) => {
+			if (ref.current && !ref.current.contains(e.target)) p.onClose(false);
+		};
+		const onKey = (e) => {
+			if (e.key !== "Escape") return;
+			e.stopPropagation();
+			e.preventDefault();
+			p.onClose(true);
+		};
+		document.addEventListener("pointerdown", onDown, true);
+		document.addEventListener("keydown", onKey, true);
+		return () => {
+			document.removeEventListener("pointerdown", onDown, true);
+			document.removeEventListener("keydown", onKey, true);
+		};
+	}, []);
+	const onKey = (e) => {
+		const all = live();
+		if (!all.length) return;
+		const i = all.indexOf(document.activeElement);
+		const go = (j) => {
+			e.preventDefault();
+			all[(j + all.length) % all.length].focus();
+		};
+		if (e.key === "ArrowDown") go(i + 1);
+		else if (e.key === "ArrowUp") go(i < 0 ? -1 : i - 1);
+		else if (e.key === "Home") go(0);
+		else if (e.key === "End") go(-1);
+		else if (e.key === "Tab") {
+			e.preventDefault();
+			p.onClose(true);
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		ref,
+		className: "fl-stopmenu",
+		role: "menu",
+		"aria-label": p.label,
+		style: {
+			left: p.x,
+			top: p.y
+		},
+		"data-no-drag": true,
+		onKeyDown: onKey,
+		onPointerDown: (e) => e.stopPropagation(),
+		onClick: (e) => e.stopPropagation(),
+		onContextMenu: (e) => e.preventDefault(),
+		children: p.items.map((it, i) => it.note ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "fl-stopmenu-note",
+			role: "menuitem",
+			"aria-disabled": "true",
+			title: it.title,
+			children: it.label
+		}, "note" + i) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			role: "menuitem",
+			className: "fl-stopmenu-item" + (it.danger ? " danger" : ""),
+			disabled: it.disabled,
+			title: it.title,
+			onClick: () => p.onPick(it.key),
+			children: it.label
+		}, it.key))
+	});
+}
+//#endregion
 //#region src/components/flights/FlywayCanvas.tsx
 var VERTICAL_BELOW_PX = 520;
 var firstOf = (v) => String(v ?? "").split("\n").map((l) => l.trim()).find(Boolean) || "";
@@ -79420,9 +79661,17 @@ function FlywayCanvas(p) {
 	const justDragged = (0, import_react.useRef)(false);
 	const pan = (0, import_react.useRef)(null);
 	const boxRefs = (0, import_react.useRef)({});
+	const stageRef = (0, import_react.useRef)(null);
 	const size = p.size || "normal";
+	const lod = p.lod || "mid";
 	const small = !!p.compact || size === "compact";
 	const detail = (n) => size === "wide" ? boxDetail(n) || p.detailOf?.(n) || "" : "";
+	const shownDetail = (n) => lod === "far" ? "" : lod === "near" ? boxDetail(n) || p.detailOf?.(n) || "" : detail(n);
+	const [stopOver, setStopOver] = (0, import_react.useState)(null);
+	const stopLabel = stopOver?.label || p.dragStop || "";
+	const stopAt = stopOver ? stopOver.at : null;
+	const addLabel = p.dropLabel || (stopLabel && stopAt === null ? "Tack on " + stopLabel : null);
+	const [menu, setMenu] = (0, import_react.useState)(null);
 	const opened = /* @__PURE__ */ new Map();
 	if (p.openBox) for (const n of p.diagram.nodes) {
 		const o = p.openBox(n);
@@ -79457,8 +79706,8 @@ function FlywayCanvas(p) {
 	const sizeOf = (n, b) => {
 		const o = opened.get(n.id);
 		if (o) return measured[n.id] || o.size;
-		if (n.kind === "add" && p.dropLabel) return {
-			w: Math.max(b.w, 60 + p.dropLabel.length * 7),
+		if (n.kind === "add" && addLabel) return {
+			w: Math.max(b.w, 60 + addLabel.length * 7),
 			h: Math.max(b.h, 40)
 		};
 		const s = sizedBox(size, n, b, detail(n));
@@ -79475,7 +79724,7 @@ function FlywayCanvas(p) {
 		vertical,
 		p.sizeOf,
 		size,
-		p.dropLabel,
+		addLabel,
 		measured,
 		p.openBox,
 		p.detailOf
@@ -79530,7 +79779,7 @@ function FlywayCanvas(p) {
 			...drag,
 			delta,
 			moved,
-			to: dropIndex(others, axis(self) + delta)
+			to: Math.max(p.diagram.insertFrom, dropIndex(others, axis(self) + delta))
 		});
 	};
 	const onBoxUp = (e) => {
@@ -79542,6 +79791,10 @@ function FlywayCanvas(p) {
 			setTimeout(() => justDragged.current = false, 0);
 			if (d.to !== d.from) p.onMove?.(d.from, d.to);
 		}
+	};
+	const shift = (n, dir) => {
+		const i = stops.indexOf(n);
+		if (p.onMove && canShift(stops, i, dir, p.diagram.insertFrom)) p.onMove(i, i + dir);
 	};
 	const activate = (n) => {
 		if (justDragged.current) return;
@@ -79559,9 +79812,7 @@ function FlywayCanvas(p) {
 		}
 		if (canDrag(n) && (e.key === back || e.key === fwd)) {
 			e.preventDefault();
-			const i = stops.indexOf(n);
-			const to = i + (e.key === back ? -1 : 1);
-			if (to >= 0 && to < stops.length && stops[to].editable !== false) p.onMove?.(i, to);
+			shift(n, e.key === back ? -1 : 1);
 			return;
 		}
 		if ((e.key === "Delete" || e.key === "Backspace") && p.onRemove && n.kind === "stop" && n.editable !== false) {
@@ -79594,35 +79845,104 @@ function FlywayCanvas(p) {
 	const onStageUp = () => {
 		pan.current = null;
 	};
-	const gaps = [];
-	if (p.onInsert && !drag) {
-		const mainBoxes = shown.boxes.filter((b) => b.node.row === "main");
-		const fanned = new Set(shown.boxes.map((b) => b.node.branch?.from));
-		for (let j = 1; j < mainBoxes.length; j++) {
-			const b = mainBoxes[j];
-			const a = mainBoxes[j - 1];
-			if (b.node.kind !== "stop" || b.node.index === void 0 || b.node.index < p.diagram.insertFrom || a.node.kind === "add" || fanned.has(a.node.id)) continue;
-			gaps.push(vertical ? {
-				at: b.node.index,
-				x: b.x + b.w / 2,
-				y: (a.y + a.h + b.y) / 2
-			} : {
-				at: b.node.index,
-				x: (a.x + a.w + b.x) / 2,
-				y: b.y + Math.min(b.h, a.h) / 2
-			});
-		}
-	}
+	const gaps = (p.onInsert || stopAt !== null) && !drag ? insertGaps(shown.boxes, p.diagram.insertFrom, vertical) : [];
+	const tooled = (n) => n.kind === "stop" && !!n.editable && !!(p.onMove || p.onRemove || p.onDuplicate);
 	const pad = 6;
-	const top = p.bird ? 26 : pad;
+	const top = p.bird || p.diagram.nodes.some(tooled) ? 26 : pad;
+	const stagePoint = (clientX, clientY) => {
+		const el = stageRef.current;
+		if (!el) return null;
+		const r = el.getBoundingClientRect();
+		const z = el.offsetWidth ? r.width / el.offsetWidth || 1 : 1;
+		return {
+			x: (clientX - r.left) / z,
+			y: (clientY - r.top) / z
+		};
+	};
+	const overStop = (e) => !!p.onDropStop && isStopDrag(e.dataTransfer?.types);
+	const gapAt = (e) => {
+		const pt = stagePoint(e.clientX, e.clientY);
+		return pt ? dropGapFor(base.boxes, {
+			x: pt.x - pad,
+			y: pt.y - top
+		}, p.diagram.insertFrom, vertical) : null;
+	};
+	const onDragOver = (e) => {
+		if (!overStop(e)) return;
+		e.preventDefault();
+		e.dataTransfer.dropEffect = "copy";
+		const at = gapAt(e);
+		const label = p.dragStop || "a stop";
+		if (stopOver?.at !== at || stopOver?.label !== label) setStopOver({
+			at,
+			label
+		});
+	};
+	const onDragLeave = (e) => {
+		if (stopOver && !rootRef.current?.contains(e.relatedTarget)) setStopOver(null);
+	};
+	const onDrop = (e) => {
+		if (!overStop(e)) return;
+		e.preventDefault();
+		e.stopPropagation();
+		const kind = e.dataTransfer.getData(STOP_MIME);
+		const at = gapAt(e);
+		setStopOver(null);
+		if (kind) p.onDropStop(kind, at);
+	};
+	const onBoxMenu = (e, n) => {
+		if (opened.has(n.id) && e.target !== e.currentTarget) return;
+		e.preventDefault();
+		e.stopPropagation();
+		const pt = stagePoint(e.clientX, e.clientY);
+		if (pt) setMenu({
+			id: n.id,
+			x: pt.x,
+			y: pt.y
+		});
+	};
+	const menuNode = menu ? p.diagram.nodes.find((n) => n.id === menu.id) || null : null;
+	const menuItems = menuNode ? menuItemsFor(menuNode, {
+		can: {
+			edit: !!p.onSelect,
+			move: !!p.onMove,
+			duplicate: !!p.onDuplicate,
+			remove: !!p.onRemove,
+			open: !!p.onOpen
+		},
+		earlier: canShift(stops, stops.indexOf(menuNode), -1, p.diagram.insertFrom),
+		later: canShift(stops, stops.indexOf(menuNode), 1, p.diagram.insertFrom),
+		live: !!p.diagram.flightId && !!menuNode.step
+	}) : [];
+	const pick = (n, key) => {
+		const flight = p.diagram.flightId;
+		const step = n.step?.id || "";
+		if (key === "edit") p.onSelect?.(n);
+		else if (key === "earlier" || key === "later") shift(n, key === "earlier" ? -1 : 1);
+		else if (key === "duplicate") p.onDuplicate?.(n);
+		else if (key === "remove") p.onRemove?.(n);
+		else if (key === "done") stepDone(flight, step);
+		else if (key === "skip") stepSkip(flight, step);
+		else if (key === "retry") stepRetry(flight, step);
+		else if (key === "tackon" || key === "open") p.onOpen?.(n);
+	};
+	const closeMenu = (refocus) => {
+		const id = menu?.id;
+		setMenu(null);
+		if (refocus && id) boxRefs.current[id]?.focus();
+	};
 	const perch = p.bird ? shown.boxes.find((b) => b.node.id === p.bird.nodeId) : void 0;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		ref: rootRef,
-		className: "fl-canvas" + (p.compact || vertical ? " fl-canvas-compact" : "") + (size !== "normal" ? " fl-size-" + size : "") + (vertical ? " fl-canvas-vertical" : "") + (drag?.moved ? " fl-dragging" : "") + (p.className ? " " + p.className : ""),
+		className: "fl-canvas" + (p.compact || vertical ? " fl-canvas-compact" : "") + (size !== "normal" ? " fl-size-" + size : "") + (vertical ? " fl-canvas-vertical" : "") + " fl-lod-" + lod + (drag?.moved ? " fl-dragging" : "") + (stopOver ? " fl-stop-over" : "") + (p.className ? " " + p.className : ""),
 		role: "list",
 		"aria-label": p.label + (p.onMove ? " — drag a stop, or ← → on a selected one, to reorder it" : ""),
 		"data-tour": p.dataTour,
+		onDragOver: p.onDropStop ? onDragOver : void 0,
+		onDragLeave: p.onDropStop ? onDragLeave : void 0,
+		onDrop: p.onDropStop ? onDrop : void 0,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			ref: stageRef,
 			className: "fl-stage",
 			style: {
 				width: shown.width + 12,
@@ -79668,11 +79988,15 @@ function FlywayCanvas(p) {
 					const y = (own ? own.y + (vertical ? drag.delta : 0) : b.y) + top;
 					const glyph = STATE_GLYPH[n.state];
 					const open = opened.get(n.id);
-					const drop = n.kind === "add" && !!p.dropLabel;
-					const more = detail(n);
+					const drop = n.kind === "add" && !!addLabel;
+					const more = shownDetail(n);
+					const far = lod === "far";
+					const near = lod === "near";
+					const tools = !open && tooled(n);
+					const i = tools ? stops.indexOf(n) : -1;
 					const waiting = n.join && n.join.waiting > 0 ? n.join : null;
-					const cls = "fl-box fl-box-" + n.kind + (open ? " fl-box-open" : "") + (drop ? " fl-drop" : "") + " fl-st-" + n.state + (n.perch ? " fl-perch" : "") + (p.selected === n.id ? " selected" : "") + (p.highlight?.has(n.id) ? " fl-described" : "") + (lifted ? " fl-lifted" : "") + (canDrag(n) ? " fl-draggable" : "");
-					const said = n.kind === "add" ? drop ? p.dropLabel : n.title : n.title + (n.kind === "stop" || n.kind === "rung" ? ", " + (STATE_WORD[n.state] || "") : "") + (n.chip ? ", " + n.chip.label : "") + (waiting ? ", " + joinLabel(waiting) : "");
+					const cls = "fl-box fl-box-" + n.kind + (open ? " fl-box-open" : "") + (drop ? " fl-drop" : "") + " fl-st-" + n.state + (n.perch ? " fl-perch" : "") + (p.selected === n.id ? " selected" : "") + (p.highlight?.has(n.id) ? " fl-described" : "") + (lifted ? " fl-lifted" : "") + (tools ? " fl-has-tools" : "") + (canDrag(n) ? " fl-draggable" : "");
+					const said = n.kind === "add" ? drop ? addLabel : n.title : n.title + (n.kind === "stop" || n.kind === "rung" ? ", " + (STATE_WORD[n.state] || "") : "") + (n.chip ? ", " + n.chip.label : "") + (waiting ? ", " + joinLabel(waiting) : "");
 					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						ref: (el) => {
 							boxRefs.current[n.id] = el;
@@ -79683,7 +80007,7 @@ function FlywayCanvas(p) {
 						"data-node": n.id,
 						"aria-label": said,
 						"aria-current": p.selected === n.id ? "true" : void 0,
-						title: open ? void 0 : n.kind === "add" ? drop ? p.dropLabel : n.title : n.reason ? n.title + " — " + n.reason : n.sub ? n.title + " — " + n.sub : n.title,
+						title: open ? void 0 : n.kind === "add" ? drop ? addLabel : n.title : n.reason ? n.title + " — " + n.reason : n.sub ? n.title + " — " + n.sub : n.title,
 						style: open ? { transform: `translate(${x}px, ${y}px)` } : {
 							transform: `translate(${x}px, ${y}px)`,
 							width: b.w,
@@ -79695,87 +80019,115 @@ function FlywayCanvas(p) {
 						onPointerCancel: onBoxUp,
 						onClick: (e) => open && e.target !== e.currentTarget ? void 0 : activate(n),
 						onKeyDown: (e) => onBoxKey(e, n),
-						children: [waiting && !open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "fl-join-pill",
-							title: "The line goes on once its workers are done: " + joinLabel(waiting),
-							"aria-hidden": "true",
-							children: waiting.waiting + " of " + waiting.total
-						}), open ? open.body : n.kind === "branch" && size !== "compact" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "fl-box-head",
+						onContextMenu: (e) => onBoxMenu(e, n),
+						children: [
+							tools && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+								className: "fl-tools",
+								role: "toolbar",
+								"aria-label": "Change “" + n.title + "”",
+								"data-no-drag": true,
+								onClick: (e) => e.stopPropagation(),
 								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "fl-box-dot tone-" + (n.chip?.tone || "neutral"),
-										"aria-hidden": "true"
+									p.onSelect && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: "fl-icon-btn fl-tool",
+										"aria-label": "Edit “" + n.title + "”",
+										title: "Edit this stop (Enter)",
+										onClick: () => p.onSelect(n),
+										children: "✎"
 									}),
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "fl-box-title",
-										children: n.title
+									p.onMove && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: "fl-icon-btn fl-tool",
+										"aria-label": "Move “" + n.title + "” earlier",
+										title: "Move this stop one place earlier (" + (vertical ? "↑" : "←") + ")",
+										disabled: !canShift(stops, i, -1, p.diagram.insertFrom),
+										onClick: () => shift(n, -1),
+										children: "⇤"
+									}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: "fl-icon-btn fl-tool",
+										"aria-label": "Move “" + n.title + "” later",
+										title: "Move this stop one place later (" + (vertical ? "↓" : "→") + ")",
+										disabled: !canShift(stops, i, 1, p.diagram.insertFrom),
+										onClick: () => shift(n, 1),
+										children: "⇥"
+									})] }),
+									p.onDuplicate && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: "fl-icon-btn fl-tool",
+										"aria-label": "Duplicate “" + n.title + "”",
+										title: "Duplicate: the same stop again, right after this one",
+										onClick: () => p.onDuplicate(n),
+										children: "⧉"
 									}),
-									glyph && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-										className: "fl-box-glyph fl-glyph-" + n.state,
-										"aria-hidden": "true",
-										children: glyph
+									p.onRemove && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+										type: "button",
+										className: "fl-icon-btn fl-tool fl-tool-remove",
+										"aria-label": "Remove “" + n.title + "”",
+										title: "Remove this stop from the line (Delete)",
+										onClick: () => p.onRemove(n),
+										children: "🗑"
 									})
 								]
 							}),
-							n.chip && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "fl-box-chip tone-" + n.chip.tone,
-								children: n.chip.label
+							waiting && !open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-join-pill",
+								title: "The line goes on once its workers are done: " + joinLabel(waiting),
+								"aria-hidden": "true",
+								children: waiting.waiting + " of " + waiting.total
 							}),
-							n.sub && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "fl-box-sub",
-								children: n.sub
-							})
-						] }) : n.kind === "add" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "fl-add-plus",
-							"aria-hidden": "true",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopIcon, {
-								kind: "add",
-								size: small ? 16 : 17
-							})
-						}), drop ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "fl-add-label",
-							children: p.dropLabel
-						}) : !small && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "fl-add-label",
-							children: n.title
-						})] }) : size === "compact" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-							className: "fl-box-head",
-							children: [
-								n.chip ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "fl-box-dot tone-" + n.chip.tone,
-									"aria-hidden": "true"
-								}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "fl-box-icon",
-									children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopIcon, {
-										kind: n.perch ? "perch" : n.icon,
-										size: 13
-									})
-								}),
-								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "fl-box-title",
-									children: n.title
-								}),
-								glyph && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "fl-box-glyph fl-glyph-" + n.state,
-									"aria-hidden": "true",
-									children: glyph
-								}),
-								(n.state === "current" || n.state === "perched") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-									className: "fl-box-pulse",
-									"aria-hidden": "true"
+							open ? open.body : n.kind === "add" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-add-plus",
+								"aria-hidden": "true",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopIcon, {
+									kind: "add",
+									size: small ? 16 : 17
 								})
-							]
-						}), p.renderInBox?.(n)] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							}), drop ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-add-label",
+								children: addLabel
+							}) : !small && !far && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-add-label",
+								children: n.title
+							})] }) : n.kind === "branch" && (near || size !== "compact" && !far) ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "fl-box-head",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "fl-box-dot tone-" + (n.chip?.tone || "neutral"),
+											"aria-hidden": "true"
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "fl-box-title",
+											children: n.title
+										}),
+										glyph && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "fl-box-glyph fl-glyph-" + n.state,
+											"aria-hidden": "true",
+											children: glyph
+										})
+									]
+								}),
+								n.chip && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "fl-box-chip tone-" + n.chip.tone,
+									children: n.chip.label
+								}),
+								n.sub && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "fl-box-sub",
+									children: n.sub
+								})
+							] }) : far || size === "compact" && !near ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "fl-box-head",
 								children: [
-									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									n.chip ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+										className: "fl-box-dot tone-" + n.chip.tone,
+										"aria-hidden": "true"
+									}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 										className: "fl-box-icon",
 										children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopIcon, {
 											kind: n.perch ? "perch" : n.icon,
-											size: small ? 13 : 15
+											size: 13
 										})
 									}),
 									/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -79792,46 +80144,95 @@ function FlywayCanvas(p) {
 										"aria-hidden": "true"
 									})
 								]
-							}),
-							n.chip && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "fl-box-chip tone-" + n.chip.tone,
-								children: n.chip.label
-							}),
-							n.sub && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "fl-box-sub",
-								children: n.sub
-							}),
-							more && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "fl-box-detail",
-								children: more
-							}),
-							n.reason && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "fl-box-reason",
-								children: n.reason
-							}),
-							n.dots && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "fl-box-dots",
-								"aria-label": "Its line",
-								children: n.dots
-							}),
-							p.renderInBox?.(n)
-						] })]
+							}), !far && p.renderInBox?.(n)] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									className: "fl-box-head",
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "fl-box-icon",
+											children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopIcon, {
+												kind: n.perch ? "perch" : n.icon,
+												size: small ? 13 : 15
+											})
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "fl-box-title",
+											children: n.title
+										}),
+										glyph && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "fl-box-glyph fl-glyph-" + n.state,
+											"aria-hidden": "true",
+											children: glyph
+										}),
+										(n.state === "current" || n.state === "perched") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "fl-box-pulse",
+											"aria-hidden": "true"
+										})
+									]
+								}),
+								n.chip && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "fl-box-chip tone-" + n.chip.tone,
+									children: n.chip.label
+								}),
+								n.sub && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "fl-box-sub",
+									children: n.sub
+								}),
+								more && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "fl-box-detail",
+									children: more
+								}),
+								n.reason && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "fl-box-reason",
+									children: n.reason
+								}),
+								n.dots && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+									className: "fl-box-dots",
+									"aria-label": "Its line",
+									children: n.dots
+								}),
+								p.renderInBox?.(n)
+							] })
+						]
 					}, n.id);
 				}),
-				gaps.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "fl-gap-add",
-					style: { transform: `translate(${g.x + pad}px, ${g.y + top}px) translate(-50%, -50%)` },
-					"aria-label": "Add a stop here (before stop " + (g.at + 1) + ")",
-					title: "Add a stop here",
-					onClick: () => p.onInsert?.(g.at),
-					children: "+"
-				}, "gap" + g.at)),
+				gaps.map((g) => {
+					const style = { transform: `translate(${g.x + pad}px, ${g.y + top}px) translate(-50%, -50%) scale(calc(1 / var(--sky-z, 1)))` };
+					if (g.at === stopAt) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "fl-gap-add fl-gap-lit",
+						style,
+						"aria-hidden": "true",
+						children: ["+ ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fl-gap-label",
+							children: "Tack on here"
+						})]
+					}, "gap" + g.at);
+					return p.onInsert ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "fl-gap-add",
+						style,
+						"aria-label": "Add a stop here (before stop " + (g.at + 1) + ")",
+						title: "Add a stop here",
+						onClick: () => p.onInsert?.(g.at),
+						children: "+"
+					}, "gap" + g.at) : null;
+				}),
 				perch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMarker, {
 					tone: p.bird.tone,
 					x: perch.x + pad + perch.w / 2,
 					y: perch.y + top,
 					label: "The bird: " + (p.bird.tone === "you" ? "perched on you at " : p.bird.tone === "halted" ? "halted at " : p.bird.tone === "paused" ? "paused at " : "flying ") + perch.node.title
+				}),
+				menuNode && menuItems.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopMenu, {
+					x: menu.x,
+					y: menu.y,
+					label: "“" + menuNode.title + "” — what you can do",
+					items: menuItems,
+					onPick: (key) => {
+						closeMenu(false);
+						pick(menuNode, key);
+					},
+					onClose: closeMenu
 				})
 			]
 		})
@@ -80697,6 +81098,8 @@ function useSessionLine(title, src, opts) {
 	const stops = diagram.nodes.filter((n) => n.kind === "stop");
 	const end = flight ? flight.steps.length : 0;
 	const sel = selected ? diagram.nodes.find((n) => n.id === selected) || null : null;
+	const latest = (0, import_react.useRef)(flight);
+	latest.current = flight;
 	(0, import_react.useEffect)(() => {
 		if (selectIndex === null) return;
 		const n = stops.find((s) => s.index === selectIndex && s.step);
@@ -80729,6 +81132,20 @@ function useSessionLine(title, src, opts) {
 		} finally {
 			setBusy(false);
 		}
+	};
+	const removeStop = async (step, index) => {
+		if (!flight) return false;
+		const id = flight.id;
+		if (!await dropStop(id, step.id)) return false;
+		toast("Removed “" + step.title + "” from the line", { action: {
+			label: "Undo",
+			ariaLabel: "Undo: put “" + step.title + "” back on the line",
+			onClick: () => {
+				const back = undoPayload(step, index, latest.current?.id === id ? latest.current : null);
+				tackOn(id, back.step, back.at);
+			}
+		} });
+		return true;
 	};
 	const joinDef = kindOf.get("join");
 	const splitAt = sel?.step?.kind === "split" && sel.index !== void 0 ? sel.index : -1;
@@ -80803,7 +81220,22 @@ function useSessionLine(title, src, opts) {
 			else if (n.session && n.session !== title) opts.onSession(n.session);
 		},
 		onInsert: flight ? (at) => setPaletteAt(paletteAt === at ? null : at) : void 0,
-		onRemove: flight ? (n) => n.editable && n.step && void dropStop(flight.id, n.step.id) : void 0,
+		onRemove: flight ? (n) => n.editable && n.step && n.index !== void 0 && void removeStop(n.step, n.index) : void 0,
+		onMove: flight ? (from, to) => {
+			const step = flight.steps[from];
+			const n = stops.find((s) => s.index === from);
+			if (step && n?.editable && to >= diagram.insertFrom && to < flight.steps.length) moveStop(flight.id, step.id, to);
+		} : void 0,
+		onDuplicate: flight ? (n) => {
+			if (!n.editable || !n.step || n.index === void 0) return;
+			const at = n.index + 1;
+			tackOn(flight.id, n.step, at < end ? at : void 0);
+		} : void 0,
+		onDropStop: (kind, at) => {
+			const def = kindOf.get(kind);
+			if (def) tackOne(def, at);
+			else toast("This line has no “" + kind + "” stop to tack on");
+		},
 		renderInBox: parts.renderInBox,
 		sizeOf: parts.sizeOf,
 		reveal: currentNodeId(diagram, flight)
@@ -80868,7 +81300,7 @@ function useSessionLine(title, src, opts) {
 			onClick: async () => {
 				setBusy(true);
 				try {
-					if (await dropStop(flight.id, draft.id)) {
+					if (sel.step && sel.index !== void 0 && await removeStop(sel.step, sel.index)) {
 						setSelected(null);
 						setDraft(null);
 					}
@@ -118415,12 +118847,13 @@ function installSurfaceHash(win = window) {
 }
 //#endregion
 //#region src/lib/skyLayout.ts
-var SKY_GAP = 36;
+var SKY_GAP = 64;
 var SKY_MARGIN = 40;
-var INTAKE_W = 300;
-var LINES_LEFT = 404;
+var INTAKE_W = 240;
+var LINES_LEFT = 328;
 var ZOOM_MIN = .4;
-var ZOOM_MAX = 2;
+var ZOOM_MAX = 3;
+var FIT_PAD = 56;
 var hits = (a, b, gap) => a.x < b.x + b.w + gap && b.x < a.x + a.w + gap && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap;
 function placeLines(lines, saved, area) {
 	const out = {};
@@ -118460,7 +118893,7 @@ function placeLines(lines, saved, area) {
 				w: l.w,
 				h: l.h
 			};
-			const hit = taken.find((t) => hits(at, t, 35));
+			const hit = taken.find((t) => hits(at, t, 63));
 			if (hit) {
 				cx = hit.x + hit.w + SKY_GAP;
 				continue;
@@ -118504,7 +118937,7 @@ function toPlane(c, px, py) {
 		y: (py - c.y) / c.z
 	};
 }
-function fitCamera(b, vw, vh, maxZ = 1.25, pad = 40) {
+function fitCamera(b, vw, vh, maxZ = 1.25, pad = FIT_PAD) {
 	if (!b || b.w <= 0 || b.h <= 0 || vw <= 0 || vh <= 0) return {
 		x: 0,
 		y: 0,
@@ -118517,6 +118950,16 @@ function fitCamera(b, vw, vh, maxZ = 1.25, pad = 40) {
 		z
 	};
 }
+function firstFit(b, vw, vh, maxZ = 1, pad = FIT_PAD) {
+	const all = fitCamera(b, vw, vh, maxZ, pad);
+	if (!b || b.w <= 0 || b.h <= 0 || vw <= 0 || vh <= 0 || all.z >= LOD_MID) return all;
+	const z = clampZoom(Math.min(maxZ, Math.max(LOD_MID, (vw - 2 * pad) / b.w)));
+	return {
+		z,
+		x: pad - b.x * z,
+		y: pad - b.y * z
+	};
+}
 function centerOn(r, vw, vh, z) {
 	const nz = clampZoom(z);
 	return {
@@ -118525,6 +118968,12 @@ function centerOn(r, vw, vh, z) {
 		y: Math.max(24, vh / 2 - r.h * nz / 2) - r.y * nz
 	};
 }
+var LOD_MID = .62;
+var LOD_NEAR = 1.15;
+var lodFor = (z) => !(z >= LOD_MID) ? "far" : z < LOD_NEAR ? "mid" : "near";
+var nearLines = (z) => lodFor(z) === "near" ? Math.max(2, Math.min(8, Math.floor(z * 2))) : 0;
+var SKY_DRAWER_KEY = "mf_sky_drawer";
+var skyDrawerOpen = (pref) => pref === "1";
 var FLYWAY_MIME$1 = "application/x-mindflock-flyway";
 var SKY_SIZES = [
 	"compact",
@@ -119612,9 +120061,9 @@ function SkyDrawer({ open, onToggle, onFocus }) {
 		"data-tour": "flights-drawer",
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 			type: "button",
-			className: "sky-drawer-tab",
+			className: "sky-drawer-tab" + (count > 0 ? " has-perch" : ""),
 			"aria-expanded": open,
-			title: open ? "Fold the drawer away" : "What is perched on you",
+			title: open ? "Fold the drawer away" : count > 0 ? count + " perched on you — open the drawer" : "What is perched on you",
 			onClick: onToggle,
 			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "sky-drawer-tab-word",
@@ -119842,6 +120291,7 @@ function SkyLine(p) {
 	const measureRef = (0, import_react.useRef)(p.onMeasure);
 	measureRef.current = p.onMeasure;
 	const size = p.layout.size || "normal";
+	const lod = lodFor(p.zoom || 1);
 	(0, import_react.useEffect)(() => {
 		const el = rootRef.current;
 		if (!el || typeof ResizeObserver === "undefined") return;
@@ -119931,6 +120381,11 @@ function SkyLine(p) {
 		ref: rootRef,
 		className: "skl skl-size-" + size + (p.focused ? " is-focused" : "") + (p.layout.open ? " is-open" : "") + (p.dropFlyway ? " is-drop" : "") + (line.editing ? " is-editing" : ""),
 		"data-line": p.title,
+		"data-lod": lod,
+		style: {
+			"--sky-z": p.zoom || 1,
+			"--sky-lines": nearLines(p.zoom || 1)
+		},
 		role: "group",
 		"aria-label": p.title + "'s line",
 		onPointerDownCapture: () => {
@@ -119951,6 +120406,10 @@ function SkyLine(p) {
 						className: "fl-box-chip skl-chip tone-" + ss.tone,
 						title: ss.hint,
 						children: ss.label
+					}),
+					row && (row.task_headline || row.task) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "skl-task",
+						children: firstLine$1(row.task_headline || row.task || "")
 					}),
 					p.layout.pinned && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "skl-pin",
@@ -120013,6 +120472,7 @@ function SkyLine(p) {
 				detailOf,
 				dropLabel: p.dropFlyway ? "Drop to fly " + p.dropFlyway.name : null,
 				openBox,
+				lod,
 				...line.canvas,
 				onOpen
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -120258,6 +120718,92 @@ function SkyFlock({ width, height, zoom, paused = false, density = 1 }) {
 	});
 }
 //#endregion
+//#region src/components/flights/StopShelf.tsx
+function stopChipOrder(kinds) {
+	return [...kinds.filter((k) => k.actor !== "you"), ...kinds.filter((k) => k.actor === "you")];
+}
+function stopDragData(def) {
+	return [[STOP_MIME, def.kind], ["text/plain", kindName(def)]];
+}
+function onStopDrag(e, def) {
+	for (const [type, value] of stopDragData(def)) e.dataTransfer.setData(type, value);
+	e.dataTransfer.effectAllowed = "copy";
+}
+function StopChip({ def, onTack }) {
+	const name = kindName(def);
+	const perch = def.actor === "you";
+	const how = onTack ? "Click to tack it onto the focused line, or drag it onto a line" : "Drag onto a line";
+	const props = {
+		className: "sky-stop-chip" + (perch ? " perch" : "") + (onTack ? "" : " drag-only"),
+		"data-kind": def.kind,
+		draggable: true,
+		title: (def.summary ? def.summary + "\n" : "") + how,
+		onDragStart: (e) => onStopDrag(e, def)
+	};
+	const body = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "sky-stop-icon",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopIcon, {
+			kind: perch ? "perch" : def.kind,
+			size: 14
+		})
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "sky-stop-name",
+		children: name
+	})] });
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		role: "listitem",
+		className: "sky-stop-item",
+		children: onTack ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			...props,
+			"aria-label": "Tack “" + name + "” onto the focused line",
+			onClick: () => onTack(def.kind),
+			children: body
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			...props,
+			children: body
+		})
+	});
+}
+function StopShelf({ onTack }) {
+	const kinds = useFlightKinds().data;
+	const ordered = stopChipOrder(kinds || []);
+	const flock = ordered.filter((k) => k.actor !== "you");
+	const perches = ordered.filter((k) => k.actor === "you");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sky-stops",
+		role: "group",
+		"aria-label": "Stops",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "sky-stops-head",
+			children: ["Stops ", /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sky-stops-hint",
+				children: "drag onto a line"
+			})]
+		}), kinds !== void 0 && ordered.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			className: "sky-stops-empty muted",
+			children: "The stop list didn't load — this server may not know Flights yet."
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "sky-stops-chips",
+			role: "list",
+			children: [
+				flock.map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopChip, {
+					def: k,
+					onTack
+				}, k.kind)),
+				flock.length > 0 && perches.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sky-stops-divider",
+					"aria-hidden": "true"
+				}),
+				perches.map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopChip, {
+					def: k,
+					onTack
+				}, k.kind))
+			]
+		})]
+	});
+}
+//#endregion
 //#region src/components/flights/FlywayShelf.tsx
 var FLYWAY_MIME = "application/x-mindflock-flyway";
 var MAX_DOTS = 10;
@@ -120283,7 +120829,7 @@ function StopDots({ plan }) {
 		})]
 	});
 }
-function FlywayShelf({ plans, onNew, onFly, onEdit, collapsed, onCollapse }) {
+function FlywayShelf({ plans, onNew, onFly, onEdit, collapsed, onCollapse, onTack }) {
 	const [ownFold, setOwnFold] = (0, import_react.useState)(false);
 	const folded = collapsed ?? ownFold;
 	const fold = (v) => {
@@ -120295,58 +120841,62 @@ function FlywayShelf({ plans, onNew, onFly, onEdit, collapsed, onCollapse }) {
 		className: "sky-shelf" + (folded ? " folded" : ""),
 		"aria-label": "Flyways",
 		"data-tour": "sky-shelf",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-			type: "button",
-			className: "sky-shelf-head",
-			"aria-expanded": !folded,
-			title: folded ? "Show the flyways" : "Fold the flyways away",
-			onClick: () => fold(!folded),
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "sky-shelf-caret",
-					"aria-hidden": "true",
-					children: folded ? "▸" : "▾"
-				}),
-				"Flyways ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "sky-shelf-count",
-					children: ordered.length
-				})
-			]
-		}), !folded && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "sky-shelf-chips",
-			role: "list",
-			children: [ordered.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				role: "listitem",
-				className: "sky-shelf-chip" + (p.builtin ? " builtin" : ""),
-				"data-plan": p.id,
-				draggable: true,
-				title: "Drag onto a line to fly “" + p.name + "” on it",
-				onDragStart: (e) => onChipDrag(e, p),
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-					type: "button",
-					className: "sky-shelf-open",
-					"aria-label": "Edit the flyway “" + p.name + "”",
-					onClick: () => onEdit(p),
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "sky-shelf-name",
-						children: p.name
-					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopDots, { plan: p })]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "sky-shelf-fly",
-					"aria-label": "Fly “" + p.name + "” on a line",
-					title: "Fly it on a line",
-					onClick: () => onFly(p),
-					children: "Fly"
-				})]
-			}, p.id)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 				type: "button",
-				className: "sky-shelf-chip sky-shelf-new",
-				onClick: onNew,
-				children: "+ New flyway"
-			})]
-		})]
+				className: "sky-shelf-head",
+				"aria-expanded": !folded,
+				title: folded ? "Show the flyways" : "Fold the flyways away",
+				onClick: () => fold(!folded),
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-shelf-caret",
+						"aria-hidden": "true",
+						children: folded ? "▸" : "▾"
+					}),
+					"Flyways ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-shelf-count",
+						children: ordered.length
+					})
+				]
+			}),
+			!folded && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sky-shelf-chips",
+				role: "list",
+				children: [ordered.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					role: "listitem",
+					className: "sky-shelf-chip" + (p.builtin ? " builtin" : ""),
+					"data-plan": p.id,
+					draggable: true,
+					title: "Drag onto a line to fly “" + p.name + "” on it",
+					onDragStart: (e) => onChipDrag(e, p),
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						className: "sky-shelf-open",
+						"aria-label": "Edit the flyway “" + p.name + "”",
+						onClick: () => onEdit(p),
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-shelf-name",
+							children: p.name
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopDots, { plan: p })]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "sky-shelf-fly",
+						"aria-label": "Fly “" + p.name + "” on a line",
+						title: "Fly it on a line",
+						onClick: () => onFly(p),
+						children: "Fly"
+					})]
+				}, p.id)), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "sky-shelf-chip sky-shelf-new",
+					onClick: onNew,
+					children: "+ New flyway"
+				})]
+			}),
+			!folded && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopShelf, { onTack })
+		]
 	});
 }
 //#endregion
@@ -120774,6 +121324,11 @@ function FlywayCard({ x, y, plans, initial, onSaved, onCancel }) {
 				},
 				onMove: move,
 				onRemove: (n) => removeStop(nodeIndex(n)),
+				onDuplicate: (n) => setSteps(duplicateStep(draft.steps, nodeIndex(n))),
+				onDropStop: (kind, at) => {
+					const def = kindOf.get(kind);
+					if (def) insert(at ?? draft.steps.length, def);
+				},
 				onInsert: (at) => setPaletteAt(paletteAt === at ? null : at)
 			}),
 			paletteAt !== null && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopPalette, {
@@ -120909,7 +121464,6 @@ var BAR_H = 34;
 var LINE_MIN_W = 280;
 var GRID = 24;
 var PAN_STEP = 80;
-var DRAWER_KEY = "mf_sky_drawer";
 var SHELF_KEY = "mf_sky_shelf";
 var readPref = (key) => {
 	try {
@@ -120998,11 +121552,12 @@ function SkyView() {
 	const vpRef = (0, import_react.useRef)(null);
 	const [newAt, setNewAt] = (0, import_react.useState)(null);
 	const [card, setCard] = (0, import_react.useState)(null);
-	const [drawerPref, setDrawerPref] = (0, import_react.useState)(() => readPref(DRAWER_KEY));
+	const [drawerPref, setDrawerPref] = (0, import_react.useState)(() => readPref(SKY_DRAWER_KEY));
 	const [shelfOpen, setShelfOpen] = (0, import_react.useState)(() => readPref(SHELF_KEY) !== "0");
 	const shelfAsk = useUi((s) => s.skyShelf);
 	useAutoTour("sky", true);
 	const [flyPick, setFlyPick] = (0, import_react.useState)(null);
+	const [tackPick, setTackPick] = (0, import_react.useState)(null);
 	const [drop, setDrop] = (0, import_react.useState)(null);
 	const dropPlan = (0, import_react.useRef)(null);
 	const [flash, setFlash] = (0, import_react.useState)("");
@@ -121064,7 +121619,7 @@ function SkyView() {
 			h: l.h
 		} : null;
 	}, [lines, posOf]);
-	const drawerOpen = drawerPref !== "0";
+	const drawerOpen = skyDrawerOpen(drawerPref);
 	const focusLine = (0, import_react.useMemo)(() => {
 		if (!focused) return "";
 		if (titles.includes(focused)) return focused;
@@ -121089,7 +121644,7 @@ function SkyView() {
 		return () => ro.disconnect();
 	}, [narrow]);
 	const touched = (0, import_react.useRef)(memo?.touched ?? false);
-	const fitAll = (0, import_react.useCallback)(() => {
+	const fitAll = (0, import_react.useCallback)((whole = false) => {
 		touched.current = false;
 		const rects = lines.map((l) => ({
 			...posOf(l.id),
@@ -121102,7 +121657,7 @@ function SkyView() {
 			w: INTAKE_W,
 			h: 1
 		});
-		setCam(fitCamera(boundsOf(rects), vp.w, vp.h, mode === "one" ? 1.5 : 1));
+		setCam((whole ? fitCamera : firstFit)(boundsOf(rects), vp.w, vp.h, mode === "one" ? 1.5 : 1));
 	}, [
 		lines,
 		posOf,
@@ -121163,10 +121718,12 @@ function SkyView() {
 		lastFocus.current = focusLine;
 		const r = rectOf(focusLine);
 		if (!r) return;
+		const pressed = pressedLine.current === focusLine;
+		pressedLine.current = "";
 		const c = camRef.current;
 		const sx = c.x + r.x * c.z;
 		const sy = c.y + r.y * c.z;
-		if (!(sx >= 0 && sy >= 0 && sx + r.w * c.z <= vp.w && sy + Math.min(r.h, 240) * c.z <= vp.h)) {
+		if (!(sx >= 0 && sy >= 0 && sx + r.w * c.z <= vp.w && sy + Math.min(r.h, 240) * c.z <= vp.h) && !pressed) {
 			touched.current = true;
 			setCam(centerOn(r, vp.w, vp.h, Math.max(c.z, .85)));
 		}
@@ -121198,7 +121755,11 @@ function SkyView() {
 		rows,
 		narrow
 	]);
-	const focusOn = (0, import_react.useCallback)((id) => selectSession(id, { noKeyboard: true }), []);
+	const pressedLine = (0, import_react.useRef)("");
+	const focusOn = (0, import_react.useCallback)((id, pressed = false) => {
+		pressedLine.current = pressed ? id : "";
+		selectSession(id, { noKeyboard: true });
+	}, []);
 	const setMode = (m) => {
 		if (m === "one" && !focused) {
 			if (!titles[0]) return;
@@ -121297,7 +121858,7 @@ function SkyView() {
 					y: p.y,
 					pinned: true
 				});
-			} else focusOn(id);
+			} else focusOn(id, true);
 		};
 		window.addEventListener("pointermove", move);
 		window.addEventListener("pointerup", up);
@@ -121314,6 +121875,20 @@ function SkyView() {
 			plan_id: plan.id,
 			title: t
 		});
+	};
+	const onTack = (kind, title) => {
+		const def = kinds.find((k) => k.kind === kind);
+		if (!def) return;
+		const t = title || focusLine;
+		if (!t) {
+			setTackPick(def);
+			return;
+		}
+		setTackPick(null);
+		const fl = rows.find((r) => r.title === t)?.flight;
+		const full = fl && isLive(fl) ? flights?.find((f) => f.id === fl.id) : null;
+		if (full) tackOn(full.id, newStep(def, full.steps.map((st) => st.id)));
+		else tackOnNew(t, [newStep(def, [])]);
 	};
 	const lineAt = (clientX, clientY) => {
 		const r = vpRef.current?.getBoundingClientRect();
@@ -121451,6 +122026,20 @@ function SkyView() {
 		if (pointers.current.size < 2) pinch.current = null;
 		if (pan.current?.id === e.pointerId) pan.current = null;
 	};
+	const onViewportScroll = () => {
+		const el = vpRef.current;
+		if (!el || !el.scrollLeft && !el.scrollTop) return;
+		const dx = el.scrollLeft;
+		const dy = el.scrollTop;
+		el.scrollLeft = 0;
+		el.scrollTop = 0;
+		touched.current = true;
+		setCam((c) => ({
+			...c,
+			x: c.x - dx,
+			y: c.y - dy
+		}));
+	};
 	const onDouble = (e) => {
 		if (!ground(e.target)) return;
 		const r = vpRef.current.getBoundingClientRect();
@@ -121489,11 +122078,12 @@ function SkyView() {
 	const keys = (0, import_react.useRef)(() => {});
 	keys.current = (e) => {
 		const el = document.activeElement;
-		if (e.key === "Escape" && (newAt || card || flyPick) && !useUi.getState().openDialog) {
+		if (e.key === "Escape" && (newAt || card || flyPick || tackPick) && !useUi.getState().openDialog) {
 			e.preventDefault();
 			setNewAt(null);
 			setCard(null);
 			setFlyPick(null);
+			setTackPick(null);
 			return;
 		}
 		if (overlayOpen()) return;
@@ -121627,13 +122217,13 @@ function SkyView() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "sky-zoom-btn sky-fit",
-						title: "Fit every line in the window — the grid's 4 / 9 (0)",
-						onClick: fitAll,
+						title: "See everything: every line in the window, however small — 0 fits them legibly (titles readable, pan down for the rest)",
+						onClick: () => fitAll(true),
 						children: "Fit"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
-						className: "sky-zoom-btn",
+						className: "sky-zoom-btn sky-zoom-100",
 						title: "Back to 100%",
 						onClick: () => zoomBy(1 / cam.z),
 						children: "100%"
@@ -121643,29 +122233,42 @@ function SkyView() {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TourButton, { tour: "sky" })
 		]
 	});
-	const pick = flyPick && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+	const asking = flyPick ? {
+		word: "Fly",
+		name: flyPick.name,
+		on: (t) => onFly(flyPick, t)
+	} : tackPick ? {
+		word: "Tack",
+		name: tackPick.label,
+		on: (t) => onTack(tackPick.kind, t)
+	} : null;
+	const pick = asking && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "sky-flypick",
 		role: "group",
-		"aria-label": "Fly " + flyPick.name + " on which line?",
+		"aria-label": asking.word + " " + asking.name + " on which line?",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "muted",
 				children: [
-					"Fly ",
-					flyPick.name,
+					asking.word,
+					" ",
+					asking.name,
 					" on"
 				]
 			}),
 			titles.slice(0, 12).map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "fl-chip",
-				onClick: () => onFly(flyPick, t),
+				onClick: () => asking.on(t),
 				children: t
 			}, t)),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "linklike",
-				onClick: () => setFlyPick(null),
+				onClick: () => {
+					setFlyPick(null);
+					setTackPick(null);
+				},
 				children: "Cancel"
 			})
 		]
@@ -121675,7 +122278,7 @@ function SkyView() {
 		onToggle: () => {
 			const v = drawerOpen ? "0" : "1";
 			setDrawerPref(v);
-			writePref(DRAWER_KEY, v);
+			writePref(SKY_DRAWER_KEY, v);
 		},
 		onFocus: focusOn
 	});
@@ -121704,7 +122307,8 @@ function SkyView() {
 			onEdit: (plan) => setCard({
 				at: middle(),
 				initial: plan
-			})
+			}),
+			onTack
 		})]
 	});
 	const flywayCard = card && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlywayCard, {
@@ -121743,7 +122347,7 @@ function SkyView() {
 		}),
 		onLayout: (patch) => onLayout(id, patch),
 		focused: focused === id,
-		onFocus: () => focusOn(id),
+		onFocus: () => focusOn(id, true),
 		zoom: cam.z,
 		onDragStart: at ? (e) => onDragStart(id, e) : void 0,
 		onMeasure: at ? (w, h) => onMeasure(id, w, h) : void 0,
@@ -121799,6 +122403,7 @@ function SkyView() {
 						onPointerUp: onUp,
 						onPointerCancel: onUp,
 						onDoubleClick: onDouble,
+						onScroll: onViewportScroll,
 						children: [
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyFlock, {
 								width: vp.w,
@@ -121813,9 +122418,11 @@ function SkyView() {
 								children: [
 									mode !== "one" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 										className: "sky-intake",
+										"data-lod": lodFor(cam.z),
 										style: {
 											transform: `translate(${SKY_MARGIN}px, ${SKY_MARGIN}px)`,
-											width: INTAKE_W
+											width: INTAKE_W,
+											"--sky-z": cam.z
 										},
 										children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(IntakeLane, {
 											rows,
@@ -121824,11 +122431,15 @@ function SkyView() {
 											width: INTAKE_W
 										})
 									}),
-									lines.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-										className: "sky-line-slot" + (flash === l.id ? " is-flash" : ""),
-										"data-tour": "sky-line",
-										children: lineFor(l.id, posOf(l.id))
-									}, l.id)),
+									lines.map((l) => {
+										const at = posOf(l.id);
+										return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+											className: "sky-line-slot" + (flash === l.id ? " is-flash" : "") + (drag?.id === l.id ? " is-dragging" : ""),
+											"data-tour": "sky-line",
+											style: { transform: `translate(${at.x}px, ${at.y}px)` },
+											children: lineFor(l.id, at)
+										}, l.id);
+									}),
 									ghosts.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GhostLine, { ...g }, "ghost:" + g.id)),
 									newBlock,
 									flywayCard
