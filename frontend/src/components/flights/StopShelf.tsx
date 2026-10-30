@@ -1,11 +1,13 @@
-/** The shelf's second row: the stop kinds as chips (the registry's, read with
+/** The shelf's last row: the stop kinds as chips (the registry's, read with
  * `useFlightKinds`), the flock's stops first and the perches last in their
  * gold, split by a thin divider as the stop palette groups them. DRAG a chip
  * onto a line: it carries the kind under `STOP_MIME` (and its name as plain
  * text) and the sky owns the drop — the gap it lands in lights up and the stop
- * is tacked on there. CLICK one (or tap it on a phone, where nothing drags) →
- * `onTack(kind)`: the host tacks it onto the focused line. Without `onTack` a
- * chip only drags. Styles live in FlywayShelf.css. */
+ * is tacked on there; dropped into a flyway row it joins that flyway (saved
+ * at once), or on the empty row it starts one. CLICK one (or tap it on a
+ * phone, where nothing drags) → `onTack(kind)`: the host tacks it onto the
+ * focused line. Without `onTack` a chip only drags. Styles live in
+ * FlywayShelf.css. */
 
 import type { DragEvent, JSX } from "react";
 import { STOP_MIME, type StepKindDef } from "../../lib/flights";
@@ -74,7 +76,7 @@ export function StopShelf({ onTack }: { onTack?(kind: string): void }): JSX.Elem
   return (
     <div className="sky-stops" role="group" aria-label="Stops">
       <span className="sky-stops-head">
-        Stops <span className="sky-stops-hint">drag onto a line</span>
+        <strong>Stops</strong> <span className="sky-stops-hint">— drag onto a line, or into a flyway</span>
       </span>
       {kinds !== undefined && ordered.length === 0 ? (
         <p className="sky-stops-empty muted">The stop list didn't load — this server may not know Flights yet.</p>

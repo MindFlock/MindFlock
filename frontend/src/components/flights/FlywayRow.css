@@ -1,0 +1,214 @@
+/* A flyway on the shelf as its stops (FlywayRow.tsx): the name, the stops on
+   a compact canvas, Fly and the ⋯; and the empty row at the end. */
+
+.sky-flyway-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 190px) minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  padding: 0 6px 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--panel-2) 55%, var(--panel));
+}
+
+.sky-flyway-row:hover,
+.sky-flyway-row:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.sky-flyway-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 5px;
+  min-width: 0;
+  padding: 6px 0;
+  cursor: grab;
+}
+
+.sky-flyway-row-head:active {
+  cursor: grabbing;
+}
+
+.sky-flyway-grip {
+  flex: none;
+  width: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  user-select: none;
+}
+
+.sky-flyway-name {
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: text;
+}
+
+.sky-flyway-name:hover,
+.sky-flyway-name:focus-visible {
+  background: var(--panel-2);
+  text-decoration: underline dotted color-mix(in srgb, var(--muted) 70%, transparent);
+  text-underline-offset: 3px;
+}
+
+.sky-flyway-row.builtin .sky-flyway-name {
+  color: color-mix(in srgb, var(--text) 82%, var(--muted));
+}
+
+.sky-flyway-rename.fl-input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.sky-flyway-tag {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 16px;
+}
+
+/* Saved: a small tick that fades away by itself. */
+.sky-flyway-saved {
+  flex: none;
+  color: var(--green);
+  font-size: 10.5px;
+  opacity: 0;
+  animation: sky-flyway-saved 1.8s ease-out forwards;
+}
+
+@keyframes sky-flyway-saved {
+  0% {
+    opacity: 0;
+  }
+  12%,
+  65% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+.sky-flyway-name-error {
+  flex-basis: 100%;
+  color: var(--red);
+  font-size: 11px;
+}
+
+/* The stops: the canvas sits in the row, scrolling sideways in itself. */
+.sky-flyway-row > .sky-flyway-canvas {
+  padding: 0;
+  overflow-y: hidden;
+}
+
+.sky-flyway-row-acts {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sky-flyway-fly,
+.sky-flyway-pick {
+  height: 26px;
+  padding: 0 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 999px;
+  background: rgba(var(--accent-rgb), 0.08);
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.sky-flyway-fly:hover,
+.sky-flyway-fly:focus-visible,
+.sky-flyway-pick:hover,
+.sky-flyway-pick:focus-visible {
+  background: rgba(var(--accent-rgb), 0.18);
+}
+
+.sky-flyway-pick {
+  border-style: dashed;
+  background: none;
+  font-weight: 500;
+}
+
+.sky-flyway-pick:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* The stop palette, opened by a + on the row: under it, full width. */
+.sky-flyway-palette {
+  grid-column: 1 / -1;
+  padding: 0 0 8px;
+}
+
+/* --- The empty row: drop stops here to start a flyway -------------------------- */
+
+.sky-flyway-empty {
+  border-style: dashed;
+  background: none;
+}
+
+.sky-flyway-empty .sky-flyway-row-head {
+  cursor: default;
+}
+
+.sky-flyway-empty-name {
+  padding: 2px 4px;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.sky-flyway-empty-text {
+  margin: 0;
+  padding: 10px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sky-flyway-empty.over {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.08);
+}
+
+.sky-flyway-empty.over .sky-flyway-empty-text {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* A narrow sky: the name and the buttons on top, the stops under them. */
+@media (max-width: 640px) {
+  .sky-flyway-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .sky-flyway-row > .sky-flyway-canvas,
+  .sky-flyway-empty-text {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
