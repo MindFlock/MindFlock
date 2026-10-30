@@ -252,6 +252,11 @@ export function FlywayCard({
         }}
         onMove={move}
         onRemove={(n) => removeStop(nodeIndex(n))}
+        onDuplicate={(n) => setSteps(duplicateStep(draft.steps, nodeIndex(n)))}
+        onDropStop={(kind, at) => {
+          const def = kindOf.get(kind);
+          if (def) insert(at ?? draft.steps.length, def);
+        }}
         onInsert={(at) => setPaletteAt(paletteAt === at ? null : at)}
       />
       {paletteAt !== null && (

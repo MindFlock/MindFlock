@@ -39,8 +39,8 @@ import { effectiveViewMode, useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
 import { overlayOpen } from "../../lib/keymap";
 import { layoutDiagram, sessionDiagram, type Diagram } from "../../lib/flightDiagram";
-import { isLive, type Flight, type FlightPlan, type FlightRow } from "../../lib/flights";
-import { takeOff } from "../../lib/flightsApi";
+import { isLive, newStep, type Flight, type FlightPlan, type FlightRow, type StepKindDef } from "../../lib/flights";
+import { tackOn, tackOnNew, takeOff } from "../../lib/flightsApi";
 import { reducedMotion, registerSkyHost, type Box, type SkyHost } from "../../lib/viewMode";
 import {
   FLYWAY_MIME,
@@ -201,6 +201,8 @@ export function SkyView() {
   // The Sky tour opens by itself the first time the sky is shown (once).
   useAutoTour("sky", true);
   const [flyPick, setFlyPick] = useState<FlightPlan | null>(null);
+  // A stop chip on the shelf pressed with no line focused: which line.
+  const [tackPick, setTackPick] = useState<StepKindDef | null>(null);
   const [drop, setDrop] = useState<{ title: string; plan: FlightPlan } | null>(null);
   const dropPlan = useRef<FlightPlan | null>(null);
   const [flash, setFlash] = useState("");
@@ -447,6 +449,24 @@ export function SkyView() {
     setFlyPick(null);
     void takeOff({ plan_id: plan.id, title: t });
   };
+  /** Tack one stop of `kind` (a shelf chip pressed) onto `title` — or the
+   * focused line; with neither, a row of the lines to pick from. A line
+   * with no flight yet starts an ad-hoc one (the fast-track's rungs become
+   * its stops), as the line's own + does. */
+  const onTack = (kind: string, title?: string) => {
+    const def = kinds.find((k) => k.kind === kind);
+    if (!def) return;
+    const t = title || focusLine;
+    if (!t) {
+      setTackPick(def);
+      return;
+    }
+    setTackPick(null);
+    const fl = rows.find((r) => r.title === t)?.flight as FlightRow | null | undefined;
+    const full = fl && isLive(fl) ? flights?.find((f) => f.id === fl.id) : null;
+    if (full) void tackOn(full.id, newStep(def, full.steps.map((st) => st.id)));
+    else void tackOnNew(t, [newStep(def, [])]);
+  };
   /** The line under a screen point (the shelf chip being dragged over it). */
   const lineAt = (clientX: number, clientY: number): string => {
     const r = vpRef.current?.getBoundingClientRect();
@@ -606,11 +626,12 @@ export function SkyView() {
     const el = document.activeElement;
     // The sky's own cards are dialogs too (role="dialog"): Esc folds them
     // unless a real dialog is over the whole sky.
-    if (e.key === "Escape" && (newAt || card || flyPick) && !useUi.getState().openDialog) {
+    if (e.key === "Escape" && (newAt || card || flyPick || tackPick) && !useUi.getState().openDialog) {
       e.preventDefault();
       setNewAt(null);
       setCard(null);
       setFlyPick(null);
+      setTackPick(null);
       return;
     }
     if (overlayOpen()) return;
@@ -732,15 +753,26 @@ export function SkyView() {
     </div>
   );
 
-  const pick = flyPick && (
-    <div className="sky-flypick" role="group" aria-label={"Fly " + flyPick.name + " on which line?"}>
-      <span className="muted">Fly {flyPick.name} on</span>
+  // Which line: a flyway (Fly) or a stop chip (Tack on) with no line focused.
+  const asking = flyPick ? { word: "Fly", name: flyPick.name, on: (t: string) => onFly(flyPick, t) } : tackPick ? { word: "Tack", name: tackPick.label, on: (t: string) => onTack(tackPick.kind, t) } : null;
+  const pick = asking && (
+    <div className="sky-flypick" role="group" aria-label={asking.word + " " + asking.name + " on which line?"}>
+      <span className="muted">
+        {asking.word} {asking.name} on
+      </span>
       {titles.slice(0, 12).map((t) => (
-        <button key={t} type="button" className="fl-chip" onClick={() => onFly(flyPick, t)}>
+        <button key={t} type="button" className="fl-chip" onClick={() => asking.on(t)}>
           {t}
         </button>
       ))}
-      <button type="button" className="linklike" onClick={() => setFlyPick(null)}>
+      <button
+        type="button"
+        className="linklike"
+        onClick={() => {
+          setFlyPick(null);
+          setTackPick(null);
+        }}
+      >
         Cancel
       </button>
     </div>
@@ -778,6 +810,7 @@ export function SkyView() {
           onNew={() => setCard({ at: middle() })}
           onFly={onFly}
           onEdit={(plan) => setCard({ at: middle(), initial: plan })}
+          onTack={onTack}
         />
       )}
     </div>

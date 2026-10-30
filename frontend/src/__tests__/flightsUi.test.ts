@@ -107,6 +107,7 @@ function withClient(el: ReactElement, prime: (c: InstanceType<typeof QueryClient
 }
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   useUi.getState().closeDialog();
   useUi.setState({ view: "grid", skyMode: "mine", focused: null } as never);
   Object.assign(useUi.getInitialState(), useUi.getState());
@@ -345,6 +346,8 @@ describe("the sky", () => {
 
   it("the sky view: the main area, every session a line with the bird on its active box — hidden helpers left out", () => {
     const html = render("sky");
+    // The drawer starts folded to its tab, the perch count on it.
+    expect(html).toMatch(/class="sky-drawer"[^>]*><button type="button" class="sky-drawer-tab has-perch" aria-expanded="false"/);
     expect(html).toMatch(/^<main id="sky-view" class="sky"/);
     expect(html).toContain('data-tour="flights-sky"');
     // One line per session, newest first; the verify helper has none.
@@ -366,6 +369,8 @@ describe("the sky", () => {
   });
 
   it("the drawer keeps what the Board showed: Perched on you with the perch's Done / Skip, then Waiting to fly", () => {
+    // The drawer starts folded (mf_sky_drawer); opened once, it stays open.
+    vi.stubGlobal("localStorage", { getItem: (k: string) => (k === "mf_sky_drawer" ? "1" : null), setItem: () => {} });
     const html = render("sky");
     expect(html).toContain('data-tour="flights-sky"');
     const drawer = html.slice(html.indexOf('class="sky-drawer open"'));
@@ -533,6 +538,8 @@ describe("a source's flyway chips (on Intake's source cards)", () => {
   });
 
   it("the drawer's waiting rows: a kind heading, a badge on every row, Fly, and the flyway chips on the source's flyway", () => {
+    // The drawer starts folded (mf_sky_drawer); opened once, it stays open.
+    vi.stubGlobal("localStorage", { getItem: (k: string) => (k === "mf_sky_drawer" ? "1" : null), setItem: () => {} });
     useUi.setState({ view: "sky", skyMode: "mine" } as never);
     Object.assign(useUi.getInitialState(), useUi.getState());
     const html = withClient(createElement(SkyView), (c) => {

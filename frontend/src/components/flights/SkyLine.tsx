@@ -299,9 +299,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
           detailOf={detailOf}
           dropLabel={p.dropFlyway ? "Drop to fly " + p.dropFlyway.name : null}
           openBox={openBox}
-          // FlywayCanvas's `lod` prop lands with the canvas's own branch; the
-          // cast keeps this one compiling until then.
-          {...({ lod } as Record<string, unknown>)}
+          lod={lod}
           {...line.canvas}
           onOpen={onOpen}
         />

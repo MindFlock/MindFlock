@@ -148,10 +148,13 @@ describe("the switch points", () => {
     expect(css("components/TopBar.css")).toMatch(/body\.narrow #topbar \.tb-view-word \{[^}]*display: none;/);
   });
 
-  it("the sidebar's View row: Auto · 1 · 2 · 4 · 9 · Sky — a number returns to the grid", () => {
+  it("the sidebar's View row: Auto · 1 · 2 · 4 · 9 │ Grid · Sky — a number returns to the grid", () => {
     const side = code("components/sidebar/Sidebar.tsx");
-    expect(side).toContain('className={"vm vm-sky" + (ui.view === "sky" ? " active" : "")}');
-    expect(side).toContain('data-view="sky"');
+    expect(side).toContain('className={"vt" + (ui.view === v ? " active" : "")}');
+    expect(side).toContain('data-tour={v === "sky" ? "view-sky" : undefined}');
+    expect(side).not.toContain("vm-sky");
+    // Both halves of the toggle carry their view (VIEWS = grid, sky).
+    expect(side).toContain("data-view={v}");
     expect(side).toMatch(/ui\.setViewMode\(v\);\s*setView\("grid"\);/);
     expect(side).toContain('className={"vm" + (ui.view === "grid" && ui.viewMode === v ? " active" : "")}');
   });
