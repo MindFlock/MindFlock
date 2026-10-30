@@ -369,3 +369,40 @@ describe("Delete yields to the Sky on a box that is not the session itself (roun
     expect(aliasFor("close").when!()).toBe(true);
   });
 });
+
+describe("Ctrl+Y switches views (the owner's pick over Alt+Y)", () => {
+  const g = globalThis as Record<string, unknown>;
+  const hadDoc = "document" in g;
+  const prevDoc = g.document;
+  afterEach(() => {
+    useUi.setState({ openDialog: null } as never);
+    if (hadDoc) g.document = prevDoc;
+    else delete g.document;
+  });
+  const view = () => KEYMAP.find((k) => k.id === "view")!;
+  const withActive = (el: unknown) => {
+    g.document = { activeElement: el, getElementById: () => null, querySelectorAll: () => [] };
+  };
+
+  it("is Ctrl/⌘+Y with no Alt — and nothing else answers Alt+Y", () => {
+    expect(view()).toMatchObject({ key: "y", mod: true });
+    expect(effBindings(view())).toEqual([view()]);
+    expect(comboLabel({ key: "y", mod: true })).toBe("Ctrl+Y");
+    expect(KEYMAP.some((k) => k.key === "y" && k.alt)).toBe(false);
+    expect(defaultCombosFor("view")).toEqual([expect.objectContaining({ key: "y", mod: true })]);
+  });
+
+  it("fires from a terminal, as Ctrl+P / B / N do; a text field keeps it (redo); never behind a dialog", () => {
+    const term = { tagName: "TEXTAREA", className: "xterm-helper-textarea", closest: (s: string) => (s === ".xterm" ? {} : null) };
+    const input = { tagName: "INPUT", closest: () => null };
+    const body = { tagName: "BODY", closest: () => null };
+    withActive(term);
+    expect(view().when!()).toBe(true);
+    withActive(input);
+    expect(view().when!()).toBe(false);
+    withActive(body);
+    expect(view().when!()).toBe(true);
+    useUi.setState({ openDialog: "settings" } as never);
+    expect(view().when!()).toBe(false);
+  });
+});

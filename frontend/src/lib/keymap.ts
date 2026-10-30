@@ -547,17 +547,15 @@ export const KEYMAP: KeymapEntry[] = [
   },
   {
     // The main area's two views (lib/viewMode): the grid of panes ⇄ the sky
-    // of lines. Alt like its neighbours, and Y because the rest are taken —
-    // I / V / S / G / N / 1-9 here, W / C / R in the pane find bar, F is
-    // Chrome's menu on Windows and D its address bar; "skY". Like Alt+G it
-    // fires FROM a terminal (switching views is something you do while
-    // working; readline's M-y yank-pop is rarely used), but a text field
-    // outside one keeps the keystroke (Option+Y types ¥), and nothing
-    // happens behind a dialog.
+    // of lines. Ctrl+Y (⌘Y on a Mac — `mod`, as Ctrl+P / B / N), the owner's
+    // pick over the old Alt+Y; Y for "skY". Like Ctrl+P / B / N it fires FROM
+    // a terminal (switching views is something you do while working; readline's
+    // C-y yank is the keystroke it takes there), but a text field outside one
+    // keeps it (Ctrl+Y is redo there), and nothing happens behind a dialog.
     key: "y",
-    alt: true,
+    mod: true,
     id: "view",
-    help: ["Navigation", "Alt+Y", "Switch views — the grid of panes ⇄ the sky of lines (the same sessions, the same focus)"],
+    help: ["Navigation", "Ctrl+Y", "Switch views — the grid of panes ⇄ the sky of lines (the same sessions, the same focus)"],
     when: () => !overlayOpen() && (terminalFocused() || !isEditingTarget(document.activeElement)),
     run: () => toggleView(),
   },

@@ -471,7 +471,7 @@ top bar, bell and dialogs stay; App renders it in the grid's place while
   needs-you rows are the drawer's Perched on you; New is a new-session card on
   the sky. The full table is in docs/web-ui.md.
 - **Switch points**: the top bar's Grid · Sky toggle (`data-tour="view-sky"`),
-  the sidebar View row's **Sky** chip (a number returns to the grid), `Alt+Y`,
+  the sidebar View row's **Sky** chip (a number returns to the grid), `Ctrl+Y`,
   the palette, `#sky` / `#sky/<title>`. Switching keeps the selection, the
   camera, the drawer and the shelf; each pane's ghost flies to its line and
   back (~250 ms; none under `prefers-reduced-motion`).
@@ -3001,3 +3001,9 @@ worker's worker) keeps its own line, with its parent's box above. This session
 still shows a worker's line alone. A folded worker's layout entry is simply
 unused. All and Mine now draw the same lines; `lineFamily` is gone (nothing
 read it).
+
+**Ctrl+Y switches views** (the owner: "I want Ctrl+Y to go to the sky instead
+of Alt+Y"). The keymap's `view` entry is `{key: "y", mod: true}`: Ctrl+Y, or ⌘Y
+on a Mac, like Ctrl+P / B / N. Alt+Y is gone. The guard is unchanged: it fires
+from a terminal, as Ctrl+P / B / N do, so it takes readline's C-y yank there.
+A text field keeps it (redo), and nothing happens behind a dialog.

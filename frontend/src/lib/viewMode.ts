@@ -8,7 +8,7 @@
  * the flip look like one picture turning into the other:
  *
  *   setView / toggleView   the top bar's Grid · Sky toggle, the sidebar View
- *                          row's Sky chip, Alt+Y, the palette
+ *                          row's Sky chip, Ctrl+Y, the palette
  *   showInSky              a session's "Show in the Sky": the sky on it alone
  *   newSession             Ctrl/Alt+N and the top bar's New: the New dialog
  *                          in the grid, a new-session card mid-sky in the sky

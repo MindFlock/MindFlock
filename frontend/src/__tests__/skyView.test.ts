@@ -1,6 +1,6 @@
 /** The sky as the main area's second view (lib/viewMode.ts, docs/web-ui.md
  * "Two views: the grid and the sky"): the view store, every switch point
- * (top bar, sidebar View row, Alt+Y, the palette, the hash), the isomorphism's
+ * (top bar, sidebar View row, Ctrl+Y, the palette, the hash), the isomorphism's
  * invariants (one focused session, one open tab per session, This session =
  * the focused one alone, the grid's 1 ↔ the sky's 1), the layout store (sizes,
  * Tidy, the mf_sky_pos migration) and the transition's pairing. */
@@ -164,12 +164,13 @@ describe("the switch points", () => {
     expect(side).toContain('className={"vm" + (ui.view === "grid" && ui.viewMode === v ? " active" : "")}');
   });
 
-  it("Alt+Y toggles, in the Navigation group, on a letter no other binding uses", () => {
+  it("Ctrl+Y (⌘Y) toggles, in the Navigation group, on a letter no other binding uses; Alt+Y is gone", () => {
     const y = KEYMAP.find((k) => k.id === "view")!;
-    expect(y).toMatchObject({ key: "y", alt: true });
+    expect(y).toMatchObject({ key: "y", mod: true });
+    expect(y.alt).toBeUndefined();
     expect(y.help?.[0]).toBe("Navigation");
-    expect(y.help?.[1]).toBe("Alt+Y");
-    expect(KEYMAP.filter((k) => k.alt && !k.shift && k.key === "y")).toHaveLength(1);
+    expect(y.help?.[1]).toBe("Ctrl+Y");
+    expect(KEYMAP.filter((k) => k.key === "y")).toHaveLength(1);
     y.run({} as KeyboardEvent);
     expect(useUi.getState().view).toBe("sky");
     y.run({} as KeyboardEvent);
