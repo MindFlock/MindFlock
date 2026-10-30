@@ -1523,6 +1523,20 @@ flight stays paused; Carry on resumes). A stop behind the flight is 409
 editor the toggle edits the draft (`toggleHalt`, lib/flights.ts) and Save
 stores it with the plan.
 
+The UI (pure rules in `lib/stopEditing.ts`: `canHalt`, `haltToggle`,
+`flightHold`, `haltMark`; tested in `stopEditing.test.ts`): `FlywayCanvas`
+takes `onToggleHalt?(n)`. With it, every stop not yet flown that can change,
+and the flight's current stop, offers ⏸ Halt here (pressed, `aria-pressed`,
+reading Carry on past here on a halt point) on its toolbar and menu; the
+current stop's own toolbar (⏹ Halt now / ▶ Carry on, then ⏸) shows only on
+such a line, so a line without it asks for no headroom. The current stop's
+right-click menu offers Halt now / Carry on on any live line
+(`controlFlight`). A halt point wears `.fl-halt-point` and a ⏸ badge
+(`.fl-halt-mark`, top-left, the paused tone; `StopEditing.css`).
+`useSessionLine` wires `onToggleHalt` to `flightsApi.setHalt(flightId,
+stepId, !halt)`. The pane strip says "Paused at a halt point" for one, and
+its ⋯ reads Halt now / Carry on / Cancel.
+
 ## Editing stops on a line
 
 The owner: "In sky mode I can't drag in new boxes or delete boxes from flows …
@@ -1545,6 +1559,8 @@ through the same `FlywayCanvas` props. The rules are pure, in
 | Drag a stop along the line | Moves it there (never before the flight's current stop) | `onMove` |
 | The + between two boxes (shows on hover of the whole line) | The stop palette, to put one in there | `onInsert` |
 | The trailing + | Tack on a stop (palette and "Fly a flyway") | `onOpen` |
+| ⏸ on a stop's toolbar or menu | Halt here / Carry on past here: a halt point ([Halt points](#halt-points)) | `onToggleHalt` |
+| ⏹ / ▶ on the current stop's toolbar or menu | Halt now / Carry on (pause / resume the flight) | — (`controlFlight`) |
 | Drag a stop chip from the shelf onto the line | The gap it would land in lights up ("+ Tack on here"), or the end + reads "Tack on <Kind>"; dropping tacks the stop on there | `onDropStop`, `dragStop` |
 
 Only a stop that can change (`DiagramNode.editable`: in the editor every
@@ -1651,7 +1667,8 @@ The type sizes per level live with the Sky (`.skl[data-lod=…]`).
   `onRemove` and `onInsert`; for Duplicate and drops it adds
   `onDuplicate={(n) => setSteps(duplicateStep(draft.steps, nodeIndex(n)))}`
   and `onDropStop={(kind, at) => { const def = kindOf.get(kind); if (def)
-  insert(at ?? draft.steps.length, def); }}`.
+  insert(at ?? draft.steps.length, def); }}`; for halt points it adds
+  `onToggleHalt={(n) => setSteps(toggleHalt(draft.steps, nodeIndex(n)))}`.
 
 ## The shelf: flyways and stops
 

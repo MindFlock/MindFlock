@@ -3,7 +3,7 @@
  * line, the flyway card's block moves, the trigger's schedule round trip, and
  * where the retired Flights dialog's addresses land now. */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   blankPlan,
   builtinPlanFor,
@@ -280,6 +280,8 @@ describe("the plan editor's blocks", () => {
   it("a new block takes its kind's default title and field defaults, under a free id", () => {
     expect(newStep(KIND, ["s1", "s2"])).toEqual({ id: "s3", kind: "wait", title: "Wait", config: { minutes: 5 }, on_fail: "halt" });
     expect(newStep(KIND, ["s1", "s3"]).id).toBe("s4");
+    // A new stop is no halt point.
+    expect("halt" in newStep(KIND, [])).toBe(false);
   });
 
   it("moves, duplicates and compares", () => {
@@ -331,5 +333,23 @@ describe("the retired Flights dialog's addresses", () => {
     expect(legacyFlightsRoute("schedule")).toEqual({ to: "schedule", target: null });
     expect(legacyFlightsRoute("schedule/new")).toEqual({ to: "schedule", target: "new" });
     expect(legacyFlightsRoute("nope/x")).toEqual({ to: "sky", focus: "" });
+  });
+});
+
+describe("a stop's halt flag on the wire", () => {
+  it("goes out with the stop (wireStep) while set, and is left out otherwise", async () => {
+    vi.doMock("../api/client", () => ({ api: vi.fn(async () => ({})), ApiError: class extends Error {} }));
+    vi.doMock("../lib/toast", () => ({ toast: vi.fn() }));
+    vi.doMock("../lib/errorPop", () => ({ errorPop: vi.fn() }));
+    const { wireStep } = await import("../lib/flightsApi");
+    const s: FlightStep = { id: "s2", kind: "ship", title: "Push", config: { lane: "push" }, on_fail: "halt" };
+    expect(wireStep({ ...s, halt: true })).toEqual({ kind: "ship", title: "Push", config: { lane: "push" }, on_fail: "halt", halt: true });
+    expect(wireStep(s)).toEqual({ kind: "ship", title: "Push", config: { lane: "push" }, on_fail: "halt" });
+    expect("halt" in wireStep({ ...s, halt: false })).toBe(false);
+    // A stored flight's step keeps it through a JSON round trip.
+    const back = JSON.parse(JSON.stringify({ ...s, halt: true })) as FlightStep;
+    expect(back.halt).toBe(true);
+    // newStep + wireStep: a fresh stop posts no halt.
+    expect("halt" in wireStep(newStep({ kind: "wait", label: "Wait", actor: "robot", summary: "", fields: [], default_title: "Wait" }, []))).toBe(false);
   });
 });

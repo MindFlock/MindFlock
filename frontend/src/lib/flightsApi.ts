@@ -14,6 +14,8 @@
  *                          {title, steps, absorb_fasttrack: true}; a live flight:
  *                          POST /api/flights/{id}/steps {step, at?}
  *  - Edit / drop a stop    PATCH · DELETE /api/flights/{id}/steps/{sid} (pending only)
+ *  - Halt here             PATCH /api/flights/{id}/steps/{sid} {halt} (a pending stop or
+ *                          the current one)
  *  - Move a stop           POST /api/flights/{id}/steps/{sid}/move {at} (pending only,
  *                          to an index after the current stop)
  *
@@ -93,8 +95,24 @@ export function jumpFlight(flightId: string, stepId: string, title = ""): Promis
 }
 
 export function controlFlight(flightId: string, verb: "pause" | "resume" | "cancel"): Promise<boolean> {
-  const said = verb === "pause" ? "Flight paused" : verb === "resume" ? "Flight resumed" : "Flight cancelled — its session is kept";
-  return flightAction(verb[0].toUpperCase() + verb.slice(1), flightPath(flightId, "/" + verb), {}, said);
+  const said = verb === "pause" ? "Flight halted — Carry on picks it up again" : verb === "resume" ? "Flight carrying on" : "Flight cancelled — its session is kept";
+  const what = verb === "pause" ? "Halt now" : verb === "resume" ? "Carry on" : "Cancel";
+  return flightAction(what, flightPath(flightId, "/" + verb), {}, said);
+}
+
+/** ⏸ Halt here / Carry on past here on a stop of a live flight: `{halt}`
+ * alone, which the server takes on a pending stop or the current one. */
+export async function setHalt(flightId: string, stepId: string, halt: boolean): Promise<boolean> {
+  try {
+    await api(flightPath(flightId, "/steps/" + enc(stepId)), { method: "PATCH", json: { halt } });
+    toast(halt ? "Halt point set — the flight stops before this stop" : "Halt point taken off");
+    return true;
+  } catch (err) {
+    errorPop(halt ? "Halt here failed" : "Carry on past here failed", errMsg(err));
+    return false;
+  } finally {
+    void refreshFlights();
+  }
 }
 
 // --- Starting --------------------------------------------------------------------
@@ -226,10 +244,12 @@ export async function describeSteps(text: string, want: "step" | "plan" = "step"
 
 // --- Tacking stops onto a session's line ------------------------------------------
 
-/** The step a stop posts: its kind, title, config and on_fail — the id is the
- * server's to give. */
-function wireStep(step: FlightStep): Omit<FlightStep, "id"> {
-  return { kind: step.kind, title: step.title, config: step.config, on_fail: step.on_fail };
+/** The step a stop posts: its kind, title, config, on_fail and (a halt
+ * point's) halt — the id is the server's to give. */
+export function wireStep(step: FlightStep): Omit<FlightStep, "id"> {
+  const out: Omit<FlightStep, "id"> = { kind: step.kind, title: step.title, config: step.config, on_fail: step.on_fail };
+  if (step.halt) out.halt = true;
+  return out;
 }
 
 /** The `+` at the end of a session's line, on a session with no flight yet: an
@@ -264,7 +284,7 @@ export async function tackOnAll(flightId: string, steps: FlightStep[]): Promise<
 }
 
 /** Edit a pending stop of a live flight in place (title / config / on_fail). */
-export async function patchStop(flightId: string, stepId: string, patch: Partial<Pick<FlightStep, "title" | "config" | "on_fail">>): Promise<boolean> {
+export async function patchStop(flightId: string, stepId: string, patch: Partial<Pick<FlightStep, "title" | "config" | "on_fail" | "halt">>): Promise<boolean> {
   try {
     await api(flightPath(flightId, "/steps/" + enc(stepId)), { method: "PATCH", json: patch });
     return true;

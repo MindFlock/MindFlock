@@ -26,7 +26,9 @@
  *
  * Editing a stop works the way n8n edits a node (docs/flights-stop-editing.md,
  * the rules in lib/stopEditing): a stop that can change wears a toolbar on
- * hover or focus (Edit · Earlier · Later · Duplicate · Remove), any box
+ * hover or focus (Edit · Earlier · Later · Duplicate · Halt here · Remove),
+ * the flight's current stop one of its own (Halt now / Carry on · Halt
+ * here: docs/flights.md "Halt points"), a halt point wears a ⏸ badge, any box
  * opens a menu on right-click (StopMenu), Delete removes the selected stop,
  * the + between boxes inserts one, and a stop chip dragged from the shelf
  * (`STOP_MIME`) lights the gap it would land in and is tacked on there.
@@ -49,11 +51,12 @@ import {
   type LayoutOpts,
 } from "../../lib/flightDiagram";
 import { STOP_MIME } from "../../lib/flights";
-import { stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
-import { canShift, dropGapFor, insertGaps, isStopDrag, menuItemsFor, type StopMenuKey } from "../../lib/stopEditing";
+import { controlFlight, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { canHalt, canShift, dropGapFor, flightHold, haltMark, haltToggle, insertGaps, isStopDrag, menuItemsFor, type StopMenuKey } from "../../lib/stopEditing";
 import { BirdMarker, StopIcon } from "./Bird";
 import { StopMenu } from "./StopMenu";
 import "./FlywayCanvas.css";
+import "./StopEditing.css";
 
 /** Below this width the line runs top to bottom. */
 const VERTICAL_BELOW_PX = 520;
@@ -126,6 +129,9 @@ export interface FlywayCanvasProps {
   onRemove?(n: DiagramNode): void;
   /** Duplicate (the toolbar, the menu): the same stop again, right after it. */
   onDuplicate?(n: DiagramNode): void;
+  /** ⏸ Halt here / Carry on past here (the toolbar, the menu): make a stop not
+   * yet flown a halt point, or no longer one. */
+  onToggleHalt?(n: DiagramNode): void;
   /** A stop chip (`STOP_MIME`, its value the stop kind) dropped on the line:
    * tack a stop of `kind` on before stop `at` — null = at the end. */
   onDropStop?(kind: string, at: number | null): void;
@@ -156,6 +162,18 @@ export interface FlywayCanvasProps {
   lod?: BoxLod;
   dataTour?: string;
   className?: string;
+}
+
+/** ⏸ on a stop's toolbar: Halt here, pressed (Carry on past here) while the
+ * stop is a halt point. */
+function HaltTool({ n, onToggle }: { n: DiagramNode; onToggle(n: DiagramNode): void }) {
+  const t = haltToggle(n);
+  const on = !!n.step?.halt;
+  return (
+    <button type="button" className={"fl-icon-btn fl-tool fl-tool-halt" + (on ? " fl-tool-on" : "")} aria-pressed={on} aria-label={t.label + " — “" + n.title + "”"} title={t.title} onClick={() => onToggle(n)}>
+      ⏸
+    </button>
+  );
 }
 
 const STATE_GLYPH: Partial<Record<DiagramNode["state"], string>> = {
@@ -387,9 +405,19 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
   // stop chip dragged over the line lights the one it would land in.
   const gaps = (p.onInsert || stopAt !== null) && !drag ? insertGaps(shown.boxes, p.diagram.insertFrom, vertical) : [];
 
+  // The live flight's current stop (under way, perched, held or halted): it
+  // wears a toolbar of its own — Halt now / Carry on, Halt here — on a line
+  // whose host marks halt points (its menu offers Halt now on any line).
+  const isHere = (n: DiagramNode) =>
+    !!p.diagram.flightId &&
+    n.kind === "stop" &&
+    !!n.step &&
+    n.index === p.diagram.insertFrom - 1 &&
+    (n.state === "current" || n.state === "perched" || n.state === "paused" || n.state === "halted");
+
   // The hover toolbar: on a stop that can change, when there is something
-  // to change it with.
-  const tooled = (n: DiagramNode) => n.kind === "stop" && !!n.editable && !!(p.onMove || p.onRemove || p.onDuplicate);
+  // to change it with; on the current stop, to halt the flight.
+  const tooled = (n: DiagramNode) => (n.kind === "stop" && !!n.editable && !!(p.onMove || p.onRemove || p.onDuplicate || p.onToggleHalt)) || (!!p.onToggleHalt && isHere(n));
   const pad = 6;
   // Headroom over the top row for the bird to stand in, or a toolbar.
   const top = p.bird || p.diagram.nodes.some(tooled) ? 26 : pad;
@@ -444,10 +472,11 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
   const menuNode = menu ? p.diagram.nodes.find((n) => n.id === menu.id) || null : null;
   const menuItems = menuNode
     ? menuItemsFor(menuNode, {
-        can: { edit: !!p.onSelect, move: !!p.onMove, duplicate: !!p.onDuplicate, remove: !!p.onRemove, open: !!p.onOpen },
+        can: { edit: !!p.onSelect, move: !!p.onMove, duplicate: !!p.onDuplicate, remove: !!p.onRemove, open: !!p.onOpen, halt: !!p.onToggleHalt },
         earlier: canShift(stops, stops.indexOf(menuNode), -1, p.diagram.insertFrom),
         later: canShift(stops, stops.indexOf(menuNode), 1, p.diagram.insertFrom),
         live: !!p.diagram.flightId && !!menuNode.step,
+        here: isHere(menuNode),
       })
     : [];
   const pick = (n: DiagramNode, key: StopMenuKey) => {
@@ -460,6 +489,8 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
     else if (key === "done") void stepDone(flight, step);
     else if (key === "skip") void stepSkip(flight, step);
     else if (key === "retry") void stepRetry(flight, step);
+    else if (key === "halt") p.onToggleHalt?.(n);
+    else if (key === "pause" || key === "resume") void controlFlight(flight, key);
     else if (key === "tackon" || key === "open") p.onOpen?.(n);
   };
   const closeMenu = (refocus: boolean) => {
@@ -522,6 +553,35 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
           const own = lifted ? base.boxes.find((x) => x.node.id === n.id) : null;
           const x = (own ? own.x + (vertical ? 0 : drag!.delta) : b.x) + pad;
           const y = (own ? own.y + (vertical ? drag!.delta : 0) : b.y) + top;
+          // Stops already flown, folded into one pill (lib/flightDiagram's
+          // "flown" node): a click opens them; no toolbar, menu or drag.
+          if ((n.kind as string) === "flown")
+            return (
+              <div
+                key={n.id}
+                ref={(el) => {
+                  boxRefs.current[n.id] = el;
+                }}
+                role="listitem"
+                tabIndex={0}
+                className="fl-box fl-box-flown"
+                data-node={n.id}
+                aria-label={n.title + " — show them"}
+                title={n.title + " — show them"}
+                style={{ transform: `translate(${x}px, ${y}px)`, width: b.w, minHeight: b.h }}
+                onClick={() => p.onOpen?.(n)}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" && e.key !== " ") return;
+                  e.preventDefault();
+                  p.onOpen?.(n);
+                }}
+              >
+                <span className="fl-box-glyph fl-glyph-done" aria-hidden="true">
+                  ✓
+                </span>
+                <span className="fl-box-title">{n.title}</span>
+              </div>
+            );
           const glyph = STATE_GLYPH[n.state];
           const open = opened.get(n.id);
           const drop = n.kind === "add" && !!addLabel;
@@ -529,7 +589,11 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
           const far = lod === "far";
           const near = lod === "near";
           const tools = !open && tooled(n);
+          const here = isHere(n);
           const i = tools ? stops.indexOf(n) : -1;
+          const mark = haltMark(n);
+          const hold = here && !n.editable ? flightHold(n) : null;
+          const haltable = !!p.onToggleHalt && canHalt(n, here);
           const waiting = n.join && n.join.waiting > 0 ? n.join : null;
           const cls =
             "fl-box fl-box-" + n.kind +
@@ -541,6 +605,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
             (p.highlight?.has(n.id) ? " fl-described" : "") +
             (lifted ? " fl-lifted" : "") +
             (tools ? " fl-has-tools" : "") +
+            (mark ? " fl-halt-point" : "") +
             (canDrag(n) ? " fl-draggable" : "");
           const said =
             n.kind === "add"
@@ -549,6 +614,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                 : n.title
               : n.title +
                 (n.kind === "stop" || n.kind === "rung" ? ", " + (STATE_WORD[n.state] || "") : "") +
+                (mark ? ", halt point" : "") +
                 (n.chip ? ", " + n.chip.label : "") +
                 (waiting ? ", " + joinLabel(waiting) : "");
           return (
@@ -576,7 +642,28 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
               onKeyDown={(e) => onBoxKey(e, n)}
               onContextMenu={(e) => onBoxMenu(e, n)}
             >
-              {tools && (
+              {mark && !open && (
+                <span className="fl-halt-mark" title={mark.title} aria-hidden="true">
+                  {mark.glyph}
+                </span>
+              )}
+              {tools && here && !n.editable && (
+                <div className="fl-tools" role="toolbar" aria-label={"Halt or carry on at “" + n.title + "”"} data-no-drag onClick={(e) => e.stopPropagation()}>
+                  {hold && (
+                    <button
+                      type="button"
+                      className={"fl-icon-btn fl-tool fl-tool-" + hold.key}
+                      aria-label={hold.label + " — “" + n.title + "”"}
+                      title={hold.title}
+                      onClick={() => void controlFlight(p.diagram.flightId, hold.key as "pause" | "resume")}
+                    >
+                      {hold.key === "pause" ? "⏹" : "▶"}
+                    </button>
+                  )}
+                  {haltable && <HaltTool n={n} onToggle={p.onToggleHalt!} />}
+                </div>
+              )}
+              {tools && !(here && !n.editable) && (
                 // Above the box on hover or focus; a press here never starts
                 // the box's drag (onBoxDown skips buttons) nor opens it.
                 <div className="fl-tools" role="toolbar" aria-label={"Change “" + n.title + "”"} data-no-drag onClick={(e) => e.stopPropagation()}>
@@ -614,6 +701,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                       ⧉
                     </button>
                   )}
+                  {haltable && <HaltTool n={n} onToggle={p.onToggleHalt!} />}
                   {p.onRemove && (
                     <button type="button" className="fl-icon-btn fl-tool fl-tool-remove" aria-label={"Remove “" + n.title + "”"} title="Remove this stop from the line (Delete)" onClick={() => p.onRemove!(n)}>
                       🗑

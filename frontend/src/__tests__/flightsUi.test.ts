@@ -191,7 +191,7 @@ describe("a flight's card", () => {
     expect(perch.indexOf(">Done</button>")).toBeLessThan(perch.indexOf('data-node="stop:s4"'));
   });
 
-  it("every live box has a ⋯: Jump here, the flight's Pause, Cancel", () => {
+  it("every live box has a ⋯: Jump here, the flight's Halt now, Cancel", () => {
     const pending = html.slice(html.indexOf('data-node="stop:s4"'));
     expect(pending).toContain('aria-label="Actions for Merge"');
     expect(pending).toContain(">Jump here</button>");
@@ -205,13 +205,16 @@ describe("a flight's card", () => {
     expect(h).toContain("Checks failed");
   });
 
-  it("a paused flight says so, offers Resume in its ⋯, and nothing pulses", () => {
+  it("a paused flight says so, offers Carry on in its ⋯, and nothing pulses", () => {
     const p = card(flight({ state: "paused", cursor: 1, step_states: {} }));
-    expect(p).toContain('class="fl-now-paused">Paused<');
-    expect(p).toContain(">Resume</button>");
-    expect(p).not.toContain(">Pause</button>");
+    expect(p).toMatch(/class="fl-now-paused" title="Halted by you[^"]*">Paused</);
+    expect(p).toContain(">Carry on</button>");
+    expect(p).not.toContain(">Halt now</button>");
     expect(p).not.toContain(">Done</button>");
     expect(p).not.toContain("fl-box-pulse");
+    // Stopped by a halt point: it says which.
+    const h = card(flight({ state: "paused", cursor: 1, reason: "halt point", step_states: {} }));
+    expect(h).toContain(">Paused at a halt point<");
   });
 
   it("never says Perch: twice", () => {

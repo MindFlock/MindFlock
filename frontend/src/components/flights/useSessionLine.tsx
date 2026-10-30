@@ -10,6 +10,9 @@
  * tacked on right after it), and is removed at once — the toast's Undo tacks
  * it back where it was while that is still ahead of the flight. A stop chip
  * dropped on the line from the shelf is tacked on at the gap it lands in.
+ * ⏸ Halt here makes a pending stop (or the current one) a halt point —
+ * `PATCH /api/flights/{id}/steps/{sid} {halt}` — and Carry on past here
+ * takes it off (docs/flights.md "Halt points").
  *
  * Two homes share it: the pane's Flight tab (SessionFlight.tsx) and every
  * line in the Sky (Sky.tsx). Tacking a stop onto a session with no flight yet
@@ -27,7 +30,7 @@ import type { Instance } from "../../api/types";
 import { toast } from "../../lib/toast";
 import { isLive, newStep, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef } from "../../lib/flights";
 import { sessionDiagram, type DiagramNode } from "../../lib/flightDiagram";
-import { dropStop, moveStop, patchStop, tackOn, tackOnAll, tackOnNew, takeOff } from "../../lib/flightsApi";
+import { dropStop, moveStop, patchStop, setHalt, tackOn, tackOnAll, tackOnNew, takeOff } from "../../lib/flightsApi";
 import { undoPayload } from "../../lib/stopEditing";
 import type { FlywayCanvasProps } from "./FlywayCanvas";
 import { currentNodeId, liveBoxParts, useCancelAsk } from "./FlightStrip";
@@ -208,7 +211,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
 
   const canvas: Pick<
     FlywayCanvasProps,
-    "selected" | "onSelect" | "onOpen" | "onInsert" | "onRemove" | "onMove" | "onDuplicate" | "onDropStop" | "renderInBox" | "sizeOf" | "reveal"
+    "selected" | "onSelect" | "onOpen" | "onInsert" | "onRemove" | "onMove" | "onDuplicate" | "onToggleHalt" | "onDropStop" | "renderInBox" | "sizeOf" | "reveal"
   > = {
     selected: paletteAt !== null && paletteAt >= end ? "add" : selected,
     onSelect,
@@ -231,6 +234,14 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
           if (!n.editable || !n.step || n.index === undefined) return;
           const at = n.index + 1;
           void tackOn(flight.id, n.step, at < end ? at : undefined);
+        }
+      : undefined,
+    // A stop the flight has not flown yet: one still ahead, or where it is.
+    onToggleHalt: flight
+      ? (n) => {
+          const step = n.index !== undefined ? flight.steps[n.index] : undefined;
+          const st = step ? flight.step_states?.[step.id]?.state : undefined;
+          if (step && n.index! >= flight.cursor && st !== "done" && st !== "skipped") void setHalt(flight.id, step.id, !step.halt);
         }
       : undefined,
     onDropStop: (kind, at) => {

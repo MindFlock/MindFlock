@@ -32,6 +32,9 @@ export interface FlightStep {
   title: string;
   config: Record<string, unknown>;
   on_fail: OnFail;
+  /** A halt point: the flight stops when it reaches this stop, before doing
+   * it (docs/flights.md "Halt points"). The server leaves it out when false. */
+  halt?: boolean;
 }
 
 export interface FlightTrigger {
@@ -379,6 +382,17 @@ export function moveStep<T>(steps: readonly T[], from: number, to: number): T[] 
   const out = steps.slice();
   const [it] = out.splice(from, 1);
   out.splice(Math.max(0, Math.min(out.length, to)), 0, it);
+  return out;
+}
+
+/** The stop at `index` made a halt point, or no longer one (the flyway
+ * editor's ⏸ Halt here / Carry on past here; saved with the flyway). */
+export function toggleHalt(steps: readonly FlightStep[], index: number): FlightStep[] {
+  const src = steps[index];
+  if (!src) return steps.slice();
+  const out = steps.slice();
+  const { halt, ...rest } = src;
+  out[index] = halt ? rest : { ...rest, halt: true };
   return out;
 }
 

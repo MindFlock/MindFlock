@@ -2,7 +2,7 @@
  * is doing — done ✓ dimmed, the current one pulsing (gold perched on you,
  * green while the flock works, red halted with the reason), skipped struck
  * through, pending outlined — a perch's checklist and Done / Skip inside its
- * box, and a ⋯ on every box (Jump here · Retry · Pause / Resume · Cancel).
+ * box, and a ⋯ on every box (Jump here · Retry · Halt now / Carry on · Cancel).
  *
  * Two homes here, one set of parts: the Board's card (`FlightCard` — the
  * session's live diagram on one compact row; a click on its head opens the
@@ -141,7 +141,7 @@ export function YouStepActions({ flight, compact = false }: { flight: Flight; co
   );
 }
 
-/** The flight's own ⋯: Open session · Pause / Resume · Cancel. Cancel asks
+/** The flight's own ⋯: Open session · Halt now / Carry on · Cancel. Cancel asks
  * inline first (it ends the flight; the session is kept). */
 export function FlightMenu({
   flight,
@@ -160,8 +160,8 @@ export function FlightMenu({
   if (live) {
     items.push(
       flight.state === "halted" || flight.state === "paused"
-        ? { key: "resume", label: "Resume", title: "Fly on from the current stop", onSelect: () => void controlFlight(flight.id, "resume") }
-        : { key: "pause", label: "Pause", title: "Hold the flight at its current stop", onSelect: () => void controlFlight(flight.id, "pause") }
+        ? { key: "resume", label: "Carry on", title: "Fly on from the current stop", onSelect: () => void controlFlight(flight.id, "resume") }
+        : { key: "pause", label: "Halt now", title: "Stop the flight at its current stop — Carry on picks it up again", onSelect: () => void controlFlight(flight.id, "pause") }
     );
     items.push({ key: "cancel", label: "Cancel", danger: true, title: "End this flight — its session is kept", onSelect: onCancelAsk });
   }
@@ -173,7 +173,7 @@ export function FlightMenu({
 }
 
 /** A box's ⋯ on a live flight: Jump here (any stop but the current one),
- * Retry (the halted or failed one), and the flight's Pause / Resume / Cancel. */
+ * Retry (the halted or failed one), and the flight's Halt now / Carry on / Cancel. */
 export function stopMenuItems(flight: Flight, n: DiagramNode, onCancelAsk: () => void): MenuItem[] {
   if (!isLive(flight) || n.kind !== "stop" || n.index === undefined) return [];
   const step = flight.steps[n.index];
@@ -186,8 +186,8 @@ export function stopMenuItems(flight: Flight, n: DiagramNode, onCancelAsk: () =>
   if (atCursor)
     items.push(
       flight.state === "halted" || flight.state === "paused"
-        ? { key: "resume", label: "Resume", title: "Fly on from here", onSelect: () => void controlFlight(flight.id, "resume") }
-        : { key: "pause", label: "Pause", title: "Hold the flight at this stop", onSelect: () => void controlFlight(flight.id, "pause") }
+        ? { key: "resume", label: "Carry on", title: "Fly on from here", onSelect: () => void controlFlight(flight.id, "resume") }
+        : { key: "pause", label: "Halt now", title: "Stop the flight at this stop — Carry on picks it up again", onSelect: () => void controlFlight(flight.id, "pause") }
     );
   items.push({ key: "cancel", label: "Cancel flight", danger: true, title: "End this flight — its session is kept", onSelect: onCancelAsk });
   return items;
@@ -321,7 +321,11 @@ export function FlightCard({ flight, kinds, expand = false }: { flight: Flight; 
               <span className={"fl-now-dot" + (you ? " fl-now-you" : "") + (flight.state === "halted" ? " fl-now-halted" : "")} aria-hidden="true" />
               <span className="fl-now-title">{you ? perchLabel(step.title) : step.title}</span>
               {elapsed && <span className="fl-now-elapsed">{elapsed}</span>}
-              {flight.state === "paused" && <span className="fl-now-paused">Paused</span>}
+              {flight.state === "paused" && (
+                <span className="fl-now-paused" title={flight.reason === "halt point" ? "The flight reached a halt point and stopped before this stop — Carry on to fly on" : "Halted by you — Carry on to fly on"}>
+                  {flight.reason === "halt point" ? "Paused at a halt point" : "Paused"}
+                </span>
+              )}
               {flight.state === "halted" && flight.reason && <span className="fl-now-reason">{flight.reason}</span>}
             </>
           ) : null}

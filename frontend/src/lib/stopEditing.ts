@@ -10,7 +10,9 @@
  *                   the end of the line;
  *  - `canShift`     whether ⇤ / ⇥ (and ← / →) can move a stop one place;
  *  - `undoPayload`  what Undo tacks back after a stop was removed;
- *  - `menuItemsFor` a box's right-click menu, by its kind and state. */
+ *  - `menuItemsFor` a box's right-click menu, by its kind and state;
+ *  - `haltToggle` / `haltMark`  a halt point's toggle and the badge a box
+ *                   wears while it is one (docs/flights.md "Halt points"). */
 
 import type { DiagramNode, Placed } from "./flightDiagram";
 import { STOP_MIME, type Flight, type FlightStep } from "./flights";
@@ -95,7 +97,7 @@ export function undoPayload(step: FlightStep, index: number, flight: Pick<Flight
 
 // --- The right-click menu --------------------------------------------------------------
 
-export type StopMenuKey = "edit" | "earlier" | "later" | "duplicate" | "remove" | "done" | "skip" | "retry" | "tackon" | "open" | "note";
+export type StopMenuKey = "edit" | "earlier" | "later" | "duplicate" | "remove" | "done" | "skip" | "retry" | "halt" | "pause" | "resume" | "tackon" | "open" | "note";
 
 /** One line of a box's menu: something to press, or a muted `note`. */
 export interface StopMenuItem {
@@ -109,19 +111,53 @@ export interface StopMenuItem {
 
 export interface StopMenuCtx {
   /** What the host lets the line do (the canvas's handlers). */
-  can: { edit?: boolean; move?: boolean; duplicate?: boolean; remove?: boolean; open?: boolean };
+  can: { edit?: boolean; move?: boolean; duplicate?: boolean; remove?: boolean; open?: boolean; halt?: boolean };
   /** ⇤ / ⇥ possible for this stop (`canShift`). */
   earlier?: boolean;
   later?: boolean;
   /** The stop belongs to a live flight the menu can act on (Done / Skip / Retry). */
   live?: boolean;
+  /** The box is the live flight's current stop: Halt now / Carry on. */
+  here?: boolean;
+}
+
+// --- Halt points ------------------------------------------------------------------------
+
+/** Whether a box can be marked a halt point: a stop not yet flown, that can
+ * change or is where the flight is. */
+export function canHalt(n: DiagramNode, here = false): boolean {
+  return n.kind === "stop" && !!n.step && (!!n.editable || here) && n.state !== "done" && n.state !== "skipped" && n.state !== "failed";
+}
+
+/** ⏸ Halt here on a stop, or Carry on past here on a halt point. */
+export function haltToggle(n: DiagramNode): StopMenuItem {
+  return n.step?.halt
+    ? { key: "halt", label: "Carry on past here", title: "Take the halt point off this stop — the flight flies on through it" }
+    : { key: "halt", label: "Halt here", title: "Make this stop a halt point — the flight stops when it gets here, before doing it" };
+}
+
+/** ⏹ Halt now (the flight under way or waiting on you) or ▶ Carry on (held),
+ * on the flight's current stop; none on a stop halted by a failure (Retry). */
+export function flightHold(n: DiagramNode): StopMenuItem | null {
+  if (n.state === "paused") return { key: "resume", label: "Carry on", title: "Fly on from this stop" };
+  if (n.state === "halted") return null;
+  return { key: "pause", label: "Halt now", title: "Stop the flight where it is — Carry on picks it up again" };
+}
+
+/** The badge a halt point wears in its corner (null on any other box). */
+export function haltMark(n: DiagramNode): { glyph: string; title: string } | null {
+  if (n.kind !== "stop" || !n.step?.halt) return null;
+  return n.state === "paused"
+    ? { glyph: "⏸", title: "Halt point — the flight stopped here. Carry on to fly on" }
+    : { glyph: "⏸", title: "Halt point — the flight stops here before doing this stop" };
 }
 
 const note = (label: string): StopMenuItem => ({ key: "note", label, title: label, note: true });
 
-/** A box's right-click menu: an editable stop is edited, moved, duplicated or
- * removed; the flight's current stop offers what its own parts do (Done on a
- * perch, Skip, Retry when halted); a stop that has flown says so; the
+/** A box's right-click menu: an editable stop is edited, moved, duplicated,
+ * made a halt point or removed; the flight's current stop offers Halt now /
+ * Carry on, what its own parts do (Done on a perch, Skip, Retry when halted)
+ * and its halt point; a stop that has flown says so; the
  * trailing + tacks a stop on; a session box opens. */
 export function menuItemsFor(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
   const { can } = ctx;
@@ -136,18 +172,22 @@ export function menuItemsFor(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
       items.push({ key: "later", label: "Later", title: "Move this stop one place later on the line (→)", disabled: !ctx.later });
     }
     if (can.duplicate) items.push({ key: "duplicate", label: "Duplicate", title: "The same stop again, right after this one" });
+    if (can.halt && canHalt(n)) items.push(haltToggle(n));
     if (can.remove) items.push({ key: "remove", label: "Remove", title: "Take this stop off the line (Delete)", danger: true });
     return items;
   }
   if (n.state === "done" || n.state === "skipped" || n.state === "failed") return [note("This stop has flown")];
-  if (n.state === "pending" || n.state === "edit") return [note("Still to come — it can't change here")];
+  if (!ctx.here && (n.state === "pending" || n.state === "edit")) return [note("Still to come — it can't change here")];
   // The flight is here (under way, perched on you, halted or paused).
   const items: StopMenuItem[] = [];
+  const hold = ctx.here && ctx.live ? flightHold(n) : null;
+  if (hold) items.push(hold);
   if (ctx.live) {
     if (n.state === "perched") items.push({ key: "done", label: "Done", title: "Mark this perch done — the bird flies on" });
     if (n.state === "halted") items.push({ key: "retry", label: "Retry", title: "Run this stop again" });
     items.push({ key: "skip", label: "Skip", title: "Skip this stop — the bird flies on to the next" });
   }
+  if (can.halt && canHalt(n, !!ctx.here)) items.push(haltToggle(n));
   items.push(note("The flight is here — it can't change now"));
   return items;
 }
