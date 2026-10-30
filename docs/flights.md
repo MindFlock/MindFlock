@@ -2871,3 +2871,119 @@ the sky's selection is on a box that is not the session itself.
   `Modal`: the folder field with Tab completion from `components/PathField`,
   a line saying what will happen, Move) → a toast on `session.moved`, the error
   card on `session.move_failed`. The row shows "moving…" meanwhile.
+
+### As built: round 12 sky
+
+> Code: `frontend/src/components/flights/SkyView.tsx` (placement, the press
+> handling for both tools, Delete), `lib/skySelect.ts` (`gestureFor`, the tool
+> store, `deleteFor`, `nodeById`, `removableBox`), `lib/skyLayout.ts`
+> (`INTAKE_KEY`, `INTAKE_OPEN_W`, `intakeSize`), `IntakeLane.tsx` (+ `.css`),
+> `SkyLine.tsx`, `GroundedLine.tsx`, `SkySelection.tsx`, `lib/keymap.ts`
+> (`skyBoxFocused`), `Sky.css`, `SkyLine.css`. Tests: `skyTool.test.ts`
+> (new), `skySelect.test.ts`, `skyIntake.test.ts`, `intakeLane.test.ts`,
+> `keymap.test.ts`, `skyView.test.ts`.
+
+**The intake lane is a sky object.** Its layout entry is `"intake"` in
+`mf_sky_layout`: `x` / `y` / `pinned` like a line's, and `open` = expanded
+(never a pane: `estimateLine` is not used for it; `intakeSize` is its measure,
+else 240 × 320 folded or 420 × 520 expanded). A session titled `intake` would
+share the entry. That is a known edge, left alone because the contract names the key.
+
+- Placement: the lane is the FIRST item of the `assignSpots` call (`items =
+  [intake, ...lines]`, area left `SKY_MARGIN`), so unpinned it takes the
+  plane's corner and the lines flow to its right and under it. Its room is
+  never under the folded width (`max(measured, INTAKE_W)`), so unfolding the
+  rail never runs into a line. No line keeps an auto spot before the lane has
+  one (`intakeReady`: its spot kept, pinned, measured, or the 0.9 s wait), so
+  the lines are placed around its real size. This session (one line) has no lane.
+- It drags by its head (`.sky-lane-head`, or the folded rail's background)
+  through SkyView's `onDragStart(INTAKE_KEY, e)`: the line drag's own path,
+  generalised to "a sky object with a layout entry". It is pinned where it
+  is dropped. A click on its head focuses no session. Tidy and "Tidy these"
+  forget its spot and keep `open`. It glides with the slots
+  (`.sky-plane[data-tidying] .sky-intake`).
+- Expanded (▸ / ▾ `.sky-lane-expand` on its head, or a double-click on the
+  head): `width` 420, every waiting item of every source (`shownWaiting(block,
+  Infinity)`), headlines and references unclamped (`.sky-lane[data-open]`),
+  lifted over the lines (`z-index: 5`). The ‹ fold to the rail stays.
+- Measured like a line: a ResizeObserver on the lane's root → `onMeasure`
+  (re-armed when the settings load and on the rail fold).
+- The marquee takes it as a line (its head is its bar). Selected, it wears a
+  dashed outline. It moves and tidies with the selection. `SkySelection`'s
+  Remove counts only the other lines (`removable`) and hides when the lane is
+  all there is.
+
+`IntakeLane` gained: `open`, `onToggleOpen`, `onHeadDown`, `draggable`
+(false = click mode: the head starts no move), `onMeasure`.
+
+**Drag mode / click mode.** `skyTool` in localStorage `mf_sky_tool`
+(`loadSkyTool` / `saveSkyTool`, "drag" unless it says "click"). The toolbar's
+toggle is a `ChipRow` with `className="sky-modes sky-tools"` (the mode chips'
+tier, `.fl-pick`). V = drag and H = click, when no field is focused. Space held is
+click mode while held (`liveTool`). `.sky[data-tool]` carries the live tool:
+in click mode the hand (`grab`) shows over the lines and boxes, `grabbing`
+while it pans (`.sky-viewport.is-panning`).
+
+`gestureFor(tool, target, {shift, space, touch})`. `target` is from
+`skyTargetOf`: `control` (a button, a field, `[data-no-drag]`, an open card, a
+line's editor, a menu, the selection bar, the new-session block), `box` (a
+`[data-node]`, or any other part of a line), `line` (`.skl-bar`, the lane's
+head or rail), `ground`.
+
+| press on | drag mode | click mode |
+|---|---|---|
+| empty sky | marquee (touch: pan) | pan; a still press clears the selection |
+| a line's bar / the lane's head | move it (and the other selected lines) | pan; a still press focuses the line |
+| a box | the box's own (its click selects it, its drag reorders) | pan; a still press is its own click: selected, and given the keyboard |
+| a control | its own | its own |
+| Shift+drag | marquee on empty sky; Shift+click on a bar toggles the line | marquee from anywhere; Shift+click on a line toggles it |
+| Space held | pan from anywhere | pan from anywhere |
+
+Click mode works in the viewport's CAPTURE phase. Every press but a
+control's is stopped there, so no bar, box or resize handle starts a move. The
+pointer is captured only once the press has moved 4px (`MARQUEE_MIN`): a still
+press keeps its target, so the box's own click and double-click land on it
+(select; Enter / double-click opens, as before), and `clickOn` focuses the line
+and gives the box (or the line) the keyboard. `SkyLine` and `GroundedLine`
+take `draggable` (false in click mode: the bar starts no move), and
+SkyView's `onDragStart` checks `gestureFor(liveTool, "line") === "move-line"`
+too.
+
+**Delete removes the selected box.** SkyView takes Delete / Backspace in the
+window's capture phase (ahead of the keymap) and routes it with
+`deleteFor(selection, focus, selectedBox)`:
+
+| where the keyboard is | Delete |
+|---|---|
+| the sky holds a selection (focus on the sky, not on a box) | the bar's Remove, as in round 11 |
+| a stop or group box (focused) | that box leaves its line, through the canvas's own `onRemove`: the undoable toast |
+| a session box (`session:`), or a worker's / branch's (`child:` / `branch:`) | "Close “name”?" inline on the line (`.skl-close-confirm`), then `closeSession` with its Undo toast |
+| a session line's bar or the line itself | the same close question for the line's session |
+| a grounded line (its head, its bar, the line) | its own "Remove “name”?" inline confirm |
+| the +, a rung, the flown pill, the intake lane | taken; nothing happens (never the keymap's close) |
+| the sky's empty space or the page, with the focused line holding a selected box (`.fl-box.selected`) | as if that box were focused |
+| an open card's pane, a field, a menu, a question, outside the sky | not the sky's: the keymap as before |
+
+How the sky reaches a line's box: each line registers a handle
+(`registerDelete(fn | null)`, `LineDelete = (node) => boolean`, `""` = the
+line itself) that SkyView keeps per line id (`registerFor`, stable per id). I
+chose this over lifting "the selected node per line" into SkyView, because the
+selection, the flight and the remove path (`useSessionLine` /
+`useGroundedLine`'s canvas, the undo toast) already live in the line. The
+handle only asks the line to do what its own Delete key or toolbar does. A
+press on a line's bar now focuses the line's root (`tabIndex={-1}`), so Delete
+has somewhere to land.
+
+The keymap's Delete alias yields to `skyBoxFocused()` (`lib/keymap.ts`). It
+yields when the focus is inside `.sky`, not inside an open card's `.pane` /
+`.skl-card`, and either on a `[data-node]` that is not `session:` or inside a
+`[data-sky-box]`: a session line's root, a grounded line's root, or the
+viewport while the selection holds something. Ctrl+W is unchanged.
+
+Checked in a browser (a scratch `vite build` + the demo mocks): the lane
+drags, pins and expands to 420; a drag-mode bar drag moves its line; in click
+mode the same drag pans and the line stays, a box drag pans, the lane's head
+pans, Shift+drag draws the marquee (it takes the lane), a click on a grounded
+stop selects it and Delete removes it (`DELETE …/steps/s1` and the Undo toast);
+Delete after a click on a session line's bar shows the close question and sends
+nothing.
