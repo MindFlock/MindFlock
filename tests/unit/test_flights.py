@@ -1328,3 +1328,72 @@ def test_step_history_events_survive_the_store():
     assert [h["event"] for h in got["history"]][-3:] == ["added", "edited", "removed"]
     assert [s["id"] for s in got["steps"]] == ["s1", "s3"]
     assert set(got["step_states"]) == {"s1", "s3"}
+
+
+def test_op_move_step_moves_pending_steps_ahead():
+    f = fly(step("agent"), step("notify"), step("wait", minutes=5), step("notify"))
+    f["history"].clear()
+    # Backward: s4 to just after the current step (pop then insert).
+    F.op_move_step(f, "s4", 1, now=NOW + 1)
+    assert [s["id"] for s in f["steps"]] == ["s1", "s4", "s2", "s3"]
+    assert f["updated"] == NOW + 1
+    assert f["history"][-1]["event"] == "moved"
+    assert f["history"][-1]["step"] == "s4"
+    assert f["history"][-1]["note"].endswith(", 3 → 1")
+    # Forward: the index is the step's place in the final list.
+    F.op_move_step(f, "s4", 2, now=NOW)
+    assert [s["id"] for s in f["steps"]] == ["s1", "s2", "s4", "s3"]
+    # Past the end clamps to the last place.
+    F.op_move_step(f, "s2", 99, now=NOW)
+    assert [s["id"] for s in f["steps"]] == ["s1", "s4", "s3", "s2"]
+    # The step keeps its record.
+    f["step_states"]["s2"]["note"] = "kept"
+    F.op_move_step(f, "s2", 1, now=NOW)
+    assert f["step_states"]["s2"]["note"] == "kept"
+    assert set(f["step_states"]) == {"s1", "s2", "s3", "s4"}
+    # The same index (or a clamp onto it) changes nothing and says nothing.
+    n, upd = len(f["history"]), f["updated"]
+    F.op_move_step(f, "s3", 3, now=NOW + 9)
+    F.op_move_step(f, "s3", 50, now=NOW + 9)
+    assert [s["id"] for s in f["steps"]] == ["s1", "s2", "s4", "s3"]
+    assert (len(f["history"]), f["updated"]) == (n, upd)
+
+
+def test_op_move_step_refusals():
+    f = fly(step("agent"), step("notify"), step("notify"), step("notify"))
+    F.op_skip(f, "s4", now=NOW)
+    for sid, at in (("s1", 2), ("s3", 0), ("s3", -1), ("s4", 1)):
+        # s1 is the current step, 0 / -1 at or before it, s4 marked skipped.
+        with pytest.raises(F.FlightError) as err:
+            F.op_move_step(f, sid, at, now=NOW)
+        assert (err.value.status, err.value.error) == (409, "in_progress")
+    with pytest.raises(F.FlightError) as err:
+        F.op_move_step(f, "s9", 1, now=NOW)
+    assert (err.value.status, err.value.error) == (404, "unknown_step")
+    for at in (None, "2", 1.0, True):
+        with pytest.raises(F.PlanError) as perr:
+            F.op_move_step(f, "s3", at, now=NOW)
+        assert perr.value.field == "at"
+    for state in ("halted", "done", "cancelled"):
+        g = copy.deepcopy(f)
+        g["state"] = state
+        with pytest.raises(F.FlightError) as err:
+            F.op_move_step(g, "s3", 1, now=NOW)
+        assert (err.value.status, err.value.error) == (409, "finished")
+    # Paused flights take moves.
+    F.op_pause(f, now=NOW)
+    F.op_move_step(f, "s3", 1, now=NOW)
+    assert [s["id"] for s in f["steps"]] == ["s1", "s3", "s2", "s4"]
+
+
+def test_planner_carries_on_at_the_same_step_after_a_move():
+    f = fly(step("you", text="Approve"), step("notify"), step("wait", minutes=5))
+    before = F.next_action(f, {"session": sess()}, NOW)
+    F.op_move_step(f, "s3", 1, now=NOW)
+    assert f["cursor"] == 0 and f["steps"][0]["id"] == "s1"
+    assert F.next_action(f, {"session": sess()}, NOW) == before
+    f = F.apply(f, before, NOW)
+    assert f["step_states"]["s1"]["state"] == "waiting_you"
+    # Done on the current step goes on to the moved one first.
+    F.op_done(f, "s1", now=NOW)
+    assert f["cursor"] == 1 and f["steps"][f["cursor"]]["id"] == "s3"

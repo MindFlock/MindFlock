@@ -1713,6 +1713,8 @@ def change_steps(
             _flights.op_add_step(f, raw, at)
         elif op == "edit":
             _flights.op_edit_step(f, step, raw)
+        elif op == "move":
+            _flights.op_move_step(f, step, at)
         else:
             _flights.op_remove_step(f, step)
 

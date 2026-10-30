@@ -159,6 +159,7 @@ HISTORY_EVENTS = (
     "added",
     "edited",
     "removed",
+    "moved",
 )
 ON_FAIL = ("halt", "agent", "skip", "you")
 TRIGGER_KINDS = ("manual", "ticket", "pr", "issue", "schedule")
@@ -2898,6 +2899,31 @@ def op_remove_step(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     step = flight["steps"].pop(i)
     flight["step_states"].pop(sid, None)
     _hist(flight, ts, sid, "removed", step["title"])
+    flight["updated"] = ts
+    return flight
+
+
+def op_move_step(flight: dict, sid: str, at, now: Optional[float] = None) -> dict:
+    """Move a step still ahead of the flight to index ``at`` of the final
+    list (pop then insert, like ``list.insert``). ``at`` past the end is the
+    last place; at/before the current step is 409 ``in_progress``. Its
+    ``step_states`` record moves with it; the same index changes nothing."""
+    ts = float(now if now is not None else time.time())
+    _editable(flight)
+    if isinstance(at, bool) or not isinstance(at, int):
+        raise PlanError("at is a step index", "at")
+    i = _pending_index(flight, sid)
+    steps = flight["steps"]
+    if at <= flight["cursor"]:
+        raise FlightError(
+            "in_progress", 409, "a step can only move after the current one"
+        )
+    j = min(at, len(steps) - 1)
+    if j == i:
+        return flight
+    step = steps.pop(i)
+    steps.insert(j, step)
+    _hist(flight, ts, sid, "moved", "%s, %d → %d" % (step["title"], i, j))
     flight["updated"] = ts
     return flight
 

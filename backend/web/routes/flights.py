@@ -237,6 +237,16 @@ def flights_step_remove(flight_id: str, step_id: str) -> JSONResponse:
     return _change(flight_id, "remove", step_id)
 
 
+@router.post("/api/flights/{flight_id}/steps/{step_id}/move")
+def flights_step_move(
+    flight_id: str, step_id: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """``{"at": int}`` → ``{"flight"}``: a step still ahead moved to index
+    ``at`` of the final list (past the end = last); the step and ``at`` both
+    after the current step (409 ``in_progress``)."""
+    return _change(flight_id, "move", step_id, at=(payload or {}).get("at"))
+
+
 @router.post("/api/flights/{flight_id}/steps/{step_id}/done")
 def flights_step_done(
     flight_id: str, step_id: str, payload: Optional[dict] = None

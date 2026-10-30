@@ -238,7 +238,7 @@ issue flights the server-built intake prompt is used and the step's own
   "cursor": 0,                    // index into steps of the current step
   "step_states": {"s1": {"state": "pending"|"running"|"waiting_you"|"done"|"skipped"|"failed", "since": 0.0, "note": "", "detail": {}, "rounds": 0}},
   "reason": "",                   // why halted / cancelled (human-readable)
-  "history": [{"at": 0.0, "step": "s1", "event": "started"|"done"|"failed"|"skipped"|"you"|"halted"|"paused"|"resumed"|"jumped"|"added"|"edited"|"removed", "note": ""}],  // ≤200
+  "history": [{"at": 0.0, "step": "s1", "event": "started"|"done"|"failed"|"skipped"|"you"|"halted"|"paused"|"resumed"|"jumped"|"added"|"edited"|"removed"|"moved", "note": ""}],  // ≤200
   "started": 0.0, "updated": 0.0, "finished": 0.0,
   "by": "user" | "intake" | "schedule" | "agent:<title>",
   "boot": "", "owner": "", "owner_at": 0.0   // lease, as autopilot.json
@@ -306,6 +306,7 @@ No model installed → 409 `no_model`.
 | `POST /api/flights/{id}/steps` | `{"step": Step, "at"?: int}` | `{"flight"}` — appended, or inserted at index `at`, which must be after the current step (409 `in_progress`); the flight must be `running`/`waiting_you`/`paused` (409 `finished`). The new step takes the next free `sN`. History `added`. |
 | `PATCH /api/flights/{id}/steps/{sid}` | `{title?, config?, on_fail?}` | `{"flight"}` — only a pending step after the current one (409 `in_progress`); validated like a plan step. History `edited`. |
 | `DELETE /api/flights/{id}/steps/{sid}` | | `{"flight"}` — only a pending step after the current one (409 `in_progress`). History `removed`. |
+| `POST /api/flights/{id}/steps/{sid}/move` | `{"at": int}` | `{"flight"}` — a pending step after the current one moved to index `at` of the final list (pop then insert), clamped to the last place; `at` at/before the current step is 409 `in_progress`; 400 `bad_step` (`field: "at"`) when `at` is not an integer. Its `step_states` record moves with it; the same place changes nothing. History `moved`. |
 | `POST /api/flights/{id}/steps/{sid}/done` | `{"note"?}` | `{"flight"}` — only for a `you` step (or a `verify` step waiting on you: it marks the open human checklist items as passed) |
 | `POST /api/flights/{id}/steps/{sid}/skip` | | `{"flight"}` |
 | `POST /api/flights/{id}/steps/{sid}/retry` | | `{"flight"}` — a failed/halted step runs again |
@@ -749,8 +750,9 @@ had to choose. Field and route names are unchanged.
   the agent's items are answered (human items stay on the checklist); open
   agent items left after a run become yours under `both`.
 
-- **Steps changed in the air.** The three step routes are pure operations
-  (`flights.op_add_step` / `op_edit_step` / `op_remove_step`) run through the
+- **Steps changed in the air.** The four step routes are pure operations
+  (`flights.op_add_step` / `op_edit_step` / `op_remove_step` /
+  `op_move_step`) run through the
   store's `mutate`, checked against the flight *as stored* under the lock (a
   driver pass that moved the cursor meanwhile wins and the route gets its
   409); each emits `flight.changed` (even when the cursor did not move) and
@@ -765,7 +767,11 @@ had to choose. Field and route names are unchanged.
   A bad step is 400 `{"error": "bad_step", "detail", "field"}` with `field`
   like `step.config.lane` (`steps[i]…` on `/start`). The planner side: an
   `apply(finish)` that meets a current step (one added after the pass read the
-  flight) advances instead of landing.
+  flight) advances instead of landing. A move never touches the current
+  step or anything before it (both the step and its new place are after the
+  cursor), so the planner, which reads `steps[cursor]`, carries on where it
+  was; a `join` of `spawned` and a `join`'s `since` follow the new order (the
+  nearest `split` / the step before it *after* the move).
 - **Absorbing a fast-track.** The stage is read the way the autopilot driver
   reads it (`server._session_stage(inst)`, uncached), else the published row's
   `stage`. The absorbed steps go where the flight *starts* — after an attach's

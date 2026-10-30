@@ -414,3 +414,100 @@ def test_step_changes_refuse_what_has_started():
     assert (r.status_code, r.json()["error"]) == (409, "finished")
     r = client.delete(base + "/s3")
     assert (r.status_code, r.json()["error"]) == (409, "finished")
+
+
+def _four_stop_flight():
+    """sess on s2 (a *you* step) with s3, s4 still ahead."""
+    f = _adhoc(
+        steps=[
+            {"kind": "agent"},
+            {"kind": "you", "config": {"text": "Approve"}},
+            {"kind": "notify", "title": "A"},
+            {"kind": "notify", "title": "B"},
+        ]
+    ).json()["flight"]
+    assert f["cursor"] == 1
+    return f, "/api/flights/%s/steps" % f["id"]
+
+
+def test_move_step():
+    f, base = _four_stop_flight()
+    r = client.post(base + "/s4/move", json={"at": 2})
+    assert r.status_code == 200
+    got = r.json()["flight"]
+    assert [s["id"] for s in got["steps"]] == ["s1", "s2", "s4", "s3"]
+    assert got["cursor"] == 1 and got["step_states"] == f["step_states"]
+    assert got["updated"] >= f["updated"]
+    assert (got["history"][-1]["event"], got["history"][-1]["step"]) == ("moved", "s4")
+    assert got["history"][-1]["note"].startswith("B")
+    # Clamped to the last place; the same place is a quiet 200.
+    r = client.post(base + "/s4/move", json={"at": 40})
+    assert [s["id"] for s in r.json()["flight"]["steps"]] == ["s1", "s2", "s3", "s4"]
+    n = len(r.json()["flight"]["history"])
+    r = client.post(base + "/s4/move", json={"at": 3})
+    assert r.status_code == 200
+    assert len(r.json()["flight"]["history"]) == n
+    assert client.get("/api/flights/%s" % f["id"]).json()["flight"]["steps"] == (
+        r.json()["flight"]["steps"]
+    )
+
+
+def test_move_step_refusals():
+    f, base = _four_stop_flight()
+    for body in ({}, {"at": "2"}, {"at": None}, {"at": 2.5}, {"at": True}):
+        r = client.post(base + "/s3/move", json=body)
+        assert (r.status_code, r.json()["error"], r.json()["field"]) == (
+            400,
+            "bad_step",
+            "at",
+        )
+    assert client.post(base + "/s3/move").status_code == 400
+    # s1 is behind the flight, s2 the current step; 1 is the current place.
+    for path, at in (("/s1", 3), ("/s2", 3), ("/s3", 1), ("/s3", 0)):
+        r = client.post(base + path + "/move", json={"at": at})
+        assert (r.status_code, r.json()["error"]) == (409, "in_progress")
+    r = client.post(base + "/s9/move", json={"at": 3})
+    assert (r.status_code, r.json()["error"]) == (404, "unknown_step")
+    r = client.post("/api/flights/f_nope/steps/s3/move", json={"at": 3})
+    assert (r.status_code, r.json()["error"]) == (404, "unknown_flight")
+    client.post("/api/flights/%s/cancel" % f["id"])
+    r = client.post(base + "/s4/move", json={"at": 2})
+    assert (r.status_code, r.json()["error"]) == (409, "finished")
+
+
+def test_driver_carries_on_at_the_same_step_after_a_move(monkeypatch):
+    import asyncio
+
+    from backend.web.core import flight_driver as D
+
+    monkeypatch.setattr(D, "_JOBS", {})
+    monkeypatch.setattr(
+        D,
+        "_session_obs",
+        lambda flight, now, agent: {
+            "present": True,
+            "pending": False,
+            "status": "running",
+            "sleeping": False,
+            "activity": "idle",
+            "branch": "b",
+            "folder": "/repo",
+            "pr_url": "",
+        },
+    )
+    sent = []
+    monkeypatch.setattr(D, "_run_notify", lambda f, s: sent.append(s["title"]))
+    f, base = _four_stop_flight()
+    asyncio.run(D.step_flight(f["id"]))
+    assert F.get(f["id"])["step_states"]["s2"]["state"] == "waiting_you"
+    assert client.post(base + "/s4/move", json={"at": 2}).status_code == 200
+    asyncio.run(D.step_flight(f["id"]))
+    got = F.get(f["id"])
+    assert got["cursor"] == 1 and got["steps"][1]["id"] == "s2"
+    assert got["step_states"]["s2"]["state"] == "waiting_you"
+    assert got["state"] == "waiting_you" and sent == []
+    # Done on s2: the moved stop flies before the one it jumped.
+    assert client.post(base + "/s2/done").status_code == 200
+    asyncio.run(D.step_flight(f["id"]))
+    assert sent == ["B", "A"]
+    assert F.get(f["id"])["state"] == "done"
