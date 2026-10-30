@@ -1709,3 +1709,354 @@ tapped on a phone, where nothing drags) calls `onTack(kind)`, and the host tacks
 onto the focused line. Without `onTack` a chip is drag-only: it is a plain span (not a
 button), its cursor is grab and its tooltip says "Drag onto a line". On a phone
 (`@media (hover: none)`) the "drag onto a line" hint under the row's label is hidden.
+
+## A still sky
+
+> Worker notes (round 10, `sky-stable`), to fold into docs/flights.md "The
+> Sky" and "Room and the semantic zoom" at merge. Source:
+> `lib/skyLayout.ts` (`assignSpots`, `NEW_SESSION_MIME`),
+> `components/flights/SkyView.tsx`, `Sky.css`, `NewSessionBlock.tsx` +
+> `.css`; tests in `skyStable.test.ts`.
+
+The owner: "I DON'T like how the boxes move around. I also don't like that I
+can't drag in a new session block." **Nothing on the sky moves unless the
+owner moves it.**
+
+### Where a line sits
+
+- **A line gets a spot once.** When it first appears, after it has been drawn
+  and measured (and the window, the sessions and the flights have loaded),
+  `assignSpots(existing, newcomers, area)` gives it the first free place by
+  the old rule (rows from the intake lane rightwards, newest first, wrapping
+  at the sky's width), clear of every line already placed at that line's size
+  now. That spot is kept in SkyView's `autoPos` and passed to the placement as
+  saved, merged with the pins (`{ ...autoPos, ...pinnedPositions(layout) }`).
+- **It keeps that spot** while it grows or shrinks: a flight loading, a perch
+  opening wide, the hover toolbar, its box opening into a pane card. A
+  neighbour arriving or leaving doesn't move it either.
+- **Two lines may grow into each other.** The sky doesn't shove them apart.
+  The focused or open line is lifted over the other (z-index), and the owner
+  drags one away or presses Tidy.
+- **A line that leaves frees its spot**: the session is closed, or it becomes
+  a hidden helper. A line hidden by a filter (Find, Mine vs All) keeps its
+  spot, and a newcomer keeps clear of it at its last measured size. A dragged
+  line is pinned where it was dropped. Its auto spot is dropped, so "Tidy this
+  line" places it afresh.
+- **Tidy** (the button, `T`) forgets every auto spot and every pin. Every line
+  is placed again, in rows. It is **the only glide**: SkyView sets
+  `data-tidying` on `.sky-plane` for 350 ms (not under reduced motion), and
+  only `.sky-plane[data-tidying] .sky-line-slot` has a `transform` transition.
+  No other rule eases a line's or a slot's transform. A dragged line follows
+  the pointer live.
+- This session (one line) still sits at the plane's corner. It neither reads
+  nor changes the auto spots.
+
+### The camera fits once
+
+The automatic fit (`firstFit`, or the focused line when the grid was on "1")
+runs once, on the sky's first show, after the lines have their spots (drawn
+and measured, or 0.9 s after the sessions load, whichever comes first). It
+runs again only when the view changes (All / Mine / Perched / This session,
+or This session's line). The effect's dependencies have no line sizes in
+them. A line growing, a new session arriving, or the window resizing never
+refits. A newcomer off screen is brought in by the rail's selection and the
+flash, as before. `Fit`, `0`, `1` and the zoom buttons work on demand. Back
+from the grid in the same view, the camera is where it was left.
+
+### Dragging a new-session block in
+
+- The toolbar's **+ New session** is draggable (`dataTransfer`
+  `application/x-mindflock-new-session` = `"session"`, effect *copy*; tooltip
+  "Click, or drag onto the sky, …"). Over empty sky the viewport washes
+  softly (`.sky-viewport.is-new-over`) and takes the drop. Over a line it
+  refuses. Dropped, the block opens at the drop point (plane coordinates
+  through `toPlane`), as a double-click there would. A click, a double-click
+  and Ctrl/Alt+N work as before.
+- **The block is a block on the sky**: a card with a line's bar (the bird,
+  "New session", × to cancel) and a dashed accent edge until it flies. In
+  light and dark. **Drag it by its bar** (`onMove(pos)` in plane px; the sky's
+  `zoom` turns pointer px into plane px). The session it makes is pinned
+  where the block sat. Its fields are unchanged: repository chips and the
+  path field, the task, the flyway pick, the agent.
+
+## Readability: sizes, flown stops, the menus
+
+### The Sky, readable
+
+> Sky round 10, the readability sweep. To be folded into `docs/flights.md`
+> under "The Sky" and "Room and the semantic zoom". Code:
+> `frontend/src/lib/flightDiagram.ts` (`boxMetrics`, `sizedBoxFor`,
+> `collapseFlown`, `drawnIndexes`, `lineWhere`), `components/flights/SkyLine.tsx`
+> (+ `SkyLine.css`, `SkyVisibility.css`), `FlywayCanvas.css`, `IntakeLane.css`,
+> `Bird.tsx`. Tests: `frontend/src/__tests__/skyVisibility.test.ts`.
+
+The owner: "Everything is still just too hard to read." At the first fit (62%)
+a stop's title was ~10px on screen and its summary ~7px; a 9-stop line was
+~2000 plane px wide, so the sky zoomed out to fit it. Two levers: bigger boxes
+and type in the sky, and shorter lines.
+
+#### Sizes
+
+The sky asks the canvas for a **roomy** tier (`LayoutOpts.roomy`,
+`boxMetrics(compact, roomy)`). The pane's Flight tab and the flyway editor keep
+the base tier. The geometry still never depends on the zoom.
+
+| | base | roomy (the sky) |
+|---|---|---|
+| box | 178 × 76 | **236 × 100** |
+| + (add) | 148 × 40 | **180 × 48** |
+| branch | 156 × 52 | **200 × 64** |
+| flown pill | 120 × 44 | **148 × 56** |
+| gap / vgap / anchor | 46 / 30 / 38 | **56 / 36 / 50** |
+| chip / branch sub / dots add | 18 / 16 / 14 | 22 / 20 / 16 |
+| ◧ compact | 110 × 62 | 150 × 64 |
+| ◧ wide | 260 wide | 330 wide |
+
+`sizedBoxFor(size, node, base, detail, roomy)` is the ◧ sizing that
+`FlywayCanvas`'s `sizedBox` used to hard-code. At the base tier it gives the
+same numbers.
+
+| Type in the sky | before | now |
+|---|---|---|
+| box title | 12.5px | **15px / 600** (a stop's title may take two lines) |
+| summary, detail, halted reason | 11.5px | **13px** |
+| chips | 10.5px | **12px** |
+| icon tile | 22px | **26px** (17px glyph) |
+| line bar | 34px, name 12.5px | **42px, name 15px, chip 12.5px** |
+| where the flight is (new, in the bar) | — | **13px**, muted ink |
+| ⋯ menu items | 12px, ~24px rows | **13.5px, 32px rows**, screen-sized at any zoom |
+| bird marker | 24px | ×1.35 |
+| intake lane cards | 11.5–12px | **13px**, the ticket id bold, Fly a 28px button, source heads 13px caps |
+| drawer perch card | 12–13px | **14px** body, 15px name, **36px** Done / Skip / Retry; "Waiting to fly" alike |
+| controls (ChipRow, Seg, Toggle, field labels) | 12–12.5px | **13px**, 28–30px tall (the toolbar's chips too) |
+
+**The zoom bands, re-tuned for the 15px base** (`SkyLine.css`):
+
+- **far** (< 62%): `--sky-far = clamp(1, 0.76 / z, 1.9)`. A title reads
+  15 × 0.76 = **11.4px** on screen from 62% down to the 40% floor. The bar's
+  where-line, ◧ and 📌 wait for mid.
+- **mid**: `--sky-mid = clamp(1, 0.8 / z, 1.3)` now grows the titles **and**
+  the summaries, chips, the join pill and the bar's where-line. At 62% a title
+  is ~12px on screen and a summary ~10.4px (they were ~10px and ~7px).
+- **near** (≥ 115%): counter-scaled back to 15px titles and 13px summaries on
+  screen. Titles wrap to three lines, summaries to `--sky-lines`.
+
+#### What has flown: one pill
+
+`sessionDiagram` folds the stops a live flight has already flown into **one
+node** (`collapseFlown`):
+
+- **The rule.** Take the leading run of `done` / `skipped` stops, up to the
+  first stop that is neither (the current one). If the run has
+  **`FLOWN_MIN` = 2** or more stops, it becomes `{ id: "flown", kind: "flown",
+  row: "main", title: "<N> flown", sub: "<first> … <last>", state: "done",
+  count: N, flown: [titles] }`. A single flown stop stays as it is. A `failed`
+  stop breaks the run, so it stays in sight.
+- **Edges and branches.** The line's edges chain through the pill. A column of
+  branches that fanned out of a folded stop fans out of the pill instead, and
+  joins at the box after it. The direct pill → next edge is dropped, so the line
+  goes through the branches.
+- **Numbering.** `insertFrom` and every stop's `index` stay the flight's own.
+- **Expanding.** `SessionDiagramOpts.expandFlown` turns the fold off. The line
+  keeps that as its own `useState` (not persisted). A press on the pill
+  (`onOpen` with `kind === "flown"`) or the ⋯'s **Show every flown stop** /
+  **Fold the flown stops** toggles it.
+- **Layout.** `layoutDiagram` sizes the pill from `boxMetrics().flown` and
+  never calls `sizeOf` for it. It sits centred on the line's anchor, the way
+  the + does. The canvas styles `.fl-box-flown` as a green-edged pill with a
+  double tick (`StopIcon` `flown`).
+- **The Flight tab.** `useSessionLine` passes no option, so it folds too.
+- **The canvas counts DRAWN stops.** A move's from / to, an insert's gap and
+  `insertFrom` comparisons all count the stops on screen. With a pill folding N
+  stops, those numbers are N lower than the flight's. `drawnIndexes(d)` lowers
+  every stop's `index` and `insertFrom` by N for the canvas. `flownCanvas(d,
+  canvas)` (SkyLine.tsx) adds N back on the way out (`onMove`, `onInsert`,
+  `onDropStop`) and hands back the original nodes (`onSelect`, `onRemove`,
+  `onDuplicate`, `renderInBox`, `sizeOf`). Without that, a drag on a folded line
+  would move the wrong stop.
+
+#### The line's bar and its ⋯
+
+The bar shows the bird, the name, the state chip, and **where the flight is,
+in words**. This comes from `lineWhere(diagram)`, which follows `birdPerch`:
+
+- "at Reviews settle · 10 min quiet"
+- "waiting on you at Perch: approve the merge · 2 items to tick"
+- "halted at Push · <reason>"
+- "at Checks · waiting for 2 of 3"
+- "fast-track at Push"
+
+Nothing shows while the bird sits on the session box, because the chip says
+that already. After that come 📌, then **◧**: the glyph, a three-bar meter
+lit to the current size (compact 1, normal 2, wide 3), and the size in words
+on hover or focus.
+
+**⋯ menu groups** (a rule above each group's first item; items 13.5px in 32px
+rows; the list scales itself back to screen size; the line whose menu is open
+is lifted over its neighbours):
+
+1. **Open session** (opens the card on the line; **Fold the session back**
+   when it is open) · **Open in the grid** (`selectSession` + `setView("grid")`)
+   · **Show only this line**
+2. **Compact boxes / Normal boxes / Wide boxes** (✓ on the current one) ·
+   **Show every flown stop** (only when something is folded) · **Pin here**
+   (pins at the line's current spot), or **Tidy this line** when it is already
+   pinned (Unpin and Tidy are the same act, so there is one item)
+3. **Fly a flyway…** · **Tack on a stop**
+4. **Close session** (danger)
+
+#### Contrast
+
+**States** (`FlywayCanvas.css`, every home):
+
+- **current**: a 2px working outline and the pulse.
+- **perched**: a 2px gold outline and a 14% gold wash.
+- **halted / failed**: a 2px red outline. The reason uses a red ink.
+- **done / skipped**: no element opacity. The title is `text` at 78% and the
+  summary is the muted ink at 85%, on the panel.
+- **pending**: a dashed outline, with the summary in the muted ink.
+
+Wires are 2px at 88% (fan / join 75%), with solid arrowheads. The selected
+ring is 3px.
+
+**Text inks** (`--fl-ink-working`, `--fl-ink-red`, `--fl-ink-muted`;
+`--sky-ink-gold` for the drawer's head). Light mode overrides them; text on
+solid gold is `--tone-attention-ink`.
+
+| text on its background | dark | light |
+|---|---|---|
+| title on a box (`--text` / `--panel-2`) | 11.35 | 13.96 |
+| summary, muted ink on a box | 6.53 | 6.24 |
+| done title (text 78%) on the panel | 8.02 | 7.91 |
+| done summary (muted ink 85%) on the panel | 5.52 | 4.96 |
+| pending summary on the panel | 7.15 | 7.24 |
+| perched title on the gold wash | 8.07 | 13.04 |
+| perched summary on the gold wash | 4.64 | 5.83 |
+| halted reason (red ink) on a box | 5.53 | 5.15 (raw `--red` was 3.82) |
+| "Working" chip (working ink) on a box | 6.71 | 4.63 (raw green was 2.95) |
+| chip ink on solid gold | 12.41 | 9.34 |
+| bar's where line (muted ink) on the panel | 7.15 | 7.24 |
+| drawer's "Perched on you" head | 12.39 (gold on the panel) | 6.37 (#7a5a10; raw gold was 1.86) |
+
+All body text is ≥ 4.5:1 in both themes. The numbers are WCAG relative
+luminance from the tokens in `styles/tokens.css`, with `color-mix` resolved
+(script: the round's scratch `contrast.py`).
+
+#### What the merge has to wire (outside this change's files)
+
+- `FlywayCanvas.tsx` needs a `roomy?: boolean` prop. Pass it into
+  `layoutDiagram`'s opts (`{ compact, vertical, sizeOf, roomy: !!p.roomy }`,
+  and add it to the memo's deps), and make `sizedBox(size, n, base, detail,
+  roomy)` return `sizedBoxFor(size, n, base, detail, roomy)`. SkyLine already
+  passes `roomy` through a cast spread. Until then the sky draws 15px type in
+  base-size boxes.
+- `SessionFlight.tsx` should use the same `flownCanvas(diagram, line.canvas)`
+  wrapper and its own `expandFlown` toggle on a `flown` press, as SkyLine
+  does. Until then the Flight tab folds the pill, but drags and the ⇤ / ⇥
+  moves there count drawn stops while the flight counts its own.
+- `FlightStrip` (the Board's strip) also gets the pill from
+  `sessionDiagram(…, family: false)`. A press on it does nothing there.
+
+#### Screenshots
+
+Before (the round-9 bundle) and after (this change with the FlywayCanvas
+wiring above applied), 1400 × 900, mocked API, in the round's scratchpad
+`shots/`: `before-{fit,far,near,menu,light,drawer,lightdrawer,tab}.png` and
+`a2-{fit,far,near,menu,light,drawer,lightdrawer,tab}.png`.
+
+## Flyways as rows of stops
+
+*(To be folded into `docs/flights.md` → "The flyway shelf" and "The shelf: flyways
+and stops"; it replaces the chips described there.)*
+
+The owner: "I want to be able to delete steps from a flyway. I feel like the flyway
+concept is not really that clear. I think it should be drag and drop."
+
+**A flyway is a saved route of stops** — a reusable sequence (ticket → agent → commit
+→ push → PR → reviews → merge) you fly a session along.
+
+### The shelf
+
+`FlywayShelf {plans, onNew, onFly, onEdit(plan, stop?), collapsed?, onCollapse?,
+onTack?}` at the foot of the Sky, top to bottom:
+
+1. The head: the fold button (**▾ Flyways N**), one line that says what a flyway is —
+   "**Flyways** — saved routes of stops. Drag one onto a line to fly it; drop stops
+   into it to build it." — and **+ New flyway**.
+2. The flyways, one ROW each (`FlywayRow.tsx`), built-ins first (`rowOrder`,
+   `lib/flywayEdit.ts`), then the **empty row**. The rows scroll inside the shelf
+   (`.sky-flyway-rows.sky-own-scroll`, so the Sky's wheel leaves them alone); the
+   whole shelf is capped at 40vh, so the head and the stops always show.
+3. The stops (`StopShelf.tsx`, unchanged but for its label): "**Stops** — drag onto a
+   line, or into a flyway".
+
+### A row
+
+| Part | What it does |
+|---|---|
+| ⠿ + the name | **Click** the name: a text field (Enter or leaving it saves, Esc cancels). **Drag** the head onto a line: flies the flyway there — it carries `FLYWAY_MIME` = the plan id and its name as `text/plain` (`flywayDragData`); the Sky's existing drop handles it. |
+| `built-in` | A small tag on a built-in. |
+| The stops | `FlywayCanvas` with `compact`, `lod="far"` (the head of each box alone), `vertical={false}`, 128×40 boxes (`rowBox`). All of the canvas's gestures: drop a stop chip in a gap, hover toolbar (✎ ⇤ ⇥ ⧉ 🗑), right-click menu, Delete / ← → on a selected stop, drag a stop along the row, the + between boxes and at the end (the stop palette, under the row). ✎ (or a click on a stop) → `onEdit(plan, index)`: the details card open on that stop. |
+| **Fly** | `onFly(plan)`; the host asks which line when none is focused. |
+| ⋯ | **Edit details…** (`onEdit(plan)` → the FlywayCard: trigger, schedule, session, description, Describe, each stop's settings), **Duplicate flyway** (a copy of yours named "<name> copy", its name field focused), then **Reset to default** on a built-in or **Delete flyway** on one of yours. |
+
+**Every change saves at once.** The row shows the change before the server answers
+(optimistic), saves go one after another (`savePlan`, the whole flyway each time), a
+small **✓ Saved** fades in and out after each, and a refusal puts the row back to what
+the server last had, with the server's sentence in an error toast (later changes queued
+behind it are dropped). The row drops its own copy when the shelf's list catches up.
+
+**Removing a stop** is immediate, with **Undo** in the toast: the same stop back at its
+old place, or the end if the row got shorter, under a fresh id if its own was taken
+meanwhile (`restoreStep`). The server keeps a flyway at one stop at least, so the last
+stop doesn't come off — the toast points at the ⋯ (Delete, or Reset on a built-in).
+
+**Deleting a flyway** hides the row at once, then `DELETE`s it; the toast's **Undo**
+saves it again (it gets a new id). No confirm — the desktop app has none.
+
+### The empty row
+
+"Drop stops here to start a flyway". A stop chip dropped on it (or **Pick a stop** →
+the palette) creates the flyway: `savePlan` of a manual `blankPlan` with that one stop
+(`flywayFromDrop`), named what was typed, else a fresh "New flyway", "New flyway 2"…
+(`freshFlywayName`). It then is an ordinary row, and if it was not named yet its name
+field takes the focus. **Editor…** opens a fresh FlywayCard (`onNew`) — the way to
+describe a whole flyway in a sentence.
+
+**+ New flyway** puts a name field in the empty row (focused); Enter there opens the
+palette for the first stop, Esc drops the name. The server refuses a flyway with no
+stops, so nothing is saved until the first stop lands.
+
+### Built-ins
+
+Rows like the rest, with the tag. Editing one saves an override (the server keeps it
+under the built-in's id); **Reset to default** (`resetPlan`) puts it back, and that is
+also what "delete" means for a built-in.
+
+### Renames (`checkRename`)
+
+Trimmed; empty is refused ("A flyway needs a name"); over 120 characters is refused
+(the server's cap); another flyway's name (any case) is refused so two rows can't look
+the same. A refused name keeps the field open on Enter (the reason under it); leaving
+the field puts the old name back and says why in a toast.
+
+### The FlywayCard
+
+Still the details editor (opened from a row's ⋯ or ✎), unchanged except `initialStop`
+(the stop to open on). It keeps its own canvas, palette and inspector as a fallback,
+and **Save & fly on…**.
+
+### Host changes this needs (outside this change)
+
+- `SkyView.tsx`: `onEdit={(plan, stop) => setCard({ at: middle(), initial: plan,
+  stop })}` and `<FlywayCard … initialStop={card.stop} />`, so ✎ on a row's stop
+  opens the card on that stop (without it the card opens on the first stop).
+- `flightsUi.test.ts` "carries the flyway shelf at its foot": the chip pin
+  `class="sky-shelf-chip builtin" data-plan="builtin:ticket"` becomes
+  `class="sky-flyway-row builtin" data-plan="builtin:ticket"`.
+
+### Where it lives
+
+`frontend/src/components/flights/FlywayRow.tsx` (+ `.css`), `FlywayShelf.tsx` (+
+`.css`), `StopShelf.tsx`, `frontend/src/lib/flywayEdit.ts`; tests in
+`__tests__/flywayRow.test.ts`, `skyFlyways.test.ts`, `stopShelf.test.ts`.

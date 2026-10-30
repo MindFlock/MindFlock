@@ -211,7 +211,9 @@ export function SkyView() {
   const [newAt, setNewAt] = useState<Pos | null>(null);
   const [card, setCard] = useState<{ at: Pos; initial?: FlightPlan; stop?: number } | null>(null);
   const [drawerPref, setDrawerPref] = useState(() => readPref(SKY_DRAWER_KEY));
-  const [shelfOpen, setShelfOpen] = useState(() => readPref(SHELF_KEY) !== "0");
+  // Folded until asked (then remembered): the rows of flyways are tall, and
+  // the sky is for the lines.
+  const [shelfOpen, setShelfOpen] = useState(() => readPref(SHELF_KEY) === "1");
   const shelfAsk = useUi((s) => s.skyShelf);
   // The Sky tour opens by itself the first time the sky is shown (once).
   useAutoTour("sky", true);
@@ -916,7 +918,7 @@ export function SkyView() {
           writePref(SHELF_KEY, shelfOpen ? "0" : "1");
         }}
       >
-        <Bird size={12} /> Flyways {shelfOpen ? "▾" : "▴"}
+        <Bird size={12} /> Flyways &amp; stops {shelfOpen ? "▾" : "▴"}
       </button>
       {shelfOpen && (
         <FlywayShelf

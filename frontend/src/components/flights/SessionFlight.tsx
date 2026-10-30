@@ -29,13 +29,14 @@ import type { Instance } from "../../api/types";
 import { useFlightKinds, useFlightPlans, useFlights, useInstances } from "../../state/queries";
 import { selectSession } from "../../lib/sessionActions";
 import { flightProgress, type FlightPlan, type StepKindDef } from "../../lib/flights";
-import { birdPerch, flywayDiagram, hasSessionDiagram } from "../../lib/flightDiagram";
+import { birdPerch, flywayDiagram, hasSessionDiagram, sessionDiagram } from "../../lib/flightDiagram";
 import { showInSky } from "../../lib/viewMode";
 import { savePlan, takeOff } from "../../lib/flightsApi";
 import { FlywayCanvas } from "./FlywayCanvas";
 import { FlightMenu } from "./FlightStrip";
 import { DescribeField } from "./StopParts";
 import { useSessionLine } from "./useSessionLine";
+import { flownCanvas } from "./SkyLine";
 import { Bird } from "./Bird";
 import "./Flights.css";
 
@@ -73,7 +74,12 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
   const plans = useFlightPlans(active).data || [];
   const line = useSessionLine(title, { rows, flights, kinds, plans }, { onSession: (t) => selectSession(t) });
   const [busy, setBusy] = useState(false);
+  // The flown stops fold into one pill, as in the sky; a press unfolds them.
+  const [expandFlown, setExpandFlown] = useState(false);
   const { row, flight, diagram, ordered, cancel } = line;
+  const full = expandFlown ? sessionDiagram(rows, title, { flights, kinds, expandFlown: true }) : diagram;
+  // The canvas counts the stops it draws; the flight counts its own.
+  const shown = flownCanvas(full, line.canvas);
 
   if (!row) return <p className="fl-note muted">This session isn't listed right now.</p>;
 
@@ -114,7 +120,13 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
         </button>
       </div>
       {cancel.node}
-      <FlywayCanvas diagram={diagram} label={"What " + title + " is doing and will do"} bird={birdPerch(diagram)} {...line.canvas} />
+      <FlywayCanvas
+        diagram={shown.diagram}
+        label={"What " + title + " is doing and will do"}
+        bird={birdPerch(full)}
+        {...shown.canvas}
+        onOpen={(n) => (n.kind === "flown" ? setExpandFlown((x) => !x) : shown.canvas.onOpen?.(n))}
+      />
       {line.palette}
       {line.inspector}
       {!hasSessionDiagram(rows, title) && (

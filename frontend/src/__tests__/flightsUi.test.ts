@@ -288,7 +288,7 @@ describe("the pane's Flight tab: the session diagram", () => {
   it("draws the parent, the session, its workers, the flight's stops and the trailing +", () => {
     const fRow = { id: "f_1", plan_name: "Ticket to merge", cursor: 2, total: 4, state: "waiting_you", step: { id: "s3", kind: "you", title: "Approve the merge", state: "waiting_you", actor: "you" } };
     const html = render([rowOf("lead"), rowOf("me", { parent: "lead", flight: fRow }), rowOf("w1", { parent: "me" })], "me");
-    expect(boxes(html).map(([id]) => id)).toEqual(["parent:lead", "session:me", "stop:s1", "stop:s2", "stop:s3", "stop:s4", "add", "child:w1"]);
+    expect(boxes(html).map(([id]) => id)).toEqual(["parent:lead", "session:me", "flown", "stop:s3", "stop:s4", "add", "child:w1"]);
     expect(html).toContain('class="fl-wire fl-wire-up"');
     expect(html).toContain('class="fl-wire fl-wire-branch"');
     expect(html).toContain(">Tack on a stop<");
@@ -338,7 +338,9 @@ describe("the sky", () => {
     });
   };
 
-  it("carries the flyway shelf at its foot — the flyways as chips, + New flyway — and its tour's ?", () => {
+  it("carries the flyway shelf at its foot — the flyways as rows, + New flyway — and its tour's ?", () => {
+    // The shelf starts folded (mf_sky_shelf); opened once, it stays open.
+    vi.stubGlobal("localStorage", { getItem: (k: string) => (k === "mf_sky_shelf" ? "1" : null), setItem: () => {} });
     const html = render("sky");
     expect(html).toContain('data-tour="sky-shelf"');
     expect(html).toMatch(/class="sky-flyway-row builtin" data-plan="builtin:ticket"/);

@@ -326,7 +326,7 @@ describe("a line in the sky", () => {
     const html = line();
     expect(html).toContain('data-node="flown"');
     expect(html).toContain(">3 flown<");
-    expect(code("components/flights/SkyLine.tsx")).toMatch(/\{\.\.\.\(\{ roomy: true \} as object\)\}/);
+    expect(code("components/flights/SkyLine.tsx")).toMatch(/\n\s+roomy\n/);
     // A press on the pill unfolds the line.
     expect(code("components/flights/SkyLine.tsx")).toMatch(/if \(n\.kind === "flown"\) setExpandFlown\(\(x\) => !x\)/);
   });

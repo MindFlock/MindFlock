@@ -43,6 +43,7 @@ import {
   joinLabel,
   layoutDiagram,
   reorderDiagram,
+  sizedBoxFor,
   type BoxSize,
   dropIndex,
   type BirdPerch,
@@ -101,11 +102,8 @@ export function boxDetail(n: DiagramNode): string {
  * and one line (the title; the + a bare circle), wide is 260px with room for
  * a two-line title, the summary on two lines and the detail line. A branch
  * stays smaller than the line's boxes at every size. */
-export function sizedBox(size: BoxSizeName, n: DiagramNode, base: BoxSize, detail = ""): BoxSize {
-  if (n.kind === "add" || size === "normal") return base;
-  if (n.kind === "branch") return size === "compact" ? { w: 110, h: 40 } : { w: 210, h: base.h + 16 };
-  if (size === "compact") return { w: 110, h: 62 };
-  return { w: 260, h: base.h + 18 + (n.sub ? 15 : 0) + (detail ? 32 : 0) };
+export function sizedBox(size: BoxSizeName, n: DiagramNode, base: BoxSize, detail = "", roomy = false): BoxSize {
+  return sizedBoxFor(size, n, base, detail, roomy);
 }
 
 export interface FlywayCanvasProps {
@@ -160,6 +158,8 @@ export interface FlywayCanvasProps {
   openBox?(n: DiagramNode): { body: ReactNode; size: BoxSize } | null;
   /** How much each box draws (the Sky's semantic zoom; default mid). */
   lod?: BoxLod;
+  /** The Sky's bigger boxes (lib/flightDiagram boxMetrics' roomy tier). */
+  roomy?: boolean;
   dataTour?: string;
   className?: string;
 }
@@ -280,11 +280,11 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
     const o = opened.get(n.id);
     if (o) return measured[n.id] || o.size;
     if (n.kind === "add" && addLabel) return { w: Math.max(b.w, 60 + addLabel.length * 7), h: Math.max(b.h, 40) };
-    const s = sizedBox(size, n, b, detail(n));
+    const s = sizedBox(size, n, b, detail(n), !!p.roomy);
     return p.sizeOf ? p.sizeOf(n, s) : s;
   };
-  const opts = { compact: small, vertical, sizeOf };
-  const base = useMemo(() => layoutDiagram(p.diagram, opts), [p.diagram, small, vertical, p.sizeOf, size, addLabel, measured, p.openBox, p.detailOf]); // eslint-disable-line react-hooks/exhaustive-deps
+  const opts = { compact: small, vertical, sizeOf, roomy: !!p.roomy };
+  const base = useMemo(() => layoutDiagram(p.diagram, opts), [p.diagram, small, vertical, p.sizeOf, size, addLabel, measured, p.openBox, p.detailOf, p.roomy]); // eslint-disable-line react-hooks/exhaustive-deps
   const shown = useMemo(
     () => (drag && drag.moved && drag.to !== drag.from ? layoutDiagram(reorderDiagram(p.diagram, drag.from, drag.to), opts) : base),
     [drag, base, p.diagram] // eslint-disable-line react-hooks/exhaustive-deps

@@ -398,9 +398,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
           lod={lod}
           {...shown.canvas}
           onOpen={onOpen}
-          // The sky's bigger boxes (lib/flightDiagram boxMetrics' roomy
-          // tier); the canvas passes it to layoutDiagram and sizedBoxFor.
-          {...({ roomy: true } as object)}
+          roomy
         />
       ) : (
         <p className="skl-gone muted">This session isn't running any more.</p>

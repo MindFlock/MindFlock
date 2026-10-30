@@ -231,7 +231,7 @@ describe("a line at three zooms", () => {
   it("never changes a box's geometry with the zoom", () => {
     const at = [0.4, 1, 2.5].map((z) => boxStyle(lineAt(z)));
     expect(at[0]).toBeTruthy();
-    expect(at[0]).toContain("width:178px");
+    expect(at[0]).toContain("width:236px");
     expect(at[1]).toBe(at[0]);
     expect(at[2]).toBe(at[0]);
   });
@@ -246,14 +246,14 @@ describe("a line at three zooms", () => {
 
   it("counter-scales the type: legible far, informative near", () => {
     const sheet = css("components/flights/SkyLine.css");
-    expect(sheet).toMatch(/\.skl\[data-lod="far"\] \{[^}]*--sky-far: clamp\(1, calc\(0\.84 \/ var\(--sky-z, 1\)\), 2\.1\);/);
+    expect(sheet).toMatch(/\.skl\[data-lod="far"\] \{[^}]*--sky-far: clamp\(1, calc\(0\.76 \/ var\(--sky-z, 1\)\), 1\.9\);/);
     expect(sheet).toMatch(/\.skl\[data-lod="near"\] \{[^}]*--sky-near: clamp\(1, var\(--sky-z, 1\), 3\);/);
-    expect(sheet).toMatch(/\.skl\[data-lod="far"\] \.fl-box:not\(\.fl-box-open\) \.fl-box-title \{[^}]*font-size: calc\(12\.5px \* var\(--sky-far\)\);[^}]*-webkit-line-clamp: 2;/);
-    expect(sheet).toMatch(/\.skl\[data-lod="near"\] \.fl-box:not\(\.fl-box-open\) \.fl-box-title \{[^}]*font-size: calc\(12\.5px \/ var\(--sky-near\)\);[^}]*white-space: normal;/);
+    expect(sheet).toMatch(/\.skl\[data-lod="far"\] \.fl-box:not\(\.fl-box-open\) \.fl-box-title \{[^}]*font-size: calc\(15px \* var\(--sky-far\)\);[^}]*-webkit-line-clamp: 2;/);
+    expect(sheet).toMatch(/\.skl\[data-lod="near"\] \.fl-box:not\(\.fl-box-open\) \.fl-box-title \{[^}]*font-size: calc\(15px \/ var\(--sky-near\)\);[^}]*white-space: normal;/);
     expect(sheet).toMatch(/-webkit-line-clamp: var\(--sky-lines, 2\);/);
     // Mid's low end still grows its titles a little (the first picture, ≥ 62%).
     expect(sheet).toMatch(/\.skl\[data-lod="mid"\] \{[^}]*--sky-mid: clamp\(1, calc\(0\.8 \/ var\(--sky-z, 1\)\), 1\.3\);/);
     // The bar's height is never the zoom's.
-    expect(sheet).toMatch(/\.skl-bar \{[^}]*height: 34px;/);
+    expect(sheet).toMatch(/\.skl-bar \{[^}]*height: 42px;/);
   });
 });
