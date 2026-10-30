@@ -1,0 +1,125 @@
+/* The landing strip (LandingStrip.tsx): the intake lane's chrome (.sky-lane,
+ * its head, its rail, its corner — IntakeLane.css), with one block per repo
+ * in the sky: the checks dot, the folder's name, the default branch, the last
+ * merge's age, and the flights that landed today. */
+
+.sky-landing {
+  border-right: none;
+  border-left: 1px solid var(--border);
+}
+
+.sky-landing-glyph {
+  font-size: 15px;
+}
+
+.sky-landing-repo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 13px;
+}
+
+.sky-landing-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sky-landing-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sky-landing-branch {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* The checks dot: green, red, amber while running, hollow with none. */
+.sky-landing-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid var(--muted);
+  box-sizing: border-box;
+}
+.sky-landing-dot.is-green {
+  background: var(--ok, #2e9e5b);
+  border-color: var(--ok, #2e9e5b);
+}
+.sky-landing-dot.is-red {
+  background: var(--danger, #d64545);
+  border-color: var(--danger, #d64545);
+}
+.sky-landing-dot.is-pending {
+  background: var(--warn, #d9a03a);
+  border-color: var(--warn, #d9a03a);
+}
+
+.sky-landing-merge {
+  font-size: 12px;
+}
+
+.sky-landing-landed {
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 4px 0 0;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sky-landing-flight {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12.5px;
+}
+
+.sky-landing-flight-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sky-landing[data-open] .sky-landing-flight-name {
+  white-space: normal;
+}
+
+.sky-landing-pr {
+  flex: none;
+  color: var(--accent);
+  text-decoration: none;
+}
+.sky-landing-pr:hover {
+  text-decoration: underline;
+}
+
+.sky-landing-at,
+.sky-landing-more {
+  flex: none;
+  font-size: 11.5px;
+}
+
+/* The mid band grows the type a little, as the lane's does. */
+.sky-landing[data-lod="mid"] .sky-landing-repo {
+  font-size: 14px;
+}

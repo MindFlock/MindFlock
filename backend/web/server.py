@@ -665,6 +665,7 @@ from backend.web.routes import chat as _chat_routes
 from backend.web.routes import guests as _guest_routes
 from backend.web.routes import team_runs as _team_runs_routes
 from backend.web.routes import flights as _flights_routes
+from backend.web.routes import sky as _sky_routes
 from backend.web.core import voice_actions as _voice_actions
 from backend.web.routes import speech as _speech_routes
 from backend.web.routes import voice as _voice_routes
@@ -9134,6 +9135,7 @@ async def instance_fast_track_cancel(title: str) -> JSONResponse:
 app.include_router(_team_runs_routes.router)
 # --- Flights: routes/flights.py ------------------------------------------------
 app.include_router(_flights_routes.router)
+app.include_router(_sky_routes.router)
 app.include_router(_speech_routes.router)
 
 # --- Voice mode (talking to a session from the phone): routes/voice.py --------

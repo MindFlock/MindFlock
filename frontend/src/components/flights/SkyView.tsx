@@ -70,10 +70,42 @@
  * state: the sky never picks a line itself; a click on empty sky or Esc
  * selects nothing (`selectSession(null)`). The blocks float as a sky object
  * too (`SkyPalette`, layout key "palette", `mf_sky_palette`), placed, dragged,
- * sized and tidied like the intake lane. */
+ * sized and tidied like the intake lane.
+ *
+ * Round 15 (docs/flights.md "As built: round 15 objects"): everything on the
+ * plane that is not a line is a SKY OBJECT from one registry
+ * (lib/skyObjects `SKY_OBJECTS` → `skyObjects(data)`): the intake lane and
+ * the palette (left, placed first), the landing strip and the device and
+ * people blocks (a column right of every line, `rightColumn`), the sticky
+ * notes (free, pinned where they were put — server-side, `/api/sky/notes`).
+ * One loop places, draws, drags, sizes and measures them (`hostFor`). A
+ * session's line dragged alone onto a person or device block asks the block
+ * to share or move it (`dropped`); a note dragged onto a line attaches to
+ * it and moves with it; ⋯ → Add a note, or a right-click on empty sky, puts
+ * a note at the pointer; Delete on a focused note removes it with Undo. */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { useFlightKinds, useFlightPlans, useFlights, useInstances } from "../../state/queries";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useDevices, useFlightKinds, useFlightPlans, useFlights, useInstances, usePeerLinks } from "../../state/queries";
+import { saveSkyNotes, type SkyNote } from "../../api/skyApi";
+import { errMsg } from "../../lib/format";
+import {
+  hitAt,
+  isObjectKey,
+  newNoteId,
+  noteDropped,
+  noteIdOf,
+  notePos,
+  noteSize,
+  objectClass,
+  objectKind,
+  skyObjects,
+  useLandingData,
+  useSkyNotesQuery,
+  type SkyObjectData,
+  type SkyObjectHost,
+  type SkyObjectItem,
+  type SkyObjectView,
+} from "../../lib/skyObjects";
 import { effectiveViewMode, useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
 import { overlayOpen } from "../../lib/keymap";
@@ -92,6 +124,8 @@ import {
   INTAKE_W,
   LINES_LEFT,
   NEW_SESSION_MIME,
+  NOTE_H,
+  NOTE_W,
   PALETTE_H,
   PALETTE_W,
   PLACE_GAP,
@@ -115,6 +149,7 @@ import {
   paletteFrame,
   patchSkyLine,
   pinnedPositions,
+  rightColumn,
   skyDrawerOpen,
   skyLineTitles,
   spotNear,
@@ -155,6 +190,7 @@ import {
   type SkyTarget,
   type SkyTool, toggleStop } from "../../lib/skySelect";
 import { ChipRow, TextField } from "./controls";
+import { OverflowMenu } from "../OverflowMenu";
 import { liveBoxParts } from "./FlightStrip";
 import { FlywayCanvas } from "./FlywayCanvas";
 import { IntakeLane } from "./IntakeLane";
@@ -172,6 +208,7 @@ import { Bird } from "./Bird";
 import { TourButton } from "../onboarding/TourButton";
 import { useAutoTour } from "../onboarding/useAutoTour";
 import "./Sky.css";
+import "./SkyObjects.css";
 
 /** A line's chrome around its canvas: the title bar and the card's padding. */
 const BAR_H = 34;
@@ -196,19 +233,25 @@ const TOOL_CHIPS: Record<SkyTool, { label: string; title: string }> = {
 const SKY_CONTROLS =
   "button, a, input, textarea, select, summary, label, [contenteditable=true], [role=menu], [role=menuitem], [data-no-drag], .skl-card, .skl-panels, .sky-selbar, .sky-own-scroll, .sky-new, .sky-palette-slot";
 
+/** Round 15's controls: a block's inline question, the right-click menu. */
+const OBJECT_CONTROLS = SKY_CONTROLS + ", .sky-block-ask, .sky-ground-menu";
+
 /** What a press landed on (lib/skySelect `gestureFor`'s target). */
 export function skyTargetOf(el: Element | null, ground: (el: Element) => boolean): SkyTarget {
   if (!el || ground(el)) return "ground";
-  if (el.closest(SKY_CONTROLS)) return "control";
+  if (el.closest(OBJECT_CONTROLS)) return "control";
   if (el.closest("[data-node]")) return "box";
-  if (el.closest(".skl-bar, .sky-lane-head, .sky-lane-rail")) return "line";
+  if (el.closest(".skl-bar, .sky-lane-head, .sky-lane-rail, [data-sky-head]")) return "line";
   return "box";
 }
 
-/** The sky object an element is on: its line's slot id, "intake", or "". */
+/** The sky object an element is on: its line's slot id, "intake", a round
+ * 15 object's key (`data-object`), or "". */
 export function skyObjectOf(el: Element | null): string {
   if (!el) return "";
   if (el.closest(".sky-intake")) return INTAKE_KEY;
+  const obj = el.closest(".sky-object[data-object]");
+  if (obj) return obj.getAttribute("data-object") || "";
   return el.closest(".sky-line-slot[data-slot]")?.getAttribute("data-slot") || "";
 }
 
@@ -361,6 +404,35 @@ export function SkyView() {
   // What a shelf chip being dragged carries (read at its dragstart).
   const dragged = useRef<{ plan: FlightPlan } | { kind: string } | null>(null);
   const [flash, setFlash] = useState("");
+  // Round 15: the sky objects' data — the landing strip's (a minute's
+  // cache on the server too), the peer links (people blocks), the other
+  // devices (device blocks) and the sticky notes (server-side, saved a
+  // moment after every change) — and what the objects are asking: a line
+  // dropped on a block (`dropped`, key → title), the note being edited, the
+  // right-click menu on empty sky.
+  const landingQ = useLandingData(!narrow && mode !== "one");
+  const linksQ = usePeerLinks();
+  const devicesQ = useDevices();
+  const notesQ = useSkyNotesQuery();
+  const [notes, setNotes] = useState<SkyNote[]>([]);
+  const notesRef = useRef(notes);
+  notesRef.current = notes;
+  const notesSeeded = useRef(false);
+  useEffect(() => {
+    if (!notesQ.data || notesSeeded.current) return;
+    notesSeeded.current = true;
+    setNotes(notesQ.data);
+  }, [notesQ.data]);
+  const noteSave = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const putNotes = useCallback((next: SkyNote[]) => {
+    notesRef.current = next;
+    setNotes(next);
+    clearTimeout(noteSave.current);
+    noteSave.current = setTimeout(() => void saveSkyNotes(next).catch((e) => toast("Saving the notes failed: " + errMsg(e))), 400);
+  }, []);
+  const [editingNote, setEditingNote] = useState("");
+  const [dropped, setDropped] = useState<Record<string, string>>({});
+  const [groundMenu, setGroundMenu] = useState<{ x: number; y: number; at: Pos } | null>(null);
   const [spaceHeld, setSpaceHeld] = useState(false);
   const space = useRef(false);
   // The tool (drag / click), remembered per device; Space held is click mode.
@@ -423,6 +495,18 @@ export function SkyView() {
   }, [layout, measured]);
   // The floating palette's room: the frame its corner set, else its measure.
   const paletteBox = useMemo(() => paletteFrame(layout[PALETTE_KEY]) || measured[PALETTE_KEY] || { w: PALETTE_W, h: PALETTE_H }, [layout, measured]);
+  // Round 15: every sky object on the board, from the one registry
+  // (lib/skyObjects), in placement order; its room is its frame, else its
+  // measure, else its kind's guess (a note's is its own numbers).
+  const links = useMemo(() => linksQ.data?.links || [], [linksQ.data]);
+  const devices = useMemo(() => (devicesQ.data?.devices || []).filter((d) => d.device && d.device !== devicesQ.data?.self?.device), [devicesQ.data]);
+  const objData: SkyObjectData = useMemo(() => ({ mode, narrow, intakeOn, paletteOn, links, devices, notes }), [mode, narrow, intakeOn, paletteOn, links, devices, notes]);
+  const objects = useMemo(() => skyObjects(objData), [objData]);
+  const objectById = useMemo(() => new Map(objects.map((o) => [o.key, o])), [objects]);
+  const objectBox = useCallback(
+    (o: SkyObjectItem): { w: number; h: number } => (o.def.kind === "note" ? noteSize(o.data as SkyNote) : o.def.size(layout[o.key], measured[o.key])),
+    [layout, measured]
+  );
   // The selection holds only lines still shown (a closed session drops out).
   const shownIds = useMemo(() => new Set([...lines.map((l) => l.id), ...(intakeOn ? [INTAKE_KEY] : [])]), [lines, intakeOn]);
   const sel = useMemo(() => pruneSelection(selRaw, shownIds), [selRaw, shownIds]);
@@ -430,8 +514,8 @@ export function SkyView() {
    * (not a hidden helper), or its grounded flight is still grounded. */
   const lineAlive = useCallback(
     (id: string) =>
-      id === INTAKE_KEY ? intakeOn : id === PALETTE_KEY ? paletteOn : isGroundedKey(id) ? groundedIds.has(groundedIdOf(id)) : rows.some((r) => r.title === id && inSky(r)),
-    [rows, groundedIds, intakeOn, paletteOn]
+      objectById.has(id) ? true : id === INTAKE_KEY ? intakeOn : id === PALETTE_KEY ? paletteOn : isGroundedKey(id) ? groundedIds.has(groundedIdOf(id)) : rows.some((r) => r.title === id && inSky(r)),
+    [rows, groundedIds, intakeOn, paletteOn, objectById]
   );
   // Every line's spot: a pinned or already-given one stays put; a newcomer
   // gets the first free place clear of the placed lines (and of the lines a
@@ -448,15 +532,28 @@ export function SkyView() {
     }
     const saved: Record<string, Pos> = { ...autoPos, ...pinnedPositions(layout) };
     const items = [{ id: INTAKE_KEY, ...intakeBox }, ...(paletteOn ? [{ id: PALETTE_KEY, ...paletteBox }] : []), ...lines];
-    const shown = new Set(items.map((l) => l.id));
-    const existing: PlacedLine[] = items.filter((l) => saved[l.id]).map((l) => ({ id: l.id, ...saved[l.id], w: l.w, h: l.h }));
+    // Round 15: the objects placed right of every line (the strip, the
+    // devices, the people) — with a spot, they are in the way of the lines.
+    const rightItems = objects.filter((o) => o.def.place === "right").map((o) => ({ id: o.key, ...objectBox(o) }));
+    const shown = new Set([...items, ...rightItems].map((l) => l.id));
+    const existing: PlacedLine[] = [...items, ...rightItems].filter((l) => saved[l.id]).map((l) => ({ id: l.id, ...saved[l.id], w: l.w, h: l.h }));
     for (const [id, at] of Object.entries(saved))
       if (!shown.has(id) && measured[id] && lineAlive(id)) existing.push({ id, ...at, ...measured[id] });
     const fresh = assignSpots(existing, items.filter((l) => !saved[l.id]), { width: Math.max(vp.w, LINES_LEFT + 900), left: SKY_MARGIN, top: SKY_MARGIN });
     const place: Record<string, Pos> = { ...fresh };
     for (const e of existing) if (shown.has(e.id)) place[e.id] = { x: e.x, y: e.y };
+    // The right column: a newcomer goes just right of everything placed,
+    // under the ones before it; its spot is kept like a line's.
+    const placedRects: Rect[] = [...items, ...rightItems].filter((l) => place[l.id]).map((l) => ({ ...place[l.id], w: l.w, h: l.h }));
+    for (const [id, at] of Object.entries(rightColumn(placedRects, rightItems.filter((r) => !saved[r.id])))) {
+      fresh[id] = at;
+      place[id] = at;
+    }
+    // A note sits where it was put: free at its own numbers, attached
+    // relative to its line's spot (so it moves with the line).
+    for (const o of objects) if (o.def.kind === "note") place[o.key] = notePos(o.data as SkyNote, (id) => place[id] || null);
     return { place, fresh };
-  }, [lines, intakeBox, paletteBox, paletteOn, layout, autoPos, measured, lineAlive, vp.w, mode]);
+  }, [lines, intakeBox, paletteBox, paletteOn, layout, autoPos, measured, lineAlive, vp.w, mode, objects, objectBox]);
   // Keep a newcomer's spot once it is known where it fits: the window
   // measured, the sessions and the flights loaded, the line drawn and
   // measured. Free the spots of sessions that are gone and of lines the
@@ -484,9 +581,11 @@ export function SkyView() {
   const rectOf = useCallback((id: string): Rect | null => {
     if (id === INTAKE_KEY) return intakeOn ? { ...posOf(id), ...intakeBox } : null;
     if (id === PALETTE_KEY) return paletteOn ? { ...posOf(id), ...paletteBox } : null;
+    const o = objectById.get(id);
+    if (o) return { ...posOf(id), ...objectBox(o) };
     const l = lines.find((x) => x.id === id);
     return l ? { ...posOf(id), w: l.w, h: l.h } : null;
-  }, [lines, posOf, intakeOn, intakeBox, paletteOn, paletteBox]);
+  }, [lines, posOf, intakeOn, intakeBox, paletteOn, paletteBox, objectById, objectBox]);
   // Folded to its tab (the perch count on it) until opened, then remembered
   // per device: a first visit keeps the room for the sky.
   const drawerOpen = skyDrawerOpen(drawerPref);
@@ -518,8 +617,10 @@ export function SkyView() {
     const rects = lines.map((l) => ({ ...posOf(l.id), w: l.w, h: l.h }));
     // The lane's width and its top (its height is its own scroll's).
     if (intakeOn) rects.push({ ...posOf(INTAKE_KEY), w: intakeBox.w, h: 1 });
+    // The right column's width and top, as the lane's.
+    for (const o of objects) if (o.def.place === "right") rects.push({ ...posOf(o.key), w: objectBox(o).w, h: 1 });
     setCam((whole ? fitCamera : firstFit)(boundsOf(rects), vp.w, vp.h, mode === "one" ? 1.5 : 1));
-  }, [lines, posOf, mode, intakeOn, intakeBox, vp.w, vp.h]);
+  }, [lines, posOf, mode, intakeOn, intakeBox, vp.w, vp.h, objects, objectBox]);
   /** The grid's "1": the focused line filling the window. */
   const fitFocused = useCallback(() => {
     const r = focusLine ? rectOf(focusLine) : null;
@@ -721,13 +822,22 @@ export function SkyView() {
     // under the pointer (the others sit still while it moves).
     const merging = isGroundedKey(id) && ids.length === 1;
     const others = merging ? lines.filter((l) => l.id !== id).map((l) => ({ id: l.id, rect: { ...posOf(l.id), w: l.w, h: l.h } })) : [];
-    const mergeAt = (ev: PointerEvent) => (merging ? mergeTargetAt(planeAt(ev.clientX, ev.clientY), others, id) : "");
+    // Round 15: a session's line dragged alone may land on a person or a
+    // device block (the block then asks); a note dragged alone on any line
+    // (it attaches). The object under the pointer lights as the target.
+    const kind = objectKind(id);
+    const toBlock = !kind && !merging && !isGroundedKey(id) && ids.length === 1;
+    const toLine = kind === "note" && ids.length === 1;
+    const blocks = toBlock ? objects.filter((o) => o.def.accepts === "session").map((o) => ({ id: o.key, rect: rectOf(o.key)! })) : [];
+    const lineRects = toLine ? lines.map((l) => ({ id: l.id, rect: { ...posOf(l.id), w: l.w, h: l.h } })) : [];
+    const mergeAt = (ev: PointerEvent) =>
+      merging ? mergeTargetAt(planeAt(ev.clientX, ev.clientY), others, id) : toBlock ? hitAt(planeAt(ev.clientX, ev.clientY), blocks) : toLine ? hitAt(planeAt(ev.clientX, ev.clientY), lineRects) : "";
     const move = (ev: PointerEvent) => {
       if (ev.pointerId !== g.pid) return;
       if (!g.moved && Math.hypot(ev.clientX - g.sx, ev.clientY - g.sy) < 4) return;
       g.moved = true;
       setDrag({ from, ...delta(ev) });
-      if (merging) {
+      if (merging || toBlock || toLine) {
         const t = mergeAt(ev);
         setMergeOver((cur) => (cur === t ? cur : t));
       }
@@ -739,9 +849,20 @@ export function SkyView() {
       window.removeEventListener("pointercancel", up);
       setDrag(null);
       setMergeOver("");
-      const into = g.moved && ev.type !== "pointercancel" ? mergeAt(ev) : "";
+      const landed = g.moved && ev.type !== "pointercancel" ? mergeAt(ev) : "";
+      const into = merging ? landed : "";
       if (into) {
         void mergeGrounded(id, into, from[id]);
+        return;
+      }
+      if (landed && toBlock) {
+        // The line goes back where it was; the block asks what to do.
+        setDropped((d) => ({ ...d, [landed]: id }));
+        return;
+      }
+      if (toLine && g.moved) {
+        const { dx, dy } = delta(ev);
+        dropNote(noteIdOf(id), { x: from[id].x + dx, y: from[id].y + dy }, landed);
         return;
       }
       if (g.moved) {
@@ -758,6 +879,7 @@ export function SkyView() {
       }
       if (!sel.lines.has(id)) clearSel();
       if (id === INTAKE_KEY || id === PALETTE_KEY) return;
+      if (isObjectKey(id)) return;
       if (isGroundedKey(id)) setGroundFocus(id);
       else focusOn(id, true);
     };
@@ -890,7 +1012,7 @@ export function SkyView() {
     const c = camRef.current;
     const pad = 16 / c.z;
     const view: Rect = { x: -c.x / c.z + pad, y: -c.y / c.z + pad, w: vp.w / c.z - 2 * pad, h: vp.h / c.z - 2 * pad };
-    const taken = [...lines.map((l) => l.id).filter((id) => id !== key), INTAKE_KEY, PALETTE_KEY].map(rectOf).filter((r): r is Rect => !!r);
+    const taken = [...lines.map((l) => l.id).filter((id) => id !== key), INTAKE_KEY, PALETTE_KEY].map(rectOf).concat(objects.map((o) => rectOf(o.key))).filter((r): r is Rect => !!r);
     const pal = near === "palette" ? rectOf(PALETTE_KEY) : null;
     const want = pal ? { x: pal.x + pal.w + PLACE_GAP, y: pal.y } : { x: view.x + view.w / 2 - size.w / 2, y: view.y + view.h - size.h };
     return spotNear(want, taken, size, view);
@@ -958,6 +1080,55 @@ export function SkyView() {
     setSessionOver("");
     setNewOver(false);
   };
+
+  // --- Sticky notes ------------------------------------------------------------------
+
+  /** A note's text or frame changed: saved a moment later. */
+  const changeNote = useCallback(
+    (id: string, patch: Partial<SkyNote>) => putNotes(notesRef.current.map((n) => (n.id === id ? { ...n, ...patch, updated: Date.now() / 1000 } : n))),
+    [putNotes]
+  );
+  /** × or Delete on a note: gone, with an Undo toast that puts it back. */
+  const removeNote = useCallback(
+    (id: string) => {
+      const n = notesRef.current.find((x) => x.id === id);
+      if (!n) return;
+      putNotes(notesRef.current.filter((x) => x.id !== id));
+      setEditingNote((e) => (e === id ? "" : e));
+      vpRef.current?.focus({ preventScroll: true });
+      toast("Note removed", {
+        action: { label: "Undo", ariaLabel: "Undo: put the note back", onClick: () => putNotes([...notesRef.current.filter((x) => x.id !== id), n]) },
+      });
+    },
+    [putNotes]
+  );
+  /** A new note at `at` (plane px): empty, in edit at once. */
+  const addNote = (at: Pos) => {
+    const n: SkyNote = { id: newNoteId(), text: "", x: Math.round(at.x), y: Math.round(at.y), w: NOTE_W, h: NOTE_H, line: "", updated: Date.now() / 1000 };
+    putNotes([...notesRef.current, n]);
+    setEditingNote(n.id);
+  };
+  /** A note dropped at `at`: on a line it attaches (its offset from the
+   * line's spot — it moves with the line), on empty sky it sits free there. */
+  const dropNote = (id: string, at: Pos, line: string) => {
+    const lineAt = line ? place[line] || null : null;
+    putNotes(notesRef.current.map((n) => (n.id === id ? noteDropped(n, { x: Math.round(at.x), y: Math.round(at.y) }, line, lineAt) : n)));
+  };
+  /** The right-click menu on empty sky: Add a note at the pointer. */
+  const onGroundMenu = (e: ReactMouseEvent<HTMLDivElement>) => {
+    if (!ground(e.target)) return;
+    e.preventDefault();
+    const r = vpRef.current!.getBoundingClientRect();
+    setGroundMenu({ x: e.clientX - r.left, y: e.clientY - r.top, at: planeAt(e.clientX, e.clientY) });
+  };
+  useEffect(() => {
+    if (!groundMenu) return;
+    const close = (e: PointerEvent) => {
+      if (!(e.target instanceof Element && e.target.closest(".sky-ground-menu"))) setGroundMenu(null);
+    };
+    window.addEventListener("pointerdown", close, true);
+    return () => window.removeEventListener("pointerdown", close, true);
+  }, [groundMenu]);
 
   // --- What the view switch reads -----------------------------------------------------
 
@@ -1040,7 +1211,7 @@ export function SkyView() {
   const clickOn = (el: Element | null) => {
     const id = skyObjectOf(el);
     if (!sel.lines.has(id)) clearSel();
-    if (!id || id === INTAKE_KEY) {
+    if (!id || id === INTAKE_KEY || isObjectKey(id)) {
       // Empty sky: nothing selected, nothing focused.
       if (!id) {
         vpRef.current?.focus({ preventScroll: true });
@@ -1294,6 +1465,12 @@ export function SkyView() {
     const el = document.activeElement;
     // The sky's own cards are dialogs too (role="dialog"): Esc folds them
     // unless a real dialog is over the whole sky.
+    if (e.key === "Escape" && (groundMenu || Object.keys(dropped).length) && !useUi.getState().openDialog) {
+      e.preventDefault();
+      setGroundMenu(null);
+      setDropped({});
+      return;
+    }
     if (e.key === "Escape" && ((newAt && !newAt.flying) || attachPick) && !useUi.getState().openDialog) {
       e.preventDefault();
       if (!newAt?.flying) setNewAt(null);
@@ -1411,6 +1588,14 @@ export function SkyView() {
     if ((e.key !== "Delete" && e.key !== "Backspace") || e.ctrlKey || e.metaKey || e.altKey) return;
     if (overlayOpen()) return;
     const el = document.activeElement;
+    // A focused note (not its textarea): the note goes, with Undo.
+    const noteEl = el?.closest(".sky-note[data-note]");
+    if (noteEl && !typing(el)) {
+      e.preventDefault();
+      e.stopPropagation();
+      removeNote(noteEl.getAttribute("data-note") || "");
+      return;
+    }
     const at = deleteFocus(el);
     if (!at) return;
     // The selection's, unless the keyboard is on a box (that box goes).
@@ -1515,6 +1700,7 @@ export function SkyView() {
           </button>
         </span>
       )}
+      {!narrow && <OverflowMenu label="More" items={[{ key: "note", label: "Add a note", title: "A sticky note in the middle of the view", onSelect: () => addNote(middle()) }]} />}
       <TourButton tour="sky" />
     </div>
   );
@@ -1694,9 +1880,123 @@ export function SkyView() {
   const intakeOpen = !!layout[INTAKE_KEY]?.open;
   const intakeFrameNow = intakeFrame(layout[INTAKE_KEY]);
   const intakeW = intakeFrameNow?.w ?? (intakeOpen ? INTAKE_OPEN_W : INTAKE_W);
-  const intakeAt = posOf(INTAKE_KEY);
   const paletteFrameNow = paletteFrame(layout[PALETTE_KEY]);
-  const paletteAt = posOf(PALETTE_KEY);
+
+  // Round 15: what every sky object gets (lib/skyObjects `SkyObjectHost`).
+  // The intake lane and the palette keep their JSX here (the view's own
+  // closures); the registry draws the rest.
+  const renderIntake = (host: SkyObjectHost) => {
+    // The intake lane: a sky object at its spot (layout key
+    // "intake"), dragged by its head, expanded from it.
+    const intakeAt = host.pos;
+    return (
+      <div
+        data-tour="sky-intake"
+        className={"sky-intake" + (drag?.from[INTAKE_KEY] ? " is-dragging" : "") + (sel.lines.has(INTAKE_KEY) ? " is-selected" : "")}
+        data-lod={lodFor(cam.z)}
+        data-open={intakeOpen ? "" : undefined}
+        style={{ transform: `translate(${intakeAt.x}px, ${intakeAt.y}px)`, width: intakeW, "--sky-z": cam.z } as React.CSSProperties}
+      >
+        <IntakeLane
+          rows={rows}
+          plans={plans}
+          onFly={flashLine}
+          width={intakeW}
+          height={intakeFrameNow?.h}
+          zoom={cam.z}
+          onResize={(w, h) => onLayout(INTAKE_KEY, { w, h })}
+          open={intakeOpen}
+          onToggleOpen={() => onLayout(INTAKE_KEY, { open: !intakeOpen })}
+          onHeadDown={(e) => onDragStart(INTAKE_KEY, e)}
+          draggable={liveTool === "drag"}
+          onMeasure={(w, h) => onMeasure(INTAKE_KEY, w, h)}
+        />
+      </div>
+    );
+  };
+  const renderPalette = (host: SkyObjectHost) => (
+    // The floating palette: a sky object at its spot (layout key
+    // "palette"), dragged by its head, sized by its corner; its
+    // blocks drag out exactly as the shelf's chips.
+    <div
+      className={"sky-palette-slot" + (drag?.from[PALETTE_KEY] ? " is-dragging" : "")}
+      data-lod={lodFor(cam.z)}
+      style={{ transform: `translate(${host.pos.x}px, ${host.pos.y}px)`, "--sky-z": cam.z } as React.CSSProperties}
+      onDragStart={onShelfDragStart}
+      onDragEnd={onShelfDragEnd}
+    >
+      <SkyPalette
+        width={paletteFrameNow?.w}
+        height={paletteFrameNow?.h}
+        zoom={cam.z}
+        onHeadDown={(e) => onDragStart(PALETTE_KEY, e)}
+        draggable={liveTool === "drag"}
+        onResize={(w, h) => onLayout(PALETTE_KEY, { w, h })}
+        onMeasure={(w, h) => onMeasure(PALETTE_KEY, w, h)}
+        onPlace={(d) => void placeGrounded(d, "palette")}
+        onDock={() => setPaletteMode("shelf")}
+        onSession={newHere}
+      />
+    </div>
+  );
+  const objView: SkyObjectView = {
+    ...objData,
+    rows,
+    plans,
+    renderIntake,
+    renderPalette,
+    flashLine,
+    placeGrounded: (d, near) => void placeGrounded(d, near),
+    newHere,
+    onShelfDragStart,
+    onShelfDragEnd,
+    landing: landingQ.data || null,
+    landingError: landingQ.error ? errMsg(landingQ.error) : "",
+    dropped,
+    answerDrop: (key) =>
+      setDropped((d) => {
+        const { [key]: _gone, ...rest } = d;
+        return rest;
+      }),
+    editingNote,
+    setEditingNote,
+    changeNote,
+    removeNote,
+  };
+  const hostFor = (o: SkyObjectItem): SkyObjectHost => ({
+    key: o.key,
+    zoom: cam.z,
+    lod: lodFor(cam.z),
+    layoutEntry: layout[o.key],
+    pos: posOf(o.key),
+    draggable: liveTool === "drag",
+    selected: sel.lines.has(o.key),
+    dragging: !!drag?.from[o.key],
+    target: mergeOver === o.key,
+    onHeadDown: (e) => onDragStart(o.key, e),
+    onResize: (w, h) => onLayout(o.key, { w, h }),
+    onMeasure: (w, h) => onMeasure(o.key, w, h),
+    onLayout: (patch) => onLayout(o.key, patch),
+    view: objView,
+    data: o.data,
+  });
+  /** One object on the plane: the lane's and the palette's own wrappers,
+   * or the registry's (`.sky-object`, placed like a slot). */
+  const objectFor = (o: SkyObjectItem) => {
+    const host = hostFor(o);
+    if (o.def.kind === "intake" || o.def.kind === "palette") return <Fragment key={o.key}>{o.def.render(host)}</Fragment>;
+    return (
+      <div
+        key={o.key}
+        className={objectClass(o.def, { dragging: host.dragging, selected: host.selected, target: host.target })}
+        data-object={o.key}
+        data-lod={host.lod}
+        style={{ transform: `translate(${host.pos.x}px, ${host.pos.y}px)`, "--sky-z": cam.z } as React.CSSProperties}
+      >
+        {o.def.render(host)}
+      </div>
+    );
+  };
 
   if (narrow)
     return (
@@ -1743,6 +2043,7 @@ export function SkyView() {
             onPointerUp={onUp}
             onPointerCancel={onUp}
             onDoubleClick={onDouble}
+            onContextMenu={onGroundMenu}
             onDragOver={onNewDragOver}
             onDragLeave={onNewDragLeave}
             onDrop={onNewDrop}
@@ -1755,57 +2056,7 @@ export function SkyView() {
               data-tidying={tidying ? "" : undefined}
               style={{ transform: `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})` }}
             >
-              {intakeOn && (
-                // The intake lane: a sky object at its spot (layout key
-                // "intake"), dragged by its head, expanded from it.
-                <div
-                  data-tour="sky-intake"
-                  className={"sky-intake" + (drag?.from[INTAKE_KEY] ? " is-dragging" : "") + (sel.lines.has(INTAKE_KEY) ? " is-selected" : "")}
-                  data-lod={lodFor(cam.z)}
-                  data-open={intakeOpen ? "" : undefined}
-                  style={{ transform: `translate(${intakeAt.x}px, ${intakeAt.y}px)`, width: intakeW, "--sky-z": cam.z } as React.CSSProperties}
-                >
-                  <IntakeLane
-                    rows={rows}
-                    plans={plans}
-                    onFly={flashLine}
-                    width={intakeW}
-                    height={intakeFrameNow?.h}
-                    zoom={cam.z}
-                    onResize={(w, h) => onLayout(INTAKE_KEY, { w, h })}
-                    open={intakeOpen}
-                    onToggleOpen={() => onLayout(INTAKE_KEY, { open: !intakeOpen })}
-                    onHeadDown={(e) => onDragStart(INTAKE_KEY, e)}
-                    draggable={liveTool === "drag"}
-                    onMeasure={(w, h) => onMeasure(INTAKE_KEY, w, h)}
-                  />
-                </div>
-              )}
-              {paletteOn && (
-                // The floating palette: a sky object at its spot (layout key
-                // "palette"), dragged by its head, sized by its corner; its
-                // blocks drag out exactly as the shelf's chips.
-                <div
-                  className={"sky-palette-slot" + (drag?.from[PALETTE_KEY] ? " is-dragging" : "")}
-                  data-lod={lodFor(cam.z)}
-                  style={{ transform: `translate(${paletteAt.x}px, ${paletteAt.y}px)`, "--sky-z": cam.z } as React.CSSProperties}
-                  onDragStart={onShelfDragStart}
-                  onDragEnd={onShelfDragEnd}
-                >
-                  <SkyPalette
-                    width={paletteFrameNow?.w}
-                    height={paletteFrameNow?.h}
-                    zoom={cam.z}
-                    onHeadDown={(e) => onDragStart(PALETTE_KEY, e)}
-                    draggable={liveTool === "drag"}
-                    onResize={(w, h) => onLayout(PALETTE_KEY, { w, h })}
-                    onMeasure={(w, h) => onMeasure(PALETTE_KEY, w, h)}
-                    onPlace={(d) => void placeGrounded(d, "palette")}
-                    onDock={() => setPaletteMode("shelf")}
-                    onSession={newHere}
-                  />
-                </div>
-              )}
+              {objects.map(objectFor)}
               {lines.map((l) => {
                 // The slot sits the line at its spot (the one it was given, or
                 // where it was dropped); only Tidy glides it to a new one.
@@ -1813,7 +2064,13 @@ export function SkyView() {
                 return (
                   <div
                     key={l.id}
-                    className={"sky-line-slot" + (flash === l.id ? " is-flash" : "") + (drag?.from[l.id] ? " is-dragging" : "") + (l.flight ? " is-grounded" : "")}
+                    className={
+                      "sky-line-slot" +
+                      (flash === l.id ? " is-flash" : "") +
+                      (drag?.from[l.id] ? " is-dragging" : "") +
+                      (l.flight ? " is-grounded" : "") +
+                      (mergeOver && !l.flight && drag?.from[l.id] ? " is-merging" : "")
+                    }
                     data-slot={l.id}
                     data-tour={l.flight ? undefined : "sky-line"}
                     style={{ transform: `translate(${at.x}px, ${at.y}px)` }}
@@ -1828,6 +2085,21 @@ export function SkyView() {
               {newBlock}
             </div>
             {marq && <div className="sky-marquee" aria-hidden="true" style={{ transform: `translate(${marq.x}px, ${marq.y}px)`, width: marq.w, height: marq.h }} />}
+            {groundMenu && (
+              <div className="sky-ground-menu" role="menu" style={{ left: groundMenu.x, top: groundMenu.y }}>
+                <button
+                  type="button"
+                  className="fl-stopmenu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    addNote(groundMenu.at);
+                    setGroundMenu(null);
+                  }}
+                >
+                  Add a note
+                </button>
+              </div>
+            )}
             {selBar}
             {empty && (
               <p className="sky-empty muted" role="status">
