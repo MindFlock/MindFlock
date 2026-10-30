@@ -255,3 +255,28 @@
   background: var(--accent);
   box-sizing: border-box;
 }
+
+/* --- Far (the sky zoomed out under 62%, lib/skyLayout lodFor) ---------------
+   The lane keeps its width; it shows its sources' names and counts in type
+   counter-scaled to stay readable, and leaves the item rows for nearer. */
+.sky-intake[data-lod="far"] {
+  --sky-far: clamp(1, calc(0.84 / var(--sky-z, 1)), 2.1);
+}
+
+.sky-intake[data-lod="far"] .sky-lane-head {
+  font-size: calc(12px * var(--sky-far));
+}
+
+.sky-intake[data-lod="far"] .sky-lane-block-name {
+  font-size: calc(13px * var(--sky-far));
+  font-weight: 700;
+}
+
+.sky-intake[data-lod="far"] .sky-lane-head .fl-count {
+  zoom: clamp(1, calc(0.6 / var(--sky-z, 1)), 1.4);
+}
+
+/* The name gets the block's width: its badge, menu and items wait for mid. */
+.sky-intake[data-lod="far"] :is(.sky-lane-block-head .fl-kind-badge, .sky-lane-block-head button, .sky-lane-block-head details, .sky-lane-chips, .sky-lane-items, .sky-lane-stubs, .sky-lane-error, .sky-lane-n-more) {
+  display: none;
+}

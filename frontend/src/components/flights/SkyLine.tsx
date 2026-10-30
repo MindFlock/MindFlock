@@ -21,6 +21,7 @@
 
 import { useEffect, useMemo, useRef, useState, type JSX, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { showInSky } from "../../lib/viewMode";
+import { lodFor, nearLines } from "../../lib/skyLayout";
 import type { Instance } from "../../api/types";
 import { useFlightKinds, useFlights } from "../../state/queries";
 import { closeSession, selectSession } from "../../lib/sessionActions";
@@ -157,6 +158,9 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   const measureRef = useRef(p.onMeasure);
   measureRef.current = p.onMeasure;
   const size: BoxSizeName = p.layout.size || "normal";
+  // What the boxes show at this zoom (far / mid / near); their size never
+  // changes with it — only what is drawn inside and the type on screen.
+  const lod = lodFor(p.zoom || 1);
 
   // The host lays the lines out from what each one measures (plane px: the
   // zoom is a transform, offset sizes don't see it).
@@ -244,9 +248,10 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
         (line.editing ? " is-editing" : "")
       }
       data-line={p.title}
+      data-lod={lod}
       // The sky's zoom, for CSS that counter-scales (a hover toolbar, the
       // level of detail a box shows): `--sky-z` on every line.
-      style={{ "--sky-z": p.zoom || 1 } as React.CSSProperties}
+      style={{ "--sky-z": p.zoom || 1, "--sky-lines": nearLines(p.zoom || 1) } as React.CSSProperties}
       role="group"
       aria-label={p.title + "'s line"}
       onPointerDownCapture={() => {
@@ -261,6 +266,9 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
             {ss.label}
           </span>
         )}
+        {/* Near: what the session is on, under its name (CSS shows it only
+            at that level of detail). */}
+        {row && (row.task_headline || row.task) && <span className="skl-task">{firstLine(row.task_headline || row.task || "")}</span>}
         {p.layout.pinned && (
           <span className="skl-pin" title="Pinned: the sky's layout leaves this line where you put it" aria-label="Pinned">
             📌
@@ -291,6 +299,9 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
           detailOf={detailOf}
           dropLabel={p.dropFlyway ? "Drop to fly " + p.dropFlyway.name : null}
           openBox={openBox}
+          // FlywayCanvas's `lod` prop lands with the canvas's own branch; the
+          // cast keeps this one compiling until then.
+          {...({ lod } as Record<string, unknown>)}
           {...line.canvas}
           onOpen={onOpen}
         />
