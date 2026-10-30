@@ -2060,3 +2060,141 @@ and **Save & fly on…**.
 `frontend/src/components/flights/FlywayRow.tsx` (+ `.css`), `FlywayShelf.tsx` (+
 `.css`), `StopShelf.tsx`, `frontend/src/lib/flywayEdit.ts`; tests in
 `__tests__/flywayRow.test.ts`, `skyFlyways.test.ts`, `stopShelf.test.ts`.
+
+## Round 11: stops all the way down (contract)
+
+The owner, after round 10: flyways are not intuitive; "get rid of the concept
+of a flyway entirely and just have stops that have multiple sub-steps in them,
+so Ticket to merge is just a series of blocks I can drag onto the board";
+a dialog to edit a box; resize a box by its corner; the New session button
+should be a stop; delete a step that is running → the flight halts and sits
+right before where it was; a join (or any flown stop) must not vanish when
+done; a renamed session shows its new name everywhere; new boxes must appear
+at once; the Tidy and other buttons in the app's button style; drag to select
+an area, move and mass-delete; add stops with no session (they do nothing
+until one is attached); select a series of boxes and make them one stop.
+
+Words: **stop** = a block. A **saved stop** = what the store still calls a
+plan (`plans.json`, `/api/flights/plans`): a named series of stops you can
+drag onto the board. The word *flyway* leaves the UI, the docs' new text and
+the code's new identifiers (old identifiers stay until their files go).
+
+### Groups — a stop with sub-steps
+
+A step may carry `group`:
+
+```json
+{"id": "s4", "kind": "ship", "title": "Open the PR", "config": {}, "on_fail": "halt",
+ "group": {"id": "g_3fa2c1", "name": "Ticket to merge", "plan_id": "builtin:ticket"}}
+```
+
+Consecutive steps with the same `group.id` are ONE stop on the board — a
+compound box named `group.name` that shows its sub-steps inside (and "k of n"
+while it flies) — and the driver flies them one by one exactly as before: the
+flight's `steps` stay flat, the cursor is still an index, nothing in the
+planner changes. `plan_id` is `""` for a group made by hand. The normaliser
+drops a `group` whose `id` or `name` is empty; `id` ≤ 40 chars, `name` ≤ 80.
+Non-consecutive steps sharing an id are split into separate boxes by the UI
+(the server does not forbid it; `op_move_step` leaves groups alone).
+
+Routes (all answer `{flight}` unless said; the usual 404 `unknown_flight` /
+`unknown_step`, 409 `in_progress` for a step that cannot change):
+
+- `POST /api/flights/{id}/steps` — as before `{step, at?}`; **new**
+  `{plan_id, at?}` appends that saved stop's steps as one fresh group (new
+  step ids, `group.name` = the plan's name, `group.plan_id` = its id; 404
+  `unknown_plan`); **new** `{steps: [Step…], at?, group?: {name}}` adds
+  several at once, grouped under a fresh id when `group` is given.
+- `PATCH /api/flights/{id}/steps/{sid}` — **new** `group: {name} | null` on
+  a step that can change: renames its group (every step of the group) or, with
+  `null`, takes this one step out of it.
+- `POST /api/flights/{id}/group {steps: [sid…], name}` → `{flight, group}`:
+  the named steps (consecutive, each able to change) become one new group;
+  409 `in_progress` otherwise, 400 `bad_group` when not consecutive.
+- `POST /api/flights/{id}/ungroup {group: gid}` → `{flight}`: every step of
+  the group loses it.
+- `DELETE /api/flights/{id}/steps/{sid}?group=1` removes every step of the
+  step's group (rules below apply to each).
+
+### Removing the stop that is flying
+
+`DELETE /api/flights/{id}/steps/{sid}` now also takes **the current step**
+of a flight that is `running`, `waiting_you`, `paused` or `halted`: the
+step's side effects stop (a `ship` step disarms its autopilot lane; an
+`agent` step is left to the session — nothing is typed; `split` children are
+left alive), the step is removed, and the flight goes `paused` with
+`reason: "stop removed"` and a history `removed` entry whose note names the
+stop. The cursor keeps its index, which now points at the step that followed,
+so the flight **sits right before that step**; Resume carries on into it. When
+nothing followed, the flight stays `paused` at the end and Resume lands it.
+A flown step (done / skipped / failed, behind the cursor) may be removed too:
+the cursor shifts down with it and nothing else changes. Grounded flights
+(below) have no current step: every step can change.
+
+### Grounded flights — stops with no session yet
+
+A series of stops can sit on the board with no session; it does nothing until
+one is attached.
+
+- `POST /api/flights/start {grounded: true, plan_id? | steps?, name?}` →
+  202 `{flight}` with `session: ""`, `state: "grounded"` (a new state),
+  `cursor: 0`, every step `pending`. `plan_id` copies the saved stop's steps as
+  one group (as the add route does); `steps` are taken as given (grouped under
+  `name` when it is set, else ungrouped, `plan_id: "adhoc"`, `plan_name`
+  = `name` or "Stops"). No `title`, no `repo_path`, no session is made.
+- The driver skips `grounded` flights (`next_action` is never called on
+  one), `prune` never releases them, `GET /api/flights/flights` lists them
+  with the unfinished ones, and `DELETE /api/flights/{id}` is allowed on one.
+- `POST /api/flights/{id}/attach {title}` → `{flight}`: binds the grounded
+  flight to that live session (404 `unknown_session`; 409 `in_flight` when the
+  session already has a flight in the air; 409 `not_grounded` on any other
+  flight) and takes off — the flight behaves from here exactly as one started
+  with `POST /start {plan_id, title}` would (state `running`, or `paused` at a
+  halt point on its first step; history `attached`; `repo_root`/`branch`
+  filled from the session). `{title: "", repo_path, program?, model?,
+  in_place?, prompt?}` instead creates the session the way `start` does for a
+  saved plan, then attaches.
+- Step routes (add / edit / remove / move / group / ungroup) all work on a
+  grounded flight, every step counting as able to change.
+- Events: `flight.changed` on create and attach.
+
+### Names
+
+A session's shown name is `windowName(title)` (`lib/windowName.ts`; the
+server twin is `aliases.display_name`) — on the box, the bar, the card, the
+drawer, the strip, every toast. Never `inst.title` or `row.title` raw. Layout
+stays keyed by the raw title (a rename is an alias, the title does not
+change).
+
+### The board, the shelf, selection (frontend)
+
+- The shelf is ONE row, **Stops**: a **Session** chip first (drop it on empty
+  sky → the new-session block at that spot; drop it on a grounded line → a new
+  session is made and attached), then the kind chips, then the saved stops
+  (name + a row of dots, one per sub-step). Drop any chip on empty sky → a
+  grounded flight (one step, or the saved stop's group) pinned at that spot;
+  drop it on a line → tacked on there (a saved stop as one group). The toolbar's
+  "+ New session" button is gone (the Session chip, double-click, Ctrl/Alt+N
+  remain).
+- A grounded flight draws as its own line (layout key `flight:<id>`), with a
+  dashed "No session yet" head box and its ⋯: **Fly on a session…** (the line
+  picker → attach), **Save to the shelf** (`savePlan` from its steps; a line
+  that came from a saved stop updates that saved stop), **Remove**.
+- Editing a saved stop = drag it onto the board, edit the blocks there, Save
+  to the shelf. Right-click a saved-stop chip: Rename, Reset to default (a
+  built-in), Delete. The schedule / session defaults of a saved stop ("Takes
+  off") live in a small dialog from the chip's menu.
+- Every box edits in a **dialog** (`Modal`), not an inline panel: ✎, Enter,
+  double-click, the menu's Edit. A group's dialog lists its sub-steps (each
+  opens its own), renames the group, offers Ungroup and Save to the shelf.
+- Flown stops stay as boxes (dimmed, ✓); the "N flown" fold is OFF by default
+  and the ⋯ item reads "Fold flown stops".
+- A line's boxes resize by a corner handle on the line (stored `boxW`/`boxH`
+  in `SkyLineLayout`, 140–420 × 60–220, clamped); the ◧ presets set the same
+  two numbers.
+- Drag on empty sky = marquee selection (pan: wheel/trackpad, middle button,
+  Space+drag, arrows). The selection is lines and/or stop boxes; the selection
+  bar offers Move (drag any selected line moves them all), Remove…
+  (inline-confirmed; a session line closes its session, a grounded line is
+  deleted), and for stops of one line: Group into a stop, Save to the shelf,
+  Remove.

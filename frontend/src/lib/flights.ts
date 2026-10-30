@@ -14,7 +14,7 @@ import { relTime } from "./format";
 // --- The contract's shapes ---------------------------------------------------
 
 export type StepActor = "robot" | "you";
-export type FlightState = "running" | "waiting_you" | "paused" | "halted" | "done" | "cancelled";
+export type FlightState = "grounded" | "running" | "waiting_you" | "paused" | "halted" | "done" | "cancelled";
 export type StepState = "pending" | "running" | "waiting_you" | "done" | "skipped" | "failed";
 export type OnFail = "halt" | "agent" | "skip" | "you";
 export type TriggerKind = "manual" | "ticket" | "pr" | "issue" | "schedule";
@@ -35,6 +35,17 @@ export interface FlightStep {
   /** A halt point: the flight stops when it reaches this stop, before doing
    * it (docs/flights.md "Halt points"). The server leaves it out when false. */
   halt?: boolean;
+  /** Round 11: consecutive steps sharing `group.id` are ONE stop on the board
+   * (a compound box named `group.name`); the driver still flies them one by
+   * one. `plan_id` is the saved stop they came from, "" for a group made by
+   * hand. Omitted when the step is on its own. */
+  group?: StepGroup;
+}
+
+export interface StepGroup {
+  id: string;
+  name: string;
+  plan_id: string;
 }
 
 export interface FlightTrigger {
@@ -73,7 +84,9 @@ export interface FlightSubject {
 export interface FlightHistoryEntry {
   at: number;
   step: string;
-  event: "started" | "done" | "failed" | "skipped" | "you" | "halted" | "resumed" | "jumped";
+  event:
+    | "started" | "done" | "failed" | "skipped" | "you" | "halted" | "paused" | "resumed" | "jumped"
+    | "added" | "edited" | "removed" | "moved" | "halted_at" | "attached";
   note: string;
 }
 

@@ -317,3 +317,102 @@ export async function dropStop(flightId: string, stepId: string): Promise<boolea
 export function moveStop(flightId: string, stepId: string, at: number): Promise<boolean> {
   return flightAction("Moving the stop", flightPath(flightId, "/steps/" + enc(stepId) + "/move"), { at });
 }
+
+// --- Round 11: groups, grounded flights (docs/flights.md "Round 11") --------
+
+/** A saved stop tacked onto a live (or grounded) flight as ONE group: the
+ * server copies its steps under a fresh group id named after it. */
+export function tackOnPlan(flightId: string, planId: string, at?: number): Promise<boolean> {
+  return flightAction("Tack on", flightPath(flightId, "/steps"), { plan_id: planId, ...(at === undefined ? {} : { at }) });
+}
+
+/** Several stops tacked on at once, grouped under `groupName` when given. */
+export function tackOnSteps(flightId: string, steps: FlightStep[], at?: number, groupName?: string): Promise<boolean> {
+  return flightAction("Tack on", flightPath(flightId, "/steps"), {
+    steps: steps.map(wireStep),
+    ...(at === undefined ? {} : { at }),
+    ...(groupName ? { group: { name: groupName } } : {}),
+  });
+}
+
+/** The named steps (consecutive, each able to change) become one group. */
+export function groupStops(flightId: string, stepIds: string[], name: string): Promise<boolean> {
+  return flightAction("Grouping", flightPath(flightId, "/group"), { steps: stepIds, name });
+}
+
+/** Every step of the group loses it. */
+export function ungroupStops(flightId: string, groupId: string): Promise<boolean> {
+  return flightAction("Ungrouping", flightPath(flightId, "/ungroup"), { group: groupId });
+}
+
+/** Rename a step's group (every step of it), or `null` to take this one step
+ * out of it. */
+export function patchStopGroup(flightId: string, stepId: string, group: { name: string } | null): Promise<boolean> {
+  return flightAction("Saving the stop", flightPath(flightId, "/steps/" + enc(stepId)), { group });
+}
+
+/** Take a whole group off a flight (each step by the remove rules). */
+export async function dropGroup(flightId: string, stepId: string): Promise<boolean> {
+  try {
+    await api(flightPath(flightId, "/steps/" + enc(stepId) + "?group=1"), { method: "DELETE" });
+    return true;
+  } catch (err) {
+    errorPop("Removing the stop failed", errMsg(err));
+    return false;
+  } finally {
+    void refreshFlights();
+    void refreshInstances();
+  }
+}
+
+/** Stops on the board with no session yet (`state: "grounded"`): from a saved
+ * stop (one group) or from loose steps (grouped under `name` when set). */
+export async function startGrounded(body: { plan_id?: string; steps?: FlightStep[]; name?: string }): Promise<Flight | null> {
+  try {
+    const d = await api<{ flight?: Flight }>("/api/flights/start", {
+      json: {
+        grounded: true,
+        ...(body.plan_id ? { plan_id: body.plan_id } : {}),
+        ...(body.steps ? { steps: body.steps.map(wireStep) } : {}),
+        ...(body.name ? { name: body.name } : {}),
+      },
+    });
+    return d?.flight || null;
+  } catch (err) {
+    errorPop("Adding the stops failed", errMsg(err));
+    return null;
+  } finally {
+    void refreshFlights();
+  }
+}
+
+/** Bind a grounded flight to a live session (`title`) and take off, or make
+ * the session first (`title: ""` + `repo_path`…) and then attach. */
+export async function attachGrounded(
+  flightId: string,
+  body: { title: string; repo_path?: string; program?: string; model?: string; in_place?: boolean; prompt?: string }
+): Promise<Flight | null> {
+  try {
+    const d = await api<{ flight?: Flight }>(flightPath(flightId, "/attach"), { json: body });
+    return d?.flight || null;
+  } catch (err) {
+    errorPop("Flying the stops failed", errMsg(err));
+    return null;
+  } finally {
+    void refreshFlights();
+    void refreshInstances();
+  }
+}
+
+/** Delete a flight that is not in the air (a grounded one, or a finished one). */
+export async function deleteFlight(flightId: string): Promise<boolean> {
+  try {
+    await api(flightPath(flightId), { method: "DELETE" });
+    return true;
+  } catch (err) {
+    errorPop("Removing the stops failed", errMsg(err));
+    return false;
+  } finally {
+    void refreshFlights();
+  }
+}
