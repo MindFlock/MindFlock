@@ -926,6 +926,9 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
               tabIndex={0}
               className={cls}
               data-node={n.id}
+              // The Sky tour's hooks: the session box, and the first stop that
+              // wears the hover toolbar (lib/tours/sky.ts).
+              data-tour={n.kind === "session" ? "sky-session-box" : tools && i === stops.findIndex((s) => tooled(s)) ? "sky-stop" : undefined}
               aria-label={said}
               aria-current={p.selected === n.id ? "true" : undefined}
               title={open ? undefined : n.kind === "add" ? (drop ? addLabel! : n.title) : n.reason ? n.title + " — " + n.reason : n.sub ? n.title + " — " + n.sub : n.title}
