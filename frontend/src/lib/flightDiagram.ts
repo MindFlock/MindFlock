@@ -44,7 +44,9 @@ import {
 
 // --- The model ----------------------------------------------------------------
 
-export type DiagramNodeKind = "parent" | "session" | "child" | "branch" | "rung" | "stop" | "add";
+/** `flown` stands for the stops a flight has already flown (two or more,
+ * done or skipped, before its current one), folded into one pill. */
+export type DiagramNodeKind = "parent" | "session" | "child" | "branch" | "rung" | "stop" | "add" | "flown";
 
 /** What a box shows. `edit` is a flyway's stop being drawn (no run yet). */
 export type DiagramNodeState =
@@ -105,6 +107,9 @@ export interface DiagramNode {
   branch?: { from: string; to: string; state: BranchState; inner: string };
   /** A join point while its branches are out: "waiting for 2 of 5". */
   join?: JoinCount;
+  /** flown: how many stops it folds, and their titles in line order. */
+  count?: number;
+  flown?: string[];
 }
 
 /** `fan` runs from a stop out to a branch, `join` from a branch into the
@@ -336,6 +341,9 @@ export interface SessionDiagramOpts {
   kinds?: readonly StepKindDef[] | null;
   /** Leave the parent and children out (the Board's one-row card). */
   family?: boolean;
+  /** Draw every stop that has flown (a line's own toggle); by default two
+   * or more of them before the current stop fold into one `flown` pill. */
+  expandFlown?: boolean;
 }
 
 /** The SESSION's live diagram, from `/api/instances` rows: parent above, the
@@ -433,7 +441,109 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
       nodes.push(c);
       edges.push({ from: me.id, to: c.id, kind: "branch" });
     }
-  return { nodes, edges, flightId, mode, insertFrom };
+  const d: Diagram = { nodes, edges, flightId, mode, insertFrom };
+  return mode === "flight" && !opts.expandFlown ? collapseFlown(d) : d;
+}
+
+// --- What has flown: folded into one pill ----------------------------------------
+
+/** Fewer than this many flown stops stay drawn one by one. */
+export const FLOWN_MIN = 2;
+export const FLOWN_ID = "flown";
+
+/** The line with the stops it has already flown folded into ONE `flown`
+ * node: the leading run of done / skipped stops before the first stop that
+ * isn't (the flight's current one), when there are `FLOWN_MIN` or more. A
+ * failed stop breaks the run (it stays in sight). The line's edges chain
+ * through the pill; a column of branches that fanned out of a folded stop
+ * fans out of the pill instead and joins at the box after it. `insertFrom`
+ * and every stop's `index` stay the flight's own. */
+export function collapseFlown(d: Diagram): Diagram {
+  const main = d.nodes.filter((n) => n.row === "main");
+  const run: DiagramNode[] = [];
+  for (const n of main) {
+    if (n.kind === "session") continue;
+    if (n.kind !== "stop" || (n.state !== "done" && n.state !== "skipped")) break;
+    run.push(n);
+  }
+  if (run.length < FLOWN_MIN) return d;
+  const folded = new Set(run.map((n) => n.id));
+  const first = run[0];
+  const last = run[run.length - 1];
+  const pill: DiagramNode = {
+    id: FLOWN_ID,
+    kind: "flown",
+    row: "main",
+    title: run.length + " flown",
+    sub: first.title + " … " + last.title,
+    state: "done",
+    icon: "flown",
+    count: run.length,
+    flown: run.map((n) => n.title),
+  };
+  const after = main[main.indexOf(last) + 1];
+  const to = (id: string) => (folded.has(id) ? FLOWN_ID : id);
+  const nodes: DiagramNode[] = [];
+  for (const n of d.nodes) {
+    if (n.id === first.id) nodes.push(pill);
+    if (folded.has(n.id)) continue;
+    // A branch out of a folded stop: out of the pill, joining past it.
+    if (n.branch && folded.has(n.branch.from))
+      nodes.push({ ...n, branch: { ...n.branch, from: FLOWN_ID, to: after && folded.has(n.branch.to) ? after.id : n.branch.to } });
+    else nodes.push(n);
+  }
+  const fanned = nodes.some((n) => n.branch?.from === FLOWN_ID);
+  const edges: DiagramEdge[] = [];
+  const seen = new Set<string>();
+  for (const e of d.edges) {
+    const from = to(e.from);
+    let dest = to(e.to);
+    // A fan-in into a folded stop joins at the box after the pill.
+    if (e.kind === "join" && dest === FLOWN_ID && after) dest = after.id;
+    if (from === dest) continue;
+    // The line reaches the box after the pill THROUGH its branches.
+    if (fanned && from === FLOWN_ID && (e.kind === "line" || e.kind === "add")) continue;
+    const key = from + ">" + dest + ">" + e.kind;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    edges.push(e.done ? { from, to: dest, kind: e.kind, done: true } : { from, to: dest, kind: e.kind });
+  }
+  return { ...d, nodes, edges };
+}
+
+/** The line as a canvas counts it: a canvas speaks of a stop by its place
+ * among the DRAWN stops (a move's from / to, an insert's gap) and compares it
+ * with `insertFrom`, so with a `flown` pill folding N stops every stop's
+ * `index` and `insertFrom` come down by N. The host adds N back on the way to
+ * the flight (SkyLine's `flownCanvas`). Without a pill: the diagram itself. */
+export function drawnIndexes(d: Diagram): Diagram {
+  const off = flownCount(d);
+  if (!off) return d;
+  return {
+    ...d,
+    insertFrom: Math.max(0, d.insertFrom - off),
+    nodes: d.nodes.map((n) => (n.index !== undefined && n.kind === "stop" ? { ...n, index: n.index - off } : n)),
+  };
+}
+
+/** Where the flight is, in words, for a line's bar: "at Reviews settle · 10
+ * min quiet", "waiting on you at Perch: approve", "halted at Push · <why>",
+ * "at Push · waiting for 2 of 3", "fast-track at Push". Empty while the bird
+ * sits on the session box itself (its state chip says it) or nowhere. */
+export function lineWhere(d: Diagram): string {
+  const b = birdPerch(d);
+  const n = b ? d.nodes.find((x) => x.id === b.nodeId) : undefined;
+  if (!b || !n || n.kind === "session") return "";
+  const head = n.kind === "rung" ? "fast-track at " : b.tone === "you" ? "waiting on you at " : b.tone === "halted" ? "halted at " : b.tone === "paused" ? "paused at " : "at ";
+  const tail = n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? n.reason : n.kind === "stop" ? n.sub : "";
+  return head + n.title + (tail ? " · " + tail : "");
+}
+
+/** How many stops a line's `flown` pill folds (0: none). The canvas speaks
+ * of a stop by its place among the line's DRAWN stops; the flight by its
+ * index — the pill's count is the difference. */
+export function flownCount(d: Pick<Diagram, "nodes">): number {
+  return d.nodes.find((n) => n.kind === "flown")?.count || 0;
 }
 
 // --- Branches: children working in parallel between two stops ----------------------
@@ -646,6 +756,9 @@ export interface BoxSize {
 
 export interface LayoutOpts {
   compact?: boolean;
+  /** The Sky's bigger boxes (bigger type, read from afar): `boxMetrics`'
+   * roomy tier. The pane's Flight tab and the flyway editor keep the base. */
+  roomy?: boolean;
   /** Phone width: the line runs top to bottom, connectors too. */
   vertical?: boolean;
   /** A box drawn bigger than the rest (an expanded perch, with its checklist
@@ -680,13 +793,53 @@ export interface Layout {
   gap: number;
 }
 
+export interface BoxMetrics {
+  box: BoxSize;
+  add: BoxSize;
+  branch: BoxSize;
+  /** The pill folding what a flight has flown. */
+  flown: BoxSize;
+  gap: number;
+  vgap: number;
+  bgap: number;
+  indent: number;
+  anchor: number;
+  /** What a session box's state chip, a branch's sub-line and a child's mini
+   * ladder add to a box's height. */
+  chipH: number;
+  subH: number;
+  dotsH: number;
+}
+
 /** The base box and the line's spacing; `branch` is a branch box (smaller:
  * the child's title, its chip, its line in brief) and `bgap` the space
- * between two branches of a column. */
-export function boxMetrics(compact = false): { box: BoxSize; add: BoxSize; branch: BoxSize; gap: number; vgap: number; bgap: number; indent: number; anchor: number } {
+ * between two branches of a column. `roomy` is the Sky's tier: bigger boxes
+ * for 15px titles and 13px summaries (docs/flights-visibility.md). */
+export function boxMetrics(compact = false, roomy = false): BoxMetrics {
+  if (roomy)
+    return compact
+      ? { box: { w: 160, h: 64 }, add: { w: 52, h: 52 }, branch: { w: 150, h: 54 }, flown: { w: 104, h: 44 }, gap: 40, vgap: 26, bgap: 10, indent: 26, anchor: 32, chipH: 22, subH: 20, dotsH: 16 }
+      : { box: { w: 236, h: 100 }, add: { w: 180, h: 48 }, branch: { w: 200, h: 64 }, flown: { w: 148, h: 56 }, gap: 56, vgap: 36, bgap: 12, indent: 30, anchor: 50, chipH: 22, subH: 20, dotsH: 16 };
   return compact
-    ? { box: { w: 140, h: 62 }, add: { w: 44, h: 44 }, branch: { w: 124, h: 46 }, gap: 34, vgap: 22, bgap: 8, indent: 22, anchor: 31 }
-    : { box: { w: 178, h: 76 }, add: { w: 148, h: 40 }, branch: { w: 156, h: 52 }, gap: 46, vgap: 30, bgap: 10, indent: 26, anchor: 38 };
+    ? { box: { w: 140, h: 62 }, add: { w: 44, h: 44 }, branch: { w: 124, h: 46 }, flown: { w: 96, h: 40 }, gap: 34, vgap: 22, bgap: 8, indent: 22, anchor: 31, chipH: 18, subH: 16, dotsH: 14 }
+    : { box: { w: 178, h: 76 }, add: { w: 148, h: 40 }, branch: { w: 156, h: 52 }, flown: { w: 120, h: 44 }, gap: 46, vgap: 30, bgap: 10, indent: 26, anchor: 38, chipH: 18, subH: 16, dotsH: 14 };
+}
+
+/** A box at a line's ◧ size, from the layout's normal one (FlywayCanvas's
+ * `sizedBox`): compact is the title alone, one line; wide has room for a
+ * two-line title, the summary on two lines and the detail line. A branch
+ * stays smaller than the line's boxes at every size; the + and the flown
+ * pill keep the layout's. `roomy`: the Sky's bigger tier. */
+export function sizedBoxFor(size: "compact" | "normal" | "wide", n: DiagramNode, base: BoxSize, detail = "", roomy = false): BoxSize {
+  if (n.kind === "add" || n.kind === "flown" || size === "normal") return base;
+  if (roomy) {
+    if (n.kind === "branch") return size === "compact" ? { w: 140, h: 48 } : { w: 270, h: base.h + 20 };
+    if (size === "compact") return { w: 150, h: 64 };
+    return { w: 330, h: base.h + 22 + (n.sub ? 18 : 0) + (detail ? 40 : 0) };
+  }
+  if (n.kind === "branch") return size === "compact" ? { w: 110, h: 40 } : { w: 210, h: base.h + 16 };
+  if (size === "compact") return { w: 110, h: 62 };
+  return { w: 260, h: base.h + 18 + (n.sub ? 15 : 0) + (detail ? 32 : 0) };
 }
 
 /** Place every box and draw every connector. Horizontal: the line left to
@@ -698,19 +851,21 @@ export function boxMetrics(compact = false): { box: BoxSize; add: BoxSize; branc
 export function layoutDiagram(d: Diagram, opts: LayoutOpts = {}): Layout {
   // A phone (or a narrow pane) draws two columns at most: compact boxes,
   // and the + as wide as a box.
-  const m = boxMetrics(!!opts.compact || !!opts.vertical);
-  if (opts.vertical) m.add = { w: m.box.w, h: 36 };
+  const m = boxMetrics(!!opts.compact || !!opts.vertical, !!opts.roomy);
+  if (opts.vertical) m.add = { w: m.box.w, h: opts.roomy ? 44 : 36 };
   // On a phone a branch group fits the line's column, indented.
   if (opts.vertical) m.branch = { w: m.box.w - m.indent, h: m.branch.h };
   const size = (n: DiagramNode): BoxSize => {
+    // The flown pill is the layout's own (never a line's ◧ size).
+    if (n.kind === "flown") return m.flown;
     // A session box also carries its state chip, a child its mini ladder, a
     // branch its line in brief.
     const base =
       n.kind === "add"
         ? m.add
         : n.kind === "branch"
-          ? { w: m.branch.w, h: m.branch.h + (n.sub ? 16 : 0) }
-          : { w: m.box.w, h: m.box.h + (n.chip ? 18 : 0) + (n.dots ? 14 : 0) };
+          ? { w: m.branch.w, h: m.branch.h + (n.sub ? m.subH : 0) }
+          : { w: m.box.w, h: m.box.h + (n.chip ? m.chipH : 0) + (n.dots ? m.dotsH : 0) };
     return opts.sizeOf ? opts.sizeOf(n, base) : base;
   };
   const above = d.nodes.filter((n) => n.row === "above");
@@ -736,8 +891,8 @@ export function layoutDiagram(d: Diagram, opts: LayoutOpts = {}): Layout {
     let fanBottom = 0;
     for (const n of main) {
       const s = size(n);
-      // A smaller box (the +) sits centred on the line's anchor.
-      put(n, x, top + (n.kind === "add" ? m.anchor - s.h / 2 : 0));
+      // A smaller box (the +, the flown pill) sits centred on the line's anchor.
+      put(n, x, top + (n.kind === "add" || n.kind === "flown" ? m.anchor - s.h / 2 : 0));
       x += s.w + m.gap;
       const col = fans.get(n.id);
       if (!col?.length) continue;
@@ -767,7 +922,7 @@ export function layoutDiagram(d: Diagram, opts: LayoutOpts = {}): Layout {
     }
     for (const n of main) {
       const s = size(n);
-      put(n, n.kind === "add" ? (m.box.w - s.w) / 2 : 0, y);
+      put(n, n.kind === "add" || n.kind === "flown" ? (m.box.w - s.w) / 2 : 0, y);
       y += s.h + m.vgap;
       const col = fans.get(n.id);
       if (!col?.length) continue;
@@ -793,7 +948,7 @@ export function layoutDiagram(d: Diagram, opts: LayoutOpts = {}): Layout {
 
   // Where a connector meets a box's side: the line's anchor, a small box's
   // middle (the +, a branch).
-  const anchorOf = (p: Placed) => (p.node.kind === "add" ? p.h / 2 : p.node.kind === "branch" ? Math.min(p.h, m.box.h) / 2 : m.anchor);
+  const anchorOf = (p: Placed) => (p.node.kind === "add" || p.node.kind === "flown" ? p.h / 2 : p.node.kind === "branch" ? Math.min(p.h, m.box.h) / 2 : m.anchor);
   const wires: Wire[] = [];
   for (const e of d.edges) {
     const a = at.get(e.from);

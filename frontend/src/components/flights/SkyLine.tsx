@@ -13,6 +13,11 @@
  * there, never also below. ◧ cycles how much each box shows (compact →
  * normal → wide).
  *
+ * The sky draws the roomy tier of boxes (`roomy`: bigger boxes, bigger type,
+ * docs/flights-visibility.md), and folds the stops the flight has already
+ * flown into one `flown` pill; pressing it (or the ⋯'s "Show every flown
+ * stop") unfolds them on this line.
+ *
  * The host (Sky.tsx) places the line at `layout.x/y`, drags it by the title
  * bar (`onDragStart`), persists `layout` (`onLayout`) and gives it room from
  * `onMeasure` — the line's size in plane px, read by a ResizeObserver. A
@@ -20,14 +25,14 @@
  * line); it reaches the host only as the line growing. */
 
 import { useEffect, useMemo, useRef, useState, type JSX, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { showInSky } from "../../lib/viewMode";
+import { setView, showInSky } from "../../lib/viewMode";
 import { lodFor, nearLines } from "../../lib/skyLayout";
 import type { Instance } from "../../api/types";
 import { useFlightKinds, useFlights } from "../../state/queries";
 import { closeSession, selectSession } from "../../lib/sessionActions";
 import { deriveSessionState } from "../../lib/sessionState";
 import { firstLine } from "../../lib/format";
-import { birdPerch, type DiagramNode } from "../../lib/flightDiagram";
+import { birdPerch, drawnIndexes, flownCount, lineWhere, sessionDiagram, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import type { FlightPlan } from "../../lib/flights";
 import { OverflowMenu, type MenuItem } from "../OverflowMenu";
 import { Pane } from "../grid/Pane";
@@ -35,6 +40,7 @@ import { FlywayCanvas, type BoxSizeName } from "./FlywayCanvas";
 import { useSessionLine, type LineSource } from "./useSessionLine";
 import { Bird } from "./Bird";
 import "./SkyLine.css";
+import "./SkyVisibility.css";
 
 export interface SkyLineLayout {
   x: number;
@@ -71,12 +77,45 @@ export const CARD_HEAD_H = 30;
 const SIZES: readonly BoxSizeName[] = ["compact", "normal", "wide"];
 const SIZE_WORD: Record<BoxSizeName, string> = { compact: "compact — titles only", normal: "normal", wide: "wide — the full text" };
 
+/** The ⋯ menu's three box sizes, in words. */
+const SIZE_ITEM: Record<BoxSizeName, string> = { compact: "Compact boxes", normal: "Normal boxes", wide: "Wide boxes" };
+
 /** ◧: compact → normal → wide → compact. */
 export const nextSize = (s: BoxSizeName): BoxSizeName => SIZES[(SIZES.indexOf(s) + 1) % SIZES.length];
 
 /** A card's pane size, never under the floor. */
 export function clampPane(w: number, h: number): { w: number; h: number } {
   return { w: Math.max(PANE_MIN_W, Math.round(w)), h: Math.max(PANE_MIN_H, Math.round(h)) };
+}
+
+type LineCanvas = ReturnType<typeof useSessionLine>["canvas"];
+
+/** A line's canvas props for a diagram with a `flown` pill. The canvas counts
+ * a stop by its place among the DRAWN stops (`drawnIndexes`), the flight by
+ * its index: every index (a move, an insert, a drop) and every node handed
+ * back (a pick, a remove, a box's own parts) returns to the flight's own on
+ * the way out. Without a pill: unchanged. */
+export function flownCanvas(d: Diagram, canvas: LineCanvas): { diagram: Diagram; canvas: LineCanvas } {
+  const off = flownCount(d);
+  if (!off) return { diagram: d, canvas };
+  const byId = new Map(d.nodes.map((n) => [n.id, n]));
+  const orig = (n: DiagramNode) => byId.get(n.id) || n;
+  const c = canvas;
+  return {
+    diagram: drawnIndexes(d),
+    canvas: {
+      ...c,
+      onSelect: c.onSelect && ((n) => c.onSelect!(orig(n))),
+      onOpen: c.onOpen && ((n) => c.onOpen!(orig(n))),
+      onInsert: c.onInsert && ((at) => c.onInsert!(at + off)),
+      onRemove: c.onRemove && ((n) => c.onRemove!(orig(n))),
+      onMove: c.onMove && ((from, to) => c.onMove!(from + off, to + off)),
+      onDuplicate: c.onDuplicate && ((n) => c.onDuplicate!(orig(n))),
+      onDropStop: c.onDropStop && ((kind, at) => c.onDropStop!(kind, at === null ? null : at + off)),
+      renderInBox: c.renderInBox && ((n) => c.renderInBox!(orig(n))),
+      sizeOf: c.sizeOf && ((n, b) => c.sizeOf!(orig(n), b)),
+    },
+  };
 }
 
 interface CardProps {
@@ -152,6 +191,14 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   const kinds = useFlightKinds().data;
   const src: LineSource = useMemo(() => ({ rows: p.rows, flights, kinds: kinds || [], plans: p.plans }), [p.rows, flights, kinds, p.plans]);
   const line = useSessionLine(p.title, src, { family: true, onSession: (t) => selectSession(t) });
+  // What has flown: folded into one pill until this line unfolds it.
+  const [expandFlown, setExpandFlown] = useState(false);
+  const folds = flownCount(line.diagram) > 0;
+  const full = useMemo(
+    () => (expandFlown ? sessionDiagram(p.rows, p.title, { flights, kinds, family: true, expandFlown: true }) : line.diagram),
+    [expandFlown, line.diagram, p.rows, p.title, flights, kinds]
+  );
+  const shown = flownCanvas(full, line.canvas);
   // Workers' open cards, by the worker's title (their pane sizes with them).
   const [kids, setKids] = useState<Record<string, { w: number; h: number }>>({});
   const rootRef = useRef<HTMLDivElement>(null);
@@ -211,12 +258,13 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
     return null;
   };
   const onOpen = (n: DiagramNode) => {
-    if (n.kind === "session") p.onLayout({ open: !p.layout.open });
+    if (n.kind === "flown") setExpandFlown((x) => !x);
+    else if (n.kind === "session") p.onLayout({ open: !p.layout.open });
     else if ((n.kind === "child" || n.kind === "branch") && n.session) {
       const t = n.session;
       if (kids[t]) foldKid(t);
       else setKids((k) => ({ ...k, [t]: { w: PANE_W, h: PANE_H } }));
-    } else line.canvas.onOpen?.(n);
+    } else shown.canvas.onOpen?.(n);
   };
   // Wide: a session's box says what it was last asked.
   const detailOf = (n: DiagramNode) => {
@@ -230,12 +278,41 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
     p.onDragStart?.(e);
   };
 
+  // The ⋯, in groups (a group's first item draws the rule above it): the
+  // session · how the line looks · what flies on it · closing it.
   const items: MenuItem[] = [
-    { key: "open", label: "Open session", title: "Open this session", onSelect: () => selectSession(p.title) },
+    p.layout.open
+      ? { key: "open", label: "Fold the session back", title: "Back to a box on the line", onSelect: () => p.onLayout({ open: false }) }
+      : { key: "open", label: "Open session", title: "Open the session here, in a card on its line", onSelect: () => p.onLayout({ open: true }) },
+    {
+      key: "grid",
+      label: "Open in the grid",
+      title: "Switch to the grid with this session selected",
+      onSelect: () => {
+        selectSession(p.title);
+        setView("grid");
+      },
+    },
     { key: "only", label: "Show only this line", title: "This session: one line, filling the sky", onSelect: () => showInSky(p.title) },
-    { key: "flyway", label: "Fly a flyway…", title: "Tack a stop, or a whole flyway, onto this line", onSelect: () => line.togglePalette(true) },
-    { key: "close", label: "Close session", danger: true, title: "Stops the agent and moves it to Recently closed", onSelect: () => void closeSession(p.title) },
+    ...SIZES.map((s, i): MenuItem => ({
+      key: "size-" + s,
+      label: SIZE_ITEM[s],
+      title: "Boxes: " + SIZE_WORD[s],
+      className: "skl-mi-check" + (s === size ? " skl-mi-on" : "") + (i === 0 ? " skl-mi-group" : ""),
+      onSelect: () => p.onLayout({ size: s }),
+    })),
+    ...(folds
+      ? [{ key: "flown", label: expandFlown ? "Fold the flown stops" : "Show every flown stop", title: "The stops this flight has already flown: one pill, or each on its own", onSelect: () => setExpandFlown((x) => !x) }]
+      : []),
+    p.layout.pinned
+      ? { key: "tidy", label: "Tidy this line", title: "Forget where you put it: back to its place in the rows", onSelect: () => p.onLayout({ pinned: false }) }
+      : { key: "pin", label: "Pin here", title: "Keep this line where it is when the others move", onSelect: () => p.onLayout({ x: p.layout.x, y: p.layout.y, pinned: true }) },
+    { key: "flyway", label: "Fly a flyway…", title: "A whole flyway, flown on this line", className: "skl-mi-group", onSelect: () => line.togglePalette(true) },
+    { key: "tack", label: "Tack on a stop", title: "One stop, at the end of the line", onSelect: () => line.togglePalette(true) },
+    { key: "close", label: "Close session", danger: true, className: "skl-mi-group", title: "Stops the agent and moves it to Recently closed", onSelect: () => void closeSession(p.title) },
   ];
+  // Where the flight is, in words (the bar's second voice).
+  const where = row ? lineWhere(full) : "";
 
   return (
     <div
@@ -259,11 +336,18 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
       }}
     >
       <div className="skl-bar" title="Drag to move this line" onPointerDown={onBarDown}>
-        <Bird size={13} />
+        <Bird size={16} />
         <span className="skl-name">{p.title}</span>
         {row && (
           <span className={"fl-box-chip skl-chip tone-" + ss.tone} title={ss.hint}>
             {ss.label}
+          </span>
+        )}
+        {/* Where the flight is ("at Reviews settle · 10 min quiet"): mid
+            and near. */}
+        {where && (
+          <span className="skl-where" title={where}>
+            {where}
           </span>
         )}
         {/* Near: what the session is on, under its name (CSS shows it only
@@ -277,11 +361,23 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
         <button
           type="button"
           className="skl-size"
+          data-size={size}
           aria-label={"Box size: " + size + " (next: " + nextSize(size) + ")"}
           title={"Boxes: " + SIZE_WORD[size] + " — press for " + nextSize(size)}
           onClick={() => p.onLayout({ size: nextSize(size) })}
         >
-          ◧
+          <span className="skl-size-glyph" aria-hidden="true">
+            ◧
+          </span>
+          {/* Its state at a glance: one, two or three bars lit. */}
+          <span className="skl-size-meter" aria-hidden="true">
+            {SIZES.map((s, i) => (
+              <i key={s} className={i <= SIZES.indexOf(size) ? "on" : ""} />
+            ))}
+          </span>
+          <span className="skl-size-word" aria-hidden="true">
+            {size}
+          </span>
         </button>
         <span className="skl-menu" data-no-drag>
           <OverflowMenu label={"Actions for " + p.title} items={items} />
@@ -290,18 +386,21 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
       {line.cancel.node}
       {row ? (
         <FlywayCanvas
-          diagram={line.diagram}
+          diagram={shown.diagram}
           label={"What " + p.title + " is doing and will do"}
           vertical={false}
-          bird={birdPerch(line.diagram)}
+          bird={birdPerch(full)}
           className="sky-canvas skl-canvas"
           size={size}
           detailOf={detailOf}
           dropLabel={p.dropFlyway ? "Drop to fly " + p.dropFlyway.name : null}
           openBox={openBox}
           lod={lod}
-          {...line.canvas}
+          {...shown.canvas}
           onOpen={onOpen}
+          // The sky's bigger boxes (lib/flightDiagram boxMetrics' roomy
+          // tier); the canvas passes it to layoutDiagram and sizedBoxFor.
+          {...({ roomy: true } as object)}
         />
       ) : (
         <p className="skl-gone muted">This session isn't running any more.</p>

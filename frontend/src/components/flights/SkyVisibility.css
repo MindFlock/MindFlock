@@ -1,0 +1,164 @@
+/* The Sky's readability overrides for parts drawn by SkyView (the toolbar,
+   the drawer) whose own rules live in Sky.css. Imported by SkyLine.tsx; CSS
+   is global. The sizes and contrast numbers are in docs/flights-visibility.md.
+
+   Text inks (FlywayCanvas.css defines --fl-ink-*): gold text on a light panel
+   reads 1.9:1, so the drawer's "Perched on you" head gets its own ink. */
+
+:root {
+  --sky-ink-gold: var(--gold, #ffd700);
+}
+
+.light {
+  --sky-ink-gold: #7a5a10;
+}
+
+/* --- The toolbar: 13px type, 28px controls, still one 36px row ----------- */
+
+.sky-toolbar .sky-modes .fl-pick {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  box-sizing: border-box;
+  padding: 0 11px;
+  font-size: 13px;
+}
+
+.sky-toolbar .sky-search .fl-input {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+
+.sky-toolbar .sky-new,
+.sky-toolbar .fl-btn {
+  min-height: 28px;
+  font-size: 13px;
+}
+
+.sky-toolbar .sky-zoom-btn {
+  min-height: 26px;
+  padding: 0 9px;
+  font-size: 13px;
+}
+
+.sky-toolbar .sky-zoom-read {
+  min-width: 46px;
+  font-size: 13px;
+  color: var(--fl-ink-muted, var(--muted));
+}
+
+/* --- The drawer: 14px bodies, 36px Done / Skip ---------------------------- */
+
+.sky-drawer-tab {
+  font-size: 13px;
+}
+
+.sky-drawer-body {
+  font-size: 14px;
+  gap: 18px;
+}
+
+.sky-drawer .fl-group-head {
+  font-size: 13px;
+}
+
+.sky-drawer .fl-group-needs > .fl-group-head {
+  color: var(--sky-ink-gold);
+}
+
+.sky-drawer .sky-perch {
+  gap: 7px;
+  padding: 12px 14px;
+  border-width: 1.5px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--tone-attention) 8%, var(--panel-2));
+}
+
+.sky-drawer .sky-perch.is-halted {
+  background: var(--panel-2);
+}
+
+.sky-drawer .sky-perch-name {
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.sky-drawer .sky-perch-step {
+  font-size: 14px;
+  color: var(--fl-ink-muted, var(--muted));
+}
+
+.sky-drawer .fl-you-text,
+.sky-drawer .fl-you-items {
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.sky-drawer .fl-you-items {
+  gap: 6px;
+}
+
+.sky-drawer .fl-you-acts {
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.sky-drawer .fl-you-acts .fl-btn {
+  min-height: 36px;
+  min-width: 76px;
+  padding: 0 16px;
+  font-size: 14px;
+}
+
+.sky-drawer .fl-check-row {
+  min-height: 36px;
+  font-size: 14px;
+}
+
+/* Waiting to fly: the same rhythm. */
+.sky-drawer .fl-waiting {
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.sky-drawer .fl-waiting-head {
+  font-size: 13px;
+}
+
+.sky-drawer .fl-waiting-title {
+  font-size: 14px;
+}
+
+.sky-drawer .fl-waiting-ref {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.sky-drawer .fl-waiting-headline {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.sky-drawer .fl-waiting-meta {
+  font-size: 13px;
+}
+
+.sky-drawer .fl-fly {
+  min-height: 36px;
+  min-width: 72px;
+  font-size: 14px;
+}
+
+.sky-drawer .fl-empty,
+.sky-drawer .fl-note {
+  font-size: 14px;
+}
+
+/* --- The plane: a line whose ⋯ is open paints over the lines after it ------ */
+
+.sky-line-slot:has(.skl-menu .vf-menu[open]) {
+  z-index: 40;
+}
