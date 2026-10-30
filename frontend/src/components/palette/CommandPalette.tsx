@@ -33,6 +33,7 @@ import { settingsActions } from "./settingsSearch";
 import { VERIFY_BLURB } from "../../lib/vocab";
 import { TOURS, TOUR_IDS } from "../../lib/tours";
 import { replayTour } from "../onboarding/replayTour";
+import { openSkyGuide } from "../flights/SkyGuide";
 import { replayPeopleTour } from "../settings/screens/peer/replayPeopleTour";
 
 /** The focused session's entries, in palette order (the table holds what
@@ -179,6 +180,17 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       hint: "on the Sky's shelf",
       keywords: "flights saved stops plan perch canvas shelf new",
       run: () => ui.showFlyways(),
+    });
+    // The Sky's long-form guide (flights/SkyGuide): the sky shows it, so show
+    // the sky first.
+    acts.push({
+      label: "Learn the Sky",
+      hint: "the guide",
+      keywords: "help how guide tutorial sky lines stops bird keys",
+      run: () => {
+        setView("sky");
+        openSkyGuide();
+      },
     });
     // Customize and its tabs: the extras you opt into.
     acts.push({ label: "Customize…", hint: "choose sidebar bars", run: () => ui.openDialogFor("customize") });
