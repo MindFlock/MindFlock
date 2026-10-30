@@ -40,6 +40,11 @@ export interface FlightStep {
    * one. `plan_id` is the saved stop they came from, "" for a group made by
    * hand. Omitted when the step is on its own. */
   group?: StepGroup;
+  /** Round 15: a condition (`diff touches frontend/**`, `weekday and files
+   * > 3` — docs/flights.md "`when`: a condition on every stop"); a pending
+   * stop whose `when` is false is skipped, never run. Omitted when it has
+   * none. */
+  when?: string;
 }
 
 export interface StepGroup {
@@ -394,7 +399,14 @@ export function newStep(def: StepKindDef, taken: readonly string[]): FlightStep 
   for (const f of def.fields) if (f.default !== undefined) config[f.name] = f.default;
   let n = taken.length + 1;
   while (taken.includes("s" + n)) n++;
-  return { id: "s" + n, kind: def.kind, title: def.default_title || def.label, config, on_fail: "halt" };
+  return { id: "s" + n, kind: def.kind, title: def.default_title || def.label, config, on_fail: defaultOnFail(def) };
+}
+
+/** What a stop of this kind does on failure when it says nothing: the kind's
+ * `default_on_fail` (round 15), "halt" from an older server or an unknown word. */
+export function defaultOnFail(def: Pick<StepKindDef, "default_on_fail"> | null | undefined): OnFail {
+  const v = def?.default_on_fail;
+  return v && Object.prototype.hasOwnProperty.call(ON_FAIL_LABEL, v) ? (v as OnFail) : "halt";
 }
 
 /** Move a stop from one index to another (drag and ← →). */
@@ -452,7 +464,7 @@ export function blankPlan(): FlightPlan {
 }
 
 /** A flyway from a line's stops ("Save as flyway" on a live line, a card
- * seeded from one): only what a stop IS — kind, title, config, on_fail —
+ * seeded from one): only what a stop IS — kind, title, config, on_fail, when —
  * never what a run did to it (step_states live beside the steps; a config key
  * with a leading `_` is the driver's, not the stop's), and re-numbered s1..sN
  * so the server sees a fresh flyway. A manual trigger unless one is given. */
@@ -473,7 +485,9 @@ export function planFromSteps(
         if (k.startsWith("_") || v === undefined) continue;
         config[k] = Array.isArray(v) ? v.slice() : v && typeof v === "object" ? JSON.parse(JSON.stringify(v)) : v;
       }
-      return { id: "s" + (i + 1), kind: s.kind, title: s.title, config, on_fail: s.on_fail || "halt" };
+      const out: FlightStep = { id: "s" + (i + 1), kind: s.kind, title: s.title, config, on_fail: s.on_fail || "halt" };
+      if (s.when?.trim()) out.when = s.when.trim();
+      return out;
     }),
   };
 }

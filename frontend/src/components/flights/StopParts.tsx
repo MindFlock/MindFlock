@@ -1,26 +1,31 @@
 /** The parts around the canvas: the stop PALETTE (what + opens — "The flock
  * does" robot stops and "You do" perches, each with its summary), the stop
- * FORM (`StopForm`: a stop's title, its kind's fields, on_fail — what the
+ * FORM (`StopForm`: a stop's title, its kind's fields, its "Only when"
+ * condition, on_fail — what the
  * INSPECTOR beside the canvas and a session line's StopDialog both draw), and
  * DESCRIBE (a sentence → new stops, through the server's
  * one-shot model). Shared by the Flyways editor and the session diagram. */
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ApiError } from "../../api/client";
 import { errMsg } from "../../lib/format";
 import { LANE_LABEL, normalizeLane } from "../../lib/autopilot";
-import { ON_FAIL_LABEL, fieldOptions, type FlightStep, type OnFail, type StepKindDef, type StepKindField } from "../../lib/flights";
+import { ON_FAIL_LABEL, defaultOnFail, fieldOptions, type FlightStep, type OnFail, type StepKindDef, type StepKindField, type StepRunState } from "../../lib/flights";
 import { stopSummary } from "../../lib/flightDiagram";
 import { describeSteps } from "../../lib/flightsApi";
+import { WHEN_COMBINE, WHEN_GRAMMAR, WHEN_MAX, checkWhen, skippedNote, whenChecker, whenError, type WhenCheck } from "../../lib/whenHelp";
 import { StopIcon } from "./Bird";
 import { FlField, NumberField, PromptBox, Seg, TextField, Toggle } from "./controls";
 import "./Flights.css";
 import "./StopParts.css";
 
 /** A kind's name as the palette and the inspector say it: a `you` stop is a
- * perch (an older server still calls it "You"). */
+ * perch (an older server still calls it "You"), a `someone` stop waits on
+ * Someone (round 15). */
 export function kindName(def: Pick<StepKindDef, "kind" | "label"> | undefined, kind = ""): string {
-  if ((def?.kind || kind) === "you") return "Perch";
+  const k = def?.kind || kind;
+  if (k === "you") return "Perch";
+  if (k === "someone") return "Someone";
   return def?.label || kind;
 }
 
@@ -179,6 +184,7 @@ export function StopInspector({
   readOnly,
   actions,
   note,
+  run,
 }: {
   step: FlightStep;
   def: StepKindDef | undefined;
@@ -187,8 +193,12 @@ export function StopInspector({
   /** The row of buttons at its foot (Move, Duplicate, Remove / Save). */
   actions?: ReactNode;
   note?: ReactNode;
+  /** What the flight did with it: a skipped stop reads its note ("skipped:
+   * <expr> — <the fact>"). */
+  run?: Pick<StepRunState, "state" | "note">;
 }) {
   const perch = (def?.actor || (step.kind === "you" ? "you" : "robot")) === "you";
+  const skipped = skippedNote(run);
   return (
     <section className={"fl-inspector" + (perch ? " fl-inspector-perch" : "") + (readOnly ? " fl-readonly" : "")} aria-label={"Stop: " + step.title}>
       <header className="fl-inspector-head">
@@ -201,15 +211,19 @@ export function StopInspector({
         </span>
       </header>
       {note}
+      {skipped && <p className="fl-note muted fl-skipped-note">{skipped}</p>}
       <StopForm step={step} def={def} onChange={onChange} readOnly={readOnly} />
       {actions && <div className="fl-inspector-acts">{actions}</div>}
     </section>
   );
 }
 
-/** A stop's form: its title, its kind's own fields, what happens if it
- * fails (the inspector's and the stop dialog's). `readOnly` ignores edits. */
+/** A stop's form: its title, its kind's own fields, the condition it flies
+ * on, what happens if it fails (the inspector's and the stop dialog's) —
+ * the kind's `default_on_fail` pressed when the stop says nothing.
+ * `readOnly` ignores edits. */
 export function StopForm({ step, def, onChange, readOnly }: { step: FlightStep; def: StepKindDef | undefined; onChange(patch: Partial<FlightStep>): void; readOnly?: boolean }) {
+  const fallback = defaultOnFail(def);
   return (
     <div className="fl-form">
       <FlField label="Title" wide={false}>
@@ -224,14 +238,117 @@ export function StopForm({ step, def, onChange, readOnly }: { step: FlightStep; 
           onChange={(v) => onChange({ config: { ...step.config, [f.name]: v } })}
         />
       ))}
-      <FlField label="If it fails" wide>
+      <WhenField value={step.when || ""} readOnly={readOnly} onChange={(w) => onChange({ when: w || undefined })} />
+      <FlField label="If it fails" wide hint={def?.default_on_fail ? "Default for " + kindName(def) + ": " + ON_FAIL_LABEL[fallback] : undefined}>
         <Seg
           label="If it fails"
-          value={step.on_fail}
-          options={(Object.keys(ON_FAIL_LABEL) as OnFail[]).map((k) => ({ v: k, label: ON_FAIL_LABEL[k], disabled: readOnly }))}
+          value={step.on_fail || fallback}
+          options={(Object.keys(ON_FAIL_LABEL) as OnFail[]).map((k) => ({
+            v: k,
+            label: ON_FAIL_LABEL[k],
+            title: k === fallback ? "The default for this kind of stop" : undefined,
+            disabled: readOnly,
+          }))}
           onChange={(k) => !readOnly && onChange({ on_fail: k })}
         />
       </FlField>
+    </div>
+  );
+}
+
+/** "Only when": the stop's condition, one line, empty for none. ⓘ opens the
+ * grammar beside it (inline, never a native alert); the server checks what
+ * is typed 300 ms after the last keystroke — its error under the field — and
+ * on blur its canonical form replaces the text. An older server without the
+ * validator just keeps the text. */
+export function WhenField({ value, onChange, readOnly }: { value: string; onChange(v: string): void; readOnly?: boolean }) {
+  const [help, setHelp] = useState(false);
+  const [answer, setAnswer] = useState<{ text: string; res: WhenCheck | null } | null>(null);
+  const change = useRef(onChange);
+  change.current = onChange;
+  const checker = useRef<ReturnType<typeof whenChecker> | null>(null);
+  if (!checker.current)
+    checker.current = whenChecker({
+      check: checkWhen,
+      onResult: (text, res) => setAnswer({ text, res }),
+      onCanonical: (c) => change.current(c),
+    });
+  useEffect(() => () => checker.current?.cancel(), []);
+  const err = whenError(value, answer?.text === value ? answer.res : null);
+  return (
+    <FlField label="Only when" wide hint={err ? undefined : "Empty: always. ⓘ lists the conditions."}>
+      <span className="fl-when-row">
+        <input
+          type="text"
+          className={"fl-input fl-mono fl-when-input" + (err ? " fl-when-bad" : "")}
+          aria-label="Only when"
+          aria-invalid={err ? true : undefined}
+          value={value}
+          maxLength={WHEN_MAX}
+          placeholder="e.g. diff touches frontend/** and weekday"
+          spellCheck={false}
+          readOnly={readOnly}
+          onChange={(e) => {
+            if (readOnly) return;
+            onChange(e.target.value);
+            checker.current?.input(e.target.value);
+          }}
+          onFocus={() => checker.current?.focus()}
+          onBlur={(e) => !readOnly && checker.current?.blur(e.target.value)}
+        />
+        <button
+          type="button"
+          className="fl-icon-btn fl-when-help-btn"
+          aria-label="What can go here"
+          title="What can go here"
+          aria-expanded={help}
+          onClick={() => setHelp((h) => !h)}
+        >
+          ⓘ
+        </button>
+      </span>
+      {err && (
+        <span className="fl-when-error" role="alert">
+          {err}
+        </span>
+      )}
+      {help && <WhenHelp onClose={() => setHelp(false)} />}
+    </FlField>
+  );
+}
+
+/** The ⓘ popover: the grammar, one row per condition. */
+function WhenHelp({ onClose }: { onClose(): void }) {
+  return (
+    <div
+      className="fl-when-help"
+      role="dialog"
+      aria-label="Only when — the conditions"
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.stopPropagation();
+          e.preventDefault();
+          onClose();
+        }
+      }}
+    >
+      <div className="fl-when-help-top">
+        <strong>The stop flies only when…</strong>
+        <button type="button" className="fl-icon-btn" aria-label="Close" title="Close" autoFocus onClick={onClose}>
+          ✕
+        </button>
+      </div>
+      <dl className="fl-when-grammar">
+        {WHEN_GRAMMAR.map((r) => (
+          <div key={r.condition} className="fl-when-gram-row">
+            <dt>
+              <code>{r.condition}</code>
+            </dt>
+            <dd className="muted">{r.meaning}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="fl-note muted">{WHEN_COMBINE} A stop whose condition is false is skipped, never run.</p>
     </div>
   );
 }
