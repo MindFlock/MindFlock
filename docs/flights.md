@@ -3551,3 +3551,97 @@ The principles, made explicit (every surface below follows them):
   `renameFlight(id, name)`; Esc cancels.
 - The floating palette is a sky object like the intake lane (drag by head,
   corner size, assignSpots, Tidy forgets its spot, marquee ignores it).
+
+### As built: round 13 palette
+
+Source: `components/flights/StopShelf.tsx` (+ `.css`), `StopCatalog.tsx`
+(+ `.css`), `SkyPalette.tsx` (+ `.css`), `lib/stopCatalog.ts`; tests in
+`stopShelf.test.ts`, `stopShelfSaved.test.ts`, `stopCatalog.test.ts`,
+`skyPalette.test.ts`, `flightsButtons.test.ts`.
+
+**What the host passes.** Nothing here changes a drop: every chip and card
+still drags with the round-12 MIMEs and SkyView reads them as before.
+
+| Surface | Props the sky passes | What they do |
+|---|---|---|
+| `StopShelf` | `onPlace(drop)`, `onFloat()` (new, optional), and as before `onTack` / `onTackPlan` / `onSession` / `folded` / `onFold` | With `onPlace`, a chip click and the catalog's Add / Enter / double-click call `onPlace({kind} \| {planId})` — never `onTack` / `onTackPlan` (those stay for the pane's Flight tab, which passes no `onPlace`). `onFloat` shows the ⤢ beside the fold handle. |
+| `SkyPalette` | `onPlace`, `onDock`, `onSession`, `onHeadDown` + `draggable`, `onResize(w, h)`, `onMeasure(w, h)`, `width` / `height` (the layout entry's), `zoom` | Exactly the placeholder's interface — no prop was added. Without `onPlace` its chips only drag; without `onDock` no ⋯; without `onResize` no handle. |
+| `StopCatalog` | (opened by the two above) `place?: boolean` added | `place` only words the hints ("Add it to the board" / "puts it on the board"). |
+
+`CatalogDrop` is `{kind: string} | {planId: string}` (lib/stopCatalog). The
+host places a grounded line near the surface that asked (the contract's
+"Place near the palette"); the palette and shelf can't tell the host where
+they are beyond `onMeasure` and the layout entry the host already keeps.
+
+**Click = place.** `StopChip` / `SavedChip` take `onClick` and `place`; with
+`place` the button's label is "Put “Ship” on the board" and its title "Click
+to put it on the board, or drag it onto a line or the sky" (a perch, a saved
+stop alike). The shelf picks `clickKind = onPlace ? (kind) => onPlace({kind})
+: onTack` (and `clickPlan` likewise); its catalog `add` closes the catalog and
+returns `onPlace(d)` first.
+
+**The big catalog** (`StopCatalog`, still a `Modal` `#sky-catalog`, the
+drag-through-the-Modal rule unchanged): `.sky-catalog` is `92vw × 86vh`
+(held 8px inside the window; a phone ≤ 640px gets the whole screen), the head
+is the title, the filter (focused) and ×; the list (`.sky-own-scroll`, so
+the sky's wheel leaves it alone) holds **Blocks** and **Multi-step**, each a
+`.sky-catalog-grid` (`repeat(auto-fill, minmax(230px, 1fr))`) of
+`.sky-catalog-card`s (`role="option"`, draggable, `data-kind` / `data-plan`):
+
+- a kind's card: the icon tile (a perch round and gold), the name, the
+  `robot` / `you` badge, ★ / ☆ (with the shelf's pick), the summary (two
+  lines), and the **Add** (`test-btn`, on the picked / hovered card);
+- a saved stop's card: the name, a dashed `built-in` badge, ★ / ☆, a **⋯**
+  (the house `OverflowMenu`, flipping up against `#sky-catalog-list`), a row
+  of step boxes joined by a thread (`planDots`: a perch's round and gold, +N
+  past ten), the path "a → b → c" (`planPath`), and Add.
+
+The ⋯ (`cardMenu(plan, shelved)`): **Rename** (when `renamable` — every
+stored plan, built-ins too: the server keeps a renamed built-in a built-in;
+a depth cut `builtin:x@lane` is virtual, so it gets none) → the name turns
+into `PlanNameField` on the card; **★ / ☆ On the shelf**; **Reset to
+default** (a built-in → `resetPlan`) or **Delete** (yours → an
+`InlineConfirm` on the card → `deletePlan`; Esc answers the question before
+it closes the catalog). While renaming or asking, the card doesn't drag.
+
+Keys, with the focus in the filter: ↑ / ↓ a row (into the next section's
+first row and back, keeping the column), ← / → one card (only from the
+filter's edge, else they move the caret) — `gridMove(at, key, [blocks,
+multi], cols)`, the column count read from the laid-out grid; Enter adds the
+picked card; a double-click on a card adds it. The filter now also matches a
+saved stop's step titles ("push" finds the stops that push).
+
+**The card model** (lib/stopCatalog, pure): `catalogCards(kinds, plans,
+query)` → `{blocks: KindCard[], multi: PlanCard[], all}` (a card = `section`,
+`key` `kind:<k>` / `plan:<id>`, `drop`, `name`, and `perch` + `def` or
+`builtin` + `path` + `plan`); `gridMove`; `renamable`; `cardMenu`.
+
+**The floating palette** (`SkyPalette`): a `section.sky-palette`
+(`aria-label="Blocks palette"`, `data-tour="sky-palette"`), its frame
+`paletteFrame(width, height)` — 360 × 420 when the host keeps none, never
+under 240 × 200. The head (`.sky-palette-head`, `data-sky-head`; `.movable`
++ "Drag to move the blocks" when `draggable && onHeadDown`; a press on its
+buttons / ⋯ never moves it): **Blocks**, a count (the kinds and saved stops
+on it), **All blocks…** (`test-btn`, opens the same catalog with
+`place`), a ⋯ → **Dock at the bottom** (`onDock`). The body
+(`.sky-palette-body.sky-own-scroll`): the Blocks region (Session, the
+picked kinds) and the Multi-step region (the picked saved stops), each a grid
+(`minmax(108px, 1fr)`; a saved stop spans two columns) of the shelf's own
+chips with `place`, right-click menus and Rename included, then a muted hint.
+The corner `.sky-palette-resize` is the intake lane's: pointer capture, the
+frame drawn live as `dragFrame(start, dx, dy, zoom)` (the delta over the
+zoom, clamped), `onResize(w, h)` on release; the arrow keys on the focused
+handle size it 20px a press. A ResizeObserver reports `onMeasure(w, h)`
+(plane px, as offsetWidth / offsetHeight). Esc does nothing special.
+
+**What moved where.** The chips (`StopChip`, `SessionChip`, `SavedChip`),
+the pick (`useShelfPick`) and a saved stop's right-click menu with its
+Rename / Takes off… / Reset / Delete (`useSavedActions` → `confirm`,
+`overlays`) are exported from StopShelf.tsx; the rename field is
+`PlanNameField` in StopCatalog.tsx (the shelf's chips, the palette's and the
+catalog's cards all use it — `checkRename`, then `savePlan`). `useShelfPick`
+stores `mf_sky_shelf` and fires `mf:sky-shelf` on window with the new pick
+(and listens for it and for `storage`), so the shelf, the palette and an
+open catalog always show the same pick. The shelf's fold handle now sits in
+`.sky-shelf-tabs` (absolute over the shelf's top edge) next to the ⤢
+`.sky-shelf-fold.sky-shelf-float` (the same quiet tab).
