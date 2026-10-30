@@ -793,7 +793,8 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
               )}
               {tools && n.kind === "stop" && here && !n.editable && (
                 <div className="fl-tools" role="toolbar" aria-label={"Halt or carry on at “" + n.title + "”"} data-no-drag onClick={(e) => e.stopPropagation()}>
-                  {hold && (
+                  {/* Halt now on the line of a host that marks halt points (its menu has it on any line). */}
+                  {hold && p.onToggleHalt && (
                     <button
                       type="button"
                       className={"fl-icon-btn fl-tool fl-tool-" + hold.key}

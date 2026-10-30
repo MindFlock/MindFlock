@@ -212,12 +212,16 @@ export function removeTool(n: DiagramNode, here = false): StopMenuItem {
   return { key: "remove", label: "Remove", title: "Take this stop off the line (Delete)", danger: true };
 }
 
-/** A group box's menu: its dialog, open / fold its sub-steps on the line,
- * its halt point, Remove (the whole group). Earlier / Later wait for a later
+/** A group box's menu: Halt now / Carry on while the flight is in it, its
+ * dialog, open / fold its sub-steps on the line, its halt point, Remove (the
+ * whole group). Earlier / Later wait for a later
  * round (a group does not move yet). */
 function groupItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
   const { can } = ctx;
   const items: StopMenuItem[] = [];
+  // The flight is in it: Halt now / Carry on.
+  const hold = ctx.here && ctx.live && FLIGHT_HERE.has(n.state) ? flightHold(n) : null;
+  if (hold) items.push(hold);
   if (can.edit) items.push({ key: "edit", label: n.editable ? "Edit" : "Details", title: "Open this stop and its sub-steps (Enter)" });
   if (can.group)
     items.push(

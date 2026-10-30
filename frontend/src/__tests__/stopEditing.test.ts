@@ -118,9 +118,11 @@ describe("where a stop chip dropped on the line lands", () => {
     expect(dropGapFor(boxes, { x: 240, y: 30 }, 0, false)).toBe(2);
   });
 
-  it("knows a stop chip from anything else dragged", () => {
+  it("knows a stop chip, and a saved stop, from anything else dragged", () => {
     expect(isStopDrag([STOP_MIME, "text/plain"])).toBe(true);
-    expect(isStopDrag(["application/x-mindflock-flyway"])).toBe(false);
+    // Round 11: a saved stop from the shelf (FLYWAY_MIME) tacks on as a group.
+    expect(isStopDrag(["application/x-mindflock-flyway"])).toBe(true);
+    expect(isStopDrag(["text/plain"])).toBe(false);
     expect(isStopDrag(null)).toBe(false);
   });
 });
@@ -171,17 +173,26 @@ describe("a box's right-click menu", () => {
     expect(keys(node({ editable: true }), { ...all, can: { remove: true } })).toEqual(["remove"]);
   });
 
-  it("the flight's current stop: its own parts, and that it can't change", () => {
-    expect(keys(node({ state: "perched" }))).toEqual(["done", "skip", "note"]);
-    expect(keys(node({ state: "halted" }))).toEqual(["retry", "skip", "note"]);
-    expect(keys(node({ state: "current" }))).toEqual(["skip", "note"]);
+  it("the flight's current stop: its own parts, its dialog (read-only), and that it can't change", () => {
+    expect(keys(node({ state: "perched" }))).toEqual(["done", "skip", "edit", "note"]);
+    expect(keys(node({ state: "halted" }))).toEqual(["retry", "skip", "edit", "note"]);
+    expect(keys(node({ state: "current" }))).toEqual(["skip", "edit", "note"]);
+    expect(menuItemsFor(node({ state: "current" }), all).find((i) => i.key === "edit")!.label).toBe("Details");
     expect(menuItemsFor(node({ state: "current" }), all).at(-1)!.label).toBe("The flight is here — it can't change now");
-    // No flight to act on: the note alone.
-    expect(keys(node({ state: "perched" }), { ...all, live: false })).toEqual(["note"]);
+    // Where the flight is: Remove halts it there.
+    expect(menuItemsFor(node({ state: "current" }), { ...all, here: true }).find((i) => i.key === "remove")).toMatchObject({ label: "Remove — the flight halts here", danger: true });
+    // No flight to act on: its dialog and the note.
+    expect(keys(node({ state: "perched" }), { ...all, live: false })).toEqual(["edit", "note"]);
   });
 
-  it("a stop that has flown says so", () => {
-    for (const state of ["done", "skipped", "failed"] as const) expect(menuItemsFor(node({ state }), all)).toEqual([expect.objectContaining({ key: "note", label: "This stop has flown", note: true })]);
+  it("a stop that has flown says so, opens read-only and comes off the line", () => {
+    for (const state of ["done", "skipped", "failed"] as const) {
+      expect(keys(node({ state }))).toEqual(["edit", "remove", "note"]);
+      expect(menuItemsFor(node({ state }), all).find((i) => i.key === "remove")!.label).toBe("Remove from the line");
+      expect(menuItemsFor(node({ state }), all).at(-1)).toEqual(expect.objectContaining({ key: "note", label: "This stop has flown", note: true }));
+    }
+    // Not on a line with no flight to take it off.
+    expect(keys(node({ state: "done" }), { ...all, live: false })).toEqual(["edit", "note"]);
   });
 
   it("the trailing + tacks a stop on; a session box opens", () => {
@@ -197,7 +208,7 @@ describe("a box's right-click menu", () => {
     expect(html).toContain('role="menu"');
     expect(html).toContain('aria-label="Push — what you can do"');
     expect(html).toContain("left:40px;top:12px");
-    expect(html.match(/<button[^>]*role="menuitem"/g)).toHaveLength(2);
+    expect(html.match(/<button[^>]*role="menuitem"/g)).toHaveLength(3);
     expect(html).toMatch(/class="fl-stopmenu-note" role="menuitem" aria-disabled="true"[^>]*>The flight is here/);
     expect(html).not.toContain("<select");
   });
@@ -280,22 +291,29 @@ describe("halt points", () => {
 
   it("the flight's current stop: Halt now while it flies or waits on you, Carry on while held", () => {
     const here = { ...all, here: true };
-    expect(keys(node({ state: "perched", step: push }), here)).toEqual(["pause", "done", "skip", "halt", "note"]);
-    expect(keys(node({ state: "current", step: push }), here)).toEqual(["pause", "skip", "halt", "note"]);
+    expect(keys(node({ state: "perched", step: push }), here)).toEqual(["pause", "done", "skip", "halt", "edit", "remove", "note"]);
+    expect(keys(node({ state: "current", step: push }), here)).toEqual(["pause", "skip", "halt", "edit", "remove", "note"]);
     expect(labels(node({ state: "current", step: push }), here)[0]).toBe("Halt now");
-    expect(keys(node({ state: "paused", step: halting(push) }), here)).toEqual(["resume", "skip", "halt", "note"]);
-    expect(labels(node({ state: "paused", step: halting(push) }), here)).toEqual(["Carry on", "Skip", "Carry on past here", "The flight is here — it can't change now"]);
+    expect(keys(node({ state: "paused", step: halting(push) }), here)).toEqual(["resume", "skip", "halt", "edit", "remove", "note"]);
+    expect(labels(node({ state: "paused", step: halting(push) }), here)).toEqual([
+      "Carry on",
+      "Skip",
+      "Carry on past here",
+      "Details",
+      "Remove — the flight halts here",
+      "The flight is here — it can't change now",
+    ]);
     // Halted by a failure: Retry, not Carry on.
-    expect(keys(node({ state: "halted", step: push }), here)).toEqual(["retry", "skip", "halt", "note"]);
-    // Not the current stop: no Halt now (as before).
-    expect(keys(node({ state: "perched", step: push }))).toEqual(["done", "skip", "note"]);
+    expect(keys(node({ state: "halted", step: push }), here)).toEqual(["retry", "skip", "halt", "edit", "remove", "note"]);
+    // Not the current stop: no Halt now (as before), no Remove.
+    expect(keys(node({ state: "perched", step: push }))).toEqual(["done", "skip", "edit", "note"]);
     // Never in the UI: "pause" or "breakpoint" as a word.
     for (const st of ["current", "paused", "perched"] as const)
       for (const i of menuItemsFor(node({ state: st, step: push }), here)) expect(i.label + i.title).not.toMatch(/pause|breakpoint/i);
   });
 
   it("a stop that has flown can't be a halt point", () => {
-    for (const state of ["done", "skipped", "failed"] as const) expect(keys(node({ state, step: push }), { ...all, here: true })).toEqual(["note"]);
+    for (const state of ["done", "skipped", "failed"] as const) expect(keys(node({ state, step: push }), { ...all, here: true })).toEqual(["edit", "remove", "note"]);
   });
 
   it("the badge: on a halt point only, saying the flight stops there", () => {
@@ -342,17 +360,25 @@ describe("halt points", () => {
       expect(cur).toContain('role="toolbar" aria-label="Halt or carry on at “Push”"');
       expect(cur).toMatch(/aria-label="Halt now — “Push”" title="Stop the flight where it is[^"]*">⏹</);
       expect(cur).toContain('aria-label="Halt here — “Push”"');
-      // The current stop's own toolbar never edits it.
-      expect(cur).not.toContain("Remove “Push”");
-      // A stop that has flown: nothing.
-      expect(boxOf(html, "stop:s1")).not.toContain("fl-tools");
+      // The current stop's own toolbar never edits it — it can only come off.
+      expect(cur).not.toContain("Edit “Push”");
+      expect(cur).toMatch(/aria-label="Remove “Push” — the flight halts here" title="Remove this stop — the flight halts right before the stop that followed it">🗑</);
+      // A stop that has flown: 🗑 alone.
+      const flown = boxOf(html, "stop:s1");
+      expect(flown).toContain('aria-label="Remove “Work the ticket” from the line"');
+      expect(flown).not.toContain("Halt here");
+      expect(flown).not.toContain("Edit “");
     });
 
-    it("without onToggleHalt: no Halt here, and the current stop wears no toolbar (no headroom asked)", () => {
+    it("without onToggleHalt: no Halt here; without onRemove either, the current stop wears no toolbar (no headroom asked)", () => {
       const { onToggleHalt: _omit, ...rest } = handlers;
       const html = render({ diagram: flightDiagram(flight({ cursor: 1 }), KINDS), ...rest });
       expect(html).not.toContain("Halt here");
-      expect(boxOf(html, "stop:s2")).not.toContain("fl-tools");
+      // Remove alone.
+      expect(boxOf(html, "stop:s2")).toContain("Remove “Push” — the flight halts here");
+      expect(boxOf(html, "stop:s2")).not.toContain("Halt now");
+      const bare = render({ diagram: flightDiagram(flight({ cursor: 1 }), KINDS), onSelect: () => {} });
+      expect(boxOf(bare, "stop:s2")).not.toContain("fl-tools");
       // Its right-click menu still has Halt now.
       expect(menuItemsFor(flightDiagram(flight({ cursor: 1 }), KINDS).nodes[1], { can: {}, live: true, here: true }).map((i) => i.label)).toContain("Halt now");
     });
