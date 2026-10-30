@@ -19,7 +19,7 @@ import { PathField } from "../PathField";
 import { useAgentChoices } from "../settings/screens/AgentPicker";
 import { cronPreviewLine } from "../dialogs/TemplateEditor";
 import { ChipRow, FlField, Seg, TextField, Toggle } from "./controls";
-import "./FlywayInspector.css";
+import "./StopParts.css";
 import "./TakeoffDialog.css";
 
 const DAYS: ReadonlyArray<{ v: WhenForm["days"]; label: string }> = [

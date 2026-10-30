@@ -1,6 +1,6 @@
 /* A stop's dialog (StopDialog.tsx): the same card as #rename-form
    (smallDialogs.css), wider for a stop's fields. The fields keep the
-   inspector's look (.fl-form, FlywayInspector.css). */
+   inspector's look (.fl-form, StopParts.css). */
 
 .stop-dialog {
   background: var(--panel);

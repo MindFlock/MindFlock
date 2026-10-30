@@ -175,7 +175,7 @@ describe("the grounded line", () => {
 
   it("edits through the flight routes, as a session's line does — every stop can change", () => {
     const src = code("components/flights/useGroundedLine.tsx");
-    for (const f of ["dropStop(id, step.id)", "moveStop(flight.id, step.id, to)", "tackOn(flight.id, step, where(at))", "tackOnPlan(flight.id, plan.id, where(at))", "setHalt(flight.id, step.id, !step.halt)", "patchStop(flight.id, draft.id,"])
+    for (const f of ["dropStop(id, step.id)", "moveStop(flight.id, step.id, to)", "tackOn(flight.id, step, where(at))", "tackOnPlan(flight.id, plan.id, where(at))", "setHalt(flight.id, step.id, !step.halt)", "patchStop(flight.id, step.id, patch)", "<StopDialog"])
       expect(src).toContain(f);
     expect(readDrop("ship")).toEqual({ kind: "ship" });
     expect(readDrop({ planId: "p_1" })).toEqual({ planId: "p_1" });

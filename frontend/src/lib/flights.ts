@@ -348,7 +348,7 @@ export function waitingAuto(
   return status.issues_enabled === true;
 }
 
-/** The built-in flyway a kind's flights use when its source names none. The
+/** The built-in saved stop a kind's flights use when its source names none. The
  * contract has no issue built-in: an issue is worked like a ticket. */
 export function builtinPlanFor(kind: WaitingKind | TriggerKind, plans?: readonly Pick<FlightPlan, "id">[] | null): string {
   const own =
@@ -429,11 +429,11 @@ export function planDirty(a: FlightPlan | null, b: FlightPlan | null): boolean {
   return strip(a) !== strip(b);
 }
 
-/** A blank manual flyway for "+ New flyway". */
+/** A blank manual saved stop (the shelf's "New stops"). */
 export function blankPlan(): FlightPlan {
   return {
     id: "",
-    name: "New flyway",
+    name: "New stops",
     description: "",
     builtin: false,
     trigger: { kind: "manual", schedule: null, paused: false },
@@ -454,7 +454,7 @@ export function planFromSteps(
   trigger?: FlightPlan["trigger"]
 ): Omit<FlightPlan, "id" | "updated"> {
   return {
-    name: name.trim() || "New flyway",
+    name: name.trim() || "New stops",
     description: "",
     builtin: false,
     trigger: trigger ? { ...trigger } : { kind: "manual", schedule: null, paused: false },
@@ -561,7 +561,7 @@ export function planChoices(
   const builtin = plans.find((p) => p.id === builtinPlanFor(kind, plans));
   const ordered = [...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)];
   const out: Array<{ value: string; label: string; builtin?: boolean }> = [
-    { value: "", label: "Default · " + (builtin?.name || "built-in flyway") },
+    { value: "", label: "Default · " + (builtin?.name || "built-in stops") },
   ];
   for (const p of ordered) out.push({ value: p.id, label: p.name, builtin: p.builtin });
   if (value && !plans.some((p) => p.id === value)) out.push({ value, label: value + " (not found)" });

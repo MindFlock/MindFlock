@@ -223,17 +223,13 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   // A rename redraws the line (its name is read through windowName).
   useUi((s) => s.aliases[p.title]);
   const name = windowName(p.title);
-  // What has flown stays as boxes until this line folds it into one pill.
-  // Both options are passed explicitly, so the line reads the same whatever
-  // the diagram's own default is (`expandFlown` = not folded).
-  const [foldFlown, setFoldFlown] = useState(false);
-  const folded = useMemo(() => sessionDiagram(p.rows, p.title, { flights, kinds, family: true, expandFlown: false }), [p.rows, p.title, flights, kinds]);
+  // What has flown stays as boxes until this line folds it into one pill
+  // (`line.foldFlown`): the hook draws the diagram with the fold and the
+  // open groups, and its canvas already speaks drawn places.
+  const { foldFlown, setFoldFlown } = line;
+  const folded = useMemo(() => sessionDiagram(p.rows, p.title, { flights, kinds, family: true, foldFlown: true }), [p.rows, p.title, flights, kinds]);
   const folds = flownCount(folded) > 0;
-  const full = useMemo(
-    () => (foldFlown ? folded : sessionDiagram(p.rows, p.title, { flights, kinds, family: true, expandFlown: true })),
-    [foldFlown, folded, p.rows, p.title, flights, kinds]
-  );
-  const shown = flownCanvas(full, line.canvas);
+  const shown = { diagram: line.diagram, canvas: line.canvas };
   // Workers' open cards, by the worker's title (their pane sizes with them).
   const [kids, setKids] = useState<Record<string, { w: number; h: number }>>({});
   const rootRef = useRef<HTMLDivElement>(null);
@@ -412,7 +408,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
     { key: "close", label: "Close session", danger: true, className: "skl-mi-group", title: "Stops the agent and moves it to Recently closed", onSelect: () => void closeSession(p.title) },
   ];
   // Where the flight is, in words (the bar's second voice).
-  const where = row ? lineWhere(full) : "";
+  const where = row ? lineWhere(shown.diagram) : "";
 
   return (
     <div
@@ -493,7 +489,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
               diagram={shown.diagram}
               label={"What " + name + " is doing and will do"}
               vertical={false}
-              bird={birdPerch(full)}
+              bird={birdPerch(shown.diagram)}
               className="sky-canvas skl-canvas"
               size={size}
               detailOf={detailOf}

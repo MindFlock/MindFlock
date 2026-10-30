@@ -15,7 +15,7 @@ import { describeSteps } from "../../lib/flightsApi";
 import { StopIcon } from "./Bird";
 import { FlField, NumberField, PromptBox, Seg, TextField, Toggle } from "./controls";
 import "./Flights.css";
-import "./FlywayInspector.css";
+import "./StopParts.css";
 
 /** A kind's name as the palette and the inspector say it: a `you` stop is a
  * perch (an older server still calls it "You"). */

@@ -19,8 +19,8 @@
  * Enter, a double-click): a pending one is edited there; done and current
  * ones read there.
  *
- * With nothing on the line yet the tab also offers the flyways as cards
- * ("Fly this flyway") and "Describe a flyway…" to make one from a sentence
+ * With nothing on the line yet the tab also offers the saved stops as cards
+ * ("Fly these stops") and "Describe stops…" to make some from a sentence
  * and fly it right away. The line's editing (the +, the palette, the
  * dialog) is useSessionLine's, shared with the Sky's lines; "Open in the
  * Sky" shows this session's line there (`#sky/<title>`). */
@@ -41,7 +41,7 @@ import { useSessionLine } from "./useSessionLine";
 import { Bird } from "./Bird";
 import "./Flights.css";
 
-/** One flyway as a card: its name, its stops as tiny boxes, "Fly this flyway". */
+/** One saved stop as a card: its name, its stops as tiny boxes, "Fly these stops". */
 function FlywayCard({ plan, kinds, onFly, busy }: { plan: FlightPlan; kinds: readonly StepKindDef[]; onFly(): void; busy: boolean }) {
   const d = flywayDiagram(plan.steps, kinds);
   return (
@@ -61,7 +61,7 @@ function FlywayCard({ plan, kinds, onFly, busy }: { plan: FlightPlan; kinds: rea
           ))}
       </ol>
       <button type="button" className="btn-primary fl-btn" disabled={busy} onClick={onFly}>
-        Fly this flyway
+        Fly these stops
       </button>
     </div>
   );
@@ -105,7 +105,7 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
         ) : (
           <>
             <strong>No flight yet</strong>
-            <span className="muted">tack a stop onto the line, or fly a flyway below</span>
+            <span className="muted">tack a stop onto the line, or fly a saved stop below</span>
           </>
         )}
         <button
@@ -122,8 +122,8 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
       {line.palette}
       {line.inspector}
       {!hasSessionDiagram(rows, title) && (
-        <section className="fl-flyway-cards" aria-label="Fly a flyway">
-          <h4 className="fl-group-head">Fly a flyway</h4>
+        <section className="fl-flyway-cards" aria-label="Saved stops">
+          <h4 className="fl-group-head">Saved stops</h4>
           {ordered.length ? (
             <div className="fl-flyway-grid">
               {ordered.map((p) => (
@@ -131,20 +131,20 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
               ))}
             </div>
           ) : (
-            <p className="fl-note muted">No flyways on this server yet.</p>
+            <p className="fl-note muted">No saved stops on this server yet.</p>
           )}
           <DescribeField
             want="plan"
             taken={[]}
-            button="Describe a flyway"
-            placeholder="Describe a flyway… e.g. push, open a PR, wait for reviews, then ask me before merging"
+            button="Describe stops"
+            placeholder="Describe the stops… e.g. push, open a PR, wait for reviews, then ask me before merging"
             onStops={async (steps) => {
               setBusy(true);
               try {
                 const words = steps.map((s) => s.title).join(" → ");
                 const plan = await savePlan({
                   id: "",
-                  name: words.length > 60 ? words.slice(0, 59) + "…" : words || "Described flyway",
+                  name: words.length > 60 ? words.slice(0, 59) + "…" : words || "Described stops",
                   description: "",
                   builtin: false,
                   trigger: { kind: "manual", schedule: null, paused: false },

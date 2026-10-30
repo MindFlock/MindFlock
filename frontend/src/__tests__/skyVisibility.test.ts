@@ -344,7 +344,7 @@ describe("a line in the sky", () => {
     expect(html).toContain('data-node="stop:s1"');
     expect(code("components/flights/SkyLine.tsx")).toMatch(/\n\s+roomy\n/);
     // A press on the pill unfolds the line.
-    expect(code("components/flights/SkyLine.tsx")).toMatch(/if \(n\.kind === "flown"\) setExpandFlown\(\(x\) => !x\)/);
+    expect(code("components/flights/SkyLine.tsx")).toMatch(/if \(n\.kind === "flown"\) setFoldFlown\(\(x\) => !x\)/);
   });
 
   it("the ⋯ in groups: the session │ the boxes and the line │ what flies │ closing", () => {
@@ -358,16 +358,16 @@ describe("a line in the sky", () => {
       "Compact boxes",
       "Normal boxes",
       "Wide boxes",
-      // Nothing folds by default, so no "Show every flown stop" (SkyLine's
-      // "Fold flown stops" is its own worker's, round 11).
+      // Nothing folds by default; the line offers to fold what has flown.
+      "Fold flown stops",
       "Pin here",
-      "Fly a flyway…",
+      "Add a stop…",
       "Tack on a stop",
       "Close session",
     ]);
     const cls = Object.fromEntries(labels);
     expect(cls["Compact boxes"]).toContain("skl-mi-group");
-    expect(cls["Fly a flyway…"]).toContain("skl-mi-group");
+    expect(cls["Add a stop…"]).toContain("skl-mi-group");
     expect(cls["Close session"]).toContain("skl-mi-group");
     expect(cls["Close session"]).toContain("vf-menu-danger");
     // The box size this line wears carries the check.

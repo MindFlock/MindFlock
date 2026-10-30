@@ -75,7 +75,7 @@ describe("the top-bar item", () => {
     // fitTopBar); its tooltip is the one the ⋯ row wears too.
     expect(btn).toContain('className={"tb-item" + (isFolded("schedule") ? " tb-folded" : "")}');
     expect(btn).toContain("title={scheduleTitle}");
-    expect(TOPBAR).toMatch(/const scheduleTitle =\s*"Schedule — templates and scheduled flyways; starts sessions on a timer" \+\s*keys\("schedule"\)/);
+    expect(TOPBAR).toMatch(/const scheduleTitle =\s*"Schedule — templates and scheduled stops; starts sessions on a timer" \+\s*keys\("schedule"\)/);
     expect(btn).toContain('ui.openDialogFor("schedule")');
     // A count only for failures, in the failure red, nothing at zero.
     expect(btn).toContain('{schedFailing > 0 && <span className="tb-count is-failing">{schedFailing}</span>}');

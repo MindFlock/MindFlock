@@ -168,7 +168,7 @@ export function TopBar() {
   // One tooltip per item, worn by the bar button and by its row in ⋯ alike.
   const verifyTitle = "Verify — " + VERIFY_BLURB + keys("verify") + "\n" + verifyCountLine(due, failing);
   const scheduleTitle =
-    "Schedule — templates and scheduled flyways; starts sessions on a timer" +
+    "Schedule — templates and scheduled stops; starts sessions on a timer" +
     keys("schedule") +
     (schedFailing > 0
       ? "\n" +
@@ -481,7 +481,7 @@ export function TopBar() {
             {due > 0 && <span className={"tb-count" + (failing > 0 ? " is-failing" : "")}>{due}</span>}
           </button>
           )}
-          {/* Schedule: what starts by itself (templates, and flyways with a
+          {/* Schedule: what starts by itself (templates, and saved stops with a
               schedule). Before it had a slot here, the only ways in were the
               palette and New's strip — the owner couldn't find it. */}
           {shows.schedule && (

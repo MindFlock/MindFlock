@@ -17,7 +17,7 @@ vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
 
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 const { IntakeLane, flyLaneItem } = await import("../components/flights/IntakeLane");
-const { NewSessionBlock, cardKey, promptKey, flyBlocked, flywayChoices, repoChoices } = await import("../components/flights/NewSessionBlock");
+const { NewSessionBlock, cardKey, promptKey, flyBlocked, savedStopChoices, repoChoices } = await import("../components/flights/NewSessionBlock");
 const { collectQueued } = await import("../components/intake/queue");
 
 (globalThis as Record<string, unknown>).document ??= {
@@ -160,15 +160,15 @@ describe("the new-session block", () => {
   const card = (prime: (c: InstanceType<typeof QueryClient>) => void = () => {}) =>
     withClient(createElement(NewSessionBlock, { x: 120, y: 80, plans: PLANS, onCreated: () => {}, onCancel: () => {} }), prime);
 
-  it("sits at (x, y): repository field with Browse…, the prompt box, flyway chips with No flyway first, Fly and Cancel", () => {
+  it("sits at (x, y): repository field with Browse…, the prompt box, stop chips with No stops first, Fly and Cancel", () => {
     const html = card();
     expect(html).toContain('style="left:120px;top:80px"');
     expect(html).toContain("Browse…");
     expect(html).toContain('class="fl-prompt sky-new-prompt"');
-    const flyway = html.slice(html.indexOf('class="fl-chiprow sky-new-flyway"'));
+    const flyway = html.slice(html.indexOf('class="fl-chiprow sky-new-stops"'));
     const chips = [...flyway.matchAll(/data-value="([^"]*)">([^<]+)</g)].map((m) => m[2]);
-    expect(chips.slice(0, 4)).toEqual(["No flyway", "Ticket to merge", "Review a PR", "Mine"]);
-    expect(flyway).toMatch(/aria-checked="true" class="fl-pick on fl-pick-default"[^>]*>No flyway</);
+    expect(chips.slice(0, 4)).toEqual(["No stops", "Ticket to merge", "Review a PR", "Mine"]);
+    expect(flyway).toMatch(/aria-checked="true" class="fl-pick on fl-pick-default"[^>]*>No stops</);
     expect(html).toContain(">Cancel</button>");
     expect(html).not.toContain("<select");
   });
@@ -206,21 +206,21 @@ describe("the new-session block", () => {
     expect(src).toContain("onKeyDown={(e) => promptKey(e, () => void fly())}");
   });
 
-  it("repository chips: recent first, one per path; flyway chips: built-ins first", () => {
+  it("repository chips: recent first, one per path; saved-stop chips: built-ins first", () => {
     const sug = [
       { path: "/h/near", name: "near", is_git: true, source: "nearby" },
       { path: "/h/app", name: "app", is_git: true, source: "recent" },
       { path: "/h/app", name: "app", is_git: true, source: "cwd" },
     ];
     expect(repoChoices(sug).map((c) => c.value)).toEqual(["/h/app", "/h/near"]);
-    expect(flywayChoices(PLANS).map((c) => c.value)).toEqual(["", "builtin:ticket", "builtin:pr", "p_mine"]);
+    expect(savedStopChoices(PLANS).map((c) => c.value)).toEqual(["", "builtin:ticket", "builtin:pr", "p_mine"]);
   });
 
-  it("creates through the New dialog's body builder, then takes off on the picked flyway; errors stay in the card", () => {
+  it("creates through the New dialog's body builder, then takes off on the picked saved stop; errors stay in the card", () => {
     const src = code("components/flights/NewSessionBlock.tsx");
     expect(src).toContain("newSessionSubmit(ctx).buildBody(");
     expect(src).toContain('api<Instance>("/api/instances", { json: body })');
-    expect(src).toContain('api("/api/flights/start", { json: { plan_id: plan, title } })');
+    expect(src).toContain("await startFlightOn(title, plan)");
     expect(src).toContain("onCreated(title);");
     expect(src).not.toMatch(/\balert\(|\bconfirm\(|window\.prompt/);
   });

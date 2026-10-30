@@ -175,9 +175,9 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
         : { label: "Switch to the Sky", hint: "Alt+Y", keywords: "view sky canvas lines bird board flock map flights", run: () => setView("sky") }
     );
     acts.push({
-      label: "Flyways…",
+      label: "Stops…",
       hint: "on the Sky's shelf",
-      keywords: "flights flyway plan stops perch canvas editor new",
+      keywords: "flights saved stops plan perch canvas shelf new",
       run: () => ui.showFlyways(),
     });
     // Customize and its tabs: the extras you opt into.

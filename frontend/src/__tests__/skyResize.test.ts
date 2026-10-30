@@ -228,10 +228,11 @@ describe("flown stops and the ⋯'s words", () => {
     expect(menu(html)).toContain("Fold flown stops");
   });
 
-  it("asks the diagram for both, whatever its default", () => {
+  it("draws the hook's diagram (the fold and the open groups are its), and asks it what a fold would hide", () => {
     const src = code("components/flights/SkyLine.tsx");
-    expect(src).toContain("{ flights, kinds, family: true, expandFlown: false }");
-    expect(src).toContain("(foldFlown ? folded : sessionDiagram(p.rows, p.title, { flights, kinds, family: true, expandFlown: true }))");
+    expect(src).toContain("const { foldFlown, setFoldFlown } = line;");
+    expect(src).toContain("{ flights, kinds, family: true, foldFlown: true }");
+    expect(src).toContain("const shown = { diagram: line.diagram, canvas: line.canvas };");
     expect(src).toContain('if (n.kind === "flown") setFoldFlown((x) => !x);');
   });
 

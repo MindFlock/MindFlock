@@ -1,7 +1,7 @@
 /** A grounded flight's line, editable (docs/flights.md "Grounded flights"):
  * the stops that sit on the board with no session yet. It mirrors
  * useSessionLine — the trailing + and the + between two stops open the stop
- * palette, a stop opens in the inspector, Delete drops it at once (Undo in
+ * palette, a stop opens in its dialog (✎, Enter, a double-click), Delete drops it at once (Undo in
  * the toast), a drag (or ⇤ / ⇥) moves it, ⧉ duplicates it, ⏸ makes it a
  * halt point, a shelf chip dropped on the line is tacked on at the gap it
  * lands in (a saved stop as one group) — with one difference: nothing has
@@ -12,13 +12,15 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "../../lib/toast";
 import { newStep, type Flight, type FlightPlan, type FlightStep, type StepKindDef } from "../../lib/flights";
-import type { DiagramNode } from "../../lib/flightDiagram";
-import { dropStop, moveStop, patchStop, setHalt, tackOn, tackOnPlan } from "../../lib/flightsApi";
+import { collapseGroups, drawnCanvas, type DiagramNode } from "../../lib/flightDiagram";
+import { errMsg } from "../../lib/format";
+import { dropGroup, dropStop, moveStop, patchStop, patchStopGroup, savePlan, setHalt, tackOn, tackOnPlan, ungroupStops } from "../../lib/flightsApi";
 import { undoPayload } from "../../lib/stopEditing";
 import { groundedDiagram } from "../../lib/groundedLines";
 import type { FlywayCanvasProps } from "./FlywayCanvas";
-import { StopInspector, StopPalette } from "./StopParts";
-import { inspectorDef, orderedPlans } from "./useSessionLine";
+import { StopDialog } from "./StopDialog";
+import { StopPalette } from "./StopParts";
+import { inspectorDef, orderedPlans, shelfPlanFor } from "./useSessionLine";
 
 /** What a chip dropped on a line carries (the canvas's `onDropStop`): a stop
  * kind, or a saved stop's id. A bare string is the older canvas's kind. */
@@ -33,34 +35,38 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
   const { kinds, plans } = src;
   const [selected, setSelected] = useState<string | null>(null);
   const [paletteAt, setPaletteAt] = useState<number | null>(null);
-  const [draft, setDraft] = useState<FlightStep | null>(null);
+  // The open dialog (a node id), and the group's to go back to from a sub-step.
+  const [dialog, setDialog] = useState<{ id: string; back?: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [selectIndex, setSelectIndex] = useState<number | null>(null);
+  // Groups shown open (▸ / ▾), by group id.
+  const [expandedGroups, setExpandedGroups] = useState<ReadonlySet<string>>(() => new Set());
 
-  const diagram = useMemo(() => groundedDiagram(flight, kinds), [flight, kinds]);
+  const diagram = useMemo(() => collapseGroups(groundedDiagram(flight, kinds), expandedGroups), [flight, kinds, expandedGroups]);
   const kindOf = useMemo(() => new Map(kinds.map((k) => [k.kind, k])), [kinds]);
   const stops = diagram.nodes.filter((n) => n.kind === "stop");
   const end = flight.steps.length;
-  const sel = selected ? diagram.nodes.find((n) => n.id === selected) || null : null;
+  const find = (id: string | null | undefined): DiagramNode | null => (id ? diagram.nodes.find((n) => n.id === id) || null : null);
+  const sel = find(selected);
+  const open = dialog ? find(dialog.id) : null;
   const latest = useRef(flight);
   latest.current = flight;
 
-  // A stop just tacked on opens in the inspector once the flight has it.
+  // A stop just tacked on opens in its dialog once the flight has it.
   useEffect(() => {
     if (selectIndex === null) return;
     const n = stops.find((s) => s.index === selectIndex && s.step);
     if (!n) return;
     setSelected(n.id);
-    setDraft(n.step!);
+    setDialog({ id: n.id });
     setSelectIndex(null);
   }, [selectIndex, stops]);
 
+  // A box that left the line takes its dialog (and its selection) with it.
   useEffect(() => {
-    if (selected && !sel) {
-      setSelected(null);
-      setDraft(null);
-    }
-  }, [selected, sel]);
+    if (selected && !sel) setSelected(null);
+    if (dialog && !open) setDialog(null);
+  }, [selected, sel, dialog, open]);
 
   const where = (at: number | null) => (at !== null && at < end ? at : undefined);
 
@@ -102,21 +108,44 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
     return true;
   };
 
+  /** A whole group off the line (every sub-step, one toast). */
+  const removeGroup = async (n: DiagramNode): Promise<boolean> => {
+    const first = n.group?.steps[0];
+    if (!first) return false;
+    if (!(await dropGroup(flight.id, first.id))) return false;
+    toast("Removed “" + (n.group?.name || n.title) + "” — its " + (n.group?.steps.length || 0) + " stops");
+    return true;
+  };
+
+  const removeNode = (n: DiagramNode): Promise<boolean> => {
+    if (n.kind === "group") return removeGroup(n);
+    return n.step && n.index !== undefined ? removeStop(n.step, n.index) : Promise.resolve(false);
+  };
+
   const onSelect = (n: DiagramNode) => {
     setPaletteAt(null);
-    if (selected === n.id) {
-      setSelected(null);
-      setDraft(null);
-      return;
-    }
-    setSelected(n.id);
-    setDraft(n.step ? { ...n.step, config: { ...n.step.config } } : null);
+    setSelected(selected === n.id ? null : n.id);
   };
+
+  /** ✎, Enter, a double-click, the menu's Edit: the box's dialog. */
+  const onEdit = (n: DiagramNode) => {
+    setPaletteAt(null);
+    setSelected(n.id);
+    setDialog({ id: n.id });
+  };
+
+  const toggleGroup = (gid: string) =>
+    setExpandedGroups((g) => {
+      const next = new Set(g);
+      if (next.has(gid)) next.delete(gid);
+      else next.add(gid);
+      return next;
+    });
 
   /** The trailing +'s palette, open or shut (the ⋯'s "Add a stop…"). */
   const togglePalette = (open?: boolean) => {
     setSelected(null);
-    setDraft(null);
+    setDialog(null);
     const shown = paletteAt !== null && paletteAt >= end;
     setPaletteAt(open ?? !shown ? end : null);
   };
@@ -135,17 +164,20 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
     </div>
   );
 
-  const canvas: Pick<
+  const raw: Pick<
     FlywayCanvasProps,
-    "selected" | "onSelect" | "onOpen" | "onInsert" | "onRemove" | "onMove" | "onDuplicate" | "onToggleHalt" | "onDropStop"
+    "selected" | "onSelect" | "onEdit" | "onOpen" | "onInsert" | "onRemove" | "onMove" | "onDuplicate" | "onToggleHalt" | "onToggleGroup" | "onDropStop"
   > = {
-    selected: paletteAt !== null && paletteAt >= end ? "add" : selected,
+    selected: paletteAt !== null && paletteAt >= end ? "add" : dialog?.id || selected,
     onSelect,
+    onEdit,
     onOpen: (n) => {
       if (n.kind === "add") togglePalette();
+      else if (n.kind === "group" && n.group) toggleGroup(n.group.id);
     },
     onInsert: (at) => setPaletteAt(paletteAt === at ? null : at),
-    onRemove: (n) => n.step && n.index !== undefined && void removeStop(n.step, n.index),
+    onRemove: (n) => void removeNode(n),
+    onToggleGroup: toggleGroup,
     onMove: (from, to) => {
       const step = flight.steps[from];
       if (step && to >= 0 && to < flight.steps.length && to !== from) void moveStop(flight.id, step.id, to);
@@ -155,7 +187,7 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
       void tackOn(flight.id, n.step, where(n.index + 1));
     },
     onToggleHalt: (n) => {
-      const step = n.index !== undefined ? flight.steps[n.index] : undefined;
+      const step = n.kind === "group" ? n.group?.steps[0] : n.index !== undefined ? flight.steps[n.index] : undefined;
       if (step) void setHalt(flight.id, step.id, !step.halt);
     },
     // A stop kind, or a saved stop (as one group) — the canvas's new drop
@@ -172,6 +204,9 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
       else toast("There is no “" + d.kind + "” stop to add");
     },
   };
+  // Collapsed groups make the drawn places differ from the flight's indexes:
+  // the canvas speaks drawn places, the handlers above the flight's own.
+  const shown = drawnCanvas(diagram, raw);
 
   const palette: ReactNode =
     paletteAt !== null ? (
@@ -184,60 +219,94 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
       />
     ) : null;
 
-  const dirtyStop = !!draft && !!sel?.step && JSON.stringify(draft) !== JSON.stringify(sel.step);
-  const inspector: ReactNode =
-    sel && draft ? (
-      <StopInspector
-        step={draft}
-        def={inspectorDef(kindOf.get(draft.kind), draft)}
-        onChange={(p) => setDraft((d) => (d ? { ...d, ...p } : d))}
-        actions={
-          <>
-            <button
-              type="button"
-              className="btn-primary fl-btn"
-              disabled={!dirtyStop || busy}
-              onClick={async () => {
-                setBusy(true);
-                try {
-                  await patchStop(flight.id, draft.id, { title: draft.title, config: draft.config, on_fail: draft.on_fail });
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              Save stop
-            </button>
-            <button
-              type="button"
-              className="test-btn fl-btn danger"
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                try {
-                  if (sel.step && sel.index !== undefined && (await removeStop(sel.step, sel.index))) {
-                    setSelected(null);
-                    setDraft(null);
-                  }
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              Remove stop
-            </button>
-          </>
+  const close = () => setDialog(dialog?.back && find(dialog.back) ? { id: dialog.back } : null);
+  const act = async (f: () => Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await f();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  let inspector: ReactNode = null;
+  if (open && open.kind === "group" && open.group) {
+    const g = open.group;
+    inspector = (
+      <StopDialog
+        key={open.id}
+        node={open}
+        kindOf={kindOf}
+        busy={busy}
+        onClose={close}
+        onRename={(name) =>
+          act(async () => {
+            if (g.steps[0] && (await patchStopGroup(flight.id, g.steps[0].id, { name }))) setDialog(null);
+          })
+        }
+        onOpenSub={(sub) => setDialog({ id: sub.id, back: open.id })}
+        onRemoveSub={(sub) => void act(() => removeNode(sub))}
+        onUngroup={() =>
+          void act(async () => {
+            if (await ungroupStops(flight.id, g.id)) setDialog(null);
+          })
+        }
+        onSaveShelf={(name) =>
+          act(async () => {
+            const plan = shelfPlanFor(name, g.steps, g.plan_id, plans);
+            try {
+              const saved = await savePlan(plan);
+              toast((plan.id ? "Updated “" : "Saved “") + (saved?.name || name) + "” on the shelf");
+            } catch (err) {
+              toast("Saving to the shelf failed: " + errMsg(err), { error: true });
+            }
+          })
+        }
+        onRemove={() =>
+          void act(async () => {
+            if (await removeGroup(open)) setDialog(null);
+          })
         }
       />
-    ) : null;
+    );
+  } else if (open && open.kind === "stop" && open.step) {
+    const step = open.step;
+    inspector = (
+      <StopDialog
+        key={open.id}
+        node={open}
+        def={inspectorDef(kindOf.get(step.kind), step)}
+        busy={busy}
+        onClose={close}
+        onSave={(patch) =>
+          act(async () => {
+            if (await patchStop(flight.id, step.id, patch)) close();
+          })
+        }
+        onDuplicate={() => {
+          const at = open.index! + 1;
+          void tackOn(flight.id, step, at < end ? at : undefined);
+          close();
+        }}
+        onRemove={() =>
+          void act(async () => {
+            if (await removeNode(open)) close();
+          })
+        }
+      />
+    );
+  }
 
   return {
-    diagram,
+    diagram: shown.diagram,
     busy,
     togglePalette,
+    expandedGroups,
+    toggleGroup,
     editing: palette !== null || inspector !== null,
-    canvas,
+    canvas: shown.canvas,
     palette,
+    /** The open stop's dialog (StopDialog), or null. */
     inspector,
   };
 }

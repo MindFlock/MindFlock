@@ -85,13 +85,13 @@ describe("the keys", () => {
 
 describe("the palette", () => {
   const p = code("components/palette/CommandPalette.tsx");
-  it("Intake… / Verify… / Schedule… open the dialogs; Switch to the Sky / grid; Flyways… is the shelf", () => {
+  it("Intake… / Verify… / Schedule… open the dialogs; Switch to the Sky / grid; Stops… is the shelf", () => {
     expect(p).toContain('run: () => ui.openDialogFor("intake"),');
     expect(p).toContain('label: "Verify…"');
     expect(p).toContain('label: "Schedule…"');
     expect(p).toContain('label: "Switch to the Sky", hint: "Alt+Y"');
     expect(p).toContain('label: "Switch to the grid", hint: "Alt+Y"');
-    expect(p).toMatch(/label: "Flyways…",[\s\S]{0,200}run: \(\) => ui\.showFlyways\(\),/);
+    expect(p).toMatch(/label: "Stops…",[\s\S]{0,200}run: \(\) => ui\.showFlyways\(\),/);
     expect(p).not.toContain('label: "Flights…"');
     expect(p).not.toContain('"flights"');
   });
@@ -195,28 +195,28 @@ describe("flyways live in the Sky", () => {
     expect(useUi.getState().skyShelf).toBeNull();
   });
 
-  it("the sky opens its shelf and the flyway's card on the request; the drawer opens Verify / Intake directly", () => {
+  it("the sky opens its shelf and the saved stop's Takes off dialog on the request; the drawer opens Verify / Intake directly", () => {
     const sky = code("components/flights/SkyView.tsx");
     expect(sky).toContain("const shelfAsk = useUi((s) => s.skyShelf);");
     expect(sky).toContain("useUi.getState().takeSkyShelf();");
-    expect(sky).toContain('if (shelfAsk.plan === "new") setCard({ at: middle() });');
+    expect(sky).toContain("if (plan) setTakeoff(plan);");
     expect(sky).not.toContain("onTab=");
     const drawer = code("components/flights/SkyDrawer.tsx");
     expect(drawer).toContain('onOpen={(b) => openDialogFor("verify", b)}');
     expect(drawer).toContain('onClick={() => openDialogFor("intake")}');
   });
 
-  it("the card's ⋯ resets a built-in or deletes yours (asked inline), and carries the trigger", () => {
-    const card = code("components/flights/FlywayCard.tsx");
-    expect(card).toContain('label: "Reset to default"');
-    expect(card).toContain('label: "Delete flyway…"');
-    expect(card).toContain("<InlineConfirm");
-    expect(card).toContain("<FlywayTrigger plan={draft}");
-    expect(card).not.toMatch(/\bconfirm\(/);
+  it("a saved stop's chip menu resets a built-in or deletes yours (asked inline); Takes off… is a dialog", () => {
+    const shelf = code("components/flights/StopShelf.tsx");
+    expect(shelf).toContain('label: "Reset to default"');
+    expect(shelf).toContain('label: "Delete"');
+    expect(shelf).toContain("<InlineConfirm");
+    expect(shelf).not.toMatch(/\bconfirm\(/);
+    expect(code("components/flights/TakeoffDialog.tsx")).toContain("<TakeoffFields");
   });
 });
 
-describe("Schedule lists the scheduled flyways", () => {
+describe("Schedule lists the scheduled stops", () => {
   const NOW = new Date(2026, 9, 14, 9, 0);
   const at = (h: number) => new Date(2026, 9, 14, h, 0).getTime() / 1000;
   const plan = (over: Partial<FlightPlan> & { runs?: Record<string, unknown> }): FlightPlan =>
@@ -268,7 +268,7 @@ describe("Schedule lists the scheduled flyways", () => {
   it("a section of rows with a template's anatomy: name, schedule line, next run, last result — Fly now, Edit in the Sky", () => {
     const html = view(FLYWAYS);
     const sec = html.slice(html.indexOf('id="schedule-flyways"'));
-    expect(sec).toContain(">Scheduled flyways<");
+    expect(sec).toContain(">Scheduled stops<");
     expect([...sec.matchAll(/data-plan="([^"]+)"/g)].map((m) => m[1])).toEqual(["p_soon", "p_late", "p_held"]);
     const late = sec.slice(sec.indexOf('data-plan="p_late"'), sec.indexOf('data-plan="p_held"'));
     expect(late).toContain("Nightly deps");
@@ -289,7 +289,7 @@ describe("Schedule lists the scheduled flyways", () => {
 
   it("nothing scheduled hides the section — no heading, no empty state", () => {
     expect(view([FLYWAYS[0]])).not.toContain("schedule-flyways");
-    expect(view(null)).not.toContain("Scheduled flyways");
+    expect(view(null)).not.toContain("Scheduled stops");
   });
 
   it("Fly now takes off on the flyway; Edit in the Sky closes Schedule and opens its card on the shelf", () => {

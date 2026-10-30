@@ -3,7 +3,7 @@
  * flight strips and perch blocks, Verify's checklist rows, the waiting rows
  * with their kind badges, and the pane's strip and Flight tab. Flights are
  * drawn on the flyway canvas (FlywayCanvas.css); the stop palette, the
- * inspector and a flyway's trigger are FlywayInspector.css. (Until Sky round
+ * inspector and a flyway's trigger are StopParts.css. (Until Sky round
  * 8 this was FlightsDialog.css; the Flights dialog is retired.) Nothing here
  * scrolls the page sideways. */
 

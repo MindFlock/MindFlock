@@ -1,5 +1,5 @@
 /* "Takes off…" (TakeoffDialog.tsx): the trigger's form inside the app's Modal.
-   The fields' own look (.fl-form, .fl-schedule) is FlywayInspector.css's. */
+   The fields' own look (.fl-form, .fl-schedule) is StopParts.css's. */
 
 .fl-takeoff {
   width: min(560px, calc(100vw - 48px));

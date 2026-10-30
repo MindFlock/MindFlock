@@ -286,8 +286,8 @@ export function scheduledOrder(templates: Template[], status: Pick<TemplateRunsS
     .map((x) => x.t);
 }
 
-// --- Scheduled flyways ---------------------------------------------------------
-// A flyway whose trigger is a schedule starts itself like a template does
+// --- Scheduled saved stops ------------------------------------------------------
+// A saved stop whose trigger is a schedule starts itself like a template does
 // (docs/flights.md "Scheduled plans"), so Schedule lists it too — under its
 // own heading, the card anatomy a template's has (name, schedule line, next
 // run, last result), and two actions: Fly now, and Edit in the Sky (its card
@@ -757,7 +757,7 @@ export function TemplatesDialogView(p: ViewProps) {
               type="button"
               className="tpl-btn tpl-run sch-flyway-fly"
               disabled={!!p.flying}
-              title="Fly now — a flight takes off on this flyway in a new session"
+              title="Fly now — a flight takes off on these stops in a new session"
               onClick={() => p.onFlyFlyway?.(f)}
             >
               {p.flying === f.id ? "Taking off…" : "Fly now"}
@@ -765,7 +765,7 @@ export function TemplatesDialogView(p: ViewProps) {
             <button
               type="button"
               className="tpl-btn sch-flyway-edit"
-              title="Open its card on the Sky's flyway shelf — its stops and its schedule"
+              title="Open it on the Sky's Stops shelf — its stops and its schedule"
               onClick={() => p.onEditFlyway?.(f)}
             >
               Edit in the Sky
@@ -917,8 +917,8 @@ export function TemplatesDialogView(p: ViewProps) {
           {flywayList.length > 0 && (
             <section className="sch-section" id="schedule-flyways" aria-labelledby="schedule-flyways-h">
               <h3 id="schedule-flyways-h">
-                Scheduled flyways<span className="sch-count">{flywayList.length}</span>
-                <span className="sch-section-hint">flyways that take off by themselves</span>
+                Scheduled stops<span className="sch-count">{flywayList.length}</span>
+                <span className="sch-section-hint">saved stops that take off by themselves</span>
               </h3>
               {flywayList.map(flywayCard)}
             </section>
@@ -971,7 +971,7 @@ export function TemplatesDialog({ embedded = false, target: embeddedTarget = nul
   const [runs, setRuns] = useState<TemplateRunsStatus>(() => templateRunsNow());
   const [running, setRunning] = useState("");
   const [flagging, setFlagging] = useState("");
-  // Scheduled flyways (the plans with a schedule trigger) list here too.
+  // Scheduled stops (the plans with a schedule trigger) list here too.
   const flyways = useFlightPlans(open).data as ScheduledFlyway[] | null | undefined;
   const [flying, setFlying] = useState("");
   const [agents, setAgents] = useState<string[]>([]);
