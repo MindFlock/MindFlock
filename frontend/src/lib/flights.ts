@@ -360,6 +360,11 @@ export function fieldOptions(f: StepKindField): Array<{ value: string; label: st
 
 /** A new stop of a kind: its default title and every field's default. The id
  * is local until saved (the server keeps or reassigns it). */
+/** What a stop chip on the sky's shelf carries while dragged (its
+ * `dataTransfer`, the stop kind, e.g. "ship"): dropped on a line it is tacked
+ * on there — at the gap it lands in, else at the end. */
+export const STOP_MIME = "application/x-mindflock-stop";
+
 export function newStep(def: StepKindDef, taken: readonly string[]): FlightStep {
   const config: Record<string, unknown> = {};
   for (const f of def.fields) if (f.default !== undefined) config[f.name] = f.default;

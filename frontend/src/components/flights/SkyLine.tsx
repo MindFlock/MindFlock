@@ -244,6 +244,9 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
         (line.editing ? " is-editing" : "")
       }
       data-line={p.title}
+      // The sky's zoom, for CSS that counter-scales (a hover toolbar, the
+      // level of detail a box shows): `--sky-z` on every line.
+      style={{ "--sky-z": p.zoom || 1 } as React.CSSProperties}
       role="group"
       aria-label={p.title + "'s line"}
       onPointerDownCapture={() => {
