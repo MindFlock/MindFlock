@@ -4973,3 +4973,137 @@ same byte for byte with or without families (pinned in `stopFamilies.test.ts`).
 Not seen in a browser: no `npm run build` in this task (fenced, and the
 contract says not to), so the label row's look is checked by its CSS pins
 only.
+### As built: round 15 objects
+
+> Code: `frontend/src/lib/skyObjects.ts` (the registry), `SkyView.tsx` (one
+> loop: `objects`, `hostFor`, `objectFor`, the drag onto a block, the notes),
+> `lib/skyLayout.ts` (`LANDING_*`, `NOTE_*`, `BLOCK_*`, `rightColumn`),
+> `LandingStrip.tsx/.css`, `PeopleBlocks.tsx`, `DeviceBlocks.tsx`,
+> `StickyNote.tsx/.css`, `SkyObjects.css`, `api/skyApi.ts`; backend
+> `backend/web/core/landing.py`, `core/sky_notes.py`, `routes/sky.py`
+> (included from `server.py` next to the flights router). Tests:
+> `skyObjects.test.ts`, `landing.test.ts`, `tests/unit/test_landing.py`,
+> `tests/unit/test_sky_routes.py`; the round 12/13 pins in `skyIntake`,
+> `skyPalette`, `skyView`, `skyResize`, `skyStable`, `sky`, `skyMerge` still
+> hold.
+
+**The registry.** `SKY_OBJECTS: SkyObjectDef[]` has one entry per KIND —
+`{key, kind, place, min, max, className, accepts?, frame(stored),
+size(stored, measured), on(data), render(host)}` — in placement order:
+`intake` and `palette` (`place: "left"`: first in `assignSpots`, as before),
+`landing`, `device:` and `person:` (`place: "right"`: a column right of every
+line), `note:` (`place: "free"`: wherever it was put). `skyObjects(data)`
+expands the kinds into the objects on the board now (`on(data)` reads the
+view's mode, phone-ness, `intakeOn` / `paletteOn`, the links, the devices,
+the notes — a phone and This session have none but the lane). SkyView
+iterates that ONE list: the placement memo (`rightItems`, `rightColumn`,
+`notePos`), `lineAlive` (`objectById.has(id)` first), `rectOf`, `fitAll`,
+`spotRef`'s `taken`, and the plane (`{objects.map(objectFor)}`). Every object
+gets a `SkyObjectHost` — `{key, zoom, lod, layoutEntry, pos, draggable,
+selected, dragging, target, onHeadDown, onResize, onMeasure, onLayout, view,
+data}` — where `view` is the view's own data and handlers (`SkyObjectView`:
+rows, plans, the landing data, the links, the devices, the notes, `dropped`
+/ `answerDrop`, the note handlers, and `renderIntake` / `renderPalette`).
+The intake lane and the palette keep their JSX in SkyView (their props are
+the round 12/13 closures, pinned by those tests); the registry's `render`
+for them calls back into the view. The others render through the registry
+(`createElement`) inside a `.sky-object[data-object=<key>]` wrapper placed
+like a slot (`SkyObjects.css`: absolute, glides only under `data-tidying`,
+`is-dragging` / `is-selected` / `is-merge-target` from `objectClass`).
+`skyObjectOf` reads `data-object`; `skyTargetOf` takes any `[data-sky-head]`
+as a "line" press, so an object's head drags it on the line drag's own path
+(`onDragStart`, pinned where dropped; a click on it focuses no session —
+`isObjectKey(id)` returns before the focus).
+
+**The right column** (`rightColumn(placed, items)`): a newcomer with no spot
+goes just right of everything placed (`max(x + w) + SKY_GAP`), stacked from
+`SKY_MARGIN` with half a gap between — the strip, then the device blocks,
+then the people blocks. Its spot is kept like a line's (`fresh` → `autoPos`
+once measured), so a line that grows or arrives later never shoves it; Tidy
+forgets it and it is placed again.
+
+**The landing strip** (`LandingStrip`, key `landing`): the intake lane's
+chrome (`.sky-lane`, its head with `data-sky-head`, the ‹ fold to a rail
+remembered in `mf_sky_landing_folded`, the ▸/▾ expand on `open`, the corner
+`onResize` with the delta over the zoom, a ResizeObserver to `onMeasure`;
+its frame 220–1200 × 120–1600, `landingFrame`). One block per repo: the
+checks dot (`is-green` / `is-red` / `is-pending` / `is-none`, tooltip the
+head's short sha), the folder's name, the default branch, "merged 2h ago"
+(`mergeWords`), and **Landed today**: newest first, the session's NAME
+(`windowName`), "PR ↗" when there is a URL, three rows folded (`+N more —
+expand ▸`), every row expanded. Data from `useLandingData(enabled)`
+(`GET /api/sky/landing`, polled every minute, off in This session and on a
+phone). Backend `core/landing.py`: `repo_roots(instances)` (this machine's
+sessions' repo roots — never a `dev::` row or a `PeerShare` — distinct, in
+order, existing), `repo_facts(root)` (git only: `default_branch` from
+`origin/HEAD` else `main` / `master` else the checked-out branch;
+`branch_ref` prefers `origin/<branch>`; `head_of`; `last_merge_at` = the
+last merge commit's time, else the last commit's), `landed(flights, root,
+now)` (state `done`, `finished` within 24 h, `repo_root` = this root, the
+LAST DONE ship step's lane `merge`; `pr_url` from that step's detail
+`pr_url` / `url`), `checks_tone` (`pr_checks`'s ok / failed / pending →
+green / red / pending, none and unknown → none; a raised check reads none),
+and `landing(instances, flights, now)` cached one answer per set of repos
+for `CACHE_TTL_S` = 60 s — the only network call is the checks.
+
+**People blocks** (`PersonBlock`, key `person:<link id>`, from
+`usePeerLinks()` → `links`): the peer's name and a state dot (`verified` /
+`unverified` / `offline`), what the link already shares ("Shared · name" or
+"Shared · N sessions", from `fetchPeerSessions`, asked on mount and after a
+share). A session's line dragged ALONE (not grounded, not a selection)
+hit-tests the blocks that `accepts: "session"` on every move (`hitAt`); the
+block under the pointer wears `.is-merge-target`, the dragged slot
+`.is-merging`; a release over one does not pin the line — the block asks
+inline (`dropped[key] = title`): "Share “name” with Bob?", the mode radios
+(`MODE_CHOICES`), the "I understand" tick for a full share (`canShare`),
+Share / Cancel. The gates stay: `sas_verified` false → "Press It matches in
+People first" and no Share button; a title not in `shareableSessions` →
+refused with the reason. Share → `sharePeerSession(link_id, title, mode)`,
+the People screen's toast, `answerDrop(key)`. Esc cancels every open ask.
+
+**Device blocks** (`DeviceBlock`, key `device:<name>`, from `useDevices()`
+minus `self`): the host name, the connected dot, "os · N sessions". A line
+dropped asks inline: "Move “name” to mac-mini? Its agent pauses while it
+moves.", the "Even if it is mid-turn" tick (`force`), Move / Cancel; a
+device not connected refuses with the reason. Move →
+`moveSessionToDevice(title, device, force)` = the existing `POST
+/api/instances/{title}/move {device, force}`; a refusal shows the route's
+sentence (`moveErrorText`), and `bad_dest` — what a server that only moves
+folders on this machine answers — reads "This server can't move a session
+to another device yet" (`NO_DEVICE_MOVE`). **Open:** `core/move_session.py`
+moves folders on one machine and refuses other devices' rows; a `device`
+target (copy the worktree over, start it there, close it here) is backend
+work outside this task's fence — until it lands the block is honest about
+it.
+
+**Sticky notes** (`StickyNote`, key `note:<id>`): ⋯ (the toolbar's new
+`OverflowMenu`) → **Add a note** in the middle of the view, or a
+right-click on empty sky (`onContextMenu` → `.sky-ground-menu` at the
+pointer, closed by any press elsewhere or Esc) → one at the pointer; it
+opens in edit at once. A note is paper-yellow with a thin head
+(`data-sky-head`: drags it; a press focuses the note root, `tabIndex -1`), its
+text (a click edits: a textarea, blur saves through `changeNote`, Esc puts
+the text back, 2000 characters at most), a corner (`onResize` → the note's
+own `w` / `h`), and × / Delete / Backspace (SkyView's capture-phase Delete
+sees `.sky-note[data-note]` first and calls `removeNote`: gone, with a
+"Note removed" toast whose Undo puts it back). Notes are stored
+SERVER-SIDE: `useSkyNotesQuery()` reads `GET /api/sky/notes` once, the view
+keeps them (`notes`, `notesRef`) and `putNotes` replaces them with `PUT
+/api/sky/notes` 400 ms after the last change; `core/sky_notes.py` keeps
+`<flights dir>/sky_notes.json` (`normalize_notes`: junk dropped, ids made
+unique, `w`/`h` clamped 120–800, text capped, at most 500 notes; a non-list
+is a 400 `bad_notes`). A note's spot is its own `x` / `y` — never the
+layout store — so `place[note:<id>] = notePos(note, lineAt)`: free at its
+numbers, attached (`line`) relative to that line's spot, so it moves with
+the line (a line that is gone leaves it at its numbers). A note dragged
+alone hit-tests every line; released over one it attaches (`noteDropped`:
+the offset from the line's spot), elsewhere it sits free where it fell.
+Notes are not selectable by the marquee and are never on a phone or in
+This session. The palette's **Note chip** named by the contract belongs to
+the `palette-groups` task (SkyPalette is not this task's); the ⋯ and the
+right-click are the two ways in for now.
+
+**Not changed:** the marquee still takes only the lines and the lane
+(`selectables`); `SkySelection`'s Remove and Tidy these never see an object;
+the shelf chip drops (`lineAt`) ignore objects, so a chip dropped on the
+strip lands on empty sky under it.

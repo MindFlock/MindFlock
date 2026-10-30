@@ -121,6 +121,47 @@ export function catalogFrame(view: Rect, screen: { w: number; h: number }, z: nu
   return { x: Math.round(x), y: Math.round(y), w, h };
 }
 
+/** The landing strip (LandingStrip, layout key "landing", docs/flights.md "As
+ * built: round 15 objects"): placed right of every line, dragged by its head,
+ * sized by its corner in this range; its size before it measured itself. */
+export const LANDING_KEY = "landing";
+export const LANDING_W = 300;
+export const LANDING_H = 240;
+export const LANDING_MIN = { w: 220, h: 120 };
+export const LANDING_MAX = { w: 1200, h: 1600 };
+export const landingFrame = (stored: StoredLine | undefined) => objectFrame(stored, LANDING_MIN, LANDING_MAX);
+
+/** A sticky note (StickyNote, layout key "note:<id>"): its size when made,
+ * and the range its corner sizes it in. */
+export const NOTE_W = 200;
+export const NOTE_H = 120;
+export const NOTE_MIN = { w: 120, h: 70 };
+export const NOTE_MAX = { w: 800, h: 800 };
+export const noteFrame = (stored: StoredLine | undefined) => objectFrame(stored, NOTE_MIN, NOTE_MAX);
+
+/** A people / device block's size (PeopleBlocks, DeviceBlocks). */
+export const BLOCK_W = 200;
+export const BLOCK_H = 64;
+
+/** Where the objects placed RIGHT of every line go (the landing strip, then
+ * the device and people blocks): one column just right of everything already
+ * placed (`placed`: every line and object with a spot, at its size), `gap`
+ * clear of it, stacked from `top` with half a gap between. With nothing
+ * placed, the column starts where the first line would. The column's x is
+ * read once per newcomer — its spot is kept like a line's, so a line that
+ * grows or comes later never shoves it. */
+export function rightColumn(placed: readonly Rect[], items: readonly LineBox[], top = SKY_MARGIN, gap = SKY_GAP): Record<string, Pos> {
+  const right = placed.reduce((m, r) => Math.max(m, r.x + r.w), 0);
+  const x = placed.length ? right + gap : LINES_LEFT;
+  const out: Record<string, Pos> = {};
+  let y = top;
+  for (const it of items) {
+    out[it.id] = { x, y };
+    y += it.h + gap / 2;
+  }
+  return out;
+}
+
 /** Where a block of `size` lands when the palette places it (docs/flights.md
  * "Round 13": place, don't tack): the free spot nearest `want` (its top-left
  * with nothing in the way) that overlaps nothing `taken` (with PLACE_GAP
