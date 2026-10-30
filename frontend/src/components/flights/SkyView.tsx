@@ -884,16 +884,31 @@ export function SkyView() {
    * Read at the moment it lands (after the flight is made), so a ref. */
   const spotRef = useRef<(f: Flight, near: "shelf" | "palette") => Pos>(() => ({ x: 0, y: 0 }));
   spotRef.current = (f, near) => {
+    const key = groundedKey(f.id);
     const base = lineSize(groundedDiagram(f, kinds), null);
-    const size = { w: measured[groundedKey(f.id)]?.w || base.w + GROUNDED_HEAD_W, h: measured[groundedKey(f.id)]?.h || base.h };
+    const size = measured[key] || { w: base.w + GROUNDED_HEAD_W, h: base.h };
     const c = camRef.current;
     const pad = 16 / c.z;
     const view: Rect = { x: -c.x / c.z + pad, y: -c.y / c.z + pad, w: vp.w / c.z - 2 * pad, h: vp.h / c.z - 2 * pad };
-    const taken = [...lines.map((l) => l.id), INTAKE_KEY, PALETTE_KEY].map(rectOf).filter((r): r is Rect => !!r);
+    const taken = [...lines.map((l) => l.id).filter((id) => id !== key), INTAKE_KEY, PALETTE_KEY].map(rectOf).filter((r): r is Rect => !!r);
     const pal = near === "palette" ? rectOf(PALETTE_KEY) : null;
     const want = pal ? { x: pal.x + pal.w + PLACE_GAP, y: pal.y } : { x: view.x + view.w / 2 - size.w / 2, y: view.y + view.h - size.h };
     return spotNear(want, taken, size, view);
   };
+  // A placed line lands at its estimated size; once drawn and measured it is
+  // placed once more at its real size (as `assignSpots` keeps a spot only once
+  // a line is measured), so it never spills out of the view or onto a line.
+  const placing = useRef(new Map<string, "shelf" | "palette">());
+  useEffect(() => {
+    for (const [key, near] of placing.current) {
+      if (!measured[key]) continue;
+      placing.current.delete(key);
+      const f = flights?.find((x) => groundedKey(x.id) === key);
+      if (!f) continue;
+      const at = spotRef.current(f, near);
+      setLayout((l) => patchSkyLine(l, key, { x: at.x, y: at.y, pinned: true }));
+    }
+  }, [measured, flights]);
   /** A palette click (a chip, the catalog's Add): the block goes ON THE
    * BOARD — a grounded line near the palette, pinned there, nothing
    * selected, nothing focused (docs/flights.md "Round 13": place, don't
@@ -905,6 +920,7 @@ export function SkyView() {
     if (!f || !alive.current) return;
     const at = spotRef.current(f, near);
     setLayout((l) => patchSkyLine(l, groundedKey(f.id), { x: at.x, y: at.y, pinned: true }));
+    placing.current.set(groundedKey(f.id), near);
     // This session and Perched on you draw no grounded line: say where it went.
     const m = useUi.getState().skyMode;
     if (m === "one" || m === "perched") toast("“" + groundedName(f) + "” is on the board — All or Mine shows it");
