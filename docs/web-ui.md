@@ -1165,8 +1165,11 @@ window closes it. The items, in groups:
   choice under it) · **Checklist…** (when the session has a branch: Verify on
   that branch's checklist, `openDialogFor("verify", branch)`) · **Run checks
   now** · **Bring work home…** on a shared folder
-- **Session** — **Rename…** · **Resume session** (*starts the agent again in
-  the same worktree*; only on a paused session — neither menu offers Pause)
+- **Session** — **Rename…** · **Move to a folder…** (this machine's own
+  rows; greyed with *moving…* while a move runs — see
+  **Move to a folder** under Rename below) · **Resume session** (*starts the
+  agent again in the same worktree*; only on a paused session — neither menu
+  offers Pause)
 - **More ▸** (folded) — **Terminal** · **Code map** (row menu only: the pane
   header always has those tabs) · **Thread** · **Browse history** (pane only,
   calm header) · **Copy entire history** (pane only, on a terminal tab) ·
@@ -2615,6 +2618,24 @@ Authentication section. If the token leaks, regenerate it from Settings →
   — for the ones nobody renamed — by the label the rail shows (`(tix)
   add-dark-mode/sc-12345`), never by the machine slug the event carries. A push
   about a session you cannot find in the rail is worse than no push.
+- **Move to a folder** — row or pane ⋯ → *Move to a folder…* opens
+  `MoveSessionDialog` (`openDialogFor("move", title)`): the session's folder
+  now (*Now in*), a **New folder** field — the new folder's full path, seeded
+  with the current folder's parent + `/` so typing a name lands it beside
+  where it is; `Tab` completes folders and **Browse…** picks one, exactly as
+  New's folder field — the line *MindFlock pauses the agent, moves the
+  folder, and resumes it there. Linked worktrees are repaired.*, a box
+  **Even if it is mid-turn** (`force`), and Cancel / **Move** (greyed until
+  the path names a new folder). Move sends `POST /api/instances/{title}/move
+  {dest, force}`; the 202 closes the dialog, toasts *Moving "name"…* and the
+  row carries `moving: true` (a client-only mark that survives polls) until
+  `session.moved` — a toast *Moved "name" to /new/path* and a refetch — or
+  `session.move_failed` — an error card *Moving "name" failed* with the
+  reason — or a minute passes. A 409 `working` without the box ticked is
+  answered inside the dialog (*The agent is mid-turn — tick the box to move
+  anyway*); every other refusal (`exists`, `bad_dest`, `in_flight`, `remote`,
+  `unknown_session`) is an error card in the server's words. Contract:
+  [flights.md "Moving a session"](flights.md#moving-a-session-backend--frontend).
 - **Attention** — sessions that need you (every "in the bell" state of the
   [one session state](#one-session-state) whose notification switch is on,
   not only questions) badge the tab **title** (`● (n)`) *and* the **favicon**

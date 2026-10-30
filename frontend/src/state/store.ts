@@ -143,6 +143,8 @@ export type DialogName =
   | "commit"
   | "make-pr"
   | "rename"
+  // Move to a folder… (MoveSessionDialog); dialogTarget = the session's title.
+  | "move"
   // "workspaces" (the disk manager) was folded into "recent" — one page.
   | "recent"
   // Customize → Prompts: the saved-prompt library.

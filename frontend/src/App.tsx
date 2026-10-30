@@ -40,6 +40,7 @@ import { MakePrDialog } from "./components/dialogs/MakePrDialog";
 import { AskDialog } from "./components/dialogs/AskDialog";
 import { ChatPanel } from "./components/chat/ChatPanel";
 import { RenameDialog } from "./components/dialogs/RenameDialog";
+import { MoveSessionDialog } from "./components/dialogs/MoveSessionDialog";
 import { GuestNameDialog } from "./components/dialogs/GuestNameDialog";
 import { RecentDialog } from "./components/dialogs/RecentDialog";
 import { SetupDialog, useDoctorAutoShow } from "./components/dialogs/SetupDialog";
@@ -332,6 +333,7 @@ export default function App() {
       <PeerSessionViewer />
       <MakePrDialog />
       <RenameDialog />
+      <MoveSessionDialog />
       <GuestNameDialog />
       <RecentDialog />
       <SetupDialog />
