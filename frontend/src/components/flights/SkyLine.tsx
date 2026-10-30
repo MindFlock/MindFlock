@@ -56,7 +56,7 @@ import { InlineConfirm } from "../InlineConfirm";
 import { OverflowMenu, type MenuItem } from "../OverflowMenu";
 import { Pane } from "../grid/Pane";
 import { FlywayCanvas, type BoxSizeName } from "./FlywayCanvas";
-import { useSessionLine, type LineSource } from "./useSessionLine";
+import { nodeIndexes, useSessionLine, type LineSource } from "./useSessionLine";
 import { Bird } from "./Bird";
 import "./SkyLine.css";
 import "./SkyVisibility.css";
@@ -425,7 +425,10 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
       return true;
     }
     const n = nodeById(shown.diagram.nodes, node);
-    if (!removableBox(n) || !shown.canvas.onRemove) return false;
+    // The stop the flight is at can't change, but it can come off (it asks
+    // first while the flight runs: useSessionLine's `removeAsk`).
+    const here = !!n && !!line.flight && (n.kind === "stop" || n.kind === "group") && nodeIndexes(n).includes(line.flight.cursor);
+    if (!(removableBox(n) || here) || !shown.canvas.onRemove) return false;
     shown.canvas.onRemove(n!);
     return true;
   };

@@ -3833,3 +3833,157 @@ from it); a double-click on a block adds it to the map as well.
   short pause) OR on double-click — never twice for one double-click
   (`clickOrDouble` helper: a click waits ~250 ms and is cancelled by a second
   click; the double-click places once).
+
+### As built: round 14 sky
+
+> Code: `frontend/src/lib/skyUndo.ts` (new), `lib/skySelect.ts`
+> (`removalNeedsAsk`, `sessionRuns`, `stopsRun`), `lib/skyLayout.ts`
+> (`catalogFrame`), `components/flights/SkyView.tsx` (Ctrl+Z, `removeGrounded`,
+> `reground`, `pinAt`, `openCatalog`), `SkyLine.tsx` (`closeLine`,
+> `pushCloseUndo`, `reopenClosed`, the close question only while running),
+> `useSessionLine.tsx` (undo entries, `askRunning`, `removeAsk`,
+> `nodeIndexes`), `GroundedLine.tsx` (Remove at once), `SkySelection.tsx`
+> (`takenStops`, `putBackAt`, one entry for the lot). Tests: `skyUndo.test.ts`
+> (new), `skySelect.test.ts`, `skyView.test.ts`, `sky.test.ts`,
+> `grounded.test.ts`, `skyMerge.test.ts`.
+
+**The undo stack.** `pushUndo({label, undo, valid?})` returns the entry;
+`popUndo()` / `peekUndo()` / `undoCount()` pass over entries older than 10
+minutes (`UNDO_TTL_MS`) or whose `valid()` says false; at most 20
+(`UNDO_MAX`), the oldest dropped. The toast's Undo is `takeUndo(entry)`: it runs
+only if the entry is still on the stack. So the toast and Ctrl+Z share one
+entry and never apply it twice (`undoAction(entry, aria)` builds the button).
+The entries:
+
+| removal | label | undo |
+|---|---|---|
+| a stop off a line (`removeStop`) | Remove “title” | `tackOn` at `undoPayload`'s index, read against the flight as it is when Undo is pressed |
+| a group off a line (`removeGroup`) | Remove “name” | `tackOnSteps(…, name)` the same way |
+| a grounded line (⋯ Remove, Delete) | Remove “name” | `reground`: `startGrounded({steps, name})`, pinned where it sat |
+| a merge onto a session | Moved N stops onto … | `reground` (the stops stay on the session too, as in round 13) |
+| a closed session line (Delete, ⋯ Close session, the close question) | Close “name” | `reopenClosed`: `undoLastClose()` (the Ctrl+Shift+T road) per title still closed, newest first |
+| the selection bar's Remove | Remove N lines / Remove N stops | the lot: grounded lines `reground`ed, sessions reopened; stops tacked back in index order (`putBackAt`) |
+
+`useSessionLine` keeps the stop toast's literal shape (`action: {label:
+"Undo", …, onClick}`), since `stopDialog.test.ts` pins it. The `onClick` takes
+the entry. A closed session's own toast comes from `closeSession`
+(`lib/sessionActions`, not the sky's): its Undo reopens directly and cannot
+take the sky's entry. That entry's `valid()` is "still closed", so a session
+reopened from that toast (or by Ctrl+Shift+T) drops out of the stack.
+`reopenClosed` skips a title that is open again. `undoLastClose` reopens the
+newest session closed in this page, so a session closed from the grid after
+the sky's close would come back first. That edge is left as is.
+
+The selection's stop undo: `takenStops(nodes, steps)` gives each removed box's
+first index, its steps and a group's name, first index first.
+`putBackAt(taken, {cursor, length})` puts each one back at its old index while
+that index is ahead of the flight's cursor and inside the line as it grows
+back. Once one item goes to the end, the rest follow it, so none lands inside
+another. If the flight went with its last stop, the stops come back as a new
+flight on the session (`tackOnNew`), or as a grounded line.
+
+The pane's Flight tab shares `useSessionLine`, so a removal there pushes an
+entry too. Ctrl+Z outside the sky is still the keymap's reopen.
+
+**Ctrl+Z / ⌘Z.** SkyView's window-capture key handler (`undoKey`: Ctrl or ⌘,
+no Shift, no Alt) pops the stack ahead of the keymap's Ctrl+Z, which reopens
+the last closed session. It does nothing in these places:
+
+- a text field, an xterm or anything else `typing`;
+- an open card's `.pane`, a `.skl-card`, a menu, a dialog or an inline question;
+- while `overlayOpen()`.
+
+During a line drag, a pan or a marquee it takes the key and does nothing.
+Otherwise it toasts "Undid: <label>" and runs the undo. An empty stack toasts
+"Nothing to undo", and its tooltip points to Ctrl+Shift+T. No redo: Ctrl+Y
+stays the view switch. A phone has no key handler.
+
+**Ask only when something runs.** `removalNeedsAsk(target)` is true for:
+
+- `{kind: "session", row}`: the row's `activity` is `working` or `clarify`,
+  or it has an `asking`;
+- `{kind: "stops", indexes, flight}`: the flight is `running` or
+  `waiting_you` and its `cursor` is among `indexes` (`nodeIndexes(n)`: a stop
+  its own, a group all its sub-steps);
+- `{kind: "selection", items}`: any item is true.
+
+`{kind: "grounded"}` is always false. Where it is applied:
+
+- **GroundedLine**: its InlineConfirm is gone. ⋯ Remove, Delete on the line
+  and Delete from the sky call `remove()` at once. Through the host
+  (`onRemove={() => removeGrounded(id)}`) that means `deleteFlight`, a
+  "Removed “name”" toast with Undo, and an entry. Alone, without a host, it
+  deletes and pushes its own entry, without the pin.
+- **SkyLine**: Delete on a session's box or on the line, and ⋯ Close session,
+  go through `askClose(t)`. An idle session closes at once (`closeLine`:
+  `closeSession`, then an entry). A working or asking one gets the inline
+  "Close “name”?". Its body names what runs ("Its agent is working right
+  now" or "…is asking you something").
+- **A stop on a session line**: the canvas's `onRemove` is `requestRemove`.
+  With `askRunning` (only SkyLine passes it; the pane's Flight tab draws no
+  question and removes at once, as before), the stop the running flight is
+  at raises `removeAsk`. That is an inline "Remove “title”? The flight is at
+  it right now…", drawn under the bar like the close question. Every other
+  stop goes at once. Delete from the sky now reaches the current stop too:
+  SkyLine's `deleteBox` takes a non-editable box when it holds the flight's
+  cursor. Before, Delete there did nothing, and only the 🗑 removed it.
+- **SkySelection**: `REMOVE_AT_ONCE` and the "past 3" question are gone.
+  Remove (now without the ellipsis), and Delete through `ask === "remove"`,
+  run at once unless the selection asks. The question names the running
+  sessions ("Remove 5 lines? a, b are running." / "x is working.") or the
+  current stop ("The flight is at “Plan it” right now."). The host passes
+  `rowOf`, `posOf` and `restoreGrounded` (`reground`).
+
+**All blocks… floats the palette large.** StopShelf gets
+`onCatalog={openCatalog}` (not on a phone). `openCatalog`:
+
+- switches `mf_sky_palette` to "float";
+- computes `catalogFrame(view, screen, zoom, stored)`. Without a stored frame,
+  that is 60% of the window's width × 70% of its height, divided by the zoom
+  (plane px), held to the palette's 220–1400 × 140–1200 and to the view less
+  16 screen px. A stored frame keeps its size, and only its spot is chosen;
+- pins the palette's layout entry at that spot: its left edge `PLACE_GAP`
+  right of the view's centre unless that would push it out (then right-aligned
+  in the view), centred top to bottom.
+
+The large size is held in state (`catalogOpen`) for this opening only. It is
+never written to the layout, so a later "Float the blocks" opens at the
+default size, unless the owner drags the corner (stored as before). The
+palette gets these props:
+
+- `focusFilter={!!catalogOpen}`;
+- `onClose={() => setPaletteMode("shelf")}`, always;
+- `width` / `height` from the stored frame, else from `catalogOpen`.
+
+Esc docks it back to the shelf in either of these cases, after the cards and
+the selection have had their Esc and before "nothing focused":
+
+- the focus is on the sky;
+- the focus is inside the palette but not in its filter field.
+
+Docking clears `catalogOpen`. It is the palette slot of round 13, not a modal:
+the board stays around it, and its blocks drag out as the shelf's do.
+
+Checked in a browser (a scratch `vite build` into the scratchpad plus the demo
+mocks; for All blocks…, a scratch copy whose StopShelf calls `onCatalog`, as
+the palette worker's will):
+
+- **Grounded line:** a bar click then Delete sent `DELETE /api/flights/f_g1`
+  with no question and toasted "Removed “Grounded stops”" with Undo. Ctrl+Z
+  sent `POST /api/flights/start {grounded, steps}`, toasted "Undid: Remove
+  “Grounded stops”", and the new line sat at the old line's exact transform.
+- **A stop ahead:** Delete sent `DELETE …/steps/a2` with no question. Ctrl+Z
+  sent `POST …/steps {step, at: 1}`.
+- **The current stop of a running flight:** Delete asked "Remove “Plan it”?"
+  and sent nothing. Remove sent the DELETE ("…the flight is paused before
+  “Review it”"), and Ctrl+Z tacked it back at the end (it was no longer
+  ahead).
+- **Select all, then Delete:** asked "Remove 5 lines? … jira-PAY-301, …
+  sc-17460 are running." and sent nothing.
+- **Session lines:** Delete on the working one asked "Close …? Its agent is
+  working right now…". Delete on an idle one sent `POST …/close` at once.
+- **Empty stack:** Ctrl+Z after draining toasted "Nothing to undo".
+- **All blocks…** at 1500 × 900 and 100% opened the palette at 900 × 630
+  screen px inside the viewport (16 px from its right edge, centred top to
+  bottom). The shelf hid, no modal opened, and the lines stayed visible to its
+  left. Esc docked it and brought the shelf back.
