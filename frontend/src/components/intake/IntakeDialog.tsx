@@ -317,13 +317,13 @@ export function IntakeDialog() {
     setFocus(nextFocus);
     setAdding(null);
   };
-  /** "+ Add source": the flow opens at the top of the tab that owns the kind,
-   * scrolled into view. */
+  /** "+ Add source": the flow opens at the FOOT of the tab that owns the kind
+   * (the tab grows downward, nothing above it moves) and brings itself into
+   * view (AddFlowShell). */
   const startAdd = (intent: AddIntent, on?: IntakeTabKey) => {
     if (on) setTab(on);
     setFocus("");
     setAdding(intent);
-    document.getElementById("intake-body")?.scrollTo({ top: 0 });
   };
   const props: TabProps = {
     gotoTab: switchTab,

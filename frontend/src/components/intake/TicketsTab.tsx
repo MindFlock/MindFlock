@@ -1070,7 +1070,6 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd, draftStas
 
   return (
     <>
-      {addFlow}
       <p className="set-hint set-block-hint">
         Connect a tracker. Tickets in the states you pick start as sessions — on their own
         while auto-start is on, or when you press <strong>Start</strong>.
@@ -1122,6 +1121,9 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd, draftStas
           </div>
         </div>
       ) : null}
+      {/* The add flow grows the tab at its FOOT, under the work — where the
+          new source's group will appear — so what is on screen stays put. */}
+      {addFlow}
     </>
   );
 }

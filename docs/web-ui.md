@@ -3974,8 +3974,9 @@ live inside an `aria-modal` dialog and the desktop app has no native confirm.
 
 **+ Add source** — the dialog head's one door (`#intake-add-source`), replacing
 the four "+ Add" buttons that sat under four card lists in two dialogs. It opens
-an inline three-step flow at the top of the tab that owns the kind
-(`AddFlowShell`): **What** (tiles: every tracker in the catalog, and
+an inline three-step flow at the **foot** of the tab that owns the kind
+(`AddFlowShell`, which scrolls itself into view) — the tab grows downward, where
+the new source's group will appear, and nothing already on screen moves: **What** (tiles: every tracker in the catalog, and
 **Repository**) → **Connect** → **What it does**. Each tile carries one line
 saying whose work it brings in (`trackerKinds` / `REPO_KIND` in `kit.tsx`) —
 above all so **GitHub Issues** the tracker (*Issues assigned to you, as

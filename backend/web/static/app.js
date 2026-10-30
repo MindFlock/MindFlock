@@ -87391,11 +87391,22 @@ var REPO_KIND = {
 	sub: "Every PR or new issue in a repo"
 };
 function AddFlowShell({ title = "Add a source", step, kinds, picked, onPick, onCancel, cancelLabel = "Cancel", children, footer }) {
+	const steps = [
+		"What",
+		"Connect",
+		"What it does"
+	];
+	const shell = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		const el = shell.current;
+		if (el && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest" });
+	}, [step]);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "ik-add",
 		id: "ik-add-flow",
 		"aria-label": title,
 		"data-step": step,
+		ref: shell,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ik-add-head",
@@ -87407,11 +87418,7 @@ function AddFlowShell({ title = "Add a source", step, kinds, picked, onPick, onC
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
 						className: "ik-steps",
 						"aria-label": "Steps",
-						children: [
-							"What",
-							"Connect",
-							"What it does"
-						].map((label, i) => {
+						children: steps.map((label, i) => {
 							const n = i + 1;
 							const state = n < step ? "done" : n === step ? "cur" : "todo";
 							return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
@@ -90419,7 +90426,6 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd, draftStash }) {
 		}) : null
 	}, "add-tracker");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		addFlow,
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint set-block-hint",
 			children: [
@@ -90458,7 +90464,8 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd, draftStash }) {
 					children: "+ Add a ticket source"
 				})]
 			})
-		}) : null
+		}) : null,
+		addFlow
 	] });
 }
 function StatePicker({ field, source, states, loadStates, onChange }) {
@@ -91792,7 +91799,6 @@ function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 		]
 	}, "work");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		addFlow,
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "caps-gate",
 			"data-caps-gate": "git",
@@ -91926,7 +91932,8 @@ function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 					})
 				]
 			})]
-		}) : null
+		}) : null,
+		addFlow
 	] });
 }
 //#endregion
@@ -92101,7 +92108,6 @@ function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 		]
 	}, "work");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		addFlow,
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "caps-gate",
 			"data-caps-gate": "git",
@@ -92214,7 +92220,8 @@ function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 					})
 				]
 			})]
-		}) : null
+		}) : null,
+		addFlow
 	] });
 }
 //#endregion
@@ -92937,7 +92944,6 @@ function IntakeDialog() {
 		if (on) setTab(on);
 		setFocus("");
 		setAdding(intent);
-		document.getElementById("intake-body")?.scrollTo({ top: 0 });
 	};
 	const props = {
 		gotoTab: switchTab,
