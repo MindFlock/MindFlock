@@ -49,7 +49,17 @@
  * opens its Takes off dialog. The intake lane (IntakeLane) sits at the
  * plane's left edge; the drawer at the right (SkyDrawer) holds what is
  * perched on you. A phone gets the lines as a plain list — no pan, no zoom —
- * with the shelf under it. */
+ * with the shelf under it.
+ *
+ * Round 12 (docs/flights.md "As built: round 12 sky"): the intake lane is a
+ * sky object like a line — layout key "intake", placed first by
+ * `assignSpots`, dragged by its head on the line drag's own path, pinned where
+ * dropped, forgotten by Tidy, expanded (`open`) from its head. Two TOOLS
+ * (`mf_sky_tool`, the toolbar's ✥ Drag · ☝ Click, V / H, Space held = click):
+ * `gestureFor` (lib/skySelect) decides what a press becomes. Delete / Backspace
+ * goes where the keyboard is (`deleteFor`): the selection, a box (a stop
+ * leaves its line, a session's box asks to close it), a line (its close or
+ * remove question), or — on nothing of the sky's — the app's keymap. */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useFlightKinds, useFlightPlans, useFlights, useInstances } from "../../state/queries";
@@ -64,6 +74,8 @@ import { windowName } from "../../lib/windowName";
 import { reducedMotion, registerSkyHost, type Box, type SkyHost } from "../../lib/viewMode";
 import {
   FLYWAY_MIME,
+  INTAKE_KEY,
+  INTAKE_OPEN_W,
   INTAKE_W,
   LINES_LEFT,
   NEW_SESSION_MIME,
@@ -79,6 +91,7 @@ import {
   firstFit,
   fitCamera,
   inSky,
+  intakeSize,
   lineLayout,
   lodFor,
   loadSkyLayout,
@@ -99,11 +112,16 @@ import {
 import {
   MARQUEE_MIN,
   NO_SELECTION,
+  SKY_TOOLS,
   addSelection,
+  deleteFor,
+  gestureFor,
   isStopNode,
+  loadSkyTool,
   planeToScreen,
   pruneSelection,
   rectFrom,
+  saveSkyTool,
   screenToPlane,
   select,
   selectLines,
@@ -113,6 +131,8 @@ import {
   type SelectLine,
   type SelectStop,
   type SkySelection,
+  type SkyTarget,
+  type SkyTool,
 } from "../../lib/skySelect";
 import { ChipRow, TextField } from "./controls";
 import { liveBoxParts } from "./FlightStrip";
@@ -121,7 +141,7 @@ import { IntakeLane } from "./IntakeLane";
 import { NewSessionBlock } from "./NewSessionBlock";
 import { SkyDrawer } from "./SkyDrawer";
 import { SkyFlock } from "./SkyFlock";
-import { SkyLine } from "./SkyLine";
+import { SkyLine, type LineDelete } from "./SkyLine";
 import { SkySelectionBar, type SelectionAsk } from "./SkySelection";
 import { GroundedLine, groundedName } from "./GroundedLine";
 import { StopShelf } from "./StopShelf";
@@ -143,6 +163,32 @@ const PAN_STEP = 80;
 const SHELF_FOLD_KEY = "mf_sky_stops_folded";
 /** How long Tidy's glide lasts (the slots' transition is on only then). */
 const TIDY_MS = 350;
+/** The toolbar's two tools, in words. */
+const TOOL_CHIPS: Record<SkyTool, { label: string; title: string }> = {
+  drag: { label: "✥ Drag", title: "Drag mode (V): a line moves by its bar, a drag on empty sky selects" },
+  click: { label: "☝ Click", title: "Click mode (H): a drag anywhere pans, a click focuses a line or selects a box — Shift+drag selects" },
+};
+/** What on the sky takes a press itself, whatever the tool: a control, a
+ * field, an open card, a line's editor, a menu, the selection's bar, the
+ * new-session block. */
+const SKY_CONTROLS =
+  "button, a, input, textarea, select, summary, label, [contenteditable=true], [role=menu], [role=menuitem], [data-no-drag], .skl-card, .skl-panels, .sky-selbar, .sky-own-scroll, .sky-new";
+
+/** What a press landed on (lib/skySelect `gestureFor`'s target). */
+export function skyTargetOf(el: Element | null, ground: (el: Element) => boolean): SkyTarget {
+  if (!el || ground(el)) return "ground";
+  if (el.closest(SKY_CONTROLS)) return "control";
+  if (el.closest("[data-node]")) return "box";
+  if (el.closest(".skl-bar, .sky-lane-head, .sky-lane-rail")) return "line";
+  return "box";
+}
+
+/** The sky object an element is on: its line's slot id, "intake", or "". */
+export function skyObjectOf(el: Element | null): string {
+  if (!el) return "";
+  if (el.closest(".sky-intake")) return INTAKE_KEY;
+  return el.closest(".sky-line-slot[data-slot]")?.getAttribute("data-slot") || "";
+}
 
 const readPref = (key: string): string | null => {
   try {
@@ -287,6 +333,14 @@ export function SkyView() {
   const [flash, setFlash] = useState("");
   const [spaceHeld, setSpaceHeld] = useState(false);
   const space = useRef(false);
+  // The tool (drag / click), remembered per device; Space held is click mode.
+  const [tool, setToolState] = useState<SkyTool>(() => loadSkyTool());
+  const setTool = useCallback((t: SkyTool) => {
+    setToolState(t);
+    saveSkyTool(t);
+  }, []);
+  const liveTool: SkyTool = spaceHeld ? "click" : tool;
+  const [panning, setPanning] = useState(false);
   // The marquee's selection (lib/skySelect), what its bar is asking, and —
   // for stops — where they were drawn, relative to their line (the bar sits
   // over them, and follows the line if it moves).
@@ -316,7 +370,8 @@ export function SkyView() {
       ...titles.map((t) => {
         const fl = rows.find((r) => r.title === t)?.flight as FlightRow | null | undefined;
         const full = fl && isLive(fl) ? flights?.find((f) => f.id === fl.id) || null : null;
-        const diagram = sessionDiagram(rows, t, { flights, kinds, family: mode === "mine" || mode === "one" });
+        // Its family too: a line draws its workers inside it in every view.
+        const diagram = sessionDiagram(rows, t, { flights, kinds, family: true });
         return { id: t, name: windowName(t), flight: null as Flight | null, diagram, ...(measured[t] || estimateLine(lineSize(diagram, full), layout[t])) };
       }),
       ...grounded.map((f) => {
@@ -328,36 +383,51 @@ export function SkyView() {
     ],
     [titles, grounded, rows, flights, kinds, mode, measured, layout]
   );
+  // The intake lane: a sky object placed like a line (not in This session).
+  // Its room is what it measured — never under the folded lane's width, so
+  // unfolding the rail never runs into the lines beside it.
+  const intakeOn = mode !== "one";
+  const intakeBox = useMemo(() => {
+    const b = intakeSize(layout[INTAKE_KEY], measured[INTAKE_KEY]);
+    return { w: Math.max(b.w, INTAKE_W), h: b.h };
+  }, [layout, measured]);
   // The selection holds only lines still shown (a closed session drops out).
-  const shownIds = useMemo(() => new Set(lines.map((l) => l.id)), [lines]);
+  const shownIds = useMemo(() => new Set([...lines.map((l) => l.id), ...(intakeOn ? [INTAKE_KEY] : [])]), [lines, intakeOn]);
   const sel = useMemo(() => pruneSelection(selRaw, shownIds), [selRaw, shownIds]);
   /** A line still on the board, shown or filtered out: its session is open
    * (not a hidden helper), or its grounded flight is still grounded. */
   const lineAlive = useCallback(
-    (id: string) => (isGroundedKey(id) ? groundedIds.has(groundedIdOf(id)) : rows.some((r) => r.title === id && inSky(r))),
-    [rows, groundedIds]
+    (id: string) => (id === INTAKE_KEY ? intakeOn : isGroundedKey(id) ? groundedIds.has(groundedIdOf(id)) : rows.some((r) => r.title === id && inSky(r))),
+    [rows, groundedIds, intakeOn]
   );
   // Every line's spot: a pinned or already-given one stays put; a newcomer
   // gets the first free place clear of the placed lines (and of the lines a
   // filter hides, at their last measured size). `fresh` is what the effect
-  // below keeps once the newcomer has been measured.
+  // below keeps once the newcomer has been measured. The intake lane is the
+  // first of them: unpinned, it takes the plane's corner and the lines flow
+  // to its right and under it.
   const { place, fresh } = useMemo(() => {
     if (mode === "one") return { place: Object.fromEntries(lines.map((l) => [l.id, { x: SKY_MARGIN, y: SKY_MARGIN }])), fresh: {} as Record<string, Pos> };
     const saved: Record<string, Pos> = { ...autoPos, ...pinnedPositions(layout) };
-    const shown = new Set(lines.map((l) => l.id));
-    const existing: PlacedLine[] = lines.filter((l) => saved[l.id]).map((l) => ({ id: l.id, ...saved[l.id], w: l.w, h: l.h }));
+    const items = [{ id: INTAKE_KEY, ...intakeBox }, ...lines];
+    const shown = new Set(items.map((l) => l.id));
+    const existing: PlacedLine[] = items.filter((l) => saved[l.id]).map((l) => ({ id: l.id, ...saved[l.id], w: l.w, h: l.h }));
     for (const [id, at] of Object.entries(saved))
       if (!shown.has(id) && measured[id] && lineAlive(id)) existing.push({ id, ...at, ...measured[id] });
-    const fresh = assignSpots(existing, lines.filter((l) => !saved[l.id]), { width: Math.max(vp.w, LINES_LEFT + 900), left: LINES_LEFT, top: SKY_MARGIN });
+    const fresh = assignSpots(existing, items.filter((l) => !saved[l.id]), { width: Math.max(vp.w, LINES_LEFT + 900), left: SKY_MARGIN, top: SKY_MARGIN });
     const place: Record<string, Pos> = { ...fresh };
     for (const e of existing) if (shown.has(e.id)) place[e.id] = { x: e.x, y: e.y };
     return { place, fresh };
-  }, [lines, layout, autoPos, measured, lineAlive, vp.w, mode]);
+  }, [lines, intakeBox, layout, autoPos, measured, lineAlive, vp.w, mode]);
   // Keep a newcomer's spot once it is known where it fits: the window
   // measured, the sessions and the flights loaded, the line drawn and
   // measured. Free the spots of sessions that are gone and of lines the
-  // owner pinned (their spot is the pin now).
+  // owner pinned (their spot is the pin now). The intake lane keeps its spot
+  // first — no line is kept before it has one, or 0.9 s have passed — so the
+  // lines are placed round the lane at its real size.
   const flightsSettled = flightsQ.isFetched || flightsQ.data !== undefined;
+  const [waited, setWaited] = useState(false);
+  const intakeReady = !!autoPos[INTAKE_KEY] || !!layout[INTAKE_KEY]?.pinned || !!measured[INTAKE_KEY] || waited;
   useEffect(() => {
     if (mode === "one" || !vp.w || instQ.data === undefined) return;
     setAutoPos((cur) => {
@@ -365,18 +435,19 @@ export function SkyView() {
       const edit = () => (next === cur ? (next = { ...cur }) : next);
       for (const id of Object.keys(cur))
         if (layout[id]?.pinned || !lineAlive(id)) delete edit()[id];
-      if (flightsSettled) for (const [id, at] of Object.entries(fresh)) if (measured[id]) edit()[id] = at;
+      if (flightsSettled && intakeReady) for (const [id, at] of Object.entries(fresh)) if (measured[id] || id === INTAKE_KEY) edit()[id] = at;
       return next;
     });
-  }, [fresh, measured, layout, lineAlive, mode, vp.w, instQ.data, flightsSettled]);
+  }, [fresh, measured, layout, lineAlive, mode, vp.w, instQ.data, flightsSettled, intakeReady]);
   const posOf = useCallback((id: string): Pos => {
     const f = drag?.from[id];
-    return f ? { x: f.x + drag!.dx, y: f.y + drag!.dy } : place[id] || { x: LINES_LEFT, y: SKY_MARGIN };
+    return f ? { x: f.x + drag!.dx, y: f.y + drag!.dy } : place[id] || (id === INTAKE_KEY ? { x: SKY_MARGIN, y: SKY_MARGIN } : { x: LINES_LEFT, y: SKY_MARGIN });
   }, [drag, place]);
   const rectOf = useCallback((id: string): Rect | null => {
+    if (id === INTAKE_KEY) return intakeOn ? { ...posOf(id), ...intakeBox } : null;
     const l = lines.find((x) => x.id === id);
     return l ? { ...posOf(id), w: l.w, h: l.h } : null;
-  }, [lines, posOf]);
+  }, [lines, posOf, intakeOn, intakeBox]);
   // Folded to its tab (the perch count on it) until opened, then remembered
   // per device: a first visit keeps the room for the sky.
   const drawerOpen = skyDrawerOpen(drawerPref);
@@ -406,9 +477,10 @@ export function SkyView() {
    * (the toolbar's Fit), all of it however small. */
   const fitAll = useCallback((whole = false) => {
     const rects = lines.map((l) => ({ ...posOf(l.id), w: l.w, h: l.h }));
-    if (mode !== "one") rects.push({ x: SKY_MARGIN, y: SKY_MARGIN, w: INTAKE_W, h: 1 });
+    // The lane's width and its top (its height is its own scroll's).
+    if (intakeOn) rects.push({ ...posOf(INTAKE_KEY), w: intakeBox.w, h: 1 });
     setCam((whole ? fitCamera : firstFit)(boundsOf(rects), vp.w, vp.h, mode === "one" ? 1.5 : 1));
-  }, [lines, posOf, mode, vp.w, vp.h]);
+  }, [lines, posOf, mode, intakeOn, intakeBox, vp.w, vp.h]);
   /** The grid's "1": the focused line filling the window. */
   const fitFocused = useCallback(() => {
     const r = focusLine ? rectOf(focusLine) : null;
@@ -424,7 +496,6 @@ export function SkyView() {
   // line, the rest fit all.
   const fitted = useRef(memo?.key || "");
   const fitKey = mode + "\u0000" + (mode === "one" ? focused : "");
-  const [waited, setWaited] = useState(false);
   useEffect(() => {
     if (instQ.data === undefined || waited) return;
     const t = setTimeout(() => setWaited(true), 900);
@@ -583,13 +654,15 @@ export function SkyView() {
     });
   }, []);
 
-  // --- Dragging a line by its bar ----------------------------------------------------
+  // --- Dragging a sky object by its bar ------------------------------------------------
 
-  // A selected line drags every selected line with it (each pinned where it
-  // lands); a click on a bar outside the selection clears it, Shift+click
-  // takes the line in or out.
+  // A sky object with a layout entry — a line by its bar, the intake lane by
+  // its head. A selected one drags every selected one with it (each pinned
+  // where it lands); a click on a bar outside the selection clears it,
+  // Shift+click takes the object in or out. In click mode nothing moves (the
+  // press never gets here: the sky pans it in its capture phase).
   const onDragStart = (id: string, e: ReactPointerEvent) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || gestureFor(liveTool, "line", { space: space.current }) !== "move-line") return;
     e.stopPropagation();
     const ids = sel.lines.has(id) ? [...sel.lines] : [id];
     const from: Record<string, Pos> = Object.fromEntries(ids.map((x) => [x, posOf(x)]));
@@ -620,6 +693,7 @@ export function SkyView() {
         return;
       }
       if (!sel.lines.has(id)) clearSel();
+      if (id === INTAKE_KEY) return;
       if (isGroundedKey(id)) setGroundFocus(id);
       else focusOn(id, true);
     };
@@ -806,22 +880,60 @@ export function SkyView() {
       pan.current = null;
     } else pan.current = { id: e.pointerId, x: e.clientX, y: e.clientY, cx: camRef.current.x, cy: camRef.current.y };
   };
+  // Click mode (or Space held): the sky takes every press but a control's
+  // in its capture phase, so no line, bar or box starts a move of its own. A
+  // press that moves pans (the pointer is captured only then); one that never
+  // moves is a click on what it pressed (`clickOn`): its own click still
+  // lands on it, so a box is selected and a double-click opens it, as ever.
+  // Shift+drag draws the marquee.
+  const press = useRef<{ id: number; sx: number; sy: number; el: Element | null } | null>(null);
   const onDownCapture = (e: ReactPointerEvent<HTMLDivElement>) => {
-    // Space held: a drag anywhere pans, even over a line.
-    if (!space.current || (e.pointerType === "mouse" && e.button !== 0)) return;
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    const t = space.current ? "click" : tool;
+    if (t === "drag") return;
+    const g = gestureFor(t, skyTargetOf(e.target as Element, ground), { shift: e.shiftKey, space: space.current, touch: e.pointerType === "touch" });
+    if (g === "none") return;
     e.stopPropagation();
     e.preventDefault();
-    startPan(e);
+    if (g === "marquee") {
+      vpRef.current?.focus({ preventScroll: true });
+      startMarquee(e);
+      return;
+    }
+    pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.current.size >= 2) {
+      press.current = null;
+      return startPan(e);
+    }
+    press.current = { id: e.pointerId, sx: e.clientX, sy: e.clientY, el: e.target instanceof Element ? e.target : null };
+  };
+  /** A click-mode press that never moved: focus the line it was on, select
+   * the box (its own click, which still lands on it, does the selecting —
+   * the box gets the keyboard here so Delete reaches it), clear the
+   * selection on empty sky. Shift+click is the marquee's (`endMarquee`). */
+  const clickOn = (el: Element | null) => {
+    const id = skyObjectOf(el);
+    if (!sel.lines.has(id)) clearSel();
+    if (!id || id === INTAKE_KEY) {
+      if (!id) vpRef.current?.focus({ preventScroll: true });
+      return;
+    }
+    if (isGroundedKey(id)) setGroundFocus(id);
+    else focusOn(id, true);
+    const box = el?.closest("[data-node]");
+    const line = el?.closest(".sky-line-slot")?.querySelector(".skl");
+    ((box || line) as HTMLElement | null | undefined)?.focus({ preventScroll: true });
   };
   // The marquee: a left drag (mouse or pen) on empty sky. A touch drag still
   // pans, as the middle button does.
-  const marquee = useRef<{ id: number; sx: number; sy: number; add: boolean; moved: boolean } | null>(null);
+  const marquee = useRef<{ id: number; sx: number; sy: number; add: boolean; moved: boolean; el: Element | null } | null>(null);
   const onDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (!ground(e.target) || (e.pointerType === "mouse" && e.button !== 0 && e.button !== 1)) return;
     e.preventDefault();
     // The keyboard comes to the sky (arrows, + / −, T), out of a terminal.
     vpRef.current?.focus({ preventScroll: true });
-    if (e.pointerType !== "touch" && e.button === 0) startMarquee(e);
+    const g = e.button === 0 ? gestureFor(liveTool, "ground", { shift: e.shiftKey, touch: e.pointerType === "touch" }) : "pan";
+    if (g === "marquee") startMarquee(e);
     else startPan(e);
   };
   const startMarquee = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -830,7 +942,7 @@ export function SkyView() {
     } catch {
       /* a synthetic event has no capture */
     }
-    marquee.current = { id: e.pointerId, sx: e.clientX, sy: e.clientY, add: e.shiftKey, moved: false };
+    marquee.current = { id: e.pointerId, sx: e.clientX, sy: e.clientY, add: e.shiftKey, moved: false, el: e.target instanceof Element ? e.target : null };
   };
   /** The viewport's corner on screen. */
   const vpCorner = (): Pos => {
@@ -864,6 +976,14 @@ export function SkyView() {
         if (isStopNode(node) && !el.closest(".skl-card")) out.stops.push({ line: l.id, node, rect: onPlane(el) });
       });
     }
+    // The intake lane is taken as a line (its head is its bar): it moves and
+    // tidies with the selection, and Remove leaves it be.
+    const lane = rectOf(INTAKE_KEY);
+    if (lane) {
+      const heads: Rect[] = [];
+      root.querySelectorAll(".sky-intake :is(.sky-lane-head, .sky-lane-rail)").forEach((el) => heads.push(onPlane(el)));
+      out.lines.push({ id: INTAKE_KEY, rect: lane, heads });
+    }
     return out;
   };
   const moveMarquee = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -879,8 +999,11 @@ export function SkyView() {
     setMarq(null);
     if (e.type === "pointercancel") return;
     if (!m.moved) {
-      // A click on empty sky clears the selection.
-      if (!m.add) clearSel();
+      // A click on empty sky clears the selection; Shift+click on a line (click
+      // mode's marquee starts anywhere) takes it in or out.
+      const id = skyObjectOf(m.el);
+      if (m.add && id) setSel((s) => toggleLine(s, id));
+      else if (!m.add) clearSel();
       return;
     }
     const o = vpCorner();
@@ -899,6 +1022,19 @@ export function SkyView() {
   };
   const onMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (marquee.current?.id === e.pointerId) return moveMarquee(e);
+    const pr = press.current;
+    if (pr && pr.id === e.pointerId) {
+      // A click-mode press becomes a pan once it moves.
+      if (Math.hypot(e.clientX - pr.sx, e.clientY - pr.sy) < MARQUEE_MIN) return;
+      press.current = null;
+      try {
+        vpRef.current?.setPointerCapture(e.pointerId);
+      } catch {
+        /* a synthetic event has no capture */
+      }
+      pan.current = { id: e.pointerId, x: pr.sx, y: pr.sy, cx: camRef.current.x, cy: camRef.current.y };
+      setPanning(true);
+    }
     if (!pointers.current.has(e.pointerId)) return;
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const pn = pinch.current;
@@ -914,9 +1050,17 @@ export function SkyView() {
   };
   const onUp = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (marquee.current?.id === e.pointerId) return endMarquee(e);
+    const pr = press.current;
+    if (pr && pr.id === e.pointerId) {
+      press.current = null;
+      if (e.type !== "pointercancel") clickOn(pr.el);
+    }
     pointers.current.delete(e.pointerId);
     if (pointers.current.size < 2) pinch.current = null;
-    if (pan.current?.id === e.pointerId) pan.current = null;
+    if (pan.current?.id === e.pointerId) {
+      pan.current = null;
+      setPanning(false);
+    }
   };
   // The viewport is overflow: hidden, but a browser still scrolls it to show
   // a box that just took the focus (a click, Tab). The plane would slide out
@@ -1064,6 +1208,12 @@ export function SkyView() {
     } else if (k === "t" || k === "T") {
       handled();
       tidy();
+    } else if (k === "v" || k === "V") {
+      handled();
+      setTool("drag");
+    } else if (k === "h" || k === "H") {
+      handled();
+      setTool("click");
     } else if (k.startsWith("Arrow")) {
       handled();
       const d = PAN_STEP * (e.shiftKey ? 4 : 1);
@@ -1076,16 +1226,65 @@ export function SkyView() {
       onLayout(focusLine, { open: false });
     }
   };
-  // Delete / Backspace with a selection removes what it holds. Taken in the
+  // Delete / Backspace on the sky (lib/skySelect `deleteFor`): the selection
+  // asks its bar to remove; a box or a line asks ITS line (the handle each
+  // line registers: a stop through the canvas's Remove, a session's box or
+  // line asks to close it, a grounded line asks to be removed). Taken in the
   // window's capture phase, before the app's keymap (document, capture) sees
   // it: there Delete closes the focused SESSION, never what is selected.
+  // With nothing of the sky's under the keyboard, the keymap's Delete stands.
+  const deleters = useRef(new Map<string, LineDelete>());
+  const registers = useRef(new Map<string, (fn: LineDelete | null) => void>());
+  /** A line's `registerDelete`, one per line id (stable across renders). */
+  const registerFor = (id: string) => {
+    let r = registers.current.get(id);
+    if (!r) {
+      r = (fn) => {
+        if (fn) deleters.current.set(id, fn);
+        else deleters.current.delete(id);
+      };
+      registers.current.set(id, r);
+    }
+    return r;
+  };
+  /** Where the keyboard is, for Delete: "sky" (its empty space, or nothing
+   * focused), a sky object and the box on it ("" = the object itself), or
+   * null — a field, an open card's pane, a menu, a question, or outside the
+   * sky: none of the sky's business. */
+  const deleteFocus = (el: Element | null): "sky" | { line: string; node: string } | null => {
+    const root = vpRef.current;
+    if (!el || el === document.body || el === root) return "sky";
+    if (!root?.contains(el)) return null;
+    if (typing(el) || el.closest(".skl-card, .pane, .skl-panels, .sky-selbar, [role=menu], [role=dialog], [role=alertdialog]")) return null;
+    const line = skyObjectOf(el);
+    if (!line) return "sky";
+    return { line, node: el.closest("[data-node]")?.getAttribute("data-node") || "" };
+  };
+  /** The box the focused line has selected (its canvas's own selection). */
+  const selectedBox = (): { line: string; node: string } | null => {
+    const id = groundFocus || focusLine;
+    if (!id) return null;
+    let slot: Element | null = null;
+    vpRef.current?.querySelectorAll(".sky-line-slot[data-slot]").forEach((el) => {
+      if (el.getAttribute("data-slot") === id) slot = el;
+    });
+    const box = [...((slot as Element | null)?.querySelectorAll(".fl-box.selected[data-node]") || [])].find((b) => !b.closest(".skl-card"));
+    return box ? { line: id, node: box.getAttribute("data-node") || "" } : null;
+  };
   const removeKeys = useRef<(e: KeyboardEvent) => void>(() => {});
   removeKeys.current = (e: KeyboardEvent) => {
-    if ((e.key !== "Delete" && e.key !== "Backspace") || selectionEmpty(sel) || e.ctrlKey || e.metaKey || e.altKey) return;
-    if (overlayOpen() || !skyKeysOwn(document.activeElement)) return;
+    if ((e.key !== "Delete" && e.key !== "Backspace") || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (overlayOpen()) return;
+    const el = document.activeElement;
+    const at = deleteFocus(el);
+    if (!at) return;
+    // The selection's, unless the keyboard is on a box (that box goes).
+    const d = deleteFor(skyKeysOwn(el) ? sel : NO_SELECTION, at === "sky" ? null : at, at === "sky" ? selectedBox() : null);
+    if (d.kind === "keymap") return;
     e.preventDefault();
     e.stopPropagation();
-    setSelAsk("remove");
+    if (d.kind === "selection") setSelAsk("remove");
+    else if (d.kind === "box" || d.kind === "line") deleters.current.get(d.line)?.(d.kind === "box" ? d.node : "");
   };
   useEffect(() => {
     if (narrow) return;
@@ -1135,6 +1334,16 @@ export function SkyView() {
         options={SKY_MODES.map((m) => ({ value: m.id, label: m.label, title: m.title }))}
         onChange={setMode}
       />
+      {!narrow && (
+        // The tool: ✥ Drag (a line moves by its bar) · ☝ Click (a drag pans).
+        <ChipRow<SkyTool>
+          className="sky-modes sky-tools"
+          label="Tool"
+          value={tool}
+          options={SKY_TOOLS.map((t) => ({ value: t, ...TOOL_CHIPS[t] }))}
+          onChange={setTool}
+        />
+      )}
       <span className="sky-search">
         <TextField value={query} onChange={setQuery} label="Find a line" placeholder="Find a line…" onEnter={() => titles[0] && focusOn(titles[0])} />
       </span>
@@ -1277,6 +1486,8 @@ export function SkyView() {
           zoom={cam.z}
           onDragStart={at ? (e) => onDragStart(id, e) : undefined}
           onMeasure={at ? (w, h) => onMeasure(id, w, h) : undefined}
+          draggable={liveTool === "drag"}
+          registerDelete={at ? registerFor(id) : undefined}
           onFlyOn={() => {
             setFlyPick(null);
             setTackPick(null);
@@ -1302,6 +1513,8 @@ export function SkyView() {
       zoom={cam.z}
       onDragStart={at ? (e) => onDragStart(id, e) : undefined}
       onMeasure={at ? (w, h) => onMeasure(id, w, h) : undefined}
+      draggable={liveTool === "drag"}
+      registerDelete={at ? registerFor(id) : undefined}
       dropFlyway={drop?.title === id ? drop.plan : null}
       selected={at ? sel.lines.has(id) : undefined}
       highlighted={at ? sel.stops.get(id) : undefined}
@@ -1334,13 +1547,17 @@ export function SkyView() {
       y={selY(selScreen)}
       ask={selAsk}
       setAsk={setSelAsk}
-      nameOf={(id) => lines.find((l) => l.id === id)?.name || windowName(id)}
+      nameOf={(id) => (id === INTAKE_KEY ? "Intake" : lines.find((l) => l.id === id)?.name || windowName(id))}
       flightOf={(id) => lines.find((l) => l.id === id)?.flight || liveFlightOf(id)}
       kinds={kinds}
       onTidy={tidyThese}
       onClear={clearSel}
     />
   );
+
+  const intakeOpen = !!layout[INTAKE_KEY]?.open;
+  const intakeW = intakeOpen ? INTAKE_OPEN_W : INTAKE_W;
+  const intakeAt = posOf(INTAKE_KEY);
 
   if (narrow)
     return (
@@ -1358,19 +1575,26 @@ export function SkyView() {
     );
 
   return (
-    <main id="sky-view" className="sky" onDragOver={onSkyDragOver} onDrop={onSkyDrop}>
+    <main id="sky-view" className="sky" data-tool={liveTool} onDragOver={onSkyDragOver} onDrop={onSkyDrop}>
       {toolbar}
       {pick}
       <div className="sky-main">
         <div className="sky-stage">
           <div
             ref={vpRef}
-            className={"sky-viewport" + (spaceHeld ? " is-grab" : "") + (newOver ? " is-new-over" : "")}
+            className={"sky-viewport" + (spaceHeld ? " is-grab" : "") + (panning ? " is-panning" : "") + (newOver ? " is-new-over" : "")}
+            // The selection holds something: the keymap's Delete yields to the
+            // sky's (lib/keymap `skyBoxFocused`).
+            data-sky-box={selectionEmpty(sel) ? undefined : ""}
             data-tour="flights-sky"
             tabIndex={-1}
             role="application"
             aria-roledescription="canvas"
-            aria-label="The sky: every session as a line — drag empty space or use the arrows to pan, Ctrl+wheel or + / − to zoom, double-click to start a session"
+            aria-label={
+              "The sky: every session as a line — " +
+              (liveTool === "click" ? "drag anywhere to pan, Shift+drag to select" : "drag empty space to select, the wheel or the arrows to pan") +
+              ", Ctrl+wheel or + / − to zoom, double-click to start a session"
+            }
             style={{ backgroundSize: `${GRID * cam.z}px ${GRID * cam.z}px`, backgroundPosition: `${cam.x}px ${cam.y}px` }}
             onPointerDownCapture={onDownCapture}
             onPointerDown={onDown}
@@ -1390,13 +1614,26 @@ export function SkyView() {
               data-tidying={tidying ? "" : undefined}
               style={{ transform: `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})` }}
             >
-              {mode !== "one" && (
+              {intakeOn && (
+                // The intake lane: a sky object at its spot (layout key
+                // "intake"), dragged by its head, expanded from it.
                 <div
-                  className="sky-intake"
+                  className={"sky-intake" + (drag?.from[INTAKE_KEY] ? " is-dragging" : "") + (sel.lines.has(INTAKE_KEY) ? " is-selected" : "")}
                   data-lod={lodFor(cam.z)}
-                  style={{ transform: `translate(${SKY_MARGIN}px, ${SKY_MARGIN}px)`, width: INTAKE_W, "--sky-z": cam.z } as React.CSSProperties}
+                  data-open={intakeOpen ? "" : undefined}
+                  style={{ transform: `translate(${intakeAt.x}px, ${intakeAt.y}px)`, width: intakeW, "--sky-z": cam.z } as React.CSSProperties}
                 >
-                  <IntakeLane rows={rows} plans={plans} onFly={focusOn} width={INTAKE_W} />
+                  <IntakeLane
+                    rows={rows}
+                    plans={plans}
+                    onFly={focusOn}
+                    width={intakeW}
+                    open={intakeOpen}
+                    onToggleOpen={() => onLayout(INTAKE_KEY, { open: !intakeOpen })}
+                    onHeadDown={(e) => onDragStart(INTAKE_KEY, e)}
+                    draggable={liveTool === "drag"}
+                    onMeasure={(w, h) => onMeasure(INTAKE_KEY, w, h)}
+                  />
                 </div>
               )}
               {lines.map((l) => {

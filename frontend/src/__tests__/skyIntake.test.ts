@@ -16,6 +16,7 @@ import {
   titlePrefix,
   type LaneWaiting,
 } from "../lib/skyIntake";
+import { INTAKE_KEY, INTAKE_OPEN_W, INTAKE_W, SKY_GAP, SKY_MARGIN, assignSpots, estimateLine, intakeSize, patchSkyLine, pinnedPositions, readSkyLayout, tidySkyLayout } from "../lib/skyLayout";
 
 const plan = (id: string, name: string, builtin = id.startsWith("builtin:")) => ({ id, name, builtin }) as FlightPlan;
 const PLANS = [plan("builtin:ticket", "Ticket to merge"), plan("builtin:pr", "Review a PR"), plan("p_mine", "Mine")];
@@ -187,5 +188,48 @@ describe("the small helpers", () => {
     const { shown, more } = shownWaiting(b);
     expect(shown).toHaveLength(6);
     expect(more).toBe(3);
+  });
+});
+
+describe("the lane as a sky object (round 12): layout key \"intake\"", () => {
+  const mem = () => {
+    const m = new Map<string, string>();
+    return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) };
+  };
+
+  it("its size: what it measured, else its width folded or expanded and a guess at its height", () => {
+    expect(INTAKE_KEY).toBe("intake");
+    expect(intakeSize(undefined)).toEqual({ w: INTAKE_W, h: 320 });
+    expect(intakeSize({ open: true })).toEqual({ w: INTAKE_OPEN_W, h: 520 });
+    expect(INTAKE_OPEN_W).toBeGreaterThan(INTAKE_W);
+    expect(intakeSize({ open: true }, { w: 430, h: 900 })).toEqual({ w: 430, h: 900 });
+    expect(intakeSize(undefined, { w: 0, h: 0 })).toEqual({ w: INTAKE_W, h: 320 });
+    // Never a line's estimate: an expanded lane is not an open pane.
+    expect(estimateLine({ w: 240, h: 300 }, { open: true }).h).toBeGreaterThan(700);
+  });
+
+  it("x / y / pinned and open are stored like a line's; a drop pins it, Tidy forgets the spot and keeps it expanded", () => {
+    const store = mem();
+    let l = patchSkyLine({}, INTAKE_KEY, { open: true }, store);
+    expect(l.intake).toEqual({ open: true });
+    l = patchSkyLine(l, INTAKE_KEY, { x: 900, y: 300, pinned: true }, store);
+    expect(pinnedPositions(l)).toEqual({ intake: { x: 900, y: 300 } });
+    expect(readSkyLayout(store.getItem("mf_sky_layout"))).toEqual({ intake: { x: 900, y: 300, pinned: true, open: true } });
+    expect(tidySkyLayout(l, undefined, store)).toEqual({ intake: { open: true } });
+    expect(tidySkyLayout(l, INTAKE_KEY, store)).toEqual({ intake: { open: true } });
+  });
+
+  it("placed first: unpinned it takes the corner and the lines flow to its right; pinned away, the corner is the lines'", () => {
+    const area = { width: 2000, left: SKY_MARGIN, top: SKY_MARGIN };
+    const lines = [
+      { id: "a", w: 400, h: 200 },
+      { id: "b", w: 400, h: 200 },
+    ];
+    const spots = assignSpots([], [{ id: INTAKE_KEY, w: INTAKE_W, h: 320 }, ...lines], area);
+    expect(spots.intake).toEqual({ x: SKY_MARGIN, y: SKY_MARGIN });
+    expect(spots.a).toEqual({ x: SKY_MARGIN + INTAKE_W + SKY_GAP, y: SKY_MARGIN });
+    expect(spots.b.x).toBe(spots.a.x + 400 + SKY_GAP);
+    const away = assignSpots([{ id: INTAKE_KEY, x: 1500, y: 900, w: INTAKE_W, h: 320 }], lines, area);
+    expect(away.a).toEqual({ x: SKY_MARGIN, y: SKY_MARGIN });
   });
 });

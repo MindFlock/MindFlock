@@ -805,3 +805,21 @@
 .skl[data-lod="near"] .fl-join-pill {
   zoom: calc(1 / var(--sky-near));
 }
+
+/* Delete on the line or its session's box (round 12): the close question,
+   inline, under the bar (as a grounded line's Remove asks). */
+.skl-close-confirm {
+  padding: 0 0 8px;
+}
+
+/* The line takes the focus (a press on its bar) so Delete lands on it; the
+   pointer's focus draws no ring, the keyboard's does. */
+.skl:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Click mode (round 12): nothing moves by dragging, the sky pans under the
+   hand — so a line's bar shows the hand, not the move. */
+.sky[data-tool="click"] .skl-bar {
+  cursor: inherit;
+}

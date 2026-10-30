@@ -12,7 +12,11 @@
  * **Remove** (inline-confirmed, then `deleteFlight`). Delete or Backspace with
  * the line itself focused asks to remove it too. The host places it, drags
  * it by the bar (`onDragStart`) and gives it room from `onMeasure`, as it
- * does a session's line. */
+ * does a session's line. `draggable` false (the sky's click mode): the bar
+ * never starts a move. `registerDelete` hands the host this line's Delete
+ * (docs/flights.md "As built: round 12 sky"): a stop or group box leaves
+ * through the canvas's Remove, anything else (the head, the bar, the line)
+ * asks to remove the line. */
 
 import { useEffect, useRef, useState, type JSX, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { Flight, FlightPlan, StepKindDef } from "../../lib/flights";
@@ -23,6 +27,7 @@ import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
 import { InlineConfirm } from "../InlineConfirm";
 import { OverflowMenu, type MenuItem } from "../OverflowMenu";
+import { nodeById, removableBox } from "../../lib/skySelect";
 import { FlywayCanvas } from "./FlywayCanvas";
 import { useGroundedLine } from "./useGroundedLine";
 import { Bird } from "./Bird";
@@ -47,6 +52,10 @@ export interface GroundedLineProps {
   selected?: boolean;
   /** Its stop boxes in the Sky's selection (node ids). */
   highlighted?: ReadonlySet<string>;
+  /** False in the sky's click mode: the bar never starts a move. */
+  draggable?: boolean;
+  /** The host's handle on this line's Delete (SkyLine's `registerDelete`). */
+  registerDelete?(fn: ((node: string) => boolean) | null): void;
 }
 
 /** The name a grounded line shows. */
@@ -119,8 +128,29 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
     if (e.button !== 0) return;
     if ((e.target as Element).closest("button, summary, a, input, [data-no-drag]")) return;
     rootRef.current?.focus({ preventScroll: true });
+    if (p.draggable === false) return;
     p.onDragStart?.(e);
   };
+  // Delete from the sky: a stop or group box through the canvas's Remove;
+  // anything else on the line asks to remove the line.
+  const deleteBox = (node: string): boolean => {
+    const n = node ? nodeById(line.diagram.nodes, node) : null;
+    if (n && (n.kind === "stop" || n.kind === "group")) {
+      if (!removableBox(n) || !line.canvas.onRemove) return false;
+      line.canvas.onRemove(n);
+      return true;
+    }
+    setConfirming(true);
+    return true;
+  };
+  const deleteRef = useRef(deleteBox);
+  deleteRef.current = deleteBox;
+  const register = p.registerDelete;
+  useEffect(() => {
+    if (!register) return;
+    register((node) => deleteRef.current(node));
+    return () => register(null);
+  }, [register]);
   // Delete / Backspace on the line itself (not a stop on it, not a field).
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
     if (e.target !== e.currentTarget || !isRemoveKey(e.key)) return;
@@ -145,13 +175,14 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
       style={{ "--sky-z": p.zoom || 1, "--sky-lines": nearLines(p.zoom || 1) } as React.CSSProperties}
       role="group"
       tabIndex={0}
+      data-sky-box
       aria-label={name + " — stops with no session yet"}
       onKeyDown={onKey}
       onPointerDownCapture={() => {
         if (!p.focused) p.onFocus();
       }}
     >
-      <div className="skl-bar" title="Drag to move these stops" onPointerDown={onBarDown}>
+      <div className="skl-bar" title={p.draggable === false ? "Click to focus these stops (drag mode moves them: V)" : "Drag to move these stops"} onPointerDown={onBarDown}>
         <Bird size={16} />
         <span className="skl-name">{name}</span>
         <span className="fl-box-chip skl-chip tone-idle" title="These stops do nothing until a session flies them">

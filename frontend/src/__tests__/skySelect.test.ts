@@ -12,6 +12,11 @@ import {
   WHOLE_LINE,
   addSelection,
   consecutive,
+  deletableNode,
+  deleteFor,
+  nodeById,
+  nodeSession,
+  removableBox,
   isStopNode,
   lineTouched,
   overlapArea,
@@ -233,7 +238,8 @@ describe("the wiring", () => {
   const sky = code("components/flights/SkyView.tsx");
 
   it("a left drag on empty sky is the marquee; touch and the middle button pan; Space+drag still pans anywhere", () => {
-    expect(sky).toContain('if (e.pointerType !== "touch" && e.button === 0) startMarquee(e);\n    else startPan(e);');
+    expect(sky).toContain('const g = e.button === 0 ? gestureFor(liveTool, "ground", { shift: e.shiftKey, touch: e.pointerType === "touch" }) : "pan";');
+    expect(sky).toContain('if (g === "marquee") startMarquee(e);\n    else startPan(e);');
     expect(sky).toContain("onPointerDownCapture={onDownCapture}");
     expect(sky).toContain("const got = select(area, items);");
     expect(sky).toContain("const next = m.add ? addSelection(sel, got) : got;");
@@ -248,7 +254,7 @@ describe("the wiring", () => {
 
   it("the shelf's drag and drop is HTML5 DnD, untouched by the marquee's pointer handling", () => {
     expect(sky).toContain("onDrop={onNewDrop}");
-    expect(sky).toContain('<main id="sky-view" className="sky" onDragOver={onSkyDragOver} onDrop={onSkyDrop}>');
+    expect(sky).toContain('<main id="sky-view" className="sky" data-tool={liveTool} onDragOver={onSkyDragOver} onDrop={onSkyDrop}>');
   });
 
   it("dragging a selected line moves every selected line, each pinned", () => {
@@ -262,7 +268,7 @@ describe("the wiring", () => {
     // Delete is taken before the app's keymap (document, capture), where it
     // closes the focused SESSION — never with a selection on the sky.
     expect(sky).toContain('window.addEventListener("keydown", del, true);');
-    expect(sky).toContain("e.stopPropagation();\n    setSelAsk(\"remove\");");
+    expect(sky).toContain('e.stopPropagation();\n    if (d.kind === "selection") setSelAsk("remove");');
   });
 
   it("lines and stops show it: is-selected on the line, fl-box-selected on a box", () => {
@@ -278,5 +284,95 @@ describe("the wiring", () => {
     expect(sheet).toMatch(/\.skl\.is-selected \{[^}]*outline: 2px dashed var\(--accent\)/);
     expect(sheet).toMatch(/\.fl-box\.fl-box-selected \{[^}]*outline: 2px dashed var\(--accent\)/);
     expect(sheet).toMatch(/\.sky-marquee \{[^}]*pointer-events: none/);
+  });
+});
+
+describe("Delete on the sky (round 12): deleteFor", () => {
+  const stops = { lines: new Set<string>(), stops: new Map([["a", new Set(["stop:s1"])]]) };
+  const box = (line: string, node: string) => ({ line, node });
+
+  it("a selection is the bar's, wherever the keyboard is", () => {
+    expect(deleteFor(stops, box("b", "stop:s2"), null)).toEqual({ kind: "selection" });
+    expect(deleteFor(selectLines(["a"]), null, null)).toEqual({ kind: "selection" });
+  });
+
+  it("a focused stop or group box leaves its line; a session's, a worker's or a branch's box closes that session", () => {
+    expect(deleteFor(NO_SELECTION, box("a", "stop:s1"), null)).toEqual({ kind: "box", line: "a", node: "stop:s1" });
+    expect(deleteFor(NO_SELECTION, box("a", "group:g1@2"), null)).toEqual({ kind: "box", line: "a", node: "group:g1@2" });
+    expect(deleteFor(NO_SELECTION, box("a", "session:a"), null)).toEqual({ kind: "box", line: "a", node: "session:a" });
+    expect(deleteFor(NO_SELECTION, box("a", "child:a-w1"), null)).toEqual({ kind: "box", line: "a", node: "child:a-w1" });
+    expect(deleteFor(NO_SELECTION, box("flight:f_1", "stop:s1"), null)).toEqual({ kind: "box", line: "flight:f_1", node: "stop:s1" });
+  });
+
+  it("a line itself (its bar, a grounded line's head) asks about the line", () => {
+    expect(deleteFor(NO_SELECTION, box("a", ""), null)).toEqual({ kind: "line", line: "a" });
+    expect(deleteFor(NO_SELECTION, box("flight:f_1", ""), null)).toEqual({ kind: "line", line: "flight:f_1" });
+  });
+
+  it("the +, a rung, the flown pill, the intake lane: taken and nothing done — never the keymap's close", () => {
+    for (const n of ["add", "rung:push", "flown"]) expect(deleteFor(NO_SELECTION, box("a", n), null)).toEqual({ kind: "swallow" });
+    expect(deleteFor(NO_SELECTION, box("intake", ""), null)).toEqual({ kind: "swallow" });
+  });
+
+  it("on the sky's empty space: the focused line's selected box, else the keymap's Delete as before", () => {
+    expect(deleteFor(NO_SELECTION, null, box("a", "stop:s3"))).toEqual({ kind: "box", line: "a", node: "stop:s3" });
+    expect(deleteFor(NO_SELECTION, null, null)).toEqual({ kind: "keymap" });
+    // The keyboard on a box wins over the line's selected one.
+    expect(deleteFor(NO_SELECTION, box("a", "stop:s1"), box("a", "stop:s3"))).toEqual({ kind: "box", line: "a", node: "stop:s1" });
+  });
+
+  it("the helpers: which nodes Delete acts on, the session a box stands for, a box by id, what may leave", () => {
+    expect(["stop:s1", "group:g", "session:a", "child:w", "branch:w"].every(deletableNode)).toBe(true);
+    expect(["add", "rung:pr", "flown", "session:"].some(deletableNode)).toBe(false);
+    expect(nodeSession("session:sc-12")).toBe("sc-12");
+    expect(nodeSession("branch:a::b")).toBe("a::b");
+    expect(nodeSession("stop:s1")).toBe("");
+    const sub = { id: "stop:s2", kind: "stop" };
+    const nodes = [{ id: "session:a", kind: "session" }, { id: "group:g", kind: "group", group: { nodes: [sub] } }];
+    expect(nodeById(nodes, "group:g")?.kind).toBe("group");
+    expect(nodeById(nodes, "stop:s2")).toBe(sub);
+    expect(nodeById(nodes, "stop:nope")).toBeNull();
+    expect(removableBox({ kind: "stop" })).toBe(true);
+    expect(removableBox({ kind: "group", editable: true })).toBe(true);
+    expect(removableBox({ kind: "stop", editable: false })).toBe(false);
+    expect(removableBox({ kind: "session" })).toBe(false);
+    expect(removableBox(null)).toBe(false);
+  });
+});
+
+describe("Delete wiring (round 12)", () => {
+  const sky = code("components/flights/SkyView.tsx");
+  const line = code("components/flights/SkyLine.tsx");
+  const grounded = code("components/flights/GroundedLine.tsx");
+
+  it("SkyView routes it before the keymap, through each line's registered handle", () => {
+    expect(sky).toContain("const d = deleteFor(skyKeysOwn(el) ? sel : NO_SELECTION, at === \"sky\" ? null : at, at === \"sky\" ? selectedBox() : null);");
+    expect(sky).toContain('else if (d.kind === "box" || d.kind === "line") deleters.current.get(d.line)?.(d.kind === "box" ? d.node : "");');
+    expect(sky.match(/registerDelete=\{at \? registerFor\(id\) : undefined\}/g)?.length).toBe(2);
+    // The keymap sees the sky's selection on the viewport.
+    expect(sky).toContain('data-sky-box={selectionEmpty(sel) ? undefined : ""}');
+  });
+
+  it("a session line: a stop through the canvas's Remove, a session's box or the line asks inline to close", () => {
+    expect(line).toContain("shown.canvas.onRemove(n!);");
+    expect(line).toContain("const t = node ? nodeSession(node) : p.title;");
+    expect(line).toMatch(/<InlineConfirm\s+title=\{"Close “" \+ windowName\(closing\) \+ "”\?"\}/);
+    expect(line).toContain("await closeSession(closing);");
+    expect(line).not.toMatch(/window\.(confirm|prompt|alert)/);
+    // A press on the bar focuses the line, so Delete lands there.
+    expect(line).toMatch(/rootRef\.current\?\.focus\(\{ preventScroll: true \}\);\s*if \(p\.draggable === false\) return;\s*p\.onDragStart\?\.\(e\);/);
+    expect(line).toContain("data-sky-box");
+  });
+
+  it("a grounded line: a stop through its canvas's Remove, anything else asks to remove the line", () => {
+    expect(grounded).toContain("line.canvas.onRemove(n);");
+    expect(grounded).toMatch(/setConfirming\(true\);\s*return true;/);
+    expect(grounded).toMatch(/if \(p\.draggable === false\) return;\s*p\.onDragStart\?\.\(e\);/);
+  });
+
+  it("the selection bar never removes the intake lane", () => {
+    const bar = code("components/flights/SkySelection.tsx");
+    expect(bar).toContain("const removable = lines.filter((id) => id !== INTAKE_KEY);");
+    expect(bar).toContain("for (const id of removable) {");
   });
 });

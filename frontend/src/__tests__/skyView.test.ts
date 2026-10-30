@@ -1,6 +1,6 @@
 /** The sky as the main area's second view (lib/viewMode.ts, docs/web-ui.md
  * "Two views: the grid and the sky"): the view store, every switch point
- * (top bar, sidebar View row, Alt+Y, the palette, the hash), the isomorphism's
+ * (top bar, sidebar View row, Ctrl+Y, the palette, the hash), the isomorphism's
  * invariants (one focused session, one open tab per session, This session =
  * the focused one alone, the grid's 1 ↔ the sky's 1), the layout store (sizes,
  * Tidy, the mf_sky_pos migration) and the transition's pairing. */
@@ -164,12 +164,13 @@ describe("the switch points", () => {
     expect(side).toContain('className={"vm" + (ui.view === "grid" && ui.viewMode === v ? " active" : "")}');
   });
 
-  it("Alt+Y toggles, in the Navigation group, on a letter no other binding uses", () => {
+  it("Ctrl+Y (⌘Y) toggles, in the Navigation group, on a letter no other binding uses; Alt+Y is gone", () => {
     const y = KEYMAP.find((k) => k.id === "view")!;
-    expect(y).toMatchObject({ key: "y", alt: true });
+    expect(y).toMatchObject({ key: "y", mod: true });
+    expect(y.alt).toBeUndefined();
     expect(y.help?.[0]).toBe("Navigation");
-    expect(y.help?.[1]).toBe("Alt+Y");
-    expect(KEYMAP.filter((k) => k.alt && !k.shift && k.key === "y")).toHaveLength(1);
+    expect(y.help?.[1]).toBe("Ctrl+Y");
+    expect(KEYMAP.filter((k) => k.key === "y")).toHaveLength(1);
     y.run({} as KeyboardEvent);
     expect(useUi.getState().view).toBe("sky");
     y.run({} as KeyboardEvent);
@@ -327,7 +328,7 @@ describe("the layout store", () => {
     const v = code("components/flights/SkyView.tsx");
     expect(v).toContain("...(measured[t] || estimateLine(lineSize(diagram, full), layout[t]))");
     expect(v).toContain("const saved: Record<string, Pos> = { ...autoPos, ...pinnedPositions(layout) };");
-    expect(v).toContain("const fresh = assignSpots(existing, lines.filter((l) => !saved[l.id]),");
+    expect(v).toContain("const fresh = assignSpots(existing, items.filter((l) => !saved[l.id]),");
     expect(v).toMatch(/className="fl-btn sky-tidy"[^>]*onClick=\{tidy\}/);
     expect(v).toContain('} else if (k === "t" || k === "T") {');
   });
@@ -367,5 +368,41 @@ describe("the transition", () => {
     const sheet = css("components/flights/Sky.css");
     expect(sheet).toMatch(/body\.view-switch #grid,\s*body\.view-switch #sky-view \{[^}]*animation: view-in/);
     expect(sheet).toMatch(/\.view-ghost \{[^}]*position: fixed;[^}]*pointer-events: none;/);
+  });
+});
+
+describe("round 12: the intake lane on the sky, the tools' presses", () => {
+  const v = code("components/flights/SkyView.tsx");
+
+  it("the lane is placed like a line, first; no line keeps a spot before it has one", () => {
+    expect(v).toContain("const items = [{ id: INTAKE_KEY, ...intakeBox }, ...lines];");
+    expect(v).toContain("const intakeReady = !!autoPos[INTAKE_KEY] || !!layout[INTAKE_KEY]?.pinned || !!measured[INTAKE_KEY] || waited;");
+    // Its room is never under the folded lane's width (unfolding the rail
+    // never runs into a line).
+    expect(v).toContain("return { w: Math.max(b.w, INTAKE_W), h: b.h };");
+    // This session (one line) has no lane.
+    expect(v).toContain('const intakeOn = mode !== "one";');
+  });
+
+  it("it drags on the line drag's own path; a click on its head focuses no session", () => {
+    expect(v).toContain('if (e.button !== 0 || gestureFor(liveTool, "line", { space: space.current }) !== "move-line") return;');
+    expect(v).toMatch(/if \(!sel\.lines\.has\(id\)\) clearSel\(\);\s*if \(id === INTAKE_KEY\) return;/);
+    expect(v).toContain('out.lines.push({ id: INTAKE_KEY, rect: lane, heads });');
+  });
+
+  it("click mode: the sky takes the press in its capture phase, pans once it moves, and a still press is a click", () => {
+    expect(v).toMatch(/const t = space\.current \? "click" : tool;\s*if \(t === "drag"\) return;/);
+    expect(v).toContain("const g = gestureFor(t, skyTargetOf(e.target as Element, ground), { shift: e.shiftKey, space: space.current, touch: e.pointerType === \"touch\" });");
+    expect(v).toMatch(/if \(Math\.hypot\(e\.clientX - pr\.sx, e\.clientY - pr\.sy\) < MARQUEE_MIN\) return;\s*press\.current = null;/);
+    expect(v).toMatch(/if \(e\.type !== "pointercancel"\) clickOn\(pr\.el\);/);
+  });
+});
+
+describe("round 12: workers live inside their lead's line", () => {
+  it("every view draws a line's family; the estimate does too", () => {
+    const v = code("components/flights/SkyView.tsx");
+    expect(v).toContain("const diagram = sessionDiagram(rows, t, { flights, kinds, family: true });");
+    expect(code("components/flights/SkyLine.tsx")).toContain("useSessionLine(p.title, src, { family: true,");
+    expect(sky.SKY_MODES.find((m) => m.id === "all")?.title).toContain("inside its lead's line");
   });
 });

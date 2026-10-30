@@ -226,6 +226,21 @@ export function endShortcutAllowed(): boolean {
   return true;
 }
 
+/** The keyboard is on a box of the Sky that is not the session itself
+ * (docs/flights.md "As built: round 12 sky"): a stop, a group, a worker's
+ * box, a line's bar, a grounded line — anything carrying `data-sky-box` or a
+ * `data-node` other than `session:` inside `.sky` — or the sky holds a
+ * selection (its viewport carries `data-sky-box` then). Delete there is the
+ * sky's ("remove this"), never "close the focused session". An open card's
+ * pane is the session's own, so not in it. */
+export function skyBoxFocused(el: Element | null = typeof document !== "undefined" ? document.activeElement : null): boolean {
+  if (!el?.closest?.(".sky")) return false;
+  if (el.closest(".pane, .skl-card")) return false;
+  const node = el.closest("[data-node]")?.getAttribute("data-node");
+  if (node) return !node.startsWith("session:");
+  return !!el.closest("[data-sky-box]");
+}
+
 // --- User-customized bindings ------------------------------------------------
 // Rebinding lives in the "?" sheet (click a row, press the new keys) and is
 // cached in localStorage — and, since "Your devices", it follows the person:
@@ -532,17 +547,15 @@ export const KEYMAP: KeymapEntry[] = [
   },
   {
     // The main area's two views (lib/viewMode): the grid of panes ⇄ the sky
-    // of lines. Alt like its neighbours, and Y because the rest are taken —
-    // I / V / S / G / N / 1-9 here, W / C / R in the pane find bar, F is
-    // Chrome's menu on Windows and D its address bar; "skY". Like Alt+G it
-    // fires FROM a terminal (switching views is something you do while
-    // working; readline's M-y yank-pop is rarely used), but a text field
-    // outside one keeps the keystroke (Option+Y types ¥), and nothing
-    // happens behind a dialog.
+    // of lines. Ctrl+Y (⌘Y on a Mac — `mod`, as Ctrl+P / B / N), the owner's
+    // pick over the old Alt+Y; Y for "skY". Like Ctrl+P / B / N it fires FROM
+    // a terminal (switching views is something you do while working; readline's
+    // C-y yank is the keystroke it takes there), but a text field outside one
+    // keeps it (Ctrl+Y is redo there), and nothing happens behind a dialog.
     key: "y",
-    alt: true,
+    mod: true,
     id: "view",
-    help: ["Navigation", "Alt+Y", "Switch views — the grid of panes ⇄ the sky of lines (the same sessions, the same focus)"],
+    help: ["Navigation", "Ctrl+Y", "Switch views — the grid of panes ⇄ the sky of lines (the same sessions, the same focus)"],
     when: () => !overlayOpen() && (terminalFocused() || !isEditingTarget(document.activeElement)),
     run: () => toggleView(),
   },
@@ -667,7 +680,8 @@ export const KEYMAP: KeymapEntry[] = [
     key: "Delete",
     shift: "any",
     aliasOf: "close", // browser-safe alias
-    when: () => endShortcutAllowed(),
+    // Not on a box of the Sky: Delete there removes the box (SkyView).
+    when: () => endShortcutAllowed() && !skyBoxFocused(),
     run: () => closeFocused(),
   },
   {
