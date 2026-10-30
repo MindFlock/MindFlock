@@ -3614,11 +3614,14 @@ agent (the checklist names which), ② Sign in to your agent, ③ Start your fir
 first sidebar row), **New** (the task box, the *Runs in* folder picker,
 **Start**, then a session pane's Agent / Diff tabs and its ⋯ — hooks
 `new-task`, `new-folder`, `new-start`, `pane-tabs`, `pane-menu`; the last
-step centres when no session is open), **Sky** (four steps: the top bar's
-Grid · Sky toggle, a line, the bird, the flyway shelf — hooks `view-sky`,
-`sky-line`, `flights-bird`, `sky-shelf`, each falling back to the toggle; its
-**?** ends the Sky's toolbar and it opens by itself the first time the Sky is
-shown; see [Flights, flyways and the Sky](#flights-flyways-and-the-sky)),
+step centres when no session is open), **Sky** (fourteen steps, every
+surface of the Sky — the toggle, a line's bar, the boxes, the bird, a stop's
+toolbar and dialog, the shelf, a grounded line, selection, the Drag / Click
+tools, Delete, the intake lane, the zoom, the ? — each centring when its
+element isn't on screen; its **?** ends the Sky's toolbar as a two-item menu,
+*Replay the tour* · *Open the guide* (the long-form **Sky guide**), and it
+opens by itself the first time the Sky is shown; see [Flights, flyways and the
+Sky](#flights-flyways-and-the-sky)),
 **Intake**, **Verify**, **Schedule** (six
 steps: the top-bar **Schedule** — or **Create a template** while that item is
 still hidden — then Create a template, Name + Folder, Task, Run on a schedule
@@ -3974,16 +3977,39 @@ otherwise, 2 min on a server without the routes), and `flight.changed`,
 
 **Keys and the palette.** `Alt+Y` switches to the Sky (and back); `Alt+I`,
 `Alt+V` and `Alt+S` open Intake, Verify and Schedule. The palette has
-**Switch to the Sky** / **Switch to the grid** and **Flyways…** (the Sky
-with its shelf open), beside **Intake…** (and each Intake tab), **Verify…**
+**Switch to the Sky** / **Switch to the grid**, **Stops…** (the Sky
+with its shelf open) and **Learn the Sky** (the Sky guide), beside **Intake…** (and each Intake tab), **Verify…**
 and **Schedule…**.
 
 **The Sky tour** (`lib/tours/sky.ts`, id `sky`; the ? at the end of the Sky's
 toolbar, and by itself once, the first time the Sky is shown in the calm
-first hour): the Grid · Sky toggle's Sky half (`data-tour="view-sky"`: the
-sidebar's View row, or the top bar's while the sidebar is hidden), a line
-(`sky-line`), the bird (`flights-bird`), the shelf (`sky-shelf`) — each
-falling back to the toggle when it is not on screen.
+first hour) walks every surface in the order a newcomer meets it, one plain
+sentence each: the Grid · Sky toggle (`view-sky`) · a line's bar (drag it, ⋯)
+· the boxes (the session box opens the real terminal) · the bird (click halts
+or carries on, drag jumps) · a stop's hover toolbar · a stop's dialog · the
+shelf (default blocks, saved stops, All blocks…) · a grounded line (drop a
+block on empty sky, attach the Session chip) · selection (marquee, Group into
+a stop, Save to the shelf) · the Drag / Click tools (V / H / Space) · Delete
+· the intake lane · zoom and Fit (0 / 1 / + / −) · the ?. A selector list
+matches in document order and the top bar comes first, so no step falls back
+to the toggle (it would always win): each target is the element's
+`data-tour="sky-…"` hook plus today's class on the same element, and a step
+whose element isn't on screen — an empty sky, no flight, nothing selected —
+centres its card. The grounded-line step falls back to the shelf, which sits
+after every line.
+
+**The Sky guide** (`components/flights/SkyGuide.tsx`, a wide `Modal`,
+`#sky-guide`): the long version. A list of sections on the left — What the
+sky is · Lines and boxes · Stops and saved stops · The bird · Halt points and
+Remove · Grounded stops · Selection · Tools and the keyboard (a table of
+every Sky key) · The intake lane · Where things are saved — and the chosen
+section on the right, each with a small inline sketch drawn in
+`currentColor` and the theme tokens; ↑ / ↓ walk the list, Back / Next walk
+the pages, **Replay the tour** hands over to the coach tour. Its open flag is
+its own small zustand store (`useSkyGuide`, `openSkyGuide(section?)`,
+`closeSkyGuide()`), so the sky's **?** menu (*Open the guide*) and the
+palette's **Learn the Sky** (which shows the sky first) both reach it; the
+sky mounts `<SkyGuide />`, which renders itself from that store.
 
 **The phone** (`/m`) has no canvas: a session perched on you gets a card under
 its plan card — the bird, *Ticket to merge · Perch: Approve the merge* — with
