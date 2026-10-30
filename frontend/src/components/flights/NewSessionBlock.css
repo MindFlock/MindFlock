@@ -1,6 +1,8 @@
-/* The Sky's new-session block (NewSessionBlock.tsx): a card at the spot the
- * owner double-clicked. Its fields are Flights' form controls (.fl-form), so
- * they wear the New dialog's look. */
+/* The Sky's new-session block (NewSessionBlock.tsx): a block on the sky at
+ * the spot the owner double-clicked (or dropped + New session) — a card with
+ * a bar like a line's (the bird, its name; drag it to move the block), a
+ * dashed accent edge while it hasn't flown yet. Its fields are Flights' form
+ * controls (.fl-form), so they wear the New dialog's look. */
 
 .sky-new.fl-form {
   position: absolute;
@@ -10,17 +12,66 @@
   max-width: calc(100vw - 24px);
   grid-template-columns: 1fr;
   gap: 10px;
-  padding: 12px 14px;
+  padding: 0 14px 12px;
   background: var(--panel);
   color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 11px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 12px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
 }
 
+.light .sky-new.fl-form {
+  box-shadow: 0 6px 20px rgba(20, 30, 60, 0.14);
+}
+
+/* The bar: the line's bar, the handle the block is dragged by. */
 .sky-new-head {
-  font-size: 13.5px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  margin: 0 -14px 2px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 12px 12px 0 0;
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+  font-size: 12.5px;
+  user-select: none;
+}
+
+.sky-new-head.is-movable {
+  cursor: move;
+  touch-action: none;
+}
+
+.sky-new-head > .fl-bird {
+  flex: none;
+  color: var(--accent);
+}
+
+.sky-new-name {
+  flex: 1 1 auto;
+  min-width: 0;
   font-weight: 700;
+}
+
+.sky-new-close {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted, var(--text));
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sky-new-close:hover {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  color: var(--text);
 }
 
 .sky-new-path {
