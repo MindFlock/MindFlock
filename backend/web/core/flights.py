@@ -878,6 +878,117 @@ def _s(sid: str, kind: str, title: str, on_fail: str = "halt", **config) -> dict
     }
 
 
+_BOT_PR_PROMPT = (
+    "This pull request was opened by a bot (a dependency or tooling update). "
+    "Read what it changes and the release notes or changelog of every package "
+    "it bumps, looking for breaking changes, deprecations and new defaults "
+    "that touch this codebase. Search the code for the APIs those notes name. "
+    "If something needs adapting, make the smallest change that does it and "
+    "commit it on this branch; if nothing does, change nothing. End with one "
+    "line saying what the update changes for this project."
+)
+_RED_MAIN_PROMPT = (
+    "The default branch is red: a check on its latest commit is failing. Find "
+    "out which check fails and why: read its log, then reproduce the failure "
+    "locally. Look at the commits that landed since main was last green and "
+    "find the one that broke it. Fix the cause, not the symptom: never skip, "
+    "delete or loosen a test to make it pass. Keep the change as small as the "
+    "fix allows, and end with one line naming the cause and the commit that "
+    "introduced it."
+)
+_NIGHTLY_PROMPT = (
+    "Nightly chores: update this project's dependencies to their latest "
+    "versions within the ranges its manifests allow (pip/uv, npm, go, cargo: "
+    "whichever it uses), and refresh the lock files. Read the changelog of "
+    "anything that moved a minor version or more and adapt the code where an "
+    "API changed. Leave major-version bumps out and list them at the end for a "
+    "person to decide. Do not change behaviour beyond what an update needs."
+)
+_NOTES_PROMPT = (
+    "Prepare a release. Find the latest release tag and read every commit and "
+    "merged pull request since it. Pick the next version by semver: a breaking "
+    "change bumps major, a feature minor, fixes only patch. Write the release "
+    "notes in the project's own style (its CHANGELOG, else a new section at the "
+    "top of CHANGELOG.md) grouped as Breaking, Added, Fixed and Changed, each "
+    "line saying what a user notices, not how it was done. Bump the version "
+    "wherever the project records it. Do not tag yet."
+)
+_PUBLISH_PROMPT = (
+    "The release pull request is merged. Check out the default branch, pull, "
+    "and tag the merge commit with the version from the release notes "
+    "(annotated, in the format the earlier tags use), then push the tag. "
+    "Publish the release with the notes you wrote (gh release create, or the "
+    "project's own release script if it has one) and attach the build "
+    "artifacts if the project builds any. End with the release's URL."
+)
+_REPRODUCE_PROMPT = (
+    "Before fixing anything, reproduce the report with a test. Write the "
+    "smallest automated test, next to the existing tests for that code, that "
+    "fails today because of exactly the bug described, and that will pass "
+    "once it is fixed. Run it and confirm it fails for the right reason (the "
+    "bug, not a typo or an import error). Do not change any code under test "
+    "yet."
+)
+_MAKE_IT_PASS_PROMPT = (
+    "Now fix the bug. Make the failing test you wrote pass by changing the "
+    "code under test, not the test. Find the root cause and fix it there, "
+    "and check whether the same mistake exists elsewhere. Run the whole test "
+    "suite, not just the new test, and keep it green."
+)
+#: The presets: saved stops of one agent step each (trigger manual), dragged
+#: onto a line from the shelf. ``{id: (name, description, prompt)}``.
+_PRESETS = {
+    "builtin:preset-docs": (
+        "Update the docs",
+        "Bring the docs in line with what this branch changed.",
+        "Read the diff of {branch} against the default branch and find every "
+        "piece of documentation it makes wrong or incomplete: the README, the "
+        "docs folder, docstrings, CLI help, config references, examples. "
+        "Update them to describe the code as it now is, in the style already "
+        "there. Add docs for anything new a user can see. Change no code.",
+    ),
+    "builtin:preset-tests": (
+        "Write tests",
+        "Cover what this branch changed with tests.",
+        "Read the diff of {branch} against the default branch and write tests "
+        "for the behaviour it adds or changes, next to the existing tests and "
+        "in their style. Cover the edge cases and the failure paths, not just "
+        "the happy path. Run the suite and make sure every new test passes; "
+        "if one exposes a bug, report it rather than weakening the test.",
+    ),
+    "builtin:preset-security": (
+        "Security pass",
+        "Look over this branch's changes for security problems and fix them.",
+        "Review the diff of {branch} against the default branch for security "
+        "problems: injection (SQL, shell, path), unchecked input, secrets in "
+        "code or logs, missing auth or permission checks, unsafe "
+        "deserialisation, SSRF, and new dependencies with known advisories. "
+        "Fix what you find with the smallest change that closes the hole. "
+        "List each finding with its file and line, including the ones you "
+        "chose not to fix and why.",
+    ),
+    "builtin:preset-selfreview": (
+        "Self-review",
+        "Review your own work like a strict reviewer would, then fix it.",
+        "Review the diff of {branch} against the default branch as a strict "
+        "reviewer would: bugs, missed edge cases, error handling, naming, "
+        "dead code, leftover debugging, and changes the task did not ask "
+        "for. Fix every real problem you find and run the tests. End with a "
+        "short list of what you changed and anything you left for a person "
+        "to decide.",
+    ),
+    "builtin:preset-explain": (
+        "Explain the diff",
+        "A plain-language explanation of what this branch changes.",
+        "Explain the diff of {branch} against the default branch to someone "
+        "who has not read it. Say what it changes and why, file by file in "
+        "order of importance, and call out anything risky, surprising or "
+        "hard to undo. Keep it short enough to read in two minutes. Change "
+        "no files.",
+    ),
+}
+
+
 def _builtin_defaults() -> Dict[str, dict]:
     raw = {
         "builtin:ticket": {
@@ -931,7 +1042,129 @@ def _builtin_defaults() -> Dict[str, dict]:
             "trigger": {"kind": "manual"},
             "steps": [_s("s1", "verify", "Verify on live", who="both", wait_live=True)],
         },
+        # Round 15: more built-ins, after the four above (whose order the depth
+        # cut and the shelf rely on).
+        "builtin:botpr": {
+            "name": "Bot PR",
+            "description": "A dependency bot's PR: read it, test it, bring it up to date, merge once checks pass.",
+            "trigger": {"kind": "pr"},
+            "steps": [
+                _s("s1", "agent", "Agent reads it", prompt=_BOT_PR_PROMPT),
+                _s("s2", "test", "Test", on_fail="agent"),
+                _s("s3", "sync", "Sync with main", on_fail="agent"),
+                _s("s4", "checks", "Checks", on_fail="agent"),
+                _s("s5", "ship", "Merge", lane="merge"),
+            ],
+        },
+        "builtin:redmain": {
+            "name": "Red main",
+            "description": "The default branch went red: find out why, fix it, open a PR and ask you.",
+            # The repository to watch is the owner's to pick in the inspector:
+            # an empty repo loads (lenient) and the trigger loop skips it.
+            "trigger": {"kind": "main_red", "repo": ""},
+            "steps": [
+                _s("s1", "agent", "Agent investigates", prompt=_RED_MAIN_PROMPT),
+                _s("s2", "test", "Test", on_fail="agent"),
+                _s("s3", "ship", "Commit", lane="commit"),
+                _s("s4", "ship", "Push", lane="push"),
+                _s("s5", "ship", "Open PR", lane="pr"),
+                _s(
+                    "s6",
+                    "you",
+                    "Look at the fix",
+                    text="Main was red. Look over the fix's pull request and press Done.",
+                ),
+            ],
+        },
+        "builtin:nightly": {
+            "name": "Nightly chores",
+            "description": "Every night at 03:00: update the dependencies, run the tests, open a PR.",
+            # Seeded paused: it fires only once the owner set its folder and
+            # switched it on (an armed seed would start a session on every
+            # install, every night).
+            "trigger": {
+                "kind": "schedule",
+                "schedule": {"at": "03:00", "days": "daily"},
+                "paused": True,
+            },
+            "steps": [
+                _s("s1", "agent", "Agent updates deps", prompt=_NIGHTLY_PROMPT),
+                _s("s2", "test", "Test", on_fail="agent"),
+                _s("s3", "ship", "Commit", lane="commit"),
+                _s("s4", "ship", "Push", lane="push"),
+                _s("s5", "ship", "Open PR", lane="pr"),
+            ],
+        },
+        "builtin:release": {
+            "name": "Release",
+            "description": "Write the release notes, ship them as a PR, merge on your go, tag and publish, land.",
+            "trigger": {"kind": "manual"},
+            "steps": [
+                _s("s1", "agent", "Agent writes the notes", prompt=_NOTES_PROMPT),
+                _s("s2", "ship", "Commit", lane="commit"),
+                _s("s3", "ship", "Push", lane="push"),
+                _s("s4", "ship", "Open PR", lane="pr"),
+                _s("s5", "checks", "Checks", on_fail="agent"),
+                _s(
+                    "s6",
+                    "you",
+                    "Approve the release",
+                    text="Read the release notes in the pull request and press Done to merge and publish.",
+                ),
+                _s("s7", "ship", "Merge", lane="merge"),
+                _s(
+                    "s8",
+                    "agent",
+                    "Agent tags and publishes",
+                    prompt=_PUBLISH_PROMPT,
+                ),
+                _s("s9", "land", "Land"),
+            ],
+        },
+        "builtin:bugreport": {
+            "name": "Bug report",
+            "description": "Reproduce the report with a failing test first, make it pass, ship it, merge on your go.",
+            "trigger": {"kind": "ticket"},
+            "steps": [
+                _s(
+                    "s1",
+                    "agent",
+                    "Write a failing test that reproduces the report",
+                    prompt=_REPRODUCE_PROMPT,
+                ),
+                _s(
+                    "s2",
+                    "test",
+                    "Write the failing test first",
+                    on_fail="agent",
+                    expect="fail",
+                ),
+                _s("s3", "agent", "Make it pass", prompt=_MAKE_IT_PASS_PROMPT),
+                _s("s4", "test", "Test", on_fail="agent"),
+                _s("s5", "ship", "Commit", lane="commit"),
+                _s("s6", "ship", "Push", lane="push"),
+                _s("s7", "verify", "Verify", who="agent"),
+                _s("s8", "ship", "Open PR", lane="pr"),
+                _s("s9", "reviews", "Reviews settle", quiet_minutes=10),
+                _s("s10", "checks", "Checks", on_fail="agent"),
+                _s(
+                    "s11",
+                    "you",
+                    "Approve the merge",
+                    text="Look over the fix and its test and press Done to merge it.",
+                ),
+                _s("s12", "ship", "Merge", lane="merge"),
+                _s("s13", "ticket", "Ticket: comment", comment="Fixed by MindFlock"),
+            ],
+        },
     }
+    for pid, (name, description, prompt) in _PRESETS.items():
+        raw[pid] = {
+            "name": name,
+            "description": description,
+            "trigger": {"kind": "manual"},
+            "steps": [_s("s1", "agent", name, prompt=prompt)],
+        }
     out = {}
     for pid, p in raw.items():
         plan = normalize_plan(p, strict=False)
@@ -2068,6 +2301,51 @@ def _merge_detail(action: dict, upd: dict) -> dict:
     return action
 
 
+# --- Receipts -------------------------------------------------------------------
+#: A receipt (``detail.receipt`` on ``done``) is what the stop did, in a few
+#: words: the box shows it once the stop has flown.
+MAX_RECEIPT = 80
+_PR_NUMBER_RE = re.compile(r"/(?:pull|pulls|merge_requests)/(\d+)")
+
+
+def plural(n: int, word: str) -> str:
+    return "%d %s%s" % (n, word, "" if n == 1 else "s")
+
+
+def _span(seconds: float) -> str:
+    """A duration a person reads: ``"12 min"``, ``"2 h 5 min"``."""
+    m = max(1, int(round(max(0.0, seconds) / 60.0)))
+    if m < 60:
+        return "%d min" % m
+    return "%d h" % (m // 60) + (" %d min" % (m % 60) if m % 60 else "")
+
+
+def _receipt(action: dict, text: str) -> dict:
+    """``action`` (a ``done``) carrying ``text`` as its receipt."""
+    action.setdefault("detail", {})["receipt"] = str(text)[:MAX_RECEIPT]
+    return action
+
+
+def ship_receipt(lane: str, url: str = "") -> str:
+    """A ship stop's receipt: ``"PR #291"`` for the pr lane (from the PR's
+    url), else what the lane did."""
+    if lane == "pr":
+        m = _PR_NUMBER_RE.search(str(url or ""))
+        return "PR #%s" % m.group(1) if m else "PR opened"
+    return {"commit": "committed", "push": "pushed", "merge": "merged"}.get(
+        lane, "shipped"
+    )
+
+
+def ticket_receipt(config: dict) -> str:
+    """A ticket stop's receipt: ``"→ Done"`` when it moved the ticket, else
+    ``"commented"``."""
+    state = str((config or {}).get("state") or "").strip()
+    if state:
+        return "→ %s" % state
+    return "commented" if (config or {}).get("comment") else "nothing to do"
+
+
 def _judge_agent(flight, step, ss, obs, now) -> dict:
     d = ss["detail"]
     need = not d.get("no_prompt")
@@ -2077,7 +2355,10 @@ def _judge_agent(flight, step, ss, obs, now) -> dict:
     if not step["config"].get("join", True) or not isinstance(kids, list):
         if held is not None:
             return held
-        return {"action": "done", "note": "the agent's turn settled"}
+        return _receipt(
+            {"action": "done", "note": "the agent's turn settled"},
+            "settled after %s" % _span(now - ss["since"]),
+        )
     view = join_view(kids, d, ss["since"], now)
     upd = view["detail"] if (view["total"] or "children" in d) else {}
     if held is not None:
@@ -2094,17 +2375,20 @@ def _judge_agent(flight, step, ss, obs, now) -> dict:
         # The last worker finished after the agent went idle: give the agent
         # one settle window to pick its report up before calling it done.
         return _wait("the agent is reading its workers' reports", idle_since=now, **upd)
-    return _merge_detail(
-        {
-            "action": "done",
-            "note": (
-                "the agent and its %d worker%s are done"
-                % (view["total"], "" if view["total"] == 1 else "s")
-                if view["total"]
-                else "the agent's turn settled"
-            ),
-        },
-        upd,
+    return _receipt(
+        _merge_detail(
+            {
+                "action": "done",
+                "note": (
+                    "the agent and its %d worker%s are done"
+                    % (view["total"], "" if view["total"] == 1 else "s")
+                    if view["total"]
+                    else "the agent's turn settled"
+                ),
+            },
+            upd,
+        ),
+        "settled after %s" % _span(now - ss["since"]),
     )
 
 
@@ -2315,16 +2599,20 @@ def _judge_join(flight, step, ss, obs, now) -> dict:
         }
     if view["waiting"]:
         return _wait(view["note"], **upd)
-    return {
-        "action": "done",
-        "note": (
-            "all %d worker%s finished"
-            % (view["total"], "" if view["total"] == 1 else "s")
-            if view["total"]
-            else "no workers to wait for"
-        ),
-        "detail": upd,
-    }
+    done = sum(1 for e in upd.get("children") or [] if e.get("state") == "done")
+    return _receipt(
+        {
+            "action": "done",
+            "note": (
+                "all %d worker%s finished"
+                % (view["total"], "" if view["total"] == 1 else "s")
+                if view["total"]
+                else "no workers to wait for"
+            ),
+            "detail": upd,
+        },
+        "%d of %d done" % (done, view["total"]) if view["total"] else "no workers",
+    )
 
 
 def _ours(flight: dict, rec: dict, lane: str) -> bool:
@@ -2354,7 +2642,10 @@ def _judge_ship(flight, step, ss, obs, now) -> dict:
     if state == "done" and _awaiting_go(rec):
         return _wait("waiting for your go — Fast-track asks before it ships")
     if state == "done":
-        return {"action": "done", "note": rec.get("url") or ""}
+        return _receipt(
+            {"action": "done", "note": rec.get("url") or ""},
+            ship_receipt(lane, rec.get("url") or ""),
+        )
     if state == "halted":
         return {"action": "fail", "reason": rec.get("reason") or "Fast-track stopped"}
     return _wait(rec.get("note") or "shipping: %s" % (rec.get("step") or lane))
@@ -2419,10 +2710,10 @@ def _judge_verify(flight, step, ss, obs, now) -> dict:
         }
     if who == "agent":
         if v.get("settled") or not open_agent:
-            return {
-                "action": "done",
-                "note": "the agent's checklist items are answered",
-            }
+            return _receipt(
+                {"action": "done", "note": "the agent's checklist items are answered"},
+                _verify_receipt(v),
+            )
         return _wait("the agent's checklist items are still open", **up)
     if who == "you":
         open_human = open_human + open_agent
@@ -2430,7 +2721,10 @@ def _judge_verify(flight, step, ss, obs, now) -> dict:
         # The agent's run ended with items it never answered: a person's now.
         open_human = open_human + open_agent
     if v.get("settled") or not open_human:
-        return {"action": "done", "note": "every checklist item has an answer"}
+        return _receipt(
+            {"action": "done", "note": "every checklist item has an answer"},
+            _verify_receipt(v),
+        )
     return {
         "action": "you",
         "note": "%d checklist item%s for you"
@@ -2439,12 +2733,29 @@ def _judge_verify(flight, step, ss, obs, now) -> dict:
     }
 
 
+def _verify_receipt(v: dict) -> str:
+    """``"k of n"``: the checklist's answered items of all of them."""
+    n = len(v.get("steps") or [])
+    k = v.get("answered")
+    if not isinstance(k, int):
+        k = n - len(v.get("open_agent") or []) - len(v.get("open_human") or [])
+    return "%d of %d" % (max(0, min(k, n)), n)
+
+
 def _judge_wait(flight, step, ss, obs, now) -> dict:
     until = float(ss["detail"].get("until") or 0.0)
     if not until:
         return {"action": "run", "note": "setting the timer"}
     if now >= until:
-        return {"action": "done", "note": ""}
+        cfg = step["config"]
+        return _receipt(
+            {"action": "done", "note": ""},
+            (
+                "until %s" % cfg["until"]
+                if cfg.get("until")
+                else "%d min" % int(cfg.get("minutes") or 0)
+            ),
+        )
     return _wait("%s left" % _mins(until - now))
 
 
@@ -2508,10 +2819,14 @@ def _judge_reviews(flight, step, ss, obs, now) -> dict:
     quiet_since = float(d.get("quiet_since") or ss["since"])
     quiet = cfg["quiet_minutes"] * 60.0
     if now - quiet_since >= quiet:
-        return {
-            "action": "done",
-            "note": "no new review comments for %d min" % cfg["quiet_minutes"],
-        }
+        rounds = int(d.get("review_rounds") or 0)
+        return _receipt(
+            {
+                "action": "done",
+                "note": "no new review comments for %d min" % cfg["quiet_minutes"],
+            },
+            "%s, quiet" % (plural(rounds, "round") if rounds else "no rounds"),
+        )
     return _wait(
         "quiet for %s of %d min" % (_mins(now - quiet_since), cfg["quiet_minutes"])
     )
@@ -2522,9 +2837,11 @@ def _judge_checks(flight, step, ss, obs, now) -> dict:
     verdict = c.get("verdict") or ""
     waited = now - ss["since"]
     if verdict == "ok":
-        return {"action": "done", "note": "every check passed"}
+        return _receipt({"action": "done", "note": "every check passed"}, "all green")
     if verdict == "none" and waited >= CHECKS_NONE_GRACE_S:
-        return {"action": "done", "note": "no checks report on this commit"}
+        return _receipt(
+            {"action": "done", "note": "no checks report on this commit"}, "no checks"
+        )
     if verdict == "failed":
         names = [str(n) for n in c.get("failing") or []]
         return {
@@ -2555,7 +2872,11 @@ def _judge_command(flight, step, ss, obs, now) -> dict:
         return _wait("running: %s" % lines[0][:80])
     out = str(c.get("output") or "")
     if c.get("exit") == 0:
-        return {"action": "done", "note": "exit 0", "detail": {"output": out}}
+        return {
+            "action": "done",
+            "note": "exit 0",
+            "detail": {"output": out, "receipt": "exit 0"},
+        }
     return {
         "action": "fail",
         "reason": "exited %s: %s" % (c.get("exit"), out[-2000:].strip() or "no output"),

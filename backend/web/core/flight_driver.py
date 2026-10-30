@@ -352,6 +352,9 @@ def _verify_obs(flight: dict, ss: dict, sess: dict) -> dict:
         "state": plan.get("state") or "",
         "error": plan.get("error") or "",
         "steps": [s["id"] for s in plan["steps"]],
+        "answered": sum(
+            1 for s in plan["steps"] if (results.get(s["id"]) or {}).get("result")
+        ),
         "settled": _tp.is_settled(plan),
         "open_human": [s["text"] for s in _tp.open_human_steps(plan)],
         "open_agent": open_agent,
@@ -1410,7 +1413,7 @@ async def _run_split(flight: dict, step: dict, action: dict) -> dict:
     return {
         "action": "done",
         "note": "spawned %d worker%s" % (len(made), "" if len(made) == 1 else "s"),
-        "detail": {"children": made},
+        "detail": {"children": made, "receipt": _flights.plural(len(made), "worker")},
     }
 
 
@@ -1545,10 +1548,14 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
                     "action": "advance",
                     "note": "the ticket's source is not set up here",
                 }
-            return {"action": "done", "note": "the ticket was updated"}
+            return {
+                "action": "done",
+                "note": "the ticket was updated",
+                "detail": {"receipt": _flights.ticket_receipt(step["config"])},
+            }
         if sk == "notify":
             await asyncio.to_thread(_run_notify, flight, step)
-            return {"action": "done", "note": "sent"}
+            return {"action": "done", "note": "sent", "detail": {"receipt": "sent"}}
         if sk == "split":
             return await _run_split(flight, step, action)
         if sk == "join":

@@ -164,7 +164,7 @@ def test_lenient_normaliser_drops_junk_steps():
 # --------------------------------------------------------------------------- #
 def test_builtins_are_seeded_first_and_shaped_as_documented():
     plans = F.list_plans()
-    assert [p["id"] for p in plans[:4]] == list(F.BUILTIN_IDS)
+    assert [p["id"] for p in plans[: len(F.BUILTIN_IDS)]] == list(F.BUILTIN_IDS)
     t = F.get_plan("builtin:ticket")
     assert (
         t["name"] == "Ticket to merge"
@@ -199,7 +199,7 @@ def test_save_edit_delete_and_reset(tmp_path):
     assert p["id"].startswith("p_") and not p["builtin"] and p["updated"] == NOW
     p2 = F.save_plan(dict(p, name="Renamed"))
     assert p2["id"] == p["id"] and F.get_plan(p["id"])["name"] == "Renamed"
-    assert [x["name"] for x in F.list_plans()][4:] == ["Renamed"]
+    assert [x["name"] for x in F.list_plans()][len(F.BUILTIN_IDS) :] == ["Renamed"]
     with pytest.raises(F.FlightError) as err:
         F.save_plan(dict(p, id="p_nope"))
     assert err.value.status == 404
