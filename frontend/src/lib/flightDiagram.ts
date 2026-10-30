@@ -23,12 +23,18 @@
  * and fans back in at the next box — the join point, which reads "waiting for
  * 2 of 5" while the parent's flight waits on them (docs/flights-branches.md).
  *
+ * Consecutive stops sharing `step.group.id` are ONE `group` box (a stop with
+ * sub-steps, `collapseGroups`) unless the line expands it; the canvas counts
+ * a group box as one place (`drawnIndexes` / `drawnCanvas` map its places to
+ * the flight's indexes and back).
+ *
  * `layoutDiagram` places the boxes and draws the connectors as SVG paths from
  * fixed box sizes, so the markup (and a test of it) needs no DOM measuring. */
 
 import type { AutopilotRun, Instance } from "../api/types";
 import { LANE_LABEL, normalizeLane, type Lane } from "./autopilot";
 import { deriveSessionState } from "./sessionState";
+import { windowName } from "./windowName";
 import {
   isLive,
   perchLabel,
@@ -45,8 +51,10 @@ import {
 // --- The model ----------------------------------------------------------------
 
 /** `flown` stands for the stops a flight has already flown (two or more,
- * done or skipped, before its current one), folded into one pill. */
-export type DiagramNodeKind = "parent" | "session" | "child" | "branch" | "rung" | "stop" | "add" | "flown";
+ * done or skipped, before its current one), folded into one pill. `group`
+ * is a stop with sub-steps: consecutive steps sharing `step.group.id`, drawn
+ * as ONE box until its line expands it (docs/flights.md "Round 11"). */
+export type DiagramNodeKind = "parent" | "session" | "child" | "branch" | "rung" | "stop" | "add" | "flown" | "group";
 
 /** What a box shows. `edit` is a flyway's stop being drawn (no run yet). */
 export type DiagramNodeState =
@@ -74,6 +82,22 @@ export type BranchState = "working" | "asking" | "done" | "failed" | "gone";
 export interface JoinCount {
   waiting: number;
   total: number;
+}
+
+/** A group box's sub-steps: the group, its steps in line order, their own
+ * stop nodes (with their live states) and how far it has flown. */
+export interface GroupInfo {
+  id: string;
+  name: string;
+  plan_id: string;
+  steps: FlightStep[];
+  nodes: DiagramNode[];
+  /** Sub-steps done or skipped, of `total`. */
+  done: number;
+  total: number;
+  /** While it flies: the sub-step the flight is at (its title is the box's
+   * second line). */
+  current?: DiagramNode;
 }
 
 export interface DiagramNode {
@@ -110,6 +134,11 @@ export interface DiagramNode {
   /** flown: how many stops it folds, and their titles in line order. */
   count?: number;
   flown?: string[];
+  /** group: its sub-steps (`index` is its first sub-step's). */
+  group?: GroupInfo;
+  /** A sub-step of a group its line has expanded: drawn as a normal stop,
+   * inside a thin outline labelled with the group's name. */
+  inGroup?: { id: string; name: string; first: boolean; last: boolean };
 }
 
 /** `fan` runs from a stop out to a branch, `join` from a branch into the
@@ -246,6 +275,8 @@ export function flywayDiagram(steps: readonly FlightStep[], kinds?: readonly Ste
 /** A flight's stops with their live state. */
 export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): DiagramNode[] {
   const live = isLive(f);
+  // Stops with no session yet: nothing has flown, every one can change.
+  const grounded = f.state === "grounded";
   return f.steps.map((s, i) => {
     const st = stepStateOf(f, s, i);
     const atCursor = i === f.cursor && live;
@@ -265,7 +296,7 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
       perch: stepActor(s, kinds) === "you",
       step: s,
       index: i,
-      editable: live && state === "pending" && i > f.cursor,
+      editable: grounded || (live && state === "pending" && i > f.cursor),
       reason: state === "halted" || state === "failed" ? f.reason || rec?.note || "" : "",
     };
   });
@@ -275,7 +306,7 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
  * while it is in the air. */
 export function flightDiagram(f: Flight, kinds?: readonly StepKindDef[] | null): Diagram {
   const line = flightStops(f, kinds);
-  if (isLive(f)) line.push(addNode("Tack on a stop"));
+  if (isLive(f) || f.state === "grounded") line.push(addNode("Tack on a stop"));
   const nodes: DiagramNode[] = [];
   const edges: DiagramEdge[] = [];
   chain(nodes, edges, line);
@@ -324,7 +355,8 @@ function sessionBox(row: Instance, kind: "parent" | "session" | "child", rowAt: 
     id: kind + ":" + row.title,
     kind,
     row: rowAt,
-    title: row.title,
+    // The shown name (a rename, the sidebar's label); keys stay the title.
+    title: windowName(row.title),
     sub: String(row.task_headline || row.task || "").split("\n")[0].trim(),
     state: "session",
     icon: "session",
@@ -341,9 +373,15 @@ export interface SessionDiagramOpts {
   kinds?: readonly StepKindDef[] | null;
   /** Leave the parent and children out (the Board's one-row card). */
   family?: boolean;
-  /** Draw every stop that has flown (a line's own toggle); by default two
-   * or more of them before the current stop fold into one `flown` pill. */
+  /** Fold the stops that have flown (two or more before the current stop)
+   * into one `flown` pill — a line's own toggle; off by default, flown stops
+   * stay as boxes (round 11). */
+  foldFlown?: boolean;
+  /** The older inverse of `foldFlown`: `false` folds. */
   expandFlown?: boolean;
+  /** The groups (`step.group.id`) this line draws open: their sub-steps as
+   * stop boxes in a thin outline, instead of one group box. */
+  expandedGroups?: ReadonlySet<string> | null;
 }
 
 /** The SESSION's live diagram, from `/api/instances` rows: parent above, the
@@ -442,7 +480,55 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
       edges.push({ from: me.id, to: c.id, kind: "branch" });
     }
   const d: Diagram = { nodes, edges, flightId, mode, insertFrom };
-  return mode === "flight" && !opts.expandFlown ? collapseFlown(d) : d;
+  if (mode !== "flight") return d;
+  const grouped = collapseGroups(d, opts.expandedGroups);
+  const fold = opts.foldFlown === true || opts.expandFlown === false;
+  return fold ? collapseFlown(grouped) : grouped;
+}
+
+// --- Folding a run of the line into one box ----------------------------------------
+
+/** The line with the consecutive main-row boxes `run` drawn as ONE box,
+ * `into`: the line's edges chain through it; a column of branches that fanned
+ * out of a folded box fans out of `into` and, when it joined at a folded box
+ * too, joins at the box after the run; a branch from outside that joined at a
+ * folded box joins at `into`. The flown pill and a collapsed group both fold
+ * this way. */
+function foldRun(d: Diagram, run: readonly DiagramNode[], into: DiagramNode): Diagram {
+  const main = d.nodes.filter((n) => n.row === "main");
+  const folded = new Set(run.map((n) => n.id));
+  const first = run[0];
+  const after = main[main.indexOf(run[run.length - 1]) + 1];
+  const to = (id: string) => (folded.has(id) ? into.id : id);
+  // Branches that fan out of a folded box: they join past the run.
+  const inner = new Set<string>();
+  const nodes: DiagramNode[] = [];
+  for (const n of d.nodes) {
+    if (n.id === first.id) nodes.push(into);
+    if (folded.has(n.id)) continue;
+    if (n.branch && folded.has(n.branch.from)) {
+      inner.add(n.id);
+      nodes.push({ ...n, branch: { ...n.branch, from: into.id, to: after && folded.has(n.branch.to) ? after.id : n.branch.to } });
+    } else if (n.branch && folded.has(n.branch.to)) nodes.push({ ...n, branch: { ...n.branch, to: into.id } });
+    else nodes.push(n);
+  }
+  const fanned = inner.size > 0;
+  const edges: DiagramEdge[] = [];
+  const seen = new Set<string>();
+  for (const e of d.edges) {
+    const from = to(e.from);
+    let dest = to(e.to);
+    // A fan-in into a folded box from a branch of the run joins past it.
+    if (e.kind === "join" && dest === into.id && inner.has(e.from) && after) dest = after.id;
+    if (from === dest) continue;
+    // The line reaches the box after the run THROUGH its branches.
+    if (fanned && from === into.id && (e.kind === "line" || e.kind === "add")) continue;
+    const key = from + ">" + dest + ">" + e.kind;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    edges.push(e.done ? { from, to: dest, kind: e.kind, done: true } : { from, to: dest, kind: e.kind });
+  }
+  return { ...d, nodes, edges };
 }
 
 // --- What has flown: folded into one pill ----------------------------------------
@@ -454,20 +540,20 @@ export const FLOWN_ID = "flown";
 /** The line with the stops it has already flown folded into ONE `flown`
  * node: the leading run of done / skipped stops before the first stop that
  * isn't (the flight's current one), when there are `FLOWN_MIN` or more. A
- * failed stop breaks the run (it stays in sight). The line's edges chain
- * through the pill; a column of branches that fanned out of a folded stop
- * fans out of the pill instead and joins at the box after it. `insertFrom`
- * and every stop's `index` stay the flight's own. */
+ * failed stop breaks the run (it stays in sight), and so does a group (or a
+ * sub-step of an expanded one). The line's edges chain through the pill; a
+ * column of branches that fanned out of a folded stop fans out of the pill
+ * instead and joins at the box after it. `insertFrom` and every stop's
+ * `index` stay the flight's own. */
 export function collapseFlown(d: Diagram): Diagram {
   const main = d.nodes.filter((n) => n.row === "main");
   const run: DiagramNode[] = [];
   for (const n of main) {
     if (n.kind === "session") continue;
-    if (n.kind !== "stop" || (n.state !== "done" && n.state !== "skipped")) break;
+    if (n.kind !== "stop" || n.inGroup || (n.state !== "done" && n.state !== "skipped")) break;
     run.push(n);
   }
   if (run.length < FLOWN_MIN) return d;
-  const folded = new Set(run.map((n) => n.id));
   const first = run[0];
   const last = run[run.length - 1];
   const pill: DiagramNode = {
@@ -481,48 +567,196 @@ export function collapseFlown(d: Diagram): Diagram {
     count: run.length,
     flown: run.map((n) => n.title),
   };
-  const after = main[main.indexOf(last) + 1];
-  const to = (id: string) => (folded.has(id) ? FLOWN_ID : id);
-  const nodes: DiagramNode[] = [];
+  return foldRun(d, run, pill);
+}
+
+// --- Groups: a stop with sub-steps ----------------------------------------------------
+
+const FLYING: ReadonlySet<DiagramNodeState> = new Set(["current", "perched", "halted", "paused"]);
+
+/** One group box from its run of sub-step nodes. Its state: done once every
+ * sub-step is done or skipped; the flight's state while it is at one of them
+ * (current, perched, halted, paused); failed when one failed; else pending
+ * (or `edit`, being drawn). It reads "k of n" while it flies, the current
+ * sub-step's title as its second line. */
+export function groupNode(id: string, g: { id: string; name: string; plan_id?: string }, run: readonly DiagramNode[]): DiagramNode {
+  const total = run.length;
+  const done = run.filter((n) => n.state === "done" || n.state === "skipped").length;
+  const flying = run.find((n) => FLYING.has(n.state));
+  const failed = run.find((n) => n.state === "failed");
+  const state: DiagramNodeState =
+    done === total ? "done" : flying ? flying.state : failed ? "failed" : run.every((n) => n.state === "edit") ? "edit" : "pending";
+  const titles = run.map((n) => n.title).join(" → ");
+  const node: DiagramNode = {
+    id,
+    kind: "group",
+    row: "main",
+    title: g.name,
+    sub: flying ? flying.title : total + (total === 1 ? " stop: " : " stops: ") + clip(titles, 40),
+    state,
+    icon: "group",
+    perch: flying?.perch,
+    index: run[0].index,
+    editable: run.every((n) => !!n.editable),
+    reason: (flying || failed)?.reason || "",
+    group: { id: g.id, name: g.name, plan_id: g.plan_id || "", steps: run.map((n) => n.step!), nodes: run.slice(), done, total, ...(flying ? { current: flying } : {}) },
+  };
+  const join = run.find((n) => n.join)?.join;
+  if (join) node.join = join;
+  return node;
+}
+
+/** The line with each run of consecutive stops that share `step.group.id`
+ * drawn as ONE `group` box (`groupNode`), except the groups in `expanded`:
+ * their sub-steps stay stop boxes, marked `inGroup` for the canvas's outline.
+ * A group id that comes back later on the line (not consecutive) is a box of
+ * its own (`group:<id>@<index>`). Branches out of a sub-step hang off the
+ * group box. Indexes stay the flight's own. */
+export function collapseGroups(d: Diagram, expanded?: ReadonlySet<string> | null): Diagram {
+  const runs: DiagramNode[][] = [];
+  let cur: DiagramNode[] = [];
+  let curId = "";
   for (const n of d.nodes) {
-    if (n.id === first.id) nodes.push(pill);
-    if (folded.has(n.id)) continue;
-    // A branch out of a folded stop: out of the pill, joining past it.
-    if (n.branch && folded.has(n.branch.from))
-      nodes.push({ ...n, branch: { ...n.branch, from: FLOWN_ID, to: after && folded.has(n.branch.to) ? after.id : n.branch.to } });
-    else nodes.push(n);
+    if (n.row !== "main") continue;
+    const gid = n.kind === "stop" ? n.step?.group?.id || "" : "";
+    if (gid && gid === curId) cur.push(n);
+    else {
+      if (cur.length) runs.push(cur);
+      cur = gid ? [n] : [];
+      curId = gid;
+    }
   }
-  const fanned = nodes.some((n) => n.branch?.from === FLOWN_ID);
-  const edges: DiagramEdge[] = [];
+  if (cur.length) runs.push(cur);
+  if (!runs.length) return d;
+  let out = d;
   const seen = new Set<string>();
-  for (const e of d.edges) {
-    const from = to(e.from);
-    let dest = to(e.to);
-    // A fan-in into a folded stop joins at the box after the pill.
-    if (e.kind === "join" && dest === FLOWN_ID && after) dest = after.id;
-    if (from === dest) continue;
-    // The line reaches the box after the pill THROUGH its branches.
-    if (fanned && from === FLOWN_ID && (e.kind === "line" || e.kind === "add")) continue;
-    const key = from + ">" + dest + ">" + e.kind;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    edges.push(e.done ? { from, to: dest, kind: e.kind, done: true } : { from, to: dest, kind: e.kind });
+  for (const run of runs) {
+    const g = run[0].step!.group!;
+    const id = "group:" + g.id + (seen.has(g.id) ? "@" + run[0].index : "");
+    seen.add(g.id);
+    if (expanded?.has(g.id)) {
+      const marks = new Map(run.map((n, i) => [n.id, { id: g.id, name: g.name, first: i === 0, last: i === run.length - 1 }]));
+      out = { ...out, nodes: out.nodes.map((n) => (marks.has(n.id) ? { ...n, inGroup: marks.get(n.id)! } : n)) };
+      continue;
+    }
+    out = foldRun(out, run, groupNode(id, g, run));
   }
-  return { ...d, nodes, edges };
+  return out;
+}
+
+/** The group box (or stop) the flight's step `index` is drawn in. */
+export function nodeAtIndex(d: Pick<Diagram, "nodes">, index: number): DiagramNode | undefined {
+  return d.nodes.find(
+    (n) => n.row === "main" && n.index !== undefined && (n.kind === "stop" ? n.index === index : n.kind === "group" && index >= n.index && index < n.index + (n.group?.total || 1))
+  );
+}
+
+// --- Drawn places and the flight's indexes ---------------------------------------------
+
+/** One place on the line as the canvas counts it: a stop, or a collapsed
+ * group (`size` sub-steps, the first at the flight's index `first`). */
+export interface LineUnit {
+  node: DiagramNode;
+  first: number;
+  size: number;
+}
+
+/** The line's places in order: its stops and its collapsed groups. */
+export function lineUnits(d: Pick<Diagram, "nodes">): LineUnit[] {
+  return d.nodes
+    .filter((n) => n.row === "main" && (n.kind === "stop" || n.kind === "group") && n.index !== undefined)
+    .map((n) => ({ node: n, first: n.index!, size: n.kind === "group" ? n.group?.total || 1 : 1 }));
+}
+
+/** The flight's index for the canvas's place `p` (an insert's gap, a drop):
+ * the first step of the place's unit; past the last one, the end. */
+export function flightIndexAt(d: Pick<Diagram, "nodes">, p: number): number {
+  const u = lineUnits(d);
+  if (!u.length) return p;
+  if (p < u.length) return u[Math.max(0, p)].first;
+  const last = u[u.length - 1];
+  return last.first + last.size + (p - u.length);
+}
+
+/** A move between two drawn places in the flight's indexes (`to` is the
+ * index in the final list, as the move route takes it): moving later lands
+ * right after the target's last step, earlier right before its first. */
+export function flightMove(d: Pick<Diagram, "nodes">, from: number, to: number): { from: number; to: number } {
+  const u = lineUnits(d);
+  if (!u[from] || !u[to]) return { from, to };
+  const f = u[from].first;
+  if (to === from) return { from: f, to: f };
+  return { from: f, to: to > from ? u[to].first + u[to].size - u[from].size : u[to].first };
 }
 
 /** The line as a canvas counts it: a canvas speaks of a stop by its place
- * among the DRAWN stops (a move's from / to, an insert's gap) and compares it
- * with `insertFrom`, so with a `flown` pill folding N stops every stop's
- * `index` and `insertFrom` come down by N. The host adds N back on the way to
- * the flight (SkyLine's `flownCanvas`). Without a pill: the diagram itself. */
+ * among the DRAWN places (a move's from / to, an insert's gap) and compares it
+ * with `insertFrom`, so with a `flown` pill folding N stops, or a group box
+ * holding several, every place's `index` and `insertFrom` are renumbered to
+ * drawn places (`lineUnits`). `drawnCanvas` maps the canvas's numbers back.
+ * A line already counted that way (nothing folded, no group box): the
+ * diagram itself. */
 export function drawnIndexes(d: Diagram): Diagram {
-  const off = flownCount(d);
-  if (!off) return d;
+  const u = lineUnits(d);
+  let from = u.findIndex((x) => x.first >= d.insertFrom);
+  if (from < 0) from = u.length;
+  if (from === d.insertFrom && u.every((x, p) => x.first === p)) return d;
+  const at = new Map(u.map((x, p) => [x.node.id, p]));
   return {
     ...d,
-    insertFrom: Math.max(0, d.insertFrom - off),
-    nodes: d.nodes.map((n) => (n.index !== undefined && n.kind === "stop" ? { ...n, index: n.index - off } : n)),
+    insertFrom: from,
+    nodes: d.nodes.map((n) => (at.has(n.id) ? { ...n, index: at.get(n.id)! } : n)),
+  };
+}
+
+/** The canvas handlers `drawnCanvas` maps (FlywayCanvas's, structurally). */
+export interface IndexedCanvas {
+  onSelect?(n: DiagramNode): void;
+  onEdit?(n: DiagramNode): void;
+  onOpen?(n: DiagramNode): void;
+  onInsert?(at: number): void;
+  onRemove?(n: DiagramNode): void;
+  onMove?(from: number, to: number): void;
+  onDuplicate?(n: DiagramNode): void;
+  onToggleHalt?(n: DiagramNode): void;
+  onDropStop?(drop: never, at: number | null): void;
+  renderInBox?(n: DiagramNode): unknown;
+  sizeOf?(n: DiagramNode, base: BoxSize): BoxSize;
+}
+
+/** A line in the flight's indexes (`d`) and its canvas handlers (which speak
+ * them), made ready for FlywayCanvas: the diagram renumbered to drawn places
+ * (`drawnIndexes`) and handlers that map the canvas's places back — moves
+ * (`flightMove`), inserts and drops (`flightIndexAt`) — and hand back the
+ * line's own nodes. A line already counted that way passes through untouched,
+ * so it is safe to apply twice. */
+export function drawnCanvas<C extends IndexedCanvas>(d: Diagram, canvas: C): { diagram: Diagram; canvas: C } {
+  const drawn = drawnIndexes(d);
+  if (drawn === d) return { diagram: d, canvas };
+  const byId = new Map(d.nodes.map((n) => [n.id, n]));
+  const orig = (n: DiagramNode) => byId.get(n.id) || n;
+  const c = canvas;
+  const node = <F extends ((n: DiagramNode, ...rest: never[]) => unknown) | undefined>(f: F): F =>
+    (f && ((n: DiagramNode, ...rest: never[]) => f(orig(n), ...rest))) as F;
+  return {
+    diagram: drawn,
+    canvas: {
+      ...c,
+      onSelect: node(c.onSelect),
+      onEdit: node(c.onEdit),
+      onOpen: node(c.onOpen),
+      onRemove: node(c.onRemove),
+      onDuplicate: node(c.onDuplicate),
+      onToggleHalt: node(c.onToggleHalt),
+      renderInBox: node(c.renderInBox),
+      sizeOf: c.sizeOf && ((n: DiagramNode, b: BoxSize) => c.sizeOf!(orig(n), b)),
+      onInsert: c.onInsert && ((at: number) => c.onInsert!(flightIndexAt(d, at))),
+      onMove: c.onMove && ((from: number, to: number) => {
+        const m = flightMove(d, from, to);
+        c.onMove!(m.from, m.to);
+      }),
+      onDropStop: c.onDropStop && ((drop: never, at: number | null) => c.onDropStop!(drop, at === null ? null : flightIndexAt(d, at))),
+    },
   };
 }
 
@@ -535,7 +769,7 @@ export function lineWhere(d: Diagram): string {
   const n = b ? d.nodes.find((x) => x.id === b.nodeId) : undefined;
   if (!b || !n || n.kind === "session") return "";
   const head = n.kind === "rung" ? "fast-track at " : b.tone === "you" ? "waiting on you at " : b.tone === "halted" ? "halted at " : b.tone === "paused" ? "paused at " : "at ";
-  const tail = n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? n.reason : n.kind === "stop" ? n.sub : "";
+  const tail = n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? n.reason : n.kind === "stop" || n.kind === "group" ? n.sub : "";
   return head + n.title + (tail ? " · " + tail : "");
 }
 
@@ -672,7 +906,7 @@ function branchesOf(title: string, kids: readonly Instance[], line: DiagramNode[
       id: "branch:" + k.title,
       kind: "branch",
       row: "branch",
-      title: k.title,
+      title: windowName(k.title),
       sub: inner || (entry?.report ? clip(String(entry.report)) : k.last_report?.summary ? clip(k.last_report.summary) : ""),
       state: BRANCH_NODE_STATE[state],
       icon: "session",
@@ -731,7 +965,7 @@ const STOP_TONE: Partial<Record<DiagramNodeState, BirdTone>> = {
  * the session is idle with nothing armed. */
 export function birdPerch(d: Diagram): BirdPerch | null {
   const main = d.nodes.filter((n) => n.row === "main");
-  const stop = main.find((n) => n.kind === "stop" && STOP_TONE[n.state]);
+  const stop = main.find((n) => (n.kind === "stop" || n.kind === "group") && STOP_TONE[n.state]);
   if (stop && (stop.state === "halted" || stop.state === "paused")) return { nodeId: stop.id, tone: STOP_TONE[stop.state]! };
   const point = main.find((n) => n.join && n.join.waiting > 0);
   if (point) {
@@ -1014,13 +1248,15 @@ export function dropIndex(otherCenters: readonly number[], at: number): number {
  * commits through `moveStep`. */
 export function reorderDiagram(d: Diagram, from: number, to: number): Diagram {
   const main = d.nodes.filter((n) => n.row === "main");
-  const stops = main.filter((n) => n.kind === "stop");
+  // A group box is one place, as the canvas counts them.
+  const isPlace = (n: DiagramNode) => n.kind === "stop" || n.kind === "group";
+  const stops = main.filter(isPlace);
   if (from === to || !stops[from] || to < 0 || to >= stops.length) return d;
   const moved = stops.slice();
   const [it] = moved.splice(from, 1);
   moved.splice(to, 0, it);
   let k = 0;
-  const line = main.map((n) => (n.kind === "stop" ? moved[k++] : n));
+  const line = main.map((n) => (isPlace(n) ? moved[k++] : n));
   const lineIds = new Set(line.map((n) => n.id));
   // Branches follow the stop they fan out of and join at its new next box.
   const next = new Map(line.slice(0, -1).map((n, i) => [n.id, line[i + 1].id]));

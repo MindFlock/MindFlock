@@ -288,7 +288,8 @@ describe("the pane's Flight tab: the session diagram", () => {
   it("draws the parent, the session, its workers, the flight's stops and the trailing +", () => {
     const fRow = { id: "f_1", plan_name: "Ticket to merge", cursor: 2, total: 4, state: "waiting_you", step: { id: "s3", kind: "you", title: "Approve the merge", state: "waiting_you", actor: "you" } };
     const html = render([rowOf("lead"), rowOf("me", { parent: "lead", flight: fRow }), rowOf("w1", { parent: "me" })], "me");
-    expect(boxes(html).map(([id]) => id)).toEqual(["parent:lead", "session:me", "flown", "stop:s3", "stop:s4", "add", "child:w1"]);
+    // Round 11: the flown stops stay as boxes (no pill by default).
+    expect(boxes(html).map(([id]) => id)).toEqual(["parent:lead", "session:me", "stop:s1", "stop:s2", "stop:s3", "stop:s4", "add", "child:w1"]);
     expect(html).toContain('class="fl-wire fl-wire-up"');
     expect(html).toContain('class="fl-wire fl-wire-branch"');
     expect(html).toContain(">Tack on a stop<");

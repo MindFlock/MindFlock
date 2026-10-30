@@ -32,7 +32,8 @@ import {
   type FlightRow,
   type StepKindDef,
 } from "../../lib/flights";
-import { flightDiagram, sessionDiagram, type BoxSize, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
+import { flightDiagram, nodeAtIndex, sessionDiagram, type BoxSize, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
+import { windowName } from "../../lib/windowName";
 import { controlFlight, jumpFlight, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
 import { FlywayCanvas } from "./FlywayCanvas";
 import { Bird } from "./Bird";
@@ -252,10 +253,11 @@ export function liveBoxParts(flight: Flight | null, expand: boolean, onCancelAsk
   return { renderInBox, sizeOf };
 }
 
-/** The box of the stop a flight is at (the canvas scrolls it into view). */
+/** The box of the stop a flight is at — the group box holding it, when it is
+ * a sub-step of one (the canvas scrolls it into view). */
 export function currentNodeId(d: Diagram, flight: Flight | null): string | null {
   if (!flight) return null;
-  return d.nodes.find((n) => n.kind === "stop" && n.index === flight.cursor)?.id || null;
+  return nodeAtIndex(d, flight.cursor)?.id || null;
 }
 
 /** One flight on the Board: its headline, the bird and its flyway, the
@@ -292,7 +294,7 @@ export function FlightCard({ flight, kinds, expand = false }: { flight: Flight; 
         className="fl-strip-body"
         role="button"
         tabIndex={0}
-        title={flight.session ? "Open " + flight.session : undefined}
+        title={flight.session ? "Open " + windowName(flight.session) : undefined}
         onClick={() => openFlightSession(flight.session)}
         onKeyDown={(e) => {
           if (e.target !== e.currentTarget) return;
@@ -308,7 +310,7 @@ export function FlightCard({ flight, kinds, expand = false }: { flight: Flight; 
             <Bird size={13} />
             {flight.plan_name}
           </span>
-          {flight.session && <span className="fl-strip-session">{flight.session}</span>}
+          {flight.session && <span className="fl-strip-session">{windowName(flight.session)}</span>}
           <FlightMenu flight={flight} onCancelAsk={cancel.ask} />
         </div>
         <div className="fl-strip-now">

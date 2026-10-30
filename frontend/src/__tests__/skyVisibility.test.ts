@@ -12,6 +12,7 @@ import { code, css, cssRule } from "./sourceText";
 import type { Instance } from "../api/types";
 import type { Flight, FlightPlan, FlightStep, StepKindDef } from "../lib/flights";
 import type { Diagram, DiagramNode } from "../lib/flightDiagram";
+import type { StopDrop } from "../lib/stopEditing";
 
 vi.mock("../api/client", () => ({ api: vi.fn(() => new Promise(() => {})), instApi: vi.fn(() => new Promise(() => {})), ApiError: class extends Error {} }));
 
@@ -92,8 +93,9 @@ const flightRow = (cursor: number, state = "running") => {
   return { id: "f_1", plan_name: PLAN.name, cursor, total: STEPS.length, state, step: { id: s.id, kind: s.kind, title: s.title, state, actor: s.kind === "you" ? "you" : "robot" } };
 };
 const me = (cursor: number, state = "running", over: Record<string, unknown> = {}) => rowOf("me", { flight: flightRow(cursor, state), ...over });
-const diagramAt = (cursor: number, opts: { before?: Record<string, string>; rows?: Instance[]; expandFlown?: boolean; state?: string } = {}) =>
-  sessionDiagram(opts.rows || [me(cursor, opts.state)], "me", { flights: [flight(cursor, opts.before, opts.state)], kinds: KINDS, expandFlown: opts.expandFlown });
+// Round 11: flown stops stay as boxes unless the line asks to fold them.
+const diagramAt = (cursor: number, opts: { before?: Record<string, string>; rows?: Instance[]; fold?: boolean; state?: string } = {}) =>
+  sessionDiagram(opts.rows || [me(cursor, opts.state)], "me", { flights: [flight(cursor, opts.before, opts.state)], kinds: KINDS, foldFlown: opts.fold });
 const mainIds = (d: Diagram) => d.nodes.filter((n) => n.row === "main").map((n) => n.id);
 const edge = (d: Diagram, from: string, to: string) => d.edges.find((e) => e.from === from && e.to === to);
 
@@ -117,7 +119,7 @@ describe("the roomy box tier (the Sky)", () => {
   });
 
   it("layoutDiagram takes `roomy`; without it the geometry is unchanged", () => {
-    const d = diagramAt(3, { expandFlown: true });
+    const d = diagramAt(3);
     const plain = layoutDiagram(d);
     const big = layoutDiagram(d, { roomy: true });
     const stop = (l: typeof plain) => l.boxes.find((b) => b.node.id === "stop:s4")!;
@@ -143,9 +145,19 @@ describe("the roomy box tier (the Sky)", () => {
 
 // --- What has flown -------------------------------------------------------------------
 
-describe("the stops a flight has flown fold into one pill", () => {
-  it(FLOWN_MIN + " or more done stops before the current one: one `flown` node", () => {
+describe("the stops a flight has flown fold into one pill — when the line asks (foldFlown)", () => {
+  it("by default every flown stop stays a box (round 11)", () => {
     const d = diagramAt(3);
+    expect(mainIds(d)).toEqual(["session:me", "stop:s1", "stop:s2", "stop:s3", "stop:s4", "stop:s5", "stop:s6", "add"]);
+    expect(flownCount(d)).toBe(0);
+    // `expandFlown: false` is the older spelling of foldFlown.
+    const old = sessionDiagram([me(3)], "me", { flights: [flight(3)], kinds: KINDS, expandFlown: false });
+    expect(flownCount(old)).toBe(3);
+    expect(flownCount(sessionDiagram([me(3)], "me", { flights: [flight(3)], kinds: KINDS, expandFlown: true }))).toBe(0);
+  });
+
+  it(FLOWN_MIN + " or more done stops before the current one: one `flown` node", () => {
+    const d = diagramAt(3, { fold: true });
     expect(mainIds(d)).toEqual(["session:me", "flown", "stop:s4", "stop:s5", "stop:s6", "add"]);
     const pill = d.nodes.find((n) => n.kind === "flown")!;
     expect(pill).toMatchObject({ id: "flown", kind: "flown", row: "main", title: "3 flown", sub: "Work the ticket … Push", state: "done", count: 3 });
@@ -161,26 +173,26 @@ describe("the stops a flight has flown fold into one pill", () => {
   });
 
   it("a single flown stop stays as it is", () => {
-    const d = diagramAt(1);
+    const d = diagramAt(1, { fold: true });
     expect(mainIds(d)).toEqual(["session:me", "stop:s1", "stop:s2", "stop:s3", "stop:s4", "stop:s5", "stop:s6", "add"]);
     expect(flownCount(d)).toBe(0);
   });
 
-  it("expandFlown draws every stop", () => {
-    const d = diagramAt(3, { expandFlown: true });
+  it("unfolded, every stop is drawn", () => {
+    const d = diagramAt(3);
     expect(mainIds(d)).toContain("stop:s1");
     expect(d.nodes.some((n) => n.kind === "flown")).toBe(false);
   });
 
   it("skipped stops fold too; a failed one breaks the run and stays in sight", () => {
-    expect(diagramAt(3, { before: { s2: "skipped" } }).nodes.find((n) => n.kind === "flown")?.count).toBe(3);
-    const d = diagramAt(3, { before: { s2: "failed" } });
+    expect(diagramAt(3, { fold: true, before: { s2: "skipped" } }).nodes.find((n) => n.kind === "flown")?.count).toBe(3);
+    const d = diagramAt(3, { fold: true, before: { s2: "failed" } });
     expect(d.nodes.some((n) => n.kind === "flown")).toBe(false);
     expect(mainIds(d)).toContain("stop:s2");
   });
 
   it("from the row alone (no full flight cached): the numbered stops fold the same way", () => {
-    const d = sessionDiagram([me(3)], "me", {});
+    const d = sessionDiagram([me(3)], "me", { foldFlown: true });
     const pill = d.nodes.find((n) => n.kind === "flown")!;
     expect(pill.title).toBe("3 flown");
     expect(pill.sub).toBe("Stop 1 … Stop 3");
@@ -189,7 +201,7 @@ describe("the stops a flight has flown fold into one pill", () => {
 
   it("a branch that fanned out of a folded stop fans out of the pill and joins past it", () => {
     const kid = rowOf("w1", { parent: "me", activity: "idle", flight: { branch: { parent: "me", step: "s2" } }, last_report: { id: "m", status: "done", summary: "ok", ts: 1 } });
-    const d = diagramAt(3, { rows: [me(3), kid] });
+    const d = diagramAt(3, { fold: true, rows: [me(3), kid] });
     const b = d.nodes.find((n) => n.id === "branch:w1")!;
     expect(b.branch?.from).toBe("flown");
     expect(b.branch?.to).toBe("stop:s4");
@@ -201,12 +213,12 @@ describe("the stops a flight has flown fold into one pill", () => {
   });
 
   it("collapseFlown on a line with nothing flown is the line itself", () => {
-    const d = diagramAt(0);
+    const d = diagramAt(0, { fold: true });
     expect(collapseFlown(d)).toBe(d);
   });
 
   it("the pill is the layout's own size, centred on the line's anchor", () => {
-    const d = diagramAt(3);
+    const d = diagramAt(3, { fold: true });
     for (const roomy of [false, true]) {
       const m = boxMetrics(false, roomy);
       const l = layoutDiagram(d, { roomy, sizeOf: (_n, b) => ({ w: b.w + 99, h: b.h }) });
@@ -217,19 +229,20 @@ describe("the stops a flight has flown fold into one pill", () => {
     }
   });
 
-  it("the Flight tab's line (useSessionLine, no option) folds by default", () => {
-    expect(code("components/flights/useSessionLine.tsx")).toMatch(/sessionDiagram\(rows, title, \{ flights, kinds, family \}\)/);
+  it("a session's line (useSessionLine) folds only on request: its own foldFlown, off by default", () => {
+    expect(code("components/flights/useSessionLine.tsx")).toMatch(/sessionDiagram\(rows, title, \{ flights, kinds, family, foldFlown, expandedGroups \}\)/);
+    expect(code("components/flights/useSessionLine.tsx")).toContain("const [foldFlown, setFoldFlown] = useState(false);");
     expect(code("components/flights/SessionFlight.tsx")).toMatch(/useSessionLine\(title/);
   });
 });
 
 describe("the canvas counts drawn stops; the flight its indexes (flownCanvas)", () => {
-  const d = diagramAt(3);
+  const d = diagramAt(3, { fold: true });
   const calls: unknown[][] = [];
   const canvas = {
     onMove: (a: number, b: number) => calls.push(["move", a, b]),
     onInsert: (at: number) => calls.push(["insert", at]),
-    onDropStop: (k: string, at: number | null) => calls.push(["drop", k, at]),
+    onDropStop: (k: StopDrop, at: number | null) => calls.push(["drop", k, at]),
     onRemove: (n: DiagramNode) => calls.push(["remove", n.index]),
     onSelect: (n: DiagramNode) => calls.push(["select", n.index]),
   };
@@ -239,6 +252,9 @@ describe("the canvas counts drawn stops; the flight its indexes (flownCanvas)", 
     expect(shown.diagram.insertFrom).toBe(1);
     expect(shown.diagram.nodes.find((n) => n.id === "stop:s5")?.index).toBe(1);
     expect(drawnIndexes(diagramAt(1))).toEqual(diagramAt(1));
+    // Nothing folded, no group box: the line itself.
+    const plain = diagramAt(3);
+    expect(drawnIndexes(plain)).toBe(plain);
   });
 
   it("moves, inserts and drops go back to the flight's indexes; nodes to the flight's own", () => {
@@ -246,15 +262,15 @@ describe("the canvas counts drawn stops; the flight its indexes (flownCanvas)", 
     const s5 = shown.diagram.nodes.find((n) => n.id === "stop:s5")!;
     shown.canvas.onMove!(1, 2);
     shown.canvas.onInsert!(2);
-    shown.canvas.onDropStop!("ship", 1);
-    shown.canvas.onDropStop!("ship", null);
+    shown.canvas.onDropStop!({ kind: "ship" }, 1);
+    shown.canvas.onDropStop!({ kind: "ship" }, null);
     shown.canvas.onRemove!(s5);
     shown.canvas.onSelect!(s5);
     expect(calls).toEqual([
       ["move", 4, 5],
       ["insert", 5],
-      ["drop", "ship", 4],
-      ["drop", "ship", null],
+      ["drop", { kind: "ship" }, 4],
+      ["drop", { kind: "ship" }, null],
       ["remove", 4],
       ["select", 4],
     ]);
@@ -322,10 +338,10 @@ describe("a line in the sky", () => {
     expect(html).toMatch(/class="skl-where"[^>]*>at Reviews settle · 10 min quiet</);
   });
 
-  it("draws the flown pill, and asks the canvas for the roomy tier", () => {
+  it("draws the flown stops as boxes (round 11: no pill by default), and asks the canvas for the roomy tier", () => {
     const html = line();
-    expect(html).toContain('data-node="flown"');
-    expect(html).toContain(">3 flown<");
+    expect(html).not.toContain('data-node="flown"');
+    expect(html).toContain('data-node="stop:s1"');
     expect(code("components/flights/SkyLine.tsx")).toMatch(/\n\s+roomy\n/);
     // A press on the pill unfolds the line.
     expect(code("components/flights/SkyLine.tsx")).toMatch(/if \(n\.kind === "flown"\) setExpandFlown\(\(x\) => !x\)/);
@@ -342,7 +358,8 @@ describe("a line in the sky", () => {
       "Compact boxes",
       "Normal boxes",
       "Wide boxes",
-      "Show every flown stop",
+      // Nothing folds by default, so no "Show every flown stop" (SkyLine's
+      // "Fold flown stops" is its own worker's, round 11).
       "Pin here",
       "Fly a flyway…",
       "Tack on a stop",

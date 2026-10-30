@@ -2395,3 +2395,135 @@ next fetch. Now:
   reconciled by the event or the poll, so they need no change.
 - One query feeds the grid, the rail and the Sky, so all three get the box at
   the same moment. No surface reads `pending_create` specially.
+### As built: round 11 stops
+
+> The stops worker's half of round 11. Code: `frontend/src/components/flights/StopDialog.tsx`
+> (+ `.css`), `useSessionLine.tsx`, `FlywayCanvas.tsx` (+ `.css`), `StopParts.tsx`
+> (`StopForm`), `lib/flightDiagram.ts`, `lib/stopEditing.ts`; tests in
+> `__tests__/stopDialog.test.ts` and `__tests__/stopGroups.test.ts`.
+
+**The dialog (`StopDialog`).** Every box on a session's line edits in a `Modal`
+(`#stop-dialog`, rendered into `document.body` so the Sky's zoom transform can't
+carry the backdrop), never the inline inspector. `FlywayCanvas` gained
+`onEdit?(n)`: ✎ on the toolbar, Enter / Space on a focused box, a double-click
+and the menu's Edit call it, while a click only selects (`onSelect`). A host
+without `onEdit` (the flyway editor) keeps the old behaviour (everything calls
+`onSelect`). Contents:
+
+- a **stop that can change**: its kind (icon, name, summary, read-only), Title,
+  the kind's fields and If it fails (`StopForm`, the inspector's own renderer,
+  now exported from `StopParts`), the halt-point toggle (saved with the rest:
+  `patchStop {title, config, on_fail, halt?}`); Remove · Duplicate, Cancel ·
+  Save (Save disabled until something changed; Enter submits);
+- a **stop that can't** (flown, or the current one): read-only, its state chip
+  and why (plus the flight's note or reason); Remove, and on the current stop
+  Done (a perch) / Retry (halted) / Skip and its halt point set at once
+  (`setHalt`); Close;
+- a **group**: its name (Save renames: `patchStopGroup` on its first sub-step
+  that can change; no rename when none can), a row per sub-step (icon, title,
+  state, ✎ opens that sub-step's own dialog — closing it goes back to the
+  group's — and 🗑 removes it), **Ungroup** (`ungroupStops`), **Save to the shelf**
+  (`savePlan(shelfPlanFor(name, steps, group.plan_id, plans))`: the saved stop
+  the group came from when the plans query still has it — same id, trigger,
+  session and `builtin` — else a new one; a toast says which), **Remove**
+  (`dropGroup`).
+
+`useSessionLine`'s `inspector` output is that dialog (or null); it no longer
+renders `StopInspector` (still exported, with `DescribeField`, for its other
+caller). No `window.confirm/prompt/alert` anywhere.
+
+**Groups on the line.** `sessionDiagram` folds each run of consecutive steps
+sharing `step.group.id` into ONE main-row node (`collapseGroups`, after the
+branches are placed): `kind: "group"`, `id: "group:<gid>"` (a later run of the
+same id: `group:<gid>@<index>`), `title` = the group's name, `index` = its first
+sub-step's, `editable` when every sub-step can change, and `group: {id, name,
+plan_id, steps, nodes, done, total, current?}` (`nodes` are the sub-steps' own
+stop nodes with their live states). Its `state`: `done` when every sub-step is
+done or skipped; else the flight's state at a sub-step it is in (current /
+perched / halted / paused); else `failed` when one failed; else `pending`
+(`edit` in an editor). While it flies `sub` is the current sub-step's title and
+the box shows "k of n"; otherwise `sub` is "3 stops: Push → Open the PR → …".
+The halt mark and ⏸ act on its first sub-step not yet flown (`groupHaltStep`).
+Branches spawned at a sub-step fan out of the group box and join at the box
+after it. The flown fold never swallows a group. `SessionDiagramOpts.expandedGroups:
+Set<gid>` draws a group open: its sub-steps stay stop boxes marked `inGroup:
+{id, name, first, last}`; the canvas draws a dashed outline around them
+(`groupFrames`) labelled with the name and a ▾. `useSessionLine` keeps the set
+(`expandedGroups`, `toggleGroup`) and the canvas calls `onToggleGroup(gid)` from
+▸ / ▾ and the menu's Show / Fold its sub-steps.
+
+On the canvas the group box is `.fl-box-group` — a stack (a second outline
+offset behind it), ▸ in its head, a dot per sub-step. Its toolbar: ⏹/▶ while the
+flight is in it, ✎, ⇤ ⇥ **disabled this round** ("A stop with sub-steps doesn't
+move yet"; it never drags either — a stop may still trade places with a group
+that can change), ⏸, 🗑 (the whole group). Its menu: Halt now / Carry on (in it),
+Edit (Details once it flies), Show / Fold its sub-steps, Halt here, Remove.
+
+**Index mapping (the remap helper).** The canvas counts *places*: a collapsed
+group (or the flown pill) is one. `lib/flightDiagram.ts` exports:
+
+- `lineUnits(d): {node, first, size}[]` — the line's places (stops and group boxes);
+- `drawnIndexes(d): Diagram` — every place's `index` and `insertFrom` renumbered
+  to places; the diagram itself (`===`) when nothing needs it;
+- `flightIndexAt(d, p): number` — place `p` (an insert gap, a drop) → the
+  flight's index (the place's first step; past the last, the end);
+- `flightMove(d, from, to): {from, to}` — a move between places → the move
+  route's `{from, at}` (later: right after the target's last step; earlier: right
+  before its first);
+- `drawnCanvas(d, canvas): {diagram, canvas}` — both at once, the generic
+  successor of SkyLine's `flownCanvas` (maps `onMove`, `onInsert`, `onDropStop`
+  and hands the line's own nodes back to `onSelect`, `onEdit`, `onOpen`,
+  `onRemove`, `onDuplicate`, `onToggleHalt`, `renderInBox`, `sizeOf`); a
+  no-op on a line already counted that way, so it is safe to apply twice;
+- `nodeAtIndex(d, i)` — the stop, or the group box, the flight's step `i` is
+  drawn in (`currentNodeId` uses it, so the canvas reveals a group box).
+
+`useSessionLine` now returns `diagram` and `canvas` **already drawn** (it runs
+`drawnCanvas` itself), so a host spreads them as they are; SkyLine's
+`flownCanvas(line.diagram, line.canvas)` is a pass-through on them (nothing
+folds by default). A host that builds its own `sessionDiagram` should pass
+`expandedGroups: line.expandedGroups` and `foldFlown: line.foldFlown` and wrap
+with `drawnCanvas` (and stop using `flownCanvas`).
+
+**Drops (`onDropStop`).** The prop is now `onDropStop?(drop: {kind} | {planId},
+at)` (`StopDrop`, lib/stopEditing). `isStopDrag` takes `STOP_MIME` (a kind chip)
+and `FLYWAY_MIME` (lib/skyLayout: a saved stop, its value the plan id);
+`stopDropOf(dataTransfer)` reads the payload (a kind first). The canvas stops a
+saved-stop drop on a line from reaching the Sky's own drop. `useSessionLine`
+wires `{kind}` to `tackOne` as before and `{planId}` to `tackOnPlan(flightId,
+planId, at)`; on a line with **no flight** it takes off as that saved stop's
+flight (`takeOff({plan_id, title})`, the "Fly a flyway" path — the simplest that
+works; its stops are not grouped). The + palette's extra row is now **Saved
+stops** (under the kinds, also for a + between stops), each tacked on as a group
+(`tackOnPlan`); the old "Fly a flyway — all of its stops" row is gone and
+`flyFlyway` tacks a saved stop on as one group too.
+
+**Remove, everywhere.** Edit / move / duplicate stay pending-only; 🗑 shows on
+every stop of a live line: still ahead "Remove", the current stop "Remove — the
+flight halts here", a flown one "Remove from the line" (lib/stopEditing
+`removeTool`; the menu says the same; Delete / Backspace stays pending-only). The
+current stop's ⏹ / ▶ show only with `onToggleHalt`, as before. `useSessionLine`
+toasts `Removed “X” — the flight is paused before “Y”` (or `… paused at the
+end`) for the current stop (and a group holding it), `Removed “X” from the line`
+otherwise, each with Undo (`undoPayload`; a group comes back through
+`tackOnSteps(…, name)`).
+
+**Flown stops stay (the fold flag).** `SessionDiagramOpts.foldFlown?: boolean`
+folds only when true; `expandFlown` is still accepted as its inverse (`fold =
+foldFlown === true || expandFlown === false`). `useSessionLine` keeps `foldFlown`
+(false) with `setFoldFlown`, and a press on a pill unfolds. A done join keeps its
+box (no pill once `waiting` is 0).
+
+**Names.** Session, parent, child and branch boxes carry `windowName(title)` as
+their `title` (their `id` and `session` stay the raw title); FlightStrip's card
+and SessionFlight's label use it too.
+
+**Outside this change (for the merge):**
+
+- `FlywayCard.tsx:257` and `FlywayRow.tsx:291` still pass the old `(kind, at)`
+  shape: `onDropStop={(drop, at) => { if (!("kind" in drop)) return; const def =
+  kindOf.get(drop.kind); … }}` (FlywayRow: `"kind" in drop &&
+  insert(kindOf.get(drop.kind), at)`).
+- SkyLine: drop `flownCanvas` and its own `expandFlown`; the ⋯ item becomes "Fold
+  flown stops" → `line.setFoldFlown((x) => !x)` (checked by `line.foldFlown`); the
+  `onOpen` override for the pill can go (the hook unfolds).

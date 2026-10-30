@@ -1,7 +1,8 @@
 /** The parts around the canvas: the stop PALETTE (what + opens — "The flock
  * does" robot stops and "You do" perches, each with its summary), the stop
- * INSPECTOR (the selected box's fields, beside or below the canvas, never a
- * modal), and DESCRIBE (a sentence → new stops, through the server's
+ * FORM (`StopForm`: a stop's title, its kind's fields, on_fail — what the
+ * INSPECTOR beside the canvas and a session line's StopDialog both draw), and
+ * DESCRIBE (a sentence → new stops, through the server's
  * one-shot model). Shared by the Flyways editor and the session diagram. */
 
 import { useState, type ReactNode } from "react";
@@ -119,7 +120,7 @@ function cleanLabel(f: StepKindField): string {
 }
 
 /** One field, drawn with the app's controls. */
-function StopField({ f, value, onChange, readOnly }: { f: StepKindField; value: unknown; onChange(v: unknown): void; readOnly?: boolean }) {
+export function StopField({ f, value, onChange, readOnly }: { f: StepKindField; value: unknown; onChange(v: unknown): void; readOnly?: boolean }) {
   const v = value === undefined ? f.default : value;
   const label = cleanLabel(f);
   if (f.type === "bool")
@@ -200,30 +201,38 @@ export function StopInspector({
         </span>
       </header>
       {note}
-      <div className="fl-form">
-        <FlField label="Title" wide={false}>
-          <TextField label="Stop title" value={step.title} onChange={(t) => !readOnly && onChange({ title: t })} />
-        </FlField>
-        {(def?.fields || []).map((f) => (
-          <StopField
-            key={f.name}
-            f={f}
-            value={step.config?.[f.name]}
-            readOnly={readOnly}
-            onChange={(v) => onChange({ config: { ...step.config, [f.name]: v } })}
-          />
-        ))}
-        <FlField label="If it fails" wide>
-          <Seg
-            label="If it fails"
-            value={step.on_fail}
-            options={(Object.keys(ON_FAIL_LABEL) as OnFail[]).map((k) => ({ v: k, label: ON_FAIL_LABEL[k], disabled: readOnly }))}
-            onChange={(k) => onChange({ on_fail: k })}
-          />
-        </FlField>
-      </div>
+      <StopForm step={step} def={def} onChange={onChange} readOnly={readOnly} />
       {actions && <div className="fl-inspector-acts">{actions}</div>}
     </section>
+  );
+}
+
+/** A stop's form: its title, its kind's own fields, what happens if it
+ * fails (the inspector's and the stop dialog's). `readOnly` ignores edits. */
+export function StopForm({ step, def, onChange, readOnly }: { step: FlightStep; def: StepKindDef | undefined; onChange(patch: Partial<FlightStep>): void; readOnly?: boolean }) {
+  return (
+    <div className="fl-form">
+      <FlField label="Title" wide={false}>
+        <TextField label="Stop title" value={step.title} onChange={(t) => !readOnly && onChange({ title: t })} />
+      </FlField>
+      {(def?.fields || []).map((f) => (
+        <StopField
+          key={f.name}
+          f={f}
+          value={step.config?.[f.name]}
+          readOnly={readOnly}
+          onChange={(v) => onChange({ config: { ...step.config, [f.name]: v } })}
+        />
+      ))}
+      <FlField label="If it fails" wide>
+        <Seg
+          label="If it fails"
+          value={step.on_fail}
+          options={(Object.keys(ON_FAIL_LABEL) as OnFail[]).map((k) => ({ v: k, label: ON_FAIL_LABEL[k], disabled: readOnly }))}
+          onChange={(k) => !readOnly && onChange({ on_fail: k })}
+        />
+      </FlField>
+    </div>
   );
 }
 
