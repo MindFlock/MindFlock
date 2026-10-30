@@ -13,40 +13,8 @@
   --sky-ink-gold: #7a5a10;
 }
 
-/* --- The toolbar: 13px type, 28px controls, still one 36px row ----------- */
-
-.sky-toolbar .sky-modes .fl-pick {
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
-  box-sizing: border-box;
-  padding: 0 11px;
-  font-size: 13px;
-}
-
-.sky-toolbar .sky-search .fl-input {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 13px;
-}
-
-.sky-toolbar .sky-new,
-.sky-toolbar .fl-btn {
-  min-height: 28px;
-  font-size: 13px;
-}
-
-.sky-toolbar .sky-zoom-btn {
-  min-height: 26px;
-  padding: 0 9px;
-  font-size: 13px;
-}
-
-.sky-toolbar .sky-zoom-read {
-  min-width: 46px;
-  font-size: 13px;
-  color: var(--fl-ink-muted, var(--muted));
-}
+/* --- The toolbar: 13px type, 28px controls, still one 36px row -----------
+   Its controls' sizes live with their tiers in Sky.css (var(--fl-ctl-h)). */
 
 /* --- The drawer: 14px bodies, 36px Done / Skip ---------------------------- */
 

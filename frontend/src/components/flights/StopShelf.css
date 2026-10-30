@@ -27,14 +27,21 @@
   border-bottom: 0;
   border-radius: 8px 8px 0 0;
   background: var(--panel);
-  color: var(--muted);
+  color: var(--fl-ink-muted, var(--muted));
   font: inherit;
   font-size: 11.5px;
   cursor: pointer;
 }
 
+/* A tab, in the quiet tier: muted until hovered, then panel-2 and the text. */
 .sky-shelf-fold:hover {
+  background: var(--panel-2);
   color: var(--text);
+}
+
+.sky-shelf-fold:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* --- The stops (StopShelf.tsx): its label, then chips scrolling sideways ----- */
@@ -78,16 +85,21 @@
   display: contents;
 }
 
+/* Every chip on the shelf is the secondary tier (.test-btn): panel-2, the
+   border, the tiers' radius, the accent border under the pointer — and the
+   toolbar's height. The Session chip is tinted with the primary's accent (it
+   makes a session); a perch stays round and gold, as everywhere. */
 .sky-stop-chip {
   display: inline-flex;
   align-items: center;
   flex: none;
   gap: 5px;
-  height: 26px;
-  padding: 0 10px 0 5px;
+  height: var(--fl-ctl-h, 28px);
+  box-sizing: border-box;
+  padding: 0 11px 0 5px;
   border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--panel);
+  border-radius: var(--fl-btn-radius, 6px);
+  background: var(--panel-2);
   color: var(--text);
   font: inherit;
   font-size: 12px;
@@ -98,8 +110,12 @@
 
 .sky-stop-chip:hover,
 .sky-stop-chip:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  background: var(--panel-2);
+  border-color: var(--accent);
+}
+
+.sky-stop-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .sky-stop-chip:active {
@@ -112,8 +128,8 @@
   width: 18px;
   height: 18px;
   border-radius: 5px;
-  color: var(--accent);
-  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--fl-ink-accent, var(--accent));
+  background: rgba(var(--accent-rgb), 0.14);
 }
 
 /* A perch: the gold perch tone, rounder, as in the stop palette. */
@@ -157,9 +173,23 @@
   }
 }
 
-/* The Session chip: the accent, since it starts something. */
-.sky-session-chip {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+/* The Session chip: primary-tinted, since it starts something — the accent
+   border over an accent wash, its word at the primary's weight. */
+.sky-stop-chip.sky-session-chip {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  background: rgba(var(--accent-rgb), 0.16);
+  font-weight: 600;
+}
+
+.sky-stop-chip.sky-session-chip:hover,
+.sky-stop-chip.sky-session-chip:focus-visible {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.26);
+}
+
+.sky-stop-chip.sky-session-chip .sky-stop-icon {
+  color: #fff;
+  background: var(--accent);
 }
 
 /* A saved stop: its name, then a dot per step (a perch's gold). */
@@ -190,30 +220,33 @@
   border-style: dashed;
 }
 
-.sky-saved-rename {
+/* The rename field: the house input (.fl-input, FlywayCanvas.css) at the
+   chip's size — focused, so the accent border and its ring. */
+.sky-saved-rename.fl-input.fl-input {
   width: 14ch;
-  padding: 1px 4px;
-  border: 1px solid var(--accent);
+  height: 22px;
+  padding: 0 6px;
   border-radius: 4px;
-  background: var(--bg);
-  color: var(--text);
-  font: inherit;
   font-size: 12px;
 }
 
-.sky-saved-rename[aria-invalid="true"] {
+.sky-saved-rename.fl-input.fl-input[aria-invalid="true"] {
   border-color: var(--red);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 22%, transparent);
 }
 
 .sky-saved-err {
   flex: none;
-  color: var(--red);
+  color: var(--fl-ink-red, var(--red));
   font-size: 11px;
   white-space: nowrap;
 }
 
+/* The shelf sits at the window's foot, so its menu opens UP from the pointer
+   (StopShelf.tsx places its top-left there); downward it fell off-screen. */
 .sky-saved-menu {
   z-index: 50;
+  transform: translateY(-100%);
 }
 
 .sky-stops-confirm {

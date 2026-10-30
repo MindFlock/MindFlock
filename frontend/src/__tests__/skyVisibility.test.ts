@@ -455,7 +455,12 @@ describe("type and contrast", () => {
     expect(cssRule(canvas, ".fl-pick")).toMatch(/min-height: 28px;[\s\S]*font-size: 13px/);
     expect(cssRule(canvas, ".fl-toggle")).toMatch(/min-height: 30px;[\s\S]*font-size: 13px/);
     expect(cssRule(canvas, ".fl-seg-host .rt-seg button")).toMatch(/min-height: 28px;[\s\S]*font-size: 13px/);
-    expect(cssRule(vis, ".sky-toolbar .sky-modes .fl-pick")).toMatch(/min-height: 28px;[\s\S]*font-size: 13px/);
+    // The toolbar's mode keys: a 28px segmented group (Sky.css, round 11 style).
+    const sky = css("components/flights/Sky.css");
+    expect(canvas).toMatch(/--fl-ctl-h: 28px;/);
+    expect(cssRule(sky, ".sky-modes.fl-chiprow")).toMatch(/height: var\(--fl-ctl-h\);/);
+    expect(cssRule(sky, ".sky-toolbar .sky-modes .fl-pick")).toMatch(/font-size: 13px/);
+    expect(vis).not.toContain(".sky-toolbar .sky-modes .fl-pick");
   });
 
   it("SkyLine brings the overrides in", () => {

@@ -70,7 +70,7 @@ describe("a stop that can change", () => {
   it("Remove · Duplicate on the left, Cancel · Save (nothing to save yet)", () => {
     expect(buttons(html).filter((b) => ["Remove", "Duplicate", "Cancel", "Save"].includes(b))).toEqual(["Remove", "Duplicate", "Cancel", "Save"]);
     expect(html).toMatch(/<button type="submit" class="btn-primary" disabled="">Save<\/button>/);
-    expect(html).toContain('class="stop-dialog-danger"');
+    expect(html).toContain('class="test-btn stop-dialog-danger"');
   });
 
   it("a halt point starts pressed", () => {

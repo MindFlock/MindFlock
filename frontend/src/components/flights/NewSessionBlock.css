@@ -65,18 +65,26 @@
   width: 24px;
   height: 24px;
   padding: 0;
-  border: none;
-  border-radius: 6px;
+  border: 1px solid transparent;
+  border-radius: var(--fl-btn-radius, 6px);
   background: transparent;
-  color: var(--muted, var(--text));
+  color: var(--fl-ink-muted, var(--muted));
+  font-family: inherit;
   font-size: 16px;
   line-height: 1;
   cursor: pointer;
 }
 
+/* The quiet-icon tier (.fl-icon-btn). */
 .sky-new-close:hover {
-  background: color-mix(in srgb, var(--text) 10%, transparent);
+  background: var(--panel-2);
+  border-color: var(--border);
   color: var(--text);
+}
+
+.sky-new-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .sky-new-path {

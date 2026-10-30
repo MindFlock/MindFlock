@@ -23,19 +23,36 @@
   font-size: 13px;
 }
 
+/* The quiet-icon tier — the top bar's .tb-item, the ⋯ summaries: no fill and
+   a transparent border until hovered (panel-2 + the border), the accent ring
+   on focus. Every glyph button in components/flights is this or wears its
+   rules (docs/flights.md "As built: round 11 style"). */
 .fl-icon-btn {
-  border: none;
+  border: 1px solid transparent;
   background: transparent;
-  color: var(--muted);
+  color: var(--fl-ink-muted, var(--muted));
   cursor: pointer;
+  font-family: inherit;
   font-size: 13px;
+  line-height: 1.2;
   padding: 2px 6px;
-  border-radius: 6px;
+  border-radius: var(--fl-btn-radius, 6px);
 }
 
-.fl-icon-btn:hover {
+.fl-icon-btn:hover:not(:disabled) {
   color: var(--text);
   background: var(--panel-2);
+  border-color: var(--border);
+}
+
+.fl-icon-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.fl-icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .fl-palette-groups {
@@ -74,10 +91,14 @@
   cursor: pointer;
 }
 
-.fl-palette-item:hover,
+.fl-palette-item:hover {
+  border-color: var(--accent);
+}
+
 .fl-palette-item:focus-visible {
   border-color: var(--accent);
-  outline: none;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .fl-palette-item.fl-kind-you {
@@ -96,7 +117,7 @@
   width: 24px;
   height: 24px;
   border-radius: 7px;
-  color: var(--accent);
+  color: var(--fl-ink-accent, var(--accent));
   background: rgba(var(--accent-rgb), 0.13);
 }
 

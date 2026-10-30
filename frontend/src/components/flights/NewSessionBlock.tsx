@@ -349,7 +349,7 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
         </p>
       )}
       <div className="sky-new-actions">
-        <button type="button" className="btn-secondary fl-btn" onClick={onCancel}>
+        <button type="button" className="test-btn fl-btn" onClick={onCancel}>
           Cancel
         </button>
         <button
