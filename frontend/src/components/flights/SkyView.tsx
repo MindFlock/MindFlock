@@ -6,7 +6,7 @@
  *
  * One plane, panned and zoomed as a whole — one `translate(x, y) scale(z)` on
  * one container, no library. Drag on empty sky pans it (mouse and touch), so
- * does the wheel or a trackpad; Ctrl/⌘+wheel and a pinch zoom it (40%–200%);
+ * does the wheel or a trackpad; Ctrl/⌘+wheel and a pinch zoom it (40%–300%);
  * Space+drag pans from anywhere. The keyboard: arrows pan, + / − zoom, 0 fits
  * every line, 1 fits the focused one, T tidies, Enter opens the focused
  * line's box, Esc closes it. A faint dot grid scales with it, the flock
@@ -46,6 +46,7 @@ import {
   FLYWAY_MIME,
   INTAKE_W,
   LINES_LEFT,
+  SKY_DRAWER_KEY,
   SKY_MARGIN,
   SKY_MODES,
   ZOOM_MAX,
@@ -53,6 +54,7 @@ import {
   boundsOf,
   centerOn,
   estimateLine,
+  firstFit,
   fitCamera,
   inSky,
   lineLayout,
@@ -60,6 +62,7 @@ import {
   patchSkyLine,
   pinnedPositions,
   placeLines,
+  skyDrawerOpen,
   skyLineTitles,
   tidySkyLayout,
   toPlane,
@@ -90,7 +93,6 @@ const LINE_MIN_W = 280;
 const GRID = 24;
 /** One arrow press pans this far (screen px); Shift: four times. */
 const PAN_STEP = 80;
-const DRAWER_KEY = "mf_sky_drawer";
 const SHELF_KEY = "mf_sky_shelf";
 
 const readPref = (key: string): string | null => {
@@ -192,7 +194,7 @@ export function SkyView() {
   const vpRef = useRef<HTMLDivElement>(null);
   const [newAt, setNewAt] = useState<Pos | null>(null);
   const [card, setCard] = useState<{ at: Pos; initial?: FlightPlan } | null>(null);
-  const [drawerPref, setDrawerPref] = useState(() => readPref(DRAWER_KEY));
+  const [drawerPref, setDrawerPref] = useState(() => readPref(SKY_DRAWER_KEY));
   const [shelfOpen, setShelfOpen] = useState(() => readPref(SHELF_KEY) !== "0");
   const shelfAsk = useUi((s) => s.skyShelf);
   // The Sky tour opens by itself the first time the sky is shown (once).
@@ -227,8 +229,9 @@ export function SkyView() {
     const l = lines.find((x) => x.id === id);
     return l ? { ...posOf(id), w: l.w, h: l.h } : null;
   }, [lines, posOf]);
-  // Open until folded away (then remembered per device).
-  const drawerOpen = drawerPref !== "0";
+  // Folded to its tab (the perch count on it) until opened, then remembered
+  // per device: a first visit keeps the room for the sky.
+  const drawerOpen = skyDrawerOpen(drawerPref);
   // The line a selection lands on: the focused session's, else its parent's
   // (a worker folded into its lead's line in Mine).
   const focusLine = useMemo(() => {
@@ -252,11 +255,14 @@ export function SkyView() {
 
   // The owner has panned or zoomed since the last fit: leave the camera be.
   const touched = useRef(memo?.touched ?? false);
-  const fitAll = useCallback(() => {
+  /** Every line and the intake lane — legibly (`firstFit`: the width at no
+   * less than mid, top-left, when everything would need far), or, `whole`
+   * (the toolbar's Fit), all of it however small. */
+  const fitAll = useCallback((whole = false) => {
     touched.current = false;
     const rects = lines.map((l) => ({ ...posOf(l.id), w: l.w, h: l.h }));
     if (mode !== "one") rects.push({ x: SKY_MARGIN, y: SKY_MARGIN, w: INTAKE_W, h: 1 });
-    setCam(fitCamera(boundsOf(rects), vp.w, vp.h, mode === "one" ? 1.5 : 1));
+    setCam((whole ? fitCamera : firstFit)(boundsOf(rects), vp.w, vp.h, mode === "one" ? 1.5 : 1));
   }, [lines, posOf, mode, vp.w, vp.h]);
   /** The grid's "1": the focused line filling the window. */
   const fitFocused = useCallback(() => {
@@ -708,7 +714,12 @@ export function SkyView() {
           <button type="button" className="sky-zoom-btn sky-fit-one" title="Fit the focused line — the grid's 1 (1)" disabled={!focusLine} onClick={fitFocused}>
             1
           </button>
-          <button type="button" className="sky-zoom-btn sky-fit" title="Fit every line in the window — the grid's 4 / 9 (0)" onClick={fitAll}>
+          <button
+            type="button"
+            className="sky-zoom-btn sky-fit"
+            title="See everything: every line in the window, however small — 0 fits them legibly (titles readable, pan down for the rest)"
+            onClick={() => fitAll(true)}
+          >
             Fit
           </button>
           <button type="button" className="sky-zoom-btn" title="Back to 100%" onClick={() => zoomBy(1 / cam.z)}>
@@ -740,7 +751,7 @@ export function SkyView() {
       onToggle={() => {
         const v = drawerOpen ? "0" : "1";
         setDrawerPref(v);
-        writePref(DRAWER_KEY, v);
+        writePref(SKY_DRAWER_KEY, v);
       }}
       onFocus={focusOn}
     />

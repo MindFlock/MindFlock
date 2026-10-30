@@ -68,22 +68,48 @@ body.view-switch #sky-view {
   --sky-dot: color-mix(in srgb, var(--text) 13%, transparent);
 }
 
+/* One slim row (≤ 36px): the views, Find, + New session, Tidy, the zoom
+   group. Nothing wraps on a desktop: Find gives up width first. */
 .sky-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px 10px;
-  flex-wrap: wrap;
-  padding: 6px 0;
+  gap: 6px 8px;
+  flex-wrap: nowrap;
+  min-height: 0;
+  max-height: 36px;
+  box-sizing: border-box;
+  padding: 4px 8px 4px 0;
+}
+
+.sky-toolbar > * {
+  flex: none;
+}
+
+.sky-modes.fl-chiprow {
+  flex-wrap: nowrap;
+  gap: 3px;
+}
+
+.sky-modes .fl-pick {
+  padding: 3px 9px;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.sky-toolbar > .sky-search {
+  flex: 0 1 170px;
+  min-width: 84px;
 }
 
 .sky-search .fl-input {
-  width: 190px;
-  padding: 4px 9px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 3px 9px;
   font-size: 12.5px;
 }
 
 .sky-new {
-  padding: 4px 11px;
+  padding: 3px 10px;
   font-size: 12.5px;
 }
 
@@ -102,7 +128,7 @@ body.view-switch #sky-view {
   background: transparent;
   border: 0;
   color: var(--text);
-  padding: 3px 8px;
+  padding: 2px 7px;
   font: inherit;
   font-size: 12px;
   border-radius: 6px;
@@ -119,7 +145,7 @@ body.view-switch #sky-view {
 }
 
 .sky-zoom-read {
-  min-width: 44px;
+  min-width: 40px;
   text-align: center;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
@@ -143,7 +169,7 @@ body.view-switch #sky-view {
 }
 
 .sky-tidy {
-  padding: 4px 11px;
+  padding: 3px 10px;
   font-size: 12.5px;
 }
 
@@ -500,6 +526,14 @@ body.view-switch #sky-view {
   writing-mode: horizontal-tb;
 }
 
+/* Folded with something perched: the tab wears the attention tone, so the
+   drawer starting folded never hides a perch. */
+.sky-drawer:not(.open) .sky-drawer-tab.has-perch {
+  color: var(--text);
+  background: color-mix(in srgb, var(--tone-attention) 14%, transparent);
+  box-shadow: inset 2px 0 0 var(--tone-attention);
+}
+
 .sky-drawer-body {
   flex: 1;
   min-width: 0;
@@ -596,9 +630,15 @@ details.fl-group-waiting > summary {
   box-shadow: none;
 }
 
+/* A phone: the row may wrap (it scrolls with the list). */
+.sky-narrow .sky-toolbar {
+  flex-wrap: wrap;
+  max-height: none;
+}
+
 @media (max-width: 600px) {
-  .sky-search .fl-input {
-    width: 140px;
+  .sky-toolbar > .sky-search {
+    flex-basis: 140px;
   }
 }
 

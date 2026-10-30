@@ -1,12 +1,14 @@
 /* The Sky's intake lane (IntakeLane.tsx): a column of source blocks pinned to
- * the sky's left edge; the Sky positions it, this styles what is inside. */
+ * the sky's left edge; the Sky positions it (INTAKE_W, 240 plane px), this
+ * styles what is inside — tight enough that an item's ref, its headline and
+ * Fly share one row at that width. */
 
 .sky-lane {
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 10px;
+  gap: 8px;
+  padding: 8px;
   max-height: 100%;
   overflow-y: auto;
   background: color-mix(in srgb, var(--panel) 92%, transparent);
@@ -54,8 +56,8 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  padding: 9px 10px;
+  gap: 6px;
+  padding: 8px 9px;
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 9px;
@@ -168,7 +170,7 @@
 
 .sky-lane-fly.fl-btn {
   flex: none;
-  padding: 3px 10px;
+  padding: 3px 8px;
   font-size: 12px;
 }
 
