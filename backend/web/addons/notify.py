@@ -548,7 +548,7 @@ NOTIFY_RULES: List[dict] = [
         "body": "{detail}",
         "default_enabled": True,
         "priority": 3,
-        "tags": ["airplane"],
+        "tags": ["bird"],
     },
     {
         # A template's SCHEDULED run couldn't start (no folder any more, the
