@@ -47,7 +47,10 @@
  * failed stop); a drag — a long-press first on touch — carries it over the
  * line, every stop it can land on lit, and a drop on one jumps the flight
  * there (`jumpFlight`); dropped anywhere else it flies back. It calls the
- * flight routes itself, as the current stop's toolbar does: no prop.
+ * flight routes itself, as the current stop's toolbar does: no prop. Every
+ * branch whose child works or waits on you — a worker, or a child hung off
+ * the line — carries a smaller bird of its own on its left edge (a click
+ * opens that child, `onOpen`; it never drags).
  *
  * Empty space pans the line sideways (scroll, or drag it). Positions and
  * connectors come from `layoutDiagram` (fixed box sizes), so the markup needs
@@ -56,6 +59,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 import {
+  birdPerches,
   joinLabel,
   layoutDiagram,
   reorderDiagram,
@@ -189,7 +193,9 @@ export interface FlywayCanvasProps {
   sizeOf?: LayoutOpts["sizeOf"];
   /** Scroll the line so this box (the flight's current stop) is in view. */
   reveal?: string | null;
-  /** The bird: standing on this box (lib/flightDiagram `birdPerch`). */
+  /** The bird: standing on this box (lib/flightDiagram `birdPerch`). Passed
+   * at all (null too), the line also draws a bird on each branch whose child
+   * works or waits on you (`birdPerches`; a click opens that child). */
   bird?: BirdPerch | null;
   /** How much each box shows (default normal — the editor, the Flight tab). */
   size?: BoxSizeName;
@@ -752,6 +758,14 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
     : undefined;
 
   const perch = p.bird ? shown.boxes.find((b) => b.node.id === (landed?.on || p.bird!.nodeId)) : undefined;
+  // The branches' own birds, on a line that draws a bird at all.
+  const branchBirds =
+    p.bird !== undefined
+      ? birdPerches(p.diagram)
+          .filter((b) => b.child)
+          .map((b) => ({ perch: b, box: shown.boxes.find((x) => x.node.id === b.nodeId) }))
+          .filter((b): b is { perch: typeof b.perch; box: NonNullable<typeof b.box> } => !!b.box)
+      : [];
   return (
     <div
       ref={rootRef}
@@ -1192,6 +1206,41 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
             label={"The bird: " + (p.bird!.tone === "you" ? "perched on you at " : p.bird!.tone === "halted" ? "halted at " : p.bird!.tone === "paused" ? "paused at " : "flying ") + perch.node.title}
           />
         )}
+        {branchBirds.map(({ perch: bp, box }) => {
+          const n = box.node;
+          const doing = bp.tone === "you" ? "waiting on you" : "working";
+          const open = () => p.onOpen?.(n);
+          return (
+            <BirdMarker
+              key={"bird:" + n.id}
+              tone={bp.tone}
+              size={18}
+              x={box.x + pad}
+              y={box.y + top + Math.min(box.h, 52) / 2}
+              label={n.title + "’s bird: " + doing}
+              className="fl-bird-branch"
+              hand={
+                p.onOpen
+                  ? {
+                      title: "Open " + n.title + " — " + doing,
+                      onClick: (e) => {
+                        e.stopPropagation();
+                        open();
+                      },
+                      onKeyDown: (e) => {
+                        if (e.key !== "Enter" && e.key !== " ") return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        open();
+                      },
+                      // A branch's bird never drags, nor starts the line's drags.
+                      onPointerDown: (e) => e.stopPropagation(),
+                    }
+                  : undefined
+              }
+            />
+          );
+        })}
         {menuNode && menuItems.length > 0 && (
           <StopMenu
             x={menu!.x}

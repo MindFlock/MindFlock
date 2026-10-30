@@ -2939,3 +2939,53 @@ folded and opened groups, the route, the menu item's place, the marker's
 markup in each state, the drag's CSS and its pointer-capture wiring);
 stopEditing / skyBirds / flightDiagram / skyBranches / skyVisibility /
 flightsButtons unchanged and green.
+
+**Every child a parallel row, each with its own bird.** The owner:
+"subsessions should all be in the MindFlock block in parallel, each with
+their own bird if they are running." (The Sky draws a child's line only
+inside its parent's.) In `sessionDiagram` every child that is not a worker
+spawned at a stop — the plain ones, one spawned at a stop not in this
+flight, one re-parented — now hangs the way workers do: a parallel row off
+the line's current place (`hangPoint`: the flight's current stop, else the
+fast-track's current or halted rung, else the session box) and converging at
+the box after it (the next stop, or the +). It stays a `child` box with its
+`child:<title>` id and its chip and mini ladder. It stays in row `below`, so
+reading order keeps the children last. What is new is a `branch` link
+(`{from, to, state, inner, live}`): the wire out is the family's `branch`
+wire, drawn the way a fan-out is, and the wire back in is a `join`, done once
+the child's turn ended. The line reaches the next box through them, the
+direct wire is dropped, and the flight never waits on them.
+
+- **Layout:** `layoutDiagram` stacks a hung child in the same column as the
+  stop's workers, under them (an indented group on a phone).
+- **Reordering:** `reorderDiagram` re-targets the child's fan-in along with
+  the workers'.
+- **States** (`childState`): working, asking, failed (by its report or a
+  broken session), else done.
+- **The +:** `insertGaps` keeps the + after a stop whose column holds only
+  hung children, drawn between the stop and the column. A worker column
+  still has none, because the line reaches its join point through the
+  workers.
+
+**Birds.** `birdPerches(diagram): BirdPerch[]` returns the main bird
+(`birdPerch`, unchanged and still exported) first. After it comes one bird
+per branch whose session works (`tone: "working"`) or waits on you (`"you"`),
+counting workers and hung children alike; an idle one has none. Each of those
+carries `child` (the session's title). `BranchInfo.live` holds it, from
+`deriveSessionState`. The canvas draws them on any line whose host passes
+`bird` at all (null too: SkyLine and SessionFlight pass `birdPerch(d)`, the
+flyway editor passes nothing), so no host changed.
+
+A branch's bird is smaller (18px), `.fl-bird-branch`, and sits centred on
+the branch box's left edge, where its wire comes in. With `onOpen` it is a
+`role="button"` ("Open <child> — working"): a click or Enter opens that
+child, as a click on its box does, and it never drags. Without `onOpen` it is
+a picture. `BirdMarker` gained a `className` prop for this. The main bird
+keeps its click (halt / carry on / retry) and its drag (jump).
+
+Tests: skyBranches.test.ts (8 more: the hanging rows off a stop, a rung or
+the session box, the phone layout, the + kept, reordering, `birdPerches`, the
+canvas's branch birds) and skyBirds.test.ts (the marker's class). The tests
+of the old "children below" picture (flightDiagram.test.ts,
+skyBranches.test.ts) now pin the parallel rows. flightsUi, skyLine and
+stopGroups are unchanged and green.

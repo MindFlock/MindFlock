@@ -1025,6 +1025,18 @@
   cursor: grabbing;
 }
 
+/* A branch's own bird (round 12): smaller, sitting on the branch box's left
+   edge where the fan-out wire comes in; a click opens that child. */
+.fl-bird-marker.fl-bird-branch {
+  z-index: 4;
+  padding: 2px;
+  transform: translate(-50%, -50%);
+}
+
+.fl-bird-marker.fl-bird-branch[role="button"] {
+  cursor: pointer;
+}
+
 /* Every stop it can land on, and the one under it. */
 .fl-box.fl-jump-target {
   outline: 2px dashed color-mix(in srgb, var(--accent) 70%, transparent);

@@ -92,6 +92,14 @@ describe("the marker", () => {
     expect(css("components/flights/FlywayCanvas.css")).toMatch(/\.fl-bird-marker \{[^}]*transition: left [^;]*top /);
   });
 
+  it("a branch's bird (round 12): its own class, smaller, a picture until the canvas hands it a click", () => {
+    const html = renderToStaticMarkup(createElement(BirdMarker, { tone: "you", x: 4, y: 8, label: "w1’s bird: waiting on you", size: 18, className: "fl-bird-branch" }));
+    expect(html).toMatch(/^<span class="fl-bird-marker tone-you fl-bird-branch" style="left:4px;top:8px" role="img" aria-label="w1’s bird: waiting on you"/);
+    expect(html).toContain('style="width:18px;height:13.3px"');
+    const hand = renderToStaticMarkup(createElement(BirdMarker, { tone: "working", x: 0, y: 0, label: "w1’s bird: working", className: "fl-bird-branch", hand: { title: "Open w1 — working", onClick: () => {} } }));
+    expect(hand).toMatch(/class="fl-bird-marker tone-working fl-bird-branch"[^>]*role="button"[^>]*tabindex="0" title="Open w1 — working"/);
+  });
+
   it("a size prop scales it", () => {
     const html = renderToStaticMarkup(createElement(BirdMarker, { tone: "you", x: 0, y: 0, label: "b", size: 32 }));
     expect(html).toContain('class="fl-bird-big fl-sprite-bird" style="width:32px;height:23.7px"');

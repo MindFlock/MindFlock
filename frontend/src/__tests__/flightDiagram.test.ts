@@ -172,19 +172,26 @@ describe("the session diagram", () => {
   const kid2 = inst("w2", { parent: "me" });
   const rows = [lead, me, kid1, kid2];
 
-  it("is the parent above, the session, its children below, then the + — from rows alone", () => {
+  it("is the parent above, the session, its children in parallel rows off it into the + — from rows alone", () => {
     const d = sessionDiagram(rows, "me");
     expect(d.nodes.find((n) => n.row === "above")?.id).toBe("parent:lead");
     expect(d.nodes.filter((n) => n.row === "main").map((n) => n.id)).toEqual(["session:me", "add"]);
-    expect(d.nodes.filter((n) => n.row === "below").map((n) => n.id)).toEqual(["child:w1", "child:w2"]);
+    // Round 12: each child a row of its own, hung off the session box and
+    // converging at the + (the line reaches the + through them).
+    expect(d.nodes.filter((n) => n.row === "below").map((n) => [n.id, n.branch?.from, n.branch?.to])).toEqual([
+      ["child:w1", "session:me", "add"],
+      ["child:w2", "session:me", "add"],
+    ]);
     expect(d.edges).toEqual(
       expect.arrayContaining([
         { from: "parent:lead", to: "session:me", kind: "up" },
         { from: "session:me", to: "child:w1", kind: "branch" },
         { from: "session:me", to: "child:w2", kind: "branch" },
-        { from: "session:me", to: "add", kind: "add" },
+        { from: "child:w1", to: "add", kind: "join", done: true },
+        { from: "child:w2", to: "add", kind: "join", done: true },
       ])
     );
+    expect(d.edges.some((e) => e.from === "session:me" && e.to === "add")).toBe(false);
     expect(d.mode).toBe("none");
   });
 
@@ -247,15 +254,20 @@ describe("the session diagram", () => {
 });
 
 describe("the layout", () => {
-  it("horizontal: the line left to right, the parent above, children stacked on a branch below", () => {
+  it("horizontal: the line left to right, the parent above, the children parallel rows between the session and the +", () => {
     const rows = [inst("lead"), inst("me", { parent: "lead" }), inst("w1", { parent: "me" }), inst("w2", { parent: "me" })];
     const l = layoutDiagram(sessionDiagram(rows, "me"));
     const at = (id: string) => l.boxes.find((b) => b.node.id === id)!;
     expect(at("parent:lead").y).toBeLessThan(at("session:me").y);
     expect(at("add").x).toBeGreaterThan(at("session:me").x);
-    expect(at("child:w1").y).toBeGreaterThan(at("session:me").y);
+    // One column, one row per child, stacked; the + after it.
+    expect(at("child:w1").x).toBeGreaterThan(at("session:me").x + at("session:me").w);
+    expect(at("child:w2").x).toBe(at("child:w1").x);
     expect(at("child:w2").y).toBeGreaterThan(at("child:w1").y);
-    expect(l.wires.find((w) => w.kind === "branch")!.d).toMatch(/^M [\d.]+ [\d.]+ V [\d.]+ H [\d.]+$/);
+    expect(at("add").x).toBeGreaterThan(at("child:w1").x + at("child:w1").w);
+    // The family wire runs out the way a fan-out does; reading order keeps the children last.
+    expect(l.wires.find((w) => w.kind === "branch" && w.to === "child:w1")!.d).toMatch(/^M [\d.]+ [\d.]+ (H|C) /);
+    expect(l.boxes.slice(-2).map((b) => b.node.id)).toEqual(["child:w1", "child:w2"]);
     expect(l.width).toBeGreaterThan(0);
   });
 

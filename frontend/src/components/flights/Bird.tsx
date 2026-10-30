@@ -84,14 +84,15 @@ export type BirdHand = { title: string; className?: string } & Pick<
  * `hand` it is a button: a click halts / carries on / retries, a drag jumps
  * the flight (FlywayCanvas). Its name stays where it is; what a press does is
  * its title and its description. */
-export function BirdMarker({ tone, x, y, label, size = 24, hand }: { tone: string; x: number; y: number; label: string; size?: number; hand?: BirdHand }) {
+export function BirdMarker({ tone, x, y, label, size = 24, hand, className = "" }: { tone: string; x: number; y: number; label: string; size?: number; hand?: BirdHand; className?: string }) {
   const look = birdLook(tone);
   const box = spriteBox(size);
   const whole = box.w + "px " + box.h + "px";
-  const { title, className, ...on } = hand || { title: label };
+  const { title, className: held, ...on } = hand || { title: label };
+  const cls = [look.className, className, held].filter(Boolean).join(" ");
   return (
     <span
-      className={look.className + (className ? " " + className : "")}
+      className={cls}
       style={{ left: x, top: y }}
       role={hand ? "button" : "img"}
       aria-label={label}

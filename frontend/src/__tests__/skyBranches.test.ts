@@ -11,10 +11,11 @@ import { describe, expect, it } from "vitest";
 import { code, css } from "./sourceText";
 import type { Instance } from "../api/types";
 import type { Flight, FlightStep, StepKindDef } from "../lib/flights";
-import { birdPerch, branchState, innerSummary, joinLabel, layoutDiagram, reorderDiagram, sessionDiagram, stopSummary, type Diagram } from "../lib/flightDiagram";
+import { birdPerch, birdPerches, branchState, innerSummary, joinLabel, layoutDiagram, reorderDiagram, sessionDiagram, stopSummary, type Diagram } from "../lib/flightDiagram";
 import { FlywayCanvas } from "../components/flights/FlywayCanvas";
 import { StopPalette } from "../components/flights/StopParts";
 import { inspectorDef, promptLines } from "../components/flights/useSessionLine";
+import { insertGaps } from "../lib/stopEditing";
 
 const step = (id: string, kind: string, title: string, config: Record<string, unknown> = {}): FlightStep => ({ id, kind, title, config, on_fail: "halt" });
 
@@ -166,12 +167,19 @@ describe("branches in the session diagram", () => {
     expect(birdPerch(halted)).toEqual({ nodeId: "stop:s1", tone: "halted" });
   });
 
-  it("children with no branch, or one spawned at a stop not in this flight, stay below", () => {
+  it("children with no branch, or one spawned at a stop not in this flight, hang in parallel off the current stop", () => {
     const rows = [lead(AGENT_STEPS, 0, null), kid("w1", "s1"), row("plain", { parent: "lead" }), kid("old", "zz"), kid("moved", "s1", { flight: { branch: { parent: "someone-else", step: "s1" } } })];
     const db = diagramOf(rows, f);
     expect(ids(db, "branch")).toEqual(["branch:w1"]);
     expect(ids(db, "child")).toEqual(["child:plain", "child:old", "child:moved"]);
-    expect(db.edges.filter((e) => e.kind === "branch").map((e) => e.to)).toEqual(["child:plain", "child:old", "child:moved"]);
+    // Round 12: off the flight's current stop, into the box after it — the
+    // worker's column, one row each.
+    expect(db.edges.filter((e) => e.kind === "branch").map((e) => [e.from, e.to])).toEqual([
+      ["stop:s1", "child:plain"],
+      ["stop:s1", "child:old"],
+      ["stop:s1", "child:moved"],
+    ]);
+    expect(db.edges.filter((e) => e.kind === "join" && e.from.startsWith("child:")).map((e) => e.to)).toEqual(["stop:s2", "stop:s2", "stop:s2"]);
     // No join count: no pill, the bird on the current stop.
     expect(db.nodes.find((n) => n.id === "stop:s2")!.join).toBeUndefined();
     expect(birdPerch(db)).toEqual({ nodeId: "stop:s1", tone: "working" });
@@ -283,11 +291,12 @@ describe("the layout of a branch column", () => {
     expect(order.indexOf("stop:s2")).toBe(order.indexOf("branch:w5") + 1);
   });
 
-  it("children below drop under the branch column", () => {
+  it("a hung child takes a row of the same column, under the workers", () => {
     const rows = [lead(AGENT_STEPS, 0, null), ...FIVE, row("plain", { parent: "lead" })];
     const l = layoutDiagram(diagramOf(rows, f));
     const lowest = Math.max(...l.boxes.filter((b) => b.node.kind === "branch").map((b) => b.y + b.h));
     expect(at(l, "child:plain").y).toBeGreaterThan(lowest);
+    expect(at(l, "child:plain").x).toBe(at(l, "branch:w1").x);
   });
 
   it("phone: the branches are an indented group under their stop, before the join point", () => {
@@ -408,5 +417,90 @@ describe("Split and Join on the line", () => {
     expect(src).toContain("tackOn(flight.id, newStep(joinDef, flight.steps.map((s) => s.id)), at < end ? at : undefined)");
     expect(src).toContain("+ Join");
     expect(src).toContain("one worker per line");
+  });
+});
+
+describe("every child a parallel row, each with its own bird (round 12)", () => {
+  const f1 = flight(AGENT_STEPS, 1);
+  const at = (l: ReturnType<typeof layoutDiagram>, id: string) => l.boxes.find((b) => b.node.id === id)!;
+  const plainKids = [row("a", { parent: "lead", activity: "working" }), row("b", { parent: "lead", activity: "clarify" }), row("c", { parent: "lead" })];
+
+  it("plain children hang off the flight's current stop and converge at the next, the line running through them", () => {
+    const d = diagramOf([lead(AGENT_STEPS, 1, null), ...plainKids], f1);
+    expect(d.nodes.filter((n) => n.kind === "child").map((n) => [n.id, n.branch!.from, n.branch!.to])).toEqual([
+      ["child:a", "stop:s2", "stop:s3"],
+      ["child:b", "stop:s2", "stop:s3"],
+      ["child:c", "stop:s2", "stop:s3"],
+    ]);
+    expect(d.edges.some((e) => e.from === "stop:s2" && e.to === "stop:s3")).toBe(false);
+    // Working / asking / idle: an idle one's turn is done (the flight never waits on it).
+    expect(d.nodes.filter((n) => n.kind === "child").map((n) => n.branch!.state)).toEqual(["working", "asking", "done"]);
+    const l = layoutDiagram(d);
+    expect(new Set(["child:a", "child:b", "child:c"].map((id) => at(l, id).x)).size).toBe(1);
+    expect(at(l, "child:b").y).toBeGreaterThan(at(l, "child:a").y);
+    expect(at(l, "child:a").x).toBeGreaterThan(at(l, "stop:s2").x + at(l, "stop:s2").w);
+    expect(at(l, "stop:s3").x).toBeGreaterThan(at(l, "child:a").x + at(l, "child:a").w);
+  });
+
+  it("with no flight they hang off the fast-track's current rung, else the session box", () => {
+    const armed = row("lead", { stage: "committed", autopilot: { depth: "push", state: "running", step: "", reason: "", source: "user", item: "" } });
+    const dl = sessionDiagram([armed, ...plainKids], "lead");
+    expect(dl.nodes.find((n) => n.id === "child:a")!.branch).toMatchObject({ from: "rung:push", to: "add" });
+    const dn = sessionDiagram([row("lead"), ...plainKids], "lead");
+    expect(dn.nodes.find((n) => n.id === "child:a")!.branch).toMatchObject({ from: "session:lead", to: "add" });
+  });
+
+  it("phone: an indented group under the box they hang off", () => {
+    const d = diagramOf([lead(AGENT_STEPS, 1, null), ...plainKids], f1);
+    const l = layoutDiagram(d, { vertical: true });
+    expect(at(l, "child:a").y).toBeGreaterThan(at(l, "stop:s2").y);
+    expect(at(l, "stop:s3").y).toBeGreaterThan(at(l, "child:c").y);
+  });
+
+  it("the + after the current stop stays, drawn between it and the column (a worker column keeps none)", () => {
+    const d = diagramOf([lead(AGENT_STEPS, 1, null), ...plainKids], f1);
+    const l = layoutDiagram(d);
+    const gap = insertGaps(l.boxes, 2, false).find((g) => g.at === 2)!;
+    expect(gap.x).toBeGreaterThan(at(l, "stop:s2").x + at(l, "stop:s2").w);
+    expect(gap.x).toBeLessThan(at(l, "child:a").x);
+  });
+
+  it("reordering keeps a hung child's fan-in on its stop's new next box", () => {
+    const steps = [...AGENT_STEPS, step("s4", "ship", "Merge", { lane: "merge" })];
+    const d = diagramOf([lead(steps, 0, null), row("a", { parent: "lead" })], flight(steps, 0));
+    // Swap s3 and s4 (places 2 and 3): s1's next box stays s2.
+    const r = reorderDiagram(d, 2, 3);
+    expect(r.edges.filter((e) => e.kind === "join" && e.from === "child:a").map((e) => e.to)).toEqual(["stop:s2"]);
+  });
+
+  it("birdPerches: the main bird first, then one per working (or asking) branch — none for an idle one", () => {
+    const d = diagramOf([lead(AGENT_STEPS, 1, null), ...plainKids, kid("w1", "s2", { activity: "working" }), kid("w2", "s2")], f1);
+    expect(birdPerches(d)).toEqual([
+      { nodeId: "stop:s2", tone: "working" },
+      { nodeId: "branch:w1", tone: "working", child: "w1" },
+      { nodeId: "child:a", tone: "working", child: "a" },
+      { nodeId: "child:b", tone: "you", child: "b" },
+    ]);
+    // The main one is still birdPerch's.
+    expect(birdPerches(d)[0]).toEqual(birdPerch(d));
+    expect(birdPerches(sessionDiagram([row("lead"), row("c", { parent: "lead" })], "lead"))).toEqual([]);
+  });
+
+  it("the canvas draws a bird on each live branch: a click opens that child; the main bird keeps its hand", () => {
+    const d = diagramOf([lead(AGENT_STEPS, 1, null), ...plainKids], f1);
+    const render = (over: Record<string, unknown>) => renderToStaticMarkup(createElement(FlywayCanvas, { diagram: d, label: "Lead", vertical: false, ...over }));
+    const html = render({ bird: birdPerch(d), onOpen: () => {} });
+    const birds = [...html.matchAll(/<span class="(fl-bird-marker[^"]*)"[^>]*role="(\w+)" aria-label="([^"]*)"[^>]*title="([^"]*)"/g)].map((m) => [m[1], m[2], m[3], m[4]]);
+    expect(birds).toEqual([
+      ["fl-bird-marker tone-working", "button", "The bird: flying Push", expect.stringMatching(/^Halt the flight here/)],
+      ["fl-bird-marker tone-working fl-bird-branch", "button", "a’s bird: working", "Open a — working"],
+      ["fl-bird-marker tone-you fl-bird-branch", "button", "b’s bird: waiting on you", "Open b — waiting on you"],
+    ]);
+    // A branch's bird is smaller and never a drag.
+    expect(html).toMatch(/fl-bird-branch"[^>]*><span class="fl-bird-big fl-sprite-bird fl-flapping" style="width:18px/);
+    // No onOpen: a picture. No bird prop at all (the flyway editor): none.
+    expect(render({ bird: null })).toMatch(/class="fl-bird-marker tone-working fl-bird-branch"[^>]*role="img"/);
+    expect(render({})).not.toContain("fl-bird-marker");
+    expect(css("components/flights/FlywayCanvas.css")).toMatch(/\.fl-bird-marker\.fl-bird-branch \{[^}]*transform: translate\(-50%, -50%\)/);
   });
 });

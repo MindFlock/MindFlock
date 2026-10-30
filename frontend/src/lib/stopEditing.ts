@@ -38,19 +38,26 @@ export interface InsertGap {
 /** Every gap of the line a stop may be inserted at: before each stop whose
  * index is ≥ `insertFrom`, never right after the trailing +, and not between a
  * stop with branches and its join point (the line reaches the join THROUGH
- * the branches). */
+ * the branches). A column of children merely hung off a stop (round 12: no
+ * join waits on them) keeps its gap, drawn between the stop and the column. */
 export function insertGaps(boxes: readonly Placed[], insertFrom: number, vertical: boolean): InsertGap[] {
   const main = boxes.filter((b) => b.node.row === "main");
-  const fanned = new Set(boxes.map((b) => b.node.branch?.from));
+  const fanned = new Set(boxes.filter((b) => b.node.kind === "branch").map((b) => b.node.branch?.from));
+  // Where the column of hung children after a box begins.
+  const hung = new Map<string, number>();
+  for (const c of boxes)
+    if (c.node.kind === "child" && c.node.branch) hung.set(c.node.branch.from, Math.min(hung.get(c.node.branch.from) ?? Infinity, vertical ? c.y : c.x));
   const gaps: InsertGap[] = [];
   for (let j = 1; j < main.length; j++) {
     const b = main[j];
     const a = main[j - 1];
     if ((b.node.kind !== "stop" && b.node.kind !== "group") || b.node.index === undefined || b.node.index < insertFrom || a.node.kind === "add" || fanned.has(a.node.id)) continue;
+    const col = hung.get(a.node.id);
+    const end = col ?? (vertical ? b.y : b.x);
     gaps.push(
       vertical
-        ? { at: b.node.index, x: b.x + b.w / 2, y: (a.y + a.h + b.y) / 2 }
-        : { at: b.node.index, x: (a.x + a.w + b.x) / 2, y: b.y + Math.min(b.h, a.h) / 2 }
+        ? { at: b.node.index, x: b.x + b.w / 2, y: (a.y + a.h + end) / 2 }
+        : { at: b.node.index, x: (a.x + a.w + end) / 2, y: (col === undefined ? b.y : a.y) + Math.min(b.h, a.h) / 2 }
     );
   }
   return gaps;
