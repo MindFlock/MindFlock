@@ -103,6 +103,24 @@ export const paletteFrame = (stored: StoredLine | undefined) => objectFrame(stor
 /** The room kept round a block placed by `spotNear`. */
 export const PLACE_GAP = 24;
 
+/** Round 14: "All blocks…" floats the palette LARGE when the owner never
+ * sized it — about 60% of the screen's width × 70% of its height (`screen`,
+ * px), in plane px at zoom `z`, held to the palette's limits and to the view
+ * (`view`: the visible plane), its left edge right of the view's centre unless
+ * that would push it out, centred top to bottom. `size`: the frame the owner
+ * already gave it (kept; only the spot is chosen). `pad` is screen px. */
+export function catalogFrame(view: Rect, screen: { w: number; h: number }, z: number, size?: { w: number; h: number } | null, pad = 16): Rect {
+  const k = z > 0 ? z : 1;
+  const m = pad / k;
+  const fit = (want: number, room: number, lo: number, hi: number) => Math.round(Math.min(hi, Math.max(lo, Math.min(want, room))));
+  // A frame the owner gave it stays; only where it sits is chosen.
+  const w = size ? size.w : fit((screen.w * 0.6) / k, view.w - 2 * m, PALETTE_MIN.w, PALETTE_MAX.w);
+  const h = size ? size.h : fit((screen.h * 0.7) / k, view.h - 2 * m, PALETTE_MIN.h, PALETTE_MAX.h);
+  const x = Math.max(view.x + m, Math.min(view.x + view.w / 2 + PLACE_GAP, view.x + view.w - m - w));
+  const y = Math.max(view.y + m, view.y + (view.h - h) / 2);
+  return { x: Math.round(x), y: Math.round(y), w, h };
+}
+
 /** Where a block of `size` lands when the palette places it (docs/flights.md
  * "Round 13": place, don't tack): the free spot nearest `want` (its top-left
  * with nothing in the way) that overlaps nothing `taken` (with PLACE_GAP

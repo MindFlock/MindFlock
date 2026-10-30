@@ -3,24 +3,30 @@
  * by SkyView over the plane, screen-sized, just above the selection.
  *
  * Lines: Move (a hint — dragging any selected line's bar moves them all),
- * Tidy these, Remove… (inline-confirmed: a session's line closes its session,
- * a grounded line is deleted), Clear. Stops of one line: Group into a stop
- * and Save to the shelf (both ask a name inline), Remove (at once for up to
- * three, inline-confirmed past that), Clear. No window.confirm / prompt:
- * Electron has none. The intake lane can be among the lines (round 12): it
- * moves and tidies with them, and Remove leaves it alone. */
+ * Tidy these, Remove (a session's line closes its session, a grounded line is
+ * deleted), Clear. Stops of one line: Group into a stop and Save to the shelf
+ * (both ask a name inline), Remove, Clear. Remove goes at once with ONE Undo
+ * for the lot (the toast and Ctrl+Z, lib/skyUndo); it asks inline only when
+ * the selection holds something running — a session whose agent works or
+ * asks, the stop a running flight is at — and the question names it (round
+ * 14, lib/skySelect `removalNeedsAsk`). No window.confirm / prompt: Electron
+ * has none. The intake lane can be among the lines (round 12): it moves and
+ * tidies with them, and Remove leaves it alone. */
 
 import { useEffect, useRef, useState, type JSX } from "react";
-import type { Flight, StepKindDef } from "../../lib/flights";
-import { planFromSteps } from "../../lib/flights";
+import type { Flight, FlightStep, StepKindDef } from "../../lib/flights";
+import { isLive, planFromSteps } from "../../lib/flights";
 import { flightStops } from "../../lib/flightDiagram";
-import { deleteFlight, dropGroup, dropStop, groupStops, savePlan } from "../../lib/flightsApi";
+import { deleteFlight, dropGroup, dropStop, groupStops, savePlan, startGrounded, tackOn, tackOnNew, tackOnSteps } from "../../lib/flightsApi";
 import { groundedIdOf, isGroundedKey } from "../../lib/groundedLines";
 import { closeSession } from "../../lib/sessionActions";
-import { INTAKE_KEY } from "../../lib/skyLayout";
-import { consecutive, removals, selectedIndexes, stopSelection, type SkySelection } from "../../lib/skySelect";
+import { INTAKE_KEY, type Pos } from "../../lib/skyLayout";
+import { consecutive, removalNeedsAsk, selectedIndexes, sessionRuns, stepIndexesOf, stopSelection, stopsRun, type SkySelection } from "../../lib/skySelect";
+import { pushUndo, undoAction } from "../../lib/skyUndo";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
+import { queryClient } from "../../state/queries";
+import { reopenClosed, runningWord, sessionOpen } from "./SkyLine";
 import { InlineConfirm } from "../InlineConfirm";
 import { TextField } from "./controls";
 import "./SkySelection.css";
@@ -29,8 +35,42 @@ import "./SkySelection.css";
  * or Save). SkyView holds it, so Delete / Backspace can ask too. */
 export type SelectionAsk = "" | "remove" | "group" | "save";
 
-/** Stops removed past this many ask first. */
-export const REMOVE_AT_ONCE = 3;
+/** One stop or group a Remove took off, enough to put it back: its first
+ * step index, its steps, and a group's name ("" = a lone stop). */
+export interface TakenStops {
+  index: number;
+  steps: FlightStep[];
+  group: string;
+}
+
+/** What the selected stop nodes stand for on `steps`, first index first —
+ * the order Undo tacks them back in. */
+export function takenStops(nodes: Iterable<string>, steps: readonly FlightStep[]): TakenStops[] {
+  const out: TakenStops[] = [];
+  for (const n of nodes) {
+    const idx = stepIndexesOf(n, steps);
+    if (!idx.length) continue;
+    const group = n.startsWith("group:") ? steps[idx[0]].group?.name || "" : "";
+    out.push({ index: idx[0], steps: group ? idx.map((i) => steps[i]) : [steps[idx[0]]], group });
+  }
+  return out.sort((a, b) => a.index - b.index);
+}
+
+/** Where Undo tacks each taken item back (in `takenStops` order): its old
+ * index while that is still ahead of the flight's `cursor` and inside the
+ * line as it grows back (`length` + what went back already), else the end
+ * (undefined). */
+export function putBackAt(taken: readonly Pick<TakenStops, "index" | "steps">[], flight: { cursor: number; length: number }): Array<number | undefined> {
+  let len = flight.length;
+  return taken.map((t) => {
+    const at = t.index > flight.cursor && t.index < len ? t.index : undefined;
+    len += t.steps.length;
+    return at;
+  });
+}
+
+/** A flight as the page knows it now (an Undo pressed minutes later). */
+const flightNow = (id: string): Flight | null => (queryClient.getQueryData<Flight[] | null>(["flights"]) || []).find((f) => f.id === id) || null;
 
 /** The name a new group or saved stop gets unless the owner types one. */
 export const NEW_STOPS = "New stops";
@@ -50,6 +90,12 @@ export interface SkySelectionProps {
   /** Tidy these: their spots forgotten. */
   onTidy(ids: string[]): void;
   onClear(): void;
+  /** A session line's row (is its agent working or asking?). */
+  rowOf?(id: string): { activity?: string; asking?: unknown } | undefined;
+  /** Where a line sits now (plane px): a grounded line put back lands there. */
+  posOf?(id: string): Pos | undefined;
+  /** Make a removed grounded line again from its stops, pinned at `at`. */
+  restoreGrounded?(steps: FlightStep[], name: string, at: Pos | undefined): Promise<unknown>;
 }
 
 const plural = (n: number, one: string, many = one + "s") => n + " " + (n === 1 ? one : many);
@@ -97,23 +143,74 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
     }
   };
 
+  // Remove asks only when the selection holds something running, and the
+  // question names it: the sessions whose agents work or ask, the stop the
+  // flight is at.
+  const runningLines = removable.filter((id) => !isGroundedKey(id) && sessionRuns(p.rowOf?.(id)));
+  const runningStop = one && flight && stopsRun(idx, flight) ? flight.steps[flight.cursor]?.title || "a stop" : "";
+  const asks = one
+    ? removalNeedsAsk({ kind: "stops", indexes: idx, flight })
+    : removalNeedsAsk({ kind: "selection", items: removable.map((id) => (isGroundedKey(id) ? { kind: "grounded" as const } : { kind: "session" as const, row: p.rowOf?.(id) })) });
+
   const removeLines = () =>
     run(async () => {
-      let gone = 0;
+      const closed: string[] = [];
+      const gone: Array<{ steps: FlightStep[]; name: string; at: Pos | undefined }> = [];
       for (const id of removable) {
         if (isGroundedKey(id)) {
-          if (await deleteFlight(groundedIdOf(id))) gone++;
-        } else await closeSession(id);
+          const f = p.flightOf(id);
+          const at = p.posOf?.(id);
+          if (await deleteFlight(groundedIdOf(id))) gone.push({ steps: f?.steps || [], name: f?.plan_name || "", at });
+        } else {
+          await closeSession(id);
+          if (!sessionOpen(id)) closed.push(id);
+        }
       }
-      if (gone) toast("Removed " + plural(gone, "line") + " of stops");
+      const n = gone.length + closed.length;
+      if (!n) return;
+      // ONE entry puts the lot back: the grounded lines where they sat, the
+      // sessions from Recently closed.
+      const entry = pushUndo({
+        label: "Remove " + plural(n, "line"),
+        undo: async () => {
+          for (const g of gone) if (g.steps.length) await (p.restoreGrounded ? p.restoreGrounded(g.steps, g.name, g.at) : startGrounded({ steps: g.steps, ...(g.name ? { name: g.name } : {}) }));
+          await reopenClosed(closed);
+        },
+      });
+      const said = [closed.length ? "closed " + plural(closed.length, "session") : "", gone.length ? "removed " + plural(gone.length, "line") + " of stops" : ""].filter(Boolean).join(", ");
+      toast(said.charAt(0).toUpperCase() + said.slice(1), { action: undoAction(entry, "Undo: put " + plural(n, "line") + " back") });
     });
 
   const removeStops = () =>
     run(async () => {
       if (!one || !flight) return;
-      let n = 0;
-      for (const r of removals(one.nodes, flight.steps)) if (await (r.group ? dropGroup(flight.id, r.step) : dropStop(flight.id, r.step))) n++;
-      if (n) toast("Removed " + plural(n, "stop"));
+      const fid = flight.id;
+      const title = isGroundedKey(one.line) ? "" : one.line;
+      const taken = takenStops(one.nodes, flight.steps);
+      const out: TakenStops[] = [];
+      for (const t of taken) if (await (t.group ? dropGroup(fid, t.steps[0].id) : dropStop(fid, t.steps[0].id))) out.push(t);
+      if (!out.length) return;
+      const n = out.length;
+      const entry = pushUndo({
+        label: "Remove " + plural(n, "stop"),
+        undo: async () => {
+          const now = flightNow(fid);
+          // The flight went with its last stop: the stops come back as a
+          // grounded line, or as a new flight on the session.
+          if (!now || (!isLive(now) && now.state !== "grounded")) {
+            const steps = out.flatMap((t) => t.steps);
+            if (title) return tackOnNew(title, steps);
+            return p.restoreGrounded ? p.restoreGrounded(steps, flight.plan_name || "", p.posOf?.(one.line)) : startGrounded({ steps });
+          }
+          const ats = putBackAt(out, { cursor: now.cursor, length: now.steps.length });
+          for (let i = 0; i < out.length; i++) {
+            const t = out[i];
+            if (t.group) await tackOnSteps(fid, t.steps, ats[i], t.group);
+            else await tackOn(fid, t.steps[0], ats[i]);
+          }
+        },
+      });
+      toast("Removed " + plural(n, "stop"), { action: undoAction(entry, "Undo: put " + plural(n, "stop") + " back") });
     });
 
   const group = () =>
@@ -134,14 +231,15 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
       }
     });
 
-  /** Remove, pressed or Delete: up to three stops go at once. */
+  /** Remove, pressed or Delete: at once, unless something in it runs. */
+  const removeNow = () => (one ? removeStops() : removeLines());
   const askRemove = () => {
-    if (one && one.nodes.length <= REMOVE_AT_ONCE) void removeStops();
-    else p.setAsk("remove");
+    if (asks) p.setAsk("remove");
+    else void removeNow();
   };
   // Delete / Backspace on the sky asks the same way.
   useEffect(() => {
-    if (p.ask === "remove" && one && one.nodes.length <= REMOVE_AT_ONCE && !busy) void removeStops();
+    if (p.ask === "remove" && !asks && !busy) void removeNow();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.ask]);
 
@@ -185,8 +283,8 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
               Tidy these
             </button>
             {removable.length > 0 && (
-              <button type="button" className="test-btn fl-btn sky-selbar-danger" disabled={busy} title="Close their sessions, remove their stops" onClick={() => p.setAsk("remove")}>
-                Remove…
+              <button type="button" className="test-btn fl-btn sky-selbar-danger" disabled={busy} title="Close their sessions, remove their stops (Ctrl+Z puts them back)" onClick={askRemove}>
+                Remove
               </button>
             )}
           </>
@@ -207,9 +305,9 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
           </button>
         </div>
       )}
-      {p.ask === "remove" && !one && removable.length > 0 && (
+      {p.ask === "remove" && asks && !one && removable.length > 0 && (
         <InlineConfirm
-          title={"Remove " + plural(removable.length, "line") + "?"}
+          title={"Remove " + plural(removable.length, "line") + "? " + names(runningLines) + (runningLines.length === 1 ? " " + runningWord(p.rowOf?.(runningLines[0])) : " are running") + "."}
           body={
             <>
               {sessions.length > 0 && (
@@ -230,10 +328,10 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
           onCancel={() => p.setAsk("")}
         />
       )}
-      {p.ask === "remove" && one && one.nodes.length > REMOVE_AT_ONCE && (
+      {p.ask === "remove" && asks && one && (
         <InlineConfirm
-          title={"Remove " + plural(one.nodes.length, "stop") + "?"}
-          body={"They leave “" + p.nameOf(one.line) + "”. A stop that is flying halts the flight right before what follows."}
+          title={"Remove " + plural(one.nodes.length, "stop") + "? The flight is at “" + runningStop + "” right now."}
+          body={"They leave “" + p.nameOf(one.line) + "”, and the flight pauses right before what follows. Ctrl+Z puts them back."}
           confirmLabel="Remove"
           busy={busy}
           onConfirm={() => void removeStops()}

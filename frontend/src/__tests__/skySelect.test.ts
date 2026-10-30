@@ -198,20 +198,40 @@ describe("the bar", () => {
     expect(render({})).toBe("");
   });
 
-  it("lines: the count, Move's hint, Tidy these, Remove…, Clear", () => {
+  it("lines: the count, Move's hint, Tidy these, Remove, Clear", () => {
     const html = render({ selection: selectLines(["a", "b"]) });
     expect(html).toContain('aria-label="2 lines selected"');
     expect(html).toContain("Drag a bar to move them");
     expect(html).toContain(">Tidy these</button>");
-    expect(html).toContain(">Remove…</button>");
+    expect(html).toContain(">Remove</button>");
     expect(html).toContain(">Clear</button>");
   });
 
-  it("lines' Remove… is an inline confirm that says what happens to each kind of line", () => {
-    const html = render({ selection: selectLines(["me", "flight:f1"]), ask: "remove" });
+  it("lines' Remove asks only when a session in it is running, names it, and says what happens to each kind of line", () => {
+    const working = (id: string) => (id === "me" ? { activity: "working" } : { activity: "idle" });
+    const html = render({ selection: selectLines(["me", "flight:f1"]), ask: "remove", rowOf: working });
     expect(html).toContain('role="alertdialog"');
+    expect(html).toContain('aria-label="Remove 2 lines? line me is working."');
     expect(html).toContain("1 session closes (line me): its agent stops and it moves to Recently closed.");
     expect(html).toContain("1 line of stops with no session leaves the board (line flight:f1)");
+    const asking = render({ selection: selectLines(["me", "you"]), ask: "remove", rowOf: () => ({ activity: "clarify" }) });
+    expect(asking).toContain('aria-label="Remove 2 lines? line me, line you are running."');
+    // Idle sessions and grounded lines: no question (they go at once, with Undo).
+    const idle = render({ selection: selectLines(["me", "flight:f1"]), ask: "remove", rowOf: () => ({ activity: "idle" }) });
+    expect(idle).not.toContain('role="alertdialog"');
+  });
+
+  it("stops' Remove asks only when the flight is at one of them while it runs", () => {
+    const flying = { id: "f1", state: "running", cursor: 4, steps: STEPS, step_states: {} } as unknown as Flight;
+    const at = { lines: new Set<string>(), stops: new Map([["me", new Set(["stop:s5"])]]) };
+    const html = render({ selection: at, flightOf: () => flying, ask: "remove" });
+    expect(html).toContain('role="alertdialog"');
+    expect(html).toContain("The flight is at “" + STEPS[4].title + "” right now.");
+    const ahead = { lines: new Set<string>(), stops: new Map([["me", new Set(["stop:s1", "group:g1", "stop:s5"])]]) };
+    const paused = { ...flying, state: "paused" } as unknown as Flight;
+    expect(render({ selection: ahead, flightOf: () => paused, ask: "remove" })).not.toContain('role="alertdialog"');
+    const before = { lines: new Set<string>(), stops: new Map([["me", new Set(["stop:s1"])]]) };
+    expect(render({ selection: before, flightOf: () => flying, ask: "remove" })).not.toContain('role="alertdialog"');
   });
 
   it("stops: Group into a stop, Save to the shelf, Remove; Group off with a hint when they aren't side by side", () => {
@@ -357,16 +377,19 @@ describe("Delete wiring (round 12)", () => {
     expect(line).toContain("shown.canvas.onRemove(n!);");
     expect(line).toContain("const t = node ? nodeSession(node) : p.title;");
     expect(line).toMatch(/<InlineConfirm\s+title=\{"Close “" \+ windowName\(closing\) \+ "”\?"\}/);
-    expect(line).toContain("await closeSession(closing);");
+    // Round 14: an idle session closes at once (undoable); a running one asks.
+    expect(line).toContain('if (removalNeedsAsk({ kind: "session", row: p.rows.find((r) => r.title === t) })) setClosing(t);');
+    expect(line).toContain("else void closeLine(t);");
+    expect(line).toContain("await closeLine(closing);");
     expect(line).not.toMatch(/window\.(confirm|prompt|alert)/);
     // A press on the bar focuses the line, so Delete lands there.
     expect(line).toMatch(/rootRef\.current\?\.focus\(\{ preventScroll: true \}\);\s*if \(p\.draggable === false\) return;\s*p\.onDragStart\?\.\(e\);/);
     expect(line).toContain("data-sky-box");
   });
 
-  it("a grounded line: a stop through its canvas's Remove, anything else asks to remove the line", () => {
+  it("a grounded line: a stop through its canvas's Remove, anything else removes the line (at once, undoable)", () => {
     expect(grounded).toContain("line.canvas.onRemove(n);");
-    expect(grounded).toMatch(/setConfirming\(true\);\s*return true;/);
+    expect(grounded).toMatch(/void remove\(\);\s*return true;/);
     expect(grounded).toMatch(/if \(p\.draggable === false\) return;\s*p\.onDragStart\?\.\(e\);/);
   });
 

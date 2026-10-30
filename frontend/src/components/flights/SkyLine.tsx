@@ -44,9 +44,10 @@ import { BOX_PRESETS, boxScale, boxTier, clampBox, lineBox, lodFor, nearLines } 
 import { windowName } from "../../lib/windowName";
 import { useUi } from "../../state/store";
 import type { Instance } from "../../api/types";
-import { useFlightKinds, useFlights } from "../../state/queries";
-import { closeSession, selectSession } from "../../lib/sessionActions";
-import { nodeById, nodeSession, removableBox } from "../../lib/skySelect";
+import { queryClient, useFlightKinds, useFlights } from "../../state/queries";
+import { closeSession, selectSession, undoLastClose } from "../../lib/sessionActions";
+import { nodeById, nodeSession, removableBox, removalNeedsAsk } from "../../lib/skySelect";
+import { pushUndo } from "../../lib/skyUndo";
 import { deriveSessionState } from "../../lib/sessionState";
 import { firstLine } from "../../lib/format";
 import { birdPerch, drawnIndexes, flownCount, lineWhere, sessionDiagram, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
@@ -104,6 +105,37 @@ export interface SkyLineProps {
 
 /** The sky's handle on a line's Delete: a box's node id ("" = the line). */
 export type LineDelete = (node: string) => boolean;
+
+/** The session is still in the instance list (not closed, or reopened). */
+export const sessionOpen = (title: string) => (queryClient.getQueryData<Instance[]>(["instances"]) || []).some((r) => r.title === title);
+
+/** Put closed sessions back from Recently closed, the last closed first
+ * (`undoLastClose`, the Ctrl+Shift+T road); one already open again is left be. */
+export async function reopenClosed(titles: readonly string[]) {
+  for (const t of [...titles].reverse()) if (!sessionOpen(t)) await undoLastClose();
+}
+
+/** The undo entry for sessions the sky closed (lib/skyUndo): Ctrl+Z reopens
+ * them from Recently closed, newest first (`undoLastClose`, the Ctrl+Shift+T
+ * road). closeSession's own toast keeps its own Undo; once every one of them
+ * is open again (that toast pressed, Ctrl+Shift+T) the entry lapses. */
+export function pushCloseUndo(titles: readonly string[]) {
+  if (!titles.length) return;
+  pushUndo({
+    label: titles.length === 1 ? "Close “" + windowName(titles[0]) + "”" : "Close " + titles.length + " sessions",
+    undo: () => reopenClosed(titles),
+    valid: () => titles.some((t) => !sessionOpen(t)),
+  });
+}
+
+/** What a running session is doing, for the question that names it. */
+export const runningWord = (row: { activity?: string } | undefined) => (row?.activity === "working" ? "is working" : "is asking you something");
+
+/** Close a session from the sky, undoably (Ctrl+Z, or the toast's Undo). */
+export async function closeLine(title: string): Promise<void> {
+  await closeSession(title);
+  if (!sessionOpen(title)) pushCloseUndo([title]);
+}
 
 /** An open card's pane, in plane px: its default and its floor. */
 export const PANE_W = 720;
@@ -246,7 +278,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   const flights = useFlights().data;
   const kinds = useFlightKinds().data;
   const src: LineSource = useMemo(() => ({ rows: p.rows, flights, kinds: kinds || [], plans: p.plans }), [p.rows, flights, kinds, p.plans]);
-  const line = useSessionLine(p.title, src, { family: true, onSession: (t) => selectSession(t) });
+  const line = useSessionLine(p.title, src, { family: true, askRunning: true, onSession: (t) => selectSession(t) });
   // A rename redraws the line (its name is read through windowName).
   useUi((s) => s.aliases[p.title]);
   const name = windowName(p.title);
@@ -377,13 +409,19 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   };
 
   // Delete from the sky: a stop or group box through the canvas's own Remove
-  // (the undoable toast); a session's box, or the line itself, asks first.
+  // (the undoable toast; the stop a running flight is at asks first); a
+  // session's box, or the line itself, closes it — at once with Undo when
+  // its agent is idle, asked first while it works or asks (round 14).
   const [closing, setClosing] = useState("");
   const [closeBusy, setCloseBusy] = useState(false);
+  const askClose = (t: string) => {
+    if (removalNeedsAsk({ kind: "session", row: p.rows.find((r) => r.title === t) })) setClosing(t);
+    else void closeLine(t);
+  };
   const deleteBox: LineDelete = (node) => {
     const t = node ? nodeSession(node) : p.title;
     if (t) {
-      setClosing(t);
+      askClose(t);
       return true;
     }
     const n = nodeById(shown.diagram.nodes, node);
@@ -402,7 +440,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   const closeNow = async () => {
     setCloseBusy(true);
     try {
-      await closeSession(closing);
+      await closeLine(closing);
     } finally {
       setCloseBusy(false);
       setClosing("");
@@ -468,7 +506,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
       : { key: "pin", label: "Pin here", title: "Keep this line where it is when the others move", onSelect: () => p.onLayout({ x: p.layout.x, y: p.layout.y, pinned: true }) },
     { key: "flyway", label: "Add a stop…", title: "A saved stop, tacked on here", className: "skl-mi-group", onSelect: () => line.togglePalette(true) },
     { key: "tack", label: "Tack on a stop", title: "One stop, at the end of the line", onSelect: () => line.togglePalette(true) },
-    { key: "close", label: "Close session", danger: true, className: "skl-mi-group", title: "Stops the agent and moves it to Recently closed", onSelect: () => void closeSession(p.title) },
+    { key: "close", label: "Close session", danger: true, className: "skl-mi-group", title: "Stops the agent and moves it to Recently closed", onSelect: () => askClose(p.title) },
   ];
   // Where the flight is, in words (the bar's second voice).
   const where = row ? lineWhere(shown.diagram) : "";
@@ -547,11 +585,12 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
         </span>
       </div>
       {line.cancel.node}
+      {line.removeAsk}
       {closing && (
         <div className="skl-close-confirm" data-no-drag>
           <InlineConfirm
             title={"Close “" + windowName(closing) + "”?"}
-            body="Its agent stops and it moves to Recently closed (Ctrl+Shift+T brings it back)."
+            body={"Its agent " + runningWord(p.rows.find((r) => r.title === closing)) + " right now: it stops, and the session moves to Recently closed (Ctrl+Z or Ctrl+Shift+T brings it back)."}
             confirmLabel="Close session"
             busy={closeBusy}
             onConfirm={() => void closeNow()}

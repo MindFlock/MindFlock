@@ -329,3 +329,43 @@ export function mergeTargetAt(point: Pos, lines: readonly { id: string; rect: Re
   }
   return "";
 }
+
+// --- Round 14: deletion asks only when something runs ---------------------------
+
+/** What a removal would take (docs/flights.md "Round 14" → "Deletion asks
+ * only when something runs"):
+ * - `session`: a session's line (closing it) — its row's `activity` /
+ *   `asking`;
+ * - `stops`: stops of one flight (a group counts as all its steps) — their
+ *   step indexes, and the flight's `state` / `cursor`;
+ * - `grounded`: a grounded line — never in the air;
+ * - `selection`: several of these at once. */
+export type RemovalTarget =
+  | { kind: "session"; row: { activity?: string; asking?: unknown } | null | undefined }
+  | { kind: "stops"; indexes: readonly number[]; flight: { state: string; cursor: number } | null | undefined }
+  | { kind: "grounded" }
+  | { kind: "selection"; items: readonly RemovalTarget[] };
+
+/** A session's agent is working, or asking you something. */
+export const sessionRuns = (row: { activity?: string; asking?: unknown } | null | undefined): boolean =>
+  !!row && (row.activity === "working" || row.activity === "clarify" || !!row.asking);
+
+/** The flight is in the air and its current stop is one of these. */
+export const stopsRun = (indexes: readonly number[], flight: { state: string; cursor: number } | null | undefined): boolean =>
+  !!flight && (flight.state === "running" || flight.state === "waiting_you") && indexes.includes(flight.cursor);
+
+/** Ask before removing? Only when something is actually running: a session
+ * whose agent works or asks, the stop a running flight is at, a selection
+ * holding any of those. Everything else goes at once, with Undo. */
+export function removalNeedsAsk(t: RemovalTarget): boolean {
+  switch (t.kind) {
+    case "session":
+      return sessionRuns(t.row);
+    case "stops":
+      return stopsRun(t.indexes, t.flight);
+    case "grounded":
+      return false;
+    case "selection":
+      return t.items.some(removalNeedsAsk);
+  }
+}
