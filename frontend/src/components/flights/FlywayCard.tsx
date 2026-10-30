@@ -4,7 +4,10 @@
  * stop…**, **Takes off** (its trigger: by hand, from intake, or on a
  * schedule — FlywayInspector), and Save / Save & fly on… / Cancel. Its ⋯
  * holds **Reset to default** (a built-in) and **Delete** (yours, asked
- * inline). The shelf is where flyways live — the Flights dialog's Flyways
+ * inline). The shelf is where flyways live — each a row of its stops,
+ * built by dragging and saved at once (FlywayRow); this card is its details
+ * editor (Edit details… in a row's ⋯): the trigger, the session, Describe,
+ * and each stop's settings in the inspector. The Flights dialog's Flyways
  * tab is retired.
  *
  * `initial` seeds it — a flyway to edit (with an `id`: Save updates it), or a
@@ -24,6 +27,7 @@ import { toast } from "../../lib/toast";
 import { TRIGGER_LABEL, blankPlan, duplicateStep, moveStep, newStep, planDirty, type FlightPlan, type FlightStep, type StepKindDef } from "../../lib/flights";
 import { flywayDiagram, type DiagramNode } from "../../lib/flightDiagram";
 import { deletePlan, resetPlan, savePlan } from "../../lib/flightsApi";
+import { freshFlywayName } from "../../lib/flywayEdit";
 import { Bird } from "./Bird";
 import { FlywayCanvas } from "./FlywayCanvas";
 import { DescribeField, StopInspector, StopPalette } from "./StopParts";
@@ -34,14 +38,7 @@ import "./FlywayCard.css";
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
 
-/** "New flyway", or "New flyway 2", 3… — never a name already on the shelf. */
-export function freshFlywayName(plans: readonly Pick<FlightPlan, "name">[], base = "New flyway"): string {
-  const taken = new Set(plans.map((p) => p.name.trim().toLowerCase()));
-  if (!taken.has(base.toLowerCase())) return base;
-  let n = 2;
-  while (taken.has((base + " " + n).toLowerCase())) n++;
-  return base + " " + n;
-}
+export { freshFlywayName };
 
 /** The card's starting flyway: `initial` over a blank manual one; a new one
  * gets a fresh name. */
@@ -87,6 +84,7 @@ export function FlywayCard({
   y,
   plans,
   initial,
+  initialStop,
   onSaved,
   onCancel,
 }: {
@@ -94,6 +92,8 @@ export function FlywayCard({
   y: number;
   plans: FlightPlan[];
   initial?: Partial<FlightPlan>;
+  /** The stop to open on (✎ on a stop in a shelf row); the first one else. */
+  initialStop?: number;
   onSaved(plan: FlightPlan): void;
   /** Closed: Cancel / ✕ / Escape, or the flyway was deleted. */
   onCancel(): void;
@@ -101,7 +101,7 @@ export function FlywayCard({
   const kinds = useFlightKinds().data || [];
   const [draft, setDraft] = useState<FlightPlan>(() => cardDraft(plans, initial));
   const [seed, setSeed] = useState<FlightPlan>(() => clone(draft));
-  const [stop, setStop] = useState<number | null>(() => (draft.steps.length ? 0 : null));
+  const [stop, setStop] = useState<number | null>(() => (draft.steps.length ? Math.max(0, Math.min(draft.steps.length - 1, initialStop ?? 0)) : null));
   const [paletteAt, setPaletteAt] = useState<number | null>(null);
   const [described, setDescribed] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");

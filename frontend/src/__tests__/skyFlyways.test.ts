@@ -1,6 +1,6 @@
 /** Flyways made from the Sky: a line's stops → a flyway (`planFromSteps`, for
- * "Save as flyway"), the shelf of saved flyways (chips in order, stop dots,
- * Fly, drag data, + New flyway, folding), and the floating card (a fresh
+ * "Save as flyway"), the shelf of saved flyways (rows in order, each its
+ * stops as boxes, Fly, drag data, + New flyway, folding), and the floating card (a fresh
  * name, the editor canvas, Save's body, Save & fly handing the saved flyway
  * on, a refusal pointing at its stop). Server-rendered with a mocked API,
  * like flightsUi.test.ts. */
@@ -8,7 +8,7 @@
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { code } from "./sourceText";
+import { code, css } from "./sourceText";
 import type { FlightPlan, FlightStep, StepKindDef } from "../lib/flights";
 
 vi.mock("../api/client", () => ({
@@ -102,48 +102,74 @@ describe("planFromSteps (Save as flyway)", () => {
 });
 
 describe("the shelf", () => {
-  it("built-ins first; each chip its name, its stop dots (a perch gold), Fly, and draggable", () => {
+  const stopsOf = (html: string) => [...html.matchAll(/data-node="(stop:[^"]+)"/g)].map((m) => m[1]);
+  const rowOf = (html: string, id: string) => {
+    const at = html.indexOf('data-plan="' + id + '"');
+    const next = html.indexOf('<div role="listitem" class="sky-flyway-row', at);
+    return html.slice(at, next < 0 ? undefined : next);
+  };
+
+  it("built-ins first; each flyway a row: its name, its stops as boxes (a perch gold), Fly, and its name draggable", () => {
     expect(shelfOrder(PLANS).map((p) => p.id)).toEqual(["builtin:ticket", "p_mine", "p_long"]);
     const all = withClient(createElement(FlywayShelf, { plans: PLANS, onNew() {}, onFly() {}, onEdit() {} }));
-    // The flyways row; the stops row under it is stopShelf.test.ts's.
+    // The flyway rows; the stops row under them is stopShelf.test.ts's.
     const html = all.slice(0, all.indexOf('class="sky-stops"'));
     expect(all).toContain('class="sky-stops"');
     expect([...html.matchAll(/data-plan="([^"]+)"/g)].map((m) => m[1])).toEqual(["builtin:ticket", "p_mine", "p_long"]);
-    expect(html.match(/draggable="true"/g)).toHaveLength(3);
-    const mine = html.slice(html.indexOf('data-plan="p_mine"'), html.indexOf('data-plan="p_long"'));
-    expect(mine).toContain('<span class="sky-shelf-name">My review</span>');
-    expect(mine.match(/class="sky-shelf-dot( perch)?"/g)).toEqual(['class="sky-shelf-dot"', 'class="sky-shelf-dot perch"', 'class="sky-shelf-dot"']);
+    // Each row's head (grip + name) drags the flyway; the empty row's doesn't.
+    expect(html.match(/class="sky-flyway-row-head" draggable="true"/g)).toHaveLength(3);
+    const mine = rowOf(html, "p_mine");
+    expect(mine).toContain('aria-label="Rename the flyway “My review”"');
+    expect(mine).toContain(">My review</button>");
+    expect(stopsOf(mine)).toEqual(["stop:s1", "stop:s2", "stop:s3"]);
+    expect(mine.match(/class="fl-box fl-box-stop fl-st-edit( fl-perch)?/g)).toEqual([
+      "class=\"fl-box fl-box-stop fl-st-edit",
+      "class=\"fl-box fl-box-stop fl-st-edit fl-perch",
+      "class=\"fl-box fl-box-stop fl-st-edit",
+    ]);
     expect(mine).toContain('aria-label="Fly “My review” on a line"');
-    expect(mine).toContain('aria-label="Edit the flyway “My review”"');
-    // Thirteen stops: ten dots and "+3".
-    const long = html.slice(html.indexOf('data-plan="p_long"'));
-    expect(long.match(/class="sky-shelf-dot"/g)).toHaveLength(10);
-    expect(long).toContain(">+3<");
-    expect(html).toContain('class="sky-shelf-chip sky-shelf-new">+ New flyway</button>');
+    expect(mine).not.toContain("built-in");
+    expect(rowOf(html, "builtin:ticket")).toContain('<span class="sky-flyway-tag">built-in</span>');
+    // Thirteen stops: thirteen boxes, no folding into "+N" any more.
+    expect(stopsOf(rowOf(html, "p_long"))).toHaveLength(13);
+    // The empty row last, and + New flyway in the head.
+    expect(html.indexOf("Drop stops here to start a flyway")).toBeGreaterThan(html.indexOf('data-plan="p_long"'));
+    expect(html).toContain('class="sky-shelf-new">+ New flyway</button>');
     expect(html).toContain('aria-expanded="true"');
     expect(html).not.toContain("✈");
   });
 
-  it("a chip's drag carries the flyway's id under its own type", () => {
+  it("says what a flyway is, and the rows scroll inside a shelf capped at ~40% of the window", () => {
+    const html = withClient(createElement(FlywayShelf, { plans: PLANS, onNew() {}, onFly() {}, onEdit() {} }));
+    expect(html).toContain("<strong>Flyways</strong> — saved routes of stops. Drag one onto a line to fly it; drop stops into it to build it.");
+    expect(html).toContain('class="sky-flyway-rows sky-own-scroll" role="list"');
+    const sheet = css("components/flights/FlywayShelf.css");
+    expect(sheet).toMatch(/section\.sky-shelf \{[^}]*max-height: 40vh;/);
+    expect(sheet).toMatch(/\.sky-flyway-rows \{[^}]*min-height: 0;[^}]*overflow-y: auto;/);
+  });
+
+  it("a row's drag carries the flyway's id under its own type", () => {
     expect(FLYWAY_MIME).toBe("application/x-mindflock-flyway");
     expect(flywayDragData(PLANS[0])).toEqual([
       ["application/x-mindflock-flyway", "p_mine"],
       ["text/plain", "My review"],
     ]);
-    const src = code("components/flights/FlywayShelf.tsx");
-    expect(src).toMatch(/onDragStart=\{\(e\) => onChipDrag\(e, p\)\}/);
+    const src = code("components/flights/FlywayRow.tsx");
+    expect(src).toMatch(/onDragStart=\{\(e\) => onFlywayDrag\(e, shown\)\}/);
     expect(src).toMatch(/for \(const \[type, value\] of flywayDragData\(plan\)\) e\.dataTransfer\.setData\(type, value\)/);
-    expect(src).toMatch(/onClick=\{\(\) => onEdit\(p\)\}/);
-    expect(src).toMatch(/onClick=\{\(\) => onFly\(p\)\}/);
-    expect(src).toMatch(/onClick=\{onNew\}/);
+    expect(src).toMatch(/onClick=\{\(\) => onFly\(shown\)\}/);
+    expect(src).toMatch(/label: "Edit details…"[^}]*onSelect: \(\) => onEdit\(shown\)/);
+    // The empty row's Editor… is the host's onNew.
+    expect(code("components/flights/FlywayShelf.tsx")).toMatch(/onEditor=\{onNew\}/);
   });
 
   it("folds to its head (the host's `collapsed`)", () => {
     const html = withClient(createElement(FlywayShelf, { plans: PLANS, onNew() {}, onFly() {}, onEdit() {}, collapsed: true }));
     expect(html).toContain('class="sky-shelf folded"');
     expect(html).toContain('aria-expanded="false"');
-    expect(html).not.toContain("sky-shelf-chip");
+    expect(html).not.toContain("sky-flyway-row");
     expect(html).not.toContain("sky-stop");
+    expect(html).not.toContain("+ New flyway");
     expect(html).toContain('<span class="sky-shelf-count">3</span>');
   });
 });
