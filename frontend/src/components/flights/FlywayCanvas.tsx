@@ -59,6 +59,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 import {
+  birdFormation,
   birdPerches,
   joinLabel,
   layoutDiagram,
@@ -71,7 +72,13 @@ import {
   type DiagramNode,
   type LayoutOpts,
 } from "../../lib/flightDiagram";
-import { controlFlight, jumpFlight, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { controlFlight, flightPath, jumpFlight, refreshFlights, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { api } from "../../api/client";
+import { refreshInstances } from "../../state/queries";
+import { errMsg } from "../../lib/format";
+import { toast } from "../../lib/toast";
+import { riskTitle } from "../../lib/stopRisk";
+import { InlineConfirm } from "../InlineConfirm";
 import {
   birdAction,
   canHalt,
@@ -90,10 +97,9 @@ import {
   removeTool,
   stopDropOf,
   type StopDrop,
-  type StopMenuKey,
 } from "../../lib/stopEditing";
 import { BirdMarker, StopIcon } from "./Bird";
-import { StopMenu } from "./StopMenu";
+import { StopMenu, type SkyMenuItem, type SkyMenuKey } from "./StopMenu";
 import "./FlywayCanvas.css";
 import "./StopEditing.css";
 
@@ -243,6 +249,34 @@ function RemoveTool({ n, here = false, onRemove }: { n: DiagramNode; here?: bool
   );
 }
 
+/** Round 15: a flown checkpoint stop's menu line. Danger, since it resets
+ * the worktree; the press opens an inline confirm on the stage, never
+ * `window.confirm` (the desktop app has none). */
+export const REWIND_ITEM: SkyMenuItem = { key: "rewind", label: "Rewind to here", title: "Reset the worktree to this checkpoint and fly on from the stop after it", danger: true };
+
+/** A stop whose menu offers Rewind: a checkpoint that has flown (done), on a
+ * live flight. */
+export function canRewind(n: DiagramNode, flightId: string): boolean {
+  return !!flightId && n.kind === "stop" && n.step?.kind === "checkpoint" && n.state === "done";
+}
+
+/** The stop's menu with Rewind slotted in before the notes (round 15). */
+export function withRewind(items: readonly SkyMenuItem[], n: DiagramNode, flightId: string): SkyMenuItem[] {
+  if (!canRewind(n, flightId)) return items.slice();
+  const out = items.slice();
+  const at = out.findIndex((i) => i.note);
+  out.splice(at < 0 ? out.length : at, 0, REWIND_ITEM);
+  return out;
+}
+
+/** Where a worker's bird flies in formation: the leader's spot plus its slot
+ * (lib/flightDiagram `formationSlot`, in bird-lengths) — behind along the
+ * line's direction, out to the side. */
+export function formationAt(leader: { x: number; y: number }, slot: { dx: number; dy: number }, size: number, vertical: boolean): { x: number; y: number } {
+  const step = size * 0.9;
+  return vertical ? { x: leader.x + slot.dy * step, y: leader.y + slot.dx * step } : { x: leader.x + slot.dx * step, y: leader.y + slot.dy * step };
+}
+
 const STATE_GLYPH: Partial<Record<DiagramNode["state"], string>> = {
   done: "✓",
   skipped: "–",
@@ -338,6 +372,10 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
   const addLabel = p.dropLabel || (stopLabel && stopAt === null ? "Tack on " + stopLabel : null);
   // The right-click menu: on which box, where in the stage.
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  // Round 15: "Rewind to here" asked on a flown checkpoint — the inline
+  // confirm row, at the menu's spot; `error` is the server's sentence when
+  // it refused (the session is working).
+  const [rewind, setRewind] = useState<{ id: string; x: number; y: number; busy: boolean; error: string } | null>(null);
 
   // Cards (an open box): what each draws, and its size as last measured.
   const opened = new Map<string, { body: ReactNode; size: BoxSize }>();
@@ -587,20 +625,45 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
     if (pt) setMenu({ id: n.id, x: pt.x, y: pt.y });
   };
   const menuNode = menu ? p.diagram.nodes.find((n) => n.id === menu.id) || null : null;
-  const menuItems = menuNode
-    ? menuItemsFor(menuNode, {
-        can: { edit: !!(p.onEdit || p.onSelect), move: !!p.onMove, duplicate: !!p.onDuplicate, remove: !!p.onRemove, open: !!p.onOpen, halt: !!p.onToggleHalt, group: !!p.onToggleGroup },
-        earlier: canShift(stops, stops.indexOf(menuNode), -1, p.diagram.insertFrom),
-        later: canShift(stops, stops.indexOf(menuNode), 1, p.diagram.insertFrom),
-        live: !!p.diagram.flightId && (!!menuNode.step || menuNode.kind === "group"),
-        here: isHere(menuNode),
-        jump: canJumpTo(jumpFlightOf(p.diagram), menuNode),
-      })
+  const menuItems: SkyMenuItem[] = menuNode
+    ? withRewind(
+        menuItemsFor(menuNode, {
+          can: { edit: !!(p.onEdit || p.onSelect), move: !!p.onMove, duplicate: !!p.onDuplicate, remove: !!p.onRemove, open: !!p.onOpen, halt: !!p.onToggleHalt, group: !!p.onToggleGroup },
+          earlier: canShift(stops, stops.indexOf(menuNode), -1, p.diagram.insertFrom),
+          later: canShift(stops, stops.indexOf(menuNode), 1, p.diagram.insertFrom),
+          live: !!p.diagram.flightId && (!!menuNode.step || menuNode.kind === "group"),
+          here: isHere(menuNode),
+          jump: canJumpTo(jumpFlightOf(p.diagram), menuNode),
+        }),
+        menuNode,
+        p.diagram.flightId
+      )
     : [];
-  const pick = (n: DiagramNode, key: StopMenuKey) => {
+  const rewindNode = rewind ? p.diagram.nodes.find((n) => n.id === rewind.id) || null : null;
+  const doRewind = async () => {
+    if (!rewind || !rewindNode?.step) return;
+    const flight = p.diagram.flightId;
+    const sid = rewindNode.step.id;
+    setRewind({ ...rewind, busy: true, error: "" });
+    try {
+      await api(flightPath(flight, "/steps/" + encodeURIComponent(sid) + "/op/rewind"), { json: {} });
+      setRewind(null);
+      toast("Rewound to “" + rewindNode.title + "” — the flight goes on from the stop after it");
+      void refreshFlights();
+      void refreshInstances();
+    } catch (err) {
+      // Refused (409 while the session works, …): the server's sentence,
+      // inline under the question. The row stays so a second try is one press.
+      setRewind((r) => (r ? { ...r, busy: false, error: errMsg(err) } : r));
+    }
+  };
+  const pick = (n: DiagramNode, key: SkyMenuKey) => {
     const flight = p.diagram.flightId;
     const step = n.step?.id || "";
-    if (key === "edit") edit(n);
+    if (key === "rewind") {
+      if (menu) setRewind({ id: n.id, x: menu.x, y: menu.y, busy: false, error: "" });
+    }
+    else if (key === "edit") edit(n);
     else if (key === "expand") {
       const g = n.group?.id || n.inGroup?.id;
       if (g) p.onToggleGroup?.(g);
@@ -770,11 +833,16 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
   // The branches' own birds, on a line that draws a bird at all.
   const branchBirds =
     p.bird !== undefined
-      ? birdPerches(p.diagram)
+      ? birdFormation(birdPerches(p.diagram))
           .filter((b) => b.child)
           .map((b) => ({ perch: b, box: shown.boxes.find((x) => x.node.id === b.nodeId) }))
           .filter((b): b is { perch: typeof b.perch; box: NonNullable<typeof b.box> } => !!b.box)
       : [];
+  // Round 15 formation: with the leader's bird on the line, the workers'
+  // birds fly in a V behind it (lib/flightDiagram `formationSlot`) instead of
+  // sitting on their branch boxes — while the leader is still (dragged, or
+  // landed and waiting for the flight), they stay on their boxes.
+  const leaderAt = perch && !birdDrag?.live ? { x: perch.x + pad + perch.w / 2, y: perch.y + top } : null;
   return (
     <div
       ref={rootRef}
@@ -966,6 +1034,15 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
               onKeyDown={(e) => onBoxKey(e, n)}
               onContextMenu={(e) => onBoxMenu(e, n)}
             >
+              {n.risk && n.risk.length > 0 && !open && (
+                // Round 15: the risk stripe — one 3px band per tag down the
+                // left edge; the tooltip names them (lib/stopRisk).
+                <span className="fl-risk" title={riskTitle(n.risk)} role="img" aria-label={"Touches: " + riskTitle(n.risk)} data-risk={n.risk.join(" ")}>
+                  {n.risk.map((t) => (
+                    <i key={t} className={"fl-risk-" + t} />
+                  ))}
+                </span>
+              )}
               {mark && !open && (
                 <span className="fl-halt-mark" title={mark.title} aria-hidden="true">
                   {mark.glyph}
@@ -1171,6 +1248,12 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                       <StopIcon kind={n.perch ? "perch" : n.icon} size={small ? 13 : 15} />
                     </span>
                     <span className="fl-box-title">{n.title}</span>
+                    {n.when && (
+                      // Round 15: the stop runs only when its condition holds.
+                      <span className="fl-box-if" title={"Only when " + n.when} aria-label={"Only when " + n.when}>
+                        if
+                      </span>
+                    )}
                     {glyph && (
                       <span className={"fl-box-glyph fl-glyph-" + n.state} aria-hidden="true">
                         {glyph}
@@ -1178,6 +1261,8 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                     )}
                     {(n.state === "current" || n.state === "perched") && <span className="fl-box-pulse" aria-hidden="true" />}
                   </div>
+                  {/* Round 15: what a flown stop did, in a line (mid and near). */}
+                  {!far && n.receipt && <div className="fl-box-receipt">{n.receipt}</div>}
                   {n.chip && <span className={"fl-box-chip tone-" + n.chip.tone}>{n.chip.label}</span>}
                   {n.sub && <div className="fl-box-sub">{n.sub}</div>}
                   {more && <div className="fl-box-detail">{more}</div>}
@@ -1229,15 +1314,17 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
           const n = box.node;
           const doing = bp.tone === "you" ? "waiting on you" : "working";
           const open = () => p.onOpen?.(n);
+          const inV = leaderAt && bp.formation ? formationAt(leaderAt, bp.formation, 18, vertical) : null;
           return (
             <BirdMarker
               key={"bird:" + n.id}
               tone={bp.tone}
               size={18}
-              x={box.x + pad}
-              y={box.y + top + Math.min(box.h, 52) / 2}
+              x={inV ? inV.x : box.x + pad}
+              y={inV ? inV.y : box.y + top + Math.min(box.h, 52) / 2}
               label={n.title + "’s bird: " + doing}
               className="fl-bird-branch"
+              formation={!!inV}
               hand={
                 p.onOpen
                   ? {
@@ -1267,11 +1354,48 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
             label={"“" + menuNode.title + "” — what you can do"}
             items={menuItems}
             onPick={(key) => {
-              closeMenu(false);
+              // Rewind reads the menu's spot for its confirm row: close after.
               pick(menuNode, key);
+              closeMenu(false);
             }}
             onClose={closeMenu}
           />
+        )}
+        {rewind && rewindNode && (
+          <div
+            className="fl-rewind"
+            style={{ left: rewind.x, top: rewind.y }}
+            data-no-drag
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key !== "Escape") return;
+              e.stopPropagation();
+              setRewind(null);
+              boxRefs.current[rewind.id]?.focus();
+            }}
+          >
+            <InlineConfirm
+              title={"Rewind to “" + rewindNode.title + "”?"}
+              body={
+                "The worktree goes back to " +
+                (rewindNode.receipt ? "where it was " + rewindNode.receipt : "this checkpoint") +
+                " — work since then is lost unless it was committed somewhere else — and the flight flies on from the stop after it."
+              }
+              confirmLabel="Rewind"
+              busy={rewind.busy}
+              onConfirm={() => void doRewind()}
+              onCancel={() => {
+                setRewind(null);
+                boxRefs.current[rewind.id]?.focus();
+              }}
+            />
+            {rewind.error && (
+              <p className="fl-rewind-error" role="alert">
+                {rewind.error}
+              </p>
+            )}
+          </div>
         )}
       </div>
     </div>

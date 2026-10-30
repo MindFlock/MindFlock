@@ -50,6 +50,7 @@ import { nodeById, nodeSession, removableBox } from "../../lib/skySelect";
 import { deriveSessionState } from "../../lib/sessionState";
 import { firstLine } from "../../lib/format";
 import { birdPerch, drawnIndexes, flownCount, lineWhere, sessionDiagram, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
+import { ageOf, ageWord, fmtDuration, segmentTitle, segmentsFor, totalSeconds, type LineSegment } from "../../lib/lineTime";
 import type { FlightPlan } from "../../lib/flights";
 import { InlineConfirm } from "../InlineConfirm";
 import { OverflowMenu, type MenuItem } from "../OverflowMenu";
@@ -115,6 +116,27 @@ export const CARD_HEAD_H = 30;
 
 const SIZES: readonly BoxSizeName[] = ["compact", "normal", "wide"];
 const SIZE_WORD: Record<BoxSizeName, string> = { compact: "compact — titles only", normal: "normal", wide: "wide — the full text" };
+
+/** Round 15: the time under the line — a 4px ruler, one segment per flown
+ * stop proportional to how long it took (lib/lineTime `segmentsFor`), its
+ * hover title "Checks · 12 min", the total at the right end. Nothing to show
+ * (no stop has flown, or none took any time) draws nothing. */
+export function LineRuler({ segments }: { segments: readonly LineSegment[] }) {
+  const total = totalSeconds(segments);
+  if (!segments.length || total <= 0) return null;
+  return (
+    <div className="skl-ruler" role="img" aria-label={"Time flown: " + fmtDuration(total) + " over " + segments.length + (segments.length === 1 ? " stop" : " stops")} data-no-drag>
+      <div className="skl-ruler-bar">
+        {segments.map((s) => (
+          <span key={s.step} className={"skl-ruler-seg skl-ruler-" + s.state} style={{ flexGrow: Math.max(s.seconds, total / 200) }} title={segmentTitle(s)} data-step={s.step} />
+        ))}
+      </div>
+      <span className="skl-ruler-total" title={"Time flown so far"}>
+        {fmtDuration(total)}
+      </span>
+    </div>
+  );
+}
 
 /** The ⋯ menu's three box sizes, in words. */
 const SIZE_ITEM: Record<BoxSizeName, string> = { compact: "Compact boxes", normal: "Normal boxes", wide: "Wide boxes" };
@@ -472,6 +494,10 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   ];
   // Where the flight is, in words (the bar's second voice).
   const where = row ? lineWhere(shown.diagram) : "";
+  // Round 15: the time under the line, and how long the row has been quiet.
+  const segments = useMemo(() => segmentsFor(line.flight), [line.flight]);
+  const age = ageOf(row?.activity_since);
+  const still = ageWord(row?.activity_since);
 
   return (
     <div
@@ -487,6 +513,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
       }
       data-line={p.title}
       data-lod={lod}
+      data-age={age || undefined}
       // The sky's zoom, for CSS that counter-scales (a hover toolbar, the
       // level of detail a box shows): `--sky-z` on every line.
       style={{ "--sky-z": p.zoom || 1, "--sky-lines": nearLines(p.zoom || 1) } as React.CSSProperties}
@@ -516,6 +543,11 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
         {/* Near: what the session is on, under its name (CSS shows it only
             at that level of detail). */}
         {row && (row.task_headline || row.task) && <span className="skl-task">{firstLine(row.task_headline || row.task || "")}</span>}
+        {still && (
+          <span className="skl-age" title={"Nothing has happened on this session for " + still.replace(/ still$/, "")}>
+            {still}
+          </span>
+        )}
         {p.layout.pinned && (
           <span className="skl-pin" title="Pinned: the sky's layout leaves this line where you put it" aria-label="Pinned">
             📌
@@ -585,6 +617,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
               roomy
             />
           </div>
+          {lod !== "far" && <LineRuler segments={segments} />}
         </div>
       ) : (
         <p className="skl-gone muted">This session isn't running any more.</p>

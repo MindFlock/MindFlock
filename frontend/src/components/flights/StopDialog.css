@@ -205,3 +205,50 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* --- Round 15 looks: "What it did" leads with the receipt, then the shots. --- */
+
+.stop-dialog-receipt {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.stop-dialog-shots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.stop-dialog-shot {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 132px;
+  color: var(--muted);
+  font-size: 11px;
+  text-decoration: none;
+}
+
+.stop-dialog-shot img {
+  display: block;
+  width: 132px;
+  height: 84px;
+  object-fit: cover;
+  object-position: top;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+
+.stop-dialog-shot:hover img {
+  border-color: var(--accent);
+}
+
+.stop-dialog-shot-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

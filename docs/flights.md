@@ -4643,3 +4643,38 @@ earlier judge stop reads "the judge has not answered" (false). `{preview}`
 fills from a `preview` stop that the `preview-shots` task builds. Nothing in
 the frontend yet (`when-ui`). Tests: `tests/unit/test_flight_when.py`,
 `tests/unit/test_flight_kind_judge.py`.
+### As built: round 15 looks
+
+The `looks` task of round 15 (2026-10-30): the Sky's boxes and lines carry
+information. Files: `FlywayCanvas.tsx/.css`, `SkyLine.tsx/.css`, `Bird.tsx`,
+`StopMenu.tsx`, `useSessionLine.tsx` ("What it did"), `StopDialog.css`,
+`lib/flightDiagram.ts`, new `lib/stopRisk.ts` and `lib/lineTime.ts`. Tests
+`stopRisk.test.ts`, `lineTime.test.ts`, `skyLooks.test.ts`. The geometry of
+a box never changes with any of it (the semantic-zoom rule holds).
+
+**The data on a node.** `flightStops` and `flywayDiagram` put three optional
+fields on a stop's `DiagramNode`: `risk` (`RiskTag[]`, only when non-empty),
+`receipt` (a flown stop's `detail.receipt`, one line, ≤ 80 chars via
+`receiptOf`) and `when` (the step's `when`, read as `(s as {when?})` since
+the type lands in `when-ui`). `groupNode` wears the union of its sub-steps'
+`risk`. The canvas reads the node; it needs no `kinds` prop.
+
+| # | What | Hook |
+|---|---|---|
+| 1 | **Risk stripe** — `riskOf(step, kinds)`: the kind's `risk` tags; ship `lane: merge` adds `irreversible`, `lane: commit` has none; an older server without `risk` still marks ship and ticket `remote`. Canonical order remote → irreversible → spends. | `<span class="fl-risk" data-risk="remote irreversible" title="Touches the shared remote · Can't be undone">` with one `<i class="fl-risk-<tag>">` per tag, a 3px column inside the box's left edge, bands stacked top to bottom. Tokens on `.fl-canvas`: `--fl-risk-remote: var(--tone-waiting)` (the ship chips' blue), `--fl-risk-irreversible: var(--red)`, `--fl-risk-spends: var(--gold)`. Flown boxes dim it to 55 %. `riskTitle(tags)` is the tooltip. |
+| 2 | **Receipts** — a flown box shows `detail.receipt` under its title; "What it did" (`stopLog`) leads with it and shows `detail.shots` as thumbnails. | `.fl-box-receipt` right after `.fl-box-head`, muted, one line (two at wide / near); not rendered at far and `.fl-lod-far .fl-box-receipt {display:none}` holds the band either way. Dialog: `<p class="stop-dialog-receipt">`, then `.stop-dialog-shots` of `<a class="stop-dialog-shot" href=url target=_blank>` each with `<img loading=lazy>` and the name · width (`shotsOf(detail)` keeps the well-formed entries). A receipt or shots alone are enough to show the section. |
+| 3 | **"if" chip** — a stop with a `when`. | `<span class="fl-box-if" title="Only when <expr>">if</span>` in the head after the title; hidden far. |
+| 4 | **Time under the line** — `segmentsFor(flight)`: one segment per flown stop (done / skipped / failed) in line order, its seconds from `history` (`started` → `done`/`failed`/`skipped`, every round added; never started = 0); `fmtDuration`, `segmentTitle` ("Checks · 12 min", "Push · 1 min · failed"), `totalSeconds`. | `LineRuler` (SkyLine): `.skl-ruler` > `.skl-ruler-bar` (4px) with `.skl-ruler-seg.skl-ruler-<state>` sized by `flex-grow: seconds` (floor 0.5 % so a quick stop still shows), `data-step`, `title`; `.skl-ruler-total` at the right; `aria-label="Time flown: 12 min over 2 stops"`. Under the canvas inside `.skl-scale`, rendered only when `lod !== "far"` and hidden by CSS at far too; nothing drawn when no stop has flown or none took time. |
+| 5 | **Ageing** — `ageOf(activity_since)`: `"old"` past 24 h, `"stale"` past 72 h, null for 0 / unknown; `ageWord` → "3 days still". | `.skl[data-age="old"|"stale"]`: the bar yellows like paper (a gold gradient, stronger when stale, the name tinted); `<span class="skl-age">3 days still</span>` in the bar when stale (hidden far). `activity_since` is the row's, epoch seconds. |
+| 6 | **Formation** — `birdFormation(birdPerches(d))`: with a main bird on the line, every worker bird (`child`) gets `formation: formationSlot(k)` = `{dx: -row, dy: ±row}` in bird-lengths (k 0,1 → row 1; 2,3 → row 2…); with no leader, no slots. `birdPerches` itself is unchanged (round 12's `skyBranches.test` pins its output). | The canvas draws a slotted worker bird at `formationAt(leader, slot, 18, vertical)` — 0.9 bird-lengths back along the line (left, or up when vertical) and out to the side — instead of on its branch box; `BirdMarker` gets `formation` → `data-formation="v"`; `.fl-bird-marker.fl-bird-branch[data-formation]` is lighter and hops into place. Class and `aria-label` stay round 12's; the click still opens the child. While the leader is being dragged the workers stay on their boxes. |
+| 7 | **Icons** — `StopIcon` glyphs for test (flask), sync (two arrows merging), checkpoint (flag), land (plane onto the strip), budget (coin), review (eye), judge (scales), call (plug, arrow out), listen (antenna), someone (person), preview (monitor with a globe), screenshot (camera). | Same 24×24 stroke style; all twelve render distinct markup, none the fallback circle. |
+| 8 | **Rewind to here** — a flown (`done`) `checkpoint` stop of a live flight: `canRewind(n, flightId)`; `withRewind(items, n, flightId)` slots `REWIND_ITEM` (`key: "rewind"`, danger) before the menu's notes. `StopMenu` now takes `SkyMenuItem` / `SkyMenuKey` = lib/stopEditing's keys plus `"rewind"`. | The press opens `.fl-rewind` at the menu's spot on the stage (counter-scaled by `--sky-z` like the menu): the app's `InlineConfirm` ("Rewind to “Checkpoint”?", body names the receipt, confirm "Rewind", Cancel focused; Esc closes and refocuses the box) — never `window.confirm`. Confirm → `POST /api/flights/{id}/steps/{sid}/op/rewind` through `api()`; success toasts and refetches flights + rows; a refusal (409 while the session works) shows the server's sentence in `<p class="fl-rewind-error" role="alert">` under the question and the row stays for a second try. |
+
+Bands, in one place: **far** = icon + title (+ the risk stripe, which is
+geometry-free paint); no receipt, no "if", no ruler, no age word. **Mid** =
+all of the above plus receipt (one line), "if", ruler, age word. **Near** =
+the receipt may wrap to two lines; the ruler's type counter-scales.
+
+Open: the receipts themselves come from the backend `receipts` task — until
+it lands, only kinds that already set `detail.receipt` show one. The
+`check_rewind` 409 sentence is the server's; the UI shows whatever it says.

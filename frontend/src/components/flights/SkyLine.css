@@ -834,3 +834,87 @@
     0 0 0 4px rgba(var(--accent-rgb), 0.55),
     0 6px 22px rgba(0, 0, 0, 0.18);
 }
+
+/* --- Round 15 looks (docs/flights.md "As built: round 15 looks") ------------- */
+
+/* Time under the line: a 4px ruler, one segment per flown stop proportional
+   to its duration, the total at the right. Mid and near; the far band hides
+   it (the canvas also leaves it out there). */
+.skl-ruler {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 2px 0;
+  font-size: 11px;
+  color: var(--fl-ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.skl-ruler-bar {
+  flex: 1;
+  display: flex;
+  height: 4px;
+  gap: 2px;
+  min-width: 0;
+}
+
+.skl-ruler-seg {
+  flex: 1 1 0;
+  min-width: 3px;
+  height: 100%;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--tone-working) 70%, transparent);
+}
+
+.skl-ruler-seg:hover {
+  background: var(--tone-working);
+}
+
+.skl-ruler-failed {
+  background: color-mix(in srgb, var(--red) 75%, transparent);
+}
+
+.skl-ruler-skipped {
+  background: color-mix(in srgb, var(--text) 25%, transparent);
+}
+
+.skl-ruler-total {
+  flex: none;
+  white-space: nowrap;
+}
+
+.skl[data-lod="far"] .skl-ruler {
+  display: none;
+}
+
+.skl[data-lod="near"] .skl-ruler {
+  font-size: calc(11px / var(--sky-near));
+}
+
+/* Ageing: a line quiet for more than a day yellows like paper; past three
+   days it says how long ("3 days still"). */
+.skl[data-age="old"] .skl-bar,
+.skl[data-age="stale"] .skl-bar {
+  background: linear-gradient(0deg, color-mix(in srgb, var(--gold, #d4a72c) 14%, transparent), color-mix(in srgb, var(--gold, #d4a72c) 22%, transparent));
+  border-bottom-color: color-mix(in srgb, var(--gold, #d4a72c) 45%, var(--border));
+}
+
+.skl[data-age="stale"] .skl-bar {
+  background: linear-gradient(0deg, color-mix(in srgb, var(--gold, #d4a72c) 24%, transparent), color-mix(in srgb, var(--gold, #d4a72c) 34%, transparent));
+}
+
+.skl[data-age="stale"] .skl-name {
+  color: color-mix(in srgb, var(--text) 80%, var(--gold, #d4a72c));
+}
+
+.skl-age {
+  flex: none;
+  font-size: 12px;
+  font-style: italic;
+  color: color-mix(in srgb, var(--text) 65%, var(--gold, #d4a72c));
+  white-space: nowrap;
+}
+
+.skl[data-lod="far"] .skl-age {
+  display: none;
+}

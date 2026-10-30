@@ -45,7 +45,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Instance } from "../../api/types";
 import { toast } from "../../lib/toast";
 import { isLive, newStep, planFromSteps, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
-import { drawnCanvas, sessionDiagram, type DiagramNode } from "../../lib/flightDiagram";
+import { drawnCanvas, receiptOf, sessionDiagram, type DiagramNode } from "../../lib/flightDiagram";
 import {
   dropGroup,
   dropStop,
@@ -140,13 +140,27 @@ type LineCanvasProps = Pick<
  * history on it (newest last), its note, a command's output, and for a ship
  * stop the fast-track's own word (its lane runs in the server, not in the
  * terminal, so this is where to look). */
+/** A screenshot stop's shots (`detail.shots`: [{name, url, width}]), only the
+ * well-formed ones. */
+export function shotsOf(detail: Record<string, unknown> | null | undefined): Array<{ name: string; url: string; width: number }> {
+  const raw = detail?.shots;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((s) => (s && typeof s === "object" ? (s as Record<string, unknown>) : null))
+    .filter((s): s is Record<string, unknown> => !!s && typeof s.url === "string" && !!s.url)
+    .map((s) => ({ name: String(s.name || ""), url: String(s.url), width: Number(s.width) || 0 }));
+}
+
 export function stopLog(n: DiagramNode, flight: Flight | null, rec: StepRunState | undefined, row: Instance | undefined): ReactNode {
   if (!flight || !n.step) return null;
   const id = n.step.id;
   const hist = (flight.history || []).filter((h) => h.step === id);
   const out = String((rec?.detail as Record<string, unknown> | undefined)?.output || "");
   const ap = n.step.kind === "ship" ? row?.autopilot : null;
-  if (!hist.length && !rec?.note && !out && !ap) return null;
+  // Round 15: the receipt leads, the shots follow.
+  const receipt = receiptOf(rec?.detail);
+  const shots = shotsOf(rec?.detail);
+  if (!hist.length && !rec?.note && !out && !ap && !receipt && !shots.length) return null;
   const when = (t: number) => {
     const d = new Date(t * 1000);
     return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -154,6 +168,21 @@ export function stopLog(n: DiagramNode, flight: Flight | null, rec: StepRunState
   return (
     <section className="stop-dialog-log" aria-label="What this stop did">
       <h3 className="fl-group-head">What it did</h3>
+      {receipt && (
+        <p className="stop-dialog-receipt" data-receipt>
+          {receipt}
+        </p>
+      )}
+      {shots.length > 0 && (
+        <div className="stop-dialog-shots" role="list" aria-label="Screenshots">
+          {shots.map((s, i) => (
+            <a key={s.url + i} className="stop-dialog-shot" role="listitem" href={s.url} target="_blank" rel="noreferrer" title={(s.name || "shot") + (s.width ? " · " + s.width + "px" : "") + " — open"}>
+              <img src={s.url} alt={s.name || "screenshot"} loading="lazy" />
+              <span className="stop-dialog-shot-name">{s.name || "shot"}{s.width ? " · " + s.width : ""}</span>
+            </a>
+          ))}
+        </div>
+      )}
       {ap && (
         <p className="fl-note">
           Fast-track: <b>{ap.state}</b>
