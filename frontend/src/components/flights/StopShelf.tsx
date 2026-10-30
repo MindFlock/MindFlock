@@ -15,25 +15,29 @@
  *     Right-click (or the context-menu key): Rename (a field in the chip),
  *     Takes off… (the TakeoffDialog), Reset to default (a built-in), Delete
  *     (yours; confirmed inline).
- *  3. **All blocks…**: opens `StopCatalog` — every kind (the rest of the
- *     registry lives only there) and every saved stop, each row dragged like
- *     its chip, with an Add that goes where a chip's click goes.
+ *  3. **All blocks…**: `onCatalog` — the host floats the palette large over
+ *     the board (round 14: every kind, every saved stop, each card dragged
+ *     like its chip). Without `onCatalog`, `StopCatalog` opens as a dialog.
  *
  * Any chip dropped on empty sky becomes stops with no session yet (a grounded
  * line); dropped on a line it is tacked on there — the sky owns the drop.
- * CLICK a kind or a saved stop (or tap it on a phone, where nothing drags) →
+ * CLICK or DOUBLE-CLICK a kind or a saved stop — once either way
+ * (`useClickOrDouble`: a click waits ~250 ms for a second) — or tap it on a
+ * phone, where nothing drags →
  * `onPlace({kind} | {planId})`: the host puts it ON THE BOARD near the shelf
  * (round 13: nothing lands in a session by itself). Without `onPlace` a click
  * is `onTack(kind)` / `onTackPlan(plan)` (onto the focused line, as before);
  * without any of them a chip only drags. The fold handle's ⤢ floats the
  * blocks (`onFloat`: the host swaps the shelf for SkyPalette).
  *
- * The chips, the pick (`useShelfPick`) and a saved stop's menu
- * (`useSavedActions`) are exported: the floating palette draws the same. */
+ * The chips, the pick (`useShelfPick`, which governs only this shelf since
+ * round 14), `sessionDragData` and a saved stop's menu (`useSavedActions`)
+ * are exported. */
 
 import { useEffect, useRef, useState, type DragEvent, type JSX, type KeyboardEvent, type MouseEvent } from "react";
 import type { FlightPlan, StepKindDef } from "../../lib/flights";
 import { deletePlan, resetPlan } from "../../lib/flightsApi";
+import { useClickOrDouble } from "../../lib/clickOrDouble";
 import { NEW_SESSION_MIME } from "../../lib/skyLayout";
 import { planDots, savedStopOrder } from "../../lib/groundedLines";
 import { SHELF_KEY, onShelf, readShelf, savedDragData, shelfKinds, shelfPlans, stopDragData, toggleShelf, type CatalogDrop, type ShelfPick } from "../../lib/stopCatalog";
@@ -77,12 +81,16 @@ export function StopChip({ def, onClick, place = false, onMenu }: { def: StepKin
   const name = kindName(def);
   const perch = def.actor === "you";
   const how = clickHow(!!onClick, place, "Click to tack it onto the focused line, or drag it onto a line or the sky");
+  const cd = useClickOrDouble(onClick && (() => onClick(def.kind)));
   const props = {
     className: "sky-stop-chip" + (perch ? " perch" : "") + (onClick ? "" : " drag-only"),
     "data-kind": def.kind,
     draggable: true,
     title: (def.summary ? def.summary + "\n" : "") + how + (onMenu ? " — right-click for more" : ""),
-    onDragStart: (e: DragEvent) => onStopDrag(e, def),
+    onDragStart: (e: DragEvent) => {
+      cd.cancel();
+      onStopDrag(e, def);
+    },
     onContextMenu: onMenu
       ? (e: MouseEvent) => {
           e.preventDefault();
@@ -101,7 +109,7 @@ export function StopChip({ def, onClick, place = false, onMenu }: { def: StepKin
   return (
     <span role="listitem" className="sky-stop-item">
       {onClick ? (
-        <button type="button" {...props} aria-label={place ? "Put “" + name + "” on the board" : "Tack “" + name + "” onto the focused line"} onClick={() => onClick(def.kind)}>
+        <button type="button" {...props} aria-label={place ? "Put “" + name + "” on the board" : "Tack “" + name + "” onto the focused line"} onClick={cd.onClick} onDoubleClick={cd.onDoubleClick}>
           {body}
         </button>
       ) : (
@@ -113,12 +121,16 @@ export function StopChip({ def, onClick, place = false, onMenu }: { def: StepKin
 
 /** The Session chip: drags the new-session type; a click opens the block. */
 export function SessionChip({ onSession }: { onSession?(): void }) {
+  const cd = useClickOrDouble(onSession);
   const props = {
     className: "sky-stop-chip sky-session-chip" + (onSession ? "" : " drag-only"),
     "data-tour": "flights-newblock",
     draggable: true,
     title: "A new session: drag it onto the sky (or onto stops with no session yet), or click — Ctrl+N, or double-click the sky",
-    onDragStart: (e: DragEvent) => carry(e, sessionDragData()),
+    onDragStart: (e: DragEvent) => {
+      cd.cancel();
+      carry(e, sessionDragData());
+    },
   };
   const body = (
     <>
@@ -131,7 +143,7 @@ export function SessionChip({ onSession }: { onSession?(): void }) {
   return (
     <span role="listitem" className="sky-stop-item">
       {onSession ? (
-        <button type="button" {...props} aria-label="Start a new session" onClick={onSession}>
+        <button type="button" {...props} aria-label="Start a new session" onClick={cd.onClick} onDoubleClick={cd.onDoubleClick}>
           {body}
         </button>
       ) : (
@@ -227,6 +239,7 @@ export function SavedChip({
   onRenamed(): void;
 }) {
   const { dots, more } = planDots(plan.steps, kinds);
+  const cd = useClickOrDouble(onClick && (() => onClick(plan)));
 
   const menuAt = (e: MouseEvent) => {
     e.preventDefault();
@@ -256,14 +269,17 @@ export function SavedChip({
     "data-plan": plan.id,
     draggable: !renaming,
     title: plan.steps.map((s) => s.title).join(" → ") + "\n" + how + " — right-click for more",
-    onDragStart: (e: DragEvent) => carry(e, savedDragData(plan)),
+    onDragStart: (e: DragEvent) => {
+      cd.cancel();
+      carry(e, savedDragData(plan));
+    },
     onContextMenu: menuAt,
     onKeyDown: menuKey,
   };
   return (
     <span role="listitem" className="sky-stop-item">
       {onClick && !renaming ? (
-        <button type="button" {...props} aria-label={place ? "Put “" + plan.name + "” on the board" : "Add “" + plan.name + "” to the focused line"} onClick={() => onClick(plan)}>
+        <button type="button" {...props} aria-label={place ? "Put “" + plan.name + "” on the board" : "Add “" + plan.name + "” to the focused line"} onClick={cd.onClick} onDoubleClick={cd.onDoubleClick}>
           {body}
         </button>
       ) : (
@@ -421,12 +437,13 @@ export interface StopShelfProps {
   onPlace?(drop: CatalogDrop): void;
   /** The shelf's "Float the blocks" (the host switches `mf_sky_palette`). */
   onFloat?(): void;
-  /** Round 14: "All blocks…" opens the floating palette large over the board
-   * (the host floats it) instead of a window-sized dialog. */
+  /** "All blocks…" (round 14): the host floats the palette large over the
+   * board — every block, the board around it. Without it, the catalog opens
+   * as a dialog (`StopCatalog`). */
   onCatalog?(): void;
 }
 
-export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPlace, onFloat }: StopShelfProps): JSX.Element {
+export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPlace, onFloat, onCatalog }: StopShelfProps): JSX.Element {
   const kinds = useFlightKinds().data;
   const plans = useFlightPlans().data;
   const [shelf, changeShelf] = useShelfPick();
@@ -516,10 +533,10 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
                 type="button"
                 className="sky-stop-chip sky-catalog-chip"
                 data-tour="sky-catalog"
-                aria-haspopup="dialog"
-                aria-expanded={catalog}
-                title="Every block and every multi-step block, in a list you can filter"
-                onClick={() => setCatalog(true)}
+                aria-haspopup={onCatalog ? undefined : "dialog"}
+                aria-expanded={onCatalog ? undefined : catalog}
+                title={onCatalog ? "Every block, in a palette on the board you can filter and drag from" : "Every block and every multi-step block, in a list you can filter"}
+                onClick={() => (onCatalog ? onCatalog() : setCatalog(true))}
               >
                 <span className="sky-stop-icon" aria-hidden="true">
                   ⊞

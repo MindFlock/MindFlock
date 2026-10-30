@@ -3,10 +3,12 @@
  * (DEFAULT_KINDS: their order, a kind the server doesn't list skipped), every
  * kind's order, the filter, the cards (catalogCards), the arrows over the
  * grids (gridMove), a saved stop's ⋯ (cardMenu), what a card's drag carries —
- * and StopCatalog, the big All blocks… Modal: Blocks and Multi-step as grids
- * of cards, a filter with the focus, cards draggable with their chip's MIME
- * and an Add, the arrows / Enter, the ⋯'s Rename / Delete / Reset / On the
- * shelf, and the Modal letting a drag through. */
+ * and StopCatalogBody (round 14: the floating palette's whole body, and the
+ * All blocks… Modal's): Blocks and Multi-step as grids of cards, a filter,
+ * cards draggable with their chip's MIME, a click or a double-click placing
+ * once, an Add, the arrows / Enter, the ⋯'s Rename / Takes off… / Delete /
+ * Reset / On the shelf; StopCatalog, the Modal around it, dialog-sized and
+ * letting a drag through. */
 
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -19,7 +21,7 @@ vi.mock("../api/client", () => ({ api: vi.fn(() => new Promise(() => {})), ApiEr
 const { STOP_MIME } = await import("../lib/flights");
 const { FLYWAY_MIME } = await import("../lib/skyLayout");
 const { DEFAULT_KINDS, cardMenu, catalogCards, catalogKinds, catalogMatch, catalogRows, defaultKinds, filterKinds, filterPlans, gridMove, planPath, renamable, savedDragData, stopDragData } = await import("../lib/stopCatalog");
-const { StopCatalog } = await import("../components/flights/StopCatalog");
+const { StopCatalog, StopCatalogBody } = await import("../components/flights/StopCatalog");
 
 const kind = (k: string, label: string, actor: "robot" | "you" = "robot", summary = label + " does its thing"): StepKindDef => ({
   kind: k,
@@ -121,7 +123,7 @@ describe("a row's drag carries its chip's MIME", () => {
       ["text/plain", "Ticket to merge"],
     ]);
     const src = code("components/flights/StopCatalog.tsx");
-    expect(src).toContain("onDragStart={(e) => onDragStart(e, plan ? savedDragData(plan) : stopDragData(def as StepKindDef))}");
+    expect(src).toContain("onDragStart={(e) => onDragStart(e, c.key, plan ? savedDragData(plan) : stopDragData(def as StepKindDef))}");
     expect(src).toMatch(/for \(const \[type, value\] of data\) e\.dataTransfer\.setData\(type, value\);\s*e\.dataTransfer\.effectAllowed = "copy";/);
   });
 });
@@ -178,15 +180,15 @@ describe("the arrows over the grids (gridMove)", () => {
 });
 
 describe("a saved-stop card's ⋯ (cardMenu)", () => {
-  it("Rename, On the shelf (★ / ☆), then Reset to default (built-in) or Delete (yours)", () => {
-    expect(cardMenu(TICKET, false).map((i) => i.label)).toEqual(["Rename", "☆ On the shelf", "Reset to default"]);
-    expect(cardMenu(MINE, true).map((i) => i.label)).toEqual(["Rename", "★ On the shelf", "Delete"]);
-    expect(cardMenu(MINE, true)[2].danger).toBe(true);
+  it("Rename, Takes off…, On the shelf (★ / ☆), then Reset to default (built-in) or Delete (yours)", () => {
+    expect(cardMenu(TICKET, false).map((i) => i.label)).toEqual(["Rename", "Takes off…", "☆ On the shelf", "Reset to default"]);
+    expect(cardMenu(MINE, true).map((i) => i.label)).toEqual(["Rename", "Takes off…", "★ On the shelf", "Delete"]);
+    expect(cardMenu(MINE, true)[3].danger).toBe(true);
   });
   it("a built-in may be renamed (the server keeps it a built-in); a depth cut is virtual, so it can't", () => {
     expect(renamable(TICKET)).toBe(true);
     expect(renamable({ id: "builtin:ticket@push" })).toBe(false);
-    expect(cardMenu({ id: "builtin:ticket@push", builtin: true }, false).map((i) => i.key)).toEqual(["shelf", "reset"]);
+    expect(cardMenu({ id: "builtin:ticket@push", builtin: true }, false).map((i) => i.key)).toEqual(["takeoff", "shelf", "reset"]);
   });
 });
 
@@ -198,12 +200,16 @@ describe("StopCatalog", () => {
     expect(html).toContain('<h2 id="sky-catalog-title">All blocks</h2>');
     expect(html).toContain('<button type="button" class="fl-icon-btn sky-catalog-close" aria-label="Close" title="Close (Esc)">×</button>');
     expect(html).toMatch(/<input class="fl-input sky-catalog-filter" type="text" placeholder="Filter blocks…" aria-label="Filter blocks" aria-controls="sky-catalog-list" aria-activedescendant="sky-catalog-row-0"/);
-    expect(code("components/flights/StopCatalog.tsx")).toMatch(/<input[\s\S]*?autoFocus[\s\S]*?\/>/);
+    // The focus, without scrolling anything (the palette floats in the sky).
+    const src = code("components/flights/StopCatalog.tsx");
+    expect(src).toContain("if (autoFocus) filterRef.current?.focus({ preventScroll: true });");
+    expect(src).toMatch(/<StopCatalogBody\s+\{\.\.\.body\}\s+autoFocus/);
   });
 
-  it("is big: ≈ 92vw × 86vh, the cards in a grid as wide as the window holds", () => {
+  it("round 14: dialog-sized, not the window — the board shows around it; the cards in a grid as wide as it holds", () => {
     const css = cssOf("components/flights/StopCatalog.css");
-    expect(css).toMatch(/\.sky-catalog \{[^}]*width: 92vw;[^}]*height: 86vh;/);
+    expect(css).toMatch(/\.sky-catalog \{[^}]*width: min\(920px, 70vw\);[^}]*height: min\(680px, 72vh\);/);
+    expect(css).not.toContain("92vw");
     expect(css).toMatch(/\.sky-catalog-grid \{\s*display: grid;\s*grid-template-columns: repeat\(auto-fill, minmax\(230px, 1fr\)\);/);
     expect(html.match(/<div class="sky-catalog-grid">/g)).toHaveLength(2);
     // The list scrolls itself, not the sky under it.
@@ -235,7 +241,7 @@ describe("StopCatalog", () => {
     // The ⋯: the house OverflowMenu (built-in: Reset; yours: Delete).
     expect(multi).toContain('<summary aria-label="“Ticket to merge” — rename, delete, shelf"');
     const ticket = multi.slice(0, multi.indexOf('data-plan="p_mine"'));
-    expect(ticket).toContain('<button type="button" class="vf-menu-item">Rename</button><button type="button" class="vf-menu-item">Reset to default</button>');
+    expect(ticket).toContain('<button type="button" class="vf-menu-item">Rename</button><button type="button" class="vf-menu-item">Takes off…</button><button type="button" class="vf-menu-item">Reset to default</button>');
     expect(multi.slice(multi.indexOf('data-plan="p_mine"'))).toContain('<button type="button" class="vf-menu-item vf-menu-danger">Delete</button>');
   });
 
@@ -258,19 +264,19 @@ describe("StopCatalog", () => {
     expect(html.match(/sky-catalog-add/g)).toHaveLength(9);
   });
 
-  it("place: the words say Add puts it on the board", () => {
+  it("place: the words say a click puts it on the board", () => {
     const placing = render({ onAdd() {}, place: true });
-    expect(placing).toContain('title="Drag onto a line or the sky, or Add it to the board"');
-    expect(placing).toContain("Enter or a double-click puts it on the board · Esc closes");
+    expect(placing).toContain('title="Drag onto a line or the sky, or click to put it on the board"');
+    expect(placing).toContain("a click or a double-click puts it on the board · the arrows pick, Enter puts it on the board");
     expect(placing).not.toContain("focused line");
-    expect(html).toContain("Enter or a double-click adds it to the focused line");
+    expect(html).toContain("a click or a double-click adds it to the focused line");
   });
 
   it("without onAdd the cards only drag", () => {
     const drag = render();
     expect(drag).not.toContain("sky-catalog-add");
     expect(drag).toContain('title="Drag onto a line or the sky"');
-    expect(drag).toContain("Drag a block onto a line or the sky · Esc closes");
+    expect(drag).toContain('<p class="sky-catalog-hint muted">Drag a block onto a line or the sky</p>');
   });
 
   it("nothing at all: says so", () => {
@@ -281,11 +287,19 @@ describe("StopCatalog", () => {
 
   it("the arrows move the pick from the filter (← / → only from its edge), Enter / Add / a double-click call onAdd({kind} | {planId})", () => {
     const src = code("components/flights/StopCatalog.tsx");
-    expect(src).toContain("setActive(gridMove(at, e.key, [cards.blocks.length, cards.multi.length], gridCols(listRef.current)));");
+    expect(src).toContain("gridMove(at + leads, e.key, [cards.blocks.length + leads, cards.multi.length], gridCols(listRef.current))");
     expect(src).toMatch(/e\.key === "ArrowLeft" \? el\.selectionStart === 0 && el\.selectionEnd === 0 : e\.key === "ArrowRight" \? el\.selectionStart === el\.value\.length : true/);
     expect(src).toMatch(/\} else if \(e\.key === "Enter"\) \{\s*e\.preventDefault\(\);\s*if \(at >= 0\) add\(rows\[at\]\.drop\);/);
     expect(src).toContain("onClick={() => add(c.drop)}");
-    expect(src).toContain("onDoubleClick={dblAdd}");
+    // A card's click or double-click places ONCE (clickOrDouble, one per card
+    // kept across renders); a press on its ★ / ⋯ / field / Add is theirs.
+    expect(src).toContain("if (!c) clicks.current.set(key, (c = clickOrDouble(() => addRef.current?.(drop))));");
+    expect(src).toContain("onClick={(e) => mine(e) && cd.onClick(e)}");
+    expect(src).toContain("onDoubleClick={(e) => mine(e) && cd.onDoubleClick()}");
+    expect(src).toContain("const mine = (e: MouseEvent) => !!onAdd && !naming && !asking && !inner(e.target);");
+    expect(src).toContain('closest?.("button, input, summary, .vf-menu, .set-confirm")');
+    // A drag drops a waiting click.
+    expect(src).toMatch(/const onDragStart = \(e: DragEvent, key: string, data: Array<\[string, string\]>\) => \{\s*clicks\.current\.get\(key\)\?\.cancel\(\);/);
     // A key typed in the catalog stays there (Escape still reaches the Modal).
     expect(src).toContain('onKeyDown={(e) => e.key === "Escape" || e.stopPropagation()}');
   });
@@ -297,17 +311,21 @@ describe("StopCatalog", () => {
     expect(src).toContain("await resetPlan(plan.id);");
     expect(src).toContain("await deletePlan(plan.id);");
     expect(src).toMatch(/<InlineConfirm\s+title=\{"Delete “" \+ plan\.name \+ "”\?"\}/);
+    expect(src).toContain('else if (it.key === "takeoff") setTakeoff(plan);');
+    expect(src).toContain("{takeoff && <TakeoffDialog plan={takeoff} onClose={() => setTakeoff(null)} />}");
     // Esc answers an open delete question before it closes the catalog.
-    expect(src).toMatch(/onEscape=\{\(\) => \{[\s\S]*?if \(!deleting\) return false;\s*setDeleting\(""\);\s*return true;/);
+    expect(src).toMatch(/escRef\.current = \(\) => \{[\s\S]*?if \(!deleting\) return false;\s*setDeleting\(""\);\s*return true;/);
+    expect(src).toContain("onEscape={() => esc.current?.() ?? false}");
     // Renaming or asking: the card stops dragging.
     expect(src).toContain("draggable={!naming && !asking}");
   });
 
   it("a drag goes through: the Modal turns see-through a tick after dragstart; a drop that landed closes it", () => {
     const src = code("components/flights/StopCatalog.tsx");
-    expect(src).toContain("setTimeout(() => setDragging(true), 0);");
+    expect(src).toContain("if (onDrag) setTimeout(() => onDrag(true, false), 0);");
+    expect(src).toContain('const onDragEnd = (e: DragEvent) => onDrag?.(false, !!e.dataTransfer && e.dataTransfer.dropEffect !== "none");');
     expect(src).toMatch(/className=\{"sky-catalog-modal" \+ \(dragging \? " is-dragging" : ""\)\}/);
-    expect(src).toMatch(/setDragging\(false\);\s*if \(e\.dataTransfer && e\.dataTransfer\.dropEffect !== "none"\) onClose\(\);/);
+    expect(src).toMatch(/onDrag=\{\(on, landed\) => \{\s*setDragging\(on\);\s*if \(!on && landed\) onClose\(\);/);
     const css = cssOf("components/flights/StopCatalog.css");
     expect(css).toMatch(/\.modal\.sky-catalog-modal\.is-dragging \{\s*background: transparent;\s*pointer-events: none;\s*\}/);
     expect(css).toMatch(/\.sky-catalog-modal\.is-dragging \.sky-catalog \{\s*opacity: 0\.35;/);
@@ -315,6 +333,75 @@ describe("StopCatalog", () => {
 
   it("no native dialogs", () => {
     expect(code("components/flights/StopCatalog.tsx")).not.toMatch(/\bwindow\.(prompt|alert|confirm)\(/);
+  });
+});
+
+describe("StopCatalogBody (round 14: the palette's body)", () => {
+  const body = (props: Record<string, unknown> = {}) =>
+    renderToStaticMarkup(
+      createElement(StopCatalogBody, {
+        kinds: KINDS,
+        plans: [TICKET, MINE],
+        head: (filter: unknown) => createElement("header", { className: "h" }, filter as never),
+        ...props,
+      } as never)
+    );
+
+  it("hands the filter to the surface's head, then the list; no Modal of its own", () => {
+    const html = body({ onAdd() {}, place: true });
+    expect(html).toMatch(/^<header class="h"><input class="fl-input sky-catalog-filter"/);
+    expect(html).not.toContain("modal");
+    expect(html).toContain('</header><div class="sky-catalog-list sky-own-scroll" id="sky-catalog-list" role="listbox" aria-label="All blocks">');
+  });
+
+  it("compact: its own ids and list class; icon + name + one line; no badges and no Add (a click places)", () => {
+    const html = body({ onAdd() {}, place: true, compact: true, idPrefix: "sky-palette", listClass: "sky-palette-body" });
+    expect(html).toContain('<div class="sky-catalog-list sky-own-scroll compact sky-palette-body" id="sky-palette-list" role="listbox"');
+    expect(html).toContain('aria-controls="sky-palette-list" aria-activedescendant="sky-palette-row-0"');
+    expect(html).toContain('id="sky-palette-row-0"');
+    expect(html).not.toContain("sky-catalog-badge");
+    expect(html).not.toContain("sky-catalog-add");
+    // A kind: its summary; a saved stop: its boxes (its path in the title).
+    expect(html).toContain('<span class="sky-catalog-summary">Commit, push, open the PR</span>');
+    expect(html).toMatch(/data-plan="builtin:ticket" draggable="true" title="Work the ticket → Push → Approve\nDrag onto a line or the sky, or click to put it on the board"/);
+    expect(html).not.toContain('<span class="sky-catalog-summary">Work the ticket → Push → Approve</span>');
+    expect(html).toContain('<span class="sky-catalog-boxes" aria-hidden="true"><i class=""></i><i class=""></i><i class="perch"></i></span>');
+    // Every kind and every saved stop.
+    expect(html.match(/role="option"/g)).toHaveLength(9);
+  });
+
+  it("a lead card goes first in Blocks, for the query; it is no row (the arrows skip it)", () => {
+    const html = body({ onAdd() {}, lead: (q: string) => (q ? null : createElement("div", { className: "lead" }, "Session")) });
+    const blocks = html.slice(html.indexOf('data-section="blocks"'));
+    expect(blocks).toMatch(/<div class="sky-catalog-grid"><div class="lead">Session<\/div><div id="sky-catalog-row-0"/);
+    const src = code("components/flights/StopCatalog.tsx");
+    expect(src).toContain("setActive(Math.max(0, gridMove(at + leads, e.key, [cards.blocks.length + leads, cards.multi.length], gridCols(listRef.current)) - leads));");
+    // Only the lead: the Blocks section still shows (it holds the lead).
+    const lone = body({ kinds: [], plans: [], lead: () => createElement("div", { className: "lead" }, "Session") });
+    expect(lone).toContain('data-section="blocks"');
+    expect(lone).not.toContain("sky-catalog-empty");
+  });
+
+  it("the ★ sets the BOTTOM shelf's pick (the palette shows everything regardless)", () => {
+    const html = body({ onAdd() {}, compact: true, shelf: (d: { kind?: string }) => d.kind === "ship", onShelfToggle() {} });
+    expect(html).toContain('<button type="button" class="fl-icon-btn sky-catalog-shelf on" tabindex="-1" aria-pressed="true" aria-label="Take “Ship” off the shelf" title="On the bottom shelf — click to take it off">★</button>');
+    expect(html).toContain('title="Put it on the bottom shelf">☆</button>');
+    expect(html.match(/role="option"/g)).toHaveLength(9);
+  });
+
+  it("scrolls only its own list to the card the arrows picked (never the sky around it)", () => {
+    const src = code("components/flights/StopCatalog.tsx");
+    expect(src).not.toContain("scrollIntoView");
+    expect(src).toContain("reveal(listRef.current, document.getElementById(rowId(at)));");
+    expect(src).toMatch(/if \(r\.top < l\.top\) list\.scrollTop -= \(l\.top - r\.top\) \/ scale;/);
+  });
+
+  it("the compact cards: a denser grid, one line, a saved stop across two columns, the ★ shown on the hovered / picked card", () => {
+    const css = cssOf("components/flights/StopCatalog.css");
+    expect(css).toMatch(/\.sky-catalog-list\.compact \.sky-catalog-grid \{\s*grid-template-columns: repeat\(auto-fill, minmax\(132px, 1fr\)\);/);
+    expect(css).toMatch(/\.sky-catalog-list\.compact \.sky-catalog-plan \{\s*grid-column: span 2;/);
+    expect(css).toMatch(/\.sky-catalog-list\.compact \.sky-catalog-summary \{[^}]*-webkit-line-clamp: 1;/);
+    expect(css).toMatch(/\.sky-catalog-list\.compact \.sky-catalog-shelf:not\(\.on\) \{\s*opacity: 0;/);
   });
 });
 

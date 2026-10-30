@@ -1,26 +1,29 @@
-/** The floating blocks palette (docs/flights.md "Round 13" → "The palette",
- * "As built: round 13 palette"): the shelf's content as a sky object the
- * owner drags by its head, sizes by its corner and drags blocks out of. The
- * host (SkyView) mounts it when `mf_sky_palette` is "float", under the layout
- * key `"palette"` (x / y / pinned / w / h), as it mounts the intake lane.
+/** The floating blocks palette (docs/flights.md "Round 14" → "The palette
+ * fills itself", "As built: round 14 palette"): EVERY block as a sky object
+ * the owner drags by its head, sizes by its corner and drags blocks out of.
+ * The host (SkyView) mounts it when `mf_sky_palette` is "float", under the
+ * layout key `"palette"` (x / y / pinned / w / h), as it mounts the intake
+ * lane; the shelf's "All blocks…" floats it large.
  *
- * Inside: the shelf's three regions — Blocks (the Session chip, the picked
- * kinds), Multi-step (the picked saved stops) — as a wrapped grid of the
- * shelf's own chips (StopChip / SessionChip / SavedChip: the same drag MIMEs,
- * the same right-click menus), and the head's **All blocks…** opens the same
- * catalog. It reads the same pick (`mf_sky_shelf`, `useShelfPick`), so the
- * shelf, the palette and the catalog always agree. A click on a block →
- * `onPlace(drop)`: the host puts it on the board to the palette's right. The
- * head's ⋯ → **Dock at the bottom** (`onDock`). */
+ * Its body is the catalog's (`StopCatalogBody`, compact): the Session card,
+ * every kind, every saved stop, as a wrapped grid of cards that fills the
+ * frame and scrolls past it — the frame decides how many show — with the
+ * filter in the head. Each card drags with its chip's MIME; a click or a
+ * double-click (once) → `onPlace(drop)`: the host puts it on the board to the
+ * palette's right. A card's ★ / ☆ sets the bottom shelf's pick
+ * (`useShelfPick`) — the palette itself always shows everything. The head's
+ * ⋯ → **Dock at the bottom** (`onDock`), its × (`onClose`) → back to the
+ * shelf. */
 
-import { useEffect, useRef, useState, type JSX, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
-import type { FlightPlan } from "../../lib/flights";
+import { useEffect, useRef, useState, type DragEvent, type JSX, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useClickOrDouble } from "../../lib/clickOrDouble";
 import { savedStopOrder } from "../../lib/groundedLines";
-import { onShelf, shelfKinds, shelfPlans, toggleShelf, type CatalogDrop } from "../../lib/stopCatalog";
+import { catalogMatch, onShelf, toggleShelf, type CatalogDrop } from "../../lib/stopCatalog";
 import { useFlightKinds, useFlightPlans } from "../../state/queries";
 import { OverflowMenu } from "../OverflowMenu";
-import { StopCatalog } from "./StopCatalog";
-import { SavedChip, SessionChip, StopChip, useSavedActions, useShelfPick } from "./StopShelf";
+import { StopIcon } from "./Bird";
+import { StopCatalogBody } from "./StopCatalog";
+import { sessionDragData, useShelfPick } from "./StopShelf";
 import "./SkyPalette.css";
 
 export const PALETTE_KEY = "palette";
@@ -60,31 +63,59 @@ export interface SkyPaletteProps {
   onResize?(w: number, h: number): void;
   /** Its measured size (a ResizeObserver), for the host's spots. */
   onMeasure?(w: number, h: number): void;
-  /** A click / Add on an item: the host places a grounded line next to the palette. */
+  /** A card's click or double-click: the host places a grounded line next to the palette. */
   onPlace?(drop: CatalogDrop): void;
   /** The ⋯'s "Dock at the bottom". */
   onDock?(): void;
   /** A Session chip pressed. */
   onSession?(): void;
-  /** Round 14: the × that returns to the shelf (the host sets shelf mode). */
+  /** The head's ×: back to the shelf (the host sets shelf mode). */
   onClose?(): void;
-  /** Round 14: opened by "All blocks…" — start with the filter focused. */
+  /** Opened by "All blocks…": the filter takes the focus on mount. */
   focusFilter?: boolean;
 }
 
 /** A press on the head that is the head's own (not one of its buttons). */
 const headPress = (e: ReactPointerEvent) => e.button === 0 && !(e.target as Element).closest("button, a, input, summary, [data-no-drag]");
 
-export function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = true, onResize, onMeasure, onPlace, onDock, onSession }: SkyPaletteProps): JSX.Element {
+/** The Session block as a card, first in the palette: it drags the
+ * new-session type; a click (or a double-click, once) opens the block. */
+function SessionCard({ onSession }: { onSession?(): void }) {
+  const cd = useClickOrDouble(onSession);
+  return (
+    <div
+      role="option"
+      aria-selected={false}
+      className={"sky-catalog-card sky-catalog-session" + (onSession ? "" : " drag-only")}
+      data-tour="flights-newblock"
+      draggable
+      title={"A new session: drag it onto the sky (or onto stops with no session yet)" + (onSession ? ", or click" : "")}
+      onDragStart={(e: DragEvent) => {
+        cd.cancel();
+        for (const [type, value] of sessionDragData()) e.dataTransfer.setData(type, value);
+        e.dataTransfer.effectAllowed = "copy";
+      }}
+      onClick={(e) => cd.onClick(e)}
+      onDoubleClick={() => cd.onDoubleClick()}
+    >
+      <div className="sky-catalog-card-head">
+        <span className="sky-catalog-icon">
+          <StopIcon kind="session" size={14} />
+        </span>
+        <span className="sky-catalog-name">
+          <span className="sky-catalog-title">Session</span>
+        </span>
+      </div>
+      <span className="sky-catalog-summary">A new agent session, its own branch</span>
+    </div>
+  );
+}
+
+export function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = true, onResize, onMeasure, onPlace, onDock, onSession, onClose, focusFilter = false }: SkyPaletteProps): JSX.Element {
   const kinds = useFlightKinds().data;
   const plans = useFlightPlans().data;
   const [shelf, changeShelf] = useShelfPick();
-  const blocks = shelfKinds(shelf, kinds || []);
   const allSaved = savedStopOrder(plans || []);
-  const saved = shelfPlans(shelf, allSaved);
-  const acts = useSavedActions(changeShelf);
-  const [catalog, setCatalog] = useState(false);
-
   // The corner handle: the intake lane's (pointer capture, the delta over the
   // zoom), the frame drawn live and handed to the host on release.
   const [live, setLive] = useState<{ w: number; h: number } | null>(null);
@@ -151,72 +182,38 @@ export function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = tr
     if (draggable && onHeadDown && headPress(e)) onHeadDown(e);
   };
   const moveHint = draggable && onHeadDown ? "Drag to move the blocks" : undefined;
-  const clickKind = onPlace ? (kind: string) => onPlace({ kind }) : undefined;
-  const clickPlan = onPlace ? (plan: FlightPlan) => onPlace({ planId: plan.id }) : undefined;
-  const count = blocks.length + saved.length;
-  const add = (d: CatalogDrop) => {
-    setCatalog(false);
-    onPlace?.(d);
-  };
+  const count = (kinds?.length || 0) + allSaved.length;
 
   return (
     <section ref={rootRef} className="sky-palette" data-tour="sky-palette" aria-label="Blocks palette" style={{ width: frame.w, height: frame.h }}>
-      <div className={"sky-palette-head" + (moveHint ? " movable" : "")} data-sky-head title={moveHint} onPointerDown={headDown}>
-        <strong className="sky-palette-title">Blocks</strong>
-        <span className="sky-palette-count" title={count + " on the palette — ☆ more in All blocks…"}>
-          {count}
-        </span>
-        <button
-          type="button"
-          className="test-btn sky-palette-all"
-          aria-haspopup="dialog"
-          aria-expanded={catalog}
-          title="Every block and every multi-step block, in a list you can filter"
-          onClick={() => setCatalog(true)}
-        >
-          All blocks…
-        </button>
-        {onDock && <OverflowMenu label="The blocks palette — more" items={[{ key: "dock", label: "Dock at the bottom", title: "Put the blocks back in the shelf at the sky's foot", onSelect: onDock }]} />}
-      </div>
-      <div className="sky-palette-body sky-own-scroll">
-        {kinds !== undefined && !kinds?.length ? (
-          <p className="sky-stops-empty muted">The stop list didn't load — this server may not know Flights yet.</p>
-        ) : (
-          <>
-            <div className="sky-palette-region" data-region="blocks" role="list" aria-label="Blocks">
-              <span className="sky-stops-label" aria-hidden="true">
-                Blocks
-              </span>
-              <SessionChip onSession={onSession} />
-              {blocks.map((k) => (
-                <StopChip key={k.kind} def={k} onClick={clickKind} place onMenu={acts.openKindMenu} />
-              ))}
-            </div>
-            {saved.length > 0 && (
-              <div className="sky-palette-region" data-region="multi" role="list" aria-label="Multi-step">
-                <span className="sky-stops-label" aria-hidden="true">
-                  Multi-step
-                </span>
-                {saved.map((p) => (
-                  <SavedChip
-                    key={p.id}
-                    plan={p}
-                    plans={allSaved}
-                    kinds={kinds || []}
-                    renaming={acts.renaming === p.id}
-                    onClick={clickPlan}
-                    place
-                    onMenu={acts.openMenu}
-                    onRenamed={acts.doneRenaming}
-                  />
-                ))}
-              </div>
+      <StopCatalogBody
+        kinds={kinds || []}
+        plans={allSaved}
+        onAdd={onPlace}
+        place
+        compact
+        idPrefix="sky-palette"
+        listClass="sky-palette-body"
+        autoFocus={focusFilter}
+        shelf={(d: CatalogDrop) => onShelf(shelf, d)}
+        onShelfToggle={(d: CatalogDrop) => changeShelf((p) => toggleShelf(p, d))}
+        lead={(q) => (catalogMatch(q, "Session", "A new agent session") ? <SessionCard key="session" onSession={onSession} /> : null)}
+        head={(filter) => (
+          <div className={"sky-palette-head" + (moveHint ? " movable" : "")} data-sky-head title={moveHint} onPointerDown={headDown}>
+            <strong className="sky-palette-title">Blocks</strong>
+            <span className="sky-palette-count" title={count + " blocks — ★ puts one on the bottom shelf"}>
+              {count}
+            </span>
+            {filter}
+            {onDock && <OverflowMenu label="The blocks palette — more" items={[{ key: "dock", label: "Dock at the bottom", title: "Put the blocks back in the shelf at the sky's foot", onSelect: onDock }]} />}
+            {onClose && (
+              <button type="button" className="fl-icon-btn sky-palette-close" aria-label="Close the blocks palette" title="Close — back to the shelf" onClick={onClose}>
+                ×
+              </button>
             )}
-            <p className="sky-palette-hint muted">Click to put a block on the board, or drag it onto a line or the sky.</p>
-          </>
+          </div>
         )}
-        {acts.confirm && <div className="sky-palette-confirm">{acts.confirm}</div>}
-      </div>
+      />
       {onResize && (
         <span
           className="sky-palette-resize"
@@ -230,18 +227,6 @@ export function SkyPalette({ width, height, zoom = 1, onHeadDown, draggable = tr
           onPointerUp={resizeUp}
           onPointerCancel={resizeUp}
           onKeyDown={resizeKey}
-        />
-      )}
-      {acts.overlays}
-      {catalog && (
-        <StopCatalog
-          kinds={kinds || []}
-          plans={allSaved}
-          onAdd={onPlace ? add : undefined}
-          place
-          onClose={() => setCatalog(false)}
-          shelf={(d) => onShelf(shelf, d)}
-          onShelfToggle={(d) => changeShelf((p) => toggleShelf(p, d))}
         />
       )}
     </section>
