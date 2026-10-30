@@ -942,9 +942,14 @@ def test_change_steps_announces_and_wakes(srv, row, emitted, monkeypatch):
     with pytest.raises(F.FlightError) as err:
         D.change_steps("f_nope", "add", raw={"kind": "notify"})
     assert err.value.status == 404
-    with pytest.raises(F.FlightError) as err:
-        D.change_steps(f["id"], "remove", "s1")
-    assert err.value.error == "in_progress"
+    # The flying stop goes too: the flight sits paused right before s3.
+    after = D.change_steps(f["id"], "remove", "s1")
+    assert (after["state"], after["reason"], after["cursor"]) == (
+        "paused",
+        "stop removed",
+        0,
+    )
+    assert [s["id"] for s in after["steps"]] == ["s3"]
 
 
 def test_a_step_added_to_a_finishing_flight_is_flown(srv, row, monkeypatch):

@@ -46,7 +46,11 @@ __all__ = [
     "run_pass",
     "run_loop",
     "start",
+    "ground",
+    "attach",
     "operate",
+    "change_steps",
+    "group_steps",
     "on_session_created",
     "on_session_removed",
 ]
@@ -832,7 +836,7 @@ def _run_notify(flight: dict, step: dict) -> None:
                 cfg,
                 title="%s · %s" % (flight["plan_name"], flight["session"] or "flight"),
                 message=text,
-                tags=["airplane"],
+                tags=["bird"],
             )
     except Exception as err:  # noqa: BLE001 — a notify step never blocks
         _log("flight %s: notify failed: %v", flight["id"], err)
@@ -1337,6 +1341,9 @@ async def step_flight(fid: str) -> None:
                 after = await asyncio.to_thread(
                     _record_outcome, fid, cur["id"], token, action, now
                 )
+                if after is None and cur["kind"] in ("ship", "reviews"):
+                    # The step was removed while its lane was being armed.
+                    await asyncio.to_thread(_disarm_if_removed, fid, cur["id"])
                 before = f
             else:
                 after = await asyncio.to_thread(
@@ -1361,6 +1368,13 @@ async def step_flight(fid: str) -> None:
             f = after
     except Exception as err:  # noqa: BLE001 — one flight never stops a pass
         _log("flight %s pass failed: %v", fid, err)
+
+
+def _disarm_if_removed(fid: str, sid: str) -> None:
+    """A lane armed for step ``sid`` after a route removed it is disarmed."""
+    f = _flights.get(fid)
+    if f is not None and sid not in f["step_states"]:
+        _disarm_ours(fid, f["session"])
 
 
 def _live_titles() -> set:
@@ -1697,40 +1711,219 @@ def operate(flight_id: str, op: str, step: str = "", note: str = "") -> dict:
     return after
 
 
-def change_steps(
-    flight_id: str, op: str, step: str = "", raw=None, at: Optional[int] = None
-) -> dict:
-    """Add / edit / remove a step of a flight in the air (blocking): the
-    change is checked against the flight as stored, under the lock, so a
-    driver pass that moved it meanwhile wins and the route gets its 409.
-    Raises :class:`flights.FlightError` / :class:`flights.PlanError`."""
+def _changed(flight_id: str, fn) -> dict:
+    """Run ``fn`` on the stored flight under the lock (a refusal raised in it
+    writes nothing), then say so — ``flight.changed`` even when the cursor did
+    not move — and wake the loop."""
     before = _flights.get(flight_id)
     if before is None:
         raise _flights.FlightError("unknown_flight", 404, "no such flight")
-
-    def _do(f: dict) -> None:
-        if op == "add":
-            _flights.op_add_step(f, raw, at)
-        elif op == "edit":
-            _flights.op_edit_step(f, step, raw)
-        elif op == "move":
-            _flights.op_move_step(f, step, at)
-        else:
-            _flights.op_remove_step(f, step)
-
-    after = _flights.mutate(flight_id, _do)
+    after = _flights.mutate(flight_id, fn)
     if after is None:
         raise _flights.FlightError("unknown_flight", 404, "no such flight")
     if _view_key(before) == _view_key(after):
         _emit("flight.changed", after)
     _announce(before, after)
+    _stop_removed(before, after)
     wake()
     return after
 
 
+def change_steps(
+    flight_id: str,
+    op: str,
+    step: str = "",
+    raw=None,
+    at: Optional[int] = None,
+    group=None,
+) -> dict:
+    """Add / edit / remove / move steps of a flight in the air or on the
+    ground (blocking): the change is checked against the flight as stored,
+    under the lock, so a driver pass that moved it meanwhile wins and the
+    route gets its 409. ``add_steps`` takes a list in ``raw`` (and ``group``:
+    ``{name}``); ``add_plan`` a plan id; ``remove_group`` a step of the group;
+    ``ungroup`` the group id in ``step``. Raises
+    :class:`flights.FlightError` / :class:`flights.PlanError`."""
+    plan = None
+    if op == "add_plan":
+        plan = _flights.get_plan(str(raw or ""))
+        if plan is None:
+            raise _flights.FlightError("unknown_plan", 404, "no such plan")
+
+    def _do(f: dict) -> None:
+        if op == "add":
+            _flights.op_add_step(f, raw, at)
+        elif op == "add_steps":
+            _flights.op_add_steps(f, raw, at, group)
+        elif op == "add_plan":
+            _flights.op_add_plan(f, plan, at)
+        elif op == "edit":
+            _flights.op_edit_step(f, step, raw)
+        elif op == "move":
+            _flights.op_move_step(f, step, at)
+        elif op == "ungroup":
+            _flights.op_ungroup(f, step)
+        elif op == "remove_group":
+            _flights.op_remove_group(f, step)
+        else:
+            _flights.op_remove_step(f, step)
+
+    return _changed(flight_id, _do)
+
+
+def group_steps(flight_id: str, sids, name) -> Tuple[dict, dict]:
+    """``POST /api/flights/{id}/group``: the steps ``sids`` become one new
+    stop → ``(flight, group)`` (blocking)."""
+    made: dict = {}
+
+    def _do(f: dict) -> None:
+        made.update(_flights.op_group(f, sids, name))
+
+    return _changed(flight_id, _do), made
+
+
+def _stop_removed(before: dict, after: dict) -> None:
+    """Stop the side effects of steps a removal took out (docs/flights.md
+    "Removing the stop that is flying"): the CURRENT one's armed lane (a
+    ``ship`` step's, or a ``reviews`` step's push) is disarmed, any step's
+    command job is forgotten. An ``agent`` step types nothing more; a
+    ``split``'s workers are left alive."""
+    gone = [s for s in before["steps"] if s["id"] not in after["step_states"]]
+    if not gone:
+        return
+    with _JOBS_LOCK:
+        for s in gone:
+            _JOBS.pop((after["id"], s["id"]), None)
+    cur = _flights._current(before)
+    if (
+        before["state"] != _flights.GROUNDED
+        and cur is not None
+        and cur in gone
+        and cur["kind"] in ("ship", "reviews")
+    ):
+        _disarm_ours(after["id"], before["session"])
+
+
+def _disarm_ours(flight_id: str, title: str) -> bool:
+    """Disarm the session's autopilot record when THIS flight armed it and it
+    has not finished (the matching half of ``lanes.arm_session(source=
+    "flight", item=<flight id>)``); your own fast-track run is left alone."""
+    rec = _autopilot.get(title) if title else None
+    if (
+        not rec
+        or rec.get("source") != "flight"
+        or rec.get("item") != flight_id
+        or rec.get("state") == "done"
+    ):
+        return False
+    _autopilot.disarm(title)
+    try:
+        _server()._publish_autopilot(title)
+    except Exception:  # noqa: BLE001
+        pass
+    return True
+
+
+async def ground(body: dict) -> dict:
+    """``POST /api/flights/start {grounded: true, plan_id? | steps?, name?}``:
+    a flight with no session (:func:`flights.ground`). Raises
+    :class:`flights.FlightError` (404 ``unknown_plan``, 400 ``needs_steps``)
+    and :class:`flights.PlanError`."""
+    body = body or {}
+    plan_id = str(body.get("plan_id") or "")
+    plan = None
+    if plan_id:
+        plan = _flights.get_plan(plan_id)
+        if plan is None:
+            raise _flights.FlightError("unknown_plan", 404, "no such plan")
+    flight = await asyncio.to_thread(
+        _flights.ground,
+        plan,
+        body.get("steps"),
+        str(body.get("name") or ""),
+        str(body.get("by") or "user"),
+    )
+    _emit("flight.changed", flight)
+    return flight
+
+
+async def attach(flight_id: str, body: dict) -> dict:
+    """``POST /api/flights/{id}/attach {title}``: bind a grounded flight to a
+    live session and take off (:func:`flights.attach`). ``{title: "",
+    repo_path, program?, model?, in_place?, prompt?}`` first creates the
+    session the way :func:`start` does for a saved plan with no title — a
+    first ``agent`` step's prompt is its initial prompt — then attaches.
+    Every refusal comes before a session is created. Raises
+    :class:`flights.FlightError`."""
+    srv = _server()
+    body = body or {}
+    f = _flights.get(flight_id)
+    if f is None:
+        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+    if f["state"] != _flights.GROUNDED:
+        raise _flights.FlightError(
+            "not_grounded", 409, "this flight already has a session"
+        )
+    title = str(body.get("title") or "").strip()
+    seeded = False
+    no_prompt = False
+    if title:
+        if title not in srv.ENGINE.instances:
+            raise _flights.FlightError("unknown_session", 404, "no session %s" % title)
+        if _flights.for_session(title) is not None:
+            raise _flights.FlightError(
+                "in_flight", 409, "%s is already on a flight" % title
+            )
+    else:
+        plan = _flights.get_plan(f["plan_id"]) or {}
+        defaults = dict(_flights._blank_session(), **(plan.get("session") or {}))
+        for key, field in (("program", "program"), ("model", "model")):
+            if str(body.get(key) or "").strip():
+                defaults[field] = str(body[key]).strip()
+        if "in_place" in body:
+            defaults["in_place"] = bool(body.get("in_place"))
+        first = _flights._current(f)
+        first_agent = (
+            first is not None and first["kind"] == "agent" and not first.get("halt")
+        )
+        prompt = str(body.get("prompt") or "").strip()
+        if first_agent and not prompt:
+            prompt = _flights.fill_prompt(first["config"].get("prompt") or "", f)
+        repo = str(body.get("repo_path") or "").strip() or defaults["repo_path"]
+        if not repo:
+            raise _flights.FlightError(
+                "no_repo", 400, "pick a folder for the new session"
+            )
+        title = await _create_session(_session_payload(defaults, repo, prompt))
+        seeded = first_agent and bool(prompt)
+        no_prompt = first_agent and not prompt
+    inst = srv.ENGINE.instances.get(title)
+    root = await asyncio.to_thread(_repo_root, title)
+    flight = await asyncio.to_thread(
+        _flights.attach,
+        flight_id,
+        title,
+        root,
+        str(getattr(inst, "Branch", "") or ""),
+        seeded,
+    )
+    if no_prompt:
+        # Nothing was typed: the first agent step only waits for a turn.
+        flight = await asyncio.to_thread(
+            _flights.mutate,
+            flight["id"],
+            lambda x: x["step_states"][x["steps"][0]["id"]]["detail"].update(
+                no_prompt=True
+            ),
+        )
+    _emit("flight.changed", flight)
+    wake()
+    return flight
+
+
 def remove(flight_id: str) -> None:
-    """``DELETE /api/flights/{id}``: finished (or halted) flights only — a
-    running, waiting or paused one must be cancelled first."""
+    """``DELETE /api/flights/{id}``: finished, halted or grounded flights
+    only — a running, waiting or paused one must be cancelled first."""
     f = _flights.get(flight_id)
     if f is None:
         raise _flights.FlightError("unknown_flight", 404, "no such flight")

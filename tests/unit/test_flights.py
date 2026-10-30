@@ -1282,9 +1282,6 @@ def test_op_edit_and_remove_only_touch_pending_steps_ahead():
         F.op_edit_step(f, "s1", {"title": "x"}, now=NOW)
     assert (err.value.status, err.value.error) == (409, "in_progress")
     with pytest.raises(F.FlightError) as err:
-        F.op_remove_step(f, "s1", now=NOW)
-    assert err.value.error == "in_progress"
-    with pytest.raises(F.FlightError) as err:
         F.op_edit_step(f, "s9", {}, now=NOW)
     assert err.value.status == 404
     F.op_edit_step(
@@ -1308,15 +1305,23 @@ def test_op_edit_and_remove_only_touch_pending_steps_ahead():
     with pytest.raises(F.PlanError) as perr:
         F.op_edit_step(f, "s2", {"on_fail": "explode"}, now=NOW)
     assert perr.value.field == "step.on_fail"
-    # A step marked ahead (skipped) is no longer pending.
+    # A step marked ahead (skipped) is no longer pending: it can't be
+    # edited, but removing takes anything.
     F.op_skip(f, "s3", now=NOW)
     with pytest.raises(F.FlightError):
-        F.op_remove_step(f, "s3", now=NOW)
+        F.op_edit_step(f, "s3", {"title": "x"}, now=NOW)
     F.op_remove_step(f, "s2", now=NOW)
     assert [s["id"] for s in f["steps"]] == ["s1", "s3"]
     assert "s2" not in f["step_states"]
     assert f["history"][-1]["event"] == "removed"
     assert f["history"][-1]["note"] == "Coffee"
+    assert (f["state"], f["cursor"]) == ("running", 0)
+    F.op_remove_step(f, "s3", now=NOW)
+    assert [s["id"] for s in f["steps"]] == ["s1"]
+    # The last stop stays: remove the flight instead.
+    with pytest.raises(F.FlightError) as err:
+        F.op_remove_step(f, "s1", now=NOW)
+    assert (err.value.status, err.value.error) == (409, "last_step")
 
 
 def test_step_history_events_survive_the_store():

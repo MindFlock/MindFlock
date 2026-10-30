@@ -392,10 +392,9 @@ def test_step_changes_refuse_what_has_started():
     )
     assert client.post(base, json={}).status_code == 400
     for path in ("/s1", "/s2"):
-        # s1 is behind the flight, s2 is the current step.
+        # s1 is behind the flight, s2 is the current step: neither edits
+        # (removing them is test_remove_flown_and_flying_stops's).
         r = client.patch(base + path, json={"title": "x"})
-        assert (r.status_code, r.json()["error"]) == (409, "in_progress")
-        r = client.delete(base + path)
         assert (r.status_code, r.json()["error"]) == (409, "in_progress")
     r = client.patch(base + "/s9", json={"title": "x"})
     assert (r.status_code, r.json()["error"]) == (404, "unknown_step")

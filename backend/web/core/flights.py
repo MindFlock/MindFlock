@@ -89,6 +89,13 @@ __all__ = [
     "op_add_step",
     "op_edit_step",
     "op_remove_step",
+    "op_remove_group",
+    "op_add_steps",
+    "op_add_plan",
+    "op_group",
+    "op_ungroup",
+    "ground",
+    "attach",
     "join_view",
     "child_state",
     "split_prompts",
@@ -135,15 +142,25 @@ PERFORM_STALE_S = 600.0
 #: counts as "nothing to wait for" once this has passed.
 CHECKS_NONE_GRACE_S = 120.0
 
-#: Flight states. ``paused`` is held by a person (resume carries on where it
-#: was); ``halted`` is stopped on a failure (retry / skip / resume);
-#: ``done``/``cancelled`` are final.
-STATES = ("running", "waiting_you", "paused", "halted", "done", "cancelled")
+#: Flight states. ``grounded`` is a row of stops on the board with no session
+#: yet (nothing drives it until one is attached); ``paused`` is held by a
+#: person (resume carries on where it was); ``halted`` is stopped on a failure
+#: (retry / skip / resume); ``done``/``cancelled`` are final.
+STATES = (
+    "grounded",
+    "running",
+    "waiting_you",
+    "paused",
+    "halted",
+    "done",
+    "cancelled",
+)
+GROUNDED = "grounded"
 #: States the driver moves.
 ACTIVE = frozenset({"running", "waiting_you"})
 #: States that hold their session (a new start is 409 ``in_flight``).
 HOLDING = frozenset({"running", "waiting_you", "paused"})
-UNFINISHED = frozenset({"running", "waiting_you", "paused", "halted"})
+UNFINISHED = frozenset({"grounded", "running", "waiting_you", "paused", "halted"})
 FINAL = frozenset({"done", "cancelled"})
 STEP_STATES = ("pending", "running", "waiting_you", "done", "skipped", "failed")
 HISTORY_EVENTS = (
@@ -161,6 +178,7 @@ HISTORY_EVENTS = (
     "removed",
     "moved",
     "halted_at",
+    "attached",
 )
 ON_FAIL = ("halt", "agent", "skip", "you")
 TRIGGER_KINDS = ("manual", "ticket", "pr", "issue", "schedule")
@@ -542,11 +560,25 @@ def _step_config(kind: str, raw: dict, strict: bool, where: str) -> dict:
     return {}
 
 
+def _normalize_group(raw) -> Optional[dict]:
+    """A step's ``group`` — the stop with sub-steps it belongs to (docs/flights.md
+    "Groups"): ``{id, name, plan_id}``, or None when its id or name is empty.
+    Never refuses, strict or not: a group is a label on the board."""
+    if not isinstance(raw, dict):
+        return None
+    gid = _text(raw.get("id"), 40)
+    name = _text(raw.get("name"), 80)
+    if not gid or not name:
+        return None
+    return {"id": gid, "name": name, "plan_id": _text(raw.get("plan_id"), 64)}
+
+
 def normalize_step(
     raw, index: int = 0, strict: bool = True, taken=None
 ) -> Optional[dict]:
     """One step coerced to ``{id, kind, title, config, on_fail}`` plus
-    ``halt: True`` on a halt point (omitted when false).
+    ``halt: True`` on a halt point (omitted when false) and ``group`` on a
+    sub-step of a compound stop (omitted when it has none).
 
     Strict (a POSTed plan, a describe answer): raises :class:`PlanError`. Lenient
     (a stored file): returns None for a step that cannot be a step. ``taken``
@@ -596,6 +628,9 @@ def normalize_step(
     }
     if halt:
         step["halt"] = True
+    group = _normalize_group(raw.get("group"))
+    if group is not None:
+        step["group"] = group
     return step
 
 
@@ -2710,13 +2745,23 @@ def _not_final(flight: dict) -> None:
         )
 
 
+def _airborne(flight: dict) -> None:
+    """Done / skip / retry / jump / pause / resume need a flight with a
+    session: 409 ``grounded`` on one still on the board (attach it first)."""
+    _not_final(flight)
+    if flight["state"] == GROUNDED:
+        raise FlightError(
+            "grounded", 409, "this flight has no session yet — fly it on one first"
+        )
+
+
 def op_done(
     flight: dict, sid: str, note: str = "", now: Optional[float] = None
 ) -> dict:
     """Done on a parked step (a *you* step, a verify step waiting on you, or
     a step whose failure was handed to you)."""
     ts = float(now if now is not None else time.time())
-    _not_final(flight)
+    _airborne(flight)
     i = _step_index(flight, sid)
     ss = flight["step_states"][sid]
     if i != flight["cursor"] or ss["state"] != "waiting_you":
@@ -2746,7 +2791,7 @@ def op_skip(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     """Skip a step: the current one moves the flight on; a later one is marked
     so the cursor passes over it when it gets there."""
     ts = float(now if now is not None else time.time())
-    _not_final(flight)
+    _airborne(flight)
     i = _step_index(flight, sid)
     if i < flight["cursor"]:
         raise FlightError("behind", 409, "that step is already behind the flight")
@@ -2764,7 +2809,7 @@ def op_skip(flight: dict, sid: str, now: Optional[float] = None) -> dict:
 def op_retry(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     """Run a failed (or parked-on-failure) current step again."""
     ts = float(now if now is not None else time.time())
-    _not_final(flight)
+    _airborne(flight)
     i = _step_index(flight, sid)
     ss = flight["step_states"][sid]
     retryable = (
@@ -2789,7 +2834,7 @@ def op_jump(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     """Move the cursor to ``sid``: forward marks the steps in between skipped,
     backward resets the target and everything after it to pending."""
     ts = float(now if now is not None else time.time())
-    _not_final(flight)
+    _airborne(flight)
     i = _step_index(flight, sid)
     steps = flight["steps"]
     if i >= flight["cursor"]:
@@ -2815,7 +2860,7 @@ def op_pause(flight: dict, now: Optional[float] = None) -> dict:
     """Hold a running / waiting flight where it is (``paused``). A halted one
     is already stopped and stays halted; pausing twice is a no-op."""
     ts = float(now if now is not None else time.time())
-    _not_final(flight)
+    _airborne(flight)
     if flight["state"] in ACTIVE:
         cur = _current(flight)
         flight["state"] = "paused"
@@ -2830,7 +2875,7 @@ def op_resume(flight: dict, now: Optional[float] = None) -> dict:
     step is parked), a failure-halted one by running its step again. A halt
     point the flight stopped at (or was about to) is let through."""
     ts = float(now if now is not None else time.time())
-    _not_final(flight)
+    _airborne(flight)
     cur = _current(flight)
     if cur is None:
         _finish(flight, "done", "", ts)
@@ -2860,8 +2905,9 @@ def op_cancel(
 
 
 def _editable(flight: dict) -> None:
-    """Steps change only on a flight in the air (running, waiting, paused)."""
-    if flight["state"] not in HOLDING:
+    """Steps change only on a flight in the air (running, waiting, paused) or
+    one still on the ground."""
+    if flight["state"] not in HOLDING and flight["state"] != GROUNDED:
         raise FlightError(
             "finished",
             409,
@@ -2870,12 +2916,19 @@ def _editable(flight: dict) -> None:
         )
 
 
+def _first_open(flight: dict) -> int:
+    """The first index a step may be edited, moved or placed at: every one on
+    a grounded flight (it has no current step), else the one after the
+    cursor."""
+    return 0 if flight["state"] == GROUNDED else flight["cursor"] + 1
+
+
 def _pending_index(flight: dict, sid: str) -> int:
-    """The index of ``sid`` if it is still ahead of the flight and untouched,
-    else 409 ``in_progress``."""
+    """The index of ``sid`` if it can still change — ahead of the flight and
+    untouched, or any step of a grounded one — else 409 ``in_progress``."""
     i = _step_index(flight, sid)
     ss = flight["step_states"][sid]
-    if i <= flight["cursor"] or ss["state"] != "pending" or ss["detail"]:
+    if i < _first_open(flight) or ss["state"] != "pending" or ss["detail"]:
         raise FlightError(
             "in_progress",
             409,
@@ -2893,57 +2946,152 @@ def _one_step(raw, index: int, taken) -> dict:
         raise PlanError(err.message, re.sub(r"^steps\[\d+\]", "step", err.field))
 
 
-def op_add_step(
-    flight: dict, raw, at: Optional[int] = None, now: Optional[float] = None
-) -> dict:
-    """Add a step to a flight in the air: appended, or inserted at index
-    ``at`` (which must be after the current step — 409 ``in_progress``). It
-    takes the next free ``sN``. A flight whose last step is finishing gains
-    a step to go on to (the planner only lands with nothing left ahead)."""
-    ts = float(now if now is not None else time.time())
-    _editable(flight)
+def _insert_index(flight: dict, at, n: int = 1) -> int:
+    """Where ``n`` new steps go: the end, or index ``at``, which must be after
+    the current step (409 ``in_progress``) — or AT it on a paused flight whose
+    current step has not started (it sits right before that step, so the new
+    one flies first: what Undo of a removed flying stop needs). 400
+    ``bad_at``; 409 ``too_many_steps`` past :data:`MAX_STEPS`."""
     steps = flight["steps"]
-    if len(steps) >= MAX_STEPS:
+    if len(steps) + n > MAX_STEPS:
         raise FlightError(
             "too_many_steps", 409, "a flight has at most %d steps" % MAX_STEPS
         )
     if at is None:
-        i = len(steps)
-    else:
-        try:
-            if isinstance(at, bool):
-                raise TypeError(at)
-            i = int(at)
-        except (TypeError, ValueError):
-            raise FlightError("bad_at", 400, "at is a step index")
-        if i < 0 or i > len(steps):
-            raise FlightError("bad_at", 400, "at is 0..%d" % len(steps))
-        if i <= flight["cursor"]:
-            raise FlightError(
-                "in_progress", 409, "a step can only be added after the current one"
+        return len(steps)
+    try:
+        if isinstance(at, bool):
+            raise TypeError(at)
+        i = int(at)
+    except (TypeError, ValueError):
+        raise FlightError("bad_at", 400, "at is a step index")
+    if i < 0 or i > len(steps):
+        raise FlightError("bad_at", 400, "at is 0..%d" % len(steps))
+    first = _first_open(flight)
+    cur = _current(flight)
+    if (
+        flight["state"] == "paused"
+        and i == flight["cursor"]
+        and (
+            cur is None
+            or (
+                flight["step_states"][cur["id"]]["state"] == "pending"
+                and not flight["step_states"][cur["id"]]["detail"].get("performing")
             )
+        )
+    ):
+        first = flight["cursor"]
+    if i < first:
+        raise FlightError(
+            "in_progress", 409, "a step can only be added after the current one"
+        )
+    return i
+
+
+def _insert_steps(flight: dict, new: List[dict], i: int, now: float) -> dict:
+    """Place validated ``new`` steps at index ``i``: each takes the next free
+    ``sN`` (never one history still names), starts pending, and gets an
+    ``added`` history event."""
+    steps = flight["steps"]
+    _renumber_after(steps, new, [h["step"] for h in flight["history"]])
+    steps[i:i] = new
+    nxt = i + len(new)
+    where = "at the end" if nxt >= len(steps) else "before %s" % steps[nxt]["title"]
+    for step in new:
+        flight["step_states"][step["id"]] = _blank_step_state()
+        _hist(flight, now, step["id"], "added", "%s, %s" % (step["title"], where))
+    flight["updated"] = now
+    return flight
+
+
+def op_add_step(
+    flight: dict, raw, at: Optional[int] = None, now: Optional[float] = None
+) -> dict:
+    """Add a step to a flight in the air (or on the ground): appended, or
+    inserted at index ``at`` (see :func:`_insert_index`). It takes the next
+    free ``sN``. A flight whose last step is finishing gains a step to go on
+    to (the planner only lands with nothing left ahead)."""
+    ts = float(now if now is not None else time.time())
+    _editable(flight)
+    i = _insert_index(flight, at)
     step = _one_step(
         dict(raw, id="") if isinstance(raw, dict) else raw,
         i,
-        {s["id"] for s in steps},
+        {s["id"] for s in flight["steps"]},
     )
-    _renumber_after(steps, [step], [h["step"] for h in flight["history"]])
-    steps.insert(i, step)
-    flight["step_states"][step["id"]] = _blank_step_state()
-    where = "at the end" if i == len(steps) - 1 else "before %s" % steps[i + 1]["title"]
-    _hist(flight, ts, step["id"], "added", "%s, %s" % (step["title"], where))
-    flight["updated"] = ts
-    return flight
+    return _insert_steps(flight, [step], i, ts)
+
+
+def _group_ids(flight: dict) -> set:
+    return {s["group"]["id"] for s in flight["steps"] if s.get("group")}
+
+
+def _fresh_group(flight: dict, name: str, plan_id: str = "") -> dict:
+    """A new ``group`` (``g_<6hex>``) no step of ``flight`` uses yet."""
+    name = _text(name, 80)
+    if not name:
+        raise FlightError("bad_group", 400, "a stop needs a name")
+    return {
+        "id": _new_id("g_", _group_ids(flight)),
+        "name": name,
+        "plan_id": _text(plan_id, 64),
+    }
+
+
+def op_add_steps(
+    flight: dict,
+    raws,
+    at: Optional[int] = None,
+    group=None,
+    now: Optional[float] = None,
+) -> dict:
+    """Several steps at once (``POST /steps {steps, at?, group?}``), validated
+    like a plan's (``steps[i]…``) and placed as :func:`op_add_step` places
+    one. ``group`` (``{name}``) makes them ONE new stop; without it each keeps
+    the ``group`` it came with."""
+    ts = float(now if now is not None else time.time())
+    _editable(flight)
+    if not isinstance(raws, list):
+        raise PlanError("steps is a list", "steps")
+    stripped = [dict(r, id="") if isinstance(r, dict) else r for r in raws]
+    new = normalize_steps(stripped, strict=True)
+    i = _insert_index(flight, at, len(new))
+    if group is not None:
+        g = _fresh_group(flight, group.get("name") if isinstance(group, dict) else "")
+        for s in new:
+            s["group"] = dict(g)
+    return _insert_steps(flight, new, i, ts)
+
+
+def op_add_plan(
+    flight: dict, plan: dict, at: Optional[int] = None, now: Optional[float] = None
+) -> dict:
+    """A saved stop's steps (``POST /steps {plan_id, at?}``) as ONE new group:
+    fresh step ids, ``group.name`` = the plan's name, ``group.plan_id`` = its
+    id."""
+    ts = float(now if now is not None else time.time())
+    _editable(flight)
+    new = copy.deepcopy(plan["steps"])
+    i = _insert_index(flight, at, len(new))
+    g = _fresh_group(flight, plan.get("name") or "Stop", plan.get("id") or "")
+    for s in new:
+        s["group"] = dict(g)
+    return _insert_steps(flight, new, i, ts)
 
 
 def op_edit_step(flight: dict, sid: str, patch, now: Optional[float] = None) -> dict:
     """Change a step still ahead of the flight: ``title`` / ``config`` (the
-    whole config, validated like a plan step's) / ``on_fail`` / ``halt``; its
-    kind and id stay. ``halt`` alone may also change on the current step (any
-    flight not yet over, a halted one too): clearing it there un-marks a halt
-    point without resuming."""
+    whole config, validated like a plan step's) / ``on_fail`` / ``halt`` /
+    ``group``; its kind and id stay. ``halt`` alone may also change on the
+    current step (any flight not yet over, a halted one too): clearing it
+    there un-marks a halt point without resuming. ``group`` is
+    :func:`_edit_group`'s."""
     ts = float(now if now is not None else time.time())
-    patch = patch if isinstance(patch, dict) else {}
+    patch = dict(patch) if isinstance(patch, dict) else {}
+    if "group" in patch:
+        _edit_group(flight, sid, patch.pop("group"), ts)
+        if not patch:
+            return flight
     if set(patch) & {"title", "config", "on_fail"} or "halt" not in patch:
         _editable(flight)
         i = _pending_index(flight, sid)
@@ -2951,7 +3099,7 @@ def op_edit_step(flight: dict, sid: str, patch, now: Optional[float] = None) -> 
         _not_final(flight)
         i = _step_index(flight, sid)
         st = flight["step_states"][sid]["state"]
-        if (
+        if flight["state"] != GROUNDED and (
             i < flight["cursor"]
             or st in ("done", "skipped")
             or (i > flight["cursor"] and st != "pending")
@@ -2979,30 +3127,163 @@ def op_edit_step(flight: dict, sid: str, patch, now: Optional[float] = None) -> 
     return flight
 
 
-def op_remove_step(flight: dict, sid: str, now: Optional[float] = None) -> dict:
-    """Take a step still ahead of the flight out of it."""
+def _edit_group(flight: dict, sid: str, value, now: float) -> None:
+    """PATCH's ``group``. ``{name}`` renames the step's group — every step of
+    it, flown ones too (a name is only a label), on any flight not yet over;
+    on a step with no group, one that can change becomes a stop of its own
+    under that name. ``null`` takes this one step (one that can change) out
+    of its group."""
+    if value is not None and not isinstance(value, dict):
+        raise PlanError("group is {name} or null", "step.group")
+    _not_final(flight)
+    i = _step_index(flight, sid)
+    step = flight["steps"][i]
+    if value is None:
+        _editable(flight)
+        _pending_index(flight, sid)
+        if step.get("group"):
+            name = step.pop("group")["name"]
+            _hist(flight, now, sid, "edited", "%s: out of %s" % (step["title"], name))
+            flight["updated"] = now
+        return
+    name = _text(value.get("name"), 80)
+    if not name:
+        raise FlightError("bad_group", 400, "a stop needs a name")
+    if not step.get("group"):
+        _editable(flight)
+        _pending_index(flight, sid)
+        step["group"] = _fresh_group(flight, name)
+        _hist(flight, now, sid, "edited", "%s: a stop of its own" % step["title"])
+        flight["updated"] = now
+        return
+    gid = step["group"]["id"]
+    if step["group"]["name"] == name:
+        return
+    for s in flight["steps"]:
+        if s.get("group") and s["group"]["id"] == gid:
+            s["group"]["name"] = name
+    _hist(flight, now, sid, "edited", "the stop is now %s" % name)
+    flight["updated"] = now
+
+
+def op_group(flight: dict, sids, name, now: Optional[float] = None) -> dict:
+    """Make the steps ``sids`` (side by side, each able to change) ONE new
+    stop named ``name``; returns the new ``group``. 409 ``in_progress`` for a
+    step that can't change, 400 ``bad_group`` when they are not consecutive
+    (or no name / no steps)."""
     ts = float(now if now is not None else time.time())
     _editable(flight)
-    i = _pending_index(flight, sid)
-    step = flight["steps"].pop(i)
-    flight["step_states"].pop(sid, None)
-    _hist(flight, ts, sid, "removed", step["title"])
+    if not isinstance(sids, list) or not sids:
+        raise FlightError("bad_group", 400, "steps is a list of step ids")
+    g = _fresh_group(flight, name)
+    idx = sorted({_pending_index(flight, str(sid)) for sid in sids})
+    if idx != list(range(idx[0], idx[-1] + 1)):
+        raise FlightError("bad_group", 400, "only stops side by side can make one stop")
+    for i in idx:
+        flight["steps"][i]["group"] = dict(g)
+    _hist(
+        flight,
+        ts,
+        flight["steps"][idx[0]]["id"],
+        "edited",
+        "%d stops grouped as %s" % (len(idx), g["name"]),
+    )
     flight["updated"] = ts
+    return g
+
+
+def op_ungroup(flight: dict, gid: str, now: Optional[float] = None) -> dict:
+    """Every step of group ``gid`` loses it (404 ``unknown_group``) — on any
+    flight not yet over, flown sub-steps too (a group is only a label)."""
+    ts = float(now if now is not None else time.time())
+    _not_final(flight)
+    mine = [s for s in flight["steps"] if s.get("group") and s["group"]["id"] == gid]
+    if not mine:
+        raise FlightError("unknown_group", 404, "no stop %s on this flight" % gid)
+    for s in mine:
+        name = s.pop("group")["name"]
+    _hist(flight, ts, mine[0]["id"], "edited", "%s taken apart" % name)
+    flight["updated"] = ts
+    return flight
+
+
+#: ``reason`` of a flight paused because its current stop was removed.
+STOP_REMOVED = "stop removed"
+
+
+def _remove_at(flight: dict, i: int, now: float) -> dict:
+    """Pop step ``i``: one ahead (or any on a grounded flight) just goes; a
+    flown one behind the cursor shifts the cursor down with it; the CURRENT
+    one leaves the flight ``paused`` (``stop removed``) with its cursor on the
+    step that followed — it sits right before it. Returns the removed step."""
+    step = flight["steps"].pop(i)
+    flight["step_states"].pop(step["id"], None)
+    note = step["title"]
+    if flight["state"] != GROUNDED and i < flight["cursor"]:
+        flight["cursor"] -= 1
+    elif flight["state"] != GROUNDED and i == flight["cursor"]:
+        flight["state"] = "paused"
+        flight["reason"] = STOP_REMOVED
+        note = "removed %s while it flew" % step["title"]
+    _hist(flight, now, step["id"], "removed", note)
+    flight["updated"] = now
+    return step
+
+
+def _keep_one(flight: dict, n: int) -> None:
+    if n >= len(flight["steps"]):
+        raise FlightError(
+            "last_step",
+            409,
+            "a flight keeps at least one stop — remove the flight instead",
+        )
+
+
+def op_remove_step(flight: dict, sid: str, now: Optional[float] = None) -> dict:
+    """Take a step out of a flight not yet over — any step (docs/flights.md
+    "Removing the stop that is flying", :func:`_remove_at`). The last one
+    left is 409 ``last_step``. The step's side effects (an armed lane, a
+    command) are the driver's to stop."""
+    ts = float(now if now is not None else time.time())
+    _not_final(flight)
+    i = _step_index(flight, sid)
+    _keep_one(flight, 1)
+    _remove_at(flight, i, ts)
+    return flight
+
+
+def op_remove_group(flight: dict, sid: str, now: Optional[float] = None) -> dict:
+    """``DELETE …/steps/{sid}?group=1``: every step of ``sid``'s group (just
+    ``sid`` when it has none), by :func:`op_remove_step`'s rules, last first
+    so the cursor lands right before what followed the group."""
+    ts = float(now if now is not None else time.time())
+    _not_final(flight)
+    i = _step_index(flight, sid)
+    gid = (flight["steps"][i].get("group") or {}).get("id")
+    idx = [
+        k
+        for k, s in enumerate(flight["steps"])
+        if k == i or (gid and (s.get("group") or {}).get("id") == gid)
+    ]
+    _keep_one(flight, len(idx))
+    for k in reversed(idx):
+        _remove_at(flight, k, ts)
     return flight
 
 
 def op_move_step(flight: dict, sid: str, at, now: Optional[float] = None) -> dict:
     """Move a step still ahead of the flight to index ``at`` of the final
     list (pop then insert, like ``list.insert``). ``at`` past the end is the
-    last place; at/before the current step is 409 ``in_progress``. Its
-    ``step_states`` record moves with it; the same index changes nothing."""
+    last place; at/before the current step is 409 ``in_progress`` (a grounded
+    flight has none). Its ``step_states`` record moves with it; the same
+    index changes nothing. Groups are left alone."""
     ts = float(now if now is not None else time.time())
     _editable(flight)
     if isinstance(at, bool) or not isinstance(at, int):
         raise PlanError("at is a step index", "at")
     i = _pending_index(flight, sid)
     steps = flight["steps"]
-    if at <= flight["cursor"]:
+    if at < _first_open(flight):
         raise FlightError(
             "in_progress", 409, "a step can only move after the current one"
         )
@@ -3014,6 +3295,144 @@ def op_move_step(flight: dict, sid: str, at, now: Optional[float] = None) -> dic
     _hist(flight, ts, sid, "moved", "%s, %d → %d" % (step["title"], i, j))
     flight["updated"] = ts
     return flight
+
+
+# --------------------------------------------------------------------------- #
+# Grounded flights: stops with no session yet
+# --------------------------------------------------------------------------- #
+def ground(
+    plan: Optional[dict] = None,
+    raw_steps=None,
+    name: str = "",
+    by: str = "user",
+    now: Optional[float] = None,
+) -> dict:
+    """Store a ``grounded`` flight (``POST /start {grounded: true}``): no
+    session, cursor 0, every step pending; the driver never touches it until
+    :func:`attach`. ``plan``'s steps come as ONE group (as the add route
+    makes them), then ``raw_steps`` validated like a plan's — grouped under
+    ``name`` when it is set. Steps are ``s1..sN``. ``plan_id`` is the plan's
+    (or ``adhoc``); ``plan_name`` is ``name``, else the plan's, else "Stops".
+    Raises :class:`PlanError` (``steps…``) and :class:`FlightError`
+    (``needs_steps`` 400)."""
+    ts = float(now if now is not None else time.time())
+    name = _text(name, 120)
+    steps: List[dict] = []
+    taken: set = set()
+    if plan is not None:
+        g = {
+            "id": _new_id("g_", taken),
+            "name": _text(plan.get("name") or "Stop", 80),
+            "plan_id": _text(plan.get("id"), 64),
+        }
+        taken.add(g["id"])
+        for s in copy.deepcopy(plan["steps"]):
+            steps.append(dict(s, group=dict(g)))
+    if raw_steps is not None:
+        if not isinstance(raw_steps, list):
+            raise PlanError("steps is a list", "steps")
+        stripped = [dict(s, id="") if isinstance(s, dict) else s for s in raw_steps]
+        given = normalize_steps(stripped, strict=True)
+        if name:
+            g = {"id": _new_id("g_", taken), "name": name[:80], "plan_id": ""}
+            for s in given:
+                s["group"] = dict(g)
+        steps += given
+    if not steps:
+        raise FlightError(
+            "needs_steps", 400, "a grounded flight needs plan_id or steps"
+        )
+    if len(steps) > MAX_STEPS:
+        raise PlanError("a flight has at most %d steps" % MAX_STEPS, "steps")
+    _renumber_after([], steps)
+    flight = _normalize_flight(
+        "pending",
+        {
+            "id": "pending",
+            "plan_id": (plan or {}).get("id") or ADHOC_PLAN_ID,
+            "plan_name": name or (plan or {}).get("name") or "Stops",
+            "steps": steps,
+            "subject": {"kind": "manual"},
+            "session": "",
+            "state": GROUNDED,
+            "cursor": 0,
+            "started": ts,
+            "updated": ts,
+            "by": by,
+        },
+    )
+    return _put_new(flight)
+
+
+def op_attach(
+    flight: dict,
+    title: str,
+    repo_root: str = "",
+    branch: str = "",
+    seeded: bool = False,
+    now: Optional[float] = None,
+) -> dict:
+    """Bind a grounded ``flight`` to session ``title`` and take off from its
+    cursor: ``running`` (history ``attached``), or ``paused`` at a halt point
+    on that step. ``seeded``: the session was just created with the first
+    (agent) step as its initial prompt, so that step is already running —
+    :func:`take_off`'s rule. 409 ``not_grounded`` on any other flight."""
+    ts = float(now if now is not None else time.time())
+    if flight["state"] != GROUNDED:
+        raise FlightError("not_grounded", 409, "this flight already has a session")
+    flight["session"] = str(title)
+    flight["repo_root"] = str(repo_root or "")
+    flight["branch"] = str(branch or "")
+    flight["state"] = "running"
+    flight["reason"] = ""
+    flight["started"] = ts
+    flight["updated"] = ts
+    flight["gone_since"] = 0.0
+    cur = _current(flight)
+    _hist(flight, ts, cur["id"] if cur else "", "attached", "attached to %s" % title)
+    if cur is None:
+        _finish(flight, "done", "", ts)
+    elif seeded and cur["kind"] == "agent":
+        ss = flight["step_states"][cur["id"]]
+        ss["state"] = "running"
+        ss["since"] = ts
+        ss["detail"] = {"seeded": True}
+        _hist(flight, ts, cur["id"], "started", "the session's first prompt")
+    else:
+        _hit_halt_point(flight, ts)
+    return flight
+
+
+def attach(
+    flight_id: str,
+    title: str,
+    repo_root: str = "",
+    branch: str = "",
+    seeded: bool = False,
+    now: Optional[float] = None,
+) -> dict:
+    """:func:`op_attach` under the store lock, refusing (404 ``unknown_flight``,
+    409 ``not_grounded``, 409 ``in_flight`` when ``title`` already has an
+    unfinished flight) against the store as it is."""
+    with _LOCK:
+        flights = _load_flights_locked()
+        f = flights.get(str(flight_id or ""))
+        if f is None:
+            raise FlightError("unknown_flight", 404, "no such flight")
+        if f["state"] != GROUNDED:
+            raise FlightError("not_grounded", 409, "this flight already has a session")
+        for g in flights.values():
+            if title and g["session"] == title and g["state"] in UNFINISHED:
+                raise FlightError(
+                    "in_flight",
+                    409,
+                    "%s is already on a flight (%s)" % (title, g["plan_name"]),
+                )
+        op_attach(f, title, repo_root, branch, seeded, now)
+        f = _normalize_flight(f["id"], f) or f
+        flights[f["id"]] = f
+        _save_flights_locked(flights)
+    return copy.deepcopy(f)
 
 
 def next_until(spec: str, now: float) -> float:
