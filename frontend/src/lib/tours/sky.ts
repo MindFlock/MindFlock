@@ -30,7 +30,7 @@ export const SKY_TOUR: TourDef = {
     {
       target: '[data-tour="sky-shelf"], [data-tour="view-sky"]',
       title: "Stops live on the shelf",
-      body: "Drag the Session chip onto the sky to start one, or a stop onto a line to add it there — dropped on empty sky, stops wait for a session. Right-click a saved stop to rename or schedule it.",
+      body: "Drag the Session chip onto the sky, or a stop onto a line — on empty sky, stops wait for a session.",
     },
   ],
 };
