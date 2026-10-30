@@ -4460,3 +4460,87 @@ route on a bare `FastAPI()` + the flights router, the gate regex and the
 gated app), `frontend/src/__tests__/flightTriggers.test.ts` (10).
 `test_flights_schedule.py` needed no change (`fire_flight`'s default subject
 and `by` are the schedule's).
+### As built: round 15 preview-shots
+
+**`preview`** (`flight_kinds/preview.py`, tests `test_flight_kind_preview.py`;
+outside · `remote` · robot, `needs_session`). Config `{command,
+timeout_minutes (20), stop_command}`; a strict plan refuses an empty
+`command` (`…config.command`), a lenient one keeps "" and `run` fails "the
+preview stop has no command". Title "Deploy a preview". `run`: the session's
+folder from `_session_obs` (none → fail "no worktree"), then `run_shell(…,
+keep=8000)` there with `MINDFLOCK_BRANCH` = the session's branch;
+`detail.command`. `observe` = `job_of`. The judge: no job this server run →
+`run` "starting the preview again (interrupted)"; running → wait "deploying
+the preview"; exit ≠ 0 → fail "the preview command exited N" ("did not
+finish" for -1) + the output's tail (≤ 2000 in all); exit 0 → `find_url`:
+the **last** `MINDFLOCK_PREVIEW_URL=<url>` line anywhere, else the last
+http(s) URL on the last non-empty line (so "Website draft URL: https://…"
+works; trailing `.,;:)]}>"'` dropped, ANSI stripped), validated with
+`urllib.parse` (http/https, a host, a sane port); none → fail "printed no
+URL" + tail. Done: `detail {url, exit, output (tail), receipt}`, receipt the
+host (`localhost:5173` keeps its port).
+
+`preview.latest_url(flight)` is the last done preview stop's `detail.url` in
+plan order ("" when none) — the rule `fill_prompt`'s `{preview}` should use.
+
+`preview.stop_all(flight) -> [{step, exit, output}]`: blocking, never
+raises; for every **done** preview stop with a `stop_command`, runs it with
+`/bin/sh -c` in the session's worktree (the cwd is left alone when it is
+gone), env `MINDFLOCK_PREVIEW_URL` / `MINDFLOCK_BRANCH` / `MINDFLOCK_FLIGHT`,
+120 s each; a non-zero exit goes to the error log. **For the integrator**
+(the driver is outside this fence): call `await
+asyncio.to_thread(preview.stop_all, flight)` once when a flight finishes
+(`done` / `failed`) and when it is cancelled or removed — nothing calls it
+yet, so `stop_command` is stored but never run until then.
+
+**`screenshot`** (`flight_kinds/screenshot.py`, tests
+`test_flight_kind_screenshot.py`; outside · no risk · robot, `needs_session`
+false). Config `{urls ("{preview}" when empty), widths ("1280, 390"),
+timeout_minutes (10), comment_pr (false)}`; title "Screenshots". **No
+playwright**: the browser's own headless mode. `find_browser()`:
+`$MINDFLOCK_CHROME` (an executable path, or a name on PATH; a bad one falls
+through), else `google-chrome`, `google-chrome-stable`, `chromium`,
+`chromium-browser` on PATH; none → fail "no browser: install google-chrome
+or chromium, or set MINDFLOCK_CHROME". `run`: `fill_urls` (`{preview}` =
+`latest_url`, then `fill_prompt` for the rest; one per line, lines that are
+not http(s) URLs once filled are dropped; none → fail "no URL to shoot"),
+`parse_widths` (every number, clamped 200..4000, deduped; [1280] when
+none), `plan_shots` (URL × width numbered from 1, ≤ 40), the store folder
+`<flights_dir()>/shots/<fid>/<sid>/` made and an earlier run's `N.png`
+cleared, then `run_shell` of `build_script`: a `mktemp -d` throwaway
+profile (removed on exit; an open Chrome of the owner's is never touched)
+and per shot `<chrome> --headless=new --disable-gpu --hide-scrollbars
+--no-first-run --no-default-browser-check --user-data-dir=… --window-size=W,900
+--screenshot=<dir>/N.png <url> || echo 'shot N failed'` (everything
+`shlex.quote`d; one failed URL does not stop the rest). `detail {pairs,
+browser}`. Verified once by hand with `/usr/bin/google-chrome` here: 1280×900
+and 390×900 PNGs.
+
+`observe` → `obs["screenshot"] = {job, shots, comment}`: once the job ended,
+`list_shots` (the non-empty `N.png` files in number order → `[{name, url:
+"/api/flights/<fid>/shots/<sid>/<name>", width, page}]`, width/page from
+`detail.pairs`). The judge: no job → `run` "taking the screenshots again
+(interrupted)"; running → wait; no shots → fail "no screenshots were taken"
++ the output's tail; else done, `detail {shots, output, comment?}`, receipt
+"N shots" ("1 shot"). Chrome's stderr noise (dbus, GPU) lands in the tail.
+
+The router (`Kind.router`, built only when FastAPI imports, so the CLI
+without the web extra still loads the kind): `GET
+/api/flights/{flight_id}/shots/{step_id}/{name}` → `FileResponse`
+`image/png`; ids must match `[A-Za-z0-9_-]{1,64}`, the name `^[0-9]+\.png$`,
+anything else (or a missing file) → 404 `not_found`. It sits behind the
+normal auth gate like every `/api` route.
+
+`comment_pr`: `github_pr` has no comment function, so `post_comment` uses
+its own `comment_pr(wt, number, body)` when one appears and otherwise the
+module's REST seam (`repo_ref` + `api_token` + `_request("POST",
+"/repos/<slug>/issues/<n>/comments")`). Text only: "Screenshots from
+MindFlock (N):" + "- N.png — <url> at <w>px" per shot (the PNGs are local,
+not uploaded). The outcome is `detail.comment`: "posted", "skipped: the
+session has no PR" / "no GitHub repo behind the session's origin" / "no
+GitHub token", or "failed: <GitHub's words>"; it never fails the stop. It is
+posted once per (flight, step, `since`) per server run (a memo, like
+review's), so a restart after posting but before the verdict posts again.
+
+Open: the verify checklist's deep link does not carry the preview URL yet
+(outside this fence); nothing in the frontend shows `detail.shots` yet.
