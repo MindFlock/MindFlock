@@ -10,13 +10,20 @@
  * resizable from its corner, ▣ folds it back into a box. A worker spawned
  * at one of the flight's stops is a BRANCH between that stop and the next
  * (docs/flights-branches.md) — it opens the same way, and is drawn only
- * there, never also below. ◧ cycles how much each box shows (compact →
- * normal → wide).
+ * there, never also below.
+ *
+ * The line's corner resizes its boxes (`boxW` × `boxH`, plane px of one stop
+ * box): the canvas draws the ◧ tier nearest that width (compact → normal →
+ * wide, what a box shows) and the line scales it uniformly to the width asked
+ * for (`boxScale`) — a transform inside a sizer, so the line still measures
+ * its drawn size, and `--sky-z` inside carries the scale so what counter-
+ * scales (a box's toolbar, a menu) stays screen-sized. ◧ and the ⋯'s sizes
+ * are presets of the same two numbers.
  *
  * The sky draws the roomy tier of boxes (`roomy`: bigger boxes, bigger type,
- * docs/flights-visibility.md), and folds the stops the flight has already
- * flown into one `flown` pill; pressing it (or the ⋯'s "Show every flown
- * stop") unfolds them on this line.
+ * docs/flights-visibility.md). Flown stops stay boxes; the ⋯'s "Fold flown
+ * stops" folds them into one `flown` pill on this line, and pressing the pill
+ * unfolds them.
  *
  * The host (Sky.tsx) places the line at `layout.x/y`, drags it by the title
  * bar (`onDragStart`), persists `layout` (`onLayout`) and gives it room from
@@ -26,7 +33,9 @@
 
 import { useEffect, useMemo, useRef, useState, type JSX, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { setView, showInSky } from "../../lib/viewMode";
-import { lodFor, nearLines } from "../../lib/skyLayout";
+import { BOX_PRESETS, boxScale, boxTier, clampBox, lineBox, lodFor, nearLines } from "../../lib/skyLayout";
+import { windowName } from "../../lib/windowName";
+import { useUi } from "../../state/store";
 import type { Instance } from "../../api/types";
 import { useFlightKinds, useFlights } from "../../state/queries";
 import { closeSession, selectSession } from "../../lib/sessionActions";
@@ -50,6 +59,10 @@ export interface SkyLineLayout {
   paneW?: number;
   paneH?: number;
   pinned?: boolean;
+  /** The boxes' size (plane px of one stop box), from the corner or a ◧
+   * preset; unset, the `size` preset's numbers. */
+  boxW?: number;
+  boxH?: number;
 }
 
 export interface SkyLineProps {
@@ -82,6 +95,22 @@ const SIZE_ITEM: Record<BoxSizeName, string> = { compact: "Compact boxes", norma
 
 /** ◧: compact → normal → wide → compact. */
 export const nextSize = (s: BoxSizeName): BoxSizeName => SIZES[(SIZES.indexOf(s) + 1) % SIZES.length];
+
+/** A ◧ preset as a layout patch: its name and its two numbers. */
+export const presetPatch = (s: BoxSizeName): Partial<SkyLineLayout> => ({ size: s, boxW: BOX_PRESETS[s].w, boxH: BOX_PRESETS[s].h });
+
+/** The corner handle's drag, in plane px: the line's drawn canvas (`cw` ×
+ * `ch`, at box width `bw`) follows the pointer's travel (`dx`, `dy`) along the
+ * axis it moved most, and the box size follows the canvas. The height is the
+ * tier's, scaled the same (the scale is uniform). */
+export function dragBox(start: { cw: number; ch: number; bw: number }, dx: number, dy: number): { w: number; h: number } {
+  const rw = start.cw > 0 ? (start.cw + dx) / start.cw : 1;
+  const rh = start.ch > 0 ? (start.ch + dy) / start.ch : 1;
+  const r = Math.abs(rw - 1) >= Math.abs(rh - 1) ? rw : rh;
+  const w = clampBox(start.bw * r, 0).w;
+  const { size, k } = boxScale(w);
+  return clampBox(w, BOX_PRESETS[size].h * k);
+}
 
 /** A card's pane size, never under the floor. */
 export function clampPane(w: number, h: number): { w: number; h: number } {
@@ -163,8 +192,8 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }: CardProps) {
   return (
     <div className="skl-card sky-own-scroll" data-no-drag style={{ width: cur.w, height: cur.h + CARD_HEAD_H }}>
       <div className="skl-card-head">
-        <span className="skl-card-name">{inst.title}</span>
-        <button type="button" className="skl-card-fold" aria-label={"Fold " + inst.title + " back into a box"} title="Back to a box" onClick={onClose}>
+        <span className="skl-card-name">{windowName(inst.title)}</span>
+        <button type="button" className="skl-card-fold" aria-label={"Fold " + windowName(inst.title) + " back into a box"} title="Back to a box" onClick={onClose}>
           ▣
         </button>
       </div>
@@ -175,7 +204,7 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }: CardProps) {
       <span
         className="skl-resize"
         role="separator"
-        aria-label={"Resize " + inst.title + "'s card"}
+        aria-label={"Resize " + windowName(inst.title) + "'s card"}
         title="Drag to resize"
         onPointerDown={down}
         onPointerMove={move}
@@ -191,12 +220,18 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   const kinds = useFlightKinds().data;
   const src: LineSource = useMemo(() => ({ rows: p.rows, flights, kinds: kinds || [], plans: p.plans }), [p.rows, flights, kinds, p.plans]);
   const line = useSessionLine(p.title, src, { family: true, onSession: (t) => selectSession(t) });
-  // What has flown: folded into one pill until this line unfolds it.
-  const [expandFlown, setExpandFlown] = useState(false);
-  const folds = flownCount(line.diagram) > 0;
+  // A rename redraws the line (its name is read through windowName).
+  useUi((s) => s.aliases[p.title]);
+  const name = windowName(p.title);
+  // What has flown stays as boxes until this line folds it into one pill.
+  // Both options are passed explicitly, so the line reads the same whatever
+  // the diagram's own default is (`expandFlown` = not folded).
+  const [foldFlown, setFoldFlown] = useState(false);
+  const folded = useMemo(() => sessionDiagram(p.rows, p.title, { flights, kinds, family: true, expandFlown: false }), [p.rows, p.title, flights, kinds]);
+  const folds = flownCount(folded) > 0;
   const full = useMemo(
-    () => (expandFlown ? sessionDiagram(p.rows, p.title, { flights, kinds, family: true, expandFlown: true }) : line.diagram),
-    [expandFlown, line.diagram, p.rows, p.title, flights, kinds]
+    () => (foldFlown ? folded : sessionDiagram(p.rows, p.title, { flights, kinds, family: true, expandFlown: true })),
+    [foldFlown, folded, p.rows, p.title, flights, kinds]
   );
   const shown = flownCanvas(full, line.canvas);
   // Workers' open cards, by the worker's title (their pane sizes with them).
@@ -204,10 +239,36 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef(p.onMeasure);
   measureRef.current = p.onMeasure;
-  const size: BoxSizeName = p.layout.size || "normal";
+  // The boxes' size: the corner's drag while it lasts, else the layout's.
+  const [liveBox, setLiveBox] = useState<{ w: number; h: number } | null>(null);
+  const box = liveBox || lineBox(p.layout);
+  // The tier the canvas draws and the uniform scale to the size asked for.
+  const { size, k } = boxScale(box.w);
+  const scaled = Math.abs(k - 1) > 0.001;
+  const z = p.zoom || 1;
   // What the boxes show at this zoom (far / mid / near); their size never
   // changes with it — only what is drawn inside and the type on screen.
   const lod = lodFor(p.zoom || 1);
+  // The canvas's own size (layout px, before the scale) sizes the box that
+  // holds it, so the line measures what it draws.
+  const innerRef = useRef<HTMLDivElement>(null);
+  const sizerRef = useRef<HTMLDivElement>(null);
+  const [inner, setInner] = useState<{ w: number; h: number } | null>(null);
+  // The canvas (and so the box observed) exists only while the session does.
+  const hasRow = !!line.row;
+  useEffect(() => {
+    const el = innerRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const read = () => {
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      setInner((c) => (c && c.w === w && c.h === h ? c : { w, h }));
+    };
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    read();
+    return () => ro.disconnect();
+  }, [hasRow]);
 
   // The host lays the lines out from what each one measures (plane px: the
   // zoom is a transform, offset sizes don't see it).
@@ -241,9 +302,20 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
 
   const card = (inst: Instance, w: number, h: number, onSize: (w: number, h: number) => void, onClose: () => void): { body: ReactNode; size: { w: number; h: number } } => {
     const s = clampPane(w, h);
+    const body = <PaneCard inst={inst} w={s.w} h={s.h} zoom={p.zoom} onSize={onSize} onClose={onClose} />;
+    if (!scaled) return { body, size: { w: s.w, h: s.h + CARD_HEAD_H } };
+    // A card keeps its own size on a scaled line: it asks the canvas for its
+    // room over the scale and draws scaled back (the zoom it sees is the
+    // sky's again).
+    const cw = s.w / k;
+    const ch = (s.h + CARD_HEAD_H) / k;
     return {
-      body: <PaneCard inst={inst} w={s.w} h={s.h} zoom={p.zoom} onSize={onSize} onClose={onClose} />,
-      size: { w: s.w, h: s.h + CARD_HEAD_H },
+      body: (
+        <div className="skl-card-unscale" style={{ width: cw, height: ch }}>
+          <div style={{ transform: `scale(${1 / k})`, transformOrigin: "0 0", "--sky-z": z } as React.CSSProperties}>{body}</div>
+        </div>
+      ),
+      size: { w: cw, h: ch },
     };
   };
   const foldKid = (t: string) => setKids((k) => Object.fromEntries(Object.entries(k).filter(([x]) => x !== t)));
@@ -258,7 +330,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
     return null;
   };
   const onOpen = (n: DiagramNode) => {
-    if (n.kind === "flown") setExpandFlown((x) => !x);
+    if (n.kind === "flown") setFoldFlown((x) => !x);
     else if (n.kind === "session") p.onLayout({ open: !p.layout.open });
     else if ((n.kind === "child" || n.kind === "branch") && n.session) {
       const t = n.session;
@@ -276,6 +348,34 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
     if (e.button !== 0) return;
     if ((e.target as Element).closest("button, summary, a, input, [data-no-drag]")) return;
     p.onDragStart?.(e);
+  };
+
+  // The corner handle: pointer travel over the zoom = plane px, drawn live,
+  // persisted once on release.
+  const grab = useRef<{ id: number; sx: number; sy: number; cw: number; ch: number; bw: number } | null>(null);
+  const resizeDown = (e: ReactPointerEvent<HTMLSpanElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const el = sizerRef.current;
+    grab.current = { id: e.pointerId, sx: e.clientX, sy: e.clientY, cw: el?.offsetWidth || 0, ch: el?.offsetHeight || 0, bw: box.w };
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* a synthetic event has no capture */
+    }
+  };
+  const resizeMove = (e: ReactPointerEvent<HTMLSpanElement>) => {
+    const g = grab.current;
+    if (!g || g.id !== e.pointerId) return;
+    setLiveBox(dragBox(g, (e.clientX - g.sx) / z, (e.clientY - g.sy) / z));
+  };
+  const resizeUp = (e: ReactPointerEvent<HTMLSpanElement>) => {
+    const g = grab.current;
+    if (!g || g.id !== e.pointerId) return;
+    grab.current = null;
+    if (liveBox) p.onLayout({ size: boxTier(liveBox.w), boxW: liveBox.w, boxH: liveBox.h });
+    setLiveBox(null);
   };
 
   // The ⋯, in groups (a group's first item draws the rule above it): the
@@ -299,15 +399,15 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
       label: SIZE_ITEM[s],
       title: "Boxes: " + SIZE_WORD[s],
       className: "skl-mi-check" + (s === size ? " skl-mi-on" : "") + (i === 0 ? " skl-mi-group" : ""),
-      onSelect: () => p.onLayout({ size: s }),
+      onSelect: () => p.onLayout(presetPatch(s)),
     })),
     ...(folds
-      ? [{ key: "flown", label: expandFlown ? "Fold the flown stops" : "Show every flown stop", title: "The stops this flight has already flown: one pill, or each on its own", onSelect: () => setExpandFlown((x) => !x) }]
+      ? [{ key: "flown", label: foldFlown ? "Show flown stops" : "Fold flown stops", title: "The stops this flight has already flown: each on its own, or one pill", onSelect: () => setFoldFlown((x) => !x) }]
       : []),
     p.layout.pinned
       ? { key: "tidy", label: "Tidy this line", title: "Forget where you put it: back to its place in the rows", onSelect: () => p.onLayout({ pinned: false }) }
       : { key: "pin", label: "Pin here", title: "Keep this line where it is when the others move", onSelect: () => p.onLayout({ x: p.layout.x, y: p.layout.y, pinned: true }) },
-    { key: "flyway", label: "Fly a flyway…", title: "A whole flyway, flown on this line", className: "skl-mi-group", onSelect: () => line.togglePalette(true) },
+    { key: "flyway", label: "Add a stop…", title: "A saved stop, tacked on here", className: "skl-mi-group", onSelect: () => line.togglePalette(true) },
     { key: "tack", label: "Tack on a stop", title: "One stop, at the end of the line", onSelect: () => line.togglePalette(true) },
     { key: "close", label: "Close session", danger: true, className: "skl-mi-group", title: "Stops the agent and moves it to Recently closed", onSelect: () => void closeSession(p.title) },
   ];
@@ -330,14 +430,14 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
       // level of detail a box shows): `--sky-z` on every line.
       style={{ "--sky-z": p.zoom || 1, "--sky-lines": nearLines(p.zoom || 1) } as React.CSSProperties}
       role="group"
-      aria-label={p.title + "'s line"}
+      aria-label={name + "'s line"}
       onPointerDownCapture={() => {
         if (!p.focused) p.onFocus();
       }}
     >
       <div className="skl-bar" title="Drag to move this line" onPointerDown={onBarDown}>
         <Bird size={16} />
-        <span className="skl-name">{p.title}</span>
+        <span className="skl-name">{name}</span>
         {row && (
           <span className={"fl-box-chip skl-chip tone-" + ss.tone} title={ss.hint}>
             {ss.label}
@@ -364,7 +464,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
           data-size={size}
           aria-label={"Box size: " + size + " (next: " + nextSize(size) + ")"}
           title={"Boxes: " + SIZE_WORD[size] + " — press for " + nextSize(size)}
-          onClick={() => p.onLayout({ size: nextSize(size) })}
+          onClick={() => p.onLayout(presetPatch(nextSize(size)))}
         >
           <span className="skl-size-glyph" aria-hidden="true">
             ◧
@@ -380,26 +480,32 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
           </span>
         </button>
         <span className="skl-menu" data-no-drag>
-          <OverflowMenu label={"Actions for " + p.title} items={items} />
+          <OverflowMenu label={"Actions for " + name} items={items} />
         </span>
       </div>
       {line.cancel.node}
       {row ? (
-        <FlywayCanvas
-          diagram={shown.diagram}
-          label={"What " + p.title + " is doing and will do"}
-          vertical={false}
-          bird={birdPerch(full)}
-          className="sky-canvas skl-canvas"
-          size={size}
-          detailOf={detailOf}
-          dropLabel={p.dropFlyway ? "Drop to fly " + p.dropFlyway.name : null}
-          openBox={openBox}
-          lod={lod}
-          {...shown.canvas}
-          onOpen={onOpen}
-          roomy
-        />
+        // The sizer holds the scaled canvas at its drawn size; inside, the
+        // canvas at its tier's size, scaled, with `--sky-z` times the scale.
+        <div ref={sizerRef} className="skl-scale" style={scaled && inner ? { width: inner.w * k, height: inner.h * k } : undefined}>
+          <div ref={innerRef} className="skl-scale-in" style={scaled ? ({ transform: `scale(${k})`, "--sky-z": z * k } as React.CSSProperties) : undefined}>
+            <FlywayCanvas
+              diagram={shown.diagram}
+              label={"What " + name + " is doing and will do"}
+              vertical={false}
+              bird={birdPerch(full)}
+              className="sky-canvas skl-canvas"
+              size={size}
+              detailOf={detailOf}
+              dropLabel={p.dropFlyway ? "Drop to fly " + p.dropFlyway.name : null}
+              openBox={openBox}
+              lod={lod}
+              {...shown.canvas}
+              onOpen={onOpen}
+              roomy
+            />
+          </div>
+        </div>
       ) : (
         <p className="skl-gone muted">This session isn't running any more.</p>
       )}
@@ -408,6 +514,19 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
           {line.palette}
           {line.inspector}
         </div>
+      )}
+      {row && (
+        <span
+          className="skl-box-resize"
+          role="separator"
+          data-no-drag
+          aria-label={"Resize " + name + "'s boxes"}
+          title={"Drag to resize the boxes (" + Math.round(box.w) + " × " + Math.round(box.h) + ")"}
+          onPointerDown={resizeDown}
+          onPointerMove={resizeMove}
+          onPointerUp={resizeUp}
+          onPointerCancel={resizeUp}
+        />
       )}
     </div>
   );

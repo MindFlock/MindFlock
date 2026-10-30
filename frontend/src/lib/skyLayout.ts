@@ -226,8 +226,11 @@ export const skyDrawerOpen = (pref: string | null | undefined): boolean => pref 
 
 // --- The layout store (per device) ----------------------------------------------
 
-/** One line's layout: where it sits on the plane, how big its box is drawn
- * (`size` cycles compact → normal → wide, `cycleSize`), whether its session
+/** One line's layout: where it sits on the plane, how big its boxes are drawn
+ * (`boxW` × `boxH`, plane px of one stop box, set by the line's corner handle
+ * or a ◧ preset; `size` names the preset — compact → normal → wide,
+ * `cycleSize` — and alone, in an older layout, stands for its numbers),
+ * whether its session
  * box is opened into the session's pane (and that pane's size), and whether
  * the owner put it there by hand (`pinned`: Tidy forgets it). The shape
  * SkyLine (components/flights/SkyLine.tsx) takes as its `layout`. */
@@ -239,6 +242,8 @@ export interface SkyLineLayout {
   paneW?: number;
   paneH?: number;
   pinned?: boolean;
+  boxW?: number;
+  boxH?: number;
 }
 
 /** What a flyway chip on the sky's shelf carries while dragged (its
@@ -253,6 +258,51 @@ export const NEW_SESSION_MIME = "application/x-mindflock-new-session";
 export type SkyLineSize = SkyLineLayout["size"];
 export const SKY_SIZES: readonly SkyLineSize[] = ["compact", "normal", "wide"];
 export const cycleSize = (s: SkyLineSize | undefined): SkyLineSize => SKY_SIZES[(SKY_SIZES.indexOf(s || "normal") + 1) % SKY_SIZES.length];
+
+// --- Box sizes (the corner handle and the ◧ presets) -------------------------------
+
+/** One stop box's size on a line, in plane px: the range the corner handle
+ * keeps to. */
+export const BOX_W_MIN = 140;
+export const BOX_W_MAX = 420;
+export const BOX_H_MIN = 60;
+export const BOX_H_MAX = 220;
+
+/** What each ◧ preset sets: the sky's roomy tier of the canvas's sizes. */
+export const BOX_PRESETS: Readonly<Record<SkyLineSize, { w: number; h: number }>> = {
+  compact: { w: 150, h: 64 },
+  normal: { w: 236, h: 100 },
+  wide: { w: 330, h: 120 },
+};
+
+const clampTo = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Math.round(v)));
+
+/** A box size inside the range. */
+export const clampBox = (w: number, h: number): { w: number; h: number } => ({
+  w: clampTo(w, BOX_W_MIN, BOX_W_MAX),
+  h: clampTo(h, BOX_H_MIN, BOX_H_MAX),
+});
+
+/** A line's box size: its own `boxW` × `boxH`, else its preset's numbers. */
+export function lineBox(l: { size?: SkyLineSize; boxW?: number; boxH?: number } | undefined): { w: number; h: number } {
+  const p = BOX_PRESETS[l?.size || "normal"] || BOX_PRESETS.normal;
+  return clampBox(Number.isFinite(l?.boxW) ? l!.boxW! : p.w, Number.isFinite(l?.boxH) ? l!.boxH! : p.h);
+}
+
+/** The preset a box width is nearest to: the tier the canvas draws (what a box
+ * shows — compact the title alone, wide the detail line), before the line
+ * scales it to the width asked for. */
+export function boxTier(w: number): SkyLineSize {
+  const { compact, normal, wide } = BOX_PRESETS;
+  return w < (compact.w + normal.w) / 2 ? "compact" : w < (normal.w + wide.w) / 2 ? "normal" : "wide";
+}
+
+/** How a line draws boxes `w` wide: the canvas's `size` tier, scaled
+ * uniformly by `k` (w over that tier's width) — 1 at every preset. */
+export function boxScale(w: number): { size: SkyLineSize; k: number } {
+  const size = boxTier(w);
+  return { size, k: w / BOX_PRESETS[size].w };
+}
 
 /** What a device remembers per line: only what differs from "auto-placed,
  * normal, closed" — so a line nobody touched has no entry. */
@@ -313,6 +363,16 @@ function cleanLine(v: unknown): StoredLine | null {
   if (SKY_SIZES.includes(p.size as SkyLineSize) && p.size !== "normal") out.size = p.size as SkyLineSize;
   if (p.open === true) out.open = true;
   for (const k of ["paneW", "paneH"] as const) if (Number.isFinite(p[k]) && (p[k] as number) > 0) out[k] = Math.round(p[k] as number);
+  // The boxes' own size, clamped — both numbers or neither, and neither when
+  // they are just the preset's.
+  if (Number.isFinite(p.boxW) || Number.isFinite(p.boxH)) {
+    const b = lineBox({ size: out.size, boxW: p.boxW as number | undefined, boxH: p.boxH as number | undefined });
+    const preset = BOX_PRESETS[out.size || "normal"];
+    if (b.w !== preset.w || b.h !== preset.h) {
+      out.boxW = b.w;
+      out.boxH = b.h;
+    }
+  }
   return Object.keys(out).length ? out : null;
 }
 
@@ -398,15 +458,31 @@ export function lineLayout(stored: StoredLine | undefined, at: Pos): SkyLineLayo
     paneW: stored?.paneW,
     paneH: stored?.paneH,
     pinned: !!stored?.pinned,
+    boxW: stored?.boxW,
+    boxH: stored?.boxH,
   };
 }
 
-/** The room a line needs before it has been measured: its drawn size scaled
- * by its `size`, and an opened box's pane below it. */
+/** The line's title bar (plane px): the part of a line its boxes' size leaves
+ * alone. */
+const LINE_BAR_H = 42;
+
+/** The room a line needs before it has been measured: its drawn size (at the
+ * normal boxes) scaled by its boxes' size — `boxW` / `boxH` when set, else the
+ * old factors of its `size` — and an opened box's pane below it. */
 export function estimateLine(base: { w: number; h: number }, stored: StoredLine | undefined): { w: number; h: number } {
-  const k = stored?.size === "compact" ? 0.75 : stored?.size === "wide" ? 1.4 : 1;
-  let w = Math.round(base.w * k);
-  let h = Math.round(base.h * (stored?.size === "compact" ? 0.85 : 1));
+  let w: number;
+  let h: number;
+  if (Number.isFinite(stored?.boxW) || Number.isFinite(stored?.boxH)) {
+    const b = lineBox(stored);
+    const n = BOX_PRESETS.normal;
+    w = Math.round(base.w * (b.w / n.w));
+    h = Math.round(Math.min(base.h, LINE_BAR_H) + Math.max(0, base.h - LINE_BAR_H) * (b.h / n.h));
+  } else {
+    const k = stored?.size === "compact" ? 0.75 : stored?.size === "wide" ? 1.4 : 1;
+    w = Math.round(base.w * k);
+    h = Math.round(base.h * (stored?.size === "compact" ? 0.85 : 1));
+  }
   if (stored?.open) {
     w = Math.max(w, (stored.paneW || PANE_W) + 24);
     h += (stored.paneH || PANE_H) + 12;

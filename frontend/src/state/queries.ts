@@ -78,6 +78,7 @@ export interface EventEnvelope {
 }
 
 export function useInstances() {
+  useEffect(bridgeSessionSetEvents, []);
   return useQuery({
     queryKey: ["instances"],
     queryFn: async () => {
@@ -85,7 +86,9 @@ export function useInstances() {
       // draw; nothing else (the grid, the pickers, the bell) ever sees them.
       const list = normalizeFlightRows(splitLockedRows(await api<Instance[]>("/api/instances")));
       window.mindflock?.__setSessions?.(list);
-      return list;
+      // A session being made is listed only once its snapshot catches up: its
+      // optimistic row waits in the cache until then (`mergePending`).
+      return mergePending(list, queryClient.getQueryData<Instance[]>(["instances"]), Date.now());
     },
     refetchInterval: pollInterval,
     refetchIntervalInBackground: true,
@@ -415,6 +418,152 @@ export function refreshAuthProfiles() {
 /** Imperative refresh after any action that changes the session set. */
 export function refreshInstances() {
   return queryClient.invalidateQueries({ queryKey: ["instances"] });
+}
+
+/* --------------------------------------------------------------------------
+ * New boxes at once (docs/flights.md "As built: round 11 line").
+ *
+ * GET /api/instances serves the server's tick snapshot, so a session made a
+ * moment ago is missing from it for up to a tick or two. An optimistic row
+ * (`pending_create`, from `addPendingSession` or a `session.created` event)
+ * stands in for it — in the grid, the rail and the Sky alike — until the
+ * snapshot lists it, under its own title or one the server numbered from it,
+ * or `PENDING_TTL_MS` passes, or `session.create_failed` names it.
+ * ------------------------------------------------------------------------ */
+
+/** How long an optimistic row waits for the server to list its session. */
+export const PENDING_TTL_MS = 20_000;
+
+/** An optimistic row's client-only fields. `pending_base` is the title it was
+ * numbered from (`foo` for a guess `foo-2`) while the server's own pick is
+ * unknown; it goes once the real title is. */
+export interface PendingFields {
+  pending_create?: boolean;
+  pending_at?: number;
+  pending_base?: string;
+}
+
+const pend = (r: Instance) => r as Instance & PendingFields;
+export const isPendingRow = (r: Instance): boolean => pend(r).pending_create === true;
+
+/** `t` is `base` or one of the server's numberings of it (`base-2`, …). */
+export function numberedFrom(t: string, base: string): boolean {
+  return t === base || (t.startsWith(base + "-") && /^\d+$/.test(t.slice(base.length + 1)));
+}
+
+/** The optimistic rows the cache holds that `fetched` does not list yet, kept
+ * after the fetched rows (where `addPendingSession` put them). A row goes once
+ * the fetch lists its title, or — while its real title is unknown — a title
+ * new in this fetch numbered from its base (each new title claims one row); or
+ * once it is older than `ttl`. Nothing pending: `fetched`, as is. */
+export function mergePending(fetched: Instance[], cached: readonly Instance[] | undefined, now: number, ttl = PENDING_TTL_MS): Instance[] {
+  const waiting = (cached || []).filter(isPendingRow);
+  if (!waiting.length) return fetched;
+  const listed = new Set(fetched.map((r) => r.title));
+  const known = new Set((cached || []).filter((r) => !isPendingRow(r)).map((r) => r.title));
+  const fresh = fetched.map((r) => r.title).filter((t) => !known.has(t) && !waiting.some((w) => w.title === t));
+  const claimed = new Set<string>();
+  const keep = waiting.filter((r) => {
+    if (listed.has(r.title)) return false;
+    const at = pend(r).pending_at;
+    if (typeof at !== "number" || now - at > ttl) return false;
+    const base = pend(r).pending_base;
+    const hit = base ? fresh.find((t) => !claimed.has(t) && numberedFrom(t, base)) : undefined;
+    if (hit) {
+      claimed.add(hit);
+      return false;
+    }
+    return true;
+  });
+  return keep.length ? [...fetched, ...keep] : fetched;
+}
+
+/** The server named a session it made (`session.created`). Already a row:
+ * unchanged (a guess that was right only forgets its base). An optimistic row still waiting for its real title, numbered
+ * from the same base: that row takes the title (one box, not two). Else a new
+ * optimistic row, so a session made anywhere — a flight, an agent, another
+ * browser — shows at once. */
+export function notePendingCreated(rows: readonly Instance[], title: string, data: Record<string, unknown>, now: number): Instance[] {
+  if (!title) return rows as Instance[];
+  const same = rows.findIndex((r) => r.title === title);
+  if (same >= 0) {
+    // The guess was right: its title is known now, so its base is spent.
+    if (!isPendingRow(rows[same]) || !pend(rows[same]).pending_base) return rows as Instance[];
+    const next = rows.slice();
+    next[same] = { ...rows[same], pending_base: undefined } as Instance;
+    return next;
+  }
+  const i = rows.findIndex((r) => isPendingRow(r) && !!pend(r).pending_base && numberedFrom(title, pend(r).pending_base!));
+  if (i >= 0) {
+    const next = rows.slice();
+    next[i] = { ...rows[i], title, pending_base: undefined, pending_at: now } as Instance;
+    return next;
+  }
+  const row: Record<string, unknown> = { title, status: "loading", pending_create: true, pending_at: now };
+  if (typeof data.parent === "string" && data.parent) row.parent = data.parent;
+  if (typeof data.program === "string" && data.program) row.program = data.program;
+  return [...rows, row as unknown as Instance];
+}
+
+/** A create answered with its row: the optimistic row for `guess` (or the one
+ * an event already moved to the real title) becomes that row — still waiting
+ * for the snapshot, so a poll that misses it keeps it. When the snapshot
+ * already lists the real title, the guess just goes. */
+export function landPendingRow(rows: readonly Instance[], guess: string, real: Instance, now: number): Instance[] {
+  const t = real.title;
+  if (!t) return rows as Instance[];
+  const listed = rows.some((r) => r.title === t && !isPendingRow(r));
+  const out: Instance[] = [];
+  let placed = listed;
+  for (const r of rows) {
+    if (!isPendingRow(r) || (r.title !== guess && r.title !== t)) {
+      out.push(r);
+      continue;
+    }
+    if (placed) continue;
+    out.push({ ...r, ...real, pending_create: true, pending_at: now, pending_base: undefined } as Instance);
+    placed = true;
+  }
+  return placed ? out : [...out, { ...real, pending_create: true, pending_at: now } as Instance];
+}
+
+/** The optimistic row for `title` goes (`session.create_failed`). */
+export function dropPendingRow(rows: readonly Instance[], title: string): Instance[] {
+  return rows.some((r) => isPendingRow(r) && r.title === title) ? rows.filter((r) => !(isPendingRow(r) && r.title === title)) : (rows as Instance[]);
+}
+
+let instancesTimer: ReturnType<typeof setTimeout> | null = null;
+/** One refetch for a burst of session-set events. */
+function refreshInstancesSoon() {
+  if (instancesTimer) clearTimeout(instancesTimer);
+  instancesTimer = setTimeout(() => {
+    instancesTimer = null;
+    void refreshInstances();
+  }, 150);
+}
+
+let sessionSetBridged = false;
+/** The events that change the session set (backend/web/core/events.py): made,
+ * removed, renamed, or a make that failed after its 202. Installed once per
+ * page; replays (history after a reconnect) only refetch. */
+export function bridgeSessionSetEvents() {
+  const ev = window.mindflock?.events;
+  if (sessionSetBridged || !ev) return; // events.js may not have loaded yet
+  sessionSetBridged = true;
+  const replay = (env: EventEnvelope) => typeof ev.isReplay === "function" && ev.isReplay(env);
+  ev.subscribe("session.created", (env) => {
+    const title = String(env?.session || "");
+    // A verify run is a hidden helper: the event can't say so, the row will.
+    if (title && !replay(env) && !isVerifySession(title))
+      queryClient.setQueryData<Instance[]>(["instances"], (rows) => (rows ? notePendingCreated(rows, title, env.data || {}, Date.now()) : rows));
+    refreshInstancesSoon();
+  });
+  ev.subscribe("session.create_failed", (env) => {
+    const title = String(env?.session || "");
+    if (title) queryClient.setQueryData<Instance[]>(["instances"], (rows) => (rows ? dropPendingRow(rows, title) : rows));
+    refreshInstancesSoon();
+  });
+  for (const name of ["session.deleted", "session.renamed"]) ev.subscribe(name, refreshInstancesSoon);
 }
 
 /** After anything that changes the recently-closed store: a reopen, a forget, a

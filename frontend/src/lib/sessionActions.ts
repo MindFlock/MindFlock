@@ -8,7 +8,7 @@ import { ApiError, api, instApi } from "../api/client";
 import type { Caps, Config, Instance } from "../api/types";
 import { computeVisibleSlots } from "../components/grid/layout";
 import { orderWithAfter } from "../components/sidebar/ordering";
-import { patchInstance, queryClient, refreshInstances, refreshRecentlyClosed } from "../state/queries";
+import { landPendingRow, patchInstance, queryClient, refreshInstances, refreshRecentlyClosed } from "../state/queries";
 import { freshStage } from "./stageWatch";
 import { displayName, effectiveViewMode, setSessionSelector, useUi, windowKey } from "../state/store";
 import { toast } from "./toast";
@@ -384,16 +384,20 @@ export async function undoLastClose() {
       });
       return;
     }
+    // Its box at once, as a create's (the server may number the title).
+    const guess = addPendingSession(ent.title || "session", "", true);
     try {
       const inst = await api<Instance>(
         "/api/recently-closed/" + encodeURIComponent(ent.id) + "/reopen",
         { method: "POST" }
       );
+      landPendingSession(guess, inst);
       void refreshRecentlyClosed();
       await refreshInstances();
       if (inst?.title) selectSession(inst.title);
       toast("Reopened " + (ent.title ? displayName(ent.title) : "session"));
     } catch (err) {
+      failPendingSession(guess);
       errorPop("Reopen failed", errMsg(err));
     }
   } finally {
@@ -451,9 +455,12 @@ export function clearStaleAlias(title: string) {
   if (title && ui.aliases[title]) ui.setAlias(title, "");
 }
 
-/** Optimistic "provisioning" row for create/duplicate (mirrors the server's
- * _unique_title numbering; a mismatch resolves on the next poll). */
-export function addPendingSession(bare: string, device = ""): string {
+/** Optimistic "provisioning" row for create/duplicate/reopen (mirrors the
+ * server's _unique_title numbering). It waits in the cache until the instances
+ * snapshot lists the session — under the guess or a title the server numbered
+ * from `bare` — for up to `PENDING_TTL_MS` (state/queries.ts `mergePending`);
+ * `landPendingSession` swaps in the create's answer. */
+export function addPendingSession(bare: string, device = "", keepAlias = false): string {
   // A session being started on another device waits in THAT device's group,
   // under the namespaced title it will arrive with.
   const base = device ? device + "::" + bare : bare;
@@ -464,15 +471,25 @@ export function addPendingSession(bare: string, device = ""): string {
     while (taken.has(base + "-" + i)) i++;
     title = base + "-" + i;
   }
-  clearStaleAlias(title);
+  // A reopen comes back with the name it was given (see clearStaleAlias).
+  if (!keepAlias) clearStaleAlias(title);
   const pending = {
     title,
     status: "loading",
     pending_create: true,
+    pending_at: Date.now(),
+    pending_base: base,
     ...(device ? { device, display_title: title.slice(device.length + 2) } : {}),
   } as unknown as Instance;
   queryClient.setQueryData<Instance[]>(["instances"], (prev) => [...(prev || []), pending]);
   return title;
+}
+
+/** The create answered: its row replaces the optimistic one for `guess` (one
+ * box, under the real title), still waiting for the snapshot to list it. */
+export function landPendingSession(guess: string, inst: Instance | null | undefined) {
+  if (!inst?.title) return;
+  queryClient.setQueryData<Instance[]>(["instances"], (prev) => landPendingRow(prev || [], guess, inst, Date.now()));
 }
 
 export function failPendingSession(title: string) {
@@ -535,6 +552,7 @@ export async function copySession(title: string) {
     // The server picks the real title (its own -copy/-copy-2 numbering), which
     // can differ from the optimistic guess — so clear that one's alias too.
     if (inst?.title) clearStaleAlias(inst.title);
+    landPendingSession(guess, inst);
     await refreshInstances();
     if (inst?.title) {
       // The guessed title reserved a slot; if the server picked a different
@@ -569,6 +587,7 @@ export async function branchSession(title: string) {
   try {
     const inst = await instApi<BranchResult>(title, "/branch", { method: "POST" });
     if (inst?.title) clearStaleAlias(inst.title);
+    landPendingSession(guess, inst);
     await refreshInstances();
     if (inst?.title) {
       if (inst.title !== guess) dropFromOrder(guess);

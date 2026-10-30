@@ -242,6 +242,72 @@
   cursor: default;
 }
 
+/* --- The boxes' size: a scaled canvas in a sizer ----------------------------
+   SkyLine.tsx sets the sizer to the canvas's size times the scale (so the
+   line measures what it draws) and scales the canvas inside it, `--sky-z`
+   there being the zoom times the scale: what counter-scales by it (a box's
+   toolbar, a gap's +, a stop's menu) stays screen-sized. At a preset the
+   scale is 1 and neither carries a style. */
+
+.skl-scale {
+  position: relative;
+}
+
+.skl-scale-in {
+  width: max-content;
+  transform-origin: 0 0;
+}
+
+/* The level of detail's type factors, read again against the canvas's own
+   `--sky-z` (the custom properties on .skl resolve against the zoom alone). */
+.skl[data-lod="far"] .skl-scale-in {
+  --sky-far: clamp(1, calc(0.76 / var(--sky-z, 1)), 1.9);
+  --sky-far-ui: clamp(1, calc(0.6 / var(--sky-z, 1)), 1.4);
+}
+
+.skl[data-lod="mid"] .skl-scale-in {
+  --sky-mid: clamp(1, calc(0.8 / var(--sky-z, 1)), 1.3);
+}
+
+.skl[data-lod="near"] .skl-scale-in {
+  --sky-near: clamp(1, var(--sky-z, 1), 3);
+}
+
+/* An open card on a scaled line, drawn back at the sky's own scale. */
+.skl-card-unscale {
+  position: relative;
+}
+
+/* The line's corner: drag to resize its boxes. Screen-sized at any zoom
+   (about its own corner), shown while the line is hovered or focused. */
+.skl-box-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  touch-action: none;
+  z-index: 3;
+  transform: scale(calc(1 / var(--sky-z, 1)));
+  transform-origin: 100% 100%;
+  background:
+    linear-gradient(135deg, transparent 0 50%, var(--muted) 50% 58%, transparent 58% 68%, var(--muted) 68% 76%, transparent 76%);
+  border-bottom-right-radius: 12px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.skl:hover .skl-box-resize,
+.skl.is-focused .skl-box-resize,
+.skl-box-resize:focus-visible {
+  opacity: 0.75;
+}
+
+.skl-box-resize:hover {
+  opacity: 1;
+}
+
 /* What the + or a stop opened: a card hanging under the line. */
 .skl-panels {
   position: absolute;
