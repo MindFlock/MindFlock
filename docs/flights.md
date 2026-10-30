@@ -2198,3 +2198,107 @@ change).
   (inline-confirmed; a session line closes its session, a grounded line is
   deleted), and for stops of one line: Group into a stop, Save to the shelf,
   Remove.
+
+### As built: round 11 backend
+
+Everything in the round 11 contract holds; these are the names, the error
+words and the places the backend had to choose.
+
+**Groups.**
+
+- `flights._normalize_group` is the one normaliser (`normalize_step` calls
+  it, so plans, take-off snapshots, `adhoc_plan`, the stored flight and every
+  dto carry `group` unchanged). It never refuses, strict or lenient: a group
+  with an empty id/name is dropped, `id` is cut to 40, `name` to 80,
+  `plan_id` is coerced to a string. A step with no group has no `group` key.
+- Pure operations: `op_add_plan` (`{plan_id}`), `op_add_steps` (`{steps,
+  group?}`), `op_group` (returns the new group), `op_ungroup`,
+  `op_remove_group` (`?group=1`), and `group` in `op_edit_step`. Group ids are
+  `g_<6hex>`, unique within the flight. All step adds share one placement
+  rule (`_insert_index`) and give each new step the next free `sN` plus its
+  own history `added`.
+- `{steps}` without `group` keeps whatever `group` each step came with (so a
+  client can put a removed group back as it was); `group` that is not an
+  object is 400 `bad_group`; an empty name is 400 `bad_group`. A bad step is
+  400 `bad_step` with `field: "steps[i]…"`. Too many is 409
+  `too_many_steps`.
+- **Rename is a label**: `PATCH {group: {name}}` renames the whole group from
+  ANY of its steps on a flight not yet over — flown and flying sub-steps too
+  (the group dialog may send its first sub-step's id). `{group: null}` (take
+  out) needs a step that can change. `{group: {name}}` on a step with no group
+  makes it a stop of its own (it must be able to change). `group` can come
+  with `title`/`config`/… in one PATCH; a `group` that is neither an object
+  nor null is 400 `bad_step` (`field: "step.group"`).
+- `POST /{id}/ungroup` is also a label change: allowed on any flight not yet
+  over (flown sub-steps lose the group too); 404 `unknown_group`.
+- `POST /{id}/group`: 400 `bad_group` for no steps / no name / not side by
+  side, 404 `unknown_step`, 409 `in_progress` for a step that can't change
+  (409 `finished` on a halted/finished flight, like the other edits). One
+  history `edited` ("N stops grouped as <name>"); no new history event.
+
+**Removing a stop.** `op_remove_step` / `_remove_at`:
+
+- Any step of a flight not yet over (halted included): one ahead just goes
+  (a `skipped`-ahead one too); one behind shifts the cursor down; the current
+  one pauses the flight (`reason` = `flights.STOP_REMOVED` = `"stop
+  removed"`, history `removed` "removed <title> while it flew"). On a
+  grounded flight nothing pauses.
+- **The last stop stays**: removing the only step left (or a group that is
+  every step) is 409 `last_step` — delete the flight instead.
+- Side effects (driver `_stop_removed`, after the store write): the removed
+  current step's lane is disarmed when it is a `ship` step or a `reviews`
+  step (its push), through `_disarm_ours` = `autopilot.disarm(title)` only
+  when the record is this flight's (`source == "flight"`, `item` = the
+  flight id) and not `done` — your own ⏩ run is left alone. Any removed
+  step's command job is forgotten (the process itself is not killed). An
+  agent's queued prompt and a split's workers are left. A lane armed by a
+  pass that was mid-effect when the route landed is disarmed when that pass
+  records its outcome (`_disarm_if_removed`).
+- Resume of a flight paused at the end (`cursor == len(steps)`) lands it
+  (`op_resume` → `done`, `flight.finished`). Resume after a removal lets
+  the next stop's halt point through, as Resume always does — the flight
+  already sat right before it.
+- **Undo**: `POST /steps {step, at}` also takes `at == cursor` on a `paused`
+  flight whose current step has not started (or `cursor == len(steps)`), so
+  a removed flying stop can be put back right where it was and flies first
+  on Resume. A running flight still needs `at` after the cursor.
+
+**Grounded flights.**
+
+- `flights.GROUNDED = "grounded"` is first in `STATES` and in `UNFINISHED`
+  (not in `ACTIVE` / `HOLDING`), so the driver never steps it, `prune` and
+  `for_session` never see it (its session is `""`), `GET /api/flights`
+  lists it with the unfinished, and `DELETE` takes it. No history entry at
+  creation.
+- `flights.ground(plan, steps, name)`: the plan's steps as one group, then
+  the given ones (grouped under `name` when set); steps renumbered `s1..sN`.
+  `plan_id` = the plan's id (a virtual `builtin:<kind>@<lane>` works) or
+  `"adhoc"`; `plan_name` = `name`, else the plan's name, else "Stops".
+  Neither → 400 `needs_steps`; 404 `unknown_plan`; a bad step 400 `bad_step`.
+- Done / Skip / Retry / Jump / Pause / Resume on a grounded flight are 409
+  `grounded`; Cancel works. All step routes work, every step able to change
+  (`at` 0 included; `{halt}` on any step).
+- Attach: `flights.attach(id, title, repo_root, branch, seeded)` checks under
+  the store lock (404 `unknown_flight`, 409 `not_grounded`, 409 `in_flight`
+  when the title has ANY unfinished flight, halted included — attach never
+  replaces one). `op_attach` sets `running`, `started` = now, history
+  `attached` ("attached to <title>"), then the existing halt-point rule
+  (`_hit_halt_point`) may pause it on step 0. `repo_root` comes from the
+  session's worktree (`_repo_root`, as `start` does), `branch` from
+  `inst.Branch` (the driver keeps it fresh after). `"attached"` is in
+  `HISTORY_EVENTS`. The route emits `flight.changed` and wakes the loop.
+- **The cursor stays at 0 on attach**: unlike `POST /start {plan_id,
+  title}`, which starts an existing session at its first non-`agent` step
+  (the work so far counts as the agent step), a grounded flight's stops were
+  drawn on purpose, so a leading `agent` step is flown: the driver's normal
+  `run` → `_run_agent` → `_deliver` (the prompt queue) types it — the path a
+  start with `start_at` on an agent step takes today. No fast-track run is
+  absorbed on attach.
+- `{title: "", repo_path?, program?, model?, in_place?, prompt?}`: the plan's
+  `session` defaults (by the flight's `plan_id`), overridden by the body,
+  through `session_create.create_result`; a first `agent` step (not a halt
+  point) gives the initial prompt (`prompt` outranks it) and is recorded
+  running (`seeded`), else `no_prompt` as `start` does. No folder → 400
+  `no_repo`; every refusal comes before the session is made.
+
+**Also.** A flight step's ntfy push is tagged `bird` (🐦), not `airplane`.
