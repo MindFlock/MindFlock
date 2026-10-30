@@ -1,8 +1,9 @@
-/** The shelf's stops row (StopShelf): a chip per stop kind the server lists
- * (the flock's stops in registry order, then the perches), each draggable with
- * its kind under STOP_MIME; a click tacks it on through `onTack`, without it a
- * chip only drags; zero kinds say the list didn't load. Server-rendered with
- * the kinds seeded in a QueryClient, like skyFlyways.test.ts. */
+/** The Sky's one shelf row, Stops (StopShelf): the Session chip first, then
+ * a chip per stop kind the server lists (the flock's stops in registry order,
+ * then the perches), each draggable with its kind under STOP_MIME; a click
+ * tacks it on through `onTack`, without it a chip only drags; zero kinds say
+ * the list didn't load; the shelf folds to a handle. Server-rendered with the
+ * kinds seeded in a QueryClient. The saved stops: stopShelfSaved.test.ts. */
 
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -15,8 +16,8 @@ vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
 
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 const { STOP_MIME } = await import("../lib/flights");
-const { StopShelf, stopChipOrder, stopDragData } = await import("../components/flights/StopShelf");
-const { FlywayShelf } = await import("../components/flights/FlywayShelf");
+const { NEW_SESSION_MIME } = await import("../lib/skyLayout");
+const { StopShelf, stopChipOrder, stopDragData, sessionDragData } = await import("../components/flights/StopShelf");
 
 (globalThis as Record<string, unknown>).document ??= {
   hidden: false,
@@ -57,19 +58,22 @@ describe("the stops row", () => {
   it("a draggable chip per kind, its kind in data-kind, the perch gold and named Perch after a divider", () => {
     const html = render(createElement(StopShelf, { onTack() {} }));
     expect(html).toContain('aria-label="Stops"');
-    expect(html).toContain('<strong>Stops</strong> <span class="sky-stops-hint">— drag onto a line, or into a flyway</span>');
+    expect(html).toContain('<strong>Stops</strong> <span class="sky-stops-hint">— drag onto the sky or a line</span>');
     expect(kindsIn(html)).toEqual(["agent", "ship", "split", "join", "you"]);
-    expect(html.match(/draggable="true"/g)).toHaveLength(5);
+    // The five kinds and the Session chip.
+    expect(html.match(/draggable="true"/g)).toHaveLength(6);
     const perch = html.slice(html.indexOf('data-kind="you"'));
     expect(html).toMatch(/class="sky-stop-chip perch" data-kind="you"/);
     expect(perch).toContain('<span class="sky-stop-name">Perch</span>');
     expect(perch).toContain("fl-stop-icon-perch");
     expect(html).not.toContain(">You<");
-    // The divider sits between the flock's last stop and the perch.
-    expect(html.indexOf("sky-stops-divider")).toBeGreaterThan(html.indexOf('data-kind="join"'));
-    expect(html.indexOf("sky-stops-divider")).toBeLessThan(html.indexOf('data-kind="you"'));
+    // A divider after the Session chip, and one between the flock's last
+    // stop and the perch.
+    expect(html.indexOf("sky-stops-divider")).toBeLessThan(html.indexOf('data-kind="agent"'));
+    expect(html.lastIndexOf("sky-stops-divider")).toBeGreaterThan(html.indexOf('data-kind="join"'));
+    expect(html.lastIndexOf("sky-stops-divider")).toBeLessThan(html.indexOf('data-kind="you"'));
     // Tooltip: the kind's summary.
-    expect(html).toContain('title="Ship does its thing\nClick to tack it onto the focused line, or drag it onto a line"');
+    expect(html).toContain('title="Ship does its thing\nClick to tack it onto the focused line, or drag it onto a line or the sky"');
     expect(html).not.toMatch(/\b(node|plane)\b/i);
   });
 
@@ -85,8 +89,8 @@ describe("the stops row", () => {
     expect(tack).toMatch(/<button type="button" class="sky-stop-chip" data-kind="agent" draggable="true"/);
     expect(tack).toContain('aria-label="Tack “Ship” onto the focused line"');
     const drag = render(createElement(StopShelf, {}));
-    expect(drag).not.toContain("<button");
-    expect(drag).toMatch(/<span class="sky-stop-chip drag-only" data-kind="agent" draggable="true" title="Agent does its thing\nDrag onto a line"/);
+    expect(drag).not.toContain('<button type="button" class="sky-stop-chip');
+    expect(drag).toMatch(/<span class="sky-stop-chip drag-only" data-kind="agent" draggable="true" title="Agent does its thing\nDrag onto a line or the sky"/);
     const src = code("components/flights/StopShelf.tsx");
     expect(src).toMatch(/onClick=\{\(\) => onTack\(def\.kind\)\}/);
   });
@@ -119,16 +123,41 @@ describe("the stops row", () => {
     expect(src).toMatch(/e\.dataTransfer\.effectAllowed = "copy"/);
   });
 
-  it("rides under the flyways on the shelf, hands onTack down, and folds with it", () => {
-    const open = render(createElement(FlywayShelf, { plans: [], onNew() {}, onFly() {}, onEdit() {}, onTack() {} }));
-    expect(open.indexOf('class="sky-stops"')).toBeGreaterThan(open.indexOf("+ New flyway"));
-    expect(open).toContain('aria-label="Tack “Agent” onto the focused line"');
-    const folded = render(createElement(FlywayShelf, { plans: [], onNew() {}, onFly() {}, onEdit() {}, collapsed: true }));
+  it("the Session chip comes first: it drags the new-session type, a click opens the block, and it carries the tour's hook", () => {
+    const html = render(createElement(StopShelf, { onSession() {}, onTack() {} }));
+    const chips = html.slice(html.indexOf('class="sky-stops-chips"'));
+    expect(chips.indexOf("sky-session-chip")).toBeGreaterThan(0);
+    expect(chips.indexOf("sky-session-chip")).toBeLessThan(chips.indexOf('data-kind="agent"'));
+    expect(html).toMatch(/<button type="button" class="sky-stop-chip sky-session-chip" data-tour="flights-newblock" draggable="true"/);
+    expect(html).toContain('aria-label="Start a new session"');
+    expect(html).toContain('<span class="sky-stop-name">Session</span>');
+    expect(NEW_SESSION_MIME).toBe("application/x-mindflock-new-session");
+    expect(sessionDragData()).toEqual([
+      [NEW_SESSION_MIME, "session"],
+      ["text/plain", "New session"],
+    ]);
+    // Without onSession it only drags.
+    expect(render(createElement(StopShelf, {}))).toMatch(/<span class="sky-stop-chip sky-session-chip drag-only" data-tour="flights-newblock"/);
+  });
+
+  it("the shelf is shown unless folded; folded, only its handle", () => {
+    const open = render(createElement(StopShelf, { onTack() {} }));
+    expect(open).toMatch(/^<section class="sky-shelf open" data-tour="sky-shelf"/);
+    expect(open).toContain('<button type="button" class="sky-shelf-fold" aria-expanded="true"');
+    const folded = render(createElement(StopShelf, { folded: true }));
+    expect(folded).toMatch(/^<section class="sky-shelf folded"/);
+    expect(folded).toContain('aria-expanded="false"');
     expect(folded).not.toContain("sky-stops");
+    // The sky no longer starts it folded (the old mf_sky_shelf) or has a
+    // "Flyways & stops" tab.
+    const sky = code("components/flights/SkyView.tsx");
+    expect(sky).not.toContain("mf_sky_shelf");
+    expect(sky).not.toContain("Flyways &amp; stops");
+    expect(sky).toContain('const [shelfFolded, setShelfFolded] = useState(() => readPref(SHELF_FOLD_KEY) === "1");');
   });
 
   it("a phone hides the drag hint; the row scrolls sideways instead of wrapping", () => {
-    const css = cssOf("components/flights/FlywayShelf.css");
+    const css = cssOf("components/flights/StopShelf.css");
     expect(css).toMatch(/@media \(hover: none\) \{\s*\.sky-stops-hint \{\s*display: none;/);
     expect(css).toMatch(/\.sky-stops-chips \{[^}]*overflow-x: auto;[^}]*scrollbar-width: thin;/);
     expect(css).toMatch(/\.sky-stop-chip \{[^}]*height: 26px;/);
