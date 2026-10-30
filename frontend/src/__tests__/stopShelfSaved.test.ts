@@ -1,5 +1,6 @@
-/** The shelf's saved stops (StopShelf): after the kinds, the saved stops
- * (`useFlightPlans`, built-ins first) — the name and a dot per step (a
+/** The shelf's saved stops (StopShelf): the Multi-step region, after the
+ * Blocks and before All blocks…, the saved stops (`useFlightPlans`, built-ins
+ * first) — the name and a dot per step (a
  * perch's gold, "+N" past ten), dragged with FLYWAY_MIME = the id; the
  * right-click menu (Rename in the chip, Takes off…, Reset to default on a
  * built-in, Delete on yours, confirmed inline); the rename rules; and the
@@ -17,7 +18,8 @@ vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
 
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 const { FLYWAY_MIME } = await import("../lib/skyLayout");
-const { StopShelf, savedDragData, savedMenuItems } = await import("../components/flights/StopShelf");
+const { StopShelf, savedMenuItems } = await import("../components/flights/StopShelf");
+const { savedDragData } = await import("../lib/stopCatalog");
 const { TakeoffDialog, triggerCron } = await import("../components/flights/TakeoffDialog");
 const { NAME_MAX, checkRename, planDots, savedStopOrder } = await import("../lib/groundedLines");
 
@@ -57,10 +59,13 @@ function render(el: ReactElement, plans: FlightPlan[] | null = [MINE, TICKET]) {
 describe("the saved stops on the shelf", () => {
   const html = render(createElement(StopShelf, {}));
 
-  it("after the kinds, built-ins first, each draggable with its id", () => {
+  it("the Multi-step region: after the kinds and a divider, built-ins first, each draggable with its id, then All blocks…", () => {
     const ids = [...html.matchAll(/data-plan="([^"]+)"/g)].map((m) => m[1]);
     expect(ids).toEqual(["builtin:ticket", "p_mine"]);
-    expect(html.indexOf('data-plan="builtin:ticket"')).toBeGreaterThan(html.indexOf('data-kind="you"'));
+    expect(html).toContain('<span class="sky-stops-divider" aria-hidden="true"></span><div class="sky-stops-region" data-region="multi" role="list" aria-label="Multi-step"><span class="sky-stops-label" aria-hidden="true">Multi-step</span>');
+    expect(html.indexOf('data-region="multi"')).toBeGreaterThan(html.indexOf('data-kind="ship"'));
+    expect(html.indexOf('data-plan="builtin:ticket"')).toBeGreaterThan(html.indexOf('data-region="multi"'));
+    expect(html.indexOf("sky-catalog-chip")).toBeGreaterThan(html.indexOf('data-plan="p_mine"'));
     expect(html).toMatch(/<span class="sky-stop-chip sky-saved-chip builtin drag-only" data-plan="builtin:ticket" draggable="true"/);
     expect(html).toContain('<span class="sky-stop-name">Mine</span>');
   });
@@ -89,11 +94,12 @@ describe("the saved stops on the shelf", () => {
     expect(tap).toContain('aria-label="Add “Mine” to the focused line"');
   });
 
-  it("no saved stops (or not loaded yet): no divider for them, no chips", () => {
+  it("no saved stops (or not loaded yet): no Multi-step region, one divider before All blocks…", () => {
     for (const none of [[], null]) {
       const h = render(createElement(StopShelf, {}), none);
       expect(h).not.toContain("sky-saved-chip");
-      expect(h).not.toContain("sky-saved-divider");
+      expect(h).not.toContain('data-region="multi"');
+      expect(h.match(/sky-stops-divider/g)).toHaveLength(1);
     }
   });
 });

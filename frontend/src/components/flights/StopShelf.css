@@ -1,5 +1,6 @@
-/* The shelf at the Sky's foot (StopShelf.tsx): one row, Stops — the Session
-   chip, the stop kinds, the saved stops — folding to a thin handle. */
+/* The shelf at the Sky's foot (StopShelf.tsx): one row, Stops — Blocks (the
+   Session chip, the default kinds), Multi-step (the saved stops), then All
+   blocks… (the catalog) — folding to a thin handle. */
 
 .sky-shelf {
   flex: none;
@@ -83,6 +84,26 @@
 
 .sky-stop-item {
   display: contents;
+}
+
+/* A region of the row: a tiny muted label, then its chips. Thin dividers
+   (.sky-stops-divider) sit between the regions. */
+.sky-stops-region {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+}
+
+.sky-stops-label {
+  flex: none;
+  padding-right: 2px;
+  color: var(--fl-ink-muted, var(--muted));
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 /* Every chip on the shelf is the secondary tier (.test-btn): panel-2, the
@@ -247,6 +268,19 @@
 .sky-saved-menu {
   z-index: 50;
   transform: translateY(-100%);
+}
+
+/* All blocks…: a plain secondary chip (it opens a list, it doesn't drag), its
+   ⊞ in the muted ink. */
+.sky-stop-chip.sky-catalog-chip {
+  cursor: pointer;
+}
+
+.sky-stop-chip.sky-catalog-chip .sky-stop-icon {
+  color: var(--fl-ink-muted, var(--muted));
+  background: transparent;
+  font-size: 14px;
+  line-height: 1;
 }
 
 .sky-stops-confirm {

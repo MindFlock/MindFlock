@@ -1,19 +1,23 @@
-/** The shelf at the Sky's foot: ONE row, **Stops** (docs/flights.md "Round
- * 11"), always there, folding to a thin handle.
+/** The shelf at the Sky's foot: ONE row, **Stops** (docs/flights.md "As built:
+ * round 12 shelf"), always there, folding to a thin handle. Three regions,
+ * each with a tiny label, split by thin dividers:
  *
- *  1. The **Session** chip: drag it onto empty sky and the new-session block
- *     opens there; onto a grounded line and a new session is made for those
- *     stops. A click opens the block in the middle of the sky. It carries
- *     `NEW_SESSION_MIME` (lib/skyLayout).
- *  2. The stop kinds (the registry's, read with `useFlightKinds`): the flock's
- *     stops first, the perches last in their gold, split by a thin divider.
- *     Each carries its kind under `STOP_MIME` (and its name as plain text).
- *  3. The SAVED STOPS (`useFlightPlans`, built-ins first): the name and a row
- *     of dots, one per step (a perch's gold, "+N" past ten). Each carries its
- *     id under `FLYWAY_MIME` and its name as plain text. Right-click (or the
- *     context-menu key): Rename (a field in the chip), Takes off… (the
- *     TakeoffDialog), Reset to default (a built-in), Delete (yours; confirmed
- *     inline).
+ *  1. **Blocks**: the **Session** chip — drag it onto empty sky and the
+ *     new-session block opens there; onto a grounded line and a new session
+ *     is made for those stops; a click opens the block in the middle of the
+ *     sky (`NEW_SESSION_MIME`, lib/skyLayout) — then the default kinds
+ *     (`DEFAULT_KINDS`, lib/stopCatalog: Agent, Perch, Ship, Verify, Wait;
+ *     one the server doesn't list is skipped). Each carries its kind under
+ *     `STOP_MIME` (and its name as plain text).
+ *  2. **Multi-step**: the SAVED STOPS (`useFlightPlans`, built-ins first): the
+ *     name and a row of dots, one per step (a perch's gold, "+N" past ten).
+ *     Each carries its id under `FLYWAY_MIME` and its name as plain text.
+ *     Right-click (or the context-menu key): Rename (a field in the chip),
+ *     Takes off… (the TakeoffDialog), Reset to default (a built-in), Delete
+ *     (yours; confirmed inline).
+ *  3. **All blocks…**: opens `StopCatalog` — every kind (the rest of the
+ *     registry lives only there) and every saved stop, each row dragged like
+ *     its chip, with an Add that goes through the same `onTack` / `onTackPlan`.
  *
  * Any chip dropped on empty sky becomes stops with no session yet (a grounded
  * line); dropped on a line it is tacked on there — the sky owns the drop.
@@ -22,43 +26,21 @@
  * line. Without them a chip only drags. */
 
 import { useEffect, useRef, useState, type DragEvent, type JSX, type KeyboardEvent, type MouseEvent } from "react";
-import { STOP_MIME, type FlightPlan, type StepKindDef } from "../../lib/flights";
+import type { FlightPlan, StepKindDef } from "../../lib/flights";
 import { deletePlan, resetPlan, savePlan } from "../../lib/flightsApi";
-import { FLYWAY_MIME, NEW_SESSION_MIME } from "../../lib/skyLayout";
+import { NEW_SESSION_MIME } from "../../lib/skyLayout";
 import { checkRename, planDots, savedStopOrder } from "../../lib/groundedLines";
+import { defaultKinds, savedDragData, stopDragData, type CatalogDrop } from "../../lib/stopCatalog";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
 import { useFlightKinds, useFlightPlans } from "../../state/queries";
 import { InlineConfirm } from "../InlineConfirm";
 import { StopIcon } from "./Bird";
 import { kindName } from "./StopParts";
+import { StopCatalog } from "./StopCatalog";
 import { TakeoffDialog } from "./TakeoffDialog";
 import "./StopMenu.css";
 import "./StopShelf.css";
-
-/** The chips' order: the flock's stops as the registry lists them, then the
- * perches. */
-export function stopChipOrder<K extends Pick<StepKindDef, "actor">>(kinds: readonly K[]): K[] {
-  return [...kinds.filter((k) => k.actor !== "you"), ...kinds.filter((k) => k.actor === "you")];
-}
-
-/** What a stop chip's drag carries: the kind under STOP_MIME, and its name as
- * plain text for anything else it is dropped on. */
-export function stopDragData(def: Pick<StepKindDef, "kind" | "label">): Array<[string, string]> {
-  return [
-    [STOP_MIME, def.kind],
-    ["text/plain", kindName(def)],
-  ];
-}
-
-/** What a saved stop's drag carries: its id under FLYWAY_MIME (the MIME the
- * canvas reads), its name as plain text. */
-export function savedDragData(plan: Pick<FlightPlan, "id" | "name">): Array<[string, string]> {
-  return [
-    [FLYWAY_MIME, plan.id],
-    ["text/plain", plan.name],
-  ];
-}
 
 /** What the Session chip's drag carries. */
 export function sessionDragData(): Array<[string, string]> {
@@ -343,15 +325,24 @@ export interface StopShelfProps {
 export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold }: StopShelfProps): JSX.Element {
   const kinds = useFlightKinds().data;
   const plans = useFlightPlans().data;
-  const ordered = stopChipOrder(kinds || []);
-  const flock = ordered.filter((k) => k.actor !== "you");
-  const perches = ordered.filter((k) => k.actor === "you");
+  const blocks = defaultKinds(kinds || []);
   const saved = savedStopOrder(plans || []);
   const [menu, setMenu] = useState<{ plan: FlightPlan; x: number; y: number } | null>(null);
   const [renaming, setRenaming] = useState("");
   const [takeoff, setTakeoff] = useState<FlightPlan | null>(null);
   const [deleting, setDeleting] = useState<FlightPlan | null>(null);
   const [busy, setBusy] = useState(false);
+  const [catalog, setCatalog] = useState(false);
+
+  /** The catalog's Add: through the same props as a chip's click. */
+  const add = (d: CatalogDrop) => {
+    setCatalog(false);
+    if ("kind" in d) onTack?.(d.kind);
+    else {
+      const plan = saved.find((p) => p.id === d.planId);
+      if (plan) onTackPlan?.(plan);
+    }
+  };
 
   const pick = async (key: MenuKey) => {
     const plan = menu?.plan;
@@ -400,32 +391,55 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
           <span className="sky-stops-head">
             <strong>Stops</strong> <span className="sky-stops-hint">— drag onto the sky or a line</span>
           </span>
-          {kinds !== undefined && ordered.length === 0 ? (
+          {kinds !== undefined && !kinds?.length ? (
             <p className="sky-stops-empty muted">The stop list didn't load — this server may not know Flights yet.</p>
           ) : (
-            <div className="sky-stops-chips" role="list">
-              <SessionChip onSession={onSession} />
+            <div className="sky-stops-chips">
+              <div className="sky-stops-region" data-region="blocks" role="list" aria-label="Blocks">
+                <span className="sky-stops-label" aria-hidden="true">
+                  Blocks
+                </span>
+                <SessionChip onSession={onSession} />
+                {blocks.map((k) => (
+                  <StopChip key={k.kind} def={k} onTack={onTack} />
+                ))}
+              </div>
+              {saved.length > 0 && (
+                <>
+                  <span className="sky-stops-divider" aria-hidden="true" />
+                  <div className="sky-stops-region" data-region="multi" role="list" aria-label="Multi-step">
+                    <span className="sky-stops-label" aria-hidden="true">
+                      Multi-step
+                    </span>
+                    {saved.map((p) => (
+                      <SavedChip
+                        key={p.id}
+                        plan={p}
+                        plans={saved}
+                        kinds={kinds || []}
+                        renaming={renaming === p.id}
+                        onTackPlan={onTackPlan}
+                        onMenu={(plan, x, y) => setMenu({ plan, x, y })}
+                        onRenamed={() => setRenaming("")}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
               <span className="sky-stops-divider" aria-hidden="true" />
-              {flock.map((k) => (
-                <StopChip key={k.kind} def={k} onTack={onTack} />
-              ))}
-              {flock.length > 0 && perches.length > 0 && <span className="sky-stops-divider" aria-hidden="true" />}
-              {perches.map((k) => (
-                <StopChip key={k.kind} def={k} onTack={onTack} />
-              ))}
-              {saved.length > 0 && <span className="sky-stops-divider sky-saved-divider" aria-hidden="true" />}
-              {saved.map((p) => (
-                <SavedChip
-                  key={p.id}
-                  plan={p}
-                  plans={saved}
-                  kinds={kinds || []}
-                  renaming={renaming === p.id}
-                  onTackPlan={onTackPlan}
-                  onMenu={(plan, x, y) => setMenu({ plan, x, y })}
-                  onRenamed={() => setRenaming("")}
-                />
-              ))}
+              <button
+                type="button"
+                className="sky-stop-chip sky-catalog-chip"
+                aria-haspopup="dialog"
+                aria-expanded={catalog}
+                title="Every block and every multi-step block, in a list you can filter"
+                onClick={() => setCatalog(true)}
+              >
+                <span className="sky-stop-icon" aria-hidden="true">
+                  ⊞
+                </span>
+                <span className="sky-stop-name">All blocks…</span>
+              </button>
             </div>
           )}
         </div>
@@ -443,6 +457,7 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
         </div>
       )}
       {menu && <SavedMenu plan={menu.plan} x={menu.x} y={menu.y} onPick={(k) => void pick(k)} onClose={() => setMenu(null)} />}
+      {catalog && <StopCatalog kinds={kinds || []} plans={saved} onAdd={onTack || onTackPlan ? add : undefined} onClose={() => setCatalog(false)} />}
       {takeoff && <TakeoffDialog plan={takeoff} onClose={() => setTakeoff(null)} />}
     </section>
   );

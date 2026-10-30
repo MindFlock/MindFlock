@@ -1,0 +1,209 @@
+/* All blocks (StopCatalog.tsx): the shelf's catalog in the app's Modal — the
+   same card as a stop's dialog (StopDialog.css, after #rename-form): a filter,
+   then Blocks and Multi-step, a row per block. */
+
+.sky-catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(560px, calc(100vw - 48px));
+  max-height: 80vh;
+  box-sizing: border-box;
+  padding: 18px 20px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  transition: opacity 0.12s;
+}
+
+/* A row is being dragged: the Modal lets the pointer through to the sky (its
+   backdrop would take the drop) and fades, so the lines under it show. */
+.modal.sky-catalog-modal.is-dragging {
+  background: transparent;
+  pointer-events: none;
+}
+
+.sky-catalog-modal.is-dragging .sky-catalog {
+  opacity: 0.35;
+}
+
+.sky-catalog-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sky-catalog-head h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 16px;
+}
+
+.sky-catalog-filter.fl-input.fl-input {
+  flex: none;
+}
+
+.sky-catalog-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.sky-catalog-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* The section's label: tiny and muted, like the shelf's region labels. */
+.sky-catalog-label {
+  margin: 0 0 3px;
+  padding: 0 8px;
+  color: var(--fl-ink-muted, var(--muted));
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sky-catalog-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: grab;
+  user-select: none;
+}
+
+.sky-catalog-row:active {
+  cursor: grabbing;
+}
+
+/* The row ↑ / ↓ picked (and the one under the pointer): panel-2, as a menu
+   row's hover. */
+.sky-catalog-row.active {
+  border-color: var(--border);
+  background: var(--panel-2);
+}
+
+.sky-catalog-icon {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--fl-ink-accent, var(--accent));
+  background: rgba(var(--accent-rgb), 0.14);
+}
+
+.sky-catalog-row.perch .sky-catalog-icon {
+  border-radius: 50%;
+  color: var(--tone-attention);
+  background: color-mix(in srgb, var(--tone-attention) 16%, transparent);
+}
+
+.sky-catalog-words {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.sky-catalog-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sky-catalog-summary {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sky-catalog-badge {
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fl-ink-muted, var(--muted));
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 15px;
+}
+
+.sky-catalog-badge.actor-you {
+  border-color: color-mix(in srgb, var(--tone-attention) 60%, var(--border));
+  color: var(--tone-attention);
+}
+
+.sky-catalog-badge.builtin {
+  border-style: dashed;
+}
+
+/* A saved stop's sub-steps: a tiny box per step (a perch's gold). */
+.sky-catalog-boxes {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 26px;
+  flex-wrap: wrap;
+}
+
+.sky-catalog-boxes i {
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 70%, var(--muted));
+}
+
+.sky-catalog-boxes i.perch {
+  border-radius: 50%;
+  background: var(--tone-attention);
+}
+
+.sky-catalog-more {
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
+/* Add: the secondary tier (.test-btn), shown on the picked row and under the
+   pointer so a long list stays calm. */
+.sky-catalog-add.test-btn {
+  flex: none;
+  visibility: hidden;
+}
+
+.sky-catalog-row.active .sky-catalog-add,
+.sky-catalog-row:hover .sky-catalog-add {
+  visibility: visible;
+}
+
+@media (hover: none) {
+  .sky-catalog-add.test-btn {
+    visibility: visible;
+  }
+}
+
+.sky-catalog-empty {
+  margin: 4px 8px;
+  font-size: 12.5px;
+}
+
+.sky-catalog-hint {
+  margin: 0;
+  font-size: 11px;
+}

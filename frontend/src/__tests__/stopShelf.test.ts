@@ -1,9 +1,11 @@
-/** The Sky's one shelf row, Stops (StopShelf): the Session chip first, then
- * a chip per stop kind the server lists (the flock's stops in registry order,
- * then the perches), each draggable with its kind under STOP_MIME; a click
- * tacks it on through `onTack`, without it a chip only drags; zero kinds say
- * the list didn't load; the shelf folds to a handle. Server-rendered with the
- * kinds seeded in a QueryClient. The saved stops: stopShelfSaved.test.ts. */
+/** The Sky's one shelf row, Stops (StopShelf), in three regions: **Blocks** —
+ * the Session chip first, then the default kinds the server lists (Agent,
+ * Perch, Ship, Verify, Wait), each draggable with its kind under STOP_MIME;
+ * **Multi-step** (the saved stops: stopShelfSaved.test.ts); then **All
+ * blocks…** (the catalog: stopCatalog.test.ts). A click tacks a kind on
+ * through `onTack`, without it a chip only drags; zero kinds say the list
+ * didn't load; the shelf folds to a handle. Server-rendered with the kinds
+ * seeded in a QueryClient. */
 
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -17,7 +19,8 @@ vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 const { STOP_MIME } = await import("../lib/flights");
 const { NEW_SESSION_MIME } = await import("../lib/skyLayout");
-const { StopShelf, stopChipOrder, stopDragData, sessionDragData } = await import("../components/flights/StopShelf");
+const { StopShelf, sessionDragData } = await import("../components/flights/StopShelf");
+const { stopDragData } = await import("../lib/stopCatalog");
 
 (globalThis as Record<string, unknown>).document ??= {
   hidden: false,
@@ -35,9 +38,9 @@ const kind = (k: string, label: string, actor: "robot" | "you" = "robot"): StepK
   fields: [],
   default_title: label,
 });
-// A perch listed mid-registry: the shelf still puts it last.
-const KINDS = [kind("agent", "Agent"), kind("you", "You", "you"), kind("ship", "Ship"), kind("split", "Split"), kind("join", "Join")];
-const NO_SPLIT = KINDS.filter((k) => k.kind !== "split" && k.kind !== "join");
+// The registry's order (the server's); the shelf shows its own.
+const KINDS = [kind("agent", "Agent"), kind("split", "Split"), kind("join", "Join"), kind("ship", "Ship"), kind("verify", "Verify"), kind("you", "You", "you"), kind("wait", "Wait"), kind("notify", "Notify")];
+const NO_VERIFY = KINDS.filter((k) => k.kind !== "verify");
 
 function render(el: ReactElement, kinds: StepKindDef[] | null | undefined = KINDS) {
   const c = new QueryClient({ defaultOptions: { queries: { retry: false, enabled: false } } });
@@ -46,42 +49,51 @@ function render(el: ReactElement, kinds: StepKindDef[] | null | undefined = KIND
 }
 const kindsIn = (html: string) => [...html.matchAll(/data-kind="([^"]+)"/g)].map((m) => m[1]);
 
-describe("stopChipOrder", () => {
-  it("the flock's stops in registry order, perches last", () => {
-    expect(stopChipOrder(KINDS).map((k) => k.kind)).toEqual(["agent", "ship", "split", "join", "you"]);
-    expect(stopChipOrder([kind("you", "You", "you"), kind("you2", "Sign off", "you"), kind("agent", "Agent")]).map((k) => k.kind)).toEqual(["agent", "you", "you2"]);
-    expect(stopChipOrder([])).toEqual([]);
-  });
-});
-
 describe("the stops row", () => {
-  it("a draggable chip per kind, its kind in data-kind, the perch gold and named Perch after a divider", () => {
+  it("Blocks: Session, then the default kinds in their order, the perch gold and named Perch", () => {
     const html = render(createElement(StopShelf, { onTack() {} }));
     expect(html).toContain('aria-label="Stops"');
     expect(html).toContain('<strong>Stops</strong> <span class="sky-stops-hint">— drag onto the sky or a line</span>');
-    expect(kindsIn(html)).toEqual(["agent", "ship", "split", "join", "you"]);
-    // The five kinds and the Session chip.
+    expect(kindsIn(html)).toEqual(["agent", "you", "ship", "verify", "wait"]);
+    // The five kinds and the Session chip (All blocks… opens a list, it doesn't drag).
     expect(html.match(/draggable="true"/g)).toHaveLength(6);
     const perch = html.slice(html.indexOf('data-kind="you"'));
     expect(html).toMatch(/class="sky-stop-chip perch" data-kind="you"/);
     expect(perch).toContain('<span class="sky-stop-name">Perch</span>');
     expect(perch).toContain("fl-stop-icon-perch");
     expect(html).not.toContain(">You<");
-    // A divider after the Session chip, and one between the flock's last
-    // stop and the perch.
-    expect(html.indexOf("sky-stops-divider")).toBeLessThan(html.indexOf('data-kind="agent"'));
-    expect(html.lastIndexOf("sky-stops-divider")).toBeGreaterThan(html.indexOf('data-kind="join"'));
-    expect(html.lastIndexOf("sky-stops-divider")).toBeLessThan(html.indexOf('data-kind="you"'));
+    // One region, its tiny label first, the Session chip, then the kinds.
+    const blocks = html.slice(html.indexOf('data-region="blocks"'));
+    expect(html).toContain('<div class="sky-stops-region" data-region="blocks" role="list" aria-label="Blocks"><span class="sky-stops-label" aria-hidden="true">Blocks</span>');
+    expect(blocks.indexOf("sky-session-chip")).toBeLessThan(blocks.indexOf('data-kind="agent"'));
+    expect(html.indexOf('data-kind="wait"')).toBeLessThan(html.indexOf("sky-catalog-chip"));
     // Tooltip: the kind's summary.
     expect(html).toContain('title="Ship does its thing\nClick to tack it onto the focused line, or drag it onto a line or the sky"');
     expect(html).not.toMatch(/\b(node|plane)\b/i);
   });
 
-  it("Split and Join only when the server lists them", () => {
-    const html = render(createElement(StopShelf, {}), NO_SPLIT);
-    expect(kindsIn(html)).toEqual(["agent", "ship", "you"]);
-    expect(html).not.toContain("Split");
-    expect(html).not.toContain("Join");
+  it("the other kinds live in the catalog; a default the server doesn't list is skipped", () => {
+    const html = render(createElement(StopShelf, {}));
+    for (const k of ["Split", "Join", "Notify"]) expect(html).not.toContain(">" + k + "<");
+    expect(kindsIn(render(createElement(StopShelf, {}), NO_VERIFY))).toEqual(["agent", "you", "ship", "wait"]);
+  });
+
+  it("then the All blocks… chip: the secondary chip, a ⊞, opens the catalog (no saved stops: no Multi-step region)", () => {
+    const html = render(createElement(StopShelf, { onTack() {} }));
+    expect(html).toContain(
+      '<button type="button" class="sky-stop-chip sky-catalog-chip" aria-haspopup="dialog" aria-expanded="false" title="Every block and every multi-step block, in a list you can filter"><span class="sky-stop-icon" aria-hidden="true">⊞</span><span class="sky-stop-name">All blocks…</span></button>'
+    );
+    expect(html).not.toContain('data-region="multi"');
+    // A thin divider between Blocks and the chip; the catalog isn't open.
+    expect(html.lastIndexOf("sky-stops-divider")).toBeGreaterThan(html.indexOf('data-kind="wait"'));
+    expect(html.lastIndexOf("sky-stops-divider")).toBeLessThan(html.indexOf("sky-catalog-chip"));
+    expect(html).not.toContain("sky-catalog-modal");
+    const src = code("components/flights/StopShelf.tsx");
+    expect(src).toContain("onClick={() => setCatalog(true)}");
+    expect(src).toContain("{catalog && <StopCatalog kinds={kinds || []} plans={saved} onAdd={onTack || onTackPlan ? add : undefined} onClose={() => setCatalog(false)} />}");
+    // Add goes through the chips' own props.
+    expect(src).toMatch(/if \("kind" in d\) onTack\?\.\(d\.kind\);/);
+    expect(src).toMatch(/if \(plan\) onTackPlan\?\.\(plan\);/);
   });
 
   it("with onTack a chip is a button; without, it only drags and says so", () => {
@@ -89,7 +101,8 @@ describe("the stops row", () => {
     expect(tack).toMatch(/<button type="button" class="sky-stop-chip" data-kind="agent" draggable="true"/);
     expect(tack).toContain('aria-label="Tack “Ship” onto the focused line"');
     const drag = render(createElement(StopShelf, {}));
-    expect(drag).not.toContain('<button type="button" class="sky-stop-chip');
+    // Only All blocks… is still a button: it opens the catalog, it doesn't tack.
+    expect(drag.match(/<button type="button" class="sky-stop-chip[^"]*"/g)).toEqual(['<button type="button" class="sky-stop-chip sky-catalog-chip"']);
     expect(drag).toMatch(/<span class="sky-stop-chip drag-only" data-kind="agent" draggable="true" title="Agent does its thing\nDrag onto a line or the sky"/);
     const src = code("components/flights/StopShelf.tsx");
     expect(src).toMatch(/onClick=\{\(\) => onTack\(def\.kind\)\}/);
@@ -161,5 +174,7 @@ describe("the stops row", () => {
     expect(css).toMatch(/@media \(hover: none\) \{\s*\.sky-stops-hint \{\s*display: none;/);
     expect(css).toMatch(/\.sky-stops-chips \{[^}]*overflow-x: auto;[^}]*scrollbar-width: thin;/);
     expect(css).toMatch(/\.sky-stop-chip \{[^}]*height: var\(--fl-ctl-h, 28px\);/);
+    // The regions' labels: tiny and muted.
+    expect(css).toMatch(/\.sky-stops-label \{[^}]*color: var\(--fl-ink-muted, var\(--muted\)\);[^}]*font-size: 9\.5px;/);
   });
 });
