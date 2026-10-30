@@ -4130,6 +4130,37 @@ a.fl-waiting-ref:hover {
   opacity: 0.55;
   cursor: default;
 }
+
+/* What a flying / flown stop did (round 12): the flight's history on it, a
+   command's output, the fast-track's word for a ship stop. */
+.stop-dialog-log {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.stop-dialog-hist {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.stop-dialog-out {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 /* The Sky guide (SkyGuide.tsx): a wide card, the section list on the left,
    the section on the right scrolling on its own. The sketches draw in
    currentColor and the theme tokens, so both themes work. */
@@ -6989,6 +7020,7 @@ a.fl-waiting-ref:hover {
  * 13px type that the mid band grows a little under 80% (like a line's). */
 
 .sky-lane {
+  position: relative;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -7338,6 +7370,17 @@ a.fl-waiting-ref:hover {
 
 .sky-lane[data-open] .sky-lane-stub-name {
   white-space: normal;
+}
+
+/* The corner handle (round 12): the card's look, pinned to the lane's corner.
+   The lane scrolls inside, so the handle sticks to the frame, not the list. */
+.sky-lane > .sky-lane-resize {
+  position: sticky;
+  align-self: flex-end;
+  margin-top: auto;
+  bottom: 0;
+  right: 0;
+  flex: 0 0 16px;
 }
 /* The Sky's new-session block (NewSessionBlock.tsx): a block on the sky at
  * the spot the owner double-clicked (or dropped the Session chip) — a card with

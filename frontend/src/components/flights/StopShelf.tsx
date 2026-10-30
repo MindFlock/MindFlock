@@ -30,7 +30,7 @@ import type { FlightPlan, StepKindDef } from "../../lib/flights";
 import { deletePlan, resetPlan, savePlan } from "../../lib/flightsApi";
 import { NEW_SESSION_MIME } from "../../lib/skyLayout";
 import { checkRename, planDots, savedStopOrder } from "../../lib/groundedLines";
-import { defaultKinds, savedDragData, stopDragData, type CatalogDrop } from "../../lib/stopCatalog";
+import { SHELF_KEY, onShelf, readShelf, savedDragData, shelfKinds, shelfPlans, stopDragData, toggleShelf, type CatalogDrop, type ShelfPick } from "../../lib/stopCatalog";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
 import { useFlightKinds, useFlightPlans } from "../../state/queries";
@@ -60,7 +60,7 @@ function onStopDrag(e: DragEvent, def: StepKindDef) {
   e.dataTransfer.effectAllowed = "copy";
 }
 
-function StopChip({ def, onTack }: { def: StepKindDef; onTack?(kind: string): void }) {
+function StopChip({ def, onTack, onMenu }: { def: StepKindDef; onTack?(kind: string): void; onMenu?(def: StepKindDef, x: number, y: number): void }) {
   const name = kindName(def);
   const perch = def.actor === "you";
   const how = onTack ? "Click to tack it onto the focused line, or drag it onto a line or the sky" : "Drag onto a line or the sky";
@@ -68,8 +68,14 @@ function StopChip({ def, onTack }: { def: StepKindDef; onTack?(kind: string): vo
     className: "sky-stop-chip" + (perch ? " perch" : "") + (onTack ? "" : " drag-only"),
     "data-kind": def.kind,
     draggable: true,
-    title: (def.summary ? def.summary + "\n" : "") + how,
+    title: (def.summary ? def.summary + "\n" : "") + how + (onMenu ? " — right-click for more" : ""),
     onDragStart: (e: DragEvent) => onStopDrag(e, def),
+    onContextMenu: onMenu
+      ? (e: MouseEvent) => {
+          e.preventDefault();
+          onMenu(def, e.clientX, e.clientY);
+        }
+      : undefined,
   };
   const body = (
     <>
@@ -121,22 +127,22 @@ function SessionChip({ onSession }: { onSession?(): void }) {
   );
 }
 
-type MenuKey = "rename" | "takeoff" | "reset" | "delete";
+type MenuKey = "rename" | "takeoff" | "reset" | "delete" | "unshelve";
 
 /** A saved stop's menu: what it offers, by whether it is a built-in. */
 export function savedMenuItems(plan: Pick<FlightPlan, "builtin">): Array<{ key: MenuKey; label: string; danger?: boolean }> {
   return [
     { key: "rename", label: "Rename" },
     { key: "takeoff", label: "Takes off…" },
+    { key: "unshelve", label: "Take off the shelf" },
     plan.builtin ? { key: "reset", label: "Reset to default" } : { key: "delete", label: "Delete", danger: true },
   ];
 }
 
 /** The menu at the pointer, in the shape of a box's (StopMenu): ↑ / ↓, Enter,
  * Esc or a press elsewhere closes it. */
-function SavedMenu({ plan, x, y, onPick, onClose }: { plan: FlightPlan; x: number; y: number; onPick(k: MenuKey): void; onClose(): void }) {
+function SavedMenu({ label, items, x, y, onPick, onClose }: { label: string; items: Array<{ key: MenuKey; label: string; danger?: boolean }>; x: number; y: number; onPick(k: MenuKey): void; onClose(): void }) {
   const ref = useRef<HTMLDivElement>(null);
-  const items = savedMenuItems(plan);
   useEffect(() => {
     ref.current?.querySelector<HTMLButtonElement>("button")?.focus();
     const onDown = (e: Event) => {
@@ -171,7 +177,7 @@ function SavedMenu({ plan, x, y, onPick, onClose }: { plan: FlightPlan; x: numbe
       ref={ref}
       className="fl-stopmenu sky-saved-menu"
       role="menu"
-      aria-label={"“" + plan.name + "” — what you can do"}
+      aria-label={"“" + label + "” — what you can do"}
       style={{ position: "fixed", left: x, top: y }}
       onKeyDown={onKey}
       onContextMenu={(e) => e.preventDefault()}
@@ -325,9 +331,31 @@ export interface StopShelfProps {
 export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold }: StopShelfProps): JSX.Element {
   const kinds = useFlightKinds().data;
   const plans = useFlightPlans().data;
-  const blocks = defaultKinds(kinds || []);
-  const saved = savedStopOrder(plans || []);
+  // What sits on the shelf is the owner's pick (per device): the default
+  // blocks to begin with, no multi-step block; the catalog's ★ adds, a chip's
+  // "Take off the shelf" removes.
+  const [shelf, setShelf] = useState<ShelfPick>(() => {
+    try {
+      return readShelf(localStorage.getItem(SHELF_KEY));
+    } catch {
+      return readShelf(null);
+    }
+  });
+  const changeShelf = (next: (p: ShelfPick) => ShelfPick) =>
+    setShelf((p) => {
+      const n = next(p);
+      try {
+        localStorage.setItem(SHELF_KEY, JSON.stringify(n));
+      } catch {
+        /* a private window: the pick lives for the session */
+      }
+      return n;
+    });
+  const blocks = shelfKinds(shelf, kinds || []);
+  const allSaved = savedStopOrder(plans || []);
+  const saved = shelfPlans(shelf, allSaved);
   const [menu, setMenu] = useState<{ plan: FlightPlan; x: number; y: number } | null>(null);
+  const [kindMenu, setKindMenu] = useState<{ def: StepKindDef; x: number; y: number } | null>(null);
   const [renaming, setRenaming] = useState("");
   const [takeoff, setTakeoff] = useState<FlightPlan | null>(null);
   const [deleting, setDeleting] = useState<FlightPlan | null>(null);
@@ -339,7 +367,7 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
     setCatalog(false);
     if ("kind" in d) onTack?.(d.kind);
     else {
-      const plan = saved.find((p) => p.id === d.planId);
+      const plan = allSaved.find((p) => p.id === d.planId);
       if (plan) onTackPlan?.(plan);
     }
   };
@@ -349,6 +377,7 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
     setMenu(null);
     if (!plan) return;
     if (key === "rename") setRenaming(plan.id);
+    else if (key === "unshelve") changeShelf((p) => toggleShelf(p, { planId: plan.id }));
     else if (key === "takeoff") setTakeoff(plan);
     else if (key === "delete") setDeleting(plan);
     else if (key === "reset") {
@@ -401,7 +430,7 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
                 </span>
                 <SessionChip onSession={onSession} />
                 {blocks.map((k) => (
-                  <StopChip key={k.kind} def={k} onTack={onTack} />
+                  <StopChip key={k.kind} def={k} onTack={onTack} onMenu={(def, x, y) => setKindMenu({ def, x, y })} />
                 ))}
               </div>
               {saved.length > 0 && (
@@ -415,7 +444,7 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
                       <SavedChip
                         key={p.id}
                         plan={p}
-                        plans={saved}
+                        plans={allSaved}
                         kinds={kinds || []}
                         renaming={renaming === p.id}
                         onTackPlan={onTackPlan}
@@ -457,8 +486,30 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
           />
         </div>
       )}
-      {menu && <SavedMenu plan={menu.plan} x={menu.x} y={menu.y} onPick={(k) => void pick(k)} onClose={() => setMenu(null)} />}
-      {catalog && <StopCatalog kinds={kinds || []} plans={saved} onAdd={onTack || onTackPlan ? add : undefined} onClose={() => setCatalog(false)} />}
+      {menu && <SavedMenu label={menu.plan.name} items={savedMenuItems(menu.plan)} x={menu.x} y={menu.y} onPick={(k) => void pick(k)} onClose={() => setMenu(null)} />}
+      {kindMenu && (
+        <SavedMenu
+          label={kindName(kindMenu.def)}
+          items={[{ key: "unshelve", label: "Take off the shelf" }]}
+          x={kindMenu.x}
+          y={kindMenu.y}
+          onPick={() => {
+            changeShelf((p) => toggleShelf(p, { kind: kindMenu.def.kind }));
+            setKindMenu(null);
+          }}
+          onClose={() => setKindMenu(null)}
+        />
+      )}
+      {catalog && (
+        <StopCatalog
+          kinds={kinds || []}
+          plans={allSaved}
+          onAdd={onTack || onTackPlan ? add : undefined}
+          onClose={() => setCatalog(false)}
+          shelf={(d) => onShelf(shelf, d)}
+          onShelfToggle={(d) => changeShelf((p) => toggleShelf(p, d))}
+        />
+      )}
       {takeoff && <TakeoffDialog plan={takeoff} onClose={() => setTakeoff(null)} />}
     </section>
   );

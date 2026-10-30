@@ -79,3 +79,56 @@ export function savedDragData(plan: Pick<FlightPlan, "id" | "name">): Array<[str
     ["text/plain", plan.name],
   ];
 }
+
+// --- What sits on the shelf (the owner's pick) ------------------------------
+
+/** The browser key the pick lives under (per device, like the layout). */
+export const SHELF_KEY = "mf_sky_shelf";
+
+/** The blocks on the shelf: kinds, and saved stops by id. The default is the
+ * five default blocks and NO multi-step block — those wait in the catalog. */
+export interface ShelfPick {
+  kinds: string[];
+  plans: string[];
+}
+
+export const defaultShelf = (): ShelfPick => ({ kinds: [...DEFAULT_KINDS], plans: [] });
+
+/** A stored pick, or the default when there is none or it is malformed. */
+export function readShelf(raw: string | null | undefined): ShelfPick {
+  if (!raw) return defaultShelf();
+  try {
+    const v = JSON.parse(raw) as Partial<ShelfPick> | null;
+    const list = (x: unknown) => (Array.isArray(x) ? x.filter((k): k is string => typeof k === "string") : null);
+    const kinds = list(v?.kinds);
+    const plans = list(v?.plans);
+    if (!kinds || !plans) return defaultShelf();
+    return { kinds, plans };
+  } catch {
+    return defaultShelf();
+  }
+}
+
+export const onShelf = (pick: ShelfPick, d: CatalogDrop): boolean => ("kind" in d ? pick.kinds.includes(d.kind) : pick.plans.includes(d.planId));
+
+/** The pick with `d` put on or taken off (Take off the shelf / On the shelf). */
+export function toggleShelf(pick: ShelfPick, d: CatalogDrop): ShelfPick {
+  if ("kind" in d) {
+    const on = pick.kinds.includes(d.kind);
+    return { ...pick, kinds: on ? pick.kinds.filter((k) => k !== d.kind) : [...pick.kinds, d.kind] };
+  }
+  const on = pick.plans.includes(d.planId);
+  return { ...pick, plans: on ? pick.plans.filter((k) => k !== d.planId) : [...pick.plans, d.planId] };
+}
+
+/** The shelf's kind chips: the pick's kinds the server lists, in the pick's
+ * order (a kind the server dropped is skipped). */
+export function shelfKinds<K extends Pick<StepKindDef, "kind">>(pick: ShelfPick, kinds: readonly K[]): K[] {
+  const by = new Map(kinds.map((k) => [k.kind, k]));
+  return pick.kinds.map((k) => by.get(k)).filter((k): k is K => !!k);
+}
+
+/** The shelf's saved stops: the ones picked, in the shelf's usual order. */
+export function shelfPlans<P extends Pick<FlightPlan, "id">>(pick: ShelfPick, plans: readonly P[]): P[] {
+  return plans.filter((p) => pick.plans.includes(p.id));
+}

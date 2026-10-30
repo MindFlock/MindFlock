@@ -5,6 +5,7 @@
  * 13px type that the mid band grows a little under 80% (like a line's). */
 
 .sky-lane {
+  position: relative;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -354,4 +355,15 @@
 
 .sky-lane[data-open] .sky-lane-stub-name {
   white-space: normal;
+}
+
+/* The corner handle (round 12): the card's look, pinned to the lane's corner.
+   The lane scrolls inside, so the handle sticks to the frame, not the list. */
+.sky-lane > .sky-lane-resize {
+  position: sticky;
+  align-self: flex-end;
+  margin-top: auto;
+  bottom: 0;
+  right: 0;
+  flex: 0 0 16px;
 }

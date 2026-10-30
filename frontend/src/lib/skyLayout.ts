@@ -65,7 +65,24 @@ export const INTAKE_OPEN_W = 420;
 
 /** The intake lane's size before it has measured itself: its width, folded
  * or expanded, and a guess at its height. Once measured, its measure. */
+export const INTAKE_MIN_W = 200;
+export const INTAKE_MIN_H = 160;
+export const INTAKE_MAX_W = 1200;
+export const INTAKE_MAX_H = 1600;
+
+/** The lane's frame when the owner dragged its corner (`w`/`h` on its
+ * layout entry), clamped; null when it sizes itself. */
+export function intakeFrame(stored: StoredLine | undefined): { w: number; h: number } | null {
+  if (!stored || !Number.isFinite(stored.w) || !Number.isFinite(stored.h)) return null;
+  return {
+    w: Math.min(INTAKE_MAX_W, Math.max(INTAKE_MIN_W, Math.round(stored.w as number))),
+    h: Math.min(INTAKE_MAX_H, Math.max(INTAKE_MIN_H, Math.round(stored.h as number))),
+  };
+}
+
 export function intakeSize(stored: StoredLine | undefined, measured?: { w: number; h: number }): { w: number; h: number } {
+  const frame = intakeFrame(stored);
+  if (frame) return frame;
   if (measured && measured.w > 0 && measured.h > 0) return measured;
   return stored?.open ? { w: INTAKE_OPEN_W, h: 520 } : { w: INTAKE_W, h: 320 };
 }
@@ -258,6 +275,10 @@ export interface SkyLineLayout {
   paneH?: number;
   pinned?: boolean;
   boxW?: number;
+  /** A sky object's own frame, dragged by its corner (the intake lane; a
+   * line's boxes use boxW/boxH instead). Screen-independent plane px. */
+  w?: number;
+  h?: number;
   boxH?: number;
 }
 
@@ -377,7 +398,7 @@ function cleanLine(v: unknown): StoredLine | null {
   }
   if (SKY_SIZES.includes(p.size as SkyLineSize) && p.size !== "normal") out.size = p.size as SkyLineSize;
   if (p.open === true) out.open = true;
-  for (const k of ["paneW", "paneH"] as const) if (Number.isFinite(p[k]) && (p[k] as number) > 0) out[k] = Math.round(p[k] as number);
+  for (const k of ["paneW", "paneH", "w", "h"] as const) if (Number.isFinite(p[k]) && (p[k] as number) > 0) out[k] = Math.round(p[k] as number);
   // The boxes' own size, clamped — both numbers or neither, and neither when
   // they are just the preset's.
   if (Number.isFinite(p.boxW) || Number.isFinite(p.boxH)) {

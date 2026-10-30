@@ -201,3 +201,25 @@ describe("StopCatalog", () => {
     expect(code("components/flights/StopCatalog.tsx")).not.toMatch(/\bwindow\.(prompt|alert|confirm)\(/);
   });
 });
+
+describe("what sits on the shelf (the pick)", () => {
+  it("defaults to the five blocks and no multi-step block; a stored pick wins; junk falls back", async () => {
+    const { readShelf, defaultShelf, DEFAULT_KINDS } = await import("../lib/stopCatalog");
+    expect(readShelf(null)).toEqual({ kinds: [...DEFAULT_KINDS], plans: [] });
+    expect(readShelf("not json")).toEqual(defaultShelf());
+    expect(readShelf(JSON.stringify({ kinds: ["ship"], plans: ["p_1", 3] }))).toEqual({ kinds: ["ship"], plans: ["p_1"] });
+    expect(readShelf(JSON.stringify({ kinds: "ship" }))).toEqual(defaultShelf());
+  });
+  it("toggles a kind or a saved stop on and off, and filters the shelf's chips", async () => {
+    const { toggleShelf, onShelf, shelfKinds, shelfPlans, defaultShelf } = await import("../lib/stopCatalog");
+    let pick = defaultShelf();
+    expect(onShelf(pick, { kind: "wait" })).toBe(true);
+    pick = toggleShelf(pick, { kind: "wait" });
+    expect(onShelf(pick, { kind: "wait" })).toBe(false);
+    pick = toggleShelf(pick, { planId: "builtin:ticket" });
+    expect(onShelf(pick, { planId: "builtin:ticket" })).toBe(true);
+    pick = toggleShelf(pick, { kind: "split" });
+    expect(shelfKinds(pick, [{ kind: "agent" }, { kind: "split" }, { kind: "wait" }]).map((k) => k.kind)).toEqual(["agent", "split"]);
+    expect(shelfPlans(pick, [{ id: "builtin:ticket" }, { id: "p_x" }]).map((p) => p.id)).toEqual(["builtin:ticket"]);
+  });
+});

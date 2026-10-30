@@ -108,6 +108,7 @@ import {
   type SkyCamera,
   type SkyLineLayout,
   type SkyMode,
+  intakeFrame,
 } from "../../lib/skyLayout";
 import {
   MARQUEE_MIN,
@@ -132,8 +133,7 @@ import {
   type SelectStop,
   type SkySelection,
   type SkyTarget,
-  type SkyTool,
-} from "../../lib/skySelect";
+  type SkyTool, toggleStop } from "../../lib/skySelect";
 import { ChipRow, TextField } from "./controls";
 import { liveBoxParts } from "./FlightStrip";
 import { FlywayCanvas } from "./FlywayCanvas";
@@ -1503,6 +1503,7 @@ export function SkyView() {
           sessionOver={sessionOver === id}
           selected={at ? sel.lines.has(id) : undefined}
           highlighted={at ? sel.stops.get(id) : undefined}
+          onShiftSelect={at ? (n) => setSel((s) => toggleStop(s, id, n.id)) : undefined}
         />
       );
     return lineForSession(id, at);
@@ -1525,6 +1526,7 @@ export function SkyView() {
       dropFlyway={drop?.title === id ? drop.plan : null}
       selected={at ? sel.lines.has(id) : undefined}
       highlighted={at ? sel.stops.get(id) : undefined}
+      onShiftSelect={at ? (n) => setSel((s) => toggleStop(s, id, n.id)) : undefined}
     />
   );
 
@@ -1563,7 +1565,8 @@ export function SkyView() {
   );
 
   const intakeOpen = !!layout[INTAKE_KEY]?.open;
-  const intakeW = intakeOpen ? INTAKE_OPEN_W : INTAKE_W;
+  const intakeFrameNow = intakeFrame(layout[INTAKE_KEY]);
+  const intakeW = intakeFrameNow?.w ?? (intakeOpen ? INTAKE_OPEN_W : INTAKE_W);
   const intakeAt = posOf(INTAKE_KEY);
 
   if (narrow)
@@ -1638,6 +1641,9 @@ export function SkyView() {
                     plans={plans}
                     onFly={focusOn}
                     width={intakeW}
+                    height={intakeFrameNow?.h}
+                    zoom={cam.z}
+                    onResize={(w, h) => onLayout(INTAKE_KEY, { w, h })}
                     open={intakeOpen}
                     onToggleOpen={() => onLayout(INTAKE_KEY, { open: !intakeOpen })}
                     onHeadDown={(e) => onDragStart(INTAKE_KEY, e)}

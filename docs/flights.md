@@ -3446,3 +3446,31 @@ of Alt+Y"). The keymap's `view` entry is `{key: "y", mod: true}`: Ctrl+Y, or ⌘
 on a Mac, like Ctrl+P / B / N. Alt+Y is gone. The guard is unchanged: it fires
 from a terminal, as Ctrl+P / B / N do, so it takes readline's C-y yank there.
 A text field keeps it (redo), and nothing happens behind a dialog.
+
+### Round 12 follow-ups (the owner, live, 2026-10-30)
+
+- **Shift+click on a box** adds it to (or takes it out of) the selection:
+  `toggleStop` in `lib/skySelect.ts`; a stop selection is always one line's,
+  so a box of another line, or a line selection, gives way. The canvas's
+  `onShiftSelect` prop carries it up through SkyLine / GroundedLine.
+- **What sits on the shelf is a pick** (`mf_sky_shelf`, `ShelfPick {kinds,
+  plans}` in `lib/stopCatalog.ts`): the five default blocks and NO multi-step
+  block to begin with. Right-click any chip → **Take off the shelf**; every
+  catalog row has a ★ / ☆ **On the shelf** toggle. The Multi-step region shows
+  only when a saved stop is picked.
+- **The intake lane resizes by its corner** (`w`/`h` on its layout entry,
+  `intakeFrame` clamps 200–1200 × 160–1600; the handle is `.sky-lane-resize`,
+  the drag divided by the sky's zoom).
+- **Removing a flight's last stop cancels the flight** (`_last_ones`, reason
+  "its last stop was removed") instead of 409 `last_step`: the box goes.
+- **A halted flight's steps can change** (`_editable` takes every UNFINISHED
+  state): tack on, edit or move pending stops, then Retry / Skip.
+- **The bird follows the work**: a flight halted or paused at a stop while the
+  agent is busy puts the bird on the session box (working), not on the stop.
+- **A click on a flying or flown stop opens its dialog** (a pending one still
+  selects; ✎ / Enter / double-click edit it). The read-only dialog shows
+  **What it did**: the flight's history on that stop, its note, a command's
+  output tail, and for a ship stop the fast-track's state / step / reason
+  (`stopLog` in `useSessionLine.tsx`). Ship lanes run in the server, not in
+  the terminal, so this is the place to look.
+- **Ctrl+Y** (⌘Y) switches Grid ⇄ Sky; **zoom** goes down to 10%.

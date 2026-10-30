@@ -161,6 +161,9 @@ export interface FlywayCanvasProps {
   /** A stop box picked (a click; and Enter, ✎, the menu's Edit when the host
    * passes no `onEdit`): open it in the inspector. */
   onSelect?(n: DiagramNode): void;
+  /** Shift+click on a stop or group box: the host adds it to (or takes it
+   * out of) its multi-selection instead of selecting it alone. */
+  onShiftSelect?(n: DiagramNode): void;
   /** The stop's dialog (✎, Enter / Space, a double-click, the menu's Edit):
    * with it, a click only selects. */
   onEdit?(n: DiagramNode): void;
@@ -447,8 +450,14 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
 
   const activate = (n: DiagramNode) => {
     if (justDragged.current) return;
-    if (n.kind === "stop" || n.kind === "group") p.onSelect?.(n);
-    else p.onOpen?.(n);
+    if (n.kind === "stop" || n.kind === "group") {
+      // A stop that is flying or has flown opens on a click — its dialog
+      // shows what it is doing / did (the owner: "for push or commit I want
+      // to see what is going on when I click, like the agent"). A pending
+      // one selects; ✎, Enter or a double-click edit it.
+      if (!n.editable && p.onEdit && n.state !== "pending") p.onEdit(n);
+      else p.onSelect?.(n);
+    } else p.onOpen?.(n);
   };
   /** The stop's dialog — the inspector, on a host without one. */
   const edit = (n: DiagramNode) => (p.onEdit ? p.onEdit(n) : p.onSelect?.(n));
@@ -940,7 +949,14 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
               onPointerCancel={onBoxUp}
               // Inside a card, a click is the card's (the pane's tabs, its
               // terminal): only the box itself, or Enter on it, acts.
-              onClick={(e) => (open && e.target !== e.currentTarget ? undefined : activate(n))}
+              onClick={(e) => {
+                if (open && e.target !== e.currentTarget) return;
+                if (e.shiftKey && p.onShiftSelect && (n.kind === "stop" || n.kind === "group") && !justDragged.current) {
+                  p.onShiftSelect(n);
+                  return;
+                }
+                activate(n);
+              }}
               onDoubleClick={(e) => {
                 if (!p.onEdit || open || (n.kind !== "stop" && n.kind !== "group")) return;
                 if ((e.target as HTMLElement).closest("button, input, textarea, a, summary")) return;

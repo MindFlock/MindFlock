@@ -2905,14 +2905,18 @@ def op_cancel(
 
 
 def _editable(flight: dict) -> None:
-    """Steps change only on a flight in the air (running, waiting, paused) or
-    one still on the ground."""
-    if flight["state"] not in HOLDING and flight["state"] != GROUNDED:
+    """Steps change on any flight not yet over: in the air (running, waiting,
+    paused), halted on a failure (the owner tacks on or takes out stops to
+    get it going again) or still on the ground. A landed or cancelled one is
+    history."""
+    if flight["state"] not in UNFINISHED:
         raise FlightError(
             "finished",
             409,
-            "this flight is %s — its steps can't change"
-            % {"halted": "halted", "done": "landed"}.get(flight["state"], "over"),
+            "this flight has %s — its steps can't change"
+            % {"done": "landed", "cancelled": "been cancelled"}.get(
+                flight["state"], "ended"
+            ),
         )
 
 
@@ -3230,24 +3234,29 @@ def _remove_at(flight: dict, i: int, now: float) -> dict:
     return step
 
 
-def _keep_one(flight: dict, n: int) -> None:
-    if n >= len(flight["steps"]):
-        raise FlightError(
-            "last_step",
-            409,
-            "a flight keeps at least one stop — remove the flight instead",
-        )
+LAST_STOP_REMOVED = "its last stop was removed"
+
+
+def _last_ones(flight: dict, n: int, ts: float) -> bool:
+    """Removing ``n`` steps would leave none: the flight has nothing left to
+    fly, so it is cancelled instead (the owner's "get rid of it" on a one-stop
+    line — round 12). True when that happened; the caller returns."""
+    if n < len(flight["steps"]):
+        return False
+    op_cancel(flight, LAST_STOP_REMOVED, ts)
+    return True
 
 
 def op_remove_step(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     """Take a step out of a flight not yet over — any step (docs/flights.md
-    "Removing the stop that is flying", :func:`_remove_at`). The last one
-    left is 409 ``last_step``. The step's side effects (an armed lane, a
-    command) are the driver's to stop."""
+    "Removing the stop that is flying", :func:`_remove_at`). Taking the last
+    one out cancels the flight (:func:`_last_ones`). The step's side effects
+    (an armed lane, a command) are the driver's to stop."""
     ts = float(now if now is not None else time.time())
     _not_final(flight)
     i = _step_index(flight, sid)
-    _keep_one(flight, 1)
+    if _last_ones(flight, 1, ts):
+        return flight
     _remove_at(flight, i, ts)
     return flight
 
@@ -3265,7 +3274,8 @@ def op_remove_group(flight: dict, sid: str, now: Optional[float] = None) -> dict
         for k, s in enumerate(flight["steps"])
         if k == i or (gid and (s.get("group") or {}).get("id") == gid)
     ]
-    _keep_one(flight, len(idx))
+    if _last_ones(flight, len(idx), ts):
+        return flight
     for k in reversed(idx):
         _remove_at(flight, k, ts)
     return flight

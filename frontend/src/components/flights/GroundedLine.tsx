@@ -20,6 +20,7 @@
 
 import { useEffect, useRef, useState, type JSX, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { Flight, FlightPlan, StepKindDef } from "../../lib/flights";
+import type { DiagramNode } from "../../lib/flightDiagram";
 import { deleteFlight, savePlan } from "../../lib/flightsApi";
 import { isRemoveKey, planToSave, sourcePlanId } from "../../lib/groundedLines";
 import { lodFor, nearLines, type SkyLineLayout } from "../../lib/skyLayout";
@@ -52,6 +53,8 @@ export interface GroundedLineProps {
   selected?: boolean;
   /** Its stop boxes in the Sky's selection (node ids). */
   highlighted?: ReadonlySet<string>;
+  /** Shift+click on a box: the host's multi-selection (SkySelection). */
+  onShiftSelect?(n: DiagramNode): void;
   /** False in the sky's click mode: the bar never starts a move. */
   draggable?: boolean;
   /** The host's handle on this line's Delete (SkyLine's `registerDelete`). */
@@ -221,6 +224,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
           lod={lod}
           {...line.canvas}
           highlighted={p.highlighted}
+          onShiftSelect={p.onShiftSelect}
           roomy
         />
       </div>

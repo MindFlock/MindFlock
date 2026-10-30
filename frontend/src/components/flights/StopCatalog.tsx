@@ -29,6 +29,10 @@ export interface StopCatalogProps {
   /** Add / Enter: the host tacks it onto the focused line. Without it the
    * rows only drag. */
   onAdd?(drop: CatalogDrop): void;
+  /** Is this block on the shelf? With `onShelfToggle`, every row gets a ★ /
+   * ☆ that puts it on the shelf or takes it off (the shelf's own pick). */
+  shelf?(drop: CatalogDrop): boolean;
+  onShelfToggle?(drop: CatalogDrop): void;
   onClose(): void;
   /** Default true (into document.body); false renders in place (the tests). */
   portal?: boolean;
@@ -36,7 +40,7 @@ export interface StopCatalogProps {
 
 const rowId = (i: number) => "sky-catalog-row-" + i;
 
-export function StopCatalog({ kinds, plans, onAdd, onClose, portal = true }: StopCatalogProps): JSX.Element {
+export function StopCatalog({ kinds, plans, onAdd, onClose, portal = true, shelf, onShelfToggle }: StopCatalogProps): JSX.Element {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -74,12 +78,31 @@ export function StopCatalog({ kinds, plans, onAdd, onClose, portal = true }: Sto
     if (e.dataTransfer && e.dataTransfer.dropEffect !== "none") onClose();
   };
 
-  const addButton = (d: CatalogDrop, name: string) =>
-    onAdd && (
-      <button type="button" className="test-btn sky-catalog-add" tabIndex={-1} aria-label={"Add “" + name + "”"} onClick={() => add(d)}>
-        Add
-      </button>
+  const addButton = (d: CatalogDrop, name: string) => {
+    const on = shelf ? shelf(d) : false;
+    return (
+      <>
+        {onShelfToggle && (
+          <button
+            type="button"
+            className={"fl-icon-btn sky-catalog-shelf" + (on ? " on" : "")}
+            tabIndex={-1}
+            aria-pressed={on}
+            aria-label={(on ? "Take “" : "Put “") + name + (on ? "” off the shelf" : "” on the shelf")}
+            title={on ? "On the shelf — click to take it off" : "Put it on the shelf at the foot of the sky"}
+            onClick={() => onShelfToggle(d)}
+          >
+            {on ? "★" : "☆"}
+          </button>
+        )}
+        {onAdd && (
+          <button type="button" className="test-btn sky-catalog-add" tabIndex={-1} aria-label={"Add “" + name + "”"} onClick={() => add(d)}>
+            Add
+          </button>
+        )}
+      </>
     );
+  };
 
   const how = onAdd ? "Drag onto a line or the sky, or Add it to the focused line" : "Drag onto a line or the sky";
   let i = -1;

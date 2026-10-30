@@ -815,9 +815,17 @@ export function drawnCanvas<C extends IndexedCanvas>(d: Diagram, canvas: C): { d
  * "at Push · waiting for 2 of 3", "fast-track at Push". Empty while the bird
  * sits on the session box itself (its state chip says it) or nowhere. */
 export function lineWhere(d: Diagram): string {
-  const b = birdPerch(d);
-  const n = b ? d.nodes.find((x) => x.id === b.nodeId) : undefined;
-  if (!b || !n || n.kind === "session") return "";
+  let b = birdPerch(d);
+  let n = b ? d.nodes.find((x) => x.id === b!.nodeId) : undefined;
+  if (!n || n.kind === "session") {
+    // The bird may sit on a busy session while the flight is parked at a
+    // stop (birdPerch): the bar still says where the flight is.
+    const parked = d.nodes.find((x) => x.row === "main" && (x.kind === "stop" || x.kind === "group") && (x.state === "halted" || x.state === "paused"));
+    if (!parked) return "";
+    n = parked;
+    b = { nodeId: parked.id, tone: STOP_TONE[parked.state]! };
+  }
+  if (!b) return "";
   const head = n.kind === "rung" ? "fast-track at " : b.tone === "you" ? "waiting on you at " : b.tone === "halted" ? "halted at " : b.tone === "paused" ? "paused at " : "at ";
   const tail = n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? n.reason : n.kind === "stop" || n.kind === "group" ? n.sub : "";
   return head + n.title + (tail ? " · " + tail : "");
@@ -1018,7 +1026,15 @@ const STOP_TONE: Partial<Record<DiagramNodeState, BirdTone>> = {
 export function birdPerch(d: Diagram): BirdPerch | null {
   const main = d.nodes.filter((n) => n.row === "main");
   const stop = main.find((n) => (n.kind === "stop" || n.kind === "group") && STOP_TONE[n.state]);
-  if (stop && (stop.state === "halted" || stop.state === "paused")) return { nodeId: stop.id, tone: STOP_TONE[stop.state]! };
+  const me = main.find((n) => n.kind === "session");
+  // The bird follows the work: a flight halted or paused at a stop while
+  // the agent itself is busy puts the bird on the session box, not on the
+  // stop it is parked at (the owner: "why is the bird on Commit when the
+  // agent is running").
+  if (stop && (stop.state === "halted" || stop.state === "paused")) {
+    if (me?.chip?.tone === "working") return { nodeId: me.id, tone: "working" };
+    return { nodeId: stop.id, tone: STOP_TONE[stop.state]! };
+  }
   const point = main.find((n) => n.join && n.join.waiting > 0);
   if (point) {
     const asking = d.nodes.some((n) => n.branch?.to === point.id && n.branch.state === "asking");
@@ -1027,7 +1043,6 @@ export function birdPerch(d: Diagram): BirdPerch | null {
   if (stop) return { nodeId: stop.id, tone: STOP_TONE[stop.state]! };
   const rung = main.find((n) => n.kind === "rung" && (n.state === "current" || n.state === "halted"));
   if (rung) return { nodeId: rung.id, tone: rung.state === "halted" ? "halted" : "working" };
-  const me = main.find((n) => n.kind === "session");
   if (me?.chip?.tone === "working") return { nodeId: me.id, tone: "working" };
   if (me?.chip?.tone === "attention") return { nodeId: me.id, tone: "you" };
   return null;

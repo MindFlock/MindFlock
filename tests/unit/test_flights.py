@@ -1261,10 +1261,14 @@ def test_op_add_step_rules():
     F.op_remove_step(f, "s4", now=NOW)
     F.op_add_step(f, step("notify"), now=NOW)
     assert f["steps"][-1]["id"] == "s5"
-    # Paused flights take steps; finished / halted ones refuse.
+    # Paused and halted flights take steps (the owner tacks on past a
+    # failure); finished ones refuse.
     F.op_pause(f, now=NOW)
     F.op_add_step(f, step("notify"), now=NOW)
-    for state in ("halted", "done", "cancelled"):
+    h = copy.deepcopy(f)
+    h["state"] = "halted"
+    F.op_add_step(h, step("notify"), now=NOW)
+    for state in ("done", "cancelled"):
         g = copy.deepcopy(f)
         g["state"] = state
         with pytest.raises(F.FlightError) as err:
@@ -1318,10 +1322,10 @@ def test_op_edit_and_remove_only_touch_pending_steps_ahead():
     assert (f["state"], f["cursor"]) == ("running", 0)
     F.op_remove_step(f, "s3", now=NOW)
     assert [s["id"] for s in f["steps"]] == ["s1"]
-    # The last stop stays: remove the flight instead.
-    with pytest.raises(F.FlightError) as err:
-        F.op_remove_step(f, "s1", now=NOW)
-    assert (err.value.status, err.value.error) == (409, "last_step")
+    # Taking the last stop out cancels the flight: nothing is left to fly.
+    F.op_remove_step(f, "s1", now=NOW)
+    assert (f["state"], f["reason"]) == ("cancelled", F.LAST_STOP_REMOVED)
+    assert [s["id"] for s in f["steps"]] == ["s1"]
 
 
 def test_step_history_events_survive_the_store():
@@ -1379,13 +1383,13 @@ def test_op_move_step_refusals():
         with pytest.raises(F.PlanError) as perr:
             F.op_move_step(f, "s3", at, now=NOW)
         assert perr.value.field == "at"
-    for state in ("halted", "done", "cancelled"):
+    for state in ("done", "cancelled"):
         g = copy.deepcopy(f)
         g["state"] = state
         with pytest.raises(F.FlightError) as err:
             F.op_move_step(g, "s3", 1, now=NOW)
         assert (err.value.status, err.value.error) == (409, "finished")
-    # Paused flights take moves.
+    # Paused (and halted) flights take moves.
     F.op_pause(f, now=NOW)
     F.op_move_step(f, "s3", 1, now=NOW)
     assert [s["id"] for s in f["steps"]] == ["s1", "s3", "s2", "s4"]
@@ -1499,9 +1503,10 @@ def test_a_halt_point_on_a_halted_flight_can_still_be_set():
     assert f["state"] == "halted"
     f = F.op_edit_step(f, "s2", {"halt": True}, now=NOW)
     assert f["steps"][1]["halt"] is True
-    with pytest.raises(F.FlightError) as err:
-        F.op_edit_step(f, "s2", {"title": "x"}, now=NOW)
-    assert err.value.error == "finished"
+    # A halted flight's pending steps change too (round 12: the owner fixes
+    # the line up before Retry / Skip).
+    f = F.op_edit_step(f, "s2", {"title": "x"}, now=NOW)
+    assert f["steps"][1]["title"] == "x"
 
 
 def test_go_actions_let_a_halt_point_through():

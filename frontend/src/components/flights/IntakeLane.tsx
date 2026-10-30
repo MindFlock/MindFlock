@@ -40,6 +40,12 @@ export interface IntakeLaneProps {
   plans: FlightPlan[];
   onFly(title: string): void;
   width?: number;
+  /** A height the owner dragged the corner to (else the lane sizes itself). */
+  height?: number;
+  /** The sky's zoom: a corner drag's screen delta becomes plane px by it. */
+  zoom?: number;
+  /** The corner handle: the frame the owner dragged to, on release. */
+  onResize?(w: number, h: number): void;
   /** Expanded: every waiting item of every source, headlines in full. */
   open?: boolean;
   /** ▸ / ▾ on the head, or a double-click on it: expand or fold. */
@@ -183,7 +189,35 @@ function Block({ block, onFly, open }: { block: SourceBlock; onFly(title: string
 /** A press on the head that is the head's own (not one of its buttons). */
 const headPress = (e: ReactPointerEvent) => e.button === 0 && !(e.target as Element).closest("button, a, input, summary, [data-no-drag]");
 
-export function IntakeLane({ rows, plans, onFly, width = 260, open = false, onToggleOpen, onHeadDown, draggable = true, onMeasure }: IntakeLaneProps) {
+export function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResize, open = false, onToggleOpen, onHeadDown, draggable = true, onMeasure }: IntakeLaneProps) {
+  const [live, setLive] = useState<{ w: number; h: number } | null>(null);
+  const grab = useRef<{ id: number; sx: number; sy: number; w: number; h: number } | null>(null);
+  const frameNow = live || { w: width, h: height ?? 0 };
+  const resizeDown = (e: ReactPointerEvent<HTMLSpanElement>) => {
+    if (e.button !== 0 || !onResize) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const el = rootRef.current;
+    grab.current = { id: e.pointerId, sx: e.clientX, sy: e.clientY, w: width, h: height ?? (el ? el.offsetHeight : 320) };
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* a synthetic event has no capture */
+    }
+  };
+  const resizeMove = (e: ReactPointerEvent<HTMLSpanElement>) => {
+    const g = grab.current;
+    if (!g || g.id !== e.pointerId) return;
+    const z = zoom > 0 ? zoom : 1;
+    setLive({ w: Math.max(200, Math.round(g.w + (e.clientX - g.sx) / z)), h: Math.max(160, Math.round(g.h + (e.clientY - g.sy) / z)) });
+  };
+  const resizeUp = (e: ReactPointerEvent<HTMLSpanElement>) => {
+    const g = grab.current;
+    if (!g || g.id !== e.pointerId) return;
+    grab.current = null;
+    if (live && onResize) onResize(live.w, live.h);
+    setLive(null);
+  };
   const settings = useSettingsDoc(true).data as Record<string, unknown> | undefined;
   const status = useMindflockStatus().data;
   const providers = useTicketingCatalog(true).data;
@@ -258,7 +292,21 @@ export function IntakeLane({ rows, plans, onFly, width = 260, open = false, onTo
   }
 
   return (
-    <nav ref={rootRef} className="sky-lane" aria-label="Intake" data-open={open ? "" : undefined} style={{ width }}>
+    <nav ref={rootRef} className="sky-lane" aria-label="Intake" data-open={open ? "" : undefined} style={{ width: frameNow.w, height: frameNow.h > 0 ? frameNow.h : undefined }}>
+      {onResize && (
+        <span
+          className="sky-lane-resize skl-resize"
+          role="separator"
+          tabIndex={0}
+          data-no-drag
+          aria-label="Resize the intake lane"
+          title="Drag to resize the intake lane"
+          onPointerDown={resizeDown}
+          onPointerMove={resizeMove}
+          onPointerUp={resizeUp}
+          onPointerCancel={resizeUp}
+        />
+      )}
       <div
         className="sky-lane-head"
         data-sky-head

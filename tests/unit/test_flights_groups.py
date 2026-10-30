@@ -222,9 +222,9 @@ def test_remove_a_whole_group_that_is_flying():
     # A step with no group: just that step.
     F.op_remove_group(f, "s6", now=NOW)
     assert [s["id"] for s in f["steps"]] == ["s1"]
-    with pytest.raises(F.FlightError) as err:
-        F.op_remove_group(f, "s1", now=NOW)
-    assert err.value.error == "last_step"
+    # The last one out cancels the flight.
+    F.op_remove_group(f, "s1", now=NOW)
+    assert (f["state"], f["reason"]) == ("cancelled", F.LAST_STOP_REMOVED)
 
 
 # --------------------------------------------------------------------------- #

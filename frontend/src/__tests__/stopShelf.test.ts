@@ -68,7 +68,7 @@ describe("the stops row", () => {
     expect(blocks.indexOf("sky-session-chip")).toBeLessThan(blocks.indexOf('data-kind="agent"'));
     expect(html.indexOf('data-kind="wait"')).toBeLessThan(html.indexOf("sky-catalog-chip"));
     // Tooltip: the kind's summary.
-    expect(html).toContain('title="Ship does its thing\nClick to tack it onto the focused line, or drag it onto a line or the sky"');
+    expect(html).toContain('title="Ship does its thing\nClick to tack it onto the focused line, or drag it onto a line or the sky — right-click for more"');
     expect(html).not.toMatch(/\b(node|plane)\b/i);
   });
 
@@ -90,7 +90,10 @@ describe("the stops row", () => {
     expect(html).not.toContain("sky-catalog-modal");
     const src = code("components/flights/StopShelf.tsx");
     expect(src).toContain("onClick={() => setCatalog(true)}");
-    expect(src).toContain("{catalog && <StopCatalog kinds={kinds || []} plans={saved} onAdd={onTack || onTackPlan ? add : undefined} onClose={() => setCatalog(false)} />}");
+    expect(src).toContain("<StopCatalog");
+    expect(src).toContain("plans={allSaved}");
+    expect(src).toContain("shelf={(d) => onShelf(shelf, d)}");
+    expect(src).toContain("onShelfToggle={(d) => changeShelf((p) => toggleShelf(p, d))}");
     // Add goes through the chips' own props.
     expect(src).toMatch(/if \("kind" in d\) onTack\?\.\(d\.kind\);/);
     expect(src).toMatch(/if \(plan\) onTackPlan\?\.\(plan\);/);
@@ -103,7 +106,7 @@ describe("the stops row", () => {
     const drag = render(createElement(StopShelf, {}));
     // Only All blocks… is still a button: it opens the catalog, it doesn't tack.
     expect(drag.match(/<button type="button" class="sky-stop-chip[^"]*"/g)).toEqual(['<button type="button" class="sky-stop-chip sky-catalog-chip"']);
-    expect(drag).toMatch(/<span class="sky-stop-chip drag-only" data-kind="agent" draggable="true" title="Agent does its thing\nDrag onto a line or the sky"/);
+    expect(drag).toMatch(/<span class="sky-stop-chip drag-only" data-kind="agent" draggable="true" title="Agent does its thing\nDrag onto a line or the sky — right-click for more"/);
     const src = code("components/flights/StopShelf.tsx");
     expect(src).toMatch(/onClick=\{\(\) => onTack\(def\.kind\)\}/);
   });

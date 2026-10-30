@@ -79664,9 +79664,18 @@ function drawnCanvas(d, canvas) {
 	};
 }
 function lineWhere(d) {
-	const b = birdPerch(d);
-	const n = b ? d.nodes.find((x) => x.id === b.nodeId) : void 0;
-	if (!b || !n || n.kind === "session") return "";
+	let b = birdPerch(d);
+	let n = b ? d.nodes.find((x) => x.id === b.nodeId) : void 0;
+	if (!n || n.kind === "session") {
+		const parked = d.nodes.find((x) => x.row === "main" && (x.kind === "stop" || x.kind === "group") && (x.state === "halted" || x.state === "paused"));
+		if (!parked) return "";
+		n = parked;
+		b = {
+			nodeId: parked.id,
+			tone: STOP_TONE[parked.state]
+		};
+	}
+	if (!b) return "";
 	const head = n.kind === "rung" ? "fast-track at " : b.tone === "you" ? "waiting on you at " : b.tone === "halted" ? "halted at " : b.tone === "paused" ? "paused at " : "at ";
 	const tail = n.join && n.join.waiting > 0 ? joinLabel(n.join) : b.tone === "halted" && n.reason ? n.reason : n.kind === "stop" || n.kind === "group" ? n.sub : "";
 	return head + n.title + (tail ? " · " + tail : "");
@@ -79821,10 +79830,17 @@ var STOP_TONE = {
 function birdPerch(d) {
 	const main = d.nodes.filter((n) => n.row === "main");
 	const stop = main.find((n) => (n.kind === "stop" || n.kind === "group") && STOP_TONE[n.state]);
-	if (stop && (stop.state === "halted" || stop.state === "paused")) return {
-		nodeId: stop.id,
-		tone: STOP_TONE[stop.state]
-	};
+	const me = main.find((n) => n.kind === "session");
+	if (stop && (stop.state === "halted" || stop.state === "paused")) {
+		if (me?.chip?.tone === "working") return {
+			nodeId: me.id,
+			tone: "working"
+		};
+		return {
+			nodeId: stop.id,
+			tone: STOP_TONE[stop.state]
+		};
+	}
 	const point = main.find((n) => n.join && n.join.waiting > 0);
 	if (point) {
 		const asking = d.nodes.some((n) => n.branch?.to === point.id && n.branch.state === "asking");
@@ -79842,7 +79858,6 @@ function birdPerch(d) {
 		nodeId: rung.id,
 		tone: rung.state === "halted" ? "halted" : "working"
 	};
-	const me = main.find((n) => n.kind === "session");
 	if (me?.chip?.tone === "working") return {
 		nodeId: me.id,
 		tone: "working"
@@ -80224,7 +80239,20 @@ var INTAKE_W = 240;
 var LINES_LEFT = 328;
 var INTAKE_KEY = "intake";
 var INTAKE_OPEN_W = 420;
+var INTAKE_MIN_W = 200;
+var INTAKE_MIN_H = 160;
+var INTAKE_MAX_W = 1200;
+var INTAKE_MAX_H = 1600;
+function intakeFrame(stored) {
+	if (!stored || !Number.isFinite(stored.w) || !Number.isFinite(stored.h)) return null;
+	return {
+		w: Math.min(INTAKE_MAX_W, Math.max(INTAKE_MIN_W, Math.round(stored.w))),
+		h: Math.min(INTAKE_MAX_H, Math.max(INTAKE_MIN_H, Math.round(stored.h)))
+	};
+}
 function intakeSize(stored, measured) {
+	const frame = intakeFrame(stored);
+	if (frame) return frame;
 	if (measured && measured.w > 0 && measured.h > 0) return measured;
 	return stored?.open ? {
 		w: INTAKE_OPEN_W,
@@ -80456,7 +80484,12 @@ function cleanLine(v) {
 	}
 	if (SKY_SIZES.includes(p.size) && p.size !== "normal") out.size = p.size;
 	if (p.open === true) out.open = true;
-	for (const k of ["paneW", "paneH"]) if (Number.isFinite(p[k]) && p[k] > 0) out[k] = Math.round(p[k]);
+	for (const k of [
+		"paneW",
+		"paneH",
+		"w",
+		"h"
+	]) if (Number.isFinite(p[k]) && p[k] > 0) out[k] = Math.round(p[k]);
 	if (Number.isFinite(p.boxW) || Number.isFinite(p.boxH)) {
 		const b = lineBox({
 			size: out.size,
@@ -81268,8 +81301,10 @@ function FlywayCanvas(p) {
 	};
 	const activate = (n) => {
 		if (justDragged.current) return;
-		if (n.kind === "stop" || n.kind === "group") p.onSelect?.(n);
-		else p.onOpen?.(n);
+		if (n.kind === "stop" || n.kind === "group") {
+			if (!n.editable && p.onEdit && n.state !== "pending") p.onEdit(n);
+			else p.onSelect?.(n);
+		} else p.onOpen?.(n);
 	};
 	const edit = (n) => p.onEdit ? p.onEdit(n) : p.onSelect?.(n);
 	const onBoxKey = (e, n) => {
@@ -81721,7 +81756,14 @@ function FlywayCanvas(p) {
 						onPointerMove: onBoxMove,
 						onPointerUp: onBoxUp,
 						onPointerCancel: onBoxUp,
-						onClick: (e) => open && e.target !== e.currentTarget ? void 0 : activate(n),
+						onClick: (e) => {
+							if (open && e.target !== e.currentTarget) return;
+							if (e.shiftKey && p.onShiftSelect && (n.kind === "stop" || n.kind === "group") && !justDragged.current) {
+								p.onShiftSelect(n);
+								return;
+							}
+							activate(n);
+						},
 						onDoubleClick: (e) => {
 							if (!p.onEdit || open || n.kind !== "stop" && n.kind !== "group") return;
 							if (e.target.closest("button, input, textarea, a, summary")) return;
@@ -83267,6 +83309,59 @@ function shelfPlanFor(name, steps, planId, plans) {
 		updated: 0
 	};
 }
+function stopLog(n, flight, rec, row) {
+	if (!flight || !n.step) return null;
+	const id = n.step.id;
+	const hist = (flight.history || []).filter((h) => h.step === id);
+	const out = String((rec?.detail)?.output || "");
+	const ap = n.step.kind === "ship" ? row?.autopilot : null;
+	if (!hist.length && !rec?.note && !out && !ap) return null;
+	const when = (t) => {
+		return (/* @__PURE__ */ new Date(t * 1e3)).toLocaleTimeString([], {
+			hour: "2-digit",
+			minute: "2-digit"
+		});
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+		className: "stop-dialog-log",
+		"aria-label": "What this stop did",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+				className: "fl-group-head",
+				children: "What it did"
+			}),
+			ap && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "fl-note",
+				children: [
+					"Fast-track: ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: ap.state }),
+					ap.step ? " · " + ap.step : "",
+					ap.reason ? " — " + ap.reason : ""
+				]
+			}),
+			hist.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
+				className: "stop-dialog-hist",
+				children: hist.slice(-12).map((h, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", { children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "muted",
+						children: when(h.at)
+					}),
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: h.event }),
+					h.note ? " — " + h.note : ""
+				] }, i))
+			}),
+			rec?.note && !hist.some((h) => h.note === rec.note) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "fl-note",
+				children: rec.note
+			}),
+			out && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("pre", {
+				className: "stop-dialog-out",
+				children: out.split("\n").slice(-40).join("\n")
+			})
+		]
+	});
+}
 function useSessionLine(title, src, opts) {
 	const { rows, flights, kinds, plans } = src;
 	const family = opts.family !== false;
@@ -83589,20 +83684,24 @@ function useSessionLine(title, src, opts) {
 			onDone: here && open.state === "perched" ? () => void act(() => stepDone(flight.id, open.step.id)) : void 0,
 			onRetry: here && open.state === "halted" ? () => void act(() => stepRetry(flight.id, open.step.id)) : void 0,
 			onSkip: here ? () => void act(() => stepSkip(flight.id, open.step.id)) : void 0,
-			extra: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [open.step?.kind === "split" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
-				className: "fl-note muted fl-split-hint",
-				children: "Prompts: one worker per line — each line starts a worker. One line (or none) and Count says how many."
-			}), offerJoin && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "fl-chiprow fl-join-offer",
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "fl-pick",
-					disabled: busy,
-					title: "Put a Join right after this Split: the line waits until every worker is done",
-					onClick: () => void addJoin(),
-					children: "+ Join"
+			extra: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+				!editable && stopLog(open, flight, rec, row),
+				open.step?.kind === "split" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "fl-note muted fl-split-hint",
+					children: "Prompts: one worker per line — each line starts a worker. One line (or none) and Count says how many."
+				}),
+				offerJoin && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "fl-chiprow fl-join-offer",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "fl-pick",
+						disabled: busy,
+						title: "Put a Join right after this Split: the line waits until every worker is done",
+						onClick: () => void addJoin(),
+						children: "+ Join"
+					})
 				})
-			})] })
+			] })
 		}, open.id);
 	}
 	return {
@@ -122731,6 +122830,16 @@ function toggleLine(s, id) {
 		stops: /* @__PURE__ */ new Map()
 	};
 }
+function toggleStop(s, line, node) {
+	const mine = s.stops.size === 1 && s.stops.has(line) && !s.lines.size ? new Set(s.stops.get(line)) : /* @__PURE__ */ new Set();
+	if (mine.has(node)) mine.delete(node);
+	else mine.add(node);
+	if (!mine.size) return NO_SELECTION;
+	return {
+		lines: /* @__PURE__ */ new Set(),
+		stops: /* @__PURE__ */ new Map([[line, mine]])
+	};
+}
 function pruneSelection(s, shown) {
 	if (![...s.lines, ...s.stops.keys()].some((id) => !shown.has(id))) return s;
 	return {
@@ -123203,7 +123312,45 @@ function Block({ block, onFly, open }) {
 	});
 }
 var headPress = (e) => e.button === 0 && !e.target.closest("button, a, input, summary, [data-no-drag]");
-function IntakeLane({ rows, plans, onFly, width = 260, open = false, onToggleOpen, onHeadDown, draggable = true, onMeasure }) {
+function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResize, open = false, onToggleOpen, onHeadDown, draggable = true, onMeasure }) {
+	const [live, setLive] = (0, import_react.useState)(null);
+	const grab = (0, import_react.useRef)(null);
+	const frameNow = live || {
+		w: width,
+		h: height ?? 0
+	};
+	const resizeDown = (e) => {
+		if (e.button !== 0 || !onResize) return;
+		e.preventDefault();
+		e.stopPropagation();
+		const el = rootRef.current;
+		grab.current = {
+			id: e.pointerId,
+			sx: e.clientX,
+			sy: e.clientY,
+			w: width,
+			h: height ?? (el ? el.offsetHeight : 320)
+		};
+		try {
+			e.currentTarget.setPointerCapture(e.pointerId);
+		} catch {}
+	};
+	const resizeMove = (e) => {
+		const g = grab.current;
+		if (!g || g.id !== e.pointerId) return;
+		const z = zoom > 0 ? zoom : 1;
+		setLive({
+			w: Math.max(200, Math.round(g.w + (e.clientX - g.sx) / z)),
+			h: Math.max(160, Math.round(g.h + (e.clientY - g.sy) / z))
+		});
+	};
+	const resizeUp = (e) => {
+		const g = grab.current;
+		if (!g || g.id !== e.pointerId) return;
+		grab.current = null;
+		if (live && onResize) onResize(live.w, live.h);
+		setLive(null);
+	};
 	const settings = useSettingsDoc(true).data;
 	const status = useMindflockStatus().data;
 	const providers = useTicketingCatalog(true).data;
@@ -123283,61 +123430,79 @@ function IntakeLane({ rows, plans, onFly, width = 260, open = false, onToggleOpe
 		className: "sky-lane",
 		"aria-label": "Intake",
 		"data-open": open ? "" : void 0,
-		style: { width },
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "sky-lane-head",
-			"data-sky-head": true,
-			title: [moveHint, onToggleOpen ? "double-click to " + (open ? "fold" : "expand") : ""].filter(Boolean).join(" · ") || void 0,
-			onPointerDown: headDown,
-			onDoubleClick: (e) => {
-				if (!onToggleOpen || e.target.closest("button")) return;
-				e.stopPropagation();
-				onToggleOpen();
-			},
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "sky-lane-title",
-					children: "Intake"
-				}),
-				total > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "fl-count",
-					children: total
-				}),
-				onToggleOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "sky-lane-toggle sky-lane-expand",
-					"aria-expanded": open,
-					"aria-label": open ? "Fold the intake lane's items" : "Expand the intake lane: every item, in full",
-					title: open ? "Fold: the first items of each source" : "Expand: every waiting item, in full",
-					onClick: onToggleOpen,
-					children: open ? "▾" : "▸"
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "sky-lane-toggle",
-					"aria-expanded": true,
-					title: "Fold the intake lane",
-					onClick: () => fold(true),
-					children: "‹"
-				})
-			]
-		}), blocks.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
-			className: "sky-lane-empty muted",
-			children: [
-				"No sources yet.",
-				" ",
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "linklike",
-					onClick: () => useUi.getState().openDialogFor("intake"),
-					children: "Intake ›"
-				})
-			]
-		}) : blocks.map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Block, {
-			block: b,
-			onFly,
-			open
-		}, b.key))]
+		style: {
+			width: frameNow.w,
+			height: frameNow.h > 0 ? frameNow.h : void 0
+		},
+		children: [
+			onResize && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sky-lane-resize skl-resize",
+				role: "separator",
+				tabIndex: 0,
+				"data-no-drag": true,
+				"aria-label": "Resize the intake lane",
+				title: "Drag to resize the intake lane",
+				onPointerDown: resizeDown,
+				onPointerMove: resizeMove,
+				onPointerUp: resizeUp,
+				onPointerCancel: resizeUp
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sky-lane-head",
+				"data-sky-head": true,
+				title: [moveHint, onToggleOpen ? "double-click to " + (open ? "fold" : "expand") : ""].filter(Boolean).join(" · ") || void 0,
+				onPointerDown: headDown,
+				onDoubleClick: (e) => {
+					if (!onToggleOpen || e.target.closest("button")) return;
+					e.stopPropagation();
+					onToggleOpen();
+				},
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-lane-title",
+						children: "Intake"
+					}),
+					total > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "fl-count",
+						children: total
+					}),
+					onToggleOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "sky-lane-toggle sky-lane-expand",
+						"aria-expanded": open,
+						"aria-label": open ? "Fold the intake lane's items" : "Expand the intake lane: every item, in full",
+						title: open ? "Fold: the first items of each source" : "Expand: every waiting item, in full",
+						onClick: onToggleOpen,
+						children: open ? "▾" : "▸"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "sky-lane-toggle",
+						"aria-expanded": true,
+						title: "Fold the intake lane",
+						onClick: () => fold(true),
+						children: "‹"
+					})
+				]
+			}),
+			blocks.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "sky-lane-empty muted",
+				children: [
+					"No sources yet.",
+					" ",
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						onClick: () => useUi.getState().openDialogFor("intake"),
+						children: "Intake ›"
+					})
+				]
+			}) : blocks.map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Block, {
+				block: b,
+				onFly,
+				open
+			}, b.key))
+		]
 	});
 }
 //#endregion
@@ -125329,6 +125494,7 @@ function SkyLine(p) {
 						lod,
 						...shown.canvas,
 						highlighted: p.highlighted,
+						onShiftSelect: p.onShiftSelect,
 						onOpen,
 						roomy: true
 					})
@@ -126014,6 +126180,7 @@ function GroundedLine(p) {
 					lod,
 					...line.canvas,
 					highlighted: p.highlighted,
+					onShiftSelect: p.onShiftSelect,
 					roomy: true
 				})]
 			}),
@@ -126070,10 +126237,53 @@ function stopDragData(def) {
 function savedDragData(plan) {
 	return [[FLYWAY_MIME, plan.id], ["text/plain", plan.name]];
 }
+var SHELF_KEY = "mf_sky_shelf";
+var defaultShelf = () => ({
+	kinds: [...DEFAULT_KINDS],
+	plans: []
+});
+function readShelf(raw) {
+	if (!raw) return defaultShelf();
+	try {
+		const v = JSON.parse(raw);
+		const list = (x) => Array.isArray(x) ? x.filter((k) => typeof k === "string") : null;
+		const kinds = list(v?.kinds);
+		const plans = list(v?.plans);
+		if (!kinds || !plans) return defaultShelf();
+		return {
+			kinds,
+			plans
+		};
+	} catch {
+		return defaultShelf();
+	}
+}
+var onShelf = (pick, d) => "kind" in d ? pick.kinds.includes(d.kind) : pick.plans.includes(d.planId);
+function toggleShelf(pick, d) {
+	if ("kind" in d) {
+		const on = pick.kinds.includes(d.kind);
+		return {
+			...pick,
+			kinds: on ? pick.kinds.filter((k) => k !== d.kind) : [...pick.kinds, d.kind]
+		};
+	}
+	const on = pick.plans.includes(d.planId);
+	return {
+		...pick,
+		plans: on ? pick.plans.filter((k) => k !== d.planId) : [...pick.plans, d.planId]
+	};
+}
+function shelfKinds(pick, kinds) {
+	const by = new Map(kinds.map((k) => [k.kind, k]));
+	return pick.kinds.map((k) => by.get(k)).filter((k) => !!k);
+}
+function shelfPlans(pick, plans) {
+	return plans.filter((p) => pick.plans.includes(p.id));
+}
 //#endregion
 //#region src/components/flights/StopCatalog.tsx
 var rowId = (i) => "sky-catalog-row-" + i;
-function StopCatalog({ kinds, plans, onAdd, onClose, portal = true }) {
+function StopCatalog({ kinds, plans, onAdd, onClose, portal = true, shelf, onShelfToggle }) {
 	const [query, setQuery] = (0, import_react.useState)("");
 	const [active, setActive] = (0, import_react.useState)(0);
 	const [dragging, setDragging] = (0, import_react.useState)(false);
@@ -126104,14 +126314,26 @@ function StopCatalog({ kinds, plans, onAdd, onClose, portal = true }) {
 		setDragging(false);
 		if (e.dataTransfer && e.dataTransfer.dropEffect !== "none") onClose();
 	};
-	const addButton = (d, name) => onAdd && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-		type: "button",
-		className: "test-btn sky-catalog-add",
-		tabIndex: -1,
-		"aria-label": "Add “" + name + "”",
-		onClick: () => add(d),
-		children: "Add"
-	});
+	const addButton = (d, name) => {
+		const on = shelf ? shelf(d) : false;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [onShelfToggle && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "fl-icon-btn sky-catalog-shelf" + (on ? " on" : ""),
+			tabIndex: -1,
+			"aria-pressed": on,
+			"aria-label": (on ? "Take “" : "Put “") + name + (on ? "” off the shelf" : "” on the shelf"),
+			title: on ? "On the shelf — click to take it off" : "Put it on the shelf at the foot of the sky",
+			onClick: () => onShelfToggle(d),
+			children: on ? "★" : "☆"
+		}), onAdd && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "test-btn sky-catalog-add",
+			tabIndex: -1,
+			"aria-label": "Add “" + name + "”",
+			onClick: () => add(d),
+			children: "Add"
+		})] });
+	};
 	const how = onAdd ? "Drag onto a line or the sky, or Add it to the focused line" : "Drag onto a line or the sky";
 	let i = -1;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
@@ -126564,7 +126786,7 @@ function onStopDrag(e, def) {
 	for (const [type, value] of stopDragData(def)) e.dataTransfer.setData(type, value);
 	e.dataTransfer.effectAllowed = "copy";
 }
-function StopChip({ def, onTack }) {
+function StopChip({ def, onTack, onMenu }) {
 	const name = kindName(def);
 	const perch = def.actor === "you";
 	const how = onTack ? "Click to tack it onto the focused line, or drag it onto a line or the sky" : "Drag onto a line or the sky";
@@ -126572,8 +126794,12 @@ function StopChip({ def, onTack }) {
 		className: "sky-stop-chip" + (perch ? " perch" : "") + (onTack ? "" : " drag-only"),
 		"data-kind": def.kind,
 		draggable: true,
-		title: (def.summary ? def.summary + "\n" : "") + how,
-		onDragStart: (e) => onStopDrag(e, def)
+		title: (def.summary ? def.summary + "\n" : "") + how + (onMenu ? " — right-click for more" : ""),
+		onDragStart: (e) => onStopDrag(e, def),
+		onContextMenu: onMenu ? (e) => {
+			e.preventDefault();
+			onMenu(def, e.clientX, e.clientY);
+		} : void 0
 	};
 	const body = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 		className: "sky-stop-icon",
@@ -126643,6 +126869,10 @@ function savedMenuItems(plan) {
 			key: "takeoff",
 			label: "Takes off…"
 		},
+		{
+			key: "unshelve",
+			label: "Take off the shelf"
+		},
 		plan.builtin ? {
 			key: "reset",
 			label: "Reset to default"
@@ -126653,9 +126883,8 @@ function savedMenuItems(plan) {
 		}
 	];
 }
-function SavedMenu({ plan, x, y, onPick, onClose }) {
+function SavedMenu({ label, items, x, y, onPick, onClose }) {
 	const ref = (0, import_react.useRef)(null);
-	const items = savedMenuItems(plan);
 	(0, import_react.useEffect)(() => {
 		ref.current?.querySelector("button")?.focus();
 		const onDown = (e) => {
@@ -126689,7 +126918,7 @@ function SavedMenu({ plan, x, y, onPick, onClose }) {
 		ref,
 		className: "fl-stopmenu sky-saved-menu",
 		role: "menu",
-		"aria-label": "“" + plan.name + "” — what you can do",
+		"aria-label": "“" + label + "” — what you can do",
 		style: {
 			position: "fixed",
 			left: x,
@@ -126817,9 +127046,25 @@ function SavedChip({ plan, plans, kinds, renaming, onTackPlan, onMenu, onRenamed
 function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold }) {
 	const kinds = useFlightKinds().data;
 	const plans = useFlightPlans().data;
-	const blocks = defaultKinds(kinds || []);
-	const saved = savedStopOrder(plans || []);
+	const [shelf, setShelf] = (0, import_react.useState)(() => {
+		try {
+			return readShelf(localStorage.getItem(SHELF_KEY));
+		} catch {
+			return readShelf(null);
+		}
+	});
+	const changeShelf = (next) => setShelf((p) => {
+		const n = next(p);
+		try {
+			localStorage.setItem(SHELF_KEY, JSON.stringify(n));
+		} catch {}
+		return n;
+	});
+	const blocks = shelfKinds(shelf, kinds || []);
+	const allSaved = savedStopOrder(plans || []);
+	const saved = shelfPlans(shelf, allSaved);
 	const [menu, setMenu] = (0, import_react.useState)(null);
+	const [kindMenu, setKindMenu] = (0, import_react.useState)(null);
 	const [renaming, setRenaming] = (0, import_react.useState)("");
 	const [takeoff, setTakeoff] = (0, import_react.useState)(null);
 	const [deleting, setDeleting] = (0, import_react.useState)(null);
@@ -126829,7 +127074,7 @@ function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold }) {
 		setCatalog(false);
 		if ("kind" in d) onTack?.(d.kind);
 		else {
-			const plan = saved.find((p) => p.id === d.planId);
+			const plan = allSaved.find((p) => p.id === d.planId);
 			if (plan) onTackPlan?.(plan);
 		}
 	};
@@ -126838,6 +127083,7 @@ function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold }) {
 		setMenu(null);
 		if (!plan) return;
 		if (key === "rename") setRenaming(plan.id);
+		else if (key === "unshelve") changeShelf((p) => toggleShelf(p, { planId: plan.id }));
 		else if (key === "takeoff") setTakeoff(plan);
 		else if (key === "delete") setDeleting(plan);
 		else if (key === "reset") try {
@@ -126907,7 +127153,12 @@ function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold }) {
 								/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionChip, { onSession }),
 								blocks.map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopChip, {
 									def: k,
-									onTack
+									onTack,
+									onMenu: (def, x, y) => setKindMenu({
+										def,
+										x,
+										y
+									})
 								}, k.kind))
 							]
 						}),
@@ -126925,7 +127176,7 @@ function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold }) {
 								children: "Multi-step"
 							}), saved.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SavedChip, {
 								plan: p,
-								plans: saved,
+								plans: allSaved,
 								kinds: kinds || [],
 								renaming: renaming === p.id,
 								onTackPlan,
@@ -126973,17 +127224,34 @@ function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold }) {
 				})
 			}),
 			menu && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SavedMenu, {
-				plan: menu.plan,
+				label: menu.plan.name,
+				items: savedMenuItems(menu.plan),
 				x: menu.x,
 				y: menu.y,
 				onPick: (k) => void pick(k),
 				onClose: () => setMenu(null)
 			}),
+			kindMenu && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SavedMenu, {
+				label: kindName(kindMenu.def),
+				items: [{
+					key: "unshelve",
+					label: "Take off the shelf"
+				}],
+				x: kindMenu.x,
+				y: kindMenu.y,
+				onPick: () => {
+					changeShelf((p) => toggleShelf(p, { kind: kindMenu.def.kind }));
+					setKindMenu(null);
+				},
+				onClose: () => setKindMenu(null)
+			}),
 			catalog && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopCatalog, {
 				kinds: kinds || [],
-				plans: saved,
+				plans: allSaved,
 				onAdd: onTack || onTackPlan ? add : void 0,
-				onClose: () => setCatalog(false)
+				onClose: () => setCatalog(false),
+				shelf: (d) => onShelf(shelf, d),
+				onShelfToggle: (d) => changeShelf((p) => toggleShelf(p, d))
 			}),
 			takeoff && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TakeoffDialog, {
 				plan: takeoff,
@@ -128485,7 +128753,8 @@ function SkyView() {
 			},
 			sessionOver: sessionOver === id,
 			selected: at ? sel.lines.has(id) : void 0,
-			highlighted: at ? sel.stops.get(id) : void 0
+			highlighted: at ? sel.stops.get(id) : void 0,
+			onShiftSelect: at ? (n) => setSel((s) => toggleStop(s, id, n.id)) : void 0
 		}, id);
 		return lineForSession(id, at);
 	};
@@ -128507,7 +128776,8 @@ function SkyView() {
 		registerDelete: at ? registerFor(id) : void 0,
 		dropFlyway: drop?.title === id ? drop.plan : null,
 		selected: at ? sel.lines.has(id) : void 0,
-		highlighted: at ? sel.stops.get(id) : void 0
+		highlighted: at ? sel.stops.get(id) : void 0,
+		onShiftSelect: at ? (n) => setSel((s) => toggleStop(s, id, n.id)) : void 0
 	}, id);
 	const selOne = stopSelection(sel);
 	const selBox = (() => {
@@ -128542,7 +128812,8 @@ function SkyView() {
 		onClear: clearSel
 	});
 	const intakeOpen = !!layout[INTAKE_KEY]?.open;
-	const intakeW = intakeOpen ? INTAKE_OPEN_W : INTAKE_W;
+	const intakeFrameNow = intakeFrame(layout[INTAKE_KEY]);
+	const intakeW = intakeFrameNow?.w ?? (intakeOpen ? INTAKE_OPEN_W : INTAKE_W);
 	const intakeAt = posOf(INTAKE_KEY);
 	if (narrow) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", {
 		id: "sky-view",
@@ -128629,6 +128900,12 @@ function SkyView() {
 											plans,
 											onFly: focusOn,
 											width: intakeW,
+											height: intakeFrameNow?.h,
+											zoom: cam.z,
+											onResize: (w, h) => onLayout(INTAKE_KEY, {
+												w,
+												h
+											}),
 											open: intakeOpen,
 											onToggleOpen: () => onLayout(INTAKE_KEY, { open: !intakeOpen }),
 											onHeadDown: (e) => onDragStart(INTAKE_KEY, e),

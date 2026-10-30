@@ -113,6 +113,17 @@ export function toggleLine(s: SkySelection, id: string): SkySelection {
   return { lines, stops: new Map() };
 }
 
+/** One box in or out (Shift+click on a stop or group box): the selection
+ * becomes that line's stops. Boxes of another line, or whole lines, give way
+ * — a stop selection is always one line's. Emptying it clears everything. */
+export function toggleStop(s: SkySelection, line: string, node: string): SkySelection {
+  const mine = s.stops.size === 1 && s.stops.has(line) && !s.lines.size ? new Set(s.stops.get(line)) : new Set<string>();
+  if (mine.has(node)) mine.delete(node);
+  else mine.add(node);
+  if (!mine.size) return NO_SELECTION;
+  return { lines: new Set(), stops: new Map([[line, mine]]) };
+}
+
 /** Only what is still on the board (a closed session's line drops out). */
 export function pruneSelection(s: SkySelection, shown: ReadonlySet<string>): SkySelection {
   const gone = [...s.lines, ...s.stops.keys()].some((id) => !shown.has(id));

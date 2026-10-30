@@ -53,6 +53,12 @@ function render(el: ReactElement, plans: FlightPlan[] | null = [MINE, TICKET]) {
   c.setQueryData(["flight-kinds"], KINDS);
   if (plans) c.setQueryData(["flight-plans"], plans);
   c.setQueryData(["settings"], {});
+  // The owner's shelf pick: these tests put the saved stops ON the shelf
+  // (by default none is — they wait in the catalog).
+  vi.stubGlobal("localStorage", {
+    getItem: (k: string) => (k === "mf_sky_shelf" ? JSON.stringify({ kinds: ["agent", "you", "ship", "verify", "wait"], plans: ["builtin:ticket", "builtin:pr", "p_mine"] }) : null),
+    setItem: () => {},
+  });
   return renderToStaticMarkup(createElement(QueryClientProvider, { client: c }, el));
 }
 
@@ -106,9 +112,9 @@ describe("the saved stops on the shelf", () => {
 
 describe("a saved stop's menu", () => {
   it("Rename and Takes off… on every one; Reset on a built-in, Delete on yours", () => {
-    expect(savedMenuItems(TICKET).map((i) => i.label)).toEqual(["Rename", "Takes off…", "Reset to default"]);
-    expect(savedMenuItems(MINE).map((i) => i.label)).toEqual(["Rename", "Takes off…", "Delete"]);
-    expect(savedMenuItems(MINE)[2].danger).toBe(true);
+    expect(savedMenuItems(TICKET).map((i) => i.label)).toEqual(["Rename", "Takes off…", "Take off the shelf", "Reset to default"]);
+    expect(savedMenuItems(MINE).map((i) => i.label)).toEqual(["Rename", "Takes off…", "Take off the shelf", "Delete"]);
+    expect(savedMenuItems(MINE)[3].danger).toBe(true);
   });
 
   it("is right-click (or the context-menu key); acts through the plan routes; Delete confirms inline, never a native dialog", () => {

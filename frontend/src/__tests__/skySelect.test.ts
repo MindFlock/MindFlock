@@ -376,3 +376,26 @@ describe("Delete wiring (round 12)", () => {
     expect(bar).toContain("for (const id of removable) {");
   });
 });
+
+describe("Shift+click on a box (toggleStop)", () => {
+  it("starts a stop selection of that line, adds and removes boxes, and clears when empty", async () => {
+    const { NO_SELECTION, toggleStop } = await import("../lib/skySelect");
+    const a = toggleStop(NO_SELECTION, "l1", "stop:s1");
+    expect([...a.stops.get("l1")!]).toEqual(["stop:s1"]);
+    expect(a.lines.size).toBe(0);
+    const b = toggleStop(a, "l1", "group:g1");
+    expect([...b.stops.get("l1")!]).toEqual(["stop:s1", "group:g1"]);
+    const c = toggleStop(b, "l1", "stop:s1");
+    expect([...c.stops.get("l1")!]).toEqual(["group:g1"]);
+    expect(toggleStop(c, "l1", "group:g1")).toBe(NO_SELECTION);
+  });
+  it("a box of another line, or a line selection, gives way to the new line's stops", async () => {
+    const { toggleStop, selectLines, NO_SELECTION } = await import("../lib/skySelect");
+    const one = toggleStop(NO_SELECTION, "l1", "stop:s1");
+    const other = toggleStop(one, "l2", "stop:s9");
+    expect([...other.stops.keys()]).toEqual(["l2"]);
+    const fromLines = toggleStop(selectLines(["l1", "l2"]), "l1", "stop:s1");
+    expect(fromLines.lines.size).toBe(0);
+    expect([...fromLines.stops.get("l1")!]).toEqual(["stop:s1"]);
+  });
+});

@@ -162,9 +162,11 @@ describe("branches in the session diagram", () => {
     expect(birdPerch(da)).toEqual({ nodeId: "stop:s2", tone: "you" });
     // Nothing outstanding: back on the current stop.
     expect(birdPerch(diagramOf([lead(AGENT_STEPS, 0, { waiting: 0, total: 5 }), ...FIVE], f))).toEqual({ nodeId: "stop:s1", tone: "working" });
-    // A halted flight keeps the bird red where it halted.
+    // A halted flight whose lead is busy: the bird follows the work, on the
+    // session box (round 12 — "why is the bird on Commit when the agent is
+    // running"); the stop keeps its red state on its own.
     const halted = diagramOf([lead(AGENT_STEPS, 0, { waiting: 2, total: 5 }), ...FIVE], { ...f, state: "halted" });
-    expect(birdPerch(halted)).toEqual({ nodeId: "stop:s1", tone: "halted" });
+    expect(birdPerch(halted)).toEqual({ nodeId: "session:lead", tone: "working" });
   });
 
   it("children with no branch, or one spawned at a stop not in this flight, hang in parallel off the current stop", () => {

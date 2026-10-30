@@ -44,7 +44,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Instance } from "../../api/types";
 import { toast } from "../../lib/toast";
-import { isLive, newStep, planFromSteps, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef } from "../../lib/flights";
+import { isLive, newStep, planFromSteps, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
 import { drawnCanvas, sessionDiagram, type DiagramNode } from "../../lib/flightDiagram";
 import {
   dropGroup,
@@ -134,6 +134,48 @@ type LineCanvasProps = Pick<
   | "sizeOf"
   | "reveal"
 >;
+
+
+/** What a flying or flown stop did, for its read-only dialog: the flight's
+ * history on it (newest last), its note, a command's output, and for a ship
+ * stop the fast-track's own word (its lane runs in the server, not in the
+ * terminal, so this is where to look). */
+export function stopLog(n: DiagramNode, flight: Flight | null, rec: StepRunState | undefined, row: Instance | undefined): ReactNode {
+  if (!flight || !n.step) return null;
+  const id = n.step.id;
+  const hist = (flight.history || []).filter((h) => h.step === id);
+  const out = String((rec?.detail as Record<string, unknown> | undefined)?.output || "");
+  const ap = n.step.kind === "ship" ? row?.autopilot : null;
+  if (!hist.length && !rec?.note && !out && !ap) return null;
+  const when = (t: number) => {
+    const d = new Date(t * 1000);
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  };
+  return (
+    <section className="stop-dialog-log" aria-label="What this stop did">
+      <h3 className="fl-group-head">What it did</h3>
+      {ap && (
+        <p className="fl-note">
+          Fast-track: <b>{ap.state}</b>
+          {ap.step ? " · " + ap.step : ""}
+          {ap.reason ? " — " + ap.reason : ""}
+        </p>
+      )}
+      {hist.length > 0 && (
+        <ol className="stop-dialog-hist">
+          {hist.slice(-12).map((h, i) => (
+            <li key={i}>
+              <span className="muted">{when(h.at)}</span> <b>{h.event}</b>
+              {h.note ? " — " + h.note : ""}
+            </li>
+          ))}
+        </ol>
+      )}
+      {rec?.note && !hist.some((h) => h.note === rec.note) && <p className="fl-note">{rec.note}</p>}
+      {out && <pre className="stop-dialog-out">{out.split("\n").slice(-40).join("\n")}</pre>}
+    </section>
+  );
+}
 
 export function useSessionLine(title: string, src: LineSource, opts: SessionLineOpts) {
   const { rows, flights, kinds, plans } = src;
@@ -526,6 +568,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         onSkip={here ? () => void act(() => stepSkip(flight!.id, open.step!.id)) : undefined}
         extra={
           <>
+            {!editable && stopLog(open, flight, rec, row)}
             {open.step?.kind === "split" && (
               <p className="fl-note muted fl-split-hint">Prompts: one worker per line — each line starts a worker. One line (or none) and Count says how many.</p>
             )}

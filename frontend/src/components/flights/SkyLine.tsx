@@ -90,6 +90,8 @@ export interface SkyLineProps {
   selected?: boolean;
   /** Its stop boxes in the Sky's selection (node ids). */
   highlighted?: ReadonlySet<string>;
+  /** Shift+click on a box: the host's multi-selection (SkySelection). */
+  onShiftSelect?(n: DiagramNode): void;
   /** False in the sky's click mode: the bar never starts a move. */
   draggable?: boolean;
   /** The host's handle on this line's Delete (null when the line goes): given
@@ -574,6 +576,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
               lod={lod}
               {...shown.canvas}
               highlighted={p.highlighted}
+              onShiftSelect={p.onShiftSelect}
               onOpen={onOpen}
               roomy
             />

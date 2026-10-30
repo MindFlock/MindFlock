@@ -338,7 +338,12 @@ describe("the sky", () => {
     });
   };
 
-  it("carries the Stops shelf at its foot — Blocks (the Session chip first), Multi-step (the saved stops), All blocks… — and its tour's ?", () => {
+  it("carries the Stops shelf at its foot — Blocks (the Session chip first), Multi-step (the saved stops put on the shelf), All blocks… — and its tour's ?", () => {
+    // Multi-step blocks sit on the shelf only when picked (the catalog's ★).
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => (k === "mf_sky_shelf" ? JSON.stringify({ kinds: ["agent", "you", "ship", "verify", "wait"], plans: ["builtin:ticket"] }) : null),
+      setItem: () => {},
+    });
     const html = render("sky");
     expect(html).toContain('data-tour="sky-shelf"');
     expect(html).toContain('class="sky-stop-chip sky-session-chip');
