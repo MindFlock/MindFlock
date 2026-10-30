@@ -1342,3 +1342,130 @@
   transform-origin: left center;
   transform: scale(calc(1 / var(--sky-z, 1)));
 }
+
+/* --- Round 15 looks (docs/flights.md "As built: round 15 looks") ------------- */
+
+/* The risk stripe: one 3px band per tag down a box's left edge, inside the
+   rounded border. remote = the ship tone (the waiting blue the ship chips
+   wear), irreversible = the failed tone, spends = the perch gold. */
+.fl-canvas {
+  --fl-risk-remote: var(--tone-waiting);
+  --fl-risk-irreversible: var(--red);
+  --fl-risk-spends: var(--gold, #d4a72c);
+}
+
+.fl-risk {
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-radius: 0 2px 2px 0;
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.fl-risk > i {
+  flex: 1;
+  display: block;
+  min-height: 4px;
+}
+
+.fl-risk-remote {
+  background: var(--fl-risk-remote);
+}
+
+.fl-risk-irreversible {
+  background: var(--fl-risk-irreversible);
+}
+
+.fl-risk-spends {
+  background: var(--fl-risk-spends);
+}
+
+.fl-st-done .fl-risk,
+.fl-st-skipped .fl-risk {
+  opacity: 0.55;
+}
+
+/* The receipt: what a flown stop did, under its title in the muted tone.
+   Mid and near only — the canvas leaves it out far, and the CSS holds the
+   band either way. */
+.fl-box-receipt {
+  color: var(--fl-ink-muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fl-lod-far .fl-box-receipt {
+  display: none;
+}
+
+.fl-size-wide .fl-box-receipt,
+.fl-lod-near .fl-box-receipt {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* The "if" chip: the stop has a `when`; the tooltip is the expression. */
+.fl-box-if {
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 700;
+  font-style: italic;
+  line-height: 1;
+  padding: 2px 5px 3px;
+  border-radius: 999px;
+  color: var(--fl-ink-accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  letter-spacing: 0.02em;
+}
+
+.fl-lod-far .fl-box-if {
+  display: none;
+}
+
+/* Formation: a worker's bird flying in the V behind the leader — a touch
+   lighter than the leader, and it hops into place. */
+.fl-bird-marker.fl-bird-branch[data-formation] {
+  z-index: 5;
+  opacity: 0.85;
+  transition: left 0.5s cubic-bezier(0.2, 0.7, 0.2, 1), top 0.5s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+/* "Rewind to here" asks on the stage, at the menu's spot: the app's inline
+   confirm row (never window.confirm), the server's refusal under it.
+   Screen-sized at any zoom, like the menu. */
+.fl-rewind {
+  position: absolute;
+  z-index: 30;
+  width: 300px;
+  max-width: 80vw;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  transform: scale(calc(1 / var(--sky-z, 1)));
+  transform-origin: 0 0;
+  cursor: auto;
+  user-select: text;
+}
+
+.fl-rewind .set-confirm {
+  margin: 0;
+}
+
+.fl-rewind-error {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--fl-ink-red);
+}

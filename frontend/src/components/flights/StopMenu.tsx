@@ -9,14 +9,21 @@ import { useEffect, useRef, type KeyboardEvent } from "react";
 import type { StopMenuItem, StopMenuKey } from "../../lib/stopEditing";
 import "./StopMenu.css";
 
+/** The menu's keys: lib/stopEditing's, plus the canvas's own `rewind` (round
+ * 15: a flown checkpoint's "Rewind to here", confirmed inline on the stage). */
+export type SkyMenuKey = StopMenuKey | "rewind";
+
+/** One line of the menu: lib/stopEditing's item, or the canvas's own. */
+export type SkyMenuItem = Omit<StopMenuItem, "key"> & { key: SkyMenuKey };
+
 export interface StopMenuProps {
   /** Where it opens, in the stage's own (unzoomed) pixels. */
   x: number;
   y: number;
   /** Its accessible name ("“Push” — what you can do"). */
   label: string;
-  items: readonly StopMenuItem[];
-  onPick(key: StopMenuKey): void;
+  items: readonly SkyMenuItem[];
+  onPick(key: SkyMenuKey): void;
   /** Esc (`returnFocus`: put the focus back on the box) or a press outside. */
   onClose(returnFocus: boolean): void;
 }

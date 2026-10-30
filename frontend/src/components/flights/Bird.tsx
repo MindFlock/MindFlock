@@ -84,7 +84,7 @@ export type BirdHand = { title: string; className?: string } & Pick<
  * `hand` it is a button: a click halts / carries on / retries, a drag jumps
  * the flight (FlywayCanvas). Its name stays where it is; what a press does is
  * its title and its description. */
-export function BirdMarker({ tone, x, y, label, size = 24, hand, className = "" }: { tone: string; x: number; y: number; label: string; size?: number; hand?: BirdHand; className?: string }) {
+export function BirdMarker({ tone, x, y, label, size = 24, hand, className = "", formation = false }: { tone: string; x: number; y: number; label: string; size?: number; hand?: BirdHand; className?: string; /** Round 15: flying in the V behind the leader (`data-formation`). */ formation?: boolean }) {
   const look = birdLook(tone);
   const box = spriteBox(size);
   const whole = box.w + "px " + box.h + "px";
@@ -100,6 +100,7 @@ export function BirdMarker({ tone, x, y, label, size = 24, hand, className = "" 
       tabIndex={hand ? 0 : undefined}
       title={title}
       data-tour="flights-bird"
+      data-formation={formation ? "v" : undefined}
       {...on}
     >
       <span className={look.sprite} style={{ width: box.w, height: box.h }}>
@@ -205,6 +206,106 @@ export function StopIcon({ kind, size = 15 }: { kind: string; size?: number }) {
         <path d="M4 6h3c4 0 5 6 8 6" />
         <path d="M4 18h3c4 0 5-6 8-6" />
         <path d="M15 12h5" />
+      </>
+    ),
+    // --- Round 15's stops (docs/flights.md "The new stops") -------------------
+    // A flask: the test run.
+    test: (
+      <>
+        <path d="M9.5 3h5" />
+        <path d="M10 3v6.2L5 18.5A1.8 1.8 0 0 0 6.6 21h10.8a1.8 1.8 0 0 0 1.6-2.5L14 9.2V3" />
+        <line x1="7.5" y1="15.5" x2="16.5" y2="15.5" />
+      </>
+    ),
+    // Two arrows merging into one: sync with the base branch.
+    sync: (
+      <>
+        <path d="M4 6h4c3 0 4 6 8 6h4" />
+        <path d="M4 18h4c3 0 4-6 8-6" />
+        <polyline points="17 9 20 12 17 15" />
+      </>
+    ),
+    // A flag planted: the checkpoint.
+    checkpoint: (
+      <>
+        <line x1="6" y1="21" x2="6" y2="3.5" />
+        <path d="M6 4.5h11.5l-2.5 4 2.5 4H6" />
+      </>
+    ),
+    // A plane coming down onto the strip: land.
+    land: (
+      <>
+        <path d="M3.5 9.5l3-1 4 3.5 6.5-2.3a1.6 1.6 0 0 1 1.1 3L8 16.5l-3.5-1" />
+        <line x1="4" y1="20" x2="20" y2="20" />
+      </>
+    ),
+    // A coin: the budget.
+    budget: (
+      <>
+        <circle cx="12" cy="12" r="8.5" />
+        <path d="M14.5 9.3c-.5-.9-1.4-1.3-2.5-1.3-1.6 0-2.6.8-2.6 1.9 0 2.6 5.3 1.3 5.3 4 0 1.2-1.1 2.1-2.7 2.1-1.3 0-2.3-.5-2.8-1.5" />
+        <line x1="12" y1="6" x2="12" y2="18" />
+      </>
+    ),
+    // An eye: the review.
+    review: (
+      <>
+        <path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12z" />
+        <circle cx="12" cy="12" r="2.8" />
+      </>
+    ),
+    // Scales: the judge.
+    judge: (
+      <>
+        <line x1="12" y1="4" x2="12" y2="20" />
+        <line x1="8" y1="20" x2="16" y2="20" />
+        <line x1="5" y1="7" x2="19" y2="7" />
+        <path d="M2.5 13l2.5-6 2.5 6a2.5 2.5 0 0 1-5 0z" />
+        <path d="M16.5 13l2.5-6 2.5 6a2.5 2.5 0 0 1-5 0z" />
+      </>
+    ),
+    // A plug with the arrow out: the call.
+    call: (
+      <>
+        <path d="M7 8V4.5M11 8V4.5" />
+        <path d="M4.5 8h9v3a4.5 4.5 0 0 1-9 0z" />
+        <path d="M9 15.5V20" />
+        <path d="M15 12h5.5" />
+        <polyline points="18 9.5 20.5 12 18 14.5" />
+      </>
+    ),
+    // An antenna: listen for the webhook.
+    listen: (
+      <>
+        <line x1="12" y1="11" x2="12" y2="21" />
+        <circle cx="12" cy="9.5" r="1.6" />
+        <path d="M8.5 6a5 5 0 0 0 0 7" />
+        <path d="M15.5 6a5 5 0 0 1 0 7" />
+        <path d="M5.5 3.5a9 9 0 0 0 0 12" />
+        <path d="M18.5 3.5a9 9 0 0 1 0 12" />
+      </>
+    ),
+    // A person: someone else.
+    someone: (
+      <>
+        <circle cx="12" cy="8" r="3.6" />
+        <path d="M4.5 20.5c.8-4 3.9-6 7.5-6s6.7 2 7.5 6" />
+      </>
+    ),
+    // A monitor with a globe on it: the preview.
+    preview: (
+      <>
+        <rect x="3" y="4" width="18" height="12" rx="2" />
+        <path d="M9 20h6M12 16v4" />
+        <circle cx="12" cy="10" r="3.6" />
+        <path d="M8.4 10h7.2M12 6.4c1.6 1.8 1.6 5.4 0 7.2M12 6.4c-1.6 1.8-1.6 5.4 0 7.2" />
+      </>
+    ),
+    // A camera: the screenshot.
+    screenshot: (
+      <>
+        <path d="M4 8.5h3l1.6-2.5h6.8L17 8.5h3a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 20 19.5H4A1.5 1.5 0 0 1 2.5 18v-8A1.5 1.5 0 0 1 4 8.5z" />
+        <circle cx="12" cy="13.5" r="3.2" />
       </>
     ),
   };

@@ -41,6 +41,7 @@ import type { AutopilotRun, Instance } from "../api/types";
 import { LANE_LABEL, normalizeLane, type Lane } from "./autopilot";
 import { deriveSessionState } from "./sessionState";
 import { windowName } from "./windowName";
+import { riskOf, type RiskTag } from "./stopRisk";
 import {
   isLive,
   perchLabel,
@@ -145,6 +146,15 @@ export interface DiagramNode {
   /** A sub-step of a group its line has expanded: drawn as a normal stop,
    * inside a thin outline labelled with the group's name. */
   inGroup?: { id: string; name: string; first: boolean; last: boolean };
+  /** Round 15 looks: what the stop touches outside its worktree (lib/stopRisk
+   * `riskOf`: the box's left-edge stripe, one 3px band per tag). A group
+   * wears the union of its sub-steps'. */
+  risk?: RiskTag[];
+  /** A flown stop's receipt (`detail.receipt`, ≤ 80 chars: "312 passed",
+   * "PR #291"), under the title at mid and near. */
+  receipt?: string;
+  /** The stop's `when` condition, when it has one (the "if" chip). */
+  when?: string;
 }
 
 /** `fan` runs from a stop out to a branch, `join` from a branch into the
@@ -270,6 +280,7 @@ export function flywayDiagram(steps: readonly FlightStep[], kinds?: readonly Ste
     step: s,
     index: i,
     editable: true,
+    ...looksOf(s, kinds),
   }));
   line.push(addNode("Add a stop"));
   const nodes: DiagramNode[] = [];
@@ -291,6 +302,7 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
     if (atCursor && f.state === "halted") state = "halted";
     else if (atCursor && f.state === "paused") state = "paused";
     const rec = f.step_states?.[s.id];
+    const flown = state === "done" || state === "skipped" || state === "failed";
     return {
       id: stopId(s, i),
       kind: "stop" as const,
@@ -304,8 +316,28 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
       index: i,
       editable: grounded || (live && state === "pending" && i > f.cursor),
       reason: state === "halted" || state === "failed" ? f.reason || rec?.note || "" : "",
+      ...looksOf(s, kinds),
+      ...(flown ? { receipt: receiptOf(rec?.detail) } : {}),
     };
   });
+}
+
+/** Round 15 looks on a stop node: its risk stripe's tags and its `when`
+ * (read defensively — the field lands in another task), only when set. */
+function looksOf(s: FlightStep, kinds?: readonly StepKindDef[] | null): Pick<DiagramNode, "risk" | "when"> {
+  const out: Pick<DiagramNode, "risk" | "when"> = {};
+  const risk = riskOf(s, kinds);
+  if (risk.length) out.risk = risk;
+  const when = String((s as { when?: unknown }).when ?? "").trim();
+  if (when) out.when = when;
+  return out;
+}
+
+/** A flown stop's receipt: `detail.receipt` on one line, at most 80 chars. */
+export function receiptOf(detail: Record<string, unknown> | null | undefined): string {
+  const r = detail?.receipt;
+  if (typeof r !== "string" && typeof r !== "number") return "";
+  return clip(String(r).replace(/\s+/g, " ").trim(), 80);
 }
 
 /** A flight on its own (no session box): its stops, then the trailing "+"
@@ -653,6 +685,9 @@ export function groupNode(id: string, g: { id: string; name: string; plan_id?: s
   };
   const join = run.find((n) => n.join)?.join;
   if (join) node.join = join;
+  // The stripe: every tag any sub-step wears, in the canonical order.
+  const tags = new Set(run.flatMap((n) => n.risk || []));
+  if (tags.size) node.risk = (["remote", "irreversible", "spends"] as const).filter((t) => tags.has(t));
   return node;
 }
 
@@ -1009,6 +1044,11 @@ export interface BirdPerch {
   tone: BirdTone;
   /** A branch's bird: the child session it flies for (a click opens it). */
   child?: string;
+  /** Round 15 formation (`birdFormation`): a worker's bird flies in a V
+   * behind the parent's bird — its place in the V, in bird-lengths (dx back
+   * along the line, dy to the side; the canvas scales and orients them).
+   * Only while the line has a main bird to follow; purely visual. */
+  formation?: { dx: number; dy: number };
 }
 
 const STOP_TONE: Partial<Record<DiagramNodeState, BirdTone>> = {
@@ -1057,6 +1097,24 @@ export function birdPerches(d: Diagram): BirdPerch[] {
   const out: BirdPerch[] = main ? [main] : [];
   for (const n of d.nodes) if (n.branch?.live && n.session) out.push({ nodeId: n.id, tone: n.branch.live, child: n.session });
   return out;
+}
+
+/** Round 15: the same birds, the workers' given their place in the V behind
+ * the leader (`formationSlot`, in line order) — only when the line has a
+ * main bird to follow. Purely visual: `birdPerches` itself is unchanged. */
+export function birdFormation(perches: readonly BirdPerch[]): BirdPerch[] {
+  const lead = perches[0] && !perches[0].child ? perches[0] : null;
+  if (!lead) return perches.slice();
+  let k = 0;
+  return perches.map((b) => (b.child ? { ...b, formation: formationSlot(k++) } : b));
+}
+
+/** The k-th worker's place in the V behind the leader: the first pair one
+ * length back and one to each side, the next pair two back and two out —
+ * the wedge a flock flies. */
+export function formationSlot(k: number): { dx: number; dy: number } {
+  const row = Math.floor(k / 2) + 1;
+  return { dx: -row, dy: (k % 2 === 0 ? -1 : 1) * row };
 }
 
 // --- Layout -------------------------------------------------------------------
