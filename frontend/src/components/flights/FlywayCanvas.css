@@ -41,12 +41,20 @@
   --fl-ink-working: var(--tone-working);
   --fl-ink-red: #e8795a;
   --fl-ink-muted: #a0a6b8;
+  /* The accent as TEXT: the raw accent reads 3.4–4:1 on the dark panels, so
+     dark mode lightens it (≈6.7:1) and light mode takes the deep twin. */
+  --fl-ink-accent: color-mix(in srgb, var(--accent) 62%, #fff);
+  /* The app's button tiers (docs/flights.md "As built: round 11 style"):
+     .btn-primary / .test-btn's radius, and the Sky toolbar's control height. */
+  --fl-btn-radius: 6px;
+  --fl-ctl-h: 28px;
 }
 
 .light {
   --fl-ink-working: #1a6f38;
   --fl-ink-red: #b23a17;
   --fl-ink-muted: #4f5769;
+  --fl-ink-accent: var(--accent-deep);
 }
 
 .fl-wires {
@@ -413,7 +421,7 @@
   font-weight: 600;
   border: 1.5px dashed color-mix(in srgb, var(--accent) 60%, var(--border));
   background: transparent;
-  color: var(--accent);
+  color: var(--fl-ink-accent);
   box-shadow: none;
 }
 
@@ -422,6 +430,11 @@
 .fl-box-add.selected {
   border-style: solid;
   background: rgba(var(--accent-rgb), 0.12);
+}
+
+.fl-box-add:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .fl-add-plus {
@@ -447,9 +460,9 @@
   height: 26px;
   padding: 0;
   border-radius: 50%;
-  border: 1px solid var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border));
   background: var(--panel);
-  color: var(--accent);
+  color: var(--fl-ink-accent);
   font-size: 17px;
   line-height: 1;
   cursor: pointer;
@@ -457,6 +470,18 @@
   transition: opacity 0.12s ease;
   /* The inline transform also counter-scales it by the Sky's --sky-z. */
   transform-origin: 50% 50%;
+}
+
+/* The quiet tier's hover: the panel-2 fill, the border firming to the
+ * accent (it is an add, the one accent-edged quiet control). */
+.fl-gap-add:hover {
+  background: var(--panel-2);
+  border-color: var(--accent);
+}
+
+.fl-gap-add:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* Over the line (in the Sky the whole line, its title bar too), not just
@@ -564,17 +589,20 @@
   display: none;
 }
 
-/* .fl-icon-btn's look (StopParts.css), here too for a canvas drawn
- * without the inspector's sheet. */
+/* The quiet-icon tier (.fl-icon-btn in StopParts.css; the top bar's
+ * .tb-item): no fill, a transparent border, the panel-2 fill and the border
+ * on hover, the accent ring on focus. Here too for a canvas drawn without
+ * the inspector's sheet. */
 .fl-tool {
-  border: none;
-  border-radius: 6px;
+  border: 1px solid transparent;
+  border-radius: var(--fl-btn-radius, 6px);
   background: transparent;
-  color: var(--muted);
+  color: var(--fl-ink-muted);
   cursor: pointer;
-  min-width: 24px;
-  height: 24px;
+  min-width: 26px;
+  height: 26px;
   padding: 0 5px;
+  font-family: inherit;
   font-size: 14px;
   line-height: 1;
 }
@@ -582,22 +610,24 @@
 .fl-tool:hover:not(:disabled) {
   color: var(--text);
   background: var(--panel-2);
+  border-color: var(--border);
 }
 
 .fl-tool:disabled {
-  opacity: 0.35;
+  opacity: 0.4;
   cursor: default;
   background: transparent;
 }
 
 .fl-tool:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: -1px;
+  outline-offset: 1px;
 }
 
 .fl-tool-remove:hover:not(:disabled) {
-  color: var(--red);
+  color: var(--fl-ink-red);
   background: color-mix(in srgb, var(--red) 13%, transparent);
+  border-color: color-mix(in srgb, var(--red) 40%, transparent);
 }
 
 @media (hover: none) {
@@ -806,6 +836,7 @@
   padding: 5px 13px 5px 6px;
   font-size: 13px;
   font-family: inherit;
+  text-align: left;
   cursor: pointer;
 }
 

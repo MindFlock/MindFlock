@@ -199,10 +199,10 @@ export function TakeoffDialog({ plan, onClose }: { plan: FlightPlan; onClose(): 
           </p>
         )}
         <div className="modal-actions">
-          <button type="button" onClick={onClose}>
+          <button type="button" className="test-btn" onClick={onClose}>
             Cancel
           </button>
-          <button type="submit" disabled={busy}>
+          <button type="submit" className="btn-primary" disabled={busy}>
             {busy ? "Saving…" : "Save"}
           </button>
         </div>

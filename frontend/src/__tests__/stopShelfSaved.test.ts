@@ -119,7 +119,7 @@ describe("a saved stop's menu", () => {
 
   it("Rename is a field in the chip", () => {
     const src = code("components/flights/StopShelf.tsx");
-    expect(src).toMatch(/className="sky-saved-rename"[\s\S]*?aria-label=\{"Rename “" \+ plan\.name \+ "”"\}/);
+    expect(src).toMatch(/className="sky-saved-rename fl-input"[\s\S]*?aria-label=\{"Rename “" \+ plan\.name \+ "”"\}/);
   });
 });
 

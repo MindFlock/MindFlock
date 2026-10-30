@@ -9,13 +9,14 @@
   flex-direction: column;
   min-width: 170px;
   max-width: 260px;
+  gap: 1px;
   padding: 4px;
-  border-radius: 9px;
+  border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.32);
-  font-size: 12.5px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.38);
+  font-size: 12px;
   cursor: default;
   transform: scale(calc(1 / var(--sky-z, 1)));
   transform-origin: 0 0;
@@ -24,20 +25,28 @@
 .fl-stopmenu-item {
   display: block;
   width: 100%;
-  padding: 6px 10px;
+  padding: 5px 9px;
   border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
+  border-radius: 5px;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
   text-align: left;
   cursor: pointer;
 }
 
-.fl-stopmenu-item:hover:not(:disabled),
+/* .vf-menu-item's rows (VerifyDialog.css, what a line's ⋯ wears): panel-2
+ * under the pointer, the accent ring on a keyboard focus. */
+.fl-stopmenu-item:hover:not(:disabled) {
+  background: var(--panel-2);
+}
+
 .fl-stopmenu-item:focus-visible {
-  outline: none;
-  background: rgba(var(--accent-rgb), 0.14);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: var(--panel-2);
 }
 
 .fl-stopmenu-item:disabled {
@@ -47,7 +56,7 @@
 }
 
 .fl-stopmenu-item.danger {
-  color: var(--red);
+  color: var(--fl-ink-red, var(--red));
 }
 
 .fl-stopmenu-item.danger:hover:not(:disabled),

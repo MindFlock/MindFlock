@@ -153,32 +153,32 @@ function StepDialog(p: StopDialogProps) {
         <div className="modal-actions stop-dialog-actions">
           <span className="stop-dialog-side">
             {p.onRemove && (
-              <button type="button" className="stop-dialog-danger" disabled={p.busy} onClick={p.onRemove}>
+              <button type="button" className="test-btn stop-dialog-danger" disabled={p.busy} onClick={p.onRemove}>
                 Remove
               </button>
             )}
             {editable && p.onDuplicate && (
-              <button type="button" disabled={p.busy} onClick={p.onDuplicate}>
+              <button type="button" className="test-btn" disabled={p.busy} onClick={p.onDuplicate}>
                 Duplicate
               </button>
             )}
           </span>
           {p.onDone && (
-            <button type="button" disabled={p.busy} onClick={p.onDone}>
+            <button type="button" className="test-btn" disabled={p.busy} onClick={p.onDone}>
               Done
             </button>
           )}
           {p.onRetry && (
-            <button type="button" disabled={p.busy} onClick={p.onRetry}>
+            <button type="button" className="test-btn" disabled={p.busy} onClick={p.onRetry}>
               Retry
             </button>
           )}
           {p.onSkip && (
-            <button type="button" disabled={p.busy} onClick={p.onSkip}>
+            <button type="button" className="test-btn" disabled={p.busy} onClick={p.onSkip}>
               Skip
             </button>
           )}
-          <button type="button" onClick={p.onClose}>
+          <button type="button" className="test-btn" onClick={p.onClose}>
             {editable ? "Cancel" : "Close"}
           </button>
           {editable && (
@@ -254,22 +254,22 @@ function GroupDialog(p: StopDialogProps) {
         <div className="modal-actions stop-dialog-actions">
           <span className="stop-dialog-side">
             {p.onRemove && (
-              <button type="button" className="stop-dialog-danger" disabled={p.busy} onClick={p.onRemove}>
+              <button type="button" className="test-btn stop-dialog-danger" disabled={p.busy} onClick={p.onRemove}>
                 Remove
               </button>
             )}
             {p.onUngroup && (
-              <button type="button" disabled={p.busy} title="Its sub-steps become stops of their own" onClick={p.onUngroup}>
+              <button type="button" className="test-btn" disabled={p.busy} title="Its sub-steps become stops of their own" onClick={p.onUngroup}>
                 Ungroup
               </button>
             )}
             {p.onSaveShelf && (
-              <button type="button" disabled={p.busy || !next} title="Keep these stops on the shelf, to drag onto any line" onClick={() => void p.onSaveShelf!(next)}>
+              <button type="button" className="test-btn" disabled={p.busy || !next} title="Keep these stops on the shelf, to drag onto any line" onClick={() => void p.onSaveShelf!(next)}>
                 Save to the shelf
               </button>
             )}
           </span>
-          <button type="button" onClick={p.onClose}>
+          <button type="button" className="test-btn" onClick={p.onClose}>
             {p.onRename ? "Cancel" : "Close"}
           </button>
           {p.onRename && (

@@ -43,8 +43,37 @@
   margin: 4px 0 2px;
 }
 
+/* Every worded button in components/flights wears one of the app's tiers
+   (docs/flights.md "As built: round 11 style"): .btn-primary (the accent
+   fill, settings/screens/screens.css) for the one action a surface is for,
+   .test-btn (panel-2 + the border, SetupDialog.css) beside it, and the
+   quiet-icon tier (.fl-icon-btn, StopParts.css) for glyphs. .fl-btn only
+   adds what flights need on top: no wrap, and the ring the tiers lack. */
 .fl-btn {
   white-space: nowrap;
+}
+
+.fl-btn:focus-visible,
+.fl-check-row:focus-visible,
+.fl-strip-line:focus-visible,
+.sky-perch-name:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A link-styled button in the flights' surfaces: the accent as text holds
+   4.5:1 only as --fl-ink-accent (FlywayCanvas.css). */
+.sky button.linklike,
+.fl-session button.linklike,
+button.linklike.fl-open-sky {
+  color: var(--fl-ink-accent, var(--accent));
+}
+
+.sky button.linklike:focus-visible,
+.fl-session button.linklike:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 /* --- The drawer's groups ----------------------------------------------------- */

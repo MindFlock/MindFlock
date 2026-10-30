@@ -160,6 +160,6 @@ describe("the stops row", () => {
     const css = cssOf("components/flights/StopShelf.css");
     expect(css).toMatch(/@media \(hover: none\) \{\s*\.sky-stops-hint \{\s*display: none;/);
     expect(css).toMatch(/\.sky-stops-chips \{[^}]*overflow-x: auto;[^}]*scrollbar-width: thin;/);
-    expect(css).toMatch(/\.sky-stop-chip \{[^}]*height: 26px;/);
+    expect(css).toMatch(/\.sky-stop-chip \{[^}]*height: var\(--fl-ctl-h, 28px\);/);
   });
 });

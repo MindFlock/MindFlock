@@ -36,9 +36,10 @@
   flex: none;
   border: 1px solid transparent;
   background: transparent;
-  color: var(--muted);
-  border-radius: 6px;
+  color: var(--fl-ink-muted, var(--muted));
+  border-radius: var(--fl-btn-radius, 6px);
   padding: 2px 7px;
+  font-family: inherit;
   font-size: 14px;
   line-height: 1.2;
   cursor: pointer;
@@ -49,6 +50,13 @@
   color: var(--text);
   border-color: var(--border);
   background: var(--panel-2);
+}
+
+.sky-lane-toggle:focus-visible,
+.sky-lane-more:focus-visible,
+.sky-lane-rail-icon:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* --- A source block -------------------------------------------------------- */

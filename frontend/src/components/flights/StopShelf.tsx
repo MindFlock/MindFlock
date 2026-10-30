@@ -266,7 +266,7 @@ function SavedChip({
     <>
       {renaming ? (
         <input
-          className="sky-saved-rename"
+          className="sky-saved-rename fl-input"
           aria-label={"Rename “" + plan.name + "”"}
           aria-invalid={!!err}
           title={err || "Enter saves, Esc cancels"}

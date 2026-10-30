@@ -96,7 +96,7 @@
   height: 30px;
   padding: 0 7px;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: var(--fl-btn-radius, 6px);
   background: none;
   color: var(--fl-ink-muted);
   font: inherit;
@@ -151,6 +151,11 @@
   color: var(--text);
 }
 
+.skl-size:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .skl-size:hover .skl-size-word,
 .skl-size:focus-visible .skl-size-word {
   display: inline;
@@ -164,7 +169,14 @@
 
 .skl-menu .vf-menu > summary {
   padding: 3px 9px 7px;
+  border-radius: var(--fl-btn-radius, 6px);
+  color: var(--fl-ink-muted);
   font-size: 18px;
+}
+
+.skl-menu .vf-menu > summary:hover,
+.skl-menu .vf-menu[open] > summary {
+  color: var(--text);
 }
 
 /* The list is part of the zoomed line: scale it back to screen size. */
@@ -223,6 +235,21 @@
 
 .skl-menu .vf-menu-list .vf-menu-danger {
   color: var(--fl-ink-red);
+}
+
+/* A box's right-click menu (StopMenu.css) on a line reads at the ⋯'s size. */
+.skl .fl-stopmenu {
+  min-width: 232px;
+  padding: 5px;
+}
+
+.skl .fl-stopmenu-item {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 13.5px;
+  line-height: 1.2;
 }
 
 .skl-gone {
@@ -304,8 +331,18 @@
   opacity: 0.75;
 }
 
-.skl-box-resize:hover {
+.skl-box-resize:hover,
+.skl-resize:hover {
   opacity: 1;
+  background-color: var(--panel-2);
+}
+
+/* The corner handles take the quiet tier's ring on a keyboard focus. */
+.skl-box-resize:focus-visible,
+.skl-resize:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* What the + or a stop opened: a card hanging under the line. */
@@ -364,9 +401,10 @@
   height: 22px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--fl-btn-radius, 6px);
   background: none;
-  color: var(--muted);
+  color: var(--fl-ink-muted);
+  font: inherit;
   font-size: 13px;
   cursor: pointer;
 }
@@ -374,7 +412,13 @@
 .skl-card-fold:hover,
 .skl-card-fold:focus-visible {
   border-color: var(--border);
+  background: var(--panel-2);
   color: var(--text);
+}
+
+.skl-card-fold:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .skl-card-pane {
@@ -402,9 +446,6 @@
   opacity: 0.7;
 }
 
-.skl-resize:hover {
-  opacity: 1;
-}
 
 /* --- The roomy boxes ---------------------------------------------------------
    The sky draws boxMetrics' roomy tier (236 × 100 boxes, 180 × 48 +, 200 ×
