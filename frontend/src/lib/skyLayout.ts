@@ -6,9 +6,10 @@
  * container). Every session is a LINE on it — its row of blocks — at a
  * position the owner dragged it to (pinned, in the per-device layout store
  * `mf_sky_layout` with the line's size and its open box, keyed by session
- * title) or, until then or after a Tidy, one `placeLines` picks at its
- * measured size: rows of lines left to right, newest first, wrapping at the
- * sky's width, never on top of another line.
+ * title) or, until then or after a Tidy, one `assignSpots` gives it ONCE when
+ * it first appears: rows of lines left to right, newest first, wrapping at
+ * the sky's width, never on top of another line. It keeps that spot while it
+ * grows or shrinks; only Tidy places it again.
  *
  * Which sessions get a line is the view's (`skyLineTitles`): All (every
  * session, workers too, each on its own line), Mine (top-level sessions, their
@@ -106,6 +107,26 @@ export function placeLines(lines: readonly LineBox[], saved: Readonly<Record<str
     }
   }
   return out;
+}
+
+/** A line that already has its spot: where it sits, at its size now. */
+export interface PlacedLine extends Rect {
+  id: string;
+}
+
+/** Spots for the lines that have none yet — and only for them. A line keeps
+ * the spot it was given (its auto spot, or where it was dropped) for as long
+ * as it is in the sky, whatever its size does later; a newcomer gets the
+ * first free place by `placeLines`' rule, clear of every placed line at its
+ * size now. Two placed lines may later grow into each other: the owner drags
+ * one, or Tidies, rather than the sky shoving them about. */
+export function assignSpots(existing: readonly PlacedLine[], newcomers: readonly LineBox[], area: PlaceArea): Record<string, Pos> {
+  const saved: Record<string, Pos> = {};
+  for (const e of existing) saved[e.id] = { x: e.x, y: e.y };
+  const fresh = newcomers.filter((n) => !saved[n.id]);
+  if (!fresh.length) return {};
+  const all = placeLines([...existing, ...fresh], saved, area);
+  return Object.fromEntries(fresh.map((n) => [n.id, all[n.id]]));
 }
 
 /** The smallest rectangle holding them all, or null for none. */
@@ -224,6 +245,10 @@ export interface SkyLineLayout {
  * `dataTransfer`, the flyway's id): dropped on a line, that flyway flies on
  * that line's session. */
 export const FLYWAY_MIME = "application/x-mindflock-flyway";
+
+/** What the toolbar's + New session carries while dragged onto the sky:
+ * dropped on empty sky, the new-session block opens there. */
+export const NEW_SESSION_MIME = "application/x-mindflock-new-session";
 
 export type SkyLineSize = SkyLineLayout["size"];
 export const SKY_SIZES: readonly SkyLineSize[] = ["compact", "normal", "wide"];

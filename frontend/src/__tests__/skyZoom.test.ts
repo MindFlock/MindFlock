@@ -161,7 +161,9 @@ describe("room on the screen", () => {
     expect(sky).toContain("style={{ transform: `translate(${at.x}px, ${at.y}px)` }}");
     expect(sky).toContain("{lineFor(l.id, at)}");
     const sheet = css("components/flights/Sky.css");
-    expect(sheet).toMatch(/\.sky-line-slot \{[^}]*position: absolute;[^}]*transition: transform/);
+    expect(sheet).toMatch(/\.sky-line-slot \{[^}]*position: absolute;/);
+    // Tidy is the only glide (docs/flights-stable.md).
+    expect(sheet).toMatch(/\.sky-plane\[data-tidying\] \.sky-line-slot \{[^}]*transition: transform/);
     expect(sheet).toMatch(/\.sky-line-slot\.is-dragging \{[^}]*transition: none;/);
     expect(sheet).toContain(".sky-line-slot.is-flash .skl,");
   });
