@@ -5,12 +5,17 @@
  * "Recently closed (n)" link, and the footer (view picker + count + Customize
  * + Shortcuts). */
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { setView } from "../../lib/viewMode";
+import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { VIEWS, VIEW_BLURB, setView, viewLabel } from "../../lib/viewMode";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Instance, RunTask } from "../../api/types";
 import { api } from "../../api/client";
-import { refreshInstances, useConfig, useDevices, useInstances } from "../../state/queries";
+import { refreshInstances, useConfig, useDevices, useFlights, useInstances } from "../../state/queries";
+import { perchBadge } from "../../lib/flights";
+import { keymapVersion, subscribeKeymap } from "../../lib/keymap";
+import { usableShortcuts } from "../palette/ShortcutsSheet";
+import { Bird } from "../flights/Bird";
+import { GridGlyph } from "../ViewGlyphs";
 import { effectiveViewMode, useUi, windowKey, type ViewMode } from "../../state/store";
 import { toast } from "../../lib/toast";
 import { canDisconnect } from "../../lib/devices";
@@ -70,10 +75,78 @@ interface Props {
   onOpenTodo(): void;
 }
 
-/** The footer's view picker. One <select> rather than five buttons: it is a
- * set-once preference, and a row of five toggles read as the sidebar's loudest
- * control. */
+/** The grid's pane counts on the footer's View row. */
 const VIEW_MODES: ViewMode[] = ["auto", "1" as ViewMode, "2", "4", "9"];
+
+/** The footer's View row: the grid's pane counts, then the Grid · Sky toggle
+ * — its home (the top bar wears it only while this row is out of sight). A
+ * number is the grid at that many panes, so picking one comes back to the
+ * grid; ⊞ is the grid at the current count; the bird is the sky, wearing the
+ * count of flights perched on you (nothing at zero, red-for-failing the way
+ * the top bar's counts are).
+ *
+ * The calm first hour hides the NUMBERS — a set-once preference that means
+ * nothing with one or two panes — unless one was already picked; the toggle
+ * always shows, so the sky is never out of reach. */
+export function ViewRow({ calm }: { calm: boolean }) {
+  const ui = useUi();
+  const perch = perchBadge(useFlights().data || []);
+  // The tooltip's shortcut off the live keymap, rebinds included.
+  useSyncExternalStore(subscribeKeymap, keymapVersion, keymapVersion);
+  const k = usableShortcuts("view");
+  const keys = k.length ? " (" + k.join(" / ") + ")" : "";
+  const perchLine =
+    perch.count > 0 ? "\n" + perch.count + (perch.count === 1 ? " flight perched on you" : " flights perched on you") : "";
+  return (
+    <div id="view-modes">
+      <span className="vm-label">View</span>
+      {(!calm || ui.viewMode !== "auto") && (
+        <span
+          className="vm-nums"
+          title="Grid view — Auto grows with sessions; 1/2/4/9 show only the top N panes, the rest stay running but hidden until reordered into the top slots."
+        >
+          {VIEW_MODES.map((v) => (
+            <button
+              key={v}
+              type="button"
+              className={"vm" + (ui.view === "grid" && ui.viewMode === v ? " active" : "")}
+              data-view={v}
+              onClick={() => {
+                ui.setViewMode(v);
+                setView("grid");
+              }}
+            >
+              {v === "auto" ? "Auto" : v}
+            </button>
+          ))}
+        </span>
+      )}
+      <span className="vt-pair" role="group" aria-label="Grid or Sky">
+        {VIEWS.map((v) => (
+          <button
+            key={v}
+            type="button"
+            className={"vt" + (ui.view === v ? " active" : "")}
+            aria-pressed={ui.view === v}
+            // The word can drop to the glyph on a narrow sidebar: the name
+            // stays, and carries the count the badge shows.
+            aria-label={viewLabel(v) + (v === "sky" && perch.count > 0 ? ", " + perch.count + " perched on you" : "")}
+            data-view={v}
+            data-tour={v === "sky" ? "view-sky" : undefined}
+            title={viewLabel(v) + " — " + VIEW_BLURB[v] + keys + (v === "sky" ? perchLine : "")}
+            onClick={() => setView(v)}
+          >
+            {v === "sky" ? <Bird size={12} className="vt-icon" /> : <GridGlyph className="vt-icon" />}
+            <span className="vt-word">{viewLabel(v)}</span>
+            {v === "sky" && perch.count > 0 && (
+              <span className={"vt-count" + (perch.failing ? " is-failing" : "")}>{perch.count}</span>
+            )}
+          </button>
+        ))}
+      </span>
+    </div>
+  );
+}
 
 /** A dialog opened while the sidebar is a narrow window's drawer closes the
  * drawer: the drawer is drawn over the page (Sidebar.css, z-index 60), so a
@@ -718,41 +791,8 @@ export function Sidebar({ onOpenChat, onOpenTodo }: Props) {
             <SetupChip />
           </span>
         </div>
-        {/* A set-once preference that means nothing with one or two panes:
-            the calm first hour leaves it out unless it was already changed.
-            Its last chip is the other view (lib/viewMode): the sky; a number
-            is the grid at that many panes, so picking one comes back. */}
-        {(!calm || ui.viewMode !== "auto" || ui.view === "sky") && (
-        <div
-          id="view-modes"
-          title="Grid view — Auto grows with sessions; 1/2/4/9 show only the top N panes, the rest stay running but hidden until reordered into the top slots. Sky — the same sessions as lines on one canvas."
-        >
-          <span className="vm-label">View</span>
-          {VIEW_MODES.map((v) => (
-            <button
-              key={v}
-              type="button"
-              className={"vm" + (ui.view === "grid" && ui.viewMode === v ? " active" : "")}
-              data-view={v}
-              onClick={() => {
-                ui.setViewMode(v);
-                setView("grid");
-              }}
-            >
-              {v === "auto" ? "Auto" : v}
-            </button>
-          ))}
-          <button
-            type="button"
-            className={"vm vm-sky" + (ui.view === "sky" ? " active" : "")}
-            data-view="sky"
-            title="The sky — every session as a line on one canvas (Alt+Y)"
-            onClick={() => setView("sky")}
-          >
-            Sky
-          </button>
-        </div>
-        )}
+        {/* The grid's pane counts and the Grid · Sky toggle (ViewRow). */}
+        <ViewRow calm={calm} />
         {/* "Add more bars" is the opposite of what a first hour needs. */}
         {!calm && (
           <Hint id="customize" className="hint-footer">

@@ -20,6 +20,7 @@ import { useDoctor, useFlights, useTestPlans } from "../state/queries";
 import { dueCount, failingCount, verifyCountLine } from "./dialogs/verify";
 import { perchBadge } from "../lib/flights";
 import { Bird } from "./flights/Bird";
+import { GridGlyph } from "./ViewGlyphs";
 import { rethemeAll } from "../lib/terminals";
 import { NotificationsBell } from "./NotificationsBell";
 import { TopBarMic } from "./TopBarMic";
@@ -84,18 +85,6 @@ export function fitTopBar({ room, fixed, brand, items, more }: BarWidths): BarFi
   let shown = items.length - 1;
   while (shown > 0 && !fits(upTo(shown) + more)) shown--;
   return { brand: false, shown };
-}
-
-/** The grid view's glyph: four panes. */
-function GridGlyph() {
-  return (
-    <svg className="tb-view-icon" width="12" height="12" viewBox="0 0 12 12" aria-hidden="true" focusable="false">
-      <rect x="0.75" y="0.75" width="4.5" height="4.5" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
-      <rect x="6.75" y="0.75" width="4.5" height="4.5" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
-      <rect x="0.75" y="6.75" width="4.5" height="4.5" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
-      <rect x="6.75" y="6.75" width="4.5" height="4.5" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
-    </svg>
-  );
 }
 
 export function TopBar() {
@@ -198,13 +187,19 @@ export function TopBar() {
   // The foldable items, in bar order; Verify / Schedule only once the calm
   // rule above lets them on the bar at all (this never overrides it). The
   // Grid · Sky toggle folds last, only on a phone-narrow bar (its ⋯ row
-  // switches to the other view, carrying the perch count; the sidebar's View
-  // row and Alt+Y still do too).
+  // switches to the other view, carrying the perch count; Alt+Y still does
+  // too).
+  //
+  // The toggle's home is the sidebar's View row, beside the pane counts. The
+  // bar wears it only where that row is out of sight — the sidebar hidden, or
+  // a phone-narrow window (whose sidebar is an overlay) — so there is one
+  // visible toggle, never two.
+  const barViews = ui.sidebarHidden || ui.narrow;
   const otherView = ui.view === "sky" ? "grid" : "sky";
   const perchLine =
     perch.count > 0 ? "\n" + perch.count + (perch.count === 1 ? " flight perched on you" : " flights perched on you") : "";
   const foldable = [
-    {
+    barViews && {
       key: "view",
       label: "Switch to the " + viewLabel(otherView),
       title: viewLabel(otherView) + " — " + VIEW_BLURB[otherView] + keys("view") + perchLine,
@@ -416,10 +411,12 @@ export function TopBar() {
             New
           </button>
           {/* The main area's two views of the same sessions (lib/viewMode):
-              the grid of panes or the sky of lines. Glyphs alone on a phone,
-              and the last thing a narrow bar folds. The Sky half wears the
-              count of flights perched on you — nothing at zero, the rule
-              every count on this bar keeps. */}
+              the grid of panes or the sky of lines. Only while the sidebar's
+              View row (its home) is out of sight — `barViews` above. Glyphs
+              alone on a phone, and the last thing a narrow bar folds. The
+              Sky half wears the count of flights perched on you — nothing at
+              zero, the rule every count on this bar keeps. */}
+          {barViews && (
           <span className={"tb-views" + (isFolded("view") ? " tb-folded" : "")} data-fold="view" role="group" aria-label="View">
             {VIEWS.map((v) => (
               <button
@@ -440,6 +437,7 @@ export function TopBar() {
               </button>
             ))}
           </span>
+          )}
           {/* Intake sits next to New because both are about starting sessions —
               one from scratch, one from what came in. */}
           <button
