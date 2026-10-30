@@ -158,6 +158,12 @@ describe("the session actions", () => {
     expect(titles(q.queryClient.getQueryData<Instance[]>(["instances"])!)).toEqual(["foo", "bar-7"]);
   });
 
+  it("a bare answer for another device's guess is not landed: the poll reconciles it", () => {
+    const t = actions.addPendingSession("foo-copy", "lap");
+    actions.landPendingSession(t, row("foo-copy"));
+    expect(titles(q.queryClient.getQueryData<Instance[]>(["instances"])!)).toEqual(["foo", "lap::foo-copy"]);
+  });
+
   it("copy, branch and reopen add a pending row and land the answer", () => {
     const src = code("lib/sessionActions.ts");
     expect(src.match(/landPendingSession\(guess, inst\);/g)?.length).toBe(3);

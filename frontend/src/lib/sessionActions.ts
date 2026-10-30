@@ -489,6 +489,9 @@ export function addPendingSession(bare: string, device = "", keepAlias = false):
  * box, under the real title), still waiting for the snapshot to list it. */
 export function landPendingSession(guess: string, inst: Instance | null | undefined) {
   if (!inst?.title) return;
+  // Another device answers under its BARE title, while the row arrives here as
+  // `device::title`: the guess waits for the poll (it matches by base) instead.
+  if (guess.includes("::") && !inst.title.includes("::")) return;
   queryClient.setQueryData<Instance[]>(["instances"], (prev) => landPendingRow(prev || [], guess, inst, Date.now()));
 }
 
