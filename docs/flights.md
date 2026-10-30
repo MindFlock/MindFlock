@@ -4073,3 +4073,31 @@ Each owns the files its row names plus its tests and an "As built: round 15
 (`_builtin_defaults` + the built-in judges' receipts). `tsc` and `vitest`
 run from `frontend/` (node_modules is linked); backend tests with
 `UV_PYTHON=3.12 uv run pytest tests/unit/test_flight*.py`.
+
+### As built: round 15 when-ui
+
+- `FlightStep.when?: string` (lib/flights.ts); `planFromSteps` carries it
+  (trimmed, left out when empty); `duplicateStep` / `toggleHalt` keep it by
+  spread. `newStep` takes the kind's `default_on_fail` through
+  `defaultOnFail(def)` ("halt" for an older server or an unknown word).
+- `lib/whenHelp.ts`: `WHEN_GRAMMAR` (the contract table's rows),
+  `looksLikeWhen` (non-empty, one line, ≤ 300), `checkWhen(expr)` → `GET
+  /api/flights/when?expr=…` (null on a 404 or a server/network error: no live
+  validation; a refusal carrying the contract's shape is the answer),
+  `whenChecker` (300 ms debounce, latest text only, canonical handed back on
+  blur, never asked again once the server has no validator), `whenError`,
+  `skippedNote`. `checkWhen` lives here, not in `lib/flightsApi.ts` (outside
+  this task's fence).
+- `StopForm` draws `WhenField` ("Only when", mono, ⓘ → an inline grammar
+  popover, Esc closes it) under the kind's fields; the error under the field;
+  "If it fails" presses `step.on_fail || defaultOnFail(def)`, marks the
+  kind's default with a title and a "Default for <kind>: …" hint.
+  `StopInspector` takes `run` and reads a skipped stop's note in the muted
+  tone. `kindName` says Someone for `someone`.
+- Tests: `stopWhen.test.ts` (27).
+- **Open (outside the fence):** `StopDialog.tsx`'s Save builds its
+  `StopPatch` from title/config/on_fail/halt only, and `lib/flightsApi.ts`'s
+  `wireStep` / `patchStop` drop `when` — so on a session's line the field
+  edits but `when` is not sent until those carry it (`StopPatch` and
+  `patchStop`'s `Pick` gain `"when"`, Save sends `when: draft.when ?? ""`,
+  `wireStep` copies a set `when`).

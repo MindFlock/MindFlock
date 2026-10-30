@@ -282,3 +282,65 @@
     align-items: stretch;
   }
 }
+
+/* --- Only when (round 15): the stop's condition, its ⓘ grammar -------------- */
+
+.fl-when-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.fl-when-row .fl-when-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.fl-when-input.fl-when-bad {
+  border-color: var(--red);
+}
+
+.fl-when-error {
+  font-size: 12.5px;
+  color: var(--red);
+}
+
+/* The popover drops under the field, inside the form (no portal: the stop
+   dialog is already the top layer). */
+.fl-when-help {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 8px 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  font-size: 12.5px;
+}
+
+.fl-when-help-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.fl-when-grammar {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fl-when-gram-row dt code {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+}
+
+.fl-when-gram-row dd {
+  margin: 0 0 0 12px;
+}
+
+.fl-skipped-note {
+  color: var(--fl-ink-muted, var(--muted));
+}
