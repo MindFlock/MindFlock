@@ -326,6 +326,13 @@ export interface StopShelfProps {
   /** Folded to its handle (the host remembers it). */
   folded?: boolean;
   onFold?(folded: boolean): void;
+  /** Round 13 — a diagram tool's manners: a chip click / the catalog's Add
+   * PLACES the block on the board (a grounded line near the palette) instead
+   * of tacking it onto the focused line. When given, it replaces the
+   * tack-on-click paths; `onTack` / `onTackPlan` stay for the drops on a line. */
+  onPlace?(drop: CatalogDrop): void;
+  /** The shelf's "Float the blocks" (the host switches `mf_sky_palette`). */
+  onFloat?(): void;
 }
 
 export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold }: StopShelfProps): JSX.Element {
