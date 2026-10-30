@@ -360,10 +360,13 @@
 /* The corner handle (round 12): the card's look, pinned to the lane's corner.
    The lane scrolls inside, so the handle sticks to the frame, not the list. */
 .sky-lane > .sky-lane-resize {
+  /* Last in the column: auto margin pushes it to the frame's bottom when the
+     list is short; sticky keeps it in view when the list scrolls. */
   position: sticky;
   align-self: flex-end;
   margin-top: auto;
-  bottom: 0;
-  right: 0;
+  margin-bottom: -8px;
+  margin-right: -8px;
+  bottom: -8px;
   flex: 0 0 16px;
 }

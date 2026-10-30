@@ -293,20 +293,6 @@ export function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, 
 
   return (
     <nav ref={rootRef} className="sky-lane" aria-label="Intake" data-open={open ? "" : undefined} style={{ width: frameNow.w, height: frameNow.h > 0 ? frameNow.h : undefined }}>
-      {onResize && (
-        <span
-          className="sky-lane-resize skl-resize"
-          role="separator"
-          tabIndex={0}
-          data-no-drag
-          aria-label="Resize the intake lane"
-          title="Drag to resize the intake lane"
-          onPointerDown={resizeDown}
-          onPointerMove={resizeMove}
-          onPointerUp={resizeUp}
-          onPointerCancel={resizeUp}
-        />
-      )}
       <div
         className="sky-lane-head"
         data-sky-head
@@ -345,6 +331,20 @@ export function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, 
         </p>
       ) : (
         blocks.map((b) => <Block key={b.key} block={b} onFly={onFly} open={open} />)
+      )}
+      {onResize && (
+        <span
+          className="sky-lane-resize skl-resize"
+          role="separator"
+          tabIndex={0}
+          data-no-drag
+          aria-label="Resize the intake lane"
+          title="Drag to resize the intake lane"
+          onPointerDown={resizeDown}
+          onPointerMove={resizeMove}
+          onPointerUp={resizeUp}
+          onPointerCancel={resizeUp}
+        />
       )}
     </nav>
   );

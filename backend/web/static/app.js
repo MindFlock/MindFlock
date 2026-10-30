@@ -123518,18 +123518,6 @@ function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResiz
 			height: frameNow.h > 0 ? frameNow.h : void 0
 		},
 		children: [
-			onResize && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "sky-lane-resize skl-resize",
-				role: "separator",
-				tabIndex: 0,
-				"data-no-drag": true,
-				"aria-label": "Resize the intake lane",
-				title: "Drag to resize the intake lane",
-				onPointerDown: resizeDown,
-				onPointerMove: resizeMove,
-				onPointerUp: resizeUp,
-				onPointerCancel: resizeUp
-			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "sky-lane-head",
 				"data-sky-head": true,
@@ -123584,7 +123572,19 @@ function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResiz
 				block: b,
 				onFly,
 				open
-			}, b.key))
+			}, b.key)),
+			onResize && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sky-lane-resize skl-resize",
+				role: "separator",
+				tabIndex: 0,
+				"data-no-drag": true,
+				"aria-label": "Resize the intake lane",
+				title: "Drag to resize the intake lane",
+				onPointerDown: resizeDown,
+				onPointerMove: resizeMove,
+				onPointerUp: resizeUp,
+				onPointerCancel: resizeUp
+			})
 		]
 	});
 }
