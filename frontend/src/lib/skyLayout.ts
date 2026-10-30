@@ -71,7 +71,7 @@ export function intakeSize(stored: StoredLine | undefined, measured?: { w: numbe
 }
 
 /** The zoom's range: near has more to show, so it goes past 200%. */
-export const ZOOM_MIN = 0.4;
+export const ZOOM_MIN = 0.1;
 export const ZOOM_MAX = 3;
 /** The room a fit keeps round what it shows (screen px). */
 export const FIT_PAD = 56;

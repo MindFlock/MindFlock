@@ -128,11 +128,11 @@ describe("what a device remembers (mf_sky_layout)", () => {
 });
 
 describe("the camera", () => {
-  it("zooms between 40% and 300%", () => {
+  it("zooms between 10% and 300% — the owner wants to see the whole board", () => {
     expect(clampZoom(0.1)).toBe(ZOOM_MIN);
     expect(clampZoom(9)).toBe(ZOOM_MAX);
     expect(clampZoom(Number.NaN)).toBe(1);
-    expect([ZOOM_MIN, ZOOM_MAX]).toEqual([0.4, 3]);
+    expect([ZOOM_MIN, ZOOM_MAX]).toEqual([0.1, 3]);
   });
 
   it("zooms about the pointer: the plane point under it stays under it", () => {
@@ -354,10 +354,10 @@ describe("the wiring", () => {
 
 describe("fitCamera at the zoom floor", () => {
   it("starts wide content at its left edge instead of cutting both ends", () => {
-    // 6000px of plane in a 1000px window: the floor (0.4) still leaves 2400px.
-    const cam = fitCamera({ x: 40, y: 40, w: 6000, h: 300 }, 1000, 800);
-    expect(cam.z).toBe(0.4);
-    expect(cam.x).toBe(FIT_PAD - 40 * 0.4); // pad - b.x * z: the lane at x=40 stays visible
+    // 60000px of plane in a 1000px window: the floor (0.1) still leaves 6000px.
+    const cam = fitCamera({ x: 40, y: 40, w: 60000, h: 300 }, 1000, 800);
+    expect(cam.z).toBe(0.1);
+    expect(cam.x).toBe(FIT_PAD - 40 * 0.1); // pad - b.x * z: the lane at x=40 stays visible
   });
   it("still centres content that fits", () => {
     const cam = fitCamera({ x: 0, y: 0, w: 500, h: 300 }, 1000, 800);

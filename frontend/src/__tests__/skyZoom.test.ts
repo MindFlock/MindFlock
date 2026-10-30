@@ -76,7 +76,7 @@ describe("the level of detail", () => {
   });
 
   it("zooms 40%–300%: near has more to show", () => {
-    expect([ZOOM_MIN, ZOOM_MAX]).toEqual([0.4, 3]);
+    expect([ZOOM_MIN, ZOOM_MAX]).toEqual([0.1, 3]);
   });
 });
 
@@ -109,7 +109,7 @@ describe("the first picture", () => {
   });
 
   it("Fit is the true fit: everything, however small", () => {
-    const b = { x: SKY_MARGIN, y: SKY_MARGIN, w: 6000, h: 3000 };
+    const b = { x: SKY_MARGIN, y: SKY_MARGIN, w: 60000, h: 30000 };
     expect(fitCamera(b, 1400, 900).z).toBe(ZOOM_MIN);
     expect(firstFit(b, 1400, 900).z).toBe(LOD_MID);
     expect(firstFit(null, 1400, 900)).toEqual({ x: 0, y: 0, z: 1 });

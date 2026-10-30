@@ -80234,7 +80234,7 @@ function intakeSize(stored, measured) {
 		h: 320
 	};
 }
-var ZOOM_MIN = .4;
+var ZOOM_MIN = .1;
 var ZOOM_MAX = 3;
 var FIT_PAD = 56;
 var hits = (a, b, gap) => a.x < b.x + b.w + gap && b.x < a.x + a.w + gap && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap;
