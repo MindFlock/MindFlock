@@ -2486,6 +2486,78 @@
   }
 }
 
+/* --- The bird in hand (round 12; docs/flights.md "As built: round 12 bird") ---
+   On a live flight's stop the bird is a button: a click halts the flight
+   (Carry on while held, Retry when a stop failed), a drag carries it to
+   another stop. `touch-action: none` lets a long-press lift it. */
+.fl-bird-marker[role="button"] {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.fl-bird-marker[role="button"]:hover {
+  border-color: currentColor;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.26);
+}
+
+.fl-bird-marker[role="button"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* In hand: it follows the pointer, centred on it, screen-sized at any zoom
+   of the Sky, and above every box. */
+.fl-bird-marker.fl-bird-dragging {
+  z-index: 8;
+  cursor: grabbing;
+  transition: none;
+  transform: translate(-50%, -50%) scale(calc(1.15 / var(--sky-z, 1)));
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+}
+
+/* Let go off a stop: a short flight home. */
+.fl-bird-marker.fl-bird-snap {
+  transition: left 0.22s ease-out, top 0.22s ease-out, transform 0.22s ease-out;
+}
+
+.fl-bird-carried,
+.fl-bird-carried .fl-box {
+  cursor: grabbing;
+}
+
+/* A branch's own bird (round 12): smaller, sitting on the branch box's left
+   edge where the fan-out wire comes in; a click opens that child. */
+.fl-bird-marker.fl-bird-branch {
+  z-index: 4;
+  padding: 2px;
+  transform: translate(-50%, -50%);
+}
+
+.fl-bird-marker.fl-bird-branch[role="button"] {
+  cursor: pointer;
+}
+
+/* Every stop it can land on, and the one under it. */
+.fl-box.fl-jump-target {
+  outline: 2px dashed color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: 3px;
+}
+
+.fl-box.fl-jump-over {
+  outline-style: solid;
+  outline-color: var(--accent);
+  box-shadow: 0 0 0 5px rgba(var(--accent-rgb), 0.3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fl-bird-marker.fl-bird-snap {
+    transition: none;
+  }
+}
+
 /* --- A line's box size (the Sky's ◧) --------------------------------------- */
 
 /* Compact: the title alone, on one line, centred in its box. */
@@ -4057,6 +4129,362 @@ a.fl-waiting-ref:hover {
 .modal-actions button:disabled {
   opacity: 0.55;
   cursor: default;
+}
+/* The Sky guide (SkyGuide.tsx): a wide card, the section list on the left,
+   the section on the right scrolling on its own. The sketches draw in
+   currentColor and the theme tokens, so both themes work. */
+
+.sky-guide {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 880px;
+  max-width: 96vw;
+  height: 600px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sky-guide-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sky-guide-head h2 {
+  margin: 0;
+  margin-right: auto;
+  font-size: 16px;
+}
+
+/* Close: the quiet tier (.fl-icon-btn), a bigger glyph. */
+.sky-guide-head .sky-guide-x {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.sky-guide-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 220px 1fr;
+}
+
+.sky-guide-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 8px;
+  border-right: 1px solid var(--border);
+  background: var(--panel-2);
+  overflow-y: auto;
+}
+
+/* A section: the menu-row tier (.fl-stopmenu-item), a little larger. */
+.sky-guide-nav .sky-guide-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  font-size: 13px;
+  padding: 6px 8px;
+}
+
+.sky-guide-nav .sky-guide-nav-item:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.sky-guide-nav .sky-guide-nav-item.on {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  font-weight: 600;
+}
+
+.sky-guide-n {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sky-guide-nav-item.on .sky-guide-n {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.sky-guide-page {
+  overflow-y: auto;
+  padding: 16px 22px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sky-guide-page h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.sky-guide-words p {
+  margin: 0 0 10px;
+  line-height: 1.5;
+}
+
+.sky-guide-words kbd,
+.sky-guide-keys kbd {
+  font: 12px/1 ui-monospace, monospace;
+  padding: 2px 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  white-space: nowrap;
+}
+
+.sky-guide-keys {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+
+.sky-guide-keys th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: 500;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sky-guide-keys td {
+  padding: 5px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  vertical-align: top;
+}
+
+.sky-guide-keys td:first-child {
+  width: 120px;
+}
+
+.sky-guide-foot {
+  margin-top: auto;
+  padding-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sky-guide-foot .muted {
+  margin-right: auto;
+}
+
+/* The sketches. */
+.sky-guide-sketch {
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.sg-sketch {
+  display: block;
+  width: 100%;
+  max-width: 480px;
+  height: auto;
+  margin: 0 auto;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sg-box {
+  fill: var(--panel-2);
+  stroke: currentColor;
+  stroke-opacity: 0.55;
+  stroke-width: 1.2;
+}
+
+.sg-box.sg-session {
+  stroke: var(--accent);
+  stroke-opacity: 1;
+}
+
+.sg-box.sg-done {
+  opacity: 0.5;
+}
+
+.sg-box.sg-here {
+  stroke: var(--gold);
+  stroke-opacity: 1;
+  stroke-width: 2;
+}
+
+.sg-box.sg-group {
+  fill: color-mix(in srgb, var(--accent) 8%, var(--panel-2));
+}
+
+.sg-dash,
+.sg-box.sg-dash {
+  stroke-dasharray: 4 3;
+}
+
+.sg-bar {
+  fill: currentColor;
+  opacity: 0.3;
+}
+
+.sg-link {
+  stroke: currentColor;
+  stroke-opacity: 0.5;
+  stroke-width: 1.2;
+}
+
+.sg-bird {
+  stroke: var(--gold);
+  stroke-width: 2.4;
+}
+
+.sg-arrow {
+  stroke: var(--accent);
+  stroke-width: 1.6;
+}
+
+.sg-text {
+  fill: currentColor;
+  stroke: none;
+  font: 10px/1 inherit;
+  font-family: inherit;
+  opacity: 0.8;
+}
+
+.sg-text.sg-strong {
+  font-weight: 600;
+  opacity: 1;
+}
+
+.sg-chip {
+  fill: var(--panel-2);
+  stroke: var(--accent);
+  stroke-width: 1.2;
+}
+
+.sg-dot {
+  fill: currentColor;
+  opacity: 0.6;
+}
+
+.sg-pane {
+  fill: var(--panel-2);
+  stroke: currentColor;
+  stroke-opacity: 0.4;
+}
+
+.sg-marquee {
+  fill: color-mix(in srgb, var(--accent) 10%, transparent);
+  stroke: var(--accent);
+  stroke-dasharray: 5 3;
+}
+
+.sg-halt {
+  fill: var(--tone-waiting, var(--gold));
+}
+
+.sg-halt-ink {
+  stroke: var(--panel);
+  stroke-width: 1.8;
+}
+
+.sg-toggle {
+  fill: var(--panel-2);
+  stroke: currentColor;
+  stroke-opacity: 0.4;
+}
+
+.sg-toggle-on {
+  fill: color-mix(in srgb, var(--accent) 22%, var(--panel));
+  stroke: var(--accent);
+}
+
+.sg-row {
+  fill: var(--panel);
+  stroke: currentColor;
+  stroke-opacity: 0.3;
+}
+
+.sg-fly {
+  fill: var(--accent);
+}
+
+.sg-cloud {
+  fill: var(--panel-2);
+  stroke: var(--accent);
+  stroke-width: 1.4;
+}
+
+/* The sky's "?" menu (onboarding/TourButton.tsx, its Sky variant): Replay
+   the tour · Open the guide. Kept here, beside the guide it opens. */
+.tour-btn-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.tour-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 30;
+  min-width: 170px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+
+.tour-menu button {
+  text-align: left;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.tour-menu button:hover,
+.tour-menu button:focus-visible {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+@media (max-width: 640px) {
+  .sky-guide-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .sky-guide-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sky-guide-nav .sky-guide-nav-item {
+    white-space: nowrap;
+  }
 }
 /* A ticketing source's repo list (RepoListField.tsx): one row per repo — the
    URL, then (with two or more) its optional hint and a Remove. */
@@ -6256,6 +6684,84 @@ a.fl-waiting-ref:hover {
     border-bottom: 0;
   }
 }
+/* Move to a folder… (MoveSessionDialog): the Rename card's shape, a little
+   wider for a path. */
+#move-form {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px;
+  width: 520px;
+  max-width: 92vw;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#move-form h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+#move-form > label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#move-form .move-now {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#move-form .move-now-path {
+  color: var(--text);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+#move-form #move-dest {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+#move-form #move-dest:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+#move-form #move-dest[aria-invalid="true"] {
+  border-color: var(--red);
+}
+
+#move-form .move-says {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#move-form > label.move-force {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+#move-form .move-midturn {
+  margin: 0;
+  font-size: 12px;
+  color: var(--red);
+}
 /* Connect GitHub's numbered token steps (components/dialogs/ConnectGitHub.tsx):
    1 make a token → 2 paste it → 3 Save & test, the answer under step 3. The
    dialog's card and the rest of its rows are styled in SetupDialog.css. */
@@ -6806,6 +7312,33 @@ a.fl-waiting-ref:hover {
 .sky-intake[data-lod="mid"] .sky-lane-fly.fl-btn {
   zoom: var(--sky-mid);
 }
+
+/* --- A sky object (round 12): the head is its handle ------------------------
+   The head drags the lane (drag mode); ▸ / ▾ or a double-click expands it.
+   Expanded, every waiting item is listed and its headline reads in full. */
+.sky[data-tool="drag"] .sky-intake .sky-lane-head,
+.sky[data-tool="drag"] .sky-intake .sky-lane-rail {
+  cursor: grab;
+}
+
+.sky-intake .sky-lane-head :is(button, .fl-count) {
+  cursor: pointer;
+}
+
+.sky-lane[data-open] .sky-lane-item-headline {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
+.sky-lane[data-open] .sky-lane-item-ref {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.sky-lane[data-open] .sky-lane-stub-name {
+  white-space: normal;
+}
 /* The Sky's new-session block (NewSessionBlock.tsx): a block on the sky at
  * the spot the owner double-clicked (or dropped the Session chip) — a card with
  * a bar like a line's (the bird, its name; drag it to move the block), a
@@ -6933,6 +7466,116 @@ a.fl-waiting-ref:hover {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* Round 12: the two folds under the rows — More options (the rest of the
+ * New dialog) and From a session (fork a worker from a live session). Their
+ * heads are the quiet-icon tier (.fl-icon-btn); folded, More options says
+ * what it holds in one muted line. */
+.sky-new-folds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 -6px -4px;
+}
+
+.sky-new-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+}
+
+.sky-new-fold[aria-expanded="true"],
+.sky-new-fold.is-on {
+  color: var(--text);
+}
+
+.sky-new-caret {
+  width: 9px;
+  font-size: 10px;
+}
+
+.sky-new-summary {
+  margin: 0;
+  overflow: hidden;
+  color: var(--fl-ink-muted, var(--muted));
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sky-new-more-body {
+  display: grid;
+  gap: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 2px 2px 2px 0;
+}
+
+.sky-new-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 6px 9px;
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+}
+
+.sky-new-args {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.sky-new-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+}
+
+.sky-new-note {
+  margin: 0;
+  color: var(--fl-ink-muted, var(--muted));
+  font-size: 12.5px;
+}
+
+/* From a session: the picker scrolls past a handful of rows. */
+.sky-new-parents {
+  display: grid;
+  gap: 6px;
+}
+
+.sky-new-parent-list {
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+/* A fork's Repository row: whose repository, and Clear. */
+.sky-new-forked {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sky-new-forked-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.sky-new-forked-repo {
+  overflow: hidden;
+  color: var(--fl-ink-muted, var(--muted));
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* One session's line in the Sky (SkyLine.tsx). The host places it (absolute,
    at its layout's x/y); the line sizes itself to its diagram and reports
@@ -7741,6 +8384,24 @@ a.fl-waiting-ref:hover {
 .skl[data-lod="near"] .fl-join-pill {
   zoom: calc(1 / var(--sky-near));
 }
+
+/* Delete on the line or its session's box (round 12): the close question,
+   inline, under the bar (as a grounded line's Remove asks). */
+.skl-close-confirm {
+  padding: 0 0 8px;
+}
+
+/* The line takes the focus (a press on its bar) so Delete lands on it; the
+   pointer's focus draws no ring, the keyboard's does. */
+.skl:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Click mode (round 12): nothing moves by dragging, the sky pans under the
+   hand — so a line's bar shows the hand, not the move. */
+.sky[data-tool="click"] .skl-bar {
+  cursor: inherit;
+}
 /* The Sky's readability overrides for parts drawn by SkyView (the toolbar,
    the drawer) whose own rules live in Sky.css. Imported by SkyLine.tsx; CSS
    is global. The sizes and contrast numbers are in docs/flights-visibility.md.
@@ -8039,6 +8700,215 @@ a.fl-waiting-ref:hover {
 .skl-grounded[data-lod="far"] .skl-grounded-head span {
   display: none;
 }
+/* All blocks (StopCatalog.tsx): the shelf's catalog in the app's Modal — the
+   same card as a stop's dialog (StopDialog.css, after #rename-form): a filter,
+   then Blocks and Multi-step, a row per block. */
+
+.sky-catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(560px, calc(100vw - 48px));
+  max-height: 80vh;
+  box-sizing: border-box;
+  padding: 18px 20px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  transition: opacity 0.12s;
+}
+
+/* A row is being dragged: the Modal lets the pointer through to the sky (its
+   backdrop would take the drop) and fades, so the lines under it show. */
+.modal.sky-catalog-modal.is-dragging {
+  background: transparent;
+  pointer-events: none;
+}
+
+.sky-catalog-modal.is-dragging .sky-catalog {
+  opacity: 0.35;
+}
+
+.sky-catalog-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sky-catalog-head h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 16px;
+}
+
+.sky-catalog-filter.fl-input.fl-input {
+  flex: none;
+}
+
+.sky-catalog-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.sky-catalog-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* The section's label: tiny and muted, like the shelf's region labels. */
+.sky-catalog-label {
+  margin: 0 0 3px;
+  padding: 0 8px;
+  color: var(--fl-ink-muted, var(--muted));
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sky-catalog-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: grab;
+  user-select: none;
+}
+
+.sky-catalog-row:active {
+  cursor: grabbing;
+}
+
+/* The row ↑ / ↓ picked (and the one under the pointer): panel-2, as a menu
+   row's hover. */
+.sky-catalog-row.active {
+  border-color: var(--border);
+  background: var(--panel-2);
+}
+
+.sky-catalog-icon {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  color: var(--fl-ink-accent, var(--accent));
+  background: rgba(var(--accent-rgb), 0.14);
+}
+
+.sky-catalog-row.perch .sky-catalog-icon {
+  border-radius: 50%;
+  color: var(--tone-attention);
+  background: color-mix(in srgb, var(--tone-attention) 16%, transparent);
+}
+
+.sky-catalog-words {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.sky-catalog-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sky-catalog-summary {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sky-catalog-badge {
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fl-ink-muted, var(--muted));
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 15px;
+}
+
+.sky-catalog-badge.actor-you {
+  border-color: color-mix(in srgb, var(--tone-attention) 60%, var(--border));
+  color: var(--tone-attention);
+}
+
+.sky-catalog-badge.builtin {
+  border-style: dashed;
+}
+
+/* A saved stop's sub-steps: a tiny box per step (a perch's gold). */
+.sky-catalog-boxes {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 26px;
+  flex-wrap: wrap;
+}
+
+.sky-catalog-boxes i {
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--accent) 70%, var(--muted));
+}
+
+.sky-catalog-boxes i.perch {
+  border-radius: 50%;
+  background: var(--tone-attention);
+}
+
+.sky-catalog-more {
+  color: var(--muted);
+  font-size: 9.5px;
+}
+
+/* Add: the secondary tier (.test-btn), shown on the picked row and under the
+   pointer so a long list stays calm. */
+.sky-catalog-add.test-btn {
+  flex: none;
+  visibility: hidden;
+}
+
+.sky-catalog-row.active .sky-catalog-add,
+.sky-catalog-row:hover .sky-catalog-add {
+  visibility: visible;
+}
+
+@media (hover: none) {
+  .sky-catalog-add.test-btn {
+    visibility: visible;
+  }
+}
+
+.sky-catalog-empty {
+  margin: 4px 8px;
+  font-size: 12.5px;
+}
+
+.sky-catalog-hint {
+  margin: 0;
+  font-size: 11px;
+}
 /* "Takes off…" (TakeoffDialog.tsx): the trigger's form inside the app's Modal.
    The fields' own look (.fl-form, .fl-schedule) is StopParts.css's. */
 
@@ -8056,8 +8926,9 @@ a.fl-waiting-ref:hover {
   padding: 0;
   background: none;
 }
-/* The shelf at the Sky's foot (StopShelf.tsx): one row, Stops — the Session
-   chip, the stop kinds, the saved stops — folding to a thin handle. */
+/* The shelf at the Sky's foot (StopShelf.tsx): one row, Stops — Blocks (the
+   Session chip, the default kinds), Multi-step (the saved stops), then All
+   blocks… (the catalog) — folding to a thin handle. */
 
 .sky-shelf {
   flex: none;
@@ -8141,6 +9012,26 @@ a.fl-waiting-ref:hover {
 
 .sky-stop-item {
   display: contents;
+}
+
+/* A region of the row: a tiny muted label, then its chips. Thin dividers
+   (.sky-stops-divider) sit between the regions. */
+.sky-stops-region {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+}
+
+.sky-stops-label {
+  flex: none;
+  padding-right: 2px;
+  color: var(--fl-ink-muted, var(--muted));
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 /* Every chip on the shelf is the secondary tier (.test-btn): panel-2, the
@@ -8305,6 +9196,19 @@ a.fl-waiting-ref:hover {
 .sky-saved-menu {
   z-index: 50;
   transform: translateY(-100%);
+}
+
+/* All blocks…: a plain secondary chip (it opens a list, it doesn't drag), its
+   ⊞ in the muted ink. */
+.sky-stop-chip.sky-catalog-chip {
+  cursor: pointer;
+}
+
+.sky-stop-chip.sky-catalog-chip .sky-stop-icon {
+  color: var(--fl-ink-muted, var(--muted));
+  background: transparent;
+  font-size: 14px;
+  line-height: 1;
 }
 
 .sky-stops-confirm {
@@ -8820,7 +9724,8 @@ body.view-switch #sky-view {
   top: 0;
 }
 
-.sky-plane[data-tidying] .sky-line-slot {
+.sky-plane[data-tidying] .sky-line-slot,
+.sky-plane[data-tidying] .sky-intake {
   transition: transform 0.28s ease;
 }
 
@@ -9079,7 +9984,8 @@ details.fl-group-waiting > summary {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sky-plane[data-tidying] .sky-line-slot {
+  .sky-plane[data-tidying] .sky-line-slot,
+  .sky-plane[data-tidying] .sky-intake {
     transition: none;
   }
   .sky-line {
@@ -9096,6 +10002,36 @@ details.fl-group-waiting > summary {
    takes no box of its own (StopShelf.css draws the shelf). */
 .sky-shelf-host {
   display: contents;
+}
+
+/* --- Round 12: the intake lane as a sky object, and the two tools ----------
+   The lane sits at its spot like a line's slot; dragged, selected or
+   expanded it is lifted over the lines it may cover. */
+.sky-intake.is-dragging {
+  transition: none;
+  z-index: 6;
+}
+
+.sky-intake[data-open] {
+  z-index: 5;
+}
+
+.sky-intake.is-selected > .sky-lane {
+  outline: 2px dashed var(--accent);
+  outline-offset: 5px;
+}
+
+/* Click mode (`.sky[data-tool="click"]`, the toolbar's ☝ Click, H, or Space
+   held): a drag anywhere pans the sky, so the hand shows over the lines and
+   their boxes too, closed while it pans. A control keeps its own pointer. */
+.sky[data-tool="click"] .sky-viewport,
+.sky[data-tool="click"] .sky-viewport :is(.skl, .skl-bar, .fl-box, .fl-draggable, .fl-canvas, .sky-lane, .sky-lane-head) {
+  cursor: grab;
+}
+
+.sky[data-tool="click"] .sky-viewport.is-panning,
+.sky[data-tool="click"] .sky-viewport.is-panning * {
+  cursor: grabbing !important;
 }
 
 @layer tokens, base, components, theme;

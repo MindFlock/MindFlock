@@ -145,6 +145,7 @@ import { SkyLine, type LineDelete } from "./SkyLine";
 import { SkySelectionBar, type SelectionAsk } from "./SkySelection";
 import { GroundedLine, groundedName } from "./GroundedLine";
 import { StopShelf } from "./StopShelf";
+import { SkyGuide } from "./SkyGuide";
 import { TakeoffDialog } from "./TakeoffDialog";
 import { Bird } from "./Bird";
 import { TourButton } from "../onboarding/TourButton";
@@ -715,7 +716,10 @@ export function SkyView() {
   const onFly = (plan: FlightPlan, title?: string) => {
     const t = title || focusLine;
     if (!t) {
-      setFlyPick(plan);
+      // Nothing focused: the saved stop lands on the board as a grounded
+      // line in the middle of the view (round 12 — the catalog's Add).
+      setFlyPick(null);
+      void dropGrounded({ plan }, middle());
       return;
     }
     setFlyPick(null);
@@ -737,7 +741,9 @@ export function SkyView() {
     if (!def) return;
     const t = title || focusLine;
     if (!t) {
-      setTackPick(def);
+      // Nothing focused: one grounded stop in the middle of the view.
+      setTackPick(null);
+      void dropGrounded({ kind }, middle());
       return;
     }
     setTackPick(null);
@@ -1338,6 +1344,7 @@ export function SkyView() {
         // The tool: ✥ Drag (a line moves by its bar) · ☝ Click (a drag pans).
         <ChipRow<SkyTool>
           className="sky-modes sky-tools"
+          field={{ "data-tour": "sky-tool" }}
           label="Tool"
           value={tool}
           options={SKY_TOOLS.map((t) => ({ value: t, ...TOOL_CHIPS[t] }))}
@@ -1353,7 +1360,7 @@ export function SkyView() {
         </button>
       )}
       {!narrow && (
-        <span className="sky-zoom" role="group" aria-label="Zoom">
+        <span className="sky-zoom" role="group" aria-label="Zoom" data-tour="sky-zoom">
           <button type="button" className="sky-zoom-btn" aria-label="Zoom out" title="Zoom out (−)" disabled={cam.z <= ZOOM_MIN + 0.001} onClick={() => zoomBy(1 / 1.2)}>
             −
           </button>
@@ -1563,6 +1570,7 @@ export function SkyView() {
     return (
       <main id="sky-view" className="sky sky-narrow" data-tour="flights-sky">
         {toolbar}
+        <SkyGuide />
         {pick}
         {drawer}
         {newBlock}
@@ -1577,6 +1585,7 @@ export function SkyView() {
   return (
     <main id="sky-view" className="sky" data-tool={liveTool} onDragOver={onSkyDragOver} onDrop={onSkyDrop}>
       {toolbar}
+      <SkyGuide />
       {pick}
       <div className="sky-main">
         <div className="sky-stage">
@@ -1618,6 +1627,7 @@ export function SkyView() {
                 // The intake lane: a sky object at its spot (layout key
                 // "intake"), dragged by its head, expanded from it.
                 <div
+                  data-tour="sky-intake"
                   className={"sky-intake" + (drag?.from[INTAKE_KEY] ? " is-dragging" : "") + (sel.lines.has(INTAKE_KEY) ? " is-selected" : "")}
                   data-lod={lodFor(cam.z)}
                   data-open={intakeOpen ? "" : undefined}

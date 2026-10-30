@@ -208,7 +208,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
         </div>
       )}
       <div className="skl-grounded-body">
-        <div className="skl-grounded-head" data-no-drag title="Drag the Session chip from the shelf here, or ⋯ → Fly on a session">
+        <div className="skl-grounded-head" data-tour="sky-grounded" data-no-drag title="Drag the Session chip from the shelf here, or ⋯ → Fly on a session">
           <strong>No session yet</strong>
           <span>drop a Session chip here, or ⋯ Fly on a session</span>
         </div>

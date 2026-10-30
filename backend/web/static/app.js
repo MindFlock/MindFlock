@@ -24730,628 +24730,6 @@ function isVerifySession(session) {
 	return ((typeof session === "string" ? session : session?.title) || "").startsWith(VERIFY_SESSION_PREFIX);
 }
 //#endregion
-//#region src/state/queries.ts
-var queryClient = new QueryClient({ defaultOptions: { queries: {
-	retry: 1,
-	refetchOnWindowFocus: false,
-	staleTime: 2e3
-} } });
-var POLL_VISIBLE_MS = 4e3;
-var POLL_HIDDEN_MS = 3e4;
-function pollInterval() {
-	return document.hidden ? POLL_HIDDEN_MS : POLL_VISIBLE_MS;
-}
-function useInstances() {
-	(0, import_react.useEffect)(bridgeSessionSetEvents, []);
-	return useQuery({
-		queryKey: ["instances"],
-		queryFn: async () => {
-			const list = normalizeFlightRows(splitLockedRows(await api("/api/instances")));
-			window.mindflock?.__setSessions?.(list);
-			return mergePending(list, queryClient.getQueryData(["instances"]), Date.now());
-		},
-		refetchInterval: pollInterval,
-		refetchIntervalInBackground: true,
-		placeholderData: (prev) => prev
-	});
-}
-function useConfig() {
-	return useQuery({
-		queryKey: ["config"],
-		queryFn: () => api("/api/config"),
-		staleTime: 6e4
-	});
-}
-function refreshConfig() {
-	return queryClient.invalidateQueries({ queryKey: ["config"] });
-}
-var PROVIDERS_STALE_MS = 3e5;
-function providersQuery() {
-	return {
-		queryKey: ["providers"],
-		queryFn: () => api("/api/providers"),
-		staleTime: PROVIDERS_STALE_MS
-	};
-}
-function refreshProviders() {
-	return queryClient.invalidateQueries({ queryKey: ["providers"] });
-}
-function useProviderEfforts() {
-	return useQuery({
-		...providersQuery(),
-		select: (d) => {
-			const out = {};
-			for (const p of d?.providers || []) if (p?.name && p.effort) out[p.name] = p.effort;
-			return out;
-		}
-	});
-}
-function useAgentChoices$1() {
-	return useQuery({
-		...providersQuery(),
-		select: (d) => ({
-			names: (d?.providers || []).map((x) => x.name || "").filter(Boolean),
-			fallback: d?.default || ""
-		})
-	});
-}
-var EXTENSIONS_STALE_MS = 3e5;
-function extensionsQuery() {
-	return {
-		queryKey: ["addons"],
-		queryFn: () => api("/api/addons"),
-		staleTime: EXTENSIONS_STALE_MS
-	};
-}
-function useExtensions() {
-	return useQuery({
-		...extensionsQuery(),
-		select: (d) => (d?.addons || []).filter((a) => a && a.id && a.extension).map((a) => ({
-			id: String(a.id),
-			label: a.label || String(a.id),
-			enabled: a.enabled !== false,
-			origin: a.origin === "user" ? "user" : "builtin",
-			extension: a.extension
-		}))
-	});
-}
-function refreshExtensions() {
-	return queryClient.invalidateQueries({ queryKey: ["addons"] });
-}
-function useAssistantActivity() {
-	return useQuery({
-		queryKey: ["assistant-state"],
-		queryFn: () => api("/api/assistant/state"),
-		refetchInterval: pollInterval,
-		placeholderData: (prev) => prev,
-		retry: false
-	});
-}
-function useDoctor(opts = {}) {
-	return useQuery({
-		queryKey: ["doctor"],
-		queryFn: () => api("/api/doctor"),
-		enabled: opts.enabled ?? true,
-		refetchInterval: opts.refetchInterval ?? false,
-		refetchIntervalInBackground: false
-	});
-}
-async function reprobeDoctor(refresh = true) {
-	const d = await api("/api/doctor" + (refresh ? "?refresh=1" : ""));
-	queryClient.setQueryData(["doctor"], d);
-	return d;
-}
-function useMindflockStatus() {
-	return useQuery({
-		queryKey: ["mindflock-status"],
-		queryFn: () => api("/api/mindflock/status"),
-		refetchInterval: 4e3,
-		retry: false
-	});
-}
-function useMemory() {
-	return useQuery({
-		queryKey: ["system-memory"],
-		queryFn: () => api("/api/system/memory"),
-		refetchInterval: 15e3,
-		retry: false
-	});
-}
-function useSlots(enabled) {
-	return useQuery({
-		queryKey: ["system-slots"],
-		queryFn: () => api("/api/system/slots"),
-		refetchInterval: 15e3,
-		retry: false,
-		enabled
-	});
-}
-function refreshMindflockStatus() {
-	return queryClient.invalidateQueries({ queryKey: ["mindflock-status"] });
-}
-function usePeerLinks() {
-	return useQuery({
-		queryKey: ["peer-links"],
-		queryFn: () => api("/api/peer"),
-		refetchInterval: 1e4,
-		retry: false
-	});
-}
-function useDevices() {
-	return useQuery({
-		queryKey: ["devices"],
-		queryFn: () => api("/api/devices"),
-		refetchInterval: 3e4,
-		placeholderData: (prev) => prev
-	});
-}
-function refreshUsage() {
-	return queryClient.invalidateQueries({ queryKey: ["usage"] });
-}
-var usageBridged = false;
-var usageRefreshedAt = null;
-var usageTrailing = null;
-function nudgeUsageNow() {
-	const decision = nudgeUsage(Date.now(), usageRefreshedAt, usageTrailing != null);
-	if (decision.action === "skip") return;
-	if (decision.action === "refresh") {
-		usageRefreshedAt = Date.now();
-		refreshUsage();
-		return;
-	}
-	usageTrailing = setTimeout(() => {
-		usageTrailing = null;
-		usageRefreshedAt = Date.now();
-		refreshUsage();
-	}, decision.delayMs);
-}
-function bridgeUsageEvents() {
-	if (usageBridged) return;
-	const ev = window.mindflock?.events;
-	if (!ev) return;
-	usageBridged = true;
-	ev.subscribe("session.activity_changed", (env) => {
-		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
-		nudgeUsageNow();
-	});
-	ev.subscribe("session.usage_restored", () => nudgeUsageNow());
-	ev.onStatus((status) => {
-		if (status === "connected") nudgeUsageNow();
-	});
-}
-function useUsage(enabled = true) {
-	(0, import_react.useEffect)(bridgeUsageEvents, []);
-	return useQuery({
-		queryKey: ["usage"],
-		queryFn: () => api("/api/usage"),
-		refetchInterval: 3e4,
-		refetchOnWindowFocus: true,
-		enabled,
-		placeholderData: (prev) => prev
-	});
-}
-function useAuthProfiles() {
-	return useQuery({
-		queryKey: ["auth-profiles"],
-		queryFn: () => api("/api/settings/auth-profiles"),
-		staleTime: 3e4,
-		placeholderData: (prev) => prev
-	});
-}
-function refreshAuthProfiles() {
-	return queryClient.invalidateQueries({ queryKey: ["auth-profiles"] });
-}
-function refreshInstances() {
-	return queryClient.invalidateQueries({ queryKey: ["instances"] });
-}
-var PENDING_TTL_MS = 2e4;
-var pend = (r) => r;
-var isPendingRow = (r) => pend(r).pending_create === true;
-function numberedFrom(t, base) {
-	return t === base || t.startsWith(base + "-") && /^\d+$/.test(t.slice(base.length + 1));
-}
-function mergePending(fetched, cached, now, ttl = PENDING_TTL_MS) {
-	const waiting = (cached || []).filter(isPendingRow);
-	if (!waiting.length) return fetched;
-	const listed = new Set(fetched.map((r) => r.title));
-	const known = new Set((cached || []).filter((r) => !isPendingRow(r)).map((r) => r.title));
-	const fresh = fetched.map((r) => r.title).filter((t) => !known.has(t) && !waiting.some((w) => w.title === t));
-	const claimed = /* @__PURE__ */ new Set();
-	const keep = waiting.filter((r) => {
-		if (listed.has(r.title)) return false;
-		const at = pend(r).pending_at;
-		if (typeof at !== "number" || now - at > ttl) return false;
-		const base = pend(r).pending_base;
-		const hit = base ? fresh.find((t) => !claimed.has(t) && numberedFrom(t, base)) : void 0;
-		if (hit) {
-			claimed.add(hit);
-			return false;
-		}
-		return true;
-	});
-	return keep.length ? [...fetched, ...keep] : fetched;
-}
-function notePendingCreated(rows, title, data, now) {
-	if (!title) return rows;
-	const same = rows.findIndex((r) => r.title === title);
-	if (same >= 0) {
-		if (!isPendingRow(rows[same]) || !pend(rows[same]).pending_base) return rows;
-		const next = rows.slice();
-		next[same] = {
-			...rows[same],
-			pending_base: void 0
-		};
-		return next;
-	}
-	const i = rows.findIndex((r) => isPendingRow(r) && !!pend(r).pending_base && numberedFrom(title, pend(r).pending_base));
-	if (i >= 0) {
-		const next = rows.slice();
-		next[i] = {
-			...rows[i],
-			title,
-			pending_base: void 0,
-			pending_at: now
-		};
-		return next;
-	}
-	const row = {
-		title,
-		status: "loading",
-		pending_create: true,
-		pending_at: now
-	};
-	if (typeof data.parent === "string" && data.parent) row.parent = data.parent;
-	if (typeof data.program === "string" && data.program) row.program = data.program;
-	return [...rows, row];
-}
-function landPendingRow(rows, guess, real, now) {
-	const t = real.title;
-	if (!t) return rows;
-	const listed = rows.some((r) => r.title === t && !isPendingRow(r));
-	const out = [];
-	let placed = listed;
-	for (const r of rows) {
-		if (!isPendingRow(r) || r.title !== guess && r.title !== t) {
-			out.push(r);
-			continue;
-		}
-		if (placed) continue;
-		out.push({
-			...r,
-			...real,
-			pending_create: true,
-			pending_at: now,
-			pending_base: void 0
-		});
-		placed = true;
-	}
-	return placed ? out : [...out, {
-		...real,
-		pending_create: true,
-		pending_at: now
-	}];
-}
-function dropPendingRow(rows, title) {
-	return rows.some((r) => isPendingRow(r) && r.title === title) ? rows.filter((r) => !(isPendingRow(r) && r.title === title)) : rows;
-}
-var instancesTimer = null;
-function refreshInstancesSoon() {
-	if (instancesTimer) clearTimeout(instancesTimer);
-	instancesTimer = setTimeout(() => {
-		instancesTimer = null;
-		refreshInstances();
-	}, 150);
-}
-var sessionSetBridged = false;
-function bridgeSessionSetEvents() {
-	const ev = window.mindflock?.events;
-	if (sessionSetBridged || !ev) return;
-	sessionSetBridged = true;
-	const replay = (env) => typeof ev.isReplay === "function" && ev.isReplay(env);
-	ev.subscribe("session.created", (env) => {
-		const title = String(env?.session || "");
-		if (title && !replay(env) && !isVerifySession(title)) queryClient.setQueryData(["instances"], (rows) => rows ? notePendingCreated(rows, title, env.data || {}, Date.now()) : rows);
-		refreshInstancesSoon();
-	});
-	ev.subscribe("session.create_failed", (env) => {
-		const title = String(env?.session || "");
-		if (title) queryClient.setQueryData(["instances"], (rows) => rows ? dropPendingRow(rows, title) : rows);
-		refreshInstancesSoon();
-	});
-	for (const name of ["session.deleted", "session.renamed"]) ev.subscribe(name, refreshInstancesSoon);
-}
-function refreshRecentlyClosed() {
-	return queryClient.invalidateQueries({ queryKey: ["recently-closed"] });
-}
-function useTraffic(enabled, days = 90) {
-	return useQuery({
-		queryKey: ["traffic", days],
-		queryFn: () => api("/api/traffic?days=" + days),
-		enabled,
-		staleTime: 6e4,
-		placeholderData: (prev) => prev,
-		retry: false
-	});
-}
-function refreshTraffic(days = 90) {
-	return queryClient.fetchQuery({
-		queryKey: ["traffic", days],
-		queryFn: () => api("/api/traffic?days=" + days + "&refresh=1"),
-		staleTime: 0,
-		retry: false
-	});
-}
-function patchInstance(title, patch) {
-	queryClient.setQueryData(["instances"], (rows) => rows?.map((r) => r.title === title ? {
-		...r,
-		...patch
-	} : r));
-}
-var PANEL_STALE_MS = 2e4;
-var PANEL_STALE_RETRY_MS = 2e3;
-var PANEL_GC_MS = 36e5;
-var PANELS = {
-	tickets: "/api/tickets",
-	"github-prs": "/api/github/prs",
-	"github-issues": "/api/github/issues"
-};
-function usePanelQuery(key, opts = {}) {
-	const q = useQuery({
-		queryKey: [key],
-		queryFn: () => api(PANELS[key]),
-		enabled: opts.enabled ?? true,
-		staleTime: PANEL_STALE_MS,
-		gcTime: PANEL_GC_MS,
-		placeholderData: (prev) => prev,
-		retry: false,
-		refetchInterval: (query) => query.state.data?.stale ? PANEL_STALE_RETRY_MS : false
-	});
-	const refresh = () => queryClient.fetchQuery({
-		queryKey: [key],
-		queryFn: () => api(PANELS[key] + "?fresh=1"),
-		staleTime: 0,
-		retry: false
-	}).catch(() => void 0);
-	return {
-		...q,
-		refresh
-	};
-}
-function refreshPanel(key) {
-	return queryClient.fetchQuery({
-		queryKey: [key],
-		queryFn: () => api(PANELS[key] + "?fresh=1"),
-		staleTime: 0,
-		retry: false
-	}).catch(() => void 0);
-}
-function prefetchIntakePanels() {
-	for (const key of Object.keys(PANELS)) queryClient.prefetchQuery({
-		queryKey: [key],
-		queryFn: () => api(PANELS[key]),
-		staleTime: PANEL_STALE_MS,
-		gcTime: PANEL_GC_MS,
-		retry: false
-	});
-}
-var SETTINGS_STALE_MS = 3e4;
-function useSettingsDoc(enabled) {
-	return useQuery({
-		queryKey: ["settings"],
-		queryFn: async () => (await api("/api/settings"))?.settings || {},
-		staleTime: SETTINGS_STALE_MS,
-		enabled,
-		placeholderData: (prev) => prev
-	});
-}
-function putSettingsDoc(settings) {
-	queryClient.setQueryData(["settings"], settings);
-}
-function fetchSettingsDoc() {
-	return queryClient.fetchQuery({
-		queryKey: ["settings"],
-		queryFn: async () => (await api("/api/settings"))?.settings || {},
-		staleTime: 0
-	});
-}
-function useTicketingCatalog(enabled) {
-	return useQuery({
-		queryKey: ["ticketing-catalog"],
-		queryFn: async () => (await api("/api/settings/providers/ticketing"))?.providers || [],
-		staleTime: Infinity,
-		enabled
-	});
-}
-function useTicketingSources(enabled) {
-	return useQuery({
-		queryKey: ["ticketing-sources"],
-		queryFn: async () => (await api("/api/settings/ticketing/sources"))?.sources || [],
-		staleTime: SETTINGS_STALE_MS,
-		enabled,
-		placeholderData: (prev) => prev
-	});
-}
-function putTicketingSources(sources) {
-	queryClient.setQueryData(["ticketing-sources"], sources);
-}
-function prefetchIntakeMeta() {
-	queryClient.prefetchQuery({
-		queryKey: ["settings"],
-		queryFn: async () => (await api("/api/settings"))?.settings || {},
-		staleTime: SETTINGS_STALE_MS
-	});
-	queryClient.prefetchQuery({
-		queryKey: ["ticketing-sources"],
-		queryFn: async () => (await api("/api/settings/ticketing/sources"))?.sources || [],
-		staleTime: SETTINGS_STALE_MS
-	});
-	queryClient.prefetchQuery({
-		queryKey: ["ticketing-catalog"],
-		queryFn: async () => (await api("/api/settings/providers/ticketing"))?.providers || [],
-		staleTime: Infinity
-	});
-	queryClient.prefetchQuery(providersQuery());
-}
-var PANEL_WARM_MS = 24e4;
-function useIntakeWarm(enabled) {
-	(0, import_react.useEffect)(() => {
-		prefetchIntakeMeta();
-	}, []);
-	(0, import_react.useEffect)(() => {
-		if (!enabled) return;
-		const warm = () => {
-			if (!document.hidden) prefetchIntakePanels();
-		};
-		warm();
-		const timer = window.setInterval(warm, PANEL_WARM_MS);
-		document.addEventListener("visibilitychange", warm);
-		return () => {
-			window.clearInterval(timer);
-			document.removeEventListener("visibilitychange", warm);
-		};
-	}, [enabled]);
-}
-var TEST_PLANS_POLL_MS = 1e4;
-var testPlansBridged = false;
-function bridgeTestPlanEvents() {
-	const ev = window.mindflock?.events;
-	if (testPlansBridged || !ev) return;
-	testPlansBridged = true;
-	const bump = (env) => {
-		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
-		refreshTestPlans();
-	};
-	ev.subscribe("session.test_plan_ready", bump);
-	const say = (env, text) => {
-		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
-		refreshTestPlans();
-		toast(text(env?.data || {}));
-	};
-	ev.subscribe("session.test_plan_ready", (env) => say(env, (d) => {
-		const n = Number(d.steps) || 0;
-		return (d.refreshed ? "Rewrote the checklist for " : "New checklist for ") + String(d.plan || "a session") + " — " + n + (n === 1 ? " step" : " steps");
-	}));
-	ev.subscribe("session.test_plan_due", (env) => say(env, (d) => String(d.title || d.plan || "A change") + " shipped to " + String(d.live_branch || "the live branch") + " — its checklist is ready in Verify"));
-	ev.subscribe("session.test_plan_failed", (env) => say(env, (d) => "Couldn't write the checklist for " + String(d.plan || "a session") + ": " + String(d.error || "no reason recorded")));
-	ev.subscribe("session.create_failed", (env) => {
-		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
-		const session = String(env?.session || "");
-		if (!isVerifySession(session) && !session.startsWith("fix-")) return;
-		refreshTestPlans();
-		const data = env?.data || {};
-		errorPop(isVerifySession(session) ? "The verify session couldn't start" : "The session to fix it couldn't start", String(data.error || "no reason recorded"));
-	});
-	ev.subscribe("session.test_plan_gave_up", (env) => say(env, (d) => "Gave up on the verify run for " + String(d.title || d.plan || "a checklist") + " — " + String(d.run_session || "the session") + " never wrote its answers. Press Check now to try again."));
-	ev.subscribe("session.test_plan_checked", (env) => say(env, checkedToastText));
-}
-function checkedToastText(d) {
-	const failed = Number(d.failed) || 0;
-	const mine = Number(d.needs_you) || 0;
-	const bits = [failed ? failed + (failed === 1 ? " step failed" : " steps failed") : "", mine ? mine + (mine === 1 ? " step needs you" : " steps need you") : ""].filter(Boolean);
-	return String(d.title || d.plan || "A checklist") + (d.before_merge === true ? " checked on the branch" : " checked") + (bits.length ? " — " + bits.join(", ") : " — everything passed");
-}
-function useGithubConnected(enabled = true) {
-	return useQuery({
-		...githubStatusQuery(enabled),
-		select: (r) => !!r.connected
-	});
-}
-function githubStatusQuery(enabled) {
-	return {
-		queryKey: ["github-status"],
-		queryFn: async () => await api("/api/github/status") || {},
-		enabled,
-		staleTime: 6e4,
-		retry: false
-	};
-}
-function useGithubStatus(enabled = true) {
-	return useQuery(githubStatusQuery(enabled));
-}
-function refreshGithubStatus() {
-	return queryClient.invalidateQueries({ queryKey: ["github-status"] });
-}
-function useTestPlans(enabled = true) {
-	(0, import_react.useEffect)(bridgeTestPlanEvents, []);
-	return useQuery({
-		queryKey: ["test-plans"],
-		queryFn: () => api("/api/test-plans"),
-		enabled,
-		refetchInterval: TEST_PLANS_POLL_MS,
-		placeholderData: (prev) => prev,
-		retry: false
-	});
-}
-function useCachedLiveBranch() {
-	return useQuery({
-		queryKey: ["test-plans"],
-		queryFn: () => api("/api/test-plans"),
-		enabled: false
-	}).data?.live_branch || "";
-}
-function refreshTestPlans() {
-	return queryClient.invalidateQueries({ queryKey: ["test-plans"] });
-}
-var FLIGHTS_LIVE_MS = 5e3;
-var FLIGHTS_IDLE_MS = 3e4;
-var FLIGHTS_MISSING_MS = 12e4;
-var routeMissing = (e) => !!e && typeof e === "object" && "status" in e && (e.status === 404 || e.status === 405);
-async function orNull(p) {
-	try {
-		return await p;
-	} catch (e) {
-		if (routeMissing(e)) return null;
-		throw e;
-	}
-}
-var flightsBridged = false;
-function bridgeFlightEvents() {
-	const ev = window.mindflock?.events;
-	if (flightsBridged || !ev) return;
-	flightsBridged = true;
-	const bump = () => {
-		queryClient.invalidateQueries({ queryKey: ["flights"] });
-		queryClient.invalidateQueries({ queryKey: ["instances"] });
-	};
-	for (const name of [
-		"flight.changed",
-		"flight.needs_you",
-		"flight.finished"
-	]) ev.subscribe(name, bump);
-}
-function useFlights(enabled = true) {
-	(0, import_react.useEffect)(bridgeFlightEvents, []);
-	return useQuery({
-		queryKey: ["flights"],
-		queryFn: () => orNull(api("/api/flights").then((d) => d?.flights || [])),
-		enabled,
-		refetchInterval: (q) => q.state.data === null ? FLIGHTS_MISSING_MS : (q.state.data || []).some((f) => f.state === "running" || f.state === "waiting_you") && !document.hidden ? FLIGHTS_LIVE_MS : FLIGHTS_IDLE_MS,
-		refetchIntervalInBackground: true,
-		placeholderData: (prev) => prev,
-		retry: false
-	});
-}
-function useFlightPlans(enabled = true) {
-	(0, import_react.useEffect)(bridgeFlightEvents, []);
-	return useQuery({
-		queryKey: ["flight-plans"],
-		queryFn: () => orNull(api("/api/flights/plans").then((d) => d?.plans || [])),
-		enabled,
-		staleTime: 3e4,
-		placeholderData: (prev) => prev,
-		retry: false
-	});
-}
-function useFlightKinds(enabled = true) {
-	return useQuery({
-		queryKey: ["flight-kinds"],
-		queryFn: () => orNull(api("/api/flights/kinds").then((d) => d?.kinds || [])),
-		enabled,
-		staleTime: 6e5,
-		retry: false
-	});
-}
-//#endregion
 //#region src/lib/jobExpectation.ts
 var MIN = 60;
 var HOUR = 3600;
@@ -25696,6 +25074,14 @@ function deriveSessionState(inst, extras) {
 		inBell: false,
 		restartable: false,
 		hint: "Session paused"
+	};
+	if (inst.moving) return {
+		state: "starting",
+		label: "Moving…",
+		tone: "muted",
+		inBell: false,
+		restartable: false,
+		hint: "Moving the session's folder — it resumes there when the move is done"
 	};
 	if (inst.pending || inst.status === "loading") return {
 		state: "starting",
@@ -26888,7 +26274,7 @@ var BY_LS = new Map(PREF_MAP.map((p) => [p.ls, p]));
 var BY_FIELD = new Map(PREF_MAP.map((p) => [p.field, p]));
 var THEME_CHANGED = "mf-theme-changed";
 var SEEDED_KEY = "mf_prefs_seeded";
-function storage$2() {
+function storage$3() {
 	try {
 		return globalThis.localStorage || null;
 	} catch {
@@ -26910,7 +26296,7 @@ function coerce(p, v) {
 		case "raw": return typeof v === "string" && (!p.values || p.values.includes(v)) ? v : void 0;
 	}
 }
-function readLocal(field, kv = storage$2()) {
+function readLocal(field, kv = storage$3()) {
 	const p = BY_FIELD.get(field);
 	if (!p || !kv) return void 0;
 	let raw = null;
@@ -26927,7 +26313,7 @@ function readLocal(field, kv = storage$2()) {
 		return;
 	}
 }
-function readAllLocal(kv = storage$2()) {
+function readAllLocal(kv = storage$3()) {
 	const out = {};
 	for (const p of PREF_MAP) {
 		const v = readLocal(p.field, kv);
@@ -26935,7 +26321,7 @@ function readAllLocal(kv = storage$2()) {
 	}
 	return out;
 }
-function writeLocal(field, value, kv = storage$2()) {
+function writeLocal(field, value, kv = storage$3()) {
 	const p = BY_FIELD.get(field);
 	if (!p || !kv) return;
 	try {
@@ -27094,7 +26480,7 @@ function noteRefused(fields, resOrErr = null) {
 	onRefused(fresh, "Your " + what + " are kept in this browser only — this device didn't save them" + (why ? ": " + why : "."));
 }
 var FIELDS$1 = new Set(PREF_MAP.map((p) => p.field));
-function dirtyFields(kv = storage$2()) {
+function dirtyFields(kv = storage$3()) {
 	const out = /* @__PURE__ */ new Set();
 	if (!kv) return out;
 	try {
@@ -27118,7 +26504,7 @@ function markDirty(field, kv) {
 	d.add(field);
 	saveDirty(d, kv);
 }
-function settleFields(fields, sentGen = null, kv = storage$2()) {
+function settleFields(fields, sentGen = null, kv = storage$3()) {
 	const d = dirtyFields(kv);
 	let changed = false;
 	for (const f of fields) {
@@ -27141,12 +26527,12 @@ function withoutEcho(fn) {
 		suspended--;
 	}
 }
-function pendingFields(kv = storage$2()) {
+function pendingFields(kv = storage$3()) {
 	const out = dirtyFields(kv);
 	for (const f of pending$3) out.add(f);
 	return out;
 }
-function notePrefWrite(lsKey, kv = storage$2()) {
+function notePrefWrite(lsKey, kv = storage$3()) {
 	const field = prefFieldFor(lsKey);
 	if (!field || suspended) return;
 	pending$3.add(field);
@@ -27160,7 +26546,7 @@ function permanent(e) {
 	const st = e?.status;
 	return typeof st === "number" && st >= 400 && st < 500 && st !== 401 && st !== 408 && st !== 409 && st !== 429;
 }
-function bodyFor$1(fields, kv) {
+function bodyFor(fields, kv) {
 	const body = {};
 	for (const f of fields) {
 		const v = readLocal(f, kv);
@@ -27168,7 +26554,7 @@ function bodyFor$1(fields, kv) {
 	}
 	return body;
 }
-async function flushPrefWrites(kv = storage$2()) {
+async function flushPrefWrites(kv = storage$3()) {
 	if (timer) clearTimeout(timer);
 	timer = null;
 	const fields = /* @__PURE__ */ new Set([...pending$3, ...dirtyFields(kv)]);
@@ -27177,7 +26563,7 @@ async function flushPrefWrites(kv = storage$2()) {
 	const sentGen = writeGens(fields);
 	let res;
 	try {
-		res = await sender(bodyFor$1(fields, kv));
+		res = await sender(bodyFor(fields, kv));
 	} catch (e) {
 		const refused = refusedFields(e);
 		if (refused) {
@@ -27201,14 +26587,14 @@ function settleExcept(fields, refused, sentGen, kv, resOrErr) {
 	const mine = refused.filter((f) => fields.has(f));
 	if (mine.length) noteRefused(mine, resOrErr);
 }
-function flushPrefsOnHide(kv = storage$2()) {
+function flushPrefsOnHide(kv = storage$3()) {
 	if (timer) clearTimeout(timer);
 	timer = null;
 	const fields = /* @__PURE__ */ new Set([...pending$3, ...dirtyFields(kv)]);
 	pending$3.clear();
 	if (!fields.size) return;
 	const sentGen = writeGens(fields);
-	beacon(bodyFor$1(fields, kv)).then((res) => settleExcept(fields, refusedFields(res) || [], sentGen, kv, res), (e) => {
+	beacon(bodyFor(fields, kv)).then((res) => settleExcept(fields, refusedFields(res) || [], sentGen, kv, res), (e) => {
 		const refused = refusedFields(e);
 		if (refused) settleExcept(fields, refused, sentGen, kv, e);
 		else if (permanent(e)) settleFields(fields, sentGen, kv);
@@ -28108,6 +27494,675 @@ function publishWindowName() {
 	w.mindflock = w.mindflock || {};
 	w.mindflock.displayName = windowName;
 	w.mindflock.slotNumber = slotNumber;
+}
+//#endregion
+//#region src/state/queries.ts
+var queryClient = new QueryClient({ defaultOptions: { queries: {
+	retry: 1,
+	refetchOnWindowFocus: false,
+	staleTime: 2e3
+} } });
+var POLL_VISIBLE_MS = 4e3;
+var POLL_HIDDEN_MS = 3e4;
+function pollInterval() {
+	return document.hidden ? POLL_HIDDEN_MS : POLL_VISIBLE_MS;
+}
+function useInstances() {
+	(0, import_react.useEffect)(bridgeSessionSetEvents, []);
+	return useQuery({
+		queryKey: ["instances"],
+		queryFn: async () => {
+			const fetched = normalizeFlightRows(splitLockedRows(await api("/api/instances")));
+			window.mindflock?.__setSessions?.(fetched);
+			return mergePending(withMoving(fetched, Date.now()), queryClient.getQueryData(["instances"]), Date.now());
+		},
+		refetchInterval: pollInterval,
+		refetchIntervalInBackground: true,
+		placeholderData: (prev) => prev
+	});
+}
+function useConfig() {
+	return useQuery({
+		queryKey: ["config"],
+		queryFn: () => api("/api/config"),
+		staleTime: 6e4
+	});
+}
+function refreshConfig() {
+	return queryClient.invalidateQueries({ queryKey: ["config"] });
+}
+var PROVIDERS_STALE_MS = 3e5;
+function providersQuery() {
+	return {
+		queryKey: ["providers"],
+		queryFn: () => api("/api/providers"),
+		staleTime: PROVIDERS_STALE_MS
+	};
+}
+function refreshProviders() {
+	return queryClient.invalidateQueries({ queryKey: ["providers"] });
+}
+function useProviderEfforts() {
+	return useQuery({
+		...providersQuery(),
+		select: (d) => {
+			const out = {};
+			for (const p of d?.providers || []) if (p?.name && p.effort) out[p.name] = p.effort;
+			return out;
+		}
+	});
+}
+function useAgentChoices$1() {
+	return useQuery({
+		...providersQuery(),
+		select: (d) => ({
+			names: (d?.providers || []).map((x) => x.name || "").filter(Boolean),
+			fallback: d?.default || ""
+		})
+	});
+}
+var EXTENSIONS_STALE_MS = 3e5;
+function extensionsQuery() {
+	return {
+		queryKey: ["addons"],
+		queryFn: () => api("/api/addons"),
+		staleTime: EXTENSIONS_STALE_MS
+	};
+}
+function useExtensions() {
+	return useQuery({
+		...extensionsQuery(),
+		select: (d) => (d?.addons || []).filter((a) => a && a.id && a.extension).map((a) => ({
+			id: String(a.id),
+			label: a.label || String(a.id),
+			enabled: a.enabled !== false,
+			origin: a.origin === "user" ? "user" : "builtin",
+			extension: a.extension
+		}))
+	});
+}
+function refreshExtensions() {
+	return queryClient.invalidateQueries({ queryKey: ["addons"] });
+}
+function useAssistantActivity() {
+	return useQuery({
+		queryKey: ["assistant-state"],
+		queryFn: () => api("/api/assistant/state"),
+		refetchInterval: pollInterval,
+		placeholderData: (prev) => prev,
+		retry: false
+	});
+}
+function useDoctor(opts = {}) {
+	return useQuery({
+		queryKey: ["doctor"],
+		queryFn: () => api("/api/doctor"),
+		enabled: opts.enabled ?? true,
+		refetchInterval: opts.refetchInterval ?? false,
+		refetchIntervalInBackground: false
+	});
+}
+async function reprobeDoctor(refresh = true) {
+	const d = await api("/api/doctor" + (refresh ? "?refresh=1" : ""));
+	queryClient.setQueryData(["doctor"], d);
+	return d;
+}
+function useMindflockStatus() {
+	return useQuery({
+		queryKey: ["mindflock-status"],
+		queryFn: () => api("/api/mindflock/status"),
+		refetchInterval: 4e3,
+		retry: false
+	});
+}
+function useMemory() {
+	return useQuery({
+		queryKey: ["system-memory"],
+		queryFn: () => api("/api/system/memory"),
+		refetchInterval: 15e3,
+		retry: false
+	});
+}
+function useSlots(enabled) {
+	return useQuery({
+		queryKey: ["system-slots"],
+		queryFn: () => api("/api/system/slots"),
+		refetchInterval: 15e3,
+		retry: false,
+		enabled
+	});
+}
+function refreshMindflockStatus() {
+	return queryClient.invalidateQueries({ queryKey: ["mindflock-status"] });
+}
+function usePeerLinks() {
+	return useQuery({
+		queryKey: ["peer-links"],
+		queryFn: () => api("/api/peer"),
+		refetchInterval: 1e4,
+		retry: false
+	});
+}
+function useDevices() {
+	return useQuery({
+		queryKey: ["devices"],
+		queryFn: () => api("/api/devices"),
+		refetchInterval: 3e4,
+		placeholderData: (prev) => prev
+	});
+}
+function refreshUsage() {
+	return queryClient.invalidateQueries({ queryKey: ["usage"] });
+}
+var usageBridged = false;
+var usageRefreshedAt = null;
+var usageTrailing = null;
+function nudgeUsageNow() {
+	const decision = nudgeUsage(Date.now(), usageRefreshedAt, usageTrailing != null);
+	if (decision.action === "skip") return;
+	if (decision.action === "refresh") {
+		usageRefreshedAt = Date.now();
+		refreshUsage();
+		return;
+	}
+	usageTrailing = setTimeout(() => {
+		usageTrailing = null;
+		usageRefreshedAt = Date.now();
+		refreshUsage();
+	}, decision.delayMs);
+}
+function bridgeUsageEvents() {
+	if (usageBridged) return;
+	const ev = window.mindflock?.events;
+	if (!ev) return;
+	usageBridged = true;
+	ev.subscribe("session.activity_changed", (env) => {
+		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
+		nudgeUsageNow();
+	});
+	ev.subscribe("session.usage_restored", () => nudgeUsageNow());
+	ev.onStatus((status) => {
+		if (status === "connected") nudgeUsageNow();
+	});
+}
+function useUsage(enabled = true) {
+	(0, import_react.useEffect)(bridgeUsageEvents, []);
+	return useQuery({
+		queryKey: ["usage"],
+		queryFn: () => api("/api/usage"),
+		refetchInterval: 3e4,
+		refetchOnWindowFocus: true,
+		enabled,
+		placeholderData: (prev) => prev
+	});
+}
+function useAuthProfiles() {
+	return useQuery({
+		queryKey: ["auth-profiles"],
+		queryFn: () => api("/api/settings/auth-profiles"),
+		staleTime: 3e4,
+		placeholderData: (prev) => prev
+	});
+}
+function refreshAuthProfiles() {
+	return queryClient.invalidateQueries({ queryKey: ["auth-profiles"] });
+}
+function refreshInstances() {
+	return queryClient.invalidateQueries({ queryKey: ["instances"] });
+}
+var PENDING_TTL_MS = 2e4;
+var pend = (r) => r;
+var isPendingRow = (r) => pend(r).pending_create === true;
+function numberedFrom(t, base) {
+	return t === base || t.startsWith(base + "-") && /^\d+$/.test(t.slice(base.length + 1));
+}
+function mergePending(fetched, cached, now, ttl = PENDING_TTL_MS) {
+	const waiting = (cached || []).filter(isPendingRow);
+	if (!waiting.length) return fetched;
+	const listed = new Set(fetched.map((r) => r.title));
+	const known = new Set((cached || []).filter((r) => !isPendingRow(r)).map((r) => r.title));
+	const fresh = fetched.map((r) => r.title).filter((t) => !known.has(t) && !waiting.some((w) => w.title === t));
+	const claimed = /* @__PURE__ */ new Set();
+	const keep = waiting.filter((r) => {
+		if (listed.has(r.title)) return false;
+		const at = pend(r).pending_at;
+		if (typeof at !== "number" || now - at > ttl) return false;
+		const base = pend(r).pending_base;
+		const hit = base ? fresh.find((t) => !claimed.has(t) && numberedFrom(t, base)) : void 0;
+		if (hit) {
+			claimed.add(hit);
+			return false;
+		}
+		return true;
+	});
+	return keep.length ? [...fetched, ...keep] : fetched;
+}
+function notePendingCreated(rows, title, data, now) {
+	if (!title) return rows;
+	const same = rows.findIndex((r) => r.title === title);
+	if (same >= 0) {
+		if (!isPendingRow(rows[same]) || !pend(rows[same]).pending_base) return rows;
+		const next = rows.slice();
+		next[same] = {
+			...rows[same],
+			pending_base: void 0
+		};
+		return next;
+	}
+	const i = rows.findIndex((r) => isPendingRow(r) && !!pend(r).pending_base && numberedFrom(title, pend(r).pending_base));
+	if (i >= 0) {
+		const next = rows.slice();
+		next[i] = {
+			...rows[i],
+			title,
+			pending_base: void 0,
+			pending_at: now
+		};
+		return next;
+	}
+	const row = {
+		title,
+		status: "loading",
+		pending_create: true,
+		pending_at: now
+	};
+	if (typeof data.parent === "string" && data.parent) row.parent = data.parent;
+	if (typeof data.program === "string" && data.program) row.program = data.program;
+	return [...rows, row];
+}
+function landPendingRow(rows, guess, real, now) {
+	const t = real.title;
+	if (!t) return rows;
+	const listed = rows.some((r) => r.title === t && !isPendingRow(r));
+	const out = [];
+	let placed = listed;
+	for (const r of rows) {
+		if (!isPendingRow(r) || r.title !== guess && r.title !== t) {
+			out.push(r);
+			continue;
+		}
+		if (placed) continue;
+		out.push({
+			...r,
+			...real,
+			pending_create: true,
+			pending_at: now,
+			pending_base: void 0
+		});
+		placed = true;
+	}
+	return placed ? out : [...out, {
+		...real,
+		pending_create: true,
+		pending_at: now
+	}];
+}
+function dropPendingRow(rows, title) {
+	return rows.some((r) => isPendingRow(r) && r.title === title) ? rows.filter((r) => !(isPendingRow(r) && r.title === title)) : rows;
+}
+var MOVE_TTL_MS = 6e4;
+var isMovingRow = (r) => r.moving === true;
+var movingSince = /* @__PURE__ */ new Map();
+function withMoving(rows, now, since = movingSince, ttl = MOVE_TTL_MS) {
+	for (const [t, at] of since) if (now - at > ttl) since.delete(t);
+	if (!since.size) return rows;
+	return rows.map((r) => since.has(r.title) && !isMovingRow(r) ? {
+		...r,
+		moving: true
+	} : r);
+}
+function markMoving(title, now = Date.now()) {
+	movingSince.set(title, now);
+	queryClient.setQueryData(["instances"], (rows) => rows ? withMoving(rows, now) : rows);
+	setTimeout(() => {
+		if (movingSince.get(title) === now) clearMoving(title);
+	}, MOVE_TTL_MS);
+}
+function clearMoving(title) {
+	movingSince.delete(title);
+	queryClient.setQueryData(["instances"], (rows) => rows && rows.some((r) => r.title === title && isMovingRow(r)) ? rows.map((r) => r.title === title && isMovingRow(r) ? {
+		...r,
+		moving: void 0
+	} : r) : rows);
+}
+function movedToastText(name, to) {
+	return to ? `Moved “${name}” to ${to}` : `Moved “${name}”`;
+}
+function movedTitle(env) {
+	return String(env?.session || (env?.data)?.title || "");
+}
+function onSessionMoved(env, replay = false) {
+	const title = movedTitle(env);
+	if (!title) return;
+	clearMoving(title);
+	refreshInstances();
+	if (!replay) toast(movedToastText(windowName(title), String(env.data?.to || "")), { duration: 5e3 });
+}
+function onSessionMoveFailed(env, replay = false) {
+	const title = movedTitle(env);
+	if (!title) return;
+	clearMoving(title);
+	refreshInstances();
+	if (!replay) errorPop(`Moving “${windowName(title)}” failed`, String(env.data?.error || "no reason recorded"));
+}
+var instancesTimer = null;
+function refreshInstancesSoon() {
+	if (instancesTimer) clearTimeout(instancesTimer);
+	instancesTimer = setTimeout(() => {
+		instancesTimer = null;
+		refreshInstances();
+	}, 150);
+}
+var sessionSetBridged = false;
+function bridgeSessionSetEvents() {
+	const ev = window.mindflock?.events;
+	if (sessionSetBridged || !ev) return;
+	sessionSetBridged = true;
+	const replay = (env) => typeof ev.isReplay === "function" && ev.isReplay(env);
+	ev.subscribe("session.created", (env) => {
+		const title = String(env?.session || "");
+		if (title && !replay(env) && !isVerifySession(title)) queryClient.setQueryData(["instances"], (rows) => rows ? notePendingCreated(rows, title, env.data || {}, Date.now()) : rows);
+		refreshInstancesSoon();
+	});
+	ev.subscribe("session.create_failed", (env) => {
+		const title = String(env?.session || "");
+		if (title) queryClient.setQueryData(["instances"], (rows) => rows ? dropPendingRow(rows, title) : rows);
+		refreshInstancesSoon();
+	});
+	ev.subscribe("session.moved", (env) => onSessionMoved(env, replay(env)));
+	ev.subscribe("session.move_failed", (env) => onSessionMoveFailed(env, replay(env)));
+	for (const name of ["session.deleted", "session.renamed"]) ev.subscribe(name, refreshInstancesSoon);
+}
+function refreshRecentlyClosed() {
+	return queryClient.invalidateQueries({ queryKey: ["recently-closed"] });
+}
+function useTraffic(enabled, days = 90) {
+	return useQuery({
+		queryKey: ["traffic", days],
+		queryFn: () => api("/api/traffic?days=" + days),
+		enabled,
+		staleTime: 6e4,
+		placeholderData: (prev) => prev,
+		retry: false
+	});
+}
+function refreshTraffic(days = 90) {
+	return queryClient.fetchQuery({
+		queryKey: ["traffic", days],
+		queryFn: () => api("/api/traffic?days=" + days + "&refresh=1"),
+		staleTime: 0,
+		retry: false
+	});
+}
+function patchInstance(title, patch) {
+	queryClient.setQueryData(["instances"], (rows) => rows?.map((r) => r.title === title ? {
+		...r,
+		...patch
+	} : r));
+}
+var PANEL_STALE_MS = 2e4;
+var PANEL_STALE_RETRY_MS = 2e3;
+var PANEL_GC_MS = 36e5;
+var PANELS = {
+	tickets: "/api/tickets",
+	"github-prs": "/api/github/prs",
+	"github-issues": "/api/github/issues"
+};
+function usePanelQuery(key, opts = {}) {
+	const q = useQuery({
+		queryKey: [key],
+		queryFn: () => api(PANELS[key]),
+		enabled: opts.enabled ?? true,
+		staleTime: PANEL_STALE_MS,
+		gcTime: PANEL_GC_MS,
+		placeholderData: (prev) => prev,
+		retry: false,
+		refetchInterval: (query) => query.state.data?.stale ? PANEL_STALE_RETRY_MS : false
+	});
+	const refresh = () => queryClient.fetchQuery({
+		queryKey: [key],
+		queryFn: () => api(PANELS[key] + "?fresh=1"),
+		staleTime: 0,
+		retry: false
+	}).catch(() => void 0);
+	return {
+		...q,
+		refresh
+	};
+}
+function refreshPanel(key) {
+	return queryClient.fetchQuery({
+		queryKey: [key],
+		queryFn: () => api(PANELS[key] + "?fresh=1"),
+		staleTime: 0,
+		retry: false
+	}).catch(() => void 0);
+}
+function prefetchIntakePanels() {
+	for (const key of Object.keys(PANELS)) queryClient.prefetchQuery({
+		queryKey: [key],
+		queryFn: () => api(PANELS[key]),
+		staleTime: PANEL_STALE_MS,
+		gcTime: PANEL_GC_MS,
+		retry: false
+	});
+}
+var SETTINGS_STALE_MS = 3e4;
+function useSettingsDoc(enabled) {
+	return useQuery({
+		queryKey: ["settings"],
+		queryFn: async () => (await api("/api/settings"))?.settings || {},
+		staleTime: SETTINGS_STALE_MS,
+		enabled,
+		placeholderData: (prev) => prev
+	});
+}
+function putSettingsDoc(settings) {
+	queryClient.setQueryData(["settings"], settings);
+}
+function fetchSettingsDoc() {
+	return queryClient.fetchQuery({
+		queryKey: ["settings"],
+		queryFn: async () => (await api("/api/settings"))?.settings || {},
+		staleTime: 0
+	});
+}
+function useTicketingCatalog(enabled) {
+	return useQuery({
+		queryKey: ["ticketing-catalog"],
+		queryFn: async () => (await api("/api/settings/providers/ticketing"))?.providers || [],
+		staleTime: Infinity,
+		enabled
+	});
+}
+function useTicketingSources(enabled) {
+	return useQuery({
+		queryKey: ["ticketing-sources"],
+		queryFn: async () => (await api("/api/settings/ticketing/sources"))?.sources || [],
+		staleTime: SETTINGS_STALE_MS,
+		enabled,
+		placeholderData: (prev) => prev
+	});
+}
+function putTicketingSources(sources) {
+	queryClient.setQueryData(["ticketing-sources"], sources);
+}
+function prefetchIntakeMeta() {
+	queryClient.prefetchQuery({
+		queryKey: ["settings"],
+		queryFn: async () => (await api("/api/settings"))?.settings || {},
+		staleTime: SETTINGS_STALE_MS
+	});
+	queryClient.prefetchQuery({
+		queryKey: ["ticketing-sources"],
+		queryFn: async () => (await api("/api/settings/ticketing/sources"))?.sources || [],
+		staleTime: SETTINGS_STALE_MS
+	});
+	queryClient.prefetchQuery({
+		queryKey: ["ticketing-catalog"],
+		queryFn: async () => (await api("/api/settings/providers/ticketing"))?.providers || [],
+		staleTime: Infinity
+	});
+	queryClient.prefetchQuery(providersQuery());
+}
+var PANEL_WARM_MS = 24e4;
+function useIntakeWarm(enabled) {
+	(0, import_react.useEffect)(() => {
+		prefetchIntakeMeta();
+	}, []);
+	(0, import_react.useEffect)(() => {
+		if (!enabled) return;
+		const warm = () => {
+			if (!document.hidden) prefetchIntakePanels();
+		};
+		warm();
+		const timer = window.setInterval(warm, PANEL_WARM_MS);
+		document.addEventListener("visibilitychange", warm);
+		return () => {
+			window.clearInterval(timer);
+			document.removeEventListener("visibilitychange", warm);
+		};
+	}, [enabled]);
+}
+var TEST_PLANS_POLL_MS = 1e4;
+var testPlansBridged = false;
+function bridgeTestPlanEvents() {
+	const ev = window.mindflock?.events;
+	if (testPlansBridged || !ev) return;
+	testPlansBridged = true;
+	const bump = (env) => {
+		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
+		refreshTestPlans();
+	};
+	ev.subscribe("session.test_plan_ready", bump);
+	const say = (env, text) => {
+		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
+		refreshTestPlans();
+		toast(text(env?.data || {}));
+	};
+	ev.subscribe("session.test_plan_ready", (env) => say(env, (d) => {
+		const n = Number(d.steps) || 0;
+		return (d.refreshed ? "Rewrote the checklist for " : "New checklist for ") + String(d.plan || "a session") + " — " + n + (n === 1 ? " step" : " steps");
+	}));
+	ev.subscribe("session.test_plan_due", (env) => say(env, (d) => String(d.title || d.plan || "A change") + " shipped to " + String(d.live_branch || "the live branch") + " — its checklist is ready in Verify"));
+	ev.subscribe("session.test_plan_failed", (env) => say(env, (d) => "Couldn't write the checklist for " + String(d.plan || "a session") + ": " + String(d.error || "no reason recorded")));
+	ev.subscribe("session.create_failed", (env) => {
+		if (typeof ev.isReplay === "function" && ev.isReplay(env)) return;
+		const session = String(env?.session || "");
+		if (!isVerifySession(session) && !session.startsWith("fix-")) return;
+		refreshTestPlans();
+		const data = env?.data || {};
+		errorPop(isVerifySession(session) ? "The verify session couldn't start" : "The session to fix it couldn't start", String(data.error || "no reason recorded"));
+	});
+	ev.subscribe("session.test_plan_gave_up", (env) => say(env, (d) => "Gave up on the verify run for " + String(d.title || d.plan || "a checklist") + " — " + String(d.run_session || "the session") + " never wrote its answers. Press Check now to try again."));
+	ev.subscribe("session.test_plan_checked", (env) => say(env, checkedToastText));
+}
+function checkedToastText(d) {
+	const failed = Number(d.failed) || 0;
+	const mine = Number(d.needs_you) || 0;
+	const bits = [failed ? failed + (failed === 1 ? " step failed" : " steps failed") : "", mine ? mine + (mine === 1 ? " step needs you" : " steps need you") : ""].filter(Boolean);
+	return String(d.title || d.plan || "A checklist") + (d.before_merge === true ? " checked on the branch" : " checked") + (bits.length ? " — " + bits.join(", ") : " — everything passed");
+}
+function useGithubConnected(enabled = true) {
+	return useQuery({
+		...githubStatusQuery(enabled),
+		select: (r) => !!r.connected
+	});
+}
+function githubStatusQuery(enabled) {
+	return {
+		queryKey: ["github-status"],
+		queryFn: async () => await api("/api/github/status") || {},
+		enabled,
+		staleTime: 6e4,
+		retry: false
+	};
+}
+function useGithubStatus(enabled = true) {
+	return useQuery(githubStatusQuery(enabled));
+}
+function refreshGithubStatus() {
+	return queryClient.invalidateQueries({ queryKey: ["github-status"] });
+}
+function useTestPlans(enabled = true) {
+	(0, import_react.useEffect)(bridgeTestPlanEvents, []);
+	return useQuery({
+		queryKey: ["test-plans"],
+		queryFn: () => api("/api/test-plans"),
+		enabled,
+		refetchInterval: TEST_PLANS_POLL_MS,
+		placeholderData: (prev) => prev,
+		retry: false
+	});
+}
+function useCachedLiveBranch() {
+	return useQuery({
+		queryKey: ["test-plans"],
+		queryFn: () => api("/api/test-plans"),
+		enabled: false
+	}).data?.live_branch || "";
+}
+function refreshTestPlans() {
+	return queryClient.invalidateQueries({ queryKey: ["test-plans"] });
+}
+var FLIGHTS_LIVE_MS = 5e3;
+var FLIGHTS_IDLE_MS = 3e4;
+var FLIGHTS_MISSING_MS = 12e4;
+var routeMissing = (e) => !!e && typeof e === "object" && "status" in e && (e.status === 404 || e.status === 405);
+async function orNull(p) {
+	try {
+		return await p;
+	} catch (e) {
+		if (routeMissing(e)) return null;
+		throw e;
+	}
+}
+var flightsBridged = false;
+function bridgeFlightEvents() {
+	const ev = window.mindflock?.events;
+	if (flightsBridged || !ev) return;
+	flightsBridged = true;
+	const bump = () => {
+		queryClient.invalidateQueries({ queryKey: ["flights"] });
+		queryClient.invalidateQueries({ queryKey: ["instances"] });
+	};
+	for (const name of [
+		"flight.changed",
+		"flight.needs_you",
+		"flight.finished"
+	]) ev.subscribe(name, bump);
+}
+function useFlights(enabled = true) {
+	(0, import_react.useEffect)(bridgeFlightEvents, []);
+	return useQuery({
+		queryKey: ["flights"],
+		queryFn: () => orNull(api("/api/flights").then((d) => d?.flights || [])),
+		enabled,
+		refetchInterval: (q) => q.state.data === null ? FLIGHTS_MISSING_MS : (q.state.data || []).some((f) => f.state === "running" || f.state === "waiting_you") && !document.hidden ? FLIGHTS_LIVE_MS : FLIGHTS_IDLE_MS,
+		refetchIntervalInBackground: true,
+		placeholderData: (prev) => prev,
+		retry: false
+	});
+}
+function useFlightPlans(enabled = true) {
+	(0, import_react.useEffect)(bridgeFlightEvents, []);
+	return useQuery({
+		queryKey: ["flight-plans"],
+		queryFn: () => orNull(api("/api/flights/plans").then((d) => d?.plans || [])),
+		enabled,
+		staleTime: 3e4,
+		placeholderData: (prev) => prev,
+		retry: false
+	});
+}
+function useFlightKinds(enabled = true) {
+	return useQuery({
+		queryKey: ["flight-kinds"],
+		queryFn: () => orNull(api("/api/flights/kinds").then((d) => d?.kinds || [])),
+		enabled,
+		staleTime: 6e5,
+		retry: false
+	});
 }
 //#endregion
 //#region src/lib/clipboard.ts
@@ -31945,6 +32000,57 @@ async function branchSession(title) {
 		errorPop("Branch failed", errMsg(err));
 	}
 }
+function openMoveSession(title) {
+	if (title) useUi.getState().openDialogFor("move", title);
+}
+var MOVE_MID_TURN = "The agent is mid-turn — tick the box to move anyway";
+var MOVE_REFUSALS = {
+	working: "The agent is mid-turn — tick the box to move anyway.",
+	exists: "Something is already at that path — pick a folder that doesn't exist yet.",
+	in_flight: "Its flight or fast-track is running — pause it first, or tick the box to move anyway.",
+	remote: "That session lives on another device — move it from there.",
+	bad_dest: "Give a full path to a new folder outside the session's own.",
+	unknown_session: "MindFlock couldn't find that session — it may have just been removed."
+};
+function moveRefusal(err) {
+	if (!(err instanceof ApiError)) return "";
+	const body = err.body;
+	for (const v of [body?.error, body?.code]) if (typeof v === "string" && v in MOVE_REFUSALS) return v;
+	return "";
+}
+function moveErrorText(err) {
+	const code = moveRefusal(err);
+	const msg = errMsg(err);
+	return code && (!msg || msg === code) ? MOVE_REFUSALS[code] : msg;
+}
+async function moveSession(title, dest, force = false) {
+	const name = windowName(title);
+	let r = null;
+	try {
+		r = await instApi(title, "/move", {
+			method: "POST",
+			json: {
+				dest,
+				force
+			}
+		});
+	} catch (err) {
+		const refusal = moveRefusal(err);
+		const message = moveErrorText(err);
+		if (!(refusal === "working" && !force)) errorPop(`Moving “${name}” failed`, message);
+		return {
+			ok: false,
+			refusal,
+			message
+		};
+	}
+	markMoving(title);
+	toast(`Moving “${name}”…`);
+	return {
+		ok: true,
+		to: r?.to || dest
+	};
+}
 function commitSession(title) {
 	if (!requireGit() || !title) return;
 	useUi.getState().openDialogFor("commit", title);
@@ -32440,6 +32546,11 @@ var SESSION_ACTIONS = {
 		label: "Rename…",
 		enabled: (c) => !c.shared,
 		run: (t) => useUi.getState().openDialogFor("rename", t)
+	},
+	move: {
+		label: "Move to a folder…",
+		enabled: (c) => !c.shared && !!c.inst && !isRemote(c.inst) && c.inst.status !== "loading",
+		run: (t) => useUi.getState().openDialogFor("move", t)
 	},
 	message: {
 		label: "Message…",
@@ -33565,6 +33676,13 @@ function endShortcutAllowed() {
 	if (threadTabFocused()) return false;
 	return true;
 }
+function skyBoxFocused(el = typeof document !== "undefined" ? document.activeElement : null) {
+	if (!el?.closest?.(".sky")) return false;
+	if (el.closest(".pane, .skl-card")) return false;
+	const node = el.closest("[data-node]")?.getAttribute("data-node");
+	if (node) return !node.startsWith("session:");
+	return !!el.closest("[data-sky-box]");
+}
 var RETIRED_KEY_IDS = ["outbox"];
 var _keyOv = {
 	keys: {},
@@ -33789,11 +33907,11 @@ var KEYMAP = [
 	},
 	{
 		key: "y",
-		alt: true,
+		mod: true,
 		id: "view",
 		help: [
 			"Navigation",
-			"Alt+Y",
+			"Ctrl+Y",
 			"Switch views — the grid of panes ⇄ the sky of lines (the same sessions, the same focus)"
 		],
 		when: () => !overlayOpen() && (terminalFocused() || !isEditingTarget(document.activeElement)),
@@ -33937,7 +34055,7 @@ var KEYMAP = [
 		key: "Delete",
 		shift: "any",
 		aliasOf: "close",
-		when: () => endShortcutAllowed(),
+		when: () => endShortcutAllowed() && !skyBoxFocused(),
 		run: () => closeFocused()
 	},
 	{
@@ -34171,7 +34289,7 @@ var TEMPLATES_CHANGED = "mf-presets-changed";
 var TEMPLATES_MIRROR_KEY = "mindflock.templates_cache";
 var OLD_PRESETS_STORAGE_KEY = "mindflock.prompt_presets";
 var PRESETS_MIGRATED_KEY = "mf_presets_migrated";
-function storage$1() {
+function storage$2() {
 	try {
 		return typeof localStorage !== "undefined" ? localStorage : null;
 	} catch {
@@ -34197,7 +34315,7 @@ function runInfoFor(name) {
 function notify$2() {
 	if (typeof document !== "undefined") document.dispatchEvent(new Event(TEMPLATES_CHANGED));
 }
-function setTemplates(list, kv = storage$1()) {
+function setTemplates(list, kv = storage$2()) {
 	cache$1 = cleanList(list);
 	try {
 		kv?.setItem(TEMPLATES_MIRROR_KEY, JSON.stringify(cache$1));
@@ -34205,7 +34323,7 @@ function setTemplates(list, kv = storage$1()) {
 	notify$2();
 	return cache$1;
 }
-function templatesNow(kv = storage$1()) {
+function templatesNow(kv = storage$2()) {
 	if (cache$1) return cache$1;
 	try {
 		return cleanList(JSON.parse(kv?.getItem(TEMPLATES_MIRROR_KEY) || "[]"));
@@ -34504,7 +34622,7 @@ function planPresetMigration(local, server) {
 		skipped
 	};
 }
-async function migratePresetsOnce(server, kv = storage$1(), post = (t) => api("/api/templates", { json: t })) {
+async function migratePresetsOnce(server, kv = storage$2(), post = (t) => api("/api/templates", { json: t })) {
 	if (!kv) return 0;
 	let done = false;
 	let local = [];
@@ -36093,20 +36211,29 @@ function birdLook(tone, reduced = prefersReducedMotion$1()) {
 		flaps
 	};
 }
-function BirdMarker({ tone, x, y, label, size = 24 }) {
+function BirdMarker({ tone, x, y, label, size = 24, hand, className = "" }) {
 	const look = birdLook(tone);
 	const box = spriteBox(size);
 	const whole = box.w + "px " + box.h + "px";
+	const { title, className: held, ...on } = hand || { title: label };
+	const cls = [
+		look.className,
+		className,
+		held
+	].filter(Boolean).join(" ");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-		className: look.className,
+		className: cls,
 		style: {
 			left: x,
 			top: y
 		},
-		role: "img",
+		role: hand ? "button" : "img",
 		"aria-label": label,
-		title: label,
+		"aria-description": hand ? title : void 0,
+		tabIndex: hand ? 0 : void 0,
+		title,
 		"data-tour": "flights-bird",
+		...on,
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 			className: look.sprite,
 			style: {
@@ -41796,14 +41923,14 @@ function normPrefs(v, stored = false) {
 function sayOnSend(byVoice, p = loadVoicePrefs()) {
 	return p.replies === "all" || byVoice && p.replies === "mine";
 }
-function storage() {
+function storage$1() {
 	try {
 		return typeof localStorage === "undefined" ? null : localStorage;
 	} catch {
 		return null;
 	}
 }
-function loadVoicePrefs(kv = storage()) {
+function loadVoicePrefs(kv = storage$1()) {
 	let raw = null;
 	try {
 		const s = kv?.getItem(VOICE_PREFS_KEY);
@@ -41814,7 +41941,7 @@ function loadVoicePrefs(kv = storage()) {
 	return normPrefs(raw, true);
 }
 var VOICE_PREFS_EVENT = "mindflock:voice-prefs";
-function saveVoicePrefs(p, kv = storage(), sync = syncSayAll) {
+function saveVoicePrefs(p, kv = storage$1(), sync = syncSayAll) {
 	const next = normPrefs(p);
 	const flip = sayAllFlip(loadVoicePrefs(kv).replies, next.replies);
 	try {
@@ -44844,23 +44971,73 @@ var TOURS = {
 		steps: [
 			{
 				target: "[data-tour=\"view-sky\"]",
-				title: "Every session in the sky",
-				body: "Grid · Sky (Alt+Y) shows the same sessions as lines — drag empty sky to pan, Ctrl+wheel to zoom, Tidy to put lines back."
+				title: "The same sessions, as lines",
+				body: "Grid · Sky (Ctrl+Y) switches the main area between panes and the sky — the sessions are the same, only the drawing changes."
 			},
 			{
-				target: "[data-tour=\"sky-line\"], [data-tour=\"view-sky\"]",
+				target: "[data-tour=\"sky-line-bar\"], [data-tour=\"sky-line\"] .skl-bar",
 				title: "One line per session",
-				body: "Its blocks are the session, its workers and its flight's stops — the session box opens its pane, + tacks on a stop."
+				body: "Drag a line by its bar to put it anywhere; its ⋯ opens the session here, shows only this line, tacks on a stop or closes it."
 			},
 			{
-				target: "[data-tour=\"flights-bird\"], [data-tour=\"view-sky\"]",
-				title: "The bird is where it is",
-				body: "It stands on the stop each flight is at: bobbing while the flock works, gold when perched on you."
+				target: "[data-tour=\"sky-session-box\"], .sky .fl-box-session",
+				title: "Boxes are stops",
+				body: "The session's own box comes first and opens its real terminal on the sky; each box after it is a stop of its flight."
 			},
 			{
-				target: "[data-tour=\"sky-shelf\"], [data-tour=\"view-sky\"]",
-				title: "Stops live on the shelf",
-				body: "Drag the Session chip onto the sky, or a stop onto a line — on empty sky, stops wait for a session."
+				target: "[data-tour=\"flights-bird\"]",
+				title: "The bird is where the flight is",
+				body: "Click the bird to halt the flight (click again to carry on), or drag it onto another stop to jump there."
+			},
+			{
+				target: "[data-tour=\"sky-stop\"], .sky .fl-box.fl-has-tools",
+				title: "Hover a stop for its tools",
+				body: "✎ edit, ⇤ ⇥ move it earlier or later, ⧉ duplicate, ⏸ halt here, 🗑 remove — right-click shows the same as a menu."
+			},
+			{
+				target: "[data-tour=\"sky-stop\"], .sky .fl-box-stop, .sky .fl-box-group",
+				title: "Every stop edits in a dialog",
+				body: "Double-click a stop, press Enter on it, or use ✎ to open its dialog: its title, its settings, what happens if it fails."
+			},
+			{
+				target: "[data-tour=\"sky-shelf\"]",
+				title: "The shelf holds the blocks",
+				body: "First the default blocks, then your saved stops (several steps as one block), and All blocks… for the full list."
+			},
+			{
+				target: "[data-tour=\"sky-grounded\"], .skl-grounded-head, [data-tour=\"sky-shelf\"]",
+				title: "Stops before a session",
+				body: "Drop a block on empty sky and it waits as a grounded line; drop the Session chip on it, or use its ⋯, to give it a session."
+			},
+			{
+				target: "[data-tour=\"sky-selbar\"], .sky-selbar",
+				title: "Select an area",
+				body: "Drag across empty sky to select lines and boxes, then move them together, Group into a stop, or Save to the shelf."
+			},
+			{
+				target: "[data-tour=\"sky-tool\"]",
+				title: "Drag or Click",
+				body: "V is Drag (lines move, empty sky selects), H is Click (any drag pans the sky); hold Space to pan in either."
+			},
+			{
+				target: "",
+				title: "Delete removes a box",
+				body: "Click any box and press Delete: a stop comes off its line (with Undo), a grounded line or a session asks first."
+			},
+			{
+				target: "[data-tour=\"sky-intake\"], .sky-intake",
+				title: "The intake lane",
+				body: "Tickets and PRs waiting to fly sit here — drag it by its head, and expand it to see every item with its Fly button."
+			},
+			{
+				target: "[data-tour=\"sky-zoom\"], .sky-toolbar .sky-zoom",
+				title: "Zoom and fit",
+				body: "+ and − zoom, 0 or Fit shows every line legibly, 1 fills the window with the focused line, and Ctrl+wheel zooms too."
+			},
+			{
+				target: "[data-tour=\"sky-guide\"], .sky-toolbar .tour-btn",
+				title: "The guide",
+				body: "This ? replays the tour or opens the guide — the long version, with every key; the palette's Learn the Sky opens it too."
 			}
 		]
 	},
@@ -51061,8 +51238,17 @@ function sessionMenu(inst, ctx, opts = {}) {
 		run: () => void next.run()
 	}, ...ship] : ship;
 	const flockOn = !!inst.flock;
+	const moving = isMovingRow(inst);
 	const session = keep([
 		fromTable("rename"),
+		!remote && !peer && !inst.pending && {
+			key: "move",
+			label: "Move to a folder…",
+			disabled: moving,
+			note: moving ? "moving…" : void 0,
+			title: moving ? "Being moved — it resumes in its new folder when the move is done" : "Pauses the agent, moves the session's folder somewhere new, and resumes it there",
+			run: () => openMoveSession(title)
+		},
 		fromTable("resume", { note: actionNote("resume", ctx) }),
 		fromTable("flock", {
 			label: (flockOn ? "✓ " : "") + "Workers on every prompt",
@@ -79163,14 +79349,43 @@ function sessionDiagram(rows, title, opts = {}) {
 			}
 		}
 	} else chain(nodes, edges, line);
-	if (family) for (const k of fans ? fans.below : kids) {
-		const c = sessionBox(k, "child", "below");
-		nodes.push(c);
-		edges.push({
-			from: me.id,
-			to: c.id,
-			kind: "branch"
+	if (family) {
+		const hang = hangPoint(line);
+		const next = line[line.indexOf(hang) + 1];
+		const hung = (fans ? fans.below : kids).map((k) => {
+			const state = childState(k);
+			const c = sessionBox(k, "child", "below");
+			c.branch = {
+				from: hang.id,
+				to: next.id,
+				state,
+				inner: innerSummary(k),
+				...liveOf(k)
+			};
+			return c;
 		});
+		if (hung.length) {
+			const direct = edges.findIndex((e) => e.from === hang.id && e.to === next.id && (e.kind === "line" || e.kind === "add"));
+			if (direct >= 0) edges.splice(direct, 1);
+		}
+		for (const c of hung) {
+			nodes.push(c);
+			edges.push({
+				from: hang.id,
+				to: c.id,
+				kind: "branch"
+			});
+			edges.push(c.branch.state === "done" ? {
+				from: c.id,
+				to: next.id,
+				kind: "join",
+				done: true
+			} : {
+				from: c.id,
+				to: next.id,
+				kind: "join"
+			});
+		}
 	}
 	const d = {
 		nodes,
@@ -79182,6 +79397,26 @@ function sessionDiagram(rows, title, opts = {}) {
 	if (mode !== "flight") return d;
 	const grouped = collapseGroups(d, opts.expandedGroups);
 	return opts.foldFlown === true || opts.expandFlown === false ? collapseFlown(grouped) : grouped;
+}
+function hangPoint(line) {
+	return line.find((n, i) => i < line.length - 1 && (n.kind === "stop" || n.kind === "rung") && HERE_STATES.has(n.state)) || line[0];
+}
+var HERE_STATES = /* @__PURE__ */ new Set([
+	"current",
+	"perched",
+	"paused",
+	"halted"
+]);
+function liveOf(k) {
+	const ss = deriveSessionState(k);
+	return ss.state === "working" ? { live: "working" } : ss.state === "needs_you" ? { live: "you" } : {};
+}
+function childState(k) {
+	const ss = deriveSessionState(k);
+	if (ss.state === "working") return "working";
+	if (ss.state === "needs_you") return "asking";
+	if (String(k.last_report?.status || "") === "failed" || ss.tone === "broken") return "failed";
+	return "done";
 }
 function foldRun(d, run, into) {
 	const main = d.nodes.filter((n) => n.row === "main");
@@ -79549,7 +79784,8 @@ function branchesOf(title, kids, line, fl, full) {
 				from: from.id,
 				to: to.id,
 				state,
-				inner
+				inner,
+				...liveOf(k)
 			}
 		};
 		out.set(from.id, [...out.get(from.id) || [], c]);
@@ -79616,6 +79852,16 @@ function birdPerch(d) {
 		tone: "you"
 	};
 	return null;
+}
+function birdPerches(d) {
+	const main = birdPerch(d);
+	const out = main ? [main] : [];
+	for (const n of d.nodes) if (n.branch?.live && n.session) out.push({
+		nodeId: n.id,
+		tone: n.branch.live,
+		child: n.session
+	});
+	return out;
 }
 function boxMetrics(compact = false, roomy = false) {
 	if (roomy) return compact ? {
@@ -79781,7 +80027,7 @@ function layoutDiagram(d, opts = {}) {
 	const main = d.nodes.filter((n) => n.row === "main");
 	const below = d.nodes.filter((n) => n.row === "below");
 	const fans = /* @__PURE__ */ new Map();
-	for (const n of d.nodes) if (n.row === "branch" && n.branch) fans.set(n.branch.from, [...fans.get(n.branch.from) || [], n]);
+	for (const n of d.nodes) if ((n.row === "branch" || n.row === "below") && n.branch) fans.set(n.branch.from, [...fans.get(n.branch.from) || [], n]);
 	const at = /* @__PURE__ */ new Map();
 	const boxes = [];
 	const put = (node, x, y) => {
@@ -79823,6 +80069,7 @@ function layoutDiagram(d, opts = {}) {
 		const lineH = Math.max(m.box.h, ...main.map((n) => size(n).h));
 		let y = Math.max(top + lineH, fanBottom) + m.vgap;
 		for (const n of below) {
+			if (at.has(n.id)) continue;
 			put(n, (sp ? sp.x : 0) + m.indent, y);
 			y += size(n).h + 12;
 		}
@@ -79847,6 +80094,7 @@ function layoutDiagram(d, opts = {}) {
 		const sp = session ? at.get(session.id) : void 0;
 		let cy = sp ? sp.y : 0;
 		for (const n of below) {
+			if (at.has(n.id)) continue;
 			put(n, m.box.w + m.indent, cy);
 			cy += size(n).h + 12;
 		}
@@ -79864,14 +80112,15 @@ function layoutDiagram(d, opts = {}) {
 		const a = at.get(e.from);
 		const b = at.get(e.to);
 		if (!a || !b) continue;
+		const kind = e.kind === "branch" && b.node.branch ? "fan" : e.kind;
 		let path = "";
-		if (opts.vertical && e.kind === "fan") path = `M ${a.x + m.indent / 2} ${a.y + a.h} V ${b.y + anchorOf(b)} H ${b.x}`;
-		else if (opts.vertical && e.kind === "join") {
+		if (opts.vertical && kind === "fan") path = `M ${a.x + m.indent / 2} ${a.y + a.h} V ${b.y + anchorOf(b)} H ${b.x}`;
+		else if (opts.vertical && kind === "join") {
 			const rx = Math.max(a.x + a.w, b.x + b.w) + 8;
 			const y2 = b.y + anchorOf(b);
 			path = `M ${a.x + a.w} ${a.y + anchorOf(a)} H ${rx} V ${y2} H ${b.x + b.w + 2}`;
-		} else if (e.kind === "up") path = `M ${a.x + Math.min(a.w, b.w) / 2} ${a.y + a.h} V ${b.y - 2}`;
-		else if (e.kind === "branch") {
+		} else if (kind === "up") path = `M ${a.x + Math.min(a.w, b.w) / 2} ${a.y + a.h} V ${b.y - 2}`;
+		else if (kind === "branch") {
 			if (!opts.vertical) {
 				const x = a.x + m.indent / 2;
 				const y = b.y + Math.min(b.h, m.box.h) / 2;
@@ -79886,7 +80135,7 @@ function layoutDiagram(d, opts = {}) {
 			const y1 = a.y + anchorOf(a);
 			const y2 = b.y + anchorOf(b);
 			const x1 = a.x + a.w;
-			const x2 = b.x - (e.kind === "fan" ? 0 : 2);
+			const x2 = b.x - (kind === "fan" ? 0 : 2);
 			const mx = (x1 + x2) / 2;
 			path = y1 === y2 ? `M ${x1} ${y1} H ${x2}` : `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
 		} else {
@@ -79934,21 +80183,24 @@ function reorderDiagram(d, from, to) {
 	const lineIds = new Set(line.map((n) => n.id));
 	const next = new Map(line.slice(0, -1).map((n, i) => [n.id, line[i + 1].id]));
 	const joinDone = new Map(d.edges.filter((e) => e.kind === "join").map((e) => [e.from, !!e.done]));
-	const branches = d.nodes.filter((n) => n.row === "branch").map((n) => n.branch && next.has(n.branch.from) ? {
+	const rejoin = (n) => n.branch && next.has(n.branch.from) ? {
 		...n,
 		branch: {
 			...n.branch,
 			to: next.get(n.branch.from)
 		}
-	} : n);
-	const fanned = new Set(branches.map((n) => n.branch?.from));
+	} : n;
+	const branches = d.nodes.filter((n) => n.row === "branch").map(rejoin);
+	const rest = d.nodes.filter((n) => n.row !== "main" && n.row !== "branch").map(rejoin);
+	const hung = rest.filter((n) => !!n.branch);
+	const fanned = new Set([...branches, ...hung].map((n) => n.branch?.from));
 	const edges = d.edges.filter((e) => e.kind !== "join" && !(lineIds.has(e.from) && lineIds.has(e.to) && (e.kind === "line" || e.kind === "add")));
 	for (let i = 1; i < line.length; i++) if (!fanned.has(line[i - 1].id)) edges.push({
 		from: line[i - 1].id,
 		to: line[i].id,
 		kind: line[i].kind === "add" ? "add" : "line"
 	});
-	for (const b of branches) if (b.branch) edges.push({
+	for (const b of [...branches, ...hung]) if (b.branch) edges.push({
 		from: b.id,
 		to: b.branch.to,
 		kind: "join",
@@ -79957,7 +80209,7 @@ function reorderDiagram(d, from, to) {
 	return {
 		...d,
 		nodes: [
-			...d.nodes.filter((n) => n.row !== "main" && n.row !== "branch"),
+			...rest,
 			...line,
 			...branches
 		],
@@ -79970,6 +80222,18 @@ var SKY_GAP = 64;
 var SKY_MARGIN = 40;
 var INTAKE_W = 240;
 var LINES_LEFT = 328;
+var INTAKE_KEY = "intake";
+var INTAKE_OPEN_W = 420;
+function intakeSize(stored, measured) {
+	if (measured && measured.w > 0 && measured.h > 0) return measured;
+	return stored?.open ? {
+		w: INTAKE_OPEN_W,
+		h: 520
+	} : {
+		w: INTAKE_W,
+		h: 320
+	};
+}
 var ZOOM_MIN = .4;
 var ZOOM_MAX = 3;
 var FIT_PAD = 56;
@@ -80311,7 +80575,7 @@ var SKY_MODES = [
 	{
 		id: "all",
 		label: "All",
-		title: "Every session on its own line, workers too"
+		title: "Every session — a worker inside its lead's line"
 	},
 	{
 		id: "mine",
@@ -80338,31 +80602,43 @@ function linePerched(r) {
 function skyLineTitles(rows, mode, opts = {}) {
 	const shown = rows.filter(inSky);
 	if (mode === "one") return shown.some((r) => r.title === opts.focus) ? [opts.focus] : [];
-	const titles = new Set(shown.map((r) => r.title));
-	const top = (r) => !r.parent || !titles.has(r.parent);
-	let pick = mode === "all" ? shown : mode === "mine" ? shown.filter(top) : shown.filter(linePerched);
+	let pick = mode === "perched" ? shown.filter(linePerched) : shown;
 	const q = String(opts.query || "").trim().toLowerCase();
 	if (q) pick = pick.filter((r) => r.title.toLowerCase().includes(q) || String(r.task_headline || r.task || "").toLowerCase().includes(q));
-	return pick.map((r) => r.title).reverse();
+	const byTitle = new Map(pick.map((r) => [r.title, r]));
+	const isLine = /* @__PURE__ */ new Map();
+	const lineOf = (r, seen) => {
+		const known = isLine.get(r.title);
+		if (known !== void 0) return known;
+		const up = r.parent && r.parent !== r.title ? byTitle.get(r.parent) : void 0;
+		const out = !up || seen.has(up.title) || !lineOf(up, new Set(seen).add(r.title));
+		isLine.set(r.title, out);
+		return out;
+	};
+	return pick.filter((r) => lineOf(r, /* @__PURE__ */ new Set())).map((r) => r.title).reverse();
 }
 //#endregion
 //#region src/lib/stopEditing.ts
 function insertGaps(boxes, insertFrom, vertical) {
 	const main = boxes.filter((b) => b.node.row === "main");
-	const fanned = new Set(boxes.map((b) => b.node.branch?.from));
+	const fanned = new Set(boxes.filter((b) => b.node.kind === "branch").map((b) => b.node.branch?.from));
+	const hung = /* @__PURE__ */ new Map();
+	for (const c of boxes) if (c.node.kind === "child" && c.node.branch) hung.set(c.node.branch.from, Math.min(hung.get(c.node.branch.from) ?? Infinity, vertical ? c.y : c.x));
 	const gaps = [];
 	for (let j = 1; j < main.length; j++) {
 		const b = main[j];
 		const a = main[j - 1];
 		if (b.node.kind !== "stop" && b.node.kind !== "group" || b.node.index === void 0 || b.node.index < insertFrom || a.node.kind === "add" || fanned.has(a.node.id)) continue;
+		const col = hung.get(a.node.id);
+		const end = col ?? (vertical ? b.y : b.x);
 		gaps.push(vertical ? {
 			at: b.node.index,
 			x: b.x + b.w / 2,
-			y: (a.y + a.h + b.y) / 2
+			y: (a.y + a.h + end) / 2
 		} : {
 			at: b.node.index,
-			x: (a.x + a.w + b.x) / 2,
-			y: b.y + Math.min(b.h, a.h) / 2
+			x: (a.x + a.w + end) / 2,
+			y: (col === void 0 ? b.y : a.y) + Math.min(b.h, a.h) / 2
 		});
 	}
 	return gaps;
@@ -80525,6 +80801,18 @@ function groupItems(n, ctx) {
 	return items;
 }
 function menuItemsFor(n, ctx) {
+	const items = boxItems(n, ctx);
+	if (!ctx.jump || n.kind !== "stop" && n.kind !== "group") return items;
+	const at = items.findIndex((i) => i.danger || i.note);
+	items.splice(at < 0 ? items.length : at, 0, JUMP_ITEM);
+	return items;
+}
+var JUMP_ITEM = {
+	key: "jump",
+	label: "Jump the bird here",
+	title: "Fly the flight to this stop — the halt points after it are armed again"
+};
+function boxItems(n, ctx) {
 	const { can } = ctx;
 	if (n.kind === "add") return can.open ? [{
 		key: "tackon",
@@ -80609,6 +80897,53 @@ function menuItemsFor(n, ctx) {
 	if (can.remove && ctx.live && ctx.here) items.push(removeTool(n, true));
 	items.push(note("The flight is here — it can't change now"));
 	return items;
+}
+function birdAction(tone, onFlight) {
+	if (!onFlight) return null;
+	if (tone === "paused") return {
+		key: "resume",
+		label: "Carry on",
+		title: "Carry on — the flight flies on from this stop"
+	};
+	if (tone === "halted") return {
+		key: "retry",
+		label: "Retry",
+		title: "Retry — run this stop again"
+	};
+	return {
+		key: "pause",
+		label: "Halt the flight here",
+		title: "Halt the flight here — Carry on picks it up again"
+	};
+}
+function jumpStepOf(n) {
+	if (n.kind === "group") return n.group?.nodes[0]?.step || n.group?.steps[0] || null;
+	return n.kind === "stop" ? n.step || null : null;
+}
+function jumpFlightOf(d) {
+	if (!d.flightId) return null;
+	for (const n of d.nodes) {
+		if (n.kind === "group" && n.group?.current?.step) return {
+			id: d.flightId,
+			at: n.group.current.step.id
+		};
+		if (n.kind === "stop" && n.step && FLIGHT_HERE.has(n.state)) return {
+			id: d.flightId,
+			at: n.step.id
+		};
+	}
+	return {
+		id: d.flightId,
+		at: null
+	};
+}
+function canJumpTo(flight, n) {
+	if (!flight?.id || n.row !== "main") return false;
+	const step = jumpStepOf(n);
+	return !!step && step.id !== flight.at;
+}
+function jumpTargets(d, flight = jumpFlightOf(d)) {
+	return flight ? d.nodes.filter((n) => canJumpTo(flight, n)) : [];
 }
 //#endregion
 //#region src/components/flights/StopMenu.tsx
@@ -80785,6 +81120,7 @@ function useNarrow(ref, forced) {
 	}, [ref, forced]);
 	return forced ?? narrow;
 }
+var BIRD_HOLD_MS = 380;
 function FlywayCanvas(p) {
 	const rootRef = (0, import_react.useRef)(null);
 	const vertical = useNarrow(rootRef, p.vertical);
@@ -81061,7 +81397,8 @@ function FlywayCanvas(p) {
 		earlier: canShift(stops, stops.indexOf(menuNode), -1, p.diagram.insertFrom),
 		later: canShift(stops, stops.indexOf(menuNode), 1, p.diagram.insertFrom),
 		live: !!p.diagram.flightId && (!!menuNode.step || menuNode.kind === "group"),
-		here: isHere(menuNode)
+		here: isHere(menuNode),
+		jump: canJumpTo(jumpFlightOf(p.diagram), menuNode)
 	}) : [];
 	const pick = (n, key) => {
 		const flight = p.diagram.flightId;
@@ -81078,17 +81415,174 @@ function FlywayCanvas(p) {
 		else if (key === "retry") stepRetry(flight, step);
 		else if (key === "halt") p.onToggleHalt?.(n);
 		else if (key === "pause" || key === "resume") controlFlight(flight, key);
-		else if (key === "tackon" || key === "open") p.onOpen?.(n);
+		else if (key === "jump") {
+			const to = jumpStepOf(n);
+			if (to) jumpFlight(flight, to.id, n.title);
+		} else if (key === "tackon" || key === "open") p.onOpen?.(n);
 	};
 	const closeMenu = (refocus) => {
 		const id = menu?.id;
 		setMenu(null);
 		if (refocus && id) boxRefs.current[id]?.focus();
 	};
-	const perch = p.bird ? shown.boxes.find((b) => b.node.id === p.bird.nodeId) : void 0;
+	const [birdDrag, setBirdDrag] = (0, import_react.useState)(null);
+	const birdRef = (0, import_react.useRef)(null);
+	birdRef.current = birdDrag;
+	const birdHold = (0, import_react.useRef)(null);
+	const birdDragged = (0, import_react.useRef)(false);
+	const [landed, setLanded] = (0, import_react.useState)(null);
+	const [snapping, setSnapping] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => () => void (birdHold.current && clearTimeout(birdHold.current)), []);
+	(0, import_react.useEffect)(() => {
+		if (landed && p.bird?.nodeId !== landed.from) setLanded(null);
+	}, [p.bird?.nodeId]);
+	(0, import_react.useEffect)(() => {
+		if (!landed) return;
+		const t = setTimeout(() => setLanded(null), 6e3);
+		return () => clearTimeout(t);
+	}, [landed]);
+	(0, import_react.useEffect)(() => {
+		if (!snapping) return;
+		const t = setTimeout(() => setSnapping(false), 260);
+		return () => clearTimeout(t);
+	}, [snapping]);
+	const perchNode = p.bird ? p.diagram.nodes.find((n) => n.id === p.bird.nodeId) : void 0;
+	const flightAt = jumpFlightOf(p.diagram);
+	const onFlight = !!flightAt && !!perchNode && (perchNode.kind === "stop" || perchNode.kind === "group") && !!jumpStepOf(perchNode);
+	const birdAct = p.bird ? birdAction(p.bird.tone, onFlight) : null;
+	const targets = (0, import_react.useMemo)(() => new Set(onFlight ? jumpTargets(p.diagram, flightAt).map((n) => n.id) : []), [
+		onFlight,
+		p.diagram,
+		flightAt?.at
+	]);
+	const lit = birdDrag?.live ? targets : null;
+	const pressBird = () => {
+		if (!birdAct || !flightAt) return;
+		if (birdAct.key === "retry") {
+			if (flightAt.at) stepRetry(flightAt.id, flightAt.at);
+		} else controlFlight(flightAt.id, birdAct.key);
+	};
+	const targetAt = (x, y) => {
+		const lx = x - pad;
+		const ly = y - top;
+		const slack = 6;
+		const hit = shown.boxes.find((b) => targets.has(b.node.id) && lx >= b.x - slack && lx <= b.x + b.w + slack && ly >= b.y - slack && ly <= b.y + b.h + slack);
+		return hit ? hit.node.id : null;
+	};
+	const endBird = (d, drop) => {
+		if (birdHold.current) clearTimeout(birdHold.current);
+		birdHold.current = null;
+		setBirdDrag(null);
+		if (!d?.live) return;
+		birdDragged.current = true;
+		setTimeout(() => birdDragged.current = false, 0);
+		const to = drop && d.over ? p.diagram.nodes.find((n) => n.id === d.over) : void 0;
+		const step = to ? jumpStepOf(to) : null;
+		if (!to || !step || !flightAt || !p.bird) {
+			setSnapping(true);
+			return;
+		}
+		setLanded({
+			on: to.id,
+			from: p.bird.nodeId
+		});
+		jumpFlight(flightAt.id, step.id, to.title).then((ok) => {
+			if (!ok) {
+				setLanded(null);
+				setSnapping(true);
+			}
+		});
+	};
+	const onBirdDown = (e) => {
+		e.stopPropagation();
+		if (e.button !== 0 || !targets.size) return;
+		const pt = stagePoint(e.clientX, e.clientY);
+		if (!pt) return;
+		const touch = e.pointerType === "touch";
+		const d = {
+			pointer: e.pointerId,
+			touch,
+			sx: e.clientX,
+			sy: e.clientY,
+			x: pt.x,
+			y: pt.y,
+			live: false,
+			over: null
+		};
+		setBirdDrag(d);
+		try {
+			e.currentTarget.setPointerCapture(e.pointerId);
+		} catch {}
+		if (touch) birdHold.current = setTimeout(() => {
+			birdHold.current = null;
+			const cur = birdRef.current;
+			if (cur && cur.pointer === d.pointer) setBirdDrag({
+				...cur,
+				live: true
+			});
+		}, BIRD_HOLD_MS);
+	};
+	const onBirdMove = (e) => {
+		const d = birdRef.current;
+		if (!d || e.pointerId !== d.pointer) return;
+		e.stopPropagation();
+		const far = Math.hypot(e.clientX - d.sx, e.clientY - d.sy) > (d.touch ? 10 : 4);
+		if (!d.live) {
+			if (d.touch) {
+				if (far) endBird(d, false);
+				return;
+			}
+			if (!far) return;
+		}
+		const pt = stagePoint(e.clientX, e.clientY);
+		if (pt) setBirdDrag({
+			...d,
+			live: true,
+			x: pt.x,
+			y: pt.y,
+			over: targetAt(pt.x, pt.y)
+		});
+	};
+	const onBirdUp = (e) => {
+		const d = birdRef.current;
+		if (!d || e.pointerId !== d.pointer) return;
+		e.stopPropagation();
+		endBird(d, e.type === "pointerup");
+	};
+	const birdHand = birdAct ? {
+		title: birdAct.title + (targets.size ? " · Drag the bird to another stop to jump there" : ""),
+		className: birdDrag?.live ? "fl-bird-dragging" : snapping ? "fl-bird-snap" : void 0,
+		onClick: (e) => {
+			e.stopPropagation();
+			if (!birdDragged.current) pressBird();
+		},
+		onKeyDown: (e) => {
+			if (e.key === "Escape" && birdRef.current) {
+				e.preventDefault();
+				endBird(birdRef.current, false);
+				return;
+			}
+			if (e.key !== "Enter" && e.key !== " ") return;
+			e.preventDefault();
+			e.stopPropagation();
+			pressBird();
+		},
+		onPointerDown: onBirdDown,
+		onPointerMove: onBirdMove,
+		onPointerUp: onBirdUp,
+		onPointerCancel: onBirdUp,
+		onContextMenu: (e) => {
+			if (birdRef.current?.touch) e.preventDefault();
+		}
+	} : void 0;
+	const perch = p.bird ? shown.boxes.find((b) => b.node.id === (landed?.on || p.bird.nodeId)) : void 0;
+	const branchBirds = p.bird !== void 0 ? birdPerches(p.diagram).filter((b) => b.child).map((b) => ({
+		perch: b,
+		box: shown.boxes.find((x) => x.node.id === b.nodeId)
+	})).filter((b) => !!b.box) : [];
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		ref: rootRef,
-		className: "fl-canvas" + (p.compact || vertical ? " fl-canvas-compact" : "") + (size !== "normal" ? " fl-size-" + size : "") + (vertical ? " fl-canvas-vertical" : "") + " fl-lod-" + lod + (drag?.moved ? " fl-dragging" : "") + (stopOver ? " fl-stop-over" : "") + (p.className ? " " + p.className : ""),
+		className: "fl-canvas" + (p.compact || vertical ? " fl-canvas-compact" : "") + (size !== "normal" ? " fl-size-" + size : "") + (vertical ? " fl-canvas-vertical" : "") + " fl-lod-" + lod + (drag?.moved ? " fl-dragging" : "") + (lit ? " fl-bird-carried" : "") + (stopOver ? " fl-stop-over" : "") + (p.className ? " " + p.className : ""),
 		role: "list",
 		"aria-label": p.label + (p.onMove ? " — drag a stop, or ← → on a selected one, to reorder it" : ""),
 		"data-tour": p.dataTour,
@@ -81204,7 +81698,7 @@ function FlywayCanvas(p) {
 					const hold = here && (!n.editable || n.kind === "group") ? flightHold(n) : null;
 					const haltable = !!p.onToggleHalt && canHalt(n, here);
 					const waiting = n.join && n.join.waiting > 0 ? n.join : null;
-					const cls = "fl-box fl-box-" + n.kind + (open ? " fl-box-open" : "") + (drop ? " fl-drop" : "") + " fl-st-" + n.state + (n.perch ? " fl-perch" : "") + (p.selected === n.id ? " selected" : "") + (p.highlight?.has(n.id) ? " fl-described" : "") + (p.highlighted?.has(n.id) ? " fl-box-selected" : "") + (lifted ? " fl-lifted" : "") + (tools ? " fl-has-tools" : "") + (mark ? " fl-halt-point" : "") + (n.inGroup ? " fl-in-group" : "") + (canDrag(n) ? " fl-draggable" : "");
+					const cls = "fl-box fl-box-" + n.kind + (open ? " fl-box-open" : "") + (drop ? " fl-drop" : "") + " fl-st-" + n.state + (n.perch ? " fl-perch" : "") + (p.selected === n.id ? " selected" : "") + (p.highlight?.has(n.id) ? " fl-described" : "") + (p.highlighted?.has(n.id) ? " fl-box-selected" : "") + (lifted ? " fl-lifted" : "") + (tools ? " fl-has-tools" : "") + (mark ? " fl-halt-point" : "") + (n.inGroup ? " fl-in-group" : "") + (canDrag(n) ? " fl-draggable" : "") + (lit?.has(n.id) ? " fl-jump-target" : "") + (lit && birdDrag?.over === n.id ? " fl-jump-over" : "");
 					const said = n.kind === "add" ? drop ? addLabel : n.title : n.title + (n.group ? ", a stop of " + n.group.total + (n.group.total === 1 ? " sub-step" : " sub-steps") + (n.group.current ? ", " + n.group.done + " of " + n.group.total + " done" : "") : "") + (n.kind === "stop" || n.kind === "rung" || n.kind === "group" ? ", " + (STATE_WORD[n.state] || "") : "") + (n.inGroup ? ", in “" + n.inGroup.name + "”" : "") + (mark ? ", halt point" : "") + (n.chip ? ", " + n.chip.label : "") + (waiting ? ", " + joinLabel(waiting) : "");
 					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						ref: (el) => {
@@ -81214,6 +81708,7 @@ function FlywayCanvas(p) {
 						tabIndex: 0,
 						className: cls,
 						"data-node": n.id,
+						"data-tour": n.kind === "session" ? "sky-session-box" : tools && i === stops.findIndex((s) => tooled(s)) ? "sky-stop" : void 0,
 						"aria-label": said,
 						"aria-current": p.selected === n.id ? "true" : void 0,
 						title: open ? void 0 : n.kind === "add" ? drop ? addLabel : n.title : n.reason ? n.title + " — " + n.reason : n.sub ? n.title + " — " + n.sub : n.title,
@@ -81584,9 +82079,37 @@ function FlywayCanvas(p) {
 				}),
 				perch && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMarker, {
 					tone: p.bird.tone,
-					x: perch.x + pad + perch.w / 2,
-					y: perch.y + top,
+					x: birdDrag?.live ? birdDrag.x : perch.x + pad + perch.w / 2,
+					y: birdDrag?.live ? birdDrag.y : perch.y + top,
+					hand: birdHand,
 					label: "The bird: " + (p.bird.tone === "you" ? "perched on you at " : p.bird.tone === "halted" ? "halted at " : p.bird.tone === "paused" ? "paused at " : "flying ") + perch.node.title
+				}),
+				branchBirds.map(({ perch: bp, box }) => {
+					const n = box.node;
+					const doing = bp.tone === "you" ? "waiting on you" : "working";
+					const open = () => p.onOpen?.(n);
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMarker, {
+						tone: bp.tone,
+						size: 18,
+						x: box.x + pad,
+						y: box.y + top + Math.min(box.h, 52) / 2,
+						label: n.title + "’s bird: " + doing,
+						className: "fl-bird-branch",
+						hand: p.onOpen ? {
+							title: "Open " + n.title + " — " + doing,
+							onClick: (e) => {
+								e.stopPropagation();
+								open();
+							},
+							onKeyDown: (e) => {
+								if (e.key !== "Enter" && e.key !== " ") return;
+								e.preventDefault();
+								e.stopPropagation();
+								open();
+							},
+							onPointerDown: (e) => e.stopPropagation()
+						} : void 0
+					}, "bird:" + n.id);
 				}),
 				menuNode && menuItems.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopMenu, {
 					x: menu.x,
@@ -85777,6 +86300,886 @@ function settingsActions(query) {
 	}));
 }
 //#endregion
+//#region src/components/flights/SkyGuide.tsx
+var SKY_GUIDE_SECTIONS = [
+	{
+		id: "what",
+		title: "What the sky is"
+	},
+	{
+		id: "lines",
+		title: "Lines and boxes"
+	},
+	{
+		id: "stops",
+		title: "Stops and saved stops"
+	},
+	{
+		id: "bird",
+		title: "The bird"
+	},
+	{
+		id: "halt",
+		title: "Halt points and Remove"
+	},
+	{
+		id: "grounded",
+		title: "Grounded stops"
+	},
+	{
+		id: "select",
+		title: "Selection"
+	},
+	{
+		id: "keys",
+		title: "Tools and the keyboard"
+	},
+	{
+		id: "intake",
+		title: "The intake lane"
+	},
+	{
+		id: "saved",
+		title: "Where things are saved"
+	}
+];
+function sectionOf(id) {
+	return SKY_GUIDE_SECTIONS.find((s) => s.id === id)?.id ?? SKY_GUIDE_SECTIONS[0].id;
+}
+var useSkyGuide = create((set) => ({
+	section: null,
+	open: (section) => set({ section: sectionOf(section) }),
+	close: () => set({ section: null })
+}));
+var openSkyGuide = (section) => useSkyGuide.getState().open(section);
+var closeSkyGuide = () => useSkyGuide.getState().close();
+var SKY_GUIDE_KEYS = [
+	["V", "Drag tool: lines move by their bars, a drag on empty sky selects"],
+	["H", "Click tool: any drag pans the sky, a click selects"],
+	["Space (held)", "Pan with the mouse, in either tool"],
+	["0", "Fit every line, titles still readable"],
+	["1", "Fit the focused line to the window"],
+	["+ / −", "Zoom in / out (Ctrl+wheel too)"],
+	["T", "Tidy: every line back in its place"],
+	["Arrows", "Pan (Shift: further); on a selected stop ← → move it"],
+	["Delete", "Remove the selected box"],
+	["Esc", "Clear the selection, fold an open session, cancel a pick"],
+	["Ctrl+A", "Select every line"],
+	["Enter", "Open the focused line's session; on a stop, its dialog"],
+	["Ctrl+Y", "Switch between the grid and the sky"],
+	["Ctrl/Alt+N", "A new-session block (double-click empty sky does too)"]
+];
+function Box({ x, y, w = 44, h = 26, cls = "" }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+		className: "sg-box " + cls,
+		x,
+		y,
+		width: w,
+		height: h,
+		rx: 5
+	});
+}
+function Bar({ x, y, w }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+		className: "sg-bar",
+		x,
+		y,
+		width: w,
+		height: 8,
+		rx: 3
+	});
+}
+function BirdMark({ x, y }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+		className: "sg-bird",
+		d: `M${x - 8} ${y} Q${x - 4} ${y - 6} ${x} ${y} Q${x + 4} ${y - 6} ${x + 8} ${y}`
+	});
+}
+function Line({ x, y, n = 4, cls = [] }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("g", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bar, {
+		x,
+		y,
+		w: n * 54 - 10
+	}), Array.from({ length: n }, (_, k) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("g", { children: [k > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+		className: "sg-link",
+		x1: x + k * 54 - 10,
+		y1: y + 27,
+		x2: x + k * 54,
+		y2: y + 27
+	}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+		x: x + k * 54,
+		y: y + 14,
+		cls: k === 0 ? "sg-session" : cls[k] || ""
+	})] }, k))] });
+}
+function Sketch({ label, children, h = 110 }) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+		className: "sg-sketch",
+		viewBox: `0 0 320 ${h}`,
+		role: "img",
+		"aria-label": label,
+		children
+	});
+}
+var SKETCHES = {
+	what: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "Panes on the left, the same sessions as lines on the right",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-pane",
+				x: 8,
+				y: 14,
+				width: 60,
+				height: 38,
+				rx: 4
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-pane",
+				x: 74,
+				y: 14,
+				width: 60,
+				height: 38,
+				rx: 4
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-pane",
+				x: 8,
+				y: 58,
+				width: 126,
+				height: 38,
+				rx: 4
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				className: "sg-arrow",
+				d: "M144 55 H170 M164 49 L170 55 L164 61"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
+				x: 180,
+				y: 12,
+				n: 2
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
+				x: 180,
+				y: 58,
+				n: 2
+			})
+		]
+	}),
+	lines: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "A line: its bar on top, the session box, then its stops, and a + to tack on",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
+				x: 12,
+				y: 30,
+				n: 4
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 12,
+				y: 22,
+				children: "bar · drag me · ⋯"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 12,
+				y: 92,
+				children: "session"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 70,
+				y: 92,
+				children: "stops →"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-box sg-dash",
+				x: 228,
+				y: 44,
+				width: 26,
+				height: 26,
+				rx: 5
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 236,
+				y: 62,
+				children: "+"
+			})
+		]
+	}),
+	stops: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "A saved stop: one box holding three sub-steps, and its chip on the shelf with a dot per step",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+				x: 12,
+				y: 24,
+				w: 150,
+				h: 56,
+				cls: "sg-group"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 20,
+				y: 38,
+				children: "Ticket to merge · 2 of 3"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+				x: 20,
+				y: 46,
+				w: 40,
+				h: 24,
+				cls: "sg-done"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+				x: 66,
+				y: 46,
+				w: 40,
+				h: 24,
+				cls: "sg-here"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+				x: 112,
+				y: 46,
+				w: 40,
+				h: 24
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-chip",
+				x: 196,
+				y: 40,
+				width: 112,
+				height: 26,
+				rx: 13
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 208,
+				y: 57,
+				children: "Ticket to merge"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+				className: "sg-dot",
+				cx: 290,
+				cy: 53,
+				r: 2
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+				className: "sg-dot",
+				cx: 296,
+				cy: 53,
+				r: 2
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+				className: "sg-dot",
+				cx: 302,
+				cy: 53,
+				r: 2
+			})
+		]
+	}),
+	bird: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "A line of boxes with the bird on the third; a dashed arrow drags it back to the second",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
+				x: 20,
+				y: 40,
+				n: 5,
+				cls: [
+					"",
+					"sg-done",
+					"sg-here"
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMark, {
+				x: 150,
+				y: 46
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				className: "sg-arrow sg-dash",
+				d: "M146 36 Q120 14 96 36 M98 28 L96 36 L104 36"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 20,
+				y: 100,
+				children: "click: halt / carry on · drag: jump"
+			})
+		]
+	}),
+	halt: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "The bird on a stop, and a halt point two stops on wearing a pause badge",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
+				x: 20,
+				y: 34,
+				n: 5,
+				cls: [
+					"",
+					"sg-done",
+					"sg-here"
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMark, {
+				x: 150,
+				y: 40
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-halt",
+				x: 236,
+				y: 44,
+				width: 14,
+				height: 14,
+				rx: 3
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				className: "sg-halt-ink",
+				d: "M241 48 V54 M245 48 V54"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 20,
+				y: 96,
+				children: "⏹ halt now — here · ⏸ halt here — when it arrives"
+			})
+		]
+	}),
+	grounded: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "A grounded line: a dashed No session yet head, its stops, and the Session chip dropped on it",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bar, {
+				x: 20,
+				y: 30,
+				w: 206
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-box sg-dash",
+				x: 20,
+				y: 44,
+				width: 64,
+				height: 26,
+				rx: 5
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 26,
+				y: 61,
+				children: "no session"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+				x: 94,
+				y: 44
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+				x: 148,
+				y: 44
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-chip",
+				x: 60,
+				y: 84,
+				width: 70,
+				height: 20,
+				rx: 10
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 70,
+				y: 98,
+				children: "Session"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				className: "sg-arrow",
+				d: "M70 84 L56 74 M56 80 L56 74 L62 74"
+			})
+		]
+	}),
+	select: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "A dashed marquee drawn over the boxes of two lines",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
+				x: 20,
+				y: 10,
+				n: 4
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
+				x: 20,
+				y: 58,
+				n: 4
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-marquee",
+				x: 64,
+				y: 18,
+				width: 118,
+				height: 84,
+				rx: 2
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				className: "sg-arrow",
+				d: "M182 102 l10 6 M182 102 l3 -10"
+			})
+		]
+	}),
+	keys: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "The tool toggle: Drag (V) and Click (H)",
+		h: 80,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-toggle",
+				x: 60,
+				y: 20,
+				width: 200,
+				height: 34,
+				rx: 17
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-toggle-on",
+				x: 63,
+				y: 23,
+				width: 97,
+				height: 28,
+				rx: 14
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text sg-strong",
+				x: 84,
+				y: 42,
+				children: "✥ Drag · V"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 180,
+				y: 42,
+				children: "☝ Click · H"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 98,
+				y: 74,
+				children: "hold Space: pan in either"
+			})
+		]
+	}),
+	intake: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "The intake lane folded to a row of source blocks, and expanded to show each waiting item with Fly",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bar, {
+				x: 12,
+				y: 12,
+				w: 120
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+				x: 12,
+				y: 26,
+				w: 56,
+				cls: "sg-group"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+				x: 76,
+				y: 26,
+				w: 56,
+				cls: "sg-group"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 12,
+				y: 72,
+				children: "folded"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bar, {
+				x: 168,
+				y: 12,
+				w: 140
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
+				x: 168,
+				y: 26,
+				w: 140,
+				h: 70,
+				cls: "sg-group"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-row",
+				x: 176,
+				y: 36,
+				width: 124,
+				height: 14,
+				rx: 3
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-row",
+				x: 176,
+				y: 56,
+				width: 124,
+				height: 14,
+				rx: 3
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-fly",
+				x: 276,
+				y: 38,
+				width: 20,
+				height: 10,
+				rx: 3
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-fly",
+				x: 276,
+				y: 58,
+				width: 20,
+				height: 10,
+				rx: 3
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 168,
+				y: 108,
+				children: "expanded ▾"
+			})
+		]
+	}),
+	saved: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
+		label: "Three places: this browser for the layout, every device for saved stops, this machine for flights",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-pane",
+				x: 16,
+				y: 24,
+				width: 70,
+				height: 46,
+				rx: 4
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 22,
+				y: 88,
+				children: "layout: here"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				className: "sg-cloud",
+				d: "M136 64 a14 14 0 0 1 4 -27 a18 18 0 0 1 34 -2 a13 13 0 0 1 6 29 Z"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 118,
+				y: 88,
+				children: "saved stops: synced"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("rect", {
+				className: "sg-pane",
+				x: 238,
+				y: 30,
+				width: 60,
+				height: 34,
+				rx: 4
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("line", {
+				className: "sg-link",
+				x1: 238,
+				y1: 52,
+				x2: 298,
+				y2: 52
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("text", {
+				className: "sg-text",
+				x: 226,
+				y: 88,
+				children: "flights: this machine"
+			})
+		]
+	})
+};
+function Keys() {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", {
+		className: "sky-guide-keys",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+			scope: "col",
+			children: "Key"
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", {
+			scope: "col",
+			children: "What it does"
+		})] }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: SKY_GUIDE_KEYS.map(([k, what]) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: k }) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: what })] }, k)) })]
+	});
+}
+var WORDS = {
+	what: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "The sky is the main area's second view. Every session is a line — the same sessions as the grid, with the same selection and the same open tabs; only the drawing changes." }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+		"Switch with ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Grid · Sky" }),
+		" on the top bar, or ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Ctrl+Y" }),
+		". The chips on the sky's toolbar choose which lines show, and ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Find a line…" }),
+		" jumps to one by name."
+	] })] }),
+	lines: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"A line is one session. Its ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "bar" }),
+			" carries the name and a ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⋯" }),
+			" menu: open the session here, open it in the grid, show only this line, tack on a stop, close the session."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"Drag a line by its bar to put it anywhere — it stays there. ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Tidy" }),
+			" (",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "T" }),
+			") puts every line back in its place; the ⋯'s ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Tidy this line" }),
+			" does one."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"The boxes run left to right: the session's own box (it opens the real terminal in a card on the line), its workers, then its flight's stops in order. The ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "+" }),
+			" at the end tacks on a stop, the + between two boxes puts one in there, and a box's corner handle resizes every box on the line."
+		] })
+	] }),
+	stops: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"A ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "stop" }),
+			" is one block of work: ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Agent" }),
+			" gives the session's agent a prompt and waits for its turn to settle, ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Perch" }),
+			" waits until you press Done, ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Ship" }),
+			" commits, pushes, opens or merges the PR, ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Verify" }),
+			" works through the branch's checklist, ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Wait" }),
+			" waits some minutes or until a time. ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "All blocks…" }),
+			" on the shelf lists the rest, each with what it does."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"A ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "saved stop" }),
+			" is a named series of stops — ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "Ticket to merge" }),
+			", say — that you drag on as one box. It flies its sub-steps one by one and reads ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "2 of 3" }),
+			" while it does. Double-click it to see and change each sub-step."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"To change a saved stop, drag it onto the sky, edit its boxes there, then ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Save to the shelf" }),
+			". Right-click its chip on the shelf to rename, reset or delete it."
+		] })
+	] }),
+	bird: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "The bird stands on the stop the flight is at: bobbing while the session works, gold when it is perched on you." }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Click" }), " the bird to halt the flight where it is; click it again on a paused flight to carry on."] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Drag" }), " the bird onto another stop of the same flight to jump there — the stops you can land on light up, and dropping it anywhere else puts it back. Jumping back re-arms the halt points after the stop you land on."] })
+	] }),
+	halt: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⏹ Halt now" }),
+		" (on the current stop, or a click on the bird) pauses the flight where it is. ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⏸ Halt here" }),
+		" on a stop ahead makes it a halt point: the flight pauses when it reaches that stop, before doing it, and the stop wears a pause badge. ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "▶ Carry on" }),
+		" goes on."
+	] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Remove" }),
+		" (🗑, the menu, or ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Delete" }),
+		") takes a stop off at once, with ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Undo" }),
+		" in the toast. Removing the stop that is flying stops its work and pauses the flight right before the next stop; Carry on goes into it."
+	] })] }),
+	grounded: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+		"Drop a block or a saved stop on empty sky and it waits there as a ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "grounded" }),
+		" line: a dashed ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "No session yet" }),
+		" head, then its stops. Nothing runs until it has a session."
+	] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+		"Give it one by dropping the shelf's ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Session" }),
+		" chip on it (a new session is made and the stops take off), or with its ⋯ → ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Fly on a session…" }),
+		" and a line that has no flight. The same ⋯ offers ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Save to the shelf" }),
+		" and ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Remove" }),
+		"."
+	] })] }),
+	select: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+		"Drag across empty sky to draw a box — everything it touches is selected, lines and stop boxes both (in the Click tool, Shift+drag). ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Ctrl+A" }),
+		" selects every line; ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Esc" }),
+		" clears."
+	] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+		"The selection bar then offers: drag any selected line's bar and they all move; ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Remove…" }),
+		" (it asks first: a session line closes its session, a grounded line goes); and for stops of one line, ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Group into a stop" }),
+		" and ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Save to the shelf" }),
+		"."
+	] })] }),
+	keys: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+		"The toolbar's toggle picks how a drag behaves. ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "✥ Drag" }),
+		" (",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "V" }),
+		"): lines move by their bars and a drag on empty sky selects. ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "☝ Click" }),
+		" (",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "H" }),
+		"): nothing moves by dragging — any drag pans, a click focuses a line or selects a box. Hold ",
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Space" }),
+		" to pan in either; the wheel and the middle button pan too."
+	] }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Keys, {})] }),
+	intake: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "The intake lane, top left, holds what is waiting to fly: one block per source — tickets, pull requests, issues — with the items in it." }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"Folded it is a row of blocks; expand it (▸ on its head, or double-click the head) to see every item with its ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Fly" }),
+			" button. Fly starts a session on that item, and its line appears in the sky."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "Drag the lane by its head like a line; Tidy puts it back." })
+	] }),
+	saved: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "The layout" }), " — where each line sits, its box sizes, the intake lane's spot, the tool — is kept per device, in this browser."] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Saved stops" }), " live on the server and are synced across your devices, like templates."] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Flights" }), " — the stops a session is flying and where the bird is — stay on the machine that runs them, never synced."] })
+	] })
+};
+function SkyGuide(p) {
+	const stored = useSkyGuide((s) => s.section);
+	const controlled = p.open !== void 0;
+	const open = controlled ? !!p.open : stored !== null;
+	const start = controlled ? p.section : stored ?? void 0;
+	const onClose = controlled ? p.onClose ?? closeSkyGuide : closeSkyGuide;
+	if (!open) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyGuideBody, {
+		start: sectionOf(start),
+		onClose,
+		portal: p.portal !== false
+	}, start ?? "");
+}
+function SkyGuideBody({ start, onClose, portal }) {
+	const [at, setAt] = (0, import_react.useState)(start);
+	const title = SKY_GUIDE_SECTIONS.find((s) => s.id === at).title;
+	const replay = () => {
+		onClose();
+		replayTour("sky");
+	};
+	const k = SKY_GUIDE_SECTIONS.findIndex((s) => s.id === at);
+	const onNavKey = (e) => {
+		const d = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
+		if (!d) return;
+		e.preventDefault();
+		const next = SKY_GUIDE_SECTIONS[(k + d + SKY_GUIDE_SECTIONS.length) % SKY_GUIDE_SECTIONS.length];
+		setAt(next.id);
+		e.currentTarget.querySelector(`[data-section="${next.id}"]`)?.focus();
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		id: "sky-guide",
+		className: "sky-guide-modal",
+		onClose,
+		portal,
+		role: "dialog",
+		"aria-modal": "true",
+		"aria-labelledby": "sky-guide-title",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "sky-guide",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
+				className: "sky-guide-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+						id: "sky-guide-title",
+						children: "Learn the Sky"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn",
+						onClick: replay,
+						children: "Replay the tour"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "fl-icon-btn sky-guide-x",
+						"aria-label": "Close the guide",
+						title: "Close (Esc)",
+						onClick: onClose,
+						children: "×"
+					})
+				]
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sky-guide-body",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("nav", {
+					className: "sky-guide-nav",
+					"aria-label": "Sections",
+					onKeyDown: onNavKey,
+					children: SKY_GUIDE_SECTIONS.map((s, n) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+						type: "button",
+						"data-section": s.id,
+						className: "fl-stopmenu-item sky-guide-nav-item" + (s.id === at ? " on" : ""),
+						"aria-current": s.id === at ? "true" : void 0,
+						onClick: () => setAt(s.id),
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-guide-n",
+							children: n + 1
+						}), s.title]
+					}, s.id))
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+					className: "sky-guide-page",
+					"aria-labelledby": "sky-guide-page-title",
+					"data-section": at,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+							id: "sky-guide-page-title",
+							children: title
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "sky-guide-sketch",
+							children: SKETCHES[at]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "sky-guide-words",
+							children: WORDS[at]
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "sky-guide-foot",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "test-btn",
+									disabled: k === 0,
+									onClick: () => setAt(SKY_GUIDE_SECTIONS[k - 1].id),
+									children: "Back"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+									className: "muted",
+									children: [
+										k + 1,
+										" of ",
+										SKY_GUIDE_SECTIONS.length
+									]
+								}),
+								k < SKY_GUIDE_SECTIONS.length - 1 ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+									type: "button",
+									className: "btn-primary",
+									onClick: () => setAt(SKY_GUIDE_SECTIONS[k + 1].id),
+									children: ["Next: ", SKY_GUIDE_SECTIONS[k + 1].title]
+								}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+									type: "button",
+									className: "btn-primary",
+									onClick: onClose,
+									children: "Done"
+								})
+							]
+						})
+					]
+				})]
+			})]
+		})
+	});
+}
+//#endregion
 //#region src/components/settings/screens/peer/replayPeopleTour.ts
 function replayPeopleTour() {
 	const ui = useUi.getState();
@@ -85788,6 +87191,7 @@ function replayPeopleTour() {
 //#region src/components/palette/CommandPalette.tsx
 var PALETTE_ACTIONS = [
 	"rename",
+	"move",
 	"message",
 	"queue",
 	"askWorkers",
@@ -85916,12 +87320,12 @@ function CommandPalette({ host }) {
 		});
 		acts.push(ui.view === "sky" ? {
 			label: "Switch to the grid",
-			hint: "Alt+Y",
+			hint: "Ctrl+Y",
 			keywords: "view panes terminals grid",
 			run: () => setView("grid")
 		} : {
 			label: "Switch to the Sky",
-			hint: "Alt+Y",
+			hint: "Ctrl+Y",
 			keywords: "view sky canvas lines bird board flock map flights",
 			run: () => setView("sky")
 		});
@@ -85930,6 +87334,15 @@ function CommandPalette({ host }) {
 			hint: "on the Sky's shelf",
 			keywords: "flights saved stops plan perch canvas shelf new",
 			run: () => ui.showFlyways()
+		});
+		acts.push({
+			label: "Learn the Sky",
+			hint: "the guide",
+			keywords: "help how guide tutorial sky lines stops bird keys",
+			run: () => {
+				setView("sky");
+				openSkyGuide();
+			}
 		});
 		acts.push({
 			label: "Customize…",
@@ -88907,6 +90320,7 @@ function TemplateEditor(p) {
 //#region src/components/onboarding/TourButton.tsx
 function TourButton({ tour }) {
 	const openCoachTour = useUi((s) => s.openCoachTour);
+	if (tour === "sky") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyTourButton, {});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 		type: "button",
 		className: "tour-btn",
@@ -88915,6 +90329,68 @@ function TourButton({ tour }) {
 		"data-tour-id": tour,
 		onClick: () => openCoachTour(tour),
 		children: "?"
+	});
+}
+function SkyTourButton() {
+	const openCoachTour = useUi((s) => s.openCoachTour);
+	const [open, setOpen] = (0, import_react.useState)(false);
+	const wrap = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		const onDown = (e) => {
+			if (!wrap.current?.contains(e.target)) setOpen(false);
+		};
+		const onKey = (e) => {
+			if (e.key !== "Escape") return;
+			e.preventDefault();
+			e.stopPropagation();
+			setOpen(false);
+			wrap.current?.querySelector(".tour-btn")?.focus();
+		};
+		document.addEventListener("mousedown", onDown, true);
+		window.addEventListener("keydown", onKey, true);
+		return () => {
+			document.removeEventListener("mousedown", onDown, true);
+			window.removeEventListener("keydown", onKey, true);
+		};
+	}, [open]);
+	(0, import_react.useEffect)(() => {
+		if (open) wrap.current?.querySelector(".tour-menu button")?.focus();
+	}, [open]);
+	const pick = (go) => {
+		setOpen(false);
+		go();
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "tour-btn-wrap",
+		ref: wrap,
+		"data-tour": "sky-guide",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "tour-btn",
+			"aria-label": "Show me around",
+			"aria-haspopup": "menu",
+			"aria-expanded": open,
+			title: "The Sky tour and guide",
+			"data-tour-id": "sky",
+			onClick: () => setOpen((o) => !o),
+			children: "?"
+		}), open && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "tour-menu",
+			role: "menu",
+			"aria-label": "Show me around",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				role: "menuitem",
+				onClick: () => pick(() => openCoachTour("sky")),
+				children: "Replay the tour"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				role: "menuitem",
+				onClick: () => pick(() => openSkyGuide()),
+				children: "Open the guide"
+			})]
+		})]
 	});
 }
 //#endregion
@@ -90916,7 +92392,7 @@ function rememberOptionsOpen(on) {
 		localStorage.setItem(OPTIONS_OPEN_KEY, on ? "1" : "0");
 	} catch {}
 }
-function optionsSummary(lane, askFirst) {
+function optionsSummary$1(lane, askFirst) {
 	return "Options · Fast-track: " + LANE_LABEL[lane] + (askFirst ? ", asks first" : "");
 }
 function RunOptions({ draft, n, split, maxPieces, splitBox, repoPicker }) {
@@ -91095,7 +92571,7 @@ function RunOptions({ draft, n, split, maxPieces, splitBox, repoPicker }) {
 					}
 					rememberOptionsOpen(!foldOpen);
 				},
-				children: optionsSummary(draft.lane, draft.askFirst)
+				children: optionsSummary$1(draft.lane, draft.askFirst)
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				className: "rt-fold-body",
 				children: body
@@ -112552,7 +114028,7 @@ function SettingsDialog({ onOpenSysLogsPane }) {
 }
 //#endregion
 //#region src/lib/verifyActions.ts
-function planPath(id) {
+function planPath$1(id) {
 	return "/api/test-plans/" + encodeURIComponent(id);
 }
 function patchPlan(id, apply) {
@@ -112563,13 +114039,13 @@ function patchPlan(id, apply) {
 	} : prev);
 }
 function requestPlanRun(planId, only) {
-	return api(planPath(planId) + "/run", {
+	return api(planPath$1(planId) + "/run", {
 		method: "POST",
 		json: only ? { steps: only } : {}
 	});
 }
 function requestPlanDelete(planId) {
-	return api(planPath(planId), { method: "DELETE" });
+	return api(planPath$1(planId), { method: "DELETE" });
 }
 async function startChecklistRun(plan, opts = {}) {
 	try {
@@ -112591,7 +114067,7 @@ async function startChecklistRun(plan, opts = {}) {
 }
 async function regeneratePlan(plan, focus = "") {
 	try {
-		await api(planPath(plan.id) + "/regenerate", {
+		await api(planPath$1(plan.id) + "/regenerate", {
 			method: "POST",
 			json: { focus: focus.trim() }
 		});
@@ -112611,7 +114087,7 @@ async function regeneratePlan(plan, focus = "") {
 }
 async function cancelChecklistRun(plan) {
 	try {
-		const r = await api(planPath(plan.id) + "/cancel", { method: "POST" });
+		const r = await api(planPath$1(plan.id) + "/cancel", { method: "POST" });
 		if (r?.plan) patchPlan(plan.id, () => r.plan);
 		if (plan.run_session) useUi.getState().closeVerifyPane(plan.run_session);
 		await refreshInstances();
@@ -112624,7 +114100,7 @@ async function cancelChecklistRun(plan) {
 }
 async function fixPlanFailures(plan, only) {
 	try {
-		const r = await api(planPath(plan.id) + "/fix", {
+		const r = await api(planPath$1(plan.id) + "/fix", {
 			method: "POST",
 			json: only ? { steps: only } : {}
 		});
@@ -112636,7 +114112,7 @@ async function fixPlanFailures(plan, only) {
 }
 async function markPlanDeployed(plan) {
 	try {
-		const r = await api(planPath(plan.id) + "/deployed", { method: "POST" });
+		const r = await api(planPath$1(plan.id) + "/deployed", { method: "POST" });
 		if (r?.plan) patchPlan(plan.id, () => r.plan);
 		await refreshTestPlans();
 		toast(planName(plan) + " is ready to check");
@@ -112662,7 +114138,7 @@ async function removePlan(plan, opts = {}) {
 }
 async function recordStepAnswer(plan, step, result, note) {
 	const wasAsking = isWaitingOnYou(plan);
-	const next = (await api(planPath(plan.id) + "/result", { json: {
+	const next = (await api(planPath$1(plan.id) + "/result", { json: {
 		step_id: step.id,
 		result,
 		note
@@ -112676,7 +114152,7 @@ async function recordStepAnswer(plan, step, result, note) {
 }
 async function editPlanStep(plan, step, fields) {
 	try {
-		const r = await api(planPath(plan.id) + "/steps/" + encodeURIComponent(step.id), {
+		const r = await api(planPath$1(plan.id) + "/steps/" + encodeURIComponent(step.id), {
 			method: "PATCH",
 			json: fields
 		});
@@ -112690,7 +114166,7 @@ async function editPlanStep(plan, step, fields) {
 }
 async function removePlanStep(plan, step) {
 	try {
-		const r = await api(planPath(plan.id) + "/steps/" + encodeURIComponent(step.id), { method: "DELETE" });
+		const r = await api(planPath$1(plan.id) + "/steps/" + encodeURIComponent(step.id), { method: "DELETE" });
 		if (r?.plan) patchPlan(plan.id, () => r.plan);
 		refreshTestPlans();
 	} catch (err) {
@@ -112698,7 +114174,7 @@ async function removePlanStep(plan, step) {
 	}
 }
 async function addPlanStep(plan, fields) {
-	return (await api(planPath(plan.id) + "/steps", {
+	return (await api(planPath$1(plan.id) + "/steps", {
 		method: "POST",
 		json: fields
 	}))?.plan;
@@ -117617,6 +119093,138 @@ function RenameDialog() {
 	});
 }
 //#endregion
+//#region src/components/dialogs/MoveSessionDialog.tsx
+function sessionFolder(inst) {
+	return inst?.path || inst?.folder || "";
+}
+function moveDestSeed(folder) {
+	const f = folder.replace(/[\\/]+$/, "");
+	const cut = Math.max(f.lastIndexOf("/"), f.lastIndexOf("\\"));
+	return cut > 0 ? f.slice(0, cut + 1) : "";
+}
+function moveBlockReason(folder, dest) {
+	const d = dest.trim();
+	if (!d) return "Type the new folder's path";
+	const strip = (p) => p.replace(/[\\/]+$/, "");
+	if (strip(d) === strip(folder)) return "That is where it is now";
+	if (/[\\/]$/.test(d) && strip(d) === strip(moveDestSeed(folder))) return "Add the new folder's name";
+	return "";
+}
+function MoveSessionDialog() {
+	const open = useUi((s) => s.openDialog === "move");
+	const target = useUi((s) => s.dialogTarget);
+	const closeDialog = useUi((s) => s.closeDialog);
+	const { data } = useInstances();
+	if (!open || !target) return null;
+	const inst = (data || []).find((i) => i.title === target);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MoveForm, {
+		title: target,
+		folder: sessionFolder(inst),
+		onClose: closeDialog
+	}, target);
+}
+function MoveForm({ title, folder, onClose }) {
+	const [dest, setDest] = (0, import_react.useState)(() => moveDestSeed(folder));
+	const [force, setForce] = (0, import_react.useState)(false);
+	const [midTurn, setMidTurn] = (0, import_react.useState)(false);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	(0, import_react.useEffect)(() => {
+		setTimeout(() => {
+			const el = document.getElementById("move-dest");
+			if (!el) return;
+			el.focus();
+			el.setSelectionRange(el.value.length, el.value.length);
+		}, 0);
+	}, []);
+	const name = windowName(title);
+	const why = moveBlockReason(folder, dest);
+	const submit = async () => {
+		if (why || busy) return;
+		setBusy(true);
+		setMidTurn(false);
+		const r = await moveSession(title, dest.trim(), force);
+		setBusy(false);
+		if (r.ok) onClose();
+		else if (r.refusal === "working" && !force) setMidTurn(true);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		id: "move-dialog",
+		onClose,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("form", {
+			id: "move-form",
+			onSubmit: (e) => {
+				e.preventDefault();
+				submit();
+			},
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h2", { children: [
+					"Move “",
+					name,
+					"” to a folder"
+				] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "move-now",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "move-now-label",
+						children: "Now in"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", {
+						className: "move-now-path",
+						title: folder,
+						children: folder || "(folder unknown)"
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", { children: ["New folder", /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
+					id: "move-dest",
+					value: dest,
+					onChange: (v) => {
+						setDest(v);
+						setMidTurn(false);
+					},
+					pickerTitle: "Pick where the folder goes",
+					placeholder: "/path/to/new-folder",
+					"aria-invalid": midTurn
+				})] }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "move-says",
+					children: "MindFlock pauses the agent, moves the folder, and resumes it there. Linked worktrees are repaired."
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+					className: "move-force",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						type: "checkbox",
+						id: "move-force",
+						checked: force,
+						onChange: (e) => {
+							setForce(e.target.checked);
+							setMidTurn(false);
+						}
+					}), "Even if it is mid-turn"]
+				}),
+				midTurn && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "move-midturn",
+					role: "alert",
+					children: MOVE_MID_TURN
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "modal-actions",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						id: "move-cancel",
+						onClick: onClose,
+						children: "Cancel"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "submit",
+						id: "move-submit",
+						disabled: !!why || busy,
+						title: why || void 0,
+						children: busy ? "Moving…" : "Move"
+					})]
+				})
+			]
+		})
+	});
+}
+//#endregion
 //#region src/components/dialogs/GuestNameDialog.tsx
 function GuestNameDialog() {
 	const { data: config } = useConfig();
@@ -121192,6 +122800,63 @@ function planeToScreen(cam, r) {
 		h: r.h * cam.z
 	};
 }
+var SKY_TOOLS = ["drag", "click"];
+var SKY_TOOL_KEY = "mf_sky_tool";
+function gestureFor(tool, target, mods = {}) {
+	if (mods.space) return "pan";
+	if (target === "control") return "none";
+	if (tool === "click") return mods.shift && !mods.touch ? "marquee" : "pan";
+	if (target === "ground") return mods.touch ? "pan" : "marquee";
+	return target === "line" ? "move-line" : "select";
+}
+function loadSkyTool(store = localStore()) {
+	try {
+		return store?.getItem(SKY_TOOL_KEY) === "click" ? "click" : "drag";
+	} catch {
+		return "drag";
+	}
+}
+function saveSkyTool(tool, store = localStore()) {
+	try {
+		store?.setItem(SKY_TOOL_KEY, tool);
+	} catch {}
+}
+function localStore() {
+	try {
+		return typeof localStorage === "undefined" ? null : localStorage;
+	} catch {
+		return null;
+	}
+}
+var deletableNode = (node) => isStopNode(node) || /^(session|child|branch):./.test(node);
+var nodeSession = (node) => {
+	const m = /^(session|child|branch):(.+)$/.exec(node);
+	return m ? m[2] : "";
+};
+function deleteFor(selection, focus, selectedBox) {
+	if (!selectionEmpty(selection)) return { kind: "selection" };
+	const at = focus || selectedBox;
+	if (!at) return { kind: "keymap" };
+	if (at.line === "intake") return { kind: "swallow" };
+	if (!at.node) return {
+		kind: "line",
+		line: at.line
+	};
+	return deletableNode(at.node) ? {
+		kind: "box",
+		line: at.line,
+		node: at.node
+	} : { kind: "swallow" };
+}
+function nodeById(nodes, id) {
+	for (const n of nodes) {
+		if (n.id === id) return n;
+		const sub = n.group?.nodes.find((s) => s.id === id);
+		if (sub) return sub;
+	}
+	return null;
+}
+var removableBox = (n) => !!n && (n.kind === "stop" || n.kind === "group") && n.editable !== false;
 //#endregion
 //#region src/lib/skyIntake.ts
 var LANE_POLL_DEFAULT = {
@@ -121464,8 +123129,8 @@ function WaitingChip({ w, block, onFly }) {
 		})]
 	});
 }
-function Block({ block, onFly }) {
-	const { shown, more } = shownWaiting(block);
+function Block({ block, onFly, open }) {
+	const { shown, more } = shownWaiting(block, open ? Infinity : void 0);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "sky-lane-block sky-lane-block-" + block.kind,
 		"data-lane-source": block.key,
@@ -121537,7 +123202,8 @@ function Block({ block, onFly }) {
 		]
 	});
 }
-function IntakeLane({ rows, plans, onFly, width = 260 }) {
+var headPress = (e) => e.button === 0 && !e.target.closest("button, a, input, summary, [data-no-drag]");
+function IntakeLane({ rows, plans, onFly, width = 260, open = false, onToggleOpen, onHeadDown, draggable = true, onMeasure }) {
 	const settings = useSettingsDoc(true).data;
 	const status = useMindflockStatus().data;
 	const providers = useTicketingCatalog(true).data;
@@ -121546,6 +123212,26 @@ function IntakeLane({ rows, plans, onFly, width = 260 }) {
 	const prs = usePanelQuery("github-prs").data;
 	const issues = usePanelQuery("github-issues").data;
 	const [collapsed, setCollapsed] = (0, import_react.useState)(loadCollapsed);
+	const rootRef = (0, import_react.useRef)(null);
+	const measureRef = (0, import_react.useRef)(onMeasure);
+	measureRef.current = onMeasure;
+	(0, import_react.useEffect)(() => {
+		const el = rootRef.current;
+		if (!el || typeof ResizeObserver === "undefined") return;
+		let last = "";
+		const read = () => {
+			const w = el.offsetWidth;
+			const h = el.offsetHeight;
+			const k = w + "x" + h;
+			if (!w || !h || k === last) return;
+			last = k;
+			measureRef.current?.(w, h);
+		};
+		const ro = new ResizeObserver(read);
+		ro.observe(el);
+		read();
+		return () => ro.disconnect();
+	}, [!!settings, collapsed]);
 	if (!settings) return null;
 	const blocks = sourceBlocks(settings, waiting, rows, {
 		plans,
@@ -121562,10 +123248,17 @@ function IntakeLane({ rows, plans, onFly, width = 260 }) {
 		saveCollapsed(v);
 	};
 	const total = blocks.reduce((n, b) => n + laneCount(b), 0);
+	const headDown = (e) => {
+		if (draggable && onHeadDown && headPress(e)) onHeadDown(e);
+	};
+	const moveHint = draggable && onHeadDown ? "Drag to move the intake lane" : "";
 	if (collapsed) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
+		ref: rootRef,
 		className: "sky-lane sky-lane-rail",
 		"aria-label": "Intake",
 		"data-collapsed": "true",
+		title: moveHint || void 0,
+		onPointerDown: headDown,
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 			type: "button",
 			className: "sky-lane-toggle",
@@ -121586,11 +123279,21 @@ function IntakeLane({ rows, plans, onFly, width = 260 }) {
 		}, b.key))]
 	});
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("nav", {
+		ref: rootRef,
 		className: "sky-lane",
 		"aria-label": "Intake",
+		"data-open": open ? "" : void 0,
 		style: { width },
 		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "sky-lane-head",
+			"data-sky-head": true,
+			title: [moveHint, onToggleOpen ? "double-click to " + (open ? "fold" : "expand") : ""].filter(Boolean).join(" · ") || void 0,
+			onPointerDown: headDown,
+			onDoubleClick: (e) => {
+				if (!onToggleOpen || e.target.closest("button")) return;
+				e.stopPropagation();
+				onToggleOpen();
+			},
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "sky-lane-title",
@@ -121599,6 +123302,15 @@ function IntakeLane({ rows, plans, onFly, width = 260 }) {
 				total > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "fl-count",
 					children: total
+				}),
+				onToggleOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "sky-lane-toggle sky-lane-expand",
+					"aria-expanded": open,
+					"aria-label": open ? "Fold the intake lane's items" : "Expand the intake lane: every item, in full",
+					title: open ? "Fold: the first items of each source" : "Expand: every waiting item, in full",
+					onClick: onToggleOpen,
+					children: open ? "▾" : "▸"
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
@@ -121623,8 +123335,411 @@ function IntakeLane({ rows, plans, onFly, width = 260 }) {
 			]
 		}) : blocks.map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Block, {
 			block: b,
-			onFly
+			onFly,
+			open
 		}, b.key))]
+	});
+}
+//#endregion
+//#region src/lib/newBlock.ts
+var MORE_KEY = "mf_sky_new_more";
+var PARENT_FILTER_AT = 8;
+function defaultOptions() {
+	return {
+		profileId: "",
+		profileModel: "",
+		inPlace: false,
+		baseBranch: "",
+		baseRemote: false,
+		template: "",
+		provision: false,
+		strategy: "worktree",
+		initRepo: false,
+		device: ""
+	};
+}
+function readMoreOpen(kv = storage()) {
+	try {
+		return kv?.getItem(MORE_KEY) === "1";
+	} catch {
+		return false;
+	}
+}
+function writeMoreOpen(open, kv = storage()) {
+	try {
+		kv?.setItem(MORE_KEY, open ? "1" : "0");
+	} catch {}
+}
+function storage() {
+	try {
+		return typeof localStorage === "undefined" ? null : localStorage;
+	} catch {
+		return null;
+	}
+}
+function modelOf(profileModel, launchArgs) {
+	if (profileModel.trim()) return profileModel.trim();
+	const toks = tokenize(launchArgs);
+	for (let i = 0; i < toks.length; i++) {
+		const t = toks[i];
+		if (t.startsWith("--model=")) return t.slice(8);
+		if ((t === "--model" || t === "-m") && toks[i + 1] && !toks[i + 1].startsWith("-")) return toks[i + 1];
+	}
+	return "";
+}
+function workspaceWords(o) {
+	if (o.provision) return "provisioned";
+	if (o.inPlace) return "in place";
+	return o.baseBranch.trim() ? "worktree from " + o.baseBranch.trim() : "worktree";
+}
+function optionsSummary(p) {
+	const o = p.options;
+	const parts = [
+		p.program.trim(),
+		modelOf(o.profileModel, p.launchArgs),
+		workspaceWords(o)
+	];
+	if (o.template) parts.push("“" + o.template + "”");
+	if (o.device) parts.push("on " + (p.deviceName || o.device));
+	return parts.filter(Boolean).join(" · ");
+}
+function branchChoices(b, max = 6) {
+	if (!b) return [];
+	const rank = (n) => n.name === b.default ? 0 : n.name === b.current ? 1 : n.remote ? 3 : 2;
+	const sorted = [...b.branches].sort((x, y) => rank(x) - rank(y));
+	const out = [];
+	for (const n of sorted) {
+		if (!n.name || out.some((o) => o.value === n.name)) continue;
+		out.push({
+			value: n.name,
+			label: n.name,
+			remote: n.remote
+		});
+		if (out.length >= max) break;
+	}
+	return out;
+}
+function parentChoices(rows, nameOf = (t) => t) {
+	return rows.filter((r) => !r.device && !r.hidden_by && !r.locked && !r.pending_create && !!r.path && !r.title.includes("::")).map((r) => ({
+		title: r.title,
+		name: nameOf(r.title) || r.title,
+		repo: r.path,
+		branch: r.branch || "",
+		provider: r.provider || r.program || ""
+	})).sort((a, b) => a.name.localeCompare(b.name));
+}
+function filterParents(choices, q) {
+	const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+	if (!words.length) return [...choices];
+	return choices.filter((c) => {
+		const hay = (c.name + " " + c.title + " " + c.repo).toLowerCase();
+		return words.every((w) => hay.includes(w));
+	});
+}
+function slug(text) {
+	return (text || "").replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^[-.]+|[-.]+$/g, "");
+}
+function workerTitle(parent, taken) {
+	const s = slug(parent).slice(0, 40);
+	const prefix = s ? s + "-w" : "worker-";
+	const used = new Set(taken);
+	let n = 1;
+	while (used.has(prefix + n)) n++;
+	return prefix + n;
+}
+function forkOptions(o, parent) {
+	return {
+		...o,
+		inPlace: false,
+		provision: false,
+		strategy: "worktree",
+		initRepo: false,
+		device: "",
+		baseBranch: parent.branch,
+		baseRemote: false
+	};
+}
+function forkFields(parent) {
+	return {
+		parent: parent.title,
+		spawned: true
+	};
+}
+//#endregion
+//#region src/components/flights/newBlockOptions.tsx
+function optionSetter(set, k) {
+	return (v) => set((o) => ({
+		...o,
+		[k]: typeof v === "function" ? v(o[k]) : v
+	}));
+}
+function MoreOptions({ program, setProgram, options: o, setOptions, launchArgs, setLaunchArgs, authProfiles, branches, templates, onTemplate, devices, forkedFrom }) {
+	const [profileModels, setProfileModels] = (0, import_react.useState)({});
+	const [otherBranch, setOtherBranch] = (0, import_react.useState)("");
+	const profiles = authProfiles?.profiles || [];
+	const setAccount = accountSetter({
+		authProfiles,
+		program,
+		profileModels,
+		canonAgent: (raw) => (raw.trim().split(/\s+/)[0] || "").toLowerCase(),
+		setAgent: setProgram,
+		setProfileId: optionSetter(setOptions, "profileId"),
+		setProfileModel: optionSetter(setOptions, "profileModel"),
+		setProfileModels
+	});
+	const selected = profiles.find((p) => p.id === o.profileId);
+	const chips = (0, import_react.useMemo)(() => branchChoices(branches), [branches]);
+	const remoteOf = (name) => !!branches?.branches.some((b) => b.name === name && b.remote);
+	const setBase = (name) => setOptions((p) => ({
+		...p,
+		baseBranch: name,
+		baseRemote: remoteOf(name)
+	}));
+	const baseOptions = [{
+		value: "",
+		label: branches?.default ? "Default (" + branches.default + ")" : "Default"
+	}, ...chips];
+	if (o.baseBranch && !baseOptions.some((c) => c.value === o.baseBranch)) baseOptions.push({
+		value: o.baseBranch,
+		label: o.baseBranch,
+		remote: o.baseRemote
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sky-new-more-body",
+		children: [
+			!o.device && profiles.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fl-fld fl-fld-wide",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-fld-label",
+					children: "Account"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+					className: "sky-new-account",
+					label: "Account",
+					value: o.profileId,
+					options: [
+						{
+							value: "",
+							label: authProfiles?.default_profile ? "App default (" + authProfiles.default_profile + ")" : "App default"
+						},
+						{
+							value: "default",
+							label: "CLI's own login"
+						},
+						...profiles.map((p) => ({
+							value: p.id,
+							label: p.label || p.id
+						}))
+					],
+					onChange: (id) => setAccount(id)
+				})]
+			}),
+			selected && selected.kind !== "account" && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+				className: "fl-fld fl-fld-wide",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "fl-fld-label",
+						children: "Model"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						className: "sky-new-input sky-new-model",
+						type: "text",
+						autoComplete: "off",
+						list: "sky-new-models",
+						placeholder: selected.model ? "Account default (" + selected.model + ")" : "Account default",
+						value: o.profileModel,
+						onChange: (e) => setOptions((p) => ({
+							...p,
+							profileModel: e.target.value
+						}))
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("datalist", {
+						id: "sky-new-models",
+						children: (profileModels[selected.id] || []).map((m) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: m }, m))
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fl-fld fl-fld-wide",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-fld-label",
+					children: "Workspace"
+				}), forkedFrom ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "sky-new-note",
+					children: [
+						"A worktree of its own, cut at “",
+						forkedFrom,
+						"”'s HEAD"
+					]
+				}) : o.provision ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "sky-new-note",
+					children: [
+						"Provisioned (",
+						o.strategy,
+						") — from the template"
+					]
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+					className: "sky-new-workspace",
+					label: "Workspace",
+					value: o.inPlace ? "in-place" : "worktree",
+					options: [{
+						value: "worktree",
+						label: "Worktree",
+						title: "Its own branch, so several sessions can run at once"
+					}, {
+						value: "in-place",
+						label: "In place",
+						title: "Edits your checkout as it is, on its current branch"
+					}],
+					onChange: (v) => setOptions((p) => ({
+						...p,
+						inPlace: v === "in-place"
+					}))
+				})]
+			}),
+			!forkedFrom && !o.inPlace && !o.provision && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fl-fld fl-fld-wide",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "fl-fld-label",
+						children: "Base branch"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+						className: "sky-new-base",
+						label: "Base branch",
+						value: o.baseBranch,
+						options: baseOptions,
+						onChange: setBase
+					}),
+					(branches?.branches.length || 0) > chips.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						className: "sky-new-input sky-new-base-other",
+						type: "text",
+						autoComplete: "off",
+						list: "sky-new-branches",
+						"aria-label": "Another base branch",
+						placeholder: "Another branch…",
+						value: otherBranch,
+						onChange: (e) => {
+							setOtherBranch(e.target.value);
+							if (branches?.branches.some((b) => b.name === e.target.value.trim())) setBase(e.target.value.trim());
+						}
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("datalist", {
+						id: "sky-new-branches",
+						children: (branches?.branches || []).map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("option", { value: b.name }, b.name))
+					})
+				]
+			}),
+			templates.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fl-fld fl-fld-wide",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-fld-label",
+					children: "Template"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+					className: "sky-new-templates",
+					label: "Template",
+					value: o.template,
+					options: [{
+						value: "",
+						label: "None"
+					}, ...templates.map((t) => ({
+						value: t.name,
+						label: t.name,
+						title: t.prompt || void 0
+					}))],
+					onChange: (name) => onTemplate(templates.find((t) => t.name === name) || null)
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fl-fld fl-fld-wide",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "fl-fld-label",
+						children: "Launch flags"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						className: "sky-new-input sky-new-args",
+						type: "text",
+						autoComplete: "off",
+						"aria-label": "Launch flags",
+						placeholder: "e.g. --verbose — after the agent's saved defaults",
+						value: launchArgs,
+						onChange: (e) => setLaunchArgs(e.target.value)
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlagChips, {
+						provider: program,
+						value: launchArgs,
+						onChange: setLaunchArgs
+					})
+				]
+			}),
+			devices.length > 0 && !forkedFrom && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fl-fld fl-fld-wide",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-fld-label",
+					children: "Device"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+					className: "sky-new-device",
+					label: "Device",
+					value: o.device,
+					options: [{
+						value: "",
+						label: "This device"
+					}, ...devices.map((d) => ({
+						value: d.device,
+						label: d.label
+					}))],
+					onChange: (device) => setOptions((p) => ({
+						...p,
+						device,
+						profileId: device ? "" : p.profileId,
+						profileModel: device ? "" : p.profileModel,
+						baseBranch: "",
+						baseRemote: false
+					}))
+				})]
+			})
+		]
+	});
+}
+function ParentPicker({ choices, value, onPick }) {
+	const [q, setQ] = (0, import_react.useState)("");
+	const shown = filterParents(choices, q);
+	if (!choices.length) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+		className: "sky-new-note sky-new-parents-none",
+		children: "No sessions running on this device to fork from."
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sky-new-parents",
+		children: [choices.length > PARENT_FILTER_AT && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+			className: "sky-new-input sky-new-parent-filter",
+			type: "search",
+			autoComplete: "off",
+			"aria-label": "Filter sessions",
+			placeholder: "Filter " + choices.length + " sessions…",
+			value: q,
+			onChange: (e) => setQ(e.target.value)
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "fl-chiprow sky-new-parent-list",
+			role: "radiogroup",
+			"aria-label": "Fork from a session",
+			children: [shown.map((c) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				role: "radio",
+				"aria-checked": c.title === value,
+				className: "fl-pick" + (c.title === value ? " on" : ""),
+				"data-value": c.title,
+				title: c.repo + (c.branch ? " · " + c.branch : ""),
+				onClick: () => onPick(c),
+				children: c.name
+			}, c.title)), !shown.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+				className: "sky-new-note",
+				children: [
+					"No session matches “",
+					q,
+					"”."
+				]
+			})]
+		})]
 	});
 }
 //#endregion
@@ -121672,26 +123787,28 @@ function promptKey(e, fly) {
 	fly();
 }
 var noop = () => {};
-function bodyFor(opts) {
+function blockBody(c) {
 	const ref = (v) => ({ current: v });
-	return newSessionSubmit({
-		title: "",
-		repoPath: opts.repo,
-		prompt: opts.prompt,
-		program: opts.program,
+	const o = c.parent ? forkOptions(c.options, c.parent) : c.options;
+	const repo = c.parent ? c.parent.repo : c.repo;
+	const body = newSessionSubmit({
+		title: c.title || "",
+		repoPath: repo,
+		prompt: c.prompt,
+		program: c.program,
 		planFirst: false,
 		planOk: false,
-		launchArgs: opts.launchArgs,
-		profileId: "",
-		profileModel: "",
-		strategy: "worktree",
-		inPlace: false,
-		initRepo: false,
-		provision: false,
-		baseBranch: "",
-		baseIsRemote: false,
+		launchArgs: c.launchArgs,
+		profileId: o.device ? "" : o.profileId,
+		profileModel: o.device ? "" : o.profileModel,
+		strategy: o.strategy,
+		inPlace: o.inPlace,
+		initRepo: o.initRepo,
+		provision: o.provision,
+		baseBranch: o.baseBranch,
+		baseIsRemote: o.baseRemote,
 		continueOn: "",
-		activeTemplate: "",
+		activeTemplate: o.template,
 		maxPieces: 0,
 		splitLimit: 0,
 		runMode: false,
@@ -121704,7 +123821,7 @@ function bodyFor(opts) {
 			lane: "leave",
 			askFirst: false
 		}),
-		deviceRef: ref(""),
+		deviceRef: ref(o.device),
 		failedReopen: ref(false),
 		submitArmAt: ref(0),
 		setError: noop,
@@ -121714,13 +123831,19 @@ function bodyFor(opts) {
 		planFolderDo: noop,
 		closeDialog: noop
 	}).buildBody({
-		title: "",
-		repoPath: opts.repo,
-		prompt: opts.prompt,
-		inPlace: false,
-		initRepo: false,
-		provisioned: false
+		title: c.title || "",
+		repoPath: repo,
+		prompt: c.prompt,
+		inPlace: o.inPlace,
+		initRepo: o.initRepo,
+		provisioned: o.provision,
+		baseBranch: o.baseBranch,
+		baseBranchRemote: o.baseRemote
 	});
+	return c.parent ? {
+		...body,
+		...forkFields(c.parent)
+	} : body;
 }
 function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, attach, onPending, onFailed, hidden }) {
 	const [repo, setRepo] = (0, import_react.useState)("");
@@ -121731,14 +123854,31 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [error, setError] = (0, import_react.useState)("");
 	const [made, setMade] = (0, import_react.useState)("");
+	const [options, setOptions] = (0, import_react.useState)(defaultOptions);
+	const [moreOpen, setMoreOpen] = (0, import_react.useState)(readMoreOpen);
+	const [fromOpen, setFromOpen] = (0, import_react.useState)(false);
+	const [parent, setParent] = (0, import_react.useState)(null);
+	const [argsEdit, setArgsEdit] = (0, import_react.useState)(null);
+	const [templates, setTemplates] = (0, import_react.useState)(() => templatesNow());
+	const [branches, setBranches] = (0, import_react.useState)(null);
 	const cardRef = (0, import_react.useRef)(null);
 	const agents = useAgentChoices$1().data;
 	const settings = useSettingsDoc(true).data;
+	const authProfiles = useAuthProfiles().data;
+	const rows = useInstances().data;
+	const startable = startableDevices(useDevices().data);
 	const names = agents?.names || [];
 	const program = picked ?? (agents?.fallback || names[0] || "");
+	const device = parent || !startable.some((d) => d.device === options.device) ? "" : options.device;
+	const shown = parent ? forkOptions(options, parent) : {
+		...options,
+		device
+	};
+	const folder = parent ? parent.repo : repo;
+	const dapi = (0, import_react.useMemo)(() => deviceApi(device), [device]);
 	(0, import_react.useEffect)(() => {
 		let live = true;
-		api("/api/repos/suggest").then((d) => {
+		dapi("/api/repos/suggest").then((d) => {
 			if (!live) return;
 			const sug = d?.suggestions || [];
 			setSuggestions(sug);
@@ -121747,17 +123887,74 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 		return () => {
 			live = false;
 		};
+	}, [dapi]);
+	(0, import_react.useEffect)(() => {
+		let live = true;
+		ensureTemplates().then((t) => live && setTemplates(t)).catch(() => {});
+		return () => {
+			live = false;
+		};
 	}, []);
+	useBaseBranches({
+		open: true,
+		page: 2,
+		repoPath: folder,
+		dapi,
+		setBaseBranch: parent ? noop : optionSetter(setOptions, "baseBranch"),
+		setBranches
+	});
 	(0, import_react.useEffect)(() => {
 		cardRef.current?.querySelector("textarea")?.focus();
 	}, []);
 	const repoChips = (0, import_react.useMemo)(() => repoChoices(suggestions), [suggestions]);
-	const blocked = flyBlocked(repo);
-	const launchArgs = (() => {
+	const parents = (0, import_react.useMemo)(() => parentChoices(rows || [], windowName), [rows]);
+	const blocked = flyBlocked(folder);
+	const defaultArgs = (() => {
 		const raw = settings?.coding_cli?.default_launch_args || {};
 		const hit = Object.keys(raw).find((k) => k.toLowerCase() === program.trim().toLowerCase());
 		return hit ? String(raw[hit] || "").trim() : "";
 	})();
+	const launchArgs = argsEdit ?? defaultArgs;
+	const pickProgram = (name) => {
+		setPicked(name);
+		setArgsEdit(null);
+	};
+	const toggleMore = () => {
+		setMoreOpen((open) => {
+			writeMoreOpen(!open);
+			return !open;
+		});
+	};
+	const fillTemplate = templateFiller({
+		setAgent: pickProgram,
+		folderDo: (a) => {
+			if (a.t === "user-set" && !parent) setRepo(a.path);
+		},
+		setPrompt,
+		setProvision: optionSetter(setOptions, "provision"),
+		setStrategy: optionSetter(setOptions, "strategy"),
+		setInPlace: optionSetter(setOptions, "inPlace"),
+		setInitRepo: optionSetter(setOptions, "initRepo"),
+		setActiveTemplate: optionSetter(setOptions, "template"),
+		setAdvancedOpen: noop,
+		setLane: noop,
+		setAskFirst: noop
+	});
+	const forkFrom = (c) => {
+		setParent(c);
+		setFromOpen(false);
+		if (c.provider && names.includes(c.provider) && c.provider !== program) pickProgram(c.provider);
+	};
+	const deviceName = (d) => {
+		const hit = startable.find((s) => s.device === d);
+		return hit ? deviceLabel(hit, startable) : d;
+	};
+	const summary = optionsSummary({
+		program,
+		options: shown,
+		launchArgs,
+		deviceName: deviceName(device)
+	});
 	const onBarDown = (e) => {
 		if (!onMove || e.button !== 0 || e.target.closest("button")) return;
 		e.preventDefault();
@@ -121792,21 +123989,28 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 		if (made) return onCreated(made);
 		setBusy(true);
 		setError("");
-		const body = bodyFor({
+		const named = parent ? workerTitle(parent.title, (rows || []).map((r) => r.title)) : "";
+		const body = blockBody({
 			repo,
 			prompt,
 			program,
-			launchArgs
+			launchArgs,
+			options: {
+				...options,
+				device
+			},
+			title: named,
+			parent
 		});
-		const guess = addPendingSession(titleFromPrompt(prompt) || repo.split("/").filter(Boolean).pop() || "untitled");
+		const guess = addPendingSession(named || titleFromPrompt(prompt) || folder.split("/").filter(Boolean).pop() || "untitled", device);
 		onPending?.(guess);
 		let title = "";
 		try {
-			title = (await api("/api/instances", { json: body })).title;
-			rememberNewSessionChoice(String(body.repo_path || ""), {
-				template: "",
+			title = await postInstance(body, device);
+			if (!device) rememberNewSessionChoice(String(body.repo_path || ""), {
+				template: shown.template,
 				program: String(body.program || ""),
-				profile_id: ""
+				profile_id: String(body.profile_id || "")
 			});
 			clearStaleAlias(title);
 			await refreshInstances();
@@ -121862,27 +124066,43 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "fl-fld fl-fld-wide",
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "fl-fld-label",
-						children: "Repository"
-					}),
-					repoChips.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
-						className: "sky-new-repos",
-						label: "Repository",
-						value: repo,
-						options: repoChips,
-						onChange: setRepo
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
-						className: "sky-new-path",
-						value: repo,
-						onChange: setRepo,
-						pickerTitle: "Pick the repository",
-						"aria-label": "Repository folder",
-						placeholder: "/path/to/repo"
-					})
-				]
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-fld-label",
+					children: "Repository"
+				}), parent ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "sky-new-forked",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "sky-new-forked-text",
+						title: parent.repo,
+						children: [
+							"forked from ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: parent.name }),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-new-forked-repo",
+								children: parent.repo + (parent.branch ? " · " + parent.branch : "")
+							})
+						]
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "test-btn fl-btn sky-new-unfork",
+						title: "Back to a plain new session",
+						onClick: () => setParent(null),
+						children: "Clear"
+					})]
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [repoChips.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+					className: "sky-new-repos",
+					label: "Repository",
+					value: repo,
+					options: repoChips,
+					onChange: setRepo
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathField, {
+					className: "sky-new-path",
+					value: repo,
+					onChange: setRepo,
+					pickerTitle: "Pick the repository",
+					"aria-label": "Repository folder",
+					placeholder: "/path/to/repo"
+				})] })]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "fl-fld fl-fld-wide",
@@ -121926,8 +124146,66 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 						label: n,
 						title: n === agents?.fallback ? "Your default agent" : void 0
 					})),
-					onChange: setPicked
+					onChange: pickProgram
 				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sky-new-folds",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "fl-icon-btn sky-new-fold sky-new-more",
+					"aria-expanded": moreOpen,
+					onClick: toggleMore,
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-new-caret",
+						"aria-hidden": "true",
+						children: moreOpen ? "▾" : "▸"
+					}), "More options"]
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					className: "fl-icon-btn sky-new-fold sky-new-from" + (parent ? " is-on" : ""),
+					"aria-expanded": fromOpen,
+					title: "Start a worker forked from a running session — its repository, at its HEAD",
+					onClick: () => setFromOpen((o) => !o),
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-new-caret",
+						"aria-hidden": "true",
+						children: fromOpen ? "▾" : "▸"
+					}), "From a session"]
+				})]
+			}),
+			!moreOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "sky-new-summary",
+				title: "More options",
+				children: [summary, parent && " · as " + workerTitle(parent.title, (rows || []).map((r) => r.title))]
+			}),
+			fromOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ParentPicker, {
+				choices: parents,
+				value: parent?.title || "",
+				onPick: forkFrom
+			}),
+			moreOpen && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MoreOptions, {
+				program,
+				setProgram: pickProgram,
+				options: shown,
+				setOptions,
+				launchArgs,
+				setLaunchArgs: setArgsEdit,
+				authProfiles,
+				branches,
+				templates,
+				onTemplate: (t) => t ? fillTemplate(t) : setOptions((o) => ({
+					...o,
+					template: "",
+					provision: false,
+					strategy: "worktree",
+					initRepo: false
+				})),
+				devices: startable.map((d) => ({
+					device: d.device,
+					label: deviceLabel(d, startable)
+				})),
+				forkedFrom: parent?.name
 			}),
 			error && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "error fl-error sky-new-error",
@@ -121952,6 +124230,10 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 			})
 		]
 	});
+}
+async function postInstance(body, device) {
+	if (device) return deviceTitle(device, (await deviceApi(device)("/api/instances", { json: body })).title);
+	return (await api("/api/instances", { json: body })).title;
 }
 //#endregion
 //#region src/components/flights/SkyDrawer.tsx
@@ -122775,7 +125057,39 @@ function SkyLine(p) {
 	const onBarDown = (e) => {
 		if (e.button !== 0) return;
 		if (e.target.closest("button, summary, a, input, [data-no-drag]")) return;
+		rootRef.current?.focus({ preventScroll: true });
+		if (p.draggable === false) return;
 		p.onDragStart?.(e);
+	};
+	const [closing, setClosing] = (0, import_react.useState)("");
+	const [closeBusy, setCloseBusy] = (0, import_react.useState)(false);
+	const deleteBox = (node) => {
+		const t = node ? nodeSession(node) : p.title;
+		if (t) {
+			setClosing(t);
+			return true;
+		}
+		const n = nodeById(shown.diagram.nodes, node);
+		if (!removableBox(n) || !shown.canvas.onRemove) return false;
+		shown.canvas.onRemove(n);
+		return true;
+	};
+	const deleteRef = (0, import_react.useRef)(deleteBox);
+	deleteRef.current = deleteBox;
+	const register = p.registerDelete;
+	(0, import_react.useEffect)(() => {
+		if (!register) return;
+		register((node) => deleteRef.current(node));
+		return () => register(null);
+	}, [register]);
+	const closeNow = async () => {
+		setCloseBusy(true);
+		try {
+			await closeSession(closing);
+		} finally {
+			setCloseBusy(false);
+			setClosing("");
+		}
 	};
 	const grab = (0, import_react.useRef)(null);
 	const resizeDown = (e) => {
@@ -122899,6 +125213,8 @@ function SkyLine(p) {
 			"--sky-lines": nearLines(p.zoom || 1)
 		},
 		role: "group",
+		tabIndex: -1,
+		"data-sky-box": true,
 		"aria-label": name + "'s line",
 		onPointerDownCapture: () => {
 			if (!p.focused) p.onFocus();
@@ -122906,7 +125222,8 @@ function SkyLine(p) {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "skl-bar",
-				title: "Drag to move this line",
+				"data-tour": "sky-line-bar",
+				title: p.draggable === false ? "Click to focus this line (drag mode moves it: V)" : "Drag to move this line",
 				onPointerDown: onBarDown,
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 16 }),
@@ -122970,6 +125287,21 @@ function SkyLine(p) {
 				]
 			}),
 			line.cancel.node,
+			closing && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "skl-close-confirm",
+				"data-no-drag": true,
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+					title: "Close “" + windowName(closing) + "”?",
+					body: "Its agent stops and it moves to Recently closed (Ctrl+Shift+T brings it back).",
+					confirmLabel: "Close session",
+					busy: closeBusy,
+					onConfirm: () => void closeNow(),
+					onCancel: () => {
+						setClosing("");
+						rootRef.current?.focus({ preventScroll: true });
+					}
+				})
+			}),
 			row ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 				ref: sizerRef,
 				className: "skl-scale",
@@ -123044,6 +125376,7 @@ function SkySelectionBar(p) {
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const one = stopSelection(p.selection);
 	const lines = [...p.selection.lines];
+	const removable = lines.filter((id) => id !== INTAKE_KEY);
 	const flight = one ? p.flightOf(one.line) : null;
 	const idx = one && flight ? selectedIndexes(one.nodes, flight.steps) : [];
 	const hint = one ? groupHint(flight, idx, p.kinds) : "";
@@ -123067,7 +125400,7 @@ function SkySelectionBar(p) {
 	};
 	const removeLines = () => run(async () => {
 		let gone = 0;
-		for (const id of lines) if (isGroundedKey(id)) {
+		for (const id of removable) if (isGroundedKey(id)) {
 			if (await deleteFlight(groundedIdOf(id))) gone++;
 		} else await closeSession(id);
 		if (gone) toast("Removed " + plural(gone, "line") + " of stops");
@@ -123104,11 +125437,12 @@ function SkySelectionBar(p) {
 	}, [p.ask]);
 	if (!lines.length && !one) return null;
 	const what = one ? plural(one.nodes.length, "stop") + " selected" : plural(lines.length, "line") + " selected";
-	const sessions = lines.filter((id) => !isGroundedKey(id));
-	const groundedLines = lines.filter(isGroundedKey);
+	const sessions = removable.filter((id) => !isGroundedKey(id));
+	const groundedLines = removable.filter(isGroundedKey);
 	const names = (ids) => ids.slice(0, 4).map(p.nameOf).join(", ") + (ids.length > 4 ? " and " + (ids.length - 4) + " more" : "");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "sky-selbar" + (p.ask ? " is-asking" : ""),
+		"data-tour": "sky-selbar",
 		role: "toolbar",
 		"aria-label": what,
 		style: { transform: `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)` },
@@ -123161,7 +125495,7 @@ function SkySelectionBar(p) {
 							onClick: () => p.onTidy(lines),
 							children: "Tidy these"
 						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						removable.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
 							className: "test-btn fl-btn sky-selbar-danger",
 							disabled: busy,
@@ -123209,8 +125543,8 @@ function SkySelectionBar(p) {
 					})
 				]
 			}),
-			p.ask === "remove" && !one && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
-				title: "Remove " + plural(lines.length, "line") + "?",
+			p.ask === "remove" && !one && removable.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+				title: "Remove " + plural(removable.length, "line") + "?",
 				body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [sessions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: "sky-selbar-says",
 					children: [
@@ -123578,8 +125912,27 @@ function GroundedLine(p) {
 		if (e.button !== 0) return;
 		if (e.target.closest("button, summary, a, input, [data-no-drag]")) return;
 		rootRef.current?.focus({ preventScroll: true });
+		if (p.draggable === false) return;
 		p.onDragStart?.(e);
 	};
+	const deleteBox = (node) => {
+		const n = node ? nodeById(line.diagram.nodes, node) : null;
+		if (n && (n.kind === "stop" || n.kind === "group")) {
+			if (!removableBox(n) || !line.canvas.onRemove) return false;
+			line.canvas.onRemove(n);
+			return true;
+		}
+		setConfirming(true);
+		return true;
+	};
+	const deleteRef = (0, import_react.useRef)(deleteBox);
+	deleteRef.current = deleteBox;
+	const register = p.registerDelete;
+	(0, import_react.useEffect)(() => {
+		if (!register) return;
+		register((node) => deleteRef.current(node));
+		return () => register(null);
+	}, [register]);
 	const onKey = (e) => {
 		if (e.target !== e.currentTarget || !isRemoveKey(e.key)) return;
 		e.preventDefault();
@@ -123597,6 +125950,7 @@ function GroundedLine(p) {
 		},
 		role: "group",
 		tabIndex: 0,
+		"data-sky-box": true,
 		"aria-label": name + " — stops with no session yet",
 		onKeyDown: onKey,
 		onPointerDownCapture: () => {
@@ -123605,7 +125959,7 @@ function GroundedLine(p) {
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "skl-bar",
-				title: "Drag to move these stops",
+				title: p.draggable === false ? "Click to focus these stops (drag mode moves them: V)" : "Drag to move these stops",
 				onPointerDown: onBarDown,
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 16 }),
@@ -123647,6 +126001,7 @@ function GroundedLine(p) {
 				className: "skl-grounded-body",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "skl-grounded-head",
+					"data-tour": "sky-grounded",
 					"data-no-drag": true,
 					title: "Drag the Session chip from the shelf here, or ⋯ → Fly on a session",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "No session yet" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "drop a Session chip here, or ⋯ Fly on a session" })]
@@ -123668,6 +126023,256 @@ function GroundedLine(p) {
 				children: [line.palette, line.inspector]
 			})
 		]
+	});
+}
+//#endregion
+//#region src/lib/stopCatalog.ts
+var DEFAULT_KINDS = [
+	"agent",
+	"you",
+	"ship",
+	"verify",
+	"wait"
+];
+function defaultKinds(kinds) {
+	const out = [];
+	for (const k of DEFAULT_KINDS) {
+		const def = kinds.find((d) => d.kind === k);
+		if (def) out.push(def);
+	}
+	return out;
+}
+function catalogKinds(kinds) {
+	const first = defaultKinds(kinds);
+	return [...first, ...kinds.filter((k) => !first.includes(k))];
+}
+function catalogMatch(query, ...texts) {
+	const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+	if (!words.length) return true;
+	const hay = texts.filter(Boolean).join("\n").toLowerCase();
+	return words.every((w) => hay.includes(w));
+}
+function filterKinds(kinds, query) {
+	return kinds.filter((k) => catalogMatch(query, kindName(k), k.label, k.kind, k.summary));
+}
+function filterPlans(plans, query) {
+	return plans.filter((p) => catalogMatch(query, p.name, p.description));
+}
+function planPath(plan) {
+	return plan.steps.map((s) => s.title).join(" → ");
+}
+function catalogRows(kinds, plans) {
+	return [...kinds.map((k) => ({ kind: k.kind })), ...plans.map((p) => ({ planId: p.id }))];
+}
+function stopDragData(def) {
+	return [[STOP_MIME, def.kind], ["text/plain", kindName(def)]];
+}
+function savedDragData(plan) {
+	return [[FLYWAY_MIME, plan.id], ["text/plain", plan.name]];
+}
+//#endregion
+//#region src/components/flights/StopCatalog.tsx
+var rowId = (i) => "sky-catalog-row-" + i;
+function StopCatalog({ kinds, plans, onAdd, onClose, portal = true }) {
+	const [query, setQuery] = (0, import_react.useState)("");
+	const [active, setActive] = (0, import_react.useState)(0);
+	const [dragging, setDragging] = (0, import_react.useState)(false);
+	const shownKinds = filterKinds(catalogKinds(kinds), query);
+	const shownPlans = filterPlans(plans, query);
+	const rows = catalogRows(shownKinds, shownPlans);
+	const at = Math.min(active, rows.length - 1);
+	(0, import_react.useEffect)(() => {
+		if (at >= 0) document.getElementById(rowId(at))?.scrollIntoView?.({ block: "nearest" });
+	}, [at]);
+	const add = (d) => onAdd?.(d);
+	const onFilterKey = (e) => {
+		if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+			e.preventDefault();
+			if (!rows.length) return;
+			setActive((Math.max(at, 0) + (e.key === "ArrowDown" ? 1 : -1) + rows.length) % rows.length);
+		} else if (e.key === "Enter") {
+			e.preventDefault();
+			if (at >= 0) add(rows[at]);
+		}
+	};
+	const onDragStart = (e, data) => {
+		for (const [type, value] of data) e.dataTransfer.setData(type, value);
+		e.dataTransfer.effectAllowed = "copy";
+		setTimeout(() => setDragging(true), 0);
+	};
+	const onDragEnd = (e) => {
+		setDragging(false);
+		if (e.dataTransfer && e.dataTransfer.dropEffect !== "none") onClose();
+	};
+	const addButton = (d, name) => onAdd && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+		type: "button",
+		className: "test-btn sky-catalog-add",
+		tabIndex: -1,
+		"aria-label": "Add “" + name + "”",
+		onClick: () => add(d),
+		children: "Add"
+	});
+	const how = onAdd ? "Drag onto a line or the sky, or Add it to the focused line" : "Drag onto a line or the sky";
+	let i = -1;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Modal, {
+		id: "sky-catalog",
+		className: "sky-catalog-modal" + (dragging ? " is-dragging" : ""),
+		onClose,
+		portal,
+		role: "dialog",
+		"aria-modal": "true",
+		"aria-labelledby": "sky-catalog-title",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "sky-catalog",
+			onKeyDown: (e) => e.key === "Escape" || e.stopPropagation(),
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "sky-catalog-head",
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", {
+						id: "sky-catalog-title",
+						children: "All blocks"
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "fl-icon-btn sky-catalog-close",
+						"aria-label": "Close",
+						title: "Close (Esc)",
+						onClick: onClose,
+						children: "×"
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					className: "fl-input sky-catalog-filter",
+					type: "text",
+					placeholder: "Filter blocks…",
+					"aria-label": "Filter blocks",
+					"aria-controls": "sky-catalog-list",
+					"aria-activedescendant": at >= 0 ? rowId(at) : void 0,
+					autoComplete: "off",
+					spellCheck: false,
+					autoFocus: true,
+					value: query,
+					onChange: (e) => {
+						setQuery(e.target.value);
+						setActive(0);
+					},
+					onKeyDown: onFilterKey
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "sky-catalog-list",
+					id: "sky-catalog-list",
+					role: "listbox",
+					"aria-label": "All blocks",
+					children: [
+						shownKinds.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+							className: "sky-catalog-section",
+							"data-section": "blocks",
+							role: "group",
+							"aria-label": "Blocks",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+								className: "sky-catalog-label",
+								children: "Blocks"
+							}), shownKinds.map((k) => {
+								const n = ++i;
+								const perch = k.actor === "you";
+								const name = kindName(k);
+								return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									id: rowId(n),
+									role: "option",
+									"aria-selected": n === at,
+									className: "sky-catalog-row" + (n === at ? " active" : "") + (perch ? " perch" : ""),
+									"data-kind": k.kind,
+									draggable: true,
+									title: how,
+									onDragStart: (e) => onDragStart(e, stopDragData(k)),
+									onDragEnd,
+									onMouseEnter: () => setActive(n),
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+											className: "sky-catalog-icon",
+											children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopIcon, {
+												kind: perch ? "perch" : k.kind,
+												size: 15
+											})
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+											className: "sky-catalog-words",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+												className: "sky-catalog-name",
+												children: [name, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "sky-catalog-badge actor-" + (perch ? "you" : "robot"),
+													children: perch ? "you" : "robot"
+												})]
+											}), k.summary && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "sky-catalog-summary",
+												children: k.summary
+											})]
+										}),
+										addButton({ kind: k.kind }, name)
+									]
+								}, k.kind);
+							})]
+						}),
+						shownPlans.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+							className: "sky-catalog-section",
+							"data-section": "multi",
+							role: "group",
+							"aria-label": "Multi-step",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", {
+								className: "sky-catalog-label",
+								children: "Multi-step"
+							}), shownPlans.map((p) => {
+								const n = ++i;
+								const { dots, more } = planDots(p.steps, kinds);
+								return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+									id: rowId(n),
+									role: "option",
+									"aria-selected": n === at,
+									className: "sky-catalog-row sky-catalog-plan" + (n === at ? " active" : ""),
+									"data-plan": p.id,
+									draggable: true,
+									title: how,
+									onDragStart: (e) => onDragStart(e, savedDragData(p)),
+									onDragEnd,
+									onMouseEnter: () => setActive(n),
+									children: [
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+											className: "sky-catalog-boxes",
+											"aria-hidden": "true",
+											children: [dots.map((d, j) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: d.perch ? "perch" : "" }, j)), more > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+												className: "sky-catalog-more",
+												children: ["+", more]
+											})]
+										}),
+										/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+											className: "sky-catalog-words",
+											children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+												className: "sky-catalog-name",
+												children: [p.name, p.builtin && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+													className: "sky-catalog-badge builtin",
+													children: "built-in"
+												})]
+											}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+												className: "sky-catalog-summary",
+												children: planPath(p) || "No steps yet"
+											})]
+										}),
+										addButton({ planId: p.id }, p.name)
+									]
+								}, p.id);
+							})]
+						}),
+						rows.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+							className: "sky-catalog-empty muted",
+							children: query.trim() ? "Nothing matches “" + query.trim() + "”." : "No blocks yet — this server may not know Flights."
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+					className: "sky-catalog-hint muted",
+					children: onAdd ? "Drag a block onto a line or the sky · ↑ ↓ pick · Enter adds it to the focused line · Esc closes" : "Drag a block onto a line or the sky · Esc closes"
+				})
+			]
+		})
 	});
 }
 //#endregion
@@ -123948,15 +126553,6 @@ function TakeoffDialog({ plan, onClose }) {
 }
 //#endregion
 //#region src/components/flights/StopShelf.tsx
-function stopChipOrder(kinds) {
-	return [...kinds.filter((k) => k.actor !== "you"), ...kinds.filter((k) => k.actor === "you")];
-}
-function stopDragData(def) {
-	return [[STOP_MIME, def.kind], ["text/plain", kindName(def)]];
-}
-function savedDragData(plan) {
-	return [[FLYWAY_MIME, plan.id], ["text/plain", plan.name]];
-}
 function sessionDragData() {
 	return [[NEW_SESSION_MIME, "session"], ["text/plain", "New session"]];
 }
@@ -124221,15 +126817,22 @@ function SavedChip({ plan, plans, kinds, renaming, onTackPlan, onMenu, onRenamed
 function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold }) {
 	const kinds = useFlightKinds().data;
 	const plans = useFlightPlans().data;
-	const ordered = stopChipOrder(kinds || []);
-	const flock = ordered.filter((k) => k.actor !== "you");
-	const perches = ordered.filter((k) => k.actor === "you");
+	const blocks = defaultKinds(kinds || []);
 	const saved = savedStopOrder(plans || []);
 	const [menu, setMenu] = (0, import_react.useState)(null);
 	const [renaming, setRenaming] = (0, import_react.useState)("");
 	const [takeoff, setTakeoff] = (0, import_react.useState)(null);
 	const [deleting, setDeleting] = (0, import_react.useState)(null);
 	const [busy, setBusy] = (0, import_react.useState)(false);
+	const [catalog, setCatalog] = (0, import_react.useState)(false);
+	const add = (d) => {
+		setCatalog(false);
+		if ("kind" in d) onTack?.(d.kind);
+		else {
+			const plan = saved.find((p) => p.id === d.planId);
+			if (plan) onTackPlan?.(plan);
+		}
+	};
 	const pick = async (key) => {
 		const plan = menu?.plan;
 		setMenu(null);
@@ -124284,47 +126887,77 @@ function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold }) {
 							children: "— drag onto the sky or a line"
 						})
 					]
-				}), kinds !== void 0 && ordered.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				}), kinds !== void 0 && !kinds?.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 					className: "sky-stops-empty muted",
 					children: "The stop list didn't load — this server may not know Flights yet."
 				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 					className: "sky-stops-chips",
-					role: "list",
 					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionChip, { onSession }),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "sky-stops-region",
+							"data-region": "blocks",
+							role: "list",
+							"aria-label": "Blocks",
+							children: [
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+									className: "sky-stops-label",
+									"aria-hidden": "true",
+									children: "Blocks"
+								}),
+								/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SessionChip, { onSession }),
+								blocks.map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopChip, {
+									def: k,
+									onTack
+								}, k.kind))
+							]
+						}),
+						saved.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-stops-divider",
+							"aria-hidden": "true"
+						}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+							className: "sky-stops-region",
+							"data-region": "multi",
+							role: "list",
+							"aria-label": "Multi-step",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-stops-label",
+								"aria-hidden": "true",
+								children: "Multi-step"
+							}), saved.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SavedChip, {
+								plan: p,
+								plans: saved,
+								kinds: kinds || [],
+								renaming: renaming === p.id,
+								onTackPlan,
+								onMenu: (plan, x, y) => setMenu({
+									plan,
+									x,
+									y
+								}),
+								onRenamed: () => setRenaming("")
+							}, p.id))]
+						})] }),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "sky-stops-divider",
 							"aria-hidden": "true"
 						}),
-						flock.map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopChip, {
-							def: k,
-							onTack
-						}, k.kind)),
-						flock.length > 0 && perches.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "sky-stops-divider",
-							"aria-hidden": "true"
-						}),
-						perches.map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopChip, {
-							def: k,
-							onTack
-						}, k.kind)),
-						saved.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "sky-stops-divider sky-saved-divider",
-							"aria-hidden": "true"
-						}),
-						saved.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SavedChip, {
-							plan: p,
-							plans: saved,
-							kinds: kinds || [],
-							renaming: renaming === p.id,
-							onTackPlan,
-							onMenu: (plan, x, y) => setMenu({
-								plan,
-								x,
-								y
-							}),
-							onRenamed: () => setRenaming("")
-						}, p.id))
+						/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							type: "button",
+							className: "sky-stop-chip sky-catalog-chip",
+							"data-tour": "sky-catalog",
+							"aria-haspopup": "dialog",
+							"aria-expanded": catalog,
+							title: "Every block and every multi-step block, in a list you can filter",
+							onClick: () => setCatalog(true),
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-stop-icon",
+								"aria-hidden": "true",
+								children: "⊞"
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-stop-name",
+								children: "All blocks…"
+							})]
+						})
 					]
 				})]
 			}),
@@ -124346,6 +126979,12 @@ function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold }) {
 				onPick: (k) => void pick(k),
 				onClose: () => setMenu(null)
 			}),
+			catalog && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopCatalog, {
+				kinds: kinds || [],
+				plans: saved,
+				onAdd: onTack || onTackPlan ? add : void 0,
+				onClose: () => setCatalog(false)
+			}),
 			takeoff && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TakeoffDialog, {
 				plan: takeoff,
 				onClose: () => setTakeoff(null)
@@ -124361,6 +127000,29 @@ var GRID = 24;
 var PAN_STEP = 80;
 var SHELF_FOLD_KEY = "mf_sky_stops_folded";
 var TIDY_MS = 350;
+var TOOL_CHIPS = {
+	drag: {
+		label: "✥ Drag",
+		title: "Drag mode (V): a line moves by its bar, a drag on empty sky selects"
+	},
+	click: {
+		label: "☝ Click",
+		title: "Click mode (H): a drag anywhere pans, a click focuses a line or selects a box — Shift+drag selects"
+	}
+};
+var SKY_CONTROLS = "button, a, input, textarea, select, summary, label, [contenteditable=true], [role=menu], [role=menuitem], [data-no-drag], .skl-card, .skl-panels, .sky-selbar, .sky-own-scroll, .sky-new";
+function skyTargetOf(el, ground) {
+	if (!el || ground(el)) return "ground";
+	if (el.closest(SKY_CONTROLS)) return "control";
+	if (el.closest("[data-node]")) return "box";
+	if (el.closest(".skl-bar, .sky-lane-head, .sky-lane-rail")) return "line";
+	return "box";
+}
+function skyObjectOf(el) {
+	if (!el) return "";
+	if (el.closest(".sky-intake")) return INTAKE_KEY;
+	return el.closest(".sky-line-slot[data-slot]")?.getAttribute("data-slot") || "";
+}
 var readPref = (key) => {
 	try {
 		return typeof localStorage === "undefined" ? null : localStorage.getItem(key);
@@ -124467,6 +127129,13 @@ function SkyView() {
 	const [flash, setFlash] = (0, import_react.useState)("");
 	const [spaceHeld, setSpaceHeld] = (0, import_react.useState)(false);
 	const space = (0, import_react.useRef)(false);
+	const [tool, setToolState] = (0, import_react.useState)(() => loadSkyTool());
+	const setTool = (0, import_react.useCallback)((t) => {
+		setToolState(t);
+		saveSkyTool(t);
+	}, []);
+	const liveTool = spaceHeld ? "click" : tool;
+	const [panning, setPanning] = (0, import_react.useState)(false);
 	const [selRaw, setSel] = (0, import_react.useState)(NO_SELECTION);
 	const [selAsk, setSelAsk] = (0, import_react.useState)("");
 	const [selStops, setSelStops] = (0, import_react.useState)(null);
@@ -124500,7 +127169,7 @@ function SkyView() {
 		const diagram = sessionDiagram(rows, t, {
 			flights,
 			kinds,
-			family: mode === "mine" || mode === "one"
+			family: true
 		});
 		return {
 			id: t,
@@ -124533,9 +127202,21 @@ function SkyView() {
 		measured,
 		layout
 	]);
-	const shownIds = (0, import_react.useMemo)(() => new Set(lines.map((l) => l.id)), [lines]);
+	const intakeOn = mode !== "one";
+	const intakeBox = (0, import_react.useMemo)(() => {
+		const b = intakeSize(layout[INTAKE_KEY], measured[INTAKE_KEY]);
+		return {
+			w: Math.max(b.w, INTAKE_W),
+			h: b.h
+		};
+	}, [layout, measured]);
+	const shownIds = (0, import_react.useMemo)(() => /* @__PURE__ */ new Set([...lines.map((l) => l.id), ...intakeOn ? [INTAKE_KEY] : []]), [lines, intakeOn]);
 	const sel = (0, import_react.useMemo)(() => pruneSelection(selRaw, shownIds), [selRaw, shownIds]);
-	const lineAlive = (0, import_react.useCallback)((id) => isGroundedKey(id) ? groundedIds.has(groundedIdOf(id)) : rows.some((r) => r.title === id && inSky(r)), [rows, groundedIds]);
+	const lineAlive = (0, import_react.useCallback)((id) => id === INTAKE_KEY ? intakeOn : isGroundedKey(id) ? groundedIds.has(groundedIdOf(id)) : rows.some((r) => r.title === id && inSky(r)), [
+		rows,
+		groundedIds,
+		intakeOn
+	]);
 	const { place, fresh } = (0, import_react.useMemo)(() => {
 		if (mode === "one") return {
 			place: Object.fromEntries(lines.map((l) => [l.id, {
@@ -124548,8 +127229,12 @@ function SkyView() {
 			...autoPos,
 			...pinnedPositions(layout)
 		};
-		const shown = new Set(lines.map((l) => l.id));
-		const existing = lines.filter((l) => saved[l.id]).map((l) => ({
+		const items = [{
+			id: INTAKE_KEY,
+			...intakeBox
+		}, ...lines];
+		const shown = new Set(items.map((l) => l.id));
+		const existing = items.filter((l) => saved[l.id]).map((l) => ({
 			id: l.id,
 			...saved[l.id],
 			w: l.w,
@@ -124560,9 +127245,9 @@ function SkyView() {
 			...at,
 			...measured[id]
 		});
-		const fresh = assignSpots(existing, lines.filter((l) => !saved[l.id]), {
+		const fresh = assignSpots(existing, items.filter((l) => !saved[l.id]), {
 			width: Math.max(vp.w, LINES_LEFT + 900),
-			left: LINES_LEFT,
+			left: SKY_MARGIN,
 			top: SKY_MARGIN
 		});
 		const place = { ...fresh };
@@ -124576,6 +127261,7 @@ function SkyView() {
 		};
 	}, [
 		lines,
+		intakeBox,
 		layout,
 		autoPos,
 		measured,
@@ -124584,14 +127270,16 @@ function SkyView() {
 		mode
 	]);
 	const flightsSettled = flightsQ.isFetched || flightsQ.data !== void 0;
+	const [waited, setWaited] = (0, import_react.useState)(false);
+	const intakeReady = !!autoPos[INTAKE_KEY] || !!layout[INTAKE_KEY]?.pinned || !!measured[INTAKE_KEY] || waited;
 	(0, import_react.useEffect)(() => {
 		if (mode === "one" || !vp.w || instQ.data === void 0) return;
 		setAutoPos((cur) => {
 			let next = cur;
 			const edit = () => next === cur ? next = { ...cur } : next;
 			for (const id of Object.keys(cur)) if (layout[id]?.pinned || !lineAlive(id)) delete edit()[id];
-			if (flightsSettled) {
-				for (const [id, at] of Object.entries(fresh)) if (measured[id]) edit()[id] = at;
+			if (flightsSettled && intakeReady) {
+				for (const [id, at] of Object.entries(fresh)) if (measured[id] || id === INTAKE_KEY) edit()[id] = at;
 			}
 			return next;
 		});
@@ -124603,26 +127291,39 @@ function SkyView() {
 		mode,
 		vp.w,
 		instQ.data,
-		flightsSettled
+		flightsSettled,
+		intakeReady
 	]);
 	const posOf = (0, import_react.useCallback)((id) => {
 		const f = drag?.from[id];
 		return f ? {
 			x: f.x + drag.dx,
 			y: f.y + drag.dy
-		} : place[id] || {
+		} : place[id] || (id === INTAKE_KEY ? {
+			x: SKY_MARGIN,
+			y: SKY_MARGIN
+		} : {
 			x: LINES_LEFT,
 			y: SKY_MARGIN
-		};
+		});
 	}, [drag, place]);
 	const rectOf = (0, import_react.useCallback)((id) => {
+		if (id === INTAKE_KEY) return intakeOn ? {
+			...posOf(id),
+			...intakeBox
+		} : null;
 		const l = lines.find((x) => x.id === id);
 		return l ? {
 			...posOf(id),
 			w: l.w,
 			h: l.h
 		} : null;
-	}, [lines, posOf]);
+	}, [
+		lines,
+		posOf,
+		intakeOn,
+		intakeBox
+	]);
 	const drawerOpen = skyDrawerOpen(drawerPref);
 	const focusLine = (0, import_react.useMemo)(() => {
 		if (!focused) return "";
@@ -124653,10 +127354,9 @@ function SkyView() {
 			w: l.w,
 			h: l.h
 		}));
-		if (mode !== "one") rects.push({
-			x: SKY_MARGIN,
-			y: SKY_MARGIN,
-			w: INTAKE_W,
+		if (intakeOn) rects.push({
+			...posOf(INTAKE_KEY),
+			w: intakeBox.w,
 			h: 1
 		});
 		setCam((whole ? fitCamera : firstFit)(boundsOf(rects), vp.w, vp.h, mode === "one" ? 1.5 : 1));
@@ -124664,6 +127364,8 @@ function SkyView() {
 		lines,
 		posOf,
 		mode,
+		intakeOn,
+		intakeBox,
 		vp.w,
 		vp.h
 	]);
@@ -124680,7 +127382,6 @@ function SkyView() {
 	]);
 	const fitted = (0, import_react.useRef)(memo?.key || "");
 	const fitKey = mode + "\0" + (mode === "one" ? focused : "");
-	const [waited, setWaited] = (0, import_react.useState)(false);
 	(0, import_react.useEffect)(() => {
 		if (instQ.data === void 0 || waited) return;
 		const t = setTimeout(() => setWaited(true), 900);
@@ -124838,7 +127539,7 @@ function SkyView() {
 		});
 	}, []);
 	const onDragStart = (id, e) => {
-		if (e.button !== 0) return;
+		if (e.button !== 0 || gestureFor(liveTool, "line", { space: space.current }) !== "move-line") return;
 		e.stopPropagation();
 		const ids = sel.lines.has(id) ? [...sel.lines] : [id];
 		const from = Object.fromEntries(ids.map((x) => [x, posOf(x)]));
@@ -124888,6 +127589,7 @@ function SkyView() {
 				return;
 			}
 			if (!sel.lines.has(id)) clearSel();
+			if (id === INTAKE_KEY) return;
 			if (isGroundedKey(id)) setGroundFocus(id);
 			else focusOn(id, true);
 		};
@@ -124902,7 +127604,8 @@ function SkyView() {
 	const onFly = (plan, title) => {
 		const t = title || focusLine;
 		if (!t) {
-			setFlyPick(plan);
+			setFlyPick(null);
+			dropGrounded({ plan }, middle());
 			return;
 		}
 		setFlyPick(null);
@@ -124919,7 +127622,8 @@ function SkyView() {
 		if (!def) return;
 		const t = title || focusLine;
 		if (!t) {
-			setTackPick(def);
+			setTackPick(null);
+			dropGrounded({ kind }, middle());
 			return;
 		}
 		setTackPick(null);
@@ -125071,18 +127775,61 @@ function SkyView() {
 			cy: camRef.current.y
 		};
 	};
+	const press = (0, import_react.useRef)(null);
 	const onDownCapture = (e) => {
-		if (!space.current || e.pointerType === "mouse" && e.button !== 0) return;
+		if (e.pointerType === "mouse" && e.button !== 0) return;
+		const t = space.current ? "click" : tool;
+		if (t === "drag") return;
+		const g = gestureFor(t, skyTargetOf(e.target, ground), {
+			shift: e.shiftKey,
+			space: space.current,
+			touch: e.pointerType === "touch"
+		});
+		if (g === "none") return;
 		e.stopPropagation();
 		e.preventDefault();
-		startPan(e);
+		if (g === "marquee") {
+			vpRef.current?.focus({ preventScroll: true });
+			startMarquee(e);
+			return;
+		}
+		pointers.current.set(e.pointerId, {
+			x: e.clientX,
+			y: e.clientY
+		});
+		if (pointers.current.size >= 2) {
+			press.current = null;
+			return startPan(e);
+		}
+		press.current = {
+			id: e.pointerId,
+			sx: e.clientX,
+			sy: e.clientY,
+			el: e.target instanceof Element ? e.target : null
+		};
+	};
+	const clickOn = (el) => {
+		const id = skyObjectOf(el);
+		if (!sel.lines.has(id)) clearSel();
+		if (!id || id === INTAKE_KEY) {
+			if (!id) vpRef.current?.focus({ preventScroll: true });
+			return;
+		}
+		if (isGroundedKey(id)) setGroundFocus(id);
+		else focusOn(id, true);
+		const box = el?.closest("[data-node]");
+		const line = el?.closest(".sky-line-slot")?.querySelector(".skl");
+		(box || line)?.focus({ preventScroll: true });
 	};
 	const marquee = (0, import_react.useRef)(null);
 	const onDown = (e) => {
 		if (!ground(e.target) || e.pointerType === "mouse" && e.button !== 0 && e.button !== 1) return;
 		e.preventDefault();
 		vpRef.current?.focus({ preventScroll: true });
-		if (e.pointerType !== "touch" && e.button === 0) startMarquee(e);
+		if ((e.button === 0 ? gestureFor(liveTool, "ground", {
+			shift: e.shiftKey,
+			touch: e.pointerType === "touch"
+		}) : "pan") === "marquee") startMarquee(e);
 		else startPan(e);
 	};
 	const startMarquee = (e) => {
@@ -125094,7 +127841,8 @@ function SkyView() {
 			sx: e.clientX,
 			sy: e.clientY,
 			add: e.shiftKey,
-			moved: false
+			moved: false,
+			el: e.target instanceof Element ? e.target : null
 		};
 	};
 	const vpCorner = () => {
@@ -125148,6 +127896,16 @@ function SkyView() {
 				});
 			});
 		}
+		const lane = rectOf(INTAKE_KEY);
+		if (lane) {
+			const heads = [];
+			root.querySelectorAll(".sky-intake :is(.sky-lane-head, .sky-lane-rail)").forEach((el) => heads.push(onPlane(el)));
+			out.lines.push({
+				id: INTAKE_KEY,
+				rect: lane,
+				heads
+			});
+		}
 		return out;
 	};
 	const moveMarquee = (e) => {
@@ -125169,7 +127927,9 @@ function SkyView() {
 		setMarq(null);
 		if (e.type === "pointercancel") return;
 		if (!m.moved) {
-			if (!m.add) clearSel();
+			const id = skyObjectOf(m.el);
+			if (m.add && id) setSel((s) => toggleLine(s, id));
+			else if (!m.add) clearSel();
 			return;
 		}
 		const o = vpCorner();
@@ -125196,6 +127956,22 @@ function SkyView() {
 	};
 	const onMove = (e) => {
 		if (marquee.current?.id === e.pointerId) return moveMarquee(e);
+		const pr = press.current;
+		if (pr && pr.id === e.pointerId) {
+			if (Math.hypot(e.clientX - pr.sx, e.clientY - pr.sy) < MARQUEE_MIN) return;
+			press.current = null;
+			try {
+				vpRef.current?.setPointerCapture(e.pointerId);
+			} catch {}
+			pan.current = {
+				id: e.pointerId,
+				x: pr.sx,
+				y: pr.sy,
+				cx: camRef.current.x,
+				cy: camRef.current.y
+			};
+			setPanning(true);
+		}
 		if (!pointers.current.has(e.pointerId)) return;
 		pointers.current.set(e.pointerId, {
 			x: e.clientX,
@@ -125218,9 +127994,17 @@ function SkyView() {
 	};
 	const onUp = (e) => {
 		if (marquee.current?.id === e.pointerId) return endMarquee(e);
+		const pr = press.current;
+		if (pr && pr.id === e.pointerId) {
+			press.current = null;
+			if (e.type !== "pointercancel") clickOn(pr.el);
+		}
 		pointers.current.delete(e.pointerId);
 		if (pointers.current.size < 2) pinch.current = null;
-		if (pan.current?.id === e.pointerId) pan.current = null;
+		if (pan.current?.id === e.pointerId) {
+			pan.current = null;
+			setPanning(false);
+		}
 	};
 	const onViewportScroll = () => {
 		const el = vpRef.current;
@@ -125367,6 +128151,12 @@ function SkyView() {
 		} else if (k === "t" || k === "T") {
 			handled();
 			tidy();
+		} else if (k === "v" || k === "V") {
+			handled();
+			setTool("drag");
+		} else if (k === "h" || k === "H") {
+			handled();
+			setTool("click");
 		} else if (k.startsWith("Arrow")) {
 			handled();
 			const d = PAN_STEP * (e.shiftKey ? 4 : 1);
@@ -125379,13 +128169,57 @@ function SkyView() {
 			onLayout(focusLine, { open: false });
 		}
 	};
+	const deleters = (0, import_react.useRef)(/* @__PURE__ */ new Map());
+	const registers = (0, import_react.useRef)(/* @__PURE__ */ new Map());
+	const registerFor = (id) => {
+		let r = registers.current.get(id);
+		if (!r) {
+			r = (fn) => {
+				if (fn) deleters.current.set(id, fn);
+				else deleters.current.delete(id);
+			};
+			registers.current.set(id, r);
+		}
+		return r;
+	};
+	const deleteFocus = (el) => {
+		const root = vpRef.current;
+		if (!el || el === document.body || el === root) return "sky";
+		if (!root?.contains(el)) return null;
+		if (typing(el) || el.closest(".skl-card, .pane, .skl-panels, .sky-selbar, [role=menu], [role=dialog], [role=alertdialog]")) return null;
+		const line = skyObjectOf(el);
+		if (!line) return "sky";
+		return {
+			line,
+			node: el.closest("[data-node]")?.getAttribute("data-node") || ""
+		};
+	};
+	const selectedBox = () => {
+		const id = groundFocus || focusLine;
+		if (!id) return null;
+		let slot = null;
+		vpRef.current?.querySelectorAll(".sky-line-slot[data-slot]").forEach((el) => {
+			if (el.getAttribute("data-slot") === id) slot = el;
+		});
+		const box = [...slot?.querySelectorAll(".fl-box.selected[data-node]") || []].find((b) => !b.closest(".skl-card"));
+		return box ? {
+			line: id,
+			node: box.getAttribute("data-node") || ""
+		} : null;
+	};
 	const removeKeys = (0, import_react.useRef)(() => {});
 	removeKeys.current = (e) => {
-		if (e.key !== "Delete" && e.key !== "Backspace" || selectionEmpty(sel) || e.ctrlKey || e.metaKey || e.altKey) return;
-		if (overlayOpen() || !skyKeysOwn(document.activeElement)) return;
+		if (e.key !== "Delete" && e.key !== "Backspace" || e.ctrlKey || e.metaKey || e.altKey) return;
+		if (overlayOpen()) return;
+		const el = document.activeElement;
+		const at = deleteFocus(el);
+		if (!at) return;
+		const d = deleteFor(skyKeysOwn(el) ? sel : NO_SELECTION, at === "sky" ? null : at, at === "sky" ? selectedBox() : null);
+		if (d.kind === "keymap") return;
 		e.preventDefault();
 		e.stopPropagation();
-		setSelAsk("remove");
+		if (d.kind === "selection") setSelAsk("remove");
+		else if (d.kind === "box" || d.kind === "line") deleters.current.get(d.line)?.(d.kind === "box" ? d.node : "");
 	};
 	(0, import_react.useEffect)(() => {
 		if (narrow) return;
@@ -125425,6 +128259,17 @@ function SkyView() {
 				})),
 				onChange: setMode
 			}),
+			!narrow && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+				className: "sky-modes sky-tools",
+				field: { "data-tour": "sky-tool" },
+				label: "Tool",
+				value: tool,
+				options: SKY_TOOLS.map((t) => ({
+					value: t,
+					...TOOL_CHIPS[t]
+				})),
+				onChange: setTool
+			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "sky-search",
 				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
@@ -125446,6 +128291,7 @@ function SkyView() {
 				className: "sky-zoom",
 				role: "group",
 				"aria-label": "Zoom",
+				"data-tour": "sky-zoom",
 				children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -125630,6 +128476,8 @@ function SkyView() {
 			zoom: cam.z,
 			onDragStart: at ? (e) => onDragStart(id, e) : void 0,
 			onMeasure: at ? (w, h) => onMeasure(id, w, h) : void 0,
+			draggable: liveTool === "drag",
+			registerDelete: at ? registerFor(id) : void 0,
 			onFlyOn: () => {
 				setFlyPick(null);
 				setTackPick(null);
@@ -125655,6 +128503,8 @@ function SkyView() {
 		zoom: cam.z,
 		onDragStart: at ? (e) => onDragStart(id, e) : void 0,
 		onMeasure: at ? (w, h) => onMeasure(id, w, h) : void 0,
+		draggable: liveTool === "drag",
+		registerDelete: at ? registerFor(id) : void 0,
 		dropFlyway: drop?.title === id ? drop.plan : null,
 		selected: at ? sel.lines.has(id) : void 0,
 		highlighted: at ? sel.stops.get(id) : void 0
@@ -125685,18 +128535,22 @@ function SkyView() {
 		y: selY(selScreen),
 		ask: selAsk,
 		setAsk: setSelAsk,
-		nameOf: (id) => lines.find((l) => l.id === id)?.name || windowName(id),
+		nameOf: (id) => id === INTAKE_KEY ? "Intake" : lines.find((l) => l.id === id)?.name || windowName(id),
 		flightOf: (id) => lines.find((l) => l.id === id)?.flight || liveFlightOf(id),
 		kinds,
 		onTidy: tidyThese,
 		onClear: clearSel
 	});
+	const intakeOpen = !!layout[INTAKE_KEY]?.open;
+	const intakeW = intakeOpen ? INTAKE_OPEN_W : INTAKE_W;
+	const intakeAt = posOf(INTAKE_KEY);
 	if (narrow) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", {
 		id: "sky-view",
 		className: "sky sky-narrow",
 		"data-tour": "flights-sky",
 		children: [
 			toolbar,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyGuide, {}),
 			pick,
 			drawer,
 			newBlock,
@@ -125713,10 +128567,12 @@ function SkyView() {
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", {
 		id: "sky-view",
 		className: "sky",
+		"data-tool": liveTool,
 		onDragOver: onSkyDragOver,
 		onDrop: onSkyDrop,
 		children: [
 			toolbar,
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyGuide, {}),
 			pick,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "sky-main",
@@ -125724,12 +128580,13 @@ function SkyView() {
 					className: "sky-stage",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						ref: vpRef,
-						className: "sky-viewport" + (spaceHeld ? " is-grab" : "") + (newOver ? " is-new-over" : ""),
+						className: "sky-viewport" + (spaceHeld ? " is-grab" : "") + (panning ? " is-panning" : "") + (newOver ? " is-new-over" : ""),
+						"data-sky-box": selectionEmpty(sel) ? void 0 : "",
 						"data-tour": "flights-sky",
 						tabIndex: -1,
 						role: "application",
 						"aria-roledescription": "canvas",
-						"aria-label": "The sky: every session as a line — drag empty space or use the arrows to pan, Ctrl+wheel or + / − to zoom, double-click to start a session",
+						"aria-label": "The sky: every session as a line — " + (liveTool === "click" ? "drag anywhere to pan, Shift+drag to select" : "drag empty space to select, the wheel or the arrows to pan") + ", Ctrl+wheel or + / − to zoom, double-click to start a session",
 						style: {
 							backgroundSize: `${GRID * cam.z}px ${GRID * cam.z}px`,
 							backgroundPosition: `${cam.x}px ${cam.y}px`
@@ -125757,19 +128614,26 @@ function SkyView() {
 								"data-tidying": tidying ? "" : void 0,
 								style: { transform: `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})` },
 								children: [
-									mode !== "one" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-										className: "sky-intake",
+									intakeOn && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+										"data-tour": "sky-intake",
+										className: "sky-intake" + (drag?.from[INTAKE_KEY] ? " is-dragging" : "") + (sel.lines.has(INTAKE_KEY) ? " is-selected" : ""),
 										"data-lod": lodFor(cam.z),
+										"data-open": intakeOpen ? "" : void 0,
 										style: {
-											transform: `translate(${SKY_MARGIN}px, ${SKY_MARGIN}px)`,
-											width: INTAKE_W,
+											transform: `translate(${intakeAt.x}px, ${intakeAt.y}px)`,
+											width: intakeW,
 											"--sky-z": cam.z
 										},
 										children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(IntakeLane, {
 											rows,
 											plans,
 											onFly: focusOn,
-											width: INTAKE_W
+											width: intakeW,
+											open: intakeOpen,
+											onToggleOpen: () => onLayout(INTAKE_KEY, { open: !intakeOpen }),
+											onHeadDown: (e) => onDragStart(INTAKE_KEY, e),
+											draggable: liveTool === "drag",
+											onMeasure: (w, h) => onMeasure(INTAKE_KEY, w, h)
 										})
 									}),
 									lines.map((l) => {
@@ -125969,6 +128833,7 @@ function App() {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PeerSessionViewer, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MakePrDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RenameDialog, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(MoveSessionDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(GuestNameDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(RecentDialog, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SetupDialog, {}),

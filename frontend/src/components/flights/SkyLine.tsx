@@ -492,7 +492,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
         if (!p.focused) p.onFocus();
       }}
     >
-      <div className="skl-bar" title={p.draggable === false ? "Click to focus this line (drag mode moves it: V)" : "Drag to move this line"} onPointerDown={onBarDown}>
+      <div className="skl-bar" data-tour="sky-line-bar" title={p.draggable === false ? "Click to focus this line (drag mode moves it: V)" : "Drag to move this line"} onPointerDown={onBarDown}>
         <Bird size={16} />
         <span className="skl-name">{name}</span>
         {row && (

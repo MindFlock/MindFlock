@@ -101,8 +101,8 @@ describe("the sidebar's View row: Auto 1 2 4 9 │ Grid Sky", () => {
     expect(html).toContain('<span class="vt-word">Grid</span>');
     expect(html).toContain('<span class="vt-word">Sky</span>');
     // The tooltips: the view's blurb and its shortcut.
-    expect(grid).toMatch(/title="Grid — Every session as a pane[^"]*\(Alt\+Y\)"/);
-    expect(sky).toMatch(/title="Sky — Every session as a line on one canvas[^"]*\(Alt\+Y\)"/);
+    expect(grid).toMatch(/title="Grid — Every session as a pane[^"]*\(Ctrl\+Y\)"/);
+    expect(sky).toMatch(/title="Sky — Every session as a line on one canvas[^"]*\(Ctrl\+Y\)"/);
   });
 
   it("in the sky, the bird is filled and no number lights (a number is the grid)", () => {

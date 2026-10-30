@@ -155,6 +155,7 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
   return (
     <div
       className={"sky-selbar" + (p.ask ? " is-asking" : "")}
+      data-tour="sky-selbar"
       role="toolbar"
       aria-label={what}
       style={{ transform: `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)` }}

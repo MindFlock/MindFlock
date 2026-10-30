@@ -179,8 +179,8 @@ describe("the switch points", () => {
 
   it("the palette offers the other view", () => {
     const p = code("components/palette/CommandPalette.tsx");
-    expect(p).toContain('label: "Switch to the grid", hint: "Alt+Y"');
-    expect(p).toContain('label: "Switch to the Sky", hint: "Alt+Y"');
+    expect(p).toContain('label: "Switch to the grid", hint: "Ctrl+Y"');
+    expect(p).toContain('label: "Switch to the Sky", hint: "Ctrl+Y"');
   });
 
   it("App draws the sky in the grid's place — nothing else on the page changes", () => {
