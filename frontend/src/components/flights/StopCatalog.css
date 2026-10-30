@@ -1,14 +1,14 @@
-/* All blocks (StopCatalog.tsx): the catalog in the app's Modal, sized to the
-   window (≈ 92vw × 86vh) — the head with the filter, then Blocks and
-   Multi-step, each a grid of cards. The card is a stop dialog's (panel,
-   border, radius 12). */
+/* All blocks (StopCatalog.tsx): the catalog's body — Blocks and Multi-step,
+   each a grid of cards — in the app's Modal (a dialog-sized card, not the
+   window: the board shows around it, so a drag out of it reads as the move),
+   and, `.compact`, as the floating palette's whole body (SkyPalette.css). */
 
 .sky-catalog {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  width: 92vw;
-  height: 86vh;
+  width: min(920px, 70vw);
+  height: min(680px, 72vh);
   max-width: calc(100vw - 16px);
   max-height: calc(100vh - 16px);
   box-sizing: border-box;
@@ -294,6 +294,84 @@
 .sky-catalog-hint {
   margin: 0;
   font-size: 11px;
+}
+
+/* --- Compact: the floating palette's cards (round 14) ---------------------
+   An icon, the name, one line; the ★ shows on the picked / hovered card (or
+   when the block is on the shelf), so a full palette stays calm. */
+.sky-catalog-list.compact {
+  gap: 10px;
+}
+
+.sky-catalog-list.compact .sky-catalog-grid {
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 6px;
+}
+
+.sky-catalog-list.compact .sky-catalog-card {
+  gap: 3px;
+  padding: 6px 4px 6px 8px;
+  border-radius: 8px;
+}
+
+/* A saved stop takes two columns: its name, its ⋯ and its boxes. */
+.sky-catalog-list.compact .sky-catalog-plan {
+  grid-column: span 2;
+}
+
+.sky-catalog-list.compact .sky-catalog-card-head {
+  gap: 6px;
+  min-height: 22px;
+}
+
+.sky-catalog-list.compact .sky-catalog-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+}
+
+.sky-catalog-list.compact .sky-catalog-name {
+  font-size: 12.5px;
+}
+
+.sky-catalog-list.compact .sky-catalog-summary {
+  font-size: 11px;
+  -webkit-line-clamp: 1;
+}
+
+.sky-catalog-list.compact .sky-catalog-shelf.fl-icon-btn {
+  padding: 0 3px;
+}
+
+.sky-catalog-list.compact .sky-catalog-shelf:not(.on) {
+  opacity: 0;
+}
+
+.sky-catalog-list.compact .sky-catalog-card.active .sky-catalog-shelf,
+.sky-catalog-list.compact .sky-catalog-card:hover .sky-catalog-shelf,
+.sky-catalog-list.compact .sky-catalog-shelf:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .sky-catalog-list.compact .sky-catalog-shelf:not(.on) {
+    opacity: 1;
+  }
+}
+
+.sky-catalog-list.compact .sky-catalog-card .vf-menu summary {
+  padding: 0 4px;
+}
+
+/* The Session card (the palette's first): primary-tinted, as the shelf's
+   Session chip, since it starts something. */
+.sky-catalog-card.sky-catalog-session {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+.sky-catalog-card.sky-catalog-session:hover {
+  border-color: var(--accent);
 }
 
 /* A phone: the card fills the screen. */

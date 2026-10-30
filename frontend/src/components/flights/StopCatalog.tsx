@@ -1,24 +1,24 @@
-/** **All blocks** (docs/flights.md "As built: round 13 palette"): the
- * catalog, opened by the shelf's (or the floating palette's) All blocks…. A
- * window-sized card (≈ 92vw × 86vh): a filter with the focus, then two
- * grids of cards — **Blocks** (every kind the server lists: its icon, name,
- * who does it, its one-line summary) and **Multi-step** (every saved stop:
- * its name, a built-in badge, a box per step, "a → b → c").
+/** **All blocks** (docs/flights.md "As built: round 14 palette"): the
+ * catalog's content, `StopCatalogBody` — a filter, then two grids of cards —
+ * **Blocks** (every kind the server lists: its icon, name, who does it, its
+ * one-line summary) and **Multi-step** (every saved stop: its name, a
+ * built-in badge, a box per step, "a → b → c"). The floating palette
+ * (SkyPalette) IS this body, compact; `StopCatalog` wraps it in a Modal for a
+ * shelf whose host floats no palette.
  *
  * A card is dragged onto the board like its chip on the shelf (the same
- * MIMEs, lib/stopCatalog), so a drop on a line or on empty sky works with the
- * catalog open: the Modal's backdrop would take that drop, so while a card is
- * being dragged the whole Modal lets the pointer through (`.is-dragging`) and
- * fades; a drop that landed closes it. **Add**, Enter on the card the arrows
- * picked, or a double-click → `onAdd({kind} | {planId})` (the host places it
- * on the board). A saved stop's ⋯: Rename (a field on the card), On the
- * shelf, Reset to default (a built-in) or Delete (yours, confirmed on the
- * card). Esc or a press on the backdrop closes. */
+ * MIMEs, lib/stopCatalog). A click or a double-click on a card places it once
+ * (`clickOrDouble`), as do its **Add** and Enter on the card the arrows
+ * picked → `onAdd({kind} | {planId})` (the host places it on the board). ★ /
+ * ☆ puts it on the bottom shelf or takes it off. A saved stop's ⋯: Rename (a
+ * field on the card), Takes off…, On the shelf, Reset to default (a
+ * built-in) or Delete (yours, confirmed on the card). */
 
-import { useEffect, useRef, useState, type DragEvent, type JSX, type KeyboardEvent, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent, type JSX, type KeyboardEvent, type MouseEvent, type MutableRefObject, type ReactNode } from "react";
 import type { FlightPlan, StepKindDef } from "../../lib/flights";
 import { deletePlan, resetPlan, savePlan } from "../../lib/flightsApi";
 import { checkRename, planDots } from "../../lib/groundedLines";
+import { clickOrDouble, type ClickOrDouble } from "../../lib/clickOrDouble";
 import { cardMenu, catalogCards, gridMove, savedDragData, stopDragData, type CatalogCard, type CatalogDrop } from "../../lib/stopCatalog";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
@@ -26,6 +26,7 @@ import { InlineConfirm } from "../InlineConfirm";
 import { Modal } from "../Modal";
 import { OverflowMenu } from "../OverflowMenu";
 import { StopIcon } from "./Bird";
+import { TakeoffDialog } from "./TakeoffDialog";
 import "./StopCatalog.css";
 
 /** A saved stop's name as a field (Rename, on a shelf chip or a catalog card):
@@ -94,26 +95,39 @@ export function PlanNameField({ plan, plans, onDone }: { plan: FlightPlan; plans
   );
 }
 
-export interface StopCatalogProps {
+export interface StopCatalogBodyProps {
   /** The kinds (`useFlightKinds`), as the server lists them. */
   kinds: readonly StepKindDef[];
   /** The saved stops (`useFlightPlans`), built-ins first. */
   plans: readonly FlightPlan[];
-  /** Add / Enter / a double-click. Without it the cards only drag. */
+  /** A card's click or double-click (once — `clickOrDouble`), its Add, Enter
+   * in the filter. Without it the cards only drag. */
   onAdd?(drop: CatalogDrop): void;
   /** Add puts the block ON THE BOARD (the host's `onPlace`) rather than on
    * the focused line: the words say so. */
   place?: boolean;
-  /** Is this block on the shelf? With `onShelfToggle`, every card gets a ★ /
-   * ☆ that puts it on the shelf or takes it off (the shelf's own pick). */
+  /** Is this block on the bottom shelf? With `onShelfToggle`, every card gets
+   * a ★ / ☆ that puts it on the shelf or takes it off (the shelf's own pick). */
   shelf?(drop: CatalogDrop): boolean;
   onShelfToggle?(drop: CatalogDrop): void;
-  onClose(): void;
-  /** Default true (into document.body); false renders in place (the tests). */
-  portal?: boolean;
+  /** The palette's cards: an icon, the name, one line (a kind's summary, a
+   * saved stop's boxes); no badges, no Add (a click places). */
+  compact?: boolean;
+  /** The list's and the cards' ids: "sky-catalog" (the Modal), "sky-palette". */
+  idPrefix?: string;
+  /** Extra classes on the list (the palette's `sky-palette-body`). */
+  listClass?: string;
+  /** Where the filter sits: the surface draws its head around it. */
+  head(filter: JSX.Element): ReactNode;
+  /** A card before the kinds (the palette's Session) for this query, or null. */
+  lead?(query: string): ReactNode;
+  /** Focus the filter on mount (without scrolling anything to it). */
+  autoFocus?: boolean;
+  /** A card's drag began (true) or ended (false, `landed` when it dropped). */
+  onDrag?(on: boolean, landed: boolean): void;
+  /** Set to "Esc answers the open question" (true when it did): the Modal's. */
+  escRef?: MutableRefObject<(() => boolean) | null>;
 }
-
-const rowId = (i: number) => "sky-catalog-row-" + i;
 
 /** How many columns a grid of cards is laid out in right now (1 when it
  * can't tell — the tests, or nothing shown). */
@@ -123,21 +137,86 @@ function gridCols(list: HTMLElement | null): number {
   return getComputedStyle(g).gridTemplateColumns.split(" ").filter(Boolean).length || 1;
 }
 
-export function StopCatalog({ kinds, plans, onAdd, place = false, onClose, portal = true, shelf, onShelfToggle }: StopCatalogProps): JSX.Element {
+/** Scroll the list (only the list: scrollIntoView would also scroll the sky
+ * the palette floats in) until the card shows. The rects are screen px; the
+ * list's own scale turns them into its px under the sky's zoom. */
+function reveal(list: HTMLElement | null, el: HTMLElement | null) {
+  if (!list || !el) return;
+  const l = list.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  const scale = list.offsetHeight ? l.height / list.offsetHeight : 1;
+  if (r.top < l.top) list.scrollTop -= (l.top - r.top) / scale;
+  else if (r.bottom > l.bottom) list.scrollTop += (r.bottom - l.bottom) / scale;
+}
+
+/** A click on a card's own controls (★, ⋯, the rename field, Add, the
+ * question) is theirs, not the card's. */
+const inner = (t: EventTarget) => !!(t as Element).closest?.("button, input, summary, .vf-menu, .set-confirm");
+
+/** The catalog's content — the filter (handed to `head`), then **Blocks** and
+ * **Multi-step**, each a grid of cards — shared by the floating palette (its
+ * whole body) and the All blocks… Modal. */
+export function StopCatalogBody({
+  kinds,
+  plans,
+  onAdd,
+  place = false,
+  shelf,
+  onShelfToggle,
+  compact = false,
+  idPrefix = "sky-catalog",
+  listClass = "",
+  head,
+  lead,
+  autoFocus = false,
+  onDrag,
+  escRef,
+}: StopCatalogBodyProps): JSX.Element {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
-  const [dragging, setDragging] = useState(false);
   const [renaming, setRenaming] = useState("");
   const [deleting, setDeleting] = useState("");
+  const [takeoff, setTakeoff] = useState<FlightPlan | null>(null);
   const [busy, setBusy] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+  const filterRef = useRef<HTMLInputElement>(null);
+  const keyed = useRef(false);
   const cards = catalogCards(kinds, plans, query);
   const rows = cards.all;
   const at = Math.min(active, rows.length - 1);
+  const listId = idPrefix + "-list";
+  const rowId = (i: number) => idPrefix + "-row-" + i;
+  const leadEl = lead?.(query) ?? null;
+  const leads = leadEl ? 1 : 0;
 
   useEffect(() => {
-    if (at >= 0) document.getElementById(rowId(at))?.scrollIntoView?.({ block: "nearest" });
-  }, [at]);
+    if (autoFocus) filterRef.current?.focus({ preventScroll: true });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!keyed.current || at < 0) return;
+    keyed.current = false;
+    reveal(listRef.current, document.getElementById(rowId(at)));
+  }, [at]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (escRef)
+    escRef.current = () => {
+      // An open delete question takes Esc first (a rename field spends its own).
+      if (!deleting) return false;
+      setDeleting("");
+      return true;
+    };
+
+  // One click-or-double per card, kept across renders (a waiting click must
+  // meet its second click), calling the newest onAdd.
+  const addRef = useRef(onAdd);
+  addRef.current = onAdd;
+  const clicks = useRef(new Map<string, ClickOrDouble>());
+  useEffect(() => () => clicks.current.forEach((c) => c.cancel()), []);
+  const clicker = (key: string, drop: CatalogDrop) => {
+    let c = clicks.current.get(key);
+    if (!c) clicks.current.set(key, (c = clickOrDouble(() => addRef.current?.(drop))));
+    return c;
+  };
 
   const add = (d: CatalogDrop) => onAdd?.(d);
 
@@ -148,24 +227,24 @@ export function StopCatalog({ kinds, plans, onAdd, place = false, onClose, porta
     if ((e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "ArrowLeft" || e.key === "ArrowRight") && edge) {
       e.preventDefault();
       if (!rows.length) return;
-      setActive(gridMove(at, e.key, [cards.blocks.length, cards.multi.length], gridCols(listRef.current)));
+      keyed.current = true;
+      // The lead card sits first in the Blocks grid but is no row: the
+      // arrows walk the grid as laid out and never land on it.
+      setActive(Math.max(0, gridMove(at + leads, e.key, [cards.blocks.length + leads, cards.multi.length], gridCols(listRef.current)) - leads));
     } else if (e.key === "Enter") {
       e.preventDefault();
       if (at >= 0) add(rows[at].drop);
     }
   };
 
-  // The drag's data is set at once; the Modal turns see-through a tick later
-  // (changing it inside dragstart can cancel the drag).
-  const onDragStart = (e: DragEvent, data: Array<[string, string]>) => {
+  const onDragStart = (e: DragEvent, key: string, data: Array<[string, string]>) => {
+    clicks.current.get(key)?.cancel();
     for (const [type, value] of data) e.dataTransfer.setData(type, value);
     e.dataTransfer.effectAllowed = "copy";
-    setTimeout(() => setDragging(true), 0);
+    // A tick later: changing the page inside dragstart can cancel the drag.
+    if (onDrag) setTimeout(() => onDrag(true, false), 0);
   };
-  const onDragEnd = (e: DragEvent) => {
-    setDragging(false);
-    if (e.dataTransfer && e.dataTransfer.dropEffect !== "none") onClose();
-  };
+  const onDragEnd = (e: DragEvent) => onDrag?.(false, !!e.dataTransfer && e.dataTransfer.dropEffect !== "none");
 
   const reset = async (plan: FlightPlan) => {
     try {
@@ -198,7 +277,7 @@ export function StopCatalog({ kinds, plans, onAdd, place = false, onClose, porta
         tabIndex={-1}
         aria-pressed={on}
         aria-label={(on ? "Take “" : "Put “") + name + (on ? "” off the shelf" : "” on the shelf")}
-        title={on ? "On the shelf — click to take it off" : "Put it on the shelf (and in the floating palette)"}
+        title={on ? "On the bottom shelf — click to take it off" : "Put it on the bottom shelf"}
         onClick={() => onShelfToggle(d)}
       >
         {on ? "★" : "☆"}
@@ -206,7 +285,7 @@ export function StopCatalog({ kinds, plans, onAdd, place = false, onClose, porta
     );
   };
 
-  const how = onAdd ? (place ? "Drag onto a line or the sky, or Add it to the board" : "Drag onto a line or the sky, or Add it to the focused line") : "Drag onto a line or the sky";
+  const how = onAdd ? (place ? "Drag onto a line or the sky, or click to put it on the board" : "Drag onto a line or the sky, or click to add it to the focused line") : "Drag onto a line or the sky";
 
   const card = (c: CatalogCard<StepKindDef, FlightPlan>, n: number) => {
     const plan = c.section === "multi" ? c.plan : null;
@@ -214,10 +293,9 @@ export function StopCatalog({ kinds, plans, onAdd, place = false, onClose, porta
     const naming = !!plan && renaming === plan.id;
     const asking = !!plan && deleting === plan.id;
     const on = n === at;
-    const dblAdd = (e: MouseEvent) => {
-      if (!onAdd || naming || asking || (e.target as Element).closest("button, input, summary, .vf-menu")) return;
-      add(c.drop);
-    };
+    const cd = clicker(c.key, c.drop);
+    const mine = (e: MouseEvent) => !!onAdd && !naming && !asking && !inner(e.target);
+    const about = plan ? (c.section === "multi" && c.path ? c.path : "No steps yet") : def?.summary;
     return (
       <div
         key={c.key}
@@ -228,21 +306,22 @@ export function StopCatalog({ kinds, plans, onAdd, place = false, onClose, porta
         data-kind={def?.kind}
         data-plan={plan?.id}
         draggable={!naming && !asking}
-        title={how}
-        onDragStart={(e) => onDragStart(e, plan ? savedDragData(plan) : stopDragData(def as StepKindDef))}
+        title={compact && about ? about + "\n" + how : how}
+        onDragStart={(e) => onDragStart(e, c.key, plan ? savedDragData(plan) : stopDragData(def as StepKindDef))}
         onDragEnd={onDragEnd}
         onMouseEnter={() => setActive(n)}
-        onDoubleClick={dblAdd}
+        onClick={(e) => mine(e) && cd.onClick(e)}
+        onDoubleClick={(e) => mine(e) && cd.onDoubleClick()}
       >
         <div className="sky-catalog-card-head">
           {def && (
             <span className="sky-catalog-icon">
-              <StopIcon kind={def.actor === "you" ? "perch" : def.kind} size={18} />
+              <StopIcon kind={def.actor === "you" ? "perch" : def.kind} size={compact ? 14 : 18} />
             </span>
           )}
           <span className="sky-catalog-name">
             {plan && naming ? <PlanNameField plan={plan} plans={plans} onDone={() => setRenaming("")} /> : <span className="sky-catalog-title">{c.name}</span>}
-            {c.section === "blocks" ? (
+            {compact ? null : c.section === "blocks" ? (
               <span className={"sky-catalog-badge actor-" + (c.perch ? "you" : "robot")}>{c.perch ? "you" : "robot"}</span>
             ) : (
               c.builtin && <span className="sky-catalog-badge builtin">built-in</span>
@@ -252,7 +331,7 @@ export function StopCatalog({ kinds, plans, onAdd, place = false, onClose, porta
           {plan && (
             <OverflowMenu
               label={"“" + plan.name + "” — rename, delete, shelf"}
-              boundaryId="sky-catalog-list"
+              boundaryId={listId}
               items={cardMenu(plan, shelf ? shelf(c.drop) : false)
                 .filter((it) => it.key !== "shelf" || onShelfToggle)
                 .map((it) => ({
@@ -261,6 +340,7 @@ export function StopCatalog({ kinds, plans, onAdd, place = false, onClose, porta
                   danger: it.danger,
                   onSelect: () => {
                     if (it.key === "rename") setRenaming(plan.id);
+                    else if (it.key === "takeoff") setTakeoff(plan);
                     else if (it.key === "shelf") onShelfToggle?.(c.drop);
                     else if (it.key === "reset") void reset(plan);
                     else setDeleting(plan.id);
@@ -272,10 +352,10 @@ export function StopCatalog({ kinds, plans, onAdd, place = false, onClose, porta
         {plan ? (
           <>
             <StepBoxes plan={plan} kinds={kinds} />
-            <span className="sky-catalog-summary">{c.section === "multi" && c.path ? c.path : "No steps yet"}</span>
+            {!compact && <span className="sky-catalog-summary">{about}</span>}
           </>
         ) : (
-          def?.summary && <span className="sky-catalog-summary">{def.summary}</span>
+          about && <span className="sky-catalog-summary">{about}</span>
         )}
         {asking && plan ? (
           <InlineConfirm
@@ -287,7 +367,8 @@ export function StopCatalog({ kinds, plans, onAdd, place = false, onClose, porta
             onCancel={() => setDeleting("")}
           />
         ) : (
-          onAdd && (
+          onAdd &&
+          !compact && (
             <span className="sky-catalog-card-foot">
               <button type="button" className="test-btn sky-catalog-add" tabIndex={-1} aria-label={"Add “" + c.name + "”"} onClick={() => add(c.drop)}>
                 Add
@@ -299,68 +380,102 @@ export function StopCatalog({ kinds, plans, onAdd, place = false, onClose, porta
     );
   };
 
+  const filter = (
+    <input
+      ref={filterRef}
+      className="fl-input sky-catalog-filter"
+      type="text"
+      placeholder="Filter blocks…"
+      aria-label="Filter blocks"
+      aria-controls={listId}
+      aria-activedescendant={at >= 0 ? rowId(at) : undefined}
+      autoComplete="off"
+      spellCheck={false}
+      value={query}
+      onChange={(e) => {
+        setQuery(e.target.value);
+        setActive(0);
+      }}
+      onKeyDown={onFilterKey}
+    />
+  );
+
+  const what = place ? "puts it on the board" : "adds it to the focused line";
   let i = -1;
+  return (
+    <>
+      {head(filter)}
+      <div className={"sky-catalog-list sky-own-scroll" + (compact ? " compact" : "") + (listClass ? " " + listClass : "")} id={listId} role="listbox" aria-label="All blocks" ref={listRef}>
+        {cards.blocks.length + leads > 0 && (
+          <section className="sky-catalog-section" data-section="blocks" role="group" aria-label="Blocks">
+            <h3 className="sky-catalog-label">Blocks</h3>
+            <div className="sky-catalog-grid">
+              {leadEl}
+              {cards.blocks.map((c) => card(c, ++i))}
+            </div>
+          </section>
+        )}
+        {cards.multi.length > 0 && (
+          <section className="sky-catalog-section" data-section="multi" role="group" aria-label="Multi-step">
+            <h3 className="sky-catalog-label">Multi-step</h3>
+            <div className="sky-catalog-grid">{cards.multi.map((c) => card(c, ++i))}</div>
+          </section>
+        )}
+        {rows.length + leads === 0 && <p className="sky-catalog-empty muted">{query.trim() ? "Nothing matches “" + query.trim() + "”." : "No blocks yet — this server may not know Flights."}</p>}
+        <p className="sky-catalog-hint muted">
+          {onAdd ? "Drag a block onto a line or the sky · a click or a double-click " + what + " · the arrows pick, Enter " + what : "Drag a block onto a line or the sky"}
+        </p>
+      </div>
+      {takeoff && <TakeoffDialog plan={takeoff} onClose={() => setTakeoff(null)} />}
+    </>
+  );
+}
+
+export interface StopCatalogProps extends Omit<StopCatalogBodyProps, "head" | "compact" | "idPrefix" | "listClass" | "autoFocus" | "onDrag" | "escRef"> {
+  onClose(): void;
+  /** Default true (into document.body); false renders in place (the tests). */
+  portal?: boolean;
+}
+
+/** **All blocks** as a dialog — the shelf's fallback when its host floats no
+ * palette (`onCatalog` not given). A card the size of a good dialog, not of
+ * the window (round 14: the board must show around it, so a drag out of it
+ * reads as the move). A card being dragged lets the pointer through to the
+ * sky (`.is-dragging`, the backdrop would take the drop) and fades it; a drop
+ * that landed closes it. */
+export function StopCatalog({ onClose, portal = true, ...body }: StopCatalogProps): JSX.Element {
+  const [dragging, setDragging] = useState(false);
+  const esc = useRef<(() => boolean) | null>(null);
   return (
     <Modal
       id="sky-catalog"
       className={"sky-catalog-modal" + (dragging ? " is-dragging" : "")}
       onClose={onClose}
-      onEscape={() => {
-        // An open delete question takes Esc first (a rename field spends its
-        // own Esc: it prevents the default, which the Modal leaves alone).
-        if (!deleting) return false;
-        setDeleting("");
-        return true;
-      }}
+      onEscape={() => esc.current?.() ?? false}
       portal={portal}
       role="dialog"
       aria-modal="true"
       aria-labelledby="sky-catalog-title"
     >
       <div className="sky-catalog" onKeyDown={(e) => e.key === "Escape" || e.stopPropagation()}>
-        <div className="sky-catalog-head">
-          <h2 id="sky-catalog-title">All blocks</h2>
-          <input
-            className="fl-input sky-catalog-filter"
-            type="text"
-            placeholder="Filter blocks…"
-            aria-label="Filter blocks"
-            aria-controls="sky-catalog-list"
-            aria-activedescendant={at >= 0 ? rowId(at) : undefined}
-            autoComplete="off"
-            spellCheck={false}
-            autoFocus
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value);
-              setActive(0);
-            }}
-            onKeyDown={onFilterKey}
-          />
-          <button type="button" className="fl-icon-btn sky-catalog-close" aria-label="Close" title="Close (Esc)" onClick={onClose}>
-            ×
-          </button>
-        </div>
-        <div className="sky-catalog-list sky-own-scroll" id="sky-catalog-list" role="listbox" aria-label="All blocks" ref={listRef}>
-          {cards.blocks.length > 0 && (
-            <section className="sky-catalog-section" data-section="blocks" role="group" aria-label="Blocks">
-              <h3 className="sky-catalog-label">Blocks</h3>
-              <div className="sky-catalog-grid">{cards.blocks.map((c) => card(c, ++i))}</div>
-            </section>
+        <StopCatalogBody
+          {...body}
+          autoFocus
+          escRef={esc}
+          onDrag={(on, landed) => {
+            setDragging(on);
+            if (!on && landed) onClose();
+          }}
+          head={(filter) => (
+            <div className="sky-catalog-head">
+              <h2 id="sky-catalog-title">All blocks</h2>
+              {filter}
+              <button type="button" className="fl-icon-btn sky-catalog-close" aria-label="Close" title="Close (Esc)" onClick={onClose}>
+                ×
+              </button>
+            </div>
           )}
-          {cards.multi.length > 0 && (
-            <section className="sky-catalog-section" data-section="multi" role="group" aria-label="Multi-step">
-              <h3 className="sky-catalog-label">Multi-step</h3>
-              <div className="sky-catalog-grid">{cards.multi.map((c) => card(c, ++i))}</div>
-            </section>
-          )}
-          {rows.length === 0 && <p className="sky-catalog-empty muted">{query.trim() ? "Nothing matches “" + query.trim() + "”." : "No blocks yet — this server may not know Flights."}</p>}
-        </div>
-        <p className="sky-catalog-hint muted">
-          {onAdd
-            ? "Drag a block onto a line or the sky · the arrows pick · Enter or a double-click " + (place ? "puts it on the board" : "adds it to the focused line") + " · Esc closes"
-            : "Drag a block onto a line or the sky · Esc closes"}
-        </p>
+        />
       </div>
     </Modal>
   );

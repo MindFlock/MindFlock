@@ -2,10 +2,11 @@
  * the Session chip first, then the default kinds the server lists (Agent,
  * Perch, Ship, Verify, Wait), each draggable with its kind under STOP_MIME;
  * **Multi-step** (the saved stops: stopShelfSaved.test.ts); then **All
- * blocks…** (the catalog: stopCatalog.test.ts). A click tacks a kind on
- * through `onTack`, without it a chip only drags; zero kinds say the list
- * didn't load; the shelf folds to a handle. Server-rendered with the kinds
- * seeded in a QueryClient. */
+ * blocks…** (round 14: `onCatalog`, the host floats the palette large; else
+ * the catalog as a dialog: stopCatalog.test.ts). A click or a double-click
+ * places once (`onPlace`) or tacks a kind on (`onTack`); without either a
+ * chip only drags; zero kinds say the list didn't load; the shelf folds to a
+ * handle. Server-rendered with the kinds seeded in a QueryClient. */
 
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -89,7 +90,7 @@ describe("the stops row", () => {
     expect(html.lastIndexOf("sky-stops-divider")).toBeLessThan(html.indexOf("sky-catalog-chip"));
     expect(html).not.toContain("sky-catalog-modal");
     const src = code("components/flights/StopShelf.tsx");
-    expect(src).toContain("onClick={() => setCatalog(true)}");
+    expect(src).toContain("onClick={() => (onCatalog ? onCatalog() : setCatalog(true))}");
     expect(src).toContain("<StopCatalog");
     expect(src).toContain("plans={allSaved}");
     expect(src).toContain("shelf={(d) => onShelf(shelf, d)}");
@@ -108,8 +109,32 @@ describe("the stops row", () => {
     expect(drag.match(/<button type="button" class="sky-stop-chip[^"]*"/g)).toEqual(['<button type="button" class="sky-stop-chip sky-catalog-chip"']);
     expect(drag).toMatch(/<span class="sky-stop-chip drag-only" data-kind="agent" draggable="true" title="Agent does its thing\nDrag onto a line or the sky — right-click for more"/);
     const src = code("components/flights/StopShelf.tsx");
-    expect(src).toMatch(/onClick=\{\(\) => onClick\(def\.kind\)\}/);
+    expect(src).toContain("const cd = useClickOrDouble(onClick && (() => onClick(def.kind)));");
     expect(src).toContain("const clickKind = onPlace ? (kind: string) => onPlace({ kind }) : onTack;");
+  });
+
+  it("round 14 — All blocks… with onCatalog: the host floats the palette (no dialog of its own)", () => {
+    const html = render(createElement(StopShelf, { onPlace() {}, onCatalog() {} }));
+    expect(html).toContain(
+      '<button type="button" class="sky-stop-chip sky-catalog-chip" data-tour="sky-catalog" title="Every block, in a palette on the board you can filter and drag from"><span class="sky-stop-icon" aria-hidden="true">⊞</span><span class="sky-stop-name">All blocks…</span></button>'
+    );
+    expect(html).not.toContain("aria-haspopup");
+    const src = code("components/flights/StopShelf.tsx");
+    expect(src).toContain("export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFold, onPlace, onFloat, onCatalog }: StopShelfProps)");
+    expect(src).toContain('aria-haspopup={onCatalog ? undefined : "dialog"}');
+  });
+
+  it("round 14 — a click OR a double-click places once: every chip that places goes through useClickOrDouble", () => {
+    const src = code("components/flights/StopShelf.tsx");
+    expect(src).toContain('import { useClickOrDouble } from "../../lib/clickOrDouble";');
+    // A kind's chip, a saved stop's, the Session chip: click and dblclick both wired, a drag drops a waiting click.
+    expect(src.match(/onClick=\{cd\.onClick\} onDoubleClick=\{cd\.onDoubleClick\}/g)).toHaveLength(3);
+    expect(src).toContain("const cd = useClickOrDouble(onClick && (() => onClick(plan)));");
+    expect(src).toContain("const cd = useClickOrDouble(onSession);");
+    expect(src.match(/onDragStart: \(e: DragEvent\) => \{\s*cd\.cancel\(\);/g)).toHaveLength(3);
+    // No chip places straight from a bare onClick any more.
+    expect(src).not.toMatch(/onClick=\{\(\) => onClick\(/);
+    expect(src).not.toContain("onClick={onSession}");
   });
 
   it("round 13 — with onPlace a click PUTS IT ON THE BOARD, never onto the focused line", () => {

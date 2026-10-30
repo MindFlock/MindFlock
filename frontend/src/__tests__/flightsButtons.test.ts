@@ -73,7 +73,10 @@ describe("every flights button wears a tier", () => {
 
   it("round 13: the palette's and the catalog's buttons name their tiers", () => {
     const palette = SRC["components/flights/SkyPalette.tsx"];
-    expect(palette).toContain('className="test-btn sky-palette-all"');
+    // Round 14: the palette IS all the blocks — its All blocks… went; the ×
+    // that returns to the shelf is the quiet tier.
+    expect(palette).not.toContain("sky-palette-all");
+    expect(palette).toContain('className="fl-icon-btn sky-palette-close"');
     const catalog = SRC["components/flights/StopCatalog.tsx"];
     expect(catalog).toContain('className="test-btn sky-catalog-add"');
     expect(catalog).toMatch(/className=\{"fl-icon-btn sky-catalog-shelf"/);
