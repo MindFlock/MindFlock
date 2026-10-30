@@ -203,7 +203,13 @@ export function SkyDrawer({ open, onToggle, onFocus }: SkyDrawerProps) {
 
   return (
     <aside className={"sky-drawer" + (open ? " open" : "")} aria-label="Perched on you" data-tour="flights-drawer">
-      <button type="button" className="sky-drawer-tab" aria-expanded={open} title={open ? "Fold the drawer away" : "What is perched on you"} onClick={onToggle}>
+      <button
+        type="button"
+        className={"sky-drawer-tab" + (count > 0 ? " has-perch" : "")}
+        aria-expanded={open}
+        title={open ? "Fold the drawer away" : count > 0 ? count + " perched on you — open the drawer" : "What is perched on you"}
+        onClick={onToggle}
+      >
         <span className="sky-drawer-tab-word">Perched on you</span>
         {count > 0 && <span className="fl-count fl-count-you">{count}</span>}
       </button>

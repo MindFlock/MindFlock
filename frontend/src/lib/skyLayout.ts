@@ -47,15 +47,18 @@ export interface PlaceArea {
 }
 
 /** The space kept between two lines. */
-export const SKY_GAP = 36;
+export const SKY_GAP = 64;
 /** The plane's margin, and the intake lane's width at its left edge. */
 export const SKY_MARGIN = 40;
-export const INTAKE_W = 300;
+export const INTAKE_W = 240;
 /** Where the first auto-placed line starts: right of the intake lane. */
-export const LINES_LEFT = SKY_MARGIN + INTAKE_W + 64;
+export const LINES_LEFT = SKY_MARGIN + INTAKE_W + 48;
 
+/** The zoom's range: near has more to show, so it goes past 200%. */
 export const ZOOM_MIN = 0.4;
-export const ZOOM_MAX = 2;
+export const ZOOM_MAX = 3;
+/** The room a fit keeps round what it shows (screen px). */
+export const FIT_PAD = 56;
 
 const hits = (a: Rect, b: Rect, gap: number) =>
   a.x < b.x + b.w + gap && b.x < a.x + a.w + gap && a.y < b.y + b.h + gap && b.y < a.y + a.h + gap;
@@ -142,7 +145,7 @@ export function toPlane(c: SkyCamera, px: number, py: number): Pos {
 /** The camera that shows `b` whole in a vw × vh window, centred, never closer
  * than `maxZ` (a lone small line doesn't balloon) nor further than the
  * zoom floor. Nothing to show: the plane's origin at 100%. */
-export function fitCamera(b: Rect | null, vw: number, vh: number, maxZ = 1.25, pad = 40): SkyCamera {
+export function fitCamera(b: Rect | null, vw: number, vh: number, maxZ = 1.25, pad = FIT_PAD): SkyCamera {
   if (!b || b.w <= 0 || b.h <= 0 || vw <= 0 || vh <= 0) return { x: 0, y: 0, z: 1 };
   const z = clampZoom(Math.min(maxZ, (vw - 2 * pad) / b.w, (vh - 2 * pad) / b.h));
   // Wider than the window even at the zoom floor: start at its left edge (the
@@ -153,11 +156,52 @@ export function fitCamera(b: Rect | null, vw: number, vh: number, maxZ = 1.25, p
   return { x, y, z };
 }
 
+/** The first picture (a first visit, a new view, `0`): everything when it
+ * fits at a legible zoom (no further than far), else the drawn content's
+ * WIDTH at no less than `LOD_MID` — anchored top-left, so the intake lane and
+ * the newest lines are on screen and the owner pans down to the rest. The
+ * toolbar's Fit is the true fit (`fitCamera`): everything, at any zoom. */
+export function firstFit(b: Rect | null, vw: number, vh: number, maxZ = 1, pad = FIT_PAD): SkyCamera {
+  const all = fitCamera(b, vw, vh, maxZ, pad);
+  if (!b || b.w <= 0 || b.h <= 0 || vw <= 0 || vh <= 0 || all.z >= LOD_MID) return all;
+  const z = clampZoom(Math.min(maxZ, Math.max(LOD_MID, (vw - 2 * pad) / b.w)));
+  return { z, x: pad - b.x * z, y: pad - b.y * z };
+}
+
 /** The camera that brings one rectangle to the middle of the window, at `z`. */
 export function centerOn(r: Rect, vw: number, vh: number, z: number): SkyCamera {
   const nz = clampZoom(z);
   return { z: nz, x: vw / 2 - (r.x + r.w / 2) * nz, y: Math.max(24, vh / 2 - (r.h * nz) / 2) - r.y * nz };
 }
+
+// --- Semantic zoom ----------------------------------------------------------------
+
+/** How much a box shows at the camera's zoom (its level of detail). The
+ * geometry never depends on it — a box and a line keep their plane size at
+ * every zoom (the fit reads measured sizes) — only what is drawn inside, and
+ * the type's size on screen: far = the icon and the title, large enough to
+ * read; mid = today's box; near = the title, the summary, the detail, the
+ * reason and the in-box parts, in small plane type so a zoomed-in box holds
+ * more words in the same room. */
+export type Lod = "far" | "mid" | "near";
+/** Below this, far; from it, mid. */
+export const LOD_MID = 0.62;
+/** From this, near. */
+export const LOD_NEAR = 1.15;
+
+export const lodFor = (z: number): Lod => (!(z >= LOD_MID) ? "far" : z < LOD_NEAR ? "mid" : "near");
+
+/** The lines of a near box's longer texts (its summary, its detail): more the
+ * closer the camera — the plane type shrinks as the zoom grows, so the box's
+ * room holds more of them. 0 outside near. */
+export const nearLines = (z: number): number => (lodFor(z) === "near" ? Math.max(2, Math.min(8, Math.floor(z * 2))) : 0);
+
+// --- The drawer -------------------------------------------------------------------
+
+/** The drawer at the sky's right edge folds to its tab (the perch count on
+ * it) until opened, then remembers (`mf_sky_drawer`: "1" open, "0" folded). */
+export const SKY_DRAWER_KEY = "mf_sky_drawer";
+export const skyDrawerOpen = (pref: string | null | undefined): boolean => pref === "1";
 
 // --- The layout store (per device) ----------------------------------------------
 

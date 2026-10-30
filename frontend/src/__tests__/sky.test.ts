@@ -2,7 +2,7 @@
  * go (lib/skyLayout placeLines — rows, newest first, no overlaps, a dragged
  * line stays put), what is remembered per device (`mf_sky_layout`, read from
  * the old `mf_sky_pos` once), the camera (zoom about a point, fit, clamped
- * 40%–200%), which sessions get a line in each view, where the bird sits
+ * 40%–300%), which sessions get a line in each view, where the bird sits
  * (lib/flightDiagram birdPerch), the address (`#sky/<title>`), and the wiring
  * the source text pins: one transformed plane, no library, the wheel listener
  * not passive, the intake lane and the new-session card mounted with their
@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 import type { Instance } from "../api/types";
 import { code, css } from "./sourceText";
 import {
+  FIT_PAD,
   INTAKE_W,
   LINES_LEFT,
   SKY_GAP,
@@ -128,11 +129,11 @@ describe("what a device remembers (mf_sky_layout)", () => {
 });
 
 describe("the camera", () => {
-  it("zooms between 40% and 200%", () => {
+  it("zooms between 40% and 300%", () => {
     expect(clampZoom(0.1)).toBe(ZOOM_MIN);
     expect(clampZoom(9)).toBe(ZOOM_MAX);
     expect(clampZoom(Number.NaN)).toBe(1);
-    expect([ZOOM_MIN, ZOOM_MAX]).toEqual([0.4, 2]);
+    expect([ZOOM_MIN, ZOOM_MAX]).toEqual([0.4, 3]);
   });
 
   it("zooms about the pointer: the plane point under it stays under it", () => {
@@ -152,7 +153,7 @@ describe("the camera", () => {
     ])!;
     expect(b).toEqual({ x: 100, y: 100, w: 900, h: 500 });
     const c = fitCamera(b, 1000, 700, 1);
-    expect(c.z).toBeCloseTo(Math.min(1, (1000 - 80) / 900, (700 - 80) / 500));
+    expect(c.z).toBeCloseTo(Math.min(1, (1000 - 2 * FIT_PAD) / 900, (700 - 2 * FIT_PAD) / 500));
     // Centred horizontally.
     expect(c.x + (b.x + b.w / 2) * c.z).toBeCloseTo(500);
     // A lone small line doesn't balloon past the ceiling.
@@ -334,7 +335,7 @@ describe("fitCamera at the zoom floor", () => {
     // 6000px of plane in a 1000px window: the floor (0.4) still leaves 2400px.
     const cam = fitCamera({ x: 40, y: 40, w: 6000, h: 300 }, 1000, 800);
     expect(cam.z).toBe(0.4);
-    expect(cam.x).toBe(40 - 40 * 0.4); // pad - b.x * z: the lane at x=40 stays visible
+    expect(cam.x).toBe(FIT_PAD - 40 * 0.4); // pad - b.x * z: the lane at x=40 stays visible
   });
   it("still centres content that fits", () => {
     const cam = fitCamera({ x: 0, y: 0, w: 500, h: 300 }, 1000, 800);
