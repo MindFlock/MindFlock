@@ -6,7 +6,7 @@
  * are the part above the hinge line, so the marker flaps by scaling that band
  * about the hinge — the same beat flock.ts draws on its canvas. */
 
-import type { CSSProperties, ReactNode } from "react";
+import type { CSSProperties, HTMLAttributes, ReactNode } from "react";
 import "./SkyFlock.css";
 
 /** The sprite (backend/web/static/bird.png) and its wing hinge, as flock.ts
@@ -69,16 +69,38 @@ export function birdLook(tone: string, reduced = prefersReducedMotion()): { clas
   return { className: "fl-bird-marker tone-" + tone, sprite: "fl-bird-big fl-sprite-bird" + (flaps ? " fl-flapping" : ""), flaps };
 }
 
+/** The bird in hand (round 12): what a press on it says (`title`, lib/
+ * stopEditing `birdAction`) and the pointer / key handlers the canvas drives
+ * its click and its drag with. Without it the bird is a picture. */
+export type BirdHand = { title: string; className?: string } & Pick<
+  HTMLAttributes<HTMLSpanElement>,
+  "onClick" | "onKeyDown" | "onPointerDown" | "onPointerMove" | "onPointerUp" | "onPointerCancel" | "onContextMenu"
+>;
+
 /** The bird on a line (the Sky, the pane's Flight tab), standing on the box
  * the flight is at: flapping while the flock works, still and gold when
  * perched on you, red when halted, grey when paused. Placed by `left` / `top`
- * so a move to the next box is a hop (a CSS transition), not a jump. */
-export function BirdMarker({ tone, x, y, label, size = 24 }: { tone: string; x: number; y: number; label: string; size?: number }) {
+ * so a move to the next box is a hop (a CSS transition), not a jump. With a
+ * `hand` it is a button: a click halts / carries on / retries, a drag jumps
+ * the flight (FlywayCanvas). Its name stays where it is; what a press does is
+ * its title and its description. */
+export function BirdMarker({ tone, x, y, label, size = 24, hand }: { tone: string; x: number; y: number; label: string; size?: number; hand?: BirdHand }) {
   const look = birdLook(tone);
   const box = spriteBox(size);
   const whole = box.w + "px " + box.h + "px";
+  const { title, className, ...on } = hand || { title: label };
   return (
-    <span className={look.className} style={{ left: x, top: y }} role="img" aria-label={label} title={label} data-tour="flights-bird">
+    <span
+      className={look.className + (className ? " " + className : "")}
+      style={{ left: x, top: y }}
+      role={hand ? "button" : "img"}
+      aria-label={label}
+      aria-description={hand ? title : undefined}
+      tabIndex={hand ? 0 : undefined}
+      title={title}
+      data-tour="flights-bird"
+      {...on}
+    >
       <span className={look.sprite} style={{ width: box.w, height: box.h }}>
         <span className="fl-sprite-wings" style={{ top: 0, height: box.wings, ...spriteMask(whole, "0 0") }} />
         <span className="fl-sprite-body" style={{ top: box.wings, height: box.body, ...spriteMask(whole, "0 " + -box.wings + "px") }} />
