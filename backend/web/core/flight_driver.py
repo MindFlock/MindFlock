@@ -2076,6 +2076,13 @@ def remove(flight_id: str) -> None:
         raise _flights.FlightError("unknown_flight", 404, "no such flight")
     if f["state"] in _flights.HOLDING:
         raise _flights.FlightError("in_flight", 409, "cancel the flight first")
+    try:
+        # A checkpoint stop pins work under refs/mindflock/flights/<fid>/…
+        from backend.web.core.flight_kinds import checkpoint as _checkpoint
+
+        _checkpoint.forget(f)
+    except Exception:  # noqa: BLE001 — the refs are a convenience, never a block
+        pass
     _flights.delete(flight_id)
     with _JOBS_LOCK:
         for k in [k for k in _JOBS if k[0] == flight_id]:
