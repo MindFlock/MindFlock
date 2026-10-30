@@ -3110,6 +3110,26 @@ New and the template editor a click in the picker already fills the Folder
 field (the git nudge follows it) and Escape / ✕ put the old folder back.
 Read-only path rows (Workspace's **Copy** lines) have no button.
 
+**Tab completes a folder like a shell** in every one of these fields (New's
+and a template's **Folder**, every `PathField`: Settings, the peer cards, the
+Sky's new-session block and inspector). With the caret at the end of a path,
+Tab lists the folder before the last `/` (`GET /api/browse`, once per folder)
+and fills the one matching name plus `/` — so Tab, Tab, Tab walks down — or,
+when several match, their common prefix with the matches as a row of chips
+under the field: Tab / Shift+Tab cycle them, ↑/↓ move the highlight, Enter
+takes it, Escape closes the row (not the dialog). Exact case wins; only when
+nothing has it does matching ignore case. Hidden folders are only offered for
+a name that starts with `.` (and `/api/browse` lists none today). A bare name
+or relative path is read from home and written back as `~/…`; a bare `~`
+becomes `~/`. No match shakes the field and keeps the focus in it; an empty
+field or a caret mid-text leaves Tab to move the focus as usual. A field
+pointed at another device skips completion (its tooltip says so) — the listing
+is this computer's. In New's Folder, a NAME with matches under it uses that
+list instead: Tab fills the only match, or walks the highlight Enter takes.
+The fills go through the field's normal change path, like typing; a polite
+live region reads "3 folders match" / "completed to …". Rules:
+`lib/pathComplete.ts`; key handling: `usePathCompletion` in `PathField.tsx`.
+
 **Browse… → + Folder** creates a folder on disk, inside whatever directory the
 browser is currently showing — the path line directly above the name box — and
 picks it. The parent is never in question, which matters: MindFlock has always

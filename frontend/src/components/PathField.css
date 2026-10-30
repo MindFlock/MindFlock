@@ -33,3 +33,96 @@
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* Tab completion (usePathCompletion): the matches of an ambiguous Tab, a
+   wrapping row of chips on its own line under the box and the button. */
+.path-field {
+  flex-wrap: wrap;
+}
+
+/* In a PathField the row takes a line of its own; under the New form's
+   Folder (a column) it is simply the next item. */
+.path-field > .path-cands {
+  flex: 1 0 100%;
+}
+
+.path-cands {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.path-cand {
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 12px;
+  font-family: var(--mono, ui-monospace, monospace);
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-cand:hover,
+.path-cand.active {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.14);
+}
+
+.path-cands-legend {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: 4px;
+}
+
+/* Read aloud, never drawn: the chips already show what it says. */
+.path-field-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* A Tab with nothing to complete: a short shake and a red edge, the focus
+   stays put. Reduced motion keeps the flash and drops the shake. */
+input.path-miss {
+  animation: path-miss 0.32s ease;
+}
+
+@keyframes path-miss {
+  0%,
+  100% {
+    transform: none;
+  }
+  20%,
+  60% {
+    transform: translateX(-4px);
+    border-color: var(--red);
+  }
+  40%,
+  80% {
+    transform: translateX(4px);
+    border-color: var(--red);
+  }
+}
+
+@keyframes path-miss-flash {
+  0%,
+  70% {
+    border-color: var(--red);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  input.path-miss {
+    animation-name: path-miss-flash;
+  }
+}

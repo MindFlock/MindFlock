@@ -28,6 +28,7 @@ import {
   type RepoSuggestion,
 } from "../newSession";
 import { useFolderPickerWhile } from "../../../lib/folderPicker";
+import { usePathCompletion } from "../../PathField";
 
 type Set<T> = Dispatch<SetStateAction<T>>;
 
@@ -347,6 +348,7 @@ export function folderIds(scope: string) {
     search: scope + "-search",
     list: scope + "-search-list",
     hit: scope + "-search-hit-",
+    matches: scope + "-path-matches",
   };
 }
 
@@ -365,6 +367,7 @@ export function FolderField({
   selIndex,
   browserOpen,
   pickMatch,
+  device = "",
 }: {
   /** Whose field: "new" (the New form) or "tpl" (a template's editor). */
   scope?: string;
@@ -382,8 +385,20 @@ export function FolderField({
   selIndex: number;
   browserOpen: boolean;
   pickMatch(path: string): void;
+  /** Whose disk the session starts on ("" = this computer): Tab completion
+   * lists this computer's folders only, so it is off for another device. */
+  device?: string;
 }) {
   const ids = folderIds(scope);
+  const typed = (path: string) => {
+    folderDo({ t: "user-set", path });
+    // Typing is what brings a dismissed list back: the query has
+    // changed, so the reason it was dismissed went with it.
+    setSearchOpen(true);
+  };
+  // Shell-style Tab completion of a PATH (PathField's, the same rules). A
+  // NAME being searched for completes from its match list instead, below.
+  const comp = usePathCompletion({ value: repoPath, onChange: typed, device, rowId: ids.matches });
   // The END of a long path is the part that names the repo, so while the
   // field isn't being edited it shows its tail ("…/r5-new/sbx/repo"), not
   // "/home/me/MindFlo…". The full path is the tooltip.
@@ -410,8 +425,12 @@ export function FolderField({
           autoComplete="off"
           placeholder={placeholder}
           value={repoPath}
-          title={repoPath || undefined}
+          title={repoPath || comp.inputProps.title}
+          className={comp.inputProps.className}
+          onAnimationEnd={comp.inputProps.onAnimationEnd}
+          onFocus={comp.onFocus}
           onBlur={(e) => {
+            comp.onBlur();
             e.currentTarget.scrollLeft = e.currentTarget.scrollWidth;
           }}
           // Announced as a combobox because it is one now: without these
@@ -420,17 +439,36 @@ export function FolderField({
           // from a list that was never mentioned.
           role="combobox"
           aria-expanded={!!searchHits}
-          aria-controls={ids.list}
+          aria-controls={comp.inputProps["aria-controls"] ?? ids.list}
           aria-autocomplete="list"
           aria-activedescendant={selIndex >= 0 ? ids.hit + selIndex : undefined}
           onChange={(e) => {
-            folderDo({ t: "user-set", path: e.target.value });
-            // Typing is what brings a dismissed list back: the query has
-            // changed, so the reason it was dismissed went with it.
-            setSearchOpen(true);
+            comp.onTyped();
+            typed(e.target.value);
           }}
           onKeyDown={(e) => {
             const hits = searchHits?.matches || [];
+            if (
+              e.key === "Tab" &&
+              !e.ctrlKey &&
+              !e.metaKey &&
+              !e.altKey &&
+              hits.length &&
+              isNameQuery(folderPath)
+            ) {
+              // A name with matches under it: the match list is the
+              // candidates row. One match is filled in; several are
+              // walked by Tab / Shift+Tab (the highlight Enter takes).
+              e.preventDefault();
+              if (hits.length === 1) pickMatch(hits[0].path);
+              else {
+                const n = hits.length;
+                const at = Math.min(searchSel, n - 1);
+                setSearchSel((at + (e.shiftKey ? -1 : 1) + n) % n);
+              }
+              return;
+            }
+            if (comp.onKeyDown(e)) return;
             if (e.key === "ArrowDown" || e.key === "ArrowUp") {
               if (!searchHits && search && search.asked === folderPath && !browserOpen) {
                 // Matches exist for exactly this text and were merely
@@ -516,6 +554,7 @@ export function FolderField({
           Browse…
         </button>
       </span>
+      {comp.aids}
     </div>
   );
 }
