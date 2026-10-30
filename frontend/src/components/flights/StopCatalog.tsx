@@ -1,7 +1,8 @@
 /** **All blocks** (docs/flights.md "As built: round 14 palette"): the
- * catalog's content, `StopCatalogBody` — a filter, then two grids of cards —
+ * catalog's content, `StopCatalogBody` — a filter, then the grids of cards —
  * **Blocks** (every kind the server lists: its icon, name, who does it, its
- * one-line summary) and **Multi-step** (every saved stop: its name, a
+ * one-line summary; by family since round 15, "As built: round 15
+ * palette-groups") and **Multi-step** (every saved stop: its name, a
  * built-in badge, a box per step, "a → b → c"). The floating palette
  * (SkyPalette) IS this body, compact; `StopCatalog` wraps it in a Modal for a
  * shelf whose host floats no palette.
@@ -19,7 +20,7 @@ import type { FlightPlan, StepKindDef } from "../../lib/flights";
 import { deletePlan, resetPlan, savePlan } from "../../lib/flightsApi";
 import { checkRename, planDots } from "../../lib/groundedLines";
 import { clickOrDouble, type ClickOrDouble } from "../../lib/clickOrDouble";
-import { cardMenu, catalogCards, gridMove, savedDragData, stopDragData, type CatalogCard, type CatalogDrop } from "../../lib/stopCatalog";
+import { cardMenu, catalogCards, familyLabel, gridMove, savedDragData, stopDragData, type CatalogCard, type CatalogDrop } from "../../lib/stopCatalog";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
 import { InlineConfirm } from "../InlineConfirm";
@@ -153,9 +154,11 @@ function reveal(list: HTMLElement | null, el: HTMLElement | null) {
  * question) is theirs, not the card's. */
 const inner = (t: EventTarget) => !!(t as Element).closest?.("button, input, summary, .vf-menu, .set-confirm");
 
-/** The catalog's content — the filter (handed to `head`), then **Blocks** and
- * **Multi-step**, each a grid of cards — shared by the floating palette (its
- * whole body) and the All blocks… Modal. */
+/** The catalog's content — the filter (handed to `head`), then **Blocks** (a
+ * grid per family under its label row — Work · Ship · Outside · People — or
+ * one flat grid when the server names no family) and **Multi-step**, grids
+ * of cards — shared by the floating palette (its whole body) and the All
+ * blocks… Modal. */
 export function StopCatalogBody({
   kinds,
   plans,
@@ -188,6 +191,13 @@ export function StopCatalogBody({
   const rowId = (i: number) => idPrefix + "-row-" + i;
   const leadEl = lead?.(query) ?? null;
   const leads = leadEl ? 1 : 0;
+  // The kinds by family (round 15), or one flat grid from an older server.
+  // The lead sits first in Work (flat: the one grid), even when the filter
+  // left that group nothing else; Work leads the order, so it is still first.
+  const leadFamily = cards.grouped ? "work" : "";
+  const groups =
+    leadEl && !cards.groups.some((g) => g.family === leadFamily) ? [{ family: leadFamily, label: cards.grouped ? familyLabel(leadFamily) : "", items: [] }, ...cards.groups] : cards.groups;
+  const leadIn = (family: string) => (leadEl && family === leadFamily ? 1 : 0);
 
   useEffect(() => {
     if (autoFocus) filterRef.current?.focus({ preventScroll: true });
@@ -228,9 +238,9 @@ export function StopCatalogBody({
       e.preventDefault();
       if (!rows.length) return;
       keyed.current = true;
-      // The lead card sits first in the Blocks grid but is no row: the
-      // arrows walk the grid as laid out and never land on it.
-      setActive(Math.max(0, gridMove(at + leads, e.key, [cards.blocks.length + leads, cards.multi.length], gridCols(listRef.current)) - leads));
+      // The lead card sits first in the first grid but is no row: the arrows
+      // walk the grids (one per family) as laid out and never land on it.
+      setActive(Math.max(0, gridMove(at + leads, e.key, [...groups.map((g) => g.items.length + leadIn(g.family)), cards.multi.length], gridCols(listRef.current)) - leads));
     } else if (e.key === "Enter") {
       e.preventDefault();
       if (at >= 0) add(rows[at].drop);
@@ -405,14 +415,34 @@ export function StopCatalogBody({
   return (
     <>
       {head(filter)}
-      <div className={"sky-catalog-list sky-own-scroll" + (compact ? " compact" : "") + (listClass ? " " + listClass : "")} id={listId} role="listbox" aria-label="All blocks" ref={listRef}>
-        {cards.blocks.length + leads > 0 && (
+      <div
+        className={"sky-catalog-list sky-own-scroll" + (compact ? " compact" : "") + (cards.grouped ? " grouped" : "") + (listClass ? " " + listClass : "")}
+        id={listId}
+        role="listbox"
+        aria-label="All blocks"
+        ref={listRef}
+      >
+        {groups.length > 0 && (
           <section className="sky-catalog-section" data-section="blocks" role="group" aria-label="Blocks">
-            <h3 className="sky-catalog-label">Blocks</h3>
-            <div className="sky-catalog-grid">
-              {leadEl}
-              {cards.blocks.map((c) => card(c, ++i))}
-            </div>
+            {cards.grouped ? (
+              groups.map((g) => (
+                <div key={g.family} className="sky-catalog-family" data-family={g.family}>
+                  <h3 className="sky-catalog-label">{g.label}</h3>
+                  <div className="sky-catalog-grid">
+                    {leadIn(g.family) ? leadEl : null}
+                    {g.items.map((c) => card(c, ++i))}
+                  </div>
+                </div>
+              ))
+            ) : (
+              <>
+                <h3 className="sky-catalog-label">Blocks</h3>
+                <div className="sky-catalog-grid">
+                  {leadEl}
+                  {groups[0].items.map((c) => card(c, ++i))}
+                </div>
+              </>
+            )}
           </section>
         )}
         {cards.multi.length > 0 && (

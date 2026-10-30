@@ -76,6 +76,33 @@
   text-transform: uppercase;
 }
 
+/* Round 15: the kinds grouped by family — a grid per family under a thin
+   label row (the label, then a hairline to the edge); the Multi-step label
+   reads the same so the regions line up. */
+.sky-catalog-list.grouped .sky-catalog-section {
+  gap: 10px;
+}
+
+.sky-catalog-family {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.sky-catalog-list.grouped .sky-catalog-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sky-catalog-list.grouped .sky-catalog-label::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+  opacity: 0.7;
+}
+
 /* The cards flow in as many columns as the window holds; the arrows read the
    count back from the laid-out grid. */
 .sky-catalog-grid {
@@ -306,6 +333,14 @@
 .sky-catalog-list.compact .sky-catalog-grid {
   grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
   gap: 6px;
+}
+
+.sky-catalog-list.compact.grouped .sky-catalog-section {
+  gap: 8px;
+}
+
+.sky-catalog-list.compact.grouped .sky-catalog-label {
+  font-size: 10px;
 }
 
 .sky-catalog-list.compact .sky-catalog-card {

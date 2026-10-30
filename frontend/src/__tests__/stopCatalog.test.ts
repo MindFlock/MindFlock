@@ -287,7 +287,7 @@ describe("StopCatalog", () => {
 
   it("the arrows move the pick from the filter (← / → only from its edge), Enter / Add / a double-click call onAdd({kind} | {planId})", () => {
     const src = code("components/flights/StopCatalog.tsx");
-    expect(src).toContain("gridMove(at + leads, e.key, [cards.blocks.length + leads, cards.multi.length], gridCols(listRef.current))");
+    expect(src).toContain("gridMove(at + leads, e.key, [...groups.map((g) => g.items.length + leadIn(g.family)), cards.multi.length], gridCols(listRef.current))");
     expect(src).toMatch(/e\.key === "ArrowLeft" \? el\.selectionStart === 0 && el\.selectionEnd === 0 : e\.key === "ArrowRight" \? el\.selectionStart === el\.value\.length : true/);
     expect(src).toMatch(/\} else if \(e\.key === "Enter"\) \{\s*e\.preventDefault\(\);\s*if \(at >= 0\) add\(rows\[at\]\.drop\);/);
     expect(src).toContain("onClick={() => add(c.drop)}");
@@ -375,7 +375,7 @@ describe("StopCatalogBody (round 14: the palette's body)", () => {
     const blocks = html.slice(html.indexOf('data-section="blocks"'));
     expect(blocks).toMatch(/<div class="sky-catalog-grid"><div class="lead">Session<\/div><div id="sky-catalog-row-0"/);
     const src = code("components/flights/StopCatalog.tsx");
-    expect(src).toContain("setActive(Math.max(0, gridMove(at + leads, e.key, [cards.blocks.length + leads, cards.multi.length], gridCols(listRef.current)) - leads));");
+    expect(src).toContain("setActive(Math.max(0, gridMove(at + leads, e.key, [...groups.map((g) => g.items.length + leadIn(g.family)), cards.multi.length], gridCols(listRef.current)) - leads));");
     // Only the lead: the Blocks section still shows (it holds the lead).
     const lone = body({ kinds: [], plans: [], lead: () => createElement("div", { className: "lead" }, "Session") });
     expect(lone).toContain('data-section="blocks"');

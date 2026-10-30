@@ -4919,3 +4919,57 @@ the receipt may wrap to two lines; the ruler's type counter-scales.
 Open: the receipts themselves come from the backend `receipts` task — until
 it lands, only kinds that already set `detail.receipt` show one. The
 `check_rewind` 409 sentence is the server's; the UI shows whatever it says.
+
+### As built: round 15 palette-groups
+
+Source: `lib/stopCatalog.ts` (`familyOrder`, `familyLabel`, `hasFamilies`,
+`familyGroups`, `catalogCards` → `groups` / `grouped`),
+`components/flights/StopCatalog.tsx` (+ `.css`), `SkyPalette.tsx` (its
+docstring only); tests `stopFamilies.test.ts` (new) and the source pins in
+`stopCatalog.test.ts`. `StopShelf` is untouched.
+
+**The families.** `familyOrder = ["work", "ship", "outside", "people"]`;
+`familyLabel(f)` → Work · Ship · Outside · People, a family the frontend
+doesn't know reads as itself capitalised, none reads **Other**.
+`familyGroups(kinds, grouped = hasFamilies(kinds))` groups in that order, then
+any unknown family (as first seen), then the kinds with no family (Other,
+last); each group keeps the order it was given, and only non-empty groups come
+back. `hasFamilies` is "some kind names a family": an older server (no
+`family` on any row) gives ONE flat group (`family` and `label` ""), or none
+when there are no kinds.
+
+**The cards.** `catalogCards(kinds, plans, query)` now also returns
+`grouped` (decided over EVERY kind, so a filter never flips the layout) and
+`groups` (the filtered kinds' cards by family; a filter hides the groups it
+empties). `blocks` (and so `all`, the arrows' order) is the groups flattened:
+`catalogKinds`' defaults-first order holds inside each family (Work: agent,
+split, join, command…; People: Perch, then Verify).
+
+**The body.** Grouped, the Blocks section (`data-section="blocks"`, still
+`role="group"` "Blocks") holds one `<div class="sky-catalog-family"
+data-family="…">` per group: a thin label row (`<h3
+class="sky-catalog-label">Work</h3>`) over its own `.sky-catalog-grid`; the
+section's "Blocks" heading is gone (the family labels replace it). The list
+gets `grouped`, which turns every label — Multi-step's too — into a row: the
+label then a 1px hairline to the edge (`::after`, `var(--border)`), so the
+saved stops' region (still its own section, after the families) lines up with
+them. Compact (the palette) the labels are 10px and the family gaps 8px.
+Flat (an older server) the markup is round 14's exactly: one "Blocks" grid,
+no `grouped` class, no family labels at all.
+
+**The lead.** The palette's Session card sits first in **Work** (flat: first
+in the one grid). A filter that matches "Session" but no work kind keeps an
+otherwise empty Work group holding just the Session card; Work leads the
+order, so the lead is always the first card and the arrows' `- leads` offset
+holds. The arrows walk the grids as laid out: `gridMove`'s sizes are one per
+family (the lead counted in Work) then Multi-step, so ↓ from Work's last row
+lands in Ship's first, keeping the column; `gridCols` reads the first grid
+(they all share one template).
+
+**Perch** keeps its gold (`.sky-catalog-card.perch`, from `actor === "you"`)
+inside People. **The bottom shelf** stays the flat ★ pick: its markup is the
+same byte for byte with or without families (pinned in `stopFamilies.test.ts`).
+
+Not seen in a browser: no `npm run build` in this task (fenced, and the
+contract says not to), so the label row's look is checked by its CSS pins
+only.

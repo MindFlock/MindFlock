@@ -136,6 +136,49 @@ export function shelfPlans<P extends Pick<FlightPlan, "id">>(pick: ShelfPick, pl
 
 // --- The catalog's cards (round 13; the palette's too since round 14) ---------------
 
+// --- Families (round 15: docs/flights.md "As built: round 15 palette-groups") ---
+
+/** The families the palette and the catalog group the kinds by, in this order
+ * (`GET /api/flights/kinds` rows' `family`). */
+export const familyOrder = ["work", "ship", "outside", "people"] as const;
+
+/** A family's label row: Work · Ship · Outside · People; a family the frontend
+ * doesn't know reads as itself, capitalised; none is Other. */
+export function familyLabel(family: string | undefined): string {
+  const f = (family || "").trim();
+  if (!f) return "Other";
+  return f.charAt(0).toUpperCase() + f.slice(1);
+}
+
+/** One family's kinds, under its label. Flat (no kind has a family: an older
+ * server) is one group with family and label "". */
+export interface FamilyGroup<T> {
+  family: string;
+  label: string;
+  items: T[];
+}
+
+/** Does the server group its kinds? Only when some kind says its family. */
+export const hasFamilies = (kinds: readonly Pick<StepKindDef, "family">[]): boolean => kinds.some((k) => !!k.family);
+
+/** The kinds by family: `familyOrder` first, then any other family as first
+ * seen, then the kinds with none (Other); each keeps the order given. Only
+ * non-empty groups (a filter hides the ones it empties). `grouped` false (an
+ * older server, decided over ALL the kinds, not the filtered ones) gives one
+ * flat group, or none when there is nothing. */
+export function familyGroups<K extends Pick<StepKindDef, "family">>(kinds: readonly K[], grouped = hasFamilies(kinds)): FamilyGroup<K>[] {
+  if (!grouped) return kinds.length ? [{ family: "", label: "", items: [...kinds] }] : [];
+  const by = new Map<string, K[]>(familyOrder.map((f) => [f, []]));
+  const other: K[] = [];
+  for (const k of kinds) {
+    const f = (k.family || "").trim();
+    if (!f || f === "other") other.push(k);
+    else by.set(f, [...(by.get(f) || []), k]);
+  }
+  const out = [...by].map(([family, items]) => ({ family, label: familyLabel(family), items }));
+  return [...out, { family: "other", label: "Other", items: other }].filter((g) => g.items.length);
+}
+
 /** A kind's card: its icon, name, a robot / you badge, its summary. */
 export interface KindCard<K> {
   section: "blocks";
@@ -159,21 +202,25 @@ export interface PlanCard<P> {
 
 export type CatalogCard<K, P> = KindCard<K> | PlanCard<P>;
 
-/** The catalog's cards for a filter: Blocks (every kind, the defaults first),
+/** The catalog's cards for a filter: Blocks (every kind, the defaults first;
+ * `groups`: by family when the server says them, else one flat group),
  * Multi-step (the saved stops, in the order given), and `all` in the order
- * the arrows walk them. */
-export function catalogCards<K extends Pick<StepKindDef, "kind" | "label" | "summary" | "actor">, P extends Pick<FlightPlan, "id" | "name" | "description" | "builtin" | "steps">>(
+ * the arrows walk them (the groups' order). */
+export function catalogCards<K extends Pick<StepKindDef, "kind" | "label" | "summary" | "actor" | "family">, P extends Pick<FlightPlan, "id" | "name" | "description" | "builtin" | "steps">>(
   kinds: readonly K[],
   plans: readonly P[],
   query: string
-): { blocks: KindCard<K>[]; multi: PlanCard<P>[]; all: Array<CatalogCard<K, P>> } {
-  const blocks = filterKinds(catalogKinds(kinds), query).map(
-    (def): KindCard<K> => ({ section: "blocks", key: "kind:" + def.kind, drop: { kind: def.kind }, name: kindName(def), perch: def.actor === "you", def })
-  );
+): { blocks: KindCard<K>[]; groups: FamilyGroup<KindCard<K>>[]; grouped: boolean; multi: PlanCard<P>[]; all: Array<CatalogCard<K, P>> } {
+  const grouped = hasFamilies(kinds);
+  const groups = familyGroups(filterKinds(catalogKinds(kinds), query), grouped).map((g) => ({
+    ...g,
+    items: g.items.map((def): KindCard<K> => ({ section: "blocks", key: "kind:" + def.kind, drop: { kind: def.kind }, name: kindName(def), perch: def.actor === "you", def })),
+  }));
+  const blocks = groups.flatMap((g) => g.items);
   const multi = filterPlans(plans, query).map(
     (plan): PlanCard<P> => ({ section: "multi", key: "plan:" + plan.id, drop: { planId: plan.id }, name: plan.name, builtin: !!plan.builtin, path: planPath(plan), plan })
   );
-  return { blocks, multi, all: [...blocks, ...multi] };
+  return { blocks, groups, grouped, multi, all: [...blocks, ...multi] };
 }
 
 /** The arrows over the cards, laid out as one grid per section (`sizes`, in

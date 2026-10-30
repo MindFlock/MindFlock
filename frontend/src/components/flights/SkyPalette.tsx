@@ -8,7 +8,8 @@
  * Its body is the catalog's (`StopCatalogBody`, compact): the Session card,
  * every kind, every saved stop, as a wrapped grid of cards that fills the
  * frame and scrolls past it — the frame decides how many show — with the
- * filter in the head. Each card drags with its chip's MIME; a click or a
+ * filter in the head. The kinds group by family (round 15: Work · Ship ·
+ * Outside · People, the Session card first in Work), the saved stops after. Each card drags with its chip's MIME; a click or a
  * double-click (once) → `onPlace(drop)`: the host puts it on the board to the
  * palette's right. A card's ★ / ☆ sets the bottom shelf's pick
  * (`useShelfPick`) — the palette itself always shows everything. The head's
