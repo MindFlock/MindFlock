@@ -85,13 +85,14 @@ export function useInstances() {
     queryFn: async () => {
       // A guest link's crossed-out rows go to lib/guest.ts for the rail to
       // draw; nothing else (the grid, the pickers, the bell) ever sees them.
-      const list = normalizeFlightRows(splitLockedRows(await api<Instance[]>("/api/instances")));
-      window.mindflock?.__setSessions?.(list);
-      // A session being made is listed only once its snapshot catches up: its
-      // optimistic row waits in the cache until then (`mergePending`).
+      const fetched = normalizeFlightRows(splitLockedRows(await api<Instance[]>("/api/instances")));
+      window.mindflock?.__setSessions?.(fetched);
       // A session being moved keeps its "moving…" mark until the move's
       // event (`withMoving`).
-      return withMoving(mergePending(list, queryClient.getQueryData<Instance[]>(["instances"]), Date.now()), Date.now());
+      const list = withMoving(fetched, Date.now());
+      // A session being made is listed only once its snapshot catches up: its
+      // optimistic row waits in the cache until then (`mergePending`).
+      return mergePending(list, queryClient.getQueryData<Instance[]>(["instances"]), Date.now());
     },
     refetchInterval: pollInterval,
     refetchIntervalInBackground: true,

@@ -2871,3 +2871,52 @@ the sky's selection is on a box that is not the session itself.
   `Modal`: the folder field with Tab completion from `components/PathField`,
   a line saying what will happen, Move) → a toast on `session.moved`, the error
   card on `session.move_failed`. The row shows "moving…" meanwhile.
+
+### As built: round 12 move UI
+
+- **The menu item** — `lib/sessionMenu.ts`: **Move to a folder…** (`key:
+  "move"`) right after Rename… in the Session group, on this machine's own
+  rows only (not a remote row, a peer's shared folder, a session still
+  starting or one whose folder is gone); greyed with the note *moving…* while
+  the row carries `moving: true`. It runs `openMoveSession(title)` →
+  `openDialogFor("move", title)` (a new `DialogName` `"move"` in
+  `state/store.ts`, `dialogTarget` = the title, the way Rename opens).
+- **The dialog** — `components/dialogs/MoveSessionDialog.tsx` (+ `.css`),
+  mounted beside `RenameDialog` in `App.tsx`: a `Modal` whose inner form is
+  keyed on the title, so every opening starts from the seed and a poll never
+  overwrites the typing. *Now in* the row's `path` (else `folder`); **New
+  folder** is a `PathField` (Tab completion through `/api/browse`, Browse…)
+  seeded with the folder's parent + `/` (`moveDestSeed`); the sentence;
+  **Even if it is mid-turn** (→ `force`); Cancel / **Move**, greyed with a
+  reason (`moveBlockReason`) for an empty path, the folder itself, or the
+  bare parent. No `confirm`/`prompt`/`alert`.
+- **The action** — `lib/sessionActions.ts` `moveSession(title, dest, force)`:
+  `POST /api/instances/{title}/move {dest, force}` via `instApi`. 202 →
+  `markMoving(title)`, toast *Moving "name"…* (names are `windowName`), and
+  the dialog closes. A failure is classified by `moveRefusal` (the body's
+  `error`, or `code`, among `working` / `exists` / `in_flight` / `remote` /
+  `bad_dest` / `unknown_session`); `moveErrorText` shows the server's
+  sentence, or ours when it sent only the bare code. 409 `working` without
+  `force` makes no card — the dialog shows `MOVE_MID_TURN` (*The agent is
+  mid-turn — tick the box to move anyway*) under the box; everything else is
+  an error card *Moving "name" failed*.
+- **The mark and the events** — `state/queries.ts`: `markMoving` /
+  `clearMoving` keep a title → since map (`MOVE_TTL_MS` = 60 s, cleared by
+  its own timer) and stamp `moving: true` (`MovingFields`, `isMovingRow`) on
+  the cached row; the instances query re-applies it to every fetch
+  (`withMoving`, before `mergePending`), so a poll doesn't wipe it.
+  `bridgeSessionSetEvents` subscribes `session.moved` → `onSessionMoved`
+  (unmark, refetch, toast *Moved "name" to <to>*) and `session.move_failed`
+  → `onSessionMoveFailed` (unmark, refetch, error card *Moving "name"
+  failed* with `error`); a replay only unmarks and refetches. The title is
+  the envelope's `session`, else `data.title`.
+- **Not in this round's files** — the rail row and the pane header don't
+  draw the *moving…* word yet (`components/sidebar/SidebarRow.tsx`,
+  `lib/paneHeader.ts`: read `isMovingRow(inst)` from `state/queries`), and
+  the command palette has no *Move to a folder…* entry
+  (`components/palette/CommandPalette.tsx`: `openMoveSession(title)` from
+  `lib/sessionActions`).
+- **Tests** — `moveSession.test.ts` (the request and its error mapping,
+  the mark and its TTL, both events and their subscription, the dialog's
+  markup), `sessionMenu.test.ts` (the item's place, its dialog, the greyed
+  *moving…*, where it is left out).
