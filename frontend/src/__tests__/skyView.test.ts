@@ -446,6 +446,11 @@ describe("round 13: nothing focused, place don't tack, the floating palette", ()
     expect(v).toContain("const want = pal ? { x: pal.x + pal.w + PLACE_GAP, y: pal.y } : { x: view.x + view.w / 2 - size.w / 2, y: view.y + view.h - size.h };");
     expect(v).toContain("return spotNear(want, taken, size, view);");
     expect(v).toContain("const at = spotRef.current(f, near);");
+    // Placed at its estimate, then once more at its measured size (never onto
+    // itself: its own rect is not `taken`).
+    expect(v).toContain("placing.current.set(groundedKey(f.id), near);");
+    expect(v).toMatch(/if \(!measured\[key\]\) continue;\s*placing\.current\.delete\(key\);/);
+    expect(v).toContain(".filter((id) => id !== key), INTAKE_KEY, PALETTE_KEY].map(rectOf)");
     // The old fallbacks are gone: no tack or Add onto `focusLine`, no picker for them.
     expect(v).not.toContain("title || focusLine");
     expect(v).not.toContain("tackPick");
