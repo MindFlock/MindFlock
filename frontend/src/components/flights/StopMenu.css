@@ -1,0 +1,69 @@
+/* A box's right-click menu on the flyway canvas (StopMenu.tsx). It lives in
+ * the line's stage, so the Sky's zoom scales it: `--sky-z` (set on `.skl`)
+ * scales it back, about its top-left corner — the pointer. */
+
+.fl-stopmenu {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 170px;
+  max-width: 260px;
+  padding: 4px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.32);
+  font-size: 12.5px;
+  cursor: default;
+  transform: scale(calc(1 / var(--sky-z, 1)));
+  transform-origin: 0 0;
+}
+
+.fl-stopmenu-item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fl-stopmenu-item:hover:not(:disabled),
+.fl-stopmenu-item:focus-visible {
+  outline: none;
+  background: rgba(var(--accent-rgb), 0.14);
+}
+
+.fl-stopmenu-item:disabled {
+  color: var(--muted);
+  opacity: 0.6;
+  cursor: default;
+}
+
+.fl-stopmenu-item.danger {
+  color: var(--red);
+}
+
+.fl-stopmenu-item.danger:hover:not(:disabled),
+.fl-stopmenu-item.danger:focus-visible {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+}
+
+.fl-stopmenu-note {
+  padding: 6px 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.fl-stopmenu-item + .fl-stopmenu-note {
+  margin-top: 3px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
