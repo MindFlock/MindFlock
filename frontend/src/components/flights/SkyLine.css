@@ -6,8 +6,8 @@
   position: relative;
   box-sizing: border-box;
   width: max-content;
-  min-width: 280px;
-  padding: 0 10px 10px;
+  min-width: 320px;
+  padding: 0 12px 12px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--panel);
@@ -22,7 +22,7 @@
 .skl.is-focused {
   border-color: var(--accent);
   box-shadow:
-    0 0 0 2px rgba(var(--accent-rgb), 0.35),
+    0 0 0 3px rgba(var(--accent-rgb), 0.5),
     0 6px 22px rgba(0, 0, 0, 0.18);
 }
 
@@ -36,12 +36,12 @@
 .skl-bar {
   display: flex;
   align-items: center;
-  gap: 7px;
-  height: 34px;
-  margin: 0 -10px 4px;
-  padding: 0 6px 0 12px;
+  gap: 9px;
+  height: 42px;
+  margin: 0 -12px 6px;
+  padding: 0 8px 0 14px;
   border-bottom: 1px solid var(--border);
-  font-size: 12.5px;
+  font-size: 15px;
   cursor: move;
   touch-action: none;
   user-select: none;
@@ -61,40 +61,168 @@
   text-overflow: ellipsis;
 }
 
-.skl-chip {
+.skl-bar .skl-chip {
   flex: none;
   align-self: center;
+  font-size: 12.5px;
+  padding: 4px 9px;
+}
+
+/* Where the flight is, in words: "at Reviews settle · 10 min quiet". */
+.skl-where {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--fl-ink-muted);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .skl-pin {
   flex: none;
-  font-size: 11px;
-  opacity: 0.8;
+  font-size: 13px;
+  opacity: 0.85;
 }
 
+/* ◧: the glyph, a three-bar meter (its state at a glance) and, on hover or
+   focus, the size in words. */
 .skl-size {
   flex: none;
   margin-left: auto;
-  width: 26px;
-  height: 24px;
-  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 7px;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 7px;
   background: none;
-  color: var(--muted);
-  font-size: 14px;
+  color: var(--fl-ink-muted);
+  font: inherit;
+  font-size: 13px;
   line-height: 1;
   cursor: pointer;
+}
+
+.skl-size-glyph {
+  font-size: 16px;
+}
+
+.skl-size-meter {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 14px;
+}
+
+.skl-size-meter i {
+  display: block;
+  width: 3px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--muted) 45%, transparent);
+}
+
+.skl-size-meter i:nth-child(1) {
+  height: 6px;
+}
+
+.skl-size-meter i:nth-child(2) {
+  height: 10px;
+}
+
+.skl-size-meter i:nth-child(3) {
+  height: 14px;
+}
+
+.skl-size-meter i.on {
+  background: var(--accent);
+}
+
+.skl-size-word {
+  display: none;
+  text-transform: capitalize;
 }
 
 .skl-size:hover,
 .skl-size:focus-visible {
   border-color: var(--border);
+  background: var(--panel-2);
   color: var(--text);
+}
+
+.skl-size:hover .skl-size-word,
+.skl-size:focus-visible .skl-size-word {
+  display: inline;
 }
 
 .skl-menu {
   flex: none;
+}
+
+/* --- The ⋯ menu: plain verbs in groups, screen-sized at any zoom ----------- */
+
+.skl-menu .vf-menu > summary {
+  padding: 3px 9px 7px;
+  font-size: 18px;
+}
+
+/* The list is part of the zoomed line: scale it back to screen size. */
+.skl-menu .vf-menu-list {
+  min-width: 232px;
+  padding: 5px;
+  transform: scale(calc(1 / var(--sky-z, 1)));
+  transform-origin: top right;
+  z-index: 20;
+}
+
+.skl-menu .vf-menu.vf-menu-up .vf-menu-list {
+  transform-origin: bottom right;
+}
+
+.skl-menu .vf-menu-list .vf-menu-item {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 13.5px;
+  line-height: 1.2;
+}
+
+/* A group's first item: a rule above it. */
+.skl-menu .vf-menu-list .vf-menu-item.skl-mi-group {
+  margin-top: 5px;
+  position: relative;
+}
+
+.skl-menu .vf-menu-list .vf-menu-item.skl-mi-group::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  top: -3px;
+  border-top: 1px solid var(--border);
+}
+
+/* The box sizes: a check on the one this line wears. */
+.skl-menu .vf-menu-list .vf-menu-item.skl-mi-check {
+  padding-left: 30px;
+}
+
+.skl-menu .vf-menu-list .vf-menu-item.skl-mi-on::after {
+  content: "✓";
+  position: absolute;
+  left: 11px;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.skl-menu .vf-menu-list .vf-menu-item.skl-mi-check {
+  position: relative;
+}
+
+.skl-menu .vf-menu-list .vf-menu-danger {
+  color: var(--fl-ink-red);
 }
 
 .skl-gone {
@@ -212,29 +340,158 @@
   opacity: 1;
 }
 
+/* --- The roomy boxes ---------------------------------------------------------
+   The sky draws boxMetrics' roomy tier (236 × 100 boxes, 180 × 48 +, 200 ×
+   64 branches, 56px gaps; docs/flights-visibility.md): titles 15px/600,
+   summaries 13px, chips 12px, a 26px icon tile. The pane's Flight tab and the
+   flyway editor keep the base sizes (FlywayCanvas.css). */
+
+.skl .fl-box:not(.fl-box-open) {
+  gap: 5px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-size: 15px;
+}
+
+.skl .fl-box:not(.fl-box-open) .fl-box-head {
+  gap: 9px;
+}
+
+.skl .fl-box:not(.fl-box-open) .fl-box-title {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+/* A stop's title may take two lines; a session's keeps one (its chip and
+   task fill the box). */
+.skl .fl-box-stop:not(.fl-box-open) .fl-box-title,
+.skl .fl-box-rung .fl-box-title {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+
+.skl .fl-box:not(.fl-box-open) :is(.fl-box-sub, .fl-box-detail, .fl-box-reason) {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.skl .fl-box:not(.fl-box-open) .fl-box-chip {
+  font-size: 12px;
+  padding: 4px 9px;
+}
+
+.skl .fl-box:not(.fl-box-open) .fl-box-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+}
+
+.skl .fl-box:not(.fl-box-open) .fl-box-icon .fl-stop-icon {
+  width: 17px;
+  height: 17px;
+}
+
+.skl .fl-box:not(.fl-box-open) .fl-box-glyph {
+  font-size: 15px;
+}
+
+.skl .fl-box:not(.fl-box-open) .fl-box-pulse,
+.skl .fl-box:not(.fl-box-open) .fl-box-dot {
+  width: 10px;
+  height: 10px;
+}
+
+.skl .fl-box:not(.fl-box-open) .fl-box-dots {
+  font-size: 13px;
+}
+
+.skl .fl-box.fl-box-branch:not(.fl-box-open) {
+  gap: 4px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.skl .fl-box.fl-box-branch:not(.fl-box-open) .fl-box-title {
+  font-size: 14px;
+}
+
+.skl .fl-box.fl-box-branch:not(.fl-box-open) .fl-box-sub {
+  font-size: 12.5px;
+}
+
+.skl .fl-box-add {
+  font-size: 14px;
+}
+
+.skl .fl-box-add .fl-add-plus .fl-stop-icon {
+  width: 19px;
+  height: 19px;
+}
+
+.skl .fl-box.fl-box-flown {
+  padding: 6px 16px;
+}
+
+.skl .fl-box.fl-box-flown .fl-box-title {
+  font-size: 14px;
+  -webkit-line-clamp: 1;
+}
+
+.skl .fl-box.fl-box-flown .fl-box-sub {
+  font-size: 12px;
+}
+
+.skl .fl-size-compact .fl-box:not(.fl-box-add):not(.fl-box-open):not(.fl-box-flown) {
+  padding: 8px 12px;
+  font-size: 14px;
+}
+
+.skl .fl-size-compact .fl-box:not(.fl-box-add):not(.fl-box-open) .fl-box-title {
+  font-size: 14px;
+  -webkit-line-clamp: 2;
+}
+
+.skl .fl-join-pill {
+  top: -12px;
+  font-size: 12px;
+  padding: 4px 9px;
+}
+
+/* The bird, to match: a third bigger on its disc. */
+.skl .fl-bird-marker .fl-bird-big {
+  zoom: 1.35;
+}
+
 /* --- Semantic zoom (lib/skyLayout lodFor; docs/flights-zoom.md) -----------
    The geometry never depends on the zoom: a box keeps its plane width and
-   height (the layout's), a line its measured size, the bar its 34px. What
+   height (the layout's), a line its measured size, the bar its 42px. What
    changes is what is drawn inside and the type's size on screen.
      far  (< 62%)   the icon and the title, counter-scaled so the title reads
-                    ~10.5px on screen; everything else is left out.
-     mid            today's box; under 80% its titles (and the bar's name)
-                    still grow a little, so the first picture (≥ 62%) reads.
-     near (≥ 115%)  the type counter-scaled back to ~12.5px on screen, so the
-                    same box holds more: the title on two lines, the summary,
-                    the detail and the reason wrapping (--sky-lines each), the
-                    perch's own parts. */
+                    ≥ 11px on screen (15px × 0.76 / zoom × zoom = 11.4px);
+                    everything else is left out.
+     mid            the box as drawn; under 80% its titles, summaries and the
+                    bar's name still grow a little, so the first picture
+                    (≥ 62%) reads: titles ~12px, summaries ~10.4px on screen.
+     near (≥ 115%)  the type counter-scaled back to ~15px on screen, so the
+                    same box holds more: the title on three lines, the
+                    summary, the detail and the reason wrapping (--sky-lines
+                    each), the perch's own parts. */
 
 .skl[data-lod="far"] {
-  /* The type's plane size over its mid size: 0.84 / zoom (~10.5px on screen),
-     from 1× up to 2.1× at the 40% floor. UI bits stop at 1.4× (the bar's
-     height is fixed). */
-  --sky-far: clamp(1, calc(0.84 / var(--sky-z, 1)), 2.1);
+  /* The type's plane size over its mid size: 0.76 / zoom (~11.4px on
+     screen for a 15px title), from 1× up to 1.9× at the 40% floor. UI bits
+     stop at 1.4× (the bar's height is fixed). */
+  --sky-far: clamp(1, calc(0.76 / var(--sky-z, 1)), 1.9);
   --sky-far-ui: clamp(1, calc(0.6 / var(--sky-z, 1)), 1.4);
 }
 
 .skl[data-lod="mid"] {
-  /* 0.8 / zoom: 1× from 80% up, 1.29× at 62% (titles ~10px on screen). */
+  /* 0.8 / zoom: 1× from 80% up, 1.29× at 62%. */
   --sky-mid: clamp(1, calc(0.8 / var(--sky-z, 1)), 1.3);
 }
 
@@ -248,8 +505,8 @@
 }
 
 .skl[data-lod="far"] .skl-bar {
-  font-size: calc(12.5px * var(--sky-far));
-  gap: calc(7px * var(--sky-far-ui));
+  font-size: calc(15px * var(--sky-far));
+  gap: calc(9px * var(--sky-far-ui));
 }
 
 .skl[data-lod="far"] .skl-name {
@@ -257,21 +514,24 @@
   line-height: 1.1;
 }
 
+/* The ⋯'s own button grows from far; its list scales itself back. */
 .skl[data-lod="far"] .skl-bar > .fl-bird,
-.skl[data-lod="far"] .skl-menu {
+.skl[data-lod="far"] .skl-menu .vf-menu > summary {
   zoom: var(--sky-far-ui);
 }
 
 /* The chip's type grows, its padding doesn't: it stays inside the bar
-   (~28 of 34px at the floor). */
-.skl[data-lod="far"] .skl-chip {
-  font-size: calc(10.5px * var(--sky-far));
-  padding: 2px 6px;
+   (~33 of 42px at the floor). */
+.skl[data-lod="far"] .skl-bar .skl-chip {
+  font-size: calc(12.5px * var(--sky-far));
+  padding: 2px 7px;
 }
 
-/* Too small to aim at from far: the size control and the pin wait for mid. */
+/* Too small to aim at from far: the size control and the pin wait for mid;
+   where the flight is waits too (the bird says it on the line). */
 .skl[data-lod="far"] .skl-size,
-.skl[data-lod="far"] .skl-pin {
+.skl[data-lod="far"] .skl-pin,
+.skl[data-lod="far"] .skl-where {
   display: none;
 }
 
@@ -283,16 +543,20 @@
   flex-wrap: wrap;
   align-content: center;
   row-gap: calc(2px / var(--sky-near));
-  column-gap: calc(7px / var(--sky-near));
-  font-size: calc(12.5px / var(--sky-near));
+  column-gap: calc(9px / var(--sky-near));
+  font-size: calc(15px / var(--sky-near));
 }
 
 .skl[data-lod="near"] .skl-bar > .fl-bird,
-.skl[data-lod="near"] .skl-chip,
+.skl[data-lod="near"] .skl-bar .skl-chip,
 .skl[data-lod="near"] .skl-pin,
 .skl[data-lod="near"] .skl-size,
-.skl[data-lod="near"] .skl-menu {
+.skl[data-lod="near"] .skl-menu .vf-menu > summary {
   zoom: calc(1 / var(--sky-near));
+}
+
+.skl[data-lod="near"] .skl-where {
+  font-size: calc(13px / var(--sky-near));
 }
 
 /* Near: what the session is on, a second row of the bar. */
@@ -301,35 +565,60 @@
   order: 10;
   flex: 1 0 100%;
   min-width: 0;
-  color: var(--muted);
-  font-size: calc(11.5px / var(--sky-near));
+  color: var(--fl-ink-muted);
+  font-size: calc(13px / var(--sky-near));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .skl[data-lod="mid"] .skl-name {
-  font-size: calc(12.5px * var(--sky-mid));
+  font-size: calc(15px * var(--sky-mid));
+}
+
+.skl[data-lod="mid"] .skl-where {
+  font-size: calc(13px * var(--sky-mid));
 }
 
 /* The boxes. An open box (a card: the session's pane) is left alone. */
 .skl[data-lod="mid"] .fl-box:not(.fl-box-open) .fl-box-title,
 .skl[data-lod="mid"] .fl-box-add .fl-add-label {
+  font-size: calc(15px * var(--sky-mid));
+}
+
+.skl[data-lod="mid"] .fl-box:not(.fl-box-open) :is(.fl-box-sub, .fl-box-detail, .fl-box-reason) {
+  font-size: calc(13px * var(--sky-mid));
+}
+
+.skl[data-lod="mid"] .fl-box:not(.fl-box-open) .fl-box-chip,
+.skl[data-lod="mid"] .fl-join-pill {
+  font-size: calc(12px * var(--sky-mid));
+}
+
+.skl[data-lod="mid"] .skl-bar .skl-chip {
   font-size: calc(12.5px * var(--sky-mid));
+}
+
+.skl[data-lod="mid"] .fl-box.fl-box-flown .fl-box-title {
+  font-size: calc(14px * var(--sky-mid));
+}
+
+.skl[data-lod="mid"] .fl-box.fl-box-flown .fl-box-sub {
+  font-size: calc(12px * var(--sky-mid));
 }
 
 .skl[data-lod="far"] .fl-box:not(.fl-box-open) {
   gap: 0;
-  padding: 6px 8px;
+  padding: 8px 10px;
   justify-content: center;
 }
 
 .skl[data-lod="far"] .fl-box:not(.fl-box-open) .fl-box-head {
-  gap: 5px;
+  gap: 6px;
 }
 
 .skl[data-lod="far"] .fl-box:not(.fl-box-open) .fl-box-title {
-  font-size: calc(12.5px * var(--sky-far));
+  font-size: calc(15px * var(--sky-far));
   font-weight: 700;
   line-height: 1.12;
   white-space: normal;
@@ -339,8 +628,13 @@
   overflow-wrap: anywhere;
 }
 
-.skl[data-lod="far"] .fl-box-branch .fl-box-title {
+.skl[data-lod="far"] .fl-box-branch .fl-box-title,
+.skl[data-lod="far"] .fl-box.fl-box-flown .fl-box-title {
   -webkit-line-clamp: 1;
+}
+
+.skl[data-lod="far"] .fl-box.fl-box-flown .fl-box-title {
+  font-size: calc(14px * var(--sky-far));
 }
 
 .skl[data-lod="far"] .fl-box:not(.fl-box-open) .fl-box-icon,
@@ -351,45 +645,47 @@
 }
 
 .skl[data-lod="far"] .fl-box-add .fl-add-label {
-  font-size: calc(12.5px * var(--sky-far));
+  font-size: calc(15px * var(--sky-far));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* The canvas leaves these out at far too (its `lod`); until then, CSS does. */
+/* The canvas leaves these out at far too (its `lod`); CSS holds the band
+   either way. */
 .skl[data-lod="far"] .fl-box:not(.fl-box-open) :is(.fl-box-chip, .fl-box-sub, .fl-box-detail, .fl-box-reason, .fl-box-dots, .fl-box-pulse, .fl-box-menu, .fl-you-text, .fl-you-items, .fl-you-acts) {
   display: none;
 }
 
-.skl[data-lod="far"] .fl-join-pill {
+.skl[data-lod="far"] .fl-join-pill,
+.skl[data-lod="far"] .fl-bird-marker {
   zoom: var(--sky-far-ui);
 }
 
 .skl[data-lod="near"] .fl-box:not(.fl-box-open) {
-  gap: calc(3px / var(--sky-near));
-  padding: calc(9px / var(--sky-near)) calc(11px / var(--sky-near));
-  font-size: calc(12.5px / var(--sky-near));
+  gap: calc(5px / var(--sky-near));
+  padding: calc(12px / var(--sky-near)) calc(14px / var(--sky-near));
+  font-size: calc(15px / var(--sky-near));
 }
 
 .skl[data-lod="near"] .fl-box:not(.fl-box-open) .fl-box-head {
-  gap: calc(7px / var(--sky-near));
+  gap: calc(9px / var(--sky-near));
 }
 
 .skl[data-lod="near"] .fl-box:not(.fl-box-open) .fl-box-title {
-  font-size: calc(12.5px / var(--sky-near));
+  font-size: calc(15px / var(--sky-near));
   line-height: 1.25;
   white-space: normal;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
 }
 
 .skl[data-lod="near"] .fl-box:not(.fl-box-open) :is(.fl-box-sub, .fl-box-detail, .fl-box-reason) {
   flex: 0 1 auto;
   min-height: 0;
-  font-size: calc(11.5px / var(--sky-near));
-  line-height: 1.3;
+  font-size: calc(13px / var(--sky-near));
+  line-height: 1.35;
   white-space: normal;
   overflow: hidden;
   display: -webkit-box;
