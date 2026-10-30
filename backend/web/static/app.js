@@ -26009,7 +26009,7 @@ function workerLine(row, opts) {
 		state
 	};
 }
-var plural$8 = (n, word) => n + " " + word + (n === 1 ? "" : "s");
+var plural$9 = (n, word) => n + " " + word + (n === 1 ? "" : "s");
 function rollup(children, nameOf, actOf = rawActivity, now = Date.now() / 1e3) {
 	const n = children.length;
 	if (!n) return null;
@@ -26035,7 +26035,7 @@ function rollup(children, nameOf, actOf = rawActivity, now = Date.now() / 1e3) {
 		cls: "bad"
 	});
 	if (ask) parts.push({
-		text: plural$8(n, "worker"),
+		text: plural$9(n, "worker"),
 		cls: ""
 	});
 	else if (reported === n) parts.push({
@@ -26059,7 +26059,7 @@ function rollup(children, nameOf, actOf = rawActivity, now = Date.now() / 1e3) {
 		cls: ""
 	});
 	else parts.push({
-		text: plural$8(n, "worker") + " · no reports",
+		text: plural$9(n, "worker") + " · no reports",
 		cls: ""
 	});
 	return {
@@ -32734,7 +32734,7 @@ function pieceStatus(t, leadName, mode) {
 		};
 	}
 }
-function plural$7(n, one, many = one + "s") {
+function plural$8(n, one, many = one + "s") {
 	return n + " " + (n === 1 ? one : many);
 }
 function leadSubline(run, leadName) {
@@ -32746,16 +32746,16 @@ function leadSubline(run, leadName) {
 	if (run.state === "plan_ready") return [
 		{ text: leadName + " proposed " },
 		{
-			text: plural$7(n, "piece") + " with separate paths",
+			text: plural$8(n, "piece") + " with separate paths",
 			b: true
 		},
 		{ text: " — approve them and MindFlock starts the workers." }
 	];
 	const parts = split ? [{ text: "Split into " }, {
-		text: plural$7(n, "piece") + " with separate paths",
+		text: plural$8(n, "piece") + " with separate paths",
 		b: true
 	}] : [{
-		text: plural$7(n, "line") + ", one PR",
+		text: plural$8(n, "line") + ", one PR",
 		b: true
 	}];
 	const merged = tasks.filter((t) => t.state === "integrated").length;
@@ -32807,7 +32807,7 @@ function leadSubline(run, leadName) {
 	}
 	const conflicts = tasks.filter((t) => t.state === "integrating" && (t.reason === "conflict" || t.conflict)).length;
 	if (conflicts) parts.push({
-		text: " · " + plural$7(conflicts, "conflict") + " with " + leadName,
+		text: " · " + plural$8(conflicts, "conflict") + " with " + leadName,
 		cls: "needs"
 	});
 	const c = run.check;
@@ -32854,7 +32854,7 @@ function planRows(pieces) {
 	}));
 }
 function startWorkersLabel(n) {
-	return "Start " + plural$7(n, "worker");
+	return "Start " + plural$8(n, "worker");
 }
 function parsePaths(text) {
 	return String(text || "").split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
@@ -32880,14 +32880,14 @@ function releaseCard(run) {
 	const base = r.base || "the base branch";
 	const branch = r.branch || run.lead?.branch || "";
 	const files = Number(r.files) || 0;
-	const stat = files ? plural$7(files, "file") + " +" + (Number(r.add) || 0) + " −" + (Number(r.del) || 0) : "";
+	const stat = files ? plural$8(files, "file") + " +" + (Number(r.add) || 0) + " −" + (Number(r.del) || 0) : "";
 	const fixes = Number(r.conflict_fixes) || 0;
 	const split = !!run.split;
 	return {
 		title: r.title || run.name,
 		into: base + " ← " + (branch || "its branch"),
 		stat,
-		commits: (isSameFolder(run) ? "one per piece, committed by MindFlock with only its paths" : split ? "one per piece, kept as written" : "one per line, kept as written") + (fixes ? " + " + plural$7(fixes, "conflict fix", "conflict fixes") + " by the lead" : ""),
+		commits: (isSameFolder(run) ? "one per piece, committed by MindFlock with only its paths" : split ? "one per piece, kept as written" : "one per line, kept as written") + (fixes ? " + " + plural$8(fixes, "conflict fix", "conflict fixes") + " by the lead" : ""),
 		body: split ? "a section per piece: what changed, the tests it ran" : "a section per line: what changed, the tests it ran"
 	};
 }
@@ -37604,6 +37604,12 @@ function tackOnSteps(flightId, steps, at, groupName) {
 		...groupName ? { group: { name: groupName } } : {}
 	});
 }
+function groupStops(flightId, stepIds, name) {
+	return flightAction("Grouping", flightPath(flightId, "/group"), {
+		steps: stepIds,
+		name
+	});
+}
 function ungroupStops(flightId, groupId) {
 	return flightAction("Ungrouping", flightPath(flightId, "/ungroup"), { group: groupId });
 }
@@ -41300,7 +41306,7 @@ var DURATION = /(^|[^A-Za-z0-9.])(\d+)(h|hr|hrs)(?:[ \t]?(\d+)(m|min|mins))?(?:[
 var DURATION_ONE = /(^|[^A-Za-z0-9.])(\d+(?:\.\d+)?)(ms|h|hr|hrs|m|min|mins|s|sec|secs)(?![A-Za-z0-9])/g;
 var UNIT = new RegExp("(^|[^A-Za-z0-9.])(\\d+(?:\\.\\d+)?)[ \\t]?(" + byLength(Object.keys(TABLES.units)).join("|") + ")(?![A-Za-z0-9])", "gi");
 var THOUSANDS = /(^|[^A-Za-z0-9.,])(\d{1,3}(?:,\d{3})+)(?![A-Za-z0-9,])/g;
-var plural$6 = (n, pair) => n === "1" || n === "1.0" ? pair[0] : pair[1];
+var plural$7 = (n, pair) => n === "1" || n === "1.0" ? pair[0] : pair[1];
 function numbers(text) {
 	text = text.replace(VERSION, (_w, pre, v) => pre + "version " + v.split(".").join(" point "));
 	text = text.replace(DOTTED, (_w, pre, v) => pre + v.split(".").join(" point "));
@@ -41311,18 +41317,18 @@ function numbers(text) {
 		const d = TABLES.durations;
 		const a = g;
 		if (a[2] !== void 0) {
-			let out = a[1] + a[2] + " " + plural$6(a[2], d[a[3]]);
-			if (a[4]) out += " " + a[4] + " " + plural$6(a[4], d[a[5]]);
-			if (a[6]) out += " " + a[6] + " " + plural$6(a[6], d[a[7]]);
+			let out = a[1] + a[2] + " " + plural$7(a[2], d[a[3]]);
+			if (a[4]) out += " " + a[4] + " " + plural$7(a[4], d[a[5]]);
+			if (a[6]) out += " " + a[6] + " " + plural$7(a[6], d[a[7]]);
 			return out;
 		}
-		return a[8] + a[9] + " " + plural$6(a[9], d[a[10]]) + " " + a[11] + " " + plural$6(a[11], d[a[12]]);
+		return a[8] + a[9] + " " + plural$7(a[9], d[a[10]]) + " " + a[11] + " " + plural$7(a[11], d[a[12]]);
 	});
 	text = text.replace(DURATION_ONE, (_w, pre, n, unit) => {
 		const pair = unit === "ms" ? TABLES.units.ms : TABLES.durations[unit];
-		return pre + n + " " + plural$6(n, pair);
+		return pre + n + " " + plural$7(n, pair);
 	});
-	text = text.replace(UNIT, (_w, pre, n, unit) => pre + n + " " + plural$6(n, TABLES.units[unit.toLowerCase()]));
+	text = text.replace(UNIT, (_w, pre, n, unit) => pre + n + " " + plural$7(n, TABLES.units[unit.toLowerCase()]));
 	return text;
 }
 var IDENT = /(^|[^A-Za-z0-9_'-])([A-Za-z0-9]+(?:[_-][A-Za-z0-9]+)*)(?![A-Za-z0-9_])/g;
@@ -51697,7 +51703,7 @@ function verdictOf(check) {
 	if (seen.some(([, r]) => r === "" || r === "blocked")) return "needs_you";
 	return "verified";
 }
-var plural$5 = (n) => n + (n === 1 ? " step" : " steps");
+var plural$6 = (n) => n + (n === 1 ? " step" : " steps");
 function verdictLine(check, peerName) {
 	const name = (peerName || "").trim() || "your peer";
 	const steps = check?.steps || [];
@@ -51714,15 +51720,15 @@ function verdictLine(check, peerName) {
 	const who = (side) => side === "mine" ? "Needs you — " : "Needs " + name + " — ";
 	for (const side of ["mine", "theirs"]) {
 		const n = count(side, "agent", "blocked");
-		if (n) return who(side) + plural$5(n) + (side === "mine" ? " your" : " their") + " agent couldn't check";
+		if (n) return who(side) + plural$6(n) + (side === "mine" ? " your" : " their") + " agent couldn't check";
 	}
 	for (const side of ["mine", "theirs"]) {
 		const n = count(side, "human", "");
-		if (n) return who(side) + plural$5(n);
+		if (n) return who(side) + plural$6(n);
 	}
 	for (const side of ["mine", "theirs"]) {
 		const n = count(side, "human", "blocked");
-		if (n) return who(side) + plural$5(n) + " couldn't be checked";
+		if (n) return who(side) + plural$6(n) + " couldn't be checked";
 	}
 	return "Needs you";
 }
@@ -59605,16 +59611,16 @@ function forkPoint(rows) {
 	if (shas.size !== 1) return "";
 	return [...shas][0].slice(0, 7);
 }
-var plural$4 = (n, word) => n + " " + word + (n === 1 ? "" : "s");
+var plural$5 = (n, word) => n + " " + word + (n === 1 ? "" : "s");
 function headerSummary(rows, finished = 0) {
 	if (!rows.length) return finished ? [{
-		text: "All " + plural$4(finished, "worker") + " finished",
+		text: "All " + plural$5(finished, "worker") + " finished",
 		cls: "ok"
 	}] : [];
 	const n = (s) => rows.filter((r) => r.state === s).length;
 	const sha = forkPoint(rows);
 	const parts = [{
-		text: plural$4(rows.length, "worker") + (sha ? " forked from " : ""),
+		text: plural$5(rows.length, "worker") + (sha ? " forked from " : ""),
 		cls: ""
 	}];
 	if (sha) parts.push({
@@ -71702,7 +71708,7 @@ function AddZoneRow(p) {
 }
 //#endregion
 //#region src/components/grid/codemap/TreeCards.tsx
-var plural$3 = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
+var plural$4 = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
 var linesTxt = (f) => f.kind === "a" ? "asset" : `~${(f.lines || 1).toLocaleString()} lines`;
 var nodeName = (M, n) => n === M.roots ? "roots" : n.kind === "root" ? n.label || n.name : n.depth === 0 ? M.name : n.disp || shortName(n.name);
 var rootWhat = (n) => {
@@ -72165,7 +72171,7 @@ function FileCard(p) {
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: kind }),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 					className: used ? "gold" : "",
-					children: ["used by ", plural$3(used, "file")]
+					children: ["used by ", plural$4(used, "file")]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: ["imports ", imp] })
 			]
@@ -72350,22 +72356,22 @@ function NodeCard(p) {
 			className: "ct-facts",
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: isTrunk ? n === M.roots ? "all roots" : "repo (the trunk)" : isRoot ? rootKind(n) : "folder" }),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: plural$3(n.nFiles, isTrunk && n === M.crown ? "code file" : "file") }),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: plural$4(n.nFiles, isTrunk && n === M.crown ? "code file" : "file") }),
 				n.lines > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
 					"~",
 					n.lines.toLocaleString(),
 					" lines"
 				] }),
-				n.kids.length > 0 && !isTrunk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: plural$3(n.kids.length, "sub-folder") })
+				n.kids.length > 0 && !isTrunk && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: plural$4(n.kids.length, "sub-folder") })
 			]
 		}),
 		isTrunk && n === M.crown && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ct-facts",
 				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [plural$3(M.roots.nFiles - nSupport, "test"), " (root tips)"] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [plural$4(M.roots.nFiles - nSupport, "test"), " (root tips)"] }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [nSupport, " docs / config (root tips under the trunk)"] }),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: plural$3(M.crown.kids.length, "top-level folder") })
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: plural$4(M.crown.kids.length, "top-level folder") })
 				]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h5", { children: "Agents" }),
@@ -72507,7 +72513,7 @@ function BlastCard(p) {
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("h3", {
 			className: "ct-gold",
-			children: [plural$3(bd.n, "file"), " could break"]
+			children: [plural$4(bd.n, "file"), " could break"]
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 			className: "ct-path",
@@ -72584,7 +72590,7 @@ function TipBody({ M, hit, agents, zones, tool, folded }) {
 			"click to paint ⛔ keep out on ",
 			shortName(n.path || n.name),
 			" · ",
-			plural$3(n.nFiles, "file")
+			plural$4(n.nFiles, "file")
 		]
 	}) : tool === "only" ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 		className: "act only",
@@ -72592,7 +72598,7 @@ function TipBody({ M, hit, agents, zones, tool, folded }) {
 			"click to paint ✓ only here on ",
 			shortName(n.path || n.name),
 			" · ",
-			plural$3(n.nFiles, "file")
+			plural$4(n.nFiles, "file")
 		]
 	}) : folded ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "folded — click to unfold" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "click for details · double-click to zoom in" });
 	if (hit.leaf) {
@@ -72682,7 +72688,7 @@ function TipBody({ M, hit, agents, zones, tool, folded }) {
 	if (n && hit.viaLeaf) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: nodeName(M, n) }),
 		" ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: (n.kind === "root" ? rootKind(n) : "folder") + " · " + plural$3(n.nFiles, "file") }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: (n.kind === "root" ? rootKind(n) : "folder") + " · " + plural$4(n.nFiles, "file") }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: act(n) }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "zoom in to pick a single file" }) })
 	] });
@@ -72692,7 +72698,7 @@ function TipBody({ M, hit, agents, zones, tool, folded }) {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("i", { children: [
 			n.kind === "root" ? n.support ? rootWhat(n) : "tests" : "folder",
 			" · ",
-			plural$3(n.nFiles, "file"),
+			plural$4(n.nFiles, "file"),
 			n.lines ? ` · ~${n.lines.toLocaleString()} lines` : ""
 		] }),
 		n.kind === "crown" && n.depth > 1 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: n.path }) }),
@@ -72703,7 +72709,7 @@ function TipBody({ M, hit, agents, zones, tool, folded }) {
 		" ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("i", { children: [
 			"the trunk = the whole repo · ",
-			plural$3(M.files.length, "file"),
+			plural$4(M.files.length, "file"),
 			" (",
 			M.crown.nFiles,
 			" code)"
@@ -72762,7 +72768,7 @@ function TipBody({ M, hit, agents, zones, tool, folded }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", {
 				className: "ct-gold",
 				children: [
-					plural$3(bd.n, "file"),
+					plural$4(bd.n, "file"),
 					" in ",
 					nodeName(M, bd.node)
 				]
@@ -72808,7 +72814,7 @@ var MapGuideContext = (0, import_react.createContext)({
 //#endregion
 //#region src/components/grid/codemap/BirdIndex.tsx
 var clip$1 = (s, n = 22) => s.length > n ? s.slice(0, n - 1) + "…" : s;
-var plural$2 = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
+var plural$3 = (n, one, many = one + "s") => `${n} ${n === 1 ? one : many}`;
 var EXPANDED = /* @__PURE__ */ new Map();
 var RISK_DONE = /* @__PURE__ */ new Map();
 var ALL_FOLDERS = "\0folders";
@@ -72873,7 +72879,7 @@ function birdWords(st, primary, activity, word, helpersOut, idle) {
 	const w = word.toLowerCase();
 	const quiet = !!w && w !== "working" && w !== "starting";
 	const chip = w && (st === "done" || st === "waiting" || quiet && st === "thinking") ? w : STATUS_TXT[st];
-	const nest = helpersOut ? `in the nest — ${plural$2(helpersOut, "helper")} out working` : "in the nest, thinking";
+	const nest = helpersOut ? `in the nest — ${plural$3(helpersOut, "helper")} out working` : "in the nest, thinking";
 	const idleWord = (() => {
 		const sidebarIdle = w.startsWith("idle");
 		const long = !!idle && idle.secs > IDLE_SAY_S;
@@ -73055,7 +73061,7 @@ function BirdIndex(p) {
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
 						type: "button",
 						className: "ct-rail-tile",
-						title: sum.total ? `${plural$2(sum.total, "file")} changed, all sessions — ${sum.tops.map(([k, n]) => `${k} ${n}`).join(", ")}\nthis session ${sum.mine} · other sessions ${sum.others}` : "No changes yet.",
+						title: sum.total ? `${plural$3(sum.total, "file")} changed, all sessions — ${sum.tops.map(([k, n]) => `${k} ${n}`).join(", ")}\nthis session ${sum.mine} · other sessions ${sum.others}` : "No changes yet.",
 						onClick: () => setRailOpen(true),
 						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("b", { children: ["✎", sum.total] }), " changed"]
 					}), rules.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
@@ -81198,7 +81204,7 @@ function FlywayCanvas(p) {
 					const hold = here && (!n.editable || n.kind === "group") ? flightHold(n) : null;
 					const haltable = !!p.onToggleHalt && canHalt(n, here);
 					const waiting = n.join && n.join.waiting > 0 ? n.join : null;
-					const cls = "fl-box fl-box-" + n.kind + (open ? " fl-box-open" : "") + (drop ? " fl-drop" : "") + " fl-st-" + n.state + (n.perch ? " fl-perch" : "") + (p.selected === n.id ? " selected" : "") + (p.highlight?.has(n.id) ? " fl-described" : "") + (lifted ? " fl-lifted" : "") + (tools ? " fl-has-tools" : "") + (mark ? " fl-halt-point" : "") + (n.inGroup ? " fl-in-group" : "") + (canDrag(n) ? " fl-draggable" : "");
+					const cls = "fl-box fl-box-" + n.kind + (open ? " fl-box-open" : "") + (drop ? " fl-drop" : "") + " fl-st-" + n.state + (n.perch ? " fl-perch" : "") + (p.selected === n.id ? " selected" : "") + (p.highlight?.has(n.id) ? " fl-described" : "") + (p.highlighted?.has(n.id) ? " fl-box-selected" : "") + (lifted ? " fl-lifted" : "") + (tools ? " fl-has-tools" : "") + (mark ? " fl-halt-point" : "") + (n.inGroup ? " fl-in-group" : "") + (canDrag(n) ? " fl-draggable" : "");
 					const said = n.kind === "add" ? drop ? addLabel : n.title : n.title + (n.group ? ", a stop of " + n.group.total + (n.group.total === 1 ? " sub-step" : " sub-steps") + (n.group.current ? ", " + n.group.done + " of " + n.group.total + " done" : "") : "") + (n.kind === "stop" || n.kind === "rung" || n.kind === "group" ? ", " + (STATE_WORD[n.state] || "") : "") + (n.inGroup ? ", in “" + n.inGroup.name + "”" : "") + (mark ? ", halt point" : "") + (n.chip ? ", " + n.chip.label : "") + (waiting ? ", " + joinLabel(waiting) : "");
 					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						ref: (el) => {
@@ -82511,12 +82517,13 @@ function StepDialog(p) {
 							className: "stop-dialog-side",
 							children: [p.onRemove && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
-								className: "stop-dialog-danger",
+								className: "test-btn stop-dialog-danger",
 								disabled: p.busy,
 								onClick: p.onRemove,
 								children: "Remove"
 							}), editable && p.onDuplicate && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 								type: "button",
+								className: "test-btn",
 								disabled: p.busy,
 								onClick: p.onDuplicate,
 								children: "Duplicate"
@@ -82524,24 +82531,28 @@ function StepDialog(p) {
 						}),
 						p.onDone && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
+							className: "test-btn",
 							disabled: p.busy,
 							onClick: p.onDone,
 							children: "Done"
 						}),
 						p.onRetry && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
+							className: "test-btn",
 							disabled: p.busy,
 							onClick: p.onRetry,
 							children: "Retry"
 						}),
 						p.onSkip && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
+							className: "test-btn",
 							disabled: p.busy,
 							onClick: p.onSkip,
 							children: "Skip"
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
+							className: "test-btn",
 							onClick: p.onClose,
 							children: editable ? "Cancel" : "Close"
 						}),
@@ -82658,13 +82669,14 @@ function GroupDialog(p) {
 							children: [
 								p.onRemove && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 									type: "button",
-									className: "stop-dialog-danger",
+									className: "test-btn stop-dialog-danger",
 									disabled: p.busy,
 									onClick: p.onRemove,
 									children: "Remove"
 								}),
 								p.onUngroup && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 									type: "button",
+									className: "test-btn",
 									disabled: p.busy,
 									title: "Its sub-steps become stops of their own",
 									onClick: p.onUngroup,
@@ -82672,6 +82684,7 @@ function GroupDialog(p) {
 								}),
 								p.onSaveShelf && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 									type: "button",
+									className: "test-btn",
 									disabled: p.busy || !next,
 									title: "Keep these stops on the shelf, to drag onto any line",
 									onClick: () => void p.onSaveShelf(next),
@@ -82681,6 +82694,7 @@ function GroupDialog(p) {
 						}),
 						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 							type: "button",
+							className: "test-btn",
 							onClick: p.onClose,
 							children: p.onRename ? "Cancel" : "Close"
 						}),
@@ -111387,7 +111401,7 @@ function fmtPct(part, whole) {
 	if (!whole) return "—";
 	return (part / whole * 100).toFixed(1) + "%";
 }
-function plural$1(n, word) {
+function plural$2(n, word) {
 	return `${fmtInt(n)} ${word}${n === 1 ? "" : "s"}`;
 }
 var CHART_W = 640;
@@ -111736,7 +111750,7 @@ function VisitorsChart({ days }) {
 				children: hovered ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: fmtDate(hovered.day) }),
 					" — ",
-					plural$1(hovered.visitors, "visitor"),
+					plural$2(hovered.visitors, "visitor"),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 						className: "traffic-tooltip-detail",
 						children: [
@@ -117842,7 +117856,7 @@ function whenTitle(e) {
 	const ms = closedMs(e);
 	return [ms ? "Closed " + new Date(ms).toLocaleString() : "", e.last_used ? "Last touched " + (/* @__PURE__ */ new Date(e.last_used * 1e3)).toLocaleString() : ""].filter(Boolean).join("\n");
 }
-var plural = (n, one, many = one + "s") => n === 1 ? one : many;
+var plural$1 = (n, one, many = one + "s") => n === 1 ? one : many;
 function nothingMessage(r) {
 	const k = r.kept || {
 		active: [],
@@ -117855,9 +117869,9 @@ function nothingMessage(r) {
 	const parts = [];
 	if (k.active.length) parts.push(`${k.active.length} in use by a running session (${k.active.join(", ")})`);
 	if (k.recent) parts.push(`${k.recent} used within the last ${days} days`);
-	if (k.not_worktree) parts.push(`${k.not_worktree} that ${plural(k.not_worktree, "is", "are")} not a worktree — a repository or a clone, which this never removes`);
+	if (k.not_worktree) parts.push(`${k.not_worktree} that ${plural$1(k.not_worktree, "is", "are")} not a worktree — a repository or a clone, which this never removes`);
 	if (outside) parts.push(`${outside} outside MindFlock's own worktrees folder (one you made yourself — never removed from here)`);
-	if (k.protected) parts.push(`${k.protected} protected base ${plural(k.protected, "clone")}`);
+	if (k.protected) parts.push(`${k.protected} protected base ${plural$1(k.protected, "clone")}`);
 	return `No unused worktrees to remove.\n\n` + (parts.length ? "Kept: " + parts.join("; ") + "." : `Nothing is older than ${days} days.`);
 }
 function pruneMessage(r) {
@@ -117865,15 +117879,15 @@ function pruneMessage(r) {
 	const days = Math.round(r.days);
 	const size = r.total_bytes ? ` (${humanSize(r.total_bytes)})` : "";
 	const dirty = r.dirty_count || 0;
-	return `Delete ${n} unused ${plural(n, "worktree")}${size}?\n\n` + previewList(r.candidates.map((c) => c.name)) + `
+	return `Delete ${n} unused ${plural$1(n, "worktree")}${size}?\n\n` + previewList(r.candidates.map((c) => c.name)) + `
 
-Only worktrees git generated are ever removed — never a repository, a clone, or a folder git did not make. Left alone: anything a session is using, and anything touched in the last ${days} days.\n\nEach branch and its commits stay in the repository the worktree came from, so it is the checkout that goes, not the work. Files git ignores (build output, a local database, the .env copied in at setup) go with it.` + (dirty ? `\n\n${dirty} of ${plural(n, "it", "them")} ${plural(dirty, "has", "have")} uncommitted changes, which would be lost — asked about separately.` : "") + `\n\nThis cannot be undone.`;
+Only worktrees git generated are ever removed — never a repository, a clone, or a folder git did not make. Left alone: anything a session is using, and anything touched in the last ${days} days.\n\nEach branch and its commits stay in the repository the worktree came from, so it is the checkout that goes, not the work. Files git ignores (build output, a local database, the .env copied in at setup) go with it.` + (dirty ? `\n\n${dirty} of ${plural$1(n, "it", "them")} ${plural$1(dirty, "has", "have")} uncommitted changes, which would be lost — asked about separately.` : "") + `\n\nThis cannot be undone.`;
 }
 function dirtyMessage(r) {
 	const dirty = r.candidates.filter((c) => c.dirty);
 	const clean = r.candidates.length - dirty.length;
-	if (!clean) return `All ${dirty.length} unused ${plural(dirty.length, "worktree")} ${plural(dirty.length, "has", "have")} uncommitted changes. Delete ${plural(dirty.length, "it", "them")} anyway?\n\n` + previewList(dirty.map((c) => c.name)) + "\n\nCommitted work stays on the branch; these changes do not.\n\nThis cannot be undone.";
-	return `Include the ${dirty.length} ${plural(dirty.length, "worktree")} with uncommitted changes?\n\n` + previewList(dirty.map((c) => c.name)) + `\n\nDelete all ${r.candidates.length} — or only the ${clean} that ${plural(clean, "is", "are")} clean.`;
+	if (!clean) return `All ${dirty.length} unused ${plural$1(dirty.length, "worktree")} ${plural$1(dirty.length, "has", "have")} uncommitted changes. Delete ${plural$1(dirty.length, "it", "them")} anyway?\n\n` + previewList(dirty.map((c) => c.name)) + "\n\nCommitted work stays on the branch; these changes do not.\n\nThis cannot be undone.";
+	return `Include the ${dirty.length} ${plural$1(dirty.length, "worktree")} with uncommitted changes?\n\n` + previewList(dirty.map((c) => c.name)) + `\n\nDelete all ${r.candidates.length} — or only the ${clean} that ${plural$1(clean, "is", "are")} clean.`;
 }
 function dirtyChoices(r) {
 	const dirty = r.candidates.filter((c) => c.dirty).length;
@@ -117890,7 +117904,7 @@ function dirtyChoices(r) {
 function prunedMessage(r) {
 	const n = r.removed_count || 0;
 	return [
-		n ? `Removed ${n} ${plural(n, "worktree")}` : "Removed nothing",
+		n ? `Removed ${n} ${plural$1(n, "worktree")}` : "Removed nothing",
 		r.freed_bytes ? humanSize(r.freed_bytes) + " freed" : "",
 		r.kept_dirty && r.kept_dirty.length ? `kept ${r.kept_dirty.length} with uncommitted work` : "",
 		r.failed && r.failed.length ? `${r.failed.length} failed` : ""
@@ -121029,6 +121043,156 @@ function checkRename(raw, plans, selfId) {
 }
 var isRemoveKey = (key) => key === "Delete" || key === "Backspace";
 //#endregion
+//#region src/lib/skySelect.ts
+var NO_SELECTION = {
+	lines: /* @__PURE__ */ new Set(),
+	stops: /* @__PURE__ */ new Map()
+};
+var WHOLE_LINE = .5;
+var MARQUEE_MIN = 4;
+function rectFrom(a, b) {
+	return {
+		x: Math.min(a.x, b.x),
+		y: Math.min(a.y, b.y),
+		w: Math.abs(a.x - b.x),
+		h: Math.abs(a.y - b.y)
+	};
+}
+function overlapArea(a, b) {
+	const w = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+	const h = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+	return w > 0 && h > 0 ? w * h : 0;
+}
+var overlaps = (a, b) => overlapArea(a, b) > 0;
+function lineTouched(m, l) {
+	if (l.heads.some((h) => overlaps(m, h))) return true;
+	const area = l.rect.w * l.rect.h;
+	return area > 0 && overlapArea(m, l.rect) >= area * WHOLE_LINE;
+}
+var isStopNode = (id) => id.startsWith("stop:") || id.startsWith("group:");
+function select(m, items) {
+	const whole = new Set(items.lines.filter((l) => lineTouched(m, l)).map((l) => l.id));
+	const stops = /* @__PURE__ */ new Map();
+	for (const s of items.stops) {
+		if (!isStopNode(s.node) || !overlaps(m, s.rect)) continue;
+		const set = stops.get(s.line) || /* @__PURE__ */ new Set();
+		set.add(s.node);
+		stops.set(s.line, set);
+	}
+	if (!whole.size && stops.size === 1) return {
+		lines: /* @__PURE__ */ new Set(),
+		stops
+	};
+	for (const id of stops.keys()) whole.add(id);
+	return {
+		lines: whole,
+		stops: /* @__PURE__ */ new Map()
+	};
+}
+function addSelection(a, b) {
+	if (!a.lines.size && !b.lines.size) {
+		if ((/* @__PURE__ */ new Set([...a.stops.keys(), ...b.stops.keys()])).size <= 1) {
+			const out = /* @__PURE__ */ new Map();
+			for (const [line, set] of [...a.stops, ...b.stops]) out.set(line, /* @__PURE__ */ new Set([...out.get(line) || [], ...set]));
+			return {
+				lines: /* @__PURE__ */ new Set(),
+				stops: out
+			};
+		}
+	}
+	return {
+		lines: /* @__PURE__ */ new Set([
+			...a.lines,
+			...a.stops.keys(),
+			...b.lines,
+			...b.stops.keys()
+		]),
+		stops: /* @__PURE__ */ new Map()
+	};
+}
+var selectLines = (ids) => ({
+	lines: new Set(ids),
+	stops: /* @__PURE__ */ new Map()
+});
+function toggleLine(s, id) {
+	const lines = /* @__PURE__ */ new Set([...s.lines, ...s.stops.keys()]);
+	if (s.lines.has(id)) lines.delete(id);
+	else lines.add(id);
+	return {
+		lines,
+		stops: /* @__PURE__ */ new Map()
+	};
+}
+function pruneSelection(s, shown) {
+	if (![...s.lines, ...s.stops.keys()].some((id) => !shown.has(id))) return s;
+	return {
+		lines: new Set([...s.lines].filter((id) => shown.has(id))),
+		stops: new Map([...s.stops].filter(([id]) => shown.has(id)))
+	};
+}
+var selectionEmpty = (s) => !s.lines.size && !s.stops.size;
+function stopSelection(s) {
+	const first = [...s.stops][0];
+	return first && first[1].size ? {
+		line: first[0],
+		nodes: [...first[1]]
+	} : null;
+}
+function stepIndexesOf(node, steps) {
+	if (node.startsWith("stop:")) {
+		const id = node.slice(5);
+		const i = steps.findIndex((s, k) => (s.id || "i" + k) === id);
+		return i < 0 ? [] : [i];
+	}
+	if (!node.startsWith("group:")) return [];
+	const rest = node.slice(6);
+	const at = rest.lastIndexOf("@");
+	const gid = at >= 0 ? rest.slice(0, at) : rest;
+	const from = at >= 0 ? Number(rest.slice(at + 1)) : steps.findIndex((s) => s.group?.id === gid);
+	if (!Number.isInteger(from) || from < 0 || steps[from]?.group?.id !== gid) return [];
+	const out = [];
+	for (let i = from; i < steps.length && steps[i].group?.id === gid; i++) out.push(i);
+	return out;
+}
+function selectedIndexes(nodes, steps) {
+	const all = /* @__PURE__ */ new Set();
+	for (const n of nodes) for (const i of stepIndexesOf(n, steps)) all.add(i);
+	return [...all].sort((a, b) => a - b);
+}
+function consecutive(indexes) {
+	const s = [...new Set(indexes)].sort((a, b) => a - b);
+	return s.length > 0 && s[s.length - 1] - s[0] === s.length - 1;
+}
+function removals(nodes, steps) {
+	const out = [];
+	for (const n of nodes) {
+		const idx = stepIndexesOf(n, steps);
+		if (!idx.length) continue;
+		out.push({
+			step: steps[idx[0]].id,
+			group: n.startsWith("group:")
+		});
+	}
+	return out;
+}
+function screenToPlane(cam, r) {
+	const z = cam.z || 1;
+	return {
+		x: (r.x - cam.x) / z,
+		y: (r.y - cam.y) / z,
+		w: r.w / z,
+		h: r.h / z
+	};
+}
+function planeToScreen(cam, r) {
+	return {
+		x: cam.x + r.x * cam.z,
+		y: cam.y + r.y * cam.z,
+		w: r.w * cam.z,
+		h: r.h * cam.z
+	};
+}
+//#endregion
 //#region src/lib/skyIntake.ts
 var LANE_POLL_DEFAULT = {
 	tickets: 20,
@@ -121774,7 +121938,7 @@ function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, a
 				className: "sky-new-actions",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 					type: "button",
-					className: "btn-secondary fl-btn",
+					className: "test-btn fl-btn",
 					onClick: onCancel,
 					children: "Cancel"
 				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -122426,6 +122590,7 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }) {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "skl-resize",
 				role: "separator",
+				tabIndex: 0,
 				"aria-label": "Resize " + windowName(inst.title) + "'s card",
 				title: "Drag to resize",
 				onPointerDown: down,
@@ -122726,7 +122891,7 @@ function SkyLine(p) {
 	const where = row ? lineWhere(shown.diagram) : "";
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		ref: rootRef,
-		className: "skl skl-size-" + size + (p.focused ? " is-focused" : "") + (p.layout.open ? " is-open" : "") + (p.dropFlyway ? " is-drop" : "") + (line.editing ? " is-editing" : ""),
+		className: "skl skl-size-" + size + (p.focused ? " is-focused" : "") + (p.selected ? " is-selected" : "") + (p.layout.open ? " is-open" : "") + (p.dropFlyway ? " is-drop" : "") + (line.editing ? " is-editing" : ""),
 		"data-line": p.title,
 		"data-lod": lod,
 		style: {
@@ -122831,6 +122996,7 @@ function SkyLine(p) {
 						openBox,
 						lod,
 						...shown.canvas,
+						highlighted: p.highlighted,
 						onOpen,
 						roomy: true
 					})
@@ -122847,6 +123013,7 @@ function SkyLine(p) {
 			row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "skl-box-resize",
 				role: "separator",
+				tabIndex: 0,
 				"data-no-drag": true,
 				"aria-label": "Resize " + name + "'s boxes",
 				title: "Drag to resize the boxes (" + Math.round(box.w) + " × " + Math.round(box.h) + ")",
@@ -122854,6 +123021,231 @@ function SkyLine(p) {
 				onPointerMove: resizeMove,
 				onPointerUp: resizeUp,
 				onPointerCancel: resizeUp
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/flights/SkySelection.tsx
+var REMOVE_AT_ONCE = 3;
+var NEW_STOPS = "New stops";
+var plural = (n, one, many = one + "s") => n + " " + (n === 1 ? one : many);
+function groupHint(f, idx, kinds) {
+	if (!f || !idx.length) return "These stops aren't on a flight any more";
+	if (!consecutive(idx)) return "Pick stops that sit next to each other";
+	const stops = flightStops(f, kinds);
+	if (idx.some((i) => !stops[i]?.editable)) return "A stop that has flown, or is flying, can't join a group";
+	const gid = f.steps[idx[0]]?.group?.id;
+	if (gid && f.steps.every((s, i) => s.group?.id === gid === idx.includes(i))) return "These already are one stop";
+	return "";
+}
+function SkySelectionBar(p) {
+	const [name, setName] = (0, import_react.useState)(NEW_STOPS);
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const one = stopSelection(p.selection);
+	const lines = [...p.selection.lines];
+	const flight = one ? p.flightOf(one.line) : null;
+	const idx = one && flight ? selectedIndexes(one.nodes, flight.steps) : [];
+	const hint = one ? groupHint(flight, idx, p.kinds) : "";
+	const askRef = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		if (p.ask !== "group" && p.ask !== "save") return;
+		setName(NEW_STOPS);
+		const input = askRef.current?.querySelector("input");
+		input?.focus({ preventScroll: true });
+		input?.select();
+	}, [p.ask]);
+	const run = async (what) => {
+		setBusy(true);
+		try {
+			await what();
+		} finally {
+			setBusy(false);
+			p.setAsk("");
+			p.onClear();
+		}
+	};
+	const removeLines = () => run(async () => {
+		let gone = 0;
+		for (const id of lines) if (isGroundedKey(id)) {
+			if (await deleteFlight(groundedIdOf(id))) gone++;
+		} else await closeSession(id);
+		if (gone) toast("Removed " + plural(gone, "line") + " of stops");
+	});
+	const removeStops = () => run(async () => {
+		if (!one || !flight) return;
+		let n = 0;
+		for (const r of removals(one.nodes, flight.steps)) if (await (r.group ? dropGroup(flight.id, r.step) : dropStop(flight.id, r.step))) n++;
+		if (n) toast("Removed " + plural(n, "stop"));
+	});
+	const group = () => run(async () => {
+		if (!flight || hint) return;
+		await groupStops(flight.id, idx.map((i) => flight.steps[i].id), name.trim() || NEW_STOPS);
+	});
+	const save = () => run(async () => {
+		if (!flight || !idx.length) return;
+		const plan = planFromSteps(name.trim() || NEW_STOPS, idx.map((i) => flight.steps[i]));
+		try {
+			toast("Saved “" + (await savePlan({
+				...plan,
+				id: "",
+				updated: 0
+			})).name + "” on the shelf");
+		} catch (err) {
+			toast("Saving to the shelf failed: " + errMsg(err), { error: true });
+		}
+	});
+	const askRemove = () => {
+		if (one && one.nodes.length <= REMOVE_AT_ONCE) removeStops();
+		else p.setAsk("remove");
+	};
+	(0, import_react.useEffect)(() => {
+		if (p.ask === "remove" && one && one.nodes.length <= REMOVE_AT_ONCE && !busy) removeStops();
+	}, [p.ask]);
+	if (!lines.length && !one) return null;
+	const what = one ? plural(one.nodes.length, "stop") + " selected" : plural(lines.length, "line") + " selected";
+	const sessions = lines.filter((id) => !isGroundedKey(id));
+	const groundedLines = lines.filter(isGroundedKey);
+	const names = (ids) => ids.slice(0, 4).map(p.nameOf).join(", ") + (ids.length > 4 ? " and " + (ids.length - 4) + " more" : "");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sky-selbar" + (p.ask ? " is-asking" : ""),
+		role: "toolbar",
+		"aria-label": what,
+		style: { transform: `translate(${Math.round(p.x)}px, ${Math.round(p.y)}px)` },
+		onPointerDown: (e) => e.stopPropagation(),
+		onDoubleClick: (e) => e.stopPropagation(),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sky-selbar-row",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-selbar-count",
+						children: what
+					}),
+					one ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn fl-btn",
+							disabled: busy || !!hint,
+							title: hint || "Make these one stop with sub-steps",
+							onClick: () => p.setAsk("group"),
+							children: "Group into a stop"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn fl-btn",
+							disabled: busy || !idx.length,
+							title: "Keep these stops on the shelf as a saved stop",
+							onClick: () => p.setAsk("save"),
+							children: "Save to the shelf"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn fl-btn sky-selbar-danger",
+							disabled: busy || !flight,
+							title: "Take these stops off the line",
+							onClick: askRemove,
+							children: "Remove"
+						})
+					] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-selbar-hint",
+							title: "Drag the bar of any selected line: they all move together",
+							children: "✥ Drag a bar to move them"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn fl-btn",
+							disabled: busy,
+							title: "Forget where you put them: back to their places in the rows",
+							onClick: () => p.onTidy(lines),
+							children: "Tidy these"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn fl-btn sky-selbar-danger",
+							disabled: busy,
+							title: "Close their sessions, remove their stops",
+							onClick: () => p.setAsk("remove"),
+							children: "Remove…"
+						})
+					] }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike sky-selbar-clear",
+						title: "Clear the selection (Esc)",
+						onClick: p.onClear,
+						children: "Clear"
+					})
+				]
+			}),
+			one && hint && hint !== "These stops aren't on a flight any more" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "sky-selbar-note muted",
+				children: hint
+			}),
+			(p.ask === "group" || p.ask === "save") && one && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				ref: askRef,
+				className: "sky-selbar-ask",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TextField, {
+						value: name,
+						onChange: setName,
+						label: p.ask === "group" ? "The new stop's name" : "The saved stop's name",
+						placeholder: NEW_STOPS,
+						onEnter: () => void (p.ask === "group" ? group() : save())
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "btn-primary fl-btn",
+						disabled: busy,
+						onClick: () => void (p.ask === "group" ? group() : save()),
+						children: p.ask === "group" ? "Group" : "Save"
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						onClick: () => p.setAsk(""),
+						children: "Cancel"
+					})
+				]
+			}),
+			p.ask === "remove" && !one && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+				title: "Remove " + plural(lines.length, "line") + "?",
+				body: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [sessions.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "sky-selbar-says",
+					children: [
+						plural(sessions.length, "session"),
+						" ",
+						sessions.length === 1 ? "closes" : "close",
+						" (",
+						names(sessions),
+						"): ",
+						sessions.length === 1 ? "its agent stops and it moves" : "their agents stop and they move",
+						" to Recently closed."
+					]
+				}), groundedLines.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "sky-selbar-says",
+					children: [
+						plural(groundedLines.length, "line"),
+						" of stops with no session ",
+						groundedLines.length === 1 ? "leaves" : "leave",
+						" the board (",
+						names(groundedLines),
+						"). A saved stop on the shelf stays."
+					]
+				})] }),
+				confirmLabel: "Remove",
+				busy,
+				onConfirm: () => void removeLines(),
+				onCancel: () => p.setAsk("")
+			}),
+			p.ask === "remove" && one && one.nodes.length > REMOVE_AT_ONCE && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(InlineConfirm, {
+				title: "Remove " + plural(one.nodes.length, "stop") + "?",
+				body: "They leave “" + p.nameOf(one.line) + "”. A stop that is flying halts the flight right before what follows.",
+				confirmLabel: "Remove",
+				busy,
+				onConfirm: () => void removeStops(),
+				onCancel: () => p.setAsk("")
 			})
 		]
 	});
@@ -123196,7 +123588,7 @@ function GroundedLine(p) {
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		ref: rootRef,
-		className: "skl skl-size-" + (p.layout.size || "normal") + " skl-grounded" + (p.focused ? " is-focused" : "") + (p.sessionOver ? " is-session-over" : "") + (line.editing ? " is-editing" : ""),
+		className: "skl skl-size-" + (p.layout.size || "normal") + " skl-grounded" + (p.focused ? " is-focused" : "") + (p.selected ? " is-selected" : "") + (p.sessionOver ? " is-session-over" : "") + (line.editing ? " is-editing" : ""),
 		"data-flight": flight.id,
 		"data-lod": lod,
 		style: {
@@ -123266,6 +123658,7 @@ function GroundedLine(p) {
 					size: p.layout.size || "normal",
 					lod,
 					...line.canvas,
+					highlighted: p.highlighted,
 					roomy: true
 				})]
 			}),
@@ -123539,10 +123932,12 @@ function TakeoffDialog({ plan, onClose }) {
 					className: "modal-actions",
 					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
+						className: "test-btn",
 						onClick: onClose,
 						children: "Cancel"
 					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "submit",
+						className: "btn-primary",
 						disabled: busy,
 						children: busy ? "Saving…" : "Save"
 					})]
@@ -123759,7 +124154,7 @@ function SavedChip({ plan, plans, kinds, renaming, onTackPlan, onMenu, onRenamed
 		onMenu(plan, r.left, r.top - 8);
 	};
 	const body = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [renaming ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-		className: "sky-saved-rename",
+		className: "sky-saved-rename fl-input",
 		"aria-label": "Rename “" + plan.name + "”",
 		"aria-invalid": !!err,
 		title: err || "Enter saves, Esc cancels",
@@ -124072,6 +124467,14 @@ function SkyView() {
 	const [flash, setFlash] = (0, import_react.useState)("");
 	const [spaceHeld, setSpaceHeld] = (0, import_react.useState)(false);
 	const space = (0, import_react.useRef)(false);
+	const [selRaw, setSel] = (0, import_react.useState)(NO_SELECTION);
+	const [selAsk, setSelAsk] = (0, import_react.useState)("");
+	const [selStops, setSelStops] = (0, import_react.useState)(null);
+	const [marq, setMarq] = (0, import_react.useState)(null);
+	const clearSel = (0, import_react.useCallback)(() => {
+		setSel(NO_SELECTION);
+		setSelAsk("");
+	}, []);
 	const titles = (0, import_react.useMemo)(() => skyLineTitles(rows, mode, {
 		query,
 		focus: focused || ""
@@ -124130,6 +124533,8 @@ function SkyView() {
 		measured,
 		layout
 	]);
+	const shownIds = (0, import_react.useMemo)(() => new Set(lines.map((l) => l.id)), [lines]);
+	const sel = (0, import_react.useMemo)(() => pruneSelection(selRaw, shownIds), [selRaw, shownIds]);
 	const lineAlive = (0, import_react.useCallback)((id) => isGroundedKey(id) ? groundedIds.has(groundedIdOf(id)) : rows.some((r) => r.title === id && inSky(r)), [rows, groundedIds]);
 	const { place, fresh } = (0, import_react.useMemo)(() => {
 		if (mode === "one") return {
@@ -124200,9 +124605,15 @@ function SkyView() {
 		instQ.data,
 		flightsSettled
 	]);
-	const posOf = (0, import_react.useCallback)((id) => drag?.id === id ? drag.pos : place[id] || {
-		x: LINES_LEFT,
-		y: SKY_MARGIN
+	const posOf = (0, import_react.useCallback)((id) => {
+		const f = drag?.from[id];
+		return f ? {
+			x: f.x + drag.dx,
+			y: f.y + drag.dy
+		} : place[id] || {
+			x: LINES_LEFT,
+			y: SKY_MARGIN
+		};
 	}, [drag, place]);
 	const rectOf = (0, import_react.useCallback)((id) => {
 		const l = lines.find((x) => x.id === id);
@@ -124404,6 +124815,15 @@ function SkyView() {
 		clearTimeout(tidyTimer.current);
 		tidyTimer.current = setTimeout(() => alive.current && setTidying(false), TIDY_MS);
 	};
+	const tidyThese = (ids) => {
+		setAutoPos((cur) => Object.fromEntries(Object.entries(cur).filter(([id]) => !ids.includes(id))));
+		setLayout((l) => ids.reduce((acc, id) => tidySkyLayout(acc, id), l));
+		clearSel();
+		if (motionOff) return;
+		setTidying(true);
+		clearTimeout(tidyTimer.current);
+		tidyTimer.current = setTimeout(() => alive.current && setTidying(false), TIDY_MS);
+	};
 	const onMeasure = (0, import_react.useCallback)((id, w, h) => {
 		setMeasured((m) => {
 			const o = m[id];
@@ -124420,24 +124840,26 @@ function SkyView() {
 	const onDragStart = (id, e) => {
 		if (e.button !== 0) return;
 		e.stopPropagation();
-		const from = posOf(id);
+		const ids = sel.lines.has(id) ? [...sel.lines] : [id];
+		const from = Object.fromEntries(ids.map((x) => [x, posOf(x)]));
 		const g = {
 			pid: e.pointerId,
 			sx: e.clientX,
 			sy: e.clientY,
-			moved: false
+			moved: false,
+			shift: e.shiftKey
 		};
-		const at = (ev) => ({
-			x: from.x + (ev.clientX - g.sx) / camRef.current.z,
-			y: from.y + (ev.clientY - g.sy) / camRef.current.z
+		const delta = (ev) => ({
+			dx: (ev.clientX - g.sx) / camRef.current.z,
+			dy: (ev.clientY - g.sy) / camRef.current.z
 		});
 		const move = (ev) => {
 			if (ev.pointerId !== g.pid) return;
 			if (!g.moved && Math.hypot(ev.clientX - g.sx, ev.clientY - g.sy) < 4) return;
 			g.moved = true;
 			setDrag({
-				id,
-				pos: at(ev)
+				from,
+				...delta(ev)
 			});
 		};
 		const up = (ev) => {
@@ -124447,13 +124869,26 @@ function SkyView() {
 			window.removeEventListener("pointercancel", up);
 			setDrag(null);
 			if (g.moved) {
-				const p = at(ev);
-				onLayout(id, {
-					x: p.x,
-					y: p.y,
-					pinned: true
-				});
-			} else if (isGroundedKey(id)) setGroundFocus(id);
+				const { dx, dy } = delta(ev);
+				for (const [id, f] of Object.entries(from)) {
+					const p = {
+						x: f.x + dx,
+						y: f.y + dy
+					};
+					onLayout(id, {
+						x: p.x,
+						y: p.y,
+						pinned: true
+					});
+				}
+				return;
+			}
+			if (g.shift) {
+				setSel((s) => toggleLine(s, id));
+				return;
+			}
+			if (!sel.lines.has(id)) clearSel();
+			if (isGroundedKey(id)) setGroundFocus(id);
 			else focusOn(id, true);
 		};
 		window.addEventListener("pointermove", move);
@@ -124642,13 +125077,125 @@ function SkyView() {
 		e.preventDefault();
 		startPan(e);
 	};
+	const marquee = (0, import_react.useRef)(null);
 	const onDown = (e) => {
 		if (!ground(e.target) || e.pointerType === "mouse" && e.button !== 0 && e.button !== 1) return;
 		e.preventDefault();
 		vpRef.current?.focus({ preventScroll: true });
-		startPan(e);
+		if (e.pointerType !== "touch" && e.button === 0) startMarquee(e);
+		else startPan(e);
+	};
+	const startMarquee = (e) => {
+		try {
+			e.currentTarget.setPointerCapture(e.pointerId);
+		} catch {}
+		marquee.current = {
+			id: e.pointerId,
+			sx: e.clientX,
+			sy: e.clientY,
+			add: e.shiftKey,
+			moved: false
+		};
+	};
+	const vpCorner = () => {
+		const r = vpRef.current?.getBoundingClientRect();
+		return {
+			x: r?.left || 0,
+			y: r?.top || 0
+		};
+	};
+	const selectables = () => {
+		const out = {
+			lines: [],
+			stops: []
+		};
+		const root = vpRef.current;
+		if (!root) return out;
+		const o = vpCorner();
+		const c = camRef.current;
+		const onPlane = (el) => {
+			const b = el.getBoundingClientRect();
+			return screenToPlane(c, {
+				x: b.left - o.x,
+				y: b.top - o.y,
+				w: b.width,
+				h: b.height
+			});
+		};
+		const slots = /* @__PURE__ */ new Map();
+		root.querySelectorAll(".sky-line-slot[data-slot]").forEach((el) => slots.set(el.getAttribute("data-slot") || "", el));
+		for (const l of lines) {
+			const slot = slots.get(l.id);
+			const heads = [];
+			slot?.querySelectorAll(".skl-bar").forEach((el) => {
+				if (!el.closest(".skl-card")) heads.push(onPlane(el));
+			});
+			out.lines.push({
+				id: l.id,
+				rect: {
+					...posOf(l.id),
+					w: l.w,
+					h: l.h
+				},
+				heads
+			});
+			slot?.querySelectorAll("[data-node]").forEach((el) => {
+				const node = el.getAttribute("data-node") || "";
+				if (isStopNode(node) && !el.closest(".skl-card")) out.stops.push({
+					line: l.id,
+					node,
+					rect: onPlane(el)
+				});
+			});
+		}
+		return out;
+	};
+	const moveMarquee = (e) => {
+		const m = marquee.current;
+		if (!m.moved && Math.hypot(e.clientX - m.sx, e.clientY - m.sy) < MARQUEE_MIN) return;
+		m.moved = true;
+		const o = vpCorner();
+		setMarq(rectFrom({
+			x: m.sx - o.x,
+			y: m.sy - o.y
+		}, {
+			x: e.clientX - o.x,
+			y: e.clientY - o.y
+		}));
+	};
+	const endMarquee = (e) => {
+		const m = marquee.current;
+		marquee.current = null;
+		setMarq(null);
+		if (e.type === "pointercancel") return;
+		if (!m.moved) {
+			if (!m.add) clearSel();
+			return;
+		}
+		const o = vpCorner();
+		const area = screenToPlane(camRef.current, rectFrom({
+			x: m.sx - o.x,
+			y: m.sy - o.y
+		}, {
+			x: e.clientX - o.x,
+			y: e.clientY - o.y
+		}));
+		const items = selectables();
+		const got = select(area, items);
+		const next = m.add ? addSelection(sel, got) : got;
+		setSel(next);
+		setSelAsk("");
+		const one = stopSelection(next);
+		const b = boundsOf(one ? items.stops.filter((x) => x.line === one.line && one.nodes.includes(x.node)).map((x) => x.rect) : []);
+		const at = one ? posOf(one.line) : null;
+		setSelStops(b && at ? {
+			...b,
+			x: b.x - at.x,
+			y: b.y - at.y
+		} : null);
 	};
 	const onMove = (e) => {
+		if (marquee.current?.id === e.pointerId) return moveMarquee(e);
 		if (!pointers.current.has(e.pointerId)) return;
 		pointers.current.set(e.pointerId, {
 			x: e.clientX,
@@ -124670,6 +125217,7 @@ function SkyView() {
 		});
 	};
 	const onUp = (e) => {
+		if (marquee.current?.id === e.pointerId) return endMarquee(e);
 		pointers.current.delete(e.pointerId);
 		if (pointers.current.size < 2) pinch.current = null;
 		if (pan.current?.id === e.pointerId) pan.current = null;
@@ -124784,6 +125332,19 @@ function SkyView() {
 			return;
 		}
 		if (overlayOpen()) return;
+		const inBar = !!el?.closest(".sky-selbar");
+		if (e.key === "Escape" && !selectionEmpty(sel) && (inBar || skyKeysOwn(el))) {
+			e.preventDefault();
+			if (selAsk) setSelAsk("");
+			else clearSel();
+			return;
+		}
+		if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "a" || e.key === "A") && skyKeysOwn(el) && lines.length) {
+			e.preventDefault();
+			setSel(selectLines(lines.map((l) => l.id)));
+			setSelAsk("");
+			return;
+		}
 		if (!skyKeysOwn(el) || e.ctrlKey || e.metaKey || e.altKey) return;
 		const k = e.key;
 		const handled = () => e.preventDefault();
@@ -124818,6 +125379,20 @@ function SkyView() {
 			onLayout(focusLine, { open: false });
 		}
 	};
+	const removeKeys = (0, import_react.useRef)(() => {});
+	removeKeys.current = (e) => {
+		if (e.key !== "Delete" && e.key !== "Backspace" || selectionEmpty(sel) || e.ctrlKey || e.metaKey || e.altKey) return;
+		if (overlayOpen() || !skyKeysOwn(document.activeElement)) return;
+		e.preventDefault();
+		e.stopPropagation();
+		setSelAsk("remove");
+	};
+	(0, import_react.useEffect)(() => {
+		if (narrow) return;
+		const del = (e) => removeKeys.current(e);
+		window.addEventListener("keydown", del, true);
+		return () => window.removeEventListener("keydown", del, true);
+	}, [narrow]);
 	(0, import_react.useEffect)(() => {
 		if (narrow) return;
 		const down = (e) => keys.current(e);
@@ -125060,7 +125635,9 @@ function SkyView() {
 				setTackPick(null);
 				setAttachPick(f);
 			},
-			sessionOver: sessionOver === id
+			sessionOver: sessionOver === id,
+			selected: at ? sel.lines.has(id) : void 0,
+			highlighted: at ? sel.stops.get(id) : void 0
 		}, id);
 		return lineForSession(id, at);
 	};
@@ -125078,8 +125655,42 @@ function SkyView() {
 		zoom: cam.z,
 		onDragStart: at ? (e) => onDragStart(id, e) : void 0,
 		onMeasure: at ? (w, h) => onMeasure(id, w, h) : void 0,
-		dropFlyway: drop?.title === id ? drop.plan : null
+		dropFlyway: drop?.title === id ? drop.plan : null,
+		selected: at ? sel.lines.has(id) : void 0,
+		highlighted: at ? sel.stops.get(id) : void 0
 	}, id);
+	const selOne = stopSelection(sel);
+	const selBox = (() => {
+		const one = stopSelection(sel);
+		if (one) {
+			const at = posOf(one.line);
+			return selStops ? {
+				...selStops,
+				x: selStops.x + at.x,
+				y: selStops.y + at.y
+			} : rectOf(one.line);
+		}
+		return boundsOf([...sel.lines].map(rectOf).filter((r) => !!r));
+	})();
+	const selScreen = selBox && planeToScreen(cam, selBox);
+	const selY = (r) => {
+		const above = r.y - 52;
+		const below = r.y + Math.min(r.h, 240) + 8;
+		const y = selOne ? below <= vp.h - 64 ? below : above : above >= 8 ? above : below;
+		return Math.max(8, Math.min(y, vp.h - 64));
+	};
+	const selBar = selScreen && !drag && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkySelectionBar, {
+		selection: sel,
+		x: Math.max(8, Math.min(selScreen.x, vp.w - 460)),
+		y: selY(selScreen),
+		ask: selAsk,
+		setAsk: setSelAsk,
+		nameOf: (id) => lines.find((l) => l.id === id)?.name || windowName(id),
+		flightOf: (id) => lines.find((l) => l.id === id)?.flight || liveFlightOf(id),
+		kinds,
+		onTidy: tidyThese,
+		onClear: clearSel
+	});
 	if (narrow) return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("main", {
 		id: "sky-view",
 		className: "sky sky-narrow",
@@ -125164,7 +125775,8 @@ function SkyView() {
 									lines.map((l) => {
 										const at = posOf(l.id);
 										return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-											className: "sky-line-slot" + (flash === l.id ? " is-flash" : "") + (drag?.id === l.id ? " is-dragging" : "") + (l.flight ? " is-grounded" : ""),
+											className: "sky-line-slot" + (flash === l.id ? " is-flash" : "") + (drag?.from[l.id] ? " is-dragging" : "") + (l.flight ? " is-grounded" : ""),
+											"data-slot": l.id,
 											"data-tour": l.flight ? void 0 : "sky-line",
 											style: { transform: `translate(${at.x}px, ${at.y}px)` },
 											children: lineFor(l.id, at)
@@ -125174,6 +125786,16 @@ function SkyView() {
 									newBlock
 								]
 							}),
+							marq && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "sky-marquee",
+								"aria-hidden": "true",
+								style: {
+									transform: `translate(${marq.x}px, ${marq.y}px)`,
+									width: marq.w,
+									height: marq.h
+								}
+							}),
+							selBar,
 							empty && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 								className: "sky-empty muted",
 								role: "status",

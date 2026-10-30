@@ -161,13 +161,13 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
         <span className="sky-selbar-count">{what}</span>
         {one ? (
           <>
-            <button type="button" className="fl-btn" disabled={busy || !!hint} title={hint || "Make these one stop with sub-steps"} onClick={() => p.setAsk("group")}>
+            <button type="button" className="test-btn fl-btn" disabled={busy || !!hint} title={hint || "Make these one stop with sub-steps"} onClick={() => p.setAsk("group")}>
               Group into a stop
             </button>
-            <button type="button" className="fl-btn" disabled={busy || !idx.length} title="Keep these stops on the shelf as a saved stop" onClick={() => p.setAsk("save")}>
+            <button type="button" className="test-btn fl-btn" disabled={busy || !idx.length} title="Keep these stops on the shelf as a saved stop" onClick={() => p.setAsk("save")}>
               Save to the shelf
             </button>
-            <button type="button" className="fl-btn sky-selbar-danger" disabled={busy || !flight} title="Take these stops off the line" onClick={askRemove}>
+            <button type="button" className="test-btn fl-btn sky-selbar-danger" disabled={busy || !flight} title="Take these stops off the line" onClick={askRemove}>
               Remove
             </button>
           </>
@@ -176,10 +176,10 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
             <span className="sky-selbar-hint" title="Drag the bar of any selected line: they all move together">
               ✥ Drag a bar to move them
             </span>
-            <button type="button" className="fl-btn" disabled={busy} title="Forget where you put them: back to their places in the rows" onClick={() => p.onTidy(lines)}>
+            <button type="button" className="test-btn fl-btn" disabled={busy} title="Forget where you put them: back to their places in the rows" onClick={() => p.onTidy(lines)}>
               Tidy these
             </button>
-            <button type="button" className="fl-btn sky-selbar-danger" disabled={busy} title="Close their sessions, remove their stops" onClick={() => p.setAsk("remove")}>
+            <button type="button" className="test-btn fl-btn sky-selbar-danger" disabled={busy} title="Close their sessions, remove their stops" onClick={() => p.setAsk("remove")}>
               Remove…
             </button>
           </>

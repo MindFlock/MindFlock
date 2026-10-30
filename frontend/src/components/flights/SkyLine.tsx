@@ -208,6 +208,7 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }: CardProps) {
       <span
         className="skl-resize"
         role="separator"
+        tabIndex={0}
         aria-label={"Resize " + windowName(inst.title) + "'s card"}
         title="Drag to resize"
         onPointerDown={down}
@@ -521,6 +522,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
         <span
           className="skl-box-resize"
           role="separator"
+          tabIndex={0}
           data-no-drag
           aria-label={"Resize " + name + "'s boxes"}
           title={"Drag to resize the boxes (" + Math.round(box.w) + " × " + Math.round(box.h) + ")"}

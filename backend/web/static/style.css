@@ -1434,13 +1434,14 @@
   flex-direction: column;
   min-width: 170px;
   max-width: 260px;
+  gap: 1px;
   padding: 4px;
-  border-radius: 9px;
+  border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--panel);
   color: var(--text);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.32);
-  font-size: 12.5px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.38);
+  font-size: 12px;
   cursor: default;
   transform: scale(calc(1 / var(--sky-z, 1)));
   transform-origin: 0 0;
@@ -1449,20 +1450,28 @@
 .fl-stopmenu-item {
   display: block;
   width: 100%;
-  padding: 6px 10px;
+  padding: 5px 9px;
   border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
+  border-radius: 5px;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
   text-align: left;
   cursor: pointer;
 }
 
-.fl-stopmenu-item:hover:not(:disabled),
+/* .vf-menu-item's rows (VerifyDialog.css, what a line's ⋯ wears): panel-2
+ * under the pointer, the accent ring on a keyboard focus. */
+.fl-stopmenu-item:hover:not(:disabled) {
+  background: var(--panel-2);
+}
+
 .fl-stopmenu-item:focus-visible {
-  outline: none;
-  background: rgba(var(--accent-rgb), 0.14);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: var(--panel-2);
 }
 
 .fl-stopmenu-item:disabled {
@@ -1472,7 +1481,7 @@
 }
 
 .fl-stopmenu-item.danger {
-  color: var(--red);
+  color: var(--fl-ink-red, var(--red));
 }
 
 .fl-stopmenu-item.danger:hover:not(:disabled),
@@ -1535,12 +1544,20 @@
   --fl-ink-working: var(--tone-working);
   --fl-ink-red: #e8795a;
   --fl-ink-muted: #a0a6b8;
+  /* The accent as TEXT: the raw accent reads 3.4–4:1 on the dark panels, so
+     dark mode lightens it (≈6.7:1) and light mode takes the deep twin. */
+  --fl-ink-accent: color-mix(in srgb, var(--accent) 62%, #fff);
+  /* The app's button tiers (docs/flights.md "As built: round 11 style"):
+     .btn-primary / .test-btn's radius, and the Sky toolbar's control height. */
+  --fl-btn-radius: 6px;
+  --fl-ctl-h: 28px;
 }
 
 .light {
   --fl-ink-working: #1a6f38;
   --fl-ink-red: #b23a17;
   --fl-ink-muted: #4f5769;
+  --fl-ink-accent: var(--accent-deep);
 }
 
 .fl-wires {
@@ -1907,7 +1924,7 @@
   font-weight: 600;
   border: 1.5px dashed color-mix(in srgb, var(--accent) 60%, var(--border));
   background: transparent;
-  color: var(--accent);
+  color: var(--fl-ink-accent);
   box-shadow: none;
 }
 
@@ -1916,6 +1933,11 @@
 .fl-box-add.selected {
   border-style: solid;
   background: rgba(var(--accent-rgb), 0.12);
+}
+
+.fl-box-add:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .fl-add-plus {
@@ -1941,9 +1963,9 @@
   height: 26px;
   padding: 0;
   border-radius: 50%;
-  border: 1px solid var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border));
   background: var(--panel);
-  color: var(--accent);
+  color: var(--fl-ink-accent);
   font-size: 17px;
   line-height: 1;
   cursor: pointer;
@@ -1951,6 +1973,18 @@
   transition: opacity 0.12s ease;
   /* The inline transform also counter-scales it by the Sky's --sky-z. */
   transform-origin: 50% 50%;
+}
+
+/* The quiet tier's hover: the panel-2 fill, the border firming to the
+ * accent (it is an add, the one accent-edged quiet control). */
+.fl-gap-add:hover {
+  background: var(--panel-2);
+  border-color: var(--accent);
+}
+
+.fl-gap-add:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* Over the line (in the Sky the whole line, its title bar too), not just
@@ -2058,17 +2092,20 @@
   display: none;
 }
 
-/* .fl-icon-btn's look (StopParts.css), here too for a canvas drawn
- * without the inspector's sheet. */
+/* The quiet-icon tier (.fl-icon-btn in StopParts.css; the top bar's
+ * .tb-item): no fill, a transparent border, the panel-2 fill and the border
+ * on hover, the accent ring on focus. Here too for a canvas drawn without
+ * the inspector's sheet. */
 .fl-tool {
-  border: none;
-  border-radius: 6px;
+  border: 1px solid transparent;
+  border-radius: var(--fl-btn-radius, 6px);
   background: transparent;
-  color: var(--muted);
+  color: var(--fl-ink-muted);
   cursor: pointer;
-  min-width: 24px;
-  height: 24px;
+  min-width: 26px;
+  height: 26px;
   padding: 0 5px;
+  font-family: inherit;
   font-size: 14px;
   line-height: 1;
 }
@@ -2076,22 +2113,24 @@
 .fl-tool:hover:not(:disabled) {
   color: var(--text);
   background: var(--panel-2);
+  border-color: var(--border);
 }
 
 .fl-tool:disabled {
-  opacity: 0.35;
+  opacity: 0.4;
   cursor: default;
   background: transparent;
 }
 
 .fl-tool:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: -1px;
+  outline-offset: 1px;
 }
 
 .fl-tool-remove:hover:not(:disabled) {
-  color: var(--red);
+  color: var(--fl-ink-red);
   background: color-mix(in srgb, var(--red) 13%, transparent);
+  border-color: color-mix(in srgb, var(--red) 40%, transparent);
 }
 
 @media (hover: none) {
@@ -2300,6 +2339,7 @@
   padding: 5px 13px 5px 6px;
   font-size: 13px;
   font-family: inherit;
+  text-align: left;
   cursor: pointer;
 }
 
@@ -2778,16 +2818,16 @@
 .fl-tool-halt.fl-tool-on {
   color: var(--text);
   background: var(--panel-2);
-  box-shadow: inset 0 0 0 1px var(--muted);
+  border-color: var(--muted);
 }
 
 .fl-tool-pause:hover:not(:disabled) {
-  color: var(--red);
+  color: var(--fl-ink-red);
   background: color-mix(in srgb, var(--red) 13%, transparent);
 }
 
 .fl-tool-resume:hover:not(:disabled) {
-  color: var(--tone-working);
+  color: var(--fl-ink-working);
   background: color-mix(in srgb, var(--tone-working) 13%, transparent);
 }
 
@@ -2856,8 +2896,37 @@
   margin: 4px 0 2px;
 }
 
+/* Every worded button in components/flights wears one of the app's tiers
+   (docs/flights.md "As built: round 11 style"): .btn-primary (the accent
+   fill, settings/screens/screens.css) for the one action a surface is for,
+   .test-btn (panel-2 + the border, SetupDialog.css) beside it, and the
+   quiet-icon tier (.fl-icon-btn, StopParts.css) for glyphs. .fl-btn only
+   adds what flights need on top: no wrap, and the ring the tiers lack. */
 .fl-btn {
   white-space: nowrap;
+}
+
+.fl-btn:focus-visible,
+.fl-check-row:focus-visible,
+.fl-strip-line:focus-visible,
+.sky-perch-name:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A link-styled button in the flights' surfaces: the accent as text holds
+   4.5:1 only as --fl-ink-accent (FlywayCanvas.css). */
+.sky button.linklike,
+.fl-session button.linklike,
+button.linklike.fl-open-sky {
+  color: var(--fl-ink-accent, var(--accent));
+}
+
+.sky button.linklike:focus-visible,
+.fl-session button.linklike:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 /* --- The drawer's groups ----------------------------------------------------- */
@@ -3554,19 +3623,36 @@ a.fl-waiting-ref:hover {
   font-size: 13px;
 }
 
+/* The quiet-icon tier — the top bar's .tb-item, the ⋯ summaries: no fill and
+   a transparent border until hovered (panel-2 + the border), the accent ring
+   on focus. Every glyph button in components/flights is this or wears its
+   rules (docs/flights.md "As built: round 11 style"). */
 .fl-icon-btn {
-  border: none;
+  border: 1px solid transparent;
   background: transparent;
-  color: var(--muted);
+  color: var(--fl-ink-muted, var(--muted));
   cursor: pointer;
+  font-family: inherit;
   font-size: 13px;
+  line-height: 1.2;
   padding: 2px 6px;
-  border-radius: 6px;
+  border-radius: var(--fl-btn-radius, 6px);
 }
 
-.fl-icon-btn:hover {
+.fl-icon-btn:hover:not(:disabled) {
   color: var(--text);
   background: var(--panel-2);
+  border-color: var(--border);
+}
+
+.fl-icon-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.fl-icon-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .fl-palette-groups {
@@ -3605,10 +3691,14 @@ a.fl-waiting-ref:hover {
   cursor: pointer;
 }
 
-.fl-palette-item:hover,
+.fl-palette-item:hover {
+  border-color: var(--accent);
+}
+
 .fl-palette-item:focus-visible {
   border-color: var(--accent);
-  outline: none;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .fl-palette-item.fl-kind-you {
@@ -3627,7 +3717,7 @@ a.fl-waiting-ref:hover {
   width: 24px;
   height: 24px;
   border-radius: 7px;
-  color: var(--accent);
+  color: var(--fl-ink-accent, var(--accent));
   background: rgba(var(--accent-rgb), 0.13);
 }
 
@@ -3939,6 +4029,23 @@ a.fl-waiting-ref:hover {
 .modal-actions .stop-dialog-danger,
 .stop-dialog-danger {
   color: var(--fl-ink-red, var(--red));
+}
+
+/* The danger buttons stay in their tier (secondary, quiet-icon) and only
+   turn red: the ink always, the wash and the border under the pointer. */
+.modal-actions .test-btn.stop-dialog-danger:hover:not(:disabled) {
+  border-color: var(--red);
+}
+
+.fl-icon-btn.stop-dialog-danger:hover:not(:disabled) {
+  color: var(--fl-ink-red, var(--red));
+  background: color-mix(in srgb, var(--red) 13%, transparent);
+  border-color: color-mix(in srgb, var(--red) 40%, transparent);
+}
+
+.modal-actions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .modal-actions button.btn-primary {
@@ -6407,9 +6514,10 @@ a.fl-waiting-ref:hover {
   flex: none;
   border: 1px solid transparent;
   background: transparent;
-  color: var(--muted);
-  border-radius: 6px;
+  color: var(--fl-ink-muted, var(--muted));
+  border-radius: var(--fl-btn-radius, 6px);
   padding: 2px 7px;
+  font-family: inherit;
   font-size: 14px;
   line-height: 1.2;
   cursor: pointer;
@@ -6420,6 +6528,13 @@ a.fl-waiting-ref:hover {
   color: var(--text);
   border-color: var(--border);
   background: var(--panel-2);
+}
+
+.sky-lane-toggle:focus-visible,
+.sky-lane-more:focus-visible,
+.sky-lane-rail-icon:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* --- A source block -------------------------------------------------------- */
@@ -6758,18 +6873,26 @@ a.fl-waiting-ref:hover {
   width: 24px;
   height: 24px;
   padding: 0;
-  border: none;
-  border-radius: 6px;
+  border: 1px solid transparent;
+  border-radius: var(--fl-btn-radius, 6px);
   background: transparent;
-  color: var(--muted, var(--text));
+  color: var(--fl-ink-muted, var(--muted));
+  font-family: inherit;
   font-size: 16px;
   line-height: 1;
   cursor: pointer;
 }
 
+/* The quiet-icon tier (.fl-icon-btn). */
 .sky-new-close:hover {
-  background: color-mix(in srgb, var(--text) 10%, transparent);
+  background: var(--panel-2);
+  border-color: var(--border);
   color: var(--text);
+}
+
+.sky-new-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .sky-new-path {
@@ -6909,7 +7032,7 @@ a.fl-waiting-ref:hover {
   height: 30px;
   padding: 0 7px;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: var(--fl-btn-radius, 6px);
   background: none;
   color: var(--fl-ink-muted);
   font: inherit;
@@ -6964,6 +7087,11 @@ a.fl-waiting-ref:hover {
   color: var(--text);
 }
 
+.skl-size:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .skl-size:hover .skl-size-word,
 .skl-size:focus-visible .skl-size-word {
   display: inline;
@@ -6977,7 +7105,14 @@ a.fl-waiting-ref:hover {
 
 .skl-menu .vf-menu > summary {
   padding: 3px 9px 7px;
+  border-radius: var(--fl-btn-radius, 6px);
+  color: var(--fl-ink-muted);
   font-size: 18px;
+}
+
+.skl-menu .vf-menu > summary:hover,
+.skl-menu .vf-menu[open] > summary {
+  color: var(--text);
 }
 
 /* The list is part of the zoomed line: scale it back to screen size. */
@@ -7036,6 +7171,21 @@ a.fl-waiting-ref:hover {
 
 .skl-menu .vf-menu-list .vf-menu-danger {
   color: var(--fl-ink-red);
+}
+
+/* A box's right-click menu (StopMenu.css) on a line reads at the ⋯'s size. */
+.skl .fl-stopmenu {
+  min-width: 232px;
+  padding: 5px;
+}
+
+.skl .fl-stopmenu-item {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 13.5px;
+  line-height: 1.2;
 }
 
 .skl-gone {
@@ -7117,8 +7267,18 @@ a.fl-waiting-ref:hover {
   opacity: 0.75;
 }
 
-.skl-box-resize:hover {
+.skl-box-resize:hover,
+.skl-resize:hover {
   opacity: 1;
+  background-color: var(--panel-2);
+}
+
+/* The corner handles take the quiet tier's ring on a keyboard focus. */
+.skl-box-resize:focus-visible,
+.skl-resize:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* What the + or a stop opened: a card hanging under the line. */
@@ -7177,9 +7337,10 @@ a.fl-waiting-ref:hover {
   height: 22px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--fl-btn-radius, 6px);
   background: none;
-  color: var(--muted);
+  color: var(--fl-ink-muted);
+  font: inherit;
   font-size: 13px;
   cursor: pointer;
 }
@@ -7187,7 +7348,13 @@ a.fl-waiting-ref:hover {
 .skl-card-fold:hover,
 .skl-card-fold:focus-visible {
   border-color: var(--border);
+  background: var(--panel-2);
   color: var(--text);
+}
+
+.skl-card-fold:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .skl-card-pane {
@@ -7215,9 +7382,6 @@ a.fl-waiting-ref:hover {
   opacity: 0.7;
 }
 
-.skl-resize:hover {
-  opacity: 1;
-}
 
 /* --- The roomy boxes ---------------------------------------------------------
    The sky draws boxMetrics' roomy tier (236 × 100 boxes, 180 × 48 +, 200 ×
@@ -7592,40 +7756,8 @@ a.fl-waiting-ref:hover {
   --sky-ink-gold: #7a5a10;
 }
 
-/* --- The toolbar: 13px type, 28px controls, still one 36px row ----------- */
-
-.sky-toolbar .sky-modes .fl-pick {
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
-  box-sizing: border-box;
-  padding: 0 11px;
-  font-size: 13px;
-}
-
-.sky-toolbar .sky-search .fl-input {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 13px;
-}
-
-.sky-toolbar .sky-new,
-.sky-toolbar .fl-btn {
-  min-height: 28px;
-  font-size: 13px;
-}
-
-.sky-toolbar .sky-zoom-btn {
-  min-height: 26px;
-  padding: 0 9px;
-  font-size: 13px;
-}
-
-.sky-toolbar .sky-zoom-read {
-  min-width: 46px;
-  font-size: 13px;
-  color: var(--fl-ink-muted, var(--muted));
-}
+/* --- The toolbar: 13px type, 28px controls, still one 36px row -----------
+   Its controls' sizes live with their tiers in Sky.css (var(--fl-ctl-h)). */
 
 /* --- The drawer: 14px bodies, 36px Done / Skip ---------------------------- */
 
@@ -7741,6 +7873,105 @@ a.fl-waiting-ref:hover {
 .sky-line-slot:has(.skl-menu .vf-menu[open]) {
   z-index: 40;
 }
+/* Selecting on the Sky (SkySelection.tsx, lib/skySelect): the marquee, the
+   selected lines and stop boxes, and the selection bar. Everything the
+   selection draws lives here, beside Sky.css / SkyLine.css. */
+
+/* A left drag on empty sky draws the marquee, not a pan: the plain pointer.
+   Space held still shows the hand (Sky.css's .is-grab). */
+.sky .sky-viewport:not(.is-grab) {
+  cursor: default;
+}
+
+.sky-marquee {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 6;
+  box-sizing: border-box;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  background: rgba(var(--accent-rgb), 0.12);
+  pointer-events: none;
+}
+
+/* A selected line: a clear accent outline, a step outside its border (the
+   focus ring sits on the border itself). */
+.skl.is-selected {
+  border-color: var(--accent);
+  outline: 2px dashed var(--accent);
+  outline-offset: 5px;
+}
+
+/* A selected stop box: the same accent, dashed, beside the one `.selected`
+   box's solid ring. */
+.fl-box.fl-box-selected {
+  border-color: var(--accent);
+  outline: 2px dashed var(--accent);
+  outline-offset: 3px;
+  background-image: linear-gradient(rgba(var(--accent-rgb), 0.1), rgba(var(--accent-rgb), 0.1));
+}
+
+/* The bar: screen-sized, over the plane, just above the selection. */
+.sky-selbar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: min(460px, calc(100% - 16px));
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.22);
+  cursor: default;
+  user-select: none;
+  font-size: 12.5px;
+}
+
+.sky-selbar-row,
+.sky-selbar-ask {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sky-selbar-count {
+  font-weight: 600;
+  margin-right: 2px;
+}
+
+.sky-selbar-hint {
+  color: var(--muted);
+}
+
+.sky-selbar-danger:not(:disabled) {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 45%, var(--border));
+}
+
+.sky-selbar-clear {
+  margin-left: auto;
+}
+
+.sky-selbar-note {
+  margin: 0;
+  font-size: 12px;
+}
+
+.sky-selbar-ask .fl-input {
+  flex: 1;
+  min-width: 140px;
+}
+
+.sky-selbar-says {
+  display: block;
+}
 /* A grounded flight's line (GroundedLine.tsx): a session's line (SkyLine.css)
    with a dashed edge, since nothing flies it yet, and a dashed head box where
    the session will sit. */
@@ -7854,14 +8085,21 @@ a.fl-waiting-ref:hover {
   border-bottom: 0;
   border-radius: 8px 8px 0 0;
   background: var(--panel);
-  color: var(--muted);
+  color: var(--fl-ink-muted, var(--muted));
   font: inherit;
   font-size: 11.5px;
   cursor: pointer;
 }
 
+/* A tab, in the quiet tier: muted until hovered, then panel-2 and the text. */
 .sky-shelf-fold:hover {
+  background: var(--panel-2);
   color: var(--text);
+}
+
+.sky-shelf-fold:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* --- The stops (StopShelf.tsx): its label, then chips scrolling sideways ----- */
@@ -7905,16 +8143,21 @@ a.fl-waiting-ref:hover {
   display: contents;
 }
 
+/* Every chip on the shelf is the secondary tier (.test-btn): panel-2, the
+   border, the tiers' radius, the accent border under the pointer — and the
+   toolbar's height. The Session chip is tinted with the primary's accent (it
+   makes a session); a perch stays round and gold, as everywhere. */
 .sky-stop-chip {
   display: inline-flex;
   align-items: center;
   flex: none;
   gap: 5px;
-  height: 26px;
-  padding: 0 10px 0 5px;
+  height: var(--fl-ctl-h, 28px);
+  box-sizing: border-box;
+  padding: 0 11px 0 5px;
   border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--panel);
+  border-radius: var(--fl-btn-radius, 6px);
+  background: var(--panel-2);
   color: var(--text);
   font: inherit;
   font-size: 12px;
@@ -7925,8 +8168,12 @@ a.fl-waiting-ref:hover {
 
 .sky-stop-chip:hover,
 .sky-stop-chip:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  background: var(--panel-2);
+  border-color: var(--accent);
+}
+
+.sky-stop-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .sky-stop-chip:active {
@@ -7939,8 +8186,8 @@ a.fl-waiting-ref:hover {
   width: 18px;
   height: 18px;
   border-radius: 5px;
-  color: var(--accent);
-  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--fl-ink-accent, var(--accent));
+  background: rgba(var(--accent-rgb), 0.14);
 }
 
 /* A perch: the gold perch tone, rounder, as in the stop palette. */
@@ -7984,9 +8231,23 @@ a.fl-waiting-ref:hover {
   }
 }
 
-/* The Session chip: the accent, since it starts something. */
-.sky-session-chip {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+/* The Session chip: primary-tinted, since it starts something — the accent
+   border over an accent wash, its word at the primary's weight. */
+.sky-stop-chip.sky-session-chip {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  background: rgba(var(--accent-rgb), 0.16);
+  font-weight: 600;
+}
+
+.sky-stop-chip.sky-session-chip:hover,
+.sky-stop-chip.sky-session-chip:focus-visible {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.26);
+}
+
+.sky-stop-chip.sky-session-chip .sky-stop-icon {
+  color: #fff;
+  background: var(--accent);
 }
 
 /* A saved stop: its name, then a dot per step (a perch's gold). */
@@ -8017,30 +8278,33 @@ a.fl-waiting-ref:hover {
   border-style: dashed;
 }
 
-.sky-saved-rename {
+/* The rename field: the house input (.fl-input, FlywayCanvas.css) at the
+   chip's size — focused, so the accent border and its ring. */
+.sky-saved-rename.fl-input.fl-input {
   width: 14ch;
-  padding: 1px 4px;
-  border: 1px solid var(--accent);
+  height: 22px;
+  padding: 0 6px;
   border-radius: 4px;
-  background: var(--bg);
-  color: var(--text);
-  font: inherit;
   font-size: 12px;
 }
 
-.sky-saved-rename[aria-invalid="true"] {
+.sky-saved-rename.fl-input.fl-input[aria-invalid="true"] {
   border-color: var(--red);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 22%, transparent);
 }
 
 .sky-saved-err {
   flex: none;
-  color: var(--red);
+  color: var(--fl-ink-red, var(--red));
   font-size: 11px;
   white-space: nowrap;
 }
 
+/* The shelf sits at the window's foot, so its menu opens UP from the pointer
+   (StopShelf.tsx places its top-left there); downward it fell off-screen. */
 .sky-saved-menu {
   z-index: 50;
+  transform: translateY(-100%);
 }
 
 .sky-stops-confirm {
@@ -8135,15 +8399,58 @@ body.view-switch #sky-view {
   flex: none;
 }
 
+/* The toolbar's controls are the app's button tiers (docs/flights.md "As
+   built: round 11 style"), all var(--fl-ctl-h) tall with the tiers' radius:
+
+   - Which lines (All / Mine / Perched on you / This session) is the top bar's
+     Grid · Sky pair (.tb-views): one bordered group, the keys bare and muted,
+     the chosen one filled panel-2 with a border, like a pressed key.
+   - Tidy is the secondary tier (.test-btn): panel-2, the border, the accent
+     border under the pointer.
+   - Zoom is a segmented control in the secondary tier: Tidy's fill, border and
+     radius around the whole group, a 1px divider between the keys. */
 .sky-modes.fl-chiprow {
   flex-wrap: nowrap;
-  gap: 3px;
+  align-items: stretch;
+  gap: 1px;
+  height: var(--fl-ctl-h);
+  box-sizing: border-box;
+  padding: 1px;
+  border: 1px solid var(--border);
+  border-radius: var(--fl-btn-radius);
 }
 
-.sky-modes .fl-pick {
-  padding: 3px 9px;
-  font-size: 12px;
-  line-height: 1.25;
+.sky-toolbar .sky-modes .fl-pick {
+  display: inline-flex;
+  align-items: center;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fl-ink-muted);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.sky-toolbar .sky-modes .fl-pick:hover:not(.on) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--panel-2) 60%, transparent);
+  color: var(--text);
+}
+
+.sky-toolbar .sky-modes .fl-pick.on {
+  border-color: var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.sky-toolbar .sky-modes .fl-pick:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
 }
 
 .sky-toolbar > .sky-search {
@@ -8151,50 +8458,96 @@ body.view-switch #sky-view {
   min-width: 84px;
 }
 
-.sky-search .fl-input {
+.sky-toolbar .sky-search .fl-input {
   width: 100%;
+  height: var(--fl-ctl-h);
   box-sizing: border-box;
-  padding: 3px 9px;
-  font-size: 12.5px;
+  padding: 0 10px;
+  border-radius: var(--fl-btn-radius);
+  font-size: 13px;
+}
+
+.sky-toolbar .fl-btn.sky-tidy {
+  display: inline-flex;
+  align-items: center;
+  height: var(--fl-ctl-h);
+  box-sizing: border-box;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--fl-btn-radius);
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sky-toolbar .fl-btn.sky-tidy:hover {
+  border-color: var(--accent);
+}
+
+.sky-toolbar .fl-btn.sky-tidy:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .sky-zoom {
   margin-left: auto;
   display: inline-flex;
-  align-items: center;
-  gap: 1px;
+  align-items: stretch;
+  height: var(--fl-ctl-h);
+  box-sizing: border-box;
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 1px;
-  background: var(--panel);
+  border-radius: var(--fl-btn-radius);
+  background: var(--panel-2);
+  overflow: hidden;
 }
 
-.sky-zoom-btn {
-  background: transparent;
+.sky-toolbar .sky-zoom-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  padding: 0 9px;
   border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--text);
-  padding: 2px 7px;
   font: inherit;
-  font-size: 12px;
-  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1;
   cursor: pointer;
 }
 
-.sky-zoom-btn:hover:not(:disabled) {
-  background: var(--panel-2);
+/* The dividers: after the key rule, at its weight, so they win. */
+.sky-toolbar .sky-zoom > * + * {
+  border-left: 1px solid var(--border);
 }
 
-.sky-zoom-btn:disabled {
+.sky-toolbar .sky-zoom-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 9%, var(--panel-2));
+}
+
+/* Inside the group's clip: the ring sits within the key. */
+.sky-toolbar .sky-zoom-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.sky-toolbar .sky-zoom-btn:disabled {
   opacity: 0.4;
   cursor: default;
 }
 
-.sky-zoom-read {
-  min-width: 40px;
-  text-align: center;
-  font-size: 12px;
+.sky-toolbar .sky-zoom-read {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
-  color: var(--muted);
+  color: var(--fl-ink-muted);
 }
 
 .sky-main {
@@ -8213,11 +8566,6 @@ body.view-switch #sky-view {
   flex-direction: column;
 }
 
-.sky-tidy {
-  padding: 3px 10px;
-  font-size: 12.5px;
-}
-
 /* A saved stop, a stop or a grounded line's stops with no line focused:
    which line. */
 .sky-flypick {
@@ -8227,6 +8575,33 @@ body.view-switch #sky-view {
   gap: 6px;
   padding: 0 0 6px;
   font-size: 12.5px;
+}
+
+/* Its line chips: the chip tier (.fl-pick). */
+.sky-flypick .fl-chip {
+  min-height: 26px;
+  max-width: 220px;
+  box-sizing: border-box;
+  padding: 2px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.sky-flypick .fl-chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.sky-flypick .fl-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .sky-viewport {
@@ -8544,6 +8919,12 @@ body.view-switch #sky-view {
 
 .sky-drawer-tab:hover {
   color: var(--text);
+  background: color-mix(in srgb, var(--panel-2) 60%, transparent);
+}
+
+.sky-drawer-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .sky-drawer-tab .fl-count {
