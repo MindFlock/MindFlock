@@ -59,7 +59,9 @@ def run_step(f, now=NOW):
 def test_kinds_registry_drives_the_editor():
     dto = F.kinds_dto()
     kinds = [k["kind"] for k in dto["kinds"]]
-    assert kinds == [
+    # The built-ins come first, in registry order; the plug-in kinds
+    # (core/flight_kinds/, docs/flights.md "Round 15") follow them.
+    assert kinds[:12] == [
         "agent",
         "split",
         "join",
