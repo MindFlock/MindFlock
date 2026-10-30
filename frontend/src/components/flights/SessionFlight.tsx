@@ -14,14 +14,15 @@
  * flight (`POST /api/flights/{id}/steps`), or — no flight yet — as a new
  * ad-hoc flight that takes over the fast-track's remaining rungs
  * (`POST /api/flights/start {title, steps, absorb_fasttrack}`), so the
- * ladder's boxes turn into the flight's seamlessly. "Fly a flyway" on the +
- * appends all of a flyway's stops. A pending stop opens in the inspector and
- * is edited in place; done and current ones are read-only.
+ * ladder's boxes turn into the flight's seamlessly. The +'s saved stops tack
+ * one on as a stop with sub-steps. A stop opens in its dialog (StopDialog: ✎,
+ * Enter, a double-click): a pending one is edited there; done and current
+ * ones read there.
  *
  * With nothing on the line yet the tab also offers the flyways as cards
  * ("Fly this flyway") and "Describe a flyway…" to make one from a sentence
  * and fly it right away. The line's editing (the +, the palette, the
- * inspector) is useSessionLine's, shared with the Sky's lines; "Open in the
+ * dialog) is useSessionLine's, shared with the Sky's lines; "Open in the
  * Sky" shows this session's line there (`#sky/<title>`). */
 
 import { useState } from "react";
@@ -29,14 +30,14 @@ import type { Instance } from "../../api/types";
 import { useFlightKinds, useFlightPlans, useFlights, useInstances } from "../../state/queries";
 import { selectSession } from "../../lib/sessionActions";
 import { flightProgress, type FlightPlan, type StepKindDef } from "../../lib/flights";
-import { birdPerch, flywayDiagram, hasSessionDiagram, sessionDiagram } from "../../lib/flightDiagram";
+import { birdPerch, flywayDiagram, hasSessionDiagram } from "../../lib/flightDiagram";
+import { windowName } from "../../lib/windowName";
 import { showInSky } from "../../lib/viewMode";
 import { savePlan, takeOff } from "../../lib/flightsApi";
 import { FlywayCanvas } from "./FlywayCanvas";
 import { FlightMenu } from "./FlightStrip";
 import { DescribeField } from "./StopParts";
 import { useSessionLine } from "./useSessionLine";
-import { flownCanvas } from "./SkyLine";
 import { Bird } from "./Bird";
 import "./Flights.css";
 
@@ -74,12 +75,9 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
   const plans = useFlightPlans(active).data || [];
   const line = useSessionLine(title, { rows, flights, kinds, plans }, { onSession: (t) => selectSession(t) });
   const [busy, setBusy] = useState(false);
-  // The flown stops fold into one pill, as in the sky; a press unfolds them.
-  const [expandFlown, setExpandFlown] = useState(false);
+  // The line comes counted the canvas's way (a group box is one place); its
+  // flown stops stay as boxes.
   const { row, flight, diagram, ordered, cancel } = line;
-  const full = expandFlown ? sessionDiagram(rows, title, { flights, kinds, expandFlown: true }) : diagram;
-  // The canvas counts the stops it draws; the flight counts its own.
-  const shown = flownCanvas(full, line.canvas);
 
   if (!row) return <p className="fl-note muted">This session isn't listed right now.</p>;
 
@@ -120,13 +118,7 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
         </button>
       </div>
       {cancel.node}
-      <FlywayCanvas
-        diagram={shown.diagram}
-        label={"What " + title + " is doing and will do"}
-        bird={birdPerch(full)}
-        {...shown.canvas}
-        onOpen={(n) => (n.kind === "flown" ? setExpandFlown((x) => !x) : shown.canvas.onOpen?.(n))}
-      />
+      <FlywayCanvas diagram={diagram} label={"What " + windowName(title) + " is doing and will do"} bird={birdPerch(diagram)} {...line.canvas} />
       {line.palette}
       {line.inspector}
       {!hasSessionDiagram(rows, title) && (

@@ -31,7 +31,16 @@
  * here: docs/flights.md "Halt points"), a halt point wears a ⏸ badge, any box
  * opens a menu on right-click (StopMenu), Delete removes the selected stop,
  * the + between boxes inserts one, and a stop chip dragged from the shelf
- * (`STOP_MIME`) lights the gap it would land in and is tacked on there.
+ * (`STOP_MIME`) — or a saved stop (`FLYWAY_MIME`) — lights the gap it would
+ * land in and is tacked on there. On a live line a stop that has flown, and
+ * the one the flight is at, offer 🗑 too (removing the current one halts the
+ * flight right before the stop that followed).
+ *
+ * Round 11: a GROUP box (`kind: "group"`, lib/flightDiagram) is one stop with
+ * sub-steps, drawn as a stack; its ▸ (`onToggleGroup`) draws its sub-steps on
+ * the line inside a thin labelled outline, ▾ folds them back. `onEdit` is the
+ * stop's dialog: ✎, Enter / Space, a double-click and the menu's Edit open it,
+ * while a click only selects (`onSelect`).
  *
  * Empty space pans the line sideways (scroll, or drag it). Positions and
  * connectors come from `layoutDiagram` (fixed box sizes), so the markup needs
@@ -51,9 +60,22 @@ import {
   type DiagramNode,
   type LayoutOpts,
 } from "../../lib/flightDiagram";
-import { STOP_MIME } from "../../lib/flights";
 import { controlFlight, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
-import { canHalt, canShift, dropGapFor, flightHold, haltMark, haltToggle, insertGaps, isStopDrag, menuItemsFor, type StopMenuKey } from "../../lib/stopEditing";
+import {
+  canHalt,
+  canShift,
+  dropGapFor,
+  flightHold,
+  haltMark,
+  haltToggle,
+  insertGaps,
+  isStopDrag,
+  menuItemsFor,
+  removeTool,
+  stopDropOf,
+  type StopDrop,
+  type StopMenuKey,
+} from "../../lib/stopEditing";
 import { BirdMarker, StopIcon } from "./Bird";
 import { StopMenu } from "./StopMenu";
 import "./FlywayCanvas.css";
@@ -117,8 +139,15 @@ export interface FlywayCanvasProps {
   selected?: string | null;
   /** Boxes to highlight (stops a description just added, until saved). */
   highlight?: ReadonlySet<string>;
-  /** A stop box picked (click, Enter): open it in the inspector. */
+  /** A stop box picked (a click; and Enter, ✎, the menu's Edit when the host
+   * passes no `onEdit`): open it in the inspector. */
   onSelect?(n: DiagramNode): void;
+  /** The stop's dialog (✎, Enter / Space, a double-click, the menu's Edit):
+   * with it, a click only selects. */
+  onEdit?(n: DiagramNode): void;
+  /** A group box's ▸ / ▾ (and the menu's Show / Fold its sub-steps): draw its
+   * sub-steps on the line, or one box again. */
+  onToggleGroup?(groupId: string): void;
   /** A session / parent / child box, or the trailing +, pressed. */
   onOpen?(n: DiagramNode): void;
   /** Reordering: drag, and ← / → on the selected stop (indexes among stops). */
@@ -130,9 +159,10 @@ export interface FlywayCanvasProps {
   /** ⏸ Halt here / Carry on past here (the toolbar, the menu): make a stop not
    * yet flown a halt point, or no longer one. */
   onToggleHalt?(n: DiagramNode): void;
-  /** A stop chip (`STOP_MIME`, its value the stop kind) dropped on the line:
-   * tack a stop of `kind` on before stop `at` — null = at the end. */
-  onDropStop?(kind: string, at: number | null): void;
+  /** A stop chip (`STOP_MIME`, its value the stop kind: `{kind}`) or a saved
+   * stop (`FLYWAY_MIME`, its value the plan id: `{planId}`) dropped on the
+   * line: tack it on before stop `at` — null = at the end. */
+  onDropStop?(drop: StopDrop, at: number | null): void;
   /** The name of a stop kind being dragged from the shelf (the host's, like
    * `dropLabel`): the end + reads "Tack on <it>". */
   dragStop?: string | null;
@@ -168,10 +198,23 @@ export interface FlywayCanvasProps {
  * stop is a halt point. */
 function HaltTool({ n, onToggle }: { n: DiagramNode; onToggle(n: DiagramNode): void }) {
   const t = haltToggle(n);
-  const on = !!n.step?.halt;
+  const on = t.label !== "Halt here";
   return (
     <button type="button" className={"fl-icon-btn fl-tool fl-tool-halt" + (on ? " fl-tool-on" : "")} aria-pressed={on} aria-label={t.label + " — “" + n.title + "”"} title={t.title} onClick={() => onToggle(n)}>
       ⏸
+    </button>
+  );
+}
+
+/** 🗑 on a stop's toolbar — what it says follows where the stop is
+ * (lib/stopEditing `removeTool`): still ahead, flown, or where the flight is
+ * (removing it halts the flight there). */
+function RemoveTool({ n, here = false, onRemove }: { n: DiagramNode; here?: boolean; onRemove(n: DiagramNode): void }) {
+  const t = removeTool(n, here);
+  const said = n.kind === "stop" && t.label !== "Remove" ? "Remove “" + n.title + "”" + t.label.slice("Remove".length) : "Remove “" + n.title + "”";
+  return (
+    <button type="button" className="fl-icon-btn fl-tool fl-tool-remove" aria-label={said} title={n.kind === "stop" && t.label === "Remove" ? "Remove this stop from the line (Delete)" : t.title} onClick={() => onRemove(n)}>
+      🗑
     </button>
   );
 }
@@ -193,6 +236,19 @@ const STATE_WORD: Partial<Record<DiagramNode["state"], string>> = {
   paused: "paused here",
   pending: "still to come",
 };
+
+/** The outline of each group drawn open: the box around its sub-steps. */
+export function groupFrames(boxes: readonly { node: DiagramNode; x: number; y: number; w: number; h: number }[]): Array<{ id: string; name: string; x: number; y: number; w: number; h: number }> {
+  const out = new Map<string, { id: string; name: string; x: number; y: number; r: number; b: number }>();
+  for (const p of boxes) {
+    const g = p.node.inGroup;
+    if (!g) continue;
+    const f = out.get(g.id);
+    if (!f) out.set(g.id, { id: g.id, name: g.name, x: p.x, y: p.y, r: p.x + p.w, b: p.y + p.h });
+    else Object.assign(f, { x: Math.min(f.x, p.x), y: Math.min(f.y, p.y), r: Math.max(f.r, p.x + p.w), b: Math.max(f.b, p.y + p.h) });
+  }
+  return [...out.values()].map((f) => ({ id: f.id, name: f.name, x: f.x, y: f.y, w: f.r - f.x, h: f.b - f.y }));
+}
 
 /** The canvas's own width, for the phone layout (none on a server render). */
 function useNarrow(ref: RefObject<HTMLElement | null>, forced?: boolean): boolean {
@@ -289,7 +345,8 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
     () => (drag && drag.moved && drag.to !== drag.from ? layoutDiagram(reorderDiagram(p.diagram, drag.from, drag.to), opts) : base),
     [drag, base, p.diagram] // eslint-disable-line react-hooks/exhaustive-deps
   );
-  const stops = p.diagram.nodes.filter((n) => n.row === "main" && n.kind === "stop");
+  // The line's places, as the canvas counts them: its stops and group boxes.
+  const stops = p.diagram.nodes.filter((n) => n.row === "main" && (n.kind === "stop" || n.kind === "group"));
   const axis = (b: { x: number; y: number; w: number; h: number }) => (vertical ? b.y + b.h / 2 : b.x + b.w / 2);
 
   // Keep the selected box in view (a ← / → move, a pick off the edge),
@@ -329,7 +386,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
     if (!moved) return;
     const self = base.boxes.find((b) => b.node.id === drag.id);
     if (!self) return;
-    const others = base.boxes.filter((b) => b.node.kind === "stop" && b.node.row === "main" && b.node.id !== drag.id).map(axis);
+    const others = base.boxes.filter((b) => (b.node.kind === "stop" || b.node.kind === "group") && b.node.row === "main" && b.node.id !== drag.id).map(axis);
     // Never before the flight's current stop.
     setDrag({ ...drag, delta, moved, to: Math.max(p.diagram.insertFrom, dropIndex(others, axis(self) + delta)) });
   };
@@ -353,9 +410,11 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
 
   const activate = (n: DiagramNode) => {
     if (justDragged.current) return;
-    if (n.kind === "stop") p.onSelect?.(n);
+    if (n.kind === "stop" || n.kind === "group") p.onSelect?.(n);
     else p.onOpen?.(n);
   };
+  /** The stop's dialog — the inspector, on a host without one. */
+  const edit = (n: DiagramNode) => (p.onEdit ? p.onEdit(n) : p.onSelect?.(n));
 
   const onBoxKey = (e: KeyboardEvent<HTMLDivElement>, n: DiagramNode) => {
     if (e.target !== e.currentTarget) return;
@@ -363,7 +422,8 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
     const fwd = vertical ? "ArrowDown" : "ArrowRight";
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      activate(n);
+      if (p.onEdit && (n.kind === "stop" || n.kind === "group")) edit(n);
+      else activate(n);
       return;
     }
     if (canDrag(n) && (e.key === back || e.key === fwd)) {
@@ -371,7 +431,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
       shift(n, e.key === back ? -1 : 1);
       return;
     }
-    if ((e.key === "Delete" || e.key === "Backspace") && p.onRemove && n.kind === "stop" && n.editable !== false) {
+    if ((e.key === "Delete" || e.key === "Backspace") && p.onRemove && (n.kind === "stop" || n.kind === "group") && n.editable !== false) {
       e.preventDefault();
       p.onRemove(n);
     }
@@ -408,19 +468,30 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
   // The live flight's current stop (under way, perched, held or halted): it
   // wears a toolbar of its own — Halt now / Carry on, Halt here — on a line
   // whose host marks halt points (its menu offers Halt now on any line).
+  const flying = (n: DiagramNode) => n.state === "current" || n.state === "perched" || n.state === "paused" || n.state === "halted";
   const isHere = (n: DiagramNode) =>
     !!p.diagram.flightId &&
-    n.kind === "stop" &&
-    !!n.step &&
-    n.index === p.diagram.insertFrom - 1 &&
-    (n.state === "current" || n.state === "perched" || n.state === "paused" || n.state === "halted");
+    ((n.kind === "stop" && !!n.step && n.index === p.diagram.insertFrom - 1) || n.kind === "group") &&
+    flying(n);
+  const flown = (n: DiagramNode) => n.state === "done" || n.state === "skipped" || n.state === "failed";
+  // On a live line any stop comes off: one still ahead, the one the flight
+  // is at, one that has flown.
+  const removable = (n: DiagramNode) => !!p.onRemove && (n.kind === "group" || (n.kind === "stop" && (!!n.editable || (!!p.diagram.flightId && !!n.step))));
 
   // The hover toolbar: on a stop that can change, when there is something
-  // to change it with; on the current stop, to halt the flight.
-  const tooled = (n: DiagramNode) => (n.kind === "stop" && !!n.editable && !!(p.onMove || p.onRemove || p.onDuplicate || p.onToggleHalt)) || (!!p.onToggleHalt && isHere(n));
+  // to change it with; on the current stop, to halt the flight (or remove
+  // it); on a flown stop, to remove it; on a group box, its own.
+  const tooled = (n: DiagramNode) => {
+    if (n.kind === "group") return !!(p.onEdit || p.onRemove || p.onToggleHalt);
+    if (n.kind !== "stop") return false;
+    if (n.editable) return !!(p.onMove || p.onRemove || p.onDuplicate || p.onToggleHalt);
+    if (isHere(n)) return !!p.onToggleHalt || removable(n);
+    return flown(n) && removable(n);
+  };
   const pad = 6;
-  // Headroom over the top row for the bird to stand in, or a toolbar.
-  const top = p.bird || p.diagram.nodes.some(tooled) ? 26 : pad;
+  // Headroom over the top row for the bird to stand in, a toolbar, or an
+  // open group's label.
+  const top = p.bird || p.diagram.nodes.some((n) => tooled(n) || !!n.inGroup) ? 26 : pad;
 
   // A point on the screen in the stage's pixels (the Sky zooms the line with
   // a transform; its width against its layout width undoes that).
@@ -432,7 +503,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
     return { x: (clientX - r.left) / z, y: (clientY - r.top) / z };
   };
 
-  // A stop chip from the shelf, over the line and dropped on it.
+  // A stop chip (or a saved stop) from the shelf, over the line and dropped on it.
   const overStop = (e: DragEvent<HTMLDivElement>) => !!p.onDropStop && isStopDrag(e.dataTransfer?.types);
   const gapAt = (e: DragEvent<HTMLDivElement>) => {
     const pt = stagePoint(e.clientX, e.clientY);
@@ -454,10 +525,10 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
     e.preventDefault();
     // The sky's own drop (a flyway on a line) stays out of it.
     e.stopPropagation();
-    const kind = e.dataTransfer.getData(STOP_MIME);
+    const drop = stopDropOf(e.dataTransfer);
     const at = gapAt(e);
     setStopOver(null);
-    if (kind) p.onDropStop!(kind, at);
+    if (drop) p.onDropStop!(drop, at);
   };
 
   // Right-click: the box's menu, at the pointer. Inside an open card (the
@@ -472,17 +543,21 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
   const menuNode = menu ? p.diagram.nodes.find((n) => n.id === menu.id) || null : null;
   const menuItems = menuNode
     ? menuItemsFor(menuNode, {
-        can: { edit: !!p.onSelect, move: !!p.onMove, duplicate: !!p.onDuplicate, remove: !!p.onRemove, open: !!p.onOpen, halt: !!p.onToggleHalt },
+        can: { edit: !!(p.onEdit || p.onSelect), move: !!p.onMove, duplicate: !!p.onDuplicate, remove: !!p.onRemove, open: !!p.onOpen, halt: !!p.onToggleHalt, group: !!p.onToggleGroup },
         earlier: canShift(stops, stops.indexOf(menuNode), -1, p.diagram.insertFrom),
         later: canShift(stops, stops.indexOf(menuNode), 1, p.diagram.insertFrom),
-        live: !!p.diagram.flightId && !!menuNode.step,
+        live: !!p.diagram.flightId && (!!menuNode.step || menuNode.kind === "group"),
         here: isHere(menuNode),
       })
     : [];
   const pick = (n: DiagramNode, key: StopMenuKey) => {
     const flight = p.diagram.flightId;
     const step = n.step?.id || "";
-    if (key === "edit") p.onSelect?.(n);
+    if (key === "edit") edit(n);
+    else if (key === "expand") {
+      const g = n.group?.id || n.inGroup?.id;
+      if (g) p.onToggleGroup?.(g);
+    }
     else if (key === "earlier" || key === "later") shift(n, key === "earlier" ? -1 : 1);
     else if (key === "duplicate") p.onDuplicate?.(n);
     else if (key === "remove") p.onRemove?.(n);
@@ -547,6 +622,32 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
             ))}
           </g>
         </svg>
+        {groupFrames(shown.boxes).map((f) => (
+          // An open group: its sub-steps inside a thin outline, its name on
+          // the outline with ▾ to fold it back into one box.
+          <div
+            key={"frame:" + f.id}
+            className="fl-group-frame"
+            style={{ transform: `translate(${f.x + pad - 8}px, ${f.y + top - 10}px)`, width: f.w + 16, height: f.h + 18 }}
+            aria-hidden={p.onToggleGroup ? undefined : true}
+          >
+            <span className="fl-group-label">
+              {p.onToggleGroup && (
+                <button
+                  type="button"
+                  className="fl-icon-btn fl-group-chev"
+                  aria-label={"Fold “" + f.name + "” into one box"}
+                  aria-expanded={true}
+                  title="Fold its sub-steps into one box"
+                  onClick={() => p.onToggleGroup!(f.id)}
+                >
+                  ▾
+                </button>
+              )}
+              {f.name}
+            </span>
+          </div>
+        ))}
         {shown.boxes.map((b) => {
           const n = b.node;
           const lifted = drag?.moved && drag.id === n.id;
@@ -592,7 +693,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
           const here = isHere(n);
           const i = tools ? stops.indexOf(n) : -1;
           const mark = haltMark(n);
-          const hold = here && !n.editable ? flightHold(n) : null;
+          const hold = here && (!n.editable || n.kind === "group") ? flightHold(n) : null;
           const haltable = !!p.onToggleHalt && canHalt(n, here);
           const waiting = n.join && n.join.waiting > 0 ? n.join : null;
           const cls =
@@ -606,6 +707,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
             (lifted ? " fl-lifted" : "") +
             (tools ? " fl-has-tools" : "") +
             (mark ? " fl-halt-point" : "") +
+            (n.inGroup ? " fl-in-group" : "") +
             (canDrag(n) ? " fl-draggable" : "");
           const said =
             n.kind === "add"
@@ -613,7 +715,9 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                 ? addLabel!
                 : n.title
               : n.title +
-                (n.kind === "stop" || n.kind === "rung" ? ", " + (STATE_WORD[n.state] || "") : "") +
+                (n.group ? ", a stop of " + n.group.total + (n.group.total === 1 ? " sub-step" : " sub-steps") + (n.group.current ? ", " + n.group.done + " of " + n.group.total + " done" : "") : "") +
+                (n.kind === "stop" || n.kind === "rung" || n.kind === "group" ? ", " + (STATE_WORD[n.state] || "") : "") +
+                (n.inGroup ? ", in “" + n.inGroup.name + "”" : "") +
                 (mark ? ", halt point" : "") +
                 (n.chip ? ", " + n.chip.label : "") +
                 (waiting ? ", " + joinLabel(waiting) : "");
@@ -639,6 +743,12 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
               // Inside a card, a click is the card's (the pane's tabs, its
               // terminal): only the box itself, or Enter on it, acts.
               onClick={(e) => (open && e.target !== e.currentTarget ? undefined : activate(n))}
+              onDoubleClick={(e) => {
+                if (!p.onEdit || open || (n.kind !== "stop" && n.kind !== "group")) return;
+                if ((e.target as HTMLElement).closest("button, input, textarea, a, summary")) return;
+                e.preventDefault();
+                edit(n);
+              }}
               onKeyDown={(e) => onBoxKey(e, n)}
               onContextMenu={(e) => onBoxMenu(e, n)}
             >
@@ -647,7 +757,41 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                   {mark.glyph}
                 </span>
               )}
-              {tools && here && !n.editable && (
+              {tools && n.kind === "group" && (
+                // A group's own: its dialog, ⇤ / ⇥ (not this round), its halt
+                // point, Remove (the whole group).
+                <div className="fl-tools" role="toolbar" aria-label={"Change “" + n.title + "”"} data-no-drag onClick={(e) => e.stopPropagation()}>
+                  {hold && here && (
+                    <button
+                      type="button"
+                      className={"fl-icon-btn fl-tool fl-tool-" + hold.key}
+                      aria-label={hold.label + " — “" + n.title + "”"}
+                      title={hold.title}
+                      onClick={() => void controlFlight(p.diagram.flightId, hold.key as "pause" | "resume")}
+                    >
+                      {hold.key === "pause" ? "⏹" : "▶"}
+                    </button>
+                  )}
+                  {(p.onEdit || p.onSelect) && (
+                    <button type="button" className="fl-icon-btn fl-tool" aria-label={"Edit “" + n.title + "”"} title="Open this stop and its sub-steps (Enter)" onClick={() => edit(n)}>
+                      ✎
+                    </button>
+                  )}
+                  {p.onMove && (
+                    <>
+                      <button type="button" className="fl-icon-btn fl-tool" aria-label={"Move “" + n.title + "” earlier"} title="A stop with sub-steps doesn't move yet" disabled>
+                        ⇤
+                      </button>
+                      <button type="button" className="fl-icon-btn fl-tool" aria-label={"Move “" + n.title + "” later"} title="A stop with sub-steps doesn't move yet" disabled>
+                        ⇥
+                      </button>
+                    </>
+                  )}
+                  {haltable && <HaltTool n={n} onToggle={p.onToggleHalt!} />}
+                  {p.onRemove && <RemoveTool n={n} onRemove={p.onRemove} />}
+                </div>
+              )}
+              {tools && n.kind === "stop" && here && !n.editable && (
                 <div className="fl-tools" role="toolbar" aria-label={"Halt or carry on at “" + n.title + "”"} data-no-drag onClick={(e) => e.stopPropagation()}>
                   {hold && (
                     <button
@@ -661,14 +805,20 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                     </button>
                   )}
                   {haltable && <HaltTool n={n} onToggle={p.onToggleHalt!} />}
+                  {removable(n) && <RemoveTool n={n} here onRemove={p.onRemove!} />}
                 </div>
               )}
-              {tools && !(here && !n.editable) && (
+              {tools && n.kind === "stop" && !here && !n.editable && (
+                <div className="fl-tools" role="toolbar" aria-label={"Remove “" + n.title + "”"} data-no-drag onClick={(e) => e.stopPropagation()}>
+                  <RemoveTool n={n} onRemove={p.onRemove!} />
+                </div>
+              )}
+              {tools && n.kind === "stop" && n.editable && (
                 // Above the box on hover or focus; a press here never starts
                 // the box's drag (onBoxDown skips buttons) nor opens it.
                 <div className="fl-tools" role="toolbar" aria-label={"Change “" + n.title + "”"} data-no-drag onClick={(e) => e.stopPropagation()}>
-                  {p.onSelect && (
-                    <button type="button" className="fl-icon-btn fl-tool" aria-label={"Edit “" + n.title + "”"} title="Edit this stop (Enter)" onClick={() => p.onSelect!(n)}>
+                  {(p.onEdit || p.onSelect) && (
+                    <button type="button" className="fl-icon-btn fl-tool" aria-label={"Edit “" + n.title + "”"} title="Edit this stop (Enter)" onClick={() => edit(n)}>
                       ✎
                     </button>
                   )}
@@ -702,11 +852,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                     </button>
                   )}
                   {haltable && <HaltTool n={n} onToggle={p.onToggleHalt!} />}
-                  {p.onRemove && (
-                    <button type="button" className="fl-icon-btn fl-tool fl-tool-remove" aria-label={"Remove “" + n.title + "”"} title="Remove this stop from the line (Delete)" onClick={() => p.onRemove!(n)}>
-                      🗑
-                    </button>
-                  )}
+                  {p.onRemove && <RemoveTool n={n} onRemove={p.onRemove} />}
                 </div>
               )}
               {waiting && !open && (
@@ -722,6 +868,50 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
                     <StopIcon kind="add" size={small ? 16 : 17} />
                   </span>
                   {drop ? <span className="fl-add-label">{addLabel}</span> : !small && !far && <span className="fl-add-label">{n.title}</span>}
+                </>
+              ) : n.kind === "group" ? (
+                // A stop with sub-steps: a stack (FlywayCanvas.css), its name,
+                // "k of n" while it flies, the sub-step it is at (else what it
+                // holds) and one dot per sub-step.
+                <>
+                  <div className="fl-box-head">
+                    {p.onToggleGroup && n.group && (
+                      <button
+                        type="button"
+                        className="fl-icon-btn fl-group-chev"
+                        aria-label={"Show the sub-steps of “" + n.title + "”"}
+                        aria-expanded={false}
+                        title="Show its sub-steps on the line"
+                        data-no-drag
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          p.onToggleGroup!(n.group!.id);
+                        }}
+                      >
+                        ▸
+                      </button>
+                    )}
+                    <span className="fl-box-icon">
+                      <StopIcon kind={n.perch ? "perch" : n.icon} size={small ? 13 : 15} />
+                    </span>
+                    <span className="fl-box-title">{n.title}</span>
+                    {n.group?.current && <span className="fl-group-count">{n.group.done + " of " + n.group.total}</span>}
+                    {glyph && (
+                      <span className={"fl-box-glyph fl-glyph-" + n.state} aria-hidden="true">
+                        {glyph}
+                      </span>
+                    )}
+                    {flying(n) && <span className="fl-box-pulse" aria-hidden="true" />}
+                  </div>
+                  {!far && (size !== "compact" || near) && n.sub && <div className="fl-box-sub">{n.sub}</div>}
+                  {!far && n.reason && (size !== "compact" || near) && <div className="fl-box-reason">{n.reason}</div>}
+                  {!far && n.group && (
+                    <div className="fl-group-dots" aria-hidden="true">
+                      {n.group.nodes.map((s) => (
+                        <span key={s.id} className={"fl-gdot fl-st-" + s.state} title={s.title} />
+                      ))}
+                    </div>
+                  )}
                 </>
               ) : n.kind === "branch" && (near || (size !== "compact" && !far)) ? (
                 <>

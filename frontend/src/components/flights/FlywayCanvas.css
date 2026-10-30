@@ -1138,3 +1138,104 @@
 .fl-box-flown .fl-box-glyph {
   display: none;
 }
+
+/* --- Round 11: a stop with sub-steps (a group box) --------------------------------
+   Clearly a stack: a second outline offset behind the box. Its ▸ opens it
+   on the line; an open group's sub-steps sit in a thin labelled outline
+   (`.fl-group-frame`) whose ▾ folds them back. */
+
+.fl-box.fl-box-group {
+  box-shadow: 5px 5px 0 -1px var(--panel-2), 5px 5px 0 0 var(--border);
+}
+
+.fl-box.fl-box-group.fl-st-current,
+.fl-box.fl-box-group.fl-st-perched,
+.fl-box.fl-box-group.fl-st-halted,
+.fl-box.fl-box-group.fl-st-paused {
+  box-shadow: 5px 5px 0 -1px var(--panel-2), 5px 5px 0 1px currentColor;
+}
+
+.fl-group-chev {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.fl-group-count {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fl-ink-working, var(--green));
+  background: color-mix(in srgb, var(--fl-ink-working, var(--green)) 14%, transparent);
+}
+
+.fl-group-dots {
+  display: flex;
+  gap: 4px;
+  margin-top: auto;
+}
+
+.fl-gdot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1px solid var(--muted);
+}
+
+.fl-gdot.fl-st-done,
+.fl-gdot.fl-st-skipped {
+  background: var(--green);
+  border-color: var(--green);
+  opacity: 0.8;
+}
+
+.fl-gdot.fl-st-current,
+.fl-gdot.fl-st-perched,
+.fl-gdot.fl-st-paused {
+  background: var(--fl-ink-working, var(--green));
+  border-color: var(--fl-ink-working, var(--green));
+}
+
+.fl-gdot.fl-st-perched {
+  background: var(--gold, #d4a72c);
+  border-color: var(--gold, #d4a72c);
+}
+
+.fl-gdot.fl-st-halted,
+.fl-gdot.fl-st-failed {
+  background: var(--red);
+  border-color: var(--red);
+}
+
+.fl-group-frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  border: 1px dashed color-mix(in srgb, var(--muted) 70%, transparent);
+  border-radius: 12px;
+  pointer-events: none;
+}
+
+.fl-group-label {
+  position: absolute;
+  top: -11px;
+  left: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: auto;
+  transform-origin: left center;
+  transform: scale(calc(1 / var(--sky-z, 1)));
+}
