@@ -5,10 +5,13 @@
  * chip carries the flyway's id as `application/x-mindflock-flyway` and the host
  * owns the drop targets. **+ New flyway** opens a fresh card (`onNew`). The
  * shelf folds to its head; the host remembers that (`collapsed` /
- * `onCollapse`), else the shelf keeps it itself. */
+ * `onCollapse`), else the shelf keeps it itself. Under the flyways, the
+ * STOPS row (`StopShelf`): a chip per stop kind to drag onto a line, or click
+ * to tack onto the focused one (`onTack`). */
 
 import { useState, type DragEvent, type JSX } from "react";
 import type { FlightPlan } from "../../lib/flights";
+import { StopShelf } from "./StopShelf";
 import "./FlywayShelf.css";
 
 /** The drag type a flyway chip carries (its value: the flyway's id). */
@@ -56,6 +59,7 @@ export function FlywayShelf({
   onEdit,
   collapsed,
   onCollapse,
+  onTack,
 }: {
   plans: FlightPlan[];
   onNew(): void;
@@ -64,6 +68,9 @@ export function FlywayShelf({
   /** Folded to its head (the host remembers it); uncontrolled when absent. */
   collapsed?: boolean;
   onCollapse?(collapsed: boolean): void;
+  /** A stop chip clicked: tack that kind onto the focused line. Absent, the
+   * stop chips only drag. */
+  onTack?(kind: string): void;
 }): JSX.Element {
   const [ownFold, setOwnFold] = useState(false);
   const folded = collapsed ?? ownFold;
@@ -106,6 +113,7 @@ export function FlywayShelf({
           </button>
         </div>
       )}
+      {!folded && <StopShelf onTack={onTack} />}
     </section>
   );
 }
