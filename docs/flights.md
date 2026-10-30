@@ -2871,3 +2871,71 @@ the sky's selection is on a box that is not the session itself.
   `Modal`: the folder field with Tab completion from `components/PathField`,
   a line saying what will happen, Move) → a toast on `session.moved`, the error
   card on `session.move_failed`. The row shows "moving…" meanwhile.
+
+### As built: round 12 bird
+
+The owner: "I want to be able to stop a bird where it is working or pick it
+up and drag it to an earlier stop." The bird (`.fl-bird-marker`) is in hand
+on any line that draws one on a live flight's stop (a line in the Sky, the
+pane's Flight tab). **No new canvas prop**: `FlywayCanvas` calls the flight
+routes itself (`controlFlight`, `stepRetry`, `jumpFlight`, keyed by
+`diagram.flightId`), the way the current stop's toolbar and `pick` already
+do, so `useSessionLine` and `useGroundedLine` are unchanged (a grounded
+line has no bird).
+
+**Click = Halt now / Carry on / Retry.** `BirdMarker` takes an optional
+`hand` (`BirdHand`, Bird.tsx: its title and its handlers); with one it is a
+`role="button"`, `tabIndex=0` span (not a `<button>`, so flightsButtons'
+tier rule has nothing to pin), Enter / Space press it. Its `aria-label`
+stays what it was ("The bird: flying Push" — the Sky's tests pin it); what
+a press does is its `title` and `aria-description`, from
+`birdAction(tone, onFlight)` in lib/stopEditing:
+
+| Bird | Press | Route |
+|---|---|---|
+| working, perched on you | **Halt the flight here** | `controlFlight(id, "pause")` |
+| paused | **Carry on** | `controlFlight(id, "resume")` |
+| halted (a stop failed) | **Retry** | `stepRetry(id, <step it is at>)` |
+| on the session box / a rung | — (a picture, `role="img"`) | — |
+
+Paused, the bird sits still: `birdLook` flaps (and bobs) only while the
+flock works. When the bird can be dragged, the title adds "· Drag the bird
+to another stop to jump there".
+
+**Drag = jump.** Pointer events with `setPointerCapture` on the marker (no
+HTML5 DnD, so the shelf's drops are untouched); pointerdown stops
+propagation, so a box's reorder drag, the stage's pan, the line's bar drag
+and the sky's marquee never start. A mouse lifts it after 4px; a touch after
+a 380ms hold (`BIRD_HOLD_MS` — a tap still clicks; a touch that moves first
+lets go; the marker is `touch-action: none` and eats the long-press's
+context menu). In hand it wears `.fl-bird-dragging`: centred on the pointer
+(stage px through `stagePoint`, which undoes the Sky's zoom), scaled
+`1.15 / --sky-z` so it stays screen-sized, no transition. The canvas wears
+`.fl-bird-carried`; every stop it can land on `.fl-jump-target` (a dashed
+accent outline), the one under the pointer (6px slack) `.fl-jump-over`.
+Released over one → `jumpFlight(flightId, step, title)`, and the bird
+stands on that stop until the flight's perch moves (or 6s; a failed jump
+flies it back). Released anywhere else, or Esc → it flies home
+(`.fl-bird-snap`, 0.22s). A drag never counts as a click.
+
+**The rules** (lib/stopEditing, tested in `birdDrag.test.ts`):
+
+- `jumpStepOf(n)` — the step a box jumps to: a stop's own, a group's first
+  sub-step; null for the session, a branch, a rung, the +.
+- `jumpFlightOf(d)` — `{id, at}`: the line's live flight and the step it is
+  at (a group's by its `current` sub-step); null with no live flight.
+- `canJumpTo(flight, n)` — a main-row box with a jump step that is not the
+  step the flight is at: any stop, earlier or later (the server re-arms the
+  halt points after the target and pauses there when it is one).
+- `jumpTargets(d, flight = jumpFlightOf(d))` — those boxes, in line order.
+
+**The menu.** `StopMenuCtx.jump` (the canvas: `canJumpTo(jumpFlightOf(d),
+n)`) adds **Jump the bird here** (`key: "jump"`) to a stop's or a group's
+right-click menu, above Remove and the notes — the keyboard's and a
+phone's path to the drag. The bird itself has no menu.
+
+Tests: `birdDrag.test.ts` (20: the click by tone, the jump rules on plain,
+folded and opened groups, the route, the menu item's place, the marker's
+markup in each state, the drag's CSS and its pointer-capture wiring);
+stopEditing / skyBirds / flightDiagram / skyBranches / skyVisibility /
+flightsButtons unchanged and green.
