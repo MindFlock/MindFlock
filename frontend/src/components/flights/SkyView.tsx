@@ -204,7 +204,7 @@ import { FlywayCanvas } from "./FlywayCanvas";
 import { IntakeLane } from "./IntakeLane";
 import { NewSessionBlock } from "./NewSessionBlock";
 import { SkyDrawer } from "./SkyDrawer";
-import { SkyFlock } from "./SkyFlock";
+import { SkyFlock, WeatherWord } from "./SkyFlock";
 import { SkyLine, type LineDelete } from "./SkyLine";
 import { SkySelectionBar, type SelectionAsk } from "./SkySelection";
 import { GroundedLine, groundedName } from "./GroundedLine";
@@ -1753,6 +1753,9 @@ export function SkyView() {
           Tidy
         </button>
       )}
+      {/* The weather word (docs/flights.md "As built: round 15 weather"):
+          "☁ usage 87 %" / "☾ quiet hours", nothing in clear weather. */}
+      {!narrow && <WeatherWord />}
       {!narrow && (
         <span className="sky-zoom" role="group" aria-label="Zoom" data-tour="sky-zoom">
           <button type="button" className="sky-zoom-btn" aria-label="Zoom out" title="Zoom out (−)" disabled={cam.z <= ZOOM_MIN + 0.001} onClick={() => zoomBy(1 / 1.2)}>
