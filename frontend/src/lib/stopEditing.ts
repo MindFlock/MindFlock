@@ -16,9 +16,12 @@
  *  - `removeTool`   what 🗑 says on a stop: pending, flown, or the one the
  *                   flight is at (removing it halts the flight there);
  *  - `stopDropOf`   what a drop on a line carries: a stop kind, or a saved
- *                   stop (round 11: a group of stops). */
+ *                   stop (round 11: a group of stops);
+ *  - `birdAction`   what a click on the bird does (Halt now / Carry on /
+ *                   Retry), and `canJumpTo` / `jumpTargets` where a dragged
+ *                   bird may land (docs/flights.md "As built: round 12 bird"). */
 
-import type { DiagramNode, Placed } from "./flightDiagram";
+import type { BirdTone, Diagram, DiagramNode, Placed } from "./flightDiagram";
 import { STOP_MIME, type Flight, type FlightStep } from "./flights";
 import { FLYWAY_MIME } from "./skyLayout";
 
@@ -35,19 +38,26 @@ export interface InsertGap {
 /** Every gap of the line a stop may be inserted at: before each stop whose
  * index is ≥ `insertFrom`, never right after the trailing +, and not between a
  * stop with branches and its join point (the line reaches the join THROUGH
- * the branches). */
+ * the branches). A column of children merely hung off a stop (round 12: no
+ * join waits on them) keeps its gap, drawn between the stop and the column. */
 export function insertGaps(boxes: readonly Placed[], insertFrom: number, vertical: boolean): InsertGap[] {
   const main = boxes.filter((b) => b.node.row === "main");
-  const fanned = new Set(boxes.map((b) => b.node.branch?.from));
+  const fanned = new Set(boxes.filter((b) => b.node.kind === "branch").map((b) => b.node.branch?.from));
+  // Where the column of hung children after a box begins.
+  const hung = new Map<string, number>();
+  for (const c of boxes)
+    if (c.node.kind === "child" && c.node.branch) hung.set(c.node.branch.from, Math.min(hung.get(c.node.branch.from) ?? Infinity, vertical ? c.y : c.x));
   const gaps: InsertGap[] = [];
   for (let j = 1; j < main.length; j++) {
     const b = main[j];
     const a = main[j - 1];
     if ((b.node.kind !== "stop" && b.node.kind !== "group") || b.node.index === undefined || b.node.index < insertFrom || a.node.kind === "add" || fanned.has(a.node.id)) continue;
+    const col = hung.get(a.node.id);
+    const end = col ?? (vertical ? b.y : b.x);
     gaps.push(
       vertical
-        ? { at: b.node.index, x: b.x + b.w / 2, y: (a.y + a.h + b.y) / 2 }
-        : { at: b.node.index, x: (a.x + a.w + b.x) / 2, y: b.y + Math.min(b.h, a.h) / 2 }
+        ? { at: b.node.index, x: b.x + b.w / 2, y: (a.y + a.h + end) / 2 }
+        : { at: b.node.index, x: (a.x + a.w + end) / 2, y: (col === undefined ? b.y : a.y) + Math.min(b.h, a.h) / 2 }
     );
   }
   return gaps;
@@ -119,7 +129,7 @@ export function undoPayload(step: FlightStep, index: number, flight: Pick<Flight
 
 // --- The right-click menu --------------------------------------------------------------
 
-export type StopMenuKey = "edit" | "earlier" | "later" | "duplicate" | "remove" | "done" | "skip" | "retry" | "halt" | "pause" | "resume" | "tackon" | "open" | "expand" | "note";
+export type StopMenuKey = "edit" | "earlier" | "later" | "duplicate" | "remove" | "done" | "skip" | "retry" | "halt" | "pause" | "resume" | "jump" | "tackon" | "open" | "expand" | "note";
 
 /** One line of a box's menu: something to press, or a muted `note`. */
 export interface StopMenuItem {
@@ -143,6 +153,8 @@ export interface StopMenuCtx {
   here?: boolean;
   /** A group box drawn open (its sub-steps on the line): Fold, not Show. */
   expanded?: boolean;
+  /** The bird may be jumped to this box (`canJumpTo`): Jump the bird here. */
+  jump?: boolean;
 }
 
 // --- Halt points ------------------------------------------------------------------------
@@ -240,6 +252,18 @@ function groupItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
  * and its halt point; a stop that has flown says so; the
  * trailing + tacks a stop on; a session box opens. */
 export function menuItemsFor(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
+  const items = boxItems(n, ctx);
+  if (!ctx.jump || (n.kind !== "stop" && n.kind !== "group")) return items;
+  // Jump the bird here: the keyboard's and a phone's way to the bird's drag,
+  // above Remove and the notes.
+  const at = items.findIndex((i) => i.danger || i.note);
+  items.splice(at < 0 ? items.length : at, 0, JUMP_ITEM);
+  return items;
+}
+
+const JUMP_ITEM: StopMenuItem = { key: "jump", label: "Jump the bird here", title: "Fly the flight to this stop — the halt points after it are armed again" };
+
+function boxItems(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
   const { can } = ctx;
   if (n.kind === "add") return can.open ? [{ key: "tackon", label: "Tack on a stop", title: "Pick a stop to tack onto the end of the line" }] : [];
   if (n.kind === "rung") return [note("A fast-track rung — it moves as the session ships")];
@@ -280,4 +304,56 @@ export function menuItemsFor(n: DiagramNode, ctx: StopMenuCtx): StopMenuItem[] {
   if (can.remove && ctx.live && ctx.here) items.push(removeTool(n, true));
   items.push(note("The flight is here — it can't change now"));
   return items;
+}
+
+// --- The bird in hand (round 12) ----------------------------------------------------------
+
+/** A click on the bird (Enter / Space on it): ⏹ Halt the flight here while
+ * it flies or waits on you, ▶ Carry on while held, Retry when a stop failed.
+ * Null for a bird that is not on a live flight's stop (the session box, a
+ * fast-track rung): there is nothing to halt. */
+export function birdAction(tone: BirdTone, onFlight: boolean): { key: "pause" | "resume" | "retry"; label: string; title: string } | null {
+  if (!onFlight) return null;
+  if (tone === "paused") return { key: "resume", label: "Carry on", title: "Carry on — the flight flies on from this stop" };
+  if (tone === "halted") return { key: "retry", label: "Retry", title: "Retry — run this stop again" };
+  return { key: "pause", label: "Halt the flight here", title: "Halt the flight here — Carry on picks it up again" };
+}
+
+/** The flight a bird is dragged on: its id and the step it is at (null when
+ * no stop says so). */
+export interface JumpFlight {
+  id: string;
+  at: string | null;
+}
+
+/** The step a box jumps the flight to: a stop's own, a group's first
+ * sub-step; none for any other box (the session, a branch, the +). */
+export function jumpStepOf(n: DiagramNode): FlightStep | null {
+  if (n.kind === "group") return n.group?.nodes[0]?.step || n.group?.steps[0] || null;
+  return n.kind === "stop" ? n.step || null : null;
+}
+
+/** The live flight a line draws, and the step it is at — a group's by the
+ * sub-step it is in; null on a line with no live flight. */
+export function jumpFlightOf(d: Diagram): JumpFlight | null {
+  if (!d.flightId) return null;
+  for (const n of d.nodes) {
+    if (n.kind === "group" && n.group?.current?.step) return { id: d.flightId, at: n.group.current.step.id };
+    if (n.kind === "stop" && n.step && FLIGHT_HERE.has(n.state)) return { id: d.flightId, at: n.step.id };
+  }
+  return { id: d.flightId, at: null };
+}
+
+/** Whether the bird may be dropped on a box: any stop of the flight,
+ * earlier or later — a group by its first sub-step — but the one it is at
+ * (a no-op), and never the session, a branch or the +. */
+export function canJumpTo(flight: JumpFlight | null, n: DiagramNode): boolean {
+  if (!flight?.id || n.row !== "main") return false;
+  const step = jumpStepOf(n);
+  return !!step && step.id !== flight.at;
+}
+
+/** Every box of a line the bird can be dropped on, in line order. */
+export function jumpTargets(d: Diagram, flight: JumpFlight | null = jumpFlightOf(d)): DiagramNode[] {
+  return flight ? d.nodes.filter((n) => canJumpTo(flight, n)) : [];
 }

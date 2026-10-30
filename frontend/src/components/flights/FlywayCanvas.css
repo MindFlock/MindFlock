@@ -983,6 +983,78 @@
   }
 }
 
+/* --- The bird in hand (round 12; docs/flights.md "As built: round 12 bird") ---
+   On a live flight's stop the bird is a button: a click halts the flight
+   (Carry on while held, Retry when a stop failed), a drag carries it to
+   another stop. `touch-action: none` lets a long-press lift it. */
+.fl-bird-marker[role="button"] {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.fl-bird-marker[role="button"]:hover {
+  border-color: currentColor;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.26);
+}
+
+.fl-bird-marker[role="button"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* In hand: it follows the pointer, centred on it, screen-sized at any zoom
+   of the Sky, and above every box. */
+.fl-bird-marker.fl-bird-dragging {
+  z-index: 8;
+  cursor: grabbing;
+  transition: none;
+  transform: translate(-50%, -50%) scale(calc(1.15 / var(--sky-z, 1)));
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+}
+
+/* Let go off a stop: a short flight home. */
+.fl-bird-marker.fl-bird-snap {
+  transition: left 0.22s ease-out, top 0.22s ease-out, transform 0.22s ease-out;
+}
+
+.fl-bird-carried,
+.fl-bird-carried .fl-box {
+  cursor: grabbing;
+}
+
+/* A branch's own bird (round 12): smaller, sitting on the branch box's left
+   edge where the fan-out wire comes in; a click opens that child. */
+.fl-bird-marker.fl-bird-branch {
+  z-index: 4;
+  padding: 2px;
+  transform: translate(-50%, -50%);
+}
+
+.fl-bird-marker.fl-bird-branch[role="button"] {
+  cursor: pointer;
+}
+
+/* Every stop it can land on, and the one under it. */
+.fl-box.fl-jump-target {
+  outline: 2px dashed color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: 3px;
+}
+
+.fl-box.fl-jump-over {
+  outline-style: solid;
+  outline-color: var(--accent);
+  box-shadow: 0 0 0 5px rgba(var(--accent-rgb), 0.3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fl-bird-marker.fl-bird-snap {
+    transition: none;
+  }
+}
+
 /* --- A line's box size (the Sky's ◧) --------------------------------------- */
 
 /* Compact: the title alone, on one line, centred in its box. */

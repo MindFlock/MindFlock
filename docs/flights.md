@@ -3087,3 +3087,120 @@ palette's **Learn the Sky** runs `setView("sky")` then `openSkyGuide()`.
    - `sky-catalog` — the shelf's **All blocks…** chip (StopShelf.tsx): not
      used by the tour yet (the shelf, its ancestor, would win a list), named
      for a later step.
+### As built: round 12 bird
+
+The owner: "I want to be able to stop a bird where it is working or pick it
+up and drag it to an earlier stop." The bird (`.fl-bird-marker`) is in hand
+on any line that draws one on a live flight's stop (a line in the Sky, the
+pane's Flight tab). **No new canvas prop**: `FlywayCanvas` calls the flight
+routes itself (`controlFlight`, `stepRetry`, `jumpFlight`, keyed by
+`diagram.flightId`), the way the current stop's toolbar and `pick` already
+do, so `useSessionLine` and `useGroundedLine` are unchanged (a grounded
+line has no bird).
+
+**Click = Halt now / Carry on / Retry.** `BirdMarker` takes an optional
+`hand` (`BirdHand`, Bird.tsx: its title and its handlers); with one it is a
+`role="button"`, `tabIndex=0` span (not a `<button>`, so flightsButtons'
+tier rule has nothing to pin), Enter / Space press it. Its `aria-label`
+stays what it was ("The bird: flying Push" — the Sky's tests pin it); what
+a press does is its `title` and `aria-description`, from
+`birdAction(tone, onFlight)` in lib/stopEditing:
+
+| Bird | Press | Route |
+|---|---|---|
+| working, perched on you | **Halt the flight here** | `controlFlight(id, "pause")` |
+| paused | **Carry on** | `controlFlight(id, "resume")` |
+| halted (a stop failed) | **Retry** | `stepRetry(id, <step it is at>)` |
+| on the session box / a rung | — (a picture, `role="img"`) | — |
+
+Paused, the bird sits still: `birdLook` flaps (and bobs) only while the
+flock works. When the bird can be dragged, the title adds "· Drag the bird
+to another stop to jump there".
+
+**Drag = jump.** Pointer events with `setPointerCapture` on the marker (no
+HTML5 DnD, so the shelf's drops are untouched); pointerdown stops
+propagation, so a box's reorder drag, the stage's pan, the line's bar drag
+and the sky's marquee never start. A mouse lifts it after 4px; a touch after
+a 380ms hold (`BIRD_HOLD_MS` — a tap still clicks; a touch that moves first
+lets go; the marker is `touch-action: none` and eats the long-press's
+context menu). In hand it wears `.fl-bird-dragging`: centred on the pointer
+(stage px through `stagePoint`, which undoes the Sky's zoom), scaled
+`1.15 / --sky-z` so it stays screen-sized, no transition. The canvas wears
+`.fl-bird-carried`; every stop it can land on `.fl-jump-target` (a dashed
+accent outline), the one under the pointer (6px slack) `.fl-jump-over`.
+Released over one → `jumpFlight(flightId, step, title)`, and the bird
+stands on that stop until the flight's perch moves (or 6s; a failed jump
+flies it back). Released anywhere else, or Esc → it flies home
+(`.fl-bird-snap`, 0.22s). A drag never counts as a click.
+
+**The rules** (lib/stopEditing, tested in `birdDrag.test.ts`):
+
+- `jumpStepOf(n)` — the step a box jumps to: a stop's own, a group's first
+  sub-step; null for the session, a branch, a rung, the +.
+- `jumpFlightOf(d)` — `{id, at}`: the line's live flight and the step it is
+  at (a group's by its `current` sub-step); null with no live flight.
+- `canJumpTo(flight, n)` — a main-row box with a jump step that is not the
+  step the flight is at: any stop, earlier or later (the server re-arms the
+  halt points after the target and pauses there when it is one).
+- `jumpTargets(d, flight = jumpFlightOf(d))` — those boxes, in line order.
+
+**The menu.** `StopMenuCtx.jump` (the canvas: `canJumpTo(jumpFlightOf(d),
+n)`) adds **Jump the bird here** (`key: "jump"`) to a stop's or a group's
+right-click menu, above Remove and the notes — the keyboard's and a
+phone's path to the drag. The bird itself has no menu.
+
+Tests: `birdDrag.test.ts` (20: the click by tone, the jump rules on plain,
+folded and opened groups, the route, the menu item's place, the marker's
+markup in each state, the drag's CSS and its pointer-capture wiring);
+stopEditing / skyBirds / flightDiagram / skyBranches / skyVisibility /
+flightsButtons unchanged and green.
+
+**Every child a parallel row, each with its own bird.** The owner:
+"subsessions should all be in the MindFlock block in parallel, each with
+their own bird if they are running." (The Sky draws a child's line only
+inside its parent's.) In `sessionDiagram` every child that is not a worker
+spawned at a stop — the plain ones, one spawned at a stop not in this
+flight, one re-parented — now hangs the way workers do: a parallel row off
+the line's current place (`hangPoint`: the flight's current stop, else the
+fast-track's current or halted rung, else the session box) and converging at
+the box after it (the next stop, or the +). It stays a `child` box with its
+`child:<title>` id and its chip and mini ladder. It stays in row `below`, so
+reading order keeps the children last. What is new is a `branch` link
+(`{from, to, state, inner, live}`): the wire out is the family's `branch`
+wire, drawn the way a fan-out is, and the wire back in is a `join`, done once
+the child's turn ended. The line reaches the next box through them, the
+direct wire is dropped, and the flight never waits on them.
+
+- **Layout:** `layoutDiagram` stacks a hung child in the same column as the
+  stop's workers, under them (an indented group on a phone).
+- **Reordering:** `reorderDiagram` re-targets the child's fan-in along with
+  the workers'.
+- **States** (`childState`): working, asking, failed (by its report or a
+  broken session), else done.
+- **The +:** `insertGaps` keeps the + after a stop whose column holds only
+  hung children, drawn between the stop and the column. A worker column
+  still has none, because the line reaches its join point through the
+  workers.
+
+**Birds.** `birdPerches(diagram): BirdPerch[]` returns the main bird
+(`birdPerch`, unchanged and still exported) first. After it comes one bird
+per branch whose session works (`tone: "working"`) or waits on you (`"you"`),
+counting workers and hung children alike; an idle one has none. Each of those
+carries `child` (the session's title). `BranchInfo.live` holds it, from
+`deriveSessionState`. The canvas draws them on any line whose host passes
+`bird` at all (null too: SkyLine and SessionFlight pass `birdPerch(d)`, the
+flyway editor passes nothing), so no host changed.
+
+A branch's bird is smaller (18px), `.fl-bird-branch`, and sits centred on
+the branch box's left edge, where its wire comes in. With `onOpen` it is a
+`role="button"` ("Open <child> — working"): a click or Enter opens that
+child, as a click on its box does, and it never drags. Without `onOpen` it is
+a picture. `BirdMarker` gained a `className` prop for this. The main bird
+keeps its click (halt / carry on / retry) and its drag (jump).
+
+Tests: skyBranches.test.ts (8 more: the hanging rows off a stop, a rung or
+the session box, the phone layout, the + kept, reordering, `birdPerches`, the
+canvas's branch birds) and skyBirds.test.ts (the marker's class). The tests
+of the old "children below" picture (flightDiagram.test.ts,
+skyBranches.test.ts) now pin the parallel rows. flightsUi, skyLine and
+stopGroups are unchanged and green.

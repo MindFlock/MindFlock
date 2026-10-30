@@ -42,6 +42,16 @@
  * stop's dialog: ✎, Enter / Space, a double-click and the menu's Edit open it,
  * while a click only selects (`onSelect`).
  *
+ * Round 12: the bird is in hand (lib/stopEditing `birdAction`, `jumpTargets`).
+ * A click on it halts the flight where it is (Carry on while held, Retry on a
+ * failed stop); a drag — a long-press first on touch — carries it over the
+ * line, every stop it can land on lit, and a drop on one jumps the flight
+ * there (`jumpFlight`); dropped anywhere else it flies back. It calls the
+ * flight routes itself, as the current stop's toolbar does: no prop. Every
+ * branch whose child works or waits on you — a worker, or a child hung off
+ * the line — carries a smaller bird of its own on its left edge (a click
+ * opens that child, `onOpen`; it never drags).
+ *
  * Empty space pans the line sideways (scroll, or drag it). Positions and
  * connectors come from `layoutDiagram` (fixed box sizes), so the markup needs
  * no measuring and a server render draws the same picture — an open card
@@ -49,6 +59,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState, type DragEvent, type KeyboardEvent, type MouseEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 import {
+  birdPerches,
   joinLabel,
   layoutDiagram,
   reorderDiagram,
@@ -60,9 +71,11 @@ import {
   type DiagramNode,
   type LayoutOpts,
 } from "../../lib/flightDiagram";
-import { controlFlight, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { controlFlight, jumpFlight, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
 import {
+  birdAction,
   canHalt,
+  canJumpTo,
   canShift,
   dropGapFor,
   flightHold,
@@ -70,6 +83,9 @@ import {
   haltToggle,
   insertGaps,
   isStopDrag,
+  jumpFlightOf,
+  jumpStepOf,
+  jumpTargets,
   menuItemsFor,
   removeTool,
   stopDropOf,
@@ -177,7 +193,9 @@ export interface FlywayCanvasProps {
   sizeOf?: LayoutOpts["sizeOf"];
   /** Scroll the line so this box (the flight's current stop) is in view. */
   reveal?: string | null;
-  /** The bird: standing on this box (lib/flightDiagram `birdPerch`). */
+  /** The bird: standing on this box (lib/flightDiagram `birdPerch`). Passed
+   * at all (null too), the line also draws a bird on each branch whose child
+   * works or waits on you (`birdPerches`; a click opens that child). */
   bird?: BirdPerch | null;
   /** How much each box shows (default normal — the editor, the Flight tab). */
   size?: BoxSizeName;
@@ -266,6 +284,22 @@ function useNarrow(ref: RefObject<HTMLElement | null>, forced?: boolean): boolea
   }, [ref, forced]);
   return forced ?? narrow;
 }
+
+/** A bird in hand: the pointer, where it went down, where it is now (stage
+ * px), and the stop under it. `live` once it moved (a touch: once held). */
+interface BirdDrag {
+  pointer: number;
+  touch: boolean;
+  sx: number;
+  sy: number;
+  x: number;
+  y: number;
+  live: boolean;
+  over: string | null;
+}
+
+/** How long a touch holds the bird before it lifts (a tap still clicks). */
+const BIRD_HOLD_MS = 380;
 
 interface Drag {
   id: string;
@@ -551,6 +585,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
         later: canShift(stops, stops.indexOf(menuNode), 1, p.diagram.insertFrom),
         live: !!p.diagram.flightId && (!!menuNode.step || menuNode.kind === "group"),
         here: isHere(menuNode),
+        jump: canJumpTo(jumpFlightOf(p.diagram), menuNode),
       })
     : [];
   const pick = (n: DiagramNode, key: StopMenuKey) => {
@@ -569,6 +604,10 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
     else if (key === "retry") void stepRetry(flight, step);
     else if (key === "halt") p.onToggleHalt?.(n);
     else if (key === "pause" || key === "resume") void controlFlight(flight, key);
+    else if (key === "jump") {
+      const to = jumpStepOf(n);
+      if (to) void jumpFlight(flight, to.id, n.title);
+    }
     else if (key === "tackon" || key === "open") p.onOpen?.(n);
   };
   const closeMenu = (refocus: boolean) => {
@@ -577,7 +616,156 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
     if (refocus && id) boxRefs.current[id]?.focus();
   };
 
-  const perch = p.bird ? shown.boxes.find((b) => b.node.id === p.bird!.nodeId) : undefined;
+  // --- The bird in hand -------------------------------------------------------
+  const [birdDrag, setBirdDrag] = useState<BirdDrag | null>(null);
+  const birdRef = useRef<BirdDrag | null>(null);
+  birdRef.current = birdDrag;
+  const birdHold = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const birdDragged = useRef(false);
+  // Dropped on a stop: it stands there until the flight says where it is.
+  const [landed, setLanded] = useState<{ on: string; from: string } | null>(null);
+  // Let go elsewhere: a short flight home.
+  const [snapping, setSnapping] = useState(false);
+  useEffect(() => () => void (birdHold.current && clearTimeout(birdHold.current)), []);
+  useEffect(() => {
+    if (landed && p.bird?.nodeId !== landed.from) setLanded(null);
+  }, [p.bird?.nodeId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!landed) return;
+    const t = setTimeout(() => setLanded(null), 6000);
+    return () => clearTimeout(t);
+  }, [landed]);
+  useEffect(() => {
+    if (!snapping) return;
+    const t = setTimeout(() => setSnapping(false), 260);
+    return () => clearTimeout(t);
+  }, [snapping]);
+
+  const perchNode = p.bird ? p.diagram.nodes.find((n) => n.id === p.bird!.nodeId) : undefined;
+  const flightAt = jumpFlightOf(p.diagram);
+  // The bird is in hand on a live flight's stop (not the session box, a rung).
+  const onFlight = !!flightAt && !!perchNode && (perchNode.kind === "stop" || perchNode.kind === "group") && !!jumpStepOf(perchNode);
+  const birdAct = p.bird ? birdAction(p.bird.tone, onFlight) : null;
+  const targets = useMemo(() => new Set(onFlight ? jumpTargets(p.diagram, flightAt).map((n) => n.id) : []), [onFlight, p.diagram, flightAt?.at]); // eslint-disable-line react-hooks/exhaustive-deps
+  const lit = birdDrag?.live ? targets : null;
+
+  const pressBird = () => {
+    if (!birdAct || !flightAt) return;
+    if (birdAct.key === "retry") {
+      if (flightAt.at) void stepRetry(flightAt.id, flightAt.at);
+    } else void controlFlight(flightAt.id, birdAct.key);
+  };
+  // The stop under a point of the stage, among those the bird can land on.
+  const targetAt = (x: number, y: number): string | null => {
+    const lx = x - pad;
+    const ly = y - top;
+    const slack = 6;
+    const hit = shown.boxes.find((b) => targets.has(b.node.id) && lx >= b.x - slack && lx <= b.x + b.w + slack && ly >= b.y - slack && ly <= b.y + b.h + slack);
+    return hit ? hit.node.id : null;
+  };
+  const endBird = (d: BirdDrag | null, drop: boolean) => {
+    if (birdHold.current) clearTimeout(birdHold.current);
+    birdHold.current = null;
+    setBirdDrag(null);
+    if (!d?.live) return;
+    birdDragged.current = true;
+    setTimeout(() => (birdDragged.current = false), 0);
+    const to = drop && d.over ? p.diagram.nodes.find((n) => n.id === d.over) : undefined;
+    const step = to ? jumpStepOf(to) : null;
+    if (!to || !step || !flightAt || !p.bird) {
+      setSnapping(true);
+      return;
+    }
+    setLanded({ on: to.id, from: p.bird.nodeId });
+    void jumpFlight(flightAt.id, step.id, to.title).then((ok) => {
+      if (!ok) {
+        setLanded(null);
+        setSnapping(true);
+      }
+    });
+  };
+  const onBirdDown = (e: PointerEvent<HTMLSpanElement>) => {
+    // Never the line's bar drag, a box's, the stage's pan or the sky's marquee.
+    e.stopPropagation();
+    if (e.button !== 0 || !targets.size) return;
+    const pt = stagePoint(e.clientX, e.clientY);
+    if (!pt) return;
+    const touch = e.pointerType === "touch";
+    const d: BirdDrag = { pointer: e.pointerId, touch, sx: e.clientX, sy: e.clientY, x: pt.x, y: pt.y, live: false, over: null };
+    setBirdDrag(d);
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* a synthetic event has no capture */
+    }
+    if (touch)
+      birdHold.current = setTimeout(() => {
+        birdHold.current = null;
+        const cur = birdRef.current;
+        if (cur && cur.pointer === d.pointer) setBirdDrag({ ...cur, live: true });
+      }, BIRD_HOLD_MS);
+  };
+  const onBirdMove = (e: PointerEvent<HTMLSpanElement>) => {
+    const d = birdRef.current;
+    if (!d || e.pointerId !== d.pointer) return;
+    e.stopPropagation();
+    const far = Math.hypot(e.clientX - d.sx, e.clientY - d.sy) > (d.touch ? 10 : 4);
+    if (!d.live) {
+      // A touch that moves before the hold is a scroll or a pan: not the bird's.
+      if (d.touch) {
+        if (far) endBird(d, false);
+        return;
+      }
+      if (!far) return;
+    }
+    const pt = stagePoint(e.clientX, e.clientY);
+    if (pt) setBirdDrag({ ...d, live: true, x: pt.x, y: pt.y, over: targetAt(pt.x, pt.y) });
+  };
+  const onBirdUp = (e: PointerEvent<HTMLSpanElement>) => {
+    const d = birdRef.current;
+    if (!d || e.pointerId !== d.pointer) return;
+    e.stopPropagation();
+    endBird(d, e.type === "pointerup");
+  };
+  const birdHand = birdAct
+    ? {
+        title: birdAct.title + (targets.size ? " · Drag the bird to another stop to jump there" : ""),
+        className: birdDrag?.live ? "fl-bird-dragging" : snapping ? "fl-bird-snap" : undefined,
+        onClick: (e: MouseEvent<HTMLSpanElement>) => {
+          e.stopPropagation();
+          if (!birdDragged.current) pressBird();
+        },
+        onKeyDown: (e: KeyboardEvent<HTMLSpanElement>) => {
+          if (e.key === "Escape" && birdRef.current) {
+            e.preventDefault();
+            endBird(birdRef.current, false);
+            return;
+          }
+          if (e.key !== "Enter" && e.key !== " ") return;
+          e.preventDefault();
+          e.stopPropagation();
+          pressBird();
+        },
+        onPointerDown: onBirdDown,
+        onPointerMove: onBirdMove,
+        onPointerUp: onBirdUp,
+        onPointerCancel: onBirdUp,
+        // A long-press is the drag, not the system's menu.
+        onContextMenu: (e: MouseEvent<HTMLSpanElement>) => {
+          if (birdRef.current?.touch) e.preventDefault();
+        },
+      }
+    : undefined;
+
+  const perch = p.bird ? shown.boxes.find((b) => b.node.id === (landed?.on || p.bird!.nodeId)) : undefined;
+  // The branches' own birds, on a line that draws a bird at all.
+  const branchBirds =
+    p.bird !== undefined
+      ? birdPerches(p.diagram)
+          .filter((b) => b.child)
+          .map((b) => ({ perch: b, box: shown.boxes.find((x) => x.node.id === b.nodeId) }))
+          .filter((b): b is { perch: typeof b.perch; box: NonNullable<typeof b.box> } => !!b.box)
+      : [];
   return (
     <div
       ref={rootRef}
@@ -588,6 +776,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
         (vertical ? " fl-canvas-vertical" : "") +
         " fl-lod-" + lod +
         (drag?.moved ? " fl-dragging" : "") +
+        (lit ? " fl-bird-carried" : "") +
         (stopOver ? " fl-stop-over" : "") +
         (p.className ? " " + p.className : "")
       }
@@ -712,7 +901,9 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
             (tools ? " fl-has-tools" : "") +
             (mark ? " fl-halt-point" : "") +
             (n.inGroup ? " fl-in-group" : "") +
-            (canDrag(n) ? " fl-draggable" : "");
+            (canDrag(n) ? " fl-draggable" : "") +
+            (lit?.has(n.id) ? " fl-jump-target" : "") +
+            (lit && birdDrag?.over === n.id ? " fl-jump-over" : "");
           const said =
             n.kind === "add"
               ? drop
@@ -1009,11 +1200,47 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
         {perch && (
           <BirdMarker
             tone={p.bird!.tone}
-            x={perch.x + pad + perch.w / 2}
-            y={perch.y + top}
+            x={birdDrag?.live ? birdDrag.x : perch.x + pad + perch.w / 2}
+            y={birdDrag?.live ? birdDrag.y : perch.y + top}
+            hand={birdHand}
             label={"The bird: " + (p.bird!.tone === "you" ? "perched on you at " : p.bird!.tone === "halted" ? "halted at " : p.bird!.tone === "paused" ? "paused at " : "flying ") + perch.node.title}
           />
         )}
+        {branchBirds.map(({ perch: bp, box }) => {
+          const n = box.node;
+          const doing = bp.tone === "you" ? "waiting on you" : "working";
+          const open = () => p.onOpen?.(n);
+          return (
+            <BirdMarker
+              key={"bird:" + n.id}
+              tone={bp.tone}
+              size={18}
+              x={box.x + pad}
+              y={box.y + top + Math.min(box.h, 52) / 2}
+              label={n.title + "’s bird: " + doing}
+              className="fl-bird-branch"
+              hand={
+                p.onOpen
+                  ? {
+                      title: "Open " + n.title + " — " + doing,
+                      onClick: (e) => {
+                        e.stopPropagation();
+                        open();
+                      },
+                      onKeyDown: (e) => {
+                        if (e.key !== "Enter" && e.key !== " ") return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        open();
+                      },
+                      // A branch's bird never drags, nor starts the line's drags.
+                      onPointerDown: (e) => e.stopPropagation(),
+                    }
+                  : undefined
+              }
+            />
+          );
+        })}
         {menuNode && menuItems.length > 0 && (
           <StopMenu
             x={menu!.x}
