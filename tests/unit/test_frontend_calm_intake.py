@@ -155,7 +155,8 @@ def test_auto_start_chip_depends_on_the_section_state():
 def test_github_tabs_have_no_repository_cards_under_the_work():
     # Add once, edit where it shows: no card list below the work. A watched
     # repository's heading carries Edit; "+ Add source" opens the add flow at
-    # the top of the tab — which leads on its own while nothing is watched.
+    # the FOOT of the tab (it grows downward, nothing on screen moves) — and
+    # it is the only thing there while nothing is watched.
     for name in ("PullRequestsTab.tsx", "IssuesTab.tsx"):
         code = re.sub(r"\s+", " ", _code(_INTAKE / name))
         assert "RepoSourceList" not in code, name
@@ -163,14 +164,14 @@ def test_github_tabs_have_no_repository_cards_under_the_work():
         # setup card (Connect GitHub → pick a repo → turn on) leads instead.
         assert "const showAdd = !!adding;" in code, name
         assert '<WorkListPanel key="work"' in code, name
-        # Order: the add flow, the switch, the GitHub line, the work, Advanced.
+        # Order: the switch, the GitHub line, the work, Advanced, the add flow.
         order = [
-            "{addFlow}",
             "<GithubSetupCard",
             "<AutoStartLink",
             "<GithubStatusLine",
             "? workList : null",
             "<summary>Advanced options</summary>",
+            "{addFlow}",
         ]
         idx = [code.index(o) for o in order]
         assert idx == sorted(idx), (name, idx)
