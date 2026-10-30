@@ -54,3 +54,44 @@
     animation: none;
   }
 }
+
+/* --- The weather ---------------------------------------------------------------- */
+
+/* Quiet hours: the sky dims. Under the flock (it comes first), over the
+   plane's background, never in the way of a click. */
+.sky-night {
+  position: absolute;
+  inset: 0 auto auto 0;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 50% 0%, rgba(8, 12, 40, 0.22), rgba(4, 6, 22, 0.4));
+  animation: sky-dusk 4s ease-out;
+}
+
+:root.light .sky-night {
+  background: radial-gradient(ellipse at 50% 0%, rgba(30, 40, 90, 0.08), rgba(20, 28, 70, 0.16));
+}
+
+@keyframes sky-dusk {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sky-night {
+    animation: none;
+  }
+}
+
+/* The title bar's word for it: "☁ usage 87 %", "☾ quiet hours". */
+.sky-weather-word {
+  font-size: 0.85em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Past 85 % the word asks for attention. */
+.sky-weather-word.is-storm {
+  color: var(--tone-attention);
+}

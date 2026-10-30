@@ -4299,3 +4299,34 @@ once. The last stop leaves the cursor. Returns `{flight, sha}`.
 - **`call`**: urllib on a thread into the module's `_JOBS`, read by `observe`. Content-Type is guessed (JSON for a `{`/`[` body) unless a header sets it. Placeholders fill `url` and `body` (`{receipt}` = the nearest earlier stop in state `done`). It reads at most 1 MB and keeps a 2000-char tail. A network error → fail "no answer from <host>: …". Headers are never logged or stored in `detail`.
 - **`someone`**: `apply` does park a `you` action returned from `_perform` (verified: `_record_outcome` → `apply` → `waiting_you`), so run sends and returns `{"action": "you", note: text, detail: {items, token, done_url, sent_to, receipt: "done by you"}}`. The link's Done writes `receipt`/`note` "done by <who>" (or "done by someone" for a webhook ask) and `detail.by = "someone"`, then calls `flight_driver.operate(…, "done")`. Your own Done keeps the preset "done by you". The peer path: the link whose `peer_name` matches `who` (case-blind) → `PeerService.human_message`. The webhook gets `{text, items, done_url}`, and `text` carries the items and link too (Slack shows only `text`).
 - **Open**: (1) `flights.you_text` has no `someone` branch, so the perch's push/event text is the stop's title, not its `text` (`ss.note` holds the text). That fix is one line in `flights.py`, which is outside this fence. (2) With no tailnet phone URL, the done link is relative (`/api/hooks/flight/<t>/done`) and useless to a peer. (3) Spent `listen`/`someone` tokens of a deleted flight still answer 404 through the step check; nothing calls `_hooks.forget_flight` yet.
+### As built: round 15 weather
+
+- `lib/weather.ts` (pure): `weatherFor({usagePct, hour, quiet, reducedMotion})
+  → {clouds: 0|1|2, night, word, drift}`. Clouds 1 past 60 %, 2 past 85 %;
+  night when the local hour is in `[from, to)`, wrapping midnight (an empty
+  window is never night); `word` = "usage 87 %" (usage wins), else "quiet
+  hours", else "". `drift` = clouds and not reduced motion. Readers:
+  `windowUsagePct(usage)` (the FULLEST live `windowed` provider window in
+  `/api/usage`: the Sky has no focused pane), `quietHours(settings)`
+  (`notifications.quiet_hours: {from, to}`, hours or "HH:MM"). Clouds:
+  `cloudCount` (3 / 6), `seedClouds`, `fitClouds` (new ones wait off the left
+  edge and drift in; surplus ones are marked `leaving` and drift off the
+  right; without drift they simply appear / go), `stepClouds`.
+- `components/flights/useWeather.ts`: `useUsage()` (the top bar's query, no new
+  endpoint) + `useSettingsDoc(true)` + `useNow(60s)` + `useReducedMotion()`
+  (moved out of SkyFlock, exported).
+- `SkyFlock.tsx`: clouds are painted on the flock's canvas before the birds
+  (soft radial puffs, greyer and denser past 85 %); under reduced motion the
+  canvas still shows static clouds (no birds, no loop) and renders nothing at
+  all in clear weather; `paused` freezes the clouds too. Night = a
+  `.sky-night` tint div before the canvas (`pointer-events: none`, a 4s dusk
+  fade, none under reduced motion). Without a QueryClient (static renders,
+  tests) the sky flies in `CLEAR` weather. Exports `WeatherWord` (live) and
+  `WeatherLabel({weather})` (pure): "☁ usage 87 %" (`is-cloudy`; `is-storm` =
+  attention colour past 85 %) or "☾ quiet hours".
+- **Mount `<WeatherWord />` in the Sky's title bar in `SkyView.tsx`** (not done:
+  SkyView belongs to another worker).
+- **Open: quiet hours do not exist in settings yet.** `NotificationSettings`
+  (`backend/config/settings.py`) has no `quiet_hours` and its `from_dict` drops
+  unknown keys, so night never shows until that field (+ settings_sync and a
+  Settings control) is added. Test: `__tests__/weather.test.ts`.
