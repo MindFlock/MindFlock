@@ -33,9 +33,10 @@ export const PALETTE_H = 420;
 export const PALETTE_MIN_W = 240;
 export const PALETTE_MIN_H = 200;
 
-/** A frame held to the palette's least size (whole px). */
+/** A frame held to the palette's least size (whole px); no number (or not a
+ * finite one) is the default. */
 export function paletteFrame(w?: number, h?: number): { w: number; h: number } {
-  const ok = (v: number | undefined, d: number) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : d);
+  const ok = (v: number | undefined, d: number) => (typeof v === "number" && Number.isFinite(v) ? v : d);
   return { w: Math.max(PALETTE_MIN_W, Math.round(ok(w, PALETTE_W))), h: Math.max(PALETTE_MIN_H, Math.round(ok(h, PALETTE_H))) };
 }
 
