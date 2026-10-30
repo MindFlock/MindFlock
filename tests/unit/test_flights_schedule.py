@@ -83,7 +83,8 @@ def test_rows_are_the_scheduled_plans_in_template_shape():
     rows = ts.flight_plan_rows(F.list_plans())
     # builtin:schedule has a schedule trigger but no schedule: a row all the same
     by_id = {r["name"]: r for r in rows}
-    assert set(by_id) == {"builtin:schedule", p["id"]}
+    # Nightly chores (round 15) is seeded with a daily schedule, paused.
+    assert set(by_id) == {"builtin:schedule", "builtin:nightly", p["id"]}
     assert by_id[p["id"]]["schedule"] == {
         "at": "09:00",
         "days": "daily",

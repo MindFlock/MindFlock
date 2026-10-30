@@ -5107,3 +5107,81 @@ right-click are the two ways in for now.
 (`selectables`); `SkySelection`'s Remove and Tidy these never see an object;
 the shelf chip drops (`lineAt`) ignore objects, so a chip dropped on the
 strip lands on empty sky under it.
+
+### As built: round 15 builtins
+
+**The built-ins.** `_builtin_defaults` keeps the original four first and in
+their order (`BUILTIN_IDS[:4]`; `_BUILTIN_FOR_KIND` / `plan_for_depth` still
+cut only those), then the five flyways, then the five presets. All are seeded,
+editable and resettable (`reset_plan` / `delete_plan` → "reset"), like the
+four. Every agent step keeps `join` on; every `test` and `sync` step and every
+`checks` step has `on_fail: agent` (the failing names / the conflicting files
+go to the agent, the stop retries).
+
+- **Bot PR** (`builtin:botpr`, trigger pr): Agent reads it → Test → Sync with
+  main → Checks → Merge. No perch. The agent's prompt (appended to the PR's
+  own intake prompt) reads the bumped packages' changelogs for breaking
+  changes and commits the smallest adaptation, or changes nothing.
+- **Red main** (`builtin:redmain`, trigger `main_red`, `repo: ""`): Agent
+  investigates → Test → Commit → Push → Open PR → Perch "Look at the fix". An
+  empty `repo` loads leniently and `flight_triggers.watching_plans` skips a
+  plan with no repo, so the seed is inert: **the owner picks the repo in the
+  inspector** (a save is strict, so it must name one: `trigger.repo` "a
+  repository to watch is needed").
+- **Nightly chores** (`builtin:nightly`, trigger schedule `{at: "03:00",
+  days: "daily"}`, **`paused: true`**): Agent updates deps → Test → Commit →
+  Push → Open PR. Seeded paused (a deviation from the contract's plain
+  "schedule 03:00"): an armed seed would try to take off on every install,
+  every night, before anyone set its folder. It shows under Scheduled flyways
+  as paused; switching the trigger on arms it.
+- **Release** (`builtin:release`, manual): Agent writes the notes → Commit →
+  Push → Open PR → Checks → Perch "Approve the release" → Merge → Agent tags
+  and publishes → Land (last, as `land` requires).
+- **Bug report** (`builtin:bugreport`, trigger ticket): Agent "Write a failing
+  test that reproduces the report" → Test `expect: fail` titled "Write the
+  failing test first" → Agent "Make it pass" → Test → Commit → Push → Verify
+  (agent) → Open PR → Reviews settle → Checks → Perch "Approve the merge" →
+  Merge → Ticket: comment ("Fixed by MindFlock"; set `state` to move it). The
+  contract listed the expect-fail Test first; an agent step to write the test
+  comes before it, since a Test stop runs tests, it does not write them.
+- **Presets** (`builtin:preset-docs` "Update the docs", `-tests` "Write
+  tests", `-security` "Security pass", `-selfreview` "Self-review",
+  `-explain` "Explain the diff"): trigger manual, one agent step titled like
+  the preset, a 3–5 sentence prompt naming `{branch}` (the diff of the branch
+  against the default branch). Dropped onto a line they are `op_add_plan`
+  groups of one stop. The prompts live in module constants (`_BOT_PR_PROMPT`
+  … `_PRESETS`) above `_builtin_defaults`.
+
+**Receipts** (`detail.receipt`, ≤ `MAX_RECEIPT` = 80 chars, cut by
+`flights._receipt`) on the `done` of every built-in kind:
+
+| kind | receipt | where |
+|---|---|---|
+| ship | `PR #291` (lane pr: the number from the record's url, `/pull/N` or `/merge_requests/N`; "PR opened" with none) / `merged` / `pushed` / `committed` | `_judge_ship` via `ship_receipt(lane, url)` |
+| checks | `all green`; `no checks` when none reported after the grace | `_judge_checks` |
+| reviews | `2 rounds, quiet` / `1 round, quiet` / `no rounds, quiet` (`detail.review_rounds`) | `_judge_reviews` |
+| command | `exit 0` | `_judge_command` |
+| agent | `settled after 12 min` / `settled after 2 h 5 min` (since the step started, ≥ 1 min) | `_judge_agent` (both done paths) |
+| join | `2 of 3 done` (workers whose entry is `done`, of all); `no workers` | `_judge_join` |
+| wait | `10 min` / `until 18:00` (from the config) | `_judge_wait` |
+| verify | `3 of 4`: answered items of all; the driver's `_verify_obs` now also returns `answered` (steps with a result in the latest run); an observation without it counts what is not open | `_judge_verify` |
+| split | `3 workers` | `flight_driver._run_split` |
+| ticket | `→ Done` (the step's `state` as typed) / `commented` / `nothing to do` | `flight_driver._perform` via `ticket_receipt(config)` |
+| notify | `sent` | `flight_driver._perform` |
+
+`plural(n, word)`, `ship_receipt` and `ticket_receipt` are module-level
+helpers in `flights.py`. The step-state shape is unchanged otherwise (the
+receipt is one more key in `detail`). `you` stops get none (a person pressed
+Done; the `someone` plug-in sets its own).
+
+**Outside this task.** `tests/unit/test_flights_schedule.py::
+test_rows_are_the_scheduled_plans_in_template_shape` pins the scheduled rows
+to `{builtin:schedule, <its plan>}`; with Nightly chores seeded it also lists
+`builtin:nightly` (paused). That file was outside this task's fence: its
+expected set needs `"builtin:nightly"` added. The frontend shows the new
+built-ins as it shows any plan; no frontend change was made here.
+
+Tests: `tests/unit/test_flights_builtins.py` (order, shapes, the depth cut,
+strict validity, reset, the red-main repo gate, nightly paused, presets),
+`tests/unit/test_flights_receipts.py` (every receipt above, judges and
+executors); `test_flights.py`'s two count pins now read `len(BUILTIN_IDS)`.
