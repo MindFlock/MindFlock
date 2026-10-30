@@ -184,3 +184,120 @@ export function screenToPlane(cam: { x: number; y: number; z: number }, r: Rect)
 export function planeToScreen(cam: { x: number; y: number; z: number }, r: Rect): Rect {
   return { x: cam.x + r.x * cam.z, y: cam.y + r.y * cam.z, w: r.w * cam.z, h: r.h * cam.z };
 }
+
+// --- The tool: drag mode or click mode (docs/flights.md "As built: round 12 sky")
+
+/** What a press on the sky does. `drag` (the default): a line moves by its
+ * bar, empty sky draws the marquee. `click`: nothing moves — a drag anywhere
+ * pans, a click focuses a line or selects a box, Shift+drag draws the
+ * marquee. Space held is click mode for as long as it is held. */
+export type SkyTool = "drag" | "click";
+export const SKY_TOOLS: readonly SkyTool[] = ["drag", "click"];
+export const SKY_TOOL_KEY = "mf_sky_tool";
+
+/** What a press landed on: empty sky, a line's bar (or the intake lane's
+ * head), a box (or the rest of a line), or a control that takes the press
+ * itself (a button, a field, an open card, a menu). */
+export type SkyTarget = "ground" | "line" | "box" | "control";
+
+/** What the press becomes. `select` is the box's own press (its click selects
+ * it, its drag reorders, as before); `none` leaves the press to its target. */
+export type SkyGesture = "pan" | "marquee" | "move-line" | "select" | "none";
+
+/** The one decision both tools share. In click mode a press that never moves
+ * is still a click on its target (a line is focused, a box selected). */
+export function gestureFor(tool: SkyTool, target: SkyTarget, mods: { shift?: boolean; space?: boolean; touch?: boolean } = {}): SkyGesture {
+  if (mods.space) return "pan";
+  if (target === "control") return "none";
+  if (tool === "click") return mods.shift && !mods.touch ? "marquee" : "pan";
+  if (target === "ground") return mods.touch ? "pan" : "marquee";
+  return target === "line" ? "move-line" : "select";
+}
+
+/** The tool this device remembers (`mf_sky_tool`), drag unless it says click. */
+export function loadSkyTool(store: Pick<Storage, "getItem"> | null = localStore()): SkyTool {
+  try {
+    return store?.getItem(SKY_TOOL_KEY) === "click" ? "click" : "drag";
+  } catch {
+    return "drag";
+  }
+}
+
+export function saveSkyTool(tool: SkyTool, store: Pick<Storage, "setItem"> | null = localStore()): void {
+  try {
+    store?.setItem(SKY_TOOL_KEY, tool);
+  } catch {
+    /* a private window: the tool lasts this visit */
+  }
+}
+
+function localStore(): Storage | null {
+  try {
+    return typeof localStorage === "undefined" ? null : localStorage;
+  } catch {
+    return null;
+  }
+}
+
+// --- Delete on the sky -------------------------------------------------------------
+
+/** What Delete / Backspace does on the sky, from where the keyboard is:
+ * - `selection`: the marquee's selection holds something — its bar removes;
+ * - `box`: a box on line `line` (focused, or the focused line's selected box)
+ *   — a stop or a group leaves the line (undoable), a session box asks to
+ *   close that session;
+ * - `line`: a line itself (its bar, a grounded line's head) — a grounded line
+ *   asks to be removed, a session's line asks to close its session;
+ * - `swallow`: a box Delete means nothing on (the +, a rung, the flown pill,
+ *   the intake lane) — taken, so the keymap does not close the session;
+ * - `keymap`: nothing of the sky's — the app's Delete (close the focused
+ *   session) as before. */
+export type SkyDelete =
+  | { kind: "selection" }
+  | { kind: "box"; line: string; node: string }
+  | { kind: "line"; line: string }
+  | { kind: "swallow" }
+  | { kind: "keymap" };
+
+/** A node Delete acts on: a stop or group (removed) or a session's box
+ * (closed). */
+export const deletableNode = (node: string) => isStopNode(node) || /^(session|child|branch):./.test(node);
+
+/** The session a session-ish box stands for (`session:` / `child:` /
+ * `branch:` + title), or "". */
+export const nodeSession = (node: string) => {
+  const m = /^(session|child|branch):(.+)$/.exec(node);
+  return m ? m[2] : "";
+};
+
+/** Where Delete goes. `focus` is where the keyboard is on the sky: the line
+ * it is on (a slot id, or "intake"), the box node it is on ("" for the line
+ * itself), or nothing (the sky's empty space, the body). `selectedBox` is the
+ * box the focused line has selected (its canvas's own selection), if any. */
+export function deleteFor(
+  selection: SkySelection,
+  focus: { line: string; node: string } | null,
+  selectedBox: { line: string; node: string } | null
+): SkyDelete {
+  if (!selectionEmpty(selection)) return { kind: "selection" };
+  const at = focus || selectedBox;
+  if (!at) return { kind: "keymap" };
+  if (at.line === "intake") return { kind: "swallow" };
+  if (!at.node) return { kind: "line", line: at.line };
+  return deletableNode(at.node) ? { kind: "box", line: at.line, node: at.node } : { kind: "swallow" };
+}
+
+/** A box on a drawn line by its node id: one of the line's own, or a
+ * sub-step of an open group's. */
+export function nodeById<N extends { id: string; group?: { nodes: readonly N[] } }>(nodes: readonly N[], id: string): N | null {
+  for (const n of nodes) {
+    if (n.id === id) return n;
+    const sub = n.group?.nodes.find((s) => s.id === id);
+    if (sub) return sub;
+  }
+  return null;
+}
+
+/** Whether Delete may take this box off its line (what the canvas's own
+ * Delete checks): a stop or a group the flight can still change. */
+export const removableBox = (n: { kind: string; editable?: boolean } | null): boolean => !!n && (n.kind === "stop" || n.kind === "group") && n.editable !== false;

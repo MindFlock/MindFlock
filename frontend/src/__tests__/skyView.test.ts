@@ -327,7 +327,7 @@ describe("the layout store", () => {
     const v = code("components/flights/SkyView.tsx");
     expect(v).toContain("...(measured[t] || estimateLine(lineSize(diagram, full), layout[t]))");
     expect(v).toContain("const saved: Record<string, Pos> = { ...autoPos, ...pinnedPositions(layout) };");
-    expect(v).toContain("const fresh = assignSpots(existing, lines.filter((l) => !saved[l.id]),");
+    expect(v).toContain("const fresh = assignSpots(existing, items.filter((l) => !saved[l.id]),");
     expect(v).toMatch(/className="fl-btn sky-tidy"[^>]*onClick=\{tidy\}/);
     expect(v).toContain('} else if (k === "t" || k === "T") {');
   });

@@ -508,7 +508,8 @@ body.view-switch #sky-view {
   top: 0;
 }
 
-.sky-plane[data-tidying] .sky-line-slot {
+.sky-plane[data-tidying] .sky-line-slot,
+.sky-plane[data-tidying] .sky-intake {
   transition: transform 0.28s ease;
 }
 
@@ -767,7 +768,8 @@ details.fl-group-waiting > summary {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sky-plane[data-tidying] .sky-line-slot {
+  .sky-plane[data-tidying] .sky-line-slot,
+  .sky-plane[data-tidying] .sky-intake {
     transition: none;
   }
   .sky-line {
@@ -784,4 +786,34 @@ details.fl-group-waiting > summary {
    takes no box of its own (StopShelf.css draws the shelf). */
 .sky-shelf-host {
   display: contents;
+}
+
+/* --- Round 12: the intake lane as a sky object, and the two tools ----------
+   The lane sits at its spot like a line's slot; dragged, selected or
+   expanded it is lifted over the lines it may cover. */
+.sky-intake.is-dragging {
+  transition: none;
+  z-index: 6;
+}
+
+.sky-intake[data-open] {
+  z-index: 5;
+}
+
+.sky-intake.is-selected > .sky-lane {
+  outline: 2px dashed var(--accent);
+  outline-offset: 5px;
+}
+
+/* Click mode (`.sky[data-tool="click"]`, the toolbar's ☝ Click, H, or Space
+   held): a drag anywhere pans the sky, so the hand shows over the lines and
+   their boxes too, closed while it pans. A control keeps its own pointer. */
+.sky[data-tool="click"] .sky-viewport,
+.sky[data-tool="click"] .sky-viewport :is(.skl, .skl-bar, .fl-box, .fl-draggable, .fl-canvas, .sky-lane, .sky-lane-head) {
+  cursor: grab;
+}
+
+.sky[data-tool="click"] .sky-viewport.is-panning,
+.sky[data-tool="click"] .sky-viewport.is-panning * {
+  cursor: grabbing !important;
 }

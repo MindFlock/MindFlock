@@ -233,7 +233,8 @@ describe("the wiring", () => {
   const sky = code("components/flights/SkyView.tsx");
 
   it("a left drag on empty sky is the marquee; touch and the middle button pan; Space+drag still pans anywhere", () => {
-    expect(sky).toContain('if (e.pointerType !== "touch" && e.button === 0) startMarquee(e);\n    else startPan(e);');
+    expect(sky).toContain('const g = e.button === 0 ? gestureFor(liveTool, "ground", { shift: e.shiftKey, touch: e.pointerType === "touch" }) : "pan";');
+    expect(sky).toContain('if (g === "marquee") startMarquee(e);\n    else startPan(e);');
     expect(sky).toContain("onPointerDownCapture={onDownCapture}");
     expect(sky).toContain("const got = select(area, items);");
     expect(sky).toContain("const next = m.add ? addSelection(sel, got) : got;");
@@ -248,7 +249,7 @@ describe("the wiring", () => {
 
   it("the shelf's drag and drop is HTML5 DnD, untouched by the marquee's pointer handling", () => {
     expect(sky).toContain("onDrop={onNewDrop}");
-    expect(sky).toContain('<main id="sky-view" className="sky" onDragOver={onSkyDragOver} onDrop={onSkyDrop}>');
+    expect(sky).toContain('<main id="sky-view" className="sky" data-tool={liveTool} onDragOver={onSkyDragOver} onDrop={onSkyDrop}>');
   });
 
   it("dragging a selected line moves every selected line, each pinned", () => {
@@ -262,7 +263,7 @@ describe("the wiring", () => {
     // Delete is taken before the app's keymap (document, capture), where it
     // closes the focused SESSION — never with a selection on the sky.
     expect(sky).toContain('window.addEventListener("keydown", del, true);');
-    expect(sky).toContain("e.stopPropagation();\n    setSelAsk(\"remove\");");
+    expect(sky).toContain('e.stopPropagation();\n    if (d.kind === "selection") setSelAsk("remove");');
   });
 
   it("lines and stops show it: is-selected on the line, fl-box-selected on a box", () => {

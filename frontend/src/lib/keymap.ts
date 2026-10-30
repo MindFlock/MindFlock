@@ -226,6 +226,21 @@ export function endShortcutAllowed(): boolean {
   return true;
 }
 
+/** The keyboard is on a box of the Sky that is not the session itself
+ * (docs/flights.md "As built: round 12 sky"): a stop, a group, a worker's
+ * box, a line's bar, a grounded line — anything carrying `data-sky-box` or a
+ * `data-node` other than `session:` inside `.sky` — or the sky holds a
+ * selection (its viewport carries `data-sky-box` then). Delete there is the
+ * sky's ("remove this"), never "close the focused session". An open card's
+ * pane is the session's own, so not in it. */
+export function skyBoxFocused(el: Element | null = typeof document !== "undefined" ? document.activeElement : null): boolean {
+  if (!el?.closest?.(".sky")) return false;
+  if (el.closest(".pane, .skl-card")) return false;
+  const node = el.closest("[data-node]")?.getAttribute("data-node");
+  if (node) return !node.startsWith("session:");
+  return !!el.closest("[data-sky-box]");
+}
+
 // --- User-customized bindings ------------------------------------------------
 // Rebinding lives in the "?" sheet (click a row, press the new keys) and is
 // cached in localStorage — and, since "Your devices", it follows the person:
@@ -667,7 +682,8 @@ export const KEYMAP: KeymapEntry[] = [
     key: "Delete",
     shift: "any",
     aliasOf: "close", // browser-safe alias
-    when: () => endShortcutAllowed(),
+    // Not on a box of the Sky: Delete there removes the box (SkyView).
+    when: () => endShortcutAllowed() && !skyBoxFocused(),
     run: () => closeFocused(),
   },
   {

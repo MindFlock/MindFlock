@@ -7,7 +7,8 @@
  * a grounded line is deleted), Clear. Stops of one line: Group into a stop
  * and Save to the shelf (both ask a name inline), Remove (at once for up to
  * three, inline-confirmed past that), Clear. No window.confirm / prompt:
- * Electron has none. */
+ * Electron has none. The intake lane can be among the lines (round 12): it
+ * moves and tidies with them, and Remove leaves it alone. */
 
 import { useEffect, useRef, useState, type JSX } from "react";
 import type { Flight, StepKindDef } from "../../lib/flights";
@@ -16,6 +17,7 @@ import { flightStops } from "../../lib/flightDiagram";
 import { deleteFlight, dropGroup, dropStop, groupStops, savePlan } from "../../lib/flightsApi";
 import { groundedIdOf, isGroundedKey } from "../../lib/groundedLines";
 import { closeSession } from "../../lib/sessionActions";
+import { INTAKE_KEY } from "../../lib/skyLayout";
 import { consecutive, removals, selectedIndexes, stopSelection, type SkySelection } from "../../lib/skySelect";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
@@ -68,6 +70,8 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
   const [busy, setBusy] = useState(false);
   const one = stopSelection(p.selection);
   const lines = [...p.selection.lines];
+  // What Remove takes: every line but the intake lane.
+  const removable = lines.filter((id) => id !== INTAKE_KEY);
   const flight = one ? p.flightOf(one.line) : null;
   const idx = one && flight ? selectedIndexes(one.nodes, flight.steps) : [];
   const hint = one ? groupHint(flight, idx, p.kinds) : "";
@@ -96,7 +100,7 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
   const removeLines = () =>
     run(async () => {
       let gone = 0;
-      for (const id of lines) {
+      for (const id of removable) {
         if (isGroundedKey(id)) {
           if (await deleteFlight(groundedIdOf(id))) gone++;
         } else await closeSession(id);
@@ -144,8 +148,8 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
   if (!lines.length && !one) return null;
 
   const what = one ? plural(one.nodes.length, "stop") + " selected" : plural(lines.length, "line") + " selected";
-  const sessions = lines.filter((id) => !isGroundedKey(id));
-  const groundedLines = lines.filter(isGroundedKey);
+  const sessions = removable.filter((id) => !isGroundedKey(id));
+  const groundedLines = removable.filter(isGroundedKey);
   const names = (ids: string[]) => ids.slice(0, 4).map(p.nameOf).join(", ") + (ids.length > 4 ? " and " + (ids.length - 4) + " more" : "");
 
   return (
@@ -179,9 +183,11 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
             <button type="button" className="test-btn fl-btn" disabled={busy} title="Forget where you put them: back to their places in the rows" onClick={() => p.onTidy(lines)}>
               Tidy these
             </button>
-            <button type="button" className="test-btn fl-btn sky-selbar-danger" disabled={busy} title="Close their sessions, remove their stops" onClick={() => p.setAsk("remove")}>
-              Remove…
-            </button>
+            {removable.length > 0 && (
+              <button type="button" className="test-btn fl-btn sky-selbar-danger" disabled={busy} title="Close their sessions, remove their stops" onClick={() => p.setAsk("remove")}>
+                Remove…
+              </button>
+            )}
           </>
         )}
         <button type="button" className="linklike sky-selbar-clear" title="Clear the selection (Esc)" onClick={p.onClear}>
@@ -200,9 +206,9 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
           </button>
         </div>
       )}
-      {p.ask === "remove" && !one && (
+      {p.ask === "remove" && !one && removable.length > 0 && (
         <InlineConfirm
-          title={"Remove " + plural(lines.length, "line") + "?"}
+          title={"Remove " + plural(removable.length, "line") + "?"}
           body={
             <>
               {sessions.length > 0 && (

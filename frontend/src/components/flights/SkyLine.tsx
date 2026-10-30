@@ -29,7 +29,14 @@
  * bar (`onDragStart`), persists `layout` (`onLayout`) and gives it room from
  * `onMeasure` — the line's size in plane px, read by a ResizeObserver. A
  * worker's open card is this line's own state (the host keeps one layout per
- * line); it reaches the host only as the line growing. */
+ * line); it reaches the host only as the line growing.
+ *
+ * Round 12 (docs/flights.md "As built: round 12 sky"): `draggable` false (the
+ * sky's click mode) and the bar never starts a move. `registerDelete` hands
+ * the host this line's Delete: a stop or group box leaves the line through
+ * the canvas's own Remove (the undoable toast), a session's box or the line
+ * itself asks inline to close that session. A press on the bar focuses the
+ * line, so Delete has somewhere to land. */
 
 import { useEffect, useMemo, useRef, useState, type JSX, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { setView, showInSky } from "../../lib/viewMode";
@@ -39,10 +46,12 @@ import { useUi } from "../../state/store";
 import type { Instance } from "../../api/types";
 import { useFlightKinds, useFlights } from "../../state/queries";
 import { closeSession, selectSession } from "../../lib/sessionActions";
+import { nodeById, nodeSession, removableBox } from "../../lib/skySelect";
 import { deriveSessionState } from "../../lib/sessionState";
 import { firstLine } from "../../lib/format";
 import { birdPerch, drawnIndexes, flownCount, lineWhere, sessionDiagram, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import type { FlightPlan } from "../../lib/flights";
+import { InlineConfirm } from "../InlineConfirm";
 import { OverflowMenu, type MenuItem } from "../OverflowMenu";
 import { Pane } from "../grid/Pane";
 import { FlywayCanvas, type BoxSizeName } from "./FlywayCanvas";
@@ -81,7 +90,15 @@ export interface SkyLineProps {
   selected?: boolean;
   /** Its stop boxes in the Sky's selection (node ids). */
   highlighted?: ReadonlySet<string>;
+  /** False in the sky's click mode: the bar never starts a move. */
+  draggable?: boolean;
+  /** The host's handle on this line's Delete (null when the line goes): given
+   * a box's node id ("" = the line itself), it acts and says whether it did. */
+  registerDelete?(fn: ((node: string) => boolean) | null): void;
 }
+
+/** The sky's handle on a line's Delete: a box's node id ("" = the line). */
+export type LineDelete = (node: string) => boolean;
 
 /** An open card's pane, in plane px: its default and its floor. */
 export const PANE_W = 720;
@@ -348,7 +365,43 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   const onBarDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     if ((e.target as Element).closest("button, summary, a, input, [data-no-drag]")) return;
+    // Delete next lands on the line (its close question), not on the page.
+    rootRef.current?.focus({ preventScroll: true });
+    if (p.draggable === false) return;
     p.onDragStart?.(e);
+  };
+
+  // Delete from the sky: a stop or group box through the canvas's own Remove
+  // (the undoable toast); a session's box, or the line itself, asks first.
+  const [closing, setClosing] = useState("");
+  const [closeBusy, setCloseBusy] = useState(false);
+  const deleteBox: LineDelete = (node) => {
+    const t = node ? nodeSession(node) : p.title;
+    if (t) {
+      setClosing(t);
+      return true;
+    }
+    const n = nodeById(shown.diagram.nodes, node);
+    if (!removableBox(n) || !shown.canvas.onRemove) return false;
+    shown.canvas.onRemove(n!);
+    return true;
+  };
+  const deleteRef = useRef(deleteBox);
+  deleteRef.current = deleteBox;
+  const register = p.registerDelete;
+  useEffect(() => {
+    if (!register) return;
+    register((node) => deleteRef.current(node));
+    return () => register(null);
+  }, [register]);
+  const closeNow = async () => {
+    setCloseBusy(true);
+    try {
+      await closeSession(closing);
+    } finally {
+      setCloseBusy(false);
+      setClosing("");
+    }
   };
 
   // The corner handle: pointer travel over the zoom = plane px, drawn live,
@@ -432,12 +485,14 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
       // level of detail a box shows): `--sky-z` on every line.
       style={{ "--sky-z": p.zoom || 1, "--sky-lines": nearLines(p.zoom || 1) } as React.CSSProperties}
       role="group"
+      tabIndex={-1}
+      data-sky-box
       aria-label={name + "'s line"}
       onPointerDownCapture={() => {
         if (!p.focused) p.onFocus();
       }}
     >
-      <div className="skl-bar" title="Drag to move this line" onPointerDown={onBarDown}>
+      <div className="skl-bar" title={p.draggable === false ? "Click to focus this line (drag mode moves it: V)" : "Drag to move this line"} onPointerDown={onBarDown}>
         <Bird size={16} />
         <span className="skl-name">{name}</span>
         {row && (
@@ -486,6 +541,21 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
         </span>
       </div>
       {line.cancel.node}
+      {closing && (
+        <div className="skl-close-confirm" data-no-drag>
+          <InlineConfirm
+            title={"Close “" + windowName(closing) + "”?"}
+            body="Its agent stops and it moves to Recently closed (Ctrl+Shift+T brings it back)."
+            confirmLabel="Close session"
+            busy={closeBusy}
+            onConfirm={() => void closeNow()}
+            onCancel={() => {
+              setClosing("");
+              rootRef.current?.focus({ preventScroll: true });
+            }}
+          />
+        </div>
+      )}
       {row ? (
         // The sizer holds the scaled canvas at its drawn size; inside, the
         // canvas at its tier's size, scaled, with `--sky-z` times the scale.

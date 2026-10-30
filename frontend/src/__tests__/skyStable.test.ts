@@ -98,12 +98,14 @@ describe("the sky view stays still", () => {
 
   it("placement reads the given spots and the pins as saved; a newcomer's spot is kept once it is measured", () => {
     expect(sky).toContain("const saved: Record<string, Pos> = { ...autoPos, ...pinnedPositions(layout) };");
-    expect(sky).toContain("assignSpots(existing, lines.filter((l) => !saved[l.id]),");
-    expect(sky).toMatch(/if \(flightsSettled\) for \(const \[id, at\] of Object\.entries\(fresh\)\) if \(measured\[id\]\) edit\(\)\[id\] = at;/);
+    // The intake lane is the first item placed (round 12), then the lines.
+    expect(sky).toContain("const items = [{ id: INTAKE_KEY, ...intakeBox }, ...lines];");
+    expect(sky).toContain("assignSpots(existing, items.filter((l) => !saved[l.id]),");
+    expect(sky).toMatch(/if \(flightsSettled && intakeReady\) for \(const \[id, at\] of Object\.entries\(fresh\)\) if \(measured\[id\] \|\| id === INTAKE_KEY\) edit\(\)\[id\] = at;/);
     // A session that's gone (or grounded stops that took off or were
     // removed), or a line the owner pinned, frees its given spot.
     expect(sky).toContain("if (layout[id]?.pinned || !lineAlive(id)) delete edit()[id];");
-    expect(sky).toContain("(isGroundedKey(id) ? groundedIds.has(groundedIdOf(id)) : rows.some((r) => r.title === id && inSky(r)))");
+    expect(sky).toContain("(id === INTAKE_KEY ? intakeOn : isGroundedKey(id) ? groundedIds.has(groundedIdOf(id)) : rows.some((r) => r.title === id && inSky(r)))");
     expect(sky).not.toContain("placeLines(");
   });
 
@@ -124,7 +126,7 @@ describe("the sky view stays still", () => {
     const slot = sheet.match(/\n\.sky-line-slot \{([^}]*)\}/);
     expect(slot).not.toBeNull();
     expect(slot![1]).not.toContain("transition");
-    expect(sheet).toMatch(/\.sky-plane\[data-tidying\] \.sky-line-slot \{\s*transition: transform 0\.28s ease;/);
+    expect(sheet).toMatch(/\.sky-plane\[data-tidying\] \.sky-line-slot,\s*\.sky-plane\[data-tidying\] \.sky-intake \{\s*transition: transform 0\.28s ease;/);
     // No other transform transition on a line or a slot.
     for (const m of sheet.matchAll(/([^{}]*)\{([^}]*)\}/g)) {
       if (!/sky-line|\.skl\b/.test(m[1]) || /data-tidying/.test(m[1])) continue;
@@ -135,7 +137,7 @@ describe("the sky view stays still", () => {
     expect(sky).toMatch(/setTidying\(true\);[\s\S]{0,120}setTimeout\(\(\) => alive\.current && setTidying\(false\), TIDY_MS\)/);
     expect(sky).toContain("const TIDY_MS = 350;");
     // Reduced motion: no glide even then.
-    expect(sheet).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.sky-plane\[data-tidying\] \.sky-line-slot \{\s*transition: none;/);
+    expect(sheet).toMatch(/@media \(prefers-reduced-motion: reduce\) \{\s*\.sky-plane\[data-tidying\] \.sky-line-slot,\s*\.sky-plane\[data-tidying\] \.sky-intake \{\s*transition: none;/);
   });
 });
 

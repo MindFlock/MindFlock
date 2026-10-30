@@ -55,6 +55,20 @@ export const INTAKE_W = 240;
 /** Where the first auto-placed line starts: right of the intake lane. */
 export const LINES_LEFT = SKY_MARGIN + INTAKE_W + 48;
 
+/** The intake lane is a sky object like a line (docs/flights.md "As built:
+ * round 12 sky"): its layout entry is this key (x / y / pinned, `open` =
+ * expanded), it is placed first, before every line, and drags by its head. */
+export const INTAKE_KEY = "intake";
+/** The expanded lane's width: every source's items in full. */
+export const INTAKE_OPEN_W = 420;
+
+/** The intake lane's size before it has measured itself: its width, folded
+ * or expanded, and a guess at its height. Once measured, its measure. */
+export function intakeSize(stored: StoredLine | undefined, measured?: { w: number; h: number }): { w: number; h: number } {
+  if (measured && measured.w > 0 && measured.h > 0) return measured;
+  return stored?.open ? { w: INTAKE_OPEN_W, h: 520 } : { w: INTAKE_W, h: 320 };
+}
+
 /** The zoom's range: near has more to show, so it goes past 200%. */
 export const ZOOM_MIN = 0.4;
 export const ZOOM_MAX = 3;

@@ -328,3 +328,30 @@
 .sky-intake[data-lod="mid"] .sky-lane-fly.fl-btn {
   zoom: var(--sky-mid);
 }
+
+/* --- A sky object (round 12): the head is its handle ------------------------
+   The head drags the lane (drag mode); ▸ / ▾ or a double-click expands it.
+   Expanded, every waiting item is listed and its headline reads in full. */
+.sky[data-tool="drag"] .sky-intake .sky-lane-head,
+.sky[data-tool="drag"] .sky-intake .sky-lane-rail {
+  cursor: grab;
+}
+
+.sky-intake .sky-lane-head :is(button, .fl-count) {
+  cursor: pointer;
+}
+
+.sky-lane[data-open] .sky-lane-item-headline {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
+.sky-lane[data-open] .sky-lane-item-ref {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.sky-lane[data-open] .sky-lane-stub-name {
+  white-space: normal;
+}

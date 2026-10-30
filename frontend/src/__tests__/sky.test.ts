@@ -305,7 +305,9 @@ describe("the wiring", () => {
   });
 
   it("mounts the intake lane on the plane and the new-session card where it was asked for", () => {
-    expect(sky).toContain("<IntakeLane rows={rows} plans={plans} onFly={focusOn} width={INTAKE_W} />");
+    // A sky object at its spot (round 12): the layout key "intake".
+    expect(sky).toMatch(/<IntakeLane\s+rows=\{rows\}\s+plans=\{plans\}\s+onFly=\{focusOn\}\s+width=\{intakeW\}/);
+    expect(sky).toContain("transform: `translate(${intakeAt.x}px, ${intakeAt.y}px)`");
     expect(sky).toMatch(/<NewSessionBlock\s+x=\{newAt\.x\}\s+y=\{newAt\.y\}\s+plans=\{plans\}/);
     expect(sky).toContain("setLayout((l) => patchSkyLine(l, title, { x: newAt.x, y: newAt.y, pinned: true }));");
   });
