@@ -259,6 +259,10 @@ describe("the wiring", () => {
   it("keys: Esc clears, Ctrl/⌘+A takes every line, Delete / Backspace asks the bar to remove", () => {
     expect(sky).toContain("setSel(selectLines(lines.map((l) => l.id)));");
     expect(sky).toContain('setSelAsk("remove");');
+    // Delete is taken before the app's keymap (document, capture), where it
+    // closes the focused SESSION — never with a selection on the sky.
+    expect(sky).toContain('window.addEventListener("keydown", del, true);');
+    expect(sky).toContain("e.stopPropagation();\n    setSelAsk(\"remove\");");
   });
 
   it("lines and stops show it: is-selected on the line, fl-box-selected on a box", () => {

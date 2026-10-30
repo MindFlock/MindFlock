@@ -5,9 +5,10 @@
  * already taken off) and SkySelection acts.
  *
  * The rules:
- * - a line is touched WHOLE when the marquee crosses one of its heads (the
- *   title bar, a session box, a grounded line's "No session yet" box) or
- *   covers at least half of it (`WHOLE_LINE`);
+ * - a line is touched WHOLE when the marquee crosses its title bar (its
+ *   `heads`) or covers at least half of it (`WHOLE_LINE`) — a session box or
+ *   a grounded line's "No session yet" box is not a head: a sweep over the
+ *   first stops clips it too easily;
  * - a stop box (a node id `stop:…` or `group:…`) is touched when the marquee
  *   overlaps it at all;
  * - stops of exactly one line and no whole line → those stops; anything else
@@ -18,7 +19,8 @@
 import type { FlightStep } from "./flights";
 import type { Pos, Rect } from "./skyLayout";
 
-/** A line as the marquee sees it: its rect and its heads (plane px). */
+/** A line as the marquee sees it: its rect and its heads — the title bar —
+ * (plane px). */
 export interface SelectLine {
   id: string;
   rect: Rect;
@@ -62,7 +64,7 @@ export function overlapArea(a: Rect, b: Rect): number {
 
 export const overlaps = (a: Rect, b: Rect) => overlapArea(a, b) > 0;
 
-/** The line is taken whole: a head crossed, or half of it covered. */
+/** The line is taken whole: its bar crossed, or half of it covered. */
 export function lineTouched(m: Rect, l: SelectLine): boolean {
   if (l.heads.some((h) => overlaps(m, h))) return true;
   const area = l.rect.w * l.rect.h;

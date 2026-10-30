@@ -838,8 +838,8 @@ export function SkyView() {
     return { x: r?.left || 0, y: r?.top || 0 };
   };
   /** What the marquee can take, measured now (plane px): every shown line's
-   * rect and heads (its title bar, its session box, a grounded line's head
-   * box), and every stop box on it — never one inside an open card's pane. */
+   * rect and title bar, and every stop box on it — never one inside an open
+   * card's pane. */
   const selectables = (): { lines: SelectLine[]; stops: SelectStop[] } => {
     const out: { lines: SelectLine[]; stops: SelectStop[] } = { lines: [], stops: [] };
     const root = vpRef.current;
@@ -855,7 +855,7 @@ export function SkyView() {
     for (const l of lines) {
       const slot = slots.get(l.id);
       const heads: Rect[] = [];
-      slot?.querySelectorAll(".skl-bar, .skl-grounded-head, [data-node^='session:']").forEach((el) => {
+      slot?.querySelectorAll(".skl-bar").forEach((el) => {
         if (!el.closest(".skl-card")) heads.push(onPlane(el));
       });
       out.lines.push({ id: l.id, rect: { ...posOf(l.id), w: l.w, h: l.h }, heads });
@@ -1045,11 +1045,6 @@ export function SkyView() {
     if (!skyKeysOwn(el) || e.ctrlKey || e.metaKey || e.altKey) return;
     const k = e.key;
     const handled = () => e.preventDefault();
-    if ((k === "Delete" || k === "Backspace") && !selectionEmpty(sel)) {
-      handled();
-      setSelAsk("remove");
-      return;
-    }
     if (k === " " && !e.repeat) {
       handled();
       space.current = true;
@@ -1081,6 +1076,23 @@ export function SkyView() {
       onLayout(focusLine, { open: false });
     }
   };
+  // Delete / Backspace with a selection removes what it holds. Taken in the
+  // window's capture phase, before the app's keymap (document, capture) sees
+  // it: there Delete closes the focused SESSION, never what is selected.
+  const removeKeys = useRef<(e: KeyboardEvent) => void>(() => {});
+  removeKeys.current = (e: KeyboardEvent) => {
+    if ((e.key !== "Delete" && e.key !== "Backspace") || selectionEmpty(sel) || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (overlayOpen() || !skyKeysOwn(document.activeElement)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setSelAsk("remove");
+  };
+  useEffect(() => {
+    if (narrow) return;
+    const del = (e: KeyboardEvent) => removeKeys.current(e);
+    window.addEventListener("keydown", del, true);
+    return () => window.removeEventListener("keydown", del, true);
+  }, [narrow]);
   useEffect(() => {
     if (narrow) return;
     const down = (e: KeyboardEvent) => keys.current(e);
@@ -1296,8 +1308,10 @@ export function SkyView() {
     />
   );
 
-  // The selection's bar, screen-sized, just above what is selected (below
-  // it when that is the window's top), kept inside the window.
+  // The selection's bar, screen-sized, kept inside the window: just above
+  // the selected lines (below them at the window's top); just under the
+  // selected stops (above them at the window's foot), off their line's bar.
+  const selOne = stopSelection(sel);
   const selBox = (() => {
     const one = stopSelection(sel);
     if (one) {
@@ -1307,11 +1321,17 @@ export function SkyView() {
     return boundsOf([...sel.lines].map(rectOf).filter((r): r is Rect => !!r));
   })();
   const selScreen = selBox && planeToScreen(cam, selBox);
+  const selY = (r: Rect) => {
+    const above = r.y - 52;
+    const below = r.y + Math.min(r.h, 240) + 8;
+    const y = selOne ? (below <= vp.h - 64 ? below : above) : above >= 8 ? above : below;
+    return Math.max(8, Math.min(y, vp.h - 64));
+  };
   const selBar = selScreen && !drag && (
     <SkySelectionBar
       selection={sel}
       x={Math.max(8, Math.min(selScreen.x, vp.w - 460))}
-      y={selScreen.y - 52 >= 8 ? selScreen.y - 52 : Math.max(8, Math.min(selScreen.y + Math.min(selScreen.h, 240) + 8, vp.h - 64))}
+      y={selY(selScreen)}
       ask={selAsk}
       setAsk={setSelAsk}
       nameOf={(id) => lines.find((l) => l.id === id)?.name || windowName(id)}

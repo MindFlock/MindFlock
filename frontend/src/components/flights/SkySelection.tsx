@@ -9,7 +9,7 @@
  * three, inline-confirmed past that), Clear. No window.confirm / prompt:
  * Electron has none. */
 
-import { useEffect, useState, type JSX } from "react";
+import { useEffect, useRef, useState, type JSX } from "react";
 import type { Flight, StepKindDef } from "../../lib/flights";
 import { planFromSteps } from "../../lib/flights";
 import { flightStops } from "../../lib/flightDiagram";
@@ -72,9 +72,14 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
   const idx = one && flight ? selectedIndexes(one.nodes, flight.steps) : [];
   const hint = one ? groupHint(flight, idx, p.kinds) : "";
 
-  // A fresh question starts from the default name.
+  // A fresh question starts from the default name, selected in its field.
+  const askRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (p.ask === "group" || p.ask === "save") setName(NEW_STOPS);
+    if (p.ask !== "group" && p.ask !== "save") return;
+    setName(NEW_STOPS);
+    const input = askRef.current?.querySelector("input");
+    input?.focus({ preventScroll: true });
+    input?.select();
   }, [p.ask]);
 
   const run = async (what: () => Promise<void>) => {
@@ -185,7 +190,7 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
       </div>
       {one && hint && hint !== "These stops aren't on a flight any more" && <p className="sky-selbar-note muted">{hint}</p>}
       {(p.ask === "group" || p.ask === "save") && one && (
-        <div className="sky-selbar-ask">
+        <div ref={askRef} className="sky-selbar-ask">
           <TextField value={name} onChange={setName} label={p.ask === "group" ? "The new stop's name" : "The saved stop's name"} placeholder={NEW_STOPS} onEnter={() => void (p.ask === "group" ? group() : save())} />
           <button type="button" className="btn-primary fl-btn" disabled={busy} onClick={() => void (p.ask === "group" ? group() : save())}>
             {p.ask === "group" ? "Group" : "Save"}

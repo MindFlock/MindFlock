@@ -2597,3 +2597,88 @@ the intake lane's started stubs show `windowName(title)`.
 the stop palette's and inspector's stylesheet, imported by `StopParts.tsx`.
 The still-needed helpers moved to `lib/groundedLines.ts` (`checkRename`,
 `NAME_MAX`, `savedStopOrder`).
+### As built: round 11 selection
+
+> Code: `frontend/src/lib/skySelect.ts` (the geometry and the rules),
+> `components/flights/SkySelection.tsx` (+ `.css`: the bar, and every rule
+> the selection draws), `SkyView.tsx` (the marquee, the keys, the group drag),
+> `SkyLine.tsx` / `GroundedLine.tsx` (`selected`, `highlighted`),
+> `FlywayCanvas.tsx` (`highlighted`). Tests: `skySelect.test.ts`.
+
+**Pointer.** A left drag (mouse or pen) on empty sky draws the marquee
+(`.sky-marquee`, viewport px, drawn after a 4px threshold, `MARQUEE_MIN`).
+Panning is the wheel / trackpad, the middle button, a touch drag (a pinch still
+zooms), Space+drag from anywhere and the arrows. A press on a line is the
+line's, as before. HTML5 drags from the shelf never send a pointerdown to the
+sky, so shelf drops are unchanged. A plain click on empty sky clears the
+selection (Shift+click keeps it), and a double-click still opens the
+new-session block. On `sky-narrow` there is no viewport, so no marquee.
+
+**What is touched.** All measuring happens at release, in plane px
+(`screenToPlane`: the viewport's corner, the camera's pan and zoom taken off):
+
+- a line is its layout rect (`posOf` + its measured size) plus its title bar
+  (`.skl-bar`'s rect). The line counts as **whole** when the marquee crosses
+  its bar or covers at least half of it (`WHOLE_LINE = 0.5`). A session box and
+  a grounded line's "No session yet" box are not heads: a sweep over the first
+  stops clips them too easily;
+- a stop box is any `[data-node]` with a `stop:` or `group:` id inside the
+  line's slot (`.sky-line-slot[data-slot=<line id>]`), never one inside an
+  open card's pane (`.skl-card`). Any overlap counts.
+
+**The rule** (`select`): stop boxes of exactly ONE line and no whole line →
+those stops (`stops: Map<line, Set<node id>>`). Anything else → lines (every
+whole line plus every line a touched stop sits on; stops dropped). Never both.
+Shift+drag adds under the same rule (`addSelection`: more stops of the same
+line stay stops, another line's turn it into lines). Shift+click on a line's bar
+toggles that line (`toggleLine`). Ctrl/⌘+A takes every line the sky shows (the
+current view and Find filter). Esc clears the bar's question first, then the
+selection. A line that leaves the board drops out (`pruneSelection`).
+
+**Stops → steps.** `stop:<sid>` is that step. `group:<gid>` (or
+`group:<gid>@<index>` for a later run of the same id) is its consecutive run
+of sub-steps (`stepIndexesOf`). `selectedIndexes` sorts them and counts each
+once. A group selected with loose stops therefore groups as all their steps.
+`consecutive` is what Group needs.
+
+**Showing it.** A selected line wears `.is-selected` (a dashed accent outline
+5px outside its border; the focus ring stays on the border). A selected box
+wears `.fl-box-selected` (FlywayCanvas's new `highlighted?: ReadonlySet<string>`
+prop, beside the single `selected`). The sky passes both only to lines drawn
+on the plane.
+
+**The bar** (`SkySelectionBar`, `.sky-selbar`, screen-sized, inside the
+viewport). It sits above selected lines (below them at the window's top) and
+under selected stops (above them at the window's foot), so it is off the
+line's own bar. It is hidden while lines are dragged. No
+`window.confirm/prompt/alert`.
+
+- **Lines**: "N lines selected", a ✥ hint (*drag a bar to move them*), **Tidy
+  these** (each line's spot forgotten with `tidySkyLayout(l, id)` and its given
+  spot freed, then the glide), **Remove…** (an `InlineConfirm` that says what
+  happens to each: a session line closes its session with `closeSession`, as
+  the ⋯ Close session does; a grounded line is deleted with `deleteFlight`; one
+  toast for the grounded ones), **Clear**.
+- **Stops of one line**: "N stops selected", **Group into a stop** and **Save
+  to the shelf** (each asks a name inline, defaulting to "New stops", focused
+  and selected; Enter submits) → `groupStops(flight, step ids, name)` /
+  `savePlan(planFromSteps(name, steps))` with the steps in flight order,
+  **Remove** (each box through `dropStop`, a group box through `dropGroup` on
+  its first step; one toast "Removed N stops"; at once for up to 3 boxes, an
+  inline confirm past that), **Clear**. Group is disabled with a hint
+  (`groupHint`) for stops not side by side ("Pick stops that sit next to each
+  other"), a stop that has flown or is flying, or a selection that already is
+  exactly one group. The flight is a grounded line's own, or a session line's
+  live flight from the flights query.
+- After any action the selection clears; the API helpers refetch.
+
+**Moving many.** The line drag keeps `{from: {id: Pos}, dx, dy}`: a drag
+started on a selected line's bar carries every selected line, and on release
+each is pinned where it lands (`onLayout(id, {x, y, pinned: true})`).
+
+**Delete / Backspace** with a selection (focus on the sky, not a field, a box
+or a pane) asks the bar to remove. The sky takes the key in the WINDOW's
+capture phase, ahead of the app keymap's document-capture dispatcher, where
+Delete is "close the focused session" (`lib/keymap.ts`). Without that,
+selecting stops and pressing Delete closed the session instead. With no
+selection, Delete on the sky still closes the focused session, as before.
