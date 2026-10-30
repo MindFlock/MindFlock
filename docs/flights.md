@@ -4073,3 +4073,73 @@ Each owns the files its row names plus its tests and an "As built: round 15
 (`_builtin_defaults` + the built-in judges' receipts). `tsc` and `vitest`
 run from `frontend/` (node_modules is linked); backend tests with
 `UV_PYTHON=3.12 uv run pytest tests/unit/test_flight*.py`.
+
+### As built: round 15 sync-checkpoint
+
+Two plug-in modules, `flight_kinds/sync.py` and `flight_kinds/checkpoint.py`
+(family `ship`, no risk tags, robot, `needs_session`), git through
+`git_ops._run_git` / `_is_dirty` / `_git_head_sha` / `_git_count` /
+`_has_origin`.
+
+**`sync`.** Config `{with, how, fetch}`; strict mode refuses a `how` other
+than rebase/merge and a `with` that is not a plain branch name (leading `-`,
+spaces, `..`); lenient mode falls back to `""` / `rebase`. Default title
+"Sync with <with|main>" (rebase) / "Merge <with|main>". `run` (blocking half
+on a thread): no worktree → `StepFailed`; the target is `with` or
+`default_branch(folder)` (`origin/HEAD`'s short name, else `main` / `master`
+on origin or locally); the ref is `origin/<target>` when the repo has an
+origin, else the local branch. A rebase / merge **already in progress**
+(`rebase-merge` / `rebase-apply` / `MERGE_HEAD` under `git rev-parse
+--git-dir`, so a linked worktree's own dir) starts nothing and records
+`detail.resumed` — that is the retry after a conflict, and the judge then
+ignores the earlier attempt's job. Otherwise `git status --porcelain`
+(untracked included) non-empty → `StepFailed("the worktree has uncommitted
+changes: commit them first, then sync")`; else `run_shell` a `set -e` script
+(`git fetch origin <target>` when `fetch` and an origin, then `git rebase
+<ref>` / `git merge --no-edit <ref>`, `GIT_EDITOR=true`, 5 min timeout).
+`detail` {folder, target, ref, how, before (HEAD), started}. `observe`
+→ `obs["sync"]`: the job; once it ended (or there is none) `busy`,
+`conflicts` (`git diff --name-only --diff-filter=U`), `contains` (`git
+merge-base --is-ancestor <tip> HEAD`), `head`, `ahead` (`<ref>..HEAD`). The
+judge: job running → wait; busy → **fail** "conflicts with main in a.py, b.py
+— resolve them, `git add` the files and run `git rebase --continue`" (merge:
+"`git commit` to finish the merge"), `detail.conflicts`, nothing aborted;
+contains → done; no job this server run (interrupted) and not there yet →
+`run` again; the job failed otherwise → fail with its exit and output tail.
+Receipts: "up to date with main" (HEAD unchanged, not resumed), "rebased N
+commits" (N = the branch's own commits on top of the target afterwards),
+"fast-forwarded to main" (a rebase with no commits of its own), "merged main".
+
+**`checkpoint`.** Config `{note}` (≤ 500), title "Checkpoint" /
+"Checkpoint: <note's first line>". `run` → `done` straight away: `detail`
+{sha, stash, ref, repo, receipt "at a1b2c3d"}; `stash` is `git stash create`
+when the worktree is dirty (never on the shared stash stack, the worktree is
+untouched); `git update-ref refs/mindflock/flights/<fid>/<sid> <stash or sha>`
+keeps it alive (a stash commit's first parent is the sha, so both survive
+gc; ids outside `[A-Za-z0-9_-]` become `_`). **Where the ref lives**: refs
+outside `refs/worktree/` are shared by every worktree of a repo, so it is in
+the session's repo's common git dir (`git rev-parse --git-common-dir`,
+recorded as `detail.repo`), not in the worktree. Judge (after a restart):
+`detail.sha` → done, else `run` again. Untracked files are not in a `stash
+create` object and `reset --hard` leaves them alone: a rewind neither
+restores nor removes them.
+
+`ops["rewind"]` (`POST /api/flights/{id}/steps/{sid}/op/rewind`): no
+`detail.sha` → 409 `no_checkpoint`; a finished / grounded flight → the jump's
+own refusal (`finished` / `grounded`) **before** anything is reset; the
+session's `_session_obs` activity `working` → 409 `working`; no worktree →
+409 `no_worktree`; then `git reset --hard <sha>`, `git stash apply --index
+<stash>` (plain `apply` as a fallback; either failing → 409
+`rewind_failed` naming what happened) and `flights.mutate(… op_jump(next
+step))` — not `flight_driver.operate`, so `step_op` announces the change
+once. The last stop leaves the cursor. Returns `{flight, sha}`.
+
+**For the integrator** (outside this task's fence):
+- `flight_driver.remove` should call `checkpoint.forget(f)` (with the flight
+  read before `_flights.delete`): it deletes every
+  `refs/mindflock/flights/<fid>/*` in each repo a checkpoint of the flight
+  recorded (works with the worktree already removed), returns the count and
+  never raises.
+- `tests/unit/test_flights.py::test_kinds_registry_drives_the_editor` pins
+  the whole kinds list to the 12 built-ins; with any round-15 kind loaded it
+  fails. It should check the built-ins as a prefix (or list the new kinds).
