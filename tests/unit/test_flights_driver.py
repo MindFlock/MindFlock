@@ -955,3 +955,35 @@ def test_a_step_added_to_a_finishing_flight_is_flown(srv, row, monkeypatch):
     run(D.step_flight(f["id"]))
     got = F.get(f["id"])
     assert sent == ["s1", "s2"] and got["state"] == "done"
+
+
+def test_a_halt_point_stops_the_pass_before_its_executor(
+    srv, row, emitted, monkeypatch
+):
+    sent = []
+    monkeypatch.setattr(D, "_run_notify", lambda flight, step: sent.append(step["id"]))
+    f = fly({"kind": "notify"}, {"kind": "notify", "halt": True}, {"kind": "notify"})
+    run(D.step_flight(f["id"]))
+    got = F.get(f["id"])
+    assert sent == ["s1"]  # s2's executor never ran
+    assert (got["cursor"], got["state"], got["reason"]) == (1, "paused", "halt point")
+    assert got["step_states"]["s2"]["detail"]["halt_hit"] is True
+    assert got["history"][-1]["event"] == "halted_at"
+    assert emitted[-1]["event"] == "flight.changed"
+    assert emitted[-1]["new"] == "paused"
+    run(D.step_flight(f["id"]))  # a paused flight is not driven
+    assert sent == ["s1"]
+    D.operate(f["id"], "resume")
+    run(D.step_flight(f["id"]))
+    assert sent == ["s1", "s2", "s3"] and F.get(f["id"])["state"] == "done"
+
+
+def test_change_steps_sets_and_clears_a_halt_point(srv, row, emitted):
+    f = fly({"kind": "agent"}, {"kind": "notify"})
+    after = D.change_steps(f["id"], "edit", "s2", {"halt": True})
+    assert after["steps"][1]["halt"] is True
+    after = D.change_steps(f["id"], "edit", "s1", {"halt": True})  # the current one
+    assert after["steps"][0]["halt"] is True
+    after = D.change_steps(f["id"], "edit", "s1", {"halt": False})
+    assert "halt" not in after["steps"][0]
+    assert [e["event"] for e in emitted] == ["flight.changed"] * 3

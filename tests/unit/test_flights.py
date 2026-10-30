@@ -1397,3 +1397,127 @@ def test_planner_carries_on_at_the_same_step_after_a_move():
     # Done on the current step goes on to the moved one first.
     F.op_done(f, "s1", now=NOW)
     assert f["cursor"] == 1 and f["steps"][f["cursor"]]["id"] == "s3"
+
+
+# --------------------------------------------------------------------------- #
+# Halt points
+# --------------------------------------------------------------------------- #
+def hfly(*steps):
+    """A flight on a session of its own (one flight per session)."""
+    hfly.n = getattr(hfly, "n", 0) + 1
+    return fly(*steps, session="h%d" % hfly.n)
+
+
+def test_halt_is_an_optional_bool_on_a_step():
+    p = plan_of(step("notify"), dict(step("notify"), halt=True))
+    assert "halt" not in p["steps"][0] and p["steps"][1]["halt"] is True
+    assert "halt" not in F.normalize_step(dict(step("notify"), halt=False))
+    with pytest.raises(F.PlanError) as err:
+        F.normalize_step(dict(step("notify"), halt="yes"))
+    assert err.value.field == "steps[0].halt"
+    # Lenient (a stored file): coerced, never dropped.
+    assert F.normalize_step(dict(step("notify"), halt="yes"), strict=False)["halt"]
+    assert "halted_at" in F.HISTORY_EVENTS
+
+
+def test_the_flight_pauses_when_it_reaches_a_halt_point():
+    f = hfly(step("notify"), dict(step("notify"), halt=True), step("notify"))
+    f = F.apply(f, F.next_action(f, {"session": sess()}, NOW), NOW)  # run s1
+    f = F.apply(f, {"action": "done", "note": ""}, NOW)
+    assert f["cursor"] == 1
+    assert (f["state"], f["reason"]) == ("paused", F.HALT_POINT)
+    ss = f["step_states"]["s2"]
+    assert ss["state"] == "pending" and ss["detail"] == {"halt_hit": True}
+    assert f["history"][-1]["event"] == "halted_at"
+    assert F.event_data(f)["detail"].endswith(": halted before Notify me")
+    # Paused: nothing runs.
+    assert F.next_action(f, {"session": sess()}, NOW)["action"] == "wait"
+    # Resume carries on INTO the step and does not stop there again.
+    f = F.op_resume(f, now=NOW)
+    assert (f["state"], f["reason"]) == ("running", "")
+    f = run_step(f)
+    assert f["step_states"]["s2"]["state"] == "running"
+    assert f["step_states"]["s2"]["detail"]["halt_hit"] is True
+
+
+def test_a_halt_point_at_take_off_or_set_on_the_current_step_holds_first():
+    f = hfly(dict(step("notify"), halt=True), step("notify"))
+    a = F.next_action(f, {"session": sess()}, NOW)
+    assert a["action"] == "hold"
+    f = F.apply(f, a, NOW)
+    assert (f["state"], f["reason"], f["cursor"]) == ("paused", F.HALT_POINT, 0)
+    # A halt point on a "you" step holds before it parks on you.
+    g = hfly(step("notify"), dict(step("you", text="t"), halt=True))
+    g = F.apply(g, F.next_action(g, {"session": sess()}, NOW), NOW)
+    g = F.apply(g, {"action": "done", "note": ""}, NOW)
+    assert g["state"] == "paused" and g["step_states"]["s2"]["state"] == "pending"
+    g = F.op_resume(g, now=NOW)
+    assert F.next_action(g, {"session": sess()}, NOW)["action"] == "you"
+
+
+def test_halt_points_are_marked_and_cleared_on_the_line():
+    f = hfly(step("notify"), step("notify"), step("notify"))
+    # A pending step ahead: halt alone, or with the other fields.
+    f = F.op_edit_step(f, "s2", {"halt": True}, now=NOW)
+    assert f["steps"][1]["halt"] is True
+    assert f["history"][-1]["note"] == "Notify me: halt point set"
+    f = F.op_edit_step(f, "s3", {"halt": True, "title": "Ping"}, now=NOW)
+    assert f["steps"][2] == dict(f["steps"][2], halt=True, title="Ping")
+    # The current step takes halt alone; a title there is still in progress.
+    f = F.op_edit_step(f, "s1", {"halt": True}, now=NOW)
+    assert f["steps"][0]["halt"] is True
+    with pytest.raises(F.FlightError) as err:
+        F.op_edit_step(f, "s1", {"halt": False, "title": "x"}, now=NOW)
+    assert err.value.error == "in_progress"
+    # Paused at the point: clearing it un-marks the stop, the flight stays put.
+    f = F.apply(f, F.next_action(f, {"session": sess()}, NOW), NOW)
+    assert f["state"] == "paused"
+    f = F.op_edit_step(f, "s1", {"halt": False}, now=NOW)
+    assert "halt" not in f["steps"][0] and f["state"] == "paused"
+    assert f["history"][-1]["note"] == "Notify me: halt point cleared"
+    f = F.op_edit_step(f, "s1", {"halt": False}, now=NOW)  # again: nothing said
+    assert f["history"][-1]["note"] == "Notify me: halt point cleared"
+    # A step behind the flight has flown.
+    f = F.op_resume(f, now=NOW)
+    f = F.apply(F.apply(f, F.next_action(f, {}, NOW), NOW), {"action": "done"}, NOW)
+    with pytest.raises(F.FlightError) as err:
+        F.op_edit_step(f, "s1", {"halt": True}, now=NOW)
+    assert (err.value.error, err.value.status) == ("in_progress", 409)
+    with pytest.raises(F.PlanError) as perr:
+        F.op_edit_step(f, "s3", {"halt": 1}, now=NOW)
+    assert perr.value.field == "step.halt"
+
+
+def test_a_halt_point_on_a_halted_flight_can_still_be_set():
+    f = run_step(hfly(step("checks"), step("notify")))
+    f = F.apply(f, {"action": "fail", "reason": "red", "then": "halt"}, NOW)
+    assert f["state"] == "halted"
+    f = F.op_edit_step(f, "s2", {"halt": True}, now=NOW)
+    assert f["steps"][1]["halt"] is True
+    with pytest.raises(F.FlightError) as err:
+        F.op_edit_step(f, "s2", {"title": "x"}, now=NOW)
+    assert err.value.error == "finished"
+
+
+def test_go_actions_let_a_halt_point_through():
+    # Retry of a failed halt-point step does not stop at it again.
+    f = hfly(dict(step("checks"), halt=True))
+    f = F.apply(f, F.next_action(f, {"session": sess()}, NOW), NOW)
+    f = run_step(F.op_resume(f, now=NOW))
+    f = F.apply(f, {"action": "fail", "reason": "red", "then": "halt"}, NOW)
+    f = F.op_retry(f, "s1", now=NOW)
+    assert F.next_action(f, {"session": sess()}, NOW)["action"] == "run"
+    # A jump onto a halt point flies it; the ones after it are armed again.
+    g = hfly(
+        step("notify"), dict(step("notify"), halt=True), dict(step("notify"), halt=True)
+    )
+    g = F.op_jump(g, "s2", now=NOW)
+    assert F.next_action(g, {"session": sess()}, NOW)["action"] == "run"
+    g = F.apply(F.apply(g, F.next_action(g, {}, NOW), NOW), {"action": "done"}, NOW)
+    assert (g["cursor"], g["state"]) == (2, "paused")
+    # Done on a paused flight that lands on a halt point keeps it paused there.
+    h = hfly(step("you", text="t"), dict(step("notify"), halt=True))
+    h = F.apply(h, F.next_action(h, {}, NOW), NOW)
+    h = F.op_done(F.op_pause(h, now=NOW), "s1", now=NOW)
+    assert (h["cursor"], h["state"], h["reason"]) == (1, "paused", F.HALT_POINT)
+    assert h["step_states"]["s2"]["detail"]["halt_hit"] is True

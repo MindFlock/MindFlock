@@ -227,7 +227,8 @@ def flights_step_add(flight_id: str, payload: Optional[dict] = None) -> JSONResp
 def flights_step_edit(
     flight_id: str, step_id: str, payload: Optional[dict] = None
 ) -> JSONResponse:
-    """``{title?, config?, on_fail?}`` on a step still ahead → ``{"flight"}``."""
+    """``{title?, config?, on_fail?, halt?}`` on a step still ahead →
+    ``{"flight"}``; ``{halt}`` alone may also mark / clear the current step."""
     return _change(flight_id, "edit", step_id, raw=payload or {})
 
 

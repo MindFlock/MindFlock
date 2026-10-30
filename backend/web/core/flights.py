@@ -160,6 +160,7 @@ HISTORY_EVENTS = (
     "edited",
     "removed",
     "moved",
+    "halted_at",
 )
 ON_FAIL = ("halt", "agent", "skip", "you")
 TRIGGER_KINDS = ("manual", "ticket", "pr", "issue", "schedule")
@@ -544,7 +545,8 @@ def _step_config(kind: str, raw: dict, strict: bool, where: str) -> dict:
 def normalize_step(
     raw, index: int = 0, strict: bool = True, taken=None
 ) -> Optional[dict]:
-    """One step coerced to ``{id, kind, title, config, on_fail}``.
+    """One step coerced to ``{id, kind, title, config, on_fail}`` plus
+    ``halt: True`` on a halt point (omitted when false).
 
     Strict (a POSTed plan, a describe answer): raises :class:`PlanError`. Lenient
     (a stored file): returns None for a step that cannot be a step. ``taken``
@@ -571,6 +573,11 @@ def normalize_step(
         on_fail = "halt"
     if kind == "you":
         on_fail = "halt"  # a you step cannot fail
+    halt = raw.get("halt")
+    if halt is not None and not isinstance(halt, bool):
+        if strict:
+            raise PlanError("halt is true or false", where + ".halt")
+        halt = _bool(halt, False)
     taken = taken if taken is not None else set()
     sid = _text(raw.get("id"), 32)
     if not _ID_RE.match(sid) or sid in taken:
@@ -580,13 +587,16 @@ def normalize_step(
         sid = "s%d" % n
     taken.add(sid)
     title = _text(raw.get("title"), 120) or _default_title(kind, config)
-    return {
+    step = {
         "id": sid,
         "kind": kind,
         "title": title,
         "config": config,
         "on_fail": on_fail,
     }
+    if halt:
+        step["halt"] = True
+    return step
 
 
 def _default_title(kind: str, config: dict) -> str:
@@ -1737,6 +1747,11 @@ def event_data(flight: dict) -> dict:
     if flight["state"] == "waiting_you":
         text, _items_ = you_text(flight)
         detail = "%s: %s" % (flight["session"] or flight["plan_name"], text)
+    elif flight["state"] == "paused" and flight["reason"] == HALT_POINT:
+        detail = "%s: halted before %s" % (
+            flight["session"] or flight["plan_name"],
+            step.get("title") or "the next stop",
+        )
     elif flight["state"] == "paused":
         detail = "%s: paused" % (flight["session"] or flight["plan_name"])
     elif flight["state"] in ("halted", "cancelled") and flight["reason"]:
@@ -2407,7 +2422,7 @@ def fail_action(flight: dict, reason: str, obs: Optional[dict] = None) -> dict:
 
 def next_action(flight: dict, obs: dict, now: float) -> dict:
     """What the driver should do for ``flight`` now — one of ``wait | run |
-    done | fail | you | advance | finish`` plus a ``note`` (the visible wait
+    done | fail | you | advance | finish | hold`` plus a ``note`` (the visible wait
     sentence) and per-action keys (``detail`` updates, ``phase`` for a
     sub-step effect, ``then`` + ``reason`` on a fail).
 
@@ -2440,6 +2455,8 @@ def next_action(flight: dict, obs: dict, now: float) -> dict:
         return _wait(flight["reason"] or "the step failed")
     hold = _session_hold(flight, step, sess)
     if st == "pending":
+        if _armed_halt(step, ss):
+            return {"action": "hold", "note": HALT_POINT}
         if step["kind"] == "ticket" and (
             flight["subject"].get("kind") not in ("ticket", "issue")
             or not flight["subject"].get("id")
@@ -2525,6 +2542,48 @@ def _advance(flight: dict, now: float) -> None:
         _finish(flight, "done", "", now)
     else:
         flight["state"] = "running"
+        _hit_halt_point(flight, now)
+
+
+#: ``reason`` of a flight paused at a halt point.
+HALT_POINT = "halt point"
+
+
+def _armed_halt(step: dict, ss: dict) -> bool:
+    """A halt point the flight has not stopped at yet: the step is marked
+    ``halt``, has not started, and was never let through (``halt_hit``)."""
+    return (
+        bool(step.get("halt"))
+        and ss["state"] == "pending"
+        and not ss["detail"].get("halt_hit")
+        and not ss["detail"].get("performing")
+    )
+
+
+def _hit_halt_point(flight: dict, now: float) -> bool:
+    """Pause the flight before its current step when that step is an armed
+    halt point (``paused``, reason ``halt point``, history ``halted_at``).
+    The step keeps ``detail.halt_hit``, so Resume carries on into it."""
+    step = _current(flight)
+    if step is None or flight["state"] in FINAL:
+        return False
+    ss = flight["step_states"][step["id"]]
+    if not _armed_halt(step, ss):
+        return False
+    ss["detail"]["halt_hit"] = True
+    flight["state"] = "paused"
+    flight["reason"] = HALT_POINT
+    flight["updated"] = now
+    _hist(flight, now, step["id"], "halted_at", "halted before %s" % step["title"])
+    return True
+
+
+def _let_through(flight: dict) -> None:
+    """A "go" on the current step (resume, retry, a jump onto it) carries on
+    into it: its halt point, if any, counts as passed."""
+    step = _current(flight)
+    if step is not None and step.get("halt"):
+        flight["step_states"][step["id"]]["detail"]["halt_hit"] = True
 
 
 def apply(flight: dict, action: dict, now: float) -> dict:
@@ -2548,7 +2607,9 @@ def apply(flight: dict, action: dict, now: float) -> dict:
     ss = flight["step_states"][sid]
     note = str(action.get("note") or "")
     upd = action.get("detail") if isinstance(action.get("detail"), dict) else {}
-    if kind == "wait":
+    if kind == "hold":
+        _hit_halt_point(flight, now)
+    elif kind == "wait":
         ss["detail"].update(upd)
         for k in [k for k, v in ss["detail"].items() if v is None]:
             ss["detail"].pop(k, None)
@@ -2558,9 +2619,10 @@ def apply(flight: dict, action: dict, now: float) -> dict:
             ss["detail"].update(upd)
             ss["note"] = note
         else:
+            hit = {"halt_hit": True} if ss["detail"].get("halt_hit") else {}
             ss["state"] = "running"
             ss["since"] = now
-            ss["detail"] = dict(upd)
+            ss["detail"] = dict(hit, **upd)
             ss["note"] = note
             _hist(
                 flight,
@@ -2715,6 +2777,7 @@ def op_retry(flight: dict, sid: str, now: Optional[float] = None) -> dict:
             "not_failed", 409, "%s has nothing to retry" % flight["steps"][i]["title"]
         )
     flight["step_states"][sid] = dict(_blank_step_state(), since=ts)
+    _let_through(flight)
     flight["state"] = "running"
     flight["reason"] = ""
     flight["updated"] = ts
@@ -2741,6 +2804,7 @@ def op_jump(flight: dict, sid: str, now: Optional[float] = None) -> dict:
         flight["step_states"][s["id"]] = _blank_step_state()
     _hist(flight, ts, sid, "jumped", "moved to %s" % steps[i]["title"])
     flight["cursor"] = i
+    _let_through(flight)
     flight["state"] = "running"
     flight["reason"] = ""
     flight["updated"] = ts
@@ -2763,7 +2827,8 @@ def op_pause(flight: dict, now: Optional[float] = None) -> dict:
 
 def op_resume(flight: dict, now: Optional[float] = None) -> dict:
     """Carry on: a paused flight where it was (back to waiting on you if the
-    step is parked), a failure-halted one by running its step again."""
+    step is parked), a failure-halted one by running its step again. A halt
+    point the flight stopped at (or was about to) is let through."""
     ts = float(now if now is not None else time.time())
     _not_final(flight)
     cur = _current(flight)
@@ -2774,6 +2839,7 @@ def op_resume(flight: dict, now: Optional[float] = None) -> dict:
     if ss["state"] == "failed":
         flight["step_states"][cur["id"]] = dict(_blank_step_state(), since=ts)
         ss = flight["step_states"][cur["id"]]
+    _let_through(flight)
     flight["state"] = "waiting_you" if ss["state"] == "waiting_you" else "running"
     flight["reason"] = ""
     flight["updated"] = ts
@@ -2872,21 +2938,43 @@ def op_add_step(
 
 def op_edit_step(flight: dict, sid: str, patch, now: Optional[float] = None) -> dict:
     """Change a step still ahead of the flight: ``title`` / ``config`` (the
-    whole config, validated like a plan step's) / ``on_fail``; its kind and
-    id stay."""
+    whole config, validated like a plan step's) / ``on_fail`` / ``halt``; its
+    kind and id stay. ``halt`` alone may also change on the current step (any
+    flight not yet over, a halted one too): clearing it there un-marks a halt
+    point without resuming."""
     ts = float(now if now is not None else time.time())
-    _editable(flight)
-    i = _pending_index(flight, sid)
     patch = patch if isinstance(patch, dict) else {}
+    if set(patch) & {"title", "config", "on_fail"} or "halt" not in patch:
+        _editable(flight)
+        i = _pending_index(flight, sid)
+    else:
+        _not_final(flight)
+        i = _step_index(flight, sid)
+        st = flight["step_states"][sid]["state"]
+        if (
+            i < flight["cursor"]
+            or st in ("done", "skipped")
+            or (i > flight["cursor"] and st != "pending")
+        ):
+            raise FlightError(
+                "in_progress",
+                409,
+                "%s has already flown — only a stop not yet done can halt"
+                % flight["steps"][i]["title"],
+            )
     raw = copy.deepcopy(flight["steps"][i])
-    for key in ("title", "config", "on_fail"):
+    for key in ("title", "config", "on_fail", "halt"):
         if key in patch:
             raw[key] = patch[key]
     step = _one_step(raw, i, {s["id"] for s in flight["steps"]} - {sid})
     if step == flight["steps"][i]:
         return flight
+    was = bool(flight["steps"][i].get("halt"))
     flight["steps"][i] = step
-    _hist(flight, ts, sid, "edited", step["title"])
+    note = step["title"]
+    if bool(step.get("halt")) != was:
+        note += ": halt point %s" % ("set" if step.get("halt") else "cleared")
+    _hist(flight, ts, sid, "edited", note)
     flight["updated"] = ts
     return flight
 

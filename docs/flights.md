@@ -188,8 +188,12 @@ accessor (the pattern of `core/autopilot.py`).
 ### Step (a block)
 
 ```json
-{"id": "s1", "kind": "agent", "title": "Work the ticket", "config": {...}, "on_fail": "halt" | "agent" | "skip" | "you"}
+{"id": "s1", "kind": "agent", "title": "Work the ticket", "config": {...}, "on_fail": "halt" | "agent" | "skip" | "you", "halt": true}
 ```
+
+`halt` (optional, omitted when false) makes the step a **halt point**: the
+flight stops before it ([Halt points](#halt-points)). A plan keeps it (the
+per-plan editor saves it with the plan) and a flight's snapshot carries it.
 
 `title` is the user-visible stop label (defaults per kind). A *you* step — a
 **perch** in the UI — carries no prefix in its title (the UI adds "Perch:"):
@@ -234,11 +238,11 @@ issue flights the server-built intake prompt is used and the step's own
   "subject": {"kind": "ticket"|"pr"|"issue"|"schedule"|"manual", "source": "<source id or repo>", "id": "<ticket id / PR number / issue number>", "title": "<headline>", "url": ""},
   "session": "<session title>",   // the flight's session; set before the session exists for intake flights (keyed like autopilot)
   "repo_root": "", "branch": "",
-  "state": "running" | "waiting_you" | "paused" | "halted" | "done" | "cancelled",   // paused = held by you (Resume carries on); halted = stopped on a failure (retry / skip / resume)
+  "state": "running" | "waiting_you" | "paused" | "halted" | "done" | "cancelled",   // paused = held by you (Halt now) or at a halt point (reason "halt point"); Resume carries on. halted = stopped on a failure (retry / skip / resume)
   "cursor": 0,                    // index into steps of the current step
   "step_states": {"s1": {"state": "pending"|"running"|"waiting_you"|"done"|"skipped"|"failed", "since": 0.0, "note": "", "detail": {}, "rounds": 0}},
   "reason": "",                   // why halted / cancelled (human-readable)
-  "history": [{"at": 0.0, "step": "s1", "event": "started"|"done"|"failed"|"skipped"|"you"|"halted"|"paused"|"resumed"|"jumped"|"added"|"edited"|"removed"|"moved", "note": ""}],  // ≤200
+  "history": [{"at": 0.0, "step": "s1", "event": "started"|"done"|"failed"|"skipped"|"you"|"halted"|"paused"|"resumed"|"jumped"|"added"|"edited"|"removed"|"moved"|"halted_at", "note": ""}],  // ≤200
   "started": 0.0, "updated": 0.0, "finished": 0.0,
   "by": "user" | "intake" | "schedule" | "agent:<title>",
   "boot": "", "owner": "", "owner_at": 0.0   // lease, as autopilot.json
@@ -304,7 +308,7 @@ No model installed → 409 `no_model`.
 | `GET /api/flights/{id}` | | `{"flight": Flight}` |
 | `POST /api/flights/start` | `{"plan_id"?, "title"?: "<existing session to attach to>", "subject"?: {kind, source, id}, "repo_path"?, "prompt"?, "start_at"?: "<step id>", "steps"?: [Step], "absorb_fasttrack"?: bool}` | 202 `{"flight": Flight, "absorbed": [lane]}`. **`steps`** (1..40, validated like a plan's; 400 `bad_step` with `field`) draws the flight here: alone, the flight is `plan_id: "adhoc"`, `plan_name` = the subject's headline or "Flight on <title>", its steps numbered `s1..sN`; with `plan_id`, the plan's steps then the given ones (next free `sN`). An ad-hoc flight needs `title` or `repo_path` (400 `needs_title`). **`absorb_fasttrack`** (default true with `title`): the session's own fast-track run (autopilot record `running` or `halted`, `source != "flight"`) becomes the flight's leading `ship` steps — the rungs after the one the session's stage (`committed`/`pushed`/`pr`) proves, up to the run's lane, in `autopilot.DEPTH_ORDER` order — placed where the flight starts, and the record is disarmed so the ladder carries on under the flight; `absorbed` lists their lanes. A `done` run is left alone; a `halted` one is absorbed (its first step starts `pending`, the halt reason goes into the flight's history). Attaching to an existing session (`title`) starts at `start_at` or the first non-`agent` step. Without `title` the server creates the session from `plan.session` (+ `repo_path` / `prompt` overrides) through `session_create.create_result` — the same path as the New dialog. A ticket/PR/issue `subject` goes through the Intake start path (`ticket_start.launch` / the PR and issue force-start bodies) with `plan_id`, which arms the flight on the deterministic title before the session exists. |
 | `POST /api/flights/{id}/steps` | `{"step": Step, "at"?: int}` | `{"flight"}` — appended, or inserted at index `at`, which must be after the current step (409 `in_progress`); the flight must be `running`/`waiting_you`/`paused` (409 `finished`). The new step takes the next free `sN`. History `added`. |
-| `PATCH /api/flights/{id}/steps/{sid}` | `{title?, config?, on_fail?}` | `{"flight"}` — only a pending step after the current one (409 `in_progress`); validated like a plan step. History `edited`. |
+| `PATCH /api/flights/{id}/steps/{sid}` | `{title?, config?, on_fail?, halt?}` | `{"flight"}` — only a pending step after the current one (409 `in_progress`); validated like a plan step. `{halt}` alone may also mark / clear the **current** step ([Halt points](#halt-points)). History `edited`. |
 | `DELETE /api/flights/{id}/steps/{sid}` | | `{"flight"}` — only a pending step after the current one (409 `in_progress`). History `removed`. |
 | `POST /api/flights/{id}/steps/{sid}/move` | `{"at": int}` | `{"flight"}` — a pending step after the current one moved to index `at` of the final list (pop then insert), clamped to the last place; `at` at/before the current step is 409 `in_progress`; 400 `bad_step` (`field: "at"`) when `at` is not an integer. Its `step_states` record moves with it; the same place changes nothing. History `moved`. |
 | `POST /api/flights/{id}/steps/{sid}/done` | `{"note"?}` | `{"flight"}` — only for a `you` step (or a `verify` step waiting on you: it marks the open human checklist items as passed) |
@@ -666,9 +670,11 @@ had to choose. Field and route names are unchanged.
 
 - **Flight record extras.** `gone_since` (prune's clock) and `announced` (the
   needs-you / finished keys already said, so a restart never repeats a push).
-- **Paused vs halted.** Pause sets `state: "paused"` (`reason` stays empty;
-  history event `paused`) on a running or waiting flight — a halted one stays
-  halted. A paused flight is not driven. **Resume** goes back to `running`, or
+- **Paused vs halted.** A flight is `paused` for one of two causes: Pause
+  (**Halt now** in the UI) sets it (`reason` stays empty; history event
+  `paused`) on a running or waiting flight — a halted one stays halted; or
+  the flight reached a [halt point](#halt-points) (`reason: "halt point"`,
+  history `halted_at`). A paused flight is not driven. **Resume** goes back to `running`, or
   to `waiting_you` when the step is parked; on a halted flight it runs the
   failed step again. Done / Skip on a paused flight tick the step off and the
   flight stays paused; Retry and Jump are a "go" and set it running.
@@ -1481,6 +1487,42 @@ The toolbar's **Fit** is the true fit (`fitCamera`): everything in the
 window, however small. Its tooltip says so, and says that `0` is the legible
 fit.
 
+## Halt points
+
+The owner: "I want to be able to halt steps whenever." Two ways:
+
+- **Halt now** stops the flight where it is: the pause route
+  (`POST /api/flights/{id}/pause`), on the current stop's hover toolbar and
+  right-click menu (⏹ Halt now while it runs or waits on you, ▶ Carry on
+  while paused) and in the pane strip's ⋯ (Halt now / Carry on / Cancel).
+- **Halt here** marks a stop not yet done as a **halt point** (`halt: true`
+  on the step): the flight pauses when it *reaches* it, before doing it,
+  like a breakpoint. ⏸ Halt here on the stop's toolbar and menu sets it;
+  Carry on past here clears it. The box wears a pause badge in its corner
+  while it is set.
+
+The planner: when the cursor lands on a pending step with `halt` (`_advance`
+after a step finishes, or `next_action`'s `hold` verdict for a flight that
+takes off on one, is jumped onto, or gets one set on its current pending
+step), the flight goes `paused` with `reason: "halt point"`, history
+`halted_at` ("halted before <title>") and `step_states[sid].detail.halt_hit
+= true`, before its executor starts. `halt_hit` lets it through after that:
+Resume carries on into the step and does not stop there again; a retry keeps
+it. Any "go" on the current step counts as passing its halt point (Resume,
+Retry, a Jump onto it); a jump back re-arms the halt points after its target.
+Done / Skip on a paused flight that lands on a halt point keeps it paused
+there.
+
+Marking: `PATCH /api/flights/{id}/steps/{sid}` with `{"halt": true|false}`
+on any stop not yet done — a pending one ahead, or the current one in any
+state, on a flight running, waiting, paused or halted. Clearing the halt on
+the current stop while paused at it un-marks it without resuming (the
+flight stays paused; Carry on resumes). A stop behind the flight is 409
+`in_progress`; a non-bool is 400 `bad_step` (`field: "step.halt"`).
+`title` / `config` / `on_fail` keep the pending-only rule. In the flyway
+editor the toggle edits the draft (`toggleHalt`, lib/flights.ts) and Save
+stores it with the plan.
+
 ## Editing stops on a line
 
 The owner: "In sky mode I can't drag in new boxes or delete boxes from flows …
@@ -1512,11 +1554,12 @@ disabled at the ends and next to a stop that can't change (`canShift`).
 
 **The right-click menu, by box** (`menuItemsFor`):
 
-- a stop that can change: Edit, Earlier, Later, Duplicate, Remove (only the
-  ones the host handles);
+- a stop that can change: Edit, Earlier, Later, Duplicate, Remove, Halt here
+  / Carry on past here (only the ones the host handles);
 - the flight's current stop: what its own parts offer (Done on a perch,
   Retry when halted, Skip; the same `stepDone` / `stepRetry` / `stepSkip`
-  routes) and a muted line: "The flight is here — it can't change now";
+  routes), Halt now / Carry on, Halt here / Carry on past here, and a muted
+  line: "The flight is here — it can't change now";
 - a stop that has flown (done, skipped, failed): "This stop has flown";
 - the trailing +: Tack on a stop; a session, parent, child or branch box:
   Open; a fast-track rung: a note that it moves as the session ships.

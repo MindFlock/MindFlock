@@ -511,3 +511,30 @@ def test_driver_carries_on_at_the_same_step_after_a_move(monkeypatch):
     asyncio.run(D.step_flight(f["id"]))
     assert sent == ["B", "A"]
     assert F.get(f["id"])["state"] == "done"
+
+
+def test_halt_points_through_the_step_patch():
+    f = _adhoc(steps=[{"kind": "agent"}, {"kind": "notify"}, {"kind": "notify"}])
+    f = f.json()["flight"]
+    base = "/api/flights/%s/steps" % f["id"]
+    assert f["cursor"] == 1  # s1 is behind, s2 is current, s3 ahead
+    r = client.patch(base + "/s3", json={"halt": True})
+    assert r.status_code == 200 and r.json()["flight"]["steps"][2]["halt"] is True
+    r = client.patch(base + "/s2", json={"halt": True})
+    assert r.status_code == 200 and r.json()["flight"]["steps"][1]["halt"] is True
+    r = client.patch(base + "/s2", json={"halt": False})
+    assert r.status_code == 200 and "halt" not in r.json()["flight"]["steps"][1]
+    # title on the current step keeps the pending-only rule
+    r = client.patch(base + "/s2", json={"halt": True, "title": "x"})
+    assert (r.status_code, r.json()["error"]) == (409, "in_progress")
+    r = client.patch(base + "/s1", json={"halt": True})  # behind: done
+    assert (r.status_code, r.json()["error"]) == (409, "in_progress")
+    r = client.patch(base + "/s3", json={"halt": "yes"})
+    assert (r.status_code, r.json()["error"], r.json()["field"]) == (
+        400,
+        "bad_step",
+        "step.halt",
+    )
+    # A plan keeps it too.
+    r = _plan(steps=[{"kind": "agent"}, {"kind": "notify", "halt": True}])
+    assert r.json()["plan"]["steps"][1]["halt"] is True
