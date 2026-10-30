@@ -942,9 +942,14 @@ def test_change_steps_announces_and_wakes(srv, row, emitted, monkeypatch):
     with pytest.raises(F.FlightError) as err:
         D.change_steps("f_nope", "add", raw={"kind": "notify"})
     assert err.value.status == 404
-    with pytest.raises(F.FlightError) as err:
-        D.change_steps(f["id"], "remove", "s1")
-    assert err.value.error == "in_progress"
+    # The flying stop goes too: the flight sits paused right before s3.
+    after = D.change_steps(f["id"], "remove", "s1")
+    assert (after["state"], after["reason"], after["cursor"]) == (
+        "paused",
+        "stop removed",
+        0,
+    )
+    assert [s["id"] for s in after["steps"]] == ["s3"]
 
 
 def test_a_step_added_to_a_finishing_flight_is_flown(srv, row, monkeypatch):
@@ -987,3 +992,89 @@ def test_change_steps_sets_and_clears_a_halt_point(srv, row, emitted):
     after = D.change_steps(f["id"], "edit", "s1", {"halt": False})
     assert "halt" not in after["steps"][0]
     assert [e["event"] for e in emitted] == ["flight.changed"] * 3
+
+
+# --------------------------------------------------------------------------- #
+# Removing the stop that is flying (round 11): its side effects stop
+# --------------------------------------------------------------------------- #
+def test_removing_a_flying_ship_step_disarms_its_lane(srv, row, emitted, monkeypatch):
+    disarmed = []
+    recs = {}
+    monkeypatch.setattr(D._autopilot, "get", lambda t: recs.get(t))
+    monkeypatch.setattr(D._autopilot, "disarm", lambda t: disarmed.append(t) or True)
+    f = fly({"kind": "ship", "config": {"lane": "push"}}, {"kind": "notify"})
+    recs["s"] = {
+        "source": "flight",
+        "item": f["id"],
+        "lane": "push",
+        "state": "running",
+    }
+    after = D.change_steps(f["id"], "remove", "s1")
+    assert disarmed == ["s"]
+    assert (after["state"], after["reason"]) == ("paused", "stop removed")
+    assert emitted[-1]["event"] == "flight.changed"
+    # Your own fast-track run (or another flight's) is never touched.
+    g = fly(
+        {"kind": "ship", "config": {"lane": "push"}}, {"kind": "notify"}, session="t"
+    )
+    recs["t"] = {"source": "session", "lane": "push", "state": "running"}
+    D.change_steps(g["id"], "remove", "s1")
+    assert disarmed == ["s"]
+
+
+def test_removing_a_step_ahead_disarms_nothing_and_forgets_its_job(
+    srv, row, monkeypatch
+):
+    disarmed = []
+    monkeypatch.setattr(
+        D._autopilot,
+        "get",
+        lambda t: {"source": "flight", "item": "x", "state": "running"},
+    )
+    monkeypatch.setattr(D._autopilot, "disarm", lambda t: disarmed.append(t))
+    f = fly(
+        {"kind": "notify"},
+        {"kind": "ship"},
+        {"kind": "command", "config": {"command": "true"}},
+    )
+    D._JOBS[(f["id"], "s3")] = {"running": True}
+    after = D.change_steps(f["id"], "remove", "s3")
+    assert after["state"] == "running" and disarmed == []
+    assert (f["id"], "s3") not in D._JOBS
+
+
+def test_a_lane_armed_for_a_step_removed_meanwhile_is_disarmed(srv, row, monkeypatch):
+    from backend.web.core import lanes
+
+    f = fly({"kind": "ship", "config": {"lane": "push"}}, {"kind": "notify"})
+    disarmed = []
+    monkeypatch.setattr(
+        D._autopilot,
+        "get",
+        lambda t: {"source": "flight", "item": f["id"], "state": "running"},
+    )
+    monkeypatch.setattr(D._autopilot, "disarm", lambda t: disarmed.append(t))
+
+    def arm_while_removed(title, lane, **kw):
+        # The route lands between the intent and the outcome.
+        F.mutate(f["id"], lambda x: F.op_remove_step(x, "s1"))
+        return {"started": 1.0}
+
+    monkeypatch.setattr(lanes, "arm_session", arm_while_removed)
+    run(D.step_flight(f["id"]))
+    assert disarmed == ["s"]
+    got = F.get(f["id"])
+    assert (got["state"], [s["id"] for s in got["steps"]]) == ("paused", ["s2"])
+
+
+def test_resume_after_removing_the_last_flying_stop_lands(srv, row, emitted):
+    f = fly({"kind": "notify"}, {"kind": "you"})
+    D.operate(f["id"], "skip", "s1")
+    D.change_steps(f["id"], "remove", "s2")
+    got = F.get(f["id"])
+    assert (got["state"], got["cursor"], len(got["steps"])) == ("paused", 1, 1)
+    run(D.run_pass())  # a paused flight is not driven
+    assert F.get(f["id"])["state"] == "paused"
+    after = D.operate(f["id"], "resume")
+    assert after["state"] == "done"
+    assert emitted[-1]["event"] == "flight.finished"

@@ -1282,9 +1282,6 @@ def test_op_edit_and_remove_only_touch_pending_steps_ahead():
         F.op_edit_step(f, "s1", {"title": "x"}, now=NOW)
     assert (err.value.status, err.value.error) == (409, "in_progress")
     with pytest.raises(F.FlightError) as err:
-        F.op_remove_step(f, "s1", now=NOW)
-    assert err.value.error == "in_progress"
-    with pytest.raises(F.FlightError) as err:
         F.op_edit_step(f, "s9", {}, now=NOW)
     assert err.value.status == 404
     F.op_edit_step(
@@ -1308,15 +1305,23 @@ def test_op_edit_and_remove_only_touch_pending_steps_ahead():
     with pytest.raises(F.PlanError) as perr:
         F.op_edit_step(f, "s2", {"on_fail": "explode"}, now=NOW)
     assert perr.value.field == "step.on_fail"
-    # A step marked ahead (skipped) is no longer pending.
+    # A step marked ahead (skipped) is no longer pending: it can't be
+    # edited, but removing takes anything.
     F.op_skip(f, "s3", now=NOW)
     with pytest.raises(F.FlightError):
-        F.op_remove_step(f, "s3", now=NOW)
+        F.op_edit_step(f, "s3", {"title": "x"}, now=NOW)
     F.op_remove_step(f, "s2", now=NOW)
     assert [s["id"] for s in f["steps"]] == ["s1", "s3"]
     assert "s2" not in f["step_states"]
     assert f["history"][-1]["event"] == "removed"
     assert f["history"][-1]["note"] == "Coffee"
+    assert (f["state"], f["cursor"]) == ("running", 0)
+    F.op_remove_step(f, "s3", now=NOW)
+    assert [s["id"] for s in f["steps"]] == ["s1"]
+    # The last stop stays: remove the flight instead.
+    with pytest.raises(F.FlightError) as err:
+        F.op_remove_step(f, "s1", now=NOW)
+    assert (err.value.status, err.value.error) == (409, "last_step")
 
 
 def test_step_history_events_survive_the_store():
@@ -1521,3 +1526,93 @@ def test_go_actions_let_a_halt_point_through():
     h = F.op_done(F.op_pause(h, now=NOW), "s1", now=NOW)
     assert (h["cursor"], h["state"], h["reason"]) == (1, "paused", F.HALT_POINT)
     assert h["step_states"]["s2"]["detail"]["halt_hit"] is True
+
+
+# --------------------------------------------------------------------------- #
+# Removing the stop that is flying (round 11)
+# --------------------------------------------------------------------------- #
+def test_removing_the_flying_stop_pauses_right_before_the_next():
+    f = fly(step("agent"), dict(step("notify"), title="Ping"), step("wait", minutes=2))
+    f = run_step(f)
+    F.op_remove_step(f, "s1", now=NOW + 1)
+    assert [s["id"] for s in f["steps"]] == ["s2", "s3"]
+    assert (f["state"], f["reason"], f["cursor"]) == ("paused", "stop removed", 0)
+    assert "s1" not in f["step_states"]
+    h = f["history"][-1]
+    assert (h["event"], h["step"]) == ("removed", "s1")
+    assert (
+        h["note"] == "removed %s while it flew" % F.STEP_KINDS["agent"]["default_title"]
+    )
+    # Paused: the planner does nothing; Resume carries on into s2.
+    assert F.next_action(f, {"session": sess()}, NOW + 2)["action"] == "wait"
+    F.op_resume(f, now=NOW + 2)
+    assert f["state"] == "running"
+    assert F.next_action(f, {"session": sess()}, NOW + 2)["action"] == "run"
+
+
+def test_removing_the_last_flying_stop_then_resume_lands():
+    f = fly(step("notify"), step("you", text="Approve"))
+    F.op_skip(f, "s1", now=NOW)
+    f = F.apply(f, F.next_action(f, {}, NOW), NOW)
+    assert f["state"] == "waiting_you" and f["cursor"] == 1
+    F.op_remove_step(f, "s2", now=NOW)
+    assert (f["state"], f["cursor"], len(f["steps"])) == ("paused", 1, 1)
+    assert F.next_action(f, {}, NOW)["action"] == "wait"
+    # The store keeps a cursor at the end.
+    g = F.mutate(f["id"], lambda x: x.update(copy.deepcopy(f)))
+    assert g["cursor"] == 1 and g["state"] == "paused"
+    F.op_resume(g, now=NOW + 1)
+    assert g["state"] == "done"
+
+
+def test_removing_a_flown_stop_shifts_the_cursor():
+    f = fly(step("notify"), step("notify"), step("wait", minutes=1))
+    F.op_skip(f, "s1", now=NOW)
+    F.op_skip(f, "s2", now=NOW)
+    assert f["cursor"] == 2
+    F.op_remove_step(f, "s1", now=NOW)
+    assert (f["state"], f["cursor"]) == ("running", 1)
+    assert f["steps"][f["cursor"]]["id"] == "s3"
+    assert f["history"][-1]["note"] == "Notify me"
+
+
+def test_removing_a_halted_stop_pauses_and_halt_points_still_count():
+    f = fly(step("command", command="false"), step("notify", halt=True))
+    f = F.apply(f, {"action": "fail", "then": "halt", "reason": "exit 1"}, NOW)
+    assert f["state"] == "halted"
+    F.op_remove_step(f, "s1", now=NOW)
+    assert (f["state"], f["reason"], f["cursor"]) == ("paused", "stop removed", 0)
+    # Resume lets the next stop's halt point through (the flight already sits
+    # right before it), as Resume always does.
+    F.op_resume(f, now=NOW)
+    assert f["state"] == "running"
+    assert F.next_action(f, {"session": sess()}, NOW)["action"] == "run"
+
+
+def test_a_paused_flight_takes_a_step_back_at_its_cursor():
+    """Undo of a removed flying stop: re-added at the cursor it flies first."""
+    f = fly(step("agent"), step("notify"))
+    F.op_remove_step(f, "s1", now=NOW)
+    F.op_add_step(f, step("agent"), at=0, now=NOW)
+    assert [s["id"] for s in f["steps"]] == ["s3", "s2"] and f["cursor"] == 0
+    F.op_resume(f, now=NOW)
+    assert F.next_action(f, {"session": sess()}, NOW)["action"] == "run"
+    # A running flight still refuses the cursor.
+    with pytest.raises(F.FlightError) as err:
+        F.op_add_step(f, step("notify"), at=0, now=NOW)
+    assert err.value.error == "in_progress"
+    # Paused at the end: at == len(steps) is the cursor.
+    g = fly(step("notify"), step("notify"), session="t")
+    F.op_skip(g, "s1", now=NOW)
+    F.op_remove_step(g, "s2", now=NOW)
+    assert (g["cursor"], len(g["steps"]), g["state"]) == (1, 1, "paused")
+    F.op_add_step(g, step("wait", minutes=1), at=1, now=NOW)
+    assert F._current(g)["id"] == "s3"
+
+
+def test_finished_flights_remove_nothing():
+    f = fly(step("notify"), step("notify"))
+    F.op_cancel(f, now=NOW)
+    with pytest.raises(F.FlightError) as err:
+        F.op_remove_step(f, "s2", now=NOW)
+    assert err.value.error == "finished"

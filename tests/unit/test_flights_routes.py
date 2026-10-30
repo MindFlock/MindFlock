@@ -392,10 +392,9 @@ def test_step_changes_refuse_what_has_started():
     )
     assert client.post(base, json={}).status_code == 400
     for path in ("/s1", "/s2"):
-        # s1 is behind the flight, s2 is the current step.
+        # s1 is behind the flight, s2 is the current step: neither edits
+        # (removing them is test_remove_flown_and_flying_stops's).
         r = client.patch(base + path, json={"title": "x"})
-        assert (r.status_code, r.json()["error"]) == (409, "in_progress")
-        r = client.delete(base + path)
         assert (r.status_code, r.json()["error"]) == (409, "in_progress")
     r = client.patch(base + "/s9", json={"title": "x"})
     assert (r.status_code, r.json()["error"]) == (404, "unknown_step")
@@ -538,3 +537,24 @@ def test_halt_points_through_the_step_patch():
     # A plan keeps it too.
     r = _plan(steps=[{"kind": "agent"}, {"kind": "notify", "halt": True}])
     assert r.json()["plan"]["steps"][1]["halt"] is True
+
+
+def test_remove_flown_and_flying_stops():
+    f, base = _four_stop_flight()
+    # s1 is behind (skipped by the attach), s2 the current you step.
+    r = client.delete(base + "/s1")
+    assert r.status_code == 200
+    got = r.json()["flight"]
+    assert (got["cursor"], got["state"]) == (0, "running")
+    assert got["steps"][0]["id"] == "s2"
+    r = client.delete(base + "/s2")
+    assert r.status_code == 200
+    got = r.json()["flight"]
+    assert (got["state"], got["reason"], got["cursor"]) == ("paused", "stop removed", 0)
+    assert got["steps"][0]["title"] == "A"
+    assert got["history"][-1]["note"].endswith("while it flew")
+    # Undo puts it back where it was: right before A, flown first.
+    r = client.post(base, json={"step": {"kind": "you"}, "at": 0})
+    assert r.status_code == 200 and r.json()["flight"]["steps"][0]["kind"] == "you"
+    r = client.post("/api/flights/%s/resume" % f["id"])
+    assert r.json()["flight"]["state"] == "running"
