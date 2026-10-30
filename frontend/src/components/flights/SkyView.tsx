@@ -58,6 +58,7 @@ import {
   fitCamera,
   inSky,
   lineLayout,
+  lodFor,
   loadSkyLayout,
   patchSkyLine,
   pinnedPositions,
@@ -722,7 +723,7 @@ export function SkyView() {
           >
             Fit
           </button>
-          <button type="button" className="sky-zoom-btn" title="Back to 100%" onClick={() => zoomBy(1 / cam.z)}>
+          <button type="button" className="sky-zoom-btn sky-zoom-100" title="Back to 100%" onClick={() => zoomBy(1 / cam.z)}>
             100%
           </button>
         </span>
@@ -873,15 +874,29 @@ export function SkyView() {
               style={{ transform: `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})` }}
             >
               {mode !== "one" && (
-                <div className="sky-intake" style={{ transform: `translate(${SKY_MARGIN}px, ${SKY_MARGIN}px)`, width: INTAKE_W }}>
+                <div
+                  className="sky-intake"
+                  data-lod={lodFor(cam.z)}
+                  style={{ transform: `translate(${SKY_MARGIN}px, ${SKY_MARGIN}px)`, width: INTAKE_W, "--sky-z": cam.z } as React.CSSProperties}
+                >
                   <IntakeLane rows={rows} plans={plans} onFly={focusOn} width={INTAKE_W} />
                 </div>
               )}
-              {lines.map((l) => (
-                <div key={l.id} className={"sky-line-slot" + (flash === l.id ? " is-flash" : "")} data-tour="sky-line">
-                  {lineFor(l.id, posOf(l.id))}
-                </div>
-              ))}
+              {lines.map((l) => {
+                // The slot sits the line at its spot (placeLines', or where it
+                // was dropped); Tidy and a reflow glide it there.
+                const at = posOf(l.id);
+                return (
+                  <div
+                    key={l.id}
+                    className={"sky-line-slot" + (flash === l.id ? " is-flash" : "") + (drag?.id === l.id ? " is-dragging" : "")}
+                    data-tour="sky-line"
+                    style={{ transform: `translate(${at.x}px, ${at.y}px)` }}
+                  >
+                    {lineFor(l.id, at)}
+                  </div>
+                );
+              })}
               {ghosts.map((g) => (
                 <GhostLine key={"ghost:" + g.id} {...g} />
               ))}

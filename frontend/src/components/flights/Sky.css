@@ -59,6 +59,8 @@ body.view-switch #sky-view {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* The toolbar folds its longer words by the room the main area has. */
+  container: sky / inline-size;
   --sky-bg: var(--bg);
   --sky-dot: color-mix(in srgb, var(--text) 17%, transparent);
 }
@@ -415,6 +417,27 @@ body.view-switch #sky-view {
   min-width: 280px;
 }
 
+/* A line's slot: placed on the plane at its spot. Lines glide to a new one
+   (Tidy, a reflow); the one being dragged follows the pointer. An open box or
+   an open editor lifts its line over its neighbours. */
+.sky-line-slot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transition: transform 0.28s ease;
+}
+
+.sky-line-slot.is-dragging {
+  transition: none;
+  z-index: 6;
+}
+
+.sky-line-slot:has(> .skl.is-open),
+.sky-line-slot:has(> .skl.is-editing) {
+  z-index: 5;
+}
+
+.sky-line-slot.is-flash .skl,
 .sky-line-slot.is-flash .sky-line {
   box-shadow:
     0 0 0 2px var(--accent),
@@ -630,6 +653,38 @@ details.fl-group-waiting > summary {
   box-shadow: none;
 }
 
+/* Beside the rail and the drawer's tab the main area can be ~700px on a
+   1000px window: the row sheds what it can spare before anything wraps —
+   the 100% button (the readout still says it) and the tour's ? — and
+   tightens. */
+@container sky (max-width: 860px) {
+  .sky-zoom-100,
+  .sky-toolbar > .tour-btn {
+    display: none;
+  }
+  .sky-modes .fl-pick {
+    padding: 3px 7px;
+  }
+  .sky-new,
+  .sky-tidy {
+    padding: 3px 8px;
+  }
+  .sky-toolbar {
+    gap: 5px;
+  }
+  .sky-toolbar > .sky-search {
+    min-width: 72px;
+  }
+}
+
+/* The drawer open on a small window: no room for one row, so it wraps. */
+@container sky (max-width: 640px) {
+  .sky-toolbar {
+    flex-wrap: wrap;
+    max-height: none;
+  }
+}
+
 /* A phone: the row may wrap (it scrolls with the list). */
 .sky-narrow .sky-toolbar {
   flex-wrap: wrap;
@@ -643,6 +698,9 @@ details.fl-group-waiting > summary {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .sky-line-slot {
+    transition: none;
+  }
   .sky-line {
     transition: none;
     animation: none;
