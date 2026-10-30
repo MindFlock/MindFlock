@@ -530,7 +530,7 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
           authProfiles={authProfiles}
           branches={branches}
           templates={templates}
-          onTemplate={(t) => (t ? fillTemplate(t) : setOptions((o) => ({ ...o, template: "" })))}
+          onTemplate={(t) => (t ? fillTemplate(t) : setOptions((o) => ({ ...o, template: "", provision: false, strategy: "worktree", initRepo: false })))}
           devices={startable.map((d) => ({ device: d.device, label: deviceLabel(d, startable) }))}
           forkedFrom={parent?.name}
         />

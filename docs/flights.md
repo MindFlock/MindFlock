@@ -2899,7 +2899,8 @@ heads the quiet tier (`fl-icon-btn sky-new-fold`):
     `useBaseBranches` (re-asked per folder, the pick reset with it).
   - **Template** — None + the server's templates (`ensureTemplates`); a pick
     fills the block through the dialog's `templateFiller` (agent, folder,
-    task, workspace). Its fast-track is ignored: the block flies stops.
+    task, workspace); None drops a template's provisioned workspace. Its
+    fast-track is ignored: the block flies stops.
   - **Launch flags** — the field (pre-filled with the agent's saved defaults,
     reset when the agent changes) plus the dialog's `FlagChips`.
   - **Device** — This device + each startable device (`startableDevices`,
