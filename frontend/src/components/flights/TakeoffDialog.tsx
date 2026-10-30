@@ -1,23 +1,26 @@
-/** A flyway's trigger on its card (FlywayCard, on the Sky's shelf): where its
- * flights come from — **Takes off** by hand, from a ticket / PR / issue, or
- * on a **Schedule** (days as chips, the time / date / cron as fields, the
- * server's preview of the next run, Paused) — and, for the ones that create
- * their own session (by hand, scheduled), the repository, agent and model it
- * starts in. It was the Flyways tab's lower half; the tab is retired, and a
- * scheduled flyway is edited here ("Edit in the Sky" from Schedule).
- *
- * The stop palette, the inspector and Describe are StopParts; this file's
- * styles (FlywayInspector.css) are theirs too, so the pane's Flight tab gets
- * them through StopParts. */
+/** "Takes off…" on a saved stop (the shelf chip's right-click menu): where
+ * its flights come from — by hand, from a ticket / PR / issue, or on a
+ * **Schedule** (days as chips, the time / date / cron as fields, the server's
+ * preview of the next run, Paused) — and, for the ones that create their own
+ * session (by hand, scheduled), the repository, agent and model it starts
+ * in. A dialog (`Modal`), saved with `savePlan`; a refusal stays in the
+ * dialog (Electron has no alert). It was the flyway card's trigger section
+ * (FlywayTrigger); a scheduled saved stop is edited here ("Edit in the Sky"
+ * from Schedule). */
 
 import { useEffect, useState, type JSX } from "react";
 import { cronOf, cronPreview, onceOf, type CronPreview } from "../../lib/templates";
 import { TRIGGER_LABEL, scheduleOfWhen, whenFormOf, type FlightPlan, type TriggerKind, type WhenForm } from "../../lib/flights";
+import { savePlan } from "../../lib/flightsApi";
+import { errMsg } from "../../lib/format";
+import { toast } from "../../lib/toast";
+import { Modal } from "../Modal";
 import { PathField } from "../PathField";
 import { useAgentChoices } from "../settings/screens/AgentPicker";
 import { cronPreviewLine } from "../dialogs/TemplateEditor";
 import { ChipRow, FlField, Seg, TextField, Toggle } from "./controls";
 import "./FlywayInspector.css";
+import "./TakeoffDialog.css";
 
 const DAYS: ReadonlyArray<{ v: WhenForm["days"]; label: string }> = [
   { v: "daily", label: "Every day" },
@@ -55,8 +58,8 @@ function useCronPreview(cron: string): CronPreview | null {
   return preview;
 }
 
-/** A scheduled flyway's when: days as chips, the time / date / cron as fields,
- * and the server's preview of the next run under them. */
+/** A schedule's when: days as chips, the time / date / cron as fields, and
+ * the server's preview of the next run under them. */
 export function ScheduleChips({ when, onWhen, preview }: { when: WhenForm; onWhen(w: WhenForm): void; preview: CronPreview | null }): JSX.Element {
   const line = cronPreviewLine(preview, new Date());
   return (
@@ -84,8 +87,8 @@ export function ScheduleChips({ when, onWhen, preview }: { when: WhenForm; onWhe
   );
 }
 
-/** Where a flyway's flights come from, and what they fly in. */
-export function FlywayTrigger({ plan, onChange }: { plan: FlightPlan; onChange(p: Partial<FlightPlan>): void }): JSX.Element {
+/** Where a saved stop's flights come from, and what they fly in. */
+export function TakeoffFields({ plan, onChange }: { plan: FlightPlan; onChange(p: Partial<FlightPlan>): void }): JSX.Element {
   const agents = useAgentChoices();
   const preview = useCronPreview(triggerCron(plan));
   const when = whenFormOf(plan.trigger.schedule);
@@ -127,7 +130,7 @@ export function FlywayTrigger({ plan, onChange }: { plan: FlightPlan; onChange(p
                 id="fl-plan-repo"
                 value={plan.session.repo_path}
                 placeholder="Ask when it takes off"
-                pickerTitle="The repository this flyway's sessions start in"
+                pickerTitle="The repository these stops' sessions start in"
                 onChange={(v) => onChange({ session: { ...plan.session, repo_path: v } })}
               />
             </FlField>
@@ -154,5 +157,56 @@ export function FlywayTrigger({ plan, onChange }: { plan: FlightPlan; onChange(p
         )}
       </div>
     </section>
+  );
+}
+
+/** The dialog: the saved stop's Takes off, Save / Cancel. */
+export function TakeoffDialog({ plan, onClose }: { plan: FlightPlan; onClose(): void }): JSX.Element {
+  const [draft, setDraft] = useState<FlightPlan>(() => JSON.parse(JSON.stringify(plan)) as FlightPlan);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const dirty = JSON.stringify({ ...draft, updated: 0 }) !== JSON.stringify({ ...plan, updated: 0 });
+
+  const save = async () => {
+    if (!dirty) return onClose();
+    setBusy(true);
+    setError("");
+    try {
+      const saved = await savePlan(draft);
+      toast("Saved “" + saved.name + "”");
+      onClose();
+    } catch (err) {
+      setError(errMsg(err));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal id="takeoff-dialog" onClose={onClose}>
+      <form
+        className="fl-takeoff"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void save();
+        }}
+      >
+        <h2>“{plan.name}” takes off</h2>
+        <p className="muted fl-takeoff-lede">When it flies by itself, and the session it starts in.</p>
+        <TakeoffFields plan={draft} onChange={(p) => setDraft((d) => ({ ...d, ...p }))} />
+        {error && (
+          <p className="error fl-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="modal-actions">
+          <button type="button" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="submit" disabled={busy}>
+            {busy ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }

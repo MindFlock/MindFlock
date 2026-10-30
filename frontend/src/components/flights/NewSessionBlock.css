@@ -1,5 +1,5 @@
 /* The Sky's new-session block (NewSessionBlock.tsx): a block on the sky at
- * the spot the owner double-clicked (or dropped + New session) — a card with
+ * the spot the owner double-clicked (or dropped the Session chip) — a card with
  * a bar like a line's (the bird, its name; drag it to move the block), a
  * dashed accent edge while it hasn't flown yet. Its fields are Flights' form
  * controls (.fl-form), so they wear the New dialog's look. */
@@ -18,6 +18,11 @@
   border: 1px dashed color-mix(in srgb, var(--accent) 55%, var(--border));
   border-radius: 12px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+}
+
+/* Its session is being made: the session's own line shows in its place. */
+.sky-new.fl-form[hidden] {
+  display: none;
 }
 
 .light .sky-new.fl-form {

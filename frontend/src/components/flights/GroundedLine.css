@@ -1,0 +1,67 @@
+/* A grounded flight's line (GroundedLine.tsx): a session's line (SkyLine.css)
+   with a dashed edge, since nothing flies it yet, and a dashed head box where
+   the session will sit. */
+
+.skl.skl-grounded {
+  border-style: dashed;
+}
+
+.skl.skl-grounded:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.5);
+}
+
+/* A Session chip over it: the head box lights up to take the drop. */
+.skl.skl-grounded.is-session-over {
+  border-color: var(--accent);
+}
+
+.skl-grounded-body {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.skl-grounded-head {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  box-sizing: border-box;
+  width: 170px;
+  min-height: 72px;
+  padding: 10px 12px;
+  border: 1.5px dashed color-mix(in srgb, var(--muted) 55%, var(--border));
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.skl-grounded-head strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.skl-grounded.is-session-over .skl-grounded-head {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.1);
+  color: var(--text);
+}
+
+.skl-grounded-body > .skl-canvas {
+  flex: 1;
+  min-width: 0;
+}
+
+.skl-grounded-confirm {
+  padding: 0 0 8px;
+}
+
+/* Far out: the head box's words are noise; its outline still says "empty". */
+.skl-grounded[data-lod="far"] .skl-grounded-head span {
+  display: none;
+}

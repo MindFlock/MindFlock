@@ -57,7 +57,7 @@ export const PANE_TABS: PaneItemDef[] = [
     id: "flight",
     kind: "tab",
     label: "Flight",
-    note: "The session's live diagram: its flight or fast-track, its workers — once it has one (⋯ → Fly a flyway… always opens it)",
+    note: "The session's live diagram: its flight or fast-track, its workers — once it has one (⋯ → Add a stop… always opens it)",
     on: true,
   },
   { id: "thread", kind: "tab", label: "Thread", note: "Workers and what passed between them — only once a session has some", on: false },
