@@ -92,6 +92,13 @@ class CodexProvider(GenericProvider):
         except Exception:  # noqa: BLE001 — history is optional
             return None
 
+    def carry_workdir(self, old: str, new: str) -> None:
+        """Nothing to carry: rollouts live under ``~/.codex/sessions/<date>/``
+        keyed by session id (the folder is only a ``cwd`` field inside), and
+        the window's thread marker is keyed by its tmux name, so ``codex
+        resume <id>`` in the new folder finds the same conversation."""
+        return None
+
     # --- per-session resume thread ----------------------------------------- #
     def record_thread(
         self,

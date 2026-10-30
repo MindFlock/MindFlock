@@ -145,6 +145,45 @@ if the branch is checked out elsewhere, re-run `Setup()` (provisioned
 workspaces are re-provisioned), then reattach or restart tmux, cleaning the
 rebuilt worktree up again if the launch fails.
 
+**`MoveWorkspace(dest)`** — moves the session's workspace folder to `dest`
+and carries on there (no Go original; the web side is `POST
+/api/instances/{title}/move`). In order: `CheckMoveDest` (absolute — a leading
+`~` is expanded —, not inside the current workspace, nothing there yet, parent
+folder exists, not in the peer-link folder; a refusal is a `MoveError` whose
+`code` the route answers with) and `_git_layout` (a folder that is a
+sub-folder of its repo is refused: moving it would carry tracked files out of
+their repo); stop the agent the way `Pause()` does (`Paused` first, then the
+tmux session); move the folder — a **linked worktree** with `git worktree move`
+then `git worktree repair` from the main repo (across filesystems, where git's
+rename fails: a plain move then `git worktree repair <new>`), a **main clone**
+or a **plain folder** with `shutil.move`, then for a repo `git worktree repair`
+in the new place, naming any worktrees that lived inside it, so every linked
+worktree finds it again; re-point every path the instance keeps (`Path`, the
+worktree's `repoPath` / `worktreePath`); call the provider's
+`carry_workdir(old, new)`; relaunch through Resume's path
+(`_relaunch_in_worktree`: the provider's resume command) when the agent was
+running — a paused session stays paused. After any failure the paths name
+wherever the folder really is (a move that failed leaves them, and the agent
+relaunched, in the old place); an agent that could not be relaunched leaves
+the session `Paused`. The module-level **`MoveWorkspace(instances, title,
+dest, save)`** is the engine's entry (Go style: it returns the error):
+`unknown_session` for an unknown title, the move, then the same re-pointing for
+every OTHER instance that kept the old folder (window copies sharing it in
+place, worktrees cut from a main clone that moved), then `save()` — also after
+a failure, so state.json names where the folder is.
+
+**`carry_workdir(old, new)`** (provider hook, `providers/base.py`, default
+no-op) — the CLI's per-directory state, carried after a move. **Claude** copies
+`<config root>/projects/<slug of old>/` to `<slug of new>/` in every config
+root that has one (`~/.claude*`, `$CLAUDE_CONFIG_DIR`, account-profile dirs;
+the slug replaces every non-alphanumeric character with `-`) — a copy, so the
+old folder's history survives a move undone by hand — and `--resume <id>` in
+the new folder finds the thread; trust and hooks are re-pinned by the relaunch
+itself. **Codex** carries nothing: its rollouts live under
+`~/.codex/sessions/<date>/` keyed by session id (the folder is only a `cwd`
+field inside) and the thread marker is keyed by the window, so `codex resume
+<id>` still finds it. The generic (TOML) providers inherit the no-op.
+
 **`Kill()`** — closes tmux, then removes the worktree and (unless the branch
 pre-existed) deletes the branch.
 
