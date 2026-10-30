@@ -2756,3 +2756,118 @@ is 3.4–4:1 on the dark panels) and `var(--accent-deep)` on light (7.2:1).
   `.fl-strip-line`, `.sky-perch-name` and the drawer tab gained the ring; the
   flights' `linklike`s (Open in the Sky, Intake ›, Refresh) use
   `--fl-ink-accent`.
+
+## Round 12: the bird in hand, a movable intake, the shelf's catalog, tools, a guide, a fuller block, moving sessions (contract)
+
+The owner, after round 11: stop a bird where it works, or pick it up and
+drag it to an earlier stop; pick up, drag around and expand the intake menu;
+the Stops shelf = the default blocks, then the multi-step blocks, the rest in
+a dialog listing every block; a toggle between drag mode and click mode in
+the sky; a big tutorial for the Sky; the sky's new-session block with the
+full capacity of the grid's New dialog, and "spawn from a session"; move a
+session to a new directory; and: click any box in the sky, hit Delete, it
+goes.
+
+### The bird (frontend)
+
+- A click on the bird marker (`.fl-bird-marker`) on the current stop = **Halt
+  now** (pause) while the flight runs or waits on you; on a paused flight =
+  **Carry on** (resume). The bird's title says which.
+- The bird is **draggable** (pointer drag, not HTML5 DnD): while dragging, every
+  stop that can be jumped to lights up (`.fl-jump-target`); dropping it on a
+  stop = `POST /api/flights/{id}/jump {step}` (`jumpFlight`), which re-arms the
+  halt points after the target and pauses there when the target is a halt
+  point. Any stop of the flight may be a target (earlier or later); the
+  current one is a no-op. Dropping elsewhere snaps the bird back. Pure rules
+  in `lib/stopEditing.ts` (`canJumpTo`, `jumpTargets`), tested.
+
+### The intake lane (frontend)
+
+- The intake lane is a sky object like a line: layout key `"intake"` in
+  `mf_sky_layout` (x / y / pinned, `open` = expanded). Drag it by its head
+  (same gesture as a line's bar; pins it). Tidy forgets its spot.
+- Folded (default) it is the block row it is today; **expanded** (▸/▾ on its
+  head, or double-click) it shows every source block with its waiting items in
+  full (titles, Fly buttons, the started stubs) and its own width grows.
+
+### The shelf (frontend)
+
+- Three regions in one row: the **default blocks** (Session, then Agent,
+  Perch, Ship, Verify, Wait), the **multi-step blocks** (the saved stops), and
+  an **All blocks…** chip that opens `StopCatalog` (a `Modal`): every kind
+  with its summary, every saved stop with its sub-steps, each row draggable
+  onto the board like a chip and with an **Add** button (tacks onto the focused
+  line, or makes a grounded line in the middle of the view).
+
+### Drag mode / click mode (frontend)
+
+- `skyTool: "drag" | "click"` kept in localStorage (`mf_sky_tool`), shown as a
+  two-way toggle on the toolbar (✥ Drag · ☝ Click) with a key (V = drag, H =
+  click, like design tools; Space held = temporary click/pan in either mode).
+- **Drag** (today): a line moves by its bar, empty-sky drag = marquee.
+- **Click**: nothing moves by dragging — a drag anywhere pans the sky; a click
+  on a line focuses it, on a box selects it (Enter / double-click opens it as
+  today). Marquee is Shift+drag.
+- `.sky[data-tool]` carries it for CSS (grab cursor in click mode).
+
+### Delete removes the selected box (frontend)
+
+Click any box in the sky and press Delete / Backspace: a stop or group → the
+line's Remove (undoable toast); a grounded line's head → Remove the line
+(inline confirm); a session box → Close session (inline confirm, as today).
+The global keymap's Delete (`lib/keymap.ts`) must yield whenever the focus or
+the sky's selection is on a box that is not the session itself.
+
+### The Sky guide (frontend)
+
+- The Sky tour (`lib/tours/sky.ts`) grows to walk every surface: the toggle,
+  a line and its bar, the boxes and the bird, the hover toolbar, a dialog, the
+  shelf and its catalog, a grounded line, the intake lane, selection, the
+  tools, the zoom, the ⋯ menu — one plain sentence each, with targets that
+  exist on an empty sky too (`""` centres the card when a target is missing).
+- `SkyGuide` (a `Modal`, `components/flights/SkyGuide.tsx`): the long-form
+  tutorial — sections with a small inline SVG sketch each: What the sky is ·
+  Lines and boxes · Stops and saved stops · The bird · Halt points and Remove ·
+  Grounded stops · Selection · Tools and the keyboard · The intake lane ·
+  Where things are saved. Opened from the sky's ? (Replay the tour / Open the
+  guide) and the palette ("Learn the Sky").
+
+### The new-session block (frontend)
+
+- `NewSessionBlock` gains a **More options** fold with everything the grid's
+  New dialog offers — CLI and account, model, workspace (worktree / in place,
+  base branch), template, launch arguments, device — built from the New
+  dialog's own pieces (`components/dialogs/newSession/*`, `lib/newSessionSubmit`),
+  so one body builder serves both.
+- **From a session**: a picker of live sessions; choosing one forks from that
+  session (the create body's `parent` + its repo; the server forks at the
+  parent's HEAD as `spawn_session` does) and suggests a worker-style title.
+
+### Moving a session (backend + frontend)
+
+`POST /api/instances/{title}/move {"dest": "<absolute folder>", "force": false}`
+→ 202 `{"title", "from", "to"}`; the move runs in the background and emits
+`session.moved {title, from, to}` (added to `EVENT_NAMES`) when done, or
+`session.move_failed {title, error}`.
+
+- `dest` is the NEW folder path for the workspace (its parent must exist; the
+  folder itself must not — 409 `exists`; 400 `bad_dest` for a relative path or
+  one inside the current workspace).
+- 409 `working` while the agent is mid-turn unless `force` is true; 409
+  `in_flight` while the session's flight or fast-track runs (pause them first,
+  or `force`); 404 `unknown_session`; 409 `remote` for another device's row.
+- The engine's `MoveWorkspace(title, dest)` (backend/session/instance.py, Go
+  style): stop the agent's tmux session (graceful, like Pause does), move the
+  folder — `git worktree move` for a linked worktree (then `git worktree
+  repair` from the main repo), `shutil.move` + `git worktree repair` for a main
+  clone or a non-git folder — update every path the instance keeps (path /
+  workdir / worktree), carry the CLI's per-directory state with the provider's
+  hook (`carry_workdir(old, new)` on the provider base, default no-op; Claude
+  copies `~/.claude/projects/<escaped old>` → `<escaped new>` so `--resume`
+  still finds the thread), persist state.json, and resume the agent in the new
+  folder through the provider's resume path. The flight / autopilot / aliases
+  are keyed by title and need no change; a flight's `repo_root` is refreshed.
+- Frontend: the session ⋯ gains **Move to a folder…** → `MoveSessionDialog` (a
+  `Modal`: the folder field with Tab completion from `components/PathField`,
+  a line saying what will happen, Move) → a toast on `session.moved`, the error
+  card on `session.move_failed`. The row shows "moving…" meanwhile.
