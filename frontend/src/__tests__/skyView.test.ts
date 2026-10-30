@@ -369,3 +369,30 @@ describe("the transition", () => {
     expect(sheet).toMatch(/\.view-ghost \{[^}]*position: fixed;[^}]*pointer-events: none;/);
   });
 });
+
+describe("round 12: the intake lane on the sky, the tools' presses", () => {
+  const v = code("components/flights/SkyView.tsx");
+
+  it("the lane is placed like a line, first; no line keeps a spot before it has one", () => {
+    expect(v).toContain("const items = [{ id: INTAKE_KEY, ...intakeBox }, ...lines];");
+    expect(v).toContain("const intakeReady = !!autoPos[INTAKE_KEY] || !!layout[INTAKE_KEY]?.pinned || !!measured[INTAKE_KEY] || waited;");
+    // Its room is never under the folded lane's width (unfolding the rail
+    // never runs into a line).
+    expect(v).toContain("return { w: Math.max(b.w, INTAKE_W), h: b.h };");
+    // This session (one line) has no lane.
+    expect(v).toContain('const intakeOn = mode !== "one";');
+  });
+
+  it("it drags on the line drag's own path; a click on its head focuses no session", () => {
+    expect(v).toContain('if (e.button !== 0 || gestureFor(liveTool, "line", { space: space.current }) !== "move-line") return;');
+    expect(v).toMatch(/if \(!sel\.lines\.has\(id\)\) clearSel\(\);\s*if \(id === INTAKE_KEY\) return;/);
+    expect(v).toContain('out.lines.push({ id: INTAKE_KEY, rect: lane, heads });');
+  });
+
+  it("click mode: the sky takes the press in its capture phase, pans once it moves, and a still press is a click", () => {
+    expect(v).toMatch(/const t = space\.current \? "click" : tool;\s*if \(t === "drag"\) return;/);
+    expect(v).toContain("const g = gestureFor(t, skyTargetOf(e.target as Element, ground), { shift: e.shiftKey, space: space.current, touch: e.pointerType === \"touch\" });");
+    expect(v).toMatch(/if \(Math\.hypot\(e\.clientX - pr\.sx, e\.clientY - pr\.sy\) < MARQUEE_MIN\) return;\s*press\.current = null;/);
+    expect(v).toMatch(/if \(e\.type !== "pointercancel"\) clickOn\(pr\.el\);/);
+  });
+});

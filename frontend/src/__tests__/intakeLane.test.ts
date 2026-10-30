@@ -7,7 +7,7 @@
 import { createElement, type ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { code } from "./sourceText";
+import { code, css, cssRule } from "./sourceText";
 import type { Instance } from "../api/types";
 import type { FlightPlan } from "../lib/flights";
 
@@ -122,6 +122,40 @@ describe("the intake lane", () => {
       ["issues", "issues:acme/web"],
     ]);
     expect(html).toContain('<span class="sky-lane-rail-count">1</span>');
+  });
+
+  it("expands (round 12): ▸ / ▾ on its head, every waiting item listed, its headlines in full, the width it is given", () => {
+    const many = { tickets: Array.from({ length: 9 }, (_, i) => ({ source: "sc", id: String(i + 1), slug: "sc-" + (i + 1), name: "Ticket " + (i + 1), eligible: true })), source_labels: { sc: "Shortcut" } };
+    const prime = (c: InstanceType<typeof QueryClient>) => {
+      primeLane(c);
+      c.setQueryData(["tickets"], many);
+    };
+    const draw = (open: boolean) => withClient(createElement(IntakeLane, { rows: [], plans: PLANS, onFly: () => {}, open, onToggleOpen: () => {}, width: open ? 420 : 240 }), prime);
+    const folded = draw(false);
+    expect(folded).toMatch(/<button type="button" class="sky-lane-toggle sky-lane-expand" aria-expanded="false"[^>]*>▸</);
+    expect(folded.match(/data-waiting="tickets:sc:/g)?.length).toBe(6);
+    expect(folded).toContain(">3 more<");
+    expect(folded).not.toContain("data-open");
+    const open = draw(true);
+    expect(open).toMatch(/<nav class="sky-lane" aria-label="Intake" data-open="" style="width:420px">/);
+    expect(open).toMatch(/aria-expanded="true"[^>]*>▾</);
+    expect(open.match(/data-waiting="tickets:sc:/g)?.length).toBe(9);
+    expect(open).not.toContain("more<");
+    const sheet = css("components/flights/IntakeLane.css");
+    expect(cssRule(sheet, ".sky-lane[data-open] .sky-lane-item-headline")).toContain("-webkit-line-clamp: unset");
+  });
+
+  it("its head is its handle: a press there is the host's drag (not on its buttons, not in click mode); a double-click expands", () => {
+    const src = code("components/flights/IntakeLane.tsx");
+    expect(src).toContain('const headPress = (e: ReactPointerEvent) => e.button === 0 && !(e.target as Element).closest("button, a, input, summary, [data-no-drag]");');
+    expect(src).toContain("if (draggable && onHeadDown && headPress(e)) onHeadDown(e);");
+    expect(src).toMatch(/onDoubleClick=\{\(e\) => \{\s*if \(!onToggleOpen \|\| \(e\.target as Element\)\.closest\("button"\)\) return;/);
+    // Measured as a line is: a ResizeObserver to onMeasure.
+    expect(src).toContain("measureRef.current?.(w, h);");
+    const sky = code("components/flights/SkyView.tsx");
+    expect(sky).toContain("onHeadDown={(e) => onDragStart(INTAKE_KEY, e)}");
+    expect(sky).toContain("onToggleOpen={() => onLayout(INTAKE_KEY, { open: !intakeOpen })}");
+    expect(sky).toContain("onMeasure={(w, h) => onMeasure(INTAKE_KEY, w, h)}");
   });
 
   it("draws nothing until settings has loaded; no sources links to Sources", () => {

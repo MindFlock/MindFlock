@@ -13,6 +13,7 @@ import {
   setKeyCombos,
   resetAllOverrides,
   modalOpen,
+  skyBoxFocused,
 } from "../lib/keymap";
 import { useUi } from "../state/store";
 
@@ -306,6 +307,65 @@ describe("Delete never ends the agent from inside a Map tab", () => {
   it("elsewhere (a sidebar button) Delete still ends the focused session", () => {
     useUi.setState({ focused: "sess-A" } as never);
     withActive(button(false));
+    expect(aliasFor("close").when!()).toBe(true);
+  });
+});
+
+describe("Delete yields to the Sky on a box that is not the session itself (round 12)", () => {
+  const g = globalThis as Record<string, unknown>;
+  const hadDoc = "document" in g;
+  const prevDoc = g.document;
+  afterEach(() => {
+    useUi.setState({ focused: null } as never);
+    if (hadDoc) g.document = prevDoc;
+    else delete g.document;
+  });
+  /** An element whose ancestors (itself first) match these selectors; a
+   * `data-node` on the one that names it. */
+  const el = (chain: Array<{ sel: string; node?: string }>) => {
+    const make = (from: number): unknown => ({
+      tagName: "DIV",
+      getAttribute: (k: string) => (k === "data-node" ? chain[from]?.node ?? null : null),
+      closest: (sel: string) => {
+        const parts = sel.split(",").map((x) => x.trim());
+        const i = chain.findIndex((c, k) => k >= from && parts.includes(c.sel));
+        return i < 0 ? null : make(i);
+      },
+    });
+    return make(0) as Element;
+  };
+  const withActive = (e: unknown) => {
+    g.document = { activeElement: e, getElementById: () => null };
+  };
+  const SKY = { sel: ".sky" };
+  const LINE = { sel: "[data-sky-box]" };
+
+  it("a stop, a group, a worker's box, a line's bar, a grounded line: the sky's", () => {
+    expect(skyBoxFocused(el([{ sel: "[data-node]", node: "stop:s1" }, LINE, SKY]))).toBe(true);
+    expect(skyBoxFocused(el([{ sel: "[data-node]", node: "group:g1" }, LINE, SKY]))).toBe(true);
+    expect(skyBoxFocused(el([{ sel: "[data-node]", node: "child:sc-12-w1" }, LINE, SKY]))).toBe(true);
+    expect(skyBoxFocused(el([LINE, SKY]))).toBe(true);
+  });
+
+  it("the session's own box, an open card's pane, anything outside the sky: the keymap's", () => {
+    expect(skyBoxFocused(el([{ sel: "[data-node]", node: "session:sc-12" }, LINE, SKY]))).toBe(false);
+    expect(skyBoxFocused(el([{ sel: "button" }, { sel: ".pane" }, { sel: ".skl-card" }, LINE, SKY]))).toBe(false);
+    expect(skyBoxFocused(el([{ sel: "[data-node]", node: "stop:s1" }]))).toBe(false);
+    expect(skyBoxFocused(el([{ sel: ".sky-viewport" }, SKY]))).toBe(false);
+    expect(skyBoxFocused(null)).toBe(false);
+  });
+
+  it("the sky holding a selection (its viewport carries data-sky-box): the sky's", () => {
+    expect(skyBoxFocused(el([{ sel: "[data-sky-box]" }, SKY]))).toBe(true);
+  });
+
+  it("the Delete alias stands down there, and still closes the focused session elsewhere", () => {
+    useUi.setState({ focused: "sess-A" } as never);
+    withActive(el([{ sel: "[data-node]", node: "stop:s1" }, LINE, SKY]));
+    expect(aliasFor("close").when!()).toBe(false);
+    withActive(el([{ sel: "[data-node]", node: "session:sess-A" }, LINE, SKY]));
+    expect(aliasFor("close").when!()).toBe(true);
+    withActive(el([{ sel: "button" }]));
     expect(aliasFor("close").when!()).toBe(true);
   });
 });
