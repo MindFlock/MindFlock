@@ -24,7 +24,7 @@ import { ApiError } from "../../api/client";
 import { useFlightKinds } from "../../state/queries";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
-import { TRIGGER_LABEL, blankPlan, duplicateStep, moveStep, newStep, planDirty, type FlightPlan, type FlightStep, type StepKindDef } from "../../lib/flights";
+import { TRIGGER_LABEL, blankPlan, duplicateStep, moveStep, newStep, planDirty, toggleHalt, type FlightPlan, type FlightStep, type StepKindDef } from "../../lib/flights";
 import { flywayDiagram, type DiagramNode } from "../../lib/flightDiagram";
 import { deletePlan, resetPlan, savePlan } from "../../lib/flightsApi";
 import { freshFlywayName } from "../../lib/flywayEdit";
@@ -253,6 +253,7 @@ export function FlywayCard({
         onMove={move}
         onRemove={(n) => removeStop(nodeIndex(n))}
         onDuplicate={(n) => setSteps(duplicateStep(draft.steps, nodeIndex(n)))}
+        onToggleHalt={(n) => setSteps(toggleHalt(draft.steps, nodeIndex(n)))}
         onDropStop={(kind, at) => {
           const def = kindOf.get(kind);
           if (def) insert(at ?? draft.steps.length, def);

@@ -1689,6 +1689,7 @@ export function NewSessionDialog() {
 
               <div className="nf-quick">
                 <FolderField
+                  device={device}
                   repoRef={repoRef}
                   repoPath={repoPath}
                   folderPath={folderPath}

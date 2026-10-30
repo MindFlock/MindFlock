@@ -3637,10 +3637,11 @@ def mkdir(payload: dict) -> JSONResponse:
 
 
 @app.get("/api/browse")
-def browse(path: str = "") -> JSONResponse:
+def browse(path: str = "", hidden: bool = False) -> JSONResponse:
     """List immediate subdirectories of ``path`` (default: home) for the picker.
 
-    Each entry flags whether it is itself a git repo. Dotfolders are hidden.
+    Each entry flags whether it is itself a git repo. Dotfolders are hidden
+    unless ``hidden=1`` (Tab completion of a name that starts with a dot).
     """
     raw = path.strip() if path else ""
     base = os.path.realpath(os.path.expanduser(raw)) if raw else os.path.expanduser("~")
@@ -3650,7 +3651,7 @@ def browse(path: str = "") -> JSONResponse:
     entries = []
     try:
         for name in sorted(os.listdir(base), key=str.lower):
-            if name.startswith("."):
+            if name.startswith(".") and not hidden:
                 continue
             full = os.path.join(base, name)
             if not os.path.isdir(full):

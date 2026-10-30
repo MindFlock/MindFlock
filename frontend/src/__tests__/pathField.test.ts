@@ -79,10 +79,10 @@ describe("browseNames", () => {
   it("lists one folder through /api/browse (\"\" = home), names only", async () => {
     api.mockResolvedValueOnce({ path: "/home/me", entries: [{ name: "Music", path: "/home/me/Music", is_git: false }] });
     expect(await browseNames("~/a b")).toEqual(["Music"]);
-    expect(api).toHaveBeenLastCalledWith("/api/browse?path=~%2Fa%20b");
+    expect(api).toHaveBeenLastCalledWith("/api/browse?path=~%2Fa%20b&hidden=1");
     api.mockResolvedValueOnce({});
     expect(await browseNames("")).toEqual([]);
-    expect(api).toHaveBeenLastCalledWith("/api/browse?path=");
+    expect(api).toHaveBeenLastCalledWith("/api/browse?path=&hidden=1");
   });
 });
 

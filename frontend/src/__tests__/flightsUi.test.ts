@@ -341,7 +341,7 @@ describe("the sky", () => {
   it("carries the flyway shelf at its foot — the flyways as chips, + New flyway — and its tour's ?", () => {
     const html = render("sky");
     expect(html).toContain('data-tour="sky-shelf"');
-    expect(html).toMatch(/class="sky-shelf-chip builtin" data-plan="builtin:ticket"/);
+    expect(html).toMatch(/class="sky-flyway-row builtin" data-plan="builtin:ticket"/);
     expect(html).toContain(">+ New flyway</button>");
     expect(html).toContain('data-tour-id="sky"');
     expect(html).toContain('data-tour="sky-line"');

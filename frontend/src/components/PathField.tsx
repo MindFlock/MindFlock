@@ -52,9 +52,10 @@ export function pathFieldRequest(opts: {
 }
 
 /** Lists one folder's subfolders by name: /api/browse ("" = home, ~ expanded
- * server-side; dotfolders are never listed). */
-export function browseNames(dir: string): Promise<string[]> {
-  return api<{ entries?: { name: string }[] }>("/api/browse?path=" + encodeURIComponent(dir)).then((r) =>
+ * server-side), dotfolders included — the lib offers those only when the
+ * partial starts with a dot. */
+export function browseNames(dir: string, hidden = true): Promise<string[]> {
+  return api<{ entries?: { name: string }[] }>("/api/browse?path=" + encodeURIComponent(dir) + (hidden ? "&hidden=1" : "")).then((r) =>
     (r.entries || []).map((e) => e.name)
   );
 }

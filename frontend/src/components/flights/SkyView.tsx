@@ -209,7 +209,7 @@ export function SkyView() {
   const [vp, setVp] = useState({ w: 0, h: 0 });
   const vpRef = useRef<HTMLDivElement>(null);
   const [newAt, setNewAt] = useState<Pos | null>(null);
-  const [card, setCard] = useState<{ at: Pos; initial?: FlightPlan } | null>(null);
+  const [card, setCard] = useState<{ at: Pos; initial?: FlightPlan; stop?: number } | null>(null);
   const [drawerPref, setDrawerPref] = useState(() => readPref(SKY_DRAWER_KEY));
   const [shelfOpen, setShelfOpen] = useState(() => readPref(SHELF_KEY) !== "0");
   const shelfAsk = useUi((s) => s.skyShelf);
@@ -923,7 +923,7 @@ export function SkyView() {
           plans={plans}
           onNew={() => setCard({ at: middle() })}
           onFly={onFly}
-          onEdit={(plan) => setCard({ at: middle(), initial: plan })}
+          onEdit={(plan, stop) => setCard({ at: middle(), initial: plan, stop })}
           onTack={onTack}
         />
       )}
@@ -936,6 +936,7 @@ export function SkyView() {
       y={card.at.y}
       plans={plans}
       initial={card.initial}
+      initialStop={card.stop}
       // Save & fly on…: the card closes and the line picker asks where.
       onSaved={(plan) => {
         setCard(null);
