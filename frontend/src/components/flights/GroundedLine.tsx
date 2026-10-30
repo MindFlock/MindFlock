@@ -10,27 +10,28 @@
  * The ⋯: **Add a stop…** (the palette), **Fly on a session…** (the host's
  * line picker → `attachGrounded`), **Save to the shelf** (a line that came
  * from a saved stop updates it, else a new saved stop named after the line),
- * **Remove** (inline-confirmed, then `deleteFlight`). Delete or Backspace with
- * the line itself focused asks to remove it too. The host places it, drags
+ * **Remove** (at once, round 14: a grounded line never runs, so nothing to
+ * ask — the host's `onRemove` deletes it with an Undo toast and a Ctrl+Z
+ * entry). Delete or Backspace with the line itself focused removes it too. The host places it, drags
  * it by the bar (`onDragStart`) and gives it room from `onMeasure`, as it
  * does a session's line. `draggable` false (the sky's click mode): the bar
  * never starts a move. `registerDelete` hands the host this line's Delete
  * (docs/flights.md "As built: round 12 sky"): a stop or group box leaves
  * through the canvas's Remove, anything else (the head, the bar, the line)
- * asks to remove the line. `merging`: dragged over a session's line, which
+ * removes the line. `merging`: dragged over a session's line, which
  * takes its stops on release (docs/flights.md "As built: round 13 sky"). */
 
 import { useEffect, useRef, useState, type JSX, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { Flight, FlightPlan, StepKindDef } from "../../lib/flights";
 import type { DiagramNode } from "../../lib/flightDiagram";
-import { deleteFlight, renameFlight, savePlan } from "../../lib/flightsApi";
+import { deleteFlight, renameFlight, savePlan, startGrounded } from "../../lib/flightsApi";
 import { isRemoveKey, planToSave, sourcePlanId } from "../../lib/groundedLines";
 import { lodFor, nearLines, type SkyLineLayout } from "../../lib/skyLayout";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
-import { InlineConfirm } from "../InlineConfirm";
 import { OverflowMenu, type MenuItem } from "../OverflowMenu";
 import { nodeById, removableBox } from "../../lib/skySelect";
+import { pushUndo, undoAction } from "../../lib/skyUndo";
 import { FlywayCanvas } from "./FlywayCanvas";
 import { useGroundedLine } from "./useGroundedLine";
 import { Bird } from "./Bird";
@@ -63,6 +64,9 @@ export interface GroundedLineProps {
   registerDelete?(fn: ((node: string) => boolean) | null): void;
   /** Dragged by its bar over a session's line: the drop merges it there. */
   merging?: boolean;
+  /** Remove the line (the host: delete, toast with Undo, a Ctrl+Z entry
+   * that makes it again where it sat). Unset: deleted here, undoable. */
+  onRemove?(): Promise<unknown> | void;
 }
 
 /** A grounded line's name as typed: trimmed, at most 120 characters (the
@@ -75,7 +79,6 @@ export const groundedName = (f: Pick<Flight, "plan_name">) => f.plan_name || "St
 export function GroundedLine(p: GroundedLineProps): JSX.Element {
   const { flight } = p;
   const line = useGroundedLine(flight, { kinds: p.kinds, plans: p.plans });
-  const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   // The name being edited (null: shown), and where the bar's press began (a
   // click on the name renames; a drag that started there moves the line).
@@ -115,13 +118,19 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
     }
   };
 
+  // Remove: at once, never asked — a grounded line has nothing in the air.
   const remove = async () => {
+    if (busy) return;
     setBusy(true);
     try {
-      if (await deleteFlight(flight.id)) toast("Removed “" + name + "”");
+      if (p.onRemove) await p.onRemove();
+      else if (await deleteFlight(flight.id)) {
+        const steps = flight.steps;
+        const entry = pushUndo({ label: "Remove “" + name + "”", undo: () => startGrounded({ steps, ...(flight.plan_name ? { name: flight.plan_name } : {}) }) });
+        toast("Removed “" + name + "”", { action: undoAction(entry, "Undo: put “" + name + "” back on the board") });
+      }
     } finally {
       setBusy(false);
-      setConfirming(false);
     }
   };
 
@@ -136,7 +145,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
       className: "skl-mi-group",
       onSelect: () => void save(),
     },
-    { key: "remove", label: "Remove", danger: true, className: "skl-mi-group", title: "Take these stops off the board", onSelect: () => setConfirming(true) },
+    { key: "remove", label: "Remove", danger: true, className: "skl-mi-group", title: "Take these stops off the board (Ctrl+Z puts them back)", onSelect: () => void remove() },
   ];
 
   // The edit ends once: Enter or Esc hands the focus back to the line, and
@@ -179,7 +188,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
       line.canvas.onRemove(n);
       return true;
     }
-    setConfirming(true);
+    void remove();
     return true;
   };
   const deleteRef = useRef(deleteBox);
@@ -202,7 +211,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
     if (!isRemoveKey(e.key)) return;
     e.preventDefault();
     e.stopPropagation();
-    setConfirming(true);
+    void remove();
   };
 
   return (
@@ -264,21 +273,6 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
           <OverflowMenu label={"Actions for " + name} items={items} />
         </span>
       </div>
-      {confirming && (
-        <div className="skl-grounded-confirm" data-no-drag>
-          <InlineConfirm
-            title={"Remove “" + name + "”?"}
-            body={"Its " + flight.steps.length + (flight.steps.length === 1 ? " stop leaves" : " stops leave") + " the board. A saved stop on the shelf stays."}
-            confirmLabel="Remove"
-            busy={busy}
-            onConfirm={() => void remove()}
-            onCancel={() => {
-              setConfirming(false);
-              rootRef.current?.focus({ preventScroll: true });
-            }}
-          />
-        </div>
-      )}
       <div className="skl-grounded-body">
         <div className="skl-grounded-head" data-tour="sky-grounded" data-no-drag title="Drag the Session chip from the shelf here, or ⋯ → Fly on a session">
           <strong>No session yet</strong>

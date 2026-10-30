@@ -61,9 +61,14 @@ describe("the sky wires it", () => {
     expect(sky).toContain("if (!live) ok = !!(await attachGrounded(f.id, { title }));");
     expect(sky).toContain("else if (await tackOnSteps(live.id, steps, undefined, name || undefined)) ok = await deleteFlight(f.id);");
     expect(sky).toContain('const msg = "Moved " + n + (n === 1 ? " stop" : " stops") + " onto " + windowName(title);');
-    // Undo: the same stops grounded again, pinned where the line was.
-    expect(sky).toContain("void startGrounded({ steps, ...(name ? { name } : {}) }).then((g) => {");
-    expect(sky).toContain("patchSkyLine(l, groundedKey(g.id), { x: was.x, y: was.y, pinned: true })");
+    // Undo: the same stops grounded again, pinned where the line was — one
+    // entry on the sky's stack, the toast's button taking that same entry.
+    expect(sky).toContain("const entry = pushUndo({ label: msg, undo: () => reground(steps, name, was) });");
+    expect(sky).toContain("toast(msg, { action: undoAction(entry, ");
+    expect(sky).toContain("const g = await startGrounded({ steps, ...(name ? { name } : {}) });");
+    expect(sky).toContain("if (g && was) pinAt(groundedKey(g.id), was);");
+    expect(sky).toContain("if (alive.current) setLayout((l) => patchSkyLine(l, key, { x: at.x, y: at.y, pinned: true }));");
+    expect(sky).toContain("else patchSkyLine(loadSkyLayout(), key, { x: at.x, y: at.y, pinned: true });");
   });
 
   it("the target lights and the dragged line goes see-through", () => {
