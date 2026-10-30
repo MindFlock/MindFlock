@@ -62,7 +62,7 @@ carries its side of the journey. Flights are drawn in the Sky.
 | Fast-track depth (off→commit→push→pr→merge) | the **ship** stops of a flyway; a per-source depth still works and maps to the plain ship ladder at that rung (the agent, then commit → … → the depth — nothing else); an armed ⏩ is drawn as rung boxes on the session's line ([The session diagram](#the-session-diagram)) | `autopilot.json` |
 
 The top bar is **New · Grid / Sky · Intake · Verify · Schedule · Settings**:
-`Alt+I` / `Alt+V` / `Alt+S` open the three dialogs, `Alt+Y` switches to the
+`Alt+I` / `Alt+V` / `Alt+S` open the three dialogs, `Ctrl+Y` (⌘Y) switches to the
 sky (the main area's other view). The Sky half of the toggle counts the
 flights perched on you. Flyways are made, edited and flown from the Sky's
 **flyway shelf**. (Sky rounds 4–7 put Intake / Verify / Schedule behind one
