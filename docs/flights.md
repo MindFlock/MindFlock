@@ -3000,3 +3000,90 @@ interface StopCatalogProps {
   the mark and its TTL, both events and their subscription, the dialog's
   markup), `sessionMenu.test.ts` (the item's place, its dialog, the greyed
   *moving…*, where it is left out).
+### As built: round 12 guide
+
+**The tour** (`lib/tours/sky.ts`, id `sky`, title "Sky") is fourteen steps,
+one plain sentence each, in the order a newcomer meets the sky:
+
+| # | Step | Target (hook first, today's class on the same element second) |
+|---|---|---|
+| 1 | The same sessions, as lines | `[data-tour="view-sky"]` |
+| 2 | One line per session (drag the bar, ⋯) | `[data-tour="sky-line-bar"], [data-tour="sky-line"] .skl-bar` |
+| 3 | Boxes are stops (the session box opens the terminal) | `[data-tour="sky-session-box"], .sky .fl-box-session` |
+| 4 | The bird is where the flight is (click halts, drag jumps) | `[data-tour="flights-bird"]` |
+| 5 | Hover a stop for its tools | `[data-tour="sky-stop"], .sky .fl-box.fl-has-tools` |
+| 6 | Every stop edits in a dialog | `[data-tour="sky-stop"], .sky .fl-box-stop, .sky .fl-box-group` |
+| 7 | The shelf holds the blocks (defaults · saved stops · All blocks…) | `[data-tour="sky-shelf"]` |
+| 8 | Stops before a session (grounded line, Session chip) | `[data-tour="sky-grounded"], .skl-grounded-head, [data-tour="sky-shelf"]` |
+| 9 | Select an area (move, Group into a stop, Save to the shelf) | `[data-tour="sky-selbar"], .sky-selbar` |
+| 10 | Drag or Click (V / H / Space) | `[data-tour="sky-tool"]` |
+| 11 | Delete removes a box | `""` |
+| 12 | The intake lane (drag it, expand it) | `[data-tour="sky-intake"], .sky-intake` |
+| 13 | Zoom and fit (0 / 1 / + / −) | `[data-tour="sky-zoom"], .sky-toolbar .sky-zoom` |
+| 14 | The guide | `[data-tour="sky-guide"], .sky-toolbar .tour-btn` |
+
+A selector list matches in **document order** and the top bar comes before
+the sky, so the old four-step tour's `…, [data-tour="view-sky"]` fallbacks always
+ringed the toggle, never the line or the bird. No step past the first names
+the toggle now: a missing element (an empty sky, no flight, nothing selected,
+a hook not added yet) centres the card. The one fallback, step 8's shelf,
+sits after every line in the page. `tours.test.ts` pins the fourteen first
+selectors and that no later step names `view-sky`; the tour-length rule
+allows the Sky up to fifteen.
+
+**The guide** (`components/flights/SkyGuide.tsx` + `.css`): a wide `Modal`
+(`#sky-guide`, `.sky-guide-modal`, portalled) with the section list on the
+left and the section on the right, each with an inline SVG sketch (built
+from three small parts — a box, a bar, the bird — in `currentColor` and the
+theme tokens). Exports:
+
+- `SKY_GUIDE_SECTIONS` — `{id, title}` × 10: `what` What the sky is ·
+  `lines` Lines and boxes · `stops` Stops and saved stops · `bird` The bird ·
+  `halt` Halt points and Remove · `grounded` Grounded stops · `select`
+  Selection · `keys` Tools and the keyboard · `intake` The intake lane ·
+  `saved` Where things are saved.
+- `SKY_GUIDE_KEYS` — the keyboard table: V, H, Space (held), 0, 1, + / −, T,
+  Arrows, Delete, Esc, Ctrl+A, Enter, Alt+Y, Ctrl/Alt+N.
+- `useSkyGuide` (zustand `create`, like `DoctorList`'s warn store):
+  `{section: id | null, open(section?), close()}`; `openSkyGuide(section?)`
+  / `closeSkyGuide()` call it. An unknown section opens the first.
+- `SkyGuide(props?: {open, onClose, section?, portal?})` — given `open` it is
+  controlled; with no props it renders itself from `useSkyGuide`, so a host
+  mounts a bare `<SkyGuide />`. Keyed by the asked-for section, so asking
+  again while open follows it. Its **Replay the tour** goes through
+  `replayTour("sky")` (onboarding.test.ts lists the files allowed to call
+  `openCoachTour`).
+
+**Ways in.** The sky's **?** (`TourButton tour="sky"`, unchanged in
+SkyView) is now a two-item menu — *Replay the tour* · *Open the guide* —
+an inline DOM menu (`role="menu"`, Esc / a press elsewhere folds it; styles
+in `SkyGuide.css`); every other tour's ? is the one button it was. The
+palette's **Learn the Sky** runs `setView("sky")` then `openSkyGuide()`.
+
+**For the orchestrator — edits outside this worker's fence:**
+
+1. Mount the guide once in `SkyView.tsx`: `import { SkyGuide } from
+   "./SkyGuide";` and `<SkyGuide />` inside both `<main id="sky-view">`
+   returns (the narrow one too), e.g. right after `{toolbar}`. Without it the
+   ? menu's *Open the guide* and the palette's *Learn the Sky* set the store
+   but nothing draws.
+2. The `data-tour` hooks the tour asks for (each on the element named, so
+   the hook and today's class match the same node):
+   - `sky-line-bar` — SkyLine.tsx's `.skl-bar` (session lines);
+   - `sky-session-box` — FlywayCanvas.tsx's `.fl-box-session` box (the sky's
+     lines; harmless on the Flight tab);
+   - `sky-stop` — FlywayCanvas.tsx, the first stop box that wears
+     `.fl-has-tools` on a line (one per line is fine: the first visible wins);
+   - `flights-bird` — keep it on `.fl-bird-marker` (Bird.tsx) through the bird
+     drag work;
+   - `sky-grounded` — GroundedLine.tsx's `.skl-grounded-head`;
+   - `sky-selbar` — SkySelection.tsx's `.sky-selbar`;
+   - `sky-tool` — the new ✥ Drag · ☝ Click toggle in SkyView's toolbar (the
+     **only** step with no class to fall back on today: it centres until
+     this lands);
+   - `sky-intake` — SkyView.tsx's `.sky-intake` slot itself (not the lane's
+     head inside it: the slot comes first in document order and would win);
+   - `sky-zoom` — SkyView.tsx's `.sky-zoom` group;
+   - `sky-catalog` — the shelf's **All blocks…** chip (StopShelf.tsx): not
+     used by the tour yet (the shelf, its ancestor, would win a list), named
+     for a later step.
