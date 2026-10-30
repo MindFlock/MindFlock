@@ -126,6 +126,14 @@ _PUBLIC_FLEET_CANCEL = re.compile(r"/api/fleet/requests/[a-f0-9]{16}/cancel")
 #: (backend.web.core.voice_actions). POST only — the route has no GET — and
 #: exactly that shape, so nothing else under /api/notify opens up.
 _PUBLIC_VOICE_ACT = re.compile(r"/api/notify/act/[a-f0-9]{32}")
+#: ``/api/hooks/flight/<token>`` — a flight stop's inbound hook (the ``listen``
+#: kind: Grafana, Slack, CI post to it) and ``…/<token>/done`` — the
+#: ``someone`` perch's one-tap page, opened by a person who holds no
+#: credential of ours (backend.web.core.flight_kinds._hooks). The token IS
+#: the credential: 32 lower-case hex, bound to one stop, spent on use, 404
+#: otherwise. POST for both; GET only for the ``/done`` page (it has no side
+#: effect).
+_PUBLIC_FLIGHT_HOOK = re.compile(r"/api/hooks/flight/[a-f0-9]{32}(/done)?")
 
 # Member-to-member routes: each handler checks the fleet key itself and
 # refuses with the fleet-aware 401 (fleet.unauthorized_body: id, key epoch,
@@ -1051,6 +1059,19 @@ def _public_voice_act_route(scope) -> bool:
     )
 
 
+def _public_flight_hook_route(scope) -> bool:
+    """Whether ``scope`` is a flight stop's hook (see
+    :data:`_PUBLIC_FLIGHT_HOOK`) — HTTP only, POST to either shape, GET only
+    to the ``/done`` page."""
+    if scope.get("type") != "http":
+        return False
+    method = str(scope.get("method") or "").upper()
+    m = _PUBLIC_FLIGHT_HOOK.fullmatch(scope.get("path", ""))
+    if m is None:
+        return False
+    return method == "POST" or (method == "GET" and m.group(1) is not None)
+
+
 def _record_person(scope, headers: list) -> None:
     """Put the relaying device's person (``X-MindFlock-Person``, only beside
     the remote marker) on the request state as ``person`` — ``""`` for
@@ -1105,6 +1126,7 @@ class AuthMiddleware:
             path in _PUBLIC_PATHS
             or _public_fleet_route(scope)
             or _public_voice_act_route(scope)
+            or _public_flight_hook_route(scope)
         )
         member_route = _member_fleet_route(scope)
 
