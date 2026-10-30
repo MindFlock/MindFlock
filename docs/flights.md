@@ -4544,3 +4544,102 @@ review's), so a restart after posting but before the verdict posts again.
 
 Open: the verify checklist's deep link does not carry the preview URL yet
 (outside this fence); nothing in the frontend shows `detail.shots` yet.
+### As built: round 15 when-judge
+
+**`when` (`backend/web/core/flight_when.py`, pure).** `parse(text) -> Cond`
+(a nested tuple: `("touches", [globs])`, `("lines", ">", n)`, `("files", "<",
+n)`, `("weekday",)`, `("weekend",)`, `("hour", h1, h2)`, `("branch", glob)`,
+`("label", name)`, `("judge", sid_or_"", value)`, `("always",)`, `("never",)`,
+`("not", c)`, `("and", a, b)`, `("or", a, b)`), `canonical(cond)`,
+`evaluate(cond, facts) -> (bool, why)`, `needs(cond) -> {"diff", "labels",
+"clock", "branch", "judge"}`, `matches(path, glob)`. Case-insensitive words,
+`and` tighter than `or`, `not` a prefix, parentheses allowed; `WhenError(message,
+hint)` names the problem ("files needs a whole number, not 'x'", "expected
+'and' here, found the end") and the hint lists the words. Canonical: lower-case
+words, one space, globs as typed, `and` chains flat, parentheses only where an
+`or` sits under `and` or `not`. A judge value is lower-cased; a label is
+compared case-insensitively. Globs: `frontend/**` and `frontend/` and a bare
+`frontend` mean under that folder (anywhere in the tree for the trailing-slash
+form), `*.sql` matches the file name anywhere, a pattern with a `/` matches the
+whole path (`*` never crosses `/`, `**` does, `a/**/b` also matches `a/b`),
+a bare file name matches at any depth. `hour between H1 and H2` is `[H1, H2)`
+and wraps past midnight when `H2 < H1`; `H1 == H2` is always true. A missing
+fact reads as empty: no diff → "the diff touches no file", no labels → "no
+labels", no judge → "the judge has not answered". `why` for `and` is the first
+false side (or the trues joined with `; ` when it holds), for `or` the first
+true side (or all the falses joined).
+
+**Core (`flights.py`).** `normalize_step` keeps `when` canonicalised (≤ 300
+chars; strict → `PlanError(message, "steps[i].when")`; lenient → dropped);
+`_normalize_when(raw, strict, where)` is what the route calls too. A pending
+step's `when` is judged right after the halt point (a halt still pauses before
+a skipped step) and before the `you` / ticket shortcuts and the session hold:
+`obs["facts"]` present and false → `{"action": "skip_when", "note": "skipped:
+<canonical> — <why>"}`; `apply` records it as `skipped` (state, note, history
+`skipped`, cursor on) and the driver's chain carries on into the next step in
+the same pass; facts absent with a `when` → wait "checking <canonical>" (a
+safety net: the driver always gathers them); a stored `when` nobody can parse
+never blocks a flight (it runs). `fill_prompt` gains `{preview}` =
+`preview_url(flight)`, the latest done `preview` stop's `detail.url` or "".
+
+**Driver facts (`flight_driver.py`).** `observe` gathers `obs["facts"]` only for
+a pending step with a `when`, and only the groups `needs` names (`when_facts`):
+`clock` = the server's local hour + weekday (Monday 0), `branch` = the row's
+branch (else the flight's), `judge` = `when_judges(flight, step)` → `{sid:
+value}` of every done judge stop + `judge_last` = the nearest earlier one,
+`labels` = `_when_labels` (the subject's number when it is a PR / issue, else
+the PR found from the branch, then `GET /repos/{slug}/issues/{n}/labels` with
+the existing token; cached 60 s per flight; `[]` without a PR, token or answer),
+`diff` = `when_diff(flight, folder)` → `{files, added, removed, base, head}`.
+**The base** is `diff_base`: the server's `_session_base_branch(inst)` (the
+recorded base, else `origin/HEAD` → main/master → the configured base), else
+`origin/HEAD`'s target, then main / master; each candidate is tried as the local
+branch first, its `origin/` twin second, verified with `rev-parse --verify`.
+The diff is the **working tree** against the merge-base (`git diff --numstat
+<merge-base>` + `ls-files --others --exclude-standard`, untracked files counted
+by their lines, ≤ 200 of them), so a condition before the first commit still
+sees the agent's edits. **The cache** `_WHEN_DIFF` is keyed `(flight id, HEAD
+sha + a sha1 of git status --porcelain)`: a warm pass costs `rev-parse` +
+`status`, an edit or a commit misses; ≤ 64 entries, the flight's own evicted
+first. A group that cannot be gathered reads as empty (logged); the condition
+decides, the flight never wedges. `diff_stat_text(diff)` renders the facts for
+a model prompt.
+
+**Route.** `GET /api/flights/when?expr=…` → `{ok, canonical, error, field,
+hint}` (`field` is `when` on an error; empty `expr` is ok with `""`). Before
+the `{flight_id}` routes.
+
+**Judge (`flight_kinds/judge.py`, kind `judge`, family work, robot, risk none,
+`needs_session` + `types_to_agent`).** Config `question` (textarea, required
+strict → `steps[i].config.question`), `options` (text; comma- or line-separated,
+lower-cased, deduplicated, ≤ 12, default "yes, no", stored as "a, b"), `by`
+model | agent (default model; strict → `steps[i].config.by`). Default title
+"Judge: <first line of the question, 50 chars>". `by: model`: `run` starts a
+thread (`_ANSWERS[(fid, sid)] = {running, answer, error}`, like the command
+kind's job) that asks `_ask_model(prompt)` — the describe machinery
+(`flight_describe._program` + `commit_message.pick_argv/_run/neutral_cwd`,
+60 s) — with `diff_stat_text(when_diff(...))` + the question + "Answer with
+exactly one of: <options>"; `observe` returns the record, `judge` waits
+"asking the model: <question>", fails with the one-shot's reason, else `pick`
+reads the answer (the last `ANSWER:` line when there is one, else the text;
+exact option first, else the one option appearing as a whole word on the last
+line) → done `detail {value, receipt: value, answer (≤ 300)}`, note "the model
+answered yes"; outside the options → fail "the model answered '<last line>' —
+not one of yes, no". A lost thread (restart) → run again. `by: agent`: `run`
+delivers `agent_prompt` (the question + "Reply with exactly one line of the
+form ANSWER: <one of: …>") through `_deliver`; `judge` runs `flights._settle`
+(worked + idle for the settle window), then reads `obs["judge"]["answer"]`,
+which `observe` fills — only while the agent is idle — from
+`session_stats._agent_transcript_text(folder, tmux name)` via `answer_after`:
+the first `ANSWER:` line AFTER the last occurrence of the question (never an
+earlier judge's). No line → fail "the agent gave no ANSWER: line"; no
+transcript (a non-Claude session) → fail "… (by: agent needs a Claude session)
+— use by: model". So `by: agent` is built, Claude sessions only.
+
+**Limits.** `label` needs a token and a PR / issue number; the model judge
+costs one one-shot per run (no cache: the diff may have moved); the diff
+counts untracked files up to 200 and reads ≤ 1 MB of each; `judge is` with no
+earlier judge stop reads "the judge has not answered" (false). `{preview}`
+fills from a `preview` stop that the `preview-shots` task builds. Nothing in
+the frontend yet (`when-ui`). Tests: `tests/unit/test_flight_when.py`,
+`tests/unit/test_flight_kind_judge.py`.

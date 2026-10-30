@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import datetime as _dt
+import hashlib
 import os
 import subprocess
 import threading
@@ -36,6 +37,7 @@ from typing import Dict, List, Optional, Tuple
 from backend.web.core import autopilot as _autopilot
 from backend.web.core import events as _events
 from backend.web.core import flight_kinds as _kinds
+from backend.web.core import flight_when as _when
 from backend.web.core import flights as _flights
 from backend.web.core import prompt_queue as _prompt_queue
 from backend.web.core.flight_kinds import StepFailed as _StepFailed
@@ -468,6 +470,244 @@ async def _failing_checks(wt: str, branch: str) -> List[str]:
     ][:12]
 
 
+# --- ``when``: the facts a pending step's condition reads ---------------------
+#: (flight id, HEAD sha + working-tree fingerprint) -> the diff facts.
+_WHEN_DIFF: Dict[Tuple[str, str], dict] = {}
+_WHEN_DIFF_KEEP = 64
+#: flight id -> {at, labels}: the PR / issue labels, asked at most once a minute.
+_WHEN_LABELS: Dict[str, dict] = {}
+_WHEN_LABELS_EVERY_S = 60.0
+_UNTRACKED_MAX = 200
+
+
+def _git_out(folder: str, *args: str, timeout: float = 30.0) -> str:
+    """Stripped stdout of ``git -C folder …``, "" on any failure."""
+    try:
+        cp = subprocess.run(
+            ["git", "-C", folder, "--no-pager", *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if cp.returncode != 0:
+        return ""
+    return cp.stdout.decode("utf-8", "replace").strip()
+
+
+def _ref_ok(folder: str, ref: str) -> bool:
+    return bool(ref) and bool(
+        _git_out(folder, "rev-parse", "--verify", "-q", ref + "^{commit}")
+    )
+
+
+def diff_base(flight: dict, folder: str) -> str:
+    """The ref a flight's diff is measured against: the session's base branch
+    when the row knows one (the server's ``_session_base_branch``: recorded at
+    creation, else ``origin/HEAD``), else ``origin/HEAD``'s target, falling
+    back to main / master — the local branch first, its remote-tracking twin
+    second. "" when nothing verifies (no diff facts then)."""
+    if not folder or not os.path.isdir(folder):
+        return ""
+    srv = _server()
+    inst = None
+    try:
+        inst = srv.ENGINE.instances.get(flight.get("session") or "")
+    except Exception:  # noqa: BLE001
+        inst = None
+    base = ""
+    if inst is not None:
+        try:
+            base = str(srv._session_base_branch(inst) or "")
+        except Exception:  # noqa: BLE001 — an older server, a fake
+            base = str(getattr(inst, "BaseBranch", "") or "")
+    if not base:
+        head = _git_out(
+            folder, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"
+        )
+        base = head[len("origin/") :] if head.startswith("origin/") else head
+    cands: List[str] = []
+    for name in ([base] if base else []) + ["main", "master"]:
+        if name.startswith("origin/"):
+            cands += [name, name[len("origin/") :]]
+        else:
+            cands += [name, "origin/" + name]
+    for ref in cands:
+        if _ref_ok(folder, ref):
+            return ref
+    return ""
+
+
+def when_diff(flight: dict, folder: str) -> dict:
+    """``{files, added, removed, base, head}`` of the session's work against
+    :func:`diff_base` — the working tree included, so a condition before the
+    first commit still sees the agent's edits (plus untracked files, counted
+    by their lines). Blocking; cached per (flight, HEAD sha + a fingerprint
+    of ``git status``) so a pass costs one ``git status`` once it is warm."""
+    empty = {"files": [], "added": 0, "removed": 0, "base": "", "head": ""}
+    if not folder or not os.path.isdir(folder):
+        return dict(empty)
+    head = _git_out(folder, "rev-parse", "HEAD")
+    if not head:
+        return dict(empty)
+    status = _git_out(folder, "status", "--porcelain", "--untracked-files=all")
+    key = (
+        flight["id"],
+        head + ":" + hashlib.sha1(status.encode("utf-8")).hexdigest()[:12],
+    )
+    hit = _WHEN_DIFF.get(key)
+    if hit is not None:
+        return dict(hit, files=list(hit["files"]))
+    base = diff_base(flight, folder)
+    files: List[str] = []
+    added = removed = 0
+    if base:
+        since = _git_out(folder, "merge-base", base, "HEAD") or base
+        for line in _git_out(folder, "diff", "--numstat", since).splitlines():
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            files.append("\t".join(parts[2:]))
+            added += int(parts[0]) if parts[0].isdigit() else 0
+            removed += int(parts[1]) if parts[1].isdigit() else 0
+        for name in _git_out(
+            folder, "ls-files", "--others", "--exclude-standard"
+        ).splitlines()[:_UNTRACKED_MAX]:
+            if not name or name in files:
+                continue
+            files.append(name)
+            try:
+                with open(os.path.join(folder, name), "rb") as fh:
+                    added += fh.read(1 << 20).count(b"\n")
+            except OSError:
+                pass
+    rec = {
+        "files": files,
+        "added": added,
+        "removed": removed,
+        "base": base,
+        "head": head,
+    }
+    if len(_WHEN_DIFF) >= _WHEN_DIFF_KEEP:
+        for k in [k for k in _WHEN_DIFF if k[0] == flight["id"]] or [
+            next(iter(_WHEN_DIFF))
+        ]:
+            _WHEN_DIFF.pop(k, None)
+    _WHEN_DIFF[key] = rec
+    return dict(rec, files=list(files))
+
+
+def diff_stat_text(diff: dict, limit: int = 4000) -> str:
+    """``when_diff``'s facts as the lines a model is shown: ``path (+a -r)``
+    per file, the totals last."""
+    lines = ["%s" % f for f in diff.get("files") or []]
+    text = "\n".join(lines)[:limit]
+    return "%s\n%d files, +%d -%d" % (
+        text or "(no changed files)",
+        len(diff.get("files") or []),
+        int(diff.get("added") or 0),
+        int(diff.get("removed") or 0),
+    )
+
+
+async def _when_labels(flight: dict, sess: dict, now: float) -> List[str]:
+    """The labels on the flight's PR (found from the branch) or on its
+    subject issue / PR; ``[]`` without one, a token or an answer."""
+    from backend.web.core import github_pr as _gh
+
+    cache = _WHEN_LABELS.get(flight["id"])
+    if cache and now - cache["at"] < _WHEN_LABELS_EVERY_S:
+        return list(cache["labels"])
+    labels: List[str] = []
+    try:
+        number, slug = 0, ""
+        subj = flight.get("subject") or {}
+        folder = sess.get("folder") or ""
+        if subj.get("kind") in ("pr", "issue") and str(subj.get("id") or "").isdigit():
+            number = int(subj["id"])
+            ref = await asyncio.to_thread(_gh.repo_ref, folder) if folder else None
+            slug = ref.slug if ref is not None else ""
+        if not (number and slug):
+            pr, slug = await _pr_of(sess, flight)
+            number = int(pr.number) if pr is not None else 0
+        token = await _gh.api_token() if number and slug else ""
+        if token:
+            status, data = await _gh._request(
+                "GET",
+                "/repos/{}/issues/{}/labels".format(slug, number),
+                token=token,
+                params={"per_page": "100"},
+            )
+            if status == 200 and isinstance(data, list):
+                labels = [
+                    str(d.get("name"))
+                    for d in data
+                    if isinstance(d, dict) and d.get("name")
+                ]
+    except Exception as err:  # noqa: BLE001 — no labels, the condition says so
+        _log("flight %s: labels unavailable: %v", flight["id"], err)
+        labels = []
+    _WHEN_LABELS[flight["id"]] = {"at": now, "labels": labels}
+    return list(labels)
+
+
+def when_judges(flight: dict, step: dict) -> Tuple[Dict[str, str], Optional[str]]:
+    """``({sid: value} of every done judge stop, the nearest earlier one's
+    value or None)`` for ``step``."""
+    judges: Dict[str, str] = {}
+    last: Optional[str] = None
+    for s in flight.get("steps") or []:
+        if s.get("kind") != "judge":
+            continue
+        ss = (flight.get("step_states") or {}).get(s["id"]) or {}
+        value = (ss.get("detail") or {}).get("value")
+        if ss.get("state") == "done" and value not in (None, ""):
+            judges[s["id"]] = str(value)
+    for s in flight.get("steps") or []:
+        if s["id"] == step["id"]:
+            break
+        if s["id"] in judges:
+            last = judges[s["id"]]
+    return judges, last
+
+
+async def when_facts(flight: dict, step: dict, sess: dict, now: float) -> dict:
+    """``obs["facts"]`` for a pending step with a ``when``: only the groups
+    its condition reads (:func:`flight_when.needs`) — ``diff`` (git in the
+    session's folder), ``labels`` (GitHub), ``clock`` (the server's local
+    time), ``branch``, ``judge`` (the flight's done judge stops). A group
+    that cannot be gathered reads as empty: the condition decides, the
+    flight never wedges on it."""
+    try:
+        cond = _when.parse(step.get("when") or "")
+    except _when.WhenError:
+        return {}
+    need = _when.needs(cond)
+    facts: dict = {}
+    if "clock" in need:
+        t = time.localtime(now)
+        facts["hour"] = t.tm_hour
+        facts["weekday"] = t.tm_wday
+    if "branch" in need:
+        facts["branch"] = sess.get("branch") or flight.get("branch") or ""
+    if "diff" in need:
+        try:
+            d = await asyncio.to_thread(when_diff, flight, sess.get("folder") or "")
+        except Exception as err:  # noqa: BLE001
+            _log("flight %s: diff facts unavailable: %v", flight["id"], err)
+            d = {"files": [], "added": 0, "removed": 0}
+        facts["files"] = d["files"]
+        facts["added"] = d["added"]
+        facts["removed"] = d["removed"]
+    if "labels" in need:
+        facts["labels"] = await _when_labels(flight, sess, now)
+    if "judge" in need:
+        facts["judges"], facts["judge_last"] = when_judges(flight, step)
+    return facts
+
+
 async def observe(flight: dict, now: float) -> dict:
     """The observation :func:`flights.next_action` decides from."""
     step = _flights._current(flight)
@@ -485,6 +725,8 @@ async def observe(flight: dict, now: float) -> dict:
     obs: dict = {"now": now, "session": sess}
     if ss["state"] in ("pending", "running"):
         await _guard_obs(flight, sess, now, obs)
+    if ss["state"] == "pending" and step.get("when"):
+        obs["facts"] = await when_facts(flight, step, sess, now)
     if ss["state"] not in ("running", "waiting_you"):
         return obs
     if kind == "ship" or (kind == "reviews" and ss["detail"].get("phase") == "push"):
@@ -1519,7 +1761,7 @@ async def step_flight(fid: str) -> None:
                     _JOBS.pop((fid, cur["id"]), None)
             await asyncio.to_thread(_announce, before, after)
             if (
-                action["action"] not in ("done", "advance")
+                action["action"] not in ("done", "advance", "skip_when")
                 or after["state"] not in _flights.ACTIVE
             ):
                 return

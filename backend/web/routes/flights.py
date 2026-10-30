@@ -19,6 +19,7 @@ from backend.web.core import flight_describe as _describe
 from backend.web.core import flight_driver as _driver
 from backend.web.core import flight_kinds as _kinds
 from backend.web.core import flight_triggers as _triggers
+from backend.web.core import flight_when as _when
 from backend.web.core import flights as _flights
 
 router = APIRouter()
@@ -35,6 +36,26 @@ def flights_kinds() -> JSONResponse:
     """The step registry: ``{"kinds": [{kind, label, actor, summary, fields,
     default_title}], "on_fail"}``."""
     return JSONResponse(_flights.kinds_dto())
+
+
+@router.get("/api/flights/when")
+def flights_when(expr: str = "") -> JSONResponse:
+    """Validate a step's ``when`` for the editor → ``{ok, canonical, error,
+    field, hint}`` (``field`` is ``when`` on an error; an empty expression
+    is ok with an empty canonical form)."""
+    try:
+        canonical = _flights._normalize_when(expr, True, "")
+    except _flights.PlanError as err:
+        return JSONResponse(
+            {
+                "ok": False,
+                "canonical": "",
+                "error": err.message,
+                "field": "when",
+                "hint": _when._HINT,
+            }
+        )
+    return JSONResponse({"ok": True, "canonical": canonical, "error": "", "field": ""})
 
 
 @router.get("/api/flights/plans")
