@@ -185,6 +185,12 @@ EVENT_NAMES = (
     # {"name": str}). Every open browser — the owner's others, a guest's —
     # re-reads the alias map on it, so a rename shows everywhere at once.
     "session.renamed",
+    # A session's workspace moved to a new folder (POST /api/instances/
+    # {title}/move, core.move_session): ``old``/``new`` are the folders, data:
+    # {"title", "from", "to"}. Or the move failed, data: {"title", "error",
+    # "path"} (``path`` = where the workspace is now).
+    "session.moved",
+    "session.move_failed",
     # A background job the agent left running first passed the duration it
     # was expected to take (a person's, the agent's, or the command's own
     # MINDFLOCK_EXPECT=; see providers.claude_background) — at 1×, not the

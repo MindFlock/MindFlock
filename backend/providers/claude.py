@@ -577,6 +577,12 @@ class ClaudeProvider(BaseProvider):
         # starting the CLI), so every launch is also pre-trusted (F2).
         pre_trust_workdir(workdir)
 
+    def carry_workdir(self, old: str, new: str) -> None:
+        # Transcripts live per folder (projects/<slug of cwd>/<id>.jsonl) and
+        # `--resume <id>` only looks in the current folder's: copy them over.
+        # Trust and hooks need no carrying — the relaunch re-pins both.
+        carry_project_dirs(old, new)
+
     # --- red-zone guard --------------------------------------------------- #
     def red_zone_guard(self) -> bool:
         # Claude Code's PreToolUse deny hard-blocks a zoned edit (verified under
@@ -1106,17 +1112,45 @@ def _ts_epoch(s) -> Optional[float]:
     return ts_epoch(s)
 
 
+def _project_slug(workdir: str) -> str:
+    """The ``projects/<slug>`` dir name Claude Code keeps ``workdir``'s
+    transcripts under: every non-alphanumeric character becomes ``-``."""
+    import re
+
+    return re.sub(r"[^a-zA-Z0-9]", "-", workdir)
+
+
+def carry_project_dirs(old: str, new: str) -> None:
+    """COPY ``old``'s transcript dirs (every config root that has one) to
+    ``new``'s slug beside them, so ``--resume <id>`` launched in ``new`` finds
+    the thread. A copy, not a move: the old folder's history survives a move
+    undone by hand. Merges into an existing target; best-effort per root."""
+    import os
+    import shutil
+
+    if not old or not new or _project_slug(old) == _project_slug(new):
+        return
+    for proj in _claude_project_dirs(old):
+        dst = os.path.join(os.path.dirname(proj), _project_slug(new))
+        try:
+            shutil.copytree(proj, dst, dirs_exist_ok=True)
+        except Exception as err:  # noqa: BLE001 — never fail a move over history
+            from backend import log
+
+            if log.ErrorLog is not None:
+                log.ErrorLog.Printf("carry %s -> %s failed: %v", proj, dst, err)
+
+
 def _claude_project_dirs(workdir: str):
     """Claude Code transcript project dirs for ``workdir``, across every
     ``~/.claude*`` config root (plus ``$CLAUDE_CONFIG_DIR`` and each claude
     auth-profile account dir) — wrappers, alternate installs, and per-account
     profiles all keep separate config dirs. Existing dirs only."""
     import os
-    import re
 
     if not workdir:
         return []
-    encoded = re.sub(r"[^a-zA-Z0-9]", "-", workdir)
+    encoded = _project_slug(workdir)
     home = os.environ.get("HOME", "")
     roots = set()
     cfg = os.environ.get("CLAUDE_CONFIG_DIR")

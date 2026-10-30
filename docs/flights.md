@@ -2871,3 +2871,40 @@ the sky's selection is on a box that is not the session itself.
   `Modal`: the folder field with Tab completion from `components/PathField`,
   a line saying what will happen, Move) → a toast on `session.moved`, the error
   card on `session.move_failed`. The row shows "moving…" meanwhile.
+
+### As built: round 12 move backend
+
+- **Route** (`server.py`, route only): `POST /api/instances/{title}/move
+  {dest, force}` → `core/move_session.check` (on a worker thread) → **202**
+  `{title, from, to}` and `move_session.start` runs the move as a task on the
+  server's loop. Refusals answer `{error, code}`: 404 `unknown_session`, 400
+  `bad_dest` / `bad_source` (a repo's sub-folder), 409 `exists` / `working` / `in_flight` / `moving` / `remote` /
+  `peer_share` / `not_ready`. `working` reads `_agent_activity` (the probe
+  ship-now uses); `in_flight` is `flights.for_session` in `ACTIVE` (running /
+  waiting on you — a paused flight does not hold it) or an autopilot record
+  with `state == "running"`. `force` skips both. A device row (`dev::title`) is
+  proxied to that device before the route runs; `check` refuses one anyway.
+- **Background run** (`move_session.run`): the tmux env is rebuilt first (port
+  block + auth-profile / local-model overlay, as the resume route does), then
+  the engine's `MoveWorkspace(ENGINE.instances, title, dest, save=ENGINE.save)`;
+  every unfinished flight whose `repo_root` was the session's old repo path
+  (an in-place session or a main clone moved) is pointed at the new one; a
+  sleep record is dropped (the agent came back up awake). Then
+  `session.moved` (`old`/`new` = the folders, data `{title, from, to}`) or
+  `session.move_failed` (data `{title, error, path}`, `path` = where the
+  workspace is now). `move_session.moving(title)` → `{from, to}` while it runs
+  (not yet on the row JSON: `server._instance_json` is outside this round's
+  backend fence — the frontend shows "moving…" from the 202 until the event).
+- **Engine** (`session/instance.py`): `Instance.MoveWorkspace(dest)` +
+  module-level `MoveWorkspace(instances, title, dest, save)`, `CheckMoveDest`,
+  `MoveError(code)`; Resume's current-scheme relaunch became
+  `_relaunch_in_worktree()`, shared with the move. Exact steps in
+  docs/session-engine.md.
+- **Providers**: `carry_workdir(old, new)` on the base (no-op); Claude copies
+  `projects/<slug old>` → `projects/<slug new>` in every config root; Codex is
+  an explicit no-op (rollouts are keyed by session id); generic inherits the
+  no-op.
+- **Not handled**: a cross-filesystem move of a folder other windows' agents
+  are running in (their cwd goes with a rename, not with a copy); Codex's
+  per-session token usage is matched by `cwd`, so turns before the move stop
+  counting toward the session.

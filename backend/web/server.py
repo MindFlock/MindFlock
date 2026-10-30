@@ -57,6 +57,8 @@ modules under
                      mail between them) and the row's last_report
     mailbox          inter-agent messages: store, exactly-once states, the
                      typed delivery line (the lane + routes live here)
+    move_session     moving a session's workspace to a new folder (the
+                     /move route's refusals, background run, session.moved)
     mobile_access    phone access: tailscale URLs, QR codes, startup banner
     pane_find        in-place Ctrl+F in a live pane (tmux copy-mode search)
     pane_scroll_find in-place Ctrl+F for apps that scroll themselves (wheel + look)
@@ -179,6 +181,7 @@ from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirnam
 # Core modules the monolith was split into (see backend.web/core/).
 from backend.web.core import aliases as _aliases
 from backend.web.core import guests as _guests
+from backend.web.core import move_session as _move_session
 from backend.web.core import guest_terminal as _guest_terminal
 from backend.web.core import guest_tunnel as _guest_tunnel
 from backend.web.core import hidden_sessions as _hidden_sessions
@@ -4460,6 +4463,35 @@ async def instance_resume(title: str) -> JSONResponse:
         new=getattr(inst.Status, "name", str(inst.Status)).lower(),
     )
     return JSONResponse(_instance_json(inst))
+
+
+@app.post("/api/instances/{title}/move")
+async def instance_move(title: str, payload: Optional[dict] = None) -> JSONResponse:
+    """Move the session's workspace to a new folder, live: ``{"dest": "<absolute
+    folder>", "force": false}`` → **202** ``{"title", "from", "to"}``; the
+    move runs in the background (:mod:`backend.web.core.move_session`) and
+    emits ``session.moved`` or ``session.move_failed``. 404
+    ``unknown_session``; 409 ``remote`` / ``exists`` / ``moving``; 400
+    ``bad_dest``; 409 ``working`` / ``in_flight`` unless ``force``."""
+    refusal, plan = await asyncio.to_thread(
+        _move_session.check,
+        ENGINE.instances,
+        title,
+        payload or {},
+        lambda inst: _agent_activity(inst, title),
+    )
+    if refusal is not None:
+        return JSONResponse(refusal[1], status_code=refusal[0])
+    if not _move_session.start(
+        ENGINE,
+        plan,
+        lambda inst: {**_session_overlay_env(inst), **_ports.env_for(title)},
+    ):
+        return JSONResponse(
+            {"error": "this session is already being moved", "code": "moving"},
+            status_code=409,
+        )
+    return JSONResponse(plan, status_code=202)
 
 
 @app.post("/api/instances/{title}/background/{pid}/stop")
