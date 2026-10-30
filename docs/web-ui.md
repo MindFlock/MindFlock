@@ -33,7 +33,7 @@ the theme toggle 🌙, the notifications 🔔 bell, whose one amber badge counts
 everything that needs you (see [Notifications](#notifications-)), and the
 mic right after it (below: talk to the focused session). Then the menu,
 which carries only the daily loop — **New**, the **Grid · Sky** toggle
-(`Alt+Y`; see [Two views](#two-views-the-grid-and-the-sky) — on the bar only
+(`Ctrl+Y`; see [Two views](#two-views-the-grid-and-the-sky) — on the bar only
 while the sidebar, its home, is hidden or the window is phone-narrow), **Intake**
 (`Alt+I`; see [Intake](#intake)), **Verify** (`Alt+V`), **Schedule**
 (`Alt+S`; see [Schedule](#schedule)) and **Settings** — and ends in a
@@ -2689,7 +2689,7 @@ built-in alias.
 | `Ctrl+B` | Toggle sidebar |
 | `Ctrl+N` / `Alt+N` | New-session dialog — in the sky, a new-session card in the middle of the view |
 | `Alt+I` | Intake — tickets, PRs and issues waiting to become sessions |
-| `Alt+Y` | Switch views — the grid of panes ⇄ the sky of lines (see [Two views](#two-views-the-grid-and-the-sky)); fires from a terminal too, never from a text field or behind a dialog |
+| `Ctrl+Y` | Switch views — the grid of panes ⇄ the sky of lines (see [Two views](#two-views-the-grid-and-the-sky)); fires from a terminal too, never from a text field or behind a dialog |
 | `Alt+V` | Verify — pushed changes nobody has checked |
 | `Alt+S` | Schedule — templates (and scheduled flyways) that start sessions on their own |
 | `Ctrl+T` (`Alt+Space` is the browser-safe alias: Chrome reserves Ctrl+T for a new tab) | Talk to the focused session through the top-bar mic — hold it (hold-to-talk) or press once to start and again to stop (click-to-talk), following the mic's push-to-talk mode. Works while a terminal has focus; the keystroke never reaches the terminal (no readline transpose; Option+Space on a Mac types no non-breaking space either). Key-repeat while held is ignored, and letting go of either key — or switching away from the window — ends a hold. The keymap only reports the key: it fires a `mindflock:voice-talk` window event with `detail.phase` `"down"` / `"up"`, and the mic decides what that means. Rebindable like the rest; a rebind applies to the release as well as the press |
@@ -3835,7 +3835,7 @@ one box, *perch* = a stop that waits on you. The glyph is a small bird
 
 **Where it all is — no dialog of its own.** Flights are drawn in the
 [Sky](#two-views-the-grid-and-the-sky) (the main area's second view, the top
-sidebar's **Grid · Sky** toggle, `Alt+Y`): every session a line, the bird on the
+sidebar's **Grid · Sky** toggle, `Ctrl+Y`): every session a line, the bird on the
 stop each flight is at, what is perched on you in the drawer. **Flyways live
 on the Sky's shelf** (below). Intake, Verify and Schedule — three sides of the
 same journey — are the flat top-bar dialogs they always were: Intake's source
@@ -3996,7 +3996,7 @@ the shelf or Schedule's **Fly now**, a template's Run now:
 otherwise, 2 min on a server without the routes), and `flight.changed`,
 `flight.needs_you` and `flight.finished` refetch at once.
 
-**Keys and the palette.** `Alt+Y` switches to the Sky (and back); `Alt+I`,
+**Keys and the palette.** `Ctrl+Y` switches to the Sky (and back); `Alt+I`,
 `Alt+V` and `Alt+S` open Intake, Verify and Schedule. The palette has
 **Switch to the Sky** / **Switch to the grid**, **Stops…** (the Sky
 with its shelf open) and **Learn the Sky** (the Sky guide), beside **Intake…** (and each Intake tab), **Verify…**
@@ -4106,7 +4106,7 @@ All through `lib/viewMode.ts` (`setView`, `toggleView`, `showInSky`):
   window (glyphs only there, and the last thing a narrow bar folds — into ⋯,
   after Settings, Schedule and Verify, as *Switch to the Sky / grid*). With the
   sidebar shown there is exactly one toggle on screen, the sidebar's.
-- **`Alt+Y`** — from anywhere but a text field or behind a dialog (a terminal
+- **`Ctrl+Y`** — from anywhere but a text field or behind a dialog (a terminal
   included).
 - **The palette**: *Switch to the Sky* / *Switch to the grid*.
 - **The URL**: `#sky` is the sky, `#sky/<title>` the sky on that session
