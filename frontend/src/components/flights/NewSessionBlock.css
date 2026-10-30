@@ -126,3 +126,113 @@
   justify-content: flex-end;
   gap: 8px;
 }
+
+/* Round 12: the two folds under the rows — More options (the rest of the
+ * New dialog) and From a session (fork a worker from a live session). Their
+ * heads are the quiet-icon tier (.fl-icon-btn); folded, More options says
+ * what it holds in one muted line. */
+.sky-new-folds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 -6px -4px;
+}
+
+.sky-new-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+}
+
+.sky-new-fold[aria-expanded="true"],
+.sky-new-fold.is-on {
+  color: var(--text);
+}
+
+.sky-new-caret {
+  width: 9px;
+  font-size: 10px;
+}
+
+.sky-new-summary {
+  margin: 0;
+  overflow: hidden;
+  color: var(--fl-ink-muted, var(--muted));
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sky-new-more-body {
+  display: grid;
+  gap: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 2px 2px 2px 0;
+}
+
+.sky-new-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 6px 9px;
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+}
+
+.sky-new-args {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.sky-new-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+}
+
+.sky-new-note {
+  margin: 0;
+  color: var(--fl-ink-muted, var(--muted));
+  font-size: 12.5px;
+}
+
+/* From a session: the picker scrolls past a handful of rows. */
+.sky-new-parents {
+  display: grid;
+  gap: 6px;
+}
+
+.sky-new-parent-list {
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+/* A fork's Repository row: whose repository, and Clear. */
+.sky-new-forked {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sky-new-forked-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.sky-new-forked-repo {
+  overflow: hidden;
+  color: var(--fl-ink-muted, var(--muted));
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -15,6 +15,15 @@
  *    for a block dropped on a grounded line (`attach`): its session flies
  *    THOSE stops (`POST /api/flights/{id}/attach {title}`).
  *  - Agent: chips when more than one CLI is installed; the default preselected.
+ *  - More options (folded; `mf_sky_new_more` remembers it): the rest of the
+ *    New dialog — account, model, workspace and base branch, template, launch
+ *    flags, device (newBlockOptions.tsx). Folded, one line says what they are
+ *    ("claude · opus · worktree from main", `optionsSummary`).
+ *  - From a session (folded): pick a live session on this device and the new
+ *    one forks from it — the body gets `parent` + `spawned`, the parent's
+ *    repository, a worktree based on the parent's branch, and a worker's
+ *    title (`workerTitle`: "<parent>-w1"), as `spawn_session` does. Clear
+ *    goes back to the plain flow.
  *
  * The create body is the New dialog's own (`newSessionSubmit(…).buildBody`, so
  * the prompt, the worktree rules and the per-agent launch flags are exactly
@@ -30,15 +39,33 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { api } from "../../api/client";
 import type { Instance } from "../../api/types";
-import { refreshInstances, useAgentChoices, useSettingsDoc } from "../../state/queries";
+import { refreshInstances, useAgentChoices, useAuthProfiles, useDevices, useInstances, useSettingsDoc } from "../../state/queries";
 import { rememberNewSessionChoice } from "../../state/store";
 import { addPendingSession, clearStaleAlias, failPendingSession } from "../../lib/sessionActions";
 import { newSessionSubmit, type NewSessionSubmitCtx } from "../../lib/newSessionSubmit";
 import { attachGrounded, startFlightOn } from "../../lib/flightsApi";
 import { windowName } from "../../lib/windowName";
+import { deviceApi, deviceLabel, deviceTitle, startableDevices } from "../../lib/devices";
+import { ensureTemplates, templatesNow, type Template } from "../../lib/templates";
+import {
+  defaultOptions,
+  forkFields,
+  forkOptions,
+  optionsSummary,
+  parentChoices,
+  readMoreOpen,
+  workerTitle,
+  writeMoreOpen,
+  type BlockOptions,
+  type ParentChoice,
+} from "../../lib/newBlock";
 import { errMsg } from "../../lib/format";
 import { isNameQuery, titleFromPrompt, type RepoSuggestion } from "../dialogs/newSession";
 import { PathField } from "../PathField";
+import { templateFiller } from "../dialogs/newSession/TemplatesStrip";
+import { useBaseBranches } from "../dialogs/newSession/WorkspaceFold";
+import type { RepoBranches } from "../../api/types";
+import { MoreOptions, ParentPicker, optionSetter } from "./newBlockOptions";
 import type { FlightPlan } from "../../lib/flights";
 import { ChipRow } from "./controls";
 import { Bird } from "./Bird";
@@ -124,28 +151,45 @@ export function promptKey(e: KeyLike, fly: () => void): void {
 
 const noop = () => {};
 
+/** What the block's create is made of: its rows, More options, and the
+ * session it forks from (null = none). */
+export interface BlockChoice {
+  repo: string;
+  prompt: string;
+  program: string;
+  launchArgs: string;
+  options: BlockOptions;
+  /** The session's title ("" = the server names it from the task). */
+  title?: string;
+  parent?: Pick<ParentChoice, "title" | "repo" | "branch"> | null;
+}
+
 /** The New dialog's create path, with the form's choices this card makes and
- * the dialog's own defaults for everything it doesn't show. */
-function bodyFor(opts: { repo: string; prompt: string; program: string; launchArgs: string }): Record<string, unknown> {
+ * the dialog's own defaults for everything it doesn't show. A fork rides the
+ * same body: its repository, a worktree on the parent's branch (forkOptions),
+ * and the lineage keys (forkFields). */
+export function blockBody(c: BlockChoice): Record<string, unknown> {
   const ref = <T,>(v: T) => ({ current: v });
+  const o = c.parent ? forkOptions(c.options, c.parent) : c.options;
+  const repo = c.parent ? c.parent.repo : c.repo;
   const ctx: NewSessionSubmitCtx = {
-    title: "",
-    repoPath: opts.repo,
-    prompt: opts.prompt,
-    program: opts.program,
+    title: c.title || "",
+    repoPath: repo,
+    prompt: c.prompt,
+    program: c.program,
     planFirst: false,
     planOk: false,
-    launchArgs: opts.launchArgs,
-    profileId: "",
-    profileModel: "",
-    strategy: "worktree",
-    inPlace: false,
-    initRepo: false,
-    provision: false,
-    baseBranch: "",
-    baseIsRemote: false,
+    launchArgs: c.launchArgs,
+    profileId: o.device ? "" : o.profileId,
+    profileModel: o.device ? "" : o.profileModel,
+    strategy: o.strategy,
+    inPlace: o.inPlace,
+    initRepo: o.initRepo,
+    provision: o.provision,
+    baseBranch: o.baseBranch,
+    baseIsRemote: o.baseRemote,
     continueOn: "",
-    activeTemplate: "",
+    activeTemplate: o.template,
     maxPieces: 0,
     splitLimit: 0,
     runMode: false,
@@ -155,7 +199,7 @@ function bodyFor(opts: { repo: string; prompt: string; program: string; launchAr
     provisionBlocked: "",
     draft: null as unknown as NewSessionSubmitCtx["draft"],
     laneAtPress: ref({ lane: "leave", askFirst: false }) as NewSessionSubmitCtx["laneAtPress"],
-    deviceRef: ref(""),
+    deviceRef: ref(o.device),
     failedReopen: ref(false),
     submitArmAt: ref(0),
     setError: noop,
@@ -165,14 +209,17 @@ function bodyFor(opts: { repo: string; prompt: string; program: string; launchAr
     planFolderDo: noop,
     closeDialog: noop,
   };
-  return newSessionSubmit(ctx).buildBody({
-    title: "",
-    repoPath: opts.repo,
-    prompt: opts.prompt,
-    inPlace: false,
-    initRepo: false,
-    provisioned: false,
+  const body = newSessionSubmit(ctx).buildBody({
+    title: c.title || "",
+    repoPath: repo,
+    prompt: c.prompt,
+    inPlace: o.inPlace,
+    initRepo: o.initRepo,
+    provisioned: o.provision,
+    baseBranch: o.baseBranch,
+    baseBranchRemote: o.baseRemote,
   });
+  return c.parent ? { ...body, ...forkFields(c.parent) } : body;
 }
 
 export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, attach, onPending, onFailed, hidden }: NewSessionBlockProps) {
@@ -185,16 +232,32 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
   const [error, setError] = useState("");
   /** A session that exists but whose stops refused to take off. */
   const [made, setMade] = useState("");
+  const [options, setOptions] = useState<BlockOptions>(defaultOptions);
+  const [moreOpen, setMoreOpen] = useState(readMoreOpen);
+  const [fromOpen, setFromOpen] = useState(false);
+  /** The session this one forks from (null = the plain flow). */
+  const [parent, setParent] = useState<ParentChoice | null>(null);
+  /** The launch flags as edited (null = the agent's saved defaults). */
+  const [argsEdit, setArgsEdit] = useState<string | null>(null);
+  const [templates, setTemplates] = useState<Template[]>(() => templatesNow());
+  const [branches, setBranches] = useState<RepoBranches | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
 
   const agents = useAgentChoices().data;
   const settings = useSettingsDoc(true).data as { coding_cli?: { default_launch_args?: Record<string, unknown> } } | undefined;
+  const authProfiles = useAuthProfiles().data;
+  const rows = useInstances().data;
+  const startable = startableDevices(useDevices().data);
   const names = agents?.names || [];
   const program = picked ?? (agents?.fallback || names[0] || "");
+  const device = parent || !startable.some((d) => d.device === options.device) ? "" : options.device;
+  const shown = parent ? forkOptions(options, parent) : { ...options, device };
+  const folder = parent ? parent.repo : repo;
+  const dapi = useMemo(() => deviceApi(device), [device]);
 
   useEffect(() => {
     let live = true;
-    api<{ suggestions?: RepoSuggestion[] }>("/api/repos/suggest")
+    dapi<{ suggestions?: RepoSuggestion[] }>("/api/repos/suggest")
       .then((d) => {
         if (!live) return;
         const sug = d?.suggestions || [];
@@ -206,20 +269,87 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
     return () => {
       live = false;
     };
+  }, [dapi]);
+
+  useEffect(() => {
+    let live = true;
+    ensureTemplates()
+      .then((t) => live && setTemplates(t))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
   }, []);
+
+  // The Base branch chips for the folder in the Repository row (the New
+  // dialog's own fetch); a fork's base is its parent's branch, kept.
+  useBaseBranches({
+    open: true,
+    page: 2,
+    repoPath: folder,
+    dapi,
+    setBaseBranch: parent ? noop : optionSetter(setOptions, "baseBranch"),
+    setBranches,
+  });
 
   useEffect(() => {
     cardRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
   }, []);
 
   const repoChips = useMemo(() => repoChoices(suggestions), [suggestions]);
-  const blocked = flyBlocked(repo);
+  const parents = useMemo(() => parentChoices(rows || [], windowName), [rows]);
+  const blocked = flyBlocked(folder);
 
-  const launchArgs = (() => {
+  const defaultArgs = (() => {
     const raw = settings?.coding_cli?.default_launch_args || {};
     const hit = Object.keys(raw).find((k) => k.toLowerCase() === program.trim().toLowerCase());
     return hit ? String(raw[hit] || "").trim() : "";
   })();
+  const launchArgs = argsEdit ?? defaultArgs;
+
+  /** Another agent: its own saved launch flags, as the New dialog does. */
+  const pickProgram = (name: string) => {
+    setPicked(name);
+    setArgsEdit(null);
+  };
+
+  const toggleMore = () => {
+    setMoreOpen((open) => {
+      writeMoreOpen(!open);
+      return !open;
+    });
+  };
+
+  const fillTemplate = templateFiller({
+    setAgent: pickProgram,
+    // A fork's repository is its parent's; a template doesn't move it.
+    folderDo: (a) => {
+      if (a.t === "user-set" && !parent) setRepo(a.path);
+    },
+    setPrompt,
+    setProvision: optionSetter(setOptions, "provision"),
+    setStrategy: optionSetter(setOptions, "strategy"),
+    setInPlace: optionSetter(setOptions, "inPlace"),
+    setInitRepo: optionSetter(setOptions, "initRepo"),
+    setActiveTemplate: optionSetter(setOptions, "template"),
+    setAdvancedOpen: noop,
+    // The block flies stops instead of a fast-track.
+    setLane: noop,
+    setAskFirst: noop,
+  });
+
+  const forkFrom = (c: ParentChoice) => {
+    setParent(c);
+    setFromOpen(false);
+    // The worker runs the parent's agent when it is one of the choices.
+    if (c.provider && names.includes(c.provider) && c.provider !== program) pickProgram(c.provider);
+  };
+
+  const deviceName = (d: string) => {
+    const hit = startable.find((s) => s.device === d);
+    return hit ? deviceLabel(hit, startable) : d;
+  };
+  const summary = optionsSummary({ program, options: shown, launchArgs, deviceName: deviceName(device) });
 
   /** Drag the block by its bar: it follows the pointer, live. */
   const onBarDown = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -247,14 +377,19 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
     if (made) return onCreated(made);
     setBusy(true);
     setError("");
-    const body = bodyFor({ repo, prompt, program, launchArgs });
-    const guess = addPendingSession(titleFromPrompt(prompt) || repo.split("/").filter(Boolean).pop() || "untitled");
+    const named = parent ? workerTitle(parent.title, (rows || []).map((r) => r.title)) : "";
+    const body = blockBody({ repo, prompt, program, launchArgs, options: { ...options, device }, title: named, parent });
+    const guess = addPendingSession(named || titleFromPrompt(prompt) || folder.split("/").filter(Boolean).pop() || "untitled", device);
     onPending?.(guess);
     let title = "";
     try {
-      const inst = await api<Instance>("/api/instances", { json: body });
-      title = inst.title;
-      rememberNewSessionChoice(String(body.repo_path || ""), { template: "", program: String(body.program || ""), profile_id: "" });
+      title = await postInstance(body, device);
+      if (!device)
+        rememberNewSessionChoice(String(body.repo_path || ""), {
+          template: shown.template,
+          program: String(body.program || ""),
+          profile_id: String(body.profile_id || ""),
+        });
       clearStaleAlias(title);
       await refreshInstances();
     } catch (err) {
@@ -301,17 +436,31 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
       </div>
       <div className="fl-fld fl-fld-wide">
         <span className="fl-fld-label">Repository</span>
-        {repoChips.length > 0 && (
-          <ChipRow className="sky-new-repos" label="Repository" value={repo} options={repoChips} onChange={setRepo} />
+        {parent ? (
+          <div className="sky-new-forked">
+            <span className="sky-new-forked-text" title={parent.repo}>
+              forked from <b>{parent.name}</b>
+              <span className="sky-new-forked-repo">{parent.repo + (parent.branch ? " · " + parent.branch : "")}</span>
+            </span>
+            <button type="button" className="test-btn fl-btn sky-new-unfork" title="Back to a plain new session" onClick={() => setParent(null)}>
+              Clear
+            </button>
+          </div>
+        ) : (
+          <>
+            {repoChips.length > 0 && (
+              <ChipRow className="sky-new-repos" label="Repository" value={repo} options={repoChips} onChange={setRepo} />
+            )}
+            <PathField
+              className="sky-new-path"
+              value={repo}
+              onChange={setRepo}
+              pickerTitle="Pick the repository"
+              aria-label="Repository folder"
+              placeholder="/path/to/repo"
+            />
+          </>
         )}
-        <PathField
-          className="sky-new-path"
-          value={repo}
-          onChange={setRepo}
-          pickerTitle="Pick the repository"
-          aria-label="Repository folder"
-          placeholder="/path/to/repo"
-        />
       </div>
       <div className="fl-fld fl-fld-wide">
         <span className="fl-fld-label">Task</span>
@@ -339,9 +488,52 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
             label="Agent"
             value={program}
             options={names.map((n) => ({ value: n, label: n, title: n === agents?.fallback ? "Your default agent" : undefined }))}
-            onChange={setPicked}
+            onChange={pickProgram}
           />
         </div>
+      )}
+      <div className="sky-new-folds">
+        <button type="button" className="fl-icon-btn sky-new-fold sky-new-more" aria-expanded={moreOpen} onClick={toggleMore}>
+          <span className="sky-new-caret" aria-hidden="true">
+            {moreOpen ? "▾" : "▸"}
+          </span>
+          More options
+        </button>
+        <button
+          type="button"
+          className={"fl-icon-btn sky-new-fold sky-new-from" + (parent ? " is-on" : "")}
+          aria-expanded={fromOpen}
+          title="Start a worker forked from a running session — its repository, at its HEAD"
+          onClick={() => setFromOpen((o) => !o)}
+        >
+          <span className="sky-new-caret" aria-hidden="true">
+            {fromOpen ? "▾" : "▸"}
+          </span>
+          From a session
+        </button>
+      </div>
+      {!moreOpen && (
+        <p className="sky-new-summary" title="More options">
+          {summary}
+          {parent && " · as " + workerTitle(parent.title, (rows || []).map((r) => r.title))}
+        </p>
+      )}
+      {fromOpen && <ParentPicker choices={parents} value={parent?.title || ""} onPick={forkFrom} />}
+      {moreOpen && (
+        <MoreOptions
+          program={program}
+          setProgram={pickProgram}
+          options={shown}
+          setOptions={setOptions}
+          launchArgs={launchArgs}
+          setLaunchArgs={setArgsEdit}
+          authProfiles={authProfiles}
+          branches={branches}
+          templates={templates}
+          onTemplate={(t) => (t ? fillTemplate(t) : setOptions((o) => ({ ...o, template: "" })))}
+          devices={startable.map((d) => ({ device: d.device, label: deviceLabel(d, startable) }))}
+          forkedFrom={parent?.name}
+        />
       )}
       {error && (
         <p className="error fl-error sky-new-error" role="alert">
@@ -364,4 +556,13 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
       </div>
     </div>
   );
+}
+
+/** POST the create — here, or on the device it is aimed at, where the
+ * session joins the rail under its namespaced title (the New dialog's
+ * `postCreate` does the same). Resolves the session's title. */
+export async function postInstance(body: Record<string, unknown>, device: string): Promise<string> {
+  if (device) return deviceTitle(device, (await deviceApi(device)<Instance>("/api/instances", { json: body })).title);
+  const inst = await api<Instance>("/api/instances", { json: body });
+  return inst.title;
 }
