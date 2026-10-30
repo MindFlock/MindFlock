@@ -366,3 +366,9 @@ def flights_resume(flight_id: str) -> JSONResponse:
 @router.post("/api/flights/{flight_id}/cancel")
 def flights_cancel(flight_id: str) -> JSONResponse:
     return _op(flight_id, "cancel")
+
+
+@router.patch("/api/flights/{flight_id}")
+def flights_rename(flight_id: str, payload: dict) -> JSONResponse:
+    """The flight's own name (docs/flights.md "Round 13"): ``{plan_name}``."""
+    return _op(flight_id, "rename", "", str((payload or {}).get("plan_name") or ""))

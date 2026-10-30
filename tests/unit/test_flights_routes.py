@@ -558,3 +558,15 @@ def test_remove_flown_and_flying_stops():
     assert r.status_code == 200 and r.json()["flight"]["steps"][0]["kind"] == "you"
     r = client.post("/api/flights/%s/resume" % f["id"])
     assert r.json()["flight"]["state"] == "running"
+
+
+def test_rename_a_flight():
+    f = _adhoc().json()["flight"]
+    r = client.patch("/api/flights/%s" % f["id"], json={"plan_name": "  My stops  "})
+    assert r.status_code == 200
+    assert r.json()["flight"]["plan_name"] == "My stops"
+    assert r.json()["flight"]["history"][-1]["note"] == "renamed to My stops"
+    r = client.patch("/api/flights/%s" % f["id"], json={"plan_name": "   "})
+    assert (r.status_code, r.json()["error"]) == (400, "bad_name")
+    r = client.patch("/api/flights/nope", json={"plan_name": "x"})
+    assert r.status_code == 404

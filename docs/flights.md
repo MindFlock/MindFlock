@@ -3474,3 +3474,80 @@ A text field keeps it (redo), and nothing happens behind a dialog.
   (`stopLog` in `useSessionLine.tsx`). Ship lanes run in the server, not in
   the terminal, so this is the place to look.
 - **Ctrl+Y** (⌘Y) switches Grid ⇄ Sky; **zoom** goes down to 10%.
+
+## Round 13: a diagram tool's manners (contract)
+
+The owner, after round 12: delete and name the non-built-in blocks I made;
+adding a block must NOT land it in the selected session — it goes on the
+board and I drag it in (the line's own + is what adds straight in); no
+session selected at all in the sky; the All blocks menu larger; the blocks
+as a block of their own I can size and drag from, with the bottom bar still
+an option. "This should be as simple as any diagram drawing software."
+
+The principles, made explicit (every surface below follows them):
+
+1. **Nothing lands anywhere by itself.** A palette click or Add puts a block
+   on the board near the palette, unselected, as a grounded line. The only
+   implicit targets are the ones you point at: a drop on a line, a line's own
+   +, a drag of a grounded line onto a session's line.
+2. **Direct manipulation.** Click selects. Double-click (or ✎ / Enter) edits.
+   Drag moves. Delete deletes. Esc clears. Dragging one thing onto another
+   combines them. Dropping on empty sky places.
+3. **Every object you made has a name and can go.** Saved stops: rename and
+   delete anywhere they appear (built-ins: reset). Grounded lines: rename
+   their title inline; Delete removes them. Groups: rename in their dialog.
+4. **Selection may be empty.** The sky never picks a session for you; a click
+   on empty sky, or Esc, leaves nothing focused. The pane strip, the drawer
+   and the keyboard actions cope with "nothing".
+5. **Palettes dock or float, your choice.** The same blocks are reachable
+   from the bottom shelf, from a floating resizable palette on the board, and
+   from a large catalog — one pick of what shows, shared by all three.
+
+### Backend
+
+- `PATCH /api/flights/{id} {"plan_name": "<name>"}` → `{flight}`: renames a
+  flight (its line's title; a grounded one's especially). ≤120 chars, 400
+  `bad_name` when empty; 404 `unknown_flight`; works in any unfinished state.
+  History `edited` ("renamed to <name>").
+
+### The palette (frontend: StopShelf / StopCatalog / SkyPalette)
+
+- **Click = place.** A chip click, a catalog row's **Add**, Enter in the
+  catalog: `onPlace(drop)` — the host makes a grounded line at a free spot
+  near the palette (bottom shelf: above it, centred; floating palette: to its
+  right) and selects nothing. No chip click ever tacks onto the focused line.
+- **The catalog is big**: a `Modal` sized to the window (≈ 92vw × 86vh), the
+  blocks as a grid of cards (icon, name, actor, summary; the saved stops with
+  their step boxes), a filter, keyboard as before. Each saved-stop card has a
+  ⋯: **Rename** (inline), **Delete** (yours, inline confirm) or **Reset to
+  default** (built-in), **On the shelf** (★/☆).
+- **Floating palette**: `SkyPalette` — the shelf's content as a sky object
+  (layout key `"palette"`: x / y / pinned / w / h), a head to drag it by, a
+  corner handle to size it, the regions flowing in a grid inside, every item
+  draggable onto lines or the sky exactly as a chip, a ⋯ with **Dock at the
+  bottom**. The bottom shelf's ⋯ (or a ⤢ on its handle) offers **Float the
+  blocks**. `mf_sky_palette: "shelf" | "float"` remembers the choice; the pick
+  (`mf_sky_shelf`) is shared.
+
+### The sky (frontend: SkyView and the lines)
+
+- **Nothing focused** is a state: entering the sky keeps whatever the grid
+  had but never picks a line itself; a click on empty sky, or Esc with no
+  selection and no dialog, calls `selectSession(null)`-equivalent (the store's
+  `setFocused(null)`); no line wears `.is-focused`, the pane strip hides, the
+  drawer shows the whole flock, Delete / Enter do nothing. "This session" mode
+  with nothing focused shows the mode's empty note.
+- **Place near the palette**: `placeGrounded(drop, near)` — a free spot
+  (assignSpots-style) just above the shelf or right of the floating palette,
+  within the view; the new line is pinned there, unselected, unfocused.
+- **Drag a grounded line onto a session's line** (its bar, drag mode): the
+  target line lights (`.is-merge-target`) while the pointer is over it; on
+  release the grounded flight's steps go onto that session — `attachGrounded`
+  when the session has no flight, else `tackOnSteps` as one group named after
+  the grounded line — and the grounded flight is deleted. A toast with Undo
+  (re-create the grounded flight from the same steps). Dropping elsewhere
+  just moves it.
+- **Grounded line rename**: a click on its name (or F2) edits inline →
+  `renameFlight(id, name)`; Esc cancels.
+- The floating palette is a sky object like the intake lane (drag by head,
+  corner size, assignSpots, Tidy forgets its spot, marquee ignores it).

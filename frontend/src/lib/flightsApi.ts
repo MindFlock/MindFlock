@@ -416,3 +416,17 @@ export async function deleteFlight(flightId: string): Promise<boolean> {
     void refreshFlights();
   }
 }
+
+/** Rename a flight — its line's title (a grounded one's especially):
+ * `PATCH /api/flights/{id} {plan_name}`. */
+export async function renameFlight(flightId: string, name: string): Promise<boolean> {
+  try {
+    await api(flightPath(flightId), { method: "PATCH", json: { plan_name: name } });
+    return true;
+  } catch (err) {
+    errorPop("Renaming failed", errMsg(err));
+    return false;
+  } finally {
+    void refreshFlights();
+  }
+}

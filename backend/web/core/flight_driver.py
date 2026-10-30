@@ -1653,6 +1653,7 @@ _OPS = {
     "pause": _flights.op_pause,
     "resume": _flights.op_resume,
     "cancel": _flights.op_cancel,
+    "rename": _flights.op_rename,
 }
 
 
@@ -1700,6 +1701,8 @@ def operate(flight_id: str, op: str, step: str = "", note: str = "") -> dict:
             fn(f, step, note)
         elif op in ("skip", "retry", "jump"):
             fn(f, step)
+        elif op == "rename":
+            fn(f, note)
         else:
             fn(f)
 

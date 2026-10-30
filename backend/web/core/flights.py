@@ -2893,6 +2893,22 @@ def op_resume(flight: dict, now: Optional[float] = None) -> dict:
     return flight
 
 
+def op_rename(flight: dict, name: str, now: Optional[float] = None) -> dict:
+    """``PATCH /api/flights/{id} {plan_name}``: the flight's own name — its
+    line's title (a grounded one's especially). Any unfinished state; empty
+    is 400 ``bad_name``."""
+    ts = float(now if now is not None else time.time())
+    _not_final(flight)
+    text = _text(name, 120).strip()
+    if not text:
+        raise FlightError("bad_name", 400, "a name needs some letters")
+    flight["plan_name"] = text
+    flight["updated"] = ts
+    cur = _current(flight)
+    _hist(flight, ts, cur["id"] if cur else "", "edited", "renamed to %s" % text)
+    return flight
+
+
 def op_cancel(
     flight: dict, reason: str = "cancelled by you", now: Optional[float] = None
 ) -> dict:
