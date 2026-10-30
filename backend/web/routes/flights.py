@@ -12,12 +12,13 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
 from backend.web.core import flight_describe as _describe
 from backend.web.core import flight_driver as _driver
 from backend.web.core import flight_kinds as _kinds
+from backend.web.core import flight_triggers as _triggers
 from backend.web.core import flights as _flights
 
 router = APIRouter()
@@ -86,6 +87,18 @@ async def flights_describe(payload: Optional[dict] = None) -> JSONResponse:
         str(body.get("want") or "step"),
     )
     return JSONResponse(out, status_code=status)
+
+
+@router.post("/api/hooks/flyway/{token}")
+async def flights_hook(token: str, request: Request) -> JSONResponse:
+    """An outside system fires the flyway whose ``hook`` trigger minted
+    ``token`` (public: auth._PUBLIC_FLYWAY_HOOK). The body — JSON with a
+    ``title`` / ``text``, or any text — names the flight's subject. 202 with
+    the flight; 404 for a token no plan holds, 429 inside the plan's quiet
+    minutes, 409 while its previous flight is still in the air."""
+    raw = await request.body()
+    status, body = await _triggers.hook_fire(token, raw[: _triggers.HOOK_BODY_MAX])
+    return JSONResponse(body, status_code=status)
 
 
 @router.get("/api/flights")

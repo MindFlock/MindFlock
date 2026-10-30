@@ -4241,3 +4241,106 @@ once. The last stop leaves the cursor. Returns `{flight, sha}`.
 - `tests/unit/test_flights.py::test_kinds_registry_drives_the_editor` pins
   the whole kinds list to the 12 built-ins; with any round-15 kind loaded it
   fails. It should check the built-ins as a prefix (or list the new kinds).
+
+### As built: round 15 triggers
+
+`TRIGGER_KINDS` is `manual, ticket, pr, issue, schedule, main_push, main_red,
+hook` (`MAIN_TRIGGERS` = the two `main_*`). The trigger block of every plan
+now carries `repo` (text, ≤ 1000), `quiet_minutes` (int, default
+`TRIGGER_QUIET_MINUTES` = 60, 0..10080) and `token` (32 lower-case hex or
+""). Strict mode refuses a `main_*` trigger whose `repo` is empty ("a
+repository to watch is needed"), relative ("the repository is an absolute
+path") or not a git work tree (a `.git` dir or worktree file:
+`flights._is_repo`, no subprocess) — all `PlanError(…, "trigger.repo")`;
+lenient (synced) plans keep the text. **The token** is minted by
+`flights.mint_hook_token` inside `save_plan` and `put_plan`: a `hook` plan
+without one gets `token_hex(16)`; a save that leaves the token out keeps the
+stored one; a plan switched off `hook` keeps its token (switching back keeps
+the URL) but no longer answers. A flight's `by` accepts the trigger names
+(`BY_KINDS` = user, intake, schedule, main_push, main_red, hook).
+
+**The watcher** (`backend/web/core/flight_triggers.py`). `template_schedule.
+run_loop` has a third step, `_tick_triggers` → `flight_triggers.maybe_tick()`,
+which paces the loop's 30 s beat down to `TICK_SECONDS` = 60 and calls
+`tick(now, start, plans, checks_reader)` (the tests' seams). Per watching
+plan (`main_*`, not paused, a repo set) on a thread: `default_branch(repo)`
+(`origin/HEAD`'s short name, else main / master on origin or locally) then
+`fetch_tip` (`git fetch --quiet origin <branch>` with `GIT_TERMINAL_PROMPT=0`,
+60 s, then `rev-parse origin/<branch>`; a repo with no origin reads the local
+branch). State lives in `<flights dir>/trigger_state.json`, `{plan_id:
+{branch, sha, fired_at, pending?, held?, error?, last_status?, checks?}}`,
+rewritten only when a row changed; rows of plans that stopped watching are
+dropped (a hook plan's `fired_at` row stays). Rules:
+
+- **first sight arms**: the tip is recorded, nothing fires (a schedule counts
+  from when it was set).
+- **`main_push`** fires when the tip differs from `sha`. Inside
+  `quiet_minutes` of `fired_at` the move is kept as `pending` (the seen sha
+  stays) and fires, once, on the latest tip when the quiet is over.
+- **`main_red`**: `checks` is `{sha, verdict, names, fired, read_at}` for
+  the tip; `read_checks(repo, sha)` (GitHub Checks + combined Status API
+  through `github_pr.repo_ref` / `api_token` / `_request`; failing names
+  come from `check_runs[].name` and `statuses[].context`) runs each tick
+  while the verdict is `pending` / `none` / `unknown` and stops once it is
+  `ok` or `failed` (final per sha). `failed` + not yet `fired` + outside the
+  quiet → fire, `fired = true`: once per sha. A tip already red at first
+  sight fires too.
+- **busy = held, not skipped**: before firing, `flight_busy_reason` of the
+  plan's run record; the previous flight still in the air (or its session
+  working) puts `held: <why>` on the row and the move waits — no skipped run
+  and no `flight.changed` every minute — then fires when it lands. A refusal
+  (400: no folder, no agent…) is the schedule's own failed run and **spends
+  the move** (`sha` advances / `fired = true`, `last_status`, no `fired_at`):
+  never a retry a minute.
+- a fire is `template_schedule.fire_or_skip(plan, kind, subject=…)` →
+  `fire_flight`, which gained `subject` (default: the schedule's `{kind:
+  schedule, title: <plan name>}`) and records `by` = the trigger's name
+  (`_BY_OF_TRIGGER`; anything else is `user`). Subjects: `{kind: "manual",
+  title: "main moved to a1b2c3d"}` / `"main is red at a1b2c3d (ci, lint)"`
+  (≤ 6 names, then "+N more"). The run lands in `schedule_runs.json` under
+  the plan id with `trigger: main_push` etc.
+- one plan's exception becomes its row's `error` (`"no default branch"`,
+  `"cannot fetch main"`, the exception text); the rest of the tick goes on.
+
+**The hook.** `POST /api/hooks/flyway/{token}` (routes/flights.py, before
+`/api/flights/{flight_id}`; public in auth.py: `_PUBLIC_FLYWAY_HOOK =
+re.compile(r"/api/hooks/flyway/[a-f0-9]{32}")`, `_public_flyway_hook_route`
+= HTTP + POST + fullmatch, added to the gate's `public` tuple beside the voice
+act — GET on the path, 31 / 33 chars, upper-case hex and every neighbour stay
+401). The body (first `HOOK_BODY_MAX` = 64 KB) names the subject via
+`hook_title`: a JSON object's `title` (else `text`), else the text itself,
+whitespace squashed, the first 80 chars → `"hook: <text>"` (`"hook"` for
+nothing). `hook_fire` answers 404 `unknown_token` (no `hook` plan holds it),
+409 `paused`, 429 `quiet` with `retry_after` seconds and a sentence, 409
+`busy` while the previous flight is in the air (via `fire_or_skip`, which
+records the skip — a POST cannot wait), else 202 `{flight}` and `fired_at` in
+the state row. `fire_or_skip` is the busy-checking wrapper the hook uses;
+`tick_flights` keeps its own inline copy of the same rule.
+
+**Frontend.** `TriggerKind` + `TRIGGER_LABEL` ("When main moves", "When main
+is red", "When a hook fires"); `FlightTrigger` gains optional `repo`,
+`quiet_minutes`, `token`; `MAIN_TRIGGERS`, `triggerMakesSession(kind)` (the
+three make their own session like manual / schedule, so the Repository /
+Agent / Model fields follow) and `hookUrl(trigger, origin?)` (`<origin>/api/
+hooks/flyway/<token>`, "" until saved; `window.location.origin` when there
+is a window). `TakeoffFields` (TakeoffDialog.tsx) shows, for `main_*`, a
+**Watches** row — `PathField` (`id="fl-trigger-repo"`, placeholder "An
+absolute path to a git repository") with a hint saying what is watched —
+and for `hook` a **Hook** row (`HookUrlRow`: before the plan is saved the
+hint "Save to get the address outside systems POST to."; after, a read-only
+`fl-mono` input that selects itself on focus and a **Copy** button →
+`navigator.clipboard.writeText` + toast "Copied the hook address", "Copied"
+on the button for 1.5 s, a toast when the clipboard is not there — never
+`prompt`); both get **Quiet** (`NumberField`, min) and **Paused**.
+`TakeoffDialog.css`: `.fl-hook-url` flex row, the input `flex: 1 1 auto`,
+`.fl-hook-copy` nowrap. The plans list carries `runs` for schedule plans
+only, as before: a trigger plan's last fire is in `schedule_runs.json` but
+not yet shown — a follow-up for whoever extends `flight_plans_status`.
+
+Tests: `tests/unit/test_flight_triggers.py` (28 tests, 49 cases: the kinds and fields, the
+token, a real tmp repo + clone for the fire rules, quiet minutes, held /
+spent moves, `read_checks` over a faked `_request`, `hook_title`, the hook
+route on a bare `FastAPI()` + the flights router, the gate regex and the
+gated app), `frontend/src/__tests__/flightTriggers.test.ts` (10).
+`test_flights_schedule.py` needed no change (`fire_flight`'s default subject
+and `by` are the schedule's).

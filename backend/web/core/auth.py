@@ -126,6 +126,11 @@ _PUBLIC_FLEET_CANCEL = re.compile(r"/api/fleet/requests/[a-f0-9]{16}/cancel")
 #: (backend.web.core.voice_actions). POST only — the route has no GET — and
 #: exactly that shape, so nothing else under /api/notify opens up.
 _PUBLIC_VOICE_ACT = re.compile(r"/api/notify/act/[a-f0-9]{32}")
+#: ``POST /api/hooks/flyway/<token>`` — an outside system (Grafana, Slack, CI)
+#: firing a flyway whose trigger is ``hook``; it holds no credential of ours,
+#: the token IS the credential: 32 lower-case hex minted when the plan was
+#: saved (backend.web.core.flight_triggers). POST only, exactly that shape.
+_PUBLIC_FLYWAY_HOOK = re.compile(r"/api/hooks/flyway/[a-f0-9]{32}")
 
 # Member-to-member routes: each handler checks the fleet key itself and
 # refuses with the fleet-aware 401 (fleet.unauthorized_body: id, key epoch,
@@ -1051,6 +1056,18 @@ def _public_voice_act_route(scope) -> bool:
     )
 
 
+def _public_flyway_hook_route(scope) -> bool:
+    """Whether ``scope`` is a flyway's hook being fired (see
+    :data:`_PUBLIC_FLYWAY_HOOK`) — HTTP only, POST only, the exact token shape."""
+    if scope.get("type") != "http":
+        return False
+    method = str(scope.get("method") or "").upper()
+    return (
+        method == "POST"
+        and _PUBLIC_FLYWAY_HOOK.fullmatch(scope.get("path", "")) is not None
+    )
+
+
 def _record_person(scope, headers: list) -> None:
     """Put the relaying device's person (``X-MindFlock-Person``, only beside
     the remote marker) on the request state as ``person`` — ``""`` for
@@ -1105,6 +1122,7 @@ class AuthMiddleware:
             path in _PUBLIC_PATHS
             or _public_fleet_route(scope)
             or _public_voice_act_route(scope)
+            or _public_flyway_hook_route(scope)
         )
         member_route = _member_fleet_route(scope)
 

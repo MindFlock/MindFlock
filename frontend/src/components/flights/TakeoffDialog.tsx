@@ -1,16 +1,18 @@
 /** "Takes off…" on a saved stop (the shelf chip's right-click menu): where
- * its flights come from — by hand, from a ticket / PR / issue, or on a
+ * its flights come from — by hand, from a ticket / PR / issue, on a
  * **Schedule** (days as chips, the time / date / cron as fields, the server's
- * preview of the next run, Paused) — and, for the ones that create their own
- * session (by hand, scheduled), the repository, agent and model it starts
- * in. A dialog (`Modal`), saved with `savePlan`; a refusal stays in the
+ * preview of the next run, Paused), or, round 15, **when main moves** /
+ * **when main is red** (the repository watched, quiet minutes) / **when a
+ * hook fires** (the address to POST to, with Copy, once saved) — and, for
+ * the ones that create their own session (by hand, scheduled, the triggers),
+ * the repository, agent and model it starts in. A dialog (`Modal`), saved with `savePlan`; a refusal stays in the
  * dialog (Electron has no alert). It was the flyway card's trigger section
  * (FlywayTrigger); a scheduled saved stop is edited here ("Edit in the Sky"
  * from Schedule). */
 
 import { useEffect, useState, type JSX } from "react";
 import { cronOf, cronPreview, onceOf, type CronPreview } from "../../lib/templates";
-import { TRIGGER_LABEL, scheduleOfWhen, whenFormOf, type FlightPlan, type TriggerKind, type WhenForm } from "../../lib/flights";
+import { MAIN_TRIGGERS, TRIGGER_LABEL, hookUrl, scheduleOfWhen, triggerMakesSession, whenFormOf, type FlightPlan, type TriggerKind, type WhenForm } from "../../lib/flights";
 import { savePlan } from "../../lib/flightsApi";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
@@ -18,7 +20,7 @@ import { Modal } from "../Modal";
 import { PathField } from "../PathField";
 import { useAgentChoices } from "../settings/screens/AgentPicker";
 import { cronPreviewLine } from "../dialogs/TemplateEditor";
-import { ChipRow, FlField, Seg, TextField, Toggle } from "./controls";
+import { ChipRow, FlField, NumberField, Seg, TextField, Toggle } from "./controls";
 import "./StopParts.css";
 import "./TakeoffDialog.css";
 
@@ -87,12 +89,48 @@ export function ScheduleChips({ when, onWhen, preview }: { when: WhenForm; onWhe
   );
 }
 
+/** The hook's address, read-only, with Copy (once the plan is saved: the
+ * server mints the token then). */
+export function HookUrlRow({ plan }: { plan: FlightPlan }): JSX.Element {
+  const url = hookUrl(plan.trigger);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const t = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(t);
+  }, [copied]);
+  if (!url) {
+    return <span className="fl-fld-hint fl-hook-pending">Save to get the address outside systems POST to.</span>;
+  }
+  const copy = () => {
+    const p = typeof navigator !== "undefined" && navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject(new Error("no clipboard"));
+    p.then(
+      () => {
+        setCopied(true);
+        toast("Copied the hook address");
+      },
+      () => toast("Couldn't copy — select the address and copy it")
+    );
+  };
+  return (
+    <span className="fl-hook-url">
+      <input type="text" className="fl-input fl-mono" aria-label="Hook address" value={url} readOnly onFocus={(e) => e.currentTarget.select()} />
+      <button type="button" className="test-btn fl-hook-copy" onClick={copy} title="Copy the address">
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </span>
+  );
+}
+
 /** Where a saved stop's flights come from, and what they fly in. */
 export function TakeoffFields({ plan, onChange }: { plan: FlightPlan; onChange(p: Partial<FlightPlan>): void }): JSX.Element {
   const agents = useAgentChoices();
   const preview = useCronPreview(triggerCron(plan));
   const when = whenFormOf(plan.trigger.schedule);
-  const needsSession = plan.trigger.kind === "manual" || plan.trigger.kind === "schedule";
+  const needsSession = triggerMakesSession(plan.trigger.kind);
+  const watchesMain = MAIN_TRIGGERS.includes(plan.trigger.kind);
+  const isHook = plan.trigger.kind === "hook";
+  const quiet = plan.trigger.quiet_minutes ?? 60;
   return (
     <section className="fl-section fl-trigger" aria-label="Where its flights come from">
       <div className="fl-form">
@@ -122,6 +160,37 @@ export function TakeoffFields({ plan, onChange }: { plan: FlightPlan; onChange(p
               title="A paused schedule takes off nothing"
             />
           </FlField>
+        )}
+        {watchesMain && (
+          <FlField label="Watches" wide hint={plan.trigger.kind === "main_push" ? "Its default branch (origin/HEAD, else main) is fetched every minute; a new tip takes off." : "The checks of its default branch's tip, once per commit; red takes off."}>
+            <PathField
+              id="fl-trigger-repo"
+              value={plan.trigger.repo || ""}
+              placeholder="An absolute path to a git repository"
+              pickerTitle="The repository whose main branch this watches"
+              onChange={(v) => onChange({ trigger: { ...plan.trigger, repo: v } })}
+            />
+          </FlField>
+        )}
+        {isHook && (
+          <FlField label="Hook" wide hint="POST anything here — Grafana, Slack, CI; a JSON title or text (else the first 80 characters) names the flight.">
+            <HookUrlRow plan={plan} />
+          </FlField>
+        )}
+        {(watchesMain || isHook) && (
+          <>
+            <FlField label="Quiet" hint="No second take-off inside this many minutes">
+              <NumberField label="Quiet minutes" unit="min" value={quiet} onChange={(v) => onChange({ trigger: { ...plan.trigger, quiet_minutes: v === "" ? 0 : v } })} />
+            </FlField>
+            <FlField label="Paused">
+              <Toggle
+                on={plan.trigger.paused}
+                onChange={(paused) => onChange({ trigger: { ...plan.trigger, paused } })}
+                label="Paused"
+                title="A paused trigger takes off nothing"
+              />
+            </FlField>
+          </>
         )}
         {needsSession && (
           <>

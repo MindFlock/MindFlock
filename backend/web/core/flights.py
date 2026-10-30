@@ -50,6 +50,9 @@ __all__ = [
     "judge_for",
     "ON_FAIL",
     "TRIGGER_KINDS",
+    "MAIN_TRIGGERS",
+    "TRIGGER_QUIET_MINUTES",
+    "mint_hook_token",
     "SUBJECT_KINDS",
     "BUILTIN_IDS",
     "PlanError",
@@ -184,8 +187,26 @@ HISTORY_EVENTS = (
     "attached",
 )
 ON_FAIL = ("halt", "agent", "skip", "you")
-TRIGGER_KINDS = ("manual", "ticket", "pr", "issue", "schedule")
+TRIGGER_KINDS = (
+    "manual",
+    "ticket",
+    "pr",
+    "issue",
+    "schedule",
+    "main_push",
+    "main_red",
+    "hook",
+)
+#: The triggers that watch a repository's default branch (``trigger.repo``
+#: required): see backend.web.core.flight_triggers.
+MAIN_TRIGGERS = ("main_push", "main_red")
+#: ``trigger.quiet_minutes`` when a plan names none: no re-fire inside it.
+TRIGGER_QUIET_MINUTES = 60
+_HOOK_TOKEN_RE = re.compile(r"^[a-f0-9]{32}$")
 SUBJECT_KINDS = ("ticket", "pr", "issue", "schedule", "manual")
+#: Who started a flight (``by``), besides ``agent:<title>``: the user, an
+#: intake, a schedule, or one of the round-15 triggers by name.
+BY_KINDS = ("user", "intake", "schedule", "main_push", "main_red", "hook")
 SHIP_LANES = ("commit", "push", "pr", "merge")
 VERIFY_WHO = ("agent", "you", "both")
 #: A join waits for every live child of the session, or only the workers the
@@ -732,6 +753,31 @@ def _normalize_schedule(raw, strict: bool):
         return raw if isinstance(raw, dict) else None
 
 
+def _is_repo(path: str) -> bool:
+    """Whether ``path`` is a git work tree (a ``.git`` dir, or a worktree's
+    ``.git`` file) — cheap, no subprocess: the strict check of
+    ``trigger.repo``."""
+    try:
+        return os.path.isdir(path) and os.path.exists(os.path.join(path, ".git"))
+    except OSError:
+        return False
+
+
+def mint_hook_token(plan: dict, previous: Optional[dict] = None) -> None:
+    """A ``hook`` trigger's token, in place: the one the client sent, else
+    the stored plan's (``previous``: a save that left it out keeps it), else
+    a fresh ``token_hex(16)``. Any other kind keeps what it has (switching
+    back to hook keeps the URL)."""
+    trig = plan.get("trigger") or {}
+    if trig.get("token"):
+        return
+    prev = (previous or {}).get("trigger") or {}
+    if prev.get("token"):
+        trig["token"] = prev["token"]
+    elif trig.get("kind") == "hook":
+        trig["token"] = secrets.token_hex(16)
+
+
 def normalize_plan(raw, strict: bool = True) -> dict:
     """A plan coerced to its stored shape (see docs/flights.md). Strict raises
     :class:`PlanError`; lenient never raises. ``id`` / ``builtin`` /
@@ -750,9 +796,22 @@ def normalize_plan(raw, strict: bool = True) -> dict:
     if tkind not in TRIGGER_KINDS:
         if strict:
             raise PlanError(
-                "trigger is manual, ticket, pr, issue or schedule", "trigger.kind"
+                "trigger is manual, ticket, pr, issue, schedule, main_push, "
+                "main_red or hook",
+                "trigger.kind",
             )
         tkind = "manual"
+    trepo = _text(trig.get("repo"), 1000)
+    if tkind in MAIN_TRIGGERS and strict:
+        if not trepo:
+            raise PlanError("a repository to watch is needed", "trigger.repo")
+        if not os.path.isabs(trepo):
+            raise PlanError("the repository is an absolute path", "trigger.repo")
+        if not _is_repo(trepo):
+            raise PlanError("not a git repository: %s" % trepo, "trigger.repo")
+    ttoken = _text(trig.get("token"), 64).lower()
+    if not _HOOK_TOKEN_RE.match(ttoken):
+        ttoken = ""
     sess = raw.get("session") if isinstance(raw.get("session"), dict) else {}
     return {
         "id": _text(raw.get("id"), 64),
@@ -763,6 +822,11 @@ def normalize_plan(raw, strict: bool = True) -> dict:
             "kind": tkind,
             "schedule": _normalize_schedule(trig.get("schedule"), strict),
             "paused": _bool(trig.get("paused"), False),
+            "repo": trepo,
+            "quiet_minutes": _int(
+                trig.get("quiet_minutes"), TRIGGER_QUIET_MINUTES, 0, 7 * 24 * 60
+            ),
+            "token": ttoken,
         },
         "session": {
             "repo_path": _text(sess.get("repo_path"), 1000),
@@ -1041,6 +1105,7 @@ def save_plan(raw, now: Optional[float] = None) -> dict:
         plan["id"] = pid
         plan["builtin"] = pid in BUILTIN_IDS
         plan["updated"] = ts
+        mint_hook_token(plan, plans.get(pid))
         plans[pid] = plan
         _save_plans_locked(plans)
     return copy.deepcopy(plan)
@@ -1062,6 +1127,7 @@ def put_plan(pid: str, raw, now: Optional[float] = None) -> dict:
         )
         if not plan["updated"]:
             plan["updated"] = float(now if now is not None else time.time())
+        mint_hook_token(plan, plans.get(pid))
         plans[pid] = plan
         _save_plans_locked(plans)
     return plan
@@ -1191,7 +1257,7 @@ def _normalize_flight(fid, raw) -> Optional[dict]:
                 }
             )
     by = _text(raw.get("by"), 200) or "user"
-    if by not in ("user", "intake", "schedule") and not by.startswith("agent:"):
+    if by not in BY_KINDS and not by.startswith("agent:"):
         by = "user"
     return {
         "id": fid,
@@ -1461,11 +1527,7 @@ def arm_pending(
     plan = get_plan(plan_id)
     if plan is None:
         raise FlightError("unknown_plan", 404, "no such plan: %s" % plan_id)
-    who = (
-        by
-        if by in ("user", "intake", "schedule") or str(by).startswith("agent:")
-        else "intake"
-    )
+    who = by if by in BY_KINDS or str(by).startswith("agent:") else "intake"
     return take_off(
         plan,
         session=str(title or ""),
