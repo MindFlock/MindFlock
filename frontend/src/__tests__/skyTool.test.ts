@@ -164,7 +164,8 @@ describe("the toggle on the toolbar", () => {
     expect(sky).toMatch(/k === "h" \|\| k === "H"\) \{\s*handled\(\);\s*setTool\("click"\);/);
     expect(sky).toContain('const liveTool: SkyTool = spaceHeld ? "click" : tool;');
     // Lines never start a move of their own in click mode.
-    expect(sky.match(/draggable=\{liveTool === "drag"\}/g)?.length).toBe(3);
+    // The lines, the grounded lines, the intake lane and the floating palette.
+    expect(sky.match(/draggable=\{liveTool === "drag"\}/g)?.length).toBe(4);
   });
 
   it("click mode shows the hand, closed while it pans", () => {

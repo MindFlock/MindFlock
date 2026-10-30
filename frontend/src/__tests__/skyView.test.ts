@@ -375,7 +375,7 @@ describe("round 12: the intake lane on the sky, the tools' presses", () => {
   const v = code("components/flights/SkyView.tsx");
 
   it("the lane is placed like a line, first; no line keeps a spot before it has one", () => {
-    expect(v).toContain("const items = [{ id: INTAKE_KEY, ...intakeBox }, ...lines];");
+    expect(v).toContain("const items = [{ id: INTAKE_KEY, ...intakeBox }, ...(paletteOn ? [{ id: PALETTE_KEY, ...paletteBox }] : []), ...lines];");
     expect(v).toContain("const intakeReady = !!autoPos[INTAKE_KEY] || !!layout[INTAKE_KEY]?.pinned || !!measured[INTAKE_KEY] || waited;");
     // Its room is never under the folded lane's width (unfolding the rail
     // never runs into a line).
@@ -386,7 +386,7 @@ describe("round 12: the intake lane on the sky, the tools' presses", () => {
 
   it("it drags on the line drag's own path; a click on its head focuses no session", () => {
     expect(v).toContain('if (e.button !== 0 || gestureFor(liveTool, "line", { space: space.current }) !== "move-line") return;');
-    expect(v).toMatch(/if \(!sel\.lines\.has\(id\)\) clearSel\(\);\s*if \(id === INTAKE_KEY\) return;/);
+    expect(v).toMatch(/if \(!sel\.lines\.has\(id\)\) clearSel\(\);\s*if \(id === INTAKE_KEY \|\| id === PALETTE_KEY\) return;/);
     expect(v).toContain('out.lines.push({ id: INTAKE_KEY, rect: lane, heads });');
   });
 
@@ -404,5 +404,73 @@ describe("round 12: workers live inside their lead's line", () => {
     expect(v).toContain("const diagram = sessionDiagram(rows, t, { flights, kinds, family: true });");
     expect(code("components/flights/SkyLine.tsx")).toContain("useSessionLine(p.title, src, { family: true,");
     expect(sky.SKY_MODES.find((m) => m.id === "all")?.title).toContain("inside its lead's line");
+  });
+});
+
+describe("round 13: nothing focused, place don't tack, the floating palette", () => {
+  const v = code("components/flights/SkyView.tsx");
+
+  it("selectSession(null) selects nothing: no session is focused, in either view", async () => {
+    const { selectSession } = await import("../lib/sessionActions");
+    useUi.setState({ focused: "fix-login" } as never);
+    selectSession(null);
+    expect(useUi.getState().focused).toBeNull();
+  });
+
+  it("a click on empty sky (both tools) and Esc with nothing else to close leave nothing focused", () => {
+    expect(v).toContain("if (useUi.getState().focused) selectSession(null);");
+    // Drag mode: the still marquee press on empty sky.
+    expect(v).toMatch(/else if \(!m\.add\) \{\s*clearSel\(\);\s*unfocus\(\);\s*\}/);
+    // Click mode: a still press on nothing of the sky's.
+    expect(v).toMatch(/if \(!id\) \{\s*vpRef\.current\?\.focus\(\{ preventScroll: true \}\);\s*unfocus\(\);\s*\}/);
+    // Esc: after the cards, the selection and an open box.
+    expect(v).toMatch(/k === "Escape" && \(focused \|\| groundFocus\) && !marquee\.current\) \{\s*handled\(\);\s*unfocus\(\);/);
+  });
+
+  it("the sky never picks a line by itself: not a view switch, not a new session, not an intake item flown", () => {
+    expect(v).toContain("const setMode = (m: SkyMode) => setSkyMode(m);");
+    expect(v).not.toContain("focusOn(titles[0]);\n");
+    expect(v).not.toMatch(/setNewAt\(null\);\s*focusOn\(title\);/);
+    expect(v).toContain("onFly={flashLine}");
+    // A drop on empty sky makes its line, unfocused.
+    expect(v).not.toMatch(/pinned: true \}\)\);\s*setGroundFocus\(id\);/);
+    // This session with nothing focused says what to do.
+    expect(v).toContain('"Pick a line to show it alone."');
+    // Enter opens only the focused line's box.
+    expect(v).toContain('} else if (k === "Enter" && focusLine) {');
+  });
+
+  it("a palette click places its block on the board, near the palette; chips never tack onto the focused line", () => {
+    expect(v).toContain("onPlace={(d) => void placeGrounded(d, \"shelf\")}");
+    expect(v).toContain("onPlace={(d) => void placeGrounded(d, \"palette\")}");
+    expect(v).toContain("const want = pal ? { x: pal.x + pal.w + PLACE_GAP, y: pal.y } : { x: view.x + view.w / 2 - size.w / 2, y: view.y + view.h - size.h };");
+    expect(v).toContain("return spotNear(want, taken, size, view);");
+    expect(v).toContain("const at = spotRef.current(f, near);");
+    // Placed at its estimate, then once more at its measured size (never onto
+    // itself: its own rect is not `taken`).
+    expect(v).toContain("placing.current.set(groundedKey(f.id), near);");
+    expect(v).toMatch(/if \(!measured\[key\]\) continue;\s*placing\.current\.delete\(key\);/);
+    expect(v).toContain(".filter((id) => id !== key), INTAKE_KEY, PALETTE_KEY].map(rectOf)");
+    // The old fallbacks are gone: no tack or Add onto `focusLine`, no picker for them.
+    expect(v).not.toContain("title || focusLine");
+    expect(v).not.toContain("tackPick");
+    expect(v).not.toContain("flyPick");
+  });
+
+  it("the floating palette is a sky object: mf_sky_palette, placed after the lane, dragged by its head, sized by its corner", () => {
+    expect(v).toContain('readPref(PALETTE_MODE_KEY) === "float" ? "float" : "shelf"');
+    expect(v).toContain("writePref(PALETTE_MODE_KEY, m);");
+    expect(v).toContain('const paletteOn = paletteMode === "float" && !narrow;');
+    expect(v).toMatch(/<SkyPalette[\s\S]*?zoom=\{cam\.z\}[\s\S]*?onHeadDown=\{\(e\) => onDragStart\(PALETTE_KEY, e\)\}[\s\S]*?onResize=\{\(w, h\) => onLayout\(PALETTE_KEY, \{ w, h \}\)\}[\s\S]*?onDock=\{\(\) => setPaletteMode\("shelf"\)\}[\s\S]*?onSession=\{newHere\}/);
+    expect(v).toContain('onFloat={narrow ? undefined : () => setPaletteMode("float")}');
+    // Floating, the bottom shelf gives way.
+    expect(v).toMatch(/\{!paletteOn && \(\s*<StopShelf/);
+    // Its blocks' drags are read as the shelf's are.
+    expect(v).toMatch(/className=\{"sky-palette-slot"[\s\S]*?onDragStart=\{onShelfDragStart\}\s*onDragEnd=\{onShelfDragEnd\}/);
+    // A press on it is its own (never a pan or a marquee), and Delete there is not the sky's.
+    expect(v).toContain(".sky-new, .sky-palette-slot\";");
+    expect(v).toContain(".sky-selbar, .sky-palette-slot, [role=menu]");
+    // The marquee never takes it: selectables lists the lines and the lane only.
+    expect(v).not.toContain("out.lines.push({ id: PALETTE_KEY");
   });
 });

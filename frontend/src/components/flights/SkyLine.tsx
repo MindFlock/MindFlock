@@ -97,6 +97,9 @@ export interface SkyLineProps {
   /** The host's handle on this line's Delete (null when the line goes): given
    * a box's node id ("" = the line itself), it acts and says whether it did. */
   registerDelete?(fn: ((node: string) => boolean) | null): void;
+  /** A grounded line dragged by its bar is over this one: the drop puts its
+   * stops on this session (docs/flights.md "As built: round 13 sky"). */
+  mergeTarget?: boolean;
 }
 
 /** The sky's handle on a line's Delete: a box's node id ("" = the line). */
@@ -479,6 +482,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
         (p.selected ? " is-selected" : "") +
         (p.layout.open ? " is-open" : "") +
         (p.dropFlyway ? " is-drop" : "") +
+        (p.mergeTarget ? " is-merge-target" : "") +
         (line.editing ? " is-editing" : "")
       }
       data-line={p.title}

@@ -70,14 +70,71 @@ export const INTAKE_MIN_H = 160;
 export const INTAKE_MAX_W = 1200;
 export const INTAKE_MAX_H = 1600;
 
-/** The lane's frame when the owner dragged its corner (`w`/`h` on its
- * layout entry), clamped; null when it sizes itself. */
-export function intakeFrame(stored: StoredLine | undefined): { w: number; h: number } | null {
+/** A sky object's frame when the owner dragged its corner (`w`/`h` on its
+ * layout entry), clamped to `min`–`max`; null when it sizes itself. The
+ * intake lane's and the floating palette's (docs/flights.md "As built:
+ * round 13 sky"). */
+export function objectFrame(
+  stored: StoredLine | undefined,
+  min: { w: number; h: number },
+  max: { w: number; h: number }
+): { w: number; h: number } | null {
   if (!stored || !Number.isFinite(stored.w) || !Number.isFinite(stored.h)) return null;
   return {
-    w: Math.min(INTAKE_MAX_W, Math.max(INTAKE_MIN_W, Math.round(stored.w as number))),
-    h: Math.min(INTAKE_MAX_H, Math.max(INTAKE_MIN_H, Math.round(stored.h as number))),
+    w: Math.min(max.w, Math.max(min.w, Math.round(stored.w as number))),
+    h: Math.min(max.h, Math.max(min.h, Math.round(stored.h as number))),
   };
+}
+
+/** The lane's frame when the owner dragged its corner, clamped; null when it
+ * sizes itself. */
+export function intakeFrame(stored: StoredLine | undefined): { w: number; h: number } | null {
+  return objectFrame(stored, { w: INTAKE_MIN_W, h: INTAKE_MIN_H }, { w: INTAKE_MAX_W, h: INTAKE_MAX_H });
+}
+
+/** The floating palette (layout key "palette", SkyPalette): its size before
+ * it measured itself, and the range its corner sizes it in. */
+export const PALETTE_W = 360;
+export const PALETTE_H = 300;
+export const PALETTE_MIN = { w: 220, h: 140 };
+export const PALETTE_MAX = { w: 1400, h: 1200 };
+export const paletteFrame = (stored: StoredLine | undefined) => objectFrame(stored, PALETTE_MIN, PALETTE_MAX);
+
+/** The room kept round a block placed by `spotNear`. */
+export const PLACE_GAP = 24;
+
+/** Where a block of `size` lands when the palette places it (docs/flights.md
+ * "Round 13": place, don't tack): the free spot nearest `want` (its top-left
+ * with nothing in the way) that overlaps nothing `taken` (with PLACE_GAP
+ * round it) and, when `within` is given (the view, plane px), fits inside it.
+ * The search walks rings of PLACE_GAP steps out from `want`; with no free
+ * spot in the view, the nearest free one anywhere; with none at all, `want`. */
+export function spotNear(want: Pos, taken: readonly Rect[], size: { w: number; h: number }, within?: Rect | null): Pos {
+  const step = PLACE_GAP;
+  const free = (x: number, y: number) => !taken.some((t) => hits({ x, y, w: size.w, h: size.h }, t, PLACE_GAP - 1));
+  const inside = (x: number, y: number) =>
+    !within || (x >= within.x && y >= within.y && x + size.w <= within.x + within.w && y + size.h <= within.y + within.h);
+  const search = (bounded: boolean): Pos | null => {
+    for (let r = 0; r <= 80; r++) {
+      let best: Pos | null = null;
+      let bestD = Infinity;
+      for (let i = -r; i <= r; i++)
+        for (let j = -r; j <= r; j++) {
+          if (Math.max(Math.abs(i), Math.abs(j)) !== r) continue;
+          const x = Math.round(want.x + i * step);
+          const y = Math.round(want.y + j * step);
+          if (bounded && !inside(x, y)) continue;
+          const d = Math.hypot(i, j);
+          if (d < bestD && free(x, y)) {
+            best = { x, y };
+            bestD = d;
+          }
+        }
+      if (best) return best;
+    }
+    return null;
+  };
+  return (within && search(true)) || search(false) || { x: Math.round(want.x), y: Math.round(want.y) };
 }
 
 export function intakeSize(stored: StoredLine | undefined, measured?: { w: number; h: number }): { w: number; h: number } {

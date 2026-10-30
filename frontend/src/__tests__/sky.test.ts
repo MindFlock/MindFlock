@@ -23,7 +23,14 @@ import {
   centerOn,
   clampZoom,
   fitCamera,
+  intakeFrame,
   linePerched,
+  objectFrame,
+  paletteFrame,
+  PALETTE_MAX,
+  PALETTE_MIN,
+  PLACE_GAP,
+  spotNear,
   loadSkyLayout,
   patchSkyLine,
   placeLines,
@@ -326,7 +333,7 @@ describe("the wiring", () => {
 
   it("mounts the intake lane on the plane and the new-session card where it was asked for", () => {
     // A sky object at its spot (round 12): the layout key "intake".
-    expect(sky).toMatch(/<IntakeLane\s+rows=\{rows\}\s+plans=\{plans\}\s+onFly=\{focusOn\}\s+width=\{intakeW\}/);
+    expect(sky).toMatch(/<IntakeLane\s+rows=\{rows\}\s+plans=\{plans\}\s+onFly=\{flashLine\}\s+width=\{intakeW\}/);
     expect(sky).toContain("transform: `translate(${intakeAt.x}px, ${intakeAt.y}px)`");
     expect(sky).toMatch(/<NewSessionBlock\s+x=\{newAt\.x\}\s+y=\{newAt\.y\}\s+plans=\{plans\}/);
     expect(sky).toContain("setLayout((l) => patchSkyLine(l, title, { x: newAt.x, y: newAt.y, pinned: true }));");
@@ -362,5 +369,47 @@ describe("fitCamera at the zoom floor", () => {
   it("still centres content that fits", () => {
     const cam = fitCamera({ x: 0, y: 0, w: 500, h: 300 }, 1000, 800);
     expect(cam.x).toBeGreaterThan(0);
+  });
+});
+
+describe("round 13: where a placed block lands, a sky object's frame", () => {
+  const view = { x: 0, y: 0, w: 1200, h: 800 };
+  const size = { w: 300, h: 120 };
+  const clear = (a: { x: number; y: number }, taken: { x: number; y: number; w: number; h: number }[]) =>
+    taken.every((t) => a.x + size.w + PLACE_GAP - 1 <= t.x || t.x + t.w + PLACE_GAP - 1 <= a.x || a.y + size.h + PLACE_GAP - 1 <= t.y || t.y + t.h + PLACE_GAP - 1 <= a.y);
+
+  it("an empty board: exactly where it wants to be", () => {
+    expect(spotNear({ x: 450, y: 660 }, [], size, view)).toEqual({ x: 450, y: 660 });
+  });
+
+  it("the spot taken: the nearest free one, clear of everything, inside the view", () => {
+    const taken = [{ x: 400, y: 600, w: 400, h: 200 }];
+    const at = spotNear({ x: 450, y: 660 }, taken, size, view);
+    expect(clear(at, taken)).toBe(true);
+    expect(at.x >= 0 && at.y >= 0 && at.x + size.w <= 1200 && at.y + size.h <= 800).toBe(true);
+    // Above or beside it, not far off.
+    expect(Math.hypot(at.x - 450, at.y - 660)).toBeLessThan(600);
+  });
+
+  it("a second block placed next to the first never stacks on it", () => {
+    const first = spotNear({ x: 450, y: 660 }, [], size, view);
+    const second = spotNear({ x: 450, y: 660 }, [{ ...first, ...size }], size, view);
+    expect(second).not.toEqual(first);
+    expect(clear(second, [{ ...first, ...size }])).toBe(true);
+  });
+
+  it("no room in the view: the nearest free spot anywhere", () => {
+    const full = [{ x: -100, y: -100, w: 1500, h: 1100 }];
+    const at = spotNear({ x: 450, y: 660 }, full, size, view);
+    expect(clear(at, full)).toBe(true);
+  });
+
+  it("objectFrame clamps a dragged corner; none dragged = it sizes itself; intakeFrame is its wrapper", () => {
+    expect(objectFrame(undefined, { w: 10, h: 10 }, { w: 50, h: 50 })).toBeNull();
+    expect(objectFrame({ x: 1 }, { w: 10, h: 10 }, { w: 50, h: 50 })).toBeNull();
+    expect(objectFrame({ w: 5, h: 99 }, { w: 10, h: 10 }, { w: 50, h: 50 })).toEqual({ w: 10, h: 50 });
+    expect(intakeFrame({ w: 50, h: 5000 })).toEqual({ w: 200, h: 1600 });
+    expect(paletteFrame({ w: 1, h: 1 })).toEqual(PALETTE_MIN);
+    expect(paletteFrame({ w: 99999, h: 99999 })).toEqual(PALETTE_MAX);
   });
 });

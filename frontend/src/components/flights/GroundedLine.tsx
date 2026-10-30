@@ -1,7 +1,8 @@
 /** A grounded flight on the Sky (docs/flights.md "Grounded flights"): stops
  * on the board with no session yet. They do nothing until one is attached.
  * Its own line, laid out under `"flight:" + id`: a title bar (the bird, its
- * name — the flight's `plan_name`, read-only this round — and a ⋯), a dashed
+ * name — the flight's `plan_name`, renamed inline: a click on it or F2 →
+ * `renameFlight` — and a ⋯), a dashed
  * head box where the session will sit ("No session yet — drop a Session chip
  * here, or ⋯ Fly on a session"), then its stops on the canvas, every one
  * editable (useGroundedLine).
@@ -16,12 +17,13 @@
  * never starts a move. `registerDelete` hands the host this line's Delete
  * (docs/flights.md "As built: round 12 sky"): a stop or group box leaves
  * through the canvas's Remove, anything else (the head, the bar, the line)
- * asks to remove the line. */
+ * asks to remove the line. `merging`: dragged over a session's line, which
+ * takes its stops on release (docs/flights.md "As built: round 13 sky"). */
 
 import { useEffect, useRef, useState, type JSX, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { Flight, FlightPlan, StepKindDef } from "../../lib/flights";
 import type { DiagramNode } from "../../lib/flightDiagram";
-import { deleteFlight, savePlan } from "../../lib/flightsApi";
+import { deleteFlight, renameFlight, savePlan } from "../../lib/flightsApi";
 import { isRemoveKey, planToSave, sourcePlanId } from "../../lib/groundedLines";
 import { lodFor, nearLines, type SkyLineLayout } from "../../lib/skyLayout";
 import { errMsg } from "../../lib/format";
@@ -59,7 +61,13 @@ export interface GroundedLineProps {
   draggable?: boolean;
   /** The host's handle on this line's Delete (SkyLine's `registerDelete`). */
   registerDelete?(fn: ((node: string) => boolean) | null): void;
+  /** Dragged by its bar over a session's line: the drop merges it there. */
+  merging?: boolean;
 }
+
+/** A grounded line's name as typed: trimmed, at most 120 characters (the
+ * server's cap); "" = nothing to save. */
+export const cleanFlightName = (s: string) => s.trim().slice(0, 120);
 
 /** The name a grounded line shows. */
 export const groundedName = (f: Pick<Flight, "plan_name">) => f.plan_name || "Stops";
@@ -69,6 +77,10 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   const line = useGroundedLine(flight, { kinds: p.kinds, plans: p.plans });
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  // The name being edited (null: shown), and where the bar's press began (a
+  // click on the name renames; a drag that started there moves the line).
+  const [naming, setNaming] = useState<string | null>(null);
+  const pressAt = useRef<{ x: number; y: number } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef(p.onMeasure);
   measureRef.current = p.onMeasure;
@@ -127,8 +139,32 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
     { key: "remove", label: "Remove", danger: true, className: "skl-mi-group", title: "Take these stops off the board", onSelect: () => setConfirming(true) },
   ];
 
+  // The edit ends once: Enter or Esc hands the focus back to the line, and
+  // the input's blur that follows must not save it again.
+  const named = useRef(false);
+  const startRename = () => {
+    named.current = false;
+    setNaming(name);
+  };
+  /** Enter or blur: the new name, if it changed; Esc: as it was. */
+  const endRename = (save: boolean) => {
+    if (named.current) return;
+    named.current = true;
+    const next = cleanFlightName(naming ?? "");
+    setNaming(null);
+    rootRef.current?.focus({ preventScroll: true });
+    if (save && next && next !== flight.plan_name) void renameFlight(flight.id, next);
+  };
+  const onNameClick = (e: React.MouseEvent) => {
+    const at = pressAt.current;
+    pressAt.current = null;
+    if (at && Math.hypot(e.clientX - at.x, e.clientY - at.y) >= 4) return;
+    startRename();
+  };
+
   const onBarDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
+    pressAt.current = { x: e.clientX, y: e.clientY };
     if ((e.target as Element).closest("button, summary, a, input, [data-no-drag]")) return;
     rootRef.current?.focus({ preventScroll: true });
     if (p.draggable === false) return;
@@ -156,7 +192,14 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   }, [register]);
   // Delete / Backspace on the line itself (not a stop on it, not a field).
   const onKey = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.target !== e.currentTarget || !isRemoveKey(e.key)) return;
+    if (e.target !== e.currentTarget) return;
+    if (e.key === "F2") {
+      e.preventDefault();
+      e.stopPropagation();
+      startRename();
+      return;
+    }
+    if (!isRemoveKey(e.key)) return;
     e.preventDefault();
     e.stopPropagation();
     setConfirming(true);
@@ -171,6 +214,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
         (p.focused ? " is-focused" : "") +
         (p.selected ? " is-selected" : "") +
         (p.sessionOver ? " is-session-over" : "") +
+        (p.merging ? " is-merging" : "") +
         (line.editing ? " is-editing" : "")
       }
       data-flight={flight.id}
@@ -185,9 +229,34 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
         if (!p.focused) p.onFocus();
       }}
     >
-      <div className="skl-bar" title={p.draggable === false ? "Click to focus these stops (drag mode moves them: V)" : "Drag to move these stops"} onPointerDown={onBarDown}>
+      <div className="skl-bar" title={p.draggable === false ? "Click to focus these stops (drag mode moves them: V)" : "Drag to move these stops — onto a session's line to give them to it"} onPointerDown={onBarDown}>
         <Bird size={16} />
-        <span className="skl-name">{name}</span>
+        {naming === null ? (
+          <span className="skl-name skl-name-edit" title="Click to rename (F2)" onClick={onNameClick}>
+            {name}
+          </span>
+        ) : (
+          <input
+            className="fl-input skl-name-input"
+            aria-label={"Rename “" + name + "”"}
+            value={naming}
+            maxLength={120}
+            autoFocus
+            onChange={(e) => setNaming(e.target.value)}
+            onFocus={(e) => e.target.select()}
+            onBlur={() => endRename(true)}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") {
+                e.preventDefault();
+                endRename(true);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                endRename(false);
+              }
+            }}
+          />
+        )}
         <span className="fl-box-chip skl-chip tone-idle" title="These stops do nothing until a session flies them">
           No session
         </span>

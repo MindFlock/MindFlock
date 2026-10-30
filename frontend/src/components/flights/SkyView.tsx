@@ -59,7 +59,18 @@
  * `gestureFor` (lib/skySelect) decides what a press becomes. Delete / Backspace
  * goes where the keyboard is (`deleteFor`): the selection, a box (a stop
  * leaves its line, a session's box asks to close it), a line (its close or
- * remove question), or — on nothing of the sky's — the app's keymap. */
+ * remove question), or — on nothing of the sky's — the app's keymap.
+ *
+ * Round 13 (docs/flights.md "As built: round 13 sky"), a diagram tool's
+ * manners: a palette click PLACES its block on the board (`placeGrounded`: a
+ * grounded line at a free spot above the shelf or right of the floating
+ * palette — `spotNear` — unselected, unfocused); only a drop on a line, the
+ * line's own +, or a grounded line dragged onto a session's line
+ * (`mergeTargetAt`, `.is-merge-target`) adds to a line. NOTHING FOCUSED is a
+ * state: the sky never picks a line itself; a click on empty sky or Esc
+ * selects nothing (`selectSession(null)`). The blocks float as a sky object
+ * too (`SkyPalette`, layout key "palette", `mf_sky_palette`), placed, dragged,
+ * sized and tidied like the intake lane. */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useFlightKinds, useFlightPlans, useFlights, useInstances } from "../../state/queries";
@@ -67,8 +78,10 @@ import { effectiveViewMode, useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
 import { overlayOpen } from "../../lib/keymap";
 import { layoutDiagram, sessionDiagram, type Diagram } from "../../lib/flightDiagram";
-import { STOP_MIME, isLive, newStep, type Flight, type FlightPlan, type FlightRow, type StepKindDef } from "../../lib/flights";
-import { attachGrounded, startFlightOn, startGrounded, tackOn, tackOnNew, tackOnPlan } from "../../lib/flightsApi";
+import { STOP_MIME, isLive, newStep, type Flight, type FlightPlan, type FlightRow } from "../../lib/flights";
+import { attachGrounded, deleteFlight, startFlightOn, startGrounded, tackOn, tackOnNew, tackOnPlan, tackOnSteps } from "../../lib/flightsApi";
+import type { CatalogDrop } from "../../lib/stopCatalog";
+import { toast } from "../../lib/toast";
 import { defaultStepFor, groundedDiagram, groundedFlights, groundedIdOf, groundedKey, isGroundedKey } from "../../lib/groundedLines";
 import { windowName } from "../../lib/windowName";
 import { reducedMotion, registerSkyHost, type Box, type SkyHost } from "../../lib/viewMode";
@@ -79,7 +92,11 @@ import {
   INTAKE_W,
   LINES_LEFT,
   NEW_SESSION_MIME,
+  PALETTE_H,
+  PALETTE_W,
+  PLACE_GAP,
   SKY_DRAWER_KEY,
+  SKY_GAP,
   SKY_MARGIN,
   SKY_MODES,
   ZOOM_MAX,
@@ -95,10 +112,12 @@ import {
   lineLayout,
   lodFor,
   loadSkyLayout,
+  paletteFrame,
   patchSkyLine,
   pinnedPositions,
   skyDrawerOpen,
   skyLineTitles,
+  spotNear,
   tidySkyLayout,
   toPlane,
   zoomAt,
@@ -119,6 +138,7 @@ import {
   gestureFor,
   isStopNode,
   loadSkyTool,
+  mergeTargetAt,
   planeToScreen,
   pruneSelection,
   rectFrom,
@@ -145,6 +165,7 @@ import { SkyLine, type LineDelete } from "./SkyLine";
 import { SkySelectionBar, type SelectionAsk } from "./SkySelection";
 import { GroundedLine, groundedName } from "./GroundedLine";
 import { StopShelf } from "./StopShelf";
+import { PALETTE_KEY, PALETTE_MODE_KEY, SkyPalette, type PaletteMode } from "./SkyPalette";
 import { SkyGuide } from "./SkyGuide";
 import { TakeoffDialog } from "./TakeoffDialog";
 import { Bird } from "./Bird";
@@ -173,7 +194,7 @@ const TOOL_CHIPS: Record<SkyTool, { label: string; title: string }> = {
  * field, an open card, a line's editor, a menu, the selection's bar, the
  * new-session block. */
 const SKY_CONTROLS =
-  "button, a, input, textarea, select, summary, label, [contenteditable=true], [role=menu], [role=menuitem], [data-no-drag], .skl-card, .skl-panels, .sky-selbar, .sky-own-scroll, .sky-new";
+  "button, a, input, textarea, select, summary, label, [contenteditable=true], [role=menu], [role=menuitem], [data-no-drag], .skl-card, .skl-panels, .sky-selbar, .sky-own-scroll, .sky-new, .sky-palette-slot";
 
 /** What a press landed on (lib/skySelect `gestureFor`'s target). */
 export function skyTargetOf(el: Element | null, ground: (el: Element) => boolean): SkyTarget {
@@ -325,9 +346,17 @@ export function SkyView() {
   const [sessionOver, setSessionOver] = useState("");
   // The Sky tour opens by itself the first time the sky is shown (once).
   useAutoTour("sky", true);
-  const [flyPick, setFlyPick] = useState<FlightPlan | null>(null);
-  // A stop chip on the shelf pressed with no line focused: which line.
-  const [tackPick, setTackPick] = useState<StepKindDef | null>(null);
+  // The blocks: the bottom shelf, or floating on the board (a sky object,
+  // layout key "palette"), remembered per device. A phone keeps the shelf.
+  const [paletteMode, setPaletteModeState] = useState<PaletteMode>(() => (readPref(PALETTE_MODE_KEY) === "float" ? "float" : "shelf"));
+  const setPaletteMode = (m: PaletteMode) => {
+    setPaletteModeState(m);
+    writePref(PALETTE_MODE_KEY, m);
+  };
+  const paletteOn = paletteMode === "float" && !narrow;
+  // A grounded line dragged by its bar: the session line under the pointer,
+  // which takes its stops on release.
+  const [mergeOver, setMergeOver] = useState("");
   const [drop, setDrop] = useState<{ title: string; plan: FlightPlan } | null>(null);
   // What a shelf chip being dragged carries (read at its dragstart).
   const dragged = useRef<{ plan: FlightPlan } | { kind: string } | null>(null);
@@ -392,25 +421,33 @@ export function SkyView() {
     const b = intakeSize(layout[INTAKE_KEY], measured[INTAKE_KEY]);
     return { w: Math.max(b.w, INTAKE_W), h: b.h };
   }, [layout, measured]);
+  // The floating palette's room: the frame its corner set, else its measure.
+  const paletteBox = useMemo(() => paletteFrame(layout[PALETTE_KEY]) || measured[PALETTE_KEY] || { w: PALETTE_W, h: PALETTE_H }, [layout, measured]);
   // The selection holds only lines still shown (a closed session drops out).
   const shownIds = useMemo(() => new Set([...lines.map((l) => l.id), ...(intakeOn ? [INTAKE_KEY] : [])]), [lines, intakeOn]);
   const sel = useMemo(() => pruneSelection(selRaw, shownIds), [selRaw, shownIds]);
   /** A line still on the board, shown or filtered out: its session is open
    * (not a hidden helper), or its grounded flight is still grounded. */
   const lineAlive = useCallback(
-    (id: string) => (id === INTAKE_KEY ? intakeOn : isGroundedKey(id) ? groundedIds.has(groundedIdOf(id)) : rows.some((r) => r.title === id && inSky(r))),
-    [rows, groundedIds, intakeOn]
+    (id: string) =>
+      id === INTAKE_KEY ? intakeOn : id === PALETTE_KEY ? paletteOn : isGroundedKey(id) ? groundedIds.has(groundedIdOf(id)) : rows.some((r) => r.title === id && inSky(r)),
+    [rows, groundedIds, intakeOn, paletteOn]
   );
   // Every line's spot: a pinned or already-given one stays put; a newcomer
   // gets the first free place clear of the placed lines (and of the lines a
   // filter hides, at their last measured size). `fresh` is what the effect
   // below keeps once the newcomer has been measured. The intake lane is the
   // first of them: unpinned, it takes the plane's corner and the lines flow
-  // to its right and under it.
+  // to its right and under it. The floating palette comes next.
   const { place, fresh } = useMemo(() => {
-    if (mode === "one") return { place: Object.fromEntries(lines.map((l) => [l.id, { x: SKY_MARGIN, y: SKY_MARGIN }])), fresh: {} as Record<string, Pos> };
+    if (mode === "one") {
+      const one: Record<string, Pos> = Object.fromEntries(lines.map((l) => [l.id, { x: SKY_MARGIN, y: SKY_MARGIN }]));
+      // The palette under the one line, unless it was put somewhere.
+      if (paletteOn) one[PALETTE_KEY] = pinnedPositions(layout)[PALETTE_KEY] || { x: SKY_MARGIN, y: SKY_MARGIN + (lines[0]?.h || 0) + SKY_GAP };
+      return { place: one, fresh: {} as Record<string, Pos> };
+    }
     const saved: Record<string, Pos> = { ...autoPos, ...pinnedPositions(layout) };
-    const items = [{ id: INTAKE_KEY, ...intakeBox }, ...lines];
+    const items = [{ id: INTAKE_KEY, ...intakeBox }, ...(paletteOn ? [{ id: PALETTE_KEY, ...paletteBox }] : []), ...lines];
     const shown = new Set(items.map((l) => l.id));
     const existing: PlacedLine[] = items.filter((l) => saved[l.id]).map((l) => ({ id: l.id, ...saved[l.id], w: l.w, h: l.h }));
     for (const [id, at] of Object.entries(saved))
@@ -419,7 +456,7 @@ export function SkyView() {
     const place: Record<string, Pos> = { ...fresh };
     for (const e of existing) if (shown.has(e.id)) place[e.id] = { x: e.x, y: e.y };
     return { place, fresh };
-  }, [lines, intakeBox, layout, autoPos, measured, lineAlive, vp.w, mode]);
+  }, [lines, intakeBox, paletteBox, paletteOn, layout, autoPos, measured, lineAlive, vp.w, mode]);
   // Keep a newcomer's spot once it is known where it fits: the window
   // measured, the sessions and the flights loaded, the line drawn and
   // measured. Free the spots of sessions that are gone and of lines the
@@ -436,19 +473,20 @@ export function SkyView() {
       const edit = () => (next === cur ? (next = { ...cur }) : next);
       for (const id of Object.keys(cur))
         if (layout[id]?.pinned || !lineAlive(id)) delete edit()[id];
-      if (flightsSettled && intakeReady) for (const [id, at] of Object.entries(fresh)) if (measured[id] || id === INTAKE_KEY) edit()[id] = at;
+      if (flightsSettled && intakeReady) for (const [id, at] of Object.entries(fresh)) if (measured[id] || id === INTAKE_KEY || id === PALETTE_KEY) edit()[id] = at;
       return next;
     });
   }, [fresh, measured, layout, lineAlive, mode, vp.w, instQ.data, flightsSettled, intakeReady]);
   const posOf = useCallback((id: string): Pos => {
     const f = drag?.from[id];
-    return f ? { x: f.x + drag!.dx, y: f.y + drag!.dy } : place[id] || (id === INTAKE_KEY ? { x: SKY_MARGIN, y: SKY_MARGIN } : { x: LINES_LEFT, y: SKY_MARGIN });
+    return f ? { x: f.x + drag!.dx, y: f.y + drag!.dy } : place[id] || (id === INTAKE_KEY || id === PALETTE_KEY ? { x: SKY_MARGIN, y: SKY_MARGIN } : { x: LINES_LEFT, y: SKY_MARGIN });
   }, [drag, place]);
   const rectOf = useCallback((id: string): Rect | null => {
     if (id === INTAKE_KEY) return intakeOn ? { ...posOf(id), ...intakeBox } : null;
+    if (id === PALETTE_KEY) return paletteOn ? { ...posOf(id), ...paletteBox } : null;
     const l = lines.find((x) => x.id === id);
     return l ? { ...posOf(id), w: l.w, h: l.h } : null;
-  }, [lines, posOf, intakeOn, intakeBox]);
+  }, [lines, posOf, intakeOn, intakeBox, paletteOn, paletteBox]);
   // Folded to its tab (the perch count on it) until opened, then remembered
   // per device: a first visit keeps the room for the sky.
   const drawerOpen = skyDrawerOpen(drawerPref);
@@ -532,6 +570,8 @@ export function SkyView() {
   // changed there, so it is checked.
   const lastFocus = useRef(memo ? "" : null as string | null);
   useEffect(() => {
+    // Nothing focused: the next line selected is a change again.
+    if (!focusLine && lastFocus.current) lastFocus.current = "";
     if (!vp.w || !focusLine) return;
     if (lastFocus.current === null || focusLine === lastFocus.current) {
       lastFocus.current = focusLine;
@@ -578,14 +618,22 @@ export function SkyView() {
     setGroundFocus("");
     selectSession(id, { noKeyboard: true });
   }, []);
+  /** Nothing focused (a click on empty sky, Esc): no line, no session — in
+   * the grid too. The sky never picks a line by itself. */
+  const unfocus = useCallback(() => {
+    setGroundFocus("");
+    if (useUi.getState().focused) selectSession(null);
+  }, []);
+  /** A line that just appeared because of something done elsewhere (an
+   * intake item flown): flashed, never focused. */
+  const flashLine = useCallback((id: string) => {
+    setFlash(id);
+    setTimeout(() => alive.current && setFlash((f) => (f === id ? "" : f)), 1400);
+  }, []);
 
-  const setMode = (m: SkyMode) => {
-    if (m === "one" && !focused) {
-      if (!titles[0]) return;
-      focusOn(titles[0]);
-    }
-    setSkyMode(m);
-  };
+  // A view switch never picks a line: This session with nothing focused
+  // says so ("Pick a line to show it alone").
+  const setMode = (m: SkyMode) => setSkyMode(m);
 
   const zoomBy = (k: number) => {
     setCam((c) => zoomAt(c, c.z * k, vp.w / 2, vp.h / 2));
@@ -669,11 +717,20 @@ export function SkyView() {
     const from: Record<string, Pos> = Object.fromEntries(ids.map((x) => [x, posOf(x)]));
     const g = { pid: e.pointerId, sx: e.clientX, sy: e.clientY, moved: false, shift: e.shiftKey };
     const delta = (ev: PointerEvent) => ({ dx: (ev.clientX - g.sx) / camRef.current.z, dy: (ev.clientY - g.sy) / camRef.current.z });
+    // A grounded line dragged alone may land on a session's line: the line
+    // under the pointer (the others sit still while it moves).
+    const merging = isGroundedKey(id) && ids.length === 1;
+    const others = merging ? lines.filter((l) => l.id !== id).map((l) => ({ id: l.id, rect: { ...posOf(l.id), w: l.w, h: l.h } })) : [];
+    const mergeAt = (ev: PointerEvent) => (merging ? mergeTargetAt(planeAt(ev.clientX, ev.clientY), others, id) : "");
     const move = (ev: PointerEvent) => {
       if (ev.pointerId !== g.pid) return;
       if (!g.moved && Math.hypot(ev.clientX - g.sx, ev.clientY - g.sy) < 4) return;
       g.moved = true;
       setDrag({ from, ...delta(ev) });
+      if (merging) {
+        const t = mergeAt(ev);
+        setMergeOver((cur) => (cur === t ? cur : t));
+      }
     };
     const up = (ev: PointerEvent) => {
       if (ev.pointerId !== g.pid) return;
@@ -681,6 +738,12 @@ export function SkyView() {
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", up);
       setDrag(null);
+      setMergeOver("");
+      const into = g.moved && ev.type !== "pointercancel" ? mergeAt(ev) : "";
+      if (into) {
+        void mergeGrounded(id, into, from[id]);
+        return;
+      }
       if (g.moved) {
         const { dx, dy } = delta(ev);
         for (const [id, f] of Object.entries(from)) {
@@ -694,7 +757,7 @@ export function SkyView() {
         return;
       }
       if (!sel.lines.has(id)) clearSel();
-      if (id === INTAKE_KEY) return;
+      if (id === INTAKE_KEY || id === PALETTE_KEY) return;
       if (isGroundedKey(id)) setGroundFocus(id);
       else focusOn(id, true);
     };
@@ -710,46 +773,29 @@ export function SkyView() {
     const fl = rows.find((r) => r.title === title)?.flight as FlightRow | null | undefined;
     return fl && isLive(fl) ? flights?.find((f) => f.id === fl.id) || null : null;
   };
-  /** Add a saved stop to `title` — or the focused line; with neither, a row
-   * of the lines to pick from. A line with a flight in the air takes it as
-   * one more stop (one group) at the end; one without starts flying it. */
-  const onFly = (plan: FlightPlan, title?: string) => {
-    const t = title || focusLine;
-    if (!t) {
-      // Nothing focused: the saved stop lands on the board as a grounded
-      // line in the middle of the view (round 12 — the catalog's Add).
-      setFlyPick(null);
-      void dropGrounded({ plan }, middle());
-      return;
-    }
-    setFlyPick(null);
-    const live = liveFlightOf(t);
+  /** A saved stop dropped on `title`'s line. A line with a flight in the air
+   * takes it as one more stop (one group) at the end; one without starts
+   * flying it. Never the focused line by itself: a palette click places
+   * (`placeGrounded`). */
+  const onFly = (plan: FlightPlan, title: string) => {
+    const live = liveFlightOf(title);
     if (live) void tackOnPlan(live.id, plan.id);
-    else void startFlightOn(t, plan.id);
+    else void startFlightOn(title, plan.id);
   };
   /** A grounded flight takes off on `title` (its ⋯ Fly on a session…). */
   const onAttach = (f: Flight, title: string) => {
     setAttachPick(null);
     void attachGrounded(f.id, { title });
   };
-  /** Tack one stop of `kind` (a shelf chip pressed) onto `title` — or the
-   * focused line; with neither, a row of the lines to pick from. A line
-   * with no flight yet starts an ad-hoc one (the fast-track's rungs become
-   * its stops), as the line's own + does. */
-  const onTack = (kind: string, title?: string) => {
+  /** One stop of `kind` dropped on `title`'s line. A line with no flight yet
+   * starts an ad-hoc one (the fast-track's rungs become its stops), as the
+   * line's own + does. */
+  const onTack = (kind: string, title: string) => {
     const def = kinds.find((k) => k.kind === kind);
     if (!def) return;
-    const t = title || focusLine;
-    if (!t) {
-      // Nothing focused: one grounded stop in the middle of the view.
-      setTackPick(null);
-      void dropGrounded({ kind }, middle());
-      return;
-    }
-    setTackPick(null);
-    const full = liveFlightOf(t);
+    const full = liveFlightOf(title);
     if (full) void tackOn(full.id, newStep(def, full.steps.map((st) => st.id)));
-    else void tackOnNew(t, [newStep(def, [])]);
+    else void tackOnNew(title, [newStep(def, [])]);
   };
   /** The line under a screen point (the shelf chip being dragged over it). */
   const lineAt = (clientX: number, clientY: number): string => {
@@ -818,19 +864,93 @@ export function SkyView() {
       if (def && f) void tackOn(gid, newStep(def, f.steps.map((st) => st.id)));
     } else onTack(d.kind, t);
   };
-  /** A chip on empty sky: stops with no session yet, pinned where it fell. */
+  /** Stops with no session yet: a grounded flight of a saved stop or of one
+   * stop of a kind. */
+  const makeGrounded = async (d: { plan: FlightPlan } | { kind: string }): Promise<Flight | null> => {
+    if ("plan" in d) return startGrounded({ plan_id: d.plan.id });
+    const def = kinds.find((k) => k.kind === d.kind);
+    return def ? startGrounded({ steps: [defaultStepFor(def)] }) : null;
+  };
+  /** A chip on empty sky: stops with no session yet, pinned where it fell —
+   * unfocused, like everything the board is given. */
   const dropGrounded = async (d: { plan: FlightPlan } | { kind: string }, at: Pos) => {
-    let f: Flight | null = null;
-    if ("plan" in d) f = await startGrounded({ plan_id: d.plan.id });
-    else {
-      const def = kinds.find((k) => k.kind === d.kind);
-      if (!def) return;
-      f = await startGrounded({ steps: [defaultStepFor(def)] });
-    }
+    const f = await makeGrounded(d);
     if (!f || !alive.current) return;
-    const id = groundedKey(f.id);
-    setLayout((l) => patchSkyLine(l, id, { x: at.x, y: at.y, pinned: true }));
-    setGroundFocus(id);
+    setLayout((l) => patchSkyLine(l, groundedKey(f.id), { x: at.x, y: at.y, pinned: true }));
+  };
+  /** Where a palette click puts its block (lib/skyLayout `spotNear`): the free
+   * spot nearest just above the shelf's middle, or right of the floating
+   * palette, inside the view, clear of every line, the lane and the palette.
+   * Read at the moment it lands (after the flight is made), so a ref. */
+  const spotRef = useRef<(f: Flight, near: "shelf" | "palette") => Pos>(() => ({ x: 0, y: 0 }));
+  spotRef.current = (f, near) => {
+    const key = groundedKey(f.id);
+    const base = lineSize(groundedDiagram(f, kinds), null);
+    const size = measured[key] || { w: base.w + GROUNDED_HEAD_W, h: base.h };
+    const c = camRef.current;
+    const pad = 16 / c.z;
+    const view: Rect = { x: -c.x / c.z + pad, y: -c.y / c.z + pad, w: vp.w / c.z - 2 * pad, h: vp.h / c.z - 2 * pad };
+    const taken = [...lines.map((l) => l.id).filter((id) => id !== key), INTAKE_KEY, PALETTE_KEY].map(rectOf).filter((r): r is Rect => !!r);
+    const pal = near === "palette" ? rectOf(PALETTE_KEY) : null;
+    const want = pal ? { x: pal.x + pal.w + PLACE_GAP, y: pal.y } : { x: view.x + view.w / 2 - size.w / 2, y: view.y + view.h - size.h };
+    return spotNear(want, taken, size, view);
+  };
+  // A placed line lands at its estimated size; once drawn and measured it is
+  // placed once more at its real size (as `assignSpots` keeps a spot only once
+  // a line is measured), so it never spills out of the view or onto a line.
+  const placing = useRef(new Map<string, "shelf" | "palette">());
+  useEffect(() => {
+    for (const [key, near] of placing.current) {
+      if (!measured[key]) continue;
+      placing.current.delete(key);
+      const f = flights?.find((x) => groundedKey(x.id) === key);
+      if (!f) continue;
+      const at = spotRef.current(f, near);
+      setLayout((l) => patchSkyLine(l, key, { x: at.x, y: at.y, pinned: true }));
+    }
+  }, [measured, flights]);
+  /** A palette click (a chip, the catalog's Add): the block goes ON THE
+   * BOARD — a grounded line near the palette, pinned there, nothing
+   * selected, nothing focused (docs/flights.md "Round 13": place, don't
+   * tack). Only a drop on a line, or its own +, adds to a line. */
+  const placeGrounded = async (d: CatalogDrop, near: "shelf" | "palette") => {
+    const plan = "planId" in d ? plans.find((p) => p.id === d.planId) : null;
+    if ("planId" in d && !plan) return;
+    const f = await makeGrounded(plan ? { plan } : { kind: (d as { kind: string }).kind });
+    if (!f || !alive.current) return;
+    const at = spotRef.current(f, near);
+    setLayout((l) => patchSkyLine(l, groundedKey(f.id), { x: at.x, y: at.y, pinned: true }));
+    placing.current.set(groundedKey(f.id), near);
+    // This session and Perched on you draw no grounded line: say where it went.
+    const m = useUi.getState().skyMode;
+    if (m === "one" || m === "perched") toast("“" + groundedName(f) + "” is on the board — All or Mine shows it");
+  };
+  /** A grounded line dropped on a session's line: its stops go onto that
+   * session — `attachGrounded` when it has no flight, else tacked on as one
+   * group named after the grounded line, and the grounded flight goes. Undo
+   * makes the grounded line again from the same stops, where it was. */
+  const mergeGrounded = async (key: string, title: string, was: Pos | undefined) => {
+    const f = flights?.find((x) => x.id === groundedIdOf(key));
+    if (!f) return;
+    const steps = f.steps;
+    const name = f.plan_name || "";
+    const live = liveFlightOf(title);
+    let ok = false;
+    if (!live) ok = !!(await attachGrounded(f.id, { title }));
+    else if (await tackOnSteps(live.id, steps, undefined, name || undefined)) ok = await deleteFlight(f.id);
+    if (!ok) return;
+    const n = steps.length;
+    const msg = "Moved " + n + (n === 1 ? " stop" : " stops") + " onto " + windowName(title);
+    toast(msg, {
+      action: {
+        label: "Undo",
+        ariaLabel: "Undo: put “" + (name || "the stops") + "” back on the board",
+        onClick: () =>
+          void startGrounded({ steps, ...(name ? { name } : {}) }).then((g) => {
+            if (g && was && alive.current) setLayout((l) => patchSkyLine(l, groundedKey(g.id), { x: was.x, y: was.y, pinned: true }));
+          }),
+      },
+    });
   };
   const onShelfDragEnd = () => {
     dragged.current = null;
@@ -921,7 +1041,11 @@ export function SkyView() {
     const id = skyObjectOf(el);
     if (!sel.lines.has(id)) clearSel();
     if (!id || id === INTAKE_KEY) {
-      if (!id) vpRef.current?.focus({ preventScroll: true });
+      // Empty sky: nothing selected, nothing focused.
+      if (!id) {
+        vpRef.current?.focus({ preventScroll: true });
+        unfocus();
+      }
       return;
     }
     if (isGroundedKey(id)) setGroundFocus(id);
@@ -1009,7 +1133,10 @@ export function SkyView() {
       // mode's marquee starts anywhere) takes it in or out.
       const id = skyObjectOf(m.el);
       if (m.add && id) setSel((s) => toggleLine(s, id));
-      else if (!m.add) clearSel();
+      else if (!m.add) {
+        clearSel();
+        unfocus();
+      }
       return;
     }
     const o = vpCorner();
@@ -1167,11 +1294,9 @@ export function SkyView() {
     const el = document.activeElement;
     // The sky's own cards are dialogs too (role="dialog"): Esc folds them
     // unless a real dialog is over the whole sky.
-    if (e.key === "Escape" && ((newAt && !newAt.flying) || flyPick || tackPick || attachPick) && !useUi.getState().openDialog) {
+    if (e.key === "Escape" && ((newAt && !newAt.flying) || attachPick) && !useUi.getState().openDialog) {
       e.preventDefault();
       if (!newAt?.flying) setNewAt(null);
-      setFlyPick(null);
-      setTackPick(null);
       setAttachPick(null);
       return;
     }
@@ -1230,6 +1355,10 @@ export function SkyView() {
     } else if (k === "Escape" && focusLine && layout[focusLine]?.open) {
       handled();
       onLayout(focusLine, { open: false });
+    } else if (k === "Escape" && (focused || groundFocus) && !marquee.current) {
+      // Nothing selected, no dialog, no marquee: Esc leaves nothing focused.
+      handled();
+      unfocus();
     }
   };
   // Delete / Backspace on the sky (lib/skySelect `deleteFor`): the selection
@@ -1261,7 +1390,7 @@ export function SkyView() {
     const root = vpRef.current;
     if (!el || el === document.body || el === root) return "sky";
     if (!root?.contains(el)) return null;
-    if (typing(el) || el.closest(".skl-card, .pane, .skl-panels, .sky-selbar, [role=menu], [role=dialog], [role=alertdialog]")) return null;
+    if (typing(el) || el.closest(".skl-card, .pane, .skl-panels, .sky-selbar, .sky-palette-slot, [role=menu], [role=dialog], [role=alertdialog]")) return null;
     const line = skyObjectOf(el);
     if (!line) return "sky";
     return { line, node: el.closest("[data-node]")?.getAttribute("data-node") || "" };
@@ -1322,7 +1451,7 @@ export function SkyView() {
       : mode === "one"
         ? focused
           ? "“" + windowName(focused) + "” isn't in the sky right now."
-          : "Pick a line first."
+          : "Pick a line to show it alone."
         : query
           ? "No line matches “" + query + "”."
           : mode === "perched"
@@ -1390,15 +1519,9 @@ export function SkyView() {
     </div>
   );
 
-  // Which line: a saved stop (Add) or a stop chip (Tack on) with no line
-  // focused, or a grounded line's stops (Fly) looking for their session.
-  const asking = attachPick
-    ? { word: "Fly", name: groundedName(attachPick), on: (t: string) => onAttach(attachPick, t) }
-    : flyPick
-      ? { word: "Add", name: flyPick.name, on: (t: string) => onFly(flyPick, t) }
-      : tackPick
-        ? { word: "Tack", name: tackPick.label, on: (t: string) => onTack(tackPick.kind, t) }
-        : null;
+  // Which line: a grounded line's stops (⋯ Fly on a session…) looking for
+  // their session. A palette click never asks: it places.
+  const asking = attachPick ? { word: "Fly", name: groundedName(attachPick), on: (t: string) => onAttach(attachPick, t) } : null;
   // A grounded flight flies on a session with no flight in the air.
   const pickable = attachPick ? titles.filter((t) => !liveFlightOf(t)) : titles;
   const pick = asking && (
@@ -1415,11 +1538,7 @@ export function SkyView() {
       <button
         type="button"
         className="linklike"
-        onClick={() => {
-          setFlyPick(null);
-          setTackPick(null);
-          setAttachPick(null);
-        }}
+        onClick={() => setAttachPick(null)}
       >
         Cancel
       </button>
@@ -1440,9 +1559,19 @@ export function SkyView() {
 
   // The Stops shelf: the chips' drags are read here as they start (the sky
   // owns their drops). `display: contents`, so the shelf sits in the stage.
+  // A click on a chip PLACES its block above the shelf; floating, the shelf
+  // gives way to the palette on the board.
   const shelf = (
     <div className="sky-shelf-host" onDragStart={onShelfDragStart} onDragEnd={onShelfDragEnd}>
-      <StopShelf onTack={onTack} onTackPlan={onFly} onSession={newHere} folded={shelfFolded} onFold={foldShelf} />
+      {!paletteOn && (
+        <StopShelf
+          onPlace={(d) => void placeGrounded(d, "shelf")}
+          onFloat={narrow ? undefined : () => setPaletteMode("float")}
+          onSession={newHere}
+          folded={shelfFolded}
+          onFold={foldShelf}
+        />
+      )}
       {takeoff && <TakeoffDialog plan={takeoff} onClose={() => setTakeoff(null)} />}
     </div>
   );
@@ -1472,8 +1601,8 @@ export function SkyView() {
         const guess = newAt.flying;
         setLayout((l) => patchSkyLine(l, title, { x: newAt.x, y: newAt.y, pinned: true }));
         if (guess && guess !== title) setLayout((l) => tidySkyLayout(l, guess));
+        // Its line shows where the block sat; it is not focused for you.
         setNewAt(null);
-        focusOn(title);
       }}
     />
   );
@@ -1495,12 +1624,9 @@ export function SkyView() {
           onMeasure={at ? (w, h) => onMeasure(id, w, h) : undefined}
           draggable={liveTool === "drag"}
           registerDelete={at ? registerFor(id) : undefined}
-          onFlyOn={() => {
-            setFlyPick(null);
-            setTackPick(null);
-            setAttachPick(f);
-          }}
+          onFlyOn={() => setAttachPick(f)}
           sessionOver={sessionOver === id}
+          merging={!!mergeOver && !!drag?.from[id]}
           selected={at ? sel.lines.has(id) : undefined}
           highlighted={at ? sel.stops.get(id) : undefined}
           onShiftSelect={at ? (n) => setSel((s) => toggleStop(s, id, n.id)) : undefined}
@@ -1524,6 +1650,7 @@ export function SkyView() {
       draggable={liveTool === "drag"}
       registerDelete={at ? registerFor(id) : undefined}
       dropFlyway={drop?.title === id ? drop.plan : null}
+      mergeTarget={mergeOver === id}
       selected={at ? sel.lines.has(id) : undefined}
       highlighted={at ? sel.stops.get(id) : undefined}
       onShiftSelect={at ? (n) => setSel((s) => toggleStop(s, id, n.id)) : undefined}
@@ -1568,6 +1695,8 @@ export function SkyView() {
   const intakeFrameNow = intakeFrame(layout[INTAKE_KEY]);
   const intakeW = intakeFrameNow?.w ?? (intakeOpen ? INTAKE_OPEN_W : INTAKE_W);
   const intakeAt = posOf(INTAKE_KEY);
+  const paletteFrameNow = paletteFrame(layout[PALETTE_KEY]);
+  const paletteAt = posOf(PALETTE_KEY);
 
   if (narrow)
     return (
@@ -1639,7 +1768,7 @@ export function SkyView() {
                   <IntakeLane
                     rows={rows}
                     plans={plans}
-                    onFly={focusOn}
+                    onFly={flashLine}
                     width={intakeW}
                     height={intakeFrameNow?.h}
                     zoom={cam.z}
@@ -1649,6 +1778,31 @@ export function SkyView() {
                     onHeadDown={(e) => onDragStart(INTAKE_KEY, e)}
                     draggable={liveTool === "drag"}
                     onMeasure={(w, h) => onMeasure(INTAKE_KEY, w, h)}
+                  />
+                </div>
+              )}
+              {paletteOn && (
+                // The floating palette: a sky object at its spot (layout key
+                // "palette"), dragged by its head, sized by its corner; its
+                // blocks drag out exactly as the shelf's chips.
+                <div
+                  className={"sky-palette-slot" + (drag?.from[PALETTE_KEY] ? " is-dragging" : "")}
+                  data-lod={lodFor(cam.z)}
+                  style={{ transform: `translate(${paletteAt.x}px, ${paletteAt.y}px)`, "--sky-z": cam.z } as React.CSSProperties}
+                  onDragStart={onShelfDragStart}
+                  onDragEnd={onShelfDragEnd}
+                >
+                  <SkyPalette
+                    width={paletteFrameNow?.w}
+                    height={paletteFrameNow?.h}
+                    zoom={cam.z}
+                    onHeadDown={(e) => onDragStart(PALETTE_KEY, e)}
+                    draggable={liveTool === "drag"}
+                    onResize={(w, h) => onLayout(PALETTE_KEY, { w, h })}
+                    onMeasure={(w, h) => onMeasure(PALETTE_KEY, w, h)}
+                    onPlace={(d) => void placeGrounded(d, "palette")}
+                    onDock={() => setPaletteMode("shelf")}
+                    onSession={newHere}
                   />
                 </div>
               )}

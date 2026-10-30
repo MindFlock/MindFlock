@@ -509,7 +509,8 @@ body.view-switch #sky-view {
 }
 
 .sky-plane[data-tidying] .sky-line-slot,
-.sky-plane[data-tidying] .sky-intake {
+.sky-plane[data-tidying] .sky-intake,
+.sky-plane[data-tidying] .sky-palette-slot {
   transition: transform 0.28s ease;
 }
 
@@ -769,7 +770,8 @@ details.fl-group-waiting > summary {
 
 @media (prefers-reduced-motion: reduce) {
   .sky-plane[data-tidying] .sky-line-slot,
-  .sky-plane[data-tidying] .sky-intake {
+  .sky-plane[data-tidying] .sky-intake,
+  .sky-plane[data-tidying] .sky-palette-slot {
     transition: none;
   }
   .sky-line {
@@ -816,4 +818,19 @@ details.fl-group-waiting > summary {
 .sky[data-tool="click"] .sky-viewport.is-panning,
 .sky[data-tool="click"] .sky-viewport.is-panning * {
   cursor: grabbing !important;
+}
+
+/* --- Round 13: the floating palette (SkyPalette) as a sky object ---------
+   It sits at its spot like the intake lane (layout key "palette"), over the
+   lines it may cover, and lifts while it is dragged by its head. */
+.sky-palette-slot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 4;
+}
+
+.sky-palette-slot.is-dragging {
+  transition: none;
+  z-index: 7;
 }
