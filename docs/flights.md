@@ -3833,3 +3833,80 @@ from it); a double-click on a block adds it to the map as well.
   short pause) OR on double-click — never twice for one double-click
   (`clickOrDouble` helper: a click waits ~250 ms and is cancelled by a second
   click; the double-click places once).
+
+### As built: round 14 palette
+
+Source: `components/flights/SkyPalette.tsx` (+ `.css`), `StopCatalog.tsx`
+(+ `.css`), `StopShelf.tsx`, `lib/clickOrDouble.ts`, `lib/stopCatalog.ts`;
+tests in `skyPalette.test.ts`, `stopCatalog.test.ts`, `stopShelf.test.ts`,
+`clickOrDouble.test.ts`, `flightsButtons.test.ts`.
+
+**What the host passes.** No drop changed: every card still drags with the
+round-12 MIMEs (STOP_MIME / FLYWAY_MIME / NEW_SESSION_MIME).
+
+| Surface | New props | What they do |
+|---|---|---|
+| `StopShelf` | `onCatalog?()` | "All blocks…" calls it (the host floats the palette large) instead of opening a dialog; the chip then drops `aria-haspopup` / `aria-expanded` and says "in a palette on the board". Without it the shelf opens `StopCatalog` (a dialog), as before. |
+| `SkyPalette` | `onClose?()`, `focusFilter?` (the round-14 seams, now wired) | `onClose` draws the head's × (`fl-icon-btn sky-palette-close`, "Close — back to the shelf"); `focusFilter` focuses the filter on mount (`focus({preventScroll: true})`, so the sky never scrolls to it). Every round-13 prop is unchanged. |
+
+**The palette is every block.** Its body is the catalog's, compact:
+`StopCatalogBody` with `compact`, `idPrefix="sky-palette"` (list
+`#sky-palette-list`, rows `sky-palette-row-N`), `listClass="sky-palette-body"`
+(so `.sky-palette-body.sky-own-scroll` stays), `place`, `onAdd = onPlace`.
+The **Session** card comes first (the body's `lead(query)` slot; it drops out
+when the filter doesn't match "Session" / "A new agent session"; it is no row,
+so the arrows skip it), then every kind (`catalogKinds`: the defaults first),
+then every saved stop (`savedStopOrder`: built-ins first) — whatever the pick.
+The grid is `repeat(auto-fill, minmax(132px, 1fr))`; a saved stop spans two
+columns; the frame (360 × 420 by default, or the host's) decides how many
+show and the list scrolls past it. A compact card: an icon tile, the name, one
+line (a kind's summary; a saved stop's step boxes, its path in the title), a
+★ / ☆ (shown on the hovered / picked card or when on; always on a touch
+screen), and a saved stop's ⋯; no badges, no Add (the click places). The head:
+**Blocks**, a count of every block (kinds + saved stops), the filter (`flex:
+1`), the ⋯ (**Dock at the bottom**) and the ×. "All blocks…" is gone from the
+palette (it IS all the blocks), and so are its round-13 regions, chips,
+right-click menus and inline delete question (`useSavedActions` is now the
+shelf's alone).
+
+**The ★ governs only the bottom shelf.** A card's ★ / ☆ is
+`toggleShelf` on `useShelfPick` (titles "Put it on the bottom shelf" / "On
+the bottom shelf — click to take it off"); the palette shows every block either
+way.
+
+**`StopCatalogBody`** (StopCatalog.tsx, exported): the filter, handed to the
+surface's `head(filter)` render prop, then the list — Blocks and Multi-step
+grids of cards, then the hint ("… · a click or a double-click puts it on the
+board · the arrows pick, Enter puts it on the board"). It owns the query, the
+arrows' pick, Rename (`PlanNameField`), the delete question and **Takes off…**
+(`cardMenu` now: Rename, Takes off…, On the shelf, Reset / Delete — so a
+palette-only owner still reaches the TakeoffDialog). `onDrag(on, landed)` and
+`escRef` are the Modal's hooks; the arrows scroll only the list to the picked
+card (`reveal`, from the rects over the list's own scale — `scrollIntoView`
+would also scroll the sky the palette floats in).
+
+**`StopCatalog`** is now a thin Modal around the body (the shelf's fallback):
+`min(920px, 70vw) × min(680px, 72vh)` instead of 92vw × 86vh, so the board
+shows around it; the drag-through (`.is-dragging`), drop-closes and Esc-answers-
+the-question rules are as before, through `onDrag` / `escRef`.
+
+**Click or double-click, once** (`lib/clickOrDouble.ts`): `clickOrDouble(place,
+{delay = 250, pair = 500}) → {onClick, onDoubleClick, cancel}`. A click arms a
+`delay` timer; a second click cancels it; the dblclick then places once. A
+keyboard click (`detail` 0: Enter / Space on a button) places at once. Two slow
+clicks (past `delay`, inside the OS's double-click time) place on the first and
+skip the dblclick (it comes within `pair` ms of the click that placed).
+`useClickOrDouble(place?)` keeps one per mount (a waiting click meets its
+second click across a re-render), calls the newest `place`, cancels on
+unmount. Used by the shelf's kind, saved-stop and Session chips (a drag start
+cancels a waiting click), by every catalog / palette card (one per card key,
+kept in the body; a press on its ★ / ⋯ / field / Add / question is theirs), and
+by the palette's Session card. Seen in the browser (a scratch build, mocked
+API): a double-click on a palette card → one `POST /api/flights/start`, a
+click → one.
+
+**Seen, for the sky (not changed here).** With the palette hanging past the
+viewport's right edge, focusing its filter by a script scrolled the sky's
+viewport ~33px (the plane, intake and lines shifted with it): the viewport is
+`overflow: hidden` but still scrollable by focus. `focusFilter` uses
+`preventScroll`, so opening it is safe; a typed caret may still do it.
