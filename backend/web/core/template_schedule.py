@@ -795,12 +795,24 @@ async def tick(now: Optional[float] = None, here: Optional[bool] = None) -> List
     return fired
 
 
+async def _tick_triggers() -> None:
+    """The flight triggers' pass (backend.web.core.flight_triggers: main_push
+    / main_red — it paces itself to its own minute)."""
+    from backend.web.core import flight_triggers
+
+    await flight_triggers.maybe_tick()
+
+
 async def run_loop() -> None:
-    """Forever: :func:`tick` and :func:`tick_flights` every
-    :data:`TICK_SECONDS` (the addon's startup registers it; off under
-    pytest)."""
+    """Forever: :func:`tick`, :func:`tick_flights` and the flight triggers'
+    tick every :data:`TICK_SECONDS` (the addon's startup registers it; off
+    under pytest)."""
     while True:
-        for what, step in (("template", tick), ("flight", tick_flights)):
+        for what, step in (
+            ("template", tick),
+            ("flight", tick_flights),
+            ("trigger", _tick_triggers),
+        ):
             try:
                 await step()
             except asyncio.CancelledError:
@@ -866,14 +878,26 @@ async def _default_flight_start(body: dict) -> dict:
     return await flight_driver.start(body)
 
 
+#: The ``by`` a flight records for each way a plan fires by itself; anything
+#: else (Fly now) is the user's.
+_BY_OF_TRIGGER = frozenset({"schedule", "main_push", "main_red", "hook"})
+
+
 async def fire_flight(
-    plan: dict, trigger: str, *, now: Optional[float] = None, start=None
+    plan: dict,
+    trigger: str,
+    *,
+    now: Optional[float] = None,
+    start=None,
+    subject: Optional[dict] = None,
 ) -> Tuple[int, dict]:
     """Take off a flight of ``plan`` through the same call ``POST
     /api/flights/start`` makes (no title, no subject of an intake kind: the
-    session is created from the plan) with ``by="schedule"``, and record it.
-    ``(status, {"flight"})`` or the refusal's ``(status, {error, detail})``,
-    recorded as a FAILED run."""
+    session is created from the plan) with ``by="schedule"`` (or the
+    trigger's own name: ``main_push`` / ``main_red`` / ``hook``), and record
+    it. ``subject`` replaces the schedule's ``{kind: schedule, title: <plan
+    name>}`` (a trigger says what moved). ``(status, {"flight"})`` or the
+    refusal's ``(status, {error, detail})``, recorded as a FAILED run."""
     from backend.web.core import flights
 
     now = time.time() if now is None else now
@@ -882,8 +906,8 @@ async def fire_flight(
     path = await asyncio.to_thread(flight_runs_path)
     body = {
         "plan_id": plan.get("id"),
-        "by": "schedule" if trigger == "schedule" else "user",
-        "subject": {"kind": "schedule", "title": plan.get("name") or ""},
+        "by": trigger if trigger in _BY_OF_TRIGGER else "user",
+        "subject": subject or {"kind": "schedule", "title": plan.get("name") or ""},
     }
     try:
         flight = await start(body)
@@ -950,6 +974,46 @@ def _emit_flight_plan(plan: dict, trigger: str, **data) -> None:
         )
     except Exception:  # noqa: BLE001
         pass
+
+
+async def fire_or_skip(
+    plan: dict,
+    trigger: str,
+    *,
+    now: Optional[float] = None,
+    start=None,
+    subject: Optional[dict] = None,
+) -> Tuple[int, dict]:
+    """:func:`fire_flight`, unless the plan's previous flight is still in
+    the air or its session busy (:func:`flight_busy_reason`): then the run
+    is recorded ``skipped`` (history + ``flight.changed``) and the answer is
+    ``(409, {"error": "busy", "detail"})`` — a trigger never stacks flights,
+    the schedule's own rule."""
+    now = time.time() if now is None else now
+    key = _key(plan.get("id"))
+    path = await asyncio.to_thread(flight_runs_path)
+    runs = await asyncio.to_thread(load_runs, path)
+    rec = runs.get(key) or {}
+    busy = await asyncio.to_thread(flight_busy_reason, rec)
+    if busy:
+        prev = str(rec.get("last_session") or "")
+        await asyncio.to_thread(
+            record_run,
+            key,
+            {"at": now, "trigger": trigger, "skipped": busy, "session": prev},
+            path=path,
+            last_skip_at=now,
+            last_skip=busy,
+        )
+        _emit_flight_plan(
+            plan,
+            trigger,
+            skipped=busy,
+            session=prev,
+            detail="Skipped a flight of “%s”: %s" % (plan.get("name") or "", busy),
+        )
+        return 409, {"error": "busy", "detail": busy}
+    return await fire_flight(plan, trigger, now=now, start=start, subject=subject)
 
 
 async def tick_flights(

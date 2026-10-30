@@ -17,7 +17,9 @@ export type StepActor = "robot" | "you";
 export type FlightState = "grounded" | "running" | "waiting_you" | "paused" | "halted" | "done" | "cancelled";
 export type StepState = "pending" | "running" | "waiting_you" | "done" | "skipped" | "failed";
 export type OnFail = "halt" | "agent" | "skip" | "you";
-export type TriggerKind = "manual" | "ticket" | "pr" | "issue" | "schedule";
+export type TriggerKind = "manual" | "ticket" | "pr" | "issue" | "schedule" | "main_push" | "main_red" | "hook";
+/** The triggers that watch a repository's default branch (`trigger.repo`). */
+export const MAIN_TRIGGERS: readonly TriggerKind[] = ["main_push", "main_red"];
 export type SubjectKind = "ticket" | "pr" | "issue" | "schedule" | "manual";
 
 /** `template_schedule.normalize_schedule`'s shape. */
@@ -57,6 +59,14 @@ export interface FlightTrigger {
   kind: TriggerKind;
   schedule: FlightSchedule | null;
   paused: boolean;
+  /** Round 15: the repository a `main_push` / `main_red` trigger watches
+   * (an absolute path; the server refuses a main_* trigger without one). */
+  repo?: string;
+  /** No re-fire inside this many minutes (server default 60). */
+  quiet_minutes?: number;
+  /** A `hook` trigger's token (32 hex), minted by the server on save: the
+   * URL is `<origin>/api/hooks/flyway/<token>` (`hookUrl`). */
+  token?: string;
 }
 
 export interface FlightPlan {
@@ -499,7 +509,25 @@ export const TRIGGER_LABEL: Record<TriggerKind, string> = {
   pr: "Pull request",
   issue: "Issue",
   schedule: "Schedule",
+  main_push: "When main moves",
+  main_red: "When main is red",
+  hook: "When a hook fires",
 };
+
+/** The triggers that start their own session (the rest attach to an intake's). */
+export function triggerMakesSession(kind: TriggerKind): boolean {
+  return kind === "manual" || kind === "schedule" || kind === "hook" || MAIN_TRIGGERS.includes(kind);
+}
+
+/** The address an outside system POSTs to fire a `hook` trigger: "" until
+ * the plan is saved (the server mints the token then). `origin` defaults to
+ * this page's. */
+export function hookUrl(trigger: Pick<FlightTrigger, "token">, origin?: string): string {
+  const token = trigger.token || "";
+  if (!token) return "";
+  const base = origin ?? (typeof window !== "undefined" && window.location ? window.location.origin : "");
+  return base + "/api/hooks/flyway/" + token;
+}
 
 /** The `on_fail` chips' words. */
 export const ON_FAIL_LABEL: Record<OnFail, string> = {
