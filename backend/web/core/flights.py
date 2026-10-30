@@ -43,6 +43,7 @@ from backend.config.config import GetConfigDir
 from backend.config.home_guard import guard
 from backend.fsutil import atomic_write_json, read_json
 from backend.web.core import flight_kinds as _kinds
+from backend.web.core import flight_when as _when
 
 __all__ = [
     "STEP_KINDS",
@@ -664,7 +665,29 @@ def normalize_step(
     group = _normalize_group(raw.get("group"))
     if group is not None:
         step["group"] = group
+    when = _normalize_when(raw.get("when"), strict, where)
+    if when:
+        step["when"] = when
     return step
+
+
+def _normalize_when(raw, strict: bool, where: str) -> str:
+    """A step's ``when`` (docs/flights.md "Round 15") in its canonical
+    spelling, "" when none. Strict: a bad one is ``PlanError(message,
+    where + ".when")``; lenient: it is dropped."""
+    text = str(raw if raw is not None else "").replace("\x00", "").strip()
+    if not text:
+        return ""
+    try:
+        if len(text) > _when.MAX_LEN:
+            raise _when.WhenError(
+                "when is at most %d characters" % _when.MAX_LEN, _when._HINT
+            )
+        return _when.canonical(_when.parse(text))
+    except _when.WhenError as err:
+        if strict:
+            raise PlanError(err.message, where + ".when")
+        return ""
 
 
 def _default_title(kind: str, config: dict) -> str:
@@ -1312,8 +1335,10 @@ def _keep_finished(flights: Dict[str, dict]) -> None:
 # Taking off
 # --------------------------------------------------------------------------- #
 def fill_prompt(text: str, flight: dict) -> str:
-    """``{ticket} {pr} {branch} {subject}`` filled from the flight. An unknown
-    brace is left as typed (a prompt may legitimately contain braces)."""
+    """``{ticket} {pr} {branch} {subject} {preview}`` filled from the flight
+    (``{preview}``: the latest done Preview stop's ``detail.url``, "" when
+    none). An unknown brace is left as typed (a prompt may legitimately
+    contain braces)."""
     subj = flight.get("subject") or {}
     kind = subj.get("kind") or "manual"
     ident = subj.get("id") or ""
@@ -1326,10 +1351,27 @@ def fill_prompt(text: str, flight: dict) -> str:
         ),
         "branch": flight.get("branch") or "",
         "subject": subj.get("title") or ident or flight.get("plan_name") or "",
+        "preview": preview_url(flight),
     }
     return re.sub(
-        r"\{(ticket|pr|branch|subject)\}", lambda m: values[m.group(1)], str(text or "")
+        r"\{(ticket|pr|branch|subject|preview)\}",
+        lambda m: values[m.group(1)],
+        str(text or ""),
     )
+
+
+def preview_url(flight: dict) -> str:
+    """The URL of the latest done ``preview`` stop of ``flight``, "" when
+    none has flown."""
+    url = ""
+    states = flight.get("step_states") or {}
+    for s in flight.get("steps") or []:
+        if s.get("kind") != "preview":
+            continue
+        ss = states.get(s.get("id")) or {}
+        if ss.get("state") == "done":
+            url = str((ss.get("detail") or {}).get("url") or "") or url
+    return url
 
 
 def _first_agent_index(steps: List[dict]) -> Optional[int]:
@@ -2505,6 +2547,27 @@ def fail_action(flight: dict, reason: str, obs: Optional[dict] = None) -> dict:
     )
 
 
+def _when_verdict(step: dict, obs: dict) -> Optional[dict]:
+    """A pending step's ``when`` (docs/flights.md "Round 15"): None to carry
+    on; ``skip_when`` when the condition is false against ``obs["facts"]``;
+    a visible wait while the facts are missing (the driver gathers them for
+    every pending step with a ``when``, so that is a safety net)."""
+    when = str(step.get("when") or "")
+    if not when:
+        return None
+    try:
+        cond = _when.parse(when)
+    except _when.WhenError:
+        return None  # a stored condition nobody can read never blocks a flight
+    facts = obs.get("facts")
+    if not isinstance(facts, dict):
+        return _wait("checking %s" % when)
+    ok, why = _when.evaluate(cond, facts)
+    if ok:
+        return None
+    return {"action": "skip_when", "note": "skipped: %s — %s" % (when, why)}
+
+
 def next_action(flight: dict, obs: dict, now: float) -> dict:
     """What the driver should do for ``flight`` now — one of ``wait | run |
     done | fail | you | advance | finish | hold`` plus a ``note`` (the visible wait
@@ -2542,6 +2605,9 @@ def next_action(flight: dict, obs: dict, now: float) -> dict:
     if st == "pending":
         if _armed_halt(step, ss):
             return {"action": "hold", "note": HALT_POINT}
+        skip = _when_verdict(step, obs)
+        if skip is not None:
+            return skip
         if step["kind"] == "ticket" and (
             flight["subject"].get("kind") not in ("ticket", "issue")
             or not flight["subject"].get("id")
@@ -2729,6 +2795,13 @@ def apply(flight: dict, action: dict, now: float) -> dict:
             ss["state"] = "skipped"
             ss["note"] = note
             _hist(flight, now, sid, "skipped", note)
+        _advance(flight, now)
+    elif kind == "skip_when":
+        # The step's ``when`` is false: skipped by the planner, never run.
+        ss["state"] = "skipped"
+        ss["note"] = note
+        ss["detail"].update(upd)
+        _hist(flight, now, sid, "skipped", note)
         _advance(flight, now)
     elif kind == "you":
         ss["state"] = "waiting_you"
