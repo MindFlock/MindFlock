@@ -1,6 +1,10 @@
-/** The Sky's new-session block: a card that opens where the owner
- * double-clicked empty sky — pick a repository, say what to do, optionally a
- * flyway, and Fly (docs/flights-intake-lane.md).
+/** The Sky's new-session block: a block on the sky that opens where the
+ * owner double-clicked empty sky (or dropped + New session) — pick a
+ * repository, say what to do, optionally a flyway, and Fly
+ * (docs/flights-intake-lane.md, docs/flights-stable.md). Its bar (the bird,
+ * "New session") drags it about like a line's bar (`onMove`, plane px; the
+ * sky's `zoom` turns pointer px into plane px); the session it makes is
+ * pinned where the block sat.
  *
  *  - Repository: the New dialog's suggestions (`/api/repos/suggest` — recent
  *    first) as chips, plus a path field with Browse… (the shared folder
@@ -16,7 +20,7 @@
  * session (`POST /api/flights/start {plan_id, title}`). Errors stay in the
  * card — Electron has no alert(). Escape cancels. */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { api } from "../../api/client";
 import type { Instance } from "../../api/types";
 import { refreshInstances, useAgentChoices, useSettingsDoc } from "../../state/queries";
@@ -29,6 +33,7 @@ import { isNameQuery, titleFromPrompt, type RepoSuggestion } from "../dialogs/ne
 import { PathField } from "../PathField";
 import type { FlightPlan } from "../../lib/flights";
 import { ChipRow } from "./controls";
+import { Bird } from "./Bird";
 import "./FlywayCanvas.css";
 import "./NewSessionBlock.css";
 
@@ -36,6 +41,11 @@ export interface NewSessionBlockProps {
   x: number;
   y: number;
   plans: FlightPlan[];
+  /** The sky's zoom, so a drag of the bar follows the pointer (default 1). */
+  zoom?: number;
+  /** The bar was dragged: the block's new top-left (plane px). Without it the
+   * block stays put (the phone's list). */
+  onMove?(at: { x: number; y: number }): void;
   onCreated(title: string): void;
   onCancel(): void;
 }
@@ -149,7 +159,7 @@ function bodyFor(opts: { repo: string; prompt: string; program: string; launchAr
   });
 }
 
-export function NewSessionBlock({ x, y, plans, onCreated, onCancel }: NewSessionBlockProps) {
+export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel }: NewSessionBlockProps) {
   const [repo, setRepo] = useState("");
   const [prompt, setPrompt] = useState("");
   const [plan, setPlan] = useState("");
@@ -195,6 +205,27 @@ export function NewSessionBlock({ x, y, plans, onCreated, onCancel }: NewSession
     return hit ? String(raw[hit] || "").trim() : "";
   })();
 
+  /** Drag the block by its bar: it follows the pointer, live. */
+  const onBarDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!onMove || e.button !== 0 || (e.target as Element).closest("button")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const g = { pid: e.pointerId, sx: e.clientX, sy: e.clientY, x, y, z: zoom || 1 };
+    const move = (ev: PointerEvent) => {
+      if (ev.pointerId !== g.pid) return;
+      onMove({ x: Math.round(g.x + (ev.clientX - g.sx) / g.z), y: Math.round(g.y + (ev.clientY - g.sy) / g.z) });
+    };
+    const up = (ev: PointerEvent) => {
+      if (ev.pointerId !== g.pid) return;
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  };
+
   const fly = async () => {
     if (busy || blocked) return;
     if (made) return onCreated(made);
@@ -233,14 +264,24 @@ export function NewSessionBlock({ x, y, plans, onCreated, onCancel }: NewSession
   return (
     <div
       ref={cardRef}
-      className="sky-new fl-form"
+      className="sky-new sky-new-block fl-form"
       role="dialog"
       aria-label="New session"
       style={{ left: x, top: y }}
       onKeyDown={(e) => cardKey(e, onCancel)}
       onDoubleClick={(e) => e.stopPropagation()}
     >
-      <div className="sky-new-head">New session</div>
+      <div
+        className={"sky-new-head" + (onMove ? " is-movable" : "")}
+        title={onMove ? "Drag to move this block — the session starts where it sits" : undefined}
+        onPointerDown={onBarDown}
+      >
+        <Bird size={13} />
+        <span className="sky-new-name">New session</span>
+        <button type="button" className="sky-new-close" aria-label="Cancel the new session" title="Cancel (Esc)" onClick={onCancel}>
+          ×
+        </button>
+      </div>
       <div className="fl-fld fl-fld-wide">
         <span className="fl-fld-label">Repository</span>
         {repoChips.length > 0 && (

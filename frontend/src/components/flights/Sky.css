@@ -241,6 +241,13 @@ body.view-switch #sky-view {
   cursor: grab !important;
 }
 
+/* + New session dragged over empty sky: a soft wash and an inset edge say
+   "drop it here". */
+.sky-viewport.is-new-over {
+  background-color: color-mix(in srgb, var(--accent) 6%, var(--sky-bg));
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
 .sky-plane {
   position: absolute;
   left: 0;
@@ -284,7 +291,6 @@ body.view-switch #sky-view {
   cursor: default;
   user-select: text;
   transition:
-    transform 0.35s ease,
     box-shadow 0.2s ease,
     border-color 0.2s ease;
   animation: sky-in 0.35s ease both;
@@ -406,8 +412,7 @@ body.view-switch #sky-view {
 
 /* --- A line's host-side states ------------------------------------------------ */
 
-/* No line glides while one is being dragged (the dragged one follows the
-   pointer; Tidy and a reflow still glide). */
+/* While a line is dragged it follows the pointer: no line eases at all. */
 .sky-plane[data-dragging] .sky-line {
   transition: none;
 }
@@ -417,13 +422,18 @@ body.view-switch #sky-view {
   min-width: 280px;
 }
 
-/* A line's slot: placed on the plane at its spot. Lines glide to a new one
-   (Tidy, a reflow); the one being dragged follows the pointer. An open box or
-   an open editor lifts its line over its neighbours. */
+/* A line's slot: placed on the plane at its spot, and STILL there — a line
+   growing, a neighbour coming or going never moves it. Only Tidy glides the
+   lines to their new spots (SkyView sets data-tidying for a moment); the one
+   being dragged follows the pointer. An open box or an open editor lifts its
+   line over its neighbours. */
 .sky-line-slot {
   position: absolute;
   left: 0;
   top: 0;
+}
+
+.sky-plane[data-tidying] .sky-line-slot {
   transition: transform 0.28s ease;
 }
 
@@ -698,7 +708,7 @@ details.fl-group-waiting > summary {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sky-line-slot {
+  .sky-plane[data-tidying] .sky-line-slot {
     transition: none;
   }
   .sky-line {

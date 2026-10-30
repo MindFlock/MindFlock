@@ -17,13 +17,19 @@
  * focused pane is the focused line (`useUi.focused`, one selection for both
  * views): a press on a line selects it, selecting a session anywhere brings
  * its line into view. Where a line sits, its size and whether its box is open
- * are the layout store's (lib/skyLayout, `mf_sky_layout`, per device): lines
- * flow into rows newest first at their measured size until dragged (pinned),
- * and Tidy forgets the pins. The camera, the drawer and the shelf survive a
- * trip to the grid and back.
+ * are the layout store's (lib/skyLayout, `mf_sky_layout`, per device).
  *
- * Built from the space: a double-click on empty sky, + New session or
- * Ctrl/Alt+N opens a NewSessionBlock there; the shelf of flyways at the foot
+ * The sky is STILL: nothing moves unless the owner moves it. A line gets a
+ * spot once, when it first appears (measured, at the first free place —
+ * `assignSpots`), and keeps it however it grows; a dragged line is pinned
+ * where it was dropped; Tidy forgets both and is the only time lines glide.
+ * The camera fits once (a first show, a new view) and then only on demand
+ * (0, 1, Fit). The camera, the drawer and the shelf survive a trip to the
+ * grid and back.
+ *
+ * Built from the space: a double-click on empty sky, + New session (pressed,
+ * or dragged onto the sky) or Ctrl/Alt+N opens a NewSessionBlock there — a
+ * block the owner can drag by its bar before it flies; the shelf of flyways at the foot
  * (FlywayShelf) is where flyways live — it flies one onto the focused line,
  * or onto the line a chip is dropped on, and a chip (or + New flyway) opens
  * its card (FlywayCard) to edit, reset or delete it. `useUi.skyShelf` asks
@@ -46,11 +52,13 @@ import {
   FLYWAY_MIME,
   INTAKE_W,
   LINES_LEFT,
+  NEW_SESSION_MIME,
   SKY_DRAWER_KEY,
   SKY_MARGIN,
   SKY_MODES,
   ZOOM_MAX,
   ZOOM_MIN,
+  assignSpots,
   boundsOf,
   centerOn,
   estimateLine,
@@ -62,12 +70,12 @@ import {
   loadSkyLayout,
   patchSkyLine,
   pinnedPositions,
-  placeLines,
   skyDrawerOpen,
   skyLineTitles,
   tidySkyLayout,
   toPlane,
   zoomAt,
+  type PlacedLine,
   type Pos,
   type Rect,
   type SkyCamera,
@@ -95,6 +103,8 @@ const GRID = 24;
 /** One arrow press pans this far (screen px); Shift: four times. */
 const PAN_STEP = 80;
 const SHELF_KEY = "mf_sky_shelf";
+/** How long Tidy's glide lasts (the slots' transition is on only then). */
+const TIDY_MS = 350;
 
 const readPref = (key: string): string | null => {
   try {
@@ -165,15 +175,15 @@ interface Ghost {
   diagram: Diagram;
 }
 
-/** The camera across a trip to the grid and back: where it was, whether the
- * owner had moved it (then no auto-fit takes it over), and which view it was
- * fitted for. */
-let memo: { cam: SkyCamera; touched: boolean; key: string } | null = null;
+/** The camera across a trip to the grid and back: where it was and which
+ * view it was fitted for (the same view back: no refit). */
+let memo: { cam: SkyCamera; key: string } | null = null;
 
 export function SkyView() {
   const instQ = useInstances();
   const rows = useMemo(() => instQ.data || [], [instQ.data]);
-  const flights = useFlights().data;
+  const flightsQ = useFlights();
+  const flights = flightsQ.data;
   const kinds = useFlightKinds().data || [];
   const plansQ = useFlightPlans();
   const plans = plansQ.data || [];
@@ -187,6 +197,11 @@ export function SkyView() {
   const [query, setQuery] = useState("");
   const [layout, setLayout] = useState(() => loadSkyLayout());
   const [measured, setMeasured] = useState<Record<string, { w: number; h: number }>>({});
+  // The spots lines were given when they first appeared (`assignSpots`): kept
+  // however a line grows, freed when its session goes, cleared by Tidy.
+  const [autoPos, setAutoPos] = useState<Record<string, Pos>>({});
+  const [tidying, setTidying] = useState(false);
+  const [newOver, setNewOver] = useState(false);
   const [drag, setDrag] = useState<{ id: string; pos: Pos } | null>(null);
   const [cam, setCam] = useState<SkyCamera>(() => memo?.cam || { x: 0, y: 0, z: 1 });
   const camRef = useRef(cam);
@@ -220,13 +235,38 @@ export function SkyView() {
       }),
     [titles, rows, flights, kinds, mode, measured, layout]
   );
-  const place = useMemo(
-    () =>
-      mode === "one"
-        ? Object.fromEntries(lines.map((l) => [l.id, { x: SKY_MARGIN, y: SKY_MARGIN }]))
-        : placeLines(lines, pinnedPositions(layout), { width: Math.max(vp.w, LINES_LEFT + 900), left: LINES_LEFT, top: SKY_MARGIN }),
-    [lines, layout, vp.w, mode]
-  );
+  // Every line's spot: a pinned or already-given one stays put; a newcomer
+  // gets the first free place clear of the placed lines (and of the lines a
+  // filter hides, at their last measured size). `fresh` is what the effect
+  // below keeps once the newcomer has been measured.
+  const { place, fresh } = useMemo(() => {
+    if (mode === "one") return { place: Object.fromEntries(lines.map((l) => [l.id, { x: SKY_MARGIN, y: SKY_MARGIN }])), fresh: {} as Record<string, Pos> };
+    const saved: Record<string, Pos> = { ...autoPos, ...pinnedPositions(layout) };
+    const shown = new Set(lines.map((l) => l.id));
+    const existing: PlacedLine[] = lines.filter((l) => saved[l.id]).map((l) => ({ id: l.id, ...saved[l.id], w: l.w, h: l.h }));
+    for (const [id, at] of Object.entries(saved))
+      if (!shown.has(id) && measured[id] && rows.some((r) => r.title === id)) existing.push({ id, ...at, ...measured[id] });
+    const fresh = assignSpots(existing, lines.filter((l) => !saved[l.id]), { width: Math.max(vp.w, LINES_LEFT + 900), left: LINES_LEFT, top: SKY_MARGIN });
+    const place: Record<string, Pos> = { ...fresh };
+    for (const e of existing) if (shown.has(e.id)) place[e.id] = { x: e.x, y: e.y };
+    return { place, fresh };
+  }, [lines, layout, autoPos, measured, rows, vp.w, mode]);
+  // Keep a newcomer's spot once it is known where it fits: the window
+  // measured, the sessions and the flights loaded, the line drawn and
+  // measured. Free the spots of sessions that are gone and of lines the
+  // owner pinned (their spot is the pin now).
+  const flightsSettled = flightsQ.isFetched || flightsQ.data !== undefined;
+  useEffect(() => {
+    if (mode === "one" || !vp.w || instQ.data === undefined) return;
+    setAutoPos((cur) => {
+      let next = cur;
+      const edit = () => (next === cur ? (next = { ...cur }) : next);
+      for (const id of Object.keys(cur))
+        if (layout[id]?.pinned || !rows.some((r) => r.title === id && inSky(r))) delete edit()[id];
+      if (flightsSettled) for (const [id, at] of Object.entries(fresh)) if (measured[id]) edit()[id] = at;
+      return next;
+    });
+  }, [fresh, measured, layout, rows, mode, vp.w, instQ.data, flightsSettled]);
   const posOf = useCallback((id: string): Pos => (drag?.id === id ? drag.pos : place[id] || { x: LINES_LEFT, y: SKY_MARGIN }), [drag, place]);
   const rectOf = useCallback((id: string): Rect | null => {
     const l = lines.find((x) => x.id === id);
@@ -256,13 +296,10 @@ export function SkyView() {
     return () => ro.disconnect();
   }, [narrow]);
 
-  // The owner has panned or zoomed since the last fit: leave the camera be.
-  const touched = useRef(memo?.touched ?? false);
   /** Every line and the intake lane — legibly (`firstFit`: the width at no
    * less than mid, top-left, when everything would need far), or, `whole`
    * (the toolbar's Fit), all of it however small. */
   const fitAll = useCallback((whole = false) => {
-    touched.current = false;
     const rects = lines.map((l) => ({ ...posOf(l.id), w: l.w, h: l.h }));
     if (mode !== "one") rects.push({ x: SKY_MARGIN, y: SKY_MARGIN, w: INTAKE_W, h: 1 });
     setCam((whole ? fitCamera : firstFit)(boundsOf(rects), vp.w, vp.h, mode === "one" ? 1.5 : 1));
@@ -271,28 +308,35 @@ export function SkyView() {
   const fitFocused = useCallback(() => {
     const r = focusLine ? rectOf(focusLine) : null;
     if (!r) return fitAll();
-    touched.current = true;
     setCam(fitCamera(r, vp.w, vp.h, 1.5));
   }, [focusLine, rectOf, fitAll, vp.w, vp.h]);
 
-  // Fit once the window and the sessions are known, again on a new view, and
-  // whenever the lines change shape (the flights load and a perch opens wide,
-  // a session comes or goes) until the owner moves the camera. The first fit
-  // follows the grid's view: "1" fits the focused line, the rest fit all.
+  // Fit ONCE: on the first show of the sky, once the lines have their spots
+  // (drawn and measured, or after a short wait), and again only when the view
+  // changes (All / Mine / Perched / This session). Never because a line grew,
+  // a session came or went, or the window resized: the owner pans, or presses
+  // 0, 1 or Fit. The first fit follows the grid's view: "1" fits the focused
+  // line, the rest fit all.
   const fitted = useRef(memo?.key || "");
   const fitKey = mode + "\u0000" + (mode === "one" ? focused : "");
-  const shape = lines.map((l) => l.id + ":" + l.w + "x" + l.h).join("|");
+  const [waited, setWaited] = useState(false);
   useEffect(() => {
-    if (!vp.w || !vp.h || instQ.data === undefined) return;
-    if (fitted.current === fitKey && touched.current) return;
+    if (instQ.data === undefined || waited) return;
+    const t = setTimeout(() => setWaited(true), 900);
+    return () => clearTimeout(t);
+  }, [instQ.data, waited]);
+  const settled = waited || (flightsSettled && lines.every((l) => measured[l.id] && (mode === "one" || autoPos[l.id] || layout[l.id]?.pinned)));
+  useEffect(() => {
+    if (!vp.w || !vp.h || instQ.data === undefined || !settled) return;
+    if (fitted.current === fitKey) return;
     const first = !fitted.current;
     fitted.current = fitKey;
     if (first && gridOne && mode !== "one") fitFocused();
     else fitAll();
-  }, [vp.w, vp.h, instQ.data, fitKey, shape]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [vp.w, vp.h, instQ.data, fitKey, settled]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(
     () => () => {
-      memo = { cam: camRef.current, touched: touched.current, key: fitted.current };
+      memo = { cam: camRef.current, key: fitted.current };
     },
     []
   );
@@ -329,7 +373,6 @@ export function SkyView() {
     const sy = c.y + r.y * c.z;
     const inView = sx >= 0 && sy >= 0 && sx + r.w * c.z <= vp.w && sy + Math.min(r.h, 240) * c.z <= vp.h;
     if (!inView && !pressed) {
-      touched.current = true;
       setCam(centerOn(r, vp.w, vp.h, Math.max(c.z, 0.85)));
     }
     setFlash(focusLine);
@@ -367,11 +410,9 @@ export function SkyView() {
   };
 
   const zoomBy = (k: number) => {
-    touched.current = true;
     setCam((c) => zoomAt(c, c.z * k, vp.w / 2, vp.h / 2));
   };
   const panBy = (dx: number, dy: number) => {
-    touched.current = true;
     setCam((c) => ({ ...c, x: c.x + dx, y: c.y + dy }));
   };
   /** A point in the middle of what is on screen (a card's top-left). */
@@ -406,9 +447,19 @@ export function SkyView() {
     // `{ pinned: false }` is "Tidy this line": its spot is forgotten.
     setLayout((l) => (patch.pinned === false ? tidySkyLayout(l, id) : patchSkyLine(l, id, patch)));
   }, []);
-  /** Every line back to its organized spot: they slide there (the line's
-   * transform transition), and an untouched camera refits around them. */
-  const tidy = () => setLayout((l) => tidySkyLayout(l));
+  /** Every line back to its organized spot: the pins and the given spots
+   * are forgotten, every line is placed again, and they glide there — the
+   * only glide on the sky (`data-tidying` turns the slots' transition on for
+   * a moment). The camera stays where it is. */
+  const tidyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const tidy = () => {
+    setAutoPos({});
+    setLayout((l) => tidySkyLayout(l));
+    if (motionOff) return;
+    setTidying(true);
+    clearTimeout(tidyTimer.current);
+    tidyTimer.current = setTimeout(() => alive.current && setTidying(false), TIDY_MS);
+  };
   const onMeasure = useCallback((id: string, w: number, h: number) => {
     setMeasured((m) => {
       const o = m[id];
@@ -554,7 +605,6 @@ export function SkyView() {
     t instanceof Element && (t === vpRef.current || t.classList.contains("sky-plane") || t.classList.contains("sky-ground"));
 
   const startPan = (e: ReactPointerEvent<HTMLDivElement>) => {
-    touched.current = true;
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -610,14 +660,46 @@ export function SkyView() {
     const dy = el.scrollTop;
     el.scrollLeft = 0;
     el.scrollTop = 0;
-    touched.current = true;
     setCam((c) => ({ ...c, x: c.x - dx, y: c.y - dy }));
+  };
+  /** The new-session block at a screen point (a double-click, a drop). */
+  const newAtScreen = (clientX: number, clientY: number) => {
+    const r = vpRef.current!.getBoundingClientRect();
+    const at = toPlane(camRef.current, clientX - r.left, clientY - r.top);
+    setNewAt({ x: Math.round(at.x), y: Math.round(at.y) });
   };
   const onDouble = (e: ReactMouseEvent<HTMLDivElement>) => {
     if (!ground(e.target)) return;
-    const r = vpRef.current!.getBoundingClientRect();
-    const at = toPlane(camRef.current, e.clientX - r.left, e.clientY - r.top);
-    setNewAt({ x: Math.round(at.x), y: Math.round(at.y) });
+    newAtScreen(e.clientX, e.clientY);
+  };
+  // + New session dragged in from the toolbar: over empty sky the sky lights
+  // softly and takes the drop; the block opens where it lands, as a
+  // double-click there would. Over a line it is refused.
+  const carriesNew = (e: ReactDragEvent) => Array.from(e.dataTransfer?.types || []).includes(NEW_SESSION_MIME);
+  const onNewDragOver = (e: ReactDragEvent<HTMLDivElement>) => {
+    if (!carriesNew(e)) return;
+    const ok = ground(e.target);
+    setNewOver(ok);
+    if (!ok) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+  };
+  const onNewDragLeave = (e: ReactDragEvent<HTMLDivElement>) => {
+    if (!(e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget))) setNewOver(false);
+  };
+  const onNewDrop = (e: ReactDragEvent<HTMLDivElement>) => {
+    if (!carriesNew(e)) return;
+    setNewOver(false);
+    if (!ground(e.target)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    vpRef.current?.focus({ preventScroll: true });
+    newAtScreen(e.clientX, e.clientY);
+  };
+  const onNewDragStart = (e: ReactDragEvent<HTMLButtonElement>) => {
+    if (!e.dataTransfer) return;
+    e.dataTransfer.setData(NEW_SESSION_MIME, "session");
+    e.dataTransfer.effectAllowed = "copy";
   };
 
   // The wheel: a native listener, since React's is passive and can't keep the
@@ -628,7 +710,6 @@ export function SkyView() {
     const onWheel = (e: WheelEvent) => {
       if ((e.target as Element | null)?.closest?.(".sky-own-scroll")) return;
       e.preventDefault();
-      touched.current = true;
       const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientHeight : 1;
       const dx = e.deltaX * unit;
       const dy = e.deltaY * unit;
@@ -738,7 +819,16 @@ export function SkyView() {
       <span className="sky-search">
         <TextField value={query} onChange={setQuery} label="Find a line" placeholder="Find a line…" onEnter={() => titles[0] && focusOn(titles[0])} />
       </span>
-      <button type="button" className="btn-primary fl-btn sky-new" data-tour="flights-newblock" title="Start a session here (Ctrl+N, or double-click the sky)" onClick={newHere}>
+      <button
+        type="button"
+        className="btn-primary fl-btn sky-new"
+        data-tour="flights-newblock"
+        title="Click, or drag onto the sky, to start a session there (Ctrl+N, or double-click the sky)"
+        draggable={!narrow}
+        onDragStart={onNewDragStart}
+        onDragEnd={() => setNewOver(false)}
+        onClick={newHere}
+      >
         + New session
       </button>
       {!narrow && (
@@ -860,6 +950,8 @@ export function SkyView() {
       x={newAt.x}
       y={newAt.y}
       plans={plans}
+      zoom={narrow ? undefined : cam.z}
+      onMove={narrow ? undefined : (at) => setNewAt(at)}
       onCancel={() => setNewAt(null)}
       onCreated={(title) => {
         setLayout((l) => patchSkyLine(l, title, { x: newAt.x, y: newAt.y, pinned: true }));
@@ -910,7 +1002,7 @@ export function SkyView() {
         <div className="sky-stage">
           <div
             ref={vpRef}
-            className={"sky-viewport" + (spaceHeld ? " is-grab" : "")}
+            className={"sky-viewport" + (spaceHeld ? " is-grab" : "") + (newOver ? " is-new-over" : "")}
             data-tour="flights-sky"
             tabIndex={-1}
             role="application"
@@ -923,12 +1015,16 @@ export function SkyView() {
             onPointerUp={onUp}
             onPointerCancel={onUp}
             onDoubleClick={onDouble}
+            onDragOver={onNewDragOver}
+            onDragLeave={onNewDragLeave}
+            onDrop={onNewDrop}
             onScroll={onViewportScroll}
           >
             <SkyFlock width={vp.w} height={vp.h} zoom={cam.z} paused={motionOff || !!drag} />
             <div
               className="sky-plane"
               data-dragging={drag ? "" : undefined}
+              data-tidying={tidying ? "" : undefined}
               style={{ transform: `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})` }}
             >
               {mode !== "one" && (
@@ -941,8 +1037,8 @@ export function SkyView() {
                 </div>
               )}
               {lines.map((l) => {
-                // The slot sits the line at its spot (placeLines', or where it
-                // was dropped); Tidy and a reflow glide it there.
+                // The slot sits the line at its spot (the one it was given, or
+                // where it was dropped); only Tidy glides it to a new one.
                 const at = posOf(l.id);
                 return (
                   <div
