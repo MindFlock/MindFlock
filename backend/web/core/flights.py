@@ -3702,7 +3702,7 @@ def op_edit_step(flight: dict, sid: str, patch, now: Optional[float] = None) -> 
         _edit_group(flight, sid, patch.pop("group"), ts)
         if not patch:
             return flight
-    if set(patch) & {"title", "config", "on_fail"} or "halt" not in patch:
+    if set(patch) & {"title", "config", "on_fail", "when"} or "halt" not in patch:
         _editable(flight)
         i = _pending_index(flight, sid)
     else:
@@ -3721,9 +3721,11 @@ def op_edit_step(flight: dict, sid: str, patch, now: Optional[float] = None) -> 
                 % flight["steps"][i]["title"],
             )
     raw = copy.deepcopy(flight["steps"][i])
-    for key in ("title", "config", "on_fail", "halt"):
+    for key in ("title", "config", "on_fail", "halt", "when"):
         if key in patch:
             raw[key] = patch[key]
+    if "when" in patch and not str(patch["when"] or "").strip():
+        raw.pop("when", None)  # "" clears the condition
     step = _one_step(
         raw, i, {s["id"] for s in flight["steps"]} - {sid}, strict=not _lenient(flight)
     )

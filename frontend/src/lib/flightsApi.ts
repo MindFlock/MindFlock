@@ -249,6 +249,7 @@ export async function describeSteps(text: string, want: "step" | "plan" = "step"
 export function wireStep(step: FlightStep): Omit<FlightStep, "id"> {
   const out: Omit<FlightStep, "id"> = { kind: step.kind, title: step.title, config: step.config, on_fail: step.on_fail };
   if (step.halt) out.halt = true;
+  if (step.when) out.when = step.when;
   return out;
 }
 
@@ -284,7 +285,7 @@ export async function tackOnAll(flightId: string, steps: FlightStep[]): Promise<
 }
 
 /** Edit a pending stop of a live flight in place (title / config / on_fail). */
-export async function patchStop(flightId: string, stepId: string, patch: Partial<Pick<FlightStep, "title" | "config" | "on_fail" | "halt">>): Promise<boolean> {
+export async function patchStop(flightId: string, stepId: string, patch: Partial<Pick<FlightStep, "title" | "config" | "on_fail" | "halt" | "when">>): Promise<boolean> {
   try {
     await api(flightPath(flightId, "/steps/" + enc(stepId)), { method: "PATCH", json: patch });
     return true;

@@ -37807,6 +37807,7 @@ function wireStep(step) {
 		on_fail: step.on_fail
 	};
 	if (step.halt) out.halt = true;
+	if (step.when) out.when = step.when;
 	return out;
 }
 async function tackOnNew(title, steps) {
@@ -83966,6 +83967,7 @@ function StepDialog(p) {
 			on_fail: draft.on_fail
 		};
 		if (!!draft.halt !== !!n.step?.halt) patch.halt = !!draft.halt;
+		if ((draft.when || "") !== (n.step?.when || "")) patch.when = draft.when || "";
 		await p.onSave(patch);
 	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Shell, {

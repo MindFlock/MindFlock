@@ -41,7 +41,7 @@ export const STOP_STATE_WORD: Partial<Record<DiagramNode["state"], string>> = {
 };
 
 /** What a stop's Save sends: only what a stop IS. */
-export type StopPatch = Partial<Pick<FlightStep, "title" | "config" | "on_fail" | "halt">>;
+export type StopPatch = Partial<Pick<FlightStep, "title" | "config" | "on_fail" | "halt" | "when">>;
 
 export interface StopDialogProps {
   /** The stop or the group box (the line's own node, flight indexes). */
@@ -107,6 +107,8 @@ function StepDialog(p: StopDialogProps) {
     if (!draft || !p.onSave) return;
     const patch: StopPatch = { title: draft.title, config: draft.config, on_fail: draft.on_fail };
     if (!!draft.halt !== !!n.step?.halt) patch.halt = !!draft.halt;
+    // "Only when" (round 15): sent whenever it differs; "" clears it.
+    if ((draft.when || "") !== (n.step?.when || "")) patch.when = draft.when || "";
     await p.onSave(patch);
   };
   return (

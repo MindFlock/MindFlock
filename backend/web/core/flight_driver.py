@@ -2372,6 +2372,13 @@ def remove(flight_id: str) -> None:
         _checkpoint.forget(f)
     except Exception:  # noqa: BLE001 — the refs are a convenience, never a block
         pass
+    try:
+        # listen / someone stops minted inbound hook tokens: spend them.
+        from backend.web.core.flight_kinds import _hooks
+
+        _hooks.forget_flight(flight_id)
+    except Exception:  # noqa: BLE001 — a spent token answers 404 anyway
+        pass
     if f["state"] not in ("done", "halted", "cancelled"):
         _take_down_previews(f)  # a grounded one never put a preview up; cheap
     _flights.delete(flight_id)

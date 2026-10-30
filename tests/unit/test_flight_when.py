@@ -561,3 +561,24 @@ def test_when_route_validates_for_the_editor(client):
     assert client.get("/api/flights/when").json()["ok"] is True
     # Never read as a flight id.
     assert "/api/flights/when" in client.app.openapi()["paths"]
+
+
+def test_patch_sets_and_clears_a_steps_when(tmp_path, monkeypatch):
+    """``PATCH /steps/{sid} {when}`` on a pending stop stores the canonical
+    condition; ``""`` clears it (docs/flights.md "Round 15")."""
+    import time
+
+    from backend.web.core import flights as F
+
+    monkeypatch.setenv("MINDFLOCK_FLIGHTS_DIR", str(tmp_path / "flights"))
+    plan = F.adhoc_plan([{"kind": "notify"}, {"kind": "notify"}], name="t")
+    f = F.take_off(plan, session="s", now=time.time())
+    sid = f["steps"][1]["id"]
+    f = F.op_edit_step(f, sid, {"when": "Diff Touches frontend/**"}, now=time.time())
+    assert f["steps"][1]["when"] == F._normalize_when(
+        "diff touches frontend/**", True, ""
+    )
+    f = F.op_edit_step(f, sid, {"when": ""}, now=time.time())
+    assert "when" not in f["steps"][1]
+    with pytest.raises(F.PlanError):
+        F.op_edit_step(f, sid, {"when": "diff touches"}, now=time.time())
