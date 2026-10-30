@@ -139,6 +139,9 @@ export interface FlywayCanvasProps {
   selected?: string | null;
   /** Boxes to highlight (stops a description just added, until saved). */
   highlight?: ReadonlySet<string>;
+  /** Boxes in the Sky's selection (a marquee over this line's stops): each
+   * wears `.fl-box-selected`, beside the one `selected` box. */
+  highlighted?: ReadonlySet<string>;
   /** A stop box picked (a click; and Enter, ✎, the menu's Edit when the host
    * passes no `onEdit`): open it in the inspector. */
   onSelect?(n: DiagramNode): void;
@@ -704,6 +707,7 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
             (n.perch ? " fl-perch" : "") +
             (p.selected === n.id ? " selected" : "") +
             (p.highlight?.has(n.id) ? " fl-described" : "") +
+            (p.highlighted?.has(n.id) ? " fl-box-selected" : "") +
             (lifted ? " fl-lifted" : "") +
             (tools ? " fl-has-tools" : "") +
             (mark ? " fl-halt-point" : "") +

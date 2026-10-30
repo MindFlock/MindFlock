@@ -5,12 +5,18 @@
  * (App renders this in the grid's place while `useUi.view === "sky"`).
  *
  * One plane, panned and zoomed as a whole — one `translate(x, y) scale(z)` on
- * one container, no library. Drag on empty sky pans it (mouse and touch), so
- * does the wheel or a trackpad; Ctrl/⌘+wheel and a pinch zoom it (40%–300%);
- * Space+drag pans from anywhere. The keyboard: arrows pan, + / − zoom, 0 fits
- * every line, 1 fits the focused one, T tidies, Enter opens the focused
- * line's box, Esc closes it. A faint dot grid scales with it, the flock
- * (SkyFlock) drifts behind it.
+ * one container, no library. The wheel or a trackpad pans it, so do the middle
+ * button, a touch drag and Space+drag (from anywhere); Ctrl/⌘+wheel and a pinch
+ * zoom it (40%–300%). The keyboard: arrows pan, + / − zoom, 0 fits every line,
+ * 1 fits the focused one, T tidies, Enter opens the focused line's box, Esc
+ * closes it. A faint dot grid scales with it, the flock (SkyFlock) drifts
+ * behind it.
+ *
+ * A left drag on empty sky is a MARQUEE (lib/skySelect): what it touches is
+ * selected — whole lines, or the stop boxes of one line — Shift+drag adds,
+ * a click on empty sky or Esc clears, Ctrl/⌘+A takes every line shown. The
+ * selection bar (SkySelection) acts on it; dragging any selected line's bar
+ * moves them all; Delete / Backspace removes (asking first where it must).
  *
  * Every session is a LINE (SkyLine): its title bar, its session diagram and
  * its session box, which opens into the session's pane right there. The
@@ -90,6 +96,24 @@ import {
   type SkyLineLayout,
   type SkyMode,
 } from "../../lib/skyLayout";
+import {
+  MARQUEE_MIN,
+  NO_SELECTION,
+  addSelection,
+  isStopNode,
+  planeToScreen,
+  pruneSelection,
+  rectFrom,
+  screenToPlane,
+  select,
+  selectLines,
+  selectionEmpty,
+  stopSelection,
+  toggleLine,
+  type SelectLine,
+  type SelectStop,
+  type SkySelection,
+} from "../../lib/skySelect";
 import { ChipRow, TextField } from "./controls";
 import { liveBoxParts } from "./FlightStrip";
 import { FlywayCanvas } from "./FlywayCanvas";
@@ -98,6 +122,7 @@ import { NewSessionBlock } from "./NewSessionBlock";
 import { SkyDrawer } from "./SkyDrawer";
 import { SkyFlock } from "./SkyFlock";
 import { SkyLine } from "./SkyLine";
+import { SkySelectionBar, type SelectionAsk } from "./SkySelection";
 import { GroundedLine, groundedName } from "./GroundedLine";
 import { StopShelf } from "./StopShelf";
 import { TakeoffDialog } from "./TakeoffDialog";
@@ -229,7 +254,9 @@ export function SkyView() {
   const [autoPos, setAutoPos] = useState<Record<string, Pos>>({});
   const [tidying, setTidying] = useState(false);
   const [newOver, setNewOver] = useState(false);
-  const [drag, setDrag] = useState<{ id: string; pos: Pos } | null>(null);
+  // A line being dragged by its bar — with every other selected line when it
+  // is one of them: where each started, and how far they have come.
+  const [drag, setDrag] = useState<{ from: Record<string, Pos>; dx: number; dy: number } | null>(null);
   const [cam, setCam] = useState<SkyCamera>(() => memo?.cam || { x: 0, y: 0, z: 1 });
   const camRef = useRef(cam);
   camRef.current = cam;
@@ -260,6 +287,18 @@ export function SkyView() {
   const [flash, setFlash] = useState("");
   const [spaceHeld, setSpaceHeld] = useState(false);
   const space = useRef(false);
+  // The marquee's selection (lib/skySelect), what its bar is asking, and —
+  // for stops — where they were drawn, relative to their line (the bar sits
+  // over them, and follows the line if it moves).
+  const [selRaw, setSel] = useState<SkySelection>(NO_SELECTION);
+  const [selAsk, setSelAsk] = useState<SelectionAsk>("");
+  const [selStops, setSelStops] = useState<Rect | null>(null);
+  // The marquee being drawn (viewport px).
+  const [marq, setMarq] = useState<Rect | null>(null);
+  const clearSel = useCallback(() => {
+    setSel(NO_SELECTION);
+    setSelAsk("");
+  }, []);
 
   // Every session's line (a `pending_create` row too: a session the sky is
   // making shows at once, a loading box under its name), then the grounded
@@ -289,6 +328,9 @@ export function SkyView() {
     ],
     [titles, grounded, rows, flights, kinds, mode, measured, layout]
   );
+  // The selection holds only lines still shown (a closed session drops out).
+  const shownIds = useMemo(() => new Set(lines.map((l) => l.id)), [lines]);
+  const sel = useMemo(() => pruneSelection(selRaw, shownIds), [selRaw, shownIds]);
   /** A line still on the board, shown or filtered out: its session is open
    * (not a hidden helper), or its grounded flight is still grounded. */
   const lineAlive = useCallback(
@@ -327,7 +369,10 @@ export function SkyView() {
       return next;
     });
   }, [fresh, measured, layout, lineAlive, mode, vp.w, instQ.data, flightsSettled]);
-  const posOf = useCallback((id: string): Pos => (drag?.id === id ? drag.pos : place[id] || { x: LINES_LEFT, y: SKY_MARGIN }), [drag, place]);
+  const posOf = useCallback((id: string): Pos => {
+    const f = drag?.from[id];
+    return f ? { x: f.x + drag!.dx, y: f.y + drag!.dy } : place[id] || { x: LINES_LEFT, y: SKY_MARGIN };
+  }, [drag, place]);
   const rectOf = useCallback((id: string): Rect | null => {
     const l = lines.find((x) => x.id === id);
     return l ? { ...posOf(id), w: l.w, h: l.h } : null;
@@ -520,6 +565,16 @@ export function SkyView() {
     clearTimeout(tidyTimer.current);
     tidyTimer.current = setTimeout(() => alive.current && setTidying(false), TIDY_MS);
   };
+  /** Tidy these (the selection bar): only their spots are forgotten. */
+  const tidyThese = (ids: string[]) => {
+    setAutoPos((cur) => Object.fromEntries(Object.entries(cur).filter(([id]) => !ids.includes(id))));
+    setLayout((l) => ids.reduce((acc, id) => tidySkyLayout(acc, id), l));
+    clearSel();
+    if (motionOff) return;
+    setTidying(true);
+    clearTimeout(tidyTimer.current);
+    tidyTimer.current = setTimeout(() => alive.current && setTidying(false), TIDY_MS);
+  };
   const onMeasure = useCallback((id: string, w: number, h: number) => {
     setMeasured((m) => {
       const o = m[id];
@@ -530,17 +585,21 @@ export function SkyView() {
 
   // --- Dragging a line by its bar ----------------------------------------------------
 
+  // A selected line drags every selected line with it (each pinned where it
+  // lands); a click on a bar outside the selection clears it, Shift+click
+  // takes the line in or out.
   const onDragStart = (id: string, e: ReactPointerEvent) => {
     if (e.button !== 0) return;
     e.stopPropagation();
-    const from = posOf(id);
-    const g = { pid: e.pointerId, sx: e.clientX, sy: e.clientY, moved: false };
-    const at = (ev: PointerEvent): Pos => ({ x: from.x + (ev.clientX - g.sx) / camRef.current.z, y: from.y + (ev.clientY - g.sy) / camRef.current.z });
+    const ids = sel.lines.has(id) ? [...sel.lines] : [id];
+    const from: Record<string, Pos> = Object.fromEntries(ids.map((x) => [x, posOf(x)]));
+    const g = { pid: e.pointerId, sx: e.clientX, sy: e.clientY, moved: false, shift: e.shiftKey };
+    const delta = (ev: PointerEvent) => ({ dx: (ev.clientX - g.sx) / camRef.current.z, dy: (ev.clientY - g.sy) / camRef.current.z });
     const move = (ev: PointerEvent) => {
       if (ev.pointerId !== g.pid) return;
       if (!g.moved && Math.hypot(ev.clientX - g.sx, ev.clientY - g.sy) < 4) return;
       g.moved = true;
-      setDrag({ id, pos: at(ev) });
+      setDrag({ from, ...delta(ev) });
     };
     const up = (ev: PointerEvent) => {
       if (ev.pointerId !== g.pid) return;
@@ -549,9 +608,19 @@ export function SkyView() {
       window.removeEventListener("pointercancel", up);
       setDrag(null);
       if (g.moved) {
-        const p = at(ev);
-        onLayout(id, { x: p.x, y: p.y, pinned: true });
-      } else if (isGroundedKey(id)) setGroundFocus(id);
+        const { dx, dy } = delta(ev);
+        for (const [id, f] of Object.entries(from)) {
+          const p = { x: f.x + dx, y: f.y + dy };
+          onLayout(id, { x: p.x, y: p.y, pinned: true });
+        }
+        return;
+      }
+      if (g.shift) {
+        setSel((s) => toggleLine(s, id));
+        return;
+      }
+      if (!sel.lines.has(id)) clearSel();
+      if (isGroundedKey(id)) setGroundFocus(id);
       else focusOn(id, true);
     };
     window.addEventListener("pointermove", move);
@@ -744,14 +813,92 @@ export function SkyView() {
     e.preventDefault();
     startPan(e);
   };
+  // The marquee: a left drag (mouse or pen) on empty sky. A touch drag still
+  // pans, as the middle button does.
+  const marquee = useRef<{ id: number; sx: number; sy: number; add: boolean; moved: boolean } | null>(null);
   const onDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (!ground(e.target) || (e.pointerType === "mouse" && e.button !== 0 && e.button !== 1)) return;
     e.preventDefault();
     // The keyboard comes to the sky (arrows, + / −, T), out of a terminal.
     vpRef.current?.focus({ preventScroll: true });
-    startPan(e);
+    if (e.pointerType !== "touch" && e.button === 0) startMarquee(e);
+    else startPan(e);
+  };
+  const startMarquee = (e: ReactPointerEvent<HTMLDivElement>) => {
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      /* a synthetic event has no capture */
+    }
+    marquee.current = { id: e.pointerId, sx: e.clientX, sy: e.clientY, add: e.shiftKey, moved: false };
+  };
+  /** The viewport's corner on screen. */
+  const vpCorner = (): Pos => {
+    const r = vpRef.current?.getBoundingClientRect();
+    return { x: r?.left || 0, y: r?.top || 0 };
+  };
+  /** What the marquee can take, measured now (plane px): every shown line's
+   * rect and heads (its title bar, its session box, a grounded line's head
+   * box), and every stop box on it — never one inside an open card's pane. */
+  const selectables = (): { lines: SelectLine[]; stops: SelectStop[] } => {
+    const out: { lines: SelectLine[]; stops: SelectStop[] } = { lines: [], stops: [] };
+    const root = vpRef.current;
+    if (!root) return out;
+    const o = vpCorner();
+    const c = camRef.current;
+    const onPlane = (el: Element) => {
+      const b = el.getBoundingClientRect();
+      return screenToPlane(c, { x: b.left - o.x, y: b.top - o.y, w: b.width, h: b.height });
+    };
+    const slots = new Map<string, Element>();
+    root.querySelectorAll(".sky-line-slot[data-slot]").forEach((el) => slots.set(el.getAttribute("data-slot") || "", el));
+    for (const l of lines) {
+      const slot = slots.get(l.id);
+      const heads: Rect[] = [];
+      slot?.querySelectorAll(".skl-bar, .skl-grounded-head, [data-node^='session:']").forEach((el) => {
+        if (!el.closest(".skl-card")) heads.push(onPlane(el));
+      });
+      out.lines.push({ id: l.id, rect: { ...posOf(l.id), w: l.w, h: l.h }, heads });
+      slot?.querySelectorAll("[data-node]").forEach((el) => {
+        const node = el.getAttribute("data-node") || "";
+        if (isStopNode(node) && !el.closest(".skl-card")) out.stops.push({ line: l.id, node, rect: onPlane(el) });
+      });
+    }
+    return out;
+  };
+  const moveMarquee = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const m = marquee.current!;
+    if (!m.moved && Math.hypot(e.clientX - m.sx, e.clientY - m.sy) < MARQUEE_MIN) return;
+    m.moved = true;
+    const o = vpCorner();
+    setMarq(rectFrom({ x: m.sx - o.x, y: m.sy - o.y }, { x: e.clientX - o.x, y: e.clientY - o.y }));
+  };
+  const endMarquee = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const m = marquee.current!;
+    marquee.current = null;
+    setMarq(null);
+    if (e.type === "pointercancel") return;
+    if (!m.moved) {
+      // A click on empty sky clears the selection.
+      if (!m.add) clearSel();
+      return;
+    }
+    const o = vpCorner();
+    const area = screenToPlane(camRef.current, rectFrom({ x: m.sx - o.x, y: m.sy - o.y }, { x: e.clientX - o.x, y: e.clientY - o.y }));
+    const items = selectables();
+    const got = select(area, items);
+    const next = m.add ? addSelection(sel, got) : got;
+    setSel(next);
+    setSelAsk("");
+    // The stops' own boxes, relative to their line: the bar sits over them.
+    const one = stopSelection(next);
+    const boxes = one ? items.stops.filter((x) => x.line === one.line && one.nodes.includes(x.node)).map((x) => x.rect) : [];
+    const b = boundsOf(boxes);
+    const at = one ? posOf(one.line) : null;
+    setSelStops(b && at ? { ...b, x: b.x - at.x, y: b.y - at.y } : null);
   };
   const onMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (marquee.current?.id === e.pointerId) return moveMarquee(e);
     if (!pointers.current.has(e.pointerId)) return;
     pointers.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const pn = pinch.current;
@@ -766,6 +913,7 @@ export function SkyView() {
     if (pa && pa.id === e.pointerId) setCam({ ...camRef.current, x: pa.cx + (e.clientX - pa.x), y: pa.cy + (e.clientY - pa.y) });
   };
   const onUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (marquee.current?.id === e.pointerId) return endMarquee(e);
     pointers.current.delete(e.pointerId);
     if (pointers.current.size < 2) pinch.current = null;
     if (pan.current?.id === e.pointerId) pan.current = null;
@@ -878,9 +1026,30 @@ export function SkyView() {
       return;
     }
     if (overlayOpen()) return;
+    // The selection: Esc clears it (or the question its bar is asking, from
+    // inside the bar too); Delete / Backspace removes what it holds.
+    const inBar = !!el?.closest(".sky-selbar");
+    if (e.key === "Escape" && !selectionEmpty(sel) && (inBar || skyKeysOwn(el))) {
+      e.preventDefault();
+      if (selAsk) setSelAsk("");
+      else clearSel();
+      return;
+    }
+    // Ctrl/⌘+A: every line the sky shows.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "a" || e.key === "A") && skyKeysOwn(el) && lines.length) {
+      e.preventDefault();
+      setSel(selectLines(lines.map((l) => l.id)));
+      setSelAsk("");
+      return;
+    }
     if (!skyKeysOwn(el) || e.ctrlKey || e.metaKey || e.altKey) return;
     const k = e.key;
     const handled = () => e.preventDefault();
+    if ((k === "Delete" || k === "Backspace") && !selectionEmpty(sel)) {
+      handled();
+      setSelAsk("remove");
+      return;
+    }
     if (k === " " && !e.repeat) {
       handled();
       space.current = true;
@@ -1102,6 +1271,8 @@ export function SkyView() {
             setAttachPick(f);
           }}
           sessionOver={sessionOver === id}
+          selected={at ? sel.lines.has(id) : undefined}
+          highlighted={at ? sel.stops.get(id) : undefined}
         />
       );
     return lineForSession(id, at);
@@ -1120,6 +1291,34 @@ export function SkyView() {
       onDragStart={at ? (e) => onDragStart(id, e) : undefined}
       onMeasure={at ? (w, h) => onMeasure(id, w, h) : undefined}
       dropFlyway={drop?.title === id ? drop.plan : null}
+      selected={at ? sel.lines.has(id) : undefined}
+      highlighted={at ? sel.stops.get(id) : undefined}
+    />
+  );
+
+  // The selection's bar, screen-sized, just above what is selected (below
+  // it when that is the window's top), kept inside the window.
+  const selBox = (() => {
+    const one = stopSelection(sel);
+    if (one) {
+      const at = posOf(one.line);
+      return selStops ? { ...selStops, x: selStops.x + at.x, y: selStops.y + at.y } : rectOf(one.line);
+    }
+    return boundsOf([...sel.lines].map(rectOf).filter((r): r is Rect => !!r));
+  })();
+  const selScreen = selBox && planeToScreen(cam, selBox);
+  const selBar = selScreen && !drag && (
+    <SkySelectionBar
+      selection={sel}
+      x={Math.max(8, Math.min(selScreen.x, vp.w - 460))}
+      y={selScreen.y - 52 >= 8 ? selScreen.y - 52 : Math.max(8, Math.min(selScreen.y + Math.min(selScreen.h, 240) + 8, vp.h - 64))}
+      ask={selAsk}
+      setAsk={setSelAsk}
+      nameOf={(id) => lines.find((l) => l.id === id)?.name || windowName(id)}
+      flightOf={(id) => lines.find((l) => l.id === id)?.flight || liveFlightOf(id)}
+      kinds={kinds}
+      onTidy={tidyThese}
+      onClear={clearSel}
     />
   );
 
@@ -1187,7 +1386,8 @@ export function SkyView() {
                 return (
                   <div
                     key={l.id}
-                    className={"sky-line-slot" + (flash === l.id ? " is-flash" : "") + (drag?.id === l.id ? " is-dragging" : "") + (l.flight ? " is-grounded" : "")}
+                    className={"sky-line-slot" + (flash === l.id ? " is-flash" : "") + (drag?.from[l.id] ? " is-dragging" : "") + (l.flight ? " is-grounded" : "")}
+                    data-slot={l.id}
                     data-tour={l.flight ? undefined : "sky-line"}
                     style={{ transform: `translate(${at.x}px, ${at.y}px)` }}
                   >
@@ -1200,6 +1400,8 @@ export function SkyView() {
               ))}
               {newBlock}
             </div>
+            {marq && <div className="sky-marquee" aria-hidden="true" style={{ transform: `translate(${marq.x}px, ${marq.y}px)`, width: marq.w, height: marq.h }} />}
+            {selBar}
             {empty && (
               <p className="sky-empty muted" role="status">
                 {empty}

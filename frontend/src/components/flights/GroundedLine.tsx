@@ -43,6 +43,10 @@ export interface GroundedLineProps {
   onFlyOn(): void;
   /** A Session chip is being dragged over this line. */
   sessionOver?: boolean;
+  /** In the Sky's selection, as a whole line. */
+  selected?: boolean;
+  /** Its stop boxes in the Sky's selection (node ids). */
+  highlighted?: ReadonlySet<string>;
 }
 
 /** The name a grounded line shows. */
@@ -132,6 +136,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
         "skl skl-size-" + (p.layout.size || "normal") +
         " skl-grounded" +
         (p.focused ? " is-focused" : "") +
+        (p.selected ? " is-selected" : "") +
         (p.sessionOver ? " is-session-over" : "") +
         (line.editing ? " is-editing" : "")
       }
@@ -184,6 +189,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
           size={p.layout.size || "normal"}
           lod={lod}
           {...line.canvas}
+          highlighted={p.highlighted}
           roomy
         />
       </div>

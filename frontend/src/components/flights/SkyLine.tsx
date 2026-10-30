@@ -77,6 +77,10 @@ export interface SkyLineProps {
   onDragStart?(e: React.PointerEvent): void;
   onMeasure?(w: number, h: number): void;
   dropFlyway?: FlightPlan | null;
+  /** In the Sky's selection, as a whole line. */
+  selected?: boolean;
+  /** Its stop boxes in the Sky's selection (node ids). */
+  highlighted?: ReadonlySet<string>;
 }
 
 /** An open card's pane, in plane px: its default and its floor. */
@@ -416,6 +420,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
       className={
         "skl skl-size-" + size +
         (p.focused ? " is-focused" : "") +
+        (p.selected ? " is-selected" : "") +
         (p.layout.open ? " is-open" : "") +
         (p.dropFlyway ? " is-drop" : "") +
         (line.editing ? " is-editing" : "")
@@ -497,6 +502,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
               openBox={openBox}
               lod={lod}
               {...shown.canvas}
+              highlighted={p.highlighted}
               onOpen={onOpen}
               roomy
             />
