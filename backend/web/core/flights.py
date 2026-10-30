@@ -1816,7 +1816,9 @@ def you_text(flight: dict) -> Tuple[str, List[str]]:
     d = flight["step_states"][cur["id"]]["detail"]
     if d.get("failed_reason"):
         return "%s failed: %s" % (cur["title"], d["failed_reason"]), []
-    if cur["kind"] == "you":
+    if cur["kind"] in ("you", "someone"):
+        # A perch, yours or someone else's (docs/flights.md "Round 15"):
+        # the bell says what was asked, not the stop's name.
         return cur["config"].get("text") or cur["title"], list(
             cur["config"].get("items") or []
         )
