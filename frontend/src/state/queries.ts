@@ -12,6 +12,7 @@ import { nudgeUsage } from "../lib/usageRefresh";
 import { toast } from "../lib/toast";
 import { errorPop } from "../lib/errorPop";
 import { isVerifySession } from "../components/dialogs/verifySession";
+import { windowName } from "../lib/windowName";
 import type { EffortCap } from "../lib/effort";
 import type { PeerStatus } from "../lib/peer";
 import type { Flight, FlightPlan, StepKindDef } from "../lib/flights";
@@ -88,7 +89,9 @@ export function useInstances() {
       window.mindflock?.__setSessions?.(list);
       // A session being made is listed only once its snapshot catches up: its
       // optimistic row waits in the cache until then (`mergePending`).
-      return mergePending(list, queryClient.getQueryData<Instance[]>(["instances"]), Date.now());
+      // A session being moved keeps its "moving…" mark until the move's
+      // event (`withMoving`).
+      return withMoving(mergePending(list, queryClient.getQueryData<Instance[]>(["instances"]), Date.now()), Date.now());
     },
     refetchInterval: pollInterval,
     refetchIntervalInBackground: true,
@@ -532,6 +535,87 @@ export function dropPendingRow(rows: readonly Instance[], title: string): Instan
   return rows.some((r) => isPendingRow(r) && r.title === title) ? rows.filter((r) => !(isPendingRow(r) && r.title === title)) : (rows as Instance[]);
 }
 
+/* --------------------------------------------------------------------------
+ * Moving a session (docs/flights.md "Moving a session").
+ *
+ * `POST /api/instances/{title}/move` answers 202 and the move runs on; its row
+ * says "moving…" (`moving: true`) from the 202 until `session.moved` or
+ * `session.move_failed` names it, or `MOVE_TTL_MS` passes. The mark lives
+ * here, not only in the cache, so a poll in between keeps it.
+ * ------------------------------------------------------------------------ */
+
+/** How long a row says "moving…" with no word from the server. */
+export const MOVE_TTL_MS = 60_000;
+
+/** A row's client-only move field. */
+export interface MovingFields {
+  moving?: boolean;
+}
+
+export const isMovingRow = (r: Instance): boolean => (r as Instance & MovingFields).moving === true;
+
+/** title → when its move was asked for. */
+const movingSince = new Map<string, number>();
+
+/** `rows` with `moving: true` on every row whose move is still pending (and
+ * the expired marks forgotten). Nothing pending: `rows`, as is. */
+export function withMoving(rows: Instance[], now: number, since: Map<string, number> = movingSince, ttl = MOVE_TTL_MS): Instance[] {
+  for (const [t, at] of since) if (now - at > ttl) since.delete(t);
+  if (!since.size) return rows;
+  return rows.map((r) => (since.has(r.title) && !isMovingRow(r) ? ({ ...r, moving: true } as Instance) : r));
+}
+
+/** The move was accepted (202): the row says "moving…" until the event, or
+ * for `MOVE_TTL_MS` at most. */
+export function markMoving(title: string, now = Date.now()) {
+  movingSince.set(title, now);
+  queryClient.setQueryData<Instance[]>(["instances"], (rows) => (rows ? withMoving(rows, now) : rows));
+  setTimeout(() => {
+    // Only this mark: a second move asked meanwhile keeps its own minute.
+    if (movingSince.get(title) === now) clearMoving(title);
+  }, MOVE_TTL_MS);
+}
+
+/** The move landed, failed, or timed out: the row stops saying "moving…". */
+export function clearMoving(title: string) {
+  movingSince.delete(title);
+  queryClient.setQueryData<Instance[]>(["instances"], (rows) =>
+    rows && rows.some((r) => r.title === title && isMovingRow(r))
+      ? rows.map((r) => (r.title === title && isMovingRow(r) ? ({ ...r, moving: undefined } as Instance) : r))
+      : rows
+  );
+}
+
+/** "Moved “name” to /new/folder" — the toast `session.moved` raises. */
+export function movedToastText(name: string, to: string): string {
+  return to ? `Moved “${name}” to ${to}` : `Moved “${name}”`;
+}
+
+/** The session a move event names: the envelope's, else the payload's. */
+function movedTitle(env: EventEnvelope): string {
+  return String(env?.session || (env?.data as Record<string, unknown> | undefined)?.title || "");
+}
+
+/** `session.moved`: the row stops saying "moving…", the rows refetch (its
+ * folder changed), and — live, not a replay — a toast says where it went. */
+export function onSessionMoved(env: EventEnvelope, replay = false) {
+  const title = movedTitle(env);
+  if (!title) return;
+  clearMoving(title);
+  void refreshInstances();
+  if (!replay) toast(movedToastText(windowName(title), String(env.data?.to || "")), { duration: 5000 });
+}
+
+/** `session.move_failed`: the row stops saying "moving…" and the reason goes
+ * on an error card (it stays: the remedy is often the sentence's end). */
+export function onSessionMoveFailed(env: EventEnvelope, replay = false) {
+  const title = movedTitle(env);
+  if (!title) return;
+  clearMoving(title);
+  void refreshInstances();
+  if (!replay) errorPop(`Moving “${windowName(title)}” failed`, String(env.data?.error || "no reason recorded"));
+}
+
 let instancesTimer: ReturnType<typeof setTimeout> | null = null;
 /** One refetch for a burst of session-set events. */
 function refreshInstancesSoon() {
@@ -544,8 +628,8 @@ function refreshInstancesSoon() {
 
 let sessionSetBridged = false;
 /** The events that change the session set (backend/web/core/events.py): made,
- * removed, renamed, or a make that failed after its 202. Installed once per
- * page; replays (history after a reconnect) only refetch. */
+ * removed, renamed, moved, or a make or move that failed after its 202.
+ * Installed once per page; replays (history after a reconnect) only refetch. */
 export function bridgeSessionSetEvents() {
   const ev = window.mindflock?.events;
   if (sessionSetBridged || !ev) return; // events.js may not have loaded yet
@@ -563,6 +647,8 @@ export function bridgeSessionSetEvents() {
     if (title) queryClient.setQueryData<Instance[]>(["instances"], (rows) => (rows ? dropPendingRow(rows, title) : rows));
     refreshInstancesSoon();
   });
+  ev.subscribe("session.moved", (env) => onSessionMoved(env, replay(env)));
+  ev.subscribe("session.move_failed", (env) => onSessionMoveFailed(env, replay(env)));
   for (const name of ["session.deleted", "session.renamed"]) ev.subscribe(name, refreshInstancesSoon);
 }
 

@@ -8,7 +8,7 @@ import { ApiError, api, instApi } from "../api/client";
 import type { Caps, Config, Instance } from "../api/types";
 import { computeVisibleSlots } from "../components/grid/layout";
 import { orderWithAfter } from "../components/sidebar/ordering";
-import { landPendingRow, patchInstance, queryClient, refreshInstances, refreshRecentlyClosed } from "../state/queries";
+import { landPendingRow, markMoving, patchInstance, queryClient, refreshInstances, refreshRecentlyClosed } from "../state/queries";
 import { freshStage } from "./stageWatch";
 import { displayName, effectiveViewMode, setSessionSelector, useUi, windowKey } from "../state/store";
 import { toast } from "./toast";
@@ -16,6 +16,7 @@ import { errMsg } from "./format";
 import { clearLoopReset, clearStep, markLoopReset, markStep } from "./stage";
 import { focusTerm, releaseTerms } from "./terminals";
 import { confirmPop, errorPop } from "./errorPop";
+import { windowName } from "./windowName";
 
 function caps() {
   return queryClient.getQueryData<Config>(["config"])?.caps ?? {
@@ -606,6 +607,71 @@ export async function branchSession(title: string) {
     failPendingSession(guess);
     errorPop("Branch failed", errMsg(err));
   }
+}
+
+/* --- Moving a session ------------------------------------------------------
+ * POST /api/instances/{title}/move {dest, force} → 202 {title, from, to}: the
+ * agent pauses, its folder moves to `dest`, and it resumes there; the
+ * outcome arrives as `session.moved` / `session.move_failed` (state/queries
+ * onSessionMoved / onSessionMoveFailed). docs/flights.md "Moving a session". */
+
+/** Move to a folder… — the session ⋯ menu's item: opens MoveSessionDialog. */
+export function openMoveSession(title: string) {
+  if (title) useUi.getState().openDialogFor("move", title);
+}
+
+/** The refusals the move route names (its 400/404/409 `error`). */
+export type MoveRefusal = "working" | "exists" | "in_flight" | "remote" | "bad_dest" | "unknown_session";
+
+/** The dialog's own line for a 409 `working` (its checkbox is the remedy). */
+export const MOVE_MID_TURN = "The agent is mid-turn — tick the box to move anyway";
+
+const MOVE_REFUSALS: Record<MoveRefusal, string> = {
+  working: MOVE_MID_TURN + ".",
+  exists: "Something is already at that path — pick a folder that doesn't exist yet.",
+  in_flight: "Its flight or fast-track is running — pause it first, or tick the box to move anyway.",
+  remote: "That session lives on another device — move it from there.",
+  bad_dest: "Give a full path to a new folder outside the session's own.",
+  unknown_session: "MindFlock couldn't find that session — it may have just been removed.",
+};
+
+/** Which refusal a failed move is ("" for anything else: a 500, a network
+ * error). The route names it in `error` (or `code`). */
+export function moveRefusal(err: unknown): MoveRefusal | "" {
+  if (!(err instanceof ApiError)) return "";
+  const body = err.body as { error?: unknown; code?: unknown } | null;
+  for (const v of [body?.error, body?.code]) if (typeof v === "string" && v in MOVE_REFUSALS) return v as MoveRefusal;
+  return "";
+}
+
+/** The sentence a failed move says: the server's own, unless all it sent is
+ * the bare code. */
+export function moveErrorText(err: unknown): string {
+  const code = moveRefusal(err);
+  const msg = errMsg(err);
+  return code && (!msg || msg === code) ? MOVE_REFUSALS[code] : msg;
+}
+
+export type MoveResult = { ok: true; to: string } | { ok: false; refusal: MoveRefusal | ""; message: string };
+
+/** Ask the server to move `title`'s folder to `dest`. Accepted: the row says
+ * "moving…" until the event, and a toast says it started. A 409 `working`
+ * without `force` is the dialog's to answer (its checkbox); every other
+ * failure goes on the error card. */
+export async function moveSession(title: string, dest: string, force = false): Promise<MoveResult> {
+  const name = windowName(title);
+  let r: { to?: string } | null = null;
+  try {
+    r = await instApi<{ title?: string; from?: string; to?: string }>(title, "/move", { method: "POST", json: { dest, force } });
+  } catch (err) {
+    const refusal = moveRefusal(err);
+    const message = moveErrorText(err);
+    if (!(refusal === "working" && !force)) errorPop(`Moving “${name}” failed`, message);
+    return { ok: false, refusal, message };
+  }
+  markMoving(title);
+  toast(`Moving “${name}”…`);
+  return { ok: true, to: r?.to || dest };
 }
 
 /** Commit… — the table's Commit action (lib/sessionActionTable): opens the

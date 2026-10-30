@@ -1,0 +1,78 @@
+/* Move to a folder… (MoveSessionDialog): the Rename card's shape, a little
+   wider for a path. */
+#move-form {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px;
+  width: 520px;
+  max-width: 92vw;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+#move-form h2 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  overflow-wrap: anywhere;
+}
+
+#move-form > label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#move-form .move-now {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#move-form .move-now-path {
+  color: var(--text);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+#move-form #move-dest {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+#move-form #move-dest:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+#move-form #move-dest[aria-invalid="true"] {
+  border-color: var(--red);
+}
+
+#move-form .move-says {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#move-form > label.move-force {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+#move-form .move-midturn {
+  margin: 0;
+  font-size: 12px;
+  color: var(--red);
+}
