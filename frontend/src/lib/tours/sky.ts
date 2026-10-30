@@ -1,6 +1,6 @@
 /** The Sky tour: the top bar's Grid · Sky toggle (the main area's second
  * view — every session a line of blocks), a line, the bird on it, and the
- * flyway shelf at the sky's foot, where flyways are made, edited and flown.
+ * Stops shelf at the sky's foot, where sessions and stops are dragged in from.
  * Each step names its data-tour hook first; a step whose hook isn't on screen
  * (the grid is showing, no session yet, or no flight in the air so no bird)
  * falls back to the toggle (`view-sky`) or centres. It opens by itself the
@@ -29,8 +29,8 @@ export const SKY_TOUR: TourDef = {
     },
     {
       target: '[data-tour="sky-shelf"], [data-tour="view-sky"]',
-      title: "Flyways live on the shelf",
-      body: "Drag a flyway onto a line to fly it there, press one to edit its stops and schedule, or + New flyway to make one.",
+      title: "Stops live on the shelf",
+      body: "Drag the Session chip onto the sky, or a stop onto a line — on empty sky, stops wait for a session.",
     },
   ],
 };

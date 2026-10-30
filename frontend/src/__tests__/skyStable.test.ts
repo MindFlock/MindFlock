@@ -2,8 +2,8 @@
  * moves it. A line gets a spot once (lib/skyLayout assignSpots) and keeps it
  * however it grows; a newcomer lands clear of every placed line; a leaver
  * frees its spot; Tidy forgets them all and is the only glide; the camera
- * fits once (no `shape` in the auto-fit's dependencies); + New session drags
- * onto the sky and the new-session block moves by its bar. */
+ * fits once (no `shape` in the auto-fit's dependencies); the shelf's Session
+ * chip drags onto the sky and the new-session block moves by its bar. */
 
 import { describe, expect, it } from "vitest";
 import { code, css } from "./sourceText";
@@ -100,8 +100,10 @@ describe("the sky view stays still", () => {
     expect(sky).toContain("const saved: Record<string, Pos> = { ...autoPos, ...pinnedPositions(layout) };");
     expect(sky).toContain("assignSpots(existing, lines.filter((l) => !saved[l.id]),");
     expect(sky).toMatch(/if \(flightsSettled\) for \(const \[id, at\] of Object\.entries\(fresh\)\) if \(measured\[id\]\) edit\(\)\[id\] = at;/);
-    // A session that's gone, or a line the owner pinned, frees its given spot.
-    expect(sky).toMatch(/if \(layout\[id\]\?\.pinned \|\| !rows\.some\(\(r\) => r\.title === id && inSky\(r\)\)\) delete edit\(\)\[id\];/);
+    // A session that's gone (or grounded stops that took off or were
+    // removed), or a line the owner pinned, frees its given spot.
+    expect(sky).toContain("if (layout[id]?.pinned || !lineAlive(id)) delete edit()[id];");
+    expect(sky).toContain("(isGroundedKey(id) ? groundedIds.has(groundedIdOf(id)) : rows.some((r) => r.title === id && inSky(r)))");
     expect(sky).not.toContain("placeLines(");
   });
 
@@ -137,25 +139,28 @@ describe("the sky view stays still", () => {
   });
 });
 
-describe("+ New session drags onto the sky", () => {
+describe("the Session chip drags onto the sky", () => {
   const sky = code("components/flights/SkyView.tsx");
 
-  it("the toolbar button is draggable and carries the new-session type, as a copy", () => {
+  it("the toolbar's + New session is gone; the shelf's Session chip carries the new-session type, as a copy", () => {
     expect(NEW_SESSION_MIME).toBe("application/x-mindflock-new-session");
-    const btn = sky.slice(sky.indexOf('className="btn-primary fl-btn sky-new"'));
-    const tag = btn.slice(0, btn.indexOf(">\n"));
-    expect(tag).toContain("draggable={!narrow}");
-    expect(tag).toContain("onDragStart={onNewDragStart}");
-    expect(tag).toContain("onClick={newHere}");
-    expect(tag).toContain('title="Click, or drag onto the sky,');
-    expect(sky).toContain('e.dataTransfer.setData(NEW_SESSION_MIME, "session");');
-    expect(sky).toContain('e.dataTransfer.effectAllowed = "copy";');
+    expect(sky).not.toContain("+ New session");
+    expect(sky).not.toContain('className="btn-primary fl-btn sky-new"');
+    expect(sky).toContain("<StopShelf onTack={onTack} onTackPlan={onFly} onSession={newHere}");
+    const shelf = code("components/flights/StopShelf.tsx");
+    expect(shelf).toContain('[NEW_SESSION_MIME, "session"],');
+    expect(shelf).toContain('e.dataTransfer.effectAllowed = "copy";');
+    // Double-click and Ctrl/Alt+N (the view switch's newHere) still open it.
+    expect(sky).toMatch(/const onDouble = [\s\S]*?newAtScreen\(e\.clientX, e\.clientY\);/);
+    expect(sky).toContain("hostRef.current.newHere = newHere;");
   });
 
   it("the viewport takes the drop on empty sky and opens the block there, like a double-click", () => {
     expect(sky).toContain("onDragOver={onNewDragOver}");
     expect(sky).toContain("onDrop={onNewDrop}");
-    expect(sky).toMatch(/const onNewDrop = \(e: ReactDragEvent<HTMLDivElement>\) => \{[\s\S]*?if \(!ground\(e\.target\)\) return;[\s\S]*?newAtScreen\(e\.clientX, e\.clientY\);/);
+    expect(sky).toMatch(/const onNewDrop = \(e: ReactDragEvent<HTMLDivElement>\) => \{[\s\S]*?if \(t \|\| !ground\(e\.target\)\) return;[\s\S]*?newAtScreen\(e\.clientX, e\.clientY\);/);
+    // On a grounded line: a block that makes a session for those stops.
+    expect(sky).toMatch(/const onNewDrop = [\s\S]*?if \(isGroundedKey\(t\)\) \{[\s\S]*?newForGrounded\(t\);/);
     expect(sky).toMatch(/const onDouble = [\s\S]*?newAtScreen\(e\.clientX, e\.clientY\);/);
     expect(sky).toMatch(/const newAtScreen = [\s\S]*?toPlane\(camRef\.current, clientX - r\.left, clientY - r\.top\)/);
     expect(sky).toMatch(/const onNewDragOver = [\s\S]*?e\.preventDefault\(\);/);
@@ -165,7 +170,7 @@ describe("+ New session drags onto the sky", () => {
   });
 
   it("the block moves by its bar, and the session it makes is pinned where it sat", () => {
-    expect(sky).toMatch(/onMove=\{narrow \? undefined : \(at\) => setNewAt\(at\)\}/);
+    expect(sky).toMatch(/onMove=\{narrow \? undefined : \(at\) => setNewAt\(\{ \.\.\.newAt, \.\.\.at \}\)\}/);
     expect(sky).toContain("setLayout((l) => patchSkyLine(l, title, { x: newAt.x, y: newAt.y, pinned: true }));");
     const block = code("components/flights/NewSessionBlock.tsx");
     expect(block).toMatch(/className=\{"sky-new-head" \+ \(onMove \? " is-movable" : ""\)\}[\s\S]*?onPointerDown=\{onBarDown\}/);

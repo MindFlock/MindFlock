@@ -4,15 +4,15 @@
  * One SOURCE BLOCK per thing the pipeline polls — each ticket source, each PR
  * repo monitor, each issue repo monitor — saying what it is (the kind badge
  * Waiting to fly uses), whether it starts work by itself and how often it
- * looks (the auto-start chip), the flyway its items fly, the items that are
+ * looks (the auto-start chip), the saved stop its items fly, the items that are
  * eligible and have no session yet (each with Fly), and a thin stub per
  * session it already started — `data-lane-target="<title>"` is where the
  * Sky's arrow to that session's line begins. ⋯ opens the source in Intake.
  * The lane folds to a rail of one icon per source with its count.
  *
- * The grouping, counts, default flyway and started-session matching are
+ * The grouping, counts, default saved stop and started-session matching are
  * lib/skyIntake.ts `sourceBlocks`; the Fly request is the Board's own
- * (`flyRequest`, with the source's flyway). */
+ * (`flyRequest`, with the source's saved stop). */
 
 import { useState } from "react";
 import { api } from "../../api/client";
@@ -20,6 +20,7 @@ import type { Instance } from "../../api/types";
 import { refreshInstances, useMindflockStatus, usePanelQuery, useSettingsDoc, useTicketingCatalog } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
+import { windowName } from "../../lib/windowName";
 import { WAITING_KIND_BADGE, WAITING_KIND_HEAD, type FlightPlan } from "../../lib/flights";
 import { flyRequest, refreshFlights, type WaitingTarget } from "../../lib/flightsApi";
 import { laneCount, shownWaiting, sourceBlocks, type LanePanels, type LaneWaiting, type SourceBlock } from "../../lib/skyIntake";
@@ -58,7 +59,7 @@ function saveCollapsed(v: boolean) {
 const RAIL_GLYPH: Record<SourceBlock["kind"], string> = { tickets: "T", prs: "PR", issues: "I" };
 
 /** Fly one waiting item the way the Board's row does: the Intake start route
- * with the source's flyway. Resolves to the session title the start returned
+ * with the source's saved stop. Resolves to the session title the start returned
  * (the ticket's reference when an older server answers without one). */
 export async function flyLaneItem(w: LaneWaiting, block: Pick<SourceBlock, "flyway">): Promise<string> {
   const t = w.item.target as WaitingTarget;
@@ -134,7 +135,7 @@ function Block({ block, onFly }: { block: SourceBlock; onFly(title: string): voi
       </header>
       <div className="sky-lane-chips">
         <span className={"sky-lane-auto" + (block.auto ? " on" : "")}>{block.autoText}</span>
-        <span className={"sky-lane-flyway" + (block.flyway.own ? " own" : "")} title={block.flyway.own ? "This source's flyway" : "The built-in flyway for " + WAITING_KIND_HEAD[block.kind].toLowerCase()}>
+        <span className={"sky-lane-flyway" + (block.flyway.own ? " own" : "")} title={block.flyway.own ? "This source's saved stop" : "The built-in stops for " + WAITING_KIND_HEAD[block.kind].toLowerCase()}>
           {block.flyway.name}
         </span>
       </div>
@@ -151,9 +152,9 @@ function Block({ block, onFly }: { block: SourceBlock; onFly(title: string): voi
       {block.started.length > 0 && (
         <ul className="sky-lane-stubs" aria-label="Started sessions">
           {block.started.map((s) => (
-            <li key={s.title} className="sky-lane-stub" data-lane-target={s.title} title={s.reference ? s.reference + " → " + s.title : s.title}>
+            <li key={s.title} className="sky-lane-stub" data-lane-target={s.title} title={s.reference ? s.reference + " → " + windowName(s.title) : windowName(s.title)}>
               <span className="sky-lane-stub-line" aria-hidden="true" />
-              <span className="sky-lane-stub-name">{s.title}</span>
+              <span className="sky-lane-stub-name">{windowName(s.title)}</span>
             </li>
           ))}
         </ul>

@@ -7,7 +7,7 @@
  *    Verify). A press on a flight's name flies the sky to its line.
  *  - Waiting to fly — the tickets, pull requests and issues that are eligible
  *    and have no session, under their own sub-headings, a kind badge on every
- *    row, the flyway as a chip row and one action: Fly. Folded: the intake
+ *    row, the saved stop as a chip row and one action: Fly. Folded: the intake
  *    lane at the sky's left edge draws them too.
  *  - Landed — finished flights, folded. */
 
@@ -17,6 +17,7 @@ import { useFlightKinds, useFlightPlans, useFlights, useSettingsDoc, useTestPlan
 import { ageText } from "../intake/kit";
 import { useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
+import { windowName } from "../../lib/windowName";
 import { isFailing, isWaitingOnYou, planName } from "../dialogs/verify";
 import { FlightCard, YouStepActions, flightHeadline } from "./FlightStrip";
 import { useWaiting, type Waiting } from "./useWaiting";
@@ -38,7 +39,7 @@ import { flyWaiting, type WaitingTarget } from "../../lib/flightsApi";
 import { ChipRow } from "./controls";
 import "./Flights.css";
 
-/** The flyway a source names for its flights (`TicketingSource.plan`,
+/** The saved stop a source names for its flights (`TicketingSource.plan`,
  * `github.repo_settings[repo].plan`, `issue_repo_settings[repo].plan`), "" =
  * none (the server then uses the built-in cut at the source's depth). */
 export function sourcePlan(settings: Record<string, unknown> | undefined, t: WaitingTarget): string {
@@ -82,10 +83,10 @@ function whereTo(w: Waiting): string {
 }
 
 /** One item waiting to fly: its badge, reference and headline, where it will
- * go, the flyway as chips, and Fly. */
+ * go, the saved stops as chips, and Fly. */
 export function WaitingRow({ w, plans, settings }: { w: Waiting; plans: FlightPlan[]; settings: Record<string, unknown> | undefined }) {
   const t = w.item.target as WaitingTarget;
-  // The source's own flyway (its card's chips) is the default; a pick here
+  // The source's own saved stop (its card's chips) is the default; a pick here
   // overrides it for this flight only. `null` = follow the source, so a
   // settings document that loads after the row still decides.
   const own = sourcePlan(settings, t);
@@ -103,7 +104,7 @@ export function WaitingRow({ w, plans, settings }: { w: Waiting; plans: FlightPl
     setError("");
     try {
       // The empty chip is the kind's built-in: sent as such when the source
-      // names a flyway of its own (else the server would use that).
+      // names a saved stop of its own (else the server would use that).
       const send = plan || (own ? builtinPlanFor(kind, plans) : "");
       await flyWaiting(t, send, {}, kind === "tickets" ? w.item.reference : "");
       // Flying opens the session (flyWaiting selects it as soon as its row
@@ -142,8 +143,8 @@ export function WaitingRow({ w, plans, settings }: { w: Waiting; plans: FlightPl
       </div>
       {plans.length > 0 && (
         <div className="fl-waiting-flyway">
-          <span className="fl-fld-label">Flyway</span>
-          <ChipRow className="fl-plan-pick" label="Flyway" value={plan} options={planChoices(plans, kind, plan)} onChange={setPicked} />
+          <span className="fl-fld-label">Stops</span>
+          <ChipRow className="fl-plan-pick" label="Stops" value={plan} options={planChoices(plans, kind, plan)} onChange={setPicked} />
         </div>
       )}
       {error && (
@@ -163,10 +164,12 @@ export const KIND_ORDER: readonly WaitingKind[] = ["tickets", "prs", "issues"];
 function PerchRow({ flight, kinds, onFocus }: { flight: Flight; kinds?: readonly StepKindDef[] | null; onFocus(title: string): void }) {
   const step = flight.steps[flight.cursor];
   const halted = flight.state === "halted";
+  // The subject's headline, else the session's shown name (never its raw title).
+  const head = flight.subject?.title || flight.subject?.id || !flight.session ? flightHeadline(flight) : windowName(flight.session);
   return (
     <div className={"sky-perch" + (halted ? " is-halted" : "")} data-flight={flight.id}>
-      <button type="button" className="sky-perch-name" title={flight.session ? "Show " + flight.session + "'s line" : undefined} onClick={() => onFocus(flight.session)}>
-        {flightHeadline(flight)}
+      <button type="button" className="sky-perch-name" title={flight.session ? "Show " + windowName(flight.session) + "'s line" : undefined} onClick={() => onFocus(flight.session)}>
+        {head}
       </button>
       <div className="sky-perch-step muted">
         {step ? (stepActor(step, kinds) === "you" ? perchLabel(step.title) : step.title) : ""}
@@ -217,7 +220,7 @@ export function SkyDrawer({ open, onToggle, onFocus }: SkyDrawerProps) {
         <div className="sky-drawer-body">
           {flightsQ.data === null && (
             <p className="fl-note muted" role="status">
-              This server has no flights yet — update MindFlock to fly flyways. Waiting items and checklists still work.
+              This server has no flights yet — update MindFlock to fly stops. Waiting items and checklists still work.
             </p>
           )}
           <section className="fl-group fl-group-needs" id="fl-group-needs" aria-labelledby="fl-group-needs-h">

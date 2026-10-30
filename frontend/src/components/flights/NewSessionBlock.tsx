@@ -1,6 +1,6 @@
 /** The Sky's new-session block: a block on the sky that opens where the
- * owner double-clicked empty sky (or dropped + New session) — pick a
- * repository, say what to do, optionally a flyway, and Fly
+ * owner double-clicked empty sky (or dropped the shelf's Session chip) — pick
+ * a repository, say what to do, optionally a saved stop to fly, and Fly
  * (docs/flights-intake-lane.md, docs/flights-stable.md). Its bar (the bird,
  * "New session") drags it about like a line's bar (`onMove`, plane px; the
  * sky's `zoom` turns pointer px into plane px); the session it makes is
@@ -11,14 +11,21 @@
  *    picker window).
  *  - Prompt: the New dialog's prompt box; Enter flies, Shift+Enter is a new
  *    line.
- *  - Flyway: "No flyway" or one of the flyways, built-ins first.
+ *  - Stops: "No stops" or one of the saved stops, built-ins first. Not shown
+ *    for a block dropped on a grounded line (`attach`): its session flies
+ *    THOSE stops (`POST /api/flights/{id}/attach {title}`).
  *  - Agent: chips when more than one CLI is installed; the default preselected.
  *
  * The create body is the New dialog's own (`newSessionSubmit(…).buildBody`, so
  * the prompt, the worktree rules and the per-agent launch flags are exactly
- * what the dialog would send); a picked flyway then takes off on the new
- * session (`POST /api/flights/start {plan_id, title}`). Errors stay in the
- * card — Electron has no alert(). Escape cancels. */
+ * what the dialog would send); a picked saved stop then takes off on the new
+ * session (`startFlightOn`). Errors stay in the card — Electron has no
+ * alert(). Escape cancels.
+ *
+ * Fast: the moment Fly is pressed the optimistic `pending_create` row is in
+ * the sessions (`addPendingSession`) and `onPending(guess)` tells the sky,
+ * which pins that row's line where the block sat and hides the block; a
+ * refusal brings the block back with the error (`onFailed`). */
 
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { api } from "../../api/client";
@@ -27,7 +34,8 @@ import { refreshInstances, useAgentChoices, useSettingsDoc } from "../../state/q
 import { rememberNewSessionChoice } from "../../state/store";
 import { addPendingSession, clearStaleAlias, failPendingSession } from "../../lib/sessionActions";
 import { newSessionSubmit, type NewSessionSubmitCtx } from "../../lib/newSessionSubmit";
-import { refreshFlights } from "../../lib/flightsApi";
+import { attachGrounded, startFlightOn } from "../../lib/flightsApi";
+import { windowName } from "../../lib/windowName";
 import { errMsg } from "../../lib/format";
 import { isNameQuery, titleFromPrompt, type RepoSuggestion } from "../dialogs/newSession";
 import { PathField } from "../PathField";
@@ -48,15 +56,23 @@ export interface NewSessionBlockProps {
   onMove?(at: { x: number; y: number }): void;
   onCreated(title: string): void;
   onCancel(): void;
+  /** Made for a grounded line's stops: they take off on the new session. */
+  attach?: { id: string; name: string };
+  /** Fly pressed: the optimistic row's (guessed) title is in the sessions. */
+  onPending?(guess: string): void;
+  /** The create was refused: the block shows again, with why. */
+  onFailed?(): void;
+  /** Drawn but not shown (its session's line already is). */
+  hidden?: boolean;
 }
 
 /** How many suggested repositories show as chips. */
 const REPO_CHIPS = 6;
 
-/** The flyway chips: "No flyway" first, then built-ins, then the owner's. */
-export function flywayChoices(plans: readonly Pick<FlightPlan, "id" | "name" | "builtin">[]): Array<{ value: string; label: string }> {
+/** The saved-stop chips: "No stops" first, then built-ins, then the owner's. */
+export function savedStopChoices(plans: readonly Pick<FlightPlan, "id" | "name" | "builtin">[]): Array<{ value: string; label: string }> {
   const ordered = [...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)];
-  return [{ value: "", label: "No flyway" }, ...ordered.map((p) => ({ value: p.id, label: p.name }))];
+  return [{ value: "", label: "No stops" }, ...ordered.map((p) => ({ value: p.id, label: p.name }))];
 }
 
 /** The repository chips: the suggestions, recent first, one per path. */
@@ -159,7 +175,7 @@ function bodyFor(opts: { repo: string; prompt: string; program: string; launchAr
   });
 }
 
-export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel }: NewSessionBlockProps) {
+export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCancel, attach, onPending, onFailed, hidden }: NewSessionBlockProps) {
   const [repo, setRepo] = useState("");
   const [prompt, setPrompt] = useState("");
   const [plan, setPlan] = useState("");
@@ -167,7 +183,7 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
   const [suggestions, setSuggestions] = useState<RepoSuggestion[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  /** A session that exists but whose flyway refused to take off. */
+  /** A session that exists but whose stops refused to take off. */
   const [made, setMade] = useState("");
   const cardRef = useRef<HTMLDivElement | null>(null);
 
@@ -233,6 +249,7 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
     setError("");
     const body = bodyFor({ repo, prompt, program, launchArgs });
     const guess = addPendingSession(titleFromPrompt(prompt) || repo.split("/").filter(Boolean).pop() || "untitled");
+    onPending?.(guess);
     let title = "";
     try {
       const inst = await api<Instance>("/api/instances", { json: body });
@@ -244,18 +261,17 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
       failPendingSession(guess);
       setError(errMsg(err));
       setBusy(false);
+      onFailed?.();
       return;
     }
-    if (plan) {
-      try {
-        await api("/api/flights/start", { json: { plan_id: plan, title } });
-        void refreshFlights();
-      } catch (err) {
-        setMade(title);
-        setError("“" + title + "” started, but the flyway didn't take off: " + errMsg(err));
-        setBusy(false);
-        return;
-      }
+    // The stops it flies: a grounded line's, or a saved stop picked here.
+    const flew = attach ? await attachGrounded(attach.id, { title }) : plan ? await startFlightOn(title, plan) : true;
+    if (!flew) {
+      setMade(title);
+      setError("“" + windowName(title) + "” started, but " + (attach ? "“" + attach.name + "”" : "the stops") + " didn't take off — the error card says why.");
+      setBusy(false);
+      onFailed?.();
+      return;
     }
     setBusy(false);
     onCreated(title);
@@ -266,7 +282,8 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
       ref={cardRef}
       className="sky-new sky-new-block fl-form"
       role="dialog"
-      aria-label="New session"
+      aria-label={attach ? "A new session for “" + attach.name + "”" : "New session"}
+      hidden={hidden}
       style={{ left: x, top: y }}
       onKeyDown={(e) => cardKey(e, onCancel)}
       onDoubleClick={(e) => e.stopPropagation()}
@@ -277,7 +294,7 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
         onPointerDown={onBarDown}
       >
         <Bird size={13} />
-        <span className="sky-new-name">New session</span>
+        <span className="sky-new-name">{attach ? "New session for “" + attach.name + "”" : "New session"}</span>
         <button type="button" className="sky-new-close" aria-label="Cancel the new session" title="Cancel (Esc)" onClick={onCancel}>
           ×
         </button>
@@ -308,10 +325,10 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
           onKeyDown={(e) => promptKey(e, () => void fly())}
         />
       </div>
-      {plans.length > 0 && (
+      {plans.length > 0 && !attach && (
         <div className="fl-fld fl-fld-wide">
-          <span className="fl-fld-label">Flyway</span>
-          <ChipRow className="sky-new-flyway" label="Flyway" value={plan} options={flywayChoices(plans)} onChange={setPlan} />
+          <span className="fl-fld-label">Stops</span>
+          <ChipRow className="sky-new-stops" label="Stops" value={plan} options={savedStopChoices(plans)} onChange={setPlan} />
         </div>
       )}
       {names.length > 1 && (
@@ -339,7 +356,7 @@ export function NewSessionBlock({ x, y, plans, zoom = 1, onMove, onCreated, onCa
           type="button"
           className="btn-primary fl-btn sky-new-fly"
           disabled={busy || !!blocked}
-          title={blocked || (plan ? "Start the session and fly the flyway" : "Start the session")}
+          title={blocked || (attach ? "Start the session and fly “" + attach.name + "” on it" : plan ? "Start the session and fly the stops" : "Start the session")}
           onClick={() => void fly()}
         >
           {busy ? "Taking off…" : made ? "Open session" : "Fly"}

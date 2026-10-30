@@ -1,4 +1,4 @@
-/** A source's flyway choice: which flyway its items fly ("" = the kind's
+/** A source's saved-stop choice: which saved stop its items fly ("" = the kind's
  * built-in, cut at the source's Fast-track depth), as a row of chips —
  * built-ins first, the default chip reading "Default · <built-in>". On the
  * ticket source cards and the PR / issue repository cards (Intake); the
@@ -28,16 +28,16 @@ export function PlanSelect({
   if (!plans) return null;
   return (
     <div className="set-row fl-source-plan">
-      <span className="set-label">Flyway</span>
+      <span className="set-label">Stops</span>
       <ChipRow
         className={className}
-        label="Flyway"
+        label="Stops"
         field={{ [field.attr]: "plan" }}
         value={value}
         options={planChoices(plans, kind, value)}
         onChange={onChange}
       />
-      <span className="set-hint">The flyway its items fly. Fast-track sets how far the default one goes.</span>
+      <span className="set-hint">The stops its items fly. Fast-track sets how far the default ones go.</span>
     </div>
   );
 }

@@ -291,13 +291,13 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
       !tabs.has("diff") && { key: "diff", label: "Diff", title: "What this session changed", run: () => useUi.getState().openDiff(title) },
     ctx.caps.git !== false && !tabs.has("map") && fromTable("map"),
     // Flights: the session's Flight tab — its live diagram, with + to tack a
-    // stop on and the flyways to fly (docs/flights.md "The session diagram").
+    // stop on and the saved stops to add (docs/flights.md "The session diagram").
     !remote &&
       !peer &&
       !inst.pending && {
         key: "flyway",
-        label: "Fly a flyway…",
-        title: "Open this session's Flight tab: tack stops onto its line, or fly a whole flyway",
+        label: "Add a stop…",
+        title: "Open this session's Flight tab: tack a stop, or a saved stop, onto its line",
         run: () => openTab(title, "flight"),
       },
     // The Sky on this one session: its line filling the sky, the bird where

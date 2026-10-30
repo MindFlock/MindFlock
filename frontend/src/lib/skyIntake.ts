@@ -5,7 +5,7 @@
  *
  * A SOURCE BLOCK is one thing the pipeline polls — a ticket source, a PR repo
  * monitor, an issue repo monitor — with how it polls (the auto-start chip),
- * the flyway its items fly by default, the items that are eligible and have no
+ * the saved stop its items fly by default, the items that are eligible and have no
  * session yet (the same `useWaiting` list the Board's Waiting to fly reads),
  * and the sessions it already started (the lane's arrow stubs, which the Sky
  * joins to each session's line).
@@ -56,7 +56,7 @@ export interface SourceBlock {
   every: number;
   /** "auto-start on · every 20 s" or "manual". */
   autoText: string;
-  /** The flyway its items fly: the source's own, else the kind's built-in. */
+  /** The saved stop its items fly: the source's own, else the kind's built-in. */
   flyway: { id: string; name: string; own: boolean };
   /** Eligible, no session yet — oldest first (the queue's order). */
   waiting: LaneWaiting[];
@@ -147,7 +147,7 @@ export function ticketSourceLabel(source: Record<string, unknown>, providers?: S
 function flywayOf(kind: WaitingKind, own: string, plans: SourceBlockOpts["plans"]): SourceBlock["flyway"] {
   if (own) return { id: own, name: plans?.find((p) => p.id === own)?.name || own, own: true };
   const id = builtinPlanFor(kind, plans);
-  return { id, name: plans?.find((p) => p.id === id)?.name || "built-in flyway", own: false };
+  return { id, name: plans?.find((p) => p.id === id)?.name || "built-in stops", own: false };
 }
 
 const sameRepo = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();

@@ -2527,3 +2527,73 @@ and SessionFlight's label use it too.
 - SkyLine: drop `flownCanvas` and its own `expandFlown`; the ⋯ item becomes "Fold
   flown stops" → `line.setFoldFlown((x) => !x)` (checked by `line.foldFlown`); the
   `onOpen` override for the pill can go (the hook unfolds).
+### As built: round 11 board
+
+The word *flyway* has left the Sky's UI; the board is the only editor of a
+series of stops. Source: `components/flights/StopShelf.tsx` (+ `.css`),
+`GroundedLine.tsx` (+ `.css`), `useGroundedLine.tsx`, `TakeoffDialog.tsx`
+(+ `.css`), `SkyView.tsx`, `NewSessionBlock.tsx`, `lib/groundedLines.ts`;
+tests in `stopShelf.test.ts`, `stopShelfSaved.test.ts`, `grounded.test.ts`,
+`skyStable.test.ts`.
+
+**The shelf** (`StopShelf`) is one row along the sky's foot, shown unless
+folded to its handle (**Stops ▾**, remembered per device as
+`mf_sky_stops_folded`; the old `mf_sky_shelf` folded-by-default is gone). It
+carries `data-tour="sky-shelf"`. Left to right:
+
+| Chip | Drag carries | Dropped on empty sky | Dropped on a line | Click |
+|---|---|---|---|---|
+| **Session** (`data-tour="flights-newblock"`) | `NEW_SESSION_MIME` = `session` | the new-session block at that spot | a grounded line: a block that makes a session for its stops (`attachGrounded(id, {title})` once made); a session line refuses | the block in the sky's middle |
+| a stop kind | `STOP_MIME` = the kind | `startGrounded({steps: [defaultStepFor(kind)]})` | tacked on at the gap (the canvas), else at the end | tacked onto the focused line (or the line picker) |
+| a saved stop (name + a dot per step, a perch's gold, "+N" past ten) | `FLYWAY_MIME` = the plan id, `text/plain` = its name | `startGrounded({plan_id})` | tacked on as one group (`tackOnPlan`), or flown on a line with no flight (`startFlightOn`) | the same, on the focused line |
+
+A new grounded line is pinned where the chip fell. The toolbar's
+**+ New session** is gone; double-click on empty sky and Ctrl/Alt+N still
+open the block. Right-click a saved stop (or the context-menu key /
+Shift+F10): **Rename** (a field inside the chip — Enter saves, Esc cancels;
+`checkRename`: never empty, ≤ 120, not another saved stop's name),
+**Takes off…** (the TakeoffDialog), **Reset to default** (a built-in,
+`resetPlan`), **Delete** (yours, `deletePlan`, confirmed inline with
+`InlineConfirm` under the row).
+
+**Grounded lines** (`GroundedLine` + `useGroundedLine`): every flight with
+`state === "grounded"` is its own line, laid out under `flight:<id>`, after
+the session lines, newest first (not in This session or Perched on you; Find
+matches its name). Its bar: the bird, the name (`plan_name`, read-only), a
+"No session" chip, a ⋯. Then a dashed head box ("No session yet — drop a
+Session chip here, or ⋯ Fly on a session") and its stops on the canvas, every
+one editable — the same flight routes a session's line uses (`tackOn`,
+`tackOnPlan`, `dropStop` with Undo, `moveStop`, `setHalt`, `patchStop`). The
+⋯: **Add a stop…**, **Fly on a session…** (the line picker, sessions with no
+flight in the air → `attachGrounded`), **Save to the shelf** (`planToSave`:
+a line whose every step shares one existing `group.plan_id` updates that
+saved stop, keeping its trigger and session defaults; else a new saved stop
+named after the line), **Remove** (confirmed inline → `deleteFlight`).
+Delete / Backspace with the line itself focused asks the same. The canvas's
+`onDropStop` is handed a function taking either a kind string (the old
+canvas) or `{kind} | {planId}` (the round-11 canvas).
+
+**TakeoffDialog** is the old flyway card's trigger section in a `Modal`:
+Takes off (by hand / ticket / PR / issue / schedule), the schedule's days,
+time and cron with the server's preview, Paused, and the repository, agent
+and model its sessions start in; Save → `savePlan`, a refusal stays in the
+dialog. `useUi.showFlyways(id)` (Schedule's Edit in the Sky, the palette, an
+old `#flights/flyways/<id>` link) unfolds the shelf and opens this dialog
+for that saved stop.
+
+**A new session is on the sky at once.** Fly in the block writes the
+optimistic `pending_create` row (`addPendingSession`) and calls
+`onPending(guess)`: the sky pins that row's line where the block sat and
+hides the block. The real title gets the same spot (the guess's entry is
+forgotten if the server picked another title); a refusal brings the block
+back with the error.
+
+**Names**: the line picker, SkyView's messages, the drawer's perch rows and
+the intake lane's started stubs show `windowName(title)`.
+
+**Deleted**: `FlywayShelf.tsx/.css`, `FlywayCard.tsx/.css`,
+`FlywayRow.tsx/.css`, `FlywayInspector.tsx`, `lib/flywayEdit.ts`,
+`skyFlyways.test.ts`, `flywayRow.test.ts`. `FlywayInspector.css` stays: it is
+the stop palette's and inspector's stylesheet, imported by `StopParts.tsx`.
+The still-needed helpers moved to `lib/groundedLines.ts` (`checkRename`,
+`NAME_MAX`, `savedStopOrder`).
