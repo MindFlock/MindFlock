@@ -2871,3 +2871,73 @@ the sky's selection is on a box that is not the session itself.
   `Modal`: the folder field with Tab completion from `components/PathField`,
   a line saying what will happen, Move) → a toast on `session.moved`, the error
   card on `session.move_failed`. The row shows "moving…" meanwhile.
+
+### As built: round 12 new block
+
+`NewSessionBlock` (components/flights/) keeps its rows — Repository, Task,
+Stops, Agent (chips when more than one CLI) — its drag bar, Esc, Enter-flies
+and the Cancel / Fly footer as they were. Under the rows sit two folds, their
+heads the quiet tier (`fl-icon-btn sky-new-fold`):
+
+- **More options** (`mf_sky_new_more` = "1" remembers it open; folded by
+  default). Folded, one muted line says what it holds — `optionsSummary`:
+  "claude · opus · worktree from main", then "“Template”" and "on <device>"
+  when picked (the model is a key account's pick, else a `--model` / `-m` /
+  `--model=` in the launch flags, `modelOf`). Open (`MoreOptions` in
+  `newBlockOptions.tsx`), all chips (`ChipRow`) or plain inputs, never a
+  `<select>`:
+  - **Account** — App default / CLI's own login / each profile (this device
+    only, as the dialog). The dialog's `accountSetter` is reused as is, so a
+    key account steers the agent and an OpenRouter key fetches its models.
+  - **Model** — for a key account (kind ≠ `account`): a text field with the
+    fetched models as a datalist (`profile_model`).
+  - **Workspace** — Worktree / In place. A template's provisioned workspace
+    is carried and shown as a line, not offered.
+  - **Base branch** — Default (<the repo's default>) plus up to six branches
+    (`branchChoices`: default, checked-out, local, remote) and an "Another
+    branch…" field past six. The branches come from the dialog's own
+    `useBaseBranches` (re-asked per folder, the pick reset with it).
+  - **Template** — None + the server's templates (`ensureTemplates`); a pick
+    fills the block through the dialog's `templateFiller` (agent, folder,
+    task, workspace). Its fast-track is ignored: the block flies stops.
+  - **Launch flags** — the field (pre-filled with the agent's saved defaults,
+    reset when the agent changes) plus the dialog's `FlagChips`.
+  - **Device** — This device + each startable device (`startableDevices`,
+    `deviceLabel`), only when there are any. Another device drops the account
+    and the base, and the POST goes there (`postInstance`: `deviceApi` +
+    `deviceTitle`, as the dialog's `postCreate`).
+- **From a session** — `ParentPicker`: this device's live sessions
+  (`parentChoices`: no `device`, not `pending_create`, `hidden_by` or
+  `locked`, with a `path`), by `windowName`, as `fl-pick` chips; a filter
+  field past eight (`PARENT_FILTER_AT`, `filterParents`). Picking one closes
+  the fold and forks: the Repository row reads "forked from **<name>**" with
+  the parent's repo · branch and a **Clear** (`test-btn`) that restores the
+  plain flow (the typed folder is kept underneath). The worker runs the
+  parent's agent when that is one of the choices. Folded, the summary adds
+  "· as <title>".
+
+**One body.** `blockBody(choice)` fills the New dialog's
+`newSessionSubmit(ctx).buildBody` ctx from the block (program, launch flags,
+account + model, workspace, base, template, device) — the only body shape.
+A fork goes through the same builder: `forkOptions` forces a worktree on this
+device with `baseBranch` = the parent's branch (so `base_ref` / `base_branch`
+cut it at the parent's HEAD and read its diff against it, as `spawn_session`
+does), `repo_path` = the parent's `path` (its repository), the title is
+`workerTitle(parent, taken)` — the lowest free `<slug(parent)[:40]>-wN`, the
+MCP's own rule — and `forkFields` adds `parent` + `spawned: true`:
+
+```json
+{"title": "r12-w1", "program": "claude", "repo_path": "/code/app",
+ "prompt": "…", "launch_args": [], "init_repo": false, "in_place": false,
+ "base_ref": "mf/r12", "base_branch": "mf/r12", "parent": "r12", "spawned": true}
+```
+
+It is still `api<Instance>("/api/instances", { json: body })` after
+`addPendingSession` (aimed at the device) and `onPending`; a picked saved stop
+then takes off (`startFlightOn`), a grounded line's stops attach.
+
+Tests: `newBlock.test.ts` (the pure helpers), `newSessionBlock.test.ts` (the
+fold closed / open markup, every option and the fork in the body, the POST
+with a mocked api, the picker). The older pins in `intakeLane.test.ts`,
+`flightsButtons.test.ts`, `grounded.test.ts` and `skyStable.test.ts` pass
+unchanged.
