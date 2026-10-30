@@ -4073,3 +4073,54 @@ Each owns the files its row names plus its tests and an "As built: round 15
 (`_builtin_defaults` + the built-in judges' receipts). `tsc` and `vitest`
 run from `frontend/` (node_modules is linked); backend tests with
 `UV_PYTHON=3.12 uv run pytest tests/unit/test_flight*.py`.
+
+### As built: round 15 test
+
+`backend/web/core/flight_kinds/test.py` registers `test` (work · no risk ·
+robot, needs the session). Config `{command, expect, rerun_failures,
+timeout_minutes}`; a strict plan refuses an `expect` other than pass/fail
+(`…config.expect`), a lenient one reads it as pass. Default title "Run the
+tests" ("Run the tests (expect a failure)" with `expect: fail`).
+
+- **Command.** Empty = `detect_command(worktree)`: pytest when `pytest.ini`,
+  pyproject `[tool.pytest…]`, setup.cfg `[tool:pytest]` or tox.ini `[pytest]`
+  (`uv run pytest -q -rfE` with a uv.lock, else `.venv/bin/python -m pytest`,
+  else `python3 -m pytest`), `npm test` when package.json has a test script
+  (npm init's "no test specified" placeholder does not count), `go test
+  ./...` with go.mod, `cargo test` with Cargo.toml; none → fail "no test
+  command: …". An auto-detected command runs with `CI=1` (vitest/jest run
+  once instead of watching); every run gets `NO_COLOR=1 FORCE_COLOR=0`, and
+  the parsers strip ANSI anyway. The job is `run_shell(…, keep=20000)` in
+  `worktree_of(flight)` (no worktree → fail).
+- **Parsers** (pure, `parse_pytest` / `parse_js` / `parse_go` /
+  `parse_cargo`; `parse_output` sums every runner that recognises the
+  output, so a `make test` running pytest + vitest reads as one result):
+  pytest's last "N passed, M failed, K errors … in Xs" line (errors count as
+  failures; FAILED/ERROR short-summary names, else `-v`'s "x::y FAILED");
+  vitest "Tests  1 failed | 4 passed" / jest "Tests: 1 failed, 4 passed"
+  (names: vitest "FAIL file > suite > test", else jest "● suite › test",
+  else ×/✕ lines, else FAIL files); go `--- FAIL:` / `--- PASS:` (top-level
+  counted, subtests named) and, without `-v`, the `ok`/`FAIL<TAB>pkg` lines
+  counted as packages (receipt "N packages ok"); cargo every "test result:"
+  line summed, names from "test x ... FAILED". No summary → the exit code
+  alone decides.
+- **Judge.** `obs["test"]` is `job_of` (via `observe`); None (no job this
+  server run) → `run` "running the tests again (interrupted)". `expect:
+  pass`: exit 0 and no failures → done; 1..3 failures with `rerun_failures`
+  → a `run` with `phase: "rerun"` (the stop keeps its `since` and history;
+  the runner starts the SAME command again, `detail.runs = 2`,
+  `detail.first` = the first run's counts) and the second run is the
+  verdict; otherwise fail. `expect: fail`: ≥ 1 failure or a non-zero exit →
+  done "failed as expected"; exit 0 with none → fail "passed unexpectedly";
+  exit -1 (timed out / could not start) is not the asked-for failure and
+  fails the stop.
+- **Stores** `detail {passed, failed (None when unparsed), failures (≤ 20
+  names), runs, exit, output (tail ≤ 2000), command, receipt}`; receipts
+  "312 passed", "312 passed after a rerun", "2 packages ok", "passed"
+  (exit 0, no summary), "failed as expected".
+- **Fail reason** (what `on_fail: agent` hands over): "2 failed: a, b" /
+  "2 failed (again on the rerun): …" / "exited 2" / "the tests did not
+  finish", then the output's tail, ≤ 2000 chars in all.
+- **Limits.** The rerun runs the whole command again (not only the failing
+  tests); a restart mid-rerun starts over at run 1; go without `-v` cannot
+  count passing tests in a package that also failed (passed reads 0).
