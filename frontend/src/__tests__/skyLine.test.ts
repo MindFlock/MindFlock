@@ -20,7 +20,7 @@ vi.mock("../lib/toast", () => ({ toast: vi.fn() }));
 
 const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 const { useUi } = await import("../state/store");
-const { SkyLine, nextSize, clampPane, PANE_MIN_W, PANE_MIN_H } = await import("../components/flights/SkyLine");
+const { SkyLine, nextSize, presetPatch, clampPane, PANE_MIN_W, PANE_MIN_H } = await import("../components/flights/SkyLine");
 const { FlywayCanvas, boxDetail, sizedBox } = await import("../components/flights/FlywayCanvas");
 const { Pane } = await import("../components/grid/Pane");
 const { flywayDiagram } = await import("../lib/flightDiagram");
@@ -184,7 +184,10 @@ describe("the line", () => {
     const html = line({ size: "compact" });
     expect(html).toContain("skl-size-compact");
     expect(html).toContain("fl-size-compact");
-    expect(code("components/flights/SkyLine.tsx")).toContain("onClick={() => p.onLayout({ size: nextSize(size) })}");
+    // ◧ is a preset: its name and its two numbers.
+    expect(code("components/flights/SkyLine.tsx")).toContain("onClick={() => p.onLayout(presetPatch(nextSize(size)))}");
+    expect(presetPatch("compact")).toEqual({ size: "compact", boxW: 150, boxH: 64 });
+    expect(presetPatch("wide")).toEqual({ size: "wide", boxW: 330, boxH: 120 });
   });
 
   it("wide: a session box says what it was last asked", () => {

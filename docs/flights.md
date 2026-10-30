@@ -2302,3 +2302,96 @@ words and the places the backend had to choose.
   `no_repo`; every refusal comes before the session is made.
 
 **Also.** A flight step's ntfy push is tagged `bird` (🐦), not `airplane`.
+### As built: round 11 line
+
+> Code: `frontend/src/components/flights/SkyLine.tsx` (+ `SkyLine.css`),
+> `lib/skyLayout.ts` (the store, `boxScale`), `state/queries.ts`
+> (`mergePending`, `notePendingCreated`, `landPendingRow`, `dropPendingRow`,
+> `bridgeSessionSetEvents`), `lib/sessionActions.ts`. Tests:
+> `skyResize.test.ts`, `skyFresh.test.ts`.
+
+**Resizing a line's boxes.** `SkyLineLayout` gains `boxW` / `boxH` (plane px
+of one stop box), clamped to 140–420 × 60–220. The store keeps both or
+neither, and neither when they are just the preset's (`cleanLine`); an old
+layout's `size` alone stands for its preset's numbers (`lineBox`).
+`estimateLine` scales the line's width by `boxW / 236` and the part under
+the 42px bar by `boxH / 100` when they are set (the old size factors
+otherwise).
+
+The canvas still draws the three tiers, so a box keeps showing what its tier
+shows (compact the title, wide the detail line). `boxScale(w)` picks the tier
+nearest the width (compact under 193, wide from 283) and a uniform scale
+`k = w / tierW`. That is the round's "boxW / 236" generalised: every preset is
+its own tier at `k = 1`, pixel-identical to round 10. The line draws the
+tier's canvas inside a sizer:
+
+- `.skl-scale` (the sizer) is set to the canvas's own size × `k`, read by a
+  ResizeObserver, so the line's offset size, and so `onMeasure`, is what it
+  draws.
+- `.skl-scale-in` carries `transform: scale(k)` (origin 0 0) and
+  `--sky-z = zoom × k`, so everything that counter-scales by `--sky-z`
+  stays screen-sized: a box's toolbar, the gap +, a stop's menu. The level
+  of detail's type factors (`--sky-far`, `--sky-far-ui`, `--sky-mid`,
+  `--sky-near`) are declared again on it, because custom properties on `.skl`
+  resolve against the zoom alone. The bar and its ⋯ keep the plain zoom.
+  The band (`lod`) still follows the camera.
+- Drops and picks need no change: the canvas's `stagePoint` divides by its
+  rendered width over its layout width, which includes `k`.
+- An open card asks the canvas for `size / k` and draws scaled by `1 / k`
+  with `--sky-z` back at the zoom, so the pane keeps its size and its
+  corner's maths.
+
+The handle is `.skl-box-resize`, the bottom-right corner of the line's frame.
+It is screen-sized and shows on hover or focus. A drag works in plane px
+(pointer travel ÷ zoom). The drawn canvas follows the pointer along the axis
+it moved most, and the box width follows the canvas (`dragBox`). The height
+is the tier's at the same scale. The drag is drawn live and persisted once on
+release: `onLayout({size: tier, boxW, boxH})`. ◧ and the ⋯'s Compact / Normal
+/ Wide are presets of the same numbers (`presetPatch`): compact 150 × 64,
+normal 236 × 100, wide 330 × 120.
+
+**Flown stops stay.** The line asks `sessionDiagram` for both pictures
+explicitly (`expandFlown: false` for the folded one it counts flown stops
+on, `expandFlown: true` for the shown one unless folded), so it reads the
+same whatever the diagram's own default is. The ⋯ item is "Fold flown stops"
+(then "Show flown stops"), and the pill still unfolds. `flownCanvas` remaps
+indexes as before when folded.
+
+**Names.** The bar, the line's aria label, the ⋯'s label, the canvas's label,
+the open card's name and its two labels go through `windowName(title)`. A
+rename redraws the line (it subscribes to its alias). `data-line`, keys and
+the layout stay on the raw title. The ⋯'s "Fly a flyway…" reads **"Add a
+stop…"** ("A saved stop, tacked on here").
+
+**New boxes at once.** `GET /api/instances` serves the server's tick
+snapshot, so a session made a moment ago is missing from it for a tick or two,
+and the optimistic row the dialog added used to be wiped by the very
+next fetch. Now:
+
+- An optimistic row is `pending_create: true` with `pending_at` (its clock)
+  and, while its real title is unknown, `pending_base` (the title it was
+  numbered from). Every fetch runs `mergePending`. It keeps the cached
+  pending rows the fetch does not list, after the fetched rows, until the
+  fetch lists the title, or a title new in this fetch numbered from the base
+  (`base` or `base-N`; each new title claims one row), or `PENDING_TTL_MS`
+  (20 s) passes.
+- `bridgeSessionSetEvents` (installed once, from `useInstances`) subscribes
+  to the following:
+  - `session.created` adds a row at once (with `parent` / `program` from the
+    event; not for a `verify-` helper). If an optimistic guess is waiting on
+    the same base, that guess takes the real title instead, so there is one
+    box, not two.
+  - `session.create_failed` drops the pending row.
+  - `session.created`, `session.create_failed`, `session.deleted` and
+    `session.renamed` each refetch, debounced to one refetch per 150 ms burst.
+  - `flight.changed` already refetches the flights (`bridgeFlightEvents`).
+- `addPendingSession` stamps `pending_at` / `pending_base`. Copy, Branch and
+  Reopen (Ctrl+Shift+T, now with a pending row too, keeping the session's
+  rename) land the create's answer with `landPendingSession`: the guess
+  becomes the real row, still waiting for the snapshot. A bare answer from
+  another device is not landed; its namespaced guess waits for the poll.
+  The New dialog (`lib/newSessionSubmit.ts`) and the new-session block
+  (`NewSessionBlock.tsx`) already add a pending row. Their guess is
+  reconciled by the event or the poll, so they need no change.
+- One query feeds the grid, the rail and the Sky, so all three get the box at
+  the same moment. No surface reads `pending_create` specially.
