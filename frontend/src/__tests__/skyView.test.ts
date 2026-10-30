@@ -515,6 +515,9 @@ describe("round 14: Ctrl+Z, removals that don't ask, All blocks… on the board"
     expect(hook).toContain('if (opts.askRunning && removalNeedsAsk({ kind: "stops", indexes: nodeIndexes(n), flight })) setRemoveAsk(n);');
     expect(hook).toContain("onRemove: flight ? (n) => requestRemove(own(n)) : undefined,");
     expect(line).toContain("askRunning: true");
+    // Delete from the sky reaches the stop the flight is at (not editable), which then asks.
+    expect(line).toContain("nodeIndexes(n).includes(line.flight.cursor);");
+    expect(line).toContain("if (!(removableBox(n) || here) || !shown.canvas.onRemove) return false;");
     expect(line).toContain("{line.removeAsk}");
     // The pane's Flight tab doesn't ask (it draws no question).
     expect(code("components/flights/SessionFlight.tsx")).not.toContain("askRunning");
