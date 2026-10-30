@@ -3551,3 +3551,142 @@ The principles, made explicit (every surface below follows them):
   `renameFlight(id, name)`; Esc cancels.
 - The floating palette is a sky object like the intake lane (drag by head,
   corner size, assignSpots, Tidy forgets its spot, marquee ignores it).
+
+### As built: round 13 sky
+
+> Code: `frontend/src/components/flights/SkyView.tsx` (`placeGrounded`,
+> `mergeGrounded`, `unfocus`, the floating palette's slot), `GroundedLine.tsx`
+> (+ `.css`: the inline rename, `.is-merging`), `SkyLine.tsx` (+ `.css`:
+> `.is-merge-target`), `Sky.css` (`.sky-palette-slot`), `lib/skyLayout.ts`
+> (`spotNear`, `objectFrame`, `paletteFrame`, `PALETTE_*`, `PLACE_GAP`),
+> `lib/skySelect.ts` (`mergeTargetAt`), `lib/sessionActions.ts`
+> (`selectSession(null)`). Tests: `skyMerge.test.ts` (new), `sky.test.ts`,
+> `skyView.test.ts`, `grounded.test.ts`, and the pins that moved in
+> `skyStable` / `skyTool` / `skyZoom`.
+
+**Place, don't tack.** The shelf gets `onPlace={(d) => placeGrounded(d,
+"shelf")}` and `onFloat`; `SkyPalette` gets `onPlace={(d) => placeGrounded(d,
+"palette")}`. The shelf no longer receives `onTack` / `onTackPlan`, so no chip
+click reaches a line. `placeGrounded` makes the grounded flight with
+`makeGrounded`, the API half of `dropGrounded`. It then pins the flight at
+`spotNear(want, taken, size, view)`:
+
+- `want` is just above the shelf, centred in the view, or for the palette
+  `PLACE_GAP` to the right of the floating palette, level with its top.
+- `taken` is every line, the intake lane and the palette.
+- `view` is the visible plane inset by 16 screen px.
+
+`spotNear` walks rings of `PLACE_GAP` (24 px) outward from `want`. It keeps
+the nearest free spot inside the view, else the nearest free spot anywhere.
+The spot is computed with an estimate (`lineSize` + the head box). Once the
+new line is drawn and measured, `placing` places it once more at its real
+size, the same rule `assignSpots` follows. Nothing is selected or focused, and
+a drop on empty sky (`dropGrounded`) no longer focuses its line. In This
+session or Perched on you, where grounded lines aren't drawn, a toast says
+where the block went. The old fallbacks are gone: `onFly` / `onTack` without a
+title, `tackPick`, `flyPick` and their rows in the line picker. Both functions
+now take a REQUIRED title and serve only a drop on a session's line. The picker
+keeps ⋯ Fly on a session….
+
+**Nothing focused.** `selectSession(null)` sets `focused` to null and returns.
+It leaves the MRU, the hidden set and the keyboard alone, and the grid's focus
+clears too. SkyView's `unfocus()` clears the grounded focus and calls it, and
+these presses reach it:
+
+- a still press on empty sky: drag mode's marquee release, or click mode's
+  `clickOn` with no object under it;
+- Esc, once the sky's cards, the selection and an open box have had their Esc,
+  with no dialog and no marquee.
+
+Removed automatic picks:
+
+- `setMode` picking `titles[0]` for This session (it now shows "Pick a line to
+  show it alone.");
+- the new-session block's `onCreated` focusing its session;
+- the intake lane's `onFly`, which focused the session it made and now only
+  flashes its line (`flashLine`);
+- `dropGrounded`'s `setGroundFocus`.
+
+The explicit picks stay: a bar or box click, the drawer's perch names, Find's
+Enter, the line picker. With nothing focused:
+
+- no line wears `.is-focused`;
+- Enter does nothing (it needs `focusLine`);
+- Delete falls through to the keymap, which needs a focused session, so it
+  does nothing;
+- the drawer always showed the whole flock and needed no change;
+- the pane strip (`PaneFlightStrip`) lives inside a session's own pane, so it
+  shows only where a pane is open.
+
+`lastFocus` resets when nothing is focused, so selecting the same line again
+from the rail brings it back into view.
+
+**Drag a grounded line onto a session's line.** In drag mode, a grounded line
+dragged ALONE (not as part of a selection) hit-tests the other lines' rects on
+every move: `mergeTargetAt(planeAt(pointer), others, id)`. The test takes the
+topmost session line containing the point, and never a `flight:` line, the
+intake lane, the palette or the dragged line itself. The target line wears
+`.is-merge-target` (an accent ring and a tint). The dragged line wears
+`.is-merging` (see-through, accent edge). A release over a target does not pin
+the line. It calls `mergeGrounded`:
+
+1. If the session has no live flight: `attachGrounded(f.id, {title})`.
+   Otherwise: `tackOnSteps(live.id, f.steps, undefined, f.plan_name)` (one
+   group named after the line), then `deleteFlight(f.id)`.
+2. A toast says "Moved N stops onto <windowName(title)>". Its Undo calls
+   `startGrounded({steps, name})` and pins the new flight where the line
+   started its drag.
+
+A release on a grounded line or on empty sky just moves the line.
+
+**Rename a grounded line.** Its bar's name (`plan_name`, or "Stops") is a
+`.skl-name-edit` span. A click on it renames, unless the press had moved 4 px
+or more (that was a drag). F2 with the line's root focused also renames. The
+name becomes an `fl-input`: Enter or blur saves through `renameFlight` when the
+trimmed name (`cleanFlightName`, at most 120 characters) changed, and Esc
+cancels. A `named` ref ends the edit once, so the blur that follows Enter or
+Esc doesn't save again.
+
+**The floating palette.** `mf_sky_palette` ("shelf" | "float", read and written
+in SkyView, default "shelf"; a phone always gets the shelf). When floating:
+
+- The shelf host mounts no `StopShelf`; the TakeoffDialog stays.
+- A `.sky-palette-slot` on the plane holds `<SkyPalette>`, with `width` /
+  `height` from `paletteFrame`, `zoom`, `onHeadDown → onDragStart(PALETTE_KEY,
+  e)`, `draggable`, `onResize → onLayout(PALETTE_KEY, {w, h})`, `onMeasure`,
+  `onPlace`, `onDock → "shelf"` and `onSession = newHere`.
+- The slot carries the shelf's `onDragStart` / `onDragEnd`, so its blocks drag
+  and drop exactly as the shelf's chips do.
+- Its layout entry is "palette". It is second in `assignSpots`, after the
+  intake lane, and keeps its spot at once, as the lane does. In This session it
+  sits under the one line unless pinned.
+- Tidy forgets its spot and keeps its `w` / `h`.
+- `objectFrame(stored, min, max)` is the generalised clamp. `intakeFrame` wraps
+  it with the lane's 200–1200 × 160–1600, and `paletteFrame` with 220–1400 ×
+  140–1200.
+- The marquee never takes it: `selectables` lists only the lines and the lane.
+- It is in `SKY_CONTROLS`, so a press on it is its own and never pans or draws
+  a marquee. Keyboard focus inside it is not the sky's for Delete
+  (`deleteFocus`).
+- A click on its head clears the selection and focuses nothing.
+
+Checked in a browser (a scratch `vite build` of a copy of `frontend/` plus the
+demo mocks; in the copy, StopShelf routes a chip click to `onPlace`, as the
+palette worker's version will):
+
+- **Nothing focused:** a bar click focused its line, and a click on empty sky
+  left none focused. Bar click then Esc left none focused. This session with
+  nothing focused showed "Pick a line to show it alone." Delete and Enter with
+  nothing focused sent nothing.
+- **Placement:** an Agent chip click made `POST /api/flights/start {grounded}`
+  and put the line just above the shelf (its bottom 16 px over the shelf's
+  top), unfocused. A second click landed directly above the first.
+- **Rename:** click the name, type, Enter sent `PATCH /api/flights/f_…
+  {plan_name}`; Esc sent nothing.
+- **Merge:** dragging "Grounded stops" by its bar over a session line lit that
+  line (`.is-merge-target`) and dimmed the dragged one (`.is-merging`). The
+  release sent `POST /api/flights/f_g1/attach {title}` and toasted "Moved 2
+  stops onto …" with Undo. Undo sent `POST /api/flights/start` with the same
+  two steps and pinned the new line where the old one had been.
+- **Float:** `mf_sky_palette=float` hid the shelf and placed the palette slot
+  (still the placeholder, so empty).
