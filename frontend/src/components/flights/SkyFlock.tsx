@@ -6,16 +6,25 @@
  *
  *  - one rAF, capped at 60 fps, and no work at all while the tab is hidden;
  *  - `paused` = no rAF (the last frame stays painted);
- *  - `prefers-reduced-motion` = nothing at all (no canvas);
+ *  - `prefers-reduced-motion` = no birds (and no canvas at all in clear
+ *    weather);
  *  - DPR-aware, `pointer-events: none`, quieter in the light theme
  *    (SkyFlock.css).
+ *
+ * The weather (lib/weather.ts, read live by useWeather) shares the canvas:
+ * soft cloud banks drift in BEHIND the birds as the plan window fills (still
+ * under reduced motion), and a night tint dims the sky during the
+ * notification quiet hours. `WeatherWord` is the title bar's word for it.
  *
  * The simulation (`flockSize`, `seedBirds`, `stepBirds`) and the frame loop
  * (`skyLoop`) are pure, so the tests drive them without a DOM. */
 
-import { useEffect, useRef, useState, type JSX } from "react";
+import { useContext, useEffect, useRef, type JSX } from "react";
+import { QueryClientContext } from "@tanstack/react-query";
 import { tinted } from "../../lib/flock";
-import { HINGE, SPRITE_H, SPRITE_W, prefersReducedMotion } from "./Bird";
+import { CLEAR, cloudCount, fitClouds, stepClouds, type Cloud, type Weather } from "../../lib/weather";
+import { HINGE, SPRITE_H, SPRITE_W } from "./Bird";
+import { useReducedMotion, useWeather } from "./useWeather";
 import "./SkyFlock.css";
 
 /** flock.ts's species — the app's bird-named theme presets: dark plumage,
@@ -197,13 +206,42 @@ export function skyLoop(
   };
 }
 
+/** Paint the clouds: each a few overlapping radial puffs, soft to nothing at
+ * their rims; a storm (past 85 %) is denser and greyer. */
+function paintClouds(g: CanvasRenderingContext2D, clouds: readonly Cloud[], thick: boolean, light: boolean) {
+  const rgb = light ? "110,120,140" : thick ? "150,160,180" : "200,210,230";
+  const a = thick ? 0.5 : 0.36;
+  for (const c of clouds) {
+    for (const p of c.puffs) {
+      const x = c.x + p.dx;
+      const y = c.y + p.dy;
+      const grad = g.createRadialGradient(x, y, 0, x, y, p.r);
+      grad.addColorStop(0, `rgba(${rgb},${a})`);
+      grad.addColorStop(0.55, `rgba(${rgb},${a * 0.45})`);
+      grad.addColorStop(1, `rgba(${rgb},0)`);
+      g.fillStyle = grad;
+      g.fillRect(x - p.r, y - p.r, p.r * 2, p.r * 2);
+    }
+  }
+}
+
 /** Paint the flock: each bird along its heading, mirrored when it flies left
  * (back to the sky), wings beating about the hinge — flock.ts's drawing. A
  * bird whose sprite hasn't decoded yet is a small vector silhouette. */
-function paint(g: CanvasRenderingContext2D, birds: readonly SkyBird[], w: number, h: number, zoom: number, frame: number) {
+function paint(
+  g: CanvasRenderingContext2D,
+  birds: readonly SkyBird[],
+  clouds: readonly Cloud[],
+  thick: boolean,
+  w: number,
+  h: number,
+  zoom: number,
+  frame: number
+) {
   const light = document.documentElement.classList.contains("light");
   const scale = Math.min(1.3, Math.max(0.7, Math.sqrt(zoom || 1)));
   g.clearRect(0, 0, w, h);
+  paintClouds(g, clouds, thick, light);
   for (const b of birds) {
     const color = SPECIES[b.species][light ? 1 : 0];
     const img = tinted(color);
@@ -231,41 +269,51 @@ function paint(g: CanvasRenderingContext2D, birds: readonly SkyBird[], w: number
   }
 }
 
-export function SkyFlock({
-  width,
-  height,
-  zoom,
-  paused = false,
-  density = 1,
-}: {
+interface SkyFlockProps {
   width: number;
   height: number;
   zoom: number;
   paused?: boolean;
   density?: number;
-}): JSX.Element {
+}
+
+/** The weather needs the app's query client (useUsage, the settings doc); a
+ * sky rendered without one (a test, a static render) flies in clear weather. */
+export function SkyFlock(props: SkyFlockProps): JSX.Element {
+  return useContext(QueryClientContext) ? <WeatheredSky {...props} /> : <SkyCanvas {...props} weather={CLEAR} />;
+}
+
+function WeatheredSky(props: SkyFlockProps): JSX.Element {
+  return <SkyCanvas {...props} weather={useWeather()} />;
+}
+
+function SkyCanvas({
+  width,
+  height,
+  zoom,
+  paused = false,
+  density = 1,
+  weather,
+}: SkyFlockProps & { weather: Weather }): JSX.Element {
   const ref = useRef<HTMLCanvasElement>(null);
-  const [reduced, setReduced] = useState(prefersReducedMotion);
-  const birds = useRef<SkyBird[]>([]);
-  const frame = useRef(0);
-  const view = useRef({ width, height, zoom });
-
   // The preference can change under a mounted sky.
-  useEffect(() => {
-    if (typeof window.matchMedia !== "function") return;
-    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const on = () => setReduced(mq.matches);
-    mq.addEventListener("change", on);
-    return () => mq.removeEventListener("change", on);
-  }, []);
+  const reduced = useReducedMotion();
+  const birds = useRef<SkyBird[]>([]);
+  const clouds = useRef<Cloud[]>([]);
+  const frame = useRef(0);
+  const view = useRef({ width, height, zoom, thick: false });
+  const { night, drift } = weather;
+  const nClouds = cloudCount(weather.clouds);
+  // Under reduced motion the canvas only carries clouds (static ones).
+  const canvas = !reduced || nClouds > 0;
 
-  // Size (DPR-aware), fit the flock to the sky, and paint a frame — so a
-  // paused sky, and a zoom while paused, still shows its birds.
+  // Size (DPR-aware), fit the flock and the clouds to the sky, and paint a
+  // frame — so a paused sky, and a zoom while paused, still shows its birds.
   useEffect(() => {
-    view.current = { width, height, zoom };
+    view.current = { width, height, zoom, thick: weather.clouds === 2 };
     const c = ref.current;
     const g = c?.getContext("2d");
-    if (!c || !g || reduced) return;
+    if (!c || !g) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const pw = Math.round(width * dpr);
     const ph = Math.round(height * dpr);
@@ -274,9 +322,12 @@ export function SkyFlock({
       c.height = ph;
     }
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    birds.current = fitBirds(birds.current, flockSize(width, height, density), width, height);
-    paint(g, birds.current, width, height, zoom, frame.current);
-  }, [width, height, zoom, density, reduced]);
+    birds.current = reduced ? [] : fitBirds(birds.current, flockSize(width, height, density), width, height);
+    // New clouds drift in from the left, cleared ones drift out — unless
+    // nothing drifts, when they are simply there (or gone).
+    clouds.current = fitClouds(clouds.current, nClouds, width, height, drift);
+    paint(g, birds.current, clouds.current, view.current.thick, width, height, zoom, frame.current);
+  }, [width, height, zoom, density, reduced, nClouds, weather.clouds, drift, canvas]);
 
   useEffect(() => {
     if (reduced) return;
@@ -286,12 +337,43 @@ export function SkyFlock({
         if (!g) return;
         const v = view.current;
         stepBirds(birds.current, v.width, v.height);
-        paint(g, birds.current, v.width, v.height, v.zoom, ++frame.current);
+        if (drift) clouds.current = stepClouds(clouds.current, v.width);
+        paint(g, birds.current, clouds.current, v.thick, v.width, v.height, v.zoom, ++frame.current);
       },
       { paused }
     );
-  }, [paused, reduced]);
+  }, [paused, reduced, drift]);
 
-  if (reduced) return <></>;
-  return <canvas ref={ref} className="sky-flock" style={{ width, height }} aria-hidden="true" />;
+  if (!canvas && !night) return <></>;
+  return (
+    <>
+      {night && <div className="sky-night" style={{ width, height }} aria-hidden="true" />}
+      {canvas && <canvas ref={ref} className="sky-flock" style={{ width, height }} aria-hidden="true" />}
+    </>
+  );
+}
+
+/** The Sky's title-bar word for its weather — "☁ usage 87 %", "☾ quiet
+ * hours" — or nothing in clear weather. Mount it in the Sky's title bar. */
+export function WeatherWord(): JSX.Element | null {
+  return useContext(QueryClientContext) ? <LiveWeatherWord /> : null;
+}
+
+function LiveWeatherWord(): JSX.Element | null {
+  return <WeatherLabel weather={useWeather()} />;
+}
+
+/** The word itself, for a given weather (pure; WeatherWord feeds it live). */
+export function WeatherLabel({ weather }: { weather: Weather }): JSX.Element | null {
+  if (!weather.word) return null;
+  const cloudy = weather.clouds > 0;
+  const title = cloudy
+    ? `The plan window is ${weather.word.slice("usage ".length)} used — clouds over the Sky` +
+      (weather.night ? " (and it is quiet hours)" : "")
+    : "Notification quiet hours — the Sky dims";
+  return (
+    <span className={"sky-weather-word" + (weather.clouds === 2 ? " is-storm" : cloudy ? " is-cloudy" : " is-night")} title={title}>
+      <span aria-hidden="true">{cloudy ? "☁" : "☾"}</span> {weather.word}
+    </span>
+  );
 }

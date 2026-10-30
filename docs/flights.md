@@ -4073,3 +4073,35 @@ Each owns the files its row names plus its tests and an "As built: round 15
 (`_builtin_defaults` + the built-in judges' receipts). `tsc` and `vitest`
 run from `frontend/` (node_modules is linked); backend tests with
 `UV_PYTHON=3.12 uv run pytest tests/unit/test_flight*.py`.
+
+### As built: round 15 weather
+
+- `lib/weather.ts` (pure): `weatherFor({usagePct, hour, quiet, reducedMotion})
+  → {clouds: 0|1|2, night, word, drift}`. Clouds 1 past 60 %, 2 past 85 %;
+  night when the local hour is in `[from, to)`, wrapping midnight (an empty
+  window is never night); `word` = "usage 87 %" (usage wins), else "quiet
+  hours", else "". `drift` = clouds and not reduced motion. Readers:
+  `windowUsagePct(usage)` (the FULLEST live `windowed` provider window in
+  `/api/usage`: the Sky has no focused pane), `quietHours(settings)`
+  (`notifications.quiet_hours: {from, to}`, hours or "HH:MM"). Clouds:
+  `cloudCount` (3 / 6), `seedClouds`, `fitClouds` (new ones wait off the left
+  edge and drift in; surplus ones are marked `leaving` and drift off the
+  right; without drift they simply appear / go), `stepClouds`.
+- `components/flights/useWeather.ts`: `useUsage()` (the top bar's query, no new
+  endpoint) + `useSettingsDoc(true)` + `useNow(60s)` + `useReducedMotion()`
+  (moved out of SkyFlock, exported).
+- `SkyFlock.tsx`: clouds are painted on the flock's canvas before the birds
+  (soft radial puffs, greyer and denser past 85 %); under reduced motion the
+  canvas still shows static clouds (no birds, no loop) and renders nothing at
+  all in clear weather; `paused` freezes the clouds too. Night = a
+  `.sky-night` tint div before the canvas (`pointer-events: none`, a 4s dusk
+  fade, none under reduced motion). Without a QueryClient (static renders,
+  tests) the sky flies in `CLEAR` weather. Exports `WeatherWord` (live) and
+  `WeatherLabel({weather})` (pure): "☁ usage 87 %" (`is-cloudy`; `is-storm` =
+  attention colour past 85 %) or "☾ quiet hours".
+- **Mount `<WeatherWord />` in the Sky's title bar in `SkyView.tsx`** (not done:
+  SkyView belongs to another worker).
+- **Open: quiet hours do not exist in settings yet.** `NotificationSettings`
+  (`backend/config/settings.py`) has no `quiet_hours` and its `from_dict` drops
+  unknown keys, so night never shows until that field (+ settings_sync and a
+  Settings control) is added. Test: `__tests__/weather.test.ts`.
