@@ -252,6 +252,18 @@ STEP_KINDS: Dict[str, dict] = {
             ),
             _f("fresh", "bool", "Start a new session for this stop", default=False),
             _f("join", "bool", "Wait for its workers", default=True),
+            _f(
+                "program",
+                "text",
+                "CLI for a fresh session (empty = the same)",
+                default="",
+            ),
+            _f(
+                "model",
+                "text",
+                "Model for a fresh session (empty = the same)",
+                default="",
+            ),
         ],
     },
     "split": {
@@ -498,6 +510,8 @@ def _step_config(kind: str, raw: dict, strict: bool, where: str) -> dict:
             "prompt": _text(c.get("prompt")),
             "fresh": _bool(c.get("fresh"), False),
             "join": _bool(c.get("join"), True),
+            "program": _text(c.get("program"), 100),
+            "model": _text(c.get("model"), 200),
         }
     if kind == "split":
         prompts = c.get("prompts")

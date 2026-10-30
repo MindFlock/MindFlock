@@ -4073,3 +4073,52 @@ Each owns the files its row names plus its tests and an "As built: round 15
 (`_builtin_defaults` + the built-in judges' receipts). `tsc` and `vitest`
 run from `frontend/` (node_modules is linked); backend tests with
 `UV_PYTHON=3.12 uv run pytest tests/unit/test_flight*.py`.
+
+### As built: round 15 review-pilot
+
+**`review`** (`flight_kinds/review.py`, tests `test_flight_kind_review.py`):
+config `program` (≤ 100), `model` (≤ 200), `focus`, `block` (true), `keep`
+(false); title "Second opinion" ("Second opinion (codex)" with a program).
+`run` computes the base (the session's `BaseBranch`, else `origin/HEAD`) and
+calls `spawn_worker(…, report_back=True, title_prefix="review")` with a
+brief: review `git diff <base>...HEAD` for correctness bugs only, change no
+files, end with a report whose summary is `No findings` or a numbered list
+(≤ 10) `1. file:line — finding`; `detail` `{children: [title], base}`. The
+worker forks from the session's HEAD, so uncommitted work in the session is
+not in what it reviews.
+
+`observe` reads the worker through `_children_obs` (filtered to its title)
+plus its **full** report from the session's mailbox (`mailbox.last_result`,
+since the stop began): the row's `last_report.summary` is one line capped at
+140 chars, too short for a list. Each line is `mailbox.sanitize`d (no forged
+`[MindFlock …]` frames reach the agent) and the text capped at 4000 chars. A
+worker that is gone is judged by that mailbox report. Once finished
+(`child_state` done/failed) and not `keep`, observe closes it — the core of
+`kill_session`: `session_end.end_session(wipe=True)` when its worktree is
+clean and holds no commits the session's HEAD lacks, else `wipe=False`
+(Recently closed keeps it) — and remembers the outcome per (flight, step,
+since, title) for this server run, so a pass whose verdict was lost judges
+from it. `detail.closed` says `deleted` / `closed`.
+
+`judge`: no children → `run` (a restart between spawn and record spawns
+again); no observation → wait "second opinion in progress"; working → wait
+"second opinion in progress (<title>)" (`detail.reviewer` is the join
+entry), asking → wait; failed, or gone without a report → fail "the
+reviewer did not finish"; finished without any report (a CLI without the
+MCP) → done, receipt "no report"; "No findings" / empty → done, receipt "no
+findings"; otherwise `detail.findings` + receipt "N findings" (a report that
+is not a numbered list counts as 1) and, with `block`, fail "the second
+opinion has N findings:\n<list>" — `on_fail: agent` types that list to the
+agent, and the retry after its fix spawns a fresh reviewer (a new
+`since`, a new title). Open: after a restart a deleted reviewer that had
+not reported reads as "did not finish" (the memo is per process).
+
+**(agent) switch pilot**: `agent` gains `program` (≤ 100, "CLI for a fresh
+session (empty = the same)") and `model` (≤ 200); `_run_agent`'s `fresh`
+path puts them over the plan's session (`program`, `profile_model`). They
+apply **only with `fresh`**: on a stop without it they are stored and
+ignored (the stop form should say so). Tests `test_flights_pilot.py`.
+
+`tests/unit/test_flights.py::test_kinds_registry_drives_the_editor` pins
+the exact kinds list, so every plug-in kind (this one included) fails it:
+it wants `kinds[:12] == [...]` — outside this task's fence.
