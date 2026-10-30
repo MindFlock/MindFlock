@@ -146,3 +146,133 @@
   color: var(--accent);
   cursor: pointer;
 }
+
+/* --- Two rows: the flyways, then the stops (StopShelf.tsx) --------------------
+   Scoped to the shelf's own <section>: the host's wrapper is a `.sky-shelf`
+   too. A grid so both rows' labels share one column; each row scrolls
+   sideways instead of wrapping. */
+
+section.sky-shelf {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 5px;
+}
+
+.sky-stops {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
+  align-items: center;
+  min-width: 0;
+}
+
+.sky-stops-head {
+  display: inline-flex;
+  flex-direction: column;
+  padding: 0 6px 0 21px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.sky-stops-hint {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.sky-stops-chips {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.sky-stop-item {
+  display: contents;
+}
+
+.sky-stop-chip {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: grab;
+  user-select: none;
+}
+
+.sky-stop-chip:hover,
+.sky-stop-chip:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: var(--panel-2);
+}
+
+.sky-stop-chip:active {
+  cursor: grabbing;
+}
+
+.sky-stop-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+/* A perch: the gold perch tone, rounder, as in the stop palette. */
+.sky-stop-chip.perch {
+  border-radius: 999px;
+  border-color: color-mix(in srgb, var(--tone-attention) 60%, var(--border));
+}
+
+.sky-stop-chip.perch:hover,
+.sky-stop-chip.perch:focus-visible {
+  border-color: var(--tone-attention);
+}
+
+.sky-stop-chip.perch .sky-stop-icon {
+  border-radius: 50%;
+  color: var(--tone-attention);
+  background: color-mix(in srgb, var(--tone-attention) 16%, transparent);
+}
+
+.sky-stops-divider {
+  flex: none;
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: var(--border);
+}
+
+.sky-stops-empty {
+  margin: 0;
+  font-size: 12px;
+}
+
+/* A phone (nothing drags): the chips are tap-to-tack, so no drag hint. */
+@media (hover: none) {
+  .sky-stops-hint {
+    display: none;
+  }
+
+  .sky-stop-chip {
+    cursor: pointer;
+  }
+}

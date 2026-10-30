@@ -104,7 +104,10 @@ describe("planFromSteps (Save as flyway)", () => {
 describe("the shelf", () => {
   it("built-ins first; each chip its name, its stop dots (a perch gold), Fly, and draggable", () => {
     expect(shelfOrder(PLANS).map((p) => p.id)).toEqual(["builtin:ticket", "p_mine", "p_long"]);
-    const html = renderToStaticMarkup(createElement(FlywayShelf, { plans: PLANS, onNew() {}, onFly() {}, onEdit() {} }));
+    const all = withClient(createElement(FlywayShelf, { plans: PLANS, onNew() {}, onFly() {}, onEdit() {} }));
+    // The flyways row; the stops row under it is stopShelf.test.ts's.
+    const html = all.slice(0, all.indexOf('class="sky-stops"'));
+    expect(all).toContain('class="sky-stops"');
     expect([...html.matchAll(/data-plan="([^"]+)"/g)].map((m) => m[1])).toEqual(["builtin:ticket", "p_mine", "p_long"]);
     expect(html.match(/draggable="true"/g)).toHaveLength(3);
     const mine = html.slice(html.indexOf('data-plan="p_mine"'), html.indexOf('data-plan="p_long"'));
@@ -136,10 +139,11 @@ describe("the shelf", () => {
   });
 
   it("folds to its head (the host's `collapsed`)", () => {
-    const html = renderToStaticMarkup(createElement(FlywayShelf, { plans: PLANS, onNew() {}, onFly() {}, onEdit() {}, collapsed: true }));
+    const html = withClient(createElement(FlywayShelf, { plans: PLANS, onNew() {}, onFly() {}, onEdit() {}, collapsed: true }));
     expect(html).toContain('class="sky-shelf folded"');
     expect(html).toContain('aria-expanded="false"');
     expect(html).not.toContain("sky-shelf-chip");
+    expect(html).not.toContain("sky-stop");
     expect(html).toContain('<span class="sky-shelf-count">3</span>');
   });
 });
