@@ -81,7 +81,7 @@ describe("the stops row", () => {
   it("then the All blocks… chip: the secondary chip, a ⊞, opens the catalog (no saved stops: no Multi-step region)", () => {
     const html = render(createElement(StopShelf, { onTack() {} }));
     expect(html).toContain(
-      '<button type="button" class="sky-stop-chip sky-catalog-chip" aria-haspopup="dialog" aria-expanded="false" title="Every block and every multi-step block, in a list you can filter"><span class="sky-stop-icon" aria-hidden="true">⊞</span><span class="sky-stop-name">All blocks…</span></button>'
+      '<button type="button" class="sky-stop-chip sky-catalog-chip" data-tour="sky-catalog" aria-haspopup="dialog" aria-expanded="false" title="Every block and every multi-step block, in a list you can filter"><span class="sky-stop-icon" aria-hidden="true">⊞</span><span class="sky-stop-name">All blocks…</span></button>'
     );
     expect(html).not.toContain('data-region="multi"');
     // A thin divider between Blocks and the chip; the catalog isn't open.

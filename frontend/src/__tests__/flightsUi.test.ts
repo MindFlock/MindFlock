@@ -338,11 +338,15 @@ describe("the sky", () => {
     });
   };
 
-  it("carries the Stops shelf at its foot — the Session chip first, then the saved stops — and its tour's ?", () => {
+  it("carries the Stops shelf at its foot — Blocks (the Session chip first), Multi-step (the saved stops), All blocks… — and its tour's ?", () => {
     const html = render("sky");
     expect(html).toContain('data-tour="sky-shelf"');
     expect(html).toContain('class="sky-stop-chip sky-session-chip');
     expect(html).toMatch(/class="sky-stop-chip sky-saved-chip builtin[^"]*" data-plan="builtin:ticket"/);
+    const regions = [...html.matchAll(/data-region="([^"]+)"/g)].map((m) => m[1]);
+    expect(regions).toEqual(["blocks", "multi"]);
+    expect(html.indexOf('data-region="multi"')).toBeLessThan(html.indexOf('data-tour="sky-catalog"'));
+    expect(html).toContain('class="sky-stop-chip sky-catalog-chip" data-tour="sky-catalog"');
     expect(html).not.toContain("+ New flyway");
     expect(html).toContain('data-tour-id="sky"');
     expect(html).toContain('data-tour="sky-line"');

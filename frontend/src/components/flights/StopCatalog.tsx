@@ -30,11 +30,13 @@ export interface StopCatalogProps {
    * rows only drag. */
   onAdd?(drop: CatalogDrop): void;
   onClose(): void;
+  /** Default true (into document.body); false renders in place (the tests). */
+  portal?: boolean;
 }
 
 const rowId = (i: number) => "sky-catalog-row-" + i;
 
-export function StopCatalog({ kinds, plans, onAdd, onClose }: StopCatalogProps): JSX.Element {
+export function StopCatalog({ kinds, plans, onAdd, onClose, portal = true }: StopCatalogProps): JSX.Element {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -86,7 +88,7 @@ export function StopCatalog({ kinds, plans, onAdd, onClose }: StopCatalogProps):
       id="sky-catalog"
       className={"sky-catalog-modal" + (dragging ? " is-dragging" : "")}
       onClose={onClose}
-      portal
+      portal={portal}
       role="dialog"
       aria-modal="true"
       aria-labelledby="sky-catalog-title"

@@ -430,6 +430,7 @@ export function StopShelf({ onTack, onTackPlan, onSession, folded = false, onFol
               <button
                 type="button"
                 className="sky-stop-chip sky-catalog-chip"
+                data-tour="sky-catalog"
                 aria-haspopup="dialog"
                 aria-expanded={catalog}
                 title="Every block and every multi-step block, in a list you can filter"

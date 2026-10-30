@@ -2871,3 +2871,84 @@ the sky's selection is on a box that is not the session itself.
   `Modal`: the folder field with Tab completion from `components/PathField`,
   a line saying what will happen, Move) → a toast on `session.moved`, the error
   card on `session.move_failed`. The row shows "moving…" meanwhile.
+
+### As built: round 12 shelf
+
+The owner: "In the stops section I want there to be the default blocks and
+then the multi-step blocks, and additional blocks should be in some dialogue
+of a list of all the blocks." Source: `components/flights/StopShelf.tsx`
+(+ `.css`), `StopCatalog.tsx` (+ `.css`), `lib/stopCatalog.ts`; tests in
+`stopShelf.test.ts`, `stopShelfSaved.test.ts`, `stopCatalog.test.ts`, and the
+sky's shelf pin in `flightsUi.test.ts`.
+
+**The shelf** is still one row (`Stops — drag onto the sky or a line`, the
+fold handle, `data-tour="sky-shelf"`), now in three regions, each a
+`.sky-stops-region` (`role="list"`, `data-region`) led by a tiny muted
+uppercase label (`.sky-stops-label`, 9.5px, `--fl-ink-muted`), split by the
+thin `.sky-stops-divider`:
+
+| Region | What | Notes |
+|---|---|---|
+| **Blocks** (`data-region="blocks"`) | the Session chip, then `defaultKinds(kinds)`: `DEFAULT_KINDS = ["agent", "you", "ship", "verify", "wait"]` in that order (`you` reads Perch, round and gold) | a default the server does not list is skipped; every other kind (split, join, reviews, checks, command, ticket, notify…) is in the catalog only. The old flock/perch divider and `stopChipOrder` are gone. |
+| **Multi-step** (`data-region="multi"`) | the saved stops, built-ins first (`savedStopOrder`) | the region and its divider are left out while there are none (or they haven't loaded) |
+| **All blocks…** | `button.sky-stop-chip.sky-catalog-chip` (`data-tour="sky-catalog"`, `aria-haspopup="dialog"`), a muted ⊞ | the secondary chip tier; not draggable; opens `StopCatalog` |
+
+Every chip keeps its round-11 behaviour: the drag MIMEs (`NEW_SESSION_MIME`,
+`STOP_MIME`, `FLYWAY_MIME` + `text/plain`), the click (`onSession`, `onTack`,
+`onTackPlan`), a saved stop's right-click menu and inline rename. The drag-data
+helpers `stopDragData` / `savedDragData` moved to `lib/stopCatalog.ts` (the
+catalog's rows use them too); `sessionDragData` stays in StopShelf.
+
+**`StopCatalog`** (`components/flights/StopCatalog.tsx`), rendered by the
+shelf while open:
+
+```ts
+interface StopCatalogProps {
+  kinds: readonly StepKindDef[];   // useFlightKinds(), as listed
+  plans: readonly FlightPlan[];    // the saved stops, built-ins first
+  onAdd?(drop: CatalogDrop): void; // CatalogDrop = {kind: string} | {planId: string}
+  onClose(): void;
+  portal?: boolean;                // default true (document.body); false in the tests
+}
+```
+
+- A `Modal` (`#sky-catalog`, `role="dialog"`, `.sky-catalog-modal`), the
+  stop dialog's card (panel, border, radius 12, `min(560px, 100vw − 48px)`,
+  ≤ 80vh with the list scrolling). Head: **All blocks** and a quiet ×
+  (`.fl-icon-btn`). Then a filter (`.fl-input`, focused on open): every word,
+  case-blind, in a kind's label (Perch for `you`), kind or summary, or a saved
+  stop's name or description (`catalogMatch`, `filterKinds`, `filterPlans`).
+- **Blocks** (`data-section="blocks"`): every kind, `catalogKinds` = the
+  defaults first, then the rest in registry order; a row = the kind's icon,
+  its name, a `robot` / `you` badge, its one-line summary. **Multi-step**
+  (`data-section="multi"`): every saved stop; a row = a tiny box per step (a
+  perch's gold, `+N` past ten), the name, a dashed `built-in` badge, its
+  sub-steps as `a → b → c` (`planPath`). Nothing matching: "Nothing matches
+  “…”."
+- Each row is `role="option"`, draggable with its chip's data (`stopDragData`
+  / `savedDragData`), and has an **Add** (`test-btn`, shown on the picked row
+  and under the pointer, always on a touch screen). The filter keeps the
+  focus: ↑ / ↓ move the pick (`aria-activedescendant`, scrolled into view;
+  the pointer picks too), Enter adds it. Esc or a press on the backdrop
+  closes; keys typed inside don't reach the sky (Escape still does, for the
+  Modal).
+- **The drag goes through the Modal.** Its backdrop is a full-window fixed
+  layer, so a drop would land on it. The catalog stays a Modal (the Escape
+  stack, the keymap's overlay guard, the focus hand-back) and, a tick after a
+  row's dragstart (changing it inside dragstart can cancel the drag), turns
+  `.is-dragging`: the backdrop transparent and `pointer-events: none`, the
+  card at 35% opacity, so the lines and the sky under it take the dragover and
+  the drop. Dragend clears it; a drop that landed (`dropEffect !== "none"`)
+  closes the catalog. The row's dragstart / dragend bubble through the React
+  tree (the portal too) to SkyView's `.sky-shelf-host`, which reads the drag
+  exactly as it reads a chip's, so SkyView needed nothing for drops.
+- **Add** goes through the shelf's own props, the ones a chip's click uses:
+  the shelf passes `onAdd` when it has `onTack` or `onTackPlan`, closes the
+  catalog, then calls `onTack(kind)` for `{kind}` or `onTackPlan(plan)` (the
+  saved stop looked up by id) for `{planId}`. SkyView passes
+  `onTack={onTack}` / `onTackPlan={onFly}` already, so Add tacks onto the
+  focused line today; with no focused line SkyView shows its line picker
+  (`setTackPick` / `setFlyPick`). The contract's "or makes a grounded line in
+  the middle of the view" is SkyView's to change in those two handlers (e.g.
+  `dropGrounded(d, <the view's centre on the plane>)` when there is no focus
+  line) — the shelf's props don't change for it.
