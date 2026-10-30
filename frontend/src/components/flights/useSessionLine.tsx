@@ -5,6 +5,12 @@
  * one is edited in place; done and current ones are read-only), Delete drops
  * a pending stop, and the live flight's ⋯ / perch parts go inside its boxes.
  *
+ * A pending stop also moves (dragged along the line, ⇤ / ⇥: `POST
+ * /api/flights/{id}/steps/{sid}/move {at}`), duplicates (⧉: the same stop
+ * tacked on right after it), and is removed at once — the toast's Undo tacks
+ * it back where it was while that is still ahead of the flight. A stop chip
+ * dropped on the line from the shelf is tacked on at the gap it lands in.
+ *
  * Two homes share it: the pane's Flight tab (SessionFlight.tsx) and every
  * line in the Sky (Sky.tsx). Tacking a stop onto a session with no flight yet
  * starts an ad-hoc one that takes over the fast-track's remaining rungs
@@ -16,12 +22,13 @@
  * inspector offers "+ Join" — one click puts a Join right after it — and
  * hides its `count` once its prompts name more than one worker. */
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Instance } from "../../api/types";
 import { toast } from "../../lib/toast";
 import { isLive, newStep, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef } from "../../lib/flights";
 import { sessionDiagram, type DiagramNode } from "../../lib/flightDiagram";
-import { dropStop, patchStop, tackOn, tackOnAll, tackOnNew, takeOff } from "../../lib/flightsApi";
+import { dropStop, moveStop, patchStop, tackOn, tackOnAll, tackOnNew, takeOff } from "../../lib/flightsApi";
+import { undoPayload } from "../../lib/stopEditing";
 import type { FlywayCanvasProps } from "./FlywayCanvas";
 import { currentNodeId, liveBoxParts, useCancelAsk } from "./FlightStrip";
 import { StopInspector, StopPalette } from "./StopParts";
@@ -75,6 +82,9 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   const stops = diagram.nodes.filter((n) => n.kind === "stop");
   const end = flight ? flight.steps.length : 0;
   const sel = selected ? diagram.nodes.find((n) => n.id === selected) || null : null;
+  // The flight as it is now, for an Undo pressed after it has moved on.
+  const latest = useRef(flight);
+  latest.current = flight;
 
   // A stop just tacked on opens in the inspector once the flight has it.
   useEffect(() => {
@@ -112,6 +122,25 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     } finally {
       setBusy(false);
     }
+  };
+
+  /** Take a pending stop off the line — at once, with Undo in the toast. */
+  const removeStop = async (step: FlightStep, index: number): Promise<boolean> => {
+    if (!flight) return false;
+    const id = flight.id;
+    if (!(await dropStop(id, step.id))) return false;
+    toast("Removed “" + step.title + "” from the line", {
+      action: {
+        label: "Undo",
+        ariaLabel: "Undo: put “" + step.title + "” back on the line",
+        onClick: () => {
+          const now = latest.current?.id === id ? latest.current : null;
+          const back = undoPayload(step, index, now);
+          void tackOn(id, back.step, back.at);
+        },
+      },
+    });
+    return true;
   };
 
   // "+ Join" on a Split: a Join right after it, one click.
@@ -177,7 +206,10 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   const editable = !!sel?.editable && !!draft && !!flight;
   const dirtyStop = !!draft && !!sel?.step && JSON.stringify(draft) !== JSON.stringify(sel.step);
 
-  const canvas: Pick<FlywayCanvasProps, "selected" | "onSelect" | "onOpen" | "onInsert" | "onRemove" | "renderInBox" | "sizeOf" | "reveal"> = {
+  const canvas: Pick<
+    FlywayCanvasProps,
+    "selected" | "onSelect" | "onOpen" | "onInsert" | "onRemove" | "onMove" | "onDuplicate" | "onDropStop" | "renderInBox" | "sizeOf" | "reveal"
+  > = {
     selected: paletteAt !== null && paletteAt >= end ? "add" : selected,
     onSelect,
     onOpen: (n) => {
@@ -185,7 +217,27 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
       else if (n.session && n.session !== title) opts.onSession(n.session);
     },
     onInsert: flight ? (at) => setPaletteAt(paletteAt === at ? null : at) : undefined,
-    onRemove: flight ? (n) => n.editable && n.step && void dropStop(flight.id, n.step.id) : undefined,
+    onRemove: flight ? (n) => n.editable && n.step && n.index !== undefined && void removeStop(n.step, n.index) : undefined,
+    // Indexes among the line's stops are the flight's (every stop is on it).
+    onMove: flight
+      ? (from, to) => {
+          const step = flight.steps[from];
+          const n = stops.find((s) => s.index === from);
+          if (step && n?.editable && to >= diagram.insertFrom && to < flight.steps.length) void moveStop(flight.id, step.id, to);
+        }
+      : undefined,
+    onDuplicate: flight
+      ? (n) => {
+          if (!n.editable || !n.step || n.index === undefined) return;
+          const at = n.index + 1;
+          void tackOn(flight.id, n.step, at < end ? at : undefined);
+        }
+      : undefined,
+    onDropStop: (kind, at) => {
+      const def = kindOf.get(kind);
+      if (def) void tackOne(def, at);
+      else toast("This line has no “" + kind + "” stop to tack on");
+    },
     renderInBox: parts.renderInBox,
     sizeOf: parts.sizeOf,
     reveal: currentNodeId(diagram, flight),
@@ -251,7 +303,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
                 onClick={async () => {
                   setBusy(true);
                   try {
-                    if (await dropStop(flight!.id, draft.id)) {
+                    if (sel.step && sel.index !== undefined && (await removeStop(sel.step, sel.index))) {
                       setSelected(null);
                       setDraft(null);
                     }

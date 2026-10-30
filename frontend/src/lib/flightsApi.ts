@@ -14,6 +14,8 @@
  *                          {title, steps, absorb_fasttrack: true}; a live flight:
  *                          POST /api/flights/{id}/steps {step, at?}
  *  - Edit / drop a stop    PATCH · DELETE /api/flights/{id}/steps/{sid} (pending only)
+ *  - Move a stop           POST /api/flights/{id}/steps/{sid}/move {at} (pending only,
+ *                          to an index after the current stop)
  *
  * Every start ends in `selectSession(title)` as soon as the row exists — the
  * way lib/templateRun.ts does. */
@@ -286,4 +288,12 @@ export async function dropStop(flightId: string, stepId: string): Promise<boolea
     void refreshFlights();
     void refreshInstances();
   }
+}
+
+/** Move a pending stop of a live flight to index `at` of the final list (its
+ * drag along the line, ⇤ / ⇥). The server refuses (409 `in_progress`) a stop,
+ * or a place, that is not after the current stop; the error card says so and
+ * the line stays as it was. */
+export function moveStop(flightId: string, stepId: string, at: number): Promise<boolean> {
+  return flightAction("Moving the stop", flightPath(flightId, "/steps/" + enc(stepId) + "/move"), { at });
 }
