@@ -162,6 +162,28 @@ export function StopIcon({ kind, size = 15 }: { kind: string; size?: number }) {
         <line x1="5" y1="12" x2="19" y2="12" />
       </>
     ),
+    // What has flown: two ticks, one behind the other.
+    flown: (
+      <>
+        <polyline points="2.5 12.5 6.5 16.5 14 8" />
+        <polyline points="10 15.5 11 16.5 21.5 6" />
+      </>
+    ),
+    // The line splits into workers, and comes back together.
+    split: (
+      <>
+        <path d="M4 12h5" />
+        <path d="M9 12c3 0 4-6 8-6h3" />
+        <path d="M9 12c3 0 4 6 8 6h3" />
+      </>
+    ),
+    join: (
+      <>
+        <path d="M4 6h3c4 0 5 6 8 6" />
+        <path d="M4 18h3c4 0 5-6 8-6" />
+        <path d="M15 12h5" />
+      </>
+    ),
   };
   return (
     <svg
