@@ -647,10 +647,14 @@ async def _run_agent(flight: dict, step: dict, action: dict, now: float) -> dict
         repo = flight["repo_root"] or (plan.get("session") or {}).get("repo_path") or ""
         if not repo:
             raise _StepFailed("no repo to start a new session in")
+        payload = _session_payload(plan.get("session") or {}, repo, text)
+        # "Switch pilot": the stop's own CLI / model over the plan's.
+        if step["config"].get("program"):
+            payload["program"] = step["config"]["program"]
+        if step["config"].get("model"):
+            payload["profile_model"] = step["config"]["model"]
         try:
-            title = await _create_session(
-                _session_payload(plan.get("session") or {}, repo, text)
-            )
+            title = await _create_session(payload)
         except _flights.FlightError as err:
             raise _StepFailed(err.error)
         return dict(
