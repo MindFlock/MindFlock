@@ -5185,3 +5185,49 @@ Tests: `tests/unit/test_flights_builtins.py` (order, shapes, the depth cut,
 strict validity, reset, the red-main repo gate, nightly paused, presets),
 `tests/unit/test_flights_receipts.py` (every receipt above, judges and
 executors); `test_flights.py`'s two count pins now read `len(BUILTIN_IDS)`.
+
+## Round 16: the Loop block (contract)
+
+The owner: "In sky mode I want the ability to loop an action or prompt or
+cycle. I should be able to pick the number of times it loops, how often it
+loops, if it waits for limits, if it clears context on each run. I am trying
+to do an iterative sky UI improvement and I need this feature before that."
+
+A **Loop** is a stop like any other (plug-in kind `loop`, family `work`,
+robot, `default_on_fail: halt`), placed AFTER the stops it repeats. When the
+flight reaches it, it sends the flight back to an earlier stop — N times, at
+most every so often, waiting out usage limits, clearing the agent's context
+first when asked — and lets the flight carry on past it when the count (or a
+condition) is met. A Loop at the end of a line with "Repeat from: the first
+stop" is a cycle of the whole flight; a Loop right after one Agent stop
+repeats that prompt.
+
+### Backend (`backend/web/core/flight_kinds/loop.py` + core)
+
+Config (`spec.fields` drive the dialog):
+
+| field | type | meaning |
+|---|---|---|
+| `back_to` | select, `dynamic: "stops_before"` (the UI fills the options with the line's stops before the loop; `""` = the first stop of the flight, or of the loop's own group when it has one) | the stop the flight returns to |
+| `times` | int, default 3, 0 = until stopped, ≤ 1000 | how many runs in all (the first pass counts as run 1; a Loop with `times: 3` sends the flight back twice) |
+| `every_minutes` | int, default 0, ≤ 7 days | the least time between the starts of two runs (0 = straight away) |
+| `wait_limits` | bool, default true | while the session is usage-limited (`obs["session"]["limited"]`), wait instead of starting the next run — the wait is not a failure and does not count |
+| `fresh` | bool, default false | clear the agent's context before each run: the provider's `clear_context_command()` (new on `providers/base.py`, default `None` = nothing to send; Claude `"/clear"`, Codex `"/new"`) delivered into the session's queue before the jump back |
+| `until` | text, optional, a `when` expression (round 15's grammar; strict mode validates it) | stop looping when it is true, whatever `times` says |
+
+Behaviour (`judge` is pure; `run` does the side effects):
+
+- `detail.runs` = runs completed so far (0 on the first arrival), `detail.last_start` = when the current run began (set when the flight jumps back; the first run's start is the flight's `started` or the `back_to` step's first `since`).
+- On arrival: if `until` is true, or `times > 0 and runs + 1 >= times` → `done`, receipt `"looped 3 times"` (or `"stopped by: <until>"`), note the same. Else if `wait_limits` and the session is limited → `wait`, note `"waiting on the usage limit"`. Else if `every_minutes` and `now - last_start < every_minutes*60` → `wait`, note `"next run in 12 min"`. Else → `run`.
+- `run`: when `fresh`, deliver the provider's clear command (skip quietly when none). Then the core's **`loop_back(flight, loop_sid, to_index, now)`** (new in flights.py): `runs += 1`, `last_start = now` on the loop step's detail, every step from `to_index` to the loop step (exclusive) reset to pending (`_blank_step_state`; their configs untouched; a halt point among them is armed again), the loop step itself stays `running` with its detail, the cursor moves to `to_index`, history `looped` ("run 2 of 3 — back to <title>"; add `looped` to HISTORY_EVENTS), `_let_through` as a jump does. `times: 0` loops until the owner removes the Loop, skips it, or halts.
+- A Loop whose `back_to` is not before it (or names a missing stop) fails with `"nothing to repeat"` (on_fail halt).
+- Removing a Loop mid-flight (the current step) is the usual "stop removed" pause; Skip on it = carry on past it.
+- Tests: `tests/unit/test_flights_loop.py` (judge decisions, loop_back resets, fresh delivery, limits, until, the receipt, the route round-trip through `POST /start {steps}` + the driver pass); the kinds-list pins in the other tests are updated for the new kind.
+
+### Frontend
+
+- The Loop box: icon ↻ (Bird.tsx's `StopIcon`), title from `default_title`: `"Loop ×3"`, `"Loop ×3 every 30 min"`, `"Loop until <until>"`, `"Loop forever"`. While it flies the box's second line is `"run 2 of 3 · next in 12 min"` / `"waiting on the limit"`; a flown Loop shows its receipt.
+- **The return arc**: `flightDiagram` adds an edge `{kind: "loop", from: <loop node>, to: <back_to node>}` and FlywayCanvas draws it as an arc ABOVE the line from the loop box back to the target (an SVG path with an arrowhead, dashed while pending, solid while running, the run counter as a small pill on the arc), scaled with the boxes. Collapsed groups: the arc lands on the group box.
+- The dialog: the kinds dto drives the fields; a field with `dynamic: "stops_before"` (new on `StepKindField`) gets its options from the line: every stop before the loop (in a group: its sub-steps first), labelled by title, `""` labelled "the first stop". `until` gets the `when` field's editor if round 15 made one, else a text field with the grammar hint.
+- The shelf's default blocks gain **Loop** after Wait (`DEFAULT_KINDS`); the palette/catalog show it under Work.
+- Tests: flightDiagram (the edge), flightsUi/skyBranches (the arc markup), stopDialog (dynamic options), stopCatalog (defaults).
