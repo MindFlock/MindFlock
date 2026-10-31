@@ -155,6 +155,23 @@ class TestPlatformKind:
         assert ss.platform_kind() == "wsl"
         assert ss.powershell_path("wsl") == ss.WIN_POWERSHELL
 
+    def test_the_powershell_lookup_is_cached(self, monkeypatch):
+        """``shutil.which`` over WSL's /mnt/c PATH costs ~100 ms: once per
+        PATH, not once per probe (every GET /api/voice)."""
+        calls: list = []
+        _platform(monkeypatch, "linux", WSL_PROC)
+        monkeypatch.setattr(ss, "_which", lambda name: calls.append(name) or PS)
+        for _ in range(10):
+            assert ss.platform_kind() == "wsl"
+            assert ss.powershell_path("wsl") == PS
+        assert calls == ["powershell.exe"]
+        monkeypatch.setenv("PATH", "/usr/bin:/mnt/c/new")
+        assert ss.platform_kind() == "wsl"
+        assert len(calls) == 2  # a new PATH looks again
+        ss.reset()
+        ss.platform_kind()
+        assert len(calls) == 3  # so does reset()
+
     def test_wsl_without_any_powershell_is_none(self, monkeypatch):
         _platform(monkeypatch, "linux", WSL_PROC)
         assert ss.platform_kind() == "none"

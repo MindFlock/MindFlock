@@ -48,8 +48,15 @@ class _Fake(speech.Backend):
 
 
 @pytest.fixture(autouse=True)
-def _store(isolate_settings_store):
-    """Delegate to the shared settings-store isolation (tests/conftest.py)."""
+def _store(isolate_settings_store, monkeypatch):
+    """Delegate to the shared settings-store isolation (tests/conftest.py);
+    a fresh voice chain, its background work inline."""
+    monkeypatch.setattr(speech, "_spawn", lambda target, name: target())
+    speech.TTS_CHAIN.reset()
+    routes.SPEAK_CACHE.clear()
+    yield
+    speech.TTS_CHAIN.reset()
+    routes.SPEAK_CACHE.clear()
 
 
 @pytest.fixture
@@ -421,6 +428,137 @@ class TestSpeak:
         r = client.post("/api/voice/speak", json={"text": "Hi"})
         assert r.status_code == 502
         assert r.json() == {"error": "piper failed: no voice"}
+
+
+class TestSpeakChain:
+    """The configured voice down → piper says the line, the headers say so,
+    and identical concurrent lines share one synthesis."""
+
+    @pytest.fixture
+    def pair(self, monkeypatch):
+        host, piper = _Fake("tts"), _Fake("tts", detail="piper voice x")
+        host.id, host.label = "openai", "the host"
+        piper.id, piper.audio = "local", (b"RIFFpiper", "audio/wav")
+        monkeypatch.setattr(
+            speech, "BACKENDS", {"stt": [_Fake("stt")], "tts": [host, piper]}
+        )
+        _voice(tts_backend="openai")
+        return SimpleNamespace(host=host, piper=piper)
+
+    def test_headers_when_the_configured_voice_speaks(self, pair):
+        r = client.post("/api/voice/speak", json={"text": "All done."})
+        assert r.status_code == 200, r.text
+        assert r.headers["x-voice-backend"] == "openai"
+        assert r.headers["x-voice-engine"] == "openai"
+        assert r.headers["x-voice-fallback"] == "0"
+        assert r.headers["x-voice-cache"] == "miss"
+        assert int(r.headers["x-voice-ms"]) >= 0
+        assert "x-voice-shared" not in r.headers
+        r = client.post("/api/voice/speak", json={"text": "All done."})
+        assert r.headers["x-voice-cache"] == "hit"
+        assert r.headers["x-voice-engine"] == "openai"
+        assert len(pair.host.calls) == 1
+
+    def test_a_down_host_falls_back_and_says_so(self, pair):
+        pair.host.fail = speech.SpeechError(
+            "could not reach 127.0.0.1:8770: refused", down=True
+        )
+        for line in ("One.", "Two.", "Three."):
+            r = client.post("/api/voice/speak", json={"text": line})
+            assert r.status_code == 200, r.text
+            assert r.content == b"RIFFpiper"
+            assert r.headers["content-type"].startswith("audio/wav")
+            assert r.headers["x-voice-backend"] == "local"
+            assert r.headers["x-voice-engine"] == "local"
+            assert r.headers["x-voice-fallback"] == "1"
+        assert len(pair.host.calls) == 1  # one attempt, then it is down
+        assert [c[1] for c in pair.piper.calls] == ["One.", "Two.", "Three."]
+        # A cached line is served in the voice the reply is in.
+        r = client.post("/api/voice/speak", json={"text": "Two."})
+        assert r.headers["x-voice-cache"] == "hit"
+        assert r.headers["x-voice-engine"] == "local"
+
+    def test_a_request_error_is_not_a_fallback(self, pair):
+        pair.host.fail = speech.SpeechError("the host answered 400: bad voice")
+        r = client.post("/api/voice/speak", json={"text": "Hi"})
+        assert r.status_code == 502
+        assert r.json() == {"error": "the host answered 400: bad voice"}
+        assert pair.piper.calls == []
+
+    def test_502_when_down_with_no_fallback(self, pair):
+        pair.piper.ok = False
+        pair.host.fail = speech.SpeechError("could not reach x", down=True)
+        assert client.post("/api/voice/speak", json={"text": "One."}).status_code == 502
+        r = client.post("/api/voice/speak", json={"text": "Two."})
+        assert r.status_code == 502
+        assert "no fallback voice is ready" in r.json()["error"]
+        assert len(pair.host.calls) == 1
+
+    def test_get_voice_is_truthful_about_the_fallback(self, pair):
+        r = client.get("/api/voice").json()["server_ready"]
+        assert r["tts"] is True and r["tts_engine"] == "openai"
+        assert r["tts_fallback"] is False and r["tts_down"] == ""
+        pair.host.fail = speech.SpeechError("could not reach x: refused", down=True)
+        client.post("/api/voice/speak", json={"text": "One."})
+        r = client.get("/api/voice").json()["server_ready"]
+        assert r["tts"] is True and r["tts_backend"] == "openai"
+        assert r["tts_engine"] == "local (fallback)" and r["tts_fallback"] is True
+        assert r["tts_down"] == "could not reach x: refused"
+        pair.piper.ok = False
+        r = client.get("/api/voice").json()["server_ready"]
+        assert r["tts"] is False
+
+    def test_identical_concurrent_lines_share_one_synthesis(self, pair):
+        import asyncio
+        import threading
+        import time as _time
+
+        import httpx
+
+        gate = threading.Event()
+        real_speak = pair.host.speak
+
+        def slow_speak(text, voice=""):
+            gate.wait(5)
+            return real_speak(text, voice)
+
+        pair.host.speak = slow_speak
+
+        async def main():
+            transport = httpx.ASGITransport(app=server.app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as ac:
+
+                async def post():
+                    return await ac.post(
+                        "/api/voice/speak", json={"text": "Same line."}
+                    )
+
+                first = asyncio.create_task(post())
+                second = asyncio.create_task(post())
+                other = asyncio.create_task(
+                    ac.post("/api/voice/speak", json={"text": "Another line."})
+                )
+                for _ in range(200):  # both identical ones joined, one in flight
+                    if len(routes._INFLIGHT) == 2:
+                        break
+                    await asyncio.sleep(0.01)
+                await asyncio.sleep(0.05)
+                gate.set()
+                return await asyncio.gather(first, second, other)
+
+        t0 = _time.monotonic()
+        a, b, c = asyncio.run(main())
+        assert _time.monotonic() - t0 < 5
+        assert a.status_code == b.status_code == c.status_code == 200
+        assert a.content == b.content == b"ID3fake-mp3"
+        assert sorted(c[1] for c in pair.host.calls) == ["Another line.", "Same line."]
+        assert sorted(r.headers.get("x-voice-shared", "0") for r in (a, b)) == [
+            "0",
+            "1",
+        ]
+        assert routes._INFLIGHT == {}
 
 
 # --------------------------------------------------------------------------- #

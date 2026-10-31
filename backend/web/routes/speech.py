@@ -22,8 +22,17 @@ Status codes, in the order they are checked:
   ``{"text", "backend", "ms"}``.
 * ``speak`` — 400 no text (or nothing left once shaped); 413 over
   :data:`MAX_SPEAK_CHARS`; 409 / 502 as above; 200 the audio bytes
-  (``audio/mpeg`` or ``audio/wav``) with ``X-Voice-Backend`` and
-  ``X-Voice-Cache`` (``hit`` | ``miss``: :data:`SPEAK_CACHE`). The text is
+  (``audio/mpeg`` or ``audio/wav``) with ``X-Voice-Backend`` (the id of the
+  engine that actually spoke), ``X-Voice-Engine`` (its short name:
+  ``piper``, ``openai``, ``system``), ``X-Voice-Fallback`` (``1`` when the
+  configured voice was down or a reply that began on the fallback was
+  still going: ``core.speech.TtsChain``), ``X-Voice-Cache`` (``hit`` |
+  ``miss``: :data:`SPEAK_CACHE`), ``X-Voice-Ms`` (the server's time for
+  the line) and ``X-Voice-Shared: 1`` when an identical request already in
+  flight was joined (:func:`_speak_once`). A configured host that refuses,
+  times out (``core.speech.host_budget``) or answers 5xx falls back to
+  piper for that line and the next :data:`core.speech.HOST_DOWN_SECONDS`;
+  the 502 comes only when no engine could say it. The text is
   shaped for the voice first (``core.spoken_text``) unless ``shape`` is
   false; the caller's text — the caption — is never changed.
 * ``stream`` (open) — 409 no recognition backend is ready, the ready one
@@ -54,7 +63,7 @@ import copy
 import re
 import time
 from collections import OrderedDict
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
@@ -370,7 +379,8 @@ async def _clip(request: Request):
         return _too_big()
     if not audio:
         return JSONResponse({"error": "the clip is empty"}, status_code=400)
-    backend, refused = _refusal("stt")
+    # select() → ready() may touch files or PATH: never on the event loop.
+    backend, refused = await asyncio.to_thread(_refusal, "stt")
     if refused is not None or backend is None:
         return refused or _failed(RuntimeError("no backend"))
     return audio, mime, backend
@@ -557,35 +567,99 @@ async def voice_speak(payload: Optional[dict] = None) -> Response:
         )
     voice = body.get("voice")
     voice = voice.strip()[:64] if isinstance(voice, str) else ""
-    backend, refused = _refusal("tts")
-    if refused is not None or backend is None:
-        return refused or _failed(RuntimeError("no backend"))
-    settings = _settings()
-    if body.get("shape") is False:
-        spoken = text.strip()
-    else:
-        spoken = _spoken_text.shape(text, _pronounce(settings))
-    if not spoken:
-        return JSONResponse({"error": "nothing to say once shaped"}, status_code=400)
-    sig = _engine_signature(backend, settings)
+    started = time.monotonic()
+    # Settings, readiness and shaping read files and PATH: off the loop.
+    plan = await asyncio.to_thread(_speak_plan, text, body.get("shape") is not False)
+    if isinstance(plan, Response):
+        return plan
+    primary, settings, spoken, engine = plan
     key = (voice, spoken)
-    headers = {"X-Voice-Backend": backend.id, "Cache-Control": "no-store"}
-    cached = SPEAK_CACHE.get(sig, key)
-    if cached is not None:
-        audio, mime = cached
-        headers["X-Voice-Cache"] = "hit"
+    hit = (
+        SPEAK_CACHE.get(_engine_signature(engine, settings), key)
+        if engine is not None
+        else None
+    )
+    shared = False
+    if hit is not None and engine is not None:
+        audio, mime = hit
+        _speech.TTS_CHAIN.note_line(spoken)
     else:
         try:
-            audio, mime = await asyncio.to_thread(backend.speak, spoken, voice)
+            (audio, mime, engine, _fell_back), shared = await _speak_once(
+                (_engine_signature(primary, settings), voice, spoken),
+                primary,
+                spoken,
+                voice,
+            )
         except Exception as err:  # noqa: BLE001
             return _failed(err)
-        SPEAK_CACHE.put(sig, key, audio, mime)
-        headers["X-Voice-Cache"] = "miss"
+        if not shared:
+            SPEAK_CACHE.put(_engine_signature(engine, settings), key, audio, mime)
+    fell_back = engine is not primary
+    headers = {
+        "X-Voice-Backend": engine.id,
+        "X-Voice-Engine": engine.engine_name(),
+        "X-Voice-Fallback": "1" if fell_back else "0",
+        "X-Voice-Cache": "hit" if hit is not None else "miss",
+        "X-Voice-Ms": str(int((time.monotonic() - started) * 1000)),
+        "Cache-Control": "no-store",
+    }
+    if shared:
+        headers["X-Voice-Shared"] = "1"
     return Response(
         content=audio,
         media_type=mime or "application/octet-stream",
         headers=headers,
     )
+
+
+def _speak_plan(text: str, shape: bool):
+    """``/speak``'s blocking half: the configured voice (or the 409), the
+    settings, the shaped text (or the 400) and the engine
+    :data:`core.speech.TTS_CHAIN` would speak it with (None: down with no
+    fallback) → a tuple, or the error :class:`Response`."""
+    primary, refused = _refusal("tts")
+    if refused is not None or primary is None:
+        return refused or _failed(RuntimeError("no backend"))
+    settings = _settings()
+    if shape:
+        spoken = _spoken_text.shape(text, _pronounce(settings))
+    else:
+        spoken = text.strip()
+    if not spoken:
+        return JSONResponse({"error": "nothing to say once shaped"}, status_code=400)
+    engine, _fell_back, _why = _speech.TTS_CHAIN.pick(primary)
+    return primary, settings, spoken, engine
+
+
+#: ``/speak`` syntheses in flight: (configured engine's signature, voice,
+#: shaped text) → the task. An identical request that arrives meanwhile (the
+#: phone and the desktop, a prefetch and the line itself) awaits the same
+#: synthesis instead of queueing a second one on a serial engine.
+_INFLIGHT: "Dict[tuple, asyncio.Future]" = {}
+
+
+async def _speak_once(key: tuple, primary, spoken: str, voice: str):
+    """``(TTS_CHAIN.speak's result, shared)``: the synthesis for ``key``,
+    started here or joined (``shared``). Shielded: a caller that hangs up
+    does not cancel the synthesis the others wait for."""
+    task = _INFLIGHT.get(key)
+    shared = task is not None and not task.done()
+    if not shared:
+        task = asyncio.ensure_future(
+            asyncio.to_thread(_speech.TTS_CHAIN.speak, primary, spoken, voice)
+        )
+        _INFLIGHT[key] = task
+
+        def _done(t: "asyncio.Future", k: tuple = key) -> None:
+            if _INFLIGHT.get(k) is t:
+                del _INFLIGHT[k]
+            if not t.cancelled():
+                t.exception()  # retrieved: no "never retrieved" warning
+
+        task.add_done_callback(_done)
+    assert task is not None
+    return await asyncio.shield(task), shared
 
 
 @router.post("/api/voice/say-all")

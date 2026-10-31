@@ -172,7 +172,17 @@ _EXT = {
 
 
 class SpeechError(Exception):
-    """A backend could not do the job; ``str(err)`` is a sentence for the UI."""
+    """A backend could not do the job; ``str(err)`` is a sentence for the UI.
+
+    ``down`` marks a failure of the ENGINE rather than of the request — a
+    host that refused the connection, timed out before its first byte,
+    answered 5xx or sent no audio — the one kind :class:`TtsChain` falls
+    back from (a 4xx, a missing key or a bad voice name is the request's
+    fault and comes back as it is)."""
+
+    def __init__(self, *args: object, down: bool = False) -> None:
+        super().__init__(*args)
+        self.down = down
 
 
 # --------------------------------------------------------------------------- #
@@ -666,6 +676,22 @@ class Backend:
     def speak(self, text: str, voice: str = "") -> Tuple[bytes, str]:
         raise SpeechError("%s does not do voices" % self.label)
 
+    def speak_within(self, text: str, voice: str, budget: float) -> Tuple[bytes, str]:
+        """:meth:`speak`, giving up after ``budget`` seconds without an
+        answer where the backend can (a host: its socket timeout); the
+        others ignore the budget."""
+        return self.speak(text, voice)
+
+    def health_key(self) -> str:
+        """What :class:`TtsChain` keeps health under: one engine (a host's
+        key includes its URL, so a new URL starts healthy)."""
+        return self.id
+
+    def engine_name(self) -> str:
+        """The short name ``GET /api/voice`` reports for the engine that
+        speaks (``server_ready.tts_engine``)."""
+        return self.id
+
     #: Whether :meth:`stream_transcriber` works (``POST /api/voice/stream``).
     streams: bool = False
 
@@ -697,11 +723,14 @@ class _OpenAI(Backend):
             status, ctype, data = _http("POST", url, headers, body, timeout)
         except OSError as err:  # URLError, timeout, refused
             reason = getattr(err, "reason", None) or err
-            raise SpeechError("could not reach %s: %s" % (host, reason)) from err
+            raise SpeechError(
+                "could not reach %s: %s" % (host, reason), down=True
+            ) from err
         if status >= 400:
             detail = _error_detail(data)
             raise SpeechError(
-                "%s answered %d%s" % (host, status, (": " + detail) if detail else "")
+                "%s answered %d%s" % (host, status, (": " + detail) if detail else ""),
+                down=status >= 500,
             )
         return mime_of(ctype), data
 
@@ -786,8 +815,14 @@ class OpenAITTS(_OpenAI):
             or rtype.startswith("application/json")
             or rtype.startswith("text/")
         ):
-            raise SpeechError("%s sent no audio back" % _host(url))
+            raise SpeechError("%s sent no audio back" % _host(url), down=True)
         return data, (rtype if rtype.startswith("audio/") else "audio/mpeg")
+
+    def speak_within(self, text: str, voice: str, budget: float) -> Tuple[bytes, str]:
+        return self.speak(text, voice, timeout=budget)
+
+    def health_key(self) -> str:
+        return "openai " + self._cfg()[0]
 
     def warm(self, prime: bool = True) -> str:  # noqa: ARG002 — no model here
         """Have a LOCAL host load its voice model: one short synthesis
@@ -888,6 +923,75 @@ def invalidate() -> None:
     the one-click install put them into the running interpreter's
     environment, so ``ready()`` sees them without a restart."""
     importlib.invalidate_caches()
+    forget_ffmpeg()
+
+
+#: How long a resolved ``ffmpeg`` lookup stands before it is re-checked (in
+#: the background; the stale answer is served meanwhile).
+FFMPEG_RECHECK_SECONDS = 600.0
+#: ``{"path": str ("" = not on PATH), "env": the PATH it was found on,
+#: "at": when, "busy": a lookup thread is running}`` — empty before the first.
+_FFMPEG: Dict[str, object] = {}
+_FFMPEG_LOCK = threading.Lock()
+
+
+def _which(name: str) -> Optional[str]:
+    return shutil.which(name)
+
+
+def _spawn(target: Callable[[], None], name: str) -> None:
+    """Run ``target`` on a daemon thread (tests run it inline)."""
+    threading.Thread(target=target, name=name, daemon=True).start()
+
+
+def _resolve_ffmpeg() -> None:
+    env = os.environ.get("PATH", "")
+    try:
+        found = _which("ffmpeg") or ""
+    except Exception:  # noqa: BLE001 — a hint, never a failure
+        found = ""
+    with _FFMPEG_LOCK:
+        _FFMPEG.update(path=found, env=env, at=_now(), busy=False)
+
+
+def ffmpeg_path() -> Optional[str]:
+    """Where ``ffmpeg`` is: a path, ``""`` (not on PATH) or ``None`` (not
+    looked up yet). Never blocks: ``shutil.which`` stats every PATH entry,
+    and under WSL most of them are ``/mnt/c`` over 9P — 50–400 ms per call,
+    which ``LocalSTT.ready()`` (reached from async routes through
+    :func:`select`) used to pay on every wake check. The lookup runs once on
+    a daemon thread and is re-run, again in the background, when PATH
+    changes, :data:`FFMPEG_RECHECK_SECONDS` later, after
+    :func:`forget_ffmpeg` (a refused clip, :func:`invalidate`)."""
+    env = os.environ.get("PATH", "")
+    with _FFMPEG_LOCK:
+        have = "path" in _FFMPEG
+        fresh = (
+            have
+            and _FFMPEG.get("env") == env
+            and _now() - float(_FFMPEG.get("at") or 0.0) < FFMPEG_RECHECK_SECONDS
+        )
+        path = str(_FFMPEG["path"]) if have else None
+        if fresh or _FFMPEG.get("busy"):
+            return path
+        _FFMPEG["busy"] = True
+    try:
+        _spawn(_resolve_ffmpeg, "mindflock-voice-ffmpeg")
+    except Exception:  # noqa: BLE001 — no thread: try again next call
+        with _FFMPEG_LOCK:
+            _FFMPEG["busy"] = False
+    with _FFMPEG_LOCK:  # an inline lookup (tests) has answered already
+        return str(_FFMPEG["path"]) if "path" in _FFMPEG else path
+
+
+def forget_ffmpeg() -> None:
+    """Drop the ``ffmpeg`` lookup: the next :func:`ffmpeg_path` re-runs it
+    (in the background)."""
+    with _FFMPEG_LOCK:
+        busy = _FFMPEG.get("busy")
+        _FFMPEG.clear()
+        if busy:
+            _FFMPEG["busy"] = True
 
 
 def _shim_av_open() -> None:
@@ -962,7 +1066,7 @@ class LocalSTT(Backend):
         if low:
             return False, "local recognition held back: " + low
         detail = "faster-whisper %s on this computer" % self._model_name()
-        if not shutil.which("ffmpeg"):
+        if ffmpeg_path() == "":
             detail += (
                 " (ffmpeg is not on PATH: webm/mp4 clips decode through the bundled"
                 " PyAV; install ffmpeg if a clip is refused)"
@@ -1026,6 +1130,7 @@ class LocalSTT(Backend):
             segments, _info = model.transcribe(path, **kw)
             words = [str(getattr(s, "text", "") or "").strip() for s in segments]
         except Exception as err:  # noqa: BLE001
+            forget_ffmpeg()  # a refused clip: look for ffmpeg again
             raise SpeechError("faster-whisper failed: %s" % err) from err
         finally:
             try:
@@ -1146,6 +1251,9 @@ class LocalTTS(Backend):
     id = "local"
     kind = "tts"
     label = "piper on this computer"
+
+    def engine_name(self) -> str:
+        return "piper"
 
     def _voice_name(self, voice: str = "") -> str:
         return piper_voice(voice or _voice().tts_voice)
@@ -1287,6 +1395,243 @@ def choose(kind: str) -> str:
     return backend.id if backend else ""
 
 
+# --------------------------------------------------------------------------- #
+# The voice chain: the configured engine, then piper, with one voice per reply
+# --------------------------------------------------------------------------- #
+#: The configured voice's connect / first-byte budget for a one-word line;
+#: :func:`host_budget` adds :data:`HOST_BUDGET_PER_CHAR` per character
+#: because a neural host (Voice Lab's F5) renders the whole clip before its
+#: first byte — about 0.035 s per character on a GPU, so the allowance is
+#: ~1.7× that. A host past its budget (F5 on a CPU: 50–60 s a sentence) is
+#: treated like one that refused the connection.
+HOST_BUDGET = 1.5
+HOST_BUDGET_PER_CHAR = 0.06
+#: A failed engine is down this long; after it the next line (or
+#: ``GET /api/voice``) starts a background probe — the engine is healthy
+#: again only once the probe passes.
+HOST_DOWN_SECONDS = 45.0
+#: The probe: :data:`WARM_TEXT` has to come back within this. A model still
+#: loading, or running on the wrong device, stays down.
+PROBE_TIMEOUT = 3.0
+#: The fallback voices, in order, after the configured one (never itself).
+FALLBACK_TTS: Tuple[str, ...] = ("local",)
+#: :class:`TtsChain`'s switch back: this long after the last fallback line
+#: should have finished playing, with nothing in flight.
+REPLY_GAP_SECONDS = 2.5
+#: How fast a line is spoken, to estimate when it stops playing.
+SPOKEN_CHARS_PER_SECOND = 14.0
+
+
+def host_budget(text: str) -> float:
+    """The configured voice's budget for ``text`` (:data:`HOST_BUDGET`)."""
+    return min(TTS_TIMEOUT, HOST_BUDGET + HOST_BUDGET_PER_CHAR * len(text or ""))
+
+
+class _Health:
+    __slots__ = ("why", "retry_at", "probing")
+
+    def __init__(self, why: str, retry_at: float) -> None:
+        self.why = why
+        self.retry_at = retry_at
+        self.probing = False
+
+
+class TtsChain:
+    """Which engine says the next line, and the fallback when it fails.
+
+    * The configured voice (:func:`select`) speaks within
+      :func:`host_budget`. A ``down`` failure (:class:`SpeechError`) marks it
+      down for :data:`HOST_DOWN_SECONDS` and the same line goes to the first
+      ready :data:`FALLBACK_TTS` engine (piper) — so a dead host costs one
+      refused connect, once, and nothing for the lines after it. With no
+      fallback ready the failure stands (the route's 502; the client then
+      uses its own voice).
+    * Health is per :meth:`Backend.health_key` and re-checked only in the
+      background (:meth:`_probe`, on a daemon thread), never on a request.
+    * One voice per reply: once a line falls back, every line does until the
+      configured engine has passed its probe AND the chain is quiet — no
+      line in flight and :data:`REPLY_GAP_SECONDS` past the moment the last
+      fallback line should have finished playing (its length at
+      :data:`SPOKEN_CHARS_PER_SECOND`). A reply's lines arrive back to back
+      (the clients ask for the next sentence while one plays), so the switch
+      back lands in the pause between replies, never inside one. Failing
+      over is immediate — a line the host cannot say is said by piper.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._down: Dict[str, _Health] = {}
+        self._sticky = False
+        self._inflight = 0
+        self._quiet_at = 0.0
+
+    def reset(self) -> None:
+        with self._lock:
+            self._down.clear()
+            self._sticky = False
+            self._inflight = 0
+            self._quiet_at = 0.0
+
+    # -- health ---------------------------------------------------------- #
+    def down_reason(self, backend: Backend) -> str:
+        """Why ``backend`` is down ("" when healthy). Past its window this
+        starts the background probe (once) and still answers "down" — the
+        probe, not the clock, brings it back."""
+        try:
+            key = backend.health_key()
+        except Exception:  # noqa: BLE001 — unreadable settings: no health
+            return ""
+        with self._lock:
+            h = self._down.get(key)
+            if h is None:
+                return ""
+            why = h.why
+            due = not h.probing and _now() >= h.retry_at
+            if due:
+                h.probing = True
+        if due:
+            try:
+                _spawn(lambda: self._probe(backend, key), "mindflock-voice-probe")
+            except Exception:  # noqa: BLE001 — no thread: try again later
+                with self._lock:
+                    h.probing = False
+        return why
+
+    def mark_down(self, backend: Backend, why: str) -> None:
+        try:
+            key = backend.health_key()
+        except Exception:  # noqa: BLE001
+            return
+        with self._lock:
+            h = self._down.get(key)
+            if h is None:
+                self._down[key] = _Health(why, _now() + HOST_DOWN_SECONDS)
+            else:
+                h.why, h.retry_at = why, _now() + HOST_DOWN_SECONDS
+            self._sticky = True
+        _logger.info("voice: %s is down for %ds: %s", key, HOST_DOWN_SECONDS, why)
+
+    def mark_up(self, backend: Backend) -> None:
+        try:
+            key = backend.health_key()
+        except Exception:  # noqa: BLE001
+            return
+        with self._lock:
+            self._down.pop(key, None)
+
+    def _probe(self, backend: Backend, key: str) -> None:
+        """One :data:`WARM_TEXT` within :data:`PROBE_TIMEOUT`: healthy on
+        an answer, down for another window on anything else."""
+        try:
+            backend.speak_within(WARM_TEXT, "", PROBE_TIMEOUT)
+        except Exception as err:  # noqa: BLE001
+            with self._lock:
+                h = self._down.get(key)
+                if h is not None:
+                    h.why = str(err) or type(err).__name__
+                    h.retry_at = _now() + HOST_DOWN_SECONDS
+                    h.probing = False
+            return
+        with self._lock:
+            self._down.pop(key, None)
+        _logger.info("voice: %s is back", key)
+
+    # -- choosing -------------------------------------------------------- #
+    @staticmethod
+    def fallback_for(primary: Backend) -> Optional[Backend]:
+        """The first ready :data:`FALLBACK_TTS` engine that is not
+        ``primary``."""
+        for backend_id in FALLBACK_TTS:
+            if backend_id == primary.id:
+                continue
+            backend = get("tts", backend_id)
+            if backend is None:
+                continue
+            try:
+                ok, _detail = backend.ready()
+            except Exception:  # noqa: BLE001
+                ok = False
+            if ok:
+                return backend
+        return None
+
+    def pick(self, primary: Backend) -> Tuple[Optional[Backend], bool, str]:
+        """``(engine, fell_back, why)`` for the next line: ``primary``, or
+        the fallback while ``primary`` is down (``why``, "" when it is
+        healthy) or a reply that began on the fallback is still going
+        (:class:`TtsChain`). ``engine`` is None when ``primary`` is down and
+        no fallback is ready."""
+        why = self.down_reason(primary)
+        with self._lock:
+            if why:
+                self._sticky = True
+            elif self._sticky and (
+                self._inflight == 0 and _now() >= self._quiet_at + REPLY_GAP_SECONDS
+            ):
+                self._sticky = False
+            sticky = self._sticky
+        if not sticky:
+            return primary, False, ""
+        fallback = self.fallback_for(primary)
+        if fallback is None:
+            return (None, False, why) if why else (primary, False, "")
+        return fallback, True, why
+
+    # -- speaking -------------------------------------------------------- #
+    def note_line(self, text: str) -> None:
+        """A line was served (a cache hit too): the reply runs until it
+        should have finished playing."""
+        with self._lock:
+            self._quiet_at = max(
+                self._quiet_at, _now() + len(text or "") / SPOKEN_CHARS_PER_SECOND
+            )
+
+    def speak(
+        self, primary: Backend, text: str, voice: str = ""
+    ) -> Tuple[bytes, str, Backend, bool]:
+        """Say ``text`` → ``(audio, mime, the engine that spoke, fell
+        back)``; blocking (the route runs it on a worker thread). Raises the
+        :class:`SpeechError` when no engine could say it."""
+        engine, fell_back, why = self.pick(primary)
+        if engine is None:
+            raise SpeechError(
+                "%s is down (%s) and no fallback voice is ready" % (primary.label, why),
+                down=True,
+            )
+        with self._lock:
+            self._inflight += 1
+        try:
+            if fell_back:
+                audio, mime = engine.speak(text, voice)
+                return audio, mime, engine, True
+            try:
+                audio, mime = engine.speak_within(text, voice, host_budget(text))
+                return audio, mime, engine, False
+            except SpeechError as err:
+                if not err.down:
+                    raise
+                self.mark_down(engine, str(err))
+                fallback = self.fallback_for(engine)
+                if fallback is None:
+                    raise
+                audio, mime = fallback.speak(text, voice)
+                return audio, mime, fallback, True
+        finally:
+            with self._lock:
+                self._inflight -= 1
+            self.note_line(text)
+
+    def status(self, primary: Backend) -> dict:
+        """``GET /api/voice``'s view of the chain for ``primary``:
+        ``{"engine": Backend|None, "fell_back": bool, "why": str}``."""
+        engine, fell_back, why = self.pick(primary)
+        return {"engine": engine, "fell_back": fell_back, "why": why}
+
+
+#: The one voice chain (``POST /api/voice/speak``, :func:`describe`).
+TTS_CHAIN = TtsChain()
+
+
 _WARMING: Dict[str, threading.Thread] = {}
 #: The last warm per kind: ``(result, what was warmed, when)`` — ``result``
 #: is "loaded", "loading" or "skipped: …" (:func:`describe`'s ``warm``).
@@ -1310,6 +1655,13 @@ def _warm_target(kind: str) -> Tuple[Optional[Backend], str]:
     elif kind == "tts":
         backend, detail = select(kind)
         ok = backend is not None
+        if backend is not None and TTS_CHAIN.down_reason(backend):
+            # The configured voice is down: have the fallback that speaks
+            # meanwhile loaded instead (its probe re-checks the host).
+            fallback = TTS_CHAIN.fallback_for(backend)
+            if fallback is None:
+                return None, "skipped: %s is down" % backend.label
+            backend, detail = fallback, fallback.ready()[1]
     else:
         return None, "skipped: no %s backend" % kind
     if not ok or backend is None:
@@ -1332,7 +1684,12 @@ def warm(kind: str = "stt", prime: bool = True) -> str:
             result = detail
         else:
             what = "%s:%s" % (backend.id, detail)
-            result = str(backend.warm(prime=prime))  # type: ignore[attr-defined]
+            try:
+                result = str(backend.warm(prime=prime))  # type: ignore[attr-defined]
+            except SpeechError as err:
+                if kind == "tts" and err.down:
+                    TTS_CHAIN.mark_down(backend, str(err))
+                raise
     except Exception as err:  # noqa: BLE001 — warming is best effort
         result = "skipped: %s" % err
     _WARMED[kind] = ("loaded" if result == "already" else result, what, _now())
@@ -1405,6 +1762,42 @@ def warm_in_background(
         return t
 
 
+def _describe_tts(ready: dict, backend: Optional[Backend], detail: str) -> str:
+    """Fill ``server_ready``'s voice keys from :data:`TTS_CHAIN` and return
+    the voice's detail: ``tts`` true while SOME engine will speak (the
+    configured one, or the fallback while it is down), ``tts_engine`` the
+    one that will (``"piper (fallback)"``), ``tts_fallback`` whether that is
+    the fallback, ``tts_down`` why the configured one is down ("" healthy).
+    ``tts_backend`` stays the configured id (Settings keys its rows on it)."""
+    ready["tts_engine"], ready["tts_fallback"], ready["tts_down"] = "", False, ""
+    if backend is None:
+        return detail
+    try:
+        st = TTS_CHAIN.status(backend)
+    except Exception:  # noqa: BLE001 — a report, never a failure
+        st = {"engine": backend, "fell_back": False, "why": ""}
+    engine, why = st["engine"], st["why"]
+    ready["tts_down"] = why
+    if engine is None:
+        ready["tts"] = False
+        return "%s is down (%s) and no fallback voice is ready" % (detail, why)
+    ready["tts_fallback"] = bool(st["fell_back"])
+    name = engine.engine_name()
+    if not st["fell_back"]:
+        ready["tts_engine"] = name
+        return detail
+    ready["tts_engine"] = name + " (fallback)"
+    try:
+        fb_detail = engine.ready()[1]
+    except Exception:  # noqa: BLE001
+        fb_detail = engine.label
+    return "%s — speaking with %s %s" % (
+        detail,
+        fb_detail,
+        ("while it is down (%s)" % why) if why else "until the reply in progress ends",
+    )
+
+
 def describe() -> dict:
     """What ``GET /api/voice`` reports about the server side::
 
@@ -1412,7 +1805,8 @@ def describe() -> dict:
          "server_ready": {"stt": bool, "tts": bool, "detail": str,
                           "stt_backend": id|"", "stt_detail": str,
                           "tts_backend": id|"", "tts_detail": str,
-                          "stt_stream": bool},
+                          "stt_stream": bool, "tts_engine": str,
+                          "tts_fallback": bool, "tts_down": str},
          "system": {"available": bool,
                     "platform": "windows"|"wsl"|"mac"|"none",
                     "detail": str, "voices": [names],
@@ -1438,6 +1832,9 @@ def describe() -> dict:
         backend, detail = select(kind)
         ready[kind] = backend is not None
         ready[kind + "_backend"] = backend.id if backend else ""
+        if kind == "tts":
+            detail = _describe_tts(ready, backend, detail)
+            backend = backend if ready["tts"] else None
         ready[kind + "_detail"] = detail
         if kind == "stt":
             ready["stt_stream"] = bool(backend is not None and backend.streams)
