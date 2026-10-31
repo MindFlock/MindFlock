@@ -10,7 +10,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ALL_CODE, css } from "./sourceText";
 
-const { Bird, BirdMarker, HINGE, SPRITE_H, SPRITE_W, birdLook, spriteBox } = await import("../components/flights/Bird");
+const { Bird, BirdMarker, HINGE, SPRITE_H, SPRITE_W, StopIcon, birdLook, spriteBox } = await import("../components/flights/Bird");
 const { SkyFlock, fitBirds, flockSize, seedBirds, skyLoop, stepBirds, FRAME_MS } = await import("../components/flights/SkyFlock");
 const { TabIcon } = await import("../components/grid/TabIcon");
 
@@ -193,5 +193,16 @@ describe("the pane's Flight tab", () => {
     expect(html.match(/<polyline /g)).toHaveLength(2);
     expect(html).not.toContain("M2 9.5c");
     expect(html).not.toContain("bird");
+  });
+});
+
+describe("round 16: the Loop's icon", () => {
+  const draw = (kind: string) => renderToStaticMarkup(createElement(StopIcon, { kind }));
+  it("↻ — an open circle with its arrowhead, in the stroke style, not the fallback", () => {
+    const html = draw("loop");
+    expect(html).toContain('<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"></path><polyline points="18.5 3 18.5 7.2 14.3 7.2"></polyline>');
+    expect(html).toContain('stroke="currentColor"');
+    expect(html).not.toBe(draw("no-such-kind"));
+    expect(html).not.toBe(draw("wait"));
   });
 });

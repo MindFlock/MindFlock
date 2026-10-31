@@ -276,6 +276,7 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
         key={open.id}
         node={open}
         def={inspectorDef(kindOf.get(step.kind), step)}
+        lineSteps={flight.steps}
         busy={busy}
         onClose={close}
         onSave={(patch) =>

@@ -431,6 +431,19 @@ describe("the stylesheets", () => {
   });
 });
 
+describe("round 16: the Loop's arc in the stylesheet", () => {
+  const canvas = css("components/flights/FlywayCanvas.css");
+  it("dashed while pending, solid (the working tone) while running, its pill a working pill", () => {
+    expect(canvas).toMatch(/\.fl-wire-loop\.fl-loop-pending \{[^}]*stroke-dasharray/);
+    expect(canvas).toMatch(/\.fl-wire-loop\.fl-loop-running \{[^}]*stroke: var\(--tone-working\)/);
+    expect(canvas).not.toMatch(/\.fl-wire-loop\.fl-loop-running \{[^}]*dasharray/);
+    expect(canvas).toMatch(/\.fl-loop-pill \{[^}]*position: absolute;[^}]*border-radius: 999px/);
+  });
+  it("the canvas keeps headroom for the arc's rise", () => {
+    expect(code("components/flights/FlywayCanvas.tsx")).toContain("shown.rise ? Math.ceil(shown.rise) + pad : 0");
+  });
+});
+
 describe("no native <select> in Flights", () => {
   it("not one in its components", () => {
     for (const f of ["SkyView", "skyContracts", "SkyDrawer", "useSessionLine", "StopDialog", "StopShelf", "GroundedLine", "TakeoffDialog", "PlanSelect", "FlightStrip", "SessionFlight", "StopParts", "FlywayCanvas", "controls"])

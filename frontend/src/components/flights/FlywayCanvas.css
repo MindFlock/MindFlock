@@ -1196,6 +1196,52 @@
   box-shadow: 0 0 0 2px var(--tone-attention);
 }
 
+/* --- A Loop's return arc (round 16) -------------------------------------------
+   Over the line from the Loop box back onto the stop it repeats from: dashed
+   while the loop is still ahead, solid once the flight is in it (or has flown
+   it), its count in a pill on the apex. */
+.fl-wire-loop {
+  stroke: color-mix(in srgb, var(--accent) 70%, transparent);
+  stroke-width: 1.8;
+}
+
+.fl-wire-loop.fl-loop-pending {
+  stroke-dasharray: 5 4;
+  stroke: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+.fl-wire-loop.fl-loop-running {
+  stroke: var(--tone-working);
+  stroke-width: 2.2;
+}
+
+.fl-wire-loop.fl-loop-done {
+  stroke: color-mix(in srgb, var(--muted) 70%, transparent);
+}
+
+.fl-loop-pill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 1;
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--tone-working);
+  color: var(--fl-ink-working);
+  background: var(--panel);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  pointer-events: auto;
+  cursor: default;
+}
+
+.fl-loop-pill.fl-loop-done {
+  border-color: color-mix(in srgb, var(--muted) 60%, transparent);
+  color: var(--muted);
+}
+
 /* --- What has flown: one pill ------------------------------------------------ */
 
 /* Two or more stops the flight has already flown, folded (lib/flightDiagram

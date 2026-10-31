@@ -55,6 +55,9 @@ export interface StopDialogProps {
   note?: string;
   /** More under the form (a Split's hint, its "+ Join"). */
   extra?: ReactNode;
+  /** The line's steps in flight order: a `dynamic: "stops_before"` field
+   * (a Loop's "Repeat from") lists the stops before this one. */
+  lineSteps?: readonly FlightStep[] | null;
   /** Render into document.body (the Sky zooms its lines with a transform,
    * which would carry a fixed backdrop with it). Default true. */
   portal?: boolean;
@@ -137,7 +140,7 @@ function StepDialog(p: StopDialogProps) {
           </p>
         )}
         {draft ? (
-          <StopForm step={draft} def={p.def} readOnly={!editable} onChange={(patch) => setDraft((d) => (d ? { ...d, ...patch } : d))} />
+          <StopForm step={draft} def={p.def} lineSteps={p.lineSteps} readOnly={!editable} onChange={(patch) => setDraft((d) => (d ? { ...d, ...patch } : d))} />
         ) : (
           <p className="fl-note muted">This stop's details haven't loaded yet.</p>
         )}

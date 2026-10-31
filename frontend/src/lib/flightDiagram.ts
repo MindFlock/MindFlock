@@ -53,6 +53,7 @@ import {
   type FlightRow,
   type FlightStep,
   type StepKindDef,
+  type StepRunState,
 } from "./flights";
 
 // --- The model ----------------------------------------------------------------
@@ -155,11 +156,25 @@ export interface DiagramNode {
   receipt?: string;
   /** The stop's `when` condition, when it has one (the "if" chip). */
   when?: string;
+  /** Round 16: a Loop stop's count (its return arc's pill). */
+  loop?: LoopMark;
+}
+
+/** A Loop's count, for its return arc: `runs` completed so far
+ * (`detail.runs`), `times` in all (0 = until stopped), and how the loop
+ * stands — `pending` (not reached: the arc is dashed), `running` (the flight
+ * is inside it, waiting at it, or back at an earlier stop for another run),
+ * `done` (it let the flight on). */
+export interface LoopMark {
+  runs: number;
+  times: number;
+  state: "pending" | "running" | "done";
 }
 
 /** `fan` runs from a stop out to a branch, `join` from a branch into the
- * join point. */
-export type DiagramEdgeKind = "line" | "up" | "branch" | "add" | "fan" | "join";
+ * join point, `loop` from a Loop stop back to the stop it repeats from (an
+ * arc over the line, round 16). */
+export type DiagramEdgeKind = "line" | "up" | "branch" | "add" | "fan" | "join" | "loop";
 
 export interface DiagramEdge {
   from: string;
@@ -167,6 +182,8 @@ export interface DiagramEdge {
   kind: DiagramEdgeKind;
   /** A fan-in whose branch has arrived (or whose join let go): drawn done. */
   done?: boolean;
+  /** A `loop` edge: its Loop's count (the pill on the arc). */
+  loop?: LoopMark;
 }
 
 export interface Diagram {
@@ -240,11 +257,91 @@ export function stopSummary(step: Pick<FlightStep, "kind" | "config">): string {
       const n = lines > 1 ? lines : Math.max(1, num(c.count, 1));
       return n + (n === 1 ? " worker" : " workers") + " in parallel";
     }
+    case "loop": {
+      const times = Math.max(0, num(c.times, 3));
+      const until = String(c.until ?? "").trim();
+      const every = Math.max(0, num(c.every_minutes, 0));
+      const parts = [times > 0 ? times + (times === 1 ? " run" : " runs") : until ? "" : "until stopped"];
+      if (until) parts.push("until " + clip(until, 22));
+      if (every) parts.push("every " + minutesWord(every));
+      if (c.fresh) parts.push("fresh context");
+      return parts.filter(Boolean).join(" · ");
+    }
     case "join":
       return (c.of === "spawned" ? "waits for its split's workers" : "waits for every worker") + (c.on_failed === "continue" ? " · goes on past a failure" : "");
     default:
       return step.kind;
   }
+}
+
+/** Minutes the way a box says them: "30 min", "2 h", "1 h 30 min", "1 d". */
+export function minutesWord(m: number): string {
+  const n = Math.round(m);
+  if (n >= 1440 && n % 1440 === 0) return n / 1440 + " d";
+  if (n < 60) return n + " min";
+  return Math.floor(n / 60) + " h" + (n % 60 ? " " + (n % 60) + " min" : "");
+}
+
+// --- The Loop (round 16) ---------------------------------------------------------
+
+/** A Loop step's count from its config and its run record. */
+export function loopMark(step: Pick<FlightStep, "config">, rec?: Pick<StepRunState, "state" | "detail"> | null): LoopMark {
+  const times = Math.max(0, Math.floor(num(step.config?.times, 3)));
+  const runs = Math.max(0, Math.floor(num(rec?.detail?.runs, 0)));
+  const st = rec?.state;
+  const state: LoopMark["state"] = st === "done" || st === "skipped" ? "done" : st === "running" || st === "waiting_you" || runs > 0 ? "running" : "pending";
+  return { runs, times, state };
+}
+
+/** The pill on a Loop's arc: the run under way of all of them — "2 / 3",
+ * "2 / ∞" — once the loop is reached or has run; "" before. */
+export function loopPill(m: LoopMark): string {
+  if (m.state === "pending" && m.runs === 0) return "";
+  return Math.max(1, m.runs + 1) + " / " + (m.times > 0 ? m.times : "∞");
+}
+
+/** The pill's tooltip: "Run 2 of 3", "Run 2 — it loops until stopped". */
+export function loopPillTitle(m: LoopMark): string {
+  const run = Math.max(1, m.runs + 1);
+  return (m.state === "done" ? "Looped: run " : "Run ") + run + (m.times > 0 ? " of " + m.times : " — it loops until stopped");
+}
+
+/** A Loop box's second line while it flies (or has sent the flight back):
+ * the judge's note when it wrote one — "waiting on the limit", "run 2 of 3 ·
+ * next in 12 min" — else the counter, "run 2 of 3" / "run 2 — until <until>". */
+export function loopLine(step: Pick<FlightStep, "config">, rec?: Pick<StepRunState, "state" | "detail" | "note"> | null): string {
+  const m = loopMark(step, rec);
+  const run = Math.max(1, m.runs + 1);
+  const until = String(step.config?.until ?? "").trim();
+  const counter = m.times > 0 ? "run " + run + " of " + m.times : "run " + run + (until ? " — until " + clip(until, 22) : "");
+  const note = String(rec?.note ?? "").replace(/\s+/g, " ").trim();
+  if (!note) return counter;
+  if (/usage limit|the limit/i.test(note)) return "waiting on the limit";
+  const next = /^next run in\s+(.+)$/i.exec(note);
+  if (next) return counter + " · next in " + next[1];
+  if (/^run \d/i.test(note)) return clip(note, 40);
+  return counter + " · " + clip(note, 28);
+}
+
+/** The line's return arcs: for every Loop stop of `line`, an edge back to the
+ * box drawn for its `back_to` — `""` is the line's first stop, or its own
+ * group's first sub-step when it is in one; a stop not before it (or gone)
+ * draws no arc. Folding (the flown pill, a collapsed group) re-aims them at
+ * the box that holds the target (`foldRun`). */
+export function loopEdges(line: readonly DiagramNode[]): DiagramEdge[] {
+  const stops = line.filter((n) => n.row === "main" && n.kind === "stop" && n.step);
+  const out: DiagramEdge[] = [];
+  stops.forEach((n, i) => {
+    const s = n.step!;
+    if (s.kind !== "loop") return;
+    const before = stops.slice(0, i);
+    const back = String(s.config?.back_to ?? "").trim();
+    const gid = s.group?.id;
+    const target = back ? before.find((b) => b.step!.id === back) : gid ? before.find((b) => b.step!.group?.id === gid) : before[0];
+    if (!target) return;
+    out.push({ from: n.id, to: target.id, kind: "loop", loop: n.loop || loopMark(s) });
+  });
+  return out;
 }
 
 /** A stop's title as its box says it: a perch reads "Perch: <title>". */
@@ -281,11 +378,13 @@ export function flywayDiagram(steps: readonly FlightStep[], kinds?: readonly Ste
     index: i,
     editable: true,
     ...looksOf(s, kinds),
+    ...(s.kind === "loop" ? { loop: loopMark(s) } : {}),
   }));
   line.push(addNode("Add a stop"));
   const nodes: DiagramNode[] = [];
   const edges: DiagramEdge[] = [];
   chain(nodes, edges, line);
+  edges.push(...loopEdges(line));
   return { nodes, edges, flightId: "", mode: "none", insertFrom: 0 };
 }
 
@@ -302,13 +401,19 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
     if (atCursor && f.state === "halted") state = "halted";
     else if (atCursor && f.state === "paused") state = "paused";
     const rec = f.step_states?.[s.id];
+    // A Loop that sent the flight back keeps its record `running` while the
+    // flight flies the stops it repeats: the box waits like one ahead (the
+    // bird is back there); its arc and second line carry the count.
+    const loop = s.kind === "loop" ? loopMark(s, rec) : undefined;
+    if (loop && state === "current" && live && i > f.cursor) state = "pending";
     const flown = state === "done" || state === "skipped" || state === "failed";
+    const looping = !!loop && !flown && (loop.runs > 0 || (atCursor && state !== "pending"));
     return {
       id: stopId(s, i),
       kind: "stop" as const,
       row: "main" as const,
       title: stopTitle(s, kinds),
-      sub: stopSummary(s),
+      sub: looping ? loopLine(s, rec) : stopSummary(s),
       state,
       icon: s.kind,
       perch: stepActor(s, kinds) === "you",
@@ -318,6 +423,7 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
       reason: state === "halted" || state === "failed" ? f.reason || rec?.note || "" : "",
       ...looksOf(s, kinds),
       ...(flown ? { receipt: receiptOf(rec?.detail) } : {}),
+      ...(loop ? { loop } : {}),
     };
   });
 }
@@ -348,6 +454,7 @@ export function flightDiagram(f: Flight, kinds?: readonly StepKindDef[] | null):
   const nodes: DiagramNode[] = [];
   const edges: DiagramEdge[] = [];
   chain(nodes, edges, line);
+  edges.push(...loopEdges(line));
   return { nodes, edges, flightId: f.id, mode: "flight", insertFrom: f.cursor + 1 };
 }
 
@@ -534,6 +641,7 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
       edges.push(c.branch!.state === "done" ? { from: c.id, to: next.id, kind: "join", done: true } : { from: c.id, to: next.id, kind: "join" });
     }
   }
+  edges.push(...loopEdges(line));
   const d: Diagram = { nodes, edges, flightId, mode, insertFrom };
   if (mode !== "flight") return d;
   const grouped = collapseGroups(d, opts.expandedGroups);
@@ -608,7 +716,7 @@ function foldRun(d: Diagram, run: readonly DiagramNode[], into: DiagramNode): Di
     const key = from + ">" + dest + ">" + e.kind;
     if (seen.has(key)) continue;
     seen.add(key);
-    edges.push(e.done ? { from, to: dest, kind: e.kind, done: true } : { from, to: dest, kind: e.kind });
+    edges.push({ ...e, from, to: dest });
   }
   return { ...d, nodes, edges };
 }
@@ -1152,6 +1260,9 @@ export interface Wire {
   d: string;
   /** A fan-in drawn done (its branch arrived, or the join let go). */
   done?: boolean;
+  /** A `loop` arc: its Loop's count, and the arc's apex (where its pill sits). */
+  loop?: LoopMark;
+  apex?: { x: number; y: number };
 }
 
 export interface Layout {
@@ -1159,6 +1270,9 @@ export interface Layout {
   wires: Wire[];
   width: number;
   height: number;
+  /** How far the return arcs (and their pills) reach ABOVE y = 0: the
+   * canvas keeps that much headroom over the line. 0 without a loop. */
+  rise: number;
   /** The gap between two boxes on the line (where a "+" can sit). */
   gap: number;
 }
@@ -1331,6 +1445,11 @@ export function layoutDiagram(d: Diagram, opts: LayoutOpts = {}): Layout {
     // A child hung off the line: its `branch` wire runs the way a fan-out does.
     const kind: DiagramEdgeKind = e.kind === "branch" && b.node.branch ? "fan" : e.kind;
     let path = "";
+    if (kind === "loop") {
+      const arc = loopArc(a, b, anchorOf, !!opts.vertical);
+      wires.push({ from: e.from, to: e.to, kind, d: arc.d, apex: arc.apex, ...(e.loop ? { loop: e.loop } : {}) });
+      continue;
+    }
     if (opts.vertical && kind === "fan") {
       // Down the group's left side, into each branch.
       const x = a.x + m.indent / 2;
@@ -1373,9 +1492,53 @@ export function layoutDiagram(d: Diagram, opts: LayoutOpts = {}): Layout {
     wires.push(e.done ? { from: e.from, to: e.to, kind: e.kind, d: path, done: true } : { from: e.from, to: e.to, kind: e.kind, d: path });
   }
 
-  const width = Math.max(0, ...boxes.map((p) => p.x + p.w));
+  const arcs = wires.filter((w) => w.apex);
+  const width = Math.max(0, ...boxes.map((p) => p.x + p.w), ...arcs.map((w) => w.apex!.x + LOOP_PILL_ROOM));
   const height = Math.max(0, ...boxes.map((p) => p.y + p.h));
-  return { boxes, wires, width, height, gap: m.gap };
+  const rise = Math.max(0, ...arcs.map((w) => LOOP_PILL_ROOM - w.apex!.y));
+  return { boxes, wires, width, height, gap: m.gap, rise: arcs.length ? rise : 0 };
+}
+
+/** Room kept past a return arc's apex for its pill (half its height and a
+ * margin). */
+export const LOOP_PILL_ROOM = 14;
+
+/** A return arc's height over the line from its span: taller for a longer
+ * reach, never flatter than 30 px nor taller than 84. */
+export function loopRise(span: number): number {
+  return Math.round(Math.min(84, Math.max(30, 18 + Math.abs(span) * 0.16)));
+}
+
+/** A Loop's return arc: horizontal, from the loop box's top centre over the
+ * line back down onto the target's top centre (the arrowhead lands on it);
+ * vertical (a phone), out of the loop box's right edge, round the right of
+ * the column, into the target's right edge. A cubic whose apex sits
+ * `loopRise(span)` past the boxes. */
+function loopArc(a: Placed, b: Placed, anchorOf: (p: Placed) => number, vertical: boolean): { d: string; apex: { x: number; y: number } } {
+  // The cubic's control points stand 4/3 of the rise out: its midpoint
+  // (the apex) then sits the full rise out.
+  if (!vertical) {
+    const x1 = a.x + a.w / 2;
+    const x2 = b.x + b.w / 2;
+    const y1 = a.y;
+    const y2 = b.y - 2;
+    const h = loopRise(x2 - x1);
+    const cy = Math.min(a.y, b.y) - (h * 4) / 3;
+    return {
+      d: `M ${x1} ${y1} C ${x1} ${cy}, ${x2} ${cy}, ${x2} ${y2}`,
+      apex: { x: (x1 + x2) / 2, y: 0.125 * y1 + 0.75 * cy + 0.125 * y2 },
+    };
+  }
+  const x1 = a.x + a.w;
+  const x2 = b.x + b.w + 2;
+  const y1 = a.y + anchorOf(a);
+  const y2 = b.y + anchorOf(b);
+  const h = loopRise(y2 - y1);
+  const cx = Math.max(x1, x2) + (h * 4) / 3;
+  return {
+    d: `M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}`,
+    apex: { x: 0.125 * x1 + 0.75 * cx + 0.125 * x2, y: (y1 + y2) / 2 },
+  };
 }
 
 /** Where a box dragged along the line lands: the index it takes among the

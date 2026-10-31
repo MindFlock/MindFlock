@@ -9,7 +9,7 @@ import { kindName } from "../components/flights/StopParts";
 
 /** The shelf's default blocks, after the Session chip, in this order. `you`
  * is shown as Perch. */
-export const DEFAULT_KINDS = ["agent", "you", "ship", "verify", "wait"] as const;
+export const DEFAULT_KINDS = ["agent", "you", "ship", "verify", "wait", "loop"] as const;
 
 /** The default blocks the server lists, in DEFAULT_KINDS order (a kind the
  * server does not list is skipped). */

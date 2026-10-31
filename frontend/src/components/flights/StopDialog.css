@@ -252,3 +252,24 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Round 16: a Loop's "Repeat from" — a chip per stop before it, a group's
+   sub-steps in a row under the group's name. */
+.fl-stops-before {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fl-stops-before-group {
+  padding-left: 10px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.fl-stops-before-name {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+}

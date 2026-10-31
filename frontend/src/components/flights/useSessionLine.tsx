@@ -619,6 +619,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         key={open.id}
         node={open}
         def={def}
+        lineSteps={flight?.steps}
         busy={busy}
         note={[why, open.reason || rec?.note || ""].filter(Boolean).join(" ")}
         onClose={close}
