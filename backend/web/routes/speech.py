@@ -11,7 +11,10 @@ only say which engine the PHONE prefers, they no longer gate these routes.
 Pages record ``audio/wav`` (the one format every backend, the built-in
 recognizer included, accepts). Only the owner clears a saved key. The engine
 calls run in a worker thread (``asyncio.to_thread``) — a local model, a
-PowerShell round trip or a slow host never stalls the event loop.
+PowerShell round trip or a slow host never stalls the event loop; the
+recognition calls (a clip, a wake check, a stream's chunk and end) on a
+pool of their own (:data:`STT_THREADS`), so a model that stays busy can
+never take the threads the rest of the server runs on.
 
 Status codes, in the order they are checked:
 
@@ -38,7 +41,11 @@ Status codes, in the order they are checked:
 * ``stream`` (open) — 409 no recognition backend is ready, the ready one
   does not stream (only ``local`` does: the client sends one clip per phrase
   instead), or :data:`speech_stream.MAX_STREAMS` are open; 200
-  ``{"id", "ready": true, "hints": chars}``. The new stream's accurate pass
+  ``{"id", "ready": true, "hints": chars}``. A client opening more than
+  :data:`speech_stream.CLIENT_STREAMS` replaces its own oldest stream
+  rather than counting against the cap: the client is ``{"client": id}``
+  when the page sends one (a page that may hold two voice streams at once
+  should), else its address and user agent (:func:`_client_key`). The new stream's accurate pass
   is biased towards the voice words, the live session titles and the
   MindFlock vocabulary (:func:`core.speech.recognition_hints`, built here
   per open so a new session's title is heard right away); its fast tier
@@ -60,9 +67,11 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import re
 import time
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -90,6 +99,32 @@ MAX_SPEAK_CHARS = 1200
 _WAV_TYPES = frozenset({"audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave"})
 #: ``?lang=`` as a BCP-47-ish tag (``en``, ``pt-BR``); anything else is dropped.
 _LANG = re.compile(r"^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})?$")
+#: The recognition calls' own threads (see the module doc). Every wait in
+#: them is bounded (``speech_stream.LANE_WAIT_S``), so a full pool drains.
+STT_THREADS = 8
+_STT_POOL: Optional[ThreadPoolExecutor] = None
+
+
+async def _stt(fn, *args):
+    """``fn(*args)`` on the recognition pool (made on first use)."""
+    global _STT_POOL
+    if _STT_POOL is None:
+        _STT_POOL = ThreadPoolExecutor(STT_THREADS, thread_name_prefix="voice-stt")
+    return await asyncio.get_running_loop().run_in_executor(
+        _STT_POOL, lambda: fn(*args)
+    )
+
+
+def _client_key(request: Request, body: dict) -> str:
+    """Who opens a stream (``speech_stream.open_stream``'s ``client``): the
+    page's own ``client`` id when it sends one (≤ 64 chars), else a digest
+    of its address and user agent."""
+    own = body.get("client")
+    if isinstance(own, str) and own.strip():
+        return "id:" + own.strip()[:64]
+    host = request.client.host if request.client else ""
+    agent = request.headers.get("user-agent", "")
+    return "ua:" + hashlib.sha256(("%s|%s" % (host, agent)).encode()).hexdigest()[:16]
 
 
 def _settings():
@@ -345,7 +380,7 @@ async def voice_transcribe(
     audio, mime, backend = got
     started = time.monotonic()
     try:
-        text = await asyncio.to_thread(
+        text = await _stt(
             backend.transcribe, audio, mime, _lang_hint(lang), _words_hint(hint)
         )
     except Exception as err:  # noqa: BLE001 — every failure is the backend's
@@ -420,7 +455,7 @@ async def voice_wake(request: Request, lang: str = "") -> JSONResponse:
     word = _wake_word()
     started = time.monotonic()
     try:
-        text = await asyncio.to_thread(
+        text = await _stt(
             backend.wake_transcribe, audio, mime, _lang_hint(lang), _wake.hint(word)
         )
     except Exception as err:  # noqa: BLE001
@@ -437,9 +472,10 @@ async def voice_wake(request: Request, lang: str = "") -> JSONResponse:
 
 
 @router.post("/api/voice/stream")
-def voice_stream_open(payload: Optional[dict] = None) -> JSONResponse:
+def voice_stream_open(request: Request, payload: Optional[dict] = None) -> JSONResponse:
     """Open a streaming recognition (``core.speech_stream``):
-    ``{"lang": "en-US"}`` → ``{"id", "ready": true, "hints": n}`` (``n``
+    ``{"lang": "en-US", "client": optional page id}`` → ``{"id", "ready":
+    true, "hints": n}`` (``n``
     characters of vocabulary hints the accurate pass is biased towards: the
     voice words, the live session titles, the MindFlock vocabulary — see
     :func:`_hints`). Only a backend that streams (``local``) can; ``GET
@@ -462,7 +498,9 @@ def voice_stream_open(payload: Optional[dict] = None) -> JSONResponse:
         )
     hints = _hints()
     sid = _stream.open_stream(
-        backend.stream_transcriber(lang), backend.final_transcriber(lang, hints)
+        backend.stream_transcriber(lang),
+        backend.final_transcriber(lang, hints),
+        client=_client_key(request, body),
     )
     if sid is None:
         return JSONResponse(
@@ -507,7 +545,7 @@ async def voice_stream_chunk(sid: str, request: Request) -> JSONResponse:
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=415)
     try:
-        committed, partial = await asyncio.to_thread(stream.feed, samples)
+        committed, partial = await _stt(stream.feed, samples)
     except Exception as err:  # noqa: BLE001 — every failure is the backend's
         return _failed(err)
     return JSONResponse(
@@ -537,7 +575,7 @@ async def voice_stream_end(sid: str) -> JSONResponse:
     if stream is None:
         return _no_stream()
     try:
-        body = await asyncio.to_thread(stream.finish)
+        body = await _stt(stream.finish)
     except Exception as err:  # noqa: BLE001
         return _failed(err)
     return JSONResponse(body)

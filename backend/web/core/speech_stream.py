@@ -12,11 +12,14 @@ committed words — a terminal cannot be corrected — so a committed word is
 never revisited: the next pass drops what it re-hears of them (by timestamp,
 then by matching up to five trailing committed words).
 
-Bounded work, because a pass's cost grows with the audio it decodes: once
-the window holds more than :data:`PRUNE_SECONDS`, the audio before the last
-committed word's end (less :data:`MARGIN_SECONDS`) is dropped — never audio
-under an uncommitted word. A window with no words in it at all keeps only
-its last second. And a pass never decodes more than :data:`WINDOW_SECONDS`:
+Bounded work, because a pass's cost grows with the audio it decodes: a
+pass hears only the uncommitted tail plus about :data:`REHEAR_SECONDS` of
+the committed words before it (whole words: the cut is at a committed
+word's end), so the committed text is decoded again only as context — once
+the window holds more than :data:`PRUNE_SECONDS`, the audio before that is
+dropped, and never audio under an uncommitted word (less
+:data:`MARGIN_SECONDS`). A window with no words in it at all keeps only its
+last second. And a pass never decodes more than :data:`WINDOW_SECONDS`:
 the one forced commit is at that edge — before a pass, the tail words that
 start before the last :data:`WINDOW_SECONDS` of audio (a tail that never
 settled) are committed as they leave, and the audio before the edge goes.
@@ -29,7 +32,9 @@ Silence also hears nothing: whisper fills a quiet stretch after the speech
 with a word ("Never.", "for.", or one of the hint words), so a word a pass
 places more than :data:`SILENCE_SLACK` after the last loud 100 ms frame is
 dropped — an audible word starts with a loud frame, so the last one is at
-or after every real word's start.
+or after every real word's start. Nor does the edge of the audio: whisper
+may end a pass by repeating the word before as a sliver ("that that.");
+a pass's last word that does is dropped (:data:`ECHO_SECONDS`).
 
 Two tiers. The passes above run the FAST model (``base.en``): they are what
 the client types as the person speaks. A stream opened with an
@@ -77,8 +82,10 @@ and returns ``[(word, start_s, end_s)]`` relative to the start of the
 samples. No numpy here — the server process does not have it unless the
 local models are installed.
 
-The registry (:func:`open_stream` …) holds at most :data:`MAX_STREAMS`;
-one expires :data:`EXPIRE_SECONDS` after its last chunk, swept on every
+The registry (:func:`open_stream` …) holds at most :data:`MAX_STREAMS`,
+and at most :data:`CLIENT_STREAMS` of one client (opening past that
+replaces that client's oldest); one expires :data:`EXPIRE_SECONDS` after
+its last chunk, swept on every
 registry call and by one daemon timer armed while any stream is open (no
 thread per stream). Tests replace :func:`_now` (the clock).
 """
@@ -97,6 +104,7 @@ from array import array
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 __all__ = [
+    "CLIENT_STREAMS",
     "CLIP",
     "EARLY_QUIET_SECONDS",
     "EXPIRE_SECONDS",
@@ -131,8 +139,15 @@ _logger = logging.getLogger(__name__)
 #: The sample rate of everything a stream holds (Whisper's).
 RATE = 16000
 #: Prune the held audio once it is longer than this.
-PRUNE_SECONDS = 4.0
-#: Audio kept before the end of the last committed word when pruning.
+PRUNE_SECONDS = 1.5
+#: The committed audio a pass hears again before the uncommitted tail: the
+#: window is cut at the end of the last committed word that ends at least
+#: this long before the last one does. Context for the words at the seam;
+#: the re-heard words are dropped by time and by matching (``_pass``). It
+#: was "everything since 0.3 s before the last committed end, once over
+#: 4 s" — up to 4 s of committed audio decoded again every pass.
+REHEAR_SECONDS = 1.0
+#: Audio kept before an uncommitted word's start when pruning.
 MARGIN_SECONDS = 0.3
 #: A window with no words in it keeps only this much audio.
 SILENT_KEEP_SECONDS = 1.0
@@ -177,6 +192,17 @@ STATS_MIN = 3
 _FRAME = RATE // 10
 #: A word a pass starts this long after the last loud frame is invented.
 SILENCE_SLACK = 0.4
+#: Whisper's edge echo: at the end of the audio it heard, a pass may repeat
+#: the word before as a sliver — "that (0.98–1.24) that. (1.24–1.32)",
+#: "Work (1.92–2.32) work. (2.32–2.44)", "out. (1.40–1.52) out.
+#: (1.52–1.68)" (the bench, 3 of 48 phrases) — and the next pass often
+#: agrees. A pass's LAST word that repeats the one before it (in the pass,
+#: or the last committed word) and lasts at most this long, starting within
+#: :data:`_ECHO_GAP` of its end, is dropped (``_echo``). A real "no no" at
+#: the very end loses its second word only in the fast text, if both are
+#: that short; the accurate pass has it.
+ECHO_SECONDS = 0.2
+_ECHO_GAP = 0.1
 
 #: The quiet that must follow the last loud frame before the accurate pass
 #: starts early: longer than most pauses between words (so a breath
@@ -198,6 +224,11 @@ EXPECT_FLOOR_MS = 300
 
 #: Open streams per server (``POST /api/voice/stream`` refuses beyond).
 MAX_STREAMS = 4
+#: Open streams per client (:func:`open_stream`'s ``client``): the one it
+#: is about to end and the next phrase's, which the phone opens before the
+#: ``/end`` of the last ("carry"). A client opening past this replaces its
+#: own least recently fed stream instead of being refused.
+CLIENT_STREAMS = 2
 #: A stream is forgotten this long after its last chunk.
 EXPIRE_SECONDS = 60.0
 
@@ -219,6 +250,16 @@ def _norm(word: str) -> str:
 
 def _join(words: Sequence[Word]) -> str:
     return " ".join(w[0] for w in words)
+
+
+def _echo(before: Word, word: Word) -> bool:
+    """Whether ``word`` is whisper's edge echo of ``before`` (see
+    :data:`ECHO_SECONDS`): the same word, a sliver, right after it."""
+    return (
+        _norm(word[0]) == _norm(before[0])
+        and word[2] - word[1] <= ECHO_SECONDS
+        and word[1] - before[2] <= _ECHO_GAP
+    )
 
 
 def _quiet(samples: Sequence[float]) -> bool:
@@ -266,6 +307,17 @@ def same_text(a: str, b: str) -> bool:
 #: client waits on it to send), a one-shot clip or wake check, a fast pass.
 FINAL, CLIP, FAST = "final", "clip", "fast"
 _RANK = {FINAL: 0, CLIP: 1, FAST: 2}
+#: How long a job of each kind waits for its turn before it gives up
+#: (:class:`Skipped`, "the model stayed busy"): a feed holds its stream and
+#: a server thread while it waits, so no wait is unbounded. A fast pass
+#: that gives up leaves its audio unheard for the next one; nobody waits
+#: on an accurate pass past :data:`FINAL_TIMEOUT_S` after ``/end``; a clip
+#: or wake check is a request the client times out on anyway.
+LANE_WAIT_S = {FINAL: 4.0, CLIP: 15.0, FAST: 3.0}
+#: A job still running this long after it started is presumed stuck (a
+#: model call that never returns): the next waiter abandons it, as
+#: :meth:`Lane.cancel` does, so one hung call cannot hold a model forever.
+LANE_STUCK_S = 60.0
 
 
 class Skipped(Exception):
@@ -278,12 +330,13 @@ class Job:
     ``done``, or ``dropped`` (with ``why``) before it ran; ``abandoned``
     when its waiter gave up on it while it ran (:meth:`Lane.cancel`)."""
 
-    __slots__ = ("kind", "owner", "state", "why", "abandoned")
+    __slots__ = ("kind", "owner", "state", "why", "abandoned", "started")
 
     def __init__(self, kind: str, owner: object):
         self.kind, self.owner = kind, owner
         self.state, self.why = "queued", ""
         self.abandoned = False
+        self.started = 0.0  # time.monotonic() when it began to run
 
 
 _CURRENT = threading.local()
@@ -319,7 +372,10 @@ class Lane:
       long phrase blocked the next phrase's final for seconds), and the
       call stops at its next check of :func:`abandoned`, if it makes one.
       The abandoned call still uses the cores until then — the price of
-      not waiting for it."""
+      not waiting for it;
+    * no wait is unbounded: a job gives up after :data:`LANE_WAIT_S` of its
+      kind (withdrawn, :class:`Skipped`), and a running job older than
+      :data:`LANE_STUCK_S` is abandoned by the next waiter."""
 
     def __init__(self, name: str):
         self.name = name
@@ -360,18 +416,34 @@ class Lane:
             self._cond.notify_all()
         return job
 
-    def run_job(self, job: Job, fn: Callable[[], object]) -> object:
-        """Wait for ``job``'s turn, then ``fn()`` in this thread → its
-        result. :class:`Skipped` when the job was dropped before it ran."""
+    def run_job(
+        self, job: Job, fn: Callable[[], object], wait: Optional[float] = None
+    ) -> object:
+        """Wait for ``job``'s turn — at most ``wait`` seconds (default
+        :data:`LANE_WAIT_S` of its kind) — then ``fn()`` in this thread →
+        its result. :class:`Skipped` when the job was dropped before it ran
+        or its wait ran out (it is withdrawn then)."""
+        limit = LANE_WAIT_S.get(job.kind, LANE_WAIT_S[FAST]) if wait is None else wait
+        deadline = time.monotonic() + max(0.0, limit)
         with self._cond:
             while job.state == "queued" and not (
                 self._running is None and self._queue and self._queue[0] is job
             ):
-                self._cond.wait()
+                now = time.monotonic()
+                self._unstick(now)
+                if now >= deadline:
+                    self._drop(job, "waited %.1fs: the model stayed busy" % limit)
+                    self._cond.notify_all()
+                    break
+                left = deadline - now
+                if self._running is not None:
+                    left = min(left, self._running.started + LANE_STUCK_S - now)
+                self._cond.wait(max(0.01, left))
             if job.state != "queued":
                 raise Skipped(job.why)
             self._queue.pop(0)
             job.state = "running"
+            job.started = time.monotonic()
             self._running = job
         outer = getattr(_CURRENT, "job", None)
         _CURRENT.job = job
@@ -404,6 +476,22 @@ class Lane:
             self._drop(job, why)
             self._cond.notify_all()
             return True
+
+    def _unstick(self, now: float) -> None:
+        """Abandon the running job when it has run :data:`LANE_STUCK_S`
+        (under the condition)."""
+        job = self._running
+        if job is None or now - job.started < LANE_STUCK_S:
+            return
+        _logger.warning(
+            "voice lane %s: a %s job has run %.0fs; abandoned so the model is free",
+            self.name,
+            job.kind,
+            now - job.started,
+        )
+        job.abandoned, job.why = True, "ran over %.0fs" % LANE_STUCK_S
+        self._running = None
+        self._cond.notify_all()
 
     def _drop(self, job: Job, why: str) -> None:
         if job in self._queue:
@@ -465,6 +553,8 @@ class Stream:
         #: Seconds of audio the last feed's pass decoded (0 when it ran none).
         self.last_window_s = 0.0
         self.touched = _now()
+        #: Who opened it (:func:`open_stream`), ``""`` when unknown.
+        self.client = ""
 
     @property
     def busy(self) -> bool:
@@ -735,6 +825,8 @@ class Stream:
                 hyp.append(
                     (text, float(start) + self._offset, float(end) + self._offset)
                 )
+        if len(hyp) >= 2 and _echo(hyp[-2], hyp[-1]):
+            hyp.pop()
         if not self._committed:
             return hyp
         last_end = self._committed[-1][2]
@@ -746,6 +838,8 @@ class Stream:
                 if said == [_norm(w[0]) for w in hyp[:k]]:
                     hyp = hyp[k:]
                     break
+        if len(hyp) == 1 and _echo(self._committed[-1], hyp[0]):
+            hyp = []
         return hyp
 
     def _pay(self, new: List[Word]) -> str:
@@ -778,10 +872,13 @@ class Stream:
 
     def _cut(self) -> None:
         end = self._offset + self.held_seconds
+        cut = self._offset
         if self._committed:
-            cut = self._committed[-1][2] - MARGIN_SECONDS
-        else:
-            cut = self._offset
+            keep_from = self._committed[-1][2] - REHEAR_SECONDS
+            for word in reversed(self._committed):
+                if word[2] <= keep_from:
+                    cut = word[2]
+                    break
         if self._tail:
             cut = min(cut, self._tail[0][1] - MARGIN_SECONDS)
         else:
@@ -918,16 +1015,31 @@ def sweep(now: Optional[float] = None) -> List[str]:
 
 
 def open_stream(
-    transcribe: Transcribe, accurate: Optional[Accurate] = None
+    transcribe: Transcribe, accurate: Optional[Accurate] = None, client: str = ""
 ) -> Optional[str]:
     """A new stream's opaque id, or ``None`` at :data:`MAX_STREAMS`;
-    ``accurate`` adds the accurate pass at its end (see the module doc)."""
+    ``accurate`` adds the accurate pass at its end (see the module doc).
+
+    ``client`` names who opens it (one page: ``routes/speech.py`` derives
+    it). A client never needs more than :data:`CLIENT_STREAMS` at once, so
+    one opening past that has left one behind (a carried stream its page
+    dropped, a reload): its least recently fed streams are closed to make
+    room — never another client's, and never one mid-pass while an idle
+    one is there to go first."""
     with _REG_LOCK:
         sweep()
+        if client:
+            mine = [(sid, st) for sid, st in _STREAMS.items() if st.client == client]
+            mine.sort(key=lambda item: (item[1].busy, item[1].touched))
+            while len(mine) >= CLIENT_STREAMS:
+                old, _st = mine.pop(0)
+                _STREAMS.pop(old, None)
+                _logger.info("voice stream: a newer stream of its client replaced one")
         if len(_STREAMS) >= MAX_STREAMS:
             return None
         sid = secrets.token_urlsafe(18)
-        _STREAMS[sid] = Stream(transcribe, accurate)
+        stream = _STREAMS[sid] = Stream(transcribe, accurate)
+        stream.client = client
         _arm_timer()
         return sid
 

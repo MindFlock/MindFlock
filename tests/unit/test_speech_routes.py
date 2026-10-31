@@ -738,8 +738,8 @@ def _words(text, step=0.2):
     return [(w, i * step, i * step + 0.15) for i, w in enumerate(text.split())]
 
 
-def _open(lang="en-US"):
-    return client.post("/api/voice/stream", json={"lang": lang})
+def _open(lang="en-US", **extra):
+    return client.post("/api/voice/stream", json={"lang": lang, **extra})
 
 
 def _chunk(sid, body=None, ctype="audio/wav"):
@@ -991,12 +991,42 @@ class TestStream:
         assert [c for c in streaming.calls if c[0] == "pass"] == []
 
     def test_at_most_four_streams(self, streaming):
-        ids = [_open().json()["id"] for _ in range(speech_stream.MAX_STREAMS)]
-        r = _open()
+        ids = [
+            _open(client="page%d" % i).json()["id"]
+            for i in range(speech_stream.MAX_STREAMS)
+        ]
+        r = _open(client="another")
         assert r.status_code == 409
         assert r.json()["error"] == "4 voice streams are already open: end one first"
         client.delete("/api/voice/stream/" + ids[0])
-        assert _open().status_code == 200
+        assert _open(client="another").status_code == 200
+
+    def test_a_client_replacing_its_stream_is_never_refused(self, streaming):
+        """The phone opens the next phrase's stream before the last one's
+        /end ("carry"): a client past two streams replaces its own oldest,
+        even when the server is full."""
+        others = [_open(client="page%d" % i).json()["id"] for i in range(2)]
+        a = _open(client="phone").json()["id"]
+        b = _open(client="phone").json()["id"]  # carried: a is still live
+        streaming.passes += [[], []]
+        assert _chunk(a).status_code == 200
+        c = _open(client="phone")  # b was left behind: the least recently fed goes
+        assert c.status_code == 200
+        assert _chunk(b).status_code == 404
+        assert _chunk(a).status_code == 200
+        assert set(speech_stream._STREAMS) == set(others) | {a, c.json()["id"]}
+
+    def test_without_an_id_the_client_is_its_address_and_agent(self, streaming):
+        a = _open().json()["id"]
+        b = _open().json()["id"]
+        c = _open().json()["id"]
+        assert set(speech_stream._STREAMS) == {b, c}
+        assert a not in speech_stream._STREAMS
+        other = client.post(
+            "/api/voice/stream", json={}, headers={"User-Agent": "another page"}
+        )
+        assert other.status_code == 200
+        assert len(speech_stream._STREAMS) == 3
 
     def test_a_stream_expires_a_minute_after_its_last_chunk(
         self, streaming, monkeypatch

@@ -627,6 +627,21 @@ def _hotwords_supported(model) -> bool:
 
 
 _HOTWORDS: Dict[type, bool] = {}
+_TAKES: Dict[Tuple[type, str], bool] = {}
+
+
+def _takes(model, name: str) -> bool:
+    """Whether this faster-whisper's ``transcribe`` takes ``name=`` (looked
+    up once per model class; an unreadable signature reads as no)."""
+    key = (type(model), name)
+    cached = _TAKES.get(key)
+    if cached is None:
+        try:
+            cached = name in inspect.signature(type(model).transcribe).parameters
+        except (TypeError, ValueError):
+            cached = False
+        _TAKES[key] = cached
+    return cached
 
 
 def _bias(model, hints: str, prompt: str, hotwords: bool = True) -> dict:
@@ -1039,6 +1054,106 @@ def _shim_av_open() -> None:
     target.open = open_
 
 
+#: The encoder input a streaming pass pads its window to, in seconds (its
+#: audio is never cut: a longer window pads to itself plus
+#: :data:`_PAD_TAIL_FRAMES`). faster-whisper always pads to Whisper's 30 s,
+#: and that encoder pass was ~60% of a fast pass (241 of 360 ms on 4
+#: threads) whatever the window held. Measured on the 48 bench clips: base.en
+#: 30 s → 10 s keeps the WER (15.2% → 14.8%) and the word times (within
+#: 20 ms) and takes a pass from 374 to 155 ms; at 6 s it starts inventing
+#: words. Whisper windows are at most :data:`speech_stream.WINDOW_SECONDS`.
+STREAM_PAD_SECONDS = 10.0
+#: The same for the accurate pass over a whole phrase — 0: Whisper's own
+#: 30 s. Its text is the one sent, and with the vocabulary as ``hotwords``
+#: a shorter input costs words: small on the 48 clips, WER 4.8% at 30 s,
+#: 5.9% at 20 s (644 vs 1150 ms p50), 8.5% at 10 s — where a low-confidence
+#: lone word also set off faster-whisper's temperature fallback for 28 s.
+FINAL_PAD_SECONDS = 0.0
+#: A fast pass decodes greedily, once: faster-whisper's temperature
+#: fallback (5 samples at each of 5 temperatures) takes seconds — never
+#: worth it to a pass the next chunk replaces — and its tokens are capped
+#: at this many plus :data:`STREAM_TOKENS_PER_S` per second of window (a
+#: fast speaker says ~6 a second), so a decoder caught in a loop stops.
+STREAM_TOKENS = 20
+STREAM_TOKENS_PER_S = 15
+#: The quiet a window longer than its pad still gets after its audio.
+_PAD_TAIL_FRAMES = 200
+#: Whisper's own input: 3000 mel frames (30 s).
+_FULL_FRAMES = 3000
+_PAD = threading.local()
+#: ``off``: a short encoder input failed once (an engine that wants 3000
+#: frames), so every pass pads to 30 s again; ``ok``: one succeeded.
+_PAD_STATE: Dict[str, bool] = {"ok": False, "off": False}
+
+
+def _pad_frames(content: int) -> int:
+    """The frames a pass under :func:`_padded` pads ``content`` mel frames
+    to: its pad, or the content plus a little quiet when that is more, in
+    whole seconds, at most Whisper's 3000."""
+    want = int(getattr(_PAD, "frames", 0) or 0)
+    if not want:
+        return _FULL_FRAMES
+    need = max(want, content + _PAD_TAIL_FRAMES)
+    need = -(-need // 100) * 100
+    return min(_FULL_FRAMES, need)
+
+
+def _hook_pad() -> bool:
+    """Wrap faster-whisper's ``pad_or_trim`` (in its ``transcribe`` module)
+    ONCE so a pass run under :func:`_padded` pads to :func:`_pad_frames`
+    instead of 3000; every other call (the one-shot clip, a thread with no
+    pad set) is untouched. ``False`` when this faster-whisper has no such
+    hook (the passes then pad to 30 s, as before)."""
+    try:
+        mod = _import("faster_whisper.transcribe")
+    except Exception:  # noqa: BLE001 — no faster-whisper: nothing to hook
+        return False
+    orig = getattr(mod, "pad_or_trim", None)
+    if orig is None:
+        return False
+    if getattr(orig, "_mf_pad", False):
+        return True
+
+    def pad_or_trim(array, length: int = _FULL_FRAMES, *, axis: int = -1):
+        if length == _FULL_FRAMES and getattr(_PAD, "frames", 0):
+            length = _pad_frames(int(array.shape[axis]))
+        return orig(array, length, axis=axis)
+
+    pad_or_trim._mf_pad = True  # type: ignore[attr-defined]
+    mod.pad_or_trim = pad_or_trim
+    return True
+
+
+def _padded(seconds: float, decode: Callable[[], object]) -> object:
+    """``decode()`` (a whole faster-whisper call, segments read) with the
+    encoder input padded to ``seconds`` rather than 30 (see
+    :data:`STREAM_PAD_SECONDS`). Should the very first such call fail — an
+    engine that refuses a short input — short padding is switched off for
+    good (logged) and the call runs again at 30 s; after one success an
+    error is the call's own and propagates."""
+    if _PAD_STATE["off"] or seconds <= 0 or not _hook_pad():
+        return decode()
+    _PAD.frames = int(seconds * 100)
+    try:
+        out = decode()
+    except Exception as err:  # noqa: BLE001 — retried at full length below
+        if _PAD_STATE["ok"]:
+            raise
+        _PAD.frames = 0
+        out = decode()  # fails too: the error was the call's own, raised
+        _PAD_STATE["off"] = True
+        _logger.warning(
+            "faster-whisper refused a %gs encoder input (%s); padding to 30 s",
+            seconds,
+            err,
+        )
+        return out
+    finally:
+        _PAD.frames = 0
+    _PAD_STATE["ok"] = True
+    return out
+
+
 def whisper_threads(role: str, cores: Optional[int] = None) -> int:
     """The CPU threads a whisper model decodes with (CTranslate2's
     ``cpu_threads``, fixed when it loads), for ``role`` ``fast`` (the live
@@ -1055,7 +1170,15 @@ def whisper_threads(role: str, cores: Optional[int] = None) -> int:
     is most of its time and scales with threads, and it is the pass a
     client waits on after "over" — and it rarely shares the cores, as no
     fast pass runs once a phrase's accurate pass has started. 8 cores → 2
-    and 6; 4 → 1 and 3; 16 → 4 and 8."""
+    and 6; 4 → 1 and 3; 16 → 4 and 8.
+
+    Two threads cost the fast tier ~170 ms a pass while it padded to 30 s
+    (the encoder was most of it: 566 vs 422 ms at 2 vs 4 threads on a
+    1.5 s window); padded to :data:`STREAM_PAD_SECONDS` the encoder is
+    small and the greedy decoder is the rest, so the thread count no longer
+    shows (189 vs 199 ms; 4 s windows 252 vs 243 ms, interleaved, load ~5)
+    and a second, 4-thread copy of the model for when no final runs would
+    buy nothing for its memory."""
     n = cores or os.cpu_count() or 4
     fast = max(1, min(4, n // 4))
     if role == "fast":
@@ -1223,7 +1346,15 @@ class LocalSTT(Backend):
             # A copy: the stream trims its buffer later, which a view would block.
             samples = np.frombuffer(bytes(audio), dtype=np.float32)
             kw = _bias(model, hints, prompt, hotwords=False)
-            try:
+            if _takes(model, "temperature"):
+                kw["temperature"] = 0.0
+            if _takes(model, "max_new_tokens"):
+                seconds = len(samples) / 16000.0
+                kw["max_new_tokens"] = int(
+                    STREAM_TOKENS + STREAM_TOKENS_PER_S * seconds
+                )
+
+            def decode() -> List[Tuple[str, float, float]]:
                 segments, _info = model.transcribe(
                     samples,
                     language=language,
@@ -1241,6 +1372,9 @@ class LocalSTT(Backend):
                     for seg in segments
                     for w in (getattr(seg, "words", None) or ())
                 ]
+
+            try:
+                return _padded(STREAM_PAD_SECONDS, decode)  # type: ignore[return-value]
             except Exception as err:  # noqa: BLE001
                 raise SpeechError("faster-whisper failed: %s" % err) from err
 
@@ -1268,7 +1402,8 @@ class LocalSTT(Backend):
             np = _import("numpy")
             samples = np.frombuffer(bytes(audio), dtype=np.float32)
             kw = _bias(model, hints, "")
-            try:
+
+            def decode() -> List[str]:
                 segments, _info = model.transcribe(
                     samples,
                     language=language,
@@ -1282,9 +1417,13 @@ class LocalSTT(Backend):
                     parts.append(str(getattr(seg, "text", "") or "").strip())
                     if _stream.abandoned():  # its finish gave up: stop here
                         break
+                return parts
+
+            try:
+                parts = _padded(FINAL_PAD_SECONDS, decode)
             except Exception as err:  # noqa: BLE001
                 raise SpeechError("faster-whisper failed: %s" % err) from err
-            return " ".join(p for p in parts if p).strip()
+            return " ".join(p for p in parts if p).strip()  # type: ignore[union-attr]
 
         run.lane = "whisper:" + name  # type: ignore[attr-defined]
         return run
