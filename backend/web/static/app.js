@@ -24293,6 +24293,25 @@ function fieldOptions(f) {
 		label: String(o.label || o.value)
 	});
 }
+function stopsBefore(steps, step) {
+	const list = steps || [];
+	const at = list.findIndex((s) => s.id === step.id);
+	const before = at >= 0 ? list.slice(0, at) : list.slice();
+	const g = step.group?.name;
+	const out = [{
+		value: "",
+		label: g ? "the first stop of " + g : "the first stop"
+	}];
+	for (const s of before) {
+		const c = {
+			value: s.id,
+			label: (s.title || "").trim() || s.kind
+		};
+		if (s.group?.name) c.group = s.group.name;
+		out.push(c);
+	}
+	return out;
+}
 var STOP_MIME = "application/x-mindflock-stop";
 function newStep(def, taken) {
 	const config = {};
@@ -36512,6 +36531,7 @@ function StopIcon({ kind, size = 15 }) {
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M8.4 10h7.2M12 6.4c1.6 1.8 1.6 5.4 0 7.2M12 6.4c-1.6 1.8-1.6 5.4 0 7.2" })
 			] }),
+			loop: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M19.5 12a7.5 7.5 0 1 1-2.2-5.3" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("polyline", { points: "18.5 3 18.5 7.2 14.3 7.2" })] }),
 			screenshot: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M4 8.5h3l1.6-2.5h6.8L17 8.5h3a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 20 19.5H4A1.5 1.5 0 0 1 2.5 18v-8A1.5 1.5 0 0 1 4 8.5z" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
 				cx: "12",
 				cy: "13.5",
@@ -79278,9 +79298,76 @@ function stopSummary(step) {
 			const n = lines > 1 ? lines : Math.max(1, num(c.count, 1));
 			return n + (n === 1 ? " worker" : " workers") + " in parallel";
 		}
+		case "loop": {
+			const times = Math.max(0, num(c.times, 3));
+			const until = String(c.until ?? "").trim();
+			const every = Math.max(0, num(c.every_minutes, 0));
+			const parts = [times > 0 ? times + (times === 1 ? " run" : " runs") : until ? "" : "until stopped"];
+			if (until) parts.push("until " + clip(until, 22));
+			if (every) parts.push("every " + minutesWord(every));
+			if (c.fresh) parts.push("fresh context");
+			return parts.filter(Boolean).join(" · ");
+		}
 		case "join": return (c.of === "spawned" ? "waits for its split's workers" : "waits for every worker") + (c.on_failed === "continue" ? " · goes on past a failure" : "");
 		default: return step.kind;
 	}
+}
+function minutesWord(m) {
+	const n = Math.round(m);
+	if (n >= 1440 && n % 1440 === 0) return n / 1440 + " d";
+	if (n < 60) return n + " min";
+	return Math.floor(n / 60) + " h" + (n % 60 ? " " + n % 60 + " min" : "");
+}
+function loopMark(step, rec) {
+	const times = Math.max(0, Math.floor(num(step.config?.times, 3)));
+	const runs = Math.max(0, Math.floor(num(rec?.detail?.runs, 0)));
+	const st = rec?.state;
+	return {
+		runs,
+		times,
+		state: st === "done" || st === "skipped" ? "done" : st === "running" || st === "waiting_you" || runs > 0 ? "running" : "pending"
+	};
+}
+function loopPill(m) {
+	if (m.state === "pending" && m.runs === 0) return "";
+	return Math.max(1, m.runs + 1) + " / " + (m.times > 0 ? m.times : "∞");
+}
+function loopPillTitle(m) {
+	const run = Math.max(1, m.runs + 1);
+	return (m.state === "done" ? "Looped: run " : "Run ") + run + (m.times > 0 ? " of " + m.times : " — it loops until stopped");
+}
+function loopLine(step, rec) {
+	const m = loopMark(step, rec);
+	const run = Math.max(1, m.runs + 1);
+	const until = String(step.config?.until ?? "").trim();
+	const counter = m.times > 0 ? "run " + run + " of " + m.times : "run " + run + (until ? " — until " + clip(until, 22) : "");
+	const note = String(rec?.note ?? "").replace(/\s+/g, " ").trim();
+	if (!note) return counter;
+	if (/usage limit|the limit/i.test(note)) return "waiting on the limit";
+	const next = /^next run in\s+(.+)$/i.exec(note);
+	if (next) return counter + " · next in " + next[1];
+	if (/^run \d/i.test(note)) return clip(note, 40);
+	return counter + " · " + clip(note, 28);
+}
+function loopEdges(line) {
+	const stops = line.filter((n) => n.row === "main" && n.kind === "stop" && n.step);
+	const out = [];
+	stops.forEach((n, i) => {
+		const s = n.step;
+		if (s.kind !== "loop") return;
+		const before = stops.slice(0, i);
+		const back = String(s.config?.back_to ?? "").trim();
+		const gid = s.group?.id;
+		const target = back ? before.find((b) => b.step.id === back) : gid ? before.find((b) => b.step.group?.id === gid) : before[0];
+		if (!target) return;
+		out.push({
+			from: n.id,
+			to: target.id,
+			kind: "loop",
+			loop: n.loop || loopMark(s)
+		});
+	});
+	return out;
 }
 function stopTitle(step, kinds) {
 	return stepActor(step, kinds) === "you" ? perchLabel(step.title) : step.title;
@@ -79318,12 +79405,14 @@ function flywayDiagram(steps, kinds) {
 		step: s,
 		index: i,
 		editable: true,
-		...looksOf(s, kinds)
+		...looksOf(s, kinds),
+		...s.kind === "loop" ? { loop: loopMark(s) } : {}
 	}));
 	line.push(addNode("Add a stop"));
 	const nodes = [];
 	const edges = [];
 	chain(nodes, edges, line);
+	edges.push(...loopEdges(line));
 	return {
 		nodes,
 		edges,
@@ -79342,13 +79431,16 @@ function flightStops(f, kinds) {
 		if (atCursor && f.state === "halted") state = "halted";
 		else if (atCursor && f.state === "paused") state = "paused";
 		const rec = f.step_states?.[s.id];
+		const loop = s.kind === "loop" ? loopMark(s, rec) : void 0;
+		if (loop && state === "current" && live && i > f.cursor) state = "pending";
 		const flown = state === "done" || state === "skipped" || state === "failed";
+		const looping = !!loop && !flown && (loop.runs > 0 || atCursor && state !== "pending");
 		return {
 			id: stopId(s, i),
 			kind: "stop",
 			row: "main",
 			title: stopTitle(s, kinds),
-			sub: stopSummary(s),
+			sub: looping ? loopLine(s, rec) : stopSummary(s),
 			state,
 			icon: s.kind,
 			perch: stepActor(s, kinds) === "you",
@@ -79357,7 +79449,8 @@ function flightStops(f, kinds) {
 			editable: grounded || live && state === "pending" && i > f.cursor,
 			reason: state === "halted" || state === "failed" ? f.reason || rec?.note || "" : "",
 			...looksOf(s, kinds),
-			...flown ? { receipt: receiptOf(rec?.detail) } : {}
+			...flown ? { receipt: receiptOf(rec?.detail) } : {},
+			...loop ? { loop } : {}
 		};
 	});
 }
@@ -79380,6 +79473,7 @@ function flightDiagram(f, kinds) {
 	const nodes = [];
 	const edges = [];
 	chain(nodes, edges, line);
+	edges.push(...loopEdges(line));
 	return {
 		nodes,
 		edges,
@@ -79592,6 +79686,7 @@ function sessionDiagram(rows, title, opts = {}) {
 			});
 		}
 	}
+	edges.push(...loopEdges(line));
 	const d = {
 		nodes,
 		edges,
@@ -79665,15 +79760,10 @@ function foldRun(d, run, into) {
 		const key = from + ">" + dest + ">" + e.kind;
 		if (seen.has(key)) continue;
 		seen.add(key);
-		edges.push(e.done ? {
+		edges.push({
+			...e,
 			from,
-			to: dest,
-			kind: e.kind,
-			done: true
-		} : {
-			from,
-			to: dest,
-			kind: e.kind
+			to: dest
 		});
 	}
 	return {
@@ -80355,6 +80445,18 @@ function layoutDiagram(d, opts = {}) {
 		if (!a || !b) continue;
 		const kind = e.kind === "branch" && b.node.branch ? "fan" : e.kind;
 		let path = "";
+		if (kind === "loop") {
+			const arc = loopArc(a, b, anchorOf, !!opts.vertical);
+			wires.push({
+				from: e.from,
+				to: e.to,
+				kind,
+				d: arc.d,
+				apex: arc.apex,
+				...e.loop ? { loop: e.loop } : {}
+			});
+			continue;
+		}
 		if (opts.vertical && kind === "fan") path = `M ${a.x + m.indent / 2} ${a.y + a.h} V ${b.y + anchorOf(b)} H ${b.x}`;
 		else if (opts.vertical && kind === "join") {
 			const rx = Math.max(a.x + a.w, b.x + b.w) + 8;
@@ -80400,12 +80502,51 @@ function layoutDiagram(d, opts = {}) {
 			d: path
 		});
 	}
+	const arcs = wires.filter((w) => w.apex);
+	const width = Math.max(0, ...boxes.map((p) => p.x + p.w), ...arcs.map((w) => w.apex.x + LOOP_PILL_ROOM));
+	const height = Math.max(0, ...boxes.map((p) => p.y + p.h));
+	const rise = Math.max(0, ...arcs.map((w) => LOOP_PILL_ROOM - w.apex.y));
 	return {
 		boxes,
 		wires,
-		width: Math.max(0, ...boxes.map((p) => p.x + p.w)),
-		height: Math.max(0, ...boxes.map((p) => p.y + p.h)),
-		gap: m.gap
+		width,
+		height,
+		gap: m.gap,
+		rise: arcs.length ? rise : 0
+	};
+}
+var LOOP_PILL_ROOM = 14;
+function loopRise(span) {
+	return Math.round(Math.min(84, Math.max(30, 18 + Math.abs(span) * .16)));
+}
+function loopArc(a, b, anchorOf, vertical) {
+	if (!vertical) {
+		const x1 = a.x + a.w / 2;
+		const x2 = b.x + b.w / 2;
+		const y1 = a.y;
+		const y2 = b.y - 2;
+		const h = loopRise(x2 - x1);
+		const cy = Math.min(a.y, b.y) - h * 4 / 3;
+		return {
+			d: `M ${x1} ${y1} C ${x1} ${cy}, ${x2} ${cy}, ${x2} ${y2}`,
+			apex: {
+				x: (x1 + x2) / 2,
+				y: .125 * y1 + .75 * cy + .125 * y2
+			}
+		};
+	}
+	const x1 = a.x + a.w;
+	const x2 = b.x + b.w + 2;
+	const y1 = a.y + anchorOf(a);
+	const y2 = b.y + anchorOf(b);
+	const h = loopRise(y2 - y1);
+	const cx = Math.max(x1, x2) + h * 4 / 3;
+	return {
+		d: `M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}`,
+		apex: {
+			x: .125 * x1 + .75 * cx + .125 * x2,
+			y: (y1 + y2) / 2
+		}
 	};
 }
 function dropIndex(otherCenters, at) {
@@ -81727,7 +81868,7 @@ function FlywayCanvas(p) {
 		return flown(n) && removable(n);
 	};
 	const pad = 6;
-	const top = p.bird || p.diagram.nodes.some((n) => tooled(n) || !!n.inGroup) ? 26 : pad;
+	const top = Math.max(p.bird || p.diagram.nodes.some((n) => tooled(n) || !!n.inGroup) ? 26 : pad, shown.rise ? Math.ceil(shown.rise) + pad : 0);
 	const stagePoint = (clientX, clientY) => {
 		const el = stageRef.current;
 		if (!el) return null;
@@ -82055,11 +82196,22 @@ function FlywayCanvas(p) {
 					}) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("g", {
 						transform: `translate(${pad} ${top})`,
 						children: shown.wires.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
-							className: "fl-wire fl-wire-" + w.kind + (w.done ? " fl-wire-done" : ""),
+							className: "fl-wire fl-wire-" + w.kind + (w.done ? " fl-wire-done" : "") + (w.kind === "loop" ? " fl-edge-loop fl-loop-" + (w.loop?.state || "pending") : ""),
 							d: w.d,
 							markerEnd: w.kind === "add" || w.kind === "fan" ? void 0 : `url(#${uid}-arrow)`
-						}, w.from + ">" + w.to))
+						}, w.from + ">" + w.to + (w.kind === "loop" ? ">loop" : "")))
 					})]
+				}),
+				shown.wires.map((w) => {
+					const text = w.kind === "loop" && w.apex && w.loop ? loopPill(w.loop) : "";
+					if (!text) return null;
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "fl-loop-pill fl-loop-" + w.loop.state,
+						style: { transform: `translate(${w.apex.x + pad}px, ${w.apex.y + top}px) translate(-50%, -50%) scale(calc(1 / var(--sky-z, 1)))` },
+						title: loopPillTitle(w.loop),
+						"aria-label": loopPillTitle(w.loop),
+						children: text
+					}, "loop:" + w.from);
 				}),
 				groupFrames(shown.boxes).map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "fl-group-frame",
@@ -83375,9 +83527,16 @@ function unitOf(f) {
 function cleanLabel(f) {
 	return f.label.replace(/\s*\((minutes|one per line)\)\s*$/i, "");
 }
-function StopField({ f, value, onChange, readOnly }) {
+function StopField({ f, value, onChange, readOnly, choices }) {
 	const v = value === void 0 ? f.default : value;
 	const label = cleanLabel(f);
+	if (f.type === "select" && f.dynamic === "stops_before") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopsBeforeField, {
+		label,
+		value: String(v ?? ""),
+		choices: choices || stopsBefore([], { id: "" }),
+		readOnly,
+		onChange
+	});
 	if (f.type === "bool") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "fl-fld",
 		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Toggle, {
@@ -83435,8 +83594,57 @@ function StopField({ f, value, onChange, readOnly }) {
 		})
 	});
 }
-function StopForm({ step, def, onChange, readOnly }) {
+function StopsBeforeField({ label, value, choices, onChange, readOnly }) {
+	const runs = [];
+	for (const c of choices) {
+		const g = c.group || "";
+		const last = runs[runs.length - 1];
+		if (last && last.group === g) last.items.push(c);
+		else runs.push({
+			group: g,
+			items: [c]
+		});
+	}
+	if (value && !choices.some((c) => c.value === value)) runs.push({
+		group: "",
+		items: [{
+			value,
+			label: "a stop no longer before this one"
+		}]
+	});
+	const pick = (x) => !readOnly && onChange(x);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+		label,
+		wide: true,
+		hint: "The flight goes back to this stop for each new run.",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "fl-stops-before",
+			"data-dynamic": "stops_before",
+			children: runs.map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fl-stops-before-run" + (r.group ? " fl-stops-before-group" : ""),
+				children: [r.group && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-stops-before-name",
+					children: r.group
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+					label: r.group ? label + " — " + r.group : label,
+					value,
+					options: r.items.map((c) => ({
+						value: c.value,
+						label: c.label,
+						title: c.value ? void 0 : "Where the line (or this group) starts"
+					})),
+					onChange: pick
+				})]
+			}, i))
+		})
+	});
+}
+function StopForm({ step, def, onChange, readOnly, lineSteps }) {
 	const fallback = defaultOnFail(def);
+	const setField = (name, v) => onChange({ config: {
+		...step.config,
+		[name]: v
+	} });
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "fl-form",
 		children: [
@@ -83449,14 +83657,19 @@ function StopForm({ step, def, onChange, readOnly }) {
 					onChange: (t) => !readOnly && onChange({ title: t })
 				})
 			}),
-			(def?.fields || []).map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopField, {
+			(def?.fields || []).map((f) => step.kind === "loop" && f.name === "until" && f.type !== "select" && f.type !== "bool" && f.type !== "int" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(WhenField, {
+				label: cleanLabel(f),
+				placeholder: f.placeholder,
+				hint: "Empty: only the count stops it. ⓘ lists the conditions.",
+				value: String(step.config?.[f.name] ?? ""),
+				readOnly,
+				onChange: (w) => setField(f.name, w)
+			}, f.name) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopField, {
 				f,
 				value: step.config?.[f.name],
 				readOnly,
-				onChange: (v) => onChange({ config: {
-					...step.config,
-					[f.name]: v
-				} })
+				choices: f.dynamic === "stops_before" ? stopsBefore(lineSteps, step) : void 0,
+				onChange: (v) => setField(f.name, v)
 			}, f.name)),
 			step.kind === "agent" && (!!step.config?.program || !!step.config?.model) && !step.config?.fresh && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "fl-form-note muted",
@@ -83487,7 +83700,7 @@ function StopForm({ step, def, onChange, readOnly }) {
 		]
 	});
 }
-function WhenField({ value, onChange, readOnly }) {
+function WhenField({ value, onChange, readOnly, label = "Only when", placeholder = "e.g. diff touches frontend/** and weekday", hint = "Empty: always. ⓘ lists the conditions." }) {
 	const [help, setHelp] = (0, import_react.useState)(false);
 	const [answer, setAnswer] = (0, import_react.useState)(null);
 	const change = (0, import_react.useRef)(onChange);
@@ -83504,20 +83717,20 @@ function WhenField({ value, onChange, readOnly }) {
 	(0, import_react.useEffect)(() => () => checker.current?.cancel(), []);
 	const err = whenError(value, answer?.text === value ? answer.res : null);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(FlField, {
-		label: "Only when",
+		label,
 		wide: true,
-		hint: err ? void 0 : "Empty: always. ⓘ lists the conditions.",
+		hint: err ? void 0 : hint,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
 				className: "fl-when-row",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
 					type: "text",
 					className: "fl-input fl-mono fl-when-input" + (err ? " fl-when-bad" : ""),
-					"aria-label": "Only when",
+					"aria-label": label,
 					"aria-invalid": err ? true : void 0,
 					value,
 					maxLength: WHEN_MAX,
-					placeholder: "e.g. diff touches frontend/** and weekday",
+					placeholder: placeholder || "e.g. diff touches frontend/** and weekday",
 					spellCheck: false,
 					readOnly,
 					onChange: (e) => {
@@ -84005,6 +84218,7 @@ function StepDialog(p) {
 				draft ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopForm, {
 					step: draft,
 					def: p.def,
+					lineSteps: p.lineSteps,
 					readOnly: !editable,
 					onChange: (patch) => setDraft((d) => d ? {
 						...d,
@@ -84698,6 +84912,7 @@ function useSessionLine(title, src, opts) {
 		inspector = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopDialog, {
 			node: open,
 			def,
+			lineSteps: flight?.steps,
 			busy,
 			note: [why, open.reason || rec?.note || ""].filter(Boolean).join(" "),
 			onClose: close,
@@ -124582,7 +124797,8 @@ var DEFAULT_KINDS = [
 	"you",
 	"ship",
 	"verify",
-	"wait"
+	"wait",
+	"loop"
 ];
 function defaultKinds(kinds) {
 	const out = [];
@@ -129931,6 +130147,7 @@ function useGroundedLine(flight, src) {
 		inspector = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopDialog, {
 			node: open,
 			def: inspectorDef(kindOf.get(step.kind), step),
+			lineSteps: flight.steps,
 			busy,
 			onClose: close,
 			onSave: (patch) => act(async () => {
