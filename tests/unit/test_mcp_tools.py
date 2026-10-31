@@ -40,7 +40,7 @@ def _ctx(clock, **kw):
 # Text budgets and registry
 # --------------------------------------------------------------------------- #
 class TestRegistry:
-    def test_twenty_eight_tools_with_annotations(self):
+    def test_thirty_four_tools_with_annotations(self):
         box, _, _ = make_box(_tree())
         tools = build_tools(box)
         assert [t.name for t in tools] == [
@@ -72,7 +72,14 @@ class TestRegistry:
             "control_run",
             "propose_run_plan",
             "report_integrated",
+            "describe_flight",
+            "start_flight",
+            "flight_status",
+            "control_flight",
+            "edit_flight",
+            "save_flight_plan",
         ]
+        assert len(tools) == 34
         by = {t.name: t for t in tools}
         for name in (
             "whoami",
@@ -114,6 +121,15 @@ class TestRegistry:
         for name in ("start_team_run", "control_run"):
             assert by[name].annotations["readOnlyHint"] is False
             assert by[name].annotations["openWorldHint"] is True
+        # Flights: describing and reading change nothing; starting, steering
+        # and editing fly stops that may push or merge, so they always prompt.
+        for name in ("describe_flight", "flight_status"):
+            assert by[name].annotations["readOnlyHint"] is True
+        for name in ("start_flight", "control_flight", "edit_flight"):
+            assert by[name].annotations["readOnlyHint"] is False
+            assert by[name].annotations["openWorldHint"] is True
+        assert by["save_flight_plan"].annotations["readOnlyHint"] is False
+        assert by["save_flight_plan"].annotations["openWorldHint"] is False
 
     def test_text_budgets(self):
         box, _, _ = make_box(_tree())
@@ -129,6 +145,10 @@ class TestRegistry:
             assert t.name in INSTRUCTIONS
         assert "mcp__mindflock__send_message" in INSTRUCTIONS
         assert "NOT the built-in SendMessage" in INSTRUCTIONS
+        assert (
+            "Flights: describe_flight → start_flight; flight_status; control_flight"
+            in INSTRUCTIONS
+        )
 
     def test_footer_names_the_tool_per_provider(self):
         assert "mcp__mindflock__report_result" in report_footer("w", "o", "claude")

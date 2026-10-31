@@ -5393,3 +5393,70 @@ the apex; the box reads "Loop ×3 every 30 min · run 2 of 3"; the bird sits
 on Screenshot; the shelf shows Loop after Wait; the dialog lists the first
 stop + the four stops before the loop as chips and Until as the mono when
 field.
+### As built: round 16 MCP flights
+
+The owner: "I want the ability to use the MindFlock MCP to set up flights, so
+if I describe a flight it should be able to set it up and run it." The
+MindFlock MCP gains six tools in `backend/mcp/flights.py`, a `Toolbox` mixin
+like `runs.py`. That takes it from 28 to 34 tools; peer mode keeps its own 10
+and never sees these six. The full reference, with a worked example, is in
+[mcp.md](mcp.md#flights-from-a-sentence-to-a-running-flight).
+
+| Tool | Route(s) |
+|---|---|
+| `describe_flight(text, want="plan"\|"step", kinds=true)` | `POST /api/flights/describe`, plus `GET /kinds` for the compact kinds list (`kind · label · summary · fields: …`, a "waits on a person" mark, `[risk]` tags) |
+| `start_flight(steps \| plan_id, title=you, grounded, name, at, confirm_merge)` | `POST /api/flights/start` (`at` is sent as `start_at`; `by: "agent:<you>"`), then `PATCH /{id} {plan_name}` for `name` on a non-grounded flight |
+| `flight_status(id \| title)` | `GET /api/flights/{id}`, or `GET /api/flights` filtered by `session` (the live flight first, else the latest) |
+| `control_flight(id \| title, op, step, note)` | `/pause`, `/resume`, `/cancel`, `/steps/{sid}/skip`, `/retry`, `/done {note}`, `/jump {step}` |
+| `edit_flight(id, add, at, remove, rename)` | `DELETE /steps/{sid}` per id, then `POST /steps {steps, at}`, then `PATCH /{id} {plan_name}` |
+| `save_flight_plan(name, steps, description, trigger)` | `POST /api/flights/plans` |
+
+Choices the contract left open:
+
+- **No kind list in the MCP.** A step's `kind` is an open string in every
+  schema. `describe_flight` returns whatever `GET /kinds` serves (the Loop
+  included), and the server validates the steps (400 `bad_step` with
+  `field`, passed through).
+- **Scope = `ship_session`'s rule** (`Policy.require_ship`). The tools act on
+  the caller or a session it manages, never on a team-run member. A stop that
+  can't be undone needs `confirm_merge`: a `ship` stop at lane `merge`, or a
+  kind whose `risk` includes `irreversible` (read from the kinds list, so a
+  new irreversible kind is covered with no change here). Under `children`
+  scope a session may not fly such a stop on itself, and the refusal suggests
+  `grounded: true`, so the user attaches the session. A grounded flight needs
+  only write scope. For `start_flight` with `plan_id`, the plan's steps are
+  checked too.
+- **An existing session starts at its first non-`agent` stop** (the server's
+  rule for `title`). `at: "s1"` flies a leading agent stop, whose prompt is
+  queued for when the session's turn ends. The MCP passes no
+  `absorb_fasttrack`, so the server default applies: a running fast-track
+  becomes the leading ship stops, and the tool reports them as `absorbed`.
+- **describe never fails on a missing model.** On 409 `no_model` and 422
+  `could_not_describe`, the tool returns `{steps: [], error, hint, kinds}`
+  with the kinds list included, so the agent writes the stops itself.
+- **flight_status stays compact** (`compact_flight`, about 2000 JSON
+  characters at most). Each stop is one line: id, state, kind, title, when,
+  halt point, group, note, and `✓ receipt`. History keeps the last 10 lines.
+  Over budget, the output shrinks in this order: flown stops behind the
+  cursor fold into a count, titles, notes and history shrink, then the stops
+  far ahead fold.
+- **The step ops default to the current stop** (`skip`, `retry`, `done`).
+  `jump` needs `step`.
+- **PATCH.** `backend.client` has no `patch()`, so `Api.request` sends PATCH
+  through `client._request(..., method="PATCH")`, and `Api.patch` is new.
+- **INSTRUCTIONS** gains `Flights: describe_flight → start_flight;
+  flight_status; control_flight; edit_flight, save_flight_plan.`, still under
+  2000 characters (1989) after small trims elsewhere.
+
+Outside this change (files outside the worker's fence):
+
+- `providers/mcp_attach.py` `AUTO_APPROVED_TOOLS` could pre-approve the two
+  reads, `describe_flight` and `flight_status`. Until it does, both ask first
+  in a permission-gated session.
+- AGENTS.md and docs/architecture.md still say "28 tools".
+- A public `client.patch()` would replace the private call.
+
+Tests: `tests/unit/test_mcp_flights.py` covers each tool's request shape
+against the in-memory API, the scope and confirm refusals, the kinds list in
+`describe_flight`, `flight_status` compactness on a 40-stop flight, and
+`Api.patch`. The 34-tool and INSTRUCTIONS pins are in `test_mcp_tools.py`.
