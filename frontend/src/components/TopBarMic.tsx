@@ -119,6 +119,7 @@ import {
   spokenLine,
   sttEngine,
   talkKeyAction,
+  TALK_DEBOUNCE_MS,
   ttsEngine,
   ttsVoiceKey,
   isNews,
@@ -184,9 +185,12 @@ const heard = new HeardTurns();
  * session you were not just talking to says where it is from (replyText). */
 const clock = new HeardClock();
 const speakingListeners = new Set<(on: boolean) => void>();
+/** A line's sound starts / ends (not its turn: lib/voiceDesktop SpeechQueue). */
+const audibleListeners = new Set<(on: boolean) => void>();
 const queue = new SpeechQueue(
   () => (ttsEngine(cfgNow) === "server" ? serverSp : browserSp),
-  (on) => speakingListeners.forEach((l) => l(on))
+  (on) => speakingListeners.forEach((l) => l(on)),
+  { onAudible: (on) => audibleListeners.forEach((l) => l(on)) }
 );
 
 /** Standby (the wake word) runs the level meter. */
@@ -471,6 +475,12 @@ export function TopBarMic() {
   const holding = useRef(false);
   /** The hotkey's own press is under way (a blur's `up` ends only that). */
   const keyHeld = useRef(false);
+  /** When that press went down (ms): a hold's tap is told from a hold. */
+  const keyDownAt = useRef(0);
+  /** "Hold to talk", the key tapped: the mic stays on; the next press stops. */
+  const keyLatched = useRef(false);
+  /** When listening last ended (ms): a press right after it is its bounce. */
+  const haltedAt = useRef(0);
   /** Reading a dialog or a question out and listening for the answer. */
   const hands = useRef<HandsFree | null>(null);
   /** The dictation hands-free listening opened (an ask read out). */
@@ -536,13 +546,15 @@ export function TopBarMic() {
       const want = sayAllMismatch(prefsRef.current.replies, c.say_all);
       if (want !== null) void syncSayAll(want);
     });
-    const l = (on: boolean) => {
-      setSpeaking(on);
+    const l = (on: boolean) => setSpeaking(on);
+    speakingListeners.add(l);
+    const a = (on: boolean) => {
       // A line while listening goes on: not the person — its audio is dropped
-      // (and 150 ms after), the phrase under way is not ended.
+      // (and 150 ms after), the phrase under way is not ended. From its first
+      // sound to its end: while it is synthesised the mic still hears you.
       if (gated.current) rec.current?.mute?.(on);
     };
-    speakingListeners.add(l);
+    audibleListeners.add(a);
     // Where speech runs moves with Settings (another window, an engine just
     // installed): re-read it when the window comes back, and after a settings
     // save here — every writer puts the server's echo into ["settings"].
@@ -554,6 +566,7 @@ export function TopBarMic() {
     });
     return () => {
       speakingListeners.delete(l);
+      audibleListeners.delete(a);
       window.removeEventListener("focus", onFocus);
       unsubSettings();
       clearTimeout(idleTimer.current);
@@ -716,6 +729,8 @@ export function TopBarMic() {
     }
     clearTimeout(idleTimer.current);
     deciding.current = null;
+    haltedAt.current = Date.now();
+    keyLatched.current = false;
     live.current = null;
     rec.current?.stop();
     rec.current = null;
@@ -859,7 +874,8 @@ export function TopBarMic() {
     publishMicState({ listening: true, title: into ? "" : opts.title || useUi.getState().focused || "" });
     d.show();
     armIdle();
-    meterStart();
+    // From the room's quiet as the pre-roll heard it (lib/voiceMic).
+    meterStart(serverRec.mic.quietFloor());
     const ok = r.start(
       {
         // Web Speech's interim words: typed as a guess, corrected as they change.
@@ -1296,7 +1312,9 @@ export function TopBarMic() {
 
   // The push-to-talk hotkey (the keymap's Talk action): works wherever the
   // focus is — a terminal pane too — and its keydown is the gesture that
-  // lets start() make the AudioContext.
+  // lets start() make the AudioContext. In "Hold to talk" a tap leaves the
+  // mic on (the next press stops it); a press while listening is still
+  // ending, or just after, starts nothing (lib/voiceDesktop talkKeyAction).
   const keyRef = useRef({ hold, start: userStart, finish });
   keyRef.current = { hold, start: userStart, finish };
   useEffect(() => {
@@ -1304,12 +1322,28 @@ export function TopBarMic() {
       const phase = (e as CustomEvent<{ phase?: TalkPhase }>).detail?.phase;
       if (phase !== "down" && phase !== "up") return;
       const k = keyRef.current;
-      const act = talkKeyAction(phase, k.hold, !!live.current, keyHeld.current);
+      // The key's press warms the mic as the button's does (the engine in
+      // this gesture, the microphone kept open, its pre-roll running).
+      if (phase === "down" && !live.current) warmMic(true);
+      const now = Date.now();
+      const act = talkKeyAction(phase, k.hold, !!live.current, keyHeld.current, {
+        heldMs: phase === "up" && keyHeld.current ? now - keyDownAt.current : undefined,
+        latched: keyLatched.current,
+        busy: !!deciding.current || now - haltedAt.current < TALK_DEBOUNCE_MS,
+      });
       if (phase === "up") keyHeld.current = false;
       // The options stay open: they show the level and the words too.
       if (act === "start") {
-        if (k.start(textField(document.activeElement)) && k.hold) keyHeld.current = true;
-      } else if (act === "finish") k.finish();
+        keyLatched.current = false;
+        if (k.start(textField(document.activeElement)) && k.hold) {
+          keyHeld.current = true;
+          keyDownAt.current = now;
+        }
+      } else if (act === "latch") keyLatched.current = true;
+      else if (act === "finish") {
+        keyLatched.current = false;
+        k.finish();
+      }
     };
     window.addEventListener(TALK_EVENT, onTalk);
     return () => window.removeEventListener(TALK_EVENT, onTalk);
