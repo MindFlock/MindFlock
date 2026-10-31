@@ -99,6 +99,12 @@ TOOL_NAMES = (
     "control_run",
     "propose_run_plan",
     "report_integrated",
+    "describe_flight",
+    "start_flight",
+    "flight_status",
+    "control_flight",
+    "edit_flight",
+    "save_flight_plan",
 )
 
 #: First line of a launch prompt decorated with ``split`` — also how
