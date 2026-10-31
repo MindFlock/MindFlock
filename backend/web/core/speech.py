@@ -71,6 +71,7 @@ nothing under pytest.
 
 from __future__ import annotations
 
+import http.client
 import importlib
 import importlib.util
 import inspect
@@ -175,10 +176,12 @@ class SpeechError(Exception):
     """A backend could not do the job; ``str(err)`` is a sentence for the UI.
 
     ``down`` marks a failure of the ENGINE rather than of the request — a
-    host that refused the connection, timed out before its first byte,
-    answered 5xx or sent no audio — the one kind :class:`TtsChain` falls
-    back from (a 4xx, a missing key or a bad voice name is the request's
-    fault and comes back as it is)."""
+    host that refused the connection or reset it, timed out (hung: see
+    :func:`host_hung_after`), answered 5xx or sent no audio — the one kind
+    that marks it down in :class:`TtsChain` (a 4xx, a missing key or a bad
+    voice name is the request's fault and comes back as it is). A host
+    that is only SLOW is never ``down``: :class:`TtsChain` tells the two
+    apart."""
 
     def __init__(self, *args: object, down: bool = False) -> None:
         super().__init__(*args)
@@ -687,6 +690,12 @@ class Backend:
         key includes its URL, so a new URL starts healthy)."""
         return self.id
 
+    #: A host that renders one request at a time (Voice Lab's F5):
+    #: :class:`TtsChain` sends it ours one at a time, in order (its lane),
+    #: so the time a line waits behind our own lines is ours to see rather
+    #: than hidden in the host's queue.
+    serial: bool = False
+
     def engine_name(self) -> str:
         """The short name ``GET /api/voice`` reports for the engine that
         speaks (``server_ready.tts_engine``)."""
@@ -721,7 +730,11 @@ class _OpenAI(Backend):
         host = _host(url)
         try:
             status, ctype, data = _http("POST", url, headers, body, timeout)
-        except OSError as err:  # URLError, timeout, refused
+        except (OSError, http.client.HTTPException) as err:  # refused, reset, timeout
+            if isinstance(err, TimeoutError):  # connected, then nothing back
+                raise SpeechError(
+                    "%s sent nothing back in %.0f s" % (host, timeout), down=True
+                ) from err
             reason = getattr(err, "reason", None) or err
             raise SpeechError(
                 "could not reach %s: %s" % (host, reason), down=True
@@ -777,6 +790,7 @@ class OpenAISTT(_OpenAI):
 
 class OpenAITTS(_OpenAI):
     kind = "tts"
+    serial = True
 
     def _cfg(self) -> Tuple[str, str, str, str]:
         v = _voice()
@@ -831,7 +845,7 @@ class OpenAITTS(_OpenAI):
         url = self._cfg()[0]
         if not _local_host(url):
             return "skipped: %s is not on this machine or network" % _host(url)
-        self.speak(WARM_TEXT, timeout=WARM_TIMEOUT)
+        TTS_CHAIN.send(self, WARM_TEXT, WARM_TIMEOUT)  # in the lane: see TtsChain
         return "loaded"
 
 
@@ -1470,8 +1484,10 @@ def choose(kind: str) -> str:
 #: :func:`host_budget` adds :data:`HOST_BUDGET_PER_CHAR` per character
 #: because a neural host (Voice Lab's F5) renders the whole clip before its
 #: first byte — about 0.035 s per character on a GPU, so the allowance is
-#: ~1.7× that. A host past its budget (F5 on a CPU: 50–60 s a sentence) is
-#: treated like one that refused the connection.
+#: ~1.7× that. The budget runs from when the line reaches the host, or from
+#: when the live line ahead of it in our lane should be done (time spent
+#: behind our own lines is not the host's fault): a line past it is said by
+#: the fallback, and the host is NOT marked down for it (:class:`TtsChain`).
 HOST_BUDGET = 1.5
 HOST_BUDGET_PER_CHAR = 0.06
 #: A failed engine is down this long; after it the next line (or
@@ -1495,6 +1511,56 @@ def host_budget(text: str) -> float:
     return min(TTS_TIMEOUT, HOST_BUDGET + HOST_BUDGET_PER_CHAR * len(text or ""))
 
 
+def host_hung_after(text: str) -> float:
+    """How long a host may send nothing back for ``text`` before it counts
+    as HUNG — dead, like a refused connection: ``max(TTS_TIMEOUT, 2 ×
+    host_budget)``. Our lane gives the host the line to itself, so only a
+    host that cannot say one sentence in that long gets here (F5 on a CPU:
+    50–60 s); a merely slow one answers first."""
+    return max(TTS_TIMEOUT, 2.0 * host_budget(text))
+
+
+class _Slow(SpeechError):
+    """A line not back within its budget (:class:`TtsChain`): the host is
+    alive and still working on it, so it is not ``down``."""
+
+
+class _Line:
+    """One request of ours in a serial host's lane (:meth:`TtsChain.send`).
+    ``deadline`` (``time.monotonic``) is when a waiting LINE gives up on the
+    host — None for one that waits for the answer (the probe, a warm, a line
+    with no fallback). ``live`` turns false when it gave up: an orphan if
+    the host has it (``started``), dropped from the lane if not."""
+
+    __slots__ = (
+        "engine", "text", "voice", "timeout", "deadline", "gen",
+        "live", "started", "sent_at", "done", "result", "error",
+    )  # fmt: skip
+
+    def __init__(self, engine: Backend, text: str, voice: str, timeout: float) -> None:
+        self.engine, self.text, self.voice, self.timeout = engine, text, voice, timeout
+        self.deadline: Optional[float] = None
+        self.gen = 0
+        self.live, self.started, self.done = True, False, False
+        self.sent_at = 0.0
+        self.result: Optional[Tuple[bytes, str]] = None
+        self.error: Optional[BaseException] = None
+
+
+class _Lane:
+    __slots__ = ("queue", "busy")
+
+    def __init__(self) -> None:
+        self.queue: List[_Line] = []  # in order; the head is at the host
+        self.busy = False  # a drain thread is running
+
+
+def _lane_thread(target: Callable[[], None], name: str) -> None:
+    """Run a lane's drain on a daemon thread (a seam of its own: tests that
+    hold :func:`_spawn`'s probes still get their lines said)."""
+    threading.Thread(target=target, name=name, daemon=True).start()
+
+
 class _Health:
     __slots__ = ("why", "retry_at", "probing")
 
@@ -1508,12 +1574,32 @@ class TtsChain:
     """Which engine says the next line, and the fallback when it fails.
 
     * The configured voice (:func:`select`) speaks within
-      :func:`host_budget`. A ``down`` failure (:class:`SpeechError`) marks it
-      down for :data:`HOST_DOWN_SECONDS` and the same line goes to the first
-      ready :data:`FALLBACK_TTS` engine (piper) — so a dead host costs one
-      refused connect, once, and nothing for the lines after it. With no
-      fallback ready the failure stands (the route's 502; the client then
-      uses its own voice).
+      :func:`host_budget`. DEAD and SLOW are told apart:
+
+      - Dead — a refused or reset connection, a connect timeout, a 5xx, no
+        audio, or nothing back for :func:`host_hung_after` (hung): a
+        ``down`` :class:`SpeechError`. The host is marked down for
+        :data:`HOST_DOWN_SECONDS` and the same line goes to the first ready
+        :data:`FALLBACK_TTS` engine (piper) — so a dead host costs one
+        refused connect, once, and nothing for the lines after it. With no
+        fallback ready the failure stands (the route's 502; the client
+        then uses its own voice).
+      - Slow — alive, but this line is not back within its budget: the
+        line is said by the fallback and the host is NOT marked down. Its
+        request stays at the host (an orphan holding the lane until the
+        host answers, so the next line queues visibly behind it), and the
+        next reply starts on the host again.
+
+    * A :attr:`Backend.serial` host gets our requests one at a time, in
+      order (:meth:`send`, one lane per host): F5 renders one line at a
+      time anyway, and this way the time a line waits behind OUR lines is
+      ours to see instead of eating its budget inside the host's queue. A
+      line's budget runs from when the live line ahead of it should be done
+      (or from now): ``budget = host_budget(this) + the budgets of the live
+      lines ahead``. The lines ahead are being played meanwhile, so the
+      owner hears no extra silence; a line behind one we gave up on (an
+      orphan, a warm, the probe) gets only its own budget — that wait IS
+      silence. A line with no fallback ready waits for the host.
     * Health is per :meth:`Backend.health_key` and re-checked only in the
       background (:meth:`_probe`, on a daemon thread), never on a request.
     * One voice per reply: once a line falls back, every line does until the
@@ -1523,7 +1609,11 @@ class TtsChain:
       :data:`SPOKEN_CHARS_PER_SECOND`). A reply's lines arrive back to back
       (the clients ask for the next sentence while one plays), so the switch
       back lands in the pause between replies, never inside one. Failing
-      over is immediate — a line the host cannot say is said by piper.
+      over is immediate — a line the host cannot say is said by piper —
+      and a SLOW line fails over the same way (without the down window):
+      the lines of the reply still waiting in the lane leave it for piper
+      too. So a reply changes voice at most once, host → piper, and only
+      ever between two of its lines.
     """
 
     def __init__(self) -> None:
@@ -1532,6 +1622,9 @@ class TtsChain:
         self._sticky = False
         self._inflight = 0
         self._quiet_at = 0.0
+        self._cond = threading.Condition(self._lock)
+        self._lanes: Dict[str, _Lane] = {}
+        self._gen = 0  # bumped by reset(): an old orphan changes nothing
 
     def reset(self) -> None:
         with self._lock:
@@ -1539,6 +1632,9 @@ class TtsChain:
             self._sticky = False
             self._inflight = 0
             self._quiet_at = 0.0
+            self._lanes.clear()
+            self._gen += 1
+            self._cond.notify_all()
 
     # -- health ---------------------------------------------------------- #
     def down_reason(self, backend: Backend) -> str:
@@ -1591,7 +1687,7 @@ class TtsChain:
         """One :data:`WARM_TEXT` within :data:`PROBE_TIMEOUT`: healthy on
         an answer, down for another window on anything else."""
         try:
-            backend.speak_within(WARM_TEXT, "", PROBE_TIMEOUT)
+            self.send(backend, WARM_TEXT, PROBE_TIMEOUT)
         except Exception as err:  # noqa: BLE001
             with self._lock:
                 h = self._down.get(key)
@@ -1610,6 +1706,113 @@ class TtsChain:
                 _WARMED["tts"] = ("loaded", what, _now())
             except Exception:  # noqa: BLE001 — a record, never a failure
                 pass
+
+    # -- the lane (a serial host's requests, one at a time) -------------- #
+    def send(
+        self,
+        engine: Backend,
+        text: str,
+        timeout: float,
+        voice: str = "",
+        budget: Optional[float] = None,
+    ) -> Tuple[bytes, str]:
+        """``engine.speak_within(text, voice, timeout)`` — for a
+        :attr:`Backend.serial` host in its lane, after every request of ours
+        ahead of it. ``budget`` (a line): give up waiting this long after
+        the live line ahead should be done (or now), or as soon as the
+        reply has gone to the fallback while this one has not reached the
+        host — raising :class:`_Slow`, the request left to finish as an
+        orphan. ``None`` waits for the answer."""
+        if not engine.serial:
+            return engine.speak_within(text, voice, timeout)
+        line = _Line(engine, text, voice, timeout)
+        with self._lock:
+            key = engine.health_key()
+            lane = self._lanes.setdefault(key, _Lane())
+            if budget is not None:
+                ahead = [
+                    ln.deadline
+                    for ln in lane.queue
+                    if ln.live and ln.deadline is not None
+                ]
+                line.deadline = max([time.monotonic()] + ahead) + budget
+            line.gen = self._gen
+            lane.queue.append(line)
+            start, lane.busy = not lane.busy, True
+        if start:
+            try:
+                _lane_thread(lambda: self._drain(lane), "mindflock-voice-lane")
+            except Exception:  # noqa: BLE001 — no thread: say it here
+                with self._lock:
+                    lane.queue.remove(line)
+                    lane.busy = False
+                return engine.speak_within(text, voice, timeout)
+        with self._lock:
+            while not line.done:
+                if line.deadline is None:
+                    self._cond.wait(1.0)
+                    continue
+                left = line.deadline - time.monotonic()
+                if left <= 0 or (self._sticky and not line.started):
+                    break
+                self._cond.wait(left)
+            if not line.done:
+                line.live = False
+                if not line.started:
+                    lane.queue.remove(line)
+                waited = budget or 0.0
+                where = "is still on it" if line.started else "had lines ahead of it"
+                raise _Slow(
+                    "%s is slow: no answer within %.1f s (%s; not down)"
+                    % (engine.health_key(), waited, where)
+                )
+        if line.error is not None:
+            raise line.error
+        if line.result is None:  # never: the drain sets one or the other
+            raise SpeechError("%s sent no audio back" % engine.health_key(), down=True)
+        return line.result
+
+    def _drain(self, lane: _Lane) -> None:
+        """Say ``lane``'s requests in order, one at a time, until it is
+        empty. An orphan (its line gave up) still holds the lane until the
+        host answers: the host is busy with it whether we listen or not."""
+        while True:
+            with self._lock:
+                if not lane.queue:
+                    lane.busy = False
+                    return
+                line = lane.queue[0]
+                line.started, line.sent_at = True, time.monotonic()
+            try:
+                line.result = line.engine.speak_within(
+                    line.text, line.voice, line.timeout
+                )
+            except Exception as err:  # noqa: BLE001 — handed to the caller
+                line.error = err
+            finally:
+                with self._lock:
+                    if lane.queue and lane.queue[0] is line:
+                        lane.queue.pop(0)
+                    line.done = True
+                    orphan = not line.live and line.gen == self._gen
+                    self._cond.notify_all()
+            if orphan:
+                self._orphan_done(line)
+
+    def _orphan_done(self, line: _Line) -> None:
+        """A line we gave up on came back: late audio means slow (nothing
+        to mark); a dead answer — hung past :func:`host_hung_after`, 5xx,
+        reset — marks the host down, as on a live line."""
+        took = time.monotonic() - line.sent_at
+        err = line.error
+        if isinstance(err, SpeechError) and err.down:
+            self.mark_down(line.engine, str(err))
+        elif err is None:
+            _logger.info(
+                "voice: %s answered a line we gave up on after %.1f s (slow)",
+                line.engine.health_key(),
+                took,
+            )
 
     # -- choosing -------------------------------------------------------- #
     @staticmethod
@@ -1680,8 +1883,27 @@ class TtsChain:
                 audio, mime = engine.speak(text, voice)
                 return audio, mime, engine, True
             try:
-                audio, mime = engine.speak_within(text, voice, host_budget(text))
+                if engine.serial:
+                    # No fallback ready: waiting for the host beats a 502.
+                    budget = host_budget(text) if self.fallback_for(engine) else None
+                    audio, mime = self.send(
+                        engine, text, host_hung_after(text), voice, budget
+                    )
+                else:
+                    audio, mime = engine.speak_within(text, voice, host_budget(text))
                 return audio, mime, engine, False
+            except _Slow as err:
+                # Alive, only slow: this line (and the rest of the reply) on
+                # the fallback, the host kept healthy for the next reply.
+                with self._lock:
+                    self._sticky = True
+                    self._cond.notify_all()  # the reply's waiting lines leave
+                _logger.info("voice: %s", err)
+                fallback = self.fallback_for(engine)
+                if fallback is None:
+                    raise
+                audio, mime = fallback.speak(text, voice)
+                return audio, mime, fallback, True
             except SpeechError as err:
                 if not err.down:
                     raise
