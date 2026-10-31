@@ -1783,7 +1783,8 @@ class TestTtsChain:
 
     def test_a_slow_host_is_cut_at_its_budget(self, chain, monkeypatch):
         """A host that accepts the connection and never answers (F5 on a
-        CPU) costs the budget, not TTS_TIMEOUT."""
+        CPU) costs the budget, not TTS_TIMEOUT — and the line alone does not
+        mark it down (slow); nothing back for host_hung_after does (hung)."""
         import socket
         import time as _time
 
@@ -1793,6 +1794,7 @@ class TestTtsChain:
         try:
             monkeypatch.setattr(speech, "HOST_BUDGET", 0.3)
             monkeypatch.setattr(speech, "HOST_BUDGET_PER_CHAR", 0.0)
+            monkeypatch.setattr(speech, "TTS_TIMEOUT", 0.8)  # hung after this
             _set(
                 tts_backend="openai",
                 tts_url="http://127.0.0.1:%d/v1" % srv.getsockname()[1],
@@ -1800,11 +1802,16 @@ class TestTtsChain:
             t0 = _time.monotonic()
             _a, _m, engine, fell_back = chain.c.speak(chain.host, "Hello there.")
             took = _time.monotonic() - t0
+            assert engine is chain.piper and fell_back is True
+            assert 0.25 <= took < 0.75
+            assert chain.c.down_reason(chain.host) == ""  # slow, not down
+            deadline = _time.monotonic() + 5
+            while not chain.c.down_reason(chain.host):
+                assert _time.monotonic() < deadline, "never marked hung"
+                _time.sleep(0.05)
         finally:
             srv.close()
-        assert engine is chain.piper and fell_back is True
-        assert 0.25 <= took < 1.5
-        assert chain.c.down_reason(chain.host)
+        assert "sent nothing back in 1 s" in chain.c.down_reason(chain.host)
 
     def test_the_budget_grows_with_the_line_and_is_capped(self, chain, monkeypatch):
         assert speech.host_budget("") == speech.HOST_BUDGET == 1.5
@@ -1814,7 +1821,10 @@ class TestTtsChain:
         monkeypatch.setattr(speech, "_http", http)
         _a, _m, engine, fell_back = chain.c.speak(chain.host, "All done.")
         assert engine is chain.host and fell_back is False
-        assert http.calls[0].timeout == speech.host_budget("All done.")
+        # The line's budget is the lane's wait; the socket waits for "hung".
+        assert http.calls[0].timeout == speech.host_hung_after("All done.")
+        assert speech.host_hung_after("x") == speech.TTS_TIMEOUT
+        assert speech.host_hung_after("x" * 1200) == 2 * speech.TTS_TIMEOUT
 
     def test_a_dead_host_costs_one_attempt_per_window(self, chain, monkeypatch):
         http = _Http()
