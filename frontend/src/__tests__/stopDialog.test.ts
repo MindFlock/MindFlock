@@ -201,3 +201,68 @@ describe("the session line's wiring", () => {
       expect(code("components/flights/" + f + ".tsx"), f).not.toMatch(/\b(window\.)?(confirm|prompt|alert)\(/);
   });
 });
+
+describe("round 16: a Loop's dialog", () => {
+  const LOOP: StepKindDef = {
+    kind: "loop",
+    label: "Loop",
+    actor: "robot",
+    summary: "Repeat from an earlier stop",
+    default_title: "Loop ×3",
+    fields: [
+      { name: "back_to", type: "select", label: "Repeat from", options: [], dynamic: "stops_before", default: "" },
+      { name: "times", type: "int", label: "Runs in all", default: 3 },
+      { name: "wait_limits", type: "bool", label: "Wait out usage limits", default: true },
+      { name: "fresh", type: "bool", label: "Clear the agent's context before each run", default: false },
+      { name: "until", type: "text", label: "Until", placeholder: "e.g. checks green" },
+    ],
+  };
+  const g = { id: "g1", name: "Polish", plan_id: "" };
+  const line: FlightStep[] = [
+    { id: "a", kind: "agent", title: "Improve the sky", config: {}, on_fail: "halt" },
+    { id: "b", kind: "command", title: "Screenshot", config: {}, on_fail: "halt", group: g },
+    { id: "c", kind: "agent", title: "Judge it", config: {}, on_fail: "halt", group: g },
+    { id: "l", kind: "loop", title: "Loop ×3", config: { back_to: "c", times: 3 }, on_fail: "halt" },
+    { id: "z", kind: "ship", title: "Push", config: {}, on_fail: "halt" },
+  ];
+  const node = stop({ id: "stop:l", title: "Loop ×3", icon: "loop", step: line[3], index: 3 });
+  const html = render({ node, def: LOOP, lineSteps: line, onSave: () => {} });
+  const radios = (h: string) => [...h.matchAll(/role="radio" aria-checked="(true|false)" class="[^"]*"(?: title="[^"]*")? data-value="([^"]*)">([^<]+)</g)].map((m) => [m[2], m[3], m[1]]);
+
+  it("“Repeat from”: the first stop, then every stop before the loop by title — none after it", () => {
+    const field = html.slice(html.indexOf('data-dynamic="stops_before"'));
+    const chips = radios(field.slice(0, field.indexOf(">Runs in all<")));
+    expect(chips).toEqual([
+      ["", "the first stop", "false"],
+      ["a", "Improve the sky", "false"],
+      ["b", "Screenshot", "false"],
+      ["c", "Judge it", "true"],
+    ]);
+    expect(html).not.toContain('data-value="z"');
+    expect(html).not.toContain("<select");
+  });
+
+  it("a group's sub-steps sit in a row under the group's name", () => {
+    expect(html).toContain('<div class="fl-stops-before-run fl-stops-before-group"><span class="fl-stops-before-name">Polish</span>');
+    expect(html).toContain('aria-label="Repeat from — Polish"');
+  });
+
+  it("“Until” is the when editor (mono, ⓘ), with the server's placeholder", () => {
+    expect(html).toMatch(/<input type="text" class="fl-input fl-mono fl-when-input" aria-label="Until" maxLength="\d+" placeholder="e.g. checks green"/);
+    // …and the stop's own "Only when" is still there.
+    expect(html).toContain('aria-label="Only when"');
+  });
+
+  it("without the line: only “the first stop”; a stale choice stays visible", () => {
+    const bare = render({ node: stop({ id: "stop:l", step: { ...line[3], config: { back_to: "gone" } } }), def: LOOP, onSave: () => {} });
+    expect(radios(bare.slice(bare.indexOf('data-dynamic="stops_before"'))).slice(0, 2)).toEqual([
+      ["", "the first stop", "false"],
+      ["gone", "a stop no longer before this one", "true"],
+    ]);
+  });
+
+  it("both line hooks hand the dialog the line's steps", () => {
+    expect(code("components/flights/useSessionLine.tsx")).toContain("lineSteps={flight?.steps}");
+    expect(code("components/flights/useGroundedLine.tsx")).toContain("lineSteps={flight.steps}");
+  });
+});

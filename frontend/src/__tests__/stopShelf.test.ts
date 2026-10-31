@@ -73,6 +73,14 @@ describe("the stops row", () => {
     expect(html).not.toMatch(/\b(node|plane)\b/i);
   });
 
+  it("round 16: the server's Loop is a default block after Wait, drawn with ↻", () => {
+    const html = render(createElement(StopShelf, { onTack() {} }), [...KINDS, kind("loop", "Loop")]);
+    expect(kindsIn(html)).toEqual(["agent", "you", "ship", "verify", "wait", "loop"]);
+    const loop = html.slice(html.indexOf('data-kind="loop"'));
+    expect(loop).toContain('<span class="sky-stop-name">Loop</span>');
+    expect(loop).toContain('<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3"></path>');
+  });
+
   it("the other kinds live in the catalog; a default the server doesn't list is skipped", () => {
     const html = render(createElement(StopShelf, {}));
     for (const k of ["Split", "Join", "Notify"]) expect(html).not.toContain(">" + k + "<");

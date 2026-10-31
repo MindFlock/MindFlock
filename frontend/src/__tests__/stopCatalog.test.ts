@@ -60,9 +60,15 @@ const render = (props: Record<string, unknown> = {}) =>
 
 describe("the default blocks (DEFAULT_KINDS)", () => {
   it("Agent, Perch, Ship, Verify, Wait — in that order, whatever the registry's", () => {
-    expect([...DEFAULT_KINDS]).toEqual(["agent", "you", "ship", "verify", "wait"]);
+    expect([...DEFAULT_KINDS]).toEqual(["agent", "you", "ship", "verify", "wait", "loop"]);
     expect(defaultKinds(KINDS).map((k) => k.kind)).toEqual(["agent", "you", "ship", "verify", "wait"]);
     expect(defaultKinds([...KINDS].reverse()).map((k) => k.kind)).toEqual(["agent", "you", "ship", "verify", "wait"]);
+  });
+
+  it("round 16: Loop after Wait, once the server lists it", () => {
+    const withLoop = [...KINDS, kind("loop", "Loop", "robot", "Repeat from an earlier stop")];
+    expect(defaultKinds(withLoop).map((k) => k.kind)).toEqual(["agent", "you", "ship", "verify", "wait", "loop"]);
+    expect(defaultKinds([withLoop[withLoop.length - 1], ...KINDS]).map((k) => k.kind)).toEqual(["agent", "you", "ship", "verify", "wait", "loop"]);
   });
 
   it("a kind the server doesn't list is skipped", () => {

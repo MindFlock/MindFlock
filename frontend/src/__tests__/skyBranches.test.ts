@@ -422,6 +422,22 @@ describe("Split and Join on the line", () => {
   });
 });
 
+describe("round 16: a Loop over a Split and its Join", () => {
+  const LOOPED = [...SPLIT_STEPS, step("s4", "loop", "Loop", { back_to: "s1", times: 2 })];
+
+  it("the arc rides over the fan-out: one loop edge from the Loop to the Split, the fan/join wires untouched", () => {
+    const f = flight(LOOPED, 1, [{ title: "w1", state: "working" }]);
+    f.step_states.s4 = { state: "running", since: 1, note: "", detail: { runs: 1 }, rounds: 0 };
+    const d = diagramOf([lead(LOOPED, 1, { waiting: 1, total: 1 }), kid("w1", "s1", { activity: "working" })], f);
+    expect(d.edges.filter((e) => e.kind === "loop")).toEqual([expect.objectContaining({ from: "stop:s4", to: "stop:s1", loop: { runs: 1, times: 2, state: "running" } })]);
+    const html = renderToStaticMarkup(createElement(FlywayCanvas, { diagram: d, label: "Lead", vertical: false }));
+    expect(html).toContain('class="fl-wire fl-wire-loop fl-edge-loop fl-loop-running"');
+    expect(html).toContain(">2 / 2</span>");
+    // The arc's own key: it never collides with a line wire between the same boxes.
+    expect(html.match(/fl-wire-loop/g)).toHaveLength(1);
+  });
+});
+
 describe("every child a parallel row, each with its own bird (round 12)", () => {
   const f1 = flight(AGENT_STEPS, 1);
   const at = (l: ReturnType<typeof layoutDiagram>, id: string) => l.boxes.find((b) => b.node.id === id)!;

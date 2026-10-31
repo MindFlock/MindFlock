@@ -1523,7 +1523,7 @@ function loopArc(a: Placed, b: Placed, anchorOf: (p: Placed) => number, vertical
     const y1 = a.y;
     const y2 = b.y - 2;
     const h = loopRise(x2 - x1);
-    const cy = Math.min(y1, y2) - (h * 4) / 3;
+    const cy = Math.min(a.y, b.y) - (h * 4) / 3;
     return {
       d: `M ${x1} ${y1} C ${x1} ${cy}, ${x2} ${cy}, ${x2} ${y2}`,
       apex: { x: (x1 + x2) / 2, y: 0.125 * y1 + 0.75 * cy + 0.125 * y2 },

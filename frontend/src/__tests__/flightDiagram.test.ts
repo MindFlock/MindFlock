@@ -319,3 +319,26 @@ describe("reordering by drag", () => {
     ]);
   });
 });
+
+describe("round 16: a Loop's return arc", () => {
+  const LOOP_LINE = [...STEPS.slice(0, 2), step("s9", "loop", "Loop ×3", { back_to: "s1", times: 3 }), ...STEPS.slice(2)];
+
+  it("one `loop` edge from the Loop box back to its back_to, besides the line", () => {
+    const d = flywayDiagram(LOOP_LINE, KINDS);
+    expect(d.edges.filter((e) => e.kind === "loop")).toEqual([{ from: "stop:s9", to: "stop:s1", kind: "loop", loop: { runs: 0, times: 3, state: "pending" } }]);
+    expect(d.edges.filter((e) => e.kind === "line")).toHaveLength(LOOP_LINE.length - 1);
+  });
+
+  it("a drag's preview keeps the arc", () => {
+    const d = reorderDiagram(flywayDiagram(LOOP_LINE, KINDS), 3, 4);
+    expect(d.edges.filter((e) => e.kind === "loop")).toEqual([expect.objectContaining({ from: "stop:s9", to: "stop:s1" })]);
+  });
+
+  it("the layout draws it as an arc over the line (negative y) and says how far it rises", () => {
+    const L = layoutDiagram(flywayDiagram(LOOP_LINE, KINDS));
+    const w = L.wires.find((x) => x.kind === "loop")!;
+    expect(w.d).toMatch(/^M [\d.]+ 0 C [\d.]+ -[\d.]+, [\d.]+ -[\d.]+, [\d.]+ -2$/);
+    expect(w.apex!.y).toBeLessThan(0);
+    expect(L.rise).toBeGreaterThan(0);
+  });
+});
