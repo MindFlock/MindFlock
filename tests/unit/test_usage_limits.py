@@ -241,3 +241,12 @@ def test_gate_clears_when_pane_is_clean(monkeypatch):
     _fake_pane(monkeypatch, "ready for your next task")
     assert server._refresh_limit_state(_inst(), "s3", "tmux-s3") == 0.0
     assert server._session_limited_until("s3") == 0.0
+
+
+def test_credits_banner_is_open_not_a_limit():
+    from backend.providers.usage_limits import is_credits_banner, is_limit_screen
+
+    text = "\n                     Now using usage credits\n"
+    assert is_credits_banner(text)
+    assert not is_limit_screen(text)
+    assert not is_credits_banner("usage limit reached ∙ resets 3am")

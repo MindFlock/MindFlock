@@ -350,3 +350,35 @@ def test_an_unscoped_call_still_reads_the_meter():
     """Callers that pass no instance (and the direct tests above) are
     unchanged — the scoping is opt-in per call site."""
     assert server._live_limit_reset(_meter({"percent_used": 0.0}), _NOW) == 0.0
+
+
+def test_credits_enabled_open_every_window(h):
+    """Extra-usage credits on and not spent: a weekly window at 100% is NOT a
+    wall — the meter reads open and the queue sends (the trap: a fresh worker
+    held for days with only "Now using usage credits" on its pane)."""
+    clock, state, refresh = h
+    server.subprocess.run = lambda *a, **k: types.SimpleNamespace(
+        returncode=0, stdout=b""
+    )
+    state["v"] = {"limited": False, "reset_at": None}
+    state["live"] = {
+        "percent_used": 100.0,
+        "end": clock["t"] + 3600,
+        "weekly": {"percent_used": 100.0, "end": clock["t"] + 3 * 86400},
+        "extra": {"used": 12.5, "limit": 100.0, "currency": "USD"},
+    }
+    assert refresh() == 0.0
+    # Credits themselves spent: the plan window is a wall again.
+    state["live"]["extra"] = {"used": 100.0, "limit": 100.0, "currency": "USD"}
+    assert refresh() == pytest.approx(1000.0 + 3 * 86400)
+
+
+def test_credits_banner_on_the_pane_clears_a_hold(h):
+    clock, state, refresh = h
+    state["v"] = {"limited": True, "reset_at": clock["t"] + 7200}
+    assert refresh() == pytest.approx(1000.0 + 7200)
+    server.subprocess.run = lambda *a, **k: types.SimpleNamespace(
+        returncode=0, stdout=b"\n   Now using usage credits\n"
+    )
+    assert refresh() == 0.0
+    assert server._LIMIT_STATE.get("t") is None

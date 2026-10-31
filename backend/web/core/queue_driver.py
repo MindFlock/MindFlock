@@ -28,6 +28,7 @@ import subprocess
 import time
 from typing import Dict, Optional
 
+from backend.providers import usage_limits as _usage_limits
 from backend import log
 from backend import providers
 from backend import session
@@ -133,6 +134,20 @@ def _meter_is_about_this_session(inst) -> bool:
         return True
 
 
+def _credits_open(live: dict) -> bool:
+    """The meter says extra-usage credits are enabled and still have room
+    (``extra.limit`` 0 = no cap). Then no plan window is a wall."""
+    ex = live.get("extra") if isinstance(live, dict) else None
+    if not isinstance(ex, dict):
+        return False
+    try:
+        used = float(ex.get("used") or 0.0)
+        limit = float(ex.get("limit") or 0.0)
+    except (TypeError, ValueError):
+        return True
+    return limit <= 0 or used < limit
+
+
 def _live_limit_reset(provider, now: float, inst=None):
     """Authoritative "limited until" from the provider's own usage meter
     (``usage_live()`` — for Claude that's Anthropic's OAuth usage endpoint, the
@@ -157,6 +172,12 @@ def _live_limit_reset(provider, now: float, inst=None):
         live = None
     if not isinstance(live, dict) or not live:
         return None
+    # Extra-usage credits enabled (``extra`` present) and not themselves spent:
+    # a spent plan window does NOT stop a send — it is billed to the credits.
+    # Treating it as a wall held a freshly spawned worker's task for days (the
+    # pane showed only "Now using usage credits").
+    if _credits_open(live):
+        return 0.0
     windows = [live]
     if isinstance(live.get("weekly"), dict):
         windows.append(live["weekly"])
@@ -225,6 +246,12 @@ def _refresh_limit_state(inst, title: str, name: str) -> float:
     except Exception:  # noqa: BLE001
         text = ""
     provider = providers.resolve(getattr(inst, "Program", "") or "")
+    # "Now using usage credits": the plan window is spent but the CLI carries
+    # on, billed to credits — the window is OPEN for sending. Clear any hold
+    # before asking the limit parser or the meter (both read the spent window).
+    if _usage_limits.is_credits_banner(text):
+        _LIMIT_STATE.pop(title, None)
+        return 0.0
     try:
         state = provider.usage_limit_state(text, now)
     except Exception:  # noqa: BLE001 — detection must never break the drain
