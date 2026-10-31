@@ -504,6 +504,28 @@ class TestLocalStream:
         )
         return seen
 
+    def test_a_pass_is_greedy_once_with_its_tokens_capped(self, model, monkeypatch):
+        from array import array
+
+        seen: list = []
+
+        class _Model:
+            def transcribe(self, audio, temperature=None, max_new_tokens=None, **kw):
+                seen.append((temperature, max_new_tokens))
+                return iter(()), SimpleNamespace(language="en")
+
+        monkeypatch.setattr(speech.LocalSTT, "_model", lambda self, name="": _Model())
+        monkeypatch.setattr(
+            speech,
+            "_import",
+            lambda name: SimpleNamespace(
+                float32="f4", frombuffer=lambda raw, dtype: [0.0] * (len(raw) // 4)
+            ),
+        )
+        run = speech.LocalSTT().stream_transcriber("en")
+        assert run(array("f", [0.0] * 32000), "") == []  # a 2 s window
+        assert seen == [(0.0, speech.STREAM_TOKENS + 2 * speech.STREAM_TOKENS_PER_S)]
+
     def test_a_pass(self, model):
         from array import array
 

@@ -162,7 +162,8 @@ class TestCommit:
 
 
 class TestPrune:
-    def test_audio_before_the_last_committed_word_is_dropped(self):
+    def test_a_pass_rehears_only_about_a_second_of_committed_words(self):
+        assert ss.REHEAR_SECONDS == 1.0
         fake = Script(
             [("one", 0.0, 0.5), ("two", 0.6, 1.0), ("three", 2.5, 2.9)],
             [
@@ -171,15 +172,41 @@ class TestPrune:
                 ("three", 2.5, 2.9),
                 ("four", 5.0, 5.5),
             ],
-            # The window now starts at 2.6 s: times are relative to it.
-            [("three", 0.0, 0.3), ("four", 2.4, 2.9), ("five", 3.1, 3.5)],
+            # The window now starts at 1.0 s: times are relative to it.
+            [("three", 1.5, 1.9), ("four", 4.0, 4.5), ("five", 4.7, 5.1)],
         )
         st = ss.Stream(fake)
         st.feed(_secs(3))
         assert st.feed(_secs(3)) == ("one two three", "four")
-        assert st.held_seconds == pytest.approx(6 - 2.6, abs=1e-3)
+        # Cut at the end of the last committed word that ends a second or
+        # more before "three" does: "two", at 1.0 s.
+        assert st.held_seconds == pytest.approx(6 - 1.0, abs=1e-3)
         assert st.feed(_secs(0.5)) == ("four", "five")
-        assert fake.calls[2][0] == int(round((6.5 - 2.6) * RATE))
+        assert fake.calls[2][0] == int(round((6.5 - 1.0) * RATE))
+        # "four" ends at 5.5 s: the cut moves to "three"'s end, 2.9 s.
+        assert st.held_seconds == pytest.approx(6.5 - 2.9, abs=1e-3)
+
+    def test_a_long_dictation_decodes_a_short_window(self):
+        """Every pass commits one more word: the window stays the tail plus
+        about a second, however long the phrase gets."""
+        passes, sizes = [], []
+        for n in range(2, 14):
+            # word i spans [i*0.5, i*0.5+0.4] in stream time
+            passes.append([("w%d" % i, i * 0.5, i * 0.5 + 0.4) for i in range(n)])
+        fake = Script(*passes)
+        st = ss.Stream(fake)
+        offsets = []
+        for _ in passes:
+            # relative times: the script answers in stream time, so shift by
+            # the window's start as the stream will see it
+            offsets.append(st._offset)
+            fake.passes[0] = [
+                (w, a - st._offset, b - st._offset) for w, a, b in fake.passes[0]
+            ]
+            st.feed(_secs(0.5))
+            sizes.append(st.held_seconds)
+        assert st.text.split()[:3] == ["w0", "w1", "w2"]
+        assert max(sizes[-6:]) <= ss.REHEAR_SECONDS + 1.0 + 1e-3
 
     def test_uncommitted_words_keep_their_audio(self):
         fake = Script(_words("um so"), _words("well then"))
@@ -196,8 +223,18 @@ class TestPrune:
         st = ss.Stream(fake)
         st.feed(_secs(3))
         assert st.feed(_secs(3)) == ("one two", "three")
-        # cut at min(two's end - 0.3, three's start - 0.3) = 0.7 s
-        assert st.held_seconds == pytest.approx(6 - 0.7, abs=1e-3)
+        # No committed word ends a second before "two" does: nothing is cut.
+        assert st.held_seconds == pytest.approx(6, abs=1e-3)
+
+    def test_the_cut_never_reaches_under_the_tail(self):
+        st = ss.Stream(Script())
+        st._committed = [("a", 0.0, 0.4), ("b", 3.0, 3.4)]
+        st._tail = [("c", 0.2, 3.9)]  # a tail word that (oddly) starts early
+        st._audio = _secs(5)
+        st._cut()
+        # "a" ends 2 s before "b" (cut there, 0.4 s) — but "c" starts at
+        # 0.2 s: its audio stays.
+        assert st.held_seconds == pytest.approx(5, abs=1e-3)
 
     def test_a_window_with_no_words_keeps_its_last_second(self):
         st = ss.Stream(Script([], []))
@@ -223,8 +260,8 @@ class TestWindow:
         assert st.feed(_secs(4)) == ("a b", "c")
         assert fake.calls[1][0] == 8 * RATE
         assert st.last_window_s == 8.0
-        # Then the usual prune: cut at b's end - 0.3 = 5.2 s.
-        assert st.held_seconds == pytest.approx(10 - 5.2, abs=1e-3)
+        # Then the usual prune: cut at a's end, 2.5 s (b ends at 5.5 s).
+        assert st.held_seconds == pytest.approx(10 - 2.5, abs=1e-3)
         assert st.text == "a b"
 
     def test_a_tail_that_never_settles_is_committed_at_the_edge(self):
@@ -256,6 +293,71 @@ class TestWindow:
             st.feed(_secs(9))
         assert st.finish()["committed"] == "late"
         assert fake.calls[1][0] == 8 * RATE
+
+
+class TestEcho:
+    """Whisper's edge echo — a sliver repeating the word before as a pass's
+    last word — is never committed. The passes are the bench's own (cycle 1
+    judge: "Disregard that that.", "over. out. out." 3/48)."""
+
+    def _run(self, passes, loud, quiet=0.6, accurate=None):
+        st = ss.Stream(Script(*passes), accurate)
+        st.feed(_secs(loud[0]))
+        for size in loud[1:]:
+            st.feed(_secs(size))
+        st.feed(_secs(quiet, 0.0))
+        st.finish()
+        return st.text
+
+    def test_disregard_that_that(self):
+        passes = [
+            [(" disregard", 0.08, 0.76)],
+            [(" Disregard", 0.08, 0.98), (" that.", 0.98, 1.22)],
+            [(" Disregard", 0.08, 0.98), (" that", 0.98, 1.24), (" that.", 1.24, 1.32)],
+        ]
+        text = self._run(passes, [1.05, 0.3, 0.3], accurate=lambda a: "disregard that")
+        assert text == "Disregard that"
+
+    def test_over_out_out(self):
+        passes = [
+            [(" over.", 0.24, 0.86)],
+            [(" over.", 0.0, 0.84), (" out.", 1.4, 1.46), (" out.", 1.46, 1.54)],
+            [(" over.", 0.0, 0.86), (" out.", 1.4, 1.52), (" out.", 1.52, 1.68)],
+        ]
+        assert self._run(passes, [1.37, 0.3, 0.3]) == "over. out."
+
+    def test_fences_work_work(self):
+        passes = [
+            [(" Fences", 0.08, 1.92), (" were", 1.92, 2.22)],
+            [(" Fences", 0.08, 1.92), (" Work", 1.92, 2.32), (" work.", 2.32, 2.44)],
+            [(" Fences", 0.08, 1.9), (" Work", 1.9, 2.32), (" work.", 2.32, 2.46)],
+        ]
+        assert self._run(passes, [2.25, 0.3, 0.3]) == "Fences Work"
+
+    def test_an_echo_of_the_last_committed_word(self):
+        st = ss.Stream(
+            Script([("that", 0.2, 0.5)], [("that", 0.2, 0.5)], [("that.", 0.5, 0.58)])
+        )
+        st.feed(_secs(0.6))
+        assert st.feed(_secs(0.3)) == ("that", "")
+        assert st.feed(_secs(0.3)) == ("", "")
+
+    def test_a_real_repeat_stays(self):
+        st = ss.Stream(Script([("no", 0.1, 0.4), ("no.", 0.5, 0.8)]))
+        assert st.feed(_secs(1)) == ("", "no no.")
+
+    @pytest.mark.parametrize(
+        "before, word, echo",
+        [
+            (("that", 0.98, 1.24), ("that.", 1.24, 1.32), True),
+            (("out.", 1.4, 1.52), ("Out", 1.52, 1.68), True),
+            (("out.", 1.4, 1.52), ("out.", 1.52, 1.8), False),  # too long
+            (("out.", 1.0, 1.2), ("out.", 1.5, 1.6), False),  # a gap before it
+            (("in", 1.0, 1.2), ("out", 1.2, 1.3), False),  # another word
+        ],
+    )
+    def test_echo(self, before, word, echo):
+        assert ss._echo(before, word) is echo
 
 
 class TestSilence:

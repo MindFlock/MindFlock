@@ -224,6 +224,58 @@ class TestLane:
         assert ss.lane("whisper:a") is not first
 
 
+class TestBoundedWaits:
+    """No lane wait is unbounded (cycle 1 judge R10)."""
+
+    def test_every_kind_has_a_wait(self):
+        assert set(ss.LANE_WAIT_S) == {ss.FINAL, ss.CLIP, ss.FAST}
+        assert all(0 < v < ss.LANE_STUCK_S for v in ss.LANE_WAIT_S.values())
+
+    def test_a_job_that_waits_too_long_gives_up(self):
+        lane = ss.lane("whisper:x")
+        busy = _Busy(lane)
+        ran = []
+        job = lane.submit(ss.FAST, "me")
+        started = time.monotonic()
+        with pytest.raises(ss.Skipped, match="stayed busy"):
+            lane.run_job(job, lambda: ran.append(1), wait=0.05)
+        assert time.monotonic() - started < 1.0
+        assert ran == [] and job.state == "dropped" and lane.pending() == []
+        busy.release()
+        assert lane.run(lambda: "next") == "next"
+
+    def test_the_default_wait_is_the_kinds(self, monkeypatch):
+        monkeypatch.setitem(ss.LANE_WAIT_S, ss.FAST, 0.05)
+        lane = ss.lane("whisper:x")
+        busy = _Busy(lane)
+        with pytest.raises(ss.Skipped):
+            lane.run(lambda: "late", ss.FAST, "me")
+        busy.release()
+
+    def test_a_stuck_job_is_abandoned_by_the_next_waiter(self, monkeypatch, caplog):
+        monkeypatch.setattr(ss, "LANE_STUCK_S", 0.1)
+        lane = ss.lane("whisper:x")
+        busy = _Busy(lane)  # never returns on its own within the test
+        assert lane.run(lambda: "after", ss.FAST, "me") == "after"
+        assert busy.job.abandoned and "ran over" in busy.job.why
+        assert "abandoned so the model is free" in caplog.text
+        busy.release()
+
+    def test_a_feed_behind_a_busy_model_returns_with_its_audio_unheard(
+        self, monkeypatch
+    ):
+        monkeypatch.setitem(ss.LANE_WAIT_S, ss.FAST, 0.05)
+        fast = Fast("hello there")
+        busy = _Busy(ss.lane(fast.lane))
+        st = ss.Stream(fast)
+        started = time.monotonic()
+        assert st.feed(_secs(1)) == ("", "")
+        assert time.monotonic() - started < 1.0
+        assert st.last_ms == 0 and st._unheard
+        busy.release()
+        assert st.feed(_secs(0.3)) == ("", "hello there")
+
+
 class Fast:
     """A fast tier that answers ``text`` for every pass, on lane ``name``."""
 
@@ -484,3 +536,102 @@ class TestThreads:
         assert stt.stream_transcriber("en").lane == "whisper:base.en"
         assert stt.stream_transcriber("de").lane == "whisper:base"
         assert stt.final_transcriber("en").lane == "whisper:small"
+
+
+class TestShortPad:
+    """The streaming tiers pad Whisper's encoder input to 10 s, not 30
+    (``speech._padded``): faster-whisper's ``pad_or_trim`` is wrapped, for
+    the calls made under it only."""
+
+    @pytest.fixture
+    def fw(self, monkeypatch):
+        seen: list = []
+
+        def pad_or_trim(array, length=3000, *, axis=-1):
+            seen.append((array.shape[axis], length))
+            return array
+
+        mod = SimpleNamespace(pad_or_trim=pad_or_trim)
+        monkeypatch.setattr(speech, "_import", lambda name: mod)
+        monkeypatch.setitem(speech._PAD_STATE, "ok", False)
+        monkeypatch.setitem(speech._PAD_STATE, "off", False)
+        return SimpleNamespace(mod=mod, seen=seen)
+
+    @staticmethod
+    def _mel(frames):
+        return SimpleNamespace(shape=(80, frames))
+
+    def test_a_pass_pads_to_ten_seconds(self, fw):
+        out = speech._padded(10.0, lambda: fw.mod.pad_or_trim(self._mel(300)))
+        assert out.shape == (80, 300)
+        assert fw.seen == [(300, 1000)]
+
+    def test_a_longer_window_is_never_cut(self, fw):
+        speech._padded(10.0, lambda: fw.mod.pad_or_trim(self._mel(950)))
+        assert fw.seen == [(950, 1200)]  # its audio, 2 s of quiet, whole seconds
+        speech._padded(10.0, lambda: fw.mod.pad_or_trim(self._mel(2950)))
+        assert fw.seen[-1] == (2950, 3000)  # never past Whisper's own 30 s
+
+    def test_other_calls_keep_thirty_seconds(self, fw):
+        speech._padded(10.0, lambda: None)  # hooks it
+        fw.mod.pad_or_trim(self._mel(300))  # a one-shot clip: not under it
+        assert fw.seen == [(300, 3000)]
+        got: list = []
+
+        def other_thread():
+            got.append(fw.mod.pad_or_trim(self._mel(200)))
+
+        def decode():
+            t = threading.Thread(target=other_thread)
+            t.start()
+            t.join()
+            return fw.mod.pad_or_trim(self._mel(100))
+
+        speech._padded(10.0, decode)
+        assert fw.seen[1:] == [(200, 3000), (100, 1000)]
+
+    def test_hooked_once(self, fw):
+        speech._padded(10.0, lambda: None)
+        first = fw.mod.pad_or_trim
+        speech._padded(10.0, lambda: None)
+        assert fw.mod.pad_or_trim is first
+
+    def test_an_engine_that_refuses_it_goes_back_to_thirty(self, fw, caplog):
+        calls: list = []
+
+        def decode():
+            length = fw.mod.pad_or_trim(self._mel(300)) and fw.seen[-1][1]
+            calls.append(length)
+            if length != 3000:
+                raise ValueError("expected 3000 frames")
+            return "text"
+
+        assert speech._padded(10.0, decode) == "text"
+        assert calls == [1000, 3000]
+        assert speech._PAD_STATE["off"] and "padding to 30 s" in caplog.text
+        assert speech._padded(10.0, decode) == "text"
+        assert calls[-1] == 3000
+
+    def test_after_one_success_an_error_is_the_calls_own(self, fw):
+        assert speech._padded(10.0, lambda: "ok") == "ok"
+
+        def boom():
+            raise RuntimeError("model crashed")
+
+        with pytest.raises(RuntimeError, match="model crashed"):
+            speech._padded(10.0, boom)
+        assert not speech._PAD_STATE["off"]
+
+    def test_a_first_error_at_both_lengths_is_the_calls_own(self, fw):
+        def boom():
+            fw.mod.pad_or_trim(self._mel(100))
+            raise RuntimeError("out of memory")
+
+        with pytest.raises(RuntimeError, match="out of memory"):
+            speech._padded(10.0, boom)
+        assert [n for _f, n in fw.seen] == [1000, 3000]
+        assert not speech._PAD_STATE["off"]
+
+    def test_no_hook_point_decodes_as_before(self, monkeypatch):
+        monkeypatch.setattr(speech, "_import", lambda name: SimpleNamespace())
+        assert speech._padded(10.0, lambda: "plain") == "plain"
