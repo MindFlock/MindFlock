@@ -19,10 +19,11 @@ server.py re-imports every name defined here.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 import time
-from typing import Dict, Optional
+from typing import Callable, Dict, List, Optional
 
 from backend.session import tmux
 from backend.web.core import agent_state as _agent_state
@@ -790,3 +791,111 @@ def _seed_event_snapshot(title: str) -> None:
             title,
             {"status": "loading", "activity": "offline", "stage": "provisioning"},
         )
+
+
+# ---- the reply, the moment it lands --------------------------------------- #
+# The Stop hook files ``<marker dir>/<session>.reply.json`` the instant a turn
+# ends (tmp + os.replace), but nothing told the server: the reply — and the
+# ``Say:`` line riding its idle announcement — reached clients on the next 4s
+# instances tick, 0-4s late on every spoken reply. ``ReplyWatch`` notices the
+# file landing for the price of one ``stat`` of the marker directory per poll
+# (an os.replace into it moves the directory's mtime), and server.py's
+# ``_reply_watch_loop`` republishes that one session (``_republish_reply``)
+# through ``_emit_state_changes`` — so the settle and boot-quiet windows above
+# hold exactly as they do for the tick. Debounced per session: a reply that
+# changes again within ``quiet_s`` (a chained turn's second Stop, a rewrite)
+# publishes once, after the burst; ``max_wait_s`` caps how long a reply that
+# keeps changing can be held. A full rescan every ``rescan_s`` covers a mount
+# whose directory mtime is too coarse to see two writes in one tick.
+REPLY_SUFFIX = ".reply.json"
+
+
+class ReplyWatch:
+    """Which sessions' reply files landed since the last poll (by safe
+    session name, see ``activity_markers.safe_session_name``). The first
+    successful scan only baselines: a reply already on disk is old news.
+    Not thread-safe — one poller owns it. Never raises."""
+
+    YOUNG_NS = 50_000_000  # > any kernel tick; see _changed
+
+    def __init__(
+        self,
+        directory: Callable[[], object],
+        quiet_s: float = 0.03,
+        max_wait_s: float = 0.5,
+        rescan_s: float = 1.0,
+    ) -> None:
+        self._directory = directory
+        self.quiet_s = quiet_s
+        self.max_wait_s = max_wait_s
+        self.rescan_s = rescan_s
+        self._dir_key: Optional[tuple] = None
+        self._files: Optional[Dict[str, tuple]] = None  # None = not baselined
+        self._scanned_at = 0.0
+        # name -> (first change seen, last change seen), monotonic
+        self._pending: Dict[str, tuple] = {}
+
+    def _scan(self) -> Optional[Dict[str, tuple]]:
+        out: Dict[str, tuple] = {}
+        try:
+            with os.scandir(str(self._directory())) as it:
+                for entry in it:
+                    name = entry.name
+                    if not name.endswith(REPLY_SUFFIX):
+                        continue
+                    try:
+                        st = entry.stat()
+                    except OSError:
+                        continue
+                    out[name[: -len(REPLY_SUFFIX)]] = (
+                        st.st_mtime_ns,
+                        st.st_size,
+                        st.st_ino,
+                    )
+        except OSError:
+            return None
+        return out
+
+    def _changed(self, now: float) -> List[str]:
+        try:
+            st = os.stat(str(self._directory()))
+            dir_key: Optional[tuple] = (st.st_ino, st.st_mtime_ns)
+        except OSError:
+            dir_key = None
+        if dir_key is None:
+            return []
+        if dir_key == self._dir_key and now - self._scanned_at < self.rescan_s:
+            return []
+        files = self._scan()
+        if files is None:
+            return []
+        # The kernel stamps directory mtimes from a coarse clock (a jiffy,
+        # 1-10ms): a reply replaced in during the same tick as the change
+        # this scan answered (the hook's own tmp file) leaves the mtime
+        # unmoved. A mtime that young is not trusted — scan again next poll.
+        young = time.time_ns() - st.st_mtime_ns < self.YOUNG_NS
+        self._dir_key = None if young else dir_key
+        self._scanned_at = now
+        prev, self._files = self._files, files
+        if prev is None:
+            return []  # baseline
+        return [n for n, key in files.items() if prev.get(n) != key]
+
+    def poll(self, now: Optional[float] = None) -> List[str]:
+        """One pass: the names whose reply landed and then stayed put for
+        ``quiet_s`` (or was held ``max_wait_s``) — each once per burst."""
+        try:
+            now = time.monotonic() if now is None else now
+            for name in self._changed(now):
+                first = self._pending.get(name, (now, now))[0]
+                self._pending[name] = (first, now)
+            due = [
+                n
+                for n, (first, last) in self._pending.items()
+                if now - last >= self.quiet_s or now - first >= self.max_wait_s
+            ]
+            for n in due:
+                del self._pending[n]
+            return due
+        except Exception:  # noqa: BLE001 — a watcher never breaks its loop
+            return []

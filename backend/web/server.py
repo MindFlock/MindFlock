@@ -95,7 +95,8 @@ modules under
                      (the sweep, the rules), wake it on demand (ensure_awake)
     snapshot         per-session JSON descriptors (labels, diff stat)
     state_events     session.*_changed diffing: settle + boot quiet windows,
-                     session.turn_ended gates, human-input presence
+                     session.turn_ended gates, human-input presence,
+                     ReplyWatch (the Stop hook's reply file landing)
     task_headlines   the row's task_headline: newest MEANINGFUL prompt as a
                      verb phrase (backend/task_headline.py), remembered per
                      session + conversation
@@ -564,6 +565,7 @@ from backend.web.core.state_events import (
     _SETTLE_ACTIVITIES,
     _STAGE_SETTLE_SECONDS,
     _TRANSIENT_STAGES,
+    ReplyWatch as _ReplyWatch,
     _TURN_END_DWELLS,
     _TURN_END_DWELL_MARKER_S,
     _TURN_END_DWELL_S,
@@ -809,6 +811,9 @@ async def lifespan(app: FastAPI):
     # Ctrl+F ahead of time: keep agent panes' find indexes current, build
     # missing ones where nobody is looking (see _find_index_tick).
     _register_task(_find_index_loop())
+    # A turn's reply goes out the moment the Stop hook files it, not on the
+    # next 4s instances tick (see _reply_watch_loop).
+    _register_task(_reply_watch_loop())
     # Verify: watch origin until each generated test plan's work reaches the
     # live branch, and poll the verify sessions that are working through one.
     _register_task(_test_plans_due_loop())
@@ -1499,9 +1504,12 @@ def _tick_state_changes() -> None:
     telemetry (the tick only needs what feeds *_changed events)."""
     for i in list(ENGINE.instances.values()):
         try:
+            started = time.monotonic()
             status = getattr(i.Status, "name", str(i.Status)).lower()
             stage = _session_stage_cached(i).get("stage") or "agent"
             activity = _agent_activity_cached(i, i.Title)
+            if _reply_superseded(i.Title, started):
+                continue  # its reply was published while this was read
             _emit_state_changes(i.Title, status, activity, stage)
         except Exception:  # noqa: BLE001 — one bad session can't stop the tick
             pass
@@ -2077,12 +2085,15 @@ _SNAPSHOT_AT = 0.0
 def _instances_tick() -> None:
     """One background pass: recompute the sessions snapshot and fire the side
     effects that used to piggyback on GET /api/instances."""
+    started = time.monotonic()
     out = _build_instances_snapshot()
     for d in out:
         title = d.get("title") or ""
         inst = ENGINE.instances.get(title)
         if inst is None:  # deleted while the snapshot was being built
             continue
+        if _reply_superseded(title, started):
+            continue  # its reply was published after this row was read
         try:
             # J5: announce the first crossing of the per-session cost budget.
             _check_session_budget(title, d.get("tokens_cost") or 0.0)
@@ -2143,8 +2154,9 @@ def _instances_tick() -> None:
     # its own thread, so it never holds up this tick (core.revive.auto_tick).
     _revive.auto_tick(sys.modules[__name__])
     # Publish the freshly computed state so AppContext.sessions() (Addon API
-    # v2) and GET /api/instances can serve it without recomputing it.
-    _events.set_sessions_snapshot(out)
+    # v2) and GET /api/instances can serve it without recomputing it — all
+    # but a row a landed reply republished after this tick read it.
+    _events.set_sessions_snapshot(_keep_reply_rows(out, started))
     global _SNAPSHOT_AT
     _SNAPSHOT_AT = time.time()
 
@@ -2181,6 +2193,134 @@ def _republish_session(title: str):
         return d
     except Exception:  # noqa: BLE001 — a freshness nicety must never 500
         return None
+
+
+#: Probe memos a landed reply makes stale: the reading the Stop hook just
+#: flipped and every row field read off the reply file.
+_REPLY_PROBES = ("activity", "asking", "last_turn", "last_say")
+#: title -> monotonic time its last _republish_reply finished. A tick that
+#: STARTED before then may have read the session before the reply landed
+#: (``working``): it must neither emit that reading (idle→working→idle, a
+#: flapping chip) nor publish that row over the fresh one.
+_REPLY_REPUBLISHED_AT: Dict[str, float] = {}
+
+
+def _reply_superseded(title: str, started: float) -> bool:
+    """Whether a reply republished ``title`` after a reading begun at
+    ``started`` (monotonic)."""
+    return _REPLY_REPUBLISHED_AT.get(title, 0.0) > started
+
+
+def _keep_reply_rows(out: list, started: float) -> list:
+    """``out`` with each row a reply republished since ``started`` swapped
+    for the published (fresher) one; old stamps are dropped."""
+    for t, at in list(_REPLY_REPUBLISHED_AT.items()):
+        if at < started - 60.0:
+            _REPLY_REPUBLISHED_AT.pop(t, None)
+    fresh = {t for t, at in list(_REPLY_REPUBLISHED_AT.items()) if at > started}
+    if not fresh:
+        return out
+    rows = {
+        r.get("title"): r
+        for r in _events.sessions_snapshot()
+        if r.get("title") in fresh
+    }
+    return [rows.get(d.get("title"), d) for d in out]
+
+
+def _republish_reply(title: str):
+    """Publish ``title``'s turn end the moment its reply file lands.
+
+    :func:`_republish_session` without its cost: a reply changes the
+    activity and the row fields read off the reply, never git state, so only
+    those are recomputed (the 4s tick refreshes the rest, as it always has)
+    and patched into the published row, then emitted exactly the way
+    :func:`_tick_state_changes` emits — so a reply announces through the same
+    settle and boot-quiet windows as the tick. The memos those fields sit
+    behind are dropped first: the activity read ≤2.5s ago is the ``working``
+    the Stop hook just ended. Publish before emit, as in
+    :func:`_republish_session`. A session the tick has not published yet gets
+    the full republish. Returns the row, or None. Never raises."""
+    try:
+        inst = ENGINE.instances.get(title)
+        if inst is None:
+            return None
+        prev = next(
+            (r for r in _events.sessions_snapshot() if r.get("title") == title),
+            None,
+        )
+        if prev is None:
+            return _republish_session(title)
+        with _PROBE_CACHE_LOCK:
+            for probe in _REPLY_PROBES:
+                _PROBE_CACHE.pop((probe, title), None)
+        status = getattr(inst.Status, "name", str(inst.Status)).lower()
+        stage = _session_stage_cached(inst).get("stage") or "agent"
+        # Computed, then donated (as _session_stage_fresh does): a reader
+        # that began before the hook may still store its ``working``.
+        activity = _probe_seed("activity", inst, _agent_activity(inst, title))
+        row = dict(prev)
+        row["activity"] = activity
+        row["activity_since"] = _agent_state.state_since(title)
+        row["asking"] = _session_asking_cached(inst, activity)
+        row["background"] = _background_jobs(inst, title)
+        row["last_turn"] = _session_last_turn_cached(inst)
+        row["last_say"] = _session_last_say_cached(inst)
+        _events.patch_session_snapshot(title, row)
+        _emit_state_changes(title, status, activity, stage)
+        _REPLY_REPUBLISHED_AT[title] = time.monotonic()
+        return row
+    except Exception:  # noqa: BLE001 — a freshness nicety must never raise
+        return None
+
+
+# ---- Reply watch ------------------------------------------------------------ #
+#: How often the marker directory is stat'ed for a landed reply (one syscall;
+#: with ReplyWatch's one-poll quiet period a reply publishes ≤ ~2 polls later).
+_REPLY_WATCH_INTERVAL = 0.05
+#: None = on except under pytest (ENGINE is the developer's real state there);
+#: tests that exercise the loop set it True with an isolated ENGINE.
+_REPLY_WATCH_LOOP_ENABLED: Optional[bool] = None
+
+
+def _reply_watch_loop_enabled() -> bool:
+    if _REPLY_WATCH_LOOP_ENABLED is not None:
+        return bool(_REPLY_WATCH_LOOP_ENABLED)
+    return not _restart._under_pytest()
+
+
+def _reply_titles(names) -> list:
+    """The live session titles behind reply-file names (safe session names)."""
+    from backend.providers import activity_markers as _am
+
+    wanted = set(names)
+    out = []
+    for title in list(ENGINE.instances):
+        try:
+            if _am.safe_session_name(tmux.to_mindflock_tmux_name(title)) in wanted:
+                out.append(title)
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
+async def _reply_watch_loop() -> None:
+    """Republish a session the moment its Stop hook files the reply
+    (core.state_events.ReplyWatch; started by the lifespan)."""
+    if not _reply_watch_loop_enabled():
+        return
+    from backend.providers import activity_markers as _am
+
+    watch = _ReplyWatch(_am.marker_dir)
+    while True:
+        try:
+            names = watch.poll()
+            if names:
+                for title in _reply_titles(names):
+                    await asyncio.to_thread(_republish_reply, title)
+        except Exception:  # noqa: BLE001 — the loop must never die
+            pass
+        await asyncio.sleep(_REPLY_WATCH_INTERVAL)
 
 
 async def _instances_tick_loop() -> None:
