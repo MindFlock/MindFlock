@@ -1143,6 +1143,8 @@ class LocalSTT(Backend):
         hints = " ".join(str(hints or "").split())
 
         def run(audio) -> str:
+            from backend.web.core import speech_stream as _stream
+
             model = self._model(name)
             np = _import("numpy")
             samples = np.frombuffer(bytes(audio), dtype=np.float32)
@@ -1156,7 +1158,11 @@ class LocalSTT(Backend):
                     vad_filter=True,
                     **kw,
                 )
-                parts = [str(getattr(s, "text", "") or "").strip() for s in segments]
+                parts: List[str] = []
+                for seg in segments:  # each 30 s window decodes as it is read
+                    parts.append(str(getattr(seg, "text", "") or "").strip())
+                    if _stream.abandoned():  # its finish gave up: stop here
+                        break
             except Exception as err:  # noqa: BLE001
                 raise SpeechError("faster-whisper failed: %s" % err) from err
             return " ".join(p for p in parts if p).strip()

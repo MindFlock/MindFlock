@@ -155,10 +155,48 @@ class TestLane:
         lane = ss.lane("whisper:x")
         busy = _Busy(lane, ss.FAST, "me")
         lane.submit(ss.FAST, "me")
-        assert busy.job.state == "running"
-        assert lane.cancel(busy.job) is False
+        assert busy.job.state == "running" and not busy.job.abandoned
         busy.release()
         assert busy.job.state == "done"
+
+    def test_an_abandoned_job_lets_the_next_run(self):
+        # A final that timed out cannot be stopped mid-call, but the next
+        # phrase's final must not wait for it.
+        lane = ss.lane("whisper:small")
+        busy = _Busy(lane, ss.FINAL, "old")
+        out: dict = {}
+        nxt = lane.submit(ss.FINAL, "new")
+        t = _waiter(lane, nxt, out)
+        time.sleep(0.02)
+        assert nxt.state == "queued"  # blocked behind the running one
+        assert lane.cancel(busy.job, "its finish stopped waiting") is False
+        assert busy.job.abandoned and busy.job.why == "its finish stopped waiting"
+        t.join(2)
+        assert out[nxt] == "ran"  # ran while the abandoned one still ran
+        assert busy.job.state == "running"
+        busy.release()
+        assert busy.job.state == "done" and lane.running is None
+
+    def test_the_call_sees_it_was_abandoned(self):
+        lane = ss.lane("whisper:small")
+        seen: list = []
+        go, checked = threading.Event(), threading.Event()
+
+        def call():
+            seen.append(ss.abandoned())
+            go.wait(5)
+            seen.append(ss.abandoned())
+            checked.set()
+
+        job = lane.submit(ss.FINAL, "me")
+        t = threading.Thread(target=lane.run_job, args=(job, call), daemon=True)
+        t.start()
+        _until(lambda: job.state == "running")
+        lane.cancel(job)
+        go.set()
+        checked.wait(2)
+        assert seen == [False, True]
+        assert ss.abandoned() is False  # not this thread's job
 
     def test_cancel_a_queued_job(self):
         lane = ss.lane("whisper:x")
@@ -214,15 +252,19 @@ class TestStreamScheduling:
     def test_no_fast_pass_once_the_final_has_started(self):
         fast, final = Fast("run the tick"), Final("Run the tests.")
         st = ss.Stream(fast, final)
+        fast.text = "run the tick"
         assert st.feed(_secs(1)) == ("", "run the tick")
-        # 0.6 s of quiet: the accurate pass starts, and the tail that waits
-        # for a second agreeing pass gets none — the final is the answer.
-        assert st.feed(_secs(0.6, level=0.0)) == ("", "run the tick")
-        assert st.feed(_secs(0.3, level=0.0)) == ("", "run the tick")
-        assert st.last_ms == 0 and len(fast.calls) == 1
+        # 0.6 s of quiet: the accurate pass starts, and the fast tier gets
+        # one pass that hears the quiet after the last word…
+        fast.text = "run the tests"
+        assert st.feed(_secs(0.6, level=0.0)) == ("run the", "tests")
+        assert st._early is not None and len(fast.calls) == 2
+        # …and then none: the final is the answer, the tail stands.
+        assert st.feed(_secs(0.3, level=0.0)) == ("", "tests")
+        assert st.last_ms == 0 and len(fast.calls) == 2
         out = st.finish()
-        assert len(fast.calls) == 1  # no flush either
-        assert out["committed"] == "run the tick"
+        assert len(fast.calls) == 2  # no flush either
+        assert out["committed"] == "tests" and st.text == "run the tests"
         assert out["final"] == "Run the tests." and out["final_early"] is True
 
     def test_a_word_end_in_the_starting_chunk_is_still_heard(self):
@@ -235,7 +277,7 @@ class TestStreamScheduling:
         assert ss._quiet(chunk) and ss._frames(chunk)[1] > 0
         st.feed(chunk)
         assert st._early is not None  # 0.9 s of quiet after the word
-        assert len(fast.calls) == 2  # but the fast tier heard its end
+        assert len(fast.calls) == 2  # and the fast tier heard its end
         st.feed(_secs(0.3, level=0.0))
         assert len(fast.calls) == 2  # and then no more
 
@@ -413,6 +455,29 @@ class TestThreads:
         voice(stt_stream_model="small")
         speech.LocalSTT()._model("small")
         assert seen[0][1]["cpu_threads"] == 6
+
+    def test_an_abandoned_final_stops_between_segments(self, loads, monkeypatch):
+        read: list = []
+
+        def segments():
+            for i in range(3):  # one per 30 s window, decoded as read
+                read.append(i)
+                if i == 0:
+                    ss.lane("whisper:small").cancel(job)  # its finish gave up
+                yield SimpleNamespace(text="part %d" % i)
+
+        class _Model:
+            def transcribe(self, audio, **kw):
+                return segments(), SimpleNamespace(language="en")
+
+        monkeypatch.setattr(speech.LocalSTT, "_model", lambda self, name="": _Model())
+        np = SimpleNamespace(float32="f4", frombuffer=lambda raw, dtype: raw)
+        monkeypatch.setattr(speech, "_import", lambda name: np)
+        run = speech.LocalSTT().final_transcriber("en")
+        lane = ss.lane(run.lane)
+        job = lane.submit(ss.FINAL, "me")
+        assert lane.run_job(job, lambda: run(array("f", [0.0] * 10))) == "part 0"
+        assert read == [0]  # the other windows were never decoded
 
     def test_transcribers_name_their_lane(self, loads):
         stt = speech.LocalSTT()

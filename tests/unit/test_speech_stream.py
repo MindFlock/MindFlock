@@ -571,12 +571,14 @@ class TestFinal:
         # The accurate pass is on its way and every loud frame was in a fast
         # pass: the flush would only re-agree on the tail, on the final's cores.
         acc = Accurate("Run the tests.")
-        fake = Script(_words("run the tick"))  # one pass only
+        fake = Script(_words("run the tick"), _words("run the tests"))  # two only
         st = ss.Stream(fake, acc)
         assert st.feed(_secs(1)) == ("", "run the tick")
+        # The pause's pass heard 0.3 s past the last word: that is enough.
+        assert st.feed(_secs(0.3, level=0.0)) == ("run the", "tests")
         out = st.finish()
-        assert out["committed"] == "run the tick" and out["final"] == "Run the tests."
-        assert len(fake.calls) == 1
+        assert out["committed"] == "tests" and out["final"] == "Run the tests."
+        assert len(fake.calls) == 2
 
     def test_open_stream_passes_the_accurate_pass_on(self):
         acc = Accurate("ok then")
@@ -794,23 +796,33 @@ class TestEarly:
         assert st.finish() == {"committed": "", "partial": ""}
         assert acc.calls == []
 
-    def test_a_running_stale_pass_is_not_doubled(self):
+    def test_a_running_stale_pass_does_not_block_the_next(self):
         import threading
 
-        gate = threading.Event()
-        acc = Accurate("x y", gate=gate)
+        first, second = threading.Event(), threading.Event()
+        gates = [first, second]
+
+        class Gated(Accurate):
+            def __call__(self, audio):
+                self.calls.append(len(audio))
+                gates[len(self.calls) - 1].wait(5)
+                return self.text
+
+        acc = Gated("x y")
         st = ss.Stream(Script(*([_words("x y")] * 6)), acc)
         st.feed(_secs(1))
         _pause(st)  # the early pass starts and blocks
         _ran(st, acc.calls)
-        st.feed(_secs(1))  # the person went on: stale
+        st.feed(_secs(1))  # the person went on: stale, and abandoned
         stale = st._early
-        _pause(st)  # still running: the next one queues behind it
-        assert len(acc.calls) == 1
         assert stale.stale is True and stale.job.state == "running"
-        assert st._early is not stale and st._early.job.state == "queued"
-        gate.set()
-        out = st.finish()  # the queued one covers the whole phrase
+        assert stale.job.abandoned is True
+        _pause(st)  # the next one starts at once: the lane was let go
+        _ran(st, acc.calls, 2)
+        assert st._early is not stale and st._early.job.state == "running"
+        second.set()
+        out = st.finish()  # the new one covers the whole phrase
+        first.set()
         assert acc.calls == [int(1.6 * RATE), int(3.2 * RATE)]
         assert out["final"] == "x y" and out["final_early"] is True
 

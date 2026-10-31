@@ -59,9 +59,10 @@ Speech after it makes it stale (withdrawn if it has not started yet).
 The two tiers share the CPU, so they are scheduled (:class:`Lane`, one per
 model: one job at a time, the accurate pass first, a stale job dropped
 before it runs), and once a phrase's accurate pass has started no fast
-pass runs for it unless loud audio came that no fast pass heard: the fast
-words are only the fallback now, and the tail stands as last heard — so a
-quiet chunk then runs no pass, and neither does ``finish``. Likewise
+pass runs for it once one has heard :data:`SETTLE_SECONDS` of the quiet
+after the last loud frame (the pass that completes the last word): the
+fast words are only the fallback now, and the tail stands as last heard —
+so a quiet chunk then runs no pass, and neither does ``finish``. Likewise
 ``finish`` skips its last fast pass when nothing loud arrived since the
 previous one and no tail waits: there is nothing new to hear.
 
@@ -183,6 +184,11 @@ SILENCE_SLACK = 0.4
 #: well short of the clients' 1.1 s phrase-end silence (``SILENCE_MS`` in
 #: voiceDesktop.ts / mobile.js), so the pass still gets ~0.6 s head start.
 EARLY_QUIET_SECONDS = 0.5
+#: How far past the last loud frame a fast pass must have heard before no
+#: more are run once the accurate pass started (``Stream._all_heard``): the
+#: bench's fast-tier WER went 28% → 36% when the pass over the speech's own
+#: last chunk had to stand.
+SETTLE_SECONDS = 0.3
 #: ``expect_ms`` is the median finish wait plus this margin (or twice the
 #: median absolute deviation, when larger), held to
 #: [:data:`EXPECT_FLOOR_MS`, the timeout]. Not the p95: the waits that hit
@@ -269,13 +275,26 @@ class Skipped(Exception):
 
 class Job:
     """One queued model call: ``state`` is ``queued`` → ``running`` →
-    ``done``, or ``dropped`` (with ``why``) before it ran."""
+    ``done``, or ``dropped`` (with ``why``) before it ran; ``abandoned``
+    when its waiter gave up on it while it ran (:meth:`Lane.cancel`)."""
 
-    __slots__ = ("kind", "owner", "state", "why")
+    __slots__ = ("kind", "owner", "state", "why", "abandoned")
 
     def __init__(self, kind: str, owner: object):
         self.kind, self.owner = kind, owner
         self.state, self.why = "queued", ""
+        self.abandoned = False
+
+
+_CURRENT = threading.local()
+
+
+def abandoned() -> bool:
+    """Whether the lane job running in this thread was abandoned: a model
+    call that can stop part-way (between faster-whisper's segments) checks
+    it and stops — its result is no longer wanted."""
+    job = getattr(_CURRENT, "job", None)
+    return bool(job is not None and job.abandoned)
 
 
 class Lane:
@@ -295,7 +314,12 @@ class Lane:
     * a :data:`FINAL` also drops its owner's queued :data:`FAST` jobs — once
       the accurate pass is on its way, the fast words are only a fallback;
     * :meth:`cancel` withdraws a queued job (a finish that stopped waiting,
-      an early pass the speech made stale)."""
+      an early pass the speech made stale), and ABANDONS a running one: the
+      lane is free for the next job at once (a final that timed out on a
+      long phrase blocked the next phrase's final for seconds), and the
+      call stops at its next check of :func:`abandoned`, if it makes one.
+      The abandoned call still uses the cores until then — the price of
+      not waiting for it."""
 
     def __init__(self, name: str):
         self.name = name
@@ -349,12 +373,16 @@ class Lane:
             self._queue.pop(0)
             job.state = "running"
             self._running = job
+        outer = getattr(_CURRENT, "job", None)
+        _CURRENT.job = job
         try:
             return fn()
         finally:
+            _CURRENT.job = outer
             with self._cond:
                 job.state = "done"
-                self._running = None
+                if self._running is job:
+                    self._running = None
                 self.ran += 1
                 self._cond.notify_all()
 
@@ -363,8 +391,14 @@ class Lane:
         return self.run_job(self.submit(kind, owner), fn)
 
     def cancel(self, job: Job, why: str = "withdrawn") -> bool:
-        """Drop ``job`` if it has not started → whether it was dropped."""
+        """Drop ``job`` if it has not started → ``True``; abandon it if it
+        is running (see the class doc) → ``False``."""
         with self._cond:
+            if job.state == "running" and not job.abandoned:
+                job.abandoned, job.why = True, why
+                if self._running is job:
+                    self._running = None
+                self._cond.notify_all()
             if job.state != "queued":
                 return False
             self._drop(job, why)
@@ -604,8 +638,12 @@ class Stream:
             self._early.cancel("the speech went on")
 
     def _all_heard(self) -> bool:
-        """Every loud frame so far was in a fast pass's window."""
-        return self._loud_end <= self._heard_end and not self._unheard
+        """A fast pass heard every loud frame so far and
+        :data:`SETTLE_SECONDS` of the quiet after the last: whisper drops or
+        clips a word that ends right at the window's edge, so the pass that
+        hears it with some quiet after is the one worth having."""
+        settled = self._loud_end + SETTLE_SECONDS <= self._heard_end
+        return settled and not self._unheard
 
     def _settled(self) -> bool:
         """The accurate pass over the phrase as it is now has started, and
