@@ -33,6 +33,10 @@ export const KEEP_STREAM_MS = 90_000;
  * mic there), grace or not. */
 export const HIDDEN_RELEASE_MS = 10_000;
 
+/** The microphone's processing, asked for explicitly: the echo of a line the
+ * app says is cancelled (its tail is not transcribed), room noise suppressed. */
+export const MIC_CONSTRAINTS: MediaTrackConstraints = { echoCancellation: true, noiseSuppression: true };
+
 const stopTracks = (s: MediaStream) => s.getTracks().forEach((t) => t.stop());
 
 /** Has the page the microphone permission already? (So a warm-up outside a
@@ -63,7 +67,9 @@ export class MicKeeper {
 
   constructor(
     private keepMs = KEEP_STREAM_MS,
-    private open: () => Promise<MediaStream> = () => navigator.mediaDevices.getUserMedia({ audio: true }),
+    // Echo cancellation and noise suppression asked for by name (the app's
+    // own voice from the speakers is not the person's), not left to defaults.
+    private open: () => Promise<MediaStream> = () => navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS }),
     /** The page's AudioContext when it runs (null: none yet) — the pre-roll
      * starts on it as soon as the stream opens. */
     private ringCtx: () => AudioContext | null = () => null
@@ -182,6 +188,13 @@ export class MicKeeper {
     return r && r.stream === this.live() ? r.last(ms, rate) : null;
   }
 
+  /** A recording ended and went: everything heard up to now is in it, so a
+   * later {@link preRoll} starts here — never the last phrase's tail again
+   * ("…over" said twice as "ver to the left"). */
+  cut(): void {
+    this.ring?.cut();
+  }
+
   /** The room's quiet as the pre-roll heard it — its quietest block's RMS
    * (0: no pre-roll): a recording's noise floor starts there, not at its
    * first block (a press that lands mid-word would make the word the floor). */
@@ -242,6 +255,8 @@ interface PreRollRing {
   stream: MediaStream;
   ctx: AudioContext;
   stop(): void;
+  /** Only samples heard after now go into a later {@link last}. */
+  cut(): void;
   last(ms: number, rate: number): Float32Array | null;
   floor(): number;
 }
@@ -276,10 +291,13 @@ function startPreRoll(stream: MediaStream, ctx: AudioContext): PreRollRing | nul
     const keep = Math.round((PRE_ROLL_MS / 1000) * ctx.sampleRate) + RING_BLOCK;
     let blocks: Array<{ pcm: Float32Array; rms: number }> = [];
     let frames = 0;
+    /** Samples heard since the last cut (capped: only its order matters). */
+    let fresh = 0;
     proc.onaudioprocess = (e: AudioProcessingEvent) => {
       const pcm = e.inputBuffer.getChannelData(0).slice();
       blocks.push({ pcm, rms: rmsOf(pcm) });
       frames += pcm.length;
+      fresh = Math.min(fresh + pcm.length, keep);
       while (blocks.length > 1 && frames - blocks[0].pcm.length >= keep) frames -= blocks.shift()!.pcm.length;
     };
     // Chrome runs a ScriptProcessor only when it reaches the destination:
@@ -294,6 +312,7 @@ function startPreRoll(stream: MediaStream, ctx: AudioContext): PreRollRing | nul
         proc.onaudioprocess = null;
         blocks = [];
         frames = 0;
+        fresh = 0;
         for (const node of [src, proc, zero] as AudioNode[]) {
           try {
             node.disconnect();
@@ -302,9 +321,12 @@ function startPreRoll(stream: MediaStream, ctx: AudioContext): PreRollRing | nul
           }
         }
       },
+      cut() {
+        fresh = 0;
+      },
       last(ms, rate) {
-        if (!frames) return null;
-        let want = Math.min(frames, Math.round((ms / 1000) * ctx.sampleRate));
+        let want = Math.min(frames, fresh, Math.round((ms / 1000) * ctx.sampleRate));
+        if (!want) return null;
         const out = new Float32Array(want);
         for (let i = blocks.length - 1; i >= 0 && want > 0; i--) {
           const b = blocks[i].pcm;
@@ -562,6 +584,16 @@ export function meterFeed(rms: number, now = Date.now()): void {
  * word at the end of the guess acts once it has been quiet a moment. */
 export function lastLoudAt(): number {
   return lastLoud;
+}
+
+/** How long the voice has been quiet (ms) as the meter HEARD it: from its
+ * last loud block to its latest block — never the time since with no block
+ * at all (a phrase's seam, the next recording starting: the voice may be
+ * back unseen). Infinity before it has heard the voice. "Over" is a radio
+ * word only after quiet heard ({@link lastLoudAt} after the phrase ended:
+ * the voice came back). */
+export function meterQuietMs(): number {
+  return lastLoud ? Math.max(0, lastFeed - lastLoud) : Infinity;
 }
 
 /** Read the level from `read` instead (an AnalyserNode, for the browser

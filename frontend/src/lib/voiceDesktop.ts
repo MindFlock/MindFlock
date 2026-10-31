@@ -1099,8 +1099,14 @@ export interface LiveHooks {
   confirm?(kind: ConfirmKind): void;
   /** How long (ms) the voice has been quiet: a control phrase at the end of
    * the guess acts after {@link CONTROL_TAIL_MS}. Absent: only at the
-   * phrase's end. */
+   * phrase's end. Only quiet the level meter HEARD (lib/voiceMic
+   * meterQuietMs): between two recordings no block comes, and that is not
+   * quiet — "over" then a breath across the seam is not the radio word. */
   quietMs?(): number;
+  /** When the meter last heard the voice (ms; lib/voiceMic lastLoudAt): a
+   * loud block after an early end means the voice came back. Absent: from
+   * {@link quietMs} and the clock. */
+  loudAt?(): number;
   /** End the phrase under way at the recognizer now (its /end, its final). */
   endPhrase?(): void;
   /** A send went through `ms` after the word's end ("over → sent"). */
@@ -1324,8 +1330,9 @@ export class LiveDictation {
   private judge(e: NonNullable<LiveDictation["early"]>): "" | "met" | "resumed" {
     if (e.seen) return e.seen;
     const quiet = this.hooks.quietMs?.() ?? Infinity;
+    const loud = this.hooks.loudAt?.() ?? Date.now() - quiet;
     // A loud block after the phrase was ended: the voice went on.
-    if (quiet < Date.now() - e.at) e.seen = "resumed";
+    if (loud > e.at) e.seen = "resumed";
     else if (quiet >= CONTROL_TAIL_MS) e.seen = "met";
     return e.seen;
   }
@@ -1375,7 +1382,9 @@ export class LiveDictation {
     if (quiet < CONTROL_TAIL_MS && !early) return;
     clearInterval(this.tailTimer);
     this.tailTimer = undefined;
-    this.wordEnd = Date.now() - Math.min(quiet, 60_000);
+    // The word's end: the meter's last loud block (the quiet it heard can
+    // lag the clock by a block).
+    this.wordEnd = this.hooks.loudAt?.() || Date.now() - Math.min(quiet, 60_000);
     this.endedAt = Date.now();
     this.hooks.endPhrase?.();
     if (radio) {
@@ -4097,6 +4106,9 @@ export function serverRecognizer(
     cur = null;
     clearTimeout(capTimer);
     if (!c?.rec) return;
+    // What the microphone heard so far goes with this phrase: the next
+    // one's pre-roll starts after it (never its tail twice).
+    mic.cut();
     if (c.stream) {
       void endStream(c);
       return;

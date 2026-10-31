@@ -142,6 +142,7 @@ import {
   lastLoudAt,
   meterFeed,
   meterPoll,
+  meterQuietMs,
   meterRef,
   meterStart,
   meterStop,
@@ -858,11 +859,10 @@ export function TopBarMic() {
         done: (how) => opts.done?.(how),
         confirm: (kind) => void confirmer.current?.say(kind),
         // A control word at the end of the guess acts after a moment's quiet
-        // (lib/voiceDesktop CONTROL_TAIL_MS), the phrase ended at once.
-        quietMs: () => {
-          const at = lastLoudAt();
-          return at ? Date.now() - at : Infinity;
-        },
+        // (lib/voiceDesktop CONTROL_TAIL_MS), the phrase ended at once — the
+        // quiet the meter heard: a phrase's seam (no blocks) is not quiet.
+        quietMs: meterQuietMs,
+        loudAt: lastLoudAt,
         endPhrase: () => {
           if (live.current === d) rec.current?.endPhrase?.();
         },

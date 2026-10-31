@@ -20,11 +20,17 @@
  *  7. (judge) a microphone that goes away mid-listen is noticed: opened
  *     again once, else listening stops and says so; a phrase taken by "over"
  *     is never typed and sent twice by its late end; the button tells
- *     listening from "muted while a line plays". */
+ *     listening from "muted while a line plays";
+ *  8. (cycle 2) "over"'s quiet is only what the meter heard — a phrase's
+ *     seam (no blocks) is not quiet, so a breath after "over" never sends
+ *     mid-sentence; the pre-roll never repeats audio a phrase already sent
+ *     (it starts at the last phrase's end); the microphone asks for echo
+ *     cancellation and noise suppression explicitly. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CHIME_LATE_MS,
+  CONTROL_POLL_MS,
   CONTROL_TAIL_MS,
   MIC_GONE_LINE,
   MIC_LOST_LINE,
@@ -47,7 +53,19 @@ import {
   type RecognizerHandlers,
   type Speaker,
 } from "../lib/voiceDesktop";
-import { MicKeeper, PRE_ROLL_MS, PRE_ROLL_ONSET_S, PRE_ROLL_RATE, downsample, withPreRoll } from "../lib/voiceMic";
+import {
+  MicKeeper,
+  PRE_ROLL_MS,
+  PRE_ROLL_ONSET_S,
+  PRE_ROLL_RATE,
+  downsample,
+  lastLoudAt,
+  meterFeed,
+  meterQuietMs,
+  meterStart,
+  meterStop,
+  withPreRoll,
+} from "../lib/voiceMic";
 import { code, src } from "./sourceText";
 
 const mocks = vi.hoisted(() => ({
@@ -883,5 +901,231 @@ describe("the button tells listening from muted-while-a-line-plays", () => {
     expect(MIC).toContain("aria-label={paused ? MIC_PAUSED_LINE :");
     const css = src("components/TopBarMic.css");
     expect(css).toMatch(/\.mic-ring\.listening\.muted::after \{\s*opacity: 0\.25;\s*border-style: dashed;/);
+  });
+});
+
+// --- cycle 2: what the meter did not hear is not quiet; no audio twice ---------- //
+
+describe("“over” counts only the quiet the meter heard (cycle 2, R4)", () => {
+  /** A recorder block's length at 48 kHz (4096 samples). */
+  const BLOCK = 85;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mocks.instApi.mockResolvedValue({ ok: true });
+    // A fresh meter for every case: no loud block left from the last one.
+    meterStart(0.002);
+  });
+  afterEach(() => meterStop());
+
+  it("the timing these cases rest on: the tail is polled more often than a block comes", () => {
+    expect(CONTROL_POLL_MS).toBe(50);
+    expect(CONTROL_POLL_MS).toBeLessThan(BLOCK);
+    expect(OVER_EARLY_QUIET_MS).toBe(100);
+    expect(CONTROL_TAIL_MS).toBe(250);
+  });
+
+  /** A dictation wired to the real meter as TopBarMic wires it; `endPhrase`
+   * opens a seam: no block reaches the meter until `resume()`. */
+  function wired() {
+    let seam = false;
+    let ends = 0;
+    const t = session();
+    const d = new LiveDictation(
+      t,
+      {
+        caption: () => {},
+        halt: () => {},
+        route: async () => false,
+        activity: () => "idle",
+        replies: () => false,
+        submitted: () => {},
+        quietMs: meterQuietMs,
+        loudAt: lastLoudAt,
+        endPhrase: () => {
+          ends++;
+          seam = true;
+        },
+        finalMs: () => 400,
+      },
+      { continuous: true }
+    );
+    return {
+      t,
+      d,
+      ends: () => ends,
+      resume: () => void (seam = false),
+      /** `n` recorder blocks of `rms`, one every {@link BLOCK} ms (none in a seam). */
+      blocks: async (rms: number, n: number) => {
+        for (let i = 0; i < n; i++) {
+          await vi.advanceTimersByTimeAsync(BLOCK);
+          if (!seam) meterFeed(rms);
+        }
+      },
+    };
+  }
+
+  it("a breath after “over” spanning the phrase seam: the voice is seen back, “over” is typed, nothing sent", async () => {
+    const w = wired();
+    await w.blocks(0.1, 3); // "move it over"
+    await w.d.stream("", "move it over");
+    await w.blocks(0.002, 2); // a breath: two quiet blocks heard (170 ms)…
+    await vi.advanceTimersByTimeAsync(CONTROL_POLL_MS); // …the phrase ends early
+    expect(w.ends()).toBe(1);
+    // The seam: the next recording's first block is 200 ms away — the meter
+    // hears nothing (before: that counted as quiet, 250 ms "met", sent).
+    await vi.advanceTimersByTimeAsync(200);
+    expect(mocks.instApi).not.toHaveBeenCalled();
+    expect(meterQuietMs()).toBe(2 * BLOCK);
+    w.resume();
+    await w.blocks(0.1, 3); // "…to the left"
+    await w.d.flush("", "move it over");
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(mocks.instApi).not.toHaveBeenCalled();
+    expect(w.t.keys.join("")).toBe("move it over ");
+    expect(w.d.active).toBe(true);
+    w.d.drop();
+  });
+
+  it("the voice really stopped: the first quiet block after the seam makes it the radio word — sent", async () => {
+    const w = wired();
+    await w.blocks(0.1, 3);
+    await w.d.stream("", "ship it over");
+    await w.blocks(0.002, 2);
+    await vi.advanceTimersByTimeAsync(CONTROL_POLL_MS);
+    expect(w.ends()).toBe(1);
+    await vi.advanceTimersByTimeAsync(100);
+    w.resume();
+    await w.blocks(0.002, 1);
+    await w.d.flush("", "ship it over");
+    await vi.advanceTimersByTimeAsync(100);
+    expect(mocks.instApi).toHaveBeenCalledTimes(1);
+    expect(w.t.keys).toEqual(["ship it"]);
+  });
+
+  it("no early end inside a seam: quiet the meter did not hear never reaches the 100 ms", async () => {
+    const w = wired();
+    await w.blocks(0.1, 3);
+    // The recorder is between clips (the 12 s cap, a stream's restart): no
+    // block for 300 ms right after the voice — then the voice goes on.
+    await w.d.stream("", "move it over");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(w.ends()).toBe(0);
+    w.d.drop();
+  });
+
+  it("wired: TopBarMic's quiet is the meter's observed quiet, and the meter's last loud block", () => {
+    const MIC = code("components/TopBarMic.tsx");
+    expect(MIC).toContain("quietMs: meterQuietMs,");
+    expect(MIC).toContain("loudAt: lastLoudAt,");
+  });
+});
+
+describe("the pre-roll never repeats audio a phrase already sent (cycle 2, R5)", () => {
+  /** One ring block (2048 samples at 48 kHz) at 16 kHz. */
+  const RING_BLOCK_16K = Math.floor((2048 * PRE_ROLL_RATE) / 48000);
+
+  it("after a cut (a phrase's end): only what the ring heard since — none right at it", async () => {
+    const ctx = new NodeCtx();
+    const mic = new MicKeeper(60_000, async () => fakeStream(), () => ctx as unknown as AudioContext);
+    await mic.get();
+    for (let i = 0; i < 20; i++) ctx.feed(0.3); // the phrase, sent with its recording
+    mic.cut();
+    expect(mic.preRoll()).toBeNull();
+    ctx.feed(0.01);
+    const pre = mic.preRoll()!;
+    expect(pre.length).toBe(RING_BLOCK_16K);
+    expect(pre.every((v) => Math.abs(v - 0.01) < 1e-6)).toBe(true);
+    // Later than the pre-roll's half second: all of it again.
+    for (let i = 0; i < 20; i++) ctx.feed(0.02);
+    expect(mic.preRoll()!.length).toBe((PRE_ROLL_MS / 1000) * PRE_ROLL_RATE);
+  });
+
+  it("a phrase ended early (“over”), the next one's speech from its first block: its pre-roll is the gap, not the last phrase's tail", async () => {
+    vi.stubGlobal("window", { AudioContext: NodeCtx });
+    const ctx = voiceAudioCtx() as unknown as NodeCtx;
+    ctx.state = "running";
+    vi.stubGlobal("navigator", { language: "en-US", userAgent: "", mediaDevices: { getUserMedia: vi.fn() } });
+    const mic = new MicKeeper(60_000, async () => fakeStream(), () => ctx as unknown as AudioContext);
+    const clips: Array<{ opts: { onLevel?: (rms: number) => void }; secs: number; fresh: boolean }> = [];
+    const wav = (n: number) => {
+      const b = new Uint8Array(44 + n * 2);
+      const v = new DataView(b.buffer);
+      [..."RIFF"].forEach((c, i) => v.setUint8(i, c.charCodeAt(0)));
+      [..."data"].forEach((c, i) => v.setUint8(36 + i, c.charCodeAt(0)));
+      v.setUint16(22, 1, true);
+      v.setUint32(24, 16000, true);
+      v.setUint16(34, 16, true);
+      v.setUint32(40, n * 2, true);
+      return new Blob([b], { type: "audio/wav" });
+    };
+    mocks.startWavRecording.mockImplementation((_s: unknown, _c: unknown, opts) => {
+      const clip = {
+        opts,
+        secs: 0,
+        fresh: false,
+        take: vi.fn((min?: number) => {
+          if (min === undefined || !clip.fresh) return null;
+          clip.fresh = false;
+          return wav(1600);
+        }),
+        stop: vi.fn(() => Promise.resolve(wav(0))),
+        cancel: vi.fn(),
+        mute: vi.fn(),
+        seconds: () => clip.secs,
+      };
+      clips.push(clip);
+      return clip;
+    });
+    /** Each stream's chunk sizes, by the order the streams opened. */
+    const bodies: number[][] = [];
+    mocks.apiRaw.mockImplementation(async (url: string, init: RequestInit) => {
+      if (url === "/api/voice/stream") {
+        bodies.push([]);
+        return { ok: true, status: 200, json: async () => ({ id: "s" + bodies.length }) };
+      }
+      const m = /\/s(\d+)\/chunk$/.exec(url);
+      if (m) {
+        bodies[Number(m[1]) - 1].push((init.body as Blob).size);
+        return { ok: true, status: 200, json: async () => ({ committed: "", partial: "" }) };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+    const r = serverRecognizer({ stream: () => true, mic });
+    await mic.get();
+    for (let i = 0; i < 20; i++) ctx.feed(0.004);
+    r.start({ onInterim: () => {}, onFinal: () => {}, onError: () => {}, onEnd: () => {} });
+    await vi.waitFor(() => expect(clips).toHaveLength(1));
+    const block = (i: number, rms: number, s: number) => {
+      clips[i].secs = s;
+      clips[i].fresh = true;
+      clips[i].opts.onLevel!(rms);
+    };
+    // Phrase 1: "…over", the ring hearing it as the recorder does.
+    for (let k = 1; k <= 8; k++) {
+      ctx.feed(0.3);
+      block(0, 0.3, k * 0.085);
+    }
+    await vi.waitFor(() => expect(bodies[0]?.length).toBeGreaterThanOrEqual(1));
+    r.endPhrase!();
+    ctx.feed(0.004); // the breath between the two phrases
+    await vi.waitFor(() => expect(clips).toHaveLength(2));
+    block(1, 0.3, 0.085); // "…to the left": speech from the first block
+    block(1, 0.3, 0.17);
+    block(1, 0.3, 0.26);
+    await vi.waitFor(() => expect(bodies[1]?.length).toBeGreaterThanOrEqual(1));
+    // Before: 44 + 3200 + the whole 500 ms — phrase 1's "…ver" sent again.
+    expect(bodies[1][0]).toBe(44 + 3200 + RING_BLOCK_16K * 2);
+    r.stop();
+  });
+});
+
+describe("the desktop asks for echo cancellation and noise suppression (cycle 2, R12)", () => {
+  it("the microphone opens with both on, explicitly", async () => {
+    const gum = vi.fn(async () => fakeStream());
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: gum } });
+    const mic = new MicKeeper(60_000);
+    await mic.get();
+    expect(gum).toHaveBeenCalledWith({ audio: { echoCancellation: true, noiseSuppression: true } });
+    mic.release();
   });
 });
