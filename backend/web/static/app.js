@@ -40182,15 +40182,23 @@ async function micGranted() {
 var MicKeeper = class {
 	keepMs;
 	open;
+	ringCtx;
 	stream = null;
 	pending = null;
 	users = 0;
 	gen = 0;
 	timer;
 	hiddenTimer;
-	constructor(keepMs = KEEP_STREAM_MS, open = () => navigator.mediaDevices.getUserMedia({ audio: true })) {
+	ring = null;
+	lostSubs = /* @__PURE__ */ new Set();
+	constructor(keepMs = KEEP_STREAM_MS, open = () => navigator.mediaDevices.getUserMedia({ audio: true }), ringCtx = () => null) {
 		this.keepMs = keepMs;
 		this.open = open;
+		this.ringCtx = ringCtx;
+		if (typeof navigator !== "undefined") navigator.mediaDevices?.addEventListener?.("devicechange", () => {
+			const st = this.stream;
+			if (st && (st.active === false || st.getTracks().some((t) => t.readyState === "ended"))) this.lost(st);
+		});
 		if (typeof document === "undefined" || !document.addEventListener) return;
 		document.addEventListener("visibilitychange", () => {
 			clearTimeout(this.hiddenTimer);
@@ -40218,7 +40226,9 @@ var MicKeeper = class {
 			this.pending = null;
 			if (this.stream && this.stream !== st) stopTracks(this.stream);
 			this.stream = st;
+			for (const t of st.getTracks?.() || []) t.addEventListener?.("ended", () => this.lost(st));
 			if (!this.users) this.arm();
+			this.roll();
 			return st;
 		}, (err) => {
 			if (g === this.gen) this.pending = null;
@@ -40249,9 +40259,41 @@ var MicKeeper = class {
 		this.gen++;
 		this.pending = null;
 		clearTimeout(this.timer);
+		this.ring?.stop();
+		this.ring = null;
 		const s = this.stream;
 		this.stream = null;
 		if (s) stopTracks(s);
+	}
+	roll(ctx = this.ringCtx()) {
+		const s = this.live();
+		if (!s || !ctx || ctx.state !== "running") return;
+		if (this.ring && this.ring.stream === s && this.ring.ctx === ctx) return;
+		this.ring?.stop();
+		this.ring = startPreRoll(s, ctx);
+	}
+	preRoll(ms = PRE_ROLL_MS, rate = PRE_ROLL_RATE) {
+		const r = this.ring;
+		return r && r.stream === this.live() ? r.last(ms, rate) : null;
+	}
+	quietFloor() {
+		const r = this.ring;
+		return r && r.stream === this.live() ? r.floor() : 0;
+	}
+	onLost(cb) {
+		this.lostSubs.add(cb);
+		return () => {
+			this.lostSubs.delete(cb);
+		};
+	}
+	lost(st) {
+		if (st !== this.stream) return;
+		clearTimeout(this.timer);
+		this.ring?.stop();
+		this.ring = null;
+		this.stream = null;
+		stopTracks(st);
+		this.lostSubs.forEach((cb) => cb());
 	}
 	releaseIdle() {
 		if (!this.users) this.release();
@@ -40262,6 +40304,109 @@ var MicKeeper = class {
 		this.timer = setTimeout(() => this.releaseIdle(), this.keepMs);
 	}
 };
+var PRE_ROLL_MS = 500;
+var PRE_ROLL_ONSET_S = .3;
+var PRE_ROLL_RATE = 16e3;
+var RING_BLOCK = 2048;
+function downsample(src, from, to) {
+	if (from === to || !src.length) return src;
+	const n = Math.floor(src.length * to / from);
+	const out = new Float32Array(n);
+	const step = from / to;
+	for (let i = 0; i < n; i++) {
+		const a = Math.floor(i * step);
+		const b = Math.max(a + 1, Math.min(src.length, Math.floor((i + 1) * step)));
+		let sum = 0;
+		for (let j = a; j < b; j++) sum += src[j];
+		out[i] = sum / (b - a);
+	}
+	return out;
+}
+function startPreRoll(stream, ctx) {
+	try {
+		const src = ctx.createMediaStreamSource(stream);
+		const proc = ctx.createScriptProcessor(RING_BLOCK, 1, 1);
+		const zero = ctx.createGain();
+		zero.gain.value = 0;
+		const keep = Math.round(PRE_ROLL_MS / 1e3 * ctx.sampleRate) + RING_BLOCK;
+		let blocks = [];
+		let frames = 0;
+		proc.onaudioprocess = (e) => {
+			const pcm = e.inputBuffer.getChannelData(0).slice();
+			blocks.push({
+				pcm,
+				rms: rmsOf(pcm)
+			});
+			frames += pcm.length;
+			while (blocks.length > 1 && frames - blocks[0].pcm.length >= keep) frames -= blocks.shift().pcm.length;
+		};
+		src.connect(proc);
+		proc.connect(zero);
+		zero.connect(ctx.destination);
+		return {
+			stream,
+			ctx,
+			stop() {
+				proc.onaudioprocess = null;
+				blocks = [];
+				frames = 0;
+				for (const node of [
+					src,
+					proc,
+					zero
+				]) try {
+					node.disconnect();
+				} catch {}
+			},
+			last(ms, rate) {
+				if (!frames) return null;
+				let want = Math.min(frames, Math.round(ms / 1e3 * ctx.sampleRate));
+				const out = new Float32Array(want);
+				for (let i = blocks.length - 1; i >= 0 && want > 0; i--) {
+					const b = blocks[i].pcm;
+					const n = Math.min(want, b.length);
+					out.set(b.subarray(b.length - n), want - n);
+					want -= n;
+				}
+				return downsample(out, ctx.sampleRate, rate);
+			},
+			floor() {
+				return blocks.length ? Math.min(...blocks.map((b) => b.rms)) : 0;
+			}
+		};
+	} catch {
+		return null;
+	}
+}
+async function withPreRoll(pre, wav, rate = PRE_ROLL_RATE) {
+	if (!pre?.length) return wav;
+	try {
+		const src = new DataView(await wav.arrayBuffer());
+		const tag = (at) => String.fromCharCode(...[
+			0,
+			1,
+			2,
+			3
+		].map((i) => src.getUint8(at + i)));
+		if (src.byteLength < 44 || tag(0) !== "RIFF" || tag(36) !== "data" || src.getUint16(22, true) !== 1 || src.getUint16(34, true) !== 16 || src.getUint32(24, true) !== rate) return wav;
+		const data = src.byteLength - 44;
+		const add = pre.length * 2;
+		const out = new Uint8Array(44 + add + data);
+		out.set(new Uint8Array(src.buffer, src.byteOffset, 44), 0);
+		const v = new DataView(out.buffer);
+		v.setUint32(4, 36 + add + data, true);
+		v.setUint32(40, add + data, true);
+		for (let i = 0, at = 44; i < pre.length; i++, at += 2) {
+			const s = pre[i];
+			const c = s > 1 ? 1 : s < -1 ? -1 : s === s ? s : 0;
+			v.setInt16(at, c < 0 ? Math.round(c * 32768) : Math.round(c * 32767), true);
+		}
+		out.set(new Uint8Array(src.buffer, src.byteOffset + 44, data), 44 + add);
+		return new Blob([out], { type: wav.type || "audio/wav" });
+	} catch {
+		return wav;
+	}
+}
 var RMS_SPEECH = .02;
 var LEVEL_DECAY_MS = 150;
 var LEVEL_FULL_RMS = .12;
@@ -40360,9 +40505,9 @@ function frame(t) {
 function kick() {
 	if (!raf) raf = schedule(frame);
 }
-function meterStart() {
+function meterStart(seed = 0) {
 	active = true;
-	floor = 0;
+	floor = seed > 0 ? seed : 0;
 	target = 0;
 	lastLoud = 0;
 	setHearing(false);
@@ -42167,10 +42312,13 @@ function onVoicePrefs(fn) {
 	return () => window.removeEventListener(VOICE_PREFS_EVENT, h);
 }
 var TALK_EVENT = "mindflock:voice-talk";
-function talkKeyAction(phase, hold, listening, keyHeld) {
-	if (!hold) return phase === "down" ? listening ? "finish" : "start" : null;
-	if (phase === "down") return listening ? null : "start";
-	return keyHeld && listening ? "finish" : null;
+var TAP_HOLD_MS = 350;
+var TALK_DEBOUNCE_MS = 300;
+function talkKeyAction(phase, hold, listening, keyHeld, o = {}) {
+	if (!hold) return phase === "down" ? listening ? "finish" : o.busy ? null : "start" : null;
+	if (phase === "down") return listening ? o.latched ? "finish" : null : o.busy ? null : "start";
+	if (!keyHeld || !listening) return null;
+	return o.heldMs !== void 0 && o.heldMs < TAP_HOLD_MS ? "latch" : "finish";
 }
 var DICT_IDLE_MS = 12e4;
 var HOLD_FINAL_WAIT_MS = 1500;
@@ -42184,6 +42332,7 @@ var LEFT_LINE = "In the field — press Enter to send";
 var STOPPED_LINE = "Stopped listening";
 var HUSH_LINE = "Quiet.";
 var HUSH_CAPTION_MS = 1e3;
+var MIC_PAUSED_LINE = "Speaking — your mic is paused until it ends";
 function micPill(s) {
 	if (s.quiet) return HUSH_LINE;
 	if (s.listening) return "Listening…";
@@ -42201,6 +42350,7 @@ function retype(before, after) {
 }
 var CONTROL_TAIL_MS = 250;
 var CONTROL_POLL_MS = 50;
+var OVER_EARLY_QUIET_MS = 100;
 var OVER_FINAL_WAIT_MS = 1500;
 var OVER_FINAL_MIN_MS = 300;
 var FINAL_ROUND_TRIP_MS = 150;
@@ -42224,6 +42374,7 @@ var FinalClock = class {
 };
 var finalClock = new FinalClock();
 var SWALLOW_MAX_MS = 5e3;
+var SWALLOW_STREAM_MAX_MS = 5e4;
 var withErase = (o, erase) => erase ? {
 	...o,
 	erase
@@ -42302,9 +42453,9 @@ var Dictation = class {
 	words(w) {
 		return this.stream(w, "");
 	}
-	flush(w, final) {
+	flush(w, final, radio = true) {
 		if (!this.listening) return { kind: "stopped" };
-		return this.heard(final?.trim() ? final.trim() : joinWords(this.held, w));
+		return this.heard(final?.trim() ? final.trim() : joinWords(this.held, w), radio);
 	}
 	wrote(text) {
 		this.typed += text;
@@ -42312,11 +42463,14 @@ var Dictation = class {
 	unwrote(text) {
 		if (text && this.typed.endsWith(text)) this.typed = this.typed.slice(0, this.typed.length - text.length);
 	}
-	heard(phrase) {
+	heard(phrase, radio = true) {
 		if (!this.listening) return { kind: "stopped" };
 		const ctl = this.control(phrase, true);
 		if (ctl) return ctl;
-		const p = parseRadio(phrase);
+		const p = radio ? parseRadio(phrase) : {
+			kind: "",
+			text: String(phrase || "").trim()
+		};
 		switch (p.kind) {
 			case "disregard": return {
 				kind: "erase",
@@ -42521,6 +42675,7 @@ var LiveDictation = class {
 	wordEnd = 0;
 	wordsAt = Date.now();
 	endedAt = 0;
+	early = null;
 	bargeAt = 0;
 	constructor(target, hooks, opts = {}) {
 		this.target = target;
@@ -42555,7 +42710,9 @@ var LiveDictation = class {
 	}
 	heard(phrase) {
 		if (phrase.trim()) this.heardAnything = true;
+		const early = this.early;
 		if (this.phraseEnded()) return this.chain;
+		if (early) return this.afterQuiet(early, (radio) => this.dict.heard(phrase, radio));
 		return this.step(() => this.dict.heard(phrase));
 	}
 	stream(w, p) {
@@ -42569,12 +42726,15 @@ var LiveDictation = class {
 	}
 	flush(w, final) {
 		if (w.trim() || final?.trim()) this.heardAnything = true;
+		const early = this.early;
 		if (this.phraseEnded()) return this.chain;
+		if (early) return this.afterQuiet(early, (radio) => this.dict.flush(w, final, radio));
 		return this.step(() => this.dict.flush(w, final));
 	}
 	phraseEnded() {
 		clearTimeout(this.sendWait);
 		this.sendWait = void 0;
+		this.early = null;
 		if (this.endedAt) {
 			finalClock.note(Date.now() - this.endedAt);
 			this.endedAt = 0;
@@ -42586,7 +42746,37 @@ var LiveDictation = class {
 	}
 	swallow() {
 		clearTimeout(this.swallowing);
-		this.swallowing = setTimeout(() => this.swallowing = void 0, SWALLOW_MAX_MS);
+		const max = this.hooks.endsSurely?.() ? SWALLOW_STREAM_MAX_MS : SWALLOW_MAX_MS;
+		this.swallowing = setTimeout(() => this.swallowing = void 0, max);
+	}
+	watchQuiet() {
+		const e = {
+			at: Date.now(),
+			seen: ""
+		};
+		this.early = e;
+		e.timer = setInterval(() => {
+			if (this.judge(e) || this.done) clearInterval(e.timer);
+		}, CONTROL_POLL_MS);
+		return e;
+	}
+	judge(e) {
+		if (e.seen) return e.seen;
+		const quiet = this.hooks.quietMs?.() ?? Infinity;
+		if (quiet < Date.now() - e.at) e.seen = "resumed";
+		else if (quiet >= CONTROL_TAIL_MS) e.seen = "met";
+		return e.seen;
+	}
+	afterQuiet(e, act) {
+		return new Promise((resolve) => {
+			const go = () => {
+				const seen = this.judge(e);
+				if (!seen && !this.done) return void setTimeout(go, CONTROL_POLL_MS);
+				clearInterval(e.timer);
+				resolve(this.step(() => act(seen !== "resumed")));
+			};
+			go();
+		});
 	}
 	watchTail() {
 		if (!this.hooks.quietMs || this.done || this.sendWait || this.swallowing || !this.dict.tail()) {
@@ -42605,17 +42795,22 @@ var LiveDictation = class {
 			return;
 		}
 		const quiet = this.hooks.quietMs?.() ?? 0;
-		if (quiet < CONTROL_TAIL_MS) return;
+		const radio = t.kind === "over" || t.kind === "out";
+		const early = radio && quiet < CONTROL_TAIL_MS && quiet >= OVER_EARLY_QUIET_MS;
+		if (quiet < CONTROL_TAIL_MS && !early) return;
 		clearInterval(this.tailTimer);
 		this.tailTimer = void 0;
 		this.wordEnd = Date.now() - Math.min(quiet, 6e4);
 		this.endedAt = Date.now();
 		this.hooks.endPhrase?.();
-		if (t.kind === "over" || t.kind === "out") {
+		if (radio) {
+			const e = early ? this.watchQuiet() : null;
 			this.sendWait = setTimeout(() => {
 				this.sendWait = void 0;
+				this.early = null;
 				this.swallow();
-				this.step(() => this.dict.heard(t.text));
+				if (e) this.afterQuiet(e, (r) => this.dict.heard(t.text, r));
+				else this.step(() => this.dict.heard(t.text));
 			}, overWaitMs(finalClock.typical(this.hooks.finalMs?.())));
 			return;
 		}
@@ -42685,6 +42880,8 @@ var LiveDictation = class {
 		clearInterval(this.tailTimer);
 		clearTimeout(this.sendWait);
 		clearTimeout(this.swallowing);
+		clearInterval(this.early?.timer);
+		this.early = null;
 		this.dict.listening = false;
 		this.hooks.halt();
 		if (line !== null) this.hooks.caption(line, sticky);
@@ -42803,6 +43000,7 @@ var LiveDictation = class {
 			erase = "";
 			if (!text) return true;
 			const words = text.trim();
+			if (route) this.hooks.caption(this.dict.shown, true, words);
 			const routed = route ? await this.hooks.route(words) : false;
 			if (routed === "hush") {
 				this.hushed();
@@ -43323,6 +43521,7 @@ var SpeechQueue = class {
 	turn = 0;
 	waiters = [];
 	gate = null;
+	audible = false;
 	gateRetry;
 	last = "";
 	constructor(engine, onSpeaking = () => {}, opts = {}) {
@@ -43390,6 +43589,9 @@ var SpeechQueue = class {
 	get busy() {
 		return !!this.speaking;
 	}
+	get audibleNow() {
+		return !!this.speaking && this.audible;
+	}
 	get confirming() {
 		return !!this.current?.confirm && !this.current.sound;
 	}
@@ -43435,7 +43637,13 @@ var SpeechQueue = class {
 		this.turn++;
 		sp.cancel();
 		if (!cur?.sound) this.onSpeaking(false);
+		this.silent(cur);
 		cur?.done();
+	}
+	silent(q) {
+		const was = this.audible;
+		this.audible = false;
+		if (was && q) this.opts.onAudible?.(false);
 	}
 	settle() {
 		if (!this.idle) return;
@@ -43473,35 +43681,69 @@ var SpeechQueue = class {
 			if (!next.sound) this.last = text;
 			this.speaking = sp;
 			this.current = next;
+			this.audible = false;
 			if (!next.sound) this.onSpeaking(true);
-			next.start?.();
+			const audible = () => {
+				if (this.turn !== turn || !this.speaking || this.audible) return;
+				this.audible = true;
+				this.opts.onAudible?.(true);
+				next.start?.();
+			};
+			const reports = !next.sound && !!sp.reportsAudible;
+			if (!reports && !next.sound) audible();
 			const done = () => {
 				if (this.turn !== turn || !this.speaking) return;
 				this.speaking = null;
 				this.current = null;
 				if (!next.sound) this.onSpeaking(false);
+				this.silent(next);
 				next.done();
 				this.pump();
 			};
-			sp.speak(text).then(done, done);
+			(reports ? sp.speak(text, audible) : sp.speak(text)).then(done, done);
 			return;
 		}
 	}
 };
+var CHIME_LATE_MS = 400;
+var RESUME_POLL_MS = 20;
+function whenRunning(ctx, maxMs = CHIME_LATE_MS) {
+	if (ctx.state === "running") return Promise.resolve(true);
+	try {
+		ctx.resume().catch(() => {});
+	} catch {}
+	const until = Date.now() + maxMs;
+	return new Promise((done) => {
+		const look = () => {
+			if (ctx.state === "running") return done(true);
+			if (ctx.state === "closed" || Date.now() >= until) return done(false);
+			setTimeout(look, RESUME_POLL_MS);
+		};
+		setTimeout(look, 0);
+	});
+}
 function soundSpeaker(play, ms, lead) {
 	let timer;
 	let end = () => {};
+	let over = false;
 	return {
 		speak: () => new Promise((resolve) => {
 			end = resolve;
-			const go = () => {
+			const sound = () => {
+				if (over) return;
 				play();
 				timer = setTimeout(resolve, ms);
+			};
+			const go = () => {
+				const ctx = audioCtx;
+				if (!ctx || ctx.state === "running") return sound();
+				whenRunning(ctx).then((ok) => ok ? sound() : resolve());
 			};
 			if (lead > 0) timer = setTimeout(go, lead);
 			else go();
 		}),
 		cancel: () => {
+			over = true;
 			clearTimeout(timer);
 			end();
 		}
@@ -43540,7 +43782,7 @@ var Confirmer = class {
 			muted = true;
 			mic?.mute?.(true);
 		} }).then(() => {
-			if (muted) mic?.mute?.(false);
+			if (muted && !x.queue.audibleNow) mic?.mute?.(false);
 			if (muted && x.server() && !x.speaker.lastError) this.prime(true);
 		});
 	}
@@ -43664,6 +43906,7 @@ function speechRequests(text) {
 }
 var WORD_MS = 400;
 var CHUNK_GRACE_MS = 1500;
+var BROWSER_START_GRACE_MS = 300;
 function browserSpeaker() {
 	const synth = typeof window !== "undefined" ? window.speechSynthesis : void 0;
 	const keep = [];
@@ -43675,12 +43918,19 @@ function browserSpeaker() {
 	};
 	return {
 		available,
-		speak(text) {
+		reportsAudible: true,
+		speak(text, audible) {
 			return new Promise((resolve) => {
 				const parts = sentenceChunks(shapeForSpeech(text, pronounce()));
 				if (!available() || !parts.length) return resolve();
 				const g = gen;
 				let i = 0;
+				let heard = false;
+				const sounding = () => {
+					if (heard || g !== gen) return;
+					heard = true;
+					audible?.();
+				};
 				const next = () => {
 					if (g !== gen || i >= parts.length) return resolve();
 					const part = parts[i++];
@@ -43696,10 +43946,12 @@ function browserSpeaker() {
 					};
 					u.onend = finish;
 					u.onerror = finish;
+					u.onstart = sounding;
 					const timer = setTimeout(finish, part.split(/\s+/).length * WORD_MS + CHUNK_GRACE_MS);
 					keep.push(u);
 					try {
 						synth.speak(u);
+						if (!heard) setTimeout(sounding, BROWSER_START_GRACE_MS);
 					} catch {
 						finish();
 					}
@@ -43729,6 +43981,9 @@ function voiceAudioCtx() {
 	}
 	if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
 	return audioCtx;
+}
+function runningAudioCtx() {
+	return audioCtx && audioCtx.state === "running" ? audioCtx : null;
 }
 function serverSpeaker(fallback, opts = {}) {
 	let gen = 0;
@@ -43760,6 +44015,7 @@ function serverSpeaker(fallback, opts = {}) {
 	};
 	const self = {
 		lastError: "",
+		reportsAudible: true,
 		cached(part) {
 			return cache.has(keyOf(part));
 		},
@@ -43773,14 +44029,16 @@ function serverSpeaker(fallback, opts = {}) {
 				await p.catch(() => {});
 			}
 		},
-		async speak(text) {
+		async speak(text, audible) {
 			const parts = speechRequests(text);
 			if (!parts.length) return;
 			const g = gen;
 			const ctx = voiceAudioCtx();
+			if (ctx && ctx.state !== "running") await whenRunning(ctx);
+			if (g !== gen) return;
 			if (!ctx || ctx.state !== "running") {
 				self.lastError = "AudioContext " + (ctx ? ctx.state : "missing");
-				return fallback.speak(parts.join(" "));
+				return fallback.speak(parts.join(" "), audible);
 			}
 			const ask = (i) => {
 				const hit = cacheable(parts[i]) ? cache.get(keyOf(parts[i])) : void 0;
@@ -43807,7 +44065,7 @@ function serverSpeaker(fallback, opts = {}) {
 					self.lastError = String(err?.message || err);
 					await last;
 					if (g !== gen) return;
-					return fallback.speak(parts.slice(i).join(" "));
+					return fallback.speak(parts.slice(i).join(" "), audible);
 				}
 				if (g !== gen) return;
 				self.lastError = "";
@@ -43815,6 +44073,7 @@ function serverSpeaker(fallback, opts = {}) {
 				const at = Math.max(ctx.currentTime, endAt);
 				endAt = at + (audio.duration || 0);
 				last = play(ctx, audio, at);
+				if (i === 0) audible?.();
 			}
 			await last;
 		},
@@ -44018,6 +44277,9 @@ var BARGE_POLLS = 3;
 var BARGE_RMS = .04;
 var BARGE_FRESH_MS = 1e3;
 var BARGE_REWIND_MS = 270;
+var MIC_LOST_LINE = "The microphone went away — listening on the default one";
+var MIC_GONE_LINE = "The microphone went away — check it, then click the mic";
+var MIC_LOST_RETRY_MS = 3e3;
 var BargeDetector = class {
 	bleed = 0;
 	loud = false;
@@ -44041,7 +44303,7 @@ var BargeDetector = class {
 var wordsOf = (v) => String((Array.isArray(v) ? v.join(" ") : v) || "").trim();
 var langTag$1 = () => String(navigator.language || "en").split(";")[0];
 function serverRecognizer(opts = {}) {
-	const mic = opts.mic || new MicKeeper();
+	const mic = opts.mic || new MicKeeper(KEEP_STREAM_MS, void 0, runningAudioCtx);
 	let holding = false;
 	let h = null;
 	let want = false;
@@ -44055,11 +44317,16 @@ function serverRecognizer(opts = {}) {
 	let lastEnd = Promise.resolve();
 	const open = /* @__PURE__ */ new Set();
 	let skipUntil = 0;
+	let firstSkipMs = 0;
+	const skipFromNow = () => {
+		if (firstSkipMs) skipUntil = Math.max(skipUntil, Date.now() + firstSkipMs);
+	};
 	let muted = false;
 	const barge = new BargeDetector();
 	let bargeTimer;
 	let bargeTap = null;
 	let lastBargeAt = 0;
+	let lostAt = 0;
 	let micStream = null;
 	let micCtx = null;
 	const listenOver = () => {
@@ -44121,13 +44388,14 @@ function serverRecognizer(opts = {}) {
 		h?.onError(code, detail);
 		maybeEnd();
 	};
-	const upload = async (blob) => {
+	const upload = async (clip) => {
 		const hh = h;
 		uploads++;
 		const ac = new AbortController();
 		aborters.add(ac);
 		const timer = setTimeout(() => ac.abort(), UPLOAD_TIMEOUT_MS);
 		try {
+			const blob = await clip;
 			const r = await apiRaw("/api/voice/transcribe?lang=" + encodeURIComponent(langTag$1()), {
 				method: "POST",
 				headers: { "Content-Type": "audio/wav" },
@@ -44247,6 +44515,8 @@ function serverRecognizer(opts = {}) {
 	};
 	const sendChunk = async (c, blob, hh) => {
 		try {
+			const pre = joined(c, blob);
+			if (pre !== blob) blob = await pre;
 			const r = await call(streamPath(c.sid, "/chunk"), {
 				method: "POST",
 				headers: { "Content-Type": "audio/wav" },
@@ -44296,7 +44566,7 @@ function serverRecognizer(opts = {}) {
 			if (c.busy) await c.busy;
 			if (h !== hh || !hh) return;
 			if (!c.stream) {
-				if (c.heard && tail && tail.size > 44) upload(tail);
+				if (c.heard && tail && tail.size > 44) upload(joined(c, tail));
 				return;
 			}
 			if (!c.sid) return;
@@ -44339,6 +44609,11 @@ function serverRecognizer(opts = {}) {
 		c.sid = null;
 		if (sid) abandon(sid);
 	};
+	const joined = (c, blob) => {
+		const pre = c.pre;
+		c.pre = null;
+		return pre ? withPreRoll(pre, blob) : blob;
+	};
 	const endClip = () => {
 		const c = cur;
 		cur = null;
@@ -44352,7 +44627,7 @@ function serverRecognizer(opts = {}) {
 		c.rec.stop().then((blob) => {
 			if (token !== mine) return;
 			token = null;
-			if (c.heard && blob.size) upload(blob);
+			if (c.heard && blob.size) upload(joined(c, blob));
 			if (want && !finishing) clip();
 			else maybeEnd();
 		}, () => {
@@ -44375,7 +44650,8 @@ function serverRecognizer(opts = {}) {
 			ending: false,
 			sent: false,
 			trimS: 0,
-			speechS: 0
+			speechS: 0,
+			pre: null
 		};
 		if (c.stream) openStream(c);
 		let s;
@@ -44388,7 +44664,10 @@ function serverRecognizer(opts = {}) {
 		}
 		if (token !== mine) return discard(c);
 		const ctx = voiceAudioCtx();
-		if (ctx && ctx.state === "suspended") await ctx.resume().catch(() => {});
+		if (ctx && ctx.state === "suspended") {
+			await ctx.resume().catch(() => {});
+			skipFromNow();
+		}
 		if (token !== mine) return discard(c);
 		micStream = s;
 		micCtx = ctx;
@@ -44403,7 +44682,11 @@ function serverRecognizer(opts = {}) {
 			failed("start-failed", "The audio engine isn't running — click the mic again");
 			return;
 		}
-		let floor = 0;
+		mic.roll(ctx);
+		const skip = Math.max(0, skipUntil - Date.now());
+		firstSkipMs = 0;
+		const pre = skip || muted ? null : mic.preRoll();
+		let floor = mic.quietFloor();
 		let lastLoud = 0;
 		let blockAt = 0;
 		const onLevel = (rms) => {
@@ -44416,6 +44699,7 @@ function serverRecognizer(opts = {}) {
 			if (isLoud(rms, floor)) {
 				if (!c.heard) {
 					c.speechS = at;
+					if (at < PRE_ROLL_ONSET_S) c.pre = pre;
 					h?.onSpeech?.();
 					if (c.stream && c.sid && now - c.opened > STREAM_FRESH_MS) {
 						discard(c);
@@ -44433,7 +44717,6 @@ function serverRecognizer(opts = {}) {
 			else pump(c);
 		};
 		try {
-			const skip = Math.max(0, skipUntil - Date.now());
 			c.rec = startWavRecording(s, ctx, {
 				targetRate: CLIP_RATE$1,
 				onLevel,
@@ -44452,6 +44735,23 @@ function serverRecognizer(opts = {}) {
 			if (cur === c) endClip();
 		}, CLIP_MAX_MS);
 	};
+	mic.onLost(() => {
+		if (!want || !h) return;
+		const now = Date.now();
+		const again = now - lostAt < MIC_LOST_RETRY_MS;
+		lostAt = now;
+		if (again) {
+			if (cur) endClip();
+			want = false;
+			self.lastError = "the microphone went away";
+			h.onError("mic-lost", MIC_GONE_LINE);
+			maybeEnd();
+			return;
+		}
+		h.onNotice?.(MIC_LOST_LINE);
+		if (cur) endClip();
+		else if (!token) clip();
+	});
 	const self = {
 		name: "server",
 		lastError: "",
@@ -44476,6 +44776,14 @@ function serverRecognizer(opts = {}) {
 			self.stop();
 			if (!self.available()) return false;
 			skipUntil = Date.now() + Math.max(0, o.skipMs || 0);
+			firstSkipMs = Math.max(0, o.skipMs || 0);
+			const cold = audioCtx && audioCtx.state !== "running" ? audioCtx : null;
+			if (cold && firstSkipMs) {
+				const mine = handlers;
+				whenRunning(cold).then((ok) => {
+					if (ok && h === mine) skipFromNow();
+				});
+			}
 			muted = false;
 			h = handlers;
 			want = true;
@@ -45529,7 +45837,8 @@ var tracker = new ReplyTracker();
 var heard = new HeardTurns();
 var clock = new HeardClock();
 var speakingListeners = /* @__PURE__ */ new Set();
-var queue = new SpeechQueue(() => ttsEngine(cfgNow) === "server" ? serverSp : browserSp, (on) => speakingListeners.forEach((l) => l(on)));
+var audibleListeners = /* @__PURE__ */ new Set();
+var queue = new SpeechQueue(() => ttsEngine(cfgNow) === "server" ? serverSp : browserSp, (on) => speakingListeners.forEach((l) => l(on)), { onAudible: (on) => audibleListeners.forEach((l) => l(on)) });
 var standbyMeter = false;
 var wakeFrom = null;
 var lastWakeMs = null;
@@ -45713,6 +46022,7 @@ function TopBarMic() {
 	const [cfg, setCfg] = (0, import_react.useState)(null);
 	const [listening, setListening] = (0, import_react.useState)(false);
 	const [speaking, setSpeaking] = (0, import_react.useState)(queue.busy);
+	const [sounding, setSounding] = (0, import_react.useState)(queue.audibleNow);
 	const [caption, setCaptionState] = (0, import_react.useState)("");
 	const [quiet, setQuiet] = (0, import_react.useState)(false);
 	const [menuOpen, setMenuOpen] = (0, import_react.useState)(false);
@@ -45751,6 +46061,9 @@ function TopBarMic() {
 	const quietTimer = (0, import_react.useRef)(void 0);
 	const holding = (0, import_react.useRef)(false);
 	const keyHeld = (0, import_react.useRef)(false);
+	const keyDownAt = (0, import_react.useRef)(0);
+	const keyLatched = (0, import_react.useRef)(false);
+	const haltedAt = (0, import_react.useRef)(0);
 	const hands = (0, import_react.useRef)(null);
 	const handsLive = (0, import_react.useRef)(null);
 	const standby = (0, import_react.useRef)(null);
@@ -45800,11 +46113,13 @@ function TopBarMic() {
 			const want = sayAllMismatch(prefsRef.current.replies, c.say_all);
 			if (want !== null) syncSayAll(want);
 		});
-		const l = (on) => {
-			setSpeaking(on);
+		const l = (on) => setSpeaking(on);
+		speakingListeners.add(l);
+		const a = (on) => {
+			setSounding(on);
 			if (gated.current) rec.current?.mute?.(on);
 		};
-		speakingListeners.add(l);
+		audibleListeners.add(a);
 		const onFocus = () => void refreshCfg();
 		window.addEventListener("focus", onFocus);
 		const unsubSettings = queryClient.getQueryCache().subscribe((event) => {
@@ -45813,6 +46128,7 @@ function TopBarMic() {
 		});
 		return () => {
 			speakingListeners.delete(l);
+			audibleListeners.delete(a);
 			window.removeEventListener("focus", onFocus);
 			unsubSettings();
 			clearTimeout(idleTimer.current);
@@ -45931,6 +46247,8 @@ function TopBarMic() {
 		}
 		clearTimeout(idleTimer.current);
 		deciding.current = null;
+		haltedAt.current = Date.now();
+		keyLatched.current = false;
 		live.current = null;
 		rec.current?.stop();
 		rec.current = null;
@@ -46037,7 +46355,8 @@ function TopBarMic() {
 				if (live.current === d) rec.current?.endPhrase?.();
 			},
 			sentIn: (ms) => void (lastSentMs = ms),
-			finalMs: () => r === serverRec ? serverRec.finalMs : null
+			finalMs: () => r === serverRec ? serverRec.finalMs : null,
+			endsSurely: () => r === serverRec && serverRec.streaming
 		}, {
 			hint: opts.hint,
 			continuous
@@ -46051,7 +46370,7 @@ function TopBarMic() {
 		});
 		d.show();
 		armIdle();
-		meterStart();
+		meterStart(serverRec.mic.quietFloor());
 		const ok = r.start({
 			onInterim: (t) => {
 				if (live.current !== d) return;
@@ -46421,11 +46740,25 @@ function TopBarMic() {
 			const phase = e.detail?.phase;
 			if (phase !== "down" && phase !== "up") return;
 			const k = keyRef.current;
-			const act = talkKeyAction(phase, k.hold, !!live.current, keyHeld.current);
+			if (phase === "down" && !live.current) warmMic(true);
+			const now = Date.now();
+			const act = talkKeyAction(phase, k.hold, !!live.current, keyHeld.current, {
+				heldMs: phase === "up" && keyHeld.current ? now - keyDownAt.current : void 0,
+				latched: keyLatched.current,
+				busy: !!deciding.current || now - haltedAt.current < TALK_DEBOUNCE_MS
+			});
 			if (phase === "up") keyHeld.current = false;
 			if (act === "start") {
-				if (k.start(textField(document.activeElement)) && k.hold) keyHeld.current = true;
-			} else if (act === "finish") k.finish();
+				keyLatched.current = false;
+				if (k.start(textField(document.activeElement)) && k.hold) {
+					keyHeld.current = true;
+					keyDownAt.current = now;
+				}
+			} else if (act === "latch") keyLatched.current = true;
+			else if (act === "finish") {
+				keyLatched.current = false;
+				k.finish();
+			}
 		};
 		window.addEventListener(TALK_EVENT, onTalk);
 		return () => window.removeEventListener(TALK_EVENT, onTalk);
@@ -46456,7 +46789,8 @@ function TopBarMic() {
 	}, [menuOpen]);
 	const who = focusedName || "a session";
 	const base = !supported ? noRecognizerLine() + " — right-click for options" : listening ? hold ? "Listening — release to stop (the words stay), Esc to take them back" : "Listening — click to stop (the words stay), Esc to take them back" : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") + (wake.on ? ", or say " + quoted(wakeName(words)) : "") + ", right-click for options";
-	const title = caption && !listening ? base + "\n" + caption : base;
+	const paused = listening && sounding;
+	const title = paused ? MIC_PAUSED_LINE : caption && !listening ? base + "\n" + caption : base;
 	const pill = micPill({
 		listening,
 		speaking,
@@ -46482,12 +46816,13 @@ function TopBarMic() {
 				"tb-item",
 				"mic-ring",
 				listening && "listening",
+				paused && "muted",
 				wake.on && !listening && "standby",
 				speaking && !listening && "speaking",
 				!supported && "unsupported"
 			].filter(Boolean).join(" "),
 			title,
-			"aria-label": listening ? "Listening — stop" : "Talk to " + who,
+			"aria-label": paused ? MIC_PAUSED_LINE : listening ? "Listening — stop" : "Talk to " + who,
 			"aria-pressed": listening,
 			"aria-haspopup": "menu",
 			"aria-expanded": menuOpen,

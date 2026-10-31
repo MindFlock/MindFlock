@@ -17491,6 +17491,26 @@ button.stagechip.bgchip.bg-stuck:focus-visible {
   background: var(--accent);
 }
 
+/* Listening, but a line is playing: the recorder is muted for it (the app's
+   own voice is not you) — the ring goes faint and dashed and the accent dot
+   says what plays, until the line ends. Still nothing moves. */
+.mic-ring.listening.muted::after {
+  opacity: 0.25;
+  border-style: dashed;
+}
+
+#mic-btn.muted::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  pointer-events: none;
+}
+
 /* No recognizer in this browser (and no server one): muted, still clickable
    — the click says what would make it work, the right-click has options. */
 #mic-btn.unsupported {
