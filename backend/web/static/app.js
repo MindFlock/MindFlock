@@ -40171,6 +40171,10 @@ function startWavRecording(stream, ctx, opts = {}) {
 //#region src/lib/voiceMic.ts
 var KEEP_STREAM_MS = 9e4;
 var HIDDEN_RELEASE_MS = 1e4;
+var MIC_CONSTRAINTS = {
+	echoCancellation: true,
+	noiseSuppression: true
+};
 var stopTracks = (s) => s.getTracks().forEach((t) => t.stop());
 async function micGranted() {
 	try {
@@ -40191,7 +40195,7 @@ var MicKeeper = class {
 	hiddenTimer;
 	ring = null;
 	lostSubs = /* @__PURE__ */ new Set();
-	constructor(keepMs = KEEP_STREAM_MS, open = () => navigator.mediaDevices.getUserMedia({ audio: true }), ringCtx = () => null) {
+	constructor(keepMs = KEEP_STREAM_MS, open = () => navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS }), ringCtx = () => null) {
 		this.keepMs = keepMs;
 		this.open = open;
 		this.ringCtx = ringCtx;
@@ -40276,6 +40280,9 @@ var MicKeeper = class {
 		const r = this.ring;
 		return r && r.stream === this.live() ? r.last(ms, rate) : null;
 	}
+	cut() {
+		this.ring?.cut();
+	}
 	quietFloor() {
 		const r = this.ring;
 		return r && r.stream === this.live() ? r.floor() : 0;
@@ -40331,6 +40338,7 @@ function startPreRoll(stream, ctx) {
 		const keep = Math.round(PRE_ROLL_MS / 1e3 * ctx.sampleRate) + RING_BLOCK;
 		let blocks = [];
 		let frames = 0;
+		let fresh = 0;
 		proc.onaudioprocess = (e) => {
 			const pcm = e.inputBuffer.getChannelData(0).slice();
 			blocks.push({
@@ -40338,6 +40346,7 @@ function startPreRoll(stream, ctx) {
 				rms: rmsOf(pcm)
 			});
 			frames += pcm.length;
+			fresh = Math.min(fresh + pcm.length, keep);
 			while (blocks.length > 1 && frames - blocks[0].pcm.length >= keep) frames -= blocks.shift().pcm.length;
 		};
 		src.connect(proc);
@@ -40350,6 +40359,7 @@ function startPreRoll(stream, ctx) {
 				proc.onaudioprocess = null;
 				blocks = [];
 				frames = 0;
+				fresh = 0;
 				for (const node of [
 					src,
 					proc,
@@ -40358,9 +40368,12 @@ function startPreRoll(stream, ctx) {
 					node.disconnect();
 				} catch {}
 			},
+			cut() {
+				fresh = 0;
+			},
 			last(ms, rate) {
-				if (!frames) return null;
-				let want = Math.min(frames, Math.round(ms / 1e3 * ctx.sampleRate));
+				let want = Math.min(frames, fresh, Math.round(ms / 1e3 * ctx.sampleRate));
+				if (!want) return null;
 				const out = new Float32Array(want);
 				for (let i = blocks.length - 1; i >= 0 && want > 0; i--) {
 					const b = blocks[i].pcm;
@@ -40532,6 +40545,9 @@ function meterFeed(rms, now = Date.now()) {
 }
 function lastLoudAt() {
 	return lastLoud;
+}
+function meterQuietMs() {
+	return lastLoud ? Math.max(0, lastFeed - lastLoud) : Infinity;
 }
 function meterPoll(read) {
 	poll = read;
@@ -42763,7 +42779,7 @@ var LiveDictation = class {
 	judge(e) {
 		if (e.seen) return e.seen;
 		const quiet = this.hooks.quietMs?.() ?? Infinity;
-		if (quiet < Date.now() - e.at) e.seen = "resumed";
+		if ((this.hooks.loudAt?.() ?? Date.now() - quiet) > e.at) e.seen = "resumed";
 		else if (quiet >= CONTROL_TAIL_MS) e.seen = "met";
 		return e.seen;
 	}
@@ -42800,7 +42816,7 @@ var LiveDictation = class {
 		if (quiet < CONTROL_TAIL_MS && !early) return;
 		clearInterval(this.tailTimer);
 		this.tailTimer = void 0;
-		this.wordEnd = Date.now() - Math.min(quiet, 6e4);
+		this.wordEnd = this.hooks.loudAt?.() || Date.now() - Math.min(quiet, 6e4);
 		this.endedAt = Date.now();
 		this.hooks.endPhrase?.();
 		if (radio) {
@@ -44619,6 +44635,7 @@ function serverRecognizer(opts = {}) {
 		cur = null;
 		clearTimeout(capTimer);
 		if (!c?.rec) return;
+		mic.cut();
 		if (c.stream) {
 			endStream(c);
 			return;
@@ -46347,10 +46364,8 @@ function TopBarMic() {
 			pending: (title) => liveActivity(title) === "clarify" || questions.has(title),
 			done: (how) => opts.done?.(how),
 			confirm: (kind) => void confirmer.current?.say(kind),
-			quietMs: () => {
-				const at = lastLoudAt();
-				return at ? Date.now() - at : Infinity;
-			},
+			quietMs: meterQuietMs,
+			loudAt: lastLoudAt,
 			endPhrase: () => {
 				if (live.current === d) rec.current?.endPhrase?.();
 			},
