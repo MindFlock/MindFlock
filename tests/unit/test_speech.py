@@ -370,6 +370,8 @@ class TestLocalSTT:
             "device": "cpu",
             "compute_type": "int8",
             "download_root": str(tmp_path / "voice" / "whisper"),
+            "cpu_threads": speech.whisper_threads("final"),
+            "num_workers": 1,
         }
         assert (tmp_path / "voice" / "whisper").is_dir()
         path, existed, size = whisper.seen_paths[0]

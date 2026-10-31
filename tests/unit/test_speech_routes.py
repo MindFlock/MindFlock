@@ -6,6 +6,7 @@ the backend registry swapped for fakes and the settings store at a tmp file
 from __future__ import annotations
 
 import io
+import time
 import wave
 from types import SimpleNamespace
 
@@ -115,7 +116,12 @@ class TestGet:
         assert final["samples"] == 3
         assert final["timeout_ms"] == int(speech_stream.FINAL_TIMEOUT_S * 1000)
         assert 0 <= final["typical_ms"] <= final["p95_ms"] <= final["timeout_ms"]
-        assert final["expect_ms"] == final["p95_ms"]  # measured, not the bench's
+        # Measured, not the bench's: the median plus the margin (held up to
+        # the floor; these fakes answer in a few ms).
+        assert final["expect_ms"] == max(
+            speech_stream.EXPECT_FLOOR_MS,
+            final["typical_ms"] + speech_stream.EXPECT_MARGIN_MS,
+        )
         assert body["server_ready"]["final_ms"] == final["expect_ms"]
 
     def test_reflects_settings_and_readiness(self, fakes):
@@ -961,13 +967,19 @@ class TestStream:
         sid = _open().json()["id"]
         streaming.passes += [_words("over")] * 2
         _chunk(sid)  # loud: "over" is the tail
-        _chunk(sid, body=_wav(0.3, sample=b"\x00\x00"))  # quiet: settles it
-        assert heard == [int(0.8 * 16000)]  # the pass started on that chunk
+        _chunk(sid, body=_wav(0.3, sample=b"\x00\x00"))  # a pause: settles it
+        assert heard == []  # 0.3 s of quiet is not yet the end
+        _chunk(sid, body=_wav(0.3, sample=b"\x00\x00"))  # 0.6 s: it starts
+        for _ in range(200):  # the pass runs on its own thread
+            if heard:
+                break
+            time.sleep(0.005)
+        assert heard == [int(1.1 * 16000)]  # the phrase so far
         body = client.post("/api/voice/stream/%s/end" % sid).json()
         assert body["final"] == "Over." and body["final_early"] is True
-        assert heard == [int(0.8 * 16000)]  # not run again
+        assert heard == [int(1.1 * 16000)]  # not run again
         assert [c for c in streaming.calls if c[0] == "pass"][-1][1] == 12800
-        # No fast pass at the end either: nothing new to hear.
+        # No fast pass after the final started, nor at the end.
         assert len([c for c in streaming.calls if c[0] == "pass"]) == 2
 
     def test_delete_abandons(self, streaming):
