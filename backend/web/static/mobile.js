@@ -5222,15 +5222,25 @@
     stop: { tones: [[880, 0], [660, 0.07]], gain: 0.16, len: 0.07 },
   };
   var VOICE_CHIME_MS = 230;   // a chime and the audio engine's latency: the recorder skips this long
+  // A context not running yet (the tap's resume() is still on its way; iOS
+  // "interrupted" while its recognizer held the mic): the chime waits for the
+  // resume, up to this long — later than that it would sound like a stray beep.
+  var VOICE_CHIME_LATE_MS = 400;
+  // The stop chime on the phone's own recognizer waits this long (s): Android
+  // hands the audio back a beat after the recognizer ends, and a tone started
+  // inside that beat is swallowed.
+  var VOICE_CHIME_STOP_GAP_S = 0.12;
   function voiceChime(kind) {
     var c = VOICE_CHIMES[kind];
     if (!c || voice.prefs.sounds === false) return false;
     var p = voiceSpeech.playing;
     if (p && (!p.nod || kind === "stop")) { voice.chimeWait = kind; return false; }
     var ctx = voice.audioCtx;
-    if (!ctx || ctx.state !== "running") return false;
-    try {
-      var t = ctx.currentTime;
+    if (!ctx) return false;
+    var gap = kind === "stop" && voice.stt && voice.stt.name === "phone" ? VOICE_CHIME_STOP_GAP_S : 0;
+    var last = c.tones[c.tones.length - 1][1] + c.len;
+    function play() {
+      var t = ctx.currentTime + gap;
       c.tones.forEach(function (n) {
         var o = ctx.createOscillator(), g = ctx.createGain(), at = t + n[1];
         o.type = "sine";
@@ -5246,6 +5256,21 @@
       voice.micMuteUntil = Math.max(voice.micMuteUntil || 0, Date.now() + VOICE_CHIME_MS);
       voice.chimes = voice.chimes || { start: 0, stop: 0 };
       voice.chimes[kind]++;
+    }
+    try {
+      if (ctx.state === "running") {
+        play();
+        // When the tones are out: the phone's recognizer starts after it (voiceListen).
+        voice.chimeEnd = Date.now() + Math.round((gap + last) * 1000) + 40;
+        return true;
+      }
+      var asked = Date.now();
+      voice.chimeEnd = asked + VOICE_CHIME_LATE_MS + Math.round((gap + last) * 1000);
+      ctx.resume().then(function () {
+        if (ctx.state === "running" && Date.now() - asked <= VOICE_CHIME_LATE_MS) {
+          try { play(); } catch (e) {}
+        }
+      }, function () {});
       return true;
     } catch (e) { return false; }
   }
@@ -5363,6 +5388,10 @@
     var L = voiceListen_;
     // Every start chimes (voiceChime) — the wake word's already has.
     if (!voiceIsListening() && !L.woke) voiceChime("start");
+    // The phone's own recognizer takes the audio the moment it starts (Android
+    // cuts the chime, iOS sends it to the earpiece): it starts once the chime
+    // is out, through the same wait a barge-in's tail uses below.
+    if (voice.stt.name === "phone" && voice.chimeEnd > Date.now()) L.muteUntil = Math.max(L.muteUntil || 0, voice.chimeEnd);
     L.mode = mode;
     L.until = Date.now() + windowMs;   // to the first word; every word moves it VOICE_DICT_IDLE_MS out
     L.cont = !!cont && !held && mode === "prompt";

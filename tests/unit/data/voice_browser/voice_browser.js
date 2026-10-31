@@ -2543,6 +2543,9 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     check("ack: a tap → state, strip ('Listening…'), the mic's colour and Cancel change in the same tick (" + ack.ms + " ms), before any network", ack.state === "listening" && ack.strip === "Listening…" && ack.btn === "listening" && ack.cancel && ack.ms < 50, JSON.stringify(ack));
     // ---- a window that closes with nothing heard says so for a moment,
     // instead of going blank: "Heard nothing." then nothing.
+    // The phone's recognizer opens just after the start chime (it would cut
+    // the chime): the silence is sent once it is listening, as a real one comes.
+    await waitFor(pageS, () => window.mfVoice.stt && window.mfVoice.stt.active && window.mfVoice.stt.active(), 2000, "recognizer open after the chime");
     await pageS.evaluate(() => { window.mfVoice.listen.cont = false; window.mfVoice.listen.until = 0; window.__silence(); });
     await waitFor(pageS, () => window.mfVoice.state === "idle", 3000, "window closed");
     const nothing = await pageS.evaluate(() => document.getElementById("voice-caption").textContent);
