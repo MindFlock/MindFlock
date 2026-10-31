@@ -46,16 +46,25 @@ final would not cover what was typed); one that fails or takes longer than
 
 The accurate pass starts EARLY. Whisper's encoder costs the same for a
 second of speech as for thirty, so the pass is ~1 s on ``small`` whatever
-the phrase, and a client that acts on a radio word waits for it. A quiet
-chunk means the person paused — usually the phrase is over — so
+the phrase, and a client that acts on a radio word waits for it. Once
+:data:`EARLY_QUIET_SECONDS` of quiet follow the last loud frame the person
+has most likely finished — a pause between words is shorter — so
 :meth:`Stream.feed` starts the accurate pass on the phrase so far right then
-(``_start_early``, one at a time), while the fast tier still settles the
-last words and the client decides. :meth:`Stream.finish` takes that result
-when no speech arrived after it started (``final_early``; ``final_wait_ms``
-is how long it still had to wait, often 0) and runs a fresh pass otherwise.
-A pause mid-sentence costs one wasted pass. Likewise ``finish`` skips its
-last fast pass when nothing loud arrived since the previous one and no tail
-waits: there is nothing new to hear.
+(``_start_early``, one per stream at a time), while the client waits out its
+own phrase-end silence. :meth:`Stream.finish` takes that result when no
+speech arrived after it started (``final_early``; ``final_wait_ms`` is how
+long it still had to wait, often 0) and starts a fresh pass otherwise.
+Speech after it makes it stale (withdrawn if it has not started yet).
+
+The two tiers share the CPU, so they are scheduled (:class:`Lane`, one per
+model: one job at a time, the accurate pass first, a stale job dropped
+before it runs), and once a phrase's accurate pass has started no fast
+pass runs for it once one has heard :data:`SETTLE_SECONDS` of the quiet
+after the last loud frame (the pass that completes the last word): the
+fast words are only the fallback now, and the tail stands as last heard —
+so a quiet chunk then runs no pass, and neither does ``finish``. Likewise
+``finish`` skips its last fast pass when nothing loud arrived since the
+previous one and no tail waits: there is nothing new to hear.
 
 The measured wait of recent finishes is kept (:func:`final_stats`) so
 ``GET /api/voice`` can tell a client how long ``/end`` typically takes.
@@ -88,15 +97,22 @@ from array import array
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 __all__ = [
+    "CLIP",
+    "EARLY_QUIET_SECONDS",
     "EXPIRE_SECONDS",
+    "FAST",
+    "FINAL",
     "FINAL_EXPECT_MS",
     "FINAL_MIN_SECONDS",
     "FINAL_TIMEOUT_S",
+    "Job",
+    "Lane",
     "MAX_STREAMS",
     "PHRASE_MAX_SECONDS",
     "RATE",
     "SILENCE_RMS",
     "SILENCE_SLACK",
+    "Skipped",
     "Stream",
     "WINDOW_SECONDS",
     "clear",
@@ -104,6 +120,7 @@ __all__ = [
     "decode_wav",
     "final_stats",
     "get_stream",
+    "lane",
     "open_stream",
     "same_text",
     "sweep",
@@ -160,6 +177,24 @@ STATS_MIN = 3
 _FRAME = RATE // 10
 #: A word a pass starts this long after the last loud frame is invented.
 SILENCE_SLACK = 0.4
+
+#: The quiet that must follow the last loud frame before the accurate pass
+#: starts early: longer than most pauses between words (so a breath
+#: mid-sentence does not start a pass that the next word makes stale), and
+#: well short of the clients' 1.1 s phrase-end silence (``SILENCE_MS`` in
+#: voiceDesktop.ts / mobile.js), so the pass still gets ~0.6 s head start.
+EARLY_QUIET_SECONDS = 0.5
+#: How far past the last loud frame a fast pass must have heard before no
+#: more are run once the accurate pass started (``Stream._all_heard``): the
+#: bench's fast-tier WER went 28% → 36% when the pass over the speech's own
+#: last chunk had to stand.
+SETTLE_SECONDS = 0.3
+#: ``expect_ms`` is the median finish wait plus this margin (or twice the
+#: median absolute deviation, when larger), held to
+#: [:data:`EXPECT_FLOOR_MS`, the timeout]. Not the p95: the waits that hit
+#: the timeout pin a p95 at the timeout, and the client's "over" wait with it.
+EXPECT_MARGIN_MS = 250
+EXPECT_FLOOR_MS = 300
 
 #: Open streams per server (``POST /api/voice/stream`` refuses beyond).
 MAX_STREAMS = 4
@@ -224,6 +259,178 @@ def same_text(a: str, b: str) -> bool:
     return _plain(a) == _plain(b)
 
 
+# --------------------------------------------------------------------------- #
+# The per-model job lanes
+# --------------------------------------------------------------------------- #
+#: Job kinds, in the order a lane serves them: a stream's accurate pass (a
+#: client waits on it to send), a one-shot clip or wake check, a fast pass.
+FINAL, CLIP, FAST = "final", "clip", "fast"
+_RANK = {FINAL: 0, CLIP: 1, FAST: 2}
+
+
+class Skipped(Exception):
+    """A lane job that never ran: a newer one of its owner replaced it, its
+    owner's accurate pass pre-empted it, or its waiter withdrew it."""
+
+
+class Job:
+    """One queued model call: ``state`` is ``queued`` → ``running`` →
+    ``done``, or ``dropped`` (with ``why``) before it ran; ``abandoned``
+    when its waiter gave up on it while it ran (:meth:`Lane.cancel`)."""
+
+    __slots__ = ("kind", "owner", "state", "why", "abandoned")
+
+    def __init__(self, kind: str, owner: object):
+        self.kind, self.owner = kind, owner
+        self.state, self.why = "queued", ""
+        self.abandoned = False
+
+
+_CURRENT = threading.local()
+
+
+def abandoned() -> bool:
+    """Whether the lane job running in this thread was abandoned: a model
+    call that can stop part-way (between faster-whisper's segments) checks
+    it and stops — its result is no longer wanted."""
+    job = getattr(_CURRENT, "job", None)
+    return bool(job is not None and job.abandoned)
+
+
+class Lane:
+    """The calls on one model (``whisper:<name>``): at most one runs at a
+    time, in its caller's own thread (no worker thread, nothing to stop).
+
+    A CTranslate2 model on the CPU cannot be stopped mid-call, and two calls
+    at once only split the cores between them (the early accurate pass
+    beside fast passes doubled both, so the final missed its deadline), so
+    the only scheduling there is happens before a job starts:
+
+    * the queue is ordered by kind — :data:`FINAL`, then :data:`CLIP`, then
+      :data:`FAST` — first come first served within one;
+    * a job of an owner (a :class:`Stream`) replaces that owner's queued job
+      of the same kind: the latest audio wins, the stale job raises
+      :class:`Skipped` without running;
+    * a :data:`FINAL` also drops its owner's queued :data:`FAST` jobs — once
+      the accurate pass is on its way, the fast words are only a fallback;
+    * :meth:`cancel` withdraws a queued job (a finish that stopped waiting,
+      an early pass the speech made stale), and ABANDONS a running one: the
+      lane is free for the next job at once (a final that timed out on a
+      long phrase blocked the next phrase's final for seconds), and the
+      call stops at its next check of :func:`abandoned`, if it makes one.
+      The abandoned call still uses the cores until then — the price of
+      not waiting for it."""
+
+    def __init__(self, name: str):
+        self.name = name
+        self._cond = threading.Condition()
+        self._queue: List[Job] = []
+        self._running: Optional[Job] = None
+        #: Jobs run / dropped before they ran, since the lane was made.
+        self.ran = 0
+        self.dropped = 0
+
+    @property
+    def running(self) -> Optional[Job]:
+        return self._running
+
+    def pending(self) -> List[Job]:
+        """The queued jobs, in the order they will run."""
+        with self._cond:
+            return list(self._queue)
+
+    def submit(self, kind: str = FAST, owner: object = None) -> Job:
+        """Queue a job (see the class doc for what it replaces) → its
+        handle, for :meth:`run_job` from any thread."""
+        job = Job(kind, owner)
+        with self._cond:
+            if owner is not None:
+                for old in list(self._queue):
+                    if old.owner is not owner:
+                        continue
+                    if old.kind == kind:
+                        self._drop(old, "replaced by a newer %s job" % kind)
+                    elif kind == FINAL and old.kind == FAST:
+                        self._drop(old, "pre-empted by the accurate pass")
+            rank = _RANK.get(kind, _RANK[FAST])
+            at = len(self._queue)
+            while at and _RANK.get(self._queue[at - 1].kind, 2) > rank:
+                at -= 1
+            self._queue.insert(at, job)
+            self._cond.notify_all()
+        return job
+
+    def run_job(self, job: Job, fn: Callable[[], object]) -> object:
+        """Wait for ``job``'s turn, then ``fn()`` in this thread → its
+        result. :class:`Skipped` when the job was dropped before it ran."""
+        with self._cond:
+            while job.state == "queued" and not (
+                self._running is None and self._queue and self._queue[0] is job
+            ):
+                self._cond.wait()
+            if job.state != "queued":
+                raise Skipped(job.why)
+            self._queue.pop(0)
+            job.state = "running"
+            self._running = job
+        outer = getattr(_CURRENT, "job", None)
+        _CURRENT.job = job
+        try:
+            return fn()
+        finally:
+            _CURRENT.job = outer
+            with self._cond:
+                job.state = "done"
+                if self._running is job:
+                    self._running = None
+                self.ran += 1
+                self._cond.notify_all()
+
+    def run(self, fn: Callable[[], object], kind: str = FAST, owner: object = None):
+        """:meth:`submit` then :meth:`run_job`."""
+        return self.run_job(self.submit(kind, owner), fn)
+
+    def cancel(self, job: Job, why: str = "withdrawn") -> bool:
+        """Drop ``job`` if it has not started → ``True``; abandon it if it
+        is running (see the class doc) → ``False``."""
+        with self._cond:
+            if job.state == "running" and not job.abandoned:
+                job.abandoned, job.why = True, why
+                if self._running is job:
+                    self._running = None
+                self._cond.notify_all()
+            if job.state != "queued":
+                return False
+            self._drop(job, why)
+            self._cond.notify_all()
+            return True
+
+    def _drop(self, job: Job, why: str) -> None:
+        if job in self._queue:
+            self._queue.remove(job)
+        job.state, job.why = "dropped", why
+        self.dropped += 1
+
+
+_LANES: Dict[str, Lane] = {}
+_LANES_LOCK = threading.Lock()
+
+
+def lane(name: str) -> Lane:
+    """The process-wide lane of model ``name`` (made on first use). A
+    transcriber names its model's lane in its ``lane`` attribute
+    (``core.speech.LocalSTT``); one without uses ``fast`` / ``final``."""
+    with _LANES_LOCK:
+        found = _LANES.get(name)
+        if found is None:
+            found = _LANES[name] = Lane(name)
+        return found
+
+
+def _lane_of(fn: Optional[Callable], default: str) -> Lane:
+    return lane(str(getattr(fn, "lane", "") or default))
+
+
 class Stream:
     """One live recognition: see the module doc for the policy. Thread-safe —
     one pass at a time (a chunk that arrives during a pass waits, then gets
@@ -250,6 +457,7 @@ class Stream:
         self._offset = 0.0  # stream seconds before _audio[0]
         self._fed = 0.0  # stream seconds fed so far
         self._loud_end = -1.0  # stream time of the last loud frame's end
+        self._heard_end = 0.0  # stream time the last fast pass heard up to
         self._committed: List[Word] = []  # stream-absolute times
         self._tail: List[Word] = []  # the last pass's uncommitted words
         self._owed: List[Word] = []  # committed, not yet returned (a pass failed)
@@ -297,11 +505,12 @@ class Stream:
                 self._start_early()
             else:
                 self._unheard = True
-                if self._early is not None:
-                    self._early.stale = True
-            if quiet and not self._tail:
-                return self._pay([]), ""
+                self._stale_early()
+            if quiet and (not self._tail or self._settled()):
+                return self._pay([]), _join(self._tail)
             hyp = self._pass()
+            if hyp is None:  # dropped from the lane: the audio waits
+                return self._pay([]), _join(self._tail)
             n = 0
             while (
                 n < len(hyp)
@@ -331,26 +540,42 @@ class Stream:
         with self._lock:
             self.touched = _now()
             self._cap()
-            fresh = self._audio and (self._tail or self._unheard)
-            rest = self._pass() if fresh else []
+            phrase, self._phrase = self._phrase, array("f")
+            early, self._early = self._early, None
+            run = self._accurate is not None and phrase
+            run = run and not self.phrase_trimmed
+            run = run and self.voiced_s >= FINAL_MIN_SECONDS
+            job: Optional[_Early] = None
+            if run and (early is None or early.stale):
+                # The accurate pass first: the fast flush is only its fallback.
+                job = _Early(self._accurate, phrase, owner=self)  # type: ignore[arg-type]
+            if run and self._all_heard():
+                # Every loud frame was heard by a fast pass and the accurate
+                # pass is on its way: the tail stands as heard, no flush.
+                rest: Optional[List[Word]] = list(self._tail)
+            else:
+                fresh = self._audio and (self._tail or self._unheard)
+                try:
+                    rest = self._pass() if fresh else []
+                except BaseException:
+                    if job is not None:
+                        job.cancel("the fast flush failed")
+                    raise
+                if rest is None:
+                    rest = list(self._tail)
             self._committed.extend(rest)
             self._tail = []
             self._offset += self.held_seconds
             self._audio = array("f")
             out: dict = {"committed": self._pay(rest), "partial": ""}
-            fast, phrase = self.text, self._phrase
-            self._phrase = array("f")
-            early, self._early = self._early, None
-            run = self._accurate is not None and phrase
-            run = run and not self.phrase_trimmed
-            run = run and self.voiced_s >= FINAL_MIN_SECONDS
+            fast = self.text
         self.final_early = False
         if not run:
             final = ""
-        elif early is not None and not early.stale:
-            final = self._await(early)
+        elif job is None:
+            final = self._await(early)  # type: ignore[arg-type]
         else:
-            final = self._final(phrase)
+            final = self._final(job)
         if run:
             _record(self.final_wait_ms)
         if final:
@@ -390,16 +615,41 @@ class Stream:
 
     def _start_early(self) -> None:
         """A quiet chunk arrived: start the accurate pass on the phrase so
-        far (a copy), unless one that is still good is running or done, the
-        phrase is too short or too long for a pass, or there is none. Under
-        the lock; the pass itself runs on its own daemon thread."""
+        far (a copy) once :data:`EARLY_QUIET_SECONDS` of quiet follow the
+        last loud frame — unless one that is still good is queued, running
+        or done, the phrase is too short or too long for a pass, or there is
+        none. A stale one still running keeps the lane; the new one queues
+        behind it. Under the lock; the pass runs on its own daemon thread."""
         if self._accurate is None or self.phrase_trimmed:
             return
         if self.voiced_s < FINAL_MIN_SECONDS:
             return
-        if self._early is not None and not (self._early.stale and self._early.done):
+        if self._fed - self._loud_end < EARLY_QUIET_SECONDS:
             return
-        self._early = _Early(self._accurate, array("f", self._phrase))
+        if self._early is not None and not self._early.stale:
+            return
+        self._early = _Early(self._accurate, array("f", self._phrase), owner=self)
+
+    def _stale_early(self) -> None:
+        """Speech arrived after the early pass started: its text would not
+        cover the phrase. Withdrawn if it has not started yet."""
+        if self._early is not None and not self._early.stale:
+            self._early.stale = True
+            self._early.cancel("the speech went on")
+
+    def _all_heard(self) -> bool:
+        """A fast pass heard every loud frame so far and
+        :data:`SETTLE_SECONDS` of the quiet after the last: whisper drops or
+        clips a word that ends right at the window's edge, so the pass that
+        hears it with some quiet after is the one worth having."""
+        settled = self._loud_end + SETTLE_SECONDS <= self._heard_end
+        return settled and not self._unheard
+
+    def _settled(self) -> bool:
+        """The accurate pass over the phrase as it is now has started, and
+        the fast tier heard all of it: no fast pass is issued after that
+        (it would only re-agree on the tail, on the cores the final needs)."""
+        return self._early is not None and not self._early.stale and self._all_heard()
 
     def _await(self, early: "_Early") -> str:
         """The early pass's text, waited for at most :data:`FINAL_TIMEOUT_S`
@@ -413,24 +663,32 @@ class Stream:
         self.final_early = True
         return self._outcome(early, early.seconds)
 
-    def _final(self, phrase: array) -> str:
-        """The accurate pass over ``phrase`` on its own daemon thread, at
-        most :data:`FINAL_TIMEOUT_S` → its text, ``""`` when it failed or
-        timed out (logged; a late result is dropped). Not under the lock."""
-        early = _Early(self._accurate, phrase)  # type: ignore[arg-type]
-        early.thread.join(FINAL_TIMEOUT_S)
-        self.final_ms = int((time.monotonic() - early.started) * 1000)
+    def _final(self, job: "_Early") -> str:
+        """The accurate pass ``finish`` started (``job``), waited for at most
+        :data:`FINAL_TIMEOUT_S` from its start → its text, ``""`` when it
+        failed or timed out (logged; a late result is dropped). Not under
+        the lock."""
+        job.thread.join(max(0.0, FINAL_TIMEOUT_S - (time.monotonic() - job.started)))
+        self.final_ms = int((time.monotonic() - job.started) * 1000)
         self.final_wait_ms = self.final_ms
-        return self._outcome(early, len(phrase) / RATE)
+        return self._outcome(job, job.seconds)
 
     @staticmethod
     def _outcome(early: "_Early", seconds: float) -> str:
         if early.thread.is_alive():
+            queued = early.cancel("its finish stopped waiting")
             _logger.warning(
                 "voice stream: the accurate pass took over %.1fs on %.1fs of"
-                " audio; the fast text stands",
+                " audio (%s); the fast text stands",
                 FINAL_TIMEOUT_S,
                 seconds,
+                "never started: the model was busy" if queued else "still running",
+            )
+            return ""
+        if "skipped" in early.box:
+            _logger.info(
+                "voice stream: the accurate pass was dropped (%s); the fast text stands",
+                early.box["skipped"],
             )
             return ""
         if "error" in early.box:
@@ -449,16 +707,26 @@ class Stream:
         space = cut.find(" ")
         return cut[space + 1 :] if 0 <= space < len(cut) - 1 else cut
 
-    def _pass(self) -> List[Word]:
-        """Transcribe the window → its words beyond what is committed, in
-        stream-absolute seconds."""
+    def _pass(self) -> Optional[List[Word]]:
+        """Transcribe the window, on the fast model's lane (:class:`Lane`)
+        → its words beyond what is committed, in stream-absolute seconds;
+        ``None`` when the lane dropped the pass before it ran (``last_ms``
+        0, the audio stays unheard)."""
         started = time.monotonic()
         self.last_window_s = self.held_seconds
+        audio, prompt = self._audio, self._prompt()
         try:
-            raw = self._transcribe(self._audio, self._prompt())
+            raw = _lane_of(self._transcribe, "fast").run(
+                lambda: self._transcribe(audio, prompt), FAST, self
+            )
+        except Skipped:
+            self.last_ms, self.last_window_s = 0, 0.0
+            return None
         finally:
-            self.last_ms = int((time.monotonic() - started) * 1000)
+            if self.last_window_s:
+                self.last_ms = int((time.monotonic() - started) * 1000)
         self._unheard = False  # a failed pass leaves the audio unheard
+        self._heard_end = self._fed
         hyp: List[Word] = []
         edge = self._loud_end + SILENCE_SLACK
         for word, start, end in raw or ():
@@ -525,19 +793,25 @@ class Stream:
 
 
 class _Early:
-    """One accurate pass in flight on its own daemon thread: ``box`` gets
-    ``text`` or ``error``; ``stale`` is set when speech arrives after it
-    started (its text would not cover the phrase)."""
+    """One accurate pass, queued on its model's lane (:class:`Lane`, as a
+    :data:`FINAL` of ``owner``) and run on its own daemon thread: ``box``
+    gets ``text``, ``error`` or ``skipped`` (the lane dropped it before it
+    ran); ``stale`` is set when speech arrives after it started (its text
+    would not cover the phrase)."""
 
-    def __init__(self, accurate: Accurate, phrase: array):
+    def __init__(self, accurate: Accurate, phrase: array, owner: object = None):
         self.box: dict = {}
         self.stale = False
         self.seconds = len(phrase) / RATE
         self.started = time.monotonic()
+        self.lane = _lane_of(accurate, "final")
+        self.job = self.lane.submit(FINAL, owner)
 
         def run() -> None:
             try:
-                self.box["text"] = accurate(phrase)
+                self.box["text"] = self.lane.run_job(self.job, lambda: accurate(phrase))
+            except Skipped as err:
+                self.box["skipped"] = str(err) or "dropped"
             except Exception as err:  # noqa: BLE001 — the fast text stands
                 self.box["error"] = err
 
@@ -547,6 +821,10 @@ class _Early:
     @property
     def done(self) -> bool:
         return not self.thread.is_alive()
+
+    def cancel(self, why: str) -> bool:
+        """Withdraw the pass if it has not started → whether it was."""
+        return self.lane.cancel(self.job, why)
 
 
 _WAITS: "collections.deque[int]" = collections.deque(maxlen=STATS_KEEP)
@@ -561,8 +839,11 @@ def final_stats() -> dict:
     last :data:`STATS_KEEP` phrases that ran one → ``{"samples", "typical_ms"
     (the median), "p95_ms", "expect_ms", "timeout_ms"}``; the two percentiles
     are 0 before the first. ``expect_ms`` is what a client should budget for
-    ``/end``: the measured p95 once :data:`STATS_MIN` phrases are in, the
-    bench's :data:`FINAL_EXPECT_MS` before, never over the timeout. ``GET
+    ``/end``: once :data:`STATS_MIN` phrases are in, the median plus
+    :data:`EXPECT_MARGIN_MS` or twice the median absolute deviation, whichever
+    is more — robust, where the p95 sits at the timeout as soon as one wait
+    in twenty hits it; the bench's :data:`FINAL_EXPECT_MS` before; held to
+    [:data:`EXPECT_FLOOR_MS`, the timeout] either way. ``GET
     /api/voice`` serves it (``server_ready.final_ms`` is ``expect_ms``) so a
     client waits about that long instead of assuming the worst."""
     waits = sorted(_WAITS)
@@ -572,12 +853,17 @@ def final_stats() -> dict:
         return waits[min(n - 1, int(round(q * (n - 1))))] if n else 0
 
     timeout = int(FINAL_TIMEOUT_S * 1000)
-    expect = pct(0.95) if n >= STATS_MIN else FINAL_EXPECT_MS
+    if n >= STATS_MIN:
+        med = pct(0.5)
+        dev = sorted(abs(w - med) for w in waits)[n // 2]
+        expect = med + max(EXPECT_MARGIN_MS, 2 * dev)
+    else:
+        expect = FINAL_EXPECT_MS
     return {
         "samples": n,
         "typical_ms": pct(0.5),
         "p95_ms": pct(0.95),
-        "expect_ms": min(expect, timeout),
+        "expect_ms": max(min(EXPECT_FLOOR_MS, timeout), min(expect, timeout)),
         "timeout_ms": timeout,
     }
 
@@ -661,9 +947,11 @@ def close_stream(sid: str) -> Optional[Stream]:
 
 
 def clear() -> None:
-    """Forget every stream, the sweep timer and the finish-wait record
-    (tests, shutdown)."""
+    """Forget every stream, the model lanes, the sweep timer and the
+    finish-wait record (tests, shutdown)."""
     global _TIMER
+    with _LANES_LOCK:
+        _LANES.clear()
     with _REG_LOCK:
         _STREAMS.clear()
         _WAITS.clear()

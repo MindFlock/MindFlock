@@ -1,0 +1,486 @@
+"""STT scheduling: ``speech_stream.Lane`` (one job per model, stale jobs
+replaced, the accurate pass first), how a :class:`speech_stream.Stream`
+uses it (no fast pass once its phrase's accurate pass has started, the early
+pass only after real trailing quiet), the ``expect_ms`` statistic, and the
+whisper thread budgets (``speech.whisper_threads``). Fake models only.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+from array import array
+from types import SimpleNamespace
+
+import pytest
+
+from backend.web.core import speech
+from backend.web.core import speech_stream as ss
+
+RATE = ss.RATE
+
+
+@pytest.fixture(autouse=True)
+def _registry():
+    ss.clear()
+    yield
+    ss.clear()
+
+
+def _secs(s, level=0.1):
+    return array("f", [level] * int(s * RATE))
+
+
+def _words(text, start=0.0, step=0.5):
+    return [
+        (w, start + i * step, start + i * step + 0.4)
+        for i, w in enumerate(text.split())
+    ]
+
+
+def _until(cond, timeout=2.0):
+    end = time.monotonic() + timeout
+    while not cond() and time.monotonic() < end:
+        time.sleep(0.002)
+    assert cond()
+
+
+class _Busy:
+    """A job holding a lane until :meth:`release` (on its own thread)."""
+
+    def __init__(self, lane, kind=ss.CLIP, owner=None):
+        self.gate = threading.Event()
+        self.job = lane.submit(kind, owner)
+        self.thread = threading.Thread(
+            target=lane.run_job, args=(self.job, lambda: self.gate.wait(5)), daemon=True
+        )
+        self.thread.start()
+        _until(lambda: self.job.state == "running")
+
+    def release(self):
+        self.gate.set()
+        self.thread.join(2)
+
+
+def _waiter(lane, job, out, fn=lambda: "ran"):
+    def go():
+        try:
+            out[job] = lane.run_job(job, fn)
+        except ss.Skipped as err:
+            out[job] = ("skipped", str(err))
+
+    t = threading.Thread(target=go, daemon=True)
+    t.start()
+    return t
+
+
+class TestLane:
+    def test_one_job_at_a_time(self):
+        lane = ss.lane("whisper:x")
+        active, peak = [0], [0]
+        lock = threading.Lock()
+
+        def job():
+            with lock:
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
+            time.sleep(0.01)
+            with lock:
+                active[0] -= 1
+
+        threads = [
+            threading.Thread(target=lane.run, args=(job, ss.FAST, object()))
+            for _ in range(6)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(5)
+        assert peak[0] == 1 and lane.ran == 6
+
+    def test_a_newer_fast_job_replaces_the_queued_one(self):
+        lane = ss.lane("whisper:x")
+        busy = _Busy(lane)
+        owner, out = object(), {}
+        old = lane.submit(ss.FAST, owner)
+        t_old = _waiter(lane, old, out)
+        new = lane.submit(ss.FAST, owner)  # the latest audio wins
+        t_new = _waiter(lane, new, out)
+        assert old.state == "dropped" and "replaced" in old.why
+        assert lane.pending() == [new]
+        busy.release()
+        t_old.join(2)
+        t_new.join(2)
+        assert out[old][0] == "skipped" and out[new] == "ran"
+        assert lane.dropped == 1
+
+    def test_other_owners_are_not_replaced(self):
+        lane = ss.lane("whisper:x")
+        busy = _Busy(lane)
+        a, b = lane.submit(ss.FAST, "a"), lane.submit(ss.FAST, "b")
+        assert lane.pending() == [a, b]
+        busy.release()
+
+    def test_a_final_pre_empts_its_owners_fast_jobs(self):
+        lane = ss.lane("whisper:same")
+        busy = _Busy(lane)
+        mine = lane.submit(ss.FAST, "me")
+        theirs = lane.submit(ss.FAST, "them")
+        final = lane.submit(ss.FINAL, "me")
+        assert mine.state == "dropped" and "accurate pass" in mine.why
+        # The final goes first; another stream's fast pass keeps its place.
+        assert lane.pending() == [final, theirs]
+        busy.release()
+
+    def test_a_newer_final_replaces_a_queued_one(self):
+        lane = ss.lane("whisper:small")
+        busy = _Busy(lane)
+        stale = lane.submit(ss.FINAL, "me")
+        fresh = lane.submit(ss.FINAL, "me")
+        assert stale.state == "dropped" and lane.pending() == [fresh]
+        busy.release()
+
+    def test_order_final_then_clip_then_fast(self):
+        lane = ss.lane("whisper:x")
+        busy = _Busy(lane)
+        f1 = lane.submit(ss.FAST, "a")
+        c1 = lane.submit(ss.CLIP)
+        f2 = lane.submit(ss.FAST, "b")
+        fin = lane.submit(ss.FINAL, "c")
+        c2 = lane.submit(ss.CLIP)
+        assert lane.pending() == [fin, c1, c2, f1, f2]
+        busy.release()
+
+    def test_a_running_job_is_never_dropped(self):
+        lane = ss.lane("whisper:x")
+        busy = _Busy(lane, ss.FAST, "me")
+        lane.submit(ss.FAST, "me")
+        assert busy.job.state == "running" and not busy.job.abandoned
+        busy.release()
+        assert busy.job.state == "done"
+
+    def test_an_abandoned_job_lets_the_next_run(self):
+        # A final that timed out cannot be stopped mid-call, but the next
+        # phrase's final must not wait for it.
+        lane = ss.lane("whisper:small")
+        busy = _Busy(lane, ss.FINAL, "old")
+        out: dict = {}
+        nxt = lane.submit(ss.FINAL, "new")
+        t = _waiter(lane, nxt, out)
+        time.sleep(0.02)
+        assert nxt.state == "queued"  # blocked behind the running one
+        assert lane.cancel(busy.job, "its finish stopped waiting") is False
+        assert busy.job.abandoned and busy.job.why == "its finish stopped waiting"
+        t.join(2)
+        assert out[nxt] == "ran"  # ran while the abandoned one still ran
+        assert busy.job.state == "running"
+        busy.release()
+        assert busy.job.state == "done" and lane.running is None
+
+    def test_the_call_sees_it_was_abandoned(self):
+        lane = ss.lane("whisper:small")
+        seen: list = []
+        go, checked = threading.Event(), threading.Event()
+
+        def call():
+            seen.append(ss.abandoned())
+            go.wait(5)
+            seen.append(ss.abandoned())
+            checked.set()
+
+        job = lane.submit(ss.FINAL, "me")
+        t = threading.Thread(target=lane.run_job, args=(job, call), daemon=True)
+        t.start()
+        _until(lambda: job.state == "running")
+        lane.cancel(job)
+        go.set()
+        checked.wait(2)
+        assert seen == [False, True]
+        assert ss.abandoned() is False  # not this thread's job
+
+    def test_cancel_a_queued_job(self):
+        lane = ss.lane("whisper:x")
+        busy = _Busy(lane)
+        out: dict = {}
+        job = lane.submit(ss.FINAL, "me")
+        t = _waiter(lane, job, out)
+        assert lane.cancel(job, "gave up") is True
+        t.join(2)
+        assert out[job] == ("skipped", "gave up")
+        busy.release()
+        assert lane.cancel(job) is False
+
+    def test_an_error_frees_the_lane(self):
+        lane = ss.lane("whisper:x")
+        with pytest.raises(RuntimeError):
+            lane.run(lambda: (_ for _ in ()).throw(RuntimeError("x")))
+        assert lane.running is None and lane.run(lambda: 5) == 5
+
+    def test_lanes_are_per_model_and_cleared(self):
+        assert ss.lane("whisper:a") is ss.lane("whisper:a")
+        assert ss.lane("whisper:a") is not ss.lane("whisper:b")
+        first = ss.lane("whisper:a")
+        ss.clear()
+        assert ss.lane("whisper:a") is not first
+
+
+class Fast:
+    """A fast tier that answers ``text`` for every pass, on lane ``name``."""
+
+    def __init__(self, text, lane="fast"):
+        self.text, self.lane = text, lane
+        self.calls: list = []
+
+    def __call__(self, audio, prompt):
+        self.calls.append(len(audio))
+        return _words(self.text)
+
+
+class Final:
+    def __init__(self, text, gate=None, lane="final"):
+        self.text, self.gate, self.lane = text, gate, lane
+        self.calls: list = []
+
+    def __call__(self, audio):
+        self.calls.append(len(audio))
+        if self.gate is not None:
+            self.gate.wait(5)
+        return self.text
+
+
+class TestStreamScheduling:
+    def test_no_fast_pass_once_the_final_has_started(self):
+        fast, final = Fast("run the tick"), Final("Run the tests.")
+        st = ss.Stream(fast, final)
+        fast.text = "run the tick"
+        assert st.feed(_secs(1)) == ("", "run the tick")
+        # 0.6 s of quiet: the accurate pass starts, and the fast tier gets
+        # one pass that hears the quiet after the last word…
+        fast.text = "run the tests"
+        assert st.feed(_secs(0.6, level=0.0)) == ("run the", "tests")
+        assert st._early is not None and len(fast.calls) == 2
+        # …and then none: the final is the answer, the tail stands.
+        assert st.feed(_secs(0.3, level=0.0)) == ("", "tests")
+        assert st.last_ms == 0 and len(fast.calls) == 2
+        out = st.finish()
+        assert len(fast.calls) == 2  # no flush either
+        assert out["committed"] == "tests" and st.text == "run the tests"
+        assert out["final"] == "Run the tests." and out["final_early"] is True
+
+    def test_a_word_end_in_the_starting_chunk_is_still_heard(self):
+        fast, final = Fast("over"), Final("over")
+        st = ss.Stream(fast, final)
+        st.feed(_secs(1))
+        # A quiet chunk (by its RMS) whose first 100 ms are the end of a word.
+        chunk = _secs(1.0, level=0.0)
+        chunk[: RATE // 10] = _secs(0.1, level=0.02)
+        assert ss._quiet(chunk) and ss._frames(chunk)[1] > 0
+        st.feed(chunk)
+        assert st._early is not None  # 0.9 s of quiet after the word
+        assert len(fast.calls) == 2  # and the fast tier heard its end
+        st.feed(_secs(0.3, level=0.0))
+        assert len(fast.calls) == 2  # and then no more
+
+    def test_speech_resuming_brings_the_fast_passes_back(self):
+        gate = threading.Event()
+        fast, final = Fast("a b"), Final("a b c", gate=gate)
+        st = ss.Stream(fast, final)
+        st.feed(_secs(1))
+        st.feed(_secs(0.6, level=0.0))
+        _until(lambda: final.calls)
+        n = len(fast.calls)
+        st.feed(_secs(0.5))  # the person went on
+        assert len(fast.calls) == n + 1 and st._early.stale is True
+        gate.set()
+
+    def test_a_pause_between_words_starts_no_final(self):
+        final = Final("x")
+        st = ss.Stream(Fast("a"), final)
+        st.feed(_secs(1))
+        st.feed(_secs(0.3, level=0.0))
+        st.feed(_secs(0.5))
+        st.feed(_secs(0.4, level=0.0))
+        assert st._early is None and final.calls == []
+
+    def test_a_queued_early_pass_is_withdrawn_when_speech_resumes(self):
+        lane = ss.lane("final")
+        busy = _Busy(lane)  # another stream's accurate pass holds the model
+        final = Final("never")
+        st = ss.Stream(Fast("a"), final)
+        st.feed(_secs(1))
+        st.feed(_secs(0.6, level=0.0))
+        early = st._early
+        assert early.job.state == "queued"
+        st.feed(_secs(0.5))
+        assert early.stale and early.job.state == "dropped"
+        busy.release()
+        early.thread.join(2)
+        assert final.calls == [] and early.box.get("skipped")
+
+    def test_the_finish_final_replaces_a_queued_stale_one(self):
+        lane = ss.lane("final")
+        busy = _Busy(lane)
+        final = Final("x y")
+        st = ss.Stream(Fast("x y"), final)
+        st.feed(_secs(1))
+        st.feed(_secs(0.6, level=0.0))
+        early = st._early
+        early.stale = True  # stale, but still queued (not withdrawn yet)
+        threading.Timer(0.1, busy.release).start()  # after finish queued its own
+        out = st.finish()
+        assert early.job.state == "dropped" and "replaced" in early.job.why
+        assert out["final"] == "x y" and out["final_early"] is False
+        assert final.calls == [int(1.6 * RATE)]  # only the fresh one ran
+
+    def test_a_dropped_fast_pass_keeps_the_audio_unheard(self):
+        # Both tiers on one model: the accurate pass pre-empts a queued fast one.
+        lane = ss.lane("whisper:same")
+        busy = _Busy(lane)
+        fast = Fast("hello", lane="whisper:same")
+        st = ss.Stream(fast, Final("Hello.", lane="whisper:same"))
+        res: dict = {}
+        t = threading.Thread(target=lambda: res.update(r=st.feed(_secs(1))))
+        t.start()
+        _until(lambda: lane.pending())
+        lane.submit(ss.FINAL, st)  # pre-empts the waiting fast pass
+        t.join(2)
+        assert res["r"] == ("", "") and fast.calls == []
+        assert st.last_ms == 0 and st._unheard is True
+        busy.release()
+
+    def test_a_timed_out_final_that_never_started_is_withdrawn(
+        self, monkeypatch, caplog
+    ):
+        monkeypatch.setattr(ss, "FINAL_TIMEOUT_S", 0.05)
+        lane = ss.lane("final")
+        busy = _Busy(lane)
+        final = Final("late")
+        st = ss.Stream(Fast("hi there"), final)
+        st.feed(_secs(1))
+        with caplog.at_level("WARNING", logger=ss.__name__):
+            out = st.finish()
+        assert "final" not in out and out["committed"] == "hi there"
+        assert "never started: the model was busy" in caplog.text
+        busy.release()
+        time.sleep(0.05)
+        assert final.calls == []  # it never ran late
+
+
+class TestExpect:
+    def test_a_saturated_p95_does_not_drag_the_budget(self):
+        timeout = int(ss.FINAL_TIMEOUT_S * 1000)
+        for ms in [700] * 16 + [timeout] * 4:  # one in five timed out
+            ss._record(ms)
+        stats = ss.final_stats()
+        assert stats["p95_ms"] == timeout
+        assert stats["typical_ms"] == 700
+        assert stats["expect_ms"] == 700 + ss.EXPECT_MARGIN_MS
+
+    def test_spread_waits_widen_the_margin(self):
+        for ms in [200, 400, 600, 800, 1000]:
+            ss._record(ms)
+        # median 600, median deviation 200 → 600 + 400
+        assert ss.final_stats()["expect_ms"] == 1000
+
+    def test_held_to_the_floor_and_the_timeout(self):
+        for _ in range(5):
+            ss._record(0)  # the early pass was always done already
+        assert ss.final_stats()["expect_ms"] == ss.EXPECT_FLOOR_MS
+        ss.clear()
+        for _ in range(5):
+            ss._record(5000)
+        assert ss.final_stats()["expect_ms"] == int(ss.FINAL_TIMEOUT_S * 1000)
+
+    def test_the_default_before_enough_samples(self):
+        ss._record(100)
+        assert ss.final_stats()["expect_ms"] == ss.FINAL_EXPECT_MS
+
+
+class TestThreads:
+    @pytest.mark.parametrize(
+        "cores, fast, final",
+        [(8, 2, 6), (4, 1, 3), (16, 4, 8), (12, 3, 8), (2, 1, 1), (1, 1, 1)],
+    )
+    def test_budgets_add_up_to_the_cores(self, cores, fast, final):
+        assert speech.whisper_threads("fast", cores) == fast
+        assert speech.whisper_threads("final", cores) == final
+        if cores >= 4:
+            assert fast + final <= cores
+
+    def test_the_default_is_this_machine(self, monkeypatch):
+        monkeypatch.setattr(speech.os, "cpu_count", lambda: 8)
+        assert speech.whisper_threads("fast") == 2
+        monkeypatch.setattr(speech.os, "cpu_count", lambda: None)
+        assert speech.whisper_threads("fast") == 1  # as for 4
+
+    @pytest.fixture
+    def loads(self, monkeypatch, tmp_path):
+        seen: list = []
+
+        class _Model:
+            def __init__(self, name, **kw):
+                seen.append((name, kw))
+
+        monkeypatch.setattr(speech, "voice_dir", lambda: tmp_path)
+        monkeypatch.setattr(speech, "_installed", lambda name: True)
+        monkeypatch.setattr(
+            speech, "_import", lambda name: SimpleNamespace(WhisperModel=_Model)
+        )
+        monkeypatch.setattr(speech, "_shim_av_open", lambda: None)
+        monkeypatch.setattr(speech, "_memory_block", lambda: "")
+        monkeypatch.setattr(speech.os, "cpu_count", lambda: 8)
+
+        def voice(**kw):
+            base = dict(stt_model="small", stt_stream_model="", stt_final="")
+            base.update(kw)
+            monkeypatch.setattr(speech, "_voice", lambda: SimpleNamespace(**base))
+
+        voice()
+        speech.unload_all()
+        yield seen, voice
+        speech.unload_all()
+
+    def test_each_tier_loads_with_its_budget(self, loads):
+        seen, _voice = loads
+        stt = speech.LocalSTT()
+        stt._model("base.en")
+        stt._model("base")  # another language's streaming model
+        stt._model("small")
+        threads = {name: kw["cpu_threads"] for name, kw in seen}
+        assert threads == {"base.en": 2, "base": 2, "small": 6}
+        assert all(kw["num_workers"] == 1 for _n, kw in seen)
+
+    def test_a_model_on_both_tiers_gets_the_big_budget(self, loads):
+        seen, voice = loads
+        voice(stt_stream_model="small")
+        speech.LocalSTT()._model("small")
+        assert seen[0][1]["cpu_threads"] == 6
+
+    def test_an_abandoned_final_stops_between_segments(self, loads, monkeypatch):
+        read: list = []
+
+        def segments():
+            for i in range(3):  # one per 30 s window, decoded as read
+                read.append(i)
+                if i == 0:
+                    ss.lane("whisper:small").cancel(job)  # its finish gave up
+                yield SimpleNamespace(text="part %d" % i)
+
+        class _Model:
+            def transcribe(self, audio, **kw):
+                return segments(), SimpleNamespace(language="en")
+
+        monkeypatch.setattr(speech.LocalSTT, "_model", lambda self, name="": _Model())
+        np = SimpleNamespace(float32="f4", frombuffer=lambda raw, dtype: raw)
+        monkeypatch.setattr(speech, "_import", lambda name: np)
+        run = speech.LocalSTT().final_transcriber("en")
+        lane = ss.lane(run.lane)
+        job = lane.submit(ss.FINAL, "me")
+        assert lane.run_job(job, lambda: run(array("f", [0.0] * 10))) == "part 0"
+        assert read == [0]  # the other windows were never decoded
+
+    def test_transcribers_name_their_lane(self, loads):
+        stt = speech.LocalSTT()
+        assert stt.stream_transcriber("en").lane == "whisper:base.en"
+        assert stt.stream_transcriber("de").lane == "whisper:base"
+        assert stt.final_transcriber("en").lane == "whisper:small"

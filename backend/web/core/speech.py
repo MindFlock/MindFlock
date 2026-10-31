@@ -1025,6 +1025,30 @@ def _shim_av_open() -> None:
     target.open = open_
 
 
+def whisper_threads(role: str, cores: Optional[int] = None) -> int:
+    """The CPU threads a whisper model decodes with (CTranslate2's
+    ``cpu_threads``, fixed when it loads), for ``role`` ``fast`` (the live
+    transcript's and wake word's model) or anything else (the accurate
+    pass's and the one-shot clip's), out of ``cores`` (``os.cpu_count()``).
+
+    The two tiers can run at the same moment (one job per model at a time:
+    ``speech_stream.Lane``), so their budgets add up to the cores rather
+    than each taking CTranslate2's default 4 (8 on 8 cores, beside the
+    server and the agent CLIs — the early accurate pass then doubled the
+    fast passes and missed its own deadline). The fast tier gets a quarter
+    (1..4): ``base.en``'s greedy decoder is sequential and gains little from
+    more. The accurate pass gets the rest (at most 8): ``small``'s encoder
+    is most of its time and scales with threads, and it is the pass a
+    client waits on after "over" — and it rarely shares the cores, as no
+    fast pass runs once a phrase's accurate pass has started. 8 cores → 2
+    and 6; 4 → 1 and 3; 16 → 4 and 8."""
+    n = cores or os.cpu_count() or 4
+    fast = max(1, min(4, n // 4))
+    if role == "fast":
+        return fast
+    return max(1, min(8, n - fast))
+
+
 class LocalSTT(Backend):
     id = "local"
     kind = "stt"
@@ -1073,13 +1097,29 @@ class LocalSTT(Backend):
             )
         return True, detail
 
+    def _role(self, name: str) -> str:
+        """``fast`` when ``name`` is only ever a streaming model (either
+        language's), else ``final`` — a model serving both tiers gets the
+        accurate pass's thread budget (:func:`whisper_threads`)."""
+        try:
+            fast = {self.stream_model_name(), self.stream_model_name("xx")}
+            slow = {self._model_name(), self.final_model_name()}
+        except Exception:  # noqa: BLE001 — unreadable settings: the big budget
+            return "final"
+        return "fast" if name in fast and name not in slow else "final"
+
     def _load(self, name: str):
         fw = _import("faster_whisper")
         _shim_av_open()
         root = voice_dir() / "whisper"
         root.mkdir(parents=True, exist_ok=True)
         return fw.WhisperModel(
-            name, device="cpu", compute_type="int8", download_root=str(root)
+            name,
+            device="cpu",
+            compute_type="int8",
+            download_root=str(root),
+            cpu_threads=whisper_threads(self._role(name)),
+            num_workers=1,
         )
 
     def _model(self, name: str = ""):
@@ -1106,7 +1146,8 @@ class LocalSTT(Backend):
         kw = {"language": whisper_language(lang), "beam_size": 5}
         if prompt:
             kw["initial_prompt"] = prompt
-        return self._clip(self._model(), audio, mime, kw)
+        name = self._model_name()
+        return self._clip(self._model(name), audio, mime, kw, name)
 
     def wake_transcribe(
         self, audio: bytes, mime: str, lang: str = "", word: str = ""
@@ -1119,16 +1160,24 @@ class LocalSTT(Backend):
         kw = {"language": whisper_language(lang), "beam_size": 1, "vad_filter": False}
         if word:
             kw["initial_prompt"] = word
-        return self._clip(self._model(self.stream_model_name(lang)), audio, mime, kw)
+        name = self.stream_model_name(lang)
+        return self._clip(self._model(name), audio, mime, kw, name)
 
     @staticmethod
-    def _clip(model, audio: bytes, mime: str, kw: dict) -> str:
-        """``audio`` (any container PyAV decodes) through ``model`` → its
-        text; the temp clip is removed after."""
+    def _clip(model, audio: bytes, mime: str, kw: dict, name: str = "") -> str:
+        """``audio`` (any container PyAV decodes) through ``model`` (named
+        ``name``: the call waits its turn on that model's lane, as a
+        ``clip`` job — ``speech_stream.Lane``) → its text; the temp clip is
+        removed after."""
+        from backend.web.core import speech_stream as _stream
+
+        def run() -> List[str]:
+            segments, _info = model.transcribe(path, **kw)
+            return [str(getattr(s, "text", "") or "").strip() for s in segments]
+
         path = _temp_clip(audio, mime)
         try:
-            segments, _info = model.transcribe(path, **kw)
-            words = [str(getattr(s, "text", "") or "").strip() for s in segments]
+            words = _stream.lane("whisper:" + (name or "?")).run(run, _stream.CLIP)
         except Exception as err:  # noqa: BLE001
             forget_ffmpeg()  # a refused clip: look for ffmpeg again
             raise SpeechError("faster-whisper failed: %s" % err) from err
@@ -1147,7 +1196,9 @@ class LocalSTT(Backend):
         ``hotwords``; the server sends none to this tier, see
         :data:`HINT_CHARS`; the bench's ``+fasthints`` does) →
         ``[(word, start_s, end_s)]``. The model is fetched per pass, so an
-        unload never strands a stream."""
+        unload never strands a stream. Its ``lane`` attribute names the
+        model's job lane (``whisper:<name>``), which the stream queues each
+        pass on (``speech_stream.Lane``)."""
         language = whisper_language(lang)
         name = self.stream_model_name(lang)
         hints = " ".join(str(hints or "").split())
@@ -1179,6 +1230,7 @@ class LocalSTT(Backend):
             except Exception as err:  # noqa: BLE001
                 raise SpeechError("faster-whisper failed: %s" % err) from err
 
+        run.lane = "whisper:" + name  # type: ignore[attr-defined]
         return run
 
     def final_transcriber(self, lang: str = "", hints: str = "") -> Optional[Callable]:
@@ -1187,7 +1239,8 @@ class LocalSTT(Backend):
         ``hints`` (:func:`recognition_hints`) as the ``hotwords`` (the prompt
         on a faster-whisper too old for them: :func:`_hotwords_supported`) —
         the vocabulary, never the fast words (those may be the wrong ones) →
-        its text. ``None`` when ``voice.stt_final`` is ``off``."""
+        its text. ``None`` when ``voice.stt_final`` is ``off``. ``lane`` as
+        in :meth:`stream_transcriber`."""
         name = self.final_model_name()
         if not name:
             return None
@@ -1195,6 +1248,8 @@ class LocalSTT(Backend):
         hints = " ".join(str(hints or "").split())
 
         def run(audio) -> str:
+            from backend.web.core import speech_stream as _stream
+
             model = self._model(name)
             np = _import("numpy")
             samples = np.frombuffer(bytes(audio), dtype=np.float32)
@@ -1208,11 +1263,16 @@ class LocalSTT(Backend):
                     vad_filter=True,
                     **kw,
                 )
-                parts = [str(getattr(s, "text", "") or "").strip() for s in segments]
+                parts: List[str] = []
+                for seg in segments:  # each 30 s window decodes as it is read
+                    parts.append(str(getattr(seg, "text", "") or "").strip())
+                    if _stream.abandoned():  # its finish gave up: stop here
+                        break
             except Exception as err:  # noqa: BLE001
                 raise SpeechError("faster-whisper failed: %s" % err) from err
             return " ".join(p for p in parts if p).strip()
 
+        run.lane = "whisper:" + name  # type: ignore[attr-defined]
         return run
 
     def warm(self, prime: bool = True) -> str:
@@ -1228,13 +1288,18 @@ class LocalSTT(Backend):
             model = self._model(name)
             fresh = fresh or not was
             if prime and not was:
-                self._prime(model)
+                self._prime(model, key)
         return "loaded" if fresh else "already"
 
     @staticmethod
-    def _prime(model) -> None:
+    def _prime(model, key: str = "") -> None:
+        """One short silent pass, on the model's lane (``key``) as a
+        ``clip`` job, so it never shares the cores with a live pass."""
+        from backend.web.core import speech_stream as _stream
+
         np = _import("numpy")
-        try:
+
+        def run() -> None:
             segments, _info = model.transcribe(
                 np.zeros(8000, dtype=np.float32),
                 language="en",
@@ -1243,6 +1308,9 @@ class LocalSTT(Backend):
             )
             for _seg in segments:  # the generator does the work
                 pass
+
+        try:
+            _stream.lane(key or "?").run(run, _stream.CLIP)
         except Exception:  # noqa: BLE001 — a warm-up may fail quietly
             pass
 

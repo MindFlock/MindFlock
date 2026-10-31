@@ -14,7 +14,7 @@ What it does: synthesises ~80 command phrases with piper (the installed
 ``en_US-lessac-medium`` voice; varied speed, varied timbre, light noise, a
 bit of room before and after) — radio words on their own ("over and out",
 "disregard"), dictation ending in a radio word ("fix the failing test,
-submit"), wake-word questions ("mindflock, how do fences work") and session
+over"), wake-word questions ("mindflock, how do fences work") and session
 switching ("switch to sitecheck bot seven, over") — and feeds each through a
 real :class:`speech_stream.Stream` chunked the way the clients chunk (150 ms
 first, then 300 ms), one quiet chunk after the speech (the clients keep
@@ -154,11 +154,12 @@ def phrases(words: dict) -> List[Phrase]:
     out.append(("Mic off.", "", ("end", "stop")))
     out.append(("That's all.", "", ("end", "stop")))
     # Dictation ending in a radio word, round-robin over the kinds.
-    kinds = [("send", send), ("send", "submit"), ("end", end), ("clear", clear)]
+    # ("submit" is retired: the clients type it like any other word.)
+    end2 = words["end"][1] if len(words["end"]) > 1 else end  # "over, out"
+    kinds = [("send", send), ("end", end2), ("end", end), ("clear", clear)]
     for i, line in enumerate(DICTATION):
         kind, word = kinds[i % len(kinds)]
-        ref = line if word != "submit" else line  # "submit" is a send synonym
-        out.append(("%s, %s." % (line.capitalize(), word), ref, ("end", kind)))
+        out.append(("%s, %s." % (line.capitalize(), word), line, ("end", kind)))
     # The wake word, then a question.
     for q in WAKE_QUESTIONS:
         out.append(("%s, %s?" % (words["wake"].capitalize(), q), q, ("start", "wake")))
