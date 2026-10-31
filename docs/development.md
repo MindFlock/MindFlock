@@ -316,6 +316,11 @@ redirects `tempfile` + `MINDFLOCK_ASSISTANT_DIR` into pytest's tmp dir so tests
 never touch your real caches — important because the pipeline's testmon
 refresher re-runs suites automatically.
 
+The reply-watch loop (`server._reply_watch_loop`) is off under pytest:
+`server._REPLY_WATCH_LOOP_ENABLED` defaults to `None`, meaning "on except
+under pytest", because `server.ENGINE` there is your real `state.json`. A
+test that exercises the loop sets it `True` and isolates `ENGINE` itself.
+
 ### Journey tests
 
 `tests/e2e` drives the real UI — the committed bundle, served by a real
