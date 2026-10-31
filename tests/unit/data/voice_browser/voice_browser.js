@@ -37,6 +37,8 @@ const state = {
   // The streaming recognizer (POST /api/voice/stream …): ids s1, s2… in open order.
   streamOpens: [],        // the open's JSON bodies
   streamOpenStatus: 0,    // non-zero → the open answers that status (409: no streaming)
+  streamFullN: 0,         // > 0 → the next n opens answer the server's stream-CAP 409 (counted down; not in streamOpens)
+  streamFull: [],         // when each cap 409 was answered
   streamChunks: [],       // {id, ctype, head, rate, len}
   streamScript: {},       // id → [{committed, partial}…], one per chunk in order (then empty words)
   streamEndReply: {},     // id → {committed}
@@ -47,6 +49,8 @@ const state = {
   routeDoneAt: [],        // when each POST /api/voice/route answered
   sendDelay: 0,           // ms before POST /instances/<t>/send answers
   streamDeletes: [],
+  streamDeleteDelay: 0,   // ms before a DELETE answers
+  streamDeleteDone: {},   // id → when its DELETE answered
   streamInflight: 0,
   streamMaxInflight: 0,
   chunkDelay: 120,        // ms each chunk takes to answer
@@ -198,6 +202,11 @@ async function mock(route) {
   if (p === "/api/voice/stream" && m === "POST") {
     let b = {};
     try { b = JSON.parse(req.postData() || "{}"); } catch (e) {}
+    if (state.streamFullN > 0) {
+      state.streamFullN--;
+      state.streamFull.push(Date.now());
+      return json(route, { error: "4 voice streams are already open: end one first" }, 409);
+    }
     state.streamOpens.push(b);
     state.streamOpenAt.push(Date.now());
     if (state.streamOpenStatus) return json(route, { error: "this backend does not stream" }, state.streamOpenStatus);
@@ -225,6 +234,8 @@ async function mock(route) {
   }
   if ((sm = /^\/api\/voice\/stream\/([^/]+)$/.exec(p)) && m === "DELETE") {
     state.streamDeletes.push(sm[1]);
+    if (state.streamDeleteDelay) await sleep(state.streamDeleteDelay);
+    state.streamDeleteDone[sm[1]] = Date.now();
     return json(route, { ok: true });
   }
   if (m === "POST") { try { body = JSON.parse(req.postData() || "{}"); } catch (e) { body = {}; } state.posts.push({ path: p, body, at: Date.now() }); }
@@ -3151,6 +3162,174 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await waitFor(pageV, () => /and also the docs/.test(document.getElementById("compose").value), 4000, "barge words in the box");
     check("barge: …the words said over it are the phrase (typed into the box)", /and also the docs/.test(await V(() => document.getElementById("compose").value)), await V(() => document.getElementById("compose").value));
     await V(() => { try { localStorage.removeItem("cs_voice_barge"); } catch (e) {} window.__speakMs = 15; });
+    await sleep(1500);
+    // ---- cycle 2. SAFETY: the phrase carried between phrases is taken only
+    // by the SAME dictation listen. A "yes" said while dictating — recorded
+    // into the carried phrase while the last one's /end is still out — must
+    // never answer a permission dialog whose listen starts a moment later
+    // (the ask sheet's mic starts one over a dictation: askListenFor).
+    await waitFor(pageV, () => window.mfVoice.state === "listening" && window.mfVoice.stt.active(), 3000, "listening before the dialog");
+    await sleep(1500);
+    await V(() => { document.getElementById("compose").value = ""; });
+    const sidP = "s" + state.streamOpens.length, sidC = "s" + (state.streamOpens.length + 1);
+    state.streamScript[sidP] = [{ committed: "write the notes", partial: "" }];
+    state.streamEndDelay[sidP] = 2500;   // /end slow: the carried phrase waits to be taken
+    state.streamScript[sidC] = [{ committed: "yes", partial: "" }];
+    state.streamEndReply[sidC] = { committed: "", final: "yes", final_ms: 100, same: true };
+    const ansD = posts("/answer").length, opensD = state.streamOpens.length;
+    await V(() => window.__tone(0.4));
+    await sleep(700);
+    await V(() => window.__tone(0.002));
+    for (let t = Date.now(); state.streamEnds.indexOf(sidP) < 0 && Date.now() - t < 4000; ) await sleep(10);
+    for (let t = Date.now(); state.streamOpens.length < opensD + 1 && Date.now() - t < 2000; ) await sleep(10);
+    await V(() => window.__tone(0.4));   // "yes", into the carried phrase
+    await sleep(450);
+    await V(() => window.__tone(0.002));
+    await sleep(100);
+    const dlgD = { id: "dC", parsed: true, question: "Allow rm -rf build?", command: "rm -rf build", options: [{ key: "1", label: "Yes", kind: "yes" }, { key: "2", label: "Yes, and don't ask again", kind: "always" }, { key: "3", label: "No", kind: "no" }] };
+    state.dialog = dlgD;
+    // Up to here every phrase of this dictation (sends, "over", a line over
+    // it, a barge-in) carried into the next: none was refused.
+    const refBefore = await V(() => window.mfVoice.rec.carryRefused || null);
+    check("carry: within one dictation listen no carried phrase was ever refused (the key costs dictation nothing)", refBefore === null, JSON.stringify(refBefore));
+    await V((d) => window.mfVoice.listenFor("dialog", 6000, d), dlgD);
+    await sleep(3200);   // a carried "yes" would have been chunked, ended (1.1 s of quiet) and answered by now
+    const refD = await V(() => window.mfVoice.rec.carryRefused || null);
+    const stD = await vstate(pageV);
+    check("SAFETY: a dictation tail cannot answer a dialog — no /answer, the carried 'yes' never streamed", posts("/answer").length === ansD && state.streamChunks.filter((c) => c.id === sidC).length === 0 && stD === "dialog", JSON.stringify({ answers: posts("/answer").slice(ansD).map((x) => x.body), chunksC: state.streamChunks.filter((c) => c.id === sidC).length, state: stD }));
+    check("SAFETY: …the carried phrase (it had heard the 'yes') was refused and DELETEd; the dialog listens on a stream of its own", !!refD && refD.heard && /^prompt#/.test(refD.had) && refD.want === "" && state.streamDeletes.indexOf(sidC) >= 0 && state.streamOpens.length >= opensD + 2, JSON.stringify({ refD, deletes: state.streamDeletes.slice(-3), opens: state.streamOpens.length - opensD }));
+    state.dialog = null;
+    delete state.streamEndDelay[sidP];
+    // (a page that DID answer it is idle: no Cancel to tap — the rest still runs)
+    if (await V(() => !document.getElementById("voice-cancel").classList.contains("hidden"))) await pageV.click("#voice-cancel");
+    await sleep(400);
+    // ---- a line's sound that arrives while the owner is talking over the
+    // listen (the server's voice: 1.4 to 20 s after its turn began) waits
+    // for their pause — the recorder is never deafened mid-word.
+    await pageV.click("#voice-btn");
+    await waitFor(pageV, () => window.mfVoice.state === "listening" && window.mfVoice.stt.active(), 3000, "listening before the late line");
+    await sleep(1200);
+    const sidS = "s" + state.streamOpens.length;
+    await V(() => { document.getElementById("compose").value = ""; window.__speakLog = []; window.__speakMs = 600; });
+    await V(() => window.__tone(0.4));   // the owner starts talking…
+    await sleep(350);
+    await V(() => { window.mfVoice.speakLine("Tests passed."); });   // …and the line's sound is ready now
+    const chunksS0 = state.streamChunks.filter((c) => c.id === sidS).length;
+    await sleep(900);   // still talking
+    const heldS = await V(() => ({ log: window.__speakLog.length, held: window.mfVoice.rec.held || null, deaf: window.mfVoice.micMuted(), playing: !!window.mfVoice.speech.playing }));
+    const chunksS1 = state.streamChunks.filter((c) => c.id === sidS).length;
+    check("hold: a line whose sound is ready while the owner talks over the listen waits — nothing sounds, the recorder not deaf (it kept streaming)", heldS.log === 0 && !!heldS.held && heldS.held.waiting && !heldS.deaf && heldS.playing && chunksS1 > chunksS0, JSON.stringify({ heldS, chunksS0, chunksS1 }));
+    const offS = Date.now();
+    await V(() => window.__tone(0.002));
+    await waitFor(pageV, () => window.__speakLog.length > 0, 3000, "hold: the line after the pause");
+    const startS = await V(() => window.__speakLog[0].start);
+    check("hold: …it sounds once they pause (" + (startS - offS) + " ms after the voice stopped)", startS - offS >= 150 && startS - offS < 900, JSON.stringify({ after: startS - offS }));
+    await waitFor(pageV, () => !window.mfVoice.speech.playing, 3000, "hold: line over");
+    await V(() => { window.__speakMs = 15; });
+    await sleep(1500);
+    // ---- a MUTED microphone (iOS during a call or Siri, another app for a
+    // moment, a Bluetooth route change) is a pause, not a loss: the phrase
+    // neither ends nor records, the strip says so, 'unmute' resumes it.
+    await waitFor(pageV, () => window.mfVoice.state === "listening" && window.mfVoice.stt.active(), 3000, "listening before the mute");
+    await V(() => { document.getElementById("compose").value = ""; });
+    const sidM = "s" + state.streamOpens.length;
+    state.streamScript[sidM] = [{ committed: "rename the", partial: "" }];
+    const gumM = await V(() => window.__gum), lostM = await V(() => window.mfVoice.rec.micLost || 0);
+    await V(() => window.__tone(0.4));
+    await sleep(700);
+    await V(() => {
+      window.__tone(0.002);
+      const t = window.__micStream.getAudioTracks()[0];
+      window.__muted = true;
+      Object.defineProperty(t, "muted", { get: () => !!window.__muted, configurable: true });
+      t.dispatchEvent(new Event("mute"));
+      navigator.mediaDevices.dispatchEvent(new Event("devicechange"));
+    });
+    await sleep(2400);   // twice the silence stop
+    const mutedM = await V(() => ({ state: window.mfVoice.state, active: window.mfVoice.stt.active(), lost: window.mfVoice.rec.micLost || 0, paused: window.mfVoice.rec.micPaused || 0, cap: document.getElementById("voice-caption").textContent, gum: window.__gum }));
+    check("mute: a muted microphone is a pause — still listening, the phrase not ended (no /end), no mic loss, no new getUserMedia", state.streamEnds.indexOf(sidM) < 0 && mutedM.state === "listening" && mutedM.active && mutedM.lost === lostM && mutedM.gum === gumM && mutedM.paused > 0, JSON.stringify({ mutedM, lostM, gumM, ends: state.streamEnds.slice(-2) }));
+    check("mute: …and the strip says so", /Mic paused/.test(mutedM.cap), mutedM.cap);
+    state.streamScript[sidM].push({ committed: "config file", partial: "" });
+    await V(() => { window.__muted = false; window.__micStream.getAudioTracks()[0].dispatchEvent(new Event("unmute")); });
+    await sleep(150);
+    const capU = await V(() => document.getElementById("voice-caption").textContent);
+    check("mute: …'unmute' → the strip is back (no 'Mic paused')", !/Mic paused/.test(capU), capU);
+    await V(() => window.__tone(0.4));
+    await sleep(700);
+    await V(() => window.__tone(0.002));
+    for (let t = Date.now(); state.streamEnds.indexOf(sidM) < 0 && Date.now() - t < 4000; ) await sleep(20);
+    await sleep(300);
+    const boxM = await V(() => document.getElementById("compose").value);
+    check("mute: …the words after the pause join the same phrase (one /end)", boxM === "rename the config file" && state.streamEnds.filter((x) => x === sidM).length === 1, JSON.stringify([boxM, state.streamEnds.slice(-3)]));
+    await sleep(1500);
+    // ---- "disregard" drops its stream BEFORE the carried phrase's opens
+    // (the open waits for the DELETE): one phone never holds two of the
+    // server's MAX_STREAMS for one phrase.
+    await waitFor(pageV, () => window.mfVoice.state === "listening" && window.mfVoice.stt.active(), 3000, "listening before disregard");
+    await V(() => { document.getElementById("compose").value = "throw this away"; });
+    const sidO = "s" + state.streamOpens.length, opensO = state.streamOpens.length;
+    state.streamScript[sidO] = [{ committed: "", partial: "no" }, { committed: "no", partial: "disregard" }, { committed: "disregard", partial: "" }];
+    state.streamDeleteDelay = 250;
+    await V(() => window.__tone(0.4));
+    for (let t = Date.now(); state.streamChunks.filter((c) => c.id === sidO).length < 4 && Date.now() - t < 4000; ) await sleep(20);
+    await V(() => window.__tone(0.002));
+    await waitFor(pageV, () => document.getElementById("compose").value === "", 2000, "disregarded (cap)");
+    for (let t = Date.now(); state.streamOpens.length === opensO && Date.now() - t < 2000; ) await sleep(10);
+    const openO = state.streamOpenAt[opensO] || 0;
+    check("cap: 'disregard' DELETEs its stream before the next phrase's stream opens", state.streamDeleteDone[sidO] > 0 && openO >= state.streamDeleteDone[sidO], JSON.stringify({ deleteDone: state.streamDeleteDone[sidO], openO }));
+    state.streamDeleteDelay = 0;
+    // ---- a 409 for the server's stream CAP is passing: asked again, the
+    // phrase streams; still full, that phrase goes as a clip — and streaming
+    // stays on (the next phrase streams again), never a sticky downgrade.
+    await pageV.click("#voice-cancel");
+    await sleep(400);
+    state.streamFullN = 1;
+    const opensF = state.streamOpens.length, fullF = state.streamFull.length, trF = state.transcribes.length;
+    await V(() => { document.getElementById("compose").value = ""; });
+    await pageV.click("#voice-btn");
+    await waitFor(pageV, () => window.mfVoice.state === "listening", 3000, "listening (cap retry)");
+    for (let t = Date.now(); state.streamOpens.length === opensF && Date.now() - t < 3000; ) await sleep(10);
+    const sidK = "s" + state.streamOpens.length;
+    state.streamScript[sidK] = [{ committed: "after the cap", partial: "" }];
+    await sleep(300);
+    await V(() => window.__tone(0.4));
+    await sleep(700);
+    await V(() => window.__tone(0.002));
+    for (let t = Date.now(); state.streamEnds.indexOf(sidK) < 0 && Date.now() - t < 4000; ) await sleep(20);
+    const sF = await V(() => ({ on: window.mfVoice.cfg.server_ready.stt_stream, full: window.mfVoice.rec.streamFull || null }));
+    check("cap: a 409 for the server's stream cap → asked again, the phrase streams (no clip), streaming stays on", state.streamFull.length === fullF + 1 && state.streamChunks.some((c) => c.id === sidK) && state.transcribes.length === trF && sF.on === true && !!sF.full, JSON.stringify({ full: state.streamFull.length - fullF, sidK, transcribes: state.transcribes.length - trF, sF }));
+    await pageV.click("#voice-cancel");
+    await sleep(400);
+    state.streamFullN = 1000;
+    state.transcribeReply = { text: "as a clip", backend: "local", ms: 50 };
+    await V(() => { document.getElementById("compose").value = ""; });
+    const trF2 = state.transcribes.length;
+    await pageV.click("#voice-btn");
+    await waitFor(pageV, () => window.mfVoice.state === "listening", 3000, "listening (cap full)");
+    await sleep(1800);   // past the retries
+    await V(() => window.__tone(0.4));
+    await sleep(700);
+    await V(() => window.__tone(0.002));
+    await waitFor(pageV, () => /as a clip/.test(document.getElementById("compose").value), 4000, "cap full: clip words");
+    const onF2 = await V(() => window.mfVoice.cfg.server_ready.stt_stream);
+    check("cap: …still full after the retries → that phrase goes as a clip, and streaming stays on", state.transcribes.length === trF2 + 1 && onF2 === true, JSON.stringify({ transcribes: state.transcribes.length - trF2, onF2 }));
+    state.streamFullN = 0;
+    state.transcribeReply = { text: "", backend: "builtin", ms: 90 };
+    await pageV.click("#voice-cancel");
+    await sleep(400);
+    const opensF3 = state.streamOpens.length, trF3 = state.transcribes.length;
+    await V(() => { document.getElementById("compose").value = ""; });
+    await pageV.click("#voice-btn");
+    await waitFor(pageV, () => window.mfVoice.state === "listening", 3000, "listening (cap free)");
+    for (let t = Date.now(); state.streamOpens.length === opensF3 && Date.now() - t < 3000; ) await sleep(10);
+    const sidF3 = "s" + state.streamOpens.length;
+    state.streamScript[sidF3] = [{ committed: "streams again", partial: "" }];
+    await sleep(300);
+    await V(() => window.__tone(0.4));
+    await sleep(700);
+    await V(() => window.__tone(0.002));
+    for (let t = Date.now(); state.streamEnds.indexOf(sidF3) < 0 && Date.now() - t < 4000; ) await sleep(20);
+    check("cap: …and the next listen streams again", state.streamOpens.length > opensF3 && state.streamChunks.some((c) => c.id === sidF3) && state.transcribes.length === trF3, JSON.stringify({ opens: state.streamOpens.length - opensF3, transcribes: state.transcribes.length - trF3 }));
     await sleep(1500);
     // ---- the microphone goes away mid-listen (unplugged, a call took it):
     // a new one is asked for and listening goes on; none to be had → it

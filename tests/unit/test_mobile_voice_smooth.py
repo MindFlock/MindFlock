@@ -23,6 +23,25 @@ stuck or doubled audio.
   routing could act by itself (``voiceRouteSafe``); the strip says
   *Sending…* at once.
 
+Cycle 2:
+
+* **A carried phrase is its own listen's only** (``voiceCarryKey``): it is
+  bound to the dictation listen it was recorded in (mode, generation, box);
+  a dialog's or an answer's listen has no key — it never carries and never
+  takes one, so a "yes" said while dictating can never answer a dialog.
+* **A line's sound waits for the owner's pause** (``voiceSpeakWhenQuiet``):
+  a clip back from the server's voice, or the phone's voice starting a
+  sentence, while the owner talks over the listen is held until they pause —
+  the recorder is never deafened mid-word. The phone recognizer hears the
+  owner until the line first sounds (``voiceEchoing``).
+* **A muted microphone is a pause** (``micMuted``/``micPause``): nothing
+  recorded, the silence clock stands still, the strip says *Mic paused…*,
+  'unmute' resumes; only 'ended' (or the device gone) is a loss.
+* **The server's stream cap is passing** (``voiceStreamFull``): a cap 409 is
+  asked again, bounded, then that phrase goes as a clip — streaming stays on;
+  an open waits for the DELETEs on their way, and "disregard" drops its
+  stream before the carried phrase's opens.
+
 Pure rules run as-is under node; the behaviour in a browser is walked by
 ``test_mobile_voice_browser.py`` (tests/unit/data/voice_browser)."""
 
@@ -100,7 +119,7 @@ def test_a_phrase_end_carries_the_recorder_to_the_next_phrase():
     assert "recEnd(g, mine, c.text);" in fire
     end = _inner(stt, "recEnd")
     assert 'mine.h.carry && mine.h.carry(text || "")' in end
-    assert "carryFrom(g);" in end and "recStop(g);" in end
+    assert "carryFrom(g, key);" in end and "recStop(g);" in end
     # The graph moves to the next phrase; its stream opens now.
     cf = _inner(stt, "carryFrom")
     assert "g.source = g.proc = g.mute = null;" in cf
@@ -300,6 +319,9 @@ var ctx = {
   },
 };
 function voiceAudioCtx() { return ctx; }
+// The owner talking over the listen (voiceSpeakHeld): until heldUntil.
+var heldUntil = 0, VOICE_HOLD_POLL_MS = 10, VOICE_HOLD_MAX_MS = 1000;
+function voiceSpeakHeld() { return Date.now() < heldUntil; }
 // The phone's voice: what it was asked to say, in calls.
 var phoneSaid = [], phoneCancels = 0;
 var phone = { prime: function () {}, voices: function () { return []; }, audible: function () { return false; },
@@ -312,6 +334,7 @@ def _tts_run(body: str):
     script = (
         _TTS_PRELUDE
         + _whole(js, "voiceSpeakWaitMs")
+        + _whole(js, "voiceSpeakWhenQuiet")
         + _whole(js, "ServerTTS")
         + "var tts = ServerTTS(phone), out = {};\n(async function () {\n"
         + body
@@ -462,7 +485,9 @@ def test_the_phone_voice_is_audible_from_speak_to_its_end():
     script = (
         r"""
 var VOICE_WORD_MS = 10, VOICE_CHUNK_GRACE_MS = 20;
-var voice = { prefs: { rate: 1 } }, ends = 0, utts = [];
+var voice = { prefs: { rate: 1 }, rec: {} }, ends = 0, utts = [];
+var heldUntil = 0, VOICE_HOLD_POLL_MS = 10, VOICE_HOLD_MAX_MS = 1000;
+function voiceSpeakHeld() { return Date.now() < heldUntil; }
 function voiceClipEnded() { ends++; }
 function sentenceChunks(t) { return String(t).split(/(?<=\.)\s+/).filter(Boolean); }
 function voiceShapeSpoken(t) { return t; }
@@ -471,6 +496,7 @@ var window = { SpeechSynthesisUtterance: SpeechSynthesisUtterance,
   speechSynthesis: { speak: function (u) { utts.push(u); }, cancel: function () {}, getVoices: function () { return []; } } };
 var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
 """
+        + _whole(js, "voiceSpeakWhenQuiet")
         + _whole(js, "PhoneTTS")
         + """
 (async function () {
@@ -744,6 +770,12 @@ def test_the_numbers_are_the_documented_ones():
         "VOICE_BARGE_BLOCKS": "3",
         "VOICE_PENDING_MS": "30000",
         "VOICE_EARLY_MAX_MS": "10000",
+        "VOICE_HOLD_POLL_MS": "50",
+        "VOICE_HOLD_MAX_MS": "10000",
+        "VOICE_MIC_PAUSE_REASK_MS": "5000",
+        "VOICE_STREAM_DELETE_WAIT_MS": "400",
+        "VOICE_STREAM_FULL_RETRY_MS": "300",
+        "VOICE_STREAM_FULL_MAX_MS": "1500",
     }
     got = {n: _consts(js, n).strip().split(" = ", 1)[1].split(";", 1)[0] for n in want}
     assert got == want
@@ -755,3 +787,748 @@ def test_the_phone_recognizer_waits_a_breath_before_a_line_plays():
     assert "(phone ? VOICE_MID_QUIET_PHONE_MS : VOICE_MID_QUIET_MS)" in _whole(
         js, "voiceMidPhrase"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 2: the carried phrase is its own listen's only (safety)
+# --------------------------------------------------------------------------- #
+@needs_node
+def test_the_carry_key_is_dictation_only_and_names_its_listen():
+    script = _whole(_js(), "voiceCarryKey") + """
+var box = { id: "asking-text" };
+console.log(JSON.stringify([
+  voiceCarryKey("prompt", 3, null), voiceCarryKey("prompt", 3, box), voiceCarryKey("prompt", 4, null),
+  voiceCarryKey("dialog", 3, null), voiceCarryKey("answer", 3, null), voiceCarryKey("prompt", 3, {}),
+]));
+"""
+    out = _run(script)
+    assert out == [
+        "prompt#3#compose",
+        "prompt#3#asking-text",
+        "prompt#4#compose",
+        "",  # a dialog's listen: never carries, never takes
+        "",  # an answer's: the same
+        "prompt#3#box",
+    ]
+
+
+def test_a_carried_phrase_is_taken_only_by_the_listen_it_was_recorded_in():
+    js = _js()
+    stt = _stt(js)
+    # The state machine hands its listen's key to every start, and a phrase
+    # carries only while it is still that listen.
+    rs = _whole(js, "voiceRecStart")
+    assert "var carryKey = voiceCarryKey(mode, voiceListen_.gen, voice.box);" in rs
+    assert "carryKey: carryKey," in rs
+    carry = rs.split("carry: function (t) {")[1].split("\n      },\n")[0]
+    assert (
+        "if (!carryKey || carryKey !== voiceCarryKey(L.mode, L.gen, voice.box)) return false;"
+        in carry
+    )
+    # The recorder binds the carried phrase to the key; none → never carried.
+    end = _inner(stt, "recEnd")
+    assert 'var key = mine.h.carryKey || "";' in end
+    assert "if (key && g.proc" in end
+    assert "c.key = key;" in _inner(stt, "carryFrom")
+    # start() takes it only with the same key; any other start (a dialog's,
+    # an answer's: no key) drops it and records why.
+    start = _inner(stt, "start")
+    assert "c && c.key && c.key === h.carryKey && c.proc" in start
+    assert "voice.rec.carryRefused = {" in start
+    assert start.index("voice.rec.carryRefused") < start.index("carryDrop();\n      }")
+    # The test hook the harness's safety scenario starts a dialog's listen with.
+    assert "voice.listenFor = function (mode, ms, d) {" in js
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 2: a line's sound waits for the owner's pause
+# --------------------------------------------------------------------------- #
+@needs_node
+def test_a_clip_ready_while_the_owner_talks_waits_for_the_pause():
+    out = _tts_run("""
+heldUntil = Date.now() + 150;   // the owner is talking for another 150 ms
+var t0 = Date.now();
+await tts.speak("One.");
+out.waited = plays[0].at - t0;
+out.held = voice.rec.held;
+// Cut while held: nothing ever sounds, the line resolves (the queue never stalls).
+heldUntil = Date.now() + 10000;
+var n = plays.length, done = false;
+var p = tts.speak("Two.").then(function () { done = true; });
+await sleep(60);
+tts.cancel();
+await sleep(60);
+out.cutDone = done;
+out.cutPlays = plays.length - n;
+// Nobody talking: at once (no poll).
+heldUntil = 0;
+var t1 = Date.now();
+await tts.speak("Three.");
+out.direct = plays[plays.length - 1].at - t1;
+""")
+    assert out["waited"] >= 140
+    assert out["held"]["n"] == 2 and out["held"]["waiting"] is False
+    assert out["cutDone"] is True and out["cutPlays"] == 0
+    assert out["direct"] < 40
+
+
+@needs_node
+def test_the_phone_voice_waits_for_the_pause_too():
+    js = _js()
+    script = (
+        r"""
+var VOICE_WORD_MS = 10, VOICE_CHUNK_GRACE_MS = 20;
+var voice = { prefs: { rate: 1 }, rec: {} }, utts = [];
+var heldUntil = Date.now() + 120, VOICE_HOLD_POLL_MS = 10, VOICE_HOLD_MAX_MS = 1000;
+function voiceSpeakHeld() { return Date.now() < heldUntil; }
+function voiceClipEnded() {}
+function sentenceChunks(t) { return String(t).split(/(?<=\.)\s+/).filter(Boolean); }
+function voiceShapeSpoken(t) { return t; }
+function SpeechSynthesisUtterance(t) { this.text = t; }
+var window = { SpeechSynthesisUtterance: SpeechSynthesisUtterance,
+  speechSynthesis: { speak: function (u) { u.at = Date.now(); utts.push(u); }, cancel: function () {}, getVoices: function () { return []; } } };
+"""
+        + _whole(js, "voiceSpeakWhenQuiet")
+        + _whole(js, "PhoneTTS")
+        + """
+var t = PhoneTTS(), t0 = Date.now();
+t.speak("Held.").then(function () {
+  console.log(JSON.stringify({ waited: utts[0].at - t0, audibleWhileHeld: false }));
+});
+"""
+    )
+    out = _run(script)
+    assert out["waited"] >= 110
+
+
+@needs_node
+def test_who_holds_a_lines_sound():
+    js = _js()
+    script = (
+        "var VOICE_MID_QUIET_MS = 250, VOICE_MID_QUIET_PHONE_MS = 800;\n"
+        "var voiceSpeech = { playing: null }, listening = true;\n"
+        "function voiceIsListening() { return listening; }\n"
+        "var voice = { stt: { name: 'server' }, loudAt: 0, wordAt: 0 };\n"
+        + _whole(js, "voiceSpeakHeld")
+        + """
+var now = Date.now(), out = [];
+voiceSpeech.playing = { over: true };
+voice.loudAt = now - 100; out.push(voiceSpeakHeld());      // talking (level), over the listen: held
+voice.loudAt = now - 400; out.push(voiceSpeakHeld());      // a pause: goes
+voice.loudAt = now; voiceSpeech.playing = { over: false };
+out.push(voiceSpeakHeld());                               // not said over a listen: never held
+voiceSpeech.playing = { over: true }; listening = false;
+out.push(voiceSpeakHeld());                               // the listen is over: goes
+listening = true; voice.stt.name = "phone"; voice.loudAt = 0;
+voice.wordAt = now - 500; out.push(voiceSpeakHeld());     // the phone's recognizer: a word 0.5 s ago
+voice.wordAt = now - 900; out.push(voiceSpeakHeld());
+console.log(JSON.stringify(out));
+"""
+    )
+    assert _run(script) == [True, False, False, False, True, False]
+
+
+@needs_node
+def test_the_phone_recognizer_hears_the_owner_until_the_line_sounds():
+    js = _js()
+    script = (
+        "var VOICE_NOD_MUTE_MS = 150, voiceSpeech = { playing: null }, audible = false;\n"
+        "function voiceTtsAudible() { return audible; }\n"
+        "var voice = { stt: { name: 'phone' }, micMuteUntil: 0, lineEndAt: 0 };\n"
+        + _whole(js, "voiceEchoing")
+        + """
+var out = [];
+voiceSpeech.playing = { over: true };
+out.push(voiceEchoing());                 // being made / held: the owner, not echo
+audible = true; out.push(voiceEchoing()); // sounding: echo
+audible = false; voiceSpeech.playing.sounded = true;
+out.push(voiceEchoing());                 // between its sentences: still its echo
+voice.stt.name = "server"; out.push(voiceEchoing());   // the server recorder is deafened instead
+console.log(JSON.stringify(out));
+"""
+    )
+    assert _run(script) == [False, True, True, False]
+    assert "if (voiceSpeech.playing) voiceSpeech.playing.sounded = true;" in _whole(
+        js, "voiceClipEnded"
+    )
+    assert "line.sounded = false;" in _whole(js, "voiceSpeechPump")
+
+
+def test_both_voices_hold_their_sound_for_the_pause():
+    js = _js()
+    said = _inner(_tts(js), "said")
+    assert (
+        "if (x.audio) voiceSpeakWhenQuiet(function () { return g === gen; }, sound); else sound(true);"
+        in said
+    )
+    phone = _whole(js, "PhoneTTS")
+    assert (
+        "voiceSpeakWhenQuiet(function () { return g === gen; }, function (go) { if (go) say(); else resolve(); });"
+        in phone
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 2: a muted microphone is a pause, not a loss
+# --------------------------------------------------------------------------- #
+def test_a_muted_microphone_is_a_pause_not_a_loss():
+    stt = _stt(_js())
+    live = _inner(stt, "micLive")
+    assert 't.readyState !== "ended"' in live and "muted" not in live
+    assert "return !!t.muted;" in _inner(stt, "micMuted")
+    gs = _inner(stt, "getStream")
+    assert 't.addEventListener("mute", function () { micPause(s, true); });' in gs
+    assert 't.addEventListener("unmute", function () { micPause(s, false); });' in gs
+    pause = _inner(stt, "micPause")
+    assert "voice.rec.micPaused = on ? Date.now() : 0;" in pause
+    assert "voiceStripPaint();" in pause
+    assert "micLost" not in pause and "finish()" not in pause
+    # A paused block: nothing recorded, the silence clock stands still —
+    # checked right after the deaf branch (which already records nothing).
+    blk = _inner(stt, "recBlock")
+    paused = blk.split("if (micMuted(g.mic)) {")[1].split("\n      }\n")[0]
+    assert "g.lastLoud = Math.min(now, g.lastLoud + (n * 1000) / g.rate);" in paused
+    assert "g.blocks.push" not in paused and "return;" in paused
+    assert blk.index("if (voiceMicDeaf()) {") < blk.index("if (micMuted(g.mic)) {")
+    assert blk.index("if (micMuted(g.mic)) {") < blk.index("g.blocks.push(block);")
+    assert "var t = paused ? VOICE_MIC_PAUSED_TEXT" in _inner(stt, "recStatus")
+    assert "function paused() { return !!(token || carry) && micMuted(stream); }" in stt
+    assert "paused: paused," in stt
+
+
+@needs_node
+def test_the_strip_says_the_mic_is_paused():
+    script = _whole(_js(), "voiceStripWord") + """
+console.log(JSON.stringify([voiceStripWord("listening", false, "", true), voiceStripWord("dialog", false, "", true),
+  voiceStripWord("listening", false, ""), voiceStripWord("listening", true, "", true), voiceStripWord("idle", false, "", true)]));
+"""
+    assert _run(script) == ["Mic paused…", "Mic paused…", "Listening…", "Speaking…", ""]
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 2: the server's stream cap is passing, never a sticky downgrade
+# --------------------------------------------------------------------------- #
+@needs_node
+def test_a_cap_409_is_told_from_a_backend_that_does_not_stream():
+    script = _whole(_js(), "voiceStreamFull") + """
+console.log(JSON.stringify([
+  voiceStreamFull({ error: "4 voice streams are already open: end one first" }),
+  voiceStreamFull({ error: "builtin recognition does not stream: send one clip per phrase" }),
+  voiceStreamFull({}), voiceStreamFull(null),
+]));
+"""
+    assert _run(script) == [True, False, False, False]
+
+
+def test_the_stream_cap_is_retried_and_deletes_land_first():
+    stt = _stt(_js())
+    so = _inner(stt, "streamOpen")
+    # A cap 409: asked again, bounded; still full → this phrase is a clip
+    # (streamFail) and streaming stays on.
+    full = so.split("if (x.r.status === 409 && voiceStreamFull(x.j)) {")[1].split(
+        "\n          }\n"
+    )[0]
+    assert "VOICE_STREAM_FULL_RETRY_MS <= VOICE_STREAM_FULL_MAX_MS" in full
+    assert "deletesSettled().then(ask);" in full
+    assert "streamFail(g, mine, streamWhy(x));" in full
+    assert "stt_stream = false" not in full
+    # Only the other 409 turns streaming off, and it comes after the cap's.
+    assert so.index("voiceStreamFull(x.j)") < so.index("stt_stream = false")
+    # Every open waits for the DELETEs on their way.
+    assert "if (deleting.length) deletesSettled().then(ask); else ask();" in so
+    sd = _inner(stt, "streamDelete")
+    assert "deleting.push(p);" in sd
+    assert "VOICE_STREAM_DELETE_WAIT_MS" in _inner(stt, "deletesSettled")
+    # "disregard": its stream goes before the carried phrase's opens.
+    fire = _inner(stt, "controlFire")
+    nosend = fire.split("if (!c.send) {")[1]
+    assert nosend.index("streamDrop(g);") < nosend.index("recEnd(g, mine, c.text);")
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 2, run: the pure rules and the recorder's pieces under node
+# --------------------------------------------------------------------------- #
+def _cap_pattern():
+    """voiceStreamFull's pattern, as a Python regex."""
+    import re
+
+    fn = _whole(_js(), "voiceStreamFull")
+    m = re.search(r"return /(.+?)/(\w*)\.test\(", fn)
+    assert m, fn
+    return re.compile(m.group(1), re.I if "i" in m.group(2) else 0)
+
+
+def test_the_cap_pattern_matches_the_servers_own_409_and_only_it(monkeypatch):
+    """The phone keeps streaming on for the cap 409 and turns it off for any
+    other — by the error's TEXT. Run the route itself: a reword on the server
+    must keep the client's pattern matching the cap's 409 only."""
+    from types import SimpleNamespace
+
+    from backend.web.routes import speech as routes
+
+    pattern = _cap_pattern()
+    backend = SimpleNamespace(
+        id="local",
+        streams=True,
+        stream_transcriber=lambda lang: object(),
+        final_transcriber=lambda lang, hints: object(),
+    )
+    monkeypatch.setattr(routes, "_refusal", lambda kind: (backend, None))
+    monkeypatch.setattr(routes, "_hints", lambda: "")
+    monkeypatch.setattr(routes._stream, "open_stream", lambda *a, **k: None)
+    cap = routes.voice_stream_open({"lang": "en-US"})
+    assert cap.status_code == 409
+    err = json.loads(cap.body)["error"]
+    assert str(routes._stream.MAX_STREAMS) in err and pattern.search(err)
+    backend.streams = False
+    nostream = routes.voice_stream_open({"lang": "en-US"})
+    assert nostream.status_code == 409
+    assert not pattern.search(json.loads(nostream.body)["error"])
+    # No ready backend: core.speech.select's reasons, never the cap's.
+    for why in (
+        "no recognition backend is ready (local models not installed)",
+        "unknown recognition backend 'x' (one of local, builtin)",
+    ):
+        assert not pattern.search(why)
+
+
+@needs_node
+def test_the_cap_409_rule_on_every_other_body():
+    script = _whole(_js(), "voiceStreamFull") + """
+console.log(JSON.stringify([
+  voiceStreamFull({ error: "local recognition does not stream: send one clip per phrase" }),
+  voiceStreamFull({ error: "no recognition backend is ready (local models not installed)" }),
+  voiceStreamFull(undefined), voiceStreamFull({ error: null }), voiceStreamFull({ error: "END ONE FIRST" }),
+]));
+"""
+    assert _run(script) == [False, False, False, False, True]
+
+
+@needs_node
+def test_every_listen_but_dictation_has_no_carry_key():
+    script = _whole(_js(), "voiceCarryKey") + """
+console.log(JSON.stringify([
+  voiceCarryKey("wake", 3, null), voiceCarryKey("", 3, { id: "b" }), voiceCarryKey(undefined, 3, null),
+  voiceCarryKey("prompt", 3, { id: "a" }) === voiceCarryKey("prompt", 3, { id: "b" }),
+  voiceCarryKey("prompt", 3, { id: "a" }) === voiceCarryKey("prompt", 4, { id: "a" }),
+  voiceCarryKey("prompt", 3, { id: "a" }) === voiceCarryKey("prompt", 3, { id: "a" }),
+]));
+"""
+    assert _run(script) == ["", "", "", False, False, True]
+
+
+def _hold_run(body: str):
+    js = _js()
+    script = (
+        "var VOICE_HOLD_POLL_MS = 10, VOICE_HOLD_MAX_MS = 200;\n"
+        "var voice = { rec: {} }, held = false;\n"
+        "function voiceSpeakHeld() { return typeof held === 'function' ? held() : held; }\n"
+        "function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }\n"
+        + _whole(js, "voiceSpeakWhenQuiet")
+        + "var out = {};\n(async function () {\n"
+        + body
+        + "\nconsole.log(JSON.stringify(out));\n})().catch(function (e) { console.error(e); process.exit(1); });\n"
+    )
+    return _run(script)
+
+
+@needs_node
+def test_the_hold_goes_at_once_waits_for_the_pause_gives_up_and_is_capped():
+    out = _hold_run("""
+// Nobody talking: go(true) synchronously, nothing counted.
+var calls = [];
+voiceSpeakWhenQuiet(function () { return true; }, function (go) { calls.push(go); });
+out.sync = calls.slice();
+out.rec0 = voice.rec.held || null;
+// Talking for 60 ms: go(true) after the pause, R.ms ~ the hold.
+held = true;
+var t0 = Date.now(), at = 0;
+voiceSpeakWhenQuiet(function () { return true; }, function (go) { calls.push(go); at = Date.now() - t0; });
+out.waitingDuring = voice.rec.held.waiting;
+await sleep(60);
+held = false;
+await sleep(40);
+out.after = calls.slice(1);
+out.at = at;
+out.R1 = JSON.parse(JSON.stringify(voice.rec.held));
+// The line is cut mid-hold: go(false), never go(true).
+held = true;
+var alive = true, cut = [];
+voiceSpeakWhenQuiet(function () { return alive; }, function (go) { cut.push(go); });
+await sleep(30);
+alive = false;
+await sleep(40);
+out.cut = cut;
+out.R2 = JSON.parse(JSON.stringify(voice.rec.held));
+// Talking for ever: go(true) at VOICE_HOLD_MAX_MS, still held.
+var t2 = Date.now(), capped = [], cappedAt = 0;
+voiceSpeakWhenQuiet(function () { return true; }, function (go) { capped.push(go); cappedAt = Date.now() - t2; });
+await sleep(320);
+out.capped = capped;
+out.cappedAt = cappedAt;
+out.R3 = JSON.parse(JSON.stringify(voice.rec.held));
+""")
+    assert out["sync"] == [True] and out["rec0"] is None
+    assert out["waitingDuring"] is True
+    assert out["after"] == [True] and 55 <= out["at"] < 100
+    assert out["R1"]["n"] == 1 and out["R1"]["waiting"] is False
+    assert 55 <= out["R1"]["ms"] < 100
+    assert out["cut"] == [False]
+    assert out["R2"]["n"] == 2 and out["R2"]["waiting"] is False
+    assert out["capped"] == [True] and 200 <= out["cappedAt"] < 260
+    assert out["R3"]["n"] == 3 and out["R3"]["waiting"] is False
+    assert 200 <= out["R3"]["ms"] < 260
+
+
+@needs_node
+def test_no_line_playing_holds_nothing():
+    js = _js()
+    script = (
+        "var VOICE_MID_QUIET_MS = 250, VOICE_MID_QUIET_PHONE_MS = 800;\n"
+        "var voiceSpeech = { playing: null };\n"
+        "function voiceIsListening() { return true; }\n"
+        "var voice = { stt: { name: 'phone' }, loudAt: Date.now(), wordAt: Date.now() };\n"
+        + _whole(js, "voiceSpeakHeld")
+        + """
+var out = [voiceSpeakHeld()];
+voiceSpeech.playing = { over: true }; voice.wordAt = 0; out.push(voiceSpeakHeld());   // never a word: goes
+voice.stt.name = "server"; voice.loudAt = 0; out.push(voiceSpeakHeld());
+console.log(JSON.stringify(out));
+"""
+    )
+    assert _run(script) == [False, False, False]
+
+
+@needs_node
+def test_the_echo_window_after_a_mute_or_a_lines_end():
+    js = _js()
+    script = (
+        "var VOICE_NOD_MUTE_MS = 150, voiceSpeech = { playing: null };\n"
+        "function voiceTtsAudible() { return false; }\n"
+        "var voice = { stt: { name: 'phone' }, micMuteUntil: 0, lineEndAt: 0 };\n"
+        + _whole(js, "voiceEchoing")
+        + """
+var now = Date.now(), out = [];
+voiceSpeech.playing = { over: true, sounded: false };
+voice.micMuteUntil = now + 500; out.push(voiceEchoing());   // a confirmation's mute window is open: echo
+voice.micMuteUntil = now - 1; out.push(voiceEchoing());     // passed, not sounded: the owner
+voiceSpeech.playing = null;
+voice.lineEndAt = now - 50; out.push(voiceEchoing());       // a line just ended: its tail is still echo
+voice.lineEndAt = now - 400; out.push(voiceEchoing());      // past VOICE_NOD_MUTE_MS
+voiceSpeech.playing = { over: false, sounded: true }; out.push(voiceEchoing());   // not over the listen
+console.log(JSON.stringify(out));
+"""
+    )
+    assert _run(script) == [True, False, True, False, False]
+
+
+@needs_node
+def test_the_strip_pauses_every_listening_state():
+    script = _whole(_js(), "voiceStripWord") + """
+console.log(JSON.stringify([voiceStripWord("awaiting", false, "", true), voiceStripWord("awaiting", false, "", false),
+  voiceStripWord("dialog", false, ""), voiceStripWord("sending", false, "", true), voiceStripWord("listening", false, "Stopped.", true)]));
+"""
+    assert _run(script) == [
+        "Mic paused…",
+        "Listening…",
+        "Listening…",
+        "Sending…",
+        "Stopped.",
+    ]
+
+
+@needs_node
+def test_a_muted_track_is_live_an_ended_one_is_not():
+    stt = _stt(_js())
+    script = _inner(stt, "micLive") + _inner(stt, "micMuted") + """
+function S(tracks, active) { return { active: active, getAudioTracks: function () { return tracks; } }; }
+var boom = { getAudioTracks: function () { throw new Error("gone"); } };
+console.log(JSON.stringify({
+  live: [micLive(S([{ readyState: "live", muted: true }])), micLive(S([{ readyState: "ended", muted: false }])),
+         micLive(S([{ readyState: "live" }], false)), micLive(null), micLive(boom)],
+  muted: [micMuted(S([{ readyState: "live", muted: false }, { readyState: "live", muted: true }])),
+          micMuted(S([{ readyState: "live", muted: false }])), micMuted(null), micMuted(boom)],
+}));
+"""
+    out = _run(script)
+    # (a throwing getAudioTracks: live — never a false loss; not muted)
+    assert out["live"] == [True, False, False, False, True]
+    assert out["muted"] == [True, False, False, False]
+
+
+@needs_node
+def test_a_recent_mute_reuses_the_mic_an_old_or_unknown_one_asks_again():
+    js = _js()
+    stt = _stt(js)
+    script = (
+        _consts(js, "VOICE_MIC_PAUSE_REASK_MS")
+        + "var clock = 100000; Date.now = function () { return clock; };\n"
+        "var stream = null, asking = null, keepTimer = null, gum = 0, stops = 0, fresh = { fresh: true, getAudioTracks: function () { return []; } };\n"
+        "function micStop(s) { if (s) stops++; }\n"
+        "function voiceAudioSession() {}\n"
+        "var window = { isSecureContext: true };\n"
+        # (node 21+ has a read-only global navigator: replace it)
+        "Object.defineProperty(globalThis, 'navigator', { configurable: true, value: { mediaDevices: { getUserMedia: function () { gum++; return Promise.resolve(fresh); } } } });\n"
+        + _inner(stt, "micLive")
+        + _inner(stt, "micMuted")
+        + _inner(stt, "getStream")
+        + """
+function muted(at) { return { __mutedAt: at, getAudioTracks: function () { return [{ readyState: "live", muted: true }]; } }; }
+(async function () {
+  var out = [];
+  for (var at of [clock - 1000, clock - 6000, 0, null]) {
+    var s = at === null ? { getAudioTracks: function () { return [{ readyState: "live", muted: false }]; } } : muted(at);
+    stream = s; gum = 0; stops = 0;
+    var got = await getStream();
+    out.push({ reused: got === s, gum: gum, stops: stops });
+  }
+  console.log(JSON.stringify(out));
+})();
+"""
+    )
+    assert _run(script) == [
+        {
+            "reused": True,
+            "gum": 0,
+            "stops": 0,
+        },  # muted 1 s ago: it comes back by itself
+        {
+            "reused": False,
+            "gum": 1,
+            "stops": 1,
+        },  # 6 s: asked for anew, the old one stopped first
+        {"reused": False, "gum": 1, "stops": 1},  # muted since before we knew
+        {"reused": True, "gum": 0, "stops": 0},  # not muted
+    ]
+
+
+@needs_node
+def test_a_pause_is_the_current_mics_and_unmute_repaints_the_words():
+    stt = _stt(_js())
+    script = (
+        "var Date_ = Date.now; Date.now = function () { return 5000; };\n"
+        "var voice = { rec: {} }, painted = 0, interim = [], status = [];\n"
+        "function voiceStripPaint() { painted++; }\n"
+        "function voiceJoin(a, b) { return [a, b].filter(Boolean).join(' '); }\n"
+        "function recStatus(g, h) { status.push(g.said); }\n"
+        "var mic = { id: 'mic' }, other = { id: 'other' };\n"
+        "var stream = mic, rec = null, token = null;\n" + _inner(stt, "micPause") + """
+var out = {};
+micPause(other, true);                        // not our microphone: nothing
+out.other = { paused: voice.rec.micPaused || 0, painted: painted, untouched: !("__mutedAt" in other) };
+var g = { mic: other, said: "Listening… 2 s", words: true, pend: "rename the", partial: "config" };
+rec = g; token = { h: { onInterim: function (t, p) { interim.push([t, p]); } } };
+micPause(mic, true);                          // ours, but the recording is on another mic: no caption touched
+out.foreign = { paused: voice.rec.micPaused, pauses: voice.rec.micPauses, at: mic.__mutedAt, said: g.said, status: status.length };
+g.mic = mic;
+micPause(mic, true);
+out.on = { said: g.said, status: status.length, interim: interim.length, pauses: voice.rec.micPauses };
+micPause(mic, false);
+out.off = { paused: voice.rec.micPaused, at: mic.__mutedAt, interim: interim, status: status.length, painted: painted };
+console.log(JSON.stringify(out));
+"""
+    )
+    out = _run(script)
+    assert out["other"] == {"paused": 0, "painted": 0, "untouched": True}
+    assert out["foreign"] == {
+        "paused": 5000,
+        "pauses": 1,
+        "at": 5000,
+        "said": "Listening… 2 s",
+        "status": 0,
+    }
+    # Paused with words heard: the caption is redrawn (recStatus says Mic paused).
+    assert out["on"] == {"said": "", "status": 1, "interim": 0, "pauses": 2}
+    # Unmuted: the words come back, joined as one phrase.
+    assert out["off"]["paused"] == 0 and out["off"]["at"] == 0
+    assert out["off"]["interim"] == [["rename the config", "config"]]
+    assert (
+        out["off"]["status"] == 1 and out["off"]["painted"] == 3
+    )  # once per pause/unmute of ours
+
+
+@needs_node
+def test_a_muted_block_records_nothing_and_the_silence_clock_stands_still():
+    stt = _stt(_js())
+    script = (
+        "var clock = 10000; Date.now = function () { return clock; };\n"
+        "var VOICE_SILENCE_MS = 1100, muted = true, levels = [], ended = 0;\n"
+        "var g = { mic: {}, heard: true, rate: 16000, lastLoud: 10000, blocks: [], frames: 0, queued: 0 };\n"
+        "var token = { h: {} }, rec = g, carry = null;\n"
+        "function voiceMicDeaf() { return false; }\n"
+        "function micMuted() { return muted; }\n"
+        "function finish() { ended++; }\n"
+        "var h = { onLevel: function (l) { levels.push(l); } };\n"
+        + _inner(stt, "recBlock")
+        + """
+function ev(n) { return { inputBuffer: { length: n, getChannelData: function () { return new Float32Array(n); } } }; }
+var out = {};
+// 3 s of mute, 4096-frame blocks (256 ms at 16 kHz), each delivered in time.
+for (var i = 0; i < 12; i++) { clock += 256; recBlock(g, token, h, ev(4096)); }
+out.blocks = g.blocks.length; out.frames = g.frames; out.levels = levels.every(function (l) { return l === 0; }) && levels.length;
+out.behind = clock - g.lastLoud;   // the clock moved with the blocks: no quiet counted
+// A burst of blocks delivered late: never pushed past now.
+clock += 10; recBlock(g, token, h, ev(16000));
+out.capped = g.lastLoud === clock;
+out.ended = ended;
+console.log(JSON.stringify(out));
+"""
+    )
+    out = _run(script)
+    assert out["blocks"] == 0 and out["frames"] == 0
+    assert out["levels"] == 12
+    assert (
+        out["behind"] == 0
+    )  # 12 × 256 ms of mute: the 1.1 s silence clock never started
+    assert out["capped"] is True and out["ended"] == 0
+
+
+def _stream_open_run(body: str):
+    js = _js()
+    stt = _stt(js)
+    script = (
+        _consts(js, "VOICE_STREAM_FULL_RETRY_MS", "VOICE_STREAM_FULL_MAX_MS")
+        + _whole(js, "voiceStreamFull")
+        + r"""
+var clock = 0, timers = [];
+Date.now = function () { return clock; };
+setTimeout = function (fn, ms) { timers.push({ at: clock + (ms || 0), fn: fn }); return timers.length; };
+function flush() { return new Promise(function (r) { setImmediate(r); }); }
+async function runAll() {
+  for (var k = 0; k < 200; k++) {
+    await flush(); await flush();
+    if (!timers.length) return;
+    timers.sort(function (a, b) { return a.at - b.at; });
+    var t = timers.shift(); clock = t.at; t.fn();
+  }
+}
+var voice = { rec: {}, cfg: { server_ready: { stt_stream: true } } };
+var asks = [], answer = null, fails = [], deleting = [], live = null, inflight = 0, maxInflight = 0;
+function lang() { return "en-US"; }
+function streamReq(g, path, opts) {
+  asks.push(clock); inflight++; maxInflight = Math.max(maxInflight, inflight);
+  var a = answer(asks.length);
+  return Promise.resolve().then(function () { inflight--; return a; });
+}
+function deletesSettled() { return Promise.resolve(); }
+function streamDelete() {}
+function streamFail(g, mine, why) { fails.push({ at: clock, why: why }); }
+function streamWhy(x) { return (x && x.j && x.j.error) || "?"; }
+function voiceTraceMark() {}
+function streamPump() {}
+function cap() { return { r: { ok: false, status: 409 }, j: { error: "4 voice streams are already open: end one first" } }; }
+"""
+        + _inner(stt, "streamOpen")
+        + "var out = {};\n(async function () {\n"
+        + body
+        + "\nconsole.log(JSON.stringify(out));\n})().catch(function (e) { console.error(e); process.exit(1); });\n"
+    )
+    return _run(script)
+
+
+@needs_node
+def test_the_cap_retry_is_bounded_then_a_clip_and_streaming_stays_on():
+    out = _stream_open_run("""
+answer = function () { return cap(); };
+var g = {};
+streamOpen(g, { h: {} });
+await runAll();
+out.asks = asks; out.fails = fails.length; out.on = voice.cfg.server_ready.stt_stream;
+out.full = voice.rec.streamFull.n; out.busy = !!(g.busy || g.opening); out.max = maxInflight;
+""")
+    # Asked at t0 and every 300 ms while t + 300 <= 1500: never past the bound.
+    assert out["asks"] == [0, 300, 600, 900, 1200, 1500]
+    assert out["fails"] == 1 and out["on"] is True
+    assert out["full"] == 6 and out["busy"] is False
+    assert out["max"] == 1  # never two opens in flight
+
+
+@needs_node
+def test_a_cap_that_frees_streams_and_another_409_turns_streaming_off():
+    out = _stream_open_run("""
+answer = function (n) { return n < 3 ? cap() : { r: { ok: true, status: 200 }, j: { id: "s9" } }; };
+var g = {};
+streamOpen(g, { h: {} });
+await runAll();
+out.freed = { asks: asks.slice(), sid: g.sid, mode: g.mode, fails: fails.length, on: voice.cfg.server_ready.stt_stream };
+asks = []; fails = [];
+answer = function () { return { r: { ok: false, status: 409 }, j: { error: "local recognition does not stream: send one clip per phrase" } }; };
+var g2 = {};
+streamOpen(g2, { h: {} });
+await runAll();
+out.other = { asks: asks.length, fails: fails.length, on: voice.cfg.server_ready.stt_stream };
+""")
+    assert out["freed"] == {
+        "asks": [0, 300, 600],
+        "sid": "s9",
+        "mode": "stream",
+        "fails": 0,
+        "on": True,
+    }
+    assert out["other"] == {"asks": 1, "fails": 1, "on": False}
+
+
+@needs_node
+def test_a_listen_that_ends_during_the_cap_wait_asks_no_more():
+    out = _stream_open_run("""
+answer = function () { return cap(); };
+var g = {};
+streamOpen(g, { h: {} });
+await flush(); await flush();
+out.waiting = !!(g.busy && g.opening);
+g.dead = true;
+await runAll();
+out.asks = asks.length; out.busy = !!g.busy; out.opening = !!g.opening; out.fails = fails.length;
+""")
+    assert out == {
+        "waiting": True,
+        "asks": 1,
+        "busy": False,
+        "opening": False,
+        "fails": 0,
+    }
+
+
+@needs_node
+def test_an_open_waits_for_the_deletes_on_their_way_bounded():
+    js = _js()
+    stt = _stt(js)
+    script = (
+        "var VOICE_STREAM_DELETE_WAIT_MS = 80;\n"
+        "var deleting = [], replies = {};\n"
+        "function streamUrl(sid) { return '/api/voice/stream/' + sid; }\n"
+        "function fetch(url) { return new Promise(function (res, rej) { replies[url.split('/').pop()] = { res: res, rej: rej }; }); }\n"
+        "function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }\n"
+        + _inner(stt, "streamDelete")
+        + _inner(stt, "deletesSettled")
+        + """
+(async function () {
+  var out = {}, t0 = Date.now();
+  await deletesSettled();
+  out.none = Date.now() - t0;
+  streamDelete("a"); streamDelete("b"); streamDelete("");
+  out.pending = deleting.length;
+  var done = false, t1 = Date.now();
+  deletesSettled().then(function () { done = true; });
+  setTimeout(function () { replies.a.res({}); }, 10);
+  setTimeout(function () { replies.b.res({}); }, 20);
+  await sleep(40);
+  out.landed = { done: done, left: deleting.length, ms: Date.now() - t1 };
+  streamDelete("c");   // never answers
+  var t2 = Date.now();
+  await deletesSettled();
+  out.hung = { ms: Date.now() - t2, left: deleting.length };
+  streamDelete("d");
+  replies.d.rej(new Error("offline"));   // a failed DELETE still leaves the list
+  await sleep(5);
+  out.rejected = deleting.length;
+  console.log(JSON.stringify(out));
+})();
+"""
+    )
+    out = _run(script)
+    assert out["none"] < 20
+    assert out["pending"] == 2  # an empty id deletes nothing
+    assert out["landed"]["done"] is True and out["landed"]["left"] == 0
+    assert 75 <= out["hung"]["ms"] < 150 and out["hung"]["left"] == 1
+    assert out["rejected"] == 1  # only the hung one is left

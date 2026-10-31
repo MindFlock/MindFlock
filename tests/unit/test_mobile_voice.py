@@ -1232,8 +1232,25 @@ def test_mobile_js_server_recognizer_starts_fast_and_shows_it_hears():
     # way a phrase ends, cleared by the next start.
     gs = stt.split("function getStream() {")[1].split("\n    }\n")[0]
     assert gs.lstrip().startswith("clearTimeout(keepTimer);")
-    assert "if (micLive(stream)) return Promise.resolve(stream);" in gs
+    # A live stream is reused — a muted one only while its pause is recent.
+    assert (
+        "if (micLive(stream) && (!micMuted(stream) || Date.now() - (stream.__mutedAt || 0) < VOICE_MIC_PAUSE_REASK_MS)) {"
+        in gs
+    )
+    assert "return Promise.resolve(stream);" in gs
     assert "micStop(stream);" in gs  # a dead one's tracks go before a new ask
+    assert gs.index("return Promise.resolve(stream);") < gs.index("micStop(stream);")
+    assert gs.index("micStop(stream);") < gs.index(
+        "navigator.mediaDevices.getUserMedia({ audio: true })"
+    )
+    # Each new track: 'ended' is a loss, 'mute'/'unmute' a pause — side by side.
+    ended = gs.index('t.addEventListener("ended", function () { micLost(s); });')
+    mute = gs.index('t.addEventListener("mute", function () { micPause(s, true); });')
+    unmute = gs.index(
+        't.addEventListener("unmute", function () { micPause(s, false); });'
+    )
+    assert ended < mute < unmute
+    assert gs[ended:unmute].count("\n") == 2  # three lines in a row
     keep = stt.split("function keep(ms, hidden) {")[1].split("\n    }\n")[0]
     assert "}, ms || voice.keepMs);" in keep
     assert "/^(sending|working|speaking)$/.test(voice.state)" in keep
@@ -1263,8 +1280,20 @@ def test_mobile_js_server_recognizer_starts_fast_and_shows_it_hears():
     assert "pad.set(pcm, min - pcm.length);" in stt
     # "Hearing you…" while a voice comes in and nothing came back yet.
     st = stt.split("function recStatus(g, h) {")[1].split("\n    }\n")[0]
-    assert "if (!h.onStatus || g.words) return;" in st
+    # (words shown: the caption is theirs — unless the mic is paused)
+    assert "if (g.words && !paused) return;" in st
     assert '"Hearing you…"' in st and '"Listening… "' in st
+    # A paused mic says so first — even with words heard or a voice coming in.
+    assert (
+        st.index("paused ? VOICE_MIC_PAUSED_TEXT")
+        < st.index('"Hearing you…"')
+        < st.index('"Listening… "')
+    )
+    # The recognizer tells the strip it is paused; the strip asks it.
+    assert "paused: paused," in stt
+    paint = js.split("  function voiceStripPaint() {")[1].split("\n  }\n")[0]
+    assert "!!(voice.stt && voice.stt.paused && voice.stt.paused()));" in paint
+    assert "voiceStripWord(voice.state," in paint
     # The ring: still — one step (quiet / hearing / loud) from a rAF loop
     # over a ~400 ms smoothed level, written only when it changes; the CSS
     # eases the ring's OPACITY between the steps. No scale, no pulse.
