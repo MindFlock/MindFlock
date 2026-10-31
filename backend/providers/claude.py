@@ -603,6 +603,10 @@ class ClaudeProvider(BaseProvider):
     def plan_supported(self) -> bool:
         return True
 
+    def clear_context_command(self) -> Optional[str]:
+        # Claude Code's built-in: clears the conversation history, same session.
+        return "/clear"
+
     def voice_prompt_hook(self) -> bool:
         # The UserPromptSubmit hook that install_activity_hooks writes
         # consumes the session's one-shot `.next` file (armed by /send for a

@@ -186,6 +186,7 @@ HISTORY_EVENTS = (
     "moved",
     "halted_at",
     "attached",
+    "looped",
 )
 ON_FAIL = ("halt", "agent", "skip", "you")
 TRIGGER_KINDS = (
@@ -245,7 +246,12 @@ class FlightError(Exception):
 # --------------------------------------------------------------------------- #
 # The step registry (served by GET /api/flights/kinds)
 # --------------------------------------------------------------------------- #
-def _f(name, type_, label, default=None, options=None, placeholder=None) -> dict:
+def _f(
+    name, type_, label, default=None, options=None, placeholder=None, dynamic=None
+) -> dict:
+    """One ``fields`` row. ``dynamic`` (a select whose options the editor
+    fills from the line, e.g. ``"stops_before"``: the Loop's ``back_to``)
+    rides through :func:`kinds_dto` unchanged."""
     out = {"name": name, "type": type_, "label": label}
     if options is not None:
         out["options"] = list(options)
@@ -253,6 +259,8 @@ def _f(name, type_, label, default=None, options=None, placeholder=None) -> dict
         out["default"] = default
     if placeholder is not None:
         out["placeholder"] = placeholder
+    if dynamic is not None:
+        out["dynamic"] = str(dynamic)
     return out
 
 
@@ -3233,6 +3241,20 @@ def apply(flight: dict, action: dict, now: float) -> dict:
         ss["detail"].pop("idle_since", None)
         _hist(flight, now, sid, "done", note)
         _advance(flight, now)
+    elif kind == "loop":
+        # A Loop stop's repeat (docs/flights.md "Round 16"): its kind's run
+        # names the stop to go back to; the core does the jump.
+        to = loop_target(flight, step, str(action.get("to") or ""))
+        if to is None:
+            reason = NOTHING_TO_REPEAT
+            ss["state"] = "failed"
+            ss["note"] = reason
+            flight["state"] = "halted"
+            flight["reason"] = reason
+            _hist(flight, now, sid, "failed", reason)
+            _hist(flight, now, sid, "halted", reason)
+        else:
+            loop_back(flight, sid, to, now)
     elif kind == "advance":
         if not action.get("keep"):
             ss["state"] = "skipped"
@@ -3419,6 +3441,77 @@ def op_jump(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     flight["state"] = "running"
     flight["reason"] = ""
     flight["updated"] = ts
+    return flight
+
+
+#: Why a Loop stop with no earlier stop to go back to fails.
+NOTHING_TO_REPEAT = "nothing to repeat"
+
+
+def loop_target(
+    flight: dict, step: dict, back_to: Optional[str] = None
+) -> Optional[int]:
+    """The index a Loop stop (``step``) sends the flight back to, None when
+    there is nothing to repeat. ``back_to`` (default: the step's
+    ``config.back_to``) ``""`` is the first stop of the flight, or of the
+    loop's own group when it has one; a named stop must come before the
+    loop."""
+    steps = flight["steps"]
+    try:
+        i = next(n for n, s in enumerate(steps) if s["id"] == step["id"])
+    except StopIteration:
+        return None
+    want = step["config"].get("back_to", "") if back_to is None else back_to
+    want = str(want or "")
+    if want:
+        to = next((n for n, s in enumerate(steps) if s["id"] == want), None)
+    elif step.get("group"):
+        gid = step["group"].get("id")
+        to = next(
+            (n for n, s in enumerate(steps) if (s.get("group") or {}).get("id") == gid),
+            None,
+        )
+    else:
+        to = 0
+    if to is None or to >= i:
+        return None
+    return to
+
+
+def loop_back(flight: dict, loop_sid: str, to_index: int, now: float) -> dict:
+    """A Loop stop's repeat (docs/flights.md "Round 16"): one more run
+    counted on the loop step's detail (``runs`` += 1, ``last_start`` =
+    ``now``), every step from ``to_index`` up to the loop (exclusive) back to
+    pending — their configs untouched, a halt point among them armed again —
+    the loop step itself left ``running`` with its detail, and the cursor on
+    ``to_index`` (let through, as a jump onto it is)."""
+    steps = flight["steps"]
+    i = _step_index(flight, loop_sid)
+    if not 0 <= to_index < i:
+        raise FlightError("nothing_to_repeat", 409, NOTHING_TO_REPEAT)
+    ss = flight["step_states"][loop_sid]
+    d = ss["detail"]
+    d["runs"] = _int(d.get("runs"), 0, 0, 10**6) + 1
+    d["last_start"] = now
+    d["target"] = steps[to_index]["id"]
+    d.pop("next_at", None)
+    for s in steps[to_index:i]:
+        flight["step_states"][s["id"]] = _blank_step_state()
+    times = _int(steps[i]["config"].get("times"), 0, 0, 10**6)
+    run = d["runs"] + 1
+    note = "run %d%s — back to %s" % (
+        run,
+        " of %d" % times if times else "",
+        steps[to_index]["title"],
+    )
+    ss["state"] = "running"
+    ss["note"] = note
+    _hist(flight, now, loop_sid, "looped", note)
+    flight["cursor"] = to_index
+    _let_through(flight)
+    flight["state"] = "running"
+    flight["reason"] = ""
+    flight["updated"] = now
     return flight
 
 
