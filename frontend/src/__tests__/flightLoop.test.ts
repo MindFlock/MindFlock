@@ -28,6 +28,10 @@ import {
   sessionDiagram,
   stopSummary,
   type Diagram,
+  LOOP_FROM,
+  LOOP_TO,
+  loopBands,
+  loopBandLabel,
 } from "../lib/flightDiagram";
 import { FlywayCanvas } from "../components/flights/FlywayCanvas";
 
@@ -212,15 +216,15 @@ describe("the Loop's count, the pill and the box's line", () => {
 });
 
 describe("the arc's layout", () => {
-  it("horizontal: from the loop box's top centre over the line onto the target's top centre", () => {
+  it("horizontal: from the loop box's left shoulder over the line onto the target's right shoulder (off the bird)", () => {
     const L = layoutDiagram(flywayDiagram(LINE(), KINDS));
     const w = L.wires.find((x) => x.kind === "loop")!;
     const a = L.boxes.find((b) => b.node.id === "stop:s4")!;
     const b = L.boxes.find((b) => b.node.id === "stop:s1")!;
-    expect(w.d.startsWith(`M ${a.x + a.w / 2} ${a.y} C `)).toBe(true);
-    expect(w.d.endsWith(`${b.x + b.w / 2} ${b.y - 2}`)).toBe(true);
+    expect(w.d.startsWith(`M ${a.x + a.w * LOOP_FROM} ${a.y} C `)).toBe(true);
+    expect(w.d.endsWith(`${b.x + b.w * LOOP_TO} ${b.y - 2}`)).toBe(true);
     // The apex is over the line, its rise from the span (clamped).
-    expect(w.apex!.x).toBeCloseTo((a.x + a.w / 2 + b.x + b.w / 2) / 2);
+    expect(w.apex!.x).toBeCloseTo((a.x + a.w * LOOP_FROM + b.x + b.w * LOOP_TO) / 2);
     expect(w.apex!.y).toBeCloseTo(-loopRise(b.x - a.x), 0);
     expect(w.loop).toEqual({ runs: 0, times: 3, state: "pending" });
     expect(L.rise).toBeGreaterThan(-w.apex!.y);
@@ -295,5 +299,19 @@ describe("the dialog's dynamic options (stopsBefore)", () => {
   it("a stop not on the line yet sees the whole line; no line: only the first stop", () => {
     expect(stopsBefore(LINE(), { id: "new" }).length).toBe(6);
     expect(stopsBefore(null, { id: "x" })).toEqual([{ value: "", label: "the first stop" }]);
+  });
+});
+
+describe("the cycle band", () => {
+  it("wraps the target, the stops between and the Loop, labelled with its count", () => {
+    const L = layoutDiagram(flywayDiagram(LINE(), KINDS));
+    const [band] = loopBands(L.boxes, L.wires, false);
+    const a = L.boxes.find((b) => b.node.id === "stop:s4")!;
+    const b = L.boxes.find((b) => b.node.id === "stop:s1")!;
+    expect(band.x).toBeLessThan(b.x);
+    expect(band.x + band.w).toBeGreaterThan(a.x + a.w);
+    expect(band.label).toBe("↻ Repeats ×3");
+    expect(loopBandLabel({ runs: 2, times: 0, state: "running" })).toBe("↻ Repeats until stopped");
+    expect(loopBandLabel({ runs: 3, times: 3, state: "done" })).toBe("↻ Repeated ×3");
   });
 });

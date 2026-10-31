@@ -80,13 +80,13 @@ export function mergeWords(at: number | null, now?: number): string {
 /** The landed rows the strip shows: every one expanded, the first
  * `LANDED_FOLDED` folded, newest first. */
 export function shownLanded(repo: Pick<LandingRepo, "landed">, open: boolean): { shown: LandedFlight[]; more: number } {
-  const all = [...repo.landed].sort((a, b) => b.at - a.at);
+  const all = [...(repo.landed || [])].sort((a, b) => b.at - a.at);
   const shown = open ? all : all.slice(0, LANDED_FOLDED);
   return { shown, more: all.length - shown.length };
 }
 
 /** Every landed flight across the strip's repos. */
-export const landedCount = (data: LandingData | null | undefined): number => (data?.repos || []).reduce((n, r) => n + r.landed.length, 0);
+export const landedCount = (data: LandingData | null | undefined): number => (data?.repos || []).reduce((n, r) => n + (r.landed || []).length, 0);
 
 /** A press on the head that is the head's own (not one of its buttons). */
 const headPress = (e: ReactPointerEvent) => e.button === 0 && !(e.target as Element).closest("button, a, input, summary, [data-no-drag]");
@@ -205,7 +205,7 @@ export function LandingStrip({ data, error = "", width, height, zoom = 1, open =
         <p className="sky-lane-empty muted">{error}</p>
       ) : !data ? (
         <p className="sky-lane-empty muted">Looking at the repos…</p>
-      ) : data.repos.length === 0 ? (
+      ) : !(data.repos || []).length ? (
         <p className="sky-lane-empty muted">No repo in the sky yet.</p>
       ) : (
         data.repos.map((r) => <RepoRow key={r.root} repo={r} open={open} now={now} />)
@@ -240,7 +240,7 @@ function RepoRow({ repo, open, now }: { repo: LandingRepo; open: boolean; now?: 
         <code className="sky-landing-branch">{repo.branch || "?"}</code>
       </div>
       <div className="sky-landing-merge muted">{mergeWords(repo.last_merge_at, now)}</div>
-      {repo.landed.length > 0 && (
+      {(repo.landed || []).length > 0 && (
         <ul className="sky-landing-landed" aria-label={"Landed today in " + repo.name}>
           {shown.map((l) => (
             <li key={l.flight} className="sky-landing-flight">

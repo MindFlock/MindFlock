@@ -63,6 +63,7 @@ import {
   birdPerches,
   joinLabel,
   layoutDiagram,
+  loopBands,
   loopPill,
   loopPillTitle,
   reorderDiagram,
@@ -877,6 +878,19 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
         onPointerUp={onStageUp}
         onPointerCancel={onStageUp}
       >
+        {loopBands(shown.boxes, shown.wires, vertical).map((b) => (
+          // A Loop's cycle: a band round the stops it repeats (the target
+          // through the Loop), under the wires and the boxes, so the line
+          // reads "these go round" before the arc is even followed.
+          <div
+            key={"band:" + b.id}
+            className={"fl-loop-band fl-loop-" + b.state}
+            style={{ transform: `translate(${b.x + pad}px, ${b.y + top}px)`, width: b.w, height: b.h }}
+            aria-hidden="true"
+          >
+            <span className="fl-loop-band-label">{b.label}</span>
+          </div>
+        ))}
         <svg className="fl-wires" width={shown.width + pad * 2} height={shown.height + top + pad} aria-hidden="true" focusable="false">
           <defs>
             <marker id={uid + "-arrow"} viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">

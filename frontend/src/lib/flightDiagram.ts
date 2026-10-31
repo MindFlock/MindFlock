@@ -1505,12 +1505,62 @@ export const LOOP_PILL_ROOM = 14;
 
 /** A return arc's height over the line from its span: taller for a longer
  * reach, never flatter than 30 px nor taller than 84. */
+/** Where the horizontal return arc leaves the Loop box and lands on the
+ * target, as a share of each box's width (round 16 follow-up: the bird sits
+ * over a box's centre and hid the arrowhead). */
+export const LOOP_FROM = 0.3;
+export const LOOP_TO = 0.72;
+
+/** The band round the stops a Loop repeats: the target to the Loop itself,
+ * on the main row (the canvas draws it under the boxes, with its label). */
+export interface LoopBand {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  label: string;
+  state: LoopMark["state"];
+}
+
+/** "↻ Repeats ×3", "↻ Repeats until stopped", "↻ Repeated ×3". */
+export function loopBandLabel(m: LoopMark): string {
+  const n = m.times > 0 ? "×" + m.times : "until stopped";
+  return (m.state === "done" ? "↻ Repeated " : "↻ Repeats ") + n;
+}
+
+/** One band per loop wire: the union of the target, the Loop and every
+ * main-row box between them along the line, padded. */
+export function loopBands(boxes: readonly Placed[], wires: readonly Wire[], vertical: boolean): LoopBand[] {
+  const out: LoopBand[] = [];
+  for (const w of wires) {
+    if (w.kind !== "loop" || !w.loop) continue;
+    const a = boxes.find((b) => b.node.id === w.from);
+    const b = boxes.find((x) => x.node.id === w.to);
+    if (!a || !b) continue;
+    const lo = vertical ? Math.min(a.y, b.y) : Math.min(a.x, b.x);
+    const hi = vertical ? Math.max(a.y + a.h, b.y + b.h) : Math.max(a.x + a.w, b.x + b.w);
+    const inside = boxes.filter((p) => {
+      if (p.node.row !== "main") return false;
+      const c = vertical ? p.y + p.h / 2 : p.x + p.w / 2;
+      return c >= lo && c <= hi;
+    });
+    const x = Math.min(...inside.map((p) => p.x)) - 10;
+    const y = Math.min(...inside.map((p) => p.y)) - 14;
+    const r = Math.max(...inside.map((p) => p.x + p.w)) + 10;
+    const btm = Math.max(...inside.map((p) => p.y + p.h)) + 10;
+    out.push({ id: w.from, x, y, w: r - x, h: btm - y, label: loopBandLabel(w.loop), state: w.loop.state });
+  }
+  return out;
+}
+
 export function loopRise(span: number): number {
   return Math.round(Math.min(84, Math.max(30, 18 + Math.abs(span) * 0.16)));
 }
 
-/** A Loop's return arc: horizontal, from the loop box's top centre over the
- * line back down onto the target's top centre (the arrowhead lands on it);
+/** A Loop's return arc: horizontal, from the loop box's left shoulder over
+ * the line back down onto the target's right shoulder (the arrowhead lands on
+ * it — off-centre, where the bird never perches over it);
  * vertical (a phone), out of the loop box's right edge, round the right of
  * the column, into the target's right edge. A cubic whose apex sits
  * `loopRise(span)` past the boxes. */
@@ -1518,8 +1568,8 @@ function loopArc(a: Placed, b: Placed, anchorOf: (p: Placed) => number, vertical
   // The cubic's control points stand 4/3 of the rise out: its midpoint
   // (the apex) then sits the full rise out.
   if (!vertical) {
-    const x1 = a.x + a.w / 2;
-    const x2 = b.x + b.w / 2;
+    const x1 = a.x + a.w * LOOP_FROM;
+    const x2 = b.x + b.w * LOOP_TO;
     const y1 = a.y;
     const y2 = b.y - 2;
     const h = loopRise(x2 - x1);

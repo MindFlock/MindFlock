@@ -80516,13 +80516,49 @@ function layoutDiagram(d, opts = {}) {
 	};
 }
 var LOOP_PILL_ROOM = 14;
+var LOOP_FROM = .3;
+var LOOP_TO = .72;
+function loopBandLabel(m) {
+	const n = m.times > 0 ? "×" + m.times : "until stopped";
+	return (m.state === "done" ? "↻ Repeated " : "↻ Repeats ") + n;
+}
+function loopBands(boxes, wires, vertical) {
+	const out = [];
+	for (const w of wires) {
+		if (w.kind !== "loop" || !w.loop) continue;
+		const a = boxes.find((b) => b.node.id === w.from);
+		const b = boxes.find((x) => x.node.id === w.to);
+		if (!a || !b) continue;
+		const lo = vertical ? Math.min(a.y, b.y) : Math.min(a.x, b.x);
+		const hi = vertical ? Math.max(a.y + a.h, b.y + b.h) : Math.max(a.x + a.w, b.x + b.w);
+		const inside = boxes.filter((p) => {
+			if (p.node.row !== "main") return false;
+			const c = vertical ? p.y + p.h / 2 : p.x + p.w / 2;
+			return c >= lo && c <= hi;
+		});
+		const x = Math.min(...inside.map((p) => p.x)) - 10;
+		const y = Math.min(...inside.map((p) => p.y)) - 14;
+		const r = Math.max(...inside.map((p) => p.x + p.w)) + 10;
+		const btm = Math.max(...inside.map((p) => p.y + p.h)) + 10;
+		out.push({
+			id: w.from,
+			x,
+			y,
+			w: r - x,
+			h: btm - y,
+			label: loopBandLabel(w.loop),
+			state: w.loop.state
+		});
+	}
+	return out;
+}
 function loopRise(span) {
 	return Math.round(Math.min(84, Math.max(30, 18 + Math.abs(span) * .16)));
 }
 function loopArc(a, b, anchorOf, vertical) {
 	if (!vertical) {
-		const x1 = a.x + a.w / 2;
-		const x2 = b.x + b.w / 2;
+		const x1 = a.x + a.w * LOOP_FROM;
+		const x2 = b.x + b.w * LOOP_TO;
 		const y1 = a.y;
 		const y2 = b.y - 2;
 		const h = loopRise(x2 - x1);
@@ -82175,6 +82211,19 @@ function FlywayCanvas(p) {
 			onPointerUp: onStageUp,
 			onPointerCancel: onStageUp,
 			children: [
+				loopBands(shown.boxes, shown.wires, vertical).map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "fl-loop-band fl-loop-" + b.state,
+					style: {
+						transform: `translate(${b.x + pad}px, ${b.y + top}px)`,
+						width: b.w,
+						height: b.h
+					},
+					"aria-hidden": "true",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "fl-loop-band-label",
+						children: b.label
+					})
+				}, "band:" + b.id)),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
 					className: "fl-wires",
 					width: shown.width + 12,
@@ -124077,14 +124126,14 @@ function mergeWords(at, now) {
 	return "merged " + relTime(at, { now });
 }
 function shownLanded(repo, open) {
-	const all = [...repo.landed].sort((a, b) => b.at - a.at);
+	const all = [...repo.landed || []].sort((a, b) => b.at - a.at);
 	const shown = open ? all : all.slice(0, LANDED_FOLDED);
 	return {
 		shown,
 		more: all.length - shown.length
 	};
 }
-var landedCount = (data) => (data?.repos || []).reduce((n, r) => n + r.landed.length, 0);
+var landedCount = (data) => (data?.repos || []).reduce((n, r) => n + (r.landed || []).length, 0);
 var headPress$4 = (e) => e.button === 0 && !e.target.closest("button, a, input, summary, [data-no-drag]");
 function LandingStrip({ data, error = "", width, height, zoom = 1, open = false, onToggleOpen, onHeadDown, draggable = true, onResize, onMeasure, now }) {
 	const [folded, setFolded] = (0, import_react.useState)(readFolded);
@@ -124231,7 +124280,7 @@ function LandingStrip({ data, error = "", width, height, zoom = 1, open = false,
 			}) : !data ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "sky-lane-empty muted",
 				children: "Looking at the repos…"
-			}) : data.repos.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+			}) : !(data.repos || []).length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "sky-lane-empty muted",
 				children: "No repo in the sky yet."
 			}) : data.repos.map((r) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(RepoRow, {
@@ -124284,7 +124333,7 @@ function RepoRow({ repo, open, now }) {
 				className: "sky-landing-merge muted",
 				children: mergeWords(repo.last_merge_at, now)
 			}),
-			repo.landed.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
+			(repo.landed || []).length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("ul", {
 				className: "sky-landing-landed",
 				"aria-label": "Landed today in " + repo.name,
 				children: [shown.map((l) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
