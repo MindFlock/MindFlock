@@ -236,20 +236,32 @@ def test_the_server_voice_speaks_one_sentence_ahead():
     # the one playing (VOICE_SPEAK_AHEAD): a voice that makes one at a time
     # is never idle between sentences; a cancel wastes at most two.
     assert "var VOICE_SPEAK_AHEAD = 2;" in js
+    said = _inner(tts, "said")
+    assert "return said(ctx, parts, keep, g);" in speak
     assert (
         "function fill() { while (asked < parts.length && ahead.length < VOICE_SPEAK_AHEAD) ahead.push(fetchClip(ctx, parts[asked++], keep)); }"
-        in speak
+        in said
     )
-    assert "var part = parts[i++], got = ahead.shift();" in speak
-    assert speak.index(
+    assert "var part = parts[i++], got = ahead.shift(), waitT = null;" in said
+    assert said.index(
         "fill();   // the next sentences are made while this one plays"
-    ) < speak.index(
-        "(x.audio ? play(ctx, x.audio) : phone.speak(part)).then(next, next);"
-    )
+    ) < said.index("(x.audio ? play(ctx, x.audio) : phone.speak(part)).then(")
     # A cancelled line stops before its next clip; cancel aborts the fetches.
-    assert "if (g !== gen) { resolve(); return; }" in speak
+    assert "if (g !== gen) { resolve(); return; }" in said
     cancel = _inner(tts, "cancel")
     assert "gen++;" in cancel and "a.abort();" in cancel
+    # The running path still says the line through said(); only a context
+    # that would not run hands it to the phone's voice.
+    assert speak.index("if (!ok) {") < speak.index("return said(ctx, parts, keep, g);")
+    # Two ways a line stops waiting, told apart: cancel aborts EVERY request
+    # on its way; the timeout fallback in said() aborts none (the late clips
+    # land in memory).
+    assert (
+        "aborts.splice(0).forEach(function (a) { try { a.abort(); } catch (e) {} });"
+        in cancel
+    )
+    assert "abort" not in said
+    assert "phone.speak(rest).then(next, next);" in said
     # No AudioContext running: the phone's voice says the whole line, once.
     assert "return phone.speak(text);" in speak
     # The phone's own voice reads the text shaped for it (spoken-text.js).
@@ -257,7 +269,7 @@ def test_the_server_voice_speaks_one_sentence_ahead():
         js, "PhoneTTS"
     )
     # Diagnostics: the first sound's time and the sentence count.
-    assert "{ first: first, parts: parts.length }" in speak
+    assert "{ first: first, parts: parts.length }" in said
     assert '", first sound " + (x.first / 1000).toFixed(1) + " s"' in _whole(
         js, "voiceDiagLast"
     )
