@@ -48,7 +48,19 @@ import type { Dialog, VoiceHelp } from "../api/types";
 import { peekTerm } from "./terminals";
 import { toast } from "./toast";
 import { resamplerName, startWavRecording, type WavRecording } from "./wavRecorder";
-import { MicKeeper, isLoud, noiseFloor, pickupLine, rmsOf, voiceMark, voicePass, voiceSent } from "./voiceMic";
+import {
+  KEEP_STREAM_MS,
+  MicKeeper,
+  PRE_ROLL_ONSET_S,
+  isLoud,
+  noiseFloor,
+  pickupLine,
+  rmsOf,
+  voiceMark,
+  voicePass,
+  voiceSent,
+  withPreRoll,
+} from "./voiceMic";
 import { applyVoiceView, phraseWords, quoted, voiceWords, voiceWordsVersion, withKin, wordKey, type VoiceWords } from "./voiceWords";
 import { pronounce, setPronounce, shapeForSpeech } from "./spokenText";
 
@@ -558,19 +570,34 @@ export function onVoicePrefs(fn: (p: VoicePrefs) => void): () => void {
 export const TALK_EVENT = "mindflock:voice-talk";
 export type TalkPhase = "down" | "up";
 
+/** In "Hold to talk", a key let go sooner than this after its press was a
+ * tap: the mic stays on (as "Click to talk" would) and the next press
+ * stops it. Held longer, letting go stops — push to talk as before. */
+export const TAP_HOLD_MS = 350;
+/** A press this soon after listening ended starts nothing: the bounce of
+ * the press that stopped it, or a double tap — not a new dictation. */
+export const TALK_DEBOUNCE_MS = 300;
+
 /** What a hotkey phase does, as the button does it: in "Hold to talk", down
  * starts and up (only after a down that the KEY pressed — a blur's stray up
  * never ends a held button) stops; in "Click to talk", each down starts
- * or stops and up is nothing. Stopping leaves the words in the field. */
+ * or stops and up is nothing. Stopping leaves the words in the field.
+ * `o.heldMs` (an up: how long the key was down): a hold's tap — under
+ * {@link TAP_HOLD_MS} — "latch"es instead (the mic stays on), and with
+ * `o.latched` (the key's own tap left it on) the next down finishes. `o.busy`
+ * (a dictation still ending, or one just over — {@link TALK_DEBOUNCE_MS}):
+ * a down that would start does nothing. */
 export function talkKeyAction(
   phase: TalkPhase,
   hold: boolean,
   listening: boolean,
-  keyHeld: boolean
-): "start" | "finish" | null {
-  if (!hold) return phase === "down" ? (listening ? "finish" : "start") : null;
-  if (phase === "down") return listening ? null : "start";
-  return keyHeld && listening ? "finish" : null;
+  keyHeld: boolean,
+  o: { heldMs?: number; latched?: boolean; busy?: boolean } = {}
+): "start" | "finish" | "latch" | null {
+  if (!hold) return phase === "down" ? (listening ? "finish" : o.busy ? null : "start") : null;
+  if (phase === "down") return listening ? (o.latched ? "finish" : null) : o.busy ? null : "start";
+  if (!keyHeld || !listening) return null;
+  return o.heldMs !== undefined && o.heldMs < TAP_HOLD_MS ? "latch" : "finish";
 }
 
 // --- the dictation state machine ------------------------------------------- //
@@ -631,6 +658,9 @@ export const STOPPED_LINE = "Stopped listening";
 /** The caption after "stop talking" — shown {@link HUSH_CAPTION_MS}. */
 export const HUSH_LINE = "Quiet.";
 export const HUSH_CAPTION_MS = 1000;
+/** The mic's tooltip while listening and a line plays (the recorder muted
+ * for it): what it hears now is not typed. */
+export const MIC_PAUSED_LINE = "Speaking — your mic is paused until it ends";
 
 /** The pill beside the top bar's mic — the one thing the bar says about
  * voice, and only ever one of these: {@link HUSH_LINE} for
@@ -665,6 +695,14 @@ export type TailKind = "over" | "out" | "disregard" | "stop" | "hush" | "route";
 export const CONTROL_TAIL_MS = 250;
 /** How often the guess's tail is checked against the quiet. */
 export const CONTROL_POLL_MS = 50;
+/** "Over" at the end of the guess with the voice quiet this long already
+ * (not mid-syllable: a meter block at least): the phrase is ended at the
+ * recognizer NOW, so its accurate final is on its way while the
+ * {@link CONTROL_TAIL_MS} of quiet that makes "over" a radio word is still
+ * being waited out — the two overlap instead of stacking. The voice coming
+ * back before that quiet makes "over" a plain word again (typed, nothing
+ * sent), exactly as if the phrase had not been ended. */
+export const OVER_EARLY_QUIET_MS = 100;
 /** "Over" from the guess ends the phrase and waits for its /end (the
  * accurate final, retyped first) — at most this long, and less once the
  * finals' round trip is known ({@link overWaitMs}); then the fast words are
@@ -714,6 +752,11 @@ export const finalClock = new FinalClock();
 /** A phrase taken from its guess: its own late words and end are ignored —
  * for at most this long (a phrase whose end never comes). */
 export const SWALLOW_MAX_MS = 5000;
+/** …but a recognizer that always reports a phrase's end (the server's
+ * stream: its /end, or its failure, within the request's 45 s timeout) is
+ * waited for that long: a late end after a backlog is the same phrase, and
+ * would otherwise be typed and SENT a second time. */
+export const SWALLOW_STREAM_MAX_MS = 50_000;
 
 /** `o` with `erase` only when there is one (outcomes stay minimal). */
 const withErase = <T extends object>(o: T, erase: string): T & { erase?: string } => (erase ? { ...o, erase } : o);
@@ -846,9 +889,9 @@ export class Dictation {
    * it differs from the fast words — the phrase ends as THAT (its whole
    * guess corrected, never past the phrase's start) and the radio words, a
    * stop phrase and the router read it, not the fast guess. */
-  flush(w: string, final?: string): DictOutcome {
+  flush(w: string, final?: string, radio = true): DictOutcome {
     if (!this.listening) return { kind: "stopped" };
-    return this.heard(final?.trim() ? final.trim() : joinWords(this.held, w));
+    return this.heard(final?.trim() ? final.trim() : joinWords(this.held, w), radio);
   }
 
   /** `text` went into the field. */
@@ -862,12 +905,13 @@ export class Dictation {
   }
 
   /** One final phrase: the phrase under way ends as `phrase` (its guess
-   * corrected to it, or taken back for a control word). */
-  heard(phrase: string): DictOutcome {
+   * corrected to it, or taken back for a control word). `radio` false: its
+   * radio words are plain words (an "over" the voice went on after). */
+  heard(phrase: string, radio = true): DictOutcome {
     if (!this.listening) return { kind: "stopped" };
     const ctl = this.control(phrase, true);
     if (ctl) return ctl;
-    const p = parseRadio(phrase);
+    const p = radio ? parseRadio(phrase) : { kind: "" as RadioKind, text: String(phrase || "").trim() };
     switch (p.kind) {
       case "disregard":
         return { kind: "erase", text: this.erase() };
@@ -1065,6 +1109,10 @@ export interface LiveHooks {
    * `final_ms`), if it has one: the first "over" of a page waits about that
    * long for its final ({@link FinalClock}). */
   finalMs?(): number | null;
+  /** The recognizer reports every phrase's end (the server's stream): a
+   * phrase taken from its guess is ignored until its end, not just
+   * {@link SWALLOW_MAX_MS}. */
+  endsSurely?(): boolean;
 }
 
 /** The spoken confirmations of the dictation's actions — about what YOU did,
@@ -1145,6 +1193,11 @@ export class LiveDictation {
   /** When the phrase was ended at the recognizer for a control word (ms):
    * its /end back is one round trip for {@link finalClock}. */
   private endedAt = 0;
+  /** "Over" ended its phrase before {@link CONTROL_TAIL_MS} of quiet
+   * ({@link OVER_EARLY_QUIET_MS}): when, and what the voice has done since —
+   * "met" (the quiet came: "over" is the radio word), "resumed" (the voice
+   * came back first: a plain word), "" (not yet). */
+  private early: { at: number; seen: "" | "met" | "resumed"; timer?: ReturnType<typeof setInterval> } | null = null;
   /** When the person last talked over a line the app said (ms). */
   private bargeAt = 0;
 
@@ -1201,7 +1254,9 @@ export class LiveDictation {
 
   heard(phrase: string): Promise<void> {
     if (phrase.trim()) this.heardAnything = true;
+    const early = this.early;
     if (this.phraseEnded()) return this.chain;
+    if (early) return this.afterQuiet(early, (radio) => this.dict.heard(phrase, radio));
     return this.step(() => this.dict.heard(phrase));
   }
 
@@ -1223,7 +1278,9 @@ export class LiveDictation {
    * re-transcription, when it differs — see {@link Dictation.flush}). */
   flush(w: string, final?: string): Promise<void> {
     if (w.trim() || final?.trim()) this.heardAnything = true;
+    const early = this.early;
     if (this.phraseEnded()) return this.chain;
+    if (early) return this.afterQuiet(early, (radio) => this.dict.flush(w, final, radio));
     return this.step(() => this.dict.flush(w, final));
   }
 
@@ -1232,6 +1289,7 @@ export class LiveDictation {
   private phraseEnded(): boolean {
     clearTimeout(this.sendWait);
     this.sendWait = undefined;
+    this.early = null;
     if (this.endedAt) {
       finalClock.note(Date.now() - this.endedAt);
       this.endedAt = 0;
@@ -1246,7 +1304,47 @@ export class LiveDictation {
    * says of it. */
   private swallow(): void {
     clearTimeout(this.swallowing);
-    this.swallowing = setTimeout(() => (this.swallowing = undefined), SWALLOW_MAX_MS);
+    const max = this.hooks.endsSurely?.() ? SWALLOW_STREAM_MAX_MS : SWALLOW_MAX_MS;
+    this.swallowing = setTimeout(() => (this.swallowing = undefined), max);
+  }
+
+  /** The phrase was just ended early for "over": watch the voice (every
+   * {@link CONTROL_POLL_MS}) until it has been quiet {@link CONTROL_TAIL_MS}
+   * ("met") or comes back first ("resumed"). */
+  private watchQuiet(): NonNullable<LiveDictation["early"]> {
+    const e: NonNullable<LiveDictation["early"]> = { at: Date.now(), seen: "" };
+    this.early = e;
+    e.timer = setInterval(() => {
+      if (this.judge(e) || this.done) clearInterval(e.timer);
+    }, CONTROL_POLL_MS);
+    return e;
+  }
+
+  /** What the voice did since an early end (see {@link early}). */
+  private judge(e: NonNullable<LiveDictation["early"]>): "" | "met" | "resumed" {
+    if (e.seen) return e.seen;
+    const quiet = this.hooks.quietMs?.() ?? Infinity;
+    // A loud block after the phrase was ended: the voice went on.
+    if (quiet < Date.now() - e.at) e.seen = "resumed";
+    else if (quiet >= CONTROL_TAIL_MS) e.seen = "met";
+    return e.seen;
+  }
+
+  /** The early-ended phrase's end is here (its final, or the fast words at
+   * the deadline): it acts the moment the quiet is known — at once when it
+   * already is (the usual case: a final takes longer than the quiet) — as
+   * the radio word when the quiet came, as plain words when the voice came
+   * back first. */
+  private afterQuiet(e: NonNullable<LiveDictation["early"]>, act: (radio: boolean) => DictOutcome): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const go = () => {
+        const seen = this.judge(e);
+        if (!seen && !this.done) return void setTimeout(go, CONTROL_POLL_MS);
+        clearInterval(e.timer);
+        resolve(this.step(() => act(seen !== "resumed")));
+      };
+      go();
+    });
   }
 
   /** After each step: a control phrase at the end of the guess acts once
@@ -1270,20 +1368,27 @@ export class LiveDictation {
       return;
     }
     const quiet = this.hooks.quietMs?.() ?? 0;
-    if (quiet < CONTROL_TAIL_MS) return;
+    const radio = t.kind === "over" || t.kind === "out";
+    // "Over" and the voice already stopped a moment: the phrase ends now and
+    // its final is fetched while the rest of the quiet is waited out.
+    const early = radio && quiet < CONTROL_TAIL_MS && quiet >= OVER_EARLY_QUIET_MS;
+    if (quiet < CONTROL_TAIL_MS && !early) return;
     clearInterval(this.tailTimer);
     this.tailTimer = undefined;
     this.wordEnd = Date.now() - Math.min(quiet, 60_000);
     this.endedAt = Date.now();
     this.hooks.endPhrase?.();
-    if (t.kind === "over" || t.kind === "out") {
+    if (radio) {
+      const e = early ? this.watchQuiet() : null;
       // The accurate final, if /end brings it within the finals' usual round
       // trip (overWaitMs); else the fast words.
       this.sendWait = setTimeout(
         () => {
           this.sendWait = undefined;
+          this.early = null;
           this.swallow();
-          void this.step(() => this.dict.heard(t.text));
+          if (e) void this.afterQuiet(e, (r) => this.dict.heard(t.text, r));
+          else void this.step(() => this.dict.heard(t.text));
         },
         overWaitMs(finalClock.typical(this.hooks.finalMs?.()))
       );
@@ -1384,6 +1489,8 @@ export class LiveDictation {
     clearInterval(this.tailTimer);
     clearTimeout(this.sendWait);
     clearTimeout(this.swallowing);
+    clearInterval(this.early?.timer);
+    this.early = null;
     this.dict.listening = false;
     this.hooks.halt();
     if (line !== null) this.hooks.caption(line, sticky);
@@ -1535,6 +1642,9 @@ export class LiveDictation {
       erase = "";
       if (!text) return true;
       const words = text.trim();
+      // The words show at once, muted — not typed yet: the router (a round
+      // trip) decides whether they are a command or the prompt.
+      if (route) this.hooks.caption(this.dict.shown, true, words);
       const routed = route ? await this.hooks.route(words) : false;
       if (routed === "hush") {
         this.hushed();
@@ -2325,10 +2435,14 @@ export function pendingDiagnostics(name: string, dialog: Dialog | null, dialogUp
 
 // --- speaking ------------------------------------------------------------------- //
 
-/** One engine: speak() resolves when the text has been said (or given up on). */
+/** One engine: speak() resolves when the text has been said (or given up on).
+ * `audible`: called as its first sound actually plays — an engine that
+ * does so says {@link reportsAudible}; for any other the queue takes the
+ * line's turn for its start. */
 export interface Speaker {
-  speak(text: string): Promise<void>;
+  speak(text: string, audible?: () => void): Promise<void>;
   cancel(): void;
+  readonly reportsAudible?: boolean;
 }
 
 /** A queued line older than this when its turn comes is dropped, not said:
@@ -2364,7 +2478,8 @@ interface Queued {
   /** A confirmation ({@link SpeechQueue.confirmLine}): at the front, said even
    * while held, stale after {@link CONFIRM_STALE_MS}. */
   confirm?: boolean;
-  /** Called as its engine starts on it (a confirmation mutes the mic). */
+  /** Called as its first sound plays (a confirmation mutes the mic) — not
+   * when its turn comes: a line being fetched is silent, the mic hears on. */
   start?: () => void;
   /** A sound ({@link SpeechQueue.cue}), not words: this plays it. */
   sound?: Speaker;
@@ -2407,13 +2522,19 @@ export class SpeechQueue {
   private waiters: Array<() => void> = [];
   /** {@link setGate}: may a line (not a confirmation) start now? */
   private gate: (() => boolean) | null = null;
+  /** The line being said is heard now (its first sound played). */
+  private audible = false;
   private gateRetry: ReturnType<typeof setTimeout> | undefined;
   last = "";
 
+  /** `onSpeaking`: a line's turn starts / ends (the pill, Escape) — from
+   * when it is asked of its engine. `opts.onAudible`: its sound starts / it
+   * is over — the mic is muted for THAT span only (a reply still being
+   * synthesised is silence the person may talk into). */
   constructor(
     private engine: () => Speaker,
     private onSpeaking: (on: boolean) => void = () => {},
-    private opts: { now?: () => number; staleMs?: number; log?: (msg: string) => void } = {}
+    private opts: { now?: () => number; staleMs?: number; log?: (msg: string) => void; onAudible?: (on: boolean) => void } = {}
   ) {}
 
   private now(): number {
@@ -2481,6 +2602,11 @@ export class SpeechQueue {
 
   get busy(): boolean {
     return !!this.speaking;
+  }
+
+  /** The line being said has started sounding (not just its turn). */
+  get audibleNow(): boolean {
+    return !!this.speaking && this.audible;
   }
 
   /** The line being said is a confirmation ("Sent.") — the person's own
@@ -2553,7 +2679,15 @@ export class SpeechQueue {
     this.turn++;
     sp.cancel();
     if (!cur?.sound) this.onSpeaking(false);
+    this.silent(cur);
     cur?.done();
+  }
+
+  /** The line `q` is over: its mute is lifted (when it had sounded). */
+  private silent(q: Queued | null): void {
+    const was = this.audible;
+    this.audible = false;
+    if (was && q) this.opts.onAudible?.(false);
   }
 
   private settle(): void {
@@ -2599,40 +2733,90 @@ export class SpeechQueue {
       if (!next.sound) this.last = text;
       this.speaking = sp;
       this.current = next;
+      this.audible = false;
       if (!next.sound) this.onSpeaking(true);
-      next.start?.();
+      // Its first sound: the mic is muted from here (not from its turn — a
+      // reply being synthesised is seconds of silence the mic must hear).
+      // A sound (the chime) is not a line: no mute, never audibleNow.
+      const audible = () => {
+        if (this.turn !== turn || !this.speaking || this.audible) return;
+        this.audible = true;
+        this.opts.onAudible?.(true);
+        next.start?.();
+      };
+      const reports = !next.sound && !!sp.reportsAudible;
+      if (!reports && !next.sound) audible();
       const done = () => {
         if (this.turn !== turn || !this.speaking) return;
         this.speaking = null;
         this.current = null;
         if (!next.sound) this.onSpeaking(false);
+        this.silent(next);
         next.done();
         this.pump();
       };
-      sp.speak(text).then(done, done);
+      (reports ? sp.speak(text, audible) : sp.speak(text)).then(done, done);
       return;
     }
   }
 }
 
+/** A chime asked for while the page's AudioContext is not running (the
+ * first press after a reload or a long idle: its resume is still in
+ * flight) waits this long for it, then is dropped — a late chime would only
+ * confuse. mobile.js VOICE_CHIME_LATE_MS. */
+export const CHIME_LATE_MS = 400;
+/** How often a waiting chime looks at the context again. */
+const RESUME_POLL_MS = 20;
+
+/** `ctx` runs — now, or within `maxMs` (its resume asked for): true; false
+ * when it didn't by then (or closed). Never throws. */
+export function whenRunning(ctx: AudioContext, maxMs = CHIME_LATE_MS): Promise<boolean> {
+  if (ctx.state === "running") return Promise.resolve(true);
+  try {
+    void ctx.resume().catch(() => {});
+  } catch {
+    /* no resume: the wait decides */
+  }
+  const until = Date.now() + maxMs;
+  return new Promise<boolean>((done) => {
+    const look = () => {
+      if (ctx.state === "running") return done(true);
+      if (ctx.state === "closed" || Date.now() >= until) return done(false);
+      setTimeout(look, RESUME_POLL_MS);
+    };
+    setTimeout(look, 0);
+  });
+}
+
 /** A {@link SpeechQueue.cue}'s player: `lead` ms of quiet, then `play`, done
  * `ms` later; cancel() ends it (a sound already started rings out — it is
- * short). */
+ * short). The page's AudioContext not running yet (a cold first press):
+ * `play` waits for it, up to {@link CHIME_LATE_MS} — and its `ms` count from
+ * when it really plays — else the sound is dropped. */
 function soundSpeaker(play: () => void, ms: number, lead: number): Speaker {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let end = () => {};
+  let over = false;
   return {
     speak: () =>
       new Promise<void>((resolve) => {
         end = resolve;
-        const go = () => {
+        const sound = () => {
+          if (over) return;
           play();
           timer = setTimeout(resolve, ms);
+        };
+        const go = () => {
+          const ctx = audioCtx;
+          if (!ctx || ctx.state === "running") return sound();
+          void whenRunning(ctx).then((ok) => (ok ? sound() : resolve()));
         };
         if (lead > 0) timer = setTimeout(go, lead);
         else go();
       }),
     cancel: () => {
+      over = true;
       clearTimeout(timer);
       end();
     },
@@ -2689,7 +2873,9 @@ export class Confirmer {
 
   constructor(
     private deps: {
-      queue: Pick<SpeechQueue, "confirmLine">;
+      /** `audibleNow`: the queue's next line already sounds (it holds the
+       * mute now — lifting it here would let the reply's audio in). */
+      queue: Pick<SpeechQueue, "confirmLine"> & { readonly audibleNow?: boolean };
       /** Settings → Voice "Spoken confirmations". */
       on(): boolean;
       /** The recognizer listening now, if any. */
@@ -2703,7 +2889,9 @@ export class Confirmer {
   ) {}
 
   /** Say `kind`'s line ({@link CONFIRM_LINES}), or a line of the router's
-   * (a switch). Resolves once it was said, cut or dropped. */
+   * (a switch). Resolves once it was said, cut or dropped. The mic is muted
+   * from its first sound to its end — unless the line after it already
+   * sounds by then (its own mute stands). */
   say(kind: ConfirmKind | { line: string }): Promise<void> {
     const x = this.deps;
     if (!x.on()) return Promise.resolve();
@@ -2718,7 +2906,7 @@ export class Confirmer {
         },
       })
       .then(() => {
-        if (muted) mic?.mute?.(false);
+        if (muted && !x.queue.audibleNow) mic?.mute?.(false);
         if (muted && x.server() && !x.speaker.lastError) this.prime(true);
       });
   }
@@ -2864,10 +3052,13 @@ export function speechRequests(text: string): string[] {
 
 const WORD_MS = 400; // onend fallback: per word…
 const CHUNK_GRACE_MS = 1500; // …plus this per chunk
+/** speechSynthesis gave no onstart this long after speak(): it is taken as
+ * sounding (some voices never fire it). */
+export const BROWSER_START_GRACE_MS = 300;
 
 /** speechSynthesis, a chunk per sentence. Utterances stay referenced until
  * they end — a garbage-collected one never fires onend (mobile.js PhoneTTS). */
-export function browserSpeaker(): Speaker & { available(): boolean } {
+export function browserSpeaker(): Speaker & { available(): boolean; readonly reportsAudible: true } {
   const synth = typeof window !== "undefined" ? window.speechSynthesis : undefined;
   const keep: SpeechSynthesisUtterance[] = [];
   let gen = 0;
@@ -2878,13 +3069,20 @@ export function browserSpeaker(): Speaker & { available(): boolean } {
   };
   return {
     available,
-    speak(text) {
+    reportsAudible: true as const,
+    speak(text, audible) {
       return new Promise<void>((resolve) => {
         // Shaped for the voice only here: a caption shows the text as written.
         const parts = sentenceChunks(shapeForSpeech(text, pronounce()));
         if (!available() || !parts.length) return resolve();
         const g = gen;
         let i = 0;
+        let heard = false;
+        const sounding = () => {
+          if (heard || g !== gen) return;
+          heard = true;
+          audible?.();
+        };
         const next = () => {
           if (g !== gen || i >= parts.length) return resolve();
           const part = parts[i++];
@@ -2900,10 +3098,12 @@ export function browserSpeaker(): Speaker & { available(): boolean } {
           };
           u.onend = finish;
           u.onerror = finish;
+          u.onstart = sounding;
           const timer = setTimeout(finish, part.split(/\s+/).length * WORD_MS + CHUNK_GRACE_MS);
           keep.push(u);
           try {
             synth!.speak(u);
+            if (!heard) setTimeout(sounding, BROWSER_START_GRACE_MS);
           } catch {
             finish();
           }
@@ -2947,6 +3147,12 @@ export function voiceAudioCtx(): AudioContext | null {
   return audioCtx;
 }
 
+/** The page's AudioContext when it runs — never makes or resumes one (the
+ * microphone's pre-roll starts on it, outside any gesture). */
+export function runningAudioCtx(): AudioContext | null {
+  return audioCtx && audioCtx.state === "running" ? audioCtx : null;
+}
+
 /** POST /api/voice/speak → audio bytes (Content-Type the backend's: mpeg for
  * a host, wav for piper) played through the one AudioContext — a request
  * for the first sentence, then a few sentences at a time
@@ -2967,7 +3173,12 @@ export function voiceAudioCtx(): AudioContext | null {
 export function serverSpeaker(
   fallback: Speaker,
   opts: { voiceKey?: () => string; cacheable?: (part: string) => boolean } = {}
-): Speaker & { lastError: string; prefetch(lines: readonly string[]): Promise<void>; cached(part: string): boolean } {
+): Speaker & {
+  lastError: string;
+  readonly reportsAudible: true;
+  prefetch(lines: readonly string[]): Promise<void>;
+  cached(part: string): boolean;
+} {
   let gen = 0;
   /** Synthesised confirmations: voice + "\n" + sentence → its audio. */
   const cache = new Map<string, Promise<AudioBuffer>>();
@@ -3004,6 +3215,8 @@ export function serverSpeaker(
 
   const self = {
     lastError: "",
+    /** speak() calls its `audible` as the first sentence starts playing. */
+    reportsAudible: true as const,
     /** The audio of `part` is in memory for the current voice. */
     cached(part: string): boolean {
       return cache.has(keyOf(part));
@@ -3021,14 +3234,18 @@ export function serverSpeaker(
           await p.catch(() => {});
         }
     },
-    async speak(text: string): Promise<void> {
+    async speak(text: string, audible?: () => void): Promise<void> {
       const parts = speechRequests(text);
       if (!parts.length) return;
       const g = gen;
       const ctx = voiceAudioCtx();
+      // A context still resuming (or iOS's "interrupted") gets a moment
+      // before the line goes to the other voice.
+      if (ctx && ctx.state !== "running") await whenRunning(ctx);
+      if (g !== gen) return;
       if (!ctx || ctx.state !== "running") {
         self.lastError = "AudioContext " + (ctx ? ctx.state : "missing");
-        return fallback.speak(parts.join(" "));
+        return fallback.speak(parts.join(" "), audible);
       }
       /** Ask for sentence `i` (the one request in flight) — or take it from
        * the cache. */
@@ -3059,7 +3276,7 @@ export function serverSpeaker(
           // What is scheduled plays out first; the rest goes in one call.
           await last;
           if (g !== gen) return;
-          return fallback.speak(parts.slice(i).join(" "));
+          return fallback.speak(parts.slice(i).join(" "), audible);
         }
         if (g !== gen) return;
         self.lastError = "";
@@ -3068,6 +3285,8 @@ export function serverSpeaker(
         const at = Math.max(ctx.currentTime, endAt);
         endAt = at + (audio.duration || 0);
         last = play(ctx, audio, at);
+        // The first sentence starts now: the line is heard from here.
+        if (i === 0) audible?.();
       }
       await last;
     },
@@ -3408,6 +3627,12 @@ export const BARGE_FRESH_MS = 1000;
 /** A barge-in lifts the mute with this much of the muted audio kept: the
  * detector's {@link BARGE_POLLS} reads plus the word's soft start. */
 export const BARGE_REWIND_MS = BARGE_POLL_MS * BARGE_POLLS + 150;
+/** The microphone went away mid-listen: the caption's line while it is
+ * opened again (the system's default microphone now). */
+export const MIC_LOST_LINE = "The microphone went away — listening on the default one";
+/** …and when it goes away again this soon after, listening stops with this. */
+export const MIC_GONE_LINE = "The microphone went away — check it, then click the mic";
+export const MIC_LOST_RETRY_MS = 3000;
 
 /** Hears for the person while the app talks. What reaches the microphone
  * of the app's own voice — what the browser's echo cancellation leaves of
@@ -3463,6 +3688,9 @@ interface Phrase {
   sent: boolean;
   trimS: number;
   speechS: number;
+  /** The pre-roll (16 kHz) its speech began in — sent in front of its first
+   * audio ({@link PRE_ROLL_ONSET_S}); null once sent, or none. */
+  pre: Float32Array | null;
 }
 
 /** A response's words (the server joins them with spaces). */
@@ -3496,7 +3724,7 @@ const langTag = () => String(navigator.language || "en").split(";")[0];
 export function serverRecognizer(
   opts: { stream?: () => boolean; mic?: MicKeeper } = {}
 ): Recognizer & { lastError: string; mic: MicKeeper; passMs: number | null; finalMs: number | null; readonly streaming: boolean } {
-  const mic = opts.mic || new MicKeeper();
+  const mic = opts.mic || new MicKeeper(KEEP_STREAM_MS, undefined, runningAudioCtx);
   /** This dictation holds the microphone (one {@link MicKeeper.hold}). */
   let holding = false;
   let h: RecognizerHandlers | null = null;
@@ -3516,6 +3744,14 @@ export function serverRecognizer(
   const open = new Set<string>();
   /** Barge-in: audio before this (ms) is the app's own voice dying away. */
   let skipUntil = 0;
+  /** start()'s skip, until the dictation's first recording takes it: on a
+   * cold AudioContext the chime it covers plays only once the context runs,
+   * so the skip is counted again from then. */
+  let firstSkipMs = 0;
+  /** `ctx` runs now: the skip start() asked for runs from now. */
+  const skipFromNow = () => {
+    if (firstSkipMs) skipUntil = Math.max(skipUntil, Date.now() + firstSkipMs);
+  };
   /** The app says a line: its audio is not the person's — the recorder
    * drops it ({@link Recognizer.mute}) while an analyser on the microphone
    * listens for a voice over it ({@link BargeDetector} → onBarge). */
@@ -3524,6 +3760,8 @@ export function serverRecognizer(
   let bargeTimer: ReturnType<typeof setInterval> | undefined;
   let bargeTap: { src: MediaStreamAudioSourceNode; an: AnalyserNode; buf: Float32Array<ArrayBuffer>; stream: MediaStream } | null = null;
   let lastBargeAt = 0;
+  /** When the microphone last went away mid-listen (ms). */
+  let lostAt = 0;
   /** The microphone and the context the phrase records with. */
   let micStream: MediaStream | null = null;
   let micCtx: AudioContext | null = null;
@@ -3588,13 +3826,14 @@ export function serverRecognizer(
     maybeEnd();
   };
 
-  const upload = async (blob: Blob) => {
+  const upload = async (clip: Blob | Promise<Blob>) => {
     const hh = h;
     uploads++;
     const ac = new AbortController();
     aborters.add(ac);
     const timer = setTimeout(() => ac.abort(), UPLOAD_TIMEOUT_MS);
     try {
+      const blob = await clip;
       const r = await apiRaw("/api/voice/transcribe?lang=" + encodeURIComponent(langTag()), {
         method: "POST",
         headers: { "Content-Type": "audio/wav" },
@@ -3730,6 +3969,9 @@ export function serverRecognizer(
 
   const sendChunk = async (c: Phrase, blob: Blob, hh: RecognizerHandlers | null) => {
     try {
+      // With its pre-roll in front (the first chunk only; none: no wait).
+      const pre = joined(c, blob);
+      if (pre !== blob) blob = await pre;
       const r = await call(streamPath(c.sid!, "/chunk"), {
         method: "POST",
         headers: { "Content-Type": "audio/wav" },
@@ -3788,7 +4030,7 @@ export function serverRecognizer(
       if (h !== hh || !hh) return;
       if (!c.stream) {
         // Fell back before the stream took anything: the phrase is a clip.
-        if (c.heard && tail && tail.size > 44) void upload(tail);
+        if (c.heard && tail && tail.size > 44) void upload(joined(c, tail));
         return;
       }
       if (!c.sid) return; // its open failed (it fell back), or it was dropped
@@ -3841,6 +4083,14 @@ export function serverRecognizer(
     if (sid) abandon(sid);
   };
 
+  /** `blob`, the phrase's first audio to go, with its pre-roll in front
+   * (once; anything else as it is). */
+  const joined = (c: Phrase, blob: Blob): Promise<Blob> | Blob => {
+    const pre = c.pre;
+    c.pre = null;
+    return pre ? withPreRoll(pre, blob) : blob;
+  };
+
   /** End the current phrase and send it. */
   const endClip = () => {
     const c = cur;
@@ -3857,7 +4107,7 @@ export function serverRecognizer(
         if (token !== mine) return; // stop(): the clip is discarded
         token = null;
         // A clip the detector heard nothing in has no words to send.
-        if (c.heard && blob.size) void upload(blob);
+        if (c.heard && blob.size) void upload(joined(c, blob));
         if (want && !finishing) void clip();
         else maybeEnd();
       },
@@ -3884,6 +4134,7 @@ export function serverRecognizer(
       sent: false,
       trimS: 0,
       speechS: 0,
+      pre: null,
     };
     // Its stream opens while the microphone and the audio engine get ready.
     if (c.stream) openStream(c);
@@ -3899,7 +4150,12 @@ export function serverRecognizer(
     // The context the mic's click made and resumed (voiceAudioCtx): the
     // resume may still be in flight.
     const ctx = voiceAudioCtx();
-    if (ctx && ctx.state === "suspended") await ctx.resume().catch(() => {});
+    if (ctx && ctx.state === "suspended") {
+      await ctx.resume().catch(() => {});
+      // The start chime waited on this same resume (SpeechQueue.cue): it
+      // plays now, so the skip it is owed counts from now.
+      skipFromNow();
+    }
     if (token !== mine) return discard(c);
     micStream = s;
     micCtx = ctx;
@@ -3915,9 +4171,18 @@ export function serverRecognizer(
       failed("start-failed", "The audio engine isn't running — click the mic again");
       return;
     }
+    // The pre-roll runs on this stream from here (lib/voiceMic): what it
+    // holds now is the half second before this recording.
+    mic.roll(ctx);
+    const skip = Math.max(0, skipUntil - Date.now());
+    firstSkipMs = 0;
+    // Not after a barge-in or under the chime's skip (that audio is not the
+    // person's), nor while muted.
+    const pre = skip || muted ? null : mic.preRoll();
     // The silence detector: the recorder's RMS per block against a noise
-    // floor that follows the quiet moments.
-    let floor = 0;
+    // floor that follows the quiet moments — from the room's quiet as the
+    // pre-roll heard it, when there is one.
+    let floor = mic.quietFloor();
     let lastLoud = 0;
     let blockAt = 0; // the recording's time before this block
     const onLevel = (rms: number) => {
@@ -3930,6 +4195,8 @@ export function serverRecognizer(
       if (isLoud(rms, floor)) {
         if (!c.heard) {
           c.speechS = at;
+          // Speech from its first moments: it began before the recording.
+          if (at < PRE_ROLL_ONSET_S) c.pre = pre;
           h?.onSpeech?.();
           // Opened so long ago the server may have forgotten it: a new one.
           if (c.stream && c.sid && now - c.opened > STREAM_FRESH_MS) {
@@ -3950,7 +4217,6 @@ export function serverRecognizer(
       else pump(c);
     };
     try {
-      const skip = Math.max(0, skipUntil - Date.now());
       c.rec = startWavRecording(s, ctx, { targetRate: CLIP_RATE, onLevel, skipS: skip / 1000 });
     } catch {
       discard(c);
@@ -3966,6 +4232,29 @@ export function serverRecognizer(
         if (cur === c) endClip();
       }, CLIP_MAX_MS);
   };
+
+  // The microphone went away (unplugged, taken by the OS) mid-listen: the
+  // phrase it was recording ends (its words go), and the next one opens the
+  // microphone again — the default one now. Gone again within
+  // MIC_LOST_RETRY_MS: listening stops and says so (never a "Listening…"
+  // over a dead microphone).
+  mic.onLost(() => {
+    if (!want || !h) return;
+    const now = Date.now();
+    const again = now - lostAt < MIC_LOST_RETRY_MS;
+    lostAt = now;
+    if (again) {
+      if (cur) endClip();
+      want = false;
+      self.lastError = "the microphone went away";
+      h.onError("mic-lost", MIC_GONE_LINE);
+      maybeEnd();
+      return;
+    }
+    h.onNotice?.(MIC_LOST_LINE);
+    if (cur) endClip();
+    else if (!token) void clip();
+  });
 
   const self = {
     name: "server" as const,
@@ -3996,6 +4285,16 @@ export function serverRecognizer(
       self.stop();
       if (!self.available()) return false;
       skipUntil = Date.now() + Math.max(0, o.skipMs || 0);
+      firstSkipMs = Math.max(0, o.skipMs || 0);
+      // A cold context (resuming since the press): the chime waits for it,
+      // and so does the skip — even when the microphone opens later still.
+      const cold = audioCtx && audioCtx.state !== "running" ? audioCtx : null;
+      if (cold && firstSkipMs) {
+        const mine = handlers;
+        void whenRunning(cold).then((ok) => {
+          if (ok && h === mine) skipFromNow();
+        });
+      }
       muted = false;
       h = handlers;
       want = true;

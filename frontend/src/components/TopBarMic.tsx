@@ -119,6 +119,8 @@ import {
   spokenLine,
   sttEngine,
   talkKeyAction,
+  TALK_DEBOUNCE_MS,
+  MIC_PAUSED_LINE,
   ttsEngine,
   ttsVoiceKey,
   isNews,
@@ -184,9 +186,12 @@ const heard = new HeardTurns();
  * session you were not just talking to says where it is from (replyText). */
 const clock = new HeardClock();
 const speakingListeners = new Set<(on: boolean) => void>();
+/** A line's sound starts / ends (not its turn: lib/voiceDesktop SpeechQueue). */
+const audibleListeners = new Set<(on: boolean) => void>();
 const queue = new SpeechQueue(
   () => (ttsEngine(cfgNow) === "server" ? serverSp : browserSp),
-  (on) => speakingListeners.forEach((l) => l(on))
+  (on) => speakingListeners.forEach((l) => l(on)),
+  { onAudible: (on) => audibleListeners.forEach((l) => l(on)) }
 );
 
 /** Standby (the wake word) runs the level meter. */
@@ -420,6 +425,9 @@ export function TopBarMic() {
   const [cfg, setCfg] = useState<VoiceCfg | null>(null);
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(queue.busy);
+  /** A line is audible now (not just its turn): while listening, the
+   * recorder is muted for it — the button says so. */
+  const [sounding, setSounding] = useState(queue.audibleNow);
   const [caption, setCaptionState] = useState("");
   /** "Quiet." in the pill, for a second after "stop talking". */
   const [quiet, setQuiet] = useState(false);
@@ -471,6 +479,12 @@ export function TopBarMic() {
   const holding = useRef(false);
   /** The hotkey's own press is under way (a blur's `up` ends only that). */
   const keyHeld = useRef(false);
+  /** When that press went down (ms): a hold's tap is told from a hold. */
+  const keyDownAt = useRef(0);
+  /** "Hold to talk", the key tapped: the mic stays on; the next press stops. */
+  const keyLatched = useRef(false);
+  /** When listening last ended (ms): a press right after it is its bounce. */
+  const haltedAt = useRef(0);
   /** Reading a dialog or a question out and listening for the answer. */
   const hands = useRef<HandsFree | null>(null);
   /** The dictation hands-free listening opened (an ask read out). */
@@ -536,13 +550,16 @@ export function TopBarMic() {
       const want = sayAllMismatch(prefsRef.current.replies, c.say_all);
       if (want !== null) void syncSayAll(want);
     });
-    const l = (on: boolean) => {
-      setSpeaking(on);
+    const l = (on: boolean) => setSpeaking(on);
+    speakingListeners.add(l);
+    const a = (on: boolean) => {
+      setSounding(on);
       // A line while listening goes on: not the person — its audio is dropped
-      // (and 150 ms after), the phrase under way is not ended.
+      // (and 150 ms after), the phrase under way is not ended. From its first
+      // sound to its end: while it is synthesised the mic still hears you.
       if (gated.current) rec.current?.mute?.(on);
     };
-    speakingListeners.add(l);
+    audibleListeners.add(a);
     // Where speech runs moves with Settings (another window, an engine just
     // installed): re-read it when the window comes back, and after a settings
     // save here — every writer puts the server's echo into ["settings"].
@@ -554,6 +571,7 @@ export function TopBarMic() {
     });
     return () => {
       speakingListeners.delete(l);
+      audibleListeners.delete(a);
       window.removeEventListener("focus", onFocus);
       unsubSettings();
       clearTimeout(idleTimer.current);
@@ -716,6 +734,8 @@ export function TopBarMic() {
     }
     clearTimeout(idleTimer.current);
     deciding.current = null;
+    haltedAt.current = Date.now();
+    keyLatched.current = false;
     live.current = null;
     rec.current?.stop();
     rec.current = null;
@@ -850,6 +870,9 @@ export function TopBarMic() {
         // The server's own measure of the last accurate pass: how long the
         // first "over" waits for its final (lib/voiceDesktop FinalClock).
         finalMs: () => (r === serverRec ? serverRec.finalMs : null),
+        // A streamed phrase's end always comes: one taken from its guess by
+        // "over" ignores its late words until then (never typed or sent twice).
+        endsSurely: () => r === serverRec && serverRec.streaming,
       },
       { hint: opts.hint, continuous }
     );
@@ -859,7 +882,8 @@ export function TopBarMic() {
     publishMicState({ listening: true, title: into ? "" : opts.title || useUi.getState().focused || "" });
     d.show();
     armIdle();
-    meterStart();
+    // From the room's quiet as the pre-roll heard it (lib/voiceMic).
+    meterStart(serverRec.mic.quietFloor());
     const ok = r.start(
       {
         // Web Speech's interim words: typed as a guess, corrected as they change.
@@ -1296,7 +1320,9 @@ export function TopBarMic() {
 
   // The push-to-talk hotkey (the keymap's Talk action): works wherever the
   // focus is — a terminal pane too — and its keydown is the gesture that
-  // lets start() make the AudioContext.
+  // lets start() make the AudioContext. In "Hold to talk" a tap leaves the
+  // mic on (the next press stops it); a press while listening is still
+  // ending, or just after, starts nothing (lib/voiceDesktop talkKeyAction).
   const keyRef = useRef({ hold, start: userStart, finish });
   keyRef.current = { hold, start: userStart, finish };
   useEffect(() => {
@@ -1304,12 +1330,28 @@ export function TopBarMic() {
       const phase = (e as CustomEvent<{ phase?: TalkPhase }>).detail?.phase;
       if (phase !== "down" && phase !== "up") return;
       const k = keyRef.current;
-      const act = talkKeyAction(phase, k.hold, !!live.current, keyHeld.current);
+      // The key's press warms the mic as the button's does (the engine in
+      // this gesture, the microphone kept open, its pre-roll running).
+      if (phase === "down" && !live.current) warmMic(true);
+      const now = Date.now();
+      const act = talkKeyAction(phase, k.hold, !!live.current, keyHeld.current, {
+        heldMs: phase === "up" && keyHeld.current ? now - keyDownAt.current : undefined,
+        latched: keyLatched.current,
+        busy: !!deciding.current || now - haltedAt.current < TALK_DEBOUNCE_MS,
+      });
       if (phase === "up") keyHeld.current = false;
       // The options stay open: they show the level and the words too.
       if (act === "start") {
-        if (k.start(textField(document.activeElement)) && k.hold) keyHeld.current = true;
-      } else if (act === "finish") k.finish();
+        keyLatched.current = false;
+        if (k.start(textField(document.activeElement)) && k.hold) {
+          keyHeld.current = true;
+          keyDownAt.current = now;
+        }
+      } else if (act === "latch") keyLatched.current = true;
+      else if (act === "finish") {
+        keyLatched.current = false;
+        k.finish();
+      }
     };
     window.addEventListener(TALK_EVENT, onTalk);
     return () => window.removeEventListener(TALK_EVENT, onTalk);
@@ -1352,8 +1394,11 @@ export function TopBarMic() {
         : "Listening — click to stop (the words stay), Esc to take them back"
       : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") +
         (wake.on ? ", or say " + quoted(wakeName(words)) : "") + ", right-click for options";
+  // Listening, but a line plays: the mic is muted for it — the tooltip and
+  // the ring say so (the pill keeps "Listening…": the listen goes on).
+  const paused = listening && sounding;
   // The last line (an error, "Sent to…") is there on hover — never a box.
-  const title = caption && !listening ? base + "\n" + caption : base;
+  const title = paused ? MIC_PAUSED_LINE : caption && !listening ? base + "\n" + caption : base;
   const pill = micPill({ listening, speaking, quiet });
 
   // Under the mic, all of it inside the window (8 px from every edge; it
@@ -1377,6 +1422,7 @@ export function TopBarMic() {
             "tb-item",
             "mic-ring",
             listening && "listening",
+            paused && "muted",
             wake.on && !listening && "standby",
             speaking && !listening && "speaking",
             !supported && "unsupported",
@@ -1384,7 +1430,7 @@ export function TopBarMic() {
             .filter(Boolean)
             .join(" ")}
           title={title}
-          aria-label={listening ? "Listening — stop" : "Talk to " + who}
+          aria-label={paused ? MIC_PAUSED_LINE : listening ? "Listening — stop" : "Talk to " + who}
           aria-pressed={listening}
           aria-haspopup="menu"
           aria-expanded={menuOpen}

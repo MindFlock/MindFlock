@@ -2336,7 +2336,9 @@ describe("the push-to-talk hotkey", () => {
     expect(MIC).toContain("window.addEventListener(TALK_EVENT, onTalk)");
     expect(MIC).toContain("window.removeEventListener(TALK_EVENT, onTalk)");
     const on = blockFrom(MIC, "const onTalk = (", "window.addEventListener(TALK_EVENT");
-    expect(on).toContain("talkKeyAction(phase, k.hold, !!live.current, keyHeld.current)");
+    expect(on).toContain("talkKeyAction(phase, k.hold, !!live.current, keyHeld.current, {");
+    // The key's press warms the mic like the button's (lib/voiceSmooth tests the rest).
+    expect(on).toMatch(/if \(phase === "down" && !live\.current\) warmMic\(true\);/);
     // The same start() as a click: it makes/resumes the AudioContext synchronously.
     expect(on).toContain("k.start(textField(document.activeElement))");
     expect(on).toContain("k.finish()");

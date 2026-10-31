@@ -56,11 +56,25 @@ export class MicKeeper {
   private gen = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private hiddenTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The pre-roll on the open stream ({@link roll}). */
+  private ring: PreRollRing | null = null;
+  /** {@link onLost}'s listeners. */
+  private lostSubs = new Set<() => void>();
 
   constructor(
     private keepMs = KEEP_STREAM_MS,
-    private open: () => Promise<MediaStream> = () => navigator.mediaDevices.getUserMedia({ audio: true })
+    private open: () => Promise<MediaStream> = () => navigator.mediaDevices.getUserMedia({ audio: true }),
+    /** The page's AudioContext when it runs (null: none yet) — the pre-roll
+     * starts on it as soon as the stream opens. */
+    private ringCtx: () => AudioContext | null = () => null
   ) {
+    // A device unplugged (or switched off) under an open stream: its track
+    // may end without an event of its own — look on every device change.
+    if (typeof navigator !== "undefined")
+      navigator.mediaDevices?.addEventListener?.("devicechange", () => {
+        const st = this.stream;
+        if (st && (st.active === false || st.getTracks().some((t) => t.readyState === "ended"))) this.lost(st);
+      });
     if (typeof document === "undefined" || !document.addEventListener) return;
     document.addEventListener("visibilitychange", () => {
       clearTimeout(this.hiddenTimer);
@@ -96,7 +110,10 @@ export class MicKeeper {
         this.pending = null;
         if (this.stream && this.stream !== st) stopTracks(this.stream);
         this.stream = st;
+        // The microphone going away (unplugged, the OS taking it): its track ends.
+        for (const t of st.getTracks?.() || []) t.addEventListener?.("ended", () => this.lost(st));
         if (!this.users) this.arm();
+        this.roll();
         return st;
       },
       (err) => {
@@ -138,9 +155,59 @@ export class MicKeeper {
     this.gen++;
     this.pending = null;
     clearTimeout(this.timer);
+    this.ring?.stop();
+    this.ring = null;
     const s = this.stream;
     this.stream = null;
     if (s) stopTracks(s);
+  }
+
+  /** Keep the {@link PRE_ROLL_MS} pre-roll on the open stream through `ctx`
+   * (default: the page's, when it runs) — for as long as the stream stays
+   * open, dictation or not (a phrase's next one starts from it). Nothing
+   * without an open stream and a running context; never throws. */
+  roll(ctx: AudioContext | null = this.ringCtx()): void {
+    const s = this.live();
+    if (!s || !ctx || ctx.state !== "running") return;
+    if (this.ring && this.ring.stream === s && this.ring.ctx === ctx) return;
+    this.ring?.stop();
+    this.ring = startPreRoll(s, ctx);
+  }
+
+  /** What the microphone heard in the last `ms` before now (16 kHz mono), or
+   * null with no pre-roll running. Kept in the page: sent only by the
+   * recording that asks for it. */
+  preRoll(ms = PRE_ROLL_MS, rate = PRE_ROLL_RATE): Float32Array | null {
+    const r = this.ring;
+    return r && r.stream === this.live() ? r.last(ms, rate) : null;
+  }
+
+  /** The room's quiet as the pre-roll heard it — its quietest block's RMS
+   * (0: no pre-roll): a recording's noise floor starts there, not at its
+   * first block (a press that lands mid-word would make the word the floor). */
+  quietFloor(): number {
+    const r = this.ring;
+    return r && r.stream === this.live() ? r.floor() : 0;
+  }
+
+  /** `cb` runs when the open stream's microphone goes away (its track
+   * ended: unplugged, taken by the OS) — the stream is dropped first, so
+   * {@link get} opens a new one (the system's default microphone now). */
+  onLost(cb: () => void): () => void {
+    this.lostSubs.add(cb);
+    return () => {
+      this.lostSubs.delete(cb);
+    };
+  }
+
+  private lost(st: MediaStream): void {
+    if (st !== this.stream) return;
+    clearTimeout(this.timer);
+    this.ring?.stop();
+    this.ring = null;
+    this.stream = null;
+    stopTracks(st);
+    this.lostSubs.forEach((cb) => cb());
   }
 
   /** {@link release}, unless a recording holds it. */
@@ -152,6 +219,136 @@ export class MicKeeper {
     clearTimeout(this.timer);
     if (!this.stream) return;
     this.timer = setTimeout(() => this.releaseIdle(), this.keepMs);
+  }
+}
+
+// --- the pre-roll ------------------------------------------------------------ //
+
+/** The pre-roll: while the microphone stays open, the last this-many ms it
+ * heard are kept in the page, so a phrase whose first syllable came before
+ * its recording started (the next phrase after a pause, a press that lands
+ * mid-word) is sent with it. OpenAI's realtime VAD pads 300 ms, Pipecat 500. */
+export const PRE_ROLL_MS = 500;
+/** A phrase whose speech is heard this early in its recording (s) started
+ * before it: the pre-roll goes in front of it. Later, its own lead-in has it. */
+export const PRE_ROLL_ONSET_S = 0.3;
+/** The pre-roll's rate: the recordings' (whisper's) 16 kHz. */
+export const PRE_ROLL_RATE = 16_000;
+/** The pre-roll's block: half the recorder's, so at most ~40 ms (48 kHz)
+ * not yet delivered is missing between it and a recording that starts. */
+const RING_BLOCK = 2048;
+
+interface PreRollRing {
+  stream: MediaStream;
+  ctx: AudioContext;
+  stop(): void;
+  last(ms: number, rate: number): Float32Array | null;
+  floor(): number;
+}
+
+/** Average `src` (at `from` Hz) down to `to` Hz — a box filter over each
+ * output sample's span: enough for half a second of lead-in (it is speech's
+ * first syllable, not music), and synchronous. */
+export function downsample(src: Float32Array, from: number, to: number): Float32Array {
+  if (from === to || !src.length) return src;
+  const n = Math.floor((src.length * to) / from);
+  const out = new Float32Array(n);
+  const step = from / to;
+  for (let i = 0; i < n; i++) {
+    const a = Math.floor(i * step);
+    const b = Math.max(a + 1, Math.min(src.length, Math.floor((i + 1) * step)));
+    let sum = 0;
+    for (let j = a; j < b; j++) sum += src[j];
+    out[i] = sum / (b - a);
+  }
+  return out;
+}
+
+/** The ring on `stream`: a ScriptProcessor keeping the last
+ * {@link PRE_ROLL_MS} (and a block) of samples and each block's RMS. Null
+ * when the audio engine can't (a context without nodes). */
+function startPreRoll(stream: MediaStream, ctx: AudioContext): PreRollRing | null {
+  try {
+    const src = ctx.createMediaStreamSource(stream);
+    const proc = ctx.createScriptProcessor(RING_BLOCK, 1, 1);
+    const zero = ctx.createGain();
+    zero.gain.value = 0;
+    const keep = Math.round((PRE_ROLL_MS / 1000) * ctx.sampleRate) + RING_BLOCK;
+    let blocks: Array<{ pcm: Float32Array; rms: number }> = [];
+    let frames = 0;
+    proc.onaudioprocess = (e: AudioProcessingEvent) => {
+      const pcm = e.inputBuffer.getChannelData(0).slice();
+      blocks.push({ pcm, rms: rmsOf(pcm) });
+      frames += pcm.length;
+      while (blocks.length > 1 && frames - blocks[0].pcm.length >= keep) frames -= blocks.shift()!.pcm.length;
+    };
+    // Chrome runs a ScriptProcessor only when it reaches the destination:
+    // through a zero gain, the microphone stays out of the speakers.
+    src.connect(proc);
+    proc.connect(zero);
+    zero.connect(ctx.destination);
+    return {
+      stream,
+      ctx,
+      stop() {
+        proc.onaudioprocess = null;
+        blocks = [];
+        frames = 0;
+        for (const node of [src, proc, zero] as AudioNode[]) {
+          try {
+            node.disconnect();
+          } catch {
+            /* already gone */
+          }
+        }
+      },
+      last(ms, rate) {
+        if (!frames) return null;
+        let want = Math.min(frames, Math.round((ms / 1000) * ctx.sampleRate));
+        const out = new Float32Array(want);
+        for (let i = blocks.length - 1; i >= 0 && want > 0; i--) {
+          const b = blocks[i].pcm;
+          const n = Math.min(want, b.length);
+          out.set(b.subarray(b.length - n), want - n);
+          want -= n;
+        }
+        return downsample(out, ctx.sampleRate, rate);
+      },
+      floor() {
+        return blocks.length ? Math.min(...blocks.map((b) => b.rms)) : 0;
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** `wav` (16-bit PCM mono at `rate`, as lib/wavRecorder encodes it) with
+ * `pre` (at that rate) in front of its samples. Never throws: anything it can't
+ * read goes as it was. */
+export async function withPreRoll(pre: Float32Array | null, wav: Blob, rate = PRE_ROLL_RATE): Promise<Blob> {
+  if (!pre?.length) return wav;
+  try {
+    const src = new DataView(await wav.arrayBuffer());
+    const tag = (at: number) => String.fromCharCode(...[0, 1, 2, 3].map((i) => src.getUint8(at + i)));
+    if (src.byteLength < 44 || tag(0) !== "RIFF" || tag(36) !== "data" || src.getUint16(22, true) !== 1 || src.getUint16(34, true) !== 16 || src.getUint32(24, true) !== rate)
+      return wav;
+    const data = src.byteLength - 44;
+    const add = pre.length * 2;
+    const out = new Uint8Array(44 + add + data);
+    out.set(new Uint8Array(src.buffer, src.byteOffset, 44), 0);
+    const v = new DataView(out.buffer);
+    v.setUint32(4, 36 + add + data, true);
+    v.setUint32(40, add + data, true);
+    for (let i = 0, at = 44; i < pre.length; i++, at += 2) {
+      const s = pre[i];
+      const c = s > 1 ? 1 : s < -1 ? -1 : s === s ? s : 0;
+      v.setInt16(at, c < 0 ? Math.round(c * 32768) : Math.round(c * 32767), true);
+    }
+    out.set(new Uint8Array(src.buffer, src.byteOffset + 44, data), 44 + add);
+    return new Blob([out], { type: wav.type || "audio/wav" });
+  } catch {
+    return wav;
   }
 }
 
@@ -329,10 +526,11 @@ function kick() {
   if (!raf) raf = schedule(frame);
 }
 
-/** A dictation starts listening: the meter runs (a new noise floor). */
-export function meterStart(): void {
+/** A dictation starts listening: the meter runs (a new noise floor — `seed`,
+ * the room's quiet as the pre-roll heard it, else learnt from the first block). */
+export function meterStart(seed = 0): void {
   active = true;
-  floor = 0;
+  floor = seed > 0 ? seed : 0;
   target = 0;
   lastLoud = 0;
   setHearing(false);
