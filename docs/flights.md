@@ -5231,3 +5231,81 @@ Behaviour (`judge` is pure; `run` does the side effects):
 - The dialog: the kinds dto drives the fields; a field with `dynamic: "stops_before"` (new on `StepKindField`) gets its options from the line: every stop before the loop (in a group: its sub-steps first), labelled by title, `""` labelled "the first stop". `until` gets the `when` field's editor if round 15 made one, else a text field with the grammar hint.
 - The shelf's default blocks gain **Loop** after Wait (`DEFAULT_KINDS`); the palette/catalog show it under Work.
 - Tests: flightDiagram (the edge), flightsUi/skyBranches (the arc markup), stopDialog (dynamic options), stopCatalog (defaults).
+
+### As built: round 16 loop backend
+
+`backend/web/core/flight_kinds/loop.py` (kind `loop`) + the core in
+`flights.py` (`loop_target`, `loop_back`, an `apply` branch for a `loop`
+action, `"looped"` in `HISTORY_EVENTS`, `_f(..., dynamic=)`) + the provider
+hook `clear_context_command()`. Tests: `tests/unit/test_flights_loop.py`
+(38); the select-options pin in `test_flights.py` accepts a dynamic select.
+
+**The dto row** (`GET /api/flights/kinds`): `{kind: "loop", label: "Loop",
+actor: "robot", family: "work", risk: [], default_on_fail: "halt",
+default_title: "Loop ×3", summary: "Send the flight back to an earlier stop,
+N times, every so often"}`, fields in this order:
+
+| name | type | default | notes |
+|---|---|---|---|
+| `back_to` | select | `""` | `options: []`, `dynamic: "stops_before"` (a new optional key on any field row, passed through `kinds_dto` unchanged); a stop id, `""` = the first stop (of the loop's group when it has one) |
+| `times` | int | 3 | 0 = until stopped; strict: 0–1000 |
+| `every_minutes` | int | 0 | strict: 0–10080 (7 days) |
+| `wait_limits` | bool | true | |
+| `fresh` | bool | false | |
+| `until` | text | `""` | a `when` expression, stored canonical; placeholder `e.g. judge is yes (empty = by count)` |
+
+Strict config errors name `steps[i].config.until` / `.back_to` (not an id
+shape) / `.times` / `.every_minutes`. Lenient (a block on the ground) keeps a
+half-typed `until` as typed; the takeoff check refuses it, and a stored one
+the judge cannot parse fails the stop `"until: <why>"`. Titles: `Loop ×3`,
+`Loop ×3 every 30 min`, `Loop ×5 every 2 h`, `Loop until <until>`, `Loop
+forever`, `Loop every 15 min` (times 0 + an interval).
+
+**Detail keys** on the loop step: `runs` (runs completed; 0 on arrival, +1
+per jump back), `last_start` (epoch s, when the current run began; run 1's
+is the target stop's `since`, else the flight's `started`), `target` (the
+stop id the last/next jump goes to), `next_at` (epoch s of the next run while
+waiting on the interval; dropped while waiting on the limit and on a jump),
+`receipt` on done (`"looped 3 times"` / `"looped 1 time"` / `"stopped by:
+<until>"`). The step's `note` while it flies: `"run 2 of 3 — back to
+<title>"` (`"run 502 — back to …"` for times 0), `"next run in 12 min"`,
+`"waiting on the usage limit"`, `"checking <until>"`.
+
+**History**: one `looped` event per jump back, on the loop step, note `"run 2
+of 3 — back to <title>"`; the steps it resets get no events of their own
+(their `started` / `done` follow as they fly again).
+
+**How it flows** (why a new action): a plug-in's `run` gets a COPY of the
+flight (the driver records outcomes through `_record_outcome` → `apply`), so
+the jump cannot happen inside `run`. First arrival: the core's generic `run`
+starts the step and `loop.run` records `runs: 0` + `last_start`; later passes
+ask the judge, whose repeat is `{"action": "run", "phase": "loop"}` (a phase,
+so `_mark_intent` does not restart the step and wipe its detail); `loop.run`
+then delivers the clear command when `fresh` and returns `{"action": "loop",
+"to": <stop id>}`, which `apply` hands to `loop_back` (re-resolving the
+target; a missing one halts with "nothing to repeat"). The loop step stays
+`running`, so the judge is asked again when `_advance` reaches it.
+
+**Edge cases**: a Loop first in line (or first in its group with `""`), a
+`back_to` after it or missing → fails `"nothing to repeat"` (halt). `times:
+1` is done on arrival (never jumps). `until` wins over `times` and is checked
+first; its facts come from the loop's own `observe` (`flight_driver.
+when_facts` with the loop as the step, so `judge is …` reads judges before
+the loop). `wait_limits` reads `obs["session"]["limited"]` or, since the
+driver reads a non-agent row for a loop, `obs["loop"]["limited"]` (observe
+reads the agent row only then). A limit wait does not count a run. A halt
+point inside the repeated stops is armed again; the target itself is let
+through, as a jump onto it is. Skip on the current Loop carries on past it,
+Remove is the usual `stop removed` pause, a backward jump onto an earlier
+stop resets the loop (`runs` from 0) — no special casing. Nested loops: an
+inner Loop inside the outer's run is reset with it, so it counts afresh each
+outer run. `fresh` with a provider whose `clear_context_command()` is None
+sends nothing. Providers: `BaseProvider` None, Claude `"/clear"`, Codex
+`"/new"` (checked against the Codex 0.164 TUI's slash list: "start a new chat
+during a conversation"; its `/clear` also wipes the terminal). The command
+goes through `_deliver` (the session's queue) before the jump, so it lands
+ahead of the repeated Agent stop's prompt.
+
+An attached `POST /api/flights/start {title, steps: [agent, loop]}` puts the
+cursor on the Loop (the session is already doing the Agent stop), so a
+`times: 2, fresh: true` flight types `/clear` then the prompt once.
