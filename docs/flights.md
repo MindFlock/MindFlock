@@ -5231,3 +5231,88 @@ Behaviour (`judge` is pure; `run` does the side effects):
 - The dialog: the kinds dto drives the fields; a field with `dynamic: "stops_before"` (new on `StepKindField`) gets its options from the line: every stop before the loop (in a group: its sub-steps first), labelled by title, `""` labelled "the first stop". `until` gets the `when` field's editor if round 15 made one, else a text field with the grammar hint.
 - The shelf's default blocks gain **Loop** after Wait (`DEFAULT_KINDS`); the palette/catalog show it under Work.
 - Tests: flightDiagram (the edge), flightsUi/skyBranches (the arc markup), stopDialog (dynamic options), stopCatalog (defaults).
+
+### As built: round 16 loop UI
+
+The `loop-ui` task of round 16 (2026-10-31), built against the contract's
+dto (mocked in tests; the backend landed in parallel). Files:
+`lib/flightDiagram.ts`, `lib/flights.ts`, `lib/stopCatalog.ts`,
+`FlywayCanvas.tsx/.css`, `Bird.tsx`, `StopParts.tsx`, `StopDialog.tsx/.css`,
+`useSessionLine.tsx`, `useGroundedLine.tsx`. Tests: new
+`flightLoop.test.ts` (23), plus cases in `flightDiagram`, `flightsUi`,
+`skyBranches`, `stopDialog`, `stopCatalog`, `stopShelf`, `skyBirds`.
+
+**The box.** `StopIcon` `loop` is ↻ (an open circle with its arrowhead, the
+stroke style). `stopSummary` of a loop: "3 runs" / "until stopped" / "until
+<until>", then "every 1 h 30 min" (`minutesWord`), "fresh context". A
+`DiagramNode` of a loop carries `loop: LoopMark` = `{runs, times, state}`
+(`loopMark(step, rec)`: `runs` = `detail.runs`, `times` = config (default 3,
+0 = forever), state `pending` → `running` (record running / waiting, or any
+run done) → `done` (done / skipped)). While the loop is at the cursor, or has
+sent the flight back (`runs > 0`), its second line is `loopLine`: the
+judge's note first — "waiting on the usage limit" → "waiting on the limit",
+"next run in 12 min" → "run 2 of 3 · next in 12 min" — else the counter "run
+2 of 3" / "run 2 — until <until>" / "run 5". **A Loop that sent the flight
+back keeps its record `running`**, so `flightStops` draws it `pending` while
+the cursor is before it (one bird, one current box: the stop the flight is
+back at); it stays editable then (the server decides what a PATCH may change).
+
+**The edge.** `loopEdges(line)` → `{kind: "loop", from: <loop node>, to:
+<target>, loop: LoopMark}` for every main-row loop stop: `back_to` names a
+stop BEFORE it, `""` is the line's first stop, or the first sub-step of the
+loop's own group; missing / not before → no edge. `flywayDiagram`,
+`flightDiagram` and `sessionDiagram` (only with the full flight — the
+row-only fallback has no steps) add them after the line. `foldRun` now
+spreads the edge (`{...e, from, to}`), so folding re-aims an arc at the box
+that holds its target: a collapsed group → the group box, the flown pill →
+the pill; a loop folded into the same box as its target draws nothing.
+`reorderDiagram` keeps them (a drag's preview). `DiagramEdgeKind` gains
+`"loop"`; `DiagramEdge.loop` / `Wire.loop` + `Wire.apex`.
+
+**The arc.** `layoutDiagram` draws a loop edge with `loopArc`: horizontal, a
+cubic from the loop box's top centre (`x + w/2, y`) up and back down onto the
+target's top centre (`y - 2`, the arrowhead), its control points 4/3 ×
+`loopRise(span)` above the higher box top so the apex sits the rise above
+the line — `loopRise` = 18 + 0.16 × span, clamped 30–84 px; vertical (a
+phone), out of the loop box's right edge, round the right of the column,
+into the target's right edge (the layout's width grows to hold it).
+`Layout.rise` = how far the arcs reach above y = 0 plus `LOOP_PILL_ROOM`
+(14); the canvas's `top` = max(its old 26 / pad, `ceil(rise) + pad`).
+Markup in the existing `.fl-wires` SVG: `<path class="fl-wire fl-wire-loop
+fl-edge-loop fl-loop-<pending|running|done>" d="M … C …"
+marker-end="url(#…-arrow)">` (key `from>to>loop`). CSS: pending dashed
+(`5 4`, accent 50 %), running solid `--tone-working` 2.2px, done muted.
+**The pill**: `<span class="fl-loop-pill fl-loop-<state>" style="transform:
+translate(apex) translate(-50%,-50%) scale(calc(1 / var(--sky-z, 1)))"
+title="Run 2 of 3" aria-label="Run 2 of 3">2 / 3</span>` on the stage —
+`loopPill`: `runs+1 / times`, "2 / ∞" for forever, nothing while the loop is
+still ahead and has never run; `loopPillTitle` ("Run 2 of 3", "Run 2 — it
+loops until stopped", "Looped: run 3 of 3").
+
+**The dialog.** `StepKindField.dynamic?: "stops_before"`. `stopsBefore(steps,
+step)` (lib/flights): `{value: "", label: "the first stop"}` ("the first
+stop of <group>" when the step is a sub-step), then every step before it in
+flight order `{value: id, label: title, group?: name}`; a step not on the
+line yet sees the whole line. `StopForm` takes `lineSteps` and hands a
+dynamic field `choices`; `StopField` draws it as `StopsBeforeField`: chip
+rows (`ChipRow`, `.fl-pick`; Flights never uses a native `<select>`) in
+`.fl-stops-before[data-dynamic="stops_before"]`, a group's sub-steps in a
+`.fl-stops-before-group` row under `.fl-stops-before-name`; a saved value no
+longer before the loop shows as its own chip ("a stop no longer before this
+one") until it is changed. A loop's `until` is `WhenField` (now taking
+`label` / `placeholder` / `hint`; aria-label "Until", the server's
+placeholder, the ⓘ grammar and the live check). `StopDialog.lineSteps` ←
+`useSessionLine` (`flight?.steps`; also the pane's Flight tab) and
+`useGroundedLine` (`flight.steps`); `StopInspector` passes it through too.
+
+**The shelf.** `DEFAULT_KINDS` = agent, you, ship, verify, wait, **loop** —
+shown once the server lists the kind; the palette groups it by the server's
+`family`.
+
+**Seen in the browser** (a scratch build + the playwright harness, a 6-stop
+line back at stop 2 of run 2): the arc rises over Judge it / Perch from the
+Loop box onto "Improve the sky" with its arrowhead, solid green, "2 / 3" on
+the apex; the box reads "Loop ×3 every 30 min · run 2 of 3"; the bird sits
+on Screenshot; the shelf shows Loop after Wait; the dialog lists the first
+stop + the four stops before the loop as chips and Until as the mono when
+field.
