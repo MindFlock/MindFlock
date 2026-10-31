@@ -120,6 +120,7 @@ import {
   sttEngine,
   talkKeyAction,
   TALK_DEBOUNCE_MS,
+  MIC_PAUSED_LINE,
   ttsEngine,
   ttsVoiceKey,
   isNews,
@@ -424,6 +425,9 @@ export function TopBarMic() {
   const [cfg, setCfg] = useState<VoiceCfg | null>(null);
   const [listening, setListening] = useState(false);
   const [speaking, setSpeaking] = useState(queue.busy);
+  /** A line is audible now (not just its turn): while listening, the
+   * recorder is muted for it — the button says so. */
+  const [sounding, setSounding] = useState(queue.audibleNow);
   const [caption, setCaptionState] = useState("");
   /** "Quiet." in the pill, for a second after "stop talking". */
   const [quiet, setQuiet] = useState(false);
@@ -549,6 +553,7 @@ export function TopBarMic() {
     const l = (on: boolean) => setSpeaking(on);
     speakingListeners.add(l);
     const a = (on: boolean) => {
+      setSounding(on);
       // A line while listening goes on: not the person — its audio is dropped
       // (and 150 ms after), the phrase under way is not ended. From its first
       // sound to its end: while it is synthesised the mic still hears you.
@@ -865,6 +870,9 @@ export function TopBarMic() {
         // The server's own measure of the last accurate pass: how long the
         // first "over" waits for its final (lib/voiceDesktop FinalClock).
         finalMs: () => (r === serverRec ? serverRec.finalMs : null),
+        // A streamed phrase's end always comes: one taken from its guess by
+        // "over" ignores its late words until then (never typed or sent twice).
+        endsSurely: () => r === serverRec && serverRec.streaming,
       },
       { hint: opts.hint, continuous }
     );
@@ -1386,8 +1394,11 @@ export function TopBarMic() {
         : "Listening — click to stop (the words stay), Esc to take them back"
       : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") +
         (wake.on ? ", or say " + quoted(wakeName(words)) : "") + ", right-click for options";
+  // Listening, but a line plays: the mic is muted for it — the tooltip and
+  // the ring say so (the pill keeps "Listening…": the listen goes on).
+  const paused = listening && sounding;
   // The last line (an error, "Sent to…") is there on hover — never a box.
-  const title = caption && !listening ? base + "\n" + caption : base;
+  const title = paused ? MIC_PAUSED_LINE : caption && !listening ? base + "\n" + caption : base;
   const pill = micPill({ listening, speaking, quiet });
 
   // Under the mic, all of it inside the window (8 px from every edge; it
@@ -1411,6 +1422,7 @@ export function TopBarMic() {
             "tb-item",
             "mic-ring",
             listening && "listening",
+            paused && "muted",
             wake.on && !listening && "standby",
             speaking && !listening && "speaking",
             !supported && "unsupported",
@@ -1418,7 +1430,7 @@ export function TopBarMic() {
             .filter(Boolean)
             .join(" ")}
           title={title}
-          aria-label={listening ? "Listening — stop" : "Talk to " + who}
+          aria-label={paused ? MIC_PAUSED_LINE : listening ? "Listening — stop" : "Talk to " + who}
           aria-pressed={listening}
           aria-haspopup="menu"
           aria-expanded={menuOpen}

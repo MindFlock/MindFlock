@@ -658,6 +658,9 @@ export const STOPPED_LINE = "Stopped listening";
 /** The caption after "stop talking" — shown {@link HUSH_CAPTION_MS}. */
 export const HUSH_LINE = "Quiet.";
 export const HUSH_CAPTION_MS = 1000;
+/** The mic's tooltip while listening and a line plays (the recorder muted
+ * for it): what it hears now is not typed. */
+export const MIC_PAUSED_LINE = "Speaking — your mic is paused until it ends";
 
 /** The pill beside the top bar's mic — the one thing the bar says about
  * voice, and only ever one of these: {@link HUSH_LINE} for
@@ -749,6 +752,11 @@ export const finalClock = new FinalClock();
 /** A phrase taken from its guess: its own late words and end are ignored —
  * for at most this long (a phrase whose end never comes). */
 export const SWALLOW_MAX_MS = 5000;
+/** …but a recognizer that always reports a phrase's end (the server's
+ * stream: its /end, or its failure, within the request's 45 s timeout) is
+ * waited for that long: a late end after a backlog is the same phrase, and
+ * would otherwise be typed and SENT a second time. */
+export const SWALLOW_STREAM_MAX_MS = 50_000;
 
 /** `o` with `erase` only when there is one (outcomes stay minimal). */
 const withErase = <T extends object>(o: T, erase: string): T & { erase?: string } => (erase ? { ...o, erase } : o);
@@ -1101,6 +1109,10 @@ export interface LiveHooks {
    * `final_ms`), if it has one: the first "over" of a page waits about that
    * long for its final ({@link FinalClock}). */
   finalMs?(): number | null;
+  /** The recognizer reports every phrase's end (the server's stream): a
+   * phrase taken from its guess is ignored until its end, not just
+   * {@link SWALLOW_MAX_MS}. */
+  endsSurely?(): boolean;
 }
 
 /** The spoken confirmations of the dictation's actions — about what YOU did,
@@ -1292,7 +1304,8 @@ export class LiveDictation {
    * says of it. */
   private swallow(): void {
     clearTimeout(this.swallowing);
-    this.swallowing = setTimeout(() => (this.swallowing = undefined), SWALLOW_MAX_MS);
+    const max = this.hooks.endsSurely?.() ? SWALLOW_STREAM_MAX_MS : SWALLOW_MAX_MS;
+    this.swallowing = setTimeout(() => (this.swallowing = undefined), max);
   }
 
   /** The phrase was just ended early for "over": watch the voice (every
@@ -3614,6 +3627,12 @@ export const BARGE_FRESH_MS = 1000;
 /** A barge-in lifts the mute with this much of the muted audio kept: the
  * detector's {@link BARGE_POLLS} reads plus the word's soft start. */
 export const BARGE_REWIND_MS = BARGE_POLL_MS * BARGE_POLLS + 150;
+/** The microphone went away mid-listen: the caption's line while it is
+ * opened again (the system's default microphone now). */
+export const MIC_LOST_LINE = "The microphone went away — listening on the default one";
+/** …and when it goes away again this soon after, listening stops with this. */
+export const MIC_GONE_LINE = "The microphone went away — check it, then click the mic";
+export const MIC_LOST_RETRY_MS = 3000;
 
 /** Hears for the person while the app talks. What reaches the microphone
  * of the app's own voice — what the browser's echo cancellation leaves of
@@ -3741,6 +3760,8 @@ export function serverRecognizer(
   let bargeTimer: ReturnType<typeof setInterval> | undefined;
   let bargeTap: { src: MediaStreamAudioSourceNode; an: AnalyserNode; buf: Float32Array<ArrayBuffer>; stream: MediaStream } | null = null;
   let lastBargeAt = 0;
+  /** When the microphone last went away mid-listen (ms). */
+  let lostAt = 0;
   /** The microphone and the context the phrase records with. */
   let micStream: MediaStream | null = null;
   let micCtx: AudioContext | null = null;
@@ -4211,6 +4232,29 @@ export function serverRecognizer(
         if (cur === c) endClip();
       }, CLIP_MAX_MS);
   };
+
+  // The microphone went away (unplugged, taken by the OS) mid-listen: the
+  // phrase it was recording ends (its words go), and the next one opens the
+  // microphone again — the default one now. Gone again within
+  // MIC_LOST_RETRY_MS: listening stops and says so (never a "Listening…"
+  // over a dead microphone).
+  mic.onLost(() => {
+    if (!want || !h) return;
+    const now = Date.now();
+    const again = now - lostAt < MIC_LOST_RETRY_MS;
+    lostAt = now;
+    if (again) {
+      if (cur) endClip();
+      want = false;
+      self.lastError = "the microphone went away";
+      h.onError("mic-lost", MIC_GONE_LINE);
+      maybeEnd();
+      return;
+    }
+    h.onNotice?.(MIC_LOST_LINE);
+    if (cur) endClip();
+    else if (!token) void clip();
+  });
 
   const self = {
     name: "server" as const,

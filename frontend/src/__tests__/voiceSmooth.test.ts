@@ -16,12 +16,21 @@
  *     first makes it a plain word, as before;
  *  5. the router's first phrase shows in the caption at once (muted);
  *  6. "Hold to talk": a tap leaves the mic on; a press while listening is
- *     ending (or just ended) starts nothing. */
+ *     ending (or just ended) starts nothing;
+ *  7. (judge) a microphone that goes away mid-listen is noticed: opened
+ *     again once, else listening stops and says so; a phrase taken by "over"
+ *     is never typed and sent twice by its late end; the button tells
+ *     listening from "muted while a line plays". */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CHIME_LATE_MS,
   CONTROL_TAIL_MS,
+  MIC_GONE_LINE,
+  MIC_LOST_LINE,
+  MIC_LOST_RETRY_MS,
+  SWALLOW_MAX_MS,
+  SWALLOW_STREAM_MAX_MS,
   Confirmer,
   LiveDictation,
   OVER_EARLY_QUIET_MS,
@@ -39,7 +48,7 @@ import {
   type Speaker,
 } from "../lib/voiceDesktop";
 import { MicKeeper, PRE_ROLL_MS, PRE_ROLL_ONSET_S, PRE_ROLL_RATE, downsample, withPreRoll } from "../lib/voiceMic";
-import { code } from "./sourceText";
+import { code, src } from "./sourceText";
 
 const mocks = vi.hoisted(() => ({
   apiRaw: vi.fn(),
@@ -704,5 +713,175 @@ describe("the talk key: a hold's tap leaves the mic on; a press while it ends do
     // The gated mute follows the line's sound, not its turn.
     expect(MIC).toMatch(/const a = \(on: boolean\) => \{[\s\S]*?if \(gated\.current\) rec\.current\?\.mute\?\.\(on\);/);
     expect(MIC).toContain("{ onAudible: (on) => audibleListeners.forEach((l) => l(on)) }");
+  });
+});
+
+// --- 7. the judge's baseline: mic loss, double sends, the true state ---------- //
+
+/** A stream whose one track can end (`end()`), as an unplugged mic's does. */
+function endingStream() {
+  const handlers: Array<() => void> = [];
+  const track = {
+    readyState: "live",
+    stop: vi.fn(),
+    addEventListener: (ev: string, cb: () => void) => void (ev === "ended" && handlers.push(cb)),
+  };
+  const stream = { active: true, getTracks: () => [track] } as unknown as MediaStream;
+  return {
+    stream,
+    track,
+    end: () => {
+      track.readyState = "ended";
+      handlers.forEach((h) => h());
+    },
+  };
+}
+
+describe("a microphone that goes away is noticed", () => {
+  it("MicKeeper: its track ending drops the stream and tells onLost — the next get() opens a new one", async () => {
+    const opened: Array<ReturnType<typeof endingStream>> = [];
+    const mic = new MicKeeper(60_000, async () => {
+      const e = endingStream();
+      opened.push(e);
+      return e.stream;
+    });
+    let lost = 0;
+    mic.onLost(() => void lost++);
+    const first = await mic.get();
+    opened[0].end();
+    expect(lost).toBe(1);
+    expect(mic.isWarm).toBe(false);
+    expect(opened[0].track.stop).toHaveBeenCalled();
+    const second = await mic.get();
+    expect(second).not.toBe(first);
+    opened[0].end(); // the old stream again: not this one
+    expect(lost).toBe(1);
+  });
+
+  it("devicechange with the open stream's track ended (no event of its own): lost too", async () => {
+    let onChange: () => void = () => {};
+    vi.stubGlobal("navigator", { mediaDevices: { addEventListener: (_: string, cb: () => void) => void (onChange = cb) } });
+    const e = endingStream();
+    const mic = new MicKeeper(60_000, async () => e.stream);
+    let lost = 0;
+    mic.onLost(() => void lost++);
+    await mic.get();
+    onChange(); // a device came or went, ours still live
+    expect(lost).toBe(0);
+    e.track.readyState = "ended";
+    onChange();
+    expect(lost).toBe(1);
+  });
+
+  function rig() {
+    vi.stubGlobal("window", { AudioContext: NodeCtx });
+    vi.stubGlobal("navigator", { language: "en-US", userAgent: "", mediaDevices: { getUserMedia: vi.fn() } });
+    const ctx = voiceAudioCtx() as unknown as NodeCtx;
+    ctx.state = "running";
+    const opened: Array<ReturnType<typeof endingStream>> = [];
+    const mic = new MicKeeper(60_000, async () => {
+      const e = endingStream();
+      opened.push(e);
+      return e.stream;
+    });
+    const recs: Array<{ stream: unknown; stop: ReturnType<typeof vi.fn>; opts: { onLevel?: (r: number) => void } }> = [];
+    mocks.startWavRecording.mockImplementation((stream: unknown, _c: unknown, opts) => {
+      const rec = { stream, opts, stop: vi.fn(() => Promise.resolve(new Blob([new Uint8Array(3244)]))), cancel: vi.fn(), take: () => null, seconds: () => 1 };
+      recs.push(rec);
+      return rec;
+    });
+    mocks.apiRaw.mockResolvedValue({ ok: true, status: 200, json: async () => ({ text: "half a thought" }) });
+    const ev: string[] = [];
+    const h: RecognizerHandlers = {
+      onInterim: () => {},
+      onFinal: (t) => void ev.push("final:" + t),
+      onNotice: (t) => void ev.push("notice:" + t),
+      onError: (c, d) => void ev.push("error:" + c + ":" + d),
+      onEnd: () => void ev.push("end"),
+    };
+    const r = serverRecognizer({ stream: () => false, mic });
+    return { r, h, ev, opened, recs };
+  }
+
+  it("mid-listen: the phrase it was recording goes (its words typed), the next records on a new microphone", async () => {
+    const t = rig();
+    t.r.start(t.h);
+    await vi.waitFor(() => expect(t.recs).toHaveLength(1));
+    t.recs[0].opts.onLevel!(0.004);
+    t.recs[0].opts.onLevel!(0.3); // speech: the clip has words
+    t.opened[0].end();
+    expect(t.ev).toContain("notice:" + MIC_LOST_LINE);
+    await vi.waitFor(() => expect(t.recs).toHaveLength(2));
+    expect(t.recs[1].stream).toBe(t.opened[1].stream);
+    await vi.waitFor(() => expect(t.ev).toContain("final:half a thought"));
+    expect(t.ev).not.toContain("end");
+    t.r.stop();
+  });
+
+  it(`gone again within ${MIC_LOST_RETRY_MS / 1000} s: listening stops and says why — never “Listening…” over a dead mic`, async () => {
+    const t = rig();
+    t.r.start(t.h);
+    await vi.waitFor(() => expect(t.recs).toHaveLength(1));
+    t.opened[0].end();
+    await vi.waitFor(() => expect(t.recs).toHaveLength(2));
+    t.opened[1].end();
+    expect(t.ev).toContain("error:mic-lost:" + MIC_GONE_LINE);
+    await vi.waitFor(() => expect(t.ev).toContain("end"));
+    expect(t.recs).toHaveLength(2);
+  });
+});
+
+describe("a phrase taken by “over” is never typed and sent twice by its late end", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mocks.instApi.mockResolvedValue({ ok: true });
+  });
+  const hooks = (over: Partial<LiveHooks> = {}): LiveHooks => ({
+    caption: () => {},
+    halt: () => {},
+    route: async () => false,
+    activity: () => "idle",
+    replies: () => false,
+    submitted: () => {},
+    quietMs: () => CONTROL_TAIL_MS,
+    endPhrase: () => {},
+    ...over,
+  });
+
+  it("a streamed phrase's /end 8 s late (a chunk backlog): ignored — before, typed and Entered again after 5 s", async () => {
+    expect(SWALLOW_MAX_MS).toBe(5000);
+    expect(SWALLOW_STREAM_MAX_MS).toBeGreaterThan(45_000);
+    const t = session();
+    const d = new LiveDictation(t, hooks({ endsSurely: () => true }), { continuous: true });
+    await d.stream("", "ship it over");
+    await vi.advanceTimersByTimeAsync(1600); // no final: the fast words go
+    expect(mocks.instApi).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(6400);
+    await d.stream("ship it over", ""); // the backlog's late words…
+    void d.flush("", "ship it over"); // …and its end
+    await vi.advanceTimersByTimeAsync(500);
+    expect(mocks.instApi).toHaveBeenCalledTimes(1);
+    expect(t.keys).toEqual(["ship it"]);
+    // The next phrase is heard as ever.
+    void d.flush("", "and push it over");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(mocks.instApi).toHaveBeenCalledTimes(2);
+  });
+
+  it("wired: the server's stream reports every end", () => {
+    const MIC = code("components/TopBarMic.tsx");
+    expect(MIC).toContain("endsSurely: () => r === serverRec && serverRec.streaming,");
+  });
+});
+
+describe("the button tells listening from muted-while-a-line-plays", () => {
+  it("a line audible while listening: the ring goes faint and dashed, the tooltip says the mic is paused", () => {
+    const MIC = code("components/TopBarMic.tsx");
+    expect(MIC).toMatch(/const a = \(on: boolean\) => \{\s*setSounding\(on\);/);
+    expect(MIC).toContain("const paused = listening && sounding;");
+    expect(MIC).toContain('paused && "muted",');
+    expect(MIC).toContain("aria-label={paused ? MIC_PAUSED_LINE :");
+    const css = src("components/TopBarMic.css");
+    expect(css).toMatch(/\.mic-ring\.listening\.muted::after \{\s*opacity: 0\.25;\s*border-style: dashed;/);
   });
 });

@@ -58,6 +58,8 @@ export class MicKeeper {
   private hiddenTimer: ReturnType<typeof setTimeout> | undefined;
   /** The pre-roll on the open stream ({@link roll}). */
   private ring: PreRollRing | null = null;
+  /** {@link onLost}'s listeners. */
+  private lostSubs = new Set<() => void>();
 
   constructor(
     private keepMs = KEEP_STREAM_MS,
@@ -66,6 +68,13 @@ export class MicKeeper {
      * starts on it as soon as the stream opens. */
     private ringCtx: () => AudioContext | null = () => null
   ) {
+    // A device unplugged (or switched off) under an open stream: its track
+    // may end without an event of its own — look on every device change.
+    if (typeof navigator !== "undefined")
+      navigator.mediaDevices?.addEventListener?.("devicechange", () => {
+        const st = this.stream;
+        if (st && (st.active === false || st.getTracks().some((t) => t.readyState === "ended"))) this.lost(st);
+      });
     if (typeof document === "undefined" || !document.addEventListener) return;
     document.addEventListener("visibilitychange", () => {
       clearTimeout(this.hiddenTimer);
@@ -101,6 +110,8 @@ export class MicKeeper {
         this.pending = null;
         if (this.stream && this.stream !== st) stopTracks(this.stream);
         this.stream = st;
+        // The microphone going away (unplugged, the OS taking it): its track ends.
+        for (const t of st.getTracks?.() || []) t.addEventListener?.("ended", () => this.lost(st));
         if (!this.users) this.arm();
         this.roll();
         return st;
@@ -177,6 +188,26 @@ export class MicKeeper {
   quietFloor(): number {
     const r = this.ring;
     return r && r.stream === this.live() ? r.floor() : 0;
+  }
+
+  /** `cb` runs when the open stream's microphone goes away (its track
+   * ended: unplugged, taken by the OS) — the stream is dropped first, so
+   * {@link get} opens a new one (the system's default microphone now). */
+  onLost(cb: () => void): () => void {
+    this.lostSubs.add(cb);
+    return () => {
+      this.lostSubs.delete(cb);
+    };
+  }
+
+  private lost(st: MediaStream): void {
+    if (st !== this.stream) return;
+    clearTimeout(this.timer);
+    this.ring?.stop();
+    this.ring = null;
+    this.stream = null;
+    stopTracks(st);
+    this.lostSubs.forEach((cb) => cb());
   }
 
   /** {@link release}, unless a recording holds it. */
