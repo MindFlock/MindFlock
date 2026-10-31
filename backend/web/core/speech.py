@@ -1535,6 +1535,13 @@ class TtsChain:
         with self._lock:
             self._down.pop(key, None)
         _logger.info("voice: %s is back", key)
+        if backend.kind == "tts":
+            # It just said a word within the probe's time: that is a warm.
+            try:
+                what = "%s:%s" % (backend.id, backend.ready()[1])
+                _WARMED["tts"] = ("loaded", what, _now())
+            except Exception:  # noqa: BLE001 — a record, never a failure
+                pass
 
     # -- choosing -------------------------------------------------------- #
     @staticmethod
@@ -1700,7 +1707,10 @@ def warm(kind: str = "stt", prime: bool = True) -> str:
 def _warm_due(kind: str) -> bool:
     """Whether :func:`warm_in_background` has anything to do for ``kind``: a
     model-cache backend with a key not resident, or a host / OS engine not
-    warmed in the last :data:`REWARM_SECONDS` with its current setup."""
+    warmed with its current setup in the last :data:`REWARM_SECONDS` — or,
+    when that last warm FAILED, in the last :data:`HOST_DOWN_SECONDS` (a
+    failure used to hold the next warm off for ten minutes, so a Voice Lab
+    started meanwhile met its cold load on a real line)."""
     backend, detail = _warm_target(kind)
     if backend is None:
         return False
@@ -1709,11 +1719,10 @@ def _warm_due(kind: str) -> bool:
         with _LOCK:
             return not all(k in _CACHE for k in keys())
     last = _WARMED.get(kind)
-    return not (
-        last is not None
-        and last[1] == "%s:%s" % (backend.id, detail)
-        and _now() - last[2] < REWARM_SECONDS
-    )
+    if last is None or last[1] != "%s:%s" % (backend.id, detail):
+        return True
+    window = REWARM_SECONDS if last[0] == "loaded" else HOST_DOWN_SECONDS
+    return _now() - last[2] >= window
 
 
 def warm_in_background(

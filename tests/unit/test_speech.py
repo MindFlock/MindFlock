@@ -2007,3 +2007,37 @@ class TestFfmpegLookup:
         speech.invalidate()  # after the one-click install
         speech.ffmpeg_path()
         assert len(calls) == 5
+
+
+class TestRewarmAfterAFailure:
+    def test_a_failed_host_warm_is_due_after_the_down_window(self, chain, monkeypatch):
+        """Not REWARM_SECONDS: a Voice Lab started a minute after a failed
+        warm is warmed before a real line meets its cold load."""
+        chain.piper.ok = False  # nothing to warm meanwhile
+        http = _Http()
+        http.raise_ = urllib.error.URLError("refused")
+        monkeypatch.setattr(speech, "_http", http)
+        assert speech.warm("tts").startswith("skipped: could not reach")
+        chain.c.mark_up(chain.host)  # e.g. the user restarted Voice Lab
+        assert speech._warm_due("tts") is False  # just tried
+        chain.now[0] += speech.HOST_DOWN_SECONDS + 1
+        assert speech._warm_due("tts") is True  # long before REWARM_SECONDS
+        http.raise_, http.ctype, http.body = None, "audio/wav", b"RIFF"
+        assert speech.warm("tts") == "loaded"
+        chain.now[0] += speech.HOST_DOWN_SECONDS + 1
+        assert speech._warm_due("tts") is False  # a good warm holds 600 s
+        chain.now[0] += speech.REWARM_SECONDS
+        assert speech._warm_due("tts") is True
+
+    def test_a_passing_probe_counts_as_a_warm(self, chain, monkeypatch):
+        http = _Http()
+        http.raise_ = urllib.error.URLError("refused")
+        monkeypatch.setattr(speech, "_http", http)
+        chain.c.speak(chain.host, "One.")
+        http.raise_, http.ctype, http.body = None, "audio/mpeg", b"ID3"
+        chain.now[0] += speech.HOST_DOWN_SECONDS + 1
+        chain.c.down_reason(chain.host)  # the probe runs (inline) and passes
+        assert chain.c.down_reason(chain.host) == ""
+        assert speech.describe()["warm"]["tts"] == "loaded"
+        assert speech._warm_due("tts") is False
+        assert len(http.calls) == 2  # the line's attempt + the probe

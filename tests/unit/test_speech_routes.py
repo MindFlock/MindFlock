@@ -561,6 +561,36 @@ class TestSpeakChain:
         assert routes._INFLIGHT == {}
 
 
+class TestClientHungUp:
+    """An aborted upload (Starlette's ClientDisconnect mid-body) ends the
+    request quietly — it used to escape as a 500 with a traceback."""
+
+    class _Gone:
+        headers = {"content-type": "audio/wav"}
+
+        async def stream(self):
+            from starlette.requests import ClientDisconnect
+
+            yield b"RIFF"
+            raise ClientDisconnect()
+
+    def test_capped_body(self):
+        import asyncio
+
+        r = asyncio.run(routes._capped_body(self._Gone()))
+        assert r.status_code == 400
+        assert b"hung up" in r.body
+
+    def test_transcribe_and_chunk(self, fakes, monkeypatch):
+        import asyncio
+
+        r = asyncio.run(routes.voice_transcribe(self._Gone()))
+        assert r.status_code == 400 and fakes.stt.calls == []
+        monkeypatch.setattr(speech_stream, "get_stream", lambda sid: object())
+        r = asyncio.run(routes.voice_stream_chunk("s1", self._Gone()))
+        assert r.status_code == 400
+
+
 # --------------------------------------------------------------------------- #
 # POST /api/voice/clear-key
 # --------------------------------------------------------------------------- #

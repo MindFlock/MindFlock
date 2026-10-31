@@ -67,6 +67,7 @@ from typing import Dict, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
+from starlette.requests import ClientDisconnect
 
 from backend.web.core import auth as _auth
 from backend.web.core import speech as _speech
@@ -219,20 +220,29 @@ def _too_big() -> JSONResponse:
     )
 
 
-async def _capped_body(request: Request) -> Optional[bytes]:
-    """The raw body, or ``None`` once it passes :data:`MAX_AUDIO_BYTES`.
+async def _capped_body(request: Request) -> "bytes | Response":
+    """The raw body — or the response that ends the request: 413 once it
+    passes :data:`MAX_AUDIO_BYTES`, 400 when the client hung up mid-upload
+    (an aborted chunk or clip: Starlette's ``ClientDisconnect``, which
+    escaped as a 500 with a traceback in the log; nobody reads the answer).
     Read in chunks and stopped at the cap: a chunked upload carries no
     Content-Length, and ``request.body()`` would hold all of it first."""
     length = request.headers.get("content-length", "")
     if length.isdigit() and int(length) > MAX_AUDIO_BYTES:
-        return None
+        return _too_big()
     chunks: list = []
     size = 0
-    async for chunk in request.stream():
-        size += len(chunk)
-        if size > MAX_AUDIO_BYTES:
-            return None
-        chunks.append(chunk)
+    try:
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > MAX_AUDIO_BYTES:
+                return _too_big()
+            chunks.append(chunk)
+    except ClientDisconnect:
+        return JSONResponse(
+            {"error": "the client hung up before the audio arrived"},
+            status_code=400,
+        )
     return b"".join(chunks)
 
 
@@ -375,8 +385,8 @@ async def _clip(request: Request):
             status_code=415,
         )
     audio = await _capped_body(request)
-    if audio is None:
-        return _too_big()
+    if isinstance(audio, Response):
+        return audio
     if not audio:
         return JSONResponse({"error": "the clip is empty"}, status_code=400)
     # select() → ready() may touch files or PATH: never on the event loop.
@@ -487,8 +497,8 @@ async def voice_stream_chunk(sid: str, request: Request) -> JSONResponse:
             status_code=415,
         )
     audio = await _capped_body(request)
-    if audio is None:
-        return _too_big()
+    if isinstance(audio, Response):
+        return audio
     try:
         samples = _stream.decode_wav(audio)
     except ValueError as err:
