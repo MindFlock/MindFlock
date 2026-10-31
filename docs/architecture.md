@@ -170,12 +170,16 @@ FastAPI app `backend.web.server:app`. Key pieces:
   streaming `base.en`) resident while configured, a piper voice unloaded
   after 30 idle minutes — and both kinds warmed at boot and whenever a voice
   client fetches `GET /api/voice` (`speech.warm_in_background`; a local
-  OpenAI-compatible voice host gets one throwaway synthesis). A voice host
-  that fails or runs past its budget falls back to piper, one voice per
-  reply, and is re-checked only by a background probe
-  (`speech.TtsChain`); the two whisper tiers are scheduled one job per
-  model with the accurate pass first (`speech_stream.Lane`) and split the
-  cores between them (`speech.whisper_threads`). The
+  OpenAI-compatible voice host gets one throwaway synthesis). A line the
+  voice host cannot say in its queue-aware budget falls back to piper, one
+  voice per reply (`speech.TtsChain`); only a DEAD host (refused, reset,
+  5xx, no audio, hung) is marked down and re-checked by a background probe,
+  a merely slow one stays healthy, and a serial host (Voice Lab's F5) gets
+  our requests one at a time through a lane per host. The two whisper tiers
+  are scheduled one job per model with the accurate pass first and every
+  wait bounded (`speech_stream.Lane`), split the cores between them
+  (`speech.whisper_threads`), and the fast tier pads its encoder input to
+  10 s instead of 30 s. The
   streaming recogniser's accurate pass is biased towards the voice words,
   the open sessions' titles and a MindFlock vocabulary
   (`speech.recognition_hints`); for the titles `speech.session_titles`

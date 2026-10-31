@@ -258,7 +258,17 @@ a session first*).
   the phrase is ended at the recogniser, so the final is on its way while the
   rest of the 250 ms is waited out — the two waits overlap instead of
   stacking; the voice coming back before the 250 ms makes “over” a plain
-  word again (typed, nothing sent). The wait lasts only as long as finals
+  word again (typed, nothing sent). Both quiets are **heard** quiet
+  (`voiceMic.meterQuietMs()` = the meter's latest block − its last loud
+  block), never wall-clock time: after the early end no block reaches the
+  meter until the next recording's first one (100–200 ms), and that blind
+  seam — or a 12 s clip cap's, or a stream restart's — used to count as
+  quiet, so *“move it over… to the left”* sent *“move it over”*. Heard quiet
+  freezes across a seam and counts again once blocks arrive, so it comes in
+  recorder blocks (~85 ms at 48 kHz: the early end takes two quiet blocks,
+  “met” three); the voice is judged back iff a loud block came after the
+  early end (`LiveHooks.loudAt`, the meter's `lastLoudAt`), and the *over →
+  sent* clock starts from that last loud block too. The wait lasts only as long as finals
   have been taking: half again the typical round trip plus 100 ms, within
   300 ms..1.5 s (`overWaitMs`; `OVER_FINAL_WAIT_MS` is the most, for the
   first "over" of a page before anything is known — `/end`'s `final_ms`,
@@ -314,11 +324,24 @@ a session first*).
   (`MicKeeper`) it keeps a 500 ms pre-roll ring at 16 kHz
   (`PRE_ROLL_MS`); a phrase whose speech starts in its first 0.3 s
   (`PRE_ROLL_ONSET_S`) gets the ring in front of its first chunk or clip
-  (never under a chime or a barge skip), and the silence detector's and the
+  (never under a chime or a barge skip) — but only the audio heard **since
+  the last phrase ended**: every phrase end (silence, an early “over”, the
+  12 s cap, a lost mic, finishing) cuts the ring (`MicKeeper.cut()`, at the
+  top of `endClip`), so a quick next phrase gets just the gap since then
+  instead of the previous phrase's tail again (*“…over”* then *“ver to the
+  left”*), and a press long after the last phrase still gets the full
+  500 ms. Audio after the stopped recorder's last block and before the cut
+  (at most one block, ~85 ms) goes in neither phrase — the price of never
+  repeating words. The silence detector's and the
   meter's noise floor start from the ring's quietest block rather than the
   first block (a press that lands mid-word would make the word the floor).
+  The microphone is opened with `{echoCancellation: true,
+  noiseSuppression: true}` asked for explicitly (`MIC_CONSTRAINTS` in
+  `lib/voiceMic.ts`; the Settings mic test still asks `{audio: true}`), so
+  the reply playing from the speakers is not what the recorder hears.
 - **A microphone that goes away** (unplugged, taken by the OS: the track's
-  `ended`, or a `devicechange` that leaves no live track) is noticed
+  `ended`, or a `devicechange` that leaves no live track — a merely
+  `muted` track is not counted) is noticed
   (`MicKeeper.onLost`): the phrase being recorded ends (its words go), the
   caption says *The microphone went away — listening on the default one*
   and the next phrase records from the default microphone; if it goes away
@@ -434,8 +457,10 @@ those are the phone page's preference. With no server recogniser ready the mic
 never tries Web Speech: it says *Speech needs the server's engine here:
 Settings → Voice*. With no server voice, replies use the app's own
 speechSynthesis. A server voice host that is down (Voice Lab not running,
-or too slow for its budget) is the **server's** problem first: it says the
-line with piper instead, one voice per reply, and `server_ready.tts_engine`
+refusing, erroring or hung) or too slow for a line's budget is the
+**server's** problem first: it says the line with piper instead, one voice
+per reply — a slow host is not marked down, so the next reply is in its
+voice again — and `server_ready.tts_engine`
 / `tts_fallback` / `tts_down` (and the Settings line, from `tts_detail`)
 say so; only with no fallback ready does `server_ready.tts` turn false and
 the app use speechSynthesis (see [web-api.md](web-api.md#voice-talking-to-a-session-from-the-phone), *The voice falls
@@ -7577,18 +7602,28 @@ replaced in the box by `final`, the caret at the end, **before** the phrase
 is decided: *over*, *over and out*, *disregard*, a command, a dialog's answer all
 read the accurate words. Without `final` (an older server, one model) the
 fast words stand. Diagnostics' *Last transcribe* line says *final 1.2 s*
-(and *(corrected)* when it changed the words). A 409 on the open
-(the server does not stream after all: a clip per phrase until `GET
+(and *(corrected)* when it changed the words). A 409 on the open that says
+the server does not stream after all (a clip per phrase until `GET
 /api/voice` says otherwise) or any failed request turns the phrase into a
 clip — the words so far stay, the audio the stream had not answered is
-transcribed in one piece.
+transcribed in one piece. **The server's stream cap is passing:** a 409
+for it (*N voice streams are already open: end one first*, told apart by
+its text — `voiceStreamFull`) never turns streaming off; the open is asked
+again every 300 ms (`VOICE_STREAM_FULL_RETRY_MS`) for up to 1.5 s
+(`VOICE_STREAM_FULL_MAX_MS`), and if the cap is still full that one phrase
+goes as a clip and the next one streams again (`voice.rec.streamFull =
+{at, n}`). An open also waits — at most 400 ms
+(`VOICE_STREAM_DELETE_WAIT_MS`, `deletesSettled`) — for the stream
+`DELETE`s already on their way, so a slot freed a moment ago is free when
+it lands; after *disregard* the dropped stream's `DELETE` now goes before
+the carried phrase's open.
 **Starting fast, and seeing it hear you** (server recognition). The stream
 opens *with* the tap, alongside the microphone's start-up, and nothing is
 uploaded before your first word: the page keeps only the last 300 ms before
 it (the word's soft start) and sends that with the first 150 ms of speech,
 so the first words show — and are typed — about 0.25 s after you start
 talking (measured in the headless harness with a 120 ms recognizer; a real
-whisper pass adds its own time, ~0.3–0.6 s with the streaming model). The
+whisper pass adds its own time, ~0.2–0.3 s with the streaming model padded to 10 s). The
 **microphone stays warm** for 90 s after a phrase (`VOICE_KEEP_STREAM_MS`),
 for as long as a reply is on its
 way back (the reply opens listening by itself), and 15 s after the page is
@@ -7600,9 +7635,31 @@ recording carries straight into the next phrase (`carryFrom`), its stream
 opening while the last phrase's `/end` and the router run; the next listen
 takes it (`carryTake`) with no `getUserMedia`, no new graph and no gap. A
 carried phrase nobody takes is dropped after 10 s (`VOICE_CARRY_MAX_MS`);
-stopping drops it at once. **A lost mic** (its track ends, or a
+stopping drops it at once. **The carry is its own listen's only:** it is
+keyed to the listen that recorded it (`voiceCarryKey(mode, gen, box)` →
+`prompt#<gen>#<box id|compose>`), and only **dictation** carries — a
+dialog's or an answer's listen has the key `""`, so it never carries and
+never takes one. A start whose key differs drops the carried phrase (graph
+down, stream `DELETE`d; `voice.rec.carryRefused = {had, want, heard}`), so
+a dialog or answer listen always starts on a fresh graph and a fresh
+stream: a *yes* said while dictating can never answer the dialog that
+opens next. A session switch or an *over* send stays in the same dictation
+listen (same `gen`) and keeps the carry; any new listen (the ask sheet, a
+dialog, a tap) bumps `gen`. **A lost mic** (its track ends, or a
 `devicechange` leaves no live track) is noticed: any carried phrase is
 dropped and the mic asked for again, instead of listening to a dead track.
+**A muted track is a pause, not a loss** (another app or a call took the
+mic, a Bluetooth route change, Siri): the track's `mute` keeps the listen
+and the phrase open — the muted blocks record nothing and the silence
+clock stands still, so the phrase does not end on the pause — and the
+strip says *Mic paused…* (the caption *Mic paused — another app or a call
+has it. Listening resumes when it's back.*, `VOICE_MIC_PAUSED_TEXT`);
+`unmute` resumes, the words so far back in the caption, and what is said
+after joins the same phrase (`voice.rec.micPaused` / `micPauses`). A
+`devicechange` ends a phrase only for an ended track. A start reuses a
+muted stream while its pause is recent; one muted since before the listen,
+or for more than 5 s (`VOICE_MIC_PAUSE_REASK_MS` — a page iOS suspended),
+is asked for again with `getUserMedia`.
 A restart scheduled after a listen ends belongs to that listen only — any
 other start in between makes it stale (`restartTok`), so listening is never
 restarted twice. While you speak, a **ring round the
@@ -7790,7 +7847,22 @@ deafened, has what it reports meanwhile dropped), and listening goes on
 after it. Only **mid-sentence** — words in the last 1.5 s and a voice in
 the last 250 ms — does the queue hold, until the quiet; with the phone's own
 recognizer, which reports no level, the hold lasts until 800 ms after its
-last word (`VOICE_MID_QUIET_PHONE_MS`). A tap on the mic
+last word (`VOICE_MID_QUIET_PHONE_MS`). **A line also waits for the pause
+at the moment it would sound** (`voiceSpeakWhenQuiet`): a server clip can
+take 1.4–20 s to make, and one that came back while you were talking used
+to start under your word with the recorder deafened. Before each clip's
+`play()` (and each phone-voice sentence, which covers the server voice's
+phone fallbacks too) a line said over the listen is held while you are
+talking — the server recorder's level within the last 250 ms
+(`VOICE_MID_QUIET_MS`, so a first syllable counts before any word is
+transcribed), or a phone-recognizer word within 800 ms — polled every
+50 ms (`VOICE_HOLD_POLL_MS`) for at most 10 s (`VOICE_HOLD_MAX_MS`, a room
+that never goes quiet); a line cut meanwhile never sounds. The recorder
+keeps streaming while a line is held (`voice.rec.held = {n, ms,
+waiting}`), and the strip still says *Speaking…*. The phone recognizer's
+echo filter (`voiceEchoing`) likewise drops what it hears only once the
+line has **sounded** (its first clip or sentence), while it is audible or
+in its echo tail — before the first sound, what it hears is you. A tap on the mic
 while such a line plays cuts it (barge-in) and the listen goes on; the
 reply's own answer-listen and hands-free do not apply (it never stopped
 listening). A listen that is not continuous still holds the queue.

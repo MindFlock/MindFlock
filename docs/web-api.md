@@ -1435,27 +1435,67 @@ marks the host **down** (below), so the warm loads piper instead — the
 voice that will actually speak meanwhile. A warm never blocks or raises;
 `GET /api/voice`'s `warm` reports the last result per kind.
 
-**The voice falls back** (`core.speech.TtsChain`, `TTS_CHAIN`). The
-configured voice must answer within `host_budget(text)` = 1.5 s + 0.06 s a
-character, capped at 20 s (`TTS_TIMEOUT`) — F5 renders the whole clip
-before its first byte, ~0.035 s a character on a GPU, so that is ~1.7× its
-pace. A host that refuses the connection, passes its budget, answers 5xx or
-sends no audio is **down**: the same line goes to piper (`FALLBACK_TTS =
-("local",)`) and the host is skipped for 45 s (`HOST_DOWN_SECONDS`) — the
-lines after it go straight to piper, at no cost. A 4xx, a missing key or a
-bad voice name is the request's fault: its 502 comes back with no fallback.
-Health is kept per host (backend id + URL). After the window the next line,
-or a `GET /api/voice`, starts **one** background probe on a daemon thread
-(*Ready.* within `PROBE_TIMEOUT` = 3 s; a probe never runs on a request):
-the probe, not the clock, brings the host back, and a passing one also
-counts as its warm. **One voice per reply:** once a line falls back, every
-line does until the host has passed its probe *and* the chain is quiet —
-no line in flight and 2.5 s (`REPLY_GAP_SECONDS`) past the moment the last
-fallback line should have finished playing (its length at 14 characters a
-second). The clients ask for the next sentence while one plays, so a
-reply's lines arrive back to back and the switch back lands in the pause
-between replies. With no fallback ready the failure stands (502), and only
-then does a client use its own voice. `server_ready.tts_engine` /
+**The voice falls back** (`core.speech.TtsChain`, `TTS_CHAIN`). Each line
+has a budget, `host_budget(text)` = 1.5 s + 0.06 s a character, capped at
+20 s (`TTS_TIMEOUT`) — F5 renders the whole clip before its first byte,
+~0.035 s a character on a GPU, so that is ~1.7× its pace. A host that fails
+is either **dead** or **slow**, and only a dead one is marked down:
+
+- **Dead** — the connection is refused, reset (an `http.client` error
+  included) or times out connecting; the host answers 5xx or sends no audio;
+  or it is **hung**: nothing back for `host_hung_after(text)` =
+  max(`TTS_TIMEOUT`, 2 × `host_budget`) on a line it had to itself (the read
+  timeout's error says *`<host>` sent nothing back in N s*). The same line
+  goes to piper (`FALLBACK_TTS = ("local",)`) and the host is skipped for
+  45 s (`HOST_DOWN_SECONDS`) — the lines after it go straight to piper, at
+  no cost.
+- **Slow** — alive, but this line is not back within its budget
+  (`speech._Slow`). The line goes to piper and the host stays healthy: no
+  down window, no probe, and the next reply starts on the host again. The
+  request stays at the host as an **orphan** that holds our lane until the
+  host answers (a late answer is logged and discarded; a hung, 5xx or reset
+  one marks the host down then).
+
+A 4xx, a missing key or a bad voice name is the request's fault: its 502
+comes back with no fallback. Health is kept per host (backend id + URL).
+
+**One lane per serial host.** A host that renders one line at a time
+(`Backend.serial`, true for `openai` — Voice Lab's F5 is serial) gets our
+requests **one at a time, in order** (`TtsChain.send`, a daemon drain thread
+per host): lines, the background probe and the boot warm
+(`OpenAITTS.warm`) all queue there, so the time a line waits behind our own
+requests is ours to see instead of eating its budget inside the host's
+socket queue. The socket timeout is `host_hung_after`; the line's budget is
+enforced by the caller waiting on the lane. The budget is **queue-aware**: a
+line gives up at max(now, the deadline of the live line ahead) +
+`host_budget(this)` — its own budget plus the budgets of the live lines
+ahead, since those are being played meanwhile and the wait is not silence.
+A line behind something nobody is playing (an orphan, the warm, the probe)
+gets only its own budget — that wait *is* silence. A line with **no
+fallback ready** waits for the host, however long (the owner's voice late
+beats a 502). Measured with a fake serial host at Voice Lab's rate: *Yes.* /
+*On it.* / *Done.* pipelined 50 ms apart came back at 1.4 / 2.75 / 4.1 s,
+all from the host, which stayed up — before the lane two of them were piper
+and the host was marked down. The lane cannot tell listeners apart: a
+second client's line of the same reply counts the first client's lines as
+"ahead".
+
+After a dead host's window the next line, or a `GET /api/voice`, starts
+**one** background probe (*Ready.* within `PROBE_TIMEOUT` = 3 s, queued in
+the host's lane; a probe never runs on a request): the probe, not the
+clock, brings the host back, and a passing one also counts as its warm.
+
+**One voice per reply:** a reply changes voice at most once, host → piper,
+and only between two of its lines. Once a line falls back — dead or slow —
+every line does until the chain is quiet: no line in flight and 2.5 s
+(`REPLY_GAP_SECONDS`) past the moment the last fallback line should have
+finished playing (its length at 14 characters a second), and, after a dead
+host, its probe has passed. A slow line also wakes the lane: every line of
+that reply still waiting there leaves it for piper without reaching the
+host. The clients ask for the next sentence while one plays, so a reply's
+lines arrive back to back and the switch back lands in the pause between
+replies. With no fallback ready the failure stands (502), and only then
+does a client use its own voice. `server_ready.tts_engine` /
 `tts_fallback` / `tts_down` and `/speak`'s `X-Voice-*` headers report it.
 
 The configured backend (`voice.stt_backend` / `voice.tts_backend`) is the
@@ -1478,7 +1518,7 @@ PowerShell lookup behind the built-in engine's probe is cached per `PATH`
 |---|---|---|
 | GET | `/api/voice` | Where speech runs and what the server offers: `{stt: "phone"\|"server", tts: "phone"\|"server", approve_dialogs, agent_words, ask_popup, backends: {stt: [ids], tts: [ids]}, server_ready: {stt, tts, detail, stt_backend, stt_detail, tts_backend, tts_detail, stt_stream, tts_engine, tts_fallback, tts_down, final_ms}, system: {available, platform: "windows"\|"wsl"\|"mac"\|"none", detail, voices: [names], recognizers: [culture tags], stt_quality: "basic"\|"good"\|"none"}, stream_model, warm: {stt, tts}, words: {send, end, clear, stop, hush: [phrases], wake: str}, words_default: {…the same shape…}, pronounce: [{say, as}], final: {samples, typical_ms, p95_ms, expect_ms, timeout_ms} (how long `/end` has lately waited for the accurate pass over the last 20 phrases — the median and the 95th percentile, 0 before the first — `expect_ms` what `server_ready.final_ms` carries: the median plus max(250 ms, twice the median absolute deviation) once three phrases are in, the bench's 1400 ms before, held to [300 ms, the timeout] — and the server's own cap: wait for `/end` about that long, not a fixed worst case), configure_allowed}` — `approve_dialogs` is `voice.approve_dialogs`, `words` the effective voice keywords (`core.voice_words.effective`: the defaults overlaid with the person's `voice.words`, every kind present — see **Voice words** below) and `words_default` ours (`voice_words.DEFAULTS`, for Settings' reset), `pronounce` the person's own pronunciations (`voice.pronounce`, normalised by `core.spoken_text.normalize_pronounce`; `[]` when there are none) which every client applies first when it shapes a line for its own voice (`lib/spokenText.ts` `shapeForSpeech(text, pronounce)`, the phone page's `window.MindFlockSpokenText.shape`) — the server does the same inside `speak`, `agent_words` is `notifications.ntfy_agent_words`, `ask_popup` is `notifications.ask_popup` (the phone pops a session's question up when on), `backends` lists `system` first, `server_ready` the offline verdict on the saved fields (whether each kind has a ready backend, which, and why not; `detail` is the one-paragraph summary; `stt_stream` whether the ready recognition backend streams — only `local` does — so a client knows before `POST /api/voice/stream`; `tts` true while SOME engine will speak — the configured one, or the fallback while it is down (**The voice falls back**, below) — and false when the configured host is down with no fallback ready, so a client goes to its own voice up front instead of a 502 per line; `tts_backend` stays the configured id (Settings keys its rows on it) while `tts_engine` names the engine that will actually speak (`"openai"`, `"piper"`, `"system"`, or e.g. `"piper (fallback)"`; `""` with no voice backend), `tts_fallback` whether that is the fallback, `tts_down` why the configured host is down (`""` when healthy) — and while it falls back `tts_detail` says so: *tts-1 (Donna) at 127.0.0.1:8770 — speaking with <piper voice> while it is down (could not reach …)*), `stream_model` the faster-whisper model the live transcript runs for English (`"base.en"` by default; `""` when the ready backend does not stream), `warm` each kind's last warm-up (`"loaded"`, `"loading"`, `"skipped: <why>"` — not local, a remote host, not installed, memory low, the host failed — or `""` before the first), `system` the built-in engine's own report (`available` when it can recognise or speak; `voices` the OS voice names a Settings picker offers, `recognizers` the recognition cultures such as `en-US`, `stt_quality` a per-platform constant — `"basic"` on Windows/WSL, where the only recognizer that reads a recorded file offline is SAPI 5's desktop dictation, `"good"` on macOS — that the Settings screen uses to recommend the local models; on Windows/WSL `server_ready.stt_detail` for the `system` backend also ends with `basic accuracy — install local models for better recognition`), `configure_allowed` whether **this caller** may use the owner-only routes (`install-local`, `clear-key`; the same answer as `auth.may_configure`) so a page can disable those buttons — the route itself stays readable by everyone — no network, no model load, the built-in engine probed once per process. Readable by any signed-in client; the desktop app reads it for its mic, the phone page reads it when voice is turned on and when its ⚙ sheet opens, and treats a missing route as the defaults (phone, phone, approval on) |
 | POST | `/api/voice/transcribe?lang=&hint=` | Recognise one recorded clip. `?hint=<words>` (≤ 80 printable characters) names words the clip likely contains — local faster-whisper's `initial_prompt`; the other backends ignore it. The **raw audio is the body** — not multipart — and `Content-Type` names its format: `audio/wav` (what every page sends; the only format the built-in Windows recognizer reads), `audio/webm`, `audio/mp4`, `audio/ogg` or `audio/mpeg` (a `;codecs=` suffix is fine). `?lang=` is a BCP-47-ish hint for the backend (`en`, `pt-BR`; anything else is dropped). → `{text, backend, ms}`. Status codes in the order they are checked: **415** `{error}` the body is not `audio/*`; **413** over 10 MB (from `Content-Length`, then the body itself); **400** an empty clip; **409** `{error}` when no recognition backend is ready (the detail says which and why — `voice.stt` is not consulted); **502** `{error}` when the backend failed (the built-in recognizer refuses a non-WAV clip this way); **200** |
-| POST | `/api/voice/stream` | Open a **streaming recognition** (words while the person speaks; below): body `{"lang": "en-US"}` (optional; a BCP-47-ish tag, anything else dropped; Whisper gets the primary subtag) → `{id, ready: true, hints}` (`id` opaque; `hints` the number of characters of vocabulary this stream's accurate pass is biased towards — the fast tier gets none; `core.speech.recognition_hints`, below). **409** `{error}` when no recognition backend is ready (`core.speech.select`'s reason), when the ready one does not stream (`<id> recognition does not stream: send one clip per phrase` — the built-in and host backends: the client falls back to `/transcribe`, one clip per phrase), or when 4 streams are already open on this server |
+| POST | `/api/voice/stream` | Open a **streaming recognition** (words while the person speaks; below): body `{"lang": "en-US", "client": "<page id>"}` (both optional; `lang` a BCP-47-ish tag, anything else dropped — Whisper gets the primary subtag; `client` a per-page id, ≤ 64 characters kept) → `{id, ready: true, hints}` (`id` opaque; `hints` the number of characters of vocabulary this stream's accurate pass is biased towards — the fast tier gets none; `core.speech.recognition_hints`, below). **Streams are counted per client** (`routes/speech.py` `_client_key`: the body's `client` when it is a non-empty string, else a digest of the request's address and user agent): a client holds at most 2 (`speech_stream.CLIENT_STREAMS` — the phrase it is about to `/end` and the next one it opened early, the phone's carry), and an open past that **replaces** that client's least recently fed stream (an idle one before one mid-pass; another client's streams are never touched) instead of counting against the server's cap — the replaced stream's next chunk gets a 404. Without a `client`, two tabs of one browser share a key and can replace each other's streams; neither the phone page nor the desktop app sends one yet. **409** `{error}` when no recognition backend is ready (`core.speech.select`'s reason), when the ready one does not stream (`<id> recognition does not stream: send one clip per phrase` — the built-in and host backends: the client falls back to `/transcribe`, one clip per phrase), or when 4 streams (`MAX_STREAMS`) are already open on this server (`N voice streams are already open: end one first` — a passing state: the phone retries it, below) |
 | POST | `/api/voice/stream/{id}/chunk` | Feed the next stretch of audio: the **raw body** is `audio/wav`, 16 kHz mono 16-bit PCM (a few hundred ms to a few seconds; read with the stdlib `wave`, no PyAV) → `{committed, partial, ms, window_s, audio_s}`: `committed` the words newly committed by this pass (possibly `""`; type them — they never change; join non-empty pieces with one space), `partial` the current unstable tail (show it, don't type it), `ms` the inference time, `window_s` the seconds of audio this pass decoded (at most 8), `audio_s` the seconds of audio the window holds after it. A quiet chunk (RMS under 0.01) with no unstable tail runs **no pass**: `ms` and `window_s` are 0 and `partial` is `""` (the audio is kept, so a soft start of speech is decoded with the next chunk). Send the next chunk only after this one returned (a chunk that arrives during a pass waits for it, then gets its own). **404** unknown or expired id; **415** not `audio/wav` (also `audio/x-wav`, `audio/wave`) or a WAV of another rate / channel count / width; **413** over 10 MB; **502** `{error}` the pass failed (the chunk is kept for the next one) |
 | POST | `/api/voice/stream/{id}/end` | Finish: one last fast pass over the held audio (skipped when nothing new arrived since the previous one and no tail waits), all of it committed, then the **accurate pass** over the whole phrase (below; usually started already, once 0.5 s of quiet followed the speech) → `{committed: <everything not committed before>, partial: "", final, final_ms, final_wait_ms, final_early, same}`: `final` the accurate model's text of the whole phrase — replace the phrase you typed with it — `final_ms` that pass's time, `final_wait_ms` how long this call waited for it (0 when the early pass was done), `final_early` whether it was the early one, `same` true when `final` is the fast words (everything committed) up to case, spacing and punctuation, so a client can skip a no-op retype. `final` / `final_ms` / `final_wait_ms` / `final_early` / `same` are **absent** when the accurate pass is off (`voice.stt_final = "off"`), skipped (under 0.2 s of speech, or a phrase over 60 s), heard nothing, failed or ran past 1.5 s of waiting: the fast text stands. The stream is gone afterwards. **404** unknown or expired; **502** the last fast pass failed (the stream is gone either way) |
 | DELETE | `/api/voice/stream/{id}` | Abandon without a last pass → **204** (also for an unknown id) |
@@ -1499,13 +1539,57 @@ streaming model (`voice.stt_stream_model`, `base.en` for
 English), committing the words two consecutive passes agree on — the
 longest common prefix, compared lower-cased without punctuation, with the
 current pass's casing — while the unstable tail waits (the "LocalAgreement-2"
-policy of whisper_streaming). Past 4 s of held audio the window drops what
-lies before the last committed word (keeping 0.3 s), never audio under an
-uncommitted word, and **no pass decodes more than 8 s**: before a pass, the
-unsettled tail words that start before the last 8 s are committed as they
-leave the window (the one forced commit). A quiet chunk with nothing
-unsettled runs no pass at all; streams expire 60 s after their last chunk (one sweep
-timer, no thread per stream), and `/transcribe` is unchanged.
+policy of whisper_streaming). **A pass decodes only the uncommitted tail
+plus about a second of context:** once the window holds more than 1.5 s
+(`PRUNE_SECONDS`) it is cut at the end of the last committed word that ends
+at least 1 s (`REHEAR_SECONDS`) before the last committed end — a word
+boundary, so whisper re-hears ~1 s of committed words (dropped again by
+time, then by the 5-gram match) — never under an uncommitted word (less
+0.3 s, `MARGIN_SECONDS`); a long dictation's window stays at ~2 s. (It used
+to be cut only past 4 s, so up to 4 s of committed audio was decoded again
+on every pass.) **No pass decodes more than 8 s** (`WINDOW_SECONDS`):
+before a pass, the unsettled tail words that start before the last 8 s are
+committed as they leave the window (the one forced commit). A quiet chunk
+with nothing unsettled runs no pass at all; streams expire 60 s after their
+last chunk (one sweep timer, no thread per stream), and `/transcribe` is
+unchanged.
+
+**A fast pass is short and greedy** (`core/speech.py`). faster-whisper pads
+every input to Whisper's 30 s, and on `base.en` that encoder pass was ~60 %
+of a fast pass whatever the window held; a streaming pass pads to **10 s**
+(`STREAM_PAD_SECONDS`; a longer window pads to its own length plus 2 s of
+quiet, never past 30 s, and audio is never cut) — the 48 bench clips keep
+their WER (15.2 → 14.8 %) and word times (within 20 ms) and a pass drops
+from 374 to 155 ms; at 6 s whisper starts inventing words. It is a wrapper
+installed once over faster-whisper's `pad_or_trim` that reads a
+thread-local set by `speech._padded`, so only `stream_transcriber`'s passes
+are padded short; the one-shot clip, the wake check, the warm-up prime and
+the **accurate pass keep 30 s** (`FINAL_PAD_SECONDS = 0`: shorter costs it
+words with the hints as `hotwords` — 4.8 % WER at 30 s, 5.9 % at 20 s,
+8.5 % at 10 s). Should the first short-padded call fail and its retry at
+30 s succeed, short padding is switched off for the process (logged). Each
+fast pass also decodes **greedily, once** (`temperature=0.0`: the
+temperature fallback's 5 × 5 samples take seconds, never worth it for a pass
+the next chunk replaces) with its tokens capped at 20 + 15 per second of
+window (`STREAM_TOKENS`, `STREAM_TOKENS_PER_S`, as `max_new_tokens`), so a
+decoder caught in a loop stops — both passed only when this faster-whisper's
+`transcribe` takes them. With the short pad the thread count stops showing
+(2 vs 4 threads: 189 vs 199 ms on a 1.5 s window), so the split below
+stands. Measured on the judge's replay (48 clips, interleaved A/B, load
+2.7–6.6): a live pass 544 → 174 ms at the median (p95 2653 → 261 ms, inside
+the 300 ms chunk cadence, so passes no longer queue behind each other),
+first committed word 2.1 → 1.2 s, speech end → `/end` done 4.2 → 1.0 s; the
+accurate pass's text identical on all 48.
+
+**Whisper's edge echo is dropped** (`speech_stream._echo`, in every pass):
+at the end of the audio it heard, whisper may repeat the word before as a
+sliver — *that (0.98–1.24) that. (1.24–1.32)* — and the next pass often
+agrees, so LocalAgreement committed it (*Disregard that that.*, *over. out.
+out.*). A pass's **last** word is dropped when it repeats the word before it
+(in the pass, or the last committed word), lasts at most 0.2 s
+(`ECHO_SECONDS`) and starts within 0.1 s of that word's end. A real *no no*
+at the very end loses its second word only in the fast text, and only that
+short; the accurate pass keeps it.
 
 **Vocabulary hints** (`core.speech.recognition_hints`, built on every
 `POST /api/voice/stream` so a new session's title counts at once): one
@@ -1531,7 +1615,7 @@ whisper fills a quiet tail with "Never." or "for.".
 
 **Two tiers: fast while speaking, accurate at the end.** The passes above
 are the fast tier — what the client types as the person speaks
-(`base.en`: ~0.5 s a pass, but it mishears: *run the tick* for *run the
+(`base.en`: ~0.2 s a pass padded short, above, but it mishears: *run the tick* for *run the
 tests*, *Top* for *stop*). Beside the window, a stream keeps the **whole
 phrase's audio** (at most the last 60 s), and decodes it once more with the
 accurate model — `voice.stt_final`, by default the one-shot `stt_model`
@@ -1566,7 +1650,19 @@ wins), a final drops its stream's queued fast passes, a waiter that gives
 up withdraws its queued job (a timed-out final never runs late) and
 abandons a running one — the lane is free for the next phrase's final at
 once, and the accurate pass stops at its next faster-whisper segment
-(`speech_stream.abandoned()`). Once a phrase's accurate pass has started,
+(`speech_stream.abandoned()`). **Every lane wait is bounded**
+(`LANE_WAIT_S`): a fast pass waits at most 3 s for its turn, an accurate
+pass 4 s, a clip or wake check 15 s; past it the job is withdrawn and raises
+`Skipped` (*waited N s: the model stayed busy*) — a feed that gives up
+returns at once with its audio left for the next pass (so a chunk holds its
+stream's lock and a thread for at most 3 s), and a clip becomes a 502. A
+job still running 60 s after it started (`LANE_STUCK_S`) is presumed hung
+and abandoned by the next waiter, as a cancel would, so one model call that
+never returns cannot hold a model forever. The recognition calls (a clip,
+a wake check, a stream's chunk and `/end`) run on a **pool of their own**
+(`routes/speech.py` `STT_THREADS = 8`), not the default `to_thread`
+executor, so a busy model never takes the threads the rest of the server
+runs on. Once a phrase's accurate pass has started,
 no fast pass runs for it except one **settle** pass that hears 0.3 s
 (`SETTLE_SECONDS`) past the last loud frame (without it the bench's fast
 WER went 28 % → 36 %: whisper clips a word at the window's edge); `/end`
