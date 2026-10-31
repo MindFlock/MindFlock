@@ -290,7 +290,10 @@ def voice_get(allowed: bool = Depends(_auth.configure_allowed)) -> JSONResponse:
     is :func:`core.speech_stream.final_stats`: how long ``/end`` has been
     waiting for the accurate pass lately (``typical_ms`` the median,
     ``p95_ms``; 0 before the first), what to budget (``expect_ms``: the
-    measured p95, or the bench's figure before enough phrases) and the
+    median plus max(250 ms, twice the median absolute deviation), or the
+    bench's figure before enough phrases, held to [300 ms, the timeout] —
+    not the p95, which sits at the timeout once one wait in twenty hits
+    it) and the
     server's own cap (``timeout_ms``); ``server_ready.final_ms`` repeats
     ``expect_ms`` — the clients seed their wait for ``/end`` from it, not
     from a fixed worst case."""

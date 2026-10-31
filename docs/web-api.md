@@ -1307,7 +1307,12 @@ ends, the same hook's `Stop` branch files the payload's
 `last_assistant_message` beside the activity marker as
 `<marker dir>/<tmux session>.reply.json` (`{"ts", "text"}`, text cut at
 8000 chars) and `core/spoken.py` lifts the `Say:` line out of it — the exact
-text the session just said, no transcript scan. The **spoken record** every
+text the session just said, no transcript scan. The server watches the
+marker directory for that file (one `stat` every 50 ms, debounced 30 ms per
+session and capped at 500 ms), so the row's `last_say` and the idle event go
+out as soon as it lands — a phone or the desktop mic no longer waits up to
+4 s for the next instances tick to hear the reply
+([Session events](#session-events)). The **spoken record** every
 reader serves is `{say, source, has_question, ts}`: `say` the text after the
 marker (the LAST `Say:` line of the reply; `**Say:**`, `SAY:` and `Say —`
 count, a `Say:` inside a code fence does not), markdown stripped, ≤ 320
@@ -1424,8 +1429,34 @@ so the host loads its model (a cloned-voice model takes ~40 s on a CPU; the
 warm call may take 3 minutes) — a remote host is never called (a paid API,
 and no cold start to hide); `system` runs the built-in engine's probe. A
 host or the OS engine is warmed again at most every 10 minutes unless its
-backend, model, voice or URL changed. A warm never blocks or raises;
+backend, model, voice or URL changed — only a good warm earns those 10
+minutes: a failed one is due again after 45 s (`HOST_DOWN_SECONDS`), and it
+marks the host **down** (below), so the warm loads piper instead — the
+voice that will actually speak meanwhile. A warm never blocks or raises;
 `GET /api/voice`'s `warm` reports the last result per kind.
+
+**The voice falls back** (`core.speech.TtsChain`, `TTS_CHAIN`). The
+configured voice must answer within `host_budget(text)` = 1.5 s + 0.06 s a
+character, capped at 20 s (`TTS_TIMEOUT`) — F5 renders the whole clip
+before its first byte, ~0.035 s a character on a GPU, so that is ~1.7× its
+pace. A host that refuses the connection, passes its budget, answers 5xx or
+sends no audio is **down**: the same line goes to piper (`FALLBACK_TTS =
+("local",)`) and the host is skipped for 45 s (`HOST_DOWN_SECONDS`) — the
+lines after it go straight to piper, at no cost. A 4xx, a missing key or a
+bad voice name is the request's fault: its 502 comes back with no fallback.
+Health is kept per host (backend id + URL). After the window the next line,
+or a `GET /api/voice`, starts **one** background probe on a daemon thread
+(*Ready.* within `PROBE_TIMEOUT` = 3 s; a probe never runs on a request):
+the probe, not the clock, brings the host back, and a passing one also
+counts as its warm. **One voice per reply:** once a line falls back, every
+line does until the host has passed its probe *and* the chain is quiet —
+no line in flight and 2.5 s (`REPLY_GAP_SECONDS`) past the moment the last
+fallback line should have finished playing (its length at 14 characters a
+second). The clients ask for the next sentence while one plays, so a
+reply's lines arrive back to back and the switch back lands in the pause
+between replies. With no fallback ready the failure stands (502), and only
+then does a client use its own voice. `server_ready.tts_engine` /
+`tts_fallback` / `tts_down` and `/speak`'s `X-Voice-*` headers report it.
 
 The configured backend (`voice.stt_backend` / `voice.tts_backend`) is the
 only candidate when set — its own detail says what is missing; unset, the
@@ -1435,17 +1466,23 @@ of that kind is ready** — `voice.stt` / `voice.tts` only say which engine the
 phone page prefers and no longer gate these routes (the old 409 *Server
 recognition is off* is gone); only the owner clears a key. Engine calls run
 on a worker thread, so a local model, a PowerShell round trip or a slow host
-never stalls the event loop.
+never stalls the event loop — and so do `/speak`'s settings read, engine
+choice and shaping, and `/transcribe`'s and `/wake`'s readiness check. No
+`PATH` lookup runs on a request either: `ffmpeg` is found once on a daemon
+thread (again when `PATH` changes, after 10 minutes, after a clip
+faster-whisper refused, or after the one-click install), and the
+PowerShell lookup behind the built-in engine's probe is cached per `PATH`
+(it was ~100 ms over WSL's `/mnt/c` entries on every `GET /api/voice`).
 
 | Method | Path | Behavior |
 |---|---|---|
-| GET | `/api/voice` | Where speech runs and what the server offers: `{stt: "phone"\|"server", tts: "phone"\|"server", approve_dialogs, agent_words, ask_popup, backends: {stt: [ids], tts: [ids]}, server_ready: {stt, tts, detail, stt_backend, stt_detail, tts_backend, tts_detail, stt_stream}, system: {available, platform: "windows"\|"wsl"\|"mac"\|"none", detail, voices: [names], recognizers: [culture tags], stt_quality: "basic"\|"good"\|"none"}, stream_model, warm: {stt, tts}, words: {send, end, clear, stop, hush: [phrases], wake: str}, words_default: {…the same shape…}, pronounce: [{say, as}], final: {samples, typical_ms, p95_ms, expect_ms, timeout_ms} (how long `/end` has lately waited for the accurate pass over the last 20 phrases — the median and the 95th percentile, 0 before the first — `expect_ms` what `server_ready.final_ms` carries, and the server's own cap: wait for `/end` about that long, not a fixed worst case), configure_allowed}` — `approve_dialogs` is `voice.approve_dialogs`, `words` the effective voice keywords (`core.voice_words.effective`: the defaults overlaid with the person's `voice.words`, every kind present — see **Voice words** below) and `words_default` ours (`voice_words.DEFAULTS`, for Settings' reset), `pronounce` the person's own pronunciations (`voice.pronounce`, normalised by `core.spoken_text.normalize_pronounce`; `[]` when there are none) which every client applies first when it shapes a line for its own voice (`lib/spokenText.ts` `shapeForSpeech(text, pronounce)`, the phone page's `window.MindFlockSpokenText.shape`) — the server does the same inside `speak`, `agent_words` is `notifications.ntfy_agent_words`, `ask_popup` is `notifications.ask_popup` (the phone pops a session's question up when on), `backends` lists `system` first, `server_ready` the offline verdict on the saved fields (whether each kind has a ready backend, which, and why not; `detail` is the one-paragraph summary; `stt_stream` whether the ready recognition backend streams — only `local` does — so a client knows before `POST /api/voice/stream`), `stream_model` the faster-whisper model the live transcript runs for English (`"base.en"` by default; `""` when the ready backend does not stream), `warm` each kind's last warm-up (`"loaded"`, `"loading"`, `"skipped: <why>"` — not local, a remote host, not installed, memory low, the host failed — or `""` before the first), `system` the built-in engine's own report (`available` when it can recognise or speak; `voices` the OS voice names a Settings picker offers, `recognizers` the recognition cultures such as `en-US`, `stt_quality` a per-platform constant — `"basic"` on Windows/WSL, where the only recognizer that reads a recorded file offline is SAPI 5's desktop dictation, `"good"` on macOS — that the Settings screen uses to recommend the local models; on Windows/WSL `server_ready.stt_detail` for the `system` backend also ends with `basic accuracy — install local models for better recognition`), `configure_allowed` whether **this caller** may use the owner-only routes (`install-local`, `clear-key`; the same answer as `auth.may_configure`) so a page can disable those buttons — the route itself stays readable by everyone — no network, no model load, the built-in engine probed once per process. Readable by any signed-in client; the desktop app reads it for its mic, the phone page reads it when voice is turned on and when its ⚙ sheet opens, and treats a missing route as the defaults (phone, phone, approval on) |
+| GET | `/api/voice` | Where speech runs and what the server offers: `{stt: "phone"\|"server", tts: "phone"\|"server", approve_dialogs, agent_words, ask_popup, backends: {stt: [ids], tts: [ids]}, server_ready: {stt, tts, detail, stt_backend, stt_detail, tts_backend, tts_detail, stt_stream, tts_engine, tts_fallback, tts_down, final_ms}, system: {available, platform: "windows"\|"wsl"\|"mac"\|"none", detail, voices: [names], recognizers: [culture tags], stt_quality: "basic"\|"good"\|"none"}, stream_model, warm: {stt, tts}, words: {send, end, clear, stop, hush: [phrases], wake: str}, words_default: {…the same shape…}, pronounce: [{say, as}], final: {samples, typical_ms, p95_ms, expect_ms, timeout_ms} (how long `/end` has lately waited for the accurate pass over the last 20 phrases — the median and the 95th percentile, 0 before the first — `expect_ms` what `server_ready.final_ms` carries: the median plus max(250 ms, twice the median absolute deviation) once three phrases are in, the bench's 1400 ms before, held to [300 ms, the timeout] — and the server's own cap: wait for `/end` about that long, not a fixed worst case), configure_allowed}` — `approve_dialogs` is `voice.approve_dialogs`, `words` the effective voice keywords (`core.voice_words.effective`: the defaults overlaid with the person's `voice.words`, every kind present — see **Voice words** below) and `words_default` ours (`voice_words.DEFAULTS`, for Settings' reset), `pronounce` the person's own pronunciations (`voice.pronounce`, normalised by `core.spoken_text.normalize_pronounce`; `[]` when there are none) which every client applies first when it shapes a line for its own voice (`lib/spokenText.ts` `shapeForSpeech(text, pronounce)`, the phone page's `window.MindFlockSpokenText.shape`) — the server does the same inside `speak`, `agent_words` is `notifications.ntfy_agent_words`, `ask_popup` is `notifications.ask_popup` (the phone pops a session's question up when on), `backends` lists `system` first, `server_ready` the offline verdict on the saved fields (whether each kind has a ready backend, which, and why not; `detail` is the one-paragraph summary; `stt_stream` whether the ready recognition backend streams — only `local` does — so a client knows before `POST /api/voice/stream`; `tts` true while SOME engine will speak — the configured one, or the fallback while it is down (**The voice falls back**, below) — and false when the configured host is down with no fallback ready, so a client goes to its own voice up front instead of a 502 per line; `tts_backend` stays the configured id (Settings keys its rows on it) while `tts_engine` names the engine that will actually speak (`"openai"`, `"piper"`, `"system"`, or e.g. `"piper (fallback)"`; `""` with no voice backend), `tts_fallback` whether that is the fallback, `tts_down` why the configured host is down (`""` when healthy) — and while it falls back `tts_detail` says so: *tts-1 (Donna) at 127.0.0.1:8770 — speaking with <piper voice> while it is down (could not reach …)*), `stream_model` the faster-whisper model the live transcript runs for English (`"base.en"` by default; `""` when the ready backend does not stream), `warm` each kind's last warm-up (`"loaded"`, `"loading"`, `"skipped: <why>"` — not local, a remote host, not installed, memory low, the host failed — or `""` before the first), `system` the built-in engine's own report (`available` when it can recognise or speak; `voices` the OS voice names a Settings picker offers, `recognizers` the recognition cultures such as `en-US`, `stt_quality` a per-platform constant — `"basic"` on Windows/WSL, where the only recognizer that reads a recorded file offline is SAPI 5's desktop dictation, `"good"` on macOS — that the Settings screen uses to recommend the local models; on Windows/WSL `server_ready.stt_detail` for the `system` backend also ends with `basic accuracy — install local models for better recognition`), `configure_allowed` whether **this caller** may use the owner-only routes (`install-local`, `clear-key`; the same answer as `auth.may_configure`) so a page can disable those buttons — the route itself stays readable by everyone — no network, no model load, the built-in engine probed once per process. Readable by any signed-in client; the desktop app reads it for its mic, the phone page reads it when voice is turned on and when its ⚙ sheet opens, and treats a missing route as the defaults (phone, phone, approval on) |
 | POST | `/api/voice/transcribe?lang=&hint=` | Recognise one recorded clip. `?hint=<words>` (≤ 80 printable characters) names words the clip likely contains — local faster-whisper's `initial_prompt`; the other backends ignore it. The **raw audio is the body** — not multipart — and `Content-Type` names its format: `audio/wav` (what every page sends; the only format the built-in Windows recognizer reads), `audio/webm`, `audio/mp4`, `audio/ogg` or `audio/mpeg` (a `;codecs=` suffix is fine). `?lang=` is a BCP-47-ish hint for the backend (`en`, `pt-BR`; anything else is dropped). → `{text, backend, ms}`. Status codes in the order they are checked: **415** `{error}` the body is not `audio/*`; **413** over 10 MB (from `Content-Length`, then the body itself); **400** an empty clip; **409** `{error}` when no recognition backend is ready (the detail says which and why — `voice.stt` is not consulted); **502** `{error}` when the backend failed (the built-in recognizer refuses a non-WAV clip this way); **200** |
 | POST | `/api/voice/stream` | Open a **streaming recognition** (words while the person speaks; below): body `{"lang": "en-US"}` (optional; a BCP-47-ish tag, anything else dropped; Whisper gets the primary subtag) → `{id, ready: true, hints}` (`id` opaque; `hints` the number of characters of vocabulary this stream's accurate pass is biased towards — the fast tier gets none; `core.speech.recognition_hints`, below). **409** `{error}` when no recognition backend is ready (`core.speech.select`'s reason), when the ready one does not stream (`<id> recognition does not stream: send one clip per phrase` — the built-in and host backends: the client falls back to `/transcribe`, one clip per phrase), or when 4 streams are already open on this server |
 | POST | `/api/voice/stream/{id}/chunk` | Feed the next stretch of audio: the **raw body** is `audio/wav`, 16 kHz mono 16-bit PCM (a few hundred ms to a few seconds; read with the stdlib `wave`, no PyAV) → `{committed, partial, ms, window_s, audio_s}`: `committed` the words newly committed by this pass (possibly `""`; type them — they never change; join non-empty pieces with one space), `partial` the current unstable tail (show it, don't type it), `ms` the inference time, `window_s` the seconds of audio this pass decoded (at most 8), `audio_s` the seconds of audio the window holds after it. A quiet chunk (RMS under 0.01) with no unstable tail runs **no pass**: `ms` and `window_s` are 0 and `partial` is `""` (the audio is kept, so a soft start of speech is decoded with the next chunk). Send the next chunk only after this one returned (a chunk that arrives during a pass waits for it, then gets its own). **404** unknown or expired id; **415** not `audio/wav` (also `audio/x-wav`, `audio/wave`) or a WAV of another rate / channel count / width; **413** over 10 MB; **502** `{error}` the pass failed (the chunk is kept for the next one) |
-| POST | `/api/voice/stream/{id}/end` | Finish: one last fast pass over the held audio (skipped when nothing new arrived since the previous one and no tail waits), all of it committed, then the **accurate pass** over the whole phrase (below; usually started already, on the quiet chunk that ended the speech) → `{committed: <everything not committed before>, partial: "", final, final_ms, final_wait_ms, final_early, same}`: `final` the accurate model's text of the whole phrase — replace the phrase you typed with it — `final_ms` that pass's time, `final_wait_ms` how long this call waited for it (0 when the early pass was done), `final_early` whether it was the early one, `same` true when `final` is the fast words (everything committed) up to case, spacing and punctuation, so a client can skip a no-op retype. `final` / `final_ms` / `final_wait_ms` / `final_early` / `same` are **absent** when the accurate pass is off (`voice.stt_final = "off"`), skipped (under 0.2 s of speech, or a phrase over 60 s), heard nothing, failed or ran past 1.5 s of waiting: the fast text stands. The stream is gone afterwards. **404** unknown or expired; **502** the last fast pass failed (the stream is gone either way) |
+| POST | `/api/voice/stream/{id}/end` | Finish: one last fast pass over the held audio (skipped when nothing new arrived since the previous one and no tail waits), all of it committed, then the **accurate pass** over the whole phrase (below; usually started already, once 0.5 s of quiet followed the speech) → `{committed: <everything not committed before>, partial: "", final, final_ms, final_wait_ms, final_early, same}`: `final` the accurate model's text of the whole phrase — replace the phrase you typed with it — `final_ms` that pass's time, `final_wait_ms` how long this call waited for it (0 when the early pass was done), `final_early` whether it was the early one, `same` true when `final` is the fast words (everything committed) up to case, spacing and punctuation, so a client can skip a no-op retype. `final` / `final_ms` / `final_wait_ms` / `final_early` / `same` are **absent** when the accurate pass is off (`voice.stt_final = "off"`), skipped (under 0.2 s of speech, or a phrase over 60 s), heard nothing, failed or ran past 1.5 s of waiting: the fast text stands. The stream is gone afterwards. **404** unknown or expired; **502** the last fast pass failed (the stream is gone either way) |
 | DELETE | `/api/voice/stream/{id}` | Abandon without a last pass → **204** (also for an unknown id) |
-| POST | `/api/voice/speak` | `{text, voice?, shape?}` → the audio bytes, `Content-Type` the backend's (`audio/mpeg` for a host, `audio/wav` for piper and the built-in engine), `X-Voice-Backend` its id, `X-Voice-Cache` `hit` or `miss`, `Cache-Control: no-store`. `voice` (≤ 64 chars) overrides `voice.tts_voice` for this one call. The text is **shaped for the voice** first (`core.spoken_text.shape`): the person's `voice.pronounce` rows, then markup dropped, paths and files spoken (`backend/web/core/speech.py:404` → *backend, web, core, speech dot pie line 404*), versions / PR numbers / durations / units said the engineers' way (`v0.10.2` → *version 0 point 10 point 2*, `PR #275` → *P R 275*, `1m23s` → *1 minute 23 seconds*), identifiers split into words (`askMicTap` → *ask mic tap*), the tech table (`SQL` → *sequel*, `JSON` → *jayson*, `k8s` → *kubernetes*) and the heteronyms by context (*everything goes live* → *lyve*, the adjective; *I read it* → *red*) — the caller's text, what a caption shows, is never changed; `shape: false` sends it as written (Settings → Voice's **Try** hears a respelling itself). A repeat of the same shaped text in the same voice is a **cache hit**: an in-memory LRU of 64 clips / 8 MB keyed by voice and shaped text, dropped whenever the backend, its host, model or voice setting changes, so "Sent.", "Listening." and a session's name cost a neural host (≈ 1 s a line) once. **400** no text (or nothing left once shaped), **413** over 1200 chars as sent (a `Say:` line is ≤ 320, a dialog read-out a few hundred), then **409** / **502** as above |
+| POST | `/api/voice/speak` | `{text, voice?, shape?}` → the audio bytes, `Content-Type` the backend's (`audio/mpeg` for a host, `audio/wav` for piper and the built-in engine), `X-Voice-Backend` the id of the engine that **actually spoke** (the fallback's when the line fell back), `X-Voice-Engine` its short name (`piper`, `openai`, `system`), `X-Voice-Fallback` `1` when the fallback spoke (else `0`), `X-Voice-Cache` `hit` or `miss`, `X-Voice-Ms` the server's time for the line in ms (synthesis, or the cache lookup), `X-Voice-Shared: 1` when an identical request already in flight was joined, `Cache-Control: no-store`. Identical concurrent requests (same configured engine, voice and shaped text) share **one** synthesis (`asyncio.shield`ed, so a caller that hangs up does not cancel it for the others). `voice` (≤ 64 chars) overrides `voice.tts_voice` for this one call. The text is **shaped for the voice** first (`core.spoken_text.shape`): the person's `voice.pronounce` rows, then markup dropped, paths and files spoken (`backend/web/core/speech.py:404` → *backend, web, core, speech dot pie line 404*), versions / PR numbers / durations / units said the engineers' way (`v0.10.2` → *version 0 point 10 point 2*, `PR #275` → *P R 275*, `1m23s` → *1 minute 23 seconds*), identifiers split into words (`askMicTap` → *ask mic tap*), the tech table (`SQL` → *sequel*, `JSON` → *jayson*, `k8s` → *kubernetes*) and the heteronyms by context (*everything goes live* → *lyve*, the adjective; *I read it* → *red*) — the caller's text, what a caption shows, is never changed; `shape: false` sends it as written (Settings → Voice's **Try** hears a respelling itself). A repeat of the same shaped text in the same voice is a **cache hit**: an in-memory LRU of 64 clips / 8 MB keyed by voice and shaped text, dropped whenever the backend, its host, model or voice setting changes, so "Sent.", "Listening." and a session's name cost a neural host (≈ 1 s a line) once. The lookup keys on the engine that will actually speak, so a cached line never brings the other voice back in the middle of a reply. **400** no text (or nothing left once shaped), **413** over 1200 chars as sent (a `Say:` line is ≤ 320, a dialog read-out a few hundred), then **409** / **502** as above |
 | POST | `/api/voice/install-local` | One click for the accurate offline engine (`backend/web/core/speech_install.py`): in a background thread, (1) `installing packages` — `uv pip install --python <server interpreter> faster-whisper piper-tts` (`uv` on PATH, else beside the interpreter, else `<interpreter> -m pip install`); (2) `downloading recognition model (<name>)` — the faster-whisper model of `voice.stt_model` (`small` unless it names a faster-whisper size) into `<voice dir>/whisper`, the cache the `local` backend loads from, so the first phrase is not a download, then `downloading streaming model (<name>)` — the live transcript's (`voice.stt_stream_model`, `base.en` by default, ~75 MB; skipped when it is the same model); (3) `downloading voice (<name>)` — the piper voice of `voice.tts_voice` (`en_US-lessac-medium` unless it names a piper voice) into `<voice dir>/piper`. Steps 2 and 3 run in a helper process of the same interpreter. On success `voice.stt_backend` becomes `"local"` (the voice backend is left as it was) and the import caches are dropped so `GET /api/voice` reports `local` ready without a restart. **The packages survive a release:** step 1's success is recorded in `~/.mindflock/voice/packages.json` (`{version: 1, packages: ["faster-whisper", "piper-tts"], installed_at, python}`, under `MINDFLOCK_HOME`), the engine's own updater and `mindflock update` carry each recorded package through the rebuild the way the Database explorer's drivers ride (`--with` on the uv line, `pipx inject` after pipx), and a rebuild that did not carry them (install.sh, a hand-run `uv tool install --force`) is healed: at boot and on every `GET /api/voice` the server reinstalls the recorded packages when `faster_whisper` / `piper` no longer import — once per process, as this install's step `reinstalling the local models' packages after the update` (packages only; the models on disk are untouched), so the Settings screen follows it like a click. A heal whose package no longer exists on the index drops the record. `mindflock doctor` lists the record as *Local speech models*. → **200** the status below (`state: "running"`); **403** not the owner (`auth.may_configure`); **409** the status with `error` when an install is already running |
 | GET | `/api/voice/install-local` | The install's progress: `{state: "idle"\|"running"\|"done"\|"failed", step: "installing packages"\|"reinstalling the local models' packages after the update"\|"downloading recognition model (small)"\|"downloading streaming model (base.en)"\|"downloading voice (en_US-lessac-medium)"\|"done"\|"", log: [the last 20 output lines], started, finished (epoch seconds or null), error}`. A step that exits non-zero, cannot start or runs past 30 minutes fails the install with `error` = the step and its last output line; the settings are then untouched. Per server process (a restart forgets it). Readable by any signed-in client |
 | POST | `/api/voice/wake?lang=` | Is this short clip the wake word on its own — `voice.words.wake`, **"MindFlock"** by default? Body and `Content-Type` exactly as `/transcribe`; the clip is recognised with the word as the decoder's hint (`MindFlock` for ours, else the word capitalised: `Hey Jarvis`) — on `local` by the fast streaming model (`base.en`, greedy, no VAD: ~0.6 s for a 1 s clip where `small` takes ~1.8 s), other backends their `/transcribe` — and judged by `core.wake.is_wake` (the word alone, in at most one token more than it has, two letters of slack for a word of 8+ letters — how whisper hears a made-up word: *Mind flock*, *Mindlock*, *mind block* — one for 5–7, none below; a sentence never wakes, however it starts) → `{wake: bool, text, word: "mindflock" (the effective word), backend, ms}`; `/transcribe`'s status codes. The clients keep the mic in a standby that watches the sound level and send only a short lone utterance bounded by silence, so the model sees a second of audio at a time, never the room |
@@ -1507,10 +1544,12 @@ must accept the `hints` keyword — the server always passes it to
 `final_transcriber`, `""` to the fast tier.
 Whisper's encoder costs the same for one second of speech as for thirty,
 so on this box the pass takes ~1.1–1.3 s on `small` whatever the phrase's
-length — which is why it **starts early**: a quiet chunk (RMS under the
-silence level) means the person paused, usually for good, so the pass
-starts right then on the phrase so far, while the fast tier still settles
-the last word and the client decides what to do with it. `/end` takes that
+length — which is why it **starts early**: once 0.5 s of quiet
+(`EARLY_QUIET_SECONDS`) follows the last loud 100 ms frame — longer than
+most pauses between words, well short of the clients' 1.1 s phrase-end
+silence — the person has most likely finished, so the pass starts right
+then on the phrase so far (~0.6 s head start), while the client waits out
+its own phrase end. `/end` takes that
 result when no speech arrived after it started (`final_early: true`,
 `final_wait_ms` what it still had to wait) and runs a fresh pass otherwise
 (a pause mid-sentence costs one wasted pass). `/end` also skips its last
@@ -1518,13 +1557,34 @@ fast pass when nothing loud arrived since the previous one and no tail
 waits. The accurate pass has 1.5 s of waiting (`FINAL_TIMEOUT_S`): the
 bench's `/end` wait is 0.7 s at the median and 1.35 s at p95, against 2.0
 and 6.5 s before the early start; past that, or when it fails, the fast
-text stands. It is skipped for under 0.2 s of speech (100 ms frames louder than
+text stands. **The two tiers share the CPU, so they are scheduled**
+(`speech_stream.Lane`, one per model, `whisper:<name>`; the caller's own
+thread runs the job, no worker thread): at most one job per model at a
+time, ordered final → one-shot clip / wake check → fast pass; a stream's
+newer job replaces its queued one of the same kind (the latest audio
+wins), a final drops its stream's queued fast passes, a waiter that gives
+up withdraws its queued job (a timed-out final never runs late) and
+abandons a running one — the lane is free for the next phrase's final at
+once, and the accurate pass stops at its next faster-whisper segment
+(`speech_stream.abandoned()`). Once a phrase's accurate pass has started,
+no fast pass runs for it except one **settle** pass that hears 0.3 s
+(`SETTLE_SECONDS`) past the last loud frame (without it the bench's fast
+WER went 28 % → 36 %: whisper clips a word at the window's edge); `/end`
+then skips its last fast pass and the tail stands as heard. Speech
+resuming makes the early pass stale (withdrawn, or abandoned if running).
+Warm-up primes queue on the same lanes. **Thread budgets**
+(`speech.whisper_threads`, CTranslate2's `cpu_threads`, `num_workers=1`):
+the fast tier gets a quarter of `os.cpu_count()` (1–4), the accurate pass
+the rest (at most 8) — 8 cores → 2 + 6, 4 → 1 + 3; a model serving both
+tiers gets the accurate budget. It is skipped for under 0.2 s of speech (100 ms frames louder than
 the silence level — two frames, so a lone *stop* still gets corrected and
 only a click is skipped) and for a phrase longer than 60 s (the final would
 not cover the words already typed). `GET /api/voice`'s
 `server_ready.final_ms` (and `final.expect_ms`) is what to budget for
-`/end`: the p95 of the last 20 measured waits once there are three, the
-bench's 1.4 s before — the phone and the desktop seed their wait from it.
+`/end`: over the last 20 measured waits, once there are three, the median
+plus max(250 ms, twice the median absolute deviation) — not the p95, which
+sits at the timeout as soon as one wait in twenty hits it — the bench's
+1.4 s before; held to [300 ms, the 1.5 s timeout] either way — the phone and the desktop seed their wait from it.
 `tests/bench/voice_bench.py` (run with the tool venv's python, which has
 faster-whisper and piper; not collected by pytest) is the reproducible
 measurement behind these numbers: 48 piper-synthesised command phrases
@@ -2778,7 +2838,11 @@ are debounced server-side (~3s settle window, i.e. one extra ~4s tick): a
 single poll can misread a busy pane as idle, and every consumer of this event —
 ntfy pushes, desktop notifications, clarify toasts, shell hooks — would
 otherwise fire on the flicker. A reading that reverts before it settles emits
-nothing at all; transitions back to `working`/`offline` are instant.
+nothing at all; transitions back to `working`/`offline` are instant. The
+settle parks only **non-authoritative** (pane-read) readings: an idle the
+`Stop` hook reports is authoritative and announces at once — now when the
+reply lands rather than on the tick — while a pane-read idle published by
+the reply watch (below) still waits for a later tick to confirm it.
 
 **The spoken line rides the two "it finished" events.** A
 `session.activity_changed` into `idle` carries `data: {say, has_question,
@@ -2796,6 +2860,24 @@ re-speaks its last words, while the two events, which fire for the same turn
 seconds to a minute apart, each carry it once. The phone page listens to the
 fast `activity_changed` (its instant cue); the ntfy push body reads
 `turn_ended`. The memory is dropped with the session.
+
+**A filed reply republishes its session at once.** When the `Stop` hook
+files `<session>.reply.json`, `server._reply_watch_loop` (watching the marker
+directory through `core/state_events.ReplyWatch`) calls `_republish_reply`
+for that one local session within ~0.1 s instead of leaving it to the next
+4 s tick: it drops the session's activity/asking/last_turn/last_say probe
+memos, recomputes just those row fields (`activity`, `activity_since`,
+`asking`, `background`, `last_turn`, `last_say` — git and diff state stay on
+the tick), patches them into the published snapshot and runs the same
+`_emit_state_changes` the tick does. Boot-quiet, the settle window and each
+channel's `(ts, say)` memory therefore apply unchanged, and the next tick
+does not repeat the announcement. For hook CLIs the idle
+`session.activity_changed` and its `say` keys arrive at turn end; CLIs with
+no `Stop` hook get no speedup. `session.turn_ended` is **not** hastened — its
+dwell still runs on the tick. A tick that started before a reply
+republished its session read it as `working`: that tick skips the session's
+emit and publishes the fresher row in place of its own
+(`_reply_superseded`, `_keep_reply_rows`), so the chip never flicks back.
 
 A **sleeping** session's `offline` is not announced at all
 ([session-engine.md](session-engine.md#sleeping-agents)): the emitter records
@@ -3452,7 +3534,11 @@ run **before everything else**, public paths included: a cross-site
 Startup (`lifespan`): a 4 s reload loop adopts sessions created by other
 processes; the Cursor auto-adopt loop starts (disable initial state with
 `CS_CURSOR_AUTOADOPT=0`); the prompt-queue drain loop starts (feeds queued
-prompts to idle agents); the persisted scroll speed is applied; a banner with
+prompts to idle agents); the reply-watch loop starts (stats the activity
+marker directory every 50 ms and republishes a session the moment its `Stop`
+hook files a reply — see [Session events](#session-events); always on, no env
+toggle, off under pytest unless `server._REPLY_WATCH_LOOP_ENABLED = True`);
+the persisted scroll speed is applied; a banner with
 the local + tailnet mobile URLs (the access token + a QR code if `segno` is
 installed) is printed; each addon's `on_startup` runs; the Code Map warmer
 builds every open session's `GET …/code-map` snapshot in the background (45 s

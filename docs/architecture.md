@@ -126,7 +126,13 @@ FastAPI app `backend.web.server:app`. Key pieces:
   its own spoken line: every prompt sent with `say: true` (a dictated one
   whose reply will be spoken) carries one instruction asking for a final
   `Say:` line, and the CLI's `Stop` hook files the reply beside the activity
-  marker. **`core/spoken.py`** is the pure text
+  marker. `core/state_events.ReplyWatch` notices the file landing (one
+  directory `stat` per poll, debounced per session, a 1 s rescan fallback for
+  coarse-mtime mounts, a first-scan baseline so replies already on disk are
+  never announced) and `server._reply_watch_loop` republishes just that
+  session's turn-end fields through `_emit_state_changes` — the reply is
+  spoken ~0.1 s after the turn ends, not on the next 4 s tick.
+  **`core/spoken.py`** is the pure text
   side — the instruction, `extract_say`, the markdown stripper, the digest
   fallback, `has_question`, and one mtime-cached reader of the reply file —
   serving the `spoken` record (`{say, source, has_question, ts}`) that the
@@ -164,7 +170,12 @@ FastAPI app `backend.web.server:app`. Key pieces:
   streaming `base.en`) resident while configured, a piper voice unloaded
   after 30 idle minutes — and both kinds warmed at boot and whenever a voice
   client fetches `GET /api/voice` (`speech.warm_in_background`; a local
-  OpenAI-compatible voice host gets one throwaway synthesis). The
+  OpenAI-compatible voice host gets one throwaway synthesis). A voice host
+  that fails or runs past its budget falls back to piper, one voice per
+  reply, and is re-checked only by a background probe
+  (`speech.TtsChain`); the two whisper tiers are scheduled one job per
+  model with the accurate pass first (`speech_stream.Lane`) and split the
+  cores between them (`speech.whisper_threads`). The
   streaming recogniser's accurate pass is biased towards the voice words,
   the open sessions' titles and a MindFlock vocabulary
   (`speech.recognition_hints`); for the titles `speech.session_titles`
@@ -316,7 +327,11 @@ FastAPI app `backend.web.server:app`. Key pieces:
   record is no longer a side effect of an offline poll or of `_forget_probes`,
   both of which destroyed live sessions' work evidence.
 - **The rest of `core/`** — `server.py` keeps only the app assembly, the
-  routes, and the always-on background loops; every other helper cluster is a
+  routes, and the always-on background loops (among them `_reply_watch_loop`,
+  50 ms, and its `_republish_reply` — the cheap counterpart of
+  `_republish_session`: it drops the activity/asking/last_turn/last_say probe
+  memos and patches the published row, never recomputing git state; the
+  watcher itself, `ReplyWatch`, lives in `state_events`); every other helper cluster is a
   focused module: `agent_sessions` (tmux ensure/send/kill for the agent+shell
   panes), `agent_state` (working/clarify/idle/offline detection — and the
   *provenance* behind it: every classification layer stamps a per-title rolling
