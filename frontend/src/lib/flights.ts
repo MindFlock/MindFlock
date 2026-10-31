@@ -139,6 +139,10 @@ export interface StepKindField {
   options?: Array<string | { value: string; label?: string }>;
   default?: unknown;
   placeholder?: string;
+  /** Round 16: a select whose options the UI fills from the line —
+   * `"stops_before"`: every stop before this one (`stopsBefore`); the
+   * server's `options` stay empty. */
+  dynamic?: "stops_before";
 }
 
 /** One entry of `GET /api/flights/kinds` — what the stop palette and the stop
@@ -395,6 +399,33 @@ export function fieldOptions(f: StepKindField): Array<{ value: string; label: st
   return (f.options || []).map((o) =>
     typeof o === "string" ? { value: o, label: o } : { value: String(o.value), label: String(o.label || o.value) }
   );
+}
+
+/** One choice of a `dynamic: "stops_before"` select: a stop's id and title,
+ * `group` the name of the group it is a sub-step of (the select lists a
+ * group's sub-steps under its name). */
+export interface StopChoice {
+  value: string;
+  label: string;
+  group?: string;
+}
+
+/** A Loop's "Repeat from" choices (docs/flights.md "Round 16"): `""` first —
+ * "the first stop", or "the first stop of <group>" when `step` is a sub-step
+ * of a group — then every stop of `steps` before `step`, in flight order,
+ * by title. A step not on the line yet (a new one) sees the whole line. */
+export function stopsBefore(steps: readonly FlightStep[] | null | undefined, step: Pick<FlightStep, "id" | "group">): StopChoice[] {
+  const list = steps || [];
+  const at = list.findIndex((s) => s.id === step.id);
+  const before = at >= 0 ? list.slice(0, at) : list.slice();
+  const g = step.group?.name;
+  const out: StopChoice[] = [{ value: "", label: g ? "the first stop of " + g : "the first stop" }];
+  for (const s of before) {
+    const c: StopChoice = { value: s.id, label: (s.title || "").trim() || s.kind };
+    if (s.group?.name) c.group = s.group.name;
+    out.push(c);
+  }
+  return out;
 }
 
 /** A new stop of a kind: its default title and every field's default. The id

@@ -301,6 +301,13 @@ export function StopIcon({ kind, size = 15 }: { kind: string; size?: number }) {
         <path d="M8.4 10h7.2M12 6.4c1.6 1.8 1.6 5.4 0 7.2M12 6.4c-1.6 1.8-1.6 5.4 0 7.2" />
       </>
     ),
+    // ↻ — an open circle with its arrowhead: the Loop (round 16).
+    loop: (
+      <>
+        <path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3" />
+        <polyline points="18.5 3 18.5 7.2 14.3 7.2" />
+      </>
+    ),
     // A camera: the screenshot.
     screenshot: (
       <>

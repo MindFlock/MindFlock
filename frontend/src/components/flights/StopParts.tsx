@@ -10,12 +10,12 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ApiError } from "../../api/client";
 import { errMsg } from "../../lib/format";
 import { LANE_LABEL, normalizeLane } from "../../lib/autopilot";
-import { ON_FAIL_LABEL, defaultOnFail, fieldOptions, type FlightStep, type OnFail, type StepKindDef, type StepKindField, type StepRunState } from "../../lib/flights";
+import { ON_FAIL_LABEL, defaultOnFail, fieldOptions, stopsBefore, type FlightStep, type OnFail, type StepKindDef, type StepKindField, type StepRunState, type StopChoice } from "../../lib/flights";
 import { stopSummary } from "../../lib/flightDiagram";
 import { describeSteps } from "../../lib/flightsApi";
 import { WHEN_COMBINE, WHEN_GRAMMAR, WHEN_MAX, checkWhen, skippedNote, whenChecker, whenError, type WhenCheck } from "../../lib/whenHelp";
 import { StopIcon } from "./Bird";
-import { FlField, NumberField, PromptBox, Seg, TextField, Toggle } from "./controls";
+import { ChipRow, FlField, NumberField, PromptBox, Seg, TextField, Toggle } from "./controls";
 import "./Flights.css";
 import "./StopParts.css";
 
@@ -124,10 +124,25 @@ function cleanLabel(f: StepKindField): string {
   return f.label.replace(/\s*\((minutes|one per line)\)\s*$/i, "");
 }
 
-/** One field, drawn with the app's controls. */
-export function StopField({ f, value, onChange, readOnly }: { f: StepKindField; value: unknown; onChange(v: unknown): void; readOnly?: boolean }) {
+/** One field, drawn with the app's controls. `choices`: a `dynamic`
+ * select's options, filled from the line (`stopsBefore`). */
+export function StopField({
+  f,
+  value,
+  onChange,
+  readOnly,
+  choices,
+}: {
+  f: StepKindField;
+  value: unknown;
+  onChange(v: unknown): void;
+  readOnly?: boolean;
+  choices?: readonly StopChoice[];
+}) {
   const v = value === undefined ? f.default : value;
   const label = cleanLabel(f);
+  if (f.type === "select" && f.dynamic === "stops_before")
+    return <StopsBeforeField label={label} value={String(v ?? "")} choices={choices || stopsBefore([], { id: "" })} readOnly={readOnly} onChange={onChange} />;
   if (f.type === "bool")
     return (
       <div className="fl-fld">
@@ -174,6 +189,52 @@ export function StopField({ f, value, onChange, readOnly }: { f: StepKindField; 
   );
 }
 
+/** A `dynamic: "stops_before"` select (a Loop's "Repeat from"): a chip per
+ * stop before this one, in flight order — "the first stop" first, a group's
+ * sub-steps in a row under the group's name. A value that is no longer
+ * before it (moved, removed) shows as its own chip so the choice stays
+ * visible until it is changed. */
+export function StopsBeforeField({
+  label,
+  value,
+  choices,
+  onChange,
+  readOnly,
+}: {
+  label: string;
+  value: string;
+  choices: readonly StopChoice[];
+  onChange(v: string): void;
+  readOnly?: boolean;
+}) {
+  const runs: Array<{ group: string; items: StopChoice[] }> = [];
+  for (const c of choices) {
+    const g = c.group || "";
+    const last = runs[runs.length - 1];
+    if (last && last.group === g) last.items.push(c);
+    else runs.push({ group: g, items: [c] });
+  }
+  if (value && !choices.some((c) => c.value === value)) runs.push({ group: "", items: [{ value, label: "a stop no longer before this one" }] });
+  const pick = (x: string) => !readOnly && onChange(x);
+  return (
+    <FlField label={label} wide hint="The flight goes back to this stop for each new run.">
+      <div className="fl-stops-before" data-dynamic="stops_before">
+        {runs.map((r, i) => (
+          <div key={i} className={"fl-stops-before-run" + (r.group ? " fl-stops-before-group" : "")}>
+            {r.group && <span className="fl-stops-before-name">{r.group}</span>}
+            <ChipRow
+              label={r.group ? label + " — " + r.group : label}
+              value={value}
+              options={r.items.map((c) => ({ value: c.value, label: c.label, title: c.value ? undefined : "Where the line (or this group) starts" }))}
+              onChange={pick}
+            />
+          </div>
+        ))}
+      </div>
+    </FlField>
+  );
+}
+
 /** The selected stop's fields: its title, its kind's own fields, and what
  * happens if it fails. `readOnly` draws a done / current stop of a live
  * flight, which can't be edited. */
@@ -185,11 +246,14 @@ export function StopInspector({
   actions,
   note,
   run,
+  lineSteps,
 }: {
   step: FlightStep;
   def: StepKindDef | undefined;
   onChange(patch: Partial<FlightStep>): void;
   readOnly?: boolean;
+  /** The line's steps in flight order: a `dynamic` field's options. */
+  lineSteps?: readonly FlightStep[] | null;
   /** The row of buttons at its foot (Move, Duplicate, Remove / Save). */
   actions?: ReactNode;
   note?: ReactNode;
@@ -212,7 +276,7 @@ export function StopInspector({
       </header>
       {note}
       {skipped && <p className="fl-note muted fl-skipped-note">{skipped}</p>}
-      <StopForm step={step} def={def} onChange={onChange} readOnly={readOnly} />
+      <StopForm step={step} def={def} onChange={onChange} readOnly={readOnly} lineSteps={lineSteps} />
       {actions && <div className="fl-inspector-acts">{actions}</div>}
     </section>
   );
@@ -222,22 +286,52 @@ export function StopInspector({
  * on, what happens if it fails (the inspector's and the stop dialog's) —
  * the kind's `default_on_fail` pressed when the stop says nothing.
  * `readOnly` ignores edits. */
-export function StopForm({ step, def, onChange, readOnly }: { step: FlightStep; def: StepKindDef | undefined; onChange(patch: Partial<FlightStep>): void; readOnly?: boolean }) {
+export function StopForm({
+  step,
+  def,
+  onChange,
+  readOnly,
+  lineSteps,
+}: {
+  step: FlightStep;
+  def: StepKindDef | undefined;
+  onChange(patch: Partial<FlightStep>): void;
+  readOnly?: boolean;
+  /** The line's steps in flight order (a session's line, a flyway being
+   * drawn): what a `dynamic: "stops_before"` field lists. */
+  lineSteps?: readonly FlightStep[] | null;
+}) {
   const fallback = defaultOnFail(def);
+  const setField = (name: string, v: unknown) => onChange({ config: { ...step.config, [name]: v } });
   return (
     <div className="fl-form">
       <FlField label="Title" wide={false}>
         <TextField label="Stop title" value={step.title} onChange={(t) => !readOnly && onChange({ title: t })} />
       </FlField>
-      {(def?.fields || []).map((f) => (
-        <StopField
-          key={f.name}
-          f={f}
-          value={step.config?.[f.name]}
-          readOnly={readOnly}
-          onChange={(v) => onChange({ config: { ...step.config, [f.name]: v } })}
-        />
-      ))}
+      {(def?.fields || []).map((f) =>
+        step.kind === "loop" && f.name === "until" && f.type !== "select" && f.type !== "bool" && f.type !== "int" ? (
+          // A Loop's "until" is a `when` expression (round 15's grammar):
+          // the same editor, checked by the server as it is typed.
+          <WhenField
+            key={f.name}
+            label={cleanLabel(f)}
+            placeholder={f.placeholder}
+            hint="Empty: only the count stops it. ⓘ lists the conditions."
+            value={String(step.config?.[f.name] ?? "")}
+            readOnly={readOnly}
+            onChange={(w) => setField(f.name, w)}
+          />
+        ) : (
+          <StopField
+            key={f.name}
+            f={f}
+            value={step.config?.[f.name]}
+            readOnly={readOnly}
+            choices={f.dynamic === "stops_before" ? stopsBefore(lineSteps, step) : undefined}
+            onChange={(v) => setField(f.name, v)}
+          />
+        )
+      )}
       {step.kind === "agent" && (!!step.config?.program || !!step.config?.model) && !step.config?.fresh && (
         // Switch pilot (docs/flights.md "Round 15"): another CLI or model
         // only takes the controls in a new session.
@@ -268,7 +362,22 @@ export function StopForm({ step, def, onChange, readOnly }: { step: FlightStep; 
  * is typed 300 ms after the last keystroke — its error under the field — and
  * on blur its canonical form replaces the text. An older server without the
  * validator just keeps the text. */
-export function WhenField({ value, onChange, readOnly }: { value: string; onChange(v: string): void; readOnly?: boolean }) {
+export function WhenField({
+  value,
+  onChange,
+  readOnly,
+  label = "Only when",
+  placeholder = "e.g. diff touches frontend/** and weekday",
+  hint = "Empty: always. ⓘ lists the conditions.",
+}: {
+  value: string;
+  onChange(v: string): void;
+  readOnly?: boolean;
+  /** Round 16: the same editor for a Loop's "until". */
+  label?: string;
+  placeholder?: string;
+  hint?: string;
+}) {
   const [help, setHelp] = useState(false);
   const [answer, setAnswer] = useState<{ text: string; res: WhenCheck | null } | null>(null);
   const change = useRef(onChange);
@@ -283,16 +392,16 @@ export function WhenField({ value, onChange, readOnly }: { value: string; onChan
   useEffect(() => () => checker.current?.cancel(), []);
   const err = whenError(value, answer?.text === value ? answer.res : null);
   return (
-    <FlField label="Only when" wide hint={err ? undefined : "Empty: always. ⓘ lists the conditions."}>
+    <FlField label={label} wide hint={err ? undefined : hint}>
       <span className="fl-when-row">
         <input
           type="text"
           className={"fl-input fl-mono fl-when-input" + (err ? " fl-when-bad" : "")}
-          aria-label="Only when"
+          aria-label={label}
           aria-invalid={err ? true : undefined}
           value={value}
           maxLength={WHEN_MAX}
-          placeholder="e.g. diff touches frontend/** and weekday"
+          placeholder={placeholder || "e.g. diff touches frontend/** and weekday"}
           spellCheck={false}
           readOnly={readOnly}
           onChange={(e) => {

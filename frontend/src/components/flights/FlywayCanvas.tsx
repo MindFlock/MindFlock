@@ -63,6 +63,8 @@ import {
   birdPerches,
   joinLabel,
   layoutDiagram,
+  loopPill,
+  loopPillTitle,
   reorderDiagram,
   sizedBoxFor,
   type BoxSize,
@@ -575,7 +577,9 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
   const pad = 6;
   // Headroom over the top row for the bird to stand in, a toolbar, or an
   // open group's label.
-  const top = p.bird || p.diagram.nodes.some((n) => tooled(n) || !!n.inGroup) ? 26 : pad;
+  // Round 16: a Loop's return arc (and its pill) rides over the line — the
+  // stage keeps room for its rise.
+  const top = Math.max(p.bird || p.diagram.nodes.some((n) => tooled(n) || !!n.inGroup) ? 26 : pad, shown.rise ? Math.ceil(shown.rise) + pad : 0);
 
   // A point on the screen in the stage's pixels (the Sky zooms the line with
   // a transform; its width against its layout width undoes that).
@@ -882,8 +886,8 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
           <g transform={`translate(${pad} ${top})`}>
             {shown.wires.map((w) => (
               <path
-                key={w.from + ">" + w.to}
-                className={"fl-wire fl-wire-" + w.kind + (w.done ? " fl-wire-done" : "")}
+                key={w.from + ">" + w.to + (w.kind === "loop" ? ">loop" : "")}
+                className={"fl-wire fl-wire-" + w.kind + (w.done ? " fl-wire-done" : "") + (w.kind === "loop" ? " fl-edge-loop fl-loop-" + (w.loop?.state || "pending") : "")}
                 d={w.d}
                 // Arrowheads only where the line arrives: a fan-out has none.
                 markerEnd={w.kind === "add" || w.kind === "fan" ? undefined : `url(#${uid}-arrow)`}
@@ -891,6 +895,23 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
             ))}
           </g>
         </svg>
+        {shown.wires.map((w) => {
+          // A Loop's count on its arc's apex: "2 / 3" — screen-sized at any
+          // zoom of the Sky, like the join pill.
+          const text = w.kind === "loop" && w.apex && w.loop ? loopPill(w.loop) : "";
+          if (!text) return null;
+          return (
+            <span
+              key={"loop:" + w.from}
+              className={"fl-loop-pill fl-loop-" + w.loop!.state}
+              style={{ transform: `translate(${w.apex!.x + pad}px, ${w.apex!.y + top}px) translate(-50%, -50%) scale(calc(1 / var(--sky-z, 1)))` }}
+              title={loopPillTitle(w.loop!)}
+              aria-label={loopPillTitle(w.loop!)}
+            >
+              {text}
+            </span>
+          );
+        })}
         {groupFrames(shown.boxes).map((f) => (
           // An open group: its sub-steps inside a thin outline, its name on
           // the outline with ▾ to fold it back into one box.
