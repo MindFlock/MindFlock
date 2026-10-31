@@ -647,6 +647,14 @@ class BaseProvider:
         Default: False."""
         return False
 
+    def clear_context_command(self) -> Optional[str]:
+        """What to type into the agent to clear its conversation (a fresh
+        context in the same session), or None when the CLI has no such
+        command. A flight's Loop stop with ``fresh`` delivers it into the
+        session's queue before each repeat (docs/flights.md "Round 16").
+        Default: None (nothing to send)."""
+        return None
+
     def voice_prompt_hook(self) -> bool:
         """Whether this CLI's prompt-submit hook injects MindFlock's voice
         instruction itself (``activity_markers.VOICE_INSTRUCTION``, printed by

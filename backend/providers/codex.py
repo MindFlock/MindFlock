@@ -48,6 +48,13 @@ class CodexProvider(GenericProvider):
             ),
         )
 
+    # --- a fresh context (a flight's Loop stop) ----------------------------- #
+    def clear_context_command(self) -> Optional[str]:
+        """Codex's ``/new`` ("start a new chat during a conversation",
+        verified in the 0.164 TUI's slash-command list; ``/clear`` there also
+        wipes the terminal, which a watcher of the pane would lose)."""
+        return "/new"
+
     # --- terminal classification ------------------------------------------ #
     def parse_dialog(self, screen_text: str) -> Optional[dict]:
         """The approval overlay (run a command / make edits / grant
