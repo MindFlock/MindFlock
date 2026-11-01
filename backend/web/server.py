@@ -6270,6 +6270,9 @@ def _deliver_to_agent(
     # prompts dialog, the Map's buttons) — automation types via
     # _send_queued_item and the limit watcher, never through here.
     _note_human_input(title)
+    # Typed into a dialog that is up (a send box that is not dialog_safe):
+    # a submitted text's Enter answers it — the last answer is stamped.
+    _note_pane_input(inst, title, text + ("\r" if submit else ""))
     typed = _voice_say(inst, title, text) if say else text
     if not _send_to_agent(name, typed, submit):
         if say:
@@ -6535,7 +6538,16 @@ async def instance_send(
     pressed; asleep or not running is 409 (never queued, never booted);
     paused, over budget and driven-elsewhere as above. → ``{"sent": true,
     "submitted": true, "entered": true}``. ``enter`` with text, or with
-    ``submit: false``, is 400."""
+    ``submit: false``, is 400.
+
+    ``voice=true``: the text is a voice client's dictation (live typing is
+    ``submit: false``) — it implies ``dialog_safe``, so a session in
+    clarify, on the usage-limit menu, with an unreadable activity or with a
+    dialog on its screen is 409 ``{"in_dialog": true}`` with nothing typed
+    (a submitted voice message is queued, as any dialog-safe send). A
+    whitespace-only ``text`` is allowed with ``submit: false`` (the space
+    between two dictated words). Typing by a person (the terminal, the send
+    box) never sets it and is unchanged."""
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
@@ -6547,9 +6559,13 @@ async def instance_send(
             {"error": "enter presses Enter on the draft: no text, submit not false"},
             status_code=400,
         )
-    if not enter and not text.strip():
+    # A voice client's dictation (opt-in ``voice: true``): never typed into a
+    # dialog, whatever the client believes is on screen — always dialog-safe.
+    # Live typing may be a lone space between two dictated words.
+    voice = (payload or {}).get("voice") is True
+    if not enter and not text.strip() and not (voice and not submit and text):
         return JSONResponse({"error": "empty message"}, status_code=400)
-    dialog_safe = bool((payload or {}).get("dialog_safe", False))
+    dialog_safe = voice or bool((payload or {}).get("dialog_safe", False))
     # "Read everything" on: every prompt asks for its Say line, not only the
     # ones a client marks (core.voice.say_all).
     say = submit and ((payload or {}).get("say") is True or _voice.say_all())
@@ -12201,6 +12217,62 @@ async def instance_answer(
     return JSONResponse(body, status_code=status)
 
 
+#: title -> (hash of the probe's last screen, whether it shows a dialog):
+#: one provider check per distinct screen, however many keys arrive.
+_PANE_DIALOG_MEMO: Dict[str, tuple] = {}
+_PANE_DIALOG_MEMO_MAX = 1024
+
+
+def _pane_input_answers(inst, title: str) -> bool:
+    """Whether a settling key reaching ``title``'s pane NOW answers a dialog,
+    from what was known BEFORE the key (once it lands the dialog is gone):
+    the session's last activity reading is ``clarify`` / ``limit``, or its
+    probe's last screen (at most ``asking.SCREEN_MAX_AGE_S`` old) shows a
+    dialog by the provider (a sub-agent's prompt while the row reads
+    working). Cached reads only — no tmux, so the terminal socket's loop
+    can ask on every frame. Never raises (unknown → False)."""
+    try:
+        rec = _agent_state._ACTIVITY_CACHE.get(title) or {}
+        if rec.get("reported") in _agent_io.ANSWERABLE_ACTIVITIES:
+            return True
+        screen = _agent_state.last_screen(title, _asking.SCREEN_MAX_AGE_S)
+        if not screen:
+            return False
+        key = hash(screen)
+        hit = _PANE_DIALOG_MEMO.get(title)
+        if hit is not None and hit[0] == key:
+            return hit[1]
+        up = bool(
+            providers.resolve(getattr(inst, "Program", "") or "").dialog_on_screen(
+                screen
+            )
+        )
+        if len(_PANE_DIALOG_MEMO) >= _PANE_DIALOG_MEMO_MAX:
+            _PANE_DIALOG_MEMO.clear()
+        _PANE_DIALOG_MEMO[title] = (key, up)
+        return up
+    except Exception:  # noqa: BLE001 — unknown reads as "not a dialog"
+        return False
+
+
+def _note_pane_input(inst, title: str, data) -> None:
+    """Input typed straight into ``title``'s pane (its terminal socket, a
+    ``/send``) that settles a dialog — Enter, a digit, y/n, Escape; never
+    the wheel, a click, focus or arrow navigation
+    (``agent_io.settling_input``) — while one is up answered it as surely
+    as ``/answer`` does: stamp ``voice_actions.answered_at``, so the voice
+    router never counts a phrase begun before it for the NEXT dialog (a
+    same-id re-ask slipping between polls). Terminal replies to tmux's
+    probes never stamp. Never raises."""
+    try:
+        if is_terminal_reply(data) or not _agent_io.settling_input(data):
+            return
+        if _pane_input_answers(inst, title):
+            _voice_actions.note_answered(title)
+    except Exception:  # noqa: BLE001 — a stamp must never cost a keystroke
+        pass
+
+
 def _answer_dialog(inst, title: str, text: str, keys, dialog_id, by: str):
     """``/answer``'s check-and-type → ``(body, status)``. Blocking.
 
@@ -12782,7 +12854,9 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
 
     def into_pane(data: bytes) -> None:
         """Input for the pane: through the attach client (the owner, and
-        every terminal's answers to tmux's probes), else send-keys."""
+        every terminal's answers to tmux's probes), else send-keys. A key
+        that settles a dialog stamps the session's last answer first."""
+        _note_pane_input(inst, title, data)
         if typist is None or is_terminal_reply(data):
             os.write(fd, data)
         else:
