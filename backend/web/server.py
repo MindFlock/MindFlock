@@ -6332,6 +6332,44 @@ def _enter_on_agent(inst, title: str, *, say: bool = False, extra: str = ""):
     return "sent", None
 
 
+def _dictate_on_agent(inst, title: str, text: str, erase: int):
+    """One batch of a voice client's live dictation → ``(told, reason)``
+    like :func:`_enter_on_agent`: take back ``erase`` characters, then type
+    ``text`` (no Enter) — ``/send``'s ``{"voice": true, "submit": false,
+    "erase": n}`` form, the desktop's every dictation keystroke.
+
+    The voice gate, checked at send time against the SCREEN (the rows the
+    client sees lag the 4 s state tick): a session in clarify, on the
+    usage-limit menu, with an unreadable activity or with a dialog on
+    screen (a sub-agent's prompt under a "working" row) gets nothing —
+    neither the text nor a Backspace (it could act on the dialog) — and
+    :data:`_SEND_IN_DIALOG`. Paused → :data:`PAUSED_REFUSED`; asleep or not
+    running → refused, never booted (a fresh CLI has no draft to correct).
+    Then one tmux call (``agent_io.send_dictation``). Blocking — call via
+    ``asyncio.to_thread``."""
+    if getattr(inst, "Status", None) == Paused:
+        return False, PAUSED_REFUSED
+    if _sleep.is_sleeping(title):
+        return False, _ENTER_ASLEEP
+    name = _live_session_name(tmux.to_mindflock_tmux_name(title))
+    if name is None:
+        return False, _ENTER_NOT_RUNNING
+    try:
+        activity = _agent_activity(inst, title)
+    except Exception:  # noqa: BLE001 — unknown reads as "don't type blind"
+        activity = "unknown"
+    if (
+        activity in _PB_DIALOG_ACTIVITIES
+        or activity == "unknown"
+        or _dialog_on_screen(inst, name)
+    ):
+        return False, _SEND_IN_DIALOG
+    _note_human_input(title)
+    if not _agent_io.send_dictation(name, erase, text):
+        return False, _SEND_FAILED
+    return "sent", None
+
+
 def _driven_elsewhere(request, title: str, payload) -> Optional[JSONResponse]:
     """409 ``{"error": "driven by <name>", "driver"}`` when another person
     holds ``title``'s keyboard (core.ownership) — the gate on every route that
@@ -6547,7 +6585,19 @@ async def instance_send(
     (a submitted voice message is queued, as any dialog-safe send). A
     whitespace-only ``text`` is allowed with ``submit: false`` (the space
     between two dictated words). Typing by a person (the terminal, the send
-    box) never sets it and is unchanged."""
+    box) never sets it and is unchanged.
+
+    ``{"voice": true, "submit": false, "erase": n}``: one batch of live
+    dictation — take back ``n`` characters (the BSpace key ×n), then type
+    ``text`` (may be empty), in ONE tmux call (:func:`_dictate_on_agent`):
+    a recognizer's correction ("fix the bu" → "fix the bag" is erase 1,
+    text "ag") lands whole. Gated like voice typing, checked against the
+    screen at send time: clarify, limit, unknown or a dialog on screen is
+    409 ``{"in_dialog": true}`` with nothing typed and nothing erased.
+    Asleep or not running is 409 (never booted). ``text`` is one line (no
+    control characters, ≤ 2000); ``n`` is 0–2000. → ``{"sent": true,
+    "submitted": false, "erased": n}``. ``erase`` without ``voice: true``
+    and ``submit: false`` (or with ``enter``) is 400."""
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
@@ -6563,7 +6613,19 @@ async def instance_send(
     # dialog, whatever the client believes is on screen — always dialog-safe.
     # Live typing may be a lone space between two dictated words.
     voice = (payload or {}).get("voice") is True
-    if not enter and not text.strip() and not (voice and not submit and text):
+    # One batch of live dictation: Backspace ×erase, then the text.
+    dictating = "erase" in (payload or {})
+    erase = 0
+    if dictating:
+        if not voice or submit or enter:
+            return JSONResponse(
+                {"error": "erase is voice live typing: voice true, submit false"},
+                status_code=400,
+            )
+        erase, eerr = _agent_io.parse_dictation(text, payload.get("erase"))
+        if eerr is not None:
+            return JSONResponse({"error": eerr}, status_code=400)
+    elif not enter and not text.strip() and not (voice and not submit and text):
         return JSONResponse({"error": "empty message"}, status_code=400)
     dialog_safe = voice or bool((payload or {}).get("dialog_safe", False))
     # "Read everything" on: every prompt asks for its Say line, not only the
@@ -6590,6 +6652,10 @@ async def instance_send(
     if enter:
         told, reason = await asyncio.to_thread(
             lambda: _enter_on_agent(inst, title, say=say, extra=extra)
+        )
+    elif dictating:
+        told, reason = await asyncio.to_thread(
+            lambda: _dictate_on_agent(inst, title, text, erase)
         )
     else:
         told, reason = await asyncio.to_thread(
@@ -6619,6 +6685,8 @@ async def instance_send(
         return JSONResponse(body)
     if enter:
         return JSONResponse({"sent": True, "submitted": True, "entered": True})
+    if dictating:
+        return JSONResponse({"sent": True, "submitted": False, "erased": erase})
     return JSONResponse({"sent": True, "submitted": submit})
 
 

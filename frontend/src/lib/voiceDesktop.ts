@@ -1,8 +1,12 @@
 /** The desktop mic (components/TopBarMic.tsx): everything that is not DOM.
  *
  * The words are typed into the focused session AS YOU SPEAK: each recognised
- * phrase goes straight into the session's input field (raw keys down its
- * terminal, like typing), and the radio words end a phrase:
+ * phrase goes straight into the session's input field — through the
+ * server's voice gate (POST /api/instances/{title}/send {voice: true,
+ * submit: false, erase, text}, {@link KeyGate}), never raw keys down the
+ * terminal socket: the server reads the screen at send time and refuses
+ * (409 in_dialog, nothing pressed) while a dialog is up, which this page
+ * hears of only 2–4 s later — and the radio words end a phrase:
  *  - "over" — send the draft (Enter, through POST /api/instances/{title}/send
  *    {enter: true}, after the same dialog checks as a send) and keep
  *    listening: the next phrase is the next message;
@@ -45,7 +49,6 @@
 
 import { ApiError, api, apiRaw, instApi } from "../api/client";
 import type { Dialog, VoiceHelp } from "../api/types";
-import { peekTerm } from "./terminals";
 import { toast } from "./toast";
 import { resamplerName, startWavRecording, type WavRecording } from "./wavRecorder";
 import {
@@ -905,6 +908,26 @@ export class Dictation {
     if (text && this.typed.endsWith(text)) this.typed = this.typed.slice(0, this.typed.length - text.length);
   }
 
+  /** A phrase is under way (its guess may be typed). */
+  get inPhrase(): boolean {
+    return this.phraseAt >= 0;
+  }
+
+  /** Keys counted as typed never went in (the server's voice gate refused
+   * them, {@link KeyGate}): `text`, the end of {@link typed}, is not in the
+   * field, and `erased`, which they would have taken back, still is.
+   * Returns the part of `text` from phrases already over — the phrase under
+   * way corrects itself at its end against what really went in (its guess
+   * is now only the part that did). */
+  untyped(text: string, erased: string): string {
+    const base = text && this.typed.endsWith(text) ? this.typed.slice(0, this.typed.length - text.length) : this.typed;
+    const guess = this.phraseAt < 0 ? 0 : this.typed.length - this.phraseAt;
+    const over = this.phraseAt < 0 ? text : guess >= text.length ? "" : text.slice(0, text.length - guess);
+    this.typed = base + erased;
+    if (this.phraseAt >= 0 && guess <= text.length) this.phraseAt = this.typed.length;
+    return over;
+  }
+
   /** One final phrase: the phrase under way ends as `phrase` (its guess
    * corrected to it, or taken back for a control word). `radio` false: its
    * radio words are plain words (an "over" the voice went on after). */
@@ -1043,6 +1066,217 @@ export function dialogUp(activity: string): boolean {
  * often ({@link LiveHooks.dialogCheck}). */
 export const DIALOG_CHECK_EVERY_MS = 2000;
 
+// --- the server's voice gate: every dictation key goes through /send -------- //
+
+/** A batch of dictation keys the server's voice gate did not take ({@link
+ * KeyGate}): nothing of it — nor of the keys queued behind it — went in. */
+export interface GateRefusal {
+  /** 409 `in_dialog`: a dialog is on the session's screen (the server read
+   * it at send time — the rows this page sees lag its 4 s state tick). */
+  dialog: boolean;
+  /** Why, as a caption (a failure's; a dialog's is {@link dialogStopLine}). */
+  line: string;
+  /** What was counted as typed but never went in: the end of the dictation's
+   * typing. */
+  text: string;
+  /** What those keys would have taken back: it is still in the field. */
+  erased: string;
+}
+
+/** One batch's request: take back `erase` characters, then type `text`. */
+export type KeyPost = (title: string, erase: number, text: string) => Promise<unknown>;
+
+/** POST /api/instances/{title}/send {voice: true, submit: false, erase, text}:
+ * BSpace ×erase then the text, in one tmux call, refused (409 in_dialog,
+ * nothing pressed) while a dialog is on the session's screen. */
+export const postKeys: KeyPost = async (title, erase, text) =>
+  instApi(title, "/send", { json: { voice: true, submit: false, erase, text } });
+
+/** A batch the server has not answered in this long has failed (the gate
+ * stops typing and says so): a hung request never holds the session's lane,
+ * nor the words behind it, for good. */
+export const KEY_TIMEOUT_MS = 4000;
+
+/** `p`, or a rejection once `ms` passed without an answer. */
+function answerWithin<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((res, rej) => {
+    const timer = setTimeout(() => rej(new Error("the server didn't answer")), ms);
+    p.then(
+      (v) => (clearTimeout(timer), res(v)),
+      (e) => (clearTimeout(timer), rej(e))
+    );
+  });
+}
+
+/** One session's batches go one at a time, in order, whichever target sent
+ * them (a dictation's and a router answer's): the next waits for the last. */
+const keyLanes = new Map<string, Promise<unknown>>();
+function inLane<T>(title: string, fn: () => Promise<T>): Promise<T> {
+  const call = (): Promise<T> => {
+    try {
+      return Promise.resolve(fn());
+    } catch (err) {
+      return Promise.reject(err);
+    }
+  };
+  const prev = keyLanes.get(title);
+  const p = prev ? prev.then(call, call) : call();
+  keyLanes.set(title, p);
+  const clear = () => {
+    if (keyLanes.get(title) === p) keyLanes.delete(title);
+  };
+  p.then(clear, clear);
+  return p;
+}
+
+/** The last {@link KEY_TIMES_KEPT} batches' round trips (ms): the latency the
+ * gate adds to live typing (window.__mfVoiceKeys; the debug trace). */
+const KEY_TIMES_KEPT = 20;
+let keyTimes: number[] = [];
+declare global {
+  interface Window {
+    __mfVoiceKeys?: number[];
+  }
+}
+function keyTime(ms: number, erase: number, chars: number): void {
+  keyTimes = [...keyTimes, Math.round(ms)].slice(-KEY_TIMES_KEPT);
+  if (typeof window !== "undefined") window.__mfVoiceKeys = keyTimes;
+  try {
+    if (typeof localStorage !== "undefined" && localStorage.getItem("cs_voice_debug") === "1")
+      console.debug("[voice] keys ⌫" + erase + " +" + chars + " in " + Math.round(ms) + " ms");
+  } catch {
+    /* no storage: no trace */
+  }
+}
+
+/** A pending batch: `erase` characters back, then `text` (code points). */
+interface KeyBatch {
+  erase: number;
+  text: string[];
+}
+
+/** Fold "take back `erase` characters, then type `text`" into `b`: an erase
+ * that reaches only what `b` would type just drops it ("fix the bu" then
+ * ⌫1 "ag" is "fix the bag"), so a burst is one request. */
+function foldKeys(b: KeyBatch, erase: number, text: string[]): KeyBatch {
+  const keep = Math.max(0, b.text.length - erase);
+  return { erase: b.erase + Math.max(0, erase - b.text.length), text: [...b.text.slice(0, keep), ...text] };
+}
+
+/** A dictation target's keys, through the server's voice gate instead of the
+ * terminal socket (MF2: the socket types into whatever is on screen; the
+ * gate reads the screen at send time and refuses in ~20 ms a dialog this
+ * page will not hear of for 2–4 s). Keys go at once when nothing is in
+ * flight; what comes while a batch is in flight is folded into ONE next
+ * batch (a local round trip is ~10–30 ms: a burst of recognizer answers
+ * goes as one correction). In order, one request at a time per session.
+ * The first refusal (a dialog) or failure (the network, the session gone)
+ * drops everything queued behind it, never falls back to the socket, and is
+ * told to {@link onRefused}; the gate then takes nothing until {@link reset}. */
+export class KeyGate {
+  /** What the server took from this gate (code points): what a refusal's
+   * erase would have taken back is read off its end. */
+  private field: string[] = [];
+  private queued: KeyBatch | null = null;
+  private flying: KeyBatch | null = null;
+  private failed: GateRefusal | null = null;
+  private waiters: Array<(r: GateRefusal | null) => void> = [];
+  private listeners = new Set<(r: GateRefusal) => void>();
+
+  constructor(
+    readonly title: string,
+    readonly name: string,
+    private post: KeyPost = postKeys
+  ) {}
+
+  /** The refusal that stopped this gate, if any. */
+  get refused(): GateRefusal | null {
+    return this.failed;
+  }
+
+  /** Nothing queued or in flight. */
+  get idle(): boolean {
+    return !this.flying && !this.queued;
+  }
+
+  /** Queue "take back `erase`, then type `text`". False once refused. */
+  push(erase: string, text: string): boolean {
+    if (this.failed) return false;
+    if (!erase && !text) return true;
+    this.queued = foldKeys(this.queued || { erase: 0, text: [] }, Array.from(erase).length, Array.from(text));
+    if (!this.flying) this.fly();
+    return true;
+  }
+
+  /** Resolves once every key pushed so far went in (null) or was refused
+   * (the refusal) — before an Enter, which must follow the words. */
+  settled(): Promise<GateRefusal | null> {
+    if (this.failed || this.idle) return Promise.resolve(this.failed);
+    return new Promise((res) => this.waiters.push(res));
+  }
+
+  /** Be told of the refusal (once). Returns the unsubscribe. */
+  onRefused(fn: (r: GateRefusal) => void): () => void {
+    this.listeners.add(fn);
+    return () => void this.listeners.delete(fn);
+  }
+
+  /** A new message: the gate takes keys again (the server gates each). */
+  reset(): void {
+    if (!this.idle) return;
+    this.failed = null;
+    this.field = [];
+  }
+
+  private fly(): void {
+    const b = this.queued;
+    this.queued = null;
+    if (!b || (!b.erase && !b.text.length)) return this.wake();
+    this.flying = b;
+    const t0 = Date.now();
+    const text = b.text.join("");
+    inLane(this.title, () => answerWithin(this.post(this.title, b.erase, text), KEY_TIMEOUT_MS)).then(
+      () => {
+        keyTime(Date.now() - t0, b.erase, b.text.length);
+        this.field = [...this.field.slice(0, Math.max(0, this.field.length - b.erase)), ...b.text];
+        this.flying = null;
+        if (this.queued) this.fly();
+        else this.wake();
+      },
+      (err) => this.fail(b, err)
+    );
+  }
+
+  private fail(b: KeyBatch, err: unknown): void {
+    // Everything from this batch on: one take-back and one text, against
+    // what the server has.
+    const all = this.queued ? foldKeys(b, this.queued.erase, this.queued.text) : b;
+    const erased = this.field.slice(Math.max(0, this.field.length - all.erase)).join("");
+    this.flying = null;
+    this.queued = null;
+    const body = (err instanceof ApiError ? err.body : null) as { in_dialog?: boolean; paused?: boolean } | null;
+    const dialog = err instanceof ApiError && err.status === 409 && !!body?.in_dialog;
+    let line = "Couldn't type into " + this.name + " — " + ((err as Error)?.message || "the server didn't answer");
+    if (body?.paused) line = this.name + " is paused — resume it first";
+    else if (!(err instanceof ApiError)) line = "Couldn't type into " + this.name + " — the server didn't answer";
+    this.failed = { dialog, line, text: all.text.join(""), erased };
+    for (const fn of [...this.listeners]) {
+      try {
+        fn(this.failed);
+      } catch {
+        /* one listener never stops the rest */
+      }
+    }
+    this.wake();
+  }
+
+  private wake(): void {
+    const w = this.waiters;
+    this.waiters = [];
+    for (const res of w) res(this.failed);
+  }
+}
+
 /** Where a dictation's words go: a session's terminal, or a text box. */
 export interface DictTarget {
   kind: "session" | "field";
@@ -1061,17 +1295,26 @@ export interface DictTarget {
    * calls this instead of leaving the words in the box. `say`: the "Read
    * replies aloud" pref. */
   submit?(say: boolean): Promise<{ ok: boolean; line: string }>;
+  /** The keys go through the server's voice gate ({@link KeyGate}): `type`,
+   * `erase` and `replace` only queue them (false once refused); whether they
+   * went in is told later — {@link KeyGate.onRefused}, {@link
+   * KeyGate.settled}. Absent: the keys are in when the call returns. */
+  gate?: KeyGate;
 }
 
-/** The focused session's agent terminal: keys down its socket, as typed. */
-export function sessionTarget(title: string, name: string): DictTarget {
-  const send = (data: string) => peekTerm(title, "agent")?.send(data) ?? false;
+/** The focused session's agent: every key through POST /send {voice: true}
+ * — the server's gate, never raw keys down the terminal socket, which would
+ * type into a dialog the page has not heard of yet. */
+export function sessionTarget(title: string, name: string, post: KeyPost = postKeys): DictTarget {
+  const gate = new KeyGate(title, name, post);
   return {
     kind: "session",
     title,
     name,
-    type: (text) => send(text),
-    erase: (text) => !text || send(backspaces(text)),
+    gate,
+    type: (text) => gate.push("", text),
+    erase: (text) => gate.push(text, ""),
+    replace: (old, text) => gate.push(old, text),
   };
 }
 
@@ -1250,6 +1493,11 @@ export class LiveDictation {
   private dialogHit = false;
   /** When {@link dialogBlocks} last asked for a held sighting to be read again. */
   private checkedAt = 0;
+  /** Words of phrases already over that the server's gate refused (a dialog
+   * came up on screen): they go to the router with the rest ({@link heldBack}). */
+  private unsent = "";
+  /** Stop hearing of the current target's gate refusals. */
+  private unwatch: (() => void) | null = null;
 
   constructor(
     private target: DictTarget | null,
@@ -1262,6 +1510,48 @@ export class LiveDictation {
     this.dict.begin();
     this.dict.routes = target?.kind !== "field";
     this.dict.continuous = !!opts.continuous;
+    this.watch(target);
+  }
+
+  /** Hear of `t`'s gate refusals (a session's keys go through the server). */
+  private watch(t: DictTarget | null): void {
+    this.unwatch?.();
+    this.unwatch = t?.gate ? t.gate.onRefused((r) => this.refused(t, r)) : null;
+  }
+
+  /** The server's gate refused a batch of keys (or it failed): nothing of
+   * it, nor anything queued behind it, went in. What this dictation counted
+   * as typed is put right; on a dialog (MF2: it came up on screen before
+   * this page heard of it) nothing more is typed for this phrase, the
+   * dialog is noted (and read, for its id), and the words not typed go to
+   * the router — at the phrase's end, or now when it is over; any other
+   * failure ends listening with its line — never a fall-back to the
+   * terminal socket. */
+  private refused(t: DictTarget, r: GateRefusal): void {
+    if (t !== this.target) return;
+    if (this.done) {
+      if (r.text.trim() || r.erased) this.hooks.caption(r.dialog ? dialogStopLine(t.name, r.text.trim()) : r.line, true);
+      return;
+    }
+    const over = this.dict.untyped(r.text, r.erased);
+    if (!r.dialog) {
+      this.end(r.line, true, "stopped");
+      return;
+    }
+    this.dialogHit = true;
+    dialogSeen.activity(t.title, "clarify");
+    this.checkedAt = Date.now();
+    this.hooks.dialogCheck?.(t.title);
+    this.unsent = joinWords(this.unsent, over);
+    // A phrase still being said hands its words over at its end; between
+    // phrases they go now, in turn (nothing to hand over — a refused
+    // take-back, a space — still stops, saying so). Unless a step under way
+    // handed them over first ("over" waits for its words: dialogHit gone).
+    this.chain = this.chain
+      .then(async () => {
+        if (this.dialogHit && !this.done && !this.dict.inPhrase && this.target === t) await this.heldBack(t, "");
+      })
+      .catch(() => {});
   }
 
   /** Still taking words (false once over / a stop / Escape / an error). */
@@ -1572,6 +1862,7 @@ export class LiveDictation {
   private end(line: string | null, sticky = false, how?: DictEnd): void {
     if (this.done) return;
     this.done = true;
+    this.unsent = "";
     clearInterval(this.tailTimer);
     clearTimeout(this.sendWait);
     clearTimeout(this.swallowing);
@@ -1601,6 +1892,9 @@ export class LiveDictation {
           return;
         }
         t?.erase(out.text);
+        // Through the gate: said only once it was taken back (a refusal
+        // stops, saying so: {@link refused}).
+        if (t?.gate && (await t.gate.settled())) return;
         this.hooks.caption("Disregarded — go on", true);
         this.hooks.confirm?.("cleared");
         return;
@@ -1614,6 +1908,7 @@ export class LiveDictation {
           return;
         }
         t?.erase(out.text);
+        if (t?.gate && (await t.gate.settled())) return;
         this.end(out.text ? "Disregarded" : "", false, "stopped");
         return;
       case "leave":
@@ -1663,7 +1958,11 @@ export class LiveDictation {
         }
         this.acted = true;
         this.hooks.caption("Sending to " + t.name + "…", true);
-        if (typedNow) await new Promise((r) => setTimeout(r, SUBMIT_SETTLE_MS));
+        // Through the gate: Enter only once every word went in (a refusal
+        // was told to {@link refused}: the check below hands it over). Raw
+        // keys: give them a moment to land first.
+        if (t.gate) await t.gate.settled();
+        else if (typedNow) await new Promise((r) => setTimeout(r, SUBMIT_SETTLE_MS));
         if (this.done) return;
         if (this.dialogBlocks(t)) {
           await this.heldBack(t, "");
@@ -1704,12 +2003,16 @@ export class LiveDictation {
     if (this.done) return;
     this.dict.next();
     this.dialogHit = false;
+    this.unsent = "";
     const n = this.hooks.retarget?.();
     if (n) {
       this.target = n.target;
       this.opts = { ...this.opts, hint: n.hint };
       this.dict.routes = n.target?.kind !== "field";
+      this.watch(n.target);
     }
+    // A new message: its keys go to the gate again (the server gates each).
+    this.target?.gate?.reset();
     if (line) this.hooks.caption(line, true);
     else if (line === undefined) this.show();
   }
@@ -1746,7 +2049,7 @@ export class LiveDictation {
       return this.keys(t, erase, text);
     }
     // A dialog came up mid-message: not a key more — nor one taken back.
-    if (t && this.dict.typed && this.dialogBlocks(t)) return this.heldBack(t, text);
+    if (t && (this.dict.typed || this.unsent) && this.dialogBlocks(t)) return this.heldBack(t, text);
     // What stays typed once the guess is corrected: nothing — the router and
     // the dialog guard come first, with the guess already taken back.
     if (this.dict.typed.length === erase.length && t?.kind !== "field") {
@@ -1815,7 +2118,8 @@ export class LiveDictation {
    * continuous dictation. Always false: nothing went in. */
   private async heldBack(t: DictTarget, rest: string): Promise<boolean> {
     this.dialogHit = false;
-    const words = rest.trim();
+    const words = joinWords(this.unsent, rest).trim();
+    this.unsent = "";
     if (words && this.dict.routes) {
       this.hooks.caption(this.dict.shown, true, words);
       const routed = await this.hooks.route(words, this.stepSpoke);
@@ -1846,9 +2150,16 @@ export class LiveDictation {
       this.end(dialogStopLine(t.name, text.trim()), true, "stopped");
       return false;
     }
-    const ok = t.replace ? t.replace(erase, text) : (!erase || t.erase(erase)) && (!text || t.type(text));
+    // Through the server's gate: queued in order, counted as typed now
+    // (live typing never waits on a round trip); a refusal puts the count
+    // right ({@link refused}).
+    const ok = t.gate
+      ? t.gate.push(erase, text)
+      : t.replace
+        ? t.replace(erase, text)
+        : (!erase || t.erase(erase)) && (!text || t.type(text));
     if (!ok) {
-      this.end("Couldn't type into " + t.name + " — its terminal isn't connected", true);
+      this.end(t.gate?.refused?.line || "Couldn't type into " + t.name + " — its terminal isn't connected", true);
       return false;
     }
     this.dict.unwrote(erase);
@@ -2331,11 +2642,18 @@ async function answer(
   }
   if (await questionPending(title, deps.activity(title))) {
     const words = answerWords(r, text);
-    if (!sessionTarget(title, name).type(words + " ")) {
-      deps.caption("Couldn't type into " + name + " — its terminal isn't connected", true);
+    // Through the server's gate, then Enter once the words are in: a dialog
+    // that came up on screen meanwhile gets neither.
+    const into = sessionTarget(title, name);
+    into.type(words + " ");
+    const refused = await into.gate?.settled();
+    if (refused) {
+      if (refused.dialog) {
+        seen.activity(title, "clarify");
+        deps.announce(name + " is on a dialog — answer it on the screen.");
+      } else deps.caption(refused.line, true);
       return;
     }
-    await new Promise((res) => setTimeout(res, SUBMIT_SETTLE_MS));
     const say = deps.replies();
     const sent = await submitDraft(title, name, say);
     if (sent.ok) deps.submitted(title, say);
@@ -5029,6 +5347,15 @@ export function finalLine(finalMs: number | null): string {
  * send — "over → sent 0.9 s" ("" before one). */
 export function sentLine(ms: number | null): string {
   return ms != null && ms >= 0 ? "over → sent " + (ms / 1000).toFixed(1) + " s" : "";
+}
+
+/** The diagnostics' typing latency: the median round trip of the last
+ * batches of dictation keys through the server's gate ({@link KeyGate}) —
+ * "typing ~18 ms/batch" ("" before one). */
+export function keysLine(times: readonly number[] = keyTimes): string {
+  if (!times.length) return "";
+  const sorted = [...times].sort((a, b) => a - b);
+  return "typing ~" + sorted[Math.floor(sorted.length / 2)] + " ms/batch";
 }
 
 /** The caption for a recognizer error, or "" for one that needs no words. */

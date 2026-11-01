@@ -155,9 +155,11 @@ now).
 **The mic** (`#mic-btn`, a monochrome glyph like the bell's) talks to the
 **focused session** — the tooltip names it (*Talk to Login fix — click to talk,
 right-click for options*). The words are **typed into the session's input
-field as you speak**: each phrase, the moment it is recognised, goes down the
-session's agent terminal as keys (with a trailing space), exactly as if you had
-typed it. Nothing pops up while you speak or while a reply is read: the words
+field as you speak**: each phrase, the moment it is recognised, goes into the
+session's agent as keys (with a trailing space), exactly as if you had typed
+it — through the server's voice gate (`POST /api/instances/{title}/send`
+`{"voice": true, "submit": false, "erase": n, "text": …}`), never as raw keys
+down the terminal socket (see *A dialog on screen* below). Nothing pops up while you speak or while a reply is read: the words
 are in the terminal, and a small pill under the mic says only *Listening…*,
 *Speaking…* or, for a second after "stop talking", *Quiet.* (see [Voice
 input](#voice-input)). When the server's
@@ -384,6 +386,33 @@ a session first*).
   router acts, a continuous dictation keeps listening, otherwise listening ends
   with *Login fix asked something — “…” not typed; the words before it stay*
   (`dialogStopLine`). A text box is never blocked.
+  **The server's gate covers what the page can't see yet.** A dialog the
+  server finds by reading the screen (Codex's approval, aider's, a
+  sub-agent's prompt) reaches the rows only on its next 4 s state tick — the
+  voice judge measured 2.1–2.4 s, in which a "yes …" typed raw used to land a
+  `y` in Codex's dialog. So every dictation key — the words, a correction's
+  Backspaces, a “disregard” — goes through `/send {"voice": true, "submit":
+  false, "erase": n, "text": …}` (`KeyGate` in `lib/voiceDesktop.ts`), which
+  re-reads the activity and the screen at send time and answers **409**
+  `in_dialog` with nothing pressed. Keys go at once when nothing is in flight;
+  whatever the recogniser says while a batch is in flight is folded into one
+  next batch (a correction that takes back only what was queued sends
+  nothing), one request at a time per session, in order. Typing is counted as
+  done when queued (it never waits on the round trip); a refusal puts the
+  count right: nothing of the refused batch nor of anything queued behind it
+  went in, the dialog is noted (`dialogSeen`, and `/dialog` read for its id),
+  this phrase types nothing more, and the words that never went in go to the
+  router — at the phrase's end, or at once between phrases — with the same
+  *answer only if begun after the dialog appeared* rule and the same
+  `dialogStopLine`. “Over” presses Enter only once every key went in
+  (`KeyGate.settled`), and never after a refusal. A network failure, a paused
+  session or a request unanswered in 4 s (`KEY_TIMEOUT_MS`) stops listening
+  with its line (*Couldn't type into Login fix — the server didn't answer*);
+  nothing ever falls back to the terminal socket. A router answer typed as a
+  prompt (an answer to a question) goes through the same gate. Each batch's
+  round trip is kept (`window.__mfVoiceKeys`, the debug trace's `keys ⌫n +m
+  in N ms`) and the mic's diagnostics show the median (*typing ~15 ms/batch*;
+  measured 15 ms p50 in-process with a real tmux pane).
 - **A text box focused** (Send a message, a dialog field…): the words go into
   the box at the cursor, “disregard” removes them while they still sit before
   the cursor, and “over” only starts the next message (“over and out”
@@ -6952,9 +6981,10 @@ the moment the recogniser first hears them, and are corrected as it changes
 its mind: the phrase under way — the stream's committed words plus its
 unsure tail, or Web Speech's interim words (both engines behave alike) — is
 typed as a guess, and each new answer is compared with what is typed from
-the phrase's start: the end that differs is taken back with backspaces (DEL,
-`\x7f`, one per character — what the terminal's Backspace key sends; a text
-box has its value set once instead) and the new end typed. At most one
+the phrase's start: the end that differs is taken back with backspaces (the
+BSpace key, one per character, pressed by the server in the same tmux call
+that types the new end — `/send {"voice": true, "erase": n, "text": …}`; a
+text box has its value set once instead) and the new end typed. At most one
 correction per answer, never reaching before the phrase's start — earlier
 phrases and whatever was in the field before you spoke are untouched. A
 phrase being said carries no trailing space; its end (the pause, or letting

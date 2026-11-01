@@ -116,6 +116,7 @@ import {
   syncSayAll,
   onVoicePrefs,
   serverRecognizer,
+  keysLine,
   sentLine,
   serverSpeaker,
   sessionTarget,
@@ -302,8 +303,8 @@ const POP_W = 280;
  * choice's tooltip and Settings → Voice's). */
 const REPLIES_SHORT: Record<VoicePrefs["replies"], string> = { off: "Off", mine: "Mine", all: "Everything" };
 
-/** The engines, the server's pass and final times and the last wake's
- * latency, as one line — Settings → Voice (This computer's mic) shows it;
+/** The engines, the server's pass and final times, the last wake's
+ * latency and the typing gate's round trip, as one line — Settings → Voice (This computer's mic) shows it;
  * the options stay controls only. */
 export function micDiagnostics(): string {
   const c = cfgNow;
@@ -311,7 +312,9 @@ export function micDiagnostics(): string {
   const tts = ttsEngine(c) === "server" ? "server" : browserSp.available() ? "browser" : "none";
   const pass =
     stt === "server" ? [passLine(c.server_ready.stt_backend, serverRec.passMs), finalLine(serverRec.finalMs)] : [];
-  return [engineDiagnostics(c, stt, tts), ...pass, wakeLine(lastWakeMs), sentLine(lastSentMs)].filter(Boolean).join(" · ");
+  return [engineDiagnostics(c, stt, tts), ...pass, wakeLine(lastWakeMs), sentLine(lastSentMs), keysLine()]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 /** The push-to-talk hotkey as the keymap shows it (the entry whose help says
