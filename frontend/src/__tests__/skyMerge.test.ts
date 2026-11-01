@@ -63,7 +63,8 @@ describe("the sky wires it", () => {
     expect(sky).toContain('const msg = "Moved " + n + (n === 1 ? " stop" : " stops") + " onto " + windowName(title);');
     // Undo: the same stops grounded again, pinned where the line was — one
     // entry on the sky's stack, the toast's button taking that same entry.
-    expect(sky).toContain("const entry = pushUndo({ label: msg, undo: () => reground(steps, name, was) });");
+    // Round 17: the entry can be redone (the remade line goes again).
+    expect(sky).toMatch(/const entry = pushUndo\(\{\s*label: msg,\s*undo: async \(\) => \{\s*const g = await reground\(steps, name, was\);[\s\S]*?redo: async \(\) => \(cur \? deleteFlight\(cur\) : false\),/);
     expect(sky).toContain("toast(msg, { action: undoAction(entry, ");
     expect(sky).toContain("const g = await startGrounded({ steps, ...(name ? { name } : {}) });");
     expect(sky).toContain("if (g && was) pinAt(groundedKey(g.id), was);");

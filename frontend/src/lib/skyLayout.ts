@@ -343,6 +343,38 @@ export function centerOn(r: Rect, vw: number, vh: number, z: number): SkyCamera 
   return { z: nz, x: vw / 2 - (r.x + r.w / 2) * nz, y: Math.max(24, vh / 2 - (r.h * nz) / 2) - r.y * nz };
 }
 
+/** The camera that shows a selection's bounds (lines and objects) whole,
+ * centred, never closer than 100 % more than `fitCamera`'s own cap — Shift+2
+ * and the zoom menu's "Fit selection". Nothing selected: null (the caller
+ * leaves the camera be). */
+export function fitSelection(rects: readonly Rect[], vw: number, vh: number, maxZ = 1.25): SkyCamera | null {
+  const b = boundsOf(rects);
+  return b ? fitCamera(b, vw, vh, maxZ) : null;
+}
+
+// --- The eased camera (round 17) ---------------------------------------------------
+
+/** How long a fit, a focus or a jump glides (ms); none under reduced motion. */
+export const CAM_EASE_MS = 220;
+
+/** Ease-out (cubic): fast away, settling in. */
+export const easeOut = (t: number): number => {
+  const u = Math.min(1, Math.max(0, t));
+  return 1 - (1 - u) ** 3;
+};
+
+/** The camera between `from` and `to` at `t` ∈ [0, 1] (already eased): the
+ * zoom is interpolated in log space so a zoom-and-pan reads as one motion;
+ * at 1 it is exactly `to`. */
+export function lerpCamera(from: SkyCamera, to: SkyCamera, t: number): SkyCamera {
+  if (t >= 1) return { x: to.x, y: to.y, z: to.z };
+  if (t <= 0) return { x: from.x, y: from.y, z: from.z };
+  const z = from.z > 0 && to.z > 0 ? Math.exp(Math.log(from.z) + (Math.log(to.z) - Math.log(from.z)) * t) : from.z + (to.z - from.z) * t;
+  return { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t, z };
+}
+
+export const sameCamera = (a: SkyCamera, b: SkyCamera): boolean => Math.abs(a.x - b.x) < 0.01 && Math.abs(a.y - b.y) < 0.01 && Math.abs(a.z - b.z) < 0.0001;
+
 // --- Semantic zoom ----------------------------------------------------------------
 
 /** How much a box shows at the camera's zoom (its level of detail). The

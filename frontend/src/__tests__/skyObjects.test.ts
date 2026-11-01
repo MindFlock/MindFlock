@@ -189,12 +189,13 @@ describe("SkyView iterates the one list", () => {
     expect(v).toContain("const notesQ = useSkyNotesQuery();");
     expect(code("lib/skyObjects.ts")).toContain('return useQuery({ queryKey: ["sky-notes"], queryFn: fetchSkyNotes, retry: false, staleTime: Infinity });');
     expect(v).toContain("noteSave.current = setTimeout(() => void saveSkyNotes(next).catch((e) => toast(\"Saving the notes failed: \" + errMsg(e))), 400);");
-    expect(v).toContain('items={[{ key: "note", label: "Add a note", title: "A sticky note in the middle of the view", onSelect: () => addNote(middle()) }]}');
+    expect(v).toContain('{ key: "note", label: "Add a note", title: "A sticky note in the middle of the view", onSelect: () => addNote(middle()) },');
     expect(v).toContain("onContextMenu={onGroundMenu}");
     expect(v).toMatch(/const onGroundMenu = [\s\S]*?if \(!ground\(e\.target\)\) return;\s*e\.preventDefault\(\);/);
     expect(v).toMatch(/<div className="sky-ground-menu" role="menu"[\s\S]*?addNote\(groundMenu\.at\);/);
     expect(v).toMatch(/const noteEl = el\?\.closest\("\.sky-note\[data-note\]"\);\s*if \(noteEl && !typing\(el\)\) \{[\s\S]*?removeNote\(noteEl\.getAttribute\("data-note"\) \|\| ""\);/);
-    expect(v).toMatch(/toast\("Note removed", \{\s*action: \{ label: "Undo"/);
+    // Round 17: the note's removal is one lib/skyUndo entry (Ctrl+Z, the toast, Ctrl+Shift+Z).
+    expect(v).toContain('toast("Note removed", { action: undoAction(entry, "Undo: put the note back") });');
     const api = code("api/skyApi.ts");
     expect(api).toContain('const d = await api<{ notes?: SkyNote[] }>("/api/sky/notes", { method: "PUT", json: { notes } });');
     expect(api).toContain('return instApi(title, "/move", { method: "POST", json: { device, force } });');

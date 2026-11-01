@@ -5581,3 +5581,145 @@ The integrator merges, rebuilds the bundle in the round's worktree, the
 judge re-shoots, the integrator fixes what is quick, merges into
 `emandel2630/flights`, deploys. The judge's leftovers are the next cycle's
 seed, written at the top of the next round's contract.
+
+### As built: round 17 sky-core
+
+The `sky-core` task of round 17 (2026-10-31). Files: `SkyView.tsx`,
+`Sky.css`, `lib/skyLayout.ts`, `lib/skySnap.ts`, `lib/skyUndo.ts`. Tests:
+new `skySnap.test.ts` (9: the pure `snapBox` and the sky's wiring) and
+`skyCanvas.test.ts` (15: fit selection, the eased camera, the redo stack,
+Tab / double-click, the cursor contract, focus mode, the seams mounted);
+`sky*.test.ts` all pass (21 files, 444 tests). `lib/skySelect.ts` and
+`lib/viewMode.ts` needed no change (the selection and reduced-motion
+readers already said what the round needs).
+
+**What each key does now** (all with the sky's keys owning the keyboard —
+nothing that takes keys itself has the focus, no dialog over the sky):
+
+| Key | Does |
+|---|---|
+| `0` | fit all, legibly (`firstFit`) — as before, now eased |
+| `Shift+1` | fit all (the same as `0`; Figma's key) |
+| `1` | fit the focused line — as before, eased |
+| `Shift+2` | fit the selection: the selected lines' and objects' bounds, or the selected stops' boxes (`fitSelection`, 1.25 cap; 1.5 for stops); nothing selected — nothing happens |
+| `Shift+0` | 100 % about the window's middle (eased); the toolbar's 100 % button says it |
+| `+` `−` arrows, the wheel, a pan, a pinch | as before, direct — and any of them stops a glide where it is |
+| `Tab` | the palette floats with its filter focused (where it was last pinned, else the view's left third under the toolbar); floating already — docks it. Inside the floating palette's filter (where the first Tab put the keyboard) a second Tab docks it too (Shift+Tab stays the browser's). Not on a phone |
+| double-click on empty sky | the palette floats AT THE POINTER with its filter focused (n8n); placing from it lands beside it (`placeGrounded(…, "palette")`). A double-click on a line keeps its meaning (it never reaches the sky). A phone (narrow) keeps the new-session block |
+| `F` | with a selection: focus mode — `.sky-focus` on the plane, `data-dim` on every slot and object not selected (a stop selection keeps its line bright); everything dimmed fades to 35 % (60 % under the pointer), opacity only, 120 ms. Any press on the sky, Esc, or clearing the selection lifts it |
+| `?` | the shortcuts sheet (`SkyShortcuts`, `open`); Esc closes it before anything else Esc does; the ⋯ menu has "Keyboard shortcuts…" for the mouse |
+| `Ctrl+Z` / `⌘Z` | undo, as round 14 |
+| `Ctrl+Shift+Z` / `⌘⇧Z` | redo: `popRedo` → "Redid: <label>", or "Nothing to redo". Same gates as undo (not in a field, a pane, a menu, a dialog, nor mid-drag). `Ctrl+Y` stays the view toggle |
+| `Alt` held while dragging | no snapping (the raw delta) |
+
+**Snapping** (`lib/skySnap`). `snapBox(moving, others, threshold)`: the
+moving box's left / centre / right and top / middle / bottom against every
+other box's, each axis on its own, the nearest alignment within `threshold`
+winning (ties: the first found, the others in drawing order); returns the
+snapped `x`, `y` and the guides — a vertical one at the aligned x spanning
+from the moving box to the box it aligned with (both heights), a horizontal
+one likewise. `snapThreshold(z) = 8 / z` (8 screen px). The sky
+(`onDragStart`'s `delta`) snaps the PRESSED box against everything that
+stays put (every line, object, the lane, the palette — not the selection
+being dragged) and moves the rest of the selection by the same snapped
+delta; the last move's delta is what the drop pins (so a drop lands where
+the guides said). The guides are drawn in the plane (`.sky-guide`,
+`data-axis="x|y"`, `left/top/height` or `top/left/width` in plane px) at 1
+SCREEN px of `--accent` whatever the zoom (`calc(1px / var(--sky-z))`),
+`pointer-events: none`, gone on release (`setGuides([])`). The plane
+carries `data-snapping` while any guide shows; the dragged slot wears
+`is-snapping`.
+
+**The eased camera.** `goTo(target, instant?)` in SkyView: ~220 ms
+(`CAM_EASE_MS`) on `requestAnimationFrame`, ease-out cubic (`easeOut`), the
+zoom interpolated in log space (`lerpCamera`), the LAST frame
+`setCamState(target)` exactly — then nothing moves. Instant when: `instant`
+(the first picture after the lines settle — there is nothing to glide
+from), reduced motion (the setting or the media query, `motionOff`), the
+camera is already there (`sameCamera`), or no frame scheduler. `setCam` is
+now a wrapper that cancels a glide first: the wheel, a pan, a pinch, `+`/`−`,
+the arrows, the minimap's drag all cut a glide short where it is. Goes
+through `goTo`: `0` / `Shift+1` / Fit, `1`, `Shift+2`, `Shift+0` and the
+zoom menu's presets (`zoomTo`), the focus effect's centring when a session
+picked elsewhere is off screen (`centerOn`), the minimap's and the hints'
+jump (`jumpTo`). No FLIP ghosts: the plane's transform is the only thing
+that moves.
+
+**Redo** (`lib/skyUndo`). `UndoInput.redo?()`; `popUndo` / `takeUndo` move
+an entry that has `redo()` onto the redo stack (its clock restarted), else
+nothing; `popRedo` takes the newest back onto the undo stack and returns it
+(the caller runs `redo()`); `redoCount`; any `pushUndo` empties the redo
+stack (the branch is gone); the redo stack expires and caps like the undo
+stack; `clearUndo` empties both. Entries that carry `redo()` now:
+- the grounded line's delete (`removeGrounded` in SkyView): undo remakes
+  the line (a NEW flight id, kept in a closure), redo deletes that one;
+- the merge onto a session (`mergeGrounded`): undo remakes the grounded
+  line, redo removes the remade line again (the stops stay on the session
+  either way, as round 14 said);
+- the note's delete (`removeNote`): it is one `pushUndo` entry now (so
+  Ctrl+Z reaches it too), the toast's Undo is `undoAction(entry, …)`, redo
+  removes it again.
+- NOT yet: a stop's or a group's removal (`removeStop` / `removeGroup` in
+  `useSessionLine.tsx`, the selection bar's `removeStops` / `removeLines`
+  in `SkySelection.tsx`, a grounded line's own Remove in
+  `GroundedLine.tsx`, a close in `SkyLine.tsx`'s `pushCloseUndo`). Those
+  entries are pushed OUTSIDE this task's fence; each needs a `redo()`
+  that drops the re-tacked step (`dropStop` / `dropGroup` by the id the
+  undo's `tackOn` returned) — the integrator or the next cycle wires them.
+  Ctrl+Shift+Z after undoing one of these says "Nothing to redo".
+
+**The cursor contract** (`Sky.css`, under `.sky-viewport` so it wins over
+the bars' own sheets): `grab` on `.skl-bar`, `.sky-line-bar`,
+`.sky-lane-head`, `[data-sky-head]`, `.sky-object-head`,
+`.sky-palette-head`; `grabbing` on the same inside `.is-dragging`;
+`crosshair` on the viewport in drag mode (`.sky[data-tool="drag"]` — a drag
+on empty sky is the marquee; click mode's `grab` stays); `move` on the bar
+of the slot that is snapping (`.is-snapping`) and on a dragging object's
+head while the plane says `data-snapping`; `copy` on and inside
+`.is-drop-target` / `.is-merge-target`; no `zoom-in` / `zoom-out` anywhere
+in the sheet.
+
+**The seams mounted** (inside the viewport, after the selection bar):
+- `<OffscreenHints rects cam viewport onJump>` and, in
+  `.sky-minimap-host` (absolute, right 12 / bottom 12, z 9, hidden under
+  520 px), `<Minimap rects cam viewport onCamera onJump open onToggle>`.
+  `rects` (`mapRects`): every line from `rectOf` — `kind` "line" or
+  "grounded", `tone` = the session's state word (`deriveSessionState(row)
+  .state`: starting / working / needs_you / idle / limit / offline) or the
+  grounded flight's `state`, `label` = its name, `selected`, `focused` (the
+  focus line, or the grounded focus) — and every object (`kind` = the
+  registry kind, label "Intake" for the lane, else its key). `onCamera` sets
+  the camera directly (a drag); `onJump` = `jumpTo`: eased `centerOn` at the
+  current zoom (≥ 0.85) and the line focused as a press on it would (no box
+  opens). `open` is remembered in `localStorage` `mf_sky_minimap` ("0" =
+  folded; default open).
+- `<ZoomMenu zoom min max onZoomTo onFitAll onFitSelection onFitFocused
+  canFitSelection canFitFocused>` in the toolbar's zoom group where the
+  `sky-zoom-read` span was (the seam still renders that span until the
+  `zoom-shortcuts` task fills it, so the readout never goes missing).
+- `<SkyShortcuts open onClose groups={[]}>` with a `TODO(zoom-shortcuts)`
+  comment: `lib/skyShortcuts.ts` (`SKY_SHORTCUT_GROUPS`) is that task's file
+  and did not exist in this worktree; the integrator imports it and passes
+  it as `groups`.
+
+**Copy that moved.** The empty sky's line reads "double-click anywhere for
+the blocks, or press the Session chip in the shelf below, to start one";
+the viewport's aria-label ends "double-click for the blocks, ? for every
+key". The ⋯ menu gained "Keyboard shortcuts…".
+
+**Test pins changed deliberately** (round 14/15 literals that round 17
+replaces): `sky.test.ts` (the plane's className now carries `sky-focus`);
+`skyZoom.test.ts` (`setCam((whole ? …` → `goTo(…, instant)`; the 100 %
+button's title says Shift+0); `skyView.test.ts` (`setCam(centerOn` →
+`goTo(centerOn`; the first fit is `fitFocused(true)`; the 1 button's
+`onClick={() => fitFocused()}`; the "no redo" test is now the redo test;
+the grounded delete's entry has `redo`; `focusFilter={!!catalogOpen ||
+filterFocus}`; `setPaletteMode("shelf")` is a block); `skyMerge.test.ts`
+(the merge's entry has `redo`); `skyObjects.test.ts` (the ⋯ menu has two
+items; the note's toast uses `undoAction`). Every other pin holds.
+
+**Open.** The judge's second pass decides whether Tab stealing the keyboard
+from a focused line is right (n8n's manner, but it is also the browser's
+focus key); the stop / group redo entries above; `SkyGuide`'s and the
+tour's copy still say a double-click starts a session where they mention
+it (outside this fence).
