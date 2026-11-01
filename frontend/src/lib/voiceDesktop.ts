@@ -1039,6 +1039,10 @@ export function dialogUp(activity: string): boolean {
   return activity === "clarify" || activity === "limit";
 }
 
+/** A dictation held by a sighting alone asks for /dialog again at most this
+ * often ({@link LiveHooks.dialogCheck}). */
+export const DIALOG_CHECK_EVERY_MS = 2000;
+
 /** Where a dictation's words go: a session's terminal, or a text box. */
 export interface DictTarget {
   kind: "session" | "field";
@@ -1094,6 +1098,10 @@ export interface LiveHooks {
   hush?(): void;
   /** The session's live activity (the rows the app polls). */
   activity(title: string): string;
+  /** Typing into `title` is held by a dialog this page saw while its row says
+   * none: read /dialog again ({@link recheckDialog}), at most every
+   * {@link DIALOG_CHECK_EVERY_MS}. */
+  dialogCheck?(title: string): void;
   /** `say` for a submit: the "Read replies aloud" pref. */
   replies(): boolean;
   /** A submit went through (`say` as sent): the reply tracker waits on it. */
@@ -1236,13 +1244,12 @@ export class LiveDictation {
   /** When the phrase the step under way acts on began: sent with the router
    * call, so a dialog is answered only by words begun after it was there. */
   private stepSpoke = 0;
-  /** When the message under way began (ms): a dialog this page had since
-   * came up while it was being typed ({@link dialogOn}). */
-  private msgAt = Date.now();
   /** A dialog came up on the session while this message's words were going
    * in (MF2): the phrase under way types nothing more — its end hands the
    * rest to the router ({@link heldBack}). */
   private dialogHit = false;
+  /** When {@link dialogBlocks} last asked for a held sighting to be read again. */
+  private checkedAt = 0;
 
   constructor(
     private target: DictTarget | null,
@@ -1696,7 +1703,6 @@ export class LiveDictation {
   private next(line?: string | null): void {
     if (this.done) return;
     this.dict.next();
-    this.msgAt = Date.now();
     this.dialogHit = false;
     const n = this.hooks.retarget?.();
     if (n) {
@@ -1781,13 +1787,23 @@ export class LiveDictation {
 
   /** A dialog is up on the session words go to (MF2: typed words could
    * answer it — Codex's "y", a digit in Claude's menus): its row says so, a
-   * dialog came up during this phrase, or this page had one there since the
-   * message began. A text box is never a dialog. */
+   * dialog came up during this phrase, or this page knows of one there now
+   * — whenever it was seen, before the mic opened too (MF2-residual: a
+   * sub-agent's prompt under a "working" row, a dialog the pop-up showed
+   * before the next rows poll). Asked right before every batch of keys. A
+   * held sighting the row doesn't confirm is read again ({@link
+   * LiveHooks.dialogCheck}), so one that has gone stops holding. A text box
+   * is never a dialog. */
   private dialogBlocks(t: DictTarget): boolean {
     if (t.kind !== "session") return false;
     if (this.dialogHit || dialogUp(this.hooks.activity(t.title))) return true;
-    const at = dialogSeen.since(t.title);
-    return at > 0 && at >= this.msgAt;
+    if (!dialogSeen.blocks(t.title)) return false;
+    const now = Date.now();
+    if (this.hooks.dialogCheck && now - this.checkedAt >= DIALOG_CHECK_EVERY_MS) {
+      this.checkedAt = now;
+      this.hooks.dialogCheck(t.title);
+    }
+    return true;
   }
 
   /** MF2: a dialog came up on the session while this message was being
@@ -1824,6 +1840,12 @@ export class LiveDictation {
    * False — and listening over — when they could not go. */
   private keys(t: DictTarget, erase: string, text: string): boolean {
     if (!erase && !text) return true;
+    // MF2: asked again right before the keys go (every caller asked already;
+    // this is the last word) — a dialog up gets none, nor a Backspace.
+    if (this.dialogBlocks(t)) {
+      this.end(dialogStopLine(t.name, text.trim()), true, "stopped");
+      return false;
+    }
     const ok = t.replace ? t.replace(erase, text) : (!erase || t.erase(erase)) && (!text || t.type(text));
     if (!ok) {
       this.end("Couldn't type into " + t.name + " — its terminal isn't connected", true);
@@ -1945,12 +1967,17 @@ export class DialogSeen {
   private seen = new Map<string, { id: string; at: number; rows?: boolean }>();
   /** Each row's last activity ({@link rows}: a dialog → none edge). */
   private was = new Map<string, string>();
+  /** Sessions whose `session.activity_changed` event said a dialog came up
+   * (MF2-residual): typing is held at once, before the rows poll (4 s) or
+   * /dialog's id is back. No id, so it never times an answer ({@link at}). */
+  private raised = new Set<string>();
   constructor(private now: () => number = Date.now) {}
   /** `title` has dialog `id` now ("" / null: it has none). */
   note(title: string, id: string | null | undefined): void {
     if (!title) return;
     if (!id) {
       this.seen.delete(title);
+      this.raised.delete(title);
       return;
     }
     const cur = this.seen.get(title);
@@ -1977,11 +2004,27 @@ export class DialogSeen {
         this.note(r.title, null);
     }
   }
+  /** `session.activity_changed` (the event, not the 4 s poll): `act` going
+   * to a dialog holds typing into `title` at once ({@link blocks}); leaving
+   * one (`old` a dialog: answered, by hand or otherwise) clears it and any
+   * sighting, as the row's edge does. */
+  activity(title: string, act: string | null | undefined, old?: string | null): void {
+    if (!title) return;
+    if (dialogUp(String(act || ""))) this.raised.add(title);
+    else if (this.raised.has(title) || dialogUp(String(old || ""))) this.note(title, null);
+  }
   /** When this page first had `title`'s current dialog, whatever its id
-   * (ms; 0: none) — a dialog that came up while words were being typed
-   * stops the typing ({@link LiveDictation}). */
+   * (ms; 0: none). */
   since(title: string): number {
     return this.seen.get(title)?.at || 0;
+  }
+  /** This page knows a dialog is up on `title` now — seen (rows, /dialog,
+   * the pop-up, the router) or raised by the event — however long ago:
+   * nothing is typed into it ({@link LiveDictation}, MF2-residual). Cleared
+   * the moment it goes: an answer, a /dialog 204, the row or event leaving
+   * the dialog ({@link recheckDialog} for one nothing else would clear). */
+  blocks(title: string): boolean {
+    return this.seen.has(title) || this.raised.has(title);
   }
   /** When `title`'s dialog `id` was first had (ms), or 0. */
   at(title: string, id: string): number {
@@ -2004,6 +2047,40 @@ export class DialogSeen {
 
 /** The desktop's one. */
 export const dialogSeen = new DialogSeen();
+
+/** A second /dialog read this long after a 204 confirms the dialog is gone
+ * (one 204 can be a frame between two redraws). */
+export const DIALOG_RECHECK_MS = 400;
+const rechecking = new Set<string>();
+
+/** Typing into `title` is held by a sighting alone (its row says no dialog:
+ * a sub-agent's prompt reads "working", and nothing clears a sighting of one
+ * answered by hand): read /dialog again. Gone (two 204s
+ * {@link DIALOG_RECHECK_MS} apart, the sighting unchanged meanwhile): the
+ * sighting is cleared, so the next words type; another id: noted. One read
+ * at a time per session; errors change nothing. */
+export async function recheckDialog(
+  title: string,
+  fetch: (title: string) => Promise<Dialog | null>,
+  seen: DialogSeen = dialogSeen,
+  waitMs = DIALOG_RECHECK_MS
+): Promise<void> {
+  if (!title || rechecking.has(title) || !seen.blocks(title)) return;
+  rechecking.add(title);
+  try {
+    const at = seen.since(title);
+    const read = () => fetch(title).catch(() => undefined);
+    let d = await read();
+    if (d === null) {
+      await new Promise((r) => setTimeout(r, waitMs));
+      d = await read();
+    }
+    if (d === null && seen.since(title) === at) seen.note(title, null);
+    else if (d?.id) seen.note(title, d.id);
+  } finally {
+    rechecking.delete(title);
+  }
+}
 
 /** The line for an answer begun before its dialog was there. */
 export const earlyLine = (name: string) => name + " asked just now: say your answer again";
@@ -2248,7 +2325,7 @@ async function answer(
   }
   // Typed as a prompt, the answer ("1", "yes") would press a dialog that is
   // up: never — that one is answered only through /answer above.
-  if (dialogUp(deps.activity(title)) || seen.since(title)) {
+  if (dialogUp(deps.activity(title)) || seen.blocks(title)) {
     deps.announce(name + " is on a dialog — answer it on the screen.");
     return;
   }
@@ -3873,6 +3950,11 @@ export const SILENCE_MS = 1100;
 export const TURN_MIN_MS = 300;
 /** The most: a verdict that asks for more is read as this. */
 export const TURN_MAX_MS = 3000;
+/** The least quiet that ends a `sentence` / `question` verdict's phrase
+ * into an empty box: that phrase goes to the router alone, so whisper's
+ * full stop at a breath ("…so far. [pause] over and out") must not cut a
+ * command in half. Words typed already: the verdict's own (900). */
+export const FIRST_PHRASE_HOLD_MS = 1100;
 
 /** The server's end-of-turn verdict on a streamed phrase (each chunk's
  * `turn`: core/speech_turn.py) — how much quiet ends it now (`hold`, ms),
@@ -3901,10 +3983,13 @@ export function parseTurn(v: unknown, at: number): TurnVerdict | null {
  * Never shorter than SILENCE_MS when the voice was heard after the audio
  * the verdict judged (`loudAt` later than its `at`: it is about older
  * words), nor for a lone command once words are typed (`blank` false: the
- * server can't see the box — "next session" mid-message is words). */
+ * server can't see the box — "next session" mid-message is words); a
+ * sentence or question into an empty box (`blank`: the first phrase, which
+ * is routed alone) waits at least {@link FIRST_PHRASE_HOLD_MS}. */
 export function turnHoldMs(turn: TurnVerdict | null, loudAt: number, blank: boolean): number {
   if (!turn) return SILENCE_MS;
   let hold = turn.reason === "command" && !blank ? SILENCE_MS : turn.hold;
+  if (blank && (turn.reason === "sentence" || turn.reason === "question")) hold = Math.max(hold, FIRST_PHRASE_HOLD_MS);
   if (loudAt > turn.at) hold = Math.max(hold, SILENCE_MS);
   return Math.min(TURN_MAX_MS, Math.max(TURN_MIN_MS, hold));
 }

@@ -57,6 +57,7 @@ import {
   dialogStopLine,
   parseTurn,
   turnHoldMs,
+  FIRST_PHRASE_HOLD_MS,
   SPOKE_LEAD_MS,
   SUBMIT_SETTLE_MS,
   SpeechQueue,
@@ -1476,13 +1477,18 @@ describe("a dialog that comes up mid-message stops the typing at once (cycle 4, 
     }
   });
 
-  it("a sighting from before the message began (the row back to working) does not stop it", async () => {
+  it("a sighting from before the message began holds it too (cycle 5, MF2-residual: it is a live dialog until cleared); once cleared, it types", async () => {
     dialogSeen.note("t1", "d-old");
     await new Promise((r) => setTimeout(r, 5));
     const x = dictation();
     await x.d.heard("please fix the login");
-    await x.d.heard("and add a test");
-    expect(x.t.keys).toEqual(["please fix the login ", "and add a test "]);
+    expect(x.t.keys).toEqual([]);
+    expect(x.routed.map((r) => r[0])).toEqual(["please fix the login"]);
+    dialogSeen.note("t1", null); // answered / a 204 / the row's edge
+    const y = dictation();
+    await y.d.heard("please fix the login");
+    await y.d.heard("and add a test");
+    expect(y.t.keys).toEqual(["please fix the login ", "and add a test "]);
   });
 
   it("a usage-limit menu (limit) mid-message stops it the same way", async () => {
@@ -1515,7 +1521,7 @@ describe("a dialog that comes up mid-message stops the typing at once (cycle 4, 
     expect(x.d.active).toBe(true);
   });
 
-  it("moved to another session by “over”: its message clock starts afresh, so a sighting there from before the switch does not stop it", async () => {
+  it("moved to another session by “over”: a dialog seen there before the switch holds the words (cycle 5); none there, they type", async () => {
     vi.useFakeTimers();
     mocks.instApi.mockResolvedValue({ ok: true });
     const t2 = session();
@@ -1529,9 +1535,17 @@ describe("a dialog that comes up mid-message stops the typing at once (cycle 4, 
     expect(mocks.instApi).toHaveBeenCalledTimes(1); // t1's message went
     await vi.advanceTimersByTimeAsync(1000);
     await x.d.heard("now update the readme");
-    expect(t2.keys).toEqual(["now update the readme "]);
-    expect(x.d.active).toBe(true);
+    expect(t2.keys).toEqual([]);
+    expect(x.routed.map((r) => r[0])).toContain("now update the readme");
     dialogSeen.note("t2", null);
+    const y = dictation({ hooks: { retarget: () => ({ target: t2, hint: "" }) } });
+    await y.d.heard("please fix the login");
+    await vi.advanceTimersByTimeAsync(1000);
+    await y.d.heard("over");
+    await vi.advanceTimersByTimeAsync(1000);
+    await y.d.heard("now update the readme");
+    expect(t2.keys).toEqual(["now update the readme "]);
+    expect(y.d.active).toBe(true);
   });
 
   it("a guess with nothing typed yet while a dialog is up types nothing; the phrase's end takes the first-phrase path", async () => {
@@ -1834,7 +1848,7 @@ describe("the server recognizer: a phrase's start on the recording's clock, its 
     expect(turnHoldMs(v(350, "control"), 50, false)).toBe(350);
     expect(turnHoldMs(v(350, "command"), 50, true)).toBe(350);
     expect(turnHoldMs(v(350, "command"), 50, false)).toBe(SILENCE_MS);
-    expect(turnHoldMs(v(900, "sentence"), 50, true)).toBe(900);
+    expect(turnHoldMs(v(900, "sentence"), 50, false)).toBe(900);
     expect(turnHoldMs(v(1500, "connector"), 50, true)).toBe(1500);
     expect(turnHoldMs(v(100, "control"), 50, true)).toBe(TURN_MIN_MS);
     expect(turnHoldMs(v(99_000, "comma"), 50, true)).toBe(TURN_MAX_MS);
@@ -1843,6 +1857,22 @@ describe("the server recognizer: a phrase's start on the recording's clock, its 
     expect(turnHoldMs(v(1500, "connector", 100), 101, true)).toBe(1500);
     expect(parseTurn({ p: 0.9, hold_ms: 350, reason: "control" }, 7)).toEqual({ hold: 350, reason: "control", at: 7 });
     for (const bad of [undefined, null, "x", {}, { hold_ms: "soon" }, { hold_ms: -1 }, { hold_ms: Infinity }]) expect(parseTurn(bad, 7)).toBeNull();
+  });
+
+  it("the first phrase into an empty box (routed alone): a sentence or question waits ≥ 1100 ms; a command, a radio word and a typed-into box keep theirs (cycle 5, U1)", () => {
+    const v = (hold: number, reason: string, at = 100) => ({ hold, reason, at });
+    expect(FIRST_PHRASE_HOLD_MS).toBe(1100);
+    // "…give me what you have so far. [0.9 s] over and out": not cut at the full stop.
+    expect(turnHoldMs(v(900, "sentence"), 50, true)).toBe(FIRST_PHRASE_HOLD_MS);
+    expect(turnHoldMs(v(900, "question"), 50, true)).toBe(FIRST_PHRASE_HOLD_MS);
+    expect(turnHoldMs(v(900, "sentence"), 50, false)).toBe(900);
+    expect(turnHoldMs(v(900, "question"), 50, false)).toBe(900);
+    expect(turnHoldMs(v(350, "command"), 50, true)).toBe(350);
+    expect(turnHoldMs(v(350, "control"), 50, true)).toBe(350);
+    expect(turnHoldMs(v(1500, "comma"), 50, true)).toBe(1500);
+    expect(turnHoldMs(v(2000, "sentence"), 50, true)).toBe(2000);
+    // TopBarMic's box is empty until a word of this dictation is typed.
+    expect(code("components/TopBarMic.tsx")).toContain("blank: () => live.current !== d || !d.dict.typed");
   });
 
   /** A streaming recognizer whose blocks come every 85 ms on a hand clock;

@@ -2356,7 +2356,7 @@ describe("hands-free answering (Read replies aloud)", () => {
     // With the ask pop-up on, the pop-up reads it out instead (askPopup.test).
     expect(MIC).toContain('else if (env.new === "clarify" && !askPopupOn()) void hands.current?.dialog(env.session)');
     expect(MIC).toContain("if (listen) void said.then(() => hands.current?.question(title, ask))");
-    expect(MIC).toContain('pending: (title) => liveActivity(title) === "clarify" || questions.has(title)');
+    expect(MIC).toContain('pending: (title) => liveActivity(title) === "clarify" || dialogSeen.blocks(title) || questions.has(title)');
     expect(MIC).toContain("runVoiceCommand(r, text, {");
     expect(MIC).toContain("railOrder: () => useUi.getState().railOrder");
     expect(src("components/settings/screens/Voice.tsx")).toContain("With Read replies aloud on");

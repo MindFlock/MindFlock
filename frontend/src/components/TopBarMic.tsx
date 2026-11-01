@@ -109,6 +109,8 @@ import {
   routePhrase,
   runVoiceCommand,
   dialogSeen,
+  dialogUp,
+  recheckDialog,
   saveVoicePrefs,
   sayAllMismatch,
   syncSayAll,
@@ -674,6 +676,16 @@ export function TopBarMic() {
       unsubs = [
         ev.subscribe("session.activity_changed", (env) => {
           if (replay(env)) return;
+          // MF2-residual: a dialog up holds dictation into the session from
+          // this event on, not from the next rows poll (4 s); its id is read
+          // at once (any session, pop-up on or off), and leaving it clears.
+          dialogSeen.activity(env.session, env.new, env.old);
+          if (dialogUp(String(env.new || "")))
+            void fetchDialog(env.session)
+              .then((dl) => {
+                if (dl?.id) dialogSeen.note(env.session, dl.id);
+              })
+              .catch(() => {});
           if (env.new === "working") {
             tracker.working(env.session);
             questions.delete(env.session);
@@ -862,12 +874,15 @@ export function TopBarMic() {
           quietPill();
         },
         activity: liveActivity,
+        // A dialog this page saw holds the typing while the row says none:
+        // read it again, so one answered by hand stops holding.
+        dialogCheck: (title) => void recheckDialog(title, (t) => fetchDialog(t)),
         replies: () => prefsRef.current.replies !== "off",
         submitted: (title, wantSay) => {
           tracker.sent(title, wantSay);
           questions.delete(title);
         },
-        pending: (title) => liveActivity(title) === "clarify" || questions.has(title),
+        pending: (title) => liveActivity(title) === "clarify" || dialogSeen.blocks(title) || questions.has(title),
         done: (how) => opts.done?.(how),
         confirm: (kind) => void confirmer.current?.say(kind),
         // A control word at the end of the guess acts after a moment's quiet
