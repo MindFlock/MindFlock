@@ -43090,6 +43090,7 @@ function backspaces(text) {
 function dialogUp(activity) {
 	return activity === "clarify" || activity === "limit";
 }
+var DIALOG_CHECK_EVERY_MS = 2e3;
 function sessionTarget(title, name) {
 	const send = (data) => peekTerm(title, "agent")?.send(data) ?? false;
 	return {
@@ -43155,8 +43156,8 @@ var LiveDictation = class {
 	lastEnd = 0;
 	phraseSpoke = 0;
 	stepSpoke = 0;
-	msgAt = Date.now();
 	dialogHit = false;
+	checkedAt = 0;
 	constructor(target, hooks, opts = {}) {
 		this.target = target;
 		this.hooks = hooks;
@@ -43483,7 +43484,6 @@ var LiveDictation = class {
 	next(line) {
 		if (this.done) return;
 		this.dict.next();
-		this.msgAt = Date.now();
 		this.dialogHit = false;
 		const n = this.hooks.retarget?.();
 		if (n) {
@@ -43554,8 +43554,13 @@ var LiveDictation = class {
 	dialogBlocks(t) {
 		if (t.kind !== "session") return false;
 		if (this.dialogHit || dialogUp(this.hooks.activity(t.title))) return true;
-		const at = dialogSeen.since(t.title);
-		return at > 0 && at >= this.msgAt;
+		if (!dialogSeen.blocks(t.title)) return false;
+		const now = Date.now();
+		if (this.hooks.dialogCheck && now - this.checkedAt >= DIALOG_CHECK_EVERY_MS) {
+			this.checkedAt = now;
+			this.hooks.dialogCheck(t.title);
+		}
+		return true;
 	}
 	async heldBack(t, rest) {
 		this.dialogHit = false;
@@ -43579,6 +43584,10 @@ var LiveDictation = class {
 	}
 	keys(t, erase, text) {
 		if (!erase && !text) return true;
+		if (this.dialogBlocks(t)) {
+			this.end(dialogStopLine(t.name, text.trim()), true, "stopped");
+			return false;
+		}
 		if (!(t.replace ? t.replace(erase, text) : (!erase || t.erase(erase)) && (!text || t.type(text)))) {
 			this.end("Couldn't type into " + t.name + " — its terminal isn't connected", true);
 			return false;
@@ -43641,6 +43650,7 @@ var DialogSeen = class {
 	now;
 	seen = /* @__PURE__ */ new Map();
 	was = /* @__PURE__ */ new Map();
+	raised = /* @__PURE__ */ new Set();
 	constructor(now = Date.now) {
 		this.now = now;
 	}
@@ -43648,6 +43658,7 @@ var DialogSeen = class {
 		if (!title) return;
 		if (!id) {
 			this.seen.delete(title);
+			this.raised.delete(title);
 			return;
 		}
 		const cur = this.seen.get(title);
@@ -43670,8 +43681,16 @@ var DialogSeen = class {
 			} else if (r.activity !== "clarify" && (this.seen.get(r.title)?.rows || was !== void 0 && dialogUp(was) && !dialogUp(act))) this.note(r.title, null);
 		}
 	}
+	activity(title, act, old) {
+		if (!title) return;
+		if (dialogUp(String(act || ""))) this.raised.add(title);
+		else if (this.raised.has(title) || dialogUp(String(old || ""))) this.note(title, null);
+	}
 	since(title) {
 		return this.seen.get(title)?.at || 0;
+	}
+	blocks(title) {
+		return this.seen.has(title) || this.raised.has(title);
 	}
 	at(title, id) {
 		const cur = this.seen.get(title);
@@ -43692,6 +43711,25 @@ var DialogSeen = class {
 	}
 };
 var dialogSeen = new DialogSeen();
+var DIALOG_RECHECK_MS = 400;
+var rechecking = /* @__PURE__ */ new Set();
+async function recheckDialog(title, fetch, seen = dialogSeen, waitMs = DIALOG_RECHECK_MS) {
+	if (!title || rechecking.has(title) || !seen.blocks(title)) return;
+	rechecking.add(title);
+	try {
+		const at = seen.since(title);
+		const read = () => fetch(title).catch(() => void 0);
+		let d = await read();
+		if (d === null) {
+			await new Promise((r) => setTimeout(r, waitMs));
+			d = await read();
+		}
+		if (d === null && seen.since(title) === at) seen.note(title, null);
+		else if (d?.id) seen.note(title, d.id);
+	} finally {
+		rechecking.delete(title);
+	}
+}
 var earlyLine = (name) => name + " asked just now: say your answer again";
 async function routePhrase(text, session, pending = routePending, spokeAt, seen = dialogSeen) {
 	try {
@@ -43852,7 +43890,7 @@ async function answer(r, text, deps, again, spokeAt, seen) {
 		}
 		return;
 	}
-	if (dialogUp(deps.activity(title)) || seen.since(title)) {
+	if (dialogUp(deps.activity(title)) || seen.blocks(title)) {
 		deps.announce(name + " is on a dialog — answer it on the screen.");
 		return;
 	}
@@ -44896,6 +44934,7 @@ function browserRecognizer() {
 var SILENCE_MS = 1100;
 var TURN_MIN_MS = 300;
 var TURN_MAX_MS = 3e3;
+var FIRST_PHRASE_HOLD_MS = 1100;
 function parseTurn(v, at) {
 	if (!v || typeof v !== "object") return null;
 	const o = v;
@@ -44910,6 +44949,7 @@ function parseTurn(v, at) {
 function turnHoldMs(turn, loudAt, blank) {
 	if (!turn) return SILENCE_MS;
 	let hold = turn.reason === "command" && !blank ? SILENCE_MS : turn.hold;
+	if (blank && (turn.reason === "sentence" || turn.reason === "question")) hold = Math.max(hold, FIRST_PHRASE_HOLD_MS);
 	if (loudAt > turn.at) hold = Math.max(hold, SILENCE_MS);
 	return Math.min(TURN_MAX_MS, Math.max(TURN_MIN_MS, hold));
 }
@@ -46913,6 +46953,10 @@ function TopBarMic() {
 			const replay = (env) => typeof ev.isReplay === "function" && ev.isReplay(env);
 			unsubs = [ev.subscribe("session.activity_changed", (env) => {
 				if (replay(env)) return;
+				dialogSeen.activity(env.session, env.new, env.old);
+				if (dialogUp(String(env.new || ""))) fetchDialog(env.session).then((dl) => {
+					if (dl?.id) dialogSeen.note(env.session, dl.id);
+				}).catch(() => {});
 				if (env.new === "working") {
 					tracker.working(env.session);
 					questions.delete(env.session);
@@ -47050,12 +47094,13 @@ function TopBarMic() {
 				quietPill();
 			},
 			activity: liveActivity,
+			dialogCheck: (title) => void recheckDialog(title, (t) => fetchDialog(t)),
 			replies: () => prefsRef.current.replies !== "off",
 			submitted: (title, wantSay) => {
 				tracker.sent(title, wantSay);
 				questions.delete(title);
 			},
-			pending: (title) => liveActivity(title) === "clarify" || questions.has(title),
+			pending: (title) => liveActivity(title) === "clarify" || dialogSeen.blocks(title) || questions.has(title),
 			done: (how) => opts.done?.(how),
 			confirm: (kind) => void confirmer.current?.say(kind),
 			quietMs: meterQuietMs,
