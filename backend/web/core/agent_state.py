@@ -438,7 +438,13 @@ def last_worked_at(title: str) -> Optional[float]:
 #: wrapper, when the agent command ends. "proc" is deliberately absent: the
 #: process-tree probe can misread transiently (a ps race, a missing pane pid),
 #: which is precisely the failure the settle exists to absorb.
-_AUTHORITATIVE_SOURCES = frozenset({"marker", "exit"})
+#: "screen-stable" is the dialog watch's CONFIRMED sighting (server
+#: ``_dialog_watch_loop``): the same parsed dialog on two independent captures
+#: :data:`backend.web.core.state_events.DialogWatch.confirm_s` apart, in a
+#: session whose row said working. A frame caught mid-redraw does not hold
+#: still across two captures; a CLI blocked on a human does. It is only ever
+#: paired with ``clarify`` (the idle consumers never see it).
+_AUTHORITATIVE_SOURCES = frozenset({"marker", "exit", "screen-stable"})
 
 
 def reading_is_authoritative(title: str, value: str) -> bool:
@@ -1191,6 +1197,73 @@ def _capture_visible(srv, name: str) -> Optional[str]:
     return cp.stdout.decode("utf-8", "replace")
 
 
+#: The header :func:`capture_visible_many` prints before each pane: this
+#: prefix, a per-batch nonce (so no pane's own text can pose as a header) and
+#: an index — never the name: a name could carry a ``#`` tmux would expand.
+_BATCH_HEADER = "@@mindflock-dialog-watch@@ "
+#: One line with its newline (or a last line without one). Not
+#: ``str.splitlines``: that also splits on \x0b-\x0d, \x1c-\x1e, \x85 and
+#: U+2028/9, all of which a pane may legitimately hold.
+_LINE_RE = re.compile(r"[^\n]*\n|[^\n]+\Z")
+
+
+def capture_visible_many(names) -> Dict[str, Optional[str]]:
+    """``{name: visible screen or None}`` for several tmux sessions in ONE
+    tmux client (``display-message`` header + ``capture-pane`` per session,
+    chained with ``;``), byte for byte what :func:`_capture_visible` returns
+    for each. One fork/exec per batch instead of one per pane is the whole
+    point: the dialog watch polls every working session a few times a
+    second. tmux stops a chain at the first command that fails (a session
+    that ended since it was listed): the panes before it are good, that one
+    reads None, and the rest go round again in a fresh batch. Never raises."""
+    names = [n for n in dict.fromkeys(names) if n]
+    out: Dict[str, Optional[str]] = {}
+    header = "%s%s " % (_BATCH_HEADER, os.urandom(6).hex())
+    while names:
+        argv = ["tmux"]
+        for idx, name in enumerate(names):
+            if idx:
+                argv.append(";")
+            argv += ["display-message", "-p", "%s%d" % (header, idx)]
+            argv += [";", "capture-pane", "-p", "-t", name]
+        try:
+            cp = _proc.run_capped(
+                argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5
+            )
+            text = cp.stdout.decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001 — a failed capture is no evidence
+            cp = None
+        if cp is None or cp.returncode == 124:  # unreachable / hung tmux
+            for name in names:
+                out[name] = None
+            return out
+        got: Dict[int, list] = {}
+        cur = None
+        for line in _LINE_RE.findall(text):
+            if line.startswith(header):
+                try:
+                    cur = int(line[len(header) :].strip())
+                except ValueError:
+                    cur = None
+                if cur is not None:
+                    got[cur] = []
+                continue
+            if cur is not None:
+                got[cur].append(line)
+        if cp.returncode == 0:
+            for idx, name in enumerate(names):
+                body = got.get(idx)
+                out[name] = "".join(body) if body is not None else None
+            return out
+        # The chain stopped at the last header it printed: that capture failed.
+        failed = max(got) if got else 0
+        for idx in range(failed):
+            out[names[idx]] = "".join(got.get(idx) or [])
+        out[names[failed]] = None
+        names = names[failed + 1 :]
+    return out
+
+
 def _reads_dialogs(provider) -> bool:
     """Whether ``provider`` has a dialog parser (getattr-safe: test stubs and
     third-party providers may predate the capability)."""
@@ -1210,6 +1283,35 @@ def _dialog_parsed(provider, text: str) -> bool:
     except Exception:  # noqa: BLE001 — a parser bug is no evidence
         return False
     return isinstance(parsed, dict) and bool(parsed.get("options"))
+
+
+def dialog_fingerprint(program: str, text: str) -> Optional[str]:
+    """A short digest of the dialog ``program``'s parser finds on ``text``
+    (its question and options), or None when there is none — the same test
+    as layer 0.5 of :func:`_agent_activity` (a parse with options, never a
+    usage-limit screen, which claims ``limit``). Two captures with one
+    fingerprint show one dialog, whatever else on screen moved. Never raises."""
+    try:
+        provider = providers.resolve(program or "")
+        if not _reads_dialogs(provider) or is_limit_screen(text):
+            return None
+        parsed = provider.parse_dialog(text)
+        if not (isinstance(parsed, dict) and parsed.get("options")):
+            return None
+        import hashlib
+        import json
+
+        # Keys and labels only: a cursor moved by hand is the same dialog.
+        opts = [
+            [o.get("key"), o.get("label")] if isinstance(o, dict) else o
+            for o in parsed.get("options") or ()
+        ]
+        blob = json.dumps(
+            [parsed.get("question"), parsed.get("command"), opts], default=str
+        )
+        return hashlib.sha1(blob.encode("utf-8", "replace")).hexdigest()[:16]
+    except Exception:  # noqa: BLE001 — a parser bug is no evidence
+        return None
 
 
 def _dialog_at_bottom(provider, text: str) -> bool:
@@ -1605,9 +1707,20 @@ def _pane_hash_activity(
     return rec.get("state", "idle")
 
 
-def _agent_activity(inst, title: str) -> str:
+def _agent_activity(
+    inst, title: str, screen: Optional[str] = None, screen_stable: bool = False
+) -> str:
     """'working' | 'clarify' | 'limit' | 'idle' | 'offline' for the agent's tmux
     session ('limit' = a usage-limit banner/menu is on screen).
+
+    ``screen``: a visible-screen capture the caller JUST took (the dialog
+    watch). It stands in for layer 0.5's own capture, and is read for a dialog
+    BEFORE the CLI's report is asked for — that report can be a ``claude
+    agents --json`` shell-out (~0.4 s) whose answer a parsed dialog outranks
+    anyway, and the watch exists to publish a dialog in well under that.
+    ``screen_stable``: the watch has seen that same dialog hold still across
+    two captures — the reading is recorded as ``screen-stable``, which skips
+    the announce path's settle (see :data:`_AUTHORITATIVE_SOURCES`).
 
     Layered, most-authoritative first:
 
@@ -1694,6 +1807,16 @@ def _agent_activity(inst, title: str) -> str:
         # Bind this window to its own conversation id while it runs (throttled)
         # so a per-window `resume <id>` after a crash targets the right thread.
         _maybe_record_thread(provider, inst, name, created)
+        reads_dialogs = _reads_dialogs(provider)
+        if screen is not None and not reads_dialogs:
+            screen = None  # no parser: the pane layer takes its own capture
+        if screen is not None:
+            # Layer 0.5 (below) on the caller's fresh capture, early: see the
+            # docstring's ``screen``. Same test, same verdict.
+            note_screen(title, screen)
+            if not is_limit_screen(screen) and _dialog_parsed(provider, screen):
+                source = "screen-stable" if screen_stable else "screen"
+                return _verdict(rec, "clarify", now, source=source)
         marked = provider.activity_state(name)
         # A marker written before this tmux session existed describes a process
         # that no longer does — WHATEVER state it names. Discarded once, here,
@@ -1716,7 +1839,8 @@ def _agent_activity(inst, title: str) -> str:
         # A usage-limit screen is left to those (its menu parses too, and
         # 'limit' outranks 'clarify'). Not authoritative for the announce
         # path (source "screen"): a frame is a frame.
-        screen = _capture_visible(srv, name) if _reads_dialogs(provider) else None
+        if screen is None and reads_dialogs:
+            screen = _capture_visible(srv, name)
         note_screen(title, screen)
         if (
             screen is not None
