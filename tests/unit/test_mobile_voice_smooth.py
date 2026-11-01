@@ -1076,12 +1076,13 @@ def test_the_cap_pattern_matches_the_servers_own_409_and_only_it(monkeypatch):
     monkeypatch.setattr(routes, "_refusal", lambda kind: (backend, None))
     monkeypatch.setattr(routes, "_hints", lambda: "")
     monkeypatch.setattr(routes._stream, "open_stream", lambda *a, **k: None)
-    cap = routes.voice_stream_open({"lang": "en-US"})
+    request = SimpleNamespace(client=None, headers={})
+    cap = routes.voice_stream_open(request, {"lang": "en-US"})
     assert cap.status_code == 409
     err = json.loads(cap.body)["error"]
     assert str(routes._stream.MAX_STREAMS) in err and pattern.search(err)
     backend.streams = False
-    nostream = routes.voice_stream_open({"lang": "en-US"})
+    nostream = routes.voice_stream_open(request, {"lang": "en-US"})
     assert nostream.status_code == 409
     assert not pattern.search(json.loads(nostream.body)["error"])
     # No ready backend: core.speech.select's reasons, never the cap's.
