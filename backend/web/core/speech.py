@@ -1657,6 +1657,10 @@ SLOW_RATIO = 1.0
 SLOW_RECHECK_SECONDS = 10.0
 #: How many listeners (pages) :class:`TtsChain` keeps a reply for.
 MAX_LISTENERS = 32
+#: The listener a pre-synthesised line (``routes/speech.py``'s prewarm) is
+#: asked for: nobody's reply, so it never extends a real line's budget nor
+#: makes a reply sticky.
+PREWARM_LISTENER = "~prewarm"
 
 
 def host_budget(text: str) -> float:
@@ -1690,12 +1694,14 @@ class _Line:
     with no fallback). ``live`` turns false when it gave up: an orphan if
     the host has it (``started``), dropped from the lane if not. ``learn``:
     its answer is a sample of the host's speed (not a warm: a cold load is
-    not the host's pace). ``listener``: whose reply it belongs to."""
+    not the host's pace). ``listener``: whose reply it belongs to. ``low``:
+    a prewarm line — every real line queues ahead of it until it reaches
+    the host (:meth:`TtsChain.send`)."""
 
     __slots__ = (
         "engine", "text", "voice", "timeout", "deadline", "gen",
         "live", "started", "sent_at", "done", "result", "error",
-        "learn", "listener", "took",
+        "learn", "listener", "took", "low",
     )  # fmt: skip
 
     def __init__(self, engine: Backend, text: str, voice: str, timeout: float) -> None:
@@ -1706,6 +1712,7 @@ class _Line:
         self.sent_at = 0.0
         self.took = 0.0
         self.learn = True
+        self.low = False
         self.listener = ""
         self.result: Optional[Tuple[bytes, str]] = None
         self.error: Optional[BaseException] = None
@@ -1833,6 +1840,10 @@ class TtsChain:
       :data:`SLOW_RECHECK_SECONDS`, only while lines are asked) answering
       under the ratio ends it. A host with no samples yet is given its
       budget, as before; :meth:`warm_host` takes the first sample at boot.
+    * Prewarm lines (:meth:`prewarm_line`, ``routes/speech.py``'s
+      ``Prewarm``) are ``low``: every real line queues ahead of one still
+      waiting, and they belong to :data:`PREWARM_LISTENER`, nobody's reply.
+      The prewarm asks only past :meth:`idle_for`'s quiet, one at a time.
     """
 
     def __init__(self) -> None:
@@ -1843,6 +1854,7 @@ class TtsChain:
         self._cond = threading.Condition(self._lock)
         self._lanes: Dict[str, _Lane] = {}
         self._gen = 0  # bumped by reset(): an old orphan changes nothing
+        self._real_at = 0.0  # _now(): a real line was last asked for / said
 
     def reset(self) -> None:
         with self._lock:
@@ -1851,7 +1863,32 @@ class TtsChain:
             self._speed.clear()
             self._lanes.clear()
             self._gen += 1
+            self._real_at = 0.0
             self._cond.notify_all()
+
+    @property
+    def generation(self) -> int:
+        """Bumped by :meth:`reset`: background work started before it stops."""
+        return self._gen
+
+    def idle_for(self) -> float:
+        """Seconds the voice has been idle: no real line in flight or in a
+        lane (an orphan, a probe or a warm holds its lane too), and nothing
+        any listener was served still playing (:meth:`note_line`) — 0.0
+        while any of that is going on. The prewarm speaks only past
+        ``routes/speech.py``'s quiet window, so it is never ahead of a real
+        line in the host's lane, and never between a reply's lines."""
+        with self._lock:
+            if any(lane.queue for lane in self._lanes.values()):
+                return 0.0
+            last = self._real_at
+            for who, r in self._replies.items():
+                if who == PREWARM_LISTENER:
+                    continue
+                if r.inflight:
+                    return 0.0
+                last = max(last, r.quiet_at)
+            return max(0.0, _now() - last)
 
     def _reply(self, listener: str) -> _Reply:
         """``listener``'s reply (under the lock), made on first use; the
@@ -2079,6 +2116,7 @@ class TtsChain:
         listener: str = "",
         learn: bool = True,
         took: Optional[List[float]] = None,
+        low: bool = False,
     ) -> Tuple[bytes, str]:
         """``engine.speak_within(text, voice, timeout)`` — for a
         :attr:`Backend.serial` host in its lane, after every request of ours
@@ -2090,11 +2128,14 @@ class TtsChain:
         learned speed says it cannot arrive by then, raise it before
         sending anything (``upfront``). ``None`` waits for the answer.
         ``learn``: the answer is a speed sample; ``took`` gets the
-        seconds the host took appended."""
+        seconds the host took appended. ``low`` (a prewarm line): every
+        later line that is not ``low`` goes ahead of it while it waits —
+        once at the host it is not interrupted (an HTTP synthesis cannot
+        be), but nothing waits behind a queued one."""
         if not engine.serial:
             return engine.speak_within(text, voice, timeout)
         line = _Line(engine, text, voice, timeout)
-        line.learn, line.listener = learn, listener
+        line.learn, line.listener, line.low = learn, listener, low
         with self._lock:
             key = engine.health_key()
             lane = self._lanes.get(key)
@@ -2108,7 +2149,7 @@ class TtsChain:
                     if ln.live and ln.deadline is not None and ln.listener == listener
                 ]
                 line.deadline = max([now] + ahead) + budget
-                eta = self._eta(key, lane, text, now)
+                eta = self._eta(key, lane, text, now, low)
                 if eta is not None and eta > line.deadline:
                     raise _Slow(
                         "%s is too slow for this line: due in %.1f s, budget %.1f s"
@@ -2116,7 +2157,13 @@ class TtsChain:
                         upfront=True,
                     )
             line.gen = self._gen
-            lane.queue.append(line)
+            at = len(lane.queue)
+            if not low:  # ahead of the prewarm lines still waiting
+                at = next(
+                    (i for i, ln in enumerate(lane.queue) if ln.low and not ln.started),
+                    at,
+                )
+            lane.queue.insert(at, line)
             start, lane.busy = not lane.busy, True
         if start:
             try:
@@ -2159,17 +2206,22 @@ class TtsChain:
             raise SpeechError("%s sent no audio back" % engine.health_key(), down=True)
         return line.result
 
-    def _eta(self, key: str, lane: _Lane, text: str, now: float) -> Optional[float]:
+    def _eta(
+        self, key: str, lane: _Lane, text: str, now: float, low: bool = False
+    ) -> Optional[float]:
         """When a line of ``text`` sent to ``lane`` now would come back, by
         the host's learned speed (under the lock): every request ahead of
         it (the one at the host: what is left of it — half its time again
-        once it is overdue, as an orphan is), then its own. None while the
+        once it is overdue, as an orphan is; a waiting prewarm line is
+        behind any line that is not ``low``), then its own. None while the
         speed is unmeasured."""
         own = self._predict(key, text)
         if own is None:
             return None
         t = now + own
         for ln in lane.queue:
+            if ln.low and not ln.started and not low:
+                continue
             p = self._predict(key, ln.text) or 0.0
             if ln.started:
                 left = p - (now - ln.sent_at)
@@ -2294,6 +2346,7 @@ class TtsChain:
             )
         with self._lock:
             self._reply(listener).inflight += 1
+            self._real_at = _now()
         try:
             if fell_back:
                 audio, mime = engine.speak(text, voice)
@@ -2332,7 +2385,28 @@ class TtsChain:
         finally:
             with self._lock:
                 self._reply(listener).inflight -= 1
+                self._real_at = _now()
             self.note_line(text, listener)
+
+    def prewarm_line(
+        self, engine: Backend, text: str, voice: str = ""
+    ) -> Tuple[bytes, str]:
+        """Say ``text`` with ``engine`` for nobody yet (the prewarm's
+        cache): a serial host gets it as a ``low`` line of
+        :data:`PREWARM_LISTENER` in its lane, waited for (its answer is a
+        speed sample like any other); any other engine directly. No reply,
+        no fallback: a failure is the caller's."""
+        if engine.serial:
+            return self.send(
+                engine,
+                text,
+                host_hung_after(text),
+                voice,
+                None,
+                PREWARM_LISTENER,
+                low=True,
+            )
+        return engine.speak(text, voice)
 
     def status(self, primary: Backend, listener: str = "") -> dict:
         """``GET /api/voice``'s view of the chain for ``primary``:
