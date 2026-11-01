@@ -42675,6 +42675,7 @@ async function submitDraft(title, name, say) {
 	}
 }
 var SPOKE_LEAD_MS = 2e3;
+var dialogStopLine = (name, words) => name + " asked something — " + (words ? "“" + words + "” not typed" : "nothing more typed") + "; the words before it stay";
 var LiveDictation = class {
 	target;
 	hooks;
@@ -42698,6 +42699,8 @@ var LiveDictation = class {
 	lastEnd = 0;
 	phraseSpoke = 0;
 	stepSpoke = 0;
+	msgAt = Date.now();
+	dialogHit = false;
 	constructor(target, hooks, opts = {}) {
 		this.target = target;
 		this.hooks = hooks;
@@ -42940,15 +42943,23 @@ var LiveDictation = class {
 				if (await this.put(out.text, out.route !== false, out.erase, out.guess)) this.show();
 				return;
 			case "erase":
+				if (out.text && t && this.dialogBlocks(t)) {
+					this.end(dialogStopLine(t.name, ""), true, "stopped");
+					return;
+				}
 				t?.erase(out.text);
 				this.hooks.caption("Disregarded — go on", true);
 				this.hooks.confirm?.("cleared");
 				return;
 			case "hush":
-				if (out.erase && t && !this.keys(t, out.erase, "")) return;
+				if (out.erase && t && !this.dialogBlocks(t) && !this.keys(t, out.erase, "")) return;
 				this.hushed();
 				return;
 			case "dropped":
+				if (out.text && t && this.dialogBlocks(t)) {
+					this.end(dialogStopLine(t.name, ""), true, "stopped");
+					return;
+				}
 				t?.erase(out.text);
 				this.end(out.text ? "Disregarded" : "", false, "stopped");
 				return;
@@ -42982,9 +42993,18 @@ var LiveDictation = class {
 					else this.next();
 					return;
 				}
+				if (this.dialogBlocks(t)) {
+					await this.heldBack(t, "");
+					return;
+				}
 				this.acted = true;
 				this.hooks.caption("Sending to " + t.name + "…", true);
 				if (typedNow) await new Promise((r) => setTimeout(r, SUBMIT_SETTLE_MS));
+				if (this.done) return;
+				if (this.dialogBlocks(t)) {
+					await this.heldBack(t, "");
+					return;
+				}
 				const say = this.hooks.replies();
 				const r = await submitDraft(t.title, t.name, say);
 				if (r.ok) this.hooks.submitted(t.title, say);
@@ -43007,6 +43027,8 @@ var LiveDictation = class {
 	next(line) {
 		if (this.done) return;
 		this.dict.next();
+		this.msgAt = Date.now();
+		this.dialogHit = false;
 		const n = this.hooks.retarget?.();
 		if (n) {
 			this.target = n.target;
@@ -43032,9 +43054,14 @@ var LiveDictation = class {
 	async put(text, route = true, erase = "", guess = false) {
 		const t = this.target;
 		if (guess) {
-			if (!t || !this.dict.typed && t.kind !== "field" && dialogUp(this.hooks.activity(t.title))) return true;
+			if (!t) return true;
+			if (this.dialogBlocks(t)) {
+				if (this.dict.typed) this.dialogHit = true;
+				return true;
+			}
 			return this.keys(t, erase, text);
 		}
+		if (t && this.dict.typed && this.dialogBlocks(t)) return this.heldBack(t, text);
 		if (this.dict.typed.length === erase.length && t?.kind !== "field") {
 			if (erase && t && !this.keys(t, erase, "")) return false;
 			erase = "";
@@ -43057,7 +43084,7 @@ var LiveDictation = class {
 				this.end("Click a session first — “" + words + "” not typed", true);
 				return false;
 			}
-			if (dialogUp(this.hooks.activity(t.title))) {
+			if (this.dialogBlocks(t)) {
 				this.end(t.name + " is waiting on a dialog — answer it first", true);
 				return false;
 			}
@@ -43067,6 +43094,32 @@ var LiveDictation = class {
 			return false;
 		}
 		return this.keys(t, erase, text);
+	}
+	dialogBlocks(t) {
+		if (t.kind !== "session") return false;
+		if (this.dialogHit || dialogUp(this.hooks.activity(t.title))) return true;
+		const at = dialogSeen.since(t.title);
+		return at > 0 && at >= this.msgAt;
+	}
+	async heldBack(t, rest) {
+		this.dialogHit = false;
+		const words = rest.trim();
+		if (words && this.dict.routes) {
+			this.hooks.caption(this.dict.shown, true, words);
+			const routed = await this.hooks.route(words, this.stepSpoke);
+			if (routed === "hush") {
+				this.hushed();
+				return false;
+			}
+			if (routed) {
+				this.acted = true;
+				if (this.dict.continuous && routed !== "end") this.next(null);
+				else this.end(null);
+				return false;
+			}
+		}
+		this.end(dialogStopLine(t.name, words), true, "stopped");
+		return false;
 	}
 	keys(t, erase, text) {
 		if (!erase && !text) return true;
@@ -43131,6 +43184,7 @@ var ANSWER_AFTER_MS = 300;
 var DialogSeen = class {
 	now;
 	seen = /* @__PURE__ */ new Map();
+	was = /* @__PURE__ */ new Map();
 	constructor(now = Date.now) {
 		this.now = now;
 	}
@@ -43148,14 +43202,20 @@ var DialogSeen = class {
 	}
 	rows(list) {
 		for (const r of list) {
+			const act = String(r.activity || "");
+			const was = this.was.get(r.title);
+			this.was.set(r.title, act);
 			const a = r.asking;
 			if (a && a.kind === "dialog") {
 				if (!a.dialog_id) continue;
 				this.note(r.title, a.dialog_id);
 				const cur = this.seen.get(r.title);
 				if (cur) cur.rows = true;
-			} else if (r.activity !== "clarify" && this.seen.get(r.title)?.rows) this.note(r.title, null);
+			} else if (r.activity !== "clarify" && (this.seen.get(r.title)?.rows || was !== void 0 && dialogUp(was) && !dialogUp(act))) this.note(r.title, null);
 		}
+	}
+	since(title) {
+		return this.seen.get(title)?.at || 0;
 	}
 	at(title, id) {
 		const cur = this.seen.get(title);
@@ -43329,9 +43389,15 @@ async function answer(r, text, deps, again, spokeAt, seen) {
 		} catch (err) {
 			const body = err instanceof ApiError ? err.body : null;
 			if (body?.dialog_changed) deps.announce("The prompt on " + name + " changed — say it again.");
-			else if (body?.dialog_answered) deps.announce("Already answered.");
-			else deps.caption("Couldn't answer " + name + ": " + (err?.message || "error"), true);
+			else if (body?.dialog_answered) {
+				seen.note(title, null);
+				deps.announce("Already answered.");
+			} else deps.caption("Couldn't answer " + name + ": " + (err?.message || "error"), true);
 		}
+		return;
+	}
+	if (dialogUp(deps.activity(title)) || seen.since(title)) {
+		deps.announce(name + " is on a dialog — answer it on the screen.");
 		return;
 	}
 	if (await questionPending(title, deps.activity(title))) {
@@ -43537,8 +43603,9 @@ var HandsFree = class {
 		if (!this.ready(title) || title !== x.focused()) return;
 		this.begin();
 		try {
-			const d = await x.fetchDialog(title).catch(() => null);
-			if (d?.id) dialogSeen.note(title, d.id);
+			const d = await x.fetchDialog(title).catch(() => void 0);
+			if (d === null) dialogSeen.note(title, null);
+			else if (d?.id) dialogSeen.note(title, d.id);
 			if (!d || !d.parsed || !d.options.length || d.id === this.seen) return;
 			if (!x.replies() || x.busy() || title !== x.focused()) return;
 			this.seen = d.id;
@@ -44371,6 +44438,37 @@ function browserRecognizer() {
 	return self;
 }
 var SILENCE_MS = 1100;
+var TURN_MIN_MS = 300;
+var TURN_MAX_MS = 3e3;
+function parseTurn(v, at) {
+	if (!v || typeof v !== "object") return null;
+	const o = v;
+	const hold = Number(o.hold_ms);
+	if (!Number.isFinite(hold) || hold <= 0) return null;
+	return {
+		hold,
+		reason: String(o.reason || ""),
+		at
+	};
+}
+function turnHoldMs(turn, loudAt, blank) {
+	if (!turn) return SILENCE_MS;
+	let hold = turn.reason === "command" && !blank ? SILENCE_MS : turn.hold;
+	if (loudAt > turn.at) hold = Math.max(hold, SILENCE_MS);
+	return Math.min(TURN_MAX_MS, Math.max(TURN_MIN_MS, hold));
+}
+var RecordingClock = class {
+	zero = Infinity;
+	block(endS, now = Date.now()) {
+		this.zero = Math.min(this.zero, now - endS * 1e3);
+	}
+	reset() {
+		this.zero = Infinity;
+	}
+	at(s) {
+		return Number.isFinite(this.zero) ? Math.round(this.zero + s * 1e3) : 0;
+	}
+};
 var CLIP_MAX_MS = 12e3;
 var UPLOAD_TIMEOUT_MS = 45e3;
 var CLIP_RATE$1 = 16e3;
@@ -44637,7 +44735,7 @@ function serverRecognizer(opts = {}) {
 			}
 		});
 	};
-	const sendChunk = async (c, blob, hh) => {
+	const sendChunk = async (c, blob, hh, takenAt = Date.now()) => {
 		try {
 			const pre = joined(c, blob);
 			if (pre !== blob) blob = await pre;
@@ -44654,6 +44752,7 @@ function serverRecognizer(opts = {}) {
 				self.passMs = ms;
 				voicePass(ms);
 			}
+			c.turn = parseTurn(r.j.turn, takenAt);
 			const w = wordsOf(r.j.committed);
 			const p = wordsOf(r.j.partial);
 			if (hh.onStream) hh.onStream(w, p);
@@ -44668,12 +44767,13 @@ function serverRecognizer(opts = {}) {
 	const pump = (c) => {
 		if (!c.stream || !c.sid || !c.heard || c.busy || c.ending || !c.rec || h === null) return;
 		const min = c.sent ? chunkMinS(self.passMs) : Math.max(0, c.speechS - c.trimS) + FIRST_CHUNK_S;
+		const takenAt = Date.now();
 		const blob = c.rec.take(min);
 		if (!blob) return;
 		c.sent = true;
 		c.fresh = false;
 		const hh = h;
-		run(c, () => sendChunk(c, blob, hh));
+		run(c, () => sendChunk(c, blob, hh, takenAt));
 	};
 	const endStream = async (c) => {
 		const hh = h;
@@ -44777,6 +44877,9 @@ function serverRecognizer(opts = {}) {
 			trimS: 0,
 			speechS: 0,
 			spokeAt: 0,
+			clock: new RecordingClock(),
+			loudAt: 0,
+			turn: null,
 			pre: null
 		};
 		if (c.stream) openStream(c);
@@ -44813,7 +44916,6 @@ function serverRecognizer(opts = {}) {
 		firstSkipMs = 0;
 		const pre = skip || muted ? null : mic.preRoll();
 		let floor = mic.quietFloor();
-		let lastLoud = 0;
 		let blockAt = 0;
 		const onLevel = (rms) => {
 			if (cur !== c) return;
@@ -44822,10 +44924,11 @@ function serverRecognizer(opts = {}) {
 			h?.onLevel?.(rms);
 			floor = noiseFloor(floor, rms);
 			const now = Date.now();
+			c.clock.block(blockAt, now);
 			if (isLoud(rms, floor)) {
 				if (!c.heard) {
 					c.speechS = at;
-					c.spokeAt = now - Math.max(0, Math.round((blockAt - at) * 1e3));
+					c.spokeAt = c.clock.at(at);
 					if (at < PRE_ROLL_ONSET_S) {
 						c.pre = pre;
 						if (pre) c.spokeAt -= PRE_ROLL_MS;
@@ -44839,11 +44942,11 @@ function serverRecognizer(opts = {}) {
 				}
 				c.heard = true;
 				c.fresh = true;
-				lastLoud = now;
+				c.loudAt = now;
 			} else if (!c.heard && c.stream) {
 				if (c.rec?.take()) c.trimS = blockAt;
 			}
-			if (c.heard && now - lastLoud > SILENCE_MS) endClip();
+			if (c.heard && now - c.loudAt > turnHoldMs(c.stream ? c.turn : null, c.loudAt, h?.blank?.() ?? true)) endClip();
 			else pump(c);
 		};
 		try {
@@ -44901,6 +45004,7 @@ function serverRecognizer(opts = {}) {
 			else unlistenOver();
 			const barged = !on && Date.now() - lastBargeAt < BARGE_FRESH_MS;
 			cur?.rec?.mute?.(on, barged ? 0 : BARGE_SKIP_MS / 1e3, barged ? BARGE_REWIND_MS / 1e3 : 0);
+			cur?.clock.reset();
 		},
 		endPhrase() {
 			if (cur?.heard && want) endClip();
@@ -46547,6 +46651,7 @@ function TopBarMic() {
 			onFlush: (t, final, at) => {
 				if (live.current === d) d.flush(t, final, at);
 			},
+			blank: () => live.current !== d || !d.dict.typed,
 			onPartial: (t) => {
 				if (live.current === d) d.unsure(t);
 			},
