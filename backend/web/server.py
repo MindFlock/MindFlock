@@ -96,7 +96,8 @@ modules under
     snapshot         per-session JSON descriptors (labels, diff stat)
     state_events     session.*_changed diffing: settle + boot quiet windows,
                      session.turn_ended gates, human-input presence,
-                     ReplyWatch (the Stop hook's reply file landing)
+                     ReplyWatch (the Stop hook's reply file landing),
+                     DialogWatch (a dialog on a working session's screen)
     task_headlines   the row's task_headline: newest MEANINGFUL prompt as a
                      verb phrase (backend/task_headline.py), remembered per
                      session + conversation
@@ -565,6 +566,8 @@ from backend.web.core.state_events import (
     _SETTLE_ACTIVITIES,
     _STAGE_SETTLE_SECONDS,
     _TRANSIENT_STAGES,
+    DialogRow as _DialogRow,
+    DialogWatch as _DialogWatch,
     ReplyWatch as _ReplyWatch,
     _TURN_END_DWELLS,
     _TURN_END_DWELL_MARKER_S,
@@ -814,6 +817,9 @@ async def lifespan(app: FastAPI):
     # A turn's reply goes out the moment the Stop hook files it, not on the
     # next 4s instances tick (see _reply_watch_loop).
     _register_task(_reply_watch_loop())
+    # Likewise a permission/choice dialog: on the row within ~0.3s of being
+    # drawn, not on the next 4s tick (see _dialog_watch_loop).
+    _register_task(_dialog_watch_loop())
     # Verify: watch origin until each generated test plan's work reaches the
     # live branch, and poll the verify sessions that are working through one.
     _register_task(_test_plans_due_loop())
@@ -2198,7 +2204,8 @@ def _republish_session(title: str):
 #: Probe memos a landed reply makes stale: the reading the Stop hook just
 #: flipped and every row field read off the reply file.
 _REPLY_PROBES = ("activity", "asking", "last_turn", "last_say")
-#: title -> monotonic time its last _republish_reply finished. A tick that
+#: title -> monotonic time its last _republish_reply (or _republish_dialog)
+#: finished. A tick that
 #: STARTED before then may have read the session before the reply landed
 #: (``working``): it must neither emit that reading (idle→working→idle, a
 #: flapping chip) nor publish that row over the fresh one.
@@ -2241,6 +2248,45 @@ def _republish_reply(title: str):
     the Stop hook just ended. Publish before emit, as in
     :func:`_republish_session`. A session the tick has not published yet gets
     the full republish. Returns the row, or None. Never raises."""
+    return _republish_fast(
+        title, _REPLY_PROBES, lambda inst: _agent_activity(inst, title), reply=True
+    )
+
+
+#: Probe memos a dialog appearing (or leaving) makes stale.
+_DIALOG_PROBES = ("activity", "asking")
+
+
+def _republish_dialog(title: str, screen: Optional[str] = None, stable: bool = False):
+    """Publish ``title``'s dialog the moment the dialog watch sees it.
+
+    :func:`_republish_reply`'s path for the two fields a dialog changes —
+    ``activity`` (``clarify``) and ``asking`` (the dialog off ``screen``) —
+    with the same publish-before-emit, settle/boot-quiet windows and tick
+    race guard. ``screen`` is the watch's own fresh capture: classified
+    first, before the CLI's report (``claude agents --json`` can take 0.4s);
+    None probes in full (a hook said clarify and no parser saw a dialog).
+    ``stable``: the watch saw the same dialog hold still across two captures
+    — recorded as an authoritative ``screen-stable`` reading, so the
+    ``activity_changed`` event skips the 3s settle (a first sighting, like
+    any single frame, still waits for it; the row does not). Returns the
+    row, or None. Never raises."""
+
+    def read(inst):
+        if screen is None:
+            return _agent_activity(inst, title)
+        return _agent_activity(inst, title, screen=screen, screen_stable=stable)
+
+    return _republish_fast(title, _DIALOG_PROBES, read, reply=False)
+
+
+def _republish_fast(title: str, probes, read_activity, reply: bool):
+    """The shared body of :func:`_republish_reply` / :func:`_republish_dialog`:
+    drop ``probes``' memos, read the activity (``read_activity(inst)``, then
+    donated to the memo, as _session_stage_fresh does: a reader that began
+    before the change may still store its ``working``), patch the row's
+    activity fields (plus the reply fields when ``reply``) into the
+    published row, emit, and stamp the tick race guard."""
     try:
         inst = ENGINE.instances.get(title)
         if inst is None:
@@ -2252,20 +2298,19 @@ def _republish_reply(title: str):
         if prev is None:
             return _republish_session(title)
         with _PROBE_CACHE_LOCK:
-            for probe in _REPLY_PROBES:
+            for probe in probes:
                 _PROBE_CACHE.pop((probe, title), None)
         status = getattr(inst.Status, "name", str(inst.Status)).lower()
         stage = _session_stage_cached(inst).get("stage") or "agent"
-        # Computed, then donated (as _session_stage_fresh does): a reader
-        # that began before the hook may still store its ``working``.
-        activity = _probe_seed("activity", inst, _agent_activity(inst, title))
+        activity = _probe_seed("activity", inst, read_activity(inst))
         row = dict(prev)
         row["activity"] = activity
         row["activity_since"] = _agent_state.state_since(title)
         row["asking"] = _session_asking_cached(inst, activity)
-        row["background"] = _background_jobs(inst, title)
-        row["last_turn"] = _session_last_turn_cached(inst)
-        row["last_say"] = _session_last_say_cached(inst)
+        if reply:
+            row["background"] = _background_jobs(inst, title)
+            row["last_turn"] = _session_last_turn_cached(inst)
+            row["last_say"] = _session_last_say_cached(inst)
         _events.patch_session_snapshot(title, row)
         _emit_state_changes(title, status, activity, stage)
         _REPLY_REPUBLISHED_AT[title] = time.monotonic()
@@ -2321,6 +2366,110 @@ async def _reply_watch_loop() -> None:
         except Exception:  # noqa: BLE001 — the loop must never die
             pass
         await asyncio.sleep(_REPLY_WATCH_INTERVAL)
+
+
+# ---- Dialog watch ----------------------------------------------------------- #
+#: The dialog watch's poll period: marker stats every poll, screens on each
+#: session's own cadence (core.state_events.DialogWatch: 0.3s working, 1s
+#: clarify, 0.1s while a hook's clarify waits for its dialog to be drawn).
+_DIALOG_WATCH_INTERVAL = 0.1
+#: None = on except under pytest (ENGINE is the developer's real state there).
+_DIALOG_WATCH_LOOP_ENABLED: Optional[bool] = None
+
+
+def _dialog_watch_loop_enabled() -> bool:
+    if _DIALOG_WATCH_LOOP_ENABLED is not None:
+        return bool(_DIALOG_WATCH_LOOP_ENABLED)
+    return not _restart._under_pytest()
+
+
+def _dialog_watch_rows() -> list:
+    """The published rows the dialog watch looks at: this device's sessions
+    reading ``working`` or ``clarify`` (idle, offline and remote rows are
+    never captured)."""
+    out = []
+    for r in _events.sessions_snapshot():
+        activity = r.get("activity")
+        if activity not in ("working", "clarify"):
+            continue
+        title = r.get("title") or ""
+        inst = ENGINE.instances.get(title)
+        if inst is None or getattr(inst, "Status", None) == session.Paused:
+            continue
+        program = getattr(inst, "Program", "") or ""
+        try:
+            parses = _agent_state._reads_dialogs(providers.resolve(program))
+            name = tmux.to_mindflock_tmux_name(title)
+        except Exception:  # noqa: BLE001
+            continue
+        out.append(_DialogRow(title, name, activity, program, parses))
+    return out
+
+
+def _dialog_marker_key(name: str):
+    """The activity marker's (mtime, size, inode), or None — one stat."""
+    from backend.providers import activity_markers as _am
+
+    try:
+        st = os.stat(_am.marker_path(name))
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size, st.st_ino)
+
+
+def _dialog_marker_state(name: str) -> Optional[str]:
+    from backend.providers import activity_markers as _am
+
+    return _am.read_activity_marker(name)
+
+
+def _dialog_watch_load() -> float:
+    """1-minute load average per CPU — the dialog watch backs off past ~0.75
+    (WSL thrash: memories of the 2026-10 OOM). Critical memory pressure reads
+    as maximal load: the watch then polls at its slowest."""
+    try:
+        from backend import memory_pressure as _mem
+
+        if _mem.level() == "critical":
+            return 1e9
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        return os.getloadavg()[0] / float(os.cpu_count() or 1)
+    except (OSError, AttributeError):
+        return 0.0
+
+
+def _new_dialog_watch():
+    return _DialogWatch(
+        _agent_state.capture_visible_many,
+        _agent_state.dialog_fingerprint,
+        marker_key=_dialog_marker_key,
+        marker_state=_dialog_marker_state,
+        load=_dialog_watch_load,
+    )
+
+
+async def _dialog_watch_loop() -> None:
+    """Republish a session the moment a dialog appears on (or leaves) its
+    screen (core.state_events.DialogWatch; started by the lifespan)."""
+    if not _dialog_watch_loop_enabled():
+        return
+    watch = _new_dialog_watch()
+    while True:
+        try:
+            rows = _dialog_watch_rows()
+            acts = await asyncio.to_thread(watch.poll, rows) if rows else []
+            if not rows:
+                watch.poll(())  # forget every session's state
+            for title, screen, stable in acts:
+                try:
+                    await asyncio.to_thread(_republish_dialog, title, screen, stable)
+                except Exception:  # noqa: BLE001 — one session can't drop the rest
+                    pass
+        except Exception:  # noqa: BLE001 — the loop must never die
+            pass
+        await asyncio.sleep(_DIALOG_WATCH_INTERVAL)
 
 
 async def _instances_tick_loop() -> None:

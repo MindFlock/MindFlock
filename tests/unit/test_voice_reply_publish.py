@@ -703,3 +703,86 @@ def test_republish_reply_reads_past_a_stale_memo_stored_after_the_drop(
     assert server._republish_reply("t")["activity"] == "idle"
     with server._PROBE_CACHE_LOCK:
         assert server._PROBE_CACHE[("activity", "t")][2] == "idle"
+
+
+# ---- the shared fast-republish body: reply vs dialog ----------------------- #
+def test_republish_reply_arms_the_tick_race_guard(bus):
+    _land_for("t", "Done.\nSay: Done.")
+    assert "t" not in server._REPLY_REPUBLISHED_AT
+    server._republish_reply("t")
+    assert "t" in server._REPLY_REPUBLISHED_AT
+
+
+@pytest.fixture()
+def dialog_then_reply(bus, monkeypatch):
+    """``bus`` with a reading that takes the dialog watch's keywords and an
+    ``asking`` that never reaches tmux: clarify asks, anything else does not."""
+    reading = bus["reading"]
+    monkeypatch.setattr(server, "_agent_activity", lambda i, t, **kw: reading["v"])
+    monkeypatch.setattr(
+        server,
+        "_session_asking_cached",
+        lambda inst, activity: (
+            {"kind": "dialog", "dialog_id": "d1"} if activity == "clarify" else None
+        ),
+    )
+    jobs = [{"id": "j1", "state": "running"}]
+    monkeypatch.setattr(server, "_background_jobs", lambda i, t: jobs)
+    return bus
+
+
+def _answer_then_end(reading):
+    """The dialog shows, is answered, and the turn ends within one tick."""
+    reading["v"] = "clarify"
+    server._republish_dialog("t", "dialog screen", True)
+    reading["v"] = "idle"
+    _land_for("t", "Installed it.\nSay: Redis is in.")
+    server._republish_reply("t")
+
+
+def test_a_dialog_then_a_reply_leave_the_reply_fields_and_the_final_idle(
+    dialog_then_reply,
+):
+    got = []
+    dialog_then_reply["bus"].subscribe(got.append)
+    reading = dialog_then_reply["reading"]
+    reading["v"] = "clarify"
+    row = server._republish_dialog("t", "dialog screen", True)
+    assert row["activity"] == "clarify"
+    assert row["asking"] == {"kind": "dialog", "dialog_id": "d1"}
+    assert "background" not in row  # a dialog never touches the reply fields
+    reading["v"] = "idle"
+    _land_for("t", "Installed it.\nSay: Redis is in.")
+    server._republish_reply("t")
+    row = _published()
+    assert row["activity"] == "idle"
+    assert row["asking"] is None
+    assert row["last_say"] == "Redis is in."
+    assert row["background"] == [{"id": "j1", "state": "running"}]
+    assert _activity_events(got) == [("working", "clarify"), ("clarify", "idle")]
+
+
+def test_a_tick_built_before_a_dialog_and_its_reply_overwrites_neither(
+    dialog_then_reply, monkeypatch
+):
+    for name in ("_check_session_budget", "_prune_session_state"):
+        monkeypatch.setattr(server, name, lambda *a, **k: None)
+    monkeypatch.setattr(server, "_orphan_dangling_parents", lambda: None)
+    monkeypatch.setattr(server._stage_reset, "prune", lambda titles: None)
+    monkeypatch.setattr(server._revive, "observe", lambda *a, **k: None)
+    monkeypatch.setattr(server._revive, "auto_tick", lambda srv: None)
+    got = []
+    dialog_then_reply["bus"].subscribe(got.append)
+
+    def build():
+        stale = dict(_published(), activity="working", check=None)
+        _answer_then_end(dialog_then_reply["reading"])  # both land mid-build
+        return [stale]
+
+    monkeypatch.setattr(server, "_build_instances_snapshot", build)
+    server._instances_tick()
+    row = _published()
+    assert row["activity"] == "idle"
+    assert row["last_say"] == "Redis is in."
+    assert row["asking"] is None
+    assert _activity_events(got) == [("working", "clarify"), ("clarify", "idle")]
