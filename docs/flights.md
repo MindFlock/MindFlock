@@ -5460,3 +5460,124 @@ Tests: `tests/unit/test_mcp_flights.py` covers each tool's request shape
 against the in-memory API, the scope and confirm refusals, the kinds list in
 `describe_flight`, `flight_status` compactness on a 40-stop flight, and
 `Api.patch`. The 34-tool and INSTRUCTIONS pins are in `test_mcp_tools.py`.
+
+## Round 17: the Sky as a canvas tool (contract)
+
+The owner (2026-10-31, a standing ask, one round per cycle): "iterate on the
+sky design and user experience to make it as seamless and intuitive as
+possible; look to other apps that exist for inspiration; take the best parts
+of all of them; make sure you have a judge agent." This round takes the
+manners every good infinite canvas has settled on and a fresh-eyes judge
+measures the Sky against them before and after.
+
+### The inspiration digest (what the best canvases agree on)
+
+| From | The manner | Sky today | This round |
+|---|---|---|---|
+| Figma / FigJam | Space+drag pans; wheel zooms about the cursor; `Shift+1` fit all, `Shift+2` fit selection, `Shift+0` 100 %; the zoom readout is a MENU of presets; smart guides snap edges and centres while dragging; a selected thing wears one thin accent outline, hover a fainter one | pan/zoom yes; 0 / Fit / 100 % buttons; no selection fit; no guides | zoom menu, fit selection, snapping guides, hover/selected rings |
+| tldraw | the select tool is the default and a drag on empty space marquees; `H` hand; the context toolbar floats ABOVE the selection; smooth eased camera moves; a `?` sheet of shortcuts | click/drag tools (V/H), selection bar at the foot | eased fit/focus, `?` sheet |
+| Miro | a minimap in the corner with the viewport rectangle; frames list to jump; zoom presets | none | minimap + off-screen hints |
+| n8n | `Tab` opens the node panel with its search focused; double-click on empty canvas opens it at the pointer; "Tidy up"; sticky notes; a node shows its run status inline | palette float/dock; Tidy; notes; status on boxes | Tab / double-click to the palette |
+| Zapier | each step's status chip reads at a glance; the path's label on the edge | receipts, states | (judge checks legibility) |
+| Excalidraw | Delete removes, Ctrl+Z / Ctrl+Shift+Z undo / redo; zen mode hides chrome; cursors say what a drag will do (grab, grabbing, crosshair, move) | undo only; cursors partial | redo, cursor contract, focus mode |
+| Linear | keyboard first; one accent colour; calm density; the `?` overlay | — | `?` sheet, density pass |
+| Apple Freeform | touch: pinch, two-finger pan, long-press menu; big targets | pinch/pan | ≥ 40 px targets on phone (judge checks) |
+
+Principles kept from rounds 13–15: nothing lands by itself, direct
+manipulation, every object has a name and can go, selection may be empty,
+palettes dock or float, geometry never depends on zoom.
+
+### The judge (task `judge`, read-only, runs first and again after the builders)
+
+A fresh-eyes judge session SEES the Sky, never reads its source. It builds a
+screenshot harness in its scratch dir (the recipe in the brief at
+`~/MindFlock/ux-lab/JUDGE_BRIEF_R17.md`: the built bundle served statically +
+the demo mocks + its own `/api/flights/*` and `/api/instances` rows), shoots
+six states (first visit with nothing; three lines; twelve lines; a flight
+mid-way with a perch waiting on you; zoomed far; a 390 px phone), tries the
+gestures (wheel, Space+drag, marquee, Tab, `?`, double-click, Delete,
+Ctrl+Z), and scores the Sky 1–5 on: first-five-minutes clarity,
+discoverability, feedback (does every action show its effect?), consistency,
+speed/smoothness, forgiveness (undo, confirm only when it must), delight.
+Its report (`JUDGE-R17-<n>.md` in `~/MindFlock/ux-lab/round17/`, with the
+PNGs beside it) lists at most twelve findings, each: what I saw / what the
+best apps do / the fix in one sentence / severity. The second pass re-shoots
+the same six states on the rebuilt bundle and says what changed and what is
+still wrong; its leftovers seed the next cycle.
+
+### The builders (disjoint files; the seams are the three placeholder components and `lib/skySnap.ts`, committed with this contract)
+
+**`sky-core`** (`SkyView.tsx`, `Sky.css`, `lib/skyLayout.ts`, `lib/skySnap.ts`,
+`lib/skyUndo.ts`, `lib/skySelect.ts`, `lib/viewMode.ts`, tests
+`skySnap.test.ts`, `skyCanvas.test.ts`, existing sky*.test.ts updates):
+(1) **snapping**: `snapBox(moving, others, threshold)` snaps a dragged line or
+object's left/centre/right and top/middle/bottom to the others' within 8
+screen px (threshold = 8 / zoom), returns the guides; the sky draws them as
+1 px accent lines (`.sky-guide`) while the drag lasts; `Alt` held = no snap;
+(2) **fit selection**: `Shift+2` / the zoom menu's "Fit selection" fits the
+selected boxes (lines and objects), `Shift+1` fits all (0 stays), `Shift+0` =
+100 %; (3) **eased camera**: fit / focus / jump animate the camera over
+~220 ms (ease-out; none under `prefers-reduced-motion`), no FLIP ghosts
+involved; (4) **redo**: `lib/skyUndo` gains a redo stack (`popRedo`,
+`redoCount`; an undo pushes its inverse when the entry provides `redo()`,
+else nothing — the kinds that can: stop/group removal, grounded line delete,
+note delete), `Ctrl+Shift+Z` / `⌘⇧Z` redoes, toast "Redid: …"; (5) **Tab**
+opens the palette floating with its filter focused (`onFocusFilter`), a
+second Tab docks it; **double-click on empty sky** opens it at the pointer
+(placing lands there) — a double-click on a line keeps its meaning; (6) the
+**cursor contract** (`Sky.css`): `grab` on a bar, `grabbing` while dragging,
+`crosshair` for the marquee, `move` for a snapping box, `zoom-in`/`zoom-out`
+never (the wheel does it), `copy` while a chip drags over a line; (7)
+**focus mode**: `F` with a selection dims everything else to 35 % (a `.sky-
+focus` class on the plane, `data-dim` on the rest), any click or Esc lifts
+it; (8) mounts `<Minimap>`, `<OffscreenHints>`, `<ZoomMenu>` (replacing the
+`sky-zoom-read` span) and `<SkyShortcuts>` (`?` opens, Esc closes) with the
+seam props, feeding the rects from `rectOf` + the objects' frames and the
+lines' state tones; passes `groups` = the sky's real shortcut list.
+
+**`minimap`** (`Minimap.tsx` + `Minimap.css`, `lib/minimap.ts`, tests
+`minimap.test.ts`): the map in the sky's bottom-right (above the shelf,
+right of the selection bar), 180×120 px, folded to a ◰ glyph by a click on
+its head and remembered (`mf_sky_minimap`); draws every rect as a rounded
+block in its state tone (lines), a muted block (objects), the intake lane
+and landing strip as thin bars; the viewport as an accent rectangle that
+DRAGS (plane = map × scale) and a click outside it centres the camera there;
+a click on a block → `onJump(id)`; hover names the line; a plane bigger than
+the map is scaled to fit with 8 px padding; hidden under 520 px wide.
+**Off-screen hints**: for each line outside the viewport, a 22 px chip at
+the nearest edge (clamped to the edge, 8 px in), the bird-coloured dot of its
+state + the title (ellipsis at 14 chars), click = `onJump`; at most 8, the
+nearest first; none while the minimap is open AND wide enough — no, keep
+both: the hints are for "where did my line go" at a glance, the map for the
+whole picture; hidden at lod far (everything is on screen then anyway).
+
+**`zoom-shortcuts`** (`ZoomMenu.tsx` + `ZoomMenu.css`, `SkyShortcuts.tsx` +
+`SkyShortcuts.css`, `lib/skyShortcuts.ts`, tests `zoomMenu.test.ts`,
+`skyShortcuts.test.ts`): the readout becomes a button opening a small menu
+(inline DOM, Esc/outside closes, arrow keys walk it): Fit all (Shift+1 / 0),
+Fit selection (Shift+2, disabled without one), Fit the focused line (1),
+then 50 % · 100 % (Shift+0) · 150 % · 200 %, each with its key; the current
+zoom ticked. The shortcuts sheet: a centred card (not a native dialog)
+listing the groups in two columns with key caps (`<kbd>`), a filter field at
+the top, `?` or Esc closes, the sky's real list in `lib/skyShortcuts.ts`
+(`SKY_SHORTCUT_GROUPS`: Move around / Select / Edit stops / Lines and
+objects / The palette / Help) — `sky-core` imports it for `groups`.
+
+**`polish-css`** (`SkyLine.css`, `FlywayCanvas.css`, `GroundedLine.css`,
+`IntakeLane.css`, `LandingStrip.css`, `SkyObjects.css`, `StickyNote.css`,
+`SkySelection.css`, `SkyPalette.css`, `StopShelf.css`; tests: a
+`skyPolish.test.ts` that pins the tokens): one accent ring for selection
+(2 px, `--accent`, 2 px offset), a fainter hover ring (1 px, 50 %) on every
+box, line bar and object head; `:focus-visible` matches hover + the ring;
+transitions 120 ms on transform/box-shadow/outline only (never on layout);
+one shadow scale (resting / raised while dragging); radii unified (lines 10,
+boxes 8, chips 999); touch targets ≥ 40 px for every control on `@media
+(hover: none)`; the drop gap's highlight reads at far too; no colour that
+is not a token. Nothing moves; nothing changes size at rest.
+
+### After the builders
+
+The integrator merges, rebuilds the bundle in the round's worktree, the
+judge re-shoots, the integrator fixes what is quick, merges into
+`emandel2630/flights`, deploys. The judge's leftovers are the next cycle's
+seed, written at the top of the next round's contract.
