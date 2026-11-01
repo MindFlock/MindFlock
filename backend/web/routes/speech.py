@@ -35,7 +35,11 @@ Status codes, in the order they are checked:
   flight was joined (:func:`_speak_once`). A configured host that refuses,
   times out (``core.speech.host_budget``) or answers 5xx falls back to
   piper for that line and the next :data:`core.speech.HOST_DOWN_SECONDS`;
-  the 502 comes only when no engine could say it. The text is
+  one that answers, but slower than its budget (its learned pace), is
+  "too slow for now": the lines go to piper at once, without waiting, until
+  a probe shows it keeps up again (``core.speech.TtsChain``). Each page
+  (:func:`_client_key`) has its own reply there. The 502 comes only when
+  no engine could say it. The text is
   shaped for the voice first (``core.spoken_text``) unless ``shape`` is
   false; the caller's text — the caption — is never changed.
 * ``stream`` (open) — 409 no recognition backend is ready, the ready one
@@ -589,7 +593,7 @@ def voice_stream_abandon(sid: str) -> Response:
 
 
 @router.post("/api/voice/speak")
-async def voice_speak(payload: Optional[dict] = None) -> Response:
+async def voice_speak(request: Request, payload: Optional[dict] = None) -> Response:
     """Say ``{"text", "voice"?, "shape"?}`` → the audio bytes, ``Content-Type``
     the backend's (``audio/mpeg`` for a host, ``audio/wav`` for piper and the
     built-in engine), ``X-Voice-Backend`` its id and ``X-Voice-Cache``
@@ -601,7 +605,11 @@ async def voice_speak(payload: Optional[dict] = None) -> Response:
     text, what a caption shows, is never changed; ``shape: false`` sends it
     as written (Settings' "Try" hears a respelling itself). A repeat of the
     same shaped text in the same voice is served from :data:`SPEAK_CACHE`
-    without an engine call. See the module doc for the status codes."""
+    without an engine call. The listener (:func:`_client_key`: the page's
+    ``client`` id, else its address and user agent) has its own reply in
+    :data:`core.speech.TTS_CHAIN` — one page falling back to piper leaves
+    another's reply in the configured voice. See the module doc for the
+    status codes."""
     body = payload if isinstance(payload, dict) else {}
     text = body.get("text")
     if not isinstance(text, str) or not text.strip():
@@ -619,8 +627,11 @@ async def voice_speak(payload: Optional[dict] = None) -> Response:
     voice = body.get("voice")
     voice = voice.strip()[:64] if isinstance(voice, str) else ""
     started = time.monotonic()
+    listener = _client_key(request, body)
     # Settings, readiness and shaping read files and PATH: off the loop.
-    plan = await asyncio.to_thread(_speak_plan, text, body.get("shape") is not False)
+    plan = await asyncio.to_thread(
+        _speak_plan, text, body.get("shape") is not False, listener
+    )
     if isinstance(plan, Response):
         return plan
     primary, settings, spoken, engine = plan
@@ -633,14 +644,17 @@ async def voice_speak(payload: Optional[dict] = None) -> Response:
     shared = False
     if hit is not None and engine is not None:
         audio, mime = hit
-        _speech.TTS_CHAIN.note_line(spoken)
+        _speech.TTS_CHAIN.note_line(spoken, listener)
     else:
         try:
+            # Keyed on the engine this listener gets: a page on the fallback
+            # never joins another page's synthesis in the configured voice.
             (audio, mime, engine, _fell_back), shared = await _speak_once(
-                (_engine_signature(primary, settings), voice, spoken),
+                (_engine_signature(engine or primary, settings), voice, spoken),
                 primary,
                 spoken,
                 voice,
+                listener,
             )
         except Exception as err:  # noqa: BLE001
             return _failed(err)
@@ -664,7 +678,7 @@ async def voice_speak(payload: Optional[dict] = None) -> Response:
     )
 
 
-def _speak_plan(text: str, shape: bool):
+def _speak_plan(text: str, shape: bool, listener: str = ""):
     """``/speak``'s blocking half: the configured voice (or the 409), the
     settings, the shaped text (or the 400) and the engine
     :data:`core.speech.TTS_CHAIN` would speak it with (None: down with no
@@ -679,7 +693,7 @@ def _speak_plan(text: str, shape: bool):
         spoken = text.strip()
     if not spoken:
         return JSONResponse({"error": "nothing to say once shaped"}, status_code=400)
-    engine, _fell_back, _why = _speech.TTS_CHAIN.pick(primary)
+    engine, _fell_back, _why = _speech.TTS_CHAIN.pick(primary, listener)
     return primary, settings, spoken, engine
 
 
@@ -690,7 +704,7 @@ def _speak_plan(text: str, shape: bool):
 _INFLIGHT: "Dict[tuple, asyncio.Future]" = {}
 
 
-async def _speak_once(key: tuple, primary, spoken: str, voice: str):
+async def _speak_once(key: tuple, primary, spoken: str, voice: str, listener: str = ""):
     """``(TTS_CHAIN.speak's result, shared)``: the synthesis for ``key``,
     started here or joined (``shared``). Shielded: a caller that hangs up
     does not cancel the synthesis the others wait for."""
@@ -698,7 +712,7 @@ async def _speak_once(key: tuple, primary, spoken: str, voice: str):
     shared = task is not None and not task.done()
     if not shared:
         task = asyncio.ensure_future(
-            asyncio.to_thread(_speech.TTS_CHAIN.speak, primary, spoken, voice)
+            asyncio.to_thread(_speech.TTS_CHAIN.speak, primary, spoken, voice, listener)
         )
         _INFLIGHT[key] = task
 

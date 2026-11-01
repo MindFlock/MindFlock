@@ -514,6 +514,28 @@ class TestSpeakChain:
         r = client.get("/api/voice").json()["server_ready"]
         assert r["tts"] is False
 
+    def test_each_page_has_its_own_reply(self, pair):
+        """The phone's reply fell back (its host line was slow): the
+        desktop's next line is still the host's, the phone's stays on
+        piper — even for a line the desktop just had cached in the host's
+        voice (one voice per reply, per page)."""
+        phone, desk = {"User-Agent": "phone"}, {"User-Agent": "desktop"}
+        pair.host.fail = speech._Slow("the host is slow")
+        r = client.post("/api/voice/speak", json={"text": "One."}, headers=phone)
+        assert r.headers["x-voice-engine"] == "local"
+        pair.host.fail = None
+        r = client.post("/api/voice/speak", json={"text": "Two."}, headers=desk)
+        assert r.headers["x-voice-engine"] == "openai"
+        r = client.post("/api/voice/speak", json={"text": "Two."}, headers=phone)
+        assert r.headers["x-voice-engine"] == "local"
+        assert r.headers["x-voice-fallback"] == "1"
+        r = client.post(
+            "/api/voice/speak",
+            json={"text": "Three.", "client": "tab-1"},
+            headers=phone,
+        )
+        assert r.headers["x-voice-engine"] == "openai"  # its own page id
+
     def test_identical_concurrent_lines_share_one_synthesis(self, pair):
         import asyncio
         import threading
