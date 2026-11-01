@@ -374,8 +374,24 @@ a session first*).
   of a session target (`LiveDictation.dialogBlocks`) the page checks for a
   dialog: the row reads a question, permission prompt or usage-limit menu
   (`clarify` / `limit`, the rows the app already polls), a dialog came up
-  during this phrase, or this page saw one on the session since the message
-  began (`dialogSeen`: rows, `/dialog`, the ask pop-up). Words, a digit or a
+  during this phrase, or this page has **any current sighting** of one on
+  the session, however long ago it was seen (`dialogSeen.blocks`: rows,
+  `/dialog`, the ask pop-up, the router — a sub-agent's prompt under a
+  `working` row and a dialog seen before the mic opened hold too). The
+  sighting is also raised by the event, not only the 4 s rows poll:
+  `TopBarMic` feeds every `session.activity_changed` to
+  `dialogSeen.activity` — going to `clarify` / `limit` holds typing into
+  that session at once (and `/dialog` is read at once for its id, for any
+  session, pop-up on or off), leaving it clears the hold and the sighting.
+  A sighting is otherwise cleared by an answer, a `/dialog` 204 or the row
+  leaving the dialog; one the row doesn't confirm (a sub-agent's prompt
+  answered by hand) is read again while it holds a dictation — at most
+  every 2 s (`DIALOG_CHECK_EVERY_MS`), `recheckDialog`: two 204s 400 ms
+  apart (`DIALOG_RECHECK_MS`) with the sighting unchanged clear it, so a
+  stale one never locks the mic out (the first try may still end with
+  *answer it first*). The check is asked once more as the last word before
+  every batch of keys or Backspaces (`LiveDictation.keys`). With a dialog
+  sighted, a lone “yes” / “two” goes to the router at once. Words, a digit or a
   Backspace would answer it, so: before the first phrase nothing is typed, the
   mic's tooltip says *Login fix is waiting on a dialog — answer it first* and
   listening ends. Mid-message no more words are typed and nothing already
@@ -547,12 +563,36 @@ re-reads `GET /api/voice` when the window regains focus and after any settings
 save.
 
 **The server's recogniser** records each phrase as **16 kHz 16-bit mono WAV**
-(`lib/wavRecorder.ts`, through the page's one AudioContext, made inside the
-click) — the built-in recognisers take nothing but PCM. The microphone's rate
-(usually 48 kHz) is brought down by the browser's own band-limited resampler
-(an `OfflineAudioContext` at 16 kHz rendering the clip), or, where there is
-none, a Blackman-windowed sinc — never plain interpolation, whose aliasing
-folds everything above 8 kHz back into the speech band. A clip ends after
+(through the page's one AudioContext, made inside the click) — the built-in
+recognisers take nothing but PCM. **Capture runs off the main thread**, in an
+AudioWorklet: one graph per microphone stream and context — mic →
+`AudioWorkletNode("mf-voice-capture")` → a zero gain → the destination —
+whose processor (`lib/voiceCapture.worklet.ts`, which Vite bundles on its own
+and emits next to `app.js` as **`/voice-capture-worklet.js`**: `vite.config.ts`
+`worker.rollupOptions.output.entryFileNames`; its `.map` is gitignored)
+brings the microphone's rate (usually 48 kHz) down to 16 kHz on the audio
+thread with a streaming Blackman-windowed sinc (the taps precomputed per
+phase) and posts one block per 4096 input frames (`CAPTURE_BLOCK_FRAMES`,
+85 ms at 48 kHz — the old recorder's block, so the noise floor and the
+end-of-phrase quiet keep their pace): the 16 kHz samples (buffer
+transferred), their RMS and the frame count. The main thread only pushes
+each block into the 500 ms pre-roll ring (`MicCapture` in `lib/voiceMic.ts`,
+kept at 16 kHz) and hands it to the listening recording
+(`MicCapture.record()`, wavRecorder's semantics: skip, mute with tail-skip or
+barge rewind, `take`, `last`, `keepS`, stop/cancel); `take()` and `stop()`
+only join samples and write the 44-byte header — nothing is resampled on
+the main thread, and the pre-roll and the recording share one block stream,
+so they join with no gap. `MicKeeper` loads the module once per context;
+the first phrase on a context waits for it at most 1.5 s
+(`CAPTURE_WAIT_MS`). **Fallback** — no AudioWorklet (an insecure page, an old
+engine), the module failed or is still loading after that wait: the old
+path, a ScriptProcessor pre-roll ring (2048 frames) and `lib/wavRecorder.ts`
+(a ScriptProcessor(4096) recorder whose clip the browser's own band-limited
+resampler — an `OfflineAudioContext` at 16 kHz — brings down, or, where there
+is none, the same windowed sinc; never plain interpolation, whose aliasing
+folds everything above 8 kHz back into the speech band). Settings → Voice's
+mic test records through `wavRecorder` too, with dictation's echo
+cancellation and noise suppression (`MIC_CONSTRAINTS`). A clip ends after
 1.1 s of quiet following speech (short, so typing keeps up with you) or at
 12 s, and is uploaded as `audio/wav` to `POST /api/voice/transcribe`; a clip
 the level meter heard no speech in is not sent.
@@ -561,13 +601,15 @@ the level meter heard no speech in is not sent.
 local whisper engine streams) the mic streams instead of sending clips. At a
 phrase's first speech it opens `POST /api/voice/stream {lang}` → `{id}`; then,
 whenever the previous request is back and at least 300 ms of new audio exists,
-the recorder's `take()` (the WAV since the last take, 16 kHz through the
-windowed sinc, recording on) goes to `POST /api/voice/stream/{id}/chunk` —
+the recorder's `take()` (the WAV since the last take, 16 kHz already — on the
+ScriptProcessor fallback, through the windowed sinc — recording on) goes to `POST /api/voice/stream/{id}/chunk` —
 never two at once. Each answer's `committed` words are typed as above; its
 `partial` is the muted tail. The quiet before the first word is not sent. Each
 chunk's `turn` verdict sets the quiet that ends the phrase (`turnHoldMs`):
 about 350 ms after a radio word, stop phrase or lone command, 900 ms after a
-sentence or question, 1500 ms after a comma or trailing connector, clamped to
+sentence or question — but at least 1100 ms (`FIRST_PHRASE_HOLD_MS`) for a
+first phrase into an empty box, so "…so far. [0.9 s] over and out" is not
+routed in halves — 1500 ms after a comma or trailing connector, clamped to
 300–3000 ms (`TURN_MIN_MS` / `TURN_MAX_MS`). It falls back to clip mode's
 1.1 s (`SILENCE_MS`) when there is no verdict (an older server, a malformed
 `turn`), when the voice was heard after the audio the verdict judged, and for
@@ -7582,12 +7624,38 @@ every browser: the server's built-in recognizers — Windows' System.Speech and
 macOS' Speech framework, which work on a fresh install with no model
 download — need plain PCM, and faster-whisper and OpenAI take WAV too, while
 `MediaRecorder` only makes webm/opus (Chrome) or mp4/AAC (Safari). So the
-page pulls the samples off its one `AudioContext` (made inside the tap): the
-mic stream → a `ScriptProcessorNode(4096, 1, 1)` → a muted gain → the
-destination (Chrome does not run a processor that reaches nothing). Each
-block's first channel is kept; when the clip ends they are joined, resampled
+page pulls the samples off its one `AudioContext` (made inside the tap),
+**off the main thread** where it can: one capture graph per microphone
+stream (`capFor`) — the stream → an `AudioWorkletNode("voice-capture")` → a
+muted gain → the destination (Chrome does not run a processor that reaches
+nothing) — built once and kept while the stream is warm, closed by
+`micStop` (release, a lost mic, a re-ask). Its processor is the page's own
+hand-written **`/mobile-capture-worklet.js`** (served as it is from
+`backend/web/static/` — not the desktop's Vite-built
+`/voice-capture-worklet.js`, which every build rewrites): channel 0
+downsampled to 16 kHz *as it records* by the page's Blackman-windowed sinc
+made continuous across render quanta (no chunk-edge effects), posted in
+fixed blocks of 680 samples (`VOICE_CAP_BLOCK`, 42.5 ms) with the worklet's
+`currentTime`. The recorder, its carried phrase, the meter and the wake
+word's standby each **tap** the one graph (`capTap`) in their own block size
+— the recorder 2 × 680 (85 ms, as ScriptProcessor(4096) at 48 kHz), the
+standby 680 (as `VOICE_WAKE_BLOCK` 2048) — through a ScriptProcessor-shaped
+event, so nothing downstream changed and no graph is made or torn down
+between a standby and a listen. With no tap for 1 s (`VOICE_CAP_IDLE_MS`)
+the worklet stops posting until the next tap. The module is added once per
+AudioContext (`capLoad`, alongside `getUserMedia`); the first start waits for
+it at most 1.5 s (`VOICE_CAP_LOAD_MS`) and records with the fallback past
+that (the next start gets the worklet). A busy main thread now delays the
+blocks but never drops them. **The ScriptProcessor fallback** — the old
+code path unchanged, one `ScriptProcessorNode(4096, 1, 1)` graph per
+consumer — runs with no `AudioWorkletNode` / `ctx.audioWorklet` (iOS Safari
+before 14.5), when `addModule` rejects, the node can't be made or
+`onprocessorerror` fires (from then on), and when `localStorage`
+**`cs_voice_worklet`** is `"0"` (or `"false"`) — the escape hatch for a phone
+where the worklet misbehaves. There each block's first channel is kept; when
+the clip ends they are joined, resampled
 to 16 kHz, clamped and written behind the 44-byte RIFF header — the same
-clip as the desktop app's recorder (`lib/wavRecorder.ts`). The resampling is
+clip as the desktop app's fallback recorder (`lib/wavRecorder.ts`). The resampling is
 anti-aliased: the browser's own resampler first (an
 `OfflineAudioContext(1, n × 16000 / rate, 16000)` rendering the clip through
 a buffer source), and where that is missing, refuses the rate, fails or
@@ -8280,9 +8348,12 @@ session*, the *Events socket* state and sequence number, *Backends*
 server's when Settings say server and `GET /api/voice` reports it ready),
 *Built-in engine* (*<platform> — <detail>*, from the `system` object of
 `GET /api/voice`; left out when an older server sends none), *Recorder*
-(*WAV 16 kHz (ScriptProcessor)*, or *not supported* without Web Audio or a
-microphone), *Resampler* (which one made the last clip — *OfflineAudioContext
-(the browser's)*, or *low-pass decimator* and why — or which one will),
+(*WAV 16 kHz (AudioWorklet, off the main thread)* or *WAV 16 kHz
+(ScriptProcessor)* — on the fallback with *— the worklet: &lt;why&gt;* when the
+module failed — or *not supported* without Web Audio or a microphone),
+*Resampler* (which one made the last clip — *the capture worklet (16 kHz as
+it records)*, *OfflineAudioContext (the browser's)*, or *low-pass decimator*
+and why — or which one will; `voice.rec.cap` is `worklet` or `script`),
 *Silence stop* (*1100 ms after speech*, and the clip cap), *Recognition
 stream* with server recognition (*words as you speak* with the pass time —
 *~0.4 s/pass* — or *one clip per phrase*, and the last chunk's time or why

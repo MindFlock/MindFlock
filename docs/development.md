@@ -110,6 +110,15 @@ refuses any dialog answer that comes without phrase timing (it replies
 before the desktop sent that timing silently turns off voice approval on the
 desktop.
 
+The build also emits the desktop's audio capture module,
+`backend/web/static/voice-capture-worklet.js` (from
+`frontend/src/lib/voiceCapture.worklet.ts`, named by `vite.config.ts`'s
+`worker` entry): commit it with `app.js`. Its `.map`, like
+`codetree-worker.js.map`, is gitignored. The phone's
+`backend/web/static/mobile-capture-worklet.js` is **not** build output — it is
+hand-written beside `mobile.js` and served as it is, under its own name so a
+build never overwrites it.
+
 ## Pre-commit hooks
 
 Shared, deterministic hooks live in `.pre-commit-config.yaml` (black,
@@ -368,6 +377,23 @@ anything:
 PYTHONPATH=$PWD ~/.local/share/uv/tools/mindflock/bin/python \
     tests/bench/voice_bench.py --configs base.en+small
 ```
+
+A config is `<fast model>+<final model>` (`off` for no accurate pass), plus
+`+nohints` (no vocabulary hints anywhere) or `+fasthints` (the voice words
+also lead the fast tier's prompt), plus knobs that each set one module
+constant for that config only: `+beam<N>` (`speech.STREAM_BEAM`), `+vocab`
+(`speech.STREAM_VOCAB` = the control words), `+la<N>`
+(`speech_stream.AGREE_PASSES`) and `+old` (the pre-cycle-6 merge:
+`PROMPT_IN_WINDOW` on, `MATCH_TEXT_FIRST` off) — e.g.
+`--configs base.en+small,base.en+small+old,base.en+small+la3`. Besides the
+control-word hits, WER and pass / finish percentiles it reports **first
+p50/p90** (when the first word would be typed, from the clip's start, on a
+simulated client clock), **extra ctl** (phrases whose fast words hold more
+control words than were said, or a word three times running — what a
+vocabulary prompt risks) and **errors** (fast passes that raised; a failed
+pass is counted and the chunk waits for the next, the run goes on). Other
+options: `--phrases N`, `--seed`, `--tail-quiet N`, `--save DIR` (the WAVs),
+`--misses`, `-v`.
 
 ### Test map
 

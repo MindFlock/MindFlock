@@ -132,6 +132,17 @@ FastAPI app `backend.web.server:app`. Key pieces:
   never announced) and `server._reply_watch_loop` republishes just that
   session's turn-end fields through `_emit_state_changes` — the reply is
   spoken ~0.1 s after the turn ends, not on the next 4 s tick.
+  Its sibling `core/state_events.DialogWatch` does the same for a dialog
+  appearing or leaving: `server._dialog_watch_loop` (0.1 s) stats the hook
+  marker of each session published `working` and captures the screens of
+  those whose CLI has a dialog parser (0.3 s; `clarify` rows 1 s; all of a
+  poll's captures in one tmux client, at most 8, re-parsed only when the
+  text's hash moves, backed off under load or memory pressure), and
+  `_republish_dialog` patches `activity` / `asking` into the row — a
+  dialog reaches the row in ~0.05–0.3 s instead of up to 4 s, and a
+  confirmed second sighting (`screen-stable`, an authoritative source)
+  sends its `activity_changed` past the settle. Idle rows are never
+  captured.
   **`core/spoken.py`** is the pure text
   side — the instruction, `extract_say`, the markdown stripper, the digest
   fallback, `has_question`, and one mtime-cached reader of the reply file —
@@ -161,7 +172,17 @@ FastAPI app `backend.web.server:app`. Key pieces:
   hooks can't inject it. **`core/voice_actions.py`** mints the single-use,
   ten-minute capability tokens behind a dialog push's Yes / No buttons
   (`POST /api/notify/act/<token>`, the notify addon's one public route) so
-  no standing credential ever reaches the ntfy server or a lock screen.
+  no standing credential ever reaches the ntfy server or a lock screen,
+  and keeps each session's last answer (`answered_at`), stamped by
+  `/answer` and by a settling key typed straight into a dialog's pane — the
+  terminal socket or a `/send` (`agent_io.settling_input`,
+  `server._note_pane_input`) — so a voice phrase begun before it never
+  answers the next dialog. The desktop mic's dictation never goes down the
+  terminal socket: every batch of keys is a gated
+  `/send {"voice": true, "submit": false, "erase", "text"}`
+  (`server._dictate_on_agent` → `agent_io.send_dictation`, one tmux call),
+  refused with 409 `in_dialog` when the screen read at send time shows a
+  dialog.
   **`core/speech.py`** + **`routes/speech.py`** are the optional server
   speech (`GET /api/voice`, `POST /api/voice/transcribe`, `…/speak`,
   `…/clear-key`): an `openai`-compatible host or lazily imported local
@@ -338,7 +359,9 @@ FastAPI app `backend.web.server:app`. Key pieces:
   50 ms, and its `_republish_reply` — the cheap counterpart of
   `_republish_session`: it drops the activity/asking/last_turn/last_say probe
   memos and patches the published row, never recomputing git state; the
-  watcher itself, `ReplyWatch`, lives in `state_events`); every other helper cluster is a
+  watcher itself, `ReplyWatch`, lives in `state_events` — and
+  `_dialog_watch_loop`, 100 ms, whose `_republish_dialog` shares that body,
+  `_republish_fast`, over `state_events.DialogWatch`); every other helper cluster is a
   focused module: `agent_sessions` (tmux ensure/send/kill for the agent+shell
   panes), `agent_state` (working/clarify/idle/offline detection — and the
   *provenance* behind it: every classification layer stamps a per-title rolling
