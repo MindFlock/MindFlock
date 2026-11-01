@@ -526,6 +526,19 @@ class TestLocalStream:
         assert run(array("f", [0.0] * 32000), "") == []  # a 2 s window
         assert seen == [(0.0, speech.STREAM_TOKENS + 2 * speech.STREAM_TOKENS_PER_S)]
 
+    def test_the_fast_knobs_reach_the_model(self, model, monkeypatch):
+        from array import array
+
+        monkeypatch.setattr(speech, "STREAM_BEAM", 2)
+        monkeypatch.setattr(speech, "STREAM_VOCAB", "Over. Disregard.")
+        run = speech.LocalSTT().stream_transcriber("en")
+        run(array("f", [0.0]), "earlier words")
+        _audio, kw = model["calls"][0]
+        assert kw["beam_size"] == 2
+        # The vocabulary leads the prompt, never as hotwords (the fast tier).
+        assert kw["initial_prompt"] == "Over. Disregard.. earlier words"
+        assert "hotwords" not in kw
+
     def test_a_pass(self, model):
         from array import array
 

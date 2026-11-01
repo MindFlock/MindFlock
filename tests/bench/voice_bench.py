@@ -24,7 +24,14 @@ Per configuration (``<fast model>+<final model>`` — the fast tier bare and
 the accurate pass with the vocabulary hints, as the server runs them;
 ``+nohints`` for no hints at all, ``+fasthints`` to also lead the fast
 tier's prompt with the voice words (what ``core.speech.HINT_CHARS`` warns
-against), ``+off`` for no accurate pass) it reports:
+against), ``+off`` for no accurate pass) it reports. The fast tier's knobs
+ride the spec too, each setting one module constant for that config only:
+``+beam<N>`` (``speech.STREAM_BEAM``), ``+vocab`` (``speech.STREAM_VOCAB``:
+the control words, :data:`CONTROL_VOCAB`), ``+la<N>``
+(``speech_stream.AGREE_PASSES``) and ``+old`` (the stream's pre-cycle-6
+merge: the prompt carries the committed words still in the window, re-heard
+words are found by time first — ``PROMPT_IN_WINDOW``,
+``MATCH_TEXT_FIRST``):
 
 * **ctl fast / ctl final** — the control word is heard where it belongs
   (at the end of the fast words, resp. of ``final``; the wake word at the
@@ -35,6 +42,15 @@ against), ``+off`` for no accurate pass) it reports:
   the accurate pass did not run, as it does for the client).
 * **pass p50/p95** — one fast pass's milliseconds (``Stream.last_ms`` of
   the passes that ran).
+* **first p50/p90** — when the first word is typed, in ms from the clip's
+  start: the chunks' passes replayed on a simulated clock (a chunk is sent
+  when it has been spoken and the previous one answered, as the clients
+  do; its answer comes a pass later).
+* **extra ctl** — phrases whose fast words hold more control words
+  (:data:`CONTROL_TOKENS`) than were said, or a word three times running:
+  what a vocabulary prompt risks (whisper writes a hint word into quiet).
+* **errors** — fast passes that raised (faster-whisper's word alignment
+  can fail on a prompted pass); the chunk waits for the next pass.
 * **finish p50/p95** — ``Stream.finish()`` wall time, which is what the
   client waits for after "over"; **final p50/p95** the accurate pass's own
   time inside it (``final_ms``), and **spec** how many finals were served
@@ -310,6 +326,21 @@ def _close(a: str, b: str) -> bool:
 # --------------------------------------------------------------------------- #
 # Configurations
 # --------------------------------------------------------------------------- #
+#: ``+vocab``: the control words only, as the fast tier's prompt.
+CONTROL_VOCAB = "Over. Over and out. Disregard. Stop"
+#: The words **extra ctl** counts.
+CONTROL_TOKENS = frozenset(("over", "out", "disregard", "stop", "submit"))
+
+
+def _extra(ref: Sequence[str], hyp: Sequence[str]) -> bool:
+    """Whether ``hyp`` holds a control word more often than ``ref``, or any
+    word three times running (a decoder loop)."""
+    for word in CONTROL_TOKENS:
+        if hyp.count(word) > ref.count(word):
+            return True
+    return any(hyp[i] == hyp[i + 1] == hyp[i + 2] for i in range(len(hyp) - 2))
+
+
 class Config:
     def __init__(self, spec: str):
         parts = spec.split("+")
@@ -318,6 +349,32 @@ class Config:
         self.hints = "nohints" not in parts[2:]
         self.fast_hints = self.hints and "fasthints" in parts[2:]
         self.name = spec
+        #: (module, constant) → the value this config runs with.
+        self.knobs: Dict[Tuple[object, str], object] = {}
+        for part in parts[2:]:
+            if part.startswith("beam") and part[4:].isdigit():
+                self.knobs[(speech, "STREAM_BEAM")] = int(part[4:])
+            elif part.startswith("la") and part[2:].isdigit():
+                self.knobs[(speech_stream, "AGREE_PASSES")] = int(part[2:])
+            elif part == "vocab":
+                self.knobs[(speech, "STREAM_VOCAB")] = CONTROL_VOCAB
+            elif part == "old":
+                self.knobs[(speech_stream, "PROMPT_IN_WINDOW")] = True
+                self.knobs[(speech_stream, "MATCH_TEXT_FIRST")] = False
+
+    def apply(self) -> Dict[Tuple[object, str], object]:
+        """Set the knobs → the values they replaced (for :meth:`restore`)."""
+        saved = {}
+        for (mod, attr), value in self.knobs.items():
+            if hasattr(mod, attr):
+                saved[(mod, attr)] = getattr(mod, attr)
+                setattr(mod, attr, value)
+        return saved
+
+    @staticmethod
+    def restore(saved: Dict[Tuple[object, str], object]) -> None:
+        for (mod, attr), value in saved.items():
+            setattr(mod, attr, value)
 
 
 def _transcribers(cfg: Config, hints: str):
@@ -361,10 +418,33 @@ def _pct(values: List[float], q: float) -> float:
 def run_config(
     cfg: Config, clips, words: dict, hints: str, tail_quiet: int, rng, verbose
 ):
+    saved = cfg.apply()
+    try:
+        return _run_config(cfg, clips, words, hints, tail_quiet, rng, verbose)
+    finally:
+        Config.restore(saved)
+
+
+def _run_config(
+    cfg: Config, clips, words: dict, hints: str, tail_quiet: int, rng, verbose
+):
     fast, final = _transcribers(cfg, hints if cfg.hints else "")
     # Load (and prime) ahead, so the first phrase's numbers are not the load.
     speech.LocalSTT().warm()
     pass_ms: List[float] = []
+    first_ms: List[float] = []
+    extra = 0
+    errors = [0]
+
+    def feed(stream, chunk):
+        """``stream.feed`` → its committed words; a failed pass is counted
+        (**errors**) and the chunk waits for the next, as in the server."""
+        try:
+            return stream.feed(chunk)[0]
+        except speech.SpeechError:
+            errors[0] += 1
+            return ""
+
     finish_ms: List[float] = []
     final_ms: List[float] = []
     ctl_fast = ctl_final = 0
@@ -374,20 +454,34 @@ def run_config(
     misses: List[str] = []
     for text, _ref, check, samples in clips:
         stream = speech_stream.Stream(fast, final)
+        spoken = answered = 0.0  # the simulated clock, in seconds
+        first = None
         for chunk in _chunks(samples):
-            stream.feed(chunk)
+            spoken += len(chunk) / RATE
+            t0 = time.monotonic()
+            got = feed(stream, chunk)
+            answered = max(spoken, answered) + (time.monotonic() - t0)
+            if got and first is None:
+                first = answered
             if stream.last_ms:
                 pass_ms.append(stream.last_ms)
+        if first is not None:
+            first_ms.append(first * 1000)
         for _ in range(tail_quiet):
-            stream.feed(_quiet_chunk(0.3, rng))
+            feed(stream, _quiet_chunk(0.3, rng))
             if stream.last_ms:
                 pass_ms.append(stream.last_ms)
         t0 = time.monotonic()
-        out = stream.finish()
+        try:
+            out = stream.finish()
+        except speech.SpeechError:
+            errors[0] += 1
+            out = {}
         finish_ms.append((time.monotonic() - t0) * 1000)
         fast_text = stream.text
         hit, _body = _control(fast_text, check, words)
         ctl_fast += hit
+        extra += _extra(_norm(text), _norm(fast_text))
         e, n = _wer(_norm(text), _norm(fast_text))
         wer_fast[0] += e
         wer_fast[1] += n
@@ -421,6 +515,10 @@ def run_config(
         "wer_final": "%.1f%%" % (100.0 * wer_final[0] / max(1, wer_final[1])),
         "pass_p50": "%d" % _pct(pass_ms, 0.5),
         "pass_p95": "%d" % _pct(pass_ms, 0.95),
+        "first_p50": "%d" % _pct(first_ms, 0.5),
+        "first_p90": "%d" % _pct(first_ms, 0.9),
+        "extra": "%d" % extra,
+        "errors": "%d" % errors[0],
         "finish_p50": "%d" % _pct(finish_ms, 0.5),
         "finish_p95": "%d" % _pct(finish_ms, 0.95),
         "final_p50": "%d" % _pct(final_ms, 0.5),
@@ -438,6 +536,10 @@ COLUMNS = [
     ("wer_final", "WER final"),
     ("pass_p50", "pass p50"),
     ("pass_p95", "pass p95"),
+    ("first_p50", "first p50"),
+    ("first_p90", "first p90"),
+    ("extra", "extra ctl"),
+    ("errors", "errors"),
     ("finish_p50", "finish p50"),
     ("finish_p95", "finish p95"),
     ("final_p50", "final p50"),
