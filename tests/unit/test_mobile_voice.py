@@ -319,8 +319,8 @@ def test_mobile_js_radio_rules_over_and_disregard():
     assert (
         "if (p.text && !composeEl.value.trim()) {" in heard
     )  # commands: empty box only
-    assert "voiceDialogHeard(p.text);" in heard
-    assert "voiceDialogAnswer(text);" in _fn(js, "voiceDialogHeard")
+    assert "voiceDialogHeard(p.text, spokeAt);" in heard
+    assert "voiceDialogAnswer(text, spokeAt);" in _fn(js, "voiceDialogHeard")
     assert "voiceListenContinue();" in heard and "voiceListenContinue();" in words
     # The phrase keeps the recognizer: no stop on a final, a restart only
     # when the adapter ended with it.
@@ -549,7 +549,7 @@ def test_mobile_js_router_first_then_the_local_table():
     route = _fn(js, "voiceRoute")
     assert 'fetch("/api/voice/route", {' in route
     assert (
-        "JSON.stringify(voiceRouteBody(text, session || voice.session || current))"
+        "JSON.stringify(voiceRouteBody(text, session || voice.session || current, spokeAt))"
         in route
     )
     assert "var body = { text: text, session: session }" in _fn(js, "voiceRouteBody")
@@ -576,10 +576,10 @@ def test_mobile_js_router_first_then_the_local_table():
         assert '"%s"' % kind in kinds, kind
     # voiceHeard asks the router; the local table is the fallback in voiceRouted.
     heard = _fn(js, "voiceHeard")
-    assert "voiceRoute(p.text).then(" in heard
+    assert 'voiceRoute(p.text, "", false, p.spokeAt).then(' in heard
     assert "voiceCommand(" not in heard
     assert "if (L.gen !== gen) return;" in heard
-    assert "if (L.routing) { L.routeQ.push([text, mode]); return; }" in heard
+    assert "if (L.routing) { L.routeQ.push([text, mode, spokeAt]); return; }" in heard
     routed = _fn(js, "voiceRouted")
     fallback = routed.split("if (!res) {")[1].split("\n    }\n")[0]
     assert (
@@ -676,14 +676,16 @@ def test_mobile_js_wider_vocabulary_numbers_stops_and_answers():
     gate = ra.split("if (res.dialog_id && res.keys && res.keys.length) {")[1]
     assert gate.index("voice.cfg.approve_dialogs") < gate.index("voiceAnswerPost(")
     assert '"Answer it on the screen."' in gate
-    assert "voiceRoute(p.text, title).then(" in ra  # only the row number: ask again
+    assert (
+        "voiceRoute(p.text, title, false, p.spokeAt).then(" in ra
+    )  # only the row number: ask again
     assert "if (res.no_dialog)" in ra
     local = _fn(js, "voiceAnswerLocal")
     assert local.index("voice.cfg.approve_dialogs") < local.index("voiceAnswerPost(")
     assert "voiceParseAnswer(a.said, d.options)" in local  # "always" only when said
     # A targeted answer never moves voice: no select(), POST to that title.
     other = _fn(js, "voiceAnswerOther")
-    assert "select(" not in other and "voiceAnswerLocal(title, ta);" in other
+    assert "select(" not in other and "voiceAnswerLocal(title, ta, spokeAt);" in other
     assert "if (!title || title === voice.session) return false;" in other
     post = _fn(js, "voiceAnswerPost")
     assert "var mine = title === voice.session" in post
@@ -779,7 +781,7 @@ def test_mobile_js_voice_requests_have_the_contract_shape():
     assert "firstSentence(text)" in _fn(js, "voiceAckTick")
     # The answer: pinned to the dialog it was read from, by the person.
     assert (
-        'voiceAnswerPost(voice.session, d.id, askOptKeys(opt), voiceKindWord(opt), "");'
+        'voiceAnswerPost(voice.session, d.id, askOptKeys(opt), voiceKindWord(opt), "", undefined, spokeAt, voiceListen_.listenAt);'
         in _fn(js, "voiceDialogAnswer")
     )
     ans = _fn(js, "voiceAnswerPost")
@@ -1086,7 +1088,7 @@ def test_mobile_js_server_recognizer_streams_words_as_you_speak():
     stt = _fn(js, "ServerSTT")
     # The routes, and the stream's own shape.
     assert 'streamReq(g, "/api/voice/stream", {' in stt
-    assert "body: JSON.stringify({ lang: lang() })," in stt
+    assert "body: JSON.stringify({ lang: lang(), client: VOICE_CLIENT_ID })," in stt
     assert (
         'function streamUrl(sid, tail) { return "/api/voice/stream/" + '
         'encodeURIComponent(sid) + (tail ? "/" + tail : ""); }' in stt
@@ -1146,7 +1148,10 @@ def test_mobile_js_server_recognizer_streams_words_as_you_speak():
     # The final takes the guess back first: the rules read the box as it
     # was before the phrase, and only final words (while the router has the
     # phrase before it, the guess in the box is that one's: it stays).
-    assert 'voiceHeard(t, mode, voiceListen_.routing ? "" : voiceGuessDrop());' in rs
+    assert (
+        'voiceHeard(t, mode, voiceListen_.routing ? "" : voiceGuessDrop(), spoke);'
+        in rs
+    )
     assert rs.index("voiceGuessDrop();   // the phrase ended with no words") > rs.index(
         "onEnd: function () {"
     )
@@ -1162,7 +1167,7 @@ def test_mobile_js_server_recognizer_streams_words_as_you_speak():
     heard = _fn(js, "voiceHeard")
     route = heard.split("if (p.text && !composeEl.value.trim()) {")[1]
     assert route.index("if (typed) voiceGuessHold(typed);") < route.index(
-        "voiceRoute(p.text)"
+        "voiceRoute(p.text, "
     )
     assert route.index("L.routing = false;\n        voiceGuessDrop();") < route.index(
         "voiceRouted(res, p)"
@@ -1196,7 +1201,7 @@ def test_mobile_js_server_recognizer_streams_words_as_you_speak():
     assert "g.lead = voiceJoin(g.pend, g.partial);" in fail
     assert "if (g.ending && token === mine) clipSend(g, mine);" in fail
     assert (
-        'upload(new Blob([wav], { type: "audio/wav" }), "audio/wav", mine, g.lead);'
+        'upload(new Blob([wav], { type: "audio/wav" }), "audio/wav", mine, g.lead, g.spokeAt);'
         in stt
     )
     assert "var text = voiceJoin(lead, x.j.text);" in stt
@@ -1292,7 +1297,10 @@ def test_mobile_js_server_recognizer_starts_fast_and_shows_it_hears():
     # The recognizer tells the strip it is paused; the strip asks it.
     assert "paused: paused," in stt
     paint = js.split("  function voiceStripPaint() {")[1].split("\n  }\n")[0]
-    assert "!!(voice.stt && voice.stt.paused && voice.stt.paused()));" in paint
+    assert (
+        "!!(voice.stt && voice.stt.paused && voice.stt.paused()), !!voice.holding && !!voiceSpeech.playing);"
+        in paint
+    )
     assert "voiceStripWord(voice.state," in paint
     # The ring: still — one step (quiet / hearing / loud) from a rAF loop
     # over a ~400 ms smoothed level, written only when it changes; the CSS
@@ -2158,7 +2166,7 @@ def test_mobile_js_pending_choice_round_trip():
     js = _js()
     v = _voice_section(js)
     assert "var VOICE_PENDING_MS = 30000;" in v
-    assert 'VOICE_ROUTE_KINDS.push("ask", "read");' in v
+    assert 'VOICE_ROUTE_KINDS.push("ask", "read", "early");' in v
     take = _fn(js, "voicePendingTake")
     assert (
         "Date.now() - p.at > VOICE_PENDING_MS" in take

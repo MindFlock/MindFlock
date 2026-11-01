@@ -42674,6 +42674,7 @@ async function submitDraft(title, name, say) {
 		};
 	}
 }
+var SPOKE_LEAD_MS = 2e3;
 var LiveDictation = class {
 	target;
 	hooks;
@@ -42693,6 +42694,10 @@ var LiveDictation = class {
 	endedAt = 0;
 	early = null;
 	bargeAt = 0;
+	startedAt = Date.now();
+	lastEnd = 0;
+	phraseSpoke = 0;
+	stepSpoke = 0;
 	constructor(target, hooks, opts = {}) {
 		this.target = target;
 		this.hooks = hooks;
@@ -42721,31 +42726,48 @@ var LiveDictation = class {
 	hearing(t) {
 		if (t) this.heardAnything = true;
 		if (t) this.wordsAt = Date.now();
+		if (t) this.notePhrase();
 		if (this.swallowing) return this.chain;
 		return this.step(() => this.dict.hearing(t));
 	}
-	heard(phrase) {
+	heard(phrase, spokeAt) {
 		if (phrase.trim()) this.heardAnything = true;
+		const spoke = this.endPhraseAt(spokeAt);
 		const early = this.early;
 		if (this.phraseEnded()) return this.chain;
-		if (early) return this.afterQuiet(early, (radio) => this.dict.heard(phrase, radio));
-		return this.step(() => this.dict.heard(phrase));
+		if (early) return this.afterQuiet(early, (radio) => this.dict.heard(phrase, radio), spoke);
+		return this.step(() => this.dict.heard(phrase), spoke);
 	}
 	stream(w, p) {
 		if (w.trim() || p.trim()) this.heardAnything = true;
 		if (w.trim() || p.trim()) this.wordsAt = Date.now();
+		if (w.trim() || p.trim()) this.notePhrase();
 		if (this.swallowing) return this.chain;
 		return this.step(() => this.dict.stream(w, p));
 	}
 	words(w) {
 		return this.stream(w, "");
 	}
-	flush(w, final) {
+	flush(w, final, spokeAt) {
 		if (w.trim() || final?.trim()) this.heardAnything = true;
+		const spoke = this.endPhraseAt(spokeAt);
 		const early = this.early;
 		if (this.phraseEnded()) return this.chain;
-		if (early) return this.afterQuiet(early, (radio) => this.dict.flush(w, final, radio));
-		return this.step(() => this.dict.flush(w, final));
+		if (early) return this.afterQuiet(early, (radio) => this.dict.flush(w, final, radio), spoke);
+		return this.step(() => this.dict.flush(w, final), spoke);
+	}
+	spokeFrom() {
+		return Math.max(this.startedAt, this.lastEnd - SPOKE_LEAD_MS);
+	}
+	notePhrase() {
+		if (!this.phraseSpoke) this.phraseSpoke = this.hooks.spokeAt?.() || this.spokeFrom();
+	}
+	endPhraseAt(spokeAt) {
+		const known = [spokeAt || 0, this.phraseSpoke].filter((v) => v > 0);
+		const spoke = known.length ? Math.min(...known) : this.spokeFrom();
+		this.phraseSpoke = 0;
+		this.lastEnd = Date.now();
+		return spoke;
 	}
 	phraseEnded() {
 		clearTimeout(this.sendWait);
@@ -42783,13 +42805,13 @@ var LiveDictation = class {
 		else if (quiet >= CONTROL_TAIL_MS) e.seen = "met";
 		return e.seen;
 	}
-	afterQuiet(e, act) {
+	afterQuiet(e, act, spoke) {
 		return new Promise((resolve) => {
 			const go = () => {
 				const seen = this.judge(e);
 				if (!seen && !this.done) return void setTimeout(go, CONTROL_POLL_MS);
 				clearInterval(e.timer);
-				resolve(this.step(() => act(seen !== "resumed")));
+				resolve(this.step(() => act(seen !== "resumed"), spoke));
 			};
 			go();
 		});
@@ -42818,6 +42840,7 @@ var LiveDictation = class {
 		this.tailTimer = void 0;
 		this.wordEnd = this.hooks.loudAt?.() || Date.now() - Math.min(quiet, 6e4);
 		this.endedAt = Date.now();
+		const spoke = this.endPhraseAt(this.hooks.spokeAt?.());
 		this.hooks.endPhrase?.();
 		if (radio) {
 			const e = early ? this.watchQuiet() : null;
@@ -42825,13 +42848,13 @@ var LiveDictation = class {
 				this.sendWait = void 0;
 				this.early = null;
 				this.swallow();
-				if (e) this.afterQuiet(e, (r) => this.dict.heard(t.text, r));
-				else this.step(() => this.dict.heard(t.text));
+				if (e) this.afterQuiet(e, (r) => this.dict.heard(t.text, r), spoke);
+				else this.step(() => this.dict.heard(t.text), spoke);
 			}, overWaitMs(finalClock.typical(this.hooks.finalMs?.())));
 			return;
 		}
 		this.swallow();
-		this.step(() => this.dict.heard(t.text));
+		this.step(() => this.dict.heard(t.text), spoke);
 	}
 	unsure(t) {
 		if (this.done) return;
@@ -42881,9 +42904,10 @@ var LiveDictation = class {
 		const lead = pickupLine(this.recording, this.hearingNow);
 		this.hooks.caption(field && lead === "Listening…" ? "Listening — " + base : lead + " · " + base, true);
 	}
-	step(next) {
+	step(next, spoke) {
 		this.chain = this.chain.then(() => {
 			if (this.done) return;
+			this.stepSpoke = spoke || this.phraseSpoke || this.spokeFrom();
 			const t = this.target;
 			this.dict.answering = t?.kind === "session" && !!this.hooks.pending?.(t.title);
 			return this.apply(next());
@@ -43017,7 +43041,7 @@ var LiveDictation = class {
 			if (!text) return true;
 			const words = text.trim();
 			if (route) this.hooks.caption(this.dict.shown, true, words);
-			const routed = route ? await this.hooks.route(words) : false;
+			const routed = route ? await this.hooks.route(words, this.stepSpoke) : false;
 			if (routed === "hush") {
 				this.hushed();
 				return false;
@@ -43080,7 +43104,8 @@ var ROUTE_KINDS = /* @__PURE__ */ new Set([
 	"question",
 	"ask",
 	"read",
-	"help"
+	"help",
+	"early"
 ]);
 var PENDING_MS = 3e4;
 var PendingChoice = class {
@@ -43102,7 +43127,57 @@ var PendingChoice = class {
 	}
 };
 var routePending = new PendingChoice();
-async function routePhrase(text, session, pending = routePending) {
+var ANSWER_AFTER_MS = 300;
+var DialogSeen = class {
+	now;
+	seen = /* @__PURE__ */ new Map();
+	constructor(now = Date.now) {
+		this.now = now;
+	}
+	note(title, id) {
+		if (!title) return;
+		if (!id) {
+			this.seen.delete(title);
+			return;
+		}
+		const cur = this.seen.get(title);
+		if (!cur || cur.id !== String(id)) this.seen.set(title, {
+			id: String(id),
+			at: this.now()
+		});
+	}
+	rows(list) {
+		for (const r of list) {
+			const a = r.asking;
+			if (a && a.kind === "dialog") {
+				if (!a.dialog_id) continue;
+				this.note(r.title, a.dialog_id);
+				const cur = this.seen.get(r.title);
+				if (cur) cur.rows = true;
+			} else if (r.activity !== "clarify" && this.seen.get(r.title)?.rows) this.note(r.title, null);
+		}
+	}
+	at(title, id) {
+		const cur = this.seen.get(title);
+		return cur && cur.id === String(id) ? cur.at : 0;
+	}
+	inTime(title, id, spokeAt) {
+		const at = this.at(title, id);
+		return !!spokeAt && spokeAt > 0 && at > 0 && spokeAt >= at + ANSWER_AFTER_MS;
+	}
+	body() {
+		const now = this.now();
+		const out = {};
+		for (const [t, v] of this.seen) out[t] = {
+			id: v.id,
+			ms_ago: Math.max(0, now - v.at)
+		};
+		return out;
+	}
+};
+var dialogSeen = new DialogSeen();
+var earlyLine = (name) => name + " asked just now: say your answer again";
+async function routePhrase(text, session, pending = routePending, spokeAt, seen = dialogSeen) {
 	try {
 		const json = {
 			text,
@@ -43110,6 +43185,12 @@ async function routePhrase(text, session, pending = routePending) {
 		};
 		const held = pending.take();
 		if (held) json.pending = held;
+		if (spokeAt && spokeAt > 0) {
+			json.spoke_ms_ago = Math.max(0, Date.now() - spokeAt);
+			json.spoke_at = spokeAt;
+		}
+		const had = seen.body();
+		if (Object.keys(had).length) json.dialog_seen = had;
 		const r = await api("/api/voice/route", { json });
 		if (r && typeof r === "object") pending.keep(r);
 		if (r && typeof r === "object" && ROUTE_KINDS.has(String(r.kind))) return r;
@@ -43143,7 +43224,7 @@ function answerWords(r, text) {
 	if (r.choice === "number" && r.number) return String(r.number);
 	return r.choice || text.trim();
 }
-async function runVoiceCommand(r, text, deps) {
+async function runVoiceCommand(r, text, deps, spokeAt, seen = dialogSeen) {
 	switch (r.kind) {
 		case "switch_index": {
 			const n = Math.trunc(Number(r.index));
@@ -43166,8 +43247,14 @@ async function runVoiceCommand(r, text, deps) {
 			return true;
 		}
 		case "answer":
-			await answer(r, text, deps, false);
+			await answer(r, text, deps, false, spokeAt, seen);
 			return true;
+		case "early": {
+			const title = r.title || deps.focused();
+			if (r.dialog_id) seen.note(title, r.dialog_id);
+			deps.announce(r.say || earlyLine(deps.name(title)));
+			return true;
+		}
 		case "question":
 			deps.announce(r.say || "Nothing is being asked.");
 			return true;
@@ -43193,19 +43280,23 @@ async function askHelp(text) {
 		model: false
 	};
 }
-async function answer(r, text, deps, again) {
+async function answer(r, text, deps, again, spokeAt, seen) {
 	if (!r.title && r.index != null && !again) {
 		const key = railRow(deps.railOrder(), Number(r.index));
 		if (!key || isWindowRow(key)) {
 			deps.announce("There is no session " + Math.trunc(Number(r.index)));
 			return;
 		}
-		const next = await deps.route(text, key);
+		const next = await deps.route(text, key, spokeAt);
 		if (next.kind === "answer") await answer({
 			...next,
 			title: next.title || key,
 			index: void 0
-		}, text, deps, true);
+		}, text, deps, true, spokeAt, seen);
+		else if (next.kind === "early") await runVoiceCommand({
+			...next,
+			title: next.title || key
+		}, text, deps, spokeAt, seen);
 		else deps.announce(next.say || deps.name(key) + " isn't asking anything.");
 		return;
 	}
@@ -43216,6 +43307,11 @@ async function answer(r, text, deps, again) {
 	}
 	const name = deps.name(title);
 	if (r.dialog_id && r.keys?.length) {
+		if (!seen.inTime(title, r.dialog_id, spokeAt)) {
+			seen.note(title, r.dialog_id);
+			deps.announce(earlyLine(name));
+			return;
+		}
 		if (!await deps.approveDialogs()) {
 			deps.announce(APPROVE_OFF_LINE);
 			return;
@@ -43228,6 +43324,7 @@ async function answer(r, text, deps, again) {
 			};
 			if (r.text) json.text = r.text;
 			await instApi(title, "/answer", { json });
+			seen.note(title, null);
 			deps.announce(r.say || "Answered " + (r.choice === "number" ? String(r.number || "") : r.choice || "") + ".");
 		} catch (err) {
 			const body = err instanceof ApiError ? err.body : null;
@@ -43441,6 +43538,7 @@ var HandsFree = class {
 		this.begin();
 		try {
 			const d = await x.fetchDialog(title).catch(() => null);
+			if (d?.id) dialogSeen.note(title, d.id);
 			if (!d || !d.parsed || !d.options.length || d.id === this.seen) return;
 			if (!x.replies() || x.busy() || title !== x.focused()) return;
 			this.seen = d.id;
@@ -43467,6 +43565,7 @@ var HandsFree = class {
 	}
 	async ask(title, a) {
 		const x = this.deps;
+		if (a.dialog?.id) dialogSeen.note(title, a.dialog.id);
 		if (!this.ready(title)) return;
 		this.begin();
 		this.stopped = "";
@@ -44318,6 +44417,12 @@ var BargeDetector = class {
 };
 var wordsOf = (v) => String((Array.isArray(v) ? v.join(" ") : v) || "").trim();
 var langTag$1 = () => String(navigator.language || "en").split(";")[0];
+var VOICE_CLIENT_ID = (() => {
+	try {
+		if (globalThis.crypto?.randomUUID) return "d-" + globalThis.crypto.randomUUID();
+	} catch {}
+	return "d-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
+})();
 function serverRecognizer(opts = {}) {
 	const mic = opts.mic || new MicKeeper(KEEP_STREAM_MS, void 0, runningAudioCtx);
 	let holding = false;
@@ -44404,7 +44509,7 @@ function serverRecognizer(opts = {}) {
 		h?.onError(code, detail);
 		maybeEnd();
 	};
-	const upload = async (clip) => {
+	const upload = async (clip, spokeAt) => {
 		const hh = h;
 		uploads++;
 		const ac = new AbortController();
@@ -44423,7 +44528,7 @@ function serverRecognizer(opts = {}) {
 			if (r.ok) {
 				self.lastError = "";
 				const text = String(j.text || "").trim();
-				if (text) hh.onFinal(text);
+				if (text) hh.onFinal(text, spokeAt || void 0);
 			} else {
 				self.lastError = String(j.error || "HTTP " + r.status);
 				want = false;
@@ -44508,7 +44613,10 @@ function serverRecognizer(opts = {}) {
 				const r = await call("/api/voice/stream", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ lang: langTag$1() })
+					body: JSON.stringify({
+						lang: langTag$1(),
+						client: VOICE_CLIENT_ID
+					})
 				});
 				const id = String(r.j.id || "");
 				if (h !== hh || !c.stream) {
@@ -44582,7 +44690,7 @@ function serverRecognizer(opts = {}) {
 			if (c.busy) await c.busy;
 			if (h !== hh || !hh) return;
 			if (!c.stream) {
-				if (c.heard && tail && tail.size > 44) upload(joined(c, tail));
+				if (c.heard && tail && tail.size > 44) upload(joined(c, tail), c.spokeAt);
 				return;
 			}
 			if (!c.sid) return;
@@ -44607,7 +44715,7 @@ function serverRecognizer(opts = {}) {
 				}
 				const final = typeof r.j.final === "string" && r.j.same !== true ? wordsOf(r.j.final) : "";
 				hh.onPartial?.("");
-				hh.onFlush?.(wordsOf(r.j.committed), final || void 0);
+				hh.onFlush?.(wordsOf(r.j.committed), final || void 0, c.spokeAt || void 0);
 			} catch (err) {
 				if (h !== hh) return;
 				c.sid = sid;
@@ -44644,7 +44752,7 @@ function serverRecognizer(opts = {}) {
 		c.rec.stop().then((blob) => {
 			if (token !== mine) return;
 			token = null;
-			if (c.heard && blob.size) upload(joined(c, blob));
+			if (c.heard && blob.size) upload(joined(c, blob), c.spokeAt);
 			if (want && !finishing) clip();
 			else maybeEnd();
 		}, () => {
@@ -44668,6 +44776,7 @@ function serverRecognizer(opts = {}) {
 			sent: false,
 			trimS: 0,
 			speechS: 0,
+			spokeAt: 0,
 			pre: null
 		};
 		if (c.stream) openStream(c);
@@ -44716,7 +44825,11 @@ function serverRecognizer(opts = {}) {
 			if (isLoud(rms, floor)) {
 				if (!c.heard) {
 					c.speechS = at;
-					if (at < PRE_ROLL_ONSET_S) c.pre = pre;
+					c.spokeAt = now - Math.max(0, Math.round((blockAt - at) * 1e3));
+					if (at < PRE_ROLL_ONSET_S) {
+						c.pre = pre;
+						if (pre) c.spokeAt -= PRE_ROLL_MS;
+					}
 					h?.onSpeech?.();
 					if (c.stream && c.sid && now - c.opened > STREAM_FRESH_MS) {
 						discard(c);
@@ -44778,6 +44891,9 @@ function serverRecognizer(opts = {}) {
 		available: () => typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia && !!audioCtxCtor(),
 		get streaming() {
 			return streaming;
+		},
+		get spokeAt() {
+			return cur?.heard ? cur.spokeAt : 0;
 		},
 		mute(on) {
 			muted = on;
@@ -46105,6 +46221,13 @@ function TopBarMic() {
 		quietTimer.current = setTimeout(() => setQuiet(false), HUSH_CAPTION_MS);
 	};
 	(0, import_react.useEffect)(() => onVoicePrefs((p) => setPrefsState(p)), []);
+	(0, import_react.useEffect)(() => {
+		const feed = () => dialogSeen.rows(queryClient.getQueryData(["instances"]) || []);
+		feed();
+		return queryClient.getQueryCache().subscribe((ev) => {
+			if (ev.type === "updated" && ev.query.queryKey[0] === "instances") feed();
+		});
+	}, []);
 	const setPrefs = (p) => {
 		setPrefsState(p);
 		saveVoicePrefs(p);
@@ -46319,7 +46442,7 @@ function TopBarMic() {
 			halt: () => {
 				if (live.current === d) halt();
 			},
-			route: async (text) => {
+			route: async (text, spokeAt) => {
 				const session = opts.title || useUi.getState().focused || "";
 				const ask = askVoice();
 				if (ask && ask.title === session && ask.phrase?.(text)) {
@@ -46328,10 +46451,10 @@ function TopBarMic() {
 					}, 150);
 					return "end";
 				}
-				const reply = await routePhrase(text, session);
+				const reply = await routePhrase(text, session, void 0, spokeAt);
 				if (reply.kind === "prompt") return false;
 				if (reply.kind === "hush") return "hush";
-				await routed(reply, text, session);
+				await routed(reply, text, session, spokeAt);
 				return reply.kind === "stop" || reply.kind === "off" || reply.kind === "cancel" ? "end" : true;
 			},
 			retarget: () => {
@@ -46371,7 +46494,8 @@ function TopBarMic() {
 			},
 			sentIn: (ms) => void (lastSentMs = ms),
 			finalMs: () => r === serverRec ? serverRec.finalMs : null,
-			endsSurely: () => r === serverRec && serverRec.streaming
+			endsSurely: () => r === serverRec && serverRec.streaming,
+			spokeAt: () => r === serverRec ? serverRec.spokeAt : 0
 		}, {
 			hint: opts.hint,
 			continuous
@@ -46407,11 +46531,11 @@ function TopBarMic() {
 			onSpeech: () => {
 				if (live.current === d) armIdle();
 			},
-			onFinal: (t) => {
+			onFinal: (t, at) => {
 				if (live.current !== d) return;
 				armIdle();
 				voiceMark("commit");
-				d.heard(t);
+				d.heard(t, at);
 			},
 			onStream: (w, p) => {
 				if (live.current !== d) return;
@@ -46420,8 +46544,8 @@ function TopBarMic() {
 				if (w) voiceMark("commit");
 				d.stream(w, p);
 			},
-			onFlush: (t, final) => {
-				if (live.current === d) d.flush(t, final);
+			onFlush: (t, final, at) => {
+				if (live.current === d) d.flush(t, final, at);
 			},
 			onPartial: (t) => {
 				if (live.current === d) d.unsure(t);
@@ -46539,7 +46663,7 @@ function TopBarMic() {
 		say(line);
 		if (prefsRef.current.replies !== "off") queue.say(line);
 	};
-	const routed = async (r, text, session) => {
+	const routed = async (r, text, session, spokeAt) => {
 		if (await runVoiceCommand(r, text, {
 			railOrder: () => useUi.getState().railOrder,
 			focused: () => session,
@@ -46551,7 +46675,7 @@ function TopBarMic() {
 				say(line, true);
 				queue.say(line);
 			},
-			route: routePhrase,
+			route: (t, s, at) => routePhrase(t, s, void 0, at),
 			approveDialogs: () => refreshCfg().then((c) => !!c.approve_dialogs),
 			activity: liveActivity,
 			replies: () => prefsRef.current.replies !== "off",
@@ -46559,7 +46683,7 @@ function TopBarMic() {
 				tracker.sent(title, wantSay);
 				questions.delete(title);
 			}
-		})) return;
+		}, spokeAt)) return;
 		switch (r.kind) {
 			case "switch":
 			case "new":

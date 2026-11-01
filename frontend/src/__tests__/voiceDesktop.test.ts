@@ -34,6 +34,8 @@ import {
   railRow,
   railStep,
   routePhrase,
+  DialogSeen,
+  VOICE_CLIENT_ID,
   PENDING_MS,
   PendingChoice,
   runVoiceCommand,
@@ -1473,7 +1475,7 @@ describe("serverRecognizer: streaming, words as you speak", () => {
     t.block(0, true);
     await vi.waitFor(() => expect(t.chunks()).toBe(1));
     const init = mocks.apiRaw.mock.calls[0][1];
-    expect(JSON.parse(init.body)).toEqual({ lang: "en-US" });
+    expect(JSON.parse(init.body)).toEqual({ lang: "en-US", client: VOICE_CLIENT_ID });
     expect(init.headers["Content-Type"]).toBe("application/json");
     r.stop();
     // A stream open when stopped is abandoned.
@@ -1778,7 +1780,7 @@ describe("wiring", () => {
   it("asks the router with a dictation's first phrase, and selects through the one selection authority", () => {
     // Hands-free listening asks about the session it read out.
     expect(MIC).toContain('const session = opts.title || useUi.getState().focused || "";');
-    expect(MIC).toContain("routePhrase(text, session)");
+    expect(MIC).toContain("routePhrase(text, session, undefined, spokeAt)");
     expect(MIC).toContain("selectSession(title, { noKeyboard: true })");
     expect(code("lib/voiceDesktop.ts")).toContain('const json: Record<string, unknown> = { text, session };');
     expect(code("lib/voiceDesktop.ts")).toContain('api<RouteReply>("/api/voice/route", { json })');
@@ -1805,7 +1807,7 @@ describe("wiring", () => {
   it("streams when GET /api/voice says the server can: each answer typed as a guess, the unsure tail shown muted", () => {
     expect(MIC).toContain("serverRecognizer({ stream: () => !!cfgNow.server_ready.stt_stream })");
     expect(MIC).toContain("void d.stream(w, p)");
-    expect(MIC).toContain("void d.flush(t, final)");
+    expect(MIC).toContain("void d.flush(t, final, at)");
     expect(MIC).toContain("d.unsure(t)");
     // The words are in the terminal: no transcript on the page (voicePolish.test).
     expect(MIC).not.toContain("mic-unsure");
@@ -2011,6 +2013,13 @@ describe("the router's new answers", () => {
   });
 
   const RAIL = ["t1", "\u0000win:chat", "t2", "t3"];
+  /** The page has had `title`'s dialog `id` for a second (R8-bis: an answer
+   * is pressed only for words begun after its dialog was there). */
+  const had = (...pairs: Array<[string, string]>) => {
+    const s = new DialogSeen(() => Date.now() - 1000);
+    pairs.forEach(([t, id]) => s.note(t, id));
+    return s;
+  };
 
   function deps(over: Partial<CommandDeps> = {}) {
     const out = { selected: [] as string[], said: [] as string[], captions: [] as string[], submitted: [] as Array<[string, boolean]> };
@@ -2114,13 +2123,13 @@ describe("the router's new answers", () => {
     const reply: RouteReply = { kind: "answer", choice: "yes", title: "t2", dialog_id: "d1", keys: ["1"], say: "Billing: allowed." };
     mocks.instApi.mockResolvedValue({ ok: true });
     const on = deps();
-    await runVoiceCommand(reply, "billing yes", on.d);
+    await runVoiceCommand(reply, "billing yes", on.d, Date.now(), had(["t2", "d1"]));
     expect(mocks.instApi).toHaveBeenCalledWith("t2", "/answer", { json: { keys: ["1"], dialog_id: "d1", by: "user" } });
     expect(on.out.said).toEqual(["Billing: allowed."]);
     expect(on.out.selected).toEqual([]); // a targeted answer never moves focus
     mocks.instApi.mockClear();
     const off = deps({ approveDialogs: async () => false });
-    await runVoiceCommand(reply, "billing yes", off.d);
+    await runVoiceCommand(reply, "billing yes", off.d, Date.now(), had(["t2", "d1"]));
     expect(mocks.instApi).not.toHaveBeenCalled();
     expect(off.out.said).toEqual([APPROVE_OFF_LINE]);
     expect(APPROVE_OFF_LINE).toBe("Approving by voice is off: Settings → Voice");
@@ -2129,9 +2138,9 @@ describe("the router's new answers", () => {
   it("“always” only when the router says so: the keys sent are the router's, never widened", async () => {
     mocks.instApi.mockResolvedValue({ ok: true });
     const { d } = deps();
-    await runVoiceCommand({ kind: "answer", choice: "yes", dialog_id: "d1", keys: ["1"] }, "always", d);
+    await runVoiceCommand({ kind: "answer", choice: "yes", dialog_id: "d1", keys: ["1"] }, "always", d, Date.now(), had(["t1", "d1"]));
     expect(mocks.instApi).toHaveBeenLastCalledWith("t1", "/answer", { json: { keys: ["1"], dialog_id: "d1", by: "user" } });
-    await runVoiceCommand({ kind: "answer", choice: "always", dialog_id: "d1", keys: ["2"] }, "always", d);
+    await runVoiceCommand({ kind: "answer", choice: "always", dialog_id: "d1", keys: ["2"] }, "always", d, Date.now(), had(["t1", "d1"]));
     expect(mocks.instApi).toHaveBeenLastCalledWith("t1", "/answer", { json: { keys: ["2"], dialog_id: "d1", by: "user" } });
     // No keys from the router: nothing pressed, whatever was said.
     mocks.instApi.mockReset();
@@ -2145,7 +2154,7 @@ describe("the router's new answers", () => {
   it("a 409 dialog_changed says so instead of pressing into the next prompt", async () => {
     mocks.instApi.mockRejectedValueOnce(new mocks.ApiError(409, "the prompt changed", { dialog_changed: true }));
     const { d, out } = deps();
-    await runVoiceCommand({ kind: "answer", choice: "no", dialog_id: "d1", keys: ["3"] }, "no", d);
+    await runVoiceCommand({ kind: "answer", choice: "no", dialog_id: "d1", keys: ["3"] }, "no", d, Date.now(), had(["t1", "d1"]));
     expect(out.said).toEqual(["The prompt on Login fix changed — say it again."]);
   });
 
@@ -2169,7 +2178,9 @@ describe("the router's new answers", () => {
     await runVoiceCommand(
       { kind: "answer", choice: "number", number: 3, title: "t1", dialog_id: "q1", keys: ["3"], text: "SAML via Okta" },
       "type something SAML via Okta",
-      d
+      d,
+      Date.now(),
+      had(["t1", "q1"])
     );
     expect(mocks.instApi).toHaveBeenLastCalledWith("t1", "/answer", {
       json: { keys: ["3"], dialog_id: "q1", by: "user", text: "SAML via Okta" },
@@ -2187,8 +2198,9 @@ describe("the router's new answers", () => {
     mocks.instApi.mockResolvedValue({ ok: true });
     const route = vi.fn(async () => ({ kind: "answer", choice: "yes", title: "t3", dialog_id: "d9", keys: ["1"] }) as RouteReply);
     const { d, out } = deps({ route });
-    await runVoiceCommand({ kind: "answer", choice: "yes", index: 4 }, "session four yes", d);
-    expect(route).toHaveBeenCalledWith("session four yes", "t3");
+    const spoke = Date.now();
+    await runVoiceCommand({ kind: "answer", choice: "yes", index: 4 }, "session four yes", d, spoke, had(["t3", "d9"]));
+    expect(route).toHaveBeenCalledWith("session four yes", "t3", spoke);
     expect(mocks.instApi).toHaveBeenCalledWith("t3", "/answer", { json: { keys: ["1"], dialog_id: "d9", by: "user" } });
     expect(out.selected).toEqual([]);
     // Past the rail: said, never routed.
