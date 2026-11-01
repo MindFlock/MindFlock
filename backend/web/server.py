@@ -12270,6 +12270,11 @@ def _answer_dialog(inst, title: str, text: str, keys, dialog_id, by: str):
             _agent_io.note_answered(title, dialog_id)
             # The push's Yes/No buttons were for THIS dialog: spent with it.
             _voice_actions.forget(title, dialog_id)
+        elif dialog_id is None and _agent_io.settles(keys):
+            # An unpinned settling answer (an ask-select's later steps, a
+            # typed answer) answered the dialog too: the voice router never
+            # counts a phrase begun before it for the next one.
+            _voice_actions.note_answered(title)
         return {"ok": True, "activity_before": activity}, 200
 
 

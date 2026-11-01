@@ -558,6 +558,16 @@ def test_an_answer_stamps_the_session_for_the_voice_router(env, stamps):
     assert stamps.answered_at("cx") == 0.0
 
 
+def test_an_unpinned_settling_answer_stamps_too(env, stamps):
+    """An answer with no ``dialog_id`` (an ask-select's later step, a typed
+    answer) still answered the dialog: it stamps like a pinned one, while
+    an unpinned navigation key does not."""
+    assert _answer({"keys": ["Down"]}).status_code == 200
+    assert stamps.answered_at("w") == 0.0
+    assert _answer({"keys": ["1"]}).status_code == 200
+    assert stamps.answered_at("w") > 0.0
+
+
 def test_a_multi_select_tick_does_not_stamp(env, stamps):
     """A tick leaves the same dialog (same id) up: not an answer, so the next
     tick by voice is not held back."""
