@@ -1216,17 +1216,51 @@ def test_route_question_tool_answer_before_it_presses_nothing(env):
     assert got["kind"] == "early" and got["dialog_id"] == did
 
 
+def test_a_dialog_that_waited_past_ten_minutes_is_still_answerable():
+    """The client keeps its first sighting, so a dialog left waiting 30
+    minutes reports a 1 800 000 ms age: it is clamped to 600 s (a LATER
+    sighting, only ever stricter), never dropped — dropping it made every
+    voice answer to that dialog "early" forever (judge MF1, cycle 3)."""
+    for waited_ms in (660_000, 1_800_000, 10**9):
+        spoke, seen = vr.phrase_timing(
+            {
+                "spoke_ms_ago": 0,
+                "dialog_seen": {"docs": {"id": "d1", "ms_ago": waited_ms}},
+            },
+            now=NOW,
+        )
+        assert seen == {"docs": ("d1", NOW - 600.0)}, waited_ms
+        ans = {"kind": "answer", "title": "docs", "dialog_id": "d1", "keys": ["1"]}
+        assert vr.answer_in_time(ans, spoke, seen)["kind"] == "answer", waited_ms
+    # Clamping never lets an early phrase through: begun before the clamped
+    # sighting is still early.
+    spoke, seen = vr.phrase_timing(
+        {
+            "spoke_ms_ago": 700_000,
+            "dialog_seen": {"docs": {"id": "d1", "ms_ago": 1_800_000}},
+        },
+        now=NOW,
+    )
+    assert spoke is None
+    ans = {"kind": "answer", "title": "docs", "dialog_id": "d1", "keys": ["1"]}
+    assert vr.answer_in_time(ans, spoke, seen)["kind"] == "early"
+
+
 def test_phrase_timing_drops_every_insane_age():
-    """Each ``dialog_seen`` age is read as ``spoke_ms_ago`` is: a bool, a
-    string, None, a negative or a past-600 s age is no sighting; an entry
-    with no id, or that is not an object, is skipped."""
-    junk = (True, False, "12", None, -1, -0.5, 600_001, 10**9, [5], {"x": 1})
+    """A bool, a string, None, NaN or a negative age is no timing for either
+    field; an entry with no id, or that is not an object, is skipped. A
+    past-600 s ``spoke_ms_ago`` is dropped too, while a past-600 s sighting
+    is clamped to 600 s (next test)."""
+    junk = (True, False, "12", None, -1, -0.5, float("nan"), [5], {"x": 1})
     for v in junk:
         spoke, seen = vr.phrase_timing(
             {"spoke_ms_ago": v, "dialog_seen": {"docs": {"id": "d1", "ms_ago": v}}},
             now=1000.0,
         )
         assert spoke is None and seen == {}, v
+    for v in (600_001, 10**9):
+        spoke, _ = vr.phrase_timing({"spoke_ms_ago": v}, now=1000.0)
+        assert spoke is None, v
     # The edges themselves are believed.
     spoke, seen = vr.phrase_timing(
         {"spoke_ms_ago": 600_000, "dialog_seen": {"docs": {"id": "d1", "ms_ago": 0}}},

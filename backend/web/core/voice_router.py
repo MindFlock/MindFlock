@@ -1919,12 +1919,21 @@ _TIMING_MAX_S = 600.0
 _SEEN_MAX = 64
 
 
-def _ago(v, now: float) -> Optional[float]:
-    """``now`` minus ``v`` milliseconds, for a sane ``v`` (else None)."""
-    if isinstance(v, bool) or not isinstance(v, (int, float)):
+def _ago(v, now: float, clamp: bool = False) -> Optional[float]:
+    """``now`` minus ``v`` milliseconds, for a sane ``v`` (else None).
+    ``clamp``: an age past :data:`_TIMING_MAX_S` counts as that age instead
+    of being dropped — for a dialog sighting, where a LATER sighting only
+    makes the check stricter (a dialog that waited 30 minutes stays
+    answerable). Never for the phrase's own age: there a smaller age would
+    loosen it."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v:
         return None
-    if not 0 <= v <= _TIMING_MAX_S * 1000:
+    if v < 0:
         return None
+    if v > _TIMING_MAX_S * 1000:
+        if not clamp:
+            return None
+        v = _TIMING_MAX_S * 1000
     return now - float(v) / 1000.0
 
 
@@ -1948,7 +1957,7 @@ def phrase_timing(payload, now: Optional[float] = None) -> Tuple[Optional[float]
         for title, v in list(raw.items())[:_SEEN_MAX]:
             if not isinstance(v, dict) or not v.get("id"):
                 continue
-            at = _ago(v.get("ms_ago"), now)
+            at = _ago(v.get("ms_ago"), now, clamp=True)
             if at is not None:
                 seen[str(title)] = (str(v["id"]), at)
     return spoke, seen
