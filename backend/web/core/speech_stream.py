@@ -7,10 +7,15 @@ committed words — the "LocalAgreement-2" policy of whisper_streaming. A
 every :meth:`Stream.feed` appends a chunk and re-transcribes the whole
 window; the words two consecutive passes agree on (the longest common
 prefix of their word lists, compared lower-cased without punctuation) become
-committed, and the unstable tail waits for the next pass. Clients type only
-committed words — a terminal cannot be corrected — so a committed word is
-never revisited: the next pass drops what it re-hears of them (by timestamp,
-then by matching up to five trailing committed words).
+committed, and the unstable tail waits for the next pass (or the last
+:data:`AGREE_PASSES` passes). Clients type only committed words — a
+terminal cannot be corrected — so a committed word is never revisited: the
+next pass drops what it re-hears of them (by matching up to five trailing
+committed words near its start, then by timestamp: whisper's word times
+move by 0.1–0.3 s from pass to pass). Whisper's ``initial_prompt`` is the
+committed text BEFORE the window only: given the words it is about to hear
+again, whisper skips them and stretches the next word back over them
+(:data:`PROMPT_IN_WINDOW`).
 
 Bounded work, because a pass's cost grows with the audio it decodes: a
 pass hears only the uncommitted tail plus about :data:`REHEAR_SECONDS` of
@@ -77,8 +82,8 @@ The measured wait of recent finishes is kept (:func:`final_stats`) so
 Pure: a stream is built on a ``transcribe(audio, prompt)`` callable
 (``core.speech.LocalSTT.stream_transcriber`` in the server, a scripted fake
 in tests) that takes the float32 samples at 16 kHz (an ``array('f')``) and
-the last ~200 characters of committed text (Whisper's ``initial_prompt``)
-and returns ``[(word, start_s, end_s)]`` relative to the start of the
+the last ~200 characters of the committed text before the window (Whisper's
+``initial_prompt``) and returns ``[(word, start_s, end_s)]`` relative to the start of the
 samples. No numpy here — the server process does not have it unless the
 local models are installed.
 
@@ -149,7 +154,7 @@ PRUNE_SECONDS = 1.5
 #: The committed audio a pass hears again before the uncommitted tail: the
 #: window is cut at the end of the last committed word that ends at least
 #: this long before the last one does. Context for the words at the seam;
-#: the re-heard words are dropped by time and by matching (``_pass``). It
+#: the re-heard words are dropped by matching, then by time (``_pass``). It
 #: was "everything since 0.3 s before the last committed end, once over
 #: 4 s" — up to 4 s of committed audio decoded again every pass.
 REHEAR_SECONDS = 1.0
@@ -167,6 +172,27 @@ MAX_HELD_SECONDS = WINDOW_SECONDS
 SILENCE_RMS = 0.01
 #: The ``initial_prompt``: this much of the committed text, from its end.
 PROMPT_CHARS = 200
+#: Whether the prompt also carries the committed words still in the window
+#: (the old way). It must not: whisper reads a prompt that ends "… bot 7."
+#: over audio that starts "bot 7 over and out" as already said, skips the
+#: re-heard words and stretches the next one back to the window's start —
+#: "over (0.00–1.06)" — where the time filter drops it as re-heard: "bot 7.
+#: and out." (the bench: "submit", "to the speech", "this" lost the same
+#: way). whisper_streaming prompts with the text before its buffer only.
+PROMPT_IN_WINDOW = False
+#: Whether a pass's re-heard words are found by their text first (the last
+#: committed words in the window, matched anywhere near the pass's start;
+#: ``_reheard``) and by time only when the text does not match. The old
+#: order filtered by time first, and whisper's word times move 0.1–0.3 s
+#: from pass to pass: "Merge (0.18–0.88)" committed, then "Merge (0.18–0.74)
+#: mean (0.74–1.04)" lost "mean" as starting before 0.78.
+MATCH_TEXT_FIRST = True
+#: LocalAgreement-N: a word is committed once this many consecutive passes
+#: agree on it (2: whisper_streaming's policy). 3 waits a pass longer
+#: before a word is typed, for fewer wrong ones; the cycle-6 bench: fast WER
+#: 13.8% against 14.5–17.8%, but the first word at 1628/2256 ms (p50/p90)
+#: against 1204/1817 and no more control words heard (36 vs 38–39 of 48).
+AGREE_PASSES = 2
 #: A re-heard word starting this long before the last committed end is old.
 _OVERLAP_SECONDS = 0.1
 #: How many trailing committed words a pass's opening words are matched to.
@@ -554,6 +580,8 @@ class Stream:
         self._heard_end = 0.0  # stream time the last fast pass heard up to
         self._committed: List[Word] = []  # stream-absolute times
         self._tail: List[Word] = []  # the last pass's uncommitted words
+        # The passes before it, oldest first (AGREE_PASSES > 2).
+        self._older: List[List[Word]] = []
         self._owed: List[Word] = []  # committed, not yet returned (a pass failed)
         self.last_ms = 0
         #: Seconds of audio the last feed's pass decoded (0 when it ran none).
@@ -607,15 +635,10 @@ class Stream:
             hyp = self._pass()
             if hyp is None:  # dropped from the lane: the audio waits
                 return self._pay([]), _join(self._tail)
-            n = 0
-            while (
-                n < len(hyp)
-                and n < len(self._tail)
-                and _norm(hyp[n][0]) == _norm(self._tail[n][0])
-            ):
-                n += 1
+            n = self._agreed(hyp)
             new = hyp[:n]
             self._committed.extend(new)
+            self._remember(n)
             self._tail = hyp[n:]
             self._prune()
             self.touched = _now()
@@ -672,7 +695,7 @@ class Stream:
                 if rest is None:
                     rest = list(self._tail)
             self._committed.extend(rest)
-            self._tail = []
+            self._tail, self._older = [], []
             self._offset += self.held_seconds
             self._audio = array("f")
             out: dict = {"committed": self._pay(rest), "partial": ""}
@@ -807,8 +830,41 @@ class Stream:
             return ""
         return str(early.box.get("text") or "").strip()
 
+    def _agreed(self, hyp: List[Word]) -> int:
+        """How many of ``hyp``'s opening words the previous
+        :data:`AGREE_PASSES` − 1 passes agree on (the words to commit)."""
+        passes = ([self._tail] + self._older[::-1])[: max(1, AGREE_PASSES - 1)]
+        if len(passes) < AGREE_PASSES - 1:
+            return 0
+        n = 0
+        while all(
+            n < len(hyp) and n < len(p) and _norm(hyp[n][0]) == _norm(p[n][0])
+            for p in passes
+        ):
+            n += 1
+        return n
+
+    def _remember(self, n: int) -> None:
+        """Keep the last pass for the next agreement (:data:`AGREE_PASSES`),
+        less the ``n`` words just committed."""
+        keep = max(0, AGREE_PASSES - 2)
+        if not keep:
+            self._older = []
+            return
+        older = [p[n:] for p in self._older] + [self._tail[n:]]
+        self._older = older[-keep:]
+
     def _prompt(self) -> str:
-        text = self.text
+        words = self._committed
+        if not PROMPT_IN_WINDOW:
+            # Only the words before the window: whisper skips what the
+            # prompt says it heard (see PROMPT_IN_WINDOW).
+            edge = self._offset + 0.01
+            k = len(words)
+            while k and words[k - 1][2] > edge:
+                k -= 1
+            words = words[:k]
+        text = _join(words)
         if len(text) <= PROMPT_CHARS:
             return text
         cut = text[-PROMPT_CHARS:]
@@ -848,6 +904,12 @@ class Stream:
         if not self._committed:
             return hyp
         last_end = self._committed[-1][2]
+        k = self._reheard(hyp, last_end) if MATCH_TEXT_FIRST else 0
+        if k:
+            hyp = hyp[k:]
+            if len(hyp) == 1 and _echo(self._committed[-1], hyp[0]):
+                hyp = []
+            return hyp
         hyp = [w for w in hyp if w[1] > last_end - _OVERLAP_SECONDS]
         if hyp and abs(hyp[0][1] - last_end) < 1.0:
             top = min(len(self._committed), len(hyp), _NGRAM)
@@ -859,6 +921,26 @@ class Stream:
         if len(hyp) == 1 and _echo(self._committed[-1], hyp[0]):
             hyp = []
         return hyp
+
+    def _reheard(self, hyp: List[Word], last_end: float) -> int:
+        """How many of ``hyp``'s opening words are committed words heard
+        again, found by their text: the longest run of the last
+        :data:`_NGRAM` committed words that ``hyp`` says within its first
+        few words, its last word centred before ``last_end`` (a new word
+        that happens to repeat the last one starts after it) → the index
+        after the run, 0 when none matches (the caller falls back to
+        time)."""
+        said = [_norm(w[0]) for w in self._committed[-_NGRAM:]]
+        heard = [_norm(w[0]) for w in hyp]
+        for k in range(min(len(said), len(heard)), 0, -1):
+            tail = said[-k:]
+            for j in range(0, min(len(heard) - k, _NGRAM) + 1):
+                if heard[j : j + k] != tail:
+                    continue
+                last = hyp[j + k - 1]
+                if (last[1] + last[2]) / 2 < last_end:
+                    return j + k
+        return 0
 
     def _pay(self, new: List[Word]) -> str:
         """The words to return as newly committed: any still owed, then
@@ -879,6 +961,7 @@ class Stream:
             word = self._tail.pop(0)
             self._committed.append(word)
             self._owed.append(word)
+            self._older = []
         del self._audio[:drop]
         self._offset = edge
 

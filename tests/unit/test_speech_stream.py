@@ -123,17 +123,35 @@ class TestCommit:
         assert st.text == "Hello world how are you?"
         assert st.held_seconds == 0
 
-    def test_initial_prompt_carries_the_committed_text(self):
+    def test_initial_prompt_carries_the_committed_text_before_the_window(self):
         fake = Script(_words("one two"), _words("one two three"), [])
         st = ss.Stream(fake)
         st.feed(_secs(1))
         st.feed(_secs(1))
+        st._offset = 0.9  # as if cut at "two"'s end: both words left the window
         st.feed(_secs(1))
         assert [p for _n, p in fake.calls] == ["", "", "one two"]
+
+    def test_the_prompt_leaves_out_the_words_the_pass_hears_again(self):
+        """Whisper skips what the prompt says it heard: the committed words
+        still in the window stay out of it (PROMPT_IN_WINDOW)."""
+        st = ss.Stream(Script())
+        st._committed = [("Switch", 0.0, 0.4), ("to", 0.5, 0.7), ("bot", 1.0, 1.3)]
+        st._offset = 0.7  # the window starts at "to"'s end
+        assert st._prompt() == "Switch to"
+        st._offset = 0.0
+        assert st._prompt() == ""
+
+    def test_the_old_prompt_is_one_constant_away(self, monkeypatch):
+        monkeypatch.setattr(ss, "PROMPT_IN_WINDOW", True)
+        st = ss.Stream(Script())
+        st._committed = [("Switch", 0.0, 0.4), ("to", 0.5, 0.7), ("bot", 1.0, 1.3)]
+        assert st._prompt() == "Switch to bot"
 
     def test_the_prompt_is_the_last_200_characters_on_a_word_boundary(self):
         st = ss.Stream(Script([]))
         st._committed = [("word%03d" % i, i, i + 0.5) for i in range(60)]
+        st._offset = 60.0  # all of them before the window
         prompt = st._prompt()
         assert len(prompt) <= ss.PROMPT_CHARS
         assert prompt.split()[0].startswith("word") and len(prompt.split()[0]) == 7
@@ -159,6 +177,113 @@ class TestCommit:
         st.feed(_secs(1.5))
         assert st.held_seconds == 1.5
         assert isinstance(st.last_ms, int) and st.last_ms >= 0
+
+
+class TestReheard:
+    """The committed words a pass hears again are found by their text
+    first (``_reheard``), by time only when that finds none. The passes are
+    the bench's (cycle 6 traces), times relative to the window."""
+
+    def test_jittered_times_lose_no_word(self):
+        # "Merge" committed ending 0.88; the next pass places it to 0.74 and
+        # the new "main" from 0.74 — before the old time filter's 0.78.
+        fake = Script(
+            [("Merge", 0.18, 0.88)],
+            [("Merge", 0.18, 0.88), ("mean", 0.88, 1.04)],
+            [("Merge", 0.18, 0.74), ("main", 0.74, 1.04), ("into", 1.04, 1.3)],
+            [("Merge", 0.18, 0.74), ("main", 0.74, 1.04), ("into", 1.04, 1.3)],
+        )
+        st = ss.Stream(fake)
+        st.feed(_secs(1))
+        assert st.feed(_secs(0.3)) == ("Merge", "mean")
+        st.feed(_secs(0.3))
+        assert st.feed(_secs(0.3)) == ("main into", "")
+        assert st.text == "Merge main into"
+
+    def test_the_old_time_first_order_lost_that_word(self, monkeypatch):
+        monkeypatch.setattr(ss, "MATCH_TEXT_FIRST", False)
+        fake = Script(
+            [("Merge", 0.18, 0.88)],
+            [("Merge", 0.18, 0.88), ("mean", 0.88, 1.04)],
+            [("Merge", 0.18, 0.74), ("main", 0.74, 1.04), ("into", 1.04, 1.3)],
+            [("Merge", 0.18, 0.74), ("main", 0.74, 1.04), ("into", 1.04, 1.3)],
+        )
+        st = ss.Stream(fake)
+        for _ in range(4):
+            st.feed(_secs(0.3))
+        assert st.text == "Merge into"
+
+    def test_a_reheard_run_inside_the_pass(self):
+        # A pass may open with a word the commit never had ("Or else").
+        st = ss.Stream(Script())
+        st._committed = [("parse", 1.3, 1.6), ("config.", 1.6, 2.1)]
+        hyp = [
+            ("Or", 1.55, 1.55),
+            ("else", 1.55, 1.7),
+            ("config", 1.7, 2.1),
+            ("over", 2.1, 2.8),
+        ]
+        assert st._reheard(hyp, 2.1) == 3
+
+    def test_a_new_word_that_repeats_the_last_is_not_reheard(self):
+        st = ss.Stream(Script())
+        st._committed = [("no", 0.0, 0.4)]
+        # The re-heard "no" was skipped: this one starts after the commit.
+        assert st._reheard([("no", 0.6, 1.0)], 0.4) == 0
+        # Both: only the first is the old one.
+        assert st._reheard([("no", 0.0, 0.4), ("no", 0.6, 1.0)], 0.4) == 1
+
+    def test_no_text_match_falls_back_to_time(self):
+        fake = Script(
+            _words("Mike"),
+            _words("Mike"),
+            # The re-heard word changed: nothing matches, the time filter drops it.
+            [("My", 0.0, 0.4), ("off", 0.5, 0.9)],
+        )
+        st = ss.Stream(fake)
+        st.feed(_secs(0.5))
+        assert st.feed(_secs(0.3)) == ("Mike", "")
+        assert st.feed(_secs(0.3)) == ("", "off")
+
+
+class TestAgreement:
+    """LocalAgreement-N (:data:`AGREE_PASSES`)."""
+
+    def test_three_passes_must_agree(self, monkeypatch):
+        monkeypatch.setattr(ss, "AGREE_PASSES", 3)
+        fake = Script(
+            _words("or is"),
+            _words("or is it"),
+            _words("Why is it hanging"),
+            _words("Why is it hanging"),
+            _words("Why is it hanging over"),
+        )
+        st = ss.Stream(fake)
+        assert st.feed(_secs(1)) == ("", "or is")
+        # LocalAgreement-2 would commit "or is" here.
+        assert st.feed(_secs(0.3)) == ("", "or is it")
+        assert st.feed(_secs(0.3)) == ("", "Why is it hanging")
+        assert st.feed(_secs(0.3)) == ("", "Why is it hanging")
+        assert st.feed(_secs(0.3)) == ("Why is it hanging", "over")
+
+    def test_the_older_passes_shift_with_a_commit(self, monkeypatch):
+        monkeypatch.setattr(ss, "AGREE_PASSES", 3)
+        fake = Script(
+            _words("one two"),
+            _words("one two three"),
+            _words("one two three four"),
+            # "one two" committed; the passes now hear what follows them.
+            [("three", 1.0, 1.4), ("four", 1.5, 1.9)],
+        )
+        st = ss.Stream(fake)
+        st.feed(_secs(1))
+        st.feed(_secs(0.3))
+        assert st.feed(_secs(0.3)) == ("one two", "three four")
+        # Two passes back said "three" too: three passes agree on it.
+        assert st.feed(_secs(0.3)) == ("three", "four")
+
+    def test_two_is_the_default(self):
+        assert ss.AGREE_PASSES == 2
 
 
 class TestPrune:

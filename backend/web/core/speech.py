@@ -138,7 +138,13 @@ OPENAI_TTS_VOICE = "alloy"
 WHISPER_MODEL = "small"
 #: The live transcript's model (``voice.stt_stream_model`` unset): ``base``
 #: decodes ~5x faster than ``small`` on a CPU at a small accuracy cost, and
-#: the English-only build is the better ``base`` for English.
+#: the English-only build is the better ``base`` for English. Measured
+#: against the bigger ones as the fast tier (cycle 6 bench, 10 s pad, 2
+#: threads, greedy): small.en 12.3% WER and 38/48 control words at a
+#: 387/439 ms pass, distil-small.en 15.9% and 40/48 at 333/368 ms, base.en
+#: 14.5–17.8% and 38–39/48 at 176–185/300–324 ms. The bigger two pass slower
+#: than the 300 ms chunk cadence (the first word +140–170 ms, and it queues
+#: under load), so ``base.en`` stays; ``voice.stt_stream_model`` picks one.
 STREAM_MODEL = "base.en"
 STREAM_MODEL_MULTI = "base"
 PIPER_VOICE = "en_US-lessac-medium"
@@ -1076,6 +1082,20 @@ FINAL_PAD_SECONDS = 0.0
 #: fast speaker says ~6 a second), so a decoder caught in a loop stops.
 STREAM_TOKENS = 20
 STREAM_TOKENS_PER_S = 15
+#: A fast pass's beam: 1 is greedy. The bench (cycle 6, 48 phrases): beam 2
+#: took the pass from 176/300 to 207/403 ms (p50/p95, over the 300 ms chunk
+#: cadence) for 16.7% WER against 14.5–17.8%, and heard fewer control words
+#: (34 vs 38–39 of 48), ending phrases in junk ("over ever B").
+STREAM_BEAM = 1
+#: A short vocabulary leading the fast pass's prompt when the caller gives
+#: no ``hints`` ("" = none). Keep it empty: even with the temperature
+#: fallback off and the tokens capped, the control words alone ("Over. Over
+#: and out. Disregard. Stop") as the prompt took the bench's fast tier to
+#: 40% WER and 14/48 control words (from 14.5% and 39/48): whisper writes
+#: a hint word or a rhyme into the quiet after the speech ("Over. Never",
+#: "disregard. regard.") and loops ("YOU YOU YOU …" ×25), and faster-whisper's
+#: word alignment raised IndexError on one prompted pass.
+STREAM_VOCAB = ""
 #: The quiet a window longer than its pad still gets after its audio.
 _PAD_TAIL_FRAMES = 200
 #: Whisper's own input: 3000 mel frames (30 s).
@@ -1338,7 +1358,7 @@ class LocalSTT(Backend):
         pass on (``speech_stream.Lane``)."""
         language = whisper_language(lang)
         name = self.stream_model_name(lang)
-        hints = " ".join(str(hints or "").split())
+        hints = " ".join(str(hints or STREAM_VOCAB).split())
 
         def run(audio, prompt: str) -> List[Tuple[str, float, float]]:
             model = self._model(name)
@@ -1358,7 +1378,7 @@ class LocalSTT(Backend):
                 segments, _info = model.transcribe(
                     samples,
                     language=language,
-                    beam_size=1,
+                    beam_size=STREAM_BEAM,
                     word_timestamps=True,
                     condition_on_previous_text=False,
                     # Silence in a window makes whisper invent "Thank you.";
