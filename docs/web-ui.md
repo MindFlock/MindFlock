@@ -202,7 +202,12 @@ a session first*).
   and the router's own line after a switch (*Billing.*) — with
   *Read replies aloud* off too. With them off, the chimes answer a start and
   a stop, and a switch still says the session's name. A stop phrase says nothing back: the falling
-  chime is its answer. They go to
+  chime is its answer. A switch's name and the fixed lines (*Sent.*,
+  *Cleared.*, *Over and out.*, *Answer it on the screen.* …) are normally
+  server cache hits, near-instant even on a slow neural host, because the
+  server prewarms them ([web-api.md](web-api.md), *Names are pre-said*) —
+  so keep their exact wording in sync with `PREWARM_FIXED` in
+  `backend/web/routes/speech.py`. They go to
   the front of the one speech queue (after other confirmations, never behind
   a reply), are said even while the person is mid-sentence, are
   dropped when more than 5 s late, and the recorder drops its audio while one
@@ -7128,7 +7133,9 @@ twin `lib/spokenText.ts` (`shapeForSpeech(text, overrides)`) and the phone
 page's build-free `static/spoken-text.js` (`window.MindFlockSpokenText.
 shape`) carry the same JSON literal — and `tests/unit/data/spoken_text.json`
 runs every case through all three. The server shapes inside `POST
-/api/voice/speak` (which also caches repeats: `X-Voice-Cache`); a client
+/api/voice/speak` (which also caches repeats: `X-Voice-Cache`, and pins
+the session names and fixed confirmations it prewarms while the voice is
+idle); a client
 shapes just before `speechSynthesis.speak`.
 
 The person's own rows come first. **Settings → Voice → Say it as**

@@ -39962,7 +39962,7 @@ function subscribeMicState(cb) {
 //#region src/lib/wavRecorder.ts
 var DEFAULT_TARGET_RATE = 16e3;
 var BLOCK_FRAMES = 4096;
-var TAKE_MIN_S = .3;
+var TAKE_MIN_S$1 = .3;
 function encodeWav(samples, sampleRate) {
 	const dataSize = samples.length * 2;
 	const buf = new ArrayBuffer(44 + dataSize);
@@ -39990,8 +39990,8 @@ function encodeWav(samples, sampleRate) {
 	}
 	return new Blob([buf], { type: "audio/wav" });
 }
-var SINC_HALF_ZC = 16;
-var SINC_ROLLOFF = .9;
+var SINC_HALF_ZC$1 = 16;
+var SINC_ROLLOFF$1 = .9;
 function resample(samples, fromRate, toRate) {
 	if (fromRate === toRate || samples.length === 0) return samples;
 	const n = samples.length;
@@ -39999,8 +39999,8 @@ function resample(samples, fromRate, toRate) {
 	const out = new Float32Array(outLen);
 	const step = fromRate / toRate;
 	const ratio = Math.min(1, toRate / fromRate);
-	const fc = .5 * ratio * SINC_ROLLOFF;
-	const half = SINC_HALF_ZC / ratio;
+	const fc = .5 * ratio * SINC_ROLLOFF$1;
+	const half = SINC_HALF_ZC$1 / ratio;
 	for (let i = 0; i < outLen; i++) {
 		const t = i * step;
 		const lo = Math.max(0, Math.ceil(t - half));
@@ -40043,7 +40043,7 @@ async function resampleTo(samples, fromRate, toRate) {
 		return resample(samples, fromRate, toRate);
 	}
 }
-var MUTE_HOLD_S = .5;
+var MUTE_HOLD_S$1 = .5;
 function startWavRecording(stream, ctx, opts = {}) {
 	const targetRate = opts.targetRate ?? DEFAULT_TARGET_RATE;
 	const onLevel = opts.onLevel;
@@ -40060,7 +40060,7 @@ function startWavRecording(stream, ctx, opts = {}) {
 	let muted = false;
 	let held = [];
 	let heldFrames = 0;
-	const hold = Math.round(MUTE_HOLD_S * ctx.sampleRate);
+	const hold = Math.round(MUTE_HOLD_S$1 * ctx.sampleRate);
 	const keep = opts.keepS ? Math.max(1, Math.round(opts.keepS * ctx.sampleRate)) : 0;
 	processor.onaudioprocess = (e) => {
 		if (done) return;
@@ -40117,7 +40117,7 @@ function startWavRecording(stream, ctx, opts = {}) {
 			result = resampleTo(drain(), ctx.sampleRate, targetRate).then((pcm) => encodeWav(pcm, targetRate));
 			return result;
 		},
-		take(minS = TAKE_MIN_S) {
+		take(minS = TAKE_MIN_S$1) {
 			if (done || !fresh || fresh < minS * ctx.sampleRate) return null;
 			return encodeWav(resample(drain(), ctx.sampleRate, targetRate), targetRate);
 		},
@@ -40168,6 +40168,175 @@ function startWavRecording(stream, ctx, opts = {}) {
 	};
 }
 //#endregion
+//#region src/lib/voiceCapture.worklet.ts?worker&url
+var voiceCapture_worklet_default = "/voice-capture-worklet.js";
+//#endregion
+//#region src/lib/voiceCapture.worklet.ts
+var CAPTURE_PROCESSOR = "mf-voice-capture";
+var CAPTURE_BLOCK_FRAMES = 4096;
+var CAPTURE_RATE = 16e3;
+var SINC_HALF_ZC = 16;
+var SINC_ROLLOFF = .9;
+var MAX_PHASES = 2048;
+var gcd = (a, b) => b ? gcd(b, a % b) : a;
+var StreamResampler = class {
+	fromRate;
+	toRate;
+	L;
+	M;
+	half;
+	K;
+	fc;
+	table;
+	buf;
+	len = 0;
+	base;
+	next = 0;
+	constructor(fromRate, toRate) {
+		this.fromRate = fromRate;
+		this.toRate = toRate;
+		const from = Math.round(fromRate);
+		const to = Math.round(toRate);
+		const g = gcd(from, to) || 1;
+		this.L = to / g;
+		this.M = from / g;
+		const ratio = Math.min(1, to / from);
+		this.fc = .5 * ratio * SINC_ROLLOFF;
+		this.half = SINC_HALF_ZC / ratio;
+		this.K = Math.ceil(this.half);
+		this.base = -this.K;
+		this.buf = new Float32Array(Math.max(1024, 4 * this.K + 512));
+		this.len = this.K;
+		this.table = from === to || this.L > MAX_PHASES ? null : Array.from({ length: this.L }, (_, p) => this.taps(p / this.L));
+	}
+	taps(frac) {
+		const K = this.K;
+		const out = new Float32Array(2 * K);
+		let sum = 0;
+		for (let k = -K + 1; k <= K; k++) {
+			const x = k - frac;
+			const u = x / this.half;
+			if (u < -1 || u > 1) continue;
+			const win = .42 + .5 * Math.cos(Math.PI * u) + .08 * Math.cos(2 * Math.PI * u);
+			const arg = 2 * this.fc * x;
+			const w = (arg === 0 ? 1 : Math.sin(Math.PI * arg) / (Math.PI * arg)) * win;
+			out[k + K - 1] = w;
+			sum += w;
+		}
+		if (sum) for (let i = 0; i < out.length; i++) out[i] /= sum;
+		return out;
+	}
+	push(input) {
+		if (this.fromRate === this.toRate) return input.slice();
+		this.append(input);
+		const { L, M, K } = this;
+		const end = this.base + this.len;
+		const last = Math.floor((end - 1 - K) * L / M);
+		const n = Math.max(0, last - this.next + 1);
+		const out = new Float32Array(n);
+		for (let o = 0; o < n; o++) {
+			const pos = (this.next + o) * M;
+			const c = Math.floor(pos / L);
+			const ph = pos - c * L;
+			const taps = this.table ? this.table[ph] : this.taps(ph / L);
+			const at = c - K + 1 - this.base;
+			let acc = 0;
+			for (let k = 0; k < taps.length; k++) acc += this.buf[at + k] * taps[k];
+			out[o] = acc;
+		}
+		this.next += n;
+		const keepFrom = Math.floor(this.next * M / L) - K + 1;
+		const drop = Math.min(this.len, Math.max(0, keepFrom - this.base));
+		if (drop) {
+			this.buf.copyWithin(0, drop, this.len);
+			this.len -= drop;
+			this.base += drop;
+		}
+		return out;
+	}
+	append(input) {
+		if (this.len + input.length > this.buf.length) {
+			const grown = new Float32Array(Math.max(this.buf.length * 2, this.len + input.length));
+			grown.set(this.buf.subarray(0, this.len));
+			this.buf = grown;
+		}
+		this.buf.set(input, this.len);
+		this.len += input.length;
+	}
+};
+var CaptureCore = class {
+	inRate;
+	emit;
+	outRate;
+	blockFrames;
+	rs;
+	parts = [];
+	outLen = 0;
+	inBlock = 0;
+	sumSq = 0;
+	frames = 0;
+	constructor(inRate, emit, outRate = CAPTURE_RATE, blockFrames = CAPTURE_BLOCK_FRAMES) {
+		this.inRate = inRate;
+		this.emit = emit;
+		this.outRate = outRate;
+		this.blockFrames = blockFrames;
+		this.rs = new StreamResampler(inRate, outRate);
+	}
+	push(input) {
+		let from = 0;
+		while (from < input.length) {
+			const n = Math.min(input.length - from, this.blockFrames - this.inBlock);
+			const part = from === 0 && n === input.length ? input : input.subarray(from, from + n);
+			for (let i = 0; i < part.length; i++) this.sumSq += part[i] * part[i];
+			const out = this.rs.push(part);
+			if (out.length) {
+				this.parts.push(out);
+				this.outLen += out.length;
+			}
+			this.inBlock += n;
+			this.frames += n;
+			from += n;
+			if (this.inBlock >= this.blockFrames) this.flush();
+		}
+	}
+	flush() {
+		const pcm = new Float32Array(this.outLen);
+		let at = 0;
+		for (const p of this.parts) {
+			pcm.set(p, at);
+			at += p.length;
+		}
+		const rms = this.inBlock ? Math.min(1, Math.sqrt(this.sumSq / this.inBlock)) : 0;
+		this.parts = [];
+		this.outLen = 0;
+		this.inBlock = 0;
+		this.sumSq = 0;
+		this.emit({
+			pcm,
+			rms,
+			frames: this.frames
+		});
+	}
+};
+if (typeof registerProcessor === "function" && typeof AudioWorkletProcessor === "function") registerProcessor(CAPTURE_PROCESSOR, class extends AudioWorkletProcessor {
+	core;
+	stopped = false;
+	constructor(options) {
+		super(options);
+		const o = options?.processorOptions || {};
+		this.core = new CaptureCore(sampleRate, (b) => this.port.postMessage(b, [b.pcm.buffer]), o.outRate || CAPTURE_RATE, o.blockFrames || CAPTURE_BLOCK_FRAMES);
+		this.port.onmessage = (e) => {
+			if (e.data === "stop") this.stopped = true;
+		};
+	}
+	process(inputs) {
+		if (this.stopped) return false;
+		const ch = inputs[0]?.[0];
+		if (ch?.length) this.core.push(ch);
+		return true;
+	}
+});
+//#endregion
 //#region src/lib/voiceMic.ts
 var KEEP_STREAM_MS = 9e4;
 var HIDDEN_RELEASE_MS = 1e4;
@@ -40194,6 +40363,7 @@ var MicKeeper = class {
 	timer;
 	hiddenTimer;
 	ring = null;
+	cap = null;
 	lostSubs = /* @__PURE__ */ new Set();
 	constructor(keepMs = KEEP_STREAM_MS, open = () => navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS }), ringCtx = () => null) {
 		this.keepMs = keepMs;
@@ -40263,18 +40433,54 @@ var MicKeeper = class {
 		this.gen++;
 		this.pending = null;
 		clearTimeout(this.timer);
-		this.ring?.stop();
-		this.ring = null;
+		this.dropRing();
 		const s = this.stream;
 		this.stream = null;
 		if (s) stopTracks(s);
+	}
+	dropRing() {
+		this.ring?.stop();
+		this.ring = null;
+		this.cap = null;
 	}
 	roll(ctx = this.ringCtx()) {
 		const s = this.live();
 		if (!s || !ctx || ctx.state !== "running") return;
 		if (this.ring && this.ring.stream === s && this.ring.ctx === ctx) return;
-		this.ring?.stop();
-		this.ring = startPreRoll(s, ctx);
+		const e = this.cap;
+		if (e && e.stream === s && e.ctx === ctx) return;
+		this.dropRing();
+		if (!workletOf(ctx)) {
+			this.ring = startPreRoll(s, ctx);
+			return;
+		}
+		const entry = {
+			stream: s,
+			ctx,
+			p: openCapture(s, ctx)
+		};
+		this.cap = entry;
+		entry.p.then((c) => {
+			if (this.cap !== entry || this.live() !== s) {
+				c?.stop();
+				return;
+			}
+			if (c) this.ring = c;
+			else {
+				this.cap = null;
+				this.ring = startPreRoll(s, ctx);
+			}
+		});
+	}
+	capture(ctx) {
+		this.roll(ctx);
+		const s = this.live();
+		const r = this.ring;
+		if (r instanceof MicCapture && r.stream === s && r.ctx === ctx) return r;
+		const e = this.cap;
+		if (!s || !e || e.stream !== s || e.ctx !== ctx) return null;
+		let timer;
+		return Promise.race([e.p.then((c) => c && this.ring === c ? c : null), new Promise((ok) => timer = setTimeout(() => ok(null), CAPTURE_WAIT_MS))]).finally(() => clearTimeout(timer));
 	}
 	preRoll(ms = PRE_ROLL_MS, rate = PRE_ROLL_RATE) {
 		const r = this.ring;
@@ -40296,8 +40502,7 @@ var MicKeeper = class {
 	lost(st) {
 		if (st !== this.stream) return;
 		clearTimeout(this.timer);
-		this.ring?.stop();
-		this.ring = null;
+		this.dropRing();
 		this.stream = null;
 		stopTracks(st);
 		this.lostSubs.forEach((cb) => cb());
@@ -40391,6 +40596,261 @@ function startPreRoll(stream, ctx) {
 		return null;
 	}
 }
+var CAPTURE_WAIT_MS = 1500;
+function workletOf(ctx) {
+	const w = ctx.audioWorklet;
+	return w && typeof w.addModule === "function" && typeof AudioWorkletNode === "function" ? w : null;
+}
+var loaded = /* @__PURE__ */ new WeakMap();
+function loadCapture(ctx) {
+	let p = loaded.get(ctx);
+	if (!p) {
+		const w = workletOf(ctx);
+		p = w ? w.addModule(voiceCapture_worklet_default).then(() => true, () => false) : Promise.resolve(false);
+		loaded.set(ctx, p);
+	}
+	return p;
+}
+async function openCapture(stream, ctx) {
+	if (!await loadCapture(ctx)) return null;
+	try {
+		const src = ctx.createMediaStreamSource(stream);
+		const node = new AudioWorkletNode(ctx, CAPTURE_PROCESSOR, {
+			numberOfInputs: 1,
+			numberOfOutputs: 1,
+			outputChannelCount: [1],
+			channelCount: 1,
+			channelCountMode: "explicit",
+			processorOptions: {
+				outRate: CAPTURE_RATE,
+				blockFrames: CAPTURE_BLOCK_FRAMES
+			}
+		});
+		const zero = ctx.createGain();
+		zero.gain.value = 0;
+		src.connect(node);
+		node.connect(zero);
+		zero.connect(ctx.destination);
+		const cap = new MicCapture(stream, ctx, () => {
+			node.port.onmessage = null;
+			try {
+				node.port.postMessage("stop");
+			} catch {}
+			for (const n of [
+				src,
+				node,
+				zero
+			]) try {
+				n.disconnect();
+			} catch {}
+		});
+		node.port.onmessage = (e) => cap.feed(e.data);
+		return cap;
+	} catch {
+		return null;
+	}
+}
+var MicCapture = class {
+	stream;
+	ctx;
+	teardown;
+	subs = /* @__PURE__ */ new Set();
+	blocks = [];
+	kept = 0;
+	fresh = 0;
+	stopped = false;
+	keep = Math.round(PRE_ROLL_MS / 1e3 * CAPTURE_RATE) + Math.ceil(CAPTURE_BLOCK_FRAMES / 2);
+	constructor(stream, ctx, teardown = () => {}) {
+		this.stream = stream;
+		this.ctx = ctx;
+		this.teardown = teardown;
+	}
+	feed(b) {
+		if (this.stopped || !b?.pcm) return;
+		this.blocks.push({
+			pcm: b.pcm,
+			rms: b.rms
+		});
+		this.kept += b.pcm.length;
+		this.fresh = Math.min(this.fresh + b.pcm.length, this.keep);
+		while (this.blocks.length > 1 && this.kept - this.blocks[0].pcm.length >= this.keep) this.kept -= this.blocks.shift().pcm.length;
+		this.subs.forEach((cb) => cb(b));
+	}
+	on(cb) {
+		this.subs.add(cb);
+		return () => {
+			this.subs.delete(cb);
+		};
+	}
+	stop() {
+		if (this.stopped) return;
+		this.stopped = true;
+		this.subs.clear();
+		this.blocks = [];
+		this.kept = 0;
+		this.fresh = 0;
+		this.teardown();
+	}
+	cut() {
+		this.fresh = 0;
+	}
+	last(ms, rate) {
+		let want = Math.min(this.kept, this.fresh, Math.round(ms / 1e3 * CAPTURE_RATE));
+		if (!want) return null;
+		const out = new Float32Array(want);
+		for (let i = this.blocks.length - 1; i >= 0 && want > 0; i--) {
+			const b = this.blocks[i].pcm;
+			const n = Math.min(want, b.length);
+			out.set(b.subarray(b.length - n), want - n);
+			want -= n;
+		}
+		return downsample(out, CAPTURE_RATE, rate);
+	}
+	floor() {
+		return this.blocks.length ? Math.min(...this.blocks.map((b) => b.rms)) : 0;
+	}
+	record(opts = {}) {
+		return recordBlocks(this, opts);
+	}
+};
+function pcmWav(samples, rate) {
+	const out = new Uint8Array(44 + samples.length * 2);
+	const v = new DataView(out.buffer);
+	const ascii = (at, s) => {
+		for (let i = 0; i < s.length; i++) v.setUint8(at + i, s.charCodeAt(i));
+	};
+	ascii(0, "RIFF");
+	v.setUint32(4, 36 + samples.length * 2, true);
+	ascii(8, "WAVE");
+	ascii(12, "fmt ");
+	v.setUint32(16, 16, true);
+	v.setUint16(20, 1, true);
+	v.setUint16(22, 1, true);
+	v.setUint32(24, rate, true);
+	v.setUint32(28, rate * 2, true);
+	v.setUint16(32, 2, true);
+	v.setUint16(34, 16, true);
+	ascii(36, "data");
+	v.setUint32(40, samples.length * 2, true);
+	putPcm16(v, 44, samples);
+	return new Blob([out], { type: "audio/wav" });
+}
+function putPcm16(v, at, samples) {
+	for (let i = 0; i < samples.length; i++, at += 2) {
+		const s = samples[i];
+		const c = s > 1 ? 1 : s < -1 ? -1 : s === s ? s : 0;
+		v.setInt16(at, c < 0 ? Math.round(c * 32768) : Math.round(c * 32767), true);
+	}
+}
+function recordBlocks(cap, opts) {
+	const rate = CAPTURE_RATE;
+	const outRate = Math.min(opts.targetRate ?? rate, rate);
+	const onLevel = opts.onLevel;
+	let blocks = [];
+	let frames = 0;
+	let fresh = 0;
+	let done = false;
+	let skip = Math.max(0, Math.round((opts.skipS || 0) * rate));
+	let muted = false;
+	let held = [];
+	let heldFrames = 0;
+	const hold = Math.round(MUTE_HOLD_S * rate);
+	const keep = opts.keepS ? Math.max(1, Math.round(opts.keepS * rate)) : 0;
+	const wav = (pcm) => pcmWav(downsample(pcm, rate, outRate), outRate);
+	const off = cap.on((b) => {
+		if (done) return;
+		const block = b.pcm;
+		if (muted) {
+			held.push(block);
+			heldFrames += block.length;
+			while (held.length > 1 && heldFrames - held[0].length >= hold) heldFrames -= held.shift().length;
+			return;
+		}
+		if (skip > 0) {
+			skip -= block.length;
+			return;
+		}
+		blocks.push(block);
+		frames += block.length;
+		fresh += block.length;
+		while (keep && blocks.length > 1 && fresh - blocks[0].length >= keep) fresh -= blocks.shift().length;
+		if (onLevel && block.length) onLevel(b.rms);
+	});
+	const drain = () => {
+		const all = new Float32Array(fresh);
+		let at = 0;
+		for (const b of blocks) {
+			all.set(b, at);
+			at += b.length;
+		}
+		blocks = [];
+		fresh = 0;
+		return all;
+	};
+	const end = () => {
+		done = true;
+		off();
+	};
+	let result = null;
+	return {
+		stop() {
+			if (result) return result;
+			end();
+			result = Promise.resolve(wav(drain()));
+			return result;
+		},
+		take(minS = TAKE_MIN_S) {
+			if (done || !fresh || fresh < minS * rate) return null;
+			return wav(drain());
+		},
+		cancel() {
+			end();
+			blocks = [];
+			fresh = 0;
+		},
+		mute(on, tailS = 0, rewindS = 0) {
+			if (!on && muted) {
+				if (rewindS > 0 && !skip) {
+					let want = Math.min(heldFrames, Math.round(rewindS * rate));
+					const back = [];
+					for (let i = held.length - 1; i >= 0 && want > 0; i--) {
+						const b = held[i];
+						const part = b.length > want ? b.subarray(b.length - want) : b;
+						back.unshift(part);
+						want -= part.length;
+					}
+					for (const b of back) {
+						blocks.push(b);
+						frames += b.length;
+						fresh += b.length;
+					}
+				} else skip = Math.max(skip, Math.round(tailS * rate));
+			}
+			if (on && !muted) {
+				held = [];
+				heldFrames = 0;
+			}
+			muted = on;
+		},
+		seconds() {
+			return frames / rate;
+		},
+		async last(s) {
+			if (done || !fresh) return null;
+			let want = Math.min(fresh, Math.max(1, Math.round(s * rate)));
+			const out = new Float32Array(want);
+			for (let i = blocks.length - 1; i >= 0 && want > 0; i--) {
+				const b = blocks[i];
+				const n = Math.min(want, b.length);
+				out.set(b.subarray(b.length - n), want - n);
+				want -= n;
+			}
+			return wav(out);
+		}
+	};
+}
+var MUTE_HOLD_S = .5;
+var TAKE_MIN_S = .3;
 async function withPreRoll(pre, wav, rate = PRE_ROLL_RATE) {
 	if (!pre?.length) return wav;
 	try {
@@ -40409,11 +40869,7 @@ async function withPreRoll(pre, wav, rate = PRE_ROLL_RATE) {
 		const v = new DataView(out.buffer);
 		v.setUint32(4, 36 + add + data, true);
 		v.setUint32(40, add + data, true);
-		for (let i = 0, at = 44; i < pre.length; i++, at += 2) {
-			const s = pre[i];
-			const c = s > 1 ? 1 : s < -1 ? -1 : s === s ? s : 0;
-			v.setInt16(at, c < 0 ? Math.round(c * 32768) : Math.round(c * 32767), true);
-		}
+		putPcm16(v, 44, pre);
 		out.set(new Uint8Array(src.buffer, src.byteOffset + 44, data), 44 + add);
 		return new Blob([out], { type: wav.type || "audio/wav" });
 	} catch {
@@ -42572,8 +43028,8 @@ var Dictation = class {
 	}
 	guess() {
 		if (this.phraseAt < 0) this.phraseAt = this.typed.length;
-		const all = joinWords(this.held, this.partial);
-		const want = this.routes && !this.before && mayBeCommand(all) ? "" : holdBack(all).type;
+		const hb = holdBack(joinWords(this.held, this.partial));
+		const want = this.routes && !this.before && mayBeCommand(hb.type) ? "" : hb.type;
 		const fix = retype(this.guessed, want);
 		if (!fix.erase && !fix.type) return { kind: "continue" };
 		return withErase({
@@ -44911,7 +45367,17 @@ function serverRecognizer(opts = {}) {
 			failed("start-failed", "The audio engine isn't running — click the mic again");
 			return;
 		}
-		mic.roll(ctx);
+		let cap = mic.capture(ctx);
+		if (cap instanceof Promise) {
+			cap = await cap;
+			if (token !== mine) return discard(c);
+			if (!want) {
+				discard(c);
+				token = null;
+				maybeEnd();
+				return;
+			}
+		}
 		const skip = Math.max(0, skipUntil - Date.now());
 		firstSkipMs = 0;
 		const pre = skip || muted ? null : mic.preRoll();
@@ -44950,11 +45416,12 @@ function serverRecognizer(opts = {}) {
 			else pump(c);
 		};
 		try {
-			c.rec = startWavRecording(s, ctx, {
+			const ro = {
 				targetRate: CLIP_RATE$1,
 				onLevel,
 				skipS: skip / 1e3
-			});
+			};
+			c.rec = cap ? cap.record(ro) : startWavRecording(s, ctx, ro);
 		} catch {
 			discard(c);
 			failed("start-failed");
@@ -105644,7 +106111,7 @@ function TryRow({ view, install }) {
 		}
 		let stream;
 		try {
-			stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+			stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS });
 		} catch (err) {
 			heard({
 				ok: false,

@@ -446,6 +446,10 @@ Re-verified against the codebase 2026-10-10; useful when touching these areas:
    machine the row's `background` is always null, so the rail's job chip and
    fast-track's background-job hold can't be reproduced there
    ([providers.md](providers.md#background-jobs)).
+7. `PREWARM_FIXED` in `backend/web/routes/speech.py` copies literal client
+   lines by hand (`static/mobile.js`, `frontend/src/lib/voiceDesktop.ts`,
+   `TopBarMic.tsx`, `core/voice_router.py`). Rewording one of those lines
+   without updating the tuple silently loses its prewarm cache hit.
 
 Two other lists are kept next to the code they describe and are not repeated
 here — read them before touching those areas:

@@ -175,7 +175,10 @@ FastAPI app `backend.web.server:app`. Key pieces:
   voice per reply (`speech.TtsChain`); only a DEAD host (refused, reset,
   5xx, no audio, hung) is marked down and re-checked by a background probe,
   a merely slow one stays healthy, and a serial host (Voice Lab's F5) gets
-  our requests one at a time through a lane per host. The two whisper tiers
+  our requests one at a time through a lane per host; session names and
+  fixed confirmations are pre-synthesised into a pinned cache while the
+  voice is idle (`routes/speech.Prewarm`), as low-priority lines every real
+  line overtakes. The two whisper tiers
   are scheduled one job per model with the accurate pass first and every
   wait bounded (`speech_stream.Lane`), split the cores between them
   (`speech.whisper_threads`), and the fast tier pads its encoder input to
