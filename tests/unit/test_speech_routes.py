@@ -810,7 +810,15 @@ class TestStream:
         r = _chunk(sid)
         assert r.status_code == 200
         first = r.json()
-        assert set(first) == {"committed", "partial", "ms", "window_s", "audio_s"}
+        assert set(first) == {
+            "committed",
+            "partial",
+            "ms",
+            "window_s",
+            "audio_s",
+            "turn",
+        }
+        assert set(first["turn"]) == {"p", "hold_ms", "reason"}
         assert first["committed"] == "" and first["partial"] == "hello world"
         assert isinstance(first["ms"], int) and first["audio_s"] == 0.5
         assert first["window_s"] == 0.5
@@ -876,6 +884,7 @@ class TestStream:
             "ms": 0,
             "window_s": 0.0,
             "audio_s": 0.5,
+            "turn": {"p": 0.0, "hold_ms": 1100, "reason": "empty"},
         }
         assert [c for c in streaming.calls if c[0] == "pass"] == []
         streaming.passes.append(_words("hi"))
