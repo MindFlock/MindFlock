@@ -6,20 +6,21 @@
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--note-bg, #fff6b0);
   color: #2a2611;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--sky-shadow-rest);
   font-size: 13px;
   line-height: 1.35;
   outline: none;
+  transition: box-shadow 120ms ease;
 }
 
-.sky-note:focus-visible,
-.sky-note:focus {
-  box-shadow:
-    0 0 0 2px var(--accent),
-    0 4px 14px rgba(0, 0, 0, 0.18);
+/* Focused (being typed in or picked): the ring is the object's
+   (SkyObjects.css .sky-object), in the selection's colour — one ring, not a
+   second one drawn by the note. */
+.sky-object:has(> .sky-note:focus) {
+  outline-color: var(--accent);
 }
 
 .sky-note.is-attached {
@@ -32,7 +33,7 @@
   justify-content: space-between;
   height: 18px;
   padding: 0 6px;
-  border-radius: 6px 6px 0 0;
+  border-radius: 8px 8px 0 0;
   background: rgba(0, 0, 0, 0.07);
   cursor: move;
   user-select: none;
@@ -86,7 +87,14 @@
   opacity: 0.55;
 }
 
-/* Dark themes: the paper stays light, the ink dark. */
+/* Dark themes: the paper stays light, the ink dark; the shadow is the one
+   scale's (FlywayCanvas.css). */
 .dark .sky-note {
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--sky-shadow-rest);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sky-note {
+    transition: none;
+  }
 }

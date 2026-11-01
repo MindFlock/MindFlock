@@ -120,9 +120,10 @@
 }
 
 /* Every chip on the shelf is the secondary tier (.test-btn): panel-2, the
-   border, the tiers' radius, the accent border under the pointer — and the
-   toolbar's height. The Session chip is tinted with the primary's accent (it
-   makes a session); a perch stays round and gold, as everywhere. */
+   border, the accent border under the pointer — and the toolbar's height.
+   Round 17: a chip's radius is 999px (lines 10, boxes 8, chips round). The
+   Session chip is tinted with the primary's accent (it makes a session); a
+   perch is gold, with a round icon, as everywhere. */
 .sky-stop-chip {
   display: inline-flex;
   align-items: center;
@@ -132,7 +133,7 @@
   box-sizing: border-box;
   padding: 0 11px 0 5px;
   border: 1px solid var(--border);
-  border-radius: var(--fl-btn-radius, 6px);
+  border-radius: 999px;
   background: var(--panel-2);
   color: var(--text);
   font: inherit;

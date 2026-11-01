@@ -11,10 +11,22 @@
   min-width: 240px;
   min-height: 200px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--panel);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--sky-shadow-rest);
   overflow: hidden;
+  transition: box-shadow 120ms ease;
+}
+
+/* Floating, in the hand (round 17): raised, the one shadow scale's. */
+.sky-palette-slot.is-dragging .sky-palette {
+  box-shadow: var(--sky-shadow-raised);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sky-palette {
+    transition: none;
+  }
 }
 
 .sky-palette-head {
