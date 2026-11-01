@@ -249,7 +249,8 @@ a session first*).
   “over”, “over and out”, “disregard”, a stop phrase, “stop talking”, or a
   switch command as a message's first phrase (“switch to billing”, “focus 3”,
   “next session”) — acts once the level meter has heard nothing for 250 ms
-  (`CONTROL_TAIL_MS`), not after the recogniser's 1.1 s pause: the phrase is
+  (`CONTROL_TAIL_MS`), not after the recogniser's phrase-end quiet (1.1 s, or
+  the streamed turn verdict): the phrase is
   ended at the recogniser at once (`Recognizer.endPhrase`, its `/end`), and
   “disregard”, a stop, “stop talking” and a switch act on the guess right
   away (that phrase's late words and end are ignored). “Over” waits for
@@ -362,11 +363,22 @@ a session first*).
   nothing. The key's press warms the microphone as the button's does. Stopping leaves
   the words in the field; say “over” first to send them. The
   keydown counts as the gesture that starts the audio engine, as a click does.
-- **A dialog on screen.** Before a dictation's first phrase is typed, the
-  session's live activity is checked (the rows the app already polls): on a
-  question, permission prompt or usage-limit menu (`clarify` / `limit`) nothing
-  is typed — words would answer it — the mic's tooltip says *Login fix is
-  waiting on a dialog — answer it first* and listening ends.
+- **A dialog on screen.** Before every phrase and every streamed correction
+  of a session target (`LiveDictation.dialogBlocks`) the page checks for a
+  dialog: the row reads a question, permission prompt or usage-limit menu
+  (`clarify` / `limit`, the rows the app already polls), a dialog came up
+  during this phrase, or this page saw one on the session since the message
+  began (`dialogSeen`: rows, `/dialog`, the ask pop-up). Words, a digit or a
+  Backspace would answer it, so: before the first phrase nothing is typed, the
+  mic's tooltip says *Login fix is waiting on a dialog — answer it first* and
+  listening ends. Mid-message no more words are typed and nothing already
+  typed is taken back (no Backspace for a correction, “disregard”, a stop or
+  the hush erase); “over” presses no Enter (checked again after the submit
+  settle). The rest of the phrase goes to the voice router, where it can
+  answer the dialog only if it was begun after the dialog appeared; if the
+  router acts, a continuous dictation keeps listening, otherwise listening ends
+  with *Login fix asked something — “…” not typed; the words before it stay*
+  (`dialogStopLine`). A text box is never blocked.
 - **A text box focused** (Send a message, a dialog field…): the words go into
   the box at the cursor, “disregard” removes them while they still sit before
   the cursor, and “over” only starts the next message (“over and out”
@@ -403,7 +415,10 @@ a session first*).
   here. **Only words begun after the dialog was there answer it** (R8-bis):
   each phrase carries when it began — the server recognizer's first loud
   block (`Phrase.spokeAt`, minus the pre-roll when its speech began with
-  it; Web Speech can't say, so no later than 2 s before the previous
+  it, taken on the recording's own clock — `RecordingClock`, the earliest
+  `now − seconds recorded` over the level callbacks, reset when the mic mutes —
+  so a page stalled by a render or terminal output doesn't make speech look
+  later than it began; Web Speech can't say, so no later than 2 s before the previous
   phrase ended, `SPOKE_LEAD_MS`) — to the router (`spoke_ms_ago`,
   `spoke_at`) with when this window first had each dialog (`dialogSeen`:
   the rows' `asking.dialog_id`, a dialog read out or shown in the ask
@@ -412,13 +427,20 @@ a session first*).
   router's `early` (web-api.md) and the page's own refusal both say *&lt;name&gt;
   asked just now: say your answer again* and press nothing. The names live
   in `lib/voiceDesktop`: `ANSWER_AFTER_MS = 300`, `SPOKE_LEAD_MS = 2000`, the
-  `DialogSeen` class and its `dialogSeen` singleton (it clears only a
-  sighting the rows confirmed, so a lagging row never erases a fresh one),
-  and `earlyLine(name)`; `TopBarMic` feeds `dialogSeen` from its
+  `DialogSeen` class and its `dialogSeen` singleton, and `earlyLine(name)`.
+  A sighting is cleared when the rows confirmed it and stop asking, when the
+  row leaves `clarify` / `limit` (answered by hand), when `/dialog` comes back
+  204 (a failed fetch keeps it) and when `/answer` says 409 `dialog_answered`
+  — so the same command asked again under the same dialog id is a new
+  sighting; a lagging row never erases a fresh one, and a sub-agent's prompt
+  under a `working` row keeps its sighting. `dialogSeen.since(title)` is the
+  sighting time whatever the id; `TopBarMic` feeds `dialogSeen` from its
   `["instances"]` query-cache subscription. In practice: an answer said too
   soon is simply asked for again, and with Web Speech the 2 s lead can make a
   quick *yes* right after a prompt appears need repeating. A question (no dialog) gets the answer as a prompt: typed and
-  sent like “over”, with `say` per *Read replies aloud*. “Session three
+  sent like “over” — but never while a dialog is up or sighted on that
+  session (*Login fix is on a dialog — answer it on the screen.*), since the
+  typed *yes* or *1* would land in the dialog — with `say` per *Read replies aloud*. “Session three
   yes” answers that session without moving focus (a row number alone is mapped
   to its title and asked again). No dialog and no question: the router's
   sentence is shown (and read, with replies on).
@@ -458,7 +480,9 @@ a session first*).
   (*Recognition: server, built in (Windows via WSL) — one clip per phrase:
   16 kHz, browser resampler, a phrase ends after 1.1 s of quiet · Voice: server
   (piper)*, *Recognition: server (local) — streaming (words as you speak):
-  16 kHz, windowed-sinc resampler, a phrase ends after 1.1 s of quiet*,
+  16 kHz, windowed-sinc resampler, a phrase ends after 1.1 s of quiet* — when
+  streaming, 1.1 s is only the fallback; the server's turn verdict usually
+  ends it (see *Streaming* below) —
   *Recognition: this browser · Voice: this browser*, and why the server's
   recogniser isn't ready when it would be used), then the last pass, final and
   wake times. The choices are kept per browser (`cs_voice_desktop`), and
@@ -506,8 +530,16 @@ whenever the previous request is back and at least 300 ms of new audio exists,
 the recorder's `take()` (the WAV since the last take, 16 kHz through the
 windowed sinc, recording on) goes to `POST /api/voice/stream/{id}/chunk` —
 never two at once. Each answer's `committed` words are typed as above; its
-`partial` is the muted tail. The quiet before the first word is not sent. The
-same 1.1 s of quiet ends the phrase: `…/end` flushes its last words (the
+`partial` is the muted tail. The quiet before the first word is not sent. Each
+chunk's `turn` verdict sets the quiet that ends the phrase (`turnHoldMs`):
+about 350 ms after a radio word, stop phrase or lone command, 900 ms after a
+sentence or question, 1500 ms after a comma or trailing connector, clamped to
+300–3000 ms (`TURN_MIN_MS` / `TURN_MAX_MS`). It falls back to clip mode's
+1.1 s (`SILENCE_MS`) when there is no verdict (an older server, a malformed
+`turn`), when the voice was heard after the audio the verdict judged, and for
+a `command` verdict once the message has typed words (the server can't see the
+box: “next session” mid-message is words; `RecognizerHandlers.blank()`). Then
+`…/end` flushes its last words (the
 phrase's radio word, if any, is read off the whole phrase then — "over" and
 "disregard" act exactly as in clip mode), and the next phrase opens a
 new stream; there is no 12 s cap. Letting go (or the second click) sends what
