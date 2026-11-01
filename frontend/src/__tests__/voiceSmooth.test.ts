@@ -640,6 +640,32 @@ describe("“over”: the final is fetched while the quiet is waited out", () =>
     expect(t.keys).toEqual(["ship it"]);
   });
 
+  it("“do it over” (an answer's words, then “over”): nothing typed only to be taken back — the router reads “do it” first, as for any first phrase that may be a command", async () => {
+    const routed: string[] = [];
+    for (const [said, words] of [
+      ["do it over", "do it"],
+      ["go ahead over", "go ahead"],
+      ["yes over", "yes"],
+    ]) {
+      const t = session();
+      routed.length = 0;
+      const d = new LiveDictation(t, hooks({ route: async (w) => (routed.push(w), false) }), { continuous: true });
+      loudAt = Date.now();
+      for (let i = 1; i <= said.split(" ").length; i++) await d.stream("", said.split(" ").slice(0, i).join(" "));
+      await vi.advanceTimersByTimeAsync(OVER_EARLY_QUIET_MS + 300);
+      const sent = d.flush("", said);
+      await vi.advanceTimersByTimeAsync(SUBMIT_SETTLE_MS + 50);
+      await sent;
+      expect(sentAt).toHaveLength(1);
+      // Before: the guess typed it ("do it over" fits no command), and the
+      // send took it back for the router and typed it again.
+      expect([said, t.keys]).toEqual([said, [words + " "]]);
+      expect(routed).toEqual([words]);
+      sentAt.length = 0;
+      mocks.instApi.mockClear();
+    }
+  });
+
   it("the final back before the quiet is complete: Enter the moment the quiet is", async () => {
     const t = session();
     const d = new LiveDictation(t, hooks(), { continuous: true });

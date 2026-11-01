@@ -970,8 +970,12 @@ export class Dictation {
   private guess(): DictOutcome {
     if (this.phraseAt < 0) this.phraseAt = this.typed.length;
     const all = joinWords(this.held, this.partial);
-    // A first phrase that may be a command waits whole for the router.
-    const want = this.routes && !this.before && mayBeCommand(all) ? "" : holdBack(all).type;
+    // A first phrase that may be a command waits whole for the router —
+    // asked of the words that would be typed, the radio word held back, as
+    // its end asks it ({@link settle}): "do it over" is "do it", an answer,
+    // so nothing is typed only to be taken back and typed again.
+    const hb = holdBack(all);
+    const want = this.routes && !this.before && mayBeCommand(hb.type) ? "" : hb.type;
     const fix = retype(this.guessed, want);
     if (!fix.erase && !fix.type) return { kind: "continue" };
     return withErase({ kind: "type" as const, text: fix.type, route: false, guess: true }, fix.erase);
@@ -4568,9 +4572,22 @@ export function serverRecognizer(
       failed("start-failed", "The audio engine isn't running — click the mic again");
       return;
     }
-    // The pre-roll runs on this stream from here (lib/voiceMic): what it
-    // holds now is the half second before this recording.
-    mic.roll(ctx);
+    // The capture graph on the audio thread (lib/voiceMic: an AudioWorklet
+    // resampling to 16 kHz): the recording, the pre-roll and the meter read
+    // its blocks. Null where there is none: the recorder's own ScriptProcessor.
+    // The pre-roll runs on this stream from here: what it holds now is the
+    // half second before this recording.
+    let cap = mic.capture(ctx);
+    if (cap instanceof Promise) {
+      cap = await cap;
+      if (token !== mine) return discard(c);
+      if (!want) {
+        discard(c);
+        token = null;
+        maybeEnd();
+        return;
+      }
+    }
     const skip = Math.max(0, skipUntil - Date.now());
     firstSkipMs = 0;
     // Not after a barge-in or under the chime's skip (that audio is not the
@@ -4624,7 +4641,8 @@ export function serverRecognizer(
       else pump(c);
     };
     try {
-      c.rec = startWavRecording(s, ctx, { targetRate: CLIP_RATE, onLevel, skipS: skip / 1000 });
+      const ro = { targetRate: CLIP_RATE, onLevel, skipS: skip / 1000 };
+      c.rec = cap ? cap.record(ro) : startWavRecording(s, ctx, ro);
     } catch {
       discard(c);
       failed("start-failed");
