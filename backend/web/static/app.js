@@ -42935,6 +42935,17 @@ var Dictation = class {
 	unwrote(text) {
 		if (text && this.typed.endsWith(text)) this.typed = this.typed.slice(0, this.typed.length - text.length);
 	}
+	get inPhrase() {
+		return this.phraseAt >= 0;
+	}
+	untyped(text, erased) {
+		const base = text && this.typed.endsWith(text) ? this.typed.slice(0, this.typed.length - text.length) : this.typed;
+		const guess = this.phraseAt < 0 ? 0 : this.typed.length - this.phraseAt;
+		const over = this.phraseAt < 0 ? text : guess >= text.length ? "" : text.slice(0, text.length - guess);
+		this.typed = base + erased;
+		if (this.phraseAt >= 0 && guess <= text.length) this.phraseAt = this.typed.length;
+		return over;
+	}
 	heard(phrase, radio = true) {
 		if (!this.listening) return { kind: "stopped" };
 		const ctl = this.control(phrase, true);
@@ -43084,21 +43095,152 @@ var Dictation = class {
 		return text;
 	}
 };
-function backspaces(text) {
-	return "".repeat(Array.from(text).length);
-}
 function dialogUp(activity) {
 	return activity === "clarify" || activity === "limit";
 }
 var DIALOG_CHECK_EVERY_MS = 2e3;
-function sessionTarget(title, name) {
-	const send = (data) => peekTerm(title, "agent")?.send(data) ?? false;
+var postKeys = async (title, erase, text) => instApi(title, "/send", { json: {
+	voice: true,
+	submit: false,
+	erase,
+	text
+} });
+var KEY_TIMEOUT_MS = 4e3;
+function answerWithin(p, ms) {
+	return new Promise((res, rej) => {
+		const timer = setTimeout(() => rej(/* @__PURE__ */ new Error("the server didn't answer")), ms);
+		p.then((v) => (clearTimeout(timer), res(v)), (e) => (clearTimeout(timer), rej(e)));
+	});
+}
+var keyLanes = /* @__PURE__ */ new Map();
+function inLane(title, fn) {
+	const call = () => {
+		try {
+			return Promise.resolve(fn());
+		} catch (err) {
+			return Promise.reject(err);
+		}
+	};
+	const prev = keyLanes.get(title);
+	const p = prev ? prev.then(call, call) : call();
+	keyLanes.set(title, p);
+	const clear = () => {
+		if (keyLanes.get(title) === p) keyLanes.delete(title);
+	};
+	p.then(clear, clear);
+	return p;
+}
+var keyTimes = [];
+function keyTime(ms, erase, chars) {
+	keyTimes = [...keyTimes, Math.round(ms)].slice(-20);
+	if (typeof window !== "undefined") window.__mfVoiceKeys = keyTimes;
+	try {
+		if (typeof localStorage !== "undefined" && localStorage.getItem("cs_voice_debug") === "1") console.debug("[voice] keys ⌫" + erase + " +" + chars + " in " + Math.round(ms) + " ms");
+	} catch {}
+}
+function foldKeys(b, erase, text) {
+	const keep = Math.max(0, b.text.length - erase);
+	return {
+		erase: b.erase + Math.max(0, erase - b.text.length),
+		text: [...b.text.slice(0, keep), ...text]
+	};
+}
+var KeyGate = class {
+	title;
+	name;
+	post;
+	field = [];
+	queued = null;
+	flying = null;
+	failed = null;
+	waiters = [];
+	listeners = /* @__PURE__ */ new Set();
+	constructor(title, name, post = postKeys) {
+		this.title = title;
+		this.name = name;
+		this.post = post;
+	}
+	get refused() {
+		return this.failed;
+	}
+	get idle() {
+		return !this.flying && !this.queued;
+	}
+	push(erase, text) {
+		if (this.failed) return false;
+		if (!erase && !text) return true;
+		this.queued = foldKeys(this.queued || {
+			erase: 0,
+			text: []
+		}, Array.from(erase).length, Array.from(text));
+		if (!this.flying) this.fly();
+		return true;
+	}
+	settled() {
+		if (this.failed || this.idle) return Promise.resolve(this.failed);
+		return new Promise((res) => this.waiters.push(res));
+	}
+	onRefused(fn) {
+		this.listeners.add(fn);
+		return () => void this.listeners.delete(fn);
+	}
+	reset() {
+		if (!this.idle) return;
+		this.failed = null;
+		this.field = [];
+	}
+	fly() {
+		const b = this.queued;
+		this.queued = null;
+		if (!b || !b.erase && !b.text.length) return this.wake();
+		this.flying = b;
+		const t0 = Date.now();
+		const text = b.text.join("");
+		inLane(this.title, () => answerWithin(this.post(this.title, b.erase, text), KEY_TIMEOUT_MS)).then(() => {
+			keyTime(Date.now() - t0, b.erase, b.text.length);
+			this.field = [...this.field.slice(0, Math.max(0, this.field.length - b.erase)), ...b.text];
+			this.flying = null;
+			if (this.queued) this.fly();
+			else this.wake();
+		}, (err) => this.fail(b, err));
+	}
+	fail(b, err) {
+		const all = this.queued ? foldKeys(b, this.queued.erase, this.queued.text) : b;
+		const erased = this.field.slice(Math.max(0, this.field.length - all.erase)).join("");
+		this.flying = null;
+		this.queued = null;
+		const body = err instanceof ApiError ? err.body : null;
+		const dialog = err instanceof ApiError && err.status === 409 && !!body?.in_dialog;
+		let line = "Couldn't type into " + this.name + " — " + (err?.message || "the server didn't answer");
+		if (body?.paused) line = this.name + " is paused — resume it first";
+		else if (!(err instanceof ApiError)) line = "Couldn't type into " + this.name + " — the server didn't answer";
+		this.failed = {
+			dialog,
+			line,
+			text: all.text.join(""),
+			erased
+		};
+		for (const fn of [...this.listeners]) try {
+			fn(this.failed);
+		} catch {}
+		this.wake();
+	}
+	wake() {
+		const w = this.waiters;
+		this.waiters = [];
+		for (const res of w) res(this.failed);
+	}
+};
+function sessionTarget(title, name, post = postKeys) {
+	const gate = new KeyGate(title, name, post);
 	return {
 		kind: "session",
 		title,
 		name,
-		type: (text) => send(text),
-		erase: (text) => !text || send(backspaces(text))
+		gate,
+		type: (text) => gate.push("", text),
+		erase: (text) => gate.push(text, ""),
+		replace: (old, text) => gate.push(old, text)
 	};
 }
 var CONFIRM_LINES = {
@@ -43158,6 +43300,8 @@ var LiveDictation = class {
 	stepSpoke = 0;
 	dialogHit = false;
 	checkedAt = 0;
+	unsent = "";
+	unwatch = null;
 	constructor(target, hooks, opts = {}) {
 		this.target = target;
 		this.hooks = hooks;
@@ -43165,6 +43309,31 @@ var LiveDictation = class {
 		this.dict.begin();
 		this.dict.routes = target?.kind !== "field";
 		this.dict.continuous = !!opts.continuous;
+		this.watch(target);
+	}
+	watch(t) {
+		this.unwatch?.();
+		this.unwatch = t?.gate ? t.gate.onRefused((r) => this.refused(t, r)) : null;
+	}
+	refused(t, r) {
+		if (t !== this.target) return;
+		if (this.done) {
+			if (r.text.trim() || r.erased) this.hooks.caption(r.dialog ? dialogStopLine(t.name, r.text.trim()) : r.line, true);
+			return;
+		}
+		const over = this.dict.untyped(r.text, r.erased);
+		if (!r.dialog) {
+			this.end(r.line, true, "stopped");
+			return;
+		}
+		this.dialogHit = true;
+		dialogSeen.activity(t.title, "clarify");
+		this.checkedAt = Date.now();
+		this.hooks.dialogCheck?.(t.title);
+		this.unsent = joinWords(this.unsent, over);
+		this.chain = this.chain.then(async () => {
+			if (this.dialogHit && !this.done && !this.dict.inPhrase && this.target === t) await this.heldBack(t, "");
+		}).catch(() => {});
 	}
 	get active() {
 		return !this.done;
@@ -43377,6 +43546,7 @@ var LiveDictation = class {
 	end(line, sticky = false, how) {
 		if (this.done) return;
 		this.done = true;
+		this.unsent = "";
 		clearInterval(this.tailTimer);
 		clearTimeout(this.sendWait);
 		clearTimeout(this.swallowing);
@@ -43405,6 +43575,7 @@ var LiveDictation = class {
 					return;
 				}
 				t?.erase(out.text);
+				if (t?.gate && await t.gate.settled()) return;
 				this.hooks.caption("Disregarded — go on", true);
 				this.hooks.confirm?.("cleared");
 				return;
@@ -43418,6 +43589,7 @@ var LiveDictation = class {
 					return;
 				}
 				t?.erase(out.text);
+				if (t?.gate && await t.gate.settled()) return;
 				this.end(out.text ? "Disregarded" : "", false, "stopped");
 				return;
 			case "leave":
@@ -43456,7 +43628,8 @@ var LiveDictation = class {
 				}
 				this.acted = true;
 				this.hooks.caption("Sending to " + t.name + "…", true);
-				if (typedNow) await new Promise((r) => setTimeout(r, SUBMIT_SETTLE_MS));
+				if (t.gate) await t.gate.settled();
+				else if (typedNow) await new Promise((r) => setTimeout(r, SUBMIT_SETTLE_MS));
 				if (this.done) return;
 				if (this.dialogBlocks(t)) {
 					await this.heldBack(t, "");
@@ -43485,6 +43658,7 @@ var LiveDictation = class {
 		if (this.done) return;
 		this.dict.next();
 		this.dialogHit = false;
+		this.unsent = "";
 		const n = this.hooks.retarget?.();
 		if (n) {
 			this.target = n.target;
@@ -43493,7 +43667,9 @@ var LiveDictation = class {
 				hint: n.hint
 			};
 			this.dict.routes = n.target?.kind !== "field";
+			this.watch(n.target);
 		}
+		this.target?.gate?.reset();
 		if (line) this.hooks.caption(line, true);
 		else if (line === void 0) this.show();
 	}
@@ -43517,7 +43693,7 @@ var LiveDictation = class {
 			}
 			return this.keys(t, erase, text);
 		}
-		if (t && this.dict.typed && this.dialogBlocks(t)) return this.heldBack(t, text);
+		if (t && (this.dict.typed || this.unsent) && this.dialogBlocks(t)) return this.heldBack(t, text);
 		if (this.dict.typed.length === erase.length && t?.kind !== "field") {
 			if (erase && t && !this.keys(t, erase, "")) return false;
 			erase = "";
@@ -43564,7 +43740,8 @@ var LiveDictation = class {
 	}
 	async heldBack(t, rest) {
 		this.dialogHit = false;
-		const words = rest.trim();
+		const words = joinWords(this.unsent, rest).trim();
+		this.unsent = "";
 		if (words && this.dict.routes) {
 			this.hooks.caption(this.dict.shown, true, words);
 			const routed = await this.hooks.route(words, this.stepSpoke);
@@ -43588,8 +43765,8 @@ var LiveDictation = class {
 			this.end(dialogStopLine(t.name, text.trim()), true, "stopped");
 			return false;
 		}
-		if (!(t.replace ? t.replace(erase, text) : (!erase || t.erase(erase)) && (!text || t.type(text)))) {
-			this.end("Couldn't type into " + t.name + " — its terminal isn't connected", true);
+		if (!(t.gate ? t.gate.push(erase, text) : t.replace ? t.replace(erase, text) : (!erase || t.erase(erase)) && (!text || t.type(text)))) {
+			this.end(t.gate?.refused?.line || "Couldn't type into " + t.name + " — its terminal isn't connected", true);
 			return false;
 		}
 		this.dict.unwrote(erase);
@@ -43896,11 +44073,16 @@ async function answer(r, text, deps, again, spokeAt, seen) {
 	}
 	if (await questionPending(title, deps.activity(title))) {
 		const words = answerWords(r, text);
-		if (!sessionTarget(title, name).type(words + " ")) {
-			deps.caption("Couldn't type into " + name + " — its terminal isn't connected", true);
+		const into = sessionTarget(title, name);
+		into.type(words + " ");
+		const refused = await into.gate?.settled();
+		if (refused) {
+			if (refused.dialog) {
+				seen.activity(title, "clarify");
+				deps.announce(name + " is on a dialog — answer it on the screen.");
+			} else deps.caption(refused.line, true);
 			return;
 		}
-		await new Promise((res) => setTimeout(res, SUBMIT_SETTLE_MS));
 		const say = deps.replies();
 		const sent = await submitDraft(title, name, say);
 		if (sent.ok) deps.submitted(title, say);
@@ -45648,6 +45830,11 @@ function finalLine(finalMs) {
 function sentLine(ms) {
 	return ms != null && ms >= 0 ? "over → sent " + (ms / 1e3).toFixed(1) + " s" : "";
 }
+function keysLine(times = keyTimes) {
+	if (!times.length) return "";
+	const sorted = [...times].sort((a, b) => a - b);
+	return "typing ~" + sorted[Math.floor(sorted.length / 2)] + " ms/batch";
+}
 function recognizerErrorLine(code, detail) {
 	if (code === "network") return "Speech recognition failed (network): use Chrome, Edge or Safari, or turn on server recognition in Settings → Voice";
 	if (code === "not-allowed" || code === "service-not-allowed") return "Microphone permission denied";
@@ -46660,7 +46847,8 @@ function micDiagnostics() {
 		engineDiagnostics(c, stt, tts),
 		...pass,
 		wakeLine(lastWakeMs),
-		sentLine(lastSentMs)
+		sentLine(lastSentMs),
+		keysLine()
 	].filter(Boolean).join(" · ");
 }
 function talkHotkey() {
