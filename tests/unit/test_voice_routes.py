@@ -747,8 +747,16 @@ def test_voice_route_answers_read_the_dialog_route(env, monkeypatch):
         agent_io, "send_answer", lambda *a: pytest.fail("the router pressed a key")
     )
 
-    def route(text, session=""):
-        r = client.post("/api/voice/route", json={"text": text, "session": session})
+    def route(text, session="", spoke_ms_ago=0, seen_ms_ago=10_000):
+        # As the clients send it: the phrase began spoke_ms_ago, and the
+        # client has had the dialog d1 for seen_ms_ago.
+        body = {
+            "text": text,
+            "session": session,
+            "spoke_ms_ago": spoke_ms_ago,
+            "dialog_seen": {"w": {"id": "d1", "ms_ago": seen_ms_ago}},
+        }
+        r = client.post("/api/voice/route", json=body)
         assert r.status_code == 200, r.text
         return r.json()
 
@@ -756,6 +764,36 @@ def test_voice_route_answers_read_the_dialog_route(env, monkeypatch):
     got = route("yes, always", "w")
     assert (got["dialog_id"], got["keys"]) == ("d1", ["2"])
     assert got["say"] == "Answered always on worker."
+    # Begun before the dialog was there (R8-bis): nothing to press.
+    got = route("yes, always", "w", spoke_ms_ago=1500, seen_ms_ago=500)
+    assert got["kind"] == "early" and got["dialog_id"] == "d1" and "keys" not in got
+    assert got["say"] == "worker asked just now: say your answer again."
+    # An older client (no timing fields at all): never pressed for.
+    r = client.post("/api/voice/route", json={"text": "yes", "session": "w"})
+    assert r.status_code == 200 and r.json()["kind"] == "early"
+    # A sighting of ANOTHER dialog id (the one before this): no sighting.
+    r = client.post(
+        "/api/voice/route",
+        json={
+            "text": "yes",
+            "session": "w",
+            "spoke_ms_ago": 0,
+            "dialog_seen": {"w": {"id": "d0", "ms_ago": 60_000}},
+        },
+    )
+    assert r.json()["kind"] == "early" and r.json()["early_ms"] is None
+    # The client's clock an hour off (spoke_at): only the ages are compared.
+    r = client.post(
+        "/api/voice/route",
+        json={
+            "text": "yes",
+            "session": "w",
+            "spoke_ms_ago": 500,
+            "spoke_at": 1,
+            "dialog_seen": {"w": {"id": "d1", "ms_ago": 2000}},
+        },
+    )
+    assert r.json()["keys"] == ["1"]
     got = route("what is it asking", "w")
     assert got["say"] == "worker: Run ls? It wants to run: ls. Say yes, no, or always."
 

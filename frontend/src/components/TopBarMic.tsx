@@ -108,6 +108,7 @@ import {
   recognizerErrorLine,
   routePhrase,
   runVoiceCommand,
+  dialogSeen,
   saveVoicePrefs,
   sayAllMismatch,
   syncSayAll,
@@ -524,6 +525,15 @@ export function TopBarMic() {
 
   // Settings → Voice edits the same prefs: follow it.
   useEffect(() => onVoicePrefs((p) => setPrefsState(p)), []);
+  // When this page first had each session's dialog (lib/voiceDesktop
+  // dialogSeen, the R8-bis rule): every rows poll's `asking.dialog_id`.
+  useEffect(() => {
+    const feed = () => dialogSeen.rows(queryClient.getQueryData<Instance[]>(["instances"]) || []);
+    feed();
+    return queryClient.getQueryCache().subscribe((ev) => {
+      if (ev.type === "updated" && ev.query.queryKey[0] === "instances") feed();
+    });
+  }, []);
   const setPrefs = (p: VoicePrefs) => {
     setPrefsState(p);
     saveVoicePrefs(p);
@@ -818,7 +828,7 @@ export function TopBarMic() {
         halt: () => {
           if (live.current === d) halt();
         },
-        route: async (text) => {
+        route: async (text, spokeAt) => {
           const session = opts.title || useUi.getState().focused || "";
           // The pop-up's own words ("type something" on Claude's question
           // prompt opens that field): listen again, into the field.
@@ -829,10 +839,12 @@ export function TopBarMic() {
             }, 150);
             return "end";
           }
-          const reply = await routePhrase(text, session);
+          // spokeAt: when the phrase began — a dialog is answered only by
+          // words begun after it was there (lib/voiceDesktop ANSWER_AFTER_MS).
+          const reply = await routePhrase(text, session, undefined, spokeAt);
           if (reply.kind === "prompt") return false;
           if (reply.kind === "hush") return "hush";
-          await routed(reply, text, session);
+          await routed(reply, text, session, spokeAt);
           return reply.kind === "stop" || reply.kind === "off" || reply.kind === "cancel" ? "end" : true;
         },
         // The next message: the text box still, else the ask pop-up's field
@@ -873,6 +885,9 @@ export function TopBarMic() {
         // A streamed phrase's end always comes: one taken from its guess by
         // "over" ignores its late words until then (never typed or sent twice).
         endsSurely: () => r === serverRec && serverRec.streaming,
+        // When the phrase being recorded began (the server recognizer's
+        // first loud block; Web Speech can't say).
+        spokeAt: () => (r === serverRec ? serverRec.spokeAt : 0),
       },
       { hint: opts.hint, continuous }
     );
@@ -909,11 +924,11 @@ export function TopBarMic() {
           if (live.current === d) armIdle();
         },
         // Each phrase is typed as it arrives — also the tail while finishing.
-        onFinal: (t) => {
+        onFinal: (t, at) => {
           if (live.current !== d) return;
           armIdle();
           voiceMark("commit");
-          void d.heard(t);
+          void d.heard(t, at);
         },
         // Streaming: each chunk's committed words and unsure tail, typed as
         // you speak and corrected once per answer; a phrase's end; the tail
@@ -927,8 +942,8 @@ export function TopBarMic() {
         },
         // A phrase's end: its last words, and the accurate final when the
         // server heard the phrase otherwise (the whole phrase retyped to it).
-        onFlush: (t, final) => {
-          if (live.current === d) void d.flush(t, final);
+        onFlush: (t, final, at) => {
+          if (live.current === d) void d.flush(t, final, at);
         },
         onPartial: (t) => {
           if (live.current === d) d.unsure(t);
@@ -1083,7 +1098,7 @@ export function TopBarMic() {
 
   /** `session`: the one the phrase was routed for (the focused one, or the
    * one hands-free listening read out) — an answer without a title is its. */
-  const routed = async (r: RouteReply, text: string, session: string) => {
+  const routed = async (r: RouteReply, text: string, session: string, spokeAt?: number) => {
     // Numbered sessions, answers and questions (lib/voiceDesktop).
     const handled = await runVoiceCommand(r, text, {
       railOrder: () => useUi.getState().railOrder,
@@ -1096,7 +1111,7 @@ export function TopBarMic() {
         say(line, true);
         queue.say(line);
       },
-      route: routePhrase,
+      route: (t, s, at) => routePhrase(t, s, undefined, at),
       approveDialogs: () => refreshCfg().then((c) => !!c.approve_dialogs),
       activity: liveActivity,
       replies: () => prefsRef.current.replies !== "off",
@@ -1104,7 +1119,7 @@ export function TopBarMic() {
         tracker.sent(title, wantSay);
         questions.delete(title);
       },
-    });
+    }, spokeAt);
     if (handled) return;
     switch (r.kind) {
       case "switch":

@@ -25,7 +25,13 @@
  *     seam (no blocks) is not quiet, so a breath after "over" never sends
  *     mid-sentence; the pre-roll never repeats audio a phrase already sent
  *     (it starts at the last phrase's end); the microphone asks for echo
- *     cancellation and noise suppression explicitly. */
+ *     cancellation and noise suppression explicitly;
+ *  9. (cycle 3, R8-bis) a dialog is answered only by words BEGUN at least
+ *     ANSWER_AFTER_MS after this page first had it: each phrase carries when
+ *     it began (the server recognizer's first loud block) to the router
+ *     (`spoke_ms_ago`, `spoke_at`, `dialog_seen`), and the page refuses an
+ *     answer begun sooner — the server's `early` is said, nothing pressed;
+ *     each page opens its streams with its own `client` id. */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -40,7 +46,16 @@ import {
   Confirmer,
   LiveDictation,
   OVER_EARLY_QUIET_MS,
+  ANSWER_AFTER_MS,
+  DialogSeen,
+  SPOKE_LEAD_MS,
   SpeechQueue,
+  VOICE_CLIENT_ID,
+  earlyLine,
+  routePhrase,
+  runVoiceCommand,
+  type CommandDeps,
+  type RouteReply,
   TALK_DEBOUNCE_MS,
   TAP_HOLD_MS,
   finalClock,
@@ -67,6 +82,7 @@ import {
   withPreRoll,
 } from "../lib/voiceMic";
 import { code, src } from "./sourceText";
+import { api } from "../api/client";
 
 const mocks = vi.hoisted(() => ({
   apiRaw: vi.fn(),
@@ -1127,5 +1143,185 @@ describe("the desktop asks for echo cancellation and noise suppression (cycle 2,
     await mic.get();
     expect(gum).toHaveBeenCalledWith({ audio: { echoCancellation: true, noiseSuppression: true } });
     mic.release();
+  });
+});
+
+// --- 9. R8-bis: an answer said before its dialog was there ------------------------- //
+
+describe("a dialog is answered only by words begun after it was there (R8-bis)", () => {
+  function deps(over: Partial<CommandDeps> = {}) {
+    const said: string[] = [];
+    const d: CommandDeps = {
+      railOrder: () => ["t1", "t2"],
+      focused: () => "t1",
+      select: () => {},
+      name: (t) => ({ t1: "Login fix", t2: "Billing" })[t] || t,
+      caption: () => {},
+      announce: (l) => void said.push(l),
+      route: vi.fn(async () => ({ kind: "prompt" }) as RouteReply),
+      approveDialogs: async () => true,
+      activity: () => "clarify",
+      replies: () => true,
+      submitted: () => {},
+      ...over,
+    };
+    return { d, said };
+  }
+  const YES: RouteReply = { kind: "answer", choice: "yes", title: "t1", dialog_id: "d1", keys: ["1"], say: "Answered yes on Login fix." };
+
+  it("DialogSeen: the first sighting of an id holds until another (or none) is seen", () => {
+    let t = 1000;
+    const seen = new DialogSeen(() => t);
+    seen.note("t1", "d1");
+    t = 2000;
+    seen.note("t1", "d1");
+    expect(seen.at("t1", "d1")).toBe(1000);
+    expect(seen.inTime("t1", "d1", 1000 + ANSWER_AFTER_MS)).toBe(true);
+    expect(seen.inTime("t1", "d1", 1000 + ANSWER_AFTER_MS - 1)).toBe(false);
+    expect(seen.inTime("t1", "d1", undefined)).toBe(false);
+    expect(seen.inTime("t1", "d0", 5000)).toBe(false);
+    expect(seen.body()).toEqual({ t1: { id: "d1", ms_ago: 1000 } });
+    // The rows: an id when they carry it. A row asking nothing clears only a
+    // sighting the rows confirmed (a row lags a sub-agent's prompt).
+    seen.rows([
+      { title: "t1", activity: "working", asking: null },
+      { title: "t2", activity: "clarify", asking: { kind: "dialog", dialog_id: "d7" } },
+      { title: "t3", activity: "clarify", asking: { kind: "dialog", dialog_id: null } },
+    ]);
+    expect(seen.at("t1", "d1")).toBe(1000);
+    expect(seen.at("t2", "d7")).toBe(2000);
+    seen.rows([{ title: "t2", activity: "idle", asking: null }]);
+    expect(seen.at("t2", "d7")).toBe(0);
+    seen.note("t1", null);
+    seen.note("t2", "d7");
+    expect(seen.body()).toEqual({ t2: { id: "d7", ms_ago: 0 } });
+    // A new id is a new dialog: its own first sighting.
+    t = 3000;
+    seen.note("t2", "d8");
+    expect(seen.at("t2", "d8")).toBe(3000);
+  });
+
+  it("the judge's case: a 'yes' begun before the page had the dialog presses nothing — the early line instead", async () => {
+    const seen = new DialogSeen();
+    seen.note("t1", "d1");
+    const at = seen.at("t1", "d1");
+    mocks.instApi.mockResolvedValue({ ok: true });
+    const { d, said } = deps();
+    for (const spoke of [at - 750, at, at + ANSWER_AFTER_MS - 1, undefined]) {
+      await runVoiceCommand(YES, "yes", d, spoke, seen);
+    }
+    expect(mocks.instApi).not.toHaveBeenCalled();
+    expect(said).toEqual(Array(4).fill(earlyLine("Login fix")));
+    // Begun after it was there: answered.
+    await runVoiceCommand(YES, "yes", d, at + ANSWER_AFTER_MS, seen);
+    expect(mocks.instApi).toHaveBeenCalledWith("t1", "/answer", { json: { keys: ["1"], dialog_id: "d1", by: "user" } });
+    // Answered: the next prompt — even an identical one — is a new sighting.
+    expect(seen.at("t1", "d1")).toBe(0);
+  });
+
+  it("a dialog the page never had (first known from the router's own answer) is not answered — and is known from then", async () => {
+    const seen = new DialogSeen();
+    const { d, said } = deps();
+    await runVoiceCommand({ ...YES, title: "t2", dialog_id: "d5" }, "billing yes", d, Date.now() - 100, seen);
+    expect(mocks.instApi).not.toHaveBeenCalled();
+    expect(said).toEqual([earlyLine("Billing")]);
+    expect(seen.at("t2", "d5")).toBeGreaterThan(0);
+  });
+
+  it("the server's early: said, nothing pressed, the dialog noted", async () => {
+    const seen = new DialogSeen();
+    const { d, said } = deps();
+    const r: RouteReply = { kind: "early", title: "t2", name: "Billing", dialog_id: "d3", say: "Billing asked just now: say your answer again.", early_ms: 420 };
+    expect(await runVoiceCommand(r, "billing yes", d, Date.now(), seen)).toBe(true);
+    expect(said).toEqual(["Billing asked just now: say your answer again."]);
+    expect(mocks.instApi).not.toHaveBeenCalled();
+    expect(seen.at("t2", "d3")).toBeGreaterThan(0);
+  });
+
+  it("an index-only answer asks again WITH the phrase's start", async () => {
+    const seen = new DialogSeen();
+    const route = vi.fn(async () => ({ kind: "early", title: "t2", dialog_id: "d9", say: "Billing asked just now: say your answer again." }) as RouteReply);
+    const { d, said } = deps({ route });
+    await runVoiceCommand({ kind: "answer", choice: "yes", index: 2 }, "session two yes", d, 12345, seen);
+    expect(route).toHaveBeenCalledWith("session two yes", "t2", 12345);
+    expect(said).toEqual(["Billing asked just now: say your answer again."]);
+    expect(mocks.instApi).not.toHaveBeenCalled();
+  });
+
+  it("routePhrase sends when the phrase began (an age and this page's clock) and the page's sightings", async () => {
+    const call = api as unknown as ReturnType<typeof vi.fn>;
+    call.mockReset();
+    call.mockResolvedValue({ kind: "prompt" });
+    const seen = new DialogSeen();
+    seen.note("t1", "d1");
+    const spoke = Date.now() - 1500;
+    await routePhrase("yes", "t1", undefined, spoke, seen);
+    const json = call.mock.calls[0][1].json;
+    expect(json.spoke_at).toBe(spoke);
+    expect(json.spoke_ms_ago).toBeGreaterThanOrEqual(1500);
+    expect(json.spoke_ms_ago).toBeLessThan(2500);
+    expect(json.dialog_seen.t1.id).toBe("d1");
+    // Without either: the body is as before.
+    await routePhrase("fix it", "t1", undefined, undefined, new DialogSeen());
+    expect(call.mock.calls[1][1]).toEqual({ json: { text: "fix it", session: "t1" } });
+    call.mockReset();
+  });
+
+  it("LiveDictation hands the router when the phrase began: the recognizer's word, else its first words' start, else the early bound", async () => {
+    const got: Array<number | undefined> = [];
+    let rec = 0;
+    const d = new LiveDictation(session(), {
+      caption: () => {},
+      halt: () => {},
+      route: async (_t, at) => {
+        got.push(at);
+        return true;
+      },
+      activity: () => "idle",
+      replies: () => false,
+      submitted: () => {},
+      spokeAt: () => rec,
+    }, { continuous: true });
+    const t0 = Date.now();
+    // 1. the recognizer says (the phrase's end carries it).
+    await d.flush("yes", undefined, t0 - 4000);
+    expect(got[0]).toBe(t0 - 4000);
+    // 2. streamed words first: the start noted with them (the recognizer's
+    // phrase under way) — the earlier of that and the end's own word.
+    rec = t0 - 900;
+    await d.stream("yes", "");
+    rec = t0 + 5000; // the NEXT phrase began meanwhile: not this one's
+    await d.flush("", undefined);
+    expect(got[1]).toBe(t0 - 900);
+    // 3. nothing known: the early bound — no later than SPOKE_LEAD_MS before
+    // the previous phrase's end, nor before the dictation itself began.
+    rec = 0;
+    const before = Date.now();
+    await d.heard("no");
+    expect(got[2]).toBe(Math.max(t0, got[2] as number));
+    expect(got[2]).toBeLessThanOrEqual(Math.max(t0 + 50, before - SPOKE_LEAD_MS + 50));
+  });
+
+  it("wired: TopBarMic routes with the phrase's start and feeds the sightings from the rows", () => {
+    const MIC = code("components/TopBarMic.tsx");
+    expect(MIC).toContain("routePhrase(text, session, undefined, spokeAt)");
+    expect(MIC).toContain("await routed(reply, text, session, spokeAt)");
+    expect(MIC).toContain("spokeAt: () => (r === serverRec ? serverRec.spokeAt : 0)");
+    expect(MIC).toContain("void d.flush(t, final, at)");
+    expect(MIC).toContain("void d.heard(t, at)");
+    expect(MIC).toContain("route: (t, s, at) => routePhrase(t, s, undefined, at)");
+    expect(MIC).toContain('dialogSeen.rows(queryClient.getQueryData<Instance[]>(["instances"]) || [])');
+    const VD = code("lib/voiceDesktop.ts");
+    expect(VD).toContain("hh.onFlush?.(wordsOf(r.j.committed), final || undefined, c.spokeAt || undefined)");
+    expect(VD).toContain("if (text) hh.onFinal(text, spokeAt || undefined)");
+    expect(VD).toContain("if (d?.id) dialogSeen.note(title, d.id)");
+  });
+});
+
+describe("each page opens its streams with its own client id", () => {
+  it("random once per page load, sent with every POST /api/voice/stream", () => {
+    expect(VOICE_CLIENT_ID).toMatch(/^d-[0-9a-z-]{8,}$/);
+    expect(VOICE_CLIENT_ID.length).toBeLessThanOrEqual(64);
+    expect(code("lib/voiceDesktop.ts")).toContain("body: JSON.stringify({ lang: langTag(), client: VOICE_CLIENT_ID })");
   });
 });
