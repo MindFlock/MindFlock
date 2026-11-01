@@ -6481,6 +6481,28 @@ def _enter_on_agent(inst, title: str, *, say: bool = False, extra: str = ""):
     return "sent", None
 
 
+def _dialog_or_limit_on_screen(inst, name: str) -> bool:
+    """:func:`_dialog_on_screen`'s verdict plus the usage-limit menu (its
+    "❯ 1. …" options take a typed digit too), from ONE capture of ``name``'s
+    visible screen. A capture that fails is no evidence (False), as there."""
+    text, err = _agent_io.capture_screen(name)
+    if err is not None or not text:
+        return False
+    try:
+        provider = providers.resolve(getattr(inst, "Program", "") or "")
+        probe = getattr(provider, "dialog_on_screen", None)
+        if callable(probe) and probe(text):
+            return True
+    except Exception:  # noqa: BLE001 — an unresolvable CLI: still check the limit
+        pass
+    try:
+        from backend.providers.usage_limits import is_limit_screen
+
+        return is_limit_screen(text)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _dictate_on_agent(inst, title: str, text: str, erase: int):
     """One batch of a voice client's live dictation → ``(told, reason)``
     like :func:`_enter_on_agent`: take back ``erase`` characters, then type
@@ -6503,14 +6525,18 @@ def _dictate_on_agent(inst, title: str, text: str, erase: int):
     name = _live_session_name(tmux.to_mindflock_tmux_name(title))
     if name is None:
         return False, _ENTER_NOT_RUNNING
+    # The reading is the memoized one (≤ _PROBE_TTL old): a fresh probe asks
+    # Claude's `claude agents --json` (0.3-1 s), which stalled every other
+    # dictation batch. What a fresh reading would add is caught by the
+    # screen read below, taken at send time.
     try:
-        activity = _agent_activity(inst, title)
+        activity = _agent_activity_cached(inst, title)
     except Exception:  # noqa: BLE001 — unknown reads as "don't type blind"
         activity = "unknown"
     if (
         activity in _PB_DIALOG_ACTIVITIES
         or activity == "unknown"
-        or _dialog_on_screen(inst, name)
+        or _dialog_or_limit_on_screen(inst, name)
     ):
         return False, _SEND_IN_DIALOG
     _note_human_input(title)

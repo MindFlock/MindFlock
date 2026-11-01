@@ -312,3 +312,44 @@ def test_live_tmux_round_trip(tmp_path, monkeypatch):
     for ch in typed:
         field = field[:-1] if ch == "\x7f" else field + ch
     assert field == "fix the bag;é "
+
+
+# --------------------------------------------------------------------------- #
+# The gate reads the memoized activity + one fresh screen (no CLI probe)       #
+# --------------------------------------------------------------------------- #
+LIMIT_MENU = (
+    "You've hit your usage limit · resets 4pm\n"
+    "\n"
+    "❯ 1. Stop and wait for limit to reset\n"
+    "  2. Upgrade your plan\n"
+)
+
+
+def test_a_usage_limit_menu_on_screen_is_409(client, screens, tmux_calls, monkeypatch):
+    """The limit menu's "❯ 1." takes a typed digit: refused on the screen read
+    alone, while the memoized reading still says working."""
+    monkeypatch.setattr(server, "_PROBE_CACHE", {})
+    monkeypatch.setattr(server, "_agent_activity", lambda i, t: "working")
+    screens["t1"] = LIMIT_MENU
+    r = _send(client, erase=0, text="1 ")
+    assert r.status_code == 409 and r.json()["in_dialog"] is True
+    assert tmux_calls == []
+
+
+def test_batches_reuse_the_memoized_reading(client, screens, tmux_calls, monkeypatch):
+    """A fresh activity probe asks Claude's `claude agents --json` (0.3-1 s);
+    back-to-back dictation batches share the memoized reading and only the
+    screen is read each time."""
+    monkeypatch.setattr(server, "_PROBE_CACHE", {})
+    probes = []
+
+    def probe(i, t):
+        probes.append(t)
+        return "working"
+
+    monkeypatch.setattr(server, "_agent_activity", probe)
+    for text in ("fix ", "the ", "tests "):
+        assert _send(client, erase=0, text=text).status_code == 200
+    assert len(probes) <= 1
+    assert len(tmux_calls) == 3
+    assert screens["_captured"].count("agent_t1") >= 3
