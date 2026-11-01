@@ -1179,6 +1179,12 @@ export async function submitDraft(title: string, name: string, say: boolean): Pr
  * {@link ANSWER_AFTER_MS}. */
 export const SPOKE_LEAD_MS = 2000;
 
+/** The caption when a dialog came up on `name` while its message was being
+ * typed (MF2): `words`, the rest of the phrase, were not typed (nor
+ * answered: the router took them for a prompt). */
+export const dialogStopLine = (name: string, words: string) =>
+  name + " asked something — " + (words ? "“" + words + "” not typed" : "nothing more typed") + "; the words before it stay";
+
 /** One dictation into one target: phrases are carried out in order (the
  * first may wait on the router), each typed as it comes. `target` null: no
  * session is focused — the first phrase can still be a command. */
@@ -1226,6 +1232,13 @@ export class LiveDictation {
   /** When the phrase the step under way acts on began: sent with the router
    * call, so a dialog is answered only by words begun after it was there. */
   private stepSpoke = 0;
+  /** When the message under way began (ms): a dialog this page had since
+   * came up while it was being typed ({@link dialogOn}). */
+  private msgAt = Date.now();
+  /** A dialog came up on the session while this message's words were going
+   * in (MF2): the phrase under way types nothing more — its end hands the
+   * rest to the router ({@link heldBack}). */
+  private dialogHit = false;
 
   constructor(
     private target: DictTarget | null,
@@ -1572,15 +1585,23 @@ export class LiveDictation {
         if (await this.put(out.text, out.route !== false, out.erase, out.guess)) this.show();
         return;
       case "erase":
+        if (out.text && t && this.dialogBlocks(t)) {
+          this.end(dialogStopLine(t.name, ""), true, "stopped");
+          return;
+        }
         t?.erase(out.text);
         this.hooks.caption("Disregarded — go on", true);
         this.hooks.confirm?.("cleared");
         return;
       case "hush":
-        if (out.erase && t && !this.keys(t, out.erase, "")) return;
+        if (out.erase && t && !this.dialogBlocks(t) && !this.keys(t, out.erase, "")) return;
         this.hushed();
         return;
       case "dropped":
+        if (out.text && t && this.dialogBlocks(t)) {
+          this.end(dialogStopLine(t.name, ""), true, "stopped");
+          return;
+        }
         t?.erase(out.text);
         this.end(out.text ? "Disregarded" : "", false, "stopped");
         return;
@@ -1624,9 +1645,19 @@ export class LiveDictation {
           else this.next();
           return;
         }
+        // A dialog is up: Enter would press it.
+        if (this.dialogBlocks(t)) {
+          await this.heldBack(t, "");
+          return;
+        }
         this.acted = true;
         this.hooks.caption("Sending to " + t.name + "…", true);
         if (typedNow) await new Promise((r) => setTimeout(r, SUBMIT_SETTLE_MS));
+        if (this.done) return;
+        if (this.dialogBlocks(t)) {
+          await this.heldBack(t, "");
+          return;
+        }
         const say = this.hooks.replies();
         const r = await submitDraft(t.title, t.name, say);
         if (r.ok) this.hooks.submitted(t.title, say);
@@ -1661,6 +1692,8 @@ export class LiveDictation {
   private next(line?: string | null): void {
     if (this.done) return;
     this.dict.next();
+    this.msgAt = Date.now();
+    this.dialogHit = false;
     const n = this.hooks.retarget?.();
     if (n) {
       this.target = n.target;
@@ -1694,9 +1727,16 @@ export class LiveDictation {
   private async put(text: string, route = true, erase = "", guess = false): Promise<boolean> {
     const t = this.target;
     if (guess) {
-      if (!t || (!this.dict.typed && t.kind !== "field" && dialogUp(this.hooks.activity(t.title)))) return true;
+      if (!t) return true;
+      if (this.dialogBlocks(t)) {
+        // Words are in already: the rest of this phrase is never typed.
+        if (this.dict.typed) this.dialogHit = true;
+        return true;
+      }
       return this.keys(t, erase, text);
     }
+    // A dialog came up mid-message: not a key more — nor one taken back.
+    if (t && this.dict.typed && this.dialogBlocks(t)) return this.heldBack(t, text);
     // What stays typed once the guess is corrected: nothing — the router and
     // the dialog guard come first, with the guess already taken back.
     if (this.dict.typed.length === erase.length && t?.kind !== "field") {
@@ -1723,7 +1763,7 @@ export class LiveDictation {
         this.end("Click a session first — “" + words + "” not typed", true);
         return false;
       }
-      if (dialogUp(this.hooks.activity(t.title))) {
+      if (this.dialogBlocks(t)) {
         this.end(t.name + " is waiting on a dialog — answer it first", true);
         return false;
       }
@@ -1733,6 +1773,45 @@ export class LiveDictation {
       return false;
     }
     return this.keys(t, erase, text);
+  }
+
+  /** A dialog is up on the session words go to (MF2: typed words could
+   * answer it — Codex's "y", a digit in Claude's menus): its row says so, a
+   * dialog came up during this phrase, or this page had one there since the
+   * message began. A text box is never a dialog. */
+  private dialogBlocks(t: DictTarget): boolean {
+    if (t.kind !== "session") return false;
+    if (this.dialogHit || dialogUp(this.hooks.activity(t.title))) return true;
+    const at = dialogSeen.since(t.title);
+    return at > 0 && at >= this.msgAt;
+  }
+
+  /** MF2: a dialog came up on the session while this message was being
+   * typed. Nothing more goes into the terminal, and nothing typed is taken
+   * back (a Backspace could act on the dialog too): the words not typed yet
+   * — `rest` — go to the router, where an answer counts only if it was
+   * begun after the dialog was there; else they are dropped, and the
+   * caption says so. Listening ends — unless the router acted in a
+   * continuous dictation. Always false: nothing went in. */
+  private async heldBack(t: DictTarget, rest: string): Promise<boolean> {
+    this.dialogHit = false;
+    const words = rest.trim();
+    if (words && this.dict.routes) {
+      this.hooks.caption(this.dict.shown, true, words);
+      const routed = await this.hooks.route(words, this.stepSpoke);
+      if (routed === "hush") {
+        this.hushed();
+        return false;
+      }
+      if (routed) {
+        this.acted = true;
+        if (this.dict.continuous && routed !== "end") this.next(null);
+        else this.end(null);
+        return false;
+      }
+    }
+    this.end(dialogStopLine(t.name, words), true, "stopped");
+    return false;
   }
 
   /** The keys themselves: `erase` taken back, then `text` typed — into a
@@ -1854,9 +1933,14 @@ export const ANSWER_AFTER_MS = 300;
 /** When this page first had each session's dialog: {@link note}d from the
  * rows (`asking.dialog_id`), the dialogs read out or shown, and the
  * router's answers. The first sighting of an id is kept until another id —
- * or none — is seen. */
+ * or none — is seen: an answer (by voice, by hand, on the pop-up), a
+ * /dialog that came back empty (204), or the row leaving its dialog
+ * ({@link rows}) — so the same command asked again (the same id) is a new
+ * sighting, never answered by a "yes" begun before it. */
 export class DialogSeen {
   private seen = new Map<string, { id: string; at: number; rows?: boolean }>();
+  /** Each row's last activity ({@link rows}: a dialog → none edge). */
+  private was = new Map<string, string>();
   constructor(private now: () => number = Date.now) {}
   /** `title` has dialog `id` now ("" / null: it has none). */
   note(title: string, id: string | null | undefined): void {
@@ -1869,19 +1953,31 @@ export class DialogSeen {
     if (!cur || cur.id !== String(id)) this.seen.set(title, { id: String(id), at: this.now() });
   }
   /** The rows: a dialog's id when the row carries it. A row asking nothing
-   * clears only a sighting the rows themselves confirmed — a row lags (a
-   * sub-agent's prompt reads "working" while /dialog serves it), and
-   * clearing a fresh sighting would only make the next one later. */
+   * clears a sighting the rows themselves confirmed, and any sighting the
+   * moment the row LEAVES a dialog (clarify → working: answered, by hand or
+   * otherwise) — but not a fresh sighting under a row that never showed the
+   * dialog (a sub-agent's prompt reads "working" while /dialog serves it:
+   * clearing that every poll would refuse every answer to it). */
   rows(list: Iterable<{ title: string; activity?: string; asking?: { kind?: string; dialog_id?: string | null } | null }>): void {
     for (const r of list) {
+      const act = String(r.activity || "");
+      const was = this.was.get(r.title);
+      this.was.set(r.title, act);
       const a = r.asking;
       if (a && a.kind === "dialog") {
         if (!a.dialog_id) continue;
         this.note(r.title, a.dialog_id);
         const cur = this.seen.get(r.title);
         if (cur) cur.rows = true;
-      } else if (r.activity !== "clarify" && this.seen.get(r.title)?.rows) this.note(r.title, null);
+      } else if (r.activity !== "clarify" && (this.seen.get(r.title)?.rows || (was !== undefined && dialogUp(was) && !dialogUp(act))))
+        this.note(r.title, null);
     }
+  }
+  /** When this page first had `title`'s current dialog, whatever its id
+   * (ms; 0: none) — a dialog that came up while words were being typed
+   * stops the typing ({@link LiveDictation}). */
+  since(title: string): number {
+    return this.seen.get(title)?.at || 0;
   }
   /** When `title`'s dialog `id` was first had (ms), or 0. */
   at(title: string, id: string): number {
@@ -2138,9 +2234,18 @@ async function answer(
     } catch (err) {
       const body = (err instanceof ApiError ? err.body : null) as { dialog_changed?: boolean; dialog_answered?: boolean } | null;
       if (body?.dialog_changed) deps.announce("The prompt on " + name + " changed — say it again.");
-      else if (body?.dialog_answered) deps.announce("Already answered.");
+      else if (body?.dialog_answered) {
+        seen.note(title, null);
+        deps.announce("Already answered.");
+      }
       else deps.caption("Couldn't answer " + name + ": " + ((err as Error)?.message || "error"), true);
     }
+    return;
+  }
+  // Typed as a prompt, the answer ("1", "yes") would press a dialog that is
+  // up: never — that one is answered only through /answer above.
+  if (dialogUp(deps.activity(title)) || seen.since(title)) {
+    deps.announce(name + " is on a dialog — answer it on the screen.");
     return;
   }
   if (await questionPending(title, deps.activity(title))) {
@@ -2507,8 +2612,10 @@ export class HandsFree {
     if (!this.ready(title) || title !== x.focused()) return;
     this.begin();
     try {
-      const d = await x.fetchDialog(title).catch(() => null);
-      if (d?.id) dialogSeen.note(title, d.id);
+      const d = await x.fetchDialog(title).catch(() => undefined);
+      // None up (/dialog 204): the next one — even the same command — is new.
+      if (d === null) dialogSeen.note(title, null);
+      else if (d?.id) dialogSeen.note(title, d.id);
       if (!d || !d.parsed || !d.options.length || d.id === this.seen) return;
       if (!x.replies() || x.busy() || title !== x.focused()) return;
       this.seen = d.id;
@@ -3541,6 +3648,10 @@ export interface RecognizerHandlers {
    * unstable tail after them — so the typing corrects once per answer. When
    * set, a chunk's answer comes here instead of onWords + onPartial. */
   onStream?(committed: string, partial: string): void;
+  /** Streaming: nothing is typed in the message yet (its box is empty) —
+   * a lone command's short end-of-turn hold applies only then
+   * ({@link turnHoldMs}). Absent: taken as empty. */
+  blank?(): boolean;
   /** Streaming: a phrase ended (a pause, or finish()); its last words.
    * `final`: the whole phrase as the server's accurate model heard it — set
    * only when it differs from the fast words (absent: they stand). */
@@ -3750,8 +3861,71 @@ export function browserRecognizer(): Recognizer {
 }
 
 /** Quiet after speech that ends a clip: short, so each phrase is typed
- * soon after it is said. */
+ * soon after it is said. A streamed phrase ends on the server's verdict
+ * instead, when it gives one ({@link turnHoldMs}). */
 export const SILENCE_MS = 1100;
+/** The least quiet that ends a phrase, whatever the server's verdict says:
+ * under it a breath between two words would cut the phrase. */
+export const TURN_MIN_MS = 300;
+/** The most: a verdict that asks for more is read as this. */
+export const TURN_MAX_MS = 3000;
+
+/** The server's end-of-turn verdict on a streamed phrase (each chunk's
+ * `turn`: core/speech_turn.py) — how much quiet ends it now (`hold`, ms),
+ * why (`reason`: control, command, sentence, comma, connector, wake…), and
+ * when the audio it judged was taken (`at`, ms). */
+export interface TurnVerdict {
+  hold: number;
+  reason: string;
+  at: number;
+}
+
+/** A chunk response's `turn` ({p, hold_ms, reason}), or null (an older
+ * server, a failed verdict, anything malformed). */
+export function parseTurn(v: unknown, at: number): TurnVerdict | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as { hold_ms?: unknown; reason?: unknown };
+  const hold = Number(o.hold_ms);
+  if (!Number.isFinite(hold) || hold <= 0) return null;
+  return { hold, reason: String(o.reason || ""), at };
+}
+
+/** The quiet (ms, as the meter heard it) that ends a streamed phrase: the
+ * latest chunk's verdict — 350 after a radio word or a lone command, 900
+ * after a sentence, 1500 after a comma or a trailing "and…" — within
+ * {@link TURN_MIN_MS}..{@link TURN_MAX_MS}; {@link SILENCE_MS} without one.
+ * Never shorter than SILENCE_MS when the voice was heard after the audio
+ * the verdict judged (`loudAt` later than its `at`: it is about older
+ * words), nor for a lone command once words are typed (`blank` false: the
+ * server can't see the box — "next session" mid-message is words). */
+export function turnHoldMs(turn: TurnVerdict | null, loudAt: number, blank: boolean): number {
+  if (!turn) return SILENCE_MS;
+  let hold = turn.reason === "command" && !blank ? SILENCE_MS : turn.hold;
+  if (loudAt > turn.at) hold = Math.max(hold, SILENCE_MS);
+  return Math.min(TURN_MAX_MS, Math.max(TURN_MIN_MS, hold));
+}
+
+/** A recording's own clock on the page's (ms): a block's callback runs no
+ * sooner than its audio was recorded — later when the page is busy (a
+ * render, a flood of terminal output) — so the earliest `now − seconds
+ * recorded` seen is when the recording's second 0 was, and a late callback
+ * never makes speech look later than it began (the answer timing rule,
+ * {@link ANSWER_AFTER_MS}, reads it). {@link reset} when the count stops
+ * following time (muted: its blocks aren't counted). */
+export class RecordingClock {
+  private zero = Infinity;
+  /** A block ending `endS` seconds into the recording was handed over `now`. */
+  block(endS: number, now = Date.now()): void {
+    this.zero = Math.min(this.zero, now - endS * 1000);
+  }
+  reset(): void {
+    this.zero = Infinity;
+  }
+  /** When second `s` of the recording was, on the page's clock (ms; 0 before a block). */
+  at(s: number): number {
+    return Number.isFinite(this.zero) ? Math.round(this.zero + s * 1000) : 0;
+  }
+}
 const CLIP_MAX_MS = 12_000; // the hard cap on one clip
 const UPLOAD_TIMEOUT_MS = 45_000;
 const CLIP_RATE = 16_000; // the built-in recognizers' rate; whisper's too
@@ -3870,8 +4044,16 @@ interface Phrase {
   trimS: number;
   speechS: number;
   /** When its speech began (ms, the clock; 0: not yet) — handed over with
-   * its words ({@link RecognizerHandlers.onFlush}). */
+   * its words ({@link RecognizerHandlers.onFlush}): its first loud block on
+   * the recording's own {@link clock}. */
   spokeAt: number;
+  /** The recording's seconds on the page's clock. */
+  clock: RecordingClock;
+  /** When the meter last heard its voice (ms; 0: not yet). */
+  loudAt: number;
+  /** The latest chunk's end-of-turn verdict (null: none — clips, an older
+   * server): the quiet that ends it ({@link turnHoldMs}). */
+  turn: TurnVerdict | null;
   /** The pre-roll (16 kHz) its speech began in — sent in front of its first
    * audio ({@link PRE_ROLL_ONSET_S}); null once sent, or none. */
   pre: Float32Array | null;
@@ -4171,7 +4353,7 @@ export function serverRecognizer(
     });
   };
 
-  const sendChunk = async (c: Phrase, blob: Blob, hh: RecognizerHandlers | null) => {
+  const sendChunk = async (c: Phrase, blob: Blob, hh: RecognizerHandlers | null, takenAt = Date.now()) => {
     try {
       // With its pre-roll in front (the first chunk only; none: no wait).
       const pre = joined(c, blob);
@@ -4189,6 +4371,9 @@ export function serverRecognizer(
         self.passMs = ms;
         voicePass(ms);
       }
+      // The server's end-of-turn verdict on the words so far (absent: the
+      // fixed quiet ends the phrase, as before).
+      c.turn = parseTurn(r.j.turn, takenAt);
       const w = wordsOf(r.j.committed);
       const p = wordsOf(r.j.partial);
       if (hh.onStream) hh.onStream(w, p);
@@ -4206,12 +4391,13 @@ export function serverRecognizer(
   const pump = (c: Phrase) => {
     if (!c.stream || !c.sid || !c.heard || c.busy || c.ending || !c.rec || h === null) return;
     const min = c.sent ? chunkMinS(self.passMs) : Math.max(0, c.speechS - c.trimS) + FIRST_CHUNK_S;
+    const takenAt = Date.now();
     const blob = c.rec.take(min);
     if (!blob) return;
     c.sent = true;
     c.fresh = false;
     const hh = h;
-    run(c, () => sendChunk(c, blob, hh));
+    run(c, () => sendChunk(c, blob, hh, takenAt));
   };
 
   /** A streamed phrase is over (a pause, or finish()): the next starts
@@ -4342,6 +4528,9 @@ export function serverRecognizer(
       trimS: 0,
       speechS: 0,
       spokeAt: 0,
+      clock: new RecordingClock(),
+      loudAt: 0,
+      turn: null,
       pre: null,
     };
     // Its stream opens while the microphone and the audio engine get ready.
@@ -4391,7 +4580,6 @@ export function serverRecognizer(
     // floor that follows the quiet moments — from the room's quiet as the
     // pre-roll heard it, when there is one.
     let floor = mic.quietFloor();
-    let lastLoud = 0;
     let blockAt = 0; // the recording's time before this block
     const onLevel = (rms: number) => {
       if (cur !== c) return;
@@ -4400,13 +4588,15 @@ export function serverRecognizer(
       h?.onLevel?.(rms);
       floor = noiseFloor(floor, rms);
       const now = Date.now();
+      c.clock.block(blockAt, now);
       if (isLoud(rms, floor)) {
         if (!c.heard) {
           c.speechS = at;
-          // When it began, on the clock: this block's start — before the
-          // recording when its first moments were loud (the pre-roll holds
-          // the start: the earliest it can have begun).
-          c.spokeAt = now - Math.max(0, Math.round((blockAt - at) * 1000));
+          // When it began: this block's start on the recording's own clock
+          // (a late callback doesn't move it) — before the recording when
+          // its first moments were loud (the pre-roll holds the start: the
+          // earliest it can have begun).
+          c.spokeAt = c.clock.at(at);
           // Speech from its first moments: it began before the recording.
           if (at < PRE_ROLL_ONSET_S) {
             c.pre = pre;
@@ -4422,13 +4612,15 @@ export function serverRecognizer(
         }
         c.heard = true;
         c.fresh = true;
-        lastLoud = now;
+        c.loudAt = now;
       } else if (!c.heard && c.stream) {
         // Before the first word, keep only a lead-in (under 300 ms): the
         // stream is not sent the quiet before it.
         if (c.rec?.take()) c.trimS = blockAt;
       }
-      if (c.heard && now - lastLoud > SILENCE_MS) endClip();
+      // The quiet heard that ends it: the server's verdict on the words so
+      // far while it streams (fallen back to a clip: the fixed quiet).
+      if (c.heard && now - c.loudAt > turnHoldMs(c.stream ? c.turn : null, c.loudAt, h?.blank?.() ?? true)) endClip();
       else pump(c);
     };
     try {
@@ -4496,6 +4688,8 @@ export function serverRecognizer(
       // the start of their word, heard while the detector was counting.
       const barged = !on && Date.now() - lastBargeAt < BARGE_FRESH_MS;
       cur?.rec?.mute?.(on, barged ? 0 : BARGE_SKIP_MS / 1000, barged ? BARGE_REWIND_MS / 1000 : 0);
+      // Muted, its blocks aren't counted: the count no longer follows time.
+      cur?.clock.reset();
     },
     endPhrase() {
       if (cur?.heard && want) endClip();

@@ -48,7 +48,17 @@ import {
   OVER_EARLY_QUIET_MS,
   ANSWER_AFTER_MS,
   DialogSeen,
+  HandsFree,
+  RecordingClock,
+  SILENCE_MS,
+  TURN_MAX_MS,
+  TURN_MIN_MS,
+  dialogSeen,
+  dialogStopLine,
+  parseTurn,
+  turnHoldMs,
   SPOKE_LEAD_MS,
+  SUBMIT_SETTLE_MS,
   SpeechQueue,
   VOICE_CLIENT_ID,
   earlyLine,
@@ -1323,5 +1333,661 @@ describe("each page opens its streams with its own client id", () => {
     expect(VOICE_CLIENT_ID).toMatch(/^d-[0-9a-z-]{8,}$/);
     expect(VOICE_CLIENT_ID.length).toBeLessThanOrEqual(64);
     expect(code("lib/voiceDesktop.ts")).toContain("body: JSON.stringify({ lang: langTag(), client: VOICE_CLIENT_ID })");
+  });
+});
+
+// --- 10. cycle 4: no typing into a dialog, fresh sightings, the recording's clock, the server's turn --- //
+
+describe("a dialog that comes up mid-message stops the typing at once (cycle 4, MF2)", () => {
+  afterEach(() => {
+    dialogSeen.note("t1", null);
+  });
+  /** A continuous dictation into session t1 ("Login fix"); `act` its row. */
+  function dictation(
+    o: {
+      route?: (w: string, at?: number) => Promise<boolean | "hush" | "end">;
+      continuous?: boolean;
+      target?: DictTarget & { keys: string[] };
+      hooks?: Partial<LiveHooks>;
+    } = {}
+  ) {
+    const t = o.target ?? session();
+    const st = { act: "working", spoke: 0 };
+    const routed: Array<[string, number | undefined]> = [];
+    const captions: string[] = [];
+    const d = new LiveDictation(
+      t,
+      {
+        caption: (l) => void captions.push(l),
+        halt: () => {},
+        route: async (w, at) => {
+          routed.push([w, at]);
+          return o.route ? o.route(w, at) : false;
+        },
+        activity: () => st.act,
+        replies: () => false,
+        submitted: () => {},
+        spokeAt: () => st.spoke,
+        ...o.hooks,
+      },
+      { continuous: o.continuous ?? true }
+    );
+    return { t, st, d, routed, captions, last: () => captions[captions.length - 1] };
+  }
+  const backspaced = (keys: string[]) => keys.some((k) => k.startsWith("⌫"));
+
+  it("the row goes clarify mid-phrase: not a word more is typed, the rest goes to the router, nothing is taken back", async () => {
+    const x = dictation();
+    await x.d.heard("please fix the login");
+    x.st.spoke = Date.now() - 400; // phrase 2 began before the dialog
+    await x.d.stream("and add", "");
+    const before = x.t.keys.join("");
+    expect(before).toBe("please fix the login and add");
+    x.st.act = "clarify"; // Codex's approval came up: "y" or a digit would answer it
+    await x.d.stream("a test", "");
+    await x.d.stream("", "yes");
+    expect(x.t.keys.join("")).toBe(before);
+    await x.d.flush("", undefined);
+    expect(x.t.keys.join("")).toBe(before);
+    expect(backspaced(x.t.keys)).toBe(false);
+    // The rest went to the router — with the phrase's own start (before the
+    // dialog: the answer timing rule refuses it there).
+    expect(x.routed[1]).toEqual(["a test", x.st.spoke]);
+    expect(x.last()).toBe(dialogStopLine("Login fix", "a test"));
+    expect(x.d.active).toBe(false);
+  });
+
+  it("a dialog only this page saw (the pop-up, /dialog: the row still says working) stops it too", async () => {
+    const x = dictation();
+    await x.d.heard("please fix the login");
+    await x.d.stream("and add", "");
+    const before = x.t.keys.join("");
+    dialogSeen.note("t1", "d-subagent");
+    await x.d.stream("a test", "");
+    await x.d.flush("", undefined);
+    expect(x.t.keys.join("")).toBe(before);
+    expect(x.last()).toBe(dialogStopLine("Login fix", "a test"));
+  });
+
+  it("the router acts on the rest (an answer, the early line): nothing typed, a continuous dictation goes on", async () => {
+    const x = dictation({ route: async (w) => w === "yes" });
+    await x.d.heard("please fix the login");
+    x.st.act = "clarify";
+    await x.d.heard("yes");
+    expect(x.t.keys).toEqual(["please fix the login "]);
+    expect(x.routed.map((r) => r[0])).toEqual(["please fix the login", "yes"]);
+    expect(x.d.active).toBe(true);
+  });
+
+  it("a correction the dialog would read as keys: no Backspace, no retype", async () => {
+    const x = dictation();
+    await x.d.heard("please fix the login");
+    await x.d.stream("", "and ad");
+    const before = x.t.keys.join("");
+    x.st.act = "clarify";
+    await x.d.flush("", "and add a test");
+    expect(x.t.keys.join("")).toBe(before);
+    expect(backspaced(x.t.keys)).toBe(false);
+  });
+
+  it("“over” with a dialog up presses no Enter; “disregard” and Escape send no Backspace", async () => {
+    mocks.instApi.mockResolvedValue({ ok: true });
+    const a = dictation();
+    await a.d.heard("please fix the login");
+    a.st.act = "clarify";
+    await a.d.heard("over");
+    expect(mocks.instApi).not.toHaveBeenCalled();
+    expect(a.last()).toBe(dialogStopLine("Login fix", ""));
+    for (const how of ["disregard", "escape"]) {
+      const b = dictation();
+      await b.d.heard("please fix the login");
+      b.st.act = "clarify";
+      if (how === "disregard") await b.d.heard("disregard");
+      else await b.d.cancel();
+      expect(backspaced(b.t.keys)).toBe(false);
+      expect(b.last()).toBe(dialogStopLine("Login fix", ""));
+      expect(b.d.active).toBe(false);
+    }
+  });
+
+  it("a sighting from before the message began (the row back to working) does not stop it", async () => {
+    dialogSeen.note("t1", "d-old");
+    await new Promise((r) => setTimeout(r, 5));
+    const x = dictation();
+    await x.d.heard("please fix the login");
+    await x.d.heard("and add a test");
+    expect(x.t.keys).toEqual(["please fix the login ", "and add a test "]);
+  });
+
+  it("a usage-limit menu (limit) mid-message stops it the same way", async () => {
+    const x = dictation();
+    await x.d.heard("please fix the login");
+    x.st.act = "limit"; // "1. Wait / 2. Upgrade": a digit would pick one
+    await x.d.heard("and add 2 tests");
+    expect(x.t.keys).toEqual(["please fix the login "]);
+    expect(x.last()).toBe(dialogStopLine("Login fix", "and add 2 tests"));
+    expect(x.d.active).toBe(false);
+  });
+
+  it("a text box is never a dialog: a clarify row and a fresh sighting type on", async () => {
+    const keys: string[] = [];
+    const box: DictTarget & { keys: string[] } = {
+      kind: "field",
+      title: "t1",
+      name: "Ask box",
+      keys,
+      type: (t) => keys.push(t) > 0,
+      erase: (t) => keys.push("⌫" + t) > 0,
+    };
+    const x = dictation({ target: box });
+    x.st.act = "clarify";
+    await x.d.heard("use the staging");
+    dialogSeen.note("t1", "d-fresh");
+    await x.d.heard("database please");
+    expect(keys).toEqual(["use the staging ", "database please "]);
+    expect(x.routed).toEqual([]); // a box's words never go to the router
+    expect(x.d.active).toBe(true);
+  });
+
+  it("moved to another session by “over”: its message clock starts afresh, so a sighting there from before the switch does not stop it", async () => {
+    vi.useFakeTimers();
+    mocks.instApi.mockResolvedValue({ ok: true });
+    const t2 = session();
+    t2.title = "t2";
+    t2.name = "Docs";
+    const x = dictation({ hooks: { retarget: () => ({ target: t2, hint: "" }) } });
+    await x.d.heard("please fix the login");
+    dialogSeen.note("t2", "d-earlier"); // seen on t2 while t1's message was typed
+    await vi.advanceTimersByTimeAsync(1000);
+    await x.d.heard("over");
+    expect(mocks.instApi).toHaveBeenCalledTimes(1); // t1's message went
+    await vi.advanceTimersByTimeAsync(1000);
+    await x.d.heard("now update the readme");
+    expect(t2.keys).toEqual(["now update the readme "]);
+    expect(x.d.active).toBe(true);
+    dialogSeen.note("t2", null);
+  });
+
+  it("a guess with nothing typed yet while a dialog is up types nothing; the phrase's end takes the first-phrase path", async () => {
+    const x = dictation();
+    x.st.act = "clarify";
+    await x.d.stream("", "yes please");
+    expect(x.t.keys).toEqual([]);
+    await x.d.flush("yes please", undefined);
+    expect(x.t.keys).toEqual([]);
+    expect(x.routed.map((r) => r[0])).toEqual(["yes please"]);
+    // Nothing was typed: the dialog guard's line, not the mid-message one.
+    expect(x.last()).toBe("Login fix is waiting on a dialog — answer it first");
+  });
+
+  it("the router hushes the held-back rest: the voice stops, nothing typed or taken back, no stop line", async () => {
+    let hushes = 0;
+    const x = dictation({ route: async (w) => (w === "stop talking" ? "hush" : false), hooks: { hush: () => void hushes++ } });
+    await x.d.heard("please fix the login");
+    x.st.act = "clarify";
+    await x.d.heard("stop talking");
+    expect(hushes).toBe(1);
+    expect(x.t.keys).toEqual(["please fix the login "]);
+    expect(x.captions.some((c) => c.includes("asked something"))).toBe(false);
+  });
+
+  it("the router ends listening on the held-back rest (“end”): a continuous dictation stops instead of going on", async () => {
+    const x = dictation({ route: async (w) => (w === "voice off" ? "end" : false) });
+    await x.d.heard("please fix the login");
+    x.st.act = "clarify";
+    await x.d.heard("voice off");
+    expect(x.d.active).toBe(false);
+    expect(x.t.keys).toEqual(["please fix the login "]);
+    expect(x.captions.some((c) => c.includes("asked something"))).toBe(false);
+  });
+
+  it("“over”: a dialog that comes up during the settle before Enter presses nothing; a dictation ended there sends nothing", async () => {
+    vi.useFakeTimers();
+    mocks.instApi.mockResolvedValue({ ok: true });
+    const a = dictation();
+    await a.d.heard("please fix the login");
+    const going = a.d.heard("and add a test over");
+    await vi.advanceTimersByTimeAsync(SUBMIT_SETTLE_MS / 2);
+    expect(a.last()).toBe("Sending to Login fix…");
+    a.st.act = "clarify"; // came up while the keys settled
+    await vi.advanceTimersByTimeAsync(SUBMIT_SETTLE_MS);
+    await going;
+    expect(mocks.instApi).not.toHaveBeenCalled();
+    // The words typed before stay — none taken back.
+    expect(a.t.keys.join("").trim()).toBe("please fix the login and add a test");
+    expect(backspaced(a.t.keys)).toBe(false);
+    expect(a.routed.map((r) => r[0])).toEqual(["please fix the login"]); // no rest: the router isn't asked
+    expect(a.last()).toBe(dialogStopLine("Login fix", ""));
+
+    const b = dictation();
+    await b.d.heard("please fix the login");
+    const sending = b.d.heard("and add a test over");
+    await vi.advanceTimersByTimeAsync(SUBMIT_SETTLE_MS / 2);
+    b.d.fail("The microphone went away");
+    await vi.advanceTimersByTimeAsync(SUBMIT_SETTLE_MS);
+    await sending;
+    expect(mocks.instApi).not.toHaveBeenCalled();
+  });
+
+  it("a hush correcting a typed guess while a dialog is up: the voice stops, but no Backspace goes", async () => {
+    let hushes = 0;
+    const x = dictation({ hooks: { hush: () => void hushes++ } });
+    await x.d.heard("please fix the login");
+    await x.d.stream("", "please"); // a guess, typed
+    await x.d.stream("please", "be quiet"); // held whole: may be a hush
+    const before = x.t.keys.slice();
+    expect(before[before.length - 1]).toBe("please");
+    x.st.act = "clarify";
+    await x.d.flush("be quiet", undefined); // a hush that would take "please" back
+    expect(hushes).toBe(1);
+    expect(x.t.keys).toEqual(before);
+    expect(backspaced(x.t.keys)).toBe(false);
+  });
+
+  it("once the dialog is gone (row working, sighting cleared), a NEW dictation types normally", async () => {
+    vi.useFakeTimers();
+    const x = dictation();
+    await x.d.heard("please fix the login");
+    x.st.act = "clarify";
+    dialogSeen.rows([{ title: "t1", activity: "clarify", asking: { kind: "dialog", dialog_id: "d1" } }]);
+    await x.d.heard("and add a test");
+    expect(x.last()).toBe(dialogStopLine("Login fix", "and add a test"));
+    // Answered on the screen: the row leaves its dialog.
+    dialogSeen.rows([{ title: "t1", activity: "working", asking: null }]);
+    expect(dialogSeen.since("t1")).toBe(0);
+    await vi.advanceTimersByTimeAsync(1000);
+    const y = dictation();
+    await y.d.heard("also add a test");
+    await y.d.heard("for the logout");
+    expect(y.t.keys).toEqual(["also add a test ", "for the logout "]);
+    expect(y.d.active).toBe(true);
+  });
+});
+
+describe("a sighting never outlives its dialog (cycle 4, S1 — the client half)", () => {
+  afterEach(() => {
+    dialogSeen.note("t1", null);
+  });
+
+  it("the row leaving its dialog (answered by hand) clears any sighting; a row that never showed it (a sub-agent's prompt) keeps it", () => {
+    let t = 1000;
+    const seen = new DialogSeen(() => t);
+    seen.rows([{ title: "t1", activity: "clarify", asking: { kind: "dialog", dialog_id: null } }]);
+    seen.note("t1", "d1"); // from the pop-up / GET /dialog
+    seen.rows([{ title: "t1", activity: "clarify", asking: null }]);
+    expect(seen.at("t1", "d1")).toBe(1000);
+    seen.rows([{ title: "t1", activity: "working", asking: null }]); // clicked Yes
+    expect(seen.since("t1")).toBe(0);
+    // The same command asked again (the same id): a new sighting.
+    t = 5000;
+    seen.note("t1", "d1");
+    expect(seen.inTime("t1", "d1", 4900)).toBe(false);
+    expect(seen.at("t1", "d1")).toBe(5000);
+    seen.rows([{ title: "t2", activity: "working" }]);
+    seen.note("t2", "s1");
+    seen.rows([{ title: "t2", activity: "working" }]);
+    expect(seen.at("t2", "s1")).toBe(5000);
+  });
+
+  it("a /dialog that comes back empty (204) clears it; one that fails keeps it", async () => {
+    const hf = (fetchDialog: () => Promise<null>) =>
+      new HandsFree({
+        replies: () => true,
+        focused: () => "t1",
+        name: () => "Login fix",
+        busy: () => false,
+        fetchDialog,
+        approveDialogs: async () => true,
+        speak: async () => {},
+        caption: () => {},
+        listen: async () => "missed",
+      });
+    dialogSeen.note("t1", "d1");
+    await hf(async () => Promise.reject(new Error("down"))).dialog("t1");
+    expect(dialogSeen.since("t1")).toBeGreaterThan(0);
+    await hf(async () => null).dialog("t1");
+    expect(dialogSeen.since("t1")).toBe(0);
+  });
+
+  it("“Already answered” (someone else got there first) clears it", async () => {
+    const seen = new DialogSeen();
+    seen.note("t1", "d1");
+    const said: string[] = [];
+    mocks.instApi.mockRejectedValue(Object.assign(new Error("409"), { status: 409, body: { dialog_answered: true } }));
+    const deps: CommandDeps = {
+      railOrder: () => ["t1"],
+      focused: () => "t1",
+      select: () => {},
+      name: () => "Login fix",
+      caption: () => {},
+      announce: (l) => void said.push(l),
+      route: vi.fn(async () => ({ kind: "prompt" }) as RouteReply),
+      approveDialogs: async () => true,
+      activity: () => "clarify",
+      replies: () => true,
+      submitted: () => {},
+    };
+    const YES: RouteReply = { kind: "answer", choice: "yes", title: "t1", dialog_id: "d1", keys: ["1"] };
+    await runVoiceCommand(YES, "yes", deps, seen.at("t1", "d1") + ANSWER_AFTER_MS, seen);
+    expect(said).toEqual(["Already answered."]);
+    expect(seen.since("t1")).toBe(0);
+  });
+
+  it("an answer the server could not pin to a dialog is never typed into one (S3)", async () => {
+    const said: string[] = [];
+    const deps: CommandDeps = {
+      railOrder: () => ["t1"],
+      focused: () => "t1",
+      select: () => {},
+      name: () => "Login fix",
+      caption: () => {},
+      announce: (l) => void said.push(l),
+      route: vi.fn(async () => ({ kind: "prompt" }) as RouteReply),
+      approveDialogs: async () => true,
+      activity: () => "clarify",
+      replies: () => true,
+      submitted: () => {},
+    };
+    mocks.instApi.mockResolvedValue({ has_question: true });
+    await runVoiceCommand({ kind: "answer", choice: "number", number: 1, title: "t1" }, "one", deps, Date.now(), new DialogSeen());
+    expect(said).toEqual(["Login fix is on a dialog — answer it on the screen."]);
+    expect(mocks.instApi).not.toHaveBeenCalled();
+  });
+
+  it("…and with the row saying working, a sighting this page still holds (a sub-agent's prompt) refuses it too — by design", async () => {
+    const said: string[] = [];
+    const seen = new DialogSeen();
+    seen.note("t1", "d-subagent");
+    const deps: CommandDeps = {
+      railOrder: () => ["t1"],
+      focused: () => "t1",
+      select: () => {},
+      name: () => "Login fix",
+      caption: () => {},
+      announce: (l) => void said.push(l),
+      route: vi.fn(async () => ({ kind: "prompt" }) as RouteReply),
+      approveDialogs: async () => true,
+      activity: () => "working",
+      replies: () => true,
+      submitted: () => {},
+    };
+    mocks.instApi.mockResolvedValue({ has_question: true });
+    await runVoiceCommand({ kind: "answer", choice: "yes", title: "t1" }, "yes", deps, Date.now(), seen);
+    expect(said).toEqual(["Login fix is on a dialog — answer it on the screen."]);
+    expect(mocks.instApi).not.toHaveBeenCalled();
+  });
+
+  it("DialogSeen.rows edges: limit → working clears; a title's first row never clears; the same id keeps its first time; a dialog row without an id still counts as on a dialog", () => {
+    let t = 1000;
+    const seen = new DialogSeen(() => t);
+    // A title's first row: no edge to read — the sighting stays.
+    seen.note("a", "d1");
+    seen.rows([{ title: "a", activity: "working" }]);
+    expect(seen.since("a")).toBe(1000);
+    // limit → working: the usage-limit menu is a dialog too.
+    seen.rows([{ title: "b", activity: "limit" }]);
+    seen.note("b", "m1");
+    seen.rows([{ title: "b", activity: "working" }]);
+    expect(seen.since("b")).toBe(0);
+    // clarify → limit: still on a dialog — kept.
+    seen.rows([{ title: "c", activity: "clarify" }]);
+    seen.note("c", "x1");
+    seen.rows([{ title: "c", activity: "limit" }]);
+    expect(seen.since("c")).toBe(1000);
+    // clarify → clarify under the same id: the first time stands.
+    seen.rows([{ title: "e", activity: "clarify", asking: { kind: "dialog", dialog_id: "e1" } }]);
+    t = 2000;
+    seen.rows([{ title: "e", activity: "clarify", asking: { kind: "dialog", dialog_id: "e1" } }]);
+    expect(seen.at("e", "e1")).toBe(1000);
+    // A dialog row the server could not id: the sighting from /dialog stays,
+    // and leaving that row is still the edge that clears it.
+    seen.rows([{ title: "f", activity: "working" }]);
+    seen.note("f", "f1");
+    seen.rows([{ title: "f", activity: "clarify", asking: { kind: "dialog", dialog_id: null } }]);
+    expect(seen.since("f")).toBe(2000);
+    seen.rows([{ title: "f", activity: "working", asking: null }]);
+    expect(seen.since("f")).toBe(0);
+  });
+
+  it("DialogSeen.since: the first time of the current dialog whatever its id; 0 once none", () => {
+    let t = 100;
+    const seen = new DialogSeen(() => t);
+    expect(seen.since("t1")).toBe(0);
+    seen.note("t1", "d1");
+    t = 200;
+    seen.note("t1", "d1");
+    expect(seen.since("t1")).toBe(100);
+    t = 300;
+    seen.note("t1", "d2");
+    expect(seen.since("t1")).toBe(300);
+    expect(seen.at("t1", "d1")).toBe(0);
+    seen.note("t1", null);
+    expect(seen.since("t1")).toBe(0);
+  });
+
+  it("an empty /dialog (204) clears the sighting quietly: nothing said, nothing read out, nothing listened for", async () => {
+    const speak = vi.fn(async () => {});
+    const caption = vi.fn();
+    const listen = vi.fn(async () => "missed" as const);
+    const hf = new HandsFree({
+      replies: () => true,
+      focused: () => "t1",
+      name: () => "Login fix",
+      busy: () => false,
+      fetchDialog: async () => null,
+      approveDialogs: async () => true,
+      speak,
+      caption,
+      listen,
+    });
+    dialogSeen.note("t1", "d1");
+    await hf.dialog("t1");
+    expect(dialogSeen.since("t1")).toBe(0);
+    expect(speak).not.toHaveBeenCalled();
+    expect(caption).not.toHaveBeenCalled();
+    expect(listen).not.toHaveBeenCalled();
+  });
+});
+
+describe("the server recognizer: a phrase's start on the recording's clock, its end on the server's verdict (cycle 4)", () => {
+  it("RecordingClock: the earliest `now − seconds` — a late callback moves nothing; reset when the count stops following time", () => {
+    const c = new RecordingClock();
+    expect(c.at(1)).toBe(0);
+    c.block(0.1, 10_100);
+    c.block(0.2, 10_200);
+    c.block(0.3, 10_900); // handed over 600 ms late (a render, an xterm flood)
+    expect(c.at(0.2)).toBe(10_200);
+    expect(c.at(0.3)).toBe(10_300);
+    c.reset();
+    expect(c.at(0)).toBe(0);
+  });
+
+  it("turnHoldMs: the verdict within 300..3000 ms; the fixed quiet without one, for stale words, and for a command once words are typed", () => {
+    const v = (hold: number, reason: string, at = 100) => ({ hold, reason, at });
+    expect(turnHoldMs(null, 0, true)).toBe(SILENCE_MS);
+    expect(turnHoldMs(v(350, "control"), 50, false)).toBe(350);
+    expect(turnHoldMs(v(350, "command"), 50, true)).toBe(350);
+    expect(turnHoldMs(v(350, "command"), 50, false)).toBe(SILENCE_MS);
+    expect(turnHoldMs(v(900, "sentence"), 50, true)).toBe(900);
+    expect(turnHoldMs(v(1500, "connector"), 50, true)).toBe(1500);
+    expect(turnHoldMs(v(100, "control"), 50, true)).toBe(TURN_MIN_MS);
+    expect(turnHoldMs(v(99_000, "comma"), 50, true)).toBe(TURN_MAX_MS);
+    // The voice was heard after the audio the verdict judged.
+    expect(turnHoldMs(v(350, "control", 100), 101, true)).toBe(SILENCE_MS);
+    expect(turnHoldMs(v(1500, "connector", 100), 101, true)).toBe(1500);
+    expect(parseTurn({ p: 0.9, hold_ms: 350, reason: "control" }, 7)).toEqual({ hold: 350, reason: "control", at: 7 });
+    for (const bad of [undefined, null, "x", {}, { hold_ms: "soon" }, { hold_ms: -1 }, { hold_ms: Infinity }]) expect(parseTurn(bad, 7)).toBeNull();
+  });
+
+  /** A streaming recognizer whose blocks come every 85 ms on a hand clock;
+   * each chunk answers `committed` + `turn`. */
+  function rig(turn: unknown, o: { blank?: boolean; turnAt?: (n: number) => unknown } = {}) {
+    vi.stubGlobal("window", { AudioContext: NodeCtx });
+    const ctx = voiceAudioCtx() as unknown as NodeCtx;
+    ctx.state = "running";
+    vi.stubGlobal("navigator", { language: "en-US", userAgent: "", mediaDevices: { getUserMedia: vi.fn() } });
+    const mic = new MicKeeper(60_000, async () => fakeStream(), () => ctx as unknown as AudioContext);
+    const clock = { now: Date.now() };
+    vi.spyOn(Date, "now").mockImplementation(() => clock.now);
+    const clips: Array<{ opts: { onLevel?: (rms: number) => void }; secs: number; fresh: boolean; stop: ReturnType<typeof vi.fn> }> = [];
+    mocks.startWavRecording.mockImplementation((_s: unknown, _c: unknown, opts) => {
+      const clip = {
+        opts,
+        secs: 0,
+        fresh: false,
+        take: vi.fn(() => {
+          if (!clip.fresh) return null;
+          clip.fresh = false;
+          return new Blob([new Uint8Array(44 + 3200)], { type: "audio/wav" });
+        }),
+        stop: vi.fn(() => Promise.resolve(new Blob([new Uint8Array(44)], { type: "audio/wav" }))),
+        cancel: vi.fn(),
+        mute: vi.fn(),
+        seconds: () => clip.secs,
+      };
+      clips.push(clip);
+      return clip;
+    });
+    let chunks = 0;
+    mocks.apiRaw.mockImplementation(async (url: string) => {
+      if (url === "/api/voice/stream") return { ok: true, status: 200, json: async () => ({ id: "s1" }) };
+      if (url.endsWith("/chunk")) {
+        chunks++;
+        const v = o.turnAt ? o.turnAt(chunks) : turn;
+        return { ok: true, status: 200, json: async () => ({ committed: "next session", partial: "", ms: 120, turn: v }) };
+      }
+      return { ok: true, status: 200, json: async () => ({}) };
+    });
+    const r = serverRecognizer({ stream: () => true, mic });
+    const h: RecognizerHandlers = { onInterim: () => {}, onFinal: () => {}, onError: () => {}, onEnd: () => {}, blank: () => o.blank ?? true };
+    const settle = async () => {
+      for (let i = 0; i < 5; i++) await new Promise((res) => setTimeout(res, 0));
+    };
+    return {
+      r,
+      clips,
+      clock,
+      chunks: () => chunks,
+      start: async () => {
+        await mic.get();
+        for (let i = 0; i < 20; i++) ctx.feed(0.004);
+        r.start(h);
+        await vi.waitFor(() => expect(clips).toHaveLength(1));
+        await settle();
+      },
+      /** One block of `rms`, handed over `late` ms after its audio ended. */
+      block: async (rms: number, late = 0) => {
+        const c = clips[0];
+        c.secs = Math.round((c.secs + 0.085) * 1000) / 1000;
+        clock.now += 85 + late;
+        c.fresh = true;
+        c.opts.onLevel!(rms);
+        clock.now -= late;
+        await settle();
+      },
+      ended: () => clips[0].stop.mock.calls.length > 0,
+    };
+  }
+
+  it("spokeAt: the first loud block's start on the recording's clock — a stalled main thread doesn't make it later (S2)", async () => {
+    const t = rig(undefined);
+    await t.start();
+    for (let i = 0; i < 6; i++) await t.block(0.004); // the room, 0.51 s
+    const zero = t.clock.now - 510;
+    await t.block(0.3, 700); // the voice, its callback 700 ms late
+    // Its block began at 0.51 s on the recording: not 700 ms later.
+    expect(t.r.spokeAt).toBe(zero + 510);
+    t.r.stop();
+  });
+
+  it("a lone command's 350 ms verdict ends the phrase after 350 ms of quiet heard, not 1100", async () => {
+    const t = rig({ p: 0.95, hold_ms: 350, reason: "command" });
+    await t.start();
+    for (let i = 0; i < 6; i++) await t.block(0.3);
+    expect(t.chunks()).toBeGreaterThan(0);
+    for (let i = 0; i < 4; i++) await t.block(0.004); // 340 ms
+    expect(t.ended()).toBe(false);
+    await t.block(0.004); // 425 ms
+    expect(t.ended()).toBe(true);
+    t.r.stop();
+  });
+
+  it("…but once words are typed it is words: the fixed quiet; no verdict: the fixed quiet; never under 300 ms", async () => {
+    for (const [turn, blank, endsAt] of [
+      [{ p: 0.95, hold_ms: 350, reason: "command" }, false, 13],
+      [undefined, true, 13],
+      [{ p: 1, hold_ms: 50, reason: "control" }, true, 4],
+    ] as const) {
+      const t = rig(turn, { blank });
+      await t.start();
+      for (let i = 0; i < 6; i++) await t.block(0.3);
+      let n = 0;
+      while (!t.ended() && n < 20) {
+        await t.block(0.004);
+        n++;
+      }
+      expect([turn, n]).toEqual([turn, endsAt]); // 13 × 85 = 1105 > 1100; 4 × 85 = 340 > 300
+      t.r.stop();
+      vi.restoreAllMocks();
+      mocks.startWavRecording.mockReset();
+      mocks.apiRaw.mockReset();
+    }
+  });
+
+  it("parseTurn / turnHoldMs edges: a numeric string is a hold, no reason is ''; zero, NaN and junk are no verdict; the voice heard AT the judged audio is not stale", () => {
+    expect(parseTurn({ hold_ms: "900" }, 5)).toEqual({ hold: 900, reason: "", at: 5 });
+    for (const bad of [{ hold_ms: 0 }, { hold_ms: NaN }, { hold_ms: "9 s" }, 900, "900"]) expect(parseTurn(bad, 5)).toBeNull();
+    // Strictly later: the same instant is the verdict's own audio.
+    expect(turnHoldMs({ hold: 350, reason: "control", at: 100 }, 100, true)).toBe(350);
+    // Only a command is overridden by typed words; a radio word still ends short.
+    expect(turnHoldMs({ hold: 350, reason: "control", at: 100 }, 0, false)).toBe(350);
+    expect(turnHoldMs({ hold: 350, reason: "wake", at: 100 }, 0, false)).toBe(350);
+  });
+
+  it("RecordingClock: after reset the next block re-anchors, even later than before", () => {
+    const c = new RecordingClock();
+    c.block(0.5, 10_500);
+    expect(c.at(0)).toBe(10_000);
+    c.reset();
+    c.block(0.5, 13_500); // 3 s muted: the count stood still, time didn't
+    expect(c.at(0.5)).toBe(13_500);
+  });
+
+  it("a later chunk without a verdict drops the last one: the phrase ends on the fixed quiet", async () => {
+    // Every chunk while the voice is heard says "command, 350"; the first
+    // one over the quiet comes back without a verdict.
+    let quiet = false;
+    const t = rig(undefined, { turnAt: () => (quiet ? undefined : { p: 0.95, hold_ms: 350, reason: "command" }) });
+    await t.start();
+    for (let i = 0; i < 6; i++) await t.block(0.3);
+    const loudChunks = t.chunks();
+    expect(loudChunks).toBeGreaterThan(0);
+    quiet = true;
+    let n = 0;
+    while (!t.ended() && n < 20) {
+      await t.block(0.004);
+      n++;
+    }
+    expect(t.chunks()).toBeGreaterThan(loudChunks);
+    expect(n).toBe(13); // 13 × 85 = 1105 > SILENCE_MS — not the stale 350
+    t.r.stop();
+  });
+
+  it("a mute resets the recording's clock: speech after it is placed by the blocks after it, not the count from before", async () => {
+    const t = rig(undefined);
+    await t.start();
+    for (let i = 0; i < 6; i++) await t.block(0.004);
+    t.r.mute!(true);
+    t.clock.now += 2000; // muted: no block counted, time goes on
+    t.r.mute!(false);
+    await t.block(0.004);
+    await t.block(0.3);
+    // The loud block began 85 ms before it was handed over — not 2 s earlier.
+    expect(t.r.spokeAt).toBe(t.clock.now - 85);
+    t.r.stop();
+  });
+
+  it("wired: TopBarMic tells the recognizer whether the message's box is still empty", () => {
+    expect(code("components/TopBarMic.tsx")).toContain("blank: () => live.current !== d || !d.dict.typed");
   });
 });
