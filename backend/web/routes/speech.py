@@ -32,7 +32,10 @@ Status codes, in the order they are checked:
   still going: ``core.speech.TtsChain``), ``X-Voice-Cache`` (``hit`` |
   ``miss``: :data:`SPEAK_CACHE`), ``X-Voice-Ms`` (the server's time for
   the line) and ``X-Voice-Shared: 1`` when an identical request already in
-  flight was joined (:func:`_speak_once`). A configured host that refuses,
+  flight was joined (:func:`_speak_once`, or :class:`Prewarm`'s synthesis
+  of that line). The session names a switch says and a few fixed lines are
+  pre-synthesised while the voice is idle (:class:`Prewarm`, kicked by
+  ``GET /api/voice`` and ``speak``), so they are hits. A configured host that refuses,
   times out (``core.speech.host_budget``) or answers 5xx falls back to
   piper for that line and the next :data:`core.speech.HOST_DOWN_SECONDS`;
   one that answers, but slower than its budget (its learned pace), is
@@ -72,13 +75,16 @@ Status codes, in the order they are checked:
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import copy
 import hashlib
+import logging
 import re
+import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
@@ -94,6 +100,7 @@ from backend.web.core import voice_words as _voice_words
 from backend.web.core import wake as _wake
 
 router = APIRouter()
+_logger = logging.getLogger(__name__)
 
 #: The raw clip cap (413 above). A minute of webm/opus is well under 1 MB;
 #: 10 MB leaves room for an uncompressed WAV of the same length.
@@ -158,16 +165,29 @@ class SpeakCache:
     a neural host is a second or more. LRU in :attr:`max_entries` entries
     and :attr:`max_bytes` in all; a clip over :attr:`max_entry_bytes` is
     served but not kept; a new signature (the backend, its host, its voice
-    changed in Settings) drops everything."""
+    changed in Settings) drops everything.
+
+    Beside the LRU, a small PINNED set (:class:`Prewarm`'s lines: the
+    session names a switch speaks, a few fixed lines) for one signature of
+    its own, :attr:`max_pinned` / :attr:`max_pinned_bytes`: it never evicts
+    a recently spoken line, and the LRU's traffic (a reply on the fallback
+    voice included) never drops a pin. A pin is served only for its own
+    signature."""
 
     max_entries = 64
     max_bytes = 8 * 1024 * 1024
     max_entry_bytes = 2 * 1024 * 1024
+    max_pinned = 48
+    max_pinned_bytes = 4 * 1024 * 1024
 
     def __init__(self) -> None:
         self._items: "OrderedDict[tuple, Tuple[bytes, str]]" = OrderedDict()
         self._sig: Optional[tuple] = None
         self.bytes = 0
+        self._pins: "Dict[tuple, Tuple[bytes, str]]" = {}
+        self._psig: Optional[tuple] = None
+        self.pinned_bytes = 0
+        self._plock = threading.Lock()  # pins are written from the prewarm thread
 
     def __len__(self) -> int:
         return len(self._items)
@@ -176,10 +196,62 @@ class SpeakCache:
         self._items.clear()
         self._sig = None
         self.bytes = 0
+        with self._plock:
+            self._pins.clear()
+            self._psig = None
+            self.pinned_bytes = 0
+
+    def pinned(self, sig: tuple, key: tuple) -> bool:
+        """``key`` is pinned for ``sig``."""
+        with self._plock:
+            return sig == self._psig and key in self._pins
+
+    def pin(self, sig: tuple, key: tuple, audio: bytes, mime: str) -> bool:
+        """Keep ``key``'s clip pinned for ``sig`` (a new ``sig`` drops the
+        old pins first) → False when it does not fit (too big, or the pinned
+        set is full)."""
+        with self._plock:
+            if sig != self._psig:
+                self._pins.clear()
+                self._psig = sig
+                self.pinned_bytes = 0
+            old = self._pins.get(key)
+            grow = len(audio) - (len(old[0]) if old else 0)
+            if (
+                len(audio) > self.max_entry_bytes
+                or (old is None and len(self._pins) >= self.max_pinned)
+                or self.pinned_bytes + grow > self.max_pinned_bytes
+            ):
+                return False
+            self._pins[key] = (audio, mime)
+            self.pinned_bytes += grow
+            return True
+
+    def keep_pins(self, sig: tuple, keys) -> None:
+        """Drop every pin that is not for ``sig`` or not in ``keys`` (a
+        session gone, a line no longer wanted)."""
+        with self._plock:
+            if sig != self._psig:
+                self._pins.clear()
+                self._psig = sig
+                self.pinned_bytes = 0
+                return
+            for k in [k for k in self._pins if k not in keys]:
+                self.pinned_bytes -= len(self._pins.pop(k)[0])
+
+    def peek(self, sig: tuple, key: tuple) -> Optional[Tuple[bytes, str]]:
+        """``key``'s clip in the LRU for ``sig``, without touching its order
+        or the signature (the prewarm pins a line spoken already)."""
+        return self._items.get(key) if sig == self._sig else None
+
+    def pin_count(self) -> int:
+        with self._plock:
+            return len(self._pins)
 
     def _sync(self, sig: tuple) -> None:
-        if sig != self._sig:
-            self.clear()
+        if sig != self._sig:  # the LRU only: pins keep their own signature
+            self._items.clear()
+            self.bytes = 0
             self._sig = sig
 
     def get(self, sig: tuple, key: tuple) -> Optional[Tuple[bytes, str]]:
@@ -187,7 +259,9 @@ class SpeakCache:
         got = self._items.get(key)
         if got is not None:
             self._items.move_to_end(key)
-        return got
+            return got
+        with self._plock:
+            return self._pins.get(key) if sig == self._psig else None
 
     def put(self, sig: tuple, key: tuple, audio: bytes, mime: str) -> None:
         self._sync(sig)
@@ -215,6 +289,289 @@ def _engine_signature(backend: _speech.Backend, settings) -> tuple:
     host, model and voice settings."""
     v = settings.voice
     return (backend.id, id(backend), v.tts_url, v.tts_model, v.tts_voice)
+
+
+# --------------------------------------------------------------------------- #
+# Prewarm: the lines we know we will say, synthesised before they are asked
+# --------------------------------------------------------------------------- #
+#: At most this many session names are pre-synthesised (most recently
+#: active first).
+PREWARM_MAX_NAMES = 40
+#: Fixed short lines the clients speak as they are (mobile.js speakLine /
+#: voiceSayThenIdle, voiceDesktop.ts CONFIRM_LINES and announce, the
+#: router's fixed ``say``), after the names. "Ready." is the warm's own.
+PREWARM_FIXED: Tuple[str, ...] = (
+    "No session is open.",
+    "There are no sessions.",
+    "Answer it on the screen.",
+    "Nothing is being asked.",
+    "Answered.",
+    "Sent.",
+    "Over and out.",
+    "Cleared.",
+)
+#: A prewarm line is asked only once the voice has been idle this long
+#: (``core.speech.TtsChain.idle_for``: nothing in flight, in a lane or
+#: still playing for any listener).
+PREWARM_QUIET_S = 3.0
+#: Between two prewarm lines: a real line arriving meanwhile finds the lane
+#: empty.
+PREWARM_GAP_S = 0.25
+#: How often a kick (``GET /api/voice``, ``/speak``) may start a run; the
+#: run compares what it wants with what is pinned, so an unchanged session
+#: list and voice cost no synthesis.
+PREWARM_RECHECK_S = 15.0
+#: A run waits this long in all for quiet, then stops until the next kick.
+PREWARM_WAIT_S = 120.0
+#: Poll step while waiting for quiet.
+_PREWARM_POLL_S = 0.2
+
+
+def _session_names() -> List[str]:
+    """The names a switch speaks (``core.voice_router.switch_line``'s
+    ``_name``: the row's ``name``, else its title; the phone's ``nameOf``
+    prefers a peer row's ``display_title``, so that is added too), this
+    device's sessions most recently active first, then other devices' and
+    peers' rows — no network: the tick's snapshot and the cached rows."""
+    rows: list = []
+    try:
+        from backend.web.core import aliases as _aliases
+        from backend.web.core import events as _events
+
+        rows = _events.sessions_snapshot()
+        _aliases.overlay(rows)
+        rank = {t: i for i, t in enumerate(_speech.session_titles())}
+        rows.sort(key=lambda r: rank.get(r.get("title"), len(rank)))
+    except Exception:  # noqa: BLE001 — no server here (tests, a bare import)
+        rows = []
+    try:
+        from backend.web.core import remote as _remote
+
+        rows += _remote.merged_instances()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from backend.web.routes import peer_sessions as _peers
+
+        rows += _peers.peer_rows()
+    except Exception:  # noqa: BLE001
+        pass
+    out: List[str] = []
+    for r in rows:
+        if not isinstance(r, dict) or not r.get("title") or r.get("hidden_by"):
+            continue
+        for n in (
+            r.get("name") or r.get("title"),
+            r.get("name") or r.get("display_title") or r.get("title"),
+        ):
+            n = str(n or "").strip()
+            if n and n not in out:
+                out.append(n)
+    return out
+
+
+def _end(text: str) -> str:
+    """``core.voice_router._end`` (mobile.js ``endSentence``): a full stop
+    unless it ends in one — a switch says ``"<name>."``."""
+    s = str(text or "").strip()
+    return s if not s or s[-1] in ".!?" else s + "."
+
+
+def _prewarmable(engine: _speech.Backend) -> bool:
+    """Only an engine whose lines cost nothing but its own time: piper, the
+    built-in voice, an OpenAI-compatible host on this machine or network
+    (Voice Lab). Never a paid remote API, and nothing else (a test's fake)."""
+    if isinstance(engine, _speech.OpenAITTS):
+        try:
+            return _speech._local_host(engine._cfg()[0])
+        except Exception:  # noqa: BLE001
+            return False
+    if isinstance(engine, _speech.LocalTTS):
+        return True
+    try:
+        from backend.web.core import speech_system as _system
+
+        return isinstance(engine, _system.SystemTTS)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _hearing() -> bool:
+    """A phrase is being heard right now: a recognition stream had a chunk
+    in the last :data:`PREWARM_QUIET_S` (its words are about to become a
+    switch or a reply — no prewarm line in the host's way then)."""
+    try:
+        now = _stream._now()
+        streams = list(_stream._STREAMS.values())
+        return any(now - st.touched < PREWARM_QUIET_S for st in streams)
+    except Exception:  # noqa: BLE001 — a gate, never a failure
+        return False
+
+
+def _prewarm_thread(target, name: str) -> None:
+    """Run a prewarm on a daemon thread (a seam: tests run it inline)."""
+    threading.Thread(target=target, name=name, daemon=True).start()
+
+
+class Prewarm:
+    """Pre-synthesise the lines we know we will say — each live session's
+    name as a switch says it (``"hackathon-2."``) and :data:`PREWARM_FIXED`
+    — into :data:`SPEAK_CACHE`'s pinned set, so a switch is a cache hit
+    instead of a synthesis (Voice Lab F5's ≥1.4 s floor) at the moment it
+    is asked for.
+
+    * Low priority: a line is asked only once the voice has been idle for
+      :data:`PREWARM_QUIET_S` (``TtsChain.idle_for``) and no phrase is
+      being heard (:func:`_hearing`), one line at a time,
+      :data:`PREWARM_GAP_S` apart, and in the host's lane as a ``low`` line
+      a real line queues ahead of (``TtsChain.send``). A real ``/speak`` for
+      a line the prewarm has at the host joins it (:meth:`joining`) instead
+      of queueing a second synthesis.
+    * Only for the engine that would speak now (the configured voice, or
+      the fallback while it is down or too slow), only when that engine is
+      free to use (:func:`_prewarmable`), keyed exactly as ``/speak`` keys
+      its cache (the engine signature; the shaped text, no per-call voice).
+    * Bounded: :data:`PREWARM_MAX_NAMES` names, the pinned set's own size
+      (``SpeakCache.max_pinned``), and runs at most every
+      :data:`PREWARM_RECHECK_S` from a kick; a run that finds every line
+      pinned for the current signature says nothing. A new signature (the
+      voice or engine changed, the host fell back) re-pins from scratch; a
+      session gone is unpinned.
+    * Stops on a failure (a dead host is marked down, as on a line), when
+      the chain is reset or the engine is no longer the registry's."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._running = False
+        self._kicked_at = float("-inf")
+        self._joins: "Dict[tuple, concurrent.futures.Future]" = {}
+        self.said = 0  # lines synthesised, ever (tests, the report)
+        self.last: dict = {}  # the last run: {"lines", "said", "done", "why"}
+
+    def reset(self) -> None:
+        with self._lock:
+            self._running = False
+            self._kicked_at = float("-inf")
+            self._joins.clear()
+            self.said = 0
+            self.last = {}
+
+    def kick(self, force: bool = False) -> bool:
+        """Start a run in the background unless one is running or the last
+        kick was under :data:`PREWARM_RECHECK_S` ago → started. Cheap: the
+        plan and every wait are on the run's own thread."""
+        now = time.monotonic()
+        with self._lock:
+            if self._running or (
+                not force and now - self._kicked_at < PREWARM_RECHECK_S
+            ):
+                return False
+            self._running, self._kicked_at = True, now
+        try:
+            _prewarm_thread(self._run, "mindflock-voice-prewarm")
+        except Exception:  # noqa: BLE001 — no thread: the next kick
+            with self._lock:
+                self._running = False
+            return False
+        return True
+
+    def _run(self) -> None:
+        try:
+            self.run_once()
+        except Exception:  # noqa: BLE001 — a prewarm never raises
+            _logger.debug("voice: prewarm failed", exc_info=True)
+        finally:
+            with self._lock:
+                self._running = False
+
+    def plan(self):
+        """``(engine, sig, [(key, spoken)…])`` — what to have pinned now — or
+        ``(None, None, [])`` when there is nothing to prewarm for."""
+        primary, _detail = _speech.select("tts")
+        if primary is None:
+            return None, None, []
+        chain = _speech.TTS_CHAIN
+        engine: Optional[_speech.Backend] = primary
+        if chain.down_reason(primary) or chain.too_slow(primary):
+            engine = chain.fallback_for(primary)
+        if engine is None or not _prewarmable(engine):
+            return None, None, []
+        settings = _settings()
+        pronounce = _pronounce(settings)
+        wanted: List[Tuple[tuple, str]] = []
+        seen = set()
+        lines = [_end(n) for n in _session_names()[:PREWARM_MAX_NAMES]]
+        for text in lines + list(PREWARM_FIXED):
+            spoken = _spoken_text.shape(text, pronounce)
+            key = ("", spoken)
+            if spoken and key not in seen:
+                seen.add(key)
+                wanted.append((key, spoken))
+        wanted = wanted[: SPEAK_CACHE.max_pinned]
+        return engine, _engine_signature(engine, settings), wanted
+
+    def run_once(self, wait: float = PREWARM_WAIT_S) -> int:
+        """One pass: pin what is missing, waiting up to ``wait`` s in all
+        for quiet → the lines synthesised."""
+        engine, sig, wanted = self.plan()
+        self.last = {"lines": len(wanted), "said": 0, "done": False, "why": ""}
+        if engine is None or sig is None:
+            self.last["why"] = "nothing to prewarm for"
+            return 0
+        SPEAK_CACHE.keep_pins(sig, {k for k, _s in wanted})
+        chain = _speech.TTS_CHAIN
+        gen = chain.generation
+        give_up = time.monotonic() + wait
+        said = 0
+        for key, spoken in wanted:
+            if SPEAK_CACHE.pinned(sig, key):
+                continue
+            spoken_already = SPEAK_CACHE.peek(sig, key)
+            if spoken_already is not None:  # no synthesis: pin that clip
+                SPEAK_CACHE.pin(sig, key, *spoken_already)
+                continue
+            while chain.idle_for() < PREWARM_QUIET_S or _hearing():
+                if time.monotonic() >= give_up:
+                    self.last["why"] = "never quiet"
+                    return said
+                time.sleep(_PREWARM_POLL_S)
+            if chain.generation != gen or _speech.get("tts", engine.id) is not engine:
+                self.last["why"] = "the voice changed"
+                return said
+            fut: "concurrent.futures.Future" = concurrent.futures.Future()
+            jkey = (sig,) + key
+            with self._lock:
+                self._joins[jkey] = fut
+            try:
+                audio, mime = chain.prewarm_line(engine, spoken)
+            except Exception as err:  # noqa: BLE001
+                fut.set_exception(err)
+                if isinstance(err, _speech.SpeechError) and err.down:
+                    chain.mark_down(engine, str(err))
+                self.last["why"] = "%s: %s" % (type(err).__name__, err)
+                return said
+            finally:
+                with self._lock:
+                    if self._joins.get(jkey) is fut:
+                        del self._joins[jkey]
+            if not fut.done():
+                fut.set_result((audio, mime, engine))
+            SPEAK_CACHE.pin(sig, key, audio, mime)
+            said += 1
+            self.said += 1
+            self.last["said"] = said
+            time.sleep(PREWARM_GAP_S)
+        self.last["done"] = True
+        return said
+
+    def joining(self, sig: tuple, key: tuple) -> "Optional[concurrent.futures.Future]":
+        """The prewarm's synthesis of ``key`` for ``sig`` in flight, if any."""
+        with self._lock:
+            return self._joins.get((sig,) + key)
+
+
+#: The one prewarm (kicked by ``GET /api/voice`` and ``/speak``).
+PREWARM = Prewarm()
 
 
 def _words() -> dict:
@@ -363,6 +720,9 @@ def voice_get(allowed: bool = Depends(_auth.configure_allowed)) -> JSONResponse:
     # load: see core.speech.warm_in_background).
     _speech.warm_in_background("stt")
     _speech.warm_in_background("tts")
+    # And the lines it will hear first — the session names a switch says —
+    # pre-synthesised while the voice is idle (Prewarm; a thread of its own).
+    PREWARM.kick()
     return JSONResponse(body)
 
 
@@ -661,8 +1021,24 @@ async def voice_speak(request: Request, payload: Optional[dict] = None) -> Respo
         if engine is not None
         else None
     )
-    shared = False
-    if hit is not None and engine is not None:
+    shared = joined = False
+    if hit is None and engine is not None:
+        # The prewarm has this very line at the host: join it (bounded by
+        # the line's budget), never queue a second synthesis behind it.
+        sig = _engine_signature(engine, settings)
+        pending = PREWARM.joining(sig, key)
+        if pending is not None:
+            try:
+                audio, mime, _by = await asyncio.wait_for(
+                    asyncio.shield(asyncio.wrap_future(pending)),
+                    _speech.host_budget(spoken),
+                )
+                shared = joined = True
+            except Exception:  # noqa: BLE001 — slow or failed: say it as usual
+                pass
+    if joined:
+        _speech.TTS_CHAIN.note_line(spoken, listener)
+    elif hit is not None and engine is not None:
         audio, mime = hit
         _speech.TTS_CHAIN.note_line(spoken, listener)
     else:
@@ -691,6 +1067,7 @@ async def voice_speak(request: Request, payload: Optional[dict] = None) -> Respo
     }
     if shared:
         headers["X-Voice-Shared"] = "1"
+    PREWARM.kick()  # a new session's name, a changed voice: re-pinned when idle
     return Response(
         content=audio,
         media_type=mime or "application/octet-stream",
