@@ -249,6 +249,42 @@ def settles(keys: List[str]) -> bool:
     return any(k in SETTLING_KEYS for k in keys)
 
 
+#: An X10 mouse report: ``ESC [ M`` then three RAW bytes (button, column,
+#: row, each +32) — those bytes can be digits, so it goes before the rest.
+_X10_MOUSE = re.compile(rb"\x1b\[M[\x00-\xff]{0,3}", re.S)
+#: Every other escape sequence a terminal sends that is NOT a key that
+#: settles a dialog: CSI (arrows, Home/PgUp, focus in/out ``ESC [ I`` /
+#: ``ESC [ O``, SGR mouse ``ESC [ < b;x;y M``, bracketed-paste brackets), SS3
+#: (application-mode arrows ``ESC O A``), OSC / DCS replies, and a meta chord
+#: (Alt+key, ``ESC`` + one printable byte).
+_ESC_SEQ = re.compile(
+    rb"\x1b(?:\[[0-?]*[ -/]*[@-~]|O[ -~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?"
+    rb"|P[^\x1b]*(?:\x1b\\)?|[ -~])",
+    re.S,
+)
+#: What is left after the sequences are gone that answers a dialog: Enter
+#: (CR / LF), a digit choice, y / n, or a bare Escape (cancel).
+_SETTLING_BYTES = re.compile(rb"[\r\n1-9yYnN\x1b]")
+
+
+def settling_input(data) -> bool:
+    """Whether raw terminal input ``data`` (bytes or str, as the pane's
+    websocket or ``/send`` carries it) holds a key that would SETTLE a
+    dialog — Enter, a digit, y/n, a bare Escape — as opposed to only
+    scrolling, clicking, focusing or moving its cursor: the mouse wheel
+    (tmux mouse mode makes xterm.js send wheel reports), clicks, focus
+    in/out and arrow navigation are stripped before looking. Never raises."""
+    try:
+        if isinstance(data, str):
+            data = data.encode("utf-8", "replace")
+        if not data:
+            return False
+        rest = _ESC_SEQ.sub(b"", _X10_MOUSE.sub(b"", bytes(data)))
+        return _SETTLING_BYTES.search(rest) is not None
+    except Exception:  # noqa: BLE001 — unreadable input settles nothing
+        return False
+
+
 def note_dialog_seen(title: str, dialog_id: Optional[str]) -> None:
     """A read of ``title``'s screen found ``dialog_id`` up: once a DIFFERENT
     dialog has been seen, the one answered before it is history, and an
