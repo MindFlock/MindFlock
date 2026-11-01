@@ -440,7 +440,7 @@ def send_answer(name: str, text: str, keys: List[str]) -> bool:
     with _agent_sessions._typing_lock(name):
         if text:
             typed = _proc.run_capped(
-                ["tmux", "send-keys", "-t", name, "-l", "--", text],
+                _agent_sessions.literal_keys_argv(name, text),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=_TMUX_TIMEOUT,
