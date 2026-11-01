@@ -42,6 +42,7 @@ const state = {
   streamFull: [],         // when each cap 409 was answered
   streamChunks: [],       // {id, ctype, head, rate, len}
   streamScript: {},       // id → [{committed, partial}…], one per chunk in order (then empty words)
+  streamTurn: {},         // id → the end-of-turn verdict {p, hold_ms, reason} on EVERY chunk answer of that stream (none: no turn key, an older server)
   streamEndReply: {},     // id → {committed}
   streamEndDelay: {},     // id → ms before /end answers
   streamEnds: [],
@@ -225,7 +226,7 @@ async function mock(route) {
     state.streamInflight--;
     if (state.streamChunks.filter((c) => c.id === sm[1]).length === state.streamFailChunk[sm[1]]) return json(route, { error: "decoder fell over" }, 500);
     const q = state.streamScript[sm[1]] || [];
-    return json(route, Object.assign({ committed: "", partial: "", ms: 42, audio_s: 0.4 }, q.shift() || {}));
+    return json(route, Object.assign({ committed: "", partial: "", ms: 42, audio_s: 0.4 }, state.streamTurn[sm[1]] ? { turn: state.streamTurn[sm[1]] } : {}, q.shift() || {}));
   }
   if ((sm = /^\/api\/voice\/stream\/([^/]+)\/end$/.exec(p)) && m === "POST") {
     state.streamEnds.push(sm[1]);
@@ -280,7 +281,7 @@ async function mock(route) {
   if (p === "/api/voice/speak" && m === "POST") {
     let b = {};
     try { b = JSON.parse(req.postData() || "{}"); } catch (e) {}
-    const text = String(b.text || ""), rec = { text, at: Date.now(), done: 0, aborted: false };
+    const text = String(b.text || ""), rec = { text, client: b.client, at: Date.now(), done: 0, aborted: false };
     state.speaks.push(rec);
     await new Promise((r) => setTimeout(r, state.speakMsPerChar * text.length));
     rec.done = Date.now();
@@ -1624,13 +1625,55 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     state.sendStatus = 0; state.sendReply = null;
     check("ask: /send 409 in_dialog → the dialog's options instead", (await page6.evaluate(() => document.querySelectorAll(".asking-opt").length)) === 3 && (await txt6("asking-kind")) === "Permission");
     check("ask: …the command in monospace, the words kept, a note why", (await txt6("asking-command")) === "git push origin main" && (await page6.evaluate(() => getComputedStyle(document.getElementById("asking-command")).fontFamily)).indexOf("mono") >= 0 && (await page6.evaluate(() => document.getElementById("asking-text").value)) === "go ahead" && /showing a prompt/.test(await txt6("asking-note")), await txt6("asking-note"));
+    const seenBefore6 = await page6.evaluate(() => window.mfVoice.dialogSeen["api-docs"] || null);
     await page6.click('.asking-opt[data-kind="no"]');
     await waitShut6("sheet closed after the option");
     const a6 = posts6("/answer").slice(-1)[0];
     check("ask: an option tap → POST /answer {keys: opt.keys, dialog_id, by:'user'}", a6 && a6.path === "/api/instances/api-docs/answer" && JSON.stringify(a6.body) === JSON.stringify({ keys: ["Escape"], dialog_id: "dx", by: "user" }), JSON.stringify(a6));
+    // ---- cycle 4 (stale sightings): an answer by hand clears the page's
+    // sighting of that dialog — the same prompt asked again (the same id)
+    // is a new sighting, so a "yes" begun before it came back never answers it.
+    {
+      const after6 = await page6.evaluate(() => ({ seen: window.mfVoice.dialogSeen["api-docs"] || null, done: (window.mfVoice.dialogDone || {})["api-docs"] }));
+      check("sighting: a tap on the sheet clears the page's sighting of the dialog it answered", !!seenBefore6 && seenBefore6.id === "dx" && !after6.seen && after6.done === "dx", JSON.stringify([seenBefore6, after6]));
+      // The same command asked again (same id dx), the row showing it.
+      const tReask6 = Date.now();
+      state.rows[2].asking = { kind: "dialog", text: "Allow git push?", ts: now6(), dialog_id: "dx", parsed: true, source: "" };
+      await page6.evaluate(() => { window.__polls6 = window.mfAsk.polls; });
+      await waitFor(page6, () => window.mfAsk.polls > window.__polls6 + 1, 10000, "two polls with dx asked again");
+      const re6 = await page6.evaluate(() => window.mfVoice.dialogSeen["api-docs"] || null);
+      check("sighting: …the same id asked again has no sighting older than the re-ask (a 'yes' begun before it is early)", !re6 || re6.at >= tReask6, JSON.stringify({ re6, tReask6, before: seenBefore6 }));
+      state.rows[2].asking = q2;
+      if (await open6()) { await page6.mouse.click(8, 8); await waitShut6("the re-asked dx sheet closed"); }
+    }
     state.rows[2].asking = null;
     delete state.dialogsBy["api-docs"];
     await sleep(300);
+    // ---- cycle 4: GET /dialog answering 204 (the prompt is gone) clears the
+    // page's sighting too: the sheet's tap meets 409 no_dialog, re-reads it.
+    {
+      const qy = { kind: "question", text: "Publish the docs?", ts: now6(), dialog_id: null, parsed: false, source: "" };
+      state.rows[2].asking = qy;
+      await kick6("api-docs", qy.text, qy.ts);
+      await openRow6("api-docs");
+      state.sendStatus = 409; state.sendReply = { in_dialog: true, error: "a dialog is up" };
+      state.dialogsBy["api-docs"] = PERM("dy");
+      await page6.fill("#asking-text", "ship it");
+      await page6.click("#asking-send");
+      await waitFor(page6, () => document.querySelectorAll(".asking-opt").length === 3, 4000, "dy options");
+      state.sendStatus = 0; state.sendReply = null;
+      const seenY = await page6.evaluate(() => (window.mfVoice.dialogSeen["api-docs"] || {}).id || "");
+      state.answerStatus = 409; state.answerReply = { no_dialog: true, error: "nothing on screen" };
+      delete state.dialogsBy["api-docs"];
+      await page6.click('.asking-opt[data-kind="yes"]');
+      await waitFor(page6, () => !window.mfVoice.dialogSeen["api-docs"], 3000, "the 204 clears the sighting");
+      const goneY = await page6.evaluate(() => window.mfVoice.dialogSeen["api-docs"] || null);
+      check("sighting: GET /dialog answering 204 (the sheet re-reading a prompt that is gone) clears the sighting", seenY === "dy" && !goneY, JSON.stringify([seenY, goneY]));
+      state.answerStatus = 0; state.answerReply = null;
+      state.rows[2].asking = null;
+      if (await open6()) { await page6.mouse.click(8, 8); await waitShut6("the dy sheet closed"); }
+      await sleep(300);
+    }
 
     // Two dialogs (and a prose question): one sheet, "1 of 2", the oldest
     // first, the question not in it; next/prev; Later snoozes a dialog.
@@ -2636,6 +2679,10 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     const playsS = await S(() => window.__plays.slice());
     const sp = state.speaks.slice();
     check("speak: one /api/voice/speak per sentence, in order", JSON.stringify(sp.map((x) => x.text)) === JSON.stringify(SENTS), JSON.stringify(sp.map((x) => x.text)));
+    // Cycle 4 (judge T3): every /speak names this page (its own reply slot on
+    // the server), the same id its streams send — not address + user agent.
+    const clientS = sp.map((x) => x.client);
+    check("speak: every /api/voice/speak carries this page's client id (one per page, 'm-…')", clientS.length === 3 && clientS.every((c) => typeof c === "string" && /^m-/.test(c) && c === clientS[0]), JSON.stringify(clientS));
     const firstSound = playsS.length ? playsS[0].at - t0S : -1, wholeMs = LINE.length * state.speakMsPerChar;
     check("speak: the first sound starts once sentence 1 is made — not the whole line (" + firstSound + " ms; the whole line takes " + wholeMs + " ms to make)", playsS.length === 3 && firstSound >= SENTS[0].length * state.speakMsPerChar - 20 && firstSound < SENTS[0].length * state.speakMsPerChar + 250 && firstSound < wholeMs - 300, JSON.stringify({ firstSound, wholeMs, plays: playsS }));
     console.log("  speak: first sound " + firstSound + " ms after speak() (sentence 1 takes " + SENTS[0].length * state.speakMsPerChar + " ms to make, the whole line " + wholeMs + " ms)");
@@ -3291,6 +3338,34 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
       await sleep(1200);
       if ((await vstate(pageV)) !== "listening") { await pageV.click("#voice-btn"); await sleep(1500); }
     }
+    // ---- cycle 4 (judge MF1, the phone's half): a dialog waiting half an
+    // hour is still answerable — the route carries the sighting's age capped
+    // at the server's 10 minutes (a capped age only makes the check stricter),
+    // and the "yes" begun now answers it.
+    {
+      await waitFor(pageV, () => window.mfVoice.state === "listening" && window.mfVoice.stt.active(), 3000, "M listening");
+      await sleep(1200);
+      await V(() => { document.getElementById("compose").value = ""; });
+      const sessM = await V(() => window.mfVoice.session || "");
+      const sidM = "s" + state.streamOpens.length, sidM2 = "s" + (state.streamOpens.length + 1);
+      [sidM, sidM2].forEach((s) => { state.streamScript[s] = [{ committed: "yes", partial: "" }]; state.streamEndReply[s] = { committed: "", final: "yes", final_ms: 100, same: true }; });
+      const ansM = posts("/answer").length, routesM = posts("/voice/route").length;
+      const dlgM = { id: "dM", parsed: true, question: "Allow make deploy?", command: "make deploy", options: [{ key: "1", label: "Yes", kind: "yes" }, { key: "2", label: "No", kind: "no" }] };
+      state.dialog = dlgM; state.dialogsBy[sessM] = dlgM;
+      await V((t) => { window.mfVoice.dialogSeen[t] = { id: "dM", at: Date.now() - 30 * 60 * 1000 }; }, sessM);
+      await V(() => window.__tone(0.4));
+      await sleep(450);
+      await V(() => window.__tone(0.002));
+      for (let t = Date.now(); posts("/answer").length === ansM && Date.now() - t < 4000; ) await sleep(20);
+      const answersM = posts("/answer").slice(ansM).map((x) => x.body);
+      const rM = posts("/voice/route").slice(routesM).map((x) => x.body)[0] || {};
+      const seenM = (rM.dialog_seen || {})[sessM] || {};
+      check("MF1: a dialog seen 30 min ago — the route carries its age capped at 600 s", seenM.id === "dM" && seenM.ms_ago === 600000, JSON.stringify(rM));
+      check("MF1: …and a 'yes' begun now answers it", answersM.length === 1 && answersM[0].dialog_id === "dM", JSON.stringify(answersM));
+      state.dialog = null; delete state.dialogsBy[sessM];
+      await sleep(1200);
+      if ((await vstate(pageV)) !== "listening") { await pageV.click("#voice-btn"); await sleep(1500); }
+    }
     // ---- the server's own refusal ({kind: "early"}): nothing pressed, the
     // dialog is read out (so the next words answer it).
     {
@@ -3403,6 +3478,53 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
       await V(() => { document.getElementById("compose").value = ""; window.__speakMs = 15; });
       await sleep(500);
       if ((await vstate(pageV)) !== "listening") { await pageV.click("#voice-btn"); await sleep(1500); }
+    }
+    // ---- cycle 4: the server's end-of-turn verdict (each chunk answer's
+    // turn {p, hold_ms, reason}) sets the quiet that ends a streamed phrase:
+    // a lone command ends ~350 ms after the voice stops, a phrase trailing
+    // off on "and…" holds 1.5 s; no verdict (an older server), or a command
+    // with words already in the box, keeps the fixed 1.1 s.
+    {
+      const turnPhrase = async (label, turn, words, boxText) => {
+        await waitFor(pageV, () => window.mfVoice.state === "listening" && window.mfVoice.stt.active(), 3000, label + ": listening");
+        await sleep(1200);
+        await V((t) => { document.getElementById("compose").value = t; }, boxText || "");
+        const a = "s" + state.streamOpens.length, b = "s" + (state.streamOpens.length + 1);
+        [a, b].forEach((x) => {
+          if (turn) state.streamTurn[x] = turn; else delete state.streamTurn[x];
+          state.streamScript[x] = [{ committed: words, partial: "" }];
+          state.streamEndReply[x] = { committed: "", final: words, final_ms: 100, same: true };
+        });
+        const ends0 = state.streamEnds.length;
+        await V(() => window.__tone(0.4));
+        await sleep(450);
+        await V(() => window.__tone(0.002));
+        const quietAt = Date.now();
+        let at1300 = -1;
+        for (let t = Date.now(); state.streamEnds.length === ends0 && Date.now() - t < 4000; ) {
+          await sleep(10);
+          if (at1300 < 0 && Date.now() - quietAt >= 1300) at1300 = state.streamEnds.length - ends0;
+        }
+        if (at1300 < 0) at1300 = state.streamEnds.length - ends0;
+        const sid = state.streamEnds[ends0];
+        const took = sid ? (state.streamEndDone[sid] || Date.now()) - quietAt : -1;
+        const rt = await V(() => window.mfVoice.rec.turn || null);
+        [a, b].forEach((x) => { delete state.streamTurn[x]; });
+        await sleep(900);   // the final routed (a prompt: into the box)
+        await V(() => { document.getElementById("compose").value = ""; });
+        if ((await vstate(pageV)) !== "listening") { await pageV.click("#voice-btn"); await sleep(1500); }
+        console.log("  turn " + label + ": phrase ended " + took + " ms after the voice stopped (verdict " + JSON.stringify(turn) + ")");
+        return { took, ended: !!sid, sid, at1300, rt };
+      };
+      const cmd = await turnPhrase("command", { p: 0.9, hold_ms: 350, reason: "command" }, "check the build");
+      check("turn: a lone command (verdict 'command', 350 ms) ends the phrase ~350 ms after the voice stops, not 1.1 s (" + cmd.took + " ms)", cmd.ended && cmd.took >= 200 && cmd.took < 850, JSON.stringify(cmd));
+      check("turn: …the page keeps the last verdict (Diagnostics' 'End of turn')", !!cmd.rt && cmd.rt.reason === "command" && cmd.rt.hold === 350, JSON.stringify(cmd.rt));
+      const con = await turnPhrase("connector", { p: 0.15, hold_ms: 1500, reason: "connector" }, "check the build and");
+      check("turn: a phrase trailing off (verdict 'connector', 1500 ms) is NOT ended by 1.3 s of quiet, and ends after 1.5 s (" + con.took + " ms)", con.ended && con.at1300 === 0 && con.took >= 1400 && con.took < 2400, JSON.stringify(con));
+      const inBox = await turnPhrase("command, words in the box", { p: 0.9, hold_ms: 350, reason: "command" }, "check the build", "draft words ");
+      check("turn: …a 'command' verdict with words already in the box keeps the 1.1 s quiet (the server cannot see the box) (" + inBox.took + " ms)", inBox.ended && inBox.took >= 1000 && inBox.took < 2000, JSON.stringify(inBox));
+      const none = await turnPhrase("no verdict", null, "check the build");
+      check("turn: …no verdict on the chunks (an older server) keeps the fixed 1.1 s (" + none.took + " ms)", none.ended && none.took >= 1000 && none.took < 2000, JSON.stringify(none));
     }
     // ---- a MUTED microphone (iOS during a call or Siri, another app for a
     // moment, a Bluetooth route change) is a pause, not a loss: the phrase

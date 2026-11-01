@@ -3376,8 +3376,10 @@
     return "m-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
   })();
   var VOICE_WAV_RATE = 16000;            // the rate of the uploaded clip
-  var VOICE_SILENCE_MS = 1100;           // quiet after speech that ends the clip
-  var VOICE_CONTROL_TAIL_MS = 250;       // ...or this, after a streamed guess that ends in a control phrase (voiceGuessControl)
+  var VOICE_SILENCE_MS = 1100;           // quiet after speech that ends the clip (a streamed phrase: the server's verdict, voiceTurnHoldMs)
+  var VOICE_TURN_MIN_MS = 300;           // the server's end-of-turn hold (a chunk's turn.hold_ms) is never shorter than this...
+  var VOICE_TURN_MAX_MS = 3000;          // ...nor longer
+  var VOICE_CONTROL_TAIL_MS = 250;      // ...or this, after a streamed guess that ends in a control phrase (voiceGuessControl)
   var VOICE_CONTROL_END_MS = 1500;       // "over": the MOST /end's accurate final is waited for; then the fast words go (voiceEndBudgetMs)
   var VOICE_CONTROL_END_MIN_MS = 300;    // ...and the least (a plain /end flush, no accurate pass)
   var VOICE_CLIP_MAX_MS = 12000;         // the hard cap on one clip
@@ -3400,6 +3402,22 @@
   // localStorage cs_voice_barge = "1".
   function voiceBargeOn() {
     try { var f = localStorage.getItem("cs_voice_barge"); return !!f && f !== "0" && f !== "false"; } catch (e) { return false; }
+  }
+  // Pure: the quiet that ends a streamed phrase, from the latest chunk's
+  // end-of-turn verdict (turn {hold_ms, reason}: 350 ms after a radio word
+  // or a lone command, 900 after a sentence, 1500 after "and…"); none (an
+  // older server, no chunk back yet): VOICE_SILENCE_MS. Held to
+  // [VOICE_TURN_MIN_MS, VOICE_TURN_MAX_MS], and never SHORTER than
+  // VOICE_SILENCE_MS when the verdict did not hear the latest speech
+  // (fresh false: loud audio came in after the chunk it answered was cut)
+  // or is a whole-phrase "command" with words already in the box (boxEmpty
+  // false: the server cannot see the box — "repeat" there is dictation).
+  function voiceTurnHoldMs(turn, fresh, boxEmpty) {
+    var ms = turn && typeof turn === "object" ? Number(turn.hold_ms) : NaN;
+    if (!(ms > 0) || !isFinite(ms)) return VOICE_SILENCE_MS;
+    ms = Math.min(VOICE_TURN_MAX_MS, Math.max(VOICE_TURN_MIN_MS, Math.round(ms)));
+    if (!fresh || (turn.reason === "command" && !boxEmpty)) ms = Math.max(ms, VOICE_SILENCE_MS);
+    return ms;
   }
   var VOICE_CARRY_MAX_MS = 10000;        // the next phrase records from the moment one ends (carryFrom); untaken this long, it goes
   var VOICE_MIC_PAUSE_REASK_MS = 5000;   // a start finds the mic muted longer than this (or since before we knew): asked for anew (getStream)
@@ -3879,9 +3897,10 @@
                // block (the lead-in); busy = a request in flight (never
                // two); pend = the phrase's committed words; partial = its
                // unstable tail; lead = the words before a clip that took
-               // over; words = the caption shows words.
+               // over; words = the caption shows words; turn = the latest
+               // chunk's end-of-turn verdict (recHoldMs).
                mode: "clip", sid: "", queued: 0, speechAt: 0, loudQueued: false, busy: false, opening: false, chunks: 0,
-               req: null, ending: false, dead: false, pend: "", partial: "", lead: "", words: false };
+               req: null, ending: false, dead: false, pend: "", partial: "", lead: "", words: false, turn: null };
     }
     // The caption while nothing has come back: "Hearing you…" while the
     // detector hears speech (and VOICE_HEARING_MS after), else
@@ -3999,9 +4018,19 @@
       recStatus(g, h);
       // The guess ends in a control phrase and the voice has been quiet
       // VOICE_CONTROL_TAIL_MS since: it acts now, not after the silence stop.
+      // Else it ends on the quiet the latest chunk's verdict asks for (recHoldMs).
       if (g.ctl && g.heard && !loud && now - g.lastLoud >= VOICE_CONTROL_TAIL_MS) controlFire(g, mine);
-      else if (g.heard && now - g.lastLoud > VOICE_SILENCE_MS) finish();
+      else if (g.heard && now - g.lastLoud > recHoldMs(g, h)) finish();
       else if (g.mode === "stream") streamPump(g, mine);
+    }
+    // The quiet that ends this phrase: a stream's latest end-of-turn verdict
+    // (g.turn, from the last chunk answered: fresh while no loud block came
+    // in after that chunk was cut — g.turn.loud, the last loud block in it),
+    // else VOICE_SILENCE_MS (a clip, a stream that broke into one, no
+    // verdict yet). h.boxEmpty: the box holds no words of its own.
+    function recHoldMs(g, h) {
+      if (g.mode !== "stream" || !g.turn) return VOICE_SILENCE_MS;
+      return voiceTurnHoldMs(g.turn, g.lastLoud <= g.turn.loud, !h.boxEmpty || h.boxEmpty());
     }
     // Barge-in (voiceBargeOn: cs_voice_barge): a voice talking OVER the line
     // — every block of VOICE_BARGE_BLOCKS in a row above max(VOICE_BARGE_RMS,
@@ -4376,7 +4405,7 @@
     // silence BEFORE its audio, where the quiet was — never a later one: the
     // stream's audio is one piece). Its answer times the pass (passMs).
     function streamChunk(g, mine) {
-      var n = g.blocks.length, frames = g.queued, all = new Float32Array(frames), at = 0, t0 = Date.now();
+      var n = g.blocks.length, frames = g.queued, all = new Float32Array(frames), at = 0, t0 = Date.now(), loudAt = g.lastLoud;
       for (var i = 0; i < n; i++) { all.set(g.blocks[i], at); at += g.blocks[i].length; }
       var first = !g.chunks;
       g.chunks++;
@@ -4400,6 +4429,12 @@
         var ms = Number(x.j.ms) || 0;   // 0: a quiet chunk ran no pass
         if (ms > 0) passMs = voice.rec.passMs = ms;
         voice.rec.chunk = { ms: ms || (Date.now() - t0), audio: Number(x.j.audio_s) || 0, error: "", at: Date.now() };
+        // The server's end-of-turn verdict for the words so far (recHoldMs);
+        // a chunk without one (an older server, a verdict that failed) puts
+        // the fixed quiet back.
+        var turn = x.j.turn;
+        g.turn = turn && typeof turn === "object" ? { hold_ms: turn.hold_ms, reason: String(turn.reason || ""), loud: loudAt } : null;
+        if (g.turn) voice.rec.turn = { hold: voiceTurnHoldMs(g.turn, true, true), reason: g.turn.reason, at: Date.now() };
         if (g.trace) {
           (g.trace.passes = g.trace.passes || []).push(ms);
           if (g.debug) { try { console.log("[voice] pass " + ms + " ms (" + (Date.now() - t0) + " ms round trip, " + (frames / g.rate).toFixed(2) + " s sent)"); } catch (e) {} }
@@ -4781,7 +4816,7 @@
       return fetch("/api/voice/speak", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: part }),
+        body: JSON.stringify({ text: part, client: VOICE_CLIENT_ID }),   // this page's own reply slot (the server's listener key)
         signal: a ? a.signal : undefined,
       }).then(function (r) {
         if (!r.ok) {
@@ -5076,6 +5111,7 @@
     lastPrompt: null,            // Diagnostics: {dictated, say} of that prompt
     lastRoute: "",               // Diagnostics: what /api/voice/route last said (or why it did not)
     dialogSeen: {},              // title → {id, at}: when this page first had that session's dialog (voiceDialogNote)
+    dialogDone: {},              // title → the dialog id last answered there, while its rows may still carry it (voiceDialogAnswered)
     early: 0,                    // answers begun before their dialog was there, refused (voiceEarly)
     cfg: { stt: "phone", tts: "phone", approve_dialogs: true, loaded: false,
            server_ready: {}, backends: { stt: [], tts: [] }, system: null, say_all: null },
@@ -6014,6 +6050,9 @@
       onInterim: function (t, tail) { if (voiceIsListening() && !voiceEchoing()) { voiceHeardSome(); voiceCaption(t || voiceDictHint(), t ? tail : ""); } },
       // A streamed phrase so far: into the box as a guess (voiceGuessShow).
       onGuess: function (t) { if (!voiceIsListening()) return false; voiceHeardSome(); return voiceGuessShow(t); },
+      // The box holds no words but this phrase's guess: a lone command's
+      // short end-of-turn hold applies (voiceTurnHoldMs).
+      boxEmpty: function () { return !voice.box && !voiceGuessBase(vbox()).trim(); },
       onStatus: function (t) { if (voiceIsListening()) voiceCaption(mode === "dialog" ? t : t + " · " + voiceDictHint()); },
       onLevel: function (v) { if (voiceIsListening() && voicePickup(v) > 0) voice.loudAt = Date.now(); voiceLevel(voiceIsListening() ? v : null); },
       onSpeech: function () { if (voiceIsListening()) voiceSpeechTick(); },
@@ -6291,8 +6330,7 @@
     var L = voiceListen_, box = vbox(), G = voice.guess;
     if (L.mode === "dialog" || L.routing) return false;
     if (G.box !== box) { voiceGuessDrop(); G.box = box; }
-    var cur = box.value;
-    var base = G.typed && cur.slice(cur.length - G.typed.length) === G.typed ? cur.slice(0, cur.length - G.typed.length) : cur;
+    var cur = box.value, base = voiceGuessBase(box);
     var words = !voice.box && !base.trim() && voiceMayBeCommand(all) ? ""
       : voiceHoldBack(all, !voice.box && !!voiceAsks(voice.session))[0];
     var put = voiceGuessPut(cur, G.typed, words);
@@ -6303,6 +6341,11 @@
     vboxSized();
     if (put.typed) voice.dictated = true;
     return !!put.type;
+  }
+  // The box's text without the guess typed into it: what was there before the phrase.
+  function voiceGuessBase(box) {
+    var G = voice.guess, cur = box.value;
+    return G.box === box && G.typed && cur.slice(cur.length - G.typed.length) === G.typed ? cur.slice(0, cur.length - G.typed.length) : cur;
   }
   // Take the guess back (the phrase's final is here, or it heard nothing):
   // the box as it was before the phrase. Returns what was taken back.
@@ -7180,7 +7223,7 @@
     if (asks === "question") { voiceAnswerSend(title, a.said); return; }
     voiceSetState("sending", a.said);
     fetch("/api/instances/" + encodeURIComponent(title) + "/dialog?quiet=1")
-      .then(function (r) { return r.status === 204 ? null : r.ok ? r.json() : null; })
+      .then(function (r) { if (r.status === 204) voiceDialogNote(title, ""); return r.status === 204 ? null : r.ok ? r.json() : null; })   // 204: nothing on screen
       .catch(function () { return null; })
       .then(function (d) {
         if (voice.state !== "sending") return;
@@ -7799,6 +7842,11 @@
   // no later than its recognizer's start, nor than this long before the
   // previous phrase came in — an early estimate is the safe one.
   var VOICE_SPOKE_LEAD_MS = 2000;
+  // A sighting's age in a route body is capped here (the server's own cap,
+  // voice_router._TIMING_MAX_S): an older one reads as this old. A capped
+  // age makes the dialog look newer than it is, so the check only gets
+  // stricter — and a prompt waiting half an hour stays answerable (MF1).
+  var VOICE_SEEN_MAX_MS = 600000;
   function voiceSpokeAt(at) {
     if (Number(at) > 0) return Number(at);
     var L = voiceListen_;
@@ -7812,15 +7860,29 @@
     if (!id) { if (cur) delete voice.dialogSeen[title]; return; }
     if (!cur || cur.id !== String(id)) voice.dialogSeen[title] = { id: String(id), at: Date.now() };
   }
-  // The rows: a dialog's id when the row carries it. A row that asks
+  // `title`'s dialog `id` was answered (here: by voice, on the sheet; or
+  // the server says it already was): its sighting goes — the same prompt
+  // asked again (the same id: ids hash the dialog's text) is a new
+  // sighting, so a "yes" begun before it came back never answers it. The
+  // rows lag the answer by a poll or two: one still carrying that id is
+  // not a new sighting (dialogDone) until a row shows no dialog there.
+  function voiceDialogAnswered(title, id) {
+    if (!title || typeof voice === "undefined" || !voice || !voice.dialogSeen) return;
+    delete voice.dialogSeen[title];
+    if (voice.dialogDone && id) voice.dialogDone[title] = String(id);
+  }
+  // The rows: a dialog's id when the row carries it (not the one just
+  // answered, a row behind: voiceDialogAnswered). A row that asks
   // nothing clears only a sighting the rows themselves confirmed — a row
   // lags (a sub-agent's prompt reads "working" while GET /dialog serves it),
   // and clearing a fresh sighting would only make the next one later.
   function voiceDialogRows(list) {
     (list || []).forEach(function (i) {
       var a = i && i.asking;
+      var done = i && voice.dialogDone ? voice.dialogDone[i.title] : undefined;
+      if (done !== undefined && !(a && a.kind === "dialog")) delete voice.dialogDone[i.title];
       if (a && a.kind === "dialog") {
-        if (!a.dialog_id) return;
+        if (!a.dialog_id || done === String(a.dialog_id)) return;
         voiceDialogNote(i.title, String(a.dialog_id));
         var x = voice.dialogSeen && voice.dialogSeen[i.title];
         if (x) x.rows = true;
@@ -7835,7 +7897,7 @@
     var out = {};
     Object.keys(voice.dialogSeen).slice(0, 64).forEach(function (t) {
       var x = voice.dialogSeen[t];
-      out[t] = { id: x.id, ms_ago: Math.max(0, now - x.at) };
+      out[t] = { id: x.id, ms_ago: Math.min(VOICE_SEEN_MAX_MS, Math.max(0, now - x.at)) };
     });
     return out;
   }
@@ -8033,7 +8095,7 @@
       return r.json().catch(function () { return {}; }).then(function (j) {
         if (voice.state === "off" || (mine && voice.session !== title)) return;
         if (r.ok) {
-          voiceDialogNote(title, "");   // answered: the next prompt (even an identical one) is new
+          voiceDialogAnswered(title, dialogId);   // answered: the next prompt (even an identical one) is new
           if (mine) {
             voice.dialog = null;
             voice.asked = false;
@@ -8058,6 +8120,7 @@
           return;
         }
         if (r.status === 409 && j && j.dialog_answered) {
+          voiceDialogAnswered(title, dialogId);   // answered (elsewhere): the next prompt is new
           if (mine) voice.dialog = null;
           askDialogAnswered(title);
           voiceSayThenIdle("Already answered.");
@@ -9129,6 +9192,7 @@
         ((window.OfflineAudioContext || window.webkitOfflineAudioContext)
           ? "OfflineAudioContext (the browser's), no clip yet" : "low-pass decimator (no OfflineAudioContext)")),
       "Silence stop: " + VOICE_SILENCE_MS + " ms after speech (clip cap " + VOICE_CLIP_MAX_MS / 1000 + " s)",
+      voice.rec.turn ? "End of turn: the server's verdict — last " + voice.rec.turn.reason + ", " + voice.rec.turn.hold + " ms of quiet" : "",
       voice.cfg.stt === "server" ? "Recognition stream: " + voiceDiagStream() : "",
       voice.cfg.stt === "server" ? "Microphone: " + (voiceAdapters.serverStt.warm()
         ? "warm (kept " + Math.round(voice.keepMs / 1000) + " s after the last phrase)" : "not held") : "",
@@ -9666,7 +9730,7 @@
     ask.dialog = null;
     if (note) ask.note = note;
     fetch("/api/instances/" + encodeURIComponent(e.title) + "/dialog?quiet=1")
-      .then(function (r) { return r.status === 204 ? false : r.ok ? r.json() : false; })
+      .then(function (r) { if (r.status === 204) voiceDialogNote(e.title, ""); return r.status === 204 ? false : r.ok ? r.json() : false; })   // 204: nothing on screen
       .catch(function () { return false; })
       .then(function (d) {
         if (seq !== ask.dialogSeq || !ask.entry || ask.entry.key !== e.key) return;
@@ -9967,6 +10031,7 @@
     askPostAnswer(e.title, body).then(function (x) {
       if (ask.entry !== e) return;
       var moved = x.r.status === 409 && (x.j.dialog_changed || x.j.dialog_answered);
+      if (x.r.ok || moved) voiceDialogAnswered(e.title, d.id);   // the next step (even the same id) is a new sighting
       if (x.r.ok || moved) { askSelRefetch(x.r.ok ? String(d.id) : ""); return; }
       ask.busy = false;
       askErr("Couldn't answer: " + (x.j.error || "HTTP " + x.r.status));
@@ -10001,7 +10066,7 @@
           askSelVoiceFailed(e);
           return;
         }
-        if (!d || typeof d !== "object") { askSelDone(e, "answered"); return; }
+        if (!d || typeof d !== "object") { voiceDialogNote(e.title, ""); askSelDone(e, "answered"); return; }   // 204: nothing on screen
         if (d.kind === "question") {
           ask.entry.kind = "question";
           ask.entry.text = String(d.question || ask.entry.text || "");
@@ -10121,12 +10186,14 @@
         ask.busy = false;
         if (!ask.entry || ask.entry.key !== e.key) return;
         if (r.ok) {
+          voiceDialogAnswered(e.title, d.id);   // answered by hand: the next prompt (even an identical one) is new
           askVoiceAnsweredHere(e.title);
           askDone(e, "answered " + stripMarkdown(String(opt.label || opt.key)));
           return;
         }
         if (r.status === 409 && j && j.dialog_changed) { askFetchDialog("It changed — this is the prompt it shows now."); return; }
         if (r.status === 409 && j && j.dialog_answered) {
+          voiceDialogAnswered(e.title, d.id);
           ask.answered[e.key] = true;
           ask.dialog = false;
           ask.note = "Already answered.";

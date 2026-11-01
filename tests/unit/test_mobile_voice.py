@@ -1025,7 +1025,9 @@ def test_mobile_js_server_recognizer_records_wav():
     # Channel 0 copied per block; the silence detector reads the same blocks.
     assert "new Float32Array(ev.inputBuffer.getChannelData(0))" in stt
     assert "Math.max(VOICE_RMS_SPEECH, g.floor * 3)" in stt
-    assert "now - g.lastLoud > VOICE_SILENCE_MS" in stt
+    # The quiet that ends it: the stream's end-of-turn verdict, else the fixed 1.1 s.
+    assert "now - g.lastLoud > recHoldMs(g, h)" in stt
+    assert 'if (g.mode !== "stream" || !g.turn) return VOICE_SILENCE_MS;' in stt
     # A phrase arrives 1.1 s after the last word, not 1.8 s; the cap stays.
     assert "var VOICE_SILENCE_MS = 1100;" in v
     assert "var VOICE_CLIP_MAX_MS = 12000;" in v
