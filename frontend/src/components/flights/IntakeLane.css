@@ -70,7 +70,7 @@
   padding: 10px;
   background: var(--panel-2);
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 8px;
 }
 
 .sky-lane-block-head {
@@ -369,4 +369,28 @@
   margin-right: -8px;
   bottom: -8px;
   flex: 0 0 16px;
+}
+
+/* --- Round 17 polish ----------------------------------------------------------
+   The lane as a sky object: the one ring (SkySelection.css draws it selected,
+   replacing Sky.css's dashed one), transparent at rest, its hover when the
+   head (its handle) is hovered, raised in the hand. */
+.sky .sky-intake > .sky-lane {
+  outline: calc(1px / var(--sky-z, 1)) solid transparent;
+  outline-offset: calc(2px / var(--sky-z, 1));
+  transition: outline-color 120ms ease, box-shadow 120ms ease;
+}
+
+.sky .sky-intake > .sky-lane:where(:has(> .sky-lane-head:hover)) {
+  outline-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+.sky .sky-intake.is-dragging > .sky-lane {
+  box-shadow: var(--sky-shadow-raised);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sky .sky-intake > .sky-lane {
+    transition: none;
+  }
 }

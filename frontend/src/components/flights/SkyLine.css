@@ -9,21 +9,25 @@
   min-width: 320px;
   padding: 0 12px 12px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--panel);
   color: var(--text);
-  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.18);
+  box-shadow: var(--sky-shadow-rest);
+  /* The ring (round 17), as a box's (FlywayCanvas.css): always drawn,
+     transparent at rest, screen-sized at any zoom. */
+  outline: calc(1px / var(--sky-z, 1)) solid transparent;
+  outline-offset: calc(2px / var(--sky-z, 1));
+  transition: box-shadow 120ms ease, outline-color 120ms ease, opacity 120ms ease;
 }
 
+/* The light theme's softer shadow is the token's (FlywayCanvas.css). */
 .light .skl {
-  box-shadow: 0 4px 16px rgba(20, 30, 60, 0.1);
+  box-shadow: var(--sky-shadow-rest);
 }
 
+/* The focused session's line wears the selection ring (SkySelection.css). */
 .skl.is-focused {
   border-color: var(--accent);
-  box-shadow:
-    0 0 0 3px rgba(var(--accent-rgb), 0.5),
-    0 6px 22px rgba(0, 0, 0, 0.18);
 }
 
 .skl.is-editing,
@@ -320,9 +324,9 @@
   transform-origin: 100% 100%;
   background:
     linear-gradient(135deg, transparent 0 50%, var(--muted) 50% 58%, transparent 58% 68%, var(--muted) 68% 76%, transparent 76%);
-  border-bottom-right-radius: 12px;
+  border-bottom-right-radius: 10px;
   opacity: 0;
-  transition: opacity 0.15s ease;
+  transition: opacity 120ms ease;
 }
 
 .skl:hover .skl-box-resize,
@@ -456,7 +460,7 @@
 .skl .fl-box:not(.fl-box-open) {
   gap: 5px;
   padding: 12px 14px;
-  border-radius: 12px;
+  border-radius: 8px;
   font-size: 15px;
 }
 
@@ -519,7 +523,7 @@
 .skl .fl-box.fl-box-branch:not(.fl-box-open) {
   gap: 4px;
   padding: 9px 12px;
-  border-radius: 10px;
+  border-radius: 8px;
   font-size: 14px;
 }
 
@@ -813,9 +817,11 @@
 }
 
 /* The line takes the focus (a press on its bar) so Delete lands on it; the
-   pointer's focus draws no ring, the keyboard's does. */
-.skl:focus:not(:focus-visible) {
-  outline: none;
+   pointer's focus draws no ring, the keyboard's does. Round 17: only the
+   colour, at the lowest weight, so a selected or hovered line pressed on
+   keeps its ring (an `outline: none` here hid the selection). */
+.skl:where(:focus:not(:focus-visible)) {
+  outline-color: transparent;
 }
 
 /* Click mode (round 12): nothing moves by dragging, the sky pans under the
@@ -832,7 +838,7 @@
   background: color-mix(in srgb, var(--accent) 10%, var(--panel));
   box-shadow:
     0 0 0 4px rgba(var(--accent-rgb), 0.55),
-    0 6px 22px rgba(0, 0, 0, 0.18);
+    var(--sky-shadow-rest);
 }
 
 /* --- Round 15 looks (docs/flights.md "As built: round 15 looks") ------------- */
@@ -917,4 +923,41 @@
 
 .skl[data-lod="far"] .skl-age {
   display: none;
+}
+
+/* --- Round 17 polish (docs/flights.md "As built: round 17 polish-css") -------
+   The line's hover ring, its keyboard ring, the raised shadow in the hand,
+   and the drop's highlight at the far band. The selection ring itself is
+   SkySelection.css's; the shadow tokens are FlywayCanvas.css's. */
+
+/* Hover the bar (the line's handle): the hover ring, 1px at half the accent.
+   Zero weight, so the selection ring always wins over it. */
+.skl:where(:has(> .skl-bar:hover)) {
+  outline-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+/* Keyboard focus: the hover ring in the selection's colour. */
+.skl:focus-visible {
+  outline-color: var(--accent);
+}
+
+/* In the hand: raised. */
+.sky-line-slot.is-dragging > .skl {
+  box-shadow: var(--sky-shadow-raised);
+}
+
+/* A flyway over the line at the far band: the end + that takes it keeps a
+   2px ring on SCREEN (the plane's 2px is under one there) and a stronger
+   wash. A stop chip's lit gap is a screen-sized pill already, ringed 2px in
+   every band (FlywayCanvas.css .fl-gap-add.fl-gap-lit). */
+.skl[data-lod="far"] .fl-box-add.fl-drop {
+  background: rgba(var(--accent-rgb), 0.3);
+  box-shadow: 0 0 0 calc(2px / var(--sky-z, 1)) var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skl,
+  .skl-box-resize {
+    transition: none;
+  }
 }

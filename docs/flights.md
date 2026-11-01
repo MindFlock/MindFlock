@@ -5581,3 +5581,100 @@ The integrator merges, rebuilds the bundle in the round's worktree, the
 judge re-shoots, the integrator fixes what is quick, merges into
 `emandel2630/flights`, deploys. The judge's leftovers are the next cycle's
 seed, written at the top of the next round's contract.
+
+### As built: round 17 polish-css
+
+CSS only, no component changed. Tests: `frontend/src/__tests__/skyPolish.test.ts`
+(13 tests, the sheets read as text).
+
+**One ring, one outline.** Every ringed thing wears it at rest, transparent:
+`outline: calc(1px / var(--sky-z, 1)) solid transparent; outline-offset:
+calc(2px / var(--sky-z, 1))`. That covers `.fl-box`, `.skl` (a session's line
+and a grounded one), `.sky-object` (people/device blocks, notes, the landing
+strip; radius 8px so it hugs the card) and the intake lane
+(`.sky .sky-intake > .sky-lane`). So hover, focus and selection change only
+the colour and width. The ring eases in, and nothing moves or grows. Every
+width is divided by `--sky-z`, so the ring is 2 (or 1) **screen** px at any
+zoom. At 40 % a plane-px ring would be under one pixel on screen.
+
+| State | The ring | Where |
+|---|---|---|
+| rest | 1px, transparent | each element's own rule |
+| hover | 1px, `color-mix(accent 50%)` | `.fl-box:where(:not(.fl-box-open):hover)`, the line's bar (`.skl:where(:has(> .skl-bar:hover))`), an object's head (`.sky-block-head` / `.sky-note-head` / `.sky-lane-head`), the lane's head. `:where` keeps it at zero weight, so the selection always wins. An open box is never restyled. |
+| `:focus-visible` | 1px, the accent (the hover ring in the selection's colour) | `.fl-box`, `.skl`, `.skl.skl-grounded`, `.sky-object:where(:has(:focus-visible))`, a focused note (`.sky-object:has(> .sky-note:focus)`) |
+| selected | **2px, the accent, 2px out, solid** | ONE rule in `SkySelection.css`: `.skl.is-selected`, `.skl.is-focused`, `.fl-box.selected`, `.fl-box.fl-box-selected`, `.sky-object.is-selected`, `.sky .sky-intake.is-selected > .sky-lane` (this beats Sky.css's dashed lane rule by weight). A lifted box (`.fl-box.fl-lifted`) wears it too. |
+
+These replaced: the dashed selection outlines (lines 5px out, boxes 3px out),
+the 3px `box-shadow` focus/selected rings on `.fl-box`, `.skl.is-focused` and
+the grounded line, and the note's 2px box-shadow ring. The border-colour
+cues stay (a selected line or box keeps its accent edge). The state rings
+(`.fl-st-current` / `-perched` / `-halted` / `-paused`, `.fl-described`) are
+still box-shadows, so a running box that is also selected shows both.
+
+The `.skl:focus:not(:focus-visible) { outline: none }` rule became
+`.skl:where(:focus:not(:focus-visible)) { outline-color: transparent }`. At
+weight (0,3,0) it had hidden a selected line's ring as soon as a press on its
+bar focused it.
+
+**One shadow scale.** `--sky-shadow-rest` and `--sky-shadow-raised` are
+defined once, in `FlywayCanvas.css` on `.sky, .fl-canvas`, with a softer pair
+under `.light`. FlywayCanvas.css rather than SkyLine.css, because the pane's
+Flight tab and the flyway editor draw boxes outside `.sky`. Rest is used on
+`.skl`, `.fl-box`, `.sky-block` (it had none), `.sky-note` and `.sky-palette`,
+and under the merge-target halos. Raised is used on
+`.sky-line-slot.is-dragging > .skl`,
+`.sky-object.is-dragging > :is(.sky-block, .sky-note, .sky-lane)`,
+`.sky .sky-intake.is-dragging > .sky-lane`,
+`.sky-palette-slot.is-dragging .sky-palette`, `.fl-lifted` (it lost its 45 %
+accent halo for the ring) and the selection bar. Popovers and menus
+(`.fl-tools`, `.sky-ground-menu`, StopParts' menus, `.fl-rewind`) and an
+open box's cards are chrome, so they keep their own shadows.
+
+**Radii.** Lines are 10px: `.skl` (was 12) and its corner handle; the floating
+`.sky-palette` (was 12). Boxes are 8px: `.fl-box` (was 10), the sky's roomy
+box (was 12) and branch (was 10), the grounded line's head box (was 10),
+`.sky-block` (was 10), `.sky-note` and its head (was 6), and `.sky-lane-block`
+(was 9). Chips are 999px: the shelf's `.sky-stop-chip` (was the button
+tier's 6px). Kept on purpose: the perch's 18px (its shape says "waits on
+you", and `flightsUi.test.ts` pins it) and the flown pill's 999px.
+
+**Motion.** The new transitions are 120ms ease on transform, box-shadow,
+outline-color and opacity only. `.fl-box` dropped its border-color leg and
+its 0.15–0.18s timings, and the line's corner handle went from 0.15s to
+120ms. No sheet in the round transitions a size. Under
+`prefers-reduced-motion: reduce` they are off: `.fl-box` (as before), `.skl`,
+`.skl-box-resize`, `.sky-object`, `.sky-block`, `.sky-note`, `.sky-palette`
+and the lane.
+
+**Touch.** In one `@media (hover: none)` block at the end of
+FlywayCanvas.css, every Sky control gets a centred `::after` at least 40px
+square (`min-width` / `min-height: 40px`, `translate(-50%, -50%)`). That
+covers the ◧ size control, the card fold, the ⋯ summaries, `.fl-tool`,
+`.fl-toggle`, `.fl-pick`, `.fl-icon-btn`, `.fl-palette-item`, `.sky .fl-btn`,
+the lane's toggles and rail icon, the shelf's fold and chips, the selection
+bar's buttons, and the absolutely placed handles (`.skl-box-resize`,
+`.skl-resize`, `.sky-palette-resize`, `.fl-gap-add`, `.fl-bird-marker`).
+Controls in flow get `position: relative`, while the absolutely placed ones
+already are a containing block. Nothing grows: a bigger `min-height` would
+have pushed the 42px line bar and the shelf.
+
+The hit area is in plane px. The phone's list view has no camera, so it is
+40 screen px there. A tablet's zoomed-out sky gets proportionally less, and
+the counter-scaled controls (the gaps, the handles) keep their full 40.
+
+**The drop.** The lit gap (`.fl-gap-add.fl-gap-lit`, "Tack on here") is now
+a 2px accent ring over a 2px panel gap (`0 0 0 2px var(--panel), 0 0 0 4px
+var(--accent)`); it was a 25 % halo. The pill is screen-sized, so this reads
+at every band. At far, the end + that takes a flyway
+(`.skl[data-lod="far"] .fl-box-add.fl-drop`) keeps a 2 screen-px ring
+(`calc(2px / var(--sky-z, 1))`) and a 30 % wash (was 16 %).
+
+**Open.** Two pins outside the fence still describe the old look and fail
+until they are updated. `skySelect.test.ts:308-309` wants
+`outline: 2px dashed var(--accent)` on `.skl.is-selected` and
+`.fl-box.fl-box-selected`; it should pin the one rule's
+`outline: calc(2px / var(--sky-z, 1)) solid var(--accent)` (skyPolish pins it
+already). `skyVisibility.test.ts:428` wants `0 0 0 3px` in `.fl-box.selected`;
+it should want `outline-color: var(--accent)`. Sky.css (sky-core's) still has
+the dashed `.sky-intake.is-selected > .sky-lane` rule. It is dead weight now
+that the heavier rule overrides it.

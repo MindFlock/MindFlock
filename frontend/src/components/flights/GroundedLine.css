@@ -1,15 +1,15 @@
 /* A grounded flight's line (GroundedLine.tsx): a session's line (SkyLine.css)
    with a dashed edge, since nothing flies it yet, and a dashed head box where
-   the session will sit. */
+   the session will sit. It wears the line's ring (round 17): hover, keyboard
+   focus and selection as a session's line does. */
 
 .skl.skl-grounded {
   border-style: dashed;
 }
 
 .skl.skl-grounded:focus-visible {
-  outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.5);
+  outline-color: var(--accent);
 }
 
 /* A Session chip over it: the head box lights up to take the drop. */
@@ -34,7 +34,7 @@
   min-height: 72px;
   padding: 10px 12px;
   border: 1.5px dashed color-mix(in srgb, var(--muted) 55%, var(--border));
-  border-radius: 10px;
+  border-radius: 8px;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.3;
