@@ -280,6 +280,7 @@ var window = { AudioContext: function () {}, AbortController: AbortController, f
 var VOICE_SPEAK_AHEAD = 2, VOICE_SPEAK_KEEP = 8, VOICE_CHUNK_GRACE_MS = 20;
 var VOICE_SPEAK_FETCH_MAX_MS = 150, VOICE_SPEAK_RESUME_MS = 50;
 var VOICE_SPEAK_WAIT_MIN_MS = 60, VOICE_SPEAK_WAIT_MAX_MS = 200;
+var VOICE_CLIENT_ID = "m-test-page";
 var voice = { prefs: { rate: 1 }, rec: {}, cfg: {} };
 var clipEnds = 0;
 function voiceClipEnded() { clipEnds++; }
@@ -290,7 +291,7 @@ var sleep = function (ms) { return new Promise(function (r) { setTimeout(r, ms);
 // The server: a request per POST /api/voice/speak; delay[text] ms (Infinity: never answers).
 var reqs = [], delay = {};
 fetch = function (url, o) {
-  var text = JSON.parse(o.body).text, r = { text: text, aborted: false, done: false };
+  var text = JSON.parse(o.body).text, r = { text: text, client: JSON.parse(o.body).client, aborted: false, done: false };
   reqs.push(r);
   return new Promise(function (resolve, reject) {
     var ms = delay[text] || 5, t = null;
@@ -1555,12 +1556,13 @@ def _seen_script(body: str) -> str:
     """voice.dialogSeen's functions as written, over a stub voice."""
     js = _js()
     return (
-        _consts(js, "VOICE_ANSWER_AFTER_MS", "VOICE_SPOKE_LEAD_MS")
-        + "var voice = { dialogSeen: {}, early: 0, state: 'listening', session: 'a', lastRoute: '' };\n"
+        _consts(js, "VOICE_ANSWER_AFTER_MS", "VOICE_SPOKE_LEAD_MS", "VOICE_SEEN_MAX_MS")
+        + "var voice = { dialogSeen: {}, dialogDone: {}, early: 0, state: 'listening', session: 'a', lastRoute: '' };\n"
         + "var voiceListen_ = { startedAt: 0, lastFinalAt: 0, listenAt: 0 };\n"
         + "function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }\n"
         + _whole(js, "voiceSpokeAt")
         + _whole(js, "voiceDialogNote")
+        + _whole(js, "voiceDialogAnswered")
         + _whole(js, "voiceDialogRows")
         + _whole(js, "voiceDialogSeenBody")
         + _whole(js, "voiceAnswerInTime")
@@ -1845,3 +1847,240 @@ function hold() {
     assert out["capped"] == 2 and out["n"] == 2
     assert out["paints"] == [True, False] and out["holding"] is False
     assert out["next"][0] is True and 200 <= out["next"][1] < 260
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 4: the server's end-of-turn verdict; stale dialog sightings
+# --------------------------------------------------------------------------- #
+@needs_node
+def test_the_turn_verdict_sets_the_quiet_that_ends_a_streamed_phrase():
+    js = _js()
+    script = (
+        _consts(js, "VOICE_SILENCE_MS", "VOICE_TURN_MIN_MS", "VOICE_TURN_MAX_MS")
+        + _whole(js, "voiceTurnHoldMs")
+        + """
+function t(hold, reason) { return { hold_ms: hold, reason: reason || "sentence" }; }
+console.log(JSON.stringify({
+  none: [voiceTurnHoldMs(null, true, true), voiceTurnHoldMs(undefined, true, true), voiceTurnHoldMs("x", true, true)],
+  bad: [voiceTurnHoldMs(t(NaN), true, true), voiceTurnHoldMs(t(0), true, true), voiceTurnHoldMs(t(-5), true, true),
+        voiceTurnHoldMs(t("abc"), true, true), voiceTurnHoldMs(t(Infinity), true, true), voiceTurnHoldMs({}, true, true)],
+  control: voiceTurnHoldMs(t(350, "control"), true, true),
+  sentence: voiceTurnHoldMs(t(900, "sentence"), true, true),
+  connector: voiceTurnHoldMs(t(1500, "connector"), true, true),
+  floor: [voiceTurnHoldMs(t(50, "control"), true, true), voiceTurnHoldMs(t(299.6), true, true)],
+  ceiling: voiceTurnHoldMs(t(60000), true, true),
+  numeric: voiceTurnHoldMs(t("900"), true, true),
+  commandEmpty: voiceTurnHoldMs(t(350, "command"), true, true),
+  commandInBox: voiceTurnHoldMs(t(350, "command"), true, false),
+  controlInBox: voiceTurnHoldMs(t(350, "control"), true, false),
+  stale: [voiceTurnHoldMs(t(350, "control"), false, true), voiceTurnHoldMs(t(1500, "connector"), false, true)],
+}));
+"""
+    )
+    out = _run(script)
+    # No verdict (an older server, nothing back yet, garbage): today's fixed quiet.
+    assert out["none"] == [1100, 1100, 1100]
+    assert out["bad"] == [1100] * 6
+    # The verdict's own hold.
+    assert out["control"] == 350 and out["sentence"] == 900 and out["connector"] == 1500
+    # Never under 300 ms of quiet, never over 3 s.
+    assert out["floor"] == [300, 300]
+    assert out["ceiling"] == 3000
+    assert out["numeric"] == 900
+    # A lone command: short only while the box holds no words (the server
+    # cannot see the box); a radio word is short either way.
+    assert out["commandEmpty"] == 350 and out["commandInBox"] == 1100
+    assert out["controlInBox"] == 350
+    # A verdict that did not hear the latest speech never shortens the quiet.
+    assert out["stale"] == [1100, 1500]
+
+
+def _rec_run(body: str):
+    """recBlock + recHoldMs as written, over a stream phrase fed quiet blocks
+    of 1024 frames at 16 kHz (64 ms) on a fake clock."""
+    js = _js()
+    stt = _stt(js)
+    script = (
+        _consts(
+            js,
+            "VOICE_SILENCE_MS",
+            "VOICE_TURN_MIN_MS",
+            "VOICE_TURN_MAX_MS",
+            "VOICE_CONTROL_TAIL_MS",
+            "VOICE_RMS_SPEECH",
+            "VOICE_LEAD_MS",
+        )
+        + "var clock = 100000; Date.now = function () { return clock; };\n"
+        + "var ended = [], fired = [], pumps = 0, boxEmpty = true;\n"
+        + "var g = { mic: {}, heard: true, rate: 16000, lastLoud: clock, blocks: [], frames: 0, queued: 0, floor: 0.001, mode: 'stream', turn: null, ctl: null };\n"
+        + "var token = { h: {} }, rec = g, carry = null;\n"
+        + "var h = { boxEmpty: function () { return boxEmpty; } };\n"
+        + "function voiceMicDeaf() { return false; }\n"
+        + "function micMuted() { return false; }\n"
+        + "function voiceMicMuted() { return false; }\n"
+        + "function voiceTraceMark() {}\n"
+        + "function recStatus() {}\n"
+        + "function finish() { ended.push(clock - g.lastLoud); g.heard = false; }\n"
+        + "function controlFire() { fired.push(clock - g.lastLoud); g.ctl = null; g.heard = false; }\n"
+        + "function streamPump() { pumps++; }\n"
+        + _whole(js, "voiceTurnHoldMs")
+        + _inner(stt, "recBlock")
+        + _inner(stt, "recHoldMs")
+        + """
+function ev(level) { var d = new Float32Array(1024); for (var i = 0; i < d.length; i++) d[i] = level * (i % 2 ? 1 : -1); return { inputBuffer: { length: 1024, getChannelData: function () { return d; } } }; }
+// Quiet blocks until the phrase ends (or 4 s): the quiet when it ended.
+function quietUntilEnd() { for (var i = 0; i < 64 && g.heard; i++) { clock += 64; recBlock(g, token, h, ev(0.001)); } return ended.length ? ended[ended.length - 1] : -1; }
+function speak() { g.heard = true; clock += 64; recBlock(g, token, h, ev(0.5)); }
+var out = {};
+"""
+        + body
+        + "\nconsole.log(JSON.stringify(out));\n"
+    )
+    return _run(script)
+
+
+@needs_node
+def test_a_streamed_phrase_ends_on_the_latest_chunks_verdict():
+    out = _rec_run("""
+// No verdict yet: the fixed 1.1 s.
+speak(); out.none = quietUntilEnd();
+// A fresh "command" verdict (it heard the last loud block), the box empty: ~350 ms.
+speak(); g.turn = { hold_ms: 350, reason: "command", loud: g.lastLoud }; out.command = quietUntilEnd();
+// The same with words in the box: 1.1 s.
+speak(); boxEmpty = false; g.turn = { hold_ms: 350, reason: "command", loud: g.lastLoud }; out.commandInBox = quietUntilEnd(); boxEmpty = true;
+// Trailing "and…": 1.5 s — a 1.2 s pause does not end it.
+speak(); g.turn = { hold_ms: 1500, reason: "connector", loud: g.lastLoud }; out.connector = quietUntilEnd();
+// A verdict from before the latest speech (stale): never shorter than 1.1 s.
+speak(); g.turn = { hold_ms: 350, reason: "control", loud: g.lastLoud - 200 }; out.stale = quietUntilEnd();
+// A bogus tiny hold: never under 300 ms.
+speak(); g.turn = { hold_ms: 10, reason: "control", loud: g.lastLoud }; out.floor = quietUntilEnd();
+// A clip (no stream, or one that broke into a clip): the verdict is not read.
+speak(); g.mode = "clip"; g.turn = { hold_ms: 350, reason: "control", loud: g.lastLoud }; out.clip = quietUntilEnd(); g.mode = "stream";
+// The radio word's own tail still acts first (250 ms), whatever the verdict.
+speak(); g.turn = { hold_ms: 1500, reason: "connector", loud: g.lastLoud }; g.ctl = { word: "over", send: true, text: "x" };
+quietUntilEnd(); out.ctl = fired.slice();
+out.ended = ended.length;
+""")
+    # The fixed quiet: the first 64 ms block past 1100 ms.
+    assert 1100 < out["none"] <= 1100 + 64
+    assert 350 < out["command"] <= 350 + 64
+    assert 1100 < out["commandInBox"] <= 1100 + 64
+    assert 1500 < out["connector"] <= 1500 + 64
+    assert 1100 < out["stale"] <= 1100 + 64
+    assert 300 < out["floor"] <= 300 + 64
+    assert 1100 < out["clip"] <= 1100 + 64
+    assert len(out["ctl"]) == 1 and 250 <= out["ctl"][0] < 250 + 64
+    assert out["ended"] == 7
+
+
+def test_each_chunk_answer_replaces_the_verdict_against_the_audio_it_heard():
+    stt = _stt(_js())
+    chunk = _inner(stt, "streamChunk")
+    # The last loud block IN the chunk, taken when it is cut (not when it returns).
+    assert "t0 = Date.now(), loudAt = g.lastLoud;" in chunk
+    assert (
+        'g.turn = turn && typeof turn === "object" ? { hold_ms: turn.hold_ms, reason: String(turn.reason || ""), loud: loudAt } : null;'
+        in chunk
+    )
+    # Taken before the words go out (a stop phrase there ends the phrase).
+    assert chunk.index("g.turn = ") < chunk.index(
+        "streamWords(g, mine, x.j.committed, x.j.partial);"
+    )
+    assert "turn: null }" in _inner(stt, "recNew")
+    # The listen tells the recorder whether the box has words of its own.
+    js = _js()
+    assert (
+        "boxEmpty: function () { return !voice.box && !voiceGuessBase(vbox()).trim(); },"
+        in js
+    )
+    # Diagnostics show the last verdict.
+    assert '"End of turn: the server\'s verdict — last " + voice.rec.turn.reason' in js
+
+
+@needs_node
+def test_any_answer_clears_the_sighting_and_a_lagging_row_does_not_bring_it_back():
+    out = _run(_seen_script("""
+voiceDialogNote("a", "d1");
+var first = voice.dialogSeen.a.at;
+await sleep(15);
+// Answered (by voice, on the sheet, or the server says it already was): gone.
+voiceDialogAnswered("a", "d1");
+out.cleared = !("a" in voice.dialogSeen);
+out.done = voice.dialogDone.a;
+// The rows lag a poll or two: a row still carrying d1 is not a new sighting.
+voiceDialogRows([{ title: "a", activity: "clarify", asking: { kind: "dialog", dialog_id: "d1" } }]);
+out.lagIgnored = !("a" in voice.dialogSeen);
+// A different dialog on that row is.
+voiceDialogRows([{ title: "a", activity: "clarify", asking: { kind: "dialog", dialog_id: "d2" } }]);
+out.otherNoted = voice.dialogSeen.a && voice.dialogSeen.a.id;
+voiceDialogAnswered("a", "d2");
+// A row with no dialog there ends the lag: the same id asked again is new now.
+voiceDialogRows([{ title: "a", activity: "working" }]);
+out.doneCleared = !("a" in voice.dialogDone);
+await sleep(15);
+voiceDialogRows([{ title: "a", activity: "clarify", asking: { kind: "dialog", dialog_id: "d2" } }]);
+out.reasked = voice.dialogSeen.a && voice.dialogSeen.a.id === "d2" && voice.dialogSeen.a.at > first;
+// The same id read live (GET /dialog, the sheet) is a new sighting at once: now.
+voiceDialogAnswered("a", "d2");
+var t0 = Date.now();
+voiceDialogNote("a", "d2");
+out.liveRead = voice.dialogSeen.a.at >= t0;
+// So a "yes" begun before that re-ask is not in time; one begun 300 ms after it is.
+out.beforeReask = voiceAnswerInTime("a", "d2", t0 - 50);
+out.afterReask = voiceAnswerInTime("a", "d2", voice.dialogSeen.a.at + 300);
+// No id (a 409 that named none): the sighting still goes.
+voiceDialogAnswered("a", "");
+out.noId = !("a" in voice.dialogSeen);
+voiceDialogAnswered("", "x"); voiceDialogAnswered(null);
+"""))
+    assert out["cleared"] is True and out["done"] == "d1"
+    assert out["lagIgnored"] is True
+    assert out["otherNoted"] == "d2"
+    assert out["doneCleared"] is True and out["reasked"] is True
+    assert out["liveRead"] is True
+    assert out["beforeReask"] is False and out["afterReask"] is True
+    assert out["noId"] is True
+
+
+@needs_node
+def test_a_sightings_age_is_capped_at_the_servers_ten_minutes():
+    out = _run(_seen_script("""
+var now = Date.now();
+voice.dialogSeen.a = { id: "d1", at: now - 30 * 60 * 1000 };
+voice.dialogSeen.b = { id: "d2", at: now - 5000 };
+out.body = voiceDialogSeenBody(now);
+"""))
+    assert out["body"]["a"] == {"id": "d1", "ms_ago": 600000}
+    assert out["body"]["b"] == {"id": "d2", "ms_ago": 5000}
+
+
+def test_every_answer_path_and_every_204_clears_the_sighting():
+    js = _js()
+    # Voice: answered, or already answered elsewhere.
+    post = _whole(js, "voiceAnswerPost")
+    assert post.count("voiceDialogAnswered(title, dialogId);") == 2
+    # The sheet, by hand: a tap, a select step (or the flow moving on).
+    ans = _whole(js, "askAnswer")
+    assert ans.count("voiceDialogAnswered(e.title, d.id);") == 2
+    assert "voiceDialogAnswered(e.title, d.id);" in _whole(js, "askSelPost")
+    # GET /dialog answering 204 (nothing on screen), everywhere it is read.
+    assert 'else if (!d) voiceDialogNote(title, "");' in _whole(js, "voiceDialog")
+    assert 'if (r.status === 204) voiceDialogNote(e.title, "");' in _whole(
+        js, "askFetchDialog"
+    )
+    assert 'voiceDialogNote(e.title, ""); askSelDone(e, "answered");' in _whole(
+        js, "askSelRefetch"
+    )
+    assert 'if (r.status === 204) voiceDialogNote(title, "");' in _whole(
+        js, "voiceAnswerLocal"
+    )
+    assert "dialogDone: {}," in js
+
+
+@needs_node
+def test_the_server_voice_says_which_page_is_listening():
+    out = _tts_run("""
+await tts.speak("One. Two.");
+out.clients = reqs.map(function (r) { return r.client; });
+""")
+    assert out["clients"] and all(c == "m-test-page" for c in out["clients"])
