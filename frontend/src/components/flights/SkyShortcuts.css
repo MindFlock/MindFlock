@@ -1,0 +1,181 @@
+/* The sky's `?` sheet (SkyShortcuts.tsx): a centred card over a dimmed
+ * backdrop, the app's ShortcutsSheet look (palette/ShortcutsSheet.css):
+ * panel, border, 10 px radius, uppercase muted group heads, monospace caps
+ * on panel-2. Two columns of groups; one under 640 px. */
+
+.sky-keys-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 3400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: color-mix(in srgb, #000 45%, transparent);
+}
+
+.sky-keys-card {
+  display: flex;
+  flex-direction: column;
+  width: 720px;
+  max-width: 100%;
+  max-height: min(80vh, 640px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.sky-keys-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px 8px;
+  font-size: 14px;
+}
+
+.sky-keys-hint {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* The × is the quiet tier (.fl-icon-btn, StopParts.css), a square here. */
+.sky-keys-head .sky-keys-close {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.sky-keys-filter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sky-keys-filter {
+  margin: 0 16px 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.sky-keys-filter::placeholder {
+  color: var(--muted);
+}
+
+/* The body scrolls; the columns inside it keep their natural height (a
+   multicol box with a capped height would spill into extra columns
+   sideways). Two balanced columns: a long group (Move around) shares the
+   height with two short ones instead of leaving a hole beside it. */
+.sky-keys-body {
+  min-height: 0;
+  padding: 6px 16px 4px;
+  border-top: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.sky-keys-cols {
+  columns: 2;
+  column-gap: 28px;
+}
+
+.sky-keys-group {
+  break-inside: avoid;
+  padding-bottom: 12px;
+}
+
+.sky-keys-group h4 {
+  margin: 6px 0 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sky-keys-group ul {
+  display: grid;
+  grid-template-columns: fit-content(150px) 1fr;
+  column-gap: 12px;
+  row-gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sky-keys-row {
+  display: grid;
+  grid-template-columns: subgrid;
+  grid-column: 1 / -1;
+  align-items: baseline;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.sky-keys-caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.sky-keys-card kbd {
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* A gesture ("drag", "click"), not a key: no keycap edge, muted. */
+.sky-keys-card kbd.is-gesture {
+  border-style: dashed;
+  border-bottom-width: 1px;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+}
+
+.sky-keys-what {
+  color: var(--muted);
+}
+
+.sky-keys-row:hover .sky-keys-what {
+  color: var(--text);
+}
+
+.sky-keys-none {
+  margin: 0;
+  padding: 18px 16px 22px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .sky-keys-cols {
+    columns: 1;
+  }
+
+  .sky-keys-hint {
+    display: none;
+  }
+}
+
+@media (hover: none) {
+  .sky-keys-head .sky-keys-close {
+    width: 40px;
+    height: 40px;
+  }
+}
