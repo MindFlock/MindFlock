@@ -829,7 +829,11 @@ class TestStream:
         r = client.post("/api/voice/stream/%s/end" % sid)
         assert r.status_code == 200
         assert r.json() == {"committed": "how are you", "partial": ""}
-        assert streaming.calls[-1] == ("pass", 16000, "Hello world")
+        assert streaming.calls[-1] == (
+            "pass",
+            16000,
+            "",
+        )  # the prompt holds only text before the window
         # Gone afterwards.
         assert _chunk(sid).status_code == 404
         assert client.post("/api/voice/stream/%s/end" % sid).status_code == 404
