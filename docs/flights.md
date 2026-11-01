@@ -5581,3 +5581,80 @@ The integrator merges, rebuilds the bundle in the round's worktree, the
 judge re-shoots, the integrator fixes what is quick, merges into
 `emandel2630/flights`, deploys. The judge's leftovers are the next cycle's
 seed, written at the top of the next round's contract.
+
+### As built: round 17 minimap
+
+`components/flights/Minimap.tsx` fills both seams; the maths is
+`lib/minimap.ts`, the look `Minimap.css`, the tests `minimap.test.ts`. The
+props are the seam's, unchanged.
+
+**The map** (`.sky-minimap`, absolute; the sky places it, the CSS defaults to
+`right: 12px; bottom: 12px` until it does) is a 22 px head row ("Map" + the
+◰ glyph) over a 180 × 120 body. Folded, only the glyph shows (`.is-folded`,
+30 px; 40 px on `hover: none`). `open` / `onToggle` belong to the sky, and so
+does storing the fold: `lib/minimap` exports `MINIMAP_KEY = "mf_sky_minimap"`
+and `minimapOpen(pref)` (open unless `"0"`) for it. `mapScale(rects, map,
+pad)` fits the content's bounds into the body with 8 px of padding, centred,
+one scale for both axes, never over 1:1. The map is drawn from the content
+alone, not content ∪ viewport, so the scale holds still while the viewport
+rectangle is dragged; a viewport off the content is clipped at the map's
+edge. `mapBlocks` draws:
+
+- lines (`line`, `grounded`) as rounded blocks in their state tone;
+- objects (palette, note, person, device) as muted blocks;
+- `intake` and `landing` as a 3 px bar along their long side.
+
+Every block is at least 3 px. Objects are drawn first, then lines, so a line
+wins a shared pixel and a click. Hovering a block shows its `title`: the
+label, or the kind. `selected` and `focused` add an accent or a text-coloured
+outline.
+
+**Tones** (`toneVar`) follow the birds: `working` is `--tone-working`;
+`asking`, `waiting_you` and `you` are `--tone-attention`; `waiting` is
+`--tone-waiting`; `halted`, `broken` and `failed` are `--tone-broken`; `idle`
+and `done` are `--tone-neutral`; anything else is `--tone-muted`. The colour
+reaches the CSS as an inline `--mm-tone`.
+
+**Pointer**: one handler set on the map body, with pointer capture.
+
+- A press that moves more than 3 px is a drag. It pans by `dragCamera`
+  (Δmap ÷ scale × z, same zoom), grabbing wherever you pressed: the viewport
+  rectangle or empty map.
+- A press that doesn't move is a click. On a block it calls `onJump(id)`;
+  anywhere else it calls `onCamera(centreAt(point))`, same zoom.
+
+Both components are **hookless**: a press's start lives in a module
+`WeakMap` keyed by the map element. The suite has no jsdom, so the tests call
+`Minimap(props)` and drive `onPointerDown/Move/Up` with plain event objects.
+The root carries `data-no-drag`, so SkyView's `SKY_CONTROLS` reads a press on
+it as a control, not a marquee or a pan. A double-click on the map stops
+there. Below 520 px wide, `@media` hides the map.
+
+**Off-screen hints** (`.sky-offscreen`, inset 0, `pointer-events: none`
+except on the chips) cover lines only. `edgeHints(rects, cam, viewport, max)`
+takes each rect wholly off screen and pins its chip 8 px in from the edge it
+lies beyond (past a corner, the edge on the axis where it lies further
+out). The chip sits at the rect's middle along that edge, clamped so it stays
+whole (a top or bottom chip assumes the 140 px max width). It keeps the
+nearest 8, sorted by distance from the viewport, and pushes chips on one edge
+apart so none covers another. A chip is a 22 px pill:
+
+- an arrow for the side the line lies on, the state dot, and the title cut at
+  14 characters (`shortLabel`);
+- `title` / `aria-label` "Go to <name>";
+- a click calls `onJump`.
+
+There are no hints at lod far.
+
+**Tiers**: `flightsButtons.test.ts` requires every flights button to carry a
+tier class. The glyph wears `fl-icon-btn` (quiet) and the chip `fl-pick`
+(chip). The minimap's own rules are scoped (`.sky-minimap .sky-minimap-glyph`,
+`.sky-offscreen .sky-offscreen-chip`), so they win over the tier's geometry
+whatever order the stylesheets load in. The chip resets `.fl-pick`'s 28 px
+`min-height` to 0. Under `prefers-reduced-motion` there are no transitions.
+
+For `sky-core`, when mounting: feed `rects` with `tone` = the line's state
+tone and `label` = its title; persist the fold under `MINIMAP_KEY`. The wheel
+over the map still reaches the sky's native wheel listener, which zooms about
+the pointer; `.sky-own-scroll` on the map would silence that if the judge
+finds it odd.
