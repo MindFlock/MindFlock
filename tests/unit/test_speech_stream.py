@@ -1012,3 +1012,50 @@ class TestRegistry:
         armed[0][1]()
         assert ss.get_stream(sid) is None
         assert len(armed) == 1  # nothing open: not re-armed
+
+
+class TestTurn:
+    """:meth:`Stream.turn`: the words so far, the quiet since the last loud
+    frame and whether a pass heard it all, read by ``core.speech_turn``."""
+
+    def test_nothing_fed_is_empty(self):
+        assert ss.Stream(Script()).turn() == {
+            "p": 0.0,
+            "hold_ms": 1100,
+            "reason": "empty",
+        }
+
+    def test_reads_committed_and_tail(self):
+        fake = Script(_words("Fix the failing"), _words("Fix the failing test and"))
+        st = ss.Stream(fake)
+        st.feed(_secs(1))
+        assert st.turn()["reason"] == "default"
+        st.feed(_secs(1.5))
+        assert st.text == "Fix the failing"  # "test and" is the tail
+        assert st.turn()["reason"] == "connector"
+
+    def test_quiet_raises_p(self):
+        fake = Script(_words("The diff looks wrong."), _words("The diff looks wrong."))
+        st = ss.Stream(fake)
+        st.feed(_secs(2))
+        loud = st.turn()
+        st.feed(_secs(0.6, 0.0))  # the tail settles on this quiet chunk's pass
+        quiet = st.turn()
+        assert loud["reason"] == quiet["reason"] == "sentence"
+        assert loud["p"] < quiet["p"] < 1.0
+
+    def test_loud_audio_no_pass_heard_is_unheard(self, monkeypatch):
+        fake = Script(_words("Over."))
+        st = ss.Stream(fake)
+        st.feed(_secs(0.5))
+        assert st.turn()["reason"] == "control"
+        # The next pass is dropped from the lane: the loud chunk stays unheard.
+        monkeypatch.setattr(st, "_pass", lambda: None)
+        st.feed(_secs(0.3))
+        assert st.turn() == {"p": 0.3, "hold_ms": 1100, "reason": "unheard"}
+
+    def test_the_persons_words(self):
+        st = ss.Stream(Script(_words("Fix it roger")))
+        st.feed(_secs(1.5))
+        assert st.turn()["reason"] == "default"
+        assert st.turn({"send": ["roger"]})["reason"] == "control"

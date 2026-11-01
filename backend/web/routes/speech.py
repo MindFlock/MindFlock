@@ -53,7 +53,9 @@ Status codes, in the order they are checked:
 * ``stream/{id}/chunk`` — 404 unknown or expired id; 415 not ``audio/wav``,
   or a WAV that is not 16 kHz mono 16-bit; 413 over
   :data:`MAX_AUDIO_BYTES`; 502 the pass failed (the chunk is kept); 200
-  ``{"committed", "partial", "ms", "window_s", "audio_s"}``.
+  ``{"committed", "partial", "ms", "window_s", "audio_s", "turn"}`` —
+  ``turn`` is ``{"p", "hold_ms", "reason"}``, the end-of-turn verdict for
+  the words so far (``core.speech_turn``).
 * ``stream/{id}/end`` — 404 as above; 502 the last fast pass failed; 200
   ``{"committed", "partial": ""}`` plus ``{"final", "final_ms",
   "final_wait_ms", "final_early", "same"}`` when the accurate pass ran
@@ -520,13 +522,30 @@ def _no_stream() -> JSONResponse:
     )
 
 
+def _feed(stream: _stream.Stream, samples) -> tuple:
+    """One chunk's pass and its end-of-turn verdict (``Stream.turn`` with
+    the person's words; None when that fails — a hint, never a failure),
+    together on the recognition pool: the verdict waits on the stream's
+    lock, which a pass holds."""
+    got = stream.feed(samples)
+    try:
+        turn: Optional[dict] = stream.turn(_words())
+    except Exception:  # noqa: BLE001
+        turn = None
+    return got, turn
+
+
 @router.post("/api/voice/stream/{sid}/chunk")
 async def voice_stream_chunk(sid: str, request: Request) -> JSONResponse:
     """Feed one ``audio/wav`` chunk (16 kHz mono 16-bit PCM, the raw body)
     → ``{"committed": newly committed words, "partial": the unstable tail,
     "ms": inference ms, "window_s": seconds the pass decoded, "audio_s":
-    seconds held}`` — ``ms`` and ``window_s`` are 0 when a quiet chunk ran
-    no pass (``core.speech_stream``). Send the next chunk only
+    seconds held, "turn": {"p", "hold_ms", "reason"}}`` — ``ms`` and
+    ``window_s`` are 0 when a quiet chunk ran no pass
+    (``core.speech_stream``); ``turn`` is the end-of-turn verdict for the
+    words so far (``core.speech_turn``: end the phrase once the quiet after
+    the last loud frame reaches ``hold_ms``), absent if it could not be
+    worked out. Send the next chunk only
     after this one returned. See the module doc for the status codes."""
     stream = _stream.get_stream(sid)
     if stream is None:
@@ -545,18 +564,19 @@ async def voice_stream_chunk(sid: str, request: Request) -> JSONResponse:
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=415)
     try:
-        committed, partial = await _stt(stream.feed, samples)
+        (committed, partial), turn = await _stt(_feed, stream, samples)
     except Exception as err:  # noqa: BLE001 — every failure is the backend's
         return _failed(err)
-    return JSONResponse(
-        {
-            "committed": committed,
-            "partial": partial,
-            "ms": stream.last_ms,
-            "window_s": round(stream.last_window_s, 2),
-            "audio_s": round(stream.held_seconds, 2),
-        }
-    )
+    body = {
+        "committed": committed,
+        "partial": partial,
+        "ms": stream.last_ms,
+        "window_s": round(stream.last_window_s, 2),
+        "audio_s": round(stream.held_seconds, 2),
+    }
+    if turn is not None:
+        body["turn"] = turn
+    return JSONResponse(body)
 
 
 @router.post("/api/voice/stream/{sid}/end")

@@ -82,6 +82,10 @@ and returns ``[(word, start_s, end_s)]`` relative to the start of the
 samples. No numpy here — the server process does not have it unless the
 local models are installed.
 
+:meth:`Stream.turn` is the end-of-turn verdict for the words so far
+(``core.speech_turn``): how long the quiet after the last loud frame must
+last before the phrase is over, given what was said.
+
 The registry (:func:`open_stream` …) holds at most :data:`MAX_STREAMS`,
 and at most :data:`CLIENT_STREAMS` of one client (opening past that
 replaces that client's oldest); one expires :data:`EXPIRE_SECONDS` after
@@ -102,6 +106,8 @@ import time
 import wave
 from array import array
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
+
+from backend.web.core import speech_turn as _turn
 
 __all__ = [
     "CLIENT_STREAMS",
@@ -614,6 +620,18 @@ class Stream:
             self._prune()
             self.touched = _now()
             return self._pay(new), _join(self._tail)
+
+    def turn(self, words: object = None) -> dict:
+        """The end-of-turn verdict for the phrase so far → ``{"p",
+        "hold_ms", "reason"}`` (``core.speech_turn.score``): the committed
+        words and the unstable tail, the quiet since the last loud frame,
+        and whether a fast pass has heard every loud frame. ``words``: the
+        effective voice words (None = the defaults)."""
+        with self._lock:
+            text = _join(self._committed + self._tail)
+            quiet = self._fed - self._loud_end if self._loud_end >= 0 else 0.0
+            heard = not self._unheard
+        return _turn.score(text, max(0.0, quiet) * 1000, heard, words).json()
 
     def finish(self) -> dict:
         """End the phrase → ``{"committed": the fast words not committed
