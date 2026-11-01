@@ -99,7 +99,8 @@ describe("the isomorphism", () => {
     const v = code("components/flights/SkyView.tsx");
     expect(v).toContain("selectSession(id, { noKeyboard: true });");
     expect(v).toContain("focused={focused === id}");
-    expect(v).toContain("setCam(centerOn(r, vp.w, vp.h, Math.max(c.z, 0.85)));");
+    // Round 17: eased (goTo), the same target.
+    expect(v).toContain("goTo(centerOn(r, vp.w, vp.h, Math.max(c.z, 0.85)));");
     // A press on the line itself never moves the camera (a wide line is never whole in view).
     expect(v).toContain("if (!inView && !pressed) {");
     expect(v).toContain("onFocus={() => focusOn(id, true)}");
@@ -109,9 +110,10 @@ describe("the isomorphism", () => {
 
   it("the grid's 1 is the sky's 1 (fit the focused line), its 4 / 9 the sky's Fit (all of them)", () => {
     const v = code("components/flights/SkyView.tsx");
-    expect(v).toContain("if (first && gridOne && mode !== \"one\") fitFocused();");
+    // Round 17: the first picture is instant (nothing to glide from); 1 and the button ease.
+    expect(v).toContain("if (first && gridOne && mode !== \"one\") fitFocused(true);");
     expect(v).toContain('} else if (k === "1") {');
-    expect(v).toMatch(/className="sky-zoom-btn sky-fit-one"[^>]*onClick=\{fitFocused\}/);
+    expect(v).toMatch(/className="sky-zoom-btn sky-fit-one"[^>]*onClick=\{\(\) => fitFocused\(\)\}/);
   });
 
   it("New is the sky's new-session card: Ctrl/Alt+N and the top bar's New open it mid-view in the sky, the dialog in the grid", () => {
@@ -481,21 +483,26 @@ describe("round 14: Ctrl+Z, removals that don't ask, All blocks… on the board"
   const grounded = code("components/flights/GroundedLine.tsx");
   const hook = code("components/flights/useSessionLine.tsx");
 
-  it("Ctrl+Z / ⌘Z in the window's capture phase pops the sky's stack — never in a field, a pane, a menu or a dialog, nor mid-drag; no redo", () => {
+  it("Ctrl+Z / ⌘Z in the window's capture phase pops the sky's stack — never in a field, a pane, a menu or a dialog, nor mid-drag; Ctrl+Shift+Z redoes (round 17)", () => {
     expect(v).toContain("if (undoKey(e)) return undoNow(e);");
+    expect(v).toContain("if (redoKey(e)) return undoNow(e, true);");
+    expect(v).toContain('const redoKey = (e: KeyboardEvent) => (e.ctrlKey || e.metaKey) && !e.altKey && e.shiftKey && (e.key === "z" || e.key === "Z");');
+    expect(v).toContain('toast("Redid: " + again.label);');
+    expect(v).toContain('toast("Nothing to redo");');
     expect(v).toContain('const undoKey = (e: KeyboardEvent) => (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "z" || e.key === "Z");');
     expect(v).toContain("if (typing(el) || overlayOpen()) return;");
     expect(v).toContain('el.closest(".pane, .skl-card, [role=menu], [role=dialog], [role=alertdialog]")');
     expect(v).toContain("if (drag || marquee.current || pan.current) return;");
     expect(v).toContain('toast("Undid: " + entry.label);');
     expect(v).toContain('toast("Nothing to undo"');
-    // Redo is not bound (Ctrl+Y stays the view toggle).
-    expect(v).not.toMatch(/key === "y"|redo/i);
+    // Ctrl+Y stays the view toggle.
+    expect(v).not.toMatch(/key === "y"/i);
   });
 
   it("a grounded line goes at once through the host: one entry, its toast takes it, Undo makes it again where it sat", () => {
     expect(v).toContain("onRemove={() => removeGrounded(id)}");
-    expect(v).toContain('const entry = pushUndo({ label: "Remove “" + shown + "”", undo: () => reground(steps, name, was) });');
+    // Round 17: the entry carries redo (the remade line, by its new id, goes again).
+    expect(v).toMatch(/const entry = pushUndo\(\{\s*label: "Remove “" \+ shown \+ "”",\s*undo: async \(\) => \{\s*const g = await reground\(steps, name, was\);\s*if \(g\) cur = g\.id;[\s\S]*?redo: \(\) => deleteFlight\(cur\),/);
     expect(v).toContain('toast("Removed “" + shown + "”", { action: undoAction(entry, ');
     expect(grounded).not.toContain("InlineConfirm");
   });
@@ -534,11 +541,11 @@ describe("round 14: Ctrl+Z, removals that don't ask, All blocks… on the board"
     expect(v).toContain("onLayout(PALETTE_KEY, { x: f.x, y: f.y, pinned: true });");
     expect(v).toContain('setPaletteMode("float");');
     expect(v).toContain('onClose={() => setPaletteMode("shelf")}');
-    expect(v).toContain("focusFilter={!!catalogOpen}");
+    expect(v).toContain("focusFilter={!!catalogOpen || filterFocus}");
     expect(v).toContain("width={paletteFrameNow?.w ?? (catalogOpen?.w || undefined)}");
     expect(v).toMatch(/k === "Escape" && catalogOpen && paletteOn\) \{\s*handled\(\);\s*setPaletteMode\("shelf"\);/);
     // Docking forgets the large frame (it was for that opening only).
-    expect(v).toContain('if (m === "shelf") setCatalogOpen(null);');
+    expect(v).toMatch(/if \(m === "shelf"\) \{\s*setCatalogOpen\(null\);/);
   });
 });
 

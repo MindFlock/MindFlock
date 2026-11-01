@@ -3,7 +3,15 @@
  * grounded line deleted, a merge onto a session, a closed session, the
  * selection bar's Remove — pushes ONE entry. Ctrl+Z / ⌘Z in the sky pops the
  * newest; the removal's toast Undo takes ITS entry (`takeUndo`), so the two
- * never apply the same undo twice. No redo (Ctrl+Y is the view toggle).
+ * never apply the same undo twice.
+ *
+ * Round 17 (docs/flights.md "Round 17", task `sky-core`): a REDO stack. An
+ * undo pushes its inverse onto it when the entry provides `redo()` (the
+ * kinds that can: a stop or group's removal, a grounded line's delete, a
+ * note's delete), else nothing; Ctrl+Shift+Z / ⌘⇧Z pops it (`popRedo`,
+ * "Redid: …"), and a redo pushes the entry back onto the undo stack. Any
+ * new push empties the redo stack (the branch is gone). Ctrl+Y stays the
+ * view toggle.
  *
  * At most `UNDO_MAX` entries, each good for `UNDO_TTL_MS`. An entry may say
  * when it no longer applies (`valid`, e.g. the closed session is open again):
@@ -20,6 +28,9 @@ export interface UndoInput {
   undo(): Promise<unknown>;
   /** False once there is nothing left to undo (it was put back elsewhere). */
   valid?(): boolean;
+  /** Does it again after an undo (Ctrl+Shift+Z). Without it, an undo of this
+   * entry leaves nothing to redo. */
+  redo?(): Promise<unknown>;
 }
 
 export interface UndoEntry extends UndoInput {
@@ -28,28 +39,39 @@ export interface UndoEntry extends UndoInput {
 }
 
 let stack: UndoEntry[] = [];
+let redoStack: UndoEntry[] = [];
 let seq = 0;
 
 const live = (e: UndoEntry, now: number) => now - e.at < UNDO_TTL_MS && (!e.valid || e.valid());
+const liveRedo = (e: UndoEntry, now: number) => now - e.at < UNDO_TTL_MS;
 
 /** Drop what has expired or no longer applies. */
 function prune(now: number) {
   stack = stack.filter((e) => live(e, now));
+  redoStack = redoStack.filter((e) => liveRedo(e, now));
 }
 
-/** One more thing to undo; the oldest falls off past `UNDO_MAX`. */
+/** One more thing to undo; the oldest falls off past `UNDO_MAX`. A new
+ * action forgets what could have been redone. */
 export function pushUndo(input: UndoInput, now = Date.now()): UndoEntry {
   const e: UndoEntry = { ...input, id: ++seq, at: now };
   prune(now);
   stack.push(e);
   if (stack.length > UNDO_MAX) stack = stack.slice(stack.length - UNDO_MAX);
+  redoStack = [];
   return e;
 }
 
-/** The newest entry still good, taken off the stack (null: nothing to undo). */
+/** The newest entry still good, taken off the stack (null: nothing to undo).
+ * An entry that can be redone moves to the redo stack (its clock restarts). */
 export function popUndo(now = Date.now()): UndoEntry | null {
   prune(now);
-  return stack.pop() || null;
+  const e = stack.pop() || null;
+  if (e?.redo) {
+    redoStack.push({ ...e, at: now });
+    if (redoStack.length > UNDO_MAX) redoStack = redoStack.slice(redoStack.length - UNDO_MAX);
+  }
+  return e;
 }
 
 /** The newest entry still good, left where it is. */
@@ -63,13 +85,34 @@ export function undoCount(now = Date.now()): number {
   return stack.length;
 }
 
+/** The newest undone entry that can be redone, taken off the redo stack and
+ * put back on the undo stack (null: nothing to redo). The caller runs its
+ * `redo()`. */
+export function popRedo(now = Date.now()): UndoEntry | null {
+  prune(now);
+  const e = redoStack.pop() || null;
+  if (!e) return null;
+  const back: UndoEntry = { ...e, at: now };
+  stack.push(back);
+  if (stack.length > UNDO_MAX) stack = stack.slice(stack.length - UNDO_MAX);
+  return back;
+}
+
+export function redoCount(now = Date.now()): number {
+  prune(now);
+  return redoStack.length;
+}
+
 /** A toast's Undo: take THIS entry off the stack. True = it was still there
- * (run it); false = Ctrl+Z already undid it (or it ran out). */
+ * (run it); false = Ctrl+Z already undid it (or it ran out). The entry moves
+ * to the redo stack when it can be redone, as Ctrl+Z's pop does. */
 export function takeUndo(entry: Pick<UndoEntry, "id">, now = Date.now()): boolean {
   const i = stack.findIndex((e) => e.id === entry.id);
   if (i < 0) return false;
   const [e] = stack.splice(i, 1);
-  return live(e, now);
+  const ok = live(e, now);
+  if (ok && e.redo) redoStack.push({ ...e, at: now });
+  return ok;
 }
 
 /** The toast action for an entry: its Undo button runs it once, at most. */
@@ -83,7 +126,8 @@ export function undoAction(entry: UndoEntry, ariaLabel?: string): { label: strin
   };
 }
 
-/** Empty the stack (tests). */
+/** Empty both stacks (tests). */
 export function clearUndo() {
   stack = [];
+  redoStack = [];
 }

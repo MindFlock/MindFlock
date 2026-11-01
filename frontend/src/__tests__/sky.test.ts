@@ -307,7 +307,8 @@ describe("the wiring", () => {
   const sheet = css("components/flights/Sky.css");
 
   it("is one transformed plane, no library: translate + scale on one container, the grid scaled with it", () => {
-    expect(sky).toMatch(/className="sky-plane"[^>]*\n?[^>]*style=\{\{ transform: `translate\(\$\{cam\.x\}px, \$\{cam\.y\}px\) scale\(\$\{cam\.z\}\)` \}\}/);
+    // Round 17: the plane's class carries focus mode (`sky-focus`), still one transform.
+    expect(sky).toMatch(/className=\{"sky-plane" \+ \(focusMode \? " sky-focus" : ""\)\}[\s\S]{0,400}?style=\{\{ transform: `translate\(\$\{cam\.x\}px, \$\{cam\.y\}px\) scale\(\$\{cam\.z\}\)` \}\}/);
     expect(sky).toContain("backgroundSize: `${GRID * cam.z}px ${GRID * cam.z}px`");
     expect(sheet).toMatch(/\.sky-plane \{[^}]*transform-origin: 0 0;/);
     expect(sheet).toMatch(/\.sky-viewport \{[^}]*touch-action: none;[^}]*radial-gradient/);
