@@ -103,7 +103,12 @@ the checkout under test.
 change under `frontend/src` — including CSS-only tweaks, which are the easiest to
 forget — needs `npm run build` in `frontend/` so the regenerated pair lands in
 the same commit as the source. The backend tests assert on literals inside those
-files, so a stale bundle shows up as a confusing Python test failure.
+files, so a stale bundle shows up as a confusing Python test failure. A stale
+bundle can also break a feature without failing a test: `POST /api/voice/route`
+refuses any dialog answer that comes without phrase timing (it replies
+`early`; web-api.md, *An answer begun before its dialog*), so a bundle built
+before the desktop sent that timing silently turns off voice approval on the
+desktop.
 
 ## Pre-commit hooks
 

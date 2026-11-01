@@ -51,6 +51,7 @@ import { resamplerName, startWavRecording, type WavRecording } from "./wavRecord
 import {
   KEEP_STREAM_MS,
   MicKeeper,
+  PRE_ROLL_MS,
   PRE_ROLL_ONSET_S,
   isLoud,
   noiseFloor,
@@ -1078,7 +1079,10 @@ export interface LiveHooks {
    * talking" in words only the router knows (listening goes on); "end" when
    * what it did ends listening even in a continuous dictation ("stop",
    * "cancel", or the ask pop-up opened a field the mic starts again into). */
-  route(text: string): Promise<boolean | "hush" | "end">;
+  route(text: string, spokeAt?: number): Promise<boolean | "hush" | "end">;
+  /** When the phrase being recorded now began (ms; 0: no speech yet, or the
+   * recognizer can't say) — the server recognizer's first loud block. */
+  spokeAt?(): number;
   /** A continuous dictation sent a message (or the router acted) and goes
    * on: where the next message goes — null keeps the target it has. */
   retarget?(): { target: DictTarget | null; hint?: string } | null;
@@ -1169,6 +1173,12 @@ export async function submitDraft(title: string, name: string, say: boolean): Pr
   }
 }
 
+/** A phrase from a recognizer that can't say when it began (Web Speech) is
+ * taken to have begun no later than this long before the previous phrase
+ * ended ({@link LiveDictation}): an early estimate is the safe one for
+ * {@link ANSWER_AFTER_MS}. */
+export const SPOKE_LEAD_MS = 2000;
+
 /** One dictation into one target: phrases are carried out in order (the
  * first may wait on the router), each typed as it comes. `target` null: no
  * session is focused — the first phrase can still be a command. */
@@ -1206,6 +1216,16 @@ export class LiveDictation {
   private early: { at: number; seen: "" | "met" | "resumed"; timer?: ReturnType<typeof setInterval> } | null = null;
   /** When the person last talked over a line the app said (ms). */
   private bargeAt = 0;
+  /** When this dictation began, and when its last phrase ended (ms): the
+   * early bound on a phrase's start when the recognizer can't say
+   * ({@link spokeFrom}). */
+  private readonly startedAt = Date.now();
+  private lastEnd = 0;
+  /** When the phrase whose words are coming in began (0: none yet). */
+  private phraseSpoke = 0;
+  /** When the phrase the step under way acts on began: sent with the router
+   * call, so a dialog is answered only by words begun after it was there. */
+  private stepSpoke = 0;
 
   constructor(
     private target: DictTarget | null,
@@ -1254,16 +1274,20 @@ export class LiveDictation {
   hearing(t: string): Promise<void> {
     if (t) this.heardAnything = true;
     if (t) this.wordsAt = Date.now();
+    if (t) this.notePhrase();
     if (this.swallowing) return this.chain;
     return this.step(() => this.dict.hearing(t));
   }
 
-  heard(phrase: string): Promise<void> {
+  /** A phrase's end: `spokeAt` — when it began (ms), when the recognizer
+   * knows ({@link RecognizerHandlers.onFinal}). */
+  heard(phrase: string, spokeAt?: number): Promise<void> {
     if (phrase.trim()) this.heardAnything = true;
+    const spoke = this.endPhraseAt(spokeAt);
     const early = this.early;
     if (this.phraseEnded()) return this.chain;
-    if (early) return this.afterQuiet(early, (radio) => this.dict.heard(phrase, radio));
-    return this.step(() => this.dict.heard(phrase));
+    if (early) return this.afterQuiet(early, (radio) => this.dict.heard(phrase, radio), spoke);
+    return this.step(() => this.dict.heard(phrase), spoke);
   }
 
   /** Streaming: one answer — committed words `w` and the unstable tail `p`,
@@ -1271,6 +1295,7 @@ export class LiveDictation {
   stream(w: string, p: string): Promise<void> {
     if (w.trim() || p.trim()) this.heardAnything = true;
     if (w.trim() || p.trim()) this.wordsAt = Date.now();
+    if (w.trim() || p.trim()) this.notePhrase();
     if (this.swallowing) return this.chain;
     return this.step(() => this.dict.stream(w, p));
   }
@@ -1282,12 +1307,36 @@ export class LiveDictation {
 
   /** Streaming: a phrase's end and its last words (`final`: the accurate
    * re-transcription, when it differs — see {@link Dictation.flush}). */
-  flush(w: string, final?: string): Promise<void> {
+  flush(w: string, final?: string, spokeAt?: number): Promise<void> {
     if (w.trim() || final?.trim()) this.heardAnything = true;
+    const spoke = this.endPhraseAt(spokeAt);
     const early = this.early;
     if (this.phraseEnded()) return this.chain;
-    if (early) return this.afterQuiet(early, (radio) => this.dict.flush(w, final, radio));
-    return this.step(() => this.dict.flush(w, final));
+    if (early) return this.afterQuiet(early, (radio) => this.dict.flush(w, final, radio), spoke);
+    return this.step(() => this.dict.flush(w, final), spoke);
+  }
+
+  /** The early bound on when a phrase began, for a recognizer that can't
+   * say: not before this dictation, nor more than {@link SPOKE_LEAD_MS}
+   * before the previous phrase ended. Early is the safe side. */
+  private spokeFrom(): number {
+    return Math.max(this.startedAt, this.lastEnd - SPOKE_LEAD_MS);
+  }
+
+  /** Words of a phrase came in: remember when it began (once per phrase). */
+  private notePhrase(): void {
+    if (!this.phraseSpoke) this.phraseSpoke = this.hooks.spokeAt?.() || this.spokeFrom();
+  }
+
+  /** A phrase ended: when it began — the recognizer's word, else the start
+   * noted with its first words, else {@link spokeFrom}, the earliest of
+   * those that are known — and the next phrase starts afresh. */
+  private endPhraseAt(spokeAt?: number): number {
+    const known = [spokeAt || 0, this.phraseSpoke].filter((v) => v > 0);
+    const spoke = known.length ? Math.min(...known) : this.spokeFrom();
+    this.phraseSpoke = 0;
+    this.lastEnd = Date.now();
+    return spoke;
   }
 
   /** A phrase's end arrived: true when it is one taken from its guess
@@ -1342,13 +1391,13 @@ export class LiveDictation {
    * already is (the usual case: a final takes longer than the quiet) — as
    * the radio word when the quiet came, as plain words when the voice came
    * back first. */
-  private afterQuiet(e: NonNullable<LiveDictation["early"]>, act: (radio: boolean) => DictOutcome): Promise<void> {
+  private afterQuiet(e: NonNullable<LiveDictation["early"]>, act: (radio: boolean) => DictOutcome, spoke?: number): Promise<void> {
     return new Promise<void>((resolve) => {
       const go = () => {
         const seen = this.judge(e);
         if (!seen && !this.done) return void setTimeout(go, CONTROL_POLL_MS);
         clearInterval(e.timer);
-        resolve(this.step(() => act(seen !== "resumed")));
+        resolve(this.step(() => act(seen !== "resumed"), spoke));
       };
       go();
     });
@@ -1386,6 +1435,9 @@ export class LiveDictation {
     // lag the clock by a block).
     this.wordEnd = this.hooks.loudAt?.() || Date.now() - Math.min(quiet, 60_000);
     this.endedAt = Date.now();
+    // The phrase is taken from its guess: when it began (its end, swallowed,
+    // brings nothing more).
+    const spoke = this.endPhraseAt(this.hooks.spokeAt?.());
     this.hooks.endPhrase?.();
     if (radio) {
       const e = early ? this.watchQuiet() : null;
@@ -1396,8 +1448,8 @@ export class LiveDictation {
           this.sendWait = undefined;
           this.early = null;
           this.swallow();
-          if (e) void this.afterQuiet(e, (r) => this.dict.heard(t.text, r));
-          else void this.step(() => this.dict.heard(t.text));
+          if (e) void this.afterQuiet(e, (r) => this.dict.heard(t.text, r), spoke);
+          else void this.step(() => this.dict.heard(t.text), spoke);
         },
         overWaitMs(finalClock.typical(this.hooks.finalMs?.()))
       );
@@ -1405,7 +1457,7 @@ export class LiveDictation {
     }
     // "Disregard", a stop, "stop talking", a switch: no accurate text needed.
     this.swallow();
-    void this.step(() => this.dict.heard(t.text));
+    void this.step(() => this.dict.heard(t.text), spoke);
   }
 
   /** Streaming: the unstable tail, for the caption only ({@link stream}
@@ -1479,10 +1531,11 @@ export class LiveDictation {
     this.hooks.caption(field && lead === "Listening…" ? "Listening — " + base : lead + " · " + base, true);
   }
 
-  private step(next: () => DictOutcome): Promise<void> {
+  private step(next: () => DictOutcome, spoke?: number): Promise<void> {
     this.chain = this.chain
       .then(() => {
         if (this.done) return;
+        this.stepSpoke = spoke || this.phraseSpoke || this.spokeFrom();
         const t = this.target;
         this.dict.answering = t?.kind === "session" && !!this.hooks.pending?.(t.title);
         return this.apply(next());
@@ -1654,7 +1707,7 @@ export class LiveDictation {
       // The words show at once, muted — not typed yet: the router (a round
       // trip) decides whether they are a command or the prompt.
       if (route) this.hooks.caption(this.dict.shown, true, words);
-      const routed = route ? await this.hooks.route(words) : false;
+      const routed = route ? await this.hooks.route(words, this.stepSpoke) : false;
       if (routed === "hush") {
         this.hushed();
         return false;
@@ -1729,7 +1782,8 @@ export interface RouteReply {
     | "question"
     | "ask"
     | "read"
-    | "help";
+    | "help"
+    | "early";
   title?: string;
   name?: string;
   say?: string;
@@ -1748,6 +1802,9 @@ export interface RouteReply {
   text?: string;
   /** answer: the session has no dialog up (`say` says so). */
   no_dialog?: boolean;
+  /** early: how much sooner than allowed the phrase began (ms; null when
+   * it said nothing about when it began). */
+  early_ms?: number | null;
   /** ambiguous: the sessions "Which one: a or b?" reads out. */
   candidates?: { title: string; name: string }[];
   /** ambiguous / ask: what the router asked back — sent with the next
@@ -1759,7 +1816,7 @@ export interface RouteReply {
 const ROUTE_KINDS = new Set<string>([
   "prompt", "switch", "new", "ambiguous", "no-session", "new-failed", "list",
   "needs", "status", "cancel", "stop", "hush", "off", "repeat", "condense",
-  "switch_index", "switch_rel", "answer", "question", "ask", "read", "help",
+  "switch_index", "switch_rel", "answer", "question", "ask", "read", "help", "early",
 ]);
 
 /** How long what the router asked back waits for its answer. */
@@ -1784,19 +1841,99 @@ export class PendingChoice {
 /** The desktop's one: every phrase the mic routes goes through it. */
 export const routePending = new PendingChoice();
 
-/** Ask the router what one phrase means, with what it last asked back.
- * Anything but a well-formed 200 — the route missing (an older server), an
- * error, the network — means "it is a prompt": the words were meant for the
- * session, never lost to the router. */
+// --- an answer said before its dialog was there (R8-bis) ------------------------- //
+
+/** A phrase answers a dialog only when the person BEGAN saying it at least
+ * this long after this page first had that dialog — under the fastest human
+ * reaction to something appearing, so a "yes" said into a dictation 300 ms
+ * before a permission prompt came up never answers it. The server applies
+ * the same rule with its own stamp too (voice_router.answer_in_time,
+ * ANSWER_AFTER_S); this is the page's half. */
+export const ANSWER_AFTER_MS = 300;
+
+/** When this page first had each session's dialog: {@link note}d from the
+ * rows (`asking.dialog_id`), the dialogs read out or shown, and the
+ * router's answers. The first sighting of an id is kept until another id —
+ * or none — is seen. */
+export class DialogSeen {
+  private seen = new Map<string, { id: string; at: number; rows?: boolean }>();
+  constructor(private now: () => number = Date.now) {}
+  /** `title` has dialog `id` now ("" / null: it has none). */
+  note(title: string, id: string | null | undefined): void {
+    if (!title) return;
+    if (!id) {
+      this.seen.delete(title);
+      return;
+    }
+    const cur = this.seen.get(title);
+    if (!cur || cur.id !== String(id)) this.seen.set(title, { id: String(id), at: this.now() });
+  }
+  /** The rows: a dialog's id when the row carries it. A row asking nothing
+   * clears only a sighting the rows themselves confirmed — a row lags (a
+   * sub-agent's prompt reads "working" while /dialog serves it), and
+   * clearing a fresh sighting would only make the next one later. */
+  rows(list: Iterable<{ title: string; activity?: string; asking?: { kind?: string; dialog_id?: string | null } | null }>): void {
+    for (const r of list) {
+      const a = r.asking;
+      if (a && a.kind === "dialog") {
+        if (!a.dialog_id) continue;
+        this.note(r.title, a.dialog_id);
+        const cur = this.seen.get(r.title);
+        if (cur) cur.rows = true;
+      } else if (r.activity !== "clarify" && this.seen.get(r.title)?.rows) this.note(r.title, null);
+    }
+  }
+  /** When `title`'s dialog `id` was first had (ms), or 0. */
+  at(title: string, id: string): number {
+    const cur = this.seen.get(title);
+    return cur && cur.id === String(id) ? cur.at : 0;
+  }
+  /** May a phrase begun at `spokeAt` (ms) answer `title`'s dialog `id`? */
+  inTime(title: string, id: string, spokeAt: number | undefined): boolean {
+    const at = this.at(title, id);
+    return !!spokeAt && spokeAt > 0 && at > 0 && spokeAt >= at + ANSWER_AFTER_MS;
+  }
+  /** POST /api/voice/route's `dialog_seen`: `{title: {id, ms_ago}}`. */
+  body(): Record<string, { id: string; ms_ago: number }> {
+    const now = this.now();
+    const out: Record<string, { id: string; ms_ago: number }> = {};
+    for (const [t, v] of this.seen) out[t] = { id: v.id, ms_ago: Math.max(0, now - v.at) };
+    return out;
+  }
+}
+
+/** The desktop's one. */
+export const dialogSeen = new DialogSeen();
+
+/** The line for an answer begun before its dialog was there. */
+export const earlyLine = (name: string) => name + " asked just now: say your answer again";
+
+/** Ask the router what one phrase means, with what it last asked back —
+ * and when the phrase began (`spokeAt`, ms: sent as an age, `spoke_ms_ago`,
+ * so the server reads it on its own clock; `spoke_at` is this page's clock,
+ * for the record) and which dialogs this page has had since when
+ * (`dialog_seen`): the server presses an answer only when the phrase began
+ * after its dialog was there. Anything but a well-formed 200 — the route
+ * missing (an older server), an error, the network — means "it is a
+ * prompt": the words were meant for the session, never lost to the
+ * router. */
 export async function routePhrase(
   text: string,
   session: string,
   pending: PendingChoice = routePending,
+  spokeAt?: number,
+  seen: DialogSeen = dialogSeen,
 ): Promise<RouteReply> {
   try {
     const json: Record<string, unknown> = { text, session };
     const held = pending.take();
     if (held) json.pending = held;
+    if (spokeAt && spokeAt > 0) {
+      json.spoke_ms_ago = Math.max(0, Date.now() - spokeAt);
+      json.spoke_at = spokeAt;
+    }
+    const had = seen.body();
+    if (Object.keys(had).length) json.dialog_seen = had;
     const r = await api<RouteReply>("/api/voice/route", { json });
     if (r && typeof r === "object") pending.keep(r);
     if (r && typeof r === "object" && ROUTE_KINDS.has(String(r.kind))) return r;
@@ -1847,8 +1984,8 @@ export interface CommandDeps {
   /** Say `line` whatever the replies choice — the answer to a question the
    * person asked out loud — and caption it; absent: `announce`. */
   speak?(line: string): void;
-  /** POST /api/voice/route for `session`. */
-  route(text: string, session: string): Promise<RouteReply>;
+  /** POST /api/voice/route for `session` (`spokeAt`: when the phrase began). */
+  route(text: string, session: string, spokeAt?: number): Promise<RouteReply>;
   /** GET /api/voice's `approve_dialogs`, read now. */
   approveDialogs(): Promise<boolean>;
   /** The session's live activity (the rows the app polls). */
@@ -1877,7 +2014,13 @@ function answerWords(r: RouteReply, text: string): string {
 
 /** Carry out the router's numbered-session, answer and question replies.
  * True when `r` was one of them; anything else is the caller's. */
-export async function runVoiceCommand(r: RouteReply, text: string, deps: CommandDeps): Promise<boolean> {
+export async function runVoiceCommand(
+  r: RouteReply,
+  text: string,
+  deps: CommandDeps,
+  spokeAt?: number,
+  seen: DialogSeen = dialogSeen,
+): Promise<boolean> {
   switch (r.kind) {
     case "switch_index": {
       const n = Math.trunc(Number(r.index));
@@ -1900,8 +2043,16 @@ export async function runVoiceCommand(r: RouteReply, text: string, deps: Command
       return true;
     }
     case "answer":
-      await answer(r, text, deps, false);
+      await answer(r, text, deps, false, spokeAt, seen);
       return true;
+    case "early": {
+      // Begun before its dialog was there: nothing pressed. The dialog is
+      // known from now on — the next words answer it.
+      const title = r.title || deps.focused();
+      if (r.dialog_id) seen.note(title, r.dialog_id);
+      deps.announce(r.say || earlyLine(deps.name(title)));
+      return true;
+    }
     case "question":
       deps.announce(r.say || "Nothing is being asked.");
       return true;
@@ -1939,15 +2090,23 @@ export async function askHelp(text: string): Promise<VoiceHelp> {
  * voice on), else to the question the session asked (as a prompt, through
  * the submit path), else the router's sentence. A row number alone is
  * mapped to its title and asked again, once. Focus never moves. */
-async function answer(r: RouteReply, text: string, deps: CommandDeps, again: boolean): Promise<void> {
+async function answer(
+  r: RouteReply,
+  text: string,
+  deps: CommandDeps,
+  again: boolean,
+  spokeAt: number | undefined,
+  seen: DialogSeen,
+): Promise<void> {
   if (!r.title && r.index != null && !again) {
     const key = railRow(deps.railOrder(), Number(r.index));
     if (!key || isWindowRow(key)) {
       deps.announce("There is no session " + Math.trunc(Number(r.index)));
       return;
     }
-    const next = await deps.route(text, key);
-    if (next.kind === "answer") await answer({ ...next, title: next.title || key, index: undefined }, text, deps, true);
+    const next = await deps.route(text, key, spokeAt);
+    if (next.kind === "answer") await answer({ ...next, title: next.title || key, index: undefined }, text, deps, true, spokeAt, seen);
+    else if (next.kind === "early") await runVoiceCommand({ ...next, title: next.title || key }, text, deps, spokeAt, seen);
     else deps.announce(next.say || deps.name(key) + " isn't asking anything.");
     return;
   }
@@ -1958,6 +2117,13 @@ async function answer(r: RouteReply, text: string, deps: CommandDeps, again: boo
   }
   const name = deps.name(title);
   if (r.dialog_id && r.keys?.length) {
+    // The page's half of the rule: never pressed for words begun before
+    // this page had the dialog (the server checked its half).
+    if (!seen.inTime(title, r.dialog_id, spokeAt)) {
+      seen.note(title, r.dialog_id);
+      deps.announce(earlyLine(name));
+      return;
+    }
     if (!(await deps.approveDialogs())) {
       deps.announce(APPROVE_OFF_LINE);
       return;
@@ -1966,6 +2132,8 @@ async function answer(r: RouteReply, text: string, deps: CommandDeps, again: boo
       const json: Record<string, unknown> = { keys: r.keys, dialog_id: r.dialog_id, by: "user" };
       if (r.text) json.text = r.text;
       await instApi(title, "/answer", { json });
+      // Answered: the next prompt — even an identical one — is new.
+      seen.note(title, null);
       deps.announce(r.say || "Answered " + (r.choice === "number" ? String(r.number || "") : r.choice || "") + ".");
     } catch (err) {
       const body = (err instanceof ApiError ? err.body : null) as { dialog_changed?: boolean; dialog_answered?: boolean } | null;
@@ -2340,6 +2508,7 @@ export class HandsFree {
     this.begin();
     try {
       const d = await x.fetchDialog(title).catch(() => null);
+      if (d?.id) dialogSeen.note(title, d.id);
       if (!d || !d.parsed || !d.options.length || d.id === this.seen) return;
       if (!x.replies() || x.busy() || title !== x.focused()) return;
       this.seen = d.id;
@@ -2375,6 +2544,7 @@ export class HandsFree {
    * unless "Read replies aloud" is on. */
   async ask(title: string, a: { dialog?: Dialog | null; question?: string; said?: Promise<void> | null }): Promise<void> {
     const x = this.deps;
+    if (a.dialog?.id) dialogSeen.note(title, a.dialog.id); // on the pop-up: seen
     if (!this.ready(title)) return;
     this.begin();
     this.stopped = "";
@@ -3351,7 +3521,9 @@ export function serverSpeaker(
  * good (never after {@link Recognizer.stop}, which reports nothing). */
 export interface RecognizerHandlers {
   onInterim(text: string): void;
-  onFinal(text: string): void;
+  /** One phrase. `spokeAt`: when it began (ms) — the server recognizer's
+   * first loud block; absent: the recognizer can't say. */
+  onFinal(text: string, spokeAt?: number): void;
   onStatus?(text: string): void;
   /** The server recognizer's detector heard speech (it has no interim words). */
   onSpeech?(): void;
@@ -3372,7 +3544,7 @@ export interface RecognizerHandlers {
   /** Streaming: a phrase ended (a pause, or finish()); its last words.
    * `final`: the whole phrase as the server's accurate model heard it — set
    * only when it differs from the fast words (absent: they stand). */
-  onFlush?(text: string, final?: string): void;
+  onFlush?(text: string, final?: string, spokeAt?: number): void;
   /** A passing line for the caption (streaming fell back to clips). */
   onNotice?(text: string): void;
   /** The person talks over a line the app is saying (the server's
@@ -3697,6 +3869,9 @@ interface Phrase {
   sent: boolean;
   trimS: number;
   speechS: number;
+  /** When its speech began (ms, the clock; 0: not yet) — handed over with
+   * its words ({@link RecognizerHandlers.onFlush}). */
+  spokeAt: number;
   /** The pre-roll (16 kHz) its speech began in — sent in front of its first
    * audio ({@link PRE_ROLL_ONSET_S}); null once sent, or none. */
   pre: Float32Array | null;
@@ -3705,6 +3880,19 @@ interface Phrase {
 /** A response's words (the server joins them with spaces). */
 const wordsOf = (v: unknown) => String((Array.isArray(v) ? v.join(" ") : v) || "").trim();
 const langTag = () => String(navigator.language || "en").split(";")[0];
+
+/** This page's own id for POST /api/voice/stream `{client}`: random once per
+ * page load, so the server's per-client stream cap (CLIENT_STREAMS) counts
+ * THIS window — two windows or tabs of one browser (one address, one user
+ * agent) never evict each other's streams. */
+export const VOICE_CLIENT_ID = (() => {
+  try {
+    if (globalThis.crypto?.randomUUID) return "d-" + globalThis.crypto.randomUUID();
+  } catch {
+    /* fall through */
+  }
+  return "d-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
+})();
 
 /** The server's recognizer (mobile.js ServerSTT), fed by lib/wavRecorder as
  * 16 kHz PCM through the page's one AudioContext (the built-in Windows /
@@ -3732,7 +3920,14 @@ const langTag = () => String(navigator.language || "en").split(";")[0];
  * given back by {@link Recognizer.release}. */
 export function serverRecognizer(
   opts: { stream?: () => boolean; mic?: MicKeeper } = {}
-): Recognizer & { lastError: string; mic: MicKeeper; passMs: number | null; finalMs: number | null; readonly streaming: boolean } {
+): Recognizer & {
+  lastError: string;
+  mic: MicKeeper;
+  passMs: number | null;
+  finalMs: number | null;
+  readonly streaming: boolean;
+  readonly spokeAt: number;
+} {
   const mic = opts.mic || new MicKeeper(KEEP_STREAM_MS, undefined, runningAudioCtx);
   /** This dictation holds the microphone (one {@link MicKeeper.hold}). */
   let holding = false;
@@ -3835,7 +4030,7 @@ export function serverRecognizer(
     maybeEnd();
   };
 
-  const upload = async (clip: Blob | Promise<Blob>) => {
+  const upload = async (clip: Blob | Promise<Blob>, spokeAt?: number) => {
     const hh = h;
     uploads++;
     const ac = new AbortController();
@@ -3854,7 +4049,7 @@ export function serverRecognizer(
       if (r.ok) {
         self.lastError = "";
         const text = String(j.text || "").trim();
-        if (text) hh.onFinal(text);
+        if (text) hh.onFinal(text, spokeAt || undefined);
       } else {
         self.lastError = String(j.error || "HTTP " + r.status);
         want = false;
@@ -3954,7 +4149,7 @@ export function serverRecognizer(
         const r = await call("/api/voice/stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ lang: langTag() }),
+          body: JSON.stringify({ lang: langTag(), client: VOICE_CLIENT_ID }),
         });
         const id = String(r.j.id || "");
         if (h !== hh || !c.stream) {
@@ -4039,7 +4234,7 @@ export function serverRecognizer(
       if (h !== hh || !hh) return;
       if (!c.stream) {
         // Fell back before the stream took anything: the phrase is a clip.
-        if (c.heard && tail && tail.size > 44) void upload(joined(c, tail));
+        if (c.heard && tail && tail.size > 44) void upload(joined(c, tail), c.spokeAt);
         return;
       }
       if (!c.sid) return; // its open failed (it fell back), or it was dropped
@@ -4067,7 +4262,7 @@ export function serverRecognizer(
         }
         const final = typeof r.j.final === "string" && r.j.same !== true ? wordsOf(r.j.final) : "";
         hh.onPartial?.("");
-        hh.onFlush?.(wordsOf(r.j.committed), final || undefined);
+        hh.onFlush?.(wordsOf(r.j.committed), final || undefined, c.spokeAt || undefined);
       } catch (err) {
         if (h !== hh) return;
         // Its held words still go in (fallBack flushes a phrase with a stream).
@@ -4119,7 +4314,7 @@ export function serverRecognizer(
         if (token !== mine) return; // stop(): the clip is discarded
         token = null;
         // A clip the detector heard nothing in has no words to send.
-        if (c.heard && blob.size) void upload(joined(c, blob));
+        if (c.heard && blob.size) void upload(joined(c, blob), c.spokeAt);
         if (want && !finishing) void clip();
         else maybeEnd();
       },
@@ -4146,6 +4341,7 @@ export function serverRecognizer(
       sent: false,
       trimS: 0,
       speechS: 0,
+      spokeAt: 0,
       pre: null,
     };
     // Its stream opens while the microphone and the audio engine get ready.
@@ -4207,8 +4403,15 @@ export function serverRecognizer(
       if (isLoud(rms, floor)) {
         if (!c.heard) {
           c.speechS = at;
+          // When it began, on the clock: this block's start — before the
+          // recording when its first moments were loud (the pre-roll holds
+          // the start: the earliest it can have begun).
+          c.spokeAt = now - Math.max(0, Math.round((blockAt - at) * 1000));
           // Speech from its first moments: it began before the recording.
-          if (at < PRE_ROLL_ONSET_S) c.pre = pre;
+          if (at < PRE_ROLL_ONSET_S) {
+            c.pre = pre;
+            if (pre) c.spokeAt -= PRE_ROLL_MS;
+          }
           h?.onSpeech?.();
           // Opened so long ago the server may have forgotten it: a new one.
           if (c.stream && c.sid && now - c.opened > STREAM_FRESH_MS) {
@@ -4280,6 +4483,10 @@ export function serverRecognizer(
     /** The dictation streams (its words are typed as they come). */
     get streaming(): boolean {
       return streaming;
+    },
+    /** When the phrase being recorded now began (ms; 0: no speech yet). */
+    get spokeAt(): number {
+      return cur?.heard ? cur.spokeAt : 0;
     },
     mute(on: boolean) {
       muted = on;

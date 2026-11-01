@@ -400,7 +400,24 @@ a session first*).
   while **Approve dialogs by voice** is on in Settings → Voice (`GET
   /api/voice` `approve_dialogs`; off: *Approving by voice is off: Settings →
   Voice*). “Always” is pressed only when the router says so, never inferred
-  here. A question (no dialog) gets the answer as a prompt: typed and
+  here. **Only words begun after the dialog was there answer it** (R8-bis):
+  each phrase carries when it began — the server recognizer's first loud
+  block (`Phrase.spokeAt`, minus the pre-roll when its speech began with
+  it; Web Speech can't say, so no later than 2 s before the previous
+  phrase ended, `SPOKE_LEAD_MS`) — to the router (`spoke_ms_ago`,
+  `spoke_at`) with when this window first had each dialog (`dialogSeen`:
+  the rows' `asking.dialog_id`, a dialog read out or shown in the ask
+  pop-up, the router's own answers; `dialog_seen`), and the page refuses an
+  answer begun under 300 ms (`ANSWER_AFTER_MS`) after its sighting: the
+  router's `early` (web-api.md) and the page's own refusal both say *&lt;name&gt;
+  asked just now: say your answer again* and press nothing. The names live
+  in `lib/voiceDesktop`: `ANSWER_AFTER_MS = 300`, `SPOKE_LEAD_MS = 2000`, the
+  `DialogSeen` class and its `dialogSeen` singleton (it clears only a
+  sighting the rows confirmed, so a lagging row never erases a fresh one),
+  and `earlyLine(name)`; `TopBarMic` feeds `dialogSeen` from its
+  `["instances"]` query-cache subscription. In practice: an answer said too
+  soon is simply asked for again, and with Web Speech the 2 s lead can make a
+  quick *yes* right after a prompt appears need repeating. A question (no dialog) gets the answer as a prompt: typed and
   sent like “over”, with `say` per *Read replies aloud*. “Session three
   yes” answers that session without moving focus (a row number alone is mapped
   to its title and asked again). No dialog and no question: the router's
@@ -7643,7 +7660,28 @@ never takes one. A start whose key differs drops the carried phrase (graph
 down, stream `DELETE`d; `voice.rec.carryRefused = {had, want, heard}`), so
 a dialog or answer listen always starts on a fresh graph and a fresh
 stream: a *yes* said while dictating can never answer the dialog that
-opens next. A session switch or an *over* send stays in the same dictation
+opens next. **Nor can one said in the same listen** (R8-bis, cycle 3): an
+answer is pressed only when its phrase BEGAN at least 300 ms
+(`VOICE_ANSWER_AFTER_MS`) after the page first had that dialog
+(`voiceAnswerInTime`; `voice.dialogSeen[title] = {id, at}`, noted from the
+rows' `asking.dialog_id`, `GET /dialog` reads — a `clarify` event fetches it
+at once, even mid-dictation — the ask sheet, and the router's answers;
+cleared once a row that showed it asks nothing, `GET /dialog` finds none, or the answer went in — a lagging row never clears a fresh sighting). The recorder
+stamps each phrase's first loud block (`g.spokeAt`; the recognizer adapter
+contract is now `onFinal(text, spokeAt?)` and `onEarly(text, spokeAt)` —
+`ServerSTT` passes the stamp, `PhoneSTT` (`webkitSpeechRecognition`) can't,
+and `voiceSpokeAt` falls back to the conservative bound: no later than its
+start, nor than 2 s before the previous phrase came in,
+`VOICE_SPOKE_LEAD_MS`), and every answer path checks it: the router's
+answers (`voiceRoutedAnswer`), the page's own (`voiceAnswerLocal`, when the
+router can't be reached), "session two yes", and the ask sheet's select
+steps. A dialog listen — opened after the dialog was read out — counts from
+its own start (`voiceListen_.listenAt`): no word in it can predate it. The
+router gets the same facts (`spoke_ms_ago`, `spoke_at`, `dialog_seen`) and
+applies the rule with its own stamp too (web-api.md, *An answer begun before
+its dialog*). Too early, nothing is pressed: the dialog is read out (this
+session's — so the next words answer it) or *&lt;name&gt; asked just now: say
+your answer again* is said (another's); `voice.early` counts them. A session switch or an *over* send stays in the same dictation
 listen (same `gen`) and keeps the carry; any new listen (the ask sheet, a
 dialog, a tap) bumps `gen`. **A lost mic** (its track ends, or a
 `devicechange` leaves no live track) is noticed: any carried phrase is
@@ -7856,10 +7894,14 @@ phone fallbacks too) a line said over the listen is held while you are
 talking — the server recorder's level within the last 250 ms
 (`VOICE_MID_QUIET_MS`, so a first syllable counts before any word is
 transcribed), or a phone-recognizer word within 800 ms — polled every
-50 ms (`VOICE_HOLD_POLL_MS`) for at most 10 s (`VOICE_HOLD_MAX_MS`, a room
-that never goes quiet); a line cut meanwhile never sounds. The recorder
-keeps streaming while a line is held (`voice.rec.held = {n, ms,
-waiting}`), and the strip still says *Speaking…*. The phone recognizer's
+50 ms (`VOICE_HOLD_POLL_MS`) for at most 10 s per sentence
+(`VOICE_HOLD_MAX_MS`) and **3 s for the whole line** (`VOICE_HOLD_REPLY_MS`,
+the line's `holdLeft`: a room that never goes quiet — traffic, a TV the
+level reads as a voice — gets the reply about three seconds late, then it
+plays through without another hold); a line cut meanwhile never sounds. The
+recorder keeps streaming while a line is held (`voice.rec.held = {n, ms,
+waiting, capped}`), and while it holds the strip says *Waiting for you…*
+(not *Speaking…*). The phone recognizer's
 echo filter (`voiceEchoing`) likewise drops what it hears only once the
 line has **sounded** (its first clip or sentence), while it is audible or
 in its echo tail — before the first sound, what it hears is you. A tap on the mic

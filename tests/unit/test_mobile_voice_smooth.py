@@ -320,7 +320,9 @@ var ctx = {
 };
 function voiceAudioCtx() { return ctx; }
 // The owner talking over the listen (voiceSpeakHeld): until heldUntil.
-var heldUntil = 0, VOICE_HOLD_POLL_MS = 10, VOICE_HOLD_MAX_MS = 1000;
+var heldUntil = 0, VOICE_HOLD_POLL_MS = 10, VOICE_HOLD_MAX_MS = 1000, VOICE_HOLD_REPLY_MS = 3000;
+var voiceSpeech = { playing: null };
+function voiceStripPaint() {}
 function voiceSpeakHeld() { return Date.now() < heldUntil; }
 // The phone's voice: what it was asked to say, in calls.
 var phoneSaid = [], phoneCancels = 0;
@@ -486,7 +488,9 @@ def test_the_phone_voice_is_audible_from_speak_to_its_end():
         r"""
 var VOICE_WORD_MS = 10, VOICE_CHUNK_GRACE_MS = 20;
 var voice = { prefs: { rate: 1 }, rec: {} }, ends = 0, utts = [];
-var heldUntil = 0, VOICE_HOLD_POLL_MS = 10, VOICE_HOLD_MAX_MS = 1000;
+var heldUntil = 0, VOICE_HOLD_POLL_MS = 10, VOICE_HOLD_MAX_MS = 1000, VOICE_HOLD_REPLY_MS = 3000;
+var voiceSpeech = { playing: null };
+function voiceStripPaint() {}
 function voiceSpeakHeld() { return Date.now() < heldUntil; }
 function voiceClipEnded() { ends++; }
 function sentenceChunks(t) { return String(t).split(/(?<=\.)\s+/).filter(Boolean); }
@@ -602,11 +606,11 @@ def test_over_asks_the_router_while_end_makes_the_final():
     fire = _inner(stt, "controlFire")
     # The hook goes before /end (finish), after the fast words are kept.
     assert fire.index("g.fast = c.text;") < fire.index(
-        "if (mine.h.onEarly) mine.h.onEarly(c.text);"
+        "if (mine.h.onEarly) mine.h.onEarly(c.text, g.spokeAt);"
     )
-    assert fire.index("mine.h.onEarly(c.text);") < fire.index("finish();")
+    assert fire.index("mine.h.onEarly(c.text, g.spokeAt);") < fire.index("finish();")
     assert (
-        "onEarly: function (t) { if (voiceIsListening()) voiceRouteEarly(t, mode); },"
+        "onEarly: function (t, at) { if (voiceIsListening()) voiceRouteEarly(t, mode, voiceSpokeAt(at)); },"
         in _whole(js, "voiceRecStart")
     )
     early = _whole(js, "voiceRouteEarly")
@@ -614,7 +618,7 @@ def test_over_asks_the_router_while_end_makes_the_final():
     # The box without the guess decides, as voiceHeard's does after it takes the guess back.
     assert "!voice.box && !!p.text && !base.trim() && !L.routing" in early
     assert 'voiceStripNote("Sending…");' in early
-    assert 'answer: voiceRoute(p.text, "", true) };' in early
+    assert 'answer: voiceRoute(p.text, "", true, spokeAt) };' in early
     route = _whole(js, "voiceRoute")
     # The early answer is used once, for the same words in the same listen, fresh.
     assert (
@@ -624,7 +628,9 @@ def test_over_asks_the_router_while_end_makes_the_final():
     assert "if (!fresh) L.early = null;" in route
     assert "return early.answer;" in route
     # voiceHeard still routes the phrase the one way.
-    assert "voiceRoute(p.text).then(function (res) {" in _whole(js, "voiceHeard")
+    assert 'voiceRoute(p.text, "", false, p.spokeAt).then(function (res) {' in _whole(
+        js, "voiceHeard"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -772,6 +778,9 @@ def test_the_numbers_are_the_documented_ones():
         "VOICE_EARLY_MAX_MS": "10000",
         "VOICE_HOLD_POLL_MS": "50",
         "VOICE_HOLD_MAX_MS": "10000",
+        "VOICE_HOLD_REPLY_MS": "3000",
+        "VOICE_ANSWER_AFTER_MS": "300",
+        "VOICE_SPOKE_LEAD_MS": "2000",
         "VOICE_MIC_PAUSE_REASK_MS": "5000",
         "VOICE_STREAM_DELETE_WAIT_MS": "400",
         "VOICE_STREAM_FULL_RETRY_MS": "300",
@@ -879,7 +888,9 @@ def test_the_phone_voice_waits_for_the_pause_too():
         r"""
 var VOICE_WORD_MS = 10, VOICE_CHUNK_GRACE_MS = 20;
 var voice = { prefs: { rate: 1 }, rec: {} }, utts = [];
-var heldUntil = Date.now() + 120, VOICE_HOLD_POLL_MS = 10, VOICE_HOLD_MAX_MS = 1000;
+var heldUntil = Date.now() + 120, VOICE_HOLD_POLL_MS = 10, VOICE_HOLD_MAX_MS = 1000, VOICE_HOLD_REPLY_MS = 3000;
+var voiceSpeech = { playing: null };
+function voiceStripPaint() {}
 function voiceSpeakHeld() { return Date.now() < heldUntil; }
 function voiceClipEnded() {}
 function sentenceChunks(t) { return String(t).split(/(?<=\.)\s+/).filter(Boolean); }
@@ -1076,12 +1087,13 @@ def test_the_cap_pattern_matches_the_servers_own_409_and_only_it(monkeypatch):
     monkeypatch.setattr(routes, "_refusal", lambda kind: (backend, None))
     monkeypatch.setattr(routes, "_hints", lambda: "")
     monkeypatch.setattr(routes._stream, "open_stream", lambda *a, **k: None)
-    cap = routes.voice_stream_open({"lang": "en-US"})
+    request = SimpleNamespace(client=SimpleNamespace(host="127.0.0.1"), headers={})
+    cap = routes.voice_stream_open(request, {"lang": "en-US"})
     assert cap.status_code == 409
     err = json.loads(cap.body)["error"]
     assert str(routes._stream.MAX_STREAMS) in err and pattern.search(err)
     backend.streams = False
-    nostream = routes.voice_stream_open({"lang": "en-US"})
+    nostream = routes.voice_stream_open(request, {"lang": "en-US"})
     assert nostream.status_code == 409
     assert not pattern.search(json.loads(nostream.body)["error"])
     # No ready backend: core.speech.select's reasons, never the cap's.
@@ -1120,8 +1132,9 @@ console.log(JSON.stringify([
 def _hold_run(body: str):
     js = _js()
     script = (
-        "var VOICE_HOLD_POLL_MS = 10, VOICE_HOLD_MAX_MS = 200;\n"
-        "var voice = { rec: {} }, held = false;\n"
+        "var VOICE_HOLD_POLL_MS = 10, VOICE_HOLD_MAX_MS = 200, VOICE_HOLD_REPLY_MS = 3000;\n"
+        "var voice = { rec: {} }, held = false, voiceSpeech = { playing: null }, paints = [];\n"
+        "function voiceStripPaint() { paints.push(!!voice.holding); }\n"
         "function voiceSpeakHeld() { return typeof held === 'function' ? held() : held; }\n"
         "function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }\n"
         + _whole(js, "voiceSpeakWhenQuiet")
@@ -1404,6 +1417,7 @@ async function runAll() {
 }
 var voice = { rec: {}, cfg: { server_ready: { stt_stream: true } } };
 var asks = [], answer = null, fails = [], deleting = [], live = null, inflight = 0, maxInflight = 0;
+var VOICE_CLIENT_ID = "m-test";
 function lang() { return "en-US"; }
 function streamReq(g, path, opts) {
   asks.push(clock); inflight++; maxInflight = Math.max(maxInflight, inflight);
@@ -1532,3 +1546,302 @@ def test_an_open_waits_for_the_deletes_on_their_way_bounded():
     assert out["landed"]["done"] is True and out["landed"]["left"] == 0
     assert 75 <= out["hung"]["ms"] < 150 and out["hung"]["left"] == 1
     assert out["rejected"] == 1  # only the hung one is left
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 3: an answer said before its dialog was there (R8-bis)
+# --------------------------------------------------------------------------- #
+def _seen_script(body: str) -> str:
+    """voice.dialogSeen's functions as written, over a stub voice."""
+    js = _js()
+    return (
+        _consts(js, "VOICE_ANSWER_AFTER_MS", "VOICE_SPOKE_LEAD_MS")
+        + "var voice = { dialogSeen: {}, early: 0, state: 'listening', session: 'a', lastRoute: '' };\n"
+        + "var voiceListen_ = { startedAt: 0, lastFinalAt: 0, listenAt: 0 };\n"
+        + "function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }\n"
+        + _whole(js, "voiceSpokeAt")
+        + _whole(js, "voiceDialogNote")
+        + _whole(js, "voiceDialogRows")
+        + _whole(js, "voiceDialogSeenBody")
+        + _whole(js, "voiceAnswerInTime")
+        + "var out = {};\n(async function () {\n"
+        + body
+        + "\nconsole.log(JSON.stringify(out));\n})().catch(function (e) { console.error(e); process.exit(1); });\n"
+    )
+
+
+@needs_node
+def test_an_answer_is_in_time_only_300_ms_after_this_pages_sighting():
+    out = _run(_seen_script("""
+voice.dialogSeen.a = { id: "d1", at: 1000 };
+out.under = voiceAnswerInTime("a", "d1", 1299);
+out.exact = voiceAnswerInTime("a", "d1", 1300);
+out.later = voiceAnswerInTime("a", "d1", 5000);
+out.before = voiceAnswerInTime("a", "d1", 900);
+out.otherId = voiceAnswerInTime("a", "d2", 5000);
+out.otherTitle = voiceAnswerInTime("b", "d1", 5000);
+out.noSpoke = [voiceAnswerInTime("a", "d1", 0), voiceAnswerInTime("a", "d1", undefined), voiceAnswerInTime("a", "d1", NaN)];
+// A dialog listen opened once the page had the dialog: every word in it is in time.
+out.listenAfter = voiceAnswerInTime("a", "d1", 0, 1000);
+out.listenBefore = voiceAnswerInTime("a", "d1", 0, 999);
+out.numericId = (voice.dialogSeen.n = { id: "7", at: 0 }, voiceAnswerInTime("n", 7, 300));
+"""))
+    assert out["under"] is False and out["exact"] is True and out["later"] is True
+    assert out["before"] is False
+    assert out["otherId"] is False and out["otherTitle"] is False
+    assert out["noSpoke"] == [False, False, False]
+    assert out["listenAfter"] is True and out["listenBefore"] is False
+    assert out["numericId"] is True
+
+
+@needs_node
+def test_the_rows_note_a_dialog_once_and_clear_only_what_they_confirmed():
+    out = _run(_seen_script("""
+voiceDialogRows([{ title: "a", activity: "clarify", asking: { kind: "dialog", dialog_id: "d1" } }]);
+var first = voice.dialogSeen.a.at;
+out.noted = voice.dialogSeen.a.id;
+await sleep(15);
+// The next poll, the same dialog: the first time stays.
+voiceDialogRows([{ title: "a", activity: "clarify", asking: { kind: "dialog", dialog_id: "d1" } }]);
+out.kept = voice.dialogSeen.a.at === first;
+// A new id: a new sighting, now.
+voiceDialogRows([{ title: "a", activity: "clarify", asking: { kind: "dialog", dialog_id: "d2" } }]);
+out.renewed = [voice.dialogSeen.a.id, voice.dialogSeen.a.at > first];
+// A dialog row with no id yet changes nothing.
+voiceDialogRows([{ title: "a", activity: "clarify", asking: { kind: "dialog" } }]);
+out.noIdKeeps = voice.dialogSeen.a.id;
+// A clarify row asking nothing yet keeps it; a working row clears it.
+voiceDialogRows([{ title: "a", activity: "clarify" }]);
+out.clarifyKeeps = !!voice.dialogSeen.a;
+voiceDialogRows([{ title: "a", activity: "working" }]);
+out.cleared = !("a" in voice.dialogSeen);
+// A sighting from a dialog read / the sheet (no row confirmed it): a
+// lagging row that asks nothing never clears it.
+voiceDialogNote("b", "d9");
+voiceDialogRows([{ title: "b", activity: "working" }, null, {}]);
+out.lagSafe = voice.dialogSeen.b && voice.dialogSeen.b.id;
+// …until a row shows it and then asks nothing.
+voiceDialogRows([{ title: "b", activity: "clarify", asking: { kind: "dialog", dialog_id: "d9" } }]);
+voiceDialogRows([{ title: "b", activity: "idle" }]);
+out.thenCleared = !("b" in voice.dialogSeen);
+// A question ask is no dialog sighting.
+voiceDialogRows([{ title: "c", activity: "idle", asking: { kind: "question", dialog_id: "q1" } }]);
+out.question = "c" in voice.dialogSeen;
+voiceDialogRows(null); voiceDialogRows(undefined);
+"""))
+    assert out["noted"] == "d1" and out["kept"] is True
+    assert out["renewed"] == ["d2", True]
+    assert out["noIdKeeps"] == "d2"
+    assert out["clarifyKeeps"] is True and out["cleared"] is True
+    assert out["lagSafe"] == "d9" and out["thenCleared"] is True
+    assert out["question"] is False
+
+
+@needs_node
+def test_the_route_body_carries_ages_never_the_pages_clock_alone():
+    js = _js()
+    out = _run(
+        _seen_script(
+            """
+var pending = null;
+function voicePendingTake() { var p = pending; pending = null; return p; }
+"""
+            + _whole(js, "voiceRouteBody")
+            + """
+var now = Date.now();
+voice.dialogSeen.a = { id: "d1", at: now - 2000 };
+voice.dialogSeen.b = { id: "d2", at: now + 50 };   // a clock step: never a negative age
+var b = voiceRouteBody("yes", "a", now - 400);
+out.withSpoke = { text: b.text, session: b.session, ago: b.spoke_ms_ago, at: b.spoke_at === now - 400, seen: b.dialog_seen };
+var nb = voiceRouteBody("yes", "a", 0);
+out.noSpoke = { keys: Object.keys(nb).sort(), seen: Object.keys(nb.dialog_seen).sort() };
+var ub = voiceRouteBody("yes", "a");
+out.undefSpoke = "spoke_ms_ago" in ub || "spoke_at" in ub;
+pending = { kind: "pick" };
+out.pending = voiceRouteBody("two", "a", now).pending;
+// At most 64 sessions' sightings go.
+for (var i = 0; i < 100; i++) voice.dialogSeen["s" + i] = { id: "x", at: now };
+out.capped = Object.keys(voiceDialogSeenBody(now)).length;
+"""
+        )
+    )
+    w = out["withSpoke"]
+    assert (w["text"], w["session"]) == ("yes", "a")
+    assert 400 <= w["ago"] < 450 and w["at"] is True
+    assert w["seen"]["a"]["id"] == "d1" and 2000 <= w["seen"]["a"]["ms_ago"] < 2050
+    assert w["seen"]["b"] == {"id": "d2", "ms_ago": 0}
+    assert out["noSpoke"]["keys"] == ["dialog_seen", "session", "text"]
+    assert out["noSpoke"]["seen"] == ["a", "b"]
+    assert out["undefSpoke"] is False
+    assert out["pending"] == {"kind": "pick"}
+    assert out["capped"] == 64
+
+
+@needs_node
+def test_a_phrase_without_a_start_time_is_dated_early():
+    out = _run(_seen_script("""
+out.server = voiceSpokeAt(12345);
+out.serverStr = voiceSpokeAt("12345");
+// The phone recognizer: no level, no timestamp — the listen's start...
+voiceListen_.startedAt = 5000; voiceListen_.lastFinalAt = 0;
+out.first = voiceSpokeAt(undefined);
+// ...or 2 s before the previous phrase came in, whichever is later.
+voiceListen_.lastFinalAt = 9000;
+out.lead = voiceSpokeAt(0);
+voiceListen_.lastFinalAt = 6000;
+out.startWins = voiceSpokeAt(null);
+voiceListen_.startedAt = 0; voiceListen_.lastFinalAt = 0;
+out.nothing = voiceSpokeAt(-1);
+"""))
+    assert out["server"] == 12345 and out["serverStr"] == 12345
+    assert out["first"] == 5000
+    assert out["lead"] == 9000 - 2000
+    assert out["startWins"] == 5000
+    # Nothing known: 0, which voiceAnswerInTime never takes as in time.
+    assert out["nothing"] == 0
+
+
+@needs_node
+def test_an_answer_post_begun_too_soon_posts_nothing_and_says_so():
+    js = _js()
+    out = _run(
+        _seen_script(
+            """
+var posts = [], states = [], said = [], read = 0;
+function nameOf(t) { return t === "b" ? "Billing" : t; }
+function fetch(url, opts) { posts.push(url); return new Promise(function () {}); }
+function voiceSetState(s, w) { states.push(s); voice.state = s; }
+function voiceSayThenIdle(t) { said.push(t); }
+function voiceDialog() { read++; }
+"""
+            + _whole(js, "voiceEarly")
+            + _whole(js, "voiceAnswerPost")
+            + """
+var now = Date.now();
+voice.dialogSeen.a = { id: "d1", at: now };
+voice.dialogSeen.b = { id: "d2", at: now };
+// This session's dialog, begun 100 ms after the page had it: refused, read out.
+voiceAnswerPost("a", "d1", ["1"], "yes", "", undefined, now + 100);
+out.mine = { posts: posts.length, states: states.slice(), read: read, early: voice.early, route: voice.lastRoute };
+// Another session's: refused, said with its name.
+voice.state = "listening";
+voiceAnswerPost("b", "d2", ["1"], "yes", "", undefined, now + 100);
+out.other = { posts: posts.length, said: said.slice(), early: voice.early };
+// A stale id: refused, and the newer id is noted.
+voiceAnswerPost("a", "d0", ["1"], "yes", "", undefined, now + 5000);
+out.stale = { posts: posts.length, seen: voice.dialogSeen.a.id };
+// In time: the POST goes, pinned to the dialog.
+voice.dialogSeen.a = { id: "d1", at: now - 1000 };
+voiceAnswerPost("a", "d1", ["1"], "yes", "", undefined, now);
+out.ok = posts.slice();
+// Voice off: refused and counted, nothing said.
+voice.state = "off"; said = [];
+voiceAnswerPost("b", "d2", ["1"], "yes", "", undefined, 0);
+out.off = { said: said.length, early: voice.early };
+"""
+        )
+    )
+    assert out["mine"]["posts"] == 0 and out["mine"]["read"] == 1
+    assert out["mine"]["states"] == ["idle"] and out["mine"]["early"] == 1
+    assert out["mine"]["route"] == "early (d1): nothing pressed"
+    assert out["other"]["posts"] == 0
+    assert out["other"]["said"] == ["Billing asked just now: say your answer again."]
+    assert out["stale"] == {"posts": 0, "seen": "d0"}
+    assert out["ok"] == ["/api/instances/a/answer"]
+    assert out["off"] == {"said": 0, "early": 4}
+
+
+@needs_node
+def test_a_clarify_reads_the_dialog_at_once_even_mid_dictation():
+    """The ``clarify`` event's GET /dialog goes while a listen is on: the
+    page notes the dialog (so the next words can answer it) but reads
+    nothing over the owner; a 204 drops the sighting."""
+    js = _js()
+    out = _run(
+        _seen_script(
+            """
+var gets = [], reply = { status: 200, body: { id: "d7", parsed: true, options: [{ key: "1", kind: "yes" }] } };
+voice.dialogBusy = false;
+function fetch(url) {
+  gets.push(url);
+  var r = reply;
+  return Promise.resolve({ status: r.status, ok: r.status < 300, json: function () { return Promise.resolve(r.body); } });
+}
+function voiceIsListening() { return true; }
+"""
+            + _whole(js, "voiceDialog")
+            + """
+voiceDialog();
+await sleep(5);
+out.noted = voice.dialogSeen.a && voice.dialogSeen.a.id;
+out.gets = gets.slice();
+out.busy = voice.dialogBusy;
+// A question in prose is no dialog to note.
+delete voice.dialogSeen.a;
+reply = { status: 200, body: { id: "q1", kind: "question" } };
+voiceDialog(); await sleep(5);
+out.question = "a" in voice.dialogSeen;
+// Nothing on screen (204): the sighting goes.
+voice.dialogSeen.a = { id: "d7", at: 1 };
+reply = { status: 204, body: null };
+voiceDialog(); await sleep(5);
+out.gone = "a" in voice.dialogSeen;
+"""
+        )
+    )
+    assert out["gets"] == ["/api/instances/a/dialog?quiet=1"]
+    assert out["noted"] == "d7" and out["busy"] is False
+    assert out["question"] is False and out["gone"] is False
+    # And the event handler calls it on clarify for this session.
+    on = _js()
+    start = on.index("  voice.onEvent = function (f) {")
+    assert 'else if (f.new === "clarify") voiceDialog();' in on[start : start + 600]
+
+
+@needs_node
+def test_a_reply_line_is_held_three_seconds_in_all_not_per_sentence():
+    """VOICE_HOLD_REPLY_MS: a room that never goes quiet holds a line's
+    sentences together for at most the reply's budget (scaled down here),
+    each one also within VOICE_HOLD_MAX_MS; the strip says it is waiting."""
+    js = _js()
+    script = (
+        "var VOICE_HOLD_POLL_MS = 10, VOICE_HOLD_MAX_MS = 200, VOICE_HOLD_REPLY_MS = 300;\n"
+        "var voice = { rec: {} }, voiceSpeech = { playing: null }, paints = [];\n"
+        "function voiceStripPaint() { paints.push(!!voice.holding); }\n"
+        "function voiceSpeakHeld() { return true; }\n"  # talking for ever
+        "function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }\n"
+        + _whole(js, "voiceSpeakWhenQuiet")
+        + """
+function hold() {
+  return new Promise(function (res) {
+    var t = Date.now();
+    voiceSpeakWhenQuiet(function () { return true; }, function (go) { res([go, Date.now() - t]); });
+  });
+}
+(async function () {
+  var out = {}, t0 = Date.now();
+  voiceSpeech.playing = { text: "One. Two. Three." };
+  out.waits = [await hold(), await hold(), await hold()];
+  out.total = Date.now() - t0;
+  out.left = voiceSpeech.playing.holdLeft;
+  out.capped = voice.rec.held.capped;
+  out.n = voice.rec.held.n;
+  out.paints = paints.slice(0, 2);
+  out.holding = !!voice.holding;
+  // A new line has its own budget.
+  voiceSpeech.playing = { text: "Next." };
+  out.next = await hold();
+  console.log(JSON.stringify(out));
+})().catch(function (e) { console.error(e); process.exit(1); });
+"""
+    )
+    out = _run(script)
+    (g1, w1), (g2, w2), (g3, w3) = out["waits"]
+    assert g1 is g2 is g3 is True
+    assert 200 <= w1 < 260  # the first sentence: the per-sentence cap
+    assert 80 <= w2 < 160  # the second: what is left of the reply's
+    assert w3 < 10  # the third: no hold left, at once
+    assert out["total"] < 400 and out["left"] == 0
+    assert out["capped"] == 2 and out["n"] == 2
+    assert out["paints"] == [True, False] and out["holding"] is False
+    assert out["next"][0] is True and 200 <= out["next"][1] < 260

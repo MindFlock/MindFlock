@@ -1128,6 +1128,7 @@
         // A guest link's crossed-out rows (`locked`, backend.web.core.guests)
         // have no terminal to open: the phone lists only what it can show.
         instances = (Array.isArray(list) ? list : []).filter(function (i) { return !i.locked; });
+        voiceDialogRows(instances);
         // Re-render when the title set OR any attention state changes, so
         // markers move without a session being added/removed.
         var sig = instances.map(function (i) {
@@ -3032,7 +3033,9 @@
   // Adapters, reachable as window.mfVoice.stt / .tts, all with one surface:
   //   stt {name, available(), start({onInterim, onFinal, onError, onEnd,
   //        onLevel?, onSpeech?, onStatus?, onGuess?, until?}), stop(), active(), release()} —
-  //        onFinal fires once per PHRASE (one start may deliver several);
+  //        onFinal fires once per PHRASE (one start may deliver several),
+  //        onFinal(text, spokeAt?): spokeAt = when the phrase began (ms, this
+  //        page's clock; ServerSTT's first loud block — PhoneSTT has none);
   //        onInterim(text, tail?): tail = the end of text still settling;
   //        onStatus carries a caption that is not words ("Transcribing…").
   //        PhoneSTT over webkitSpeechRecognition (continuous), adding end()
@@ -3118,7 +3121,8 @@
   var VOICE_MID_WORDS_MS = 1500;         // continuous listening: words this recent mean mid-sentence...
   var VOICE_MID_QUIET_MS = 250;          // ...until the voice has been quiet this long — then a line may play
   var VOICE_HOLD_POLL_MS = 50;           // a line's sound held for the owner's pause (voiceSpeakWhenQuiet): asked this often...
-  var VOICE_HOLD_MAX_MS = 10000;         // ...for at most this long
+  var VOICE_HOLD_MAX_MS = 10000;         // ...for at most this long per sentence...
+  var VOICE_HOLD_REPLY_MS = 3000;        // ...and this long in all per line (a reply): a noisy room never holds it longer
   var VOICE_MID_QUIET_PHONE_MS = 800;    // ...the phone's recognizer: this long since its last word (it has no level)
   // The spoken confirmations (prefs.confirm): what was done, said short. A
   // stop phrase has none — the falling chime is its answer (the owner heard
@@ -3363,6 +3367,14 @@
   // not stream after all: clip per phrase until GET /api/voice says
   // otherwise) or any failed chunk turns the phrase into a clip: the words
   // so far stay, the audio not yet answered is transcribed in one piece.
+  // This page's own id for POST /api/voice/stream {client}: random once per
+  // page load, so the server's per-client stream cap (CLIENT_STREAMS) counts
+  // THIS page — two tabs of one browser (one address, one user agent) never
+  // evict each other's streams.
+  var VOICE_CLIENT_ID = (function () {
+    try { if (window.crypto && crypto.randomUUID) return "m-" + crypto.randomUUID(); } catch (e) {}
+    return "m-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
+  })();
   var VOICE_WAV_RATE = 16000;            // the rate of the uploaded clip
   var VOICE_SILENCE_MS = 1100;           // quiet after speech that ends the clip
   var VOICE_CONTROL_TAIL_MS = 250;       // ...or this, after a streamed guess that ends in a control phrase (voiceGuessControl)
@@ -3859,7 +3871,7 @@
     function recNew() {
       return { ctx: null, rate: 0, blocks: [], frames: 0,
                source: null, proc: null, mute: null,
-               heard: false, lastLoud: 0, floor: 0, t0: Date.now(), said: "",
+               heard: false, lastLoud: 0, floor: 0, t0: Date.now(), said: "", spokeAt: 0,
                t00: Date.now(), trace: {}, debug: voiceDebugOn(),
                // The stream: mode "clip" (none, or it broke) / "opening" /
                // "stream"; blocks + queued = the audio it has not answered
@@ -3961,8 +3973,12 @@
       var loud = !muted && rms > Math.max(VOICE_RMS_SPEECH, g.floor * 3);
       if (loud && !g.heard) {
         // The phrase's first word: the trace, and the tick (h.onSpeech) —
-        // a carried phrase's once start() takes it.
+        // a carried phrase's once start() takes it. spokeAt: when it
+        // began (the block's start, the clock's), handed over with the
+        // phrase — an answer is pressed only when that was after its
+        // dialog was there (voiceAnswerInTime).
         g.speechAt = g.queued - block.length;
+        g.spokeAt = Date.now() - Math.round(block.length * 1000 / (g.rate || VOICE_WAV_RATE));
         if (mine) {
           voiceTraceMark(g, "speech");
           if (h.onSpeech) h.onSpeech();
@@ -4212,10 +4228,10 @@
       voiceResampleClip(all, g.rate).then(function (pcm) {
         if (token !== mine) return;   // stopped meanwhile (discard() cleared uploading)
         var wav = voiceWavEncode(pcm, VOICE_WAV_RATE);
-        upload(new Blob([wav], { type: "audio/wav" }), "audio/wav", mine, g.lead);
+        upload(new Blob([wav], { type: "audio/wav" }), "audio/wav", mine, g.lead, g.spokeAt);
       });
     }
-    function upload(blob, mime, mine, lead) {
+    function upload(blob, mime, mine, lead, spokeAt) {
       var h = mine.h;
       uploading = true;
       aborter = window.AbortController ? new AbortController() : null;
@@ -4235,7 +4251,7 @@
         if (x.r.ok) {
           voice.rec.last = { ms: Number(x.j.ms) || (Date.now() - t0), backend: String(x.j.backend || "server"), error: "", at: Date.now() };
           var text = voiceJoin(lead, x.j.text);
-          if (text) { if (h.onFinal) h.onFinal(text); }
+          if (text) { if (h.onFinal) h.onFinal(text, spokeAt); }
           else if (h.onEnd) h.onEnd();     // a clip with no words: the window decides
           return;
         }
@@ -4307,7 +4323,7 @@
         streamReq(g, "/api/voice/stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ lang: lang() }),
+          body: JSON.stringify({ lang: lang(), client: VOICE_CLIENT_ID }),
         }).then(function (x) {
           g.busy = g.opening = false;
           mine = mine || g.mine || null;
@@ -4410,7 +4426,7 @@
       if (tail && tail.kind === "stop") {
         var all = g.pend;
         g.pend = g.partial = "";
-        if (h.onFinal) h.onFinal(all);
+        if (h.onFinal) h.onFinal(all, g.spokeAt);
         return;
       }
       var shown = voiceJoin(g.pend, g.partial);
@@ -4453,7 +4469,7 @@
       // The send is coming: the state machine says so on the strip now and
       // asks the router about the phrase WHILE /end makes the final
       // (voiceRouteEarly) — the two waits overlap instead of stacking.
-      if (mine.h.onEarly) mine.h.onEarly(c.text);
+      if (mine.h.onEarly) mine.h.onEarly(c.text, g.spokeAt);
       if (token !== mine) return;
       var budget = voiceEndBudgetMs(voice.rec.endMs);
       voice.rec.ctl.budget = budget;
@@ -4517,7 +4533,7 @@
       live = null;
       token = null;
       uploading = false;
-      if (text) { if (h.onFinal) h.onFinal(text); }
+      if (text) { if (h.onFinal) h.onFinal(text, g.spokeAt); }
       else if (h.onEnd) h.onEnd();
     }
     // Abandoned (stop()): DELETE the stream — an open still on its way
@@ -5059,6 +5075,8 @@
     expectSay: null,             // the last prompt sent asked for a Say line (null: none sent here yet)
     lastPrompt: null,            // Diagnostics: {dictated, say} of that prompt
     lastRoute: "",               // Diagnostics: what /api/voice/route last said (or why it did not)
+    dialogSeen: {},              // title → {id, at}: when this page first had that session's dialog (voiceDialogNote)
+    early: 0,                    // answers begun before their dialog was there, refused (voiceEarly)
     cfg: { stt: "phone", tts: "phone", approve_dialogs: true, loaded: false,
            server_ready: {}, backends: { stt: [], tts: [] }, system: null, say_all: null },
     sayAll: { synced: false, denied: false },   // the say-all marker: set from the pref once this load; a 403 said once
@@ -5220,8 +5238,9 @@
   // heard), else "". `paused`: the microphone is muted under the listen (a
   // call, Siri, another app: ServerSTT's paused()) — "Mic paused…", never
   // "Listening…" over a mic that hears nothing.
-  function voiceStripWord(state, speaking, note, paused) {
+  function voiceStripWord(state, speaking, note, paused, holding) {
     if (note) return String(note);
+    if (holding) return "Waiting for you…";   // a line held for the owner's pause (voiceSpeakWhenQuiet)
     if (speaking) return "Speaking…";
     if (state === "listening" || state === "awaiting" || state === "dialog") return paused ? "Mic paused…" : "Listening…";
     if (state === "sending") return "Sending…";
@@ -5229,7 +5248,7 @@
   }
   function voiceStripPaint() {
     var w = voiceStripWord(voice.state, !!voiceSpeech.playing || voice.state === "speaking", Date.now() < voice.quietUntil ? voice.quietWord : "",
-                           !!(voice.stt && voice.stt.paused && voice.stt.paused()));
+                           !!(voice.stt && voice.stt.paused && voice.stt.paused()), !!voice.holding && !!voiceSpeech.playing);
     if (voiceCaptionEl.textContent !== w) voiceCaptionEl.textContent = w;
   }
   // A moment's word on the strip, VOICE_QUIET_CAPTION_MS long: the cue
@@ -5799,22 +5818,40 @@
   }
   // go(true) the moment the line may sound (at once, synchronously, when
   // nobody is talking over it); held, it is asked every VOICE_HOLD_POLL_MS
-  // until the pause — at most VOICE_HOLD_MAX_MS (a room that never goes
-  // quiet). go(false) when alive() says the line was cut meanwhile.
-  // voice.rec.held: how many sounds waited, and the last wait.
+  // until the pause — at most VOICE_HOLD_MAX_MS for one sentence and
+  // VOICE_HOLD_REPLY_MS for all of the line's sentences together (the
+  // line's holdLeft): a room that never goes quiet (traffic, a TV the level
+  // reads as a voice) gets the reply three seconds late, not ten seconds
+  // per sentence. While it holds the strip says "Waiting for you…", not
+  // "Speaking…" (voice.holding). go(false) when alive() says the line was
+  // cut meanwhile. voice.rec.held: how many sounds waited, the last wait,
+  // and how many waits ran out (capped).
   function voiceSpeakWhenQuiet(alive, go) {
-    if (!voiceSpeakHeld()) { go(true); return; }
+    var line = voiceSpeech.playing;
+    if (line && line.holdLeft === undefined) line.holdLeft = VOICE_HOLD_REPLY_MS;
+    var left = line ? Math.min(VOICE_HOLD_MAX_MS, line.holdLeft) : VOICE_HOLD_MAX_MS;
+    if (left <= 0 || !voiceSpeakHeld()) { go(true); return; }
     var t0 = Date.now();
-    var R = voice.rec.held = voice.rec.held || { n: 0, ms: 0, at: 0 };
+    var R = voice.rec.held = voice.rec.held || { n: 0, ms: 0, at: 0, capped: 0 };
     R.n++;
     R.at = t0;
     R.waiting = true;
+    voice.holding = true;
+    voiceStripPaint();
+    function over() {
+      R.waiting = false;
+      R.ms = Date.now() - t0;
+      if (line) line.holdLeft = Math.max(0, line.holdLeft - R.ms);
+      voice.holding = false;
+      voiceStripPaint();
+    }
     (function poll() {
       setTimeout(function () {
-        if (!alive()) { R.waiting = false; go(false); return; }
-        if (voiceSpeakHeld() && Date.now() - t0 < VOICE_HOLD_MAX_MS) { poll(); return; }
-        R.waiting = false;
-        R.ms = Date.now() - t0;
+        if (!alive()) { over(); go(false); return; }
+        var waited = Date.now() - t0;
+        if (voiceSpeakHeld() && waited < left) { poll(); return; }
+        if (waited >= left) R.capped = (R.capped || 0) + 1;
+        over();
         go(true);
       }, VOICE_HOLD_POLL_MS);
     })();
@@ -5865,7 +5902,7 @@
   var voiceListen_ = { netErrs: 0, mode: "", until: 0, restarts: 0, timer: null, reprompted: false,
                        heard: false, startedAt: 0, rapid: 0, stopAfter: false, held: false,
                        overAfter: false, overBy: 0, routing: false, routeQ: [], draining: false, gen: 0,
-                       muteUntil: 0, woke: null, cont: false, restartTok: 0, early: null };
+                       muteUntil: 0, woke: null, cont: false, restartTok: 0, early: null, lastFinalAt: 0, listenAt: 0 };
   voice.listen = voiceListen_;   // tests age the window with it
   function voiceListen(mode, windowMs, held, cont) {
     var L = voiceListen_;
@@ -5889,6 +5926,7 @@
     L.routeQ = [];
     L.draining = false;
     L.early = null;
+    L.listenAt = Date.now();   // this listen's start: a dialog listen opened after its dialog was had (voiceAnswerInTime)
     L.gen++;
     L.restartTok++;
     clearTimeout(L.timer);
@@ -5993,12 +6031,19 @@
       // is cut, the listen goes on with those words.
       onBarge: function () { if (voiceIsListening()) voiceBargeIn(); },
       // "over" heard in the guess: the send is on its way (voiceRouteEarly).
-      onEarly: function (t) { if (voiceIsListening()) voiceRouteEarly(t, mode); },
+      onEarly: function (t, at) { if (voiceIsListening()) voiceRouteEarly(t, mode, voiceSpokeAt(at)); },
       // The phrase's final: its guess is taken back first, so every rule
       // reads the box as it was before the phrase (and only final words).
       // (While the router has the phrase before it, the guess in the box is
       // that phrase's: it stays.)
-      onFinal: function (t) { if (voiceIsListening() && !voiceEchoing()) { voiceHeardSome(); voiceHeard(t, mode, voiceListen_.routing ? "" : voiceGuessDrop()); } },
+      onFinal: function (t, at) {
+        if (voiceIsListening() && !voiceEchoing()) {
+          var spoke = voiceSpokeAt(at);
+          voiceListen_.lastFinalAt = Date.now();
+          voiceHeardSome();
+          voiceHeard(t, mode, voiceListen_.routing ? "" : voiceGuessDrop(), spoke);
+        }
+      },
       onError: function (code, detail) {
         if (!voiceIsListening()) return;
         if (code === "not-allowed" || code === "service-not-allowed") {
@@ -6146,9 +6191,9 @@
   // are words. A dialog answer ("yes", "two") needs no "over"; an "over" (and
   // out) is stripped when said. `typed`: the phrase's guess, taken
   // back from the box just now ("" when there was none).
-  function voiceHeard(text, mode, typed) {
+  function voiceHeard(text, mode, typed, spokeAt) {
     var L = voiceListen_;
-    if (L.routing) { L.routeQ.push([text, mode]); return; }   // after the phrase being routed
+    if (L.routing) { L.routeQ.push([text, mode, spokeAt]); return; }   // after the phrase being routed
     text = voiceEchoStrip(text);
     if (!String(text).trim()) { voiceListenContinue(); return; }
     // "Stop talking", in any mode and into any box: the voice stops, the
@@ -6159,13 +6204,14 @@
     var stop = voiceTail(text, false);
     if (stop) { voiceStopPhrase(stop.text, mode); return; }
     // A select question the ask sheet shows: its words, its buttons.
-    if (mode === "dialog" && askSelVoiceOn()) { askSelVoice(text); return; }
+    if (mode === "dialog" && askSelVoiceOn()) { askSelVoice(text, spokeAt); return; }
     var p = voiceDictParse(text);
+    p.spokeAt = spokeAt;
     if (mode === "dialog") {
       if (p.kind === "disregard" || !p.text) { voiceListenContinue(); return; }
       clearTimeout(L.timer);
       voice.stt.stop();
-      voiceDialogHeard(p.text);
+      voiceDialogHeard(p.text, spokeAt);
       return;
     }
     if (p.kind === "disregard") {
@@ -6187,7 +6233,7 @@
       // moment the answer is in — for the final words, or for a command —
       // so the words never blink out.
       if (typed) voiceGuessHold(typed);
-      voiceRoute(p.text).then(function (res) {
+      voiceRoute(p.text, "", false, p.spokeAt).then(function (res) {
         if (L.gen !== gen) return;      // a newer listen (or none): this answer is for nobody
         L.routing = false;
         voiceGuessDrop();
@@ -6205,12 +6251,12 @@
   // this session is asking, an answer at the end answers it (the words
   // before it join the box); else it is dictation. True when it acted.
   function voiceHeardRest(p) {
-    if (p.text && voiceAnswerOther(p.text)) return true;
+    if (p.text && voiceAnswerOther(p.text, p.spokeAt)) return true;
     var a = p.text && voiceAsks(voice.session) ? voiceTail(p.text, true) : null;
     if (a && a.kind === "answer") {
       if (a.text) voiceAppend(a.text);
       voiceStopForCommand();
-      voiceAnswerLocal(voice.session, a);
+      voiceAnswerLocal(voice.session, a, p.spokeAt);
       return true;
     }
     voiceHeardWords(p);
@@ -6332,7 +6378,7 @@
     L.draining = true;
     while (L.routeQ.length && !L.routing && voiceIsListening()) {
       var x = L.routeQ.shift();
-      voiceHeard(x[0], x[1]);
+      voiceHeard(x[0], x[1], undefined, x[2]);
     }
     L.draining = false;
     if (!voiceIsListening()) { L.routeQ = []; return; }
@@ -6847,7 +6893,7 @@
   var VOICE_ROUTE_KINDS = ["prompt", "switch", "new", "ambiguous", "no-session", "new-failed", "list",
                            "needs", "status", "cancel", "stop", "off", "repeat", "condense",
                            "switch_index", "switch_rel", "answer", "question", "hush"];
-  VOICE_ROUTE_KINDS.push("ask", "read");
+  VOICE_ROUTE_KINDS.push("ask", "read", "early");
   // What the router last asked back ("Which one: a or b?", "In which
   // project?"): its answer's `pending`, sent with the next phrase so the
   // router reads that phrase as the pick, the project or the task — for
@@ -6865,7 +6911,7 @@
   // A phrase asked about already, on its guess, while /end made the final
   // (voiceRouteEarly): that answer, when the final words are the same
   // (fresh: always ask).
-  function voiceRoute(text, session, fresh) {
+  function voiceRoute(text, session, fresh, spokeAt) {
     var L = voiceListen_, early = L.early;
     if (!fresh) L.early = null;
     if (!fresh && early && !session && early.gen === L.gen && early.norm === voiceNorm(text) && Date.now() - early.at < VOICE_EARLY_MAX_MS) {
@@ -6884,7 +6930,7 @@
     var asked = fetch("/api/voice/route", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(voiceRouteBody(text, session || voice.session || current)),
+      body: JSON.stringify(voiceRouteBody(text, session || voice.session || current, spokeAt)),
       signal: aborter ? aborter.signal : undefined,
     }).then(function (r) {
       if (!r.ok) { voice.lastRoute = "HTTP " + r.status + " — the local table"; return null; }
@@ -6917,7 +6963,7 @@
   // Routing only — nothing acts before the final — and never a phrase whose
   // routing could act by itself (voiceRouteSafe).
   var VOICE_EARLY_MAX_MS = 10000;   // an early answer this old is not used
-  function voiceRouteEarly(text, mode) {
+  function voiceRouteEarly(text, mode, spokeAt) {
     var L = voiceListen_;
     L.early = null;
     if (mode === "dialog") return;
@@ -6929,7 +6975,7 @@
     var routed = !voice.box && !!p.text && !base.trim() && !L.routing;
     if (!routed || !voiceMayBeCommand(p.text)) voiceStripNote("Sending…");
     if (!routed || !voiceRouteSafe(p.text)) return;
-    L.early = { norm: voiceNorm(p.text), gen: L.gen, at: Date.now(), answer: voiceRoute(p.text, "", true) };
+    L.early = { norm: voiceNorm(p.text), gen: L.gen, at: Date.now(), answer: voiceRoute(p.text, "", true, spokeAt) };
   }
   // May this phrase go to the router before its final words? Not while the
   // router waits for an answer to its own question (`pending`: the pick, a
@@ -6941,9 +6987,17 @@
     if (p && Date.now() - p.at <= VOICE_PENDING_MS) return false;
     return !/(?:^| )(?:sessions?|agents?|spin)(?: |$)/.test(voiceNorm(text));
   }
-  function voiceRouteBody(text, session) {
+  function voiceRouteBody(text, session, spokeAt) {
     var body = { text: text, session: session }, pending = voicePendingTake();
     if (pending) body.pending = pending;
+    // When the phrase began — as an age at send time, so the server reads
+    // it on its own clock (spoke_at, this page's clock, is for the record)
+    // — and when this page first had each session's dialog: the server
+    // presses an answer only when the phrase began after its dialog was
+    // there (voice_router.answer_in_time).
+    var now = Date.now();
+    if (spokeAt > 0) { body.spoke_ms_ago = Math.max(0, now - spokeAt); body.spoke_at = spokeAt; }
+    body.dialog_seen = voiceDialogSeenBody(now);
     return body;
   }
   // The router's answer for phrase p (null: ask the local table). True when
@@ -6988,6 +7042,10 @@
       case "answer":
         voiceStopForCommand();
         voiceRoutedAnswer(res, p, false);
+        return true;
+      case "early":   // an answer begun before its dialog was there: nothing pressed
+        voiceStopForCommand();
+        voiceEarly(String(res.title || "") || voice.session, String(res.dialog_id || ""), say);
         return true;
       case "question":
         voiceStopForCommand();
@@ -7056,11 +7114,12 @@
       if (!title) { voiceSayThenIdle("There is no session " + res.index + "."); return; }
       if (!again && !res.dialog_id && !res.no_dialog) {
         voiceSetState("sending", p.text);
-        voiceRoute(p.text, title).then(function (r2) {
+        voiceRoute(p.text, title, false, p.spokeAt).then(function (r2) {
           if (voice.state !== "sending") return;
           if (r2 && r2.kind === "answer") { r2.title = r2.title || title; voiceRoutedAnswer(r2, p, true); return; }
+          if (r2 && r2.kind === "early") { voiceEarly(String(r2.title || "") || title, String(r2.dialog_id || ""), String(r2.say || "")); return; }
           var ta = voiceTargetAnswer(p.text);
-          voiceAnswerLocal(title, ta || { choice: String(res.choice || ""), said: voiceAnswerText(p.text) });
+          voiceAnswerLocal(title, ta || { choice: String(res.choice || ""), said: voiceAnswerText(p.text) }, p.spokeAt);
         });
         return;
       }
@@ -7071,7 +7130,7 @@
       if (!voice.cfg.loaded || !voice.cfg.approve_dialogs) { voiceSayThenIdle("Answer it on the screen."); return; }
       voiceAnswerPost(title, String(res.dialog_id), res.keys.map(String),
                       res.text ? String(res.text) : res.choice === "number" ? String(res.number || res.keys[0]) : String(res.choice || "that"),
-                      say, res.text);
+                      say, res.text, p.spokeAt);
       return;
     }
     voiceAnswerSend(title, voiceAnswerText(p.text));
@@ -7095,7 +7154,7 @@
   // A whole phrase answering ANOTHER session ("session three yes", "tell
   // parser no"): answered there, voice stays here. False when the phrase is
   // not one, or names this session (then it is this one's answer).
-  function voiceAnswerOther(text) {
+  function voiceAnswerOther(text, spokeAt) {
     var ta = voiceTargetAnswer(text);
     if (!ta) return false;
     var title = ta.index ? voiceRowTitle(ta.index) : "";
@@ -7103,7 +7162,7 @@
     if (ta.index && !title) { voiceStopForCommand(); voiceSayThenIdle("There is no session " + ta.index + "."); return true; }
     if (!title || title === voice.session) return false;
     voiceStopForCommand();
-    voiceAnswerLocal(title, ta);
+    voiceAnswerLocal(title, ta, spokeAt);
     return true;
   }
   // "session two yes" / "tell parser no thanks" → "yes" / "no thanks": what
@@ -7116,7 +7175,7 @@
   // or could not say): a question's answer is a prompt; a dialog's is the
   // option voiceParseAnswer picks from GET /dialog — "always" only when
   // said, a number never on a permission prompt, as when it is read out.
-  function voiceAnswerLocal(title, a) {
+  function voiceAnswerLocal(title, a, spokeAt) {
     var asks = voiceAsks(title), name = nameOf(title);
     if (asks === "question") { voiceAnswerSend(title, a.said); return; }
     voiceSetState("sending", a.said);
@@ -7133,7 +7192,8 @@
         var opt = voiceParseAnswer(a.said, d.options);
         if (!opt) { voiceSayThenIdle("I didn't catch that: " + voiceDialogChoices(d).replace(/^.*\bSay /, "say ")); return; }
         if (title === voice.session) { voice.dialog = d; voice.dialogKey = String(d.id); }
-        voiceAnswerPost(title, String(d.id), askOptKeys(opt), voiceKindWord(opt), "");
+        voiceDialogNote(title, String(d.id));
+        voiceAnswerPost(title, String(d.id), askOptKeys(opt), voiceKindWord(opt), "", undefined, spokeAt);
       });
   }
   // A question's answer goes as a prompt: to this session with the words
@@ -7726,6 +7786,87 @@
   // --- permission dialogs ---------------------------------------------------------
   var VOICE_ORD = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine"];
   var VOICE_ANSWERED_GRACE_MS = 8000;   // a stale clarify reading after a voice answer is not a new dialog
+  // --- an answer said before its dialog was there (R8-bis) -------------------------
+  // A phrase answers a dialog only when the person BEGAN saying it at least
+  // VOICE_ANSWER_AFTER_MS after this page first had that dialog — under the
+  // fastest human reaction to something appearing, so a "yes" said into a
+  // dictation 300 ms before a permission prompt came up never answers it.
+  // The server applies the same rule with its own stamp as well
+  // (voice_router.answer_in_time, ANSWER_AFTER_S); this is the page's half,
+  // and the only one when the router is not reachable (voiceAnswerLocal).
+  var VOICE_ANSWER_AFTER_MS = 300;
+  // A phrase from a recognizer that does not say when it began (PhoneSTT):
+  // no later than its recognizer's start, nor than this long before the
+  // previous phrase came in — an early estimate is the safe one.
+  var VOICE_SPOKE_LEAD_MS = 2000;
+  function voiceSpokeAt(at) {
+    if (Number(at) > 0) return Number(at);
+    var L = voiceListen_;
+    return Math.max(L.startedAt || 0, (L.lastFinalAt || 0) - VOICE_SPOKE_LEAD_MS);
+  }
+  // This page has `title`'s dialog `id` now ("" — it has none): the first
+  // sighting of an id is kept until another id, or none, is seen.
+  function voiceDialogNote(title, id) {
+    if (!title || typeof voice === "undefined" || !voice || !voice.dialogSeen) return;   // a poll before voice is set up
+    var cur = voice.dialogSeen[title];
+    if (!id) { if (cur) delete voice.dialogSeen[title]; return; }
+    if (!cur || cur.id !== String(id)) voice.dialogSeen[title] = { id: String(id), at: Date.now() };
+  }
+  // The rows: a dialog's id when the row carries it. A row that asks
+  // nothing clears only a sighting the rows themselves confirmed — a row
+  // lags (a sub-agent's prompt reads "working" while GET /dialog serves it),
+  // and clearing a fresh sighting would only make the next one later.
+  function voiceDialogRows(list) {
+    (list || []).forEach(function (i) {
+      var a = i && i.asking;
+      if (a && a.kind === "dialog") {
+        if (!a.dialog_id) return;
+        voiceDialogNote(i.title, String(a.dialog_id));
+        var x = voice.dialogSeen && voice.dialogSeen[i.title];
+        if (x) x.rows = true;
+        return;
+      }
+      var cur = i && voice.dialogSeen && voice.dialogSeen[i.title];
+      if (cur && cur.rows && i.activity !== "clarify") voiceDialogNote(i.title, "");
+    });
+  }
+  // POST /api/voice/route's dialog_seen: {title: {id, ms_ago}}.
+  function voiceDialogSeenBody(now) {
+    var out = {};
+    Object.keys(voice.dialogSeen).slice(0, 64).forEach(function (t) {
+      var x = voice.dialogSeen[t];
+      out[t] = { id: x.id, ms_ago: Math.max(0, now - x.at) };
+    });
+    return out;
+  }
+  // Pure but for voice.dialogSeen: may a phrase begun at spokeAt (ms) answer
+  // `title`'s dialog `dialogId`? Not without knowing when it began.
+  // listenAt: the phrase came in a dialog listen opened at that time FOR
+  // this dialog (voiceReadDialog reads it out, then listens; a carried
+  // phrase never reaches a dialog listen) — no word in it predates the
+  // listen, so one opened once the page had the dialog is in time.
+  function voiceAnswerInTime(title, dialogId, spokeAt, listenAt) {
+    var x = voice.dialogSeen[title];
+    if (!x || x.id !== String(dialogId)) return false;
+    if (Number(listenAt) > 0 && Number(listenAt) >= x.at) return true;
+    return Number(spokeAt) > 0 && Number(spokeAt) >= x.at + VOICE_ANSWER_AFTER_MS;
+  }
+  // An answer begun before its dialog was there: nothing is pressed. This
+  // session's dialog is read out (its answer listened for, as when it comes
+  // up); another's is said — "say your answer again".
+  function voiceEarly(title, dialogId, say) {
+    if (dialogId) voiceDialogNote(title, dialogId);
+    voice.early++;
+    voice.lastRoute = "early" + (dialogId ? " (" + dialogId + ")" : "") + ": nothing pressed";
+    if (voice.state === "off") return;
+    if (title === voice.session) {
+      voice.dialogKey = "";
+      voiceSetState("idle", "");
+      voiceDialog();
+      return;
+    }
+    voiceSayThenIdle(say || nameOf(title) + " asked just now: say your answer again.");
+  }
   var VOICE_YES = /\b(?:yes|yeah|yep|yup|allow|approve|okay|ok|go ahead|do it|sure)\b/;
   var VOICE_NO = /\b(?:no|nope|deny|reject|don'?t|cancel|skip|stop)\b/;
   // "always" must be SAID, and said as the whole answer: "always", "yes,
@@ -7790,6 +7931,8 @@
       .catch(function () { return null; })
       .then(function (d) {
         voice.dialogBusy = false;
+        if (d && d.id && d.kind !== "question") voiceDialogNote(title, String(d.id));
+        else if (!d) voiceDialogNote(title, "");   // 204: nothing on screen
         if (voice.session !== title || voice.state === "off") return;
         if (voiceIsListening() || voice.state === "sending") return;
         // A question in prose (the newer server answers it here too): its
@@ -7853,26 +7996,32 @@
   // A phrase while a dialog listens: "session two yes" answers THAT one
   // (voice stays), "what is it asking" / "say that again" reads this one
   // again, anything else is this dialog's answer.
-  function voiceDialogHeard(text) {
-    if (voiceAnswerOther(text)) return;
+  function voiceDialogHeard(text, spokeAt) {
+    if (voiceAnswerOther(text, spokeAt)) return;
     var c = voiceCommand(text);
     if (c && (c.kind === "question" || c.kind === "repeat") && voice.dialog) { voiceReadDialog(voice.dialog); return; }
-    voiceDialogAnswer(text);
+    voiceDialogAnswer(text, spokeAt);
   }
-  function voiceDialogAnswer(text) {
+  function voiceDialogAnswer(text, spokeAt) {
     var d = voice.dialog;
     if (!d) { voiceIdle(); return; }
     var opt = voiceParseAnswer(text, d.options);
     if (!opt) { voiceDialogRetry(); return; }
-    voiceAnswerPost(voice.session, d.id, askOptKeys(opt), voiceKindWord(opt), "");
+    voiceAnswerPost(voice.session, d.id, askOptKeys(opt), voiceKindWord(opt), "", undefined, spokeAt, voiceListen_.listenAt);
   }
   // POST /answer, pinned to the dialog it was read from, by the person.
   // This session's: "Answered yes." and it is working again. Another's
   // ("session two yes"): said with its name first, and voice stays here.
   // text: the router's free-text answer (a select question's "Type
   // something"), typed with the keys.
-  function voiceAnswerPost(title, dialogId, keys, word, say, text) {
+  //
+  // spokeAt: when the phrase began (ms). Nothing is posted unless that was
+  // VOICE_ANSWER_AFTER_MS after this page first had the dialog
+  // (voiceAnswerInTime) — a "yes" said before a prompt came up never
+  // answers it (voiceEarly reads the prompt instead).
+  function voiceAnswerPost(title, dialogId, keys, word, say, text, spokeAt, listenAt) {
     var mine = title === voice.session, name = nameOf(title);
+    if (!voiceAnswerInTime(title, dialogId, spokeAt, listenAt)) { voiceEarly(title, String(dialogId), ""); return; }
     voiceSetState("sending", word);
     var body = { keys: keys, dialog_id: dialogId, by: "user" };
     if (text) body.text = String(text);
@@ -7884,6 +8033,7 @@
       return r.json().catch(function () { return {}; }).then(function (j) {
         if (voice.state === "off" || (mine && voice.session !== title)) return;
         if (r.ok) {
+          voiceDialogNote(title, "");   // answered: the next prompt (even an identical one) is new
           if (mine) {
             voice.dialog = null;
             voice.asked = false;
@@ -9548,6 +9698,7 @@
     var e = ask.entry;
     if (!e) return;
     var d = e.kind === "dialog" ? ask.dialog : null;
+    if (d && d.id) voiceDialogNote(e.title, String(d.id));   // on the sheet: seen
     var list = askList();
     var at = askIndex(list, e.key);
     var n = rowOrder.indexOf(e.title);
@@ -10342,7 +10493,7 @@
   var ASK_SEL_BACK = /^(?:back|go back|previous|previous question)$/;
   var ASK_SEL_TEXT = /^(?:type something|type it|something else|other)$/;
   var ASK_SEL_CHAT = /^(?:chat about (?:this|it|that)|chat)$/;
-  function askSelVoice(text) {
+  function askSelVoice(text, spokeAt) {
     var e = ask.entry, d = ask.dialog;
     var p = voiceDictParse(text);
     var said = p.kind === "disregard" ? "" : p.text;
@@ -10353,6 +10504,8 @@
     var review = askSelReview(d);
     var c = voiceCommand(said);
     if (c && (c.kind === "question" || c.kind === "repeat")) { voiceReadDialog(d); return; }
+    // Begun before this step was there: no key for it (the step is read).
+    if (!voiceAnswerInTime(e.title, d.id, spokeAt, voiceListen_.listenAt)) { voiceEarly(e.title, String(d.id), ""); return; }
     if (ASK_SEL_BACK.test(t)) { ask.sel.voice = true; voiceSetState("sending", "Back"); askSelPrev(); return; }
     if (ASK_SEL_NEXT.test(t) || (t === "submit" && !review)) {
       ask.sel.voice = true;
@@ -10370,8 +10523,9 @@
       if (yes) { askSelVoicePick(yes); return; }
     }
     voiceSetState("sending", said);
-    voiceRoute(said, e.title).then(function (res) {
+    voiceRoute(said, e.title, false, spokeAt).then(function (res) {
       if (voice.state !== "sending" || ask.entry !== e || ask.dialog !== d) return;
+      if (res && res.kind === "early") { voiceEarly(e.title, String(d.id), ""); return; }
       // A free-text answer the router made of it: its keys and words, as said.
       if (res && res.kind === "answer" && res.text && (res.keys || []).length) {
         ask.sel.voice = true;
