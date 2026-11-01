@@ -945,6 +945,10 @@ export function TopBarMic() {
         onFlush: (t, final, at) => {
           if (live.current === d) void d.flush(t, final, at);
         },
+        // The server's end-of-turn verdict: a lone command ("next session",
+        // "repeat") ends its phrase after a short quiet only while nothing
+        // is typed yet (lib/voiceDesktop turnHoldMs).
+        blank: () => live.current !== d || !d.dict.typed,
         onPartial: (t) => {
           if (live.current === d) d.unsure(t);
         },

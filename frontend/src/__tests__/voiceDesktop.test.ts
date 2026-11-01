@@ -12,6 +12,7 @@ import {
   ANSWER_LISTEN_MS,
   APPROVE_OFF_LINE,
   controlMaxWords,
+  dialogStopLine,
   FIRST_CHUNK_S,
   chunkMinS,
   passLine,
@@ -35,6 +36,7 @@ import {
   railStep,
   routePhrase,
   DialogSeen,
+  dialogSeen,
   VOICE_CLIENT_ID,
   PENDING_MS,
   PendingChoice,
@@ -311,15 +313,51 @@ describe("LiveDictation: typing into the session as you speak", () => {
     }
   });
 
-  it("the dialog is checked before the FIRST phrase only", async () => {
+  it("a dialog that comes up after the first phrase stops the typing: the rest goes to the router, the words typed stay (MF2)", async () => {
     const sent = terms();
     let act = "working";
     const k = hooks({ activity: () => act });
     const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
     await d.heard("one");
-    act = "clarify"; // the first phrase is already in the field: keep going
+    act = "clarify"; // a permission prompt came up: "two" could answer it
+    await d.heard("two");
+    expect(sent.t1).toEqual(["one "]); // nothing typed, nothing taken back
+    expect(k.calls.routed).toEqual(["one", "two"]);
+    expect(k.last()).toBe(dialogStopLine("Login fix", "two"));
+    expect(d.active).toBe(false);
+  });
+
+  it("a dialog that came and went between two phrases (answered by hand: the row edge clears the sighting) leaves the message typing", async () => {
+    const sent = terms();
+    let act = "working";
+    const k = hooks({ activity: () => act });
+    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    await d.heard("one");
+    act = "clarify";
+    dialogSeen.rows([{ title: "t1", activity: "clarify", asking: { kind: "dialog", dialog_id: "d1" } }]);
+    expect(dialogSeen.since("t1")).toBeGreaterThan(0);
+    act = "working"; // clicked on the screen before "two" was said
+    dialogSeen.rows([{ title: "t1", activity: "working", asking: null }]);
+    expect(dialogSeen.since("t1")).toBe(0);
+    // No dialog is up any more and no guess hit it: "two" can't answer one.
     await d.heard("two");
     expect(sent.t1).toEqual(["one ", "two "]);
+    expect(d.active).toBe(true);
+  });
+
+  it("after a mid-message dialog stop, “disregard” and Escape send no ⌫ — no key reaches the terminal", async () => {
+    const sent = terms();
+    let act = "working";
+    const k = hooks({ activity: () => act });
+    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    await d.heard("one");
+    act = "clarify";
+    await d.heard("two");
+    expect(d.active).toBe(false);
+    await d.heard("disregard");
+    await d.cancel();
+    expect(sent.t1).toEqual(["one "]);
+    expect(k.last()).toBe(dialogStopLine("Login fix", "two"));
   });
 
   it("“disregard” sends one backspace per character this dictation typed — multi-byte ones included — and goes on", async () => {
