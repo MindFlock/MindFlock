@@ -312,11 +312,13 @@ class TestSlowIsNotDown:
         _wait(lambda: len(fake.seen) == 1)
         assert fake.texts() == ["First."]
 
-    def test_a_line_behind_an_orphan_gets_only_its_own_budget(self, chain, monkeypatch):
+    def test_a_line_behind_an_orphan_goes_to_piper_at_once(self, chain, monkeypatch):
         """The orphan is not being played, so waiting behind it IS silence:
-        the next reply's line waits its own budget, then piper — still not
-        down."""
+        the host already missed a budget, so the next reply's line is not
+        sent behind it — piper at once (it used to wait its own budget
+        first). Still not down."""
         _budget(monkeypatch, 0.3)
+        monkeypatch.setattr(speech, "_spawn", lambda target, name: None)  # no probe
         fake = chain.serve("serial", floor=1.2)
         chain.c.speak(chain.host, "Slow one.")  # gives up at 0.3 s
         chain.now[0] += 10 + speech.REPLY_GAP_SECONDS  # a new reply
@@ -324,11 +326,11 @@ class TestSlowIsNotDown:
         _a, _m, engine, _fb = chain.c.speak(chain.host, "Next.")
         took = time.monotonic() - t0
         assert engine is chain.piper
-        assert 0.25 <= took < 0.7
+        assert took < 0.15
         assert chain.c.down_reason(chain.host) == ""
         _wait(lambda: len(fake.seen) == 1)
         time.sleep(0.1)
-        assert fake.texts() == ["Slow one."]  # "Next." left before its turn
+        assert fake.texts() == ["Slow one."]  # "Next." never went there
 
     def test_no_fallback_waits_for_a_slow_host(self, chain, monkeypatch):
         """Waiting for the owner's voice beats a 502 when there is nothing
@@ -390,3 +392,197 @@ class TestBudgetMath:
         )
         assert [r[2] for r in out] == [chain.host] * 3
         assert fake.max_active == 1
+
+
+def _no_probe(monkeypatch) -> list:
+    """Background probes recorded, not run (the window stays as it is)."""
+    started: list = []
+    monkeypatch.setattr(speech, "_spawn", lambda target, name: started.append(name))
+    return started
+
+
+class TestLearnedSpeed:
+    """N1 (cycle-2 judge): a host that is alive but slower than its budget
+    (Voice Lab's F5 on a CPU) used to cost every reply its first line's
+    budget in silence before piper. Its pace is learned now: once it is
+    known too slow, a reply goes to piper at once; a probe brings it back."""
+
+    def _slow_reply(self, chain, fake):
+        _a, _m, engine, _fb = chain.c.speak(chain.host, "One.")
+        assert engine is chain.piper
+        _wait(lambda: len(fake.seen) == 1)  # the orphan's answer: a sample
+        time.sleep(0.05)
+
+    def test_a_slow_host_costs_one_reply_then_none(self, chain, monkeypatch):
+        _budget(monkeypatch, 0.3)
+        probes = _no_probe(monkeypatch)
+        fake = chain.serve("serial", floor=0.8)
+        self._slow_reply(chain, fake)
+        sp = chain.c.speed(chain.host)
+        assert sp["slow"] is True and sp["ratio"] > speech.SLOW_RATIO
+        assert chain.c.down_reason(chain.host) == ""  # too slow is not down
+        for n in range(3):  # the next replies: piper at once, nothing sent
+            chain.now[0] += 5 + speech.REPLY_GAP_SECONDS
+            t0 = time.monotonic()
+            _a, _m, engine, fb = chain.c.speak(chain.host, "Reply %d." % n)
+            assert time.monotonic() - t0 < 0.1
+            assert engine is chain.piper and fb is True
+        assert fake.texts() == ["One."]
+        assert probes  # the recheck came due and asked for a probe
+        assert chain.c.status(chain.host)["slow"]
+
+    def test_no_probe_before_the_recheck(self, chain, monkeypatch):
+        _budget(monkeypatch, 0.3)
+        probes = _no_probe(monkeypatch)
+        fake = chain.serve("serial", floor=0.8)
+        self._slow_reply(chain, fake)
+        chain.now[0] += speech.SLOW_RECHECK_SECONDS / 2
+        chain.c.speak(chain.host, "Soon after.")
+        assert probes == []
+
+    def test_one_probe_that_keeps_up_ends_the_window(self, chain, monkeypatch):
+        """slow → fast: the first probe after the host speeds up brings the
+        configured voice back for the next reply (the probe runs inline
+        here, so for this very line)."""
+        _budget(monkeypatch, 0.3)
+        fake = chain.serve("serial", floor=0.8)
+        self._slow_reply(chain, fake)
+        assert chain.c.speed(chain.host)["slow"]
+        fake.floor = 0.05
+        chain.now[0] += speech.SLOW_RECHECK_SECONDS + speech.REPLY_GAP_SECONDS + 5
+        _a, _m, engine, fb = chain.c.speak(chain.host, "Back.")
+        assert engine is chain.host and fb is False
+        assert fake.texts() == ["One.", speech.WARM_TEXT, "Back."]
+        assert chain.c.speed(chain.host)["slow"] is False
+
+    def test_a_probe_still_slow_keeps_the_window(self, chain, monkeypatch):
+        _budget(monkeypatch, 0.3)
+        fake = chain.serve("serial", floor=0.8)
+        self._slow_reply(chain, fake)
+        chain.now[0] += speech.SLOW_RECHECK_SECONDS + speech.REPLY_GAP_SECONDS + 5
+        _a, _m, engine, _fb = chain.c.speak(chain.host, "Still slow.")
+        assert engine is chain.piper
+        assert fake.texts() == ["One.", speech.WARM_TEXT]
+        assert chain.c.speed(chain.host)["slow"]
+        assert chain.c.down_reason(chain.host) == ""
+
+    def test_the_warm_measures_a_slow_host_before_the_first_reply(
+        self, chain, monkeypatch
+    ):
+        """A warm past its budget may be a cold load, so one more word is
+        timed: a host that is just slow is known before anyone asks, and
+        even the FIRST reply starts on piper at once."""
+        _budget(monkeypatch, 0.3)
+        _no_probe(monkeypatch)
+        fake = chain.serve("serial", floor=0.8)
+        assert chain.host.warm() == "loaded"
+        assert fake.texts() == [speech.WARM_TEXT, speech.WARM_TEXT]
+        assert chain.c.speed(chain.host)["slow"]
+        t0 = time.monotonic()
+        _a, _m, engine, _fb = chain.c.speak(chain.host, "First reply.")
+        assert time.monotonic() - t0 < 0.1 and engine is chain.piper
+
+    def test_a_cold_warm_on_a_fast_host_is_not_held_against_it(
+        self, chain, monkeypatch
+    ):
+        _budget(monkeypatch, 0.3)
+        fake = chain.serve("serial", floor=0.8)  # a cold load …
+        orig = fake.delay
+        fake.delay = lambda text: (orig(text) if len(fake.seen) == 0 else 0.05)
+        assert chain.host.warm() == "loaded"
+        assert len(fake.seen) == 2  # … then the timed word: fast
+        assert chain.c.speed(chain.host)["slow"] is False
+        _a, _m, engine, _fb = chain.c.speak(chain.host, "Hello.")
+        assert engine is chain.host
+
+    def test_a_fast_warm_is_the_first_sample(self, chain, monkeypatch):
+        _budget(monkeypatch, 0.6)
+        fake = chain.serve("serial", floor=0.1)
+        assert chain.host.warm() == "loaded"
+        assert fake.texts() == [speech.WARM_TEXT]  # no second word needed
+        sp = chain.c.speed(chain.host)
+        assert sp["samples"] == 1 and sp["slow"] is False
+
+    def test_a_measured_healthy_host_keeps_every_line(self, chain, monkeypatch):
+        """Prediction never costs a host that keeps up its voice: three
+        queued lines, each within its chained budget, all the host's."""
+        _budget(monkeypatch, 0.6)
+        fake = chain.serve("serial", floor=0.4)
+        chain.host.warm()
+        out = _at_once(
+            chain.c.speak, [(chain.host, "A."), (chain.host, "B."), (chain.host, "C.")]
+        )
+        assert [r[2] for r in out] == [chain.host] * 3
+        assert fake.texts()[1:] == ["A.", "B.", "C."]
+
+    def test_a_line_that_cannot_make_it_behind_the_probe_is_not_sent(
+        self, chain, monkeypatch
+    ):
+        """Known pace, but a probe is at the host: the line would arrive
+        past its budget, so it goes to piper at once rather than after
+        waiting its budget out."""
+        _budget(monkeypatch, 0.5)
+        fake = chain.serve("serial", floor=0.4)
+        chain.host.warm()  # ratio ≈ 0.8: keeps up
+        probe = threading.Thread(
+            target=chain.c.send,
+            args=(chain.host, speech.WARM_TEXT, speech.host_hung_after("")),
+        )
+        probe.start()
+        _wait(lambda: fake.active == 1)
+        t0 = time.monotonic()
+        _a, _m, engine, _fb = chain.c.speak(chain.host, "Now.")
+        assert time.monotonic() - t0 < 0.1 and engine is chain.piper
+        probe.join(5)
+        assert "Now." not in fake.texts()
+
+    def test_learning_math(self, chain, monkeypatch):
+        _budget(monkeypatch, 1.0)
+        c = chain.c
+        with c._lock:
+            c._learn("h", "", 0.5)  # first sample: as is
+            assert c._speed["h"].ratio == pytest.approx(0.5)
+            c._learn("h", "", 2.5)  # EWMA → 1.5: too slow
+            assert c._speed["h"].slow
+            c._learn("h", "", 0.2, at_least=True)  # a lower bound never lowers
+            assert c._speed["h"].ratio == pytest.approx(1.5)
+            c._learn("h", "", 0.9)  # one answer within budget ends it
+            assert c._speed["h"].ratio == pytest.approx(0.9)
+            assert not c._speed["h"].slow
+            assert c._predict("h", "") == pytest.approx(0.9)
+            assert c._predict("other", "") is None
+
+
+class TestListeners:
+    """Two pages hearing one reply (the phone and the desktop): each has
+    its own reply in the chain."""
+
+    def test_another_pages_lines_ahead_do_not_extend_a_budget(self, chain, monkeypatch):
+        """The desktop's first line behind the phone's three is not chained
+        off them (they are not being played to the desktop): it falls back
+        on its own budget — and the phone's reply stays in the host's
+        voice, its waiting lines untouched by the desktop's switch."""
+        _budget(monkeypatch, 0.6)
+        fake = chain.serve("serial", floor=0.4)
+        calls = [
+            (chain.host, "Phone one.", "", "phone"),
+            (chain.host, "Phone two.", "", "phone"),
+            (chain.host, "Phone three.", "", "phone"),
+            (chain.host, "The desktop's whole reply.", "", "desktop"),
+        ]
+        out = _at_once(chain.c.speak, calls, stagger=0.03)
+        assert [r[2] for r in out[:3]] == [chain.host] * 3
+        assert out[3][2] is chain.piper and out[3][3] is True
+        assert "The desktop's whole reply." not in fake.texts()
+        # The desktop's reply is on piper; the phone's next line is not.
+        _a, _m, engine, _fb = chain.c.speak(chain.host, "Phone four.", "", "phone")
+        assert engine is chain.host
+        _a, _m, engine, _fb = chain.c.speak(chain.host, "Desk two.", "", "desktop")
+        assert engine is chain.piper
+
+    def test_down_moves_every_listener(self, chain, monkeypatch):
+        chain.c.pick(chain.host, "phone")
+        chain.c.pick(chain.host, "desktop")
+        chain.c.mark_down(chain.host, "refused")
+        for who in ("phone", "desktop", "new page"):
+            assert chain.c.pick(chain.host, who)[0] is chain.piper

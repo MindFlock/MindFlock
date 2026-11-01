@@ -1998,6 +1998,15 @@ class TestDescribeTruthfulVoice:
         assert "no fallback voice is ready" in r["tts_detail"]
         assert "Server voice not ready" in r["detail"]
 
+    def test_a_too_slow_host_says_so_and_is_not_down(self, chain, monkeypatch):
+        monkeypatch.setattr(speech, "_spawn", lambda target, name: None)
+        with chain.c._lock:
+            chain.c._learn(chain.host.health_key(), "Hello.", 9.0)
+        r = speech.describe()["server_ready"]
+        assert r["tts"] is True and r["tts_down"] == ""
+        assert r["tts_engine"] == "piper (fallback)" and r["tts_fallback"] is True
+        assert "while it is too slow (openai http://127.0.0.1:8770" in r["tts_detail"]
+
 
 class TestFfmpegLookup:
     def test_looked_up_once(self, monkeypatch):
