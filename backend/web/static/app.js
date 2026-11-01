@@ -52,7 +52,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 	}
 })();
 //#endregion
-//#region node_modules/react/cjs/react.production.js
+//#region ../../app-flight/frontend/node_modules/react/cjs/react.production.js
 /**
 * @license React
 * react.production.js
@@ -439,12 +439,12 @@ var require_react_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.version = "19.3.0";
 }));
 //#endregion
-//#region node_modules/react/index.js
+//#region ../../app-flight/frontend/node_modules/react/index.js
 var require_react = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_production();
 }));
 //#endregion
-//#region node_modules/scheduler/cjs/scheduler.production.js
+//#region ../../app-flight/frontend/node_modules/scheduler/cjs/scheduler.production.js
 /**
 * @license React
 * scheduler.production.js
@@ -699,12 +699,12 @@ var require_scheduler_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	};
 }));
 //#endregion
-//#region node_modules/scheduler/index.js
+//#region ../../app-flight/frontend/node_modules/scheduler/index.js
 var require_scheduler = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_scheduler_production();
 }));
 //#endregion
-//#region node_modules/react-dom/cjs/react-dom.production.js
+//#region ../../app-flight/frontend/node_modules/react-dom/cjs/react-dom.production.js
 /**
 * @license React
 * react-dom.production.js
@@ -857,7 +857,7 @@ var require_react_dom_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.version = "19.3.0";
 }));
 //#endregion
-//#region node_modules/react-dom/index.js
+//#region ../../app-flight/frontend/node_modules/react-dom/index.js
 var require_react_dom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	function checkDCE() {
 		if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ === "undefined" || typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE !== "function") return;
@@ -871,7 +871,7 @@ var require_react_dom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_dom_production();
 }));
 //#endregion
-//#region node_modules/react-dom/cjs/react-dom-client.production.js
+//#region ../../app-flight/frontend/node_modules/react-dom/cjs/react-dom-client.production.js
 /**
 * @license React
 * react-dom-client.production.js
@@ -11446,7 +11446,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 	};
 }));
 //#endregion
-//#region node_modules/react-dom/client.js
+//#region ../../app-flight/frontend/node_modules/react-dom/client.js
 var require_client = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	function checkDCE() {
 		if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ === "undefined" || typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE !== "function") return;
@@ -11460,7 +11460,7 @@ var require_client = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_dom_client_production();
 }));
 //#endregion
-//#region node_modules/react/cjs/react-jsx-runtime.production.js
+//#region ../../app-flight/frontend/node_modules/react/cjs/react-jsx-runtime.production.js
 /**
 * @license React
 * react-jsx-runtime.production.js
@@ -11495,12 +11495,12 @@ var require_react_jsx_runtime_production = /* @__PURE__ */ __commonJSMin(((expor
 	exports.jsxs = jsxProd;
 }));
 //#endregion
-//#region node_modules/react/jsx-runtime.js
+//#region ../../app-flight/frontend/node_modules/react/jsx-runtime.js
 var require_jsx_runtime = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_jsx_runtime_production();
 }));
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/QueryClientProvider.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/react-query/build/modern/QueryClientProvider.js
 var import_react = /* @__PURE__ */ __toESM(require_react(), 1);
 var import_jsx_runtime = require_jsx_runtime();
 var QueryClientContext = import_react.createContext(void 0);
@@ -11523,7 +11523,7 @@ var QueryClientProvider = ({ client, children }) => {
 	});
 };
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/timeoutManager.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/timeoutManager.js
 var defaultTimeoutProvider = {
 	setTimeout: (callback, delay) => setTimeout(callback, delay),
 	clearTimeout: (timeoutId) => clearTimeout(timeoutId),
@@ -11554,7 +11554,7 @@ function systemSetTimeoutZero(callback) {
 	setTimeout(callback, 0);
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/utils.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/utils.js
 var isServer$1 = typeof window === "undefined" || "Deno" in globalThis;
 function noop$1() {}
 function functionalUpdate(updater, input) {
@@ -11717,11 +11717,11 @@ function addConsumeAwareSignal(object, getSignal, onCancelled) {
 	return object;
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/environmentManager.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/environmentManager.js
 var isServerFn = () => isServer$1;
 var isServer = () => isServerFn();
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/subscribable.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/subscribable.js
 var Subscribable = class {
 	constructor() {
 		this.listeners = /* @__PURE__ */ new Set();
@@ -11742,7 +11742,7 @@ var Subscribable = class {
 	onUnsubscribe() {}
 };
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/focusManager.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/focusManager.js
 var FocusManager = class extends Subscribable {
 	#focused;
 	#cleanup;
@@ -11795,7 +11795,7 @@ var FocusManager = class extends Subscribable {
 };
 var focusManager = new FocusManager();
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/notifyManager.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/notifyManager.js
 var defaultScheduler = systemSetTimeoutZero;
 function createNotifyManager() {
 	let queue = [];
@@ -11857,7 +11857,7 @@ function createNotifyManager() {
 }
 var notifyManager = createNotifyManager();
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/onlineManager.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/onlineManager.js
 var OnlineManager = class extends Subscribable {
 	#online = true;
 	#cleanup;
@@ -11905,7 +11905,7 @@ var OnlineManager = class extends Subscribable {
 };
 var onlineManager = new OnlineManager();
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/retryer.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/retryer.js
 function defaultRetryDelay(failureCount) {
 	return Math.min(1e3 * 2 ** failureCount, 3e4);
 }
@@ -12020,7 +12020,7 @@ function createRetryer(config) {
 	};
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/removable.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/removable.js
 var Removable = class {
 	#gcTimeout;
 	destroy() {
@@ -12043,7 +12043,7 @@ var Removable = class {
 	}
 };
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/infiniteQueryBehavior.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/infiniteQueryBehavior.js
 function infiniteQueryBehavior(pages) {
 	return { onFetch: (context, query) => {
 		const options = context.options;
@@ -12122,7 +12122,7 @@ function getPreviousPageParam(options, { pages, pageParams }) {
 	return pages.length > 0 ? options.getPreviousPageParam?.(pages[0], pages, pageParams[0], pageParams) : void 0;
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/query.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/query.js
 var Query = class extends Removable {
 	#queryType;
 	#initialState;
@@ -12495,7 +12495,7 @@ function getDefaultState$1(options) {
 	};
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/queryObserver.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/queryObserver.js
 var QueryObserver = class extends Subscribable {
 	#client;
 	#currentQuery = void 0;
@@ -12824,7 +12824,7 @@ function isStale(query, options) {
 	return resolveQueryValue(options.enabled, query) !== false && query.isStaleByTime(resolveQueryValue(options.staleTime, query));
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/mutation.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/mutation.js
 var Mutation = class extends Removable {
 	#client;
 	#observers;
@@ -13041,7 +13041,7 @@ function getDefaultState() {
 	};
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/mutationCache.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/mutationCache.js
 var MutationCache = class extends Subscribable {
 	#mutations;
 	#scopes;
@@ -13148,7 +13148,7 @@ function scopeFor(mutation) {
 	return mutation.options.scope?.id;
 }
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/queryCache.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/queryCache.js
 var QueryCache = class extends Subscribable {
 	#queries;
 	constructor(config = {}) {
@@ -13240,7 +13240,7 @@ var QueryCache = class extends Subscribable {
 	}
 };
 //#endregion
-//#region node_modules/@tanstack/query-core/build/modern/queryClient.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/queryClient.js
 var QueryClient = class {
 	#queryCache;
 	#mutationCache;
@@ -13489,12 +13489,12 @@ var QueryClient = class {
 	}
 };
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/IsRestoringProvider.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/react-query/build/modern/IsRestoringProvider.js
 var IsRestoringContext = import_react.createContext(false);
 var useIsRestoring = () => import_react.useContext(IsRestoringContext);
 IsRestoringContext.Provider;
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/QueryErrorResetBoundary.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/react-query/build/modern/QueryErrorResetBoundary.js
 function createValue() {
 	let isReset = false;
 	return {
@@ -13512,7 +13512,7 @@ function createValue() {
 var QueryErrorResetBoundaryContext = import_react.createContext(createValue());
 var useQueryErrorResetBoundary = () => import_react.useContext(QueryErrorResetBoundaryContext);
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/errorBoundaryUtils.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/react-query/build/modern/errorBoundaryUtils.js
 var ensurePreventErrorBoundaryRetry = (options, errorResetBoundary, query) => {
 	const throwOnError = query?.state.error && typeof options.throwOnError === "function" ? shouldThrowError(options.throwOnError, [query.state.error, query]) : options.throwOnError;
 	if (options.suspense || throwOnError) {
@@ -13528,7 +13528,7 @@ var getHasError = ({ result, errorResetBoundary, throwOnError, query, suspense }
 	return result.isError && !errorResetBoundary.isReset() && !result.isFetching && query && (suspense && result.data === void 0 || shouldThrowError(throwOnError, [result.error, query]));
 };
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/suspense.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/react-query/build/modern/suspense.js
 var ensureSuspenseTimers = (defaultedOptions) => {
 	if (defaultedOptions.suspense) {
 		const MIN_SUSPENSE_TIME_MS = 1e3;
@@ -13543,7 +13543,7 @@ var fetchOptimistic = (defaultedOptions, observer, errorResetBoundary) => observ
 	errorResetBoundary.clearReset();
 });
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/useBaseQuery.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/react-query/build/modern/useBaseQuery.js
 function useBaseQuery(options, Observer, queryClient) {
 	const isRestoring = useIsRestoring();
 	const errorResetBoundary = useQueryErrorResetBoundary();
@@ -13577,12 +13577,12 @@ function useBaseQuery(options, Observer, queryClient) {
 	return !defaultedOptions.notifyOnChangeProps ? observer.trackResult(result) : result;
 }
 //#endregion
-//#region node_modules/@tanstack/react-query/build/modern/useQuery.js
+//#region ../../app-flight/frontend/node_modules/@tanstack/react-query/build/modern/useQuery.js
 function useQuery(options, queryClient) {
 	return useBaseQuery(options, QueryObserver, queryClient);
 }
 //#endregion
-//#region node_modules/@xterm/xterm/lib/xterm.mjs
+//#region ../../app-flight/frontend/node_modules/@xterm/xterm/lib/xterm.mjs
 var import_client = require_client();
 /**
 * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
@@ -23946,7 +23946,7 @@ var Dl = class extends D {
 	}
 };
 //#endregion
-//#region node_modules/@xterm/addon-fit/lib/addon-fit.mjs
+//#region ../../app-flight/frontend/node_modules/@xterm/addon-fit/lib/addon-fit.mjs
 /**
 * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
 * @license MIT
@@ -23989,7 +23989,7 @@ var o = class {
 	}
 };
 //#endregion
-//#region node_modules/@xterm/addon-web-links/lib/addon-web-links.mjs
+//#region ../../app-flight/frontend/node_modules/@xterm/addon-web-links/lib/addon-web-links.mjs
 /**
 * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
 * @license MIT
@@ -25961,7 +25961,7 @@ function sessionLabel(title, branch) {
 	};
 }
 //#endregion
-//#region node_modules/zustand/esm/vanilla.mjs
+//#region ../../app-flight/frontend/node_modules/zustand/esm/vanilla.mjs
 var createStoreImpl = (createState) => {
 	let state;
 	const listeners = /* @__PURE__ */ new Set();
@@ -25990,7 +25990,7 @@ var createStoreImpl = (createState) => {
 };
 var createStore = ((createState) => createState ? createStoreImpl(createState) : createStoreImpl);
 //#endregion
-//#region node_modules/zustand/esm/react.mjs
+//#region ../../app-flight/frontend/node_modules/zustand/esm/react.mjs
 var identity = (arg) => arg;
 function useStore(api, selector = identity) {
 	const slice = import_react.useSyncExternalStore(api.subscribe, import_react.useCallback(() => selector(api.getState()), [api, selector]), import_react.useCallback(() => selector(api.getInitialState()), [api, selector]));
@@ -76881,7 +76881,7 @@ var GAP = 12;
 var EDGE = 8;
 var overlap = (a, b) => Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)) * Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
 var holds = (a, x, y) => x > a.x && x < a.x + a.w && y > a.y && y < a.y + a.h;
-var inside = (a, b) => a.x >= b.x - 1 && a.y >= b.y - 1 && a.x + a.w <= b.x + b.w + 1 && a.y + a.h <= b.y + b.h + 1;
+var inside$1 = (a, b) => a.x >= b.x - 1 && a.y >= b.y - 1 && a.x + a.w <= b.x + b.w + 1 && a.y + a.h <= b.y + b.h + 1;
 function placeMapCard(t, W, H, cardH, s) {
 	const cw = Math.min(CARD_W, W - 16);
 	const clamp = (x, y) => ({
@@ -76901,7 +76901,7 @@ function placeMapCard(t, W, H, cardH, s) {
 	const parts = s && s.parts || [];
 	const focus = t || tree || area;
 	const fx = focus.x + focus.w / 2, fy = focus.y + focus.h / 2;
-	const cost = (c) => (tree ? overlap(c, tree) * (parts.length ? .25 : 1) : 0) + parts.reduce((a, r) => a + 2 * overlap(c, r), 0) + avoid.reduce((a, r) => a + (t && inside(t, r) ? .5 : 1) * overlap(c, r), 0);
+	const cost = (c) => (tree ? overlap(c, tree) * (parts.length ? .25 : 1) : 0) + parts.reduce((a, r) => a + 2 * overlap(c, r), 0) + avoid.reduce((a, r) => a + (t && inside$1(t, r) ? .5 : 1) * overlap(c, r), 0);
 	const pick = (cands) => {
 		let best = null, bc = Infinity;
 		for (const c of cands) {
@@ -76931,7 +76931,7 @@ function placeMapCard(t, W, H, cardH, s) {
 			top: c.y
 		};
 	}
-	const box = avoid.filter((r) => inside(t, r));
+	const box = avoid.filter((r) => inside$1(t, r));
 	const rx = Math.max(t.x + t.w, ...box.map((r) => r.x + r.w)), lx = Math.min(t.x, ...box.map((r) => r.x));
 	const sides = [
 		[(W - rx) * H, clamp(rx + GAP, t.y)],
@@ -80902,6 +80902,33 @@ function centerOn(r, vw, vh, z) {
 		y: Math.max(24, vh / 2 - r.h * nz / 2) - r.y * nz
 	};
 }
+function fitSelection(rects, vw, vh, maxZ = 1.25) {
+	const b = boundsOf(rects);
+	return b ? fitCamera(b, vw, vh, maxZ) : null;
+}
+var CAM_EASE_MS = 220;
+var easeOut = (t) => {
+	return 1 - (1 - Math.min(1, Math.max(0, t))) ** 3;
+};
+function lerpCamera(from, to, t) {
+	if (t >= 1) return {
+		x: to.x,
+		y: to.y,
+		z: to.z
+	};
+	if (t <= 0) return {
+		x: from.x,
+		y: from.y,
+		z: from.z
+	};
+	const z = from.z > 0 && to.z > 0 ? Math.exp(Math.log(from.z) + (Math.log(to.z) - Math.log(from.z)) * t) : from.z + (to.z - from.z) * t;
+	return {
+		x: from.x + (to.x - from.x) * t,
+		y: from.y + (to.y - from.y) * t,
+		z
+	};
+}
+var sameCamera = (a, b) => Math.abs(a.x - b.x) < .01 && Math.abs(a.y - b.y) < .01 && Math.abs(a.z - b.z) < 1e-4;
 var LOD_MID = .62;
 var LOD_NEAR = 1.15;
 var lodFor = (z) => !(z >= LOD_MID) ? "far" : z < LOD_NEAR ? "mid" : "near";
@@ -83918,10 +83945,13 @@ function DescribeField({ want = "step", taken, onStops, placeholder = "Describe 
 var UNDO_MAX = 20;
 var UNDO_TTL_MS = 6e5;
 var stack = [];
+var redoStack = [];
 var seq = 0;
 var live = (e, now) => now - e.at < UNDO_TTL_MS && (!e.valid || e.valid());
+var liveRedo = (e, now) => now - e.at < UNDO_TTL_MS;
 function prune(now) {
 	stack = stack.filter((e) => live(e, now));
+	redoStack = redoStack.filter((e) => liveRedo(e, now));
 }
 function pushUndo(input, now = Date.now()) {
 	const e = {
@@ -83932,17 +83962,43 @@ function pushUndo(input, now = Date.now()) {
 	prune(now);
 	stack.push(e);
 	if (stack.length > UNDO_MAX) stack = stack.slice(stack.length - UNDO_MAX);
+	redoStack = [];
 	return e;
 }
 function popUndo(now = Date.now()) {
 	prune(now);
-	return stack.pop() || null;
+	const e = stack.pop() || null;
+	if (e?.redo) {
+		redoStack.push({
+			...e,
+			at: now
+		});
+		if (redoStack.length > UNDO_MAX) redoStack = redoStack.slice(redoStack.length - UNDO_MAX);
+	}
+	return e;
+}
+function popRedo(now = Date.now()) {
+	prune(now);
+	const e = redoStack.pop() || null;
+	if (!e) return null;
+	const back = {
+		...e,
+		at: now
+	};
+	stack.push(back);
+	if (stack.length > UNDO_MAX) stack = stack.slice(stack.length - UNDO_MAX);
+	return back;
 }
 function takeUndo(entry, now = Date.now()) {
 	const i = stack.findIndex((e) => e.id === entry.id);
 	if (i < 0) return false;
 	const [e] = stack.splice(i, 1);
-	return live(e, now);
+	const ok = live(e, now);
+	if (ok && e.redo) redoStack.push({
+		...e,
+		at: now
+	});
+	return ok;
 }
 function undoAction(entry, ariaLabel) {
 	return {
@@ -103155,7 +103211,7 @@ function reachableRow(data, opts) {
 	if (!data) return "wait";
 	return data.local_only ? "fail" : "ok";
 }
-var GLYPH = {
+var GLYPH$1 = {
 	ok: "✓",
 	fail: "✗",
 	wait: "•"
@@ -103187,7 +103243,7 @@ function Row({ n, state, title, id, children }) {
 				state !== "none" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "mobile-row-glyph st-" + state,
 					"aria-label": state === "ok" ? "done" : state === "fail" ? "not yet" : "checking",
-					children: GLYPH[state]
+					children: GLYPH$1[state]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "mobile-row-title",
@@ -126792,6 +126848,65 @@ function objectClass(def, state) {
 	return def.className + (state.dragging ? " is-dragging" : "") + (state.selected ? " is-selected" : "") + (state.target ? " is-merge-target" : "");
 }
 //#endregion
+//#region src/lib/skySnap.ts
+var stations = (start, size) => [
+	start,
+	start + size / 2,
+	start + size
+];
+function nearest(mine, others, axis, threshold) {
+	let best = null;
+	for (const o of others) {
+		const theirs = axis === "x" ? stations(o.x, o.w) : stations(o.y, o.h);
+		for (const m of mine) for (const t of theirs) {
+			const d = t - m;
+			if (Math.abs(d) <= threshold && (!best || Math.abs(d) < Math.abs(best.shift))) best = {
+				shift: d,
+				at: t,
+				other: o
+			};
+		}
+	}
+	return best;
+}
+function snapBox(moving, others, threshold) {
+	const out = {
+		x: moving.x,
+		y: moving.y,
+		guides: []
+	};
+	if (!(threshold > 0) || !others.length) return out;
+	const rest = others.filter((o) => o.id !== moving.id && o.w > 0 && o.h > 0);
+	if (!rest.length) return out;
+	const mx = nearest(stations(moving.x, moving.w), rest, "x", threshold);
+	const my = nearest(stations(moving.y, moving.h), rest, "y", threshold);
+	if (mx) out.x = moving.x + mx.shift;
+	if (my) out.y = moving.y + my.shift;
+	if (mx) {
+		const from = Math.min(out.y, mx.other.y);
+		const to = Math.max(out.y + moving.h, mx.other.y + mx.other.h);
+		out.guides.push({
+			axis: "x",
+			at: mx.at,
+			from,
+			to
+		});
+	}
+	if (my) {
+		const from = Math.min(out.x, my.other.x);
+		const to = Math.max(out.x + moving.w, my.other.x + my.other.w);
+		out.guides.push({
+			axis: "y",
+			at: my.at,
+			from,
+			to
+		});
+	}
+	return out;
+}
+var SNAP_SCREEN_PX = 8;
+var snapThreshold = (z) => SNAP_SCREEN_PX / (z > 0 ? z : 1);
+//#endregion
 //#region src/lib/skyIntake.ts
 var LANE_POLL_DEFAULT = {
 	tickets: 20,
@@ -130473,6 +130588,840 @@ function GroundedLine(p) {
 	});
 }
 //#endregion
+//#region src/lib/minimap.ts
+var MINIMAP_W = 180;
+var MINIMAP_H = 120;
+var MINIMAP_PAD = 8;
+function mapScale(rects, map, pad = MINIMAP_PAD) {
+	const b = boundsOf(rects);
+	if (!b) return {
+		scale: 1,
+		ox: pad,
+		oy: pad
+	};
+	const aw = Math.max(1, map.w - 2 * pad);
+	const ah = Math.max(1, map.h - 2 * pad);
+	const scale = Math.min(1, aw / Math.max(1, b.w), ah / Math.max(1, b.h));
+	return {
+		scale,
+		ox: (map.w - b.w * scale) / 2 - b.x * scale,
+		oy: (map.h - b.h * scale) / 2 - b.y * scale
+	};
+}
+var toMap = (fit, p) => ({
+	x: p.x * fit.scale + fit.ox,
+	y: p.y * fit.scale + fit.oy
+});
+var fromMap = (fit, p) => ({
+	x: (p.x - fit.ox) / fit.scale,
+	y: (p.y - fit.oy) / fit.scale
+});
+function rectToMap(fit, r) {
+	const a = toMap(fit, r);
+	return {
+		x: a.x,
+		y: a.y,
+		w: r.w * fit.scale,
+		h: r.h * fit.scale
+	};
+}
+function viewportRect(cam, viewport) {
+	const z = cam.z > 0 ? cam.z : 1;
+	return {
+		x: 0 - cam.x / z,
+		y: 0 - cam.y / z,
+		w: viewport.w / z,
+		h: viewport.h / z
+	};
+}
+function centreAt(p, viewport, z) {
+	const nz = clampZoom(z);
+	return {
+		z: nz,
+		x: viewport.w / 2 - p.x * nz,
+		y: viewport.h / 2 - p.y * nz
+	};
+}
+function dragCamera(cam0, fit, dx, dy) {
+	const k = cam0.z / (fit.scale || 1);
+	return {
+		z: cam0.z,
+		x: cam0.x - dx * k,
+		y: cam0.y - dy * k
+	};
+}
+var BAR_KINDS = /* @__PURE__ */ new Set(["intake", "landing"]);
+var LINE_KINDS = /* @__PURE__ */ new Set(["line", "grounded"]);
+var BAR_PX = 3;
+var MIN_BLOCK = 3;
+function mapBlocks(rects, fit) {
+	const out = rects.map((r) => {
+		const m = rectToMap(fit, r);
+		const bar = BAR_KINDS.has(r.kind);
+		if (bar) {
+			if (m.h >= m.w) return {
+				id: r.id,
+				kind: r.kind,
+				bar,
+				x: m.x + m.w / 2 - BAR_PX / 2,
+				y: m.y,
+				w: BAR_PX,
+				h: Math.max(MIN_BLOCK, m.h)
+			};
+			return {
+				id: r.id,
+				kind: r.kind,
+				bar,
+				x: m.x,
+				y: m.y + m.h / 2 - BAR_PX / 2,
+				w: Math.max(MIN_BLOCK, m.w),
+				h: BAR_PX
+			};
+		}
+		return {
+			id: r.id,
+			kind: r.kind,
+			bar,
+			x: m.x,
+			y: m.y,
+			w: Math.max(MIN_BLOCK, m.w),
+			h: Math.max(MIN_BLOCK, m.h)
+		};
+	});
+	const rank = (b) => LINE_KINDS.has(b.kind) ? 2 : b.bar ? 0 : 1;
+	return out.map((b, i) => ({
+		b,
+		i
+	})).sort((p, q) => rank(p.b) - rank(q.b) || p.i - q.i).map((p) => p.b);
+}
+function pickBlock(blocks, mx, my, slop = 2) {
+	for (let i = blocks.length - 1; i >= 0; i--) {
+		const b = blocks[i];
+		if (mx >= b.x - slop && mx <= b.x + b.w + slop && my >= b.y - slop && my <= b.y + b.h + slop) return b.id;
+	}
+	return "";
+}
+var inside = (r, x, y) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+function toneVar(tone) {
+	switch (tone || "") {
+		case "working":
+		case "running": return "var(--tone-working)";
+		case "asking":
+		case "waiting_you":
+		case "you":
+		case "attention":
+		case "needs_input": return "var(--tone-attention)";
+		case "waiting":
+		case "limited": return "var(--tone-waiting)";
+		case "halted":
+		case "broken":
+		case "failed":
+		case "error":
+		case "offline": return "var(--tone-broken)";
+		case "idle":
+		case "done":
+		case "neutral": return "var(--tone-neutral)";
+		default: return "var(--tone-muted)";
+	}
+}
+function shortLabel(label, n = 14) {
+	const s = (label || "").trim();
+	return [...s].length > n ? [...s].slice(0, n - 1).join("").trimEnd() + "…" : s;
+}
+var HINT_H = 22;
+var HINT_INSET = 8;
+var HINT_MAX_W = 140;
+var HINT_MAX = 8;
+function edgeHints(rects, cam, viewport, max = HINT_MAX) {
+	const { w: vw, h: vh } = viewport;
+	if (vw <= 0 || vh <= 0 || max <= 0) return [];
+	const clamp = (v, lo, hi) => lo > hi ? (lo + hi) / 2 : Math.min(hi, Math.max(lo, v));
+	const yLo = 19;
+	const yHi = vh - HINT_INSET - HINT_H / 2;
+	const xLo = 78;
+	const xHi = vw - HINT_INSET - HINT_MAX_W / 2;
+	const out = [];
+	for (const r of rects) {
+		const sx = r.x * cam.z + cam.x;
+		const sy = r.y * cam.z + cam.y;
+		const sw = r.w * cam.z;
+		const sh = r.h * cam.z;
+		const gapL = -(sx + sw);
+		const gapR = sx - vw;
+		const gapT = -(sy + sh);
+		const gapB = sy - vh;
+		const gx = Math.max(0, gapL, gapR);
+		const gy = Math.max(0, gapT, gapB);
+		if (gx <= 0 && gy <= 0) continue;
+		const cx = sx + sw / 2;
+		const cy = sy + sh / 2;
+		let h;
+		if (gx >= gy) {
+			const edge = gapL > 0 ? "left" : "right";
+			h = {
+				id: r.id,
+				edge,
+				x: edge === "left" ? HINT_INSET : vw - HINT_INSET,
+				y: clamp(cy, yLo, yHi),
+				dist: Math.hypot(gx, gy)
+			};
+		} else {
+			const edge = gapT > 0 ? "top" : "bottom";
+			h = {
+				id: r.id,
+				edge,
+				x: clamp(cx, xLo, xHi),
+				y: edge === "top" ? HINT_INSET : vh - HINT_INSET,
+				dist: Math.hypot(gx, gy)
+			};
+		}
+		out.push(h);
+	}
+	out.sort((a, b) => a.dist - b.dist || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+	const kept = out.slice(0, max);
+	for (const edge of [
+		"left",
+		"right",
+		"top",
+		"bottom"
+	]) {
+		const side = kept.filter((k) => k.edge === edge);
+		if (side.length < 2) continue;
+		const vertical = edge === "left" || edge === "right";
+		const key = vertical ? "y" : "x";
+		const gap = vertical ? 26 : 146;
+		const hi = vertical ? yHi : xHi;
+		const lo = vertical ? yLo : xLo;
+		side.sort((a, b) => a[key] - b[key]);
+		for (let i = 1; i < side.length; i++) side[i][key] = Math.max(side[i][key], side[i - 1][key] + gap);
+		const over = side[side.length - 1][key] - hi;
+		if (over > 0) for (const s of side) s[key] = Math.max(lo, s[key] - over);
+	}
+	return kept;
+}
+//#endregion
+//#region src/components/flights/Minimap.tsx
+var CLICK_SLOP = 3;
+var presses = /* @__PURE__ */ new WeakMap();
+var GLYPH = "◰";
+function mapPoint(e) {
+	const r = e.currentTarget.getBoundingClientRect();
+	return {
+		x: e.clientX - r.left,
+		y: e.clientY - r.top
+	};
+}
+var blockTitle = (r) => r ? r.label || r.kind : "";
+function Minimap({ rects, cam, viewport, onCamera, onJump, open, onToggle }) {
+	if (!open) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "sky-minimap is-folded",
+		"data-no-drag": "",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+			type: "button",
+			className: "sky-minimap-glyph fl-icon-btn",
+			"aria-label": "Show the minimap",
+			"aria-expanded": false,
+			title: "Show the minimap",
+			onClick: () => onToggle(),
+			children: GLYPH
+		})
+	});
+	const fit = mapScale(rects, {
+		w: MINIMAP_W,
+		h: MINIMAP_H
+	}, MINIMAP_PAD);
+	const blocks = mapBlocks(rects, fit);
+	const byId = new Map(rects.map((r) => [r.id, r]));
+	const view = rectToMap(fit, viewportRect(cam, viewport));
+	const empty = rects.length === 0;
+	const onPointerDown = (e) => {
+		if (e.button !== 0 || empty) return;
+		e.stopPropagation();
+		e.preventDefault();
+		const p = mapPoint(e);
+		presses.set(e.currentTarget, {
+			pointer: e.pointerId,
+			x: p.x,
+			y: p.y,
+			cam0: cam,
+			fit,
+			drag: inside(view, p.x, p.y),
+			moved: false
+		});
+		try {
+			e.currentTarget.setPointerCapture?.(e.pointerId);
+		} catch {}
+	};
+	const onPointerMove = (e) => {
+		const s = presses.get(e.currentTarget);
+		if (!s || s.pointer !== e.pointerId) return;
+		const p = mapPoint(e);
+		const dx = p.x - s.x;
+		const dy = p.y - s.y;
+		if (!s.moved && Math.hypot(dx, dy) < CLICK_SLOP) return;
+		s.moved = true;
+		s.drag = true;
+		onCamera(dragCamera(s.cam0, s.fit, dx, dy));
+	};
+	const onPointerUp = (e) => {
+		const s = presses.get(e.currentTarget);
+		if (!s || s.pointer !== e.pointerId) return;
+		presses.delete(e.currentTarget);
+		e.stopPropagation();
+		if (s.moved) return;
+		const id = pickBlock(blocks, s.x, s.y);
+		if (id) onJump(id);
+		else onCamera(centreAt(fromMap(s.fit, s), viewport, s.cam0.z));
+	};
+	const onPointerCancel = (e) => {
+		presses.delete(e.currentTarget);
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sky-minimap",
+		"data-no-drag": "",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "sky-minimap-head",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sky-minimap-title",
+				children: "Map"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "sky-minimap-glyph fl-icon-btn",
+				"aria-label": "Fold the minimap",
+				"aria-expanded": true,
+				title: "Fold the minimap",
+				onClick: () => onToggle(),
+				children: GLYPH
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "sky-minimap-map",
+			style: {
+				width: MINIMAP_W,
+				height: MINIMAP_H
+			},
+			role: "img",
+			"aria-label": "Minimap: click a line to go to it, click or drag to move the view",
+			onPointerDown,
+			onPointerMove,
+			onPointerUp,
+			onPointerCancel,
+			onDoubleClick: (e) => e.stopPropagation(),
+			children: [
+				empty ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sky-minimap-empty",
+					children: "Nothing on the sky yet"
+				}) : null,
+				blocks.map((b) => {
+					const r = byId.get(b.id);
+					const line = LINE_KINDS.has(b.kind);
+					const cls = "sky-minimap-block" + (b.bar ? " is-bar" : line ? " is-line" : " is-object") + (r?.selected ? " is-selected" : "") + (r?.focused ? " is-focused" : "");
+					const style = {
+						left: b.x,
+						top: b.y,
+						width: b.w,
+						height: b.h,
+						...line ? { "--mm-tone": toneVar(r?.tone) } : {}
+					};
+					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+						className: cls,
+						style,
+						title: blockTitle(r),
+						"data-id": b.id,
+						"data-kind": b.kind
+					}, b.id);
+				}),
+				empty ? null : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "sky-minimap-view",
+					style: {
+						left: view.x,
+						top: view.y,
+						width: view.w,
+						height: view.h
+					}
+				})
+			]
+		})]
+	});
+}
+function OffscreenHints({ rects, cam, viewport, onJump }) {
+	if (lodFor(cam.z) === "far") return null;
+	const lines = rects.filter((r) => LINE_KINDS.has(r.kind));
+	const hints = edgeHints(lines, cam, viewport, HINT_MAX);
+	if (!hints.length) return null;
+	const byId = new Map(lines.map((r) => [r.id, r]));
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "sky-offscreen",
+		"data-no-drag": "",
+		children: hints.map((h) => {
+			const r = byId.get(h.id);
+			const name = r?.label || h.id;
+			const style = h.edge === "left" ? {
+				left: h.x,
+				top: h.y
+			} : h.edge === "right" ? {
+				right: viewport.w - h.x,
+				top: h.y
+			} : h.edge === "top" ? {
+				left: h.x,
+				top: h.y
+			} : {
+				left: h.x,
+				bottom: viewport.h - h.y
+			};
+			return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+				type: "button",
+				className: "sky-offscreen-chip fl-pick edge-" + h.edge,
+				style: {
+					...style,
+					"--mm-tone": toneVar(r?.tone)
+				},
+				title: "Go to " + name,
+				"aria-label": "Go to " + name,
+				"data-id": h.id,
+				onClick: (e) => {
+					e.stopPropagation();
+					onJump(h.id);
+				},
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sky-offscreen-dot",
+					"aria-hidden": "true"
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sky-offscreen-name",
+					children: shortLabel(name, 14)
+				})]
+			}, h.id);
+		})
+	});
+}
+//#endregion
+//#region src/components/flights/ZoomMenu.tsx
+var ZOOM_PRESETS = [
+	.5,
+	1,
+	1.5,
+	2
+];
+var zoomLabel = (z) => Math.round(z * 100) + " %";
+function presetAt(zoom) {
+	let best = null;
+	for (const p of ZOOM_PRESETS) {
+		const d = Math.abs(zoom - p) * 100;
+		if (d <= 2 + 1e-9 && (best === null || d < Math.abs(zoom - best) * 100)) best = p;
+	}
+	return best;
+}
+function zoomMenuItems(p) {
+	const on = presetAt(p.zoom);
+	const items = [
+		{
+			id: "fit-all",
+			label: "Fit all",
+			keys: [["Shift", "1"], ["0"]],
+			disabled: false,
+			checked: false,
+			gapBefore: false,
+			run: () => p.onFitAll()
+		},
+		{
+			id: "fit-selection",
+			label: "Fit selection",
+			keys: [["Shift", "2"]],
+			disabled: !p.canFitSelection,
+			checked: false,
+			gapBefore: false,
+			run: () => p.onFitSelection()
+		},
+		{
+			id: "fit-focused",
+			label: "Fit the focused line",
+			keys: [["1"]],
+			disabled: !p.canFitFocused,
+			checked: false,
+			gapBefore: false,
+			run: () => p.onFitFocused()
+		}
+	];
+	ZOOM_PRESETS.forEach((z, i) => items.push({
+		id: "zoom-" + Math.round(z * 100),
+		label: zoomLabel(z),
+		keys: z === 1 ? [["Shift", "0"]] : [],
+		disabled: z < p.min - 1e-9 || z > p.max + 1e-9,
+		checked: on === z,
+		gapBefore: i === 0,
+		run: () => p.onZoomTo(z)
+	}));
+	return items;
+}
+function zoomMenuKey(key, at, live) {
+	if (key === "Escape" || key === "Tab") return "close";
+	if (!live) return null;
+	const wrap = (j) => ({ to: (j + live) % live });
+	if (key === "ArrowDown") return wrap(at + 1);
+	if (key === "ArrowUp") return wrap(at < 0 ? -1 : at - 1);
+	if (key === "Home") return { to: 0 };
+	if (key === "End") return { to: live - 1 };
+	return null;
+}
+function Caps({ keys }) {
+	if (!keys.length) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+		className: "sky-zoom-menu-keys",
+		"aria-hidden": "true",
+		children: keys.map((combo, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "sky-zoom-menu-combo",
+			children: [i > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sky-zoom-menu-or",
+				children: "/"
+			}), combo.map((k) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: k }, k))]
+		}, i))
+	});
+}
+function ZoomMenuList(p) {
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "sky-zoom-menu",
+		role: "menu",
+		"aria-label": "Zoom",
+		onKeyDown: p.onKeyDown,
+		children: zoomMenuItems(p).map((it) => [it.gapBefore ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "sky-zoom-menu-sep",
+			role: "separator"
+		}, it.id + ":sep") : null, /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			type: "button",
+			role: "menuitem",
+			"aria-current": it.checked || void 0,
+			className: "fl-stopmenu-item sky-zoom-menu-item" + (it.checked ? " is-current" : ""),
+			"data-item": it.id,
+			disabled: it.disabled,
+			"aria-keyshortcuts": it.keys.map((c) => c.join("+")).join(" ") || void 0,
+			onClick: () => {
+				it.run();
+				p.onPicked?.();
+			},
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sky-zoom-menu-tick",
+					"aria-hidden": "true",
+					children: it.checked ? "✓" : ""
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sky-zoom-menu-label",
+					children: it.label
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Caps, { keys: it.keys })
+			]
+		}, it.id)])
+	});
+}
+function ZoomMenu(p) {
+	const [open, setOpen] = (0, import_react.useState)(false);
+	const [at, setAt] = (0, import_react.useState)(null);
+	const btn = (0, import_react.useRef)(null);
+	const menu = (0, import_react.useRef)(null);
+	const live = () => [...menu.current?.querySelectorAll("button[role=menuitem]:not(:disabled)") || []];
+	const close = (refocus) => {
+		setOpen(false);
+		setAt(null);
+		if (refocus) btn.current?.focus();
+	};
+	(0, import_react.useLayoutEffect)(() => {
+		if (!open || !btn.current) return;
+		const r = btn.current.getBoundingClientRect();
+		const right = Math.max(8, window.innerWidth - r.right);
+		setAt(r.bottom + 280 > window.innerHeight && r.top > 280 ? {
+			bottom: window.innerHeight - r.top + 4,
+			right
+		} : {
+			top: r.bottom + 4,
+			right
+		});
+	}, [open]);
+	(0, import_react.useEffect)(() => {
+		if (!open) return;
+		(live().find((b) => b.classList.contains("is-current")) || live()[0])?.focus();
+		const onDown = (e) => {
+			const t = e.target;
+			if (menu.current?.contains(t) || btn.current?.contains(t)) return;
+			close(false);
+		};
+		const onEsc = (e) => {
+			if (e.key !== "Escape") return;
+			e.preventDefault();
+			e.stopPropagation();
+			close(true);
+		};
+		const onAway = () => close(false);
+		document.addEventListener("pointerdown", onDown, true);
+		document.addEventListener("keydown", onEsc, true);
+		window.addEventListener("resize", onAway);
+		window.addEventListener("blur", onAway);
+		return () => {
+			document.removeEventListener("pointerdown", onDown, true);
+			document.removeEventListener("keydown", onEsc, true);
+			window.removeEventListener("resize", onAway);
+			window.removeEventListener("blur", onAway);
+		};
+	}, [open, at]);
+	const onKey = (e) => {
+		const all = live();
+		const r = zoomMenuKey(e.key, all.indexOf(document.activeElement), all.length);
+		if (!r) return;
+		e.preventDefault();
+		e.stopPropagation();
+		if (r === "close") close(true);
+		else all[r.to]?.focus();
+	};
+	const onBtnKey = (e) => {
+		if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+			e.preventDefault();
+			setOpen(true);
+		}
+	};
+	const label = zoomLabel(p.zoom);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "sky-zoom-menu-wrap",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+			ref: btn,
+			type: "button",
+			className: "sky-zoom-btn sky-zoom-read sky-zoom-menu-btn" + (open ? " is-open" : ""),
+			"aria-haspopup": "menu",
+			"aria-expanded": open,
+			"aria-label": "Zoom " + label + " — fit and presets",
+			title: "Zoom: fit and presets",
+			onClick: () => open ? close(false) : setOpen(true),
+			onKeyDown: onBtnKey,
+			children: [label, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sky-zoom-menu-caret",
+				"aria-hidden": "true",
+				children: "▾"
+			})]
+		}), open && at && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			ref: menu,
+			className: "sky-zoom-menu-pop",
+			style: {
+				top: at.top,
+				bottom: at.bottom,
+				right: at.right
+			},
+			"data-no-drag": true,
+			onPointerDown: (e) => e.stopPropagation(),
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ZoomMenuList, {
+				...p,
+				onPicked: () => close(true),
+				onKeyDown: onKey
+			})
+		}), document.body)]
+	});
+}
+//#endregion
+//#region src/lib/skyShortcuts.ts
+var MAC_CAPS = {
+	Ctrl: "⌘",
+	Alt: "⌥"
+};
+function withPlatform(groups, isMac) {
+	if (!isMac) return groups.map((g) => ({
+		title: g.title,
+		items: g.items.slice()
+	}));
+	return groups.map((g) => ({
+		title: g.title,
+		items: g.items.map((it) => ({
+			...it,
+			keys: it.keys.map((k) => MAC_CAPS[k] || k)
+		}))
+	}));
+}
+function isMacLike() {
+	const nav = globalThis.navigator;
+	if (!nav) return false;
+	return /Mac|iPhone|iPad/.test(nav.platform || "") || /Mac OS X/.test(nav.userAgent || "");
+}
+var CAP_WORDS = {
+	"⌘": "cmd command ctrl",
+	"⌥": "alt option",
+	Ctrl: "control",
+	"−": "- minus",
+	"+": "plus =",
+	"?": "question help",
+	Esc: "escape",
+	Arrows: "arrow left right up down",
+	Wheel: "scroll mouse"
+};
+function haystack(group, it) {
+	const caps = it.keys.map((k) => k + " " + (CAP_WORDS[k] || "")).join(" ");
+	return (group + " " + it.keys.join("+") + " " + caps + " " + it.what).toLowerCase();
+}
+function capTokens(it) {
+	return new Set(it.keys.flatMap((k) => [k, ...(CAP_WORDS[k] || "").split(" ")]).map((t) => t.toLowerCase()));
+}
+function filterShortcuts(groups, query) {
+	const q = query.trim().toLowerCase();
+	if (!q) return groups.slice();
+	const split = q.split(/[\s+]+/).filter(Boolean);
+	const words = split.length ? split : [q];
+	const out = [];
+	for (const g of groups) {
+		const items = g.items.filter((it) => {
+			const hay = haystack(g.title, it);
+			const caps = capTokens(it);
+			return words.every((w) => w.length === 1 ? caps.has(w) : hay.includes(w));
+		});
+		if (items.length) out.push({
+			title: g.title,
+			items
+		});
+	}
+	return out;
+}
+//#endregion
+//#region src/components/flights/SkyShortcuts.tsx
+function sheetKey(key, filter) {
+	if (key === "Escape") return "close";
+	if (key === "?" && !filter) return "close";
+	if (key === "Tab") return "trap";
+	return null;
+}
+var GESTURES = /* @__PURE__ */ new Set([
+	"drag",
+	"click",
+	"double-click",
+	"right-click",
+	"Wheel"
+]);
+function SkyShortcutsCard(p) {
+	const shown = filterShortcuts(p.groups, p.filter);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		ref: p.cardRef,
+		className: "sky-keys-card",
+		role: "dialog",
+		"aria-modal": "true",
+		"aria-label": "Keyboard shortcuts",
+		onPointerDown: (e) => e.stopPropagation(),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sky-keys-head",
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "Keyboard shortcuts" }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "sky-keys-hint",
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "?" }),
+							" or ",
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Esc" }),
+							" to close"
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "fl-icon-btn sky-keys-close",
+						"aria-label": "Close",
+						title: "Close (Esc)",
+						onClick: p.onClose,
+						children: "×"
+					})
+				]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				ref: p.filterRef,
+				className: "sky-keys-filter",
+				type: "search",
+				placeholder: "Filter — a key or a word (undo, shift, zoom…)",
+				"aria-label": "Filter the shortcuts",
+				value: p.filter,
+				onChange: (e) => p.onFilter(e.target.value),
+				spellCheck: false,
+				autoComplete: "off"
+			}),
+			shown.length ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "sky-keys-body",
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "sky-keys-cols",
+					children: shown.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
+						className: "sky-keys-group",
+						"aria-label": g.title,
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("h4", { children: g.title }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("ul", { children: g.items.map((it, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
+							className: "sky-keys-row",
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-keys-caps",
+								children: it.keys.map((k, j) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", {
+									className: GESTURES.has(k) ? "is-gesture" : void 0,
+									children: k
+								}, j))
+							}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-keys-what",
+								children: it.what
+							})]
+						}, i)) })]
+					}, g.title))
+				})
+			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
+				className: "sky-keys-none",
+				children: [
+					"No shortcut matches “",
+					p.filter,
+					"”."
+				]
+			})
+		]
+	});
+}
+function SkyShortcuts(p) {
+	const [filter, setFilter] = (0, import_react.useState)("");
+	const filterRef = (0, import_react.useRef)(null);
+	const cardRef = (0, import_react.useRef)(null);
+	const groups = (0, import_react.useMemo)(() => withPlatform(p.groups, isMacLike()), [p.groups]);
+	const filterNow = (0, import_react.useRef)("");
+	filterNow.current = filter;
+	const onClose = (0, import_react.useRef)(p.onClose);
+	onClose.current = p.onClose;
+	(0, import_react.useEffect)(() => {
+		if (!p.open) return;
+		const back = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		setFilter("");
+		filterRef.current?.focus();
+		const onKey = (e) => {
+			const act = sheetKey(e.key, filterNow.current);
+			if (act === "close") {
+				e.preventDefault();
+				e.stopPropagation();
+				onClose.current();
+			} else if (act === "trap") {
+				const all = [...cardRef.current?.querySelectorAll("input, button") || []];
+				if (!all.length) return;
+				e.preventDefault();
+				e.stopPropagation();
+				all[(all.indexOf(document.activeElement) + (e.shiftKey ? -1 : 1) + all.length) % all.length].focus();
+			} else if (!e.ctrlKey && !e.metaKey && !e.altKey && document.activeElement !== filterRef.current && e.key.length === 1) {
+				e.stopPropagation();
+				filterRef.current?.focus();
+			} else e.stopPropagation();
+		};
+		window.addEventListener("keydown", onKey, true);
+		return () => {
+			window.removeEventListener("keydown", onKey, true);
+			if (back?.isConnected) back.focus();
+		};
+	}, [p.open]);
+	if (!p.open) return null;
+	const sheet = /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "sky-keys-backdrop",
+		"data-no-drag": true,
+		onPointerDown: (e) => {
+			e.stopPropagation();
+			if (e.target === e.currentTarget) p.onClose();
+		},
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyShortcutsCard, {
+			groups,
+			filter,
+			onFilter: setFilter,
+			onClose: p.onClose,
+			filterRef,
+			cardRef
+		})
+	});
+	return typeof document !== "undefined" && document.body ? (0, import_react_dom.createPortal)(sheet, document.body) : sheet;
+}
+//#endregion
 //#region src/components/flights/SkyView.tsx
 var BAR_H = 34;
 var LINE_MIN_W = 280;
@@ -130480,6 +131429,7 @@ var GRID = 24;
 var PAN_STEP = 80;
 var SHELF_FOLD_KEY = "mf_sky_stops_folded";
 var TIDY_MS = 350;
+var MINIMAP_KEY = "mf_sky_minimap";
 var TOOL_CHIPS = {
 	drag: {
 		label: "✥ Drag",
@@ -130583,13 +131533,28 @@ function SkyView() {
 	const [tidying, setTidying] = (0, import_react.useState)(false);
 	const [newOver, setNewOver] = (0, import_react.useState)(false);
 	const [drag, setDrag] = (0, import_react.useState)(null);
-	const [cam, setCam] = (0, import_react.useState)(() => memo?.cam || {
+	const [guides, setGuides] = (0, import_react.useState)([]);
+	const [focusMode, setFocusMode] = (0, import_react.useState)(false);
+	const [shortcutsOpen, setShortcutsOpen] = (0, import_react.useState)(false);
+	const [minimapOpen, setMinimapOpen] = (0, import_react.useState)(() => readPref(MINIMAP_KEY) !== "0");
+	const [filterFocus, setFilterFocus] = (0, import_react.useState)(false);
+	const [cam, setCamState] = (0, import_react.useState)(() => memo?.cam || {
 		x: 0,
 		y: 0,
 		z: 1
 	});
 	const camRef = (0, import_react.useRef)(cam);
 	camRef.current = cam;
+	const ease = (0, import_react.useRef)(0);
+	const stopEase = (0, import_react.useCallback)(() => {
+		if (!ease.current) return;
+		if (typeof cancelAnimationFrame === "function") cancelAnimationFrame(ease.current);
+		ease.current = 0;
+	}, []);
+	const setCam = (0, import_react.useCallback)((next) => {
+		stopEase();
+		setCamState(next);
+	}, [stopEase]);
 	const [vp, setVp] = (0, import_react.useState)({
 		w: 0,
 		h: 0
@@ -130609,7 +131574,10 @@ function SkyView() {
 	const setPaletteMode = (m) => {
 		setPaletteModeState(m);
 		writePref(PALETTE_MODE_KEY, m);
-		if (m === "shelf") setCatalogOpen(null);
+		if (m === "shelf") {
+			setCatalogOpen(null);
+			setFilterFocus(false);
+		}
 	};
 	const paletteOn = paletteMode === "float" && !narrow;
 	const [mergeOver, setMergeOver] = (0, import_react.useState)("");
@@ -130655,6 +131623,7 @@ function SkyView() {
 	const clearSel = (0, import_react.useCallback)(() => {
 		setSel(NO_SELECTION);
 		setSelAsk("");
+		setFocusMode(false);
 	}, []);
 	const titles = (0, import_react.useMemo)(() => skyLineTitles(rows, mode, {
 		query,
@@ -130937,7 +131906,28 @@ function SkyView() {
 		ro.observe(el);
 		return () => ro.disconnect();
 	}, [narrow]);
-	const fitAll = (0, import_react.useCallback)((whole = false) => {
+	const goTo = (0, import_react.useCallback)((target, instant = false) => {
+		stopEase();
+		const from = camRef.current;
+		if (instant || motionOff || sameCamera(from, target) || typeof requestAnimationFrame !== "function" || typeof performance === "undefined") {
+			setCamState(target);
+			return;
+		}
+		const t0 = performance.now();
+		const step = (now) => {
+			const t = (now - t0) / CAM_EASE_MS;
+			if (t >= 1) {
+				ease.current = 0;
+				setCamState(target);
+				return;
+			}
+			setCamState(lerpCamera(from, target, easeOut(t)));
+			ease.current = requestAnimationFrame(step);
+		};
+		ease.current = requestAnimationFrame(step);
+	}, [motionOff, stopEase]);
+	(0, import_react.useEffect)(() => stopEase, [stopEase]);
+	const fitAll = (0, import_react.useCallback)((whole = false, instant = false) => {
 		const rects = lines.map((l) => ({
 			...posOf(l.id),
 			w: l.w,
@@ -130953,7 +131943,7 @@ function SkyView() {
 			w: objectBox(o).w,
 			h: 1
 		});
-		setCam((whole ? fitCamera : firstFit)(boundsOf(rects), vp.w, vp.h, mode === "one" ? 1.5 : 1));
+		goTo((whole ? fitCamera : firstFit)(boundsOf(rects), vp.w, vp.h, mode === "one" ? 1.5 : 1), instant);
 	}, [
 		lines,
 		posOf,
@@ -130963,18 +131953,20 @@ function SkyView() {
 		vp.w,
 		vp.h,
 		objects,
-		objectBox
+		objectBox,
+		goTo
 	]);
-	const fitFocused = (0, import_react.useCallback)(() => {
+	const fitFocused = (0, import_react.useCallback)((instant = false) => {
 		const r = focusLine ? rectOf(focusLine) : null;
-		if (!r) return fitAll();
-		setCam(fitCamera(r, vp.w, vp.h, 1.5));
+		if (!r) return fitAll(false, instant);
+		goTo(fitCamera(r, vp.w, vp.h, 1.5), instant);
 	}, [
 		focusLine,
 		rectOf,
 		fitAll,
 		vp.w,
-		vp.h
+		vp.h,
+		goTo
 	]);
 	const fitted = (0, import_react.useRef)(memo?.key || "");
 	const fitKey = mode + "\0" + (mode === "one" ? focused : "");
@@ -130989,8 +131981,8 @@ function SkyView() {
 		if (fitted.current === fitKey) return;
 		const first = !fitted.current;
 		fitted.current = fitKey;
-		if (first && gridOne && mode !== "one") fitFocused();
-		else fitAll();
+		if (first && gridOne && mode !== "one") fitFocused(true);
+		else fitAll(false, true);
 	}, [
 		vp.w,
 		vp.h,
@@ -131031,7 +132023,7 @@ function SkyView() {
 		const c = camRef.current;
 		const sx = c.x + r.x * c.z;
 		const sy = c.y + r.y * c.z;
-		if (!(sx >= 0 && sy >= 0 && sx + r.w * c.z <= vp.w && sy + Math.min(r.h, 240) * c.z <= vp.h) && !pressed) setCam(centerOn(r, vp.w, vp.h, Math.max(c.z, .85)));
+		if (!(sx >= 0 && sy >= 0 && sx + r.w * c.z <= vp.w && sy + Math.min(r.h, 240) * c.z <= vp.h) && !pressed) goTo(centerOn(r, vp.w, vp.h, Math.max(c.z, .85)));
 		setFlash(focusLine);
 		setTimeout(() => alive.current && setFlash((f) => f === focusLine ? "" : f), 1400);
 	}, [
@@ -131087,6 +132079,7 @@ function SkyView() {
 			y: c.y + dy
 		}));
 	};
+	const zoomTo = (z) => goTo(zoomAt(camRef.current, z, vp.w / 2, vp.h / 2));
 	const middle = () => {
 		const c = toPlane(camRef.current, vp.w / 2, vp.h / 3);
 		return {
@@ -131152,12 +132145,45 @@ function SkyView() {
 			sx: e.clientX,
 			sy: e.clientY,
 			moved: false,
-			shift: e.shiftKey
+			shift: e.shiftKey,
+			dx: 0,
+			dy: 0
 		};
-		const delta = (ev) => ({
-			dx: (ev.clientX - g.sx) / camRef.current.z,
-			dy: (ev.clientY - g.sy) / camRef.current.z
-		});
+		const pressedRect = rectOf(id);
+		const still = pressedRect ? [
+			...lines.map((l) => l.id),
+			...objects.map((o) => o.key),
+			INTAKE_KEY,
+			PALETTE_KEY
+		].filter((x, i, arr) => !ids.includes(x) && arr.indexOf(x) === i).map((x) => ({
+			id: x,
+			rect: rectOf(x)
+		})).filter((x) => !!x.rect).map((x) => ({
+			id: x.id,
+			...x.rect
+		})) : [];
+		const delta = (ev) => {
+			const raw = {
+				dx: (ev.clientX - g.sx) / camRef.current.z,
+				dy: (ev.clientY - g.sy) / camRef.current.z
+			};
+			if (!pressedRect || ev.altKey || !still.length) return {
+				...raw,
+				guides: []
+			};
+			const r = snapBox({
+				id,
+				x: from[id].x + raw.dx,
+				y: from[id].y + raw.dy,
+				w: pressedRect.w,
+				h: pressedRect.h
+			}, still, snapThreshold(camRef.current.z));
+			return {
+				dx: r.x - from[id].x,
+				dy: r.y - from[id].y,
+				guides: r.guides
+			};
+		};
 		const merging = isGroundedKey(id) && ids.length === 1;
 		const others = merging ? lines.filter((l) => l.id !== id).map((l) => ({
 			id: l.id,
@@ -131187,10 +132213,15 @@ function SkyView() {
 			if (ev.pointerId !== g.pid) return;
 			if (!g.moved && Math.hypot(ev.clientX - g.sx, ev.clientY - g.sy) < 4) return;
 			g.moved = true;
+			const d = delta(ev);
+			g.dx = d.dx;
+			g.dy = d.dy;
 			setDrag({
 				from,
-				...delta(ev)
+				dx: d.dx,
+				dy: d.dy
 			});
+			setGuides(d.guides);
 			if (merging || toBlock || toLine) {
 				const t = mergeAt(ev);
 				setMergeOver((cur) => cur === t ? cur : t);
@@ -131202,6 +132233,7 @@ function SkyView() {
 			window.removeEventListener("pointerup", up);
 			window.removeEventListener("pointercancel", up);
 			setDrag(null);
+			setGuides([]);
 			setMergeOver("");
 			const landed = g.moved && ev.type !== "pointercancel" ? mergeAt(ev) : "";
 			const into = merging ? landed : "";
@@ -131217,7 +132249,7 @@ function SkyView() {
 				return;
 			}
 			if (toLine && g.moved) {
-				const { dx, dy } = delta(ev);
+				const { dx, dy } = g;
 				dropNote(noteIdOf(id), {
 					x: from[id].x + dx,
 					y: from[id].y + dy
@@ -131225,7 +132257,7 @@ function SkyView() {
 				return;
 			}
 			if (g.moved) {
-				const { dx, dy } = delta(ev);
+				const { dx, dy } = g;
 				for (const [id, f] of Object.entries(from)) {
 					const p = {
 						x: f.x + dx,
@@ -131444,9 +132476,15 @@ function SkyView() {
 		const steps = f.steps;
 		const name = f.plan_name || "";
 		const shown = groundedName(f);
+		let cur = f.id;
 		const entry = pushUndo({
 			label: "Remove “" + shown + "”",
-			undo: () => reground(steps, name, was)
+			undo: async () => {
+				const g = await reground(steps, name, was);
+				if (g) cur = g.id;
+				return g;
+			},
+			redo: () => deleteFlight(cur)
 		});
 		toast("Removed “" + shown + "”", { action: undoAction(entry, "Undo: put “" + shown + "” back on the board") });
 	};
@@ -131462,9 +132500,15 @@ function SkyView() {
 		if (!ok) return;
 		const n = steps.length;
 		const msg = "Moved " + n + (n === 1 ? " stop" : " stops") + " onto " + windowName(title);
+		let cur = "";
 		toast(msg, { action: undoAction(pushUndo({
 			label: msg,
-			undo: () => reground(steps, name, was)
+			undo: async () => {
+				const g = await reground(steps, name, was);
+				cur = g ? g.id : "";
+				return g;
+			},
+			redo: async () => cur ? deleteFlight(cur) : false
 		}), "Undo: put “" + (name || "the stops") + "” back on the board") });
 	};
 	const onShelfDragEnd = () => {
@@ -131484,11 +132528,11 @@ function SkyView() {
 		putNotes(notesRef.current.filter((x) => x.id !== id));
 		setEditingNote((e) => e === id ? "" : e);
 		vpRef.current?.focus({ preventScroll: true });
-		toast("Note removed", { action: {
-			label: "Undo",
-			ariaLabel: "Undo: put the note back",
-			onClick: () => putNotes([...notesRef.current.filter((x) => x.id !== id), n])
-		} });
+		toast("Note removed", { action: undoAction(pushUndo({
+			label: "Remove the note",
+			undo: async () => putNotes([...notesRef.current.filter((x) => x.id !== id), n]),
+			redo: async () => putNotes(notesRef.current.filter((x) => x.id !== id))
+		}), "Undo: put the note back") });
 	}, [putNotes]);
 	const addNote = (at) => {
 		const n = {
@@ -131562,6 +132606,7 @@ function SkyView() {
 	const pinch = (0, import_react.useRef)(null);
 	const ground = (t) => t instanceof Element && (t === vpRef.current || t.classList.contains("sky-plane") || t.classList.contains("sky-ground"));
 	const startPan = (e) => {
+		stopEase();
 		pointers.current.set(e.pointerId, {
 			x: e.clientX,
 			y: e.clientY
@@ -131586,6 +132631,7 @@ function SkyView() {
 	};
 	const press = (0, import_react.useRef)(null);
 	const onDownCapture = (e) => {
+		if (focusMode) setFocusMode(false);
 		if (e.pointerType === "mouse" && e.button !== 0) return;
 		const t = space.current ? "click" : tool;
 		if (t === "drag") return;
@@ -131855,9 +132901,31 @@ function SkyView() {
 			}
 		});
 	};
+	const floatPaletteAt = (at) => {
+		setFilterFocus(true);
+		onLayout(PALETTE_KEY, {
+			x: Math.round(at.x),
+			y: Math.round(at.y),
+			pinned: true
+		});
+		setPaletteMode("float");
+	};
+	const paletteSpot = () => {
+		const stored = layout[PALETTE_KEY];
+		if (stored?.pinned && typeof stored.x === "number" && typeof stored.y === "number") return {
+			x: stored.x,
+			y: stored.y
+		};
+		const c = toPlane(camRef.current, Math.max(24, vp.w / 2 - PALETTE_W$1 * camRef.current.z / 2), 48);
+		return {
+			x: Math.round(c.x),
+			y: Math.round(c.y)
+		};
+	};
 	const onDouble = (e) => {
 		if (!ground(e.target)) return;
-		newAtScreen(e.clientX, e.clientY);
+		if (narrow) return newAtScreen(e.clientX, e.clientY);
+		floatPaletteAt(planeAt(e.clientX, e.clientY));
 	};
 	const carriesNew = (e) => Array.from(e.dataTransfer?.types || []).includes(NEW_SESSION_MIME);
 	const onNewDragOver = (e) => {
@@ -131919,9 +132987,72 @@ function SkyView() {
 		el.addEventListener("wheel", onWheel, { passive: false });
 		return () => el.removeEventListener("wheel", onWheel);
 	}, [narrow]);
+	const selOne = stopSelection(sel);
+	const selBox = (() => {
+		if (selOne) {
+			const at = posOf(selOne.line);
+			return selStops ? {
+				...selStops,
+				x: selStops.x + at.x,
+				y: selStops.y + at.y
+			} : rectOf(selOne.line);
+		}
+		return boundsOf([...sel.lines].map(rectOf).filter((r) => !!r));
+	})();
+	const fitSel = () => {
+		const target = selBox ? fitSelection([selBox], vp.w, vp.h, selOne ? 1.5 : 1.25) : null;
+		if (target) goTo(target);
+	};
+	const jumpTo = (id) => {
+		const r = rectOf(id);
+		if (!r) return;
+		goTo(centerOn(r, vp.w, vp.h, Math.max(camRef.current.z, .85)));
+		if (isGroundedKey(id)) setGroundFocus(id);
+		else if (lines.some((l) => l.id === id)) focusOn(id, true);
+	};
+	const mapRects = [...lines.map((l) => {
+		const r = rectOf(l.id);
+		const row = l.flight ? void 0 : rows.find((x) => x.title === l.id);
+		return {
+			id: l.id,
+			...r,
+			kind: l.flight ? "grounded" : "line",
+			tone: l.flight ? l.flight.state : row ? deriveSessionState(row).state : "",
+			label: l.name,
+			selected: sel.lines.has(l.id),
+			focused: l.flight ? groundFocus === l.id : focusLine === l.id
+		};
+	}), ...objects.flatMap((o) => {
+		const r = rectOf(o.key);
+		return r ? [{
+			id: o.key,
+			...r,
+			kind: o.def.kind,
+			tone: "",
+			label: o.key === INTAKE_KEY ? "Intake" : o.key,
+			selected: sel.lines.has(o.key)
+		}] : [];
+	})];
+	const dimmed = (id) => focusMode && !sel.lines.has(id) && selOne?.line !== id;
 	const keys = (0, import_react.useRef)(() => {});
 	keys.current = (e) => {
 		const el = document.activeElement;
+		if (e.key === "Escape" && shortcutsOpen) {
+			e.preventDefault();
+			setShortcutsOpen(false);
+			return;
+		}
+		if (e.key === "Escape" && focusMode && !useUi.getState().openDialog) {
+			e.preventDefault();
+			setFocusMode(false);
+			return;
+		}
+		if (e.key === "Tab" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && paletteOn && typing(el) && el?.closest(".sky-palette-slot")) {
+			e.preventDefault();
+			setPaletteMode("shelf");
+			vpRef.current?.focus({ preventScroll: true });
+			return;
+		}
 		if (e.key === "Escape" && (groundMenu || Object.keys(dropped).length) && !useUi.getState().openDialog) {
 			e.preventDefault();
 			setGroundMenu(null);
@@ -131956,10 +133087,30 @@ function SkyView() {
 		if (!skyKeysOwn(el) || e.ctrlKey || e.metaKey || e.altKey) return;
 		const k = e.key;
 		const handled = () => e.preventDefault();
+		const digit = (n) => e.code === "Digit" + n || e.code === "Numpad" + n;
 		if (k === " " && !e.repeat) {
 			handled();
 			space.current = true;
 			setSpaceHeld(true);
+		} else if (e.shiftKey && (digit("1") || k === "!")) {
+			handled();
+			fitAll();
+		} else if (e.shiftKey && (digit("2") || k === "@")) {
+			handled();
+			fitSel();
+		} else if (e.shiftKey && (digit("0") || k === ")")) {
+			handled();
+			zoomTo(1);
+		} else if (k === "Tab" && !e.shiftKey && !narrow) {
+			handled();
+			if (paletteOn) setPaletteMode("shelf");
+			else floatPaletteAt(paletteSpot());
+		} else if ((k === "f" || k === "F") && !selectionEmpty(sel)) {
+			handled();
+			setFocusMode(true);
+		} else if (k === "?") {
+			handled();
+			setShortcutsOpen(true);
 		} else if (k === "0") {
 			handled();
 			fitAll();
@@ -132039,6 +133190,7 @@ function SkyView() {
 	};
 	const removeKeys = (0, import_react.useRef)(() => {});
 	removeKeys.current = (e) => {
+		if (redoKey(e)) return undoNow(e, true);
 		if (undoKey(e)) return undoNow(e);
 		if (e.key !== "Delete" && e.key !== "Backspace" || e.ctrlKey || e.metaKey || e.altKey) return;
 		if (overlayOpen()) return;
@@ -132060,13 +133212,24 @@ function SkyView() {
 		else if (d.kind === "box" || d.kind === "line") deleters.current.get(d.line)?.(d.kind === "box" ? d.node : "");
 	};
 	const undoKey = (e) => (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "z" || e.key === "Z");
-	const undoNow = (e) => {
+	const redoKey = (e) => (e.ctrlKey || e.metaKey) && !e.altKey && e.shiftKey && (e.key === "z" || e.key === "Z");
+	const undoNow = (e, redo = false) => {
 		const el = document.activeElement;
 		if (typing(el) || overlayOpen()) return;
 		if (el && el !== document.body && el.closest(".pane, .skl-card, [role=menu], [role=dialog], [role=alertdialog]")) return;
 		e.preventDefault();
 		e.stopPropagation();
 		if (drag || marquee.current || pan.current) return;
+		if (redo) {
+			const again = popRedo();
+			if (!again?.redo) {
+				toast("Nothing to redo");
+				return;
+			}
+			toast("Redid: " + again.label);
+			again.redo();
+			return;
+		}
 		const entry = popUndo();
 		if (!entry) {
 			toast("Nothing to undo", { title: "Ctrl+Shift+T reopens the last closed session" });
@@ -132096,7 +133259,7 @@ function SkyView() {
 			window.removeEventListener("keyup", up, true);
 		};
 	}, [narrow]);
-	const empty = lines.length > 0 ? "" : mode === "one" ? focused ? "“" + windowName(focused) + "” isn't in the sky right now." : "Pick a line to show it alone." : query ? "No line matches “" + query + "”." : mode === "perched" ? "Nothing is perched on you." : instQ.data === void 0 ? "" : "No sessions in the sky yet — double-click anywhere, or drag the Session chip from the shelf below, to start one.";
+	const empty = lines.length > 0 ? "" : mode === "one" ? focused ? "“" + windowName(focused) + "” isn't in the sky right now." : "Pick a line to show it alone." : query ? "No line matches “" + query + "”." : mode === "perched" ? "Nothing is perched on you." : instQ.data === void 0 ? "" : "No sessions in the sky yet — double-click anywhere for the blocks, or press the Session chip in the shelf below, to start one.";
 	const toolbar = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "sky-toolbar",
 		role: "toolbar",
@@ -132157,10 +133320,16 @@ function SkyView() {
 						onClick: () => zoomBy(1 / 1.2),
 						children: "−"
 					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-						className: "sky-zoom-read",
-						"aria-live": "polite",
-						children: [Math.round(cam.z * 100), "%"]
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ZoomMenu, {
+						zoom: cam.z,
+						min: ZOOM_MIN,
+						max: ZOOM_MAX,
+						onZoomTo: zoomTo,
+						onFitAll: () => fitAll(),
+						onFitSelection: fitSel,
+						onFitFocused: () => fitFocused(),
+						canFitSelection: !selectionEmpty(sel),
+						canFitFocused: !!focusLine
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -132176,7 +133345,7 @@ function SkyView() {
 						className: "sky-zoom-btn sky-fit-one",
 						title: "Fit the focused line — the grid's 1 (1)",
 						disabled: !focusLine,
-						onClick: fitFocused,
+						onClick: () => fitFocused(),
 						children: "1"
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
@@ -132189,8 +133358,8 @@ function SkyView() {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
 						className: "sky-zoom-btn sky-zoom-100",
-						title: "Back to 100%",
-						onClick: () => zoomBy(1 / cam.z),
+						title: "Back to 100% (Shift+0)",
+						onClick: () => zoomTo(1),
 						children: "100%"
 					})
 				]
@@ -132202,6 +133371,11 @@ function SkyView() {
 					label: "Add a note",
 					title: "A sticky note in the middle of the view",
 					onSelect: () => addNote(middle())
+				}, {
+					key: "keys",
+					label: "Keyboard shortcuts…",
+					title: "Every key the sky knows (?)",
+					onSelect: () => setShortcutsOpen(true)
 				}]
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TourButton, { tour: "sky" })
@@ -132390,19 +133564,6 @@ function SkyView() {
 		highlighted: at ? sel.stops.get(id) : void 0,
 		onShiftSelect: at ? (n) => setSel((s) => toggleStop(s, id, n.id)) : void 0
 	}, id);
-	const selOne = stopSelection(sel);
-	const selBox = (() => {
-		const one = stopSelection(sel);
-		if (one) {
-			const at = posOf(one.line);
-			return selStops ? {
-				...selStops,
-				x: selStops.x + at.x,
-				y: selStops.y + at.y
-			} : rectOf(one.line);
-		}
-		return boundsOf([...sel.lines].map(rectOf).filter((r) => !!r));
-	})();
 	const selScreen = selBox && planeToScreen(cam, selBox);
 	const selY = (r) => {
 		const above = r.y - 52;
@@ -132436,6 +133597,7 @@ function SkyView() {
 			className: "sky-intake" + (drag?.from[INTAKE_KEY] ? " is-dragging" : "") + (sel.lines.has(INTAKE_KEY) ? " is-selected" : ""),
 			"data-lod": lodFor(cam.z),
 			"data-open": intakeOpen ? "" : void 0,
+			"data-dim": dimmed(INTAKE_KEY) ? "" : void 0,
 			style: {
 				transform: `translate(${intakeAt.x}px, ${intakeAt.y}px)`,
 				width: intakeW,
@@ -132463,6 +133625,7 @@ function SkyView() {
 	const renderPalette = (host) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 		className: "sky-palette-slot" + (drag?.from[PALETTE_KEY] ? " is-dragging" : ""),
 		"data-lod": lodFor(cam.z),
+		"data-dim": dimmed(PALETTE_KEY) ? "" : void 0,
 		style: {
 			transform: `translate(${host.pos.x}px, ${host.pos.y}px)`,
 			"--sky-z": cam.z
@@ -132483,7 +133646,7 @@ function SkyView() {
 			onPlace: (d) => void placeGrounded(d, "palette"),
 			onDock: () => setPaletteMode("shelf"),
 			onClose: () => setPaletteMode("shelf"),
-			focusFilter: !!catalogOpen,
+			focusFilter: !!catalogOpen || filterFocus,
 			onSession: newHere
 		})
 	});
@@ -132541,6 +133704,7 @@ function SkyView() {
 			}),
 			"data-object": o.key,
 			"data-lod": host.lod,
+			"data-dim": dimmed(o.key) ? "" : void 0,
 			style: {
 				transform: `translate(${host.pos.x}px, ${host.pos.y}px)`,
 				"--sky-z": cam.z
@@ -132590,7 +133754,7 @@ function SkyView() {
 						tabIndex: -1,
 						role: "application",
 						"aria-roledescription": "canvas",
-						"aria-label": "The sky: every session as a line — " + (liveTool === "click" ? "drag anywhere to pan, Shift+drag to select" : "drag empty space to select, the wheel or the arrows to pan") + ", Ctrl+wheel or + / − to zoom, double-click to start a session",
+						"aria-label": "The sky: every session as a line — " + (liveTool === "click" ? "drag anywhere to pan, Shift+drag to select" : "drag empty space to select, the wheel or the arrows to pan") + ", Ctrl+wheel or + / − to zoom, double-click for the blocks, ? for every key",
 						style: {
 							backgroundSize: `${GRID * cam.z}px ${GRID * cam.z}px`,
 							backgroundPosition: `${cam.x}px ${cam.y}px`
@@ -132614,24 +133778,42 @@ function SkyView() {
 								paused: motionOff || !!drag
 							}),
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-								className: "sky-plane",
+								className: "sky-plane" + (focusMode ? " sky-focus" : ""),
 								"data-dragging": drag ? "" : void 0,
 								"data-tidying": tidying ? "" : void 0,
+								"data-snapping": guides.length ? "" : void 0,
 								style: { transform: `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})` },
 								children: [
 									objects.map(objectFor),
 									lines.map((l) => {
 										const at = posOf(l.id);
 										return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-											className: "sky-line-slot" + (flash === l.id ? " is-flash" : "") + (drag?.from[l.id] ? " is-dragging" : "") + (l.flight ? " is-grounded" : "") + (mergeOver && !l.flight && drag?.from[l.id] ? " is-merging" : ""),
+											className: "sky-line-slot" + (flash === l.id ? " is-flash" : "") + (drag?.from[l.id] ? " is-dragging" : "") + (drag?.from[l.id] && guides.length ? " is-snapping" : "") + (l.flight ? " is-grounded" : "") + (mergeOver && !l.flight && drag?.from[l.id] ? " is-merging" : ""),
 											"data-slot": l.id,
 											"data-tour": l.flight ? void 0 : "sky-line",
+											"data-dim": dimmed(l.id) ? "" : void 0,
 											style: { transform: `translate(${at.x}px, ${at.y}px)` },
 											children: lineFor(l.id, at)
 										}, l.id);
 									}),
 									ghosts.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GhostLine, { ...g }, "ghost:" + g.id)),
-									newBlock
+									newBlock,
+									guides.map((g, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+										className: "sky-guide",
+										"data-axis": g.axis,
+										"aria-hidden": "true",
+										style: g.axis === "x" ? {
+											left: g.at,
+											top: g.from,
+											height: g.to - g.from,
+											"--sky-z": cam.z
+										} : {
+											top: g.at,
+											left: g.from,
+											width: g.to - g.from,
+											"--sky-z": cam.z
+										}
+									}, g.axis + i))
 								]
 							}),
 							marq && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
@@ -132662,6 +133844,33 @@ function SkyView() {
 								})
 							}),
 							selBar,
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(OffscreenHints, {
+								rects: mapRects,
+								cam,
+								viewport: vp,
+								onJump: jumpTo
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+								className: "sky-minimap-host",
+								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Minimap, {
+									rects: mapRects,
+									cam,
+									viewport: vp,
+									onCamera: (c) => setCam(c),
+									onJump: jumpTo,
+									open: minimapOpen,
+									onToggle: () => {
+										const v = !minimapOpen;
+										setMinimapOpen(v);
+										writePref(MINIMAP_KEY, v ? "1" : "0");
+									}
+								})
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyShortcuts, {
+								open: shortcutsOpen,
+								onClose: () => setShortcutsOpen(false),
+								groups: []
+							}),
 							empty && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 								className: "sky-empty muted",
 								role: "status",
