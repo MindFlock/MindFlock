@@ -5581,3 +5581,80 @@ The integrator merges, rebuilds the bundle in the round's worktree, the
 judge re-shoots, the integrator fixes what is quick, merges into
 `emandel2630/flights`, deploys. The judge's leftovers are the next cycle's
 seed, written at the top of the next round's contract.
+
+### As built: round 17 zoom-shortcuts
+
+The two seams filled in, their props unchanged; `sky-core` mounts them.
+
+**`ZoomMenu`** (`ZoomMenu.tsx` + `ZoomMenu.css`). The readout is now a
+button (`sky-zoom-btn sky-zoom-read sky-zoom-menu-btn`, so it wears the zoom
+group's secondary tier and keeps the readout's muted tabular look) reading
+`87 %` with a small ▾, `aria-haspopup="menu"` / `aria-expanded`. A click, or
+↓ / ↑ on it, opens an inline `role="menu"` (never a native select), portalled
+to `<body>` at fixed coordinates under the button with right edges aligned
+(above it when the window is short): the zoom group clips (`overflow:
+hidden`) and the toolbar must not grow. Rows, each a `menuitem` with its caps
+on the right (`aria-keyshortcuts` too): **Fit all** (Shift 1 / 0), **Fit
+selection** (Shift 2, disabled when `!canFitSelection`), **Fit the focused
+line** (1, disabled when `!canFitFocused`), a separator, then **50 % · 100 %
+(Shift 0) · 150 % · 200 %**: a preset outside `min..max` is disabled, the one
+the zoom sits on is ticked ✓ with `aria-current` (`presetAt`: the nearest
+preset within 2 percentage points, none in between). Picking a row calls its
+prop and closes, the focus back on the button; ↑ / ↓ wrap over the enabled
+rows, Home / End jump, Esc or Tab close (Esc listened in the capture phase
+and stopped, so the sky's own Esc doesn't also clear a selection), a press
+outside, a resize or the window losing focus close. Opening focuses the
+ticked row, else the first. The rows are the menu-row tier (`fl-stopmenu-
+item`, StopMenu.css): `flightsButtons.test.ts` pins every flights button to a
+tier, so ZoomMenu.css only lays a row out (tick · label · caps) and draws the
+caps. Exported for the tests (no DOM in the node environment): `ZOOM_PRESETS`,
+`zoomLabel`, `presetAt`, `zoomMenuItems(props)`, `zoomMenuKey(key, at,
+live)` and `ZoomMenuList` (the open rows without positioning).
+
+**`SkyShortcuts`** (`SkyShortcuts.tsx` + `SkyShortcuts.css`). A centred card
+(`role="dialog"`, `aria-modal`, `aria-label="Keyboard shortcuts"`, not a
+native `<dialog>`) over a fixed dimmed backdrop, portalled to `<body>`; a
+press on the backdrop closes. The head says "? or Esc to close" beside a ×
+(the quiet tier, `fl-icon-btn`); under it the filter, then the groups in two
+balanced CSS columns (one under 640 px) inside a scrolling body, each row its
+caps as `<kbd>` (a pointer word — drag, click, double-click, right-click,
+Wheel — drawn as a dashed, muted "gesture" cap) and the words. While open a
+window keydown listener in the capture phase owns the keys: Esc closes, `?`
+closes while the filter is empty (with text in it, `?` is a character to
+search for), Tab cycles inside the card, a character typed with the focus on
+the × goes to the filter, and nothing reaches the sky's keys underneath (T,
+V, 0… typed in the filter never tidy or fit). On open the filter is cleared
+and focused; on close the focus returns to where it was. The sheet applies
+`withPlatform(groups, isMacLike())` itself, so the sky may pass
+`SKY_SHORTCUT_GROUPS` as is. Exported for the tests: `sheetKey(key,
+filter)` and `SkyShortcutsCard` (the card alone).
+
+**`lib/skyShortcuts.ts`**: `SKY_SHORTCUT_GROUPS`, read off SkyView's key
+handlers and the round 12–17 sections, in six groups — Move around (Space
+drag, Wheel, Ctrl Wheel, Arrows, + / −, Shift 1 and 0, Shift 2, 1, Shift 0,
+H), Select (V, drag, Shift drag, Shift click, Ctrl A, F, Esc), Edit stops
+(double-click, Enter, right-click, Delete, Backspace, Ctrl Z, Ctrl Shift Z,
+Esc), Lines and objects (drag a bar, Alt drag = no snap, T, Ctrl N, Ctrl Y),
+The palette (Tab, double-click on empty sky, click, drag onto a line, Esc),
+Help (?, Esc). Each key is one cap; a key's row says what it does, not how
+it is wired. `withPlatform(groups, isMac)` maps Ctrl → ⌘ and Alt → ⌥ (the
+keys the sky reads as `metaKey` / `altKey` there), never mutates, and is
+idempotent. `filterShortcuts(groups, query)` keeps the rows whose group,
+caps or words hold every word of the query, case-folded, "+" splitting
+words ("ctrl+z" = "ctrl z"); a one-character word is a KEY and matches a cap
+only ("ctrl z" finds Undo and Redo, not Ctrl Wheel's "zoom"); caps answer to
+aliases (⌘ to ctrl / cmd, ⌥ to alt / option, − to minus, ? to help, Esc to
+escape); emptied groups drop out, and the sheet says "No shortcut matches
+“…”." when nothing is left.
+
+Open for `sky-core`: the rows name the keys the contract adds (Shift 1 / 2 /
+0, Ctrl Shift Z, Tab, double-click on empty sky to the palette, F, ?, Alt to
+skip snapping); a key that lands differently should change its row here.
+Note that Shift 1 arrives as `e.key === "!"` (and Shift 2 as "@", Shift 0 as
+")") on a US layout: match `e.code` (`Digit1`) with `shiftKey`.
+
+Tests: `zoomMenu.test.ts` (the closed button, the rows and their order, the
+caps, greying, the tick, each row's callback, the menu keys, the stylesheet)
+and `skyShortcuts.test.ts` (the six groups and the keys SkyView answers to,
+`withPlatform`, the filter by words and by keys, the card's markup, closed =
+nothing, `sheetKey`, the capture listener and focus wiring, the two columns).
