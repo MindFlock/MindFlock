@@ -1050,8 +1050,8 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     await page3.click("#voice-gear");
     await sleep(200);
     const diag3 = await page3.evaluate(() => document.getElementById("voice-diag").textContent);
-    check("diagnostics: the WAV recorder and the server's built-in engine", /Recorder: WAV 16 kHz \(ScriptProcessor\)/.test(diag3) && /Built-in engine: Windows — System\.Speech \(en-US\)/.test(diag3) && /Last transcribe: 90 ms via builtin/.test(diag3), diag3.replace(/\n/g, " | "));
-    check("diagnostics: the clip went through the browser's resampler; the silence stop is 1100 ms", /Resampler: OfflineAudioContext \(the browser's\)$/m.test(diag3) && /Silence stop: 1100 ms after speech/.test(diag3), diag3.replace(/\n/g, " | "));
+    check("diagnostics: the WAV recorder (the capture worklet: AudioWorklet is there) and the server's built-in engine", /Recorder: WAV 16 kHz \(AudioWorklet, off the main thread\)/.test(diag3) && /Built-in engine: Windows — System\.Speech \(en-US\)/.test(diag3) && /Last transcribe: 90 ms via builtin/.test(diag3), diag3.replace(/\n/g, " | "));
+    check("diagnostics: the clip was 16 kHz as it was recorded (the worklet downsampled it); the silence stop is 1100 ms", /Resampler: the capture worklet \(16 kHz as it records\)$/m.test(diag3) && /Silence stop: 1100 ms after speech/.test(diag3), diag3.replace(/\n/g, " | "));
     check("diagnostics: the warm microphone and the last start-up trace", /^Microphone: warm \(kept 90 s after the last phrase\)$/m.test(diag3) && /^Last start: mic \d+ ms, speech \d+ ms after the start$/m.test(diag3), diag3.replace(/\n/g, " | "));
     await page3.click("#voice-done");
     // ---- the warm microphone: kept after the phrase, reused by the next
@@ -3835,6 +3835,117 @@ const spokeBare = async (page, name, text) => (await said(page, text)) && !(awai
     check("help: a failed lookup is said, never silent, nothing sent", (await said(pageH, "Couldn't look that up.")) && posts("/send").length === sendsH);
     state.helpStatus = 0;
     await pageH.close();
+
+    // ---- cycle 4b: the capture runs off the main thread. The mic → the
+    // capture worklet (voice-capture-worklet.js: 16 kHz blocks over its
+    // port), ScriptProcessor only without it. A busy page (a busy loop on
+    // the main thread, the tone still sounding) delays the worklet's blocks
+    // and loses none: the audio the server gets is the audio spoken.
+    state.voiceCfg = {
+      stt: "server", tts: "phone", approve_dialogs: true,
+      server_ready: { stt: true, tts: false, stt_backend: "whisper", stt_stream: true, final_ms: 900 },
+      backends: { stt: ["whisper"], tts: [] },
+    };
+    state.voiceGet = { on: false, say: null, has_question: false, source: "none", ts: null };
+    state.sendDelay = 0; state.routeDelay = 0; state.chunkDelay = 120;
+    const capPage = async (init, routes) => {
+      const pg = await ctx.newPage();
+      pg.on("pageerror", (e) => errors.push(String(e)));
+      if (init) await pg.addInitScript(init);
+      await pg.addInitScript(() => {
+        navigator.mediaDevices.getUserMedia = function () {
+          const ac = new AudioContext();
+          const osc = ac.createOscillator(), gain = ac.createGain(), dst = ac.createMediaStreamDestination();
+          gain.gain.value = 0.002;
+          osc.frequency.value = 440;
+          osc.connect(gain); gain.connect(dst); osc.start();
+          window.__tone = (g) => { gain.gain.value = g; };
+          window.__gum = (window.__gum || 0) + 1;
+          return Promise.resolve(dst.stream);
+        };
+        try { localStorage.setItem("cs_voice", JSON.stringify({ confirm: false })); } catch (e) {}
+      });
+      if (routes) await routes(pg);
+      await pg.route("**/api/**", mock);
+      await pg.goto(`http://127.0.0.1:${PORT}/mobile.html?s=api-docs`, { waitUntil: "load" });
+      await waitFor(pg, () => window.mfVoice && window.mfVoice.cfg.loaded && window.mfVoice.cfg.server_ready, 5000, "capture page loaded");
+      return pg;
+    };
+    // One streamed phrase: ~1.4 s of tone (a busy loop of blockMs on the
+    // page's main thread in the middle of it), then quiet until the silence
+    // stop. → what the server got (the phrase's chunks, in seconds of
+    // 16 kHz audio) against what was spoken, and the capture's own count
+    // (capStat: frames posted by the worklet) against the AudioContext's clock.
+    const capPhrase = async (pg, label, blockMs) => {
+      await pg.evaluate(() => { document.getElementById("compose").value = ""; });
+      const opens0 = state.streamOpens.length;
+      await pg.click("#voice-btn");
+      await waitFor(pg, () => window.mfVoice.state === "listening" && window.mfVoice.stt.name === "server" && window.__tone, 4000, label + ": listening");
+      for (let t = Date.now(); state.streamOpens.length === opens0 && Date.now() - t < 3000; ) await sleep(20);
+      const sid = "s" + state.streamOpens.length;
+      state.streamScript[sid] = [{ committed: "check the", partial: "" }, { committed: "logs", partial: "" }];
+      await sleep(500);
+      const probe = () => pg.evaluate(() => ({ at: Date.now(), ct: window.mfVoice.audioCtx.currentTime, f: (window.mfVoice.rec.capStat || {}).frames || 0 }));
+      await pg.evaluate(() => window.__tone(0.4));
+      const t0 = await probe();
+      await sleep(300);
+      if (blockMs) await pg.evaluate((ms) => { const e = Date.now() + ms; while (Date.now() < e) { /* the page is busy */ } }, blockMs);
+      await sleep(blockMs ? 500 : 1100);
+      const t1 = await probe();
+      await pg.evaluate(() => window.__tone(0.002));
+      for (let t = Date.now(); state.streamEnds.indexOf(sid) < 0 && Date.now() - t < 6000; ) await sleep(20);
+      await sleep(200);
+      const ch = state.streamChunks.filter((c) => c.id === sid);
+      const out = {
+        sid, ended: state.streamEnds.indexOf(sid) >= 0, chunks: ch.length, rates: [...new Set(ch.map((c) => c.rate))],
+        sent: ch.reduce((s, c) => s + Math.max(0, c.len - 44) / 2 / (c.rate || 16000), 0),
+        spoken: (t1.at - t0.at) / 1000, capS: (t1.f - t0.f) / 16000, clockS: t1.ct - t0.ct,
+        cap: await pg.evaluate(() => window.mfVoice.rec.cap), box: await pg.evaluate(() => document.getElementById("compose").value),
+      };
+      // What the server got beyond the tone: the lead-in (~0.3 s) + the quiet up to the silence stop (~1.1 s).
+      out.extra = +(out.sent - out.spoken).toFixed(3);
+      console.log("  " + label + ": " + JSON.stringify(out));
+      return out;
+    };
+    const diagOf = async (pg) => { await pg.click("#voice-gear"); await sleep(200); const d = await pg.evaluate(() => document.getElementById("voice-diag").textContent); await pg.keyboard.press("Escape").catch(() => {}); return d; };
+    // The worklet path, a quiet page, then a page busy for 1.2 s mid-phrase.
+    const pageQ = await capPage();
+    const qQuiet = await capPhrase(pageQ, "worklet, quiet page", 0);
+    check("capture: AudioWorklet is there → the worklet records (16 kHz chunks, the words typed)", qQuiet.cap === "worklet" && qQuiet.ended && JSON.stringify(qQuiet.rates) === "[16000]" && qQuiet.box === "check the logs", JSON.stringify(qQuiet));
+    check("capture: …its blocks keep pace with the audio clock (" + qQuiet.capS.toFixed(2) + " s posted in " + qQuiet.clockS.toFixed(2) + " s)", Math.abs(qQuiet.capS - qQuiet.clockS) < 0.15, JSON.stringify(qQuiet));
+    await waitFor(pageQ, () => window.mfVoice.state === "listening", 4000, "worklet: listening on");
+    await pageQ.click("#voice-btn");   // off: the next phrase starts from a tap
+    await sleep(300);
+    const qBusy = await capPhrase(pageQ, "worklet, page busy 1.2 s", 1200);
+    check("capture: a main thread busy for 1.2 s mid-phrase loses no worklet block (" + qBusy.capS.toFixed(2) + " s posted in " + qBusy.clockS.toFixed(2) + " s of audio clock)", Math.abs(qBusy.capS - qBusy.clockS) < 0.15, JSON.stringify(qBusy));
+    check("capture: …and the server got all of it: " + qBusy.sent.toFixed(2) + " s for " + qBusy.spoken.toFixed(2) + " s spoken (the quiet page's phrase: +" + qQuiet.extra + " s, this one +" + qBusy.extra + " s)", qBusy.ended && Math.abs(qBusy.extra - qQuiet.extra) < 0.3 && qBusy.box === "check the logs", JSON.stringify({ qQuiet, qBusy }));
+    const diagCapQ = await diagOf(pageQ);
+    check("capture: Diagnostics names the worklet", /Recorder: WAV 16 kHz \(AudioWorklet, off the main thread\)/.test(diagCapQ), diagCapQ.replace(/\n/g, " | "));
+    await pageQ.close();
+    // No AudioWorklet (iOS Safari before 14.5): ScriptProcessor, as before.
+    const pageF = await capPage(() => { delete window.AudioWorkletNode; });
+    const fQuiet = await capPhrase(pageF, "fallback, quiet page", 0);
+    check("capture: no AudioWorklet → ScriptProcessor records (16 kHz chunks, the words typed)", fQuiet.cap === "script" && fQuiet.ended && JSON.stringify(fQuiet.rates) === "[16000]" && fQuiet.box === "check the logs", JSON.stringify(fQuiet));
+    await waitFor(pageF, () => window.mfVoice.state === "listening", 4000, "fallback: listening on");
+    await pageF.click("#voice-btn");
+    await sleep(300);
+    const fBusy = await capPhrase(pageF, "fallback, page busy 1.2 s", 1200);
+    console.log("  fallback (ScriptProcessor) under a 1.2 s busy page: the server got " + fBusy.sent.toFixed(2) + " s for " + fBusy.spoken.toFixed(2) + " s spoken (+" + fBusy.extra + " s; the quiet page +" + fQuiet.extra + " s)");
+    check("capture: …the fallback still ends the phrase and types its words under a busy page", fBusy.ended && fBusy.cap === "script" && fBusy.box === "check the logs", JSON.stringify(fBusy));
+    const diagCapF = await diagOf(pageF);
+    check("capture: Diagnostics says ScriptProcessor; the browser's resampler made the 16 kHz clip", /Recorder: WAV 16 kHz \(ScriptProcessor\)/.test(diagCapF) && /Resampler: OfflineAudioContext \(the browser's\)$/m.test(diagCapF), diagCapF.replace(/\n/g, " | "));
+    await pageF.close();
+    // The module does not load (addModule rejects: a 404, a blocked fetch, a
+    // syntax error in it): ScriptProcessor, and Diagnostics says why. (A
+    // Playwright route does not see a worklet's module fetch: the rejection is stubbed.)
+    const page404 = await capPage(() => {
+      AudioWorklet.prototype.addModule = function () { return Promise.reject(new DOMException("Unable to load a worklet's module.", "AbortError")); };
+    });
+    const nQuiet = await capPhrase(page404, "module fails", 0);
+    check("capture: the worklet's module fails to load → ScriptProcessor records, the words typed", nQuiet.cap === "script" && nQuiet.ended && nQuiet.box === "check the logs", JSON.stringify(nQuiet));
+    const diagCapN = await diagOf(page404);
+    check("capture: …Diagnostics says the worklet did not load", /Recorder: WAV 16 kHz \(ScriptProcessor\)[^|\n]* — the worklet: /.test(diagCapN), diagCapN.replace(/\n/g, " | "));
+    await page404.close();
   } catch (e) {
     console.log("HARNESS ERROR", e && e.stack || e);
     results.push({ name: "harness", ok: false, detail: String(e) });

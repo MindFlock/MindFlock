@@ -2084,3 +2084,339 @@ await tts.speak("One. Two.");
 out.clients = reqs.map(function (r) { return r.client; });
 """)
     assert out["clients"] and all(c == "m-test-page" for c in out["clients"])
+
+
+# --------------------------------------------------------------------------- #
+# Cycle 4b: the capture runs off the main thread (voice-capture-worklet.js)
+# --------------------------------------------------------------------------- #
+def _worklet() -> str:
+    return (STATIC / "voice-capture-worklet.js").read_text()
+
+
+_WORKLET_HARNESS = """
+// The worklet's scope, faked: sampleRate / currentTime globals, a port that
+// records what is posted, registerProcessor keeping the class.
+function load(rate) {
+  var posted = [], P = null;
+  var Base = class { constructor() { this.port = { postMessage: function (m) { posted.push(m); }, onmessage: null }; } };
+  new Function("sampleRate", "currentTime", "AudioWorkletProcessor", "registerProcessor", SRC)(
+    rate, 0, Base, function (name, cls) { P = cls; P.named = name; });
+  return { P: P, posted: posted };
+}
+function run(rate, gen, n, opts) {
+  var L = load(rate);
+  var p = new L.P({ processorOptions: Object.assign({ rate: 16000, block: 680 }, opts || {}) });
+  var all = new Float32Array(n);
+  for (var i = 0; i < n; i++) all[i] = gen(i / rate);
+  for (var at = 0; at < n; at += 128) p.process([[all.subarray(at, Math.min(n, at + 128))]]);
+  var out = [];
+  L.posted.forEach(function (m) { out.push.apply(out, Array.from(m.x)); });
+  return { p: p, L: L, all: all, out: Float32Array.from(out), sizes: L.posted.map(function (m) { return m.x.length; }) };
+}
+function rms(a, from, to) { var s = 0; for (var i = from; i < to; i++) s += a[i] * a[i]; return Math.sqrt(s / (to - from)); }
+function maxDiff(a, b, upto) { var d = 0; for (var i = 0; i < upto; i++) d = Math.max(d, Math.abs(a[i] - b[i])); return d; }
+var tone = function (t) { return 0.5 * Math.sin(2 * Math.PI * 440 * t); };
+"""
+
+
+@needs_node
+def test_the_capture_worklet_downsamples_like_the_page_does_and_posts_fixed_blocks():
+    """The worklet's downsampler is voiceResample made continuous: fed one
+    second in 128-frame render quanta, its output is the page's own
+    windowed-sinc decimator over the whole second (bit for bit, but for the
+    last few samples still waiting on input), at 48 and 44.1 kHz; what 16 kHz
+    cannot hold (a 10 kHz tone) is filtered out, not folded back; 16 kHz
+    passes as is; a slower context is interpolated up. Every post is one
+    fixed block, transferred."""
+    js = _js()
+    script = (
+        "var SRC = "
+        + json.dumps(_worklet())
+        + ";\n"
+        + _consts(js, "VOICE_SINC_HALF", "VOICE_SINC_CUTOFF", "VOICE_SINC_STEPS")
+        + _whole(js, "voiceResample")
+        + _WORKLET_HARNESS
+        + """
+var out = {};
+var r48 = run(48000, tone, 48000), r44 = run(44100, tone, 44100);
+out.name = r48.L.P.named;
+out.n48 = r48.out.length; out.n44 = r44.out.length;
+out.sizes = Array.from(new Set(r48.sizes.concat(r44.sizes)));
+out.diff48 = maxDiff(r48.out, voiceResample(r48.all, 48000, 16000), r48.out.length - 20);
+out.diff44 = maxDiff(r44.out, voiceResample(r44.all, 44100, 16000), r44.out.length - 20);
+out.rms440 = rms(r48.out, 100, r48.out.length - 100);
+var hi = run(48000, function (t) { return 0.5 * Math.sin(2 * Math.PI * 10000 * t); }, 48000);
+out.rms10k = rms(hi.out, 100, hi.out.length - 100);
+var r16 = run(16000, tone, 16000);
+out.same16 = maxDiff(r16.out, r16.all, r16.out.length);
+var r8 = run(8000, tone, 8000);
+out.n8 = r8.out.length; out.rms8 = rms(r8.out, 100, r8.out.length - 100);
+// The history stays small: the input no output reaches is dropped.
+out.hist = r48.p.len;
+out.t = r48.L.posted[0].t > 0;
+console.log(JSON.stringify(out));
+"""
+    )
+    out = _run(script)
+    assert out["name"] == "voice-capture"
+    # 23 whole blocks of 680 in a second (the 24th is still filling).
+    assert out["sizes"] == [680]
+    assert out["n48"] == out["n44"] == out["n8"] == 23 * 680
+    assert out["diff48"] < 1e-6 and out["diff44"] < 1e-6
+    assert abs(out["rms440"] - 0.5 / 2**0.5) < 0.005
+    assert out["rms10k"] < 0.001
+    assert out["same16"] == 0
+    assert abs(out["rms8"] - 0.5 / 2**0.5) < 0.01
+    assert out["hist"] < 200
+    assert out["t"] is True
+
+
+@needs_node
+def test_the_capture_worklet_pauses_and_stops_on_the_pages_word():
+    script = "var SRC = " + json.dumps(_worklet()) + ";\n" + _WORKLET_HARNESS + """
+var out = {}, q = new Float32Array(128).fill(0.1);
+var r = run(48000, function () { return 0.1; }, 48000);
+var n0 = r.L.posted.length;
+r.p.port.onmessage({ data: { run: false } });
+for (var i = 0; i < 400; i++) r.p.process([[q]]);
+out.idlePosted = r.L.posted.length - n0;
+out.idleAlive = r.p.process([[q]]);
+r.p.port.onmessage({ data: { run: true } });
+for (var i = 0; i < 400; i++) r.p.process([[q]]);
+out.resumed = r.L.posted.length - n0;
+out.noInput = r.p.process([]);
+r.p.port.onmessage({ data: { stop: true } });
+out.stopped = r.p.process([[q]]);
+// Starting paused (processorOptions.run false) posts nothing.
+var s = run(48000, function () { return 0.1; }, 48000, { run: false });
+out.startPaused = s.L.posted.length;
+console.log(JSON.stringify(out));
+"""
+    out = _run(script)
+    assert out["idlePosted"] == 0 and out["idleAlive"] is True
+    # 400 quanta at 48 kHz → 400 × 128 / 3 ≈ 17067 samples → 25 blocks.
+    assert out["resumed"] == 25
+    assert out["noInput"] is True
+    assert out["stopped"] is False
+    assert out["startPaused"] == 0
+
+
+def test_the_capture_blocks_match_the_scriptprocessor_blocks_they_replace():
+    js = _js()
+    assert "var VOICE_CAP_BLOCK = 680;" in js
+    assert "var VOICE_CAP_REC_PER = 2;" in js
+    assert 'var VOICE_CAP_URL = "/voice-capture-worklet.js";' in js
+    # The recorder's 85 ms (ScriptProcessor(4096) at 48 kHz: 85.3) and the
+    # standby's 42.5 ms (VOICE_WAKE_BLOCK 2048 at 48 kHz: 42.7) — the per-block
+    # rules (floor creep, the barge-in run, the wake detector) stay as tuned.
+    assert abs(680 * 2 / 16000 - 4096 / 48000) < 0.001
+    assert abs(680 / 16000 - 2048 / 48000) < 0.001
+    assert "var VOICE_WAKE_BLOCK = 2048;" in js
+    # The static mount serves it as is (no route): the page loads it by URL.
+    assert (STATIC / "voice-capture-worklet.js").is_file()
+    assert 'registerProcessor("voice-capture", VoiceCapture);' in _worklet()
+
+
+def test_every_consumer_taps_the_shared_capture_and_falls_back_to_scriptprocessor():
+    js = _js()
+    stt = _stt(js)
+    rs = _inner(stt, "recStart")
+    # The worklet's graph first; ScriptProcessor, exactly as before, without it.
+    assert rs.index("var c = capFor(s, ctx);") < rs.index(
+        "ctx.createScriptProcessor(4096, 1, 1)"
+    )
+    assert "g.proc = capTap(c, VOICE_CAP_REC_PER);" in rs
+    assert "g.rate = c.rate;" in rs and "g.rate = ctx.sampleRate;" in rs
+    assert 'voice.rec.cap = "worklet";' in rs and 'voice.rec.cap = "script";' in rs
+    assert "g.proc.onaudioprocess = function (ev) { recBlock(g, mine, h, ev); };" in rs
+    sb = _inner(stt, "standby")
+    assert "var c = capFor(s, ctx);" in sb and "w.proc = capTap(c, 1);" in sb
+    assert "ctx.createScriptProcessor(VOICE_WAKE_BLOCK, 1, 1)" in sb
+    # Both wait (bounded) for the module, which loads alongside getUserMedia.
+    for body in (_inner(stt, "start"), sb):
+        assert "capLoad();" in body
+        assert "getStream().then(capAfter).then(function (s) {" in body
+    assert "return capLoad().then(function () { return s; });" in _inner(
+        stt, "capAfter"
+    )
+    # The capture goes with its stream (release, a lost mic, a re-ask).
+    assert "if (cap && cap.stream === s) capClose();" in _inner(stt, "micStop")
+    # The carried phrase keeps the same tap: no graph made between phrases.
+    cf = _inner(stt, "carryFrom")
+    assert "c.proc = g.proc;" in cf
+    assert "c.proc.onaudioprocess = function (ev) { recBlock(c, null, {}, ev); };" in cf
+
+
+def test_the_capture_graph_and_its_module():
+    js = _js()
+    stt = _stt(js)
+    load = _inner(stt, "capLoad")
+    assert "!voiceWorkletOn() || !ctx.audioWorklet || !window.AudioWorkletNode" in load
+    assert "ctx.audioWorklet.addModule(VOICE_CAP_URL)" in load
+    assert "VOICE_CAP_LOAD_MS" in load
+    assert 'localStorage.getItem("cs_voice_worklet")' in _whole(js, "voiceWorkletOn")
+    cf = _inner(stt, "capFor")
+    assert 'new AudioWorkletNode(ctx, "voice-capture", {' in cf
+    assert "processorOptions: { rate: VOICE_WAV_RATE, block: VOICE_CAP_BLOCK }" in cf
+    assert 'channelCountMode: "explicit"' in cf
+    # Muted, but reaching the destination (a node that reaches nothing may not run).
+    assert "c.mute.gain.value = 0;" in cf
+    assert (
+        cf.index("c.source.connect(c.node);")
+        < cf.index("c.node.connect(c.mute);")
+        < cf.index("c.mute.connect(ctx.destination);")
+    )
+    # A node that cannot be made or a processor that throws: the fallback from then on.
+    assert cf.count("capMod.ok = false;") == 2
+    assert "c.node.onprocessorerror = function () {" in cf
+    assert "c.node.port.onmessage = function (ev) { capBlock(c, ev.data); };" in cf
+    diag = _fn_top(js, "voiceDiag")
+    assert '"WAV 16 kHz (AudioWorklet, off the main thread)"' in diag
+    assert '"WAV 16 kHz (ScriptProcessor)"' in diag
+    assert '" — the worklet: " + voice.rec.capWhy' in diag
+    assert '"the capture worklet (16 kHz as it records)"' in _whole(
+        js, "voiceResampleClip"
+    )
+
+
+def _fn_top(js: str, name: str) -> str:
+    start = js.index("  function " + name + "(")
+    return js[start : js.index("\n  }\n", start)]
+
+
+def _cap_script(body: str) -> str:
+    js = _js()
+    stt = _stt(js)
+    return (
+        _consts(
+            js,
+            "VOICE_WAV_RATE",
+            "VOICE_CAP_URL",
+            "VOICE_CAP_BLOCK",
+            "VOICE_CAP_IDLE_MS",
+        )
+        + "var VOICE_CAP_LOAD_MS = 60;\n"
+        + "var voice = { rec: {} }, store = {};\n"
+        + "var localStorage = { getItem: function (k) { return k in store ? store[k] : null; } };\n"
+        + _whole(js, "voiceWorkletOn")
+        + "var window = { AudioWorkletNode: function () {} }, theCtx = null;\n"
+        + "function voiceAudioCtx() { return theCtx; }\n"
+        + "function errDetail(e) { return e && e.message || ''; }\n"
+        + "var cap = null, capMod = null;\n"
+        + "".join(
+            _inner(stt, n)
+            for n in (
+                "capLoad",
+                "capAfter",
+                "capBlock",
+                "capTap",
+                "capRun",
+                "capDown",
+                "capClose",
+            )
+        )
+        + "(async function () { var out = {};\n"
+        + body
+        + "\nconsole.log(JSON.stringify(out)); })();\n"
+    )
+
+
+@needs_node
+def test_the_capture_module_loads_once_and_every_failure_falls_back():
+    out = _run(_cap_script("""
+function ctxWith(add) { var c = { adds: 0, audioWorklet: { addModule: function (u) { c.adds++; c.url = u; return add(); } } }; return c; }
+theCtx = ctxWith(function () { return Promise.resolve(); });
+out.ok = await capLoad();
+out.again = await capLoad();
+out.adds = theCtx.adds; out.url = theCtx.url;
+theCtx = ctxWith(function () { return Promise.reject(new Error("404")); });
+out.rejected = await capLoad();
+out.rejectedAgain = await capLoad();
+out.why = voice.rec.capWhy; out.rejectedAdds = theCtx.adds;
+theCtx = ctxWith(function () { return new Promise(function () {}); });
+var t0 = Date.now();
+out.slow = await capLoad();
+out.slowWaited = Date.now() - t0;
+theCtx = ctxWith(function () { return Promise.resolve(); });
+store.cs_voice_worklet = "0";
+out.optedOut = await capLoad();
+out.optedOutAdds = theCtx.adds;
+delete store.cs_voice_worklet;
+window.AudioWorkletNode = undefined;
+out.noNode = await capLoad();
+window.AudioWorkletNode = function () {};
+theCtx = { audioWorklet: undefined };
+out.noWorklet = await capLoad();
+theCtx = null;
+out.noCtx = await capLoad();
+out.after = await capAfter("the-stream");
+"""))
+    assert out["ok"] is True and out["again"] is True
+    assert out["adds"] == 1 and out["url"] == "/voice-capture-worklet.js"
+    assert out["rejected"] is False and out["rejectedAgain"] is False
+    assert out["why"] == "404" and out["rejectedAdds"] == 1
+    # A module still loading past VOICE_CAP_LOAD_MS: this start goes without it.
+    assert out["slow"] is False and 40 <= out["slowWaited"] < 1000
+    assert out["optedOut"] is False and out["optedOutAdds"] == 0
+    assert (
+        out["noNode"] is False and out["noWorklet"] is False and out["noCtx"] is False
+    )
+    assert out["after"] == "the-stream"
+
+
+@needs_node
+def test_a_tap_looks_like_a_scriptprocessor_at_its_own_block_and_lets_go():
+    out = _run(_cap_script("""
+var msgs = [];
+var c = { rate: 16000, taps: [], blocks: 0, frames: 0, running: true, idle: null, dead: false,
+          node: { port: { postMessage: function (m) { msgs.push(m); } } } };
+cap = c;
+function blk(v) { return new Float32Array(680).fill(v); }
+var rec = capTap(c, 2), wake = capTap(c, 1), got = { rec: [], wake: [] };
+rec.onaudioprocess = function (ev) { got.rec.push([ev.inputBuffer.length, ev.inputBuffer.getChannelData(0)[0], ev.inputBuffer.getChannelData(0)[1000], ev.inputBuffer.sampleRate, ev.playbackTime]); };
+wake.onaudioprocess = function (ev) { got.wake.push(ev.inputBuffer.length); };
+capBlock(c, { x: blk(0.1), t: 1 });
+capBlock(c, { x: blk(0.2), t: 2 });
+capBlock(c, { x: blk(0.3), t: 3 });
+out.rec = got.rec.slice(); out.wake = got.wake.slice();
+out.stat = voice.rec.capStat;
+// A tap whose handler was cleared (recStop) feeds nothing.
+rec.onaudioprocess = null;
+capBlock(c, { x: blk(0.4), t: 4 });
+out.recAfterNull = got.rec.length;
+// Letting go: the last tap gone → after VOICE_CAP_IDLE_MS the worklet stops posting...
+rec.disconnect(); rec.disconnect();
+wake.disconnect();
+out.taps = c.taps.length;
+out.msgsAtOnce = msgs.slice();
+await new Promise(function (r) { setTimeout(r, VOICE_CAP_IDLE_MS + 100); });
+out.msgsIdle = msgs.slice();
+// ...and a new tap starts it again; one back within the idle never stopped it.
+var again = capTap(c, 1);
+out.msgsBack = msgs.slice();
+again.disconnect();
+capTap(c, 1);
+await new Promise(function (r) { setTimeout(r, VOICE_CAP_IDLE_MS + 100); });
+out.msgsQuick = msgs.slice();
+// Blocks of a capture that is no longer THE capture are dropped.
+cap = null;
+var n = c.blocks;
+capBlock(c, { x: blk(0.5), t: 5 });
+out.staleCounted = c.blocks - n;
+// capClose: stop posted, the nodes let go.
+cap = c; c.node.disconnect = function () { out.nodeOff = true; };
+capClose();
+out.closed = cap === null && c.node === null && msgs[msgs.length - 1].stop === true;
+"""))
+    # The recorder's tap joins two worklet blocks into one 85 ms block.
+    assert out["rec"] == [[1360, 0.10000000149011612, 0.20000000298023224, 16000, 2]]
+    assert out["wake"] == [680, 680, 680]
+    assert out["stat"] == {"blocks": 3, "frames": 2040, "rate": 16000}
+    assert out["recAfterNull"] == 1
+    assert out["taps"] == 0
+    assert out["msgsAtOnce"] == []
+    assert out["msgsIdle"] == [{"run": False}]
+    assert out["msgsBack"] == [{"run": False}, {"run": True}]
+    assert out["msgsQuick"] == [{"run": False}, {"run": True}]
+    assert out["staleCounted"] == 0
+    assert out["closed"] is True and out["nodeOff"] is True

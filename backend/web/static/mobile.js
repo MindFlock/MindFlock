@@ -3320,9 +3320,11 @@
   // System.Speech, macOS' Speech framework) need plain PCM, and faster-whisper
   // and OpenAI take WAV too. The browser's own recorder cannot make it
   // (webm/opus on Chrome, mp4/AAC on Safari), so the samples come straight off the shared
-  // AudioContext (voiceAudioCtx, made inside the tap): the mic stream →
-  // ScriptProcessorNode(4096, 1, 1) → a muted GainNode → the destination
-  // (Chrome does not run a ScriptProcessor that reaches nothing). Each block's
+  // AudioContext (voiceAudioCtx, made inside the tap): the mic stream → the
+  // capture worklet (voice-capture-worklet.js: 16 kHz blocks, downsampled on
+  // the audio thread, so a busy page never loses them; capFor) — or, without
+  // AudioWorklet, ScriptProcessorNode(4096, 1, 1) — → a muted GainNode → the
+  // destination (Chrome does not run a node that reaches nothing). Each block's
   // channel 0 is copied into a list; finish() joins them, resamples to
   // VOICE_WAV_RATE (voiceResampleClip: the browser's own anti-aliased
   // resampler, else voiceResample's low-pass decimator) and encodes
@@ -3376,6 +3378,16 @@
     return "m-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
   })();
   var VOICE_WAV_RATE = 16000;            // the rate of the uploaded clip
+  // The capture (ServerSTT capFor): the warm stream → an AudioWorklet that
+  // downsamples to VOICE_WAV_RATE on the audio thread and posts fixed blocks
+  // (voice-capture-worklet.js) — a busy main thread delays them, never drops
+  // them. ScriptProcessor is the fallback (no AudioWorklet: iOS Safari before
+  // 14.5; the module failed to load; localStorage cs_voice_worklet = "0").
+  var VOICE_CAP_URL = "/voice-capture-worklet.js";
+  var VOICE_CAP_BLOCK = 680;             // the worklet's block: 42.5 ms at 16 kHz (the standby's; VOICE_WAKE_BLOCK at 48 kHz)...
+  var VOICE_CAP_REC_PER = 2;             // ...the recorder takes two at a time: 85 ms, its ScriptProcessor(4096)'s at 48 kHz
+  var VOICE_CAP_LOAD_MS = 1500;          // a start waits this long at most for the worklet's module; then ScriptProcessor
+  var VOICE_CAP_IDLE_MS = 1000;          // nothing tapping the capture this long: the worklet stops posting
   var VOICE_SILENCE_MS = 1100;           // quiet after speech that ends the clip (a streamed phrase: the server's verdict, voiceTurnHoldMs)
   var VOICE_TURN_MIN_MS = 300;           // the server's end-of-turn hold (a chunk's turn.hold_ms) is never shorter than this...
   var VOICE_TURN_MAX_MS = 3000;          // ...nor longer
@@ -3402,6 +3414,11 @@
   // localStorage cs_voice_barge = "1".
   function voiceBargeOn() {
     try { var f = localStorage.getItem("cs_voice_barge"); return !!f && f !== "0" && f !== "false"; } catch (e) { return false; }
+  }
+  // The capture worklet is on unless localStorage cs_voice_worklet says "0"
+  // / "false" (the way back to ScriptProcessor on a phone where it misbehaves).
+  function voiceWorkletOn() {
+    try { var f = localStorage.getItem("cs_voice_worklet"); return !(f === "0" || f === "false"); } catch (e) { return true; }
   }
   // Pure: the quiet that ends a streamed phrase, from the latest chunk's
   // end-of-turn verdict (turn {hold_ms, reason}: 350 ms after a radio word
@@ -3441,7 +3458,7 @@
   function voiceResampleClip(samples, from) {
     var to = VOICE_WAV_RATE;
     if (!from || from === to) {
-      voice.rec.resampler = "none (the microphone runs at 16 kHz)";
+      voice.rec.resampler = voice.rec.cap === "worklet" ? "the capture worklet (16 kHz as it records)" : "none (the microphone runs at 16 kHz)";
       return Promise.resolve(samples);
     }
     var OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
@@ -3760,7 +3777,134 @@
       try { return s.getAudioTracks().some(function (t) { return !!t.muted; }); } catch (e) { return false; }
     }
     function micStop(s) {
+      if (cap && cap.stream === s) capClose();
       if (s) { try { s.getTracks().forEach(function (t) { t.stop(); }); } catch (e) {} }
+    }
+    // --- the capture: ONE graph per microphone stream, shared ---
+    // The warm stream → MediaStreamSource → AudioWorkletNode "voice-capture"
+    // (voice-capture-worklet.js: 16 kHz blocks of VOICE_CAP_BLOCK over its
+    // port) → a muted gain → the destination. Built once per stream (capFor)
+    // and kept while the stream is: the recorder, its carried phrase, the
+    // meter and the wake word's standby each TAP it (capTap) — no graph made
+    // or torn down between a standby and a listen, a phrase and the next.
+    // A tap looks like the ScriptProcessor it stands in for (onaudioprocess
+    // gets {inputBuffer}, disconnect() lets go), at the tap's own block
+    // (per × VOICE_CAP_BLOCK), so everything downstream of a block is the
+    // same on either path. No worklet (capLoad false) → each consumer builds
+    // its own ScriptProcessor graph, as it always did.
+    var cap = null;           // the shared capture graph (capFor); null = none (or the fallback)
+    var capMod = null;        // the worklet module of one AudioContext: {ctx, ok: null|true|false, p, why}
+    function capLoad() {
+      var ctx = voiceAudioCtx();
+      if (!ctx || !voiceWorkletOn() || !ctx.audioWorklet || !window.AudioWorkletNode) return Promise.resolve(false);
+      if (!capMod || capMod.ctx !== ctx) {
+        var m = capMod = { ctx: ctx, ok: null, p: null, why: "" };
+        try {
+          m.p = Promise.resolve(ctx.audioWorklet.addModule(VOICE_CAP_URL)).then(
+            function () { m.ok = true; return true; },
+            function (e) { m.ok = false; m.why = errDetail(e) || "addModule failed"; voice.rec.capWhy = m.why; return false; });
+        } catch (e) { m.ok = false; m.why = errDetail(e); voice.rec.capWhy = m.why; m.p = Promise.resolve(false); }
+      }
+      if (capMod.ok !== null) return Promise.resolve(capMod.ok);
+      // Still loading: this start waits a bounded time (the next one gets it).
+      var p = capMod.p;
+      return new Promise(function (resolve) {
+        var timer = setTimeout(function () { resolve(false); }, VOICE_CAP_LOAD_MS);
+        p.then(function (ok) { clearTimeout(timer); resolve(ok); });
+      });
+    }
+    // The microphone, once the capture module is in (or given up on).
+    function capAfter(s) { return capLoad().then(function () { return s; }); }
+    function capFor(s, ctx) {
+      if (cap && cap.stream === s && cap.ctx === ctx && !cap.dead) return cap;
+      capClose();
+      if (!capMod || capMod.ctx !== ctx || capMod.ok !== true) return null;
+      var c = { ctx: ctx, stream: s, rate: VOICE_WAV_RATE, source: null, node: null, mute: null,
+                taps: [], blocks: 0, frames: 0, running: true, idle: null, dead: false };
+      try {
+        c.source = ctx.createMediaStreamSource(s);
+        c.node = new AudioWorkletNode(ctx, "voice-capture", {
+          numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1],
+          channelCount: 1, channelCountMode: "explicit", channelInterpretation: "speakers",
+          processorOptions: { rate: VOICE_WAV_RATE, block: VOICE_CAP_BLOCK },
+        });
+        c.mute = ctx.createGain();
+        c.mute.gain.value = 0;
+        c.source.connect(c.node);
+        c.node.connect(c.mute);
+        c.mute.connect(ctx.destination);
+      } catch (e) {
+        capDown(c);
+        capMod.ok = false;
+        capMod.why = voice.rec.capWhy = errDetail(e) || "AudioWorkletNode failed";
+        return null;
+      }
+      c.node.port.onmessage = function (ev) { capBlock(c, ev.data); };
+      // A processor that threw outputs silence and posts nothing: this
+      // stream's next start builds the fallback.
+      c.node.onprocessorerror = function () {
+        c.dead = true;
+        capMod.ok = false;
+        capMod.why = voice.rec.capWhy = "the capture worklet failed";
+      };
+      cap = c;
+      voice.rec.capStat = { blocks: 0, frames: 0, rate: c.rate };
+      return c;
+    }
+    function capBlock(c, d) {
+      var x = d && d.x;
+      if (cap !== c || !x || !x.length) return;
+      c.blocks++;
+      c.frames += x.length;
+      voice.rec.capStat = { blocks: c.blocks, frames: c.frames, rate: c.rate };
+      c.taps.slice().forEach(function (t) { t.feed(x, d.t); });
+    }
+    function capTap(c, per) {
+      var t = { per: per, parts: [], onaudioprocess: null };
+      t.feed = function (x, at) {
+        t.parts.push(x);
+        if (t.parts.length < t.per) return;
+        var b = x;
+        if (t.parts.length > 1) {
+          var n = 0, o = 0;
+          t.parts.forEach(function (p) { n += p.length; });
+          b = new Float32Array(n);
+          t.parts.forEach(function (p) { b.set(p, o); o += p.length; });
+        }
+        t.parts = [];
+        if (t.onaudioprocess) {
+          t.onaudioprocess({ playbackTime: at, inputBuffer: { length: b.length, numberOfChannels: 1, sampleRate: c.rate, getChannelData: function () { return b; } } });
+        }
+      };
+      t.disconnect = function () {
+        var i = c.taps.indexOf(t);
+        if (i < 0) return;
+        c.taps.splice(i, 1);
+        if (c.taps.length) return;
+        clearTimeout(c.idle);
+        c.idle = setTimeout(function () { capRun(c, false); }, VOICE_CAP_IDLE_MS);
+      };
+      c.taps.push(t);
+      clearTimeout(c.idle);
+      capRun(c, true);
+      return t;
+    }
+    function capRun(c, on) {
+      if (c.running === on || cap !== c) return;
+      c.running = on;
+      try { c.node.port.postMessage({ run: on }); } catch (e) {}
+    }
+    function capDown(c) {
+      clearTimeout(c.idle);
+      c.taps = [];
+      if (c.node) { try { c.node.port.onmessage = null; c.node.port.postMessage({ stop: true }); } catch (e) {} }
+      [c.source, c.node, c.mute].forEach(function (n) { if (n) { try { n.disconnect(); } catch (e) {} } });
+      c.source = c.node = c.mute = null;
+    }
+    function capClose() {
+      var c = cap;
+      cap = null;
+      if (c) capDown(c);
     }
     // One ask at a time: the standby and a tap's recording asking together
     // share it (two streams would leave one open, the mic indicator on).
@@ -3915,21 +4059,33 @@
         : "Listening… " + Math.round((now - g.t0) / 1000) + " s";
       if (t !== g.said) { g.said = t; h.onStatus(t); }
     }
+    // The phrase's audio: a tap on the stream's shared capture (16 kHz
+    // blocks from the worklet; g.source / g.mute stay null — the graph is
+    // the capture's), else its own ScriptProcessor graph at the context's rate.
     function recStart(g, s, mine, h) {
       var ctx = voiceAudioCtx();
-      if (!ctx || !ctx.createScriptProcessor || !ctx.createMediaStreamSource) return false;
+      if (!ctx || !ctx.createMediaStreamSource) return false;
       g.ctx = ctx;
-      g.rate = ctx.sampleRate;
       g.t0 = Date.now();
-      try {
-        g.source = ctx.createMediaStreamSource(s);
-        g.proc = ctx.createScriptProcessor(4096, 1, 1);
-        g.mute = ctx.createGain();
-        g.mute.gain.value = 0;
-        g.source.connect(g.proc);
-        g.proc.connect(g.mute);
-        g.mute.connect(ctx.destination);
-      } catch (e) { recStop(g); return false; }
+      var c = capFor(s, ctx);
+      if (c) {
+        g.rate = c.rate;
+        g.proc = capTap(c, VOICE_CAP_REC_PER);
+        voice.rec.cap = "worklet";
+      } else {
+        if (!ctx.createScriptProcessor) return false;
+        g.rate = ctx.sampleRate;
+        try {
+          g.source = ctx.createMediaStreamSource(s);
+          g.proc = ctx.createScriptProcessor(4096, 1, 1);
+          g.mute = ctx.createGain();
+          g.mute.gain.value = 0;
+          g.source.connect(g.proc);
+          g.proc.connect(g.mute);
+          g.mute.connect(ctx.destination);
+        } catch (e) { recStop(g); return false; }
+        voice.rec.cap = "script";
+      }
       g.mic = s;
       g.proc.onaudioprocess = function (ev) { recBlock(g, mine, h, ev); };
       return true;
@@ -4179,7 +4335,8 @@
         if (g.debug) { try { console.log("[voice] wake: the word's end → listening " + h.wakeMs + " ms"); } catch (e) {} }
       }
       if (streams()) streamOpen(g, mine);
-      getStream().then(function (s) {
+      capLoad();   // the capture module loads alongside getUserMedia (capAfter waits for it, bounded)
+      getStream().then(capAfter).then(function (s) {
         if (token !== mine) { if (!token) keep(); return; }   // stopped while the mic came up: its grace starts now
         voiceTraceMark(g, "mic");
         if (!recStart(g, s, mine, h)) {
@@ -4607,7 +4764,8 @@
       micStop(s);
     }
     // --- the wake word's standby (voiceWakeSync drives it) ---
-    // The warm stream → its own ScriptProcessor(VOICE_WAKE_BLOCK) → the
+    // The warm stream → a tap on the shared capture (capTap: 42.5 ms blocks;
+    // without the worklet, its own ScriptProcessor(VOICE_WAKE_BLOCK)) → the
     // lone-utterance detector (voiceWakeStep), on the phone: nothing leaves
     // it until a lone utterance ends, and then only that clip (+ its
     // lead-in), resampled and encoded as a recording's clip is, handed to
@@ -4620,18 +4778,26 @@
       if (standing) { standing.h = h; return true; }
       if (token || !available()) return false;
       var w = standing = { h: h, d: voiceWakeNew(), blocks: [], rate: 0, source: null, proc: null, mute: null };
-      getStream().then(function (s) {
+      capLoad();
+      getStream().then(capAfter).then(function (s) {
         if (standing !== w) { if (!token && !standing) keep(); return; }
         var ctx = voiceAudioCtx();
         try {
-          w.rate = ctx.sampleRate;
-          w.source = ctx.createMediaStreamSource(s);
-          w.proc = ctx.createScriptProcessor(VOICE_WAKE_BLOCK, 1, 1);
-          w.mute = ctx.createGain();
-          w.mute.gain.value = 0;
-          w.source.connect(w.proc);
-          w.proc.connect(w.mute);
-          w.mute.connect(ctx.destination);
+          // A tap on the shared capture (its 42.5 ms blocks at 16 kHz), else its own ScriptProcessor.
+          var c = capFor(s, ctx);
+          if (c) {
+            w.rate = c.rate;
+            w.proc = capTap(c, 1);
+          } else {
+            w.rate = ctx.sampleRate;
+            w.source = ctx.createMediaStreamSource(s);
+            w.proc = ctx.createScriptProcessor(VOICE_WAKE_BLOCK, 1, 1);
+            w.mute = ctx.createGain();
+            w.mute.gain.value = 0;
+            w.source.connect(w.proc);
+            w.proc.connect(w.mute);
+            w.mute.connect(ctx.destination);
+          }
         } catch (e) {
           standbyDrop(w);
           standing = null;
@@ -9186,7 +9352,10 @@
       "Backends: recognition " + voiceDiagBackend("stt") + ", voice " + voiceDiagBackend("tts"),
       sys && sys.platform ? "Built-in engine: " + sys.platform + (sys.detail ? " — " + sys.detail : "") : "",
       "Recorder: " + (voiceAdapters.serverStt.available()
-        ? "WAV 16 kHz (ScriptProcessor)" + (voice.rec.mime ? "" : ", no clip yet")
+        ? (voice.rec.cap === "worklet" || (!voice.rec.cap && window.AudioWorkletNode && voiceWorkletOn())
+            ? "WAV 16 kHz (AudioWorklet, off the main thread)" : "WAV 16 kHz (ScriptProcessor)") +
+          (voice.rec.mime ? "" : ", no clip yet") +
+          (voice.rec.cap === "script" && voice.rec.capWhy ? " — the worklet: " + voice.rec.capWhy : "")
         : "not supported (no Web Audio or microphone)"),
       "Resampler: " + (voice.rec.resampler ||
         ((window.OfflineAudioContext || window.webkitOfflineAudioContext)
