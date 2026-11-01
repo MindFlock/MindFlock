@@ -50,12 +50,14 @@ import time
 from functools import lru_cache
 from typing import Iterable, List, Optional, Tuple
 
+from backend.web.core import voice_actions as _voice_actions
 from backend.web.core import voice_words as _voice_words
 from backend.web.core.session_create import title_from_prompt
 from backend.web.core.spoken import strip_markdown
 
 __all__ = [
     "ANSWER_AFTER_S",
+    "ANSWERED_MARGIN_S",
     "LOCAL_KINDS",
     "answer",
     "answer_in_time",
@@ -1913,6 +1915,12 @@ def select_route(text, session: str, dialog, rows=()) -> Optional[dict]:
 #: was not said to that dialog. A "yes" said in a dictation 300 ms before
 #: a permission prompt came up answered it (R8-bis, cycle 2).
 ANSWER_AFTER_S = 0.3
+#: A session's dialog that comes up after one of its dialogs was answered
+#: was there to see no sooner than that answer (``voice_actions.answered_at``)
+#: plus this: the network delay the client-measured phrase age carries
+#: (``phrase_timing`` reads it at arrival, so it looks that much LATER than
+#: it began) against a stamp on this server's own clock.
+ANSWERED_MARGIN_S = 0.2
 #: A ``spoke_ms_ago`` / ``dialog_seen`` age past this is not believed.
 _TIMING_MAX_S = 600.0
 #: At most this many sessions' ``dialog_seen`` entries are read.
@@ -1963,15 +1971,28 @@ def phrase_timing(payload, now: Optional[float] = None) -> Tuple[Optional[float]
     return spoke, seen
 
 
-def dialog_visible_at(title: str, dialog_id, seen: dict, row) -> Optional[float]:
+def dialog_visible_at(
+    title: str, dialog_id, seen: dict, row, answered: Optional[float] = None
+) -> Optional[float]:
     """When ``title``'s dialog ``dialog_id`` was there to see, as late as the
     evidence allows — or None when the CLIENT never reported having it (an
-    answer then waits for one that did). The evidence: the client's own
-    first sighting of that same id (``seen``), and this server's stamp of
-    the session going to ``clarify`` (the row's ``asking.ts`` — core.asking
-    ``dialog_asking``: ``agent_state.state_since``). The LATEST of them
-    counts: each is no earlier than the dialog appeared, so the latest is
-    the safest bound."""
+    answer then waits for one that did). The evidence:
+
+    - the client's own first sighting of that same id (``seen``) — a
+      sighting of another id does not count, so a dialog that changed since
+      the client saw it is unanswerable until the client has the new one;
+    - this server's stamp of the session going to ``clarify`` (the row's
+      ``asking.ts`` — core.asking ``dialog_asking``:
+      ``agent_state.state_since``);
+    - the session's last answer, any path (``answered``, epoch; default
+      ``voice_actions.answered_at(title)``) plus :data:`ANSWERED_MARGIN_S`:
+      the dialog up now came after it. A client that kept its sighting of
+      an identical prompt (same id) asked again after that answer — or that
+      missed the clarify gap between them — can no longer make a phrase
+      begun before the answer look in time.
+
+    The LATEST of them counts: each is no earlier than the dialog appeared,
+    so the latest is the safest bound."""
     mine = (seen or {}).get(title)
     if not mine or mine[0] != str(dialog_id):
         return None
@@ -1979,6 +2000,14 @@ def dialog_visible_at(title: str, dialog_id, seen: dict, row) -> Optional[float]
     asked = row.get("asking") if isinstance(row, dict) else None
     if isinstance(asked, dict) and asked.get("kind") == "dialog":
         at = max(at, _num(asked.get("ts")))
+    if answered is None:
+        try:
+            answered = _voice_actions.answered_at(title)
+        except Exception:  # noqa: BLE001 — the other evidence still holds
+            answered = 0.0
+    answered = _num(answered)
+    if answered > 0:
+        at = max(at, answered + ANSWERED_MARGIN_S)
     return at
 
 

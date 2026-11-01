@@ -19,7 +19,7 @@ from hypothesis import strategies as st
 
 from backend.session import tmux
 from backend.web import server
-from backend.web.core import aliases, voice
+from backend.web.core import aliases, voice, voice_actions
 from backend.web.core import voice_router as vr
 from backend.web.routes import voice as voice_routes
 from backend.web.server import app
@@ -963,7 +963,9 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "suggest_repos", lambda **kw: list(REPOS))
     monkeypatch.setattr(server, "_recent_repo_paths", lambda: [])
     monkeypatch.setattr(sys.modules[__name__], "_ENV", state)
-    return state
+    voice_actions._reset_for_tests()
+    yield state
+    voice_actions._reset_for_tests()
 
 
 #: The route fixture's state, for :func:`route`'s default timing.
@@ -2389,3 +2391,161 @@ def test_route_help_carries_the_question(env):
         "kind": "help",
         "text": "what is a team run",
     }
+
+
+# --- the server answer guard: the last answer per session (cycle 4) ----------
+@pytest.fixture
+def answered(monkeypatch):
+    """``voice_actions``' answer stamps on a fake clock: ``answered(title,
+    at)`` records an answer to one of ``title``'s dialogs at epoch ``at``,
+    the way ``/answer``'s ``forget(title, dialog_id)`` does."""
+    voice_actions._reset_for_tests()
+    clock = [0.0]
+    monkeypatch.setattr(voice_actions, "_clock", lambda: clock[0])
+
+    def stamp(title, at, dialog_id="d1"):
+        clock[0] = at
+        voice_actions.forget(title, dialog_id)
+
+    yield stamp
+    voice_actions._reset_for_tests()
+
+
+#: Everything relative to NOW. ``seen``: the client's sighting (id, seconds
+#: before NOW); ``asked``: the row's asking.ts (seconds before NOW) or None;
+#: ``answers``: (title, seconds before NOW) stamped before the phrase is
+#: judged; ``spoke``: when the phrase began (seconds before NOW); ``id``:
+#: the dialog on screen now.
+_A = vr.ANSWER_AFTER_S + vr.ANSWERED_MARGIN_S
+# fmt: off
+_GUARD_CASES = [
+    # The same command asked again with the SAME id after a voice answer;
+    # the client kept its first sighting (60 s old) and the server missed
+    # the clarify gap (asking.ts still the first ask): a "yes" begun before
+    # that answer used to press the re-ask.
+    ("re-ask same id: begun before the answer", ("d1", 60), 60, [("docs", 5)], 6, "d1", "early"),
+    ("re-ask same id: begun during the answer", ("d1", 60), 60, [("docs", 5)], 5.0, "d1", "early"),
+    ("re-ask same id: begun after answer + margins", ("d1", 60), 60, [("docs", 5)], 5 - _A, "d1", "answer"),
+    # ...and once the server did see the re-ask (asking.ts), that wins.
+    ("re-ask same id: asking.ts of the re-ask wins", ("d1", 60), 1, [("docs", 5)], 2, "d1", "early"),
+    # A hand answer (strip, pop-up, push button: all /answer) then a voice
+    # "yes" begun before it: no answer to whatever is up next.
+    ("hand answer, then a yes begun before it", ("d1", 30), None, [("docs", 2)], 2.5, "d1", "early"),
+    ("hand answer, then a yes begun just inside the margin", ("d1", 30), None, [("docs", 2)], 2 - _A + 0.001, "d1", "early"),
+    ("hand answer, then a yes begun after it", ("d1", 30), None, [("docs", 2)], 2 - _A, "d1", "answer"),
+    # Two dialogs back to back: d1 answered 2 s ago, d2 up and seen 1.8 s
+    # ago. A phrase begun after d2 was there answers it; the tail of the
+    # phrase that answered d1 does not.
+    ("back to back: a fresh yes answers d2", ("d2", 1.8), None, [("docs", 2)], 1.0, "d2", "answer"),
+    ("back to back: begun before d1's answer", ("d2", 1.8), None, [("docs", 2)], 2.1, "d2", "early"),
+    # ...even when the client claims an impossibly old sighting of d2.
+    ("back to back: an old d2 sighting can't predate d1's answer", ("d2", 50), None, [("docs", 2)], 2.1, "d2", "early"),
+    # The client still has d1 but d2 is up: its sighting does not count.
+    ("back to back: a sighting of the previous id is none", ("d1", 50), None, [("docs", 2)], 0.5, "d2", "early"),
+    # MF1: a dialog waiting 30 minutes (sighting clamped to 600 s) stays
+    # answerable, with or without an older answer in that session.
+    ("MF1: 30 min wait, no answer since start", ("d1", 1800), None, [], 0.8, "d1", "answer"),
+    ("MF1: 30 min wait, last answer 31 min ago", ("d1", 1800), None, [("docs", 1860)], 0.8, "d1", "answer"),
+    ("MF1: 30 min wait, last answer 2 min ago", ("d1", 1800), None, [("docs", 120)], 0.8, "d1", "answer"),
+    # Another session's answer moves nothing here.
+    ("another session's answer", ("d1", 30), None, [("billing", 0.1)], 1.0, "d1", "answer"),
+    ("a later answer elsewhere, an earlier one here", ("d1", 30), None, [("docs", 9), ("billing", 0.1)], 1.0, "d1", "answer"),
+]
+# fmt: on
+
+
+@pytest.mark.parametrize(
+    "seen,asked,answers,spoke,did,want",
+    [c[1:] for c in _GUARD_CASES],
+    ids=[c[0] for c in _GUARD_CASES],
+)
+def test_answer_guard_last_answer_per_session(
+    answered, seen, asked, answers, spoke, did, want
+):
+    for title, ago in answers:
+        answered(title, NOW - ago)
+    payload = {
+        "spoke_ms_ago": int(round(spoke * 1000)),
+        "dialog_seen": {"docs": {"id": seen[0], "ms_ago": int(round(seen[1] * 1000))}},
+    }
+    rows = []
+    if asked is not None:
+        rows = [{"title": "docs", "asking": {"kind": "dialog", "ts": NOW - asked}}]
+    t_spoke, t_seen = vr.phrase_timing(payload, now=NOW)
+    got = vr.answer_in_time(_ans(dialog_id=did), t_spoke, t_seen, rows)
+    assert got["kind"] == want, got
+    if want == "early":
+        assert "keys" not in got and got["dialog_id"] == did
+
+
+def test_dialog_visible_at_counts_the_last_answer_plus_its_margin(answered):
+    seen = {"docs": ("d1", 100.0)}
+    assert vr.dialog_visible_at("docs", "d1", seen, None) == 100.0
+    answered("docs", 150.0)
+    want = 150.0 + vr.ANSWERED_MARGIN_S
+    assert vr.dialog_visible_at("docs", "d1", seen, None) == want
+    # An explicit stamp is read instead of the store; 0 / junk = none.
+    assert vr.dialog_visible_at("docs", "d1", seen, None, answered=0.0) == 100.0
+    assert vr.dialog_visible_at("docs", "d1", seen, None, answered="x") == 100.0
+    assert vr.dialog_visible_at("docs", "d1", seen, None, answered=90.0) == 100.0
+    # Never a sighting it doesn't have: the id still has to match.
+    assert vr.dialog_visible_at("docs", "d2", seen, None) is None
+
+    # A store that fails reads as no stamp; the other evidence still holds.
+    def boom(title):
+        raise RuntimeError("store down")
+
+    voice_actions_answered_at = voice_actions.answered_at
+    try:
+        voice_actions.answered_at = boom
+        assert vr.dialog_visible_at("docs", "d1", seen, None) == 100.0
+    finally:
+        voice_actions.answered_at = voice_actions_answered_at
+
+
+@settings(max_examples=300, deadline=None)
+@given(_AGES, _AGES, st.floats(min_value=-700.0, max_value=700.0, allow_nan=False))
+def test_answer_guard_property_the_last_answer_only_raises(spoke_ago, seen_ago, off):
+    """A last-answer stamp can only make the dialog look later (stricter):
+    never earlier than without it, and never earlier than the stamp plus its
+    margin."""
+    payload = {
+        "spoke_ms_ago": spoke_ago,
+        "dialog_seen": {"docs": {"id": "d1", "ms_ago": seen_ago}},
+    }
+    spoke, seen = vr.phrase_timing(payload, now=NOW)
+    plain = vr.dialog_visible_at("docs", "d1", seen, None, answered=0.0)
+    guarded = vr.dialog_visible_at("docs", "d1", seen, None, answered=NOW + off)
+    assert guarded >= plain
+    assert guarded >= NOW + off + vr.ANSWERED_MARGIN_S
+    if spoke < NOW + off:  # begun before that answer: never in time
+        assert spoke < guarded + vr.ANSWER_AFTER_S
+
+
+def test_route_a_yes_begun_before_a_hand_answer_presses_nothing(env, monkeypatch):
+    """Over HTTP: the person clicked Yes on d1 a second ago (``/answer``
+    stamps the session); the agent asks the same command again — same id —
+    and the client still reports its first sighting from a minute ago. A
+    "yes" that began 1.5 s ago, before the click, is early; one begun now
+    answers."""
+    import time as _time
+
+    env.dialogs["docs"] = PERM
+    monkeypatch.setattr(voice_actions, "_clock", lambda: _time.time() - 1.0)
+    voice_actions.forget("docs", "d1")  # what /answer does after the click
+    stale = {
+        "spoke_ms_ago": 1500,
+        "dialog_seen": {"docs": {"id": "d1", "ms_ago": 60_000}},
+    }
+    got = route("yes", "docs", timing=stale)
+    assert got["kind"] == "early" and got["dialog_id"] == "d1"
+    # Begun 0.5 s before the click; allowed from 0.5 s after it: ~1000 ms early.
+    assert "keys" not in got and 900 <= got["early_ms"] <= 1100
+    fresh = {"spoke_ms_ago": 0, "dialog_seen": {"docs": {"id": "d1", "ms_ago": 60_000}}}
+    assert route("yes", "docs", timing=fresh)["keys"] == ["1"]
+    # "tell docs yes" from another session: the same guard.
+    got = route("tell docs yes", "invoice-parser", timing=stale)
+    assert got["kind"] == "early" and got["title"] == "docs"
+    # Session removal drops the stamp (forget without an id).
+    voice_actions.forget("docs")
+    assert voice_actions.answered_at("docs") == 0.0

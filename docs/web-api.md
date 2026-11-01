@@ -1848,11 +1848,28 @@ times are on **this server's clock**: `spoke_ms_ago` and each `dialog_seen`
 against the arrival time — a client whose clock is off does not matter
 (`spoke_at` is never compared with the server's clock; the network's delay
 shifts both ages alike, and the margin covers it against the server's own
-stamp). When the dialog was there is the LATEST of: the client's first
-sighting of **that same id** (`dialog_seen[title]`) and the server's stamp of
-the session going to `clarify` (the row's `asking.ts` — `core.asking`
-`dialog_asking`, `agent_state.state_since`); each is no earlier than the
-dialog appeared. Without `spoke_ms_ago`, or without the client's sighting of
+stamp). When the dialog was there (`voice_router.dialog_visible_at`) is the
+LATEST of:
+
+- the client's first sighting of **that same id** (`dialog_seen[title]`) — a
+  sighting of another id counts for nothing, so when the session's dialog
+  changed since the client saw it, the answer is `early` until the client
+  reports the new one;
+- the server's stamp of the session going to `clarify` (the row's
+  `asking.ts` — `core.asking` `dialog_asking`, `agent_state.state_since`);
+- the session's **last answer**, by any path — a voice answer, a click on the
+  strip or the pop-up, a push button, an orchestrator: every settling
+  `POST /api/instances/{title}/answer` stamps it (`voice_actions.answered_at`;
+  a multi-select tick is not an answer, and removing the session drops it) —
+  plus `ANSWERED_MARGIN_S` (**0.2 s**, the network delay a client-measured age
+  carries against this server's own clock). Whatever is up now came after
+  that answer, so a phrase begun before it can never answer the next dialog —
+  not even an identical prompt asked again with the **same id** by a client
+  that kept its old sighting, nor one whose clarify gap the server missed (a
+  sub-agent's prompt, a fast re-ask). In memory only: a restart forgets it,
+  and the other two bounds still hold.
+
+Each is no earlier than the dialog appeared. Without `spoke_ms_ago`, or without the client's sighting of
 that dialog (an older page, a dialog the page never had), nothing is pressed
 either — the server never presses on a guess. Instead of the answer:
 
@@ -1870,7 +1887,9 @@ never reach the router) — see web-ui.md, *Answering by voice*.
 
 What is read (`voice_router.phrase_timing`): `spoke_ms_ago` and each
 `ms_ago` are milliseconds in `0..600000` — a negative, non-numeric or
-boolean age, or one over 600 s, is dropped as if absent; at most 64
+boolean age is dropped as if absent, and so is a `spoke_ms_ago` over 600 s;
+a `dialog_seen` age over 600 s counts as 600 s (a later sighting is only ever
+stricter, so a dialog left waiting 30 minutes stays answerable); at most 64
 `dialog_seen` entries are read, and one without an `id` is skipped. Only
 `answer` replies that carry a `dialog_id` and `keys` are checked; every other
 kind (`prompt`, `switch`, `stop`, `question`, …) passes through unchanged.
