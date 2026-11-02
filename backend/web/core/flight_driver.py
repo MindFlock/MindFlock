@@ -162,7 +162,11 @@ def _view_key(f: Optional[dict]) -> tuple:
     if not f:
         return ()
     step = _flights.step_view(f)
-    return (f["state"], f["cursor"], step.get("state"), f["reason"], f["session"])
+    st = step.get("state")
+    if step.get("parallel"):
+        # At a parallel group: every member's state (round 20).
+        st = tuple(m["state"] for m in step["parallel"])
+    return (f["state"], f["cursor"], st, f["reason"], f["session"])
 
 
 def _announce(before: Optional[dict], after: Optional[dict]) -> None:
@@ -175,9 +179,10 @@ def _announce(before: Optional[dict], after: Optional[dict]) -> None:
     keys: List[str] = []
     step = _flights.step_view(after)
     if after["state"] == "waiting_you" and step:
-        rounds = after["step_states"][step["id"]]["rounds"]
-        key = "%s:%d:you" % (step["id"], rounds)
-        cur = _flights._current(after)
+        cur = _flights.waiting_step(after)
+        sid = cur["id"] if cur is not None else step["id"]
+        rounds = after["step_states"][sid]["rounds"]
+        key = "%s:%d:you" % (sid, rounds)
         quiet = (
             cur is not None
             and cur["kind"] == "you"
@@ -1597,18 +1602,19 @@ class _Stale(Exception):
 
 
 def _apply_if_unchanged(
-    fid: str, seen: dict, action: dict, now: float
+    fid: str, seen: dict, action: dict, now: float, at: Optional[int] = None
 ) -> Optional[dict]:
-    """Apply an effect-free ``action`` unless a route moved the flight since it
-    was read. None when stale; the stored record when applying it changed
-    nothing but the clock (no write — see :func:`_same`)."""
+    """Apply an effect-free ``action`` (to member ``at`` of a parallel group,
+    default the cursor) unless a route moved the flight since it was read.
+    None when stale; the stored record when applying it changed nothing but
+    the clock (no write — see :func:`_same`)."""
     out: dict = {}
 
     def fn(f: dict) -> None:
         if _view_key(f)[:3] != _view_key(seen)[:3]:
             raise _Stale()
         before = copy.deepcopy(f)
-        _flights.apply(f, action, now)
+        _flights.apply_at(f, f["cursor"] if at is None else at, action, now)
         if _same(before, f):
             out["unchanged"] = before
             raise _Stale()
@@ -1633,7 +1639,12 @@ def _needs_effect(action: dict) -> bool:
 
 
 def _mark_intent(
-    fid: str, seen: dict, action: dict, now: float, token: str
+    fid: str,
+    seen: dict,
+    action: dict,
+    now: float,
+    token: str,
+    at: Optional[int] = None,
 ) -> Optional[dict]:
     """Record, under the lock and only if nobody moved the flight, that this
     step's side effect is about to be carried out (``detail.performing``). A
@@ -1643,11 +1654,12 @@ def _mark_intent(
     def fn(f: dict) -> None:
         if _view_key(f)[:3] != _view_key(seen)[:3]:
             raise _Stale()
-        cur = _flights._current(f)
+        i = f["cursor"] if at is None else at
+        cur = f["steps"][i] if 0 <= i < len(f["steps"]) else None
         if cur is None or f["step_states"][cur["id"]]["detail"].get("performing"):
             raise _Stale()
         if action["action"] == "run" and not action.get("phase"):
-            _flights.apply(f, dict(action, detail={}), now)
+            _flights.apply_at(f, i, dict(action, detail={}), now)
         f["step_states"][cur["id"]]["detail"]["performing"] = {
             "token": token,
             "at": now,
@@ -1675,8 +1687,11 @@ def _record_outcome(
         if not isinstance(mark, dict) or mark.get("token") != token:
             raise _Stale()
         ss["detail"].pop("performing", None)
-        cur = _flights._current(f)
-        if f["state"] in _flights.FINAL or cur is None or cur["id"] != sid:
+        lo, hi = _flights.current_group(f)
+        here = [
+            k for k in range(lo, min(hi, len(f["steps"]))) if f["steps"][k]["id"] == sid
+        ]
+        if f["state"] in _flights.FINAL or not here:
             return
         if f["state"] == "halted":
             return
@@ -1693,7 +1708,7 @@ def _record_outcome(
                 ss["note"] = str(action["note"])
             f["updated"] = now
         else:
-            _flights.apply(f, action, now)
+            _flights.apply_at(f, here[0], action, now)
         if paused and f["state"] in _flights.ACTIVE:
             f["state"] = "paused"
 
@@ -1706,6 +1721,50 @@ def _record_outcome(
 #: At most this many steps finish within one pass (a notify followed by a
 #: wait, say) before the loop moves on to the next flight.
 _CHAIN = 4
+
+
+async def _step_member(
+    fid: str, f: dict, i: int, now: float
+) -> Optional[Tuple[dict, dict]]:
+    """Observe, judge and apply step ``i`` of ``f`` (the cursor, or one member
+    of the parallel group at it) → ``(after, action)``; None when stale or
+    nothing changed."""
+    view = _flights.member_view(f, i)
+    obs = await observe(view, now)
+    action = _flights.next_action(view, obs, now)
+    sess = obs.get("session") or {}
+    if not f["repo_root"] and sess.get("present"):
+        root = await asyncio.to_thread(_repo_root, f["session"])
+        if root:
+            action["repo_root"] = root
+    if sess.get("branch") and sess["branch"] != f["branch"]:
+        action["branch"] = sess["branch"]
+    cur = _flights._current(view)
+    if _needs_effect(action) and cur is not None:
+        token = uuid.uuid4().hex
+        marked = await asyncio.to_thread(_mark_intent, fid, f, action, now, token, i)
+        if marked is None:
+            return None
+        action = await _perform(_flights.member_view(marked, i), action, now)
+        after = await asyncio.to_thread(
+            _record_outcome, fid, cur["id"], token, action, now
+        )
+        if after is None and cur["kind"] in ("ship", "reviews"):
+            # The step was removed while its lane was being armed.
+            await asyncio.to_thread(_disarm_if_removed, fid, cur["id"])
+    else:
+        after = await asyncio.to_thread(_apply_if_unchanged, fid, f, action, now, i)
+    if after is None or _same(f, after):
+        return None
+    if (
+        cur is not None
+        and cur["kind"] == "command"
+        and action["action"] in ("done", "fail", "advance")
+    ):
+        with _JOBS_LOCK:
+            _JOBS.pop((fid, cur["id"]), None)
+    await asyncio.to_thread(_announce, f, after)
+    return after, action
 
 
 async def step_flight(fid: str) -> None:
@@ -1728,52 +1787,37 @@ async def step_flight(fid: str) -> None:
         for _ in range(_CHAIN):
             if f["state"] not in _flights.ACTIVE:
                 return
-            obs = await observe(f, now)
-            action = _flights.next_action(f, obs, now)
-            sess = obs.get("session") or {}
-            if not f["repo_root"] and sess.get("present"):
-                root = await asyncio.to_thread(_repo_root, f["session"])
-                if root:
-                    action["repo_root"] = root
-            if sess.get("branch") and sess["branch"] != f["branch"]:
-                action["branch"] = sess["branch"]
-            cur = _flights._current(f)
-            if _needs_effect(action) and cur is not None:
-                token = uuid.uuid4().hex
-                marked = await asyncio.to_thread(
-                    _mark_intent, fid, f, action, now, token
-                )
-                if marked is None:
+            lo, hi = _flights.current_group(f)
+            if hi - lo < 2:
+                out = await _step_member(fid, f, f["cursor"], now)
+                if out is None:
+                    return  # stale, or nothing changed: no write, nothing to say
+                after, action = out
+                if (
+                    action["action"] not in ("done", "advance", "skip_when")
+                    or after["state"] not in _flights.ACTIVE
+                ):
                     return
-                action = await _perform(marked, action, now)
-                after = await asyncio.to_thread(
-                    _record_outcome, fid, cur["id"], token, action, now
-                )
-                if after is None and cur["kind"] in ("ship", "reviews"):
-                    # The step was removed while its lane was being armed.
-                    await asyncio.to_thread(_disarm_if_removed, fid, cur["id"])
-                before = f
-            else:
-                after = await asyncio.to_thread(
-                    _apply_if_unchanged, fid, f, action, now
-                )
-                before = f
-            if after is None or _same(before, after):
-                return  # stale, or nothing changed: no write, nothing to say
-            if (
-                cur is not None
-                and cur["kind"] == "command"
-                and action["action"] in ("done", "fail", "advance")
-            ):
-                with _JOBS_LOCK:
-                    _JOBS.pop((fid, cur["id"]), None)
-            await asyncio.to_thread(_announce, before, after)
-            if (
-                action["action"] not in ("done", "advance", "skip_when")
-                or after["state"] not in _flights.ACTIVE
-            ):
+                f = after
+                continue
+            # A parallel group (round 20): every open member, each its own
+            # verdict against the flight as the one before left it.
+            cursor = f["cursor"]
+            members = [f["steps"][k]["id"] for k in _flights.open_members(f)]
+            if not members:
+                members = [f["steps"][cursor]["id"]]  # all through: advance
+            for sid in members:
+                if f["state"] not in _flights.ACTIVE:
+                    return
+                k = next((n for n, st in enumerate(f["steps"]) if st["id"] == sid), -1)
+                glo, ghi = _flights.current_group(f)
+                if not glo <= k < ghi:
+                    continue  # the group moved on (or the member went)
+                out = await _step_member(fid, f, k, now)
+                if out is not None:
+                    f = out[0]
+            if f["state"] not in _flights.ACTIVE or f["cursor"] == cursor:
                 return
-            f = after
     except Exception as err:  # noqa: BLE001 — one flight never stops a pass
         _log("flight %s pass failed: %v", fid, err)
 
@@ -2217,7 +2261,8 @@ def change_steps(
     under the lock, so a driver pass that moved it meanwhile wins and the
     route gets its 409. ``add_steps`` takes a list in ``raw`` (and ``group``:
     ``{name}``); ``add_plan`` a plan id; ``remove_group`` a step of the group;
-    ``ungroup`` the group id in ``step``. Raises
+    ``ungroup`` the group id in ``step``; ``add_parallel`` the step in
+    ``raw`` placed in ``step``'s parallel group (round 20). Raises
     :class:`flights.FlightError` / :class:`flights.PlanError`."""
     plan = None
     if op == "add_plan":
@@ -2228,6 +2273,8 @@ def change_steps(
     def _do(f: dict) -> None:
         if op == "add":
             _flights.op_add_step(f, raw, at)
+        elif op == "add_parallel":
+            _flights.op_add_parallel(f, raw, step, at)
         elif op == "add_steps":
             _flights.op_add_steps(f, raw, at, group)
         elif op == "add_plan":

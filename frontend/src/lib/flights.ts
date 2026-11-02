@@ -54,6 +54,52 @@ export interface FlightStep {
   /** Round 18: where the Sky draws this stop, chain-local plane px (relative
    * to the chain's origin); omitted = auto-placed. Layout only. */
   pos?: { x: number; y: number };
+  /** Round 20: consecutive steps sharing `parallel.id` (`p_<hex>`) are ONE
+   * parallel group — they fly side by side and the flight goes on once every
+   * one is through (docs/flights-r20-parallel.md). Omitted on a step of its
+   * own; only `parallel_safe` kinds carry it. */
+  parallel?: StepParallel;
+}
+
+export interface StepParallel {
+  id: string;
+}
+
+/** Round 20: the parallel group of step `i` as `[lo, hi)` (hi exclusive);
+ * `[i, i + 1]` for a step of its own. Groups are RUNS of consecutive steps
+ * sharing `parallel.id` — the server's rule (a run of one is no group). */
+export function parallelSpan(steps: readonly Pick<FlightStep, "parallel">[], i: number): [number, number] {
+  const pid = steps[i]?.parallel?.id || "";
+  if (!pid) return [i, i + 1];
+  let lo = i;
+  let hi = i + 1;
+  while (lo > 0 && steps[lo - 1]?.parallel?.id === pid) lo--;
+  while (hi < steps.length && steps[hi]?.parallel?.id === pid) hi++;
+  return [lo, hi];
+}
+
+/** Kinds the server never lets run side by side (backend `NOT_PARALLEL`,
+ * plus Judge, which types to the agent) — the fallback when the kinds list
+ * (its `parallel_safe`) is not at hand. */
+export const PARALLEL_UNSAFE: ReadonlySet<string> = new Set(["agent", "ship", "reviews", "verify", "split", "join", "land", "sync", "loop", "judge"]);
+
+/** May a step of `kind` sit in a parallel group? The kinds list's
+ * `parallel_safe` when it says, else `PARALLEL_UNSAFE`. */
+export function isParallelSafe(kind: string, kinds?: readonly Pick<StepKindDef, "kind" | "parallel_safe">[] | null): boolean {
+  const def = kinds?.find((k) => k.kind === kind);
+  if (def && typeof def.parallel_safe === "boolean") return def.parallel_safe;
+  return !PARALLEL_UNSAFE.has(kind);
+}
+
+/** Every parallel group of `steps` (two members or more), in order. */
+export function parallelGroups(steps: readonly Pick<FlightStep, "parallel">[]): { id: string; lo: number; hi: number }[] {
+  const out: { id: string; lo: number; hi: number }[] = [];
+  for (let i = 0; i < steps.length; ) {
+    const [lo, hi] = parallelSpan(steps, i);
+    if (hi - lo > 1) out.push({ id: steps[i].parallel!.id, lo, hi });
+    i = hi;
+  }
+  return out;
 }
 
 export interface StepGroup {
@@ -177,6 +223,10 @@ export interface StepKindDef {
   family?: string;
   /** What a new step of this kind does on failure when the plan says nothing. */
   default_on_fail?: string;
+  /** Round 20: may a step of this kind sit in a parallel group (it neither
+   * types to the agent nor uses the worktree's lanes)? Older servers omit it
+   * — treat that as false. */
+  parallel_safe?: boolean;
 }
 
 /** The session row's `flight` field (`/api/instances`): all the pane strip

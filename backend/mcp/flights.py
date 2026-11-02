@@ -153,6 +153,13 @@ _STEP = {
         "halt": {"type": "boolean", "description": "stop before this stop"},
         "id": _STEP_ID,
         "group": {"type": "object"},
+        "parallel": {
+            "type": "object",
+            "description": (
+                "{id: 'p_<hex>'}: consecutive stops sharing it run side by side "
+                "(only kinds with parallel_safe; not agent/ship/split…)"
+            ),
+        },
     },
     "required": ["kind"],
 }

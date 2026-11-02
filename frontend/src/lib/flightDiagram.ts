@@ -34,6 +34,13 @@
  * a group box as one place (`drawnIndexes` / `drawnCanvas` map its places to
  * the flight's indexes and back).
  *
+ * Round 20: consecutive stops sharing `step.parallel.id` are ONE parallel
+ * group — they fly side by side. Each member stays a stop box (marked
+ * `parallel: {id, index, size}`); the line forks into them (`fan` edges from
+ * the place before) and joins after them (`join` edges into the place after),
+ * the same edge kinds a Split's branches use (`lineEdges`). `layoutDiagram`
+ * stacks a group's members in one column.
+ *
  * `layoutDiagram` places the boxes and draws the connectors as SVG paths from
  * fixed box sizes, so the markup (and a test of it) needs no DOM measuring. */
 
@@ -46,6 +53,7 @@ import {
   isLive,
   isShown,
   newStep,
+  parallelSpan,
   perchLabel,
   stepActor,
   stepStateOf,
@@ -167,6 +175,16 @@ export interface DiagramNode {
   when?: string;
   /** Round 16: a Loop stop's count (its return arc's pill). */
   loop?: LoopMark;
+  /** Round 20: a member of a parallel group — its id (`step.parallel.id`),
+   * its place in the group (0-based) and the group's size. */
+  parallel?: ParallelMark;
+}
+
+/** Round 20: where a stop sits in its parallel group. */
+export interface ParallelMark {
+  id: string;
+  index: number;
+  size: number;
 }
 
 /** A Loop's count, for its return arc: `runs` completed so far
@@ -431,10 +449,65 @@ export function stopTitle(step: FlightStep, kinds?: readonly StepKindDef[] | nul
 
 const stopId = (s: FlightStep, i: number) => "stop:" + (s.id || "i" + i);
 
+/** Round 20: step `i`'s place in its parallel group, or nothing for a step
+ * of its own. */
+export function parallelMark(steps: readonly FlightStep[], i: number): { parallel?: ParallelMark } {
+  const [lo, hi] = parallelSpan(steps, i);
+  if (hi - lo < 2) return {};
+  return { parallel: { id: steps[i].parallel!.id, index: i - lo, size: hi - lo } };
+}
+
+/** The line cut into its places: a parallel group's consecutive members
+ * (sharing `parallel.id`) are one place, every other node one of its own. */
+export function lineRuns(line: readonly DiagramNode[]): DiagramNode[][] {
+  const out: DiagramNode[][] = [];
+  for (const n of line) {
+    const last = out[out.length - 1];
+    const pid = n.parallel?.id;
+    if (pid && last && last[0].parallel?.id === pid) last.push(n);
+    else out.push([n]);
+  }
+  return out;
+}
+
+const FLOWN_STATES: ReadonlySet<DiagramNodeState> = new Set(["done", "skipped", "failed"]);
+
+/** The line's edges, in line order: one place to the next, a `line` (an
+ * `add` into the trailing +). Round 20: into a parallel group the line FORKS
+ * — a `fan` edge from the place before to each member — and out of it it
+ * JOINS — a `join` edge from each member into the place after (drawn `done`
+ * once that member has flown); the + after a group trails its last member
+ * only. Two groups in a row join every member of the first into every
+ * member of the second. */
+export function lineEdges(line: readonly DiagramNode[]): DiagramEdge[] {
+  const runs = lineRuns(line);
+  const edges: DiagramEdge[] = [];
+  for (let k = 1; k < runs.length; k++) {
+    const a = runs[k - 1];
+    const b = runs[k];
+    if (b.length === 1 && b[0].kind === "add") {
+      edges.push({ from: a[a.length - 1].id, to: b[0].id, kind: "add" });
+      continue;
+    }
+    for (const x of a)
+      for (const y of b) {
+        if (a.length > 1) edges.push(FLOWN_STATES.has(x.state) ? { from: x.id, to: y.id, kind: "join", done: true } : { from: x.id, to: y.id, kind: "join" });
+        else edges.push({ from: x.id, to: y.id, kind: b.length > 1 ? "fan" : "line" });
+      }
+  }
+  return edges;
+}
+
 function chain(nodes: DiagramNode[], edges: DiagramEdge[], line: DiagramNode[]) {
-  for (let i = 1; i < line.length; i++)
-    edges.push({ from: line[i - 1].id, to: line[i].id, kind: line[i].kind === "add" ? "add" : "line" });
+  edges.push(...lineEdges(line));
   nodes.push(...line);
+}
+
+/** Where a live flight takes new stops: past its current place (a parallel
+ * group at the cursor: past its last member); anywhere on a ready one. */
+export function insertFromOf(f: Pick<Flight, "cursor" | "steps"> & { state?: string }): number {
+  if (f.state === "ready" || f.state === "grounded") return 0;
+  return Math.max(f.cursor + 1, parallelSpan(f.steps, f.cursor)[1]);
 }
 
 function addNode(title: string): DiagramNode {
@@ -457,6 +530,7 @@ export function flywayDiagram(steps: readonly FlightStep[], kinds?: readonly Ste
     editable: true,
     ...looksOf(s, kinds),
     ...(s.kind === "loop" ? { loop: loopMark(s) } : {}),
+    ...parallelMark(steps, i),
   }));
   const { line, loops } = liftLoops(stops);
   line.push(addNode("Add a stop"));
@@ -473,12 +547,22 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
   // Stops with no session yet, or built and not yet flying (round 19 ready):
   // nothing has flown, every one can change.
   const grounded = f.state === "grounded" || f.state === "ready";
+  // Round 20: the cursor's parallel group — every member flies at once.
+  const [glo, ghi] = parallelSpan(f.steps, f.cursor);
+  const open = Math.max(f.cursor + 1, ghi);
   return f.steps.map((s, i) => {
     const st = stepStateOf(f, s, i);
-    const atCursor = i === f.cursor && live;
+    const inGroup = ghi - glo > 1 && i >= glo && i < ghi;
+    const atCursor = live && (i === f.cursor || inGroup);
     let state: DiagramNodeState =
       st === "done" ? "done" : st === "skipped" ? "skipped" : st === "failed" ? "failed" : st === "waiting_you" ? "perched" : st === "running" ? "current" : "pending";
-    if (atCursor && f.state === "halted") state = "halted";
+    if (inGroup && state === "done") {
+      // A member through, its group still flying: it stays done.
+    } else if (inGroup && f.state === "halted") {
+      if (st === "failed") state = "halted";
+    } else if (inGroup && f.state === "paused") {
+      if (state === "current" || state === "pending") state = "paused";
+    } else if (atCursor && f.state === "halted") state = "halted";
     else if (atCursor && f.state === "paused") state = "paused";
     const rec = f.step_states?.[s.id];
     // A Loop that sent the flight back keeps its record `running` while the
@@ -499,12 +583,13 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
       perch: stepActor(s, kinds) === "you",
       step: s,
       index: i,
-      editable: grounded || (live && state === "pending" && i > f.cursor),
+      editable: grounded || (live && state === "pending" && i >= open),
       reason: state === "halted" || state === "failed" ? f.reason || rec?.note || "" : "",
       ...looksOf(s, kinds),
       ...(flown ? { receipt: receiptOf(rec?.detail) } : {}),
       ...(loop ? { loop } : {}),
       ...(!flown && untilOf(rec?.detail) ? { until: untilOf(rec?.detail) } : {}),
+      ...parallelMark(f.steps, i),
     };
   });
 }
@@ -553,7 +638,7 @@ export function flightDiagram(f: Flight, kinds?: readonly StepKindDef[] | null):
   const edges: DiagramEdge[] = [];
   chain(nodes, edges, line);
   edges.push(...loops);
-  return { nodes, edges, flightId: f.id, mode: "flight", insertFrom: f.cursor + 1 };
+  return { nodes, edges, flightId: f.id, mode: "flight", insertFrom: f.state === "grounded" || f.state === "ready" ? f.cursor + 1 : insertFromOf(f) };
 }
 
 // --- The fast-track ladder as boxes --------------------------------------------------
@@ -675,6 +760,8 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
     insertFrom = fl.state === "ready" ? 0 : fl.cursor + 1;
     const full = opts.flights?.find((f) => f.id === fl.id);
     if (full) {
+      // Round 20: a parallel group at the cursor takes no stop inside it.
+      if (fl.state !== "ready") insertFrom = Math.max(insertFrom, insertFromOf(full));
       const lifted = liftLoops(flightStops(full, opts.kinds), me.id);
       line.push(...lifted.line);
       loops = lifted.loops;
@@ -729,11 +816,12 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
   const fans = family && mode === "flight" && fl ? branchesOf(title, kids, line, fl, opts.flights?.find((f) => f.id === fl.id)) : null;
   if (fans) {
     nodes.push(...line);
+    const plain = lineEdges(line);
     for (let i = 1; i < line.length; i++) {
       const a = line[i - 1];
       const b = line[i];
       // A stop with branches reaches the next box THROUGH them.
-      if (!fans.out.has(a.id)) edges.push({ from: a.id, to: b.id, kind: b.kind === "add" ? "add" : "line" });
+      if (!fans.out.has(a.id)) edges.push(...plain.filter((e) => e.from === a.id));
       for (const c of fans.out.get(a.id) || []) {
         nodes.push(c);
         edges.push({ from: a.id, to: c.id, kind: "fan" });
@@ -828,9 +916,16 @@ function foldRun(d: Diagram, run: readonly DiagramNode[], into: DiagramNode): Di
     else nodes.push(n);
   }
   const fanned = inner.size > 0;
+  // Round 20: a parallel group's fork / join folded into the box: the
+  // box's own wires are plain line again.
+  const members = new Set(run.filter((n) => n.parallel).map((n) => n.id));
   const edges: DiagramEdge[] = [];
   const seen = new Set<string>();
-  for (const e of d.edges) {
+  for (const e0 of d.edges) {
+    const e: DiagramEdge =
+      (e0.kind === "fan" && members.has(e0.to)) || (e0.kind === "join" && members.has(e0.from))
+        ? { from: e0.from, to: e0.to, kind: d.nodes.find((n) => n.id === e0.to)?.kind === "add" ? "add" : "line" }
+        : e0;
     const from = to(e.from);
     let dest = to(e.to);
     // A fan-in into a folded box from a branch of the run joins past it.
@@ -870,6 +965,12 @@ export function collapseFlown(d: Diagram): Diagram {
     if (n.kind !== "stop" || n.inGroup || (n.state !== "done" && n.state !== "skipped")) break;
     run.push(n);
   }
+  // Round 20: the pill never ends inside a parallel group (one member still
+  // flying): it stops before the group's first member.
+  if (run.length < FLOWN_MIN) return d;
+  const after = main[main.indexOf(run[run.length - 1]) + 1];
+  const pid = run[run.length - 1].parallel?.id;
+  if (pid && after?.parallel?.id === pid) while (run.length && run[run.length - 1].parallel?.id === pid) run.pop();
   if (run.length < FLOWN_MIN) return d;
   const first = run[0];
   const last = run[run.length - 1];
@@ -1514,12 +1615,35 @@ export function layoutDiagram(d: Diagram, opts: LayoutOpts = {}): Layout {
     const top = above.length ? m.box.h + m.vgap : 0;
     let x = 0;
     let fanBottom = 0;
-    for (const n of main) {
+    // Round 20: a parallel group's members share one column (the first on
+    // the line, the rest below it); the line goes on past the widest.
+    let colX = 0;
+    let colY = 0;
+    let colW = 0;
+    for (let k = 0; k < main.length; k++) {
+      const n = main[k];
       const s = size(n);
-      // A smaller box (the +, the flown pill) sits centred on the line's anchor.
-      put(n, x, top + (n.kind === "add" || n.kind === "flown" ? m.anchor - s.h / 2 : 0));
-      x += s.w + m.gap;
-      const col = fans.get(n.id);
+      const pid = n.parallel?.id;
+      if (pid) {
+        const first = main[k - 1]?.parallel?.id !== pid;
+        if (first) {
+          colX = x;
+          colY = top;
+          colW = 0;
+        }
+        put(n, colX, colY);
+        colY += s.h + m.vgap;
+        colW = Math.max(colW, s.w);
+        const lastOne = main[k + 1]?.parallel?.id !== pid;
+        if (!lastOne) continue;
+        x = colX + colW + m.gap;
+        fanBottom = Math.max(fanBottom, colY - m.vgap);
+      } else {
+        // A smaller box (the +, the flown pill) sits centred on the line's anchor.
+        put(n, x, top + (n.kind === "add" || n.kind === "flown" ? m.anchor - s.h / 2 : 0));
+        x += s.w + m.gap;
+      }
+      const col = pid ? main.filter((g) => g.parallel?.id === pid).flatMap((g) => fans.get(g.id) || []) : fans.get(n.id);
       if (!col?.length) continue;
       const sizes = col.map(size);
       const colH = sizes.reduce((h, c) => h + c.h, 0) + m.bgap * (col.length - 1);
@@ -1548,8 +1672,10 @@ export function layoutDiagram(d: Diagram, opts: LayoutOpts = {}): Layout {
     }
     for (const n of main) {
       const s = size(n);
-      put(n, n.kind === "add" || n.kind === "flown" ? (m.box.w - s.w) / 2 : 0, y);
-      y += s.h + m.vgap;
+      // Round 20: a parallel group's members indented under the place
+      // before, as a Split's branches are (its fork runs down their side).
+      put(n, n.parallel ? m.indent : n.kind === "add" || n.kind === "flown" ? (m.box.w - s.w) / 2 : 0, y);
+      y += s.h + (n.parallel && n.parallel.index < n.parallel.size - 1 ? m.bgap : m.vgap);
       const col = fans.get(n.id);
       if (!col?.length) continue;
       for (const c of col) {

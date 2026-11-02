@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import copy
 import datetime as _dt
+import hashlib
 import json
 import math
 import os
@@ -245,10 +246,13 @@ class PlanError(ValueError):
     """A plan (or step) that cannot be stored: ``field`` names the culprit
     (``steps[2].config.lane``) so the editor can point at it."""
 
-    def __init__(self, message: str, field: str = "") -> None:
+    def __init__(self, message: str, field: str = "", code: str = "bad_step") -> None:
         super().__init__(message)
         self.message = message
         self.field = field
+        # The machine word a route answers with (``bad_step``; a refused
+        # parallel grouping is ``not_parallel_safe``).
+        self.code = code
 
 
 class FlightError(Exception):
@@ -507,9 +511,190 @@ def kinds_dto() -> dict:
                 "risk": list(spec.get("risk") or []),
                 "family": spec.get("family") or _FAMILY.get(kind, "outside"),
                 "default_on_fail": spec.get("default_on_fail") or "halt",
+                "parallel_safe": parallel_safe(kind),
             }
         )
     return {"kinds": out, "on_fail": list(ON_FAIL)}
+
+
+# --------------------------------------------------------------------------- #
+# Parallel stops (docs/flights.md "Round 20 … B. Parallel stops")
+# --------------------------------------------------------------------------- #
+#: Kinds that never run side by side: they use the session's agent (agent,
+#: reviews, verify's agent half, a Loop's prompt mode) or its worktree lanes
+#: (ship, sync, land), or they ARE the flight's own fan-out (split, join).
+#: A plug-in that types to the agent (``Kind.types_to_agent``, a Judge) or
+#: sets ``spec["parallel_safe"] = False`` is refused too.
+NOT_PARALLEL = frozenset(
+    {"agent", "ship", "reviews", "verify", "split", "join", "land", "sync", "loop"}
+)
+NOT_PARALLEL_HINT = "use a Split for agents"
+_PARALLEL_RE = re.compile(r"^p_[A-Za-z0-9]{1,16}$")
+
+
+def parallel_safe(kind: str) -> bool:
+    """Whether a step of ``kind`` may sit in a parallel group."""
+    if kind in NOT_PARALLEL or kind not in STEP_KINDS:
+        return False
+    plug = _kinds.get(kind)
+    if plug is not None and (
+        plug.types_to_agent or plug.spec.get("parallel_safe") is False
+    ):
+        return False
+    return True
+
+
+def not_parallel_safe(kind: str, field: str = "step.parallel") -> PlanError:
+    """The 400 ``not_parallel_safe`` refusal naming ``kind``."""
+    label = (STEP_KINDS.get(kind) or {}).get("label") or kind
+    return PlanError(
+        "%s can't run in parallel — %s" % (label, NOT_PARALLEL_HINT),
+        field,
+        code="not_parallel_safe",
+    )
+
+
+def _normalize_parallel(raw) -> Optional[dict]:
+    """A step's ``parallel`` — ``{id}`` (``p_<hex>``) — or None."""
+    if not isinstance(raw, dict):
+        return None
+    pid = _text(raw.get("id"), 40)
+    return {"id": pid} if _PARALLEL_RE.match(pid) else None
+
+
+def parallel_id(step: Optional[dict]) -> str:
+    return str(((step or {}).get("parallel") or {}).get("id") or "")
+
+
+def _tidy_parallel(steps: List[dict]) -> None:
+    """Groups are RUNS of consecutive steps sharing a ``parallel`` id: a run
+    of one is no group (its ``parallel`` goes); a second run reusing an id an
+    earlier run has is given an id of its own (derived, so a read never
+    changes it twice). In place."""
+    seen: set = set()
+    i, n = 0, len(steps)
+    while i < n:
+        pid = parallel_id(steps[i])
+        if not pid:
+            i += 1
+            continue
+        j = i + 1
+        while j < n and parallel_id(steps[j]) == pid:
+            j += 1
+        if j - i < 2:
+            steps[i].pop("parallel", None)
+        else:
+            if pid in seen:
+                k = 0
+                while True:
+                    new = (
+                        "p_"
+                        + hashlib.sha1(("%s:%d:%d" % (pid, i, k)).encode()).hexdigest()[
+                            :6
+                        ]
+                    )
+                    if new not in seen:
+                        break
+                    k += 1
+                for s in steps[i:j]:
+                    s["parallel"] = {"id": new}
+                pid = new
+            seen.add(pid)
+        i = j
+
+
+def group_span(steps: Sequence[dict], i: int) -> Tuple[int, int]:
+    """``(lo, hi)``: the parallel group holding step ``i`` (``hi`` exclusive);
+    ``(i, i + 1)`` for a step of its own."""
+    pid = parallel_id(steps[i]) if 0 <= i < len(steps) else ""
+    if not pid:
+        return i, i + 1
+    lo, hi = i, i + 1
+    while lo > 0 and parallel_id(steps[lo - 1]) == pid:
+        lo -= 1
+    while hi < len(steps) and parallel_id(steps[hi]) == pid:
+        hi += 1
+    return lo, hi
+
+
+def _passed(ss: dict) -> bool:
+    """A group member the flight no longer waits for: done, skipped, or
+    failed and moved on past (``on_fail: skip``)."""
+    return ss["state"] in ("done", "skipped") or (
+        ss["state"] == "failed" and bool(ss["detail"].get("moved_on"))
+    )
+
+
+def current_group(flight: dict) -> Tuple[int, int]:
+    """The cursor's group span (``(c, c + 1)`` for a lone step)."""
+    return group_span(flight["steps"], flight["cursor"])
+
+
+def open_members(flight: dict) -> List[int]:
+    """The indices the driver works this pass: every member of the cursor's
+    parallel group not yet passed, or just the cursor for a lone step (none
+    past the end)."""
+    steps = flight["steps"]
+    c = flight["cursor"]
+    if not 0 <= c < len(steps):
+        return []
+    lo, hi = group_span(steps, c)
+    if hi - lo < 2:
+        return [c]
+    return [
+        k for k in range(lo, hi) if not _passed(flight["step_states"][steps[k]["id"]])
+    ]
+
+
+def member_view(flight: dict, i: int) -> dict:
+    """``flight`` as seen from member ``i`` of its current group: a shallow
+    copy whose ``cursor`` is ``i`` (steps, states and history shared), for
+    :func:`next_action`, the driver's ``observe`` and ``_perform``."""
+    if flight["cursor"] == i:
+        return flight
+    return dict(flight, cursor=i)
+
+
+def _group_state(flight: dict) -> None:
+    """A flight in the air at a parallel group waits on you while any open
+    member does, else runs."""
+    if flight["state"] not in ACTIVE:
+        return
+    lo, hi = current_group(flight)
+    if hi - lo < 2:
+        return
+    waiting = any(
+        flight["step_states"][flight["steps"][k]["id"]]["state"] == "waiting_you"
+        for k in range(lo, hi)
+    )
+    flight["state"] = "waiting_you" if waiting else "running"
+
+
+def apply_at(flight: dict, i: int, action: dict, now: float) -> dict:
+    """:func:`apply` for member ``i`` of the cursor's parallel group (just
+    :func:`apply` for the cursor of a lone step): the verdict lands on that
+    member's own state; the cursor stays on the group's first member until
+    every member is passed."""
+    lo, hi = current_group(flight)
+    if hi - lo < 2 or not lo <= i < hi:
+        return apply(flight, action, now)
+    view = dict(flight, cursor=i)
+    apply(view, action, now)
+    if lo <= view["cursor"] < hi:
+        view["cursor"] = lo
+    flight.update(view)
+    _group_state(flight)
+    return flight
+
+
+def waiting_step(flight: dict) -> Optional[dict]:
+    """The step a waiting flight waits on you at: the first member of the
+    current group parked on you, else the current step."""
+    lo, hi = current_group(flight)
+    for k in range(lo, min(hi, len(flight["steps"]))):
+        if flight["step_states"][flight["steps"][k]["id"]]["state"] == "waiting_you":
+            return flight["steps"][k]
+    return _current(flight)
 
 
 # --------------------------------------------------------------------------- #
@@ -698,8 +883,10 @@ def normalize_step(
 ) -> Optional[dict]:
     """One step coerced to ``{id, kind, title, config, on_fail}`` plus
     ``halt: True`` on a halt point (omitted when false), ``group`` on a
-    sub-step of a compound stop (omitted when it has none) and ``pos`` (its
-    free position on the Sky, :func:`_normalize_pos`; omitted when unset).
+    sub-step of a compound stop (omitted when it has none), ``pos`` (its
+    free position on the Sky, :func:`_normalize_pos`; omitted when unset) and
+    ``parallel: {id}`` on a member of a parallel group (round 20; a kind
+    that is not :func:`parallel_safe` is refused strictly, dropped leniently).
 
     Strict (a POSTed plan, a describe answer): raises :class:`PlanError`. Lenient
     (a stored file): returns None for a step that cannot be a step. ``taken``
@@ -763,6 +950,12 @@ def normalize_step(
     pos = _normalize_pos(raw.get("pos"))
     if pos is not None:
         step["pos"] = pos
+    par = _normalize_parallel(raw.get("parallel"))
+    if par is not None:
+        if parallel_safe(kind):
+            step["parallel"] = par
+        elif strict:
+            raise not_parallel_safe(kind, where + ".parallel")
     return step
 
 
@@ -825,6 +1018,7 @@ def normalize_steps(
                 # It closes the session: nothing can fly after it.
                 raise PlanError("a Land stop is the last stop", "steps[%d].kind" % i)
             out.append(step)
+    _tidy_parallel(out)
     return out
 
 
@@ -1622,6 +1816,9 @@ def _normalize_flight(fid, raw) -> Optional[dict]:
     trig = _normalize_triggered_by(raw.get("triggered_by"))
     if trig is not None:
         out["triggered_by"] = trig
+    if out["cursor"] < len(steps):
+        # At a parallel group the cursor stands on its first member.
+        out["cursor"] = group_span(steps, out["cursor"])[0]
     return out
 
 
@@ -2148,7 +2345,7 @@ def step_view(flight: dict) -> dict:
     if cur is None:
         return {}
     ss = flight["step_states"][cur["id"]]
-    return {
+    out = {
         "id": cur["id"],
         "kind": cur["kind"],
         "title": cur["title"],
@@ -2157,6 +2354,21 @@ def step_view(flight: dict) -> dict:
         "note": ss["note"],
         "since": ss["since"],
     }
+    lo, hi = current_group(flight)
+    if hi - lo > 1:
+        # Round 20: the cursor stands on a parallel group — every member.
+        out["parallel"] = [
+            {
+                "id": s["id"],
+                "kind": s["kind"],
+                "title": s["title"],
+                "state": flight["step_states"][s["id"]]["state"],
+                "actor": _actor(s, flight["step_states"][s["id"]]),
+                "note": flight["step_states"][s["id"]]["note"],
+            }
+            for s in flight["steps"][lo:hi]
+        ]
+    return out
 
 
 def join_dto(flight: dict) -> Optional[dict]:
@@ -2249,8 +2461,9 @@ def row_dto(
 
 
 def you_text(flight: dict) -> Tuple[str, List[str]]:
-    """What a parked step asks of you: ``(text, items)``."""
-    cur = _current(flight)
+    """What a parked step asks of you: ``(text, items)`` — at a parallel
+    group, the member parked on you (:func:`waiting_step`)."""
+    cur = waiting_step(flight)
     if cur is None:
         return "", []
     d = flight["step_states"][cur["id"]]["detail"]
@@ -3124,6 +3337,13 @@ def next_action(flight: dict, obs: dict, now: float) -> dict:
     ss = flight["step_states"][step["id"]]
     sess = obs.get("session") or {}
     st = ss["state"]
+    lo, hi = current_group(flight)
+    if hi - lo > 1 and all(
+        _passed(flight["step_states"][flight["steps"][k]["id"]]) for k in range(lo, hi)
+    ):
+        # Every member of a parallel group is through (a route skipped the
+        # last one): go on past it.
+        return {"action": "advance", "note": "", "keep": True}
     performing = ss["detail"].get("performing")
     if (
         isinstance(performing, dict)
@@ -3229,16 +3449,32 @@ def _finish(flight: dict, state: str, reason: str, now: float) -> None:
 
 
 def _advance(flight: dict, now: float) -> None:
-    """Move the cursor past every step already done/skipped; finish at the end."""
+    """Move the cursor past every step already done/skipped; finish at the end.
+    A parallel group is passed only when every member is (:func:`_passed`);
+    until then the cursor stands on its first member."""
     steps = flight["steps"]
-    while flight["cursor"] < len(steps) and flight["step_states"][
-        steps[flight["cursor"]]["id"]
-    ]["state"] in ("done", "skipped"):
-        flight["cursor"] += 1
+    while flight["cursor"] < len(steps):
+        lo, hi = group_span(steps, flight["cursor"])
+        if hi - lo > 1:
+            if all(
+                _passed(flight["step_states"][steps[k]["id"]]) for k in range(lo, hi)
+            ):
+                flight["cursor"] = hi
+                continue
+            flight["cursor"] = lo
+            break
+        if flight["step_states"][steps[flight["cursor"]]["id"]]["state"] in (
+            "done",
+            "skipped",
+        ):
+            flight["cursor"] += 1
+            continue
+        break
     if flight["cursor"] >= len(steps):
         _finish(flight, "done", "", now)
     else:
         flight["state"] = "running"
+        _group_state(flight)
         _hit_halt_point(flight, now)
 
 
@@ -3382,8 +3618,11 @@ def apply(flight: dict, action: dict, now: float) -> dict:
         if then == "skip":
             ss["state"] = "failed"
             ss["note"] = reason
+            ss["detail"]["moved_on"] = True
             _hist(flight, now, sid, "failed", reason + " — moving on")
-            flight["cursor"] += 1
+            lo, hi = group_span(flight["steps"], flight["cursor"])
+            if hi - lo < 2:
+                flight["cursor"] += 1
             _advance(flight, now)
         elif then == "agent":
             ss["rounds"] += 1
@@ -3460,7 +3699,8 @@ def op_done(
     _airborne(flight)
     i = _step_index(flight, sid)
     ss = flight["step_states"][sid]
-    if i != flight["cursor"] or ss["state"] != "waiting_you":
+    lo, hi = current_group(flight)
+    if not lo <= i < hi or ss["state"] != "waiting_you":
         raise FlightError(
             "not_waiting", 409, "%s is not waiting on you" % flight["steps"][i]["title"]
         )
@@ -3496,7 +3736,17 @@ def op_skip(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     ss["note"] = "skipped by you"
     _hist(flight, ts, sid, "skipped", "skipped by you")
     flight["updated"] = ts
-    if i == flight["cursor"]:
+    lo, hi = current_group(flight)
+    # Skipping one member of a group halted on ANOTHER's failure leaves it halted.
+    stuck = flight["state"] == "halted" and any(
+        k != i
+        and flight["step_states"][flight["steps"][k]["id"]]["state"] == "failed"
+        and not flight["step_states"][flight["steps"][k]["id"]]["detail"].get(
+            "moved_on"
+        )
+        for k in range(lo, hi)
+    )
+    if lo <= i < hi and not stuck:
         flight["reason"] = ""
         _advance_keeping_pause(flight, ts)
     return flight
@@ -3513,14 +3763,18 @@ def op_retry(flight: dict, sid: str, now: Optional[float] = None) -> dict:
         or ss["detail"].get("failed_reason")
         or flight["state"] == "halted"
     )
-    if i != flight["cursor"] or not retryable:
+    lo, hi = current_group(flight)
+    if not lo <= i < hi or not retryable:
         raise FlightError(
             "not_failed", 409, "%s has nothing to retry" % flight["steps"][i]["title"]
         )
     flight["step_states"][sid] = dict(_blank_step_state(), since=ts)
     _let_through(flight)
+    if hi - lo > 1 and flight["steps"][i].get("halt"):
+        flight["step_states"][sid]["detail"]["halt_hit"] = True  # a go, as Resume
     flight["state"] = "running"
     flight["reason"] = ""
+    _group_state(flight)
     flight["updated"] = ts
     _hist(flight, ts, sid, "resumed", "retry")
     return flight
@@ -3531,7 +3785,7 @@ def op_jump(flight: dict, sid: str, now: Optional[float] = None) -> dict:
     backward resets the target and everything after it to pending."""
     ts = float(now if now is not None else time.time())
     _airborne(flight)
-    i = _step_index(flight, sid)
+    i = group_span(flight["steps"], _step_index(flight, sid))[0]
     steps = flight["steps"]
     if i >= flight["cursor"]:
         for s in steps[flight["cursor"] : i]:
@@ -3648,11 +3902,16 @@ def op_resume(flight: dict, now: Optional[float] = None) -> dict:
         _finish(flight, "done", "", ts)
         return flight
     ss = flight["step_states"][cur["id"]]
-    if ss["state"] == "failed":
-        flight["step_states"][cur["id"]] = dict(_blank_step_state(), since=ts)
-        ss = flight["step_states"][cur["id"]]
+    lo, hi = current_group(flight)
+    for k in range(lo, hi):
+        mid = flight["steps"][k]["id"]
+        mss = flight["step_states"][mid]
+        if mss["state"] == "failed" and not mss["detail"].get("moved_on"):
+            flight["step_states"][mid] = dict(_blank_step_state(), since=ts)
+    ss = flight["step_states"][cur["id"]]
     _let_through(flight)
     flight["state"] = "waiting_you" if ss["state"] == "waiting_you" else "running"
+    _group_state(flight)
     flight["reason"] = ""
     flight["updated"] = ts
     ss["detail"].pop("idle_since", None)
@@ -3714,7 +3973,9 @@ def _first_open(flight: dict) -> int:
     """The first index a step may be edited, moved or placed at: every one on
     a grounded or ready flight (it has no current step), else the one after
     the cursor."""
-    return 0 if _on_ground(flight) else flight["cursor"] + 1
+    if _on_ground(flight):
+        return 0
+    return max(current_group(flight)[1], flight["cursor"] + 1)
 
 
 def _pending_index(flight: dict, sid: str) -> int:
@@ -3802,6 +4063,7 @@ def _insert_steps(
     steps = flight["steps"]
     _renumber_after(steps, new, [h["step"] for h in flight["history"]])
     _follow_loop_targets(new, was)
+    _adopt_group(steps, new, i)
     steps[i:i] = new
     nxt = i + len(new)
     where = "at the end" if nxt >= len(steps) else "before %s" % steps[nxt]["title"]
@@ -3810,6 +4072,31 @@ def _insert_steps(
         _hist(flight, now, step["id"], "added", "%s, %s" % (step["title"], where))
     flight["updated"] = now
     return flight
+
+
+def _inside_group(steps: Sequence[dict], i: int) -> str:
+    """The parallel id of the group index ``i`` falls strictly inside
+    (between two of its members), "" when none."""
+    if 0 < i < len(steps):
+        pid = parallel_id(steps[i - 1])
+        if pid and parallel_id(steps[i]) == pid:
+            return pid
+    return ""
+
+
+def _adopt_group(steps: Sequence[dict], new: List[dict], i: int) -> None:
+    """Steps placed strictly inside a parallel group join it (a step that
+    brings its own ``parallel`` keeps that); a kind that can't run in
+    parallel is 400 ``not_parallel_safe``. In place, before the insert."""
+    pid = _inside_group(steps, i)
+    if not pid:
+        return
+    for s in new:
+        if parallel_id(s):
+            continue
+        if not parallel_safe(s["kind"]):
+            raise not_parallel_safe(s["kind"], "at")
+        s["parallel"] = {"id": pid}
 
 
 def _follow_loop_targets(new: List[dict], was: Sequence[str]) -> None:
@@ -3853,6 +4140,140 @@ def op_add_step(
         {s["id"] for s in flight["steps"]},
     )
     return _insert_steps(flight, [step], i, ts)
+
+
+def _parallel_ids(flight: dict) -> set:
+    return {parallel_id(s) for s in flight["steps"]} - {""}
+
+
+def _group_of(flight: dict, with_sid: str, field: str) -> str:
+    """The parallel id of ``with_sid``'s group — minted (and set on it) when
+    it has none, which only a step still ahead may take. Refuses a kind that
+    can't run in parallel."""
+    j = _step_index(flight, with_sid)
+    other = flight["steps"][j]
+    if not parallel_safe(other["kind"]):
+        raise not_parallel_safe(other["kind"], field)
+    pid = parallel_id(other)
+    if not pid:
+        _pending_index(flight, with_sid)
+        pid = _new_id("p_", _parallel_ids(flight))
+        other["parallel"] = {"id": pid}
+    return pid
+
+
+def op_add_parallel(
+    flight: dict,
+    raw,
+    with_sid: str,
+    at: Optional[int] = None,
+    now: Optional[float] = None,
+) -> dict:
+    """``POST /steps {step, parallel_with: sid, at?}`` (round 20): a new step
+    in ``sid``'s parallel group — one made of ``sid`` and it when ``sid`` has
+    none (``sid`` must then be a step still ahead). It goes after the group's
+    last member, or at ``at`` within the group (``lo..hi``; 400 ``bad_at``
+    outside it). 400 ``not_parallel_safe`` for either kind; the rest as
+    :func:`op_add_step`."""
+    ts = float(now if now is not None else time.time())
+    _editable(flight)
+    if not isinstance(raw, dict):
+        raise PlanError("step is an object", "step")
+    j = _step_index(flight, with_sid)
+    kind = _text(raw.get("kind"), 16).lower()
+    if kind in STEP_KINDS and not parallel_safe(kind):
+        raise not_parallel_safe(kind, "step.kind")
+    lo, hi = group_span(flight["steps"], j)
+    if at is not None:
+        if isinstance(at, bool) or not isinstance(at, int) or not lo <= at <= hi:
+            raise FlightError(
+                "bad_at", 400, "at is %d..%d (within the group)" % (lo, hi)
+            )
+    i = _insert_index(flight, hi if at is None else at)
+    pid = _group_of(flight, with_sid, "parallel_with")
+    step = _one_step(
+        dict(raw, id="", parallel={"id": pid}),
+        i,
+        {s["id"] for s in flight["steps"]},
+        strict=not _lenient(flight),
+    )
+    _insert_steps(flight, [step], i, ts)
+    _hist(
+        flight,
+        ts,
+        step["id"],
+        "edited",
+        "%s runs in parallel with %s" % (step["title"], flight["steps"][j]["title"]),
+    )
+    return flight
+
+
+def op_leave_parallel(flight: dict, sid: str, now: Optional[float] = None) -> dict:
+    """``PATCH …/steps/{sid} {parallel: null}``: a step still ahead leaves its
+    parallel group and flies right after it (a group left with one member is
+    no group). No-op on a step in none."""
+    ts = float(now if now is not None else time.time())
+    _editable(flight)
+    i = _pending_index(flight, sid)
+    steps = flight["steps"]
+    if not parallel_id(steps[i]):
+        return flight
+    _lo, hi = group_span(steps, i)
+    step = steps.pop(i)
+    step.pop("parallel", None)
+    steps.insert(hi - 1, step)
+    _tidy_parallel(steps)
+    _hist(flight, ts, sid, "edited", "%s: out of its parallel group" % step["title"])
+    flight["updated"] = ts
+    return flight
+
+
+def op_join_parallel(
+    flight: dict, sid: str, with_sid: str, now: Optional[float] = None
+) -> dict:
+    """``PATCH …/steps/{sid} {parallel_with: other}`` (the Sky's Shift-drop):
+    a step still ahead joins ``other``'s parallel group (making one with it
+    when it has none), moving to after the group's last member. 400
+    ``not_parallel_safe`` / ``bad_parallel`` (itself)."""
+    ts = float(now if now is not None else time.time())
+    _editable(flight)
+    if not with_sid or with_sid == sid:
+        raise FlightError("bad_parallel", 400, "parallel_with names another step")
+    i = _pending_index(flight, sid)
+    j = _step_index(flight, with_sid)
+    steps = flight["steps"]
+    for k in (i, j):
+        if not parallel_safe(steps[k]["kind"]):
+            raise not_parallel_safe(steps[k]["kind"], "parallel_with")
+    pid = parallel_id(steps[j])
+    if pid and parallel_id(steps[i]) == pid:
+        return flight
+    if not pid:
+        _pending_index(flight, with_sid)
+        pid = _new_id("p_", _parallel_ids(flight))
+    first = _first_open(flight)  # sid is ahead of the cursor: it never moves
+    step = dict(steps[i], parallel={"id": pid})
+    other = dict(steps[j], parallel={"id": pid})
+    rest = [other if k == j else s for k, s in enumerate(steps) if k != i]
+    _tidy_parallel(rest)  # sid's old group may be left with one member
+    other["parallel"] = {"id": pid}
+    _lo, hi = group_span(rest, rest.index(other))
+    if hi < first:
+        raise FlightError(
+            "in_progress", 409, "a step can only join a group still ahead"
+        )
+    rest.insert(hi, step)
+    steps[:] = rest
+    _tidy_parallel(steps)
+    _hist(
+        flight,
+        ts,
+        sid,
+        "edited",
+        "%s runs in parallel with %s" % (step["title"], other["title"]),
+    )
+    flight["updated"] = ts
+    return flight
 
 
 def _group_ids(flight: dict) -> set:
@@ -3930,6 +4351,20 @@ def op_edit_step(flight: dict, sid: str, patch, now: Optional[float] = None) -> 
             return flight
     if "group" in patch:
         _edit_group(flight, sid, patch.pop("group"), ts)
+        if not patch:
+            return flight
+    if "parallel" in patch:
+        if patch.pop("parallel") is not None:
+            raise FlightError(
+                "bad_parallel",
+                400,
+                "parallel is null (out of its group) — join one with parallel_with",
+            )
+        op_leave_parallel(flight, sid, ts)
+        if not patch:
+            return flight
+    if "parallel_with" in patch:
+        op_join_parallel(flight, sid, str(patch.pop("parallel_with") or ""), ts)
         if not patch:
             return flight
     if set(patch) & {"title", "config", "on_fail", "when"} or "halt" not in patch:
@@ -4086,10 +4521,19 @@ def _remove_at(flight: dict, i: int, now: float) -> dict:
     flown one behind the cursor shifts the cursor down with it; the CURRENT
     one leaves the flight ``paused`` (``stop removed``) with its cursor on the
     step that followed — it sits right before it. Returns the removed step."""
+    lo, hi = current_group(flight)
+    in_group = not _on_ground(flight) and hi - lo > 1 and lo <= i < hi
     step = flight["steps"].pop(i)
     flight["step_states"].pop(step["id"], None)
     note = step["title"]
-    if not _on_ground(flight) and i < flight["cursor"]:
+    if in_group:
+        # A member of the group in the air: the others fly on without it.
+        note = "removed %s while its group flew" % step["title"]
+        flight["cursor"] = lo
+        _tidy_parallel(flight["steps"])
+        if flight["state"] in ACTIVE:
+            _advance(flight, now)
+    elif not _on_ground(flight) and i < flight["cursor"]:
         flight["cursor"] -= 1
     elif not _on_ground(flight) and i == flight["cursor"]:
         flight["state"] = "paused"
@@ -4167,6 +4611,13 @@ def op_move_step(flight: dict, sid: str, at, now: Optional[float] = None) -> dic
     if j == i:
         return flight
     step = steps.pop(i)
+    pid = _inside_group(steps, j)
+    if pid and parallel_id(step) != pid:
+        steps.insert(i, step)
+        if not parallel_safe(step["kind"]):
+            raise not_parallel_safe(step["kind"], "at")
+        steps.pop(i)
+        step["parallel"] = {"id": pid}
     steps.insert(j, step)
     _hist(flight, ts, sid, "moved", "%s, %d → %d" % (step["title"], i, j))
     flight["updated"] = ts
@@ -4467,9 +4918,11 @@ def op_take_off(flight: dict, by: str = "run", now: Optional[float] = None) -> d
         _finish(flight, "done", "", ts)
         return flight
     if who == "prompt":
-        d = flight["step_states"][cur["id"]]["detail"]
-        d["after_turn"] = True
-        d["turn_from"] = ts
+        lo, hi = current_group(flight)
+        for k in range(lo, hi):
+            d = flight["step_states"][flight["steps"][k]["id"]]["detail"]
+            d["after_turn"] = True
+            d["turn_from"] = ts
     _hit_halt_point(flight, ts)
     return flight
 
