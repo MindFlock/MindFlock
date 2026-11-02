@@ -317,7 +317,9 @@ describe("the wiring", () => {
   });
 
   it("pans on empty sky, zooms with Ctrl/⌘+wheel and a pinch, Space+drag pans anywhere, 0 fits", () => {
-    expect(sky).toContain('el.addEventListener("wheel", onWheel, { passive: false });');
+    // Captured, and a pan under way keeps panning across an open card.
+    expect(sky).toContain('el.addEventListener("wheel", onWheel, { passive: false, capture: true });');
+    expect(sky).toContain("if (inOwn && now - lastPan > PAN_GAP_MS) return;");
     expect(sky).toContain("if (e.ctrlKey || e.metaKey) {");
     expect(sky).toContain("pinch.current = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, z: camRef.current.z };");
     expect(sky).toContain("onPointerDownCapture={onDownCapture}");

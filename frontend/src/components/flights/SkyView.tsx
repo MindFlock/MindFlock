@@ -1718,9 +1718,21 @@ export function SkyView() {
   useEffect(() => {
     const el = vpRef.current;
     if (!el) return;
+    // A pan under way keeps panning: a wheel event within PAN_GAP_MS of the
+    // last one the sky took is the same gesture, even if the pointer is now
+    // over an open session card (the owner: passing over one mustn't slow the
+    // sky down). The card (or any own-scroll panel) takes the wheel only when
+    // a NEW gesture starts with the pointer resting on it.
+    const PAN_GAP_MS = 600;
+    let lastPan = 0;
     const onWheel = (e: WheelEvent) => {
-      if ((e.target as Element | null)?.closest?.(".sky-own-scroll")) return;
+      const now = e.timeStamp || performance.now();
+      const inOwn = !!(e.target as Element | null)?.closest?.(".sky-own-scroll");
+      if (inOwn && now - lastPan > PAN_GAP_MS) return;
+      // Captured: the card's terminal never sees a wheel that pans the sky.
       e.preventDefault();
+      e.stopPropagation();
+      lastPan = now;
       const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientHeight : 1;
       const dx = e.deltaX * unit;
       const dy = e.deltaY * unit;
@@ -1730,8 +1742,8 @@ export function SkyView() {
       } else if (e.shiftKey && !dx) setCam((c) => ({ ...c, x: c.x - dy }));
       else setCam((c) => ({ ...c, x: c.x - dx, y: c.y - dy }));
     };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    el.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    return () => el.removeEventListener("wheel", onWheel, { capture: true });
   }, [narrow]);
 
   // What is selected, as one plane rectangle: the selected stops' boxes

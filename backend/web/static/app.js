@@ -138002,9 +138002,14 @@ function SkyView() {
 	(0, import_react.useEffect)(() => {
 		const el = vpRef.current;
 		if (!el) return;
+		const PAN_GAP_MS = 600;
+		let lastPan = 0;
 		const onWheel = (e) => {
-			if (e.target?.closest?.(".sky-own-scroll")) return;
+			const now = e.timeStamp || performance.now();
+			if (!!e.target?.closest?.(".sky-own-scroll") && now - lastPan > PAN_GAP_MS) return;
 			e.preventDefault();
+			e.stopPropagation();
+			lastPan = now;
 			const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientHeight : 1;
 			const dx = e.deltaX * unit;
 			const dy = e.deltaY * unit;
@@ -138021,8 +138026,11 @@ function SkyView() {
 				y: c.y - dy
 			}));
 		};
-		el.addEventListener("wheel", onWheel, { passive: false });
-		return () => el.removeEventListener("wheel", onWheel);
+		el.addEventListener("wheel", onWheel, {
+			passive: false,
+			capture: true
+		});
+		return () => el.removeEventListener("wheel", onWheel, { capture: true });
 	}, [narrow]);
 	const selOne = stopSelection(sel);
 	const selBox = (() => {
