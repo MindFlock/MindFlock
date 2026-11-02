@@ -40,6 +40,7 @@ import { toast } from "../../lib/toast";
 import { OverflowMenu, type MenuItem } from "../OverflowMenu";
 import { nodeById, removableBox } from "../../lib/skySelect";
 import { pushUndo, undoAction } from "../../lib/skyUndo";
+import { pillAimer, useChainMenu } from "./useChainMenu";
 import { SkyChain } from "./SkyChain";
 import { ChainPanels } from "./SkyWires";
 import { HEAD, useChainEntry, useNodeMoves, useTourHooks, type ChainEntry } from "./useSkyWiring";
@@ -248,6 +249,9 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter);
   useTourHooks(wrapRef, { ".sky-socket": "sky-grounded" });
   const gc = line.graphCanvas;
+  // Round 18: a tile's right-click menu; a Loop's pill dragged onto a stop re-aims it.
+  const chainMenu = useChainMenu(gc, flight.id);
+  const onPillDown = pillAimer(graph, gc.onLoopTo);
   const shift = useRef(false);
 
   return (
@@ -333,11 +337,15 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
           onOpen={gc.onOpen}
           onRemove={gc.onRemove}
           onLoopPill={(via) => gc.onEdit?.(via)}
+          onPillDown={onPillDown}
+          onMenu={chainMenu.onMenu}
+          kinds={p.kinds}
           onNodeMove={moves.move}
           onPortDown={p.onPortDown}
           onPlus={(after) => (after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true))}
         />
-        <ChainPanels graph={graph} anchor={line.anchor} anchorPos={line.anchorPos}>
+        {chainMenu.menu}
+          <ChainPanels graph={graph} anchor={line.anchor} anchorPos={line.anchorPos}>
           {line.palette}
           {line.inspector}
         </ChainPanels>

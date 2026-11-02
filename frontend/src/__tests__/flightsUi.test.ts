@@ -370,10 +370,11 @@ describe("the sky", () => {
     const line = html.slice(html.indexOf('data-line="sc-12-fix-login"'));
     expect(line).toContain('class="skl-name">sc-12-fix-login<');
     expect(line).toContain('aria-label="Actions for sc-12-fix-login"');
-    expect(line).toContain(">Tack on a stop<");
-    // The bird: gold on the perch, flying on the running stop.
-    expect(line).toMatch(/class="fl-bird-marker tone-you"[^>]*aria-label="The bird: perched on you at Perch: Approve the merge"/);
-    expect(html.slice(html.indexOf('data-line="second"'))).toContain('class="fl-bird-marker tone-working"');
+    // Round 18: its chain (SkyChain), keyed by the session, with the bird
+    // where the flight is (the chain draws it: `bird`).
+    expect(line).toContain('data-chain="sc-12-fix-login"');
+    expect(html.slice(html.indexOf('data-line="second"'))).toContain('data-chain="second"');
+    expect(code("components/flights/SkyLine.tsx")).toContain("bird={birdPerch(moves.diagram)}");
     // The toolbar: the views, find, Tidy, the zoom (New session is the shelf's chip).
     for (const w of [">All<", ">Mine<", ">Perched on you<", ">This session<", ">Tidy<", ">Fit<", ">100%<", 'aria-label="Find a line"'])
       expect(html).toContain(w);

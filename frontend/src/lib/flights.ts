@@ -147,7 +147,7 @@ export interface StepKindField {
   /** Round 16: a select whose options the UI fills from the line —
    * `"stops_before"`: every stop before this one (`stopsBefore`); the
    * server's `options` stay empty. */
-  dynamic?: "stops_before";
+  dynamic?: "stops_before" | "chains" | "sessions";
 }
 
 /** One entry of `GET /api/flights/kinds` — what the stop palette and the stop

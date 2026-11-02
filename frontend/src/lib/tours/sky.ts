@@ -1,6 +1,7 @@
 /** The Sky tour (round 12): every surface of the Sky in the order a newcomer
- * meets it — the Grid · Sky toggle, a line and its bar, the boxes, the bird,
- * a stop's toolbar and dialog, the shelf, a grounded line, selection, the
+ * meets it — the Grid · Sky toggle, a chain and its label, the session tile,
+ * the bird, free tiles, wires, a stop's dialog, the shelf, a stops-only chain
+ * (round 18: free-floating chains), selection, the
  * Drag / Click tools, Delete, the intake lane, the zoom, and the ? that opens
  * the long-form guide (components/flights/SkyGuide.tsx).
  *
@@ -21,18 +22,18 @@ export const SKY_TOUR: TourDef = {
   steps: [
     {
       target: '[data-tour="view-sky"]',
-      title: "The same sessions, as lines",
+      title: "The same sessions, as chains",
       body: "Grid · Sky (Ctrl+Y) switches the main area between panes and the sky — the sessions are the same, only the drawing changes.",
     },
     {
       target: '[data-tour="sky-line-bar"], [data-tour="sky-line"] .skl-bar',
-      title: "One line per session",
-      body: "Drag a line by its bar to put it anywhere; its ⋯ opens the session here, shows only this line, tacks on a stop or closes it.",
+      title: "One chain per session",
+      body: "Drag a chain by its label to put it anywhere; its ⋯ opens the session here, shows only this chain, tacks on a stop or closes it.",
     },
     {
-      target: '[data-tour="sky-session-box"], .sky .fl-box-session',
-      title: "Boxes are stops",
-      body: "The session's own box comes first and opens its real terminal on the sky; each box after it is a stop of its flight.",
+      target: '[data-tour="sky-session-box"], .sky-head',
+      title: "The session starts its chain",
+      body: "The session's tile, in its own colour, starts the chain — click it to open its real terminal on the sky.",
     },
     {
       target: '[data-tour="flights-bird"]',
@@ -40,14 +41,19 @@ export const SKY_TOUR: TourDef = {
       body: "Click the bird to halt the flight (click again to carry on), or drag it onto another stop to jump there.",
     },
     {
-      target: '[data-tour="sky-stop"], .sky .fl-box.fl-has-tools',
-      title: "Hover a stop for its tools",
-      body: "✎ edit, ⇤ ⇥ move it earlier or later, ⧉ duplicate, ⏸ halt here, 🗑 remove — right-click shows the same as a menu.",
+      target: '[data-tour="sky-stop"], .sky-node:not(.sky-head)',
+      title: "Tiles float free",
+      body: "Drag a tile anywhere (it never changes the order); right-click it to edit, duplicate, halt there or remove it.",
     },
     {
-      target: '[data-tour="sky-stop"], .sky .fl-box-stop, .sky .fl-box-group',
+      target: '.sky-port-out:not(.sky-port-off), [data-tour="sky-stop"]',
+      title: "Wires set the order",
+      body: "Drag from a tile's round port: onto a later stop to move it, an earlier one to loop, empty sky to add a stop there.",
+    },
+    {
+      target: '[data-tour="sky-stop"], .sky-node:not(.sky-head)',
       title: "Every stop edits in a dialog",
-      body: "Double-click a stop, press Enter on it, or use ✎ to open its dialog: its title, its settings, what happens if it fails.",
+      body: "Double-click a tile or press Enter for its dialog; drag a Loop's ↻ pill onto a stop to loop from there.",
     },
     {
       target: '[data-tour="sky-shelf"]',
@@ -55,24 +61,24 @@ export const SKY_TOUR: TourDef = {
       body: "First the default blocks, then your saved stops (several steps as one block), and All blocks… for the full list.",
     },
     {
-      target: '[data-tour="sky-grounded"], .skl-grounded-head, [data-tour="sky-shelf"]',
-      title: "Stops before a session",
-      body: "Drop a block on empty sky and it waits as a grounded line; drop the Session chip on it, or use its ⋯, to give it a session.",
+      target: '[data-tour="sky-grounded"], .sky-socket, [data-tour="sky-shelf"]',
+      title: "Stops with no session yet",
+      body: "A block dropped on empty sky floats as its own stops-only chain; wire a session's port into its socket to run it.",
     },
     {
       target: '[data-tour="sky-selbar"], .sky-selbar',
       title: "Select an area",
-      body: "Drag across empty sky to select lines and boxes, then move them together, Group into a stop, or Save to the shelf.",
+      body: "Drag across empty sky to select chains and tiles, then move them together, Group into a stop, or Save to the shelf.",
     },
     {
       target: '[data-tour="sky-tool"]',
       title: "Drag or Click",
-      body: "V is Drag (lines move, empty sky selects), H is Click (any drag pans the sky); hold Space to pan in either.",
+      body: "V is Drag (chains and tiles move, empty sky selects), H is Click (any drag pans the sky); hold Space to pan in either.",
     },
     {
       target: "",
-      title: "Delete removes a box",
-      body: "Click any box and press Delete: a stop comes off its line (with Undo), a grounded line or a session asks first.",
+      title: "Delete removes a tile",
+      body: "Click any tile and press Delete: a stop comes off its chain (with Undo), a stops-only chain or a session asks first.",
     },
     {
       target: '[data-tour="sky-intake"], .sky-intake',
@@ -82,7 +88,7 @@ export const SKY_TOUR: TourDef = {
     {
       target: '[data-tour="sky-zoom"], .sky-toolbar .sky-zoom',
       title: "Zoom and fit",
-      body: "+ and − zoom, 0 or Fit shows every line legibly, 1 fills the window with the focused line, and Ctrl+wheel zooms too.",
+      body: "+ and − zoom, 0 or Fit shows every chain legibly, 1 fills the window with the focused chain, and Ctrl+wheel zooms too.",
     },
     {
       target: '[data-tour="sky-guide"], .sky-toolbar .tour-btn',

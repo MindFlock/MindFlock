@@ -301,7 +301,8 @@
   outline-offset: 4px;
 }
 
-.sky-node.is-over .sky-tile {
+.sky-node.is-over .sky-tile,
+.sky-node.sky-aim-over .sky-tile {
   outline: 2px solid var(--accent);
   outline-offset: 4px;
   box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 22%, transparent);

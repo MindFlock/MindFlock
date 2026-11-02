@@ -37828,6 +37828,7 @@ function wireStep(step) {
 	};
 	if (step.halt) out.halt = true;
 	if (step.when) out.when = step.when;
+	if (step.pos) out.pos = step.pos;
 	return out;
 }
 async function tackOnNew(title, steps) {
@@ -37970,6 +37971,51 @@ async function renameFlight(flightId, name) {
 	} finally {
 		refreshFlights();
 	}
+}
+async function saveStopPositions(flightId, positions) {
+	try {
+		await api(flightPath(flightId, "/layout"), { json: { positions } });
+		return true;
+	} catch (err) {
+		errorPop("Saving where the stops sit failed", errMsg(err));
+		return false;
+	} finally {
+		refreshFlights();
+	}
+}
+async function splitOffChain(flightId, stepId, pos) {
+	try {
+		return (await api(flightPath(flightId, "/steps/" + enc$1(stepId) + "/split_off"), { json: pos ? { pos } : {} }))?.chain || null;
+	} catch (err) {
+		errorPop("Splitting the chain failed", errMsg(err));
+		return null;
+	} finally {
+		refreshFlights();
+	}
+}
+var posQueue = /* @__PURE__ */ new Map();
+var POS_BATCH_MS = 250;
+function queueStopPos(flightId, stepId, pos, onDone) {
+	let q = posQueue.get(flightId);
+	if (q) clearTimeout(q.timer);
+	else {
+		q = {
+			positions: {},
+			timer: 0,
+			done: []
+		};
+		posQueue.set(flightId, q);
+	}
+	q.positions[stepId] = pos ? {
+		x: Math.round(pos.x),
+		y: Math.round(pos.y)
+	} : null;
+	if (onDone) q.done.push(onDone);
+	const cur = q;
+	cur.timer = setTimeout(() => {
+		posQueue.delete(flightId);
+		saveStopPositions(flightId, cur.positions).then((ok) => cur.done.forEach((f) => f(ok)));
+	}, POS_BATCH_MS);
 }
 //#endregion
 //#region src/components/outbox/WaitingRow.tsx
@@ -46389,18 +46435,18 @@ var TOURS = {
 		steps: [
 			{
 				target: "[data-tour=\"view-sky\"]",
-				title: "The same sessions, as lines",
+				title: "The same sessions, as chains",
 				body: "Grid · Sky (Ctrl+Y) switches the main area between panes and the sky — the sessions are the same, only the drawing changes."
 			},
 			{
 				target: "[data-tour=\"sky-line-bar\"], [data-tour=\"sky-line\"] .skl-bar",
-				title: "One line per session",
-				body: "Drag a line by its bar to put it anywhere; its ⋯ opens the session here, shows only this line, tacks on a stop or closes it."
+				title: "One chain per session",
+				body: "Drag a chain by its label to put it anywhere; its ⋯ opens the session here, shows only this chain, tacks on a stop or closes it."
 			},
 			{
-				target: "[data-tour=\"sky-session-box\"], .sky .fl-box-session",
-				title: "Boxes are stops",
-				body: "The session's own box comes first and opens its real terminal on the sky; each box after it is a stop of its flight."
+				target: "[data-tour=\"sky-session-box\"], .sky-head",
+				title: "The session starts its chain",
+				body: "The session's tile, in its own colour, starts the chain — click it to open its real terminal on the sky."
 			},
 			{
 				target: "[data-tour=\"flights-bird\"]",
@@ -46408,14 +46454,19 @@ var TOURS = {
 				body: "Click the bird to halt the flight (click again to carry on), or drag it onto another stop to jump there."
 			},
 			{
-				target: "[data-tour=\"sky-stop\"], .sky .fl-box.fl-has-tools",
-				title: "Hover a stop for its tools",
-				body: "✎ edit, ⇤ ⇥ move it earlier or later, ⧉ duplicate, ⏸ halt here, 🗑 remove — right-click shows the same as a menu."
+				target: "[data-tour=\"sky-stop\"], .sky-node:not(.sky-head)",
+				title: "Tiles float free",
+				body: "Drag a tile anywhere (it never changes the order); right-click it to edit, duplicate, halt there or remove it."
 			},
 			{
-				target: "[data-tour=\"sky-stop\"], .sky .fl-box-stop, .sky .fl-box-group",
+				target: ".sky-port-out:not(.sky-port-off), [data-tour=\"sky-stop\"]",
+				title: "Wires set the order",
+				body: "Drag from a tile's round port: onto a later stop to move it, an earlier one to loop, empty sky to add a stop there."
+			},
+			{
+				target: "[data-tour=\"sky-stop\"], .sky-node:not(.sky-head)",
 				title: "Every stop edits in a dialog",
-				body: "Double-click a stop, press Enter on it, or use ✎ to open its dialog: its title, its settings, what happens if it fails."
+				body: "Double-click a tile or press Enter for its dialog; drag a Loop's ↻ pill onto a stop to loop from there."
 			},
 			{
 				target: "[data-tour=\"sky-shelf\"]",
@@ -46423,24 +46474,24 @@ var TOURS = {
 				body: "First the default blocks, then your saved stops (several steps as one block), and All blocks… for the full list."
 			},
 			{
-				target: "[data-tour=\"sky-grounded\"], .skl-grounded-head, [data-tour=\"sky-shelf\"]",
-				title: "Stops before a session",
-				body: "Drop a block on empty sky and it waits as a grounded line; drop the Session chip on it, or use its ⋯, to give it a session."
+				target: "[data-tour=\"sky-grounded\"], .sky-socket, [data-tour=\"sky-shelf\"]",
+				title: "Stops with no session yet",
+				body: "A block dropped on empty sky floats as its own stops-only chain; wire a session's port into its socket to run it."
 			},
 			{
 				target: "[data-tour=\"sky-selbar\"], .sky-selbar",
 				title: "Select an area",
-				body: "Drag across empty sky to select lines and boxes, then move them together, Group into a stop, or Save to the shelf."
+				body: "Drag across empty sky to select chains and tiles, then move them together, Group into a stop, or Save to the shelf."
 			},
 			{
 				target: "[data-tour=\"sky-tool\"]",
 				title: "Drag or Click",
-				body: "V is Drag (lines move, empty sky selects), H is Click (any drag pans the sky); hold Space to pan in either."
+				body: "V is Drag (chains and tiles move, empty sky selects), H is Click (any drag pans the sky); hold Space to pan in either."
 			},
 			{
 				target: "",
-				title: "Delete removes a box",
-				body: "Click any box and press Delete: a stop comes off its line (with Undo), a grounded line or a session asks first."
+				title: "Delete removes a tile",
+				body: "Click any tile and press Delete: a stop comes off its chain (with Undo), a stops-only chain or a session asks first."
 			},
 			{
 				target: "[data-tour=\"sky-intake\"], .sky-intake",
@@ -46450,7 +46501,7 @@ var TOURS = {
 			{
 				target: "[data-tour=\"sky-zoom\"], .sky-toolbar .sky-zoom",
 				title: "Zoom and fit",
-				body: "+ and − zoom, 0 or Fit shows every line legibly, 1 fills the window with the focused line, and Ctrl+wheel zooms too."
+				body: "+ and − zoom, 0 or Fit shows every chain legibly, 1 fills the window with the focused chain, and Ctrl+wheel zooms too."
 			},
 			{
 				target: "[data-tour=\"sky-guide\"], .sky-toolbar .tour-btn",
@@ -74514,7 +74565,7 @@ function nBlocked(agents, z) {
 	for (const A of agents) for (const bk of A.blocked) if (bk.z && bk.z.z.id === z.id) n++;
 	return n;
 }
-function sessionWord(title) {
+function sessionWord$1(title) {
 	const inst = instances$2().find((i) => i.title === title);
 	return inst ? deriveSessionState(inst).label : "";
 }
@@ -74775,7 +74826,7 @@ function AgentRow({ p, A, subs, open, onToggle }) {
 		secs: A.clock.server + (performance.now() / 1e3 - A.clock.view) - A.lastAt.ts,
 		where: lastWhere(M, A.lastAt.path)
 	} : null;
-	const words = birdWords(st, A.ag.primary, A.activity, A.ag.parent ? "" : sessionWord(A.ag.key), working, idleFor);
+	const words = birdWords(st, A.ag.primary, A.activity, A.ag.parent ? "" : sessionWord$1(A.ag.key), working, idleFor);
 	const now = st === "blocked" && bk ? `⛔ tried ${bk.f ? dispName(M, bk.f) : bk.path}` : words.now;
 	const guide = (0, import_react.useContext)(MapGuideContext);
 	const binding = A.ag.primary ? p.tzones : p.tzones.filter((z) => z.type === "keep" && z.z.scope !== "worktree");
@@ -77903,27 +77954,51 @@ function drawn(el) {
 		visibilityProperty: true
 	}) : true;
 }
+function selectorParts(selector) {
+	const out = [];
+	let depth = 0;
+	let quote = "";
+	let cur = "";
+	for (const ch of selector) {
+		if (quote) {
+			if (ch === quote) quote = "";
+		} else if (ch === "\"" || ch === "'") quote = ch;
+		else if (ch === "[" || ch === "(") depth++;
+		else if (ch === "]" || ch === ")") depth = Math.max(0, depth - 1);
+		else if (ch === "," && depth === 0) {
+			if (cur.trim()) out.push(cur.trim());
+			cur = "";
+			continue;
+		}
+		cur += ch;
+	}
+	if (cur.trim()) out.push(cur.trim());
+	return out;
+}
 function findTarget(root, selector) {
 	if (!selector) return null;
-	let all;
-	try {
-		all = root.querySelectorAll(selector);
-	} catch {
-		return null;
+	for (const part of selectorParts(selector)) {
+		let all;
+		try {
+			all = root.querySelectorAll(part);
+		} catch {
+			continue;
+		}
+		const seen = Array.from(all).filter(drawn);
+		if (!seen.length) continue;
+		if (seen.length === 1 || typeof window === "undefined" || typeof getComputedStyle !== "function") return seen[0];
+		const share = seen.map((el) => shownShare(el.getBoundingClientRect(), clipBox(el)));
+		for (const min of [
+			.999,
+			.5,
+			.001
+		]) {
+			const i = share.findIndex((v) => v >= min);
+			if (i >= 0) return seen[i];
+		}
+		return seen[0];
 	}
-	const seen = Array.from(all).filter(drawn);
-	if (!seen.length) return null;
-	if (typeof window === "undefined" || typeof getComputedStyle !== "function") return seen[0];
-	const share = seen.map((el) => shownShare(el.getBoundingClientRect(), clipBox(el)));
-	for (const min of [
-		.999,
-		.5,
-		.001
-	]) {
-		const i = share.findIndex((s) => s >= min);
-		if (i >= 0) return seen[i];
-	}
-	return seen[0];
+	return null;
 }
 function scrollPanes(el) {
 	const out = [];
@@ -82368,17 +82443,6 @@ function lineBox(l) {
 	const p = BOX_PRESETS[l?.size || "normal"] || BOX_PRESETS.normal;
 	return clampBox(Number.isFinite(l?.boxW) ? l.boxW : p.w, Number.isFinite(l?.boxH) ? l.boxH : p.h);
 }
-function boxTier(w) {
-	const { compact, normal, wide } = BOX_PRESETS;
-	return w < (compact.w + normal.w) / 2 ? "compact" : w < (normal.w + wide.w) / 2 ? "normal" : "wide";
-}
-function boxScale(w) {
-	const size = boxTier(w);
-	return {
-		size,
-		k: w / BOX_PRESETS[size].w
-	};
-}
 var SKY_LAYOUT_KEY = "mf_sky_layout";
 var SKY_POS_KEY = "mf_sky_pos";
 var LAYOUT_CAP = 400;
@@ -83065,7 +83129,7 @@ var STATE_GLYPH = {
 	failed: "✗",
 	halted: "!"
 };
-var STATE_WORD = {
+var STATE_WORD$1 = {
 	done: "done",
 	skipped: "skipped",
 	failed: "failed",
@@ -83840,7 +83904,7 @@ function FlywayCanvas(p) {
 					const haltable = !!p.onToggleHalt && canHalt(n, here);
 					const waiting = n.join && n.join.waiting > 0 ? n.join : null;
 					const cls = "fl-box fl-box-" + n.kind + (open ? " fl-box-open" : "") + (drop ? " fl-drop" : "") + " fl-st-" + n.state + (n.perch ? " fl-perch" : "") + (p.selected === n.id ? " selected" : "") + (p.highlight?.has(n.id) ? " fl-described" : "") + (p.highlighted?.has(n.id) ? " fl-box-selected" : "") + (lifted ? " fl-lifted" : "") + (tools ? " fl-has-tools" : "") + (mark ? " fl-halt-point" : "") + (n.inGroup ? " fl-in-group" : "") + (canDrag(n) ? " fl-draggable" : "") + (lit?.has(n.id) ? " fl-jump-target" : "") + (lit && birdDrag?.over === n.id ? " fl-jump-over" : "") + (loopDraw?.over === n.id ? " fl-loop-target" : "");
-					const said = n.kind === "add" ? drop ? addLabel : n.title : n.title + (n.group ? ", a stop of " + n.group.total + (n.group.total === 1 ? " sub-step" : " sub-steps") + (n.group.current ? ", " + n.group.done + " of " + n.group.total + " done" : "") : "") + (n.kind === "stop" || n.kind === "rung" || n.kind === "group" ? ", " + (STATE_WORD[n.state] || "") : "") + (n.inGroup ? ", in “" + n.inGroup.name + "”" : "") + (mark ? ", halt point" : "") + (n.chip ? ", " + n.chip.label : "") + (waiting ? ", " + joinLabel(waiting) : "");
+					const said = n.kind === "add" ? drop ? addLabel : n.title : n.title + (n.group ? ", a stop of " + n.group.total + (n.group.total === 1 ? " sub-step" : " sub-steps") + (n.group.current ? ", " + n.group.done + " of " + n.group.total + " done" : "") : "") + (n.kind === "stop" || n.kind === "rung" || n.kind === "group" ? ", " + (STATE_WORD$1[n.state] || "") : "") + (n.inGroup ? ", in “" + n.inGroup.name + "”" : "") + (mark ? ", halt point" : "") + (n.chip ? ", " + n.chip.label : "") + (waiting ? ", " + joinLabel(waiting) : "");
 					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						ref: (el) => {
 							boxRefs.current[n.id] = el;
@@ -84715,6 +84779,666 @@ function PaneFlightStrip({ inst }) {
 	});
 }
 //#endregion
+//#region src/lib/skyGraph.ts
+var TILE = 64;
+var NODE_W = 132;
+var NODE_H = 118;
+var PITCH_X = 150;
+var PITCH_Y = 150;
+var GRID_SNAP = 8;
+var PLUS_REACH = 52;
+var PLUS_SIZE = 24;
+var LOOP_CLEAR = 16;
+var LOOP_LANE = 20;
+var LOOP_HOOK = 40;
+var HEAD_ID = "head";
+var isStopish$1 = (n) => n.kind === "stop" || n.kind === "group";
+var isBranchRow = (n) => n.row === "branch" || n.row === "below";
+var savedPos = (n) => {
+	const p = firstStepOf(n)?.pos;
+	return p && Number.isFinite(p.x) && Number.isFinite(p.y) ? {
+		x: Math.round(p.x),
+		y: Math.round(p.y)
+	} : null;
+};
+function canFollow(n, insertFrom) {
+	if (n.kind !== "stop" && n.kind !== "group") return false;
+	const slot = loopSlotAfter(n);
+	return slot !== void 0 && slot >= insertFrom;
+}
+function loopable(n) {
+	return (n.kind === "stop" ? !!n.step && n.step.kind !== "loop" : n.kind === "group") && n.index !== void 0;
+}
+function headDiagramNode(head) {
+	if (head.node) return head.node;
+	return {
+		id: HEAD_ID,
+		kind: "session",
+		row: "main",
+		title: head.title,
+		sub: head.sub,
+		state: head.kind === "session" ? "session" : "pending",
+		icon: head.kind === "trigger" ? "handoff" : "session",
+		...head.session ? { session: head.session } : {}
+	};
+}
+function chainGraph(d, opts) {
+	const head = opts.head;
+	const headNode = head.kind === "none" ? null : {
+		id: HEAD_ID,
+		node: headDiagramNode(head),
+		x: 0,
+		y: 0,
+		w: NODE_W,
+		h: NODE_H,
+		pinned: true,
+		inPort: false,
+		outPort: true
+	};
+	const sessionIds = new Set(d.nodes.filter((n) => n.kind === "session").map((n) => n.id));
+	const idOf = (id) => sessionIds.has(id) ? HEAD_ID : id;
+	const main = d.nodes.filter((n) => n.row === "main" && n.kind !== "session" && n.kind !== "add" && n.kind !== "parent");
+	const branches = d.nodes.filter((n) => isBranchRow(n) && n.kind !== "parent");
+	const firstId = main[0]?.id;
+	const stopsOnly = head.kind !== "session";
+	const insertFrom = d.insertFrom || 0;
+	const toNode = (n) => {
+		const pos = savedPos(n);
+		const editable = isStopish$1(n) && !!n.editable;
+		const first = stopsOnly && n.id === firstId;
+		return {
+			id: n.id,
+			node: n.branch ? {
+				...n,
+				branch: {
+					...n.branch,
+					from: idOf(n.branch.from),
+					to: idOf(n.branch.to)
+				}
+			} : n,
+			x: pos ? pos.x : 0,
+			y: pos ? pos.y : 0,
+			w: NODE_W,
+			h: NODE_H,
+			pinned: !!pos,
+			inPort: editable || first,
+			outPort: canFollow(n, insertFrom)
+		};
+	};
+	const placed = autoPlace([
+		...headNode ? [headNode] : [],
+		...main.map(toNode),
+		...branches.map(toNode)
+	]);
+	const hn = headNode ? placed[0] : null;
+	const nodes = hn ? placed.slice(1) : placed;
+	const ids = new Set(placed.map((n) => n.id));
+	const specs = [];
+	const seen = /* @__PURE__ */ new Set();
+	const push = (s) => {
+		const k = s.from + ">" + s.to + ">" + s.kind + ">" + (s.via?.id || "");
+		if (seen.has(k)) return;
+		seen.add(k);
+		specs.push(s);
+	};
+	let addFrom = null;
+	for (const e of d.edges) {
+		const from = idOf(e.from);
+		const to = idOf(e.to);
+		if (e.kind === "add") {
+			if (ids.has(from)) addFrom = from;
+			continue;
+		}
+		if (!ids.has(from) || !ids.has(to)) continue;
+		const kind = wireKindOf(e, from);
+		if (!kind) continue;
+		push({
+			from,
+			to,
+			kind,
+			...e.loop ? { loop: e.loop } : {},
+			...e.via ? { via: e.via } : {},
+			...e.done ? { done: true } : {}
+		});
+	}
+	if (hn && main.length && !specs.some((s) => s.from === HEAD_ID)) push({
+		from: HEAD_ID,
+		to: main[0].id,
+		kind: "head"
+	});
+	if (d.nodes.some((n) => n.kind === "add") && !addFrom) addFrom = main.length ? main[main.length - 1].id : hn ? HEAD_ID : null;
+	if (addFrom) push({
+		from: addFrom,
+		to: "add",
+		kind: "add"
+	});
+	return assemble({
+		key: opts.key,
+		flightId: opts.flightId,
+		head,
+		insertFrom
+	}, hn, nodes, specs);
+}
+function wireKindOf(e, from) {
+	switch (e.kind) {
+		case "line": return from === HEAD_ID ? "head" : "line";
+		case "fan":
+		case "branch": return "fan";
+		case "join": return "join";
+		case "loop": return "loop";
+		default: return null;
+	}
+}
+function assemble(base, headNode, nodes, specs) {
+	const all = headNode ? [headNode, ...nodes] : nodes;
+	const byId = new Map(all.map((n) => [n.id, n]));
+	const order = new Map(all.map((n, i) => [n.id, i]));
+	const wires = [];
+	let plus = null;
+	const loops = specs.filter((s) => s.kind === "loop");
+	const spanOf = (s) => {
+		const a = order.get(s.from) ?? 0;
+		const b = order.get(s.to) ?? 0;
+		return [Math.min(a, b), Math.max(a, b)];
+	};
+	const laneOf = /* @__PURE__ */ new Map();
+	[...loops].sort((p, q) => spanOf(p)[1] - spanOf(p)[0] - (spanOf(q)[1] - spanOf(q)[0])).forEach((s, k, sorted) => {
+		const [lo, hi] = spanOf(s);
+		let lane = 0;
+		for (const t of sorted.slice(0, k)) {
+			const [l2, h2] = spanOf(t);
+			if (l2 <= hi && h2 >= lo) lane = Math.max(lane, (laneOf.get(t) ?? 0) + 1);
+		}
+		laneOf.set(s, lane);
+	});
+	for (const s of specs) {
+		const a = byId.get(s.from);
+		if (!a) continue;
+		if (s.kind === "add") {
+			const o = outPortOf(a);
+			const at = {
+				x: o.x + PLUS_REACH,
+				y: o.y
+			};
+			plus = {
+				after: a.id,
+				at
+			};
+			wires.push({
+				id: a.id + ">add",
+				from: a.id,
+				to: "add",
+				kind: "add",
+				d: `M ${o.x} ${o.y} H ${at.x - PLUS_SIZE / 2}`,
+				mid: {
+					x: (o.x + at.x) / 2,
+					y: o.y
+				}
+			});
+			continue;
+		}
+		const b = byId.get(s.to);
+		if (!b) continue;
+		const extra = {
+			...s.loop ? { loop: s.loop } : {},
+			...s.via ? { via: s.via } : {},
+			...s.done ? { done: true } : {}
+		};
+		if (s.kind === "loop") {
+			const [lo, hi] = spanOf(s);
+			const between = all.filter((n) => {
+				const i = order.get(n.id);
+				return i > lo && i < hi && !isBranchRow(n.node);
+			});
+			const lane = laneOf.get(s) ?? 0;
+			const r = loopWirePathG(a, b, between, lane);
+			wires.push({
+				id: "loop:" + (s.via?.id || s.from + ">" + s.to),
+				from: a.id,
+				to: b.id,
+				kind: "loop",
+				d: r.d,
+				mid: r.mid,
+				lane,
+				...extra
+			});
+			continue;
+		}
+		const o = outPortOf(a);
+		const i = inPortOf(b);
+		wires.push({
+			id: a.id + ">" + b.id + (s.kind === "fan" || s.kind === "join" ? ":" + s.kind : ""),
+			from: a.id,
+			to: b.id,
+			kind: s.kind,
+			d: wirePath(o, i),
+			mid: {
+				x: (o.x + i.x) / 2,
+				y: (o.y + i.y) / 2
+			},
+			...extra
+		});
+	}
+	const g = {
+		...base,
+		headNode,
+		nodes,
+		wires,
+		plus,
+		bbox: {
+			x: 0,
+			y: 0,
+			w: 0,
+			h: 0
+		}
+	};
+	g.bbox = chainBBox(g);
+	return g;
+}
+function autoPlace(nodes) {
+	const out = [];
+	const byId = /* @__PURE__ */ new Map();
+	const rows = /* @__PURE__ */ new Map();
+	let prev = null;
+	for (const n of nodes) {
+		let next;
+		const split = n.node.branch ? byId.get(n.node.branch.from) : void 0;
+		if (isBranchRow(n.node)) {
+			const k = (rows.get(n.node.branch?.from || "") ?? 0) + 1;
+			rows.set(n.node.branch?.from || "", k);
+			const at = split || prev;
+			next = n.pinned ? { ...n } : {
+				...n,
+				x: (at ? at.x : 0) + PITCH_X / 2,
+				y: (at ? at.y : 0) + PITCH_Y * k
+			};
+		} else {
+			next = n.pinned ? { ...n } : {
+				...n,
+				x: prev ? prev.x + PITCH_X : 0,
+				y: prev ? prev.y : 0
+			};
+			prev = next;
+		}
+		byId.set(next.id, next);
+		out.push(next);
+	}
+	return out;
+}
+function moveNode(g, id, pos) {
+	const all = g.headNode ? [g.headNode, ...g.nodes] : g.nodes;
+	if (!all.some((n) => n.id === id) || id === HEAD_ID) return g;
+	const placed = autoPlace(all.map((n) => n.id === id ? {
+		...n,
+		x: Math.round(pos.x),
+		y: Math.round(pos.y),
+		pinned: true
+	} : n));
+	const hn = g.headNode ? placed[0] : null;
+	const specs = g.wires.map((w) => ({
+		from: w.from,
+		to: w.to,
+		kind: w.kind,
+		...w.loop ? { loop: w.loop } : {},
+		...w.via ? { via: w.via } : {},
+		...w.done ? { done: true } : {}
+	}));
+	return assemble({
+		key: g.key,
+		flightId: g.flightId,
+		head: g.head,
+		insertFrom: g.insertFrom
+	}, hn, hn ? placed.slice(1) : placed, specs);
+}
+function snapPos(p, free = false) {
+	if (free) return {
+		x: Math.round(p.x),
+		y: Math.round(p.y)
+	};
+	return {
+		x: Math.round(p.x / GRID_SNAP) * GRID_SNAP,
+		y: Math.round(p.y / GRID_SNAP) * GRID_SNAP
+	};
+}
+function chainBBox(g) {
+	const all = g.headNode ? [g.headNode, ...g.nodes] : g.nodes;
+	if (!all.length) return {
+		x: 0,
+		y: 0,
+		w: 0,
+		h: 0
+	};
+	let x0 = Infinity;
+	let y0 = Infinity;
+	let x1 = -Infinity;
+	let y1 = -Infinity;
+	const take = (x, y, x2, y2) => {
+		x0 = Math.min(x0, x);
+		y0 = Math.min(y0, y);
+		x1 = Math.max(x1, x2);
+		y1 = Math.max(y1, y2);
+	};
+	for (const n of all) take(n.x, n.y, n.x + n.w, n.y + n.h);
+	if (g.plus) take(g.plus.at.x - PLUS_SIZE / 2, g.plus.at.y - PLUS_SIZE / 2, g.plus.at.x + PLUS_SIZE / 2, g.plus.at.y + PLUS_SIZE / 2);
+	const byId = new Map(all.map((n) => [n.id, n]));
+	for (const w of g.wires) {
+		if (w.kind !== "loop") continue;
+		const a = byId.get(w.from);
+		const b = byId.get(w.to);
+		if (!a || !b) continue;
+		const o = outPortOf(a);
+		const i = inPortOf(b);
+		take(Math.min(i.x - LOOP_HOOK * .75, w.mid.x - 40), w.mid.y - 12, Math.max(o.x + LOOP_HOOK * .75, w.mid.x + 40), w.mid.y + 12);
+	}
+	return {
+		x: x0,
+		y: y0,
+		w: x1 - x0,
+		h: y1 - y0
+	};
+}
+function outPortOf(n) {
+	return {
+		x: n.x + (n.w + TILE) / 2,
+		y: n.y + TILE / 2
+	};
+}
+function inPortOf(n) {
+	return {
+		x: n.x + (n.w - TILE) / 2,
+		y: n.y + TILE / 2
+	};
+}
+function wirePath(a, b) {
+	const dx = Math.max(40, Math.abs(b.x - a.x) / 2);
+	return `M ${a.x} ${a.y} C ${a.x + dx} ${a.y}, ${b.x - dx} ${b.y}, ${b.x} ${b.y}`;
+}
+function loopWirePathG(a, b, others, lane = 0) {
+	const o = outPortOf(a);
+	const i = inPortOf(b);
+	const y = Math.max(a.y + a.h, b.y + b.h, ...others.map((n) => n.y + n.h)) + LOOP_CLEAR + lane * LOOP_LANE;
+	const k = LOOP_HOOK;
+	return {
+		d: `M ${o.x} ${o.y} C ${o.x + k} ${o.y}, ${o.x + k} ${y}, ${o.x} ${y} L ${i.x} ${y} C ${i.x - k} ${y}, ${i.x - k} ${i.y}, ${i.x} ${i.y}`,
+		mid: {
+			x: (o.x + i.x) / 2,
+			y
+		}
+	};
+}
+var CHAIN_HUES = [
+	265,
+	200,
+	150,
+	30,
+	330,
+	95,
+	180,
+	0
+];
+function chainColor(session) {
+	if (!session || session === "new") return "var(--muted)";
+	let h = 0;
+	for (const c of session) h = h * 31 + c.charCodeAt(0) >>> 0;
+	return `hsl(${CHAIN_HUES[h % CHAIN_HUES.length]} 70% 60%)`;
+}
+var NONE = { op: "none" };
+var isHead = (n) => n.id === HEAD_ID;
+var firstNodeOf = (c) => c.nodes.find((n) => !isBranchRow(n.node)) || null;
+var stopsOnlyChain = (c) => c.head.kind !== "session";
+var isChainStart = (c, n) => isHead(n) || n.id === firstNodeOf(c)?.id;
+var insertFromOf = (c) => c.insertFrom ?? 0;
+function wireIntent(src, dst, ctx = {}) {
+	if ("sky" in src) return NONE;
+	const A = src.chain;
+	const X = src.node;
+	if (src.side === "in") {
+		if (!("sky" in dst) || isHead(X) || !isStopish$1(X.node) || !X.node.editable) return NONE;
+		if (stopsOnlyChain(A) && X.id === firstNodeOf(A)?.id) return NONE;
+		return {
+			op: "split",
+			chain: A.key,
+			step: X.node,
+			at: dst.sky
+		};
+	}
+	if (!X.outPort) return NONE;
+	if (isHead(X)) {
+		if (A.head.kind !== "session") return NONE;
+		if ("sky" in dst) return {
+			op: "palette",
+			chain: A.key,
+			after: null,
+			at: dst.sky
+		};
+		const B = dst.chain;
+		if (B.key === A.key || !stopsOnlyChain(B) || !isChainStart(B, dst.node) || !A.head.session) return NONE;
+		return {
+			op: "attach",
+			session: A.head.session,
+			chain: B.key
+		};
+	}
+	if (!canFollow(X.node, insertFromOf(A))) return NONE;
+	if ("sky" in dst) return {
+		op: "palette",
+		chain: A.key,
+		after: X.node,
+		at: dst.sky
+	};
+	const B = dst.chain;
+	const Y = dst.node;
+	if (B.key === A.key) {
+		if (isHead(Y) || Y.node.index === void 0 || X.node.index === void 0 || isBranchRow(Y.node)) return NONE;
+		if (Y.node.index > X.node.index) {
+			if (Y.node.kind !== "stop" || !Y.node.editable) return NONE;
+			if (Y.node.index === loopSlotAfter(X.node)) return NONE;
+			return {
+				op: "move",
+				chain: A.key,
+				step: Y.node,
+				after: X.node
+			};
+		}
+		if (!loopable(X.node) || !loopable(Y.node)) return NONE;
+		return {
+			op: "loop",
+			chain: A.key,
+			from: X.node,
+			to: Y.node
+		};
+	}
+	if (!stopsOnlyChain(B) || !isChainStart(B, Y)) return NONE;
+	if (!!ctx.shift || B.head.kind === "trigger") {
+		if (A.head.kind !== "session" || !B.flightId) return NONE;
+		return {
+			op: "handoff",
+			chain: A.key,
+			from: X.node,
+			target: "flight:" + B.flightId
+		};
+	}
+	if (isHead(Y)) return NONE;
+	return {
+		op: "merge",
+		chain: A.key,
+		after: X.node,
+		from: B.key
+	};
+}
+//#endregion
+//#region src/lib/groundedLines.ts
+var GROUNDED_PREFIX = "flight:";
+var groundedKey = (id) => GROUNDED_PREFIX + id;
+var isGroundedKey = (key) => key.startsWith(GROUNDED_PREFIX);
+var groundedIdOf = (key) => isGroundedKey(key) ? key.slice(7) : "";
+function groundedFlights(flights) {
+	return (flights || []).filter((f) => f.state === "grounded").sort((a, b) => (b.started || 0) - (a.started || 0) || (a.id < b.id ? 1 : -1));
+}
+function groundedDiagram(f, kinds) {
+	let d = flightDiagram(f, kinds);
+	const nodes = d.nodes.map((n) => n.kind === "stop" ? {
+		...n,
+		state: "pending",
+		editable: true
+	} : n);
+	d = {
+		...d,
+		edges: d.edges.map((e) => e.via ? {
+			...e,
+			via: {
+				...e.via,
+				state: "pending",
+				editable: true
+			}
+		} : e)
+	};
+	if (!nodes.some((n) => n.kind === "add")) {
+		const last = [...nodes].reverse().find((n) => n.row === "main");
+		nodes.push({
+			id: "add",
+			kind: "add",
+			row: "main",
+			title: "Add a stop",
+			sub: "",
+			state: "pending",
+			icon: "add"
+		});
+		const edges = last ? [...d.edges, {
+			from: last.id,
+			to: "add",
+			kind: "add"
+		}] : d.edges;
+		return {
+			...d,
+			nodes,
+			edges,
+			flightId: f.id,
+			mode: "flight",
+			insertFrom: 0
+		};
+	}
+	return {
+		...d,
+		nodes,
+		flightId: f.id,
+		mode: "flight",
+		insertFrom: 0
+	};
+}
+function defaultStepFor(def) {
+	return newStep(def, []);
+}
+function sourcePlanId(steps, plans) {
+	if (!steps.length) return "";
+	const id = steps[0].group?.plan_id || "";
+	if (!id || id === "adhoc") return "";
+	if (!steps.every((s) => s.group?.plan_id === id)) return "";
+	return plans.some((p) => p.id === id) ? id : "";
+}
+function planToSave(name, steps, plans) {
+	const id = sourcePlanId(steps, plans);
+	const base = id ? plans.find((p) => p.id === id) : null;
+	const fresh = planFromSteps(base ? base.name : name || "Stops", steps, base?.trigger);
+	if (!base) return {
+		...fresh,
+		id: "",
+		updated: 0
+	};
+	return {
+		...fresh,
+		id: base.id,
+		builtin: base.builtin,
+		description: base.description,
+		session: { ...base.session },
+		updated: base.updated
+	};
+}
+function planDots(steps, kinds, max = 10) {
+	return {
+		dots: steps.slice(0, max).map((s) => ({ perch: stepActor(s, kinds) === "you" })),
+		more: Math.max(0, steps.length - max)
+	};
+}
+function savedStopOrder(plans) {
+	return [...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)];
+}
+var NAME_MAX = 120;
+function checkRename(raw, plans, selfId) {
+	const name = raw.trim();
+	if (!name) return {
+		ok: false,
+		error: "A saved stop needs a name"
+	};
+	if (name.length > NAME_MAX) return {
+		ok: false,
+		error: "Keep the name under 120 characters"
+	};
+	const clash = plans.find((p) => p.id !== selfId && p.name.trim().toLowerCase() === name.toLowerCase());
+	if (clash) return {
+		ok: false,
+		error: "Another saved stop is already called “" + clash.name.trim() + "”"
+	};
+	return {
+		ok: true,
+		name
+	};
+}
+var isRemoveKey = (key) => key === "Delete" || key === "Backspace";
+var HANDOFF_KIND = "handoff";
+function handoffLinks(flights) {
+	const out = [];
+	for (const f of flights || []) for (const st of f.steps || []) {
+		if (st.kind !== HANDOFF_KIND) continue;
+		const detail = f.step_states?.[st.id]?.detail || {};
+		const child = typeof detail.child === "string" ? detail.child : "";
+		const raw = String(st.config?.target ?? "");
+		const target = child || (isGroundedKey(raw) ? groundedIdOf(raw) : "");
+		if (!target) continue;
+		const session = String((child && typeof detail.session === "string" ? detail.session : st.config?.session) || "new");
+		out.push({
+			fromFlight: f.id,
+			fromStep: st.id,
+			stepTitle: st.title || "Start a chain",
+			fromSession: f.session || "",
+			fromName: f.plan_name || "",
+			target,
+			started: !!child,
+			session
+		});
+	}
+	return out;
+}
+var sessionWord = (s, nameOf = (t) => t) => !s || s === "new" ? "a new session" : nameOf(s);
+function triggerHeadFor(f, flights, nameOf = (t) => t) {
+	const link = handoffLinks(flights).find((l) => l.target === f.id && !l.started);
+	if (!link) return null;
+	return {
+		kind: "trigger",
+		title: "When " + (link.fromSession ? nameOf(link.fromSession) : link.fromName || "a chain") + " reaches " + link.stepTitle,
+		sub: "runs on " + sessionWord(link.session, nameOf),
+		session: link.session,
+		color: chainColor(link.fromSession),
+		from: {
+			flight: link.fromFlight,
+			step: link.fromStep,
+			title: link.stepTitle
+		}
+	};
+}
+function handoffStepFor(def, taken, target) {
+	const st = newStep(def, taken);
+	return {
+		...st,
+		config: {
+			...st.config,
+			target,
+			session: "new",
+			wait: false
+		}
+	};
+}
+//#endregion
 //#region src/lib/whenHelp.ts
 var WHEN_GRAMMAR = [
 	{
@@ -85092,6 +85816,37 @@ function unitOf(f) {
 function cleanLabel(f) {
 	return f.label.replace(/\s*\((minutes|one per line)\)\s*$/i, "");
 }
+var boardDynamic = (f) => {
+	const d = String(f.dynamic || "");
+	return d === "chains" || d === "sessions" ? d : "";
+};
+function chainChoices(flights, plans) {
+	const out = [];
+	for (const f of groundedFlights(flights)) out.push({
+		value: "flight:" + f.id,
+		label: f.plan_name || "Stops",
+		group: "On the board"
+	});
+	for (const p of plans || []) out.push({
+		value: "plan:" + p.id,
+		label: p.name,
+		group: "Saved stops — a fresh copy each time"
+	});
+	return out;
+}
+function sessionChoices(rows, nameOf = (t) => t) {
+	return [{
+		value: "new",
+		label: "a new session"
+	}, ...(rows || []).map((r) => ({
+		value: r.title,
+		label: nameOf(r.title)
+	}))];
+}
+function boardChoices(d) {
+	if (d === "chains") return chainChoices(queryClient.getQueryData(["flights"]), queryClient.getQueryData(["flight-plans"]));
+	return sessionChoices(queryClient.getQueryData(["instances"]), windowName);
+}
 function StopField({ f, value, onChange, readOnly, choices }) {
 	const v = value === void 0 ? f.default : value;
 	const label = cleanLabel(f);
@@ -85099,6 +85854,15 @@ function StopField({ f, value, onChange, readOnly, choices }) {
 		label,
 		value: String(v ?? ""),
 		choices: choices || stopsBefore([], { id: "" }),
+		readOnly,
+		onChange
+	});
+	const board = f.type === "select" ? boardDynamic(f) : "";
+	if (board) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BoardChoiceField, {
+		label,
+		kind: board,
+		value: String(v ?? ""),
+		choices: choices || boardChoices(board),
 		readOnly,
 		onChange
 	});
@@ -85201,6 +85965,53 @@ function StopsBeforeField({ label, value, choices, onChange, readOnly }) {
 					onChange: pick
 				})]
 			}, i))
+		})
+	});
+}
+function BoardChoiceField({ label, kind, value, choices, onChange, readOnly }) {
+	const runs = [];
+	for (const c of choices) {
+		const g = c.group || "";
+		const last = runs[runs.length - 1];
+		if (last && last.group === g) last.items.push(c);
+		else runs.push({
+			group: g,
+			items: [c]
+		});
+	}
+	if (value && !choices.some((c) => c.value === value)) runs.push({
+		group: "",
+		items: [{
+			value,
+			label: kind === "chains" ? "a chain no longer on the board" : value
+		}]
+	});
+	const pick = (x) => !readOnly && onChange(x);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+		label,
+		wide: true,
+		hint: kind === "chains" ? "A chain on the board takes off (it leaves the board); a saved stop starts a fresh copy each time." : "Where the chain runs: a new session forks from this one.",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "fl-stops-before fl-board-choice",
+			"data-dynamic": kind,
+			children: [!choices.length && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
+				className: "fl-note muted",
+				children: kind === "chains" ? "No stops-only chain on the board yet — drop some stops on empty sky first." : "No session yet."
+			}), runs.map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "fl-stops-before-run" + (r.group ? " fl-stops-before-group" : ""),
+				children: [r.group && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-stops-before-name",
+					children: r.group
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ChipRow, {
+					label: r.group ? label + " — " + r.group : label,
+					value,
+					options: r.items.map((c) => ({
+						value: c.value,
+						label: c.label
+					})),
+					onChange: pick
+				})]
+			}, i))]
 		})
 	});
 }
@@ -86169,6 +86980,7 @@ function useSessionLine(title, src, opts) {
 	const family = opts.family !== false;
 	const [selected, setSelected] = (0, import_react.useState)(null);
 	const [paletteAt, setPaletteAt] = (0, import_react.useState)(null);
+	const [paletteHang, setPaletteHang] = (0, import_react.useState)(null);
 	const [dialog, setDialog] = (0, import_react.useState)(null);
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [selectIndex, setSelectIndex] = (0, import_react.useState)(null);
@@ -86215,9 +87027,14 @@ function useSessionLine(title, src, opts) {
 		if (selected && !find(selected)) setSelected(null);
 	});
 	const tackOne = async (def, at, openIt = false) => {
-		const step = newStep(def, flight ? flight.steps.map((s) => s.id) : []);
+		const fresh = newStep(def, flight ? flight.steps.map((s) => s.id) : []);
+		const step = paletteHang?.pos ? {
+			...fresh,
+			pos: paletteHang.pos
+		} : fresh;
 		setBusy(true);
 		setPaletteAt(null);
+		setPaletteHang(null);
 		try {
 			if (flight) {
 				const where = at !== null && at < end ? at : void 0;
@@ -86363,7 +87180,20 @@ function useSessionLine(title, src, opts) {
 	};
 	const togglePalette = (open) => {
 		setDialog(null);
+		setPaletteHang(null);
 		setPaletteAt(open ?? !(paletteAt !== null && paletteAt >= end) ? end : null);
+	};
+	const paletteAfter = (after, pos) => {
+		setDialog(null);
+		const slot = after ? loopSlotAfter(after) : line.insertFrom;
+		setPaletteAt(slot === void 0 ? end : Math.min(slot, end));
+		setPaletteHang({
+			node: after ? after.id : null,
+			pos: pos ? {
+				x: Math.round(pos.x),
+				y: Math.round(pos.y)
+			} : null
+		});
 	};
 	const toggleGroup = (gid) => setExpandedGroups((cur) => {
 		const next = new Set(cur);
@@ -86396,7 +87226,7 @@ function useSessionLine(title, src, opts) {
 			}, p.id))
 		})]
 	});
-	const shown = drawnCanvas(line, {
+	const raw = {
 		selected: paletteAt !== null && paletteAt >= end ? "add" : dialog?.id || selected,
 		onSelect: (n) => onSelect(own(n)),
 		onEdit: (n) => onEdit(own(n)),
@@ -86452,12 +87282,16 @@ function useSessionLine(title, src, opts) {
 		renderInBox: parts.renderInBox,
 		sizeOf: parts.sizeOf,
 		reveal: currentNodeId(line, flight)
-	});
+	};
+	const shown = drawnCanvas(line, raw);
 	const palette = paletteAt !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopPalette, {
 		kinds,
 		title: paletteAt >= end ? "Tack on a stop" : "Add a stop before “" + (flight?.steps[paletteAt]?.title || "") + "”",
 		onPick: (k) => void tackOne(k, paletteAt, true),
-		onClose: () => setPaletteAt(null),
+		onClose: () => {
+			setPaletteAt(null);
+			setPaletteHang(null);
+		},
 		extra: ordered.length > 0 ? savedStops(paletteAt >= end ? null : paletteAt) : void 0
 	}) : null;
 	const close = () => setDialog(dialog?.back && find(dialog.back) ? { id: dialog.back } : null);
@@ -86567,6 +87401,11 @@ function useSessionLine(title, src, opts) {
 		toggleGroup,
 		editing: palette !== null || inspector !== null,
 		canvas: shown.canvas,
+		graphDiagram: line,
+		graphCanvas: raw,
+		paletteAfter,
+		anchor: inspector !== null && dialog ? dialog.id : palette !== null ? paletteHang?.node ?? "" : null,
+		anchorPos: palette !== null ? paletteHang?.pos ?? null : null,
 		palette,
 		inspector,
 		removeAsk: removeAskNode,
@@ -89256,7 +90095,7 @@ var SKY_GUIDE_SECTIONS = [
 	},
 	{
 		id: "lines",
-		title: "Lines and boxes"
+		title: "Chains, tiles and wires"
 	},
 	{
 		id: "stops",
@@ -89272,7 +90111,7 @@ var SKY_GUIDE_SECTIONS = [
 	},
 	{
 		id: "grounded",
-		title: "Grounded stops"
+		title: "Stops on their own, and handoffs"
 	},
 	{
 		id: "select",
@@ -89414,7 +90253,7 @@ var SKETCHES = {
 		]
 	}),
 	lines: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "A line: its bar on top, the session box, then its stops, and a + to tack on",
+		label: "A chain: its label on top, the session tile, then its stop tiles joined by wires, and a + to add one",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Line, {
 				x: 12,
@@ -89592,7 +90431,7 @@ var SKETCHES = {
 		]
 	}),
 	grounded: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(Sketch, {
-		label: "A grounded line: a dashed No session yet head, its stops, and the Session chip dropped on it",
+		label: "A chain with no session: an empty socket on its first tile, its stops, and the Session chip dropped on it",
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bar, {
 				x: 20,
@@ -89611,7 +90450,7 @@ var SKETCHES = {
 				className: "sg-text",
 				x: 26,
 				y: 61,
-				children: "no session"
+				children: "socket"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Box, {
 				x: 94,
@@ -89861,25 +90700,35 @@ var WORDS = {
 	] })] }),
 	lines: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"A line is one session. Its ",
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "bar" }),
-			" carries the name and a ",
+			"Each session draws as a ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "chain" }),
+			": its ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "session tile" }),
+			" first (its name, its state and the bird, in the session's own colour — a click opens the real terminal in a card under it, a double-click on the card's top folds it back), then its stops as free-floating ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "tiles" }),
+			" joined by ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "wires" }),
+			". The small label above a chain carries its name and a ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "⋯" }),
-			" menu: open the session here, open it in the grid, show only this line, tack on a stop, close the session."
+			" menu: open the session, open it in the grid, show only this chain, add a stop, close the session."
 		] }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"Drag a line by its bar to put it anywhere — it stays there. ",
+			"Drag a chain by its label (or its session tile) to put it anywhere — it stays there. Drag a single tile to move just that stop: order is the wires, never where a tile sits. ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Tidy" }),
 			" (",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "T" }),
-			") puts every line back in its place; the ⋯'s ",
+			") puts every chain back in its place; the ⋯'s ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Tidy this line" }),
 			" does one."
 		] }),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-			"The boxes run left to right: the session's own box (it opens the real terminal in a card on the line), its workers, then its flight's stops in order. The ",
+			"Every tile has an ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "in port" }),
+			" (the square on its left) and an ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "out port" }),
+			" (the circle on its right). Drag from an out port: onto a later stop of the same chain to move that stop right after this one, onto an earlier one (or itself) to loop back to it, onto another chain to give it these stops, or onto empty sky to pick a new stop there. The ",
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "+" }),
-			" at the end tacks on a stop, the + between two boxes puts one in there, and a box's corner handle resizes every box on the line."
+			" after the last tile does the same — or just click it. Grab a wire by a tile's in port and pull it onto empty sky to split that stop and the ones after it off into a chain of their own."
 		] })
 	] }),
 	stops: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
@@ -89935,23 +90784,37 @@ var WORDS = {
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Undo" }),
 		" in the toast. Removing the stop that is flying stops its work and pauses the flight right before the next stop; Carry on goes into it."
 	] })] }),
-	grounded: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-		"Drop a block or a saved stop on empty sky and it waits there as a ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "grounded" }),
-		" line: a dashed ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "No session yet" }),
-		" head, then its stops. Nothing runs until it has a session."
-	] }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
-		"Give it one by dropping the shelf's ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Session" }),
-		" chip on it (a new session is made and the stops take off), or with its ⋯ → ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Fly on a session…" }),
-		" and a line that has no flight. The same ⋯ offers ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Save to the shelf" }),
-		" and ",
-		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Remove" }),
-		"."
-	] })] }),
+	grounded: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"Drop a block or a saved stop on empty sky and it waits there as a chain of its own, with ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "no session" }),
+			": no head tile, just an empty socket on its first tile — ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "wire a session's out port here to run it" }),
+			". Nothing runs until it has a session."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"Give it one by wiring a session tile's out port (or its +) to that socket, by dropping the shelf's ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Session" }),
+			" chip on it (a new session is made and the stops take off), or with its ⋯ → ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Fly on a session…" }),
+			". The same ⋯ offers ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Save to the shelf" }),
+			" and ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Remove" }),
+			"."
+		] }),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
+			"One chain can ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "start another" }),
+			": hold ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Shift" }),
+			" while you drop a wire from a stop onto a stops-only chain, and a ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: "Start a chain" }),
+			" stop goes in there. The other chain then shows a trigger tile — ",
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { children: "When <chain> reaches <stop>" }),
+			" — and a dashed wire in the first session's colour; when the flight gets there, that chain takes off on a new session (or the one its dialog names), and the wire follows it there."
+		] })
+	] }),
 	select: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { children: [
 		"Drag across empty sky to draw a box — everything it touches is selected, lines and stop boxes both (in the Click tool, Shift+drag). ",
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Ctrl+A" }),
@@ -126290,125 +127153,6 @@ function useClickOrDouble(place, opts) {
 	return cd.current;
 }
 //#endregion
-//#region src/lib/groundedLines.ts
-var GROUNDED_PREFIX = "flight:";
-var groundedKey = (id) => GROUNDED_PREFIX + id;
-var isGroundedKey = (key) => key.startsWith(GROUNDED_PREFIX);
-var groundedIdOf = (key) => isGroundedKey(key) ? key.slice(7) : "";
-function groundedFlights(flights) {
-	return (flights || []).filter((f) => f.state === "grounded").sort((a, b) => (b.started || 0) - (a.started || 0) || (a.id < b.id ? 1 : -1));
-}
-function groundedDiagram(f, kinds) {
-	let d = flightDiagram(f, kinds);
-	const nodes = d.nodes.map((n) => n.kind === "stop" ? {
-		...n,
-		state: "pending",
-		editable: true
-	} : n);
-	d = {
-		...d,
-		edges: d.edges.map((e) => e.via ? {
-			...e,
-			via: {
-				...e.via,
-				state: "pending",
-				editable: true
-			}
-		} : e)
-	};
-	if (!nodes.some((n) => n.kind === "add")) {
-		const last = [...nodes].reverse().find((n) => n.row === "main");
-		nodes.push({
-			id: "add",
-			kind: "add",
-			row: "main",
-			title: "Add a stop",
-			sub: "",
-			state: "pending",
-			icon: "add"
-		});
-		const edges = last ? [...d.edges, {
-			from: last.id,
-			to: "add",
-			kind: "add"
-		}] : d.edges;
-		return {
-			...d,
-			nodes,
-			edges,
-			flightId: f.id,
-			mode: "flight",
-			insertFrom: 0
-		};
-	}
-	return {
-		...d,
-		nodes,
-		flightId: f.id,
-		mode: "flight",
-		insertFrom: 0
-	};
-}
-function defaultStepFor(def) {
-	return newStep(def, []);
-}
-function sourcePlanId(steps, plans) {
-	if (!steps.length) return "";
-	const id = steps[0].group?.plan_id || "";
-	if (!id || id === "adhoc") return "";
-	if (!steps.every((s) => s.group?.plan_id === id)) return "";
-	return plans.some((p) => p.id === id) ? id : "";
-}
-function planToSave(name, steps, plans) {
-	const id = sourcePlanId(steps, plans);
-	const base = id ? plans.find((p) => p.id === id) : null;
-	const fresh = planFromSteps(base ? base.name : name || "Stops", steps, base?.trigger);
-	if (!base) return {
-		...fresh,
-		id: "",
-		updated: 0
-	};
-	return {
-		...fresh,
-		id: base.id,
-		builtin: base.builtin,
-		description: base.description,
-		session: { ...base.session },
-		updated: base.updated
-	};
-}
-function planDots(steps, kinds, max = 10) {
-	return {
-		dots: steps.slice(0, max).map((s) => ({ perch: stepActor(s, kinds) === "you" })),
-		more: Math.max(0, steps.length - max)
-	};
-}
-function savedStopOrder(plans) {
-	return [...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)];
-}
-var NAME_MAX = 120;
-function checkRename(raw, plans, selfId) {
-	const name = raw.trim();
-	if (!name) return {
-		ok: false,
-		error: "A saved stop needs a name"
-	};
-	if (name.length > NAME_MAX) return {
-		ok: false,
-		error: "Keep the name under 120 characters"
-	};
-	const clash = plans.find((p) => p.id !== selfId && p.name.trim().toLowerCase() === name.toLowerCase());
-	if (clash) return {
-		ok: false,
-		error: "Another saved stop is already called “" + clash.name.trim() + "”"
-	};
-	return {
-		ok: true,
-		name
-	};
-}
-var isRemoveKey = (key) => key === "Delete" || key === "Backspace";
-//#endregion
 //#region src/lib/stopCatalog.ts
 var DEFAULT_KINDS = [
 	"agent",
@@ -130645,7 +131389,1227 @@ function ageWord(activitySince, now = Date.now()) {
 	return days + (days === 1 ? " day" : " days") + " still";
 }
 //#endregion
+//#region src/components/flights/useChainMenu.tsx
+var HERE = /* @__PURE__ */ new Set([
+	"current",
+	"perched",
+	"halted",
+	"paused"
+]);
+function useChainMenu(h, flightId) {
+	const [open, setOpen] = (0, import_react.useState)(null);
+	const onMenu = (n, at) => setOpen({
+		n,
+		x: at.clientX,
+		y: at.clientY
+	});
+	if (!open || typeof document === "undefined") return {
+		onMenu,
+		menu: null
+	};
+	const n = open.n;
+	const live = !!flightId && (!!n.step || n.kind === "group");
+	const items = menuItemsFor(n, {
+		can: {
+			edit: !!(h.onEdit || h.onSelect),
+			duplicate: !!h.onDuplicate,
+			remove: !!h.onRemove,
+			open: !!h.onOpen,
+			halt: !!h.onToggleHalt
+		},
+		live,
+		here: live && HERE.has(n.state)
+	});
+	if (!items.length) return {
+		onMenu,
+		menu: null
+	};
+	const step = n.step?.id || "";
+	const pick = (key) => {
+		if (key === "edit") (h.onEdit || h.onSelect)?.(n);
+		else if (key === "duplicate") h.onDuplicate?.(n);
+		else if (key === "remove") h.onRemove?.(n);
+		else if (key === "halt") h.onToggleHalt?.(n);
+		else if (key === "done") stepDone(flightId, step);
+		else if (key === "skip") stepSkip(flightId, step);
+		else if (key === "retry") stepRetry(flightId, step);
+		else if (key === "pause" || key === "resume") controlFlight(flightId, key);
+		else if (key === "open" || key === "tackon") h.onOpen?.(n);
+	};
+	return {
+		onMenu,
+		menu: (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "sky-chain-menu",
+			style: {
+				position: "fixed",
+				left: 0,
+				top: 0,
+				width: 0,
+				height: 0,
+				zIndex: 80,
+				["--sky-z"]: 1
+			},
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopMenu, {
+				x: open.x,
+				y: open.y,
+				label: "“" + n.title + "” — what you can do",
+				items,
+				onPick: (key) => {
+					pick(key);
+					setOpen(null);
+				},
+				onClose: () => setOpen(null)
+			})
+		}), document.body)
+	};
+}
+function pillAimer(graph, onLoopTo) {
+	return (via, e) => {
+		if (!onLoopTo || !via.editable || e.button !== 0) return;
+		const wire = graph.wires.find((w) => w.via?.id === via.id);
+		const end = graph.nodes.find((n) => n.id === wire?.from);
+		if (!end || end.node.index === void 0) return;
+		const sx = e.clientX;
+		const sy = e.clientY;
+		let moved = false;
+		let lit = null;
+		const targetAt = (x, y) => {
+			const el = document.elementFromPoint(x, y)?.closest("[data-node]");
+			if (!el || el.closest("[data-chain]")?.getAttribute("data-chain") !== graph.key) return null;
+			const n = graph.nodes.find((g) => g.id === el.getAttribute("data-node"));
+			return n && loopable(n.node) && n.node.index <= end.node.index ? {
+				el,
+				n
+			} : null;
+		};
+		const light = (el) => {
+			if (lit === el) return;
+			lit?.classList.remove("sky-aim-over");
+			el?.classList.add("sky-aim-over");
+			lit = el;
+		};
+		const stop = () => {
+			window.removeEventListener("pointermove", move);
+			window.removeEventListener("pointerup", up);
+			window.removeEventListener("pointercancel", stop);
+			window.removeEventListener("keydown", key, true);
+			light(null);
+			if (moved) {
+				const eat = (c) => {
+					c.stopPropagation();
+					c.preventDefault();
+				};
+				window.addEventListener("click", eat, {
+					capture: true,
+					once: true
+				});
+				setTimeout(() => window.removeEventListener("click", eat, { capture: true }), 0);
+			}
+		};
+		const move = (ev) => {
+			if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 4) return;
+			moved = true;
+			const t = targetAt(ev.clientX, ev.clientY);
+			light(t ? t.el.closest(".sky-node") ?? t.el : null);
+		};
+		const up = (ev) => {
+			const t = moved ? targetAt(ev.clientX, ev.clientY) : null;
+			stop();
+			if (t) onLoopTo(via, t.n.node);
+		};
+		const key = (ev) => {
+			if (ev.key !== "Escape") return;
+			ev.preventDefault();
+			ev.stopPropagation();
+			stop();
+		};
+		window.addEventListener("pointermove", move);
+		window.addEventListener("pointerup", up);
+		window.addEventListener("pointercancel", stop);
+		window.addEventListener("keydown", key, true);
+	};
+}
+//#endregion
+//#region src/components/flights/StopIcons.tsx
+var FAMILY = {
+	agent: "work",
+	split: "work",
+	join: "work",
+	command: "work",
+	test: "work",
+	sync: "work",
+	checkpoint: "work",
+	judge: "work",
+	screenshot: "work",
+	preview: "work",
+	ship: "ship",
+	checks: "ship",
+	reviews: "ship",
+	land: "ship",
+	wait: "outside",
+	notify: "outside",
+	ticket: "outside",
+	budget: "outside",
+	call: "outside",
+	listen: "outside",
+	you: "people",
+	perch: "people",
+	verify: "people",
+	review: "people",
+	someone: "people",
+	loop: "flow",
+	handoff: "flow"
+};
+var FAMILIES = /* @__PURE__ */ new Set([
+	"work",
+	"ship",
+	"outside",
+	"people",
+	"flow"
+]);
+function kindFamily(kind, kinds) {
+	const f = kinds?.find((k) => k.kind === kind)?.family;
+	if (f && FAMILIES.has(f)) return f;
+	return FAMILY[kind] || "outside";
+}
+function nodeFamily(n, kinds) {
+	if (n.perch) return "people";
+	if (n.kind === "group") return n.group?.steps[0] ? kindFamily(n.group.steps[0].kind, kinds) : "work";
+	if (n.kind === "session" || n.kind === "child" || n.kind === "branch" || n.kind === "parent") return "work";
+	return kindFamily(n.icon, kinds);
+}
+function TileIcon({ kind, size = 28 }) {
+	if (kind === "handoff") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+		className: "fl-stop-icon",
+		width: size,
+		height: size,
+		viewBox: "0 0 24 24",
+		fill: "none",
+		stroke: "currentColor",
+		strokeWidth: "1.8",
+		strokeLinecap: "round",
+		strokeLinejoin: "round",
+		"aria-hidden": "true",
+		focusable: "false",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M13.5 4.5H19.5V10.5" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M19.5 4.5L10 14" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M17 13.5V18a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 18V8.5A1.5 1.5 0 0 1 6 7h4.5" })
+		]
+	});
+	if (kind === "group") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+		className: "fl-stop-icon",
+		width: size,
+		height: size,
+		viewBox: "0 0 24 24",
+		fill: "none",
+		stroke: "currentColor",
+		strokeWidth: "1.8",
+		strokeLinecap: "round",
+		strokeLinejoin: "round",
+		"aria-hidden": "true",
+		focusable: "false",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 3.5l8.5 4.25L12 12 3.5 7.75z" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3.5 12L12 16.25 20.5 12" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3.5 16.25L12 20.5l8.5-4.25" })
+		]
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopIcon, {
+		kind,
+		size
+	});
+}
+//#endregion
+//#region src/components/flights/SkyChain.tsx
+var DRAG_MIN = 4;
+var STATE_WORD = {
+	done: "done",
+	current: "flying now",
+	perched: "waiting on you",
+	halted: "halted",
+	paused: "paused",
+	pending: "to come",
+	skipped: "skipped",
+	failed: "failed",
+	edit: "",
+	session: ""
+};
+var isStopish = (n) => n.kind === "stop" || n.kind === "group";
+function tileSub(n) {
+	if (n.kind === "group" && n.group) return n.group.done + " of " + n.group.total + (n.group.current ? " · " + n.group.current.title : "");
+	if (n.receipt) return n.receipt;
+	return n.sub;
+}
+function tileLabel(n, head = false) {
+	if (head) return (n.title || "Session") + (n.chip ? " — " + n.chip.label : "") + (n.sub ? ", " + n.sub : "");
+	const word = STATE_WORD[n.state] ?? "";
+	const sub = tileSub(n);
+	return n.title + (word ? " — " + word : "") + (sub ? ", " + sub : "") + (n.reason ? " (" + n.reason + ")" : "");
+}
+function SkyChain(p) {
+	const [drag, setDrag] = (0, import_react.useState)(null);
+	const dragRef = (0, import_react.useRef)(null);
+	const justDragged = (0, import_react.useRef)(false);
+	const plusPress = (0, import_react.useRef)(null);
+	const g = (0, import_react.useMemo)(() => drag?.live ? moveNode(p.graph, drag.id, drag.pos) : p.graph, [p.graph, drag]);
+	const head = g.head;
+	const all = g.headNode ? [g.headNode, ...g.nodes] : g.nodes;
+	const byId = new Map(all.map((n) => [n.id, n]));
+	const zoom = p.zoom > 0 ? p.zoom : 1;
+	const headNodeId = head.node?.id;
+	const isSel = (n) => !!p.selected && (p.selected === n.id || n.id === HEAD_ID && p.selected === headNodeId);
+	const firstStop = g.nodes.find((n) => n.node.row === "main") || null;
+	const activate = (n) => {
+		if (justDragged.current) return;
+		if (n.id !== HEAD_ID && isStopish(n.node)) p.onSelect?.(n.node);
+		else p.onOpen?.(n.node);
+	};
+	const edit = (n) => p.onEdit ? p.onEdit(n.node) : p.onSelect?.(n.node);
+	const draggable = (n) => !!p.onNodeMove && n.id !== HEAD_ID && isStopish(n.node);
+	const endDrag = (commit) => {
+		const d = dragRef.current;
+		dragRef.current = null;
+		setDrag(null);
+		if (!d) return;
+		if (d.live) {
+			justDragged.current = true;
+			setTimeout(() => justDragged.current = false, 0);
+			const n = p.graph.nodes.find((x) => x.id === d.id);
+			if (commit && n && (d.pos.x !== n.x || d.pos.y !== n.y)) p.onNodeMove?.(n, d.pos);
+		}
+	};
+	const onDown = (e, n) => {
+		if (e.button !== 0 || !draggable(n)) return;
+		if (e.target.closest("button, input, textarea, a, [data-port], [data-no-drag]")) return;
+		e.stopPropagation();
+		try {
+			e.currentTarget.setPointerCapture(e.pointerId);
+		} catch {}
+		const d = {
+			id: n.id,
+			pointer: e.pointerId,
+			sx: e.clientX,
+			sy: e.clientY,
+			x0: n.x,
+			y0: n.y,
+			live: false,
+			pos: {
+				x: n.x,
+				y: n.y
+			}
+		};
+		dragRef.current = d;
+		setDrag(d);
+	};
+	const onMove = (e) => {
+		const d = dragRef.current;
+		if (!d || d.pointer !== e.pointerId) return;
+		const dx = e.clientX - d.sx;
+		const dy = e.clientY - d.sy;
+		if (!d.live && Math.hypot(dx, dy) < DRAG_MIN) return;
+		const next = {
+			...d,
+			live: true,
+			pos: snapPos({
+				x: d.x0 + dx / zoom,
+				y: d.y0 + dy / zoom
+			}, e.altKey)
+		};
+		dragRef.current = next;
+		setDrag(next);
+	};
+	const onUp = (e) => {
+		const d = dragRef.current;
+		if (!d || d.pointer !== e.pointerId) return;
+		endDrag(e.type === "pointerup");
+	};
+	const onKey = (e, n) => {
+		if (e.key === "Escape" && dragRef.current) {
+			e.preventDefault();
+			endDrag(false);
+			return;
+		}
+		if (e.target !== e.currentTarget) return;
+		if (e.key === "Enter") {
+			e.preventDefault();
+			if (n.id !== HEAD_ID && isStopish(n.node)) edit(n);
+			else p.onOpen?.(n.node);
+		} else if (e.key === " ") {
+			e.preventDefault();
+			activate(n);
+		} else if ((e.key === "Delete" || e.key === "Backspace") && n.id !== HEAD_ID && isStopish(n.node) && p.onRemove) {
+			e.preventDefault();
+			p.onRemove(n.node);
+		}
+	};
+	const portDown = (e, n, side) => {
+		if (e.button !== 0) return;
+		e.stopPropagation();
+		p.onPortDown?.(n, side, e);
+	};
+	const port = (n, side, wired) => {
+		const live = side === "in" ? n.inPort : n.outPort;
+		if (!live && !wired) return null;
+		const cls = "sky-port sky-port-" + side + (live ? "" : " sky-port-off");
+		const title = side === "in" ? "Drag from here to pull this stop and the ones after it off into a chain of their own" : "Drag from here to wire it to a stop, another chain or empty sky";
+		return live ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: cls,
+			"data-port": side,
+			"data-node": n.id,
+			title,
+			onPointerDown: (e) => portDown(e, n, side)
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: cls,
+			"aria-hidden": "true"
+		});
+	};
+	const wiredIn = new Set(g.wires.filter((w) => w.kind !== "add").map((w) => w.to));
+	const wiredOut = new Set(g.wires.map((w) => w.from));
+	const birdOn = (() => {
+		const b = p.bird;
+		if (!b) return null;
+		const id = b.nodeId === headNodeId ? HEAD_ID : b.nodeId;
+		return byId.get(id) || null;
+	})();
+	const tile = (n) => {
+		const isHead = n.id === HEAD_ID;
+		const dn = n.node;
+		const fam = nodeFamily(dn, p.kinds);
+		const halt = isHead ? null : haltMark(dn);
+		const sub = isHead ? head.sub : tileSub(dn);
+		const cls = [
+			"sky-node",
+			isHead ? "sky-head sky-head-" + head.kind : "sky-node-" + dn.kind,
+			"st-" + dn.state,
+			"sky-fam-" + fam,
+			isHead && dn.chip ? "tone-" + dn.chip.tone : "",
+			dn.kind === "group" ? "is-group" : "",
+			dn.perch ? "is-perch" : "",
+			n.inPort || n.outPort ? "" : "is-fixed",
+			isSel(n) ? "is-selected" : "",
+			p.highlighted?.has(n.id) || isHead && headNodeId && p.highlighted?.has(headNodeId) ? "is-highlighted" : "",
+			p.targets?.has(n.id) ? "is-target" : "",
+			p.over === n.id ? "is-over" : "",
+			drag?.live && drag.id === n.id ? "is-dragging" : "",
+			draggable(n) ? "is-draggable" : ""
+		].filter(Boolean).join(" ");
+		const said = tileLabel(isHead ? {
+			...dn,
+			title: head.title,
+			sub: head.sub
+		} : dn, isHead);
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			role: "listitem",
+			tabIndex: 0,
+			className: cls,
+			"data-node": n.id,
+			"data-diagram-node": dn.id,
+			"aria-label": said,
+			"aria-current": isSel(n) ? "true" : void 0,
+			title: isHead ? void 0 : dn.reason ? dn.title + " — " + dn.reason : sub ? dn.title + " — " + sub : dn.title,
+			style: {
+				transform: `translate(${n.x}px, ${n.y}px)`,
+				width: n.w,
+				height: n.h,
+				...isHead ? { ["--sky-head-color"]: head.color } : {}
+			},
+			onPointerDown: (e) => onDown(e, n),
+			onPointerMove: onMove,
+			onPointerUp: onUp,
+			onPointerCancel: onUp,
+			onClick: (e) => {
+				if (e.target.closest("[data-port], [data-no-drag], button")) return;
+				activate(n);
+			},
+			onDoubleClick: (e) => {
+				if (isHead || !isStopish(dn) || !p.onEdit) return;
+				if (e.target.closest("button, input, textarea, a, [data-port]")) return;
+				e.preventDefault();
+				edit(n);
+			},
+			onKeyDown: (e) => onKey(e, n),
+			onContextMenu: (e) => {
+				if (!p.onMenu) return;
+				e.preventDefault();
+				e.stopPropagation();
+				p.onMenu(dn, {
+					clientX: e.clientX,
+					clientY: e.clientY
+				});
+			},
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "sky-tile",
+					style: {
+						width: TILE,
+						height: TILE
+					},
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-tile-icon",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TileIcon, {
+								kind: isHead ? head.kind === "trigger" ? "handoff" : "session" : dn.perch ? "perch" : dn.icon,
+								size: 28
+							})
+						}),
+						isHead && head.kind !== "none" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-head-dot",
+							"aria-hidden": "true"
+						}),
+						!isHead && dn.state === "done" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-badge sky-badge-done",
+							"aria-hidden": "true",
+							children: "✓"
+						}),
+						!isHead && dn.state === "failed" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-badge sky-badge-failed",
+							"aria-hidden": "true",
+							children: "!"
+						}),
+						halt && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-badge sky-badge-halt",
+							title: halt.title,
+							"aria-label": halt.title,
+							role: "img",
+							children: halt.glyph
+						}),
+						!isHead && dn.when && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-badge sky-badge-if",
+							title: "Only when " + dn.when,
+							"aria-label": "Only when " + dn.when,
+							role: "img",
+							children: "if"
+						}),
+						port(n, "in", wiredIn.has(n.id)),
+						port(n, "out", wiredOut.has(n.id)),
+						!isHead && dn.risk && dn.risk.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-risk",
+							title: riskTitle(dn.risk),
+							role: "img",
+							"aria-label": "Touches: " + riskTitle(dn.risk),
+							"data-risk": dn.risk.join(" "),
+							children: dn.risk.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: "sky-risk-" + t }, t))
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "sky-node-title",
+					children: isHead ? head.title : dn.title
+				}),
+				sub && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "sky-node-sub",
+					children: sub
+				}),
+				isHead ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "sky-head-extra",
+					"data-no-drag": true,
+					children: p.renderHead ? p.renderHead() : dn.chip ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-head-chip tone-" + dn.chip.tone,
+						children: dn.chip.label
+					}) : null
+				}) : p.renderInBox && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "sky-node-extra",
+					"data-no-drag": true,
+					children: p.renderInBox(dn)
+				})
+			]
+		}, n.id);
+	};
+	const wireClass = (w) => {
+		const to = byId.get(w.to)?.node;
+		const live = (w.kind === "line" || w.kind === "head" || w.kind === "fan") && to && (to.state === "current" || to.state === "perched");
+		return [
+			"sky-wire",
+			"sky-wire-" + w.kind,
+			w.done ? "is-done" : "",
+			live ? "is-live" : "",
+			w.loop ? "sky-loop-" + w.loop.state : ""
+		].filter(Boolean).join(" ");
+	};
+	const tinted = (w) => w.kind === "line" || w.kind === "head";
+	const b = g.bbox;
+	const plusAfter = g.plus ? byId.get(g.plus.after) || null : null;
+	const socket = head.kind === "none" && firstStop ? inPortOf(firstStop) : null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sky-chain" + (p.className ? " " + p.className : "") + (drag?.live ? " is-dragging-node" : ""),
+		style: {
+			position: "relative",
+			width: Math.max(0, b.x + b.w),
+			height: Math.max(0, b.y + b.h),
+			["--sky-chain-color"]: head.color
+		},
+		"data-chain": g.key,
+		"data-flight": g.flightId || void 0,
+		"data-head": head.kind,
+		role: "list",
+		"aria-label": (head.kind === "session" ? "Chain in " + head.title : head.kind === "trigger" ? head.title : "Stops with no session yet") + " — drag a tile to move it, drag a port to wire it",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+				className: "sky-wires",
+				"aria-hidden": "true",
+				focusable: "false",
+				style: {
+					left: b.x,
+					top: b.y
+				},
+				width: Math.max(1, b.w),
+				height: Math.max(1, b.h),
+				viewBox: `${b.x} ${b.y} ${Math.max(1, b.w)} ${Math.max(1, b.h)}`,
+				children: [g.wires.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+					className: wireClass(w),
+					d: w.d,
+					"data-wire": w.kind,
+					"data-from": w.from,
+					"data-to": w.to,
+					style: tinted(w) ? { stroke: head.color } : void 0
+				}, w.id)), socket && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+					className: "sky-wire sky-wire-socket",
+					d: `M ${socket.x - 16} ${socket.y} H ${socket.x}`
+				})]
+			}),
+			all.map(tile),
+			socket && firstStop && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sky-socket" + (p.targets?.has(firstStop.id) ? " is-target" : "") + (p.over === firstStop.id ? " is-over" : ""),
+				style: {
+					left: socket.x - 24,
+					top: socket.y
+				},
+				"data-port": "in",
+				"data-node": firstStop.id,
+				"data-socket": "",
+				role: "img",
+				"aria-label": "Wire a session's out port here to run it",
+				title: "Wire a session's out port here to run it"
+			}),
+			g.plus && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "sky-plus fl-icon-btn",
+				style: {
+					left: g.plus.at.x,
+					top: g.plus.at.y
+				},
+				"data-port": "out",
+				"data-node": g.plus.after,
+				"data-plus": "",
+				"aria-label": "Add a stop after this one — or drag to wire it",
+				title: "Add a stop (drag to wire it somewhere)",
+				onPointerDown: (e) => {
+					if (e.button !== 0) return;
+					e.stopPropagation();
+					plusPress.current = {
+						pointer: e.pointerId,
+						sx: e.clientX,
+						sy: e.clientY,
+						sent: false
+					};
+				},
+				onPointerMove: (e) => {
+					const pr = plusPress.current;
+					if (!pr || pr.sent || pr.pointer !== e.pointerId || !plusAfter) return;
+					if (Math.hypot(e.clientX - pr.sx, e.clientY - pr.sy) < DRAG_MIN) return;
+					pr.sent = true;
+					p.onPortDown?.(plusAfter, "out", e);
+				},
+				onPointerUp: () => {
+					if (plusPress.current?.sent) {
+						justDragged.current = true;
+						setTimeout(() => justDragged.current = false, 0);
+					}
+					plusPress.current = null;
+				},
+				onPointerCancel: () => plusPress.current = null,
+				onClick: (e) => {
+					e.stopPropagation();
+					if (justDragged.current) return;
+					p.onPlus?.(plusAfter);
+				},
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+					width: "12",
+					height: "12",
+					viewBox: "0 0 12 12",
+					"aria-hidden": "true",
+					focusable: "false",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+						d: "M6 1.5v9M1.5 6h9",
+						stroke: "currentColor",
+						strokeWidth: "1.8",
+						strokeLinecap: "round"
+					})
+				})
+			}),
+			g.wires.map((w) => {
+				if (w.kind !== "loop" || !w.loop) return null;
+				const m = w.loop;
+				const v = w.via;
+				const text = loopPill(m) || loopIdlePill(m, v);
+				const title = (m.state === "pending" && m.runs === 0 ? "Loop: " + (v?.sub || text) : loopPillTitle(m)) + (v ? " — click to change it" : "");
+				const cls = [
+					"sky-loop-pill",
+					"sky-loop-" + m.state,
+					v ? "st-" + v.state : "",
+					v && p.selected === v.id ? "is-selected" : ""
+				].filter(Boolean).join(" ");
+				const style = {
+					left: w.mid.x,
+					top: w.mid.y
+				};
+				return v ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					role: "button",
+					tabIndex: 0,
+					className: cls,
+					style,
+					"data-node": v.id,
+					"data-pill": "",
+					title,
+					"aria-label": title,
+					onPointerDown: (e) => {
+						if (e.button !== 0) return;
+						e.stopPropagation();
+						p.onPillDown?.(v, e);
+					},
+					onClick: (e) => {
+						e.stopPropagation();
+						p.onLoopPill?.(v);
+					},
+					onContextMenu: (e) => {
+						if (!p.onMenu) return;
+						e.preventDefault();
+						e.stopPropagation();
+						p.onMenu(v, {
+							clientX: e.clientX,
+							clientY: e.clientY
+						});
+					},
+					onKeyDown: (e) => {
+						if (e.key === "Enter" || e.key === " ") {
+							e.preventDefault();
+							p.onLoopPill?.(v);
+						} else if ((e.key === "Delete" || e.key === "Backspace") && p.onRemove) {
+							e.preventDefault();
+							p.onRemove(v);
+						}
+					},
+					children: text
+				}, "pill:" + w.id) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: cls,
+					style,
+					title,
+					"aria-label": title,
+					role: "img",
+					children: text
+				}, "pill:" + w.id);
+			}),
+			birdOn && p.bird && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMarker, {
+				tone: p.bird.tone,
+				x: birdOn.x + birdOn.w / 2,
+				y: birdOn.y,
+				size: 22,
+				label: "The flight is at “" + (birdOn.id === HEAD_ID ? head.title : birdOn.node.title) + "”",
+				className: "sky-chain-bird"
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/flights/useSkyWiring.ts
+var HEAD = "head";
+var chainNodes = (g) => g.headNode ? [g.headNode, ...g.nodes] : g.nodes;
+var chainNode = (g, id) => id === HEAD ? g.headNode : g.nodes.find((n) => n.id === id) || null;
+var onPlane = (c, p) => ({
+	x: c.origin.x + c.dx + p.x,
+	y: c.origin.y + c.dy + p.y
+});
+var inChain = (c, p) => ({
+	x: p.x - c.origin.x - c.dx,
+	y: p.y - c.origin.y - c.dy
+});
+var portOnPlane = (c, n, side) => onPlane(c, side === "in" ? inPortOf(n) : outPortOf(n));
+function wireTargetsOf(src, chains, shift = false) {
+	const out = /* @__PURE__ */ new Map();
+	for (const c of chains) for (const n of chainNodes(c.graph)) {
+		if (wireIntent(src, {
+			chain: c.graph,
+			node: n,
+			side: "in"
+		}, { shift }).op === "none") continue;
+		let s = out.get(c.graph.key);
+		if (!s) out.set(c.graph.key, s = /* @__PURE__ */ new Set());
+		s.add(n.id);
+	}
+	return out;
+}
+function nodeUnder(el, chains) {
+	const nodeEl = el?.closest("[data-node]");
+	const chainEl = nodeEl?.closest(".sky-chain[data-chain]");
+	if (!nodeEl || !chainEl || nodeEl.closest(".skl-card")) return null;
+	const key = chainEl.getAttribute("data-chain") || "";
+	const c = chains.get(key);
+	const node = c ? chainNode(c.graph, nodeEl.getAttribute("data-node") || "") : null;
+	return c && node ? {
+		key,
+		node
+	} : null;
+}
+function entrySig(e) {
+	const g = e.graph;
+	return [
+		g.key,
+		g.flightId,
+		g.head.kind,
+		e.dx,
+		e.dy,
+		...chainNodes(g).map((n) => n.id + "@" + n.x + "," + n.y)
+	].join("|");
+}
+function useChainRegistry() {
+	const entries = (0, import_react.useRef)(/* @__PURE__ */ new Map());
+	const sigs = (0, import_react.useRef)(/* @__PURE__ */ new Map());
+	const registers = (0, import_react.useRef)(/* @__PURE__ */ new Map());
+	const [version, setVersion] = (0, import_react.useState)(0);
+	return {
+		entries,
+		registerFor: (0, import_react.useCallback)((key) => {
+			let r = registers.current.get(key);
+			if (!r) {
+				r = (e) => {
+					if (e) entries.current.set(key, e);
+					else entries.current.delete(key);
+					const sig = e ? entrySig(e) : "";
+					if (sig === (sigs.current.get(key) || "")) return;
+					if (sig) sigs.current.set(key, sig);
+					else sigs.current.delete(key);
+					setVersion((v) => v + 1);
+				};
+				registers.current.set(key, r);
+			}
+			return r;
+		}, []),
+		version
+	};
+}
+function useSkyWiring(opts) {
+	const optsRef = (0, import_react.useRef)(opts);
+	optsRef.current = opts;
+	const [band, setBand] = (0, import_react.useState)(null);
+	const [targets, setTargets] = (0, import_react.useState)(() => /* @__PURE__ */ new Map());
+	const [over, setOver] = (0, import_react.useState)(null);
+	const stop = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => () => stop.current?.(), []);
+	const startWire = (0, import_react.useCallback)((key, node, side, e) => {
+		const o = optsRef.current;
+		const chains = o.chains();
+		const c = chains.get(key);
+		if (!c) return;
+		stop.current?.();
+		const src = {
+			chain: c.graph,
+			node,
+			side
+		};
+		const el = e.currentTarget;
+		const r = el instanceof Element ? el.getBoundingClientRect() : null;
+		const from = r && (r.width || r.height) ? o.planeAt(r.left + r.width / 2, r.top + r.height / 2) : portOnPlane(c, node, side);
+		let shift = e.shiftKey;
+		setTargets(wireTargetsOf(src, chains.values(), shift));
+		setBand({
+			from,
+			to: from,
+			side,
+			over: false
+		});
+		setOver(null);
+		const pid = e.pointerId;
+		const sx = e.clientX;
+		const sy = e.clientY;
+		let moved = false;
+		const hit = (ev) => {
+			const at = typeof document !== "undefined" && document.elementFromPoint ? document.elementFromPoint(ev.clientX, ev.clientY) : null;
+			return {
+				el: at,
+				node: nodeUnder(at, optsRef.current.chains())
+			};
+		};
+		const move = (ev) => {
+			if (ev.pointerId !== pid) return;
+			if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) >= 3) moved = true;
+			const now = optsRef.current;
+			const to = now.planeAt(ev.clientX, ev.clientY);
+			if (ev.shiftKey !== shift) {
+				shift = ev.shiftKey;
+				setTargets(wireTargetsOf(src, now.chains().values(), shift));
+			}
+			const h = hit(ev).node;
+			const hc = h ? now.chains().get(h.key) : null;
+			const ok = !!h && !!hc && wireIntent(src, {
+				chain: hc.graph,
+				node: h.node,
+				side: "in"
+			}, { shift }).op !== "none";
+			setOver((cur) => ok ? cur?.key === h.key && cur.node === h.node.id ? cur : {
+				key: h.key,
+				node: h.node.id
+			} : null);
+			setBand({
+				from,
+				to,
+				side,
+				over: ok
+			});
+		};
+		const end = (commit, ev) => {
+			window.removeEventListener("pointermove", move);
+			window.removeEventListener("pointerup", up);
+			window.removeEventListener("pointercancel", cancel);
+			window.removeEventListener("keydown", esc, true);
+			stop.current = null;
+			setBand(null);
+			setTargets(/* @__PURE__ */ new Map());
+			setOver(null);
+			if (moved && typeof window !== "undefined") {
+				const eat = (c) => {
+					c.stopPropagation();
+					c.preventDefault();
+				};
+				window.addEventListener("click", eat, {
+					capture: true,
+					once: true
+				});
+				setTimeout(() => window.removeEventListener("click", eat, { capture: true }), 0);
+			}
+			if (!commit || !ev || !moved) return;
+			const now = optsRef.current;
+			const at = now.planeAt(ev.clientX, ev.clientY);
+			const h = hit(ev);
+			const placed = h.node ? now.chains().get(h.node.key) : null;
+			const dst = h.node && placed ? {
+				chain: placed.graph,
+				node: h.node.node,
+				side: "in"
+			} : now.ground(h.el) ? { sky: at } : null;
+			const intent = dst ? wireIntent(src, dst, { shift: ev.shiftKey }) : { op: "none" };
+			now.onIntent(intent, {
+				src,
+				at
+			});
+		};
+		const up = (ev) => {
+			if (ev.pointerId === pid) end(true, ev);
+		};
+		const cancel = (ev) => {
+			if (ev.pointerId === pid) end(false);
+		};
+		const esc = (ev) => {
+			if (ev.key !== "Escape") return;
+			ev.preventDefault();
+			ev.stopPropagation();
+			end(false);
+		};
+		stop.current = () => end(false);
+		window.addEventListener("pointermove", move);
+		window.addEventListener("pointerup", up);
+		window.addEventListener("pointercancel", cancel);
+		window.addEventListener("keydown", esc, true);
+	}, []);
+	const targetsOf = (key) => targets.get(key);
+	const overOf = (key) => over?.key === key ? over.node : null;
+	return {
+		band,
+		targets,
+		over,
+		startWire,
+		targetsOf,
+		overOf,
+		dragging: !!band
+	};
+}
+var groundedName$1 = (f) => f.plan_name || "Stops";
+var atOrEnd = (f, at) => at !== void 0 && at < f.steps.length ? at : void 0;
+async function runWireIntent(intent, ctx, d) {
+	if (intent.op === "none") return;
+	if (intent.op === "attach") {
+		await d.merge(intent.chain, intent.session);
+		return;
+	}
+	if (intent.op === "merge") {
+		const f = d.flightOf(intent.chain);
+		await d.merge(intent.from, intent.chain, f && intent.after ? loopSlotAfter(intent.after) : void 0);
+		return;
+	}
+	if (intent.op === "palette") {
+		const c = d.chain(intent.chain);
+		if (!c) return;
+		const p = inChain(c, intent.at);
+		const snap = (v) => Math.round(v / GRID_SNAP) * GRID_SNAP;
+		c.paletteAfter(intent.after, {
+			x: snap(p.x - NODE_W / 2),
+			y: snap(p.y - TILE / 2)
+		});
+		return;
+	}
+	const f = d.flightOf(intent.chain);
+	if (intent.op === "handoff") {
+		const def = d.kinds.find((k) => k.kind === HANDOFF_KIND);
+		if (!def) return void toast("This server has no “Start a chain” stop yet");
+		const target = d.flights.find((x) => groundedKey(x.id) === intent.target);
+		const step = handoffStepFor(def, f ? f.steps.map((st) => st.id) : [], intent.target);
+		if (f ? await tackOn(f.id, step, atOrEnd(f, loopSlotAfter(intent.from))) : !!await tackOnNew(intent.chain, [step])) toast("“" + intent.from.title + "” starts “" + (target ? groundedName$1(target) : "that chain") + "” on " + sessionWord("new"));
+		return;
+	}
+	if (!f) return;
+	if (intent.op === "move") {
+		const step = firstStepOf(intent.step);
+		const to = intent.after ? loopSlotAfter(intent.after) : 0;
+		if (step && to !== void 0) await moveStop(f.id, step.id, Math.min(to, f.steps.length - 1));
+		return;
+	}
+	if (intent.op === "loop") {
+		const def = d.kinds.find((k) => k.kind === "loop");
+		const target = firstStepOf(intent.to);
+		const at = loopSlotAfter(intent.from);
+		if (!def || !target || at === void 0) return void toast("This server has no Loop stop");
+		if (await tackOn(f.id, loopStepTo(def, f.steps.map((st) => st.id), target), atOrEnd(f, at))) toast("Loops back to “" + target.title + "”");
+		return;
+	}
+	if (intent.op === "split") {
+		const step = firstStepOf(intent.step);
+		if (!step) return;
+		const chain = await splitOffChain(f.id, step.id, {
+			x: 0,
+			y: 0
+		});
+		if (!chain) return;
+		const label = d.chain(intent.chain)?.dy ?? d.labelH;
+		d.pinAt(groundedKey(chain.id), {
+			x: Math.round(ctx.at.x - NODE_W / 2),
+			y: Math.round(ctx.at.y - TILE / 2 - label)
+		});
+		const base = "sky" in ctx.src ? null : ctx.src.node;
+		const moved = {};
+		if (base) {
+			for (const st of chain.steps.slice(1)) if (st.pos) moved[st.id] = {
+				x: st.pos.x - base.x,
+				y: st.pos.y - base.y
+			};
+		}
+		if (Object.keys(moved).length) await saveStopPositions(chain.id, moved);
+		toast("Split off “" + groundedName$1(chain) + "”");
+	}
+}
+var posStepOf = (n) => firstStepOf(n);
+function withLocalPos(d, local) {
+	if (!Object.keys(local).length) return d;
+	const put = (n) => {
+		const st = posStepOf(n);
+		const p = st ? local[st.id] : void 0;
+		if (!st || !p) return n;
+		if (n.step) return {
+			...n,
+			step: {
+				...n.step,
+				pos: p
+			}
+		};
+		if (n.group && n.group.steps.length) return {
+			...n,
+			group: {
+				...n.group,
+				steps: [{
+					...n.group.steps[0],
+					pos: p
+				}, ...n.group.steps.slice(1)]
+			}
+		};
+		return n;
+	};
+	return {
+		...d,
+		nodes: d.nodes.map(put)
+	};
+}
+function useNodeMoves(flightId, d) {
+	const [local, setLocal] = (0, import_react.useState)({});
+	(0, import_react.useEffect)(() => {
+		const ids = Object.keys(local);
+		if (!ids.length) return;
+		const saved = /* @__PURE__ */ new Map();
+		for (const n of d.nodes) {
+			const st = posStepOf(n);
+			if (st) saved.set(st.id, st.pos);
+		}
+		const keep = ids.filter((id) => {
+			const s = saved.get(id);
+			return !(s && s.x === local[id].x && s.y === local[id].y);
+		});
+		if (keep.length !== ids.length) setLocal(Object.fromEntries(keep.map((id) => [id, local[id]])));
+	}, [d, local]);
+	const move = flightId ? (node, pos) => {
+		const st = posStepOf(node.node);
+		if (!st) return;
+		const p = {
+			x: Math.round(pos.x),
+			y: Math.round(pos.y)
+		};
+		setLocal((l) => ({
+			...l,
+			[st.id]: p
+		}));
+		queueStopPos(flightId, st.id, p, (ok) => {
+			if (!ok) setLocal((l) => Object.fromEntries(Object.entries(l).filter(([id]) => id !== st.id)));
+		});
+	} : void 0;
+	return {
+		diagram: (0, import_react.useMemo)(() => withLocalPos(d, local), [d, local]),
+		move
+	};
+}
+function useChainEntry(register, graph, wrap, paletteAfter) {
+	const palRef = (0, import_react.useRef)(paletteAfter);
+	palRef.current = paletteAfter;
+	const pal = (0, import_react.useCallback)((a, p) => palRef.current(a, p), []);
+	const last = (0, import_react.useRef)(null);
+	(0, import_react.useLayoutEffect)(() => {
+		if (!register) return;
+		const el = wrap.current;
+		const dx = el ? el.offsetLeft : 0;
+		const dy = el ? el.offsetTop : 0;
+		const l = last.current;
+		if (l && l.graph === graph && l.dx === dx && l.dy === dy) return;
+		last.current = {
+			graph,
+			dx,
+			dy
+		};
+		register({
+			graph,
+			dx,
+			dy,
+			paletteAfter: pal
+		});
+	});
+	(0, import_react.useEffect)(() => {
+		if (!register) return;
+		return () => {
+			last.current = null;
+			register(null);
+		};
+	}, [register]);
+}
+function useTourHooks(root, hooks) {
+	(0, import_react.useEffect)(() => {
+		const el = root.current;
+		if (!el) return;
+		for (const [sel, name] of Object.entries(hooks)) {
+			const t = el.querySelector(sel);
+			if (t && t.getAttribute("data-tour") !== name) t.setAttribute("data-tour", name);
+		}
+	});
+}
+//#endregion
+//#region src/components/flights/SkyWires.tsx
+function nodeOfStep(g, stepId) {
+	for (const n of g.nodes) {
+		if (posStepOf(n.node)?.id === stepId) return n;
+		if (n.node.group?.steps.some((s) => s.id === stepId)) return n;
+	}
+	return null;
+}
+function entryOf(c) {
+	const n = c.graph.headNode || c.graph.nodes.find((x) => x.node.row === "main") || c.graph.nodes[0];
+	return n ? portOnPlane(c, n, "in") : null;
+}
+function handoffWires(links, chains) {
+	const byFlight = /* @__PURE__ */ new Map();
+	for (const c of chains) if (c.graph.flightId) byFlight.set(c.graph.flightId, c);
+	const out = [];
+	for (const l of links) {
+		const src = byFlight.get(l.fromFlight);
+		const dst = byFlight.get(l.target);
+		if (!src || !dst || src === dst) continue;
+		const n = nodeOfStep(src.graph, l.fromStep);
+		const to = entryOf(dst);
+		if (!n || !to) continue;
+		const from = portOnPlane(src, n, "out");
+		out.push({
+			id: l.fromFlight + ":" + l.fromStep,
+			d: wirePath(from, to),
+			color: chainColor(l.fromSession),
+			started: l.started,
+			from,
+			to
+		});
+	}
+	return out;
+}
+function SkyWires({ band, wires }) {
+	if (!band && !wires.length) return null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+		className: "sky-xwires",
+		"aria-hidden": "true",
+		focusable: "false",
+		width: 1,
+		height: 1,
+		children: [wires.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("g", {
+			className: "sky-xwire" + (w.started ? " is-started" : ""),
+			"data-handoff": w.id,
+			style: { color: w.color },
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				className: "sky-xwire-path",
+				d: w.d
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+				className: "sky-xwire-end",
+				cx: w.to.x,
+				cy: w.to.y,
+				r: 3.5
+			})]
+		}, w.id)), band && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("g", {
+			className: "sky-band" + (band.over ? " is-over" : "") + (band.side === "in" ? " is-split" : ""),
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+				className: "sky-band-path",
+				d: band.side === "in" ? wirePath(band.to, band.from) : wirePath(band.from, band.to)
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+				className: "sky-band-end",
+				cx: band.to.x,
+				cy: band.to.y,
+				r: 5
+			})]
+		})]
+	});
+}
+function panelSpot(g, anchor, pos) {
+	if (pos) return {
+		x: pos.x + 24,
+		y: pos.y - TILE / 2
+	};
+	const all = chainNodes(g);
+	const n = anchor ? chainNode(g, anchor) || all.find((x) => x.node.id === anchor) : all[all.length - 1];
+	if (!n) return {
+		x: 0,
+		y: 0
+	};
+	return {
+		x: n.x + (n.w + TILE) / 2 + (anchor ? 16 : 52),
+		y: n.y - 6
+	};
+}
+function ChainPanels({ graph, anchor, anchorPos, children }) {
+	if (anchor === null) return null;
+	const at = panelSpot(graph, anchor, anchorPos);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "skl-panels skl-hang sky-own-scroll",
+		"data-no-drag": true,
+		"data-anchor": anchor || "end",
+		style: {
+			left: at.x,
+			top: at.y,
+			minWidth: NODE_W * 3
+		},
+		children
+	});
+}
+//#endregion
 //#region src/components/flights/SkyLine.tsx
+var NO_KINDS$1 = [];
 var sessionOpen = (title) => (queryClient.getQueryData(["instances"]) || []).some((r) => r.title === title);
 async function reopenClosed(titles) {
 	for (const t of [...titles].reverse()) if (!sessionOpen(t)) await undoLastClose();
@@ -130668,16 +132632,6 @@ var PANE_H = 460;
 var PANE_MIN_W = 360;
 var PANE_MIN_H = 240;
 var CARD_HEAD_H = 30;
-var SIZES = [
-	"compact",
-	"normal",
-	"wide"
-];
-var SIZE_WORD = {
-	compact: "compact — titles only",
-	normal: "normal",
-	wide: "wide — the full text"
-};
 function LineRuler({ segments }) {
 	const total = totalSeconds(segments);
 	if (!segments.length || total <= 0) return null;
@@ -130700,25 +132654,6 @@ function LineRuler({ segments }) {
 			children: fmtDuration(total)
 		})]
 	});
-}
-var SIZE_ITEM = {
-	compact: "Compact boxes",
-	normal: "Normal boxes",
-	wide: "Wide boxes"
-};
-var nextSize = (s) => SIZES[(SIZES.indexOf(s) + 1) % SIZES.length];
-var presetPatch = (s) => ({
-	size: s,
-	boxW: BOX_PRESETS[s].w,
-	boxH: BOX_PRESETS[s].h
-});
-function dragBox(start, dx, dy) {
-	const rw = start.cw > 0 ? (start.cw + dx) / start.cw : 1;
-	const rh = start.ch > 0 ? (start.ch + dy) / start.ch : 1;
-	const r = Math.abs(rw - 1) >= Math.abs(rh - 1) ? rw : rh;
-	const w = clampBox(start.bw * r, 0).w;
-	const { size, k } = boxScale(w);
-	return clampBox(w, BOX_PRESETS[size].h * k);
 }
 function clampPane(w, h) {
 	return {
@@ -130816,7 +132751,7 @@ function SkyLine(p) {
 	const src = (0, import_react.useMemo)(() => ({
 		rows: p.rows,
 		flights,
-		kinds: kinds || [],
+		kinds: kinds || NO_KINDS$1,
 		plans: p.plans
 	}), [
 		p.rows,
@@ -130843,40 +132778,12 @@ function SkyLine(p) {
 		flights,
 		kinds
 	])) > 0;
-	const shown = {
-		diagram: line.diagram,
-		canvas: line.canvas
-	};
 	const [kids, setKids] = (0, import_react.useState)({});
 	const rootRef = (0, import_react.useRef)(null);
+	const wrapRef = (0, import_react.useRef)(null);
 	const measureRef = (0, import_react.useRef)(p.onMeasure);
 	measureRef.current = p.onMeasure;
-	const [liveBox, setLiveBox] = (0, import_react.useState)(null);
-	const box = liveBox || lineBox(p.layout);
-	const { size, k } = boxScale(box.w);
-	const scaled = Math.abs(k - 1) > .001;
-	const z = p.zoom || 1;
 	const lod = lodFor(p.zoom || 1);
-	const innerRef = (0, import_react.useRef)(null);
-	const sizerRef = (0, import_react.useRef)(null);
-	const [inner, setInner] = (0, import_react.useState)(null);
-	const hasRow = !!line.row;
-	(0, import_react.useEffect)(() => {
-		const el = innerRef.current;
-		if (!el || typeof ResizeObserver === "undefined") return;
-		const read = () => {
-			const w = el.offsetWidth;
-			const h = el.offsetHeight;
-			setInner((c) => c && c.w === w && c.h === h ? c : {
-				w,
-				h
-			});
-		};
-		const ro = new ResizeObserver(read);
-		ro.observe(el);
-		read();
-		return () => ro.disconnect();
-	}, [hasRow]);
 	(0, import_react.useEffect)(() => {
 		const el = rootRef.current;
 		if (!el || typeof ResizeObserver === "undefined") return;
@@ -130905,65 +132812,50 @@ function SkyLine(p) {
 	const row = line.row;
 	const ss = deriveSessionState(row || {});
 	const rowOf = (t) => t ? p.rows.find((r) => r.title === t) : void 0;
-	const card = (inst, w, h, onSize, onClose) => {
-		const s = clampPane(w, h);
-		const body = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneCard, {
-			inst,
-			w: s.w,
-			h: s.h,
-			zoom: p.zoom,
-			onSize,
-			onClose
-		});
-		if (!scaled) return {
-			body,
-			size: {
-				w: s.w,
-				h: s.h + CARD_HEAD_H
-			}
-		};
-		const cw = s.w / k;
-		const ch = (s.h + CARD_HEAD_H) / k;
-		return {
-			body: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-				className: "skl-card-unscale",
-				style: {
-					width: cw,
-					height: ch
-				},
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					style: {
-						transform: `scale(${1 / k})`,
-						transformOrigin: "0 0",
-						"--sky-z": z
-					},
-					children: body
-				})
-			}),
-			size: {
-				w: cw,
-				h: ch
-			}
-		};
-	};
+	const where = row ? lineWhere(line.diagram) : "";
+	const moves = useNodeMoves(line.flight?.id, line.graphDiagram);
+	const sessionNode = (0, import_react.useMemo)(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
+	const headSub = where || (row ? firstLine$1(row.task_headline || row.task || "") : "");
+	const head = (0, import_react.useMemo)(() => ({
+		kind: "session",
+		title: name,
+		sub: headSub,
+		session: p.title,
+		color: chainColor(p.title),
+		node: sessionNode
+	}), [
+		name,
+		headSub,
+		p.title,
+		sessionNode
+	]);
+	const graph = (0, import_react.useMemo)(() => chainGraph(moves.diagram, {
+		head,
+		key: p.title,
+		flightId: line.flight?.id || ""
+	}), [
+		moves.diagram,
+		head,
+		p.title,
+		line.flight?.id
+	]);
+	useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter);
+	useTourHooks(wrapRef, {
+		".sky-head": "sky-session-box",
+		".sky-node:not(.sky-head)": "sky-stop"
+	});
+	const gc = line.graphCanvas;
+	const chainMenu = useChainMenu(gc, line.flight?.id || "");
+	const onPillDown = pillAimer(graph, gc.onLoopTo);
 	const foldKid = (t) => setKids((k) => Object.fromEntries(Object.entries(k).filter(([x]) => x !== t)));
-	const openBox = (n) => {
-		if (n.kind === "session" && p.layout.open && row) return card(row, p.layout.paneW ?? PANE_W, p.layout.paneH ?? PANE_H, (w, h) => p.onLayout({
-			paneW: w,
-			paneH: h
-		}), () => p.onLayout({ open: false }));
-		const kid = n.kind === "child" || n.kind === "branch" ? rowOf(n.session) : void 0;
-		const ks = kid ? kids[kid.title] : void 0;
-		if (kid && ks) return card(kid, ks.w, ks.h, (w, h) => setKids((k) => ({
-			...k,
-			[kid.title]: {
-				w,
-				h
-			}
-		})), () => foldKid(kid.title));
-		return null;
-	};
+	const press = (0, import_react.useRef)({
+		x: 0,
+		y: 0,
+		shift: false,
+		moved: false
+	});
 	const onOpen = (n) => {
+		if (n.kind === "session" && press.current.moved) return;
 		if (n.kind === "flown") setFoldFlown((x) => !x);
 		else if (n.kind === "session") p.onLayout({ open: !p.layout.open });
 		else if ((n.kind === "child" || n.kind === "branch") && n.session) {
@@ -130976,11 +132868,11 @@ function SkyLine(p) {
 					h: PANE_H
 				}
 			}));
-		} else shown.canvas.onOpen?.(n);
+		} else gc.onOpen?.(n);
 	};
-	const detailOf = (n) => {
-		const r = rowOf(n.session);
-		return r ? firstLine$1(r.last_prompt || r.task || "") : "";
+	const onSelect = (n) => {
+		if (press.current.shift && p.onShiftSelect) p.onShiftSelect(n);
+		else gc.onSelect?.(n);
 	};
 	const onBarDown = (e) => {
 		if (e.button !== 0) return;
@@ -130988,6 +132880,16 @@ function SkyLine(p) {
 		rootRef.current?.focus({ preventScroll: true });
 		if (p.draggable === false) return;
 		p.onDragStart?.(e);
+	};
+	const onChainDown = (e) => {
+		press.current = {
+			x: e.clientX,
+			y: e.clientY,
+			shift: e.shiftKey,
+			moved: false
+		};
+		const t = e.target;
+		if (t.closest(".sky-head") && !t.closest("[data-port], [data-no-drag], button")) onBarDown(e);
 	};
 	const [closing, setClosing] = (0, import_react.useState)("");
 	const [closeBusy, setCloseBusy] = (0, import_react.useState)(false);
@@ -130999,15 +132901,15 @@ function SkyLine(p) {
 		else closeLine(t);
 	};
 	const deleteBox = (node) => {
-		const t = node ? nodeSession(node) : p.title;
+		const t = node && node !== HEAD ? nodeSession(node) : p.title;
 		if (t) {
 			askClose(t);
 			return true;
 		}
-		const n = nodeById(shown.diagram.nodes, node);
+		const n = nodeById(line.graphDiagram.nodes, node);
 		const here = !!n && !!line.flight && (n.kind === "stop" || n.kind === "group") && nodeIndexes(n).includes(line.flight.cursor);
-		if (!(removableBox(n) || here) || !shown.canvas.onRemove) return false;
-		shown.canvas.onRemove(n);
+		if (!(removableBox(n) || here) || !gc.onRemove) return false;
+		gc.onRemove(n);
 		return true;
 	};
 	const deleteRef = (0, import_react.useRef)(deleteBox);
@@ -131027,50 +132929,16 @@ function SkyLine(p) {
 			setClosing("");
 		}
 	};
-	const grab = (0, import_react.useRef)(null);
-	const resizeDown = (e) => {
-		if (e.button !== 0) return;
-		e.preventDefault();
-		e.stopPropagation();
-		const el = sizerRef.current;
-		grab.current = {
-			id: e.pointerId,
-			sx: e.clientX,
-			sy: e.clientY,
-			cw: el?.offsetWidth || 0,
-			ch: el?.offsetHeight || 0,
-			bw: box.w
-		};
-		try {
-			e.currentTarget.setPointerCapture(e.pointerId);
-		} catch {}
-	};
-	const resizeMove = (e) => {
-		const g = grab.current;
-		if (!g || g.id !== e.pointerId) return;
-		setLiveBox(dragBox(g, (e.clientX - g.sx) / z, (e.clientY - g.sy) / z));
-	};
-	const resizeUp = (e) => {
-		const g = grab.current;
-		if (!g || g.id !== e.pointerId) return;
-		grab.current = null;
-		if (liveBox) p.onLayout({
-			size: boxTier(liveBox.w),
-			boxW: liveBox.w,
-			boxH: liveBox.h
-		});
-		setLiveBox(null);
-	};
 	const items = [
 		p.layout.open ? {
 			key: "open",
 			label: "Fold the session back",
-			title: "Back to a box on the line",
+			title: "Back to its tile on the chain",
 			onSelect: () => p.onLayout({ open: false })
 		} : {
 			key: "open",
 			label: "Open session",
-			title: "Open the session here, in a card on its line",
+			title: "Open the session here, in a card under its chain",
 			onSelect: () => p.onLayout({ open: true })
 		},
 		{
@@ -131085,20 +132953,14 @@ function SkyLine(p) {
 		{
 			key: "only",
 			label: "Show only this line",
-			title: "This session: one line, filling the sky",
+			title: "This session: one chain, filling the sky",
 			onSelect: () => showInSky(p.title)
 		},
-		...SIZES.map((s, i) => ({
-			key: "size-" + s,
-			label: SIZE_ITEM[s],
-			title: "Boxes: " + SIZE_WORD[s],
-			className: "skl-mi-check" + (s === size ? " skl-mi-on" : "") + (i === 0 ? " skl-mi-group" : ""),
-			onSelect: () => p.onLayout(presetPatch(s))
-		})),
 		...folds ? [{
 			key: "flown",
 			label: foldFlown ? "Show flown stops" : "Fold flown stops",
 			title: "The stops this flight has already flown: each on its own, or one pill",
+			className: "skl-mi-group",
 			onSelect: () => setFoldFlown((x) => !x)
 		}] : [],
 		p.layout.pinned ? {
@@ -131109,7 +132971,7 @@ function SkyLine(p) {
 		} : {
 			key: "pin",
 			label: "Pin here",
-			title: "Keep this line where it is when the others move",
+			title: "Keep this chain where it is when the others move",
 			onSelect: () => p.onLayout({
 				x: p.layout.x,
 				y: p.layout.y,
@@ -131119,14 +132981,8 @@ function SkyLine(p) {
 		{
 			key: "flyway",
 			label: "Add a stop…",
-			title: "A saved stop, tacked on here",
+			title: "A stop or a saved stop, at the end of the chain",
 			className: "skl-mi-group",
-			onSelect: () => line.togglePalette(true)
-		},
-		{
-			key: "tack",
-			label: "Tack on a stop",
-			title: "One stop, at the end of the line",
 			onSelect: () => line.togglePalette(true)
 		},
 		{
@@ -131138,52 +132994,72 @@ function SkyLine(p) {
 			onSelect: () => askClose(p.title)
 		}
 	];
-	const where = row ? lineWhere(shown.diagram) : "";
 	const segments = (0, import_react.useMemo)(() => segmentsFor(line.flight), [line.flight]);
 	const age = ageOf(row?.activity_since);
 	const still = ageWord(row?.activity_since);
+	const cards = [];
+	if (p.layout.open && row) cards.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneCard, {
+		inst: row,
+		w: p.layout.paneW ?? PANE_W,
+		h: p.layout.paneH ?? PANE_H,
+		zoom: p.zoom,
+		onSize: (w, h) => p.onLayout({
+			paneW: w,
+			paneH: h
+		}),
+		onClose: () => p.onLayout({ open: false })
+	}, row.title));
+	for (const [t, ks] of Object.entries(kids)) {
+		const kid = rowOf(t);
+		if (kid) cards.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneCard, {
+			inst: kid,
+			w: ks.w,
+			h: ks.h,
+			zoom: p.zoom,
+			onSize: (w, h) => setKids((k) => ({
+				...k,
+				[t]: {
+					w,
+					h
+				}
+			})),
+			onClose: () => foldKid(t)
+		}, t));
+	}
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		ref: rootRef,
-		className: "skl skl-size-" + size + (p.focused ? " is-focused" : "") + (p.selected ? " is-selected" : "") + (p.layout.open ? " is-open" : "") + (p.dropFlyway ? " is-drop" : "") + (p.mergeTarget ? " is-merge-target" : "") + (line.editing ? " is-editing" : ""),
+		className: "skl skl-chainline" + (p.focused ? " is-focused" : "") + (p.selected ? " is-selected" : "") + (p.layout.open ? " is-open" : "") + (p.dropFlyway ? " is-drop" : "") + (p.mergeTarget ? " is-merge-target" : "") + (line.editing ? " is-editing" : ""),
 		"data-line": p.title,
 		"data-lod": lod,
 		"data-age": age || void 0,
 		style: {
 			"--sky-z": p.zoom || 1,
-			"--sky-lines": nearLines(p.zoom || 1)
+			"--sky-lines": nearLines(p.zoom || 1),
+			"--sky-chain-color": head.color
 		},
 		role: "group",
 		tabIndex: -1,
 		"data-sky-box": true,
-		"aria-label": name + "'s line",
+		"aria-label": name + "'s chain",
 		onPointerDownCapture: () => {
 			if (!p.focused) p.onFocus();
 		},
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "skl-bar",
+				className: "skl-bar skl-label",
 				"data-tour": "sky-line-bar",
-				title: p.draggable === false ? "Click to focus this line (drag mode moves it: V)" : "Drag to move this line",
+				title: p.draggable === false ? "Click to focus this chain (drag mode moves it: V)" : "Drag to move this chain",
 				onPointerDown: onBarDown,
 				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 16 }),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 14 }),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "skl-name",
 						children: name
-					}),
-					row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "fl-box-chip skl-chip tone-" + ss.tone,
-						title: ss.hint,
-						children: ss.label
 					}),
 					where && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "skl-where",
 						title: where,
 						children: where
-					}),
-					row && (row.task_headline || row.task) && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "skl-task",
-						children: firstLine$1(row.task_headline || row.task || "")
 					}),
 					still && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "skl-age",
@@ -131192,34 +133068,9 @@ function SkyLine(p) {
 					}),
 					p.layout.pinned && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "skl-pin",
-						title: "Pinned: the sky's layout leaves this line where you put it",
+						title: "Pinned: the sky's layout leaves this chain where you put it",
 						"aria-label": "Pinned",
 						children: "📌"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
-						type: "button",
-						className: "skl-size",
-						"data-size": size,
-						"aria-label": "Box size: " + size + " (next: " + nextSize(size) + ")",
-						title: "Boxes: " + SIZE_WORD[size] + " — press for " + nextSize(size),
-						onClick: () => p.onLayout(presetPatch(nextSize(size))),
-						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "skl-size-glyph",
-								"aria-hidden": "true",
-								children: "◧"
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "skl-size-meter",
-								"aria-hidden": "true",
-								children: SIZES.map((s, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: i <= SIZES.indexOf(size) ? "on" : "" }, s))
-							}),
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-								className: "skl-size-word",
-								"aria-hidden": "true",
-								children: size
-							})
-						]
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "skl-menu",
@@ -131249,57 +133100,55 @@ function SkyLine(p) {
 				})
 			}),
 			row ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				ref: sizerRef,
-				className: "skl-scale",
-				style: scaled && inner ? {
-					width: inner.w * k,
-					height: inner.h * k
-				} : void 0,
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					ref: innerRef,
-					className: "skl-scale-in",
-					style: scaled ? {
-						transform: `scale(${k})`,
-						"--sky-z": z * k
-					} : void 0,
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlywayCanvas, {
-						diagram: shown.diagram,
-						label: "What " + name + " is doing and will do",
-						vertical: false,
-						bird: birdPerch(shown.diagram),
-						className: "sky-canvas skl-canvas",
-						size,
-						detailOf,
-						dropLabel: p.dropFlyway ? "Drop to fly " + p.dropFlyway.name : null,
-						openBox,
-						lod,
-						...shown.canvas,
+				ref: wrapRef,
+				className: "skl-chain-wrap",
+				onPointerDownCapture: onChainDown,
+				onPointerMoveCapture: (e) => {
+					if (!press.current.moved && Math.hypot(e.clientX - press.current.x, e.clientY - press.current.y) >= 4) press.current.moved = e.buttons !== 0;
+				},
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyChain, {
+						graph,
+						zoom: p.zoom,
+						selected: gc.selected,
 						highlighted: p.highlighted,
-						onShiftSelect: p.onShiftSelect,
+						targets: p.targets,
+						over: p.over,
+						bird: birdPerch(moves.diagram),
+						onSelect,
+						onEdit: gc.onEdit,
 						onOpen,
-						roomy: true
+						onRemove: gc.onRemove,
+						onLoopPill: (via) => gc.onEdit?.(via),
+						onPillDown,
+						onMenu: chainMenu.onMenu,
+						kinds,
+						onNodeMove: moves.move,
+						onPortDown: p.onPortDown,
+						onPlus: (after) => after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true),
+						renderInBox: gc.renderInBox ? (n) => gc.renderInBox(n) : void 0,
+						renderHead: () => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-head-chip fl-box-chip tone-" + ss.tone,
+							title: ss.hint,
+							children: ss.label
+						})
+					}),
+					chainMenu.menu,
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(ChainPanels, {
+						graph,
+						anchor: line.anchor,
+						anchorPos: line.anchorPos,
+						children: [line.palette, line.inspector]
 					})
-				}), lod !== "far" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LineRuler, { segments })]
+				]
 			}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
 				className: "skl-gone muted",
 				children: "This session isn't running any more."
 			}),
-			line.editing && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "skl-panels sky-own-scroll",
-				"data-no-drag": true,
-				children: [line.palette, line.inspector]
-			}),
-			row && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "skl-box-resize",
-				role: "separator",
-				tabIndex: 0,
-				"data-no-drag": true,
-				"aria-label": "Resize " + name + "'s boxes",
-				title: "Drag to resize the boxes (" + Math.round(box.w) + " × " + Math.round(box.h) + ")",
-				onPointerDown: resizeDown,
-				onPointerMove: resizeMove,
-				onPointerUp: resizeUp,
-				onPointerCancel: resizeUp
+			row && lod !== "far" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(LineRuler, { segments }),
+			cards.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "skl-cards",
+				children: cards
 			})
 		]
 	});
@@ -131625,6 +133474,7 @@ function useGroundedLine(flight, src) {
 	const { kinds, plans } = src;
 	const [selected, setSelected] = (0, import_react.useState)(null);
 	const [paletteAt, setPaletteAt] = (0, import_react.useState)(null);
+	const [paletteHang, setPaletteHang] = (0, import_react.useState)(null);
 	const [dialog, setDialog] = (0, import_react.useState)(null);
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [selectIndex, setSelectIndex] = (0, import_react.useState)(null);
@@ -131661,10 +133511,16 @@ function useGroundedLine(flight, src) {
 	]);
 	const where = (at) => at !== null && at < end ? at : void 0;
 	const tackOne = async (def, at) => {
+		const pos = paletteHang?.pos;
 		setBusy(true);
 		setPaletteAt(null);
+		setPaletteHang(null);
 		try {
-			const step = newStep(def, flight.steps.map((s) => s.id));
+			const fresh = newStep(def, flight.steps.map((s) => s.id));
+			const step = pos ? {
+				...fresh,
+				pos
+			} : fresh;
 			if (await tackOn(flight.id, step, where(at))) setSelectIndex(where(at) ?? end);
 		} finally {
 			setBusy(false);
@@ -131721,7 +133577,21 @@ function useGroundedLine(flight, src) {
 	const togglePalette = (open) => {
 		setSelected(null);
 		setDialog(null);
+		setPaletteHang(null);
 		setPaletteAt(open ?? !(paletteAt !== null && paletteAt >= end) ? end : null);
+	};
+	const paletteAfter = (after, pos) => {
+		setSelected(null);
+		setDialog(null);
+		const slot = after ? loopSlotAfter(after) : 0;
+		setPaletteAt(slot === void 0 ? end : Math.min(slot, end));
+		setPaletteHang({
+			node: after ? after.id : null,
+			pos: pos ? {
+				x: Math.round(pos.x),
+				y: Math.round(pos.y)
+			} : null
+		});
 	};
 	const ordered = orderedPlans(plans);
 	const savedChips = /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -131741,7 +133611,7 @@ function useGroundedLine(flight, src) {
 			}, p.id))
 		})]
 	});
-	const shown = drawnCanvas(diagram, {
+	const raw = {
 		selected: paletteAt !== null && paletteAt >= end ? "add" : dialog?.id || selected,
 		onSelect,
 		onEdit,
@@ -131793,12 +133663,16 @@ function useGroundedLine(flight, src) {
 			if (def) tackOne(def, at);
 			else toast("There is no “" + d.kind + "” stop to add");
 		}
-	});
+	};
+	const shown = drawnCanvas(diagram, raw);
 	const palette = paletteAt !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopPalette, {
 		kinds,
 		title: paletteAt >= end ? "Add a stop" : "Add a stop before “" + (flight.steps[paletteAt]?.title || "") + "”",
 		onPick: (k) => void tackOne(k, paletteAt),
-		onClose: () => setPaletteAt(null),
+		onClose: () => {
+			setPaletteAt(null);
+			setPaletteHang(null);
+		},
 		extra: ordered.length > 0 ? savedChips : void 0
 	}) : null;
 	const close = () => setDialog(dialog?.back && find(dialog.back) ? { id: dialog.back } : null);
@@ -131871,12 +133745,23 @@ function useGroundedLine(flight, src) {
 		toggleGroup,
 		editing: palette !== null || inspector !== null,
 		canvas: shown.canvas,
+		graphDiagram: diagram,
+		graphCanvas: raw,
+		paletteAfter,
+		anchor: inspector !== null && dialog ? dialog.id : palette !== null ? paletteHang?.node ?? "" : null,
+		anchorPos: palette !== null ? paletteHang?.pos ?? null : null,
 		palette,
 		inspector
 	};
 }
 //#endregion
 //#region src/components/flights/GroundedLine.tsx
+var NO_HEAD = {
+	kind: "none",
+	title: "",
+	sub: "",
+	color: "var(--muted)"
+};
 var cleanFlightName = (s) => s.trim().slice(0, 120);
 var groundedName = (f) => f.plan_name || "Stops";
 function GroundedLine(p) {
@@ -132000,10 +133885,10 @@ function GroundedLine(p) {
 		p.onDragStart?.(e);
 	};
 	const deleteBox = (node) => {
-		const n = node ? nodeById(line.diagram.nodes, node) : null;
+		const n = node && node !== HEAD ? nodeById(line.graphDiagram.nodes, node) : null;
 		if (n && (n.kind === "stop" || n.kind === "group")) {
-			if (!removableBox(n) || !line.canvas.onRemove) return false;
-			line.canvas.onRemove(n);
+			if (!removableBox(n) || !line.graphCanvas.onRemove) return false;
+			line.graphCanvas.onRemove(n);
 			return true;
 		}
 		remove();
@@ -132030,9 +133915,27 @@ function GroundedLine(p) {
 		e.stopPropagation();
 		remove();
 	};
+	const wrapRef = (0, import_react.useRef)(null);
+	const moves = useNodeMoves(flight.id, line.graphDiagram);
+	const head = p.head || NO_HEAD;
+	const graph = (0, import_react.useMemo)(() => chainGraph(moves.diagram, {
+		head,
+		key: "flight:" + flight.id,
+		flightId: flight.id
+	}), [
+		moves.diagram,
+		head,
+		flight.id
+	]);
+	useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter);
+	useTourHooks(wrapRef, { ".sky-socket": "sky-grounded" });
+	const gc = line.graphCanvas;
+	const chainMenu = useChainMenu(gc, flight.id);
+	const onPillDown = pillAimer(graph, gc.onLoopTo);
+	const shift = (0, import_react.useRef)(false);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		ref: rootRef,
-		className: "skl skl-size-" + (p.layout.size || "normal") + " skl-grounded" + (p.focused ? " is-focused" : "") + (p.selected ? " is-selected" : "") + (p.sessionOver ? " is-session-over" : "") + (p.merging ? " is-merging" : "") + (line.editing ? " is-editing" : ""),
+		className: "skl skl-chainline skl-grounded" + (head.kind === "trigger" ? " is-triggered" : "") + (p.focused ? " is-focused" : "") + (p.selected ? " is-selected" : "") + (p.sessionOver ? " is-session-over" : "") + (p.merging ? " is-merging" : "") + (line.editing ? " is-editing" : ""),
 		"data-flight": flight.id,
 		"data-lod": lod,
 		style: {
@@ -132042,85 +133945,91 @@ function GroundedLine(p) {
 		role: "group",
 		tabIndex: 0,
 		"data-sky-box": true,
-		"aria-label": name + " — stops with no session yet",
+		"aria-label": name + (head.kind === "trigger" ? " — " + head.title : " — stops with no session yet"),
 		onKeyDown: onKey,
 		onPointerDownCapture: () => {
 			if (!p.focused) p.onFocus();
 		},
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "skl-bar",
-				title: p.draggable === false ? "Click to focus these stops (drag mode moves them: V)" : "Drag to move these stops — onto a session's line to give them to it",
-				onPointerDown: onBarDown,
-				children: [
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 16 }),
-					naming === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "skl-name skl-name-edit",
-						title: "Click to rename (F2)",
-						onClick: onNameClick,
-						children: name
-					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-						className: "fl-input skl-name-input",
-						"aria-label": "Rename “" + name + "”",
-						value: naming,
-						maxLength: 120,
-						autoFocus: true,
-						onChange: (e) => setNaming(e.target.value),
-						onFocus: (e) => e.target.select(),
-						onBlur: () => endRename(true),
-						onKeyDown: (e) => {
-							e.stopPropagation();
-							if (e.key === "Enter") {
-								e.preventDefault();
-								endRename(true);
-							} else if (e.key === "Escape") {
-								e.preventDefault();
-								endRename(false);
-							}
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "skl-bar skl-label",
+			"data-tour": "sky-grounded",
+			title: p.draggable === false ? "Click to focus these stops (drag mode moves them: V)" : "Drag to move these stops — onto a session's chain to give them to it",
+			onPointerDown: onBarDown,
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 14 }),
+				naming === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "skl-name skl-name-edit",
+					title: "Click to rename (F2)",
+					onClick: onNameClick,
+					children: name
+				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					className: "fl-input skl-name-input",
+					"aria-label": "Rename “" + name + "”",
+					value: naming,
+					maxLength: 120,
+					autoFocus: true,
+					onChange: (e) => setNaming(e.target.value),
+					onFocus: (e) => e.target.select(),
+					onBlur: () => endRename(true),
+					onKeyDown: (e) => {
+						e.stopPropagation();
+						if (e.key === "Enter") {
+							e.preventDefault();
+							endRename(true);
+						} else if (e.key === "Escape") {
+							e.preventDefault();
+							endRename(false);
 						}
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "fl-box-chip skl-chip tone-idle",
-						title: "These stops do nothing until a session flies them",
-						children: "No session"
-					}),
-					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "skl-menu",
-						"data-no-drag": true,
-						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
-							label: "Actions for " + name,
-							items
-						})
-					})
-				]
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "skl-grounded-body",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "skl-grounded-head",
-					"data-tour": "sky-grounded",
+					}
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-box-chip skl-chip " + (head.kind === "trigger" ? "tone-working" : "tone-idle"),
+					title: head.kind === "trigger" ? head.title + " — " + head.sub : "These stops do nothing until a session flies them: wire a session's out port to the first one",
+					children: head.kind === "trigger" ? "Started by a chain" : "No session"
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "skl-menu",
 					"data-no-drag": true,
-					title: "Drag the Session chip from the shelf here, or ⋯ → Fly on a session",
-					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: "No session yet" }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "drop a Session chip here, or ⋯ Fly on a session" })]
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlywayCanvas, {
-					diagram: line.diagram,
-					label: "The stops of " + name,
-					vertical: false,
-					className: "sky-canvas skl-canvas",
-					size: p.layout.size || "normal",
-					lod,
-					...line.canvas,
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
+						label: "Actions for " + name,
+						items
+					})
+				})
+			]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			ref: wrapRef,
+			className: "skl-chain-wrap",
+			onPointerDownCapture: (e) => shift.current = e.shiftKey,
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyChain, {
+					graph,
+					zoom: p.zoom,
+					selected: gc.selected,
 					highlighted: p.highlighted,
-					onShiftSelect: p.onShiftSelect,
-					roomy: true
-				})]
-			}),
-			line.editing && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-				className: "skl-panels sky-own-scroll",
-				"data-no-drag": true,
-				children: [line.palette, line.inspector]
-			})
-		]
+					targets: p.targets,
+					over: p.over,
+					bird: birdPerch(moves.diagram),
+					onSelect: (n) => shift.current && p.onShiftSelect ? p.onShiftSelect(n) : gc.onSelect?.(n),
+					onEdit: gc.onEdit,
+					onOpen: gc.onOpen,
+					onRemove: gc.onRemove,
+					onLoopPill: (via) => gc.onEdit?.(via),
+					onPillDown,
+					onMenu: chainMenu.onMenu,
+					kinds: p.kinds,
+					onNodeMove: moves.move,
+					onPortDown: p.onPortDown,
+					onPlus: (after) => after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true)
+				}),
+				chainMenu.menu,
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(ChainPanels, {
+					graph,
+					anchor: line.anchor,
+					anchorPos: line.anchorPos,
+					children: [line.palette, line.inspector]
+				})
+			]
+		})]
 	});
 }
 //#endregion
@@ -132971,7 +134880,6 @@ function revealCamera(c, r, vw, vh, margin = .8) {
 }
 //#endregion
 //#region src/components/flights/SkyView.tsx
-var BAR_H = 34;
 var LINE_MIN_W = 280;
 var GRID = 24;
 var PAN_STEP = 80;
@@ -133032,11 +134940,12 @@ function useNarrowWindow() {
 	}, []);
 	return narrow;
 }
-function lineSize(d, flight) {
-	const lay = layoutDiagram(d, { sizeOf: liveBoxParts(flight, true, () => {}).sizeOf });
+var CHAIN_LABEL_H = 34;
+function chainSize(d, head) {
+	const n = d.nodes.filter((x) => x.row === "main" && x.kind !== "session" && x.kind !== "add" && x.kind !== "parent").length + (head ? 1 : 0);
 	return {
-		w: Math.max(LINE_MIN_W, lay.width + 12 + 20 + 4),
-		h: lay.height + 32 + BAR_H + 20
+		w: Math.max(LINE_MIN_W, Math.max(1, n) * PITCH_X + 60),
+		h: NODE_H + CHAIN_LABEL_H + 24
 	};
 }
 function GhostLine({ name, pos, diagram }) {
@@ -133058,16 +134967,17 @@ function GhostLine({ name, pos, diagram }) {
 		})]
 	});
 }
-var GROUNDED_HEAD_W = 182;
+var NO_KINDS = [];
+var NO_PLANS = [];
 var memo = null;
 function SkyView() {
 	const instQ = useInstances();
 	const rows = (0, import_react.useMemo)(() => instQ.data || [], [instQ.data]);
 	const flightsQ = useFlights();
 	const flights = flightsQ.data;
-	const kinds = useFlightKinds().data || [];
+	const kinds = useFlightKinds().data || NO_KINDS;
 	const plansQ = useFlightPlans();
-	const plans = plansQ.data || [];
+	const plans = plansQ.data || NO_PLANS;
 	const focused = useUi((s) => s.focused);
 	const mode = useUi((s) => s.skyMode);
 	const setSkyMode = useUi((s) => s.setSkyMode);
@@ -133193,8 +135103,6 @@ function SkyView() {
 	]);
 	const groundedIds = (0, import_react.useMemo)(() => new Set(groundedFlights(flights).map((f) => f.id)), [flights]);
 	const lines = (0, import_react.useMemo)(() => [...titles.map((t) => {
-		const fl = rows.find((r) => r.title === t)?.flight;
-		const full = fl && isLive(fl) ? flights?.find((f) => f.id === fl.id) || null : null;
 		const diagram = sessionDiagram(rows, t, {
 			flights,
 			kinds,
@@ -133205,21 +135113,17 @@ function SkyView() {
 			name: windowName(t),
 			flight: null,
 			diagram,
-			...measured[t] || estimateLine(lineSize(diagram, full), layout[t])
+			...measured[t] || estimateLine(chainSize(diagram, true), layout[t])
 		};
 	}), ...grounded.map((f) => {
 		const id = groundedKey(f.id);
 		const diagram = groundedDiagram(f, kinds);
-		const base = lineSize(diagram, null);
 		return {
 			id,
 			name: groundedName(f),
 			flight: f,
 			diagram,
-			...measured[id] || estimateLine({
-				w: base.w + GROUNDED_HEAD_W,
-				h: base.h
-			}, layout[id])
+			...measured[id] || estimateLine(chainSize(diagram, false), layout[id])
 		};
 	})], [
 		titles,
@@ -133960,11 +135864,7 @@ function SkyView() {
 	}));
 	spotRef.current = (f, near) => {
 		const key = groundedKey(f.id);
-		const base = lineSize(groundedDiagram(f, kinds), null);
-		const size = measured[key] || {
-			w: base.w + GROUNDED_HEAD_W,
-			h: base.h
-		};
+		const size = measured[key] || chainSize(groundedDiagram(f, kinds), false);
 		const c = camRef.current;
 		const pad = 16 / c.z;
 		const view = {
@@ -134057,18 +135957,21 @@ function SkyView() {
 		});
 		toast("Removed “" + shown + "”", { action: undoAction(entry, "Undo: put “" + shown + "” back on the board") });
 	};
-	const mergeGrounded = async (key, title, was) => {
+	const mergeGrounded = async (key, title, was, at) => {
 		const f = flights?.find((x) => x.id === groundedIdOf(key));
 		if (!f) return;
 		const steps = f.steps;
 		const name = f.plan_name || "";
-		const live = liveFlightOf(title);
+		const into = isGroundedKey(title) ? flights?.find((x) => x.id === groundedIdOf(title)) || null : null;
+		if (isGroundedKey(title) && !into) return;
+		const live = into || liveFlightOf(title);
+		const bare = steps.map(({ pos: _pos, ...st }) => st);
 		let ok = false;
 		if (!live) ok = !!await attachGrounded(f.id, { title });
-		else if (await tackOnSteps(live.id, steps, void 0, name || void 0)) ok = await deleteFlight(f.id);
+		else if (await tackOnSteps(live.id, bare, at !== void 0 && at < live.steps.length ? at : void 0, name || void 0)) ok = await deleteFlight(f.id);
 		if (!ok) return;
 		const n = steps.length;
-		const msg = "Moved " + n + (n === 1 ? " stop" : " stops") + " onto " + windowName(title);
+		const msg = "Moved " + n + (n === 1 ? " stop" : " stops") + " onto " + (into ? groundedName(into) : windowName(title));
 		let cur = "";
 		toast(msg, { action: undoAction(pushUndo({
 			label: msg,
@@ -134199,76 +136102,49 @@ function SkyView() {
 		};
 	};
 	const press = (0, import_react.useRef)(null);
-	const [connect, setConnect] = (0, import_react.useState)(null);
-	const startConnect = (e, from, plus) => {
-		const targets = lines.filter((l) => l.flight).map((l) => ({
-			id: l.id,
-			rect: {
-				...posOf(l.id),
-				w: l.w,
-				h: l.h
-			}
-		}));
-		if (!targets.length) return false;
-		const r = plus.getBoundingClientRect();
-		const x1 = r.left + r.width / 2;
-		const y1 = r.top + r.height / 2;
-		const g = {
-			pid: e.pointerId,
-			sx: e.clientX,
-			sy: e.clientY,
-			moved: false,
-			over: ""
-		};
-		const move = (ev) => {
-			if (ev.pointerId !== g.pid) return;
-			if (!g.moved && Math.hypot(ev.clientX - g.sx, ev.clientY - g.sy) < 5) return;
-			g.moved = true;
-			g.over = hitAt(planeAt(ev.clientX, ev.clientY), targets);
-			setSessionOver((cur) => cur === g.over ? cur : g.over);
-			setConnect({
-				x1,
-				y1,
-				x2: ev.clientX,
-				y2: ev.clientY,
-				over: !!g.over
-			});
-		};
-		const done = (ev) => {
-			if (ev.pointerId !== g.pid) return;
-			window.removeEventListener("pointermove", move);
-			window.removeEventListener("pointerup", done);
-			window.removeEventListener("pointercancel", done);
-			setConnect(null);
-			setSessionOver("");
-			if (!g.moved) return;
-			const eat = (c) => {
-				c.stopPropagation();
-				c.preventDefault();
-			};
-			window.addEventListener("click", eat, {
-				capture: true,
-				once: true
-			});
-			setTimeout(() => window.removeEventListener("click", eat, { capture: true }), 0);
-			if (ev.type === "pointerup" && g.over) mergeGrounded(g.over, from, posOf(g.over));
-		};
-		window.addEventListener("pointermove", move);
-		window.addEventListener("pointerup", done);
-		window.addEventListener("pointercancel", done);
-		return true;
+	const chainReg = useChainRegistry();
+	const placedChains = () => {
+		const m = /* @__PURE__ */ new Map();
+		const shown = new Set(lines.map((l) => l.id));
+		for (const [key, e] of chainReg.entries.current) if (shown.has(key)) m.set(key, {
+			...e,
+			key,
+			origin: posOf(key)
+		});
+		return m;
 	};
+	const flightOfKey = (key) => isGroundedKey(key) ? flights?.find((f) => f.id === groundedIdOf(key)) || null : liveFlightOf(key);
+	const runIntent = (intent, ctx) => runWireIntent(intent, ctx, {
+		flightOf: flightOfKey,
+		flights: flights || [],
+		kinds,
+		chain: (key) => placedChains().get(key) || null,
+		merge: (from, into, at) => mergeGrounded(from, into, posOf(from), at),
+		pinAt: (key, at) => alive.current && pinAt(key, at),
+		labelH: CHAIN_LABEL_H
+	});
+	const wiring = useSkyWiring({
+		chains: () => placedChains(),
+		planeAt: (x, y) => planeAt(x, y),
+		ground: (el) => ground(el),
+		onIntent: (i, ctx) => void runIntent(i, ctx)
+	});
+	const portDownFor = (key) => (node, side, e) => wiring.startWire(key, node, side, e);
+	const handoffs = (0, import_react.useMemo)(() => handoffLinks(flights), [flights]);
+	const xwires = (0, import_react.useMemo)(() => handoffWires(handoffs, placedChains().values()), [
+		handoffs,
+		chainReg.version,
+		place,
+		drag,
+		lines
+	]);
+	const triggerHeads = (0, import_react.useMemo)(() => new Map(grounded.map((f) => [f.id, triggerHeadFor(f, flights, windowName)])), [grounded, flights]);
 	const onDownCapture = (e) => {
 		if (focusMode) setFocusMode(false);
 		if (e.pointerType === "mouse" && e.button !== 0) return;
 		const el = e.target instanceof Element ? e.target : null;
 		if (el?.closest(".fl-loop-handle, .fl-loop-pill[role='button']")) return;
-		const plus = el?.closest(".fl-box-add");
-		const slot = plus?.closest("[data-slot]")?.getAttribute("data-slot") || "";
-		if (plus && slot && !isGroundedKey(slot) && startConnect(e, slot, plus)) {
-			e.stopPropagation();
-			return;
-		}
+		if (el?.closest(".sky-chain [data-port]")) return;
 		const t = space.current ? "click" : tool;
 		if (t === "drag") return;
 		const g = gestureFor(t, skyTargetOf(e.target, ground), {
@@ -134381,7 +136257,7 @@ function SkyView() {
 				},
 				heads
 			});
-			slot?.querySelectorAll("[data-node]").forEach((el) => {
+			slot?.querySelectorAll(":is(.sky-node, .fl-box)[data-node]").forEach((el) => {
 				const node = el.getAttribute("data-node") || "";
 				if (isStopNode(node) && !el.closest(".skl-card")) out.stops.push({
 					line: l.id,
@@ -134818,7 +136694,7 @@ function SkyView() {
 		vpRef.current?.querySelectorAll(".sky-line-slot[data-slot]").forEach((el) => {
 			if (el.getAttribute("data-slot") === id) slot = el;
 		});
-		const box = [...slot?.querySelectorAll(".fl-box.selected[data-node]") || []].find((b) => !b.closest(".skl-card"));
+		const box = [...slot?.querySelectorAll(".sky-node.is-selected[data-node], .fl-box.selected[data-node]") || []].find((b) => !b.closest(".skl-card"));
 		return box ? {
 			line: id,
 			node: box.getAttribute("data-node") || ""
@@ -135174,7 +137050,12 @@ function SkyView() {
 			merging: !!mergeOver && !!drag?.from[id],
 			selected: at ? sel.lines.has(id) : void 0,
 			highlighted: at ? sel.stops.get(id) : void 0,
-			onShiftSelect: at ? (n) => setSel((s) => toggleStop(s, id, n.id)) : void 0
+			onShiftSelect: at ? (n) => setSel((s) => toggleStop(s, id, n.id)) : void 0,
+			head: triggerHeads.get(f.id) || null,
+			registerChain: at ? chainReg.registerFor(id) : void 0,
+			onPortDown: at ? portDownFor(id) : void 0,
+			targets: wiring.targetsOf(id),
+			over: wiring.overOf(id)
 		}, id);
 		return lineForSession(id, at);
 	};
@@ -135198,7 +137079,11 @@ function SkyView() {
 		mergeTarget: mergeOver === id,
 		selected: at ? sel.lines.has(id) : void 0,
 		highlighted: at ? sel.stops.get(id) : void 0,
-		onShiftSelect: at ? (n) => setSel((s) => toggleStop(s, id, n.id)) : void 0
+		onShiftSelect: at ? (n) => setSel((s) => toggleStop(s, id, n.id)) : void 0,
+		registerChain: at ? chainReg.registerFor(id) : void 0,
+		onPortDown: at ? portDownFor(id) : void 0,
+		targets: wiring.targetsOf(id),
+		over: wiring.overOf(id)
 	}, id);
 	const selScreen = selBox && planeToScreen(cam, selBox);
 	const selY = (r) => {
@@ -135378,16 +137263,6 @@ function SkyView() {
 			toolbar,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyGuide, {}),
 			pick,
-			connect && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-				className: "sky-connect" + (connect.over ? " is-over" : ""),
-				"aria-hidden": "true",
-				focusable: "false",
-				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: `M ${connect.x1} ${connect.y1} C ${connect.x1 + 60} ${connect.y1}, ${connect.x2 - 60} ${connect.y2}, ${connect.x2} ${connect.y2}` }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
-					cx: connect.x2,
-					cy: connect.y2,
-					r: 5
-				})]
-			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "sky-main",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -135426,6 +137301,7 @@ function SkyView() {
 							/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 								className: "sky-plane" + (focusMode ? " sky-focus" : ""),
 								"data-dragging": drag ? "" : void 0,
+								"data-wiring": wiring.dragging ? "" : void 0,
 								"data-tidying": tidying ? "" : void 0,
 								"data-snapping": guides.length ? "" : void 0,
 								style: { transform: `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})` },
@@ -135441,6 +137317,10 @@ function SkyView() {
 											style: { transform: `translate(${at.x}px, ${at.y}px)` },
 											children: lineFor(l.id, at)
 										}, l.id);
+									}),
+									/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyWires, {
+										band: wiring.band,
+										wires: xwires
 									}),
 									ghosts.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GhostLine, { ...g }, "ghost:" + g.id)),
 									newBlock,

@@ -130,29 +130,59 @@ function drawn(el: HTMLElement): boolean {
   return typeof check === "function" ? check.call(el, { opacityProperty: true, visibilityProperty: true }) : true;
 }
 
-/** The match of `selector` under `root` to point at: of the drawn ones (a
- * hidden duplicate must not win), the first that is on screen — wholly, else
- * mostly, else at all — then the first drawn one (the coach mark brings it
- * into view). A selector list matches in document order, so in the Sky (a
- * panned plane) the first match is often off screen while another one shows.
- * A broken selector is "nothing to point at", never a crash. */
+/** A selector list split at its top-level commas (not inside [], (), or
+ * quotes): `'[data-tour="a"], .b'` → `['[data-tour="a"]', '.b']`. */
+export function selectorParts(selector: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let quote = "";
+  let cur = "";
+  for (const ch of selector) {
+    if (quote) {
+      if (ch === quote) quote = "";
+    } else if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === "[" || ch === "(") depth++;
+    else if (ch === "]" || ch === ")") depth = Math.max(0, depth - 1);
+    else if (ch === "," && depth === 0) {
+      if (cur.trim()) out.push(cur.trim());
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
+/** The match of `selector` under `root` to point at. A step's selector list
+ * names its target first and its fallbacks after (`'[data-tour="x"],
+ * .today-class, [data-tour="shelf"]'`): the FIRST part that matches anything
+ * drawn wins — a later fallback never beats it, even when it is off screen
+ * (the coach mark brings it into view). Among that part's matches (a hidden
+ * duplicate never wins), the one on screen — wholly, else mostly, else at all
+ * — then the first: in the Sky (a panned plane) the first in the document is
+ * often off screen while another shows. A broken selector is "nothing to
+ * point at", never a crash. */
 export function findTarget(root: ParentNode, selector: string): HTMLElement | null {
   if (!selector) return null;
-  let all: NodeListOf<HTMLElement>;
-  try {
-    all = root.querySelectorAll<HTMLElement>(selector);
-  } catch {
-    return null;
+  for (const part of selectorParts(selector)) {
+    let all: NodeListOf<HTMLElement>;
+    try {
+      all = root.querySelectorAll<HTMLElement>(part);
+    } catch {
+      continue;
+    }
+    const seen = Array.from(all).filter(drawn);
+    if (!seen.length) continue;
+    if (seen.length === 1 || typeof window === "undefined" || typeof getComputedStyle !== "function") return seen[0];
+    const share = seen.map((el) => shownShare(el.getBoundingClientRect(), clipBox(el)));
+    for (const min of [0.999, 0.5, 0.001]) {
+      const i = share.findIndex((v) => v >= min);
+      if (i >= 0) return seen[i];
+    }
+    return seen[0];
   }
-  const seen = Array.from(all).filter(drawn);
-  if (!seen.length) return null;
-  if (typeof window === "undefined" || typeof getComputedStyle !== "function") return seen[0];
-  const share = seen.map((el) => shownShare(el.getBoundingClientRect(), clipBox(el)));
-  for (const min of [0.999, 0.5, 0.001]) {
-    const i = share.findIndex((s) => s >= min);
-    if (i >= 0) return seen[i];
-  }
-  return seen[0];
+  return null;
 }
 
 /** The ancestors of `el` that scroll (overflow auto/scroll), innermost first. */

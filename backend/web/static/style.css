@@ -9449,6 +9449,614 @@ a.fl-waiting-ref:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* Round 18 — a chain in the Sky, n8n-style (SkyChain.tsx, lib/skyGraph):
+ * free-floating icon tiles with the name and a muted summary UNDER them, a
+ * square in-port on the left, a round out-port on the right, bézier wires,
+ * a trailing "+" on the last node. No card around a chain, no row
+ * background. Colours are the app's tokens, so both themes follow; the
+ * light theme only softens a few mixes. Prefix sky- (sky-chain, sky-node,
+ * sky-tile, sky-port, sky-wire, sky-plus, sky-socket, sky-loop-pill). */
+
+.sky-chain {
+  --sky-tile-bg: var(--panel);
+  --sky-tile-line: color-mix(in srgb, var(--text) 20%, transparent);
+  --sky-tile-line-hi: color-mix(in srgb, var(--text) 42%, transparent);
+  --sky-wire: color-mix(in srgb, var(--text) 34%, transparent);
+  --sky-port: color-mix(in srgb, var(--text) 46%, var(--panel));
+  --sky-fam-work: var(--accent);
+  --sky-fam-ship: var(--tone-waiting);
+  --sky-fam-outside: color-mix(in srgb, var(--tone-working) 62%, var(--tone-waiting));
+  --sky-fam-people: var(--gold, var(--tone-attention));
+  --sky-fam-flow: color-mix(in srgb, var(--accent) 55%, var(--tone-broken));
+  --sky-risk-remote: var(--tone-waiting);
+  --sky-risk-irreversible: var(--red, var(--tone-broken));
+  --sky-risk-spends: var(--gold, #d4a72c);
+  position: relative;
+  overflow: visible;
+  font-size: 12.5px;
+  color: var(--text);
+}
+
+.light .sky-chain {
+  --sky-tile-line: color-mix(in srgb, var(--text) 16%, transparent);
+  --sky-tile-line-hi: color-mix(in srgb, var(--text) 34%, transparent);
+  --sky-wire: color-mix(in srgb, var(--text) 30%, transparent);
+  --sky-port: color-mix(in srgb, var(--text) 38%, var(--panel));
+}
+
+/* --- Wires ------------------------------------------------------------------ */
+
+.sky-wires {
+  position: absolute;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.sky-wire {
+  fill: none;
+  stroke: var(--sky-wire);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+/* A session's wires wear its colour (set inline), softly. */
+.sky-wire-line,
+.sky-wire-head {
+  stroke-opacity: 0.6;
+}
+
+.sky-wire-line.is-done,
+.sky-wire-head.is-done {
+  stroke-opacity: 0.85;
+}
+
+.sky-wire-fan,
+.sky-wire-join {
+  stroke-width: 1.6;
+}
+
+.sky-wire-join.is-done {
+  stroke: color-mix(in srgb, var(--tone-working) 60%, transparent);
+}
+
+.sky-wire-add,
+.sky-wire-socket {
+  stroke-width: 1.5;
+  stroke-dasharray: 3 4;
+}
+
+/* A loop: dashed until it runs, the working green while it goes round,
+   muted once it let the flight on. */
+.sky-wire-loop {
+  stroke: color-mix(in srgb, var(--accent) 70%, transparent);
+  stroke-dasharray: 5 5;
+  stroke-width: 1.8;
+}
+
+.sky-wire-loop.sky-loop-running {
+  stroke: var(--tone-working);
+  stroke-dasharray: none;
+}
+
+.sky-wire-loop.sky-loop-done {
+  stroke: color-mix(in srgb, var(--muted) 60%, transparent);
+  stroke-dasharray: none;
+}
+
+/* The wire into the stop the flock is at flows. */
+.sky-wire.is-live {
+  stroke-dasharray: 6 6;
+  stroke-opacity: 0.95;
+  animation: sky-wire-flow 0.9s linear infinite;
+}
+
+@keyframes sky-wire-flow {
+  to {
+    stroke-dashoffset: -12;
+  }
+}
+
+/* --- A node: its tile, its name and summary under it ------------------------- */
+
+.sky-node {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  outline: none;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: pointer;
+}
+
+.sky-node.is-draggable {
+  touch-action: none;
+}
+
+.sky-node.is-dragging {
+  z-index: 4;
+  cursor: grabbing;
+}
+
+.sky-tile {
+  position: relative;
+  flex: none;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--sky-tile-bg);
+  border: 1.5px solid var(--sky-tile-line);
+  box-shadow: var(--sky-shadow-rest, 0 1px 2px rgba(0, 0, 0, 0.16), 0 4px 14px rgba(0, 0, 0, 0.14));
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s,
+    transform 0.15s;
+}
+
+.sky-node:hover .sky-tile {
+  border-color: var(--sky-tile-line-hi);
+}
+
+.sky-node.is-dragging .sky-tile {
+  box-shadow: var(--sky-shadow-raised, 0 6px 12px rgba(0, 0, 0, 0.22), 0 18px 40px rgba(0, 0, 0, 0.34));
+  transform: scale(1.04);
+}
+
+.sky-tile-icon {
+  display: grid;
+  place-items: center;
+  line-height: 0;
+  color: var(--sky-fam-work);
+}
+
+.sky-fam-ship .sky-tile-icon {
+  color: var(--sky-fam-ship);
+}
+.sky-fam-outside .sky-tile-icon {
+  color: var(--sky-fam-outside);
+}
+.sky-fam-people .sky-tile-icon {
+  color: var(--sky-fam-people);
+}
+.sky-fam-flow .sky-tile-icon {
+  color: var(--sky-fam-flow);
+}
+
+.sky-node-title {
+  margin-top: 7px;
+  padding-bottom: 1px;
+  max-width: 100%;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 16px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+
+.sky-node-sub {
+  margin-top: 1px;
+  max-width: 100%;
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sky-node-extra,
+.sky-head-extra {
+  margin-top: 4px;
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  cursor: auto;
+}
+
+.sky-head-extra:empty,
+.sky-node-extra:empty {
+  display: none;
+}
+
+/* --- States on the tile ------------------------------------------------------ */
+
+.sky-node.st-current .sky-tile,
+.sky-head.tone-working .sky-tile {
+  border-color: var(--tone-working);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--tone-working) 20%, transparent),
+    0 0 18px color-mix(in srgb, var(--tone-working) 30%, transparent);
+}
+
+.sky-node.st-perched .sky-tile,
+.sky-head.tone-attention .sky-tile {
+  border-color: var(--tone-attention);
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--tone-attention) 22%, transparent),
+    0 0 16px color-mix(in srgb, var(--tone-attention) 26%, transparent);
+}
+
+.sky-node.st-halted .sky-tile {
+  border: 1.5px dashed var(--red, var(--tone-broken));
+}
+
+.sky-node.st-failed .sky-tile,
+.sky-head.tone-broken .sky-tile {
+  border-color: var(--red, var(--tone-broken));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--red, var(--tone-broken)) 16%, transparent);
+}
+
+.sky-node.st-paused .sky-tile {
+  border-style: dashed;
+  border-color: var(--muted);
+}
+
+.sky-node.st-done .sky-tile {
+  background: color-mix(in srgb, var(--sky-tile-bg) 70%, transparent);
+}
+
+.sky-node.st-done .sky-tile-icon,
+.sky-node.st-skipped .sky-tile-icon {
+  opacity: 0.5;
+}
+
+.sky-node.st-done .sky-node-title,
+.sky-node.st-skipped .sky-node-title {
+  color: color-mix(in srgb, var(--text) 70%, transparent);
+}
+
+.sky-node.st-skipped .sky-node-title {
+  text-decoration: line-through;
+}
+
+/* A collapsed group: two offset borders behind the tile, a stack. */
+.sky-node.is-group .sky-tile {
+  box-shadow:
+    4px 4px 0 -1.5px var(--sky-tile-bg),
+    4px 4px 0 0 var(--sky-tile-line),
+    8px 8px 0 -1.5px var(--sky-tile-bg),
+    8px 8px 0 0 var(--sky-tile-line);
+}
+
+.sky-node.is-group.st-current .sky-tile {
+  box-shadow:
+    4px 4px 0 -1.5px var(--sky-tile-bg),
+    4px 4px 0 0 var(--tone-working),
+    8px 8px 0 -1.5px var(--sky-tile-bg),
+    8px 8px 0 0 color-mix(in srgb, var(--tone-working) 60%, transparent);
+}
+
+/* Selection, the Sky's multi-selection, a wire's possible drop. */
+.sky-node.is-selected .sky-tile,
+.sky-node:focus-visible .sky-tile {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.sky-node.is-highlighted .sky-tile {
+  outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  outline-offset: 3px;
+}
+
+.sky-node.is-target .sky-tile {
+  outline: 2px dashed color-mix(in srgb, var(--accent) 75%, transparent);
+  outline-offset: 4px;
+}
+
+.sky-node.is-over .sky-tile,
+.sky-node.sky-aim-over .sky-tile {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* --- Badges: ✓ done, ! failed, ⏸ halt point, "if" ---------------------------- */
+
+.sky-badge {
+  position: absolute;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+  border: 2px solid var(--sky-bg, var(--bg));
+}
+
+.sky-badge-done {
+  top: -7px;
+  right: -7px;
+  background: var(--tone-working);
+  color: var(--tone-working-ink, #0b1a10);
+}
+
+.sky-badge-failed {
+  top: -7px;
+  right: -7px;
+  background: var(--red, var(--tone-broken));
+  color: #fff;
+}
+
+.sky-badge-halt {
+  top: -7px;
+  left: -7px;
+  background: var(--panel-2);
+  color: var(--text);
+  border-color: var(--sky-bg, var(--bg));
+  font-size: 9px;
+}
+
+.sky-badge-if {
+  bottom: -7px;
+  left: -7px;
+  background: var(--panel-2);
+  color: var(--accent);
+  font-size: 9.5px;
+  font-style: italic;
+}
+
+/* The risk stripe, as dots on the tile's bottom edge. */
+.sky-risk {
+  position: absolute;
+  left: 50%;
+  bottom: -4px;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: flex;
+  gap: 3px;
+  padding: 1px 3px;
+  border-radius: 999px;
+  background: var(--sky-bg, var(--bg));
+}
+
+.sky-risk > i {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.sky-risk-remote {
+  background: var(--sky-risk-remote);
+}
+.sky-risk-irreversible {
+  background: var(--sky-risk-irreversible);
+}
+.sky-risk-spends {
+  background: var(--sky-risk-spends);
+}
+
+/* --- Ports ----------------------------------------------------------------- */
+
+.sky-port {
+  position: absolute;
+  top: 50%;
+  z-index: 3;
+  box-sizing: border-box;
+  background: var(--sky-port);
+  border: 2px solid var(--sky-bg, var(--bg));
+  cursor: crosshair;
+  touch-action: none;
+  transition:
+    transform 0.12s,
+    background 0.12s;
+}
+
+.sky-port-in {
+  left: -7px;
+  width: 11px;
+  height: 14px;
+  margin-top: -7px;
+  border-radius: 3px;
+}
+
+.sky-port-out {
+  right: -8px;
+  width: 15px;
+  height: 15px;
+  margin-top: -7.5px;
+  border-radius: 50%;
+}
+
+.sky-port:not(.sky-port-off):hover,
+.sky-node.is-over .sky-port-in,
+.sky-node.is-target .sky-port-in {
+  background: var(--accent);
+  transform: scale(1.35);
+}
+
+/* A wire's end on a tile that takes none: drawn, not grabbed. */
+.sky-port-off {
+  cursor: inherit;
+  pointer-events: none;
+  opacity: 0.65;
+}
+
+/* The head's out port wears its session's colour. */
+.sky-head .sky-port-out {
+  background: var(--sky-head-color, var(--sky-port));
+}
+
+/* --- The head: the session tile, or a trigger ----------------------------- */
+
+.sky-head .sky-tile {
+  border-radius: 32px 12px 12px 32px;
+}
+
+.sky-head .sky-tile-icon {
+  color: var(--sky-head-color, var(--muted));
+}
+
+.sky-head-dot {
+  position: absolute;
+  top: 6px;
+  right: 7px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--sky-head-color, var(--muted));
+  box-shadow: 0 0 0 2px var(--sky-tile-bg);
+}
+
+.sky-head-trigger .sky-tile {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--sky-head-color, var(--muted)) 70%, transparent);
+}
+
+.sky-head-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  line-height: 15px;
+  background: color-mix(in srgb, var(--muted) 18%, transparent);
+  color: var(--muted);
+}
+
+.sky-head-chip.tone-working {
+  background: color-mix(in srgb, var(--tone-working) 18%, transparent);
+  color: var(--fl-ink-working, var(--tone-working));
+}
+
+.sky-head-chip.tone-attention {
+  background: color-mix(in srgb, var(--tone-attention) 20%, transparent);
+  color: var(--tone-attention-ink, var(--text));
+}
+
+.sky-head-chip.tone-broken {
+  background: color-mix(in srgb, var(--tone-broken) 18%, transparent);
+  color: var(--tone-broken);
+}
+
+/* --- The trailing +, the empty socket -------------------------------------- */
+
+/* It wears the quiet tier (.fl-icon-btn, StopParts.css); these win over it. */
+.sky-chain .sky-plus {
+  position: absolute;
+  z-index: 2;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  transform: translate(-50%, -50%);
+  border-radius: 7px;
+  border: 1.5px solid var(--sky-tile-line-hi);
+  background: var(--sky-tile-bg);
+  color: var(--muted);
+  cursor: pointer;
+  touch-action: none;
+  transition:
+    color 0.12s,
+    border-color 0.12s,
+    transform 0.12s;
+}
+
+.sky-chain .sky-plus:hover:not(:disabled),
+.sky-chain .sky-plus:focus-visible {
+  background: var(--sky-tile-bg);
+  color: var(--accent);
+  border-color: var(--accent);
+  transform: translate(-50%, -50%) scale(1.12);
+  outline: none;
+}
+
+.sky-socket {
+  position: absolute;
+  z-index: 2;
+  width: 16px;
+  height: 16px;
+  box-sizing: border-box;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1.5px dashed var(--sky-tile-line-hi);
+  background: var(--sky-bg, var(--bg));
+}
+
+.sky-socket.is-target {
+  border-color: var(--accent);
+}
+
+.sky-socket.is-over {
+  border-style: solid;
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+/* --- A loop's pill: screen-sized at any zoom, like the classic canvas's ----- */
+
+.sky-loop-pill {
+  position: absolute;
+  z-index: 2;
+  transform: translate(-50%, -50%) scale(calc(1 / var(--sky-z, 1)));
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  color: var(--fl-ink-accent, var(--accent));
+  background: var(--panel);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.sky-loop-pill.sky-loop-running {
+  border-color: var(--tone-working);
+  color: var(--fl-ink-working, var(--tone-working));
+}
+
+.sky-loop-pill.sky-loop-done {
+  border-color: color-mix(in srgb, var(--muted) 60%, transparent);
+  color: var(--muted);
+}
+
+.sky-loop-pill.st-halted {
+  border-color: var(--fl-ink-red, var(--red, #e5534b));
+  color: var(--fl-ink-red, var(--red, #e5534b));
+}
+
+.sky-loop-pill:hover,
+.sky-loop-pill.is-selected {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.sky-loop-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The bird perches on the tile's top edge (FlywayCanvas.css .fl-bird-marker). */
+.sky-chain-bird {
+  z-index: 5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sky-wire.is-live {
+    animation: none;
+  }
+  .sky-tile,
+  .sky-port,
+  .sky-plus {
+    transition: none;
+  }
+}
 /* One session's line in the Sky (SkyLine.tsx). The host places it (absolute,
    at its layout's x/y); the line sizes itself to its diagram and reports
    that size, so it is in flow inside the host's box. */
@@ -10411,6 +11019,128 @@ a.fl-waiting-ref:hover {
   .skl-box-resize {
     transition: none;
   }
+}
+
+/* --- Round 18: a line is a CHAIN of free-floating tiles -------------------
+   No card around it and no row behind it (docs/flights.md "Round 18"): a
+   small label over the tiles (the handle and the ⋯), the chain (SkyChain),
+   the open cards in a row under it. The ring and the focus show on the
+   label. */
+
+.skl.skl-chainline {
+  min-width: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+
+.skl.skl-chainline.skl-grounded {
+  border: none;
+}
+
+.skl-chainline > .skl-bar.skl-label {
+  display: inline-flex;
+  gap: 6px;
+  width: max-content;
+  max-width: 520px;
+  height: 26px;
+  margin: 0 0 8px;
+  padding: 0 4px 0 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 86%, transparent);
+  font-size: 12.5px;
+  outline: calc(1px / var(--sky-z, 1)) solid transparent;
+  outline-offset: calc(2px / var(--sky-z, 1));
+}
+
+.skl-chainline > .skl-bar.skl-label > .fl-bird {
+  color: var(--sky-chain-color, var(--accent));
+}
+
+.skl-chainline.skl-grounded > .skl-bar.skl-label {
+  border-style: dashed;
+}
+
+.skl-chainline.is-focused > .skl-bar.skl-label,
+.skl-chainline.is-selected > .skl-bar.skl-label,
+.skl-chainline:focus-visible > .skl-bar.skl-label {
+  border-color: var(--accent);
+  outline-color: var(--accent);
+}
+
+.skl-chainline > .skl-bar.skl-label .skl-name {
+  font-weight: 600;
+}
+
+.skl-chainline > .skl-bar.skl-label .skl-where,
+.skl-chainline > .skl-bar.skl-label .skl-age {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A stops-only chain dragged by its label onto a session's chain. */
+.skl-chainline.is-merging {
+  opacity: 0.7;
+}
+
+.skl-chainline.is-merge-target .sky-head,
+.skl-chainline.is-drop .sky-head,
+.skl-chainline.is-session-over .sky-socket {
+  outline: calc(2px / var(--sky-z, 1)) solid var(--accent);
+  outline-offset: calc(3px / var(--sky-z, 1));
+  border-radius: 12px;
+}
+
+.skl-chain-wrap {
+  position: relative;
+  width: max-content;
+}
+
+/* The palette / a stop's dialog floats beside the tile it was opened from. */
+.skl-panels.skl-hang {
+  top: auto;
+  width: 440px;
+  z-index: 8;
+}
+
+.skl-chainline .skl-ruler {
+  max-width: 100%;
+  margin-top: 4px;
+}
+
+.skl-cards {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.skl-chainline > .skl-bar.skl-label .skl-chip {
+  height: 18px;
+  padding: 0 7px;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+/* Focus shows on the chain's label only (above); a chain the marquee took
+   whole keeps the sky's one selection ring (SkySelection.css) round it. */
+.skl.skl-chainline.is-focused:not(.is-selected),
+.skl.skl-chainline:focus-visible:not(.is-selected),
+.skl.skl-chainline:where(:has(> .skl-bar:hover)):not(.is-selected) {
+  outline-color: transparent;
+}
+
+.skl.skl-chainline.is-selected {
+  border-radius: 14px;
 }
 /* The Sky's readability overrides for parts drawn by SkyView (the toolbar,
    the drawer) whose own rules live in Sky.css. Imported by SkyLine.tsx; CSS
@@ -12258,35 +12988,64 @@ details.fl-group-waiting > summary {
 /* A session line's + being dragged onto a stops-only line (SkyView
    `startConnect`): a wire from the + to the pointer, solid once it is over a
    line that would take it. */
-.sky-connect {
-  position: fixed;
-  inset: 0;
-  width: 100vw;
-  height: 100vh;
-  z-index: 60;
-  pointer-events: none;
+/* Round 18: the wires BETWEEN chains (SkyWires) — one SVG at the plane's
+   origin, overflow visible, under every press. A handoff wire is dashed in
+   the source session's colour; the band is the wire being drawn. */
+.sky-xwires {
+  position: absolute;
+  left: 0;
+  top: 0;
   overflow: visible;
+  pointer-events: none;
+  z-index: 4;
 }
 
-.sky-connect path {
+.sky-xwire-path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: calc(2px / var(--sky-z, 1));
+  stroke-dasharray: 7 5;
+  opacity: 0.75;
+}
+
+.sky-xwire.is-started .sky-xwire-path {
+  opacity: 0.45;
+}
+
+.sky-xwire-end {
+  fill: currentColor;
+  opacity: 0.8;
+}
+
+.sky-band-path {
   fill: none;
   stroke: var(--accent);
-  stroke-width: 2;
+  stroke-width: calc(2px / var(--sky-z, 1));
   stroke-dasharray: 6 4;
 }
 
-.sky-connect circle {
+.sky-band-end {
   fill: var(--panel);
   stroke: var(--accent);
-  stroke-width: 2;
+  stroke-width: calc(2px / var(--sky-z, 1));
 }
 
-.sky-connect.is-over path {
+.sky-band.is-over .sky-band-path {
   stroke-dasharray: none;
 }
 
-.sky-connect.is-over circle {
+.sky-band.is-over .sky-band-end {
   fill: var(--accent);
+}
+
+/* Pulling an in port's wire off (a split): the band reads as cutting. */
+.sky-band.is-split .sky-band-path {
+  stroke: var(--warn, var(--accent));
+}
+
+/* While a wire is drawn nothing on the plane takes a hover but the tiles. */
+.sky-plane[data-wiring] {
+  cursor: crosshair;
 }
 
 @layer tokens, base, components, theme;

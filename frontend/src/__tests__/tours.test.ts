@@ -50,7 +50,7 @@ describe("the tours registry", () => {
     expect(isTourId("map")).toBe(false);
   });
 
-  it("keeps every tour short: 3–7 steps of one plain sentence each (Voice: the mic's eight; Sky: the whole sky's fourteen)", () => {
+  it("keeps every tour short: 3–7 steps of one plain sentence each (Voice: the mic's eight; Sky: the whole sky's fifteen)", () => {
     for (const id of TOUR_IDS) {
       const { steps, title } = TOURS[id];
       expect(title, id).toMatch(/^[A-Z]/);
@@ -156,7 +156,7 @@ describe("the tours registry", () => {
     const steps = TOURS.sky.steps;
     expect(TOURS.sky.id).toBe("sky");
     expect(TOURS.sky.title).toBe("Sky");
-    expect(steps).toHaveLength(14);
+    expect(steps).toHaveLength(15);
     // the first selector of each target: its data-tour hook (or "")
     expect(steps.map((s) => s.target.split(",")[0])).toEqual([
       '[data-tour="view-sky"]',
@@ -164,6 +164,7 @@ describe("the tours registry", () => {
       '[data-tour="sky-session-box"]',
       '[data-tour="flights-bird"]',
       '[data-tour="sky-stop"]',
+      ".sky-port-out:not(.sky-port-off)",
       '[data-tour="sky-stop"]',
       '[data-tour="sky-shelf"]',
       '[data-tour="sky-grounded"]',
@@ -181,7 +182,7 @@ describe("the tours registry", () => {
     expect(steps.some((s) => /flights-tab|flights-plans/.test(s.target))).toBe(false);
     // every surface the contract names has its step
     const words = steps.map((s) => s.title + " " + s.body).join(" ");
-    for (const w of ["Grid · Sky", "bar", "terminal", "bird", "duplicate", "dialog", "All blocks…", "grounded", "Group into a stop", "Save to the shelf", "V ", "H ", "Space", "Delete", "intake", "Fit", "0 ", "guide"])
+    for (const w of ["Grid · Sky", "label", "terminal", "bird", "duplicate", "dialog", "port", "loop", "All blocks…", "stops-only", "Group into a stop", "Save to the shelf", "V ", "H ", "Space", "Delete", "intake", "Fit", "0 ", "guide"])
       expect(words, w).toContain(w);
   });
 });

@@ -69,6 +69,7 @@ import { InlineConfirm } from "../InlineConfirm";
 import { OverflowMenu, type MenuItem } from "../OverflowMenu";
 import { Pane } from "../grid/Pane";
 import type { BoxSizeName } from "./FlywayCanvas";
+import { pillAimer, useChainMenu } from "./useChainMenu";
 import { SkyChain } from "./SkyChain";
 import { ChainPanels } from "./SkyWires";
 import { HEAD, useChainEntry, useNodeMoves, useTourHooks, type ChainEntry } from "./useSkyWiring";
@@ -401,6 +402,9 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter);
   useTourHooks(wrapRef, { ".sky-head": "sky-session-box", ".sky-node:not(.sky-head)": "sky-stop" });
   const gc = line.graphCanvas;
+  // Round 18: a tile's right-click menu; a Loop's pill dragged onto a stop re-aims it.
+  const chainMenu = useChainMenu(gc, line.flight?.id || "");
+  const onPillDown = pillAimer(graph, gc.onLoopTo);
 
   const foldKid = (t: string) => setKids((k) => Object.fromEntries(Object.entries(k).filter(([x]) => x !== t)));
   // A press on the head that moved was the line's drag, not a click on it.
@@ -608,6 +612,9 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
             onOpen={onOpen}
             onRemove={gc.onRemove}
             onLoopPill={(via) => gc.onEdit?.(via)}
+            onPillDown={onPillDown}
+            onMenu={chainMenu.onMenu}
+            kinds={kinds}
             onNodeMove={moves.move}
             onPortDown={p.onPortDown}
             onPlus={(after) => (after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true))}
@@ -618,7 +625,8 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
               </span>
             )}
           />
-          <ChainPanels graph={graph} anchor={line.anchor} anchorPos={line.anchorPos}>
+          {chainMenu.menu}
+            <ChainPanels graph={graph} anchor={line.anchor} anchorPos={line.anchorPos}>
             {line.palette}
             {line.inspector}
           </ChainPanels>

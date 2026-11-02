@@ -6152,5 +6152,506 @@ Only the Sky draws chains.
   placeholder render.
 - `lib/flights.ts`: `FlightStep.pos?`, `Flight.triggered_by?`.
 - `lib/flightsApi.ts`: `saveStopPositions`, `splitOffChain`.
-- Each worker writes its notes to `docs/flights-r18/<task>.md` (merged into
-  this section after).
+- Each worker wrote its notes to `docs/flights-r18/<task>.md`, folded in
+  below.
+
+### Round 18 — as built (2026-11-02)
+
+The workers' integrator notes, folded in (backend, graph, sky), then the integrator's own.
+
+#### Backend (r18-backend)
+
+#### Round 18 backend: notes for the integrator
+
+Everything here is live on branch `emandel2630/r18-backend`. Tests:
+`tests/unit/test_flights_r18_backend.py` (48 tests).
+
+##### 1. Step `pos`
+
+- **Shape.** `step.pos = {x: int, y: int}`, chain-local plane px. Omitted when
+  unset. The normaliser (`flights._normalize_pos`) keeps two finite numbers,
+  rounds them and clamps them to ±100000 (`flights.MAX_POS`). Anything else
+  (a string, a bool, NaN/Inf, a missing axis, a list) is **dropped silently**:
+  it is never a 400, strict mode included.
+- **Where it is kept.** `normalize_step` keeps it, so these all keep it:
+  saved plans (`POST /api/flights/plans`), take-off, grounded flights, the
+  flight dto (`GET /api/flights`, `GET /api/flights/{id}`, SSE
+  `flight.changed`), `POST /steps` with `{step}` / `{steps}` / `{plan_id}`
+  (tackOn / tackOnSteps / a saved stop dropped back), PATCH edits of other
+  fields, and split_off.
+- **`PATCH /api/flights/{id}/steps/{sid}` `{pos: {x,y} | null}`.** Layout
+  only. It is allowed on ANY step: flown, current, ahead, on any flight
+  (landed/cancelled ones too). It does not go through `_editable`, writes no
+  history and does not bump `updated`. `null`, or a bad value, clears it.
+  404 `unknown_step`. `pos` can share a body with other fields; those fields
+  keep their own rules (a `title` on a flown step is still 409).
+- **`POST /api/flights/{id}/layout` `{positions: {<sid>: {x,y} | null}}`** →
+  `200 {flight}`. Bulk version of the above: `null` (or a bad value) clears,
+  unknown ids are ignored. 400 `bad_layout` when `positions` is not an
+  object; 404 `unknown_flight`.
+
+##### 2. Split off
+
+`POST /api/flights/{id}/steps/{sid}/split_off` `{pos?: {x,y}}` (no body is
+fine) → `200 {flight, chain}`.
+
+- `flight` = the source flight without `sid…end`. Each moved step gets a
+  `removed` history event ("<title>, split off").
+- `chain` = a new **grounded** flight (`state: "grounded"`, `session: ""`,
+  `plan_id: "adhoc"`), stored under a fresh `f_xxxxxx` id. Its name is
+  `"<source plan_name> (from <first moved step title>)"`. Its steps are
+  renumbered `s1..sN` and all pending. A Loop among them whose `back_to`
+  named a moved step follows it to that step's new id (`_follow_loop_targets`).
+- `pos`: every moved step keeps its own. When the body has `pos`, the first
+  step's `pos` becomes the drop's.
+- Refusals: 409 `not_pending` when any moved step has started or is at or
+  before the cursor (the current step can never split off), 409
+  `whole_chain` when `sid` is the flight's first step (nothing would be
+  left: move the chain instead), 409 `finished`, 404 `unknown_step` /
+  `unknown_flight`. Nothing is written on a refusal.
+- Two `flight.changed` events go out: one for the source, one for the
+  chain.
+- Python: `flights.op_split_off(flight, sid, pos=None, now=None) -> chain`
+  (pure, does not store the chain), `flights.split_off(fid, sid, pos)` →
+  `(flight, chain)` (atomic under the store lock), and
+  `flight_driver.split_off` (announces and wakes the driver).
+
+##### 3. The `handoff` kind ("Start a chain")
+
+`core/flight_kinds/handoff.py`. `GET /api/flights/kinds` row:
+`kind: "handoff"`, `label: "Start a chain"`, `family: "flow"` (new;
+`flights.FAMILIES` now ends with `"flow"`), `actor: "robot"`,
+`default_on_fail: "halt"`, `risk: []`. The backend sends no icon: the
+frontend maps `handoff` → ↗.
+
+Fields:
+
+| name | type | default | notes |
+|---|---|---|---|
+| `target` | select | `""` | `options: []`, `dynamic: "chains"`. Value is `"flight:<id>"` (a grounded chain) or `"plan:<id>"` (a saved stop/flyway). |
+| `session` | select | `"new"` | `options: ["new"]`, `dynamic: "sessions"`. Value is a session title or `"new"`; the UI labels `"new"` as "a new session". |
+| `wait` | bool | `false` | |
+
+- **Config.** Strict mode (take-off, a step tacked onto a flight in the air)
+  requires `target` in one of the two forms, else `PlanError` with field
+  `…config.target` (e.g. `step.config.target` from `POST /steps`). On the
+  ground it may be empty, and `validate_for_takeoff` refuses it at attach.
+  `session` is case-folded to `"new"`; empty means `"new"`.
+- **Default title.** `"Start a chain"`, plus `" on <session>"` for a named
+  session and `" and wait"` when `wait` is on.
+- **Run.** It resolves the target:
+  - `flight:<id>` must still be grounded and pass `validate_for_takeoff`.
+  - `plan:<id>` → `flights.ground(plan)` makes a fresh grounded copy each
+    time, its steps grouped under the plan's name as a dropped saved stop
+    is. The plan itself is never consumed.
+
+  A named session must exist and must not be on a flight. `"new"` →
+  `flight_driver.spawn_worker(flight, step, prompt, report_back=False,
+  title_prefix=<chain name>)`: a child of this flight's session, forked from
+  its HEAD, on its CLI. The chain's first agent stop's prompt becomes the
+  worker's initial prompt (seeded, so the driver does not type it again).
+  The target is then attached with
+  `flights.attach(..., triggered_by={flight, step, session})`.
+- **Detail on the stop.** `child` (the started flight id), `child_name`,
+  `session` (where it runs) and `receipt` = `"started <name> on <session>"`
+  (≤ 80 chars).
+- **`wait: false`.** The stop is `done` as soon as the target has taken off.
+- **`wait: true`.** The stop stays `running` (note "waiting for <name> to
+  land") until the child flight is:
+  - `done`: the stop is `done`, receipt `"<name> landed"`;
+  - `halted`: the stop fails with "<name> halted: <reason>";
+  - `cancelled`: the stop fails with "<name> was cancelled: <reason>";
+  - deleted: the stop fails with "<name> is gone".
+
+  A fail goes through `on_fail` as usual (default halt).
+- **Refusals** fail the stop with one of these sentences:
+  - "the chain to start is gone"
+  - "the saved stop <id> is gone"
+  - "<name> is already flying" / "<name> is already over"
+  - "no session <title>"
+  - "<title> is already on a flight"
+  - "<name>: <takeoff validation message>"
+
+  A failed spawn deletes the plan copy it had made.
+- **Retry or restart.** If the target flight is already flying and its
+  `triggered_by` names this flight and stop, the stop adopts it instead of
+  failing.
+- `needs_session: true` (the flight's own session must be up: a new worker
+  is its child).
+
+###### `triggered_by` on the flight dto
+
+A flight started by a Handoff carries
+`triggered_by: {flight: <source flight id>, step: <handoff step id>, session: <the SOURCE flight's session>}`.
+The session the child runs in is the child's own `session`. The key is
+**omitted** on every other flight, so don't expect `null`. It persists in
+flights.json.
+
+##### 4. MCP
+
+`backend/mcp/flights.py` is generic: it reads kinds from
+`GET /api/flights/kinds` and passes step dicts through untouched, so
+`handoff` shows up in `describe_flight`'s kinds and `pos` survives
+`start_flight` / `edit_flight` / `save_flight_plan`. No MCP change was made,
+and split_off is **not** in `edit_flight`.
+
+##### 5. For the frontend
+
+- `FlightStep.pos?: {x: number; y: number}`,
+  `Flight.triggered_by?: {flight: string; step: string; session: string}`.
+- `saveStopPositions(fid, positions)` → `POST /api/flights/{fid}/layout
+  {positions}`; one drag → `PATCH …/steps/{sid} {pos}` works too.
+- `splitOffChain(fid, sid, pos?)` → `POST …/steps/{sid}/split_off {pos}` →
+  `{flight, chain}`.
+- The kinds editor must fill selects with `dynamic: "chains"` (grounded
+  flights as `flight:<id>` + saved plans as `plan:<id>`) and
+  `dynamic: "sessions"` (live titles + `"new"`).
+- Draw the handoff wire to the started flight with
+  `step_states[sid].detail.child`. Before it starts, use `config.target`.
+
+##### Open issue (outside my fence)
+
+`tests/unit/test_flights.py::test_kinds_registry_drives_the_editor`
+(line ~85) asserts that every select with empty `options` has
+`dynamic == "stops_before"`. The handoff's `target` (`dynamic: "chains"`)
+fails it. One-line fix: `assert fld["options"] or fld.get("dynamic") in
+("stops_before", "chains", "sessions")`.
+
+#### Graph model and tiles (r18-graph)
+
+#### Round 18 — graph worker notes (skyGraph + SkyChain)
+
+What the integrator (SkyView) needs to wire the free-floating chains in. Spec:
+`docs/flights.md` "Round 18: free-floating chains (the n8n look) — contract".
+Every seam name and signature is unchanged; everything below marked *added*
+is optional and new.
+
+##### `frontend/src/lib/skyGraph.ts`
+
+Coordinates are **chain-local plane px**: (0, 0) is the head's top-left (no
+head: the slot's origin). A node's box is `NODE_W × NODE_H` (132 × 118); its
+tile (`TILE` = 64) sits centred at the box's top, the label area under it.
+
+| Export | What |
+|---|---|
+| `chainGraph(d, {head, key, flightId})` | The chain of a `sessionDiagram` / `groundedDiagram` (collapse groups first, as the Sky does today). The diagram's session node becomes the head (`id === HEAD_ID`, `"head"`); parent rows are dropped; main-row stops / groups / the flown pill / rungs become nodes; branch / below rows (workers, hung children) are nodes too, placed under their split. |
+| `autoPlace(nodes)` | Line order in; pinned nodes keep their spot; the rest go `PITCH_X` right of the node before (so an un-positioned tail **follows** a moved node); branches `PITCH_Y` below their split, half a pitch right, stacking. |
+| `moveNode(g, id, pos)` *added* | The graph with `id` pinned at `pos` (tail follows, wires re-route, bbox follows). SkyChain uses it for the drag preview; the host can use it for an optimistic update. The head never moves (returns `g`). |
+| `snapPos(p, free)` *added* | 8 px grid (`GRID_SNAP`), or rounded when Alt is held. |
+| `chainBBox(g)` *added* | What `g.bbox` is: every box, the `+`, each loop's run + pill + hook bulge. `bbox.x/y` go **negative** when a node is dragged left of / above the origin. |
+| `outPortOf`, `inPortOf`, `portPos(n, side)` *added* | Port spots (the rubber band starts at `portPos`). |
+| `wirePath(a, b)` | Cubic out→in, horizontal tangents. |
+| `loopWirePathG(a, b, others, lane = 0)` | Out port → hooks down → runs `LOOP_CLEAR` under the lowest of a, b, `others` (whole boxes, labels included) → hooks up into b's in port. `lane` (*added*, optional) drops nested loops `LOOP_LANE` lower; `chainGraph` assigns lanes (wider span = lower). |
+| `chainColor(title)` | One of `CHAIN_HUES` (8), stable per title; `var(--muted)` for `""`, null and `"new"`. |
+| `nodeAt(g, p)`, `portAt(g, p, slop)` | Chain-local hit tests (topmost box; nearest *live* port). |
+| `wireIntent(src, dst, {shift})` | The Wiring table (below). |
+| `wireTargets(src, chains, ctx)` *added* | `Map<chainKey, Set<nodeId>>` of every node a drop means something on — pass each chain's set as its `targets`. |
+| `canFollow(n, insertFrom)`, `loopable(n)` *added* | The rules `wireIntent` uses: a stop may go right after `n` (its next slot ≥ `insertFrom`); a node a Loop can leave from / return to. |
+
+`ChainGraph` *added fields*: `insertFrom` (the diagram's) and `plus: {after, at}
+| null` (the node the trailing `+` hangs off — `"head"` when there are no
+stops — and the button's centre). `GraphWire.lane` *added* (loops).
+
+Ports: head = out only. A stop's `inPort` = it is `editable` (can still
+change), or it is the first node of a stops-only chain; `outPort` =
+`canFollow` (a live flight's current stop has one; flown stops don't).
+
+###### `wireIntent` — chains are named by **key**
+
+All intents name chains by `ChainGraph.key` (a session title, or
+`"flight:<id>"` for a grounded chain — the same form as `groundedKey`); a
+handoff's `target` is `"flight:<B.flightId>"`. Steps are diagram nodes (flight
+indexes in `node.index`).
+
+| src | dst | intent |
+|---|---|---|
+| X out (X can be followed) | Y of the same chain, `Y.index > X.index`, Y an editable **stop** (groups don't move), not already right after X | `move {chain, step: Y, after: X}` |
+| X out | Y of the same chain at or before X (X itself too), both `loopable` | `loop {chain, from: X, to: Y}` → `tackOn` Loop via `loopStepTo` at `loopSlotAfter(X)` |
+| X out | first node of a stops-only chain B (no trigger), no Shift | `merge {chain: A, after: X, from: B.key}` |
+| X out, A has a session | B's first node **or trigger tile**, with Shift or B already triggered | `handoff {chain: A, from: X, target: "flight:<id>"}` |
+| session head out | B's first node / socket (or its trigger tile) | `attach {session, chain: B.key}` |
+| X out / session head out / `+` | `{sky}` | `palette {chain, after: X \| null, at}` (`null` = after the head: insert at `insertFrom`) |
+| X **in** (editable stop/group; not the first of a stops-only chain) | `{sky}` | `split {chain, step: X, at}` |
+| anything else | | `none` |
+
+`dst` for the socket = `{chain: B, node: B's first node, side: "in"}`. The
+side of `dst` is ignored (a drop on the node counts).
+
+##### `frontend/src/components/flights/SkyChain.tsx`
+
+Props as pre-committed, plus *added* optional:
+- `kinds?: StepKindDef[]` — family colours follow the server's `family`
+  (else StopIcons' built-in map).
+- `onPillDown?(via, e)` — a loop pill pressed (before its click): start a
+  re-aim drag here if you want `onLoopTo` in the graph. `onLoopPill` still
+  fires on click.
+
+Exported helpers: `tileSub(n)` (group "k of n · current", receipt, else sub),
+`tileLabel(n, head?)`.
+
+Behaviour the host relies on:
+- **Root** (`.sky-chain`, `role=list`, `data-chain`, `data-flight`,
+  `data-head`) is sized `bbox.x + bbox.w` × `bbox.y + bbox.h`, overflow
+  visible; position it at the chain's origin. Nodes at negative spots overflow
+  left/up — use `graph.bbox` for the real extent (Tidy, marquee, fit).
+- **Node drag** is internal: tile pointerdown is `stopPropagation`ed only for
+  draggable nodes (stops / groups, when `onNodeMove` is set). Head, flown
+  pill, branch tiles let the pointerdown bubble (the host can drag the whole
+  chain by its head). Preview = `moveNode`; `onNodeMove(node, pos)` fires on
+  release only if the spot changed; Esc cancels.
+- **Ports**: `<span class="sky-port sky-port-in|out" data-port="in|out"
+  data-node="<id>">` call `onPortDown(node, side, e)` on pointerdown (button
+  0, propagation stopped). Passive wire ends on fixed tiles get
+  `sky-port-off`, no data attributes.
+- **`+`**: `<button class="sky-plus" data-port="out" data-node="<after>"
+  data-plus>` — a click → `onPlus(afterNode)`; once the pointer moves 4 px it
+  calls `onPortDown(afterNode, "out", <the pointermove event>)` (the host's
+  drag starts from the move, so a plain click never starts one).
+- **Socket** (headless chain): `<span class="sky-socket" data-port="in"
+  data-node="<first>" data-socket>` — a drop target only; lit by
+  `targets`/`over` on the first node's id.
+- **Clicks**: a stop/group → `onSelect`; head, flown pill, branch/child →
+  `onOpen`. Double-click / Enter → `onEdit` (stops); Space = click;
+  Delete/Backspace → `onRemove` (stops/groups and a focused loop pill);
+  right-click → `onMenu(node, {clientX, clientY})`.
+- `selected` may be a node id or the head's diagram id (`session:<title>`);
+  `bird.nodeId` likewise maps the session node onto the head. The bird is a
+  picture here (no hand); add one in a later round if the graph needs it.
+- `--sky-z` must be set on an ancestor (the Sky already does) for the loop
+  pill to stay screen-sized.
+- Imports `FlywayCanvas.css` (bird marker) and `SkyChain.css`; the built
+  bundle needs a rebuild (`npm run build`) by whoever owns `backend/web/static`.
+
+##### CSS classes (SkyChain.css, prefix `sky-`)
+
+`.sky-chain` · `.sky-wires` (the one SVG) · `.sky-wire` + `-line|-head|-fan|
+-join|-loop|-add|-socket`, `.is-done`, `.is-live` (flowing dash into the
+current stop), `.sky-loop-pending|running|done` · `.sky-node` +
+`.sky-node-<kind>` / `.sky-head .sky-head-session|trigger`, `.st-<state>`,
+`.sky-fam-work|ship|outside|people|flow`, `.tone-<chip tone>` (head),
+`.is-group`, `.is-perch`, `.is-selected`, `.is-highlighted`, `.is-target`,
+`.is-over`, `.is-dragging`, `.is-draggable`, `.is-fixed` · `.sky-tile`,
+`.sky-tile-icon`, `.sky-node-title`, `.sky-node-sub`, `.sky-node-extra`,
+`.sky-head-extra`, `.sky-head-dot`, `.sky-head-chip` · `.sky-badge` +
+`-done|-failed|-halt|-if` · `.sky-risk` + `.sky-risk-<tag>` · `.sky-port` +
+`-in|-out|-off` · `.sky-plus` · `.sky-socket` · `.sky-loop-pill` ·
+`.sky-chain-bird`. Tokens are local custom properties on `.sky-chain`
+(`--sky-tile-bg`, `--sky-wire`, `--sky-fam-*`, …) over the app's theme
+variables; `.light` softens the mixes. The head's colour arrives as
+`--sky-head-color` (inline); head/line wires get `stroke: head.color` inline at
+0.6 opacity.
+
+##### `frontend/src/components/flights/StopIcons.tsx` (new)
+
+`TileIcon({kind, size})` — Bird.tsx's `StopIcon` plus `handoff` (↗ out of a
+box) and `group` (stacked layers). `kindFamily(kind, kinds?)`,
+`nodeFamily(node, kinds?)`, type `StopFamily` (`work | ship | outside | people
+| flow`; Loop and Handoff are `flow`). When the backend adds the `handoff`
+kind, the palette's `StopIcon` won't know its glyph — use `TileIcon` there
+too, or move the glyph into `StopIcon`.
+
+##### Not done here (outside the fence)
+
+- Cross-chain handoff wires (dashed, source session's colour) — the host
+  draws them between chains; SkyChain only draws a chain's own wires.
+- The rubber band during a wire drag — host.
+- Rebuilding `backend/web/static`.
+
+#### Sky integration (r18-sky)
+
+#### Round 18 — Sky integration notes (r18-sky)
+
+Spec: `docs/flights.md` "Round 18: free-floating chains (the n8n look) —
+contract". Built against the pre-committed `skyGraph.ts` / `SkyChain.tsx`
+seams. Neither file is edited here. Checked against r18-graph's real versions
+(merged on `emandel2630/flights`, f0e0f420) in a scratch copy: tsc is clean
+and vitest is 5661/5662 (the one failure is the skySnap "snaps the pressed
+box" timeout, which also fails on the base). Your commit 0ecc6d65 (the card's
+double-click fold, the `mf:tour-reveal` camera glide) merges into SkyLine.tsx
+and SkyView.tsx with **no conflicts** (`git merge-file` checked).
+
+##### What changed
+
+###### Lines are chains
+- **SkyLine** draws a small `.skl-label` (Bird, name, where, age, pin, ⋯) and
+  then `<SkyChain>` from `chainGraph(line.graphDiagram, {head, key: title,
+  flightId})`. The head is `{kind: "session", title: windowName, sub: where ||
+  task, session: title, color: chainColor(title), node: <the session node>}`.
+  `renderHead` = the state chip. The head tile is the chain's drag handle (its
+  press bubbles up to the label's `onDragStart`; a press that moved is not a
+  click). A click on the head opens the session card. Cards (the session's,
+  and each opened worker's) sit in a `.skl-cards` row under the chain.
+  **PaneCard is untouched**, so your double-click fold is kept as-is. The ◧,
+  the box-size ⋯ items, the corner resize and the scaled sizer are gone (a
+  chain's tiles have one size). `dragBox`, `presetPatch`, `nextSize` and
+  `flownCanvas` are still exported for the classic row.
+- **GroundedLine** has no "No session yet" head box and no card frame. It
+  draws a `.skl-label` (name / rename, chip, ⋯; still the drag handle) and
+  then a chain. The new `head` prop takes a trigger head (from SkyView's
+  `triggerHeads`), else `NO_HEAD` (headless, with SkyChain's socket).
+- `.skl.skl-chainline` (SkyLine.css) drops the card look: no border,
+  background, shadow or padding. Focus rings the label only. A chain the
+  marquee took whole keeps the sky's one solid selection ring.
+- Slot size = what the line root measures (label + `SkyChain` root sized by
+  `bbox` + cards). Before measuring, SkyView estimates with `chainSize(diagram,
+  head)`.
+
+###### Hooks (useSessionLine / useGroundedLine)
+- New on both: `graphDiagram` (the line in the **flight's** indexes, which
+  chainGraph / wireIntent need; `diagram` / `canvas` stay drawn-place-counted
+  for FlywayCanvas), `graphCanvas` (the raw handlers), `paletteAfter(node |
+  null, pos?)`, `anchor` / `anchorPos` (where the palette or dialog floats).
+- A stop picked from a palette opened at a drop carries `pos`. `wireStep` now
+  sends `pos` (the backend keeps it on `POST /steps`).
+
+###### Wiring (useSkyWiring.ts, SkyWires.tsx)
+- `useChainRegistry`: each line calls `registerChain(entry)` (graph, the
+  chain's offset in its slot, its `paletteAfter`) from a layout effect
+  (`useChainEntry`). The registry always stores the latest entry. It bumps
+  its `version` (which redraws the cross-chain wires) only when `entrySig`
+  changes (ids and spots). **A render loop was found and fixed:** SkyView's
+  `kinds || []` / `plans || []` made new arrays while loading, which remade
+  every graph, which re-registered, which re-rendered. The fallbacks are
+  stable consts now, and the signature check guards against it either way.
+- `useSkyWiring`: `startWire(key, node, side, e)` from each chain's
+  `onPortDown`. It uses window pointer listeners and draws the band in plane
+  px. Hits are found in the DOM (`elementFromPoint` → `[data-node]` inside
+  `.sky-chain[data-chain]`, never inside `.skl-card`). Targets come from
+  `wireIntent` node by node (`wireTargetsOf`; this is equivalent to r18-graph's
+  optional `wireTargets`, used here so the branch compiles against the stubs).
+  Shift re-lights the targets, Esc cancels, and the click after a drag is
+  eaten. SkyView's `onDownCapture` leaves `.sky-chain [data-port]` alone in
+  both tools. The old `startConnect` / `.fl-box-add` gesture is removed: the
+  `+` stub and the session head's out port now do it as `attach` / `merge`.
+- `runWireIntent(intent, ctx, deps)` (pure, tested):
+  - move → `moveStop(f, sid, loopSlotAfter(after))`
+  - loop → `tackOn(loopStepTo(...), loopSlotAfter(from))`
+  - merge / attach → SkyView's `mergeGrounded(from, into, was, at?)`, which
+    now takes a flight index and a stops-only target, and strips the merged
+    stops' `pos`
+  - handoff → `tackOn(handoffStepFor(def, ids, "flight:<id>"),
+    loopSlotAfter(from))` (`tackOnNew` with no flight; a toast if the server
+    lacks the kind)
+  - palette → the chain's `paletteAfter(after, drop - tile centre, snapped to
+    8 px)`
+  - split → `splitOffChain(f, sid, {x: 0, y: 0})`. The new chain's slot is
+    pinned at the drop. Its other stops' saved spots are re-based onto the
+    new origin (`saveStopPositions`).
+- Node moves: `useNodeMoves` keeps an optimistic spot map, cleared once the
+  server pos matches (or on failure), and `queueStopPos` (flightsApi) batches
+  them into **one `POST …/layout` per flight** 250 ms after the last drop.
+- Cross-chain wires: `handoffLinks(flights)` (groundedLines) lists every
+  Handoff stop with a `flight:` target or a started `detail.child`.
+  `handoffWires` draws each one from the Handoff tile's out port to the target
+  chain's head (or first tile) in port: dashed, in the source session's
+  colour, dimmer once started. These are drawn in `<SkyWires>` (`.sky-xwires`,
+  plane coordinates, `pointer-events: none`), with the band.
+- `triggerHeadFor(flight, flights, windowName)`: "When <session> reaches
+  <stop>", "runs on <session | a new session>", `chainColor(source session)`.
+
+###### Panels
+- `ChainPanels`: the palette or the stop dialog is absolutely positioned
+  inside `.skl-chain-wrap`, right of its tile (or 24 px right of a wire's drop
+  spot). It never changes the slot's measured size.
+
+###### StopDialog / StopParts
+- `dynamic: "chains"` → `BoardChoiceField`: chips grouped "On the board" (the
+  stops-only chains, `flight:<id>`) and "Saved stops — a fresh copy each time"
+  (`plan:<id>`). `dynamic: "sessions"` → "a new session" (`new`) and then
+  every session title (`windowName` labels). The options are read from the
+  query cache (`queryClient.getQueryData`), so StopForm needs no provider. A
+  value no longer on the board stays visible as its own chip.
+  `lib/flights.ts`'s `StepKindField.dynamic` type is still `"stops_before"`
+  (outside my fence), so StopParts reads it as a string (`boardDynamic`).
+  **Integrator:** widen it to `"stops_before" | "chains" | "sessions"`.
+
+###### Tour hooks (kept on the element itself)
+- `sky-line`: the session line's slot (SkyView, unchanged).
+- `sky-line-bar`: the chain's label.
+- `sky-session-box`: the head tile, and `sky-stop`: the first stop tile.
+  Both are set on SkyChain's own elements by `useTourHooks` (a DOM effect),
+  since the seam has no prop for them. If r18-graph adds a `tourHooks` /
+  `headProps` prop, switch over.
+- `sky-grounded`: the stops-only chain's label, and its `.sky-socket`.
+- `flights-bird`, `sky-selbar`, `sky-shelf` are untouched.
+
+###### SkyGuide
+- "Chains, tiles and wires" (ports, dragging a tile, out-port drops, `+`,
+  pulling an in port off to split) and "Stops on their own, and handoffs"
+  (the socket, Shift-drop = Start a chain, the trigger tile, the dashed wire)
+  replace the old "No session yet" copy.
+
+##### Still to do (for the integrator)
+
+- **Props r18-graph added that are not passed yet** (the stubs don't have
+  them): `kinds` on `<SkyChain>` (family colours from the server) and
+  `onPillDown` (re-aiming a loop pill in the graph). `onLoopPill` is wired:
+  it opens the Loop's dialog.
+- **Right-click menu:** `onMenu` is not wired (the classic StopMenu was
+  FlywayCanvas's).
+- **Worker birds in formation:** FlywayCanvas flew these; SkyChain draws one
+  bird.
+- **Negative bbox:** a tile dragged left of or above the chain's origin
+  overflows its slot (SkyChain sizes its root `bbox.x + bbox.w`). Tidy,
+  marquee and snapping use the slot rect.
+- **Existing layout behaviour, not new:** lines are placed under the intake
+  lane at its first measured height. At a nearer zoom the lane draws its
+  cards and grows over them. The base does the same.
+- Rebuild `backend/web/static` after the merge (I never build into the
+  worktree).
+- **Outside my fence:** `frontend/src/__tests__/flightsUi.test.ts` ("the sky
+  view: … every session a line with the bird on its active box") still asserts
+  the row's `>Tack on a stop<` + and `.fl-bird-marker`. It fails on this
+  branch. The fix, a 5-line change asserting `data-chain` on each line and
+  the `bird={birdPerch(moves.diagram)}` source, is in the scratch patch
+  `/tmp/claude-1000/-home-emandel2630--mindflock-worktrees-emandel2630-r18-sky-18e43fd578908858/7d51475c-55e3-42ff-874f-de5068097847/scratchpad/flightsUi-test.patch`.
+  It passes against both the stubs and the real SkyChain.
+- **Outside my fence:** `lib/flights.ts` `StepKindField.dynamic` should
+  widen to `"stops_before" | "chains" | "sessions"`.
+
+##### Tests
+
+- New: `r18Sky.test.ts` (29 tests):
+  - heads and handoff links, the trigger head, `handoffStepFor`
+  - handoff wire geometry, `nodeOfStep`, `panelSpot`
+  - `wireTargetsOf` / `nodeUnder` / `entrySig` (loop-proof) / `withLocalPos`
+  - every `runWireIntent` op against mocked flight routes
+  - `queueStopPos` batching against the mocked client, `wireStep` pos
+  - the chains / sessions choices and their chips
+  - the host wiring and tour hooks pinned in the source
+- Rewritten to the chain behaviour: skyLine, skyResize, skyVisibility,
+  skyZoom, skyLooks, skySelect, skyMerge, skyView, grounded, flightsUi,
+  skyGuide. They assert only markup that the stub SkyChain and the real one
+  both draw (`data-chain`, the label, cards), plus the source.
+- `skyGraph.test.ts` is untouched (r18-graph's).
+
+##### Screens (scratch, merged picture with mocks)
+
+The scratch directory is
+`/tmp/claude-1000/-home-emandel2630--mindflock-worktrees-emandel2630-r18-sky-18e43fd578908858/7d51475c-55e3-42ff-874f-de5068097847/scratchpad/`:
+
+- `sky.png`: the board after Fit (four session chains, the trigger head, the
+  dashed handoff wire)
+- `sky-zoom.png`: close-up of a session chain
+- `sky-palette.png`: a wire dropped on empty sky; the palette opens at the
+  drop
+- `sky-attach.png`: a session tile's out port dragged to a socket, targets
+  lit (on release: `POST /api/flights/f_live/steps` with the group, then
+  `DELETE` of the stops-only flight)
+
+#### Integrator (same day)
+- Tiles' right-click menu (`useChainMenu`): the classic canvas's items via
+  `menuItemsFor` (no Earlier / Later — order is the wires), in a portal at
+  the pointer (a fixed box inside the zoomed plane is not fixed).
+- A Loop's pill dragged onto a stop of its chain re-aims it (`pillAimer` →
+  the line's `onLoopTo`); the stop under the pointer wears `.sky-aim-over`.
+- `kinds` passed to SkyChain (family colours). `StepKindField.dynamic`
+  widened to `"stops_before" | "chains" | "sessions"`.
+- Tours: `findTarget` takes the FIRST selector part that matches anything
+  drawn (a fallback never beats the step's own target, even off screen), and
+  among that part's matches prefers one on screen; the Sky pans to it
+  (`mf:tour-reveal`). The Sky tour's copy speaks chains, tiles, ports and
+  wires (15 steps, a new "Wires set the order").
+- Known gaps: a tile dragged left of / above its chain's origin overflows the
+  slot (marquee / minimap / Tidy measure the slot); the worker-bird formation
+  and the bird's click/drag are not on the graph's bird yet.
