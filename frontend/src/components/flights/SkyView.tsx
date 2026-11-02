@@ -153,6 +153,7 @@ import { windowName } from "../../lib/windowName";
 import { reducedMotion, registerSkyHost, type Box, type SkyHost } from "../../lib/viewMode";
 import {
   FLYWAY_MIME,
+  FULL_DETAIL_LODS,
   INTAKE_KEY,
   INTAKE_OPEN_W,
   INTAKE_W,
@@ -179,6 +180,7 @@ import {
   firstFit,
   fitCamera,
   fitSelection,
+  grownOver,
   lerpCamera,
   sameCamera,
   inSky,
@@ -331,6 +333,33 @@ export function skyKeysOwn(el: Element | null): boolean {
   if (!el || el === document.body) return true;
   if (typing(el)) return false;
   return !el.closest("button, a, summary, select, [role=menu], [role=menuitem], [role=radiogroup], [role=listbox], [role=tablist], .fl-canvas, .pane");
+}
+
+/** The intake lane's height at FULL detail, whatever the zoom draws now
+ * (lib/skyLayout `FULL_DETAIL_LODS`): its slot copied — the drawn lane as it
+ * is, same width, same sources, items and folds — set to each full level of
+ * detail beside the real one, hidden, measured and removed in the same task
+ * (never painted, never observed). The lane's level of detail is CSS alone
+ * (IntakeLane.css), so the copy is exact however its blocks wrap. 0 when
+ * there is nothing to measure (no slot, no layout — a test's DOM). */
+export function laneFullHeight(slot: HTMLElement | null): number {
+  const parent = slot?.parentElement;
+  if (!slot || !parent || !slot.querySelector(":scope > .sky-lane")) return 0;
+  let tallest = 0;
+  for (const { lod, z } of FULL_DETAIL_LODS) {
+    const ghost = slot.cloneNode(true) as HTMLElement;
+    ghost.removeAttribute("data-tour");
+    ghost.setAttribute("aria-hidden", "true");
+    ghost.setAttribute("data-lod", lod);
+    ghost.style.setProperty("--sky-z", String(z));
+    ghost.style.visibility = "hidden";
+    ghost.style.pointerEvents = "none";
+    ghost.style.transition = "none";
+    parent.appendChild(ghost);
+    tallest = Math.max(tallest, ghost.querySelector<HTMLElement>(":scope > .sky-lane")?.offsetHeight || 0);
+    ghost.remove();
+  }
+  return tallest;
 }
 
 /** A phone-narrow window: the lines as a list, no pan or zoom. */
@@ -933,13 +962,71 @@ export function SkyView() {
     clearTimeout(tidyTimer.current);
     tidyTimer.current = setTimeout(() => alive.current && setTidying(false), TIDY_MS);
   };
+  // The intake lane's slot (`.sky-intake`): what its full-detail measure is
+  // read from (`laneFullHeight`).
+  const intakeEl = useRef<HTMLDivElement | null>(null);
   const onMeasure = useCallback((id: string, w: number, h: number) => {
+    // The lane's room is its FULL-detail height, not what this zoom draws
+    // (lib/skyLayout `FULL_DETAIL_LODS`): lines placed beside a compact Fit
+    // lane must not end up under it at 100 %.
+    if (id === INTAKE_KEY) h = Math.max(h, laneFullHeight(intakeEl.current));
     setMeasured((m) => {
       const o = m[id];
       if (o && Math.abs(o.w - w) < 2 && Math.abs(o.h - h) < 2) return m;
       return { ...m, [id]: { w: Math.round(w), h: Math.round(h) } };
     });
   }, []);
+  // What the lane holds can change with no change to what this zoom draws
+  // (items arriving at far, where they are hidden): watched, it is measured
+  // again at full detail (once a frame at most).
+  const intakeWatch = useRef<(() => void) | null>(null);
+  const intakeSlot = useCallback(
+    (el: HTMLDivElement | null) => {
+      intakeWatch.current?.();
+      intakeWatch.current = null;
+      intakeEl.current = el;
+      if (!el || typeof MutationObserver === "undefined") return;
+      let frame = 0;
+      const mo = new MutationObserver(() => {
+        if (frame) return;
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          const lane = el.querySelector<HTMLElement>(":scope > .sky-lane");
+          if (lane?.offsetWidth && lane.offsetHeight) onMeasure(INTAKE_KEY, lane.offsetWidth, lane.offsetHeight);
+        });
+      });
+      mo.observe(el, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["open", "data-open", "data-collapsed"] });
+      intakeWatch.current = () => {
+        mo.disconnect();
+        cancelAnimationFrame(frame);
+      };
+    },
+    [onMeasure]
+  );
+  // The lane GREW where it sits (a source or items arrived, ▸ / ▾ expanded
+  // it): the auto-placed lines it now covers make way — their spots are
+  // freed, so `assignSpots` places them again clear of it (gliding, as a
+  // Tidy). A line the owner pinned stays where it was put; a lane dragged
+  // onto lines shoves nothing (lib/skyLayout `grownOver`).
+  const laneWas = useRef<Rect | null>(null);
+  useEffect(() => {
+    const at = place[INTAKE_KEY];
+    const now = mode !== "one" && intakeOn && !drag && at ? { ...at, ...intakeBox } : null;
+    const was = laneWas.current;
+    laneWas.current = now;
+    const movable: PlacedLine[] = [];
+    for (const id of Object.keys(autoPos)) {
+      const r = id !== INTAKE_KEY && !layout[id]?.pinned ? rectOf(id) : null;
+      if (r) movable.push({ id, ...r });
+    }
+    const out = grownOver(was, now, movable);
+    if (!out.length) return;
+    setAutoPos((cur) => Object.fromEntries(Object.entries(cur).filter(([id]) => !out.includes(id))));
+    if (motionOff) return;
+    setTidying(true);
+    clearTimeout(tidyTimer.current);
+    tidyTimer.current = setTimeout(() => alive.current && setTidying(false), TIDY_MS);
+  }, [place, intakeBox, intakeOn, mode, drag, autoPos, layout, rectOf, motionOff]);
 
   // --- Dragging a sky object by its bar ------------------------------------------------
 
@@ -2390,6 +2477,7 @@ export function SkyView() {
     const intakeAt = host.pos;
     return (
       <div
+        ref={intakeSlot}
         data-tour="sky-intake"
         className={"sky-intake" + (drag?.from[INTAKE_KEY] ? " is-dragging" : "") + (sel.lines.has(INTAKE_KEY) ? " is-selected" : "")}
         data-lod={lodFor(cam.z)}
