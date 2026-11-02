@@ -78,6 +78,7 @@ def test_the_dto_row():
         "wait_limits",
         "fresh",
         "until",
+        "prompt",
     ]
     assert fields["back_to"] == {
         "name": "back_to",
@@ -236,10 +237,33 @@ def test_a_bad_back_to_is_nothing_to_repeat(back_to):
     )
 
 
-def test_a_loop_first_in_line_has_nothing_to_repeat():
+def test_a_loop_first_on_a_sessions_chain_repeats_the_sessions_prompt():
+    """Nothing before it to go back to: it loops the session's own prompt."""
     f = fly({"kind": "loop", "config": {}}, AGENT)
     out = judge(_at_loop(f, i=0))
-    assert out["action"] == "fail" and out["reason"] == "nothing to repeat"
+    assert (out["action"], out.get("phase"), out["detail"]["target"]) == (
+        "run",
+        "loop",
+        "session",
+    )
+    # While the agent works on a run, it waits.
+    assert (
+        judge(_at_loop(f, i=0), {"session": {"present": True, "activity": "working"}})[
+            "action"
+        ]
+        == "wait"
+    )
+
+
+def test_only_a_loop_first_on_a_sessions_chain_repeats_the_prompt():
+    step = {"id": "s1", "kind": "loop", "config": {"back_to": ""}}
+    assert L.repeats_prompt({"session": "s", "steps": [step]}, step)
+    assert not L.repeats_prompt({"session": "", "steps": [step]}, step)
+    aimed = {"id": "s2", "kind": "loop", "config": {"back_to": "s1"}}
+    assert not L.repeats_prompt(
+        {"session": "s", "steps": [{"id": "s1", "kind": "agent", "config": {}}, aimed]},
+        aimed,
+    )
 
 
 def test_back_to_resolution():
@@ -469,8 +493,27 @@ def test_the_driver_waits_for_the_interval(srv, row, sent):
     assert sent == [("s", "improve the sky")]
 
 
+def test_the_driver_repeats_the_sessions_prompt_for_a_loop_first_on_the_chain(
+    srv, row, sent, monkeypatch
+):
+    """[Loop ×3, Agent] on a session: the session's last prompt goes again
+    twice (the session's own turn was run 1), then the Agent stop flies."""
+    from backend.web.core.flight_kinds import loop as L2
+
+    monkeypatch.setattr(L2, "_last_prompt", lambda title: "polish the sky")
+    f = fly({"kind": "loop", "config": {"times": 3}}, AGENT)
+    got = _drive(f["id"], passes=60)
+    assert [t for t in sent if t[1] == "polish the sky"] == [
+        ("s", "polish the sky")
+    ] * 2
+    assert got["step_states"]["s1"]["state"] == "done"
+    assert "your prompt 3 times" in got["step_states"]["s1"]["detail"].get(
+        "receipt", ""
+    )
+
+
 def test_the_driver_halts_a_loop_with_nothing_to_repeat(srv, row, sent):
-    f = fly({"kind": "loop", "config": {}}, AGENT)
+    f = fly(AGENT, {"kind": "loop", "config": {"back_to": "nope"}}, AGENT)
     got = _drive(f["id"])
     assert got["state"] == "halted" and got["reason"] == "nothing to repeat"
 
@@ -522,6 +565,7 @@ def test_route_round_trip(tmp_path, monkeypatch, sent):
         "wait_limits": True,
         "fresh": True,
         "until": "",
+        "prompt": "",
     }
     # Drive it with a settled fake session named like the real one.
     ns = SimpleNamespace(

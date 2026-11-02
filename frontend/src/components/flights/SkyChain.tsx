@@ -17,11 +17,11 @@
  * `onNodeMove`, Esc cancels. A press without movement is a click
  * (`onSelect`; a head / child / flown tile: `onOpen`). */
 
-import { useMemo, useRef, useState, type JSX, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import type { BirdPerch, DiagramNode } from "../../lib/flightDiagram";
-import { loopIdlePill, loopPill, loopPillTitle } from "../../lib/flightDiagram";
+import { leftWord, loopIdlePill, loopPill, loopPillTitle } from "../../lib/flightDiagram";
 import type { StepKindDef } from "../../lib/flights";
-import { HEAD_ID, TILE, inPortOf, moveNode, snapPos, type ChainGraph, type GraphNode, type GraphWire } from "../../lib/skyGraph";
+import { HEAD_ID, TILE, inPortOf, isBranchRow, moveNode, snapPos, type ChainGraph, type GraphNode, type GraphWire } from "../../lib/skyGraph";
 import type { Pos } from "../../lib/skyLayout";
 import { haltMark } from "../../lib/stopEditing";
 import { riskTitle } from "../../lib/stopRisk";
@@ -60,6 +60,10 @@ export interface SkyChainProps {
   onPlus?(after: GraphNode | null): void;
   /** Extra content in or under a tile (a perch's Done / Skip …). */
   renderInBox?(n: DiagramNode): ReactNode;
+  /** A node drawn open instead of as a tile (an open sub-session's card):
+   * its content, else null for the tile. The graph gives it the room
+   * (`ChainGraphOpts.big`). */
+  renderOpen?(n: DiagramNode): ReactNode;
   /** The head tile's own content (the session's chip, ⋯) — the host's. */
   renderHead?(): ReactNode;
   className?: string;
@@ -138,7 +142,9 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
   const edit = (n: GraphNode) => (p.onEdit ? p.onEdit(n.node) : p.onSelect?.(n.node));
 
   // --- Node drag ---------------------------------------------------------------
-  const draggable = (n: GraphNode) => !!p.onNodeMove && n.id !== HEAD_ID && isStopish(n.node);
+  // Every tile moves (the owner: "I should be able to drag every block
+  // around") — stops, groups, and sub-sessions / workers hung under them.
+  const draggable = (n: GraphNode) => !!p.onNodeMove && n.id !== HEAD_ID && (isStopish(n.node) || isBranchRow(n.node));
   const endDrag = (commit: boolean) => {
     const d = dragRef.current;
     dragRef.current = null;
@@ -240,7 +246,9 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
       isHead ? "sky-head sky-head-" + head.kind : "sky-node-" + dn.kind,
       "st-" + dn.state,
       "sky-fam-" + fam,
-      isHead && dn.chip ? "tone-" + dn.chip.tone : "",
+      // A session-like tile (the head, a sub-session, a worker) wears its
+      // session's state: working glows, asking is gold.
+      dn.chip ? "tone-" + dn.chip.tone : "",
       dn.kind === "group" ? "is-group" : "",
       dn.perch ? "is-perch" : "",
       n.inPort || n.outPort ? "" : "is-fixed",
@@ -254,6 +262,13 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
       .filter(Boolean)
       .join(" ");
     const said = tileLabel(isHead ? { ...dn, title: head.title, sub: head.sub } : dn, isHead);
+    const opened = !isHead && p.renderOpen ? p.renderOpen(dn) : null;
+    if (opened)
+      return (
+        <div key={n.id} role="listitem" className="sky-node sky-node-open" data-node={n.id} data-diagram-node={dn.id} aria-label={said} style={{ transform: `translate(${n.x}px, ${n.y}px)`, width: n.w, height: n.h }}>
+          {opened}
+        </div>
+      );
     return (
       <div
         key={n.id}
@@ -325,12 +340,22 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
         </div>
         <div className="sky-node-title">{isHead ? head.title : dn.title}</div>
         {sub && <div className="sky-node-sub">{sub}</div>}
+        {!isHead && dn.until && (dn.state === "current" || dn.state === "paused" || dn.state === "halted") ? <Countdown until={dn.until} /> : null}
         {isHead ? (
           <div className="sky-head-extra" data-no-drag>
             {p.renderHead ? p.renderHead() : dn.chip ? <span className={"sky-head-chip tone-" + dn.chip.tone}>{dn.chip.label}</span> : null}
           </div>
+        ) : dn.chip && !isStopish(dn) ? (
+          // A sub-session / worker: its state, always (the owner: "I should be
+          // able to see the states of the sub-sessions, always").
+          <div className="sky-node-extra">
+            <span className={"sky-head-chip tone-" + dn.chip.tone}>{dn.chip.label}</span>
+          </div>
         ) : (
           p.renderInBox && <div className="sky-node-extra" data-no-drag>{p.renderInBox(dn)}</div>
+        )}
+        {!isHead && dn.chip && !isStopish(dn) && (dn.chip.tone === "working" || dn.chip.tone === "attention") && (
+          <BirdMarker tone={dn.chip.tone === "working" ? "working" : "you"} x={n.w / 2} y={0} size={18} label={dn.title + " — " + dn.chip.label} className="sky-kid-bird" />
         )}
       </div>
     );
@@ -472,6 +497,22 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
         );
       })}
       {birdOn && p.bird && <BirdMarker tone={p.bird.tone} x={birdOn.x + birdOn.w / 2} y={birdOn.y} size={22} label={"The flight is at “" + (birdOn.id === HEAD_ID ? head.title : birdOn.node.title) + "”"} className="sky-chain-bird" />}
+    </div>
+  );
+}
+
+/** A waiting stop's live countdown (a Wait's timer, a paced Loop's next run):
+ * "12:34 left", ticking each second; "due" once it is up. */
+function Countdown({ until }: { until: number }): JSX.Element {
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const at = new Date(until * 1000);
+  return (
+    <div className="sky-node-left" title={"Until " + at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} aria-live="off">
+      ⏱ {leftWord(until - now)}
     </div>
   );
 }

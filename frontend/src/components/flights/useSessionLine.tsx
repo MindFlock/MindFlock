@@ -44,7 +44,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Instance } from "../../api/types";
 import { toast } from "../../lib/toast";
-import { isLive, newStep, planFromSteps, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
+import { optimistic, withSteps, withoutSteps } from "../../lib/flightOptimism";
+import { isShown, newStep, planFromSteps, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
 import { drawnCanvas, findNode, firstStepOf, loopSlotAfter, loopStepTo, receiptOf, sessionDiagram, type DiagramNode } from "../../lib/flightDiagram";
 import {
   dropGroup,
@@ -241,7 +242,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
 
   const row = rows.find((r) => r.title === title);
   const flRow = row?.flight as FlightRow | null | undefined;
-  const flight = flRow && isLive(flRow) ? flights?.find((f) => f.id === flRow.id) || null : null;
+  const flight = flRow && isShown(flRow) ? flights?.find((f) => f.id === flRow.id) || null : null;
   // The line in the flight's own indexes (what every handler below speaks).
   const line = useMemo(() => sessionDiagram(rows, title, { flights, kinds, family, foldFlown, expandedGroups }), [rows, title, flights, kinds, family, foldFlown, expandedGroups]);
   const cancel = useCancelAsk(flight);
@@ -287,11 +288,14 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     try {
       if (flight) {
         const where = at !== null && at < end ? at : undefined;
-        if ((await tackOn(flight.id, step, where)) && openIt) setSelectIndex(where ?? end);
+        // Shown at once; the server's flight replaces the guess (lib/flightOptimism).
+        if ((await optimistic(flight.id, withSteps([step], where), () => tackOn(flight.id, step, where))) && openIt) setSelectIndex(where ?? end);
       } else {
-        const f = await tackOnNew(title, [step]);
+        // Round 19: building a chain on a session doesn't fly it — it waits,
+        // ready, for ▶ Run or the session's next prompt.
+        const f = await tackOnNew(title, [step], "prompt");
         if (f) {
-          toast("Took off: " + (f.plan_name || "a new flight"));
+          toast("Ready: " + (f.plan_name || "a new chain") + " — it runs on ▶ Run or your next prompt");
           if (openIt) setSelectIndex(f.steps.length - 1);
         }
       }
@@ -308,8 +312,11 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     try {
       if (flight) {
         const where = at !== null && at < end ? at : undefined;
-        if (await tackOnPlan(flight.id, plan.id, where)) toast("Tacked on “" + plan.name + "”" + (plan.steps ? " — " + plan.steps.length + (plan.steps.length === 1 ? " stop" : " stops") : ""));
-      } else await takeOff({ plan_id: plan.id, title });
+        const steps = plan.steps || plans.find((p) => p.id === plan.id)?.steps;
+        const fid = flight.id;
+        const go = () => tackOnPlan(fid, plan.id, where);
+        if (await (steps?.length ? optimistic(fid, withSteps(steps, where), go) : go())) toast("Tacked on “" + plan.name + "”" + (plan.steps ? " — " + plan.steps.length + (plan.steps.length === 1 ? " stop" : " stops") : ""));
+      } else await takeOff({ plan_id: plan.id, title, start_on: "prompt" });
     } finally {
       setBusy(false);
     }
@@ -322,7 +329,8 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     const id = flight.id;
     const wasHere = index === flight.cursor;
     const next = flight.steps[index + 1]?.title;
-    if (!(await dropStop(id, step.id))) return false;
+    // Gone at once; a refusal puts it back (lib/flightOptimism).
+    if (!(await optimistic(id, withoutSteps(new Set([step.id])), () => dropStop(id, step.id)))) return false;
     // One undo, two roads: the toast's button and Ctrl+Z in the sky (lib/skyUndo).
     const entry = pushUndo({
       label: "Remove “" + step.title + "”",
@@ -354,7 +362,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     const first = n.index;
     const wasHere = flight.cursor >= first && flight.cursor < first + g.total;
     const next = flight.steps[first + g.total]?.title;
-    if (!(await dropGroup(id, g.steps[0].id))) return false;
+    if (!(await optimistic(id, withoutSteps(new Set(g.steps.map((s) => s.id))), () => dropGroup(id, g.steps[0].id)))) return false;
     const entry = pushUndo({
       label: "Remove “" + g.name + "”",
       undo: () => {
@@ -428,7 +436,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     try {
       if (flight) {
         if (await tackOnPlan(flight.id, plan.id)) toast("Tacked on “" + plan.name + "” — " + plan.steps.length + " stops");
-      } else await takeOff({ plan_id: plan.id, title });
+      } else await takeOff({ plan_id: plan.id, title, start_on: "prompt" });
     } finally {
       setBusy(false);
     }

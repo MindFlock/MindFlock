@@ -145,10 +145,10 @@ describe("the grounded line", () => {
     })
   );
 
-  it("its bar names it (the flight's plan_name) and says it has no session", () => {
+  it("its bar names it (the flight's plan_name); a lone block wears no 'No session' chip", () => {
     expect(html).toContain('data-flight="f_1"');
     expect(html).toContain('class="skl-name skl-name-edit" title="Click to rename (F2)">Ticket to merge<');
-    expect(html).toContain(">No session<");
+    expect(html).not.toContain(">No session<");
     expect(html).toContain('aria-label="Ticket to merge — stops with no session yet"');
     expect(html).toContain('tabindex="0"');
     expect(groundedName({ plan_name: "" })).toBe("Stops");
@@ -197,7 +197,7 @@ describe("the grounded line", () => {
     expect(src).not.toContain("setConfirming");
     // The host removes it (and pins the Undo where it sat); alone, it deletes and pushes its own entry.
     expect(src).toContain("if (p.onRemove) await p.onRemove();");
-    expect(src).toContain("else if (await deleteFlight(flight.id)) {");
+    expect(src).toContain("else if (await optimisticDelete(flight.id, () => deleteFlight(flight.id))) {");
     expect(src).toMatch(/const entry = pushUndo\(\{ label: "Remove “" \+ name \+ "”", undo: \(\) => startGrounded\(/);
     expect(src).toContain('toast("Removed “" + name + "”", { action: undoAction(entry,');
     expect(src).toContain("const saved = await savePlan(plan);");

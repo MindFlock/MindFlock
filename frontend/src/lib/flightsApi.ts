@@ -29,7 +29,7 @@ import { errorPop } from "./errorPop";
 import { errMsg } from "./format";
 import { selectSession } from "./sessionActions";
 import { toast } from "./toast";
-import type { Flight, FlightPlan, FlightStep, StepKindDef } from "./flights";
+import type { Flight, FlightPlan, FlightStartOn, FlightStep, StepKindDef } from "./flights";
 
 const enc = encodeURIComponent;
 export const flightPath = (id: string, rest = "") => "/api/flights/" + enc(id) + rest;
@@ -94,10 +94,37 @@ export function jumpFlight(flightId: string, stepId: string, title = ""): Promis
   return flightAction("Jump", flightPath(flightId, "/jump"), { step: stepId }, title ? "Jumped to " + title : "");
 }
 
-export function controlFlight(flightId: string, verb: "pause" | "resume" | "cancel"): Promise<boolean> {
-  const said = verb === "pause" ? "Flight halted — Carry on picks it up again" : verb === "resume" ? "Flight carrying on" : "Flight cancelled — its session is kept";
-  const what = verb === "pause" ? "Halt now" : verb === "resume" ? "Carry on" : "Cancel";
+export function controlFlight(flightId: string, verb: "pause" | "resume" | "cancel" | "run"): Promise<boolean> {
+  const said =
+    verb === "pause"
+      ? "Flight halted — Carry on picks it up again"
+      : verb === "resume"
+        ? "Flight carrying on"
+        : verb === "run"
+          ? "Chain started"
+          : "Flight cancelled — its session is kept";
+  const what = verb === "pause" ? "Halt now" : verb === "resume" ? "Carry on" : verb === "run" ? "Run" : "Cancel";
   return flightAction(what, flightPath(flightId, "/" + verb), {}, said);
+}
+
+/** Round 19: ▶ Run on a ready chain — `POST /api/flights/{id}/run`. */
+export function runFlight(flightId: string): Promise<boolean> {
+  return controlFlight(flightId, "run");
+}
+
+/** Round 19: how a ready chain starts — `PATCH /api/flights/{id} {start_on}`
+ * ("now" runs it at once; anything but a ready chain is 409 not_ready). */
+export async function setStartOn(flightId: string, startOn: FlightStartOn): Promise<boolean> {
+  try {
+    await api(flightPath(flightId), { method: "PATCH", json: { start_on: startOn } });
+    return true;
+  } catch (err) {
+    errorPop("Changing how it starts failed", errMsg(err));
+    return false;
+  } finally {
+    void refreshFlights();
+    void refreshInstances();
+  }
 }
 
 /** ⏸ Halt here / Carry on past here on a stop of a live flight: `{halt}`
@@ -137,6 +164,8 @@ export async function openWhenReady(title: string, tries = 8, waitMs = 750): Pro
 
 export interface StartBody {
   plan_id: string;
+  /** Round 19: "prompt" / "run" = built, waiting (ready); absent = take off now. */
+  start_on?: FlightStartOn;
   title?: string;
   subject?: { kind: string; source: string; id: string };
   repo_path?: string;
@@ -164,8 +193,8 @@ export async function takeOff(body: StartBody): Promise<Flight | null> {
 }
 
 /** Fly a saved flyway on an existing session (a line on the Sky). */
-export function startFlightOn(title: string, planId: string): Promise<Flight | null> {
-  return takeOff({ plan_id: planId, title });
+export function startFlightOn(title: string, planId: string, startOn?: FlightStartOn): Promise<Flight | null> {
+  return takeOff({ plan_id: planId, title, ...(startOn ? { start_on: startOn } : {}) });
 }
 
 /** What a waiting item's Fly posts: the Intake start routes with their bodies
@@ -259,10 +288,10 @@ export function wireStep(step: FlightStep): Omit<FlightStep, "id"> {
  * ad-hoc flight of these stops (no saved flyway), which takes over an armed
  * fast-track — its remaining rungs become the leading ship stops — so the
  * ladder's boxes turn into the flight's without a jump. */
-export async function tackOnNew(title: string, steps: FlightStep[]): Promise<Flight | null> {
+export async function tackOnNew(title: string, steps: FlightStep[], startOn?: FlightStartOn): Promise<Flight | null> {
   try {
     const d = await api<{ flight?: Flight }>("/api/flights/start", {
-      json: { title, steps: steps.map(wireStep), absorb_fasttrack: true },
+      json: { title, steps: steps.map(wireStep), absorb_fasttrack: true, ...(startOn ? { start_on: startOn } : {}) },
     });
     return d?.flight || null;
   } catch (err) {
@@ -395,7 +424,7 @@ export async function startGrounded(body: { plan_id?: string; steps?: FlightStep
  * the session first (`title: ""` + `repo_path`…) and then attach. */
 export async function attachGrounded(
   flightId: string,
-  body: { title: string; repo_path?: string; program?: string; model?: string; in_place?: boolean; prompt?: string }
+  body: { title: string; repo_path?: string; program?: string; model?: string; in_place?: boolean; prompt?: string; start_on?: FlightStartOn }
 ): Promise<Flight | null> {
   try {
     const d = await api<{ flight?: Flight }>(flightPath(flightId, "/attach"), { json: body });

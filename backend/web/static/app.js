@@ -24183,6 +24183,9 @@ var MAIN_TRIGGERS = ["main_push", "main_red"];
 function isLive(f) {
 	return f.state === "running" || f.state === "waiting_you" || f.state === "paused" || f.state === "halted";
 }
+function isShown(f) {
+	return isLive(f) || f.state === "ready";
+}
 function flightDrives(f) {
 	return !!f && (f.state === "running" || f.state === "waiting_you" || f.state === "paused");
 }
@@ -26936,6 +26939,7 @@ var useUi = create((set, get) => ({
 	showFilter: load$1("mf_show_filter", true),
 	filterPeek: false,
 	reduceMotion: load$1("mf_reduce_motion", false),
+	skyBirds: load$1("mf_sky_birds", true),
 	breakReminder: load$1("mf_break_on", false),
 	breakEveryMin: clampBreakMinutes(load$1("mf_break_every", BREAK_DEFAULT_MINUTES)),
 	idleFlock: load$1("mf_idle_flock", true),
@@ -27221,6 +27225,10 @@ var useUi = create((set, get) => ({
 	setReduceMotion: (on) => {
 		save("mf_reduce_motion", on);
 		set({ reduceMotion: on });
+	},
+	setSkyBirds: (on) => {
+		save("mf_sky_birds", on);
+		set({ skyBirds: on });
 	},
 	setBreakReminder: (on) => {
 		save("mf_break_on", on);
@@ -29743,6 +29751,7 @@ function Appearance(_) {
 			children: "Comfort"
 		}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReduceMotionRow, {}),
+		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyBirdsRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TakeABreakRow, {}),
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)(IdleFlockRow, {})
 	] });
@@ -29769,6 +29778,34 @@ function ReduceMotionRow() {
 				onChange: (e) => {
 					setReduceMotion(e.target.checked);
 					toast(e.target.checked ? "Reduce motion on" : "Reduce motion off");
+				}
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
+		})]
+	});
+}
+function SkyBirdsRow() {
+	const on = useUi((s) => s.skyBirds);
+	const setOn = useUi((s) => s.setSkyBirds);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "set-row set-switch-row",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+			className: "notif-rule-text",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-label",
+				children: "Birds in the Sky"
+			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "set-hint notif-rule-desc",
+				children: "The flock drifting across the Sky's background. The birds on your chains stay."
+			})]
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("label", {
+			className: "ca-switch",
+			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				type: "checkbox",
+				"aria-label": "Birds in the Sky",
+				checked: on,
+				onChange: (e) => {
+					setOn(e.target.checked);
+					toast(e.target.checked ? "Birds in the Sky on" : "Birds in the Sky off");
 				}
 			}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "ca-slider" })]
 		})]
@@ -37707,8 +37744,26 @@ function jumpFlight(flightId, stepId, title = "") {
 	return flightAction("Jump", flightPath(flightId, "/jump"), { step: stepId }, title ? "Jumped to " + title : "");
 }
 function controlFlight(flightId, verb) {
-	const said = verb === "pause" ? "Flight halted — Carry on picks it up again" : verb === "resume" ? "Flight carrying on" : "Flight cancelled — its session is kept";
-	return flightAction(verb === "pause" ? "Halt now" : verb === "resume" ? "Carry on" : "Cancel", flightPath(flightId, "/" + verb), {}, said);
+	const said = verb === "pause" ? "Flight halted — Carry on picks it up again" : verb === "resume" ? "Flight carrying on" : verb === "run" ? "Chain started" : "Flight cancelled — its session is kept";
+	return flightAction(verb === "pause" ? "Halt now" : verb === "resume" ? "Carry on" : verb === "run" ? "Run" : "Cancel", flightPath(flightId, "/" + verb), {}, said);
+}
+function runFlight(flightId) {
+	return controlFlight(flightId, "run");
+}
+async function setStartOn(flightId, startOn) {
+	try {
+		await api(flightPath(flightId), {
+			method: "PATCH",
+			json: { start_on: startOn }
+		});
+		return true;
+	} catch (err) {
+		errorPop("Changing how it starts failed", errMsg(err));
+		return false;
+	} finally {
+		refreshFlights();
+		refreshInstances();
+	}
 }
 async function setHalt(flightId, stepId, halt) {
 	try {
@@ -37751,10 +37806,11 @@ async function takeOff(body) {
 		return null;
 	}
 }
-function startFlightOn(title, planId) {
+function startFlightOn(title, planId, startOn) {
 	return takeOff({
 		plan_id: planId,
-		title
+		title,
+		...startOn ? { start_on: startOn } : {}
 	});
 }
 function flyRequest(t, plan, extra = {}) {
@@ -37831,12 +37887,13 @@ function wireStep(step) {
 	if (step.pos) out.pos = step.pos;
 	return out;
 }
-async function tackOnNew(title, steps) {
+async function tackOnNew(title, steps, startOn) {
 	try {
 		return (await api("/api/flights/start", { json: {
 			title,
 			steps: steps.map(wireStep),
-			absorb_fasttrack: true
+			absorb_fasttrack: true,
+			...startOn ? { start_on: startOn } : {}
 		} }))?.flight || null;
 	} catch (err) {
 		errorPop("Tack on failed", errMsg(err));
@@ -52233,14 +52290,14 @@ async function expectBackgroundJob(title, jobId, secs) {
 }
 //#endregion
 //#region src/lib/codemapSeen.ts
-var KEY = "mf_codemap_seen";
+var KEY$1 = "mf_codemap_seen";
 var MAX_TITLES = 200;
 var cache = null;
 var listeners$3 = /* @__PURE__ */ new Set();
 function load() {
 	if (cache) return cache;
 	try {
-		const raw = localStorage.getItem(KEY);
+		const raw = localStorage.getItem(KEY$1);
 		const v = raw ? JSON.parse(raw) : null;
 		cache = v && typeof v === "object" ? v : {};
 	} catch {
@@ -52269,7 +52326,7 @@ function markCodemapSeen(title, ts) {
 	}
 	cache = next;
 	try {
-		localStorage.setItem(KEY, JSON.stringify(next));
+		localStorage.setItem(KEY$1, JSON.stringify(next));
 	} catch {}
 	listeners$3.forEach((l) => l());
 }
@@ -80793,7 +80850,7 @@ function loopLine(step, rec) {
 	if (/^run \d/i.test(note)) return clip(note, 40);
 	return counter + " · " + clip(note, 28);
 }
-function loopEdges(line) {
+function loopEdges(line, head) {
 	const stops = line.filter((n) => n.row === "main" && n.kind === "stop" && n.step);
 	const out = [];
 	stops.forEach((n, i) => {
@@ -80804,6 +80861,16 @@ function loopEdges(line) {
 		const gid = s.group?.id;
 		const target = back ? before.find((b) => b.step.id === back) : gid ? before.find((b) => b.step.group?.id === gid) : before[0];
 		const end = before[before.length - 1];
+		if (!before.length && !back && head) {
+			out.push({
+				from: head,
+				to: head,
+				kind: "loop",
+				loop: n.loop || loopMark(s),
+				via: n
+			});
+			return;
+		}
 		if (!target || !end) return;
 		out.push({
 			from: end.id,
@@ -80815,8 +80882,8 @@ function loopEdges(line) {
 	});
 	return out;
 }
-function liftLoops(line) {
-	const loops = loopEdges(line);
+function liftLoops(line, head) {
+	const loops = loopEdges(line, head);
 	const lifted = new Set(loops.map((e) => e.via.id));
 	return {
 		line: line.filter((n) => !lifted.has(n.id)),
@@ -80911,7 +80978,7 @@ function flywayDiagram(steps, kinds) {
 }
 function flightStops(f, kinds) {
 	const live = isLive(f);
-	const grounded = f.state === "grounded";
+	const grounded = f.state === "grounded" || f.state === "ready";
 	return f.steps.map((s, i) => {
 		const st = stepStateOf(f, s, i);
 		const atCursor = i === f.cursor && live;
@@ -80938,7 +81005,8 @@ function flightStops(f, kinds) {
 			reason: state === "halted" || state === "failed" ? f.reason || rec?.note || "" : "",
 			...looksOf(s, kinds),
 			...flown ? { receipt: receiptOf(rec?.detail) } : {},
-			...loop ? { loop } : {}
+			...loop ? { loop } : {},
+			...!flown && untilOf(rec?.detail) ? { until: untilOf(rec?.detail) } : {}
 		};
 	});
 }
@@ -80950,6 +81018,18 @@ function looksOf(s, kinds) {
 	if (when) out.when = when;
 	return out;
 }
+function untilOf(detail) {
+	const v = Number(detail?.until ?? detail?.next_at ?? 0);
+	return Number.isFinite(v) && v > 0 ? v : 0;
+}
+function leftWord(secs) {
+	if (secs <= 0) return "due";
+	const s = Math.ceil(secs);
+	const h = Math.floor(s / 3600);
+	const m = Math.floor(s % 3600 / 60);
+	const ss = String(s % 60).padStart(2, "0");
+	return (h ? h + ":" + String(m).padStart(2, "0") : String(m)) + ":" + ss + " left";
+}
 function receiptOf(detail) {
 	const r = detail?.receipt;
 	if (typeof r !== "string" && typeof r !== "number") return "";
@@ -80957,7 +81037,7 @@ function receiptOf(detail) {
 }
 function flightDiagram(f, kinds) {
 	const { line, loops } = liftLoops(flightStops(f, kinds));
-	if (isLive(f) || f.state === "grounded") line.push(addNode("Tack on a stop"));
+	if (isShown(f) || f.state === "grounded") line.push(addNode("Tack on a stop"));
 	const nodes = [];
 	const edges = [];
 	chain(nodes, edges, line);
@@ -81010,7 +81090,7 @@ function ladderRungs(row) {
 }
 function miniDots(row) {
 	const fl = row.flight;
-	if (fl && isLive(fl)) return stripDots(fl);
+	if (fl && isShown(fl)) return stripDots(fl);
 	return ladderRungs(row).map((r) => r.state === "done" || r.state === "current" ? "●" : r.state === "halted" ? "✗" : "○").join("");
 }
 function sessionBox(row, kind, rowAt) {
@@ -81030,6 +81110,14 @@ function sessionBox(row, kind, rowAt) {
 		},
 		dots: kind === "child" ? miniDots(row) : void 0
 	};
+}
+function landedFlightOf(title, flights) {
+	let best = null;
+	for (const f of flights || []) {
+		if (f.session !== title || f.state !== "done" && f.state !== "cancelled") continue;
+		if (!best || (f.finished || f.updated || 0) > (best.finished || best.updated || 0)) best = f;
+	}
+	return best;
 }
 function sessionDiagram(rows, title, opts = {}) {
 	const row = rows.find((r) => r.title === title);
@@ -81065,13 +81153,13 @@ function sessionDiagram(rows, title, opts = {}) {
 	let insertFrom = 0;
 	let loops = [];
 	const fl = row.flight;
-	if (fl && isLive(fl)) {
+	if (fl && isShown(fl)) {
 		mode = "flight";
 		flightId = fl.id;
-		insertFrom = fl.cursor + 1;
+		insertFrom = fl.state === "ready" ? 0 : fl.cursor + 1;
 		const full = opts.flights?.find((f) => f.id === fl.id);
 		if (full) {
-			const lifted = liftLoops(flightStops(full, opts.kinds));
+			const lifted = liftLoops(flightStops(full, opts.kinds), me.id);
 			line.push(...lifted.line);
 			loops = lifted.loops;
 		} else for (let i = 0; i < Math.max(0, Number(fl.total) || 0); i++) {
@@ -81090,6 +81178,14 @@ function sessionDiagram(rows, title, opts = {}) {
 				reason: cur && fl.state === "halted" ? fl.reason || "" : ""
 			});
 		}
+	} else if (landedFlightOf(title, opts.flights) && !ladderRungs(row).length) {
+		const done = landedFlightOf(title, opts.flights);
+		mode = "flight";
+		flightId = done.id;
+		insertFrom = done.steps.length;
+		const lifted = liftLoops(flightStops(done, opts.kinds), me.id);
+		line.push(...lifted.line);
+		loops = lifted.loops;
 	} else {
 		const rungs = ladderRungs(row);
 		if (rungs.length) {
@@ -81540,7 +81636,7 @@ var BRANCH_NODE_STATE = {
 };
 function innerSummary(row) {
 	const fl = row.flight;
-	if (fl && isLive(fl) && Number(fl.total) > 0) return Math.min(fl.cursor, fl.total) + "/" + fl.total + " stops" + (fl.step?.title ? " · " + fl.step.title : "");
+	if (fl && isShown(fl) && Number(fl.total) > 0) return Math.min(fl.cursor, fl.total) + "/" + fl.total + " stops" + (fl.step?.title ? " · " + fl.step.title : "");
 	const rungs = ladderRungs(row);
 	if (!rungs.length) return "";
 	const done = rungs.filter((r) => r.state === "done").length;
@@ -81616,7 +81712,7 @@ function hasSessionDiagram(rows, title) {
 	const row = rows.find((r) => r.title === title);
 	if (!row) return false;
 	const fl = row.flight;
-	return !!(fl && isLive(fl)) || ladderRungs(row).length > 0 || !!row.parent || rows.some((r) => r.parent === title);
+	return !!(fl && isShown(fl)) || ladderRungs(row).length > 0 || !!row.parent || rows.some((r) => r.parent === title);
 }
 var STOP_TONE = {
 	current: "working",
@@ -84782,7 +84878,7 @@ function PaneFlightStrip({ inst }) {
 //#region src/lib/skyGraph.ts
 var TILE = 64;
 var NODE_W = 132;
-var NODE_H = 118;
+var NODE_H = 140;
 var PITCH_X = 150;
 var PITCH_Y = 150;
 var GRID_SNAP = 8;
@@ -84795,7 +84891,7 @@ var HEAD_ID = "head";
 var isStopish$1 = (n) => n.kind === "stop" || n.kind === "group";
 var isBranchRow = (n) => n.row === "branch" || n.row === "below";
 var savedPos = (n) => {
-	const p = firstStepOf(n)?.pos;
+	const p = firstStepOf(n)?.pos ?? n.pos;
 	return p && Number.isFinite(p.x) && Number.isFinite(p.y) ? {
 		x: Math.round(p.x),
 		y: Math.round(p.y)
@@ -84858,8 +84954,8 @@ function chainGraph(d, opts) {
 			} : n,
 			x: pos ? pos.x : 0,
 			y: pos ? pos.y : 0,
-			w: NODE_W,
-			h: NODE_H,
+			w: Math.max(NODE_W, opts.big?.[n.id]?.w ?? 0),
+			h: Math.max(NODE_H, opts.big?.[n.id]?.h ?? 0),
 			pinned: !!pos,
 			inPort: editable || first,
 			outPort: canFollow(n, insertFrom)
@@ -85004,6 +85100,27 @@ function assemble(base, headNode, nodes, specs) {
 			});
 			continue;
 		}
+		if (s.kind === "join" && isBranchRow(a.node)) continue;
+		if (s.kind === "fan" && isBranchRow(b.node)) {
+			const ax = a.x + a.w / 2;
+			const ay = a.y + TILE;
+			const bx = b.x + b.w / 2;
+			const bus = b.y - 18;
+			const d = ax === bx ? `M ${ax} ${ay} V ${b.y - 2}` : `M ${ax} ${ay} V ${bus} H ${bx} V ${b.y - 2}`;
+			wires.push({
+				id: a.id + ">" + b.id + ":fan",
+				from: a.id,
+				to: b.id,
+				kind: "fan",
+				d,
+				mid: {
+					x: (ax + bx) / 2,
+					y: bus
+				},
+				...extra
+			});
+			continue;
+		}
 		const o = outPortOf(a);
 		const i = inPortOf(b);
 		wires.push({
@@ -85035,6 +85152,8 @@ function assemble(base, headNode, nodes, specs) {
 	g.bbox = chainBBox(g);
 	return g;
 }
+var BRANCH_COLS = 4;
+var BRANCH_Y = 200;
 function autoPlace(nodes) {
 	const out = [];
 	const byId = /* @__PURE__ */ new Map();
@@ -85044,14 +85163,34 @@ function autoPlace(nodes) {
 		let next;
 		const split = n.node.branch ? byId.get(n.node.branch.from) : void 0;
 		if (isBranchRow(n.node)) {
-			const k = (rows.get(n.node.branch?.from || "") ?? 0) + 1;
-			rows.set(n.node.branch?.from || "", k);
+			const from = n.node.branch?.from || "";
 			const at = split || prev;
+			let st = rows.get(from);
+			if (!st) {
+				const x0 = (at ? at.x : 0) + PITCH_X / 2;
+				st = {
+					col: 0,
+					x0,
+					x: x0,
+					y: (at ? at.y : 0) + BRANCH_Y,
+					rowH: 0
+				};
+				rows.set(from, st);
+			}
+			if (st.col >= BRANCH_COLS) {
+				st.col = 0;
+				st.x = st.x0;
+				st.y += st.rowH;
+				st.rowH = 0;
+			}
 			next = n.pinned ? { ...n } : {
 				...n,
-				x: (at ? at.x : 0) + PITCH_X / 2,
-				y: (at ? at.y : 0) + PITCH_Y * k
+				x: st.x,
+				y: st.y
 			};
+			st.x += Math.max(PITCH_X, n.w + 18);
+			st.rowH = Math.max(st.rowH, PITCH_Y, n.h + 10);
+			st.col++;
 		} else {
 			next = n.pinned ? { ...n } : {
 				...n,
@@ -85156,7 +85295,8 @@ function wirePath(a, b) {
 function loopWirePathG(a, b, others, lane = 0) {
 	const o = outPortOf(a);
 	const i = inPortOf(b);
-	const y = Math.max(a.y + a.h, b.y + b.h, ...others.map((n) => n.y + n.h)) + LOOP_CLEAR + lane * LOOP_LANE;
+	const headRoom = a.id === HEAD_ID || b.id === HEAD_ID ? 60 : 0;
+	const y = Math.max(a.y + a.h, b.y + b.h, ...others.map((n) => n.y + n.h)) + headRoom + LOOP_CLEAR + lane * LOOP_LANE;
 	const k = LOOP_HOOK;
 	return {
 		d: `M ${o.x} ${o.y} C ${o.x + k} ${o.y}, ${o.x + k} ${y}, ${o.x} ${y} L ${i.x} ${y} C ${i.x - k} ${y}, ${i.x - k} ${i.y}, ${i.x} ${i.y}`,
@@ -85265,6 +85405,843 @@ function wireIntent(src, dst, ctx = {}) {
 		after: X.node,
 		from: B.key
 	};
+}
+//#endregion
+//#region src/components/flights/ReadyHead.tsx
+function startWord(f) {
+	return f.start_on === "run" ? "runs when you press ▶ Run" : "runs on your next prompt";
+}
+function ReadyHead({ flight }) {
+	const [busy, setBusy] = (0, import_react.useState)(false);
+	const run = async () => {
+		setBusy(true);
+		try {
+			if (await runFlight(flight.id)) toast("Running “" + (flight.plan_name || "the chain") + "”");
+		} finally {
+			setBusy(false);
+		}
+	};
+	const flip = () => void setStartOn(flight.id, flight.start_on === "run" ? "prompt" : "run");
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "sky-ready",
+		"data-no-drag": true,
+		onPointerDown: (e) => e.stopPropagation(),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sky-head-chip tone-ready",
+				title: "Built, not flying yet",
+				children: "Ready"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "fl-icon-btn sky-run",
+				disabled: busy,
+				title: "Run this chain now",
+				"aria-label": "Run this chain now",
+				onClick: () => void run(),
+				children: "▶ Run"
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "linklike sky-start-on",
+				title: "Change how this chain starts",
+				onClick: flip,
+				children: startWord(flight)
+			})
+		]
+	});
+}
+//#endregion
+//#region src/components/flights/StopIcons.tsx
+var FAMILY = {
+	agent: "work",
+	split: "work",
+	join: "work",
+	command: "work",
+	test: "work",
+	sync: "work",
+	checkpoint: "work",
+	judge: "work",
+	screenshot: "work",
+	preview: "work",
+	ship: "ship",
+	checks: "ship",
+	reviews: "ship",
+	land: "ship",
+	wait: "outside",
+	notify: "outside",
+	ticket: "outside",
+	budget: "outside",
+	call: "outside",
+	listen: "outside",
+	you: "people",
+	perch: "people",
+	verify: "people",
+	review: "people",
+	someone: "people",
+	loop: "flow",
+	handoff: "flow"
+};
+var FAMILIES = /* @__PURE__ */ new Set([
+	"work",
+	"ship",
+	"outside",
+	"people",
+	"flow"
+]);
+function kindFamily(kind, kinds) {
+	const f = kinds?.find((k) => k.kind === kind)?.family;
+	if (f && FAMILIES.has(f)) return f;
+	return FAMILY[kind] || "outside";
+}
+function nodeFamily(n, kinds) {
+	if (n.perch) return "people";
+	if (n.kind === "group") return n.group?.steps[0] ? kindFamily(n.group.steps[0].kind, kinds) : "work";
+	if (n.kind === "session" || n.kind === "child" || n.kind === "branch" || n.kind === "parent") return "work";
+	return kindFamily(n.icon, kinds);
+}
+function TileIcon({ kind, size = 28 }) {
+	if (kind === "handoff") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+		className: "fl-stop-icon",
+		width: size,
+		height: size,
+		viewBox: "0 0 24 24",
+		fill: "none",
+		stroke: "currentColor",
+		strokeWidth: "1.8",
+		strokeLinecap: "round",
+		strokeLinejoin: "round",
+		"aria-hidden": "true",
+		focusable: "false",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M13.5 4.5H19.5V10.5" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M19.5 4.5L10 14" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M17 13.5V18a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 18V8.5A1.5 1.5 0 0 1 6 7h4.5" })
+		]
+	});
+	if (kind === "group") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+		className: "fl-stop-icon",
+		width: size,
+		height: size,
+		viewBox: "0 0 24 24",
+		fill: "none",
+		stroke: "currentColor",
+		strokeWidth: "1.8",
+		strokeLinecap: "round",
+		strokeLinejoin: "round",
+		"aria-hidden": "true",
+		focusable: "false",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 3.5l8.5 4.25L12 12 3.5 7.75z" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3.5 12L12 16.25 20.5 12" }),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3.5 16.25L12 20.5l8.5-4.25" })
+		]
+	});
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopIcon, {
+		kind,
+		size
+	});
+}
+//#endregion
+//#region src/components/flights/SkyChain.tsx
+var DRAG_MIN = 4;
+var STATE_WORD = {
+	done: "done",
+	current: "flying now",
+	perched: "waiting on you",
+	halted: "halted",
+	paused: "paused",
+	pending: "to come",
+	skipped: "skipped",
+	failed: "failed",
+	edit: "",
+	session: ""
+};
+var isStopish = (n) => n.kind === "stop" || n.kind === "group";
+function tileSub(n) {
+	if (n.kind === "group" && n.group) return n.group.done + " of " + n.group.total + (n.group.current ? " · " + n.group.current.title : "");
+	if (n.receipt) return n.receipt;
+	return n.sub;
+}
+function tileLabel(n, head = false) {
+	if (head) return (n.title || "Session") + (n.chip ? " — " + n.chip.label : "") + (n.sub ? ", " + n.sub : "");
+	const word = STATE_WORD[n.state] ?? "";
+	const sub = tileSub(n);
+	return n.title + (word ? " — " + word : "") + (sub ? ", " + sub : "") + (n.reason ? " (" + n.reason + ")" : "");
+}
+function SkyChain(p) {
+	const [drag, setDrag] = (0, import_react.useState)(null);
+	const dragRef = (0, import_react.useRef)(null);
+	const justDragged = (0, import_react.useRef)(false);
+	const plusPress = (0, import_react.useRef)(null);
+	const g = (0, import_react.useMemo)(() => drag?.live ? moveNode(p.graph, drag.id, drag.pos) : p.graph, [p.graph, drag]);
+	const head = g.head;
+	const all = g.headNode ? [g.headNode, ...g.nodes] : g.nodes;
+	const byId = new Map(all.map((n) => [n.id, n]));
+	const zoom = p.zoom > 0 ? p.zoom : 1;
+	const headNodeId = head.node?.id;
+	const isSel = (n) => !!p.selected && (p.selected === n.id || n.id === HEAD_ID && p.selected === headNodeId);
+	const firstStop = g.nodes.find((n) => n.node.row === "main") || null;
+	const activate = (n) => {
+		if (justDragged.current) return;
+		if (n.id !== HEAD_ID && isStopish(n.node)) p.onSelect?.(n.node);
+		else p.onOpen?.(n.node);
+	};
+	const edit = (n) => p.onEdit ? p.onEdit(n.node) : p.onSelect?.(n.node);
+	const draggable = (n) => !!p.onNodeMove && n.id !== HEAD_ID && (isStopish(n.node) || isBranchRow(n.node));
+	const endDrag = (commit) => {
+		const d = dragRef.current;
+		dragRef.current = null;
+		setDrag(null);
+		if (!d) return;
+		if (d.live) {
+			justDragged.current = true;
+			setTimeout(() => justDragged.current = false, 0);
+			const n = p.graph.nodes.find((x) => x.id === d.id);
+			if (commit && n && (d.pos.x !== n.x || d.pos.y !== n.y)) p.onNodeMove?.(n, d.pos);
+		}
+	};
+	const onDown = (e, n) => {
+		if (e.button !== 0 || !draggable(n)) return;
+		if (e.target.closest("button, input, textarea, a, [data-port], [data-no-drag]")) return;
+		e.stopPropagation();
+		try {
+			e.currentTarget.setPointerCapture(e.pointerId);
+		} catch {}
+		const d = {
+			id: n.id,
+			pointer: e.pointerId,
+			sx: e.clientX,
+			sy: e.clientY,
+			x0: n.x,
+			y0: n.y,
+			live: false,
+			pos: {
+				x: n.x,
+				y: n.y
+			}
+		};
+		dragRef.current = d;
+		setDrag(d);
+	};
+	const onMove = (e) => {
+		const d = dragRef.current;
+		if (!d || d.pointer !== e.pointerId) return;
+		const dx = e.clientX - d.sx;
+		const dy = e.clientY - d.sy;
+		if (!d.live && Math.hypot(dx, dy) < DRAG_MIN) return;
+		const next = {
+			...d,
+			live: true,
+			pos: snapPos({
+				x: d.x0 + dx / zoom,
+				y: d.y0 + dy / zoom
+			}, e.altKey)
+		};
+		dragRef.current = next;
+		setDrag(next);
+	};
+	const onUp = (e) => {
+		const d = dragRef.current;
+		if (!d || d.pointer !== e.pointerId) return;
+		endDrag(e.type === "pointerup");
+	};
+	const onKey = (e, n) => {
+		if (e.key === "Escape" && dragRef.current) {
+			e.preventDefault();
+			endDrag(false);
+			return;
+		}
+		if (e.target !== e.currentTarget) return;
+		if (e.key === "Enter") {
+			e.preventDefault();
+			if (n.id !== HEAD_ID && isStopish(n.node)) edit(n);
+			else p.onOpen?.(n.node);
+		} else if (e.key === " ") {
+			e.preventDefault();
+			activate(n);
+		} else if ((e.key === "Delete" || e.key === "Backspace") && n.id !== HEAD_ID && isStopish(n.node) && p.onRemove) {
+			e.preventDefault();
+			p.onRemove(n.node);
+		}
+	};
+	const portDown = (e, n, side) => {
+		if (e.button !== 0) return;
+		e.stopPropagation();
+		p.onPortDown?.(n, side, e);
+	};
+	const port = (n, side, wired) => {
+		const live = side === "in" ? n.inPort : n.outPort;
+		if (!live && !wired) return null;
+		const cls = "sky-port sky-port-" + side + (live ? "" : " sky-port-off");
+		const title = side === "in" ? "Drag from here to pull this stop and the ones after it off into a chain of their own" : "Drag from here to wire it to a stop, another chain or empty sky";
+		return live ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: cls,
+			"data-port": side,
+			"data-node": n.id,
+			title,
+			onPointerDown: (e) => portDown(e, n, side)
+		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+			className: cls,
+			"aria-hidden": "true"
+		});
+	};
+	const wiredIn = new Set(g.wires.filter((w) => w.kind !== "add").map((w) => w.to));
+	const wiredOut = new Set(g.wires.map((w) => w.from));
+	const birdOn = (() => {
+		const b = p.bird;
+		if (!b) return null;
+		const id = b.nodeId === headNodeId ? HEAD_ID : b.nodeId;
+		return byId.get(id) || null;
+	})();
+	const tile = (n) => {
+		const isHead = n.id === HEAD_ID;
+		const dn = n.node;
+		const fam = nodeFamily(dn, p.kinds);
+		const halt = isHead ? null : haltMark(dn);
+		const sub = isHead ? head.sub : tileSub(dn);
+		const cls = [
+			"sky-node",
+			isHead ? "sky-head sky-head-" + head.kind : "sky-node-" + dn.kind,
+			"st-" + dn.state,
+			"sky-fam-" + fam,
+			dn.chip ? "tone-" + dn.chip.tone : "",
+			dn.kind === "group" ? "is-group" : "",
+			dn.perch ? "is-perch" : "",
+			n.inPort || n.outPort ? "" : "is-fixed",
+			isSel(n) ? "is-selected" : "",
+			p.highlighted?.has(n.id) || isHead && headNodeId && p.highlighted?.has(headNodeId) ? "is-highlighted" : "",
+			p.targets?.has(n.id) ? "is-target" : "",
+			p.over === n.id ? "is-over" : "",
+			drag?.live && drag.id === n.id ? "is-dragging" : "",
+			draggable(n) ? "is-draggable" : ""
+		].filter(Boolean).join(" ");
+		const said = tileLabel(isHead ? {
+			...dn,
+			title: head.title,
+			sub: head.sub
+		} : dn, isHead);
+		const opened = !isHead && p.renderOpen ? p.renderOpen(dn) : null;
+		if (opened) return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			role: "listitem",
+			className: "sky-node sky-node-open",
+			"data-node": n.id,
+			"data-diagram-node": dn.id,
+			"aria-label": said,
+			style: {
+				transform: `translate(${n.x}px, ${n.y}px)`,
+				width: n.w,
+				height: n.h
+			},
+			children: opened
+		}, n.id);
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			role: "listitem",
+			tabIndex: 0,
+			className: cls,
+			"data-node": n.id,
+			"data-diagram-node": dn.id,
+			"aria-label": said,
+			"aria-current": isSel(n) ? "true" : void 0,
+			title: isHead ? void 0 : dn.reason ? dn.title + " — " + dn.reason : sub ? dn.title + " — " + sub : dn.title,
+			style: {
+				transform: `translate(${n.x}px, ${n.y}px)`,
+				width: n.w,
+				height: n.h,
+				...isHead ? { ["--sky-head-color"]: head.color } : {}
+			},
+			onPointerDown: (e) => onDown(e, n),
+			onPointerMove: onMove,
+			onPointerUp: onUp,
+			onPointerCancel: onUp,
+			onClick: (e) => {
+				if (e.target.closest("[data-port], [data-no-drag], button")) return;
+				activate(n);
+			},
+			onDoubleClick: (e) => {
+				if (isHead || !isStopish(dn) || !p.onEdit) return;
+				if (e.target.closest("button, input, textarea, a, [data-port]")) return;
+				e.preventDefault();
+				edit(n);
+			},
+			onKeyDown: (e) => onKey(e, n),
+			onContextMenu: (e) => {
+				if (!p.onMenu) return;
+				e.preventDefault();
+				e.stopPropagation();
+				p.onMenu(dn, {
+					clientX: e.clientX,
+					clientY: e.clientY
+				});
+			},
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "sky-tile",
+					style: {
+						width: TILE,
+						height: TILE
+					},
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-tile-icon",
+							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TileIcon, {
+								kind: isHead ? head.kind === "trigger" ? "handoff" : "session" : dn.perch ? "perch" : dn.icon,
+								size: 28
+							})
+						}),
+						isHead && head.kind !== "none" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-head-dot",
+							"aria-hidden": "true"
+						}),
+						!isHead && dn.state === "done" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-badge sky-badge-done",
+							"aria-hidden": "true",
+							children: "✓"
+						}),
+						!isHead && dn.state === "failed" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-badge sky-badge-failed",
+							"aria-hidden": "true",
+							children: "!"
+						}),
+						halt && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-badge sky-badge-halt",
+							title: halt.title,
+							"aria-label": halt.title,
+							role: "img",
+							children: halt.glyph
+						}),
+						!isHead && dn.when && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-badge sky-badge-if",
+							title: "Only when " + dn.when,
+							"aria-label": "Only when " + dn.when,
+							role: "img",
+							children: "if"
+						}),
+						port(n, "in", wiredIn.has(n.id)),
+						port(n, "out", wiredOut.has(n.id)),
+						!isHead && dn.risk && dn.risk.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-risk",
+							title: riskTitle(dn.risk),
+							role: "img",
+							"aria-label": "Touches: " + riskTitle(dn.risk),
+							"data-risk": dn.risk.join(" "),
+							children: dn.risk.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: "sky-risk-" + t }, t))
+						})
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "sky-node-title",
+					children: isHead ? head.title : dn.title
+				}),
+				sub && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "sky-node-sub",
+					children: sub
+				}),
+				!isHead && dn.until && (dn.state === "current" || dn.state === "paused" || dn.state === "halted") ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Countdown, { until: dn.until }) : null,
+				isHead ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "sky-head-extra",
+					"data-no-drag": true,
+					children: p.renderHead ? p.renderHead() : dn.chip ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-head-chip tone-" + dn.chip.tone,
+						children: dn.chip.label
+					}) : null
+				}) : dn.chip && !isStopish(dn) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "sky-node-extra",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-head-chip tone-" + dn.chip.tone,
+						children: dn.chip.label
+					})
+				}) : p.renderInBox && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "sky-node-extra",
+					"data-no-drag": true,
+					children: p.renderInBox(dn)
+				}),
+				!isHead && dn.chip && !isStopish(dn) && (dn.chip.tone === "working" || dn.chip.tone === "attention") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMarker, {
+					tone: dn.chip.tone === "working" ? "working" : "you",
+					x: n.w / 2,
+					y: 0,
+					size: 18,
+					label: dn.title + " — " + dn.chip.label,
+					className: "sky-kid-bird"
+				})
+			]
+		}, n.id);
+	};
+	const wireClass = (w) => {
+		const to = byId.get(w.to)?.node;
+		const live = (w.kind === "line" || w.kind === "head" || w.kind === "fan") && to && (to.state === "current" || to.state === "perched");
+		return [
+			"sky-wire",
+			"sky-wire-" + w.kind,
+			w.done ? "is-done" : "",
+			live ? "is-live" : "",
+			w.loop ? "sky-loop-" + w.loop.state : ""
+		].filter(Boolean).join(" ");
+	};
+	const tinted = (w) => w.kind === "line" || w.kind === "head";
+	const b = g.bbox;
+	const plusAfter = g.plus ? byId.get(g.plus.after) || null : null;
+	const socket = head.kind === "none" && firstStop ? inPortOf(firstStop) : null;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sky-chain" + (p.className ? " " + p.className : "") + (drag?.live ? " is-dragging-node" : ""),
+		style: {
+			position: "relative",
+			width: Math.max(0, b.x + b.w),
+			height: Math.max(0, b.y + b.h),
+			["--sky-chain-color"]: head.color
+		},
+		"data-chain": g.key,
+		"data-flight": g.flightId || void 0,
+		"data-head": head.kind,
+		role: "list",
+		"aria-label": (head.kind === "session" ? "Chain in " + head.title : head.kind === "trigger" ? head.title : "Stops with no session yet") + " — drag a tile to move it, drag a port to wire it",
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+				className: "sky-wires",
+				"aria-hidden": "true",
+				focusable: "false",
+				style: {
+					left: b.x,
+					top: b.y
+				},
+				width: Math.max(1, b.w),
+				height: Math.max(1, b.h),
+				viewBox: `${b.x} ${b.y} ${Math.max(1, b.w)} ${Math.max(1, b.h)}`,
+				children: [g.wires.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+					className: wireClass(w),
+					d: w.d,
+					"data-wire": w.kind,
+					"data-from": w.from,
+					"data-to": w.to,
+					style: tinted(w) ? { stroke: head.color } : void 0
+				}, w.id)), socket && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+					className: "sky-wire sky-wire-socket",
+					d: `M ${socket.x - 16} ${socket.y} H ${socket.x}`
+				})]
+			}),
+			all.map(tile),
+			socket && firstStop && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				className: "sky-socket" + (p.targets?.has(firstStop.id) ? " is-target" : "") + (p.over === firstStop.id ? " is-over" : ""),
+				style: {
+					left: socket.x - 24,
+					top: socket.y
+				},
+				"data-port": "in",
+				"data-node": firstStop.id,
+				"data-socket": "",
+				role: "img",
+				"aria-label": "Wire a session's out port here to run it",
+				title: "Wire a session's out port here to run it"
+			}),
+			g.plus && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "sky-plus fl-icon-btn",
+				style: {
+					left: g.plus.at.x,
+					top: g.plus.at.y
+				},
+				"data-port": "out",
+				"data-node": g.plus.after,
+				"data-plus": "",
+				"aria-label": "Add a stop after this one — or drag to wire it",
+				title: "Add a stop (drag to wire it somewhere)",
+				onPointerDown: (e) => {
+					if (e.button !== 0) return;
+					e.stopPropagation();
+					plusPress.current = {
+						pointer: e.pointerId,
+						sx: e.clientX,
+						sy: e.clientY,
+						sent: false
+					};
+				},
+				onPointerMove: (e) => {
+					const pr = plusPress.current;
+					if (!pr || pr.sent || pr.pointer !== e.pointerId || !plusAfter) return;
+					if (Math.hypot(e.clientX - pr.sx, e.clientY - pr.sy) < DRAG_MIN) return;
+					pr.sent = true;
+					p.onPortDown?.(plusAfter, "out", e);
+				},
+				onPointerUp: () => {
+					if (plusPress.current?.sent) {
+						justDragged.current = true;
+						setTimeout(() => justDragged.current = false, 0);
+					}
+					plusPress.current = null;
+				},
+				onPointerCancel: () => plusPress.current = null,
+				onClick: (e) => {
+					e.stopPropagation();
+					if (justDragged.current) return;
+					p.onPlus?.(plusAfter);
+				},
+				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
+					width: "12",
+					height: "12",
+					viewBox: "0 0 12 12",
+					"aria-hidden": "true",
+					focusable: "false",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+						d: "M6 1.5v9M1.5 6h9",
+						stroke: "currentColor",
+						strokeWidth: "1.8",
+						strokeLinecap: "round"
+					})
+				})
+			}),
+			g.wires.map((w) => {
+				if (w.kind !== "loop" || !w.loop) return null;
+				const m = w.loop;
+				const v = w.via;
+				const text = loopPill(m) || loopIdlePill(m, v);
+				const title = (m.state === "pending" && m.runs === 0 ? "Loop: " + (v?.sub || text) : loopPillTitle(m)) + (v ? " — click to change it" : "");
+				const cls = [
+					"sky-loop-pill",
+					"sky-loop-" + m.state,
+					v ? "st-" + v.state : "",
+					v && p.selected === v.id ? "is-selected" : ""
+				].filter(Boolean).join(" ");
+				const style = {
+					left: w.mid.x,
+					top: w.mid.y
+				};
+				return v ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					role: "button",
+					tabIndex: 0,
+					className: cls,
+					style,
+					"data-node": v.id,
+					"data-pill": "",
+					title,
+					"aria-label": title,
+					onPointerDown: (e) => {
+						if (e.button !== 0) return;
+						e.stopPropagation();
+						p.onPillDown?.(v, e);
+					},
+					onClick: (e) => {
+						e.stopPropagation();
+						p.onLoopPill?.(v);
+					},
+					onContextMenu: (e) => {
+						if (!p.onMenu) return;
+						e.preventDefault();
+						e.stopPropagation();
+						p.onMenu(v, {
+							clientX: e.clientX,
+							clientY: e.clientY
+						});
+					},
+					onKeyDown: (e) => {
+						if (e.key === "Enter" || e.key === " ") {
+							e.preventDefault();
+							p.onLoopPill?.(v);
+						} else if ((e.key === "Delete" || e.key === "Backspace") && p.onRemove) {
+							e.preventDefault();
+							p.onRemove(v);
+						}
+					},
+					children: text
+				}, "pill:" + w.id) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: cls,
+					style,
+					title,
+					"aria-label": title,
+					role: "img",
+					children: text
+				}, "pill:" + w.id);
+			}),
+			birdOn && p.bird && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMarker, {
+				tone: p.bird.tone,
+				x: birdOn.x + birdOn.w / 2,
+				y: birdOn.y,
+				size: 22,
+				label: "The flight is at “" + (birdOn.id === HEAD_ID ? head.title : birdOn.node.title) + "”",
+				className: "sky-chain-bird"
+			})
+		]
+	});
+}
+function Countdown({ until }) {
+	const [now, setNow] = (0, import_react.useState)(() => Date.now() / 1e3);
+	(0, import_react.useEffect)(() => {
+		const t = setInterval(() => setNow(Date.now() / 1e3), 1e3);
+		return () => clearInterval(t);
+	}, []);
+	const at = /* @__PURE__ */ new Date(until * 1e3);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sky-node-left",
+		title: "Until " + at.toLocaleTimeString([], {
+			hour: "numeric",
+			minute: "2-digit"
+		}),
+		"aria-live": "off",
+		children: ["⏱ ", leftWord(until - now)]
+	});
+}
+//#endregion
+//#region src/components/flights/useChainMenu.tsx
+var HERE = /* @__PURE__ */ new Set([
+	"current",
+	"perched",
+	"halted",
+	"paused"
+]);
+function useChainMenu(h, flightId) {
+	const [open, setOpen] = (0, import_react.useState)(null);
+	const onMenu = (n, at) => setOpen({
+		n,
+		x: at.clientX,
+		y: at.clientY
+	});
+	if (!open || typeof document === "undefined") return {
+		onMenu,
+		menu: null
+	};
+	const n = open.n;
+	const live = !!flightId && (!!n.step || n.kind === "group");
+	const items = menuItemsFor(n, {
+		can: {
+			edit: !!(h.onEdit || h.onSelect),
+			duplicate: !!h.onDuplicate,
+			remove: !!h.onRemove,
+			open: !!h.onOpen,
+			halt: !!h.onToggleHalt
+		},
+		live,
+		here: live && HERE.has(n.state)
+	});
+	if (!items.length) return {
+		onMenu,
+		menu: null
+	};
+	const step = n.step?.id || "";
+	const pick = (key) => {
+		if (key === "edit") (h.onEdit || h.onSelect)?.(n);
+		else if (key === "duplicate") h.onDuplicate?.(n);
+		else if (key === "remove") h.onRemove?.(n);
+		else if (key === "halt") h.onToggleHalt?.(n);
+		else if (key === "done") stepDone(flightId, step);
+		else if (key === "skip") stepSkip(flightId, step);
+		else if (key === "retry") stepRetry(flightId, step);
+		else if (key === "pause" || key === "resume") controlFlight(flightId, key);
+		else if (key === "open" || key === "tackon") h.onOpen?.(n);
+	};
+	return {
+		onMenu,
+		menu: (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			className: "sky-chain-menu",
+			style: {
+				position: "fixed",
+				left: 0,
+				top: 0,
+				width: 0,
+				height: 0,
+				zIndex: 80,
+				["--sky-z"]: 1
+			},
+			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopMenu, {
+				x: open.x,
+				y: open.y,
+				label: "“" + n.title + "” — what you can do",
+				items,
+				onPick: (key) => {
+					pick(key);
+					setOpen(null);
+				},
+				onClose: () => setOpen(null)
+			})
+		}), document.body)
+	};
+}
+function pillAimer(graph, onLoopTo) {
+	return (via, e) => {
+		if (!onLoopTo || !via.editable || e.button !== 0) return;
+		const wire = graph.wires.find((w) => w.via?.id === via.id);
+		const end = graph.nodes.find((n) => n.id === wire?.from);
+		if (!end || end.node.index === void 0) return;
+		const sx = e.clientX;
+		const sy = e.clientY;
+		let moved = false;
+		let lit = null;
+		const targetAt = (x, y) => {
+			const el = document.elementFromPoint(x, y)?.closest("[data-node]");
+			if (!el || el.closest("[data-chain]")?.getAttribute("data-chain") !== graph.key) return null;
+			const n = graph.nodes.find((g) => g.id === el.getAttribute("data-node"));
+			return n && loopable(n.node) && n.node.index <= end.node.index ? {
+				el,
+				n
+			} : null;
+		};
+		const light = (el) => {
+			if (lit === el) return;
+			lit?.classList.remove("sky-aim-over");
+			el?.classList.add("sky-aim-over");
+			lit = el;
+		};
+		const stop = () => {
+			window.removeEventListener("pointermove", move);
+			window.removeEventListener("pointerup", up);
+			window.removeEventListener("pointercancel", stop);
+			window.removeEventListener("keydown", key, true);
+			light(null);
+			if (moved) {
+				const eat = (c) => {
+					c.stopPropagation();
+					c.preventDefault();
+				};
+				window.addEventListener("click", eat, {
+					capture: true,
+					once: true
+				});
+				setTimeout(() => window.removeEventListener("click", eat, { capture: true }), 0);
+			}
+		};
+		const move = (ev) => {
+			if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 4) return;
+			moved = true;
+			const t = targetAt(ev.clientX, ev.clientY);
+			light(t ? t.el.closest(".sky-node") ?? t.el : null);
+		};
+		const up = (ev) => {
+			const t = moved ? targetAt(ev.clientX, ev.clientY) : null;
+			stop();
+			if (t) onLoopTo(via, t.n.node);
+		};
+		const key = (ev) => {
+			if (ev.key !== "Escape") return;
+			ev.preventDefault();
+			ev.stopPropagation();
+			stop();
+		};
+		window.addEventListener("pointermove", move);
+		window.addEventListener("pointerup", up);
+		window.addEventListener("pointercancel", stop);
+		window.addEventListener("keydown", key, true);
+	};
+}
+//#endregion
+//#region src/lib/skyNodePos.ts
+var KEY = "mf_sky_node_pos";
+function read() {
+	try {
+		const raw = localStorage.getItem(KEY);
+		const v = raw ? JSON.parse(raw) : {};
+		return v && typeof v === "object" ? v : {};
+	} catch {
+		return {};
+	}
+}
+function loadNodePos(chain) {
+	return { ...read()[chain] || {} };
+}
+function saveNodePos(chain, spots) {
+	try {
+		const all = read();
+		if (Object.keys(spots).length) all[chain] = spots;
+		else delete all[chain];
+		localStorage.setItem(KEY, JSON.stringify(all));
+	} catch {}
 }
 //#endregion
 //#region src/lib/groundedLines.ts
@@ -85437,6 +86414,572 @@ function handoffStepFor(def, taken, target) {
 			wait: false
 		}
 	};
+}
+//#endregion
+//#region src/components/flights/useSkyWiring.ts
+var HEAD = "head";
+var chainNodes = (g) => g.headNode ? [g.headNode, ...g.nodes] : g.nodes;
+var chainNode = (g, id) => id === HEAD ? g.headNode : g.nodes.find((n) => n.id === id) || null;
+var onPlane = (c, p) => ({
+	x: c.origin.x + c.dx + p.x,
+	y: c.origin.y + c.dy + p.y
+});
+var inChain = (c, p) => ({
+	x: p.x - c.origin.x - c.dx,
+	y: p.y - c.origin.y - c.dy
+});
+var portOnPlane = (c, n, side) => onPlane(c, side === "in" ? inPortOf(n) : outPortOf(n));
+function wireTargetsOf(src, chains, shift = false) {
+	const out = /* @__PURE__ */ new Map();
+	for (const c of chains) for (const n of chainNodes(c.graph)) {
+		if (wireIntent(src, {
+			chain: c.graph,
+			node: n,
+			side: "in"
+		}, { shift }).op === "none") continue;
+		let s = out.get(c.graph.key);
+		if (!s) out.set(c.graph.key, s = /* @__PURE__ */ new Set());
+		s.add(n.id);
+	}
+	return out;
+}
+function nodeUnder(el, chains) {
+	const nodeEl = el?.closest("[data-node]");
+	const chainEl = nodeEl?.closest(".sky-chain[data-chain]");
+	if (!nodeEl || !chainEl || nodeEl.closest(".skl-card")) return null;
+	const key = chainEl.getAttribute("data-chain") || "";
+	const c = chains.get(key);
+	const node = c ? chainNode(c.graph, nodeEl.getAttribute("data-node") || "") : null;
+	return c && node ? {
+		key,
+		node
+	} : null;
+}
+function entrySig(e) {
+	const g = e.graph;
+	return [
+		g.key,
+		g.flightId,
+		g.head.kind,
+		e.dx,
+		e.dy,
+		...chainNodes(g).map((n) => n.id + "@" + n.x + "," + n.y)
+	].join("|");
+}
+function useChainRegistry() {
+	const entries = (0, import_react.useRef)(/* @__PURE__ */ new Map());
+	const sigs = (0, import_react.useRef)(/* @__PURE__ */ new Map());
+	const registers = (0, import_react.useRef)(/* @__PURE__ */ new Map());
+	const [version, setVersion] = (0, import_react.useState)(0);
+	return {
+		entries,
+		registerFor: (0, import_react.useCallback)((key) => {
+			let r = registers.current.get(key);
+			if (!r) {
+				r = (e) => {
+					if (e) entries.current.set(key, e);
+					else entries.current.delete(key);
+					const sig = e ? entrySig(e) : "";
+					if (sig === (sigs.current.get(key) || "")) return;
+					if (sig) sigs.current.set(key, sig);
+					else sigs.current.delete(key);
+					setVersion((v) => v + 1);
+				};
+				registers.current.set(key, r);
+			}
+			return r;
+		}, []),
+		version
+	};
+}
+function useSkyWiring(opts) {
+	const optsRef = (0, import_react.useRef)(opts);
+	optsRef.current = opts;
+	const [band, setBand] = (0, import_react.useState)(null);
+	const [targets, setTargets] = (0, import_react.useState)(() => /* @__PURE__ */ new Map());
+	const [over, setOver] = (0, import_react.useState)(null);
+	const stop = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => () => stop.current?.(), []);
+	const startWire = (0, import_react.useCallback)((key, node, side, e) => {
+		const o = optsRef.current;
+		const chains = o.chains();
+		const c = chains.get(key);
+		if (!c) return;
+		stop.current?.();
+		const src = {
+			chain: c.graph,
+			node,
+			side
+		};
+		const el = e.currentTarget;
+		const r = el instanceof Element ? el.getBoundingClientRect() : null;
+		const from = r && (r.width || r.height) ? o.planeAt(r.left + r.width / 2, r.top + r.height / 2) : portOnPlane(c, node, side);
+		let shift = e.shiftKey;
+		setTargets(wireTargetsOf(src, chains.values(), shift));
+		setBand({
+			from,
+			to: from,
+			side,
+			over: false
+		});
+		setOver(null);
+		const pid = e.pointerId;
+		const sx = e.clientX;
+		const sy = e.clientY;
+		let moved = false;
+		const hit = (ev) => {
+			const at = typeof document !== "undefined" && document.elementFromPoint ? document.elementFromPoint(ev.clientX, ev.clientY) : null;
+			return {
+				el: at,
+				node: nodeUnder(at, optsRef.current.chains())
+			};
+		};
+		const move = (ev) => {
+			if (ev.pointerId !== pid) return;
+			if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) >= 3) moved = true;
+			const now = optsRef.current;
+			const to = now.planeAt(ev.clientX, ev.clientY);
+			if (ev.shiftKey !== shift) {
+				shift = ev.shiftKey;
+				setTargets(wireTargetsOf(src, now.chains().values(), shift));
+			}
+			const h = hit(ev).node;
+			const hc = h ? now.chains().get(h.key) : null;
+			const ok = !!h && !!hc && wireIntent(src, {
+				chain: hc.graph,
+				node: h.node,
+				side: "in"
+			}, { shift }).op !== "none";
+			setOver((cur) => ok ? cur?.key === h.key && cur.node === h.node.id ? cur : {
+				key: h.key,
+				node: h.node.id
+			} : null);
+			setBand({
+				from,
+				to,
+				side,
+				over: ok
+			});
+		};
+		const end = (commit, ev) => {
+			window.removeEventListener("pointermove", move);
+			window.removeEventListener("pointerup", up);
+			window.removeEventListener("pointercancel", cancel);
+			window.removeEventListener("keydown", esc, true);
+			stop.current = null;
+			setBand(null);
+			setTargets(/* @__PURE__ */ new Map());
+			setOver(null);
+			if (moved && typeof window !== "undefined") {
+				const eat = (c) => {
+					c.stopPropagation();
+					c.preventDefault();
+				};
+				window.addEventListener("click", eat, {
+					capture: true,
+					once: true
+				});
+				setTimeout(() => window.removeEventListener("click", eat, { capture: true }), 0);
+			}
+			if (!commit || !ev || !moved) return;
+			const now = optsRef.current;
+			const at = now.planeAt(ev.clientX, ev.clientY);
+			const h = hit(ev);
+			const placed = h.node ? now.chains().get(h.node.key) : null;
+			const dst = h.node && placed ? {
+				chain: placed.graph,
+				node: h.node.node,
+				side: "in"
+			} : now.ground(h.el) ? { sky: at } : null;
+			const intent = dst ? wireIntent(src, dst, { shift: ev.shiftKey }) : { op: "none" };
+			now.onIntent(intent, {
+				src,
+				at
+			});
+		};
+		const up = (ev) => {
+			if (ev.pointerId === pid) end(true, ev);
+		};
+		const cancel = (ev) => {
+			if (ev.pointerId === pid) end(false);
+		};
+		const esc = (ev) => {
+			if (ev.key !== "Escape") return;
+			ev.preventDefault();
+			ev.stopPropagation();
+			end(false);
+		};
+		stop.current = () => end(false);
+		window.addEventListener("pointermove", move);
+		window.addEventListener("pointerup", up);
+		window.addEventListener("pointercancel", cancel);
+		window.addEventListener("keydown", esc, true);
+	}, []);
+	const targetsOf = (key) => targets.get(key);
+	const overOf = (key) => over?.key === key ? over.node : null;
+	return {
+		band,
+		targets,
+		over,
+		startWire,
+		targetsOf,
+		overOf,
+		dragging: !!band
+	};
+}
+var groundedName$1 = (f) => f.plan_name || "Stops";
+var atOrEnd = (f, at) => at !== void 0 && at < f.steps.length ? at : void 0;
+async function runWireIntent(intent, ctx, d) {
+	if (intent.op === "none") return;
+	if (intent.op === "attach") {
+		await d.merge(intent.chain, intent.session);
+		return;
+	}
+	if (intent.op === "merge") {
+		const f = d.flightOf(intent.chain);
+		await d.merge(intent.from, intent.chain, f && intent.after ? loopSlotAfter(intent.after) : void 0);
+		return;
+	}
+	if (intent.op === "palette") {
+		const c = d.chain(intent.chain);
+		if (!c) return;
+		const p = inChain(c, intent.at);
+		const snap = (v) => Math.round(v / GRID_SNAP) * GRID_SNAP;
+		c.paletteAfter(intent.after, {
+			x: snap(p.x - NODE_W / 2),
+			y: snap(p.y - TILE / 2)
+		});
+		return;
+	}
+	const f = d.flightOf(intent.chain);
+	if (intent.op === "handoff") {
+		const def = d.kinds.find((k) => k.kind === HANDOFF_KIND);
+		if (!def) return void toast("This server has no “Start a chain” stop yet");
+		const target = d.flights.find((x) => groundedKey(x.id) === intent.target);
+		const step = handoffStepFor(def, f ? f.steps.map((st) => st.id) : [], intent.target);
+		if (f ? await tackOn(f.id, step, atOrEnd(f, loopSlotAfter(intent.from))) : !!await tackOnNew(intent.chain, [step])) toast("“" + intent.from.title + "” starts “" + (target ? groundedName$1(target) : "that chain") + "” on " + sessionWord("new"));
+		return;
+	}
+	if (!f) return;
+	if (intent.op === "move") {
+		const step = firstStepOf(intent.step);
+		const to = intent.after ? loopSlotAfter(intent.after) : 0;
+		if (step && to !== void 0) await moveStop(f.id, step.id, Math.min(to, f.steps.length - 1));
+		return;
+	}
+	if (intent.op === "loop") {
+		const def = d.kinds.find((k) => k.kind === "loop");
+		const target = firstStepOf(intent.to);
+		const at = loopSlotAfter(intent.from);
+		if (!def || !target || at === void 0) return void toast("This server has no Loop stop");
+		if (await tackOn(f.id, loopStepTo(def, f.steps.map((st) => st.id), target), atOrEnd(f, at))) toast("Loops back to “" + target.title + "”");
+		return;
+	}
+	if (intent.op === "split") {
+		const step = firstStepOf(intent.step);
+		if (!step) return;
+		const chain = await splitOffChain(f.id, step.id, {
+			x: 0,
+			y: 0
+		});
+		if (!chain) return;
+		const label = d.chain(intent.chain)?.dy ?? d.labelH;
+		d.pinAt(groundedKey(chain.id), {
+			x: Math.round(ctx.at.x - NODE_W / 2),
+			y: Math.round(ctx.at.y - TILE / 2 - label)
+		});
+		const base = "sky" in ctx.src ? null : ctx.src.node;
+		const moved = {};
+		if (base) {
+			for (const st of chain.steps.slice(1)) if (st.pos) moved[st.id] = {
+				x: st.pos.x - base.x,
+				y: st.pos.y - base.y
+			};
+		}
+		if (Object.keys(moved).length) await saveStopPositions(chain.id, moved);
+		toast("Split off “" + groundedName$1(chain) + "”");
+	}
+}
+var posStepOf = (n) => firstStepOf(n);
+function withLocalPos(d, local) {
+	if (!Object.keys(local).length) return d;
+	const put = (n) => {
+		const st = posStepOf(n);
+		const p = st ? local[st.id] : void 0;
+		if (!st || !p) return n;
+		if (n.step) return {
+			...n,
+			step: {
+				...n.step,
+				pos: p
+			}
+		};
+		if (n.group && n.group.steps.length) return {
+			...n,
+			group: {
+				...n.group,
+				steps: [{
+					...n.group.steps[0],
+					pos: p
+				}, ...n.group.steps.slice(1)]
+			}
+		};
+		return n;
+	};
+	return {
+		...d,
+		nodes: d.nodes.map(put)
+	};
+}
+function useNodeMoves(flightId, d, chainKey) {
+	const [local, setLocal] = (0, import_react.useState)({});
+	const [mine, setMine] = (0, import_react.useState)(() => chainKey ? loadNodePos(chainKey) : {});
+	(0, import_react.useEffect)(() => setMine(chainKey ? loadNodePos(chainKey) : {}), [chainKey]);
+	(0, import_react.useEffect)(() => {
+		const ids = Object.keys(local);
+		if (!ids.length) return;
+		const saved = /* @__PURE__ */ new Map();
+		for (const n of d.nodes) {
+			const st = posStepOf(n);
+			if (st) saved.set(st.id, st.pos);
+		}
+		const keep = ids.filter((id) => {
+			const s = saved.get(id);
+			return !(s && s.x === local[id].x && s.y === local[id].y);
+		});
+		if (keep.length !== ids.length) setLocal(Object.fromEntries(keep.map((id) => [id, local[id]])));
+	}, [d, local]);
+	const move = flightId || chainKey ? (node, pos) => {
+		const p = {
+			x: Math.round(pos.x),
+			y: Math.round(pos.y)
+		};
+		const st = posStepOf(node.node);
+		if (st && flightId) {
+			setLocal((l) => ({
+				...l,
+				[st.id]: p
+			}));
+			queueStopPos(flightId, st.id, p, (ok) => {
+				if (!ok) setLocal((l) => Object.fromEntries(Object.entries(l).filter(([id]) => id !== st.id)));
+			});
+			return;
+		}
+		if (!st && chainKey) setMine((m) => {
+			const next = {
+				...m,
+				[node.id]: p
+			};
+			saveNodePos(chainKey, next);
+			return next;
+		});
+	} : void 0;
+	return {
+		diagram: (0, import_react.useMemo)(() => withNodePos(withLocalPos(d, local), mine), [
+			d,
+			local,
+			mine
+		]),
+		move
+	};
+}
+function withNodePos(d, spots) {
+	if (!Object.keys(spots).length) return d;
+	return {
+		...d,
+		nodes: d.nodes.map((n) => !n.step && !n.group && spots[n.id] ? {
+			...n,
+			pos: spots[n.id]
+		} : n)
+	};
+}
+function useChainEntry(register, graph, wrap, paletteAfter) {
+	const palRef = (0, import_react.useRef)(paletteAfter);
+	palRef.current = paletteAfter;
+	const pal = (0, import_react.useCallback)((a, p) => palRef.current(a, p), []);
+	const last = (0, import_react.useRef)(null);
+	(0, import_react.useLayoutEffect)(() => {
+		if (!register) return;
+		const el = wrap.current;
+		const dx = el ? el.offsetLeft : 0;
+		const dy = el ? el.offsetTop : 0;
+		const l = last.current;
+		if (l && l.graph === graph && l.dx === dx && l.dy === dy) return;
+		last.current = {
+			graph,
+			dx,
+			dy
+		};
+		register({
+			graph,
+			dx,
+			dy,
+			paletteAfter: pal
+		});
+	});
+	(0, import_react.useEffect)(() => {
+		if (!register) return;
+		return () => {
+			last.current = null;
+			register(null);
+		};
+	}, [register]);
+}
+function useTourHooks(root, hooks) {
+	(0, import_react.useEffect)(() => {
+		const el = root.current;
+		if (!el) return;
+		for (const [sel, name] of Object.entries(hooks)) {
+			const t = el.querySelector(sel);
+			if (t && t.getAttribute("data-tour") !== name) t.setAttribute("data-tour", name);
+		}
+	});
+}
+//#endregion
+//#region src/components/flights/FlightChain.tsx
+function FlightChain({ title, line, kinds, label }) {
+	const row = line.row;
+	const ss = deriveSessionState(row || {});
+	const flightId = line.flight?.id || "";
+	const moves = useNodeMoves(line.flight?.id, line.graphDiagram, title);
+	const sessionNode = (0, import_react.useMemo)(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
+	const where = row ? lineWhere(line.diagram) : "";
+	const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : where || (row ? firstLine$1(row.task_headline || row.task || "") : "");
+	const head = (0, import_react.useMemo)(() => ({
+		kind: "session",
+		title: windowName(title),
+		sub: headSub,
+		session: title,
+		color: chainColor(title),
+		node: sessionNode
+	}), [
+		title,
+		headSub,
+		sessionNode
+	]);
+	const graph = (0, import_react.useMemo)(() => chainGraph(moves.diagram, {
+		head,
+		key: title,
+		flightId
+	}), [
+		moves.diagram,
+		head,
+		title,
+		flightId
+	]);
+	const gc = line.graphCanvas;
+	const chainMenu = useChainMenu(gc, flightId);
+	const onPillDown = pillAimer(graph, gc.onLoopTo);
+	const rootRef = (0, import_react.useRef)(null);
+	const [band, setBand] = (0, import_react.useState)(null);
+	const onPortDown = (src, side, e) => {
+		if (side !== "out" || e.button !== 0) return;
+		e.preventDefault();
+		const r = e.currentTarget.getBoundingClientRect();
+		const x1 = r.left + r.width / 2;
+		const y1 = r.top + r.height / 2;
+		const sx = e.clientX;
+		const sy = e.clientY;
+		let moved = false;
+		const nodeAt = (x, y) => {
+			const el = document.elementFromPoint(x, y)?.closest("[data-node]");
+			if (!el || !rootRef.current?.contains(el)) return null;
+			const id = el.getAttribute("data-node");
+			return graph.nodes.find((n) => n.id === id) || null;
+		};
+		const intentFor = (x, y) => {
+			const dst = nodeAt(x, y);
+			return dst ? wireIntent({
+				chain: graph,
+				node: src,
+				side: "out"
+			}, {
+				chain: graph,
+				node: dst,
+				side: "in"
+			}) : null;
+		};
+		const move = (ev) => {
+			if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 4) return;
+			moved = true;
+			const it = intentFor(ev.clientX, ev.clientY);
+			setBand({
+				x1,
+				y1,
+				x2: ev.clientX,
+				y2: ev.clientY,
+				over: !!it && it.op !== "none"
+			});
+		};
+		const stop = () => {
+			window.removeEventListener("pointermove", move);
+			window.removeEventListener("pointerup", up);
+			window.removeEventListener("pointercancel", stop);
+			setBand(null);
+		};
+		const up = (ev) => {
+			stop();
+			if (!moved) return;
+			const it = intentFor(ev.clientX, ev.clientY);
+			if (!it) {
+				if (src.id === HEAD_ID) line.togglePalette(true);
+				else line.paletteAfter(src.node, null);
+				return;
+			}
+			if (it.op === "loop") gc.onLoopFrom?.(it.from, it.to);
+			else if (it.op === "move" && it.step.index !== void 0) {
+				const from = it.step.index;
+				const after = it.after?.index ?? -1;
+				const to = after < from ? after + 1 : after;
+				gc.onMove?.(from, to);
+			}
+		};
+		window.addEventListener("pointermove", move);
+		window.addEventListener("pointerup", up);
+		window.addEventListener("pointercancel", stop);
+	};
+	const onOpen = (n) => gc.onOpen?.(n);
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		ref: rootRef,
+		className: "fl-chain-view sky-own-scroll",
+		"aria-label": label,
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyChain, {
+				graph,
+				zoom: 1,
+				selected: gc.selected,
+				bird: birdPerch(moves.diagram),
+				kinds,
+				onSelect: gc.onSelect,
+				onEdit: gc.onEdit,
+				onOpen,
+				onRemove: gc.onRemove,
+				onLoopPill: (via) => gc.onEdit?.(via),
+				onPillDown,
+				onMenu: chainMenu.onMenu,
+				onNodeMove: moves.move,
+				onPortDown,
+				onPlus: (after) => after && after.id !== HEAD_ID ? line.paletteAfter(after.node, null) : line.togglePalette(true),
+				renderInBox: gc.renderInBox ? (n) => gc.renderInBox(n) : void 0,
+				renderHead: () => line.flight?.state === "ready" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReadyHead, { flight: line.flight }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "sky-head-chip fl-box-chip tone-" + ss.tone,
+					title: ss.hint,
+					children: ss.label
+				})
+			}),
+			chainMenu.menu,
+			band && (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+				className: "sky-connect" + (band.over ? " is-over" : ""),
+				"aria-hidden": "true",
+				focusable: "false",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: `M ${band.x1} ${band.y1} C ${band.x1 + 60} ${band.y1}, ${band.x2 - 60} ${band.y2}, ${band.x2} ${band.y2}` }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+					cx: band.x2,
+					cy: band.y2,
+					r: 5
+				})]
+			}), document.body)
+		]
+	});
 }
 //#endregion
 //#region src/lib/whenHelp.ts
@@ -86241,6 +87784,83 @@ function DescribeField({ want = "step", taken, onStops, placeholder = "Describe 
 	});
 }
 //#endregion
+//#region src/lib/flightOptimism.ts
+function patchFlightCache(id, edit) {
+	const key = ["flights"];
+	queryClient.cancelQueries({ queryKey: key });
+	const before = queryClient.getQueryData(key);
+	if (!before) return () => {};
+	queryClient.setQueryData(key, before.map((f) => f.id === id ? edit(f) : f));
+	return () => queryClient.setQueryData(key, before);
+}
+async function optimistic(id, edit, request) {
+	const rollback = patchFlightCache(id, edit);
+	try {
+		const ok = await request();
+		if (!ok) rollback();
+		return ok;
+	} catch (err) {
+		rollback();
+		throw err;
+	}
+}
+function withoutSteps(ids) {
+	return (f) => {
+		const before = f.steps.slice(0, Math.max(0, f.cursor)).filter((s) => ids.has(s.id)).length;
+		return {
+			...f,
+			steps: f.steps.filter((s) => !ids.has(s.id)),
+			cursor: Math.max(0, f.cursor - before)
+		};
+	};
+}
+var tmp = 0;
+var PENDING = {
+	state: "pending",
+	since: 0,
+	note: "",
+	detail: {},
+	rounds: 0
+};
+function withSteps(steps, at) {
+	return (f) => {
+		const fresh = steps.map((s) => ({
+			...s,
+			id: "s_tmp" + ++tmp
+		}));
+		const i = at === void 0 ? f.steps.length : Math.max(0, Math.min(at, f.steps.length));
+		const states = { ...f.step_states };
+		for (const s of fresh) states[s.id] = {
+			...PENDING,
+			since: Date.now() / 1e3
+		};
+		return {
+			...f,
+			steps: [
+				...f.steps.slice(0, i),
+				...fresh,
+				...f.steps.slice(i)
+			],
+			step_states: states,
+			cursor: i <= f.cursor && f.state !== "grounded" ? f.cursor + fresh.length : f.cursor
+		};
+	};
+}
+async function optimisticDelete(id, request) {
+	const key = ["flights"];
+	queryClient.cancelQueries({ queryKey: key });
+	const before = queryClient.getQueryData(key);
+	if (before) queryClient.setQueryData(key, before.filter((f) => f.id !== id));
+	try {
+		const ok = await request();
+		if (!ok && before) queryClient.setQueryData(key, before);
+		return ok;
+	} catch (err) {
+		if (before) queryClient.setQueryData(key, before);
+		throw err;
+	}
+}
+//#endregion
 //#region src/lib/skyUndo.ts
 var UNDO_MAX = 20;
 var UNDO_TTL_MS = 6e5;
@@ -86988,7 +88608,7 @@ function useSessionLine(title, src, opts) {
 	const [expandedGroups, setExpandedGroups] = (0, import_react.useState)(() => /* @__PURE__ */ new Set());
 	const row = rows.find((r) => r.title === title);
 	const flRow = row?.flight;
-	const flight = flRow && isLive(flRow) ? flights?.find((f) => f.id === flRow.id) || null : null;
+	const flight = flRow && isShown(flRow) ? flights?.find((f) => f.id === flRow.id) || null : null;
 	const line = (0, import_react.useMemo)(() => sessionDiagram(rows, title, {
 		flights,
 		kinds,
@@ -87038,11 +88658,11 @@ function useSessionLine(title, src, opts) {
 		try {
 			if (flight) {
 				const where = at !== null && at < end ? at : void 0;
-				if (await tackOn(flight.id, step, where) && openIt) setSelectIndex(where ?? end);
+				if (await optimistic(flight.id, withSteps([step], where), () => tackOn(flight.id, step, where)) && openIt) setSelectIndex(where ?? end);
 			} else {
-				const f = await tackOnNew(title, [step]);
+				const f = await tackOnNew(title, [step], "prompt");
 				if (f) {
-					toast("Took off: " + (f.plan_name || "a new flight"));
+					toast("Ready: " + (f.plan_name || "a new chain") + " — it runs on ▶ Run or your next prompt");
 					if (openIt) setSelectIndex(f.steps.length - 1);
 				}
 			}
@@ -87056,10 +88676,14 @@ function useSessionLine(title, src, opts) {
 		try {
 			if (flight) {
 				const where = at !== null && at < end ? at : void 0;
-				if (await tackOnPlan(flight.id, plan.id, where)) toast("Tacked on “" + plan.name + "”" + (plan.steps ? " — " + plan.steps.length + (plan.steps.length === 1 ? " stop" : " stops") : ""));
+				const steps = plan.steps || plans.find((p) => p.id === plan.id)?.steps;
+				const fid = flight.id;
+				const go = () => tackOnPlan(fid, plan.id, where);
+				if (await (steps?.length ? optimistic(fid, withSteps(steps, where), go) : go())) toast("Tacked on “" + plan.name + "”" + (plan.steps ? " — " + plan.steps.length + (plan.steps.length === 1 ? " stop" : " stops") : ""));
 			} else await takeOff({
 				plan_id: plan.id,
-				title
+				title,
+				start_on: "prompt"
 			});
 		} finally {
 			setBusy(false);
@@ -87070,7 +88694,7 @@ function useSessionLine(title, src, opts) {
 		const id = flight.id;
 		const wasHere = index === flight.cursor;
 		const next = flight.steps[index + 1]?.title;
-		if (!await dropStop(id, step.id)) return false;
+		if (!await optimistic(id, withoutSteps(/* @__PURE__ */ new Set([step.id])), () => dropStop(id, step.id))) return false;
 		const entry = pushUndo({
 			label: "Remove “" + step.title + "”",
 			undo: () => {
@@ -87094,7 +88718,7 @@ function useSessionLine(title, src, opts) {
 		const first = n.index;
 		const wasHere = flight.cursor >= first && flight.cursor < first + g.total;
 		const next = flight.steps[first + g.total]?.title;
-		if (!await dropGroup(id, g.steps[0].id)) return false;
+		if (!await optimistic(id, withoutSteps(new Set(g.steps.map((s) => s.id))), () => dropGroup(id, g.steps[0].id))) return false;
 		const entry = pushUndo({
 			label: "Remove “" + g.name + "”",
 			undo: () => {
@@ -87163,7 +88787,8 @@ function useSessionLine(title, src, opts) {
 				if (await tackOnPlan(flight.id, plan.id)) toast("Tacked on “" + plan.name + "” — " + plan.steps.length + " stops");
 			} else await takeOff({
 				plan_id: plan.id,
-				title
+				title,
+				start_on: "prompt"
 			});
 		} finally {
 			setBusy(false);
@@ -87510,11 +89135,11 @@ function SessionFlight({ inst, active = true }) {
 				]
 			}),
 			cancel.node,
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlywayCanvas, {
-				diagram,
-				label: "What " + windowName(title) + " is doing and will do",
-				bird: birdPerch(diagram),
-				...line.canvas
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlightChain, {
+				title,
+				line,
+				kinds,
+				label: "What " + windowName(title) + " is doing and will do"
 			}),
 			line.palette,
 			line.inspector,
@@ -87646,7 +89271,6 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 	const threadSeen = useUi((s) => s.threadLastSeen[title] || 0);
 	const threadShown = threadTabShown(!!family.parent || family.children.length > 0 || inst.run?.role === "lead", threadOpened || lastTab === "thread");
 	const badge = threadBadge(family.children, threadSeen, effectiveActivity);
-	const flightShown = hasSessionDiagram(allRows ?? [], title);
 	const flightNeeds = rowWaitsOnYou(inst.flight) || inst.flight?.state === "halted";
 	const newestReport = newestReportTs(family.children);
 	const seenAt = (0, import_react.useCallback)(() => codemapSeenAt(title), [title]);
@@ -88133,7 +89757,7 @@ function Pane({ inst, drag = NO_DRAG, dragging = false, embedded = false }) {
 		calm,
 		queueBusy: pending > 0 || holding,
 		mapBusy: mapHasState(inst, rzChip),
-		flight: flightShown,
+		flight: true,
 		ftBusy: !!ft && (ft.lane !== "leave" || ft.halted || ft.active || !!ftMenu)
 	});
 	const shows = (id) => items.buttons.includes(id);
@@ -131389,1123 +133013,6 @@ function ageWord(activitySince, now = Date.now()) {
 	return days + (days === 1 ? " day" : " days") + " still";
 }
 //#endregion
-//#region src/components/flights/useChainMenu.tsx
-var HERE = /* @__PURE__ */ new Set([
-	"current",
-	"perched",
-	"halted",
-	"paused"
-]);
-function useChainMenu(h, flightId) {
-	const [open, setOpen] = (0, import_react.useState)(null);
-	const onMenu = (n, at) => setOpen({
-		n,
-		x: at.clientX,
-		y: at.clientY
-	});
-	if (!open || typeof document === "undefined") return {
-		onMenu,
-		menu: null
-	};
-	const n = open.n;
-	const live = !!flightId && (!!n.step || n.kind === "group");
-	const items = menuItemsFor(n, {
-		can: {
-			edit: !!(h.onEdit || h.onSelect),
-			duplicate: !!h.onDuplicate,
-			remove: !!h.onRemove,
-			open: !!h.onOpen,
-			halt: !!h.onToggleHalt
-		},
-		live,
-		here: live && HERE.has(n.state)
-	});
-	if (!items.length) return {
-		onMenu,
-		menu: null
-	};
-	const step = n.step?.id || "";
-	const pick = (key) => {
-		if (key === "edit") (h.onEdit || h.onSelect)?.(n);
-		else if (key === "duplicate") h.onDuplicate?.(n);
-		else if (key === "remove") h.onRemove?.(n);
-		else if (key === "halt") h.onToggleHalt?.(n);
-		else if (key === "done") stepDone(flightId, step);
-		else if (key === "skip") stepSkip(flightId, step);
-		else if (key === "retry") stepRetry(flightId, step);
-		else if (key === "pause" || key === "resume") controlFlight(flightId, key);
-		else if (key === "open" || key === "tackon") h.onOpen?.(n);
-	};
-	return {
-		onMenu,
-		menu: (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-			className: "sky-chain-menu",
-			style: {
-				position: "fixed",
-				left: 0,
-				top: 0,
-				width: 0,
-				height: 0,
-				zIndex: 80,
-				["--sky-z"]: 1
-			},
-			children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopMenu, {
-				x: open.x,
-				y: open.y,
-				label: "“" + n.title + "” — what you can do",
-				items,
-				onPick: (key) => {
-					pick(key);
-					setOpen(null);
-				},
-				onClose: () => setOpen(null)
-			})
-		}), document.body)
-	};
-}
-function pillAimer(graph, onLoopTo) {
-	return (via, e) => {
-		if (!onLoopTo || !via.editable || e.button !== 0) return;
-		const wire = graph.wires.find((w) => w.via?.id === via.id);
-		const end = graph.nodes.find((n) => n.id === wire?.from);
-		if (!end || end.node.index === void 0) return;
-		const sx = e.clientX;
-		const sy = e.clientY;
-		let moved = false;
-		let lit = null;
-		const targetAt = (x, y) => {
-			const el = document.elementFromPoint(x, y)?.closest("[data-node]");
-			if (!el || el.closest("[data-chain]")?.getAttribute("data-chain") !== graph.key) return null;
-			const n = graph.nodes.find((g) => g.id === el.getAttribute("data-node"));
-			return n && loopable(n.node) && n.node.index <= end.node.index ? {
-				el,
-				n
-			} : null;
-		};
-		const light = (el) => {
-			if (lit === el) return;
-			lit?.classList.remove("sky-aim-over");
-			el?.classList.add("sky-aim-over");
-			lit = el;
-		};
-		const stop = () => {
-			window.removeEventListener("pointermove", move);
-			window.removeEventListener("pointerup", up);
-			window.removeEventListener("pointercancel", stop);
-			window.removeEventListener("keydown", key, true);
-			light(null);
-			if (moved) {
-				const eat = (c) => {
-					c.stopPropagation();
-					c.preventDefault();
-				};
-				window.addEventListener("click", eat, {
-					capture: true,
-					once: true
-				});
-				setTimeout(() => window.removeEventListener("click", eat, { capture: true }), 0);
-			}
-		};
-		const move = (ev) => {
-			if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 4) return;
-			moved = true;
-			const t = targetAt(ev.clientX, ev.clientY);
-			light(t ? t.el.closest(".sky-node") ?? t.el : null);
-		};
-		const up = (ev) => {
-			const t = moved ? targetAt(ev.clientX, ev.clientY) : null;
-			stop();
-			if (t) onLoopTo(via, t.n.node);
-		};
-		const key = (ev) => {
-			if (ev.key !== "Escape") return;
-			ev.preventDefault();
-			ev.stopPropagation();
-			stop();
-		};
-		window.addEventListener("pointermove", move);
-		window.addEventListener("pointerup", up);
-		window.addEventListener("pointercancel", stop);
-		window.addEventListener("keydown", key, true);
-	};
-}
-//#endregion
-//#region src/components/flights/StopIcons.tsx
-var FAMILY = {
-	agent: "work",
-	split: "work",
-	join: "work",
-	command: "work",
-	test: "work",
-	sync: "work",
-	checkpoint: "work",
-	judge: "work",
-	screenshot: "work",
-	preview: "work",
-	ship: "ship",
-	checks: "ship",
-	reviews: "ship",
-	land: "ship",
-	wait: "outside",
-	notify: "outside",
-	ticket: "outside",
-	budget: "outside",
-	call: "outside",
-	listen: "outside",
-	you: "people",
-	perch: "people",
-	verify: "people",
-	review: "people",
-	someone: "people",
-	loop: "flow",
-	handoff: "flow"
-};
-var FAMILIES = /* @__PURE__ */ new Set([
-	"work",
-	"ship",
-	"outside",
-	"people",
-	"flow"
-]);
-function kindFamily(kind, kinds) {
-	const f = kinds?.find((k) => k.kind === kind)?.family;
-	if (f && FAMILIES.has(f)) return f;
-	return FAMILY[kind] || "outside";
-}
-function nodeFamily(n, kinds) {
-	if (n.perch) return "people";
-	if (n.kind === "group") return n.group?.steps[0] ? kindFamily(n.group.steps[0].kind, kinds) : "work";
-	if (n.kind === "session" || n.kind === "child" || n.kind === "branch" || n.kind === "parent") return "work";
-	return kindFamily(n.icon, kinds);
-}
-function TileIcon({ kind, size = 28 }) {
-	if (kind === "handoff") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-		className: "fl-stop-icon",
-		width: size,
-		height: size,
-		viewBox: "0 0 24 24",
-		fill: "none",
-		stroke: "currentColor",
-		strokeWidth: "1.8",
-		strokeLinecap: "round",
-		strokeLinejoin: "round",
-		"aria-hidden": "true",
-		focusable: "false",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M13.5 4.5H19.5V10.5" }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M19.5 4.5L10 14" }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M17 13.5V18a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 18V8.5A1.5 1.5 0 0 1 6 7h4.5" })
-		]
-	});
-	if (kind === "group") return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-		className: "fl-stop-icon",
-		width: size,
-		height: size,
-		viewBox: "0 0 24 24",
-		fill: "none",
-		stroke: "currentColor",
-		strokeWidth: "1.8",
-		strokeLinecap: "round",
-		strokeLinejoin: "round",
-		"aria-hidden": "true",
-		focusable: "false",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M12 3.5l8.5 4.25L12 12 3.5 7.75z" }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3.5 12L12 16.25 20.5 12" }),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: "M3.5 16.25L12 20.5l8.5-4.25" })
-		]
-	});
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(StopIcon, {
-		kind,
-		size
-	});
-}
-//#endregion
-//#region src/components/flights/SkyChain.tsx
-var DRAG_MIN = 4;
-var STATE_WORD = {
-	done: "done",
-	current: "flying now",
-	perched: "waiting on you",
-	halted: "halted",
-	paused: "paused",
-	pending: "to come",
-	skipped: "skipped",
-	failed: "failed",
-	edit: "",
-	session: ""
-};
-var isStopish = (n) => n.kind === "stop" || n.kind === "group";
-function tileSub(n) {
-	if (n.kind === "group" && n.group) return n.group.done + " of " + n.group.total + (n.group.current ? " · " + n.group.current.title : "");
-	if (n.receipt) return n.receipt;
-	return n.sub;
-}
-function tileLabel(n, head = false) {
-	if (head) return (n.title || "Session") + (n.chip ? " — " + n.chip.label : "") + (n.sub ? ", " + n.sub : "");
-	const word = STATE_WORD[n.state] ?? "";
-	const sub = tileSub(n);
-	return n.title + (word ? " — " + word : "") + (sub ? ", " + sub : "") + (n.reason ? " (" + n.reason + ")" : "");
-}
-function SkyChain(p) {
-	const [drag, setDrag] = (0, import_react.useState)(null);
-	const dragRef = (0, import_react.useRef)(null);
-	const justDragged = (0, import_react.useRef)(false);
-	const plusPress = (0, import_react.useRef)(null);
-	const g = (0, import_react.useMemo)(() => drag?.live ? moveNode(p.graph, drag.id, drag.pos) : p.graph, [p.graph, drag]);
-	const head = g.head;
-	const all = g.headNode ? [g.headNode, ...g.nodes] : g.nodes;
-	const byId = new Map(all.map((n) => [n.id, n]));
-	const zoom = p.zoom > 0 ? p.zoom : 1;
-	const headNodeId = head.node?.id;
-	const isSel = (n) => !!p.selected && (p.selected === n.id || n.id === HEAD_ID && p.selected === headNodeId);
-	const firstStop = g.nodes.find((n) => n.node.row === "main") || null;
-	const activate = (n) => {
-		if (justDragged.current) return;
-		if (n.id !== HEAD_ID && isStopish(n.node)) p.onSelect?.(n.node);
-		else p.onOpen?.(n.node);
-	};
-	const edit = (n) => p.onEdit ? p.onEdit(n.node) : p.onSelect?.(n.node);
-	const draggable = (n) => !!p.onNodeMove && n.id !== HEAD_ID && isStopish(n.node);
-	const endDrag = (commit) => {
-		const d = dragRef.current;
-		dragRef.current = null;
-		setDrag(null);
-		if (!d) return;
-		if (d.live) {
-			justDragged.current = true;
-			setTimeout(() => justDragged.current = false, 0);
-			const n = p.graph.nodes.find((x) => x.id === d.id);
-			if (commit && n && (d.pos.x !== n.x || d.pos.y !== n.y)) p.onNodeMove?.(n, d.pos);
-		}
-	};
-	const onDown = (e, n) => {
-		if (e.button !== 0 || !draggable(n)) return;
-		if (e.target.closest("button, input, textarea, a, [data-port], [data-no-drag]")) return;
-		e.stopPropagation();
-		try {
-			e.currentTarget.setPointerCapture(e.pointerId);
-		} catch {}
-		const d = {
-			id: n.id,
-			pointer: e.pointerId,
-			sx: e.clientX,
-			sy: e.clientY,
-			x0: n.x,
-			y0: n.y,
-			live: false,
-			pos: {
-				x: n.x,
-				y: n.y
-			}
-		};
-		dragRef.current = d;
-		setDrag(d);
-	};
-	const onMove = (e) => {
-		const d = dragRef.current;
-		if (!d || d.pointer !== e.pointerId) return;
-		const dx = e.clientX - d.sx;
-		const dy = e.clientY - d.sy;
-		if (!d.live && Math.hypot(dx, dy) < DRAG_MIN) return;
-		const next = {
-			...d,
-			live: true,
-			pos: snapPos({
-				x: d.x0 + dx / zoom,
-				y: d.y0 + dy / zoom
-			}, e.altKey)
-		};
-		dragRef.current = next;
-		setDrag(next);
-	};
-	const onUp = (e) => {
-		const d = dragRef.current;
-		if (!d || d.pointer !== e.pointerId) return;
-		endDrag(e.type === "pointerup");
-	};
-	const onKey = (e, n) => {
-		if (e.key === "Escape" && dragRef.current) {
-			e.preventDefault();
-			endDrag(false);
-			return;
-		}
-		if (e.target !== e.currentTarget) return;
-		if (e.key === "Enter") {
-			e.preventDefault();
-			if (n.id !== HEAD_ID && isStopish(n.node)) edit(n);
-			else p.onOpen?.(n.node);
-		} else if (e.key === " ") {
-			e.preventDefault();
-			activate(n);
-		} else if ((e.key === "Delete" || e.key === "Backspace") && n.id !== HEAD_ID && isStopish(n.node) && p.onRemove) {
-			e.preventDefault();
-			p.onRemove(n.node);
-		}
-	};
-	const portDown = (e, n, side) => {
-		if (e.button !== 0) return;
-		e.stopPropagation();
-		p.onPortDown?.(n, side, e);
-	};
-	const port = (n, side, wired) => {
-		const live = side === "in" ? n.inPort : n.outPort;
-		if (!live && !wired) return null;
-		const cls = "sky-port sky-port-" + side + (live ? "" : " sky-port-off");
-		const title = side === "in" ? "Drag from here to pull this stop and the ones after it off into a chain of their own" : "Drag from here to wire it to a stop, another chain or empty sky";
-		return live ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: cls,
-			"data-port": side,
-			"data-node": n.id,
-			title,
-			onPointerDown: (e) => portDown(e, n, side)
-		}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-			className: cls,
-			"aria-hidden": "true"
-		});
-	};
-	const wiredIn = new Set(g.wires.filter((w) => w.kind !== "add").map((w) => w.to));
-	const wiredOut = new Set(g.wires.map((w) => w.from));
-	const birdOn = (() => {
-		const b = p.bird;
-		if (!b) return null;
-		const id = b.nodeId === headNodeId ? HEAD_ID : b.nodeId;
-		return byId.get(id) || null;
-	})();
-	const tile = (n) => {
-		const isHead = n.id === HEAD_ID;
-		const dn = n.node;
-		const fam = nodeFamily(dn, p.kinds);
-		const halt = isHead ? null : haltMark(dn);
-		const sub = isHead ? head.sub : tileSub(dn);
-		const cls = [
-			"sky-node",
-			isHead ? "sky-head sky-head-" + head.kind : "sky-node-" + dn.kind,
-			"st-" + dn.state,
-			"sky-fam-" + fam,
-			isHead && dn.chip ? "tone-" + dn.chip.tone : "",
-			dn.kind === "group" ? "is-group" : "",
-			dn.perch ? "is-perch" : "",
-			n.inPort || n.outPort ? "" : "is-fixed",
-			isSel(n) ? "is-selected" : "",
-			p.highlighted?.has(n.id) || isHead && headNodeId && p.highlighted?.has(headNodeId) ? "is-highlighted" : "",
-			p.targets?.has(n.id) ? "is-target" : "",
-			p.over === n.id ? "is-over" : "",
-			drag?.live && drag.id === n.id ? "is-dragging" : "",
-			draggable(n) ? "is-draggable" : ""
-		].filter(Boolean).join(" ");
-		const said = tileLabel(isHead ? {
-			...dn,
-			title: head.title,
-			sub: head.sub
-		} : dn, isHead);
-		return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			role: "listitem",
-			tabIndex: 0,
-			className: cls,
-			"data-node": n.id,
-			"data-diagram-node": dn.id,
-			"aria-label": said,
-			"aria-current": isSel(n) ? "true" : void 0,
-			title: isHead ? void 0 : dn.reason ? dn.title + " — " + dn.reason : sub ? dn.title + " — " + sub : dn.title,
-			style: {
-				transform: `translate(${n.x}px, ${n.y}px)`,
-				width: n.w,
-				height: n.h,
-				...isHead ? { ["--sky-head-color"]: head.color } : {}
-			},
-			onPointerDown: (e) => onDown(e, n),
-			onPointerMove: onMove,
-			onPointerUp: onUp,
-			onPointerCancel: onUp,
-			onClick: (e) => {
-				if (e.target.closest("[data-port], [data-no-drag], button")) return;
-				activate(n);
-			},
-			onDoubleClick: (e) => {
-				if (isHead || !isStopish(dn) || !p.onEdit) return;
-				if (e.target.closest("button, input, textarea, a, [data-port]")) return;
-				e.preventDefault();
-				edit(n);
-			},
-			onKeyDown: (e) => onKey(e, n),
-			onContextMenu: (e) => {
-				if (!p.onMenu) return;
-				e.preventDefault();
-				e.stopPropagation();
-				p.onMenu(dn, {
-					clientX: e.clientX,
-					clientY: e.clientY
-				});
-			},
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-					className: "sky-tile",
-					style: {
-						width: TILE,
-						height: TILE
-					},
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "sky-tile-icon",
-							children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TileIcon, {
-								kind: isHead ? head.kind === "trigger" ? "handoff" : "session" : dn.perch ? "perch" : dn.icon,
-								size: 28
-							})
-						}),
-						isHead && head.kind !== "none" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "sky-head-dot",
-							"aria-hidden": "true"
-						}),
-						!isHead && dn.state === "done" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "sky-badge sky-badge-done",
-							"aria-hidden": "true",
-							children: "✓"
-						}),
-						!isHead && dn.state === "failed" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "sky-badge sky-badge-failed",
-							"aria-hidden": "true",
-							children: "!"
-						}),
-						halt && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "sky-badge sky-badge-halt",
-							title: halt.title,
-							"aria-label": halt.title,
-							role: "img",
-							children: halt.glyph
-						}),
-						!isHead && dn.when && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "sky-badge sky-badge-if",
-							title: "Only when " + dn.when,
-							"aria-label": "Only when " + dn.when,
-							role: "img",
-							children: "if"
-						}),
-						port(n, "in", wiredIn.has(n.id)),
-						port(n, "out", wiredOut.has(n.id)),
-						!isHead && dn.risk && dn.risk.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-							className: "sky-risk",
-							title: riskTitle(dn.risk),
-							role: "img",
-							"aria-label": "Touches: " + riskTitle(dn.risk),
-							"data-risk": dn.risk.join(" "),
-							children: dn.risk.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("i", { className: "sky-risk-" + t }, t))
-						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "sky-node-title",
-					children: isHead ? head.title : dn.title
-				}),
-				sub && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "sky-node-sub",
-					children: sub
-				}),
-				isHead ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "sky-head-extra",
-					"data-no-drag": true,
-					children: p.renderHead ? p.renderHead() : dn.chip ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "sky-head-chip tone-" + dn.chip.tone,
-						children: dn.chip.label
-					}) : null
-				}) : p.renderInBox && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "sky-node-extra",
-					"data-no-drag": true,
-					children: p.renderInBox(dn)
-				})
-			]
-		}, n.id);
-	};
-	const wireClass = (w) => {
-		const to = byId.get(w.to)?.node;
-		const live = (w.kind === "line" || w.kind === "head" || w.kind === "fan") && to && (to.state === "current" || to.state === "perched");
-		return [
-			"sky-wire",
-			"sky-wire-" + w.kind,
-			w.done ? "is-done" : "",
-			live ? "is-live" : "",
-			w.loop ? "sky-loop-" + w.loop.state : ""
-		].filter(Boolean).join(" ");
-	};
-	const tinted = (w) => w.kind === "line" || w.kind === "head";
-	const b = g.bbox;
-	const plusAfter = g.plus ? byId.get(g.plus.after) || null : null;
-	const socket = head.kind === "none" && firstStop ? inPortOf(firstStop) : null;
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "sky-chain" + (p.className ? " " + p.className : "") + (drag?.live ? " is-dragging-node" : ""),
-		style: {
-			position: "relative",
-			width: Math.max(0, b.x + b.w),
-			height: Math.max(0, b.y + b.h),
-			["--sky-chain-color"]: head.color
-		},
-		"data-chain": g.key,
-		"data-flight": g.flightId || void 0,
-		"data-head": head.kind,
-		role: "list",
-		"aria-label": (head.kind === "session" ? "Chain in " + head.title : head.kind === "trigger" ? head.title : "Stops with no session yet") + " — drag a tile to move it, drag a port to wire it",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
-				className: "sky-wires",
-				"aria-hidden": "true",
-				focusable: "false",
-				style: {
-					left: b.x,
-					top: b.y
-				},
-				width: Math.max(1, b.w),
-				height: Math.max(1, b.h),
-				viewBox: `${b.x} ${b.y} ${Math.max(1, b.w)} ${Math.max(1, b.h)}`,
-				children: [g.wires.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
-					className: wireClass(w),
-					d: w.d,
-					"data-wire": w.kind,
-					"data-from": w.from,
-					"data-to": w.to,
-					style: tinted(w) ? { stroke: head.color } : void 0
-				}, w.id)), socket && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
-					className: "sky-wire sky-wire-socket",
-					d: `M ${socket.x - 16} ${socket.y} H ${socket.x}`
-				})]
-			}),
-			all.map(tile),
-			socket && firstStop && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "sky-socket" + (p.targets?.has(firstStop.id) ? " is-target" : "") + (p.over === firstStop.id ? " is-over" : ""),
-				style: {
-					left: socket.x - 24,
-					top: socket.y
-				},
-				"data-port": "in",
-				"data-node": firstStop.id,
-				"data-socket": "",
-				role: "img",
-				"aria-label": "Wire a session's out port here to run it",
-				title: "Wire a session's out port here to run it"
-			}),
-			g.plus && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "sky-plus fl-icon-btn",
-				style: {
-					left: g.plus.at.x,
-					top: g.plus.at.y
-				},
-				"data-port": "out",
-				"data-node": g.plus.after,
-				"data-plus": "",
-				"aria-label": "Add a stop after this one — or drag to wire it",
-				title: "Add a stop (drag to wire it somewhere)",
-				onPointerDown: (e) => {
-					if (e.button !== 0) return;
-					e.stopPropagation();
-					plusPress.current = {
-						pointer: e.pointerId,
-						sx: e.clientX,
-						sy: e.clientY,
-						sent: false
-					};
-				},
-				onPointerMove: (e) => {
-					const pr = plusPress.current;
-					if (!pr || pr.sent || pr.pointer !== e.pointerId || !plusAfter) return;
-					if (Math.hypot(e.clientX - pr.sx, e.clientY - pr.sy) < DRAG_MIN) return;
-					pr.sent = true;
-					p.onPortDown?.(plusAfter, "out", e);
-				},
-				onPointerUp: () => {
-					if (plusPress.current?.sent) {
-						justDragged.current = true;
-						setTimeout(() => justDragged.current = false, 0);
-					}
-					plusPress.current = null;
-				},
-				onPointerCancel: () => plusPress.current = null,
-				onClick: (e) => {
-					e.stopPropagation();
-					if (justDragged.current) return;
-					p.onPlus?.(plusAfter);
-				},
-				children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("svg", {
-					width: "12",
-					height: "12",
-					viewBox: "0 0 12 12",
-					"aria-hidden": "true",
-					focusable: "false",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
-						d: "M6 1.5v9M1.5 6h9",
-						stroke: "currentColor",
-						strokeWidth: "1.8",
-						strokeLinecap: "round"
-					})
-				})
-			}),
-			g.wires.map((w) => {
-				if (w.kind !== "loop" || !w.loop) return null;
-				const m = w.loop;
-				const v = w.via;
-				const text = loopPill(m) || loopIdlePill(m, v);
-				const title = (m.state === "pending" && m.runs === 0 ? "Loop: " + (v?.sub || text) : loopPillTitle(m)) + (v ? " — click to change it" : "");
-				const cls = [
-					"sky-loop-pill",
-					"sky-loop-" + m.state,
-					v ? "st-" + v.state : "",
-					v && p.selected === v.id ? "is-selected" : ""
-				].filter(Boolean).join(" ");
-				const style = {
-					left: w.mid.x,
-					top: w.mid.y
-				};
-				return v ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					role: "button",
-					tabIndex: 0,
-					className: cls,
-					style,
-					"data-node": v.id,
-					"data-pill": "",
-					title,
-					"aria-label": title,
-					onPointerDown: (e) => {
-						if (e.button !== 0) return;
-						e.stopPropagation();
-						p.onPillDown?.(v, e);
-					},
-					onClick: (e) => {
-						e.stopPropagation();
-						p.onLoopPill?.(v);
-					},
-					onContextMenu: (e) => {
-						if (!p.onMenu) return;
-						e.preventDefault();
-						e.stopPropagation();
-						p.onMenu(v, {
-							clientX: e.clientX,
-							clientY: e.clientY
-						});
-					},
-					onKeyDown: (e) => {
-						if (e.key === "Enter" || e.key === " ") {
-							e.preventDefault();
-							p.onLoopPill?.(v);
-						} else if ((e.key === "Delete" || e.key === "Backspace") && p.onRemove) {
-							e.preventDefault();
-							p.onRemove(v);
-						}
-					},
-					children: text
-				}, "pill:" + w.id) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: cls,
-					style,
-					title,
-					"aria-label": title,
-					role: "img",
-					children: text
-				}, "pill:" + w.id);
-			}),
-			birdOn && p.bird && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMarker, {
-				tone: p.bird.tone,
-				x: birdOn.x + birdOn.w / 2,
-				y: birdOn.y,
-				size: 22,
-				label: "The flight is at “" + (birdOn.id === HEAD_ID ? head.title : birdOn.node.title) + "”",
-				className: "sky-chain-bird"
-			})
-		]
-	});
-}
-//#endregion
-//#region src/components/flights/useSkyWiring.ts
-var HEAD = "head";
-var chainNodes = (g) => g.headNode ? [g.headNode, ...g.nodes] : g.nodes;
-var chainNode = (g, id) => id === HEAD ? g.headNode : g.nodes.find((n) => n.id === id) || null;
-var onPlane = (c, p) => ({
-	x: c.origin.x + c.dx + p.x,
-	y: c.origin.y + c.dy + p.y
-});
-var inChain = (c, p) => ({
-	x: p.x - c.origin.x - c.dx,
-	y: p.y - c.origin.y - c.dy
-});
-var portOnPlane = (c, n, side) => onPlane(c, side === "in" ? inPortOf(n) : outPortOf(n));
-function wireTargetsOf(src, chains, shift = false) {
-	const out = /* @__PURE__ */ new Map();
-	for (const c of chains) for (const n of chainNodes(c.graph)) {
-		if (wireIntent(src, {
-			chain: c.graph,
-			node: n,
-			side: "in"
-		}, { shift }).op === "none") continue;
-		let s = out.get(c.graph.key);
-		if (!s) out.set(c.graph.key, s = /* @__PURE__ */ new Set());
-		s.add(n.id);
-	}
-	return out;
-}
-function nodeUnder(el, chains) {
-	const nodeEl = el?.closest("[data-node]");
-	const chainEl = nodeEl?.closest(".sky-chain[data-chain]");
-	if (!nodeEl || !chainEl || nodeEl.closest(".skl-card")) return null;
-	const key = chainEl.getAttribute("data-chain") || "";
-	const c = chains.get(key);
-	const node = c ? chainNode(c.graph, nodeEl.getAttribute("data-node") || "") : null;
-	return c && node ? {
-		key,
-		node
-	} : null;
-}
-function entrySig(e) {
-	const g = e.graph;
-	return [
-		g.key,
-		g.flightId,
-		g.head.kind,
-		e.dx,
-		e.dy,
-		...chainNodes(g).map((n) => n.id + "@" + n.x + "," + n.y)
-	].join("|");
-}
-function useChainRegistry() {
-	const entries = (0, import_react.useRef)(/* @__PURE__ */ new Map());
-	const sigs = (0, import_react.useRef)(/* @__PURE__ */ new Map());
-	const registers = (0, import_react.useRef)(/* @__PURE__ */ new Map());
-	const [version, setVersion] = (0, import_react.useState)(0);
-	return {
-		entries,
-		registerFor: (0, import_react.useCallback)((key) => {
-			let r = registers.current.get(key);
-			if (!r) {
-				r = (e) => {
-					if (e) entries.current.set(key, e);
-					else entries.current.delete(key);
-					const sig = e ? entrySig(e) : "";
-					if (sig === (sigs.current.get(key) || "")) return;
-					if (sig) sigs.current.set(key, sig);
-					else sigs.current.delete(key);
-					setVersion((v) => v + 1);
-				};
-				registers.current.set(key, r);
-			}
-			return r;
-		}, []),
-		version
-	};
-}
-function useSkyWiring(opts) {
-	const optsRef = (0, import_react.useRef)(opts);
-	optsRef.current = opts;
-	const [band, setBand] = (0, import_react.useState)(null);
-	const [targets, setTargets] = (0, import_react.useState)(() => /* @__PURE__ */ new Map());
-	const [over, setOver] = (0, import_react.useState)(null);
-	const stop = (0, import_react.useRef)(null);
-	(0, import_react.useEffect)(() => () => stop.current?.(), []);
-	const startWire = (0, import_react.useCallback)((key, node, side, e) => {
-		const o = optsRef.current;
-		const chains = o.chains();
-		const c = chains.get(key);
-		if (!c) return;
-		stop.current?.();
-		const src = {
-			chain: c.graph,
-			node,
-			side
-		};
-		const el = e.currentTarget;
-		const r = el instanceof Element ? el.getBoundingClientRect() : null;
-		const from = r && (r.width || r.height) ? o.planeAt(r.left + r.width / 2, r.top + r.height / 2) : portOnPlane(c, node, side);
-		let shift = e.shiftKey;
-		setTargets(wireTargetsOf(src, chains.values(), shift));
-		setBand({
-			from,
-			to: from,
-			side,
-			over: false
-		});
-		setOver(null);
-		const pid = e.pointerId;
-		const sx = e.clientX;
-		const sy = e.clientY;
-		let moved = false;
-		const hit = (ev) => {
-			const at = typeof document !== "undefined" && document.elementFromPoint ? document.elementFromPoint(ev.clientX, ev.clientY) : null;
-			return {
-				el: at,
-				node: nodeUnder(at, optsRef.current.chains())
-			};
-		};
-		const move = (ev) => {
-			if (ev.pointerId !== pid) return;
-			if (!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) >= 3) moved = true;
-			const now = optsRef.current;
-			const to = now.planeAt(ev.clientX, ev.clientY);
-			if (ev.shiftKey !== shift) {
-				shift = ev.shiftKey;
-				setTargets(wireTargetsOf(src, now.chains().values(), shift));
-			}
-			const h = hit(ev).node;
-			const hc = h ? now.chains().get(h.key) : null;
-			const ok = !!h && !!hc && wireIntent(src, {
-				chain: hc.graph,
-				node: h.node,
-				side: "in"
-			}, { shift }).op !== "none";
-			setOver((cur) => ok ? cur?.key === h.key && cur.node === h.node.id ? cur : {
-				key: h.key,
-				node: h.node.id
-			} : null);
-			setBand({
-				from,
-				to,
-				side,
-				over: ok
-			});
-		};
-		const end = (commit, ev) => {
-			window.removeEventListener("pointermove", move);
-			window.removeEventListener("pointerup", up);
-			window.removeEventListener("pointercancel", cancel);
-			window.removeEventListener("keydown", esc, true);
-			stop.current = null;
-			setBand(null);
-			setTargets(/* @__PURE__ */ new Map());
-			setOver(null);
-			if (moved && typeof window !== "undefined") {
-				const eat = (c) => {
-					c.stopPropagation();
-					c.preventDefault();
-				};
-				window.addEventListener("click", eat, {
-					capture: true,
-					once: true
-				});
-				setTimeout(() => window.removeEventListener("click", eat, { capture: true }), 0);
-			}
-			if (!commit || !ev || !moved) return;
-			const now = optsRef.current;
-			const at = now.planeAt(ev.clientX, ev.clientY);
-			const h = hit(ev);
-			const placed = h.node ? now.chains().get(h.node.key) : null;
-			const dst = h.node && placed ? {
-				chain: placed.graph,
-				node: h.node.node,
-				side: "in"
-			} : now.ground(h.el) ? { sky: at } : null;
-			const intent = dst ? wireIntent(src, dst, { shift: ev.shiftKey }) : { op: "none" };
-			now.onIntent(intent, {
-				src,
-				at
-			});
-		};
-		const up = (ev) => {
-			if (ev.pointerId === pid) end(true, ev);
-		};
-		const cancel = (ev) => {
-			if (ev.pointerId === pid) end(false);
-		};
-		const esc = (ev) => {
-			if (ev.key !== "Escape") return;
-			ev.preventDefault();
-			ev.stopPropagation();
-			end(false);
-		};
-		stop.current = () => end(false);
-		window.addEventListener("pointermove", move);
-		window.addEventListener("pointerup", up);
-		window.addEventListener("pointercancel", cancel);
-		window.addEventListener("keydown", esc, true);
-	}, []);
-	const targetsOf = (key) => targets.get(key);
-	const overOf = (key) => over?.key === key ? over.node : null;
-	return {
-		band,
-		targets,
-		over,
-		startWire,
-		targetsOf,
-		overOf,
-		dragging: !!band
-	};
-}
-var groundedName$1 = (f) => f.plan_name || "Stops";
-var atOrEnd = (f, at) => at !== void 0 && at < f.steps.length ? at : void 0;
-async function runWireIntent(intent, ctx, d) {
-	if (intent.op === "none") return;
-	if (intent.op === "attach") {
-		await d.merge(intent.chain, intent.session);
-		return;
-	}
-	if (intent.op === "merge") {
-		const f = d.flightOf(intent.chain);
-		await d.merge(intent.from, intent.chain, f && intent.after ? loopSlotAfter(intent.after) : void 0);
-		return;
-	}
-	if (intent.op === "palette") {
-		const c = d.chain(intent.chain);
-		if (!c) return;
-		const p = inChain(c, intent.at);
-		const snap = (v) => Math.round(v / GRID_SNAP) * GRID_SNAP;
-		c.paletteAfter(intent.after, {
-			x: snap(p.x - NODE_W / 2),
-			y: snap(p.y - TILE / 2)
-		});
-		return;
-	}
-	const f = d.flightOf(intent.chain);
-	if (intent.op === "handoff") {
-		const def = d.kinds.find((k) => k.kind === HANDOFF_KIND);
-		if (!def) return void toast("This server has no “Start a chain” stop yet");
-		const target = d.flights.find((x) => groundedKey(x.id) === intent.target);
-		const step = handoffStepFor(def, f ? f.steps.map((st) => st.id) : [], intent.target);
-		if (f ? await tackOn(f.id, step, atOrEnd(f, loopSlotAfter(intent.from))) : !!await tackOnNew(intent.chain, [step])) toast("“" + intent.from.title + "” starts “" + (target ? groundedName$1(target) : "that chain") + "” on " + sessionWord("new"));
-		return;
-	}
-	if (!f) return;
-	if (intent.op === "move") {
-		const step = firstStepOf(intent.step);
-		const to = intent.after ? loopSlotAfter(intent.after) : 0;
-		if (step && to !== void 0) await moveStop(f.id, step.id, Math.min(to, f.steps.length - 1));
-		return;
-	}
-	if (intent.op === "loop") {
-		const def = d.kinds.find((k) => k.kind === "loop");
-		const target = firstStepOf(intent.to);
-		const at = loopSlotAfter(intent.from);
-		if (!def || !target || at === void 0) return void toast("This server has no Loop stop");
-		if (await tackOn(f.id, loopStepTo(def, f.steps.map((st) => st.id), target), atOrEnd(f, at))) toast("Loops back to “" + target.title + "”");
-		return;
-	}
-	if (intent.op === "split") {
-		const step = firstStepOf(intent.step);
-		if (!step) return;
-		const chain = await splitOffChain(f.id, step.id, {
-			x: 0,
-			y: 0
-		});
-		if (!chain) return;
-		const label = d.chain(intent.chain)?.dy ?? d.labelH;
-		d.pinAt(groundedKey(chain.id), {
-			x: Math.round(ctx.at.x - NODE_W / 2),
-			y: Math.round(ctx.at.y - TILE / 2 - label)
-		});
-		const base = "sky" in ctx.src ? null : ctx.src.node;
-		const moved = {};
-		if (base) {
-			for (const st of chain.steps.slice(1)) if (st.pos) moved[st.id] = {
-				x: st.pos.x - base.x,
-				y: st.pos.y - base.y
-			};
-		}
-		if (Object.keys(moved).length) await saveStopPositions(chain.id, moved);
-		toast("Split off “" + groundedName$1(chain) + "”");
-	}
-}
-var posStepOf = (n) => firstStepOf(n);
-function withLocalPos(d, local) {
-	if (!Object.keys(local).length) return d;
-	const put = (n) => {
-		const st = posStepOf(n);
-		const p = st ? local[st.id] : void 0;
-		if (!st || !p) return n;
-		if (n.step) return {
-			...n,
-			step: {
-				...n.step,
-				pos: p
-			}
-		};
-		if (n.group && n.group.steps.length) return {
-			...n,
-			group: {
-				...n.group,
-				steps: [{
-					...n.group.steps[0],
-					pos: p
-				}, ...n.group.steps.slice(1)]
-			}
-		};
-		return n;
-	};
-	return {
-		...d,
-		nodes: d.nodes.map(put)
-	};
-}
-function useNodeMoves(flightId, d) {
-	const [local, setLocal] = (0, import_react.useState)({});
-	(0, import_react.useEffect)(() => {
-		const ids = Object.keys(local);
-		if (!ids.length) return;
-		const saved = /* @__PURE__ */ new Map();
-		for (const n of d.nodes) {
-			const st = posStepOf(n);
-			if (st) saved.set(st.id, st.pos);
-		}
-		const keep = ids.filter((id) => {
-			const s = saved.get(id);
-			return !(s && s.x === local[id].x && s.y === local[id].y);
-		});
-		if (keep.length !== ids.length) setLocal(Object.fromEntries(keep.map((id) => [id, local[id]])));
-	}, [d, local]);
-	const move = flightId ? (node, pos) => {
-		const st = posStepOf(node.node);
-		if (!st) return;
-		const p = {
-			x: Math.round(pos.x),
-			y: Math.round(pos.y)
-		};
-		setLocal((l) => ({
-			...l,
-			[st.id]: p
-		}));
-		queueStopPos(flightId, st.id, p, (ok) => {
-			if (!ok) setLocal((l) => Object.fromEntries(Object.entries(l).filter(([id]) => id !== st.id)));
-		});
-	} : void 0;
-	return {
-		diagram: (0, import_react.useMemo)(() => withLocalPos(d, local), [d, local]),
-		move
-	};
-}
-function useChainEntry(register, graph, wrap, paletteAfter) {
-	const palRef = (0, import_react.useRef)(paletteAfter);
-	palRef.current = paletteAfter;
-	const pal = (0, import_react.useCallback)((a, p) => palRef.current(a, p), []);
-	const last = (0, import_react.useRef)(null);
-	(0, import_react.useLayoutEffect)(() => {
-		if (!register) return;
-		const el = wrap.current;
-		const dx = el ? el.offsetLeft : 0;
-		const dy = el ? el.offsetTop : 0;
-		const l = last.current;
-		if (l && l.graph === graph && l.dx === dx && l.dy === dy) return;
-		last.current = {
-			graph,
-			dx,
-			dy
-		};
-		register({
-			graph,
-			dx,
-			dy,
-			paletteAfter: pal
-		});
-	});
-	(0, import_react.useEffect)(() => {
-		if (!register) return;
-		return () => {
-			last.current = null;
-			register(null);
-		};
-	}, [register]);
-}
-function useTourHooks(root, hooks) {
-	(0, import_react.useEffect)(() => {
-		const el = root.current;
-		if (!el) return;
-		for (const [sel, name] of Object.entries(hooks)) {
-			const t = el.querySelector(sel);
-			if (t && t.getAttribute("data-tour") !== name) t.setAttribute("data-tour", name);
-		}
-	});
-}
-//#endregion
 //#region src/components/flights/SkyWires.tsx
 function nodeOfStep(g, stepId) {
 	for (const n of g.nodes) {
@@ -132813,9 +133320,9 @@ function SkyLine(p) {
 	const ss = deriveSessionState(row || {});
 	const rowOf = (t) => t ? p.rows.find((r) => r.title === t) : void 0;
 	const where = row ? lineWhere(line.diagram) : "";
-	const moves = useNodeMoves(line.flight?.id, line.graphDiagram);
+	const moves = useNodeMoves(line.flight?.id, line.graphDiagram, p.title);
 	const sessionNode = (0, import_react.useMemo)(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
-	const headSub = where || (row ? firstLine$1(row.task_headline || row.task || "") : "");
+	const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : where || (row ? firstLine$1(row.task_headline || row.task || "") : "");
 	const head = (0, import_react.useMemo)(() => ({
 		kind: "session",
 		title: name,
@@ -132829,15 +133336,28 @@ function SkyLine(p) {
 		p.title,
 		sessionNode
 	]);
+	const big = (0, import_react.useMemo)(() => {
+		const out = {};
+		for (const [t, ks] of Object.entries(kids)) {
+			const c = clampPane(ks.w, ks.h);
+			out["child:" + t] = {
+				w: c.w,
+				h: c.h + CARD_HEAD_H
+			};
+		}
+		return out;
+	}, [kids]);
 	const graph = (0, import_react.useMemo)(() => chainGraph(moves.diagram, {
 		head,
 		key: p.title,
-		flightId: line.flight?.id || ""
+		flightId: line.flight?.id || "",
+		big
 	}), [
 		moves.diagram,
 		head,
 		p.title,
-		line.flight?.id
+		line.flight?.id,
+		big
 	]);
 	useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter);
 	useTourHooks(wrapRef, {
@@ -132998,20 +133518,26 @@ function SkyLine(p) {
 	const age = ageOf(row?.activity_since);
 	const still = ageWord(row?.activity_since);
 	const cards = [];
-	if (p.layout.open && row) cards.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneCard, {
-		inst: row,
-		w: p.layout.paneW ?? PANE_W,
-		h: p.layout.paneH ?? PANE_H,
-		zoom: p.zoom,
-		onSize: (w, h) => p.onLayout({
-			paneW: w,
-			paneH: h
-		}),
-		onClose: () => p.onLayout({ open: false })
-	}, row.title));
+	const own = p.layout.open && row ? clampPane(p.layout.paneW ?? PANE_W, p.layout.paneH ?? PANE_H) : null;
+	const ownCard = own && row ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "skl-own-card",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneCard, {
+			inst: row,
+			w: own.w,
+			h: own.h,
+			zoom: p.zoom,
+			onSize: (w, h) => p.onLayout({
+				paneW: w,
+				paneH: h
+			}),
+			onClose: () => p.onLayout({ open: false })
+		}, row.title)
+	}) : null;
+	const cardShift = own ? Math.max(0, own.w - (NODE_W + TILE) / 2) : 0;
+	const onChain = new Set(graph.nodes.map((n) => n.node.session).filter(Boolean));
 	for (const [t, ks] of Object.entries(kids)) {
 		const kid = rowOf(t);
-		if (kid) cards.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneCard, {
+		if (kid && !onChain.has(t)) cards.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneCard, {
 			inst: kid,
 			w: ks.w,
 			h: ks.h,
@@ -133026,6 +133552,26 @@ function SkyLine(p) {
 			onClose: () => foldKid(t)
 		}, t));
 	}
+	const renderOpen = (n) => {
+		const t = n.session;
+		const ks = t ? kids[t] : void 0;
+		const kid = t && ks ? rowOf(t) : void 0;
+		if (!t || !ks || !kid) return null;
+		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneCard, {
+			inst: kid,
+			w: ks.w,
+			h: ks.h,
+			zoom: p.zoom,
+			onSize: (w, h) => setKids((k) => ({
+				...k,
+				[t]: {
+					w,
+					h
+				}
+			})),
+			onClose: () => foldKid(t)
+		}, t);
+	};
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		ref: rootRef,
 		className: "skl skl-chainline" + (p.focused ? " is-focused" : "") + (p.selected ? " is-selected" : "") + (p.layout.open ? " is-open" : "") + (p.dropFlyway ? " is-drop" : "") + (p.mergeTarget ? " is-merge-target" : "") + (line.editing ? " is-editing" : ""),
@@ -133101,12 +133647,17 @@ function SkyLine(p) {
 			}),
 			row ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				ref: wrapRef,
-				className: "skl-chain-wrap",
+				className: "skl-chain-wrap" + (ownCard ? " has-card" : ""),
+				style: own ? {
+					paddingLeft: cardShift,
+					minHeight: own.h + CARD_HEAD_H
+				} : void 0,
 				onPointerDownCapture: onChainDown,
 				onPointerMoveCapture: (e) => {
 					if (!press.current.moved && Math.hypot(e.clientX - press.current.x, e.clientY - press.current.y) >= 4) press.current.moved = e.buttons !== 0;
 				},
 				children: [
+					ownCard,
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyChain, {
 						graph,
 						zoom: p.zoom,
@@ -133126,8 +133677,9 @@ function SkyLine(p) {
 						onNodeMove: moves.move,
 						onPortDown: p.onPortDown,
 						onPlus: (after) => after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true),
+						renderOpen,
 						renderInBox: gc.renderInBox ? (n) => gc.renderInBox(n) : void 0,
-						renderHead: () => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						renderHead: () => line.flight?.state === "ready" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(ReadyHead, { flight: line.flight }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 							className: "sky-head-chip fl-box-chip tone-" + ss.tone,
 							title: ss.hint,
 							children: ss.label
@@ -133236,7 +133788,7 @@ function SkySelectionBar(p) {
 		for (const id of removable) if (isGroundedKey(id)) {
 			const f = p.flightOf(id);
 			const at = p.posOf?.(id);
-			if (await deleteFlight(groundedIdOf(id))) gone.push({
+			if (await optimisticDelete(groundedIdOf(id), () => deleteFlight(groundedIdOf(id)))) gone.push({
 				steps: f?.steps || [],
 				name: f?.plan_name || "",
 				at
@@ -133266,7 +133818,9 @@ function SkySelectionBar(p) {
 		const title = isGroundedKey(one.line) ? "" : one.line;
 		const taken = takenStops(one.nodes, flight.steps);
 		const out = [];
+		const rollback = patchFlightCache(fid, withoutSteps(new Set(taken.flatMap((t) => t.steps.map((s) => s.id)))));
 		for (const t of taken) if (await (t.group ? dropGroup(fid, t.steps[0].id) : dropStop(fid, t.steps[0].id))) out.push(t);
+		if (out.length < taken.length) rollback();
 		if (!out.length) return;
 		const n = out.length;
 		const entry = pushUndo({
@@ -133521,7 +134075,7 @@ function useGroundedLine(flight, src) {
 				...fresh,
 				pos
 			} : fresh;
-			if (await tackOn(flight.id, step, where(at))) setSelectIndex(where(at) ?? end);
+			if (await optimistic(flight.id, withSteps([step], where(at)), () => tackOn(flight.id, step, where(at)))) setSelectIndex(where(at) ?? end);
 		} finally {
 			setBusy(false);
 		}
@@ -133530,14 +134084,16 @@ function useGroundedLine(flight, src) {
 		setBusy(true);
 		setPaletteAt(null);
 		try {
-			if (await tackOnPlan(flight.id, plan.id, where(at))) toast("Added “" + plan.name + "”");
+			const steps = plans.find((p) => p.id === plan.id)?.steps;
+			const go = () => tackOnPlan(flight.id, plan.id, where(at));
+			if (await (steps?.length ? optimistic(flight.id, withSteps(steps, where(at)), go) : go())) toast("Added “" + plan.name + "”");
 		} finally {
 			setBusy(false);
 		}
 	};
 	const removeStop = async (step, index) => {
 		const id = flight.id;
-		if (!await dropStop(id, step.id)) return false;
+		if (!await optimistic(id, withoutSteps(/* @__PURE__ */ new Set([step.id])), () => dropStop(id, step.id))) return false;
 		toast("Removed “" + step.title + "”", { action: {
 			label: "Undo",
 			ariaLabel: "Undo: put “" + step.title + "” back",
@@ -133551,7 +134107,8 @@ function useGroundedLine(flight, src) {
 	const removeGroup = async (n) => {
 		const first = n.group?.steps[0];
 		if (!first) return false;
-		if (!await dropGroup(flight.id, first.id)) return false;
+		const ids = new Set((n.group?.steps || []).map((s) => s.id));
+		if (!await optimistic(flight.id, withoutSteps(ids), () => dropGroup(flight.id, first.id))) return false;
 		toast("Removed “" + (n.group?.name || n.title) + "” — its " + (n.group?.steps.length || 0) + " stops");
 		return true;
 	};
@@ -133809,7 +134366,7 @@ function GroundedLine(p) {
 		setBusy(true);
 		try {
 			if (p.onRemove) await p.onRemove();
-			else if (await deleteFlight(flight.id)) {
+			else if (await optimisticDelete(flight.id, () => deleteFlight(flight.id))) {
 				const steps = flight.steps;
 				const entry = pushUndo({
 					label: "Remove “" + name + "”",
@@ -133916,7 +134473,7 @@ function GroundedLine(p) {
 		remove();
 	};
 	const wrapRef = (0, import_react.useRef)(null);
-	const moves = useNodeMoves(flight.id, line.graphDiagram);
+	const moves = useNodeMoves(flight.id, line.graphDiagram, "flight:" + flight.id);
 	const head = p.head || NO_HEAD;
 	const graph = (0, import_react.useMemo)(() => chainGraph(moves.diagram, {
 		head,
@@ -133982,10 +134539,10 @@ function GroundedLine(p) {
 						}
 					}
 				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "fl-box-chip skl-chip " + (head.kind === "trigger" ? "tone-working" : "tone-idle"),
-					title: head.kind === "trigger" ? head.title + " — " + head.sub : "These stops do nothing until a session flies them: wire a session's out port to the first one",
-					children: head.kind === "trigger" ? "Started by a chain" : "No session"
+				head.kind === "trigger" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-box-chip skl-chip tone-working",
+					title: head.title + " — " + head.sub,
+					children: "Started by a chain"
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "skl-menu",
@@ -134867,6 +135424,129 @@ function SkyShortcuts(p) {
 	return typeof document !== "undefined" && document.body ? (0, import_react_dom.createPortal)(sheet, document.body) : sheet;
 }
 //#endregion
+//#region src/components/flights/QuickAdd.tsx
+function quickRows(kinds, plans, q) {
+	const all = [...kinds.map((k) => ({
+		key: "k:" + k.kind,
+		label: k.label,
+		hint: k.summary || "",
+		icon: k.kind,
+		pick: { kind: k.kind },
+		words: [
+			k.label,
+			k.summary,
+			k.kind,
+			k.family
+		].join(" ")
+	})), ...plans.map((p) => ({
+		key: "p:" + p.id,
+		label: p.name,
+		hint: "saved stop · " + p.steps.length + (p.steps.length === 1 ? " step" : " steps"),
+		icon: "group",
+		pick: { plan: p },
+		words: [
+			p.name,
+			"saved stop",
+			p.steps.map((s) => s.title).join(" ")
+		].join(" ")
+	}))];
+	const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+	return (terms.length ? all.filter((r) => terms.every((t) => r.words.toLowerCase().includes(t))) : all).map(({ words: _w, ...r }) => r);
+}
+function QuickAdd(p) {
+	const [q, setQ] = (0, import_react.useState)("");
+	const [at, setAt] = (0, import_react.useState)(0);
+	const rows = (0, import_react.useMemo)(() => quickRows(p.kinds, p.plans, q), [
+		p.kinds,
+		p.plans,
+		q
+	]);
+	const sel = Math.min(at, Math.max(0, rows.length - 1));
+	const onKey = (e) => {
+		if (e.key === "ArrowDown") {
+			e.preventDefault();
+			setAt((i) => Math.min(rows.length - 1, i + 1));
+		} else if (e.key === "ArrowUp") {
+			e.preventDefault();
+			setAt((i) => Math.max(0, i - 1));
+		} else if (e.key === "Enter") {
+			e.preventDefault();
+			if (rows[sel]) p.onPick(rows[sel].pick);
+		} else if (e.key === "Escape") {
+			e.preventDefault();
+			e.stopPropagation();
+			p.onClose();
+		}
+	};
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+		className: "sky-ground-menu sky-quick-add",
+		role: "dialog",
+		"aria-label": "Add a block here",
+		style: {
+			left: p.x,
+			top: p.y
+		},
+		onContextMenu: (e) => e.preventDefault(),
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+				className: "sky-quick-field",
+				autoFocus: true,
+				placeholder: "Add a block…",
+				"aria-label": "Search blocks",
+				value: q,
+				onChange: (e) => {
+					setQ(e.target.value);
+					setAt(0);
+				},
+				onKeyDown: onKey
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "sky-quick-list",
+				role: "listbox",
+				"aria-label": "Blocks",
+				children: [rows.slice(0, 40).map((r, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+					type: "button",
+					role: "option",
+					"aria-selected": i === sel,
+					className: "fl-stopmenu-item sky-quick-row" + (i === sel ? " is-sel" : ""),
+					onMouseEnter: () => setAt(i),
+					onClick: () => p.onPick(r.pick),
+					children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-quick-icon",
+						"aria-hidden": "true",
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(TileIcon, {
+							kind: r.icon,
+							size: 16
+						})
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "sky-quick-text",
+						children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-quick-label",
+							children: r.label
+						}), r.hint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "sky-quick-hint",
+							children: r.hint
+						})]
+					})]
+				}, r.key)), !rows.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "sky-quick-none",
+					children: [
+						"No block matches “",
+						q,
+						"”"
+					]
+				})]
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "fl-stopmenu-item sky-quick-note",
+				onClick: p.onNote,
+				children: "Add a note"
+			})
+		]
+	});
+}
+//#endregion
 //#region src/lib/skyReveal.ts
 function revealCamera(c, r, vw, vh, margin = .8) {
 	const k = Math.min(1, r.w > 0 ? vw * margin / r.w : 1, r.h > 0 ? vh * margin / r.h : 1);
@@ -134948,25 +135628,6 @@ function chainSize(d, head) {
 		h: NODE_H + CHAIN_LABEL_H + 24
 	};
 }
-function GhostLine({ name, pos, diagram }) {
-	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "sky-line sky-line-leaving",
-		style: { transform: `translate(${pos.x}px, ${pos.y}px)` },
-		"aria-hidden": "true",
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "sky-line-bar",
-			children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 13 }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "sky-line-name",
-				children: name
-			})]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlywayCanvas, {
-			diagram,
-			label: name,
-			vertical: false,
-			className: "sky-canvas"
-		})]
-	});
-}
 var NO_KINDS = [];
 var NO_PLANS = [];
 var memo = null;
@@ -135039,6 +135700,7 @@ function SkyView() {
 	};
 	const paletteOn = paletteMode === "float" && !narrow;
 	const [mergeOver, setMergeOver] = (0, import_react.useState)("");
+	const skyBirds = useUi((s) => s.skyBirds);
 	const [drop, setDrop] = (0, import_react.useState)(null);
 	const dragged = (0, import_react.useRef)(null);
 	const [flash, setFlash] = (0, import_react.useState)("");
@@ -135505,27 +136167,6 @@ function SkyView() {
 		vp.w,
 		vp.h
 	]);
-	const last = (0, import_react.useRef)(/* @__PURE__ */ new Map());
-	const [ghosts, setGhosts] = (0, import_react.useState)([]);
-	(0, import_react.useEffect)(() => {
-		const now = new Map(lines.map((l) => [l.id, {
-			id: l.id,
-			name: l.name,
-			pos: place[l.id],
-			diagram: l.diagram
-		}]));
-		const gone = [...last.current.values()].filter((g) => !now.has(g.id) && !lineAlive(g.id));
-		last.current = now;
-		if (!gone.length || narrow) return;
-		const ids = new Set(gone.map((g) => g.id));
-		setGhosts((cur) => [...cur.filter((g) => !ids.has(g.id)), ...gone]);
-		setTimeout(() => alive.current && setGhosts((cur) => cur.filter((g) => !ids.has(g.id))), 450);
-	}, [
-		lines,
-		place,
-		lineAlive,
-		narrow
-	]);
 	const pressedLine = (0, import_react.useRef)("");
 	const openedFor = (0, import_react.useRef)("");
 	const focusOn = (0, import_react.useCallback)((id, pressed = false) => {
@@ -135760,12 +136401,12 @@ function SkyView() {
 	};
 	const liveFlightOf = (title) => {
 		const fl = rows.find((r) => r.title === title)?.flight;
-		return fl && isLive(fl) ? flights?.find((f) => f.id === fl.id) || null : null;
+		return fl && isShown(fl) ? flights?.find((f) => f.id === fl.id) || null : null;
 	};
 	const onFly = (plan, title) => {
 		const live = liveFlightOf(title);
 		if (live) tackOnPlan(live.id, plan.id);
-		else startFlightOn(title, plan.id);
+		else startFlightOn(title, plan.id, "prompt");
 	};
 	const onAttach = (f, title) => {
 		setAttachPick(null);
@@ -135941,7 +136582,7 @@ function SkyView() {
 		const f = flights?.find((x) => x.id === groundedIdOf(key));
 		if (!f) return;
 		const was = posOf(key);
-		if (!await deleteFlight(f.id)) return;
+		if (!await optimisticDelete(f.id, () => deleteFlight(f.id))) return;
 		const steps = f.steps;
 		const name = f.plan_name || "";
 		const shown = groundedName(f);
@@ -135967,7 +136608,10 @@ function SkyView() {
 		const live = into || liveFlightOf(title);
 		const bare = steps.map(({ pos: _pos, ...st }) => st);
 		let ok = false;
-		if (!live) ok = !!await attachGrounded(f.id, { title });
+		if (!live) ok = !!await attachGrounded(f.id, {
+			title,
+			start_on: "prompt"
+		});
 		else if (await tackOnSteps(live.id, bare, at !== void 0 && at < live.steps.length ? at : void 0, name || void 0)) ok = await deleteFlight(f.id);
 		if (!ok) return;
 		const n = steps.length;
@@ -137292,7 +137936,7 @@ function SkyView() {
 						onDrop: onNewDrop,
 						onScroll: onViewportScroll,
 						children: [
-							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyFlock, {
+							skyBirds && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyFlock, {
 								width: vp.w,
 								height: vp.h,
 								zoom: cam.z,
@@ -137322,7 +137966,6 @@ function SkyView() {
 										band: wiring.band,
 										wires: xwires
 									}),
-									ghosts.map((g) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(GhostLine, { ...g }, "ghost:" + g.id)),
 									newBlock,
 									guides.map((g, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 										className: "sky-guide",
@@ -137351,23 +137994,20 @@ function SkyView() {
 									height: marq.h
 								}
 							}),
-							groundMenu && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-								className: "sky-ground-menu",
-								role: "menu",
-								style: {
-									left: groundMenu.x,
-									top: groundMenu.y
+							groundMenu && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(QuickAdd, {
+								x: groundMenu.x,
+								y: groundMenu.y,
+								kinds,
+								plans,
+								onPick: (pick) => {
+									dropGrounded(pick, groundMenu.at);
+									setGroundMenu(null);
 								},
-								children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-									type: "button",
-									className: "fl-stopmenu-item",
-									role: "menuitem",
-									onClick: () => {
-										addNote(groundMenu.at);
-										setGroundMenu(null);
-									},
-									children: "Add a note"
-								})
+								onNote: () => {
+									addNote(groundMenu.at);
+									setGroundMenu(null);
+								},
+								onClose: () => setGroundMenu(null)
 							}),
 							selBar,
 							/* @__PURE__ */ (0, import_jsx_runtime.jsx)(OffscreenHints, {

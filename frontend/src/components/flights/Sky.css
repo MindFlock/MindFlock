@@ -990,3 +990,83 @@ details.fl-group-waiting > summary {
 .sky-plane[data-wiring] {
   cursor: crosshair;
 }
+
+/* Right-click on empty sky: add a block by search (QuickAdd). */
+.sky-quick-add {
+  width: 280px;
+  max-height: 380px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  gap: 4px;
+}
+.sky-quick-field {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+}
+.sky-quick-field:focus {
+  border-color: var(--accent);
+}
+.sky-quick-list {
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-height: 0;
+}
+.sky-quick-add .sky-quick-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.sky-quick-add .sky-quick-row.is-sel {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.sky-quick-icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  flex: none;
+}
+.sky-quick-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.sky-quick-label {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.sky-quick-hint {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sky-quick-none {
+  padding: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.sky-quick-note {
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+}

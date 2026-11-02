@@ -17,7 +17,7 @@ import type { Pos, Rect } from "./skyLayout";
  * label area under it. */
 export const TILE = 64;
 export const NODE_W = 132;
-export const NODE_H = 118;
+export const NODE_H = 140;
 /** Left→right pitch of auto-placed nodes, and the row gap for branches. */
 export const PITCH_X = 150;
 export const PITCH_Y = 150;
@@ -115,14 +115,19 @@ export interface ChainGraphOpts {
   /** The line key and its flight. */
   key: string;
   flightId: string;
+  /** Nodes drawn bigger than a tile (an open sub-session's card, by node
+   * id): their box, so the branches around them make room. */
+  big?: Readonly<Record<string, { w: number; h: number }>>;
 }
 
 // --- Building a chain ---------------------------------------------------------------
 
 const isStopish = (n: DiagramNode) => n.kind === "stop" || n.kind === "group";
-const isBranchRow = (n: DiagramNode) => n.row === "branch" || n.row === "below";
+export const isBranchRow = (n: DiagramNode) => n.row === "branch" || n.row === "below";
 const savedPos = (n: DiagramNode): Pos | null => {
-  const p = firstStepOf(n)?.pos;
+  // A stop's own `pos` (a group's: its first sub-step's); a sub-session's,
+  // kept per device (`node.pos`).
+  const p = firstStepOf(n)?.pos ?? n.pos;
   return p && Number.isFinite(p.x) && Number.isFinite(p.y) ? { x: Math.round(p.x), y: Math.round(p.y) } : null;
 };
 
@@ -177,8 +182,8 @@ export function chainGraph(d: Diagram, opts: ChainGraphOpts): ChainGraph {
       node: n.branch ? { ...n, branch: { ...n.branch, from: idOf(n.branch.from), to: idOf(n.branch.to) } } : n,
       x: pos ? pos.x : 0,
       y: pos ? pos.y : 0,
-      w: NODE_W,
-      h: NODE_H,
+      w: Math.max(NODE_W, opts.big?.[n.id]?.w ?? 0),
+      h: Math.max(NODE_H, opts.big?.[n.id]?.h ?? 0),
       pinned: !!pos,
       inPort: editable || first,
       outPort: canFollow(n, insertFrom),
@@ -295,6 +300,21 @@ function assemble(base: Pick<ChainGraph, "key" | "flightId" | "head" | "insertFr
       wires.push({ id: "loop:" + (s.via?.id || s.from + ">" + s.to), from: a.id, to: b.id, kind: "loop", d: r.d, mid: r.mid, lane, ...extra });
       continue;
     }
+    // Sub-sessions hang under their parent the n8n way: a dashed bus down from
+    // the parent's tile and a short drop into each one's top — no curve out of
+    // the parent's port, and no curve back into the stop after (the Join's
+    // "waiting for k of n" says what it waits for). The owner: "too much
+    // weird verticality".
+    if (s.kind === "join" && isBranchRow(a.node)) continue;
+    if (s.kind === "fan" && isBranchRow(b.node)) {
+      const ax = a.x + a.w / 2;
+      const ay = a.y + TILE;
+      const bx = b.x + b.w / 2;
+      const bus = b.y - 18;
+      const d = ax === bx ? `M ${ax} ${ay} V ${b.y - 2}` : `M ${ax} ${ay} V ${bus} H ${bx} V ${b.y - 2}`;
+      wires.push({ id: a.id + ">" + b.id + ":fan", from: a.id, to: b.id, kind: "fan", d, mid: { x: (ax + bx) / 2, y: bus }, ...extra });
+      continue;
+    }
     const o = outPortOf(a);
     const i = inPortOf(b);
     wires.push({ id: a.id + ">" + b.id + (s.kind === "fan" || s.kind === "join" ? ":" + s.kind : ""), from: a.id, to: b.id, kind: s.kind, d: wirePath(o, i), mid: { x: (o.x + i.x) / 2, y: (o.y + i.y) / 2 }, ...extra });
@@ -311,19 +331,46 @@ function assemble(base: Pick<ChainGraph, "key" | "flightId" | "head" | "insertFr
  * rest follow the node before them, so a tail with no `pos` trails a moved
  * node. Each branch off the same split stacks one more row down, half a
  * pitch right of the split (between it and the node it joins). */
+/** How many branches sit side by side under their parent before a new row
+ * starts (the owner: a session's sub-sessions were "too much weird
+ * verticality" one under another). */
+export const BRANCH_COLS = 4;
+/** How far below its parent a row of branches starts: a pitch, plus room for
+ * a loop's wire that runs under the main row. */
+export const BRANCH_Y = PITCH_Y + 50;
+
 export function autoPlace(nodes: readonly GraphNode[]): GraphNode[] {
   const out: GraphNode[] = [];
   const byId = new Map<string, GraphNode>();
-  const rows = new Map<string, number>();
+  // Branches spread in rows of BRANCH_COLS under their parent, instead of
+  // one tall column — each place as wide / tall as its node (an open card
+  // pushes its neighbours along), a tile's place a pitch.
+  const rows = new Map<string, { col: number; x0: number; x: number; y: number; rowH: number }>();
   let prev: GraphNode | null = null;
   for (const n of nodes) {
     let next: GraphNode;
     const split = n.node.branch ? byId.get(n.node.branch.from) : undefined;
     if (isBranchRow(n.node)) {
-      const k = (rows.get(n.node.branch?.from || "") ?? 0) + 1;
-      rows.set(n.node.branch?.from || "", k);
+      const from = n.node.branch?.from || "";
       const at = split || prev;
-      next = n.pinned ? { ...n } : { ...n, x: (at ? at.x : 0) + PITCH_X / 2, y: (at ? at.y : 0) + PITCH_Y * k };
+      // Left-aligned under the parent (centring would push a head's first
+      // children left of the chain's origin, outside its slot).
+      let st = rows.get(from);
+      if (!st) {
+        const x0 = (at ? at.x : 0) + PITCH_X / 2;
+        st = { col: 0, x0, x: x0, y: (at ? at.y : 0) + BRANCH_Y, rowH: 0 };
+        rows.set(from, st);
+      }
+      if (st.col >= BRANCH_COLS) {
+        st.col = 0;
+        st.x = st.x0;
+        st.y += st.rowH;
+        st.rowH = 0;
+      }
+      next = n.pinned ? { ...n } : { ...n, x: st.x, y: st.y };
+      st.x += Math.max(PITCH_X, n.w + (PITCH_X - NODE_W));
+      st.rowH = Math.max(st.rowH, PITCH_Y, n.h + (PITCH_Y - NODE_H));
+      st.col++;
     } else {
       next = n.pinned ? { ...n } : { ...n, x: prev ? prev.x + PITCH_X : 0, y: prev ? prev.y : 0 };
       prev = next;
@@ -412,7 +459,10 @@ export function wirePath(a: Pos, b: Pos): string {
 export function loopWirePathG(a: GraphNode, b: GraphNode, others: readonly GraphNode[], lane = 0): { d: string; mid: Pos } {
   const o = outPortOf(a);
   const i = inPortOf(b);
-  const low = Math.max(a.y + a.h, b.y + b.h, ...others.map((n) => n.y + n.h));
+  // The session tile's text runs taller than its box (its chip, the Ready
+  // controls): a loop round it (a Loop first on the chain) clears that too.
+  const headRoom = a.id === HEAD_ID || b.id === HEAD_ID ? 60 : 0;
+  const low = Math.max(a.y + a.h, b.y + b.h, ...others.map((n) => n.y + n.h)) + headRoom;
   const y = low + LOOP_CLEAR + lane * LOOP_LANE;
   const k = LOOP_HOOK;
   return {

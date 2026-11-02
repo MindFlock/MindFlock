@@ -722,6 +722,7 @@ async def observe(flight: dict, now: float) -> dict:
     agent = (
         kind in ("agent", "reviews")
         or ss["detail"].get("phase") == "fix"
+        or bool(ss["detail"].get("after_turn"))
         or bool(plug is not None and plug.types_to_agent)
     )
     sess = await asyncio.to_thread(_session_obs, flight, now, agent)
@@ -1814,7 +1815,10 @@ async def run_pass() -> None:
             await asyncio.to_thread(_announce, None, f)
     flights = [f for f in everything if f["state"] not in _flights.FINAL]
     for f in flights:
-        if f["state"] in _flights.ACTIVE:
+        if f["state"] == _flights.READY:
+            if await asyncio.to_thread(_catch_typed_turn, f):
+                await step_flight(f["id"])
+        elif f["state"] in _flights.ACTIVE:
             await step_flight(f["id"])
     _prune_taps(now)
     live = {f["id"] for f in flights}
@@ -1882,6 +1886,41 @@ def on_session_created(title: str) -> Optional[dict]:
     return after
 
 
+def on_prompt(title: str) -> Optional[dict]:
+    """A server send path typed a prompt into ``title`` (``/send``, voice,
+    the prompt queue's drain, the mailbox lane behind MCP ``send_message``):
+    its ready ``start_on: "prompt"`` flight takes off after that turn
+    (:func:`flights.on_prompt`), announced, the loop woken → the flight, or
+    None. Never raises — a send never fails on a flight."""
+    try:
+        out = _flights.on_prompt(title)
+    except Exception as err:  # noqa: BLE001
+        _log("flights on_prompt %s failed: %v", title, err)
+        return None
+    if out is None:
+        return None
+    before, after = out
+    _announce(before, after)
+    wake()
+    return after
+
+
+def _catch_typed_turn(f: dict) -> bool:
+    """The tick's half of "take off on the next prompt": a turn typed straight
+    into the terminal (the row's activity went working after the flight
+    became ready — :func:`flights.ready_turn_started`) takes the ready
+    flight off like a server send does. True when it took off."""
+    if f.get("start_on") != "prompt" or not f.get("session"):
+        return False
+    try:
+        row = _row(f["session"])
+    except Exception:  # noqa: BLE001 — no row, no turn
+        return False
+    if not _flights.ready_turn_started(f, row):
+        return False
+    return on_prompt(f["session"]) is not None
+
+
 def on_session_removed(title: str) -> None:
     """The session-removal hook: its flight is cancelled (and announced)."""
     f = _flights.for_session(title)
@@ -1906,9 +1945,15 @@ def _subject_of(raw) -> dict:
 async def start(body: dict, absorbed: Optional[list] = None) -> dict:
     """``POST /api/flights/start``. Raises :class:`flights.FlightError`, and
     :class:`flights.PlanError` for a bad ad-hoc ``steps`` list. The lanes of
-    a fast-track run it took over are appended to ``absorbed``."""
+    a fast-track run it took over are appended to ``absorbed``.
+
+    ``start_on`` (docs/flights.md "Round 19"; absent = ``"now"``, today's
+    behaviour): ``"prompt"`` / ``"run"`` store the flight ``ready`` — cursor
+    0, nothing started, and a session created for it gets NO prompt."""
     srv = _server()
     body = body or {}
+    start_on = _flights.normalize_start_on(body.get("start_on"))
+    ready = start_on != "now"
     plan_id = str(body.get("plan_id") or "")
     subject = _subject_of(body.get("subject"))
     by = str(body.get("by") or "user")
@@ -1941,7 +1986,10 @@ async def start(body: dict, absorbed: Optional[list] = None) -> dict:
     if rec is not None:
         stage = await asyncio.to_thread(_stage_of, title)
         lead = _flights.absorb_steps(rec, stage)
-        plan, start_at = _flights.with_lead(plan, lead, start_at, attach=True)
+        # A ready chain starts at 0: the absorbed rungs lead it.
+        plan, start_at = _flights.with_lead(
+            plan, lead, "" if ready else start_at, attach=not ready
+        )
     replaced: list = []
     if title:
         flight = await asyncio.to_thread(
@@ -1954,13 +2002,14 @@ async def start(body: dict, absorbed: Optional[list] = None) -> dict:
                 start_at=start_at,
                 repo_root=_repo_root(title),
                 replaced=replaced,
+                start_on=start_on,
             )
         )
     else:
         steps = plan["steps"]
-        first_agent = steps[0]["kind"] == "agent" and not start_at
+        first_agent = steps[0]["kind"] == "agent" and not start_at and not ready
         draft = {"subject": subject, "plan_name": plan["name"], "branch": ""}
-        prompt = str(body.get("prompt") or "").strip()
+        prompt = "" if ready else str(body.get("prompt") or "").strip()
         if first_agent and not prompt:
             prompt = _flights.fill_prompt(steps[0]["config"].get("prompt") or "", draft)
         repo = str(body.get("repo_path") or "").strip() or plan["session"]["repo_path"]
@@ -1982,6 +2031,7 @@ async def start(body: dict, absorbed: Optional[list] = None) -> dict:
                 start_at=start_at,
                 seeded=first_agent and bool(prompt),
                 replaced=replaced,
+                start_on=start_on,
             )
         )
         if first_agent and not prompt:
@@ -2062,6 +2112,21 @@ _OPS = {
     "cancel": _flights.op_cancel,
     "rename": _flights.op_rename,
 }
+
+
+def run(flight_id: str) -> dict:
+    """``POST /api/flights/{id}/run`` (▶ Run, MCP ``control_flight run``): a
+    ready flight takes off at cursor 0 (:func:`flights.op_take_off` by
+    ``run``) — its first stop starts on the next pass. Raises
+    :class:`flights.FlightError` (404 ``unknown_flight``, 409 ``not_ready``)
+    and :class:`flights.PlanError` (a stop not ready to fly)."""
+    return _changed(flight_id, lambda f: _flights.op_take_off(f, "run"))
+
+
+def set_start_on(flight_id: str, value) -> dict:
+    """``PATCH /api/flights/{id} {start_on}``: how a ready flight starts
+    (:func:`flights.op_start_on`; ``"now"`` runs it)."""
+    return _changed(flight_id, lambda f: _flights.op_start_on(f, value))
 
 
 def _verify_done(flight: dict, sid: str, note: str) -> None:
@@ -2229,7 +2294,7 @@ def _stop_removed(before: dict, after: dict) -> None:
             _JOBS.pop((after["id"], s["id"]), None)
     cur = _flights._current(before)
     if (
-        before["state"] != _flights.GROUNDED
+        not _flights._on_ground(before)
         and cur is not None
         and cur in gone
         and cur["kind"] in ("ship", "reviews")
@@ -2286,10 +2351,14 @@ async def attach(flight_id: str, body: dict) -> dict:
     repo_path, program?, model?, in_place?, prompt?}`` first creates the
     session the way :func:`start` does for a saved plan with no title — a
     first ``agent`` step's prompt is its initial prompt — then attaches.
-    Every refusal comes before a session is created. Raises
-    :class:`flights.FlightError`."""
+    Every refusal comes before a session is created. ``start_on``
+    ``"prompt"`` / ``"run"`` (docs/flights.md "Round 19"; absent =
+    ``"now"``): bound but left ``ready``, and a session made for it gets no
+    prompt. Raises :class:`flights.FlightError`."""
     srv = _server()
     body = body or {}
+    start_on = _flights.normalize_start_on(body.get("start_on"))
+    ready = start_on != "now"
     f = _flights.get(flight_id)
     if f is None:
         raise _flights.FlightError("unknown_flight", 404, "no such flight")
@@ -2318,9 +2387,12 @@ async def attach(flight_id: str, body: dict) -> dict:
             defaults["in_place"] = bool(body.get("in_place"))
         first = _flights._current(f)
         first_agent = (
-            first is not None and first["kind"] == "agent" and not first.get("halt")
+            first is not None
+            and first["kind"] == "agent"
+            and not first.get("halt")
+            and not ready
         )
-        prompt = str(body.get("prompt") or "").strip()
+        prompt = "" if ready else str(body.get("prompt") or "").strip()
         if first_agent and not prompt:
             prompt = _flights.fill_prompt(first["config"].get("prompt") or "", f)
         repo = str(body.get("repo_path") or "").strip() or defaults["repo_path"]
@@ -2340,6 +2412,9 @@ async def attach(flight_id: str, body: dict) -> dict:
         root,
         str(getattr(inst, "Branch", "") or ""),
         seeded,
+        None,
+        None,
+        start_on,
     )
     if no_prompt:
         # Nothing was typed: the first agent step only waits for a turn.
@@ -2386,7 +2461,8 @@ def remove(flight_id: str) -> None:
     f = _flights.get(flight_id)
     if f is None:
         raise _flights.FlightError("unknown_flight", 404, "no such flight")
-    if f["state"] in _flights.HOLDING:
+    if f["state"] in _flights.HOLDING and f["state"] != _flights.READY:
+        # A ready chain has not started anything: it goes at once.
         raise _flights.FlightError("in_flight", 409, "cancel the flight first")
     try:
         # A checkpoint stop pins work under refs/mindflock/flights/<fid>/…

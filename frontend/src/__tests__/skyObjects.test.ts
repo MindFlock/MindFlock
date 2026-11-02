@@ -192,7 +192,8 @@ describe("SkyView iterates the one list", () => {
     expect(v).toContain('{ key: "note", label: "Add a note", title: "A sticky note in the middle of the view", onSelect: () => addNote(middle()) },');
     expect(v).toContain("onContextMenu={onGroundMenu}");
     expect(v).toMatch(/const onGroundMenu = [\s\S]*?if \(!ground\(e\.target\)\) return;\s*e\.preventDefault\(\);/);
-    expect(v).toMatch(/<div className="sky-ground-menu" role="menu"[\s\S]*?addNote\(groundMenu\.at\);/);
+    // Right-click on empty sky: add a block by search (QuickAdd), the note at its foot.
+    expect(v).toMatch(/<QuickAdd[\s\S]*?onNote=\{\(\) => \{\s*addNote\(groundMenu\.at\);/);
     expect(v).toMatch(/const noteEl = el\?\.closest\("\.sky-note\[data-note\]"\);\s*if \(noteEl && !typing\(el\)\) \{[\s\S]*?removeNote\(noteEl\.getAttribute\("data-note"\) \|\| ""\);/);
     // Round 17: the note's removal is one lib/skyUndo entry (Ctrl+Z, the toast, Ctrl+Shift+Z).
     expect(v).toContain('toast("Note removed", { action: undoAction(entry, "Undo: put the note back") });');

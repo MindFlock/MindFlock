@@ -191,15 +191,19 @@
   overflow-wrap: anywhere;
 }
 
+/* Two lines, wrapped at words (the owner: "text is cut off on blocks"); the
+   tile's tooltip still carries all of it. */
 .sky-node-sub {
   margin-top: 1px;
   max-width: 100%;
   font-size: 11px;
-  line-height: 15px;
+  line-height: 14px;
   color: var(--muted);
-  white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: break-word;
 }
 
 .sky-node-extra,
@@ -219,7 +223,8 @@
 /* --- States on the tile ------------------------------------------------------ */
 
 .sky-node.st-current .sky-tile,
-.sky-head.tone-working .sky-tile {
+.sky-head.tone-working .sky-tile,
+.sky-node.tone-working .sky-tile {
   border-color: var(--tone-working);
   box-shadow:
     0 0 0 3px color-mix(in srgb, var(--tone-working) 20%, transparent),
@@ -227,7 +232,8 @@
 }
 
 .sky-node.st-perched .sky-tile,
-.sky-head.tone-attention .sky-tile {
+.sky-head.tone-attention .sky-tile,
+.sky-node.tone-attention .sky-tile {
   border-color: var(--tone-attention);
   box-shadow:
     0 0 0 3px color-mix(in srgb, var(--tone-attention) 22%, transparent),
@@ -605,4 +611,75 @@
   .sky-plus {
     transition: none;
   }
+}
+
+/* A waiting stop's countdown under its summary (a Wait's timer, a paced
+   Loop's next run). */
+.sky-node-left {
+  margin-top: 3px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--tone-working) 55%, transparent);
+  color: var(--fl-ink-working, var(--tone-working));
+  background: var(--panel);
+  font-size: 10.5px;
+  line-height: 15px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Sub-sessions' bus: dashed, quiet, square corners (lib/skyGraph). */
+.sky-wire.sky-wire-fan {
+  stroke-dasharray: 4 4;
+  stroke-linejoin: round;
+  opacity: 0.75;
+}
+
+/* Round 19: a ready chain's session tile — Ready, ▶ Run, how it starts. */
+.sky-ready {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  max-width: 180px;
+}
+.sky-head-chip.tone-ready {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  color: var(--fl-ink-accent, var(--accent));
+}
+.sky-run {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--tone-working);
+  color: var(--fl-ink-working, var(--tone-working));
+  background: var(--panel);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sky-run:hover {
+  background: color-mix(in srgb, var(--tone-working) 14%, var(--panel));
+}
+.sky-start-on {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+/* A working / asking sub-session's own bird, perched on its tile. */
+.sky-kid-bird {
+  position: absolute;
+  pointer-events: none;
+}
+
+/* The empty socket on a stops-only chain's first block: only while a wire is
+   being dragged (it is a target) or the chain is hovered — at rest a block
+   is just a block. */
+.sky-socket {
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.sky-chain:hover .sky-socket,
+.sky-socket.is-target {
+  opacity: 1;
 }

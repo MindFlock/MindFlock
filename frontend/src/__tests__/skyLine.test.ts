@@ -163,7 +163,7 @@ describe("the line", () => {
     const src = code("components/flights/SkyLine.tsx");
     expect(src).toContain('const head: ChainHead = useMemo(');
     expect(src).toContain('kind: "session", title: name, sub: headSub, session: p.title, color: chainColor(p.title), node: sessionNode');
-    expect(src).toContain("chainGraph(moves.diagram, { head, key: p.title, flightId: line.flight?.id || \"\" })");
+    expect(src).toContain("chainGraph(moves.diagram, { head, key: p.title, flightId: line.flight?.id || \"\", big })");
     // No pane until a box is opened.
     expect(html).not.toContain("pane-embedded");
   });
@@ -193,7 +193,7 @@ describe("the line", () => {
 
   it("the session tile says what the session is on (or where its flight is)", () => {
     const src = code("components/flights/SkyLine.tsx");
-    expect(src).toContain('const headSub = where || (row ? firstLine(row.task_headline || row.task || "") : "");');
+    expect(src).toContain('const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : where || (row ? firstLine(row.task_headline || row.task || "") : "");');
   });
 
   it("focus draws the ring; a pin shows when pinned", () => {
@@ -214,7 +214,10 @@ describe("the line", () => {
   it("open: the session box is a card holding the real pane — tab strip, no grid chrome", () => {
     const html = line({ open: true, paneW: 800, paneH: 500 });
     // Round 18: the card opens from the session tile, under the chain.
-    expect(html).toContain('class="skl-cards"');
+    // The session's own card opens in its tile's place (not in the row of
+    // workers' cards under the chain).
+    expect(html).toContain('class="skl-own-card"');
+    expect(html).toContain('class="skl-chain-wrap has-card"');
     expect(html).toContain('class="skl-card sky-own-scroll"');
     expect(html).toContain("width:800px;height:530px");
     expect(html).toContain('class="pane pane-embedded"');

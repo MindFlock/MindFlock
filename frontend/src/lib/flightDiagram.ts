@@ -44,6 +44,7 @@ import { windowName } from "./windowName";
 import { riskOf, type RiskTag } from "./stopRisk";
 import {
   isLive,
+  isShown,
   newStep,
   perchLabel,
   stepActor,
@@ -155,6 +156,13 @@ export interface DiagramNode {
   /** A flown stop's receipt (`detail.receipt`, ≤ 80 chars: "312 passed",
    * "PR #291"), under the title at mid and near. */
   receipt?: string;
+  /** A stop the flight is at that waits for a moment (a Wait's timer
+   * `detail.until`, a paced Loop's `detail.next_at`): epoch seconds, for the
+   * tile's live "12:34 left". */
+  until?: number;
+  /** Round 18: where the Sky draws a node that is not a step (a sub-session,
+   * a worker), chain-local — kept per device (lib/skyNodePos). */
+  pos?: { x: number; y: number };
   /** The stop's `when` condition, when it has one (the "if" chip). */
   when?: string;
   /** Round 16: a Loop stop's count (its return arc's pill). */
@@ -334,7 +342,7 @@ export function loopLine(step: Pick<FlightStep, "config">, rec?: Pick<StepRunSta
  * with nothing before it to repeat (or whose target is gone) draws no wire —
  * it stays a box. Folding (the flown pill, a collapsed group) re-aims the
  * wires at the box that holds their ends (`foldRun`). */
-export function loopEdges(line: readonly DiagramNode[]): DiagramEdge[] {
+export function loopEdges(line: readonly DiagramNode[], head?: string): DiagramEdge[] {
   const stops = line.filter((n) => n.row === "main" && n.kind === "stop" && n.step);
   const out: DiagramEdge[] = [];
   stops.forEach((n, i) => {
@@ -345,6 +353,13 @@ export function loopEdges(line: readonly DiagramNode[]): DiagramEdge[] {
     const gid = s.group?.id;
     const target = back ? before.find((b) => b.step!.id === back) : gid ? before.find((b) => b.step!.group?.id === gid) : before[0];
     const end = before[before.length - 1];
+    // First on a session's chain (nothing before it, aimed nowhere): it
+    // repeats the session's own prompt — a wire from the session tile back
+    // into it (backend flight_kinds/loop `repeats_prompt`).
+    if (!before.length && !back && head) {
+      out.push({ from: head, to: head, kind: "loop", loop: n.loop || loopMark(s), via: n });
+      return;
+    }
     if (!target || !end) return;
     out.push({ from: end.id, to: target.id, kind: "loop", loop: n.loop || loopMark(s), via: n });
   });
@@ -354,8 +369,8 @@ export function loopEdges(line: readonly DiagramNode[]): DiagramEdge[] {
 /** The line with its Loops lifted off it: each Loop that draws a return
  * wire (`loopEdges`) leaves the line — the line runs straight past it — and
  * comes back as that wire. */
-export function liftLoops(line: readonly DiagramNode[]): { line: DiagramNode[]; loops: DiagramEdge[] } {
-  const loops = loopEdges(line);
+export function liftLoops(line: readonly DiagramNode[], head?: string): { line: DiagramNode[]; loops: DiagramEdge[] } {
+  const loops = loopEdges(line, head);
   const lifted = new Set(loops.map((e) => e.via!.id));
   return { line: line.filter((n) => !lifted.has(n.id)), loops };
 }
@@ -455,8 +470,9 @@ export function flywayDiagram(steps: readonly FlightStep[], kinds?: readonly Ste
 /** A flight's stops with their live state. */
 export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): DiagramNode[] {
   const live = isLive(f);
-  // Stops with no session yet: nothing has flown, every one can change.
-  const grounded = f.state === "grounded";
+  // Stops with no session yet, or built and not yet flying (round 19 ready):
+  // nothing has flown, every one can change.
+  const grounded = f.state === "grounded" || f.state === "ready";
   return f.steps.map((s, i) => {
     const st = stepStateOf(f, s, i);
     const atCursor = i === f.cursor && live;
@@ -488,6 +504,7 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
       ...looksOf(s, kinds),
       ...(flown ? { receipt: receiptOf(rec?.detail) } : {}),
       ...(loop ? { loop } : {}),
+      ...(!flown && untilOf(rec?.detail) ? { until: untilOf(rec?.detail) } : {}),
     };
   });
 }
@@ -503,6 +520,23 @@ function looksOf(s: FlightStep, kinds?: readonly StepKindDef[] | null): Pick<Dia
   return out;
 }
 
+/** When a waiting stop is due (epoch seconds): a Wait's `detail.until`, a
+ * paced Loop's `detail.next_at`; 0 when it has none. */
+export function untilOf(detail: Record<string, unknown> | null | undefined): number {
+  const v = Number(detail?.until ?? detail?.next_at ?? 0);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+/** "12:34 left", "1:02:03 left", "due" — what a countdown says `secs` before. */
+export function leftWord(secs: number): string {
+  if (secs <= 0) return "due";
+  const s = Math.ceil(secs);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = String(s % 60).padStart(2, "0");
+  return (h ? h + ":" + String(m).padStart(2, "0") : String(m)) + ":" + ss + " left";
+}
+
 /** A flown stop's receipt: `detail.receipt` on one line, at most 80 chars. */
 export function receiptOf(detail: Record<string, unknown> | null | undefined): string {
   const r = detail?.receipt;
@@ -514,7 +548,7 @@ export function receiptOf(detail: Record<string, unknown> | null | undefined): s
  * while it is in the air. */
 export function flightDiagram(f: Flight, kinds?: readonly StepKindDef[] | null): Diagram {
   const { line, loops } = liftLoops(flightStops(f, kinds));
-  if (isLive(f) || f.state === "grounded") line.push(addNode("Tack on a stop"));
+  if (isShown(f) || f.state === "grounded") line.push(addNode("Tack on a stop"));
   const nodes: DiagramNode[] = [];
   const edges: DiagramEdge[] = [];
   chain(nodes, edges, line);
@@ -552,7 +586,7 @@ export function ladderRungs(row: Pick<Instance, "stage"> & { autopilot?: Autopil
 /** A mini ladder for a child box: its flight's dots, else its fast-track's. */
 function miniDots(row: Instance): string {
   const fl = row.flight as FlightRow | null | undefined;
-  if (fl && isLive(fl)) return stripDots(fl);
+  if (fl && isShown(fl)) return stripDots(fl);
   return ladderRungs(row)
     .map((r) => (r.state === "done" || r.state === "current" ? "●" : r.state === "halted" ? "✗" : "○"))
     .join("");
@@ -573,6 +607,17 @@ function sessionBox(row: Instance, kind: "parent" | "session" | "child", rowAt: 
     chip: { label: ss.label, tone: ss.tone },
     dots: kind === "child" ? miniDots(row) : undefined,
   };
+}
+
+/** The session's most recent flight that has landed (done or cancelled), from
+ * the flights query (it keeps the last finished ones), else null. */
+export function landedFlightOf(title: string, flights?: readonly Flight[] | null): Flight | null {
+  let best: Flight | null = null;
+  for (const f of flights || []) {
+    if (f.session !== title || (f.state !== "done" && f.state !== "cancelled")) continue;
+    if (!best || (f.finished || f.updated || 0) > (best.finished || best.updated || 0)) best = f;
+  }
+  return best;
 }
 
 export interface SessionDiagramOpts {
@@ -623,13 +668,14 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
   let insertFrom = 0;
   let loops: DiagramEdge[] = [];
   const fl = row.flight as FlightRow | null | undefined;
-  if (fl && isLive(fl)) {
+  if (fl && isShown(fl)) {
     mode = "flight";
     flightId = fl.id;
-    insertFrom = fl.cursor + 1;
+    // A ready flight (round 19) takes stops anywhere, its first one too.
+    insertFrom = fl.state === "ready" ? 0 : fl.cursor + 1;
     const full = opts.flights?.find((f) => f.id === fl.id);
     if (full) {
-      const lifted = liftLoops(flightStops(full, opts.kinds));
+      const lifted = liftLoops(flightStops(full, opts.kinds), me.id);
       line.push(...lifted.line);
       loops = lifted.loops;
     } else
@@ -649,6 +695,17 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
           reason: cur && fl.state === "halted" ? (fl as FlightRow & { reason?: string }).reason || "" : "",
         });
       }
+  } else if (landedFlightOf(title, opts.flights) && !ladderRungs(row).length) {
+    // A flight that landed stays on its session's line, its stops flown (the
+    // owner: the stops must not go away from the flow once they finish) —
+    // until the session builds or flies its next chain.
+    const done = landedFlightOf(title, opts.flights)!;
+    mode = "flight";
+    flightId = done.id;
+    insertFrom = done.steps.length;
+    const lifted = liftLoops(flightStops(done, opts.kinds), me.id);
+    line.push(...lifted.line);
+    loops = lifted.loops;
   } else {
     const rungs = ladderRungs(row);
     if (rungs.length) {
@@ -1131,7 +1188,7 @@ const BRANCH_NODE_STATE: Record<BranchState, DiagramNodeState> = {
  * fast-track's rungs), "" when it has neither. */
 export function innerSummary(row: Instance): string {
   const fl = row.flight as FlightRow | null | undefined;
-  if (fl && isLive(fl) && Number(fl.total) > 0) return Math.min(fl.cursor, fl.total) + "/" + fl.total + " stops" + (fl.step?.title ? " · " + fl.step.title : "");
+  if (fl && isShown(fl) && Number(fl.total) > 0) return Math.min(fl.cursor, fl.total) + "/" + fl.total + " stops" + (fl.step?.title ? " · " + fl.step.title : "");
   const rungs = ladderRungs(row);
   if (!rungs.length) return "";
   const done = rungs.filter((r) => r.state === "done").length;
@@ -1214,7 +1271,7 @@ export function hasSessionDiagram(rows: readonly Instance[], title: string): boo
   const row = rows.find((r) => r.title === title);
   if (!row) return false;
   const fl = row.flight as FlightRow | null | undefined;
-  return !!(fl && isLive(fl)) || ladderRungs(row).length > 0 || !!row.parent || rows.some((r) => r.parent === title);
+  return !!(fl && isShown(fl)) || ladderRungs(row).length > 0 || !!row.parent || rows.some((r) => r.parent === title);
 }
 
 // --- The bird -------------------------------------------------------------------

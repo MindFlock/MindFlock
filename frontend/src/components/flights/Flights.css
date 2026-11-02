@@ -745,3 +745,16 @@ a.fl-waiting-ref:hover {
     display: none;
   }
 }
+
+/* The Flight tab's chain (FlightChain): the Sky's tiles on a dotted ground,
+   scrolling sideways when the chain is wider than the pane. */
+.fl-chain-view {
+  position: relative;
+  overflow: auto;
+  padding: 26px 18px 18px;
+  border-radius: 10px;
+  background-color: var(--bg);
+  background-image: radial-gradient(color-mix(in srgb, var(--muted) 35%, transparent) 1px, transparent 1px);
+  background-size: 18px 18px;
+  min-height: 190px;
+}

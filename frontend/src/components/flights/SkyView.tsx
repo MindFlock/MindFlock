@@ -113,6 +113,7 @@
  * stop's dashed wire to the chain it starts — are drawn on the plane
  * (SkyWires); a stops-only chain something hands off to wears a trigger head. */
 
+import { optimisticDelete } from "../../lib/flightOptimism";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useDevices, useFlightKinds, useFlightPlans, useFlights, useInstances, usePeerLinks } from "../../state/queries";
 import { saveSkyNotes, type SkyNote } from "../../api/skyApi";
@@ -139,7 +140,7 @@ import { effectiveViewMode, useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
 import { overlayOpen } from "../../lib/keymap";
 import { layoutDiagram, sessionDiagram, type Diagram } from "../../lib/flightDiagram";
-import { STOP_MIME, isLive, newStep, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef } from "../../lib/flights";
+import { STOP_MIME, isShown, newStep, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef } from "../../lib/flights";
 import { attachGrounded, deleteFlight, startFlightOn, startGrounded, tackOn, tackOnNew, tackOnPlan, tackOnSteps } from "../../lib/flightsApi";
 import { NODE_H, PITCH_X, type WireEnd, type WireIntent } from "../../lib/skyGraph";
 import type { CatalogDrop } from "../../lib/stopCatalog";
@@ -231,7 +232,6 @@ import {
 import { ChipRow, TextField } from "./controls";
 import { OverflowMenu } from "../OverflowMenu";
 import { liveBoxParts } from "./FlightStrip";
-import { FlywayCanvas } from "./FlywayCanvas";
 import { IntakeLane } from "./IntakeLane";
 import { NewSessionBlock } from "./NewSessionBlock";
 import { SkyDrawer } from "./SkyDrawer";
@@ -248,8 +248,8 @@ import { Minimap, OffscreenHints, type MinimapRect } from "./Minimap";
 import { ZoomMenu } from "./ZoomMenu";
 import { SkyShortcuts } from "./SkyShortcuts";
 import { TakeoffDialog } from "./TakeoffDialog";
-import { Bird } from "./Bird";
 import { TourButton } from "../onboarding/TourButton";
+import { QuickAdd } from "./QuickAdd";
 import { TOUR_REVEAL } from "../onboarding/CoachTour";
 import { revealCamera } from "../../lib/skyReveal";
 import { useAutoTour } from "../onboarding/useAutoTour";
@@ -365,25 +365,6 @@ export function chainSize(d: Diagram, head: boolean): { w: number; h: number } {
 
 /** A closed session's line (or removed stops) on its way out: the last
  * picture of it, fading. */
-function GhostLine({ name, pos, diagram }: { name: string; pos: Pos; diagram: Diagram }) {
-  return (
-    <div className="sky-line sky-line-leaving" style={{ transform: `translate(${pos.x}px, ${pos.y}px)` }} aria-hidden="true">
-      <div className="sky-line-bar">
-        <Bird size={13} />
-        <span className="sky-line-name">{name}</span>
-      </div>
-      <FlywayCanvas diagram={diagram} label={name} vertical={false} className="sky-canvas" />
-    </div>
-  );
-}
-
-interface Ghost {
-  id: string;
-  name: string;
-  pos: Pos;
-  diagram: Diagram;
-}
-
 /** Where the new-session block sits, and what it is for: `attach` = the
  * grounded flight it makes a session for; `flying` = the guessed title of
  * the session it is making (the block hides while its line shows). */
@@ -492,6 +473,8 @@ export function SkyView() {
   // A grounded line dragged by its bar: the session line under the pointer,
   // which takes its stops on release.
   const [mergeOver, setMergeOver] = useState("");
+  // Settings → Appearance → Birds in the Sky: the background flock, or none.
+  const skyBirds = useUi((s) => s.skyBirds);
   const [drop, setDrop] = useState<{ title: string; plan: FlightPlan } | null>(null);
   // What a shelf chip being dragged carries (read at its dragstart).
   const dragged = useRef<{ plan: FlightPlan } | { kind: string } | null>(null);
@@ -849,18 +832,8 @@ export function SkyView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- layout/onLayout/rows are read once per pick
   }, [focusLine, rectOf, vp.w, vp.h]);
 
-  // A closed (or deleted) session's line leaves: the last picture fades out.
-  const last = useRef(new Map<string, Ghost>());
-  const [ghosts, setGhosts] = useState<Ghost[]>([]);
-  useEffect(() => {
-    const now = new Map<string, Ghost>(lines.map((l) => [l.id, { id: l.id, name: l.name, pos: place[l.id], diagram: l.diagram }]));
-    const gone = [...last.current.values()].filter((g) => !now.has(g.id) && !lineAlive(g.id));
-    last.current = now;
-    if (!gone.length || narrow) return;
-    const ids = new Set(gone.map((g) => g.id));
-    setGhosts((cur) => [...cur.filter((g) => !ids.has(g.id)), ...gone]);
-    setTimeout(() => alive.current && setGhosts((cur) => cur.filter((g) => !ids.has(g.id))), 450);
-  }, [lines, place, lineAlive, narrow]);
+  // A line that leaves is gone at once (the owner: deletes must disappear
+  // right away); round 18 dropped the fade, which drew the old row format.
 
   /** Select a line's session — the same selection a pane click makes. A
    * press on the line itself is remembered, so the selection effect above
@@ -1071,7 +1044,7 @@ export function SkyView() {
   /** The live flight on a session's line, if any. */
   const liveFlightOf = (title: string): Flight | null => {
     const fl = rows.find((r) => r.title === title)?.flight as FlightRow | null | undefined;
-    return fl && isLive(fl) ? flights?.find((f) => f.id === fl.id) || null : null;
+    return fl && isShown(fl) ? flights?.find((f) => f.id === fl.id) || null : null;
   };
   /** A saved stop dropped on `title`'s line. A line with a flight in the air
    * takes it as one more stop (one group) at the end; one without starts
@@ -1080,7 +1053,7 @@ export function SkyView() {
   const onFly = (plan: FlightPlan, title: string) => {
     const live = liveFlightOf(title);
     if (live) void tackOnPlan(live.id, plan.id);
-    else void startFlightOn(title, plan.id);
+    else void startFlightOn(title, plan.id, "prompt");
   };
   /** A grounded flight takes off on `title` (its ⋯ Fly on a session…). */
   const onAttach = (f: Flight, title: string) => {
@@ -1243,7 +1216,8 @@ export function SkyView() {
     const f = flights?.find((x) => x.id === groundedIdOf(key));
     if (!f) return;
     const was = posOf(key);
-    if (!(await deleteFlight(f.id))) return;
+    // Gone from the board at once; a refusal puts it back (lib/flightOptimism).
+    if (!(await optimisticDelete(f.id, () => deleteFlight(f.id)))) return;
     const steps = f.steps;
     const name = f.plan_name || "";
     const shown = groundedName(f);
@@ -1276,7 +1250,8 @@ export function SkyView() {
     // Their spots were their own chain's: they are placed afresh here.
     const bare = steps.map(({ pos: _pos, ...st }) => st as FlightStep);
     let ok = false;
-    if (!live) ok = !!(await attachGrounded(f.id, { title }));
+    // Round 19: wired / dropped onto a session it waits there, ready.
+    if (!live) ok = !!(await attachGrounded(f.id, { title, start_on: "prompt" }));
     else if (await tackOnSteps(live.id, bare, at !== undefined && at < live.steps.length ? at : undefined, name || undefined)) ok = await deleteFlight(f.id);
     if (!ok) return;
     const n = steps.length;
@@ -2533,7 +2508,7 @@ export function SkyView() {
             onDrop={onNewDrop}
             onScroll={onViewportScroll}
           >
-            <SkyFlock width={vp.w} height={vp.h} zoom={cam.z} paused={motionOff || !!drag} />
+            {skyBirds && <SkyFlock width={vp.w} height={vp.h} zoom={cam.z} paused={motionOff || !!drag} />}
             <div
               className={"sky-plane" + (focusMode ? " sky-focus" : "")}
               data-dragging={drag ? "" : undefined}
@@ -2569,9 +2544,6 @@ export function SkyView() {
               })}
               {/* Round 18: the wires between chains and the one being drawn. */}
               <SkyWires band={wiring.band} wires={xwires} />
-              {ghosts.map((g) => (
-                <GhostLine key={"ghost:" + g.id} {...g} />
-              ))}
               {newBlock}
               {/* Round 17: the alignment guides of the drag under way — 1 screen
                   px of accent, from the moving box to the one it aligned with. */}
@@ -2591,19 +2563,22 @@ export function SkyView() {
             </div>
             {marq && <div className="sky-marquee" aria-hidden="true" style={{ transform: `translate(${marq.x}px, ${marq.y}px)`, width: marq.w, height: marq.h }} />}
             {groundMenu && (
-              <div className="sky-ground-menu" role="menu" style={{ left: groundMenu.x, top: groundMenu.y }}>
-                <button
-                  type="button"
-                  className="fl-stopmenu-item"
-                  role="menuitem"
-                  onClick={() => {
-                    addNote(groundMenu.at);
-                    setGroundMenu(null);
-                  }}
-                >
-                  Add a note
-                </button>
-              </div>
+              // Right-click on empty sky: add a block by search, right there.
+              <QuickAdd
+                x={groundMenu.x}
+                y={groundMenu.y}
+                kinds={kinds}
+                plans={plans}
+                onPick={(pick) => {
+                  void dropGrounded(pick, groundMenu.at);
+                  setGroundMenu(null);
+                }}
+                onNote={() => {
+                  addNote(groundMenu.at);
+                  setGroundMenu(null);
+                }}
+                onClose={() => setGroundMenu(null)}
+              />
             )}
             {selBar}
             {/* Round 17: the minimap (folded to its glyph or open, remembered)

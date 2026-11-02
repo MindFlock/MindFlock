@@ -62,7 +62,7 @@ import { pushUndo } from "../../lib/skyUndo";
 import { deriveSessionState } from "../../lib/sessionState";
 import { firstLine } from "../../lib/format";
 import { birdPerch, drawnIndexes, flownCount, lineWhere, sessionDiagram, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
-import { chainColor, chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
+import { NODE_W, TILE, chainColor, chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
 import { ageOf, ageWord, fmtDuration, segmentTitle, segmentsFor, totalSeconds, type LineSegment } from "../../lib/lineTime";
 import type { FlightPlan, StepKindDef } from "../../lib/flights";
 import { InlineConfirm } from "../InlineConfirm";
@@ -70,6 +70,7 @@ import { OverflowMenu, type MenuItem } from "../OverflowMenu";
 import { Pane } from "../grid/Pane";
 import type { BoxSizeName } from "./FlywayCanvas";
 import { pillAimer, useChainMenu } from "./useChainMenu";
+import { ReadyHead, startWord } from "./ReadyHead";
 import { SkyChain } from "./SkyChain";
 import { ChainPanels } from "./SkyWires";
 import { HEAD, useChainEntry, useNodeMoves, useTourHooks, type ChainEntry } from "./useSkyWiring";
@@ -391,14 +392,25 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   // (its name, state chip and bird, in the session's colour), its stops are
   // free-floating tiles at their saved spots, wires join their ports.
   const where = row ? lineWhere(line.diagram) : "";
-  const moves = useNodeMoves(line.flight?.id, line.graphDiagram);
+  const moves = useNodeMoves(line.flight?.id, line.graphDiagram, p.title);
   const sessionNode = useMemo(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
-  const headSub = where || (row ? firstLine(row.task_headline || row.task || "") : "");
+  const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : where || (row ? firstLine(row.task_headline || row.task || "") : "");
   const head: ChainHead = useMemo(
     () => ({ kind: "session", title: name, sub: headSub, session: p.title, color: chainColor(p.title), node: sessionNode }),
     [name, headSub, p.title, sessionNode]
   );
-  const graph = useMemo(() => chainGraph(moves.diagram, { head, key: p.title, flightId: line.flight?.id || "" }), [moves.diagram, head, p.title, line.flight?.id]);
+  // An open sub-session's card takes its tile's place: the graph gives it a
+  // card-sized box and the other branches make room (the owner: sub-sessions
+  // should open like the session does, not below).
+  const big = useMemo(() => {
+    const out: Record<string, { w: number; h: number }> = {};
+    for (const [t, ks] of Object.entries(kids)) {
+      const c = clampPane(ks.w, ks.h);
+      out["child:" + t] = { w: c.w, h: c.h + CARD_HEAD_H };
+    }
+    return out;
+  }, [kids]);
+  const graph = useMemo(() => chainGraph(moves.diagram, { head, key: p.title, flightId: line.flight?.id || "", big }), [moves.diagram, head, p.title, line.flight?.id, big]);
   useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter);
   useTourHooks(wrapRef, { ".sky-head": "sky-session-box", ".sky-node:not(.sky-head)": "sky-stop" });
   const gc = line.graphCanvas;
@@ -511,17 +523,34 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   const age = ageOf(row?.activity_since);
   const still = ageWord(row?.activity_since);
 
-  // The open cards: the session's (from its tile) and each opened worker's,
-  // in a row under the chain.
+  // The session's card opens IN its tile's place (the owner: "open up like in
+  // its box, so it is clear where the session is"): the card sits where the
+  // tile was, the chain moves right of it, and the head's wire leaves the
+  // card's right edge. Each opened worker's card goes in a row under it.
   const cards: ReactNode[] = [];
-  if (p.layout.open && row)
-    cards.push(
-      <PaneCard key={row.title} inst={row} w={p.layout.paneW ?? PANE_W} h={p.layout.paneH ?? PANE_H} zoom={p.zoom} onSize={(w, h) => p.onLayout({ paneW: w, paneH: h })} onClose={() => p.onLayout({ open: false })} />
-    );
+  const own = p.layout.open && row ? clampPane(p.layout.paneW ?? PANE_W, p.layout.paneH ?? PANE_H) : null;
+  const ownCard =
+    own && row ? (
+      <div className="skl-own-card">
+        <PaneCard key={row.title} inst={row} w={own.w} h={own.h} zoom={p.zoom} onSize={(w, h) => p.onLayout({ paneW: w, paneH: h })} onClose={() => p.onLayout({ open: false })} />
+      </div>
+    ) : null;
+  // The head's out port (chain-local) lands on the card's right edge.
+  const cardShift = own ? Math.max(0, own.w - (NODE_W + TILE) / 2) : 0;
+  // A worker that is not drawn on the chain (no tile to open in) keeps the
+  // row under it; the ones on the chain open in their tile's place.
+  const onChain = new Set(graph.nodes.map((n) => n.node.session).filter(Boolean));
   for (const [t, ks] of Object.entries(kids)) {
     const kid = rowOf(t);
-    if (kid) cards.push(<PaneCard key={t} inst={kid} w={ks.w} h={ks.h} zoom={p.zoom} onSize={(w, h) => setKids((k) => ({ ...k, [t]: { w, h } }))} onClose={() => foldKid(t)} />);
+    if (kid && !onChain.has(t)) cards.push(<PaneCard key={t} inst={kid} w={ks.w} h={ks.h} zoom={p.zoom} onSize={(w, h) => setKids((k) => ({ ...k, [t]: { w, h } }))} onClose={() => foldKid(t)} />);
   }
+  const renderOpen = (n: DiagramNode): ReactNode => {
+    const t = n.session;
+    const ks = t ? kids[t] : undefined;
+    const kid = t && ks ? rowOf(t) : undefined;
+    if (!t || !ks || !kid) return null;
+    return <PaneCard key={t} inst={kid} w={ks.w} h={ks.h} zoom={p.zoom} onSize={(w, h) => setKids((k) => ({ ...k, [t]: { w, h } }))} onClose={() => foldKid(t)} />;
+  };
 
   return (
     <div
@@ -593,12 +622,14 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
       {row ? (
         <div
           ref={wrapRef}
-          className="skl-chain-wrap"
+          className={"skl-chain-wrap" + (ownCard ? " has-card" : "")}
+          style={own ? { paddingLeft: cardShift, minHeight: own.h + CARD_HEAD_H } : undefined}
           onPointerDownCapture={onChainDown}
           onPointerMoveCapture={(e) => {
             if (!press.current.moved && Math.hypot(e.clientX - press.current.x, e.clientY - press.current.y) >= 4) press.current.moved = e.buttons !== 0;
           }}
         >
+          {ownCard}
           <SkyChain
             graph={graph}
             zoom={p.zoom}
@@ -618,8 +649,12 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
             onNodeMove={moves.move}
             onPortDown={p.onPortDown}
             onPlus={(after) => (after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true))}
+            renderOpen={renderOpen}
             renderInBox={gc.renderInBox ? (n) => gc.renderInBox!(n) as ReactNode : undefined}
-            renderHead={() => (
+            renderHead={() =>
+              line.flight?.state === "ready" ? (
+                <ReadyHead flight={line.flight} />
+              ) : (
               <span className={"sky-head-chip fl-box-chip tone-" + ss.tone} title={ss.hint}>
                 {ss.label}
               </span>

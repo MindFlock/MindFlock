@@ -216,7 +216,7 @@ describe("flown stops and the ⋯'s words", () => {
     expect(src).toContain("const { foldFlown, setFoldFlown } = line;");
     expect(src).toContain("{ flights, kinds, family: true, foldFlown: true }");
     // Round 18: the chain draws the hook's diagram in the flight's indexes.
-    expect(src).toContain("const moves = useNodeMoves(line.flight?.id, line.graphDiagram);");
+    expect(src).toContain("const moves = useNodeMoves(line.flight?.id, line.graphDiagram, p.title);");
     expect(src).toContain('if (n.kind === "flown") setFoldFlown((x) => !x);');
   });
 

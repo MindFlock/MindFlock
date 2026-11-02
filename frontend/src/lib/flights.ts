@@ -14,7 +14,11 @@ import { relTime } from "./format";
 // --- The contract's shapes ---------------------------------------------------
 
 export type StepActor = "robot" | "you";
-export type FlightState = "grounded" | "running" | "waiting_you" | "paused" | "halted" | "done" | "cancelled";
+export type FlightState = "grounded" | "ready" | "running" | "waiting_you" | "paused" | "halted" | "done" | "cancelled";
+
+/** Round 19: how a chain built on a session takes off — on ▶ Run or the
+ * session's next prompt, only on ▶ Run, or at once (never stored as ready). */
+export type FlightStartOn = "prompt" | "run" | "now";
 export type StepState = "pending" | "running" | "waiting_you" | "done" | "skipped" | "failed";
 export type OnFail = "halt" | "agent" | "skip" | "you";
 export type TriggerKind = "manual" | "ticket" | "pr" | "issue" | "schedule" | "main_push" | "main_red" | "hook";
@@ -104,8 +108,10 @@ export interface FlightHistoryEntry {
   step: string;
   event:
     | "started" | "done" | "failed" | "skipped" | "you" | "halted" | "paused" | "resumed" | "jumped"
-    | "added" | "edited" | "removed" | "moved" | "halted_at" | "attached";
+    | "added" | "edited" | "removed" | "moved" | "halted_at" | "attached" | "looped" | "took_off";
   note: string;
+  /** Round 19: on `took_off` — what took a ready chain off. */
+  by?: "run" | "prompt";
 }
 
 export interface Flight {
@@ -131,6 +137,10 @@ export interface Flight {
   boot?: string;
   owner?: string;
   owner_at?: number;
+  /** Round 19: how it takes off ("now" for everything started at once). */
+  start_on?: FlightStartOn;
+  /** Round 19: when it became `ready` (0 when it never was). */
+  ready_since?: number;
 }
 
 export type FieldType = "text" | "textarea" | "int" | "bool" | "select";
@@ -185,6 +195,12 @@ export interface FlightRow {
 /** The flight is still in the air (the Board's *In flight* / *Needs you*). */
 export function isLive(f: Pick<Flight, "state">): boolean {
   return f.state === "running" || f.state === "waiting_you" || f.state === "paused" || f.state === "halted";
+}
+
+/** Round 19: a flight a session's line draws — one in the air (`isLive`), or
+ * one built and waiting for ▶ Run or the session's next prompt (`ready`). */
+export function isShown(f: Pick<Flight, "state">): boolean {
+  return isLive(f) || f.state === "ready";
 }
 
 /** The flight drives its session's ship ladder right now: running, parked on

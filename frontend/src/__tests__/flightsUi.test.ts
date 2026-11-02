@@ -113,6 +113,8 @@ afterEach(() => {
 });
 
 const boxes = (html: string) => [...html.matchAll(/class="(fl-box [^"]*)"[^>]*data-node="([^"]+)"/g)].map((m) => [m[2], m[1]]);
+/** The chain's tiles (SkyChain, round 18 — the Flight tab draws them too): the diagram node each one is. */
+const tiles = (html: string) => [...html.matchAll(/class="(sky-node [^"]*)"[^>]*data-diagram-node="([^"]+)"/g)].map((m) => m[2]);
 const lines = (html: string) => (html.match(/class="fl-wire fl-wire-line"/g) || []).length;
 
 describe("the flyway canvas", () => {
@@ -287,11 +289,12 @@ describe("the pane's Flight tab: the session diagram", () => {
   it("draws the parent, the session, its workers, the flight's stops and the trailing +", () => {
     const fRow = { id: "f_1", plan_name: "Ticket to merge", cursor: 2, total: 4, state: "waiting_you", step: { id: "s3", kind: "you", title: "Approve the merge", state: "waiting_you", actor: "you" } };
     const html = render([rowOf("lead"), rowOf("me", { parent: "lead", flight: fRow }), rowOf("w1", { parent: "me" })], "me");
-    // Round 11: the flown stops stay as boxes (no pill by default).
-    expect(boxes(html).map(([id]) => id)).toEqual(["parent:lead", "session:me", "stop:s1", "stop:s2", "stop:s3", "stop:s4", "add", "child:w1"]);
-    expect(html).toContain('class="fl-wire fl-wire-up"');
-    expect(html).toContain('class="fl-wire fl-wire-branch"');
-    expect(html).toContain(">Tack on a stop<");
+    // The same n8n-style chain as the Sky (FlightChain): the session tile, the
+    // flight's stops (flown ones stay tiles), its worker hung under on the
+    // dashed bus, and the trailing +.
+    expect(tiles(html)).toEqual(["session:me", "stop:s1", "stop:s2", "stop:s3", "stop:s4", "child:w1"]);
+    expect(html).toContain('data-wire="fan"');
+    expect(html).toContain("data-plus");
     expect(html).toContain('data-tour="flights-session"');
     // The perch where the flight is, opened wide.
     expect(html).toContain(">Done</button>");
@@ -301,13 +304,14 @@ describe("the pane's Flight tab: the session diagram", () => {
 
   it("an armed fast-track's rungs are boxes on the line", () => {
     const html = render([rowOf("me", { stage: "committed", autopilot: { depth: "pr", state: "running", step: "", reason: "", source: "user", item: "" } })], "me");
-    expect(boxes(html).map(([id]) => id)).toEqual(["session:me", "rung:commit", "rung:push", "rung:pr", "add"]);
+    expect(tiles(html)).toEqual(["session:me", "rung:commit", "rung:push", "rung:pr"]);
     expect(html).toContain(">Fast-track<");
   });
 
   it("with nothing on the line: the session, the +, and the saved stops as cards with Describe stops", () => {
     const html = render([rowOf("me")], "me");
-    expect(boxes(html).map(([id]) => id)).toEqual(["session:me", "add"]);
+    expect(tiles(html)).toEqual(["session:me"]);
+    expect(html).toContain("data-plus");
     expect(html).toContain(">Fly these stops</button>");
     expect(html).toContain('class="fl-mini-box fl-perch"');
     expect(html).toContain(">Describe stops</button>");
@@ -531,7 +535,8 @@ describe("the wiring outside Flights", () => {
     const pane = code("components/grid/Pane.tsx");
     expect(pane).toContain('data-tab="flight"');
     expect(pane).toContain("<SessionFlight inst={inst} />");
-    expect(pane).toContain("const flightShown = hasSessionDiagram(allRows ?? [], title);");
+    // Every session's pane has the tab (the owner wants it on all of them).
+    expect(pane).toContain("flight: true,");
     expect(code("lib/paneHeader.ts")).toContain('!(id === "flight" && !ctx.flight && ctx.active !== "flight")');
   });
 

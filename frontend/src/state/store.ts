@@ -287,6 +287,10 @@ interface UiState {
    * "running" panel instead of showing the live (flickering) output. Off by
    * default; the cover lifts on interaction and re-covers after a short idle. */
   reduceMotion: boolean;
+  /** The birds that drift across the Sky's background (SkyFlock). On by
+   * default; off draws none at all. */
+  skyBirds: boolean;
+  setSkyBirds(on: boolean): void;
   /** Take a break: pop a full-screen reminder every `breakEveryMin` minutes.
    * Off by default — nobody wants an app that interrupts them uninvited. */
   breakReminder: boolean;
@@ -539,6 +543,7 @@ export const useUi = create<UiState>((set, get) => ({
   showFilter: load<boolean>("mf_show_filter", true),
   filterPeek: false,
   reduceMotion: load<boolean>("mf_reduce_motion", false),
+  skyBirds: load<boolean>("mf_sky_birds", true),
   breakReminder: load<boolean>("mf_break_on", false),
   breakEveryMin: clampBreakMinutes(load<number>("mf_break_every", BREAK_DEFAULT_MINUTES)),
   idleFlock: load<boolean>("mf_idle_flock", true),
@@ -803,6 +808,10 @@ export const useUi = create<UiState>((set, get) => ({
   setReduceMotion: (on) => {
     save("mf_reduce_motion", on);
     set({ reduceMotion: on });
+  },
+  setSkyBirds: (on) => {
+    save("mf_sky_birds", on);
+    set({ skyBirds: on });
   },
   setBreakReminder: (on) => {
     save("mf_break_on", on);

@@ -325,12 +325,11 @@ describe("the wiring", () => {
     expect(sky).toContain("onDoubleClick={onDouble}");
   });
 
-  it("a line drags by its bar (SkyLine's onDragStart) and its spot is remembered, pinned; a closed one fades out", () => {
+  it("a line drags by its bar (SkyLine's onDragStart) and its spot is remembered, pinned; a closed one is gone at once", () => {
     expect(sky).toContain("onLayout(id, { x: p.x, y: p.y, pinned: true });");
     expect(sky).toContain("onDragStart={at ? (e) => onDragStart(id, e) : undefined}");
-    expect(sky).toContain('className="sky-line-bar"');
-    expect(sky).toContain('"sky-line sky-line-leaving"');
-    expect(sheet).toMatch(/\.sky-line-leaving \{[^}]*animation: sky-out/);
+    // No fade (it drew the old row format; deletes disappear right away).
+    expect(sky).not.toContain('"sky-line sky-line-leaving"');
   });
 
   it("mounts the intake lane on the plane and the new-session card where it was asked for", () => {

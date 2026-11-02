@@ -8,6 +8,8 @@ import type { Flight, FlightStep, StepRunState } from "../lib/flights";
 import { flightDiagram, type Diagram, type DiagramNode } from "../lib/flightDiagram";
 import { groundedDiagram } from "../lib/groundedLines";
 import {
+  BRANCH_COLS,
+  BRANCH_Y,
   CHAIN_HUES,
   GRID_SNAP,
   HEAD_ID,
@@ -122,7 +124,7 @@ describe("placement", () => {
     expect(g.nodes.find((n) => n.id === "stop:g2")).toMatchObject({ x: 10, y: 300, pinned: true });
   });
 
-  it("autoPlace: branches PITCH_Y below their split, half a pitch right, stacking", () => {
+  it("autoPlace: branches a row PITCH_Y below their split, from half a pitch right, BRANCH_COLS to a row", () => {
     const mk = (id: string, extra: Partial<DiagramNode> = {}, pinned = false, x = 0, y = 0): GraphNode => ({
       id,
       node: { id, kind: "stop", row: "main", title: id, sub: "", state: "pending", icon: "agent", ...extra },
@@ -139,9 +141,14 @@ describe("placement", () => {
     expect(out.map((n) => [n.id, n.x, n.y])).toEqual([
       ["a", 40, 16],
       ["b", 40 + PITCH_X, 16],
-      ["c1", 40 + PITCH_X / 2, 16 + PITCH_Y],
-      ["c2", 40 + PITCH_X / 2, 16 + 2 * PITCH_Y],
+      ["c1", 40 + PITCH_X / 2, 16 + BRANCH_Y],
+      ["c2", 40 + PITCH_X / 2 + PITCH_X, 16 + BRANCH_Y],
     ]);
+    // Past BRANCH_COLS a new row starts, back under the split.
+    const many = autoPlace([mk("a", {}, true, 0, 0), ...Array.from({ length: BRANCH_COLS + 1 }, (_, i) => br("k" + i))]);
+    const last = many[many.length - 1];
+    expect([last.x, last.y]).toEqual([PITCH_X / 2, BRANCH_Y + PITCH_Y]);
+    expect(new Set(many.slice(1, 1 + BRANCH_COLS).map((n) => n.y)).size).toBe(1);
   });
 
   it("moveNode pins the node, the tail follows, wires re-route, the head never moves", () => {

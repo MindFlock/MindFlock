@@ -356,6 +356,7 @@ def _send_queued_item(title: str, name: str, nxt: dict, rec: dict, now: float) -
     rec["armed"] = False
     rec["sent_at"] = now
     rec["sent_text"] = typed
+    _took_off_on_prompt(title)
     _events.BUS.emit(
         "session.prompt_sent",
         session=title,
@@ -375,6 +376,19 @@ def _send_queued_item(title: str, name: str, nxt: dict, rec: dict, now: float) -
         except Exception:  # noqa: BLE001
             pass
     return True
+
+
+def _took_off_on_prompt(title: str) -> None:
+    """A prompt was typed into ``title`` (the queue's drain, the mailbox lane
+    behind MCP ``send_message``): its ready chain waiting on the next prompt
+    takes off after the turn (``flight_driver.on_prompt``; docs/flights.md
+    "Round 19"). Never raises."""
+    try:
+        from backend.web.core import flight_driver as _flight_driver
+
+        _flight_driver.on_prompt(title)
+    except Exception:  # noqa: BLE001 — a send never fails on a flight
+        pass
 
 
 def _dialog_on_screen(inst, name: str) -> bool:
@@ -837,6 +851,7 @@ def _mail_type(inst, title: str, name: str, msg: dict, now: float):
     rec = _MAIL_STATE.setdefault(title, {"idle_since": None, "sent_at": 0.0})
     rec["sent_at"] = now
     rec["idle_since"] = None
+    _took_off_on_prompt(title)
     if log.ErrorLog is not None:
         try:
             log.ErrorLog.Printf(
