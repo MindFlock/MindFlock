@@ -12,11 +12,13 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, Response
 
+from backend.web.core import auth as _web_auth
 from backend.web.core import flight_describe as _describe
 from backend.web.core import flight_driver as _driver
+from backend.web.core import flight_intake_default as _intake_default
 from backend.web.core import flight_kinds as _kinds
 from backend.web.core import flight_triggers as _triggers
 from backend.web.core import flight_when as _when
@@ -188,14 +190,53 @@ def _bad_step(err: _flights.PlanError) -> JSONResponse:
     )
 
 
+async def _ground_editor(body: dict, ref: dict) -> dict:
+    """:func:`flight_driver.ground` for a chain that edits ``ref``'s default
+    stops: the same grounding, with ``edits_default`` stored on it."""
+    plan = None
+    plan_id = str(body.get("plan_id") or "")
+    if plan_id:
+        plan = _flights.get_plan(plan_id)
+        if plan is None:
+            raise _flights.FlightError("unknown_plan", 404, "no such plan")
+    flight = await asyncio.to_thread(
+        _flights.ground,
+        plan,
+        body.get("steps"),
+        str(body.get("name") or ""),
+        str(body.get("by") or "user"),
+        None,
+        ref,
+    )
+    _driver._emit("flight.changed", flight)
+    return flight
+
+
 async def _start_grounded(body: dict) -> JSONResponse:
-    """``{grounded: true, plan_id? | steps?, name?}`` → 202 ``{"flight"}``: a
-    row of stops with no session (state ``grounded``) that nothing drives
-    until ``POST /api/flights/{id}/attach``."""
+    """``{grounded: true, plan_id? | steps?, name?, edits_default?}`` → 202
+    ``{"flight"}``: a row of stops with no session (state ``grounded``) that
+    nothing drives until ``POST /api/flights/{id}/attach``. With
+    ``edits_default`` (``{kind: tickets|prs|issues, target}``; 400
+    ``bad_edits_default`` when malformed) it EDITS that source's default
+    stops and is never attached (409 ``edits_default``)."""
     if "steps" in body and not isinstance(body["steps"], list):
         return _bad_step(_flights.PlanError("steps is a list", "steps"))
+    ref = None
+    if body.get("edits_default") is not None:
+        ref = _flights.normalize_edits_default(body.get("edits_default"))
+        if ref is None:
+            return _err(
+                _flights.FlightError(
+                    "bad_edits_default",
+                    400,
+                    "edits_default is {kind: tickets|prs|issues, target}",
+                )
+            )
     try:
-        flight = await _driver.ground(body)
+        if ref is not None:
+            flight = await _ground_editor(body, ref)
+        else:
+            flight = await _driver.ground(body)
     except _flights.PlanError as err:
         return _bad_step(err)
     except _flights.FlightError as err:
@@ -252,6 +293,53 @@ def flights_default_place() -> JSONResponse:
     if shown.startswith(home):
         shown = "~" + shown[len(home) :]
     return JSONResponse({"folder": shown})
+
+
+# --- An intake source's default stops (docs/flights.md "A source's default
+# stops, edited in the Sky (2026-11-02)"); the logic is core.flight_intake_default.
+
+
+@router.get("/api/flights/intake-default")
+def flights_intake_default(kind: str = "", target: str = "") -> JSONResponse:
+    """``?kind=tickets|prs|issues&target=<source id | owner/repo>`` →
+    ``{kind, target, label, plan_id, name, own, steps}``: what a new item
+    from that source flies now. 400 ``bad_kind``, 404 ``unknown_source``."""
+    try:
+        return JSONResponse(_intake_default.resolve(kind, target))
+    except _flights.FlightError as err:
+        return _err(err)
+
+
+@router.put("/api/flights/intake-default")
+def flights_intake_default_put(
+    payload: Optional[dict] = None,
+    allowed: bool = Depends(_web_auth.configure_allowed),
+) -> JSONResponse:
+    """Set a source's default stops: ``{kind, target, steps, name?}`` (saved
+    as its own saved stop), ``{kind, target, plan_id}`` (``""`` = our
+    built-in) or ``{from_flight}`` → the GET shape plus ``previous_plan_id``.
+    400 ``bad_step`` with the field; 404 ``unknown_source`` /
+    ``unknown_plan`` / ``unknown_flight`` / ``no_source``. Owner only, like
+    the Intake dialog's saves (a source decides what its tickets run)."""
+    if not allowed:
+        return _web_auth.configure_refused()
+    try:
+        return JSONResponse(_intake_default.put(payload or {}))
+    except _flights.PlanError as err:
+        return _bad_step(err)
+    except _flights.FlightError as err:
+        return _err(err)
+
+
+@router.get("/api/flights/intake-default/for-flight/{flight_id}")
+def flights_intake_default_for_flight(flight_id: str) -> JSONResponse:
+    """The GET shape for the source ``flight_id`` came from (its subject, or
+    the source an editor chain edits); 404 ``unknown_flight`` /
+    ``no_source``."""
+    try:
+        return JSONResponse(_intake_default.for_flight(flight_id))
+    except _flights.FlightError as err:
+        return _err(err)
 
 
 @router.get("/api/flights/{flight_id}")

@@ -1752,6 +1752,33 @@ def _normalize_subject(raw) -> dict:
     }
 
 
+#: The intake sources a default belongs to (``flight_intake_default.KINDS``).
+EDITS_DEFAULT_KINDS = ("tickets", "prs", "issues")
+EDITS_DEFAULT_REFUSED = (
+    "this chain edits a source's default stops; save it as the default instead"
+)
+
+
+def normalize_edits_default(raw) -> Optional[dict]:
+    """A grounded chain's ``edits_default`` (docs/flights.md "A source's
+    default stops, edited in the Sky"): ``{kind: tickets|prs|issues, target}``
+    — the intake source whose default stops it edits — or None when absent
+    or malformed (dropped, never an error)."""
+    if not isinstance(raw, dict):
+        return None
+    kind = _text(raw.get("kind"), 16).lower()
+    target = _text(raw.get("target"), 500)
+    if kind not in EDITS_DEFAULT_KINDS or not target:
+        return None
+    return {"kind": kind, "target": target}
+
+
+def _refuse_editor(flight: dict) -> None:
+    """A chain that edits a source's default is never flown (409)."""
+    if normalize_edits_default(flight.get("edits_default")) is not None:
+        raise FlightError("edits_default", 409, EDITS_DEFAULT_REFUSED)
+
+
 def _normalize_flight(fid, raw) -> Optional[dict]:
     if not isinstance(raw, dict):
         return None
@@ -1828,6 +1855,10 @@ def _normalize_flight(fid, raw) -> Optional[dict]:
     trig = _normalize_triggered_by(raw.get("triggered_by"))
     if trig is not None:
         out["triggered_by"] = trig
+    edits = normalize_edits_default(raw.get("edits_default"))
+    if edits is not None:
+        # An EDITOR: a source's default stops on the board, never flown.
+        out["edits_default"] = edits
     if raw.get("free"):
         # A chain on the board, run in a folder with no session (n8n's
         # workflow: the run is an execution, the chain stays).
@@ -3984,7 +4015,10 @@ def op_resume(flight: dict, now: Optional[float] = None) -> dict:
 def validate_for_takeoff(flight: dict) -> None:
     """Every step as strict as a plan's (``steps[i]…`` in the error), before a
     grounded flight binds to a session: a Split with no prompts, a Wait with
-    no minutes… is refused here, with the field, not when it was placed."""
+    no minutes… is refused here, with the field, not when it was placed. A
+    chain carrying ``edits_default`` is refused outright (409
+    ``edits_default``): it edits a source's default, it never flies."""
+    _refuse_editor(flight)
     normalize_steps(copy.deepcopy(flight["steps"]), strict=True)
 
 
@@ -4695,6 +4729,7 @@ def ground(
     name: str = "",
     by: str = "user",
     now: Optional[float] = None,
+    edits_default=None,
 ) -> dict:
     """Store a ``grounded`` flight (``POST /start {grounded: true}``): no
     session, cursor 0, every step pending; the driver never touches it until
@@ -4702,8 +4737,10 @@ def ground(
     makes them), then ``raw_steps`` validated like a plan's — grouped under
     ``name`` when it is set. Steps are ``s1..sN``. ``plan_id`` is the plan's
     (or ``adhoc``); ``plan_name`` is ``name``, else the plan's, else "Stops".
-    Raises :class:`PlanError` (``steps…``) and :class:`FlightError`
-    (``needs_steps`` 400)."""
+    ``edits_default`` (``{kind, target}``, :func:`normalize_edits_default`)
+    makes it an EDITOR of that intake source's default stops: stored on the
+    flight, refused take-off. Raises :class:`PlanError` (``steps…``) and
+    :class:`FlightError` (``needs_steps`` 400)."""
     ts = float(now if now is not None else time.time())
     name = _text(name, 120)
     steps: List[dict] = []
@@ -4750,6 +4787,7 @@ def ground(
             "started": ts,
             "updated": ts,
             "by": by,
+            "edits_default": edits_default,
         },
     )
     return _put_new(flight)
@@ -4772,10 +4810,12 @@ def op_attach(
     :func:`take_off`'s rule. ``triggered_by`` (a Handoff stop started it):
     recorded on the flight. ``start_on`` ``"prompt"`` / ``"run"``
     (docs/flights.md "Round 19"): bound but left ``ready`` (nothing started,
-    ``seeded`` ignored). 409 ``not_grounded`` on any other flight."""
+    ``seeded`` ignored). 409 ``not_grounded`` on any other flight; 409
+    ``edits_default`` on a chain editing a source's default stops."""
     ts = float(now if now is not None else time.time())
     if flight["state"] != GROUNDED:
         raise FlightError("not_grounded", 409, "this flight already has a session")
+    _refuse_editor(flight)
     trig = _normalize_triggered_by(triggered_by)
     if trig is not None:
         flight["triggered_by"] = trig

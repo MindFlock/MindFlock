@@ -7339,3 +7339,52 @@ chain with `last_run` resets every stop to pending, cursor 0. `prune` never
 touches a sessionless flight. Removed: `ensure_default_session`,
 `general.default_session`; `GET /api/flights/default-place` → `{folder}`.
 The picker says "Default folder" / "Run in <folder>".
+
+## A source's default stops, edited in the Sky (2026-11-02)
+
+**The rule.** The defaults are ours: every intake source (a ticketing source,
+a repo's PRs, a repo's issues) flies our built-in stops, cut at its Fast-track
+depth (`builtin:ticket@pr`…), until it names its own saved stop in its `plan`
+field (`TicketingSource.plan`; `plan` in `github.repo_settings[repo]` /
+`github.issue_repo_settings[repo]`). A ticket's flight is a COPY of that plan,
+so editing one ticket's line stays local to that ticket. The calls below are
+the ONLY way the Sky changes a source's default. Logic:
+`backend/web/core/flight_intake_default.py`; routes in `routes/flights.py`.
+
+A source is `{kind, target}`: `tickets` + the source's id (its provider as a
+fallback, like every intake lookup), or `prs` / `issues` + `owner/repo`
+(matched case-insensitively against `github.repos` / `issue_repos`, or the
+settings table).
+
+| Call | Does |
+|---|---|
+| `GET /api/flights/intake-default?kind=&target=` | `{kind, target, label, plan_id, name, own, steps}` — what a NEW item from the source flies now, resolved like an intake start (`server._intake_plan` with no per-start pick): its own plan when it exists (`own: true`), else the built-in cut at its depth. All empty (`plan_id ""`, `steps []`) when nothing flies (no depth, no plan). `label` is the lane's: "Tickets · Shortcut", "Tickets · Jira · Platform", "PRs · o/r", "Issues · o/r". 400 `bad_kind`, 404 `unknown_source` |
+| `PUT /api/flights/intake-default {kind, target, steps, name?}` | Steps (validated strictly: 400 `bad_step` + `field`) become the source's own saved stop. Its existing own plan is rewritten IN PLACE (name kept unless `name`) when it is not a built-in / depth cut, runs on no trigger of its own (schedule, main push/red, hook) and no other source or repo names it; otherwise a new plan "<label> stops" (or `name`), trigger = the intake kind, is made and the source pointed at it |
+| `PUT … {kind, target, plan_id}` | The source flies that existing plan (404 `unknown_plan`); `""` clears the field — back to our built-in |
+| `PUT … {from_flight}` | That flight's steps (reduced to plan shape) as `{kind, target, steps}`. Its source: an editor chain's `edits_default`, else its `subject` (ticket → tickets + `subject.source`; pr → prs; issue → issues). 404 `unknown_flight` / `no_source` |
+| `GET /api/flights/intake-default/for-flight/{id}` | The GET shape for that flight's source (mapped as above); 404 `no_source` for a hand-made flight or a source since removed |
+
+Every PUT answers the GET shape plus `previous_plan_id` (the field before the
+write, `""` when unset) so the UI can Undo with `{kind, target, plan_id:
+previous_plan_id}`. PUT is owner only (`auth.may_configure`, like the Intake
+dialog). The field is written the way the Intake dialog saves it —
+`settings.set_ticketing_sources` (the whole list, every other field kept) or
+`update_settings(github={repo_settings|issue_repo_settings: …})` (a block
+whose only key was `plan` is dropped) — then stamped for settings sync
+(`settings_sync.local_change`) and passed to `settings_hooks.
+after_settings_change`, so other devices get it and the pipeline's fresh read
+(`session_runner._fresh_settings`) sees it. Reads drop the per-process
+settings cache first. Saving steps drops the group a grounded editor puts round
+the stop it was seeded from (one wrapping the whole chain, or one labelling
+the source's current default); other groups are kept.
+
+**The editor chain.** `POST /api/flights/start {grounded: true, plan_id? |
+steps?, name?, edits_default: {kind, target}}` stores a grounded chain with
+`edits_default` (400 `bad_edits_default` when malformed; the flight
+normalizer drops a malformed one from the store). It is never flown:
+`validate_for_takeoff` and `op_attach` refuse it with 409 `edits_default`
+("this chain edits a source's default stops; save it as the default
+instead"), which covers `POST /attach` with a session, `"@default"` / a folder
+(refused before anything is started), and a Handoff aimed at it. Adding,
+moving and removing its stops work as on any grounded chain; Save as default
+is `PUT {from_flight: <its id>}`. A split-off piece is a plain chain.
