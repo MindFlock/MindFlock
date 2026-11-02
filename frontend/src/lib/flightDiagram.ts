@@ -1053,6 +1053,9 @@ export function collapseGroups(d: Diagram, expanded?: ReadonlySet<string> | null
   let out = d;
   const seen = new Set<string>();
   for (const run of runs) {
+    // A group of ONE stop is that stop (the owner saw a lone Commit "boxed
+    // out" as a "Stops · 0 of 1" group after a chain was joined on).
+    if (run.length < 2) continue;
     const g = run[0].step!.group!;
     const id = "group:" + g.id + (seen.has(g.id) ? "@" + run[0].index : "");
     seen.add(g.id);

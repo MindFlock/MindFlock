@@ -81575,6 +81575,7 @@ function collapseGroups(d, expanded) {
 	let out = d;
 	const seen = /* @__PURE__ */ new Set();
 	for (const run of runs) {
+		if (run.length < 2) continue;
 		const g = run[0].step.group;
 		const id = "group:" + g.id + (seen.has(g.id) ? "@" + run[0].index : "");
 		seen.add(g.id);
@@ -87209,7 +87210,12 @@ function useSkyWiring(opts) {
 		dragging: !!band
 	};
 }
-var groundedName$1 = (f) => f.plan_name || "Stops";
+var groundedName$1 = (f) => {
+	const given = (f.plan_name || "").trim();
+	if (given && given !== "Stops") return given;
+	const steps = f.steps || [];
+	return steps.length ? steps[0].title + (steps.length > 1 ? " + " + (steps.length - 1) + " more" : "") : "Stops";
+};
 var atOrEnd = (f, at) => at !== void 0 && at < f.steps.length ? at : void 0;
 async function runWireIntent(intent, ctx, d) {
 	if (intent.op === "none") return;
@@ -135184,7 +135190,13 @@ var NO_HEAD = {
 	color: "var(--muted)"
 };
 var cleanFlightName = (s) => s.trim().slice(0, 120);
-var groundedName = (f) => f.plan_name || "Stops";
+var groundedName = (f) => {
+	const given = (f.plan_name || "").trim();
+	if (given && given !== "Stops") return given;
+	const steps = f.steps || [];
+	if (!steps.length) return "Stops";
+	return steps[0].title + (steps.length > 1 ? " + " + (steps.length - 1) + " more" : "");
+};
 function GroundedLine(p) {
 	const { flight } = p;
 	const line = useGroundedLine(flight, {
@@ -137469,7 +137481,8 @@ function SkyView() {
 		const f = flights?.find((x) => x.id === groundedIdOf(key));
 		if (!f) return;
 		const steps = f.steps;
-		const name = f.plan_name || "";
+		const given = (f.plan_name || "").trim();
+		const name = steps.length > 1 && given && given !== "Stops" && !/ \(from .+\)$/.test(given) ? given : "";
 		const into = isGroundedKey(title) ? flights?.find((x) => x.id === groundedIdOf(title)) || null : null;
 		if (isGroundedKey(title) && !into) return;
 		const live = into || liveFlightOf(title);

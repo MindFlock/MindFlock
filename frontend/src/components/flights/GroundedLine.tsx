@@ -100,7 +100,16 @@ export const NO_HEAD: ChainHead = { kind: "none", title: "", sub: "", color: "va
 export const cleanFlightName = (s: string) => s.trim().slice(0, 120);
 
 /** The name a grounded line shows. */
-export const groundedName = (f: Pick<Flight, "plan_name">) => f.plan_name || "Stops";
+/** A stops-only chain's name: the one it was given, else what it holds — its
+ * first stop's title (and how many more): "Commit", "Loop ×3 + 2 more". The
+ * server's placeholder "Stops" counts as no name. */
+export const groundedName = (f: Pick<Flight, "plan_name"> & { steps?: readonly { title: string }[] }) => {
+  const given = (f.plan_name || "").trim();
+  if (given && given !== "Stops") return given;
+  const steps = f.steps || [];
+  if (!steps.length) return "Stops";
+  return steps[0].title + (steps.length > 1 ? " + " + (steps.length - 1) + " more" : "");
+};
 
 export function GroundedLine(p: GroundedLineProps): JSX.Element {
   const { flight } = p;

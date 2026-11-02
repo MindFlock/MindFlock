@@ -53,3 +53,13 @@ describe("sub-sessions keep their spot per device", () => {
     expect(withNodePos(d, {})).toBe(d);
   });
 });
+
+describe("a stops-only chain's name", () => {
+  it("is the one it was given, else its first stop and how many more — never the placeholder 'Stops'", async () => {
+    const { groundedName } = await import("../components/flights/GroundedLine");
+    expect(groundedName({ plan_name: "Iterate on the sky" })).toBe("Iterate on the sky");
+    expect(groundedName({ plan_name: "Stops", steps: [{ title: "Commit" }] })).toBe("Commit");
+    expect(groundedName({ plan_name: "", steps: [{ title: "Loop ×3" }, { title: "Commit" }, { title: "Push" }] })).toBe("Loop ×3 + 2 more");
+    expect(groundedName({ plan_name: "" })).toBe("Stops");
+  });
+});

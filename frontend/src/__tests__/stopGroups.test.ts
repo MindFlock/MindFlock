@@ -146,9 +146,12 @@ describe("a group is one stop on the line", () => {
     expect(groupHaltStep(node(at(5), "group:g1"))).toBeNull();
   });
 
-  it("the same id back later on the line is a box of its own", () => {
-    const steps = [...STEPS.slice(0, 4), step("s5", "you", "Approve"), step("s6", "ship", "Merge", G)];
+  it("the same id back later on the line is a box of its own — a lone member draws as itself", () => {
+    const steps = [...STEPS.slice(0, 4), step("s5", "you", "Approve"), step("s6", "ship", "Merge", G), step("s7", "ship", "Tag", G)];
     expect(mainIds(at(0, { steps }))).toEqual(["session:me", "stop:s1", "group:g1", "stop:s5", "group:g1@5", "add"]);
+    // A group of ONE stop is that stop (a joined-on lone Commit stays "Commit").
+    const lone = [...STEPS.slice(0, 4), step("s5", "you", "Approve"), step("s6", "ship", "Merge", G)];
+    expect(mainIds(at(0, { steps: lone }))).toEqual(["session:me", "stop:s1", "group:g1", "stop:s5", "stop:s6", "add"]);
   });
 
   it("a line's expandedGroups draws its sub-steps as stops, marked for the outline", () => {

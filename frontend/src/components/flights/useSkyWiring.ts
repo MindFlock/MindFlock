@@ -271,7 +271,13 @@ export interface WireRunDeps {
 }
 
 /** A stops-only chain's name (GroundedLine's `groundedName`). */
-const groundedName = (f: Pick<Flight, "plan_name">) => f.plan_name || "Stops";
+// The same naming as GroundedLine's (a placeholder "Stops" is no name).
+const groundedName = (f: Pick<Flight, "plan_name"> & { steps?: readonly { title: string }[] }) => {
+  const given = (f.plan_name || "").trim();
+  if (given && given !== "Stops") return given;
+  const steps = f.steps || [];
+  return steps.length ? steps[0].title + (steps.length > 1 ? " + " + (steps.length - 1) + " more" : "") : "Stops";
+};
 
 /** A flight index as the routes take it: past the end = appended. */
 const atOrEnd = (f: Pick<Flight, "steps">, at: number | undefined) => (at !== undefined && at < f.steps.length ? at : undefined);

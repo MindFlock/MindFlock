@@ -1242,7 +1242,11 @@ export function SkyView() {
     const f = flights?.find((x) => x.id === groundedIdOf(key));
     if (!f) return;
     const steps = f.steps;
-    const name = f.plan_name || "";
+    // Joined on as ONE named group only when it was really named (by you, or
+    // a saved stop) and holds more than one stop; otherwise the stops land as
+    // themselves (a lone Commit must stay "Commit", not a "Stops" box).
+    const given = (f.plan_name || "").trim();
+    const name = steps.length > 1 && given && given !== "Stops" && !/ \(from .+\)$/.test(given) ? given : "";
     // Round 18: onto another stops-only chain too (a wire from its tile).
     const into = isGroundedKey(title) ? flights?.find((x) => x.id === groundedIdOf(title)) || null : null;
     if (isGroundedKey(title) && !into) return;
