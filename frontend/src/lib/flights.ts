@@ -168,6 +168,10 @@ export interface Flight {
    * ends it goes back on the ground (`last_run` says how it went). */
   free?: boolean;
   last_run?: { state: "done" | "cancelled"; reason: string; at: number };
+  /** A grounded chain that EDITS an intake source's default stops (the Sky's
+   * intake lane, 2026-11-02): never run; Save as default writes its steps as
+   * that source's own saved stop (`PUT /api/flights/intake-default`). */
+  edits_default?: IntakeSourceRef;
   id: string;
   plan_id: string;
   plan_name: string;
@@ -740,4 +744,23 @@ export function normalizeFlightRows<T extends { flight?: (FlightRow & { branch?:
     if (!f || f.id) return r;
     return { ...r, flight: null, flight_branch: f.branch && f.branch.step ? { parent: f.branch.parent, step: f.branch.step } : null };
   });
+}
+
+/** An intake source a default belongs to: a ticketing source (its id), or a
+ * GitHub repo's PRs / issues (the repo). The intake lane's block `kind`/`id`. */
+export interface IntakeSourceRef {
+  kind: "tickets" | "prs" | "issues";
+  target: string;
+}
+
+/** A source's default stops as the server resolves them
+ * (`GET /api/flights/intake-default`): its own saved stop (`own`) or the
+ * built-in, cut at its Fast-track depth — the steps new items really fly. */
+export interface IntakeDefault extends IntakeSourceRef {
+  /** What the lane calls the source ("Tickets · Shortcut", "PRs · o/r"). */
+  label: string;
+  plan_id: string;
+  name: string;
+  own: boolean;
+  steps: FlightStep[];
 }

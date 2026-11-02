@@ -29,7 +29,7 @@ import { errorPop } from "./errorPop";
 import { errMsg } from "./format";
 import { selectSession } from "./sessionActions";
 import { toast } from "./toast";
-import type { Flight, FlightPlan, FlightStartOn, FlightStep, StepKindDef } from "./flights";
+import type { Flight, FlightPlan, FlightStartOn, FlightStep, IntakeDefault, IntakeSourceRef, StepKindDef } from "./flights";
 
 const enc = encodeURIComponent;
 export const flightPath = (id: string, rest = "") => "/api/flights/" + enc(id) + rest;
@@ -444,7 +444,7 @@ export async function dropGroup(flightId: string, stepId: string): Promise<boole
 
 /** Stops on the board with no session yet (`state: "grounded"`): from a saved
  * stop (one group) or from loose steps (grouped under `name` when set). */
-export async function startGrounded(body: { plan_id?: string; steps?: FlightStep[]; name?: string }): Promise<Flight | null> {
+export async function startGrounded(body: { plan_id?: string; steps?: FlightStep[]; name?: string; edits_default?: IntakeSourceRef }): Promise<Flight | null> {
   try {
     const d = await api<{ flight?: Flight }>("/api/flights/start", {
       json: {
@@ -452,6 +452,7 @@ export async function startGrounded(body: { plan_id?: string; steps?: FlightStep
         ...(body.plan_id ? { plan_id: body.plan_id } : {}),
         ...(body.steps ? { steps: body.steps.map(wireStep) } : {}),
         ...(body.name ? { name: body.name } : {}),
+        ...(body.edits_default ? { edits_default: body.edits_default } : {}),
       },
     });
     return d?.flight || null;
@@ -570,5 +571,57 @@ export function flushStopPos(): void {
     clearTimeout(q.timer);
     posQueue.delete(id);
     void saveStopPositions(id, q.positions).then((ok) => q.done.forEach((f) => f(ok)));
+  }
+}
+
+// --- An intake source's default stops (2026-11-02) ------------------------------
+// Our built-in stops are every source's default; the owner edits one source's
+// in the Sky with the blocks (the lane's stops chip, or a ticket line's ⋯ "Use
+// these stops for every ticket from …"). Editing ONE ticket's line never
+// changes the default — only these calls do.
+
+const defaultQuery = (ref: IntakeSourceRef) => "kind=" + encodeURIComponent(ref.kind) + "&target=" + encodeURIComponent(ref.target);
+
+/** The stops a source's new items fly now (its own saved stop, else the
+ * built-in at its depth); null when the server can't say (logged as a pop). */
+export async function getIntakeDefault(ref: IntakeSourceRef): Promise<IntakeDefault | null> {
+  try {
+    return await api<IntakeDefault>("/api/flights/intake-default?" + defaultQuery(ref));
+  } catch (err) {
+    errorPop("Couldn't read the default stops", errMsg(err));
+    return null;
+  }
+}
+
+/** The intake source a session line's flight came from (its subject), or
+ * null — a hand-made flight, or a source since removed. Quiet on failure. */
+export async function intakeSourceOfFlight(flightId: string): Promise<IntakeDefault | null> {
+  try {
+    return await api<IntakeDefault>("/api/flights/intake-default/for-flight/" + encodeURIComponent(flightId));
+  } catch {
+    return null;
+  }
+}
+
+/** Set a source's default stops. One of: `steps` (saved as the source's own
+ * saved stop — its existing own one is replaced when no other source shares
+ * it), `from_flight` (that flight's steps, its source from its subject), or
+ * `plan_id` (an existing saved stop; "" = back to our built-in). Returns the
+ * default as it now stands, with `previous_plan_id` for an Undo. */
+export async function setIntakeDefault(
+  body: (IntakeSourceRef & ({ steps: FlightStep[]; name?: string } | { plan_id: string })) | { from_flight: string }
+): Promise<(IntakeDefault & { previous_plan_id: string }) | null> {
+  try {
+    const json = "steps" in body ? { ...body, steps: body.steps.map(wireStep) } : body;
+    const d = await api<IntakeDefault & { previous_plan_id: string }>("/api/flights/intake-default", { method: "PUT", json });
+    return d;
+  } catch (err) {
+    errorPop("Saving the default stops failed", errMsg(err));
+    return null;
+  } finally {
+    void refreshFlights();
+    // The lane reads each source's plan off the settings doc; Intake off these.
+    void queryClient.invalidateQueries({ queryKey: ["settings"] });
+    void queryClient.invalidateQueries({ queryKey: ["ticketing-sources"] });
   }
 }
