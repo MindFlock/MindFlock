@@ -435,7 +435,7 @@ describe("type and contrast", () => {
   it("the intake lane: 13px cards, a bold id, a 28px Fly; the drawer: 14px bodies, 36px Done / Skip", () => {
     expect(cssRule(lane, ".sky-lane-item-ref")).toMatch(/font-size: 13px;[\s\S]*font-weight: 700/);
     expect(cssRule(lane, ".sky-lane-fly.fl-btn")).toContain("height: 28px");
-    expect(cssRule(lane, ".sky-lane-block-name")).toMatch(/font-size: 13px;[\s\S]*text-transform: uppercase/);
+    expect(cssRule(lane, ".sky-lane-block-name")).toMatch(/font-size: 13px;[\s\S]*-webkit-line-clamp: 2/);
     expect(cssRule(vis, ".sky-drawer-body")).toContain("font-size: 14px");
     expect(cssRule(vis, ".sky-drawer .fl-you-acts .fl-btn")).toContain("min-height: 36px");
     expect(cssRule(vis, ".sky-drawer .fl-fly")).toContain("min-height: 36px");

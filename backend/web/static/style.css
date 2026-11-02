@@ -4978,6 +4978,19 @@ a.fl-waiting-ref:hover {
   color: var(--bg);
   outline: none;
 }
+
+/* A free chain's ▶ takes the empty socket's place (`.has-run`): on hover it
+   is the one circle left of the first stop, its dashed stub the wire into
+   it. The socket comes back — and the ▶ steps aside — only while something
+   is dragged that could land there (a wire: `.is-target`; a Session chip:
+   GroundedLine.css `.is-session-over`). */
+.sky-chain.has-run .sky-socket:not(.is-target) {
+  opacity: 0;
+}
+.sky-chain.has-run:has(.sky-socket.is-target) .sky-run:not(.is-running) {
+  opacity: 0;
+  pointer-events: none;
+}
 /* The sky (SkyView.tsx) — prefix sky-.
  *
  * The main area's second view, in the grid's place (#sky-view is the body
@@ -10987,28 +11000,44 @@ details.fl-group-waiting > summary {
   border-radius: 8px;
 }
 
+/* The badge and ⋯ sit on the title's first line; a long title wraps to a
+   second (a repo path at its "/", the view's <wbr>) and clamps there, the
+   full label in its tooltip. Normal case: the badge already says the kind. */
 .sky-lane-block-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 7px;
   min-width: 0;
 }
 
 .sky-lane-block-head .fl-kind-badge {
   margin-top: 0;
+  flex: none;
+}
+
+.sky-lane-block-head .sky-lane-more {
+  margin-top: -2px;
 }
 
 .sky-lane-block-name {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  padding-top: 1px;
   font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-weight: 650;
+  line-height: 1.3;
   color: var(--text);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+
+/* A source the settings don't name (items arrived from it all the same): a
+   dashed edge says it is not one of yours; the tooltip says why it's here. */
+.sky-lane-block-stray {
+  border-style: dashed;
 }
 
 .sky-lane-chips {
@@ -11018,7 +11047,7 @@ details.fl-group-waiting > summary {
 }
 
 .sky-lane-auto,
-.sky-lane-flyway {
+.sky-lane-stops {
   font-size: 12px;
   line-height: 1;
   padding: 4px 7px;
@@ -11037,9 +11066,11 @@ details.fl-group-waiting > summary {
   background: color-mix(in srgb, var(--green) 10%, transparent);
 }
 
-/* The stops chip sits in a quiet button (edit this source's default stops
-   on the board): the button is bare, the chip keeps its look and lights its
-   edge on hover. */
+/* The stops chip: "Stops  built-in ✎" / "Stops  Payments stops ✎" — the
+   source's default stops, and a button that edits them on the board. The
+   button is bare; the pill inside is the chip. It reads as pressable at rest
+   (the muted key, the pencil) and lights its edge on hover / focus. While the
+   source's editor chain is on the board it stays lit and says "editing…". */
 .sky-lane-chips .sky-lane-flyway-btn {
   display: inline-flex;
   min-width: 0;
@@ -11047,25 +11078,70 @@ details.fl-group-waiting > summary {
   padding: 0;
   border: none;
   border-radius: 999px;
+  cursor: pointer;
 }
 
 .sky-lane-chips .sky-lane-flyway-btn:hover:not(:disabled) {
   background: transparent;
 }
 
-.sky-lane-flyway-btn .sky-lane-flyway {
-  cursor: pointer;
-}
-
-.sky-lane-flyway-btn:hover .sky-lane-flyway {
+.sky-lane-stops {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
   color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: var(--bg);
 }
 
-.sky-lane-flyway.own {
+.sky-lane-stops-key {
+  flex: none;
+  color: var(--fl-ink-muted, var(--muted));
+}
+
+.sky-lane-flyway {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.sky-lane-stops-edit {
+  flex: none;
+  color: var(--fl-ink-muted, var(--muted));
+  opacity: 0.6;
+}
+
+.sky-lane-flyway-btn:hover .sky-lane-stops,
+.sky-lane-flyway-btn:focus-visible .sky-lane-stops {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  background: rgba(var(--accent-rgb), 0.06);
+}
+
+.sky-lane-flyway-btn:hover .sky-lane-stops-edit,
+.sky-lane-flyway-btn:focus-visible .sky-lane-stops-edit {
   color: var(--accent);
-  border-color: rgba(var(--accent-rgb), 0.45);
-  background: rgba(var(--accent-rgb), 0.1);
+  opacity: 1;
+}
+
+.sky-lane-chips .sky-lane-flyway-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sky-lane-stops.own .sky-lane-flyway {
+  color: var(--accent);
+}
+
+.sky-lane-stops.editing {
+  border-color: rgba(var(--accent-rgb), 0.6);
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+.sky-lane-stops.editing .sky-lane-stops-edit {
+  color: var(--accent);
+  opacity: 1;
+  font-style: italic;
 }
 
 .sky-lane-empty {
@@ -11246,8 +11322,25 @@ details.fl-group-waiting > summary {
   zoom: clamp(1, calc(0.6 / var(--sky-z, 1)), 1.4);
 }
 
-/* The name gets the block's width: its badge, menu and items wait for mid. */
-.sky-intake[data-lod="far"] :is(.sky-lane-block-head .fl-kind-badge, .sky-lane-block-head button, .sky-lane-block-head details, .sky-lane-chips, .sky-lane-items, .sky-lane-stubs, .sky-lane-error, .sky-lane-n-more) {
+/* The kind badge stays (the name no longer says it: "quickpay/quickpay" is
+   a PR repo or an issue repo by its badge alone), grown with the words, on
+   its own row so the name keeps the block's width. */
+.sky-intake[data-lod="far"] .sky-lane-block-head {
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.sky-intake[data-lod="far"] .sky-lane-block-head .fl-kind-badge {
+  zoom: var(--sky-far);
+}
+
+.sky-intake[data-lod="far"] .sky-lane-block-name {
+  flex-basis: 100%;
+}
+
+/* The name gets the rest of the block's width: its menu and items wait for
+   mid. */
+.sky-intake[data-lod="far"] :is(.sky-lane-block-head button, .sky-lane-block-head details, .sky-lane-chips, .sky-lane-items, .sky-lane-stubs, .sky-lane-error, .sky-lane-n-more) {
   display: none;
 }
 
@@ -11261,7 +11354,7 @@ details.fl-group-waiting > summary {
   font-size: calc(13px * var(--sky-mid));
 }
 
-.sky-intake[data-lod="mid"] :is(.sky-lane-auto, .sky-lane-flyway, .sky-lane-stub, .sky-lane-n-more) {
+.sky-intake[data-lod="mid"] :is(.sky-lane-auto, .sky-lane-stops, .sky-lane-stub, .sky-lane-n-more) {
   font-size: calc(12px * var(--sky-mid));
 }
 
@@ -13158,22 +13251,66 @@ details.fl-group-waiting > summary {
 }
 
 /* --- A source's default stops, edited on the board (the intake lane's
-   stops chip): the label names it, a muted hint says what it means, and its
-   own buttons (Save as default, Reset to default, Discard) sit in the pill,
-   sized to it. It never runs: no ▶ on its first stop. */
-.skl-chainline.is-default-editor > .skl-bar.skl-label {
-  max-width: 760px;
-  border-style: solid;
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+   stops chip). An editor is a pending edit, so it reads as a DRAFT at rest
+   and at any zoom: a dashed accent outline and a faint accent tint round the
+   whole chain (screen-sized lines), its bar always shown — the source's name,
+   a small "Default · <kind>" tag, Save as default (the one primary), Reset (a
+   quiet secondary) and a quiet × to discard — and a one-line caption under
+   it saying what it means. It never runs: no ▶ on its first stop. */
+.skl.skl-chainline.is-default-editor {
+  isolation: isolate;
 }
 
-.skl-grounded .skl-default-hint {
-  flex: 0 1 auto;
+.skl.skl-chainline.is-default-editor::before {
+  content: "";
+  position: absolute;
+  inset: -12px -14px 0 -14px;
+  z-index: -1;
+  border: calc(1.5px / var(--sky-z, 1)) dashed color-mix(in srgb, var(--accent) 60%, transparent);
+  border-radius: 16px;
+  background: rgba(var(--accent-rgb), 0.045);
+  pointer-events: none;
+}
+
+.skl.skl-chainline.is-default-editor:is(.is-focused, :focus-within)::before {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.07);
+}
+
+.skl-chainline.skl-grounded.is-default-editor > .skl-bar.skl-label {
+  max-width: 640px;
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--panel);
+  opacity: 1;
+}
+
+.skl-grounded .skl-default-name {
   min-width: 0;
   overflow: hidden;
-  font-size: 11.5px;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.skl-chainline > .skl-bar.skl-label .skl-default-tag {
+  flex: none;
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: rgba(var(--accent-rgb), 0.1);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* The caption: what an editor means, under its bar — never truncated. */
+.skl-grounded .skl-default-hint {
+  margin: -4px 0 8px 10px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+
+.skl-grounded[data-lod="far"] .skl-default-hint {
+  visibility: hidden;
 }
 
 .skl-grounded .skl-default-acts {
@@ -13181,6 +13318,7 @@ details.fl-group-waiting > summary {
   flex: none;
   align-items: center;
   gap: 4px;
+  margin-left: 4px;
   cursor: default;
 }
 
@@ -13190,6 +13328,44 @@ details.fl-group-waiting > summary {
   padding: 0 8px;
   font-size: 11.5px;
   line-height: 1;
+}
+
+/* Unchanged: "No changes", greyed — not an accent button you can't press. */
+.skl-grounded .skl-default-acts > .skl-default-save:disabled {
+  border-color: var(--border);
+  background: transparent;
+  color: var(--muted);
+  opacity: 1;
+  font-weight: 500;
+}
+
+/* Reset: a quiet secondary — no fill until hovered. */
+.skl-grounded .skl-default-acts > .skl-default-reset {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.skl-grounded .skl-default-acts > .skl-default-reset:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.skl-grounded .skl-default-acts > .skl-default-discard {
+  width: 20px;
+  padding: 0;
+  font-size: 15px;
+}
+
+/* A Session chip dragged over a free chain: its socket takes the drop, so it
+   shows and the ▶ that sits on it steps aside (SkyChain.css `.has-run`). */
+.skl-grounded.is-session-over .sky-chain.has-run .sky-socket {
+  opacity: 1;
+}
+.skl-grounded.is-session-over .sky-chain.has-run .sky-run:not(.is-running) {
+  opacity: 0;
+  pointer-events: none;
 }
 /* The minimap and the off-screen hints (Minimap.tsx, lib/minimap). Screen-
    sized chrome over the plane: the sky places the map (its bottom-right,

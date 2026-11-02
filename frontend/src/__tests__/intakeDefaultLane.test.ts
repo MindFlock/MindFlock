@@ -150,7 +150,7 @@ describe("the lane's stops chip opens the editor", () => {
   it("the chip is a tiered button naming what it edits; the Sky places + focuses the editor beside the lane", () => {
     const lane = code("components/flights/IntakeLane.tsx");
     expect(lane).toContain('className="fl-icon-btn sky-lane-flyway-btn"');
-    expect(lane).toContain('<span className={"sky-lane-flyway" + (block.flyway.own ? " own" : "")}>{block.flyway.name}</span>');
+    expect(lane).toContain('<span className={"sky-lane-flyway" + (block.flyway.own ? " own" : "")}>{stopsWords(block.flyway)}</span>');
     expect(lane).toContain('aria-label={"Edit the default stops for " + block.label}');
     expect(lane).toContain("onClick={() => onEditDefault({ kind: block.kind, target: block.id }, block.label)}");
     expect(lane).toContain("else void openDefaultEditor(ref, flights);");

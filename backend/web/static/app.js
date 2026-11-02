@@ -82534,6 +82534,10 @@ function spotNear(want, taken, size, within) {
 		y: Math.round(want.y)
 	};
 }
+function grownOver(was, now, movable) {
+	if (!was || !now || was.x !== now.x || was.y !== now.y || now.w <= was.w && now.h <= was.h) return [];
+	return movable.filter((p) => hits(p, now, 0) && !hits(p, was, 0)).map((p) => p.id);
+}
 function intakeSize(stored, measured) {
 	const frame = intakeFrame(stored);
 	if (frame) return frame;
@@ -82704,6 +82708,13 @@ var sameCamera = (a, b) => Math.abs(a.x - b.x) < .01 && Math.abs(a.y - b.y) < .0
 var LOD_MID = .62;
 var LOD_NEAR = 1.15;
 var lodFor = (z) => !(z >= LOD_MID) ? "far" : z < LOD_NEAR ? "mid" : "near";
+var FULL_DETAIL_LODS = [{
+	lod: "mid",
+	z: LOD_MID
+}, {
+	lod: "near",
+	z: 1
+}];
 var nearLines = (z) => lodFor(z) === "near" ? Math.max(2, Math.min(8, Math.floor(z * 2))) : 0;
 var SKY_DRAWER_KEY = "mf_sky_drawer";
 var skyDrawerOpen = (pref) => pref === "1";
@@ -86315,7 +86326,7 @@ function SkyChain(p) {
 	const plusAfter = g.plus ? byId.get(g.plus.after) || null : null;
 	const socket = head.kind === "none" && firstStop && !p.run?.running ? inPortOf(firstStop) : null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "sky-chain" + (p.className ? " " + p.className : "") + (drag?.live ? " is-dragging-node" : ""),
+		className: "sky-chain" + (p.className ? " " + p.className : "") + (drag?.live ? " is-dragging-node" : "") + (p.run && socket ? " has-run" : ""),
 		style: {
 			position: "relative",
 			width: Math.max(0, b.x + b.w),
@@ -86372,7 +86383,7 @@ function SkyChain(p) {
 					type: "button",
 					className: "sky-run fl-icon-btn" + (r.running ? " is-running" : ""),
 					style: {
-						left: at.x - (socket ? 46 : 22),
+						left: at.x - 24,
 						top: at.y
 					},
 					"data-no-drag": true,
@@ -87104,6 +87115,42 @@ function editorLabel(f) {
 function chainRunFor(f, headKind, make) {
 	if (isDefaultEditor(f) || !f.steps.length || headKind === "trigger") return null;
 	return make();
+}
+function editorTitle(label) {
+	const at = label.indexOf(" · ");
+	if (at <= 0 || at + 3 >= label.length) return {
+		kind: "",
+		name: label
+	};
+	return {
+		kind: label.slice(0, at),
+		name: label.slice(at + 3)
+	};
+}
+function sameValue(a, b) {
+	if (a === b) return true;
+	if (Array.isArray(a) || Array.isArray(b)) {
+		if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+		return a.every((v, i) => sameValue(v, b[i]));
+	}
+	if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+	const ka = Object.keys(a).filter((k) => a[k] !== void 0);
+	const kb = Object.keys(b).filter((k) => b[k] !== void 0);
+	return ka.length === kb.length && ka.every((k) => sameValue(a[k], b[k]));
+}
+function defaultChanged(steps, base) {
+	if (steps.length !== base.length) return true;
+	return steps.some((s, i) => {
+		const b = base[i];
+		return s.kind !== b.kind || s.title !== b.title || (s.on_fail || "") !== (b.on_fail || "") || !!s.halt !== !!b.halt || (s.when || "") !== (b.when || "") || !sameValue(s.config || {}, b.config || {});
+	});
+}
+function lastRunWords(last, now) {
+	const label = last.state === "done" ? "Last run done" : "Last run stopped";
+	return {
+		label,
+		title: label + (last.at ? " · " + relTime(last.at, now === void 0 ? {} : { now }) : "") + (last.reason ? " — " + last.reason : "")
+	};
 }
 //#endregion
 //#region src/components/flights/useSkyWiring.ts
@@ -131837,6 +131884,7 @@ function sourceBlocks(settings, waiting, rows, opts = {}) {
 			kind,
 			id,
 			label,
+			name: kind === "tickets" ? label : id,
 			target: kind + ":" + id,
 			auto,
 			every,
@@ -131930,6 +131978,16 @@ function escapeRe(s) {
 }
 function looksLikeTicket(title) {
 	return /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(title);
+}
+function stopsWords(flyway) {
+	return flyway.own ? flyway.name : "built-in";
+}
+function stopsTip(block, editing = false) {
+	const now = block.flyway.own ? "its own: " + block.flyway.name : "built-in: " + block.flyway.name;
+	return editing ? "Editing on the board — go to the editor for " + block.name + " (" + now + ")" : "Edit the default stops for " + block.name + " (" + now + ")";
+}
+function nameParts(name) {
+	return name.split(/(?<=\/)/);
 }
 function laneCount(block) {
 	return block.waiting.length;
@@ -132060,12 +132118,14 @@ function WaitingChip({ w, block, onFly }) {
 		})]
 	});
 }
-function Block({ block, onFly, open, onEditDefault }) {
+function Block({ block, onFly, open, editing, onEditDefault }) {
 	const { shown, more } = shownWaiting(block, open ? Infinity : void 0);
+	const parts = nameParts(block.name);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
-		className: "sky-lane-block sky-lane-block-" + block.kind,
+		className: "sky-lane-block sky-lane-block-" + block.kind + (block.stray ? " sky-lane-block-stray" : ""),
 		"data-lane-source": block.key,
 		"aria-label": block.label,
+		title: block.stray ? "Not in your settings: items from " + block.id + " are listed all the same" : void 0,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("header", {
 				className: "sky-lane-block-head",
@@ -132077,7 +132137,7 @@ function Block({ block, onFly, open, onEditDefault }) {
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 						className: "sky-lane-block-name",
 						title: block.label,
-						children: block.label
+						children: parts.map((p, i) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_react.Fragment, { children: [p, i < parts.length - 1 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("wbr", {})] }, i))
 					}),
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 						type: "button",
@@ -132098,14 +132158,29 @@ function Block({ block, onFly, open, onEditDefault }) {
 					type: "button",
 					className: "fl-icon-btn sky-lane-flyway-btn",
 					"aria-label": "Edit the default stops for " + block.label,
-					title: (block.flyway.own ? "This source's saved stop" : "The built-in stops for " + WAITING_KIND_HEAD[block.kind].toLowerCase()) + " — click to edit them on the board",
+					"data-editing": editing ? "" : void 0,
+					title: stopsTip(block, editing),
 					onClick: () => onEditDefault({
 						kind: block.kind,
 						target: block.id
 					}, block.label),
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "sky-lane-flyway" + (block.flyway.own ? " own" : ""),
-						children: block.flyway.name
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "sky-lane-stops" + (block.flyway.own ? " own" : "") + (editing ? " editing" : ""),
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-lane-stops-key",
+								children: "Stops"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-lane-flyway" + (block.flyway.own ? " own" : ""),
+								children: stopsWords(block.flyway)
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-lane-stops-edit",
+								"aria-hidden": "true",
+								children: editing ? "editing…" : "✎"
+							})
+						]
 					})
 				})]
 			}),
@@ -132325,6 +132400,10 @@ function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResiz
 				block: b,
 				onFly,
 				open,
+				editing: !!editorFor(flights, {
+					kind: b.kind,
+					target: b.id
+				}),
 				onEditDefault: editDefault
 			}, b.key)),
 			onResize && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
@@ -135508,8 +135587,11 @@ function GroundedLine(p) {
 	const ed = isDefaultEditor(flight) ? flight.edits_default : null;
 	const edLabel = ed ? editorLabel(flight) : "";
 	const name = ed ? "Default stops · " + edLabel : groundedName(flight);
+	const edTitle = editorTitle(edLabel);
+	const edHint = "New items from " + (edTitle.name || "this source") + " fly these stops";
 	const lod = lodFor(p.zoom || 1);
 	const [ownDefault, setOwnDefault] = (0, import_react.useState)(false);
+	const [baseSteps, setBaseSteps] = (0, import_react.useState)(null);
 	const edKind = ed?.kind;
 	const edTarget = ed?.target;
 	(0, import_react.useEffect)(() => {
@@ -135518,11 +135600,16 @@ function GroundedLine(p) {
 		getIntakeDefault({
 			kind: edKind,
 			target: edTarget
-		}).then((d) => live && setOwnDefault(!!d?.own));
+		}).then((d) => {
+			if (!live) return;
+			setOwnDefault(!!d?.own);
+			setBaseSteps(d ? d.steps : null);
+		});
 		return () => {
 			live = false;
 		};
 	}, [edKind, edTarget]);
+	const changed = !baseSteps || defaultChanged(flight.steps, baseSteps);
 	(0, import_react.useEffect)(() => {
 		const el = rootRef.current;
 		if (!el || typeof ResizeObserver === "undefined") return;
@@ -135758,135 +135845,146 @@ function GroundedLine(p) {
 		onPointerDownCapture: () => {
 			if (!p.focused) p.onFocus();
 		},
-		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			className: "skl-bar skl-label",
-			"data-tour": "sky-grounded",
-			title: p.draggable === false ? "Click to focus these stops (drag mode moves them: V)" : "Drag to move these stops — onto a session's chain to give them to it",
-			onPointerDown: onBarDown,
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 14 }),
-				ed ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "skl-name skl-default-name",
-					title: name,
-					children: name
-				}) : naming === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "skl-name skl-name-edit",
-					title: "Click to rename (F2)",
-					onClick: onNameClick,
-					children: name
-				}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
-					className: "fl-input skl-name-input",
-					"aria-label": "Rename “" + name + "”",
-					value: naming,
-					maxLength: 120,
-					autoFocus: true,
-					onChange: (e) => setNaming(e.target.value),
-					onFocus: (e) => e.target.select(),
-					onBlur: () => endRename(true),
-					onKeyDown: (e) => {
-						e.stopPropagation();
-						if (e.key === "Enter") {
-							e.preventDefault();
-							endRename(true);
-						} else if (e.key === "Escape") {
-							e.preventDefault();
-							endRename(false);
+		children: [
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				className: "skl-bar skl-label",
+				"data-tour": "sky-grounded",
+				title: p.draggable === false ? "Click to focus these stops (drag mode moves them: V)" : "Drag to move these stops — onto a session's chain to give them to it",
+				onPointerDown: onBarDown,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 14 }),
+					ed ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "skl-name skl-default-name",
+						title: "Default stops for " + edLabel + ". New items from this source fly these.",
+						children: edTitle.name
+					}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "fl-box-chip skl-chip skl-default-tag",
+						title: "You are editing the stops new items from " + edLabel + " fly",
+						children: edTitle.kind ? "Default · " + edTitle.kind : "Default"
+					})] }) : naming === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "skl-name skl-name-edit",
+						title: "Click to rename (F2)",
+						onClick: onNameClick,
+						children: name
+					}) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+						className: "fl-input skl-name-input",
+						"aria-label": "Rename “" + name + "”",
+						value: naming,
+						maxLength: 120,
+						autoFocus: true,
+						onChange: (e) => setNaming(e.target.value),
+						onFocus: (e) => e.target.select(),
+						onBlur: () => endRename(true),
+						onKeyDown: (e) => {
+							e.stopPropagation();
+							if (e.key === "Enter") {
+								e.preventDefault();
+								endRename(true);
+							} else if (e.key === "Escape") {
+								e.preventDefault();
+								endRename(false);
+							}
 						}
-					}
-				}),
-				head.kind === "trigger" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "fl-box-chip skl-chip tone-working",
-					title: head.title + " — " + head.sub,
-					children: "Started by a chain"
-				}),
-				running && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "fl-box-chip skl-chip " + (flight.state === "waiting_you" ? "tone-you" : flight.state === "running" ? "tone-working" : "tone-paused"),
-					title: flight.repo_root ? "Running in " + flight.repo_root : void 0,
-					children: flight.state === "waiting_you" ? "Waiting on you" : flight.state === "running" ? "Running" : "Paused"
-				}),
-				!running && flight.last_run && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "fl-box-chip skl-chip " + (flight.last_run.state === "done" ? "tone-ready" : "tone-muted"),
-					title: flight.last_run.reason || void 0,
-					children: flight.last_run.state === "done" ? "Last run done" : "Last run stopped"
-				}),
-				ed && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "skl-default-hint muted",
-					children: "New items from this source fly these"
-				}),
-				ed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-					className: "skl-default-acts",
-					"data-no-drag": true,
-					children: [
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "btn-primary fl-btn skl-default-save",
-							disabled: busy || !flight.steps.length,
-							title: "New items from " + edLabel + " fly these stops",
-							onClick: () => void writeDefault(false),
-							children: "Save as default"
-						}),
-						ownDefault && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn fl-btn skl-default-reset",
-							disabled: busy,
-							title: "Put " + edLabel + " back on our built-in stops",
-							onClick: () => void writeDefault(true),
-							children: "Reset to default"
-						}),
-						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-							type: "button",
-							className: "test-btn fl-btn skl-default-discard",
-							disabled: busy,
-							title: "Take this editor off the board — the default stops stay as they are",
-							onClick: () => void discard(),
-							children: "Discard"
+					}),
+					head.kind === "trigger" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "fl-box-chip skl-chip tone-working",
+						title: head.title + " — " + head.sub,
+						children: "Started by a chain"
+					}),
+					running && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "fl-box-chip skl-chip " + (flight.state === "waiting_you" ? "tone-you" : flight.state === "running" ? "tone-working" : "tone-paused"),
+						title: flight.repo_root ? "Running in " + flight.repo_root : void 0,
+						children: flight.state === "waiting_you" ? "Waiting on you" : flight.state === "running" ? "Running" : "Paused"
+					}),
+					!running && flight.last_run && (() => {
+						const w = lastRunWords(flight.last_run);
+						return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+							className: "fl-box-chip skl-chip " + (flight.last_run.state === "done" ? "tone-ready" : "tone-muted"),
+							title: w.title,
+							children: w.label
+						});
+					})(),
+					ed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+						className: "skl-default-acts",
+						"data-no-drag": true,
+						children: [
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "btn-primary fl-btn skl-default-save",
+								disabled: busy || !flight.steps.length || !changed,
+								title: changed ? edHint : "These are the stops " + edLabel + " flies now — change one to save",
+								onClick: () => void writeDefault(false),
+								children: changed ? "Save as default" : "No changes"
+							}),
+							ownDefault && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "test-btn fl-btn skl-default-reset",
+								disabled: busy,
+								title: "Put " + edLabel + " back on our built-in stops",
+								onClick: () => void writeDefault(true),
+								children: "Reset to default"
+							}),
+							/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+								type: "button",
+								className: "fl-icon-btn skl-default-discard",
+								disabled: busy,
+								"aria-label": "Discard this edit",
+								title: "Discard — take this editor off the board; the default stops stay as they are",
+								onClick: () => void discard(),
+								children: "×"
+							})
+						]
+					}),
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "skl-menu",
+						"data-no-drag": true,
+						children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
+							label: "Actions for " + name,
+							items
 						})
-					]
-				}),
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "skl-menu",
-					"data-no-drag": true,
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OverflowMenu, {
-						label: "Actions for " + name,
-						items
 					})
-				})
-			]
-		}), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-			ref: wrapRef,
-			className: "skl-chain-wrap",
-			onPointerDownCapture: (e) => shift.current = e.shiftKey,
-			children: [
-				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyChain, {
-					graph,
-					zoom: p.zoom,
-					selected: gc.selected,
-					highlighted: p.highlighted,
-					targets: p.targets,
-					over: p.over,
-					bird: birdPerch(moves.diagram),
-					onSelect: (n) => shift.current && p.onShiftSelect ? p.onShiftSelect(n) : gc.onSelect?.(n),
-					onEdit: gc.onEdit,
-					onOpen: gc.onOpen,
-					onRemove: gc.onRemove,
-					onLoopPill: (via) => gc.onEdit?.(via),
-					onPillDown,
-					onMenu: chainMenu.onMenu,
-					kinds: p.kinds,
-					onNodeMove: moves.move,
-					onPortDown: p.onPortDown,
-					onPlus: (after) => after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true),
-					run
-				}),
-				chainMenu.menu,
-				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(ChainPanels, {
-					graph,
-					anchor: line.anchor,
-					anchorPos: line.anchorPos,
-					children: [line.palette, line.inspector]
-				})
-			]
-		})]
+				]
+			}),
+			ed && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+				className: "skl-default-hint",
+				children: edHint
+			}),
+			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+				ref: wrapRef,
+				className: "skl-chain-wrap",
+				onPointerDownCapture: (e) => shift.current = e.shiftKey,
+				children: [
+					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyChain, {
+						graph,
+						zoom: p.zoom,
+						selected: gc.selected,
+						highlighted: p.highlighted,
+						targets: p.targets,
+						over: p.over,
+						bird: birdPerch(moves.diagram),
+						onSelect: (n) => shift.current && p.onShiftSelect ? p.onShiftSelect(n) : gc.onSelect?.(n),
+						onEdit: gc.onEdit,
+						onOpen: gc.onOpen,
+						onRemove: gc.onRemove,
+						onLoopPill: (via) => gc.onEdit?.(via),
+						onPillDown,
+						onMenu: chainMenu.onMenu,
+						kinds: p.kinds,
+						onNodeMove: moves.move,
+						onPortDown: p.onPortDown,
+						onPlus: (after) => after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true),
+						run
+					}),
+					chainMenu.menu,
+					/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(ChainPanels, {
+						graph,
+						anchor: line.anchor,
+						anchorPos: line.anchorPos,
+						children: [line.palette, line.inspector]
+					})
+				]
+			})
+		]
 	});
 }
 //#endregion
@@ -137091,6 +137189,25 @@ function skyKeysOwn(el) {
 	if (typing(el)) return false;
 	return !el.closest("button, a, summary, select, [role=menu], [role=menuitem], [role=radiogroup], [role=listbox], [role=tablist], .fl-canvas, .pane");
 }
+function laneFullHeight(slot) {
+	const parent = slot?.parentElement;
+	if (!slot || !parent || !slot.querySelector(":scope > .sky-lane")) return 0;
+	let tallest = 0;
+	for (const { lod, z } of FULL_DETAIL_LODS) {
+		const ghost = slot.cloneNode(true);
+		ghost.removeAttribute("data-tour");
+		ghost.setAttribute("aria-hidden", "true");
+		ghost.setAttribute("data-lod", lod);
+		ghost.style.setProperty("--sky-z", String(z));
+		ghost.style.visibility = "hidden";
+		ghost.style.pointerEvents = "none";
+		ghost.style.transition = "none";
+		parent.appendChild(ghost);
+		tallest = Math.max(tallest, ghost.querySelector(":scope > .sky-lane")?.offsetHeight || 0);
+		ghost.remove();
+	}
+	return tallest;
+}
 function useNarrowWindow() {
 	const [narrow, setNarrow] = (0, import_react.useState)(() => typeof window !== "undefined" && !!window.matchMedia?.("(max-width: 600px)").matches);
 	(0, import_react.useEffect)(() => {
@@ -137718,7 +137835,9 @@ function SkyView() {
 		clearTimeout(tidyTimer.current);
 		tidyTimer.current = setTimeout(() => alive.current && setTidying(false), TIDY_MS);
 	};
+	const intakeEl = (0, import_react.useRef)(null);
 	const onMeasure = (0, import_react.useCallback)((id, w, h) => {
+		if (id === INTAKE_KEY) h = Math.max(h, laneFullHeight(intakeEl.current));
 		setMeasured((m) => {
 			const o = m[id];
 			if (o && Math.abs(o.w - w) < 2 && Math.abs(o.h - h) < 2) return m;
@@ -137731,6 +137850,72 @@ function SkyView() {
 			};
 		});
 	}, []);
+	const intakeWatch = (0, import_react.useRef)(null);
+	const intakeSlot = (0, import_react.useCallback)((el) => {
+		intakeWatch.current?.();
+		intakeWatch.current = null;
+		intakeEl.current = el;
+		if (!el || typeof MutationObserver === "undefined") return;
+		let frame = 0;
+		const mo = new MutationObserver(() => {
+			if (frame) return;
+			frame = requestAnimationFrame(() => {
+				frame = 0;
+				const lane = el.querySelector(":scope > .sky-lane");
+				if (lane?.offsetWidth && lane.offsetHeight) onMeasure(INTAKE_KEY, lane.offsetWidth, lane.offsetHeight);
+			});
+		});
+		mo.observe(el, {
+			childList: true,
+			subtree: true,
+			characterData: true,
+			attributes: true,
+			attributeFilter: [
+				"open",
+				"data-open",
+				"data-collapsed"
+			]
+		});
+		intakeWatch.current = () => {
+			mo.disconnect();
+			cancelAnimationFrame(frame);
+		};
+	}, [onMeasure]);
+	const laneWas = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		const at = place[INTAKE_KEY];
+		const now = mode !== "one" && intakeOn && !drag && at ? {
+			...at,
+			...intakeBox
+		} : null;
+		const was = laneWas.current;
+		laneWas.current = now;
+		const movable = [];
+		for (const id of Object.keys(autoPos)) {
+			const r = id !== INTAKE_KEY && !layout[id]?.pinned ? rectOf(id) : null;
+			if (r) movable.push({
+				id,
+				...r
+			});
+		}
+		const out = grownOver(was, now, movable);
+		if (!out.length) return;
+		setAutoPos((cur) => Object.fromEntries(Object.entries(cur).filter(([id]) => !out.includes(id))));
+		if (motionOff) return;
+		setTidying(true);
+		clearTimeout(tidyTimer.current);
+		tidyTimer.current = setTimeout(() => alive.current && setTidying(false), TIDY_MS);
+	}, [
+		place,
+		intakeBox,
+		intakeOn,
+		mode,
+		drag,
+		autoPos,
+		layout,
+		rectOf,
+		motionOff
+	]);
 	const onDragStart = (id, e) => {
 		if (e.button !== 0 || gestureFor(liveTool, "line", { space: space.current }) !== "move-line") return;
 		e.stopPropagation();
@@ -139253,6 +139438,7 @@ function SkyView() {
 	const renderIntake = (host) => {
 		const intakeAt = host.pos;
 		return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+			ref: intakeSlot,
 			"data-tour": "sky-intake",
 			className: "sky-intake" + (drag?.from[INTAKE_KEY] ? " is-dragging" : "") + (sel.lines.has(INTAKE_KEY) ? " is-selected" : ""),
 			"data-lod": lodFor(cam.z),
