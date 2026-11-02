@@ -6891,3 +6891,63 @@ start_on: "prompt"})`).
   "Ready" chip, ▶ Run (`runFlight`), and how it starts ("runs on your next
   prompt" / "runs when you press ▶ Run"; a press flips it via `setStartOn`);
   its subtitle says "ready · …".
+
+## Round 20: a session is a frame, the agent is a tile; parallel stops — contract
+
+The owner (2026-11-02): "we are weirdly conflating agent with session — I
+often click on session to edit what the agent is doing; a flight chain has to
+be connected to a session but I'm not sure a session block makes sense"; and
+"I placed two notifications after the PR and it forced them into a line —
+why couldn't they run in parallel?" Both answers chosen: **frame + agent
+tile**, **parallel side by side**.
+
+### A. Frames (task `frames`, frontend)
+- A **session** is no longer a block: it is a **frame** — a soft rounded
+  container (1px border in the session's colour at low alpha, faint fill)
+  around its chain, its title bar the session's name · branch · state chip ·
+  ⋯ (today's chain label, now the frame's top edge; still the drag handle;
+  double-click the bar = rename). The frame's size = its chain's bbox +
+  padding.
+- The **agent** is the chain's first tile, inside the frame: icon = the
+  agent kind's (sparkle), title "Agent" (or the provider's name: "Claude",
+  "Codex"), summary = what it is doing now (the task headline / last prompt,
+  2 lines), its state chip under it, the bird on it. A click opens the
+  session's terminal in that tile's place (today's in-place card); its
+  right-click menu: Open terminal, Send a prompt…, Stop, plus the session's
+  menu. Its out port starts the chain (today's head port).
+- **Sub-sessions** are small frames hung under their parent's frame (the
+  dashed bus from the parent's agent tile to each child frame's top), each
+  with its own agent tile (state, bird) and its own chain if it flies one;
+  opening one opens its card in its agent tile's place (today's `big`).
+- A **stops-only chain** has no frame: free tiles. Dragging it into a frame
+  (or wiring into the agent tile's out side) attaches it (today's merge
+  target is the frame rect).
+- The pane's Flight tab (FlightChain) draws the same frame + agent tile.
+- Tour (lib/tours/sky.ts) and SkyGuide wording follow ("frame", "agent").
+
+### B. Parallel stops (task `parallel`, backend + graph model)
+- A step may carry `parallel: {id}` (`p_<6hex>`): consecutive steps sharing
+  it form ONE parallel group — they run side by side; the flight goes on past
+  the group when every member is done (one failing: the group fails as its
+  `on_fail` says — the first failure's).
+- Only steps that don't use the session's agent or worktree lanes may be
+  parallel: a kind is **parallel-safe** unless it types to the agent
+  (`types_to_agent`), is `agent`, `ship`, `reviews`, `split`, `join`, `land`,
+  `sync`, `loop`, or a `you` perch… (perch IS allowed: it waits on a person).
+  The kinds dto gains `parallel_safe: bool`. A refused grouping is 400
+  `not_parallel_safe` naming the kind, with "use a Split for agents".
+- Driver: at a parallel group the cursor stands on its first member; every
+  pass judges/runs every unfinished member (each keeps its own step state);
+  `apply` advances past the group only when all are done/skipped.
+- Routes: `POST /api/flights/{id}/steps {step, at?, parallel_with?: sid}`
+  inserts a step into `sid`'s group (making one when `sid` has none); `PATCH
+  …/steps/{sid} {parallel: null}` takes a step out; ops are `_editable`
+  (pending only). Saved plans keep `parallel`.
+- Graph (lib/skyGraph): members of a group are placed in a column (the first
+  at the group's spot, the rest PITCH_Y below — unless pinned); wires fork
+  from the stop before to each member (`fan`) and join from each member into
+  the stop after (`join`); the + of a group trails its last member's row.
+  wireIntent gains `parallel`: a wire dropped from X's out port onto empty sky
+  while X already has a next → "add a stop in parallel with X's next"
+  (palette, then `parallel_with`); dropped on a stop Y of the same chain with
+  Shift → Y joins X's next's group.
