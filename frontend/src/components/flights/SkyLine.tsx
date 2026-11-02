@@ -3,6 +3,17 @@
  * rungs or the flight's stops, the trailing + — with the bird on the box the
  * flight is at.
  *
+ * Round 18 (docs/flights.md "Round 18", docs/flights-r18/sky.md): the line
+ * draws as a CHAIN (SkyChain over lib/skyGraph `chainGraph`): a small label
+ * (its handle and ⋯), then the session tile heading free-floating stop tiles
+ * joined by wires, in the session's colour (`chainColor`). The session
+ * tile's press opens its card (PaneCard, under the chain); a tile dragged
+ * keeps its spot (`useNodeMoves` → `queueStopPos`); a port pressed hands the
+ * wire drag to the host (`onPortDown`); the palette and a stop's dialog float
+ * beside their tile (`ChainPanels`); the host reads the chain's graph from
+ * `registerChain`. No ◧, no corner: a chain's tiles have one size. The
+ * older notes below describe the row this replaced where they differ.
+ *
  * The line is an isomorphism of the normal flow: press the session box (or a
  * worker's) and it opens in place into a card holding the SAME Pane the grid
  * draws for that title (`embedded`: no grip, no hide −) — Agent · Terminal ·
@@ -40,7 +51,7 @@
 
 import { useEffect, useMemo, useRef, useState, type JSX, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { setView, showInSky } from "../../lib/viewMode";
-import { BOX_PRESETS, boxScale, boxTier, clampBox, lineBox, lodFor, nearLines } from "../../lib/skyLayout";
+import { BOX_PRESETS, boxScale, clampBox, lodFor, nearLines } from "../../lib/skyLayout";
 import { windowName } from "../../lib/windowName";
 import { useUi } from "../../state/store";
 import type { Instance } from "../../api/types";
@@ -51,12 +62,16 @@ import { pushUndo } from "../../lib/skyUndo";
 import { deriveSessionState } from "../../lib/sessionState";
 import { firstLine } from "../../lib/format";
 import { birdPerch, drawnIndexes, flownCount, lineWhere, sessionDiagram, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
+import { chainColor, chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
 import { ageOf, ageWord, fmtDuration, segmentTitle, segmentsFor, totalSeconds, type LineSegment } from "../../lib/lineTime";
-import type { FlightPlan } from "../../lib/flights";
+import type { FlightPlan, StepKindDef } from "../../lib/flights";
 import { InlineConfirm } from "../InlineConfirm";
 import { OverflowMenu, type MenuItem } from "../OverflowMenu";
 import { Pane } from "../grid/Pane";
-import { FlywayCanvas, type BoxSizeName } from "./FlywayCanvas";
+import type { BoxSizeName } from "./FlywayCanvas";
+import { SkyChain } from "./SkyChain";
+import { ChainPanels } from "./SkyWires";
+import { HEAD, useChainEntry, useNodeMoves, useTourHooks, type ChainEntry } from "./useSkyWiring";
 import { nodeIndexes, useSessionLine, type LineSource } from "./useSessionLine";
 import { Bird } from "./Bird";
 import "./SkyLine.css";
@@ -102,7 +117,19 @@ export interface SkyLineProps {
   /** A grounded line dragged by its bar is over this one: the drop puts its
    * stops on this session (docs/flights.md "As built: round 13 sky"). */
   mergeTarget?: boolean;
+  /** Round 18: the host's handle on this chain (its graph, where it sits, its
+   * palette) — the wiring and the cross-chain wires read it. */
+  registerChain?(e: ChainEntry | null): void;
+  /** A port (or the +) pressed: the host runs the wire drag. */
+  onPortDown?(node: GraphNode, side: "in" | "out", e: React.PointerEvent<HTMLElement>): void;
+  /** The tiles a wire being drawn could land on, and the one under it. */
+  targets?: ReadonlySet<string>;
+  over?: string | null;
 }
+
+/** The kinds before their query has loaded (one object: the chain's graph
+ * is memoized on it). */
+const NO_KINDS: StepKindDef[] = [];
 
 /** The sky's handle on a line's Delete: a box's node id ("" = the line). */
 export type LineDelete = (node: string) => boolean;
@@ -147,7 +174,6 @@ export const PANE_MIN_H = 240;
 export const CARD_HEAD_H = 30;
 
 const SIZES: readonly BoxSizeName[] = ["compact", "normal", "wide"];
-const SIZE_WORD: Record<BoxSizeName, string> = { compact: "compact — titles only", normal: "normal", wide: "wide — the full text" };
 
 /** Round 15: the time under the line — a 4px ruler, one segment per flown
  * stop proportional to how long it took (lib/lineTime `segmentsFor`), its
@@ -169,9 +195,6 @@ export function LineRuler({ segments }: { segments: readonly LineSegment[] }) {
     </div>
   );
 }
-
-/** The ⋯ menu's three box sizes, in words. */
-const SIZE_ITEM: Record<BoxSizeName, string> = { compact: "Compact boxes", normal: "Normal boxes", wide: "Wide boxes" };
 
 /** ◧: compact → normal → wide → compact. */
 export const nextSize = (s: BoxSizeName): BoxSizeName => SIZES[(SIZES.indexOf(s) + 1) % SIZES.length];
@@ -299,56 +322,29 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }: CardProps) {
 export function SkyLine(p: SkyLineProps): JSX.Element {
   const flights = useFlights().data;
   const kinds = useFlightKinds().data;
-  const src: LineSource = useMemo(() => ({ rows: p.rows, flights, kinds: kinds || [], plans: p.plans }), [p.rows, flights, kinds, p.plans]);
+  const src: LineSource = useMemo(() => ({ rows: p.rows, flights, kinds: kinds || NO_KINDS, plans: p.plans }), [p.rows, flights, kinds, p.plans]);
   const line = useSessionLine(p.title, src, { family: true, askRunning: true, onSession: (t) => selectSession(t) });
   // A rename redraws the line (its name is read through windowName).
   useUi((s) => s.aliases[p.title]);
   const name = windowName(p.title);
-  // What has flown stays as boxes until this line folds it into one pill
+  // What has flown stays as tiles until this line folds it into one pill
   // (`line.foldFlown`): the hook draws the diagram with the fold and the
-  // open groups, and its canvas already speaks drawn places.
+  // open groups.
   const { foldFlown, setFoldFlown } = line;
   const folded = useMemo(() => sessionDiagram(p.rows, p.title, { flights, kinds, family: true, foldFlown: true }), [p.rows, p.title, flights, kinds]);
   const folds = flownCount(folded) > 0;
-  const shown = { diagram: line.diagram, canvas: line.canvas };
   // Workers' open cards, by the worker's title (their pane sizes with them).
   const [kids, setKids] = useState<Record<string, { w: number; h: number }>>({});
   const rootRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef(p.onMeasure);
   measureRef.current = p.onMeasure;
-  // The boxes' size: the corner's drag while it lasts, else the layout's.
-  const [liveBox, setLiveBox] = useState<{ w: number; h: number } | null>(null);
-  const box = liveBox || lineBox(p.layout);
-  // The tier the canvas draws and the uniform scale to the size asked for.
-  const { size, k } = boxScale(box.w);
-  const scaled = Math.abs(k - 1) > 0.001;
-  const z = p.zoom || 1;
-  // What the boxes show at this zoom (far / mid / near); their size never
-  // changes with it — only what is drawn inside and the type on screen.
+  // What the tiles show at this zoom (far / mid / near).
   const lod = lodFor(p.zoom || 1);
-  // The canvas's own size (layout px, before the scale) sizes the box that
-  // holds it, so the line measures what it draws.
-  const innerRef = useRef<HTMLDivElement>(null);
-  const sizerRef = useRef<HTMLDivElement>(null);
-  const [inner, setInner] = useState<{ w: number; h: number } | null>(null);
-  // The canvas (and so the box observed) exists only while the session does.
-  const hasRow = !!line.row;
-  useEffect(() => {
-    const el = innerRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const read = () => {
-      const w = el.offsetWidth;
-      const h = el.offsetHeight;
-      setInner((c) => (c && c.w === w && c.h === h ? c : { w, h }));
-    };
-    const ro = new ResizeObserver(read);
-    ro.observe(el);
-    read();
-    return () => ro.disconnect();
-  }, [hasRow]);
 
   // The host lays the lines out from what each one measures (plane px: the
-  // zoom is a transform, offset sizes don't see it).
+  // zoom is a transform, offset sizes don't see it) — the chain's graph box,
+  // its label and any open card.
   useEffect(() => {
     const el = rootRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -377,48 +373,38 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   const ss = deriveSessionState(row || {});
   const rowOf = (t: string | undefined) => (t ? p.rows.find((r) => r.title === t) : undefined);
 
-  const card = (inst: Instance, w: number, h: number, onSize: (w: number, h: number) => void, onClose: () => void): { body: ReactNode; size: { w: number; h: number } } => {
-    const s = clampPane(w, h);
-    const body = <PaneCard inst={inst} w={s.w} h={s.h} zoom={p.zoom} onSize={onSize} onClose={onClose} />;
-    if (!scaled) return { body, size: { w: s.w, h: s.h + CARD_HEAD_H } };
-    // A card keeps its own size on a scaled line: it asks the canvas for its
-    // room over the scale and draws scaled back (the zoom it sees is the
-    // sky's again).
-    const cw = s.w / k;
-    const ch = (s.h + CARD_HEAD_H) / k;
-    return {
-      body: (
-        <div className="skl-card-unscale" style={{ width: cw, height: ch }}>
-          <div style={{ transform: `scale(${1 / k})`, transformOrigin: "0 0", "--sky-z": z } as React.CSSProperties}>{body}</div>
-        </div>
-      ),
-      size: { w: cw, h: ch },
-    };
-  };
+  // Round 18: the line is a CHAIN (lib/skyGraph): the session tile heads it
+  // (its name, state chip and bird, in the session's colour), its stops are
+  // free-floating tiles at their saved spots, wires join their ports.
+  const where = row ? lineWhere(line.diagram) : "";
+  const moves = useNodeMoves(line.flight?.id, line.graphDiagram);
+  const sessionNode = useMemo(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
+  const headSub = where || (row ? firstLine(row.task_headline || row.task || "") : "");
+  const head: ChainHead = useMemo(
+    () => ({ kind: "session", title: name, sub: headSub, session: p.title, color: chainColor(p.title), node: sessionNode }),
+    [name, headSub, p.title, sessionNode]
+  );
+  const graph = useMemo(() => chainGraph(moves.diagram, { head, key: p.title, flightId: line.flight?.id || "" }), [moves.diagram, head, p.title, line.flight?.id]);
+  useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter);
+  useTourHooks(wrapRef, { ".sky-head": "sky-session-box", ".sky-node:not(.sky-head)": "sky-stop" });
+  const gc = line.graphCanvas;
+
   const foldKid = (t: string) => setKids((k) => Object.fromEntries(Object.entries(k).filter(([x]) => x !== t)));
-  const openBox = (n: DiagramNode) => {
-    if (n.kind === "session" && p.layout.open && row)
-      return card(row, p.layout.paneW ?? PANE_W, p.layout.paneH ?? PANE_H, (w, h) => p.onLayout({ paneW: w, paneH: h }), () => p.onLayout({ open: false }));
-    // A worker below the session or a branch between two stops: its pane.
-    const kid = n.kind === "child" || n.kind === "branch" ? rowOf(n.session) : undefined;
-    const ks = kid ? kids[kid.title] : undefined;
-    if (kid && ks)
-      return card(kid, ks.w, ks.h, (w, h) => setKids((k) => ({ ...k, [kid.title]: { w, h } })), () => foldKid(kid.title));
-    return null;
-  };
+  // A press on the head that moved was the line's drag, not a click on it.
+  const press = useRef<{ x: number; y: number; shift: boolean; moved: boolean }>({ x: 0, y: 0, shift: false, moved: false });
   const onOpen = (n: DiagramNode) => {
+    if (n.kind === "session" && press.current.moved) return;
     if (n.kind === "flown") setFoldFlown((x) => !x);
     else if (n.kind === "session") p.onLayout({ open: !p.layout.open });
     else if ((n.kind === "child" || n.kind === "branch") && n.session) {
       const t = n.session;
       if (kids[t]) foldKid(t);
       else setKids((k) => ({ ...k, [t]: { w: PANE_W, h: PANE_H } }));
-    } else shown.canvas.onOpen?.(n);
+    } else gc.onOpen?.(n);
   };
-  // Wide: a session's box says what it was last asked.
-  const detailOf = (n: DiagramNode) => {
-    const r = rowOf(n.session);
-    return r ? firstLine(r.last_prompt || r.task || "") : "";
+  const onSelect = (n: DiagramNode) => {
+    if (press.current.shift && p.onShiftSelect) p.onShiftSelect(n);
+    else gc.onSelect?.(n);
   };
 
   const onBarDown = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -429,10 +415,16 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
     if (p.draggable === false) return;
     p.onDragStart?.(e);
   };
+  // The head tile is the chain's handle too (SkyChain lets its press bubble).
+  const onChainDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    press.current = { x: e.clientX, y: e.clientY, shift: e.shiftKey, moved: false };
+    const t = e.target as Element;
+    if (t.closest(".sky-head") && !t.closest("[data-port], [data-no-drag], button")) onBarDown(e);
+  };
 
-  // Delete from the sky: a stop or group box through the canvas's own Remove
+  // Delete from the sky: a stop or group tile through the line's own Remove
   // (the undoable toast; the stop a running flight is at asks first); a
-  // session's box, or the line itself, closes it — at once with Undo when
+  // session's tile, or the line itself, closes it — at once with Undo when
   // its agent is idle, asked first while it works or asks (round 14).
   const [closing, setClosing] = useState("");
   const [closeBusy, setCloseBusy] = useState(false);
@@ -441,17 +433,17 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
     else void closeLine(t);
   };
   const deleteBox: LineDelete = (node) => {
-    const t = node ? nodeSession(node) : p.title;
+    const t = node && node !== HEAD ? nodeSession(node) : p.title;
     if (t) {
       askClose(t);
       return true;
     }
-    const n = nodeById(shown.diagram.nodes, node);
+    const n = nodeById(line.graphDiagram.nodes, node);
     // The stop the flight is at can't change, but it can come off (it asks
     // first while the flight runs: useSessionLine's `removeAsk`).
     const here = !!n && !!line.flight && (n.kind === "stop" || n.kind === "group") && nodeIndexes(n).includes(line.flight.cursor);
-    if (!(removableBox(n) || here) || !shown.canvas.onRemove) return false;
-    shown.canvas.onRemove(n!);
+    if (!(removableBox(n) || here) || !gc.onRemove) return false;
+    gc.onRemove(n!);
     return true;
   };
   const deleteRef = useRef(deleteBox);
@@ -472,40 +464,12 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
     }
   };
 
-  // The corner handle: pointer travel over the zoom = plane px, drawn live,
-  // persisted once on release.
-  const grab = useRef<{ id: number; sx: number; sy: number; cw: number; ch: number; bw: number } | null>(null);
-  const resizeDown = (e: ReactPointerEvent<HTMLSpanElement>) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const el = sizerRef.current;
-    grab.current = { id: e.pointerId, sx: e.clientX, sy: e.clientY, cw: el?.offsetWidth || 0, ch: el?.offsetHeight || 0, bw: box.w };
-    try {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    } catch {
-      /* a synthetic event has no capture */
-    }
-  };
-  const resizeMove = (e: ReactPointerEvent<HTMLSpanElement>) => {
-    const g = grab.current;
-    if (!g || g.id !== e.pointerId) return;
-    setLiveBox(dragBox(g, (e.clientX - g.sx) / z, (e.clientY - g.sy) / z));
-  };
-  const resizeUp = (e: ReactPointerEvent<HTMLSpanElement>) => {
-    const g = grab.current;
-    if (!g || g.id !== e.pointerId) return;
-    grab.current = null;
-    if (liveBox) p.onLayout({ size: boxTier(liveBox.w), boxW: liveBox.w, boxH: liveBox.h });
-    setLiveBox(null);
-  };
-
   // The ⋯, in groups (a group's first item draws the rule above it): the
   // session · how the line looks · what flies on it · closing it.
   const items: MenuItem[] = [
     p.layout.open
-      ? { key: "open", label: "Fold the session back", title: "Back to a box on the line", onSelect: () => p.onLayout({ open: false }) }
-      : { key: "open", label: "Open session", title: "Open the session here, in a card on its line", onSelect: () => p.onLayout({ open: true }) },
+      ? { key: "open", label: "Fold the session back", title: "Back to its tile on the chain", onSelect: () => p.onLayout({ open: false }) }
+      : { key: "open", label: "Open session", title: "Open the session here, in a card under its chain", onSelect: () => p.onLayout({ open: true }) },
     {
       key: "grid",
       label: "Open in the grid",
@@ -515,36 +479,38 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
         setView("grid");
       },
     },
-    { key: "only", label: "Show only this line", title: "This session: one line, filling the sky", onSelect: () => showInSky(p.title) },
-    ...SIZES.map((s, i): MenuItem => ({
-      key: "size-" + s,
-      label: SIZE_ITEM[s],
-      title: "Boxes: " + SIZE_WORD[s],
-      className: "skl-mi-check" + (s === size ? " skl-mi-on" : "") + (i === 0 ? " skl-mi-group" : ""),
-      onSelect: () => p.onLayout(presetPatch(s)),
-    })),
+    { key: "only", label: "Show only this line", title: "This session: one chain, filling the sky", onSelect: () => showInSky(p.title) },
     ...(folds
-      ? [{ key: "flown", label: foldFlown ? "Show flown stops" : "Fold flown stops", title: "The stops this flight has already flown: each on its own, or one pill", onSelect: () => setFoldFlown((x) => !x) }]
+      ? [{ key: "flown", label: foldFlown ? "Show flown stops" : "Fold flown stops", title: "The stops this flight has already flown: each on its own, or one pill", className: "skl-mi-group", onSelect: () => setFoldFlown((x) => !x) }]
       : []),
     p.layout.pinned
       ? { key: "tidy", label: "Tidy this line", title: "Forget where you put it: back to its place in the rows", onSelect: () => p.onLayout({ pinned: false }) }
-      : { key: "pin", label: "Pin here", title: "Keep this line where it is when the others move", onSelect: () => p.onLayout({ x: p.layout.x, y: p.layout.y, pinned: true }) },
-    { key: "flyway", label: "Add a stop…", title: "A saved stop, tacked on here", className: "skl-mi-group", onSelect: () => line.togglePalette(true) },
-    { key: "tack", label: "Tack on a stop", title: "One stop, at the end of the line", onSelect: () => line.togglePalette(true) },
+      : { key: "pin", label: "Pin here", title: "Keep this chain where it is when the others move", onSelect: () => p.onLayout({ x: p.layout.x, y: p.layout.y, pinned: true }) },
+    { key: "flyway", label: "Add a stop…", title: "A stop or a saved stop, at the end of the chain", className: "skl-mi-group", onSelect: () => line.togglePalette(true) },
     { key: "close", label: "Close session", danger: true, className: "skl-mi-group", title: "Stops the agent and moves it to Recently closed", onSelect: () => askClose(p.title) },
   ];
-  // Where the flight is, in words (the bar's second voice).
-  const where = row ? lineWhere(shown.diagram) : "";
-  // Round 15: the time under the line, and how long the row has been quiet.
+  // Round 15: the time under the chain, and how long the row has been quiet.
   const segments = useMemo(() => segmentsFor(line.flight), [line.flight]);
   const age = ageOf(row?.activity_since);
   const still = ageWord(row?.activity_since);
+
+  // The open cards: the session's (from its tile) and each opened worker's,
+  // in a row under the chain.
+  const cards: ReactNode[] = [];
+  if (p.layout.open && row)
+    cards.push(
+      <PaneCard key={row.title} inst={row} w={p.layout.paneW ?? PANE_W} h={p.layout.paneH ?? PANE_H} zoom={p.zoom} onSize={(w, h) => p.onLayout({ paneW: w, paneH: h })} onClose={() => p.onLayout({ open: false })} />
+    );
+  for (const [t, ks] of Object.entries(kids)) {
+    const kid = rowOf(t);
+    if (kid) cards.push(<PaneCard key={t} inst={kid} w={ks.w} h={ks.h} zoom={p.zoom} onSize={(w, h) => setKids((k) => ({ ...k, [t]: { w, h } }))} onClose={() => foldKid(t)} />);
+  }
 
   return (
     <div
       ref={rootRef}
       className={
-        "skl skl-size-" + size +
+        "skl skl-chainline" +
         (p.focused ? " is-focused" : "") +
         (p.selected ? " is-selected" : "") +
         (p.layout.open ? " is-open" : "") +
@@ -555,66 +521,37 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
       data-line={p.title}
       data-lod={lod}
       data-age={age || undefined}
-      // The sky's zoom, for CSS that counter-scales (a hover toolbar, the
-      // level of detail a box shows): `--sky-z` on every line.
-      style={{ "--sky-z": p.zoom || 1, "--sky-lines": nearLines(p.zoom || 1) } as React.CSSProperties}
+      // The sky's zoom, for CSS that counter-scales (a pill, the level of
+      // detail a tile shows): `--sky-z` on every line.
+      style={{ "--sky-z": p.zoom || 1, "--sky-lines": nearLines(p.zoom || 1), "--sky-chain-color": head.color } as React.CSSProperties}
       role="group"
       tabIndex={-1}
       data-sky-box
-      aria-label={name + "'s line"}
+      aria-label={name + "'s chain"}
       onPointerDownCapture={() => {
         if (!p.focused) p.onFocus();
       }}
     >
-      <div className="skl-bar" data-tour="sky-line-bar" title={p.draggable === false ? "Click to focus this line (drag mode moves it: V)" : "Drag to move this line"} onPointerDown={onBarDown}>
-        <Bird size={16} />
+      {/* The chain's label: its handle (drag) and its ⋯ — a small tag over
+          the chain, no card around it. */}
+      <div className="skl-bar skl-label" data-tour="sky-line-bar" title={p.draggable === false ? "Click to focus this chain (drag mode moves it: V)" : "Drag to move this chain"} onPointerDown={onBarDown}>
+        <Bird size={14} />
         <span className="skl-name">{name}</span>
-        {row && (
-          <span className={"fl-box-chip skl-chip tone-" + ss.tone} title={ss.hint}>
-            {ss.label}
-          </span>
-        )}
-        {/* Where the flight is ("at Reviews settle · 10 min quiet"): mid
-            and near. */}
         {where && (
           <span className="skl-where" title={where}>
             {where}
           </span>
         )}
-        {/* Near: what the session is on, under its name (CSS shows it only
-            at that level of detail). */}
-        {row && (row.task_headline || row.task) && <span className="skl-task">{firstLine(row.task_headline || row.task || "")}</span>}
         {still && (
           <span className="skl-age" title={"Nothing has happened on this session for " + still.replace(/ still$/, "")}>
             {still}
           </span>
         )}
         {p.layout.pinned && (
-          <span className="skl-pin" title="Pinned: the sky's layout leaves this line where you put it" aria-label="Pinned">
+          <span className="skl-pin" title="Pinned: the sky's layout leaves this chain where you put it" aria-label="Pinned">
             📌
           </span>
         )}
-        <button
-          type="button"
-          className="skl-size"
-          data-size={size}
-          aria-label={"Box size: " + size + " (next: " + nextSize(size) + ")"}
-          title={"Boxes: " + SIZE_WORD[size] + " — press for " + nextSize(size)}
-          onClick={() => p.onLayout(presetPatch(nextSize(size)))}
-        >
-          <span className="skl-size-glyph" aria-hidden="true">
-            ◧
-          </span>
-          {/* Its state at a glance: one, two or three bars lit. */}
-          <span className="skl-size-meter" aria-hidden="true">
-            {SIZES.map((s, i) => (
-              <i key={s} className={i <= SIZES.indexOf(size) ? "on" : ""} />
-            ))}
-          </span>
-          <span className="skl-size-word" aria-hidden="true">
-            {size}
-          </span>
-        </button>
         <span className="skl-menu" data-no-drag>
           <OverflowMenu label={"Actions for " + name} items={items} />
         </span>
@@ -637,53 +574,47 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
         </div>
       )}
       {row ? (
-        // The sizer holds the scaled canvas at its drawn size; inside, the
-        // canvas at its tier's size, scaled, with `--sky-z` times the scale.
-        <div ref={sizerRef} className="skl-scale" style={scaled && inner ? { width: inner.w * k, height: inner.h * k } : undefined}>
-          <div ref={innerRef} className="skl-scale-in" style={scaled ? ({ transform: `scale(${k})`, "--sky-z": z * k } as React.CSSProperties) : undefined}>
-            <FlywayCanvas
-              diagram={shown.diagram}
-              label={"What " + name + " is doing and will do"}
-              vertical={false}
-              bird={birdPerch(shown.diagram)}
-              className="sky-canvas skl-canvas"
-              size={size}
-              detailOf={detailOf}
-              dropLabel={p.dropFlyway ? "Drop to fly " + p.dropFlyway.name : null}
-              openBox={openBox}
-              lod={lod}
-              {...shown.canvas}
-              highlighted={p.highlighted}
-              onShiftSelect={p.onShiftSelect}
-              onOpen={onOpen}
-              roomy
-            />
-          </div>
-          {lod !== "far" && <LineRuler segments={segments} />}
+        <div
+          ref={wrapRef}
+          className="skl-chain-wrap"
+          onPointerDownCapture={onChainDown}
+          onPointerMoveCapture={(e) => {
+            if (!press.current.moved && Math.hypot(e.clientX - press.current.x, e.clientY - press.current.y) >= 4) press.current.moved = e.buttons !== 0;
+          }}
+        >
+          <SkyChain
+            graph={graph}
+            zoom={p.zoom}
+            selected={gc.selected}
+            highlighted={p.highlighted}
+            targets={p.targets}
+            over={p.over}
+            bird={birdPerch(moves.diagram)}
+            onSelect={onSelect}
+            onEdit={gc.onEdit}
+            onOpen={onOpen}
+            onRemove={gc.onRemove}
+            onLoopPill={(via) => gc.onEdit?.(via)}
+            onNodeMove={moves.move}
+            onPortDown={p.onPortDown}
+            onPlus={(after) => (after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true))}
+            renderInBox={gc.renderInBox ? (n) => gc.renderInBox!(n) as ReactNode : undefined}
+            renderHead={() => (
+              <span className={"sky-head-chip fl-box-chip tone-" + ss.tone} title={ss.hint}>
+                {ss.label}
+              </span>
+            )}
+          />
+          <ChainPanels graph={graph} anchor={line.anchor} anchorPos={line.anchorPos}>
+            {line.palette}
+            {line.inspector}
+          </ChainPanels>
         </div>
       ) : (
         <p className="skl-gone muted">This session isn't running any more.</p>
       )}
-      {line.editing && (
-        <div className="skl-panels sky-own-scroll" data-no-drag>
-          {line.palette}
-          {line.inspector}
-        </div>
-      )}
-      {row && (
-        <span
-          className="skl-box-resize"
-          role="separator"
-          tabIndex={0}
-          data-no-drag
-          aria-label={"Resize " + name + "'s boxes"}
-          title={"Drag to resize the boxes (" + Math.round(box.w) + " × " + Math.round(box.h) + ")"}
-          onPointerDown={resizeDown}
-          onPointerMove={resizeMove}
-          onPointerUp={resizeUp}
-          onPointerCancel={resizeUp}
-        />
-      )}
+      {row && lod !== "far" && <LineRuler segments={segments} />}
+      {cards.length > 0 && <div className="skl-cards">{cards}</div>}
     </div>
   );
 }

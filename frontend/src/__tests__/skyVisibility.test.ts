@@ -338,11 +338,10 @@ describe("a line in the sky", () => {
     expect(html).toMatch(/class="skl-where"[^>]*>at Reviews settle · 10 min quiet</);
   });
 
-  it("draws the flown stops as boxes (round 11: no pill by default), and asks the canvas for the roomy tier", () => {
+  it("draws the flown stops as tiles (round 11: no pill by default)", () => {
     const html = line();
     expect(html).not.toContain('data-node="flown"');
     expect(html).toContain('data-node="stop:s1"');
-    expect(code("components/flights/SkyLine.tsx")).toMatch(/\n\s+roomy\n/);
     // A press on the pill unfolds the line.
     expect(code("components/flights/SkyLine.tsx")).toMatch(/if \(n\.kind === "flown"\) setFoldFlown\(\(x\) => !x\)/);
   });
@@ -355,24 +354,18 @@ describe("a line in the sky", () => {
       "Open session",
       "Open in the grid",
       "Show only this line",
-      "Compact boxes",
-      "Normal boxes",
-      "Wide boxes",
       // Nothing folds by default; the line offers to fold what has flown.
+      // (Round 18: a chain's tiles have one size — no box sizes.)
       "Fold flown stops",
       "Pin here",
       "Add a stop…",
-      "Tack on a stop",
       "Close session",
     ]);
     const cls = Object.fromEntries(labels);
-    expect(cls["Compact boxes"]).toContain("skl-mi-group");
+    expect(cls["Fold flown stops"]).toContain("skl-mi-group");
     expect(cls["Add a stop…"]).toContain("skl-mi-group");
     expect(cls["Close session"]).toContain("skl-mi-group");
     expect(cls["Close session"]).toContain("vf-menu-danger");
-    // The box size this line wears carries the check.
-    expect(cls["Normal boxes"]).toContain("skl-mi-on");
-    expect(cls["Wide boxes"]).not.toContain("skl-mi-on");
   });
 
   it("a pinned line offers Tidy instead of Pin; an open one folds back", () => {
@@ -381,12 +374,9 @@ describe("a line in the sky", () => {
     expect(html).not.toContain(">Pin here<");
   });
 
-  it("◧ shows its state (a three-bar meter) and its size in words on hover", () => {
+  it("round 18: no ◧ on a chain's label (its tiles have one size)", () => {
     const html = line({ size: "wide" });
-    expect(html).toMatch(/class="skl-size" data-size="wide"/);
-    expect(html.match(/<i class="on"><\/i>/g)?.length).toBe(3);
-    expect(html).toMatch(/class="skl-size-word"[^>]*>wide</);
-    expect(cssRule(css("components/flights/SkyLine.css"), ".skl-size:hover .skl-size-word")).toContain("display: inline");
+    expect(html).not.toContain('class="skl-size"');
   });
 });
 

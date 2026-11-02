@@ -328,7 +328,8 @@ describe("the layout store", () => {
 
   it("measured sizes win over the estimate, and the Tidy button and T run it", () => {
     const v = code("components/flights/SkyView.tsx");
-    expect(v).toContain("...(measured[t] || estimateLine(lineSize(diagram, full), layout[t]))");
+    // Round 18: the estimate is a chain's (its tiles at the pitch, its label).
+    expect(v).toContain("...(measured[t] || estimateLine(chainSize(diagram, true), layout[t]))");
     expect(v).toContain("const saved: Record<string, Pos> = { ...autoPos, ...pinnedPositions(layout) };");
     expect(v).toContain("const fresh = assignSpots(existing, items.filter((l) => !saved[l.id]),");
     expect(v).toMatch(/className="fl-btn sky-tidy"[^>]*onClick=\{tidy\}/);
@@ -524,7 +525,7 @@ describe("round 14: Ctrl+Z, removals that don't ask, All blocks… on the board"
     expect(line).toContain("askRunning: true");
     // Delete from the sky reaches the stop the flight is at (not editable), which then asks.
     expect(line).toContain("nodeIndexes(n).includes(line.flight.cursor);");
-    expect(line).toContain("if (!(removableBox(n) || here) || !shown.canvas.onRemove) return false;");
+    expect(line).toContain("if (!(removableBox(n) || here) || !gc.onRemove) return false;");
     expect(line).toContain("{line.removeAsk}");
     // The pane's Flight tab doesn't ask (it draws no question).
     expect(code("components/flights/SessionFlight.tsx")).not.toContain("askRunning");

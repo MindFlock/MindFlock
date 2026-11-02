@@ -381,8 +381,9 @@ describe("Delete wiring (round 12)", () => {
   });
 
   it("a session line: a stop through the canvas's Remove, a session's box or the line asks inline to close", () => {
-    expect(line).toContain("shown.canvas.onRemove(n!);");
-    expect(line).toContain("const t = node ? nodeSession(node) : p.title;");
+    expect(line).toContain("gc.onRemove(n!);");
+    // Round 18: the head tile ("head") is the line itself.
+    expect(line).toContain("const t = node && node !== HEAD ? nodeSession(node) : p.title;");
     expect(line).toMatch(/<InlineConfirm\s+title=\{"Close “" \+ windowName\(closing\) \+ "”\?"\}/);
     // Round 14: an idle session closes at once (undoable); a running one asks.
     expect(line).toContain('if (removalNeedsAsk({ kind: "session", row: p.rows.find((r) => r.title === t) })) setClosing(t);');
@@ -395,7 +396,7 @@ describe("Delete wiring (round 12)", () => {
   });
 
   it("a grounded line: a stop through its canvas's Remove, anything else removes the line (at once, undoable)", () => {
-    expect(grounded).toContain("line.canvas.onRemove(n);");
+    expect(grounded).toContain("line.graphCanvas.onRemove(n);");
     expect(grounded).toMatch(/void remove\(\);\s*return true;/);
     expect(grounded).toMatch(/if \(p\.draggable === false\) return;\s*p\.onDragStart\?\.\(e\);/);
   });

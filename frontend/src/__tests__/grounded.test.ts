@@ -154,11 +154,38 @@ describe("the grounded line", () => {
     expect(groundedName({ plan_name: "" })).toBe("Stops");
   });
 
-  it("a dashed head box where the session will sit, then its stops on the canvas", () => {
-    expect(html).toContain('class="skl-grounded-head"');
-    expect(html).toContain("<strong>No session yet</strong><span>drop a Session chip here, or ⋯ Fly on a session</span>");
-    expect(html.indexOf("skl-grounded-head")).toBeLessThan(html.indexOf("Fix it"));
+  it("round 18: no head box — a headless chain of its stops under a small label", () => {
+    expect(html).not.toContain("skl-grounded-head");
+    expect(html).not.toContain("No session yet");
+    expect(html).toContain('class="skl skl-chainline skl-grounded"');
+    expect(html).toContain('data-tour="sky-grounded"');
+    expect(html).toContain('data-chain="flight:f_1"');
+    expect(html.indexOf("skl-label")).toBeLessThan(html.indexOf("Fix it"));
     expect(html).toContain("Push");
+    const src = code("components/flights/GroundedLine.tsx");
+    expect(src).toContain('chainGraph(moves.diagram, { head, key: "flight:" + flight.id, flightId: flight.id })');
+    // The empty socket on its first tile is a tour hook too.
+    expect(src).toContain('useTourHooks(wrapRef, { ".sky-socket": "sky-grounded" });');
+  });
+
+  it("round 18: a chain another hands off to wears its trigger head and says so", () => {
+    const head = { kind: "trigger" as const, title: "When me reaches Start a chain", sub: "runs on a new session", session: "new", color: "hsl(1 70% 60%)", from: { flight: "f_0", step: "s2", title: "Start a chain" } };
+    const t = renderToStaticMarkup(
+      createElement(GroundedLine, {
+        flight: flight({ plan_name: "Ticket to merge" }),
+        kinds: KINDS,
+        plans: [],
+        layout: { x: 0, y: 0, size: "normal", open: false },
+        focused: false,
+        onFocus() {},
+        zoom: 1,
+        onFlyOn() {},
+        head,
+      })
+    );
+    expect(t).toContain(">Started by a chain<");
+    expect(t).toContain("is-triggered");
+    expect(t).toContain('aria-label="Ticket to merge — When me reaches Start a chain"');
   });
 
   it("its ⋯: Add a stop…, Fly on a session…, Save to the shelf, Remove — Remove at once, undoable (round 14: a grounded line never runs)", () => {

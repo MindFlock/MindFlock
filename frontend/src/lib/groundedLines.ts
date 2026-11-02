@@ -8,6 +8,7 @@
 
 import { flightDiagram, type Diagram } from "./flightDiagram";
 import { newStep, planFromSteps, stepActor, type Flight, type FlightPlan, type FlightStep, type StepKindDef } from "./flights";
+import { chainColor, type ChainHead } from "./skyGraph";
 
 /** A grounded flight's line is laid out under `"flight:" + id` (a session's
  * line under its title — a title never starts with this). */
@@ -104,3 +105,68 @@ export function checkRename(raw: string, plans: readonly Pick<FlightPlan, "id" |
 
 /** Delete or Backspace on a focused grounded line asks to remove it. */
 export const isRemoveKey = (key: string) => key === "Delete" || key === "Backspace";
+
+// --- Round 18: one chain starts another (the Handoff kind) ---------------------
+
+/** The plug-in kind that starts another chain (docs/flights.md "Round 18"). */
+export const HANDOFF_KIND = "handoff";
+
+/** One Handoff stop and the chain it starts: `target` is the stops-only
+ * flight it names (`config.target` "flight:<id>") until it has started, then
+ * the started flight (`detail.child`, `started`). `session` is where the
+ * target runs ("new" = a new session); `fromSession` the source flight's. */
+export interface HandoffLink {
+  fromFlight: string;
+  fromStep: string;
+  stepTitle: string;
+  fromSession: string;
+  fromName: string;
+  target: string;
+  started: boolean;
+  session: string;
+}
+
+/** Every Handoff stop on the board that names a chain (a saved stop target
+ * — "plan:<id>" — names none until it has started one). */
+export function handoffLinks(flights: readonly Flight[] | null | undefined): HandoffLink[] {
+  const out: HandoffLink[] = [];
+  for (const f of flights || [])
+    for (const st of f.steps || []) {
+      if (st.kind !== HANDOFF_KIND) continue;
+      const detail = (f.step_states?.[st.id]?.detail || {}) as Record<string, unknown>;
+      const child = typeof detail.child === "string" ? detail.child : "";
+      const raw = String(st.config?.target ?? "");
+      const target = child || (isGroundedKey(raw) ? groundedIdOf(raw) : "");
+      if (!target) continue;
+      const session = String((child && typeof detail.session === "string" ? detail.session : st.config?.session) || "new");
+      out.push({ fromFlight: f.id, fromStep: st.id, stepTitle: st.title || "Start a chain", fromSession: f.session || "", fromName: f.plan_name || "", target, started: !!child, session });
+    }
+  return out;
+}
+
+/** "a new session" for "new", else the title. */
+export const sessionWord = (s: string, nameOf: (t: string) => string = (t) => t) => (!s || s === "new" ? "a new session" : nameOf(s));
+
+/** The head of a stops-only chain another chain hands off to: a trigger tile
+ * "When <chain> reaches <stop>", naming the session it will run in, in the
+ * SOURCE session's colour. Null when nothing hands off to it. */
+export function triggerHeadFor(f: Pick<Flight, "id">, flights: readonly Flight[] | null | undefined, nameOf: (t: string) => string = (t) => t): ChainHead | null {
+  const link = handoffLinks(flights).find((l) => l.target === f.id && !l.started);
+  if (!link) return null;
+  const chain = link.fromSession ? nameOf(link.fromSession) : link.fromName || "a chain";
+  return {
+    kind: "trigger",
+    title: "When " + chain + " reaches " + link.stepTitle,
+    sub: "runs on " + sessionWord(link.session, nameOf),
+    session: link.session,
+    color: chainColor(link.fromSession),
+    from: { flight: link.fromFlight, step: link.fromStep, title: link.stepTitle },
+  };
+}
+
+/** A Handoff stop of `def` that starts the stops-only flight `target` ("flight:<id>")
+ * on a new session, done once it has taken off. */
+export function handoffStepFor(def: StepKindDef, taken: readonly string[], target: string): FlightStep {
+  const st = newStep(def, taken);
+  return { ...st, config: { ...st.config, target, session: "new", wait: false } };
+}

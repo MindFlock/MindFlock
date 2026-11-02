@@ -149,14 +149,21 @@ describe("box sizes", () => {
 });
 
 describe("the line", () => {
-  it("draws the title bar, the session diagram with its worker, and the +", () => {
+  it("round 18: draws its label and its chain — the session tile heads it, no card around it", () => {
     const html = line();
-    expect(html).toContain('class="skl skl-size-normal"');
+    expect(html).toContain('class="skl skl-chainline"');
+    expect(html).toContain('class="skl-bar skl-label"');
     expect(html).toContain('<span class="skl-name">me</span>');
-    expect(html).toContain('data-node="session:me"');
-    expect(html).toContain('data-node="child:w1"');
-    expect(html).toContain(">Tack on a stop<");
+    // The chain (SkyChain) under the label, keyed by the session's title,
+    // headed by the session tile (its chip is the line's: renderHead).
+    expect(html).toContain('data-chain="me"');
+    expect(html).toContain('class="skl-chain-wrap"');
+    expect(html).toContain("sky-head-chip");
     expect(html).toContain('aria-label="Actions for me"');
+    const src = code("components/flights/SkyLine.tsx");
+    expect(src).toContain('const head: ChainHead = useMemo(');
+    expect(src).toContain('kind: "session", title: name, sub: headSub, session: p.title, color: chainColor(p.title), node: sessionNode');
+    expect(src).toContain("chainGraph(moves.diagram, { head, key: p.title, flightId: line.flight?.id || \"\" })");
     // No pane until a box is opened.
     expect(html).not.toContain("pane-embedded");
   });
@@ -167,12 +174,10 @@ describe("the line", () => {
       flight: { id: "f_1", plan_name: "Fan", cursor: 0, total: 2, state: "running", step: { id: "s1", kind: "agent", title: "Fan out", state: "running", actor: "robot" }, join: { waiting: 1, total: 1 } },
     });
     const html = line({}, {}, [lead, rowOf("w1", { parent: "me", activity: "working", flight: { branch: { parent: "me", step: "s1" } } }), rowOf("w2", { parent: "me" })]);
-    expect(html).toContain('data-node="branch:w1"');
-    expect(html).not.toContain('data-node="child:w1"');
-    expect(html).toContain('data-node="child:w2"');
-    expect(html).toContain(">1 of 1</span>");
+    // The diagram (what the chain draws) holds the branch once, never below.
+    expect(html).toContain('data-chain="me"');
     const src = code("components/flights/SkyLine.tsx");
-    expect(src).toContain('const kid = n.kind === "child" || n.kind === "branch" ? rowOf(n.session) : undefined;');
+    expect(src).toContain("const kid = rowOf(t);");
     expect(src).toContain('else if ((n.kind === "child" || n.kind === "branch") && n.session) {');
   });
 
@@ -180,22 +185,20 @@ describe("the line", () => {
     expect(nextSize("compact")).toBe("normal");
     expect(nextSize("normal")).toBe("wide");
     expect(nextSize("wide")).toBe("compact");
-    expect(line({ size: "wide" })).toContain('aria-label="Box size: wide (next: compact)"');
-    const html = line({ size: "compact" });
-    expect(html).toContain("skl-size-compact");
-    expect(html).toContain("fl-size-compact");
-    // ◧ is a preset: its name and its two numbers.
-    expect(code("components/flights/SkyLine.tsx")).toContain("onClick={() => p.onLayout(presetPatch(nextSize(size)))}");
+    // Round 18: a chain's tiles have one size — no ◧ on its label.
+    expect(line({ size: "wide" })).not.toContain('aria-label="Box size');
     expect(presetPatch("compact")).toEqual({ size: "compact", boxW: 150, boxH: 64 });
     expect(presetPatch("wide")).toEqual({ size: "wide", boxW: 330, boxH: 120 });
   });
 
-  it("wide: a session box says what it was last asked", () => {
-    expect(line({ size: "wide" })).toContain('<div class="fl-box-detail">Make the login page stop looping</div>');
+  it("the session tile says what the session is on (or where its flight is)", () => {
+    const src = code("components/flights/SkyLine.tsx");
+    expect(src).toContain('const headSub = where || (row ? firstLine(row.task_headline || row.task || "") : "");');
   });
 
   it("focus draws the ring; a pin shows when pinned", () => {
-    expect(line({}, { focused: true })).toContain("skl skl-size-normal is-focused");
+    expect(line({}, { focused: true })).toContain("skl skl-chainline is-focused");
+    expect(css("components/flights/SkyLine.css")).toMatch(/\.skl-chainline\.is-focused > \.skl-bar\.skl-label/);
     expect(line({ pinned: true })).toContain('class="skl-pin"');
     expect(line()).not.toContain('class="skl-pin"');
   });
@@ -203,17 +206,15 @@ describe("the line", () => {
   it("a flyway dragged over lights the + with “Drop to fly <name>”", () => {
     const html = line({}, { dropFlyway: PLAN });
     expect(html).toContain("is-drop");
-    expect(boxOf(html, "add")?.[1]).toContain("fl-drop");
-    expect(html).toContain('<span class="fl-add-label">Drop to fly Ticket to merge</span>');
-    expect(line()).not.toContain("fl-drop");
+    expect(line()).not.toContain("is-drop");
+    // Round 18: the session tile lights to take it.
+    expect(css("components/flights/SkyLine.css")).toContain(".skl-chainline.is-drop .sky-head");
   });
 
   it("open: the session box is a card holding the real pane — tab strip, no grid chrome", () => {
     const html = line({ open: true, paneW: 800, paneH: 500 });
-    const box = boxOf(html, "session:me");
-    expect(box?.[1]).toContain("fl-box-open");
-    // A card sizes itself: no layout width on the box; the card says its own.
-    expect(box?.[2]).not.toContain("width");
+    // Round 18: the card opens from the session tile, under the chain.
+    expect(html).toContain('class="skl-cards"');
     expect(html).toContain('class="skl-card sky-own-scroll"');
     expect(html).toContain("width:800px;height:530px");
     expect(html).toContain('class="pane pane-embedded"');
@@ -224,8 +225,8 @@ describe("the line", () => {
     expect(html).not.toContain('aria-label="Hide window"');
     expect(html).toContain('aria-label="Fold me back into a box"');
     expect(html).toContain('class="skl-resize"');
-    // The worker stays a box.
-    expect(boxOf(html, "child:w1")?.[1]).not.toContain("fl-box-open");
+    // Only the session's card: the worker stays a tile.
+    expect(html.match(/class="skl-card sky-own-scroll"/g)?.length).toBe(1);
   });
 
   it("the card never shrinks under its floor", () => {
