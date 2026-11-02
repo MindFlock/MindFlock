@@ -24,6 +24,8 @@
  * inherits the tab-wide default, which every placeholder names.
  */
 
+import { PlanSelect } from "../flights/PlanSelect";
+import { PLAN_FIELD } from "../../lib/flights";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../api/client";
 import type { Json } from "../../api/types";
@@ -88,6 +90,9 @@ export interface RepoOverride {
    * Never "merge" — a per-repo default applies to every future item with nobody
    * watching, and a merge cannot be undone. */
   depth?: string;
+  /** PR / issue: the flight plan this repo's items follow (a plan id, "" =
+   * the kind's built-in cut at `depth`; docs/flights.md). */
+  plan?: string;
   base_branch?: string;
   min_age_minutes?: number | string;
   skip_authors?: string[] | string;
@@ -379,6 +384,14 @@ export function RepoFields({
           onSave={save}
         />
       </div>
+      {/* Beside Fast-track: the flyway this repo's PRs / issues fly
+          ("" = the built-in, cut at that depth). */}
+      <PlanSelect
+        kind={use === "pr" ? "prs" : "issues"}
+        field={{ attr: "data-repo-field" }}
+        value={o.plan || ""}
+        onChange={(id) => save(PLAN_FIELD, id)}
+      />
       <div className={"ik-grid " + (use === "pr" ? "ik-grid-2" : "ik-grid-1")}>
         {use === "pr" && (
           <BlockInput

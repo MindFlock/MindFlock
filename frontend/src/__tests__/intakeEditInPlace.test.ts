@@ -16,10 +16,19 @@ const CHROME = code("components/dialogs/VerifyChrome.tsx");
 const SETTINGS = code("components/settings/useSettings.tsx");
 
 describe("one door to add a source", () => {
-  it("is the dialog head's + Add source, opening at the top of the tab that owns the kind", () => {
+  it("is the dialog head's + Add source, opening at the FOOT of the tab that owns the kind", () => {
     expect(has(DIALOG, 'id="intake-add-source"')).toBe(true);
     expect(has(DIALOG, '? [{ kind: "repo", uses: ["pr"] }, "prs"]')).toBe(true);
-    expect(has(DIALOG, 'document.getElementById("intake-body")?.scrollTo({ top: 0 })')).toBe(true);
+    // The tab grows downward: the flow is the last thing in each tab's
+    // fragment, after the work, and scrolls itself into view — never a
+    // scroll-to-top that yanks what was being read.
+    expect(has(DIALOG, "scrollTo({ top: 0 })")).toBe(false);
+    for (const src of [TICKETS, PRS, ISSUES]) {
+      const flow = src.lastIndexOf("{addFlow}");
+      expect(flow).toBeGreaterThan(src.indexOf("set-block-hint"));
+      expect(src.indexOf("{addFlow}")).toBe(flow);
+    }
+    expect(has(KIT, 'el.scrollIntoView({ block: "nearest" })')).toBe(true);
     // Verify's door adds a repository with Verify ticked and nothing else.
     expect(has(VERIFY, 'id="vf-repo-add-btn"')).toBe(true);
     expect(has(VERIFY, 'only="verify"')).toBe(true);

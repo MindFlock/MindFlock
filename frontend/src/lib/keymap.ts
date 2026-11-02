@@ -29,6 +29,7 @@ import { notePrefWrite } from "./prefs";
 import { useUi } from "../state/store";
 import { VERIFY_BLURB } from "./vocab";
 import { jumpToNeedsYou } from "./needsYou";
+import { newSession, toggleView } from "./viewMode";
 
 /** One key combination as matched by the dispatcher and stored in the
  * "mf_keymap" overrides ({key, mod, shift, alt}). `mod` true = Ctrl/⌘;
@@ -223,6 +224,21 @@ export function endShortcutAllowed(): boolean {
   if ((active as HTMLElement | null)?.closest?.(".cm-root")) return false;
   if (threadTabFocused()) return false;
   return true;
+}
+
+/** The keyboard is on a box of the Sky that is not the session itself
+ * (docs/flights.md "As built: round 12 sky"): a stop, a group, a worker's
+ * box, a line's bar, a grounded line — anything carrying `data-sky-box` or a
+ * `data-node` other than `session:` inside `.sky` — or the sky holds a
+ * selection (its viewport carries `data-sky-box` then). Delete there is the
+ * sky's ("remove this"), never "close the focused session". An open card's
+ * pane is the session's own, so not in it. */
+export function skyBoxFocused(el: Element | null = typeof document !== "undefined" ? document.activeElement : null): boolean {
+  if (!el?.closest?.(".sky")) return false;
+  if (el.closest(".pane, .skl-card")) return false;
+  const node = el.closest("[data-node]")?.getAttribute("data-node");
+  if (node) return !node.startsWith("session:");
+  return !!el.closest("[data-sky-box]");
 }
 
 // --- User-customized bindings ------------------------------------------------
@@ -510,11 +526,11 @@ export const KEYMAP: KeymapEntry[] = [
     key: "n",
     mod: true,
     id: "new",
-    help: ["Navigation", "Ctrl+N / Alt+N", "New session"],
-    run: () => useUi.getState().openDialogFor("new-session"),
+    help: ["Navigation", "Ctrl+N / Alt+N", "New session — in the sky, a new-session card in the middle of the view"],
+    run: () => newSession(),
   },
   // browser-safe alias
-  { key: "n", alt: true, aliasOf: "new", run: () => useUi.getState().openDialogFor("new-session") },
+  { key: "n", alt: true, aliasOf: "new", run: () => newSession() },
   {
     // Alt rather than Ctrl: Ctrl+I *is* Tab at the terminal, and every other
     // free Ctrl+letter either belongs to the shell or to the browser. Alt+I is
@@ -528,6 +544,20 @@ export const KEYMAP: KeymapEntry[] = [
     // someone meant for a text field or a terminal.
     when: () => !isEditingTarget(document.activeElement),
     run: () => useUi.getState().openDialogFor("intake"),
+  },
+  {
+    // The main area's two views (lib/viewMode): the grid of panes ⇄ the sky
+    // of lines. Ctrl+Y (⌘Y on a Mac — `mod`, as Ctrl+P / B / N), the owner's
+    // pick over the old Alt+Y; Y for "skY". Like Ctrl+P / B / N it fires FROM
+    // a terminal (switching views is something you do while working; readline's
+    // C-y yank is the keystroke it takes there), but a text field outside one
+    // keeps it (Ctrl+Y is redo there), and nothing happens behind a dialog.
+    key: "y",
+    mod: true,
+    id: "view",
+    help: ["Navigation", "Ctrl+Y", "Switch views — the grid of panes ⇄ the sky of lines (the same sessions, the same focus)"],
+    when: () => !overlayOpen() && (terminalFocused() || !isEditingTarget(document.activeElement)),
+    run: () => toggleView(),
   },
   {
     // Alt for the same reasons as Alt+I next door — Ctrl+V is paste and always
@@ -650,7 +680,8 @@ export const KEYMAP: KeymapEntry[] = [
     key: "Delete",
     shift: "any",
     aliasOf: "close", // browser-safe alias
-    when: () => endShortcutAllowed(),
+    // Not on a box of the Sky: Delete there removes the box (SkyView).
+    when: () => endShortcutAllowed() && !skyBoxFocused(),
     run: () => closeFocused(),
   },
   {

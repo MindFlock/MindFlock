@@ -61,6 +61,24 @@ LIMIT_SCREEN_PATTERNS: tuple = (
 )
 
 
+#: The CLI's "the plan window is spent but extra-usage credits carry on"
+#: banners. Seeing one means the window is OPEN for sending (billed to
+#: credits), whatever the plan meter says — the opposite of a limit screen.
+CREDITS_OPEN_PATTERNS: tuple = (
+    r"now using usage credits",
+    r"using (?:extra[\s-])?usage credits",
+    r"extra usage (?:is )?(?:on|enabled|active)",
+)
+
+
+def is_credits_banner(text: str) -> bool:
+    """True when ``text`` shows the CLI running on extra-usage credits: the
+    plan's window is spent, yet prompts still go through (and are billed)."""
+    if not text:
+        return False
+    return any(re.search(p, text, re.I) for p in CREDITS_OPEN_PATTERNS)
+
+
 def is_limit_screen(text: str) -> bool:
     """True when ``text`` shows a CLI usage-limit SCREEN (high precision).
 

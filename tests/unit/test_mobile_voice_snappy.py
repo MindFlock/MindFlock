@@ -196,9 +196,7 @@ console.log(JSON.stringify(cases.map(function (c) { return voiceTtsNearby(c); })
 def test_a_mute_keeps_the_audio_and_only_a_line_over_the_listen_is_deaf():
     js = _js()
     stt = js[js.index("  function ServerSTT(") : js.index("  // --- ServerTTS")]
-    block = stt.split("g.proc.onaudioprocess = function (ev) {")[1].split(
-        "\n      };\n"
-    )[0]
+    block = stt.split("function recBlock(g, mine, h, ev) {")[1].split("\n    }\n")[0]
     # Deaf (the block skipped, the floor still learnt) only under a line over the listen.
     assert "if (voiceMicDeaf()) {" in block
     assert "if (voiceMicMuted()) {" not in block
@@ -215,11 +213,79 @@ def test_a_mute_keeps_the_audio_and_only_a_line_over_the_listen_is_deaf():
     )
     assert "h.onLevel(muted ? 0 : voiceLevelOf(rms, g.floor))" in block
     deaf = _whole(js, "voiceMicDeaf")
-    assert "return !!(p && p.over);" in deaf
+    assert "return !!(p && p.over) && voiceTtsAudible();" in deaf
     assert (
         "return voiceMicDeaf() || Date.now() < (voice.micMuteUntil || 0) + (grace || 0);"
         in _whole(js, "voiceMicMuted")
     )
+
+
+@needs_node
+def test_deaf_needs_a_line_over_the_listen_and_sound_coming_out():
+    js = _js()
+    script = _whole(js, "voiceTtsAudible") + _whole(js, "voiceMicDeaf") + """
+var voice = {}, voiceSpeech = {};
+function deaf(playing, tts) { voiceSpeech.playing = playing; voice.tts = tts; return voiceMicDeaf(); }
+var loud = { audible: function () { return true; } }, quiet = { audible: function () { return false; } };
+console.log(JSON.stringify({
+  overQuiet: deaf({ over: true }, quiet),          // still being made: not deaf
+  overLoud: deaf({ over: true }, loud),            // sounding: deaf
+  notOverLoud: deaf({ over: false }, loud),        // a line that waited for the mic: never deaf
+  notOverQuiet: deaf({ over: false }, quiet),
+  nothing: deaf(null, loud),
+  overNoAudible: deaf({ over: true }, { name: "old" }),   // an adapter that cannot say: deaf
+  overNoTts: deaf({ over: true }, null),
+}));
+"""
+    out = _run(script)
+    assert out == {
+        "overQuiet": False,
+        "overLoud": True,
+        "notOverLoud": False,
+        "notOverQuiet": False,
+        "nothing": False,
+        "overNoAudible": True,
+        "overNoTts": True,
+    }
+
+
+@needs_node
+def test_a_block_from_a_stale_graph_feeds_nothing():
+    js = _js()
+    stt = js[js.index("  function ServerSTT(") : js.index("  // --- ServerTTS")]
+    script = (
+        "var token = null, rec = null, carry = null, fed = 0;\n"
+        # Past the guard the first thing a block does is ask voiceMicDeaf: count it, stop there.
+        + "function voiceMicDeaf() { fed++; throw 'fed'; }\n"
+        + _inner(stt, "recBlock")
+        + """
+function feeds(g, mine) { var n = fed; try { recBlock(g, mine, {}, {}); } catch (e) { if (e !== "fed") throw e; } return fed > n; }
+var A = { id: "A" }, B = { id: "B" }, me = {}, other = {};
+var out = {};
+token = me; rec = A; carry = null;
+out.live = feeds(A, me);              // the active phrase's own graph
+out.staleToken = feeds(A, other);     // a listen that was replaced
+out.staleGraph = feeds(B, me);        // a graph that is not rec
+carry = B;
+out.carried = feeds(B, null);         // the carried graph, untaken
+// carryTake: the carried graph became the phrase's; its old handler is stale.
+carry = null; rec = B;
+out.afterTake = feeds(B, null);
+out.takenLive = feeds(B, me);
+out.neither = feeds({ id: "C" }, null);
+console.log(JSON.stringify(out));
+"""
+    )
+    out = _run(script)
+    assert out == {
+        "live": True,
+        "staleToken": False,
+        "staleGraph": False,
+        "carried": True,
+        "afterTake": False,
+        "takenLive": True,
+        "neither": False,
+    }
 
 
 def test_barge_in_starts_the_server_recorder_at_once():
@@ -293,10 +359,8 @@ def test_the_server_voice_is_asked_two_ahead_and_joins_short_sentences():
     )
     start = js.index("  function ServerTTS(phone) {")
     tts = js[start : js.index("\n  }\n", start)]
-    speak = _inner(tts, "speak")
-    assert (
-        "ahead.length < VOICE_SPEAK_AHEAD" in speak and "got = ahead.shift();" in speak
-    )
+    said = _inner(tts, "said")
+    assert "ahead.length < VOICE_SPEAK_AHEAD" in said and "got = ahead.shift()," in said
     # Cancel still aborts every request on its way.
     assert (
         "aborts.splice(0).forEach(function (a) { try { a.abort(); } catch (e) {} });"

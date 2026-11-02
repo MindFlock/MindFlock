@@ -4,6 +4,7 @@
  * feeds window.mindflock.__setSessions so addons see the same snapshot. */
 
 import { useEffect } from "react";
+import { normalizeFlightRows } from "../lib/flights";
 import { QueryClient, useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { splitLockedRows } from "../lib/guest";
@@ -11,8 +12,10 @@ import { nudgeUsage } from "../lib/usageRefresh";
 import { toast } from "../lib/toast";
 import { errorPop } from "../lib/errorPop";
 import { isVerifySession } from "../components/dialogs/verifySession";
+import { windowName } from "../lib/windowName";
 import type { EffortCap } from "../lib/effort";
 import type { PeerStatus } from "../lib/peer";
+import type { Flight, FlightPlan, StepKindDef } from "../lib/flights";
 import type { ExtensionInfo, ExtensionSpec } from "../extensions/types";
 import type {
   AuthProfilesResponse,
@@ -76,14 +79,20 @@ export interface EventEnvelope {
 }
 
 export function useInstances() {
+  useEffect(bridgeSessionSetEvents, []);
   return useQuery({
     queryKey: ["instances"],
     queryFn: async () => {
       // A guest link's crossed-out rows go to lib/guest.ts for the rail to
       // draw; nothing else (the grid, the pickers, the bell) ever sees them.
-      const list = splitLockedRows(await api<Instance[]>("/api/instances"));
-      window.mindflock?.__setSessions?.(list);
-      return list;
+      const fetched = normalizeFlightRows(splitLockedRows(await api<Instance[]>("/api/instances")));
+      window.mindflock?.__setSessions?.(fetched);
+      // A session being moved keeps its "moving…" mark until the move's
+      // event (`withMoving`).
+      const list = withMoving(fetched, Date.now());
+      // A session being made is listed only once its snapshot catches up: its
+      // optimistic row waits in the cache until then (`mergePending`).
+      return mergePending(list, queryClient.getQueryData<Instance[]>(["instances"]), Date.now());
     },
     refetchInterval: pollInterval,
     refetchIntervalInBackground: true,
@@ -415,6 +424,235 @@ export function refreshInstances() {
   return queryClient.invalidateQueries({ queryKey: ["instances"] });
 }
 
+/* --------------------------------------------------------------------------
+ * New boxes at once (docs/flights.md "As built: round 11 line").
+ *
+ * GET /api/instances serves the server's tick snapshot, so a session made a
+ * moment ago is missing from it for up to a tick or two. An optimistic row
+ * (`pending_create`, from `addPendingSession` or a `session.created` event)
+ * stands in for it — in the grid, the rail and the Sky alike — until the
+ * snapshot lists it, under its own title or one the server numbered from it,
+ * or `PENDING_TTL_MS` passes, or `session.create_failed` names it.
+ * ------------------------------------------------------------------------ */
+
+/** How long an optimistic row waits for the server to list its session. */
+export const PENDING_TTL_MS = 20_000;
+
+/** An optimistic row's client-only fields. `pending_base` is the title it was
+ * numbered from (`foo` for a guess `foo-2`) while the server's own pick is
+ * unknown; it goes once the real title is. */
+export interface PendingFields {
+  pending_create?: boolean;
+  pending_at?: number;
+  pending_base?: string;
+}
+
+const pend = (r: Instance) => r as Instance & PendingFields;
+export const isPendingRow = (r: Instance): boolean => pend(r).pending_create === true;
+
+/** `t` is `base` or one of the server's numberings of it (`base-2`, …). */
+export function numberedFrom(t: string, base: string): boolean {
+  return t === base || (t.startsWith(base + "-") && /^\d+$/.test(t.slice(base.length + 1)));
+}
+
+/** The optimistic rows the cache holds that `fetched` does not list yet, kept
+ * after the fetched rows (where `addPendingSession` put them). A row goes once
+ * the fetch lists its title, or — while its real title is unknown — a title
+ * new in this fetch numbered from its base (each new title claims one row); or
+ * once it is older than `ttl`. Nothing pending: `fetched`, as is. */
+export function mergePending(fetched: Instance[], cached: readonly Instance[] | undefined, now: number, ttl = PENDING_TTL_MS): Instance[] {
+  const waiting = (cached || []).filter(isPendingRow);
+  if (!waiting.length) return fetched;
+  const listed = new Set(fetched.map((r) => r.title));
+  const known = new Set((cached || []).filter((r) => !isPendingRow(r)).map((r) => r.title));
+  const fresh = fetched.map((r) => r.title).filter((t) => !known.has(t) && !waiting.some((w) => w.title === t));
+  const claimed = new Set<string>();
+  const keep = waiting.filter((r) => {
+    if (listed.has(r.title)) return false;
+    const at = pend(r).pending_at;
+    if (typeof at !== "number" || now - at > ttl) return false;
+    const base = pend(r).pending_base;
+    const hit = base ? fresh.find((t) => !claimed.has(t) && numberedFrom(t, base)) : undefined;
+    if (hit) {
+      claimed.add(hit);
+      return false;
+    }
+    return true;
+  });
+  return keep.length ? [...fetched, ...keep] : fetched;
+}
+
+/** The server named a session it made (`session.created`). Already a row:
+ * unchanged (a guess that was right only forgets its base). An optimistic row still waiting for its real title, numbered
+ * from the same base: that row takes the title (one box, not two). Else a new
+ * optimistic row, so a session made anywhere — a flight, an agent, another
+ * browser — shows at once. */
+export function notePendingCreated(rows: readonly Instance[], title: string, data: Record<string, unknown>, now: number): Instance[] {
+  if (!title) return rows as Instance[];
+  const same = rows.findIndex((r) => r.title === title);
+  if (same >= 0) {
+    // The guess was right: its title is known now, so its base is spent.
+    if (!isPendingRow(rows[same]) || !pend(rows[same]).pending_base) return rows as Instance[];
+    const next = rows.slice();
+    next[same] = { ...rows[same], pending_base: undefined } as Instance;
+    return next;
+  }
+  const i = rows.findIndex((r) => isPendingRow(r) && !!pend(r).pending_base && numberedFrom(title, pend(r).pending_base!));
+  if (i >= 0) {
+    const next = rows.slice();
+    next[i] = { ...rows[i], title, pending_base: undefined, pending_at: now } as Instance;
+    return next;
+  }
+  const row: Record<string, unknown> = { title, status: "loading", pending_create: true, pending_at: now };
+  if (typeof data.parent === "string" && data.parent) row.parent = data.parent;
+  if (typeof data.program === "string" && data.program) row.program = data.program;
+  return [...rows, row as unknown as Instance];
+}
+
+/** A create answered with its row: the optimistic row for `guess` (or the one
+ * an event already moved to the real title) becomes that row — still waiting
+ * for the snapshot, so a poll that misses it keeps it. When the snapshot
+ * already lists the real title, the guess just goes. */
+export function landPendingRow(rows: readonly Instance[], guess: string, real: Instance, now: number): Instance[] {
+  const t = real.title;
+  if (!t) return rows as Instance[];
+  const listed = rows.some((r) => r.title === t && !isPendingRow(r));
+  const out: Instance[] = [];
+  let placed = listed;
+  for (const r of rows) {
+    if (!isPendingRow(r) || (r.title !== guess && r.title !== t)) {
+      out.push(r);
+      continue;
+    }
+    if (placed) continue;
+    out.push({ ...r, ...real, pending_create: true, pending_at: now, pending_base: undefined } as Instance);
+    placed = true;
+  }
+  return placed ? out : [...out, { ...real, pending_create: true, pending_at: now } as Instance];
+}
+
+/** The optimistic row for `title` goes (`session.create_failed`). */
+export function dropPendingRow(rows: readonly Instance[], title: string): Instance[] {
+  return rows.some((r) => isPendingRow(r) && r.title === title) ? rows.filter((r) => !(isPendingRow(r) && r.title === title)) : (rows as Instance[]);
+}
+
+/* --------------------------------------------------------------------------
+ * Moving a session (docs/flights.md "Moving a session").
+ *
+ * `POST /api/instances/{title}/move` answers 202 and the move runs on; its row
+ * says "moving…" (`moving: true`) from the 202 until `session.moved` or
+ * `session.move_failed` names it, or `MOVE_TTL_MS` passes. The mark lives
+ * here, not only in the cache, so a poll in between keeps it.
+ * ------------------------------------------------------------------------ */
+
+/** How long a row says "moving…" with no word from the server. */
+export const MOVE_TTL_MS = 60_000;
+
+/** A row's client-only move field. */
+export interface MovingFields {
+  moving?: boolean;
+}
+
+export const isMovingRow = (r: Instance): boolean => (r as Instance & MovingFields).moving === true;
+
+/** title → when its move was asked for. */
+const movingSince = new Map<string, number>();
+
+/** `rows` with `moving: true` on every row whose move is still pending (and
+ * the expired marks forgotten). Nothing pending: `rows`, as is. */
+export function withMoving(rows: Instance[], now: number, since: Map<string, number> = movingSince, ttl = MOVE_TTL_MS): Instance[] {
+  for (const [t, at] of since) if (now - at > ttl) since.delete(t);
+  if (!since.size) return rows;
+  return rows.map((r) => (since.has(r.title) && !isMovingRow(r) ? ({ ...r, moving: true } as Instance) : r));
+}
+
+/** The move was accepted (202): the row says "moving…" until the event, or
+ * for `MOVE_TTL_MS` at most. */
+export function markMoving(title: string, now = Date.now()) {
+  movingSince.set(title, now);
+  queryClient.setQueryData<Instance[]>(["instances"], (rows) => (rows ? withMoving(rows, now) : rows));
+  setTimeout(() => {
+    // Only this mark: a second move asked meanwhile keeps its own minute.
+    if (movingSince.get(title) === now) clearMoving(title);
+  }, MOVE_TTL_MS);
+}
+
+/** The move landed, failed, or timed out: the row stops saying "moving…". */
+export function clearMoving(title: string) {
+  movingSince.delete(title);
+  queryClient.setQueryData<Instance[]>(["instances"], (rows) =>
+    rows && rows.some((r) => r.title === title && isMovingRow(r))
+      ? rows.map((r) => (r.title === title && isMovingRow(r) ? ({ ...r, moving: undefined } as Instance) : r))
+      : rows
+  );
+}
+
+/** "Moved “name” to /new/folder" — the toast `session.moved` raises. */
+export function movedToastText(name: string, to: string): string {
+  return to ? `Moved “${name}” to ${to}` : `Moved “${name}”`;
+}
+
+/** The session a move event names: the envelope's, else the payload's. */
+function movedTitle(env: EventEnvelope): string {
+  return String(env?.session || (env?.data as Record<string, unknown> | undefined)?.title || "");
+}
+
+/** `session.moved`: the row stops saying "moving…", the rows refetch (its
+ * folder changed), and — live, not a replay — a toast says where it went. */
+export function onSessionMoved(env: EventEnvelope, replay = false) {
+  const title = movedTitle(env);
+  if (!title) return;
+  clearMoving(title);
+  void refreshInstances();
+  if (!replay) toast(movedToastText(windowName(title), String(env.data?.to || "")), { duration: 5000 });
+}
+
+/** `session.move_failed`: the row stops saying "moving…" and the reason goes
+ * on an error card (it stays: the remedy is often the sentence's end). */
+export function onSessionMoveFailed(env: EventEnvelope, replay = false) {
+  const title = movedTitle(env);
+  if (!title) return;
+  clearMoving(title);
+  void refreshInstances();
+  if (!replay) errorPop(`Moving “${windowName(title)}” failed`, String(env.data?.error || "no reason recorded"));
+}
+
+let instancesTimer: ReturnType<typeof setTimeout> | null = null;
+/** One refetch for a burst of session-set events. */
+function refreshInstancesSoon() {
+  if (instancesTimer) clearTimeout(instancesTimer);
+  instancesTimer = setTimeout(() => {
+    instancesTimer = null;
+    void refreshInstances();
+  }, 150);
+}
+
+let sessionSetBridged = false;
+/** The events that change the session set (backend/web/core/events.py): made,
+ * removed, renamed, moved, or a make or move that failed after its 202.
+ * Installed once per page; replays (history after a reconnect) only refetch. */
+export function bridgeSessionSetEvents() {
+  const ev = window.mindflock?.events;
+  if (sessionSetBridged || !ev) return; // events.js may not have loaded yet
+  sessionSetBridged = true;
+  const replay = (env: EventEnvelope) => typeof ev.isReplay === "function" && ev.isReplay(env);
+  ev.subscribe("session.created", (env) => {
+    const title = String(env?.session || "");
+    // A verify run is a hidden helper: the event can't say so, the row will.
+    if (title && !replay(env) && !isVerifySession(title))
+      queryClient.setQueryData<Instance[]>(["instances"], (rows) => (rows ? notePendingCreated(rows, title, env.data || {}, Date.now()) : rows));
+    refreshInstancesSoon();
+  });
+  ev.subscribe("session.create_failed", (env) => {
+    const title = String(env?.session || "");
+    if (title) queryClient.setQueryData<Instance[]>(["instances"], (rows) => (rows ? dropPendingRow(rows, title) : rows));
+    refreshInstancesSoon();
+  });
+  ev.subscribe("session.moved", (env) => onSessionMoved(env, replay(env)));
+  ev.subscribe("session.move_failed", (env) => onSessionMoveFailed(env, replay(env)));
+  for (const name of ["session.deleted", "session.renamed"]) ev.subscribe(name, refreshInstancesSoon);
+}
+
 /** After anything that changes the recently-closed store: a reopen, a forget, a
  * delete, or the unused-worktree sweep (which forgets the entries whose
  * directory it removed). The Verify dialog caches this list to offer closed
@@ -500,10 +738,13 @@ export type PanelKey = keyof typeof PANELS;
  * so reopening a screen shows the last list immediately instead of blanking.
  * `refresh()` is the Refresh button: `?fresh=1` tells the server to skip its
  * cache and actually sweep, so the click means what it says. */
-export function usePanelQuery<T extends { stale?: boolean }>(key: PanelKey) {
+export function usePanelQuery<T extends { stale?: boolean }>(key: PanelKey, opts: { enabled?: boolean } = {}) {
   const q = useQuery<T>({
     queryKey: [key],
     queryFn: () => api<T>(PANELS[key]),
+    // false = read the cache only (the top bar's Flights badge counts what the
+    // lists already hold; it never fans out upstream itself).
+    enabled: opts.enabled ?? true,
     staleTime: PANEL_STALE_MS,
     gcTime: PANEL_GC_MS,
     placeholderData: (prev) => prev,
@@ -948,4 +1189,86 @@ export function useCachedLiveBranch(): string {
  * just wrote, but the list is shared with the top bar's badge. */
 export function refreshTestPlans() {
   return queryClient.invalidateQueries({ queryKey: ["test-plans"] });
+}
+
+/* --------------------------------------------------------------------------
+ * Flights (docs/flights.md): the flights in the air, the plans and the step
+ * registry. A server that predates the routes answers 404, read as "none"
+ * (null) and asked rarely. `flight.changed | needs_you | finished` refetch,
+ * the pattern of the run events (state/runs.ts).
+ * ------------------------------------------------------------------------ */
+
+/** While a flight is live: the driver's own 5 s cadence. */
+export const FLIGHTS_LIVE_MS = 5_000;
+/** Nothing live (or the tab hidden): enough to notice a new one. */
+export const FLIGHTS_IDLE_MS = 30_000;
+const FLIGHTS_MISSING_MS = 120_000;
+
+const routeMissing = (e: unknown) =>
+  !!e && typeof e === "object" && "status" in e && ((e as { status: number }).status === 404 || (e as { status: number }).status === 405);
+
+async function orNull<T>(p: Promise<T>): Promise<T | null> {
+  try {
+    return await p;
+  } catch (e) {
+    if (routeMissing(e)) return null;
+    throw e;
+  }
+}
+
+let flightsBridged = false;
+function bridgeFlightEvents() {
+  const ev = window.mindflock?.events;
+  if (flightsBridged || !ev) return; // events.js may not have loaded yet
+  flightsBridged = true;
+  const bump = () => {
+    void queryClient.invalidateQueries({ queryKey: ["flights"] });
+    void queryClient.invalidateQueries({ queryKey: ["instances"] });
+  };
+  for (const name of ["flight.changed", "flight.needs_you", "flight.finished"]) ev.subscribe(name, bump);
+}
+
+/** The flights (unfinished + the last 20 finished). `data` null = this server
+ * has no flights route. */
+export function useFlights(enabled = true) {
+  useEffect(bridgeFlightEvents, []);
+  return useQuery({
+    queryKey: ["flights"],
+    queryFn: () => orNull(api<{ flights?: Flight[] }>("/api/flights").then((d) => d?.flights || [])),
+    enabled,
+    refetchInterval: (q) =>
+      q.state.data === null
+        ? FLIGHTS_MISSING_MS
+        : (q.state.data || []).some((f) => f.state === "running" || f.state === "waiting_you") && !document.hidden
+          ? FLIGHTS_LIVE_MS
+          : FLIGHTS_IDLE_MS,
+    refetchIntervalInBackground: true,
+    placeholderData: (prev) => prev,
+    retry: false,
+  });
+}
+
+/** The plans, built-ins first. null = no flights route. */
+export function useFlightPlans(enabled = true) {
+  useEffect(bridgeFlightEvents, []);
+  return useQuery({
+    queryKey: ["flight-plans"],
+    queryFn: () => orNull(api<{ plans?: FlightPlan[] }>("/api/flights/plans").then((d) => d?.plans || [])),
+    enabled,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+    retry: false,
+  });
+}
+
+/** The step registry (`STEP_KINDS`): the palette's blocks and their forms.
+ * Fixed for the life of a server, so read once. */
+export function useFlightKinds(enabled = true) {
+  return useQuery({
+    queryKey: ["flight-kinds"],
+    queryFn: () => orNull(api<{ kinds?: StepKindDef[] }>("/api/flights/kinds").then((d) => d?.kinds || [])),
+    enabled,
+    staleTime: 10 * 60_000,
+    retry: false,
+  });
 }

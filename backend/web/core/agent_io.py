@@ -249,6 +249,42 @@ def settles(keys: List[str]) -> bool:
     return any(k in SETTLING_KEYS for k in keys)
 
 
+#: An X10 mouse report: ``ESC [ M`` then three RAW bytes (button, column,
+#: row, each +32) — those bytes can be digits, so it goes before the rest.
+_X10_MOUSE = re.compile(rb"\x1b\[M[\x00-\xff]{0,3}", re.S)
+#: Every other escape sequence a terminal sends that is NOT a key that
+#: settles a dialog: CSI (arrows, Home/PgUp, focus in/out ``ESC [ I`` /
+#: ``ESC [ O``, SGR mouse ``ESC [ < b;x;y M``, bracketed-paste brackets), SS3
+#: (application-mode arrows ``ESC O A``), OSC / DCS replies, and a meta chord
+#: (Alt+key, ``ESC`` + one printable byte).
+_ESC_SEQ = re.compile(
+    rb"\x1b(?:\[[0-?]*[ -/]*[@-~]|O[ -~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?"
+    rb"|P[^\x1b]*(?:\x1b\\)?|[ -~])",
+    re.S,
+)
+#: What is left after the sequences are gone that answers a dialog: Enter
+#: (CR / LF), a digit choice, y / n, or a bare Escape (cancel).
+_SETTLING_BYTES = re.compile(rb"[\r\n1-9yYnN\x1b]")
+
+
+def settling_input(data) -> bool:
+    """Whether raw terminal input ``data`` (bytes or str, as the pane's
+    websocket or ``/send`` carries it) holds a key that would SETTLE a
+    dialog — Enter, a digit, y/n, a bare Escape — as opposed to only
+    scrolling, clicking, focusing or moving its cursor: the mouse wheel
+    (tmux mouse mode makes xterm.js send wheel reports), clicks, focus
+    in/out and arrow navigation are stripped before looking. Never raises."""
+    try:
+        if isinstance(data, str):
+            data = data.encode("utf-8", "replace")
+        if not data:
+            return False
+        rest = _ESC_SEQ.sub(b"", _X10_MOUSE.sub(b"", bytes(data)))
+        return _SETTLING_BYTES.search(rest) is not None
+    except Exception:  # noqa: BLE001 — unreadable input settles nothing
+        return False
+
+
 def note_dialog_seen(title: str, dialog_id: Optional[str]) -> None:
     """A read of ``title``'s screen found ``dialog_id`` up: once a DIFFERENT
     dialog has been seen, the one answered before it is history, and an
@@ -308,6 +344,77 @@ def current_dialog(name: str, program: str) -> Tuple[Optional[dict], Optional[st
     return body, None
 
 
+#: Ceilings on one voice dictation batch (``/send {"voice": true, "submit":
+#: false, "erase": n}``): the characters taken back and the characters typed.
+#: A batch is what the desktop's recognizer changed in ~30 ms — a phrase's
+#: guess corrected — so these are generous.
+MAX_DICTATION_ERASE = 2000
+MAX_DICTATION_TEXT = 2000
+
+
+def parse_dictation(text: str, erase) -> Tuple[int, Optional[str]]:
+    """``(erase, error)`` for a voice dictation batch: ``erase`` a whole
+    number of characters to take back (0 to :data:`MAX_DICTATION_ERASE`;
+    a bool is not a number), ``text`` one line of words — no control
+    character (a newline would submit, an Escape interrupt) and at most
+    :data:`MAX_DICTATION_TEXT` characters — and not both empty."""
+    if isinstance(erase, bool) or not isinstance(erase, int):
+        return 0, "erase must be a whole number of characters"
+    if erase < 0 or erase > MAX_DICTATION_ERASE:
+        return 0, "erase must be 0 to %d" % MAX_DICTATION_ERASE
+    if len(text) > MAX_DICTATION_TEXT:
+        return 0, "dictation text is limited to %d characters" % MAX_DICTATION_TEXT
+    if _CONTROL_CHARS.search(text):
+        return 0, "dictation text can't hold control characters"
+    if not erase and not text:
+        return 0, "empty message"
+    return erase, None
+
+
+def dictation_argv(name: str, erase: int, text: str) -> List[str]:
+    """ONE tmux invocation that takes back ``erase`` characters (the BSpace
+    key, ×``erase``) and then types ``text`` literally — a correction lands
+    whole, with no other typer between its halves.
+
+    tmux reads an argument that ENDS in ``;`` as a command separator (even a
+    lone ``send-keys -l -- "fix it;"`` loses the ``;``), so trailing
+    semicolons go as their hex key (``-H 3b``) after the literal text."""
+    argv: List[str] = ["tmux"]
+
+    def cmd(*args: str) -> None:
+        if len(argv) > 1:
+            argv.append(";")
+        argv.extend(["send-keys", "-t", name, *args])
+
+    if erase:
+        cmd(*(["BSpace"] * erase))
+    body = text.rstrip(";")
+    if body:
+        cmd("-l", "--", body)
+    if len(text) > len(body):
+        cmd("-H", *(["3b"] * (len(text) - len(body))))
+    return argv
+
+
+def send_dictation(name: str, erase: int, text: str) -> bool:
+    """Take back ``erase`` characters, then type ``text`` (no Enter) into the
+    agent tmux session ``name`` in one tmux call (:func:`dictation_argv`),
+    under the session's typing lock. False when tmux errored (the session is
+    gone). The caller (the server's voice gate) has checked for a dialog."""
+    if not name:
+        return False
+    if not erase and not text:
+        return True
+    with _agent_sessions._typing_lock(name):
+        done = _proc.run_capped(
+            dictation_argv(name, erase, text),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=_TMUX_TIMEOUT,
+        )
+    return done.returncode == 0
+
+
 def send_answer(name: str, text: str, keys: List[str]) -> bool:
     """Type ``text`` literally (no Enter), then press each key in order.
 
@@ -333,7 +440,7 @@ def send_answer(name: str, text: str, keys: List[str]) -> bool:
     with _agent_sessions._typing_lock(name):
         if text:
             typed = _proc.run_capped(
-                ["tmux", "send-keys", "-t", name, "-l", "--", text],
+                _agent_sessions.literal_keys_argv(name, text),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=_TMUX_TIMEOUT,

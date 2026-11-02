@@ -1,0 +1,40 @@
+/* "Takes off…" (TakeoffDialog.tsx): the trigger's form inside the app's Modal.
+   The fields' own look (.fl-form, .fl-schedule) is StopParts.css's. */
+
+.fl-takeoff {
+  width: min(560px, calc(100vw - 48px));
+}
+
+.fl-takeoff-lede {
+  margin: -4px 0 10px;
+  font-size: 12.5px;
+}
+
+.fl-takeoff .fl-trigger {
+  border: 0;
+  padding: 0;
+  background: none;
+}
+
+/* The hook trigger's address: the read-only field takes the row, Copy beside it. */
+.fl-hook-url {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.fl-hook-url .fl-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.fl-hook-copy {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.fl-hook-pending {
+  font-style: italic;
+}

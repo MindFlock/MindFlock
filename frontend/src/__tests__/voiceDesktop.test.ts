@@ -12,6 +12,7 @@ import {
   ANSWER_LISTEN_MS,
   APPROVE_OFF_LINE,
   controlMaxWords,
+  dialogStopLine,
   FIRST_CHUNK_S,
   chunkMinS,
   passLine,
@@ -34,6 +35,9 @@ import {
   railRow,
   railStep,
   routePhrase,
+  DialogSeen,
+  dialogSeen,
+  VOICE_CLIENT_ID,
   PENDING_MS,
   PendingChoice,
   runVoiceCommand,
@@ -72,6 +76,7 @@ import {
   type RecognizerHandlers,
   type Speaker,
   type VoiceCfg,
+  type KeyPost,
 } from "../lib/voiceDesktop";
 import { ALL_CODE, ALL_CSS, blockFrom, code, cssRule, fn, src } from "./sourceText";
 
@@ -97,6 +102,34 @@ const mocks = vi.hoisted(() => {
 });
 vi.mock("../api/client", () => ({ api: mocks.api, apiRaw: mocks.apiRaw, instApi: mocks.instApi, ApiError: mocks.ApiError }));
 vi.mock("../lib/terminals", () => ({ peekTerm: mocks.peekTerm }));
+
+/** The server's voice gate, faked (sessionTarget's `post`): every batch,
+ * and what it pressed — recorded as raw keystrokes (⌫ per erased character,
+ * then the text) so the expectations read as typing. `mode`: "down" — the
+ * server can't be reached; "dialog" — 409 in_dialog. */
+const gate = {
+  log: {} as Record<string, string[]>,
+  calls: [] as Array<[string, number, string]>,
+  mode: "ok" as "ok" | "down" | "dialog",
+};
+const keys: KeyPost = async (title, erase, text) => {
+  gate.calls.push([title, erase, text]);
+  if (gate.mode === "down") throw new TypeError("Failed to fetch");
+  if (gate.mode === "dialog") throw new mocks.ApiError(409, "Answer its prompt first", { in_dialog: true });
+  const log = (gate.log[title] ||= []);
+  if (erase) log.push("\x7f".repeat(erase));
+  if (text) log.push(text);
+};
+/** A fresh faked gate (`open` false: the server can't be reached): its
+ * per-session keystrokes. */
+function keyLog(open = true): Record<string, string[]> {
+  gate.log = {};
+  gate.calls = [];
+  gate.mode = open ? "ok" : "down";
+  return gate.log;
+}
+/** A macrotask: the gate's answers (and a refusal's handling) are in. */
+const settle = () => new Promise((r) => setTimeout(r, 0));
 vi.mock("../lib/wavRecorder", () => ({
   startWavRecording: mocks.startWavRecording,
   resamplerName: mocks.resamplerName,
@@ -239,25 +272,15 @@ describe("Dictation: the machine (what to type, what to take back)", () => {
 
 describe("LiveDictation: typing into the session as you speak", () => {
   afterEach(() => {
+    // Every key went through the server's gate: the terminal socket is
+    // never asked for (MF2 — it types into whatever is on screen).
+    expect(mocks.peekTerm).not.toHaveBeenCalled();
     mocks.peekTerm.mockReset();
     mocks.instApi.mockReset();
   });
 
-  /** A terminal per session that records the raw keys sent down it. */
-  function terms(open = true) {
-    const sent: Record<string, string[]> = {};
-    mocks.peekTerm.mockImplementation((title: string, kind: string) => {
-      expect(kind).toBe("agent");
-      return {
-        send: (data: string) => {
-          if (!open) return false;
-          (sent[title] ||= []).push(data);
-          return true;
-        },
-      };
-    });
-    return sent;
-  }
+  /** The keys each session got, through the (faked) server gate. */
+  const terms = keyLog;
 
   function hooks(over: Partial<LiveHooks> = {}) {
     const captions: string[] = [];
@@ -284,7 +307,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
   it("types each final at once with a trailing space, and shows the running text", async () => {
     const sent = terms();
     const k = hooks();
-    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
     await d.heard("fix the login bug");
     expect(sent.t1).toEqual(["fix the login bug "]);
     await d.heard("and add a test");
@@ -300,7 +323,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
     for (const activity of ["clarify", "limit"]) {
       const sent = terms();
       const k = hooks({ activity: () => activity });
-      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
       await d.heard("yes do it");
       expect(sent.t1).toBeUndefined();
       expect(k.last()).toBe("Login fix is waiting on a dialog — answer it first");
@@ -309,21 +332,57 @@ describe("LiveDictation: typing into the session as you speak", () => {
     }
   });
 
-  it("the dialog is checked before the FIRST phrase only", async () => {
+  it("a dialog that comes up after the first phrase stops the typing: the rest goes to the router, the words typed stay (MF2)", async () => {
     const sent = terms();
     let act = "working";
     const k = hooks({ activity: () => act });
-    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
     await d.heard("one");
-    act = "clarify"; // the first phrase is already in the field: keep going
+    act = "clarify"; // a permission prompt came up: "two" could answer it
+    await d.heard("two");
+    expect(sent.t1).toEqual(["one "]); // nothing typed, nothing taken back
+    expect(k.calls.routed).toEqual(["one", "two"]);
+    expect(k.last()).toBe(dialogStopLine("Login fix", "two"));
+    expect(d.active).toBe(false);
+  });
+
+  it("a dialog that came and went between two phrases (answered by hand: the row edge clears the sighting) leaves the message typing", async () => {
+    const sent = terms();
+    let act = "working";
+    const k = hooks({ activity: () => act });
+    const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
+    await d.heard("one");
+    act = "clarify";
+    dialogSeen.rows([{ title: "t1", activity: "clarify", asking: { kind: "dialog", dialog_id: "d1" } }]);
+    expect(dialogSeen.since("t1")).toBeGreaterThan(0);
+    act = "working"; // clicked on the screen before "two" was said
+    dialogSeen.rows([{ title: "t1", activity: "working", asking: null }]);
+    expect(dialogSeen.since("t1")).toBe(0);
+    // No dialog is up any more and no guess hit it: "two" can't answer one.
     await d.heard("two");
     expect(sent.t1).toEqual(["one ", "two "]);
+    expect(d.active).toBe(true);
+  });
+
+  it("after a mid-message dialog stop, “disregard” and Escape send no ⌫ — no key reaches the terminal", async () => {
+    const sent = terms();
+    let act = "working";
+    const k = hooks({ activity: () => act });
+    const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
+    await d.heard("one");
+    act = "clarify";
+    await d.heard("two");
+    expect(d.active).toBe(false);
+    await d.heard("disregard");
+    await d.cancel();
+    expect(sent.t1).toEqual(["one "]);
+    expect(k.last()).toBe(dialogStopLine("Login fix", "two"));
   });
 
   it("“disregard” sends one backspace per character this dictation typed — multi-byte ones included — and goes on", async () => {
     const sent = terms();
     const k = hooks();
-    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
     await d.heard("café");
     await d.heard("ship it 🚀");
     await d.heard("disregard that");
@@ -341,7 +400,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
   it("Escape takes it back and stops", async () => {
     const sent = terms();
     const k = hooks();
-    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
     await d.heard("rm -rf");
     await d.cancel();
     expect(sent.t1).toEqual(["rm -rf ", "\x7f".repeat(7)]);
@@ -352,7 +411,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
   it("a stop phrase stops with the words in the field, nothing sent", async () => {
     const sent = terms();
     const k = hooks();
-    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
     await d.heard("run the tests");
     await d.heard("stop recording");
     expect(sent.t1).toEqual(["run the tests "]);
@@ -365,7 +424,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
   it("push to talk let go stops: the phrase in flight is typed, nothing sent", async () => {
     const sent = terms();
     const k = hooks();
-    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
     await d.heard("fix the bug");
     await d.hearing("and the test");
     expect(sent.t1).toEqual(["fix the bug ", "and the test"]); // typed as heard
@@ -384,7 +443,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
     for (const replies of [false, true]) {
       mocks.instApi.mockResolvedValueOnce({ ok: true });
       const k = hooks({ replies: () => replies });
-      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
       await d.heard("run the tests over");
       expect(mocks.instApi).toHaveBeenLastCalledWith("t1", "/send", { json: { enter: true, say: replies } });
       expect(k.calls.submitted).toEqual([["t1", replies]]);
@@ -398,7 +457,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
     terms();
     mocks.instApi.mockRejectedValueOnce(new mocks.ApiError(409, "in a dialog", { in_dialog: true }));
     const k = hooks({ replies: () => true });
-    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
     await d.heard("yes over");
     expect(k.last()).toBe("Login fix is on a dialog — press Enter yourself when it is answered");
     expect(k.calls.submitted).toEqual([]); // nothing went: no reply to wait for
@@ -433,7 +492,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
   it("a phrase the router acted on is not typed", async () => {
     const sent = terms();
     const k = hooks({ route: async () => true });
-    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
     await d.heard("switch to the billing page");
     expect(sent.t1).toBeUndefined();
     expect(k.calls.halt).toBe(1);
@@ -449,20 +508,26 @@ describe("LiveDictation: typing into the session as you speak", () => {
     expect(mocks.peekTerm).not.toHaveBeenCalled();
   });
 
-  it("a terminal that isn't connected: says so and stops", async () => {
+  it("the server can't be reached: says so and stops — never a fall-back to the terminal socket", async () => {
     terms(false);
     const k = hooks();
-    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
     await d.heard("hello");
-    expect(k.last()).toBe("Couldn't type into Login fix — its terminal isn't connected");
+    await settle();
+    expect(k.last()).toBe("Couldn't type into Login fix — the server didn't answer");
     expect(d.active).toBe(false);
+    expect(k.calls.halt).toBe(1);
+    // Later words go nowhere.
+    gate.mode = "ok";
+    await d.heard("more");
+    expect(gate.log.t1).toBeUndefined();
   });
 
   it("phrases are carried out in order even while the first waits on the router", async () => {
     const sent = terms();
     let release: (v: boolean) => void = () => {};
     const k = hooks({ route: () => new Promise<boolean>((r) => (release = r)) });
-    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
     const a = d.heard("one");
     const b = d.heard("two");
     await Promise.resolve();
@@ -476,7 +541,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
     it("are typed as soon as the first pass hears them — the unsure tail too — and corrected as they change", async () => {
       const sent = terms();
       const k = hooks();
-      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
       await d.stream("", "fix the");
       expect(sent.t1).toEqual(["fix the"]); // the first pass, before anything commits
       expect(k.last()).toBe(""); // settled: nothing yet…
@@ -496,7 +561,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
 
     it("each answer is one correction: the backspaces, then the new end", async () => {
       const sent = terms();
-      const d = new LiveDictation(sessionTarget("t1", "Login fix"), hooks().h);
+      const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), hooks().h);
       await d.stream("", "run the test");
       await d.stream("run the", "tests now");
       expect(sent.t1).toEqual(["run the test", "s now"]); // a longer guess: no backspace
@@ -510,7 +575,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
       const sent = terms();
       mocks.instApi.mockResolvedValueOnce({ ok: true });
       const k = hooks();
-      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
       await d.stream("run the", "tests over");
       expect(sent.t1).toEqual(["run the tests"]);
       expect(mocks.instApi).not.toHaveBeenCalled(); // held: more words may follow
@@ -525,13 +590,13 @@ describe("LiveDictation: typing into the session as you speak", () => {
       const sent = terms();
       mocks.instApi.mockResolvedValue({ ok: true });
       const k = hooks();
-      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
       await d.words("ship the fix");
       await d.flush("Over.");
       expect(sent.t1).toEqual(["ship the fix"]);
       expect(mocks.instApi).toHaveBeenCalledTimes(1);
       const sent2 = terms();
-      const d2 = new LiveDictation(sessionTarget("t2", "Billing"), hooks().h);
+      const d2 = new LiveDictation(sessionTarget("t2", "Billing", keys), hooks().h);
       await d2.stream("deploy it", "over and");
       expect(sent2.t2).toEqual(["deploy it"]);
       await d2.stream("over and", "out");
@@ -541,7 +606,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
       expect(mocks.instApi).toHaveBeenCalledTimes(2);
       // "submit" is a word: typed as it comes, nothing sent.
       const sent3 = terms();
-      const d3 = new LiveDictation(sessionTarget("t3", "Docs"), hooks().h);
+      const d3 = new LiveDictation(sessionTarget("t3", "Docs", keys), hooks().h);
       await d3.stream("", "please submit");
       await d3.flush("please submit");
       expect(sent3.t3.join("")).toBe("please submit ");
@@ -550,7 +615,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
 
     it("a held control word goes in once the next word rules it out", async () => {
       const sent = terms();
-      const d = new LiveDictation(sessionTarget("t1", "Login fix"), hooks().h);
+      const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), hooks().h);
       await d.stream("", "move it over");
       expect(sent.t1).toEqual(["move it"]);
       await d.stream("", "move it over here");
@@ -562,7 +627,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
     it("“stop recording” at the end of a streamed phrase stops with the words in the field", async () => {
       const sent = terms();
       const k = hooks();
-      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
       await d.stream("", "leave it there stop recording");
       await d.flush("leave it there stop recording");
       expect(sent.t1).toEqual(["leave it there", " "]);
@@ -573,7 +638,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
     it("“disregard” backspaces everything this dictation typed, the guess included", async () => {
       const sent = terms();
       const k = hooks();
-      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
       await d.heard("café"); // a phrase from before (clip or stream alike)
       await d.stream("scrap this", "whole thing disregard");
       expect(sent.t1).toEqual(["café ", "scrap this whole thing"]);
@@ -585,7 +650,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
 
     it("never takes back past the phrase's start: what came before stays", async () => {
       const sent = terms();
-      const d = new LiveDictation(sessionTarget("t1", "Login fix"), hooks().h);
+      const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), hooks().h);
       await d.heard("first part");
       await d.stream("", "fix it");
       await d.stream("", "Different words");
@@ -601,7 +666,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
           return true;
         },
       });
-      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
       await d.stream("", "switch two the");
       expect(sent.t1).toEqual(["switch two the"]); // can't be a command: typed
       await d.stream("switch to", "the login fix");
@@ -615,7 +680,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
     it("…and is typed once the words rule a command out", async () => {
       const sent = terms();
       const k = hooks();
-      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
       await d.words("stop");
       expect(sent.t1).toBeUndefined();
       await d.words("the server first");
@@ -625,7 +690,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
 
     it("a radio word followed by more words is just a word", async () => {
       const sent = terms();
-      const d = new LiveDictation(sessionTarget("t1", "Login fix"), hooks().h);
+      const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), hooks().h);
       await d.words("over");
       await d.words("the form then");
       await d.flush("wait");
@@ -636,7 +701,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
     it("the dialog guard still comes first: no guess goes in, and the phrase's end says why", async () => {
       const sent = terms();
       const k = hooks({ activity: () => "clarify" });
-      const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+      const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
       await d.stream("yes do", "it now");
       expect(sent.t1).toBeUndefined();
       expect(d.active).toBe(true);
@@ -681,7 +746,7 @@ describe("LiveDictation: typing into the session as you speak", () => {
 
   it("before a word, the caption names the radio words", () => {
     const k = hooks();
-    new LiveDictation(sessionTarget("t1", "Login fix"), k.h).show();
+    new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h).show();
     expect(k.last()).toBe("Listening… · " + dictHint()); // "Listening…" from the press, before the mic records
     expect(dictHint()).toBe("Say “over” to send, “over and out” to stop, “disregard” to start over");
   });
@@ -769,8 +834,7 @@ describe("typing as you speak: the guess and its corrections", () => {
   });
 
   it("the browser recognizer's interim words go the same way: typed, corrected, then settled by the final", async () => {
-    const sent: string[] = [];
-    mocks.peekTerm.mockImplementation(() => ({ send: (x: string) => (sent.push(x), true) }));
+    const log = keyLog();
     try {
       const h: LiveHooks = {
         caption: () => {},
@@ -780,19 +844,20 @@ describe("typing as you speak: the guess and its corrections", () => {
         replies: () => false,
         submitted: () => {},
       };
-      const d = new LiveDictation(sessionTarget("t1", "Login fix"), h);
+      const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), h);
       await d.hearing("fix the");
       await d.hearing("fix the bug");
       await d.hearing("fix the bag");
       await d.heard("fix the bag.");
-      expect(sent).toEqual(["fix the", " bug", "\x7f\x7f", "ag", ". "]);
+      expect(log.t1).toEqual(["fix the", " bug", "\x7f\x7f", "ag", ". "]);
       // A later phrase: interim words after the first final.
       await d.hearing("and run");
       await d.hearing("and run the tests over");
       await d.heard("and run the tests over");
-      expect(sent.slice(5)).toEqual(["and run", " the tests"]);
+      expect(log.t1.slice(5)).toEqual(["and run", " the tests"]);
       expect(d.active).toBe(false);
       expect(MIC_SRC).toContain("void d.hearing(t)");
+      expect(mocks.peekTerm).not.toHaveBeenCalled();
     } finally {
       mocks.peekTerm.mockReset();
     }
@@ -1473,7 +1538,7 @@ describe("serverRecognizer: streaming, words as you speak", () => {
     t.block(0, true);
     await vi.waitFor(() => expect(t.chunks()).toBe(1));
     const init = mocks.apiRaw.mock.calls[0][1];
-    expect(JSON.parse(init.body)).toEqual({ lang: "en-US" });
+    expect(JSON.parse(init.body)).toEqual({ lang: "en-US", client: VOICE_CLIENT_ID });
     expect(init.headers["Content-Type"]).toBe("application/json");
     r.stop();
     // A stream open when stopped is abandoned.
@@ -1758,9 +1823,10 @@ describe("wiring", () => {
     expect(cssRule(src("components/TopBarMic.css"), "#topbar #mic-btn.listening")).toContain("var(--red)");
   });
 
-  it("types into the session's agent terminal, never a whole-prompt /send; submit is /send {enter: true}", () => {
+  it("types through the server's voice gate (never the terminal socket, never a whole-prompt /send); submit is /send {enter: true}", () => {
     const lib = code("lib/voiceDesktop.ts");
-    expect(lib).toContain('peekTerm(title, "agent")?.send(data)');
+    expect(lib).not.toContain("peekTerm");
+    expect(lib).toContain('instApi(title, "/send", { json: { voice: true, submit: false, erase, text } })');
     expect(lib).toMatch(/instApi<[^>]*>\(title, "\/send", \{ json: \{ enter: true, say \} \}\)/);
     // The old one-shot prompt send is gone from the mic.
     expect(MIC).not.toContain("dialog_safe");
@@ -1778,7 +1844,7 @@ describe("wiring", () => {
   it("asks the router with a dictation's first phrase, and selects through the one selection authority", () => {
     // Hands-free listening asks about the session it read out.
     expect(MIC).toContain('const session = opts.title || useUi.getState().focused || "";');
-    expect(MIC).toContain("routePhrase(text, session)");
+    expect(MIC).toContain("routePhrase(text, session, undefined, spokeAt)");
     expect(MIC).toContain("selectSession(title, { noKeyboard: true })");
     expect(code("lib/voiceDesktop.ts")).toContain('const json: Record<string, unknown> = { text, session };');
     expect(code("lib/voiceDesktop.ts")).toContain('api<RouteReply>("/api/voice/route", { json })');
@@ -1805,7 +1871,7 @@ describe("wiring", () => {
   it("streams when GET /api/voice says the server can: each answer typed as a guess, the unsure tail shown muted", () => {
     expect(MIC).toContain("serverRecognizer({ stream: () => !!cfgNow.server_ready.stt_stream })");
     expect(MIC).toContain("void d.stream(w, p)");
-    expect(MIC).toContain("void d.flush(t, final)");
+    expect(MIC).toContain("void d.flush(t, final, at)");
     expect(MIC).toContain("d.unsure(t)");
     // The words are in the terminal: no transcript on the page (voicePolish.test).
     expect(MIC).not.toContain("mic-unsure");
@@ -1853,13 +1919,7 @@ describe("control words at any point", () => {
     mocks.instApi.mockReset();
   });
 
-  function terms() {
-    const sent: Record<string, string[]> = {};
-    mocks.peekTerm.mockImplementation((title: string) => ({
-      send: (data: string) => ((sent[title] ||= []).push(data), true),
-    }));
-    return sent;
-  }
+  const terms = () => keyLog();
 
   function hooks(over: Partial<LiveHooks> = {}) {
     const captions: string[] = [];
@@ -1910,7 +1970,7 @@ describe("control words at any point", () => {
   it("a stop phrase at the end of a committed group stops at once, never typed; the words before it stay", async () => {
     const sent = terms();
     const k = hooks();
-    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
     await d.words("fix the login bug stop recording");
     expect(sent.t1).toEqual(["fix the login bug "]);
     expect(sent.t1.join("")).not.toMatch(/stop|recording/);
@@ -1924,7 +1984,7 @@ describe("control words at any point", () => {
   it("…split across committed groups too: the held words wait for the rest of the phrase", async () => {
     const sent = terms();
     const k = hooks();
-    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
     await d.words("ship it that is");
     expect(sent.t1).toEqual(["ship it"]);
     await d.words("all");
@@ -1935,13 +1995,13 @@ describe("control words at any point", () => {
   it("said alone, it stops without asking the router; a clip's phrase works the same", async () => {
     terms();
     const k = hooks();
-    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
     await d.words("stop listening");
     expect(k.calls.routed).toEqual([]);
     expect(k.last()).toBe(STOPPED_LINE);
     const sent = terms();
     const k2 = hooks();
-    const d2 = new LiveDictation(sessionTarget("t2", "Billing"), k2.h);
+    const d2 = new LiveDictation(sessionTarget("t2", "Billing", keys), k2.h);
     await d2.heard("run the tests");
     await d2.heard("Mic off.");
     expect(sent.t2).toEqual(["run the tests "]);
@@ -1950,7 +2010,7 @@ describe("control words at any point", () => {
 
   it("“stop” followed by more words is a prompt", async () => {
     const sent = terms();
-    const d = new LiveDictation(sessionTarget("t1", "Login fix"), hooks().h);
+    const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), hooks().h);
     await d.words("stop");
     await d.words("the server and");
     expect(sent.t1).toEqual(["stop the server and"]);
@@ -1965,13 +2025,13 @@ describe("control words at any point", () => {
         return true;
       },
     });
-    const d = new LiveDictation(sessionTarget("t1", "Login fix"), k.h);
+    const d = new LiveDictation(sessionTarget("t1", "Login fix", keys), k.h);
     await d.words("Yes.");
     expect(k.calls.routed).toEqual(["Yes."]);
     expect(k.calls.ends).toEqual(["acted"]);
     // Nothing pending: "yes" may open a prompt — it waits for more words.
     const k2 = hooks();
-    const d2 = new LiveDictation(sessionTarget("t1", "Login fix"), k2.h);
+    const d2 = new LiveDictation(sessionTarget("t1", "Login fix", keys), k2.h);
     await d2.words("yes");
     expect(k2.calls.routed).toEqual([]);
     expect(d2.active).toBe(true);
@@ -2011,6 +2071,13 @@ describe("the router's new answers", () => {
   });
 
   const RAIL = ["t1", "\u0000win:chat", "t2", "t3"];
+  /** The page has had `title`'s dialog `id` for a second (R8-bis: an answer
+   * is pressed only for words begun after its dialog was there). */
+  const had = (...pairs: Array<[string, string]>) => {
+    const s = new DialogSeen(() => Date.now() - 1000);
+    pairs.forEach(([t, id]) => s.note(t, id));
+    return s;
+  };
 
   function deps(over: Partial<CommandDeps> = {}) {
     const out = { selected: [] as string[], said: [] as string[], captions: [] as string[], submitted: [] as Array<[string, boolean]> };
@@ -2114,13 +2181,13 @@ describe("the router's new answers", () => {
     const reply: RouteReply = { kind: "answer", choice: "yes", title: "t2", dialog_id: "d1", keys: ["1"], say: "Billing: allowed." };
     mocks.instApi.mockResolvedValue({ ok: true });
     const on = deps();
-    await runVoiceCommand(reply, "billing yes", on.d);
+    await runVoiceCommand(reply, "billing yes", on.d, Date.now(), had(["t2", "d1"]));
     expect(mocks.instApi).toHaveBeenCalledWith("t2", "/answer", { json: { keys: ["1"], dialog_id: "d1", by: "user" } });
     expect(on.out.said).toEqual(["Billing: allowed."]);
     expect(on.out.selected).toEqual([]); // a targeted answer never moves focus
     mocks.instApi.mockClear();
     const off = deps({ approveDialogs: async () => false });
-    await runVoiceCommand(reply, "billing yes", off.d);
+    await runVoiceCommand(reply, "billing yes", off.d, Date.now(), had(["t2", "d1"]));
     expect(mocks.instApi).not.toHaveBeenCalled();
     expect(off.out.said).toEqual([APPROVE_OFF_LINE]);
     expect(APPROVE_OFF_LINE).toBe("Approving by voice is off: Settings → Voice");
@@ -2129,9 +2196,9 @@ describe("the router's new answers", () => {
   it("“always” only when the router says so: the keys sent are the router's, never widened", async () => {
     mocks.instApi.mockResolvedValue({ ok: true });
     const { d } = deps();
-    await runVoiceCommand({ kind: "answer", choice: "yes", dialog_id: "d1", keys: ["1"] }, "always", d);
+    await runVoiceCommand({ kind: "answer", choice: "yes", dialog_id: "d1", keys: ["1"] }, "always", d, Date.now(), had(["t1", "d1"]));
     expect(mocks.instApi).toHaveBeenLastCalledWith("t1", "/answer", { json: { keys: ["1"], dialog_id: "d1", by: "user" } });
-    await runVoiceCommand({ kind: "answer", choice: "always", dialog_id: "d1", keys: ["2"] }, "always", d);
+    await runVoiceCommand({ kind: "answer", choice: "always", dialog_id: "d1", keys: ["2"] }, "always", d, Date.now(), had(["t1", "d1"]));
     expect(mocks.instApi).toHaveBeenLastCalledWith("t1", "/answer", { json: { keys: ["2"], dialog_id: "d1", by: "user" } });
     // No keys from the router: nothing pressed, whatever was said.
     mocks.instApi.mockReset();
@@ -2145,20 +2212,22 @@ describe("the router's new answers", () => {
   it("a 409 dialog_changed says so instead of pressing into the next prompt", async () => {
     mocks.instApi.mockRejectedValueOnce(new mocks.ApiError(409, "the prompt changed", { dialog_changed: true }));
     const { d, out } = deps();
-    await runVoiceCommand({ kind: "answer", choice: "no", dialog_id: "d1", keys: ["3"] }, "no", d);
+    await runVoiceCommand({ kind: "answer", choice: "no", dialog_id: "d1", keys: ["3"] }, "no", d, Date.now(), had(["t1", "d1"]));
     expect(out.said).toEqual(["The prompt on Login fix changed — say it again."]);
   });
 
-  it("an answer to a QUESTION goes as a prompt, typed and submitted with say", async () => {
-    const sent: string[] = [];
-    mocks.peekTerm.mockImplementation(() => ({ send: (x: string) => sent.push(x) > 0 }));
+  it("an answer to a QUESTION goes as a prompt, typed through the gate and submitted with say", async () => {
     mocks.instApi.mockImplementation(async (_t: string, suffix: string) =>
       suffix === "/voice" ? { say: "Which branch, main or dev?", has_question: true } : { ok: true }
     );
     const { d, out } = deps();
     await runVoiceCommand({ kind: "answer", choice: "number", number: 2, no_dialog: true }, "two", d);
-    expect(sent).toEqual(["2 "]);
-    expect(mocks.instApi).toHaveBeenLastCalledWith("t1", "/send", { json: { enter: true, say: true } });
+    const sends = mocks.instApi.mock.calls.filter((c) => c[1] === "/send").map((c) => c[2]);
+    expect(sends).toEqual([
+      { json: { voice: true, submit: false, erase: 0, text: "2 " } },
+      { json: { enter: true, say: true } },
+    ]);
+    expect(mocks.peekTerm).not.toHaveBeenCalled();
     expect(out.submitted).toEqual([["t1", true]]);
     expect(mocks.instApi.mock.calls.some((c) => c[1] === "/answer")).toBe(false);
   });
@@ -2169,7 +2238,9 @@ describe("the router's new answers", () => {
     await runVoiceCommand(
       { kind: "answer", choice: "number", number: 3, title: "t1", dialog_id: "q1", keys: ["3"], text: "SAML via Okta" },
       "type something SAML via Okta",
-      d
+      d,
+      Date.now(),
+      had(["t1", "q1"])
     );
     expect(mocks.instApi).toHaveBeenLastCalledWith("t1", "/answer", {
       json: { keys: ["3"], dialog_id: "q1", by: "user", text: "SAML via Okta" },
@@ -2187,8 +2258,9 @@ describe("the router's new answers", () => {
     mocks.instApi.mockResolvedValue({ ok: true });
     const route = vi.fn(async () => ({ kind: "answer", choice: "yes", title: "t3", dialog_id: "d9", keys: ["1"] }) as RouteReply);
     const { d, out } = deps({ route });
-    await runVoiceCommand({ kind: "answer", choice: "yes", index: 4 }, "session four yes", d);
-    expect(route).toHaveBeenCalledWith("session four yes", "t3");
+    const spoke = Date.now();
+    await runVoiceCommand({ kind: "answer", choice: "yes", index: 4 }, "session four yes", d, spoke, had(["t3", "d9"]));
+    expect(route).toHaveBeenCalledWith("session four yes", "t3", spoke);
     expect(mocks.instApi).toHaveBeenCalledWith("t3", "/answer", { json: { keys: ["1"], dialog_id: "d9", by: "user" } });
     expect(out.selected).toEqual([]);
     // Past the rail: said, never routed.
@@ -2306,7 +2378,7 @@ describe("hands-free answering (Read replies aloud)", () => {
     // With the ask pop-up on, the pop-up reads it out instead (askPopup.test).
     expect(MIC).toContain('else if (env.new === "clarify" && !askPopupOn()) void hands.current?.dialog(env.session)');
     expect(MIC).toContain("if (listen) void said.then(() => hands.current?.question(title, ask))");
-    expect(MIC).toContain('pending: (title) => liveActivity(title) === "clarify" || questions.has(title)');
+    expect(MIC).toContain('pending: (title) => liveActivity(title) === "clarify" || dialogSeen.blocks(title) || questions.has(title)');
     expect(MIC).toContain("runVoiceCommand(r, text, {");
     expect(MIC).toContain("railOrder: () => useUi.getState().railOrder");
     expect(src("components/settings/screens/Voice.tsx")).toContain("With Read replies aloud on");
@@ -2336,7 +2408,9 @@ describe("the push-to-talk hotkey", () => {
     expect(MIC).toContain("window.addEventListener(TALK_EVENT, onTalk)");
     expect(MIC).toContain("window.removeEventListener(TALK_EVENT, onTalk)");
     const on = blockFrom(MIC, "const onTalk = (", "window.addEventListener(TALK_EVENT");
-    expect(on).toContain("talkKeyAction(phase, k.hold, !!live.current, keyHeld.current)");
+    expect(on).toContain("talkKeyAction(phase, k.hold, !!live.current, keyHeld.current, {");
+    // The key's press warms the mic like the button's (lib/voiceSmooth tests the rest).
+    expect(on).toMatch(/if \(phase === "down" && !live\.current\) warmMic\(true\);/);
     // The same start() as a click: it makes/resumes the AudioContext synchronously.
     expect(on).toContain("k.start(textField(document.activeElement))");
     expect(on).toContain("k.finish()");

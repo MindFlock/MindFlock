@@ -1,0 +1,356 @@
+/* The Sky guide (SkyGuide.tsx): a wide card, the section list on the left,
+   the section on the right scrolling on its own. The sketches draw in
+   currentColor and the theme tokens, so both themes work. */
+
+.sky-guide {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  width: 880px;
+  max-width: 96vw;
+  height: 600px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sky-guide-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sky-guide-head h2 {
+  margin: 0;
+  margin-right: auto;
+  font-size: 16px;
+}
+
+/* Close: the quiet tier (.fl-icon-btn), a bigger glyph. */
+.sky-guide-head .sky-guide-x {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.sky-guide-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 220px 1fr;
+}
+
+.sky-guide-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 8px;
+  border-right: 1px solid var(--border);
+  background: var(--panel-2);
+  overflow-y: auto;
+}
+
+/* A section: the menu-row tier (.fl-stopmenu-item), a little larger. */
+.sky-guide-nav .sky-guide-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  font-size: 13px;
+  padding: 6px 8px;
+}
+
+.sky-guide-nav .sky-guide-nav-item:hover {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.sky-guide-nav .sky-guide-nav-item.on {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  font-weight: 600;
+}
+
+.sky-guide-n {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sky-guide-nav-item.on .sky-guide-n {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.sky-guide-page {
+  overflow-y: auto;
+  padding: 16px 22px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sky-guide-page h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.sky-guide-words p {
+  margin: 0 0 10px;
+  line-height: 1.5;
+}
+
+.sky-guide-words kbd,
+.sky-guide-keys kbd {
+  font: 12px/1 ui-monospace, monospace;
+  padding: 2px 5px;
+  border: 1px solid var(--border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  white-space: nowrap;
+}
+
+.sky-guide-keys {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+
+.sky-guide-keys th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: 500;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sky-guide-keys td {
+  padding: 5px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  vertical-align: top;
+}
+
+.sky-guide-keys td:first-child {
+  width: 120px;
+}
+
+.sky-guide-foot {
+  margin-top: auto;
+  padding-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sky-guide-foot .muted {
+  margin-right: auto;
+}
+
+/* The sketches. */
+.sky-guide-sketch {
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.sg-sketch {
+  display: block;
+  width: 100%;
+  max-width: 480px;
+  height: auto;
+  margin: 0 auto;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sg-box {
+  fill: var(--panel-2);
+  stroke: currentColor;
+  stroke-opacity: 0.55;
+  stroke-width: 1.2;
+}
+
+.sg-box.sg-session {
+  stroke: var(--accent);
+  stroke-opacity: 1;
+}
+
+.sg-box.sg-done {
+  opacity: 0.5;
+}
+
+.sg-box.sg-here {
+  stroke: var(--gold);
+  stroke-opacity: 1;
+  stroke-width: 2;
+}
+
+.sg-box.sg-group {
+  fill: color-mix(in srgb, var(--accent) 8%, var(--panel-2));
+}
+
+.sg-dash,
+.sg-box.sg-dash {
+  stroke-dasharray: 4 3;
+}
+
+.sg-bar {
+  fill: currentColor;
+  opacity: 0.3;
+}
+
+.sg-link {
+  stroke: currentColor;
+  stroke-opacity: 0.5;
+  stroke-width: 1.2;
+}
+
+.sg-bird {
+  stroke: var(--gold);
+  stroke-width: 2.4;
+}
+
+.sg-arrow {
+  stroke: var(--accent);
+  stroke-width: 1.6;
+}
+
+.sg-text {
+  fill: currentColor;
+  stroke: none;
+  font: 10px/1 inherit;
+  font-family: inherit;
+  opacity: 0.8;
+}
+
+.sg-text.sg-strong {
+  font-weight: 600;
+  opacity: 1;
+}
+
+.sg-chip {
+  fill: var(--panel-2);
+  stroke: var(--accent);
+  stroke-width: 1.2;
+}
+
+.sg-dot {
+  fill: currentColor;
+  opacity: 0.6;
+}
+
+.sg-pane {
+  fill: var(--panel-2);
+  stroke: currentColor;
+  stroke-opacity: 0.4;
+}
+
+.sg-marquee {
+  fill: color-mix(in srgb, var(--accent) 10%, transparent);
+  stroke: var(--accent);
+  stroke-dasharray: 5 3;
+}
+
+.sg-halt {
+  fill: var(--tone-waiting, var(--gold));
+}
+
+.sg-halt-ink {
+  stroke: var(--panel);
+  stroke-width: 1.8;
+}
+
+.sg-toggle {
+  fill: var(--panel-2);
+  stroke: currentColor;
+  stroke-opacity: 0.4;
+}
+
+.sg-toggle-on {
+  fill: color-mix(in srgb, var(--accent) 22%, var(--panel));
+  stroke: var(--accent);
+}
+
+.sg-row {
+  fill: var(--panel);
+  stroke: currentColor;
+  stroke-opacity: 0.3;
+}
+
+.sg-fly {
+  fill: var(--accent);
+}
+
+.sg-cloud {
+  fill: var(--panel-2);
+  stroke: var(--accent);
+  stroke-width: 1.4;
+}
+
+/* The sky's "?" menu (onboarding/TourButton.tsx, its Sky variant): Replay
+   the tour · Open the guide. Kept here, beside the guide it opens. */
+.tour-btn-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.tour-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 30;
+  min-width: 170px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+
+.tour-menu button {
+  text-align: left;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.tour-menu button:hover,
+.tour-menu button:focus-visible {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+@media (max-width: 640px) {
+  .sky-guide-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+
+  .sky-guide-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sky-guide-nav .sky-guide-nav-item {
+    white-space: nowrap;
+  }
+}

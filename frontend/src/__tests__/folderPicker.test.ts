@@ -21,6 +21,7 @@ import {
   seedChain,
 } from "../lib/folderPicker";
 import { PathField, pathFieldRequest } from "../components/PathField";
+import { FolderField } from "../components/dialogs/newSession/FolderPicker";
 import WINDOW from "../components/FolderPickerWindow.tsx?raw";
 import PICKER from "../lib/folderPicker.ts?raw";
 import PATHFIELD from "../components/PathField.tsx?raw";
@@ -216,5 +217,55 @@ describe("every editable path field opens it", () => {
   it("Settings → Workspace folder, keeping its id, field and save", () => {
     expect(WORKSPACE).toMatch(/<PathField\s+data-group="repository"\s+data-field="workspace_dir"\s+id="workspace-dir-input"/);
     expect(WORKSPACE).toContain('onPicked={(p) => p.trim() !== stored && s.saveField("repository", "workspace_dir", p.trim())}');
+  });
+});
+
+describe("Tab completes the New form's Folder like a shell", () => {
+  const field = (over: Record<string, unknown> = {}) =>
+    renderToStaticMarkup(
+      createElement(FolderField, {
+        repoPath: "~/pro",
+        folderPath: "~/pro",
+        folderDo: () => undefined,
+        search: null,
+        searchHits: null,
+        searchSel: 0,
+        setSearchSel: () => undefined,
+        setSearchOpen: () => undefined,
+        selIndex: -1,
+        browserOpen: false,
+        pickMatch: () => undefined,
+        ...over,
+      })
+    );
+
+  it("shares PathField's completion (same lib, same rules, same live region)", () => {
+    expect(FOLDER).toContain('import { usePathCompletion } from "../../PathField";');
+    expect(FOLDER).toContain("usePathCompletion({ value: repoPath, onChange: typed, device, rowId: ids.matches })");
+    const html = field();
+    expect(html).toContain('<span class="path-field-live" role="status" aria-live="polite"></span>');
+    expect(html).not.toContain("<datalist");
+  });
+
+  it("fills through the reducer exactly like typing", () => {
+    expect(FOLDER).toMatch(/const typed = \(path: string\) => \{\s*folderDo\(\{ t: "user-set", path \}\);[^}]*?setSearchOpen\(true\);/);
+    expect(FOLDER).toMatch(/onChange=\{\(e\) => \{\s*comp\.onTyped\(\);\s*typed\(e\.target\.value\);/);
+  });
+
+  it("lets a name's match list double as the candidates: one is filled, several are walked", () => {
+    const tab = FOLDER.slice(FOLDER.indexOf('e.key === "Tab"'), FOLDER.indexOf("if (comp.onKeyDown(e)) return;"));
+    expect(tab).toContain("isNameQuery(folderPath)");
+    expect(tab).toContain("if (hits.length === 1) pickMatch(hits[0].path);");
+    expect(tab).toContain('setSearchSel((at + (e.shiftKey ? -1 : 1) + n) % n);');
+    // Path completion runs before the list's own arrows / Enter / Escape.
+    expect(FOLDER.indexOf("if (comp.onKeyDown(e)) return;")).toBeLessThan(FOLDER.indexOf('if (e.key === "ArrowDown" || e.key === "ArrowUp") {'));
+  });
+
+  it("says so (and skips) on another device's disk", () => {
+    expect(field({ repoPath: "", folderPath: "", device: "mac-mini" })).toContain(
+      'title="Tab completes folders on this computer only'
+    );
+    // A path in the field is its own tooltip, as before.
+    expect(field({ device: "mac-mini" })).toContain('title="~/pro"');
   });
 });

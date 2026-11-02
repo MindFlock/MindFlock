@@ -44,6 +44,17 @@ const TAB_ICONS: Record<PaneTabId, ReactNode> = {
       <circle cx="4.5" cy="18" r="1" />
     </>
   ),
+  // A route: three stops joined by arrows — the session's flight and its line.
+  flight: (
+    <>
+      <circle cx="3.5" cy="12" r="1.8" />
+      <circle cx="12" cy="12" r="1.8" />
+      <circle cx="20.5" cy="12" r="1.8" />
+      <path d="M6 12h3.5M14.5 12h3.5" />
+      <polyline points="8 10 10 12 8 14" />
+      <polyline points="16.5 10 18.5 12 16.5 14" />
+    </>
+  ),
   // Two speech bubbles: what passed between the workers.
   thread: (
     <>

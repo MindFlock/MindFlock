@@ -32,9 +32,11 @@ keys, event names and MCP tool names keep their older names (`/api/instances`,
 the theme toggle 🌙, the notifications 🔔 bell, whose one amber badge counts
 everything that needs you (see [Notifications](#notifications-)), and the
 mic right after it (below: talk to the focused session). Then the menu,
-which carries only the daily loop — **New**, **Intake** (`Alt+I`; see
-[Intake](#intake)), **Verify** (`Alt+V`), **Schedule** (`Alt+S`; see
-[Schedule](#schedule)) and **Settings** — and ends in a
+which carries only the daily loop — **New**, the **Grid · Sky** toggle
+(`Ctrl+Y`; see [Two views](#two-views-the-grid-and-the-sky) — on the bar only
+while the sidebar, its home, is hidden or the window is phone-narrow), **Intake**
+(`Alt+I`; see [Intake](#intake)), **Verify** (`Alt+V`), **Schedule**
+(`Alt+S`; see [Schedule](#schedule)) and **Settings** — and ends in a
 monochrome magnifier icon (`#palette-btn`, tooltip *Command palette — Ctrl+P /
 ⌘P*) that opens the command palette (below). **Intake** sits beside **New**
 because both are about starting sessions — one from scratch, one from what came
@@ -42,37 +44,53 @@ in. The **MindFlock** wordmark (carrying the *running engine's* version, plus a
 red `-DEV` badge under a dev shell) sits centered, and the empty strip beside it
 is the drag region that moves the desktop shell's window.
 
+For a while (Sky rounds 4–7) Intake, Verify and Schedule were tabs of one
+**Flights** dialog behind one top-bar button. The owner didn't love menus
+within menus, so round 8 put the three back on the bar exactly as they were;
+the Flights dialog is retired, flyways live on the [Sky](#flights-flyways-and-the-sky)'s
+shelf, and every old `#flights/…` link still lands (below).
+
 The bar never wraps and never clips (any width from 360 px up): it measures
 itself, before paint and on every resize, and gives things up in a fixed order
 (`fitTopBar` in `TopBar.tsx`). The wordmark goes first, then Settings, Schedule
 and Verify move, from the right, into one **⋯** (`#more-btn`) that sits where
-they stood, just before the magnifier. **New**, **Intake** and the magnifier
-never fold. The ⋯ carries the folded items' counts (Verify's red count rides on
-it while Verify is folded), and its menu lists the folded items with their own
-counts and tooltips (↑/↓ move, Esc closes). A folded item keeps its id
-(`#verify-btn` &c., hidden), its shortcut and its palette entry; the calm rule
-below still decides which items are on the bar at all.
+they stood, just before the magnifier; last the **Grid · Sky** toggle (its
+words already dropped to glyphs on a phone) folds into the same ⋯ as *Switch
+to the Sky / grid*. **New**, **Intake** and the magnifier never fold. The ⋯
+carries the folded items' counts (Verify's red count rides on it while Verify
+is folded), and its menu lists the folded items with their own counts and
+tooltips (↑/↓ move, Esc closes). A folded item keeps its id (`#verify-btn`
+&c., hidden), its shortcut and its palette entry; the calm rule below still
+decides which items are on the bar at all.
 
 **Verify** is always on the bar once the [calm first hour](#layout) is over
 (or its first checklist exists — before that it waits, and so does
 **Schedule** until its first template; Alt+V / Alt+S and the palette work
-throughout). Its badge counts the checklists under **Needs
-you** and **Failed** (the dialog's first two groups) and says nothing at zero;
-it turns **red** when any of them failed, and the tooltip's second line says
-what it counts (*3 checklists need you or failed — 1 failed*). Everywhere Verify is described in passing
-(this tooltip, the palette, the shortcut sheet) it is one sentence,
-`lib/vocab.ts`'s *check that pushed changes work*.
+throughout; `lib/calm.ts` `topBarShows`). Its badge counts the checklists
+under **Needs you** and **Failed** (the dialog's first two groups) and says
+nothing at zero; it turns **red** when any of them failed, and the tooltip's
+second line says what it counts (*3 checklists need you or failed — 1
+failed*). Everywhere Verify is described in passing (this tooltip, the
+palette, the shortcut sheet) it is one sentence, `lib/vocab.ts`'s *check that
+pushed changes work*.
 
-**Schedule** is always on the bar too (`#schedule-btn`, tooltip *Schedule —
-templates that start sessions on their own (Alt+S)*). Its only mark is a red
-count of the scheduled templates whose **last run failed** — exactly the
-Schedule cards that say *Last run failed*, so it clears when the next run
-starts fine — with the tooltip's second line saying so (*1 scheduled
-template's last run failed*). A schedule that is merely set, a paused one, or
-a run skipped because the previous one was still going gets no mark: those
-are the feature working. It refreshes on `template.run_started` /
-`template.run_failed` (`lib/useScheduleStatus.ts`). Under 520 px the worded
-items close up so the palette icon stays on the bar.
+**Schedule** (`#schedule-btn`, tooltip *Schedule — templates and scheduled
+flyways; starts sessions on a timer (Alt+S)*). Its only mark is a red count of
+the scheduled templates whose **last run failed** — exactly the Schedule
+cards that say *Last run failed*, so it clears when the next run starts fine
+— with the tooltip's second line saying so (*1 scheduled template's last run
+failed*). A schedule that is merely set, a paused one, or a run skipped
+because the previous one was still going gets no mark: those are the feature
+working. It refreshes on `template.run_started` / `template.run_failed`
+(`lib/useScheduleStatus.ts`).
+
+**The Grid · Sky toggle**'s Sky half wears the count of flights **perched on
+you** (parked on a *you* stop, or halted until someone retries or skips; a
+flight parked on a Verify stop is Verify's count, not this one) — nothing at
+zero, red when one halted (`lib/flights.ts` `perchBadge`). Its folded ⋯ row
+carries the same count, and so does the sidebar View row's Sky half — the
+toggle's home, where it lives whenever the sidebar is shown (see
+[Switching](#switching)).
 
 **The bar's tooltips read their shortcuts off the live keymap**
 (`shortcutLabels`), rebinds included — and in a browser tab they leave out
@@ -82,13 +100,22 @@ wordmark steps aside rather than being clipped.
 
 **Each surface has a URL.** Opening **New**, **Intake**, **Verify**,
 **Schedule** or **Settings** puts it in the hash (`#new`, `#intake/tickets`,
-`#verify`, `#schedule`, `#settings/accounts`; an old `#templates` link opens
-Schedule) with one history entry, so the
-browser's **Back** closes it instead of leaving the app, and a link (or a
-reload) opens it (`lib/surfaceHash.ts`). Moving from one surface to another
+`#verify/<branch>`, `#schedule`, `#settings/accounts`) with one history entry,
+so the browser's **Back** closes it instead of leaving the app, and a link (or
+a reload) opens it (`lib/surfaceHash.ts`). Moving from one surface to another
 replaces that entry, so Back still lands on the grid; closing a surface in the
 app steps back over its entry. Commit, the palette and other moments don't
-touch the URL.
+touch the URL. `#templates` (Schedule's old name) still opens Schedule, and
+the retired Flights dialog's links land where they belong now, rewritten in
+place (`lib/flights.ts` `legacyFlightsRoute`):
+
+| Old link | Lands on |
+|---|---|
+| `#flights`, `#flights/sky[/<title>]`, `#flights/board` | the Sky (`#sky`, `#sky/<title>`) |
+| `#flights/flyways[/<id>]` (and `#flights/plans[/<id>]`) | the Sky with the flyway shelf open — and that flyway's card |
+| `#flights/sources[/<tab>[:<source>]]` | Intake (`#intake/…`) |
+| `#flights/checklists[/<branch>]` | Verify (`#verify/…`) |
+| `#flights/schedule` | Schedule (`#schedule`) |
 
 Four entries left the bar:
 
@@ -128,9 +155,11 @@ now).
 **The mic** (`#mic-btn`, a monochrome glyph like the bell's) talks to the
 **focused session** — the tooltip names it (*Talk to Login fix — click to talk,
 right-click for options*). The words are **typed into the session's input
-field as you speak**: each phrase, the moment it is recognised, goes down the
-session's agent terminal as keys (with a trailing space), exactly as if you had
-typed it. Nothing pops up while you speak or while a reply is read: the words
+field as you speak**: each phrase, the moment it is recognised, goes into the
+session's agent as keys (with a trailing space), exactly as if you had typed
+it — through the server's voice gate (`POST /api/instances/{title}/send`
+`{"voice": true, "submit": false, "erase": n, "text": …}`), never as raw keys
+down the terminal socket (see *A dialog on screen* below). Nothing pops up while you speak or while a reply is read: the words
 are in the terminal, and a small pill under the mic says only *Listening…*,
 *Speaking…* or, for a second after "stop talking", *Quiet.* (see [Voice
 input](#voice-input)). When the server's
@@ -175,12 +204,18 @@ a session first*).
   and the router's own line after a switch (*Billing.*) — with
   *Read replies aloud* off too. With them off, the chimes answer a start and
   a stop, and a switch still says the session's name. A stop phrase says nothing back: the falling
-  chime is its answer. They go to
+  chime is its answer. A switch's name and the fixed lines (*Sent.*,
+  *Cleared.*, *Over and out.*, *Answer it on the screen.* …) are normally
+  server cache hits, near-instant even on a slow neural host, because the
+  server prewarms them ([web-api.md](web-api.md), *Names are pre-said*) —
+  so keep their exact wording in sync with `PREWARM_FIXED` in
+  `backend/web/routes/speech.py`. They go to
   the front of the one speech queue (after other confirmations, never behind
   a reply), are said even while the person is mid-sentence, are
   dropped when more than 5 s late, and the recorder drops its audio while one
-  plays and 150 ms after (`Recognizer.mute`; Web Speech ignores its results
-  then) without ending the phrase. The server voice's audio for them is kept
+  sounds and 150 ms after (`Recognizer.mute`; Web Speech ignores its results
+  then) without ending the phrase. A confirmation's unmute never lifts the
+  mute of a line that already sounds after it (`SpeechQueue.audibleNow`). The server voice's audio for them is kept
   in memory per voice (engine + detail), and the five fixed lines are made
   ahead once — on the first press, when `/api/voice` says the voice is local
   (`tts_backend` `local` / `system`, or a host at a local address in
@@ -191,9 +226,16 @@ a session first*).
   the queue's gate (`SpeechQueue.setGate`) holds a line only while the phrase
   under way has words from the last 1.5 s and no 250 ms pause yet
   (`LiveDictation.midSentence`; also for 1.5 s after the mic is keyed). While
-  any line plays the recorder drops its audio, and 150 ms after
+  any line **sounds** the recorder drops its audio, and 150 ms after
   (`Recognizer.mute`) — the phrase under way is not ended — and listening
-  goes on after it. A click (or the Talk hotkey) while a line plays cuts that
+  goes on after it. The mute follows the line's first sound, not its turn in
+  the queue (`Speaker.reportsAudible`: the server voice and speechSynthesis
+  report when audio starts — a speechSynthesis voice that never fires
+  `onstart` counts as sounding 300 ms after `speak()`), so a reply the server
+  voice is still making leaves the mic listening. While muted for a line the
+  mic's ring goes faint and dashed with the accent dot (`#mic-btn.muted`,
+  `.mic-ring.listening.muted`) and its tooltip says *Speaking — your mic is
+  paused until it ends*. A click (or the Talk hotkey) while a line plays cuts that
   line and keeps listening; the next one stops. **Barge-in by voice:** while
   a line plays, the server's recogniser keeps reading the microphone's level
   (an analyser, every 40 ms; the recorder's muted blocks are unmetered) and
@@ -206,7 +248,7 @@ a session first*).
   recorder drops muted audio). "Loud" is over 0.04 RMS and three times what
   the microphone hears of the app's own voice — the speakers' bleed the
   browser's echo cancellation leaves — learnt as a floor from the muted reads
-  (`BargeDetector.bleed`; the first read seeds it, so a machine with no
+  taken while audio actually plays (`BargeDetector.bleed`; the first read seeds it, so a machine with no
   cancellation never barges on its own voice, and only a voice well over the
   bleed barges). Web Speech has no level while muted: no barge-in by voice
   there. A hands-free answer still holds the queue for its 12 s listen.
@@ -214,12 +256,28 @@ a session first*).
   “over”, “over and out”, “disregard”, a stop phrase, “stop talking”, or a
   switch command as a message's first phrase (“switch to billing”, “focus 3”,
   “next session”) — acts once the level meter has heard nothing for 250 ms
-  (`CONTROL_TAIL_MS`), not after the recogniser's 1.1 s pause: the phrase is
+  (`CONTROL_TAIL_MS`), not after the recogniser's phrase-end quiet (1.1 s, or
+  the streamed turn verdict): the phrase is
   ended at the recogniser at once (`Recognizer.endPhrase`, its `/end`), and
   “disregard”, a stop, “stop talking” and a switch act on the guess right
   away (that phrase's late words and end are ignored). “Over” waits for
-  `/end` — its accurate final retyped first — only as long as finals have
-  been taking: half again the typical round trip plus 100 ms, within
+  `/end` — its accurate final retyped first — but its `/end` starts early:
+  once the meter has heard 100 ms of quiet after “over” (`OVER_EARLY_QUIET_MS`)
+  the phrase is ended at the recogniser, so the final is on its way while the
+  rest of the 250 ms is waited out — the two waits overlap instead of
+  stacking; the voice coming back before the 250 ms makes “over” a plain
+  word again (typed, nothing sent). Both quiets are **heard** quiet
+  (`voiceMic.meterQuietMs()` = the meter's latest block − its last loud
+  block), never wall-clock time: after the early end no block reaches the
+  meter until the next recording's first one (100–200 ms), and that blind
+  seam — or a 12 s clip cap's, or a stream restart's — used to count as
+  quiet, so *“move it over… to the left”* sent *“move it over”*. Heard quiet
+  freezes across a seam and counts again once blocks arrive, so it comes in
+  recorder blocks (~85 ms at 48 kHz: the early end takes two quiet blocks,
+  “met” three); the voice is judged back iff a loud block came after the
+  early end (`LiveHooks.loudAt`, the meter's `lastLoudAt`), and the *over →
+  sent* clock starts from that last loud block too. The wait lasts only as long as finals
+  have been taking: half again the typical round trip plus 100 ms, within
   300 ms..1.5 s (`overWaitMs`; `OVER_FINAL_WAIT_MS` is the most, for the
   first "over" of a page before anything is known — `/end`'s `final_ms`,
   the server's own measure of its accurate pass, plus 150 ms stands in
@@ -232,7 +290,11 @@ a session first*).
   word's end to Enter is the Diagnostics line's *over → sent 0.9 s* (and
   `window.__mfVoiceSent`, the debug trace's line).
   A control word the next word rules out (“move it over here”) goes in as
-  before.
+  before. A phrase taken from its guess (by “over” or another control word)
+  ignores its late words and end until that end arrives — up to 50 s when
+  the recogniser always reports one (the server's stream: `/end` times out
+  at 45 s; `SWALLOW_STREAM_MAX_MS`), 5 s otherwise — so a chunk backlog never
+  types and sends the phrase a second time.
 - **Sounds** (Settings → Voice → *Sounds*, on by default, per browser):
   every start of listening — a click, the hotkey, the wake word, the ask
   card's mic — plays a rising two-tone chime (skipped from the recording),
@@ -240,7 +302,11 @@ a session first*).
   hotkey again, letting go, the idle stop, a refused send — a falling, softer
   one (880 → 660 Hz, 140 ms; `chime(ctx, "stop")` in `lib/wakeWord.ts`).
   “Over” (sent, still listening) plays none — *Sent.* is the cue. A chime
-  never plays over words: it goes through the speech queue
+  never plays over words, and a chime asked for while the AudioContext is
+  not yet running waits up to 400 ms for it to resume (`CHIME_LATE_MS`, the
+  phone's `VOICE_CHIME_LATE_MS`) instead of being dropped — the recorder's
+  chime skip counts from when the context runs; the server voice waits the
+  same 400 ms before falling back to speechSynthesis. A chime goes through the speech queue
   (`SpeechQueue.cue`) after the line being said and the confirmations
   waiting, ~120 ms after their end, before any reply — so a pending
   *Over and out.* / *Sent.* plays whole, then the chime. Nothing on the
@@ -262,20 +328,107 @@ a session first*).
   recognised (it is typed like the rest — and if it ended in “over”, sent).
   There, and for a hands-free answer (one message: “over” sends and stops),
   two minutes without a word stops listening; the words stay where they are.
+- **The first syllable is kept.** While the microphone is open
+  (`MicKeeper`) it keeps a 500 ms pre-roll ring at 16 kHz
+  (`PRE_ROLL_MS`); a phrase whose speech starts in its first 0.3 s
+  (`PRE_ROLL_ONSET_S`) gets the ring in front of its first chunk or clip
+  (never under a chime or a barge skip) — but only the audio heard **since
+  the last phrase ended**: every phrase end (silence, an early “over”, the
+  12 s cap, a lost mic, finishing) cuts the ring (`MicKeeper.cut()`, at the
+  top of `endClip`), so a quick next phrase gets just the gap since then
+  instead of the previous phrase's tail again (*“…over”* then *“ver to the
+  left”*), and a press long after the last phrase still gets the full
+  500 ms. Audio after the stopped recorder's last block and before the cut
+  (at most one block, ~85 ms) goes in neither phrase — the price of never
+  repeating words. The silence detector's and the
+  meter's noise floor start from the ring's quietest block rather than the
+  first block (a press that lands mid-word would make the word the floor).
+  The microphone is opened with `{echoCancellation: true,
+  noiseSuppression: true}` asked for explicitly (`MIC_CONSTRAINTS` in
+  `lib/voiceMic.ts`; the Settings mic test still asks `{audio: true}`), so
+  the reply playing from the speakers is not what the recorder hears.
+- **A microphone that goes away** (unplugged, taken by the OS: the track's
+  `ended`, or a `devicechange` that leaves no live track — a merely
+  `muted` track is not counted) is noticed
+  (`MicKeeper.onLost`): the phrase being recorded ends (its words go), the
+  caption says *The microphone went away — listening on the default one*
+  and the next phrase records from the default microphone; if it goes away
+  again within 3 s (`MIC_LOST_RETRY_MS`) listening stops with *The
+  microphone went away — check it, then click the mic* — never a
+  *Listening…* over a dead mic.
 - **The Talk hotkey** (the keymap's Talk action, default Ctrl+T — Alt+Space
   stays as the browser-safe alias, since Chrome keeps Ctrl+T for a new tab —
   rebindable in Keyboard shortcuts) does the same from anywhere — a terminal
   pane included: the keymap dispatches `mindflock:voice-talk` on `window` with
   `{phase: "down" | "up"}`. In *Hold to talk* a press starts and the release
-  stops (a window blur's `up` ends only a press the key began); in *Click
-  to talk* each press starts or stops and releases do nothing. Stopping leaves
+  stops (a window blur's `up` ends only a press the key began) — but a
+  **tap** (let go within 350 ms, `TAP_HOLD_MS`) leaves the mic on, as *Click
+  to talk* would, and the next press stops it; in *Click
+  to talk* each press starts or stops and releases do nothing. A press
+  while a dictation is still ending, or within 300 ms after one ended
+  (`TALK_DEBOUNCE_MS`: the stopping press's bounce, a double tap), starts
+  nothing. The key's press warms the microphone as the button's does. Stopping leaves
   the words in the field; say “over” first to send them. The
   keydown counts as the gesture that starts the audio engine, as a click does.
-- **A dialog on screen.** Before a dictation's first phrase is typed, the
-  session's live activity is checked (the rows the app already polls): on a
-  question, permission prompt or usage-limit menu (`clarify` / `limit`) nothing
-  is typed — words would answer it — the mic's tooltip says *Login fix is
-  waiting on a dialog — answer it first* and listening ends.
+- **A dialog on screen.** Before every phrase and every streamed correction
+  of a session target (`LiveDictation.dialogBlocks`) the page checks for a
+  dialog: the row reads a question, permission prompt or usage-limit menu
+  (`clarify` / `limit`, the rows the app already polls), a dialog came up
+  during this phrase, or this page has **any current sighting** of one on
+  the session, however long ago it was seen (`dialogSeen.blocks`: rows,
+  `/dialog`, the ask pop-up, the router — a sub-agent's prompt under a
+  `working` row and a dialog seen before the mic opened hold too). The
+  sighting is also raised by the event, not only the 4 s rows poll:
+  `TopBarMic` feeds every `session.activity_changed` to
+  `dialogSeen.activity` — going to `clarify` / `limit` holds typing into
+  that session at once (and `/dialog` is read at once for its id, for any
+  session, pop-up on or off), leaving it clears the hold and the sighting.
+  A sighting is otherwise cleared by an answer, a `/dialog` 204 or the row
+  leaving the dialog; one the row doesn't confirm (a sub-agent's prompt
+  answered by hand) is read again while it holds a dictation — at most
+  every 2 s (`DIALOG_CHECK_EVERY_MS`), `recheckDialog`: two 204s 400 ms
+  apart (`DIALOG_RECHECK_MS`) with the sighting unchanged clear it, so a
+  stale one never locks the mic out (the first try may still end with
+  *answer it first*). The check is asked once more as the last word before
+  every batch of keys or Backspaces (`LiveDictation.keys`). With a dialog
+  sighted, a lone “yes” / “two” goes to the router at once. Words, a digit or a
+  Backspace would answer it, so: before the first phrase nothing is typed, the
+  mic's tooltip says *Login fix is waiting on a dialog — answer it first* and
+  listening ends. Mid-message no more words are typed and nothing already
+  typed is taken back (no Backspace for a correction, “disregard”, a stop or
+  the hush erase); “over” presses no Enter (checked again after the submit
+  settle). The rest of the phrase goes to the voice router, where it can
+  answer the dialog only if it was begun after the dialog appeared; if the
+  router acts, a continuous dictation keeps listening, otherwise listening ends
+  with *Login fix asked something — “…” not typed; the words before it stay*
+  (`dialogStopLine`). A text box is never blocked.
+  **The server's gate covers what the page can't see yet.** A dialog the
+  server finds by reading the screen (Codex's approval, aider's, a
+  sub-agent's prompt) reaches the rows only on its next 4 s state tick — the
+  voice judge measured 2.1–2.4 s, in which a "yes …" typed raw used to land a
+  `y` in Codex's dialog. So every dictation key — the words, a correction's
+  Backspaces, a “disregard” — goes through `/send {"voice": true, "submit":
+  false, "erase": n, "text": …}` (`KeyGate` in `lib/voiceDesktop.ts`), which
+  re-reads the activity and the screen at send time and answers **409**
+  `in_dialog` with nothing pressed. Keys go at once when nothing is in flight;
+  whatever the recogniser says while a batch is in flight is folded into one
+  next batch (a correction that takes back only what was queued sends
+  nothing), one request at a time per session, in order. Typing is counted as
+  done when queued (it never waits on the round trip); a refusal puts the
+  count right: nothing of the refused batch nor of anything queued behind it
+  went in, the dialog is noted (`dialogSeen`, and `/dialog` read for its id),
+  this phrase types nothing more, and the words that never went in go to the
+  router — at the phrase's end, or at once between phrases — with the same
+  *answer only if begun after the dialog appeared* rule and the same
+  `dialogStopLine`. “Over” presses Enter only once every key went in
+  (`KeyGate.settled`), and never after a refusal. A network failure, a paused
+  session or a request unanswered in 4 s (`KEY_TIMEOUT_MS`) stops listening
+  with its line (*Couldn't type into Login fix — the server didn't answer*);
+  nothing ever falls back to the terminal socket. A router answer typed as a
+  prompt (an answer to a question) goes through the same gate. Each batch's
+  round trip is kept (`window.__mfVoiceKeys`, the debug trace's `keys ⌫n +m
+  in N ms`) and the mic's diagnostics show the median (*typing ~15 ms/batch*;
+  measured 15 ms p50 in-process with a real tmux pane).
 - **A text box focused** (Send a message, a dialog field…): the words go into
   the box at the cursor, “disregard” removes them while they still sit before
   the cursor, and “over” only starts the next message (“over and out”
@@ -309,8 +462,35 @@ a session first*).
   while **Approve dialogs by voice** is on in Settings → Voice (`GET
   /api/voice` `approve_dialogs`; off: *Approving by voice is off: Settings →
   Voice*). “Always” is pressed only when the router says so, never inferred
-  here. A question (no dialog) gets the answer as a prompt: typed and
-  sent like “over”, with `say` per *Read replies aloud*. “Session three
+  here. **Only words begun after the dialog was there answer it** (R8-bis):
+  each phrase carries when it began — the server recognizer's first loud
+  block (`Phrase.spokeAt`, minus the pre-roll when its speech began with
+  it, taken on the recording's own clock — `RecordingClock`, the earliest
+  `now − seconds recorded` over the level callbacks, reset when the mic mutes —
+  so a page stalled by a render or terminal output doesn't make speech look
+  later than it began; Web Speech can't say, so no later than 2 s before the previous
+  phrase ended, `SPOKE_LEAD_MS`) — to the router (`spoke_ms_ago`,
+  `spoke_at`) with when this window first had each dialog (`dialogSeen`:
+  the rows' `asking.dialog_id`, a dialog read out or shown in the ask
+  pop-up, the router's own answers; `dialog_seen`), and the page refuses an
+  answer begun under 300 ms (`ANSWER_AFTER_MS`) after its sighting: the
+  router's `early` (web-api.md) and the page's own refusal both say *&lt;name&gt;
+  asked just now: say your answer again* and press nothing. The names live
+  in `lib/voiceDesktop`: `ANSWER_AFTER_MS = 300`, `SPOKE_LEAD_MS = 2000`, the
+  `DialogSeen` class and its `dialogSeen` singleton, and `earlyLine(name)`.
+  A sighting is cleared when the rows confirmed it and stop asking, when the
+  row leaves `clarify` / `limit` (answered by hand), when `/dialog` comes back
+  204 (a failed fetch keeps it) and when `/answer` says 409 `dialog_answered`
+  — so the same command asked again under the same dialog id is a new
+  sighting; a lagging row never erases a fresh one, and a sub-agent's prompt
+  under a `working` row keeps its sighting. `dialogSeen.since(title)` is the
+  sighting time whatever the id; `TopBarMic` feeds `dialogSeen` from its
+  `["instances"]` query-cache subscription. In practice: an answer said too
+  soon is simply asked for again, and with Web Speech the 2 s lead can make a
+  quick *yes* right after a prompt appears need repeating. A question (no dialog) gets the answer as a prompt: typed and
+  sent like “over” — but never while a dialog is up or sighted on that
+  session (*Login fix is on a dialog — answer it on the screen.*), since the
+  typed *yes* or *1* would land in the dialog — with `say` per *Read replies aloud*. “Session three
   yes” answers that session without moving focus (a row number alone is mapped
   to its title and asked again). No dialog and no question: the router's
   sentence is shown (and read, with replies on).
@@ -350,7 +530,9 @@ a session first*).
   (*Recognition: server, built in (Windows via WSL) — one clip per phrase:
   16 kHz, browser resampler, a phrase ends after 1.1 s of quiet · Voice: server
   (piper)*, *Recognition: server (local) — streaming (words as you speak):
-  16 kHz, windowed-sinc resampler, a phrase ends after 1.1 s of quiet*,
+  16 kHz, windowed-sinc resampler, a phrase ends after 1.1 s of quiet* — when
+  streaming, 1.1 s is only the fallback; the server's turn verdict usually
+  ends it (see *Streaming* below) —
   *Recognition: this browser · Voice: this browser*, and why the server's
   recogniser isn't ready when it would be used), then the last pass, final and
   wake times. The choices are kept per browser (`cs_voice_desktop`), and
@@ -365,7 +547,15 @@ engine, whisper, piper or a host), whatever `voice.stt` / `voice.tts` say —
 those are the phone page's preference. With no server recogniser ready the mic
 never tries Web Speech: it says *Speech needs the server's engine here:
 Settings → Voice*. With no server voice, replies use the app's own
-speechSynthesis. In a **browser tab** it is the phone's rule: Web Speech and
+speechSynthesis. A server voice host that is down (Voice Lab not running,
+refusing, erroring or hung) or too slow for a line's budget is the
+**server's** problem first: it says the line with piper instead, one voice
+per reply — a slow host is not marked down, so the next reply is in its
+voice again — and `server_ready.tts_engine`
+/ `tts_fallback` / `tts_down` (and the Settings line, from `tts_detail`)
+say so; only with no fallback ready does `server_ready.tts` turn false and
+the app use speechSynthesis (see [web-api.md](web-api.md#voice-talking-to-a-session-from-the-phone), *The voice falls
+back*). In a **browser tab** it is the phone's rule: Web Speech and
 speechSynthesis, unless Settings → Voice says *server* for that kind and it is
 ready (Chromium builds without Google's speech service, such as Arc, need that:
 their Web Speech fails with *Speech recognition failed (network)*). The mic
@@ -373,12 +563,36 @@ re-reads `GET /api/voice` when the window regains focus and after any settings
 save.
 
 **The server's recogniser** records each phrase as **16 kHz 16-bit mono WAV**
-(`lib/wavRecorder.ts`, through the page's one AudioContext, made inside the
-click) — the built-in recognisers take nothing but PCM. The microphone's rate
-(usually 48 kHz) is brought down by the browser's own band-limited resampler
-(an `OfflineAudioContext` at 16 kHz rendering the clip), or, where there is
-none, a Blackman-windowed sinc — never plain interpolation, whose aliasing
-folds everything above 8 kHz back into the speech band. A clip ends after
+(through the page's one AudioContext, made inside the click) — the built-in
+recognisers take nothing but PCM. **Capture runs off the main thread**, in an
+AudioWorklet: one graph per microphone stream and context — mic →
+`AudioWorkletNode("mf-voice-capture")` → a zero gain → the destination —
+whose processor (`lib/voiceCapture.worklet.ts`, which Vite bundles on its own
+and emits next to `app.js` as **`/voice-capture-worklet.js`**: `vite.config.ts`
+`worker.rollupOptions.output.entryFileNames`; its `.map` is gitignored)
+brings the microphone's rate (usually 48 kHz) down to 16 kHz on the audio
+thread with a streaming Blackman-windowed sinc (the taps precomputed per
+phase) and posts one block per 4096 input frames (`CAPTURE_BLOCK_FRAMES`,
+85 ms at 48 kHz — the old recorder's block, so the noise floor and the
+end-of-phrase quiet keep their pace): the 16 kHz samples (buffer
+transferred), their RMS and the frame count. The main thread only pushes
+each block into the 500 ms pre-roll ring (`MicCapture` in `lib/voiceMic.ts`,
+kept at 16 kHz) and hands it to the listening recording
+(`MicCapture.record()`, wavRecorder's semantics: skip, mute with tail-skip or
+barge rewind, `take`, `last`, `keepS`, stop/cancel); `take()` and `stop()`
+only join samples and write the 44-byte header — nothing is resampled on
+the main thread, and the pre-roll and the recording share one block stream,
+so they join with no gap. `MicKeeper` loads the module once per context;
+the first phrase on a context waits for it at most 1.5 s
+(`CAPTURE_WAIT_MS`). **Fallback** — no AudioWorklet (an insecure page, an old
+engine), the module failed or is still loading after that wait: the old
+path, a ScriptProcessor pre-roll ring (2048 frames) and `lib/wavRecorder.ts`
+(a ScriptProcessor(4096) recorder whose clip the browser's own band-limited
+resampler — an `OfflineAudioContext` at 16 kHz — brings down, or, where there
+is none, the same windowed sinc; never plain interpolation, whose aliasing
+folds everything above 8 kHz back into the speech band). Settings → Voice's
+mic test records through `wavRecorder` too, with dictation's echo
+cancellation and noise suppression (`MIC_CONSTRAINTS`). A clip ends after
 1.1 s of quiet following speech (short, so typing keeps up with you) or at
 12 s, and is uploaded as `audio/wav` to `POST /api/voice/transcribe`; a clip
 the level meter heard no speech in is not sent.
@@ -387,11 +601,21 @@ the level meter heard no speech in is not sent.
 local whisper engine streams) the mic streams instead of sending clips. At a
 phrase's first speech it opens `POST /api/voice/stream {lang}` → `{id}`; then,
 whenever the previous request is back and at least 300 ms of new audio exists,
-the recorder's `take()` (the WAV since the last take, 16 kHz through the
-windowed sinc, recording on) goes to `POST /api/voice/stream/{id}/chunk` —
+the recorder's `take()` (the WAV since the last take, 16 kHz already — on the
+ScriptProcessor fallback, through the windowed sinc — recording on) goes to `POST /api/voice/stream/{id}/chunk` —
 never two at once. Each answer's `committed` words are typed as above; its
-`partial` is the muted tail. The quiet before the first word is not sent. The
-same 1.1 s of quiet ends the phrase: `…/end` flushes its last words (the
+`partial` is the muted tail. The quiet before the first word is not sent. Each
+chunk's `turn` verdict sets the quiet that ends the phrase (`turnHoldMs`):
+about 350 ms after a radio word, stop phrase or lone command, 900 ms after a
+sentence or question — but at least 1100 ms (`FIRST_PHRASE_HOLD_MS`) for a
+first phrase into an empty box, so "…so far. [0.9 s] over and out" is not
+routed in halves — 1500 ms after a comma or trailing connector, clamped to
+300–3000 ms (`TURN_MIN_MS` / `TURN_MAX_MS`). It falls back to clip mode's
+1.1 s (`SILENCE_MS`) when there is no verdict (an older server, a malformed
+`turn`), when the voice was heard after the audio the verdict judged, and for
+a `command` verdict once the message has typed words (the server can't see the
+box: “next session” mid-message is words; `RecognizerHandlers.blank()`). Then
+`…/end` flushes its last words (the
 phrase's radio word, if any, is read off the whole phrase then — "over" and
 "disregard" act exactly as in clip mode), and the next phrase opens a
 new stream; there is no 12 s cap. Letting go (or the second click) sends what
@@ -450,13 +674,14 @@ first session under a week old, read from the server's setup record (the
 `repo` step's date), so every device agrees — with fewer than three sessions
 sees only what the first hour needs: the sessions, **+ New** and **Setup**.
 The usage strip, the **Assistant** bar and every extension's bar (Database,
-Usage optimizer…) join the *default* hidden set; the **View** presets, the
+Usage optimizer…) join the *default* hidden set; the **View** row's pane
+counts (never its Grid · Sky toggle), the
 filter box (`/` still summons it), the "more bars" 💡 hint and the rows'
 Alt+N numbers wait too; and pane headers are calm unless you customized them (see
 [The pane header](#the-pane-header)). Three sessions, or a week, brings the
 full screen back by itself. A choice the person made always wins: bars set in
 Customize (here or synced from another device) are never touched, and a View
-preset other than Auto keeps the picker shown.
+preset other than Auto keeps the counts shown.
 
 The top bar is calm too (`topBarShows` in `lib/calm.ts`): **Verify** appears
 with the first checklist and **Schedule** with the first template — until
@@ -1137,8 +1362,11 @@ window closes it. The items, in groups:
   choice under it) · **Checklist…** (when the session has a branch: Verify on
   that branch's checklist, `openDialogFor("verify", branch)`) · **Run checks
   now** · **Bring work home…** on a shared folder
-- **Session** — **Rename…** · **Resume session** (*starts the agent again in
-  the same worktree*; only on a paused session — neither menu offers Pause)
+- **Session** — **Rename…** · **Move to a folder…** (this machine's own
+  rows; greyed with *moving…* while a move runs — see
+  **Move to a folder** under Rename below) · **Resume session** (*starts the
+  agent again in the same worktree*; only on a paused session — neither menu
+  offers Pause)
 - **More ▸** (folded) — **Terminal** · **Code map** (row menu only: the pane
   header always has those tabs) · **Thread** · **Browse history** (pane only,
   calm header) · **Copy entire history** (pane only, on a terminal tab) ·
@@ -2587,6 +2815,24 @@ Authentication section. If the token leaks, regenerate it from Settings →
   — for the ones nobody renamed — by the label the rail shows (`(tix)
   add-dark-mode/sc-12345`), never by the machine slug the event carries. A push
   about a session you cannot find in the rail is worse than no push.
+- **Move to a folder** — row or pane ⋯ → *Move to a folder…* opens
+  `MoveSessionDialog` (`openDialogFor("move", title)`): the session's folder
+  now (*Now in*), a **New folder** field — the new folder's full path, seeded
+  with the current folder's parent + `/` so typing a name lands it beside
+  where it is; `Tab` completes folders and **Browse…** picks one, exactly as
+  New's folder field — the line *MindFlock pauses the agent, moves the
+  folder, and resumes it there. Linked worktrees are repaired.*, a box
+  **Even if it is mid-turn** (`force`), and Cancel / **Move** (greyed until
+  the path names a new folder). Move sends `POST /api/instances/{title}/move
+  {dest, force}`; the 202 closes the dialog, toasts *Moving "name"…* and the
+  row carries `moving: true` (a client-only mark that survives polls) until
+  `session.moved` — a toast *Moved "name" to /new/path* and a refetch — or
+  `session.move_failed` — an error card *Moving "name" failed* with the
+  reason — or a minute passes. A 409 `working` without the box ticked is
+  answered inside the dialog (*The agent is mid-turn — tick the box to move
+  anyway*); every other refusal (`exists`, `bad_dest`, `in_flight`, `remote`,
+  `unknown_session`) is an error card in the server's words. Contract:
+  [flights.md "Moving a session"](flights.md#moving-a-session-backend--frontend).
 - **Attention** — sessions that need you (every "in the bell" state of the
   [one session state](#one-session-state) whose notification switch is on,
   not only questions) badge the tab **title** (`● (n)`) *and* the **favicon**
@@ -2638,10 +2884,11 @@ built-in alias.
 |---|---|
 | `Ctrl+P` / `Ctrl+Shift+P` | Command palette (fuzzy: focus session, rename, send/queue, commit/push/PR/IDE, work, settings, doctor, shortcuts…) |
 | `Ctrl+B` | Toggle sidebar |
-| `Ctrl+N` / `Alt+N` | New-session dialog |
+| `Ctrl+N` / `Alt+N` | New-session dialog — in the sky, a new-session card in the middle of the view |
 | `Alt+I` | Intake — tickets, PRs and issues waiting to become sessions |
+| `Ctrl+Y` | Switch views — the grid of panes ⇄ the sky of lines (see [Two views](#two-views-the-grid-and-the-sky)); fires from a terminal too, never from a text field or behind a dialog |
 | `Alt+V` | Verify — pushed changes nobody has checked |
-| `Alt+S` | Schedule — templates that start sessions on their own |
+| `Alt+S` | Schedule — templates (and scheduled flyways) that start sessions on their own |
 | `Ctrl+T` (`Alt+Space` is the browser-safe alias: Chrome reserves Ctrl+T for a new tab) | Talk to the focused session through the top-bar mic — hold it (hold-to-talk) or press once to start and again to stop (click-to-talk), following the mic's push-to-talk mode. Works while a terminal has focus; the keystroke never reaches the terminal (no readline transpose; Option+Space on a Mac types no non-breaking space either). Key-repeat while held is ignored, and letting go of either key — or switching away from the window — ends a hold. The keymap only reports the key: it fires a `mindflock:voice-talk` window event with `detail.phase` `"down"` / `"up"`, and the mic decides what that means. Rebindable like the rest; a rebind applies to the release as well as the press |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` (also `Ctrl+PgDn` / `Ctrl+PgUp`) | Next / previous window — sessions and open windows (assistant, logs, extension panes), one list |
 | `Ctrl+1…9` / `Alt+1…9` | Focus the Nth sidebar row — a session or a window, matching the number badges |
@@ -2938,6 +3185,19 @@ and *To send text to a session that's already running, use Prompts.*, with
   weekday, once or on any cron.*
 - **Not scheduled (n)** *run now or add a schedule* — the templates without a
   schedule, each with **▶ Run now**, **Schedule…**, **Edit** and **Delete**.
+- **Scheduled flyways (n)** *flyways that take off by themselves* — the
+  [flyways](#flights-flyways-and-the-sky) whose trigger is a schedule
+  (`useFlightPlans`, the plans with `trigger.kind === "schedule"`; the server
+  puts their run record on each as `runs`), soonest next run first, paused
+  last, as cards with a template's anatomy: the bird and the name, *2 stops ·
+  app · claude*, the strip's schedule line (`runs.schedule_label`) and how far
+  off the next run is (*Paused*, *Starts on mac-mini*), then the last run or
+  *Last run failed: …* and **Recent runs**. Two actions: **Fly now** (`POST
+  /api/flights/start {plan_id}` — the new session is selected once its row
+  exists, and Schedule closes) and **Edit in the Sky** (closes Schedule and
+  opens that flyway's card on the Sky's shelf, its **Takes off** section
+  open on the schedule). With no scheduled flyway the section is not drawn
+  at all (`scheduledFlyways` / `flywayNextLine` in `TemplatesDialog.tsx`).
 
 Every card has **▶ Run now**, **Edit** and **Delete** at its top right.
 With no templates at all the surface is one dashed panel: *Save a session as
@@ -3067,6 +3327,26 @@ works as before (the Workspace folder saves on pick, as it does on blur). In
 New and the template editor a click in the picker already fills the Folder
 field (the git nudge follows it) and Escape / ✕ put the old folder back.
 Read-only path rows (Workspace's **Copy** lines) have no button.
+
+**Tab completes a folder like a shell** in every one of these fields (New's
+and a template's **Folder**, every `PathField`: Settings, the peer cards, the
+Sky's new-session block and inspector). With the caret at the end of a path,
+Tab lists the folder before the last `/` (`GET /api/browse`, once per folder)
+and fills the one matching name plus `/` — so Tab, Tab, Tab walks down — or,
+when several match, their common prefix with the matches as a row of chips
+under the field: Tab / Shift+Tab cycle them, ↑/↓ move the highlight, Enter
+takes it, Escape closes the row (not the dialog). Exact case wins; only when
+nothing has it does matching ignore case. Hidden folders are only offered for
+a name that starts with `.` (and `/api/browse` lists none today). A bare name
+or relative path is read from home and written back as `~/…`; a bare `~`
+becomes `~/`. No match shakes the field and keeps the focus in it; an empty
+field or a caret mid-text leaves Tab to move the focus as usual. A field
+pointed at another device skips completion (its tooltip says so) — the listing
+is this computer's. In New's Folder, a NAME with matches under it uses that
+list instead: Tab fills the only match, or walks the highlight Enter takes.
+The fills go through the field's normal change path, like typing; a polite
+live region reads "3 folders match" / "completed to …". Rules:
+`lib/pathComplete.ts`; key handling: `usePathCompletion` in `PathField.tsx`.
 
 **Browse… → + Folder** creates a folder on disk, inside whatever directory the
 browser is currently showing — the path line directly above the name box — and
@@ -3546,13 +3826,21 @@ a `screen` of its surface to switch to first (`TourStep.screen`); Settings is
 the one surface that reads it as a screen, and the mic reads `"mic-pop"` (the
 Voice tour) as "open my options".
 
-There are eight (`lib/tours/`, one file per tour, `TOURS` in `index.ts`):
+There are nine (`lib/tours/`, one file per tour, `TOURS` in `index.ts`):
 **Welcome** (over the Get set up checklist: the *next:* line, ① Install your
 agent (the checklist names which), ② Sign in to your agent, ③ Start your first session, then the
 first sidebar row), **New** (the task box, the *Runs in* folder picker,
 **Start**, then a session pane's Agent / Diff tabs and its ⋯ — hooks
 `new-task`, `new-folder`, `new-start`, `pane-tabs`, `pane-menu`; the last
-step centres when no session is open), **Intake**, **Verify**, **Schedule** (six
+step centres when no session is open), **Sky** (fourteen steps, every
+surface of the Sky — the toggle, a line's bar, the boxes, the bird, a stop's
+toolbar and dialog, the shelf, a grounded line, selection, the Drag / Click
+tools, Delete, the intake lane, the zoom, the ? — each centring when its
+element isn't on screen; its **?** ends the Sky's toolbar as a two-item menu,
+*Replay the tour* · *Open the guide* (the long-form **Sky guide**), and it
+opens by itself the first time the Sky is shown; see [Flights, flyways and the
+Sky](#flights-flyways-and-the-sky)),
+**Intake**, **Verify**, **Schedule** (six
 steps: the top-bar **Schedule** — or **Create a template** while that item is
 still hidden — then Create a template, Name + Folder, Task, Run on a schedule
 and its next-runs line, **▶ Run now**; hooks `schedule-new`, `schedule-name`,
@@ -3727,13 +4015,406 @@ count, so the number is checkable against what is on screen. When it finds
 nothing it says why: how many are in use, how many were used this week, how many
 are repositories it will never touch.
 
+## Flights, flyways and the Sky
+
+**One route from waiting to landed** (`docs/flights.md` is the design
+contract). The words are birds', never planes': a **flyway** is the route a
+flock follows — a line of **stops** (the wire's *plan* and *steps*); a
+**flight** is one run of a flyway bound to one session (a ticket, a pull
+request, an issue, a scheduled job, or something you started by hand); a
+**stop** is one box on the line — a *robot* stop MindFlock carries out by
+itself (the agent works, commit, push, open a PR, wait for reviews to settle,
+wait for checks, verify, a shell command, move the ticket, notify) — or a
+**perch**, where the flight perches until you are done and goes on when you
+press **Done**. Glossary: *flyway* = the route, *flight* = one run, *stop* =
+one box, *perch* = a stop that waits on you. The glyph is a small bird
+(`components/flights/Bird.tsx`), never ✈.
+
+**Where it all is — no dialog of its own.** Flights are drawn in the
+[Sky](#two-views-the-grid-and-the-sky) (the main area's second view, the top
+sidebar's **Grid · Sky** toggle, `Ctrl+Y`): every session a line, the bird on the
+stop each flight is at, what is perched on you in the drawer. **Flyways live
+on the Sky's shelf** (below). Intake, Verify and Schedule — three sides of the
+same journey — are the flat top-bar dialogs they always were: Intake's source
+cards carry each source's **Flyway**, Verify's checklists are what a Verify
+stop perches on, and Schedule lists the **scheduled flyways** beside the
+templates. (Sky rounds 4–7 gathered all of this into one Flights dialog with
+tabs; round 8 retired it — menus within menus — and its links still land:
+[the table under Layout](#layout).) The code is
+`frontend/src/components/flights/` (`SkyView`, `SkyDrawer`, `FlywayShelf`,
+`FlywayCard`, `FlywayInspector`, `FlywayCanvas`, `FlightStrip`,
+`SessionFlight`, `useSessionLine`, `StopParts`, `controls`, `useWaiting`; CSS
+prefix `fl-` — the kit in `Flights.css`, the palette / inspector / trigger in
+`FlywayInspector.css` — and the Sky's `sky-`), with the pure rules in
+`lib/flights.ts`, `lib/flightDiagram.ts` and `lib/skyLayout.ts` and the
+routes in `lib/flightsApi.ts`.
+
+**The flyway canvas** (`FlywayCanvas.tsx`, its model in
+`lib/flightDiagram.ts`). Every flyway and every flight is drawn the same way:
+stops as boxes on a line, read left to right, with the connectors drawn
+between them (curved lines with an arrowhead) — no ports, no manual wiring:
+the order *is* the sequence. Each box has its kind's icon, its title and one
+line of config (*push*, *10 min quiet*, *who: agent*, *2 items to tick*); a
+perch is rounder, outlined in gold, with the bird on its branch. Empty space
+pans the line (scroll, or drag it with the mouse); below ~520px wide (a phone,
+a narrow pane) the line runs top to bottom with compact boxes. Live, the same
+boxes say where the flight is: done boxes dimmed with ✓, the current one
+glowing — gold when perched on you, green while the flock works, red when
+halted with the reason in the box — skipped ones struck through, pending ones
+outlined. A perch that is waiting on you opens wide in its box: its text, its
+checklist (ticking every item enables **Done**) and **Skip** (a halted stop:
+**Retry** / **Skip**). Every live box has a ⋯ (shown on hover): **Jump here**,
+**Retry** on a halted one, the flight's **Pause** / **Resume**, and **Cancel
+flight** (asked inline; the session is kept).
+
+**The session diagram.** A flight is not only a list of stops: each session's
+canvas is a *systems diagram* of what it is and what it is about to do,
+composed from the `/api/instances` rows alone
+(`lib/flightDiagram.ts` `sessionDiagram(rows, title)`): its **parent** above
+(click = go up), the **session box** (its state chip — Working, Idle, Perch:
+…, Needs you — and its headline), its **children** branching below on a
+vertical branch, each with its own state and a mini ladder (its flight's or
+its fast-track's dots; click = open it), then the line: the **fast-track's
+rungs** as boxes when ⏩ is armed and there is no flight (commit → push → PR →
+merge up to its depth, done rungs ticked from the session's git stage, the
+next one glowing, a halted one red with the reason — the same boxes as ship
+stops), or the **flight's stops** when it flies one, and always a trailing
+**+ Tack on a stop**. The + opens the stop palette and also offers **Fly a
+flyway** (all of a flyway's stops). Tacking a stop on a session with no flight
+starts an ad-hoc flight of it (`POST /api/flights/start {title, steps,
+absorb_fasttrack: true}`) that takes over the armed fast-track's remaining
+rungs, so the ladder's boxes become the flight's without a jump; on a live
+flight it appends (`POST /api/flights/{id}/steps`), and a **+** between two
+pending stops inserts there (only after the current stop). A pending stop
+opens in the inspector and is edited in place (**Save stop** — `PATCH
+/api/flights/{id}/steps/{sid}` — or **Remove stop** — `DELETE`; Delete on the
+box too); done and current ones open read-only. Toggling ⏩ on a session
+therefore shows up as boxes appearing on its line.
+
+**No native controls.** Nothing in Flights is a native `<select>` or a bare
+field: enum choices are the New dialog's segmented control (`Seg`, `.rt-seg`)
+or a wrapping chip row (the flyway choice, the agent), free text uses the New
+dialog's field look (`.fl-input` — its radius, border, background and focus
+ring), a prompt its prompt box (`.fl-prompt`), a number a field with its unit
+beside it (*10 min*), a yes/no a switch chip (`components/flights/controls.tsx`,
+styled in `FlywayCanvas.css`).
+
+**The flyway shelf** (`FlywayShelf.tsx`, at the foot of the Sky; folds to
+its head, remembered per device as `mf_sky_shelf`). The saved flyways as
+chips, built-ins first — each its name and a row of stop dots (a perch's dot
+gold) — and **+ New flyway**. **Drag** a chip onto a line to fly it there,
+press its **Fly** to fly it on the focused line (or pick one), or **press the
+chip** to open its card. The palette's **Flyways…**, Schedule's **Edit in the
+Sky** and an old `#flights/flyways/<id>` link open the Sky with the shelf
+open (`useUi.showFlyways(id)` — and that flyway's card; `"new"` a fresh one).
+On a phone the shelf sits under the list of lines.
+
+**The flyway card** (`FlywayCard.tsx`, floating on the plane — in the list on
+a phone): where a flyway is made, edited, reset and deleted. Its name, then
+the flyway on the canvas: drag a box to reorder it (pointer events, mouse and
+touch: the picked box lifts, the others slide, the drop snaps into the line
+and the connectors redraw), or select it and press ← / →; **Delete** removes
+it, **Enter** opens it. **+** between boxes (on hover) or at the end opens the
+stop palette under the canvas: **The flock does** (robot stops) and **You
+do** (perches), each with its kind's summary. **Describe a stop…** sends a
+sentence to `POST /api/flights/describe` and appends the stops it answers
+with, highlighted until **Save**. The selected stop's **inspector** (never a
+modal): its title, its kind's fields in the controls above, **If it fails**
+(stop and tell me · hand it to the agent · skip it · ask me), and **←
+Earlier** / **Later →** / **Duplicate** / **Remove**. Then **Takes off: <how>**,
+folded to that line (open on a scheduled flyway; `FlywayInspector.tsx`): by
+hand · ticket · pull request · issue · schedule — a schedule's days as chips,
+its time / date / cron as fields with the server's preview line, and a
+**Paused** switch — and, for by-hand and scheduled flyways, the session
+defaults (repository with Browse…, agent as chips, model). **Save & fly on…**
+saves and asks which line to fly it on; **Save** keeps the card open on the
+saved flyway; **Cancel** with unsaved changes asks first, inline (*Discard the
+unsaved changes?*). Its **⋯** holds **Reset to default** on a built-in (puts
+it back the way MindFlock ships it) and **Delete flyway…** on one of yours
+(asked inline: *Flights already in the air keep their own copy of its
+stops.*).
+
+**A source's flyway** — each ticket source card on [Intake](#intake) (under
+*Where it goes*, beside Fast-track) and each PR / issue repository card has a
+**Flyway** chip row: the flyway its items fly — *Default · <the kind's
+built-in>*, cut at the card's Fast-track, or any other flyway. It saves as
+`plan` on the source (`PUT /api/settings/ticketing/sources`) or as
+`github.repo_settings[repo].plan` / `github.issue_repo_settings[repo].plan`,
+and the waiting items from that source (the sky's intake lane and its drawer)
+start on it unless their own chips say otherwise
+(`components/flights/PlanSelect.tsx`; hidden on a server without flights).
+
+**Scheduled flyways** are listed on [Schedule](#schedule) under their own
+heading, with **Fly now** and **Edit in the Sky**.
+
+**The pane's Flight tab** (`SessionFlight.tsx`; header item `flight` in
+Customize → Pane header, after Map). It shows once the session has a diagram
+worth drawing — a flight in the air, workers, a parent, or an armed
+fast-track (`hasSessionDiagram`) — with a gold **!** badge while the flight is
+perched on you or halted; the session ⋯ menu's **Fly a flyway…** opens it on
+any session (and **Show in the Sky** switches to the sky on this session's
+line alone).
+It draws the session diagram full width (the perch where the flight is opens
+wide, with its checklist and Done / Skip) with the bird on the box it is at,
+the flight's name, progress and ⋯ above it — and **Open in the Sky** at the
+head's far end — the palette and the inspector under it. With nothing
+on the line yet it also lists the flyways as cards (**Fly this flyway**,
+built-ins first, the stops as tiny boxes) and **Describe a flyway…**, which
+turns a sentence into a flyway (`describe want=plan` → saved → flown on this
+session right away).
+
+**The pane strip.** A session in a flight shows one line above its pane body,
+in its own row under the pane header (not inside it: the header hides chips):
+the bird · `Ticket to merge · ●●●○○○ · Reviews settle (4m)` — a button that
+opens the **Flight** tab — gold when the flight is perched on you, with
+**Done** / **Skip** (and the perch's tick boxes) inline and a ⋯ for **Pause** /
+**Resume** and **Cancel**. While the flight drives the session (running,
+perched on you or paused) the guided next-step button and the ⏩ fast-track
+toggle are hidden — the flight owns the ship ladder and the strip is the next
+step — and both come back once it halts or lands. It reads the session row's
+`flight` field, and the full flight from the flights query for the elapsed
+time and the checklist.
+
+**The rail and the bell.** A flight perched on you is a Needs-you state
+(`lib/sessionState.ts`, reason `flight_you`, notify rule `flight_needs_you`):
+the row's chip says **Perch: <stop title>** in the gold (width-capped with an
+ellipsis so the row's name stays readable; clicking it opens the bell), a
+paused flight's chip is a calm **Paused flight**, and the bell lists it as
+**Perched on you: <stop>** with **Done**, **Skip** and **Open ↗**
+(`outbox/WaitingRow`; `lib/needsYou.ts` `withFlightYou` adds the row from the
+session's own `flight` field until the server's outbox lists it).
+
+**Every start opens its session** — a waiting item's Fly, a flyway flown from
+the shelf or Schedule's **Fly now**, a template's Run now:
+`selectSession(title)` as soon as the row exists.
+
+**Live.** `useFlights` / `useFlightPlans` / `useFlightKinds`
+(`state/queries.ts`) poll every 5 s while a flight is in the air (30 s
+otherwise, 2 min on a server without the routes), and `flight.changed`,
+`flight.needs_you` and `flight.finished` refetch at once.
+
+**Keys and the palette.** `Ctrl+Y` switches to the Sky (and back); `Alt+I`,
+`Alt+V` and `Alt+S` open Intake, Verify and Schedule. The palette has
+**Switch to the Sky** / **Switch to the grid**, **Stops…** (the Sky
+with its shelf open) and **Learn the Sky** (the Sky guide), beside **Intake…** (and each Intake tab), **Verify…**
+and **Schedule…**.
+
+**The Sky tour** (`lib/tours/sky.ts`, id `sky`; the ? at the end of the Sky's
+toolbar, and by itself once, the first time the Sky is shown in the calm
+first hour) walks every surface in the order a newcomer meets it, one plain
+sentence each: the Grid · Sky toggle (`view-sky`) · a line's bar (drag it, ⋯)
+· the boxes (the session box opens the real terminal) · the bird (click halts
+or carries on, drag jumps) · a stop's hover toolbar · a stop's dialog · the
+shelf (default blocks, saved stops, All blocks…) · a grounded line (drop a
+block on empty sky, attach the Session chip) · selection (marquee, Group into
+a stop, Save to the shelf) · the Drag / Click tools (V / H / Space) · Delete
+· the intake lane · zoom and Fit (0 / 1 / + / −) · the ?. A selector list
+matches in document order and the top bar comes first, so no step falls back
+to the toggle (it would always win): each target is the element's
+`data-tour="sky-…"` hook plus today's class on the same element, and a step
+whose element isn't on screen — an empty sky, no flight, nothing selected —
+centres its card. The grounded-line step falls back to the shelf, which sits
+after every line.
+
+**The Sky guide** (`components/flights/SkyGuide.tsx`, a wide `Modal`,
+`#sky-guide`): the long version. A list of sections on the left — What the
+sky is · Lines and boxes · Stops and saved stops · The bird · Halt points and
+Remove · Grounded stops · Selection · Tools and the keyboard (a table of
+every Sky key) · The intake lane · Where things are saved — and the chosen
+section on the right, each with a small inline sketch drawn in
+`currentColor` and the theme tokens; ↑ / ↓ walk the list, Back / Next walk
+the pages, **Replay the tour** hands over to the coach tour. Its open flag is
+its own small zustand store (`useSkyGuide`, `openSkyGuide(section?)`,
+`closeSkyGuide()`), so the sky's **?** menu (*Open the guide*) and the
+palette's **Learn the Sky** (which shows the sky first) both reach it; the
+sky mounts `<SkyGuide />`, which renders itself from that store.
+
+**The phone** (`/m`) has no canvas: a session perched on you gets a card under
+its plan card — the bird, *Ticket to merge · Perch: Approve the merge* — with
+**Done** and **Skip**.
+
+## Two views: the grid and the sky
+
+The main area shows your sessions one of two ways, and they are the **same
+sessions, the same selection, the same open tabs** — only the drawing
+changes. The **grid** lays each session out as a pane (its terminal and tabs,
+side by side). The **sky** (`components/flights/SkyView.tsx`, `Sky.css`; the
+pure rules in `lib/skyLayout.ts`, the switch in `lib/viewMode.ts`) draws each
+one as a *line* floating on one open canvas — its session box, its workers,
+its fast-track rungs or flight stops, the bird where it is — so you see where
+everything is and what comes next. The rail, the top bar, the bell, every
+dialog and the mic stay exactly where they are; App renders `<SkyView/>` in
+the grid's place while `useUi.view === "sky"` (per device, `mf_view`).
+
+### The isomorphism
+
+Every row is a rule the code keeps true (pinned in `skyView.test.ts`):
+
+| In the grid | In the sky | What makes it one thing |
+|---|---|---|
+| a session's pane | its line | one per session, keyed by title; hidden helpers (`hidden_by`) are in neither |
+| the focused pane | the focused line | `useUi.focused` is the only selection: pressing a line's bar or box selects it (`selectSession`, as a pane click does); selecting anywhere — the rail, the bell, `Alt+1…9` — brings its line into view (centred if off screen, flashed) |
+| the pane's open tab | the line's opened session box | the box *is* the session's `Pane`, reading the same `lastTab[title]`: the Terminal tab you had open in the grid is what the box opens to, and back |
+| a terminal | the same terminal | terminals live in `lib/terminals`' registry, so a pane mounting in the other view adopts the same xterm — never re-attached |
+| View **1** | **1** — fit the focused line | entering the sky from a grid at 1 fits the focused line; `1` in the sky does it again |
+| View **2 / 4 / 9 / Auto** | **Fit** — every line | entering from any other size fits them all; `0` does it again |
+| the bell's needs-you rows | the drawer's **Perched on you** | the same data (flights perched on you or halted, due checklists) |
+| New session dialog | a new-session card on the sky | `Ctrl/Alt+N` and the top bar's **New** open the card mid-view in the sky (`NewSessionBlock`), the dialog in the grid |
+| the ⏩ fast-track | the ladder's boxes on the line | arming ⏩ draws its rungs on the line; tacking a stop on takes them over |
+| Intake's sources | the intake lane | the same sources and waiting items, at the plane's left edge |
+| a grid with one pane (View 1) | **This session** | the sky's This session is exactly the focused session's line alone |
+
+None of it rests on a dialog: the view is `useUi.view`, the switch is
+`lib/viewMode.ts`, `#sky` is parsed on its own (`parseViewHash`), and the
+drawer opens Intake and Verify directly. Only the retired Flights dialog's old
+`#flights/…` links go through the store's `openDialogFor("flights", …)`,
+which routes them (`legacyFlightsRoute`).
+
+Switching keeps the selection, the sky's camera (where you had panned and
+zoomed — only an untouched camera refits), the drawer and the shelf, and the
+grid's own scroll. When the focused session sat outside a capped grid
+("1", "4"), coming back selects it again, so it gets a slot instead of the grid
+focusing something else.
+
+**The transition** (`installViewFlip`). The store change is seen before React
+paints the other view, so each session's rectangle on screen — its pane, or
+its line — is measured then; once the other view has laid out, a ghost of each
+(at most 12, the focused one first) flies from the old rectangle to the new
+one in ~250 ms while the new view fades in over 150 ms. With
+`prefers-reduced-motion` neither happens: the views just swap.
+
+### Switching
+
+All through `lib/viewMode.ts` (`setView`, `toggleView`, `showInSky`):
+
+- **The sidebar's View row**, at its foot: `View  Auto 1 2 4 9 │ ⊞ Grid  🐦 Sky`
+  (`ViewRow` in `Sidebar.tsx`). A number is the grid at that many panes, so
+  picking one comes back to the grid; after a thin rule, the **Grid · Sky
+  toggle** — ⊞ the grid at the current count, the bird the sky — a glyph and
+  a word each (the words drop to the glyphs when the row is too narrow to hold
+  them beside the numbers), the active one filled, the view's blurb and the
+  shortcut in the tooltip, the Sky half wearing the count of flights perched on
+  you (nothing at zero, red when one halted). The Sky half is
+  `data-tour="view-sky"`. The row is always there: the calm first hour hides
+  only the numbers (unless a count other than Auto was picked), never the
+  toggle.
+- **The top bar's Grid · Sky toggle**, beside New — the same pair, worn only
+  while the View row is out of sight: the sidebar hidden, or a phone-narrow
+  window (glyphs only there, and the last thing a narrow bar folds — into ⋯,
+  after Settings, Schedule and Verify, as *Switch to the Sky / grid*). With the
+  sidebar shown there is exactly one toggle on screen, the sidebar's.
+- **`Ctrl+Y`** — from anywhere but a text field or behind a dialog (a terminal
+  included).
+- **The palette**: *Switch to the Sky* / *Switch to the grid*.
+- **The URL**: `#sky` is the sky, `#sky/<title>` the sky on that session
+  alone (This session), no hash the grid. A switch replaces the history entry
+  (Back is for leaving a surface, not undoing a toggle); a dialog opened over
+  the sky closes back onto `#sky`. Old `#flights/sky/<title>` and
+  `#flights/board` links open the view and are rewritten to `#sky…`.
+- **Show in the Sky** (the session ⋯ menu, the pane's Flight tab **Open in
+  the Sky**): the sky on that session's line alone. A line's ⋯ **Open in the
+  grid** goes back with it focused.
+
+### The sky
+
+**Pan and zoom.** The sky is one plane under one `translate(x, y) scale(z)` —
+no library. Drag on empty sky to pan (mouse or touch); the wheel or a trackpad
+scrolls it; **Ctrl/⌘+wheel** or a pinch zooms about the pointer, from 40% to
+200%. **Space**+drag pans from anywhere (even over a line). The toolbar's zoom
+group: **−**, the readout (*100%*), **+**, **1** (fit the focused line),
+**Fit** and **100%**. The background is a faint dot grid that scales and pans
+with the plane — a dark sky in the dark theme, a white expanse in the light
+one — with the flock drifting behind it (`SkyFlock`; still while a line is
+being dragged or motion is reduced).
+
+**Lines.** Each session is a line (`SkyLine`): a title bar — the bird, the
+name, its state chip, a 📌 when you placed it by hand, a size control and a ⋯
+(**Open the box** · **Open in the grid** · **Show only this line** · the size
+· **Tidy this line** · **Fly a flyway…** · **Close session**) — then its
+session diagram on the flyway canvas (`sessionDiagram`: the session box, its
+workers branching below, the fast-track's rungs or the flight's stops, and the
+trailing **+ Tack on a stop**), then, opened, its session box as the real
+pane. A new session appears in place on the next poll; a closed one's line
+fades away.
+
+**Sizes.** A line is **compact**, **normal** or **wide** (its bar's size
+control cycles them) — bigger shows more of each box's text — and an opened
+box has its own width and height. The auto-layout places lines at the size
+they report (`onMeasure`), so wide lines and open boxes get room.
+
+**Placing and Tidy.** Lines you haven't moved flow into rows (`placeLines`):
+newest at the top, left to right, wrapping at the window's width, never on top
+of another line. Drag a line by its bar and it stays where you drop it
+(pinned). **Tidy** in the toolbar (or `T`) forgets every pin and the lines
+slide back to their organized spots; a line's ⋯ **Tidy this line** does it for
+one. All of it — spot, pin, size, open box — is remembered on this device
+(`localStorage` `mf_sky_layout`, keyed by session title; the older
+`mf_sky_pos` positions are read once, as pinned lines).
+
+**Keys in the sky** (while nothing that takes keys has the focus): arrows
+pan (Shift: further), **+** / **−** zoom, **0** fits every line, **1** the
+focused one, **T** tidies, **Enter** opens the focused line's box, **Esc**
+closes it (first folding a new-session or flyway card away), Space+drag pans.
+A terminal in an opened box keeps every key it gets.
+
+**Views** (the toolbar's chips): **All** — every session on its own line,
+workers too; **Mine** (the default) — top-level sessions, their workers folded
+into their parent's line; **Perched on you** — only lines waiting on you (a
+flight perched on you or halted, or a session that needs you); **This
+session** — the focused session's line alone, centred and fit
+(`#sky/<title>`). **Find a line…** filters lines by name or task; Enter selects
+the first. The chosen view (not This session) is remembered per device
+(`mf_sky_view`).
+
+**Build from the space.** Double-click empty sky — or **+ New session**, or
+`Ctrl/Alt+N` — and a new-session card opens right there (`NewSessionBlock`: a
+repository, a prompt, an optional flyway, **Fly**); the session it makes
+appears where the card was, pinned. Esc folds the card away. To add to a line,
+press its **+**.
+
+**The bird.** On every line a bird (~22px, the Flights glyph) stands on the
+active box (`birdPerch` in `lib/flightDiagram.ts`): the flight's current stop,
+else the fast-track's current rung, else the session box while its agent works
+(or asks you something); no bird when the session is idle with nothing armed.
+It bobs while the flock works, sits gold and still when perched on you, red
+when halted, grey when paused, and when the flight moves on it hops to the
+next box.
+
+**Flyways from the sky.** The shelf at the sky's foot (**Flyways ▴/▾**, folds
+away, remembered as `mf_sky_shelf`; `FlywayShelf`) lists your flyways: fly one
+on the focused line (`POST /api/flights/start {plan_id, title}`), or — with no
+line focused — pick the line from a row of chips; **drag a flyway's chip onto
+a line** to fly it there (the line under the pointer lights up; the chip
+carries `application/x-mindflock-flyway` = the flyway's id). **New** and
+**Edit** open a flyway card on the sky (`FlywayCard`) in the middle of the
+view.
+
+**The intake lane** (`IntakeLane`) is pinned at the plane's left edge — it
+pans and zooms with the sky — and draws the ticket, PR and issue sources as
+source blocks with their waiting items and arrows to the lines they started.
+
+**The drawer** at the right edge (`SkyDrawer.tsx`, **Perched on you**, folds
+to a slim tab; remembered per device as `mf_sky_drawer`) keeps everything the
+old Board listed: **Perched on you** — each flight perched on you with its
+perch block (the checklist, **Done**, **Skip**) or halted (**Retry** /
+**Skip**, and the reason), its name a button that selects its line, and
+Verify's due or failing checklists (a row that opens it in Verify);
+**Waiting to fly** (folded) — the eligible tickets, PRs and issues with their
+kind badges, the flyway chip row and **Fly** (empty: *Intake ›* opens
+Intake); **Landed** (folded).
+
+**The phone.** Below 600px wide there is no pan or zoom: the toolbar, the
+drawer, then the lines as a plain list, each line's canvas running top to
+bottom, and the flyway shelf under them (a flyway's card opens above the
+list). Ctrl/Alt+N opens the New dialog there.
+
 ## Intake
 
 **Where your sessions come from.** Ticketing, PR review and issue handling used
 to be three screens in Settings, and they never belonged there: Settings is
 set-and-forget, while these three are somewhere you *visit* — to see what came
 in, start something by hand, or pause a queue. They now have their own top-bar
-entry (**Intake**, `Alt+I`, or the palette's Open Intake), dialog `#intake-dialog` /
+entry (**Intake**, `Alt+I`, or the palette's **Intake…**), dialog `#intake-dialog` /
 panel `#intake-panel`, built from
 `frontend/src/components/intake/{IntakeDialog,TicketsTab,PullRequestsTab,IssuesTab,QueueTab,RepoSources,kit}.tsx`,
 with the shared rules beside them in the same folder (`search.ts`, `buckets.ts`,
@@ -3974,8 +4655,9 @@ live inside an `aria-modal` dialog and the desktop app has no native confirm.
 
 **+ Add source** — the dialog head's one door (`#intake-add-source`), replacing
 the four "+ Add" buttons that sat under four card lists in two dialogs. It opens
-an inline three-step flow at the top of the tab that owns the kind
-(`AddFlowShell`): **What** (tiles: every tracker in the catalog, and
+an inline three-step flow at the **foot** of the tab that owns the kind
+(`AddFlowShell`, which scrolls itself into view) — the tab grows downward, where
+the new source's group will appear, and nothing already on screen moves: **What** (tiles: every tracker in the catalog, and
 **Repository**) → **Connect** → **What it does**. Each tile carries one line
 saying whose work it brings in (`trackerKinds` / `REPO_KIND` in `kit.tsx`) —
 above all so **GitHub Issues** the tracker (*Issues assigned to you, as
@@ -6342,9 +7024,10 @@ the moment the recogniser first hears them, and are corrected as it changes
 its mind: the phrase under way — the stream's committed words plus its
 unsure tail, or Web Speech's interim words (both engines behave alike) — is
 typed as a guess, and each new answer is compared with what is typed from
-the phrase's start: the end that differs is taken back with backspaces (DEL,
-`\x7f`, one per character — what the terminal's Backspace key sends; a text
-box has its value set once instead) and the new end typed. At most one
+the phrase's start: the end that differs is taken back with backspaces (the
+BSpace key, one per character, pressed by the server in the same tmux call
+that types the new end — `/send {"voice": true, "erase": n, "text": …}`; a
+text box has its value set once instead) and the new end typed. At most one
 correction per answer, never reaching before the phrase's start — earlier
 phrases and whatever was in the field before you spoke are untouched. A
 phrase being said carries no trailing space; its end (the pause, or letting
@@ -6362,12 +7045,13 @@ showing a dialog or with no session focused; the phrase's end decides then.
 accuracy for speed, so at the phrase's end `POST /api/voice/stream/{id}/end`
 also answers `final` — the whole phrase heard again by the accurate model —
 with `final_ms`, `final_wait_ms` (how long `/end` itself waited: the
-accurate pass usually started on the quiet chunk that ended the speech, so
+accurate pass usually started once 0.5 s of quiet followed the speech, so
 often little), `final_early` and `same` (true when it matches the fast
 words). How long to wait for `/end` is seeded from `GET /api/voice`'s
-`server_ready.final_ms` (`final.expect_ms`: the server's measured p95 over
-its last 20 finishes, 1.4 s before it has three), not a fixed worst case;
-`final_early: true` means the pass started on the quiet chunk that ended the
+`server_ready.final_ms` (`final.expect_ms`: the median of the server's last
+20 finishes plus max(250 ms, twice their median absolute deviation), held to
+300 ms–1.5 s; 1.4 s before it has three), not a fixed worst case;
+`final_early: true` means the pass started on the quiet that ended the
 speech, so the correction usually lands within a second of your stopping. When
 `final` differs, the whole phrase as typed (its committed words and the guess)
 is retyped to it, the same backspace-then-type correction as above and never
@@ -6522,7 +7206,9 @@ twin `lib/spokenText.ts` (`shapeForSpeech(text, overrides)`) and the phone
 page's build-free `static/spoken-text.js` (`window.MindFlockSpokenText.
 shape`) carry the same JSON literal — and `tests/unit/data/spoken_text.json`
 runs every case through all three. The server shapes inside `POST
-/api/voice/speak` (which also caches repeats: `X-Voice-Cache`); a client
+/api/voice/speak` (which also caches repeats: `X-Voice-Cache`, and pins
+the session names and fixed confirmations it prewarms while the voice is
+idle); a client
 shapes just before `speechSynthesis.speak`.
 
 The person's own rows come first. **Settings → Voice → Say it as**
@@ -6899,7 +7585,8 @@ you then press and hold the mic to talk. A **voice
 strip** appears above the composer. It says **one word and nothing else**:
 *Listening…* while the mic listens, *Speaking…* while a line is said (the
 whole line, every sentence of it), *Sending…* for the moment a prompt is on
-its way (the radio word was heard), *Quiet.* for a moment after a hush,
+its way (shown the moment *over* / *over and out* is heard, before `/end`
+returns; a send to another session is a caption here, never spoken), *Quiet.* for a moment after a hush,
 *Heard nothing.* for a moment when a listening window closed without a word
 (a cue, never a silent blank), and
 otherwise nothing — never the words it hears (they are in the box already,
@@ -6938,12 +7625,38 @@ every browser: the server's built-in recognizers — Windows' System.Speech and
 macOS' Speech framework, which work on a fresh install with no model
 download — need plain PCM, and faster-whisper and OpenAI take WAV too, while
 `MediaRecorder` only makes webm/opus (Chrome) or mp4/AAC (Safari). So the
-page pulls the samples off its one `AudioContext` (made inside the tap): the
-mic stream → a `ScriptProcessorNode(4096, 1, 1)` → a muted gain → the
-destination (Chrome does not run a processor that reaches nothing). Each
-block's first channel is kept; when the clip ends they are joined, resampled
+page pulls the samples off its one `AudioContext` (made inside the tap),
+**off the main thread** where it can: one capture graph per microphone
+stream (`capFor`) — the stream → an `AudioWorkletNode("voice-capture")` → a
+muted gain → the destination (Chrome does not run a processor that reaches
+nothing) — built once and kept while the stream is warm, closed by
+`micStop` (release, a lost mic, a re-ask). Its processor is the page's own
+hand-written **`/mobile-capture-worklet.js`** (served as it is from
+`backend/web/static/` — not the desktop's Vite-built
+`/voice-capture-worklet.js`, which every build rewrites): channel 0
+downsampled to 16 kHz *as it records* by the page's Blackman-windowed sinc
+made continuous across render quanta (no chunk-edge effects), posted in
+fixed blocks of 680 samples (`VOICE_CAP_BLOCK`, 42.5 ms) with the worklet's
+`currentTime`. The recorder, its carried phrase, the meter and the wake
+word's standby each **tap** the one graph (`capTap`) in their own block size
+— the recorder 2 × 680 (85 ms, as ScriptProcessor(4096) at 48 kHz), the
+standby 680 (as `VOICE_WAKE_BLOCK` 2048) — through a ScriptProcessor-shaped
+event, so nothing downstream changed and no graph is made or torn down
+between a standby and a listen. With no tap for 1 s (`VOICE_CAP_IDLE_MS`)
+the worklet stops posting until the next tap. The module is added once per
+AudioContext (`capLoad`, alongside `getUserMedia`); the first start waits for
+it at most 1.5 s (`VOICE_CAP_LOAD_MS`) and records with the fallback past
+that (the next start gets the worklet). A busy main thread now delays the
+blocks but never drops them. **The ScriptProcessor fallback** — the old
+code path unchanged, one `ScriptProcessorNode(4096, 1, 1)` graph per
+consumer — runs with no `AudioWorkletNode` / `ctx.audioWorklet` (iOS Safari
+before 14.5), when `addModule` rejects, the node can't be made or
+`onprocessorerror` fires (from then on), and when `localStorage`
+**`cs_voice_worklet`** is `"0"` (or `"false"`) — the escape hatch for a phone
+where the worklet misbehaves. There each block's first channel is kept; when
+the clip ends they are joined, resampled
 to 16 kHz, clamped and written behind the 44-byte RIFF header — the same
-clip as the desktop app's recorder (`lib/wavRecorder.ts`). The resampling is
+clip as the desktop app's fallback recorder (`lib/wavRecorder.ts`). The resampling is
 anti-aliased: the browser's own resampler first (an
 `OfflineAudioContext(1, n × 16000 / rate, 16000)` rendering the clip through
 a buffer source), and where that is missing, refuses the rate, fails or
@@ -7009,7 +7722,14 @@ late `/end` grows the next budget (it took at least that). The Enter itself wait
 trip: the ack's baseline read goes out alongside `POST /send`, not before
 it. The trace and Diagnostics time it: *Last control: over → sent 0.9 s
 (waited for /end up to 1.2 s; /end takes ~0.7 s here)* (the word's last
-loud block → the Enter).
+loud block → the Enter). **The router overlaps `/end`:** on *over*, the
+guessed phrase goes to `POST /api/voice/route` while `/end` is still making
+the final text (`voiceRouteEarly`), so the two waits run together — but
+never while the router is waiting on its own question (a pick, a new
+session's project or task, `VOICE_PENDING_MS`) or when the phrase says
+*session(s)*, *agent(s)* or *spin* (`voiceRouteSafe`): those act on the
+server and are routed once, with the final words. A send that went takes
+its words out of the box whatever the state.
 
 **Pacing.** A phrase's first chunk goes once **150 ms of speech** is in
 (with the 300 ms lead-in before it); after that each chunk waits for the
@@ -7026,9 +7746,10 @@ streaming one also answers `/end` with `final` (the whole phrase
 transcribed again by it), `final_ms`, `final_wait_ms`, `final_early` and
 `same` (true: no different). The page sizes its wait for `/end` from `GET
 /api/voice`'s `server_ready.final_ms` (`final.expect_ms`, the server's
-measured p95; 1.4 s before it has three finishes) rather than a fixed worst
-case, and `final_early: true` says the accurate pass started on the quiet
-chunk that ended the speech, so the correction usually lands within a second
+measured median plus a margin — max(250 ms, twice the median absolute
+deviation); 1.4 s before it has three finishes) rather than a fixed worst
+case, and `final_early: true` says the accurate pass started on the 0.5 s
+of quiet that ended the speech, so the correction usually lands within a second
 of the person stopping. When
 `final` is there and `same` is not true, the **whole phrase typed so far**
 (its committed words and the guess — never the words before it) is
@@ -7036,24 +7757,88 @@ replaced in the box by `final`, the caret at the end, **before** the phrase
 is decided: *over*, *over and out*, *disregard*, a command, a dialog's answer all
 read the accurate words. Without `final` (an older server, one model) the
 fast words stand. Diagnostics' *Last transcribe* line says *final 1.2 s*
-(and *(corrected)* when it changed the words). A 409 on the open
-(the server does not stream after all: a clip per phrase until `GET
+(and *(corrected)* when it changed the words). A 409 on the open that says
+the server does not stream after all (a clip per phrase until `GET
 /api/voice` says otherwise) or any failed request turns the phrase into a
 clip — the words so far stay, the audio the stream had not answered is
-transcribed in one piece.
+transcribed in one piece. **The server's stream cap is passing:** a 409
+for it (*N voice streams are already open: end one first*, told apart by
+its text — `voiceStreamFull`) never turns streaming off; the open is asked
+again every 300 ms (`VOICE_STREAM_FULL_RETRY_MS`) for up to 1.5 s
+(`VOICE_STREAM_FULL_MAX_MS`), and if the cap is still full that one phrase
+goes as a clip and the next one streams again (`voice.rec.streamFull =
+{at, n}`). An open also waits — at most 400 ms
+(`VOICE_STREAM_DELETE_WAIT_MS`, `deletesSettled`) — for the stream
+`DELETE`s already on their way, so a slot freed a moment ago is free when
+it lands; after *disregard* the dropped stream's `DELETE` now goes before
+the carried phrase's open.
 **Starting fast, and seeing it hear you** (server recognition). The stream
 opens *with* the tap, alongside the microphone's start-up, and nothing is
 uploaded before your first word: the page keeps only the last 300 ms before
 it (the word's soft start) and sends that with the first 150 ms of speech,
 so the first words show — and are typed — about 0.25 s after you start
 talking (measured in the headless harness with a 120 ms recognizer; a real
-whisper pass adds its own time, ~0.3–0.6 s with the streaming model). The
+whisper pass adds its own time, ~0.2–0.3 s with the streaming model padded to 10 s). The
 **microphone stays warm** for 90 s after a phrase (`VOICE_KEEP_STREAM_MS`),
 for as long as a reply is on its
 way back (the reply opens listening by itself), and 15 s after the page is
 hidden: a tap in that time starts listening at once, with no
 `getUserMedia`. The browser's mic-in-use indicator stays lit for that long;
-voice off gives the mic back at once. While you speak, a **ring round the
+voice off gives the mic back at once. **Listening never goes deaf between
+phrases:** when a phrase ends and continuous listening goes on, the same
+recording carries straight into the next phrase (`carryFrom`), its stream
+opening while the last phrase's `/end` and the router run; the next listen
+takes it (`carryTake`) with no `getUserMedia`, no new graph and no gap. A
+carried phrase nobody takes is dropped after 10 s (`VOICE_CARRY_MAX_MS`);
+stopping drops it at once. **The carry is its own listen's only:** it is
+keyed to the listen that recorded it (`voiceCarryKey(mode, gen, box)` →
+`prompt#<gen>#<box id|compose>`), and only **dictation** carries — a
+dialog's or an answer's listen has the key `""`, so it never carries and
+never takes one. A start whose key differs drops the carried phrase (graph
+down, stream `DELETE`d; `voice.rec.carryRefused = {had, want, heard}`), so
+a dialog or answer listen always starts on a fresh graph and a fresh
+stream: a *yes* said while dictating can never answer the dialog that
+opens next. **Nor can one said in the same listen** (R8-bis, cycle 3): an
+answer is pressed only when its phrase BEGAN at least 300 ms
+(`VOICE_ANSWER_AFTER_MS`) after the page first had that dialog
+(`voiceAnswerInTime`; `voice.dialogSeen[title] = {id, at}`, noted from the
+rows' `asking.dialog_id`, `GET /dialog` reads — a `clarify` event fetches it
+at once, even mid-dictation — the ask sheet, and the router's answers;
+cleared once a row that showed it asks nothing, `GET /dialog` finds none, or the answer went in — a lagging row never clears a fresh sighting). The recorder
+stamps each phrase's first loud block (`g.spokeAt`; the recognizer adapter
+contract is now `onFinal(text, spokeAt?)` and `onEarly(text, spokeAt)` —
+`ServerSTT` passes the stamp, `PhoneSTT` (`webkitSpeechRecognition`) can't,
+and `voiceSpokeAt` falls back to the conservative bound: no later than its
+start, nor than 2 s before the previous phrase came in,
+`VOICE_SPOKE_LEAD_MS`), and every answer path checks it: the router's
+answers (`voiceRoutedAnswer`), the page's own (`voiceAnswerLocal`, when the
+router can't be reached), "session two yes", and the ask sheet's select
+steps. A dialog listen — opened after the dialog was read out — counts from
+its own start (`voiceListen_.listenAt`): no word in it can predate it. The
+router gets the same facts (`spoke_ms_ago`, `spoke_at`, `dialog_seen`) and
+applies the rule with its own stamp too (web-api.md, *An answer begun before
+its dialog*). Too early, nothing is pressed: the dialog is read out (this
+session's — so the next words answer it) or *&lt;name&gt; asked just now: say
+your answer again* is said (another's); `voice.early` counts them. A session switch or an *over* send stays in the same dictation
+listen (same `gen`) and keeps the carry; any new listen (the ask sheet, a
+dialog, a tap) bumps `gen`. **A lost mic** (its track ends, or a
+`devicechange` leaves no live track) is noticed: any carried phrase is
+dropped and the mic asked for again, instead of listening to a dead track.
+**A muted track is a pause, not a loss** (another app or a call took the
+mic, a Bluetooth route change, Siri): the track's `mute` keeps the listen
+and the phrase open — the muted blocks record nothing and the silence
+clock stands still, so the phrase does not end on the pause — and the
+strip says *Mic paused…* (the caption *Mic paused — another app or a call
+has it. Listening resumes when it's back.*, `VOICE_MIC_PAUSED_TEXT`);
+`unmute` resumes, the words so far back in the caption, and what is said
+after joins the same phrase (`voice.rec.micPaused` / `micPauses`). A
+`devicechange` ends a phrase only for an ended track. A start reuses a
+muted stream while its pause is recent; one muted since before the listen,
+or for more than 5 s (`VOICE_MIC_PAUSE_REASK_MS` — a page iOS suspended),
+is asked for again with `getUserMedia`.
+A restart scheduled after a listen ends belongs to that listen only — any
+other start in between makes it stale (`restartTok`), so listening is never
+restarted twice. While you speak, a **ring round the
 mic** (and the ask sheet's mic) grows and firms with your voice — its level
 relative to the room's noise, so a quiet room sits at zero, rising in
 ~80 ms and falling over ~300 ms — and the ⚙ sheet's meter follows it. The
@@ -7228,12 +8013,36 @@ reply. A turn that ends with no line at all says *<name> finished.*
 **In continuous listening** a line does not wait for the listen to end: the
 Say line of the turn you sent, another session's line, an ask read-out, a
 router line all play **as soon as they are ready**, over the listen — the
-recorder deaf for the line (its blocks skipped, the phrase under way not
-ended) and no word starting in the 150 ms after it (the audio kept — a word
+recorder deaf only while the line is **audible** (a clip playing, or the
+phone's voice saying a sentence — `voiceTtsAudible()`; not while the server
+voice is still being made), its deaf blocks only lowering the noise floor,
+learning the line's level (bleed) and freezing the silence clock, the
+phrase under way not ended and no word starting in the 150 ms after it (the audio kept — a word
 that starts right away loses nothing; the phone's own recognizer, which cannot be
 deafened, has what it reports meanwhile dropped), and listening goes on
 after it. Only **mid-sentence** — words in the last 1.5 s and a voice in
-the last 250 ms — does the queue hold, until the quiet. A tap on the mic
+the last 250 ms — does the queue hold, until the quiet; with the phone's own
+recognizer, which reports no level, the hold lasts until 800 ms after its
+last word (`VOICE_MID_QUIET_PHONE_MS`). **A line also waits for the pause
+at the moment it would sound** (`voiceSpeakWhenQuiet`): a server clip can
+take 1.4–20 s to make, and one that came back while you were talking used
+to start under your word with the recorder deafened. Before each clip's
+`play()` (and each phone-voice sentence, which covers the server voice's
+phone fallbacks too) a line said over the listen is held while you are
+talking — the server recorder's level within the last 250 ms
+(`VOICE_MID_QUIET_MS`, so a first syllable counts before any word is
+transcribed), or a phone-recognizer word within 800 ms — polled every
+50 ms (`VOICE_HOLD_POLL_MS`) for at most 10 s per sentence
+(`VOICE_HOLD_MAX_MS`) and **3 s for the whole line** (`VOICE_HOLD_REPLY_MS`,
+the line's `holdLeft`: a room that never goes quiet — traffic, a TV the
+level reads as a voice — gets the reply about three seconds late, then it
+plays through without another hold); a line cut meanwhile never sounds. The
+recorder keeps streaming while a line is held (`voice.rec.held = {n, ms,
+waiting, capped}`), and while it holds the strip says *Waiting for you…*
+(not *Speaking…*). The phone recognizer's
+echo filter (`voiceEchoing`) likewise drops what it hears only once the
+line has **sounded** (its first clip or sentence), while it is audible or
+in its echo tail — before the first sound, what it hears is you. A tap on the mic
 while such a line plays cuts it (barge-in) and the listen goes on; the
 reply's own answer-listen and hands-free do not apply (it never stopped
 listening). A listen that is not continuous still holds the queue.
@@ -7341,7 +8150,11 @@ session's wait for their turn), and keeps the phone's own voice out of the
 transcript: the server's recorder starts at once (its stream opens and the
 mic comes up under the speaker's tail) but no word may start for 150 ms;
 the phone's own recognizer, which cannot be deafened, starts 150 ms later.
-The cut line is not said again.
+The cut line is not said again. **Barge-in by voice** is opt-in (localStorage
+`cs_voice_barge` set, not `0` / `false`; off by default, the tap is
+unchanged): speaking over a line cuts it — the line's level is learnt for
+300 ms, then a voice over 0.04 RMS and 3× that level for 3 blocks (~250 ms)
+barges, and the first word is kept.
 **Stop talking:** say *stop talking* (*be quiet*, *quiet*, *hush*, *shut
 up*, *stop reading*, *enough*, *okay stop*…; the router's `{kind: "hush"}`,
 the page's own table when it cannot answer) — or tap **Stop talking** in the
@@ -7536,9 +8349,12 @@ session*, the *Events socket* state and sequence number, *Backends*
 server's when Settings say server and `GET /api/voice` reports it ready),
 *Built-in engine* (*<platform> — <detail>*, from the `system` object of
 `GET /api/voice`; left out when an older server sends none), *Recorder*
-(*WAV 16 kHz (ScriptProcessor)*, or *not supported* without Web Audio or a
-microphone), *Resampler* (which one made the last clip — *OfflineAudioContext
-(the browser's)*, or *low-pass decimator* and why — or which one will),
+(*WAV 16 kHz (AudioWorklet, off the main thread)* or *WAV 16 kHz
+(ScriptProcessor)* — on the fallback with *— the worklet: &lt;why&gt;* when the
+module failed — or *not supported* without Web Audio or a microphone),
+*Resampler* (which one made the last clip — *the capture worklet (16 kHz as
+it records)*, *OfflineAudioContext (the browser's)*, or *low-pass decimator*
+and why — or which one will; `voice.rec.cap` is `worklet` or `script`),
 *Silence stop* (*1100 ms after speech*, and the clip cap), *Recognition
 stream* with server recognition (*words as you speak* with the pass time —
 *~0.4 s/pass* — or *one clip per phrase*, and the last chunk's time or why
@@ -7604,8 +8420,17 @@ the one playing (`VOICE_SPEAK_AHEAD`), so a voice that makes one at a time
 is never idle between sentences — each plays the moment the one before
 ends, back to back. *Speaking…* spans the whole line. Cancel, a hush or a
 barge-in stops the sentence playing, drops the rest and aborts the requests
-on their way (at most two). A sentence the server cannot say is said by the
-phone's voice. The phone's own voice (speechSynthesis) is unchanged.
+on their way (at most two). **The wait is bounded:** each `/api/voice/speak`
+request is cut at 30 s (`VOICE_SPEAK_FETCH_MAX_MS`), and each clip waited
+for gets a budget learnt per voice (`voiceSpeakWaitMs`: ~3× the measured ms
+per character × its length + 1 s, held to 4–20 s). Past it, or after any
+clip times out, the phone's voice says the rest of the line in one go (no
+flipping back); that fallback does not abort the clips on their way — they
+land in an in-memory cache of the last 8 (`VOICE_SPEAK_KEEP`), so a line
+said again plays without a request. A suspended or interrupted
+`AudioContext` gets 400 ms to resume (`VOICE_SPEAK_RESUME_MS`) before the
+phone's voice takes over. **One audio owner:** a new line or clip stops the
+one playing, so two clips never sound at once. The phone's own voice (speechSynthesis) is unchanged.
 Diagnostics' *Last speak* line says *first sound 0.9 s (3 sentences)*. The
 spoken confirmations (*Sent.*, *Cleared.*, *Over and out.*…) are made ahead and
 cached at the first tap for a voice made on this machine or **nearby** — not

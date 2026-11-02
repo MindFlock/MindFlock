@@ -116,10 +116,10 @@ describe("the rail: railOrder stays the numbering authority", () => {
 describe("no Outbox: the bell and the group header", () => {
   it("the top bar carries only the daily loop", () => {
     // The Outbox, Prompts and Recent buttons are gone (dropped, Customize, the
-    // session list); Verify always shows; the palette is the last item, after
-    // Settings.
+    // session list), and so is the Flights button (Intake / Verify / Schedule
+    // are back on the bar); the palette is the last item, after Settings.
     const top = fn("components/TopBar.tsx", "TopBar");
-    for (const gone of ['"outbox-btn"', '"prompts-btn"', '"recent-btn"']) expect(top, gone).not.toContain(gone);
+    for (const gone of ['"outbox-btn"', '"prompts-btn"', '"recent-btn"', '"flights-btn"']) expect(top, gone).not.toContain(gone);
     const i = top.indexOf('id="intake-btn"');
     const v = top.indexOf('id="verify-btn"');
     const s = top.indexOf('id="settings-btn"');
@@ -177,7 +177,7 @@ describe("no Outbox: the bell and the group header", () => {
   it("the bell still reads the waiting list from one response", () => {
     expect(has(normCode("state/runs.ts"), 'api<OutboxResponse>("/api/outbox?group=all")')).toBe(true);
     const bell = fn("components/NotificationsBell.tsx", "NotificationsBell");
-    expect(has(bell, "needsAttention(attentionItems(instances), outbox?.groups?.waiting)")).toBe(true);
+    expect(has(bell, "needsAttention(attentionItems(instances), withFlightYou(outbox?.groups?.waiting, instances))")).toBe(true);
     expect(has(bell, 'document.addEventListener("mf-open-bell", onOpen)')).toBe(true);
   });
 

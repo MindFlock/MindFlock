@@ -8,7 +8,7 @@ import { ApiError, api, instApi } from "../api/client";
 import type { Caps, Config, Instance } from "../api/types";
 import { computeVisibleSlots } from "../components/grid/layout";
 import { orderWithAfter } from "../components/sidebar/ordering";
-import { patchInstance, queryClient, refreshInstances, refreshRecentlyClosed } from "../state/queries";
+import { landPendingRow, markMoving, patchInstance, queryClient, refreshInstances, refreshRecentlyClosed } from "../state/queries";
 import { freshStage } from "./stageWatch";
 import { displayName, effectiveViewMode, setSessionSelector, useUi, windowKey } from "../state/store";
 import { toast } from "./toast";
@@ -16,6 +16,7 @@ import { errMsg } from "./format";
 import { clearLoopReset, clearStep, markLoopReset, markStep } from "./stage";
 import { focusTerm, releaseTerms } from "./terminals";
 import { confirmPop, errorPop } from "./errorPop";
+import { windowName } from "./windowName";
 
 function caps() {
   return queryClient.getQueryData<Config>(["config"])?.caps ?? {
@@ -39,9 +40,17 @@ export function instances(): Instance[] {
  * touched. When the grid is full (capped view) and the session has no pane
  * yet, it takes the FOCUSED window's exact spot (the focused one is demoted
  * below every other visible window in the MRU, making it the eviction
- * candidate) rather than evicting whichever window is least-recently-used. */
-export function selectSession(title: string, opts?: { noKeyboard?: boolean }) {
+ * candidate) rather than evicting whichever window is least-recently-used.
+ *
+ * `null` selects nothing (the sky's empty-sky click and Esc — docs/flights.md
+ * "Round 13": selection may be empty): no session is focused, in either view;
+ * the MRU, the hidden set and the keyboard are left as they are. */
+export function selectSession(title: string | null, opts?: { noKeyboard?: boolean }) {
   const ui = useUi.getState();
+  if (title === null) {
+    ui.setFocused(null);
+    return;
+  }
   ui.setHidden(title, false);
   // Visibility is judged over the UNION the grid actually renders — sessions
   // AND open windows, one cap, one MRU (computeVisibleSlots, exactly as
@@ -384,16 +393,20 @@ export async function undoLastClose() {
       });
       return;
     }
+    // Its box at once, as a create's (the server may number the title).
+    const guess = addPendingSession(ent.title || "session", "", true);
     try {
       const inst = await api<Instance>(
         "/api/recently-closed/" + encodeURIComponent(ent.id) + "/reopen",
         { method: "POST" }
       );
+      landPendingSession(guess, inst);
       void refreshRecentlyClosed();
       await refreshInstances();
       if (inst?.title) selectSession(inst.title);
       toast("Reopened " + (ent.title ? displayName(ent.title) : "session"));
     } catch (err) {
+      failPendingSession(guess);
       errorPop("Reopen failed", errMsg(err));
     }
   } finally {
@@ -451,9 +464,12 @@ export function clearStaleAlias(title: string) {
   if (title && ui.aliases[title]) ui.setAlias(title, "");
 }
 
-/** Optimistic "provisioning" row for create/duplicate (mirrors the server's
- * _unique_title numbering; a mismatch resolves on the next poll). */
-export function addPendingSession(bare: string, device = ""): string {
+/** Optimistic "provisioning" row for create/duplicate/reopen (mirrors the
+ * server's _unique_title numbering). It waits in the cache until the instances
+ * snapshot lists the session — under the guess or a title the server numbered
+ * from `bare` — for up to `PENDING_TTL_MS` (state/queries.ts `mergePending`);
+ * `landPendingSession` swaps in the create's answer. */
+export function addPendingSession(bare: string, device = "", keepAlias = false): string {
   // A session being started on another device waits in THAT device's group,
   // under the namespaced title it will arrive with.
   const base = device ? device + "::" + bare : bare;
@@ -464,15 +480,28 @@ export function addPendingSession(bare: string, device = ""): string {
     while (taken.has(base + "-" + i)) i++;
     title = base + "-" + i;
   }
-  clearStaleAlias(title);
+  // A reopen comes back with the name it was given (see clearStaleAlias).
+  if (!keepAlias) clearStaleAlias(title);
   const pending = {
     title,
     status: "loading",
     pending_create: true,
+    pending_at: Date.now(),
+    pending_base: base,
     ...(device ? { device, display_title: title.slice(device.length + 2) } : {}),
   } as unknown as Instance;
   queryClient.setQueryData<Instance[]>(["instances"], (prev) => [...(prev || []), pending]);
   return title;
+}
+
+/** The create answered: its row replaces the optimistic one for `guess` (one
+ * box, under the real title), still waiting for the snapshot to list it. */
+export function landPendingSession(guess: string, inst: Instance | null | undefined) {
+  if (!inst?.title) return;
+  // Another device answers under its BARE title, while the row arrives here as
+  // `device::title`: the guess waits for the poll (it matches by base) instead.
+  if (guess.includes("::") && !inst.title.includes("::")) return;
+  queryClient.setQueryData<Instance[]>(["instances"], (prev) => landPendingRow(prev || [], guess, inst, Date.now()));
 }
 
 export function failPendingSession(title: string) {
@@ -535,6 +564,7 @@ export async function copySession(title: string) {
     // The server picks the real title (its own -copy/-copy-2 numbering), which
     // can differ from the optimistic guess — so clear that one's alias too.
     if (inst?.title) clearStaleAlias(inst.title);
+    landPendingSession(guess, inst);
     await refreshInstances();
     if (inst?.title) {
       // The guessed title reserved a slot; if the server picked a different
@@ -569,6 +599,7 @@ export async function branchSession(title: string) {
   try {
     const inst = await instApi<BranchResult>(title, "/branch", { method: "POST" });
     if (inst?.title) clearStaleAlias(inst.title);
+    landPendingSession(guess, inst);
     await refreshInstances();
     if (inst?.title) {
       if (inst.title !== guess) dropFromOrder(guess);
@@ -584,6 +615,71 @@ export async function branchSession(title: string) {
     failPendingSession(guess);
     errorPop("Branch failed", errMsg(err));
   }
+}
+
+/* --- Moving a session ------------------------------------------------------
+ * POST /api/instances/{title}/move {dest, force} → 202 {title, from, to}: the
+ * agent pauses, its folder moves to `dest`, and it resumes there; the
+ * outcome arrives as `session.moved` / `session.move_failed` (state/queries
+ * onSessionMoved / onSessionMoveFailed). docs/flights.md "Moving a session". */
+
+/** Move to a folder… — the session ⋯ menu's item: opens MoveSessionDialog. */
+export function openMoveSession(title: string) {
+  if (title) useUi.getState().openDialogFor("move", title);
+}
+
+/** The refusals the move route names (its 400/404/409 `error`). */
+export type MoveRefusal = "working" | "exists" | "in_flight" | "remote" | "bad_dest" | "unknown_session";
+
+/** The dialog's own line for a 409 `working` (its checkbox is the remedy). */
+export const MOVE_MID_TURN = "The agent is mid-turn — tick the box to move anyway";
+
+const MOVE_REFUSALS: Record<MoveRefusal, string> = {
+  working: MOVE_MID_TURN + ".",
+  exists: "Something is already at that path — pick a folder that doesn't exist yet.",
+  in_flight: "Its flight or fast-track is running — pause it first, or tick the box to move anyway.",
+  remote: "That session lives on another device — move it from there.",
+  bad_dest: "Give a full path to a new folder outside the session's own.",
+  unknown_session: "MindFlock couldn't find that session — it may have just been removed.",
+};
+
+/** Which refusal a failed move is ("" for anything else: a 500, a network
+ * error). The route names it in `error` (or `code`). */
+export function moveRefusal(err: unknown): MoveRefusal | "" {
+  if (!(err instanceof ApiError)) return "";
+  const body = err.body as { error?: unknown; code?: unknown } | null;
+  for (const v of [body?.error, body?.code]) if (typeof v === "string" && v in MOVE_REFUSALS) return v as MoveRefusal;
+  return "";
+}
+
+/** The sentence a failed move says: the server's own, unless all it sent is
+ * the bare code. */
+export function moveErrorText(err: unknown): string {
+  const code = moveRefusal(err);
+  const msg = errMsg(err);
+  return code && (!msg || msg === code) ? MOVE_REFUSALS[code] : msg;
+}
+
+export type MoveResult = { ok: true; to: string } | { ok: false; refusal: MoveRefusal | ""; message: string };
+
+/** Ask the server to move `title`'s folder to `dest`. Accepted: the row says
+ * "moving…" until the event, and a toast says it started. A 409 `working`
+ * without `force` is the dialog's to answer (its checkbox); every other
+ * failure goes on the error card. */
+export async function moveSession(title: string, dest: string, force = false): Promise<MoveResult> {
+  const name = windowName(title);
+  let r: { to?: string } | null = null;
+  try {
+    r = await instApi<{ title?: string; from?: string; to?: string }>(title, "/move", { method: "POST", json: { dest, force } });
+  } catch (err) {
+    const refusal = moveRefusal(err);
+    const message = moveErrorText(err);
+    if (!(refusal === "working" && !force)) errorPop(`Moving “${name}” failed`, message);
+    return { ok: false, refusal, message };
+  }
+  markMoving(title);
+  toast(`Moving “${name}”…`);
+  return { ok: true, to: r?.to || dest };
 }
 
 /** Commit… — the table's Commit action (lib/sessionActionTable): opens the

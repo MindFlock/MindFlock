@@ -37,8 +37,9 @@ import { SCHEDULE_TOUR } from "./schedule";
 import { SETTINGS_TOUR } from "./settings";
 import { PEOPLE_TOUR } from "./people";
 import { VOICE_TOUR } from "./voice";
+import { SKY_TOUR } from "./sky";
 
-export type TourId = "welcome" | "new" | "intake" | "verify" | "schedule" | "settings" | "people" | "voice";
+export type TourId = "welcome" | "new" | "sky" | "intake" | "verify" | "schedule" | "settings" | "people" | "voice";
 
 export interface TourStep {
   /** CSS selector resolved in `document`; "" centres the card. */
@@ -65,6 +66,7 @@ export interface TourDef {
 export const TOURS: Record<TourId, TourDef> = {
   welcome: WELCOME_TOUR,
   new: NEW_TOUR,
+  sky: SKY_TOUR,
   intake: INTAKE_TOUR,
   verify: VERIFY_TOUR,
   schedule: SCHEDULE_TOUR,
@@ -74,7 +76,7 @@ export const TOURS: Record<TourId, TourDef> = {
 };
 
 /** Every tour, in the order Settings → General → Tours lists them. */
-export const TOUR_IDS: readonly TourId[] = ["welcome", "new", "intake", "verify", "schedule", "settings", "people", "voice"];
+export const TOUR_IDS: readonly TourId[] = ["welcome", "new", "sky", "intake", "verify", "schedule", "settings", "people", "voice"];
 
 export function isTourId(v: unknown): v is TourId {
   return typeof v === "string" && (TOUR_IDS as readonly string[]).includes(v);

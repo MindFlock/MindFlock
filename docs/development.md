@@ -103,7 +103,21 @@ the checkout under test.
 change under `frontend/src` — including CSS-only tweaks, which are the easiest to
 forget — needs `npm run build` in `frontend/` so the regenerated pair lands in
 the same commit as the source. The backend tests assert on literals inside those
-files, so a stale bundle shows up as a confusing Python test failure.
+files, so a stale bundle shows up as a confusing Python test failure. A stale
+bundle can also break a feature without failing a test: `POST /api/voice/route`
+refuses any dialog answer that comes without phrase timing (it replies
+`early`; web-api.md, *An answer begun before its dialog*), so a bundle built
+before the desktop sent that timing silently turns off voice approval on the
+desktop.
+
+The build also emits the desktop's audio capture module,
+`backend/web/static/voice-capture-worklet.js` (from
+`frontend/src/lib/voiceCapture.worklet.ts`, named by `vite.config.ts`'s
+`worker` entry): commit it with `app.js`. Its `.map`, like
+`codetree-worker.js.map`, is gitignored. The phone's
+`backend/web/static/mobile-capture-worklet.js` is **not** build output — it is
+hand-written beside `mobile.js` and served as it is, under its own name so a
+build never overwrites it.
 
 ## Pre-commit hooks
 
@@ -316,6 +330,11 @@ redirects `tempfile` + `MINDFLOCK_ASSISTANT_DIR` into pytest's tmp dir so tests
 never touch your real caches — important because the pipeline's testmon
 refresher re-runs suites automatically.
 
+The reply-watch loop (`server._reply_watch_loop`) is off under pytest:
+`server._REPLY_WATCH_LOOP_ENABLED` defaults to `None`, meaning "on except
+under pytest", because `server.ENGINE` there is your real `state.json`. A
+test that exercises the loop sets it `True` and isolates `ENGINE` itself.
+
 ### Journey tests
 
 `tests/e2e` drives the real UI — the committed bundle, served by a real
@@ -358,6 +377,23 @@ anything:
 PYTHONPATH=$PWD ~/.local/share/uv/tools/mindflock/bin/python \
     tests/bench/voice_bench.py --configs base.en+small
 ```
+
+A config is `<fast model>+<final model>` (`off` for no accurate pass), plus
+`+nohints` (no vocabulary hints anywhere) or `+fasthints` (the voice words
+also lead the fast tier's prompt), plus knobs that each set one module
+constant for that config only: `+beam<N>` (`speech.STREAM_BEAM`), `+vocab`
+(`speech.STREAM_VOCAB` = the control words), `+la<N>`
+(`speech_stream.AGREE_PASSES`) and `+old` (the pre-cycle-6 merge:
+`PROMPT_IN_WINDOW` on, `MATCH_TEXT_FIRST` off) — e.g.
+`--configs base.en+small,base.en+small+old,base.en+small+la3`. Besides the
+control-word hits, WER and pass / finish percentiles it reports **first
+p50/p90** (when the first word would be typed, from the clip's start, on a
+simulated client clock), **extra ctl** (phrases whose fast words hold more
+control words than were said, or a word three times running — what a
+vocabulary prompt risks) and **errors** (fast passes that raised; a failed
+pass is counted and the chunk waits for the next, the run goes on). Other
+options: `--phrases N`, `--seed`, `--tail-quiet N`, `--save DIR` (the WAVs),
+`--misses`, `-v`.
 
 ### Test map
 
@@ -436,6 +472,10 @@ Re-verified against the codebase 2026-10-10; useful when touching these areas:
    machine the row's `background` is always null, so the rail's job chip and
    fast-track's background-job hold can't be reproduced there
    ([providers.md](providers.md#background-jobs)).
+7. `PREWARM_FIXED` in `backend/web/routes/speech.py` copies literal client
+   lines by hand (`static/mobile.js`, `frontend/src/lib/voiceDesktop.ts`,
+   `TopBarMic.tsx`, `core/voice_router.py`). Rewording one of those lines
+   without updating the tuple silently loses its prewarm cache hit.
 
 Two other lists are kept next to the code they describe and are not repeated
 here — read them before touching those areas:

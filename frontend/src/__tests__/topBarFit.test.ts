@@ -72,6 +72,8 @@ describe("TopBar wiring around the fold", () => {
   it("keeps every id on its own bar button, and folds by class, not by unmounting", () => {
     for (const id of ["new-btn", "intake-btn", "verify-btn", "schedule-btn", "settings-btn", "palette-btn"])
       expect(TOPBAR, id).toContain(`id="${id}"`);
+    // The Flights button is gone (Sky round 8: the bar is flat again).
+    expect(TOPBAR).not.toContain('id="flights-btn"');
     for (const key of ["verify", "schedule", "settings"]) {
       expect(TOPBAR).toContain(`className={"tb-item" + (isFolded("${key}") ? " tb-folded" : "")}`);
       expect(TOPBAR).toContain(`data-fold="${key}"`);
@@ -81,6 +83,15 @@ describe("TopBar wiring around the fold", () => {
       const at = TOPBAR.indexOf(`id="${id}"`);
       expect(TOPBAR.slice(at, at + 200), id).not.toContain("tb-folded");
     }
+    // The Grid · Sky toggle folds last: it is first of the foldable items, and
+    // the fold takes items from the right end (Settings, Schedule, Verify).
+    expect(TOPBAR).toContain('<span className={"tb-views" + (isFolded("view") ? " tb-folded" : "")} data-fold="view"');
+    const order = ['key: "view"', 'key: "verify"', 'key: "schedule"', '{ key: "settings"'].map((k) => TOPBAR.indexOf(k));
+    expect(order.every((x, i) => x > 0 && (i === 0 || x > order[i - 1]))).toBe(true);
+    // ...and it sits right after New on the bar, before Intake.
+    expect(TOPBAR.indexOf('id="new-btn"')).toBeLessThan(TOPBAR.indexOf('data-fold="view"'));
+    expect(TOPBAR.indexOf('data-fold="view"')).toBeLessThan(TOPBAR.indexOf('id="intake-btn"'));
+    expect(fitTopBar({ ...BAR, items: [90, 60], room: 270 + 60 + 30 }).shown).toBe(0);
     // ⋯ sits after Settings and before the palette.
     const se = TOPBAR.indexOf('id="settings-btn"');
     const mo = TOPBAR.indexOf('id="more-btn"');
@@ -112,6 +123,8 @@ describe("TopBar wiring around the fold", () => {
     // Each row wears its bar button's tooltip (shortcut and count line).
     expect(TOPBAR).toContain("title: verifyTitle,");
     expect(TOPBAR).toContain("title: scheduleTitle,");
+    // The toggle's row carries the perch count, as its Sky half does.
+    expect(TOPBAR).toContain("count: perch.count,");
   });
 
   it("measures before paint and on resize — no breakpoint list", () => {

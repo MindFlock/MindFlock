@@ -22,6 +22,7 @@ from __future__ import annotations
 import dataclasses as _dataclasses
 import datetime as _datetime
 import os
+import shutil
 import subprocess
 import time
 from typing import List, Optional, Tuple
@@ -54,6 +55,9 @@ __all__ = [
     "new_instance",
     "FromInstanceData",
     "from_instance_data",
+    "MoveError",
+    "MoveWorkspace",
+    "CheckMoveDest",
 ]
 
 
@@ -1030,19 +1034,7 @@ class Instance:
 
         if self._worktree_present():
             # Current scheme: the checkout is right where the agent left it.
-            if self._tmux_session.does_session_exist():
-                rerr = self._tmux_session.restore()
-                if rerr is not None:
-                    if log.ErrorLog is not None:
-                        log.ErrorLog.Print(rerr)
-                    self._configure_launch_command(resume=True)
-                    self._start_tmux_or_cleanup(cleanup=False)
-            else:
-                # Pause killed the agent: relaunch with the provider's RESUME
-                # command so the conversation continues (the first-start
-                # command would re-send the seed prompt into a fresh agent).
-                self._configure_launch_command(resume=True)
-                self._start_tmux_or_cleanup(cleanup=False)
+            self._relaunch_in_worktree()
             self.SetStatus(Status.Running)
             return
 
@@ -1082,6 +1074,131 @@ class Instance:
             self._start_tmux_or_cleanup()
 
         self.SetStatus(Status.Running)
+
+    def _relaunch_in_worktree(self) -> None:
+        """Bring the stopped agent back in the worktree as it stands: reattach
+        a tmux session that is still alive, else launch the provider's RESUME
+        command so the conversation continues (the first-start command would
+        re-send the seed prompt into a fresh agent). A failed launch never
+        touches the worktree. Raises ``RuntimeError``."""
+        if self._tmux_session.does_session_exist():
+            rerr = self._tmux_session.restore()
+            if rerr is not None:
+                if log.ErrorLog is not None:
+                    log.ErrorLog.Print(rerr)
+                self._configure_launch_command(resume=True)
+                self._start_tmux_or_cleanup(cleanup=False)
+        else:
+            self._configure_launch_command(resume=True)
+            self._start_tmux_or_cleanup(cleanup=False)
+
+    # --- Move ---------------------------------------------------------------
+    def MoveWorkspace(self, dest: str) -> None:
+        """Move this session's workspace folder to ``dest`` and carry on there.
+
+        In order: check ``dest`` (:func:`CheckMoveDest`); stop the agent the
+        way :meth:`Pause` does (``Paused`` first, then the tmux session); move
+        the folder — ``git worktree move`` then ``git worktree repair`` from
+        the main repo for a linked worktree, ``shutil.move`` then ``git
+        worktree repair`` in the new place for a main clone (so its linked
+        worktrees find it again) or a plain folder; re-point every path the
+        instance keeps (``Path``, the worktree's repo and worktree paths); let
+        the provider carry its per-directory state (``carry_workdir``); and,
+        when the agent was running, relaunch it in the new folder through
+        Resume's path (the provider's resume command). A paused session stays
+        paused.
+
+        Raises :class:`MoveError` (refused before anything was touched) or
+        ``RuntimeError``. After any failure the paths name wherever the folder
+        really is; an agent that could not be relaunched leaves the session
+        ``Paused`` (Resume brings it back).
+        """
+        if not self._started or self._git_worktree is None:
+            raise RuntimeError("cannot move instance that has not been started")
+        if getattr(self, "PeerShare", ""):
+            raise MoveError(
+                "peer_share", "a shared folder's session moves with its peer link"
+            )
+        old = self._git_worktree.GetWorktreePath()
+        new = CheckMoveDest(old, dest)
+        if not os.path.isdir(old):
+            raise RuntimeError("workspace not found: {}".format(old))
+        main, linked = _git_layout(old)
+        nested = [] if linked else _nested_worktrees(old)
+        olds = _path_aliases(old)
+
+        was_running = self.Status != Status.Paused
+        if was_running:
+            # Paused BEFORE the kill, as Pause does: a terminal socket that
+            # reconnects must not revive the agent in a folder mid-move.
+            self.SetStatus(Status.Paused)
+            if self._tmux_session is not None:
+                cerr = self._tmux_session.close()
+                if cerr is not None and log.ErrorLog is not None:
+                    log.ErrorLog.Print(cerr)
+
+        errs: List[BaseException] = []
+        try:
+            repair_err = _move_folder(old, new, main, linked, nested)
+            if repair_err is not None:
+                errs.append(
+                    RuntimeError(
+                        "moved, but git worktree repair failed: {}".format(
+                            _err_text(repair_err)
+                        )
+                    )
+                )
+        except Exception as err:  # noqa: BLE001
+            errs.append(
+                RuntimeError("failed to move workspace: {}".format(_err_text(err)))
+            )
+        # Wherever the folder really is now — a move that failed half-way
+        # (a cross-device copy) leaves the original in place.
+        moved = os.path.isdir(new) and not os.path.lexists(old)
+        if moved:
+            self._repoint_paths(olds, new)
+            try:
+                from backend import providers as _providers
+
+                _providers.resolve(self.Program).carry_workdir(old, new)
+            except Exception as err:  # noqa: BLE001 — history is best-effort
+                if log.ErrorLog is not None:
+                    log.ErrorLog.Printf("carry_workdir %s failed: %v", new, err)
+
+        if was_running:
+            try:
+                self._relaunch_in_worktree()
+                self.SetStatus(Status.Running)
+            except Exception as err:  # noqa: BLE001
+                errs.append(
+                    RuntimeError(
+                        "failed to relaunch the agent: {}".format(_err_text(err))
+                    )
+                )
+
+        combined = self._combine_errors(errs)
+        if combined is not None:
+            if log.ErrorLog is not None:
+                log.ErrorLog.Print(combined)
+            raise combined
+
+    def _repoint_paths(self, olds, new: str) -> bool:
+        """Re-point every path this instance keeps that is (or lies under) one
+        of ``olds`` at ``new``. True when anything changed."""
+        changed = False
+        rebased = _rebase_path(self.Path, olds, new)
+        if rebased != self.Path:
+            self.Path = rebased
+            changed = True
+        wt = self._git_worktree
+        if wt is not None:
+            for attr in ("repoPath", "worktreePath"):
+                cur = getattr(wt, attr, "") or ""
+                rebased = _rebase_path(cur, olds, new)
+                if rebased != cur:
+                    setattr(wt, attr, rebased)
+                    changed = True
+        return changed
 
     def _start_tmux_or_cleanup(self, cleanup: bool = True) -> None:
         """Start a new tmux session; with ``cleanup`` (the legacy resume, whose
@@ -1508,6 +1625,198 @@ def from_instance_data(data: InstanceData, attach: bool = True) -> Instance:
         inst.Start(False)
 
     return inst
+
+
+# ---------------------------------------------------------------------------
+# Moving a workspace (no Go original)
+# ---------------------------------------------------------------------------
+class MoveError(RuntimeError):
+    """A move refused before anything was touched. ``code`` is what the web
+    route answers with: ``bad_dest``, ``exists``, ``unknown_session``,
+    ``bad_source`` or ``peer_share``."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def MoveWorkspace(instances, title: str, dest: str, save=None):
+    """The engine's move (Go style: returns the error, never raises).
+
+    Moves ``instances[title]``'s workspace to ``dest`` (:meth:`Instance.
+    MoveWorkspace`), re-points the paths of every OTHER instance that kept the
+    old folder too (window copies sharing it in place, worktrees cut from a
+    main clone that moved), then persists through ``save`` (the engine's
+    ``save``) — also after a failure, so state.json names wherever the folder
+    really is. Returns ``None`` or the error (a :class:`MoveError` for a
+    refusal, ``unknown_session`` for an unknown title).
+    """
+    inst = (instances or {}).get(title)
+    if inst is None:
+        return MoveError("unknown_session", "instance not found: {}".format(title))
+    old = inst.GetWorktreePath()
+    olds = _path_aliases(old) if old else ()
+    errs: List[BaseException] = []
+    try:
+        inst.MoveWorkspace(dest)
+    except MoveError as err:
+        return err
+    except Exception as err:  # noqa: BLE001
+        errs.append(err)
+    new = inst.GetWorktreePath()
+    if olds and new != old:
+        for other in list(instances.values()):
+            if other is not inst and hasattr(other, "_repoint_paths"):
+                other._repoint_paths(olds, new)
+    if save is not None:
+        try:
+            save()
+        except Exception as err:  # noqa: BLE001
+            errs.append(RuntimeError("failed to save state: {}".format(_err_text(err))))
+    return inst._combine_errors(errs)
+
+
+def CheckMoveDest(old: str, dest: str) -> str:
+    """The normalized new folder for a workspace at ``old``, or a
+    :class:`MoveError`: ``bad_dest`` for an empty / relative path, one inside
+    the current workspace, one whose parent folder does not exist, or one in
+    the peer-link folder; ``exists`` when something is already there. A
+    leading ``~`` is expanded."""
+    dest = (dest if isinstance(dest, str) else "").strip()
+    if not dest:
+        raise MoveError("bad_dest", "a destination folder is required")
+    dest = os.path.expanduser(dest)
+    if not os.path.isabs(dest):
+        raise MoveError("bad_dest", "the destination must be an absolute path")
+    new = os.path.normpath(dest)
+    parent = os.path.dirname(new)
+    real_new = os.path.join(os.path.realpath(parent), os.path.basename(new))
+    for base in _path_aliases(old):
+        for cand in (new, real_new):
+            if cand == base or cand.startswith(base.rstrip(os.sep) + os.sep):
+                raise MoveError(
+                    "bad_dest", "the destination is inside the current workspace"
+                )
+    if os.path.lexists(new):
+        raise MoveError("exists", "something already exists at {}".format(new))
+    if not os.path.isdir(parent):
+        raise MoveError(
+            "bad_dest", "the parent folder {} does not exist".format(parent)
+        )
+    from backend.peer import paths as _peer_paths
+
+    if _peer_paths.is_inside_peer_root(new):
+        raise MoveError("bad_dest", "the peer-link folder is not a place for sessions")
+    return new
+
+
+def _path_aliases(path: str) -> tuple:
+    """``path`` normalized, plus its realpath when that differs."""
+    if not path:
+        return ()
+    norm = os.path.normpath(path)
+    real = os.path.realpath(path)
+    return (norm,) if real == norm else (norm, real)
+
+
+def _rebase_path(path: str, olds, new: str) -> str:
+    """``path`` with a leading ``olds`` folder swapped for ``new`` (unchanged
+    when it is not that folder or under it)."""
+    if not path:
+        return path
+    norm = os.path.normpath(path)
+    for base in olds:
+        if norm == base:
+            return new
+        if norm.startswith(base.rstrip(os.sep) + os.sep):
+            return new + norm[len(base) :]
+    return path
+
+
+def _git_out(folder: str, *args: str) -> Tuple[int, str]:
+    """``git -C <folder> <args>`` → ``(returncode, stdout+stderr)``."""
+    r = subprocess.run(
+        ["git", "-C", folder, *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=_GIT_PROBE_TIMEOUT_SECONDS,
+    )
+    return r.returncode, (r.stdout or "").strip()
+
+
+def _git_layout(folder: str) -> Tuple[str, bool]:
+    """``(main repo root, is_linked_worktree)`` for ``folder``; ``("", False)``
+    for a plain (non-git) folder. Raises :class:`MoveError` (``bad_source``)
+    for a folder that is not the top of its own repository — moving it would
+    carry tracked files out of their repo."""
+    code, out = _git_out(
+        folder,
+        "rev-parse",
+        "--path-format=absolute",
+        "--show-toplevel",
+        "--git-dir",
+        "--git-common-dir",
+    )
+    lines = out.splitlines() if code == 0 else []
+    if len(lines) < 3:
+        return "", False
+    top, git_dir, common = lines[:3]
+    if os.path.realpath(top) != os.path.realpath(folder):
+        raise MoveError(
+            "bad_source",
+            "{} is a folder inside the repository at {} — move the repository "
+            "instead".format(folder, top),
+        )
+    if os.path.realpath(git_dir) == os.path.realpath(common):
+        return top, False
+    if os.path.basename(common.rstrip(os.sep)) == ".git":
+        return os.path.dirname(common.rstrip(os.sep)), True
+    return common, True  # a bare repo's worktree
+
+
+def _nested_worktrees(folder: str) -> List[str]:
+    """The linked worktrees of the repo at ``folder`` that live INSIDE it
+    (they move with it, so ``git worktree repair`` needs their new paths)."""
+    code, out = _git_out(folder, "worktree", "list", "--porcelain")
+    if code != 0:
+        return []
+    olds = _path_aliases(folder)
+    found = []
+    for line in out.splitlines():
+        if not line.startswith("worktree "):
+            continue
+        path = os.path.normpath(line[len("worktree ") :])
+        if path in olds:
+            continue
+        if any(path.startswith(b.rstrip(os.sep) + os.sep) for b in olds):
+            found.append(path)
+    return found
+
+
+def _move_folder(
+    old: str, new: str, main: str, linked: bool, nested: List[str]
+) -> Optional[BaseException]:
+    """Move the folder and repair git's links. Raises when the folder did not
+    move; returns the repair's error (or None) once it has."""
+    if linked:
+        code, out = _git_out(main, "worktree", "move", old, new)
+        if code != 0:
+            if "cross-device" not in out.lower() or os.path.lexists(new):
+                raise RuntimeError("git worktree move: {}".format(out))
+            # git renames; across filesystems move it by hand, then tell git
+            # where the worktree went.
+            shutil.move(old, new)
+            code, out = _git_out(main, "worktree", "repair", new)
+        else:
+            code, out = _git_out(main, "worktree", "repair")
+        return RuntimeError(out) if code != 0 else None
+    shutil.move(old, new)
+    if not main:
+        return None  # a plain folder: nothing points at it
+    moved_nested = [_rebase_path(p, _path_aliases(old), new) for p in nested]
+    code, out = _git_out(new, "worktree", "repair", *moved_nested)
+    return RuntimeError(out) if code != 0 else None
 
 
 # ---------------------------------------------------------------------------

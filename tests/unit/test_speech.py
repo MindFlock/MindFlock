@@ -31,9 +31,15 @@ def _isolate(isolate_settings_store, monkeypatch, tmp_path):
     monkeypatch.setenv("MINDFLOCK_VOICE_DIR", str(tmp_path / "voice"))
     monkeypatch.setattr(speech, "_arm_timer", lambda: None)
     monkeypatch.setattr(memory_pressure, "is_low", lambda **kw: False)
+    # Background lookups / probes run inline, from a clean slate.
+    monkeypatch.setattr(speech, "_spawn", lambda target, name: target())
+    speech.forget_ffmpeg()
+    speech.TTS_CHAIN.reset()
     speech.unload_all()
     yield
     speech.unload_all()
+    speech.TTS_CHAIN.reset()
+    speech.forget_ffmpeg()
 
 
 def _set(**voice):
@@ -284,6 +290,7 @@ class TestLocalRefusals:
         assert detail.startswith("faster-whisper small on this computer")
         assert "ffmpeg" in detail
         monkeypatch.setattr(speech.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+        speech.forget_ffmpeg()  # cached until forgotten (or PATH changes)
         _set(stt_model="base")
         assert speech.LocalSTT().ready() == (
             True,
@@ -363,6 +370,8 @@ class TestLocalSTT:
             "device": "cpu",
             "compute_type": "int8",
             "download_root": str(tmp_path / "voice" / "whisper"),
+            "cpu_threads": speech.whisper_threads("final"),
+            "num_workers": 1,
         }
         assert (tmp_path / "voice" / "whisper").is_dir()
         path, existed, size = whisper.seen_paths[0]
@@ -494,6 +503,41 @@ class TestLocalStream:
             speech, "_import", lambda name: {"faster_whisper": fw, "numpy": np}[name]
         )
         return seen
+
+    def test_a_pass_is_greedy_once_with_its_tokens_capped(self, model, monkeypatch):
+        from array import array
+
+        seen: list = []
+
+        class _Model:
+            def transcribe(self, audio, temperature=None, max_new_tokens=None, **kw):
+                seen.append((temperature, max_new_tokens))
+                return iter(()), SimpleNamespace(language="en")
+
+        monkeypatch.setattr(speech.LocalSTT, "_model", lambda self, name="": _Model())
+        monkeypatch.setattr(
+            speech,
+            "_import",
+            lambda name: SimpleNamespace(
+                float32="f4", frombuffer=lambda raw, dtype: [0.0] * (len(raw) // 4)
+            ),
+        )
+        run = speech.LocalSTT().stream_transcriber("en")
+        assert run(array("f", [0.0] * 32000), "") == []  # a 2 s window
+        assert seen == [(0.0, speech.STREAM_TOKENS + 2 * speech.STREAM_TOKENS_PER_S)]
+
+    def test_the_fast_knobs_reach_the_model(self, model, monkeypatch):
+        from array import array
+
+        monkeypatch.setattr(speech, "STREAM_BEAM", 2)
+        monkeypatch.setattr(speech, "STREAM_VOCAB", "Over. Disregard.")
+        run = speech.LocalSTT().stream_transcriber("en")
+        run(array("f", [0.0]), "earlier words")
+        _audio, kw = model["calls"][0]
+        assert kw["beam_size"] == 2
+        # The vocabulary leads the prompt, never as hotwords (the fast tier).
+        assert kw["initial_prompt"] == "Over. Disregard.. earlier words"
+        assert "hotwords" not in kw
 
     def test_a_pass(self, model):
         from array import array
@@ -1697,3 +1741,359 @@ class TestDescribeAdditions:
         assert speech.describe()["stream_model"] == "tiny.en"
         _set(stt_backend="openai", stt_url="https://api.openai.com/v1")
         assert speech.describe()["stream_model"] == ""  # it does not stream
+
+
+# --------------------------------------------------------------------------- #
+# The voice chain (TtsChain): fallback, health, one voice per reply
+# --------------------------------------------------------------------------- #
+class _Piper(speech.Backend):
+    """A stand-in for the local piper voice: always ready, says WAV."""
+
+    id, kind, label = "local", "tts", "piper on this computer"
+
+    def __init__(self, ok=True):
+        self.ok = ok
+        self.spoken: list = []
+        self.warmed = 0
+        self.during = None  # called inside speak (sees the chain mid-flight)
+
+    def ready(self):
+        return self.ok, "piper voice en_US-lessac-medium on this computer"
+
+    def engine_name(self):
+        return "piper"
+
+    def speak(self, text, voice=""):
+        self.spoken.append(text)
+        if self.during:
+            self.during()
+        return b"RIFFpiper", "audio/wav"
+
+    def warm(self, prime=True):
+        self.warmed += 1
+        return "loaded"
+
+
+def _refused_port() -> int:
+    """A loopback port nobody listens on (connect → refused at once)."""
+    import socket
+
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+@pytest.fixture
+def chain(monkeypatch):
+    """The configured voice is a local OpenAI-compatible host (Voice Lab's
+    shape), piper is the fallback; the clock is ours."""
+    piper = _Piper()
+    host = speech.OpenAITTS()
+    monkeypatch.setattr(speech, "BACKENDS", {"stt": [], "tts": [host, piper]})
+    now = [1000.0]
+    monkeypatch.setattr(speech, "_now", lambda: now[0])
+    _set(tts_backend="openai", tts_url="http://127.0.0.1:8770/v1", tts_voice="Donna")
+    return SimpleNamespace(host=host, piper=piper, now=now, c=speech.TTS_CHAIN)
+
+
+class TestTtsChain:
+    def test_connect_refused_falls_back_to_piper_at_once(self, chain):
+        import time as _time
+
+        _set(tts_backend="openai", tts_url="http://127.0.0.1:%d/v1" % _refused_port())
+        t0 = _time.monotonic()
+        audio, mime, engine, fell_back = chain.c.speak(chain.host, "All done.")
+        took = _time.monotonic() - t0
+        assert (audio, mime, engine, fell_back) == (
+            b"RIFFpiper",
+            "audio/wav",
+            chain.piper,
+            True,
+        )
+        assert took < 1.0
+        assert chain.piper.spoken == ["All done."]
+        assert "could not reach 127.0.0.1" in chain.c.down_reason(chain.host)
+
+    def test_a_slow_host_is_cut_at_its_budget(self, chain, monkeypatch):
+        """A host that accepts the connection and never answers (F5 on a
+        CPU) costs the budget, not TTS_TIMEOUT — and the line alone does not
+        mark it down (slow); nothing back for host_hung_after does (hung)."""
+        import socket
+        import time as _time
+
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(8)  # the kernel completes the handshake; nobody answers
+        try:
+            monkeypatch.setattr(speech, "HOST_BUDGET", 0.3)
+            monkeypatch.setattr(speech, "HOST_BUDGET_PER_CHAR", 0.0)
+            monkeypatch.setattr(speech, "TTS_TIMEOUT", 0.8)  # hung after this
+            _set(
+                tts_backend="openai",
+                tts_url="http://127.0.0.1:%d/v1" % srv.getsockname()[1],
+            )
+            t0 = _time.monotonic()
+            _a, _m, engine, fell_back = chain.c.speak(chain.host, "Hello there.")
+            took = _time.monotonic() - t0
+            assert engine is chain.piper and fell_back is True
+            assert 0.25 <= took < 0.75
+            assert chain.c.down_reason(chain.host) == ""  # slow, not down
+            deadline = _time.monotonic() + 5
+            while not chain.c.down_reason(chain.host):
+                assert _time.monotonic() < deadline, "never marked hung"
+                _time.sleep(0.05)
+        finally:
+            srv.close()
+        assert "sent nothing back in 1 s" in chain.c.down_reason(chain.host)
+
+    def test_the_budget_grows_with_the_line_and_is_capped(self, chain, monkeypatch):
+        assert speech.host_budget("") == speech.HOST_BUDGET == 1.5
+        assert speech.host_budget("x" * 100) == pytest.approx(1.5 + 6.0)
+        assert speech.host_budget("x" * 1200) == speech.TTS_TIMEOUT
+        http = _Http(ctype="audio/mpeg", body=b"ID3")
+        monkeypatch.setattr(speech, "_http", http)
+        _a, _m, engine, fell_back = chain.c.speak(chain.host, "All done.")
+        assert engine is chain.host and fell_back is False
+        # The line's budget is the lane's wait; the socket waits for "hung".
+        assert http.calls[0].timeout == speech.host_hung_after("All done.")
+        assert speech.host_hung_after("x") == speech.TTS_TIMEOUT
+        assert speech.host_hung_after("x" * 1200) == 2 * speech.TTS_TIMEOUT
+
+    def test_a_dead_host_costs_one_attempt_per_window(self, chain, monkeypatch):
+        http = _Http()
+        http.raise_ = urllib.error.URLError(ConnectionRefusedError(111, "refused"))
+        monkeypatch.setattr(speech, "_http", http)
+        for line in ("One.", "Two.", "Three.", "Four."):
+            _a, _m, engine, fell_back = chain.c.speak(chain.host, line)
+            assert engine is chain.piper and fell_back is True
+        assert len(http.calls) == 1
+        assert chain.piper.spoken == ["One.", "Two.", "Three.", "Four."]
+
+    def test_a_5xx_or_no_audio_fails_over_a_4xx_does_not(self, chain, monkeypatch):
+        http = _Http(status=500, body=b'{"error": "CUDA error: unknown error"}')
+        monkeypatch.setattr(speech, "_http", http)
+        _a, _m, engine, _fb = chain.c.speak(chain.host, "Hi.")
+        assert engine is chain.piper
+        assert "answered 500" in chain.c.down_reason(chain.host)
+        chain.c.reset()
+        http.status, http.ctype, http.body = 200, "application/json", b"{}"
+        _a, _m, engine, _fb = chain.c.speak(chain.host, "Hi.")
+        assert engine is chain.piper  # no audio back: the engine's fault
+        chain.c.reset()
+        http.status, http.body = 400, b'{"error": "unknown voice Donna"}'
+        with pytest.raises(speech.SpeechError, match="answered 400") as err:
+            chain.c.speak(chain.host, "Hi.")
+        assert err.value.down is False
+        assert chain.c.down_reason(chain.host) == ""
+        assert chain.piper.spoken == ["Hi.", "Hi."]
+
+    def test_health_window_then_a_background_probe(self, chain, monkeypatch):
+        http = _Http()
+        http.raise_ = urllib.error.URLError("refused")
+        monkeypatch.setattr(speech, "_http", http)
+        chain.c.speak(chain.host, "One.")
+        assert len(http.calls) == 1
+        chain.now[0] += speech.HOST_DOWN_SECONDS - 1  # inside the window
+        assert chain.c.down_reason(chain.host)
+        chain.c.speak(chain.host, "Two.")
+        assert len(http.calls) == 1  # no probe yet, no attempt
+        chain.now[0] += 2  # past it: the probe runs (inline here), still down
+        chain.c.speak(chain.host, "Three.")
+        assert len(http.calls) == 2
+        probe = http.calls[1]
+        assert json.loads(probe.body)["input"] == speech.WARM_TEXT
+        assert probe.timeout == speech.PROBE_TIMEOUT
+        assert chain.piper.spoken == ["One.", "Two.", "Three."]
+        chain.now[0] += speech.HOST_DOWN_SECONDS - 1  # a new window
+        assert chain.c.down_reason(chain.host)
+        assert len(http.calls) == 2
+        http.raise_, http.ctype, http.body = None, "audio/mpeg", b"ID3"
+        chain.now[0] += 2
+        chain.c.down_reason(chain.host)  # the probe passes …
+        assert chain.c.down_reason(chain.host) == ""  # … healthy again
+
+    def test_the_probe_never_runs_on_the_request(self, chain, monkeypatch):
+        started: list = []
+        monkeypatch.setattr(speech, "_spawn", lambda target, name: started.append(name))
+        http = _Http()
+        http.raise_ = urllib.error.URLError("refused")
+        monkeypatch.setattr(speech, "_http", http)
+        chain.c.speak(chain.host, "One.")
+        chain.now[0] += speech.HOST_DOWN_SECONDS + 1
+        _a, _m, engine, _fb = chain.c.speak(chain.host, "Two.")
+        assert engine is chain.piper
+        assert len(http.calls) == 1  # the line did not wait on a probe
+        assert started == ["mindflock-voice-probe"]
+        chain.c.speak(chain.host, "Three.")
+        assert started == ["mindflock-voice-probe"]  # one probe at a time
+
+    def test_one_voice_per_reply(self, chain, monkeypatch):
+        """Back on the host only once it is healthy AND the reply on the
+        fallback has finished (nothing in flight, the gap after its last
+        line's playback)."""
+        http = _Http()
+        http.raise_ = urllib.error.URLError("refused")
+        monkeypatch.setattr(speech, "_http", http)
+        seen: list = []
+
+        def mid_line():  # the host recovers while piper says the line
+            chain.c.mark_up(chain.host)
+            seen.append(chain.c.pick(chain.host))
+
+        chain.piper.during = mid_line
+        chain.c.speak(chain.host, "The first line of a reply.")
+        assert seen[0][0] is chain.piper  # a line in flight holds the voice
+        chain.piper.during = None
+        line = "And another line of the same reply."  # 35 chars ≈ 2.5 s
+        _a, _m, engine, fb = chain.c.speak(chain.host, line)
+        assert engine is chain.piper and fb is True  # the reply keeps piper
+        assert len(http.calls) == 1
+        chain.now[0] += len(line) / speech.SPOKEN_CHARS_PER_SECOND  # it plays
+        chain.now[0] += speech.REPLY_GAP_SECONDS - 0.5
+        assert chain.c.pick(chain.host)[0] is chain.piper  # not quiet yet
+        chain.now[0] += 1  # the pause between replies
+        http.raise_, http.ctype, http.body = None, "audio/mpeg", b"ID3"
+        _a, _m, engine, fb = chain.c.speak(chain.host, "A new reply.")
+        assert engine is chain.host and fb is False
+        assert chain.c.pick(chain.host) == (chain.host, False, "")
+
+    def test_no_fallback_ready_keeps_the_failure(self, chain, monkeypatch):
+        chain.piper.ok = False
+        http = _Http()
+        http.raise_ = urllib.error.URLError("refused")
+        monkeypatch.setattr(speech, "_http", http)
+        with pytest.raises(speech.SpeechError, match="could not reach"):
+            chain.c.speak(chain.host, "One.")
+        with pytest.raises(speech.SpeechError, match="no fallback voice is ready"):
+            chain.c.speak(chain.host, "Two.")
+        assert len(http.calls) == 1  # the second line cost nothing
+        assert chain.piper.spoken == []
+
+    def test_a_fallback_never_falls_back_to_itself(self, chain, monkeypatch):
+        _set(tts_backend="local")
+        assert chain.c.fallback_for(chain.piper) is None
+
+    def test_a_warm_that_fails_marks_the_host_and_warms_piper(self, chain, monkeypatch):
+        http = _Http()
+        http.raise_ = urllib.error.URLError("refused")
+        monkeypatch.setattr(speech, "_http", http)
+        assert speech.warm("tts").startswith("skipped: could not reach")
+        assert chain.c.down_reason(chain.host)
+        assert speech.warm("tts") == "loaded"  # the fallback that speaks now
+        assert chain.piper.warmed == 1
+        assert len(http.calls) == 1
+
+
+class TestDescribeTruthfulVoice:
+    def test_healthy_host(self, chain):
+        r = speech.describe()["server_ready"]
+        assert r["tts"] is True and r["tts_backend"] == "openai"
+        assert r["tts_engine"] == "openai" and r["tts_fallback"] is False
+        assert r["tts_down"] == ""
+
+    def test_a_down_host_reports_the_fallback(self, chain):
+        chain.c.mark_down(chain.host, "could not reach 127.0.0.1:8770: refused")
+        r = speech.describe()["server_ready"]
+        assert r["tts"] is True
+        assert r["tts_backend"] == "openai"  # Settings keys its rows on it
+        assert r["tts_engine"] == "piper (fallback)" and r["tts_fallback"] is True
+        assert "could not reach" in r["tts_down"]
+        assert "speaking with piper voice" in r["tts_detail"]
+        assert "while it is down (could not reach" in r["tts_detail"]
+
+    def test_a_down_host_without_a_fallback_is_not_ready(self, chain):
+        chain.piper.ok = False
+        chain.c.mark_down(chain.host, "could not reach 127.0.0.1:8770: refused")
+        r = speech.describe()["server_ready"]
+        assert r["tts"] is False and r["tts_engine"] == ""
+        assert "no fallback voice is ready" in r["tts_detail"]
+        assert "Server voice not ready" in r["detail"]
+
+    def test_a_too_slow_host_says_so_and_is_not_down(self, chain, monkeypatch):
+        monkeypatch.setattr(speech, "_spawn", lambda target, name: None)
+        with chain.c._lock:
+            chain.c._learn(chain.host.health_key(), "Hello.", 9.0)
+        r = speech.describe()["server_ready"]
+        assert r["tts"] is True and r["tts_down"] == ""
+        assert r["tts_engine"] == "piper (fallback)" and r["tts_fallback"] is True
+        assert "while it is too slow (openai http://127.0.0.1:8770" in r["tts_detail"]
+
+
+class TestFfmpegLookup:
+    def test_looked_up_once(self, monkeypatch):
+        calls: list = []
+        monkeypatch.setattr(speech, "_installed", lambda name: True)
+        monkeypatch.setattr(speech, "_which", lambda name: calls.append(name))
+        for _ in range(25):
+            ok, detail = speech.LocalSTT().ready()
+            assert ok is True and "ffmpeg is not on PATH" in detail
+        assert calls == ["ffmpeg"]
+
+    def test_never_looked_up_on_the_caller(self, monkeypatch):
+        calls, spawned = [], []
+        monkeypatch.setattr(speech, "_installed", lambda name: True)
+        monkeypatch.setattr(speech, "_which", lambda name: calls.append(name))
+        monkeypatch.setattr(
+            speech, "_spawn", lambda target, name: spawned.append(target)
+        )
+        ok, detail = speech.LocalSTT().ready()
+        assert ok is True and "ffmpeg" not in detail  # not known yet
+        speech.LocalSTT().ready()
+        assert calls == [] and len(spawned) == 1  # one background lookup
+        spawned[0]()
+        assert calls == ["ffmpeg"]
+        assert "ffmpeg is not on PATH" in speech.LocalSTT().ready()[1]
+
+    def test_again_after_forget_a_path_change_or_the_recheck(self, monkeypatch, clock):
+        calls: list = []
+        monkeypatch.setattr(speech, "_which", lambda name: calls.append(name) or "/x")
+        assert speech.ffmpeg_path() == "/x" and speech.ffmpeg_path() == "/x"
+        assert len(calls) == 1
+        speech.forget_ffmpeg()
+        speech.ffmpeg_path()
+        assert len(calls) == 2
+        monkeypatch.setenv("PATH", os.environ.get("PATH", "") + ":/opt/new")
+        speech.ffmpeg_path()
+        assert len(calls) == 3
+        clock[0] += speech.FFMPEG_RECHECK_SECONDS + 1
+        speech.ffmpeg_path()
+        assert len(calls) == 4
+        speech.invalidate()  # after the one-click install
+        speech.ffmpeg_path()
+        assert len(calls) == 5
+
+
+class TestRewarmAfterAFailure:
+    def test_a_failed_host_warm_is_due_after_the_down_window(self, chain, monkeypatch):
+        """Not REWARM_SECONDS: a Voice Lab started a minute after a failed
+        warm is warmed before a real line meets its cold load."""
+        chain.piper.ok = False  # nothing to warm meanwhile
+        http = _Http()
+        http.raise_ = urllib.error.URLError("refused")
+        monkeypatch.setattr(speech, "_http", http)
+        assert speech.warm("tts").startswith("skipped: could not reach")
+        chain.c.mark_up(chain.host)  # e.g. the user restarted Voice Lab
+        assert speech._warm_due("tts") is False  # just tried
+        chain.now[0] += speech.HOST_DOWN_SECONDS + 1
+        assert speech._warm_due("tts") is True  # long before REWARM_SECONDS
+        http.raise_, http.ctype, http.body = None, "audio/wav", b"RIFF"
+        assert speech.warm("tts") == "loaded"
+        chain.now[0] += speech.HOST_DOWN_SECONDS + 1
+        assert speech._warm_due("tts") is False  # a good warm holds 600 s
+        chain.now[0] += speech.REWARM_SECONDS
+        assert speech._warm_due("tts") is True
+
+    def test_a_passing_probe_counts_as_a_warm(self, chain, monkeypatch):
+        http = _Http()
+        http.raise_ = urllib.error.URLError("refused")
+        monkeypatch.setattr(speech, "_http", http)
+        chain.c.speak(chain.host, "One.")
+        http.raise_, http.ctype, http.body = None, "audio/mpeg", b"ID3"
+        chain.now[0] += speech.HOST_DOWN_SECONDS + 1
+        chain.c.down_reason(chain.host)  # the probe runs (inline) and passes
+        assert chain.c.down_reason(chain.host) == ""
+        assert speech.describe()["warm"]["tts"] == "loaded"
+        assert speech._warm_due("tts") is False
+        assert len(http.calls) == 2  # the line's attempt + the probe

@@ -524,3 +524,55 @@ def test_quiet_still_serves_a_dialog_and_still_reports_real_errors(env):
     env.tm.alive = False  # clarify, but no pane: an oddity worth a 409
     r = client.get("/api/instances/w/dialog?quiet=1")
     assert r.status_code == 409 and r.json()["error"] == "no live session"
+
+
+# --------------------------------------------------------------------------- #
+# The last answer per session (the voice router's answer guard, cycle 4)       #
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def stamps(monkeypatch):
+    from backend.web.core import voice_actions
+
+    voice_actions._reset_for_tests()
+    monkeypatch.setattr(agent_io, "_TOGGLE_IDS", {})
+    yield voice_actions
+    voice_actions._reset_for_tests()
+
+
+def test_an_answer_stamps_the_session_for_the_voice_router(env, stamps):
+    """A settling ``/answer`` — the strip, the pop-up, a voice answer — stamps
+    when the session last got an answer; navigation and refusals don't. The
+    voice router then never counts a phrase begun before it."""
+    import time
+
+    did = _dialog().json()["id"]
+    assert _answer({"keys": ["Down"], "dialog_id": did}).status_code == 200
+    assert stamps.answered_at("w") == 0.0
+    env.tm.screen = _screen("claude_edit_file")  # the prompt changed
+    assert _answer({"keys": ["1"], "dialog_id": did}).status_code == 409
+    assert stamps.answered_at("w") == 0.0
+    env.tm.screen = _screen("claude_bash")
+    before = time.time()
+    assert _answer({"keys": ["1"], "dialog_id": did, "by": "user"}).status_code == 200
+    assert before <= stamps.answered_at("w") <= time.time()
+    assert stamps.answered_at("cx") == 0.0
+
+
+def test_an_unpinned_settling_answer_stamps_too(env, stamps):
+    """An answer with no ``dialog_id`` (an ask-select's later step, a typed
+    answer) still answered the dialog: it stamps like a pinned one, while
+    an unpinned navigation key does not."""
+    assert _answer({"keys": ["Down"]}).status_code == 200
+    assert stamps.answered_at("w") == 0.0
+    assert _answer({"keys": ["1"]}).status_code == 200
+    assert stamps.answered_at("w") > 0.0
+
+
+def test_a_multi_select_tick_does_not_stamp(env, stamps):
+    """A tick leaves the same dialog (same id) up: not an answer, so the next
+    tick by voice is not held back."""
+    env.tm.screen = _screen("claude2_ask_multi_w100").partition("\n")[2]
+    body = _dialog().json()
+    assert body.get("multi") is True, body
+    assert _answer({"keys": ["1"], "dialog_id": body["id"]}).status_code == 200
+    assert stamps.answered_at("w") == 0.0

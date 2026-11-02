@@ -123,17 +123,35 @@ class TestCommit:
         assert st.text == "Hello world how are you?"
         assert st.held_seconds == 0
 
-    def test_initial_prompt_carries_the_committed_text(self):
+    def test_initial_prompt_carries_the_committed_text_before_the_window(self):
         fake = Script(_words("one two"), _words("one two three"), [])
         st = ss.Stream(fake)
         st.feed(_secs(1))
         st.feed(_secs(1))
+        st._offset = 0.9  # as if cut at "two"'s end: both words left the window
         st.feed(_secs(1))
         assert [p for _n, p in fake.calls] == ["", "", "one two"]
+
+    def test_the_prompt_leaves_out_the_words_the_pass_hears_again(self):
+        """Whisper skips what the prompt says it heard: the committed words
+        still in the window stay out of it (PROMPT_IN_WINDOW)."""
+        st = ss.Stream(Script())
+        st._committed = [("Switch", 0.0, 0.4), ("to", 0.5, 0.7), ("bot", 1.0, 1.3)]
+        st._offset = 0.7  # the window starts at "to"'s end
+        assert st._prompt() == "Switch to"
+        st._offset = 0.0
+        assert st._prompt() == ""
+
+    def test_the_old_prompt_is_one_constant_away(self, monkeypatch):
+        monkeypatch.setattr(ss, "PROMPT_IN_WINDOW", True)
+        st = ss.Stream(Script())
+        st._committed = [("Switch", 0.0, 0.4), ("to", 0.5, 0.7), ("bot", 1.0, 1.3)]
+        assert st._prompt() == "Switch to bot"
 
     def test_the_prompt_is_the_last_200_characters_on_a_word_boundary(self):
         st = ss.Stream(Script([]))
         st._committed = [("word%03d" % i, i, i + 0.5) for i in range(60)]
+        st._offset = 60.0  # all of them before the window
         prompt = st._prompt()
         assert len(prompt) <= ss.PROMPT_CHARS
         assert prompt.split()[0].startswith("word") and len(prompt.split()[0]) == 7
@@ -161,8 +179,116 @@ class TestCommit:
         assert isinstance(st.last_ms, int) and st.last_ms >= 0
 
 
+class TestReheard:
+    """The committed words a pass hears again are found by their text
+    first (``_reheard``), by time only when that finds none. The passes are
+    the bench's (cycle 6 traces), times relative to the window."""
+
+    def test_jittered_times_lose_no_word(self):
+        # "Merge" committed ending 0.88; the next pass places it to 0.74 and
+        # the new "main" from 0.74 — before the old time filter's 0.78.
+        fake = Script(
+            [("Merge", 0.18, 0.88)],
+            [("Merge", 0.18, 0.88), ("mean", 0.88, 1.04)],
+            [("Merge", 0.18, 0.74), ("main", 0.74, 1.04), ("into", 1.04, 1.3)],
+            [("Merge", 0.18, 0.74), ("main", 0.74, 1.04), ("into", 1.04, 1.3)],
+        )
+        st = ss.Stream(fake)
+        st.feed(_secs(1))
+        assert st.feed(_secs(0.3)) == ("Merge", "mean")
+        st.feed(_secs(0.3))
+        assert st.feed(_secs(0.3)) == ("main into", "")
+        assert st.text == "Merge main into"
+
+    def test_the_old_time_first_order_lost_that_word(self, monkeypatch):
+        monkeypatch.setattr(ss, "MATCH_TEXT_FIRST", False)
+        fake = Script(
+            [("Merge", 0.18, 0.88)],
+            [("Merge", 0.18, 0.88), ("mean", 0.88, 1.04)],
+            [("Merge", 0.18, 0.74), ("main", 0.74, 1.04), ("into", 1.04, 1.3)],
+            [("Merge", 0.18, 0.74), ("main", 0.74, 1.04), ("into", 1.04, 1.3)],
+        )
+        st = ss.Stream(fake)
+        for _ in range(4):
+            st.feed(_secs(0.3))
+        assert st.text == "Merge into"
+
+    def test_a_reheard_run_inside_the_pass(self):
+        # A pass may open with a word the commit never had ("Or else").
+        st = ss.Stream(Script())
+        st._committed = [("parse", 1.3, 1.6), ("config.", 1.6, 2.1)]
+        hyp = [
+            ("Or", 1.55, 1.55),
+            ("else", 1.55, 1.7),
+            ("config", 1.7, 2.1),
+            ("over", 2.1, 2.8),
+        ]
+        assert st._reheard(hyp, 2.1) == 3
+
+    def test_a_new_word_that_repeats_the_last_is_not_reheard(self):
+        st = ss.Stream(Script())
+        st._committed = [("no", 0.0, 0.4)]
+        # The re-heard "no" was skipped: this one starts after the commit.
+        assert st._reheard([("no", 0.6, 1.0)], 0.4) == 0
+        # Both: only the first is the old one.
+        assert st._reheard([("no", 0.0, 0.4), ("no", 0.6, 1.0)], 0.4) == 1
+
+    def test_no_text_match_falls_back_to_time(self):
+        fake = Script(
+            _words("Mike"),
+            _words("Mike"),
+            # The re-heard word changed: nothing matches, the time filter drops it.
+            [("My", 0.0, 0.4), ("off", 0.5, 0.9)],
+        )
+        st = ss.Stream(fake)
+        st.feed(_secs(0.5))
+        assert st.feed(_secs(0.3)) == ("Mike", "")
+        assert st.feed(_secs(0.3)) == ("", "off")
+
+
+class TestAgreement:
+    """LocalAgreement-N (:data:`AGREE_PASSES`)."""
+
+    def test_three_passes_must_agree(self, monkeypatch):
+        monkeypatch.setattr(ss, "AGREE_PASSES", 3)
+        fake = Script(
+            _words("or is"),
+            _words("or is it"),
+            _words("Why is it hanging"),
+            _words("Why is it hanging"),
+            _words("Why is it hanging over"),
+        )
+        st = ss.Stream(fake)
+        assert st.feed(_secs(1)) == ("", "or is")
+        # LocalAgreement-2 would commit "or is" here.
+        assert st.feed(_secs(0.3)) == ("", "or is it")
+        assert st.feed(_secs(0.3)) == ("", "Why is it hanging")
+        assert st.feed(_secs(0.3)) == ("", "Why is it hanging")
+        assert st.feed(_secs(0.3)) == ("Why is it hanging", "over")
+
+    def test_the_older_passes_shift_with_a_commit(self, monkeypatch):
+        monkeypatch.setattr(ss, "AGREE_PASSES", 3)
+        fake = Script(
+            _words("one two"),
+            _words("one two three"),
+            _words("one two three four"),
+            # "one two" committed; the passes now hear what follows them.
+            [("three", 1.0, 1.4), ("four", 1.5, 1.9)],
+        )
+        st = ss.Stream(fake)
+        st.feed(_secs(1))
+        st.feed(_secs(0.3))
+        assert st.feed(_secs(0.3)) == ("one two", "three four")
+        # Two passes back said "three" too: three passes agree on it.
+        assert st.feed(_secs(0.3)) == ("three", "four")
+
+    def test_two_is_the_default(self):
+        assert ss.AGREE_PASSES == 2
+
+
 class TestPrune:
-    def test_audio_before_the_last_committed_word_is_dropped(self):
+    def test_a_pass_rehears_only_about_a_second_of_committed_words(self):
+        assert ss.REHEAR_SECONDS == 1.0
         fake = Script(
             [("one", 0.0, 0.5), ("two", 0.6, 1.0), ("three", 2.5, 2.9)],
             [
@@ -171,15 +297,41 @@ class TestPrune:
                 ("three", 2.5, 2.9),
                 ("four", 5.0, 5.5),
             ],
-            # The window now starts at 2.6 s: times are relative to it.
-            [("three", 0.0, 0.3), ("four", 2.4, 2.9), ("five", 3.1, 3.5)],
+            # The window now starts at 1.0 s: times are relative to it.
+            [("three", 1.5, 1.9), ("four", 4.0, 4.5), ("five", 4.7, 5.1)],
         )
         st = ss.Stream(fake)
         st.feed(_secs(3))
         assert st.feed(_secs(3)) == ("one two three", "four")
-        assert st.held_seconds == pytest.approx(6 - 2.6, abs=1e-3)
+        # Cut at the end of the last committed word that ends a second or
+        # more before "three" does: "two", at 1.0 s.
+        assert st.held_seconds == pytest.approx(6 - 1.0, abs=1e-3)
         assert st.feed(_secs(0.5)) == ("four", "five")
-        assert fake.calls[2][0] == int(round((6.5 - 2.6) * RATE))
+        assert fake.calls[2][0] == int(round((6.5 - 1.0) * RATE))
+        # "four" ends at 5.5 s: the cut moves to "three"'s end, 2.9 s.
+        assert st.held_seconds == pytest.approx(6.5 - 2.9, abs=1e-3)
+
+    def test_a_long_dictation_decodes_a_short_window(self):
+        """Every pass commits one more word: the window stays the tail plus
+        about a second, however long the phrase gets."""
+        passes, sizes = [], []
+        for n in range(2, 14):
+            # word i spans [i*0.5, i*0.5+0.4] in stream time
+            passes.append([("w%d" % i, i * 0.5, i * 0.5 + 0.4) for i in range(n)])
+        fake = Script(*passes)
+        st = ss.Stream(fake)
+        offsets = []
+        for _ in passes:
+            # relative times: the script answers in stream time, so shift by
+            # the window's start as the stream will see it
+            offsets.append(st._offset)
+            fake.passes[0] = [
+                (w, a - st._offset, b - st._offset) for w, a, b in fake.passes[0]
+            ]
+            st.feed(_secs(0.5))
+            sizes.append(st.held_seconds)
+        assert st.text.split()[:3] == ["w0", "w1", "w2"]
+        assert max(sizes[-6:]) <= ss.REHEAR_SECONDS + 1.0 + 1e-3
 
     def test_uncommitted_words_keep_their_audio(self):
         fake = Script(_words("um so"), _words("well then"))
@@ -196,8 +348,18 @@ class TestPrune:
         st = ss.Stream(fake)
         st.feed(_secs(3))
         assert st.feed(_secs(3)) == ("one two", "three")
-        # cut at min(two's end - 0.3, three's start - 0.3) = 0.7 s
-        assert st.held_seconds == pytest.approx(6 - 0.7, abs=1e-3)
+        # No committed word ends a second before "two" does: nothing is cut.
+        assert st.held_seconds == pytest.approx(6, abs=1e-3)
+
+    def test_the_cut_never_reaches_under_the_tail(self):
+        st = ss.Stream(Script())
+        st._committed = [("a", 0.0, 0.4), ("b", 3.0, 3.4)]
+        st._tail = [("c", 0.2, 3.9)]  # a tail word that (oddly) starts early
+        st._audio = _secs(5)
+        st._cut()
+        # "a" ends 2 s before "b" (cut there, 0.4 s) — but "c" starts at
+        # 0.2 s: its audio stays.
+        assert st.held_seconds == pytest.approx(5, abs=1e-3)
 
     def test_a_window_with_no_words_keeps_its_last_second(self):
         st = ss.Stream(Script([], []))
@@ -223,8 +385,8 @@ class TestWindow:
         assert st.feed(_secs(4)) == ("a b", "c")
         assert fake.calls[1][0] == 8 * RATE
         assert st.last_window_s == 8.0
-        # Then the usual prune: cut at b's end - 0.3 = 5.2 s.
-        assert st.held_seconds == pytest.approx(10 - 5.2, abs=1e-3)
+        # Then the usual prune: cut at a's end, 2.5 s (b ends at 5.5 s).
+        assert st.held_seconds == pytest.approx(10 - 2.5, abs=1e-3)
         assert st.text == "a b"
 
     def test_a_tail_that_never_settles_is_committed_at_the_edge(self):
@@ -256,6 +418,71 @@ class TestWindow:
             st.feed(_secs(9))
         assert st.finish()["committed"] == "late"
         assert fake.calls[1][0] == 8 * RATE
+
+
+class TestEcho:
+    """Whisper's edge echo — a sliver repeating the word before as a pass's
+    last word — is never committed. The passes are the bench's own (cycle 1
+    judge: "Disregard that that.", "over. out. out." 3/48)."""
+
+    def _run(self, passes, loud, quiet=0.6, accurate=None):
+        st = ss.Stream(Script(*passes), accurate)
+        st.feed(_secs(loud[0]))
+        for size in loud[1:]:
+            st.feed(_secs(size))
+        st.feed(_secs(quiet, 0.0))
+        st.finish()
+        return st.text
+
+    def test_disregard_that_that(self):
+        passes = [
+            [(" disregard", 0.08, 0.76)],
+            [(" Disregard", 0.08, 0.98), (" that.", 0.98, 1.22)],
+            [(" Disregard", 0.08, 0.98), (" that", 0.98, 1.24), (" that.", 1.24, 1.32)],
+        ]
+        text = self._run(passes, [1.05, 0.3, 0.3], accurate=lambda a: "disregard that")
+        assert text == "Disregard that"
+
+    def test_over_out_out(self):
+        passes = [
+            [(" over.", 0.24, 0.86)],
+            [(" over.", 0.0, 0.84), (" out.", 1.4, 1.46), (" out.", 1.46, 1.54)],
+            [(" over.", 0.0, 0.86), (" out.", 1.4, 1.52), (" out.", 1.52, 1.68)],
+        ]
+        assert self._run(passes, [1.37, 0.3, 0.3]) == "over. out."
+
+    def test_fences_work_work(self):
+        passes = [
+            [(" Fences", 0.08, 1.92), (" were", 1.92, 2.22)],
+            [(" Fences", 0.08, 1.92), (" Work", 1.92, 2.32), (" work.", 2.32, 2.44)],
+            [(" Fences", 0.08, 1.9), (" Work", 1.9, 2.32), (" work.", 2.32, 2.46)],
+        ]
+        assert self._run(passes, [2.25, 0.3, 0.3]) == "Fences Work"
+
+    def test_an_echo_of_the_last_committed_word(self):
+        st = ss.Stream(
+            Script([("that", 0.2, 0.5)], [("that", 0.2, 0.5)], [("that.", 0.5, 0.58)])
+        )
+        st.feed(_secs(0.6))
+        assert st.feed(_secs(0.3)) == ("that", "")
+        assert st.feed(_secs(0.3)) == ("", "")
+
+    def test_a_real_repeat_stays(self):
+        st = ss.Stream(Script([("no", 0.1, 0.4), ("no.", 0.5, 0.8)]))
+        assert st.feed(_secs(1)) == ("", "no no.")
+
+    @pytest.mark.parametrize(
+        "before, word, echo",
+        [
+            (("that", 0.98, 1.24), ("that.", 1.24, 1.32), True),
+            (("out.", 1.4, 1.52), ("Out", 1.52, 1.68), True),
+            (("out.", 1.4, 1.52), ("out.", 1.52, 1.8), False),  # too long
+            (("out.", 1.0, 1.2), ("out.", 1.5, 1.6), False),  # a gap before it
+            (("in", 1.0, 1.2), ("out", 1.2, 1.3), False),  # another word
+        ],
+    )
+    def test_echo(self, before, word, echo):
+        assert ss._echo(before, word) is echo
 
 
 class TestSilence:
@@ -559,10 +786,26 @@ class TestFinal:
 
     def test_a_failed_fast_flush_still_raises(self):
         acc = Accurate("x")
-        st = ss.Stream(Script(_words("x"), speech.SpeechError("boom")), acc)
-        st.feed(_secs(1))  # "x" waits in the tail: the flush must hear again
+        st = ss.Stream(
+            Script(speech.SpeechError("first"), speech.SpeechError("boom")), acc
+        )
         with pytest.raises(speech.SpeechError):
+            st.feed(_secs(1))  # no pass heard the chunk: the flush must
+        with pytest.raises(speech.SpeechError, match="boom"):
             st.finish()
+
+    def test_a_tail_already_heard_stands_without_a_flush(self):
+        # The accurate pass is on its way and every loud frame was in a fast
+        # pass: the flush would only re-agree on the tail, on the final's cores.
+        acc = Accurate("Run the tests.")
+        fake = Script(_words("run the tick"), _words("run the tests"))  # two only
+        st = ss.Stream(fake, acc)
+        assert st.feed(_secs(1)) == ("", "run the tick")
+        # The pause's pass heard 0.3 s past the last word: that is enough.
+        assert st.feed(_secs(0.3, level=0.0)) == ("run the", "tests")
+        out = st.finish()
+        assert out["committed"] == "tests" and out["final"] == "Run the tests."
+        assert len(fake.calls) == 2
 
     def test_open_stream_passes_the_accurate_pass_on(self):
         acc = Accurate("ok then")
@@ -615,22 +858,44 @@ class TestFlushSkip:
         assert len(fake.calls) == 2
 
 
+def _pause(st, chunks=2):
+    """The quiet chunks a client sends after the speech, 300 ms each (two:
+    0.6 s, past :data:`speech_stream.EARLY_QUIET_SECONDS`)."""
+    for _ in range(chunks):
+        st.feed(_secs(0.3, level=0.0))
+
+
+def _ran(st, calls, n=1):
+    """Wait until the accurate pass was called ``n`` times (it runs on its
+    own thread)."""
+    import time as _t
+
+    end = _t.monotonic() + 2
+    while len(calls) < n and _t.monotonic() < end:
+        _t.sleep(0.002)
+    assert len(calls) >= n
+
+
 class TestEarly:
     """The accurate pass starts on the quiet chunk that ends the speech, so
     ``finish`` finds it running or done."""
 
     def test_a_quiet_chunk_starts_the_pass_and_finish_takes_it(self):
+        assert ss.EARLY_QUIET_SECONDS == 0.5
         acc = Accurate("Run the tests, over.")
         fake = Script(_words("run the tick over"), _words("run the tick over"))
         st = ss.Stream(fake, acc)
         st.feed(_secs(2))
         assert acc.calls == []
         st.feed(_secs(0.3, level=0.0))
-        assert acc.calls == [int(2.3 * RATE)]  # started, on the phrase so far
+        assert st._early is None  # 0.3 s of quiet: a pause between words
+        st.feed(_secs(0.3, level=0.0))
+        _ran(st, acc.calls)
+        assert acc.calls == [int(2.6 * RATE)]  # started, on the phrase so far
         out = st.finish()
         assert out["final"] == "Run the tests, over."
         assert out["final_early"] is True
-        assert acc.calls == [int(2.3 * RATE)]  # not run again
+        assert acc.calls == [int(2.6 * RATE)]  # not run again
         assert out["final_wait_ms"] <= out["final_ms"]
         assert st.final_early is True
 
@@ -638,8 +903,8 @@ class TestEarly:
         acc = Accurate("x")
         st = ss.Stream(Script(_words("x"), _words("x")), acc)
         st.feed(_secs(1))
-        for _ in range(3):
-            st.feed(_secs(0.3, level=0.0))
+        _pause(st, 4)
+        _ran(st, acc.calls)
         assert len(acc.calls) == 1
         assert st.finish()["final_early"] is True
 
@@ -647,21 +912,24 @@ class TestEarly:
         acc = Accurate("x y")
         st = ss.Stream(Script(*([_words("x y")] * 4)), acc)
         st.feed(_secs(1))
-        st.feed(_secs(0.3, level=0.0))  # early pass on 1.3 s
+        _pause(st)  # early pass on 1.6 s
+        _ran(st, acc.calls)
         st.feed(_secs(1))  # the person went on: that pass is stale
         out = st.finish()
         assert out["final"] == "x y" and out["final_early"] is False
-        assert acc.calls == [int(1.3 * RATE), int(2.3 * RATE)]  # a fresh one
+        assert acc.calls == [int(1.6 * RATE), int(2.6 * RATE)]  # a fresh one
         assert out["final_wait_ms"] == out["final_ms"]
 
     def test_a_stale_pass_is_replaced_on_the_next_quiet_chunk(self):
         acc = Accurate("x y")
-        st = ss.Stream(Script(*([_words("x y")] * 5)), acc)
+        st = ss.Stream(Script(*([_words("x y")] * 6)), acc)
         st.feed(_secs(1))
-        st.feed(_secs(0.3, level=0.0))
+        _pause(st)
+        _ran(st, acc.calls)
         st.feed(_secs(1))
-        st.feed(_secs(0.3, level=0.0))  # the stale one is done: a new one
-        assert acc.calls == [int(1.3 * RATE), int(2.6 * RATE)]
+        _pause(st)  # the stale one is done: a new one
+        _ran(st, acc.calls, 2)
+        assert acc.calls == [int(1.6 * RATE), int(3.2 * RATE)]
         assert st.finish()["final_early"] is True
         assert len(acc.calls) == 2
 
@@ -669,13 +937,13 @@ class TestEarly:
         acc = Accurate("hi")
         st = ss.Stream(Script(_words("hi"), _words("hi")), acc)
         st.feed(_secs(0.1))
-        st.feed(_secs(0.3, level=0.0))
-        assert acc.calls == []
+        _pause(st)
+        assert acc.calls == [] and st._early is None
 
     def test_without_an_accurate_pass_nothing_starts(self):
         st = ss.Stream(Script(_words("hi"), _words("hi")))
         st.feed(_secs(1))
-        st.feed(_secs(0.3, level=0.0))
+        _pause(st)
         assert st._early is None
 
     def test_a_failed_early_pass_leaves_the_fast_text(self, caplog):
@@ -684,7 +952,7 @@ class TestEarly:
             Accurate(speech.SpeechError("boom")),
         )
         st.feed(_secs(1))
-        st.feed(_secs(0.3, level=0.0))
+        _pause(st)
         with caplog.at_level("WARNING", logger=ss.__name__):
             assert st.finish() == {"committed": "", "partial": ""}
         assert "accurate pass failed (boom)" in caplog.text
@@ -697,12 +965,13 @@ class TestEarly:
         acc = Accurate("too late", gate=gate)
         st = ss.Stream(Script(_words("hello"), _words("hello")), acc)
         st.feed(_secs(1))
-        st.feed(_secs(0.3, level=0.0))
+        _pause(st)
+        _ran(st, acc.calls)
         with caplog.at_level("WARNING", logger=ss.__name__):
             out = st.finish()
         gate.set()
         assert out == {"committed": "", "partial": ""}
-        assert "took over 0.1s on 1.3s" in caplog.text
+        assert "took over 0.1s on 1.6s of audio (still running)" in caplog.text
 
     def test_finish_waits_are_recorded(self):
         assert ss.final_stats() == {
@@ -720,7 +989,10 @@ class TestEarly:
         stats = ss.final_stats()
         assert stats["samples"] == 3
         assert stats["typical_ms"] >= 0 and stats["p95_ms"] >= stats["typical_ms"]
-        assert stats["expect_ms"] == stats["p95_ms"]  # measured now
+        # Measured now: the median plus the margin (fast fakes: the floor).
+        assert stats["expect_ms"] == max(
+            ss.EXPECT_FLOOR_MS, stats["typical_ms"] + ss.EXPECT_MARGIN_MS
+        )
         # A phrase that skipped the pass records nothing.
         st = ss.Stream(Script(_words("hi"), _words("hi")), Accurate("hi"))
         st.feed(_secs(0.1))
@@ -733,7 +1005,7 @@ class TestEarly:
         for _ in range(ss.STATS_KEEP + 5):
             ss._record(7)
         assert ss.final_stats()["samples"] == ss.STATS_KEEP
-        assert ss.final_stats()["expect_ms"] == 7
+        assert ss.final_stats()["expect_ms"] == ss.EXPECT_FLOOR_MS  # 7 + 250, held
 
     def test_expect_never_exceeds_the_timeout(self):
         for _ in range(ss.STATS_MIN):
@@ -751,23 +1023,35 @@ class TestEarly:
         assert st.finish() == {"committed": "", "partial": ""}
         assert acc.calls == []
 
-    def test_a_running_stale_pass_is_not_doubled(self):
+    def test_a_running_stale_pass_does_not_block_the_next(self):
         import threading
 
-        gate = threading.Event()
-        acc = Accurate("x y", gate=gate)
-        st = ss.Stream(Script(*([_words("x y")] * 5)), acc)
+        first, second = threading.Event(), threading.Event()
+        gates = [first, second]
+
+        class Gated(Accurate):
+            def __call__(self, audio):
+                self.calls.append(len(audio))
+                gates[len(self.calls) - 1].wait(5)
+                return self.text
+
+        acc = Gated("x y")
+        st = ss.Stream(Script(*([_words("x y")] * 6)), acc)
         st.feed(_secs(1))
-        st.feed(_secs(0.3, level=0.0))  # the early pass starts and blocks
-        st.feed(_secs(1))  # the person went on: stale
-        st.feed(_secs(0.3, level=0.0))  # still running: no second thread
-        assert len(acc.calls) == 1
-        assert st._early is not None and st._early.stale is True
-        gate.set()
-        out = st.finish()  # stale: a fresh pass over the whole phrase
-        assert acc.calls == [int(1.3 * RATE), int(2.6 * RATE)]
-        assert out["final"] == "x y" and out["final_early"] is False
-        assert out["final_wait_ms"] == out["final_ms"]
+        _pause(st)  # the early pass starts and blocks
+        _ran(st, acc.calls)
+        st.feed(_secs(1))  # the person went on: stale, and abandoned
+        stale = st._early
+        assert stale.stale is True and stale.job.state == "running"
+        assert stale.job.abandoned is True
+        _pause(st)  # the next one starts at once: the lane was let go
+        _ran(st, acc.calls, 2)
+        assert st._early is not stale and st._early.job.state == "running"
+        second.set()
+        out = st.finish()  # the new one covers the whole phrase
+        first.set()
+        assert acc.calls == [int(1.6 * RATE), int(3.2 * RATE)]
+        assert out["final"] == "x y" and out["final_early"] is True
 
     def test_the_percentiles_and_the_budget(self):
         timeout = int(ss.FINAL_TIMEOUT_S * 1000)
@@ -782,7 +1066,8 @@ class TestEarly:
         ss._record(300)
         three = ss.final_stats()
         assert (three["typical_ms"], three["p95_ms"]) == (300, 500)
-        assert three["expect_ms"] == 500  # STATS_MIN in: the measured p95
+        # STATS_MIN in: the median + twice the median deviation (200 → 400).
+        assert three["expect_ms"] == 700
         ss.clear()
         assert ss.final_stats()["samples"] == 0
         for ms in range(10, 210, 10):  # 20 waits: 10, 20, ... 200
@@ -790,7 +1075,8 @@ class TestEarly:
         full = ss.final_stats()
         assert full["samples"] == ss.STATS_KEEP == 20
         assert full["typical_ms"] == 110
-        assert full["p95_ms"] == 190 == full["expect_ms"]
+        assert full["p95_ms"] == 190
+        assert full["expect_ms"] == 110 + ss.EXPECT_MARGIN_MS  # deviation 50
         ss._record(1000)  # the oldest goes
         assert list(ss._WAITS)[0] == 20 and ss.final_stats()["samples"] == 20
 
@@ -851,3 +1137,50 @@ class TestRegistry:
         armed[0][1]()
         assert ss.get_stream(sid) is None
         assert len(armed) == 1  # nothing open: not re-armed
+
+
+class TestTurn:
+    """:meth:`Stream.turn`: the words so far, the quiet since the last loud
+    frame and whether a pass heard it all, read by ``core.speech_turn``."""
+
+    def test_nothing_fed_is_empty(self):
+        assert ss.Stream(Script()).turn() == {
+            "p": 0.0,
+            "hold_ms": 1100,
+            "reason": "empty",
+        }
+
+    def test_reads_committed_and_tail(self):
+        fake = Script(_words("Fix the failing"), _words("Fix the failing test and"))
+        st = ss.Stream(fake)
+        st.feed(_secs(1))
+        assert st.turn()["reason"] == "default"
+        st.feed(_secs(1.5))
+        assert st.text == "Fix the failing"  # "test and" is the tail
+        assert st.turn()["reason"] == "connector"
+
+    def test_quiet_raises_p(self):
+        fake = Script(_words("The diff looks wrong."), _words("The diff looks wrong."))
+        st = ss.Stream(fake)
+        st.feed(_secs(2))
+        loud = st.turn()
+        st.feed(_secs(0.6, 0.0))  # the tail settles on this quiet chunk's pass
+        quiet = st.turn()
+        assert loud["reason"] == quiet["reason"] == "sentence"
+        assert loud["p"] < quiet["p"] < 1.0
+
+    def test_loud_audio_no_pass_heard_is_unheard(self, monkeypatch):
+        fake = Script(_words("Over."))
+        st = ss.Stream(fake)
+        st.feed(_secs(0.5))
+        assert st.turn()["reason"] == "control"
+        # The next pass is dropped from the lane: the loud chunk stays unheard.
+        monkeypatch.setattr(st, "_pass", lambda: None)
+        st.feed(_secs(0.3))
+        assert st.turn() == {"p": 0.3, "hold_ms": 1100, "reason": "unheard"}
+
+    def test_the_persons_words(self):
+        st = ss.Stream(Script(_words("Fix it roger")))
+        st.feed(_secs(1.5))
+        assert st.turn()["reason"] == "default"
+        assert st.turn({"send": ["roger"]})["reason"] == "control"

@@ -3,6 +3,7 @@
  * typed text filters (substring beats subsequence). */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { newSession, setView } from "../../lib/viewMode";
 import { useConfig, useExtensions } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { Modal } from "../Modal";
@@ -32,6 +33,7 @@ import { settingsActions } from "./settingsSearch";
 import { VERIFY_BLURB } from "../../lib/vocab";
 import { TOURS, TOUR_IDS } from "../../lib/tours";
 import { replayTour } from "../onboarding/replayTour";
+import { openSkyGuide } from "../flights/SkyGuide";
 import { replayPeopleTour } from "../settings/screens/peer/replayPeopleTour";
 
 /** The focused session's entries, in palette order (the table holds what
@@ -39,6 +41,7 @@ import { replayPeopleTour } from "../settings/screens/peer/replayPeopleTour";
  * Merge is last — the most consequential, and deliberately unbound. */
 const PALETTE_ACTIONS: SessionActionId[] = [
   "rename",
+  "move",
   "message",
   "queue",
   "askWorkers",
@@ -128,13 +131,19 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     // Order: New, then the places you open, then what acts on the focused
     // session, then Focus rows, then extensions — commands before sessions, so
     // an empty query reads as a menu rather than as the session list again.
-    acts.push({ label: "New session…", hint: "Alt+N", top: TOP.new, run: () => ui.openDialogFor("new-session") });
+    acts.push({ label: "New session…", hint: "Alt+N", top: TOP.new, run: () => newSession() });
 
     // --- Dialog openers ----------------------------------------------------
     // Each Intake tab gets its own entry: the queue you want is the thing you
     // have in mind, and typing "issues" should land on it directly rather than
     // on a dialog you then have to navigate.
-    acts.push({ label: "Open Intake", hint: "Alt+I", top: TOP.intake, run: () => ui.openDialogFor("intake") });
+    acts.push({
+      label: "Intake…",
+      hint: "Alt+I",
+      top: TOP.intake,
+      keywords: "sources tickets pull requests issues waiting to fly",
+      run: () => ui.openDialogFor("intake"),
+    });
     acts.push({ label: "Intake: Tickets", run: () => ui.openDialogFor("intake", "tickets") });
     acts.push({ label: "Intake: GitHub PRs", run: () => ui.openDialogFor("intake", "prs") });
     acts.push({ label: "Intake: GitHub issues", run: () => ui.openDialogFor("intake", "issues") });
@@ -146,9 +155,10 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
     // The other end of the same arc, so it sits with the Intake entries rather
     // than down among the settings screens.
     acts.push({
-      label: "Verify — " + VERIFY_BLURB,
+      label: "Verify…",
       hint: "Alt+V",
       top: TOP.verify,
+      keywords: VERIFY_BLURB + " checklists",
       run: () => ui.openDialogFor("verify"),
     });
     acts.push({
@@ -157,6 +167,31 @@ export function CommandPalette({ host }: { host: KeymapHost }) {
       top: TOP.schedule,
       keywords: "templates cron recurring nightly timer daily weekly",
       run: () => ui.openDialogFor("schedule"),
+    });
+    // The main area's other view (lib/viewMode): the same sessions as panes
+    // or as lines on the sky — and the sky's flyway shelf, where flyways are
+    // made, edited and flown.
+    acts.push(
+      ui.view === "sky"
+        ? { label: "Switch to the grid", hint: "Ctrl+Y", keywords: "view panes terminals grid", run: () => setView("grid") }
+        : { label: "Switch to the Sky", hint: "Ctrl+Y", keywords: "view sky canvas lines bird board flock map flights", run: () => setView("sky") }
+    );
+    acts.push({
+      label: "Stops…",
+      hint: "on the Sky's shelf",
+      keywords: "flights saved stops plan perch canvas shelf new",
+      run: () => ui.showFlyways(),
+    });
+    // The Sky's long-form guide (flights/SkyGuide): the sky shows it, so show
+    // the sky first.
+    acts.push({
+      label: "Learn the Sky",
+      hint: "the guide",
+      keywords: "help how guide tutorial sky lines stops bird keys",
+      run: () => {
+        setView("sky");
+        openSkyGuide();
+      },
     });
     // Customize and its tabs: the extras you opt into.
     acts.push({ label: "Customize…", hint: "choose sidebar bars", run: () => ui.openDialogFor("customize") });

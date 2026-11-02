@@ -31,15 +31,16 @@ import { ShortcutsSheet } from "./components/palette/ShortcutsSheet";
 import { NewSessionDialog } from "./components/dialogs/NewSessionDialog";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
 import { IntakeDialog } from "./components/intake/IntakeDialog";
+import { VerifyDialog } from "./components/dialogs/VerifyDialog";
 import { CustomizeDialog } from "./components/customize/CustomizeDialog";
 import { PromptsDialog } from "./components/dialogs/PromptsDialog";
-import { VerifyDialog } from "./components/dialogs/VerifyDialog";
 import { CommitDialog } from "./components/dialogs/CommitDialog";
 import { PeerSessionViewer } from "./components/PeerSessionViewer";
 import { MakePrDialog } from "./components/dialogs/MakePrDialog";
 import { AskDialog } from "./components/dialogs/AskDialog";
 import { ChatPanel } from "./components/chat/ChatPanel";
 import { RenameDialog } from "./components/dialogs/RenameDialog";
+import { MoveSessionDialog } from "./components/dialogs/MoveSessionDialog";
 import { GuestNameDialog } from "./components/dialogs/GuestNameDialog";
 import { RecentDialog } from "./components/dialogs/RecentDialog";
 import { SetupDialog, useDoctorAutoShow } from "./components/dialogs/SetupDialog";
@@ -53,6 +54,8 @@ import { Breaks } from "./components/breaks/Breaks";
 import { openSettings } from "./lib/openSettings";
 import { FolderPickerWindow } from "./components/FolderPickerWindow";
 import { installSurfaceHash } from "./lib/surfaceHash";
+import { installViewFlip } from "./lib/viewMode";
+import { SkyView } from "./components/flights/SkyView";
 
 /** At or under this window width the main screen goes single-column. */
 const NARROW_PX = 760;
@@ -297,9 +300,13 @@ export default function App() {
   }, []);
 
   useEffect(() => installKeymap(host), [host]);
-  // New / Intake / Verify / Settings / Templates in the URL hash: browser
+  // New / Intake / Verify / Schedule / Settings (and the old #flights links)
+  // in the URL hash: browser
   // Back closes the open one, a link opens it (lib/surfaceHash).
   useEffect(() => installSurfaceHash(), []);
+  // Grid ⇄ sky: each session's pane flies to its line and back (lib/viewMode).
+  useEffect(() => installViewFlip(), []);
+  const view = useUi((s) => s.view);
 
   return (
     <>
@@ -311,7 +318,9 @@ export default function App() {
         onOpenChat={() => toggleSpecial("chat")}
         onOpenTodo={() => useUi.getState().openDialogFor("todo")}
       />
-      <TerminalGrid specialPanes={specialPanes} />
+      {/* The main area: the grid of panes, or the sky — the same sessions,
+          the same focused one, drawn as lines (lib/viewMode.ts). */}
+      {view === "sky" ? <SkyView /> : <TerminalGrid specialPanes={specialPanes} />}
 
       {/* Dialogs (each renders null unless open) */}
       <NewSessionDialog />
@@ -324,6 +333,7 @@ export default function App() {
       <PeerSessionViewer />
       <MakePrDialog />
       <RenameDialog />
+      <MoveSessionDialog />
       <GuestNameDialog />
       <RecentDialog />
       <SetupDialog />

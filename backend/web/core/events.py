@@ -140,6 +140,12 @@ EVENT_NAMES = (
     # runs say the same through ``test_plan_checked``; this is the hand-answered
     # half, so the bell hears about every failed checklist. Once per transition.
     "session.test_plan_step_failed",
+    # A PERSON answered the last open human item of a checklist (data:
+    # {"plan", "title", "branch"}). The hand-answered twin of
+    # ``test_plan_checked``: once per transition from "something is yours" to
+    # "nothing is", so a flight's verify step waiting on you moves on at once
+    # rather than at the driver's next pass.
+    "session.test_plan_settled",
     # A run was RELEASED without ever reporting (data: {"plan", "title",
     # "run_session", "hours", "reason"}). Two things end a run this way — an
     # agent window that died, and the two-hour deadline — and both used to be
@@ -179,6 +185,12 @@ EVENT_NAMES = (
     # {"name": str}). Every open browser — the owner's others, a guest's —
     # re-reads the alias map on it, so a rename shows everywhere at once.
     "session.renamed",
+    # A session's workspace moved to a new folder (POST /api/instances/
+    # {title}/move, core.move_session): ``old``/``new`` are the folders, data:
+    # {"title", "from", "to"}. Or the move failed, data: {"title", "error",
+    # "path"} (``path`` = where the workspace is now).
+    "session.moved",
+    "session.move_failed",
     # A background job the agent left running first passed the duration it
     # was expected to take (a person's, the agent's, or the command's own
     # MINDFLOCK_EXPECT=; see providers.claude_background) — at 1×, not the
@@ -241,6 +253,24 @@ EVENT_NAMES = (
     # (data: {"run", "name", "shipped", "failed", "cost_usd", "duration_s",
     # "detail"}).
     "run.finished",
+    # Flights (core.flight_driver is their ONE emitter; ``session`` is the
+    # flight's session title, "" before it has one). docs/flights.md.
+    #
+    # Any state / cursor / step change of a flight (data: {"id", "plan_name",
+    # "session", "state", "cursor", "step": {"id", "kind", "title", "state"},
+    # "reason", "detail"}). Also, from core.template_schedule, a scheduled
+    # plan's run that made NO flight — skipped or refused (data: {"id": "",
+    # "plan_id", "plan_name", "trigger", "skipped"|"error", "detail"}). For UI
+    # refetch only; no rule notifies on it.
+    "flight.changed",
+    # A flight parked on a *you* step (or a verify step with open human
+    # checklist items, or a failure handed to you), once per step and round —
+    # also a bell row (outbox kind ``flight_you``) (data: as flight.changed
+    # plus "text", "items").
+    "flight.needs_you",
+    # A flight landed, halted or was cancelled, once (data: as
+    # flight.changed).
+    "flight.finished",
     # Template runs (core.template_schedule is their one emitter). A template
     # started a fresh session — Run now or its schedule (``session`` is the
     # new one; data: {"template", "trigger": "manual"|"schedule"}). For UI

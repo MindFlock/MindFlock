@@ -1,0 +1,777 @@
+"""The flight tools: ``describe_flight``, ``start_flight``, ``flight_status``,
+``control_flight``, ``edit_flight`` and ``save_flight_plan``.
+
+A mixin of :class:`backend.mcp.tools.Toolbox` (kept apart for size), driving
+the same ``/api/flights*`` routes the Sky does (docs/flights.md "Contract: the
+HTTP API"). A FLIGHT is a row of stops (steps) the server's flight driver flies
+one session through: an agent prompt, a test run, a ship rung, a wait, a perch
+for the user, a Loop back to an earlier stop… The kinds are plug-ins the
+server serves at ``GET /api/flights/kinds``; nothing here hard-codes the list,
+so a kind added on the server (round 16's ``loop``) is usable at once.
+
+The path from a sentence to a running flight is ``describe_flight`` (the
+server's one-shot model turns prose into normalised steps, and the kinds list
+comes along so the agent can hand-write or fix them) → ``start_flight``.
+
+Scope: a session flies, steers and edits flights on ITSELF or on one of its
+descendants — the rule ``ship_session`` / ``set_autopilot`` follow
+(:meth:`backend.mcp.policy.Policy.require_ship`), including "a team run's
+member ships with its run" and "a stop that cannot be undone needs
+``confirm_merge``". A grounded flight (stops on the board, no session) belongs
+to nobody yet: any caller with write scope may make or edit one, and the user
+attaches it. These tools are local-only: peer mode serves its own toolset
+(:mod:`backend.mcp.peer_tools`), so they are never offered to a peer.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import urllib.parse
+from typing import Any, Dict, List, Optional, Tuple
+
+from backend import client
+from backend.mcp.policy import Flock
+from backend.mcp.protocol import ToolContext, ToolError
+
+_log = logging.getLogger(__name__)
+
+__all__ = [
+    "FlightTools",
+    "CONTROL_OPS",
+    "STEP_OPS",
+    "compact_flight",
+    "compact_kinds",
+    "step_line",
+]
+
+#: control_flight's ops: the flight-wide ones and the per-step ones.
+FLIGHT_OPS = ("pause", "resume", "cancel")
+STEP_OPS = ("skip", "retry", "jump", "done")
+CONTROL_OPS = FLIGHT_OPS + STEP_OPS
+#: Flights still in the air (or on the board): docs/flights.md "Flight".
+UNFINISHED = ("grounded", "running", "waiting_you", "paused", "halted")
+#: The one-shot describe runs ≤60 s server-side.
+DESCRIBE_TIMEOUT_S = 90.0
+START_TIMEOUT_S = 120.0
+#: flight_status stays about this small (JSON characters).
+STATUS_BUDGET = 2000
+HISTORY_LINES = 10
+MAX_STEPS = 40
+
+D_DESCRIBE = (
+    "Turn a sentence into flight stops. A FLIGHT is a row of stops MindFlock's "
+    "driver flies one session through (an agent prompt, tests, a ship rung, a "
+    "wait, a perch for your user, a loop back…). text: the flight in plain "
+    "words ('run the tests, fix failures, open a PR, wait for checks'); want: "
+    "plan (several stops, default) or step (one). The server's one-shot model "
+    "answers with normalised steps {id, kind, title, config, on_fail, when?} "
+    "plus one line each. Also returns kinds (kind · label · summary · config "
+    "fields) so you can hand-write or fix steps; kinds=false skips them. "
+    "error no_model / could_not_describe: no steps — write them from kinds. "
+    "Nothing starts: pass the steps to start_flight (or save_flight_plan)."
+)
+D_START = (
+    "Start a flight. steps: [{kind, title?, config?, on_fail?, when?, halt?}] "
+    "(from describe_flight, or by hand from its kinds) and/or plan_id (a saved "
+    "stop; its steps come first). title: the session that flies it — default "
+    "yourself; else one of your descendants. On an existing session the "
+    "flight starts at the first non-agent stop (the work so far counts as the "
+    "agent stop) unless at= names a stop id (s1…). grounded=true puts the "
+    "stops on your user's board with no session (they attach one). name: the "
+    "flight's name. A stop that can't be undone (ship lane merge, a kind whose "
+    "risk is irreversible) needs confirm_merge=true. One flight per session: "
+    "409 in_flight means it has one (flight_status). Returns {id, state, "
+    "steps, session}; then flight_status / control_flight."
+)
+D_STATUS = (
+    "A flight, compact: state (grounded|running|waiting_you|paused|halted|"
+    "done|cancelled), cursor (the current stop), reason, every stop as one "
+    "line (id, state, kind, title, note, receipt, when) and the last 10 "
+    "history lines. id, or title (that session's live flight, else its "
+    "latest); neither = your own session's flight."
+)
+D_CONTROL = (
+    "Steer a flight on you or a descendant (or a grounded one). op: pause | "
+    "resume | cancel (the session is kept) | skip (a stop) | retry (a failed "
+    "stop) | jump (move the cursor to step) | done (a perch — a stop waiting on "
+    "a person — with an optional note). skip/retry/done default to the current "
+    "stop; jump needs step. id, or title for that session's live flight. "
+    "Never press done on a perch your user should judge unless they said so."
+)
+D_EDIT = (
+    "Fix a flight's stops (the board does the rest): add [steps] (inserted at "
+    "index at, else appended; only after the current stop), remove [step ids] "
+    "(a stop ahead just goes; removing the flying stop pauses the flight "
+    "right before the next; the last stop stays), rename = the flight's name. "
+    "Same scope and confirm_merge rule as start_flight. Returns the flight as "
+    "flight_status does."
+)
+D_SAVE_PLAN = (
+    "Keep a row of stops as a saved stop on your user's shelf (the store "
+    "calls it a plan): name, steps (as start_flight takes them), description, "
+    "trigger {kind: manual|ticket|pr|issue|schedule, schedule?: {at:'HH:MM', "
+    "days:'daily'|'weekdays'} | {cron} | {once}, paused?} — a schedule "
+    "trigger flies by itself. Returns {plan_id, name, steps}; "
+    "start_flight(plan_id=…) flies it."
+)
+
+
+def _obj(props: dict, required: Tuple[str, ...] = ()) -> dict:
+    out: Dict[str, Any] = {
+        "type": "object",
+        "properties": props,
+        "additionalProperties": False,
+    }
+    if required:
+        out["required"] = list(required)
+    return out
+
+
+_FLIGHT_ID = {"type": "string", "minLength": 1, "maxLength": 40}
+_STEP_ID = {"type": "string", "minLength": 1, "maxLength": 32}
+_TITLE = {"type": "string", "minLength": 1, "maxLength": 200}
+#: One step as a client draws it; the server validates (400 bad_step + field).
+_STEP = {
+    "type": "object",
+    "properties": {
+        "kind": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40,
+            "description": "a kind from describe_flight's kinds",
+        },
+        "title": {"type": "string", "maxLength": 120},
+        "config": {"type": "object", "description": "the kind's fields"},
+        "on_fail": {"type": "string", "enum": ["halt", "agent", "skip", "you"]},
+        "when": {
+            "type": "string",
+            "maxLength": 300,
+            "description": "condition; false = the stop is skipped",
+        },
+        "halt": {"type": "boolean", "description": "stop before this stop"},
+        "id": _STEP_ID,
+        "group": {"type": "object"},
+    },
+    "required": ["kind"],
+}
+_STEPS = {"type": "array", "minItems": 1, "maxItems": MAX_STEPS, "items": _STEP}
+
+S_DESCRIBE = _obj(
+    {
+        "text": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "want": {"type": "string", "enum": ["plan", "step"], "default": "plan"},
+        "kinds": {"type": "boolean", "default": True},
+    },
+    ("text",),
+)
+S_START = _obj(
+    {
+        "steps": _STEPS,
+        "plan_id": {"type": "string", "minLength": 1, "maxLength": 80},
+        "title": dict(_TITLE, description="session that flies it (default: you)"),
+        "grounded": {"type": "boolean", "default": False},
+        "name": {"type": "string", "maxLength": 80},
+        "at": dict(_STEP_ID, description="stop id to start at"),
+        "confirm_merge": {"type": "boolean", "default": False},
+    }
+)
+S_STATUS = _obj({"id": _FLIGHT_ID, "title": _TITLE})
+S_CONTROL = _obj(
+    {
+        "id": _FLIGHT_ID,
+        "title": _TITLE,
+        "op": {"type": "string", "enum": list(CONTROL_OPS)},
+        "step": _STEP_ID,
+        "note": {"type": "string", "maxLength": 2000},
+    },
+    ("op",),
+)
+S_EDIT = _obj(
+    {
+        "id": _FLIGHT_ID,
+        "add": _STEPS,
+        "at": {"type": "integer", "minimum": 0, "maximum": MAX_STEPS},
+        "remove": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": MAX_STEPS,
+            "items": _STEP_ID,
+        },
+        "rename": {"type": "string", "minLength": 1, "maxLength": 80},
+        "confirm_merge": {"type": "boolean", "default": False},
+    },
+    ("id",),
+)
+S_SAVE_PLAN = _obj(
+    {
+        "name": {"type": "string", "minLength": 1, "maxLength": 80},
+        "steps": _STEPS,
+        "description": {"type": "string", "maxLength": 2000},
+        "trigger": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": ["manual", "ticket", "pr", "issue", "schedule"],
+                },
+                "schedule": {"type": ["object", "null"]},
+                "paused": {"type": "boolean"},
+            },
+            "required": ["kind"],
+        },
+    },
+    ("name", "steps"),
+)
+
+
+# --------------------------------------------------------------------------- #
+# Compact views
+# --------------------------------------------------------------------------- #
+def _cut(text: Any, limit: int) -> str:
+    s = " ".join(str(text if text is not None else "").split())
+    return s if len(s) <= limit else s[: max(0, limit - 1)] + "…"
+
+
+def compact_kinds(dto: dict) -> List[str]:
+    """``GET /api/flights/kinds`` as one line per kind: ``kind · label ·
+    summary · fields`` (+ ``[risk]`` when the kind carries any)."""
+    out: List[str] = []
+    for k in dto.get("kinds") or []:
+        if not isinstance(k, dict) or not k.get("kind"):
+            continue
+        fields = [
+            str(f.get("name"))
+            for f in k.get("fields") or []
+            if isinstance(f, dict) and f.get("name")
+        ]
+        line = "%s · %s · %s · fields: %s" % (
+            k.get("kind"),
+            k.get("label") or k.get("kind"),
+            _cut(k.get("summary"), 110),
+            ", ".join(fields) or "none",
+        )
+        if k.get("actor") == "you":
+            line += " · waits on a person"
+        risk = [str(r) for r in k.get("risk") or []]
+        if risk:
+            line += " · [%s]" % ", ".join(risk)
+        out.append(line)
+    return out
+
+
+def step_line(step: dict, state: Optional[dict] = None, width: int = 60) -> str:
+    """One stop as a line: ``s3 running ship "Open PR" · note … · receipt …``.
+    Without ``state`` (a plan's step): ``s3 ship "Open PR" · on_fail agent``."""
+    sid = str(step.get("id") or "?")
+    parts = [sid]
+    if state is not None:
+        parts.append(str(state.get("state") or "pending"))
+    parts.append(str(step.get("kind") or "?"))
+    parts.append('"%s"' % _cut(step.get("title"), width))
+    line = " ".join(parts)
+    cfg = step.get("config") if isinstance(step.get("config"), dict) else {}
+    if state is None:
+        bits = [
+            "%s=%s" % (k, _cut(v, 40)) for k, v in cfg.items() if v not in ("", None)
+        ]
+        if bits:
+            line += " · " + "; ".join(bits[:4])
+        if step.get("on_fail") and step.get("on_fail") != "halt":
+            line += " · on_fail " + str(step["on_fail"])
+    if step.get("when"):
+        line += " · when " + _cut(step["when"], 60)
+    if step.get("halt"):
+        line += " · halt point"
+    if isinstance(step.get("group"), dict) and step["group"].get("name"):
+        line += " · in " + _cut(step["group"]["name"], 30)
+    if state is not None:
+        detail = state.get("detail") if isinstance(state.get("detail"), dict) else {}
+        if state.get("note"):
+            line += " · " + _cut(state["note"], width + 20)
+        if detail.get("receipt"):
+            line += " · ✓ " + _cut(detail["receipt"], max(12, width - 10))
+    return line
+
+
+def _history_line(h: dict, now: float, width: int = 90) -> str:
+    try:
+        ago = max(0, int(now - float(h.get("at") or 0)))
+    except (TypeError, ValueError):
+        ago = 0
+    when = (
+        "%ds" % ago
+        if ago < 90
+        else "%dm" % (ago // 60) if ago < 5400 else "%dh" % (ago // 3600)
+    )
+    line = "-%s %s %s" % (when, h.get("step") or "-", h.get("event") or "?")
+    if h.get("note"):
+        line += " — " + _cut(h["note"], width)
+    return line
+
+
+def compact_flight(f: dict, now: float, budget: int = STATUS_BUDGET) -> dict:
+    """A flight as the tools return it, about ``budget`` JSON characters:
+    flown stops far behind the cursor fold into a count, then titles, notes
+    and history shrink, then the stops far ahead fold too."""
+    steps = [s for s in f.get("steps") or [] if isinstance(s, dict)]
+    states = f.get("step_states") if isinstance(f.get("step_states"), dict) else {}
+    try:
+        cursor = int(f.get("cursor") or 0)
+    except (TypeError, ValueError):
+        cursor = 0
+    current = steps[cursor] if 0 <= cursor < len(steps) else None
+    head: Dict[str, Any] = {
+        "id": f.get("id"),
+        "name": f.get("plan_name"),
+        "session": f.get("session") or None,
+        "state": f.get("state"),
+        "cursor": (
+            "%d/%d %s" % (cursor + 1, len(steps), current.get("id"))
+            if current
+            else "%d/%d (past the last stop)" % (cursor, len(steps))
+        ),
+    }
+    if f.get("reason"):
+        head["reason"] = _cut(f["reason"], 200)
+    if f.get("by") and f.get("by") != "user":
+        head["by"] = f["by"]
+    history = [h for h in f.get("history") or [] if isinstance(h, dict)]
+    keep = HISTORY_LINES
+
+    def fold(part: List[dict]) -> str:
+        counts: Dict[str, int] = {}
+        for s in part:
+            st = str((states.get(s.get("id")) or {}).get("state") or "pending")
+            counts[st] = counts.get(st, 0) + 1
+        return "%s–%s: %s" % (
+            part[0].get("id"),
+            part[-1].get("id"),
+            ", ".join("%d %s" % (n, st) for st, n in counts.items()),
+        )
+
+    def render(width: int, before: int, after: int) -> dict:
+        lines: List[str] = [fold(steps[:before])] if before > 0 else []
+        for s in steps[before:after]:
+            lines.append(step_line(s, states.get(s.get("id")) or {}, width))
+        if after < len(steps):
+            lines.append(fold(steps[after:]))
+        hist = [_history_line(h, now, width + 30) for h in history[-keep:]]
+        return dict(head, steps=lines, history=hist)
+
+    before, after, width = 0, len(steps), 60
+    out = render(width, before, after)
+    while len(json.dumps(out, ensure_ascii=False)) > budget:
+        if before < cursor - 1:
+            before = cursor - 1  # flown stops far behind fold into a count
+        elif width > 12:
+            width -= 12
+        elif keep > 3:
+            keep = 3
+        elif after > cursor + 6:
+            after = cursor + 6  # and, last, the stops far ahead
+        else:
+            break
+        out = render(width, before, after)
+    return out
+
+
+def _irreversible(steps: List[dict], kinds: Dict[str, dict]) -> List[str]:
+    """Titles of the stops that cannot be undone: the kind's ``risk`` says
+    ``irreversible`` (served by the kinds list), or a ship stop's lane is
+    merge (the frontend's ``riskOf`` rule)."""
+    out: List[str] = []
+    for s in steps:
+        kind = str(s.get("kind") or "")
+        cfg = s.get("config") if isinstance(s.get("config"), dict) else {}
+        risk = (kinds.get(kind) or {}).get("risk") or []
+        if "irreversible" in risk or (kind == "ship" and cfg.get("lane") == "merge"):
+            out.append(str(s.get("title") or kind))
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Handlers
+# --------------------------------------------------------------------------- #
+class FlightTools:
+    """The six flight handlers; mixed into ``Toolbox``."""
+
+    # -- helpers -------------------------------------------------------------- #
+    def _fl_api(self, method: str, path: str, payload=None, what: str = "", **kw):
+        try:
+            if method == "GET":
+                resp = self.api.get(path, **kw)
+            elif method == "DELETE":
+                resp = self.api.delete(path, **kw)
+            elif method == "PATCH":
+                resp = self.api.patch(path, payload or {}, **kw)
+            else:
+                resp = self.api.post(path, payload or {}, **kw)
+        except client.ApiError as err:
+            raise self._flight_error(err, what) from None
+        return resp if isinstance(resp, dict) else {}
+
+    @staticmethod
+    def _flight_error(err: client.ApiError, what: str) -> ToolError:
+        body = err.payload or {}
+        if err.status in (404, 405) and (
+            "Not Found" in err.message or err.status == 405
+        ):
+            return ToolError(
+                "this MindFlock server has no flights; upgrade it to use %s" % what
+            )
+        msg = "%s failed: %s" % (what, err.message)
+        if body.get("detail"):
+            msg += " — %s" % _cut(body["detail"], 300)
+        if body.get("field"):
+            msg += " (field %s)" % body["field"]
+        hint = {
+            "in_flight": "that session already has a flight in the air: "
+            "flight_status(title=…) shows it; cancel it first or edit_flight it",
+            "in_progress": "only stops after the current one can change",
+            "needs_title": "name the session (title) or start it grounded=true",
+            "unknown_flight": "flight_status(title=…) finds a session's flight",
+            "last_step": "a flight keeps its last stop: cancel the flight instead",
+            "finished": "that flight is over",
+            "grounded": "a grounded flight does nothing until your user attaches "
+            "a session to it (only cancel works)",
+        }.get(err.message)
+        if hint:
+            msg += ". " + hint
+        return ToolError(msg)
+
+    def _kinds(self) -> dict:
+        return self._fl_api("GET", "/api/flights/kinds", what="flight kinds")
+
+    def _kinds_by_name(self) -> Dict[str, dict]:
+        return {
+            str(k.get("kind")): k
+            for k in self._kinds().get("kinds") or []
+            if isinstance(k, dict)
+        }
+
+    @staticmethod
+    def _flight_path(fid: str, suffix: str = "") -> str:
+        return "/api/flights/" + urllib.parse.quote(fid, safe="") + suffix
+
+    def _get_flight(self, fid: str, what: str) -> dict:
+        resp = self._fl_api("GET", self._flight_path(fid), what=what)
+        f = resp.get("flight")
+        if not isinstance(f, dict):
+            raise ToolError("%s: the server returned no flight" % what)
+        return f
+
+    def _flight_of(self, title: str, what: str) -> Optional[dict]:
+        """``title``'s live flight, else its most recent one (None: none)."""
+        resp = self._fl_api("GET", "/api/flights", what=what)
+        mine = [
+            f
+            for f in resp.get("flights") or []
+            if isinstance(f, dict) and f.get("session") == title
+        ]
+        if not mine:
+            return None
+        live = [f for f in mine if f.get("state") in UNFINISHED]
+        pool = live or mine
+        return max(pool, key=lambda f: float(f.get("updated") or 0))
+
+    def _resolve_flight(self, flock: Flock, args: dict, what: str) -> dict:
+        fid = str(args.get("id") or "").strip()
+        if fid:
+            return self._get_flight(fid, what)
+        title = str(args.get("title") or "").strip() or (flock.self_title or "")
+        if not title:
+            raise ToolError(
+                "%s needs id or title: you are not inside a MindFlock session" % what
+            )
+        f = self._flight_of(title, what)
+        if f is None:
+            raise ToolError(
+                "%s: %r has no flight (start_flight starts one)" % (what, title)
+            )
+        return f
+
+    def _may_fly(
+        self, flock: Flock, title: str, what: str, steps=(), confirm: bool = False
+    ) -> None:
+        """You or a descendant (``require_ship``'s rule, merge included); a
+        grounded flight (no session) needs only write scope."""
+        if not title:
+            self.policy.require_write(flock, what)
+            if steps:
+                self._require_confirm(list(steps), confirm, what)
+            return
+        bad = _irreversible(list(steps), self._kinds_by_name()) if steps else []
+        try:
+            self.policy.require_ship(
+                flock, title, what, merge=bool(bad), confirm_merge=confirm
+            )
+        except ToolError as err:
+            if bad and "merg" in str(err):
+                raise ToolError(
+                    "%s (stops that can't be undone: %s). Or start it "
+                    "grounded=true for your user to attach." % (err, ", ".join(bad))
+                ) from None
+            raise
+
+    def _require_confirm(self, steps: List[dict], confirm: bool, what: str) -> None:
+        bad = _irreversible(steps, self._kinds_by_name())
+        if bad and not confirm:
+            raise ToolError(
+                "%s: %s can't be undone — pass confirm_merge=true only when your "
+                "user (or your task) clearly asked for it" % (what, ", ".join(bad))
+            )
+
+    def _by(self, flock: Flock) -> str:
+        return ("agent:" + flock.self_title) if flock.self_title else "user"
+
+    @staticmethod
+    def _clean_steps(raw) -> List[dict]:
+        return [dict(s) for s in raw or [] if isinstance(s, dict)]
+
+    # -- describe_flight -------------------------------------------------------- #
+    def describe_flight(self, args: dict, ctx: ToolContext) -> dict:
+        text = str(args.get("text") or "").strip()
+        if not text:
+            raise ToolError("describe_flight needs text")
+        want = args.get("want") or "plan"
+        out: Dict[str, Any] = {}
+        try:
+            resp = self.api.post(
+                "/api/flights/describe",
+                {"text": text, "want": want},
+                timeout=DESCRIBE_TIMEOUT_S,
+            )
+            resp = resp if isinstance(resp, dict) else {}
+            steps = self._clean_steps(resp.get("steps"))
+            out["steps"] = steps
+            out["lines"] = [step_line(s) for s in steps]
+            if resp.get("model"):
+                out["model"] = resp["model"]
+        except client.ApiError as err:
+            if err.message == "no_model":
+                out["steps"] = []
+                out["error"] = "no_model"
+                out["hint"] = (
+                    "no model CLI is installed for the server's one-shot describe: "
+                    "write the steps yourself from kinds and pass them to "
+                    "start_flight"
+                )
+            elif err.message == "could_not_describe":
+                out["steps"] = []
+                out["error"] = "could_not_describe"
+                detail = (err.payload or {}).get("detail")
+                out["hint"] = (
+                    "the model's answer was not a flight%s: rephrase, or write "
+                    "the steps from kinds"
+                    % (" (%s)" % _cut(detail, 200) if detail else "")
+                )
+            else:
+                raise self._flight_error(err, "describe_flight") from None
+        if args.get("kinds", True) or out.get("error"):
+            dto = self._kinds()
+            out["kinds"] = compact_kinds(dto)
+            if dto.get("on_fail"):
+                out["on_fail"] = list(dto["on_fail"])
+        return out
+
+    # -- start_flight ----------------------------------------------------------- #
+    def start_flight(self, args: dict, ctx: ToolContext) -> dict:
+        flock = self.flock()
+        what = "start_flight"
+        steps = self._clean_steps(args.get("steps"))
+        plan_id = str(args.get("plan_id") or "").strip()
+        if not steps and not plan_id:
+            raise ToolError(
+                "start_flight needs steps (describe_flight writes them) or plan_id"
+            )
+        grounded = bool(args.get("grounded"))
+        name = str(args.get("name") or "").strip()
+        confirm = bool(args.get("confirm_merge"))
+        title = ""
+        if not grounded:
+            title = str(args.get("title") or "").strip() or (flock.self_title or "")
+            if not title:
+                raise ToolError(
+                    "start_flight needs title (the session that flies it): you are "
+                    "not inside a MindFlock session — or pass grounded=true"
+                )
+        check = list(steps)
+        if plan_id:
+            plan = self._plan(plan_id)
+            check = list(plan.get("steps") or []) + check
+        self._may_fly(flock, title, what, check, confirm)
+        payload: Dict[str, Any] = {"by": self._by(flock)}
+        if plan_id:
+            payload["plan_id"] = plan_id
+        if steps:
+            payload["steps"] = steps
+        if grounded:
+            payload["grounded"] = True
+            if name:
+                payload["name"] = name
+        else:
+            payload["title"] = title
+            if args.get("at"):
+                payload["start_at"] = str(args["at"])
+        resp = self._fl_api(
+            "POST", "/api/flights/start", payload, what, timeout=START_TIMEOUT_S
+        )
+        f = resp.get("flight")
+        if not isinstance(f, dict):
+            raise ToolError("start_flight: the server returned no flight")
+        if name and not grounded and f.get("id"):
+            try:
+                r = self._fl_api(
+                    "PATCH",
+                    self._flight_path(str(f["id"])),
+                    {"plan_name": name},
+                    what + " (rename)",
+                )
+                f = r.get("flight") if isinstance(r.get("flight"), dict) else f
+            except ToolError as err:
+                _log.info("start_flight: rename failed: %s", err)
+        view = compact_flight(f, self.clock())
+        out = {
+            "id": f.get("id"),
+            "state": f.get("state"),
+            "session": f.get("session") or None,
+            "name": f.get("plan_name"),
+            "cursor": view.get("cursor"),
+            "steps": view.get("steps"),
+        }
+        if resp.get("absorbed"):
+            out["absorbed"] = resp["absorbed"]
+            out["note"] = (
+                "the session's own fast-track run became the flight's leading "
+                "ship stops"
+            )
+        if grounded:
+            out["note"] = (
+                "grounded: the stops sit on your user's board until they attach a "
+                "session"
+            )
+        return out
+
+    def _plan(self, plan_id: str) -> dict:
+        resp = self._fl_api("GET", "/api/flights/plans", what="start_flight")
+        for p in resp.get("plans") or []:
+            if isinstance(p, dict) and p.get("id") == plan_id:
+                return p
+        return {}  # the server says unknown_plan (a virtual id may still work)
+
+    # -- flight_status ---------------------------------------------------------- #
+    def flight_status(self, args: dict, ctx: ToolContext) -> dict:
+        flock = self.flock()
+        f = self._resolve_flight(flock, args, "flight_status")
+        return compact_flight(f, self.clock())
+
+    # -- control_flight --------------------------------------------------------- #
+    def control_flight(self, args: dict, ctx: ToolContext) -> dict:
+        flock = self.flock()
+        op = str(args.get("op") or "")
+        if op not in CONTROL_OPS:
+            raise ToolError("control_flight: op is one of %s" % ", ".join(CONTROL_OPS))
+        what = "control_flight(%s)" % op
+        f = self._resolve_flight(flock, args, what)
+        self._may_fly(flock, str(f.get("session") or ""), what)
+        fid = str(f.get("id") or "")
+        if op in FLIGHT_OPS:
+            path, payload = self._flight_path(fid, "/" + op), {}
+        else:
+            step = str(args.get("step") or "").strip()
+            if not step and op != "jump":
+                steps = f.get("steps") or []
+                cur = int(f.get("cursor") or 0)
+                if 0 <= cur < len(steps) and isinstance(steps[cur], dict):
+                    step = str(steps[cur].get("id") or "")
+            if not step:
+                raise ToolError(
+                    "%s needs step (a stop id from flight_status)%s"
+                    % (what, "" if op == "jump" else ": the flight has no current stop")
+                )
+            if op == "jump":
+                path, payload = self._flight_path(fid, "/jump"), {"step": step}
+            else:
+                q = urllib.parse.quote(step, safe="")
+                path = self._flight_path(fid, "/steps/%s/%s" % (q, op))
+                payload = {}
+                if op == "done" and args.get("note"):
+                    payload["note"] = str(args["note"])
+        resp = self._fl_api("POST", path, payload, what)
+        nf = resp.get("flight")
+        return compact_flight(nf if isinstance(nf, dict) else f, self.clock())
+
+    # -- edit_flight ------------------------------------------------------------ #
+    def edit_flight(self, args: dict, ctx: ToolContext) -> dict:
+        flock = self.flock()
+        what = "edit_flight"
+        add = self._clean_steps(args.get("add"))
+        remove = [str(s).strip() for s in args.get("remove") or [] if str(s).strip()]
+        rename = str(args.get("rename") or "").strip()
+        if not (add or remove or rename):
+            raise ToolError("edit_flight needs add, remove or rename")
+        f = self._get_flight(str(args["id"]), what)
+        self._may_fly(
+            flock,
+            str(f.get("session") or ""),
+            what,
+            add,
+            bool(args.get("confirm_merge")),
+        )
+        fid = str(f.get("id") or args["id"])
+        done: List[str] = []
+        for sid in remove:
+            q = urllib.parse.quote(sid, safe="")
+            r = self._fl_api(
+                "DELETE",
+                self._flight_path(fid, "/steps/" + q),
+                what="%s(remove %s)" % (what, sid),
+            )
+            f = r.get("flight") if isinstance(r.get("flight"), dict) else f
+            done.append("removed " + sid)
+        if add:
+            payload: Dict[str, Any] = {"steps": add}
+            if args.get("at") is not None:
+                payload["at"] = int(args["at"])
+            r = self._fl_api("POST", self._flight_path(fid, "/steps"), payload, what)
+            f = r.get("flight") if isinstance(r.get("flight"), dict) else f
+            done.append("added %d" % len(add))
+        if rename:
+            r = self._fl_api(
+                "PATCH", self._flight_path(fid), {"plan_name": rename}, what
+            )
+            f = r.get("flight") if isinstance(r.get("flight"), dict) else f
+            done.append("renamed")
+        out = compact_flight(f, self.clock())
+        out["changed"] = done
+        return out
+
+    # -- save_flight_plan ------------------------------------------------------- #
+    def save_flight_plan(self, args: dict, ctx: ToolContext) -> dict:
+        flock = self.flock()
+        self.policy.require_write(flock, "save_flight_plan")
+        steps = self._clean_steps(args.get("steps"))
+        if not steps:
+            raise ToolError("save_flight_plan needs steps")
+        payload: Dict[str, Any] = {
+            "name": str(args.get("name") or "").strip(),
+            "steps": steps,
+        }
+        if args.get("description"):
+            payload["description"] = str(args["description"])
+        if isinstance(args.get("trigger"), dict):
+            payload["trigger"] = dict(args["trigger"])
+        resp = self._fl_api("POST", "/api/flights/plans", payload, "save_flight_plan")
+        plan = resp.get("plan") if isinstance(resp.get("plan"), dict) else {}
+        out = {
+            "plan_id": plan.get("id"),
+            "name": plan.get("name"),
+            "steps": [
+                step_line(s) for s in plan.get("steps") or [] if isinstance(s, dict)
+            ],
+        }
+        trig = plan.get("trigger")
+        if isinstance(trig, dict) and trig.get("kind") not in (None, "manual"):
+            out["trigger"] = trig
+        return out

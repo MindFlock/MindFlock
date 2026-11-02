@@ -1,0 +1,113 @@
+/* Selecting on the Sky (SkySelection.tsx, lib/skySelect): the marquee, the
+   selected lines and stop boxes, and the selection bar. Everything the
+   selection draws lives here, beside Sky.css / SkyLine.css. */
+
+/* A left drag on empty sky draws the marquee, not a pan: the plain pointer.
+   Space held still shows the hand (Sky.css's .is-grab). */
+.sky .sky-viewport:not(.is-grab) {
+  cursor: default;
+}
+
+.sky-marquee {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 6;
+  box-sizing: border-box;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  background: rgba(var(--accent-rgb), 0.12);
+  pointer-events: none;
+}
+
+/* THE selection ring (round 17): one rule for every selected thing on the
+   Sky — a line (a session's or a grounded one), the focused session's line,
+   a stop box (the one `.selected` and the marquee's), a sky object, the
+   intake lane, a box in the hand. 2px of the accent, 2px out, solid; both
+   on SCREEN at any zoom (divided by the sky's --sky-z). Each of these wears
+   the same ring transparent at rest (outline-style and offset set there),
+   so only the colour and width change: it eases in, nothing moves. Hover
+   (1px, half the accent) and keyboard focus (1px, the accent) are the same
+   ring, lighter, in each element's own stylesheet. */
+.skl.is-selected,
+.skl.is-focused,
+.fl-box.selected,
+.fl-box.fl-box-selected,
+.sky-object.is-selected,
+.sky .sky-intake.is-selected > .sky-lane {
+  outline: calc(2px / var(--sky-z, 1)) solid var(--accent);
+  outline-offset: calc(2px / var(--sky-z, 1));
+}
+
+/* A selected line: the accent edge under the ring. */
+.skl.is-selected {
+  border-color: var(--accent);
+}
+
+/* A selected stop box: the accent edge and a faint wash (the marquee's
+   picks), under the ring. */
+.fl-box.fl-box-selected {
+  border-color: var(--accent);
+  background-image: linear-gradient(rgba(var(--accent-rgb), 0.1), rgba(var(--accent-rgb), 0.1));
+}
+
+/* The bar: screen-sized, over the plane, just above the selection. */
+.sky-selbar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 8;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: min(460px, calc(100% - 16px));
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--sky-shadow-raised);
+  cursor: default;
+  user-select: none;
+  font-size: 12.5px;
+}
+
+.sky-selbar-row,
+.sky-selbar-ask {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sky-selbar-count {
+  font-weight: 600;
+  margin-right: 2px;
+}
+
+.sky-selbar-hint {
+  color: var(--muted);
+}
+
+.sky-selbar-danger:not(:disabled) {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 45%, var(--border));
+}
+
+.sky-selbar-clear {
+  margin-left: auto;
+}
+
+.sky-selbar-note {
+  margin: 0;
+  font-size: 12px;
+}
+
+.sky-selbar-ask .fl-input {
+  flex: 1;
+  min-width: 140px;
+}
+
+.sky-selbar-says {
+  display: block;
+}

@@ -1,7 +1,7 @@
 /** Top bar (port of the 030 partial + section 17's chrome wiring):
- * sidebar/theme cluster, notifications bell and mic, the main menu (New / Intake /
- * Verify / Schedule / Settings, then the command palette as an icon), centered
- * wordmark, and the Electron drag region.
+ * sidebar/theme cluster, notifications bell and mic, the main menu (New /
+ * Grid · Sky / Intake / Verify / Schedule / Settings, then the command palette
+ * as an icon), centered wordmark, and the Electron drag region.
  *
  * Only the daily loop is on the bar. Everything that waits on you is the
  * bell's (one badge); saved prompts are a tab of Customize (the sidebar
@@ -16,8 +16,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import { useUi } from "../state/store";
-import { useDoctor, useTestPlans } from "../state/queries";
+import { useDoctor, useFlights, useTestPlans } from "../state/queries";
 import { dueCount, failingCount, verifyCountLine } from "./dialogs/verify";
+import { perchBadge } from "../lib/flights";
+import { Bird } from "./flights/Bird";
+import { GridGlyph } from "./ViewGlyphs";
 import { rethemeAll } from "../lib/terminals";
 import { NotificationsBell } from "./NotificationsBell";
 import { TopBarMic } from "./TopBarMic";
@@ -34,6 +37,7 @@ import { useScheduleStatus } from "../lib/useScheduleStatus";
 import { failingSchedules } from "../lib/templates";
 import { useCalm } from "../lib/useCalm";
 import { topBarShows } from "../lib/calm";
+import { VIEWS, VIEW_BLURB, newSession, setView, toggleView, viewLabel } from "../lib/viewMode";
 
 /* The wordmark carries the RUNNING ENGINE's version (GET /api/doctor), not the
  * desktop shell's: this frontend ships inside the engine wheel, so that string
@@ -53,8 +57,9 @@ function engineVersion(raw: string | undefined): string {
 /** What a narrow bar gives up, in order: the wordmark first (it is a label,
  * not a control), then the foldable items from the RIGHT end (Settings, then
  * Schedule, then Verify — Verify's count is the reason it earns a slot, so it
- * goes last) into one ⋯ that sits where they were. New, Intake and the palette
- * never fold. Every argument is a measured width in px, gaps included:
+ * goes late — and last the Grid · Sky toggle) into one ⋯ that sits where they
+ * were. New, Intake and the palette never fold. Every argument is a measured
+ * width in px, gaps included:
  * `room` the bar's content box, `fixed` everything that always shows,
  * `brand` the wordmark, `items` the foldable items left to right, `more` the ⋯.
  * Pure, so the rule is pinned by a test rather than by a screenshot. */
@@ -104,6 +109,9 @@ export function TopBar() {
   // feature working and gets no mark.
   const sched = useScheduleStatus();
   const schedFailing = failingSchedules(sched.templates, sched.status).length;
+  // The Sky toggle's badge: flights perched on you (lib/flights perchBadge) —
+  // the sky is where they are drawn and its drawer lists them.
+  const perch = perchBadge(useFlights().data || []);
   // The calm first hour (lib/calm.ts topBarShows): Verify waits for its first
   // checklist and Schedule for its first template. Their shortcuts, the
   // palette and the #verify / #schedule links keep working meanwhile.
@@ -160,7 +168,7 @@ export function TopBar() {
   // One tooltip per item, worn by the bar button and by its row in ⋯ alike.
   const verifyTitle = "Verify — " + VERIFY_BLURB + keys("verify") + "\n" + verifyCountLine(due, failing);
   const scheduleTitle =
-    "Schedule — templates; starts sessions on a timer" +
+    "Schedule — templates and scheduled stops; starts sessions on a timer" +
     keys("schedule") +
     (schedFailing > 0
       ? "\n" +
@@ -177,8 +185,28 @@ export function TopBar() {
   // badge, a rebound shortcut's absence, the mac lights' gap.
   //
   // The foldable items, in bar order; Verify / Schedule only once the calm
-  // rule above lets them on the bar at all (this never overrides it).
+  // rule above lets them on the bar at all (this never overrides it). The
+  // Grid · Sky toggle folds last, only on a phone-narrow bar (its ⋯ row
+  // switches to the other view, carrying the perch count; Ctrl+Y still does
+  // too).
+  //
+  // The toggle's home is the sidebar's View row, beside the pane counts. The
+  // bar wears it only where that row is out of sight — the sidebar hidden, or
+  // a phone-narrow window (whose sidebar is an overlay) — so there is one
+  // visible toggle, never two.
+  const barViews = ui.sidebarHidden || ui.narrow;
+  const otherView = ui.view === "sky" ? "grid" : "sky";
+  const perchLine =
+    perch.count > 0 ? "\n" + perch.count + (perch.count === 1 ? " flight perched on you" : " flights perched on you") : "";
   const foldable = [
+    barViews && {
+      key: "view",
+      label: "Switch to the " + viewLabel(otherView),
+      title: viewLabel(otherView) + " — " + VIEW_BLURB[otherView] + keys("view") + perchLine,
+      count: perch.count,
+      failing: perch.failing,
+      open: () => toggleView(),
+    },
     shows.verify && {
       key: "verify",
       label: "Verify",
@@ -378,10 +406,38 @@ export function TopBar() {
             id="new-btn"
             className="tb-new"
             title={"New session" + keys("new")}
-            onClick={() => ui.openDialogFor("new-session")}
+            onClick={() => newSession()}
           >
             New
           </button>
+          {/* The main area's two views of the same sessions (lib/viewMode):
+              the grid of panes or the sky of lines. Only while the sidebar's
+              View row (its home) is out of sight — `barViews` above. Glyphs
+              alone on a phone, and the last thing a narrow bar folds. The
+              Sky half wears the count of flights perched on you — nothing at
+              zero, the rule every count on this bar keeps. */}
+          {barViews && (
+          <span className={"tb-views" + (isFolded("view") ? " tb-folded" : "")} data-fold="view" role="group" aria-label="View">
+            {VIEWS.map((v) => (
+              <button
+                key={v}
+                id={"view-" + v + "-btn"}
+                type="button"
+                className={"tb-item tb-view" + (ui.view === v ? " active" : "")}
+                aria-pressed={ui.view === v}
+                data-tour={v === "sky" ? "view-sky" : undefined}
+                title={viewLabel(v) + " — " + VIEW_BLURB[v] + keys("view")}
+                onClick={() => setView(v)}
+              >
+                {v === "sky" ? <Bird size={12} className="tb-view-icon" /> : <GridGlyph />}
+                <span className="tb-view-word">{viewLabel(v)}</span>
+                {v === "sky" && perch.count > 0 && (
+                  <span className={"tb-count" + (perch.failing ? " is-failing" : "")}>{perch.count}</span>
+                )}
+              </button>
+            ))}
+          </span>
+          )}
           {/* Intake sits next to New because both are about starting sessions —
               one from scratch, one from what came in. */}
           <button
@@ -425,8 +481,8 @@ export function TopBar() {
             {due > 0 && <span className={"tb-count" + (failing > 0 ? " is-failing" : "")}>{due}</span>}
           </button>
           )}
-          {/* Schedule: what starts by itself (and the saved setups it starts
-              from). Before it had a slot here, the only ways in were the
+          {/* Schedule: what starts by itself (templates, and saved stops with a
+              schedule). Before it had a slot here, the only ways in were the
               palette and New's strip — the owner couldn't find it. */}
           {shows.schedule && (
           <button

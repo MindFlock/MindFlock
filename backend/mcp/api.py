@@ -21,6 +21,7 @@ to translate (most become a ``ToolError`` with the server's own message); a
 
 from __future__ import annotations
 
+import json
 import time
 import urllib.parse
 from typing import Any, Callable, List, Mapping, Optional
@@ -146,6 +147,15 @@ class Api:
                     return client.get(base, path, timeout=timeout)
                 if method == "DELETE":
                     return client.delete(base, path, timeout=timeout)
+                if method == "PATCH":
+                    # backend.client has no patch(); its one round-trip
+                    # takes any method (the flight rename / step edit).
+                    return client._request(
+                        base + path,
+                        json.dumps(payload or {}).encode("utf-8"),
+                        timeout,
+                        method="PATCH",
+                    )
                 return client.post(base, path, payload, timeout=timeout)
             except (client.RequestTimeout, client.ConnectionDropped) as err:
                 if method not in _IDEMPOTENT:
@@ -182,6 +192,9 @@ class Api:
 
     def delete(self, path: str, **kw: Any) -> Any:
         return self.request("DELETE", path, **kw)
+
+    def patch(self, path: str, payload: Optional[dict] = None, **kw: Any) -> Any:
+        return self.request("PATCH", path, payload, **kw)
 
     def get_text(self, path: str, **kw: Any) -> str:
         return self.request("GET", path, text=True, **kw)

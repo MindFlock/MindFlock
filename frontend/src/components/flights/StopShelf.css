@@ -1,0 +1,302 @@
+/* The shelf at the Sky's foot (StopShelf.tsx): one row, Stops — Blocks (the
+   Session chip, the default kinds), Multi-step (the saved stops), then All
+   blocks… (the catalog) — folding to a thin handle. The chips' rules are
+   shared with the floating palette (SkyPalette.css lays them out in a grid). */
+
+.sky-shelf {
+  flex: none;
+  position: relative;
+  padding: 6px 12px 8px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.sky-shelf.folded {
+  padding: 0;
+  height: 4px;
+}
+
+/* The tabs over the shelf's top edge: the fold handle, and ⤢ Float the blocks
+   (round 13: the shelf can become a palette on the board). */
+.sky-shelf-tabs {
+  position: absolute;
+  left: 12px;
+  top: -25px;
+  display: inline-flex;
+  gap: 4px;
+}
+
+.sky-shelf-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: var(--panel);
+  color: var(--fl-ink-muted, var(--muted));
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+/* A tab, in the quiet tier: muted until hovered, then panel-2 and the text. */
+.sky-shelf-fold:hover {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.sky-shelf-fold:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sky-shelf-fold.sky-shelf-float {
+  padding: 0 8px;
+  font-size: 13px;
+}
+
+/* --- The stops (StopShelf.tsx): its label, then chips scrolling sideways ----- */
+
+.sky-stops {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  min-width: 0;
+}
+
+.sky-stops-head {
+  display: inline-flex;
+  flex: none;
+  flex-direction: column;
+  padding: 0 6px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.sky-stops-hint {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.sky-stops-chips {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.sky-stop-item {
+  display: contents;
+}
+
+/* A region of the row: a tiny muted label, then its chips. Thin dividers
+   (.sky-stops-divider) sit between the regions. */
+.sky-stops-region {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+}
+
+.sky-stops-label {
+  flex: none;
+  padding-right: 2px;
+  color: var(--fl-ink-muted, var(--muted));
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* Every chip on the shelf is the secondary tier (.test-btn): panel-2, the
+   border, the accent border under the pointer — and the toolbar's height.
+   Round 17: a chip's radius is 999px (lines 10, boxes 8, chips round). The
+   Session chip is tinted with the primary's accent (it makes a session); a
+   perch is gold, with a round icon, as everywhere. */
+.sky-stop-chip {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 5px;
+  height: var(--fl-ctl-h, 28px);
+  box-sizing: border-box;
+  padding: 0 11px 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: grab;
+  user-select: none;
+}
+
+.sky-stop-chip:hover,
+.sky-stop-chip:focus-visible {
+  border-color: var(--accent);
+}
+
+.sky-stop-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sky-stop-chip:active {
+  cursor: grabbing;
+}
+
+.sky-stop-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  color: var(--fl-ink-accent, var(--accent));
+  background: rgba(var(--accent-rgb), 0.14);
+}
+
+/* A perch: the gold perch tone, rounder, as in the stop palette. */
+.sky-stop-chip.perch {
+  border-radius: 999px;
+  border-color: color-mix(in srgb, var(--tone-attention) 60%, var(--border));
+}
+
+.sky-stop-chip.perch:hover,
+.sky-stop-chip.perch:focus-visible {
+  border-color: var(--tone-attention);
+}
+
+.sky-stop-chip.perch .sky-stop-icon {
+  border-radius: 50%;
+  color: var(--tone-attention);
+  background: color-mix(in srgb, var(--tone-attention) 16%, transparent);
+}
+
+.sky-stops-divider {
+  flex: none;
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: var(--border);
+}
+
+.sky-stops-empty {
+  margin: 0;
+  font-size: 12px;
+}
+
+/* A phone (nothing drags): the chips are tap-to-tack, so no drag hint. */
+@media (hover: none) {
+  .sky-stops-hint {
+    display: none;
+  }
+
+  .sky-stop-chip {
+    cursor: pointer;
+  }
+}
+
+/* The Session chip: primary-tinted, since it starts something — the accent
+   border over an accent wash, its word at the primary's weight. */
+.sky-stop-chip.sky-session-chip {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  background: rgba(var(--accent-rgb), 0.16);
+  font-weight: 600;
+}
+
+.sky-stop-chip.sky-session-chip:hover,
+.sky-stop-chip.sky-session-chip:focus-visible {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.26);
+}
+
+.sky-stop-chip.sky-session-chip .sky-stop-icon {
+  color: #fff;
+  background: var(--accent);
+}
+
+/* A saved stop: its name, then a dot per step (a perch's gold). */
+.sky-saved-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.sky-saved-dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 70%, var(--muted));
+}
+
+.sky-saved-dots i.perch {
+  background: var(--tone-attention);
+}
+
+.sky-saved-more {
+  margin-left: 2px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.sky-saved-chip.builtin {
+  border-style: dashed;
+}
+
+/* The rename field: the house input (.fl-input, FlywayCanvas.css) at the
+   chip's size — focused, so the accent border and its ring. */
+.sky-saved-rename.fl-input.fl-input {
+  width: 14ch;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.sky-saved-rename.fl-input.fl-input[aria-invalid="true"] {
+  border-color: var(--red);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 22%, transparent);
+}
+
+.sky-saved-err {
+  flex: none;
+  color: var(--fl-ink-red, var(--red));
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* The shelf sits at the window's foot, so its menu opens UP from the pointer
+   (StopShelf.tsx places its top-left there); downward it fell off-screen. */
+.sky-saved-menu {
+  z-index: 50;
+  transform: translateY(-100%);
+}
+
+/* All blocks…: a plain secondary chip (it opens a list, it doesn't drag), its
+   ⊞ in the muted ink. */
+.sky-stop-chip.sky-catalog-chip {
+  cursor: pointer;
+}
+
+.sky-stop-chip.sky-catalog-chip .sky-stop-icon {
+  color: var(--fl-ink-muted, var(--muted));
+  background: transparent;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.sky-stops-confirm {
+  padding-top: 6px;
+}

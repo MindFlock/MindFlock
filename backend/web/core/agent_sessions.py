@@ -504,6 +504,23 @@ def _paste_into(name: str, text: str) -> bool:
             pass
 
 
+def literal_keys_argv(name: str, text: str) -> list:
+    """``tmux send-keys -l -- text`` as ONE invocation. tmux reads an
+    argument that ENDS in ``;`` as a command separator and drops it (``fix
+    it;`` arrived as ``fix it``), so trailing semicolons go as their hex key
+    (``-H 3b``) after the literal text."""
+    body = text.rstrip(";")
+    argv = ["tmux"]
+    if body:
+        argv += ["send-keys", "-t", name, "-l", "--", body]
+    tail = len(text) - len(body)
+    if tail:
+        if body:
+            argv.append(";")
+        argv += ["send-keys", "-t", name, "-H", *(["3b"] * tail)]
+    return argv
+
+
 def _send_to_agent(name: str, text: str, submit: bool = True) -> bool:
     """Type ``text`` into the agent tmux session; press Enter when ``submit``.
 
@@ -536,7 +553,7 @@ def _send_to_agent(name: str, text: str, submit: bool = True) -> bool:
             settle = 0.4  # a long paste takes the TUI a moment to absorb
         else:
             typed = _proc.run_capped(
-                ["tmux", "send-keys", "-t", name, "-l", "--", text],
+                literal_keys_argv(name, text),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=10,

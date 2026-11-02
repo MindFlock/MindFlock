@@ -42,6 +42,11 @@ modules under
                      slots (DST-safe), describe
     cursor_windows   IDE window adoption/focus/close (Cursor & friends)
     engine           the Engine singleton: instance registry + state reload
+    flights          Flights (docs/flights.md): plan + flight stores, the step
+                     registry, built-in plans, the pure planner
+    flight_driver    Flights: the loop, bus taps, step executors, flight.*
+                     events, the operations behind /api/flights*
+    flight_describe  Flights: describe a step/plan with the one-shot CLI
     events           the event bus behind /api/events
     git_ops          git primitives (branch/sha/dirty/origin probes, caches)
     ide_launch       launching the configured IDE on a folder
@@ -52,6 +57,8 @@ modules under
                      mail between them) and the row's last_report
     mailbox          inter-agent messages: store, exactly-once states, the
                      typed delivery line (the lane + routes live here)
+    move_session     moving a session's workspace to a new folder (the
+                     /move route's refusals, background run, session.moved)
     mobile_access    phone access: tailscale URLs, QR codes, startup banner
     pane_find        in-place Ctrl+F in a live pane (tmux copy-mode search)
     pane_scroll_find in-place Ctrl+F for apps that scroll themselves (wheel + look)
@@ -88,7 +95,9 @@ modules under
                      (the sweep, the rules), wake it on demand (ensure_awake)
     snapshot         per-session JSON descriptors (labels, diff stat)
     state_events     session.*_changed diffing: settle + boot quiet windows,
-                     session.turn_ended gates, human-input presence
+                     session.turn_ended gates, human-input presence,
+                     ReplyWatch (the Stop hook's reply file landing),
+                     DialogWatch (a dialog on a working session's screen)
     task_headlines   the row's task_headline: newest MEANINGFUL prompt as a
                      verb phrase (backend/task_headline.py), remembered per
                      session + conversation
@@ -116,6 +125,7 @@ and re-imports its helpers, so tests that patch ``server._x`` still reach it.
 
     peer             peer links: /api/peer* (backend.peer.service does the work)
     team_runs        team runs /api/runs* and GET /api/outbox
+    flights          Flights /api/flights* (plans, flights, describe, kinds)
 
 Convention: extracted modules call back through the server namespace for
 anything monkeypatched in tests (``_server()._foo(...)``), and this module
@@ -173,6 +183,7 @@ from backend.workspace_setup import is_refresher_dirname as _is_refresher_dirnam
 # Core modules the monolith was split into (see backend.web/core/).
 from backend.web.core import aliases as _aliases
 from backend.web.core import guests as _guests
+from backend.web.core import move_session as _move_session
 from backend.web.core import guest_terminal as _guest_terminal
 from backend.web.core import guest_tunnel as _guest_tunnel
 from backend.web.core import hidden_sessions as _hidden_sessions
@@ -192,6 +203,8 @@ from backend.web.core import autopilot as _autopilot
 from backend.web.core import lanes as _lanes
 from backend.web.core import team_runs as _team_runs
 from backend.web.core import team_run_driver as _team_run_driver
+from backend.web.core import flight_driver as _flight_driver
+from backend.web.core import flights as _flights
 from backend.web.core import worker_order_driver as _worker_order_driver
 from backend.web.core import code_map as _code_map
 from backend.web.core import code_outline as _code_outline
@@ -553,6 +566,9 @@ from backend.web.core.state_events import (
     _SETTLE_ACTIVITIES,
     _STAGE_SETTLE_SECONDS,
     _TRANSIENT_STAGES,
+    DialogRow as _DialogRow,
+    DialogWatch as _DialogWatch,
+    ReplyWatch as _ReplyWatch,
     _TURN_END_DWELLS,
     _TURN_END_DWELL_MARKER_S,
     _TURN_END_DWELL_S,
@@ -653,6 +669,8 @@ from backend.web.routes import peer_sessions as _peer_session_routes
 from backend.web.routes import chat as _chat_routes
 from backend.web.routes import guests as _guest_routes
 from backend.web.routes import team_runs as _team_runs_routes
+from backend.web.routes import flights as _flights_routes
+from backend.web.routes import sky as _sky_routes
 from backend.web.core import voice_actions as _voice_actions
 from backend.web.routes import speech as _speech_routes
 from backend.web.routes import voice as _voice_routes
@@ -778,6 +796,12 @@ async def lifespan(app: FastAPI):
     if _team_run_loop_enabled():
         _team_run_driver.subscribe()
         _register_task(_team_run_driver.run_loop())
+    # Flights: carry each flight along its plan (ship steps through the
+    # autopilot above, prompts through the queue). Off under pytest like the
+    # team-run loop — ENGINE is the developer's real state there.
+    if _team_run_loop_enabled():
+        _flight_driver.subscribe()
+        _register_task(_flight_driver.run_loop())
     # Worker order: release an orchestrator's held workers when their turn
     # comes, land their fences first (core.worker_order). Off under pytest
     # like the team-run loop.
@@ -790,6 +814,12 @@ async def lifespan(app: FastAPI):
     # Ctrl+F ahead of time: keep agent panes' find indexes current, build
     # missing ones where nobody is looking (see _find_index_tick).
     _register_task(_find_index_loop())
+    # A turn's reply goes out the moment the Stop hook files it, not on the
+    # next 4s instances tick (see _reply_watch_loop).
+    _register_task(_reply_watch_loop())
+    # Likewise a permission/choice dialog: on the row within ~0.3s of being
+    # drawn, not on the next 4s tick (see _dialog_watch_loop).
+    _register_task(_dialog_watch_loop())
     # Verify: watch origin until each generated test plan's work reaches the
     # live branch, and poll the verify sessions that are working through one.
     _register_task(_test_plans_due_loop())
@@ -1480,9 +1510,12 @@ def _tick_state_changes() -> None:
     telemetry (the tick only needs what feeds *_changed events)."""
     for i in list(ENGINE.instances.values()):
         try:
+            started = time.monotonic()
             status = getattr(i.Status, "name", str(i.Status)).lower()
             stage = _session_stage_cached(i).get("stage") or "agent"
             activity = _agent_activity_cached(i, i.Title)
+            if _reply_superseded(i.Title, started):
+                continue  # its reply was published while this was read
             _emit_state_changes(i.Title, status, activity, stage)
         except Exception:  # noqa: BLE001 — one bad session can't stop the tick
             pass
@@ -1706,6 +1739,7 @@ def _session_snapshot(i, queues: dict) -> dict:
     # A dict read off an already-loaded store, so it is computed fresh on BOTH
     # snapshot paths and therefore never needs a _SNAPSHOT_PROBE_KEYS carry-over.
     d["autopilot"] = _autopilot_dto(i.Title)
+    d["flight"] = _flight_dto(i.Title, i)
     # A killed agent coming back by itself, or left Offline and why
     # (core.revive.auto_state) — a dict read, fresh on both snapshot paths.
     d["auto_revive"] = _revive.auto_state(i.Title)
@@ -1833,6 +1867,7 @@ def _session_snapshot_cheap(i, queues: dict, prev: Optional[dict] = None) -> dic
     d["merge_state"] = None
     d["queue"] = _queue_summary(i.Title, queues)
     d["autopilot"] = _autopilot_dto(i.Title)
+    d["flight"] = _flight_dto(i.Title, i)
     d["auto_revive"] = _revive.auto_state(i.Title)
     d["tokens"] = d["tokens_in"] = 0
     d["tokens_cache_read"] = d["tokens_cache_write"] = 0
@@ -2056,12 +2091,15 @@ _SNAPSHOT_AT = 0.0
 def _instances_tick() -> None:
     """One background pass: recompute the sessions snapshot and fire the side
     effects that used to piggyback on GET /api/instances."""
+    started = time.monotonic()
     out = _build_instances_snapshot()
     for d in out:
         title = d.get("title") or ""
         inst = ENGINE.instances.get(title)
         if inst is None:  # deleted while the snapshot was being built
             continue
+        if _reply_superseded(title, started):
+            continue  # its reply was published after this row was read
         try:
             # J5: announce the first crossing of the per-session cost budget.
             _check_session_budget(title, d.get("tokens_cost") or 0.0)
@@ -2122,8 +2160,9 @@ def _instances_tick() -> None:
     # its own thread, so it never holds up this tick (core.revive.auto_tick).
     _revive.auto_tick(sys.modules[__name__])
     # Publish the freshly computed state so AppContext.sessions() (Addon API
-    # v2) and GET /api/instances can serve it without recomputing it.
-    _events.set_sessions_snapshot(out)
+    # v2) and GET /api/instances can serve it without recomputing it — all
+    # but a row a landed reply republished after this tick read it.
+    _events.set_sessions_snapshot(_keep_reply_rows(out, started))
     global _SNAPSHOT_AT
     _SNAPSHOT_AT = time.time()
 
@@ -2160,6 +2199,277 @@ def _republish_session(title: str):
         return d
     except Exception:  # noqa: BLE001 — a freshness nicety must never 500
         return None
+
+
+#: Probe memos a landed reply makes stale: the reading the Stop hook just
+#: flipped and every row field read off the reply file.
+_REPLY_PROBES = ("activity", "asking", "last_turn", "last_say")
+#: title -> monotonic time its last _republish_reply (or _republish_dialog)
+#: finished. A tick that
+#: STARTED before then may have read the session before the reply landed
+#: (``working``): it must neither emit that reading (idle→working→idle, a
+#: flapping chip) nor publish that row over the fresh one.
+_REPLY_REPUBLISHED_AT: Dict[str, float] = {}
+
+
+def _reply_superseded(title: str, started: float) -> bool:
+    """Whether a reply republished ``title`` after a reading begun at
+    ``started`` (monotonic)."""
+    return _REPLY_REPUBLISHED_AT.get(title, 0.0) > started
+
+
+def _keep_reply_rows(out: list, started: float) -> list:
+    """``out`` with each row a reply republished since ``started`` swapped
+    for the published (fresher) one; old stamps are dropped."""
+    for t, at in list(_REPLY_REPUBLISHED_AT.items()):
+        if at < started - 60.0:
+            _REPLY_REPUBLISHED_AT.pop(t, None)
+    fresh = {t for t, at in list(_REPLY_REPUBLISHED_AT.items()) if at > started}
+    if not fresh:
+        return out
+    rows = {
+        r.get("title"): r
+        for r in _events.sessions_snapshot()
+        if r.get("title") in fresh
+    }
+    return [rows.get(d.get("title"), d) for d in out]
+
+
+def _republish_reply(title: str):
+    """Publish ``title``'s turn end the moment its reply file lands.
+
+    :func:`_republish_session` without its cost: a reply changes the
+    activity and the row fields read off the reply, never git state, so only
+    those are recomputed (the 4s tick refreshes the rest, as it always has)
+    and patched into the published row, then emitted exactly the way
+    :func:`_tick_state_changes` emits — so a reply announces through the same
+    settle and boot-quiet windows as the tick. The memos those fields sit
+    behind are dropped first: the activity read ≤2.5s ago is the ``working``
+    the Stop hook just ended. Publish before emit, as in
+    :func:`_republish_session`. A session the tick has not published yet gets
+    the full republish. Returns the row, or None. Never raises."""
+    return _republish_fast(
+        title, _REPLY_PROBES, lambda inst: _agent_activity(inst, title), reply=True
+    )
+
+
+#: Probe memos a dialog appearing (or leaving) makes stale.
+_DIALOG_PROBES = ("activity", "asking")
+
+
+def _republish_dialog(title: str, screen: Optional[str] = None, stable: bool = False):
+    """Publish ``title``'s dialog the moment the dialog watch sees it.
+
+    :func:`_republish_reply`'s path for the two fields a dialog changes —
+    ``activity`` (``clarify``) and ``asking`` (the dialog off ``screen``) —
+    with the same publish-before-emit, settle/boot-quiet windows and tick
+    race guard. ``screen`` is the watch's own fresh capture: classified
+    first, before the CLI's report (``claude agents --json`` can take 0.4s);
+    None probes in full (a hook said clarify and no parser saw a dialog).
+    ``stable``: the watch saw the same dialog hold still across two captures
+    — recorded as an authoritative ``screen-stable`` reading, so the
+    ``activity_changed`` event skips the 3s settle (a first sighting, like
+    any single frame, still waits for it; the row does not). Returns the
+    row, or None. Never raises."""
+
+    def read(inst):
+        if screen is None:
+            return _agent_activity(inst, title)
+        return _agent_activity(inst, title, screen=screen, screen_stable=stable)
+
+    return _republish_fast(title, _DIALOG_PROBES, read, reply=False)
+
+
+def _republish_fast(title: str, probes, read_activity, reply: bool):
+    """The shared body of :func:`_republish_reply` / :func:`_republish_dialog`:
+    drop ``probes``' memos, read the activity (``read_activity(inst)``, then
+    donated to the memo, as _session_stage_fresh does: a reader that began
+    before the change may still store its ``working``), patch the row's
+    activity fields (plus the reply fields when ``reply``) into the
+    published row, emit, and stamp the tick race guard."""
+    try:
+        inst = ENGINE.instances.get(title)
+        if inst is None:
+            return None
+        prev = next(
+            (r for r in _events.sessions_snapshot() if r.get("title") == title),
+            None,
+        )
+        if prev is None:
+            return _republish_session(title)
+        with _PROBE_CACHE_LOCK:
+            for probe in probes:
+                _PROBE_CACHE.pop((probe, title), None)
+        status = getattr(inst.Status, "name", str(inst.Status)).lower()
+        stage = _session_stage_cached(inst).get("stage") or "agent"
+        activity = _probe_seed("activity", inst, read_activity(inst))
+        row = dict(prev)
+        row["activity"] = activity
+        row["activity_since"] = _agent_state.state_since(title)
+        row["asking"] = _session_asking_cached(inst, activity)
+        if reply:
+            row["background"] = _background_jobs(inst, title)
+            row["last_turn"] = _session_last_turn_cached(inst)
+            row["last_say"] = _session_last_say_cached(inst)
+        _events.patch_session_snapshot(title, row)
+        _emit_state_changes(title, status, activity, stage)
+        _REPLY_REPUBLISHED_AT[title] = time.monotonic()
+        return row
+    except Exception:  # noqa: BLE001 — a freshness nicety must never raise
+        return None
+
+
+# ---- Reply watch ------------------------------------------------------------ #
+#: How often the marker directory is stat'ed for a landed reply (one syscall;
+#: with ReplyWatch's one-poll quiet period a reply publishes ≤ ~2 polls later).
+_REPLY_WATCH_INTERVAL = 0.05
+#: None = on except under pytest (ENGINE is the developer's real state there);
+#: tests that exercise the loop set it True with an isolated ENGINE.
+_REPLY_WATCH_LOOP_ENABLED: Optional[bool] = None
+
+
+def _reply_watch_loop_enabled() -> bool:
+    if _REPLY_WATCH_LOOP_ENABLED is not None:
+        return bool(_REPLY_WATCH_LOOP_ENABLED)
+    return not _restart._under_pytest()
+
+
+def _reply_titles(names) -> list:
+    """The live session titles behind reply-file names (safe session names)."""
+    from backend.providers import activity_markers as _am
+
+    wanted = set(names)
+    out = []
+    for title in list(ENGINE.instances):
+        try:
+            if _am.safe_session_name(tmux.to_mindflock_tmux_name(title)) in wanted:
+                out.append(title)
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
+async def _reply_watch_loop() -> None:
+    """Republish a session the moment its Stop hook files the reply
+    (core.state_events.ReplyWatch; started by the lifespan)."""
+    if not _reply_watch_loop_enabled():
+        return
+    from backend.providers import activity_markers as _am
+
+    watch = _ReplyWatch(_am.marker_dir)
+    while True:
+        try:
+            names = watch.poll()
+            if names:
+                for title in _reply_titles(names):
+                    await asyncio.to_thread(_republish_reply, title)
+        except Exception:  # noqa: BLE001 — the loop must never die
+            pass
+        await asyncio.sleep(_REPLY_WATCH_INTERVAL)
+
+
+# ---- Dialog watch ----------------------------------------------------------- #
+#: The dialog watch's poll period: marker stats every poll, screens on each
+#: session's own cadence (core.state_events.DialogWatch: 0.3s working, 1s
+#: clarify, 0.1s while a hook's clarify waits for its dialog to be drawn).
+_DIALOG_WATCH_INTERVAL = 0.1
+#: None = on except under pytest (ENGINE is the developer's real state there).
+_DIALOG_WATCH_LOOP_ENABLED: Optional[bool] = None
+
+
+def _dialog_watch_loop_enabled() -> bool:
+    if _DIALOG_WATCH_LOOP_ENABLED is not None:
+        return bool(_DIALOG_WATCH_LOOP_ENABLED)
+    return not _restart._under_pytest()
+
+
+def _dialog_watch_rows() -> list:
+    """The published rows the dialog watch looks at: this device's sessions
+    reading ``working`` or ``clarify`` (idle, offline and remote rows are
+    never captured)."""
+    out = []
+    for r in _events.sessions_snapshot():
+        activity = r.get("activity")
+        if activity not in ("working", "clarify"):
+            continue
+        title = r.get("title") or ""
+        inst = ENGINE.instances.get(title)
+        if inst is None or getattr(inst, "Status", None) == session.Paused:
+            continue
+        program = getattr(inst, "Program", "") or ""
+        try:
+            parses = _agent_state._reads_dialogs(providers.resolve(program))
+            name = tmux.to_mindflock_tmux_name(title)
+        except Exception:  # noqa: BLE001
+            continue
+        out.append(_DialogRow(title, name, activity, program, parses))
+    return out
+
+
+def _dialog_marker_key(name: str):
+    """The activity marker's (mtime, size, inode), or None — one stat."""
+    from backend.providers import activity_markers as _am
+
+    try:
+        st = os.stat(_am.marker_path(name))
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size, st.st_ino)
+
+
+def _dialog_marker_state(name: str) -> Optional[str]:
+    from backend.providers import activity_markers as _am
+
+    return _am.read_activity_marker(name)
+
+
+def _dialog_watch_load() -> float:
+    """1-minute load average per CPU — the dialog watch backs off past ~0.75
+    (WSL thrash: memories of the 2026-10 OOM). Critical memory pressure reads
+    as maximal load: the watch then polls at its slowest."""
+    try:
+        from backend import memory_pressure as _mem
+
+        if _mem.level() == "critical":
+            return 1e9
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        return os.getloadavg()[0] / float(os.cpu_count() or 1)
+    except (OSError, AttributeError):
+        return 0.0
+
+
+def _new_dialog_watch():
+    return _DialogWatch(
+        _agent_state.capture_visible_many,
+        _agent_state.dialog_fingerprint,
+        marker_key=_dialog_marker_key,
+        marker_state=_dialog_marker_state,
+        load=_dialog_watch_load,
+    )
+
+
+async def _dialog_watch_loop() -> None:
+    """Republish a session the moment a dialog appears on (or leaves) its
+    screen (core.state_events.DialogWatch; started by the lifespan)."""
+    if not _dialog_watch_loop_enabled():
+        return
+    watch = _new_dialog_watch()
+    while True:
+        try:
+            rows = _dialog_watch_rows()
+            acts = await asyncio.to_thread(watch.poll, rows) if rows else []
+            if not rows:
+                watch.poll(())  # forget every session's state
+            for title, screen, stable in acts:
+                try:
+                    await asyncio.to_thread(_republish_dialog, title, screen, stable)
+                except Exception:  # noqa: BLE001 — one session can't drop the rest
+                    pass
+        except Exception:  # noqa: BLE001 — the loop must never die
+            pass
+        await asyncio.sleep(_DIALOG_WATCH_INTERVAL)
 
 
 async def _instances_tick_loop() -> None:
@@ -2256,6 +2566,21 @@ async def _find_index_loop() -> None:
 
 #: Test seam, like _RED_ZONE_LOOP_ENABLED: None = on except under pytest.
 _TEAM_RUN_LOOP_ENABLED: Optional[bool] = None
+
+
+def _flight_dto(title: str, inst=None):
+    """The row's ``flight`` field (core.flights.row_dto), None on any error —
+    a row build never fails on the flights store. ``inst`` gives its live
+    parent and creation time, so a worker of a flying session is a branch."""
+    try:
+        parent, created = "", None
+        if inst is not None:
+            parent = _lineage.live_parent(ENGINE.instances, title)
+            at = getattr(inst, "CreatedAt", None)
+            created = float(at.timestamp()) if at is not None else None
+        return _flights.row_dto(title, parent, created)
+    except Exception:  # noqa: BLE001 — enrichment only
+        return None
 
 
 def _team_run_loop_enabled() -> bool:
@@ -2928,6 +3253,22 @@ def _start_depth_override(payload: dict) -> str:
     return depth
 
 
+def _start_plan_override(payload: dict) -> str:
+    """A validated per-start flight plan id from a force-start body, or ``""``
+    (the server's own resolution, :func:`_intake_plan`). The third sibling of
+    :func:`_start_agent_override` / :func:`_start_depth_override`: a plan that
+    does not exist is refused, never quietly replaced by the default."""
+    raw = (payload or {}).get("plan", "")
+    if raw in (None, ""):
+        return ""
+    if not isinstance(raw, str):
+        raise ValueError("plan must be a plan id")
+    plan = raw.strip()
+    if plan and _flights.get_plan(plan) is None:
+        raise ValueError("unknown plan %r — see GET /api/flights/plans" % plan)
+    return plan
+
+
 def _start_effort_override(payload: dict) -> str:
     """A validated per-start thinking-effort rung from a force-start body, or ``""``.
 
@@ -3045,6 +3386,162 @@ def _arm_intake_autopilot(
             by=by,
         )
     except Exception:  # noqa: BLE001 — never fail a launch over the autopilot
+        pass
+
+
+def _source_intake_plan(source_id: str) -> str:
+    """The flight plan configured for a ticketing source (``plan``), or ``""``.
+    Matched like :func:`_source_intake_depth`: the exact source key first."""
+    from backend.config import settings as _settings
+
+    try:
+        sources = list(_settings.load_settings().ticketing.sources)
+        for match in ("id", "provider"):
+            for src in sources:
+                if getattr(src, match, "") == source_id:
+                    return str(getattr(src, "plan", "") or "").strip()
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+def _repo_intake_plan(repo: str, kind: str) -> str:
+    """The flight plan configured for a GitHub repo's PRs or issues (``kind``
+    ``"prs"`` / ``"issues"``, the two override maps), or ``""``."""
+    from backend.config import settings as _settings
+
+    try:
+        gh = _settings.load_settings().github
+        table = gh.issue_repo_settings if kind == "issues" else gh.repo_settings
+        return str(((table or {}).get(repo) or {}).get("plan", "") or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _intake_plan(
+    kind: str,
+    plan: str = "",
+    depth_override: str = "",
+    configured: str = "",
+    depth: str = "",
+) -> str:
+    """The flight plan an intake start of ``kind`` (``ticket``/``pr``/``issue``)
+    flies, ``""`` for none (docs/flights.md "How a ticket becomes a flight").
+
+    In order: the start's explicit ``plan``; a per-start ``depth_override``
+    (a row's pick, a team run's ``"off"``, an agent's ``autopilot=``) cut from
+    the built-in — a choice made for THIS start outranks the source's
+    standing one; the source's ``plan`` setting, when that plan still exists;
+    the built-in cut at the source's ``depth``. ``off``/``agent`` is no flight,
+    which is today's behaviour exactly. Never raises."""
+    if plan:
+        return plan
+    try:
+        if depth_override:
+            return _flights.plan_for_depth(kind, depth_override)
+        if configured and _flights.get_plan(configured) is not None:
+            return configured
+        return _flights.plan_for_depth(kind, depth)
+    except Exception:  # noqa: BLE001 — an unreadable store is "no flight"
+        return ""
+
+
+def _arm_intake_flight(
+    title: str, plan_id: str, subject: dict, by: str = "user", branch: str = ""
+) -> Optional[dict]:
+    """:func:`flights.arm_pending` for an intake title, or None when it could
+    not be armed (logged). A flight left on the title by an earlier start whose
+    session never appeared is cancelled first: no session, nothing to keep."""
+    who = by if str(by).startswith("agent:") else "intake"
+    for attempt in (1, 2):
+        try:
+            flight = _flights.arm_pending(
+                title, plan_id, subject, by=who, branch=branch
+            )
+        except _flights.FlightError as err:
+            stale = _flights.for_session(title)
+            if (
+                attempt == 1
+                and err.error == "in_flight"
+                and stale is not None
+                and title not in ENGINE.instances
+            ):
+                _cancel_intake_flight(title, "replaced by a new start")
+                continue
+            if log.ErrorLog is not None:
+                log.ErrorLog.Printf("flight for %s not armed: %v", title, err.detail)
+        except Exception as err:  # noqa: BLE001 — never fail a launch over it
+            if log.ErrorLog is not None:
+                log.ErrorLog.Printf("flight for %s not armed: %v", title, err)
+        else:
+            try:
+                # On the Board from second one (flight.changed is a refetch).
+                _flight_driver._announce(None, flight)
+            except Exception:  # noqa: BLE001
+                pass
+            return flight
+        return None
+    return None
+
+
+def _arm_intake(
+    title: str,
+    depth: str,
+    source: str,
+    item: str,
+    message: str = "",
+    by: str = "user",
+    *,
+    plan: str = "",
+    subject: Optional[dict] = None,
+    branch: str = "",
+) -> str:
+    """What an intake start arms before its session exists: the flight of
+    ``plan`` (resolved by :func:`_intake_plan`) when there is one, else the
+    autopilot ``depth`` (:func:`_arm_intake_autopilot`). A flight's ship steps
+    arm their own lanes, so the depth is armed beside a flight only when its
+    plan has none — and an autopilot record left on the title by an earlier
+    start is dropped, so it can't ship the session beside the flight.
+    ``branch`` is the branch the start cuts (the plan's ``{branch}``).
+
+    Returns the text to append to the intake prompt: the plan's first agent
+    step's own ``prompt`` (placeholders filled), ``""`` without one."""
+    flight = (
+        _arm_intake_flight(title, plan, subject or {}, by, branch) if plan else None
+    )
+    if flight is None or not any(s["kind"] == "ship" for s in flight["steps"]):
+        _arm_intake_autopilot(title, depth, source, item, message=message, by=by)
+    else:
+        try:
+            _autopilot.disarm(title)
+        except Exception:  # noqa: BLE001
+            pass
+    if flight is None:
+        return ""
+    first = next((s for s in flight["steps"] if s["kind"] == "agent"), None)
+    text = _flights.fill_prompt(
+        (first or {}).get("config", {}).get("prompt") or "", flight
+    )
+    return "\n\n" + text.strip() if text.strip() else ""
+
+
+def _cancel_intake_flight(title: str, reason: str) -> None:
+    """Cancel the flight armed for ``title`` whose session could not be
+    created (``session.create_failed``) — and say so — and drop the autopilot
+    record armed for it: neither may outlive the start that armed it. A title
+    that has a live session (this launch lost a race to another) keeps both."""
+    try:
+        if title in ENGINE.instances:
+            return
+        _autopilot.disarm(title)
+        before = _flights.for_session(title)
+        if before is None:
+            return
+        after = _flights.mutate(
+            before["id"], lambda f: _flights.op_cancel(f, reason[:300])
+        )
+        _flight_driver._announce(before, after)
+    except Exception:  # noqa: BLE001 — a failed launch is already being reported
         pass
 
 
@@ -3433,10 +3930,11 @@ def mkdir(payload: dict) -> JSONResponse:
 
 
 @app.get("/api/browse")
-def browse(path: str = "") -> JSONResponse:
+def browse(path: str = "", hidden: bool = False) -> JSONResponse:
     """List immediate subdirectories of ``path`` (default: home) for the picker.
 
-    Each entry flags whether it is itself a git repo. Dotfolders are hidden.
+    Each entry flags whether it is itself a git repo. Dotfolders are hidden
+    unless ``hidden=1`` (Tab completion of a name that starts with a dot).
     """
     raw = path.strip() if path else ""
     base = os.path.realpath(os.path.expanduser(raw)) if raw else os.path.expanduser("~")
@@ -3446,7 +3944,7 @@ def browse(path: str = "") -> JSONResponse:
     entries = []
     try:
         for name in sorted(os.listdir(base), key=str.lower):
-            if name.startswith("."):
+            if name.startswith(".") and not hidden:
                 continue
             full = os.path.join(base, name)
             if not os.path.isdir(full):
@@ -4255,6 +4753,35 @@ async def instance_resume(title: str) -> JSONResponse:
         new=getattr(inst.Status, "name", str(inst.Status)).lower(),
     )
     return JSONResponse(_instance_json(inst))
+
+
+@app.post("/api/instances/{title}/move")
+async def instance_move(title: str, payload: Optional[dict] = None) -> JSONResponse:
+    """Move the session's workspace to a new folder, live: ``{"dest": "<absolute
+    folder>", "force": false}`` → **202** ``{"title", "from", "to"}``; the
+    move runs in the background (:mod:`backend.web.core.move_session`) and
+    emits ``session.moved`` or ``session.move_failed``. 404
+    ``unknown_session``; 409 ``remote`` / ``exists`` / ``moving``; 400
+    ``bad_dest``; 409 ``working`` / ``in_flight`` unless ``force``."""
+    refusal, plan = await asyncio.to_thread(
+        _move_session.check,
+        ENGINE.instances,
+        title,
+        payload or {},
+        lambda inst: _agent_activity(inst, title),
+    )
+    if refusal is not None:
+        return JSONResponse(refusal[1], status_code=refusal[0])
+    if not _move_session.start(
+        ENGINE,
+        plan,
+        lambda inst: {**_session_overlay_env(inst), **_ports.env_for(title)},
+    ):
+        return JSONResponse(
+            {"error": "this session is already being moved", "code": "moving"},
+            status_code=409,
+        )
+    return JSONResponse(plan, status_code=202)
 
 
 @app.post("/api/instances/{title}/background/{pid}/stop")
@@ -5892,6 +6419,9 @@ def _deliver_to_agent(
     # prompts dialog, the Map's buttons) — automation types via
     # _send_queued_item and the limit watcher, never through here.
     _note_human_input(title)
+    # Typed into a dialog that is up (a send box that is not dialog_safe):
+    # a submitted text's Enter answers it — the last answer is stamped.
+    _note_pane_input(inst, title, text + ("\r" if submit else ""))
     typed = _voice_say(inst, title, text) if say else text
     if not _send_to_agent(name, typed, submit):
         if say:
@@ -5947,6 +6477,70 @@ def _enter_on_agent(inst, title: str, *, say: bool = False, extra: str = ""):
     if not _send_to_agent(name, typed, True):
         if say:
             _voice_say_cancel(title)
+        return False, _SEND_FAILED
+    return "sent", None
+
+
+def _dialog_or_limit_on_screen(inst, name: str) -> bool:
+    """:func:`_dialog_on_screen`'s verdict plus the usage-limit menu (its
+    "❯ 1. …" options take a typed digit too), from ONE capture of ``name``'s
+    visible screen. A capture that fails is no evidence (False), as there."""
+    text, err = _agent_io.capture_screen(name)
+    if err is not None or not text:
+        return False
+    try:
+        provider = providers.resolve(getattr(inst, "Program", "") or "")
+        probe = getattr(provider, "dialog_on_screen", None)
+        if callable(probe) and probe(text):
+            return True
+    except Exception:  # noqa: BLE001 — an unresolvable CLI: still check the limit
+        pass
+    try:
+        from backend.providers.usage_limits import is_limit_screen
+
+        return is_limit_screen(text)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _dictate_on_agent(inst, title: str, text: str, erase: int):
+    """One batch of a voice client's live dictation → ``(told, reason)``
+    like :func:`_enter_on_agent`: take back ``erase`` characters, then type
+    ``text`` (no Enter) — ``/send``'s ``{"voice": true, "submit": false,
+    "erase": n}`` form, the desktop's every dictation keystroke.
+
+    The voice gate, checked at send time against the SCREEN (the rows the
+    client sees lag the 4 s state tick): a session in clarify, on the
+    usage-limit menu, with an unreadable activity or with a dialog on
+    screen (a sub-agent's prompt under a "working" row) gets nothing —
+    neither the text nor a Backspace (it could act on the dialog) — and
+    :data:`_SEND_IN_DIALOG`. Paused → :data:`PAUSED_REFUSED`; asleep or not
+    running → refused, never booted (a fresh CLI has no draft to correct).
+    Then one tmux call (``agent_io.send_dictation``). Blocking — call via
+    ``asyncio.to_thread``."""
+    if getattr(inst, "Status", None) == Paused:
+        return False, PAUSED_REFUSED
+    if _sleep.is_sleeping(title):
+        return False, _ENTER_ASLEEP
+    name = _live_session_name(tmux.to_mindflock_tmux_name(title))
+    if name is None:
+        return False, _ENTER_NOT_RUNNING
+    # The reading is the memoized one (≤ _PROBE_TTL old): a fresh probe asks
+    # Claude's `claude agents --json` (0.3-1 s), which stalled every other
+    # dictation batch. What a fresh reading would add is caught by the
+    # screen read below, taken at send time.
+    try:
+        activity = _agent_activity_cached(inst, title)
+    except Exception:  # noqa: BLE001 — unknown reads as "don't type blind"
+        activity = "unknown"
+    if (
+        activity in _PB_DIALOG_ACTIVITIES
+        or activity == "unknown"
+        or _dialog_or_limit_on_screen(inst, name)
+    ):
+        return False, _SEND_IN_DIALOG
+    _note_human_input(title)
+    if not _agent_io.send_dictation(name, erase, text):
         return False, _SEND_FAILED
     return "sent", None
 
@@ -6157,7 +6751,28 @@ async def instance_send(
     pressed; asleep or not running is 409 (never queued, never booted);
     paused, over budget and driven-elsewhere as above. → ``{"sent": true,
     "submitted": true, "entered": true}``. ``enter`` with text, or with
-    ``submit: false``, is 400."""
+    ``submit: false``, is 400.
+
+    ``voice=true``: the text is a voice client's dictation (live typing is
+    ``submit: false``) — it implies ``dialog_safe``, so a session in
+    clarify, on the usage-limit menu, with an unreadable activity or with a
+    dialog on its screen is 409 ``{"in_dialog": true}`` with nothing typed
+    (a submitted voice message is queued, as any dialog-safe send). A
+    whitespace-only ``text`` is allowed with ``submit: false`` (the space
+    between two dictated words). Typing by a person (the terminal, the send
+    box) never sets it and is unchanged.
+
+    ``{"voice": true, "submit": false, "erase": n}``: one batch of live
+    dictation — take back ``n`` characters (the BSpace key ×n), then type
+    ``text`` (may be empty), in ONE tmux call (:func:`_dictate_on_agent`):
+    a recognizer's correction ("fix the bu" → "fix the bag" is erase 1,
+    text "ag") lands whole. Gated like voice typing, checked against the
+    screen at send time: clarify, limit, unknown or a dialog on screen is
+    409 ``{"in_dialog": true}`` with nothing typed and nothing erased.
+    Asleep or not running is 409 (never booted). ``text`` is one line (no
+    control characters, ≤ 2000); ``n`` is 0–2000. → ``{"sent": true,
+    "submitted": false, "erased": n}``. ``erase`` without ``voice: true``
+    and ``submit: false`` (or with ``enter``) is 400."""
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
@@ -6169,9 +6784,25 @@ async def instance_send(
             {"error": "enter presses Enter on the draft: no text, submit not false"},
             status_code=400,
         )
-    if not enter and not text.strip():
+    # A voice client's dictation (opt-in ``voice: true``): never typed into a
+    # dialog, whatever the client believes is on screen — always dialog-safe.
+    # Live typing may be a lone space between two dictated words.
+    voice = (payload or {}).get("voice") is True
+    # One batch of live dictation: Backspace ×erase, then the text.
+    dictating = "erase" in (payload or {})
+    erase = 0
+    if dictating:
+        if not voice or submit or enter:
+            return JSONResponse(
+                {"error": "erase is voice live typing: voice true, submit false"},
+                status_code=400,
+            )
+        erase, eerr = _agent_io.parse_dictation(text, payload.get("erase"))
+        if eerr is not None:
+            return JSONResponse({"error": eerr}, status_code=400)
+    elif not enter and not text.strip() and not (voice and not submit and text):
         return JSONResponse({"error": "empty message"}, status_code=400)
-    dialog_safe = bool((payload or {}).get("dialog_safe", False))
+    dialog_safe = voice or bool((payload or {}).get("dialog_safe", False))
     # "Read everything" on: every prompt asks for its Say line, not only the
     # ones a client marks (core.voice.say_all).
     say = submit and ((payload or {}).get("say") is True or _voice.say_all())
@@ -6196,6 +6827,10 @@ async def instance_send(
     if enter:
         told, reason = await asyncio.to_thread(
             lambda: _enter_on_agent(inst, title, say=say, extra=extra)
+        )
+    elif dictating:
+        told, reason = await asyncio.to_thread(
+            lambda: _dictate_on_agent(inst, title, text, erase)
         )
     else:
         told, reason = await asyncio.to_thread(
@@ -6225,6 +6860,8 @@ async def instance_send(
         return JSONResponse(body)
     if enter:
         return JSONResponse({"sent": True, "submitted": True, "entered": True})
+    if dictating:
+        return JSONResponse({"sent": True, "submitted": False, "erased": erase})
     return JSONResponse({"sent": True, "submitted": submit})
 
 
@@ -8895,6 +9532,9 @@ async def instance_fast_track_cancel(title: str) -> JSONResponse:
 
 # --- Team runs + the outbox: routes/team_runs.py ------------------------------
 app.include_router(_team_runs_routes.router)
+# --- Flights: routes/flights.py ------------------------------------------------
+app.include_router(_flights_routes.router)
+app.include_router(_sky_routes.router)
 app.include_router(_speech_routes.router)
 
 # --- Voice mode (talking to a session from the phone): routes/voice.py --------
@@ -9077,7 +9717,9 @@ async def github_open_prs(fresh: bool = False) -> JSONResponse:
 
 @app.post("/api/github/prs/review")
 async def github_force_review(payload: dict) -> JSONResponse:
-    """Force-start a review session for one open PR, bypassing auto filters."""
+    """Force-start a review session for one open PR, bypassing auto filters.
+    The launch itself is ``core.pr_review.launch`` (``POST /api/flights/start``
+    with a ``pr`` subject runs the same code); ``plan`` picks its flight."""
     if not git_available():
         return _no_git_response()
     payload = payload or {}
@@ -9092,133 +9734,29 @@ async def github_force_review(payload: dict) -> JSONResponse:
         agent_override = _start_agent_override(payload)
         depth_override = _start_depth_override(payload)
         effort_override = _start_effort_override(payload)
+        plan_override = _start_plan_override(payload)
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=400)
-
-    # The provisioning row goes up BEFORE the GitHub lookup below, which is the
-    # last thing standing between the click and the sidebar showing anything.
-    # The panel's cached list already carries the title this PR maps to, so no
-    # slug re-derivation is involved; a cold cache just falls back to the
-    # post-lookup registration further down.
-    early = _cached_session_title(
-        _OPEN_PRS_CACHE,
-        "prs",
-        lambda p: p.get("repo") == repo and p.get("number") == number,
+    # This start's own pick, then this repo's card, then Intake → Pull
+    # requests' screen-wide Agent CLI (same chain the auto monitor uses), then
+    # the app-wide default. Mirrors the issue force-start below, which reads
+    # the same chain. Resolved here because this start's effort has to be
+    # translated into THAT CLI's spelling.
+    program = (
+        agent_override or _pr_review.review_agent(repo) or ENGINE.default_program()
     )
-    if early:
-        if early in ENGINE.instances or _pending_has(early):
-            return JSONResponse(
-                {
-                    "error": "session %s already exists — close it to re-review"
-                    % early,
-                    "title": early,
-                },
-                status_code=409,
-            )
-        _pending_add(early, "pr", repo=repo)
-
     try:
-        pr = await _pr_review.find_pr(repo, number)
-    except LookupError as err:
-        _pending_drop(early)
-        return JSONResponse({"error": str(err)}, status_code=404)
-    except Exception as err:  # noqa: BLE001
-        _pending_drop(early)
-        return JSONResponse({"error": str(err)}, status_code=502)
-
-    title = _pr_review.session_title(pr)
-    if title != early:
-        _pending_drop(early)  # stale cache entry — keep only the real title
-        if title in ENGINE.instances or _pending_has(title):
-            return JSONResponse(
-                {
-                    "error": "session %s already exists — close it to re-review"
-                    % title,
-                    "title": title,
-                },
-                status_code=409,
-            )
-    # Re-registered with the branch now that it's known (add() keeps `since`).
-    _pending_add(title, "pr", branch=pr.head_ref, repo=repo)
-    _arm_intake_autopilot(
-        title,
-        depth_override or _repo_intake_depth(repo, "prs"),
-        "pr",
-        "%s#%s" % (repo, number),
-        message=str(getattr(pr, "title", "") or ""),
-    )
-
-    async def _bg_review() -> None:
-        # Provision first (slow: clone/fetch of the PR head), then register the
-        # adopted workspace as a live session — same shape as the pipeline's
-        # SessionRunner.run_pr, but against THIS server's engine so the session
-        # shows up in the grid without a reload.
-        try:
-            directory, prompt, n_comments = await _pr_review.prepare_review(pr)
-            # This start's own pick, then this repo's card, then Intake → Pull
-            # requests' screen-wide Agent CLI (same chain the auto monitor uses),
-            # then the app-wide default. Mirrors the issue force-start below,
-            # which reads the same chain. Resolved first because this start's
-            # effort has to be translated into THAT CLI's spelling.
-            program = (
-                agent_override
-                or _pr_review.review_agent(repo)
-                or ENGINE.default_program()
-            )
-            prompt = _provider_effort.decorate_prompt(prompt, program, effort_override)
-            # The review workspace already exists here: decorate against it.
-            prompt = await asyncio.to_thread(
-                _red_zone_prompt, prompt, program, [str(directory)], None
-            )
-            inst = session.NewInstance(
-                session.InstanceOptions(
-                    title=title,
-                    path=".",
-                    program=program,
-                    provisioned=True,
-                    workspace_strategy="clone",
-                    new_branch=pr.head_ref,
-                    prompt=prompt,
-                    workspace_path=str(directory),
-                    launch_args=_start_launch_args(program, effort_override),
-                )
-            )
-            inst.ExtraEnv = _ports.env_for(title)
-            inst.SetStatus(Loading)
-            with ENGINE.lock:
-                ENGINE.instances[title] = inst
-            _seed_event_snapshot(title)
-            _events.BUS.emit(
-                "session.created",
-                session=title,
-                new="loading",
-                data={"program": inst.Program, "provisioned": True, "pr": pr.number},
-            )
-            try:
-                await asyncio.to_thread(inst.Start, True)
-                ENGINE.save()
-            except Exception:
-                # By identity: this task may be the loser of a re-start, and
-                # popping by name would delete the LIVE session's record.
-                _drop_failed_start(title, inst)
-                raise
-            # Ledger the PR so auto review doesn't run it a second time.
-            _pr_review.record_reviewed(pr)
-            if log.InfoLog is not None:
-                log.InfoLog.Printf(
-                    "forced PR review %s live (%d comments)", title, n_comments
-                )
-        except Exception as err:  # noqa: BLE001
-            if log.ErrorLog is not None:
-                log.ErrorLog.Printf("forced PR review %s failed: %v", title, err)
-            _events.BUS.emit(
-                "session.create_failed", session=title, data={"error": str(err)}
-            )
-        finally:
-            _pending_drop(title)
-
-    _register_task(_bg_review())
-    return JSONResponse({"started": True, "title": title}, status_code=202)
+        body = await _pr_review.launch(
+            repo,
+            number,
+            program=program,
+            depth=depth_override,
+            effort=effort_override,
+            plan=plan_override,
+        )
+    except _pr_review.LaunchError as err:
+        return JSONResponse(err.body, status_code=err.status)
+    return JSONResponse(body, status_code=202)
 
 
 # --- Ticket force-start (Intake → Tickets) --------------------------------
@@ -9407,6 +9945,7 @@ async def ticket_force_start(payload: dict, request: Request) -> JSONResponse:
         agent_override = _start_agent_override(payload)
         depth_override = _start_depth_override(payload)
         effort_override = _start_effort_override(payload)
+        plan_override = _start_plan_override(payload)
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=400)
     # A multi-repo source's ticket, started in a repo picked on the row
@@ -9441,6 +9980,7 @@ async def ticket_force_start(payload: dict, request: Request) -> JSONResponse:
             lineage=lineage,
             override_claim=override_claim,
             repo=repo,
+            plan=plan_override,
         )
     except _ticket_start.LaunchError as err:
         return JSONResponse(err.body, status_code=err.status)
@@ -9675,7 +10215,10 @@ async def github_open_issues(fresh: bool = False) -> JSONResponse:
 
 @app.post("/api/github/issues/start")
 async def github_issue_force_start(payload: dict) -> JSONResponse:
-    """Force-start a coding session for one open issue, bypassing auto filters."""
+    """Force-start a coding session for one open issue, bypassing auto filters.
+    The launch itself is ``core.issue_start.launch`` (``POST
+    /api/flights/start`` with an ``issue`` subject runs the same code);
+    ``plan`` picks its flight."""
     if not git_available():
         return _no_git_response()
     payload = payload or {}
@@ -9690,139 +10233,21 @@ async def github_issue_force_start(payload: dict) -> JSONResponse:
         agent_override = _start_agent_override(payload)
         depth_override = _start_depth_override(payload)
         effort_override = _start_effort_override(payload)
+        plan_override = _start_plan_override(payload)
     except ValueError as err:
         return JSONResponse({"error": str(err)}, status_code=400)
-
-    # Row first, GitHub lookup second (see the PR endpoint above).
-    early = _cached_session_title(
-        _OPEN_ISSUES_CACHE,
-        "issues",
-        lambda i: i.get("repo") == repo and i.get("number") == number,
-    )
-    if early:
-        if early in ENGINE.instances or _pending_has(early):
-            return JSONResponse(
-                {
-                    "error": "session %s already exists — close it to re-run" % early,
-                    "title": early,
-                },
-                status_code=409,
-            )
-        _pending_add(early, "iss", repo=repo)
-
     try:
-        issue = await _issue_start.find_issue(repo, number)
-    except LookupError as err:
-        _pending_drop(early)
-        return JSONResponse({"error": str(err)}, status_code=404)
-    except Exception as err:  # noqa: BLE001
-        _pending_drop(early)
-        return JSONResponse({"error": str(err)}, status_code=502)
-
-    title = _issue_start.session_title(issue)
-    if title != early:
-        _pending_drop(early)  # stale cache entry — keep only the real title
-        if title in ENGINE.instances or _pending_has(title):
-            return JSONResponse(
-                {
-                    "error": "session %s already exists — close it to re-run" % title,
-                    "title": title,
-                },
-                status_code=409,
-            )
-    _pending_add(
-        title,
-        "iss",
-        branch=_issue_start.branch_for(issue),
-        repo=repo,
-        workspace_strategy=_issue_start.workspace_mode(),
-    )
-    _arm_intake_autopilot(
-        title,
-        depth_override or _repo_intake_depth(repo, "issues"),
-        "iss",
-        "%s#%s" % (repo, number),
-        message=str(getattr(issue, "title", "") or ""),
-    )
-
-    async def _bg_start() -> None:
-        # Same shape as the pipeline's issue loop (issue → Ticket → engine
-        # session on a fresh branch), but against THIS server's engine so the
-        # session shows up in the grid without a reload. The engine owns
-        # provisioning (inside Instance.Start), like the ticket path.
-        try:
-            story, prompt, branch = await _issue_start.prepare_start(issue)
-            # Same leftover-worktree reclaim as the ticket path above.
-            await asyncio.to_thread(
-                _worktree_reclaim.reclaim_for_launch,
-                getattr(story, "repo_url", "") or "",
-                branch,
-            )
-            # This start's own pick outranks the repo card's Agent CLI, which
-            # prepare_start already resolved onto the story. Resolved before the
-            # options because this start's effort has to be translated into THAT
-            # CLI's spelling.
-            program = (
-                agent_override
-                or getattr(story, "agent", "")
-                or ENGINE.default_program()
-            )
-            prompt = _provider_effort.decorate_prompt(prompt, program, effort_override)
-            prompt = await asyncio.to_thread(
-                lambda p=prompt: _red_zone_prompt(
-                    p,
-                    program,
-                    _repo_url_workdirs(getattr(story, "repo_url", "") or ""),
-                    None,
-                )
-            )
-            inst = session.NewInstance(
-                session.InstanceOptions(
-                    title=title,
-                    path=".",
-                    program=program,
-                    provisioned=True,
-                    workspace_strategy=_issue_start.workspace_mode(),
-                    new_branch=branch,
-                    prompt=prompt,
-                    provision_repo_url=getattr(story, "repo_url", "") or "",
-                    launch_args=_start_launch_args(program, effort_override),
-                )
-            )
-            inst.ExtraEnv = _ports.env_for(title)
-            inst.SetStatus(Loading)
-            with ENGINE.lock:
-                ENGINE.instances[title] = inst
-            _seed_event_snapshot(title)
-            _events.BUS.emit(
-                "session.created",
-                session=title,
-                new="loading",
-                data={"program": inst.Program, "provisioned": True, "issue": number},
-            )
-            try:
-                await asyncio.to_thread(inst.Start, True)
-                ENGINE.save()
-            except Exception:
-                # By identity: this task may be the loser of a re-start, and
-                # popping by name would delete the LIVE session's record.
-                _drop_failed_start(title, inst)
-                raise
-            # Ledger the issue so auto handling doesn't run it a second time.
-            _issue_start.record_handled(issue)
-            if log.InfoLog is not None:
-                log.InfoLog.Printf("forced issue session %s live", title)
-        except Exception as err:  # noqa: BLE001
-            if log.ErrorLog is not None:
-                log.ErrorLog.Printf("forced issue session %s failed: %v", title, err)
-            _events.BUS.emit(
-                "session.create_failed", session=title, data={"error": str(err)}
-            )
-        finally:
-            _pending_drop(title)
-
-    _register_task(_bg_start())
-    return JSONResponse({"started": True, "title": title}, status_code=202)
+        body = await _issue_start.launch(
+            repo,
+            number,
+            agent=agent_override,
+            depth=depth_override,
+            effort=effort_override,
+            plan=plan_override,
+        )
+    except _issue_start.LaunchError as err:
+        return JSONResponse(err.body, status_code=err.status)
+    return JSONResponse(body, status_code=202)
 
 
 # --- Intake reopen (all three panels) -------------------------------------
@@ -10981,7 +11406,9 @@ def record_test_plan_result(plan_id: str, payload: dict) -> JSONResponse:
     step_id = str(payload.get("step_id", "") or "").strip()
     result = str(payload.get("result", "") or "").strip()
     note = str(payload.get("note", "") or "")
-    was_failing = bool(_test_plans.failed_steps(_test_plans.get(plan_id) or {}))
+    before = _test_plans.get(plan_id) or {}
+    was_failing = bool(_test_plans.failed_steps(before))
+    was_open = bool(before) and bool(_test_plans.open_human_steps(before))
     try:
         plan = _test_plans.record_result(plan_id, step_id, result, note, by="human")
     except ValueError as err:
@@ -10996,7 +11423,41 @@ def record_test_plan_result(plan_id: str, payload: dict) -> JSONResponse:
         )
     if result == "fail" and not was_failing:
         _announce_step_failed(plan, step_id)
+    if was_open and not _test_plans.open_human_steps(plan):
+        _announce_settled(plan)
     return JSONResponse({"ok": True, "plan": plan})
+
+
+def _announce_settled(plan: dict) -> None:
+    """``session.test_plan_settled``: a person just answered the last open
+    human item of a checklist a flight's verify step is waiting on — the
+    flight driver's cue to move on now (``session`` is that flight's
+    session). Nothing waits on it otherwise, so nothing is said."""
+    pid = str(plan.get("id") or "")
+
+    def _waits(f: dict) -> bool:
+        step = _flights.step_view(f)
+        if f["state"] != "waiting_you" or step.get("kind") != "verify":
+            return False
+        return str(f["step_states"][step["id"]]["detail"].get("plan") or "") == pid
+
+    try:
+        flights = _flights.list_flights(include_finished=False)
+        waiting = next((f for f in flights if _waits(f)), None)
+        if waiting is None:
+            return
+        _events.BUS.emit(
+            "session.test_plan_settled",
+            session=waiting["session"],
+            data={
+                "plan": pid,
+                "title": plan.get("title") or pid,
+                "branch": plan.get("branch") or "",
+                "flight": waiting["id"],
+            },
+        )
+    except Exception:  # noqa: BLE001 — an announcement never fails the answer
+        pass
 
 
 def _announce_step_failed(plan: dict, step_id: str) -> None:
@@ -11999,6 +12460,62 @@ async def instance_answer(
     return JSONResponse(body, status_code=status)
 
 
+#: title -> (hash of the probe's last screen, whether it shows a dialog):
+#: one provider check per distinct screen, however many keys arrive.
+_PANE_DIALOG_MEMO: Dict[str, tuple] = {}
+_PANE_DIALOG_MEMO_MAX = 1024
+
+
+def _pane_input_answers(inst, title: str) -> bool:
+    """Whether a settling key reaching ``title``'s pane NOW answers a dialog,
+    from what was known BEFORE the key (once it lands the dialog is gone):
+    the session's last activity reading is ``clarify`` / ``limit``, or its
+    probe's last screen (at most ``asking.SCREEN_MAX_AGE_S`` old) shows a
+    dialog by the provider (a sub-agent's prompt while the row reads
+    working). Cached reads only — no tmux, so the terminal socket's loop
+    can ask on every frame. Never raises (unknown → False)."""
+    try:
+        rec = _agent_state._ACTIVITY_CACHE.get(title) or {}
+        if rec.get("reported") in _agent_io.ANSWERABLE_ACTIVITIES:
+            return True
+        screen = _agent_state.last_screen(title, _asking.SCREEN_MAX_AGE_S)
+        if not screen:
+            return False
+        key = hash(screen)
+        hit = _PANE_DIALOG_MEMO.get(title)
+        if hit is not None and hit[0] == key:
+            return hit[1]
+        up = bool(
+            providers.resolve(getattr(inst, "Program", "") or "").dialog_on_screen(
+                screen
+            )
+        )
+        if len(_PANE_DIALOG_MEMO) >= _PANE_DIALOG_MEMO_MAX:
+            _PANE_DIALOG_MEMO.clear()
+        _PANE_DIALOG_MEMO[title] = (key, up)
+        return up
+    except Exception:  # noqa: BLE001 — unknown reads as "not a dialog"
+        return False
+
+
+def _note_pane_input(inst, title: str, data) -> None:
+    """Input typed straight into ``title``'s pane (its terminal socket, a
+    ``/send``) that settles a dialog — Enter, a digit, y/n, Escape; never
+    the wheel, a click, focus or arrow navigation
+    (``agent_io.settling_input``) — while one is up answered it as surely
+    as ``/answer`` does: stamp ``voice_actions.answered_at``, so the voice
+    router never counts a phrase begun before it for the NEXT dialog (a
+    same-id re-ask slipping between polls). Terminal replies to tmux's
+    probes never stamp. Never raises."""
+    try:
+        if is_terminal_reply(data) or not _agent_io.settling_input(data):
+            return
+        if _pane_input_answers(inst, title):
+            _voice_actions.note_answered(title)
+    except Exception:  # noqa: BLE001 — a stamp must never cost a keystroke
+        pass
+
+
 def _answer_dialog(inst, title: str, text: str, keys, dialog_id, by: str):
     """``/answer``'s check-and-type → ``(body, status)``. Blocking.
 
@@ -12068,6 +12585,11 @@ def _answer_dialog(inst, title: str, text: str, keys, dialog_id, by: str):
             _agent_io.note_answered(title, dialog_id)
             # The push's Yes/No buttons were for THIS dialog: spent with it.
             _voice_actions.forget(title, dialog_id)
+        elif dialog_id is None and _agent_io.settles(keys):
+            # An unpinned settling answer (an ask-select's later steps, a
+            # typed answer) answered the dialog too: the voice router never
+            # counts a phrase begun before it for the next one.
+            _voice_actions.note_answered(title)
         return {"ok": True, "activity_before": activity}, 200
 
 
@@ -12575,7 +13097,9 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
 
     def into_pane(data: bytes) -> None:
         """Input for the pane: through the attach client (the owner, and
-        every terminal's answers to tmux's probes), else send-keys."""
+        every terminal's answers to tmux's probes), else send-keys. A key
+        that settles a dialog stamps the session's last answer first."""
+        _note_pane_input(inst, title, data)
         if typist is None or is_terminal_reply(data):
             os.write(fd, data)
         else:

@@ -7,9 +7,10 @@
  *   Work     Message…, Queue prompt…
  *   Ship     Commit… (only once there is something to commit), Push, Open PR,
  *            Merge PR, View PR, Fast-track…, Verify checklist…, Run checks now
- *   Session  Rename…, Resume (only on a paused session: there is no Pause
- *            here — the palette, `mindflock pause` and the API still pause),
- *            Workers on every prompt (a ✓ switch: Flock mode)
+ *   Session  Rename…, Move to a folder… (this machine's own rows), Resume
+ *            (only on a paused session: there is no Pause here — the
+ *            palette, `mindflock pause` and the API still pause), Workers on
+ *            every prompt (a ✓ switch: Flock mode)
  *   More ▸   the rare ones, folded: Terminal, Diff, Code map, Thread, Browse
  *            history, Copy entire history (pane only), Split into parallel
  *            pieces…, Duplicate, Open in the IDE,
@@ -26,9 +27,9 @@
 
 import type { Instance } from "../api/types";
 import { instApi } from "../api/client";
-import { refreshInstances } from "../state/queries";
+import { isMovingRow, refreshInstances } from "../state/queries";
 import { displayName, useUi } from "../state/store";
-import { PR_FALLBACK_HINT, cleanupMissing, deleteConfirmText, deleteSession, selectSession } from "./sessionActions";
+import { PR_FALLBACK_HINT, cleanupMissing, deleteConfirmText, deleteSession, openMoveSession, selectSession } from "./sessionActions";
 import { api } from "../api/client";
 import { CONNECT_GITHUB_FOR_PRS, NOTHING_TO_PUSH } from "./vocab";
 import { actionLabel, actionNote, sessionAction, type ActionCtx, type SessionActionId } from "./sessionActionTable";
@@ -43,6 +44,7 @@ import { flockTooltip } from "./workersRequest";
 import { errorPop } from "./errorPop";
 import { errMsg } from "./format";
 import { toast } from "./toast";
+import { showInSky } from "./viewMode";
 
 export interface MenuItem {
   /** Stable id (data-menu): tests and the pane/row tell items apart by it. */
@@ -270,8 +272,24 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
   // Workers on every prompt (Flock mode) is a switch: the ✓ says it is on,
   // the note what it does. Same rows as Resume — this machine's own, settled.
   const flockOn = !!inst.flock;
+  const moving = isMovingRow(inst);
   const session = keep([
     fromTable("rename"),
+    // Move to a folder… (docs/flights.md "Moving a session"): this machine's
+    // own rows only — a peer's shared folder or another device's session is
+    // moved where it lives.
+    !remote &&
+      !peer &&
+      !inst.pending && {
+        key: "move",
+        label: "Move to a folder…",
+        disabled: moving,
+        note: moving ? "moving…" : undefined,
+        title: moving
+          ? "Being moved — it resumes in its new folder when the move is done"
+          : "Pauses the agent, moves the session's folder somewhere new, and resumes it there",
+        run: () => openMoveSession(title),
+      },
     fromTable("resume", { note: actionNote("resume", ctx) }),
     fromTable("flock", {
       label: (flockOn ? "✓ " : "") + "Workers on every prompt",
@@ -289,6 +307,26 @@ export function sessionMenu(inst: Instance, ctx: ActionCtx, opts: SessionMenuOpt
     ctx.caps.git !== false &&
       !tabs.has("diff") && { key: "diff", label: "Diff", title: "What this session changed", run: () => useUi.getState().openDiff(title) },
     ctx.caps.git !== false && !tabs.has("map") && fromTable("map"),
+    // Flights: the session's Flight tab — its live diagram, with + to tack a
+    // stop on and the saved stops to add (docs/flights.md "The session diagram").
+    !remote &&
+      !peer &&
+      !inst.pending && {
+        key: "flyway",
+        label: "Add a stop…",
+        title: "Open this session's Flight tab: tack a stop, or a saved stop, onto its line",
+        run: () => openTab(title, "flight"),
+      },
+    // The Sky on this one session: its line filling the sky, the bird where
+    // it is (docs/flights.md "The Sky").
+    !remote &&
+      !peer &&
+      !inst.pending && {
+        key: "sky",
+        label: "Show in the Sky",
+        title: "Switch to the sky on this session's line alone, with the bird where it is",
+        run: () => showInSky(title),
+      },
     fromTable("thread", { note: actionNote("thread", ctx) }),
     opts.onHistory && {
       key: "history",

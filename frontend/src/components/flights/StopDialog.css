@@ -1,0 +1,275 @@
+/* A stop's dialog (StopDialog.tsx): the same card as #rename-form
+   (smallDialogs.css), wider for a stop's fields. The fields keep the
+   inspector's look (.fl-form, StopParts.css). */
+
+.stop-dialog {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px;
+  width: 560px;
+  max-width: 94vw;
+  max-height: 88vh;
+  overflow: auto;
+}
+
+.stop-dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.stop-dialog h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.stop-dialog-kind {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.stop-dialog-kind.stop-dialog-perch {
+  background: color-mix(in srgb, var(--gold, #d4a72c) 14%, var(--panel-2));
+}
+
+.stop-dialog-kind-words {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+}
+
+.stop-dialog-kind-words .muted {
+  font-size: 12px;
+}
+
+.stop-dialog-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.stop-dialog-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.stop-dialog-chip.fl-st-current {
+  color: var(--fl-ink-working, var(--green));
+}
+
+.stop-dialog-chip.fl-st-perched,
+.stop-dialog-chip.fl-st-paused {
+  color: var(--sky-ink-gold, var(--gold, #d4a72c));
+}
+
+.stop-dialog-chip.fl-st-halted,
+.stop-dialog-chip.fl-st-failed {
+  color: var(--fl-ink-red, var(--red));
+}
+
+.stop-dialog-halt {
+  display: flex;
+}
+
+/* The group's sub-steps: one row each. */
+.stop-dialog-subs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stop-dialog-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.stop-dialog-sub-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stop-dialog-sub-state {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.stop-dialog-sub.fl-st-done .stop-dialog-sub-title,
+.stop-dialog-sub.fl-st-skipped .stop-dialog-sub-title {
+  color: color-mix(in srgb, var(--text) 78%, transparent);
+}
+
+.stop-dialog-sub.fl-st-current,
+.stop-dialog-sub.fl-st-perched,
+.stop-dialog-sub.fl-st-paused,
+.stop-dialog-sub.fl-st-halted {
+  border-color: var(--fl-ink-working, var(--green));
+}
+
+.stop-dialog-actions {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* Remove / Duplicate / Ungroup on the left; Cancel and Save on the right. */
+.stop-dialog-side {
+  display: flex;
+  gap: 8px;
+  margin-right: auto;
+}
+
+.modal-actions .stop-dialog-danger,
+.stop-dialog-danger {
+  color: var(--fl-ink-red, var(--red));
+}
+
+/* The danger buttons stay in their tier (secondary, quiet-icon) and only
+   turn red: the ink always, the wash and the border under the pointer. */
+.modal-actions .test-btn.stop-dialog-danger:hover:not(:disabled) {
+  border-color: var(--red);
+}
+
+.fl-icon-btn.stop-dialog-danger:hover:not(:disabled) {
+  color: var(--fl-ink-red, var(--red));
+  background: color-mix(in srgb, var(--red) 13%, transparent);
+  border-color: color-mix(in srgb, var(--red) 40%, transparent);
+}
+
+.modal-actions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.modal-actions button.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.modal-actions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* What a flying / flown stop did (round 12): the flight's history on it, a
+   command's output, the fast-track's word for a ship stop. */
+.stop-dialog-log {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.stop-dialog-hist {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.stop-dialog-out {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* --- Round 15 looks: "What it did" leads with the receipt, then the shots. --- */
+
+.stop-dialog-receipt {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.stop-dialog-shots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.stop-dialog-shot {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 132px;
+  color: var(--muted);
+  font-size: 11px;
+  text-decoration: none;
+}
+
+.stop-dialog-shot img {
+  display: block;
+  width: 132px;
+  height: 84px;
+  object-fit: cover;
+  object-position: top;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+}
+
+.stop-dialog-shot:hover img {
+  border-color: var(--accent);
+}
+
+.stop-dialog-shot-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Round 16: a Loop's "Repeat from" — a chip per stop before it, a group's
+   sub-steps in a row under the group's name. */
+.fl-stops-before {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fl-stops-before-group {
+  padding-left: 10px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.fl-stops-before-name {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+}

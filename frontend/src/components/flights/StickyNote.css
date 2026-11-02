@@ -1,0 +1,100 @@
+/* A sticky note on the sky (StickyNote.tsx): a paper-yellow card with a thin
+ * head to drag it by, its text (or a textarea while editing), a corner. */
+
+.sky-note {
+  position: relative;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  border-radius: 8px;
+  background: var(--note-bg, #fff6b0);
+  color: #2a2611;
+  box-shadow: var(--sky-shadow-rest);
+  font-size: 13px;
+  line-height: 1.35;
+  outline: none;
+  transition: box-shadow 120ms ease;
+}
+
+/* Focused (being typed in or picked): the ring is the object's
+   (SkyObjects.css .sky-object), in the selection's colour — one ring, not a
+   second one drawn by the note. */
+.sky-object:has(> .sky-note:focus) {
+  outline-color: var(--accent);
+}
+
+.sky-note.is-attached {
+  background: var(--note-attached-bg, #ffe9a8);
+}
+
+.sky-note-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 8px 8px 0 0;
+  background: rgba(0, 0, 0, 0.07);
+  cursor: move;
+  user-select: none;
+  font-size: 10px;
+  color: rgba(0, 0, 0, 0.5);
+}
+
+.sky-note-x.fl-icon-btn {
+  border: none;
+  background: transparent;
+  color: rgba(0, 0, 0, 0.55);
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  min-width: 0;
+  cursor: pointer;
+}
+.sky-note-x:hover {
+  color: #000;
+}
+
+.sky-note-text,
+.sky-note-area {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+  font: inherit;
+  color: inherit;
+  cursor: text;
+}
+
+.sky-note-text.is-empty {
+  color: rgba(0, 0, 0, 0.4);
+  font-style: italic;
+}
+
+.sky-note-area {
+  width: 100%;
+  box-sizing: border-box;
+  border: none;
+  background: transparent;
+  resize: none;
+  outline: none;
+}
+
+.sky-note-resize {
+  opacity: 0.55;
+}
+
+/* Dark themes: the paper stays light, the ink dark; the shadow is the one
+   scale's (FlywayCanvas.css). */
+.dark .sky-note {
+  box-shadow: var(--sky-shadow-rest);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sky-note {
+    transition: none;
+  }
+}

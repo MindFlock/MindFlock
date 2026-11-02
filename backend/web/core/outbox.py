@@ -66,6 +66,9 @@ WAITING_ACTIONS = {
     # A same-folder split: changes (or a commit) in the lead's folder that no
     # piece owns — yours to commit, discard or undo.
     "stray": ["open"],
+    # A flight parked on a *you* step (core.flights): Done / Skip go to
+    # POST /api/flights/{id}/steps/{sid}/done|skip (the row's ``flight``).
+    "flight_you": ["done", "skip", "open"],
 }
 #: Waiting kinds that are the agent stopped on your answer — listed first.
 _ANSWER_KINDS = frozenset({"prompt", "question"})
@@ -113,12 +116,14 @@ def build(
     today_start: float,
     group: str = "all",
     verify: Optional[Callable[[dict], Optional[dict]]] = None,
+    flights: Iterable[dict] = (),
 ) -> dict:
     """The ``GET /api/outbox`` payload (see the module docstring).
 
     ``group``: ``"all"``, a run id (that group's members and tasks only), or
     ``"own"`` (sessions in no group). ``verify(row)`` → ``{"id", "state"}`` of
-    the checklist covering the row's branch, or None."""
+    the checklist covering the row's branch, or None. ``flights``: the flight
+    records (core.flights) — each one parked on you is a ``flight_you`` row."""
     rows = [r for r in rows if isinstance(r, dict) and not r.get("device")]
     runs = list(runs)
     by_title: Dict[str, dict] = {}
@@ -388,6 +393,12 @@ def build(
                 }
             )
 
+    if group in ("", "all", "own"):
+        for fl in flights or ():
+            row = _flight_row(fl, by_title)
+            if row is not None:
+                waiting.append(row)
+
     summaries = []
     for run in runs:
         if run["state"] not in _runs.RUN_FINISHED or not run.get("summary"):
@@ -436,6 +447,40 @@ def build(
             "queued": queued,
         },
         "summaries": summaries,
+    }
+
+
+def _flight_row(flight: dict, by_title: Dict[str, dict]) -> Optional[dict]:
+    """A flight waiting on you as a ``waiting`` item, or None."""
+    from backend.web.core import flights as _flights
+
+    if not isinstance(flight, dict) or flight.get("state") != "waiting_you":
+        return None
+    step = _flights.step_view(flight)
+    if not step:
+        return None
+    text, items = _flights.you_text(flight)
+    title = str(flight.get("session") or "")
+    row = by_title.get(title)
+    return {
+        "key": "flight::%s::%s" % (flight["id"], step["id"]),
+        "title": title,
+        "run": None,
+        "kind": "flight_you",
+        "reason": text or step["title"],
+        "since": float(step.get("since") or flight.get("updated") or 0.0),
+        "text": text or None,
+        "preview": None,
+        "actions": list(WAITING_ACTIONS["flight_you"]),
+        "flight": {
+            "id": flight["id"],
+            "plan_name": flight.get("plan_name") or "",
+            "step": step["id"],
+            "step_title": step["title"],
+            "kind": step["kind"],
+            "items": items,
+        },
+        "branch": str((row or {}).get("branch") or flight.get("branch") or ""),
     }
 
 
@@ -616,6 +661,12 @@ def outbox(group: str = "all") -> dict:
             return None
         return {"id": pid} if pid else None
 
+    try:
+        from backend.web.core import flights as _flights
+
+        flights = _flights.list_flights(include_finished=False)
+    except Exception:  # noqa: BLE001 — the bell never fails on the flights store
+        flights = []
     return build(
         rows,
         _runs.list_runs(),
@@ -624,4 +675,5 @@ def outbox(group: str = "all") -> dict:
         today_start=today.timestamp(),
         group=group or "all",
         verify=_verify,
+        flights=flights,
     )

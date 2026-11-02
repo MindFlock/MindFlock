@@ -1,0 +1,1664 @@
+/* The flyway canvas (FlywayCanvas.tsx) and Flights' form controls
+ * (controls.tsx) — prefix fl-.
+ *
+ * Boxes sit absolutely on a stage at the positions lib/flightDiagram's
+ * layout gives them; an SVG under them draws the connectors. Robot stops are
+ * solid panels, a perch (a stop that waits on you) is rounder with a gold
+ * outline and a branch, the current box pulses — gold perched on you, green
+ * while the flock works, red halted. The canvas scrolls inside itself, so a
+ * phone never scrolls the page sideways. Colours are the app's tokens, so
+ * both themes follow. */
+
+/* --- Round 17 polish: one shadow scale ------------------------------------
+ * Every box, line and sky object draws one of two shadows: resting, or
+ * raised while it is dragged (.is-dragging, a lifted box). Defined once,
+ * here, on the sky and on any canvas drawn outside it (the pane's Flight tab,
+ * the flyway editor); the light theme's are softer. */
+.sky,
+.fl-canvas {
+  --sky-shadow-rest: 0 1px 2px rgba(0, 0, 0, 0.16), 0 4px 14px rgba(0, 0, 0, 0.14);
+  --sky-shadow-raised: 0 6px 12px rgba(0, 0, 0, 0.22), 0 18px 40px rgba(0, 0, 0, 0.34);
+}
+
+.light .sky,
+.light .fl-canvas {
+  --sky-shadow-rest: 0 1px 2px rgba(0, 0, 0, 0.08), 0 4px 14px rgba(0, 0, 0, 0.08);
+  --sky-shadow-raised: 0 6px 12px rgba(0, 0, 0, 0.12), 0 18px 40px rgba(0, 0, 0, 0.18);
+}
+
+.fl-canvas {
+  position: relative;
+  overflow: auto;
+  max-width: 100%;
+  min-width: 0;
+  padding: 2px 0 8px;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+
+.fl-stage {
+  position: relative;
+  cursor: grab;
+  touch-action: pan-x pan-y;
+}
+
+.fl-canvas-vertical {
+  overflow-x: hidden;
+}
+
+.fl-dragging .fl-stage,
+.fl-dragging .fl-box {
+  cursor: grabbing;
+}
+
+/* Text inks that hold 4.5:1 on a box in both themes (docs/flights-
+   visibility.md has the numbers): the raw tones are made for fills and
+   rings, and green or red text on a light box falls under 4:1. */
+:root {
+  --fl-ink-working: var(--tone-working);
+  --fl-ink-red: #e8795a;
+  --fl-ink-muted: #a0a6b8;
+  /* The accent as TEXT: the raw accent reads 3.4–4:1 on the dark panels, so
+     dark mode lightens it (≈6.7:1) and light mode takes the deep twin. */
+  --fl-ink-accent: color-mix(in srgb, var(--accent) 62%, #fff);
+  /* The app's button tiers (docs/flights.md "As built: round 11 style"):
+     .btn-primary / .test-btn's radius, and the Sky toolbar's control height. */
+  --fl-btn-radius: 6px;
+  --fl-ctl-h: 28px;
+}
+
+.light {
+  --fl-ink-working: #1a6f38;
+  --fl-ink-red: #b23a17;
+  --fl-ink-muted: #4f5769;
+  --fl-ink-accent: var(--accent-deep);
+}
+
+.fl-wires {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.fl-wire {
+  fill: none;
+  stroke: color-mix(in srgb, var(--muted) 88%, transparent);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: d 0.18s ease;
+}
+
+.fl-wire-branch,
+.fl-wire-up {
+  stroke: color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.fl-wire-add {
+  stroke-dasharray: 4 4;
+  stroke: color-mix(in srgb, var(--muted) 70%, transparent);
+}
+
+.fl-arrowhead {
+  fill: var(--muted);
+}
+
+/* --- A box ---------------------------------------------------------------- */
+
+.fl-box {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 11px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12.5px;
+  cursor: pointer;
+  user-select: none;
+  transition: transform 120ms ease, box-shadow 120ms ease, outline-color 120ms ease, opacity 120ms ease;
+  box-shadow: var(--sky-shadow-rest);
+  /* The ring (round 17): always drawn, transparent at rest, so hover, focus
+     and selection only change its colour and width — never the geometry.
+     Screen-sized at any zoom of the Sky (--sky-z). */
+  outline: calc(1px / var(--sky-z, 1)) solid transparent;
+  outline-offset: calc(2px / var(--sky-z, 1));
+}
+
+.fl-box:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+/* The hover ring: 1px at half the accent (an open box is never restyled). */
+.fl-box:where(:not(.fl-box-open):hover) {
+  outline-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+/* Keyboard focus: the hover ring in the selection's colour. The one
+   selected box: the selection ring (2px accent, 2px out — SkySelection.css
+   holds the rule for every selected thing). */
+.fl-box:focus-visible,
+.fl-box.selected {
+  border-color: var(--accent);
+  outline-color: var(--accent);
+}
+
+.fl-draggable {
+  cursor: grab;
+  touch-action: none;
+}
+
+.fl-lifted {
+  z-index: 3;
+  transition: box-shadow 120ms ease, outline-color 120ms ease;
+  box-shadow: var(--sky-shadow-raised);
+}
+
+/* A box in the hand wears the selection ring over the raised shadow. */
+.fl-box.fl-lifted {
+  outline-width: calc(2px / var(--sky-z, 1));
+  outline-color: var(--accent);
+}
+
+.fl-box-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.fl-box-icon {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.13);
+}
+
+.fl-box-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fl-box-sub {
+  color: var(--muted);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fl-box-reason {
+  color: var(--fl-ink-red);
+  font-size: 11.5px;
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.fl-box-glyph {
+  flex: none;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.fl-glyph-done {
+  color: var(--green);
+}
+
+.fl-glyph-failed,
+.fl-glyph-halted {
+  color: var(--red);
+}
+
+.fl-box-pulse {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tone-working);
+  animation: fl-pulse 1.4s ease-in-out infinite;
+}
+
+.fl-box-chip {
+  align-self: flex-start;
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  color: var(--tone-neutral);
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fl-box-chip.tone-working {
+  color: var(--fl-ink-working);
+}
+
+.fl-box-chip.tone-attention {
+  color: var(--tone-attention-ink);
+  background: var(--tone-attention);
+  border-color: var(--tone-attention);
+}
+
+.fl-box-chip.tone-broken {
+  color: var(--tone-broken);
+}
+
+.fl-box-chip.tone-waiting {
+  color: var(--tone-waiting);
+}
+
+.fl-box-chip.tone-muted {
+  color: var(--tone-muted);
+}
+
+.fl-box-dots {
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: var(--muted);
+}
+
+/* The session and its family: an accent edge on the left. */
+.fl-box-session,
+.fl-box-parent,
+.fl-box-child {
+  border-left: 3px solid var(--accent);
+  background: var(--panel);
+}
+
+.fl-box-parent,
+.fl-box-child {
+  border-left-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.fl-box-session .fl-box-icon,
+.fl-box-parent .fl-box-icon,
+.fl-box-child .fl-box-icon {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+}
+
+/* A fast-track rung: the same box as a ship stop. */
+.fl-box-rung .fl-box-sub {
+  font-style: italic;
+}
+
+/* A perch: rounder, gold, the bird on its branch. */
+.fl-perch {
+  border-radius: 18px;
+  border: 1.5px solid var(--tone-attention);
+  background: color-mix(in srgb, var(--tone-attention) 7%, var(--panel-2));
+}
+
+.fl-perch .fl-box-icon {
+  color: var(--tone-attention);
+  background: color-mix(in srgb, var(--tone-attention) 16%, transparent);
+  border-radius: 50%;
+}
+
+.fl-perch::after {
+  content: "";
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--tone-attention) 55%, transparent);
+}
+
+/* --- Live states ------------------------------------------------------------ */
+
+/* Done: dimmed by its ink, never by opacity — the title keeps ~78% of the
+   text colour, the summary the muted ink (both ≥ 4.5:1, either theme). */
+.fl-st-done,
+.fl-st-skipped {
+  background: var(--panel);
+  border-color: color-mix(in srgb, var(--muted) 40%, var(--border));
+  box-shadow: none;
+}
+
+.fl-st-done .fl-box-title,
+.fl-st-skipped .fl-box-title {
+  color: color-mix(in srgb, var(--text) 78%, var(--panel));
+}
+
+.fl-st-done .fl-box-sub,
+.fl-st-skipped .fl-box-sub {
+  color: color-mix(in srgb, var(--fl-ink-muted) 85%, var(--panel));
+}
+
+.fl-st-done .fl-box-icon,
+.fl-st-skipped .fl-box-icon {
+  opacity: 0.7;
+}
+
+.fl-st-done:hover,
+.fl-st-done:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.fl-st-skipped .fl-box-title {
+  text-decoration: line-through;
+}
+
+/* Pending: outlined (dashed), its words muted but legible. */
+.fl-st-pending {
+  background: transparent;
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--muted) 60%, var(--border));
+  box-shadow: none;
+}
+
+.fl-st-pending .fl-box-sub {
+  color: var(--fl-ink-muted);
+}
+
+.fl-st-pending.fl-perch {
+  border-style: dashed;
+  background: transparent;
+}
+
+/* Current: a 2px working outline and the pulse. */
+.fl-st-current {
+  border-color: var(--tone-working);
+  box-shadow: 0 0 0 2px var(--tone-working), 0 0 16px color-mix(in srgb, var(--tone-working) 35%, transparent);
+  animation: fl-box-glow 1.8s ease-in-out infinite;
+}
+
+/* Perched on you: the gold outline and a gold wash (its text stays the
+   text colour; text ON solid gold is --tone-attention-ink). */
+.fl-st-perched {
+  border-color: var(--tone-attention);
+  background: color-mix(in srgb, var(--tone-attention) 14%, var(--panel-2));
+  box-shadow: 0 0 0 2px var(--tone-attention), 0 0 16px color-mix(in srgb, var(--tone-attention) 35%, transparent);
+  animation: fl-box-glow 1.8s ease-in-out infinite;
+}
+
+.fl-st-perched .fl-box-sub {
+  color: var(--fl-ink-muted);
+}
+
+.fl-st-perched .fl-box-pulse {
+  background: var(--tone-attention);
+}
+
+.fl-st-halted,
+.fl-st-failed {
+  border-color: var(--red);
+  box-shadow: 0 0 0 2px var(--red);
+}
+
+.fl-st-paused {
+  border-color: var(--muted);
+  box-shadow: 0 0 0 2px var(--muted);
+}
+
+.fl-st-paused .fl-box-sub::after {
+  content: " · paused";
+}
+
+.fl-described {
+  box-shadow: 0 0 0 2px var(--accent), 0 0 18px rgba(var(--accent-rgb), 0.45);
+}
+
+@keyframes fl-box-glow {
+  0%,
+  100% {
+    filter: none;
+  }
+  50% {
+    filter: brightness(1.12);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fl-st-current,
+  .fl-st-perched,
+  .fl-box-pulse {
+    animation: none;
+  }
+  .fl-box,
+  .fl-wire {
+    transition: none;
+  }
+}
+
+/* --- The + ------------------------------------------------------------------ */
+
+.fl-box-add {
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+  border: 1.5px dashed color-mix(in srgb, var(--accent) 60%, var(--border));
+  background: transparent;
+  color: var(--fl-ink-accent);
+  box-shadow: none;
+}
+
+.fl-box-add:hover,
+.fl-box-add:focus-visible,
+.fl-box-add.selected {
+  border-style: solid;
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+.fl-box-add:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.fl-add-plus {
+  display: inline-grid;
+  place-items: center;
+}
+
+.fl-add-label {
+  white-space: nowrap;
+}
+
+.fl-canvas-compact .fl-box-add {
+  padding: 0;
+  border-radius: 50%;
+}
+
+.fl-gap-add {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border));
+  background: var(--panel);
+  color: var(--fl-ink-accent);
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+  /* The inline transform also counter-scales it by the Sky's --sky-z. */
+  transform-origin: 50% 50%;
+}
+
+/* The quiet tier's hover: the panel-2 fill, the border firming to the
+ * accent (it is an add, the one accent-edged quiet control). */
+.fl-gap-add:hover {
+  background: var(--panel-2);
+  border-color: var(--accent);
+}
+
+.fl-gap-add:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Over the line (in the Sky the whole line, its title bar too), not just
+ * the canvas. */
+.fl-canvas:hover .fl-gap-add,
+.skl:hover .fl-gap-add,
+.fl-gap-add:focus-visible {
+  opacity: 1;
+}
+
+/* A stop chip from the shelf, over the line: the gap it would land in grows
+ * and says so; the end + says "Tack on <Kind>" (the box's .fl-drop). */
+.fl-stop-over .fl-gap-add {
+  opacity: 0.55;
+}
+
+.fl-gap-add.fl-gap-lit {
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: auto;
+  height: 30px;
+  padding: 0 11px 0 9px;
+  border-radius: 15px;
+  border-width: 2px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 1;
+  /* Round 17: a crisp 2px accent ring over a 2px panel gap (was a faint
+     25% halo) — it reads at the far band too, where the line is small. */
+  box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent);
+  pointer-events: none;
+}
+
+.fl-gap-label {
+  font-size: 12px;
+}
+
+.fl-gap-add:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* Touch has no hover: the gaps' + always show there. */
+@media (hover: none) {
+  .fl-gap-add {
+    opacity: 1;
+  }
+}
+
+/* --- The hover toolbar (a stop that can change) ------------------------------
+ * Above the box on hover or keyboard focus. It is the box's child, so moving
+ * onto it keeps the box hovered; it lingers a moment after the pointer
+ * leaves (the transition delay) so it can be reached, and the Sky's
+ * `--sky-z` scales it back to screen size about its foot. */
+
+.fl-tools {
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  z-index: 5;
+  display: flex;
+  gap: 1px;
+  padding: 2px;
+  margin-bottom: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  white-space: nowrap;
+  cursor: default;
+  transform: translateX(-50%) scale(calc(1 / var(--sky-z, 1)));
+  transform-origin: 50% 100%;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease 0.25s, visibility 0s linear 0.37s;
+}
+
+/* The bridge: the 4px between the box and the toolbar still counts as the
+ * toolbar, so crossing it never drops the hover. */
+.fl-tools::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 6px;
+}
+
+.fl-box:hover > .fl-tools,
+.fl-box:focus-within > .fl-tools {
+  opacity: 1;
+  visibility: visible;
+  transition-delay: 0s;
+}
+
+.fl-has-tools:hover,
+.fl-has-tools:focus-within {
+  z-index: 4;
+}
+
+.fl-dragging .fl-tools {
+  display: none;
+}
+
+/* The quiet-icon tier (.fl-icon-btn in StopParts.css; the top bar's
+ * .tb-item): no fill, a transparent border, the panel-2 fill and the border
+ * on hover, the accent ring on focus. Here too for a canvas drawn without
+ * the inspector's sheet. */
+.fl-tool {
+  border: 1px solid transparent;
+  border-radius: var(--fl-btn-radius, 6px);
+  background: transparent;
+  color: var(--fl-ink-muted);
+  cursor: pointer;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 5px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.fl-tool:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+
+.fl-tool:disabled {
+  opacity: 0.4;
+  cursor: default;
+  background: transparent;
+}
+
+.fl-tool:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.fl-tool-remove:hover:not(:disabled) {
+  color: var(--fl-ink-red);
+  background: color-mix(in srgb, var(--red) 13%, transparent);
+  border-color: color-mix(in srgb, var(--red) 40%, transparent);
+}
+
+@media (hover: none) {
+  .fl-box.selected > .fl-tools {
+    opacity: 1;
+    visibility: visible;
+  }
+}
+
+/* --- Compact (the Board's cards) ------------------------------------------- */
+
+.fl-canvas-compact .fl-box {
+  padding: 7px 9px;
+  font-size: 12px;
+  gap: 2px;
+}
+
+.fl-canvas-compact .fl-box-icon {
+  width: 19px;
+  height: 19px;
+}
+
+.fl-canvas-compact .fl-box-sub {
+  font-size: 11px;
+}
+
+/* --- Inside a box: a perch's checklist and its Done / Skip ------------------ */
+
+.fl-box .fl-you {
+  margin-top: 4px;
+  cursor: default;
+}
+
+.fl-box .fl-you-items {
+  margin: 2px 0 4px;
+}
+
+/* The box's ⋯: out of the title's way until the box is hovered or focused
+   (touch has no hover: always there). */
+.fl-box-menu {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.fl-box:hover .fl-box-menu,
+.fl-box:focus-within .fl-box-menu,
+.fl-box-menu:has(details[open]) {
+  opacity: 1;
+}
+
+.fl-box-menu .vf-menu summary {
+  background: var(--panel);
+}
+
+@media (hover: none) {
+  .fl-box-menu {
+    opacity: 1;
+  }
+}
+
+.fl-box-menu .vf-menu summary {
+  padding: 0 5px;
+  line-height: 18px;
+  border-radius: 6px;
+}
+
+/* --- Flights' form controls (controls.tsx): the New dialog's look ---------- */
+
+.fl-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px 16px;
+  align-items: start;
+}
+
+.fl-fld {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.fl-fld-wide {
+  grid-column: 1 / -1;
+}
+
+.fl-fld-label {
+  font-size: 13px;
+  color: var(--fl-ink-muted);
+}
+
+.fl-fld-hint {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.fl-input.fl-input,
+.fl-prompt.fl-prompt {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 13.5px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.fl-prompt.fl-prompt {
+  resize: vertical;
+  min-height: 64px;
+  line-height: 1.45;
+}
+
+.fl-input.fl-input:focus,
+.fl-prompt.fl-prompt:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+}
+
+.fl-input::placeholder,
+.fl-prompt::placeholder {
+  color: color-mix(in srgb, var(--muted) 80%, transparent);
+}
+
+.fl-mono.fl-mono {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12.5px;
+}
+
+.fl-num {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fl-num .fl-num-input.fl-input {
+  width: 76px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.fl-num-unit {
+  font-size: 13px;
+  color: var(--fl-ink-muted);
+}
+
+/* The segmented control (Seg), in Flights' forms. */
+.fl-form .rt-seg,
+.fl-seg-host .rt-seg {
+  flex-wrap: wrap;
+  max-width: 100%;
+  background: var(--bg);
+}
+
+.fl-form .rt-seg button,
+.fl-seg-host .rt-seg button {
+  border: none;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  background: none;
+  color: var(--text);
+  min-height: 28px;
+  font-size: 13px;
+  font-family: inherit;
+  padding: 5px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.fl-form .rt-seg button:first-child,
+.fl-seg-host .rt-seg button:first-child {
+  border-left: none;
+}
+
+.fl-form .rt-seg button:hover:not(.on),
+.fl-seg-host .rt-seg button:hover:not(.on) {
+  background: var(--panel-2);
+}
+
+.fl-form .rt-seg button.on,
+.fl-seg-host .rt-seg button.on {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* A switch chip. */
+.fl-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 999px;
+  min-height: 30px;
+  box-sizing: border-box;
+  padding: 5px 13px 5px 6px;
+  font-size: 13px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fl-toggle:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.fl-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.fl-toggle-track {
+  position: relative;
+  width: 26px;
+  height: 15px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 45%, transparent);
+  transition: background 0.12s;
+}
+
+.fl-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.12s;
+}
+
+.fl-toggle.on .fl-toggle-track {
+  background: var(--accent);
+}
+
+.fl-toggle.on .fl-toggle-knob {
+  transform: translateX(11px);
+}
+
+/* A wrapping row of pill chips, one highlighted (the flyway choice). */
+.fl-chiprow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.fl-pick {
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 999px;
+  min-height: 28px;
+  box-sizing: border-box;
+  padding: 4px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fl-pick:hover:not(.on) {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.fl-pick:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.fl-pick.on {
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.16);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.fl-pick-default:not(.on) {
+  color: var(--muted);
+}
+
+/* --- The bird (the Sky's lines, lib/flightDiagram birdPerch) ------------------ */
+
+/* It stands on the top edge of the box the flight is at; a move to the next
+   box is a hop (left / top transition), never a jump. */
+.fl-bird-marker {
+  position: absolute;
+  z-index: 3;
+  transform: translate(-50%, -78%);
+  transition: left 0.5s cubic-bezier(0.34, 1.4, 0.64, 1), top 0.5s cubic-bezier(0.34, 1.4, 0.64, 1);
+  color: var(--tone-working);
+  line-height: 0;
+  pointer-events: auto;
+  /* A small disc behind it, so it reads on any box and any sky. */
+  padding: 3px;
+  border-radius: 50%;
+  background: var(--panel);
+  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.18);
+}
+
+.fl-bird-marker .fl-bird-big {
+  display: block;
+}
+
+/* While the flock works it bobs; perched on you it sits gold and still;
+   halted, red. */
+.fl-bird-marker.tone-working .fl-bird-big {
+  animation: fl-bird-bob 1.6s ease-in-out infinite;
+}
+
+.fl-bird-marker.tone-you {
+  color: var(--tone-attention);
+}
+
+.fl-bird-marker.tone-halted {
+  color: var(--red);
+}
+
+.fl-bird-marker.tone-paused {
+  color: var(--muted);
+}
+
+@keyframes fl-bird-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fl-bird-marker {
+    transition: none;
+  }
+  .fl-bird-marker.tone-working .fl-bird-big {
+    animation: none;
+  }
+}
+
+/* --- The bird in hand (round 12; docs/flights.md "As built: round 12 bird") ---
+   On a live flight's stop the bird is a button: a click halts the flight
+   (Carry on while held, Retry when a stop failed), a drag carries it to
+   another stop. `touch-action: none` lets a long-press lift it. */
+.fl-bird-marker[role="button"] {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.fl-bird-marker[role="button"]:hover {
+  border-color: currentColor;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.26);
+}
+
+.fl-bird-marker[role="button"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* In hand: it follows the pointer, centred on it, screen-sized at any zoom
+   of the Sky, and above every box. */
+.fl-bird-marker.fl-bird-dragging {
+  z-index: 8;
+  cursor: grabbing;
+  transition: none;
+  transform: translate(-50%, -50%) scale(calc(1.15 / var(--sky-z, 1)));
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+}
+
+/* Let go off a stop: a short flight home. */
+.fl-bird-marker.fl-bird-snap {
+  transition: left 0.22s ease-out, top 0.22s ease-out, transform 0.22s ease-out;
+}
+
+.fl-bird-carried,
+.fl-bird-carried .fl-box {
+  cursor: grabbing;
+}
+
+/* A branch's own bird (round 12): smaller, sitting on the branch box's left
+   edge where the fan-out wire comes in; a click opens that child. */
+.fl-bird-marker.fl-bird-branch {
+  z-index: 4;
+  padding: 2px;
+  transform: translate(-50%, -50%);
+}
+
+.fl-bird-marker.fl-bird-branch[role="button"] {
+  cursor: pointer;
+}
+
+/* Every stop it can land on, and the one under it. */
+.fl-box.fl-jump-target {
+  outline: 2px dashed color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: 3px;
+}
+
+.fl-box.fl-jump-over {
+  outline-style: solid;
+  outline-color: var(--accent);
+  box-shadow: 0 0 0 5px rgba(var(--accent-rgb), 0.3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fl-bird-marker.fl-bird-snap {
+    transition: none;
+  }
+}
+
+/* --- A line's box size (the Sky's ◧) --------------------------------------- */
+
+/* Compact: the title alone, on one line, centred in its box. */
+.fl-size-compact .fl-box:not(.fl-box-add):not(.fl-box-open) {
+  justify-content: center;
+  padding: 6px 9px;
+  font-size: 12px;
+}
+
+.fl-box-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* Wide: the full title (two lines), the summary on two, and the detail. */
+.fl-size-wide .fl-box-title {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.3;
+}
+
+.fl-size-wide .fl-box-sub {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.3;
+}
+
+.fl-box-detail {
+  color: color-mix(in srgb, var(--text) 85%, var(--panel-2));
+  font-size: 11.5px;
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* A flyway dragged over the line: the + is where it lands. */
+.fl-box-add.fl-drop {
+  border-style: solid;
+  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.16);
+  box-shadow: 0 0 0 2px var(--accent), 0 0 18px rgba(var(--accent-rgb), 0.45);
+}
+
+/* An open box: a card around whatever it holds (the Sky's pane). */
+.fl-box.fl-box-open {
+  padding: 0;
+  gap: 0;
+  cursor: default;
+  overflow: visible;
+}
+
+.fl-box.fl-box-open {
+  user-select: text;
+}
+
+/* --- Branches: workers spawned at a stop, joining at the next box ---------- */
+
+/* A branch: smaller than the line's boxes — the worker's title, its chip,
+ * its own line in brief — with the family's accent edge. */
+.fl-box-branch {
+  gap: 3px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  font-size: 12px;
+  border-left: 3px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: var(--panel);
+}
+
+.fl-box-branch .fl-box-sub {
+  font-size: 11px;
+}
+
+.fl-box-dot.tone-working {
+  color: var(--tone-working);
+}
+
+.fl-box-dot.tone-attention {
+  color: var(--tone-attention);
+}
+
+.fl-box-dot.tone-broken {
+  color: var(--tone-broken);
+}
+
+.fl-box-dot.tone-neutral,
+.fl-box-dot.tone-muted {
+  color: var(--tone-muted);
+}
+
+/* Out of the stop to each branch, and back in to the join point: dashed
+ * while that worker is still out, solid once it (or the join) is done. */
+.fl-wire-fan,
+.fl-wire-join {
+  stroke: color-mix(in srgb, var(--accent) 75%, transparent);
+}
+
+.fl-wire-join:not(.fl-wire-done) {
+  stroke-dasharray: 4 3;
+}
+
+.fl-wire-join.fl-wire-done {
+  stroke: color-mix(in srgb, var(--green) 85%, transparent);
+}
+
+/* The join point while it waits: "2 of 5" on its top edge. */
+.fl-join-pill {
+  position: absolute;
+  top: -9px;
+  right: 10px;
+  z-index: 1;
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--tone-working);
+  color: var(--fl-ink-working);
+  background: var(--panel);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Five workers at once glow quietly: a ring, no pulse. */
+.fl-box-branch.fl-st-current {
+  animation: none;
+  box-shadow: 0 0 0 2px var(--tone-working);
+}
+
+.fl-box-branch.fl-st-perched {
+  animation: none;
+  box-shadow: 0 0 0 2px var(--tone-attention);
+}
+
+/* --- A Loop: its return wire ---------------------------------------------------
+   A Loop draws no box: it is the wire from the last stop it repeats back
+   under the line into the first one — dashed while the loop is still ahead,
+   solid once the flight is in it (or has flown it), its count in a pill on
+   the run under the line that opens the Loop on a click. */
+.fl-wire-loop {
+  stroke: color-mix(in srgb, var(--accent) 70%, transparent);
+  stroke-width: 1.8;
+}
+
+.fl-wire-loop.fl-loop-pending {
+  stroke-dasharray: 5 4;
+  stroke: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+.fl-wire-loop.fl-loop-running {
+  stroke: var(--tone-working);
+  stroke-width: 2.2;
+}
+
+.fl-wire-loop.fl-loop-done {
+  stroke: color-mix(in srgb, var(--muted) 70%, transparent);
+}
+
+.fl-loop-pill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 1;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--tone-working);
+  color: var(--fl-ink-working);
+  background: var(--panel);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  pointer-events: auto;
+  cursor: default;
+}
+
+/* Before the loop runs: the accent, like the dashed wire it sits on. */
+.fl-loop-pill.fl-loop-pending {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  color: var(--fl-ink-accent, var(--accent));
+}
+
+.fl-loop-pill[role="button"] {
+  cursor: pointer;
+}
+
+.fl-loop-pill[role="button"]:hover,
+.fl-loop-pill.selected {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.fl-loop-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.fl-loop-pill.fl-st-halted {
+  border-color: var(--fl-ink-red, #e5534b);
+  color: var(--fl-ink-red, #e5534b);
+}
+
+.fl-loop-pill.fl-loop-done {
+  border-color: color-mix(in srgb, var(--muted) 60%, transparent);
+  color: var(--muted);
+}
+
+/* Drawing a loop by hand: each stop that can take one wears a small ↻ on
+   its bottom-right corner (on hover, selection or focus); dragged back onto a
+   stop it draws the wire there. The stop it would land on lights. */
+.fl-loop-handle {
+  position: absolute;
+  right: 10px;
+  bottom: -9px;
+  z-index: 2;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  background: var(--panel);
+  color: var(--fl-ink-accent, var(--accent));
+  font-size: 11px;
+  line-height: 1;
+  cursor: crosshair;
+  user-select: none;
+  touch-action: none;
+  opacity: 0;
+  transform: scale(calc(1 / var(--sky-z, 1)));
+  transition: opacity 0.12s;
+}
+
+.fl-box:hover > .fl-loop-handle,
+.fl-box.selected > .fl-loop-handle,
+.fl-box:focus-within > .fl-loop-handle,
+.fl-canvas.fl-loop-drawing-on .fl-loop-handle {
+  opacity: 1;
+}
+
+.fl-loop-handle:hover {
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+}
+
+.fl-box.fl-loop-target {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.fl-wire-loop.fl-loop-drawing {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-dasharray: 5 4;
+}
+
+.fl-wire-loop.fl-loop-drawing.is-landing {
+  stroke-dasharray: none;
+}
+
+.fl-wire-loop.fl-loop-aiming {
+  opacity: 0.25;
+}
+
+.fl-loop-pill[role="button"] {
+  touch-action: none;
+  user-select: none;
+}
+
+/* --- What has flown: one pill ------------------------------------------------ */
+
+/* Two or more stops the flight has already flown, folded (lib/flightDiagram
+   collapseFlown): "7 flown" over "first … last"; a press unfolds them. */
+.fl-box.fl-box-flown {
+  justify-content: center;
+  gap: 1px;
+  padding: 5px 14px;
+  border-radius: 999px;
+  border: 1.5px solid color-mix(in srgb, var(--green) 55%, var(--border));
+  background: color-mix(in srgb, var(--green) 9%, var(--panel));
+  box-shadow: none;
+  text-align: center;
+}
+
+.fl-box.fl-box-flown:hover,
+.fl-box.fl-box-flown:focus-visible {
+  border-color: var(--green);
+}
+
+.fl-box-flown .fl-box-head {
+  justify-content: center;
+  gap: 5px;
+}
+
+.fl-box-flown .fl-box-title {
+  flex: 0 1 auto;
+  color: var(--text);
+}
+
+.fl-box-flown .fl-box-sub {
+  color: var(--fl-ink-muted);
+  font-size: 11px;
+}
+
+.fl-box-flown .fl-box-icon {
+  width: auto;
+  height: auto;
+  background: none;
+  color: var(--fl-ink-working);
+}
+
+.fl-box-flown .fl-box-glyph {
+  display: none;
+}
+
+/* --- Round 11: a stop with sub-steps (a group box) --------------------------------
+   Clearly a stack: a second outline offset behind the box. Its ▸ opens it
+   on the line; an open group's sub-steps sit in a thin labelled outline
+   (`.fl-group-frame`) whose ▾ folds them back. */
+
+.fl-box.fl-box-group {
+  box-shadow: 5px 5px 0 -1px var(--panel-2), 5px 5px 0 0 var(--border);
+}
+
+.fl-box.fl-box-group.fl-st-current,
+.fl-box.fl-box-group.fl-st-perched,
+.fl-box.fl-box-group.fl-st-halted,
+.fl-box.fl-box-group.fl-st-paused {
+  box-shadow: 5px 5px 0 -1px var(--panel-2), 5px 5px 0 1px currentColor;
+}
+
+.fl-group-chev {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.fl-group-count {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fl-ink-working, var(--green));
+  background: color-mix(in srgb, var(--fl-ink-working, var(--green)) 14%, transparent);
+}
+
+.fl-group-dots {
+  display: flex;
+  gap: 4px;
+  margin-top: auto;
+}
+
+.fl-gdot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1px solid var(--muted);
+}
+
+.fl-gdot.fl-st-done,
+.fl-gdot.fl-st-skipped {
+  background: var(--green);
+  border-color: var(--green);
+  opacity: 0.8;
+}
+
+.fl-gdot.fl-st-current,
+.fl-gdot.fl-st-perched,
+.fl-gdot.fl-st-paused {
+  background: var(--fl-ink-working, var(--green));
+  border-color: var(--fl-ink-working, var(--green));
+}
+
+.fl-gdot.fl-st-perched {
+  background: var(--gold, #d4a72c);
+  border-color: var(--gold, #d4a72c);
+}
+
+.fl-gdot.fl-st-halted,
+.fl-gdot.fl-st-failed {
+  background: var(--red);
+  border-color: var(--red);
+}
+
+.fl-group-frame {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  border: 1px dashed color-mix(in srgb, var(--muted) 70%, transparent);
+  border-radius: 12px;
+  pointer-events: none;
+}
+
+.fl-group-label {
+  position: absolute;
+  top: -11px;
+  left: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: auto;
+  transform-origin: left center;
+  transform: scale(calc(1 / var(--sky-z, 1)));
+}
+
+/* --- Round 15 looks (docs/flights.md "As built: round 15 looks") ------------- */
+
+/* The risk stripe: one 3px band per tag down a box's left edge, inside the
+   rounded border. remote = the ship tone (the waiting blue the ship chips
+   wear), irreversible = the failed tone, spends = the perch gold. */
+.fl-canvas {
+  --fl-risk-remote: var(--tone-waiting);
+  --fl-risk-irreversible: var(--red);
+  --fl-risk-spends: var(--gold, #d4a72c);
+}
+
+.fl-risk {
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-radius: 0 2px 2px 0;
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.fl-risk > i {
+  flex: 1;
+  display: block;
+  min-height: 4px;
+}
+
+.fl-risk-remote {
+  background: var(--fl-risk-remote);
+}
+
+.fl-risk-irreversible {
+  background: var(--fl-risk-irreversible);
+}
+
+.fl-risk-spends {
+  background: var(--fl-risk-spends);
+}
+
+.fl-st-done .fl-risk,
+.fl-st-skipped .fl-risk {
+  opacity: 0.55;
+}
+
+/* The receipt: what a flown stop did, under its title in the muted tone.
+   Mid and near only — the canvas leaves it out far, and the CSS holds the
+   band either way. */
+.fl-box-receipt {
+  color: var(--fl-ink-muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fl-lod-far .fl-box-receipt {
+  display: none;
+}
+
+.fl-size-wide .fl-box-receipt,
+.fl-lod-near .fl-box-receipt {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* The "if" chip: the stop has a `when`; the tooltip is the expression. */
+.fl-box-if {
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 700;
+  font-style: italic;
+  line-height: 1;
+  padding: 2px 5px 3px;
+  border-radius: 999px;
+  color: var(--fl-ink-accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  letter-spacing: 0.02em;
+}
+
+.fl-lod-far .fl-box-if {
+  display: none;
+}
+
+/* Formation: a worker's bird flying in the V behind the leader — a touch
+   lighter than the leader, and it hops into place. */
+.fl-bird-marker.fl-bird-branch[data-formation] {
+  z-index: 5;
+  opacity: 0.85;
+  transition: left 0.5s cubic-bezier(0.2, 0.7, 0.2, 1), top 0.5s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+/* "Rewind to here" asks on the stage, at the menu's spot: the app's inline
+   confirm row (never window.confirm), the server's refusal under it.
+   Screen-sized at any zoom, like the menu. */
+.fl-rewind {
+  position: absolute;
+  z-index: 30;
+  width: 300px;
+  max-width: 80vw;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  transform: scale(calc(1 / var(--sky-z, 1)));
+  transform-origin: 0 0;
+  cursor: auto;
+  user-select: text;
+}
+
+.fl-rewind .set-confirm {
+  margin: 0;
+}
+
+.fl-rewind-error {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--fl-ink-red);
+}
+
+/* --- Round 17 polish: touch targets ------------------------------------------
+ * On a touch screen every button, chip and handle of the Sky takes a finger:
+ * an invisible hit area at least 40px square, centred on the control. It is a
+ * pseudo-element, so nothing at rest moves or grows (the geometry never
+ * depends on the device either); controls in normal flow become its
+ * containing block, the absolutely placed handles already are one. */
+@media (hover: none) {
+  :is(.skl-size, .skl-card-fold, .skl-menu .vf-menu > summary, .fl-tool, .fl-box-menu .vf-menu summary, .fl-toggle, .fl-pick, .fl-icon-btn, .fl-palette-item, .sky .fl-btn, .sky-lane-toggle, .sky-lane-more, .sky-lane-rail-icon, .sky-shelf-fold, .sky-stop-chip, .sky-selbar button) {
+    position: relative;
+  }
+
+  :is(.skl-size, .skl-card-fold, .skl-menu .vf-menu > summary, .fl-tool, .fl-box-menu .vf-menu summary, .fl-toggle, .fl-pick, .fl-icon-btn, .fl-palette-item, .sky .fl-btn, .sky-lane-toggle, .sky-lane-more, .sky-lane-rail-icon, .sky-shelf-fold, .sky-stop-chip, .sky-selbar button, .skl-box-resize, .skl-resize, .sky-palette-resize, .fl-gap-add, .fl-bird-marker)::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    min-width: 40px;
+    min-height: 40px;
+    width: 100%;
+    height: 100%;
+    transform: translate(-50%, -50%);
+  }
+}

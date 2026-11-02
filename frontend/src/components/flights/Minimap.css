@@ -1,0 +1,261 @@
+/* The minimap and the off-screen hints (Minimap.tsx, lib/minimap). Screen-
+   sized chrome over the plane: the sky places the map (its bottom-right,
+   above the shelf, right of the selection bar); the defaults below put it in
+   the corner until it does. Colours are tokens only. */
+
+.sky-minimap {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+  font-size: 11.5px;
+  transition: opacity 120ms ease-out;
+}
+
+.sky-minimap.is-folded {
+  border-radius: 8px;
+}
+
+.sky-minimap-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  height: 22px;
+  padding: 0 2px 0 8px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.sky-minimap-title {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.sky-minimap .sky-minimap-glyph {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sky-minimap.is-folded .sky-minimap-glyph {
+  width: 30px;
+  height: 30px;
+  font-size: 16px;
+}
+
+.sky-minimap .sky-minimap-glyph:hover,
+.sky-minimap .sky-minimap-glyph:focus-visible {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
+}
+
+.sky-minimap .sky-minimap-glyph:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The map: 180 × 120 (Minimap.tsx sets the size from lib/minimap). */
+.sky-minimap-map {
+  position: relative;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--text) 4%, var(--panel));
+  cursor: pointer;
+  touch-action: none;
+}
+
+.sky-minimap-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.sky-minimap-block {
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: 2px;
+}
+
+/* A line: its state tone, a touch see-through so overlaps read. */
+.sky-minimap-block.is-line {
+  background: color-mix(in srgb, var(--mm-tone, var(--tone-muted)) 78%, transparent);
+  border-radius: 3px;
+}
+
+/* An object (palette, note, person, device): muted. */
+.sky-minimap-block.is-object {
+  background: color-mix(in srgb, var(--tone-muted) 38%, transparent);
+  border: 1px solid color-mix(in srgb, var(--tone-muted) 55%, transparent);
+}
+
+/* The intake lane and the landing strip: a thin bar. */
+.sky-minimap-block.is-bar {
+  background: color-mix(in srgb, var(--tone-neutral) 70%, transparent);
+  border-radius: 999px;
+}
+
+.sky-minimap-block:hover {
+  outline: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  outline-offset: 1px;
+}
+
+.sky-minimap-block.is-focused {
+  outline: 1px solid var(--text);
+  outline-offset: 1px;
+}
+
+.sky-minimap-block.is-selected {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* What the camera shows: the accent rectangle you drag. */
+.sky-minimap-view {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.5px solid var(--accent);
+  border-radius: 3px;
+  background: rgba(var(--accent-rgb), 0.1);
+  cursor: grab;
+  pointer-events: none;
+}
+
+.sky-minimap-map:active .sky-minimap-view {
+  background: rgba(var(--accent-rgb), 0.16);
+}
+
+/* A narrow window has no room for the map. */
+@media (max-width: 520px) {
+  .sky-minimap {
+    display: none;
+  }
+}
+
+/* --- Off-screen hints ----------------------------------------------------- */
+
+.sky-offscreen {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.sky-offscreen .sky-offscreen-chip {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  box-sizing: border-box;
+  height: 22px;
+  min-height: 0;
+  max-width: 140px;
+  padding: 0 8px 0 6px;
+  border: 1px solid color-mix(in srgb, var(--mm-tone, var(--tone-muted)) 55%, var(--border));
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  font: inherit;
+  font-size: 11.5px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  transition:
+    box-shadow 120ms ease-out,
+    outline-color 120ms ease-out;
+}
+
+.sky-offscreen .sky-offscreen-chip.edge-left,
+.sky-offscreen .sky-offscreen-chip.edge-right {
+  transform: translateY(-50%);
+}
+
+.sky-offscreen .sky-offscreen-chip.edge-top,
+.sky-offscreen .sky-offscreen-chip.edge-bottom {
+  transform: translateX(-50%);
+}
+
+.sky-offscreen .sky-offscreen-chip:hover,
+.sky-offscreen .sky-offscreen-chip:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  outline-offset: 1px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+}
+
+.sky-offscreen .sky-offscreen-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.sky-offscreen-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--mm-tone, var(--tone-muted));
+}
+
+.sky-offscreen-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The edge arrow: which way the line lies. */
+.sky-offscreen .sky-offscreen-chip.edge-left::before {
+  content: "‹";
+  color: var(--muted);
+}
+
+.sky-offscreen .sky-offscreen-chip.edge-right::after {
+  content: "›";
+  color: var(--muted);
+}
+
+.sky-offscreen .sky-offscreen-chip.edge-top::before {
+  content: "˄";
+  color: var(--muted);
+}
+
+.sky-offscreen .sky-offscreen-chip.edge-bottom::before {
+  content: "˅";
+  color: var(--muted);
+}
+
+@media (hover: none) {
+  .sky-minimap .sky-minimap-glyph {
+    width: 40px;
+    height: 40px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sky-minimap,
+  .sky-minimap *,
+  .sky-offscreen .sky-offscreen-chip {
+    transition: none;
+  }
+}

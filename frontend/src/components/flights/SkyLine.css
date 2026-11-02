@@ -1,0 +1,1085 @@
+/* One session's line in the Sky (SkyLine.tsx). The host places it (absolute,
+   at its layout's x/y); the line sizes itself to its diagram and reports
+   that size, so it is in flow inside the host's box. */
+
+.skl {
+  position: relative;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 320px;
+  padding: 0 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--sky-shadow-rest);
+  /* The ring (round 17), as a box's (FlywayCanvas.css): always drawn,
+     transparent at rest, screen-sized at any zoom. */
+  outline: calc(1px / var(--sky-z, 1)) solid transparent;
+  outline-offset: calc(2px / var(--sky-z, 1));
+  transition: box-shadow 120ms ease, outline-color 120ms ease, opacity 120ms ease;
+}
+
+/* The light theme's softer shadow is the token's (FlywayCanvas.css). */
+.light .skl {
+  box-shadow: var(--sky-shadow-rest);
+}
+
+/* The focused session's line wears the selection ring (SkySelection.css). */
+.skl.is-focused {
+  border-color: var(--accent);
+}
+
+.skl.is-editing,
+.skl.is-open {
+  z-index: 5;
+}
+
+/* --- The title bar: the handle the host drags the line by ----------------- */
+
+.skl-bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 42px;
+  margin: 0 -12px 6px;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 15px;
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+
+.skl-bar > .fl-bird {
+  flex: none;
+  color: var(--accent);
+}
+
+.skl-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skl-bar .skl-chip {
+  flex: none;
+  align-self: center;
+  font-size: 12.5px;
+  padding: 4px 9px;
+}
+
+/* Where the flight is, in words: "at Reviews settle · 10 min quiet". */
+.skl-where {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--fl-ink-muted);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skl-pin {
+  flex: none;
+  font-size: 13px;
+  opacity: 0.85;
+}
+
+/* ◧: the glyph, a three-bar meter (its state at a glance) and, on hover or
+   focus, the size in words. */
+.skl-size {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: var(--fl-btn-radius, 6px);
+  background: none;
+  color: var(--fl-ink-muted);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.skl-size-glyph {
+  font-size: 16px;
+}
+
+.skl-size-meter {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 14px;
+}
+
+.skl-size-meter i {
+  display: block;
+  width: 3px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--muted) 45%, transparent);
+}
+
+.skl-size-meter i:nth-child(1) {
+  height: 6px;
+}
+
+.skl-size-meter i:nth-child(2) {
+  height: 10px;
+}
+
+.skl-size-meter i:nth-child(3) {
+  height: 14px;
+}
+
+.skl-size-meter i.on {
+  background: var(--accent);
+}
+
+.skl-size-word {
+  display: none;
+  text-transform: capitalize;
+}
+
+.skl-size:hover,
+.skl-size:focus-visible {
+  border-color: var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.skl-size:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.skl-size:hover .skl-size-word,
+.skl-size:focus-visible .skl-size-word {
+  display: inline;
+}
+
+.skl-menu {
+  flex: none;
+}
+
+/* --- The ⋯ menu: plain verbs in groups, screen-sized at any zoom ----------- */
+
+.skl-menu .vf-menu > summary {
+  padding: 3px 9px 7px;
+  border-radius: var(--fl-btn-radius, 6px);
+  color: var(--fl-ink-muted);
+  font-size: 18px;
+}
+
+.skl-menu .vf-menu > summary:hover,
+.skl-menu .vf-menu[open] > summary {
+  color: var(--text);
+}
+
+/* The list is part of the zoomed line: scale it back to screen size. */
+.skl-menu .vf-menu-list {
+  min-width: 232px;
+  padding: 5px;
+  transform: scale(calc(1 / var(--sky-z, 1)));
+  transform-origin: top right;
+  z-index: 20;
+}
+
+.skl-menu .vf-menu.vf-menu-up .vf-menu-list {
+  transform-origin: bottom right;
+}
+
+.skl-menu .vf-menu-list .vf-menu-item {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 13.5px;
+  line-height: 1.2;
+}
+
+/* A group's first item: a rule above it. */
+.skl-menu .vf-menu-list .vf-menu-item.skl-mi-group {
+  margin-top: 5px;
+  position: relative;
+}
+
+.skl-menu .vf-menu-list .vf-menu-item.skl-mi-group::before {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  top: -3px;
+  border-top: 1px solid var(--border);
+}
+
+/* The box sizes: a check on the one this line wears. */
+.skl-menu .vf-menu-list .vf-menu-item.skl-mi-check {
+  padding-left: 30px;
+}
+
+.skl-menu .vf-menu-list .vf-menu-item.skl-mi-on::after {
+  content: "✓";
+  position: absolute;
+  left: 11px;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.skl-menu .vf-menu-list .vf-menu-item.skl-mi-check {
+  position: relative;
+}
+
+.skl-menu .vf-menu-list .vf-menu-danger {
+  color: var(--fl-ink-red);
+}
+
+/* A box's right-click menu (StopMenu.css) on a line reads at the ⋯'s size. */
+.skl .fl-stopmenu {
+  min-width: 232px;
+  padding: 5px;
+}
+
+.skl .fl-stopmenu-item {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 13.5px;
+  line-height: 1.2;
+}
+
+.skl-gone {
+  margin: 8px 2px 0;
+  font-size: 12px;
+}
+
+/* --- The diagram: the sky pans, the canvas never scrolls ------------------- */
+
+.skl .fl-canvas.skl-canvas {
+  overflow: visible;
+  max-width: none;
+  padding: 0;
+}
+
+.skl .fl-canvas.skl-canvas .fl-stage {
+  cursor: default;
+}
+
+/* --- The boxes' size: a scaled canvas in a sizer ----------------------------
+   SkyLine.tsx sets the sizer to the canvas's size times the scale (so the
+   line measures what it draws) and scales the canvas inside it, `--sky-z`
+   there being the zoom times the scale: what counter-scales by it (a box's
+   toolbar, a gap's +, a stop's menu) stays screen-sized. At a preset the
+   scale is 1 and neither carries a style. */
+
+.skl-scale {
+  position: relative;
+}
+
+.skl-scale-in {
+  width: max-content;
+  transform-origin: 0 0;
+}
+
+/* The level of detail's type factors, read again against the canvas's own
+   `--sky-z` (the custom properties on .skl resolve against the zoom alone). */
+.skl[data-lod="far"] .skl-scale-in {
+  --sky-far: clamp(1, calc(0.76 / var(--sky-z, 1)), 1.9);
+  --sky-far-ui: clamp(1, calc(0.6 / var(--sky-z, 1)), 1.4);
+}
+
+.skl[data-lod="mid"] .skl-scale-in {
+  --sky-mid: clamp(1, calc(0.8 / var(--sky-z, 1)), 1.3);
+}
+
+.skl[data-lod="near"] .skl-scale-in {
+  --sky-near: clamp(1, var(--sky-z, 1), 3);
+}
+
+/* An open card on a scaled line, drawn back at the sky's own scale. */
+.skl-card-unscale {
+  position: relative;
+}
+
+/* The line's corner: drag to resize its boxes. Screen-sized at any zoom
+   (about its own corner), shown while the line is hovered or focused. */
+.skl-box-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  touch-action: none;
+  z-index: 3;
+  transform: scale(calc(1 / var(--sky-z, 1)));
+  transform-origin: 100% 100%;
+  background:
+    linear-gradient(135deg, transparent 0 50%, var(--muted) 50% 58%, transparent 58% 68%, var(--muted) 68% 76%, transparent 76%);
+  border-bottom-right-radius: 10px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.skl:hover .skl-box-resize,
+.skl.is-focused .skl-box-resize,
+.skl-box-resize:focus-visible {
+  opacity: 0.75;
+}
+
+.skl-box-resize:hover,
+.skl-resize:hover {
+  opacity: 1;
+  background-color: var(--panel-2);
+}
+
+/* The corner handles take the quiet tier's ring on a keyboard focus. */
+.skl-box-resize:focus-visible,
+.skl-resize:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* What the + or a stop opened: a card hanging under the line. */
+.skl-panels {
+  position: absolute;
+  left: -1px;
+  top: calc(100% + 6px);
+  width: max(100%, 440px);
+  max-height: 560px;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* --- An open box: the session's real pane ---------------------------------- */
+
+.skl-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  box-sizing: content-box;
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+}
+
+.skl-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  box-sizing: border-box;
+  padding: 0 6px 0 11px;
+  font-size: 12px;
+}
+
+.skl-card-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skl-card-fold {
+  flex: none;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--fl-btn-radius, 6px);
+  background: none;
+  color: var(--fl-ink-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.skl-card-fold:hover,
+.skl-card-fold:focus-visible {
+  border-color: var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.skl-card-fold:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.skl-card-pane {
+  display: flex;
+  min-height: 0;
+}
+
+.skl-card-pane > .pane {
+  flex: 1;
+  min-width: 0;
+}
+
+.skl-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  touch-action: none;
+  z-index: 2;
+  background:
+    linear-gradient(135deg, transparent 0 55%, var(--muted) 55% 62%, transparent 62% 72%, var(--muted) 72% 79%, transparent 79%);
+  border-bottom-right-radius: 10px;
+  opacity: 0.7;
+}
+
+
+/* --- The roomy boxes ---------------------------------------------------------
+   The sky draws boxMetrics' roomy tier (236 × 100 boxes, 180 × 48 +, 200 ×
+   64 branches, 56px gaps; docs/flights-visibility.md): titles 15px/600,
+   summaries 13px, chips 12px, a 26px icon tile. The pane's Flight tab and the
+   flyway editor keep the base sizes (FlywayCanvas.css). */
+
+.skl .fl-box:not(.fl-box-open) {
+  gap: 5px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 15px;
+}
+
+.skl .fl-box:not(.fl-box-open) .fl-box-head {
+  gap: 9px;
+}
+
+.skl .fl-box:not(.fl-box-open) .fl-box-title {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+/* A stop's title may take two lines; a session's keeps one (its chip and
+   task fill the box). */
+.skl .fl-box-stop:not(.fl-box-open) .fl-box-title,
+.skl .fl-box-rung .fl-box-title {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+
+.skl .fl-box:not(.fl-box-open) :is(.fl-box-sub, .fl-box-detail, .fl-box-reason) {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.skl .fl-box:not(.fl-box-open) .fl-box-chip {
+  font-size: 12px;
+  padding: 4px 9px;
+}
+
+.skl .fl-box:not(.fl-box-open) .fl-box-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+}
+
+.skl .fl-box:not(.fl-box-open) .fl-box-icon .fl-stop-icon {
+  width: 17px;
+  height: 17px;
+}
+
+.skl .fl-box:not(.fl-box-open) .fl-box-glyph {
+  font-size: 15px;
+}
+
+.skl .fl-box:not(.fl-box-open) .fl-box-pulse,
+.skl .fl-box:not(.fl-box-open) .fl-box-dot {
+  width: 10px;
+  height: 10px;
+}
+
+.skl .fl-box:not(.fl-box-open) .fl-box-dots {
+  font-size: 13px;
+}
+
+.skl .fl-box.fl-box-branch:not(.fl-box-open) {
+  gap: 4px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.skl .fl-box.fl-box-branch:not(.fl-box-open) .fl-box-title {
+  font-size: 14px;
+}
+
+.skl .fl-box.fl-box-branch:not(.fl-box-open) .fl-box-sub {
+  font-size: 12.5px;
+}
+
+.skl .fl-box-add {
+  font-size: 14px;
+}
+
+.skl .fl-box-add .fl-add-plus .fl-stop-icon {
+  width: 19px;
+  height: 19px;
+}
+
+.skl .fl-box.fl-box-flown {
+  padding: 6px 16px;
+}
+
+.skl .fl-box.fl-box-flown .fl-box-title {
+  font-size: 14px;
+  -webkit-line-clamp: 1;
+}
+
+.skl .fl-box.fl-box-flown .fl-box-sub {
+  font-size: 12px;
+}
+
+.skl .fl-size-compact .fl-box:not(.fl-box-add):not(.fl-box-open):not(.fl-box-flown) {
+  padding: 8px 12px;
+  font-size: 14px;
+}
+
+.skl .fl-size-compact .fl-box:not(.fl-box-add):not(.fl-box-open) .fl-box-title {
+  font-size: 14px;
+  -webkit-line-clamp: 2;
+}
+
+.skl .fl-join-pill {
+  top: -12px;
+  font-size: 12px;
+  padding: 4px 9px;
+}
+
+/* The bird, to match: a third bigger on its disc. */
+.skl .fl-bird-marker .fl-bird-big {
+  zoom: 1.35;
+}
+
+/* --- Semantic zoom (lib/skyLayout lodFor; docs/flights-zoom.md) -----------
+   The geometry never depends on the zoom: a box keeps its plane width and
+   height (the layout's), a line its measured size, the bar its 42px. What
+   changes is what is drawn inside and the type's size on screen.
+     far  (< 62%)   the icon and the title, counter-scaled so the title reads
+                    ≥ 11px on screen (15px × 0.76 / zoom × zoom = 11.4px);
+                    everything else is left out.
+     mid            the box as drawn; under 80% its titles, summaries and the
+                    bar's name still grow a little, so the first picture
+                    (≥ 62%) reads: titles ~12px, summaries ~10.4px on screen.
+     near (≥ 115%)  the type counter-scaled back to ~15px on screen, so the
+                    same box holds more: the title on three lines, the
+                    summary, the detail and the reason wrapping (--sky-lines
+                    each), the perch's own parts. */
+
+.skl[data-lod="far"] {
+  /* The type's plane size over its mid size: 0.76 / zoom (~11.4px on
+     screen for a 15px title), from 1× up to 1.9× at the 40% floor. UI bits
+     stop at 1.4× (the bar's height is fixed). */
+  --sky-far: clamp(1, calc(0.76 / var(--sky-z, 1)), 1.9);
+  --sky-far-ui: clamp(1, calc(0.6 / var(--sky-z, 1)), 1.4);
+}
+
+.skl[data-lod="mid"] {
+  /* 0.8 / zoom: 1× from 80% up, 1.29× at 62%. */
+  --sky-mid: clamp(1, calc(0.8 / var(--sky-z, 1)), 1.3);
+}
+
+.skl[data-lod="near"] {
+  --sky-near: clamp(1, var(--sky-z, 1), 3);
+}
+
+/* The bar: the name and the state chip readable far; the bar's height fixed. */
+.skl-task {
+  display: none;
+}
+
+.skl[data-lod="far"] .skl-bar {
+  font-size: calc(15px * var(--sky-far));
+  gap: calc(9px * var(--sky-far-ui));
+}
+
+.skl[data-lod="far"] .skl-name {
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+/* The ⋯'s own button grows from far; its list scales itself back. */
+.skl[data-lod="far"] .skl-bar > .fl-bird,
+.skl[data-lod="far"] .skl-menu .vf-menu > summary {
+  zoom: var(--sky-far-ui);
+}
+
+/* The chip's type grows, its padding doesn't: it stays inside the bar
+   (~33 of 42px at the floor). */
+.skl[data-lod="far"] .skl-bar .skl-chip {
+  font-size: calc(12.5px * var(--sky-far));
+  padding: 2px 7px;
+}
+
+/* Too small to aim at from far: the size control and the pin wait for mid;
+   where the flight is waits too (the bird says it on the line). */
+.skl[data-lod="far"] .skl-size,
+.skl[data-lod="far"] .skl-pin,
+.skl[data-lod="far"] .skl-where {
+  display: none;
+}
+
+.skl[data-lod="far"] .skl-menu {
+  margin-left: auto;
+}
+
+.skl[data-lod="near"] .skl-bar {
+  flex-wrap: wrap;
+  align-content: center;
+  row-gap: calc(2px / var(--sky-near));
+  column-gap: calc(9px / var(--sky-near));
+  font-size: calc(15px / var(--sky-near));
+}
+
+.skl[data-lod="near"] .skl-bar > .fl-bird,
+.skl[data-lod="near"] .skl-bar .skl-chip,
+.skl[data-lod="near"] .skl-pin,
+.skl[data-lod="near"] .skl-size,
+.skl[data-lod="near"] .skl-menu .vf-menu > summary {
+  zoom: calc(1 / var(--sky-near));
+}
+
+.skl[data-lod="near"] .skl-where {
+  font-size: calc(13px / var(--sky-near));
+}
+
+/* Near: what the session is on, a second row of the bar. */
+.skl[data-lod="near"] .skl-task {
+  display: block;
+  order: 10;
+  flex: 1 0 100%;
+  min-width: 0;
+  color: var(--fl-ink-muted);
+  font-size: calc(13px / var(--sky-near));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skl[data-lod="mid"] .skl-name {
+  font-size: calc(15px * var(--sky-mid));
+}
+
+.skl[data-lod="mid"] .skl-where {
+  font-size: calc(13px * var(--sky-mid));
+}
+
+/* The boxes. An open box (a card: the session's pane) is left alone. */
+.skl[data-lod="mid"] .fl-box:not(.fl-box-open) .fl-box-title,
+.skl[data-lod="mid"] .fl-box-add .fl-add-label {
+  font-size: calc(15px * var(--sky-mid));
+}
+
+.skl[data-lod="mid"] .fl-box:not(.fl-box-open) :is(.fl-box-sub, .fl-box-detail, .fl-box-reason) {
+  font-size: calc(13px * var(--sky-mid));
+}
+
+.skl[data-lod="mid"] .fl-box:not(.fl-box-open) .fl-box-chip,
+.skl[data-lod="mid"] .fl-join-pill {
+  font-size: calc(12px * var(--sky-mid));
+}
+
+.skl[data-lod="mid"] .skl-bar .skl-chip {
+  font-size: calc(12.5px * var(--sky-mid));
+}
+
+.skl[data-lod="mid"] .fl-box.fl-box-flown .fl-box-title {
+  font-size: calc(14px * var(--sky-mid));
+}
+
+.skl[data-lod="mid"] .fl-box.fl-box-flown .fl-box-sub {
+  font-size: calc(12px * var(--sky-mid));
+}
+
+.skl[data-lod="far"] .fl-box:not(.fl-box-open) {
+  gap: 0;
+  padding: 8px 10px;
+  justify-content: center;
+}
+
+.skl[data-lod="far"] .fl-box:not(.fl-box-open) .fl-box-head {
+  gap: 6px;
+}
+
+.skl[data-lod="far"] .fl-box:not(.fl-box-open) .fl-box-title {
+  font-size: calc(15px * var(--sky-far));
+  font-weight: 700;
+  line-height: 1.12;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+
+.skl[data-lod="far"] .fl-box-branch .fl-box-title,
+.skl[data-lod="far"] .fl-box.fl-box-flown .fl-box-title {
+  -webkit-line-clamp: 1;
+}
+
+.skl[data-lod="far"] .fl-box.fl-box-flown .fl-box-title {
+  font-size: calc(14px * var(--sky-far));
+}
+
+.skl[data-lod="far"] .fl-box:not(.fl-box-open) .fl-box-icon,
+.skl[data-lod="far"] .fl-box:not(.fl-box-open) .fl-box-glyph,
+.skl[data-lod="far"] .fl-box:not(.fl-box-open) .fl-box-dot,
+.skl[data-lod="far"] .fl-box-add .fl-add-plus {
+  zoom: var(--sky-far-ui);
+}
+
+.skl[data-lod="far"] .fl-box-add .fl-add-label {
+  font-size: calc(15px * var(--sky-far));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The canvas leaves these out at far too (its `lod`); CSS holds the band
+   either way. */
+.skl[data-lod="far"] .fl-box:not(.fl-box-open) :is(.fl-box-chip, .fl-box-sub, .fl-box-detail, .fl-box-reason, .fl-box-dots, .fl-box-pulse, .fl-box-menu, .fl-you-text, .fl-you-items, .fl-you-acts) {
+  display: none;
+}
+
+.skl[data-lod="far"] .fl-join-pill,
+.skl[data-lod="far"] .fl-bird-marker {
+  zoom: var(--sky-far-ui);
+}
+
+.skl[data-lod="near"] .fl-box:not(.fl-box-open) {
+  gap: calc(5px / var(--sky-near));
+  padding: calc(12px / var(--sky-near)) calc(14px / var(--sky-near));
+  font-size: calc(15px / var(--sky-near));
+}
+
+.skl[data-lod="near"] .fl-box:not(.fl-box-open) .fl-box-head {
+  gap: calc(9px / var(--sky-near));
+}
+
+.skl[data-lod="near"] .fl-box:not(.fl-box-open) .fl-box-title {
+  font-size: calc(15px / var(--sky-near));
+  line-height: 1.25;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.skl[data-lod="near"] .fl-box:not(.fl-box-open) :is(.fl-box-sub, .fl-box-detail, .fl-box-reason) {
+  flex: 0 1 auto;
+  min-height: 0;
+  font-size: calc(13px / var(--sky-near));
+  line-height: 1.35;
+  white-space: normal;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: var(--sky-lines, 2);
+  -webkit-box-orient: vertical;
+}
+
+.skl[data-lod="near"] .fl-box:not(.fl-box-open) :is(.fl-box-icon, .fl-box-glyph, .fl-box-dot, .fl-box-pulse, .fl-box-chip, .fl-box-dots, .fl-box-menu, .fl-you-text, .fl-you-items, .fl-you-acts),
+.skl[data-lod="near"] .fl-box-add .fl-add-plus,
+.skl[data-lod="near"] .fl-join-pill {
+  zoom: calc(1 / var(--sky-near));
+}
+
+/* Delete on the line or its session's box (round 12): the close question,
+   inline, under the bar (as a grounded line's Remove asks). */
+.skl-close-confirm {
+  padding: 0 0 8px;
+}
+
+/* The line takes the focus (a press on its bar) so Delete lands on it; the
+   pointer's focus draws no ring, the keyboard's does. Round 17: only the
+   colour, at the lowest weight, so a selected or hovered line pressed on
+   keeps its ring (an `outline: none` here hid the selection). */
+.skl:where(:focus:not(:focus-visible)) {
+  outline-color: transparent;
+}
+
+/* Click mode (round 12): nothing moves by dragging, the sky pans under the
+   hand — so a line's bar shows the hand, not the move. */
+.sky[data-tool="click"] .skl-bar {
+  cursor: inherit;
+}
+
+/* Round 13: a grounded line dragged over this line by its bar — the drop
+   gives this session its stops (docs/flights.md "As built: round 13 sky"). */
+.skl.is-merge-target {
+  border-color: var(--accent);
+  border-style: solid;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  box-shadow:
+    0 0 0 4px rgba(var(--accent-rgb), 0.55),
+    var(--sky-shadow-rest);
+}
+
+/* --- Round 15 looks (docs/flights.md "As built: round 15 looks") ------------- */
+
+/* Time under the line: a 4px ruler, one segment per flown stop proportional
+   to its duration, the total at the right. Mid and near; the far band hides
+   it (the canvas also leaves it out there). */
+.skl-ruler {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 2px 0;
+  font-size: 11px;
+  color: var(--fl-ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.skl-ruler-bar {
+  flex: 1;
+  display: flex;
+  height: 4px;
+  gap: 2px;
+  min-width: 0;
+}
+
+.skl-ruler-seg {
+  flex: 1 1 0;
+  min-width: 3px;
+  height: 100%;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--tone-working) 70%, transparent);
+}
+
+.skl-ruler-seg:hover {
+  background: var(--tone-working);
+}
+
+.skl-ruler-failed {
+  background: color-mix(in srgb, var(--red) 75%, transparent);
+}
+
+.skl-ruler-skipped {
+  background: color-mix(in srgb, var(--text) 25%, transparent);
+}
+
+.skl-ruler-total {
+  flex: none;
+  white-space: nowrap;
+}
+
+.skl[data-lod="far"] .skl-ruler {
+  display: none;
+}
+
+.skl[data-lod="near"] .skl-ruler {
+  font-size: calc(11px / var(--sky-near));
+}
+
+/* Ageing: a line quiet for more than a day yellows like paper; past three
+   days it says how long ("3 days still"). */
+.skl[data-age="old"] .skl-bar,
+.skl[data-age="stale"] .skl-bar {
+  background: linear-gradient(0deg, color-mix(in srgb, var(--gold, #d4a72c) 14%, transparent), color-mix(in srgb, var(--gold, #d4a72c) 22%, transparent));
+  border-bottom-color: color-mix(in srgb, var(--gold, #d4a72c) 45%, var(--border));
+}
+
+.skl[data-age="stale"] .skl-bar {
+  background: linear-gradient(0deg, color-mix(in srgb, var(--gold, #d4a72c) 24%, transparent), color-mix(in srgb, var(--gold, #d4a72c) 34%, transparent));
+}
+
+.skl[data-age="stale"] .skl-name {
+  color: color-mix(in srgb, var(--text) 80%, var(--gold, #d4a72c));
+}
+
+.skl-age {
+  flex: none;
+  font-size: 12px;
+  font-style: italic;
+  color: color-mix(in srgb, var(--text) 65%, var(--gold, #d4a72c));
+  white-space: nowrap;
+}
+
+.skl[data-lod="far"] .skl-age {
+  display: none;
+}
+
+/* --- Round 17 polish (docs/flights.md "As built: round 17 polish-css") -------
+   The line's hover ring, its keyboard ring, the raised shadow in the hand,
+   and the drop's highlight at the far band. The selection ring itself is
+   SkySelection.css's; the shadow tokens are FlywayCanvas.css's. */
+
+/* Hover the bar (the line's handle): the hover ring, 1px at half the accent.
+   Zero weight, so the selection ring always wins over it. */
+.skl:where(:has(> .skl-bar:hover)) {
+  outline-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+/* Keyboard focus: the hover ring in the selection's colour. */
+.skl:focus-visible {
+  outline-color: var(--accent);
+}
+
+/* In the hand: raised. */
+.sky-line-slot.is-dragging > .skl {
+  box-shadow: var(--sky-shadow-raised);
+}
+
+/* A flyway over the line at the far band: the end + that takes it keeps a
+   2px ring on SCREEN (the plane's 2px is under one there) and a stronger
+   wash. A stop chip's lit gap is a screen-sized pill already, ringed 2px in
+   every band (FlywayCanvas.css .fl-gap-add.fl-gap-lit). */
+.skl[data-lod="far"] .fl-box-add.fl-drop {
+  background: rgba(var(--accent-rgb), 0.3);
+  box-shadow: 0 0 0 calc(2px / var(--sky-z, 1)) var(--accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skl,
+  .skl-box-resize {
+    transition: none;
+  }
+}
+
+/* --- Round 18: a line is a CHAIN of free-floating tiles -------------------
+   No card around it and no row behind it (docs/flights.md "Round 18"): a
+   small label over the tiles (the handle and the ⋯), the chain (SkyChain),
+   the open cards in a row under it. The ring and the focus show on the
+   label. */
+
+.skl.skl-chainline {
+  min-width: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+
+.skl.skl-chainline.skl-grounded {
+  border: none;
+}
+
+.skl-chainline > .skl-bar.skl-label {
+  display: inline-flex;
+  gap: 6px;
+  width: max-content;
+  max-width: 520px;
+  height: 26px;
+  margin: 0 0 8px;
+  padding: 0 4px 0 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 86%, transparent);
+  font-size: 12.5px;
+  outline: calc(1px / var(--sky-z, 1)) solid transparent;
+  outline-offset: calc(2px / var(--sky-z, 1));
+}
+
+.skl-chainline > .skl-bar.skl-label > .fl-bird {
+  color: var(--sky-chain-color, var(--accent));
+}
+
+.skl-chainline.skl-grounded > .skl-bar.skl-label {
+  border-style: dashed;
+}
+
+.skl-chainline.is-focused > .skl-bar.skl-label,
+.skl-chainline.is-selected > .skl-bar.skl-label,
+.skl-chainline:focus-visible > .skl-bar.skl-label {
+  border-color: var(--accent);
+  outline-color: var(--accent);
+}
+
+.skl-chainline > .skl-bar.skl-label .skl-name {
+  font-weight: 600;
+}
+
+.skl-chainline > .skl-bar.skl-label .skl-where,
+.skl-chainline > .skl-bar.skl-label .skl-age {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A stops-only chain dragged by its label onto a session's chain. */
+.skl-chainline.is-merging {
+  opacity: 0.7;
+}
+
+.skl-chainline.is-merge-target .sky-head,
+.skl-chainline.is-drop .sky-head,
+.skl-chainline.is-session-over .sky-socket {
+  outline: calc(2px / var(--sky-z, 1)) solid var(--accent);
+  outline-offset: calc(3px / var(--sky-z, 1));
+  border-radius: 12px;
+}
+
+.skl-chain-wrap {
+  position: relative;
+  width: max-content;
+}
+
+/* The palette / a stop's dialog floats beside the tile it was opened from. */
+.skl-panels.skl-hang {
+  top: auto;
+  width: 440px;
+  z-index: 8;
+}
+
+.skl-chainline .skl-ruler {
+  max-width: 100%;
+  margin-top: 4px;
+}
+
+.skl-cards {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.skl-chainline > .skl-bar.skl-label .skl-chip {
+  height: 18px;
+  padding: 0 7px;
+  font-size: 11px;
+  line-height: 18px;
+}
+
+/* Focus shows on the chain's label only (above); a chain the marquee took
+   whole keeps the sky's one selection ring (SkySelection.css) round it. */
+.skl.skl-chainline.is-focused:not(.is-selected),
+.skl.skl-chainline:focus-visible:not(.is-selected),
+.skl.skl-chainline:where(:has(> .skl-bar:hover)):not(.is-selected) {
+  outline-color: transparent;
+}
+
+.skl.skl-chainline.is-selected {
+  border-radius: 14px;
+}

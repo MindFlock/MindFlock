@@ -67,9 +67,10 @@ function rule(raw: string, selector: string): string {
 }
 
 describe("the Intake dialog shell", () => {
-  it("is a top-bar surface of its own", () => {
+  it("is a top-bar surface of its own again (the Flights dialog is retired)", () => {
     expect(TOPBAR).toContain('id="intake-btn"'); // the top-bar entry
     expect(TOPBAR).toMatch(/id="intake-btn"[^>]*onClick=\{\(\) => ui\.openDialogFor\("intake"\)\}/);
+    expect(TOPBAR).not.toContain('id="flights-btn"');
     expect(DIALOG).toContain('<div id="intake-panel">');
     // A blocking modal: its cards carry Remove buttons, so a stray Ctrl+W /
     // Delete must not kill the session behind it instead.

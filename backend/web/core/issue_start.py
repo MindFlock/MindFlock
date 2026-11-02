@@ -19,11 +19,16 @@ live grid) — mirroring :mod:`backend.web.core.pr_review` and
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
+from backend.providers import effort as _provider_effort
 from backend.web.core import pipeline_root
+from backend.web.core.ticket_start import LaunchError
+
+__all__ = ["LaunchError", "launch"]
 
 _logger = logging.getLogger(__name__)
 
@@ -41,6 +46,14 @@ def _load_config():
     """The pipeline's config, ``workspace_dir`` anchored at :data:`_REPO_ROOT`
     (:func:`backend.web.core.pipeline_root.load_config`)."""
     return pipeline_root.load_config(_REPO_ROOT)
+
+
+def _server():
+    """The ``backend.web.server`` module, imported lazily (circular import) —
+    see :func:`backend.web.core.pr_review._server`."""
+    from backend.web import server
+
+    return server
 
 
 def session_title(issue) -> str:
@@ -212,3 +225,178 @@ def record_handled(issue, error: str | None = None) -> None:
             status="failed" if error else "",
         ),
     )
+
+
+async def launch(
+    repo: str,
+    number: int,
+    *,
+    agent: str = "",
+    depth: str = "",
+    effort: str = "",
+    plan: str = "",
+) -> dict:
+    """Start a coding session for one open issue and return the 202 body.
+
+    The body of ``POST /api/github/issues/start`` (which validates its
+    payload and calls this), callable without HTTP: ``POST /api/flights/start``
+    with an ``issue`` subject calls it too. Same shape as the pipeline's issue
+    loop (issue → Ticket → engine session on a fresh branch), against the
+    server's engine; a launch failure is reported as ``session.create_failed``.
+
+    * ``agent`` / ``depth`` / ``effort``: per-start overrides (``""`` = the
+      repo card's chain).
+    * ``plan``: the flight plan to fly; ``""`` = ``server._intake_plan``.
+
+    Raises :class:`LaunchError` (404 no such open issue, 409 a session for it
+    already exists, 502 GitHub failed).
+    """
+    srv = _server()
+    agent_override = str(agent or "")
+    effort_override = str(effort or "")
+    # Row first, GitHub lookup second (see core.pr_review.launch).
+    early = srv._cached_session_title(
+        srv._OPEN_ISSUES_CACHE,
+        "issues",
+        lambda i: i.get("repo") == repo and i.get("number") == number,
+    )
+    if early:
+        if early in srv.ENGINE.instances or srv._pending_has(early):
+            raise LaunchError(
+                409,
+                {
+                    "error": "session %s already exists — close it to re-run" % early,
+                    "title": early,
+                },
+            )
+        srv._pending_add(early, "iss", repo=repo)
+
+    try:
+        issue = await find_issue(repo, number)
+    except LookupError as err:
+        srv._pending_drop(early)
+        raise LaunchError(404, {"error": str(err)}) from None
+    except Exception as err:  # noqa: BLE001
+        srv._pending_drop(early)
+        raise LaunchError(502, {"error": str(err)}) from None
+
+    title = session_title(issue)
+    if title != early:
+        srv._pending_drop(early)  # stale cache entry — keep only the real title
+        if title in srv.ENGINE.instances or srv._pending_has(title):
+            raise LaunchError(
+                409,
+                {
+                    "error": "session %s already exists — close it to re-run" % title,
+                    "title": title,
+                },
+            )
+    srv._pending_add(
+        title,
+        "iss",
+        branch=branch_for(issue),
+        repo=repo,
+        workspace_strategy=workspace_mode(),
+    )
+    repo_depth = srv._repo_intake_depth(repo, "issues")
+    flight_tail = srv._arm_intake(
+        title,
+        depth or repo_depth,
+        "iss",
+        "%s#%s" % (repo, number),
+        message=str(getattr(issue, "title", "") or ""),
+        plan=srv._intake_plan(
+            "issue", plan, depth, srv._repo_intake_plan(repo, "issues"), repo_depth
+        ),
+        subject={
+            "kind": "issue",
+            "source": repo,
+            "id": str(number),
+            "title": str(getattr(issue, "title", "") or ""),
+            "url": str(getattr(issue, "url", "") or ""),
+        },
+        branch=branch_for(issue),
+    )
+
+    async def _bg_start() -> None:
+        # The engine owns provisioning (inside Instance.Start), like the
+        # ticket path.
+        try:
+            story, prompt, branch = await prepare_start(issue)
+            # Same leftover-worktree reclaim as the ticket path.
+            await asyncio.to_thread(
+                srv._worktree_reclaim.reclaim_for_launch,
+                getattr(story, "repo_url", "") or "",
+                branch,
+            )
+            # This start's own pick outranks the repo card's Agent CLI, which
+            # prepare_start already resolved onto the story. Resolved before the
+            # options because this start's effort has to be translated into THAT
+            # CLI's spelling.
+            program = (
+                agent_override
+                or getattr(story, "agent", "")
+                or srv.ENGINE.default_program()
+            )
+            prompt += flight_tail
+            prompt = _provider_effort.decorate_prompt(prompt, program, effort_override)
+            prompt = await asyncio.to_thread(
+                lambda p=prompt: srv._red_zone_prompt(
+                    p,
+                    program,
+                    srv._repo_url_workdirs(getattr(story, "repo_url", "") or ""),
+                    None,
+                )
+            )
+            inst = srv.session.NewInstance(
+                srv.session.InstanceOptions(
+                    title=title,
+                    path=".",
+                    program=program,
+                    provisioned=True,
+                    workspace_strategy=workspace_mode(),
+                    new_branch=branch,
+                    prompt=prompt,
+                    provision_repo_url=getattr(story, "repo_url", "") or "",
+                    launch_args=srv._start_launch_args(program, effort_override),
+                )
+            )
+            inst.ExtraEnv = srv._ports.env_for(title)
+            inst.SetStatus(srv.Loading)
+            with srv.ENGINE.lock:
+                srv.ENGINE.instances[title] = inst
+            srv._seed_event_snapshot(title)
+            srv._events.BUS.emit(
+                "session.created",
+                session=title,
+                new="loading",
+                data={"program": inst.Program, "provisioned": True, "issue": number},
+            )
+            try:
+                await asyncio.to_thread(inst.Start, True)
+                srv.ENGINE.save()
+            except Exception:
+                # By identity: this task may be the loser of a re-start, and
+                # popping by name would delete the LIVE session's record.
+                srv._drop_failed_start(title, inst)
+                raise
+            # Ledger the issue so auto handling doesn't run it a second time.
+            record_handled(issue)
+            if srv.log.InfoLog is not None:
+                srv.log.InfoLog.Printf("forced issue session %s live", title)
+        except Exception as err:  # noqa: BLE001
+            if srv.log.ErrorLog is not None:
+                srv.log.ErrorLog.Printf(
+                    "forced issue session %s failed: %v", title, err
+                )
+            srv._events.BUS.emit(
+                "session.create_failed", session=title, data={"error": str(err)}
+            )
+            srv._cancel_intake_flight(
+                title, "the session could not be created: %s" % err
+            )
+        finally:
+            srv._pending_drop(title)
+
+    srv._register_task(_bg_start())
+    return {"started": True, "title": title}

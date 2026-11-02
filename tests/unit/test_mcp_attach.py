@@ -43,6 +43,8 @@ _TOOLS = (
     "get_session",
     "read_output",
     "get_diff",
+    "describe_flight",
+    "flight_status",
     "check_inbox",
     "wait_for_message",
     "wait_for_session",

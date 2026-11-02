@@ -20,6 +20,13 @@ that comes up later with the same id. In memory only: a restart forgets every
 outstanding button, which is the right failure (a button older than the
 server is answered by nobody). At most :data:`MAX_LIVE` live at once, oldest
 evicted.
+
+It also keeps WHEN each session's dialog last got an answer
+(:func:`answered_at`, stamped by :func:`forget` with a ``dialog_id`` — the
+call ``/answer`` makes after every settling answer, by voice, by hand, from
+the pop-up or from a push button). The voice router reads it: a phrase begun
+before the previous answer can never answer the next dialog, even one that
+re-asks with the same id (``voice_router.dialog_visible_at``).
 """
 
 from __future__ import annotations
@@ -43,6 +50,12 @@ _LOCK = threading.Lock()
 _LIVE: "OrderedDict[str, Dict]" = OrderedDict()
 
 _now = time.monotonic  # patched by tests to age a token
+
+#: title -> epoch (``time.time()``, the clock the voice router reads phrase
+#: timing on) of the last settling answer to one of its dialogs.
+_ANSWERED_AT: Dict[str, float] = {}
+_ANSWERED_MAX = 1024
+_clock = time.time  # patched by tests
 
 
 def _sweep(now: float) -> None:
@@ -101,8 +114,16 @@ def forget(title: str, dialog_id: Optional[str] = None) -> int:
     way (the desktop, the phone page) and when the session is removed, so a
     button on the lock screen never answers a LATER prompt that happens to
     hash to the same id (an agent re-asking the same ``git push``). Returns
-    how many were dropped."""
+    how many were dropped.
+
+    With a ``dialog_id`` (``/answer``'s call after a settling answer) it
+    also stamps :func:`answered_at`; without one (session removal) it drops
+    the stamp."""
+    if dialog_id is not None:
+        note_answered(title, dialog_id)
     with _LOCK:
+        if dialog_id is None:
+            _ANSWERED_AT.pop(str(title), None)
         gone = [
             tok
             for tok, e in _LIVE.items()
@@ -114,6 +135,38 @@ def forget(title: str, dialog_id: Optional[str] = None) -> int:
     return len(gone)
 
 
+def _ticks(dialog_id) -> bool:
+    """Whether ``dialog_id``'s digits TOGGLE rather than answer (a
+    multi-select question, as ``agent_io.current_dialog`` saw it): a tick
+    leaves that same dialog up, and the next tick is welcome."""
+    try:
+        from backend.web.core import agent_io as _agent_io
+
+        return str(dialog_id) in getattr(_agent_io, "_TOGGLE_IDS", {})
+    except Exception:  # noqa: BLE001 — unknown reads as an answer (stricter)
+        return False
+
+
+def note_answered(title: str, dialog_id: Optional[str] = None) -> None:
+    """``title``'s dialog ``dialog_id`` just got a settling answer: stamp
+    :func:`answered_at` (a multi-select tick is not an answer)."""
+    if dialog_id is not None and _ticks(dialog_id):
+        return
+    now = _clock()
+    with _LOCK:
+        if len(_ANSWERED_AT) >= _ANSWERED_MAX and str(title) not in _ANSWERED_AT:
+            _ANSWERED_AT.clear()
+        _ANSWERED_AT[str(title)] = now
+
+
+def answered_at(title: str) -> float:
+    """Epoch of the last settling answer to one of ``title``'s dialogs, any
+    path — 0.0 when none since this server started (or the session was
+    removed). Never raises."""
+    with _LOCK:
+        return _ANSWERED_AT.get(str(title), 0.0)
+
+
 def live_count() -> int:
     """How many buttons are outstanding (expired ones included until swept)."""
     with _LOCK:
@@ -123,3 +176,4 @@ def live_count() -> int:
 def _reset_for_tests() -> None:
     with _LOCK:
         _LIVE.clear()
+        _ANSWERED_AT.clear()

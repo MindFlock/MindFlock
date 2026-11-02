@@ -18,6 +18,7 @@
  * open/closed state is per source.
  */
 
+import { PlanSelect } from "../flights/PlanSelect";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api } from "../../api/client";
 import {
@@ -1070,7 +1071,6 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd, draftStas
 
   return (
     <>
-      {addFlow}
       <p className="set-hint set-block-hint">
         Connect a tracker. Tickets in the states you pick start as sessions — on their own
         while auto-start is on, or when you press <strong>Start</strong>.
@@ -1122,6 +1122,9 @@ export function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd, draftStas
           </div>
         </div>
       ) : null}
+      {/* The add flow grows the tab at its FOOT, under the work — where the
+          new source's group will appear — so what is on screen stays put. */}
+      {addFlow}
     </>
   );
 }
@@ -2568,6 +2571,15 @@ function TicketSourceEditor({
               <span className="set-hint">After the agent finishes. Merge is per ticket only.</span>
             </label>
           </div>
+          {/* The flyway this source's tickets fly (docs/flights.md):
+              "" = the built-in ticket flyway, cut at the Fast-track above. */}
+          <PlanSelect
+            kind="tickets"
+            className="tk-plan"
+            field={{ attr: "data-tk-field" }}
+            value={source.plan || ""}
+            onChange={(plan) => onChange({ plan })}
+          />
           {/* BASIC vs ADVANCED. Everything above is what a first setup needs to
               get tickets flowing; the per-queue tuning and the catalog's
               `advanced` extras (claim label, move on start…) fold away here.

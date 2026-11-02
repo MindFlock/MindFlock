@@ -42,20 +42,20 @@ const { topBarShows } = await import("../lib/calm");
 const { useUi } = await import("../state/store");
 
 describe("the tours registry", () => {
-  it("has the eight tours, each under its own id", () => {
-    expect([...TOUR_IDS]).toEqual(["welcome", "new", "intake", "verify", "schedule", "settings", "people", "voice"]);
+  it("has the nine tours, each under its own id", () => {
+    expect([...TOUR_IDS]).toEqual(["welcome", "new", "sky", "intake", "verify", "schedule", "settings", "people", "voice"]);
     expect(Object.keys(TOURS).sort()).toEqual([...TOUR_IDS].sort());
     for (const id of TOUR_IDS) expect(TOURS[id].id).toBe(id);
     expect(isTourId("intake")).toBe(true);
     expect(isTourId("map")).toBe(false);
   });
 
-  it("keeps every tour short: 3–7 steps of one plain sentence each (Voice: the mic's eight)", () => {
+  it("keeps every tour short: 3–7 steps of one plain sentence each (Voice: the mic's eight; Sky: the whole sky's fifteen)", () => {
     for (const id of TOUR_IDS) {
       const { steps, title } = TOURS[id];
       expect(title, id).toMatch(/^[A-Z]/);
       expect(steps.length, id).toBeGreaterThanOrEqual(3);
-      expect(steps.length, id).toBeLessThanOrEqual(id === "voice" ? 8 : 7);
+      expect(steps.length, id).toBeLessThanOrEqual(id === "voice" ? 8 : id === "sky" ? 15 : 7);
       for (const s of steps) {
         expect(s.title.trim(), id).not.toBe("");
         expect(s.body.trim(), id).not.toBe("");
@@ -150,6 +150,40 @@ describe("the tours registry", () => {
     for (const id of TOUR_IDS)
       if (id !== "settings" && id !== "voice") for (const s of TOURS[id].steps) expect(s.screen, id).toBeUndefined();
     for (const s of TOURS.voice.steps) expect([undefined, "mic-pop"], s.title).toContain(s.screen);
+  });
+
+  it("the Sky tour walks every surface, in the order a newcomer meets them — never a Flights tab", () => {
+    const steps = TOURS.sky.steps;
+    expect(TOURS.sky.id).toBe("sky");
+    expect(TOURS.sky.title).toBe("Sky");
+    expect(steps).toHaveLength(15);
+    // the first selector of each target: its data-tour hook (or "")
+    expect(steps.map((s) => s.target.split(",")[0])).toEqual([
+      '[data-tour="view-sky"]',
+      '[data-tour="sky-line-bar"]',
+      '[data-tour="sky-session-box"]',
+      '[data-tour="flights-bird"]',
+      '[data-tour="sky-stop"]',
+      ".sky-port-out:not(.sky-port-off)",
+      '[data-tour="sky-stop"]',
+      '[data-tour="sky-shelf"]',
+      '[data-tour="sky-grounded"]',
+      '[data-tour="sky-selbar"]',
+      '[data-tour="sky-tool"]',
+      "",
+      '[data-tour="sky-intake"]',
+      '[data-tour="sky-zoom"]',
+      '[data-tour="sky-guide"]',
+    ]);
+    // A selector list matches in DOCUMENT order and the top bar comes first:
+    // a fallback to the toggle would always win, so no step past the first
+    // names it — a missing target centres the card instead.
+    for (const s of steps.slice(1)) expect(s.target).not.toContain("view-sky");
+    expect(steps.some((s) => /flights-tab|flights-plans/.test(s.target))).toBe(false);
+    // every surface the contract names has its step
+    const words = steps.map((s) => s.title + " " + s.body).join(" ");
+    for (const w of ["Grid · Sky", "label", "terminal", "bird", "duplicate", "dialog", "port", "loop", "All blocks…", "stops-only", "Group into a stop", "Save to the shelf", "V ", "H ", "Space", "Delete", "intake", "Fit", "0 ", "guide"])
+      expect(words, w).toContain(w);
   });
 });
 

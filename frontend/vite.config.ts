@@ -40,13 +40,16 @@ export default defineConfig({
     },
   },
   // The Code Tree's layout search runs in a module Web Worker
-  // (lib/codetree/layout.worker.ts). It ships as one more stable,
-  // unminified file next to app.js, served by the same static mount.
+  // (lib/codetree/layout.worker.ts), and the desktop mic's capture in an
+  // AudioWorklet (lib/voiceCapture.worklet.ts, imported `?worker&url`). Each
+  // ships as one more stable, unminified file next to app.js, served by the
+  // same static mount.
   worker: {
     format: "es",
     rollupOptions: {
       output: {
-        entryFileNames: "codetree-worker.js",
+        entryFileNames: (chunk) =>
+          chunk.facadeModuleId?.includes("voiceCapture.worklet") ? "voice-capture-worklet.js" : "codetree-worker.js",
         chunkFileNames: "js/chunks/[name].js",
         comments: { legal: true, annotation: true, jsdoc: false },
       },

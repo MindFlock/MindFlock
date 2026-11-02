@@ -1,0 +1,78 @@
+/* Halt points on a line (docs/flights.md "Halt points"): the ⏸ badge a halt
+ * point wears in its corner, the toolbar's Halt here / Halt now / Carry on,
+ * and the pill a run of flown stops folds into. Colours are the app's tokens,
+ * so light and dark both follow the theme; the badge takes the paused tone
+ * (FlywayCanvas.css `.fl-st-paused`). */
+
+.fl-halt-mark {
+  position: absolute;
+  top: -8px;
+  left: -8px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 999px;
+  border: 1px solid var(--muted);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1;
+  pointer-events: auto;
+  cursor: default;
+}
+
+/* Paused at it: the badge is the reason the bird is still. */
+.fl-st-paused.fl-halt-point .fl-halt-mark {
+  border-color: var(--text);
+  color: var(--text);
+  box-shadow: 0 0 0 2px var(--panel);
+}
+
+.fl-halt-point {
+  border-style: dashed;
+}
+
+.fl-st-paused.fl-halt-point {
+  border-style: solid;
+}
+
+/* The toolbar's ⏸ while the stop is a halt point: pressed. */
+.fl-tool-halt.fl-tool-on {
+  color: var(--text);
+  background: var(--panel-2);
+  border-color: var(--muted);
+}
+
+.fl-tool-pause:hover:not(:disabled) {
+  color: var(--fl-ink-red);
+  background: color-mix(in srgb, var(--red) 13%, transparent);
+}
+
+.fl-tool-resume:hover:not(:disabled) {
+  color: var(--fl-ink-working);
+  background: color-mix(in srgb, var(--tone-working) 13%, transparent);
+}
+
+/* Stops already flown, folded into one pill. */
+.fl-box.fl-box-flown {
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 999px;
+  border-style: dashed;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.fl-box-flown .fl-box-title {
+  font-size: 12px;
+}
+
+.fl-box-flown:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

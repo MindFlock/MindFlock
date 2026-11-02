@@ -614,6 +614,15 @@ class BaseProvider:
         best-effort right before a session launches. Default: no-op."""
         return None
 
+    def carry_workdir(self, old: str, new: str) -> None:
+        """Carry the CLI's per-DIRECTORY state from ``old`` to ``new`` after
+        the engine moved a session's workspace there (``MoveWorkspace``), so
+        the resume launch in ``new`` still finds the conversation. Called
+        best-effort between the move and the relaunch. Default: no-op — a CLI
+        that keys its state by session id, not by folder, has nothing to
+        carry."""
+        return None
+
     # --- red-zone guard (roadmap: Code Map + red zones) -------------------- #
     def red_zone_guard(self) -> bool:
         """Whether this CLI's tool hooks can HARD-BLOCK a red-zone edit (a
@@ -637,6 +646,14 @@ class BaseProvider:
         Claude returns True. The Map hides the plan UI when this is False.
         Default: False."""
         return False
+
+    def clear_context_command(self) -> Optional[str]:
+        """What to type into the agent to clear its conversation (a fresh
+        context in the same session), or None when the CLI has no such
+        command. A flight's Loop stop with ``fresh`` delivers it into the
+        session's queue before each repeat (docs/flights.md "Round 16").
+        Default: None (nothing to send)."""
+        return None
 
     def voice_prompt_hook(self) -> bool:
         """Whether this CLI's prompt-submit hook injects MindFlock's voice

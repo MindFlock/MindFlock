@@ -132,6 +132,10 @@ AUTO_APPROVED_TOOLS = (
     "get_session",
     "read_output",
     "get_diff",
+    # Flights (round 16): the two reads — a description turned into steps,
+    # and a flight's state. Starting or steering one still asks.
+    "describe_flight",
+    "flight_status",
     "check_inbox",
     "wait_for_message",
     "wait_for_session",

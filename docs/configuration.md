@@ -475,6 +475,20 @@ Notes on individual keys:
   the process lifetime (the pipeline and the server each keep their own), so a
   renamed account needs the pipeline restarted — and the server too, for
   **Run ticket**.
+- `plan` (per ticket source in `settings.json`, and per repo in
+  `github.repo_settings` / `github.issue_repo_settings`; optional) — the
+  **flight plan** an item started from there flies ([flights.md](flights.md)):
+  a plan id from `GET /api/flights/plans` (`builtin:ticket`, `p_7f3a2c`…).
+  Blank = the built-in plan for that kind (`builtin:ticket` for tickets and
+  issues, `builtin:pr` for PRs) cut at the source's `depth`, which is no flight
+  at all while `depth` is blank/off/agent — so a source saved before the field
+  existed behaves exactly as before. A plan id that no longer exists falls
+  back to the depth. A per-start `plan` or `depth` (the Intake row, the Flights
+  Board, an agent's `spawn_ticket_session`) outranks it; the full order is in
+  [ingestion-pipeline.md](ingestion-pipeline.md#which-flight-a-started-item-flies).
+  Synced with the rest of the source / repo block (the plans themselves sync
+  as `store:flight_plans`). Changing it restarts the pipeline like any source
+  field, and the pipeline also reads it fresh at every launch.
 - `workflow_state` (per source) — the state a ticket must be in to be ingested.
   In the web UI this is a live dropdown (Intake → Tickets) populated from the
   provider, so you rarely need the raw id. For Shortcut you can also list ids with
@@ -529,8 +543,8 @@ Notes on individual keys:
 - `github.repo_settings` / `github.issue_repo_settings` — the per-repo override
   tables, spelled as nested tables whose key is the quoted repo slug
   (`[github.repo_settings."owner/name"]`). Each block accepts `agent`,
-  `min_age_minutes`, `skip_authors` and — PR review only — `base_branch`; any
-  other key is dropped, and so is any key whose value is blank or empty, which
+  `min_age_minutes`, `skip_authors`, `depth`, `plan` (see below) and — PR
+  review only — `base_branch`; any other key is dropped, and so is any key whose value is blank or empty, which
   is how a card's cleared field means "inherit the flat field above" rather than
   "set it to nothing". `0` is a real value (no grace period at all), not blank.
   Both tables go through the same normalizer the Intake tab's cards save
@@ -667,7 +681,7 @@ Override the directory with `MINDFLOCK_ASSISTANT_DIR`.
 | `usage-history.json` | Durable daily token/cost ledger |
 | `scroll-speed` | Terminal wheel speed, 1–20 (also settable in the UI) |
 | `.exit-markers/<session>.code` | Last exit code per session (clean-quit vs crash detection) |
-| `.activity-markers/<session>.json`, `<session>.reply.json` | The per-session `{state, ts}` activity marker the CLI's lifecycle hooks write ([providers.md](providers.md#activity-signal-activity_markerspy)), and beside it the reply the `Stop` hook files — `{"ts", "text"}`, the payload's `last_assistant_message` cut at 8000 chars — which is where a session's spoken `Say:` line is read from (the `last_say` row field, the `say` event data, `GET …/voice`). Both keyed by tmux session name; the reply file goes with the session. Override the directory with `MINDFLOCK_ACTIVITY_MARKER_DIR` (below) |
+| `.activity-markers/<session>.json`, `<session>.reply.json` | The per-session `{state, ts}` activity marker the CLI's lifecycle hooks write ([providers.md](providers.md#activity-signal-activity_markerspy)), and beside it the reply the `Stop` hook files — `{"ts", "text"}`, the payload's `last_assistant_message` cut at 8000 chars — which is where a session's spoken `Say:` line is read from (the `last_say` row field, the `say` event data, `GET …/voice`). Both keyed by tmux session name; the reply file goes with the session. The server watches this directory to publish a reply the moment it lands. Override the directory with `MINDFLOCK_ACTIVITY_MARKER_DIR` (below) — on a network or coarse-mtime filesystem replies fall back to the 1 s rescan |
 | `.voice/<session>.on`, `.voice/<session>.next` | The per-session **voice files** (`backend/web/core/voice.py`). `.on` exists while a phone is in a voice conversation with that session (the row's `voice`; `POST …/voice` writes and removes it) and asks nothing of the session. `.next` is the **one-shot** request for a spoken reply: `POST …/send {say: true}` arms it right before the keystrokes (it holds the arming time), the installed `UserPromptSubmit` hook reads it at fire time, deletes it, and prints the voice instruction for Claude Code to inject only when it is under 120 s old — so a typed prompt costs no `Say:` tokens and a prompt that never got submitted cannot attach its line to the next one. Session removal drops both, so a closed session leaves nothing behind and a namesake inherits none. Override the directory with `MINDFLOCK_VOICE_FLAG_DIR` |
 | `prompts/` | Generated ticket prompts (pruned after 1 h) |
 | `.red-zones/<sha1>.json` | Per-worktree zone guard files the tool hook reads at fire time (`v: 2`: red `rules`/`files`/`dirs`/`sym`, green `green_rules` + `companions`; GC'd a day after their worktree stops being live) |
@@ -1317,7 +1331,7 @@ Settable from the UI settings dialog (⚙) and persisted server-side:
     model's words as the person speaks, then at the end of the phrase the
     accurate pass re-decodes the whole phrase and corrects it (blank = with
     `stt_model`, i.e. `small`: the pass is ~1.1–1.3 s on an 8-core CPU
-    whatever the phrase's length, started on the first quiet chunk so the
+    whatever the phrase's length, started once 0.5 s of quiet follows the speech so the
     correction usually lands within a second of the person stopping; it is
     skipped only under 0.2 s of speech, so a lone "stop" is still corrected,
     and waited for at most 1.5 s, after which the fast words stand; `"off"`

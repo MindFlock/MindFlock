@@ -521,6 +521,36 @@ NOTIFY_RULES: List[dict] = [
         "tags": ["computer"],
     },
     {
+        # A flight parked on you (core.flight_driver emits it once per step
+        # and round): a *you* step, open checklist items, a failure handed to
+        # you. The flight waits until you press Done, so it rings by default.
+        "id": "flight_needs_you",
+        "label": "A flight waits on you",
+        "description": "A flight reached a step only you can do, like approving the merge.",
+        "event": "flight.needs_you",
+        "old": None,
+        "new": None,
+        "title": "A flight needs you",
+        "body": "{detail}",
+        "default_enabled": True,
+        "priority": 4,
+        "tags": ["raising_hand"],
+    },
+    {
+        # A flight landed, halted or was cancelled — once per finish.
+        "id": "flight_finished",
+        "label": "A flight finishes",
+        "description": "A flight landed, stopped on a problem or was cancelled.",
+        "event": "flight.finished",
+        "old": None,
+        "new": None,
+        "title": "Flight finished",
+        "body": "{detail}",
+        "default_enabled": True,
+        "priority": 3,
+        "tags": ["bird"],
+    },
+    {
         # A template's SCHEDULED run couldn't start (no folder any more, the
         # repo moved, no free name). It fired with nobody watching — at 21:00
         # or overnight — so without a push the failure waits on a card in the

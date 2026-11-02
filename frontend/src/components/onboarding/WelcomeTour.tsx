@@ -87,7 +87,7 @@ export function WelcomeTour() {
   const open = useUi((s) => s.tourOpen);
   // Hidden (not closed) while a setup dialog is up over it: .modal carries no
   // z-index and this renders last in App.tsx, so it would paint on top of
-  // Settings, Intake or the Setup checklist opened from elsewhere.
+  // Settings, Flights (Intake) or the Setup checklist opened from elsewhere.
   const covered = useUi((s) => s.openDialog === "settings" || s.openDialog === "intake" || s.openDialog === "setup");
   const finishTour = useUi((s) => s.finishTour);
   if (!open || covered) return null;

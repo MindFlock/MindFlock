@@ -18,8 +18,21 @@ import { notePrefWrite } from "../lib/prefs";
 import { asPaneHeaderPref, type PaneHeaderPref } from "../lib/paneHeader";
 import { toast } from "../lib/toast";
 import type { TourId } from "../lib/tours";
+import type { SkyMode } from "../lib/skyLayout";
+import { legacyFlightsRoute } from "../lib/flights";
 
 export type ViewMode = "auto" | "2" | "4" | "9";
+
+/** The main area's two views of the same sessions (lib/viewMode.ts): the grid
+ * of panes, or the sky — every session a line on one pannable plane
+ * (components/flights/SkyView.tsx). Per device, `mf_view`. */
+export type MainView = "grid" | "sky";
+/** Which lines the sky draws (lib/skyLayout SKY_MODES); "one" is the focused
+ * session alone — never remembered, the `#sky/<title>` hash carries it. */
+const loadSkyMode = (): SkyMode => {
+  const m = load<string>("mf_sky_view", "mine", false);
+  return m === "all" || m === "perched" ? m : "mine";
+};
 
 /** Sidebar width bounds (px).
  *
@@ -121,6 +134,7 @@ export function windowKey(
 export type DialogName =
   | "new-session"
   | "settings"
+  // Intake (IntakeDialog): Alt+I; dialogTarget = its tab / source.
   | "intake"
   // Customize (CustomizeDialog): "customize" opens its Sidebar tab, and
   // "prompts" below opens it on that tab.
@@ -129,6 +143,8 @@ export type DialogName =
   | "commit"
   | "make-pr"
   | "rename"
+  // Move to a folder… (MoveSessionDialog); dialogTarget = the session's title.
+  | "move"
   // "workspaces" (the disk manager) was folded into "recent" — one page.
   | "recent"
   // Customize → Prompts: the saved-prompt library.
@@ -140,14 +156,19 @@ export type DialogName =
   | "shortcuts"
   // Repo-level red zones + Plan-first, managed outside any one session.
   | "red-zones"
-  // Schedule (TemplatesDialog): the top bar's Schedule (Alt+S), New's
-  // templates strip, the palette's "Schedule…" / "Templates…". dialogTarget
-  // "new" = reopen New on close (lib/templates' readTemplatesTarget).
+  // Schedule (TemplatesDialog): Alt+S, New's templates strip, the palette's
+  // "Schedule…" / "Templates…". Its target "new" = reopen New on close
+  // (lib/templates' readTemplatesTarget).
   | "schedule"
   // The surface's name before it was Schedule. Still accepted by
   // openDialogFor (old call sites, a saved #templates link) and opened as
   // "schedule" — the store never holds it.
   | "templates"
+  // The retired Flights dialog. Still accepted by openDialogFor (an old call
+  // site, a saved #flights/… link) and routed where it lands now (lib/flights
+  // legacyFlightsRoute): the sky, the sky's flyway shelf, or Intake / Verify
+  // / Schedule — the store never holds it.
+  | "flights"
   // The one dialog every extension's dialog surfaces share; the extension id +
   // surface ride in dialogTarget ("<ext>:<surface>[:<ref>]").
   | "extension"
@@ -163,6 +184,15 @@ interface UiState {
   focused: string | null;
   /** Grid view cap. */
   viewMode: ViewMode;
+  /** The main area's view: the grid, or the sky (lib/viewMode.ts). */
+  view: MainView;
+  /** The sky's lines: All · Mine · Perched on you · This session (the
+   * focused session alone). */
+  skyMode: SkyMode;
+  /** A request for the sky's flyway shelf (showFlyways): open it, and the
+   * card of `plan` when one is named ("new" = a fresh card). The sky takes
+   * it once (takeSkyShelf); `n` makes a repeat of the same request new. */
+  skyShelf: { plan: string; n: number } | null;
   /** Persisted row layout: array of arrays of titles. */
   gridRows: string[][];
   sidebarHidden: boolean;
@@ -339,6 +369,19 @@ interface UiState {
   /** Replace the MRU wholesale (the capped-view swap-in-place demotion). */
   setOrderlessMru(mru: string[]): void;
   setViewMode(v: ViewMode): void;
+  /** Switch the main area (lib/viewMode's setView / toggleView are the
+   * callers' door: they bring the focused session along). */
+  setView(v: MainView): void;
+  setSkyMode(m: SkyMode): void;
+  /** The sky view, on `focus` alone ("" = whichever lines the view shows):
+   * `#sky`, `#sky/<title>`, and every old Flights → Sky address. */
+  showSky(focus?: string): void;
+  /** The sky with its flyway shelf open — and `plan`'s card ("new" = a new
+   * flyway): the palette's "Flyways…", Schedule's "Edit in the Sky", an old
+   * `#flights/flyways/<id>` link. */
+  showFlyways(plan?: string): void;
+  /** The sky took the shelf request: clear it. */
+  takeSkyShelf(): void;
   setGridRows(rows: string[][]): void;
   toggleSidebar(): void;
   /** Set the sidebar width (clamped + persisted). */
@@ -461,6 +504,9 @@ let _focusSeq = 0;
 export const useUi = create<UiState>((set, get) => ({
   focused: null,
   viewMode: load<ViewMode>("cs_viewmode", "auto", false),
+  view: load<string>("mf_view", "grid", false) === "sky" ? "sky" : "grid",
+  skyMode: loadSkyMode(),
+  skyShelf: null,
   gridRows: load<string[][]>("cs_gridrows", []),
   sidebarHidden: load<string>("cs_sidebar", "", false) === "hidden",
   sidebarWidth: clampSidebarWidth(load<number>("mf_sidebar_w", SIDEBAR_DEFAULT_W)),
@@ -532,6 +578,34 @@ export const useUi = create<UiState>((set, get) => ({
     save("cs_viewmode", v, false);
     set({ viewMode: v });
   },
+  setView: (v) => {
+    if (v === get().view) return;
+    save("mf_view", v, false);
+    set({ view: v });
+    // The session focused in the sky is the one focused in the grid: select
+    // it again so a capped grid ("1", "4") gives it a slot instead of the
+    // grid re-focusing whatever it happens to show.
+    const f = get().focused;
+    if (v === "grid" && f && _selectSession) _selectSession(f, { noKeyboard: true });
+  },
+  setSkyMode: (m) => {
+    if (m !== "one") save("mf_sky_view", m, false);
+    set({ skyMode: m });
+  },
+  showSky: (focus = "") => {
+    if (get().openDialog) set({ openDialog: null, dialogTarget: null });
+    if (focus) {
+      if (_selectSession) _selectSession(focus, { noKeyboard: true });
+      else get().setFocused(focus);
+      get().setSkyMode("one");
+    } else if (get().skyMode === "one") set({ skyMode: loadSkyMode() });
+    get().setView("sky");
+  },
+  showFlyways: (plan = "") => {
+    get().showSky();
+    set({ skyShelf: { plan, n: (get().skyShelf?.n || 0) + 1 } });
+  },
+  takeSkyShelf: () => set({ skyShelf: null }),
   setGridRows: (rows) => {
     save("cs_gridrows", rows);
     set({ gridRows: rows });
@@ -797,8 +871,16 @@ export const useUi = create<UiState>((set, get) => ({
     save("cs_lasttab", lastTab);
     set({ lastTab });
   },
-  openDialogFor: (name, target = null) =>
-    set({ openDialog: name === "templates" ? "schedule" : name, dialogTarget: target }),
+  openDialogFor: (name, target = null) => {
+    if (name !== "flights") {
+      set({ openDialog: name === "templates" ? "schedule" : name, dialogTarget: target });
+      return;
+    }
+    const r = legacyFlightsRoute(target);
+    if (r.to === "sky") get().showSky(r.focus);
+    else if (r.to === "flyways") get().showFlyways(r.plan);
+    else set({ openDialog: r.to, dialogTarget: r.target });
+  },
   closeDialog: () => set({ openDialog: null, dialogTarget: null }),
   setPrBase: (repo, base) => {
     if (!repo) return;

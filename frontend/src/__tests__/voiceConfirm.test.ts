@@ -622,7 +622,7 @@ describe("snappy control words: acted on from the guess after a moment's quiet",
     const mic = code("components/TopBarMic.tsx");
     expect(mic).toMatch(/wakeLine\(lastWakeMs\), sentLine\(lastSentMs\)/);
     expect(mic).toMatch(/endPhrase: \(\) => \{\s*if \(live\.current === d\) rec\.current\?\.endPhrase\?\.\(\);/);
-    expect(mic).toMatch(/quietMs: \(\) => \{\s*const at = lastLoudAt\(\);/);
+    expect(mic).toContain("quietMs: meterQuietMs,");
   });
 });
 

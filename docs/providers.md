@@ -250,7 +250,10 @@ it:
 - `Stop` files the payload's `last_assistant_message` beside the marker as
   `<marker dir>/<session>.reply.json` = `{"ts": <epoch>, "text": …}` (text
   cut at 8000 chars, `activity_markers.REPLY_TEXT_MAX`), written to a temp
-  file and `os.replace`d. That is the exact text the session just said, so
+  file and `os.replace`d — load-bearing: the server spots a landed reply by
+  the marker directory's mtime moving and the file's (mtime, size, inode)
+  changing, so a hook that writes the reply in place, or outside the marker
+  dir, is only seen on the 1 s rescan or the 4 s tick. That is the exact text the session just said, so
   the spoken line (`core/spoken.py`: the reply's `Say:` line, else a digest)
   costs no transcript scan. Every CLI that installs the hook gets this
   branch; where the payload lacks the field it files an empty text (best

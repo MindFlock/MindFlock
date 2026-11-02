@@ -1,0 +1,238 @@
+/* The Sky's new-session block (NewSessionBlock.tsx): a block on the sky at
+ * the spot the owner double-clicked (or dropped the Session chip) — a card with
+ * a bar like a line's (the bird, its name; drag it to move the block), a
+ * dashed accent edge while it hasn't flown yet. Its fields are Flights' form
+ * controls (.fl-form), so they wear the New dialog's look. */
+
+.sky-new.fl-form {
+  position: absolute;
+  z-index: 20;
+  box-sizing: border-box;
+  width: 380px;
+  max-width: calc(100vw - 24px);
+  grid-template-columns: 1fr;
+  gap: 10px;
+  padding: 0 14px 12px;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px dashed color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+}
+
+/* Its session is being made: the session's own line shows in its place. */
+.sky-new.fl-form[hidden] {
+  display: none;
+}
+
+.light .sky-new.fl-form {
+  box-shadow: 0 6px 20px rgba(20, 30, 60, 0.14);
+}
+
+/* The bar: the line's bar, the handle the block is dragged by. */
+.sky-new-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  margin: 0 -14px 2px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--border);
+  border-radius: 12px 12px 0 0;
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+  font-size: 12.5px;
+  user-select: none;
+}
+
+.sky-new-head.is-movable {
+  cursor: move;
+  touch-action: none;
+}
+
+.sky-new-head > .fl-bird {
+  flex: none;
+  color: var(--accent);
+}
+
+.sky-new-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 700;
+}
+
+.sky-new-close {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--fl-btn-radius, 6px);
+  background: transparent;
+  color: var(--fl-ink-muted, var(--muted));
+  font-family: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* The quiet-icon tier (.fl-icon-btn). */
+.sky-new-close:hover {
+  background: var(--panel-2);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.sky-new-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sky-new-path {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.sky-new-path input {
+  flex: 1 1 auto;
+  min-width: 0;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 7px 9px;
+  font-size: 12.5px;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  outline: none;
+}
+
+.sky-new-path input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+}
+
+.sky-new-repos {
+  margin-bottom: 2px;
+}
+
+.sky-new-error {
+  margin: 0;
+  font-size: 12px;
+}
+
+.sky-new-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Round 12: the two folds under the rows — More options (the rest of the
+ * New dialog) and From a session (fork a worker from a live session). Their
+ * heads are the quiet-icon tier (.fl-icon-btn); folded, More options says
+ * what it holds in one muted line. */
+.sky-new-folds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 -6px -4px;
+}
+
+.sky-new-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+}
+
+.sky-new-fold[aria-expanded="true"],
+.sky-new-fold.is-on {
+  color: var(--text);
+}
+
+.sky-new-caret {
+  width: 9px;
+  font-size: 10px;
+}
+
+.sky-new-summary {
+  margin: 0;
+  overflow: hidden;
+  color: var(--fl-ink-muted, var(--muted));
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sky-new-more-body {
+  display: grid;
+  gap: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 2px 2px 2px 0;
+}
+
+.sky-new-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 6px 9px;
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+}
+
+.sky-new-args {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+}
+
+.sky-new-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+}
+
+.sky-new-note {
+  margin: 0;
+  color: var(--fl-ink-muted, var(--muted));
+  font-size: 12.5px;
+}
+
+/* From a session: the picker scrolls past a handful of rows. */
+.sky-new-parents {
+  display: grid;
+  gap: 6px;
+}
+
+.sky-new-parent-list {
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+/* A fork's Repository row: whose repository, and Clear. */
+.sky-new-forked {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sky-new-forked-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.sky-new-forked-repo {
+  overflow: hidden;
+  color: var(--fl-ink-muted, var(--muted));
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

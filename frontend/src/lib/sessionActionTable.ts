@@ -166,6 +166,13 @@ export const SESSION_ACTIONS = {
     enabled: (c) => !c.shared,
     run: (t) => useUi.getState().openDialogFor("rename", t),
   },
+  // Move the session's folder somewhere new (round 12): the dialog pauses the
+  // agent, moves the worktree and resumes it there — this machine's rows only.
+  move: {
+    label: "Move to a folder…",
+    enabled: (c) => !c.shared && !!c.inst && !isRemote(c.inst) && c.inst.status !== "loading",
+    run: (t) => useUi.getState().openDialogFor("move", t),
+  },
   // Opens the Thread composer addressed to the session — what you type there
   // goes in as YOU, never through the agents' mailbox.
   message: {

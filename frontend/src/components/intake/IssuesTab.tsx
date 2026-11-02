@@ -276,7 +276,6 @@ export function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProps
 
   return (
     <>
-      {addFlow}
       <div className="caps-gate" data-caps-gate="git">
         <p>
           Install <strong>Git</strong> to use this — each issue is worked on in a fresh
@@ -347,6 +346,8 @@ export function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }: TabProps
         </div>
       </details>
       ) : null}
+      {/* Under the work, where the new repository's group will appear. */}
+      {addFlow}
     </>
   );
 }

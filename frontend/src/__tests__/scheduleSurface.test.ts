@@ -63,18 +63,19 @@ function view(over: Partial<Parameters<typeof TemplatesDialogView>[0]> = {}) {
 }
 
 describe("the top-bar item", () => {
-  it("sits between Verify and Settings, like Intake and Verify", () => {
+  it("sits between Verify and Settings, like Intake and Verify (back on the bar: the Flights dialog is retired)", () => {
     const v = TOPBAR.indexOf('id="verify-btn"');
     const sc = TOPBAR.indexOf('id="schedule-btn"');
     const se = TOPBAR.indexOf('id="settings-btn"');
     expect(v).toBeGreaterThan(0);
     expect(v < sc && sc < se).toBe(true);
+    expect(TOPBAR).not.toContain('id="flights-btn"');
     const btn = TOPBAR.slice(sc, se);
     // The bar's item look, folded into ⋯ on a narrow window (TopBar's
     // fitTopBar); its tooltip is the one the ⋯ row wears too.
     expect(btn).toContain('className={"tb-item" + (isFolded("schedule") ? " tb-folded" : "")}');
     expect(btn).toContain("title={scheduleTitle}");
-    expect(TOPBAR).toMatch(/const scheduleTitle =\s*"Schedule — templates; starts sessions on a timer" \+\s*keys\("schedule"\)/);
+    expect(TOPBAR).toMatch(/const scheduleTitle =\s*"Schedule — templates and scheduled stops; starts sessions on a timer" \+\s*keys\("schedule"\)/);
     expect(btn).toContain('ui.openDialogFor("schedule")');
     // A count only for failures, in the failure red, nothing at zero.
     expect(btn).toContain('{schedFailing > 0 && <span className="tb-count is-failing">{schedFailing}</span>}');

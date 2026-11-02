@@ -1,0 +1,747 @@
+/* Flights' shared kit — prefix fl-: the counts and notes, the Sky drawer's
+ * groups (Perched on you / Waiting to fly / Landed) and their rows, the
+ * flight strips and perch blocks, Verify's checklist rows, the waiting rows
+ * with their kind badges, and the pane's strip and Flight tab. Flights are
+ * drawn on the flyway canvas (FlywayCanvas.css); the stop palette, the
+ * inspector and a flyway's trigger are StopParts.css. (Until Sky round
+ * 8 this was FlightsDialog.css; the Flights dialog is retired.) Nothing here
+ * scrolls the page sideways. */
+
+.fl-count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  border-radius: 999px;
+  padding: 1px 7px;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  margin-left: 6px;
+}
+
+.fl-count.fl-count-you {
+  color: var(--gold-ink);
+  background: var(--gold-fill);
+  border-color: var(--gold-fill);
+  margin-left: 0;
+}
+
+.fl-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 4px;
+}
+
+.fl-note {
+  font-size: 12.5px;
+  margin: 6px 0;
+}
+
+.fl-empty {
+  font-size: 12.5px;
+  margin: 4px 0 2px;
+}
+
+/* Every worded button in components/flights wears one of the app's tiers
+   (docs/flights.md "As built: round 11 style"): .btn-primary (the accent
+   fill, settings/screens/screens.css) for the one action a surface is for,
+   .test-btn (panel-2 + the border, SetupDialog.css) beside it, and the
+   quiet-icon tier (.fl-icon-btn, StopParts.css) for glyphs. .fl-btn only
+   adds what flights need on top: no wrap, and the ring the tiers lack. */
+.fl-btn {
+  white-space: nowrap;
+}
+
+.fl-btn:focus-visible,
+.fl-check-row:focus-visible,
+.fl-strip-line:focus-visible,
+.sky-perch-name:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A link-styled button in the flights' surfaces: the accent as text holds
+   4.5:1 only as --fl-ink-accent (FlywayCanvas.css). */
+.sky button.linklike,
+.fl-session button.linklike,
+button.linklike.fl-open-sky {
+  color: var(--fl-ink-accent, var(--accent));
+}
+
+.sky button.linklike:focus-visible,
+.fl-session button.linklike:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* --- The drawer's groups ----------------------------------------------------- */
+
+.fl-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fl-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.fl-group-needs > .fl-group-head {
+  color: var(--gold);
+}
+
+.fl-group-hint {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  margin-left: 4px;
+}
+
+details.fl-group-landed > summary {
+  cursor: pointer;
+  list-style: revert;
+}
+
+/* A flight's strip on the Board. */
+.fl-strip-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.fl-strip-card.fl-needs {
+  border-color: var(--tone-attention);
+  box-shadow: inset 3px 0 0 var(--tone-attention);
+}
+
+.fl-strip-card.fl-state-done,
+.fl-strip-card.fl-state-cancelled {
+  opacity: 0.8;
+}
+
+.fl-strip-body {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 12px;
+  cursor: pointer;
+  border-radius: 10px;
+  min-width: 0;
+}
+
+.fl-strip-body:hover {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.fl-strip-body:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.fl-strip-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.fl-strip-title {
+  font-weight: 600;
+  font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.fl-strip-plan,
+.fl-strip-session {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.fl-strip-plan {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.fl-strip-plan .fl-bird {
+  color: var(--accent);
+}
+
+.fl-strip-session {
+  font-family: var(--mono, ui-monospace, monospace);
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fl-menu {
+  flex: none;
+}
+
+@keyframes fl-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.fl-strip-now {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.fl-now-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--tone-working);
+  flex: none;
+}
+
+.fl-now-dot.fl-now-you {
+  background: var(--tone-attention);
+}
+
+.fl-now-dot.fl-now-halted {
+  background: var(--red);
+}
+
+.fl-now-title {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fl-now-elapsed {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.fl-now-paused {
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+.fl-now-reason {
+  color: var(--red);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fl-progress {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.fl-landed {
+  color: var(--green);
+  font-weight: 600;
+}
+
+/* A parked you step: its text, its tick boxes, Done / Skip. */
+.fl-you {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 12px 10px;
+}
+
+.fl-you-text {
+  margin: 0;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+}
+
+.fl-you-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12.5px;
+}
+
+.fl-you-items label {
+  display: inline-flex;
+  gap: 6px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.fl-you-acts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Verify's due / failing checklists, one line each. */
+.fl-check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.fl-check-row:hover {
+  border-color: var(--accent);
+}
+
+.fl-check-row.is-failing {
+  border-color: color-mix(in srgb, var(--red) 55%, var(--border));
+}
+
+.fl-check-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fl-check-state {
+  color: var(--gold);
+  white-space: nowrap;
+}
+
+.fl-check-row.is-failing .fl-check-state,
+.fl-check-row.is-failing .fl-check-glyph {
+  color: var(--red);
+}
+
+.fl-check-branch {
+  font-size: 11px;
+  color: var(--muted);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fl-error {
+  margin: 0;
+}
+
+/* --- Waiting to fly: badged rows under their kind's heading ---------------- */
+
+.fl-waiting-kind {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.fl-waiting-head {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+}
+
+.fl-waiting {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-2);
+  min-width: 0;
+}
+
+.fl-waiting-main {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.fl-waiting-words {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.fl-waiting-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.fl-waiting-ref {
+  flex: none;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a.fl-waiting-ref:hover {
+  text-decoration: underline;
+}
+
+.fl-waiting-headline {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.fl-waiting-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 11.5px;
+}
+
+.fl-waiting-where {
+  color: var(--text);
+}
+
+.fl-auto {
+  color: var(--muted);
+}
+
+.fl-auto.on {
+  color: var(--green);
+}
+
+.fl-waiting-flyway {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.fl-waiting-flyway .fl-fld-label {
+  flex: none;
+}
+
+.fl-fly {
+  flex: none;
+  min-width: 64px;
+}
+
+/* The kind badge on every row: a ticket, a PR, an issue — never a guess. */
+.fl-kind-badge {
+  flex: none;
+  margin-top: 1px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: 6px;
+  border: 1px solid currentColor;
+}
+
+.fl-kind-badge-tickets {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+.fl-kind-badge-prs {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 12%, transparent);
+}
+
+.fl-kind-badge-issues {
+  color: var(--tone-waiting);
+  background: color-mix(in srgb, var(--tone-waiting) 12%, transparent);
+}
+
+/* A perch's tick boxes: the New dialog's accent box. */
+.fl-tick {
+  display: inline-flex;
+  gap: 8px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.fl-tick input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin: 1px 0 0;
+  border: 1.5px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  cursor: pointer;
+}
+
+.fl-tick input[type="checkbox"]:hover {
+  border-color: var(--tone-attention);
+}
+
+.fl-tick input[type="checkbox"]:checked {
+  border-color: var(--tone-attention);
+  background: var(--tone-attention)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%231a1a1a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='M2.5 6.3 5 8.8l4.5-5'/%3E%3C/svg%3E")
+    center / 11px no-repeat;
+}
+
+.fl-tick input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* --- The pane's Flight tab (SessionFlight.tsx) ------------------------------ */
+
+.pane-flight {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  padding: 12px 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.fl-session {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.fl-session-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.fl-session-head > .fl-bird {
+  color: var(--accent);
+}
+
+/* "Open in the Sky": this session's line in the Sky, at the head's far end. */
+.fl-open-sky {
+  margin-left: auto;
+  font-size: 12px;
+}
+
+.fl-flyway-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.fl-flyway-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.fl-flyway-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel-2);
+}
+
+.fl-flyway-card-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+}
+
+.fl-flyway-card-head .fl-bird {
+  color: var(--accent);
+}
+
+.fl-flyway-card .fl-btn {
+  align-self: flex-start;
+}
+
+.fl-mini-line {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 0;
+}
+
+.fl-mini-box {
+  font-size: 10.5px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fl-mini-box:not(:last-child) {
+  margin-right: 12px;
+  position: relative;
+}
+
+.fl-mini-box:not(:last-child)::after {
+  content: "›";
+  position: absolute;
+  right: -10px;
+  color: var(--muted);
+}
+
+.fl-mini-box.fl-perch {
+  border-radius: 10px;
+  border-color: var(--tone-attention);
+  border-width: 1px;
+}
+
+.flight-badge.needs {
+  color: var(--tone-attention-ink);
+  background: var(--tone-attention);
+}
+
+/* --- The pane strip (Pane.tsx, its own row above the terminal) ----------- */
+
+.fl-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+  font-size: 12px;
+  min-width: 0;
+}
+
+.fl-strip.fl-needs {
+  background: color-mix(in srgb, var(--tone-attention) 14%, var(--panel-2));
+  box-shadow: inset 3px 0 0 var(--tone-attention);
+}
+
+.fl-strip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  min-width: 0;
+}
+
+.fl-strip-line {
+  flex: 1 1 180px;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  padding: 2px 0;
+  cursor: pointer;
+}
+
+.fl-strip-line:hover .fl-strip-text {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--text) 40%, transparent);
+}
+
+.fl-strip-line .fl-bird {
+  flex: none;
+  color: var(--accent);
+}
+
+.fl-strip-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fl-strip .fl-you.fl-you-compact {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 0;
+}
+
+.fl-strip .fl-you-compact .fl-you-items {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+}
+
+.fl-strip .fl-btn {
+  padding: 1px 9px;
+  font-size: 11.5px;
+}
+
+/* --- Narrow (phone / side panel) ------------------------------------------ */
+
+@media (max-width: 600px) {
+  .fl-waiting-flyway {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .fl-strip-session {
+    display: none;
+  }
+}

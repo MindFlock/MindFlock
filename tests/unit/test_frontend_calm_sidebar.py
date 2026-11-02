@@ -256,19 +256,56 @@ def test_recently_closed_is_a_link_under_the_list_never_a_rail_row():
 
 def test_the_view_buttons_and_footer_icons_are_back():
     """The owner missed them: Auto / 1 / 2 / 4 / 9 as buttons, and the ⚙ / ⌨
-    glyphs on Customize and Shortcuts."""
+    glyphs on Customize and Shortcuts. Then: "I wish the grid/sky icon was at
+    the bottom next to 9" — the Grid · Sky toggle lives at the row's end."""
     side = _code("components/sidebar/Sidebar.tsx")
     assert 'id="view-modes"' in side
-    assert 'className={"vm" + (ui.viewMode === v ? " active" : "")}' in side
-    assert "onClick={() => ui.setViewMode(v)}" in side
+    assert "<ViewRow calm={calm} />" in side
+    # A number is the grid's mode and lights only in the grid.
+    assert (
+        'className={"vm" + (ui.view === "grid" && ui.viewMode === v ? " active" : "")}'
+        in side
+    )
+    # A number picks the grid mode AND returns to the grid view.
+    assert 'ui.setViewMode(v);\n                setView("grid");' in side
+    # After the numbers, the toggle's two buttons: ⊞ the grid at the current
+    # count, the bird the sky (the tour's target), the perch count on the bird.
+    assert side.index('className="vm-nums"') < side.index('className="vt-pair"')
+    assert 'className={"vt" + (ui.view === v ? " active" : "")}' in side
+    assert 'data-tour={v === "sky" ? "view-sky" : undefined}' in side
+    assert "onClick={() => setView(v)}" in side
+    assert (
+        '{v === "sky" ? <Bird size={12} className="vt-icon" /> : <GridGlyph className="vt-icon" />}'
+        in side
+    )
+    assert "const perch = perchBadge(useFlights().data || []);" in side
+    assert "vm-sky" not in side
     assert 'id="view-mode-select"' not in side
     assert "⌨ Shortcuts" in side
     css = _src("components/sidebar/SidebarRow.css")
     assert "#view-modes .vm.active {" in css
     assert "#view-modes select" not in css
     side_css = _src("components/sidebar/Sidebar.css")
+    assert "#view-modes .vt.active {" in side_css
     assert "#foot-customize-menu" not in side_css
     assert ".fc-item" not in side_css
+
+
+def test_the_view_row_always_shows_and_calm_hides_only_the_numbers():
+    """The row is always reachable: the calm first hour hides the pane counts
+    (a set-once preference that means nothing with one or two panes) unless one
+    was already picked — never the Grid · Sky toggle."""
+    side = _code("components/sidebar/Sidebar.tsx")
+    row = side[side.index("export function ViewRow") :]
+    row = row[: row.index("\n}\n")]
+    nums = row.index('{(!calm || ui.viewMode !== "auto") && (')
+    pair = row.index('className="vt-pair"')
+    # The toggle is outside that condition: it closes before the pair opens.
+    assert nums < row.rindex(")}", nums, pair) < pair
+    # The footer renders the row unconditionally (no calm gate around it).
+    at = side.index("<ViewRow calm={calm} />")
+    assert "&&" not in side[side.rindex("\n", 0, at) : at]
+    assert '(!calm || ui.viewMode !== "auto" || ui.view === "sky")' not in side
 
 
 # --- Rail rows ------------------------------------------------------------------------
@@ -449,3 +486,6 @@ def test_the_view_buttons_offer_the_five_modes():
         in side
     )
     assert '{v === "auto" ? "Auto" : v}' in side
+    # Five numbers, then the two views — not a sixth "Sky" chip among them.
+    assert "{VIEWS.map((v) => (" in side
+    assert 'className="vt-word">{viewLabel(v)}</span>' in side

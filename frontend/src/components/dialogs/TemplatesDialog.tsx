@@ -63,7 +63,10 @@ import { selectSession } from "../../lib/sessionActions";
 import { LANE_LABEL } from "../../lib/autopilot";
 import { api } from "../../api/client";
 import type { FleetStatus } from "../../api/types";
-import { useConfig, useGithubConnected, useInstances } from "../../state/queries";
+import { useConfig, useFlightPlans, useGithubConnected, useInstances } from "../../state/queries";
+import type { FlightPlan } from "../../lib/flights";
+import { takeOff } from "../../lib/flightsApi";
+import { Bird } from "../flights/Bird";
 import { leafName, newSessionResume, type InstalledMap, type RepoSuggestion } from "./newSession";
 import {
   ScheduleEditor,
@@ -75,6 +78,7 @@ import {
 } from "./TemplateEditor";
 import { TourButton } from "../onboarding/TourButton";
 import { useAutoTour } from "../onboarding/useAutoTour";
+import { embeddedGuard } from "../flights/embedGuard";
 
 // The editor's form and its helpers live with the editor; the dialog's tests
 // (and anything else) keep importing them from here.
@@ -282,6 +286,42 @@ export function scheduledOrder(templates: Template[], status: Pick<TemplateRunsS
     .map((x) => x.t);
 }
 
+// --- Scheduled saved stops ------------------------------------------------------
+// A saved stop whose trigger is a schedule starts itself like a template does
+// (docs/flights.md "Scheduled plans"), so Schedule lists it too — under its
+// own heading, the card anatomy a template's has (name, schedule line, next
+// run, last result), and two actions: Fly now, and Edit in the Sky (its card
+// on the flyway shelf, where flyways are made and edited).
+
+/** A flyway's schedule record (`runs` on GET /api/flights/plans): a
+ * template's run record, plus where schedules fire. */
+export type FlywayRuns = TemplateRunInfo & { runs_here?: boolean; runs_on?: string };
+export type ScheduledFlyway = FlightPlan & { runs?: FlywayRuns };
+
+/** The flyways that start themselves, in the order the surface lists them:
+ * soonest next run first, then any with no next run, then the paused ones. */
+export function scheduledFlyways(plans: readonly ScheduledFlyway[] | null | undefined): ScheduledFlyway[] {
+  const rank = (p: ScheduledFlyway): [number, number] => {
+    if (p.trigger.paused || p.runs?.paused) return [2, 0];
+    const at = Number(p.runs?.next_at) || 0;
+    return at ? [0, at] : [1, 0];
+  };
+  return (plans || [])
+    .filter((p) => p.trigger?.kind === "schedule")
+    .map((p) => ({ p, r: rank(p) }))
+    .sort((a, b) => a.r[0] - b.r[0] || a.r[1] - b.r[1])
+    .map((x) => x.p);
+}
+
+/** A scheduled flyway's "when next" — the words a template card uses:
+ * "Paused", "Starts on mac-mini", "in 9h", or "". */
+export function flywayNextLine(p: ScheduledFlyway, now: Date = new Date()): string {
+  const r = p.runs || {};
+  if (p.trigger.paused || r.paused) return "Paused";
+  if (r.runs_here === false && r.runs_on) return "Starts on " + r.runs_on;
+  return r.next_at ? inLabel(r.next_at, now) : "";
+}
+
 interface ViewProps {
   templates: Template[];
   ui: TemplatesUiState;
@@ -342,6 +382,16 @@ interface ViewProps {
   dirty?: boolean;
   /** "Discard changes?" → Discard: drop the edits and do what was asked. */
   onDiscard?: () => void;
+  /** Drawn inside another surface: no Modal of its own and no Close. */
+  embedded?: boolean;
+  /** Every flyway (GET /api/flights/plans); the scheduled ones get a section. */
+  flyways?: readonly ScheduledFlyway[] | null;
+  /** A scheduled flyway's Fly now: a flight takes off on it. */
+  onFlyFlyway?: (plan: ScheduledFlyway) => void;
+  /** A scheduled flyway's Edit in the Sky: close Schedule, open its card. */
+  onEditFlyway?: (plan: ScheduledFlyway) => void;
+  /** The flyway whose Fly now is starting. */
+  flying?: string;
 }
 
 /** Markup only: everything it shows comes in as props. */
@@ -555,7 +605,7 @@ export function TemplatesDialogView(p: ViewProps) {
   };
 
   /** What happened last, and the fold with the rest. */
-  const outcome = (t: Template, info: TemplateRunInfo) => {
+  const outcome = (info: TemplateRunInfo) => {
     const last = lastLine(info, now);
     const session = info.last_session || "";
     return (
@@ -636,7 +686,7 @@ export function TemplatesDialogView(p: ViewProps) {
         ) : (
           scheduled && strip(t, info)
         )}
-        {outcome(t, info)}
+        {outcome(info)}
         {t.prompt && <div className="tpl-prompt">{t.prompt}</div>}
         {runProblem(t) && (
           /* Said on the card, not only in a hover title: a disabled button
@@ -679,37 +729,86 @@ export function TemplatesDialogView(p: ViewProps) {
     );
   };
 
+  /** A scheduled flyway, as a template card: what it is, when it runs, how
+   * its last run went — and Fly now / Edit in the Sky. */
+  const flywayCard = (f: ScheduledFlyway) => {
+    const info: FlywayRuns = f.runs || {};
+    const paused = !!(f.trigger.paused || info.paused);
+    const next = flywayNextLine(f, now);
+    const stops = f.steps.length + (f.steps.length === 1 ? " stop" : " stops");
+    return (
+      <div
+        key={f.id}
+        className={"tpl-card is-scheduled sch-flyway" + (paused ? " is-paused" : "") + (!paused && lastRunFailed(info) ? " is-failing" : "")}
+        data-plan={f.id}
+      >
+        <div className="tpl-card-top">
+          <div className="tpl-card-text">
+            <div className="tpl-name">
+              <Bird size={12} className="sch-flyway-bird" />
+              {f.name}
+            </div>
+            <div className="tpl-meta" title={f.session?.repo_path || undefined}>
+              {[stops, f.session?.repo_path ? leafName(f.session.repo_path) : "", f.session?.program || ""].filter(Boolean).join(" · ")}
+            </div>
+          </div>
+          <div className="tpl-actions">
+            <button
+              type="button"
+              className="tpl-btn tpl-run sch-flyway-fly"
+              disabled={!!p.flying}
+              title="Fly now — a flight takes off on these stops in a new session"
+              onClick={() => p.onFlyFlyway?.(f)}
+            >
+              {p.flying === f.id ? "Taking off…" : "Fly now"}
+            </button>
+            <button
+              type="button"
+              className="tpl-btn sch-flyway-edit"
+              title="Open it on the Sky's Stops shelf — its stops and its schedule"
+              onClick={() => p.onEditFlyway?.(f)}
+            >
+              Edit in the Sky
+            </button>
+          </div>
+        </div>
+        <div className={"sch-strip" + (paused ? " is-paused" : "")}>
+          <div className="sch-when">
+            <span className="sch-cadence">{info.schedule_label || "No schedule set"}</span>
+            {next && <span className={"sch-next" + (paused ? " sch-paused-chip" : "")}>{next}</span>}
+          </div>
+        </div>
+        {outcome(info)}
+      </div>
+    );
+  };
+  const flywayList = scheduledFlyways(p.flyways);
+
   const scheduledList = scheduledOrder(templates, runs);
   const saved = templates.filter((t) => !hasSchedule(t));
   const up = nextUp(templates, runs);
   const elsewhere = !runs.runs_here && !!runs.runs_on;
   const empty = loaded && templates.length === 0 && ui.editing !== "";
 
-  return (
-    <Modal
-      id="templates-dialog"
-      // The top-bar dialogs' shared fixed top edge (Modal.css): opening the
-      // editor grows the card down instead of re-centring it.
-      className="top-dialog"
-      onClose={p.onClose}
-      // A press outside never throws away a half-edited template.
-      closeOnBackdrop={!p.dirty}
-      // Escape withdraws an open editor or delete question first; on "Discard
-      // changes?" it keeps editing.
-      onEscape={() => {
-        if (ui.discarding) {
-          p.dispatch({ t: "keep-editing" });
-          return true;
-        }
-        if (ui.editing !== null && escapeRef.current?.()) return true;
-        if (ui.editing === null && !ui.confirming) return false;
-        p.dispatch(ui.editing !== null ? { t: "dismiss" } : { t: "cancel" });
-        return true;
-      }}
-    >
-      <div id="templates-card" role="dialog" aria-modal="true" aria-labelledby="templates-title">
+  const onEscape = () => {
+    if (ui.discarding) {
+      p.dispatch({ t: "keep-editing" });
+      return true;
+    }
+    if (ui.editing !== null && escapeRef.current?.()) return true;
+    if (ui.editing === null && !ui.confirming) return false;
+    p.dispatch(ui.editing !== null ? { t: "dismiss" } : { t: "cancel" });
+    return true;
+  };
+  const body = (
+      <div
+        id="templates-card"
+        role={p.embedded ? undefined : "dialog"}
+        aria-modal={p.embedded ? undefined : "true"}
+        aria-labelledby={p.embedded ? undefined : "templates-title"}
+      >
         <div className="tpl-head">
-          <h2 id="templates-title">Schedule</h2>
+          {p.embedded ? <span className="tpl-head-title muted">Templates</span> : <h2 id="templates-title">Schedule</h2>}
           <div className="tpl-head-acts">
             {ui.editing !== "" && !empty && (
               <button
@@ -723,9 +822,11 @@ export function TemplatesDialogView(p: ViewProps) {
               </button>
             )}
             <TourButton tour="schedule" />
-            <button type="button" id="templates-close" onClick={p.onClose}>
-              Close
-            </button>
+            {!p.embedded && (
+              <button type="button" id="templates-close" onClick={p.onClose}>
+                Close
+              </button>
+            )}
           </div>
         </div>
         {!empty && (
@@ -811,16 +912,53 @@ export function TemplatesDialogView(p: ViewProps) {
               )}
             </>
           )}
+          {/* Nothing scheduled hides: no section at all until a flyway has a
+              schedule trigger. */}
+          {flywayList.length > 0 && (
+            <section className="sch-section" id="schedule-flyways" aria-labelledby="schedule-flyways-h">
+              <h3 id="schedule-flyways-h">
+                Scheduled stops<span className="sch-count">{flywayList.length}</span>
+                <span className="sch-section-hint">saved stops that take off by themselves</span>
+              </h3>
+              {flywayList.map(flywayCard)}
+            </section>
+          )}
         </div>
       </div>
+  );
+  // Embedded, the host is the Modal: it asks this view about Escape and
+  // about leaving with unsaved edits (embedGuard).
+  if (p.embedded) {
+    embeddedGuard.current = { escape: onEscape, dirty: () => !!p.dirty };
+    return body;
+  }
+  return (
+    <Modal
+      id="templates-dialog"
+      // The top-bar dialogs' shared fixed top edge (Modal.css): opening the
+      // editor grows the card down instead of re-centring it.
+      className="top-dialog"
+      onClose={p.onClose}
+      // A press outside never throws away a half-edited template.
+      closeOnBackdrop={!p.dirty}
+      // Escape withdraws an open editor or delete question first; on "Discard
+      // changes?" it keeps editing.
+      onEscape={onEscape}
+    >
+      {body}
     </Modal>
   );
 }
 
-export function TemplatesDialog() {
-  const open = useUi((s) => s.openDialog === "schedule");
+/** `embedded`: drawn inside another surface — its deep link ("new",
+ * "schedule:<name>", …) comes in as `target` rather than from the store.
+ * Nothing embeds it today; the top bar's Schedule opens it standalone. */
+export function TemplatesDialog({ embedded = false, target: embeddedTarget = null }: { embedded?: boolean; target?: string | null } = {}) {
+  const storeOpen = useUi((s) => s.openDialog === "schedule");
+  const open = embedded || storeOpen;
   useAutoTour("schedule", open);
-  const target = useUi((s) => s.dialogTarget);
+  const storeTarget = useUi((s) => s.dialogTarget);
+  const target = embedded ? embeddedTarget : storeTarget;
   const closeDialog = useUi((s) => s.closeDialog);
   const [templates, setList] = useState<Template[]>(() => templatesNow());
   const [loaded, setLoaded] = useState(false);
@@ -833,6 +971,9 @@ export function TemplatesDialog() {
   const [runs, setRuns] = useState<TemplateRunsStatus>(() => templateRunsNow());
   const [running, setRunning] = useState("");
   const [flagging, setFlagging] = useState("");
+  // Scheduled stops (the plans with a schedule trigger) list here too.
+  const flyways = useFlightPlans(open).data as ScheduledFlyway[] | null | undefined;
+  const [flying, setFlying] = useState("");
   const [agents, setAgents] = useState<string[]>([]);
   const [installed, setInstalled] = useState<InstalledMap | null>(null);
   const [otherDevices, setOtherDevices] = useState(false);
@@ -925,7 +1066,7 @@ export function TemplatesDialog() {
     // The palette's "Schedule a session…" opens straight onto a NEW template's
     // editor with its schedule already switched on; a template chip's ⏰ in
     // New opens that template's.
-    const want = readTemplatesTarget(useUi.getState().dialogTarget).schedule;
+    const want = readTemplatesTarget(embedded ? embeddedTarget : useUi.getState().dialogTarget).schedule;
     if (want !== null) {
       setScheduleFocus(true);
       dispatch(want ? { t: "schedule", name: want } : { t: "new" });
@@ -969,7 +1110,7 @@ export function TemplatesDialog() {
       live = false;
       document.removeEventListener(TEMPLATES_CHANGED, reload);
     };
-  }, [open]);
+  }, [open, embedded ? embeddedTarget : null]);
 
   // Opening an editor seeds the form from the card it is for.
   useEffect(() => {
@@ -1148,6 +1289,7 @@ export function TemplatesDialog() {
         dispatch(a);
       }}
       dirty={dirty}
+      embedded={embedded}
       onDiscard={() => {
         const then = ui.discarding?.then;
         if (!then) return;
@@ -1176,6 +1318,21 @@ export function TemplatesDialog() {
         selectSession(title);
       }}
       otherDevices={otherDevices}
+      flyways={flyways}
+      flying={flying}
+      onFlyFlyway={(f) => {
+        if (flying) return;
+        setFlying(f.id);
+        // takeOff selects the new session once its row exists.
+        void takeOff({ plan_id: f.id }).then((flight) => {
+          setFlying("");
+          if (flight) closeDialog();
+        });
+      }}
+      onEditFlyway={(f) => {
+        closeDialog();
+        useUi.getState().showFlyways(f.id);
+      }}
     />
   );
 }

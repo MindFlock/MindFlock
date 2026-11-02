@@ -42,7 +42,7 @@ const { attentionItems, askedQuestion } = await import("../components/sidebar/or
 const { needsAttention } = await import("../components/outbox/outbox");
 const { AskedInWordsView, primaryIndex } = await import("../components/AnswerStrip");
 const { answerFresh, normDialog } = await import("../lib/flockActions");
-const { HandsFree, LiveDictation, APPROVE_OFF_LINE, runVoiceCommand } = await import("../lib/voiceDesktop");
+const { HandsFree, LiveDictation, APPROVE_OFF_LINE, runVoiceCommand, DialogSeen } = await import("../lib/voiceDesktop");
 const { useUi } = await import("../state/store");
 const { queryClient } = await import("../state/queries");
 
@@ -574,10 +574,17 @@ describe("voice: the pop-up is the one hands-free entry", () => {
       submitted: () => {},
     };
     const reply = { kind: "answer" as const, title: "bot", choice: "yes" as const, dialog_id: "d1", keys: ["1"] };
-    await runVoiceCommand(reply, "yes", cmdDeps);
+    // The dialog was on screen at t=1000; a "yes" begun a second later may answer it.
+    const seen = new DialogSeen(() => 1000);
+    seen.note("bot", "d1");
+    await runVoiceCommand(reply, "yes", cmdDeps, 2000, seen);
     expect(instApi).toHaveBeenCalledWith("bot", "/answer", { json: { keys: ["1"], dialog_id: "d1", by: "user" } });
     instApi.mockReset();
-    await runVoiceCommand(reply, "yes", { ...cmdDeps, approveDialogs: async () => false });
+    // Begun before the dialog appeared (or with no timing): never pressed.
+    await runVoiceCommand(reply, "yes", cmdDeps, 900, seen);
+    await runVoiceCommand(reply, "yes", cmdDeps, undefined, seen);
+    expect(instApi).not.toHaveBeenCalled();
+    await runVoiceCommand(reply, "yes", { ...cmdDeps, approveDialogs: async () => false }, 2000, seen);
     expect(instApi).not.toHaveBeenCalled();
     expect(cmdDeps.announce).toHaveBeenLastCalledWith(APPROVE_OFF_LINE);
   });

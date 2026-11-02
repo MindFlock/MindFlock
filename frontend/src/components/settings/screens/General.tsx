@@ -260,6 +260,7 @@ function Tours() {
 const TOUR_HINT: Record<TourId, string> = {
   welcome: "The three steps to your first session.",
   new: "Starting a session: the task, the repo, Start.",
+  sky: "The sky: every session a line, the bird on its stop, and the Stops shelf.",
   intake: "Turning tickets, pull requests and issues into sessions.",
   verify: "Checking that a change actually works.",
   schedule: "Templates, and sessions that start by themselves.",

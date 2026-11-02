@@ -99,9 +99,11 @@ def test_the_top_bar_has_no_outbox_prompts_or_recent_and_keeps_the_palette_title
 
 def test_verify_always_shows_in_the_top_bar():
     """The owner: Verify should "always show" — no earn-its-slot rule, no
-    per-device memory of it; the badge still says nothing on zero."""
+    per-device memory of it; the badge still says nothing on zero. (Sky round
+    8 put it back on the bar after its stint as a tab of Flights.)"""
     src = _code("components/TopBar.tsx")
     assert 'id="verify-btn"' in src
+    assert 'id="flights-btn"' not in src
     assert "showVerify" not in src
     assert "useVerifySettings" not in src
     assert "mf_tb_verify" not in src
@@ -125,14 +127,22 @@ def test_schedule_is_on_the_top_bar_and_sized_like_its_neighbours():
     src = _code("components/TopBar.tsx")
     assert 'ui.openDialogFor("schedule")' in src
     assert 'keys("schedule")' in src
+    assert 'run: () => useUi.getState().openDialogFor("schedule"),' in _code(
+        "lib/keymap.ts"
+    )
     css = (_SRC / "components" / "TopBar.css").read_text()
     assert "#topbar #schedule-btn," in css
+    assert "#flights-btn" not in css
 
 
 def test_the_bell_hosts_the_waiting_rows_and_drops_its_toggle():
     src = _code("components/NotificationsBell.tsx")
     assert 'import { WaitingRow } from "./outbox/WaitingRow";' in src
-    assert "needsAttention(attentionItems(instances), outbox?.groups?.waiting)" in src
+    # Flights parked on a you step join the waiting rows (lib/needsYou).
+    assert (
+        "needsAttention(attentionItems(instances), withFlightYou(outbox?.groups?.waiting, instances))"
+        in src
+    )
     assert "NotifToggle" not in src and "mf-notify-state" not in src
     assert '"mf-open-bell"' in src and '"mf-close-bell"' in src
     # The badge counts the merged list; the heading keeps its name.
@@ -244,7 +254,7 @@ def test_the_palette_lists_commands_before_focus_rows():
     src = _src("components/palette/CommandPalette.tsx")
     order = [
         'label: "New session…"',
-        'label: "Open Intake"',
+        'label: "Intake…"',
         'label: "Customize…"',
         "label: `${actionLabel(id, c)} — ${name}`",
         'label: "Focus: " + windowName(inst.title)',
@@ -257,7 +267,8 @@ def test_the_palette_lists_commands_before_focus_rows():
         'label: "Recently closed…", hint: "reopen or delete closed sessions"',
         '  "pr",\n',
         '  "merge",\n',
-        'label: "Verify — " + VERIFY_BLURB',
+        'label: "Verify…"',
+        "keywords: VERIFY_BLURB",
         'label: "Customize…", hint: "choose sidebar bars"',
     ):
         assert label in src, label

@@ -358,3 +358,102 @@ body.narrow .sidebar-resizer {
   color: var(--muted);
   font-style: italic;
 }
+
+/* The View row's Grid · Sky toggle (ViewRow in Sidebar.tsx), after the pane
+   counts and a thin rule. The .vm chips' family — height, radius, font, the
+   accent fill when active (SidebarRow.css) — with a glyph and a word. The
+   word drops to the glyph when the row is too narrow to hold it beside the
+   numbers (the container query); with the numbers hidden (the calm first
+   hour) the pair takes the row and keeps its words. */
+#view-modes {
+  container: view-row / inline-size;
+}
+
+#view-modes .vm-nums {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  gap: 4px;
+  padding-right: 6px;
+  margin-right: 2px;
+  border-right: 1px solid var(--border);
+}
+
+/* A little side padding, so a squeezed chip ("Auto" is a word among digits)
+   never runs its label into its border; Auto takes a bigger share. */
+#view-modes .vm-nums .vm {
+  padding: 4px 3px;
+}
+
+#view-modes .vm-nums .vm[data-view="auto"] {
+  flex: 1.6;
+}
+
+#view-modes .vt-pair {
+  display: flex;
+  flex: none;
+  gap: 4px;
+}
+
+#view-modes .vm-label + .vt-pair {
+  flex: 1;
+}
+
+#view-modes .vm-label + .vt-pair .vt {
+  flex: 1;
+  justify-content: center;
+}
+
+#view-modes .vt {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+#view-modes .vt:hover {
+  border-color: var(--accent);
+}
+
+#view-modes .vt.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#view-modes .vt-icon {
+  flex: none;
+}
+
+/* Flights perched on you: the top bar's count (TopBar.css .tb-count), a
+   hair shorter so the chip keeps the row's height. */
+#view-modes .vt-count {
+  min-width: 12px;
+  height: 12px;
+  padding: 0 3px;
+  border-radius: 6px;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 12px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  background: var(--red);
+  color: #fff;
+}
+
+#view-modes .vt-count.is-failing {
+  background: var(--red);
+  color: #fff;
+}
+
+@container view-row (max-width: 319px) {
+  #view-modes .vm-nums ~ .vt-pair .vt-word {
+    display: none;
+  }
+}

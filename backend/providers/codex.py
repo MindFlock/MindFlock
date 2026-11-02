@@ -48,6 +48,13 @@ class CodexProvider(GenericProvider):
             ),
         )
 
+    # --- a fresh context (a flight's Loop stop) ----------------------------- #
+    def clear_context_command(self) -> Optional[str]:
+        """Codex's ``/new`` ("start a new chat during a conversation",
+        verified in the 0.164 TUI's slash-command list; ``/clear`` there also
+        wipes the terminal, which a watcher of the pane would lose)."""
+        return "/new"
+
     # --- terminal classification ------------------------------------------ #
     def parse_dialog(self, screen_text: str) -> Optional[dict]:
         """The approval overlay (run a command / make edits / grant
@@ -91,6 +98,13 @@ class CodexProvider(GenericProvider):
             return codex_usage_api.windows()
         except Exception:  # noqa: BLE001 — history is optional
             return None
+
+    def carry_workdir(self, old: str, new: str) -> None:
+        """Nothing to carry: rollouts live under ``~/.codex/sessions/<date>/``
+        keyed by session id (the folder is only a ``cwd`` field inside), and
+        the window's thread marker is keyed by its tmux name, so ``codex
+        resume <id>`` in the new folder finds the same conversation."""
+        return None
 
     # --- per-session resume thread ----------------------------------------- #
     def record_thread(

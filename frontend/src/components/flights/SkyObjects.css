@@ -1,0 +1,184 @@
+/* The round 15 sky objects on the plane (lib/skyObjects, SkyView): the
+ * wrapper every object sits in (`.sky-object`, placed like a line's slot),
+ * the people and device blocks (`.sky-block`), and the drop-target ring a
+ * block wears while a line is dragged over it. The intake lane's and the
+ * palette's wrappers keep their round 12/13 rules in Sky.css. */
+
+.sky-object {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 3;
+  /* The ring (round 17), as a line's: drawn round the object, transparent
+     at rest, screen-sized at any zoom; the box radius so it hugs the card. */
+  border-radius: 8px;
+  outline: calc(1px / var(--sky-z, 1)) solid transparent;
+  outline-offset: calc(2px / var(--sky-z, 1));
+  transition: outline-color 120ms ease;
+}
+
+/* Hover the object's head (the handle it is dragged by): the hover ring.
+   Zero weight, so the selection ring (SkySelection.css) wins over it. */
+.sky-object:where(:has(:is(.sky-block-head, .sky-note-head, .sky-lane-head):hover)) {
+  outline-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+/* Keyboard focus inside it: the hover ring in the selection's colour. */
+.sky-object:where(:has(:focus-visible)) {
+  outline-color: var(--accent);
+}
+
+/* They glide only under Tidy, as the slots do (Sky.css). */
+.sky-plane[data-tidying] .sky-object {
+  transition: transform 0.28s ease;
+}
+
+.sky-object.is-dragging {
+  transition: none;
+  z-index: 7;
+}
+
+/* In the hand: the object's card raised (the one shadow scale). */
+.sky-object.is-dragging > :is(.sky-block, .sky-note, .sky-lane) {
+  box-shadow: var(--sky-shadow-raised);
+}
+
+.sky-object-note {
+  z-index: 4;
+}
+
+.sky-object-landing .sky-landing {
+  max-height: 100%;
+}
+
+/* --- People and device blocks ------------------------------------------ */
+
+.sky-block {
+  position: relative;
+  box-sizing: border-box;
+  width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  font-size: 13px;
+  box-shadow: var(--sky-shadow-rest);
+  transition: box-shadow 120ms ease;
+}
+
+.sky-block-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  cursor: move;
+  user-select: none;
+}
+
+.sky-block-glyph {
+  flex: none;
+  font-size: 15px;
+}
+
+.sky-block-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sky-block-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid var(--muted);
+  box-sizing: border-box;
+}
+.sky-block-dot.is-on,
+.sky-block-dot.is-verified {
+  background: var(--ok, #2e9e5b);
+  border-color: var(--ok, #2e9e5b);
+}
+.sky-block-dot.is-unverified {
+  background: var(--warn, #d9a03a);
+  border-color: var(--warn, #d9a03a);
+}
+
+.sky-block-body {
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sky-block-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  font-size: 12.5px;
+}
+.sky-block-ask p {
+  margin: 0;
+  white-space: normal;
+}
+
+.sky-block-choice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.sky-block-err {
+  color: var(--danger, #d64545);
+}
+
+.sky-block-btns {
+  display: flex;
+  gap: 6px;
+}
+
+/* A dragged line over a block: the same ring a line wears as a merge target. */
+.sky-block.is-merge-target {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0.55), var(--sky-shadow-rest);
+}
+
+/* The session line being dragged toward a block: see-through. */
+.sky-line-slot.is-merging {
+  opacity: 0.65;
+}
+
+/* The right-click menu on empty sky. */
+.sky-ground-menu {
+  position: absolute;
+  z-index: 20;
+  min-width: 160px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+.sky-ground-menu .fl-stopmenu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sky-object,
+  .sky-block {
+    transition: none;
+  }
+}

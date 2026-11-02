@@ -1,0 +1,992 @@
+/* The sky (SkyView.tsx) — prefix sky-.
+ *
+ * The main area's second view, in the grid's place (#sky-view is the body
+ * grid's second column, like #grid): a slim toolbar, then the sky — one plane
+ * under one translate+scale, a faint dot grid that scales with it (dark sky in
+ * the dark theme, a white expanse in the light one), the shelf of stops
+ * folding at its foot (StopShelf.css) — and the drawer at its right edge. Every line is a
+ * card on the plane; the canvas inside it never scrolls (the sky pans
+ * instead). A phone gets the lines as a plain list. */
+
+/* --- The view in the main area ---------------------------------------------- */
+
+#sky-view {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0 0 0 12px;
+}
+
+#sky-view.sky-narrow {
+  overflow-y: auto;
+  padding: 8px 10px;
+}
+
+/* Grid ⇄ sky (lib/viewMode): the incoming view fades in while a ghost of each
+   session flies from its pane to its line (or back). */
+body.view-switch #grid,
+body.view-switch #sky-view {
+  animation: view-in 0.15s ease-out both;
+}
+
+@keyframes view-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.view-ghost {
+  position: fixed;
+  z-index: 40;
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.22);
+}
+
+.view-ghost.is-focused {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--accent),
+    0 10px 30px rgba(var(--accent-rgb), 0.3);
+}
+
+/* --- The sky ---------------------------------------------------------------- */
+
+.sky {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* The toolbar folds its longer words by the room the main area has. */
+  container: sky / inline-size;
+  --sky-bg: var(--bg);
+  --sky-dot: color-mix(in srgb, var(--text) 17%, transparent);
+}
+
+.light .sky {
+  --sky-bg: #ffffff;
+  --sky-dot: color-mix(in srgb, var(--text) 13%, transparent);
+}
+
+/* One slim row (≤ 36px): the views, Find, + New session, Tidy, the zoom
+   group. Nothing wraps on a desktop: Find gives up width first. */
+.sky-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px 8px;
+  flex-wrap: nowrap;
+  min-height: 0;
+  max-height: 36px;
+  box-sizing: border-box;
+  padding: 4px 8px 4px 0;
+}
+
+.sky-toolbar > * {
+  flex: none;
+}
+
+/* The toolbar's controls are the app's button tiers (docs/flights.md "As
+   built: round 11 style"), all var(--fl-ctl-h) tall with the tiers' radius:
+
+   - Which lines (All / Mine / Perched on you / This session) is the top bar's
+     Grid · Sky pair (.tb-views): one bordered group, the keys bare and muted,
+     the chosen one filled panel-2 with a border, like a pressed key.
+   - Tidy is the secondary tier (.test-btn): panel-2, the border, the accent
+     border under the pointer.
+   - Zoom is a segmented control in the secondary tier: Tidy's fill, border and
+     radius around the whole group, a 1px divider between the keys. */
+.sky-modes.fl-chiprow {
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 1px;
+  height: var(--fl-ctl-h);
+  box-sizing: border-box;
+  padding: 1px;
+  border: 1px solid var(--border);
+  border-radius: var(--fl-btn-radius);
+}
+
+.sky-toolbar .sky-modes .fl-pick {
+  display: inline-flex;
+  align-items: center;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--fl-ink-muted);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.sky-toolbar .sky-modes .fl-pick:hover:not(.on) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--panel-2) 60%, transparent);
+  color: var(--text);
+}
+
+.sky-toolbar .sky-modes .fl-pick.on {
+  border-color: var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.sky-toolbar .sky-modes .fl-pick:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
+}
+
+.sky-toolbar > .sky-search {
+  flex: 0 1 170px;
+  min-width: 84px;
+}
+
+.sky-toolbar .sky-search .fl-input {
+  width: 100%;
+  height: var(--fl-ctl-h);
+  box-sizing: border-box;
+  padding: 0 10px;
+  border-radius: var(--fl-btn-radius);
+  font-size: 13px;
+}
+
+.sky-toolbar .fl-btn.sky-tidy {
+  display: inline-flex;
+  align-items: center;
+  height: var(--fl-ctl-h);
+  box-sizing: border-box;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--fl-btn-radius);
+  background: var(--panel-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sky-toolbar .fl-btn.sky-tidy:hover {
+  border-color: var(--accent);
+}
+
+.sky-toolbar .fl-btn.sky-tidy:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sky-zoom {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: stretch;
+  height: var(--fl-ctl-h);
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--fl-btn-radius);
+  background: var(--panel-2);
+  overflow: hidden;
+}
+
+.sky-toolbar .sky-zoom-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* The dividers: after the key rule, at its weight, so they win. */
+.sky-toolbar .sky-zoom > * + * {
+  border-left: 1px solid var(--border);
+}
+
+.sky-toolbar .sky-zoom-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 9%, var(--panel-2));
+}
+
+/* Inside the group's clip: the ring sits within the key. */
+.sky-toolbar .sky-zoom-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.sky-toolbar .sky-zoom-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.sky-toolbar .sky-zoom-read {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--fl-ink-muted);
+}
+
+.sky-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  margin-left: -12px;
+  border-top: 1px solid var(--border);
+}
+
+/* The sky over its shelf. */
+.sky-stage {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* A saved stop, a stop or a grounded line's stops with no line focused:
+   which line. */
+.sky-flypick {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 0 6px;
+  font-size: 12.5px;
+}
+
+/* Its line chips: the chip tier (.fl-pick). */
+.sky-flypick .fl-chip {
+  min-height: 26px;
+  max-width: 220px;
+  box-sizing: border-box;
+  padding: 2px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.sky-flypick .fl-chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.sky-flypick .fl-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sky-viewport {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+  user-select: none;
+  background-color: var(--sky-bg);
+  background-image: radial-gradient(circle, var(--sky-dot) 1px, transparent 1.4px);
+}
+
+/* Focused by a press on empty sky (so the arrows and + / − reach it), never
+   tabbed to: no ring. */
+.sky-viewport:focus {
+  outline: none;
+}
+
+.sky-viewport.is-grab,
+.sky-viewport.is-grab * {
+  cursor: grab !important;
+}
+
+/* + New session dragged over empty sky: a soft wash and an inset edge say
+   "drop it here". */
+.sky-viewport.is-new-over {
+  background-color: color-mix(in srgb, var(--accent) 6%, var(--sky-bg));
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.sky-plane {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+}
+
+.sky-intake {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+.sky-empty {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  transform: translate(-50%, -50%);
+  max-width: 440px;
+  margin: 0;
+  text-align: center;
+  font-size: 13.5px;
+  pointer-events: none;
+}
+
+/* --- A line ------------------------------------------------------------------ */
+
+.sky-line {
+  position: absolute;
+  left: 0;
+  top: 0;
+  box-sizing: border-box;
+  padding: 0 10px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.18);
+  cursor: default;
+  user-select: text;
+  transition:
+    box-shadow 0.2s ease,
+    border-color 0.2s ease;
+  animation: sky-in 0.35s ease both;
+}
+
+.light .sky-line {
+  box-shadow: 0 4px 16px rgba(20, 30, 60, 0.1);
+}
+
+.sky-line.is-chosen {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+}
+
+.sky-line.is-flash {
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 0 26px rgba(var(--accent-rgb), 0.45);
+}
+
+.sky-line.is-dragging {
+  transition: none;
+  z-index: 4;
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.3);
+}
+
+.sky-line.is-editing {
+  z-index: 5;
+}
+
+.sky-line-bar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  margin: 0 -10px 4px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  cursor: move;
+  touch-action: none;
+  user-select: none;
+}
+
+.sky-line.is-dragging .sky-line-bar {
+  cursor: grabbing;
+}
+
+/* --- Round 17: the cursor contract (docs/flights.md "Round 17") -----------
+   The pointer says what a drag will do, as Excalidraw's does:
+   - grab on a bar or head (it can be picked up), grabbing while it is
+     dragged;
+   - crosshair on empty sky in drag mode (a drag there is the marquee);
+   - move while a dragged box is snapping to a neighbour (`is-snapping`);
+   - copy while a chip or a grounded line drags over a line that takes it;
+   - zoom-in / zoom-out never: the wheel and + / − zoom.
+   The bars' own sheets say `move`; these rules sit under .sky-viewport so
+   they win. A control keeps its own pointer. */
+.sky-viewport :is(.skl-bar, .sky-line-bar, .sky-lane-head, [data-sky-head], .sky-object-head, .sky-palette-head) {
+  cursor: grab;
+}
+
+.sky-viewport :is(.sky-line-slot.is-dragging, .sky-intake.is-dragging, .sky-palette-slot.is-dragging, .sky-object.is-dragging)
+  :is(.skl-bar, .sky-line-bar, .sky-lane-head, [data-sky-head], .sky-object-head, .sky-palette-head) {
+  cursor: grabbing;
+}
+
+/* Drag mode: a drag on empty sky draws the marquee. */
+.sky[data-tool="drag"] .sky-viewport {
+  cursor: crosshair;
+}
+
+/* A snapping box: the pointer says it is being placed. */
+.sky-viewport .sky-line-slot.is-snapping :is(.skl-bar, .sky-line-bar),
+.sky-plane[data-snapping] :is(.sky-intake.is-dragging, .sky-palette-slot.is-dragging, .sky-object.is-dragging) :is(.sky-lane-head, [data-sky-head], .sky-object-head, .sky-palette-head) {
+  cursor: move;
+}
+
+/* A chip, a saved stop or a grounded line over a line that will take it. */
+.sky-viewport :is(.is-drop-target, .is-merge-target),
+.sky-viewport :is(.is-drop-target, .is-merge-target) * {
+  cursor: copy;
+}
+
+/* --- Round 17: the alignment guides (lib/skySnap) ------------------------
+   Drawn in the plane while a drag snaps: 1 SCREEN px of accent, however the
+   plane is zoomed (the plane's scale is undone by --sky-z). */
+.sky-guide {
+  position: absolute;
+  pointer-events: none;
+  z-index: 8;
+  background: var(--accent);
+  opacity: 0.9;
+}
+
+.sky-guide[data-axis="x"] {
+  width: calc(1px / var(--sky-z, 1));
+  margin-left: calc(-0.5px / var(--sky-z, 1));
+}
+
+.sky-guide[data-axis="y"] {
+  height: calc(1px / var(--sky-z, 1));
+  margin-top: calc(-0.5px / var(--sky-z, 1));
+}
+
+/* --- Round 17: focus mode (F with a selection) -----------------------------
+   Everything not selected fades to 35 %; a click or Esc lifts it. Only
+   opacity moves, over 120 ms — nothing changes place or size. */
+.sky-plane.sky-focus [data-dim] {
+  opacity: 0.35;
+  transition: opacity 0.12s ease;
+}
+
+.sky-plane.sky-focus [data-dim]:hover {
+  opacity: 0.6;
+}
+
+/* --- Round 17: the minimap's corner ----------------------------------------
+   Bottom-right of the sky, above the shelf and right of the selection bar;
+   the map itself (Minimap.css) is what the `minimap` task draws. */
+.sky-minimap-host {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 9;
+  pointer-events: none;
+}
+
+.sky-minimap-host > * {
+  pointer-events: auto;
+}
+
+@media (max-width: 520px) {
+  .sky-minimap-host {
+    display: none;
+  }
+}
+
+.sky-line-bar > .fl-bird {
+  flex: none;
+  color: var(--accent);
+}
+
+.sky-line-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sky-line-chip {
+  flex: none;
+  align-self: center;
+}
+
+.sky-line-menu {
+  margin-left: auto;
+  flex: none;
+}
+
+/* The canvas inside a line never scrolls: the sky pans. */
+.sky-line .fl-canvas.sky-canvas {
+  overflow: visible;
+  max-width: none;
+  padding: 0;
+}
+
+.sky-line .fl-canvas.sky-canvas .fl-stage {
+  cursor: default;
+}
+
+/* What the + or a stop opened: a card hanging under the line. */
+.sky-line-panels {
+  position: absolute;
+  left: -1px;
+  top: calc(100% + 6px);
+  width: max(100%, 440px);
+  max-height: 560px;
+  overflow-y: auto;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sky-line-leaving {
+  animation: sky-out 0.42s ease forwards;
+  pointer-events: none;
+}
+
+@keyframes sky-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes sky-out {
+  to {
+    opacity: 0;
+    filter: blur(1.5px);
+  }
+}
+
+/* --- A line's host-side states ------------------------------------------------ */
+
+/* While a line is dragged it follows the pointer: no line eases at all. */
+.sky-plane[data-dragging] .sky-line {
+  transition: none;
+}
+
+.sky-line {
+  width: max-content;
+  min-width: 280px;
+}
+
+/* A line's slot: placed on the plane at its spot, and STILL there — a line
+   growing, a neighbour coming or going never moves it. Only Tidy glides the
+   lines to their new spots (SkyView sets data-tidying for a moment); the one
+   being dragged follows the pointer. An open box or an open editor lifts its
+   line over its neighbours. */
+.sky-line-slot {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+.sky-plane[data-tidying] .sky-line-slot,
+.sky-plane[data-tidying] .sky-intake,
+.sky-plane[data-tidying] .sky-palette-slot {
+  transition: transform 0.28s ease;
+}
+
+.sky-line-slot.is-dragging {
+  transition: none;
+  z-index: 6;
+}
+
+.sky-line-slot:has(> .skl.is-open),
+.sky-line-slot:has(> .skl.is-editing) {
+  z-index: 5;
+}
+
+.sky-line-slot.is-flash .skl,
+.sky-line-slot.is-flash .sky-line {
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 0 26px rgba(var(--accent-rgb), 0.45);
+}
+
+.sky-line.is-drop-target {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 12px 32px rgba(var(--accent-rgb), 0.3);
+}
+
+.sky-line-drop {
+  margin: 6px 0 2px;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.sky-line-pin {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+/* An opened box: the session's own pane, right on the line. */
+.sky-line-pane {
+  display: flex;
+  margin-top: 10px;
+  min-width: 0;
+}
+
+.sky-line-pane > .pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.sky-list .sky-line {
+  position: relative;
+  transform: none !important;
+  width: auto;
+  min-width: 0;
+  animation: none;
+}
+
+/* --- The drawer: perched on you ------------------------------------------------- */
+
+.sky-drawer {
+  flex: none;
+  display: flex;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.sky-drawer.open {
+  width: 360px;
+}
+
+.sky-drawer-tab {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 12px 6px;
+  writing-mode: vertical-rl;
+  background: transparent;
+  border: 0;
+  border-right: 1px solid transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+
+.sky-drawer.open .sky-drawer-tab {
+  border-right-color: var(--border);
+}
+
+.sky-drawer-tab:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--panel-2) 60%, transparent);
+}
+
+.sky-drawer-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.sky-drawer-tab .fl-count {
+  writing-mode: horizontal-tb;
+}
+
+/* Folded with something perched: the tab wears the attention tone, so the
+   drawer starting folded never hides a perch. */
+.sky-drawer:not(.open) .sky-drawer-tab.has-perch {
+  color: var(--text);
+  background: color-mix(in srgb, var(--tone-attention) 14%, transparent);
+  box-shadow: inset 2px 0 0 var(--tone-attention);
+}
+
+.sky-drawer-body {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+details.fl-group-waiting > summary {
+  cursor: pointer;
+  list-style: revert;
+}
+
+.sky-perch {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--tone-attention);
+  border-radius: 10px;
+  background: var(--panel-2);
+}
+
+.sky-perch.is-halted {
+  border-color: var(--red);
+}
+
+.sky-perch-name {
+  align-self: flex-start;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sky-perch-name:hover {
+  text-decoration: underline;
+}
+
+.sky-perch-step {
+  font-size: 12px;
+}
+
+/* --- A phone: the lines as a list ------------------------------------------------ */
+
+.sky-narrow {
+  gap: 12px;
+}
+
+.sky-narrow .sky-drawer {
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.sky-narrow .sky-drawer.open {
+  width: auto;
+}
+
+.sky-narrow .sky-drawer-tab {
+  writing-mode: horizontal-tb;
+  padding: 8px 10px;
+  border-right: 0;
+}
+
+.sky-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sky-line.sky-line-flow {
+  position: relative;
+  width: auto;
+  animation: none;
+}
+
+.sky-line-flow .sky-line-bar {
+  cursor: default;
+}
+
+.sky-line-flow .sky-line-panels {
+  position: static;
+  width: auto;
+  max-height: none;
+  margin-top: 8px;
+  box-shadow: none;
+}
+
+/* Beside the rail and the drawer's tab the main area can be ~700px on a
+   1000px window: the row sheds what it can spare before anything wraps —
+   the 100% button (the readout still says it) and the tour's ? — and
+   tightens. */
+@container sky (max-width: 860px) {
+  .sky-zoom-100,
+  .sky-toolbar > .tour-btn {
+    display: none;
+  }
+  .sky-modes .fl-pick {
+    padding: 3px 7px;
+  }
+  .sky-tidy {
+    padding: 3px 8px;
+  }
+  .sky-toolbar {
+    gap: 5px;
+  }
+  .sky-toolbar > .sky-search {
+    min-width: 72px;
+  }
+}
+
+/* The drawer open on a small window: no room for one row, so it wraps. */
+@container sky (max-width: 640px) {
+  .sky-toolbar {
+    flex-wrap: wrap;
+    max-height: none;
+  }
+}
+
+/* A phone: the row may wrap (it scrolls with the list). */
+.sky-narrow .sky-toolbar {
+  flex-wrap: wrap;
+  max-height: none;
+}
+
+@media (max-width: 600px) {
+  .sky-toolbar > .sky-search {
+    flex-basis: 140px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sky-plane[data-tidying] .sky-line-slot,
+  .sky-plane[data-tidying] .sky-intake,
+  .sky-plane[data-tidying] .sky-palette-slot {
+    transition: none;
+  }
+  .sky-line {
+    transition: none;
+    animation: none;
+  }
+  .sky-line-leaving {
+    animation: none;
+    opacity: 0;
+  }
+  .sky-plane.sky-focus [data-dim] {
+    transition: none;
+  }
+}
+
+/* The Stops shelf's host in SkyView: it only reads the chips' drags, so it
+   takes no box of its own (StopShelf.css draws the shelf). */
+.sky-shelf-host {
+  display: contents;
+}
+
+/* --- Round 12: the intake lane as a sky object, and the two tools ----------
+   The lane sits at its spot like a line's slot; dragged, selected or
+   expanded it is lifted over the lines it may cover. */
+.sky-intake.is-dragging {
+  transition: none;
+  z-index: 6;
+}
+
+.sky-intake[data-open] {
+  z-index: 5;
+}
+
+.sky-intake.is-selected > .sky-lane {
+  outline: 2px dashed var(--accent);
+  outline-offset: 5px;
+}
+
+/* Click mode (`.sky[data-tool="click"]`, the toolbar's ☝ Click, H, or Space
+   held): a drag anywhere pans the sky, so the hand shows over the lines and
+   their boxes too, closed while it pans. A control keeps its own pointer. */
+.sky[data-tool="click"] .sky-viewport,
+.sky[data-tool="click"] .sky-viewport :is(.skl, .skl-bar, .fl-box, .fl-draggable, .fl-canvas, .sky-lane, .sky-lane-head) {
+  cursor: grab;
+}
+
+.sky[data-tool="click"] .sky-viewport.is-panning,
+.sky[data-tool="click"] .sky-viewport.is-panning * {
+  cursor: grabbing !important;
+}
+
+/* --- Round 13: the floating palette (SkyPalette) as a sky object ---------
+   It sits at its spot like the intake lane (layout key "palette"), over the
+   lines it may cover, and lifts while it is dragged by its head. */
+.sky-palette-slot {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 4;
+}
+
+.sky-palette-slot.is-dragging {
+  transition: none;
+  z-index: 7;
+}
+
+/* A session line's + being dragged onto a stops-only line (SkyView
+   `startConnect`): a wire from the + to the pointer, solid once it is over a
+   line that would take it. */
+/* Round 18: the wires BETWEEN chains (SkyWires) — one SVG at the plane's
+   origin, overflow visible, under every press. A handoff wire is dashed in
+   the source session's colour; the band is the wire being drawn. */
+.sky-xwires {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 4;
+}
+
+.sky-xwire-path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: calc(2px / var(--sky-z, 1));
+  stroke-dasharray: 7 5;
+  opacity: 0.75;
+}
+
+.sky-xwire.is-started .sky-xwire-path {
+  opacity: 0.45;
+}
+
+.sky-xwire-end {
+  fill: currentColor;
+  opacity: 0.8;
+}
+
+.sky-band-path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: calc(2px / var(--sky-z, 1));
+  stroke-dasharray: 6 4;
+}
+
+.sky-band-end {
+  fill: var(--panel);
+  stroke: var(--accent);
+  stroke-width: calc(2px / var(--sky-z, 1));
+}
+
+.sky-band.is-over .sky-band-path {
+  stroke-dasharray: none;
+}
+
+.sky-band.is-over .sky-band-end {
+  fill: var(--accent);
+}
+
+/* Pulling an in port's wire off (a split): the band reads as cutting. */
+.sky-band.is-split .sky-band-path {
+  stroke: var(--warn, var(--accent));
+}
+
+/* While a wire is drawn nothing on the plane takes a hover but the tiles. */
+.sky-plane[data-wiring] {
+  cursor: crosshair;
+}

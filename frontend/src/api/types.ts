@@ -3,6 +3,8 @@
  * settings payloads stay loose (Record) — they are round-tripped, not
  * interpreted, by the UI. */
 
+import type { FlightRow } from "../lib/flights";
+
 export interface DiffStat {
   files: number;
   additions: number;
@@ -371,6 +373,15 @@ export interface Instance {
   /** For a shared session: who it is shared with, and whether they are
    * connected now. null/absent otherwise. */
   peer_with?: { link_id: string; name: string; connected: boolean } | null;
+  /** The flight driving this session (docs/flights.md), or null for none —
+   * all the pane strip and the rail read. Optional: an older server doesn't
+   * send it. */
+  flight?: FlightRow | null;
+  /** A worker spawned during one of its parent's stops: where it branches
+   * from (docs/flights.md "Fan-out and join"). The server sends this inside
+   * a branch-only `flight` dto; lib/flights normalizeFlightRows lifts it here
+   * so `flight` stays "this session's own flight, or null". */
+  flight_branch?: { parent: string; step: string } | null;
   /** Flock mode ("Workers on every prompt"): while true the server adds the
    * workers request to every prompt submitted in this session. Optional: an
    * older server doesn't send it (lib/workersRequest). */
@@ -1437,7 +1448,13 @@ export interface TicketingCatalogEntry {
  * non-string passenger is `last_test` (a `TicketingLastTest`), read through
  * `components/intake/sourceForm.ts::lastTestOf` rather than typed here, so the
  * form's string fields stay string-typed. */
-export type TicketingSource = Record<string, string> & { id: string; provider: string };
+export type TicketingSource = Record<string, string> & {
+  id: string;
+  provider: string;
+  /** The flight plan this source's tickets follow (a plan id; "" or absent =
+   * the built-in ticket plan cut at `depth`; docs/flights.md). */
+  plan?: string;
+};
 
 /** GET /api/traffic (backend/web/addons/traffic.py) — GitHub stars/forks,
  * per-release download counts, and click totals for the mindflock.ai/go/

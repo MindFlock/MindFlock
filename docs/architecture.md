@@ -126,7 +126,24 @@ FastAPI app `backend.web.server:app`. Key pieces:
   its own spoken line: every prompt sent with `say: true` (a dictated one
   whose reply will be spoken) carries one instruction asking for a final
   `Say:` line, and the CLI's `Stop` hook files the reply beside the activity
-  marker. **`core/spoken.py`** is the pure text
+  marker. `core/state_events.ReplyWatch` notices the file landing (one
+  directory `stat` per poll, debounced per session, a 1 s rescan fallback for
+  coarse-mtime mounts, a first-scan baseline so replies already on disk are
+  never announced) and `server._reply_watch_loop` republishes just that
+  session's turn-end fields through `_emit_state_changes` — the reply is
+  spoken ~0.1 s after the turn ends, not on the next 4 s tick.
+  Its sibling `core/state_events.DialogWatch` does the same for a dialog
+  appearing or leaving: `server._dialog_watch_loop` (0.1 s) stats the hook
+  marker of each session published `working` and captures the screens of
+  those whose CLI has a dialog parser (0.3 s; `clarify` rows 1 s; all of a
+  poll's captures in one tmux client, at most 8, re-parsed only when the
+  text's hash moves, backed off under load or memory pressure), and
+  `_republish_dialog` patches `activity` / `asking` into the row — a
+  dialog reaches the row in ~0.05–0.3 s instead of up to 4 s, and a
+  confirmed second sighting (`screen-stable`, an authoritative source)
+  sends its `activity_changed` past the settle. Idle rows are never
+  captured.
+  **`core/spoken.py`** is the pure text
   side — the instruction, `extract_say`, the markdown stripper, the digest
   fallback, `has_question`, and one mtime-cached reader of the reply file —
   serving the `spoken` record (`{say, source, has_question, ts}`) that the
@@ -155,7 +172,17 @@ FastAPI app `backend.web.server:app`. Key pieces:
   hooks can't inject it. **`core/voice_actions.py`** mints the single-use,
   ten-minute capability tokens behind a dialog push's Yes / No buttons
   (`POST /api/notify/act/<token>`, the notify addon's one public route) so
-  no standing credential ever reaches the ntfy server or a lock screen.
+  no standing credential ever reaches the ntfy server or a lock screen,
+  and keeps each session's last answer (`answered_at`), stamped by
+  `/answer` and by a settling key typed straight into a dialog's pane — the
+  terminal socket or a `/send` (`agent_io.settling_input`,
+  `server._note_pane_input`) — so a voice phrase begun before it never
+  answers the next dialog. The desktop mic's dictation never goes down the
+  terminal socket: every batch of keys is a gated
+  `/send {"voice": true, "submit": false, "erase", "text"}`
+  (`server._dictate_on_agent` → `agent_io.send_dictation`, one tmux call),
+  refused with 409 `in_dialog` when the screen read at send time shows a
+  dialog.
   **`core/speech.py`** + **`routes/speech.py`** are the optional server
   speech (`GET /api/voice`, `POST /api/voice/transcribe`, `…/speak`,
   `…/clear-key`): an `openai`-compatible host or lazily imported local
@@ -164,7 +191,19 @@ FastAPI app `backend.web.server:app`. Key pieces:
   streaming `base.en`) resident while configured, a piper voice unloaded
   after 30 idle minutes — and both kinds warmed at boot and whenever a voice
   client fetches `GET /api/voice` (`speech.warm_in_background`; a local
-  OpenAI-compatible voice host gets one throwaway synthesis). The
+  OpenAI-compatible voice host gets one throwaway synthesis). A line the
+  voice host cannot say in its queue-aware budget falls back to piper, one
+  voice per reply (`speech.TtsChain`); only a DEAD host (refused, reset,
+  5xx, no audio, hung) is marked down and re-checked by a background probe,
+  a merely slow one stays healthy, and a serial host (Voice Lab's F5) gets
+  our requests one at a time through a lane per host; session names and
+  fixed confirmations are pre-synthesised into a pinned cache while the
+  voice is idle (`routes/speech.Prewarm`), as low-priority lines every real
+  line overtakes. The two whisper tiers
+  are scheduled one job per model with the accurate pass first and every
+  wait bounded (`speech_stream.Lane`), split the cores between them
+  (`speech.whisper_threads`), and the fast tier pads its encoder input to
+  10 s instead of 30 s. The
   streaming recogniser's accurate pass is biased towards the voice words,
   the open sessions' titles and a MindFlock vocabulary
   (`speech.recognition_hints`); for the titles `speech.session_titles`
@@ -214,6 +253,13 @@ FastAPI app `backend.web.server:app`. Key pieces:
   `/m` URL names no machine and opens on whichever device is up; withdrawn on
   clean shutdown. Sign-in carries across devices through `core/auth.py`'s
   cookie-per-token scheme.
+- **`core/flights.py` + `core/flight_driver.py`** — Flights
+  ([flights.md](flights.md)): plans (rows of steps) and flights (one run of a
+  plan bound to one session), driven by a 5 s loop in the lifespan beside the
+  autopilot's plus bus taps. Every Intake start path (the three force-start
+  routes, the pipeline's auto-start in its own process) arms a flight on the
+  deterministic title before the session exists; scheduled plans fire from
+  `core/template_schedule.py`'s loop (the templates' loop, its own run record).
 - **`core/prompt_queue.py`** — per-session FIFO of prompts drained into idle
   agents by a background loop (self-driving runs; state in
   `~/.mindflock/prompt_queues.json`).
@@ -309,7 +355,13 @@ FastAPI app `backend.web.server:app`. Key pieces:
   record is no longer a side effect of an offline poll or of `_forget_probes`,
   both of which destroyed live sessions' work evidence.
 - **The rest of `core/`** — `server.py` keeps only the app assembly, the
-  routes, and the always-on background loops; every other helper cluster is a
+  routes, and the always-on background loops (among them `_reply_watch_loop`,
+  50 ms, and its `_republish_reply` — the cheap counterpart of
+  `_republish_session`: it drops the activity/asking/last_turn/last_say probe
+  memos and patches the published row, never recomputing git state; the
+  watcher itself, `ReplyWatch`, lives in `state_events` — and
+  `_dialog_watch_loop`, 100 ms, whose `_republish_dialog` shares that body,
+  `_republish_fast`, over `state_events.DialogWatch`); every other helper cluster is a
   focused module: `agent_sessions` (tmux ensure/send/kill for the agent+shell
   panes), `agent_state` (working/clarify/idle/offline detection — and the
   *provenance* behind it: every classification layer stamps a per-title rolling
@@ -474,7 +526,7 @@ prunes workspaces untouched for 3 days. See
 ### MindFlock MCP (`backend/mcp`, `providers/mcp_attach.py`)
 
 A stdlib-only Model Context Protocol server, `python -P -m backend.mcp` or
-`mindflock mcp`, that gives an agent 28 tools over the rest of the flock:
+`mindflock mcp`, that gives an agent 34 tools over the rest of the flock:
 list and inspect sessions, read their output and diffs, message them, spawn
 workers (or start tickets as workers), wait for them, answer their dialogs,
 ship their work (commit, push, PR, merge, or arm Fast-track), close
@@ -578,6 +630,7 @@ independent cadences, so each side has to tolerate the other being older. See
 | `~/.mindflock/mailbox.json` (+ `.lock`) | web (`core/mailbox.py`) | inter-agent messages per recipient, with exactly-once states; dropped per session on removal |
 | `~/.mindflock/run/` | engine/providers | per-launch files: `<tmux name>.env` (an auth profile's credentials) and `mcp-<tmux name>.json` (Claude's `--mcp-config` for the MindFlock MCP). Mode 0600, directory 0700; removed with the session |
 | `~/.mindflock/session_templates.json` | web (templates addon) | saved new-session templates |
+| `~/.mindflock/flights/` | web (`core/flights.py`) + pipeline | `plans.json` (flight plans, synced as `store:flight_plans`), `flights.json` (flights, local; the pipeline arms intake flights here too), `schedule_runs.json` (scheduled plans' run record, local) |
 | `~/.mindflock/remote_devices.json` | web (remote) | paired tailnet devices + tokens |
 | `~/.mindflock/settings.json` | web (settings addon) | the web settings store |
 | `~/.mindflock/settings_sync.json` | web (`core/settings_sync.py`) | settings-sync stamps: which device last changed each synced field, pins kept separate |

@@ -148,7 +148,8 @@ describe("the pane header", () => {
     expect(pane).not.toContain("❚❚");
     expect(pane).toContain('const canResume = sessionAction("resume").enabled(menuCtx);');
     expect(pane).toMatch(/\{canResume && \(\s*<button\s+className="act pane-resume"/);
-    expect(pane).toContain('ns && ns.label === "Commit…" && !hasUncommitted(inst) ? null : ns');
+    // ...and none while a flight drives the session: its strip is the next step.
+    expect(pane).toContain('flying || (ns && ns.label === "Commit…" && !hasUncommitted(inst)) ? null : ns');
   });
 });
 
@@ -170,6 +171,10 @@ describe("surfaces in the URL hash", () => {
     expect(parseHash("#new")).toEqual({ name: "new-session", target: null });
     expect(parseHash("#nope")).toBeNull();
     expect(parseHash("")).toBeNull();
+    // The retired Flights dialog is not a surface: its old links are routed
+    // (flatTopBar.test.ts), never produced.
+    expect(hashFor("flights", null)).toBe("");
+    expect(parseHash("#flights/plans")).toBeNull();
   });
 
   it("Back closes a surface; closing it steps back over its entry; a link opens one", async () => {
@@ -270,7 +275,8 @@ describe("a quieter main screen", () => {
 
   it("Verify is described one way", () => {
     expect(code("components/TopBar.tsx")).toContain('"Verify — " + VERIFY_BLURB');
-    expect(code("components/palette/CommandPalette.tsx")).toContain('"Verify — " + VERIFY_BLURB');
+    // The palette's row is "Verify…", the blurb in its keywords.
+    expect(code("components/palette/CommandPalette.tsx")).toContain("keywords: VERIFY_BLURB");
     expect(code("lib/keymap.ts")).toContain('"Verify — " + VERIFY_BLURB');
     // The welcome card no longer describes Verify; the Verify tour does.
   });
