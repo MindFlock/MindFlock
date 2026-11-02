@@ -425,15 +425,19 @@ describe("Split and Join on the line", () => {
 describe("round 16: a Loop over a Split and its Join", () => {
   const LOOPED = [...SPLIT_STEPS, step("s4", "loop", "Loop", { back_to: "s1", times: 2 })];
 
-  it("the arc rides over the fan-out: one loop edge from the Loop to the Split, the fan/join wires untouched", () => {
+  it("the wire runs under the fan-out: one loop edge from the last stop back to the Split, the fan/join wires untouched", () => {
     const f = flight(LOOPED, 1, [{ title: "w1", state: "working" }]);
     f.step_states.s4 = { state: "running", since: 1, note: "", detail: { runs: 1 }, rounds: 0 };
     const d = diagramOf([lead(LOOPED, 1, { waiting: 1, total: 1 }), kid("w1", "s1", { activity: "working" })], f);
-    expect(d.edges.filter((e) => e.kind === "loop")).toEqual([expect.objectContaining({ from: "stop:s4", to: "stop:s1", loop: { runs: 1, times: 2, state: "running" } })]);
+    expect(d.edges.filter((e) => e.kind === "loop")).toEqual([expect.objectContaining({ from: "stop:s3", to: "stop:s1", loop: { runs: 1, times: 2, state: "running" } })]);
+    // Under the branches, not through them.
+    const L = layoutDiagram(d);
+    const w = L.wires.find((x) => x.kind === "loop")!;
+    expect(w.apex!.y).toBeGreaterThan(Math.max(...L.boxes.filter((b) => b.node.kind === "branch" || b.node.row === "branch").map((b) => b.y + b.h), 0));
     const html = renderToStaticMarkup(createElement(FlywayCanvas, { diagram: d, label: "Lead", vertical: false }));
     expect(html).toContain('class="fl-wire fl-wire-loop fl-edge-loop fl-loop-running"');
     expect(html).toContain(">2 / 2</span>");
-    // The arc's own key: it never collides with a line wire between the same boxes.
+    // The wire's own key: it never collides with a line wire between the same boxes.
     expect(html.match(/fl-wire-loop/g)).toHaveLength(1);
   });
 });

@@ -555,3 +555,41 @@ def test_route_round_trip(tmp_path, monkeypatch, sent):
     view = client.get("/api/flights/" + f["id"]).json()["flight"]
     assert view["step_states"]["s2"]["detail"]["receipt"] == "looped 2 times"
     assert any(h["event"] == "looped" for h in view["history"])
+
+
+def test_moved_steps_keep_their_loops_target():
+    """Stops moved onto another line take new ids (a stops-only line dragged
+    onto a session, a saved stop tacked on): a Loop among them that repeats
+    from one of them follows it to its new id; any other back_to stays."""
+    f = fly(AGENT, AGENT, AGENT)
+    moved = [
+        {"id": "s1", "kind": "agent", "config": {"prompt": "edit"}},
+        {"id": "s2", "kind": "command", "config": {"command": "npm run shots"}},
+        {"id": "s3", "kind": "loop", "config": {"back_to": "s2", "times": 2}},
+    ]
+    F.op_add_steps(f, moved, group={"name": "Iterate"}, now=NOW)
+    new = f["steps"][3:]
+    assert [s["id"] for s in new] == ["s4", "s5", "s6"]
+    assert new[2]["config"]["back_to"] == "s5"
+    assert F.loop_target(f, new[2]) == 4
+    # A back_to outside the batch is left alone (a duplicated Loop on its own line).
+    F.op_add_steps(
+        f, [{"id": "s9", "kind": "loop", "config": {"back_to": "s1"}}], now=NOW
+    )
+    assert f["steps"][-1]["config"]["back_to"] == "s1"
+
+
+def test_a_saved_stop_keeps_its_loops_target():
+    plan = F.save_plan(
+        {
+            "name": "Polish",
+            "steps": [
+                {"kind": "agent", "config": {"prompt": "edit"}},
+                {"kind": "command", "config": {"command": "shots"}},
+                {"kind": "loop", "config": {"back_to": "s2", "times": 3}},
+            ],
+        }
+    )
+    f = fly(AGENT, AGENT)
+    F.op_add_plan(f, plan, now=NOW)
+    assert f["steps"][-1]["config"]["back_to"] == f["steps"][3]["id"]

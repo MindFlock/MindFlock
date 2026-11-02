@@ -330,7 +330,9 @@ export function tackOnPlan(flightId: string, planId: string, at?: number): Promi
 /** Several stops tacked on at once, grouped under `groupName` when given. */
 export function tackOnSteps(flightId: string, steps: FlightStep[], at?: number, groupName?: string): Promise<boolean> {
   return flightAction("Tack on", flightPath(flightId, "/steps"), {
-    steps: steps.map(wireStep),
+    // Their ids ride along: the server gives them new ones and re-aims a Loop
+    // among them that repeats from one of them.
+    steps: steps.map((s) => ({ ...wireStep(s), id: s.id })),
     ...(at === undefined ? {} : { at }),
     ...(groupName ? { group: { name: groupName } } : {}),
   });
@@ -427,6 +429,34 @@ export async function renameFlight(flightId: string, name: string): Promise<bool
   } catch (err) {
     errorPop("Renaming failed", errMsg(err));
     return false;
+  } finally {
+    void refreshFlights();
+  }
+}
+
+/** Round 18: free positions of a flight's stops (chain-local; null clears) —
+ * `POST /api/flights/{id}/layout`. Layout only: any step, flown too. */
+export async function saveStopPositions(flightId: string, positions: Record<string, { x: number; y: number } | null>): Promise<boolean> {
+  try {
+    await api(flightPath(flightId, "/layout"), { json: { positions } });
+    return true;
+  } catch (err) {
+    errorPop("Saving where the stops sit failed", errMsg(err));
+    return false;
+  } finally {
+    void refreshFlights();
+  }
+}
+
+/** Round 18: stop `stepId` and every stop after it leave into a new
+ * stops-only chain (its first stop at `pos`) — `POST …/steps/{sid}/split_off`. */
+export async function splitOffChain(flightId: string, stepId: string, pos?: { x: number; y: number }): Promise<Flight | null> {
+  try {
+    const d = await api<{ chain?: Flight }>(flightPath(flightId, "/steps/" + enc(stepId) + "/split_off"), { json: pos ? { pos } : {} });
+    return d?.chain || null;
+  } catch (err) {
+    errorPop("Splitting the chain failed", errMsg(err));
+    return null;
   } finally {
     void refreshFlights();
   }

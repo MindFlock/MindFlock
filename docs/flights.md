@@ -5461,6 +5461,62 @@ against the in-memory API, the scope and confirm refusals, the kinds list in
 `describe_flight`, `flight_status` compactness on a 40-stop flight, and
 `Api.patch`. The 34-tool and INSTRUCTIONS pins are in `test_mcp_tools.py`.
 
+
+### Redrawn: a Loop is its return wire, not a box (2026-11-02)
+
+The owner: "why are loops their own block that doesn't actually loop around
+to the bottom — I want to see the loop in the block diagram, not a block in
+the chain". The data model and the backend are unchanged (a Loop is still a
+`loop` step in `steps`, and its mechanics are round 16's); only the drawing
+moved:
+
+- **No Loop box.** `liftLoops(line)` (lib/flightDiagram) takes every Loop
+  that has something to repeat off the line — the line runs straight past it
+  — and gives back its `loop` edge from the LAST stop it repeats (the last
+  non-Loop stop before it) to its `back_to` box, carrying the Loop node as
+  `edge.via` (in the flight's indexes). A Loop with nothing before it, or whose
+  target is gone, stays a box. flywayDiagram, flightDiagram and sessionDiagram
+  all lift; `groundedDiagram` maps `via` the way it maps the boxes.
+- **Under the line.** `loopArc` draws a flowchart loop-back: down out of the
+  bottom of the last repeated box (`LOOP_FROM` 0.72 of its width), back along
+  under every box in its span (branches and children too) `LOOP_DROP` px below
+  the lowest, and up into the bottom of the first (`LOOP_TO` 0.28), arrowhead
+  on it, rounded corners. A one-stop loop is a U under that stop. `Layout.height`
+  grows for it (`rise` stays 0); the phone's vertical wire still goes round
+  the right of the column. The cycle band is gone (the wire says it).
+- **The pill is the Loop.** Always shown on the middle of the run under the
+  line: "↻ ×3" / "↻ until <until>" / "↻ until stopped" before it runs
+  (`loopIdlePill`), "2 / 3" while it goes round. It is a button: a click or
+  Enter opens the Loop's dialog (`edit`), right-click its menu, Delete removes it.
+- **Folding.** `foldRun` keeps a loop edge whose ends fold into one box (a
+  Loop inside a collapsed group, a finished loop inside the flown pill): it
+  goes round that box.
+- **The bird** at a Loop (deciding, waiting out its pace or a limit, halted
+  on it — `loopAtWork`) stands on the stop its wire leaves from; `lineWhere`
+  names the Loop ("at Loop ×3 · run 2 of 3 · next in 12 min");
+  `currentNodeId` reveals that stop.
+- Drops and moves count drawn places (`drawnCanvas`): a stop dropped in the gap
+  after the wire's last stop lands AFTER the Loop (outside it).
+
+**Drawing loops by hand (same day).**
+- Every stop that can take a Loop after it wears a small ↻ on its bottom-right
+  corner (hover / selected / focused). Drag it back onto a stop at or before
+  it (itself = loop just that stop): `onLoopFrom(from, to)` tacks a Loop right
+  after `from` (`loopSlotAfter`) with `back_to` = `to`'s first step
+  (`loopStepTo`, `firstStepOf`). The wire follows the pointer and snaps onto
+  the stop under it (`.fl-loop-target`, `loopWirePath`); Esc or a drop on
+  nothing cancels.
+- A Loop's pill dragged onto another stop at or before the wire's start
+  re-aims it: `onLoopTo(loop, to)` PATCHes `config.back_to`. A press that
+  never moves still opens the dialog.
+- In the Sky, a session line's trailing + dragged onto a stops-only line does
+  what dragging that line onto the session does (`mergeGrounded`): a wire
+  follows the pointer (`.sky-connect`), the line under it lights.
+- Moved stops keep their Loop's target: `POST /steps {steps}` now carries the
+  steps' old ids and `_follow_loop_targets` re-aims a Loop whose `back_to`
+  names one of the batch at its new id (also for a saved stop tacked on,
+  `op_add_plan`). Before this, a moved Loop pointed at whatever had the old id.
+
 ## Round 17: the Sky as a canvas tool (contract)
 
 The owner (2026-10-31, a standing ask, one round per cycle): "iterate on the
@@ -5972,3 +6028,129 @@ from a focused line is right (n8n's manner, but it is also the browser's
 focus key); the stop / group redo entries above; `SkyGuide`'s and the
 tour's copy still say a double-click starts a session where they mention
 it (outside this fence).
+
+## Round 18: free-floating chains (the n8n look) — contract
+
+The owner (2026-11-02): boxes should float free like n8n — icon tiles, ports,
+wires you drag — not rows that look like they wait for a session; show which
+session a chain runs in; let one session's chain trigger a chain in another
+session: "I want really max modularity".
+
+**Words.** A **chain** is what the Sky used to call a line: one flight's stops
+(a session's live flight, or a stops-only/grounded flight) plus its **head**.
+A **node** is one stop (or a collapsed group) drawn as a tile. A **wire**
+joins an **out port** (right side of a tile) to an **in port** (left side).
+
+### What it looks like
+- **Node** = a 64×64 rounded tile (radius 12) holding the kind's icon (28 px,
+  the kind's family colour), the title under it (12.5 px semibold, ≤2 lines,
+  centred) and the summary under that (11 px muted, 1 line). No card around
+  a chain, no row background. State on the tile: running = green border +
+  soft glow, waiting on you = gold, halted = red dashed, failed = red, done =
+  a small ✓ badge on the tile's top-right and a dimmer tile, pending = plain,
+  a halt point = the ⏸ mark, the risk stripe = small coloured dots under the
+  tile. The bird perches on the tile's top edge. A collapsed group = a tile
+  with a stacked (2 offset borders) look and "k of n" in its summary.
+- **Ports**: in = a small square on the tile's left middle, out = a small
+  circle on the right middle; both grow on hover. The chain's last node
+  carries n8n's trailing "+" stub on its out port (a press opens the palette
+  there; a drag starts a wire).
+- **Wires**: cubic béziers out→in (horizontal tangents). Line wires plain;
+  loop wires (`via` = the Loop) leave the out port, run under both tiles and
+  come up into the target's in port, pill in the middle (round "Redrawn"
+  rules: the Loop has no tile); fan/join for Split/Join and children as now.
+  Handoff wires (cross-chain, below) dashed in the source session's colour.
+- **Head** (`ChainHead`): a session chain starts with the **session tile** —
+  an n8n trigger-style node (rounded left side) with the session's name,
+  state chip and bird; a click opens its card as the session box does today;
+  its out port feeds the first stop. A stops-only chain that another chain
+  hands off to starts with a **trigger tile** "When <chain> reaches <stop>"
+  naming the session it will run in. A stops-only chain with neither has
+  **no head**: its first node's in port shows an empty socket ("Wire a
+  session's out port here to run it") — the "No session yet" box is gone.
+- **Session colour**: `chainColor(sessionTitle)` — one of 8 hues, stable per
+  title; the head wears it as a dot and its chain's wires at low opacity, so
+  "this chain runs in that session" reads at a glance. Stops-only: neutral.
+
+### Free positions
+- Every step may carry `pos: {x, y}` — integers, chain-local plane px,
+  relative to the chain's origin (the head's top-left; with no head, the
+  slot's origin). The sky layout store keeps placing chain origins as it
+  places lines today (`mf_sky_layout`, Tidy, pins, marquee).
+- `autoPlace` gives a node without `pos` a spot: left→right after the
+  previous node (tile pitch 150 px), branches 150 px below their split.
+- Dragging a tile moves only that node (8 px grid snap, Alt = free); it never
+  reorders. Order is the wires. The chain's bbox follows its nodes.
+- Backend: `pos` is kept by the normaliser, dropped when not two finite
+  numbers (clamped ±100000, rounded). `PATCH /api/flights/{id}/steps/{sid}
+  {pos}` is allowed on ANY step (flown and current too — layout only, never
+  `_editable`). Bulk: `POST /api/flights/{id}/layout {positions: {<sid>:
+  {x, y} | null}}` (null clears; unknown ids ignored) → `{flight}`. Saved
+  plans keep `pos` too (a saved stop dropped back keeps its shape).
+
+### Wiring (drag from a port)
+The host (SkyView) runs every wire drag, so a wire can reach another chain:
+a rubber band from the port follows the pointer; the node or head under it
+lights when the drop means something; `wireIntent` (pure, lib/skyGraph) says
+what a drop does:
+| From | Dropped on | Intent | API |
+|---|---|---|---|
+| node X out (chain A) | a node Y of A after X | `move`: Y right after X | `moveStop` |
+| node X out | a node Y of A at or before X (X itself too) | `loop`: a Loop after X back to Y | `tackOn` Loop (`loopStepTo`) |
+| node X out | the first node / socket of a stops-only chain B | `merge`: B's stops spliced in right after X | `tackOnSteps(A, B.steps, at)` + `deleteFlight(B)` (as `mergeGrounded`) |
+| node X out (A has a session) | the head of a stops-only chain B whose drop asks for another session (Shift held, or B already has a trigger) | `handoff`: a Handoff step after X targeting B | `tackOn` Handoff `{target: "flight:<B>", session: "new"}` |
+| a session tile's out | the first node / socket of a stops-only chain B | `attach`: B flies on that session | `attachGrounded` / `tackOnSteps` (as `mergeGrounded`) |
+| node X out / session out / "+" | empty sky | `palette`: the palette opens there; the picked stop goes right after X with `pos` = the drop | `tackOn` + layout |
+| an in port's wire end (grab the wire near its in port) | empty sky | `split`: the node and every stop after it leave into a new stops-only chain placed there | `POST …/steps/{sid}/split_off` |
+| anything | nothing that fits | `none` (the band snaps back) | — |
+Rules: only steps that can still change move (the server refuses others; the
+UI greys the target). Esc cancels. The ↻ handle and pill drags from the
+"Redrawn" rounds keep working on the classic FlywayCanvas; in the graph the
+out-port drag IS the loop gesture, and a loop pill still re-aims (`onLoopTo`).
+
+### One chain triggers another (the Handoff kind)
+New plug-in kind `handoff` (label "Start a chain", family "flow", actor
+robot, icon ↗): config
+- `target`: `"flight:<id>"` — a stops-only chain on the board (consumed: it
+  takes off on the session), or `"plan:<id>"` — a saved stop/flyway (a fresh
+  copy each time: the reusable module). Required to take off.
+- `session`: an existing session title, or `"new"` (a new session in this
+  flight's repo, the program/model of this flight's session — the Split's
+  `spawn_worker` path). Default `"new"`.
+- `wait`: bool, default false — false: done once the target has taken off;
+  true: running until the target flight lands (landed → done, failed /
+  cancelled → this step fails with the target's reason).
+Run: start the target (flight → `attach` on that session; plan → `fly_plan`
+onto it), record `detail.child` = the started flight id, `detail.session` =
+where it runs, receipt "started <name> on <session>". The started flight
+carries `triggered_by: {flight, step, session}` in its dto. A target already
+flying / gone → the step fails with a sentence. Dialog fields: target = select
+filled by `dynamic: "chains"` (the board's stops-only chains + saved stops),
+session = select `dynamic: "sessions"` + "a new session".
+Drawn: a handoff wire from the Handoff node's out port to the target chain's
+head (its trigger tile); once started, to the started flight's head on its
+session.
+
+### Split off
+`op_split_off(flight, sid, pos=None)` → a new grounded flight holding
+steps [sid…] (each still pending — else 409 `not_pending`), named "<plan
+name> (from <step title>)", loops re-aimed (`_follow_loop_targets`), the
+first step's `pos` = the drop's; the steps leave `flight`. Route `POST
+/api/flights/{id}/steps/{sid}/split_off {pos?}` → `{flight, chain}`.
+
+### What stays
+FlywayCanvas (the classic row) stays for the pane's Flight tab, the strip,
+the plan preview and the Session flight panel; `liftLoops` & co. feed both.
+Only the Sky draws chains.
+
+### Seams (pre-committed; workers fill them)
+- `frontend/src/lib/skyGraph.ts` — types `ChainHead`, `GraphNode`,
+  `GraphWire`, `ChainGraph`, `WireIntent`, `WireEnd`; functions `chainGraph`,
+  `autoPlace`, `wirePath`, `loopWirePathG`, `chainColor`, `portAt`,
+  `nodeAt`, `wireIntent` (stubs).
+- `frontend/src/components/flights/SkyChain.tsx` — `SkyChainProps` and a
+  placeholder render.
+- `lib/flights.ts`: `FlightStep.pos?`, `Flight.triggered_by?`.
+- `lib/flightsApi.ts`: `saveStopPositions`, `splitOffChain`.
+- Each worker writes its notes to `docs/flights-r18/<task>.md` (merged into
+  this section after).

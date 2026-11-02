@@ -320,25 +320,35 @@ describe("reordering by drag", () => {
   });
 });
 
-describe("round 16: a Loop's return arc", () => {
+describe("a Loop is its return wire (no box)", () => {
   const LOOP_LINE = [...STEPS.slice(0, 2), step("s9", "loop", "Loop ×3", { back_to: "s1", times: 3 }), ...STEPS.slice(2)];
 
-  it("one `loop` edge from the Loop box back to its back_to, besides the line", () => {
+  it("one `loop` edge from the last stop it repeats back to its back_to; the line runs straight past it", () => {
     const d = flywayDiagram(LOOP_LINE, KINDS);
-    expect(d.edges.filter((e) => e.kind === "loop")).toEqual([{ from: "stop:s9", to: "stop:s1", kind: "loop", loop: { runs: 0, times: 3, state: "pending" } }]);
-    expect(d.edges.filter((e) => e.kind === "line")).toHaveLength(LOOP_LINE.length - 1);
+    expect(d.edges.filter((e) => e.kind === "loop")).toEqual([
+      { from: "stop:s2", to: "stop:s1", kind: "loop", loop: { runs: 0, times: 3, state: "pending" }, via: expect.objectContaining({ id: "stop:s9", index: 2 }) },
+    ]);
+    expect(d.nodes.some((n) => n.id === "stop:s9")).toBe(false);
+    expect(d.edges.filter((e) => e.kind === "line").map((e) => [e.from, e.to])).toEqual([
+      ["stop:s1", "stop:s2"],
+      ["stop:s2", "stop:s3"],
+      ["stop:s3", "stop:s4"],
+    ]);
   });
 
-  it("a drag's preview keeps the arc", () => {
-    const d = reorderDiagram(flywayDiagram(LOOP_LINE, KINDS), 3, 4);
-    expect(d.edges.filter((e) => e.kind === "loop")).toEqual([expect.objectContaining({ from: "stop:s9", to: "stop:s1" })]);
+  it("a drag's preview keeps the wire", () => {
+    const d = reorderDiagram(flywayDiagram(LOOP_LINE, KINDS), 2, 3);
+    expect(d.edges.filter((e) => e.kind === "loop")).toEqual([expect.objectContaining({ from: "stop:s2", to: "stop:s1" })]);
   });
 
-  it("the layout draws it as an arc over the line (negative y) and says how far it rises", () => {
+  it("the layout runs it under the line, below every box, and no rise over it", () => {
     const L = layoutDiagram(flywayDiagram(LOOP_LINE, KINDS));
     const w = L.wires.find((x) => x.kind === "loop")!;
-    expect(w.d).toMatch(/^M [\d.]+ 0 C [\d.]+ -[\d.]+, [\d.]+ -[\d.]+, [\d.]+ -2$/);
-    expect(w.apex!.y).toBeLessThan(0);
-    expect(L.rise).toBeGreaterThan(0);
+    expect(w.d).toMatch(/^M [\d.]+ [\d.]+ V [\d.]+ Q .* H [\d.]+ Q .* V [\d.]+$/);
+    const bottom = Math.max(...L.boxes.map((b) => b.y + b.h));
+    expect(w.apex!.y).toBeGreaterThan(bottom);
+    expect(L.height).toBeGreaterThan(w.apex!.y);
+    expect(L.rise).toBe(0);
   });
 });
+

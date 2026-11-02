@@ -37,7 +37,7 @@ import re
 import secrets
 import threading
 import time
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from backend.config.config import GetConfigDir
 from backend.config.home_guard import guard
@@ -3683,12 +3683,17 @@ def _insert_index(flight: dict, at, n: int = 1) -> int:
     return i
 
 
-def _insert_steps(flight: dict, new: List[dict], i: int, now: float) -> dict:
+def _insert_steps(
+    flight: dict, new: List[dict], i: int, now: float, was: Sequence[str] = ()
+) -> dict:
     """Place validated ``new`` steps at index ``i``: each takes the next free
     ``sN`` (never one history still names), starts pending, and gets an
-    ``added`` history event."""
+    ``added`` history event. ``was`` (the ids the steps had where they came
+    from, in order): a Loop among them whose ``back_to`` names one of them
+    follows it to its new id."""
     steps = flight["steps"]
     _renumber_after(steps, new, [h["step"] for h in flight["history"]])
+    _follow_loop_targets(new, was)
     steps[i:i] = new
     nxt = i + len(new)
     where = "at the end" if nxt >= len(steps) else "before %s" % steps[nxt]["title"]
@@ -3697,6 +3702,23 @@ def _insert_steps(flight: dict, new: List[dict], i: int, now: float) -> dict:
         _hist(flight, now, step["id"], "added", "%s, %s" % (step["title"], where))
     flight["updated"] = now
     return flight
+
+
+def _follow_loop_targets(new: List[dict], was: Sequence[str]) -> None:
+    """Re-aim each Loop of ``new`` whose ``config.back_to`` names a step of
+    the same batch by its old id (``was[k]`` is ``new[k]``'s) at that step's
+    new id, in place. Any other ``back_to`` stays as it is."""
+    moved = {old: s["id"] for old, s in zip(was, new) if old}
+    if not moved:
+        return
+    for s in new:
+        cfg = s.get("config")
+        if (
+            isinstance(cfg, dict)
+            and isinstance(cfg.get("back_to"), str)
+            and cfg["back_to"] in moved
+        ):
+            s["config"] = dict(cfg, back_to=moved[cfg["back_to"]])
 
 
 def op_add_step(
@@ -3756,6 +3778,8 @@ def op_add_steps(
     _editable(flight)
     if not isinstance(raws, list):
         raise PlanError("steps is a list", "steps")
+    # The ids they had (another line's): a Loop among them keeps its target.
+    was = [str(r.get("id") or "") if isinstance(r, dict) else "" for r in raws]
     stripped = [dict(r, id="") if isinstance(r, dict) else r for r in raws]
     new = normalize_steps(stripped, strict=True, config_strict=not _lenient(flight))
     i = _insert_index(flight, at, len(new))
@@ -3763,7 +3787,7 @@ def op_add_steps(
         g = _fresh_group(flight, group.get("name") if isinstance(group, dict) else "")
         for s in new:
             s["group"] = dict(g)
-    return _insert_steps(flight, new, i, ts)
+    return _insert_steps(flight, new, i, ts, was)
 
 
 def op_add_plan(
@@ -3779,7 +3803,7 @@ def op_add_plan(
     g = _fresh_group(flight, plan.get("name") or "Stop", plan.get("id") or "")
     for s in new:
         s["group"] = dict(g)
-    return _insert_steps(flight, new, i, ts)
+    return _insert_steps(flight, new, i, ts, [s["id"] for s in new])
 
 
 def op_edit_step(flight: dict, sid: str, patch, now: Optional[float] = None) -> dict:
