@@ -216,6 +216,7 @@ AGENT_NAMES = {
     "opencode": "OpenCode",
     "cline": "Cline",
     "goose": "Goose",
+    "copilot": "GitHub Copilot",
 }
 
 

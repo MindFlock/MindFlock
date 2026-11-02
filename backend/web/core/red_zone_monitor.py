@@ -108,6 +108,7 @@ _CLI_LABELS = {
     "antigravity": "Antigravity",
     "cline": "Cline",
     "goose": "Goose",
+    "copilot": "GitHub Copilot",
 }
 
 # title -> per-session state (feed cursor, work-cycle dedupe, row summary)

@@ -844,8 +844,8 @@ def test_every_auto_approved_tool_is_a_read_or_the_report():
     assert "list_tickets" in mcp_attach.AUTO_APPROVED_TOOLS
 
 
-def test_supported_providers_are_claude_and_codex():
-    assert mcp_attach.supported_providers() == ["claude", "codex"]
+def test_supported_providers_are_claude_codex_and_copilot():
+    assert mcp_attach.supported_providers() == ["claude", "codex", "copilot"]
 
 
 # --------------------------------------------------------------------------- #
@@ -1340,7 +1340,7 @@ def client():
 
 def test_config_caps_agent_mcp(client, monkeypatch):
     caps = client.get("/api/config").json()["caps"]["agent_mcp"]
-    assert caps == {"enabled": True, "providers": ["claude", "codex"]}
+    assert caps == {"enabled": True, "providers": ["claude", "codex", "copilot"]}
     monkeypatch.setenv("MINDFLOCK_AGENT_MCP", "0")
     assert client.get("/api/config").json()["caps"]["agent_mcp"]["enabled"] is False
 

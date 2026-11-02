@@ -24988,7 +24988,8 @@ var AGENT_NAMES = {
 	antigravity: "Antigravity",
 	opencode: "OpenCode",
 	cline: "Cline",
-	goose: "Goose"
+	goose: "Goose",
+	copilot: "GitHub Copilot"
 };
 function agentName(provider) {
 	return AGENT_NAMES[provider] || (provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : "Agent");

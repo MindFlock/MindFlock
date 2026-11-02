@@ -2,7 +2,7 @@
 
 MindFlock manages fleets of coding-agent sessions: **a session = a git
 workspace + a tmux session running an agent CLI** (claude, codex, antigravity,
-aider, opencode, cline, goose), observable and steerable from a web UI, a
+aider, opencode, cline, goose, copilot), observable and steerable from a web UI, a
 mobile page, an Electron desktop app, and the `mindflock` CLI.
 
 ## Setup and tests
