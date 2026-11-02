@@ -7,5 +7,5 @@ both, and ``tests/unit/test_pins.py`` fails the moment they drift.
 """
 
 # sha256 of https://astral.sh/uv/<UV_PINNED_VERSION>/install.sh
-UV_PINNED_VERSION = "0.11.29"
-UV_INSTALLER_SHA256 = "504a79fd2ed0dcd47e7f04f0792cfd0871f62e24a7fe40fa8ae0f563a369f2bd"  # pragma: allowlist secret
+UV_PINNED_VERSION = "0.13.6"
+UV_INSTALLER_SHA256 = "f7a56e7afaec49a3bcbc3ac3cdbe917e7c6ce30e0d815308a12e531aa5ef23b7"  # pragma: allowlist secret
