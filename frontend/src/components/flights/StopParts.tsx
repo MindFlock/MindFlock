@@ -10,7 +10,11 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ApiError } from "../../api/client";
 import { errMsg } from "../../lib/format";
 import { LANE_LABEL, normalizeLane } from "../../lib/autopilot";
-import { ON_FAIL_LABEL, defaultOnFail, fieldOptions, stopsBefore, type FlightStep, type OnFail, type StepKindDef, type StepKindField, type StepRunState, type StopChoice } from "../../lib/flights";
+import { ON_FAIL_LABEL, defaultOnFail, fieldOptions, stopsBefore, type Flight, type FlightPlan, type FlightStep, type OnFail, type StepKindDef, type StepKindField, type StepRunState, type StopChoice } from "../../lib/flights";
+import type { Instance } from "../../api/types";
+import { queryClient } from "../../state/queries";
+import { groundedFlights } from "../../lib/groundedLines";
+import { windowName } from "../../lib/windowName";
 import { stopSummary } from "../../lib/flightDiagram";
 import { describeSteps } from "../../lib/flightsApi";
 import { WHEN_COMBINE, WHEN_GRAMMAR, WHEN_MAX, checkWhen, skippedNote, whenChecker, whenError, type WhenCheck } from "../../lib/whenHelp";
@@ -124,8 +128,41 @@ function cleanLabel(f: StepKindField): string {
   return f.label.replace(/\s*\((minutes|one per line)\)\s*$/i, "");
 }
 
+/** Round 18: a select the UI fills from the board (the Handoff's fields,
+ * docs/flights.md "One chain triggers another"): `"chains"` — the board's
+ * stops-only chains ("flight:<id>") then the saved stops ("plan:<id>");
+ * `"sessions"` — "a new session" ("new") then every session's title. The
+ * kinds' type still says only "stops_before", so it is read as a string. */
+export type BoardDynamic = "chains" | "sessions";
+export const boardDynamic = (f: Pick<StepKindField, "dynamic">): BoardDynamic | "" => {
+  const d = String(f.dynamic || "");
+  return d === "chains" || d === "sessions" ? d : "";
+};
+
+/** A Handoff's "Start which chain" choices: the stops-only chains on the
+ * board (by their name), then the saved stops (each start makes a fresh
+ * copy). */
+export function chainChoices(flights: readonly Flight[] | null | undefined, plans: readonly FlightPlan[] | null | undefined): StopChoice[] {
+  const out: StopChoice[] = [];
+  for (const f of groundedFlights(flights)) out.push({ value: "flight:" + f.id, label: f.plan_name || "Stops", group: "On the board" });
+  for (const p of plans || []) out.push({ value: "plan:" + p.id, label: p.name, group: "Saved stops — a fresh copy each time" });
+  return out;
+}
+
+/** A Handoff's "Run it on" choices: a new session first, then every open
+ * session (a pending one too). */
+export function sessionChoices(rows: readonly Pick<Instance, "title">[] | null | undefined, nameOf: (t: string) => string = (t) => t): StopChoice[] {
+  return [{ value: "new", label: "a new session" }, ...(rows || []).map((r) => ({ value: r.title, label: nameOf(r.title) }))];
+}
+
+/** The board's choices for a `dynamic` select, from what the app has loaded. */
+export function boardChoices(d: BoardDynamic): StopChoice[] {
+  if (d === "chains") return chainChoices(queryClient.getQueryData<Flight[] | null>(["flights"]), queryClient.getQueryData<FlightPlan[] | null>(["flight-plans"]));
+  return sessionChoices(queryClient.getQueryData<Instance[]>(["instances"]), windowName);
+}
+
 /** One field, drawn with the app's controls. `choices`: a `dynamic`
- * select's options, filled from the line (`stopsBefore`). */
+ * select's options, filled from the line (`stopsBefore`) or the board. */
 export function StopField({
   f,
   value,
@@ -143,6 +180,8 @@ export function StopField({
   const label = cleanLabel(f);
   if (f.type === "select" && f.dynamic === "stops_before")
     return <StopsBeforeField label={label} value={String(v ?? "")} choices={choices || stopsBefore([], { id: "" })} readOnly={readOnly} onChange={onChange} />;
+  const board = f.type === "select" ? boardDynamic(f) : "";
+  if (board) return <BoardChoiceField label={label} kind={board} value={String(v ?? "")} choices={choices || boardChoices(board)} readOnly={readOnly} onChange={onChange} />;
   if (f.type === "bool")
     return (
       <div className="fl-fld">
@@ -228,6 +267,49 @@ export function StopsBeforeField({
               options={r.items.map((c) => ({ value: c.value, label: c.label, title: c.value ? undefined : "Where the line (or this group) starts" }))}
               onChange={pick}
             />
+          </div>
+        ))}
+      </div>
+    </FlField>
+  );
+}
+
+/** A `dynamic: "chains" | "sessions"` select (round 18's Handoff): a chip per
+ * choice, grouped as `StopsBeforeField` groups — a value no longer on the
+ * board shows as its own chip so it stays visible until changed. */
+export function BoardChoiceField({
+  label,
+  kind,
+  value,
+  choices,
+  onChange,
+  readOnly,
+}: {
+  label: string;
+  kind: BoardDynamic;
+  value: string;
+  choices: readonly StopChoice[];
+  onChange(v: string): void;
+  readOnly?: boolean;
+}) {
+  const runs: Array<{ group: string; items: StopChoice[] }> = [];
+  for (const c of choices) {
+    const g = c.group || "";
+    const last = runs[runs.length - 1];
+    if (last && last.group === g) last.items.push(c);
+    else runs.push({ group: g, items: [c] });
+  }
+  if (value && !choices.some((c) => c.value === value)) runs.push({ group: "", items: [{ value, label: kind === "chains" ? "a chain no longer on the board" : value }] });
+  const pick = (x: string) => !readOnly && onChange(x);
+  const hint = kind === "chains" ? "A chain on the board takes off (it leaves the board); a saved stop starts a fresh copy each time." : "Where the chain runs: a new session forks from this one.";
+  return (
+    <FlField label={label} wide hint={hint}>
+      <div className="fl-stops-before fl-board-choice" data-dynamic={kind}>
+        {!choices.length && <p className="fl-note muted">{kind === "chains" ? "No stops-only chain on the board yet — drop some stops on empty sky first." : "No session yet."}</p>}
+        {runs.map((r, i) => (
+          <div key={i} className={"fl-stops-before-run" + (r.group ? " fl-stops-before-group" : "")}>
+            {r.group && <span className="fl-stops-before-name">{r.group}</span>}
+            <ChipRow label={r.group ? label + " — " + r.group : label} value={value} options={r.items.map((c) => ({ value: c.value, label: c.label }))} onChange={pick} />
           </div>
         ))}
       </div>

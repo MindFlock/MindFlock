@@ -228,6 +228,9 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   const family = opts.family !== false;
   const [selected, setSelected] = useState<string | null>(null);
   const [paletteAt, setPaletteAt] = useState<number | null>(null);
+  // Round 18: the palette opened from a wire dropped on empty sky — the node
+  // it hangs off (its panel opens beside it) and the spot the new stop takes.
+  const [paletteHang, setPaletteHang] = useState<{ node: string | null; pos: { x: number; y: number } | null } | null>(null);
   // The open dialog (a node id), and the group's to go back to from a
   // sub-step's.
   const [dialog, setDialog] = useState<{ id: string; back?: string } | null>(null);
@@ -275,9 +278,12 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   }); // eslint-disable-line react-hooks/exhaustive-deps
 
   const tackOne = async (def: StepKindDef, at: number | null, openIt = false) => {
-    const step = newStep(def, flight ? flight.steps.map((s) => s.id) : []);
+    const fresh = newStep(def, flight ? flight.steps.map((s) => s.id) : []);
+    // Dropped at a spot on the sky: it is drawn there (round 18).
+    const step = paletteHang?.pos ? { ...fresh, pos: paletteHang.pos } : fresh;
     setBusy(true);
     setPaletteAt(null);
+    setPaletteHang(null);
     try {
       if (flight) {
         const where = at !== null && at < end ? at : undefined;
@@ -444,8 +450,19 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   /** The trailing +'s palette, open or shut (the line's ⋯ "Fly a flyway…"). */
   const togglePalette = (open?: boolean) => {
     setDialog(null);
+    setPaletteHang(null);
     const shown = paletteAt !== null && paletteAt >= end;
     setPaletteAt(open ?? !shown ? end : null);
+  };
+
+  /** Round 18: the palette for a stop right after `after` (null: right after
+   * the session — the first slot that can change), the new stop drawn at
+   * `pos` (chain-local) when given. A wire dropped on empty sky. */
+  const paletteAfter = (after: DiagramNode | null, pos?: { x: number; y: number } | null) => {
+    setDialog(null);
+    const slot = after ? loopSlotAfter(after) : line.insertFrom;
+    setPaletteAt(slot === undefined ? end : Math.min(slot, end));
+    setPaletteHang({ node: after ? after.id : null, pos: pos ? { x: Math.round(pos.x), y: Math.round(pos.y) } : null });
   };
 
   const toggleGroup = (gid: string) =>
@@ -553,7 +570,10 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
         kinds={kinds}
         title={paletteAt >= end ? "Tack on a stop" : "Add a stop before “" + (flight?.steps[paletteAt]?.title || "") + "”"}
         onPick={(k) => void tackOne(k, paletteAt, true)}
-        onClose={() => setPaletteAt(null)}
+        onClose={() => {
+          setPaletteAt(null);
+          setPaletteHang(null);
+        }}
         extra={ordered.length > 0 ? savedStops(paletteAt >= end ? null : paletteAt) : undefined}
       />
     ) : null;
@@ -702,6 +722,15 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     /** Something is open under the line (the palette or a stop's dialog). */
     editing: palette !== null || inspector !== null,
     canvas: shown.canvas,
+    /** Round 18: the line in the FLIGHT's indexes and its handlers (the Sky's
+     * chain speaks them: lib/skyGraph `chainGraph` / `wireIntent`). */
+    graphDiagram: line,
+    graphCanvas: raw,
+    paletteAfter,
+    /** Where the open palette / dialog hangs: a node id, "" = the end of the
+     * line, null = nothing open; `pos` a spot asked for (chain-local). */
+    anchor: inspector !== null && dialog ? dialog.id : palette !== null ? (paletteHang?.node ?? "") : null,
+    anchorPos: palette !== null ? paletteHang?.pos ?? null : null,
     palette,
     /** The open stop's dialog (StopDialog), or null. */
     inspector,

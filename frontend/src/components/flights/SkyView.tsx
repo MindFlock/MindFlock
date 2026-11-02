@@ -101,7 +101,17 @@
  * pointer; F with a selection is FOCUS MODE (`.sky-focus` on the plane,
  * `data-dim` on the rest — a click or Esc lifts it); `?` opens the shortcuts
  * sheet; the minimap and the off-screen hints sit bottom-right, the zoom
- * readout is a menu (Minimap, OffscreenHints, ZoomMenu, SkyShortcuts). */
+ * readout is a menu (Minimap, OffscreenHints, ZoomMenu, SkyShortcuts).
+ *
+ * Round 18 (docs/flights.md "Round 18", docs/flights-r18/sky.md): every line
+ * is a CHAIN of free-floating tiles (SkyLine / GroundedLine over SkyChain).
+ * Each chain hands this host its graph (`useChainRegistry`); a port pressed
+ * starts the host's wire drag (useSkyWiring: the rubber band, the targets lit
+ * on every chain, Esc cancels), and the drop runs what lib/skyGraph
+ * `wireIntent` says (`runWireIntent`: move · loop · merge · attach · handoff
+ * · palette at the drop · split off). The wires BETWEEN chains — a Handoff
+ * stop's dashed wire to the chain it starts — are drawn on the plane
+ * (SkyWires); a stops-only chain something hands off to wears a trigger head. */
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useDevices, useFlightKinds, useFlightPlans, useFlights, useInstances, usePeerLinks } from "../../state/queries";
@@ -129,14 +139,15 @@ import { effectiveViewMode, useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
 import { overlayOpen } from "../../lib/keymap";
 import { layoutDiagram, sessionDiagram, type Diagram } from "../../lib/flightDiagram";
-import { STOP_MIME, isLive, newStep, type Flight, type FlightPlan, type FlightRow, type FlightStep } from "../../lib/flights";
+import { STOP_MIME, isLive, newStep, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef } from "../../lib/flights";
 import { attachGrounded, deleteFlight, startFlightOn, startGrounded, tackOn, tackOnNew, tackOnPlan, tackOnSteps } from "../../lib/flightsApi";
+import { NODE_H, PITCH_X, type WireEnd, type WireIntent } from "../../lib/skyGraph";
 import type { CatalogDrop } from "../../lib/stopCatalog";
 import { toast } from "../../lib/toast";
 import { popRedo, popUndo, pushUndo, undoAction } from "../../lib/skyUndo";
 import { snapBox, snapThreshold, type SnapGuide } from "../../lib/skySnap";
 import { deriveSessionState } from "../../lib/sessionState";
-import { defaultStepFor, groundedDiagram, groundedFlights, groundedIdOf, groundedKey, isGroundedKey } from "../../lib/groundedLines";
+import { defaultStepFor, groundedDiagram, groundedFlights, groundedIdOf, groundedKey, handoffLinks, isGroundedKey, triggerHeadFor } from "../../lib/groundedLines";
 import { windowName } from "../../lib/windowName";
 import { reducedMotion, registerSkyHost, type Box, type SkyHost } from "../../lib/viewMode";
 import {
@@ -228,6 +239,8 @@ import { SkyFlock, WeatherWord } from "./SkyFlock";
 import { SkyLine, type LineDelete } from "./SkyLine";
 import { SkySelectionBar, type SelectionAsk } from "./SkySelection";
 import { GroundedLine, groundedName } from "./GroundedLine";
+import { SkyWires, handoffWires } from "./SkyWires";
+import { runWireIntent, useChainRegistry, useSkyWiring, type PlacedChain } from "./useSkyWiring";
 import { StopShelf } from "./StopShelf";
 import { PALETTE_KEY, PALETTE_MODE_KEY, SkyPalette, type PaletteMode } from "./SkyPalette";
 import { SkyGuide } from "./SkyGuide";
@@ -340,6 +353,16 @@ export function lineSize(d: Diagram, flight: Flight | null): { w: number; h: num
   return { w: Math.max(LINE_MIN_W, lay.width + 12 + LINE_PAD * 2 + 4), h: lay.height + 32 + BAR_H + LINE_PAD * 2 };
 }
 
+/** Round 18: a chain's label above its tiles (plane px, with its gap). */
+export const CHAIN_LABEL_H = 34;
+
+/** Round 18: the size a chain is drawn at before it has measured: its tiles
+ * left→right at the pitch (the head one more), its label above. */
+export function chainSize(d: Diagram, head: boolean): { w: number; h: number } {
+  const n = d.nodes.filter((x) => x.row === "main" && x.kind !== "session" && x.kind !== "add" && x.kind !== "parent").length + (head ? 1 : 0);
+  return { w: Math.max(LINE_MIN_W, Math.max(1, n) * PITCH_X + 60), h: NODE_H + CHAIN_LABEL_H + 24 };
+}
+
 /** A closed session's line (or removed stops) on its way out: the last
  * picture of it, fading. */
 function GhostLine({ name, pos, diagram }: { name: string; pos: Pos; diagram: Diagram }) {
@@ -361,10 +384,6 @@ interface Ghost {
   diagram: Diagram;
 }
 
-/** A grounded line's chrome beyond a session line's: the dashed head box
- * where its session will sit. */
-const GROUNDED_HEAD_W = 182;
-
 /** Where the new-session block sits, and what it is for: `attach` = the
  * grounded flight it makes a session for; `flying` = the guessed title of
  * the session it is making (the block hides while its line shows). */
@@ -372,6 +391,10 @@ interface NewBlockAt extends Pos {
   attach?: { id: string; name: string };
   flying?: string;
 }
+
+/** The empty lists a query stands for before it has loaded (one object each). */
+const NO_KINDS: StepKindDef[] = [];
+const NO_PLANS: FlightPlan[] = [];
 
 /** The camera across a trip to the grid and back: where it was and which
  * view it was fitted for (the same view back: no refit). */
@@ -382,9 +405,10 @@ export function SkyView() {
   const rows = useMemo(() => instQ.data || [], [instQ.data]);
   const flightsQ = useFlights();
   const flights = flightsQ.data;
-  const kinds = useFlightKinds().data || [];
+  // Stable while loading: a new [] each render would remake every chain.
+  const kinds = useFlightKinds().data || NO_KINDS;
   const plansQ = useFlightPlans();
-  const plans = plansQ.data || [];
+  const plans = plansQ.data || NO_PLANS;
   const focused = useUi((s) => s.focused);
   const mode = useUi((s) => s.skyMode);
   const setSkyMode = useUi((s) => s.setSkyMode);
@@ -539,17 +563,14 @@ export function SkyView() {
   const lines = useMemo(
     () => [
       ...titles.map((t) => {
-        const fl = rows.find((r) => r.title === t)?.flight as FlightRow | null | undefined;
-        const full = fl && isLive(fl) ? flights?.find((f) => f.id === fl.id) || null : null;
         // Its family too: a line draws its workers inside it in every view.
         const diagram = sessionDiagram(rows, t, { flights, kinds, family: true });
-        return { id: t, name: windowName(t), flight: null as Flight | null, diagram, ...(measured[t] || estimateLine(lineSize(diagram, full), layout[t])) };
+        return { id: t, name: windowName(t), flight: null as Flight | null, diagram, ...(measured[t] || estimateLine(chainSize(diagram, true), layout[t])) };
       }),
       ...grounded.map((f) => {
         const id = groundedKey(f.id);
         const diagram = groundedDiagram(f, kinds);
-        const base = lineSize(diagram, null);
-        return { id, name: groundedName(f), flight: f, diagram, ...(measured[id] || estimateLine({ w: base.w + GROUNDED_HEAD_W, h: base.h }, layout[id])) };
+        return { id, name: groundedName(f), flight: f, diagram, ...(measured[id] || estimateLine(chainSize(diagram, false), layout[id])) };
       }),
     ],
     [titles, grounded, rows, flights, kinds, mode, measured, layout]
@@ -1164,8 +1185,7 @@ export function SkyView() {
   const spotRef = useRef<(f: Flight, near: "shelf" | "palette") => Pos>(() => ({ x: 0, y: 0 }));
   spotRef.current = (f, near) => {
     const key = groundedKey(f.id);
-    const base = lineSize(groundedDiagram(f, kinds), null);
-    const size = measured[key] || { w: base.w + GROUNDED_HEAD_W, h: base.h };
+    const size = measured[key] || chainSize(groundedDiagram(f, kinds), false);
     const c = camRef.current;
     const pad = 16 / c.z;
     const view: Rect = { x: -c.x / c.z + pad, y: -c.y / c.z + pad, w: vp.w / c.z - 2 * pad, h: vp.h / c.z - 2 * pad };
@@ -1244,18 +1264,23 @@ export function SkyView() {
    * session — `attachGrounded` when it has no flight, else tacked on as one
    * group named after the grounded line, and the grounded flight goes. Undo
    * makes the grounded line again from the same stops, where it was. */
-  const mergeGrounded = async (key: string, title: string, was: Pos | undefined) => {
+  const mergeGrounded = async (key: string, title: string, was: Pos | undefined, at?: number) => {
     const f = flights?.find((x) => x.id === groundedIdOf(key));
     if (!f) return;
     const steps = f.steps;
     const name = f.plan_name || "";
-    const live = liveFlightOf(title);
+    // Round 18: onto another stops-only chain too (a wire from its tile).
+    const into = isGroundedKey(title) ? flights?.find((x) => x.id === groundedIdOf(title)) || null : null;
+    if (isGroundedKey(title) && !into) return;
+    const live = into || liveFlightOf(title);
+    // Their spots were their own chain's: they are placed afresh here.
+    const bare = steps.map(({ pos: _pos, ...st }) => st as FlightStep);
     let ok = false;
     if (!live) ok = !!(await attachGrounded(f.id, { title }));
-    else if (await tackOnSteps(live.id, steps, undefined, name || undefined)) ok = await deleteFlight(f.id);
+    else if (await tackOnSteps(live.id, bare, at !== undefined && at < live.steps.length ? at : undefined, name || undefined)) ok = await deleteFlight(f.id);
     if (!ok) return;
     const n = steps.length;
-    const msg = "Moved " + n + (n === 1 ? " stop" : " stops") + " onto " + windowName(title);
+    const msg = "Moved " + n + (n === 1 ? " stop" : " stops") + " onto " + (into ? groundedName(into) : windowName(title));
     // The grounded line back where it was (the stops stay on the session too:
     // Undo makes the line again, it does not take them off); Redo takes the
     // remade line off the board again.
@@ -1386,49 +1411,47 @@ export function SkyView() {
   // lands on it, so a box is selected and a double-click opens it, as ever.
   // Shift+drag draws the marquee.
   const press = useRef<{ id: number; sx: number; sy: number; el: Element | null } | null>(null);
-  // --- Connect: a session line's + dragged onto a stops-only line -------------
-  // The same as dragging the stops-only line onto the session's (`mergeGrounded`):
-  // its stops fly on that session. A wire follows the pointer from the +; the
-  // stops-only line under it lights. A press that never moves stays the +'s
-  // own click (the palette).
-  const [connect, setConnect] = useState<{ x1: number; y1: number; x2: number; y2: number; over: boolean } | null>(null);
-  const startConnect = (e: ReactPointerEvent<HTMLDivElement>, from: string, plus: Element): boolean => {
-    const targets = lines.filter((l) => l.flight).map((l) => ({ id: l.id, rect: { ...posOf(l.id), w: l.w, h: l.h } }));
-    if (!targets.length) return false;
-    const r = plus.getBoundingClientRect();
-    const x1 = r.left + r.width / 2;
-    const y1 = r.top + r.height / 2;
-    const g = { pid: e.pointerId, sx: e.clientX, sy: e.clientY, moved: false, over: "" };
-    const move = (ev: PointerEvent) => {
-      if (ev.pointerId !== g.pid) return;
-      if (!g.moved && Math.hypot(ev.clientX - g.sx, ev.clientY - g.sy) < 5) return;
-      g.moved = true;
-      g.over = hitAt(planeAt(ev.clientX, ev.clientY), targets);
-      setSessionOver((cur) => (cur === g.over ? cur : g.over));
-      setConnect({ x1, y1, x2: ev.clientX, y2: ev.clientY, over: !!g.over });
-    };
-    const done = (ev: PointerEvent) => {
-      if (ev.pointerId !== g.pid) return;
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", done);
-      window.removeEventListener("pointercancel", done);
-      setConnect(null);
-      setSessionOver("");
-      if (!g.moved) return;
-      // The click that follows the release is the drag's, not the +'s.
-      const eat = (c: Event) => {
-        c.stopPropagation();
-        c.preventDefault();
-      };
-      window.addEventListener("click", eat, { capture: true, once: true });
-      setTimeout(() => window.removeEventListener("click", eat, { capture: true }), 0);
-      if (ev.type === "pointerup" && g.over) void mergeGrounded(g.over, from, posOf(g.over));
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", done);
-    window.addEventListener("pointercancel", done);
-    return true;
+  // --- Round 18: wires between ports (docs/flights.md "Round 18" → "Wiring") ---
+  // Every chain hands the host its graph (`registerChain`); a port pressed
+  // starts the host's wire drag (useSkyWiring), which can reach any chain;
+  // the drop's `wireIntent` runs here (`runIntent`).
+  const chainReg = useChainRegistry();
+  const placedChains = (): Map<string, PlacedChain> => {
+    const m = new Map<string, PlacedChain>();
+    const shown = new Set(lines.map((l) => l.id));
+    for (const [key, e] of chainReg.entries.current) if (shown.has(key)) m.set(key, { ...e, key, origin: posOf(key) });
+    return m;
   };
+  /** The flight a chain is: a stops-only one's, or a session's live one. */
+  const flightOfKey = (key: string): Flight | null => (isGroundedKey(key) ? flights?.find((f) => f.id === groundedIdOf(key)) || null : liveFlightOf(key));
+  const runIntent = (intent: WireIntent, ctx: { src: WireEnd; at: Pos }) =>
+    runWireIntent(intent, ctx, {
+      flightOf: flightOfKey,
+      flights: flights || [],
+      kinds,
+      chain: (key) => placedChains().get(key) || null,
+      merge: (from, into, at) => mergeGrounded(from, into, posOf(from), at),
+      pinAt: (key, at) => alive.current && pinAt(key, at),
+      labelH: CHAIN_LABEL_H,
+    });
+  const wiring = useSkyWiring({
+    chains: () => placedChains(),
+    planeAt: (x, y) => planeAt(x, y),
+    ground: (el) => ground(el),
+    onIntent: (i, ctx) => void runIntent(i, ctx),
+  });
+  /** A chain's port pressed: the wire drag, in drag mode or click mode alike. */
+  const portDownFor = (key: string) => (node: Parameters<typeof wiring.startWire>[1], side: "in" | "out", e: ReactPointerEvent<HTMLElement>) => wiring.startWire(key, node, side, e);
+  // The handoff wires between chains (dashed, the source session's colour):
+  // redrawn when a chain changes or moves.
+  const handoffs = useMemo(() => handoffLinks(flights), [flights]);
+  const xwires = useMemo(
+    () => handoffWires(handoffs, placedChains().values()),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the registry is a ref; its version moves with it
+    [handoffs, chainReg.version, place, drag, lines]
+  );
+  // A stops-only chain another chain hands off to starts with a trigger tile.
+  const triggerHeads = useMemo(() => new Map(grounded.map((f) => [f.id, triggerHeadFor(f, flights, windowName)])), [grounded, flights]);
 
   const onDownCapture = (e: ReactPointerEvent<HTMLDivElement>) => {
     // Round 17: any press on the sky lifts the focus mode.
@@ -1437,13 +1460,8 @@ export function SkyView() {
     const el = e.target instanceof Element ? e.target : null;
     // A loop being drawn or re-aimed is the line's own (FlywayCanvas).
     if (el?.closest(".fl-loop-handle, .fl-loop-pill[role='button']")) return;
-    // A session line's + pressed: it may be dragged onto a stops-only line.
-    const plus = el?.closest(".fl-box-add");
-    const slot = plus?.closest("[data-slot]")?.getAttribute("data-slot") || "";
-    if (plus && slot && !isGroundedKey(slot) && startConnect(e, slot, plus)) {
-      e.stopPropagation();
-      return;
-    }
+    // Round 18: a chain's port (or its +) is a wire, whatever the tool.
+    if (el?.closest(".sky-chain [data-port]")) return;
     const t = space.current ? "click" : tool;
     if (t === "drag") return;
     const g = gestureFor(t, skyTargetOf(e.target as Element, ground), { shift: e.shiftKey, space: space.current, touch: e.pointerType === "touch" });
@@ -1530,7 +1548,8 @@ export function SkyView() {
         if (!el.closest(".skl-card")) heads.push(onPlane(el));
       });
       out.lines.push({ id: l.id, rect: { ...posOf(l.id), w: l.w, h: l.h }, heads });
-      slot?.querySelectorAll("[data-node]").forEach((el) => {
+      // The tiles themselves (round 18: `.sky-node`), not their ports.
+      slot?.querySelectorAll(":is(.sky-node, .fl-box)[data-node]").forEach((el) => {
         const node = el.getAttribute("data-node") || "";
         if (isStopNode(node) && !el.closest(".skl-card")) out.stops.push({ line: l.id, node, rect: onPlane(el) });
       });
@@ -1962,7 +1981,7 @@ export function SkyView() {
     vpRef.current?.querySelectorAll(".sky-line-slot[data-slot]").forEach((el) => {
       if (el.getAttribute("data-slot") === id) slot = el;
     });
-    const box = [...((slot as Element | null)?.querySelectorAll(".fl-box.selected[data-node]") || [])].find((b) => !b.closest(".skl-card"));
+    const box = [...((slot as Element | null)?.querySelectorAll(".sky-node.is-selected[data-node], .fl-box.selected[data-node]") || [])].find((b) => !b.closest(".skl-card"));
     return box ? { line: id, node: box.getAttribute("data-node") || "" } : null;
   };
   const removeKeys = useRef<(e: KeyboardEvent) => void>(() => {});
@@ -2273,6 +2292,11 @@ export function SkyView() {
           selected={at ? sel.lines.has(id) : undefined}
           highlighted={at ? sel.stops.get(id) : undefined}
           onShiftSelect={at ? (n) => setSel((s) => toggleStop(s, id, n.id)) : undefined}
+          head={triggerHeads.get(f.id) || null}
+          registerChain={at ? chainReg.registerFor(id) : undefined}
+          onPortDown={at ? portDownFor(id) : undefined}
+          targets={wiring.targetsOf(id)}
+          over={wiring.overOf(id)}
         />
       );
     return lineForSession(id, at);
@@ -2297,6 +2321,10 @@ export function SkyView() {
       selected={at ? sel.lines.has(id) : undefined}
       highlighted={at ? sel.stops.get(id) : undefined}
       onShiftSelect={at ? (n) => setSel((s) => toggleStop(s, id, n.id)) : undefined}
+      registerChain={at ? chainReg.registerFor(id) : undefined}
+      onPortDown={at ? portDownFor(id) : undefined}
+      targets={wiring.targetsOf(id)}
+      over={wiring.overOf(id)}
     />
   );
 
@@ -2475,12 +2503,6 @@ export function SkyView() {
       {toolbar}
       <SkyGuide />
       {pick}
-      {connect && (
-        <svg className={"sky-connect" + (connect.over ? " is-over" : "")} aria-hidden="true" focusable="false">
-          <path d={`M ${connect.x1} ${connect.y1} C ${connect.x1 + 60} ${connect.y1}, ${connect.x2 - 60} ${connect.y2}, ${connect.x2} ${connect.y2}`} />
-          <circle cx={connect.x2} cy={connect.y2} r={5} />
-        </svg>
-      )}
       <div className="sky-main">
         <div className="sky-stage">
           <div
@@ -2515,6 +2537,7 @@ export function SkyView() {
             <div
               className={"sky-plane" + (focusMode ? " sky-focus" : "")}
               data-dragging={drag ? "" : undefined}
+              data-wiring={wiring.dragging ? "" : undefined}
               data-tidying={tidying ? "" : undefined}
               data-snapping={guides.length ? "" : undefined}
               style={{ transform: `translate(${cam.x}px, ${cam.y}px) scale(${cam.z})` }}
@@ -2544,6 +2567,8 @@ export function SkyView() {
                   </div>
                 );
               })}
+              {/* Round 18: the wires between chains and the one being drawn. */}
+              <SkyWires band={wiring.band} wires={xwires} />
               {ghosts.map((g) => (
                 <GhostLine key={"ghost:" + g.id} {...g} />
               ))}

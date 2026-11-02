@@ -35,6 +35,9 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
   const { kinds, plans } = src;
   const [selected, setSelected] = useState<string | null>(null);
   const [paletteAt, setPaletteAt] = useState<number | null>(null);
+  // Round 18: the palette from a wire dropped on empty sky — the node it
+  // hangs off and the spot the new stop takes (chain-local).
+  const [paletteHang, setPaletteHang] = useState<{ node: string | null; pos: { x: number; y: number } | null } | null>(null);
   // The open dialog (a node id), and the group's to go back to from a sub-step.
   const [dialog, setDialog] = useState<{ id: string; back?: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -72,10 +75,13 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
   const where = (at: number | null) => (at !== null && at < end ? at : undefined);
 
   const tackOne = async (def: StepKindDef, at: number | null) => {
+    const pos = paletteHang?.pos;
     setBusy(true);
     setPaletteAt(null);
+    setPaletteHang(null);
     try {
-      const step = newStep(def, flight.steps.map((s) => s.id));
+      const fresh = newStep(def, flight.steps.map((s) => s.id));
+      const step = pos ? { ...fresh, pos } : fresh;
       if (await tackOn(flight.id, step, where(at))) setSelectIndex(where(at) ?? end);
     } finally {
       setBusy(false);
@@ -147,8 +153,19 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
   const togglePalette = (open?: boolean) => {
     setSelected(null);
     setDialog(null);
+    setPaletteHang(null);
     const shown = paletteAt !== null && paletteAt >= end;
     setPaletteAt(open ?? !shown ? end : null);
+  };
+
+  /** Round 18: the palette for a stop right after `after` (null: the start),
+   * drawn at `pos` (chain-local) when given — a wire dropped on empty sky. */
+  const paletteAfter = (after: DiagramNode | null, pos?: { x: number; y: number } | null) => {
+    setSelected(null);
+    setDialog(null);
+    const slot = after ? loopSlotAfter(after) : 0;
+    setPaletteAt(slot === undefined ? end : Math.min(slot, end));
+    setPaletteHang({ node: after ? after.id : null, pos: pos ? { x: Math.round(pos.x), y: Math.round(pos.y) } : null });
   };
 
   const ordered = orderedPlans(plans);
@@ -229,7 +246,10 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
         kinds={kinds}
         title={paletteAt >= end ? "Add a stop" : "Add a stop before “" + (flight.steps[paletteAt]?.title || "") + "”"}
         onPick={(k) => void tackOne(k, paletteAt)}
-        onClose={() => setPaletteAt(null)}
+        onClose={() => {
+          setPaletteAt(null);
+          setPaletteHang(null);
+        }}
         extra={ordered.length > 0 ? savedChips : undefined}
       />
     ) : null;
@@ -321,6 +341,15 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
     toggleGroup,
     editing: palette !== null || inspector !== null,
     canvas: shown.canvas,
+    /** Round 18: the line in the flight's indexes and its handlers (the
+     * Sky's chain speaks them). */
+    graphDiagram: diagram,
+    graphCanvas: raw,
+    paletteAfter,
+    /** Where the open palette / dialog hangs (a node id, "" = the end, null =
+     * nothing open) and a spot asked for (chain-local). */
+    anchor: inspector !== null && dialog ? dialog.id : palette !== null ? (paletteHang?.node ?? "") : null,
+    anchorPos: palette !== null ? paletteHang?.pos ?? null : null,
     palette,
     /** The open stop's dialog (StopDialog), or null. */
     inspector,

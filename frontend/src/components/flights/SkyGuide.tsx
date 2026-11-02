@@ -18,11 +18,11 @@ import "./SkyGuide.css";
 
 export const SKY_GUIDE_SECTIONS = [
   { id: "what", title: "What the sky is" },
-  { id: "lines", title: "Lines and boxes" },
+  { id: "lines", title: "Chains, tiles and wires" },
   { id: "stops", title: "Stops and saved stops" },
   { id: "bird", title: "The bird" },
   { id: "halt", title: "Halt points and Remove" },
-  { id: "grounded", title: "Grounded stops" },
+  { id: "grounded", title: "Stops on their own, and handoffs" },
   { id: "select", title: "Selection" },
   { id: "keys", title: "Tools and the keyboard" },
   { id: "intake", title: "The intake lane" },
@@ -119,7 +119,7 @@ const SKETCHES: Record<SkyGuideSection, ReactNode> = {
     </Sketch>
   ),
   lines: (
-    <Sketch label="A line: its bar on top, the session box, then its stops, and a + to tack on">
+    <Sketch label="A chain: its label on top, the session tile, then its stop tiles joined by wires, and a + to add one">
       <Line x={12} y={30} n={4} />
       <text className="sg-text" x={12} y={22}>bar · drag me · ⋯</text>
       <text className="sg-text" x={12} y={92}>session</text>
@@ -160,10 +160,10 @@ const SKETCHES: Record<SkyGuideSection, ReactNode> = {
     </Sketch>
   ),
   grounded: (
-    <Sketch label="A grounded line: a dashed No session yet head, its stops, and the Session chip dropped on it">
+    <Sketch label="A chain with no session: an empty socket on its first tile, its stops, and the Session chip dropped on it">
       <Bar x={20} y={30} w={206} />
       <rect className="sg-box sg-dash" x={20} y={44} width={64} height={26} rx={5} />
-      <text className="sg-text" x={26} y={61}>no session</text>
+      <text className="sg-text" x={26} y={61}>socket</text>
       <Box x={94} y={44} />
       <Box x={148} y={44} />
       <rect className="sg-chip" x={60} y={84} width={70} height={20} rx={10} />
@@ -250,9 +250,9 @@ const WORDS: Record<SkyGuideSection, ReactNode> = {
   ),
   lines: (
     <>
-      <p>A line is one session. Its <b>bar</b> carries the name and a <b>⋯</b> menu: open the session here, open it in the grid, show only this line, tack on a stop, close the session.</p>
-      <p>Drag a line by its bar to put it anywhere — it stays there. <b>Tidy</b> (<kbd>T</kbd>) puts every line back in its place; the ⋯'s <b>Tidy this line</b> does one.</p>
-      <p>The boxes run left to right: the session's own box (it opens the real terminal in a card on the line), its workers, then its flight's stops in order. The <b>+</b> at the end tacks on a stop, the + between two boxes puts one in there, and a box's corner handle resizes every box on the line.</p>
+      <p>Each session draws as a <b>chain</b>: its <b>session tile</b> first (its name, its state and the bird, in the session's own colour — a click opens the real terminal in a card under it, a double-click on the card's top folds it back), then its stops as free-floating <b>tiles</b> joined by <b>wires</b>. The small label above a chain carries its name and a <b>⋯</b> menu: open the session, open it in the grid, show only this chain, add a stop, close the session.</p>
+      <p>Drag a chain by its label (or its session tile) to put it anywhere — it stays there. Drag a single tile to move just that stop: order is the wires, never where a tile sits. <b>Tidy</b> (<kbd>T</kbd>) puts every chain back in its place; the ⋯'s <b>Tidy this line</b> does one.</p>
+      <p>Every tile has an <b>in port</b> (the square on its left) and an <b>out port</b> (the circle on its right). Drag from an out port: onto a later stop of the same chain to move that stop right after this one, onto an earlier one (or itself) to loop back to it, onto another chain to give it these stops, or onto empty sky to pick a new stop there. The <b>+</b> after the last tile does the same — or just click it. Grab a wire by a tile's in port and pull it onto empty sky to split that stop and the ones after it off into a chain of their own.</p>
     </>
   ),
   stops: (
@@ -277,8 +277,9 @@ const WORDS: Record<SkyGuideSection, ReactNode> = {
   ),
   grounded: (
     <>
-      <p>Drop a block or a saved stop on empty sky and it waits there as a <b>grounded</b> line: a dashed <i>No session yet</i> head, then its stops. Nothing runs until it has a session.</p>
-      <p>Give it one by dropping the shelf's <b>Session</b> chip on it (a new session is made and the stops take off), or with its ⋯ → <b>Fly on a session…</b> and a line that has no flight. The same ⋯ offers <b>Save to the shelf</b> and <b>Remove</b>.</p>
+      <p>Drop a block or a saved stop on empty sky and it waits there as a chain of its own, with <b>no session</b>: no head tile, just an empty socket on its first tile — <i>wire a session's out port here to run it</i>. Nothing runs until it has a session.</p>
+      <p>Give it one by wiring a session tile's out port (or its +) to that socket, by dropping the shelf's <b>Session</b> chip on it (a new session is made and the stops take off), or with its ⋯ → <b>Fly on a session…</b>. The same ⋯ offers <b>Save to the shelf</b> and <b>Remove</b>.</p>
+      <p>One chain can <b>start another</b>: hold <kbd>Shift</kbd> while you drop a wire from a stop onto a stops-only chain, and a <b>Start a chain</b> stop goes in there. The other chain then shows a trigger tile — <i>When &lt;chain&gt; reaches &lt;stop&gt;</i> — and a dashed wire in the first session's colour; when the flight gets there, that chain takes off on a new session (or the one its dialog names), and the wire follows it there.</p>
     </>
   ),
   select: (

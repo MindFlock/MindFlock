@@ -198,7 +198,7 @@ describe("time under the line", () => {
     expect(sheet).toMatch(/\.skl-ruler-bar\s*\{[^}]*height:\s*4px/);
     expect(sheet).toMatch(/\.skl\[data-lod="far"\] \.skl-ruler\s*\{\s*display:\s*none/);
     const line = code("components/flights/SkyLine.tsx");
-    expect(line).toContain('{lod !== "far" && <LineRuler segments={segments} />}');
+    expect(line).toContain('{row && lod !== "far" && <LineRuler segments={segments} />}');
     expect(line).toContain("segmentsFor(line.flight)");
   });
 });

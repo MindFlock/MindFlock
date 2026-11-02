@@ -216,7 +216,7 @@ const lineAt = (zoom: number) => {
   );
 };
 
-const boxStyle = (html: string) => /<div[^>]*class="fl-box fl-box-session[^"]*"[^>]*style="([^"]*)"/.exec(html)?.[1];
+const chainStyle = (html: string) => /<div[^>]*class="sky-chain[^"]*"[^>]*style="([^"]*)"/.exec(html)?.[1];
 
 describe("a line at three zooms", () => {
   it("wears data-lod and --sky-z on its root", () => {
@@ -230,10 +230,10 @@ describe("a line at three zooms", () => {
     expect(near).toContain("--sky-z:2.5;--sky-lines:5");
   });
 
-  it("never changes a box's geometry with the zoom", () => {
-    const at = [0.4, 1, 2.5].map((z) => boxStyle(lineAt(z)));
+  it("never changes a chain's geometry with the zoom (round 18: the graph's, plane px)", () => {
+    const at = [0.4, 1, 2.5].map((z) => chainStyle(lineAt(z)));
     expect(at[0]).toBeTruthy();
-    expect(at[0]).toContain("width:236px");
+    expect(at[0]).toMatch(/width:\d+px/);
     expect(at[1]).toBe(at[0]);
     expect(at[2]).toBe(at[0]);
   });
@@ -241,9 +241,9 @@ describe("a line at three zooms", () => {
   it("hands the level to the canvas and carries what near reveals", () => {
     const line = code("components/flights/SkyLine.tsx");
     expect(line).toContain("const lod = lodFor(p.zoom || 1);");
-    expect(line).toMatch(/\{\.\.\.\(\{ lod \}|lod=\{lod\}/);
-    // Near: the session's task under its name in the bar.
-    expect(lineAt(2.5)).toContain('<span class="skl-task">Do me</span>');
+    expect(line).toContain("data-lod={lod}");
+    // The session tile says what the session is on (its sub), at every level.
+    expect(line).toContain('firstLine(row.task_headline || row.task || "")');
   });
 
   it("counter-scales the type: legible far, informative near", () => {

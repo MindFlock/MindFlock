@@ -250,6 +250,8 @@ export function wireStep(step: FlightStep): Omit<FlightStep, "id"> {
   const out: Omit<FlightStep, "id"> = { kind: step.kind, title: step.title, config: step.config, on_fail: step.on_fail };
   if (step.halt) out.halt = true;
   if (step.when) out.when = step.when;
+  // Round 18: where the Sky draws it (a stop dropped at a spot keeps it).
+  if (step.pos) out.pos = step.pos;
   return out;
 }
 
@@ -459,5 +461,36 @@ export async function splitOffChain(flightId: string, stepId: string, pos?: { x:
     return null;
   } finally {
     void refreshFlights();
+  }
+}
+
+/** Round 18: a node dragged on the Sky — its spot queued and sent with the
+ * flight's other moves a moment later, as ONE `POST …/layout` per flight
+ * (a drag that lands, then another, costs one call). `onDone` hears whether
+ * that batch was saved. */
+const posQueue = new Map<string, { positions: Record<string, { x: number; y: number } | null>; timer: ReturnType<typeof setTimeout>; done: Array<(ok: boolean) => void> }>();
+export const POS_BATCH_MS = 250;
+export function queueStopPos(flightId: string, stepId: string, pos: { x: number; y: number } | null, onDone?: (ok: boolean) => void): void {
+  let q = posQueue.get(flightId);
+  if (q) clearTimeout(q.timer);
+  else {
+    q = { positions: {}, timer: 0 as unknown as ReturnType<typeof setTimeout>, done: [] };
+    posQueue.set(flightId, q);
+  }
+  q.positions[stepId] = pos ? { x: Math.round(pos.x), y: Math.round(pos.y) } : null;
+  if (onDone) q.done.push(onDone);
+  const cur = q;
+  cur.timer = setTimeout(() => {
+    posQueue.delete(flightId);
+    void saveStopPositions(flightId, cur.positions).then((ok) => cur.done.forEach((f) => f(ok)));
+  }, POS_BATCH_MS);
+}
+
+/** Send every queued spot now (tests; a page about to go). */
+export function flushStopPos(): void {
+  for (const [id, q] of [...posQueue]) {
+    clearTimeout(q.timer);
+    posQueue.delete(id);
+    void saveStopPositions(id, q.positions).then((ok) => q.done.forEach((f) => f(ok)));
   }
 }

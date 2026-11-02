@@ -93,8 +93,9 @@ describe("tiers and the scale", () => {
 
   it("◧ and the ⋯'s sizes are presets of the two numbers", () => {
     expect(presetPatch("normal")).toEqual({ size: "normal", boxW: 236, boxH: 100 });
+    // Round 18: a chain's tiles have one size — the ⋯ offers no box sizes.
     const src = code("components/flights/SkyLine.tsx");
-    expect(src).toContain("onSelect: () => p.onLayout(presetPatch(s)),");
+    expect(src).not.toContain("onSelect: () => p.onLayout(presetPatch(s)),");
   });
 });
 
@@ -115,11 +116,10 @@ describe("the corner's drag", () => {
     expect(dragBox(start, -5000, 0)).toEqual({ w: 140, h: Math.max(60, Math.round(64 * (140 / 150))) });
   });
 
-  it("is persisted once, on release, with the tier's name", () => {
+  it("round 18: a chain line draws no corner (the math stays for the classic row)", () => {
     const src = code("components/flights/SkyLine.tsx");
-    expect(src).toContain("if (liveBox) p.onLayout({ size: boxTier(liveBox.w), boxW: liveBox.w, boxH: liveBox.h });");
-    expect(src).toContain("setLiveBox(dragBox(g, (e.clientX - g.sx) / z, (e.clientY - g.sy) / z));");
-    expect(src).toMatch(/setPointerCapture\(e\.pointerId\)/);
+    expect(src).not.toContain('className="skl-box-resize"');
+    expect(src).toContain("export function dragBox(");
   });
 });
 
@@ -180,41 +180,24 @@ const line = (layout: Record<string, unknown> = {}, zoom = 1) =>
     })
   );
 
-describe("a resized line", () => {
-  it("at a preset: no scale, no style on the sizer", () => {
-    const html = line();
-    expect(html).toContain('<div class="skl-scale"><div class="skl-scale-in">');
-    expect(html).toContain('aria-label="Resize me&#x27;s boxes"');
-  });
-
-  it("between presets: the tier's canvas, scaled, with --sky-z times the scale", () => {
+describe("round 18: a chain line is never scaled", () => {
+  it("no sizer, no scale, no corner — the tiles have one size at any boxW", () => {
     const html = line({ boxW: 300, boxH: 109 }, 0.5);
-    const k = 300 / 330;
-    expect(html).toContain("fl-size-wide");
-    expect(html).toContain(`transform:scale(${k})`);
-    expect(html).toContain(`--sky-z:${0.5 * k}`);
-    // The bar keeps the sky's own zoom.
-    expect(html).toMatch(/class="skl skl-size-wide[^"]*"[^>]*style="--sky-z:0.5;/);
-  });
-
-  it("an old layout's size alone is its preset", () => {
-    const html = line({ size: "compact" });
-    expect(html).toContain("fl-size-compact");
+    expect(html).not.toContain("skl-scale");
     expect(html).not.toContain("transform:scale(");
+    expect(html).not.toContain("skl-box-resize");
+    // The label keeps the sky's own zoom.
+    expect(html).toMatch(/class="skl skl-chainline[^"]*"[^>]*style="--sky-z:0.5;/);
   });
 
-  it("the CSS: the sizer, the type factors read against the canvas's --sky-z, the handle screen-sized", () => {
-    const c = css("components/flights/SkyLine.css");
-    expect(c).toMatch(/\.skl-scale-in \{[^}]*transform-origin: 0 0;/);
-    expect(c).toMatch(/\.skl\[data-lod="far"\] \.skl-scale-in \{[^}]*--sky-far: clamp\(1, calc\(0\.76 \/ var\(--sky-z, 1\)\), 1\.9\);/);
-    expect(c).toMatch(/\.skl\[data-lod="near"\] \.skl-scale-in \{[^}]*--sky-near: clamp\(1, var\(--sky-z, 1\), 3\);/);
-    expect(c).toMatch(/\.skl-box-resize \{[^}]*transform: scale\(calc\(1 \/ var\(--sky-z, 1\)\)\);/);
+  it("the CSS: no card around a chain, no row behind it", () => {
+    expect(css("components/flights/SkyLine.css")).toMatch(/\.skl\.skl-chainline \{[^}]*border: none;[^}]*background: transparent;[^}]*box-shadow: none;/);
   });
 
-  it("an open card keeps its own size on a scaled line", () => {
+  it("an open card is drawn at its own size, under the chain", () => {
     const src = code("components/flights/SkyLine.tsx");
-    expect(src).toContain("const cw = s.w / k;");
-    expect(src).toContain('transform: `scale(${1 / k})`, transformOrigin: "0 0", "--sky-z": z');
+    expect(src).toContain('{cards.length > 0 && <div className="skl-cards">{cards}</div>}');
+    expect(src).not.toContain("const cw = s.w / k;");
   });
 });
 
@@ -232,7 +215,8 @@ describe("flown stops and the ⋯'s words", () => {
     const src = code("components/flights/SkyLine.tsx");
     expect(src).toContain("const { foldFlown, setFoldFlown } = line;");
     expect(src).toContain("{ flights, kinds, family: true, foldFlown: true }");
-    expect(src).toContain("const shown = { diagram: line.diagram, canvas: line.canvas };");
+    // Round 18: the chain draws the hook's diagram in the flight's indexes.
+    expect(src).toContain("const moves = useNodeMoves(line.flight?.id, line.graphDiagram);");
     expect(src).toContain('if (n.kind === "flown") setFoldFlown((x) => !x);');
   });
 
@@ -240,7 +224,7 @@ describe("flown stops and the ⋯'s words", () => {
     const items = menu(line());
     expect(items).toContain("Add a stop…");
     expect(items.some((l) => /flyway/i.test(l))).toBe(false);
-    expect(line()).toContain('title="A saved stop, tacked on here"');
+    expect(line()).toContain('title="A stop or a saved stop, at the end of the chain"');
   });
 });
 
@@ -249,9 +233,8 @@ describe("names", () => {
     useUi.setState({ aliases: { me: "Login fix" } });
     const html = line();
     expect(html).toContain('<span class="skl-name">Login fix</span>');
-    expect(html).toContain('aria-label="Login fix&#x27;s line"');
+    expect(html).toContain('aria-label="Login fix&#x27;s chain"');
     expect(html).toContain('aria-label="Actions for Login fix"');
-    expect(html).toContain('aria-label="Resize Login fix&#x27;s boxes"');
     // Still keyed by the raw title.
     expect(html).toContain('data-line="me"');
   });

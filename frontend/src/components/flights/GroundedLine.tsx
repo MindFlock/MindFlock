@@ -1,4 +1,11 @@
-/** A grounded flight on the Sky (docs/flights.md "Grounded flights"): stops
+/** Round 18 (docs/flights.md "Round 18"): the stops draw as a CHAIN of
+ * free-floating tiles under a small label (its handle, name and ⋯) — no card,
+ * no "No session yet" box: headless (an empty socket on its first tile —
+ * wire a session's out port there) or headed by the trigger tile of the chain
+ * that hands off to it (`head`, lib/groundedLines `triggerHeadFor`). What
+ * follows is the round 11–13 story, as the row was.
+ *
+ * A grounded flight on the Sky (docs/flights.md "Grounded flights"): stops
  * on the board with no session yet. They do nothing until one is attached.
  * Its own line, laid out under `"flight:" + id`: a title bar (the bird, its
  * name — the flight's `plan_name`, renamed inline: a click on it or F2 →
@@ -21,9 +28,10 @@
  * removes the line. `merging`: dragged over a session's line, which
  * takes its stops on release (docs/flights.md "As built: round 13 sky"). */
 
-import { useEffect, useRef, useState, type JSX, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { Flight, FlightPlan, StepKindDef } from "../../lib/flights";
-import type { DiagramNode } from "../../lib/flightDiagram";
+import { birdPerch, type DiagramNode } from "../../lib/flightDiagram";
+import { chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
 import { deleteFlight, renameFlight, savePlan, startGrounded } from "../../lib/flightsApi";
 import { isRemoveKey, planToSave, sourcePlanId } from "../../lib/groundedLines";
 import { lodFor, nearLines, type SkyLineLayout } from "../../lib/skyLayout";
@@ -32,7 +40,9 @@ import { toast } from "../../lib/toast";
 import { OverflowMenu, type MenuItem } from "../OverflowMenu";
 import { nodeById, removableBox } from "../../lib/skySelect";
 import { pushUndo, undoAction } from "../../lib/skyUndo";
-import { FlywayCanvas } from "./FlywayCanvas";
+import { SkyChain } from "./SkyChain";
+import { ChainPanels } from "./SkyWires";
+import { HEAD, useChainEntry, useNodeMoves, useTourHooks, type ChainEntry } from "./useSkyWiring";
 import { useGroundedLine } from "./useGroundedLine";
 import { Bird } from "./Bird";
 import "./SkyLine.css";
@@ -67,7 +77,21 @@ export interface GroundedLineProps {
   /** Remove the line (the host: delete, toast with Undo, a Ctrl+Z entry
    * that makes it again where it sat). Unset: deleted here, undoable. */
   onRemove?(): Promise<unknown> | void;
+  /** Round 18: what starts this chain — a trigger tile when another chain
+   * hands off to it (lib/groundedLines `triggerHeadFor`); none: no head, an
+   * empty socket on its first tile. */
+  head?: ChainHead | null;
+  /** The host's handle on this chain (SkyLine's `registerChain`). */
+  registerChain?(e: ChainEntry | null): void;
+  /** A port pressed: the host runs the wire drag. */
+  onPortDown?(node: GraphNode, side: "in" | "out", e: React.PointerEvent<HTMLElement>): void;
+  /** The tiles a wire being drawn could land on, and the one under it. */
+  targets?: ReadonlySet<string>;
+  over?: string | null;
 }
+
+/** A chain with nothing to start it: no head tile. */
+export const NO_HEAD: ChainHead = { kind: "none", title: "", sub: "", color: "var(--muted)" };
 
 /** A grounded line's name as typed: trimmed, at most 120 characters (the
  * server's cap); "" = nothing to save. */
@@ -182,10 +206,10 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   // Delete from the sky: a stop or group box through the canvas's Remove;
   // anything else on the line asks to remove the line.
   const deleteBox = (node: string): boolean => {
-    const n = node ? nodeById(line.diagram.nodes, node) : null;
+    const n = node && node !== HEAD ? nodeById(line.graphDiagram.nodes, node) : null;
     if (n && (n.kind === "stop" || n.kind === "group")) {
-      if (!removableBox(n) || !line.canvas.onRemove) return false;
-      line.canvas.onRemove(n);
+      if (!removableBox(n) || !line.graphCanvas.onRemove) return false;
+      line.graphCanvas.onRemove(n);
       return true;
     }
     void remove();
@@ -214,12 +238,24 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
     void remove();
   };
 
+  // Round 18: the stops are a CHAIN of free-floating tiles (lib/skyGraph):
+  // headless (an empty socket on the first tile: wire a session's out port
+  // there) or headed by the trigger tile of the chain that hands off to it.
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const moves = useNodeMoves(flight.id, line.graphDiagram);
+  const head = p.head || NO_HEAD;
+  const graph = useMemo(() => chainGraph(moves.diagram, { head, key: "flight:" + flight.id, flightId: flight.id }), [moves.diagram, head, flight.id]);
+  useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter);
+  useTourHooks(wrapRef, { ".sky-socket": "sky-grounded" });
+  const gc = line.graphCanvas;
+  const shift = useRef(false);
+
   return (
     <div
       ref={rootRef}
       className={
-        "skl skl-size-" + (p.layout.size || "normal") +
-        " skl-grounded" +
+        "skl skl-chainline skl-grounded" +
+        (head.kind === "trigger" ? " is-triggered" : "") +
         (p.focused ? " is-focused" : "") +
         (p.selected ? " is-selected" : "") +
         (p.sessionOver ? " is-session-over" : "") +
@@ -232,14 +268,21 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
       role="group"
       tabIndex={0}
       data-sky-box
-      aria-label={name + " — stops with no session yet"}
+      aria-label={name + (head.kind === "trigger" ? " — " + head.title : " — stops with no session yet")}
       onKeyDown={onKey}
       onPointerDownCapture={() => {
         if (!p.focused) p.onFocus();
       }}
     >
-      <div className="skl-bar" title={p.draggable === false ? "Click to focus these stops (drag mode moves them: V)" : "Drag to move these stops — onto a session's line to give them to it"} onPointerDown={onBarDown}>
-        <Bird size={16} />
+      {/* The chain's label: its handle (drag, also onto a session's chain to
+          give it the stops), its name (click to rename) and its ⋯. */}
+      <div
+        className="skl-bar skl-label"
+        data-tour="sky-grounded"
+        title={p.draggable === false ? "Click to focus these stops (drag mode moves them: V)" : "Drag to move these stops — onto a session's chain to give them to it"}
+        onPointerDown={onBarDown}
+      >
+        <Bird size={14} />
         {naming === null ? (
           <span className="skl-name skl-name-edit" title="Click to rename (F2)" onClick={onNameClick}>
             {name}
@@ -266,37 +309,39 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
             }}
           />
         )}
-        <span className="fl-box-chip skl-chip tone-idle" title="These stops do nothing until a session flies them">
-          No session
+        <span
+          className={"fl-box-chip skl-chip " + (head.kind === "trigger" ? "tone-working" : "tone-idle")}
+          title={head.kind === "trigger" ? head.title + " — " + head.sub : "These stops do nothing until a session flies them: wire a session's out port to the first one"}
+        >
+          {head.kind === "trigger" ? "Started by a chain" : "No session"}
         </span>
         <span className="skl-menu" data-no-drag>
           <OverflowMenu label={"Actions for " + name} items={items} />
         </span>
       </div>
-      <div className="skl-grounded-body">
-        <div className="skl-grounded-head" data-tour="sky-grounded" data-no-drag title="Drag the Session chip from the shelf here, or ⋯ → Fly on a session">
-          <strong>No session yet</strong>
-          <span>drop a Session chip here, or ⋯ Fly on a session</span>
-        </div>
-        <FlywayCanvas
-          diagram={line.diagram}
-          label={"The stops of " + name}
-          vertical={false}
-          className="sky-canvas skl-canvas"
-          size={p.layout.size || "normal"}
-          lod={lod}
-          {...line.canvas}
+      <div ref={wrapRef} className="skl-chain-wrap" onPointerDownCapture={(e) => (shift.current = e.shiftKey)}>
+        <SkyChain
+          graph={graph}
+          zoom={p.zoom}
+          selected={gc.selected}
           highlighted={p.highlighted}
-          onShiftSelect={p.onShiftSelect}
-          roomy
+          targets={p.targets}
+          over={p.over}
+          bird={birdPerch(moves.diagram)}
+          onSelect={(n) => (shift.current && p.onShiftSelect ? p.onShiftSelect(n) : gc.onSelect?.(n))}
+          onEdit={gc.onEdit}
+          onOpen={gc.onOpen}
+          onRemove={gc.onRemove}
+          onLoopPill={(via) => gc.onEdit?.(via)}
+          onNodeMove={moves.move}
+          onPortDown={p.onPortDown}
+          onPlus={(after) => (after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true))}
         />
-      </div>
-      {line.editing && (
-        <div className="skl-panels sky-own-scroll" data-no-drag>
+        <ChainPanels graph={graph} anchor={line.anchor} anchorPos={line.anchorPos}>
           {line.palette}
           {line.inspector}
-        </div>
-      )}
+        </ChainPanels>
+      </div>
     </div>
   );
 }

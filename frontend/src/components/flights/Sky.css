@@ -931,33 +931,62 @@ details.fl-group-waiting > summary {
 /* A session line's + being dragged onto a stops-only line (SkyView
    `startConnect`): a wire from the + to the pointer, solid once it is over a
    line that would take it. */
-.sky-connect {
-  position: fixed;
-  inset: 0;
-  width: 100vw;
-  height: 100vh;
-  z-index: 60;
-  pointer-events: none;
+/* Round 18: the wires BETWEEN chains (SkyWires) — one SVG at the plane's
+   origin, overflow visible, under every press. A handoff wire is dashed in
+   the source session's colour; the band is the wire being drawn. */
+.sky-xwires {
+  position: absolute;
+  left: 0;
+  top: 0;
   overflow: visible;
+  pointer-events: none;
+  z-index: 4;
 }
 
-.sky-connect path {
+.sky-xwire-path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: calc(2px / var(--sky-z, 1));
+  stroke-dasharray: 7 5;
+  opacity: 0.75;
+}
+
+.sky-xwire.is-started .sky-xwire-path {
+  opacity: 0.45;
+}
+
+.sky-xwire-end {
+  fill: currentColor;
+  opacity: 0.8;
+}
+
+.sky-band-path {
   fill: none;
   stroke: var(--accent);
-  stroke-width: 2;
+  stroke-width: calc(2px / var(--sky-z, 1));
   stroke-dasharray: 6 4;
 }
 
-.sky-connect circle {
+.sky-band-end {
   fill: var(--panel);
   stroke: var(--accent);
-  stroke-width: 2;
+  stroke-width: calc(2px / var(--sky-z, 1));
 }
 
-.sky-connect.is-over path {
+.sky-band.is-over .sky-band-path {
   stroke-dasharray: none;
 }
 
-.sky-connect.is-over circle {
+.sky-band.is-over .sky-band-end {
   fill: var(--accent);
+}
+
+/* Pulling an in port's wire off (a split): the band reads as cutting. */
+.sky-band.is-split .sky-band-path {
+  stroke: var(--warn, var(--accent));
+}
+
+/* While a wire is drawn nothing on the plane takes a hover but the tiles. */
+.sky-plane[data-wiring] {
+  cursor: crosshair;
 }
