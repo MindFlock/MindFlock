@@ -518,7 +518,7 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
         )}
         {sub_ && frame && frame.stops.length > 0 && <MiniChain stops={frame.stops} />}
         {!isHead && dn.chip && !isStopish(dn) && (dn.chip.tone === "working" || dn.chip.tone === "attention") && (
-          <BirdMarker tone={dn.chip.tone === "working" ? "working" : "you"} x={n.w / 2} y={sub_ ? SUB_BAR + SUB_PAD : 0} size={18} label={dn.title + " — " + dn.chip.label} className="sky-kid-bird" />
+          <BirdMarker tone={dn.chip.tone === "working" ? "working" : "you"} x={sub_ ? 8 + TILE / 2 : n.w / 2} y={sub_ ? SUB_BAR + SUB_PAD : 0} size={18} label={dn.title + " — " + dn.chip.label} className="sky-kid-bird" />
         )}
       </div>
     );

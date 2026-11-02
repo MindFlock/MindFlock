@@ -4722,8 +4722,9 @@ a.fl-waiting-ref:hover {
   white-space: nowrap;
 }
 
-/* Sub-sessions' bus: dashed, quiet, square corners (lib/skyGraph). */
-.sky-wire.sky-wire-fan {
+/* Sub-sessions' bus: dashed, quiet, square corners (lib/skyGraph). A
+   parallel group's fork and join (round 20) are plain fan / join wires: solid. */
+.sky-wire.sky-wire-bus {
   stroke-dasharray: 4 4;
   stroke-linejoin: round;
   opacity: 0.75;
@@ -4796,6 +4797,9 @@ a.fl-waiting-ref:hover {
 .sky-node.sky-subframe {
   box-sizing: border-box;
   justify-content: flex-start;
+  /* Left-aligned inside (the owner: not "weirdly center justified"). */
+  align-items: flex-start;
+  text-align: left;
   padding: 0 8px 8px;
   border: 1px solid color-mix(in srgb, var(--sky-sub-color, var(--accent)) 40%, transparent);
   border-radius: 12px;
@@ -4847,7 +4851,7 @@ a.fl-waiting-ref:hover {
 .sky-mini-chain {
   position: relative;
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 6px;
   margin-top: 8px;
 }

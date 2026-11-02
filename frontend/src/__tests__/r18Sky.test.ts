@@ -362,7 +362,7 @@ describe("the sky wires it", () => {
 
   it("every chain registers with the host, takes its port drags, lights its targets", () => {
     for (const src of [line, grounded]) {
-      expect(src).toContain("useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter);");
+      expect(src).toContain("useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter, line.paletteParallel);");
       expect(src).toContain("onPortDown={p.onPortDown}");
       expect(src).toContain("targets={p.targets}");
       expect(src).toContain("over={p.over}");

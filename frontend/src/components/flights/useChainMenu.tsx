@@ -15,7 +15,8 @@ import { toast } from "../../lib/toast";
 import { windowName } from "../../lib/windowName";
 import { loopable, type ChainGraph } from "../../lib/skyGraph";
 import { menuItemsFor } from "../../lib/stopEditing";
-import { controlFlight, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { controlFlight, joinParallel, leaveParallel, stepDone, stepRetry, stepSkip } from "../../lib/flightsApi";
+import { isParallelSafe, type FlightStep, type StepKindDef } from "../../lib/flights";
 import { StopMenu, type SkyMenuItem } from "./StopMenu";
 
 export interface ChainMenuHandlers {
@@ -29,7 +30,13 @@ export interface ChainMenuHandlers {
 
 const HERE: ReadonlySet<string> = new Set(["current", "perched", "halted", "paused"]);
 
-export function useChainMenu(h: ChainMenuHandlers, flightId: string): { onMenu(n: DiagramNode, at: { clientX: number; clientY: number }): void; menu: ReactNode } {
+export function useChainMenu(
+  h: ChainMenuHandlers,
+  flightId: string,
+  /** Round 20: the flight's stops and the kinds, for "Run in parallel with
+   * the next stop" / "Run on its own". */
+  ctx?: { steps?: readonly FlightStep[] | null; kinds?: readonly StepKindDef[] | null }
+): { onMenu(n: DiagramNode, at: { clientX: number; clientY: number }): void; menu: ReactNode } {
   const [open, setOpen] = useState<{ n: DiagramNode; x: number; y: number } | null>(null);
   const onMenu = (n: DiagramNode, at: { clientX: number; clientY: number }) => setOpen({ n, x: at.clientX, y: at.clientY });
   if (!open || typeof document === "undefined") return { onMenu, menu: null };
@@ -40,6 +47,22 @@ export function useChainMenu(h: ChainMenuHandlers, flightId: string): { onMenu(n
     live,
     here: live && HERE.has(n.state),
   }) as SkyMenuItem[];
+  // Round 20: side by side with the next stop, or out of its group again —
+  // only for a stop still ahead whose kind may run in parallel.
+  const st = n.step;
+  const steps = ctx?.steps || [];
+  const at = st ? steps.findIndex((x) => x.id === st.id) : -1;
+  const next = at >= 0 ? steps.slice(at + 1).find((x) => !st?.parallel || x.parallel?.id !== st.parallel.id) : undefined;
+  const par: SkyMenuItem[] = [];
+  if (st && n.editable && flightId && isParallelSafe(st.kind, ctx?.kinds)) {
+    if (st.parallel) par.push({ key: "solo" as SkyMenuItem["key"], label: "Run on its own", title: "Take it out of its parallel group — it runs after the group" });
+    else if (next && isParallelSafe(next.kind, ctx?.kinds))
+      par.push({ key: "parallel" as SkyMenuItem["key"], label: "Run in parallel with the next stop", title: "“" + st.title + "” and “" + next.title + "” run side by side" });
+  }
+  if (par.length) {
+    const cut = items.findIndex((i) => i.danger || i.note);
+    items.splice(cut < 0 ? items.length : cut, 0, ...par);
+  }
   if (!items.length) return { onMenu, menu: null };
   const step = n.step?.id || "";
   const pick = (key: string) => {
@@ -52,6 +75,8 @@ export function useChainMenu(h: ChainMenuHandlers, flightId: string): { onMenu(n
     else if (key === "retry") void stepRetry(flightId, step);
     else if (key === "pause" || key === "resume") void controlFlight(flightId, key);
     else if (key === "open" || key === "tackon") h.onOpen?.(n);
+    else if (key === "solo") void leaveParallel(flightId, step);
+    else if (key === "parallel" && next) void joinParallel(flightId, step, next.id);
   };
   const menu = createPortal(
     <div className="sky-chain-menu" style={{ position: "fixed", left: 0, top: 0, width: 0, height: 0, zIndex: 80, ["--sky-z" as string]: 1 }}>

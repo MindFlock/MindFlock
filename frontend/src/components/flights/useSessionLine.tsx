@@ -60,6 +60,7 @@ import {
   stepSkip,
   tackOn,
   tackOnNew,
+  tackOnParallel,
   tackOnPlan,
   tackOnSteps,
   takeOff,
@@ -231,7 +232,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   const [paletteAt, setPaletteAt] = useState<number | null>(null);
   // Round 18: the palette opened from a wire dropped on empty sky — the node
   // it hangs off (its panel opens beside it) and the spot the new stop takes.
-  const [paletteHang, setPaletteHang] = useState<{ node: string | null; pos: { x: number; y: number } | null } | null>(null);
+  const [paletteHang, setPaletteHang] = useState<{ node: string | null; pos: { x: number; y: number } | null; withStep?: string } | null>(null);
   // The open dialog (a node id), and the group's to go back to from a
   // sub-step's.
   const [dialog, setDialog] = useState<{ id: string; back?: string } | null>(null);
@@ -282,6 +283,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     const fresh = newStep(def, flight ? flight.steps.map((s) => s.id) : []);
     // Dropped at a spot on the sky: it is drawn there (round 18).
     const step = paletteHang?.pos ? { ...fresh, pos: paletteHang.pos } : fresh;
+    const withStep = paletteHang?.withStep;
     setBusy(true);
     setPaletteAt(null);
     setPaletteHang(null);
@@ -289,7 +291,10 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
       if (flight) {
         const where = at !== null && at < end ? at : undefined;
         // Shown at once; the server's flight replaces the guess (lib/flightOptimism).
-        if ((await optimistic(flight.id, withSteps([step], where), () => tackOn(flight.id, step, where))) && openIt) setSelectIndex(where ?? end);
+        // In parallel with a stop (round 20): into its group, else before `where`.
+        const fid = flight.id;
+        const go = withStep ? () => tackOnParallel(fid, step, withStep) : () => tackOn(fid, step, where);
+        if ((await optimistic(fid, withSteps([step], where), go)) && openIt) setSelectIndex(where ?? end);
       } else {
         // Round 19: building a chain on a session doesn't fly it — it waits,
         // ready, for ▶ Run or the session's next prompt.
@@ -471,6 +476,16 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     const slot = after ? loopSlotAfter(after) : line.insertFrom;
     setPaletteAt(slot === undefined ? end : Math.min(slot, end));
     setPaletteHang({ node: after ? after.id : null, pos: pos ? { x: Math.round(pos.x), y: Math.round(pos.y) } : null });
+  };
+
+  /** Round 20: the palette for a stop that runs side by side with `withNode`
+   * (its parallel group, made when it has none); the pick goes through
+   * `tackOnParallel`. */
+  const paletteParallel = (withNode: DiagramNode, pos?: { x: number; y: number } | null) => {
+    const first = firstStepOf(withNode);
+    if (!first) return paletteAfter(withNode, pos);
+    paletteAfter(withNode, pos);
+    setPaletteHang({ node: withNode.id, pos: pos ? { x: Math.round(pos.x), y: Math.round(pos.y) } : null, withStep: first.id });
   };
 
   const toggleGroup = (gid: string) =>
@@ -735,6 +750,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     graphDiagram: line,
     graphCanvas: raw,
     paletteAfter,
+    paletteParallel,
     /** Where the open palette / dialog hangs: a node id, "" = the end of the
      * line, null = nothing open; `pos` a spot asked for (chain-local). */
     anchor: inspector !== null && dialog ? dialog.id : palette !== null ? (paletteHang?.node ?? "") : null,

@@ -24180,6 +24180,32 @@ function firstLine$1(text) {
 //#endregion
 //#region src/lib/flights.ts
 var MAIN_TRIGGERS = ["main_push", "main_red"];
+function parallelSpan(steps, i) {
+	const pid = steps[i]?.parallel?.id || "";
+	if (!pid) return [i, i + 1];
+	let lo = i;
+	let hi = i + 1;
+	while (lo > 0 && steps[lo - 1]?.parallel?.id === pid) lo--;
+	while (hi < steps.length && steps[hi]?.parallel?.id === pid) hi++;
+	return [lo, hi];
+}
+var PARALLEL_UNSAFE = /* @__PURE__ */ new Set([
+	"agent",
+	"ship",
+	"reviews",
+	"verify",
+	"split",
+	"join",
+	"land",
+	"sync",
+	"loop",
+	"judge"
+]);
+function isParallelSafe(kind, kinds) {
+	const def = kinds?.find((k) => k.kind === kind);
+	if (def && typeof def.parallel_safe === "boolean") return def.parallel_safe;
+	return !PARALLEL_UNSAFE.has(kind);
+}
 function isLive(f) {
 	return f.state === "running" || f.state === "waiting_you" || f.state === "paused" || f.state === "halted";
 }
@@ -37885,6 +37911,7 @@ function wireStep(step) {
 	if (step.halt) out.halt = true;
 	if (step.when) out.when = step.when;
 	if (step.pos) out.pos = step.pos;
+	if (step.parallel) out.parallel = step.parallel;
 	return out;
 }
 async function tackOnNew(title, steps, startOn) {
@@ -37903,11 +37930,35 @@ async function tackOnNew(title, steps, startOn) {
 		refreshInstances();
 	}
 }
-function tackOn(flightId, step, at) {
+function tackOn(flightId, step, at, opts = {}) {
 	return flightAction("Tack on", flightPath(flightId, "/steps"), {
 		step: wireStep(step),
-		...at === void 0 ? {} : { at }
+		...at === void 0 ? {} : { at },
+		...opts.parallel_with ? { parallel_with: opts.parallel_with } : {}
 	});
+}
+function tackOnParallel(flightId, step, withSid, at) {
+	return tackOn(flightId, step, at, { parallel_with: withSid });
+}
+async function patchParallel(flightId, stepId, body) {
+	try {
+		await api(flightPath(flightId, "/steps/" + enc$1(stepId)), {
+			method: "PATCH",
+			json: body
+		});
+		return true;
+	} catch (err) {
+		errorPop("Saving the stop failed", errMsg(err));
+		return false;
+	} finally {
+		refreshFlights();
+	}
+}
+function leaveParallel(flightId, stepId) {
+	return patchParallel(flightId, stepId, { parallel: null });
+}
+function joinParallel(flightId, stepId, withSid) {
+	return patchParallel(flightId, stepId, { parallel_with: withSid });
 }
 async function patchStop(flightId, stepId, patch) {
 	try {
@@ -80928,13 +80979,69 @@ function stopTitle(step, kinds) {
 	return stepActor(step, kinds) === "you" ? perchLabel(step.title) : step.title;
 }
 var stopId = (s, i) => "stop:" + (s.id || "i" + i);
+function parallelMark(steps, i) {
+	const [lo, hi] = parallelSpan(steps, i);
+	if (hi - lo < 2) return {};
+	return { parallel: {
+		id: steps[i].parallel.id,
+		index: i - lo,
+		size: hi - lo
+	} };
+}
+function lineRuns(line) {
+	const out = [];
+	for (const n of line) {
+		const last = out[out.length - 1];
+		const pid = n.parallel?.id;
+		if (pid && last && last[0].parallel?.id === pid) last.push(n);
+		else out.push([n]);
+	}
+	return out;
+}
+var FLOWN_STATES = /* @__PURE__ */ new Set([
+	"done",
+	"skipped",
+	"failed"
+]);
+function lineEdges(line) {
+	const runs = lineRuns(line);
+	const edges = [];
+	for (let k = 1; k < runs.length; k++) {
+		const a = runs[k - 1];
+		const b = runs[k];
+		if (b.length === 1 && b[0].kind === "add") {
+			edges.push({
+				from: a[a.length - 1].id,
+				to: b[0].id,
+				kind: "add"
+			});
+			continue;
+		}
+		for (const x of a) for (const y of b) if (a.length > 1) edges.push(FLOWN_STATES.has(x.state) ? {
+			from: x.id,
+			to: y.id,
+			kind: "join",
+			done: true
+		} : {
+			from: x.id,
+			to: y.id,
+			kind: "join"
+		});
+		else edges.push({
+			from: x.id,
+			to: y.id,
+			kind: b.length > 1 ? "fan" : "line"
+		});
+	}
+	return edges;
+}
 function chain(nodes, edges, line) {
-	for (let i = 1; i < line.length; i++) edges.push({
-		from: line[i - 1].id,
-		to: line[i].id,
-		kind: line[i].kind === "add" ? "add" : "line"
-	});
+	edges.push(...lineEdges(line));
 	nodes.push(...line);
+}
+function insertFromOf$1(f) {
+	if (f.state === "ready" || f.state === "grounded") return 0;
+	return Math.max(f.cursor + 1, parallelSpan(f.steps, f.cursor)[1]);
 }
 function addNode(title) {
 	return {
@@ -80961,7 +81068,8 @@ function flywayDiagram(steps, kinds) {
 		index: i,
 		editable: true,
 		...looksOf(s, kinds),
-		...s.kind === "loop" ? { loop: loopMark(s) } : {}
+		...s.kind === "loop" ? { loop: loopMark(s) } : {},
+		...parallelMark(steps, i)
 	})));
 	line.push(addNode("Add a stop"));
 	const nodes = [];
@@ -80979,11 +81087,18 @@ function flywayDiagram(steps, kinds) {
 function flightStops(f, kinds) {
 	const live = isLive(f);
 	const grounded = f.state === "grounded" || f.state === "ready";
+	const [glo, ghi] = parallelSpan(f.steps, f.cursor);
+	const open = Math.max(f.cursor + 1, ghi);
 	return f.steps.map((s, i) => {
 		const st = stepStateOf(f, s, i);
-		const atCursor = i === f.cursor && live;
+		const inGroup = ghi - glo > 1 && i >= glo && i < ghi;
+		const atCursor = live && (i === f.cursor || inGroup);
 		let state = st === "done" ? "done" : st === "skipped" ? "skipped" : st === "failed" ? "failed" : st === "waiting_you" ? "perched" : st === "running" ? "current" : "pending";
-		if (atCursor && f.state === "halted") state = "halted";
+		if (inGroup && state === "done") {} else if (inGroup && f.state === "halted") {
+			if (st === "failed") state = "halted";
+		} else if (inGroup && f.state === "paused") {
+			if (state === "current" || state === "pending") state = "paused";
+		} else if (atCursor && f.state === "halted") state = "halted";
 		else if (atCursor && f.state === "paused") state = "paused";
 		const rec = f.step_states?.[s.id];
 		const loop = s.kind === "loop" ? loopMark(s, rec) : void 0;
@@ -81001,12 +81116,13 @@ function flightStops(f, kinds) {
 			perch: stepActor(s, kinds) === "you",
 			step: s,
 			index: i,
-			editable: grounded || live && state === "pending" && i > f.cursor,
+			editable: grounded || live && state === "pending" && i >= open,
 			reason: state === "halted" || state === "failed" ? f.reason || rec?.note || "" : "",
 			...looksOf(s, kinds),
 			...flown ? { receipt: receiptOf(rec?.detail) } : {},
 			...loop ? { loop } : {},
-			...!flown && untilOf(rec?.detail) ? { until: untilOf(rec?.detail) } : {}
+			...!flown && untilOf(rec?.detail) ? { until: untilOf(rec?.detail) } : {},
+			...parallelMark(f.steps, i)
 		};
 	});
 }
@@ -81047,7 +81163,7 @@ function flightDiagram(f, kinds) {
 		edges,
 		flightId: f.id,
 		mode: "flight",
-		insertFrom: f.cursor + 1
+		insertFrom: f.state === "grounded" || f.state === "ready" ? f.cursor + 1 : insertFromOf$1(f)
 	};
 }
 var RUNGS = [
@@ -81114,7 +81230,7 @@ function sessionBox(row, kind, rowAt) {
 function landedFlightOf(title, flights) {
 	let best = null;
 	for (const f of flights || []) {
-		if (f.session !== title || f.state !== "done" && f.state !== "cancelled") continue;
+		if (f.session !== title || f.state !== "done") continue;
 		if (!best || (f.finished || f.updated || 0) > (best.finished || best.updated || 0)) best = f;
 	}
 	return best;
@@ -81159,6 +81275,7 @@ function sessionDiagram(rows, title, opts = {}) {
 		insertFrom = fl.state === "ready" ? 0 : fl.cursor + 1;
 		const full = opts.flights?.find((f) => f.id === fl.id);
 		if (full) {
+			if (fl.state !== "ready") insertFrom = Math.max(insertFrom, insertFromOf$1(full));
 			const lifted = liftLoops(flightStops(full, opts.kinds), me.id);
 			line.push(...lifted.line);
 			loops = lifted.loops;
@@ -81207,14 +81324,11 @@ function sessionDiagram(rows, title, opts = {}) {
 	const fans = family && mode === "flight" && fl ? branchesOf(title, kids, line, fl, opts.flights?.find((f) => f.id === fl.id)) : null;
 	if (fans) {
 		nodes.push(...line);
+		const plain = lineEdges(line);
 		for (let i = 1; i < line.length; i++) {
 			const a = line[i - 1];
 			const b = line[i];
-			if (!fans.out.has(a.id)) edges.push({
-				from: a.id,
-				to: b.id,
-				kind: b.kind === "add" ? "add" : "line"
-			});
+			if (!fans.out.has(a.id)) edges.push(...plain.filter((e) => e.from === a.id));
 			for (const c of fans.out.get(a.id) || []) {
 				nodes.push(c);
 				edges.push({
@@ -81337,9 +81451,15 @@ function foldRun(d, run, into) {
 		else nodes.push(n);
 	}
 	const fanned = inner.size > 0;
+	const members = new Set(run.filter((n) => n.parallel).map((n) => n.id));
 	const edges = [];
 	const seen = /* @__PURE__ */ new Set();
-	for (const e of d.edges) {
+	for (const e0 of d.edges) {
+		const e = e0.kind === "fan" && members.has(e0.to) || e0.kind === "join" && members.has(e0.from) ? {
+			from: e0.from,
+			to: e0.to,
+			kind: d.nodes.find((n) => n.id === e0.to)?.kind === "add" ? "add" : "line"
+		} : e0;
 		const from = to(e.from);
 		let dest = to(e.to);
 		if (e.kind === "join" && dest === into.id && inner.has(e.from) && after) dest = after.id;
@@ -81370,6 +81490,10 @@ function collapseFlown(d) {
 		if (n.kind !== "stop" || n.inGroup || n.state !== "done" && n.state !== "skipped") break;
 		run.push(n);
 	}
+	if (run.length < FLOWN_MIN) return d;
+	const after = main[main.indexOf(run[run.length - 1]) + 1];
+	const pid = run[run.length - 1].parallel?.id;
+	if (pid && after?.parallel?.id === pid) while (run.length && run[run.length - 1].parallel?.id === pid) run.pop();
 	if (run.length < FLOWN_MIN) return d;
 	const first = run[0];
 	const last = run[run.length - 1];
@@ -81975,11 +82099,30 @@ function layoutDiagram(d, opts = {}) {
 		const top = above.length ? m.box.h + m.vgap : 0;
 		let x = 0;
 		let fanBottom = 0;
-		for (const n of main) {
+		let colX = 0;
+		let colY = 0;
+		let colW = 0;
+		for (let k = 0; k < main.length; k++) {
+			const n = main[k];
 			const s = size(n);
-			put(n, x, top + (n.kind === "add" || n.kind === "flown" ? m.anchor - s.h / 2 : 0));
-			x += s.w + m.gap;
-			const col = fans.get(n.id);
+			const pid = n.parallel?.id;
+			if (pid) {
+				if (main[k - 1]?.parallel?.id !== pid) {
+					colX = x;
+					colY = top;
+					colW = 0;
+				}
+				put(n, colX, colY);
+				colY += s.h + m.vgap;
+				colW = Math.max(colW, s.w);
+				if (!(main[k + 1]?.parallel?.id !== pid)) continue;
+				x = colX + colW + m.gap;
+				fanBottom = Math.max(fanBottom, colY - m.vgap);
+			} else {
+				put(n, x, top + (n.kind === "add" || n.kind === "flown" ? m.anchor - s.h / 2 : 0));
+				x += s.w + m.gap;
+			}
+			const col = pid ? main.filter((g) => g.parallel?.id === pid).flatMap((g) => fans.get(g.id) || []) : fans.get(n.id);
 			if (!col?.length) continue;
 			const sizes = col.map(size);
 			const colH = sizes.reduce((h, c) => h + c.h, 0) + m.bgap * (col.length - 1);
@@ -82008,8 +82151,8 @@ function layoutDiagram(d, opts = {}) {
 		}
 		for (const n of main) {
 			const s = size(n);
-			put(n, n.kind === "add" || n.kind === "flown" ? (m.box.w - s.w) / 2 : 0, y);
-			y += s.h + m.vgap;
+			put(n, n.parallel ? m.indent : n.kind === "add" || n.kind === "flown" ? (m.box.w - s.w) / 2 : 0, y);
+			y += s.h + (n.parallel && n.parallel.index < n.parallel.size - 1 ? m.bgap : m.vgap);
 			const col = fans.get(n.id);
 			if (!col?.length) continue;
 			for (const c of col) {
@@ -84997,11 +85140,22 @@ function chainGraph(d, opts) {
 			...e.done ? { done: true } : {}
 		});
 	}
-	if (hn && main.length && !specs.some((s) => s.from === HEAD_ID)) push({
-		from: HEAD_ID,
-		to: main[0].id,
-		kind: "head"
-	});
+	if (hn && main.length && !specs.some((s) => s.from === HEAD_ID)) {
+		const pid = main[0].parallel?.id;
+		let end = 1;
+		while (pid && end < main.length && main[end].parallel?.id === pid) end++;
+		const first = main.slice(0, end);
+		if (first.length > 1) for (const n of first) push({
+			from: HEAD_ID,
+			to: n.id,
+			kind: "fan"
+		});
+		else push({
+			from: HEAD_ID,
+			to: main[0].id,
+			kind: "head"
+		});
+	}
 	if (d.nodes.some((n) => n.kind === "add") && !addFrom) addFrom = main.length ? main[main.length - 1].id : hn ? HEAD_ID : null;
 	if (addFrom) push({
 		from: addFrom,
@@ -85159,6 +85313,8 @@ function autoPlace(nodes) {
 	const byId = /* @__PURE__ */ new Map();
 	const rows = /* @__PURE__ */ new Map();
 	let prev = null;
+	let col = null;
+	let colLow = -Infinity;
 	for (const n of nodes) {
 		let next;
 		const split = n.node.branch ? byId.get(n.node.branch.from) : void 0;
@@ -85172,7 +85328,7 @@ function autoPlace(nodes) {
 					col: 0,
 					x0,
 					x: x0,
-					y: (at ? at.y : 0) + BRANCH_Y,
+					y: Math.max((at ? at.y : 0) + BRANCH_Y, colLow + BRANCH_Y),
 					rowH: 0
 				};
 				rows.set(from, st);
@@ -85191,6 +85347,14 @@ function autoPlace(nodes) {
 			st.x += Math.max(PITCH_X, n.w + 18);
 			st.rowH = Math.max(st.rowH, PITCH_Y, n.h + 10);
 			st.col++;
+		} else if (n.node.parallel && col && col.id === n.node.parallel.id && n.node.parallel.index > 0) {
+			next = n.pinned ? { ...n } : {
+				...n,
+				x: col.head.x,
+				y: col.last.y + Math.max(PITCH_Y, col.last.h + 10)
+			};
+			col.last = next;
+			if (!n.pinned) colLow = Math.max(colLow, next.y);
 		} else {
 			next = n.pinned ? { ...n } : {
 				...n,
@@ -85198,6 +85362,11 @@ function autoPlace(nodes) {
 				y: prev ? prev.y : 0
 			};
 			prev = next;
+			col = n.node.parallel && n.node.parallel.size > 1 ? {
+				id: n.node.parallel.id,
+				head: next,
+				last: next
+			} : null;
 		}
 		byId.set(next.id, next);
 		out.push(next);
@@ -85328,6 +85497,30 @@ var firstNodeOf = (c) => c.nodes.find((n) => !isBranchRow(n.node)) || null;
 var stopsOnlyChain = (c) => c.head.kind !== "session";
 var isChainStart = (c, n) => isHead(n) || n.id === firstNodeOf(c)?.id;
 var insertFromOf = (c) => c.insertFrom ?? 0;
+var lineOf = (c) => c.nodes.filter((n) => !isBranchRow(n.node));
+function groupLast(c, n) {
+	const pid = n.node.parallel?.id;
+	if (!pid) return n;
+	const line = lineOf(c);
+	let k = line.findIndex((m) => m.id === n.id);
+	if (k < 0) return n;
+	while (k + 1 < line.length && line[k + 1].node.parallel?.id === pid) k++;
+	return line[k];
+}
+function nextOf(c, n) {
+	const line = lineOf(c);
+	if (n.id === HEAD_ID) return line[0] || null;
+	const k = line.findIndex((m) => m.id === groupLast(c, n).id);
+	return k >= 0 ? line[k + 1] || null : null;
+}
+function parallelOk(c, next, kinds) {
+	if (!next || next.node.kind !== "stop" || !next.node.step) return false;
+	if (!isParallelSafe(next.node.step.kind, kinds)) return false;
+	if (next.node.editable) return true;
+	if (!next.node.parallel) return false;
+	const last = groupLast(c, next).node;
+	return last.index !== void 0 && last.index + 1 >= (c.insertFrom ?? 0);
+}
 function wireIntent(src, dst, ctx = {}) {
 	if ("sky" in src) return NONE;
 	const A = src.chain;
@@ -85360,31 +85553,56 @@ function wireIntent(src, dst, ctx = {}) {
 		};
 	}
 	if (!canFollow(X.node, insertFromOf(A))) return NONE;
-	if ("sky" in dst) return {
-		op: "palette",
-		chain: A.key,
-		after: X.node,
-		at: dst.sky
-	};
+	const N = nextOf(A, X);
+	const Xa = groupLast(A, X).node;
+	if ("sky" in dst) {
+		if (parallelOk(A, N, ctx.kinds)) return {
+			op: "parallel",
+			chain: A.key,
+			after: Xa,
+			with: N.node,
+			at: dst.sky
+		};
+		return {
+			op: "palette",
+			chain: A.key,
+			after: Xa,
+			at: dst.sky
+		};
+	}
 	const B = dst.chain;
 	const Y = dst.node;
+	if (B.key === A.key && ctx.shift) {
+		if (isHead(Y) || isBranchRow(Y.node) || Y.node.kind !== "stop" || !Y.node.step || !Y.node.editable) return NONE;
+		if (!parallelOk(A, N, ctx.kinds) || Y.id === N.id || Y.id === X.id) return NONE;
+		if (Y.node.parallel && Y.node.parallel.id === N.node.parallel?.id) return NONE;
+		if (!isParallelSafe(Y.node.step.kind, ctx.kinds)) return NONE;
+		return {
+			op: "parallel",
+			chain: A.key,
+			after: Xa,
+			with: N.node,
+			step: Y.node
+		};
+	}
 	if (B.key === A.key) {
 		if (isHead(Y) || Y.node.index === void 0 || X.node.index === void 0 || isBranchRow(Y.node)) return NONE;
 		if (Y.node.index > X.node.index) {
 			if (Y.node.kind !== "stop" || !Y.node.editable) return NONE;
-			if (Y.node.index === loopSlotAfter(X.node)) return NONE;
+			if (Y.node.parallel && Y.node.parallel.id === X.node.parallel?.id) return NONE;
+			if (Y.node.index === loopSlotAfter(Xa)) return NONE;
 			return {
 				op: "move",
 				chain: A.key,
 				step: Y.node,
-				after: X.node
+				after: Xa
 			};
 		}
 		if (!loopable(X.node) || !loopable(Y.node)) return NONE;
 		return {
 			op: "loop",
 			chain: A.key,
-			from: X.node,
+			from: Xa,
 			to: Y.node
 		};
 	}
@@ -85394,7 +85612,7 @@ function wireIntent(src, dst, ctx = {}) {
 		return {
 			op: "handoff",
 			chain: A.key,
-			from: X.node,
+			from: Xa,
 			target: "flight:" + B.flightId
 		};
 	}
@@ -85402,7 +85620,7 @@ function wireIntent(src, dst, ctx = {}) {
 	return {
 		op: "merge",
 		chain: A.key,
-		after: X.node,
+		after: Xa,
 		from: B.key
 	};
 }
@@ -85995,7 +86213,7 @@ function SkyChain(p) {
 				sub_ && frame && frame.stops.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(MiniChain, { stops: frame.stops }),
 				!isHead && dn.chip && !isStopish(dn) && (dn.chip.tone === "working" || dn.chip.tone === "attention") && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(BirdMarker, {
 					tone: dn.chip.tone === "working" ? "working" : "you",
-					x: n.w / 2,
+					x: sub_ ? 8 + TILE / 2 : n.w / 2,
 					y: sub_ ? 30 : 0,
 					size: 18,
 					label: dn.title + " — " + dn.chip.label,
@@ -86226,7 +86444,7 @@ var HERE = /* @__PURE__ */ new Set([
 	"halted",
 	"paused"
 ]);
-function useChainMenu(h, flightId) {
+function useChainMenu(h, flightId, ctx) {
 	const [open, setOpen] = (0, import_react.useState)(null);
 	const onMenu = (n, at) => setOpen({
 		n,
@@ -86250,6 +86468,27 @@ function useChainMenu(h, flightId) {
 		live,
 		here: live && HERE.has(n.state)
 	});
+	const st = n.step;
+	const steps = ctx?.steps || [];
+	const at = st ? steps.findIndex((x) => x.id === st.id) : -1;
+	const next = at >= 0 ? steps.slice(at + 1).find((x) => !st?.parallel || x.parallel?.id !== st.parallel.id) : void 0;
+	const par = [];
+	if (st && n.editable && flightId && isParallelSafe(st.kind, ctx?.kinds)) {
+		if (st.parallel) par.push({
+			key: "solo",
+			label: "Run on its own",
+			title: "Take it out of its parallel group — it runs after the group"
+		});
+		else if (next && isParallelSafe(next.kind, ctx?.kinds)) par.push({
+			key: "parallel",
+			label: "Run in parallel with the next stop",
+			title: "“" + st.title + "” and “" + next.title + "” run side by side"
+		});
+	}
+	if (par.length) {
+		const cut = items.findIndex((i) => i.danger || i.note);
+		items.splice(cut < 0 ? items.length : cut, 0, ...par);
+	}
 	if (!items.length) return {
 		onMenu,
 		menu: null
@@ -86265,6 +86504,8 @@ function useChainMenu(h, flightId) {
 		else if (key === "retry") stepRetry(flightId, step);
 		else if (key === "pause" || key === "resume") controlFlight(flightId, key);
 		else if (key === "open" || key === "tackon") h.onOpen?.(n);
+		else if (key === "solo") leaveParallel(flightId, step);
+		else if (key === "parallel" && next) joinParallel(flightId, step, next.id);
 	};
 	return {
 		onMenu,
@@ -86759,14 +87000,17 @@ var inChain = (c, p) => ({
 	y: p.y - c.origin.y - c.dy
 });
 var portOnPlane = (c, n, side) => onPlane(c, side === "in" ? inPortOf(n) : outPortOf(n));
-function wireTargetsOf(src, chains, shift = false) {
+function wireTargetsOf(src, chains, shift = false, kinds) {
 	const out = /* @__PURE__ */ new Map();
 	for (const c of chains) for (const n of chainNodes(c.graph)) {
 		if (wireIntent(src, {
 			chain: c.graph,
 			node: n,
 			side: "in"
-		}, { shift }).op === "none") continue;
+		}, {
+			shift,
+			kinds
+		}).op === "none") continue;
 		let s = out.get(c.graph.key);
 		if (!s) out.set(c.graph.key, s = /* @__PURE__ */ new Set());
 		s.add(n.id);
@@ -86845,7 +87089,8 @@ function useSkyWiring(opts) {
 		const r = el instanceof Element ? el.getBoundingClientRect() : null;
 		const from = r && (r.width || r.height) ? o.planeAt(r.left + r.width / 2, r.top + r.height / 2) : portOnPlane(c, node, side);
 		let shift = e.shiftKey;
-		setTargets(wireTargetsOf(src, chains.values(), shift));
+		const kindsNow = () => optsRef.current.kinds?.() || null;
+		setTargets(wireTargetsOf(src, chains.values(), shift, kindsNow()));
 		setBand({
 			from,
 			to: from,
@@ -86871,7 +87116,7 @@ function useSkyWiring(opts) {
 			const to = now.planeAt(ev.clientX, ev.clientY);
 			if (ev.shiftKey !== shift) {
 				shift = ev.shiftKey;
-				setTargets(wireTargetsOf(src, now.chains().values(), shift));
+				setTargets(wireTargetsOf(src, now.chains().values(), shift, kindsNow()));
 			}
 			const h = hit(ev).node;
 			const hc = h ? now.chains().get(h.key) : null;
@@ -86879,7 +87124,10 @@ function useSkyWiring(opts) {
 				chain: hc.graph,
 				node: h.node,
 				side: "in"
-			}, { shift }).op !== "none";
+			}, {
+				shift,
+				kinds: kindsNow()
+			}).op !== "none";
 			setOver((cur) => ok ? cur?.key === h.key && cur.node === h.node.id ? cur : {
 				key: h.key,
 				node: h.node.id
@@ -86921,7 +87169,10 @@ function useSkyWiring(opts) {
 				node: h.node.node,
 				side: "in"
 			} : now.ground(h.el) ? { sky: at } : null;
-			const intent = dst ? wireIntent(src, dst, { shift: ev.shiftKey }) : { op: "none" };
+			const intent = dst ? wireIntent(src, dst, {
+				shift: ev.shiftKey,
+				kinds: kindsNow()
+			}) : { op: "none" };
 			now.onIntent(intent, {
 				src,
 				at
@@ -86981,7 +87232,27 @@ async function runWireIntent(intent, ctx, d) {
 		});
 		return;
 	}
+	if (intent.op === "parallel" && !intent.step) {
+		const c = d.chain(intent.chain);
+		if (!c) return;
+		const p = inChain(c, intent.at ?? ctx.at);
+		const snap = (v) => Math.round(v / GRID_SNAP) * GRID_SNAP;
+		const pos = {
+			x: snap(p.x - NODE_W / 2),
+			y: snap(p.y - TILE / 2)
+		};
+		if (c.paletteParallel) c.paletteParallel(intent.with, pos);
+		else c.paletteAfter(intent.after, pos);
+		return;
+	}
 	const f = d.flightOf(intent.chain);
+	if (intent.op === "parallel") {
+		const step = intent.step ? firstStepOf(intent.step) : void 0;
+		const withStep = firstStepOf(intent.with);
+		if (!f || !step || !withStep) return;
+		if (await joinParallel(f.id, step.id, withStep.id)) toast("“" + step.title + "” runs beside “" + withStep.title + "”");
+		return;
+	}
 	if (intent.op === "handoff") {
 		const def = d.kinds.find((k) => k.kind === HANDOFF_KIND);
 		if (!def) return void toast("This server has no “Start a chain” stop yet");
@@ -87123,10 +87394,14 @@ function withNodePos(d, spots) {
 		} : n)
 	};
 }
-function useChainEntry(register, graph, wrap, paletteAfter) {
+function useChainEntry(register, graph, wrap, paletteAfter, paletteParallel) {
 	const palRef = (0, import_react.useRef)(paletteAfter);
 	palRef.current = paletteAfter;
 	const pal = (0, import_react.useCallback)((a, p) => palRef.current(a, p), []);
+	const parRef = (0, import_react.useRef)(paletteParallel);
+	parRef.current = paletteParallel;
+	const hasPar = !!paletteParallel;
+	const par = (0, import_react.useCallback)((w, p) => parRef.current?.(w, p), []);
 	const last = (0, import_react.useRef)(null);
 	(0, import_react.useLayoutEffect)(() => {
 		if (!register) return;
@@ -87134,17 +87409,19 @@ function useChainEntry(register, graph, wrap, paletteAfter) {
 		const dx = el ? el.offsetLeft : 0;
 		const dy = el ? el.offsetTop : 0;
 		const l = last.current;
-		if (l && l.graph === graph && l.dx === dx && l.dy === dy) return;
+		if (l && l.graph === graph && l.dx === dx && l.dy === dy && l.par === hasPar) return;
 		last.current = {
 			graph,
 			dx,
-			dy
+			dy,
+			par: hasPar
 		};
 		register({
 			graph,
 			dx,
 			dy,
-			paletteAfter: pal
+			paletteAfter: pal,
+			...hasPar ? { paletteParallel: par } : {}
 		});
 	});
 	(0, import_react.useEffect)(() => {
@@ -87211,7 +87488,10 @@ function FlightChain({ title, line, kinds, label }) {
 		big
 	]);
 	const gc = line.graphCanvas;
-	const chainMenu = useChainMenu(gc, flightId);
+	const chainMenu = useChainMenu(gc, flightId, {
+		steps: line.flight?.steps,
+		kinds
+	});
 	const agentMenu = useAgentMenu();
 	const onPillDown = pillAimer(graph, gc.onLoopTo);
 	const rootRef = (0, import_react.useRef)(null);
@@ -87266,7 +87546,16 @@ function FlightChain({ title, line, kinds, label }) {
 			if (!moved) return;
 			const it = intentFor(ev.clientX, ev.clientY);
 			if (!it) {
-				if (src.id === HEAD_ID) line.togglePalette(true);
+				const sky = wireIntent({
+					chain: graph,
+					node: src,
+					side: "out"
+				}, { sky: {
+					x: 0,
+					y: 0
+				} });
+				if (sky.op === "parallel" && line.paletteParallel) line.paletteParallel(sky.with, null);
+				else if (src.id === HEAD_ID) line.togglePalette(true);
 				else line.paletteAfter(src.node, null);
 				return;
 			}
@@ -89046,13 +89335,16 @@ function useSessionLine(title, src, opts) {
 			...fresh,
 			pos: paletteHang.pos
 		} : fresh;
+		const withStep = paletteHang?.withStep;
 		setBusy(true);
 		setPaletteAt(null);
 		setPaletteHang(null);
 		try {
 			if (flight) {
 				const where = at !== null && at < end ? at : void 0;
-				if (await optimistic(flight.id, withSteps([step], where), () => tackOn(flight.id, step, where)) && openIt) setSelectIndex(where ?? end);
+				const fid = flight.id;
+				const go = withStep ? () => tackOnParallel(fid, step, withStep) : () => tackOn(fid, step, where);
+				if (await optimistic(fid, withSteps([step], where), go) && openIt) setSelectIndex(where ?? end);
 			} else {
 				const f = await tackOnNew(title, [step], "prompt");
 				if (f) {
@@ -89212,6 +89504,19 @@ function useSessionLine(title, src, opts) {
 				x: Math.round(pos.x),
 				y: Math.round(pos.y)
 			} : null
+		});
+	};
+	const paletteParallel = (withNode, pos) => {
+		const first = firstStepOf(withNode);
+		if (!first) return paletteAfter(withNode, pos);
+		paletteAfter(withNode, pos);
+		setPaletteHang({
+			node: withNode.id,
+			pos: pos ? {
+				x: Math.round(pos.x),
+				y: Math.round(pos.y)
+			} : null,
+			withStep: first.id
 		});
 	};
 	const toggleGroup = (gid) => setExpandedGroups((cur) => {
@@ -89423,6 +89728,7 @@ function useSessionLine(title, src, opts) {
 		graphDiagram: line,
 		graphCanvas: raw,
 		paletteAfter,
+		paletteParallel,
 		anchor: inspector !== null && dialog ? dialog.id : palette !== null ? paletteHang?.node ?? "" : null,
 		anchorPos: palette !== null ? paletteHang?.pos ?? null : null,
 		palette,
@@ -133787,7 +134093,7 @@ function SkyLine(p) {
 		line.flight?.id,
 		big
 	]);
-	useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter);
+	useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter, line.paletteParallel);
 	const frameX = Math.min(0, Math.floor(graph.bbox.x));
 	const frameY = Math.min(0, Math.floor(graph.bbox.y));
 	useTourHooks(wrapRef, {
@@ -133795,7 +134101,10 @@ function SkyLine(p) {
 		".sky-node:not(.sky-head):not(.sky-subframe)": "sky-stop"
 	});
 	const gc = line.graphCanvas;
-	const chainMenu = useChainMenu(gc, line.flight?.id || "");
+	const chainMenu = useChainMenu(gc, line.flight?.id || "", {
+		steps: line.flight?.steps,
+		kinds
+	});
 	const agentMenu = useAgentMenu();
 	const onPillDown = pillAimer(graph, gc.onLoopTo);
 	const foldKid = (t) => setKids((k) => Object.fromEntries(Object.entries(k).filter(([x]) => x !== t)));
@@ -134604,6 +134913,7 @@ function useGroundedLine(flight, src) {
 	const where = (at) => at !== null && at < end ? at : void 0;
 	const tackOne = async (def, at) => {
 		const pos = paletteHang?.pos;
+		const withStep = paletteHang?.withStep;
 		setBusy(true);
 		setPaletteAt(null);
 		setPaletteHang(null);
@@ -134613,7 +134923,8 @@ function useGroundedLine(flight, src) {
 				...fresh,
 				pos
 			} : fresh;
-			if (await optimistic(flight.id, withSteps([step], where(at)), () => tackOn(flight.id, step, where(at)))) setSelectIndex(where(at) ?? end);
+			const go = withStep ? () => tackOnParallel(flight.id, step, withStep) : () => tackOn(flight.id, step, where(at));
+			if (await optimistic(flight.id, withSteps([step], where(at)), go)) setSelectIndex(where(at) ?? end);
 		} finally {
 			setBusy(false);
 		}
@@ -134686,6 +134997,19 @@ function useGroundedLine(flight, src) {
 				x: Math.round(pos.x),
 				y: Math.round(pos.y)
 			} : null
+		});
+	};
+	const paletteParallel = (withNode, pos) => {
+		const first = firstStepOf(withNode);
+		if (!first) return paletteAfter(withNode, pos);
+		paletteAfter(withNode, pos);
+		setPaletteHang({
+			node: withNode.id,
+			pos: pos ? {
+				x: Math.round(pos.x),
+				y: Math.round(pos.y)
+			} : null,
+			withStep: first.id
 		});
 	};
 	const ordered = orderedPlans(plans);
@@ -134843,6 +135167,7 @@ function useGroundedLine(flight, src) {
 		graphDiagram: diagram,
 		graphCanvas: raw,
 		paletteAfter,
+		paletteParallel,
 		anchor: inspector !== null && dialog ? dialog.id : palette !== null ? paletteHang?.node ?? "" : null,
 		anchorPos: palette !== null ? paletteHang?.pos ?? null : null,
 		palette,
@@ -135022,10 +135347,13 @@ function GroundedLine(p) {
 		head,
 		flight.id
 	]);
-	useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter);
+	useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter, line.paletteParallel);
 	useTourHooks(wrapRef, { ".sky-socket": "sky-grounded" });
 	const gc = line.graphCanvas;
-	const chainMenu = useChainMenu(gc, flight.id);
+	const chainMenu = useChainMenu(gc, flight.id, {
+		steps: flight.steps,
+		kinds: p.kinds
+	});
 	const onPillDown = pillAimer(graph, gc.onLoopTo);
 	const shift = (0, import_react.useRef)(false);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
@@ -137309,7 +137637,8 @@ function SkyView() {
 		chains: () => placedChains(),
 		planeAt: (x, y) => planeAt(x, y),
 		ground: (el) => ground(el),
-		onIntent: (i, ctx) => void runIntent(i, ctx)
+		onIntent: (i, ctx) => void runIntent(i, ctx),
+		kinds: () => kinds
 	});
 	const portDownFor = (key) => (node, side, e) => wiring.startWire(key, node, side, e);
 	const handoffs = (0, import_react.useMemo)(() => handoffLinks(flights), [flights]);

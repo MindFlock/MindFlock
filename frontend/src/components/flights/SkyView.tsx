@@ -1414,6 +1414,8 @@ export function SkyView() {
     planeAt: (x, y) => planeAt(x, y),
     ground: (el) => ground(el),
     onIntent: (i, ctx) => void runIntent(i, ctx),
+    // Round 20: unsafe kinds never light as parallel targets.
+    kinds: () => kinds,
   });
   /** A chain's port pressed: the wire drag, in drag mode or click mode alike. */
   const portDownFor = (key: string) => (node: Parameters<typeof wiring.startWire>[1], side: "in" | "out", e: ReactPointerEvent<HTMLElement>) => wiring.startWire(key, node, side, e);

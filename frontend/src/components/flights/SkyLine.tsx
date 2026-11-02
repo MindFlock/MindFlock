@@ -430,14 +430,14 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
     return subFrameBoxes(moves.diagram.nodes, subFrames, open);
   }, [kids, moves.diagram, subFrames]);
   const graph = useMemo(() => chainGraph(hangFromAgent(moves.diagram), { head, key: p.title, flightId: line.flight?.id || "", big }), [moves.diagram, head, p.title, line.flight?.id, big]);
-  useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter);
+  useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter, line.paletteParallel);
   // The frame grows to a tile dragged left of / above the chain's origin.
   const frameX = Math.min(0, Math.floor(graph.bbox.x));
   const frameY = Math.min(0, Math.floor(graph.bbox.y));
   useTourHooks(wrapRef, { ".sky-head": "sky-session-box", ".sky-node:not(.sky-head):not(.sky-subframe)": "sky-stop" });
   const gc = line.graphCanvas;
   // Round 18: a tile's right-click menu; a Loop's pill dragged onto a stop re-aims it.
-  const chainMenu = useChainMenu(gc, line.flight?.id || "");
+  const chainMenu = useChainMenu(gc, line.flight?.id || "", { steps: line.flight?.steps, kinds });
   const agentMenu = useAgentMenu();
   const onPillDown = pillAimer(graph, gc.onLoopTo);
 

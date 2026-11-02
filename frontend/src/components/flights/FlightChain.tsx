@@ -50,7 +50,7 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
   const big = useMemo(() => subFrameBoxes(moves.diagram.nodes, subFrames), [moves.diagram, subFrames]);
   const graph = useMemo(() => chainGraph(hangFromAgent(moves.diagram), { head, key: title, flightId, big }), [moves.diagram, head, title, flightId, big]);
   const gc = line.graphCanvas;
-  const chainMenu = useChainMenu(gc, flightId);
+  const chainMenu = useChainMenu(gc, flightId, { steps: line.flight?.steps, kinds });
   const agentMenu = useAgentMenu();
   const onPillDown = pillAimer(graph, gc.onLoopTo);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -93,8 +93,11 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
       if (!moved) return;
       const it = intentFor(ev.clientX, ev.clientY);
       if (!it) {
-        // Empty space: a stop right after this one.
-        if (src.id === HEAD_ID) line.togglePalette(true);
+        // Empty space: a stop beside this one's next when it may run in
+        // parallel (round 20), else a stop right after this one.
+        const sky = wireIntent({ chain: graph, node: src, side: "out" }, { sky: { x: 0, y: 0 } });
+        if (sky.op === "parallel" && line.paletteParallel) line.paletteParallel(sky.with, null);
+        else if (src.id === HEAD_ID) line.togglePalette(true);
         else line.paletteAfter(src.node, null);
         return;
       }

@@ -6,6 +6,11 @@
  * (lib/skyGraph), and what a dropped `parallel` wire does (useSkyWiring). */
 
 /// <reference types="vite/client" />
+import sessionLineSrc from "../components/flights/useSessionLine.tsx?raw";
+import groundedLineSrc from "../components/flights/useGroundedLine.tsx?raw";
+import skyLineSrc from "../components/flights/SkyLine.tsx?raw";
+import skyViewSrc from "../components/flights/SkyView.tsx?raw";
+import chainMenuSrc from "../components/flights/useChainMenu.tsx?raw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Flight, FlightStep, StepKindDef, StepRunState } from "../lib/flights";
 import type { DiagramNode } from "../lib/flightDiagram";
@@ -365,3 +370,16 @@ describe("useSkyWiring: runWireIntent parallel", () => {
 
 // Keep the unused-type imports honest.
 export type _Unused = DiagramNode;
+
+describe("the integration: parallel in the UI", () => {
+  it("both line hooks offer paletteParallel and the lines hand it to the host", () => {
+    for (const src of [sessionLineSrc, groundedLineSrc]) {
+      expect(src).toContain("const paletteParallel = (withNode: DiagramNode");
+      expect(src).toContain("tackOnParallel(");
+    }
+    expect(skyLineSrc).toContain("line.paletteParallel");
+    expect(skyViewSrc).toContain("kinds: () => kinds,");
+    expect(chainMenuSrc).toContain('label: "Run in parallel with the next stop"');
+    expect(chainMenuSrc).toContain('label: "Run on its own"');
+  });
+});

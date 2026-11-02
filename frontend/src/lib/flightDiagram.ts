@@ -694,12 +694,13 @@ function sessionBox(row: Instance, kind: "parent" | "session" | "child", rowAt: 
   };
 }
 
-/** The session's most recent flight that has landed (done or cancelled), from
- * the flights query (it keeps the last finished ones), else null. */
+/** The session's most recent flight that LANDED (done), from the flights query
+ * (it keeps the last finished ones), else null. A cancelled one is gone: you
+ * threw it away (the owner saw old cancelled Loops reappear on sessions). */
 export function landedFlightOf(title: string, flights?: readonly Flight[] | null): Flight | null {
   let best: Flight | null = null;
   for (const f of flights || []) {
-    if (f.session !== title || (f.state !== "done" && f.state !== "cancelled")) continue;
+    if (f.session !== title || f.state !== "done") continue;
     if (!best || (f.finished || f.updated || 0) > (best.finished || best.updated || 0)) best = f;
   }
   return best;

@@ -247,11 +247,11 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   const moves = useNodeMoves(flight.id, line.graphDiagram, "flight:" + flight.id);
   const head = p.head || NO_HEAD;
   const graph = useMemo(() => chainGraph(moves.diagram, { head, key: "flight:" + flight.id, flightId: flight.id }), [moves.diagram, head, flight.id]);
-  useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter);
+  useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter, line.paletteParallel);
   useTourHooks(wrapRef, { ".sky-socket": "sky-grounded" });
   const gc = line.graphCanvas;
   // Round 18: a tile's right-click menu; a Loop's pill dragged onto a stop re-aims it.
-  const chainMenu = useChainMenu(gc, flight.id);
+  const chainMenu = useChainMenu(gc, flight.id, { steps: flight.steps, kinds: p.kinds });
   const onPillDown = pillAimer(graph, gc.onLoopTo);
   const shift = useRef(false);
 
