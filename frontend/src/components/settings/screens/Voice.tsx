@@ -35,6 +35,7 @@ import { toast } from "../../../lib/toast";
 import { startWavRecording } from "../../../lib/wavRecorder";
 import { dictHint, loadVoicePrefs, onVoicePrefs, saveVoicePrefs, REPLIES_CHOICES, voiceAudioCtx, type VoicePrefs } from "../../../lib/voiceDesktop";
 import { micDiagnostics, talkHotkey } from "../../TopBarMic";
+import { MIC_CONSTRAINTS } from "../../../lib/voiceMic";
 import { onWakeStatus, wakeStatus, wakeSwitchHint, wakeSwitchLabel } from "../../../lib/wakeWord";
 import { applyVoiceView, quoted } from "../../../lib/voiceWords";
 import { useVoiceWords } from "../../../lib/useVoiceWords";
@@ -1156,7 +1157,9 @@ function TryRow({ view, install }: { view: VoiceView | null; install?: InstallPr
     }
     let stream: MediaStream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // The same processing dictation asks for (echo cancellation, noise
+      // suppression): the test hears what a dictation would.
+      stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS });
     } catch (err) {
       heard({ ok: false, text: micErrorText(err) });
       setBusy("");

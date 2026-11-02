@@ -19,10 +19,11 @@ server.py re-imports every name defined here.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 import time
-from typing import Dict, Optional
+from typing import Callable, Dict, List, Optional
 
 from backend.session import tmux
 from backend.web.core import agent_state as _agent_state
@@ -790,3 +791,355 @@ def _seed_event_snapshot(title: str) -> None:
             title,
             {"status": "loading", "activity": "offline", "stage": "provisioning"},
         )
+
+
+# ---- the reply, the moment it lands --------------------------------------- #
+# The Stop hook files ``<marker dir>/<session>.reply.json`` the instant a turn
+# ends (tmp + os.replace), but nothing told the server: the reply — and the
+# ``Say:`` line riding its idle announcement — reached clients on the next 4s
+# instances tick, 0-4s late on every spoken reply. ``ReplyWatch`` notices the
+# file landing for the price of one ``stat`` of the marker directory per poll
+# (an os.replace into it moves the directory's mtime), and server.py's
+# ``_reply_watch_loop`` republishes that one session (``_republish_reply``)
+# through ``_emit_state_changes`` — so the settle and boot-quiet windows above
+# hold exactly as they do for the tick. Debounced per session: a reply that
+# changes again within ``quiet_s`` (a chained turn's second Stop, a rewrite)
+# publishes once, after the burst; ``max_wait_s`` caps how long a reply that
+# keeps changing can be held. A full rescan every ``rescan_s`` covers a mount
+# whose directory mtime is too coarse to see two writes in one tick.
+REPLY_SUFFIX = ".reply.json"
+
+
+class ReplyWatch:
+    """Which sessions' reply files landed since the last poll (by safe
+    session name, see ``activity_markers.safe_session_name``). The first
+    successful scan only baselines: a reply already on disk is old news.
+    Not thread-safe — one poller owns it. Never raises."""
+
+    YOUNG_NS = 50_000_000  # > any kernel tick; see _changed
+
+    def __init__(
+        self,
+        directory: Callable[[], object],
+        quiet_s: float = 0.03,
+        max_wait_s: float = 0.5,
+        rescan_s: float = 1.0,
+    ) -> None:
+        self._directory = directory
+        self.quiet_s = quiet_s
+        self.max_wait_s = max_wait_s
+        self.rescan_s = rescan_s
+        self._dir_key: Optional[tuple] = None
+        self._files: Optional[Dict[str, tuple]] = None  # None = not baselined
+        self._scanned_at = 0.0
+        # name -> (first change seen, last change seen), monotonic
+        self._pending: Dict[str, tuple] = {}
+
+    def _scan(self) -> Optional[Dict[str, tuple]]:
+        out: Dict[str, tuple] = {}
+        try:
+            with os.scandir(str(self._directory())) as it:
+                for entry in it:
+                    name = entry.name
+                    if not name.endswith(REPLY_SUFFIX):
+                        continue
+                    try:
+                        st = entry.stat()
+                    except OSError:
+                        continue
+                    out[name[: -len(REPLY_SUFFIX)]] = (
+                        st.st_mtime_ns,
+                        st.st_size,
+                        st.st_ino,
+                    )
+        except OSError:
+            return None
+        return out
+
+    def _changed(self, now: float) -> List[str]:
+        try:
+            st = os.stat(str(self._directory()))
+            dir_key: Optional[tuple] = (st.st_ino, st.st_mtime_ns)
+        except OSError:
+            dir_key = None
+        if dir_key is None:
+            return []
+        if dir_key == self._dir_key and now - self._scanned_at < self.rescan_s:
+            return []
+        files = self._scan()
+        if files is None:
+            return []
+        # The kernel stamps directory mtimes from a coarse clock (a jiffy,
+        # 1-10ms): a reply replaced in during the same tick as the change
+        # this scan answered (the hook's own tmp file) leaves the mtime
+        # unmoved. A mtime that young is not trusted — scan again next poll.
+        young = time.time_ns() - st.st_mtime_ns < self.YOUNG_NS
+        self._dir_key = None if young else dir_key
+        self._scanned_at = now
+        prev, self._files = self._files, files
+        if prev is None:
+            return []  # baseline
+        return [n for n, key in files.items() if prev.get(n) != key]
+
+    def poll(self, now: Optional[float] = None) -> List[str]:
+        """One pass: the names whose reply landed and then stayed put for
+        ``quiet_s`` (or was held ``max_wait_s``) — each once per burst."""
+        try:
+            now = time.monotonic() if now is None else now
+            for name in self._changed(now):
+                first = self._pending.get(name, (now, now))[0]
+                self._pending[name] = (first, now)
+            due = [
+                n
+                for n, (first, last) in self._pending.items()
+                if now - last >= self.quiet_s or now - first >= self.max_wait_s
+            ]
+            for n in due:
+                del self._pending[n]
+            return due
+        except Exception:  # noqa: BLE001 — a watcher never breaks its loop
+            return []
+
+
+# ---- dialog watch: a dialog reaches the row well before the 4s tick -------- #
+class DialogRow:
+    """What :class:`DialogWatch` needs of one published row."""
+
+    __slots__ = ("title", "name", "activity", "program", "parses")
+
+    def __init__(
+        self, title: str, name: str, activity: str, program: str, parses: bool
+    ) -> None:
+        self.title = title
+        self.name = name  # the tmux session name
+        self.activity = activity  # the PUBLISHED reading
+        self.program = program
+        self.parses = parses  # the provider has a dialog parser
+
+
+class _DialogState:
+    __slots__ = (
+        "hash",
+        "fp",
+        "fp_since",
+        "published_fp",
+        "published_at",
+        "confirmed_fp",
+        "had_dialog",
+        "due",
+        "urgent_until",
+        "marker_key",
+    )
+
+    def __init__(self) -> None:
+        self.hash: Optional[str] = None
+        self.fp: Optional[str] = None
+        self.fp_since = 0.0
+        self.published_fp: Optional[str] = None
+        self.published_at = 0.0
+        self.confirmed_fp: Optional[str] = None
+        self.had_dialog = False
+        self.due = 0.0
+        self.urgent_until = 0.0
+        self.marker_key: object = _UNSEEN
+
+
+_UNSEEN = object()
+
+
+class DialogWatch:
+    """Which sessions just raised (or left) a permission/choice dialog, read
+    a few times a second instead of on the 4 s instances tick.
+
+    Two triggers, both cheap and both limited to rows the tick last
+    published as ``working`` (or ``clarify``, for the dialog leaving):
+
+    * **hook marker** — Claude's ``PermissionRequest``/``Notification`` and
+      Codex's ``PermissionRequest`` hooks write ``clarify`` into the
+      session's activity marker. One ``stat`` per working session per poll;
+      the file is read only when its key moved. A clarify there makes the
+      session *urgent*: captured every poll for ``urgent_window_s`` (the
+      hook can fire a frame before the dialog is drawn), then, if no dialog
+      ever parsed (a prompt the parser does not know), handed over once
+      without a screen — the full probe reads the marker.
+    * **screen** — every working session whose CLI has a dialog parser is
+      captured every ``screen_s`` (clarify rows every ``clarify_s``), all of
+      a poll's captures in ONE tmux call (``capture``), at most
+      ``max_captures`` sessions a poll, the longest-waiting first. A capture
+      whose text hashes the same as the last one is not parsed again.
+
+    ``poll`` returns ``(title, screen, stable)`` for each session to
+    republish: ``screen`` is the capture to classify (None: probe in full),
+    ``stable`` that the same dialog held still across two captures at least
+    ``confirm_s`` apart — the confirmed sighting that may skip the announce
+    path's settle. A dialog is handed over once when first seen on a
+    working row, once more when confirmed, and its leaving once on a
+    clarify row that showed it. A row that reads ``working`` again while the
+    dialog it was handed is still up is handed it again, at most once per
+    ``clarify_s``.
+
+    Load: ``load()`` is the 1-minute load average per CPU; past ``load_soft``
+    the screen intervals stretch linearly up to ``max_backoff`` × at
+    ``load_hard`` (markers keep their pace — a stat costs nothing). Not
+    thread-safe (one poller owns it); never raises.
+    """
+
+    def __init__(
+        self,
+        capture: Callable[[List[str]], Dict[str, Optional[str]]],
+        fingerprint: Callable[[str, str], Optional[str]],
+        marker_key: Optional[Callable[[str], object]] = None,
+        marker_state: Optional[Callable[[str], Optional[str]]] = None,
+        load: Optional[Callable[[], float]] = None,
+        *,
+        screen_s: float = 0.3,
+        clarify_s: float = 1.0,
+        urgent_s: float = 0.1,
+        confirm_s: float = 0.15,
+        urgent_window_s: float = 1.0,
+        max_captures: int = 8,
+        load_soft: float = 0.75,
+        load_hard: float = 2.0,
+        max_backoff: float = 6.0,
+    ) -> None:
+        self._capture = capture
+        self._fingerprint = fingerprint
+        self._marker_key = marker_key
+        self._marker_state = marker_state
+        self._load = load
+        self.screen_s = screen_s
+        self.clarify_s = clarify_s
+        self.urgent_s = urgent_s
+        self.confirm_s = confirm_s
+        self.urgent_window_s = urgent_window_s
+        self.max_captures = max_captures
+        self.load_soft = load_soft
+        self.load_hard = load_hard
+        self.max_backoff = max_backoff
+        self._state: Dict[str, _DialogState] = {}
+        # Counters (tests, the CPU report): what the watch actually spent.
+        self.captures = 0
+        self.capture_calls = 0
+        self.parses = 0
+
+    def backoff(self) -> float:
+        """The screen-interval multiplier for the current load (≥ 1)."""
+        try:
+            load = float(self._load()) if self._load else 0.0
+        except Exception:  # noqa: BLE001
+            return 1.0
+        if load <= self.load_soft:
+            return 1.0
+        if load >= self.load_hard:
+            return self.max_backoff
+        span = (load - self.load_soft) / (self.load_hard - self.load_soft)
+        return 1.0 + span * (self.max_backoff - 1.0)
+
+    def _markers(self, rows, now: float) -> None:
+        if self._marker_key is None:
+            return
+        for r in rows:
+            if r.activity != "working":
+                continue
+            st = self._state[r.title]
+            try:
+                key = self._marker_key(r.name)
+            except Exception:  # noqa: BLE001
+                key = None
+            if st.marker_key is _UNSEEN:
+                st.marker_key = key  # baseline: a clarify already there is old
+                continue
+            if key == st.marker_key:
+                continue
+            st.marker_key = key
+            try:
+                state = self._marker_state(r.name) if self._marker_state else None
+            except Exception:  # noqa: BLE001
+                state = None
+            if state == "clarify":
+                st.urgent_until = now + self.urgent_window_s
+                st.due = now
+
+    def poll(self, rows, now: Optional[float] = None) -> List[tuple]:
+        try:
+            return self._poll(list(rows), time.monotonic() if now is None else now)
+        except Exception:  # noqa: BLE001 — a watcher never breaks its loop
+            return []
+
+    def _poll(self, rows, now: float) -> List[tuple]:
+        rows = [r for r in rows if r.activity in ("working", "clarify")]
+        live = {r.title for r in rows}
+        for t in [t for t in self._state if t not in live]:
+            del self._state[t]  # idle, offline or gone: forgotten, not polled
+        for r in rows:
+            self._state.setdefault(r.title, _DialogState())
+        self._markers(rows, now)
+        out: List[tuple] = []
+        due = [
+            r
+            for r in rows
+            if self._state[r.title].due <= now
+            and (r.parses or self._state[r.title].urgent_until)
+        ]
+        # A hook's clarify first: it is the one waiting on a redraw now.
+        due.sort(
+            key=lambda r: (
+                not self._state[r.title].urgent_until,
+                self._state[r.title].due,
+            )
+        )
+        due = due[: max(1, int(self.max_captures))]
+        if not due:
+            return out
+        mult = self.backoff()
+        names = [r.name for r in due if r.parses]
+        screens = (self._capture(names) or {}) if names else {}
+        self.capture_calls += 1 if names else 0
+        for r in due:
+            st = self._state[r.title]
+            screen = screens.get(r.name) if r.parses else None
+            if screen is not None:
+                self.captures += 1
+                self._classify(r, st, screen, now, out)
+            if st.urgent_until and (now >= st.urgent_until or not r.parses):
+                # The hook said clarify and no parser saw a dialog in time (or
+                # there is no parser): the full probe, which reads the
+                # marker, decides.
+                st.urgent_until = 0.0
+                if r.activity == "working" and st.fp is None:
+                    out.append((r.title, screen, False))
+            if st.urgent_until > now or (st.fp and st.confirmed_fp != st.fp):
+                st.due = now + self.urgent_s
+            else:
+                base = self.screen_s if r.activity == "working" else self.clarify_s
+                st.due = now + base * mult
+        return out
+
+    def _classify(self, r, st: _DialogState, screen: str, now: float, out) -> None:
+        import hashlib
+
+        h = hashlib.sha1(screen.encode("utf-8", "replace")).hexdigest()
+        if h != st.hash:
+            st.hash = h
+            self.parses += 1
+            fp = self._fingerprint(r.program, screen)
+            if fp != st.fp:
+                st.fp, st.fp_since = fp, now
+        if st.fp is None:
+            st.published_fp = st.confirmed_fp = None
+            if r.activity == "clarify" and st.had_dialog:
+                st.had_dialog = False
+                out.append((r.title, screen, False))  # the dialog left
+            return
+        st.had_dialog = True
+        st.urgent_until = 0.0  # the hook's dialog is on screen: found
+        if r.activity == "working" and (
+            st.published_fp != st.fp or now - st.published_at >= self.clarify_s
+        ):
+            # New, or handed over and the row reads working again (a tick
+            # that disagreed): again, at most once per ``clarify_s``.
+            st.published_fp, st.published_at = st.fp, now
+            out.append((r.title, screen, False))
+        elif st.confirmed_fp != st.fp and now - st.fp_since >= self.confirm_s:
+            st.confirmed_fp = st.published_fp = st.fp
+            out.append((r.title, screen, True))

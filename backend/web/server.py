@@ -95,7 +95,9 @@ modules under
                      (the sweep, the rules), wake it on demand (ensure_awake)
     snapshot         per-session JSON descriptors (labels, diff stat)
     state_events     session.*_changed diffing: settle + boot quiet windows,
-                     session.turn_ended gates, human-input presence
+                     session.turn_ended gates, human-input presence,
+                     ReplyWatch (the Stop hook's reply file landing),
+                     DialogWatch (a dialog on a working session's screen)
     task_headlines   the row's task_headline: newest MEANINGFUL prompt as a
                      verb phrase (backend/task_headline.py), remembered per
                      session + conversation
@@ -564,6 +566,9 @@ from backend.web.core.state_events import (
     _SETTLE_ACTIVITIES,
     _STAGE_SETTLE_SECONDS,
     _TRANSIENT_STAGES,
+    DialogRow as _DialogRow,
+    DialogWatch as _DialogWatch,
+    ReplyWatch as _ReplyWatch,
     _TURN_END_DWELLS,
     _TURN_END_DWELL_MARKER_S,
     _TURN_END_DWELL_S,
@@ -809,6 +814,12 @@ async def lifespan(app: FastAPI):
     # Ctrl+F ahead of time: keep agent panes' find indexes current, build
     # missing ones where nobody is looking (see _find_index_tick).
     _register_task(_find_index_loop())
+    # A turn's reply goes out the moment the Stop hook files it, not on the
+    # next 4s instances tick (see _reply_watch_loop).
+    _register_task(_reply_watch_loop())
+    # Likewise a permission/choice dialog: on the row within ~0.3s of being
+    # drawn, not on the next 4s tick (see _dialog_watch_loop).
+    _register_task(_dialog_watch_loop())
     # Verify: watch origin until each generated test plan's work reaches the
     # live branch, and poll the verify sessions that are working through one.
     _register_task(_test_plans_due_loop())
@@ -1499,9 +1510,12 @@ def _tick_state_changes() -> None:
     telemetry (the tick only needs what feeds *_changed events)."""
     for i in list(ENGINE.instances.values()):
         try:
+            started = time.monotonic()
             status = getattr(i.Status, "name", str(i.Status)).lower()
             stage = _session_stage_cached(i).get("stage") or "agent"
             activity = _agent_activity_cached(i, i.Title)
+            if _reply_superseded(i.Title, started):
+                continue  # its reply was published while this was read
             _emit_state_changes(i.Title, status, activity, stage)
         except Exception:  # noqa: BLE001 — one bad session can't stop the tick
             pass
@@ -2077,12 +2091,15 @@ _SNAPSHOT_AT = 0.0
 def _instances_tick() -> None:
     """One background pass: recompute the sessions snapshot and fire the side
     effects that used to piggyback on GET /api/instances."""
+    started = time.monotonic()
     out = _build_instances_snapshot()
     for d in out:
         title = d.get("title") or ""
         inst = ENGINE.instances.get(title)
         if inst is None:  # deleted while the snapshot was being built
             continue
+        if _reply_superseded(title, started):
+            continue  # its reply was published after this row was read
         try:
             # J5: announce the first crossing of the per-session cost budget.
             _check_session_budget(title, d.get("tokens_cost") or 0.0)
@@ -2143,8 +2160,9 @@ def _instances_tick() -> None:
     # its own thread, so it never holds up this tick (core.revive.auto_tick).
     _revive.auto_tick(sys.modules[__name__])
     # Publish the freshly computed state so AppContext.sessions() (Addon API
-    # v2) and GET /api/instances can serve it without recomputing it.
-    _events.set_sessions_snapshot(out)
+    # v2) and GET /api/instances can serve it without recomputing it — all
+    # but a row a landed reply republished after this tick read it.
+    _events.set_sessions_snapshot(_keep_reply_rows(out, started))
     global _SNAPSHOT_AT
     _SNAPSHOT_AT = time.time()
 
@@ -2181,6 +2199,277 @@ def _republish_session(title: str):
         return d
     except Exception:  # noqa: BLE001 — a freshness nicety must never 500
         return None
+
+
+#: Probe memos a landed reply makes stale: the reading the Stop hook just
+#: flipped and every row field read off the reply file.
+_REPLY_PROBES = ("activity", "asking", "last_turn", "last_say")
+#: title -> monotonic time its last _republish_reply (or _republish_dialog)
+#: finished. A tick that
+#: STARTED before then may have read the session before the reply landed
+#: (``working``): it must neither emit that reading (idle→working→idle, a
+#: flapping chip) nor publish that row over the fresh one.
+_REPLY_REPUBLISHED_AT: Dict[str, float] = {}
+
+
+def _reply_superseded(title: str, started: float) -> bool:
+    """Whether a reply republished ``title`` after a reading begun at
+    ``started`` (monotonic)."""
+    return _REPLY_REPUBLISHED_AT.get(title, 0.0) > started
+
+
+def _keep_reply_rows(out: list, started: float) -> list:
+    """``out`` with each row a reply republished since ``started`` swapped
+    for the published (fresher) one; old stamps are dropped."""
+    for t, at in list(_REPLY_REPUBLISHED_AT.items()):
+        if at < started - 60.0:
+            _REPLY_REPUBLISHED_AT.pop(t, None)
+    fresh = {t for t, at in list(_REPLY_REPUBLISHED_AT.items()) if at > started}
+    if not fresh:
+        return out
+    rows = {
+        r.get("title"): r
+        for r in _events.sessions_snapshot()
+        if r.get("title") in fresh
+    }
+    return [rows.get(d.get("title"), d) for d in out]
+
+
+def _republish_reply(title: str):
+    """Publish ``title``'s turn end the moment its reply file lands.
+
+    :func:`_republish_session` without its cost: a reply changes the
+    activity and the row fields read off the reply, never git state, so only
+    those are recomputed (the 4s tick refreshes the rest, as it always has)
+    and patched into the published row, then emitted exactly the way
+    :func:`_tick_state_changes` emits — so a reply announces through the same
+    settle and boot-quiet windows as the tick. The memos those fields sit
+    behind are dropped first: the activity read ≤2.5s ago is the ``working``
+    the Stop hook just ended. Publish before emit, as in
+    :func:`_republish_session`. A session the tick has not published yet gets
+    the full republish. Returns the row, or None. Never raises."""
+    return _republish_fast(
+        title, _REPLY_PROBES, lambda inst: _agent_activity(inst, title), reply=True
+    )
+
+
+#: Probe memos a dialog appearing (or leaving) makes stale.
+_DIALOG_PROBES = ("activity", "asking")
+
+
+def _republish_dialog(title: str, screen: Optional[str] = None, stable: bool = False):
+    """Publish ``title``'s dialog the moment the dialog watch sees it.
+
+    :func:`_republish_reply`'s path for the two fields a dialog changes —
+    ``activity`` (``clarify``) and ``asking`` (the dialog off ``screen``) —
+    with the same publish-before-emit, settle/boot-quiet windows and tick
+    race guard. ``screen`` is the watch's own fresh capture: classified
+    first, before the CLI's report (``claude agents --json`` can take 0.4s);
+    None probes in full (a hook said clarify and no parser saw a dialog).
+    ``stable``: the watch saw the same dialog hold still across two captures
+    — recorded as an authoritative ``screen-stable`` reading, so the
+    ``activity_changed`` event skips the 3s settle (a first sighting, like
+    any single frame, still waits for it; the row does not). Returns the
+    row, or None. Never raises."""
+
+    def read(inst):
+        if screen is None:
+            return _agent_activity(inst, title)
+        return _agent_activity(inst, title, screen=screen, screen_stable=stable)
+
+    return _republish_fast(title, _DIALOG_PROBES, read, reply=False)
+
+
+def _republish_fast(title: str, probes, read_activity, reply: bool):
+    """The shared body of :func:`_republish_reply` / :func:`_republish_dialog`:
+    drop ``probes``' memos, read the activity (``read_activity(inst)``, then
+    donated to the memo, as _session_stage_fresh does: a reader that began
+    before the change may still store its ``working``), patch the row's
+    activity fields (plus the reply fields when ``reply``) into the
+    published row, emit, and stamp the tick race guard."""
+    try:
+        inst = ENGINE.instances.get(title)
+        if inst is None:
+            return None
+        prev = next(
+            (r for r in _events.sessions_snapshot() if r.get("title") == title),
+            None,
+        )
+        if prev is None:
+            return _republish_session(title)
+        with _PROBE_CACHE_LOCK:
+            for probe in probes:
+                _PROBE_CACHE.pop((probe, title), None)
+        status = getattr(inst.Status, "name", str(inst.Status)).lower()
+        stage = _session_stage_cached(inst).get("stage") or "agent"
+        activity = _probe_seed("activity", inst, read_activity(inst))
+        row = dict(prev)
+        row["activity"] = activity
+        row["activity_since"] = _agent_state.state_since(title)
+        row["asking"] = _session_asking_cached(inst, activity)
+        if reply:
+            row["background"] = _background_jobs(inst, title)
+            row["last_turn"] = _session_last_turn_cached(inst)
+            row["last_say"] = _session_last_say_cached(inst)
+        _events.patch_session_snapshot(title, row)
+        _emit_state_changes(title, status, activity, stage)
+        _REPLY_REPUBLISHED_AT[title] = time.monotonic()
+        return row
+    except Exception:  # noqa: BLE001 — a freshness nicety must never raise
+        return None
+
+
+# ---- Reply watch ------------------------------------------------------------ #
+#: How often the marker directory is stat'ed for a landed reply (one syscall;
+#: with ReplyWatch's one-poll quiet period a reply publishes ≤ ~2 polls later).
+_REPLY_WATCH_INTERVAL = 0.05
+#: None = on except under pytest (ENGINE is the developer's real state there);
+#: tests that exercise the loop set it True with an isolated ENGINE.
+_REPLY_WATCH_LOOP_ENABLED: Optional[bool] = None
+
+
+def _reply_watch_loop_enabled() -> bool:
+    if _REPLY_WATCH_LOOP_ENABLED is not None:
+        return bool(_REPLY_WATCH_LOOP_ENABLED)
+    return not _restart._under_pytest()
+
+
+def _reply_titles(names) -> list:
+    """The live session titles behind reply-file names (safe session names)."""
+    from backend.providers import activity_markers as _am
+
+    wanted = set(names)
+    out = []
+    for title in list(ENGINE.instances):
+        try:
+            if _am.safe_session_name(tmux.to_mindflock_tmux_name(title)) in wanted:
+                out.append(title)
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
+async def _reply_watch_loop() -> None:
+    """Republish a session the moment its Stop hook files the reply
+    (core.state_events.ReplyWatch; started by the lifespan)."""
+    if not _reply_watch_loop_enabled():
+        return
+    from backend.providers import activity_markers as _am
+
+    watch = _ReplyWatch(_am.marker_dir)
+    while True:
+        try:
+            names = watch.poll()
+            if names:
+                for title in _reply_titles(names):
+                    await asyncio.to_thread(_republish_reply, title)
+        except Exception:  # noqa: BLE001 — the loop must never die
+            pass
+        await asyncio.sleep(_REPLY_WATCH_INTERVAL)
+
+
+# ---- Dialog watch ----------------------------------------------------------- #
+#: The dialog watch's poll period: marker stats every poll, screens on each
+#: session's own cadence (core.state_events.DialogWatch: 0.3s working, 1s
+#: clarify, 0.1s while a hook's clarify waits for its dialog to be drawn).
+_DIALOG_WATCH_INTERVAL = 0.1
+#: None = on except under pytest (ENGINE is the developer's real state there).
+_DIALOG_WATCH_LOOP_ENABLED: Optional[bool] = None
+
+
+def _dialog_watch_loop_enabled() -> bool:
+    if _DIALOG_WATCH_LOOP_ENABLED is not None:
+        return bool(_DIALOG_WATCH_LOOP_ENABLED)
+    return not _restart._under_pytest()
+
+
+def _dialog_watch_rows() -> list:
+    """The published rows the dialog watch looks at: this device's sessions
+    reading ``working`` or ``clarify`` (idle, offline and remote rows are
+    never captured)."""
+    out = []
+    for r in _events.sessions_snapshot():
+        activity = r.get("activity")
+        if activity not in ("working", "clarify"):
+            continue
+        title = r.get("title") or ""
+        inst = ENGINE.instances.get(title)
+        if inst is None or getattr(inst, "Status", None) == session.Paused:
+            continue
+        program = getattr(inst, "Program", "") or ""
+        try:
+            parses = _agent_state._reads_dialogs(providers.resolve(program))
+            name = tmux.to_mindflock_tmux_name(title)
+        except Exception:  # noqa: BLE001
+            continue
+        out.append(_DialogRow(title, name, activity, program, parses))
+    return out
+
+
+def _dialog_marker_key(name: str):
+    """The activity marker's (mtime, size, inode), or None — one stat."""
+    from backend.providers import activity_markers as _am
+
+    try:
+        st = os.stat(_am.marker_path(name))
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size, st.st_ino)
+
+
+def _dialog_marker_state(name: str) -> Optional[str]:
+    from backend.providers import activity_markers as _am
+
+    return _am.read_activity_marker(name)
+
+
+def _dialog_watch_load() -> float:
+    """1-minute load average per CPU — the dialog watch backs off past ~0.75
+    (WSL thrash: memories of the 2026-10 OOM). Critical memory pressure reads
+    as maximal load: the watch then polls at its slowest."""
+    try:
+        from backend import memory_pressure as _mem
+
+        if _mem.level() == "critical":
+            return 1e9
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        return os.getloadavg()[0] / float(os.cpu_count() or 1)
+    except (OSError, AttributeError):
+        return 0.0
+
+
+def _new_dialog_watch():
+    return _DialogWatch(
+        _agent_state.capture_visible_many,
+        _agent_state.dialog_fingerprint,
+        marker_key=_dialog_marker_key,
+        marker_state=_dialog_marker_state,
+        load=_dialog_watch_load,
+    )
+
+
+async def _dialog_watch_loop() -> None:
+    """Republish a session the moment a dialog appears on (or leaves) its
+    screen (core.state_events.DialogWatch; started by the lifespan)."""
+    if not _dialog_watch_loop_enabled():
+        return
+    watch = _new_dialog_watch()
+    while True:
+        try:
+            rows = _dialog_watch_rows()
+            acts = await asyncio.to_thread(watch.poll, rows) if rows else []
+            if not rows:
+                watch.poll(())  # forget every session's state
+            for title, screen, stable in acts:
+                try:
+                    await asyncio.to_thread(_republish_dialog, title, screen, stable)
+                except Exception:  # noqa: BLE001 — one session can't drop the rest
+                    pass
+        except Exception:  # noqa: BLE001 — the loop must never die
+            pass
+        await asyncio.sleep(_DIALOG_WATCH_INTERVAL)
 
 
 async def _instances_tick_loop() -> None:
@@ -6130,6 +6419,9 @@ def _deliver_to_agent(
     # prompts dialog, the Map's buttons) — automation types via
     # _send_queued_item and the limit watcher, never through here.
     _note_human_input(title)
+    # Typed into a dialog that is up (a send box that is not dialog_safe):
+    # a submitted text's Enter answers it — the last answer is stamped.
+    _note_pane_input(inst, title, text + ("\r" if submit else ""))
     typed = _voice_say(inst, title, text) if say else text
     if not _send_to_agent(name, typed, submit):
         if say:
@@ -6185,6 +6477,70 @@ def _enter_on_agent(inst, title: str, *, say: bool = False, extra: str = ""):
     if not _send_to_agent(name, typed, True):
         if say:
             _voice_say_cancel(title)
+        return False, _SEND_FAILED
+    return "sent", None
+
+
+def _dialog_or_limit_on_screen(inst, name: str) -> bool:
+    """:func:`_dialog_on_screen`'s verdict plus the usage-limit menu (its
+    "❯ 1. …" options take a typed digit too), from ONE capture of ``name``'s
+    visible screen. A capture that fails is no evidence (False), as there."""
+    text, err = _agent_io.capture_screen(name)
+    if err is not None or not text:
+        return False
+    try:
+        provider = providers.resolve(getattr(inst, "Program", "") or "")
+        probe = getattr(provider, "dialog_on_screen", None)
+        if callable(probe) and probe(text):
+            return True
+    except Exception:  # noqa: BLE001 — an unresolvable CLI: still check the limit
+        pass
+    try:
+        from backend.providers.usage_limits import is_limit_screen
+
+        return is_limit_screen(text)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _dictate_on_agent(inst, title: str, text: str, erase: int):
+    """One batch of a voice client's live dictation → ``(told, reason)``
+    like :func:`_enter_on_agent`: take back ``erase`` characters, then type
+    ``text`` (no Enter) — ``/send``'s ``{"voice": true, "submit": false,
+    "erase": n}`` form, the desktop's every dictation keystroke.
+
+    The voice gate, checked at send time against the SCREEN (the rows the
+    client sees lag the 4 s state tick): a session in clarify, on the
+    usage-limit menu, with an unreadable activity or with a dialog on
+    screen (a sub-agent's prompt under a "working" row) gets nothing —
+    neither the text nor a Backspace (it could act on the dialog) — and
+    :data:`_SEND_IN_DIALOG`. Paused → :data:`PAUSED_REFUSED`; asleep or not
+    running → refused, never booted (a fresh CLI has no draft to correct).
+    Then one tmux call (``agent_io.send_dictation``). Blocking — call via
+    ``asyncio.to_thread``."""
+    if getattr(inst, "Status", None) == Paused:
+        return False, PAUSED_REFUSED
+    if _sleep.is_sleeping(title):
+        return False, _ENTER_ASLEEP
+    name = _live_session_name(tmux.to_mindflock_tmux_name(title))
+    if name is None:
+        return False, _ENTER_NOT_RUNNING
+    # The reading is the memoized one (≤ _PROBE_TTL old): a fresh probe asks
+    # Claude's `claude agents --json` (0.3-1 s), which stalled every other
+    # dictation batch. What a fresh reading would add is caught by the
+    # screen read below, taken at send time.
+    try:
+        activity = _agent_activity_cached(inst, title)
+    except Exception:  # noqa: BLE001 — unknown reads as "don't type blind"
+        activity = "unknown"
+    if (
+        activity in _PB_DIALOG_ACTIVITIES
+        or activity == "unknown"
+        or _dialog_or_limit_on_screen(inst, name)
+    ):
+        return False, _SEND_IN_DIALOG
+    _note_human_input(title)
+    if not _agent_io.send_dictation(name, erase, text):
         return False, _SEND_FAILED
     return "sent", None
 
@@ -6395,7 +6751,28 @@ async def instance_send(
     pressed; asleep or not running is 409 (never queued, never booted);
     paused, over budget and driven-elsewhere as above. → ``{"sent": true,
     "submitted": true, "entered": true}``. ``enter`` with text, or with
-    ``submit: false``, is 400."""
+    ``submit: false``, is 400.
+
+    ``voice=true``: the text is a voice client's dictation (live typing is
+    ``submit: false``) — it implies ``dialog_safe``, so a session in
+    clarify, on the usage-limit menu, with an unreadable activity or with a
+    dialog on its screen is 409 ``{"in_dialog": true}`` with nothing typed
+    (a submitted voice message is queued, as any dialog-safe send). A
+    whitespace-only ``text`` is allowed with ``submit: false`` (the space
+    between two dictated words). Typing by a person (the terminal, the send
+    box) never sets it and is unchanged.
+
+    ``{"voice": true, "submit": false, "erase": n}``: one batch of live
+    dictation — take back ``n`` characters (the BSpace key ×n), then type
+    ``text`` (may be empty), in ONE tmux call (:func:`_dictate_on_agent`):
+    a recognizer's correction ("fix the bu" → "fix the bag" is erase 1,
+    text "ag") lands whole. Gated like voice typing, checked against the
+    screen at send time: clarify, limit, unknown or a dialog on screen is
+    409 ``{"in_dialog": true}`` with nothing typed and nothing erased.
+    Asleep or not running is 409 (never booted). ``text`` is one line (no
+    control characters, ≤ 2000); ``n`` is 0–2000. → ``{"sent": true,
+    "submitted": false, "erased": n}``. ``erase`` without ``voice: true``
+    and ``submit: false`` (or with ``enter``) is 400."""
     inst, err = _inst_or_404(title)
     if err is not None:
         return err
@@ -6407,9 +6784,25 @@ async def instance_send(
             {"error": "enter presses Enter on the draft: no text, submit not false"},
             status_code=400,
         )
-    if not enter and not text.strip():
+    # A voice client's dictation (opt-in ``voice: true``): never typed into a
+    # dialog, whatever the client believes is on screen — always dialog-safe.
+    # Live typing may be a lone space between two dictated words.
+    voice = (payload or {}).get("voice") is True
+    # One batch of live dictation: Backspace ×erase, then the text.
+    dictating = "erase" in (payload or {})
+    erase = 0
+    if dictating:
+        if not voice or submit or enter:
+            return JSONResponse(
+                {"error": "erase is voice live typing: voice true, submit false"},
+                status_code=400,
+            )
+        erase, eerr = _agent_io.parse_dictation(text, payload.get("erase"))
+        if eerr is not None:
+            return JSONResponse({"error": eerr}, status_code=400)
+    elif not enter and not text.strip() and not (voice and not submit and text):
         return JSONResponse({"error": "empty message"}, status_code=400)
-    dialog_safe = bool((payload or {}).get("dialog_safe", False))
+    dialog_safe = voice or bool((payload or {}).get("dialog_safe", False))
     # "Read everything" on: every prompt asks for its Say line, not only the
     # ones a client marks (core.voice.say_all).
     say = submit and ((payload or {}).get("say") is True or _voice.say_all())
@@ -6434,6 +6827,10 @@ async def instance_send(
     if enter:
         told, reason = await asyncio.to_thread(
             lambda: _enter_on_agent(inst, title, say=say, extra=extra)
+        )
+    elif dictating:
+        told, reason = await asyncio.to_thread(
+            lambda: _dictate_on_agent(inst, title, text, erase)
         )
     else:
         told, reason = await asyncio.to_thread(
@@ -6463,6 +6860,8 @@ async def instance_send(
         return JSONResponse(body)
     if enter:
         return JSONResponse({"sent": True, "submitted": True, "entered": True})
+    if dictating:
+        return JSONResponse({"sent": True, "submitted": False, "erased": erase})
     return JSONResponse({"sent": True, "submitted": submit})
 
 
@@ -12061,6 +12460,62 @@ async def instance_answer(
     return JSONResponse(body, status_code=status)
 
 
+#: title -> (hash of the probe's last screen, whether it shows a dialog):
+#: one provider check per distinct screen, however many keys arrive.
+_PANE_DIALOG_MEMO: Dict[str, tuple] = {}
+_PANE_DIALOG_MEMO_MAX = 1024
+
+
+def _pane_input_answers(inst, title: str) -> bool:
+    """Whether a settling key reaching ``title``'s pane NOW answers a dialog,
+    from what was known BEFORE the key (once it lands the dialog is gone):
+    the session's last activity reading is ``clarify`` / ``limit``, or its
+    probe's last screen (at most ``asking.SCREEN_MAX_AGE_S`` old) shows a
+    dialog by the provider (a sub-agent's prompt while the row reads
+    working). Cached reads only — no tmux, so the terminal socket's loop
+    can ask on every frame. Never raises (unknown → False)."""
+    try:
+        rec = _agent_state._ACTIVITY_CACHE.get(title) or {}
+        if rec.get("reported") in _agent_io.ANSWERABLE_ACTIVITIES:
+            return True
+        screen = _agent_state.last_screen(title, _asking.SCREEN_MAX_AGE_S)
+        if not screen:
+            return False
+        key = hash(screen)
+        hit = _PANE_DIALOG_MEMO.get(title)
+        if hit is not None and hit[0] == key:
+            return hit[1]
+        up = bool(
+            providers.resolve(getattr(inst, "Program", "") or "").dialog_on_screen(
+                screen
+            )
+        )
+        if len(_PANE_DIALOG_MEMO) >= _PANE_DIALOG_MEMO_MAX:
+            _PANE_DIALOG_MEMO.clear()
+        _PANE_DIALOG_MEMO[title] = (key, up)
+        return up
+    except Exception:  # noqa: BLE001 — unknown reads as "not a dialog"
+        return False
+
+
+def _note_pane_input(inst, title: str, data) -> None:
+    """Input typed straight into ``title``'s pane (its terminal socket, a
+    ``/send``) that settles a dialog — Enter, a digit, y/n, Escape; never
+    the wheel, a click, focus or arrow navigation
+    (``agent_io.settling_input``) — while one is up answered it as surely
+    as ``/answer`` does: stamp ``voice_actions.answered_at``, so the voice
+    router never counts a phrase begun before it for the NEXT dialog (a
+    same-id re-ask slipping between polls). Terminal replies to tmux's
+    probes never stamp. Never raises."""
+    try:
+        if is_terminal_reply(data) or not _agent_io.settling_input(data):
+            return
+        if _pane_input_answers(inst, title):
+            _voice_actions.note_answered(title)
+    except Exception:  # noqa: BLE001 — a stamp must never cost a keystroke
+        pass
+
+
 def _answer_dialog(inst, title: str, text: str, keys, dialog_id, by: str):
     """``/answer``'s check-and-type → ``(body, status)``. Blocking.
 
@@ -12130,6 +12585,11 @@ def _answer_dialog(inst, title: str, text: str, keys, dialog_id, by: str):
             _agent_io.note_answered(title, dialog_id)
             # The push's Yes/No buttons were for THIS dialog: spent with it.
             _voice_actions.forget(title, dialog_id)
+        elif dialog_id is None and _agent_io.settles(keys):
+            # An unpinned settling answer (an ask-select's later steps, a
+            # typed answer) answered the dialog too: the voice router never
+            # counts a phrase begun before it for the next one.
+            _voice_actions.note_answered(title)
         return {"ok": True, "activity_before": activity}, 200
 
 
@@ -12637,7 +13097,9 @@ async def terminal_ws(ws: WebSocket, title: str) -> None:
 
     def into_pane(data: bytes) -> None:
         """Input for the pane: through the attach client (the owner, and
-        every terminal's answers to tmux's probes), else send-keys."""
+        every terminal's answers to tmux's probes), else send-keys. A key
+        that settles a dialog stamps the session's last answer first."""
+        _note_pane_input(inst, title, data)
         if typist is None or is_terminal_reply(data):
             os.write(fd, data)
         else:

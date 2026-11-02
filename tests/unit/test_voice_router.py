@@ -9,14 +9,17 @@ The pure module runs against a fixed row list; the route's seams
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from backend.session import tmux
 from backend.web import server
-from backend.web.core import aliases, voice
+from backend.web.core import aliases, voice, voice_actions
 from backend.web.core import voice_router as vr
 from backend.web.routes import voice as voice_routes
 from backend.web.server import app
@@ -959,15 +962,36 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(voice_routes, "_read_spoken", lambda t: state.spoken.get(t, {}))
     monkeypatch.setattr(server, "suggest_repos", lambda **kw: list(REPOS))
     monkeypatch.setattr(server, "_recent_repo_paths", lambda: [])
-    return state
+    monkeypatch.setattr(sys.modules[__name__], "_ENV", state)
+    voice_actions._reset_for_tests()
+    yield state
+    voice_actions._reset_for_tests()
 
 
-def route(text, session="", title=None, pending=None):
+#: The route fixture's state, for :func:`route`'s default timing.
+_ENV = None
+
+
+def route(text, session="", title=None, pending=None, timing=True):
+    """POST /api/voice/route as the clients do. ``timing`` (default): the
+    phrase began just now and the client has had every dialog of the
+    fixture for 10 s — what a real answer looks like; False: no timing at
+    all; a dict: those fields as given."""
     body = {"text": text, "session": session}
     if title is not None:
         body["title"] = title
     if pending is not None:
         body["pending"] = pending
+    if timing is True:
+        dialogs = getattr(_ENV, "dialogs", None) or {}
+        body["spoke_ms_ago"] = 0
+        body["dialog_seen"] = {
+            t: {"id": d.get("id"), "ms_ago": 10_000}
+            for t, d in dialogs.items()
+            if isinstance(d, dict) and d.get("id")
+        }
+    elif isinstance(timing, dict):
+        body.update(timing)
     r = client.post("/api/voice/route", json=body)
     assert r.status_code == 200, r.text
     return r.json()
@@ -1102,6 +1126,403 @@ def test_route_numbered_answer_is_mapped_then_resent(env):
     # … or the bare words to that session.
     got = route(first["words"], "docs")
     assert (got["title"], got["keys"]) == ("docs", ["2"])
+
+
+def _ans(**kw):
+    base = {
+        "kind": "answer",
+        "title": "docs",
+        "name": "API docs",
+        "dialog_id": "d1",
+        "keys": ["1"],
+        "say": "Answered yes on API docs.",
+    }
+    base.update(kw)
+    return base
+
+
+def test_phrase_timing_is_on_the_servers_clock():
+    """Ages, not the client's clock: a client an hour off still lines up."""
+    spoke, seen = vr.phrase_timing(
+        {
+            "spoke_ms_ago": 1500,
+            "spoke_at": 1,  # the client's epoch: informational, never compared
+            "dialog_seen": {"docs": {"id": "d1", "ms_ago": 4000}, "bad": {"id": ""}},
+        },
+        now=1000.0,
+    )
+    assert spoke == 998.5
+    assert seen == {"docs": ("d1", 996.0)}
+    for junk in (-1, True, "12", None, 10**9):
+        assert vr.phrase_timing({"spoke_ms_ago": junk}, now=1000.0)[0] is None
+    assert vr.phrase_timing(["nope"]) == (None, {})
+
+
+def test_answer_in_time_presses_only_after_the_dialog_was_there():
+    """R8-bis: a "yes" begun before the dialog appeared (or within the
+    human-reaction margin of it) is no answer; one begun after is."""
+    seen = {"docs": ("d1", 100.0)}
+    ok = _ans()
+    assert vr.answer_in_time(ok, 100.0 + vr.ANSWER_AFTER_S, seen) is ok
+    for spoke in (99.7, 100.0, 100.29):
+        got = vr.answer_in_time(ok, spoke, seen)
+        assert got["kind"] == "early" and "keys" not in got
+        assert (got["title"], got["dialog_id"]) == ("docs", "d1")
+        assert got["say"] == "API docs asked just now: say your answer again."
+        assert got["early_ms"] == round((100.0 + vr.ANSWER_AFTER_S - spoke) * 1000)
+    # No timing, or the client never had THIS dialog: never pressed.
+    assert vr.answer_in_time(ok, None, seen)["early_ms"] is None
+    assert vr.answer_in_time(ok, 200.0, {})["kind"] == "early"
+    assert vr.answer_in_time(ok, 200.0, {"docs": ("d0", 1.0)})["kind"] == "early"
+    # The server's own stamp (the row's asking.ts) is a later bound: it wins.
+    rows = [{"title": "docs", "asking": {"kind": "dialog", "ts": 150.0}}]
+    assert vr.answer_in_time(ok, 120.0, seen, rows)["kind"] == "early"
+    assert vr.answer_in_time(ok, 150.3, seen, rows) is ok
+    q = [{"title": "docs", "asking": {"kind": "question", "ts": 150.0}}]
+    assert vr.answer_in_time(ok, 120.0, seen, q) is ok
+    # Nothing to press: untouched.
+    for other in (
+        {"kind": "prompt"},
+        _ans(keys=[]),
+        _ans(dialog_id=None),
+        {"kind": "answer", "no_dialog": True, "title": "docs"},
+    ):
+        assert vr.answer_in_time(other, None, {}) == other
+
+
+def test_route_yes_before_the_dialog_presses_nothing(env):
+    """The judge's R8-bis over HTTP: the phrase began 1.2 s ago, the dialog
+    was first seen 0.4 s ago — early; the same words begun after it answer."""
+    env.dialogs["docs"] = PERM
+    before = {
+        "spoke_ms_ago": 1200,
+        "dialog_seen": {"docs": {"id": "d1", "ms_ago": 400}},
+    }
+    got = route("yes", "docs", timing=before)
+    assert got["kind"] == "early" and got["dialog_id"] == "d1"
+    assert "keys" not in got and 790 <= got["early_ms"] <= 1110
+    after = {"spoke_ms_ago": 800, "dialog_seen": {"docs": {"id": "d1", "ms_ago": 2000}}}
+    assert route("yes", "docs", timing=after)["keys"] == ["1"]
+    # An older client (no timing at all) is never pressed for.
+    assert route("yes", "docs", timing=False)["kind"] == "early"
+    # Another session's answer, the same rule.
+    got = route("tell docs no", "invoice-parser", timing=before)
+    assert got["kind"] == "early" and got["title"] == "docs"
+
+
+def test_route_question_tool_answer_before_it_presses_nothing(env):
+    env.dialogs["docs"] = _ask("multi")
+    did = _ask("multi")["id"]
+    before = {"spoke_ms_ago": 900, "dialog_seen": {"docs": {"id": did, "ms_ago": 100}}}
+    got = route("cheese and mushrooms", "docs", timing=before)
+    assert got["kind"] == "early" and got["dialog_id"] == did
+
+
+def test_a_dialog_that_waited_past_ten_minutes_is_still_answerable():
+    """The client keeps its first sighting, so a dialog left waiting 30
+    minutes reports a 1 800 000 ms age: it is clamped to 600 s (a LATER
+    sighting, only ever stricter), never dropped — dropping it made every
+    voice answer to that dialog "early" forever (judge MF1, cycle 3)."""
+    for waited_ms in (660_000, 1_800_000, 10**9):
+        spoke, seen = vr.phrase_timing(
+            {
+                "spoke_ms_ago": 0,
+                "dialog_seen": {"docs": {"id": "d1", "ms_ago": waited_ms}},
+            },
+            now=NOW,
+        )
+        assert seen == {"docs": ("d1", NOW - 600.0)}, waited_ms
+        ans = {"kind": "answer", "title": "docs", "dialog_id": "d1", "keys": ["1"]}
+        assert vr.answer_in_time(ans, spoke, seen)["kind"] == "answer", waited_ms
+    # Clamping never lets an early phrase through: begun before the clamped
+    # sighting is still early.
+    spoke, seen = vr.phrase_timing(
+        {
+            "spoke_ms_ago": 700_000,
+            "dialog_seen": {"docs": {"id": "d1", "ms_ago": 1_800_000}},
+        },
+        now=NOW,
+    )
+    assert spoke is None
+    ans = {"kind": "answer", "title": "docs", "dialog_id": "d1", "keys": ["1"]}
+    assert vr.answer_in_time(ans, spoke, seen)["kind"] == "early"
+
+
+def test_phrase_timing_drops_every_insane_age():
+    """A bool, a string, None, NaN or a negative age is no timing for either
+    field; an entry with no id, or that is not an object, is skipped. A
+    past-600 s ``spoke_ms_ago`` is dropped too, while a past-600 s sighting
+    is clamped to 600 s (next test)."""
+    junk = (True, False, "12", None, -1, -0.5, float("nan"), [5], {"x": 1})
+    for v in junk:
+        spoke, seen = vr.phrase_timing(
+            {"spoke_ms_ago": v, "dialog_seen": {"docs": {"id": "d1", "ms_ago": v}}},
+            now=1000.0,
+        )
+        assert spoke is None and seen == {}, v
+    for v in (600_001, 10**9):
+        spoke, _ = vr.phrase_timing({"spoke_ms_ago": v}, now=1000.0)
+        assert spoke is None, v
+    # The edges themselves are believed.
+    spoke, seen = vr.phrase_timing(
+        {"spoke_ms_ago": 600_000, "dialog_seen": {"docs": {"id": "d1", "ms_ago": 0}}},
+        now=1000.0,
+    )
+    assert spoke == 400.0 and seen == {"docs": ("d1", 1000.0)}
+    _, seen = vr.phrase_timing(
+        {
+            "dialog_seen": {
+                "a": "d1",
+                "b": ["d1", 5],
+                "c": None,
+                "d": {"ms_ago": 5},
+                "e": {"id": None, "ms_ago": 5},
+                "f": {"id": "d9", "ms_ago": 5},
+            }
+        },
+        now=1000.0,
+    )
+    assert seen == {"f": ("d9", 999.995)}
+    # dialog_seen not an object, or no body at all.
+    assert vr.phrase_timing({"dialog_seen": ["docs"]}, now=1.0) == (None, {})
+    for payload in (None, "text", 5, []):
+        assert vr.phrase_timing(payload) == (None, {})
+
+
+def test_phrase_timing_reads_at_most_64_sightings_as_strings():
+    raw = {"s%03d" % i: {"id": "d%d" % i, "ms_ago": 100} for i in range(100)}
+    _, seen = vr.phrase_timing({"dialog_seen": raw}, now=1000.0)
+    assert len(seen) == 64
+    # Titles and ids come back as strings, whatever the client sent.
+    _, seen = vr.phrase_timing({"dialog_seen": {7: {"id": 42, "ms_ago": 0}}}, now=5.0)
+    assert seen == {"7": ("42", 5.0)}
+
+
+def test_dialog_visible_at_is_the_latest_evidence_of_that_dialog():
+    seen = {"docs": ("d1", 100.0)}
+    asking = {"title": "docs", "asking": {"kind": "dialog", "ts": 150.0}}
+    # The client never had it, or had another one: no time at all.
+    assert vr.dialog_visible_at("billing", "d1", seen, asking) is None
+    assert vr.dialog_visible_at("docs", "d2", seen, asking) is None
+    assert vr.dialog_visible_at("docs", "d1", {}, None) is None
+    assert vr.dialog_visible_at("docs", "d1", None, None) is None
+    # Only the client's sighting: that.
+    assert vr.dialog_visible_at("docs", "d1", seen, None) == 100.0
+    # The server's clarify stamp, later: it wins; earlier: the sighting does.
+    assert vr.dialog_visible_at("docs", "d1", seen, asking) == 150.0
+    early = {"title": "docs", "asking": {"kind": "dialog", "ts": 50.0}}
+    assert vr.dialog_visible_at("docs", "d1", seen, early) == 100.0
+    # A non-dialog ask, a row without one, or a row that is no row: ignored.
+    for row in (
+        {"title": "docs", "asking": {"kind": "question", "ts": 150.0}},
+        {"title": "docs", "asking": "dialog"},
+        {"title": "docs"},
+        "docs",
+        ["docs"],
+    ):
+        assert vr.dialog_visible_at("docs", "d1", seen, row) == 100.0, row
+    # The id is compared as a string.
+    assert vr.dialog_visible_at("n", 7, {"n": ("7", 3.0)}, None) == 3.0
+
+
+def test_answer_in_time_boundary_and_name_fallback():
+    seen = {"docs": ("d1", 100.0)}
+    ok = _ans()
+    assert vr.answer_in_time(ok, 100.0 + 0.3, seen) is ok
+    got = vr.answer_in_time(ok, 100.299, seen)
+    assert got["kind"] == "early" and got["early_ms"] == 1
+    assert set(got) == {"kind", "title", "name", "dialog_id", "say", "early_ms"}
+    # No timing at all, or no sighting: early_ms is unknown.
+    for spoke, s in ((None, seen), (500.0, {}), (None, {})):
+        got = vr.answer_in_time(ok, spoke, s)
+        assert got["kind"] == "early" and got["early_ms"] is None
+        assert got["say"] == "API docs asked just now: say your answer again."
+    # No name: the title says it.
+    got = vr.answer_in_time(_ans(name=None), None, {})
+    assert got["name"] == "docs"
+    assert got["say"] == "docs asked just now: say your answer again."
+    got = vr.answer_in_time(_ans(name=""), None, {})
+    assert got["say"] == "docs asked just now: say your answer again."
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {"kind": "prompt"},
+        {"kind": "switch", "title": "docs", "name": "API docs"},
+        {"kind": "question", "title": "docs", "say": "API docs: Run ls?"},
+        {"kind": "stop"},
+        {"kind": "cancel"},
+        {"kind": "hush"},
+        {"kind": "answer", "title": "docs", "dialog_id": "d1", "keys": []},
+        {"kind": "answer", "title": "docs", "dialog_id": "", "keys": ["1"]},
+        {"kind": "answer", "title": "docs", "keys": ["1"]},
+        {"kind": "answer", "title": "docs", "dialog_id": "d1"},
+        None,
+        "prompt",
+    ],
+)
+def test_answer_in_time_passes_whatever_presses_nothing(reply):
+    """No timing, no sighting: what presses no key goes out as it came."""
+    assert vr.answer_in_time(reply, None, {}) is reply
+    assert vr.answer_in_time(reply, None, {}, ROWS) is reply
+
+
+def test_answer_in_time_a_late_clarify_stamp_raises_the_bound():
+    """The client had the dialog at 100 s, but the server only saw the
+    session go to clarify at 102 s (the row's asking.ts): a phrase begun at
+    101 s passes on the client's sighting alone, never with the row."""
+    seen = {"docs": ("d1", 100.0)}
+    ok = _ans()
+    assert vr.answer_in_time(ok, 101.0, seen) is ok
+    rows = [dict(ROWS[1], asking={"kind": "dialog", "ts": 102.0})]
+    got = vr.answer_in_time(ok, 101.0, seen, rows)
+    assert got["kind"] == "early" and got["early_ms"] == 1300
+    assert vr.answer_in_time(ok, 102.3, seen, rows) is ok
+
+
+#: Ages as POST /api/voice/route carries them (ms, 0 … 600 s).
+_AGES = st.integers(min_value=0, max_value=600_000)
+
+
+def _timed(spoke_ms_ago, seen_ms_ago, rows=()):
+    payload = {"dialog_seen": {"docs": {"id": "d1", "ms_ago": seen_ms_ago}}}
+    if spoke_ms_ago is not None:
+        payload["spoke_ms_ago"] = spoke_ms_ago
+    spoke, seen = vr.phrase_timing(payload, now=NOW)
+    return spoke, seen, vr.answer_in_time(_ans(), spoke, seen, rows)
+
+
+@settings(max_examples=300, deadline=None)
+@given(_AGES, _AGES)
+def test_answer_in_time_property_answer_iff_after_the_margin(spoke_ago, seen_ago):
+    """For any phrase and sighting ages: ``answer`` iff the phrase began at
+    least ANSWER_AFTER_S after the sighting; an ``early`` never has keys."""
+    spoke, seen, got = _timed(spoke_ago, seen_ago)
+    assert (got["kind"] == "answer") is (spoke >= seen["docs"][1] + vr.ANSWER_AFTER_S)
+    if got["kind"] == "early":
+        assert "keys" not in got and got["early_ms"] >= 0
+        assert (got["title"], got["dialog_id"]) == ("docs", "d1")
+
+
+@settings(max_examples=300, deadline=None)
+@given(_AGES, _AGES, st.floats(min_value=-700.0, max_value=700.0))
+def test_answer_in_time_property_a_clarify_stamp_only_raises(spoke_ago, seen_ago, off):
+    """The row's asking.ts can turn an answer early, never an early answer."""
+    rows = [{"title": "docs", "asking": {"kind": "dialog", "ts": NOW + off}}]
+    spoke, seen, got = _timed(spoke_ago, seen_ago, rows)
+    visible = max(seen["docs"][1], NOW + off)
+    assert (got["kind"] == "answer") is (spoke >= visible + vr.ANSWER_AFTER_S)
+    if _timed(spoke_ago, seen_ago)[2]["kind"] == "early":
+        assert got["kind"] == "early"
+    if got["kind"] == "early":
+        assert "keys" not in got
+
+
+@settings(deadline=None)
+@given(st.one_of(st.none(), _AGES), st.one_of(st.none(), _AGES))
+def test_answer_in_time_property_half_the_timing_presses_nothing(spoke_ago, seen_ago):
+    payload = {}
+    if spoke_ago is not None:
+        payload["spoke_ms_ago"] = spoke_ago
+    if seen_ago is not None:
+        payload["dialog_seen"] = {"docs": {"id": "d1", "ms_ago": seen_ago}}
+    if spoke_ago is not None and seen_ago is not None:
+        return
+    spoke, seen = vr.phrase_timing(payload, now=NOW)
+    got = vr.answer_in_time(_ans(), spoke, seen)
+    assert got["kind"] == "early" and "keys" not in got and got["early_ms"] is None
+
+
+def test_route_select_answer_begun_before_its_step_presses_nothing(env, monkeypatch):
+    """The question tool's own path (``_select_answer`` → ``(answer, rows)``):
+    early, no keys, and nothing reaches the terminal; begun after, its keys."""
+    from backend.web.core import agent_io
+
+    monkeypatch.setattr(
+        agent_io, "send_answer", lambda *a, **k: pytest.fail("the router pressed")
+    )
+    monkeypatch.setattr(
+        tmux, "send_keys", lambda *a, **k: pytest.fail("keys sent"), raising=False
+    )
+    env.dialogs["docs"] = _ask("tabs")
+    did = env.dialogs["docs"]["id"]
+    before = {"spoke_ms_ago": 900, "dialog_seen": {"docs": {"id": did, "ms_ago": 100}}}
+    got = route("two", "docs", timing=before)
+    assert got["kind"] == "early" and got["dialog_id"] == did
+    assert "keys" not in got and got["title"] == "docs"
+    after = {"spoke_ms_ago": 100, "dialog_seen": {"docs": {"id": did, "ms_ago": 900}}}
+    got = route("two", "docs", timing=after)
+    assert got["kind"] == "answer" and got["keys"] == ["2"]
+    # Old clients (no timing): the select answer is never pressed either.
+    assert route("two", "docs", timing=False)["kind"] == "early"
+
+
+def test_route_without_timing_refuses_answers_but_routes_the_rest(env):
+    """The fail-closed contract for an older client: a "yes" to a pending
+    dialog is early, a command routes as it always did."""
+    env.dialogs["docs"] = PERM
+    got = route("yes", "docs", timing=False)
+    assert got["kind"] == "early" and got["early_ms"] is None
+    assert got["say"] == "API docs asked just now: say your answer again."
+    got = route("switch to login-fix", "docs", timing=False)
+    assert got["kind"] == "switch" and got["title"] == "login-fix"
+    assert route("fix the login bug", "docs", timing=False) == {"kind": "prompt"}
+    assert route("never mind", "docs", timing=False) == {"kind": "cancel"}
+    got = route("what is it asking", "docs", timing=False)
+    assert got["kind"] == "question" and "keys" not in got
+
+
+def test_route_a_stale_sighting_is_no_sighting(env):
+    """The client last had d0; the screen now asks d1: a "yes" is early,
+    however long ago that older dialog was seen."""
+    env.dialogs["docs"] = PERM
+    stale = {"spoke_ms_ago": 0, "dialog_seen": {"docs": {"id": "d0", "ms_ago": 60_000}}}
+    got = route("yes", "docs", timing=stale)
+    assert got["kind"] == "early" and got["dialog_id"] == "d1"
+    assert got["early_ms"] is None
+
+
+def test_route_ignores_the_clients_clock(env):
+    """spoke_at an hour off either way changes nothing: only ages count."""
+    env.dialogs["docs"] = PERM
+    import time
+
+    for skew in (-3600_000, 3600_000):
+        timing = {
+            "spoke_ms_ago": 500,
+            "spoke_at": int(time.time() * 1000) + skew,
+            "dialog_seen": {"docs": {"id": "d1", "ms_ago": 2000}},
+        }
+        got = route("yes", "docs", timing=timing)
+        assert got["kind"] == "answer" and got["keys"] == ["1"], skew
+    # …and a sane spoke_at never rescues an insane age.
+    timing = {
+        "spoke_ms_ago": -5,
+        "spoke_at": int(time.time() * 1000) - 5000,
+        "dialog_seen": {"docs": {"id": "d1", "ms_ago": 2000}},
+    }
+    assert route("yes", "docs", timing=timing)["kind"] == "early"
+
+
+def test_select_answer_is_none_none_off_the_select_path(env):
+    """``_select_answer``'s two refusals are ``(None, None)``, and the route
+    goes on to the general answer with no select rows read."""
+    import asyncio
+
+    env.dialogs["docs"] = PERM  # a permission prompt: not a select
+    assert asyncio.run(voice_routes._select_answer("two", "docs", None)) == (None, None)
+    env.dialogs["docs"] = _ask("tabs")  # a select, but "purple" is no answer
+    assert asyncio.run(voice_routes._select_answer("purple", "docs", None)) == (
+        None,
+        None,
+    )
+    env.dialogs.pop("docs")
+    assert asyncio.run(voice_routes._select_answer("two", "docs", None)) == (None, None)
+    assert env.row_reads == 0
+    env.dialogs["docs"] = _ask("tabs")
+    got, rows = asyncio.run(voice_routes._select_answer("two", "docs", None))
+    assert got["keys"] == ["2"] and rows is env.rows
 
 
 def test_route_remote_answer_is_never_read(env):
@@ -1970,3 +2391,161 @@ def test_route_help_carries_the_question(env):
         "kind": "help",
         "text": "what is a team run",
     }
+
+
+# --- the server answer guard: the last answer per session (cycle 4) ----------
+@pytest.fixture
+def answered(monkeypatch):
+    """``voice_actions``' answer stamps on a fake clock: ``answered(title,
+    at)`` records an answer to one of ``title``'s dialogs at epoch ``at``,
+    the way ``/answer``'s ``forget(title, dialog_id)`` does."""
+    voice_actions._reset_for_tests()
+    clock = [0.0]
+    monkeypatch.setattr(voice_actions, "_clock", lambda: clock[0])
+
+    def stamp(title, at, dialog_id="d1"):
+        clock[0] = at
+        voice_actions.forget(title, dialog_id)
+
+    yield stamp
+    voice_actions._reset_for_tests()
+
+
+#: Everything relative to NOW. ``seen``: the client's sighting (id, seconds
+#: before NOW); ``asked``: the row's asking.ts (seconds before NOW) or None;
+#: ``answers``: (title, seconds before NOW) stamped before the phrase is
+#: judged; ``spoke``: when the phrase began (seconds before NOW); ``id``:
+#: the dialog on screen now.
+_A = vr.ANSWER_AFTER_S + vr.ANSWERED_MARGIN_S
+# fmt: off
+_GUARD_CASES = [
+    # The same command asked again with the SAME id after a voice answer;
+    # the client kept its first sighting (60 s old) and the server missed
+    # the clarify gap (asking.ts still the first ask): a "yes" begun before
+    # that answer used to press the re-ask.
+    ("re-ask same id: begun before the answer", ("d1", 60), 60, [("docs", 5)], 6, "d1", "early"),
+    ("re-ask same id: begun during the answer", ("d1", 60), 60, [("docs", 5)], 5.0, "d1", "early"),
+    ("re-ask same id: begun after answer + margins", ("d1", 60), 60, [("docs", 5)], 5 - _A, "d1", "answer"),
+    # ...and once the server did see the re-ask (asking.ts), that wins.
+    ("re-ask same id: asking.ts of the re-ask wins", ("d1", 60), 1, [("docs", 5)], 2, "d1", "early"),
+    # A hand answer (strip, pop-up, push button: all /answer) then a voice
+    # "yes" begun before it: no answer to whatever is up next.
+    ("hand answer, then a yes begun before it", ("d1", 30), None, [("docs", 2)], 2.5, "d1", "early"),
+    ("hand answer, then a yes begun just inside the margin", ("d1", 30), None, [("docs", 2)], 2 - _A + 0.001, "d1", "early"),
+    ("hand answer, then a yes begun after it", ("d1", 30), None, [("docs", 2)], 2 - _A, "d1", "answer"),
+    # Two dialogs back to back: d1 answered 2 s ago, d2 up and seen 1.8 s
+    # ago. A phrase begun after d2 was there answers it; the tail of the
+    # phrase that answered d1 does not.
+    ("back to back: a fresh yes answers d2", ("d2", 1.8), None, [("docs", 2)], 1.0, "d2", "answer"),
+    ("back to back: begun before d1's answer", ("d2", 1.8), None, [("docs", 2)], 2.1, "d2", "early"),
+    # ...even when the client claims an impossibly old sighting of d2.
+    ("back to back: an old d2 sighting can't predate d1's answer", ("d2", 50), None, [("docs", 2)], 2.1, "d2", "early"),
+    # The client still has d1 but d2 is up: its sighting does not count.
+    ("back to back: a sighting of the previous id is none", ("d1", 50), None, [("docs", 2)], 0.5, "d2", "early"),
+    # MF1: a dialog waiting 30 minutes (sighting clamped to 600 s) stays
+    # answerable, with or without an older answer in that session.
+    ("MF1: 30 min wait, no answer since start", ("d1", 1800), None, [], 0.8, "d1", "answer"),
+    ("MF1: 30 min wait, last answer 31 min ago", ("d1", 1800), None, [("docs", 1860)], 0.8, "d1", "answer"),
+    ("MF1: 30 min wait, last answer 2 min ago", ("d1", 1800), None, [("docs", 120)], 0.8, "d1", "answer"),
+    # Another session's answer moves nothing here.
+    ("another session's answer", ("d1", 30), None, [("billing", 0.1)], 1.0, "d1", "answer"),
+    ("a later answer elsewhere, an earlier one here", ("d1", 30), None, [("docs", 9), ("billing", 0.1)], 1.0, "d1", "answer"),
+]
+# fmt: on
+
+
+@pytest.mark.parametrize(
+    "seen,asked,answers,spoke,did,want",
+    [c[1:] for c in _GUARD_CASES],
+    ids=[c[0] for c in _GUARD_CASES],
+)
+def test_answer_guard_last_answer_per_session(
+    answered, seen, asked, answers, spoke, did, want
+):
+    for title, ago in answers:
+        answered(title, NOW - ago)
+    payload = {
+        "spoke_ms_ago": int(round(spoke * 1000)),
+        "dialog_seen": {"docs": {"id": seen[0], "ms_ago": int(round(seen[1] * 1000))}},
+    }
+    rows = []
+    if asked is not None:
+        rows = [{"title": "docs", "asking": {"kind": "dialog", "ts": NOW - asked}}]
+    t_spoke, t_seen = vr.phrase_timing(payload, now=NOW)
+    got = vr.answer_in_time(_ans(dialog_id=did), t_spoke, t_seen, rows)
+    assert got["kind"] == want, got
+    if want == "early":
+        assert "keys" not in got and got["dialog_id"] == did
+
+
+def test_dialog_visible_at_counts_the_last_answer_plus_its_margin(answered):
+    seen = {"docs": ("d1", 100.0)}
+    assert vr.dialog_visible_at("docs", "d1", seen, None) == 100.0
+    answered("docs", 150.0)
+    want = 150.0 + vr.ANSWERED_MARGIN_S
+    assert vr.dialog_visible_at("docs", "d1", seen, None) == want
+    # An explicit stamp is read instead of the store; 0 / junk = none.
+    assert vr.dialog_visible_at("docs", "d1", seen, None, answered=0.0) == 100.0
+    assert vr.dialog_visible_at("docs", "d1", seen, None, answered="x") == 100.0
+    assert vr.dialog_visible_at("docs", "d1", seen, None, answered=90.0) == 100.0
+    # Never a sighting it doesn't have: the id still has to match.
+    assert vr.dialog_visible_at("docs", "d2", seen, None) is None
+
+    # A store that fails reads as no stamp; the other evidence still holds.
+    def boom(title):
+        raise RuntimeError("store down")
+
+    voice_actions_answered_at = voice_actions.answered_at
+    try:
+        voice_actions.answered_at = boom
+        assert vr.dialog_visible_at("docs", "d1", seen, None) == 100.0
+    finally:
+        voice_actions.answered_at = voice_actions_answered_at
+
+
+@settings(max_examples=300, deadline=None)
+@given(_AGES, _AGES, st.floats(min_value=-700.0, max_value=700.0, allow_nan=False))
+def test_answer_guard_property_the_last_answer_only_raises(spoke_ago, seen_ago, off):
+    """A last-answer stamp can only make the dialog look later (stricter):
+    never earlier than without it, and never earlier than the stamp plus its
+    margin."""
+    payload = {
+        "spoke_ms_ago": spoke_ago,
+        "dialog_seen": {"docs": {"id": "d1", "ms_ago": seen_ago}},
+    }
+    spoke, seen = vr.phrase_timing(payload, now=NOW)
+    plain = vr.dialog_visible_at("docs", "d1", seen, None, answered=0.0)
+    guarded = vr.dialog_visible_at("docs", "d1", seen, None, answered=NOW + off)
+    assert guarded >= plain
+    assert guarded >= NOW + off + vr.ANSWERED_MARGIN_S
+    if spoke < NOW + off:  # begun before that answer: never in time
+        assert spoke < guarded + vr.ANSWER_AFTER_S
+
+
+def test_route_a_yes_begun_before_a_hand_answer_presses_nothing(env, monkeypatch):
+    """Over HTTP: the person clicked Yes on d1 a second ago (``/answer``
+    stamps the session); the agent asks the same command again — same id —
+    and the client still reports its first sighting from a minute ago. A
+    "yes" that began 1.5 s ago, before the click, is early; one begun now
+    answers."""
+    import time as _time
+
+    env.dialogs["docs"] = PERM
+    monkeypatch.setattr(voice_actions, "_clock", lambda: _time.time() - 1.0)
+    voice_actions.forget("docs", "d1")  # what /answer does after the click
+    stale = {
+        "spoke_ms_ago": 1500,
+        "dialog_seen": {"docs": {"id": "d1", "ms_ago": 60_000}},
+    }
+    got = route("yes", "docs", timing=stale)
+    assert got["kind"] == "early" and got["dialog_id"] == "d1"
+    # Begun 0.5 s before the click; allowed from 0.5 s after it: ~1000 ms early.
+    assert "keys" not in got and 900 <= got["early_ms"] <= 1100
+    fresh = {"spoke_ms_ago": 0, "dialog_seen": {"docs": {"id": "d1", "ms_ago": 60_000}}}
+    assert route("yes", "docs", timing=fresh)["keys"] == ["1"]
+    # "tell docs yes" from another session: the same guard.
+    got = route("tell docs yes", "invoice-parser", timing=stale)
+    assert got["kind"] == "early" and got["title"] == "docs"
+    # Session removal drops the stamp (forget without an id).
+    voice_actions.forget("docs")
+    assert voice_actions.answered_at("docs") == 0.0

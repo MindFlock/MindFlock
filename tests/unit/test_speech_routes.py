@@ -6,6 +6,7 @@ the backend registry swapped for fakes and the settings store at a tmp file
 from __future__ import annotations
 
 import io
+import time
 import wave
 from types import SimpleNamespace
 
@@ -48,8 +49,15 @@ class _Fake(speech.Backend):
 
 
 @pytest.fixture(autouse=True)
-def _store(isolate_settings_store):
-    """Delegate to the shared settings-store isolation (tests/conftest.py)."""
+def _store(isolate_settings_store, monkeypatch):
+    """Delegate to the shared settings-store isolation (tests/conftest.py);
+    a fresh voice chain, its background work inline."""
+    monkeypatch.setattr(speech, "_spawn", lambda target, name: target())
+    speech.TTS_CHAIN.reset()
+    routes.SPEAK_CACHE.clear()
+    yield
+    speech.TTS_CHAIN.reset()
+    routes.SPEAK_CACHE.clear()
 
 
 @pytest.fixture
@@ -108,7 +116,12 @@ class TestGet:
         assert final["samples"] == 3
         assert final["timeout_ms"] == int(speech_stream.FINAL_TIMEOUT_S * 1000)
         assert 0 <= final["typical_ms"] <= final["p95_ms"] <= final["timeout_ms"]
-        assert final["expect_ms"] == final["p95_ms"]  # measured, not the bench's
+        # Measured, not the bench's: the median plus the margin (held up to
+        # the floor; these fakes answer in a few ms).
+        assert final["expect_ms"] == max(
+            speech_stream.EXPECT_FLOOR_MS,
+            final["typical_ms"] + speech_stream.EXPECT_MARGIN_MS,
+        )
         assert body["server_ready"]["final_ms"] == final["expect_ms"]
 
     def test_reflects_settings_and_readiness(self, fakes):
@@ -423,6 +436,189 @@ class TestSpeak:
         assert r.json() == {"error": "piper failed: no voice"}
 
 
+class TestSpeakChain:
+    """The configured voice down → piper says the line, the headers say so,
+    and identical concurrent lines share one synthesis."""
+
+    @pytest.fixture
+    def pair(self, monkeypatch):
+        host, piper = _Fake("tts"), _Fake("tts", detail="piper voice x")
+        host.id, host.label = "openai", "the host"
+        piper.id, piper.audio = "local", (b"RIFFpiper", "audio/wav")
+        monkeypatch.setattr(
+            speech, "BACKENDS", {"stt": [_Fake("stt")], "tts": [host, piper]}
+        )
+        _voice(tts_backend="openai")
+        return SimpleNamespace(host=host, piper=piper)
+
+    def test_headers_when_the_configured_voice_speaks(self, pair):
+        r = client.post("/api/voice/speak", json={"text": "All done."})
+        assert r.status_code == 200, r.text
+        assert r.headers["x-voice-backend"] == "openai"
+        assert r.headers["x-voice-engine"] == "openai"
+        assert r.headers["x-voice-fallback"] == "0"
+        assert r.headers["x-voice-cache"] == "miss"
+        assert int(r.headers["x-voice-ms"]) >= 0
+        assert "x-voice-shared" not in r.headers
+        r = client.post("/api/voice/speak", json={"text": "All done."})
+        assert r.headers["x-voice-cache"] == "hit"
+        assert r.headers["x-voice-engine"] == "openai"
+        assert len(pair.host.calls) == 1
+
+    def test_a_down_host_falls_back_and_says_so(self, pair):
+        pair.host.fail = speech.SpeechError(
+            "could not reach 127.0.0.1:8770: refused", down=True
+        )
+        for line in ("One.", "Two.", "Three."):
+            r = client.post("/api/voice/speak", json={"text": line})
+            assert r.status_code == 200, r.text
+            assert r.content == b"RIFFpiper"
+            assert r.headers["content-type"].startswith("audio/wav")
+            assert r.headers["x-voice-backend"] == "local"
+            assert r.headers["x-voice-engine"] == "local"
+            assert r.headers["x-voice-fallback"] == "1"
+        assert len(pair.host.calls) == 1  # one attempt, then it is down
+        assert [c[1] for c in pair.piper.calls] == ["One.", "Two.", "Three."]
+        # A cached line is served in the voice the reply is in.
+        r = client.post("/api/voice/speak", json={"text": "Two."})
+        assert r.headers["x-voice-cache"] == "hit"
+        assert r.headers["x-voice-engine"] == "local"
+
+    def test_a_request_error_is_not_a_fallback(self, pair):
+        pair.host.fail = speech.SpeechError("the host answered 400: bad voice")
+        r = client.post("/api/voice/speak", json={"text": "Hi"})
+        assert r.status_code == 502
+        assert r.json() == {"error": "the host answered 400: bad voice"}
+        assert pair.piper.calls == []
+
+    def test_502_when_down_with_no_fallback(self, pair):
+        pair.piper.ok = False
+        pair.host.fail = speech.SpeechError("could not reach x", down=True)
+        assert client.post("/api/voice/speak", json={"text": "One."}).status_code == 502
+        r = client.post("/api/voice/speak", json={"text": "Two."})
+        assert r.status_code == 502
+        assert "no fallback voice is ready" in r.json()["error"]
+        assert len(pair.host.calls) == 1
+
+    def test_get_voice_is_truthful_about_the_fallback(self, pair):
+        r = client.get("/api/voice").json()["server_ready"]
+        assert r["tts"] is True and r["tts_engine"] == "openai"
+        assert r["tts_fallback"] is False and r["tts_down"] == ""
+        pair.host.fail = speech.SpeechError("could not reach x: refused", down=True)
+        client.post("/api/voice/speak", json={"text": "One."})
+        r = client.get("/api/voice").json()["server_ready"]
+        assert r["tts"] is True and r["tts_backend"] == "openai"
+        assert r["tts_engine"] == "local (fallback)" and r["tts_fallback"] is True
+        assert r["tts_down"] == "could not reach x: refused"
+        pair.piper.ok = False
+        r = client.get("/api/voice").json()["server_ready"]
+        assert r["tts"] is False
+
+    def test_each_page_has_its_own_reply(self, pair):
+        """The phone's reply fell back (its host line was slow): the
+        desktop's next line is still the host's, the phone's stays on
+        piper — even for a line the desktop just had cached in the host's
+        voice (one voice per reply, per page)."""
+        phone, desk = {"User-Agent": "phone"}, {"User-Agent": "desktop"}
+        pair.host.fail = speech._Slow("the host is slow")
+        r = client.post("/api/voice/speak", json={"text": "One."}, headers=phone)
+        assert r.headers["x-voice-engine"] == "local"
+        pair.host.fail = None
+        r = client.post("/api/voice/speak", json={"text": "Two."}, headers=desk)
+        assert r.headers["x-voice-engine"] == "openai"
+        r = client.post("/api/voice/speak", json={"text": "Two."}, headers=phone)
+        assert r.headers["x-voice-engine"] == "local"
+        assert r.headers["x-voice-fallback"] == "1"
+        r = client.post(
+            "/api/voice/speak",
+            json={"text": "Three.", "client": "tab-1"},
+            headers=phone,
+        )
+        assert r.headers["x-voice-engine"] == "openai"  # its own page id
+
+    def test_identical_concurrent_lines_share_one_synthesis(self, pair):
+        import asyncio
+        import threading
+        import time as _time
+
+        import httpx
+
+        gate = threading.Event()
+        real_speak = pair.host.speak
+
+        def slow_speak(text, voice=""):
+            gate.wait(5)
+            return real_speak(text, voice)
+
+        pair.host.speak = slow_speak
+
+        async def main():
+            transport = httpx.ASGITransport(app=server.app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as ac:
+
+                async def post():
+                    return await ac.post(
+                        "/api/voice/speak", json={"text": "Same line."}
+                    )
+
+                first = asyncio.create_task(post())
+                second = asyncio.create_task(post())
+                other = asyncio.create_task(
+                    ac.post("/api/voice/speak", json={"text": "Another line."})
+                )
+                for _ in range(200):  # both identical ones joined, one in flight
+                    if len(routes._INFLIGHT) == 2:
+                        break
+                    await asyncio.sleep(0.01)
+                await asyncio.sleep(0.05)
+                gate.set()
+                return await asyncio.gather(first, second, other)
+
+        t0 = _time.monotonic()
+        a, b, c = asyncio.run(main())
+        assert _time.monotonic() - t0 < 5
+        assert a.status_code == b.status_code == c.status_code == 200
+        assert a.content == b.content == b"ID3fake-mp3"
+        assert sorted(c[1] for c in pair.host.calls) == ["Another line.", "Same line."]
+        assert sorted(r.headers.get("x-voice-shared", "0") for r in (a, b)) == [
+            "0",
+            "1",
+        ]
+        assert routes._INFLIGHT == {}
+
+
+class TestClientHungUp:
+    """An aborted upload (Starlette's ClientDisconnect mid-body) ends the
+    request quietly — it used to escape as a 500 with a traceback."""
+
+    class _Gone:
+        headers = {"content-type": "audio/wav"}
+
+        async def stream(self):
+            from starlette.requests import ClientDisconnect
+
+            yield b"RIFF"
+            raise ClientDisconnect()
+
+    def test_capped_body(self):
+        import asyncio
+
+        r = asyncio.run(routes._capped_body(self._Gone()))
+        assert r.status_code == 400
+        assert b"hung up" in r.body
+
+    def test_transcribe_and_chunk(self, fakes, monkeypatch):
+        import asyncio
+
+        r = asyncio.run(routes.voice_transcribe(self._Gone()))
+        assert r.status_code == 400 and fakes.stt.calls == []
+        monkeypatch.setattr(speech_stream, "get_stream", lambda sid: object())
+        r = asyncio.run(routes.voice_stream_chunk("s1", self._Gone()))
+        assert r.status_code == 400
+
+
 # --------------------------------------------------------------------------- #
 # POST /api/voice/clear-key
 # --------------------------------------------------------------------------- #
@@ -564,8 +760,8 @@ def _words(text, step=0.2):
     return [(w, i * step, i * step + 0.15) for i, w in enumerate(text.split())]
 
 
-def _open(lang="en-US"):
-    return client.post("/api/voice/stream", json={"lang": lang})
+def _open(lang="en-US", **extra):
+    return client.post("/api/voice/stream", json={"lang": lang, **extra})
 
 
 def _chunk(sid, body=None, ctype="audio/wav"):
@@ -614,7 +810,15 @@ class TestStream:
         r = _chunk(sid)
         assert r.status_code == 200
         first = r.json()
-        assert set(first) == {"committed", "partial", "ms", "window_s", "audio_s"}
+        assert set(first) == {
+            "committed",
+            "partial",
+            "ms",
+            "window_s",
+            "audio_s",
+            "turn",
+        }
+        assert set(first["turn"]) == {"p", "hold_ms", "reason"}
         assert first["committed"] == "" and first["partial"] == "hello world"
         assert isinstance(first["ms"], int) and first["audio_s"] == 0.5
         assert first["window_s"] == 0.5
@@ -625,7 +829,11 @@ class TestStream:
         r = client.post("/api/voice/stream/%s/end" % sid)
         assert r.status_code == 200
         assert r.json() == {"committed": "how are you", "partial": ""}
-        assert streaming.calls[-1] == ("pass", 16000, "Hello world")
+        assert streaming.calls[-1] == (
+            "pass",
+            16000,
+            "",
+        )  # the prompt holds only text before the window
         # Gone afterwards.
         assert _chunk(sid).status_code == 404
         assert client.post("/api/voice/stream/%s/end" % sid).status_code == 404
@@ -680,6 +888,7 @@ class TestStream:
             "ms": 0,
             "window_s": 0.0,
             "audio_s": 0.5,
+            "turn": {"p": 0.0, "hold_ms": 1100, "reason": "empty"},
         }
         assert [c for c in streaming.calls if c[0] == "pass"] == []
         streaming.passes.append(_words("hi"))
@@ -793,13 +1002,19 @@ class TestStream:
         sid = _open().json()["id"]
         streaming.passes += [_words("over")] * 2
         _chunk(sid)  # loud: "over" is the tail
-        _chunk(sid, body=_wav(0.3, sample=b"\x00\x00"))  # quiet: settles it
-        assert heard == [int(0.8 * 16000)]  # the pass started on that chunk
+        _chunk(sid, body=_wav(0.3, sample=b"\x00\x00"))  # a pause: settles it
+        assert heard == []  # 0.3 s of quiet is not yet the end
+        _chunk(sid, body=_wav(0.3, sample=b"\x00\x00"))  # 0.6 s: it starts
+        for _ in range(200):  # the pass runs on its own thread
+            if heard:
+                break
+            time.sleep(0.005)
+        assert heard == [int(1.1 * 16000)]  # the phrase so far
         body = client.post("/api/voice/stream/%s/end" % sid).json()
         assert body["final"] == "Over." and body["final_early"] is True
-        assert heard == [int(0.8 * 16000)]  # not run again
+        assert heard == [int(1.1 * 16000)]  # not run again
         assert [c for c in streaming.calls if c[0] == "pass"][-1][1] == 12800
-        # No fast pass at the end either: nothing new to hear.
+        # No fast pass after the final started, nor at the end.
         assert len([c for c in streaming.calls if c[0] == "pass"]) == 2
 
     def test_delete_abandons(self, streaming):
@@ -811,12 +1026,42 @@ class TestStream:
         assert [c for c in streaming.calls if c[0] == "pass"] == []
 
     def test_at_most_four_streams(self, streaming):
-        ids = [_open().json()["id"] for _ in range(speech_stream.MAX_STREAMS)]
-        r = _open()
+        ids = [
+            _open(client="page%d" % i).json()["id"]
+            for i in range(speech_stream.MAX_STREAMS)
+        ]
+        r = _open(client="another")
         assert r.status_code == 409
         assert r.json()["error"] == "4 voice streams are already open: end one first"
         client.delete("/api/voice/stream/" + ids[0])
-        assert _open().status_code == 200
+        assert _open(client="another").status_code == 200
+
+    def test_a_client_replacing_its_stream_is_never_refused(self, streaming):
+        """The phone opens the next phrase's stream before the last one's
+        /end ("carry"): a client past two streams replaces its own oldest,
+        even when the server is full."""
+        others = [_open(client="page%d" % i).json()["id"] for i in range(2)]
+        a = _open(client="phone").json()["id"]
+        b = _open(client="phone").json()["id"]  # carried: a is still live
+        streaming.passes += [[], []]
+        assert _chunk(a).status_code == 200
+        c = _open(client="phone")  # b was left behind: the least recently fed goes
+        assert c.status_code == 200
+        assert _chunk(b).status_code == 404
+        assert _chunk(a).status_code == 200
+        assert set(speech_stream._STREAMS) == set(others) | {a, c.json()["id"]}
+
+    def test_without_an_id_the_client_is_its_address_and_agent(self, streaming):
+        a = _open().json()["id"]
+        b = _open().json()["id"]
+        c = _open().json()["id"]
+        assert set(speech_stream._STREAMS) == {b, c}
+        assert a not in speech_stream._STREAMS
+        other = client.post(
+            "/api/voice/stream", json={}, headers={"User-Agent": "another page"}
+        )
+        assert other.status_code == 200
+        assert len(speech_stream._STREAMS) == 3
 
     def test_a_stream_expires_a_minute_after_its_last_chunk(
         self, streaming, monkeypatch

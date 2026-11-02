@@ -70,7 +70,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from backend.web.core import speech as _speech
 
@@ -235,15 +235,32 @@ def _warm_allowed() -> bool:
 # --------------------------------------------------------------------------- #
 # The platform
 # --------------------------------------------------------------------------- #
+#: :func:`powershell_path`'s answers: ``(kind, PATH, the seams) → path``.
+_PS_PATHS: Dict[tuple, str] = {}
+
+
 def powershell_path(kind: str) -> str:
-    """The Windows PowerShell to run on ``kind`` ("" when there is none)."""
+    """The Windows PowerShell to run on ``kind`` ("" when there is none).
+    Looked up once per PATH: under WSL ``shutil.which`` stats every
+    ``/mnt/c`` entry over 9P (~100 ms), and :func:`platform_kind` asks on
+    every probe — every ``GET /api/voice``. The key holds the seams so a
+    test that swaps one gets a fresh answer; :func:`reset` forgets."""
+    key = (kind, os.environ.get("PATH", ""), _which, _isfile)
+    hit = _PS_PATHS.get(key)
+    if hit is not None:
+        return hit
     if kind == "windows":
-        return _which("powershell") or _which("powershell.exe") or "powershell.exe"
-    if kind == "wsl":
-        return _which("powershell.exe") or (
+        found = _which("powershell") or _which("powershell.exe") or "powershell.exe"
+    elif kind == "wsl":
+        found = _which("powershell.exe") or (
             WIN_POWERSHELL if _isfile(WIN_POWERSHELL) else ""
         )
-    return ""
+    else:
+        found = ""
+    if len(_PS_PATHS) > 8:
+        _PS_PATHS.clear()
+    _PS_PATHS[key] = found
+    return found
 
 
 def platform_kind() -> str:
@@ -660,6 +677,7 @@ def reset() -> None:
     global _PROBE
     with _PROBE_LOCK:
         _PROBE = None
+    _PS_PATHS.clear()
     _WARM.close()
 
 

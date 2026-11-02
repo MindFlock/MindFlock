@@ -71,6 +71,7 @@ nothing under pytest.
 
 from __future__ import annotations
 
+import http.client
 import importlib
 import importlib.util
 import inspect
@@ -137,7 +138,13 @@ OPENAI_TTS_VOICE = "alloy"
 WHISPER_MODEL = "small"
 #: The live transcript's model (``voice.stt_stream_model`` unset): ``base``
 #: decodes ~5x faster than ``small`` on a CPU at a small accuracy cost, and
-#: the English-only build is the better ``base`` for English.
+#: the English-only build is the better ``base`` for English. Measured
+#: against the bigger ones as the fast tier (cycle 6 bench, 10 s pad, 2
+#: threads, greedy): small.en 12.3% WER and 38/48 control words at a
+#: 387/439 ms pass, distil-small.en 15.9% and 40/48 at 333/368 ms, base.en
+#: 14.5–17.8% and 38–39/48 at 176–185/300–324 ms. The bigger two pass slower
+#: than the 300 ms chunk cadence (the first word +140–170 ms, and it queues
+#: under load), so ``base.en`` stays; ``voice.stt_stream_model`` picks one.
 STREAM_MODEL = "base.en"
 STREAM_MODEL_MULTI = "base"
 PIPER_VOICE = "en_US-lessac-medium"
@@ -172,7 +179,19 @@ _EXT = {
 
 
 class SpeechError(Exception):
-    """A backend could not do the job; ``str(err)`` is a sentence for the UI."""
+    """A backend could not do the job; ``str(err)`` is a sentence for the UI.
+
+    ``down`` marks a failure of the ENGINE rather than of the request — a
+    host that refused the connection or reset it, timed out (hung: see
+    :func:`host_hung_after`), answered 5xx or sent no audio — the one kind
+    that marks it down in :class:`TtsChain` (a 4xx, a missing key or a bad
+    voice name is the request's fault and comes back as it is). A host
+    that is only SLOW is never ``down``: :class:`TtsChain` tells the two
+    apart."""
+
+    def __init__(self, *args: object, down: bool = False) -> None:
+        super().__init__(*args)
+        self.down = down
 
 
 # --------------------------------------------------------------------------- #
@@ -614,6 +633,21 @@ def _hotwords_supported(model) -> bool:
 
 
 _HOTWORDS: Dict[type, bool] = {}
+_TAKES: Dict[Tuple[type, str], bool] = {}
+
+
+def _takes(model, name: str) -> bool:
+    """Whether this faster-whisper's ``transcribe`` takes ``name=`` (looked
+    up once per model class; an unreadable signature reads as no)."""
+    key = (type(model), name)
+    cached = _TAKES.get(key)
+    if cached is None:
+        try:
+            cached = name in inspect.signature(type(model).transcribe).parameters
+        except (TypeError, ValueError):
+            cached = False
+        _TAKES[key] = cached
+    return cached
 
 
 def _bias(model, hints: str, prompt: str, hotwords: bool = True) -> dict:
@@ -666,6 +700,28 @@ class Backend:
     def speak(self, text: str, voice: str = "") -> Tuple[bytes, str]:
         raise SpeechError("%s does not do voices" % self.label)
 
+    def speak_within(self, text: str, voice: str, budget: float) -> Tuple[bytes, str]:
+        """:meth:`speak`, giving up after ``budget`` seconds without an
+        answer where the backend can (a host: its socket timeout); the
+        others ignore the budget."""
+        return self.speak(text, voice)
+
+    def health_key(self) -> str:
+        """What :class:`TtsChain` keeps health under: one engine (a host's
+        key includes its URL, so a new URL starts healthy)."""
+        return self.id
+
+    #: A host that renders one request at a time (Voice Lab's F5):
+    #: :class:`TtsChain` sends it ours one at a time, in order (its lane),
+    #: so the time a line waits behind our own lines is ours to see rather
+    #: than hidden in the host's queue.
+    serial: bool = False
+
+    def engine_name(self) -> str:
+        """The short name ``GET /api/voice`` reports for the engine that
+        speaks (``server_ready.tts_engine``)."""
+        return self.id
+
     #: Whether :meth:`stream_transcriber` works (``POST /api/voice/stream``).
     streams: bool = False
 
@@ -695,13 +751,20 @@ class _OpenAI(Backend):
         host = _host(url)
         try:
             status, ctype, data = _http("POST", url, headers, body, timeout)
-        except OSError as err:  # URLError, timeout, refused
+        except (OSError, http.client.HTTPException) as err:  # refused, reset, timeout
+            if isinstance(err, TimeoutError):  # connected, then nothing back
+                raise SpeechError(
+                    "%s sent nothing back in %.0f s" % (host, timeout), down=True
+                ) from err
             reason = getattr(err, "reason", None) or err
-            raise SpeechError("could not reach %s: %s" % (host, reason)) from err
+            raise SpeechError(
+                "could not reach %s: %s" % (host, reason), down=True
+            ) from err
         if status >= 400:
             detail = _error_detail(data)
             raise SpeechError(
-                "%s answered %d%s" % (host, status, (": " + detail) if detail else "")
+                "%s answered %d%s" % (host, status, (": " + detail) if detail else ""),
+                down=status >= 500,
             )
         return mime_of(ctype), data
 
@@ -748,6 +811,7 @@ class OpenAISTT(_OpenAI):
 
 class OpenAITTS(_OpenAI):
     kind = "tts"
+    serial = True
 
     def _cfg(self) -> Tuple[str, str, str, str]:
         v = _voice()
@@ -786,8 +850,14 @@ class OpenAITTS(_OpenAI):
             or rtype.startswith("application/json")
             or rtype.startswith("text/")
         ):
-            raise SpeechError("%s sent no audio back" % _host(url))
+            raise SpeechError("%s sent no audio back" % _host(url), down=True)
         return data, (rtype if rtype.startswith("audio/") else "audio/mpeg")
+
+    def speak_within(self, text: str, voice: str, budget: float) -> Tuple[bytes, str]:
+        return self.speak(text, voice, timeout=budget)
+
+    def health_key(self) -> str:
+        return "openai " + self._cfg()[0]
 
     def warm(self, prime: bool = True) -> str:  # noqa: ARG002 — no model here
         """Have a LOCAL host load its voice model: one short synthesis
@@ -796,7 +866,7 @@ class OpenAITTS(_OpenAI):
         url = self._cfg()[0]
         if not _local_host(url):
             return "skipped: %s is not on this machine or network" % _host(url)
-        self.speak(WARM_TEXT, timeout=WARM_TIMEOUT)
+        TTS_CHAIN.warm_host(self)  # in the lane, and timed: see TtsChain
         return "loaded"
 
 
@@ -888,6 +958,75 @@ def invalidate() -> None:
     the one-click install put them into the running interpreter's
     environment, so ``ready()`` sees them without a restart."""
     importlib.invalidate_caches()
+    forget_ffmpeg()
+
+
+#: How long a resolved ``ffmpeg`` lookup stands before it is re-checked (in
+#: the background; the stale answer is served meanwhile).
+FFMPEG_RECHECK_SECONDS = 600.0
+#: ``{"path": str ("" = not on PATH), "env": the PATH it was found on,
+#: "at": when, "busy": a lookup thread is running}`` — empty before the first.
+_FFMPEG: Dict[str, object] = {}
+_FFMPEG_LOCK = threading.Lock()
+
+
+def _which(name: str) -> Optional[str]:
+    return shutil.which(name)
+
+
+def _spawn(target: Callable[[], None], name: str) -> None:
+    """Run ``target`` on a daemon thread (tests run it inline)."""
+    threading.Thread(target=target, name=name, daemon=True).start()
+
+
+def _resolve_ffmpeg() -> None:
+    env = os.environ.get("PATH", "")
+    try:
+        found = _which("ffmpeg") or ""
+    except Exception:  # noqa: BLE001 — a hint, never a failure
+        found = ""
+    with _FFMPEG_LOCK:
+        _FFMPEG.update(path=found, env=env, at=_now(), busy=False)
+
+
+def ffmpeg_path() -> Optional[str]:
+    """Where ``ffmpeg`` is: a path, ``""`` (not on PATH) or ``None`` (not
+    looked up yet). Never blocks: ``shutil.which`` stats every PATH entry,
+    and under WSL most of them are ``/mnt/c`` over 9P — 50–400 ms per call,
+    which ``LocalSTT.ready()`` (reached from async routes through
+    :func:`select`) used to pay on every wake check. The lookup runs once on
+    a daemon thread and is re-run, again in the background, when PATH
+    changes, :data:`FFMPEG_RECHECK_SECONDS` later, after
+    :func:`forget_ffmpeg` (a refused clip, :func:`invalidate`)."""
+    env = os.environ.get("PATH", "")
+    with _FFMPEG_LOCK:
+        have = "path" in _FFMPEG
+        fresh = (
+            have
+            and _FFMPEG.get("env") == env
+            and _now() - float(_FFMPEG.get("at") or 0.0) < FFMPEG_RECHECK_SECONDS
+        )
+        path = str(_FFMPEG["path"]) if have else None
+        if fresh or _FFMPEG.get("busy"):
+            return path
+        _FFMPEG["busy"] = True
+    try:
+        _spawn(_resolve_ffmpeg, "mindflock-voice-ffmpeg")
+    except Exception:  # noqa: BLE001 — no thread: try again next call
+        with _FFMPEG_LOCK:
+            _FFMPEG["busy"] = False
+    with _FFMPEG_LOCK:  # an inline lookup (tests) has answered already
+        return str(_FFMPEG["path"]) if "path" in _FFMPEG else path
+
+
+def forget_ffmpeg() -> None:
+    """Drop the ``ffmpeg`` lookup: the next :func:`ffmpeg_path` re-runs it
+    (in the background)."""
+    with _FFMPEG_LOCK:
+        busy = _FFMPEG.get("busy")
+        _FFMPEG.clear()
+        if busy:
+            _FFMPEG["busy"] = True
 
 
 def _shim_av_open() -> None:
@@ -919,6 +1058,152 @@ def _shim_av_open() -> None:
 
     open_._mf_shim = True  # type: ignore[attr-defined]
     target.open = open_
+
+
+#: The encoder input a streaming pass pads its window to, in seconds (its
+#: audio is never cut: a longer window pads to itself plus
+#: :data:`_PAD_TAIL_FRAMES`). faster-whisper always pads to Whisper's 30 s,
+#: and that encoder pass was ~60% of a fast pass (241 of 360 ms on 4
+#: threads) whatever the window held. Measured on the 48 bench clips: base.en
+#: 30 s → 10 s keeps the WER (15.2% → 14.8%) and the word times (within
+#: 20 ms) and takes a pass from 374 to 155 ms; at 6 s it starts inventing
+#: words. Whisper windows are at most :data:`speech_stream.WINDOW_SECONDS`.
+STREAM_PAD_SECONDS = 10.0
+#: The same for the accurate pass over a whole phrase — 0: Whisper's own
+#: 30 s. Its text is the one sent, and with the vocabulary as ``hotwords``
+#: a shorter input costs words: small on the 48 clips, WER 4.8% at 30 s,
+#: 5.9% at 20 s (644 vs 1150 ms p50), 8.5% at 10 s — where a low-confidence
+#: lone word also set off faster-whisper's temperature fallback for 28 s.
+FINAL_PAD_SECONDS = 0.0
+#: A fast pass decodes greedily, once: faster-whisper's temperature
+#: fallback (5 samples at each of 5 temperatures) takes seconds — never
+#: worth it to a pass the next chunk replaces — and its tokens are capped
+#: at this many plus :data:`STREAM_TOKENS_PER_S` per second of window (a
+#: fast speaker says ~6 a second), so a decoder caught in a loop stops.
+STREAM_TOKENS = 20
+STREAM_TOKENS_PER_S = 15
+#: A fast pass's beam: 1 is greedy. The bench (cycle 6, 48 phrases): beam 2
+#: took the pass from 176/300 to 207/403 ms (p50/p95, over the 300 ms chunk
+#: cadence) for 16.7% WER against 14.5–17.8%, and heard fewer control words
+#: (34 vs 38–39 of 48), ending phrases in junk ("over ever B").
+STREAM_BEAM = 1
+#: A short vocabulary leading the fast pass's prompt when the caller gives
+#: no ``hints`` ("" = none). Keep it empty: even with the temperature
+#: fallback off and the tokens capped, the control words alone ("Over. Over
+#: and out. Disregard. Stop") as the prompt took the bench's fast tier to
+#: 40% WER and 14/48 control words (from 14.5% and 39/48): whisper writes
+#: a hint word or a rhyme into the quiet after the speech ("Over. Never",
+#: "disregard. regard.") and loops ("YOU YOU YOU …" ×25), and faster-whisper's
+#: word alignment raised IndexError on one prompted pass.
+STREAM_VOCAB = ""
+#: The quiet a window longer than its pad still gets after its audio.
+_PAD_TAIL_FRAMES = 200
+#: Whisper's own input: 3000 mel frames (30 s).
+_FULL_FRAMES = 3000
+_PAD = threading.local()
+#: ``off``: a short encoder input failed once (an engine that wants 3000
+#: frames), so every pass pads to 30 s again; ``ok``: one succeeded.
+_PAD_STATE: Dict[str, bool] = {"ok": False, "off": False}
+
+
+def _pad_frames(content: int) -> int:
+    """The frames a pass under :func:`_padded` pads ``content`` mel frames
+    to: its pad, or the content plus a little quiet when that is more, in
+    whole seconds, at most Whisper's 3000."""
+    want = int(getattr(_PAD, "frames", 0) or 0)
+    if not want:
+        return _FULL_FRAMES
+    need = max(want, content + _PAD_TAIL_FRAMES)
+    need = -(-need // 100) * 100
+    return min(_FULL_FRAMES, need)
+
+
+def _hook_pad() -> bool:
+    """Wrap faster-whisper's ``pad_or_trim`` (in its ``transcribe`` module)
+    ONCE so a pass run under :func:`_padded` pads to :func:`_pad_frames`
+    instead of 3000; every other call (the one-shot clip, a thread with no
+    pad set) is untouched. ``False`` when this faster-whisper has no such
+    hook (the passes then pad to 30 s, as before)."""
+    try:
+        mod = _import("faster_whisper.transcribe")
+    except Exception:  # noqa: BLE001 — no faster-whisper: nothing to hook
+        return False
+    orig = getattr(mod, "pad_or_trim", None)
+    if orig is None:
+        return False
+    if getattr(orig, "_mf_pad", False):
+        return True
+
+    def pad_or_trim(array, length: int = _FULL_FRAMES, *, axis: int = -1):
+        if length == _FULL_FRAMES and getattr(_PAD, "frames", 0):
+            length = _pad_frames(int(array.shape[axis]))
+        return orig(array, length, axis=axis)
+
+    pad_or_trim._mf_pad = True  # type: ignore[attr-defined]
+    mod.pad_or_trim = pad_or_trim
+    return True
+
+
+def _padded(seconds: float, decode: Callable[[], object]) -> object:
+    """``decode()`` (a whole faster-whisper call, segments read) with the
+    encoder input padded to ``seconds`` rather than 30 (see
+    :data:`STREAM_PAD_SECONDS`). Should the very first such call fail — an
+    engine that refuses a short input — short padding is switched off for
+    good (logged) and the call runs again at 30 s; after one success an
+    error is the call's own and propagates."""
+    if _PAD_STATE["off"] or seconds <= 0 or not _hook_pad():
+        return decode()
+    _PAD.frames = int(seconds * 100)
+    try:
+        out = decode()
+    except Exception as err:  # noqa: BLE001 — retried at full length below
+        if _PAD_STATE["ok"]:
+            raise
+        _PAD.frames = 0
+        out = decode()  # fails too: the error was the call's own, raised
+        _PAD_STATE["off"] = True
+        _logger.warning(
+            "faster-whisper refused a %gs encoder input (%s); padding to 30 s",
+            seconds,
+            err,
+        )
+        return out
+    finally:
+        _PAD.frames = 0
+    _PAD_STATE["ok"] = True
+    return out
+
+
+def whisper_threads(role: str, cores: Optional[int] = None) -> int:
+    """The CPU threads a whisper model decodes with (CTranslate2's
+    ``cpu_threads``, fixed when it loads), for ``role`` ``fast`` (the live
+    transcript's and wake word's model) or anything else (the accurate
+    pass's and the one-shot clip's), out of ``cores`` (``os.cpu_count()``).
+
+    The two tiers can run at the same moment (one job per model at a time:
+    ``speech_stream.Lane``), so their budgets add up to the cores rather
+    than each taking CTranslate2's default 4 (8 on 8 cores, beside the
+    server and the agent CLIs — the early accurate pass then doubled the
+    fast passes and missed its own deadline). The fast tier gets a quarter
+    (1..4): ``base.en``'s greedy decoder is sequential and gains little from
+    more. The accurate pass gets the rest (at most 8): ``small``'s encoder
+    is most of its time and scales with threads, and it is the pass a
+    client waits on after "over" — and it rarely shares the cores, as no
+    fast pass runs once a phrase's accurate pass has started. 8 cores → 2
+    and 6; 4 → 1 and 3; 16 → 4 and 8.
+
+    Two threads cost the fast tier ~170 ms a pass while it padded to 30 s
+    (the encoder was most of it: 566 vs 422 ms at 2 vs 4 threads on a
+    1.5 s window); padded to :data:`STREAM_PAD_SECONDS` the encoder is
+    small and the greedy decoder is the rest, so the thread count no longer
+    shows (189 vs 199 ms; 4 s windows 252 vs 243 ms, interleaved, load ~5)
+    and a second, 4-thread copy of the model for when no final runs would
+    buy nothing for its memory."""
+    n = cores or os.cpu_count() or 4
+    fast = max(1, min(4, n // 4))
+    if role == "fast":
+        return fast
+    return max(1, min(8, n - fast))
 
 
 class LocalSTT(Backend):
@@ -962,12 +1247,23 @@ class LocalSTT(Backend):
         if low:
             return False, "local recognition held back: " + low
         detail = "faster-whisper %s on this computer" % self._model_name()
-        if not shutil.which("ffmpeg"):
+        if ffmpeg_path() == "":
             detail += (
                 " (ffmpeg is not on PATH: webm/mp4 clips decode through the bundled"
                 " PyAV; install ffmpeg if a clip is refused)"
             )
         return True, detail
+
+    def _role(self, name: str) -> str:
+        """``fast`` when ``name`` is only ever a streaming model (either
+        language's), else ``final`` — a model serving both tiers gets the
+        accurate pass's thread budget (:func:`whisper_threads`)."""
+        try:
+            fast = {self.stream_model_name(), self.stream_model_name("xx")}
+            slow = {self._model_name(), self.final_model_name()}
+        except Exception:  # noqa: BLE001 — unreadable settings: the big budget
+            return "final"
+        return "fast" if name in fast and name not in slow else "final"
 
     def _load(self, name: str):
         fw = _import("faster_whisper")
@@ -975,7 +1271,12 @@ class LocalSTT(Backend):
         root = voice_dir() / "whisper"
         root.mkdir(parents=True, exist_ok=True)
         return fw.WhisperModel(
-            name, device="cpu", compute_type="int8", download_root=str(root)
+            name,
+            device="cpu",
+            compute_type="int8",
+            download_root=str(root),
+            cpu_threads=whisper_threads(self._role(name)),
+            num_workers=1,
         )
 
     def _model(self, name: str = ""):
@@ -1002,7 +1303,8 @@ class LocalSTT(Backend):
         kw = {"language": whisper_language(lang), "beam_size": 5}
         if prompt:
             kw["initial_prompt"] = prompt
-        return self._clip(self._model(), audio, mime, kw)
+        name = self._model_name()
+        return self._clip(self._model(name), audio, mime, kw, name)
 
     def wake_transcribe(
         self, audio: bytes, mime: str, lang: str = "", word: str = ""
@@ -1015,17 +1317,26 @@ class LocalSTT(Backend):
         kw = {"language": whisper_language(lang), "beam_size": 1, "vad_filter": False}
         if word:
             kw["initial_prompt"] = word
-        return self._clip(self._model(self.stream_model_name(lang)), audio, mime, kw)
+        name = self.stream_model_name(lang)
+        return self._clip(self._model(name), audio, mime, kw, name)
 
     @staticmethod
-    def _clip(model, audio: bytes, mime: str, kw: dict) -> str:
-        """``audio`` (any container PyAV decodes) through ``model`` → its
-        text; the temp clip is removed after."""
+    def _clip(model, audio: bytes, mime: str, kw: dict, name: str = "") -> str:
+        """``audio`` (any container PyAV decodes) through ``model`` (named
+        ``name``: the call waits its turn on that model's lane, as a
+        ``clip`` job — ``speech_stream.Lane``) → its text; the temp clip is
+        removed after."""
+        from backend.web.core import speech_stream as _stream
+
+        def run() -> List[str]:
+            segments, _info = model.transcribe(path, **kw)
+            return [str(getattr(s, "text", "") or "").strip() for s in segments]
+
         path = _temp_clip(audio, mime)
         try:
-            segments, _info = model.transcribe(path, **kw)
-            words = [str(getattr(s, "text", "") or "").strip() for s in segments]
+            words = _stream.lane("whisper:" + (name or "?")).run(run, _stream.CLIP)
         except Exception as err:  # noqa: BLE001
+            forget_ffmpeg()  # a refused clip: look for ffmpeg again
             raise SpeechError("faster-whisper failed: %s" % err) from err
         finally:
             try:
@@ -1042,10 +1353,12 @@ class LocalSTT(Backend):
         ``hotwords``; the server sends none to this tier, see
         :data:`HINT_CHARS`; the bench's ``+fasthints`` does) →
         ``[(word, start_s, end_s)]``. The model is fetched per pass, so an
-        unload never strands a stream."""
+        unload never strands a stream. Its ``lane`` attribute names the
+        model's job lane (``whisper:<name>``), which the stream queues each
+        pass on (``speech_stream.Lane``)."""
         language = whisper_language(lang)
         name = self.stream_model_name(lang)
-        hints = " ".join(str(hints or "").split())
+        hints = " ".join(str(hints or STREAM_VOCAB).split())
 
         def run(audio, prompt: str) -> List[Tuple[str, float, float]]:
             model = self._model(name)
@@ -1053,11 +1366,19 @@ class LocalSTT(Backend):
             # A copy: the stream trims its buffer later, which a view would block.
             samples = np.frombuffer(bytes(audio), dtype=np.float32)
             kw = _bias(model, hints, prompt, hotwords=False)
-            try:
+            if _takes(model, "temperature"):
+                kw["temperature"] = 0.0
+            if _takes(model, "max_new_tokens"):
+                seconds = len(samples) / 16000.0
+                kw["max_new_tokens"] = int(
+                    STREAM_TOKENS + STREAM_TOKENS_PER_S * seconds
+                )
+
+            def decode() -> List[Tuple[str, float, float]]:
                 segments, _info = model.transcribe(
                     samples,
                     language=language,
-                    beam_size=1,
+                    beam_size=STREAM_BEAM,
                     word_timestamps=True,
                     condition_on_previous_text=False,
                     # Silence in a window makes whisper invent "Thank you.";
@@ -1071,9 +1392,13 @@ class LocalSTT(Backend):
                     for seg in segments
                     for w in (getattr(seg, "words", None) or ())
                 ]
+
+            try:
+                return _padded(STREAM_PAD_SECONDS, decode)  # type: ignore[return-value]
             except Exception as err:  # noqa: BLE001
                 raise SpeechError("faster-whisper failed: %s" % err) from err
 
+        run.lane = "whisper:" + name  # type: ignore[attr-defined]
         return run
 
     def final_transcriber(self, lang: str = "", hints: str = "") -> Optional[Callable]:
@@ -1082,7 +1407,8 @@ class LocalSTT(Backend):
         ``hints`` (:func:`recognition_hints`) as the ``hotwords`` (the prompt
         on a faster-whisper too old for them: :func:`_hotwords_supported`) —
         the vocabulary, never the fast words (those may be the wrong ones) →
-        its text. ``None`` when ``voice.stt_final`` is ``off``."""
+        its text. ``None`` when ``voice.stt_final`` is ``off``. ``lane`` as
+        in :meth:`stream_transcriber`."""
         name = self.final_model_name()
         if not name:
             return None
@@ -1090,11 +1416,14 @@ class LocalSTT(Backend):
         hints = " ".join(str(hints or "").split())
 
         def run(audio) -> str:
+            from backend.web.core import speech_stream as _stream
+
             model = self._model(name)
             np = _import("numpy")
             samples = np.frombuffer(bytes(audio), dtype=np.float32)
             kw = _bias(model, hints, "")
-            try:
+
+            def decode() -> List[str]:
                 segments, _info = model.transcribe(
                     samples,
                     language=language,
@@ -1103,11 +1432,20 @@ class LocalSTT(Backend):
                     vad_filter=True,
                     **kw,
                 )
-                parts = [str(getattr(s, "text", "") or "").strip() for s in segments]
+                parts: List[str] = []
+                for seg in segments:  # each 30 s window decodes as it is read
+                    parts.append(str(getattr(seg, "text", "") or "").strip())
+                    if _stream.abandoned():  # its finish gave up: stop here
+                        break
+                return parts
+
+            try:
+                parts = _padded(FINAL_PAD_SECONDS, decode)
             except Exception as err:  # noqa: BLE001
                 raise SpeechError("faster-whisper failed: %s" % err) from err
-            return " ".join(p for p in parts if p).strip()
+            return " ".join(p for p in parts if p).strip()  # type: ignore[union-attr]
 
+        run.lane = "whisper:" + name  # type: ignore[attr-defined]
         return run
 
     def warm(self, prime: bool = True) -> str:
@@ -1123,13 +1461,18 @@ class LocalSTT(Backend):
             model = self._model(name)
             fresh = fresh or not was
             if prime and not was:
-                self._prime(model)
+                self._prime(model, key)
         return "loaded" if fresh else "already"
 
     @staticmethod
-    def _prime(model) -> None:
+    def _prime(model, key: str = "") -> None:
+        """One short silent pass, on the model's lane (``key``) as a
+        ``clip`` job, so it never shares the cores with a live pass."""
+        from backend.web.core import speech_stream as _stream
+
         np = _import("numpy")
-        try:
+
+        def run() -> None:
             segments, _info = model.transcribe(
                 np.zeros(8000, dtype=np.float32),
                 language="en",
@@ -1138,6 +1481,9 @@ class LocalSTT(Backend):
             )
             for _seg in segments:  # the generator does the work
                 pass
+
+        try:
+            _stream.lane(key or "?").run(run, _stream.CLIP)
         except Exception:  # noqa: BLE001 — a warm-up may fail quietly
             pass
 
@@ -1146,6 +1492,9 @@ class LocalTTS(Backend):
     id = "local"
     kind = "tts"
     label = "piper on this computer"
+
+    def engine_name(self) -> str:
+        return "piper"
 
     def _voice_name(self, voice: str = "") -> str:
         return piper_voice(voice or _voice().tts_voice)
@@ -1287,6 +1636,812 @@ def choose(kind: str) -> str:
     return backend.id if backend else ""
 
 
+# --------------------------------------------------------------------------- #
+# The voice chain: the configured engine, then piper, with one voice per reply
+# --------------------------------------------------------------------------- #
+#: The configured voice's connect / first-byte budget for a one-word line;
+#: :func:`host_budget` adds :data:`HOST_BUDGET_PER_CHAR` per character
+#: because a neural host (Voice Lab's F5) renders the whole clip before its
+#: first byte — about 0.035 s per character on a GPU, so the allowance is
+#: ~1.7× that. The budget runs from when the line reaches the host, or from
+#: when the live line ahead of it in our lane should be done (time spent
+#: behind our own lines is not the host's fault): a line past it is said by
+#: the fallback, and the host is NOT marked down for it (:class:`TtsChain`).
+HOST_BUDGET = 1.5
+HOST_BUDGET_PER_CHAR = 0.06
+#: A failed engine is down this long; after it the next line (or
+#: ``GET /api/voice``) starts a background probe — the engine is healthy
+#: again only once the probe passes.
+HOST_DOWN_SECONDS = 45.0
+#: The probe: :data:`WARM_TEXT` has to come back within this. A model still
+#: loading, or running on the wrong device, stays down.
+PROBE_TIMEOUT = 3.0
+#: The fallback voices, in order, after the configured one (never itself).
+FALLBACK_TTS: Tuple[str, ...] = ("local",)
+#: :class:`TtsChain`'s switch back: this long after the last fallback line
+#: should have finished playing, with nothing in flight.
+REPLY_GAP_SECONDS = 2.5
+#: How fast a line is spoken, to estimate when it stops playing.
+SPOKEN_CHARS_PER_SECOND = 14.0
+#: A serial host's learned speed (:class:`TtsChain`): every answer it gives
+#: (a line, an orphan, a probe) is a sample of ``took / host_budget(text)``
+#: — its "budget ratio" — folded in with this weight for the newest.
+SPEED_ALPHA = 0.5
+#: A learned ratio over this is TOO SLOW FOR NOW: no line of it would arrive
+#: within its budget, so the lines go to the fallback at once instead of
+#: each waiting its budget out in silence first. Not down: the host keeps
+#: its lane, and one probe answering under this brings it back.
+SLOW_RATIO = 1.0
+#: While too slow, a probe (:data:`WARM_TEXT`, in the lane) runs at most
+#: this often, and only when a line or ``GET /api/voice`` asks.
+SLOW_RECHECK_SECONDS = 10.0
+#: How many listeners (pages) :class:`TtsChain` keeps a reply for.
+MAX_LISTENERS = 32
+#: The listener a pre-synthesised line (``routes/speech.py``'s prewarm) is
+#: asked for: nobody's reply, so it never extends a real line's budget nor
+#: makes a reply sticky.
+PREWARM_LISTENER = "~prewarm"
+
+
+def host_budget(text: str) -> float:
+    """The configured voice's budget for ``text`` (:data:`HOST_BUDGET`)."""
+    return min(TTS_TIMEOUT, HOST_BUDGET + HOST_BUDGET_PER_CHAR * len(text or ""))
+
+
+def host_hung_after(text: str) -> float:
+    """How long a host may send nothing back for ``text`` before it counts
+    as HUNG — dead, like a refused connection: ``max(TTS_TIMEOUT, 2 ×
+    host_budget)``. Our lane gives the host the line to itself, so only a
+    host that cannot say one sentence in that long gets here (F5 on a CPU:
+    50–60 s); a merely slow one answers first."""
+    return max(TTS_TIMEOUT, 2.0 * host_budget(text))
+
+
+class _Slow(SpeechError):
+    """A line not back within its budget (:class:`TtsChain`): the host is
+    alive and still working on it, so it is not ``down``. ``upfront``: the
+    host's learned speed said so before the line was sent (nothing waited)."""
+
+    def __init__(self, *args: object, upfront: bool = False) -> None:
+        super().__init__(*args)
+        self.upfront = upfront
+
+
+class _Line:
+    """One request of ours in a serial host's lane (:meth:`TtsChain.send`).
+    ``deadline`` (``time.monotonic``) is when a waiting LINE gives up on the
+    host — None for one that waits for the answer (the probe, a warm, a line
+    with no fallback). ``live`` turns false when it gave up: an orphan if
+    the host has it (``started``), dropped from the lane if not. ``learn``:
+    its answer is a sample of the host's speed (not a warm: a cold load is
+    not the host's pace). ``listener``: whose reply it belongs to. ``low``:
+    a prewarm line — every real line queues ahead of it until it reaches
+    the host (:meth:`TtsChain.send`)."""
+
+    __slots__ = (
+        "engine", "text", "voice", "timeout", "deadline", "gen",
+        "live", "started", "sent_at", "done", "result", "error",
+        "learn", "listener", "took", "low",
+    )  # fmt: skip
+
+    def __init__(self, engine: Backend, text: str, voice: str, timeout: float) -> None:
+        self.engine, self.text, self.voice, self.timeout = engine, text, voice, timeout
+        self.deadline: Optional[float] = None
+        self.gen = 0
+        self.live, self.started, self.done = True, False, False
+        self.sent_at = 0.0
+        self.took = 0.0
+        self.learn = True
+        self.low = False
+        self.listener = ""
+        self.result: Optional[Tuple[bytes, str]] = None
+        self.error: Optional[BaseException] = None
+
+
+class _Lane:
+    __slots__ = ("queue", "busy", "key")
+
+    def __init__(self, key: str = "") -> None:
+        self.queue: List[_Line] = []  # in order; the head is at the host
+        self.busy = False  # a drain thread is running
+        self.key = key  # the host's health key
+
+
+def _lane_thread(target: Callable[[], None], name: str) -> None:
+    """Run a lane's drain on a daemon thread (a seam of its own: tests that
+    hold :func:`_spawn`'s probes still get their lines said)."""
+    threading.Thread(target=target, name=name, daemon=True).start()
+
+
+class _Health:
+    __slots__ = ("why", "retry_at", "probing")
+
+    def __init__(self, why: str, retry_at: float) -> None:
+        self.why = why
+        self.retry_at = retry_at
+        self.probing = False
+
+
+class _Speed:
+    """A serial host's learned pace (:meth:`TtsChain._learn`): ``ratio`` is
+    the EWMA of ``took / host_budget(text)`` over ``samples`` answers, so a
+    line is predicted to take ``ratio × host_budget(text)``."""
+
+    __slots__ = ("ratio", "samples", "recheck_at", "probing", "last_s")
+
+    def __init__(self) -> None:
+        self.ratio = 0.0
+        self.samples = 0
+        self.recheck_at = 0.0  # _now(): the next too-slow probe is due
+        self.probing = False
+        self.last_s = 0.0  # the last answer's seconds at the host
+
+    @property
+    def slow(self) -> bool:
+        return self.samples > 0 and self.ratio > SLOW_RATIO
+
+
+class _Reply:
+    """One listener's reply in progress (:class:`TtsChain`'s one voice per
+    reply): ``sticky`` once a line of it fell back, ``inflight`` lines being
+    said, ``quiet_at`` when its last line should have finished playing."""
+
+    __slots__ = ("sticky", "inflight", "quiet_at")
+
+    def __init__(self) -> None:
+        self.sticky = False
+        self.inflight = 0
+        self.quiet_at = 0.0
+
+
+class TtsChain:
+    """Which engine says the next line, and the fallback when it fails.
+
+    * The configured voice (:func:`select`) speaks within
+      :func:`host_budget`. DEAD and SLOW are told apart:
+
+      - Dead — a refused or reset connection, a connect timeout, a 5xx, no
+        audio, or nothing back for :func:`host_hung_after` (hung): a
+        ``down`` :class:`SpeechError`. The host is marked down for
+        :data:`HOST_DOWN_SECONDS` and the same line goes to the first ready
+        :data:`FALLBACK_TTS` engine (piper) — so a dead host costs one
+        refused connect, once, and nothing for the lines after it. With no
+        fallback ready the failure stands (the route's 502; the client
+        then uses its own voice).
+      - Slow — alive, but this line is not back within its budget: the
+        line is said by the fallback and the host is NOT marked down. Its
+        request stays at the host (an orphan holding the lane until the
+        host answers, so the next line queues visibly behind it), and the
+        next reply starts on the host again.
+
+    * A :attr:`Backend.serial` host gets our requests one at a time, in
+      order (:meth:`send`, one lane per host): F5 renders one line at a
+      time anyway, and this way the time a line waits behind OUR lines is
+      ours to see instead of eating its budget inside the host's queue. A
+      line's budget runs from when the live line ahead of it should be done
+      (or from now): ``budget = host_budget(this) + the budgets of the live
+      lines ahead``. The lines ahead are being played meanwhile, so the
+      owner hears no extra silence; a line behind one we gave up on (an
+      orphan, a warm, the probe) gets only its own budget — that wait IS
+      silence. A line with no fallback ready waits for the host.
+    * Health is per :meth:`Backend.health_key` and re-checked only in the
+      background (:meth:`_probe`, on a daemon thread), never on a request.
+    * One voice per reply: once a line falls back, every line does until the
+      configured engine has passed its probe AND the chain is quiet — no
+      line in flight and :data:`REPLY_GAP_SECONDS` past the moment the last
+      fallback line should have finished playing (its length at
+      :data:`SPOKEN_CHARS_PER_SECOND`). A reply's lines arrive back to back
+      (the clients ask for the next sentence while one plays), so the switch
+      back lands in the pause between replies, never inside one. Failing
+      over is immediate — a line the host cannot say is said by piper —
+      and a SLOW line fails over the same way (without the down window):
+      the lines of the reply still waiting in the lane leave it for piper
+      too. So a reply changes voice at most once, host → piper, and only
+      ever between two of its lines.
+    * A reply is a LISTENER's (the page asking, ``listener``; "" when the
+      caller does not say): the phone and the desktop hearing the same
+      session each have theirs — one falling back does not pull the
+      other's waiting lines off the host, and only a listener's OWN live
+      lines ahead extend a line's budget (another page's lines are not
+      being played to this one, so waiting behind them is silence).
+    * Learned speed (TOO SLOW FOR NOW). Each answer of a serial host is a
+      sample of ``took / host_budget(text)`` (:data:`SPEED_ALPHA`, see
+      :class:`_Speed`); a line it gave up on counts as at least what it
+      waited. Two uses, so that a host that cannot keep up costs no
+      silence: a line predicted to arrive past its budget (the predicted
+      time of every request ahead in the lane plus its own) is not sent at
+      all — it is said by the fallback at once (an ``upfront``
+      :class:`_Slow`); and while the learned ratio is over
+      :data:`SLOW_RATIO` the host is too slow for EVERY line, so
+      :meth:`pick` hands out the fallback straight away (the cache and the
+      route see piper too). That window is not ``down``: no
+      :data:`HOST_DOWN_SECONDS`, the boot warm and the probes still go to
+      the host, and one probe (:meth:`_speed_probe`, at most every
+      :data:`SLOW_RECHECK_SECONDS`, only while lines are asked) answering
+      under the ratio ends it. A host with no samples yet is given its
+      budget, as before; :meth:`warm_host` takes the first sample at boot.
+    * Prewarm lines (:meth:`prewarm_line`, ``routes/speech.py``'s
+      ``Prewarm``) are ``low``: every real line queues ahead of one still
+      waiting, and they belong to :data:`PREWARM_LISTENER`, nobody's reply.
+      The prewarm asks only past :meth:`idle_for`'s quiet, one at a time.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._down: Dict[str, _Health] = {}
+        self._replies: Dict[str, _Reply] = {}
+        self._speed: Dict[str, _Speed] = {}
+        self._cond = threading.Condition(self._lock)
+        self._lanes: Dict[str, _Lane] = {}
+        self._gen = 0  # bumped by reset(): an old orphan changes nothing
+        self._real_at = 0.0  # _now(): a real line was last asked for / said
+
+    def reset(self) -> None:
+        with self._lock:
+            self._down.clear()
+            self._replies.clear()
+            self._speed.clear()
+            self._lanes.clear()
+            self._gen += 1
+            self._real_at = 0.0
+            self._cond.notify_all()
+
+    @property
+    def generation(self) -> int:
+        """Bumped by :meth:`reset`: background work started before it stops."""
+        return self._gen
+
+    def idle_for(self) -> float:
+        """Seconds the voice has been idle: no real line in flight or in a
+        lane (an orphan, a probe or a warm holds its lane too), and nothing
+        any listener was served still playing (:meth:`note_line`) — 0.0
+        while any of that is going on. The prewarm speaks only past
+        ``routes/speech.py``'s quiet window, so it is never ahead of a real
+        line in the host's lane, and never between a reply's lines."""
+        with self._lock:
+            if any(lane.queue for lane in self._lanes.values()):
+                return 0.0
+            last = self._real_at
+            for who, r in self._replies.items():
+                if who == PREWARM_LISTENER:
+                    continue
+                if r.inflight:
+                    return 0.0
+                last = max(last, r.quiet_at)
+            return max(0.0, _now() - last)
+
+    def _reply(self, listener: str) -> _Reply:
+        """``listener``'s reply (under the lock), made on first use; the
+        idle ones are forgotten past :data:`MAX_LISTENERS`."""
+        r = self._replies.get(listener)
+        if r is None:
+            if len(self._replies) >= MAX_LISTENERS:
+                for k in [
+                    k
+                    for k, v in self._replies.items()
+                    if not v.inflight and not v.sticky
+                ]:
+                    del self._replies[k]
+            r = self._replies[listener] = _Reply()
+        return r
+
+    # -- learned speed --------------------------------------------------- #
+    def _learn(self, key: str, text: str, took: float, at_least: bool = False) -> None:
+        """Fold one answer of the host ``key`` into its speed (under the
+        lock). ``at_least``: a line given up on after ``took`` — its real
+        time is at least that, so it can only push the ratio up. A sample
+        under :data:`SLOW_RATIO` while too slow ends the window at once
+        (the host just kept up: believe it)."""
+        r = took / max(0.05, host_budget(text))
+        sp = self._speed.setdefault(key, _Speed())
+        was = sp.slow
+        if sp.samples == 0:
+            sp.ratio = r
+        elif at_least:
+            sp.ratio = max(sp.ratio, SPEED_ALPHA * r + (1 - SPEED_ALPHA) * sp.ratio)
+        elif was and r <= SLOW_RATIO:
+            sp.ratio = r
+        else:
+            sp.ratio = SPEED_ALPHA * r + (1 - SPEED_ALPHA) * sp.ratio
+        sp.samples += 1
+        if not at_least:
+            sp.last_s = took
+        if sp.slow and not was:
+            sp.recheck_at = _now() + SLOW_RECHECK_SECONDS
+            _logger.info(
+                "voice: %s is too slow for now (%.1f× its budget; not down)",
+                key,
+                sp.ratio,
+            )
+        elif was and not sp.slow:
+            _logger.info("voice: %s keeps up again (%.1f× its budget)", key, sp.ratio)
+
+    def _predict(self, key: str, text: str) -> Optional[float]:
+        """Seconds the host ``key`` is expected to take for ``text`` (under
+        the lock); None before its first sample."""
+        sp = self._speed.get(key)
+        if sp is None or sp.samples == 0:
+            return None
+        return sp.ratio * host_budget(text)
+
+    def too_slow(self, backend: Backend) -> str:
+        """Why ``backend`` is too slow for now ("" when it keeps up or is
+        unmeasured). When the recheck is due this starts the probe (once) —
+        the probe's answer, not the clock, ends the window."""
+        try:
+            key = backend.health_key()
+        except Exception:  # noqa: BLE001 — unreadable settings: no speed
+            return ""
+        with self._lock:
+            sp = self._speed.get(key)
+            if sp is None or not sp.slow:
+                return ""
+            due = not sp.probing and _now() >= sp.recheck_at
+            if due:
+                sp.probing = True
+        if due:
+            try:
+                _spawn(lambda: self._speed_probe(backend, key), "mindflock-voice-pace")
+            except Exception:  # noqa: BLE001 — no thread: try again later
+                with self._lock:
+                    sp.probing = False
+        with self._lock:
+            if not sp.slow:  # the probe ran inline (tests) and it keeps up
+                return ""
+            return "%s takes %.1f× its budget (last line %.1f s)" % (
+                key,
+                sp.ratio,
+                sp.last_s,
+            )
+
+    def _speed_probe(self, backend: Backend, key: str) -> None:
+        """One :data:`WARM_TEXT` in the lane, waited for (up to
+        :func:`host_hung_after`): its time is a sample (:meth:`_drain`); a
+        dead answer marks the host down."""
+        try:
+            self.send(backend, WARM_TEXT, host_hung_after(WARM_TEXT))
+        except SpeechError as err:
+            if err.down:
+                self.mark_down(backend, str(err))
+        except Exception:  # noqa: BLE001 — a probe never raises
+            pass
+        finally:
+            with self._lock:
+                sp = self._speed.get(key)
+                if sp is not None:
+                    sp.probing = False
+                    sp.recheck_at = _now() + SLOW_RECHECK_SECONDS
+
+    def warm_host(self, engine: Backend) -> None:
+        """A local host's warm (:meth:`OpenAITTS.warm`): :data:`WARM_TEXT`
+        in the lane, then its first speed sample. A warm that came back
+        within budget is that sample (it is no faster than the host); a
+        slow one may have been a cold load, so one more word is timed —
+        and a host that is merely slow is then known before the first
+        reply, which goes to the fallback at once instead of waiting."""
+        took: List[float] = []
+        self.send(engine, WARM_TEXT, WARM_TIMEOUT, learn=False, took=took)
+        try:
+            key = engine.health_key()
+        except Exception:  # noqa: BLE001
+            return
+        if not took:  # said outside the lane: nothing measured
+            return
+        with self._lock:
+            if took[0] <= SLOW_RATIO * host_budget(WARM_TEXT):
+                self._learn(key, WARM_TEXT, took[0])
+                return
+        try:
+            self.send(engine, WARM_TEXT, host_hung_after(WARM_TEXT))
+        except SpeechError as err:
+            if err.down:
+                self.mark_down(engine, str(err))
+
+    def speed(self, backend: Backend) -> dict:
+        """The learned pace of ``backend`` for ``GET /api/voice``:
+        ``{"ratio", "samples", "slow"}`` (ratio 0 before a sample)."""
+        try:
+            key = backend.health_key()
+        except Exception:  # noqa: BLE001
+            return {"ratio": 0.0, "samples": 0, "slow": False}
+        with self._lock:
+            sp = self._speed.get(key) or _Speed()
+            return {
+                "ratio": round(sp.ratio, 2),
+                "samples": sp.samples,
+                "slow": sp.slow,
+            }
+
+    # -- health ---------------------------------------------------------- #
+    def down_reason(self, backend: Backend) -> str:
+        """Why ``backend`` is down ("" when healthy). Past its window this
+        starts the background probe (once) and still answers "down" — the
+        probe, not the clock, brings it back."""
+        try:
+            key = backend.health_key()
+        except Exception:  # noqa: BLE001 — unreadable settings: no health
+            return ""
+        with self._lock:
+            h = self._down.get(key)
+            if h is None:
+                return ""
+            why = h.why
+            due = not h.probing and _now() >= h.retry_at
+            if due:
+                h.probing = True
+        if due:
+            try:
+                _spawn(lambda: self._probe(backend, key), "mindflock-voice-probe")
+            except Exception:  # noqa: BLE001 — no thread: try again later
+                with self._lock:
+                    h.probing = False
+        return why
+
+    def mark_down(self, backend: Backend, why: str) -> None:
+        try:
+            key = backend.health_key()
+        except Exception:  # noqa: BLE001
+            return
+        with self._lock:
+            h = self._down.get(key)
+            if h is None:
+                self._down[key] = _Health(why, _now() + HOST_DOWN_SECONDS)
+            else:
+                h.why, h.retry_at = why, _now() + HOST_DOWN_SECONDS
+            for r in self._replies.values():  # every listener's reply
+                r.sticky = True
+            self._cond.notify_all()  # their waiting lines leave the lane
+        _logger.info("voice: %s is down for %ds: %s", key, HOST_DOWN_SECONDS, why)
+
+    def mark_up(self, backend: Backend) -> None:
+        try:
+            key = backend.health_key()
+        except Exception:  # noqa: BLE001
+            return
+        with self._lock:
+            self._down.pop(key, None)
+
+    def _probe(self, backend: Backend, key: str) -> None:
+        """One :data:`WARM_TEXT` within :data:`PROBE_TIMEOUT`: healthy on
+        an answer, down for another window on anything else."""
+        try:
+            self.send(backend, WARM_TEXT, PROBE_TIMEOUT)
+        except Exception as err:  # noqa: BLE001
+            with self._lock:
+                h = self._down.get(key)
+                if h is not None:
+                    h.why = str(err) or type(err).__name__
+                    h.retry_at = _now() + HOST_DOWN_SECONDS
+                    h.probing = False
+            return
+        with self._lock:
+            self._down.pop(key, None)
+        _logger.info("voice: %s is back", key)
+        if backend.kind == "tts":
+            # It just said a word within the probe's time: that is a warm.
+            try:
+                what = "%s:%s" % (backend.id, backend.ready()[1])
+                _WARMED["tts"] = ("loaded", what, _now())
+            except Exception:  # noqa: BLE001 — a record, never a failure
+                pass
+
+    # -- the lane (a serial host's requests, one at a time) -------------- #
+    def send(
+        self,
+        engine: Backend,
+        text: str,
+        timeout: float,
+        voice: str = "",
+        budget: Optional[float] = None,
+        listener: str = "",
+        learn: bool = True,
+        took: Optional[List[float]] = None,
+        low: bool = False,
+    ) -> Tuple[bytes, str]:
+        """``engine.speak_within(text, voice, timeout)`` — for a
+        :attr:`Backend.serial` host in its lane, after every request of ours
+        ahead of it. ``budget`` (a line of ``listener``'s reply): give up
+        waiting this long after that listener's live line ahead should be
+        done (or now), or as soon as the reply has gone to the fallback
+        while this one has not reached the host — raising :class:`_Slow`,
+        the request left to finish as an orphan; and when the host's
+        learned speed says it cannot arrive by then, raise it before
+        sending anything (``upfront``). ``None`` waits for the answer.
+        ``learn``: the answer is a speed sample; ``took`` gets the
+        seconds the host took appended. ``low`` (a prewarm line): every
+        later line that is not ``low`` goes ahead of it while it waits —
+        once at the host it is not interrupted (an HTTP synthesis cannot
+        be), but nothing waits behind a queued one."""
+        if not engine.serial:
+            return engine.speak_within(text, voice, timeout)
+        line = _Line(engine, text, voice, timeout)
+        line.learn, line.listener, line.low = learn, listener, low
+        with self._lock:
+            key = engine.health_key()
+            lane = self._lanes.get(key)
+            if lane is None:
+                lane = self._lanes[key] = _Lane(key)
+            if budget is not None:
+                now = time.monotonic()
+                ahead = [
+                    ln.deadline
+                    for ln in lane.queue
+                    if ln.live and ln.deadline is not None and ln.listener == listener
+                ]
+                line.deadline = max([now] + ahead) + budget
+                eta = self._eta(key, lane, text, now, low)
+                if eta is not None and eta > line.deadline:
+                    raise _Slow(
+                        "%s is too slow for this line: due in %.1f s, budget %.1f s"
+                        " (not sent; not down)" % (key, eta - now, line.deadline - now),
+                        upfront=True,
+                    )
+            line.gen = self._gen
+            at = len(lane.queue)
+            if not low:  # ahead of the prewarm lines still waiting
+                at = next(
+                    (i for i, ln in enumerate(lane.queue) if ln.low and not ln.started),
+                    at,
+                )
+            lane.queue.insert(at, line)
+            start, lane.busy = not lane.busy, True
+        if start:
+            try:
+                _lane_thread(lambda: self._drain(lane), "mindflock-voice-lane")
+            except Exception:  # noqa: BLE001 — no thread: say it here
+                with self._lock:
+                    lane.queue.remove(line)
+                    lane.busy = False
+                return engine.speak_within(text, voice, timeout)
+        with self._lock:
+            while not line.done:
+                if line.deadline is None:
+                    self._cond.wait(1.0)
+                    continue
+                left = line.deadline - time.monotonic()
+                reply = self._replies.get(listener)
+                if left <= 0 or (
+                    reply is not None and reply.sticky and not line.started
+                ):
+                    break
+                self._cond.wait(left)
+            if not line.done:
+                line.live = False
+                if not line.started:
+                    lane.queue.remove(line)
+                elif learn and line.gen == self._gen:
+                    # At the host past its budget: at least this slow.
+                    self._learn(key, text, time.monotonic() - line.sent_at, True)
+                waited = budget or 0.0
+                where = "is still on it" if line.started else "had lines ahead of it"
+                raise _Slow(
+                    "%s is slow: no answer within %.1f s (%s; not down)"
+                    % (engine.health_key(), waited, where)
+                )
+        if took is not None and line.started:
+            took.append(line.took)
+        if line.error is not None:
+            raise line.error
+        if line.result is None:  # never: the drain sets one or the other
+            raise SpeechError("%s sent no audio back" % engine.health_key(), down=True)
+        return line.result
+
+    def _eta(
+        self, key: str, lane: _Lane, text: str, now: float, low: bool = False
+    ) -> Optional[float]:
+        """When a line of ``text`` sent to ``lane`` now would come back, by
+        the host's learned speed (under the lock): every request ahead of
+        it (the one at the host: what is left of it — half its time again
+        once it is overdue, as an orphan is; a waiting prewarm line is
+        behind any line that is not ``low``), then its own. None while the
+        speed is unmeasured."""
+        own = self._predict(key, text)
+        if own is None:
+            return None
+        t = now + own
+        for ln in lane.queue:
+            if ln.low and not ln.started and not low:
+                continue
+            p = self._predict(key, ln.text) or 0.0
+            if ln.started:
+                left = p - (now - ln.sent_at)
+                t += left if left > 0 else 0.5 * p
+            else:
+                t += p
+        return t
+
+    def _drain(self, lane: _Lane) -> None:
+        """Say ``lane``'s requests in order, one at a time, until it is
+        empty. An orphan (its line gave up) still holds the lane until the
+        host answers: the host is busy with it whether we listen or not."""
+        while True:
+            with self._lock:
+                if not lane.queue:
+                    lane.busy = False
+                    return
+                line = lane.queue[0]
+                line.started, line.sent_at = True, time.monotonic()
+            try:
+                line.result = line.engine.speak_within(
+                    line.text, line.voice, line.timeout
+                )
+            except Exception as err:  # noqa: BLE001 — handed to the caller
+                line.error = err
+            finally:
+                with self._lock:
+                    if lane.queue and lane.queue[0] is line:
+                        lane.queue.pop(0)
+                    line.took = time.monotonic() - line.sent_at
+                    if line.learn and line.error is None and line.gen == self._gen:
+                        self._learn(lane.key, line.text, line.took)
+                    line.done = True
+                    orphan = not line.live and line.gen == self._gen
+                    self._cond.notify_all()
+            if orphan:
+                self._orphan_done(line)
+
+    def _orphan_done(self, line: _Line) -> None:
+        """A line we gave up on came back: late audio means slow (nothing
+        to mark); a dead answer — hung past :func:`host_hung_after`, 5xx,
+        reset — marks the host down, as on a live line."""
+        took = line.took
+        err = line.error
+        if isinstance(err, SpeechError) and err.down:
+            self.mark_down(line.engine, str(err))
+        elif err is None:
+            _logger.info(
+                "voice: %s answered a line we gave up on after %.1f s (slow)",
+                line.engine.health_key(),
+                took,
+            )
+
+    # -- choosing -------------------------------------------------------- #
+    @staticmethod
+    def fallback_for(primary: Backend) -> Optional[Backend]:
+        """The first ready :data:`FALLBACK_TTS` engine that is not
+        ``primary``."""
+        for backend_id in FALLBACK_TTS:
+            if backend_id == primary.id:
+                continue
+            backend = get("tts", backend_id)
+            if backend is None:
+                continue
+            try:
+                ok, _detail = backend.ready()
+            except Exception:  # noqa: BLE001
+                ok = False
+            if ok:
+                return backend
+        return None
+
+    def pick(
+        self, primary: Backend, listener: str = ""
+    ) -> Tuple[Optional[Backend], bool, str]:
+        """``(engine, fell_back, why)`` for ``listener``'s next line:
+        ``primary``, or the fallback while ``primary`` is down (``why``, ""
+        when it is healthy), too slow for now (:meth:`too_slow`) or a reply
+        of this listener that began on the fallback is still going
+        (:class:`TtsChain`). ``engine`` is None when ``primary`` is down and
+        no fallback is ready."""
+        why = self.down_reason(primary)
+        slow = "" if why else self.too_slow(primary)
+        with self._lock:
+            r = self._reply(listener)
+            if why or slow:
+                r.sticky = True
+            elif r.sticky and (
+                r.inflight == 0 and _now() >= r.quiet_at + REPLY_GAP_SECONDS
+            ):
+                r.sticky = False
+            sticky = r.sticky
+        if not sticky:
+            return primary, False, ""
+        fallback = self.fallback_for(primary)
+        if fallback is None:
+            return (None, False, why) if why else (primary, False, "")
+        return fallback, True, why
+
+    # -- speaking -------------------------------------------------------- #
+    def note_line(self, text: str, listener: str = "") -> None:
+        """A line was served to ``listener`` (a cache hit too): its reply
+        runs until the line should have finished playing."""
+        with self._lock:
+            r = self._reply(listener)
+            r.quiet_at = max(
+                r.quiet_at, _now() + len(text or "") / SPOKEN_CHARS_PER_SECOND
+            )
+
+    def speak(
+        self, primary: Backend, text: str, voice: str = "", listener: str = ""
+    ) -> Tuple[bytes, str, Backend, bool]:
+        """Say ``text`` for ``listener`` → ``(audio, mime, the engine that
+        spoke, fell back)``; blocking (the route runs it on a worker
+        thread). Raises the :class:`SpeechError` when no engine could say
+        it."""
+        engine, fell_back, why = self.pick(primary, listener)
+        if engine is None:
+            raise SpeechError(
+                "%s is down (%s) and no fallback voice is ready" % (primary.label, why),
+                down=True,
+            )
+        with self._lock:
+            self._reply(listener).inflight += 1
+            self._real_at = _now()
+        try:
+            if fell_back:
+                audio, mime = engine.speak(text, voice)
+                return audio, mime, engine, True
+            try:
+                if engine.serial:
+                    # No fallback ready: waiting for the host beats a 502.
+                    budget = host_budget(text) if self.fallback_for(engine) else None
+                    audio, mime = self.send(
+                        engine, text, host_hung_after(text), voice, budget, listener
+                    )
+                else:
+                    audio, mime = engine.speak_within(text, voice, host_budget(text))
+                return audio, mime, engine, False
+            except _Slow as err:
+                # Alive, only slow: this line (and the rest of the reply) on
+                # the fallback, the host kept healthy for the next reply.
+                with self._lock:
+                    self._reply(listener).sticky = True
+                    self._cond.notify_all()  # the reply's waiting lines leave
+                _logger.info("voice: %s", err)
+                fallback = self.fallback_for(engine)
+                if fallback is None:
+                    raise
+                audio, mime = fallback.speak(text, voice)
+                return audio, mime, fallback, True
+            except SpeechError as err:
+                if not err.down:
+                    raise
+                self.mark_down(engine, str(err))
+                fallback = self.fallback_for(engine)
+                if fallback is None:
+                    raise
+                audio, mime = fallback.speak(text, voice)
+                return audio, mime, fallback, True
+        finally:
+            with self._lock:
+                self._reply(listener).inflight -= 1
+                self._real_at = _now()
+            self.note_line(text, listener)
+
+    def prewarm_line(
+        self, engine: Backend, text: str, voice: str = ""
+    ) -> Tuple[bytes, str]:
+        """Say ``text`` with ``engine`` for nobody yet (the prewarm's
+        cache): a serial host gets it as a ``low`` line of
+        :data:`PREWARM_LISTENER` in its lane, waited for (its answer is a
+        speed sample like any other); any other engine directly. No reply,
+        no fallback: a failure is the caller's."""
+        if engine.serial:
+            return self.send(
+                engine,
+                text,
+                host_hung_after(text),
+                voice,
+                None,
+                PREWARM_LISTENER,
+                low=True,
+            )
+        return engine.speak(text, voice)
+
+    def status(self, primary: Backend, listener: str = "") -> dict:
+        """``GET /api/voice``'s view of the chain for ``primary``:
+        ``{"engine": Backend|None, "fell_back": bool, "why": str, "slow":
+        str}`` — ``slow`` why it is too slow for now ("" when it keeps up
+        or is down)."""
+        engine, fell_back, why = self.pick(primary, listener)
+        slow = "" if why else self.too_slow(primary)
+        return {"engine": engine, "fell_back": fell_back, "why": why, "slow": slow}
+
+
+#: The one voice chain (``POST /api/voice/speak``, :func:`describe`).
+TTS_CHAIN = TtsChain()
+
+
 _WARMING: Dict[str, threading.Thread] = {}
 #: The last warm per kind: ``(result, what was warmed, when)`` — ``result``
 #: is "loaded", "loading" or "skipped: …" (:func:`describe`'s ``warm``).
@@ -1310,6 +2465,13 @@ def _warm_target(kind: str) -> Tuple[Optional[Backend], str]:
     elif kind == "tts":
         backend, detail = select(kind)
         ok = backend is not None
+        if backend is not None and TTS_CHAIN.down_reason(backend):
+            # The configured voice is down: have the fallback that speaks
+            # meanwhile loaded instead (its probe re-checks the host).
+            fallback = TTS_CHAIN.fallback_for(backend)
+            if fallback is None:
+                return None, "skipped: %s is down" % backend.label
+            backend, detail = fallback, fallback.ready()[1]
     else:
         return None, "skipped: no %s backend" % kind
     if not ok or backend is None:
@@ -1332,7 +2494,12 @@ def warm(kind: str = "stt", prime: bool = True) -> str:
             result = detail
         else:
             what = "%s:%s" % (backend.id, detail)
-            result = str(backend.warm(prime=prime))  # type: ignore[attr-defined]
+            try:
+                result = str(backend.warm(prime=prime))  # type: ignore[attr-defined]
+            except SpeechError as err:
+                if kind == "tts" and err.down:
+                    TTS_CHAIN.mark_down(backend, str(err))
+                raise
     except Exception as err:  # noqa: BLE001 — warming is best effort
         result = "skipped: %s" % err
     _WARMED[kind] = ("loaded" if result == "already" else result, what, _now())
@@ -1343,7 +2510,10 @@ def warm(kind: str = "stt", prime: bool = True) -> str:
 def _warm_due(kind: str) -> bool:
     """Whether :func:`warm_in_background` has anything to do for ``kind``: a
     model-cache backend with a key not resident, or a host / OS engine not
-    warmed in the last :data:`REWARM_SECONDS` with its current setup."""
+    warmed with its current setup in the last :data:`REWARM_SECONDS` — or,
+    when that last warm FAILED, in the last :data:`HOST_DOWN_SECONDS` (a
+    failure used to hold the next warm off for ten minutes, so a Voice Lab
+    started meanwhile met its cold load on a real line)."""
     backend, detail = _warm_target(kind)
     if backend is None:
         return False
@@ -1352,11 +2522,10 @@ def _warm_due(kind: str) -> bool:
         with _LOCK:
             return not all(k in _CACHE for k in keys())
     last = _WARMED.get(kind)
-    return not (
-        last is not None
-        and last[1] == "%s:%s" % (backend.id, detail)
-        and _now() - last[2] < REWARM_SECONDS
-    )
+    if last is None or last[1] != "%s:%s" % (backend.id, detail):
+        return True
+    window = REWARM_SECONDS if last[0] == "loaded" else HOST_DOWN_SECONDS
+    return _now() - last[2] >= window
 
 
 def warm_in_background(
@@ -1405,6 +2574,44 @@ def warm_in_background(
         return t
 
 
+def _describe_tts(ready: dict, backend: Optional[Backend], detail: str) -> str:
+    """Fill ``server_ready``'s voice keys from :data:`TTS_CHAIN` and return
+    the voice's detail: ``tts`` true while SOME engine will speak (the
+    configured one, or the fallback while it is down), ``tts_engine`` the
+    one that will (``"piper (fallback)"``), ``tts_fallback`` whether that is
+    the fallback, ``tts_down`` why the configured one is down ("" healthy).
+    ``tts_backend`` stays the configured id (Settings keys its rows on it)."""
+    ready["tts_engine"], ready["tts_fallback"], ready["tts_down"] = "", False, ""
+    if backend is None:
+        return detail
+    try:
+        st = TTS_CHAIN.status(backend)
+    except Exception:  # noqa: BLE001 — a report, never a failure
+        st = {"engine": backend, "fell_back": False, "why": "", "slow": ""}
+    engine, why = st["engine"], st["why"]
+    ready["tts_down"] = why
+    if engine is None:
+        ready["tts"] = False
+        return "%s is down (%s) and no fallback voice is ready" % (detail, why)
+    ready["tts_fallback"] = bool(st["fell_back"])
+    name = engine.engine_name()
+    if not st["fell_back"]:
+        ready["tts_engine"] = name
+        return detail
+    ready["tts_engine"] = name + " (fallback)"
+    try:
+        fb_detail = engine.ready()[1]
+    except Exception:  # noqa: BLE001
+        fb_detail = engine.label
+    if why:
+        until = "while it is down (%s)" % why
+    elif st.get("slow"):
+        until = "while it is too slow (%s)" % st["slow"]
+    else:
+        until = "until the reply in progress ends"
+    return "%s — speaking with %s %s" % (detail, fb_detail, until)
+
+
 def describe() -> dict:
     """What ``GET /api/voice`` reports about the server side::
 
@@ -1412,7 +2619,8 @@ def describe() -> dict:
          "server_ready": {"stt": bool, "tts": bool, "detail": str,
                           "stt_backend": id|"", "stt_detail": str,
                           "tts_backend": id|"", "tts_detail": str,
-                          "stt_stream": bool},
+                          "stt_stream": bool, "tts_engine": str,
+                          "tts_fallback": bool, "tts_down": str},
          "system": {"available": bool,
                     "platform": "windows"|"wsl"|"mac"|"none",
                     "detail": str, "voices": [names],
@@ -1438,6 +2646,9 @@ def describe() -> dict:
         backend, detail = select(kind)
         ready[kind] = backend is not None
         ready[kind + "_backend"] = backend.id if backend else ""
+        if kind == "tts":
+            detail = _describe_tts(ready, backend, detail)
+            backend = backend if ready["tts"] else None
         ready[kind + "_detail"] = detail
         if kind == "stt":
             ready["stt_stream"] = bool(backend is not None and backend.streams)

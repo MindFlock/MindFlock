@@ -304,8 +304,8 @@ describe("the accurate final retypes the whole phrase", () => {
 
   it("the mic hands the final to the dictation, and the diagnostics show its time", () => {
     const MIC = code("components/TopBarMic.tsx");
-    expect(MIC).toContain("onFlush: (t, final) => {");
-    expect(MIC).toContain("void d.flush(t, final)");
+    expect(MIC).toContain("onFlush: (t, final, at) => {");
+    expect(MIC).toContain("void d.flush(t, final, at)");
     expect(MIC).toContain("finalLine(serverRec.finalMs)");
   });
 });

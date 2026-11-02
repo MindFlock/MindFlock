@@ -720,8 +720,16 @@ export function AddFlowShell({
   footer?: React.ReactNode;
 }) {
   const steps = ["What", "Connect", "What it does"];
+  // The flow sits under the work, so a long tab has it below the fold: bring
+  // it into view when it opens and as its steps grow (nearest: a flow already
+  // on screen does not move).
+  const shell = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const el = shell.current;
+    if (el && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest" });
+  }, [step]);
   return (
-    <section className="ik-add" id="ik-add-flow" aria-label={title} data-step={step}>
+    <section className="ik-add" id="ik-add-flow" aria-label={title} data-step={step} ref={shell}>
       <div className="ik-add-head">
         <b className="ik-add-title">{title}</b>
         <ol className="ik-steps" aria-label="Steps">

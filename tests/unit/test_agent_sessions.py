@@ -444,3 +444,77 @@ def test_ensure_agent_create_failure_returns_stderr(rec, monkeypatch):
     monkeypatch.setattr(thread_markers, "clear", lambda name: None)
     name, err = agent_sessions._ensure_agent_session(FakeInst(), "Title")
     assert (name, err) == ("mindflock_Title", "boom")
+
+
+# --- a trailing ';' survives tmux --------------------------------------------
+def test_literal_keys_argv_sends_trailing_semicolons_as_hex():
+    """tmux reads an argument ending in ``;`` as a separator and drops it, so
+    trailing semicolons go as ``-H 3b`` after the literal text."""
+    assert agent_sessions.literal_keys_argv("s", "fix it") == [
+        "tmux",
+        "send-keys",
+        "-t",
+        "s",
+        "-l",
+        "--",
+        "fix it",
+    ]
+    assert agent_sessions.literal_keys_argv("s", "a; b;;") == [
+        "tmux",
+        "send-keys",
+        "-t",
+        "s",
+        "-l",
+        "--",
+        "a; b",
+        ";",
+        "send-keys",
+        "-t",
+        "s",
+        "-H",
+        "3b",
+        "3b",
+    ]
+    assert agent_sessions.literal_keys_argv("s", ";") == [
+        "tmux",
+        "send-keys",
+        "-t",
+        "s",
+        "-H",
+        "3b",
+    ]
+
+
+@pytest.mark.skipif(not __import__("shutil").which("tmux"), reason="no tmux")
+def test_literal_keys_argv_round_trips_through_real_tmux(tmp_path):
+    """On a scratch tmux server (its own -S socket, never the user's), the
+    text arrives with its trailing semicolons."""
+    import subprocess
+    import time
+
+    sock = str(tmp_path / "t.sock")
+    env = {k: v for k, v in os.environ.items() if k != "TMUX"}
+    base = ["tmux", "-S", sock]
+    subprocess.run(
+        base + ["new-session", "-d", "-s", "t", "-x", "80", "-y", "5", "cat"],
+        check=True,
+        env=env,
+    )
+    try:
+        time.sleep(0.2)
+        argv = agent_sessions.literal_keys_argv("t", "echo a; b;")
+        subprocess.run(base + argv[1:], check=True, env=env)
+        screen = ""
+        for _ in range(20):
+            time.sleep(0.05)
+            screen = subprocess.run(
+                base + ["capture-pane", "-p", "-t", "t"],
+                capture_output=True,
+                text=True,
+                env=env,
+            ).stdout
+            if "b;" in screen:
+                break
+        assert "echo a; b;" in screen
+    finally:
+        subprocess.run(base + ["kill-session", "-t", "t"], env=env)

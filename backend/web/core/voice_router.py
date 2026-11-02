@@ -50,18 +50,23 @@ import time
 from functools import lru_cache
 from typing import Iterable, List, Optional, Tuple
 
+from backend.web.core import voice_actions as _voice_actions
 from backend.web.core import voice_words as _voice_words
 from backend.web.core.session_create import title_from_prompt
 from backend.web.core.spoken import strip_markdown
 
 __all__ = [
+    "ANSWER_AFTER_S",
+    "ANSWERED_MARGIN_S",
     "LOCAL_KINDS",
     "answer",
+    "answer_in_time",
     "choice_of",
     "command",
     "continue_new",
     "dialog_choices",
     "dialog_speech",
+    "dialog_visible_at",
     "find_sessions",
     "finish",
     "fresh_reply",
@@ -70,6 +75,7 @@ __all__ = [
     "match_session",
     "norm",
     "parse_answer",
+    "phrase_timing",
     "pick",
     "plan_new",
     "select_answer",
@@ -1899,6 +1905,146 @@ def select_route(text, session: str, dialog, rows=()) -> Optional[dict]:
     out = {"kind": "answer", "title": session, "name": _name(row), "words": text}
     out["dialog_id"] = dialog.get("id")
     return _finish_select(out, out["name"], dialog, text)
+
+
+# --- an answer said before its dialog was there ---------------------------------
+#: A phrase answers a dialog only when the person BEGAN saying it at least
+#: this long after the dialog was there to see. 300 ms is under the fastest
+#: human reaction to something appearing on a screen (simple visual
+#: reaction ≈ 200–250 ms, then a word's onset): a word that starts sooner
+#: was not said to that dialog. A "yes" said in a dictation 300 ms before
+#: a permission prompt came up answered it (R8-bis, cycle 2).
+ANSWER_AFTER_S = 0.3
+#: A session's dialog that comes up after one of its dialogs was answered
+#: was there to see no sooner than that answer (``voice_actions.answered_at``)
+#: plus this: the network delay the client-measured phrase age carries
+#: (``phrase_timing`` reads it at arrival, so it looks that much LATER than
+#: it began) against a stamp on this server's own clock.
+ANSWERED_MARGIN_S = 0.2
+#: A ``spoke_ms_ago`` / ``dialog_seen`` age past this is not believed.
+_TIMING_MAX_S = 600.0
+#: At most this many sessions' ``dialog_seen`` entries are read.
+_SEEN_MAX = 64
+
+
+def _ago(v, now: float, clamp: bool = False) -> Optional[float]:
+    """``now`` minus ``v`` milliseconds, for a sane ``v`` (else None).
+    ``clamp``: an age past :data:`_TIMING_MAX_S` counts as that age instead
+    of being dropped — for a dialog sighting, where a LATER sighting only
+    makes the check stricter (a dialog that waited 30 minutes stays
+    answerable). Never for the phrase's own age: there a smaller age would
+    loosen it."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v:
+        return None
+    if v < 0:
+        return None
+    if v > _TIMING_MAX_S * 1000:
+        if not clamp:
+            return None
+        v = _TIMING_MAX_S * 1000
+    return now - float(v) / 1000.0
+
+
+def phrase_timing(payload, now: Optional[float] = None) -> Tuple[Optional[float], dict]:
+    """``(spoke, seen)`` from a ``/api/voice/route`` body, on THIS server's
+    clock: ``spoke`` — when the person began saying the phrase
+    (``spoke_ms_ago``, measured by the client from its own clock at send
+    time, so a skewed client clock does not matter; None when absent or
+    insane) — and ``seen`` — ``{title: (dialog_id, epoch)}`` from
+    ``dialog_seen: {title: {id, ms_ago}}``, when the client first had each
+    session's current dialog. ``spoke_at`` (the client's epoch ms) is
+    informational only: never compared with this clock. Both ages ride the
+    same request, so the network's delay shifts them alike."""
+    now = time.time() if now is None else now
+    if not isinstance(payload, dict):
+        return None, {}
+    spoke = _ago(payload.get("spoke_ms_ago"), now)
+    seen: dict = {}
+    raw = payload.get("dialog_seen")
+    if isinstance(raw, dict):
+        for title, v in list(raw.items())[:_SEEN_MAX]:
+            if not isinstance(v, dict) or not v.get("id"):
+                continue
+            at = _ago(v.get("ms_ago"), now, clamp=True)
+            if at is not None:
+                seen[str(title)] = (str(v["id"]), at)
+    return spoke, seen
+
+
+def dialog_visible_at(
+    title: str, dialog_id, seen: dict, row, answered: Optional[float] = None
+) -> Optional[float]:
+    """When ``title``'s dialog ``dialog_id`` was there to see, as late as the
+    evidence allows — or None when the CLIENT never reported having it (an
+    answer then waits for one that did). The evidence:
+
+    - the client's own first sighting of that same id (``seen``) — a
+      sighting of another id does not count, so a dialog that changed since
+      the client saw it is unanswerable until the client has the new one;
+    - this server's stamp of the session going to ``clarify`` (the row's
+      ``asking.ts`` — core.asking ``dialog_asking``:
+      ``agent_state.state_since``);
+    - the session's last answer, any path (``answered``, epoch; default
+      ``voice_actions.answered_at(title)``) plus :data:`ANSWERED_MARGIN_S`:
+      the dialog up now came after it. A client that kept its sighting of
+      an identical prompt (same id) asked again after that answer — or that
+      missed the clarify gap between them — can no longer make a phrase
+      begun before the answer look in time.
+
+    The LATEST of them counts: each is no earlier than the dialog appeared,
+    so the latest is the safest bound."""
+    mine = (seen or {}).get(title)
+    if not mine or mine[0] != str(dialog_id):
+        return None
+    at = mine[1]
+    asked = row.get("asking") if isinstance(row, dict) else None
+    if isinstance(asked, dict) and asked.get("kind") == "dialog":
+        at = max(at, _num(asked.get("ts")))
+    if answered is None:
+        try:
+            answered = _voice_actions.answered_at(title)
+        except Exception:  # noqa: BLE001 — the other evidence still holds
+            answered = 0.0
+    answered = _num(answered)
+    if answered > 0:
+        at = max(at, answered + ANSWERED_MARGIN_S)
+    return at
+
+
+def answer_in_time(ans: dict, spoke: Optional[float], seen: dict, rows=()) -> dict:
+    """``ans`` (any route answer) unless it presses keys on a dialog the
+    person began speaking BEFORE it was there to see plus
+    :data:`ANSWER_AFTER_S` — then ``{kind: "early", title, name,
+    dialog_id, say, early_ms}``: nothing is pressed, and the client reads
+    the dialog out (or says ``say``) so the next words answer it. With no
+    phrase timing, or no sighting of the dialog by the client, an answer
+    is early too: the server never presses on a guess. ``early_ms``: how
+    much sooner than allowed the phrase began (None without timing)."""
+    if (
+        not isinstance(ans, dict)
+        or ans.get("kind") != "answer"
+        or not ans.get("dialog_id")
+        or not ans.get("keys")
+    ):
+        return ans
+    title = str(ans.get("title") or "")
+    visible = dialog_visible_at(title, ans["dialog_id"], seen, _row(rows, title))
+    if spoke is not None and visible is not None and spoke >= visible + ANSWER_AFTER_S:
+        return ans
+    name = ans.get("name") or title
+    early_ms = (
+        int(round((visible + ANSWER_AFTER_S - spoke) * 1000))
+        if spoke is not None and visible is not None
+        else None
+    )
+    return {
+        "kind": "early",
+        "title": title,
+        "name": name,
+        "dialog_id": ans["dialog_id"],
+        "say": "%s asked just now: say your answer again." % name,
+        "early_ms": early_ms,
+    }
 
 
 # --- new sessions --------------------------------------------------------------

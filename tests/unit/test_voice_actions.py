@@ -254,3 +254,110 @@ def test_answering_the_dialog_on_the_desktop_spends_its_buttons(monkeypatch):
     assert status == 200, body
     assert voice_actions.consume(tok) is None
     assert voice_actions.consume(other) is not None  # another dialog's button lives on
+
+
+# --------------------------------------------------------------------------- #
+# The last answer per session (the voice router's answer guard, cycle 4)       #
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def stamps(monkeypatch):
+    """The answer stamps' clock: ``stamps[0] = epoch``."""
+    now = [5000.0]
+    monkeypatch.setattr(voice_actions, "_clock", lambda: now[0])
+    return now
+
+
+def test_forget_with_a_dialog_stamps_the_answer_and_removal_drops_it(stamps):
+    assert voice_actions.answered_at("w") == 0.0
+    voice_actions.forget("w", "d1")
+    assert voice_actions.answered_at("w") == 5000.0
+    assert voice_actions.answered_at("x") == 0.0  # per session
+    stamps[0] = 5007.5
+    voice_actions.forget("w", "d2")  # the next dialog's answer: the latest
+    assert voice_actions.answered_at("w") == 5007.5
+    voice_actions.forget("w")  # the session was removed
+    assert voice_actions.answered_at("w") == 0.0
+
+
+def test_a_multi_select_tick_is_not_an_answer(stamps, monkeypatch):
+    """Ticking a box leaves the same dialog up: the next tick, begun before
+    this one landed, must not be refused as early."""
+    from backend.web.core import agent_io
+
+    monkeypatch.setattr(agent_io, "_TOGGLE_IDS", {"dm": True})
+    voice_actions.forget("w", "dm")
+    assert voice_actions.answered_at("w") == 0.0
+    voice_actions.note_answered("w", "d1")
+    assert voice_actions.answered_at("w") == 5000.0
+
+
+def test_the_answer_stamps_are_bounded(stamps, monkeypatch):
+    monkeypatch.setattr(voice_actions, "_ANSWERED_MAX", 3)
+    for t in ("a", "b", "c"):
+        voice_actions.note_answered(t, "d")
+    voice_actions.note_answered("a", "d")  # a known title never clears
+    assert voice_actions.answered_at("c") == 5000.0
+    voice_actions.note_answered("d", "d")  # a fourth clears the rest
+    assert voice_actions.answered_at("d") == 5000.0
+    assert voice_actions.answered_at("a") == 0.0
+
+
+def _answer_rig(monkeypatch, dialog_id="d1", sent=True):
+    from backend.web.core import agent_io
+
+    monkeypatch.setattr(server, "_agent_activity", lambda inst, title: "clarify")
+    monkeypatch.setattr(server, "_live_session_name", lambda name: "w")
+    monkeypatch.setattr(
+        agent_io,
+        "current_dialog",
+        lambda live, program: ({"id": dialog_id, "parsed": True}, None),
+    )
+    monkeypatch.setattr(agent_io, "send_answer", lambda name, text, keys: sent)
+    monkeypatch.setattr(agent_io, "_ANSWERED", {})
+    monkeypatch.setattr(server, "_note_human_input", lambda title: None)
+    return SimpleNamespace(Title="w", Program="claude")
+
+
+@pytest.mark.parametrize(
+    "keys,pin,by,stamped",
+    [
+        (["1"], "d1", "user", True),  # a hand click / the pop-up
+        (["1"], "d1", "agent", True),  # an orchestrator's answer
+        (["Enter"], "d1", "user", True),
+        (["Escape"], "d1", "user", True),
+        (["Down"], "d1", "user", False),  # navigation answers nothing
+    ],
+)
+def test_every_settling_answer_stamps_the_session(
+    monkeypatch, stamps, keys, pin, by, stamped
+):
+    """``/answer``'s helper (every path: the strip, the pop-up, a voice
+    answer, a push button) stamps the session after a settling answer."""
+    inst = _answer_rig(monkeypatch)
+    body, status = server._answer_dialog(inst, "w", "", keys, pin, by)
+    assert status == 200, body
+    assert voice_actions.answered_at("w") == (5000.0 if stamped else 0.0)
+
+
+def test_a_refused_or_failed_answer_stamps_nothing(monkeypatch, stamps):
+    inst = _answer_rig(monkeypatch, dialog_id="d2")  # the prompt changed
+    body, status = server._answer_dialog(inst, "w", "", ["1"], "d1", "user")
+    assert status == 409 and body.get("dialog_changed")
+    inst = _answer_rig(monkeypatch, sent=False)  # tmux refused the keys
+    body, status = server._answer_dialog(inst, "w", "", ["1"], "d1", "user")
+    assert status == 502
+    assert voice_actions.answered_at("w") == 0.0
+
+
+def test_a_push_button_answer_stamps_the_session(monkeypatch, stamps):
+    """The notify act route runs the real answer helper: its answer counts."""
+    _answer_rig(monkeypatch)
+    monkeypatch.setattr(
+        server.ENGINE,
+        "instances",
+        {"w": SimpleNamespace(Title="w", Program="claude")},
+    )
+    monkeypatch.setattr(server, "_budget_locked", lambda title: False)
+    tok = voice_actions.issue("w", "d1", "1")
+    assert _act(tok).status_code == 200
+    assert voice_actions.answered_at("w") == 5000.0

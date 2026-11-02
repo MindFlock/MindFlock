@@ -39965,7 +39965,7 @@ function subscribeMicState(cb) {
 //#region src/lib/wavRecorder.ts
 var DEFAULT_TARGET_RATE = 16e3;
 var BLOCK_FRAMES = 4096;
-var TAKE_MIN_S = .3;
+var TAKE_MIN_S$1 = .3;
 function encodeWav(samples, sampleRate) {
 	const dataSize = samples.length * 2;
 	const buf = new ArrayBuffer(44 + dataSize);
@@ -39993,8 +39993,8 @@ function encodeWav(samples, sampleRate) {
 	}
 	return new Blob([buf], { type: "audio/wav" });
 }
-var SINC_HALF_ZC = 16;
-var SINC_ROLLOFF = .9;
+var SINC_HALF_ZC$1 = 16;
+var SINC_ROLLOFF$1 = .9;
 function resample(samples, fromRate, toRate) {
 	if (fromRate === toRate || samples.length === 0) return samples;
 	const n = samples.length;
@@ -40002,8 +40002,8 @@ function resample(samples, fromRate, toRate) {
 	const out = new Float32Array(outLen);
 	const step = fromRate / toRate;
 	const ratio = Math.min(1, toRate / fromRate);
-	const fc = .5 * ratio * SINC_ROLLOFF;
-	const half = SINC_HALF_ZC / ratio;
+	const fc = .5 * ratio * SINC_ROLLOFF$1;
+	const half = SINC_HALF_ZC$1 / ratio;
 	for (let i = 0; i < outLen; i++) {
 		const t = i * step;
 		const lo = Math.max(0, Math.ceil(t - half));
@@ -40046,7 +40046,7 @@ async function resampleTo(samples, fromRate, toRate) {
 		return resample(samples, fromRate, toRate);
 	}
 }
-var MUTE_HOLD_S = .5;
+var MUTE_HOLD_S$1 = .5;
 function startWavRecording(stream, ctx, opts = {}) {
 	const targetRate = opts.targetRate ?? DEFAULT_TARGET_RATE;
 	const onLevel = opts.onLevel;
@@ -40063,7 +40063,7 @@ function startWavRecording(stream, ctx, opts = {}) {
 	let muted = false;
 	let held = [];
 	let heldFrames = 0;
-	const hold = Math.round(MUTE_HOLD_S * ctx.sampleRate);
+	const hold = Math.round(MUTE_HOLD_S$1 * ctx.sampleRate);
 	const keep = opts.keepS ? Math.max(1, Math.round(opts.keepS * ctx.sampleRate)) : 0;
 	processor.onaudioprocess = (e) => {
 		if (done) return;
@@ -40120,7 +40120,7 @@ function startWavRecording(stream, ctx, opts = {}) {
 			result = resampleTo(drain(), ctx.sampleRate, targetRate).then((pcm) => encodeWav(pcm, targetRate));
 			return result;
 		},
-		take(minS = TAKE_MIN_S) {
+		take(minS = TAKE_MIN_S$1) {
 			if (done || !fresh || fresh < minS * ctx.sampleRate) return null;
 			return encodeWav(resample(drain(), ctx.sampleRate, targetRate), targetRate);
 		},
@@ -40171,9 +40171,182 @@ function startWavRecording(stream, ctx, opts = {}) {
 	};
 }
 //#endregion
+//#region src/lib/voiceCapture.worklet.ts?worker&url
+var voiceCapture_worklet_default = "/voice-capture-worklet.js";
+//#endregion
+//#region src/lib/voiceCapture.worklet.ts
+var CAPTURE_PROCESSOR = "mf-voice-capture";
+var CAPTURE_BLOCK_FRAMES = 4096;
+var CAPTURE_RATE = 16e3;
+var SINC_HALF_ZC = 16;
+var SINC_ROLLOFF = .9;
+var MAX_PHASES = 2048;
+var gcd = (a, b) => b ? gcd(b, a % b) : a;
+var StreamResampler = class {
+	fromRate;
+	toRate;
+	L;
+	M;
+	half;
+	K;
+	fc;
+	table;
+	buf;
+	len = 0;
+	base;
+	next = 0;
+	constructor(fromRate, toRate) {
+		this.fromRate = fromRate;
+		this.toRate = toRate;
+		const from = Math.round(fromRate);
+		const to = Math.round(toRate);
+		const g = gcd(from, to) || 1;
+		this.L = to / g;
+		this.M = from / g;
+		const ratio = Math.min(1, to / from);
+		this.fc = .5 * ratio * SINC_ROLLOFF;
+		this.half = SINC_HALF_ZC / ratio;
+		this.K = Math.ceil(this.half);
+		this.base = -this.K;
+		this.buf = new Float32Array(Math.max(1024, 4 * this.K + 512));
+		this.len = this.K;
+		this.table = from === to || this.L > MAX_PHASES ? null : Array.from({ length: this.L }, (_, p) => this.taps(p / this.L));
+	}
+	taps(frac) {
+		const K = this.K;
+		const out = new Float32Array(2 * K);
+		let sum = 0;
+		for (let k = -K + 1; k <= K; k++) {
+			const x = k - frac;
+			const u = x / this.half;
+			if (u < -1 || u > 1) continue;
+			const win = .42 + .5 * Math.cos(Math.PI * u) + .08 * Math.cos(2 * Math.PI * u);
+			const arg = 2 * this.fc * x;
+			const w = (arg === 0 ? 1 : Math.sin(Math.PI * arg) / (Math.PI * arg)) * win;
+			out[k + K - 1] = w;
+			sum += w;
+		}
+		if (sum) for (let i = 0; i < out.length; i++) out[i] /= sum;
+		return out;
+	}
+	push(input) {
+		if (this.fromRate === this.toRate) return input.slice();
+		this.append(input);
+		const { L, M, K } = this;
+		const end = this.base + this.len;
+		const last = Math.floor((end - 1 - K) * L / M);
+		const n = Math.max(0, last - this.next + 1);
+		const out = new Float32Array(n);
+		for (let o = 0; o < n; o++) {
+			const pos = (this.next + o) * M;
+			const c = Math.floor(pos / L);
+			const ph = pos - c * L;
+			const taps = this.table ? this.table[ph] : this.taps(ph / L);
+			const at = c - K + 1 - this.base;
+			let acc = 0;
+			for (let k = 0; k < taps.length; k++) acc += this.buf[at + k] * taps[k];
+			out[o] = acc;
+		}
+		this.next += n;
+		const keepFrom = Math.floor(this.next * M / L) - K + 1;
+		const drop = Math.min(this.len, Math.max(0, keepFrom - this.base));
+		if (drop) {
+			this.buf.copyWithin(0, drop, this.len);
+			this.len -= drop;
+			this.base += drop;
+		}
+		return out;
+	}
+	append(input) {
+		if (this.len + input.length > this.buf.length) {
+			const grown = new Float32Array(Math.max(this.buf.length * 2, this.len + input.length));
+			grown.set(this.buf.subarray(0, this.len));
+			this.buf = grown;
+		}
+		this.buf.set(input, this.len);
+		this.len += input.length;
+	}
+};
+var CaptureCore = class {
+	inRate;
+	emit;
+	outRate;
+	blockFrames;
+	rs;
+	parts = [];
+	outLen = 0;
+	inBlock = 0;
+	sumSq = 0;
+	frames = 0;
+	constructor(inRate, emit, outRate = CAPTURE_RATE, blockFrames = CAPTURE_BLOCK_FRAMES) {
+		this.inRate = inRate;
+		this.emit = emit;
+		this.outRate = outRate;
+		this.blockFrames = blockFrames;
+		this.rs = new StreamResampler(inRate, outRate);
+	}
+	push(input) {
+		let from = 0;
+		while (from < input.length) {
+			const n = Math.min(input.length - from, this.blockFrames - this.inBlock);
+			const part = from === 0 && n === input.length ? input : input.subarray(from, from + n);
+			for (let i = 0; i < part.length; i++) this.sumSq += part[i] * part[i];
+			const out = this.rs.push(part);
+			if (out.length) {
+				this.parts.push(out);
+				this.outLen += out.length;
+			}
+			this.inBlock += n;
+			this.frames += n;
+			from += n;
+			if (this.inBlock >= this.blockFrames) this.flush();
+		}
+	}
+	flush() {
+		const pcm = new Float32Array(this.outLen);
+		let at = 0;
+		for (const p of this.parts) {
+			pcm.set(p, at);
+			at += p.length;
+		}
+		const rms = this.inBlock ? Math.min(1, Math.sqrt(this.sumSq / this.inBlock)) : 0;
+		this.parts = [];
+		this.outLen = 0;
+		this.inBlock = 0;
+		this.sumSq = 0;
+		this.emit({
+			pcm,
+			rms,
+			frames: this.frames
+		});
+	}
+};
+if (typeof registerProcessor === "function" && typeof AudioWorkletProcessor === "function") registerProcessor(CAPTURE_PROCESSOR, class extends AudioWorkletProcessor {
+	core;
+	stopped = false;
+	constructor(options) {
+		super(options);
+		const o = options?.processorOptions || {};
+		this.core = new CaptureCore(sampleRate, (b) => this.port.postMessage(b, [b.pcm.buffer]), o.outRate || CAPTURE_RATE, o.blockFrames || CAPTURE_BLOCK_FRAMES);
+		this.port.onmessage = (e) => {
+			if (e.data === "stop") this.stopped = true;
+		};
+	}
+	process(inputs) {
+		if (this.stopped) return false;
+		const ch = inputs[0]?.[0];
+		if (ch?.length) this.core.push(ch);
+		return true;
+	}
+});
+//#endregion
 //#region src/lib/voiceMic.ts
 var KEEP_STREAM_MS = 9e4;
 var HIDDEN_RELEASE_MS = 1e4;
+var MIC_CONSTRAINTS = {
+	echoCancellation: true,
+	noiseSuppression: true
+};
 var stopTracks = (s) => s.getTracks().forEach((t) => t.stop());
 async function micGranted() {
 	try {
@@ -40185,15 +40358,24 @@ async function micGranted() {
 var MicKeeper = class {
 	keepMs;
 	open;
+	ringCtx;
 	stream = null;
 	pending = null;
 	users = 0;
 	gen = 0;
 	timer;
 	hiddenTimer;
-	constructor(keepMs = KEEP_STREAM_MS, open = () => navigator.mediaDevices.getUserMedia({ audio: true })) {
+	ring = null;
+	cap = null;
+	lostSubs = /* @__PURE__ */ new Set();
+	constructor(keepMs = KEEP_STREAM_MS, open = () => navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS }), ringCtx = () => null) {
 		this.keepMs = keepMs;
 		this.open = open;
+		this.ringCtx = ringCtx;
+		if (typeof navigator !== "undefined") navigator.mediaDevices?.addEventListener?.("devicechange", () => {
+			const st = this.stream;
+			if (st && (st.active === false || st.getTracks().some((t) => t.readyState === "ended"))) this.lost(st);
+		});
 		if (typeof document === "undefined" || !document.addEventListener) return;
 		document.addEventListener("visibilitychange", () => {
 			clearTimeout(this.hiddenTimer);
@@ -40221,7 +40403,9 @@ var MicKeeper = class {
 			this.pending = null;
 			if (this.stream && this.stream !== st) stopTracks(this.stream);
 			this.stream = st;
+			for (const t of st.getTracks?.() || []) t.addEventListener?.("ended", () => this.lost(st));
 			if (!this.users) this.arm();
+			this.roll();
 			return st;
 		}, (err) => {
 			if (g === this.gen) this.pending = null;
@@ -40252,9 +40436,79 @@ var MicKeeper = class {
 		this.gen++;
 		this.pending = null;
 		clearTimeout(this.timer);
+		this.dropRing();
 		const s = this.stream;
 		this.stream = null;
 		if (s) stopTracks(s);
+	}
+	dropRing() {
+		this.ring?.stop();
+		this.ring = null;
+		this.cap = null;
+	}
+	roll(ctx = this.ringCtx()) {
+		const s = this.live();
+		if (!s || !ctx || ctx.state !== "running") return;
+		if (this.ring && this.ring.stream === s && this.ring.ctx === ctx) return;
+		const e = this.cap;
+		if (e && e.stream === s && e.ctx === ctx) return;
+		this.dropRing();
+		if (!workletOf(ctx)) {
+			this.ring = startPreRoll(s, ctx);
+			return;
+		}
+		const entry = {
+			stream: s,
+			ctx,
+			p: openCapture(s, ctx)
+		};
+		this.cap = entry;
+		entry.p.then((c) => {
+			if (this.cap !== entry || this.live() !== s) {
+				c?.stop();
+				return;
+			}
+			if (c) this.ring = c;
+			else {
+				this.cap = null;
+				this.ring = startPreRoll(s, ctx);
+			}
+		});
+	}
+	capture(ctx) {
+		this.roll(ctx);
+		const s = this.live();
+		const r = this.ring;
+		if (r instanceof MicCapture && r.stream === s && r.ctx === ctx) return r;
+		const e = this.cap;
+		if (!s || !e || e.stream !== s || e.ctx !== ctx) return null;
+		let timer;
+		return Promise.race([e.p.then((c) => c && this.ring === c ? c : null), new Promise((ok) => timer = setTimeout(() => ok(null), CAPTURE_WAIT_MS))]).finally(() => clearTimeout(timer));
+	}
+	preRoll(ms = PRE_ROLL_MS, rate = PRE_ROLL_RATE) {
+		const r = this.ring;
+		return r && r.stream === this.live() ? r.last(ms, rate) : null;
+	}
+	cut() {
+		this.ring?.cut();
+	}
+	quietFloor() {
+		const r = this.ring;
+		return r && r.stream === this.live() ? r.floor() : 0;
+	}
+	onLost(cb) {
+		this.lostSubs.add(cb);
+		return () => {
+			this.lostSubs.delete(cb);
+		};
+	}
+	lost(st) {
+		if (st !== this.stream) return;
+		clearTimeout(this.timer);
+		this.dropRing();
+		this.stream = null;
+		stopTracks(st);
+		this.lostSubs.forEach((cb) => cb());
 	}
 	releaseIdle() {
 		if (!this.users) this.release();
@@ -40265,6 +40519,366 @@ var MicKeeper = class {
 		this.timer = setTimeout(() => this.releaseIdle(), this.keepMs);
 	}
 };
+var PRE_ROLL_MS = 500;
+var PRE_ROLL_ONSET_S = .3;
+var PRE_ROLL_RATE = 16e3;
+var RING_BLOCK = 2048;
+function downsample(src, from, to) {
+	if (from === to || !src.length) return src;
+	const n = Math.floor(src.length * to / from);
+	const out = new Float32Array(n);
+	const step = from / to;
+	for (let i = 0; i < n; i++) {
+		const a = Math.floor(i * step);
+		const b = Math.max(a + 1, Math.min(src.length, Math.floor((i + 1) * step)));
+		let sum = 0;
+		for (let j = a; j < b; j++) sum += src[j];
+		out[i] = sum / (b - a);
+	}
+	return out;
+}
+function startPreRoll(stream, ctx) {
+	try {
+		const src = ctx.createMediaStreamSource(stream);
+		const proc = ctx.createScriptProcessor(RING_BLOCK, 1, 1);
+		const zero = ctx.createGain();
+		zero.gain.value = 0;
+		const keep = Math.round(PRE_ROLL_MS / 1e3 * ctx.sampleRate) + RING_BLOCK;
+		let blocks = [];
+		let frames = 0;
+		let fresh = 0;
+		proc.onaudioprocess = (e) => {
+			const pcm = e.inputBuffer.getChannelData(0).slice();
+			blocks.push({
+				pcm,
+				rms: rmsOf(pcm)
+			});
+			frames += pcm.length;
+			fresh = Math.min(fresh + pcm.length, keep);
+			while (blocks.length > 1 && frames - blocks[0].pcm.length >= keep) frames -= blocks.shift().pcm.length;
+		};
+		src.connect(proc);
+		proc.connect(zero);
+		zero.connect(ctx.destination);
+		return {
+			stream,
+			ctx,
+			stop() {
+				proc.onaudioprocess = null;
+				blocks = [];
+				frames = 0;
+				fresh = 0;
+				for (const node of [
+					src,
+					proc,
+					zero
+				]) try {
+					node.disconnect();
+				} catch {}
+			},
+			cut() {
+				fresh = 0;
+			},
+			last(ms, rate) {
+				let want = Math.min(frames, fresh, Math.round(ms / 1e3 * ctx.sampleRate));
+				if (!want) return null;
+				const out = new Float32Array(want);
+				for (let i = blocks.length - 1; i >= 0 && want > 0; i--) {
+					const b = blocks[i].pcm;
+					const n = Math.min(want, b.length);
+					out.set(b.subarray(b.length - n), want - n);
+					want -= n;
+				}
+				return downsample(out, ctx.sampleRate, rate);
+			},
+			floor() {
+				return blocks.length ? Math.min(...blocks.map((b) => b.rms)) : 0;
+			}
+		};
+	} catch {
+		return null;
+	}
+}
+var CAPTURE_WAIT_MS = 1500;
+function workletOf(ctx) {
+	const w = ctx.audioWorklet;
+	return w && typeof w.addModule === "function" && typeof AudioWorkletNode === "function" ? w : null;
+}
+var loaded = /* @__PURE__ */ new WeakMap();
+function loadCapture(ctx) {
+	let p = loaded.get(ctx);
+	if (!p) {
+		const w = workletOf(ctx);
+		p = w ? w.addModule(voiceCapture_worklet_default).then(() => true, () => false) : Promise.resolve(false);
+		loaded.set(ctx, p);
+	}
+	return p;
+}
+async function openCapture(stream, ctx) {
+	if (!await loadCapture(ctx)) return null;
+	try {
+		const src = ctx.createMediaStreamSource(stream);
+		const node = new AudioWorkletNode(ctx, CAPTURE_PROCESSOR, {
+			numberOfInputs: 1,
+			numberOfOutputs: 1,
+			outputChannelCount: [1],
+			channelCount: 1,
+			channelCountMode: "explicit",
+			processorOptions: {
+				outRate: CAPTURE_RATE,
+				blockFrames: CAPTURE_BLOCK_FRAMES
+			}
+		});
+		const zero = ctx.createGain();
+		zero.gain.value = 0;
+		src.connect(node);
+		node.connect(zero);
+		zero.connect(ctx.destination);
+		const cap = new MicCapture(stream, ctx, () => {
+			node.port.onmessage = null;
+			try {
+				node.port.postMessage("stop");
+			} catch {}
+			for (const n of [
+				src,
+				node,
+				zero
+			]) try {
+				n.disconnect();
+			} catch {}
+		});
+		node.port.onmessage = (e) => cap.feed(e.data);
+		return cap;
+	} catch {
+		return null;
+	}
+}
+var MicCapture = class {
+	stream;
+	ctx;
+	teardown;
+	subs = /* @__PURE__ */ new Set();
+	blocks = [];
+	kept = 0;
+	fresh = 0;
+	stopped = false;
+	keep = Math.round(PRE_ROLL_MS / 1e3 * CAPTURE_RATE) + Math.ceil(CAPTURE_BLOCK_FRAMES / 2);
+	constructor(stream, ctx, teardown = () => {}) {
+		this.stream = stream;
+		this.ctx = ctx;
+		this.teardown = teardown;
+	}
+	feed(b) {
+		if (this.stopped || !b?.pcm) return;
+		this.blocks.push({
+			pcm: b.pcm,
+			rms: b.rms
+		});
+		this.kept += b.pcm.length;
+		this.fresh = Math.min(this.fresh + b.pcm.length, this.keep);
+		while (this.blocks.length > 1 && this.kept - this.blocks[0].pcm.length >= this.keep) this.kept -= this.blocks.shift().pcm.length;
+		this.subs.forEach((cb) => cb(b));
+	}
+	on(cb) {
+		this.subs.add(cb);
+		return () => {
+			this.subs.delete(cb);
+		};
+	}
+	stop() {
+		if (this.stopped) return;
+		this.stopped = true;
+		this.subs.clear();
+		this.blocks = [];
+		this.kept = 0;
+		this.fresh = 0;
+		this.teardown();
+	}
+	cut() {
+		this.fresh = 0;
+	}
+	last(ms, rate) {
+		let want = Math.min(this.kept, this.fresh, Math.round(ms / 1e3 * CAPTURE_RATE));
+		if (!want) return null;
+		const out = new Float32Array(want);
+		for (let i = this.blocks.length - 1; i >= 0 && want > 0; i--) {
+			const b = this.blocks[i].pcm;
+			const n = Math.min(want, b.length);
+			out.set(b.subarray(b.length - n), want - n);
+			want -= n;
+		}
+		return downsample(out, CAPTURE_RATE, rate);
+	}
+	floor() {
+		return this.blocks.length ? Math.min(...this.blocks.map((b) => b.rms)) : 0;
+	}
+	record(opts = {}) {
+		return recordBlocks(this, opts);
+	}
+};
+function pcmWav(samples, rate) {
+	const out = new Uint8Array(44 + samples.length * 2);
+	const v = new DataView(out.buffer);
+	const ascii = (at, s) => {
+		for (let i = 0; i < s.length; i++) v.setUint8(at + i, s.charCodeAt(i));
+	};
+	ascii(0, "RIFF");
+	v.setUint32(4, 36 + samples.length * 2, true);
+	ascii(8, "WAVE");
+	ascii(12, "fmt ");
+	v.setUint32(16, 16, true);
+	v.setUint16(20, 1, true);
+	v.setUint16(22, 1, true);
+	v.setUint32(24, rate, true);
+	v.setUint32(28, rate * 2, true);
+	v.setUint16(32, 2, true);
+	v.setUint16(34, 16, true);
+	ascii(36, "data");
+	v.setUint32(40, samples.length * 2, true);
+	putPcm16(v, 44, samples);
+	return new Blob([out], { type: "audio/wav" });
+}
+function putPcm16(v, at, samples) {
+	for (let i = 0; i < samples.length; i++, at += 2) {
+		const s = samples[i];
+		const c = s > 1 ? 1 : s < -1 ? -1 : s === s ? s : 0;
+		v.setInt16(at, c < 0 ? Math.round(c * 32768) : Math.round(c * 32767), true);
+	}
+}
+function recordBlocks(cap, opts) {
+	const rate = CAPTURE_RATE;
+	const outRate = Math.min(opts.targetRate ?? rate, rate);
+	const onLevel = opts.onLevel;
+	let blocks = [];
+	let frames = 0;
+	let fresh = 0;
+	let done = false;
+	let skip = Math.max(0, Math.round((opts.skipS || 0) * rate));
+	let muted = false;
+	let held = [];
+	let heldFrames = 0;
+	const hold = Math.round(MUTE_HOLD_S * rate);
+	const keep = opts.keepS ? Math.max(1, Math.round(opts.keepS * rate)) : 0;
+	const wav = (pcm) => pcmWav(downsample(pcm, rate, outRate), outRate);
+	const off = cap.on((b) => {
+		if (done) return;
+		const block = b.pcm;
+		if (muted) {
+			held.push(block);
+			heldFrames += block.length;
+			while (held.length > 1 && heldFrames - held[0].length >= hold) heldFrames -= held.shift().length;
+			return;
+		}
+		if (skip > 0) {
+			skip -= block.length;
+			return;
+		}
+		blocks.push(block);
+		frames += block.length;
+		fresh += block.length;
+		while (keep && blocks.length > 1 && fresh - blocks[0].length >= keep) fresh -= blocks.shift().length;
+		if (onLevel && block.length) onLevel(b.rms);
+	});
+	const drain = () => {
+		const all = new Float32Array(fresh);
+		let at = 0;
+		for (const b of blocks) {
+			all.set(b, at);
+			at += b.length;
+		}
+		blocks = [];
+		fresh = 0;
+		return all;
+	};
+	const end = () => {
+		done = true;
+		off();
+	};
+	let result = null;
+	return {
+		stop() {
+			if (result) return result;
+			end();
+			result = Promise.resolve(wav(drain()));
+			return result;
+		},
+		take(minS = TAKE_MIN_S) {
+			if (done || !fresh || fresh < minS * rate) return null;
+			return wav(drain());
+		},
+		cancel() {
+			end();
+			blocks = [];
+			fresh = 0;
+		},
+		mute(on, tailS = 0, rewindS = 0) {
+			if (!on && muted) {
+				if (rewindS > 0 && !skip) {
+					let want = Math.min(heldFrames, Math.round(rewindS * rate));
+					const back = [];
+					for (let i = held.length - 1; i >= 0 && want > 0; i--) {
+						const b = held[i];
+						const part = b.length > want ? b.subarray(b.length - want) : b;
+						back.unshift(part);
+						want -= part.length;
+					}
+					for (const b of back) {
+						blocks.push(b);
+						frames += b.length;
+						fresh += b.length;
+					}
+				} else skip = Math.max(skip, Math.round(tailS * rate));
+			}
+			if (on && !muted) {
+				held = [];
+				heldFrames = 0;
+			}
+			muted = on;
+		},
+		seconds() {
+			return frames / rate;
+		},
+		async last(s) {
+			if (done || !fresh) return null;
+			let want = Math.min(fresh, Math.max(1, Math.round(s * rate)));
+			const out = new Float32Array(want);
+			for (let i = blocks.length - 1; i >= 0 && want > 0; i--) {
+				const b = blocks[i];
+				const n = Math.min(want, b.length);
+				out.set(b.subarray(b.length - n), want - n);
+				want -= n;
+			}
+			return wav(out);
+		}
+	};
+}
+var MUTE_HOLD_S = .5;
+var TAKE_MIN_S = .3;
+async function withPreRoll(pre, wav, rate = PRE_ROLL_RATE) {
+	if (!pre?.length) return wav;
+	try {
+		const src = new DataView(await wav.arrayBuffer());
+		const tag = (at) => String.fromCharCode(...[
+			0,
+			1,
+			2,
+			3
+		].map((i) => src.getUint8(at + i)));
+		if (src.byteLength < 44 || tag(0) !== "RIFF" || tag(36) !== "data" || src.getUint16(22, true) !== 1 || src.getUint16(34, true) !== 16 || src.getUint32(24, true) !== rate) return wav;
+		const data = src.byteLength - 44;
+		const add = pre.length * 2;
+		const out = new Uint8Array(44 + add + data);
+		out.set(new Uint8Array(src.buffer, src.byteOffset, 44), 0);
+		const v = new DataView(out.buffer);
+		v.setUint32(4, 36 + add + data, true);
+		v.setUint32(40, add + data, true);
+		putPcm16(v, 44, pre);
+		out.set(new Uint8Array(src.buffer, src.byteOffset + 44, data), 44 + add);
+		return new Blob([out], { type: wav.type || "audio/wav" });
+	} catch {
+		return wav;
+	}
+}
 var RMS_SPEECH = .02;
 var LEVEL_DECAY_MS = 150;
 var LEVEL_FULL_RMS = .12;
@@ -40363,9 +40977,9 @@ function frame(t) {
 function kick() {
 	if (!raf) raf = schedule(frame);
 }
-function meterStart() {
+function meterStart(seed = 0) {
 	active = true;
-	floor = 0;
+	floor = seed > 0 ? seed : 0;
 	target = 0;
 	lastLoud = 0;
 	setHearing(false);
@@ -40390,6 +41004,9 @@ function meterFeed(rms, now = Date.now()) {
 }
 function lastLoudAt() {
 	return lastLoud;
+}
+function meterQuietMs() {
+	return lastLoud ? Math.max(0, lastFeed - lastLoud) : Infinity;
 }
 function meterPoll(read) {
 	poll = read;
@@ -42170,10 +42787,13 @@ function onVoicePrefs(fn) {
 	return () => window.removeEventListener(VOICE_PREFS_EVENT, h);
 }
 var TALK_EVENT = "mindflock:voice-talk";
-function talkKeyAction(phase, hold, listening, keyHeld) {
-	if (!hold) return phase === "down" ? listening ? "finish" : "start" : null;
-	if (phase === "down") return listening ? null : "start";
-	return keyHeld && listening ? "finish" : null;
+var TAP_HOLD_MS = 350;
+var TALK_DEBOUNCE_MS = 300;
+function talkKeyAction(phase, hold, listening, keyHeld, o = {}) {
+	if (!hold) return phase === "down" ? listening ? "finish" : o.busy ? null : "start" : null;
+	if (phase === "down") return listening ? o.latched ? "finish" : null : o.busy ? null : "start";
+	if (!keyHeld || !listening) return null;
+	return o.heldMs !== void 0 && o.heldMs < TAP_HOLD_MS ? "latch" : "finish";
 }
 var DICT_IDLE_MS = 12e4;
 var HOLD_FINAL_WAIT_MS = 1500;
@@ -42187,6 +42807,7 @@ var LEFT_LINE = "In the field — press Enter to send";
 var STOPPED_LINE = "Stopped listening";
 var HUSH_LINE = "Quiet.";
 var HUSH_CAPTION_MS = 1e3;
+var MIC_PAUSED_LINE = "Speaking — your mic is paused until it ends";
 function micPill(s) {
 	if (s.quiet) return HUSH_LINE;
 	if (s.listening) return "Listening…";
@@ -42204,6 +42825,7 @@ function retype(before, after) {
 }
 var CONTROL_TAIL_MS = 250;
 var CONTROL_POLL_MS = 50;
+var OVER_EARLY_QUIET_MS = 100;
 var OVER_FINAL_WAIT_MS = 1500;
 var OVER_FINAL_MIN_MS = 300;
 var FINAL_ROUND_TRIP_MS = 150;
@@ -42227,6 +42849,7 @@ var FinalClock = class {
 };
 var finalClock = new FinalClock();
 var SWALLOW_MAX_MS = 5e3;
+var SWALLOW_STREAM_MAX_MS = 5e4;
 var withErase = (o, erase) => erase ? {
 	...o,
 	erase
@@ -42305,9 +42928,9 @@ var Dictation = class {
 	words(w) {
 		return this.stream(w, "");
 	}
-	flush(w, final) {
+	flush(w, final, radio = true) {
 		if (!this.listening) return { kind: "stopped" };
-		return this.heard(final?.trim() ? final.trim() : joinWords(this.held, w));
+		return this.heard(final?.trim() ? final.trim() : joinWords(this.held, w), radio);
 	}
 	wrote(text) {
 		this.typed += text;
@@ -42315,11 +42938,25 @@ var Dictation = class {
 	unwrote(text) {
 		if (text && this.typed.endsWith(text)) this.typed = this.typed.slice(0, this.typed.length - text.length);
 	}
-	heard(phrase) {
+	get inPhrase() {
+		return this.phraseAt >= 0;
+	}
+	untyped(text, erased) {
+		const base = text && this.typed.endsWith(text) ? this.typed.slice(0, this.typed.length - text.length) : this.typed;
+		const guess = this.phraseAt < 0 ? 0 : this.typed.length - this.phraseAt;
+		const over = this.phraseAt < 0 ? text : guess >= text.length ? "" : text.slice(0, text.length - guess);
+		this.typed = base + erased;
+		if (this.phraseAt >= 0 && guess <= text.length) this.phraseAt = this.typed.length;
+		return over;
+	}
+	heard(phrase, radio = true) {
 		if (!this.listening) return { kind: "stopped" };
 		const ctl = this.control(phrase, true);
 		if (ctl) return ctl;
-		const p = parseRadio(phrase);
+		const p = radio ? parseRadio(phrase) : {
+			kind: "",
+			text: String(phrase || "").trim()
+		};
 		switch (p.kind) {
 			case "disregard": return {
 				kind: "erase",
@@ -42405,8 +43042,8 @@ var Dictation = class {
 	}
 	guess() {
 		if (this.phraseAt < 0) this.phraseAt = this.typed.length;
-		const all = joinWords(this.held, this.partial);
-		const want = this.routes && !this.before && mayBeCommand(all) ? "" : holdBack(all).type;
+		const hb = holdBack(joinWords(this.held, this.partial));
+		const want = this.routes && !this.before && mayBeCommand(hb.type) ? "" : hb.type;
 		const fix = retype(this.guessed, want);
 		if (!fix.erase && !fix.type) return { kind: "continue" };
 		return withErase({
@@ -42461,20 +43098,152 @@ var Dictation = class {
 		return text;
 	}
 };
-function backspaces(text) {
-	return "".repeat(Array.from(text).length);
-}
 function dialogUp(activity) {
 	return activity === "clarify" || activity === "limit";
 }
-function sessionTarget(title, name) {
-	const send = (data) => peekTerm(title, "agent")?.send(data) ?? false;
+var DIALOG_CHECK_EVERY_MS = 2e3;
+var postKeys = async (title, erase, text) => instApi(title, "/send", { json: {
+	voice: true,
+	submit: false,
+	erase,
+	text
+} });
+var KEY_TIMEOUT_MS = 4e3;
+function answerWithin(p, ms) {
+	return new Promise((res, rej) => {
+		const timer = setTimeout(() => rej(/* @__PURE__ */ new Error("the server didn't answer")), ms);
+		p.then((v) => (clearTimeout(timer), res(v)), (e) => (clearTimeout(timer), rej(e)));
+	});
+}
+var keyLanes = /* @__PURE__ */ new Map();
+function inLane(title, fn) {
+	const call = () => {
+		try {
+			return Promise.resolve(fn());
+		} catch (err) {
+			return Promise.reject(err);
+		}
+	};
+	const prev = keyLanes.get(title);
+	const p = prev ? prev.then(call, call) : call();
+	keyLanes.set(title, p);
+	const clear = () => {
+		if (keyLanes.get(title) === p) keyLanes.delete(title);
+	};
+	p.then(clear, clear);
+	return p;
+}
+var keyTimes = [];
+function keyTime(ms, erase, chars) {
+	keyTimes = [...keyTimes, Math.round(ms)].slice(-20);
+	if (typeof window !== "undefined") window.__mfVoiceKeys = keyTimes;
+	try {
+		if (typeof localStorage !== "undefined" && localStorage.getItem("cs_voice_debug") === "1") console.debug("[voice] keys ⌫" + erase + " +" + chars + " in " + Math.round(ms) + " ms");
+	} catch {}
+}
+function foldKeys(b, erase, text) {
+	const keep = Math.max(0, b.text.length - erase);
+	return {
+		erase: b.erase + Math.max(0, erase - b.text.length),
+		text: [...b.text.slice(0, keep), ...text]
+	};
+}
+var KeyGate = class {
+	title;
+	name;
+	post;
+	field = [];
+	queued = null;
+	flying = null;
+	failed = null;
+	waiters = [];
+	listeners = /* @__PURE__ */ new Set();
+	constructor(title, name, post = postKeys) {
+		this.title = title;
+		this.name = name;
+		this.post = post;
+	}
+	get refused() {
+		return this.failed;
+	}
+	get idle() {
+		return !this.flying && !this.queued;
+	}
+	push(erase, text) {
+		if (this.failed) return false;
+		if (!erase && !text) return true;
+		this.queued = foldKeys(this.queued || {
+			erase: 0,
+			text: []
+		}, Array.from(erase).length, Array.from(text));
+		if (!this.flying) this.fly();
+		return true;
+	}
+	settled() {
+		if (this.failed || this.idle) return Promise.resolve(this.failed);
+		return new Promise((res) => this.waiters.push(res));
+	}
+	onRefused(fn) {
+		this.listeners.add(fn);
+		return () => void this.listeners.delete(fn);
+	}
+	reset() {
+		if (!this.idle) return;
+		this.failed = null;
+		this.field = [];
+	}
+	fly() {
+		const b = this.queued;
+		this.queued = null;
+		if (!b || !b.erase && !b.text.length) return this.wake();
+		this.flying = b;
+		const t0 = Date.now();
+		const text = b.text.join("");
+		inLane(this.title, () => answerWithin(this.post(this.title, b.erase, text), KEY_TIMEOUT_MS)).then(() => {
+			keyTime(Date.now() - t0, b.erase, b.text.length);
+			this.field = [...this.field.slice(0, Math.max(0, this.field.length - b.erase)), ...b.text];
+			this.flying = null;
+			if (this.queued) this.fly();
+			else this.wake();
+		}, (err) => this.fail(b, err));
+	}
+	fail(b, err) {
+		const all = this.queued ? foldKeys(b, this.queued.erase, this.queued.text) : b;
+		const erased = this.field.slice(Math.max(0, this.field.length - all.erase)).join("");
+		this.flying = null;
+		this.queued = null;
+		const body = err instanceof ApiError ? err.body : null;
+		const dialog = err instanceof ApiError && err.status === 409 && !!body?.in_dialog;
+		let line = "Couldn't type into " + this.name + " — " + (err?.message || "the server didn't answer");
+		if (body?.paused) line = this.name + " is paused — resume it first";
+		else if (!(err instanceof ApiError)) line = "Couldn't type into " + this.name + " — the server didn't answer";
+		this.failed = {
+			dialog,
+			line,
+			text: all.text.join(""),
+			erased
+		};
+		for (const fn of [...this.listeners]) try {
+			fn(this.failed);
+		} catch {}
+		this.wake();
+	}
+	wake() {
+		const w = this.waiters;
+		this.waiters = [];
+		for (const res of w) res(this.failed);
+	}
+};
+function sessionTarget(title, name, post = postKeys) {
+	const gate = new KeyGate(title, name, post);
 	return {
 		kind: "session",
 		title,
 		name,
-		type: (text) => send(text),
-		erase: (text) => !text || send(backspaces(text))
+		gate,
+		type: (text) => gate.push("", text),
+		erase: (text) => gate.push(text, ""),
+		replace: (old, text) => gate.push(old, text)
 	};
 }
 var CONFIRM_LINES = {
@@ -42507,6 +43276,8 @@ async function submitDraft(title, name, say) {
 		};
 	}
 }
+var SPOKE_LEAD_MS = 2e3;
+var dialogStopLine = (name, words) => name + " asked something — " + (words ? "“" + words + "” not typed" : "nothing more typed") + "; the words before it stay";
 var LiveDictation = class {
 	target;
 	hooks;
@@ -42524,7 +43295,16 @@ var LiveDictation = class {
 	wordEnd = 0;
 	wordsAt = Date.now();
 	endedAt = 0;
+	early = null;
 	bargeAt = 0;
+	startedAt = Date.now();
+	lastEnd = 0;
+	phraseSpoke = 0;
+	stepSpoke = 0;
+	dialogHit = false;
+	checkedAt = 0;
+	unsent = "";
+	unwatch = null;
 	constructor(target, hooks, opts = {}) {
 		this.target = target;
 		this.hooks = hooks;
@@ -42532,6 +43312,31 @@ var LiveDictation = class {
 		this.dict.begin();
 		this.dict.routes = target?.kind !== "field";
 		this.dict.continuous = !!opts.continuous;
+		this.watch(target);
+	}
+	watch(t) {
+		this.unwatch?.();
+		this.unwatch = t?.gate ? t.gate.onRefused((r) => this.refused(t, r)) : null;
+	}
+	refused(t, r) {
+		if (t !== this.target) return;
+		if (this.done) {
+			if (r.text.trim() || r.erased) this.hooks.caption(r.dialog ? dialogStopLine(t.name, r.text.trim()) : r.line, true);
+			return;
+		}
+		const over = this.dict.untyped(r.text, r.erased);
+		if (!r.dialog) {
+			this.end(r.line, true, "stopped");
+			return;
+		}
+		this.dialogHit = true;
+		dialogSeen.activity(t.title, "clarify");
+		this.checkedAt = Date.now();
+		this.hooks.dialogCheck?.(t.title);
+		this.unsent = joinWords(this.unsent, over);
+		this.chain = this.chain.then(async () => {
+			if (this.dialogHit && !this.done && !this.dict.inPhrase && this.target === t) await this.heldBack(t, "");
+		}).catch(() => {});
 	}
 	get active() {
 		return !this.done;
@@ -42553,31 +43358,53 @@ var LiveDictation = class {
 	hearing(t) {
 		if (t) this.heardAnything = true;
 		if (t) this.wordsAt = Date.now();
+		if (t) this.notePhrase();
 		if (this.swallowing) return this.chain;
 		return this.step(() => this.dict.hearing(t));
 	}
-	heard(phrase) {
+	heard(phrase, spokeAt) {
 		if (phrase.trim()) this.heardAnything = true;
+		const spoke = this.endPhraseAt(spokeAt);
+		const early = this.early;
 		if (this.phraseEnded()) return this.chain;
-		return this.step(() => this.dict.heard(phrase));
+		if (early) return this.afterQuiet(early, (radio) => this.dict.heard(phrase, radio), spoke);
+		return this.step(() => this.dict.heard(phrase), spoke);
 	}
 	stream(w, p) {
 		if (w.trim() || p.trim()) this.heardAnything = true;
 		if (w.trim() || p.trim()) this.wordsAt = Date.now();
+		if (w.trim() || p.trim()) this.notePhrase();
 		if (this.swallowing) return this.chain;
 		return this.step(() => this.dict.stream(w, p));
 	}
 	words(w) {
 		return this.stream(w, "");
 	}
-	flush(w, final) {
+	flush(w, final, spokeAt) {
 		if (w.trim() || final?.trim()) this.heardAnything = true;
+		const spoke = this.endPhraseAt(spokeAt);
+		const early = this.early;
 		if (this.phraseEnded()) return this.chain;
-		return this.step(() => this.dict.flush(w, final));
+		if (early) return this.afterQuiet(early, (radio) => this.dict.flush(w, final, radio), spoke);
+		return this.step(() => this.dict.flush(w, final), spoke);
+	}
+	spokeFrom() {
+		return Math.max(this.startedAt, this.lastEnd - SPOKE_LEAD_MS);
+	}
+	notePhrase() {
+		if (!this.phraseSpoke) this.phraseSpoke = this.hooks.spokeAt?.() || this.spokeFrom();
+	}
+	endPhraseAt(spokeAt) {
+		const known = [spokeAt || 0, this.phraseSpoke].filter((v) => v > 0);
+		const spoke = known.length ? Math.min(...known) : this.spokeFrom();
+		this.phraseSpoke = 0;
+		this.lastEnd = Date.now();
+		return spoke;
 	}
 	phraseEnded() {
 		clearTimeout(this.sendWait);
 		this.sendWait = void 0;
+		this.early = null;
 		if (this.endedAt) {
 			finalClock.note(Date.now() - this.endedAt);
 			this.endedAt = 0;
@@ -42589,7 +43416,37 @@ var LiveDictation = class {
 	}
 	swallow() {
 		clearTimeout(this.swallowing);
-		this.swallowing = setTimeout(() => this.swallowing = void 0, SWALLOW_MAX_MS);
+		const max = this.hooks.endsSurely?.() ? SWALLOW_STREAM_MAX_MS : SWALLOW_MAX_MS;
+		this.swallowing = setTimeout(() => this.swallowing = void 0, max);
+	}
+	watchQuiet() {
+		const e = {
+			at: Date.now(),
+			seen: ""
+		};
+		this.early = e;
+		e.timer = setInterval(() => {
+			if (this.judge(e) || this.done) clearInterval(e.timer);
+		}, CONTROL_POLL_MS);
+		return e;
+	}
+	judge(e) {
+		if (e.seen) return e.seen;
+		const quiet = this.hooks.quietMs?.() ?? Infinity;
+		if ((this.hooks.loudAt?.() ?? Date.now() - quiet) > e.at) e.seen = "resumed";
+		else if (quiet >= CONTROL_TAIL_MS) e.seen = "met";
+		return e.seen;
+	}
+	afterQuiet(e, act, spoke) {
+		return new Promise((resolve) => {
+			const go = () => {
+				const seen = this.judge(e);
+				if (!seen && !this.done) return void setTimeout(go, CONTROL_POLL_MS);
+				clearInterval(e.timer);
+				resolve(this.step(() => act(seen !== "resumed"), spoke));
+			};
+			go();
+		});
 	}
 	watchTail() {
 		if (!this.hooks.quietMs || this.done || this.sendWait || this.swallowing || !this.dict.tail()) {
@@ -42608,22 +43465,28 @@ var LiveDictation = class {
 			return;
 		}
 		const quiet = this.hooks.quietMs?.() ?? 0;
-		if (quiet < CONTROL_TAIL_MS) return;
+		const radio = t.kind === "over" || t.kind === "out";
+		const early = radio && quiet < CONTROL_TAIL_MS && quiet >= OVER_EARLY_QUIET_MS;
+		if (quiet < CONTROL_TAIL_MS && !early) return;
 		clearInterval(this.tailTimer);
 		this.tailTimer = void 0;
-		this.wordEnd = Date.now() - Math.min(quiet, 6e4);
+		this.wordEnd = this.hooks.loudAt?.() || Date.now() - Math.min(quiet, 6e4);
 		this.endedAt = Date.now();
+		const spoke = this.endPhraseAt(this.hooks.spokeAt?.());
 		this.hooks.endPhrase?.();
-		if (t.kind === "over" || t.kind === "out") {
+		if (radio) {
+			const e = early ? this.watchQuiet() : null;
 			this.sendWait = setTimeout(() => {
 				this.sendWait = void 0;
+				this.early = null;
 				this.swallow();
-				this.step(() => this.dict.heard(t.text));
+				if (e) this.afterQuiet(e, (r) => this.dict.heard(t.text, r), spoke);
+				else this.step(() => this.dict.heard(t.text), spoke);
 			}, overWaitMs(finalClock.typical(this.hooks.finalMs?.())));
 			return;
 		}
 		this.swallow();
-		this.step(() => this.dict.heard(t.text));
+		this.step(() => this.dict.heard(t.text), spoke);
 	}
 	unsure(t) {
 		if (this.done) return;
@@ -42673,9 +43536,10 @@ var LiveDictation = class {
 		const lead = pickupLine(this.recording, this.hearingNow);
 		this.hooks.caption(field && lead === "Listening…" ? "Listening — " + base : lead + " · " + base, true);
 	}
-	step(next) {
+	step(next, spoke) {
 		this.chain = this.chain.then(() => {
 			if (this.done) return;
+			this.stepSpoke = spoke || this.phraseSpoke || this.spokeFrom();
 			const t = this.target;
 			this.dict.answering = t?.kind === "session" && !!this.hooks.pending?.(t.title);
 			return this.apply(next());
@@ -42685,9 +43549,12 @@ var LiveDictation = class {
 	end(line, sticky = false, how) {
 		if (this.done) return;
 		this.done = true;
+		this.unsent = "";
 		clearInterval(this.tailTimer);
 		clearTimeout(this.sendWait);
 		clearTimeout(this.swallowing);
+		clearInterval(this.early?.timer);
+		this.early = null;
 		this.dict.listening = false;
 		this.hooks.halt();
 		if (line !== null) this.hooks.caption(line, sticky);
@@ -42706,16 +43573,26 @@ var LiveDictation = class {
 				if (await this.put(out.text, out.route !== false, out.erase, out.guess)) this.show();
 				return;
 			case "erase":
+				if (out.text && t && this.dialogBlocks(t)) {
+					this.end(dialogStopLine(t.name, ""), true, "stopped");
+					return;
+				}
 				t?.erase(out.text);
+				if (t?.gate && await t.gate.settled()) return;
 				this.hooks.caption("Disregarded — go on", true);
 				this.hooks.confirm?.("cleared");
 				return;
 			case "hush":
-				if (out.erase && t && !this.keys(t, out.erase, "")) return;
+				if (out.erase && t && !this.dialogBlocks(t) && !this.keys(t, out.erase, "")) return;
 				this.hushed();
 				return;
 			case "dropped":
+				if (out.text && t && this.dialogBlocks(t)) {
+					this.end(dialogStopLine(t.name, ""), true, "stopped");
+					return;
+				}
 				t?.erase(out.text);
+				if (t?.gate && await t.gate.settled()) return;
 				this.end(out.text ? "Disregarded" : "", false, "stopped");
 				return;
 			case "leave":
@@ -42748,9 +43625,19 @@ var LiveDictation = class {
 					else this.next();
 					return;
 				}
+				if (this.dialogBlocks(t)) {
+					await this.heldBack(t, "");
+					return;
+				}
 				this.acted = true;
 				this.hooks.caption("Sending to " + t.name + "…", true);
-				if (typedNow) await new Promise((r) => setTimeout(r, SUBMIT_SETTLE_MS));
+				if (t.gate) await t.gate.settled();
+				else if (typedNow) await new Promise((r) => setTimeout(r, SUBMIT_SETTLE_MS));
+				if (this.done) return;
+				if (this.dialogBlocks(t)) {
+					await this.heldBack(t, "");
+					return;
+				}
 				const say = this.hooks.replies();
 				const r = await submitDraft(t.title, t.name, say);
 				if (r.ok) this.hooks.submitted(t.title, say);
@@ -42773,6 +43660,8 @@ var LiveDictation = class {
 	next(line) {
 		if (this.done) return;
 		this.dict.next();
+		this.dialogHit = false;
+		this.unsent = "";
 		const n = this.hooks.retarget?.();
 		if (n) {
 			this.target = n.target;
@@ -42781,7 +43670,9 @@ var LiveDictation = class {
 				hint: n.hint
 			};
 			this.dict.routes = n.target?.kind !== "field";
+			this.watch(n.target);
 		}
+		this.target?.gate?.reset();
 		if (line) this.hooks.caption(line, true);
 		else if (line === void 0) this.show();
 	}
@@ -42798,15 +43689,21 @@ var LiveDictation = class {
 	async put(text, route = true, erase = "", guess = false) {
 		const t = this.target;
 		if (guess) {
-			if (!t || !this.dict.typed && t.kind !== "field" && dialogUp(this.hooks.activity(t.title))) return true;
+			if (!t) return true;
+			if (this.dialogBlocks(t)) {
+				if (this.dict.typed) this.dialogHit = true;
+				return true;
+			}
 			return this.keys(t, erase, text);
 		}
+		if (t && (this.dict.typed || this.unsent) && this.dialogBlocks(t)) return this.heldBack(t, text);
 		if (this.dict.typed.length === erase.length && t?.kind !== "field") {
 			if (erase && t && !this.keys(t, erase, "")) return false;
 			erase = "";
 			if (!text) return true;
 			const words = text.trim();
-			const routed = route ? await this.hooks.route(words) : false;
+			if (route) this.hooks.caption(this.dict.shown, true, words);
+			const routed = route ? await this.hooks.route(words, this.stepSpoke) : false;
 			if (routed === "hush") {
 				this.hushed();
 				return false;
@@ -42822,7 +43719,7 @@ var LiveDictation = class {
 				this.end("Click a session first — “" + words + "” not typed", true);
 				return false;
 			}
-			if (dialogUp(this.hooks.activity(t.title))) {
+			if (this.dialogBlocks(t)) {
 				this.end(t.name + " is waiting on a dialog — answer it first", true);
 				return false;
 			}
@@ -42833,10 +43730,46 @@ var LiveDictation = class {
 		}
 		return this.keys(t, erase, text);
 	}
+	dialogBlocks(t) {
+		if (t.kind !== "session") return false;
+		if (this.dialogHit || dialogUp(this.hooks.activity(t.title))) return true;
+		if (!dialogSeen.blocks(t.title)) return false;
+		const now = Date.now();
+		if (this.hooks.dialogCheck && now - this.checkedAt >= DIALOG_CHECK_EVERY_MS) {
+			this.checkedAt = now;
+			this.hooks.dialogCheck(t.title);
+		}
+		return true;
+	}
+	async heldBack(t, rest) {
+		this.dialogHit = false;
+		const words = joinWords(this.unsent, rest).trim();
+		this.unsent = "";
+		if (words && this.dict.routes) {
+			this.hooks.caption(this.dict.shown, true, words);
+			const routed = await this.hooks.route(words, this.stepSpoke);
+			if (routed === "hush") {
+				this.hushed();
+				return false;
+			}
+			if (routed) {
+				this.acted = true;
+				if (this.dict.continuous && routed !== "end") this.next(null);
+				else this.end(null);
+				return false;
+			}
+		}
+		this.end(dialogStopLine(t.name, words), true, "stopped");
+		return false;
+	}
 	keys(t, erase, text) {
 		if (!erase && !text) return true;
-		if (!(t.replace ? t.replace(erase, text) : (!erase || t.erase(erase)) && (!text || t.type(text)))) {
-			this.end("Couldn't type into " + t.name + " — its terminal isn't connected", true);
+		if (this.dialogBlocks(t)) {
+			this.end(dialogStopLine(t.name, text.trim()), true, "stopped");
+			return false;
+		}
+		if (!(t.gate ? t.gate.push(erase, text) : t.replace ? t.replace(erase, text) : (!erase || t.erase(erase)) && (!text || t.type(text)))) {
+			this.end(t.gate?.refused?.line || "Couldn't type into " + t.name + " — its terminal isn't connected", true);
 			return false;
 		}
 		this.dict.unwrote(erase);
@@ -42869,7 +43802,8 @@ var ROUTE_KINDS = /* @__PURE__ */ new Set([
 	"question",
 	"ask",
 	"read",
-	"help"
+	"help",
+	"early"
 ]);
 var PENDING_MS = 3e4;
 var PendingChoice = class {
@@ -42891,7 +43825,93 @@ var PendingChoice = class {
 	}
 };
 var routePending = new PendingChoice();
-async function routePhrase(text, session, pending = routePending) {
+var ANSWER_AFTER_MS = 300;
+var DialogSeen = class {
+	now;
+	seen = /* @__PURE__ */ new Map();
+	was = /* @__PURE__ */ new Map();
+	raised = /* @__PURE__ */ new Set();
+	constructor(now = Date.now) {
+		this.now = now;
+	}
+	note(title, id) {
+		if (!title) return;
+		if (!id) {
+			this.seen.delete(title);
+			this.raised.delete(title);
+			return;
+		}
+		const cur = this.seen.get(title);
+		if (!cur || cur.id !== String(id)) this.seen.set(title, {
+			id: String(id),
+			at: this.now()
+		});
+	}
+	rows(list) {
+		for (const r of list) {
+			const act = String(r.activity || "");
+			const was = this.was.get(r.title);
+			this.was.set(r.title, act);
+			const a = r.asking;
+			if (a && a.kind === "dialog") {
+				if (!a.dialog_id) continue;
+				this.note(r.title, a.dialog_id);
+				const cur = this.seen.get(r.title);
+				if (cur) cur.rows = true;
+			} else if (r.activity !== "clarify" && (this.seen.get(r.title)?.rows || was !== void 0 && dialogUp(was) && !dialogUp(act))) this.note(r.title, null);
+		}
+	}
+	activity(title, act, old) {
+		if (!title) return;
+		if (dialogUp(String(act || ""))) this.raised.add(title);
+		else if (this.raised.has(title) || dialogUp(String(old || ""))) this.note(title, null);
+	}
+	since(title) {
+		return this.seen.get(title)?.at || 0;
+	}
+	blocks(title) {
+		return this.seen.has(title) || this.raised.has(title);
+	}
+	at(title, id) {
+		const cur = this.seen.get(title);
+		return cur && cur.id === String(id) ? cur.at : 0;
+	}
+	inTime(title, id, spokeAt) {
+		const at = this.at(title, id);
+		return !!spokeAt && spokeAt > 0 && at > 0 && spokeAt >= at + ANSWER_AFTER_MS;
+	}
+	body() {
+		const now = this.now();
+		const out = {};
+		for (const [t, v] of this.seen) out[t] = {
+			id: v.id,
+			ms_ago: Math.max(0, now - v.at)
+		};
+		return out;
+	}
+};
+var dialogSeen = new DialogSeen();
+var DIALOG_RECHECK_MS = 400;
+var rechecking = /* @__PURE__ */ new Set();
+async function recheckDialog(title, fetch, seen = dialogSeen, waitMs = DIALOG_RECHECK_MS) {
+	if (!title || rechecking.has(title) || !seen.blocks(title)) return;
+	rechecking.add(title);
+	try {
+		const at = seen.since(title);
+		const read = () => fetch(title).catch(() => void 0);
+		let d = await read();
+		if (d === null) {
+			await new Promise((r) => setTimeout(r, waitMs));
+			d = await read();
+		}
+		if (d === null && seen.since(title) === at) seen.note(title, null);
+		else if (d?.id) seen.note(title, d.id);
+	} finally {
+		rechecking.delete(title);
+	}
+}
+var earlyLine = (name) => name + " asked just now: say your answer again";
+async function routePhrase(text, session, pending = routePending, spokeAt, seen = dialogSeen) {
 	try {
 		const json = {
 			text,
@@ -42899,6 +43919,12 @@ async function routePhrase(text, session, pending = routePending) {
 		};
 		const held = pending.take();
 		if (held) json.pending = held;
+		if (spokeAt && spokeAt > 0) {
+			json.spoke_ms_ago = Math.max(0, Date.now() - spokeAt);
+			json.spoke_at = spokeAt;
+		}
+		const had = seen.body();
+		if (Object.keys(had).length) json.dialog_seen = had;
 		const r = await api("/api/voice/route", { json });
 		if (r && typeof r === "object") pending.keep(r);
 		if (r && typeof r === "object" && ROUTE_KINDS.has(String(r.kind))) return r;
@@ -42932,7 +43958,7 @@ function answerWords(r, text) {
 	if (r.choice === "number" && r.number) return String(r.number);
 	return r.choice || text.trim();
 }
-async function runVoiceCommand(r, text, deps) {
+async function runVoiceCommand(r, text, deps, spokeAt, seen = dialogSeen) {
 	switch (r.kind) {
 		case "switch_index": {
 			const n = Math.trunc(Number(r.index));
@@ -42955,8 +43981,14 @@ async function runVoiceCommand(r, text, deps) {
 			return true;
 		}
 		case "answer":
-			await answer(r, text, deps, false);
+			await answer(r, text, deps, false, spokeAt, seen);
 			return true;
+		case "early": {
+			const title = r.title || deps.focused();
+			if (r.dialog_id) seen.note(title, r.dialog_id);
+			deps.announce(r.say || earlyLine(deps.name(title)));
+			return true;
+		}
 		case "question":
 			deps.announce(r.say || "Nothing is being asked.");
 			return true;
@@ -42982,19 +44014,23 @@ async function askHelp(text) {
 		model: false
 	};
 }
-async function answer(r, text, deps, again) {
+async function answer(r, text, deps, again, spokeAt, seen) {
 	if (!r.title && r.index != null && !again) {
 		const key = railRow(deps.railOrder(), Number(r.index));
 		if (!key || isWindowRow(key)) {
 			deps.announce("There is no session " + Math.trunc(Number(r.index)));
 			return;
 		}
-		const next = await deps.route(text, key);
+		const next = await deps.route(text, key, spokeAt);
 		if (next.kind === "answer") await answer({
 			...next,
 			title: next.title || key,
 			index: void 0
-		}, text, deps, true);
+		}, text, deps, true, spokeAt, seen);
+		else if (next.kind === "early") await runVoiceCommand({
+			...next,
+			title: next.title || key
+		}, text, deps, spokeAt, seen);
 		else deps.announce(next.say || deps.name(key) + " isn't asking anything.");
 		return;
 	}
@@ -43005,6 +44041,11 @@ async function answer(r, text, deps, again) {
 	}
 	const name = deps.name(title);
 	if (r.dialog_id && r.keys?.length) {
+		if (!seen.inTime(title, r.dialog_id, spokeAt)) {
+			seen.note(title, r.dialog_id);
+			deps.announce(earlyLine(name));
+			return;
+		}
 		if (!await deps.approveDialogs()) {
 			deps.announce(APPROVE_OFF_LINE);
 			return;
@@ -43017,22 +44058,34 @@ async function answer(r, text, deps, again) {
 			};
 			if (r.text) json.text = r.text;
 			await instApi(title, "/answer", { json });
+			seen.note(title, null);
 			deps.announce(r.say || "Answered " + (r.choice === "number" ? String(r.number || "") : r.choice || "") + ".");
 		} catch (err) {
 			const body = err instanceof ApiError ? err.body : null;
 			if (body?.dialog_changed) deps.announce("The prompt on " + name + " changed — say it again.");
-			else if (body?.dialog_answered) deps.announce("Already answered.");
-			else deps.caption("Couldn't answer " + name + ": " + (err?.message || "error"), true);
+			else if (body?.dialog_answered) {
+				seen.note(title, null);
+				deps.announce("Already answered.");
+			} else deps.caption("Couldn't answer " + name + ": " + (err?.message || "error"), true);
 		}
+		return;
+	}
+	if (dialogUp(deps.activity(title)) || seen.blocks(title)) {
+		deps.announce(name + " is on a dialog — answer it on the screen.");
 		return;
 	}
 	if (await questionPending(title, deps.activity(title))) {
 		const words = answerWords(r, text);
-		if (!sessionTarget(title, name).type(words + " ")) {
-			deps.caption("Couldn't type into " + name + " — its terminal isn't connected", true);
+		const into = sessionTarget(title, name);
+		into.type(words + " ");
+		const refused = await into.gate?.settled();
+		if (refused) {
+			if (refused.dialog) {
+				seen.activity(title, "clarify");
+				deps.announce(name + " is on a dialog — answer it on the screen.");
+			} else deps.caption(refused.line, true);
 			return;
 		}
-		await new Promise((res) => setTimeout(res, SUBMIT_SETTLE_MS));
 		const say = deps.replies();
 		const sent = await submitDraft(title, name, say);
 		if (sent.ok) deps.submitted(title, say);
@@ -43229,7 +44282,9 @@ var HandsFree = class {
 		if (!this.ready(title) || title !== x.focused()) return;
 		this.begin();
 		try {
-			const d = await x.fetchDialog(title).catch(() => null);
+			const d = await x.fetchDialog(title).catch(() => void 0);
+			if (d === null) dialogSeen.note(title, null);
+			else if (d?.id) dialogSeen.note(title, d.id);
 			if (!d || !d.parsed || !d.options.length || d.id === this.seen) return;
 			if (!x.replies() || x.busy() || title !== x.focused()) return;
 			this.seen = d.id;
@@ -43256,6 +44311,7 @@ var HandsFree = class {
 	}
 	async ask(title, a) {
 		const x = this.deps;
+		if (a.dialog?.id) dialogSeen.note(title, a.dialog.id);
 		if (!this.ready(title)) return;
 		this.begin();
 		this.stopped = "";
@@ -43326,6 +44382,7 @@ var SpeechQueue = class {
 	turn = 0;
 	waiters = [];
 	gate = null;
+	audible = false;
 	gateRetry;
 	last = "";
 	constructor(engine, onSpeaking = () => {}, opts = {}) {
@@ -43393,6 +44450,9 @@ var SpeechQueue = class {
 	get busy() {
 		return !!this.speaking;
 	}
+	get audibleNow() {
+		return !!this.speaking && this.audible;
+	}
 	get confirming() {
 		return !!this.current?.confirm && !this.current.sound;
 	}
@@ -43438,7 +44498,13 @@ var SpeechQueue = class {
 		this.turn++;
 		sp.cancel();
 		if (!cur?.sound) this.onSpeaking(false);
+		this.silent(cur);
 		cur?.done();
+	}
+	silent(q) {
+		const was = this.audible;
+		this.audible = false;
+		if (was && q) this.opts.onAudible?.(false);
 	}
 	settle() {
 		if (!this.idle) return;
@@ -43476,35 +44542,69 @@ var SpeechQueue = class {
 			if (!next.sound) this.last = text;
 			this.speaking = sp;
 			this.current = next;
+			this.audible = false;
 			if (!next.sound) this.onSpeaking(true);
-			next.start?.();
+			const audible = () => {
+				if (this.turn !== turn || !this.speaking || this.audible) return;
+				this.audible = true;
+				this.opts.onAudible?.(true);
+				next.start?.();
+			};
+			const reports = !next.sound && !!sp.reportsAudible;
+			if (!reports && !next.sound) audible();
 			const done = () => {
 				if (this.turn !== turn || !this.speaking) return;
 				this.speaking = null;
 				this.current = null;
 				if (!next.sound) this.onSpeaking(false);
+				this.silent(next);
 				next.done();
 				this.pump();
 			};
-			sp.speak(text).then(done, done);
+			(reports ? sp.speak(text, audible) : sp.speak(text)).then(done, done);
 			return;
 		}
 	}
 };
+var CHIME_LATE_MS = 400;
+var RESUME_POLL_MS = 20;
+function whenRunning(ctx, maxMs = CHIME_LATE_MS) {
+	if (ctx.state === "running") return Promise.resolve(true);
+	try {
+		ctx.resume().catch(() => {});
+	} catch {}
+	const until = Date.now() + maxMs;
+	return new Promise((done) => {
+		const look = () => {
+			if (ctx.state === "running") return done(true);
+			if (ctx.state === "closed" || Date.now() >= until) return done(false);
+			setTimeout(look, RESUME_POLL_MS);
+		};
+		setTimeout(look, 0);
+	});
+}
 function soundSpeaker(play, ms, lead) {
 	let timer;
 	let end = () => {};
+	let over = false;
 	return {
 		speak: () => new Promise((resolve) => {
 			end = resolve;
-			const go = () => {
+			const sound = () => {
+				if (over) return;
 				play();
 				timer = setTimeout(resolve, ms);
+			};
+			const go = () => {
+				const ctx = audioCtx;
+				if (!ctx || ctx.state === "running") return sound();
+				whenRunning(ctx).then((ok) => ok ? sound() : resolve());
 			};
 			if (lead > 0) timer = setTimeout(go, lead);
 			else go();
 		}),
 		cancel: () => {
+			over = true;
 			clearTimeout(timer);
 			end();
 		}
@@ -43543,7 +44643,7 @@ var Confirmer = class {
 			muted = true;
 			mic?.mute?.(true);
 		} }).then(() => {
-			if (muted) mic?.mute?.(false);
+			if (muted && !x.queue.audibleNow) mic?.mute?.(false);
 			if (muted && x.server() && !x.speaker.lastError) this.prime(true);
 		});
 	}
@@ -43667,6 +44767,7 @@ function speechRequests(text) {
 }
 var WORD_MS = 400;
 var CHUNK_GRACE_MS = 1500;
+var BROWSER_START_GRACE_MS = 300;
 function browserSpeaker() {
 	const synth = typeof window !== "undefined" ? window.speechSynthesis : void 0;
 	const keep = [];
@@ -43678,12 +44779,19 @@ function browserSpeaker() {
 	};
 	return {
 		available,
-		speak(text) {
+		reportsAudible: true,
+		speak(text, audible) {
 			return new Promise((resolve) => {
 				const parts = sentenceChunks(shapeForSpeech(text, pronounce()));
 				if (!available() || !parts.length) return resolve();
 				const g = gen;
 				let i = 0;
+				let heard = false;
+				const sounding = () => {
+					if (heard || g !== gen) return;
+					heard = true;
+					audible?.();
+				};
 				const next = () => {
 					if (g !== gen || i >= parts.length) return resolve();
 					const part = parts[i++];
@@ -43699,10 +44807,12 @@ function browserSpeaker() {
 					};
 					u.onend = finish;
 					u.onerror = finish;
+					u.onstart = sounding;
 					const timer = setTimeout(finish, part.split(/\s+/).length * WORD_MS + CHUNK_GRACE_MS);
 					keep.push(u);
 					try {
 						synth.speak(u);
+						if (!heard) setTimeout(sounding, BROWSER_START_GRACE_MS);
 					} catch {
 						finish();
 					}
@@ -43732,6 +44842,9 @@ function voiceAudioCtx() {
 	}
 	if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
 	return audioCtx;
+}
+function runningAudioCtx() {
+	return audioCtx && audioCtx.state === "running" ? audioCtx : null;
 }
 function serverSpeaker(fallback, opts = {}) {
 	let gen = 0;
@@ -43763,6 +44876,7 @@ function serverSpeaker(fallback, opts = {}) {
 	};
 	const self = {
 		lastError: "",
+		reportsAudible: true,
 		cached(part) {
 			return cache.has(keyOf(part));
 		},
@@ -43776,14 +44890,16 @@ function serverSpeaker(fallback, opts = {}) {
 				await p.catch(() => {});
 			}
 		},
-		async speak(text) {
+		async speak(text, audible) {
 			const parts = speechRequests(text);
 			if (!parts.length) return;
 			const g = gen;
 			const ctx = voiceAudioCtx();
+			if (ctx && ctx.state !== "running") await whenRunning(ctx);
+			if (g !== gen) return;
 			if (!ctx || ctx.state !== "running") {
 				self.lastError = "AudioContext " + (ctx ? ctx.state : "missing");
-				return fallback.speak(parts.join(" "));
+				return fallback.speak(parts.join(" "), audible);
 			}
 			const ask = (i) => {
 				const hit = cacheable(parts[i]) ? cache.get(keyOf(parts[i])) : void 0;
@@ -43810,7 +44926,7 @@ function serverSpeaker(fallback, opts = {}) {
 					self.lastError = String(err?.message || err);
 					await last;
 					if (g !== gen) return;
-					return fallback.speak(parts.slice(i).join(" "));
+					return fallback.speak(parts.slice(i).join(" "), audible);
 				}
 				if (g !== gen) return;
 				self.lastError = "";
@@ -43818,6 +44934,7 @@ function serverSpeaker(fallback, opts = {}) {
 				const at = Math.max(ctx.currentTime, endAt);
 				endAt = at + (audio.duration || 0);
 				last = play(ctx, audio, at);
+				if (i === 0) audible?.();
 			}
 			await last;
 		},
@@ -44000,6 +45117,39 @@ function browserRecognizer() {
 	return self;
 }
 var SILENCE_MS = 1100;
+var TURN_MIN_MS = 300;
+var TURN_MAX_MS = 3e3;
+var FIRST_PHRASE_HOLD_MS = 1100;
+function parseTurn(v, at) {
+	if (!v || typeof v !== "object") return null;
+	const o = v;
+	const hold = Number(o.hold_ms);
+	if (!Number.isFinite(hold) || hold <= 0) return null;
+	return {
+		hold,
+		reason: String(o.reason || ""),
+		at
+	};
+}
+function turnHoldMs(turn, loudAt, blank) {
+	if (!turn) return SILENCE_MS;
+	let hold = turn.reason === "command" && !blank ? SILENCE_MS : turn.hold;
+	if (blank && (turn.reason === "sentence" || turn.reason === "question")) hold = Math.max(hold, FIRST_PHRASE_HOLD_MS);
+	if (loudAt > turn.at) hold = Math.max(hold, SILENCE_MS);
+	return Math.min(TURN_MAX_MS, Math.max(TURN_MIN_MS, hold));
+}
+var RecordingClock = class {
+	zero = Infinity;
+	block(endS, now = Date.now()) {
+		this.zero = Math.min(this.zero, now - endS * 1e3);
+	}
+	reset() {
+		this.zero = Infinity;
+	}
+	at(s) {
+		return Number.isFinite(this.zero) ? Math.round(this.zero + s * 1e3) : 0;
+	}
+};
 var CLIP_MAX_MS = 12e3;
 var UPLOAD_TIMEOUT_MS = 45e3;
 var CLIP_RATE$1 = 16e3;
@@ -44021,6 +45171,9 @@ var BARGE_POLLS = 3;
 var BARGE_RMS = .04;
 var BARGE_FRESH_MS = 1e3;
 var BARGE_REWIND_MS = 270;
+var MIC_LOST_LINE = "The microphone went away — listening on the default one";
+var MIC_GONE_LINE = "The microphone went away — check it, then click the mic";
+var MIC_LOST_RETRY_MS = 3e3;
 var BargeDetector = class {
 	bleed = 0;
 	loud = false;
@@ -44043,8 +45196,14 @@ var BargeDetector = class {
 };
 var wordsOf = (v) => String((Array.isArray(v) ? v.join(" ") : v) || "").trim();
 var langTag$1 = () => String(navigator.language || "en").split(";")[0];
+var VOICE_CLIENT_ID = (() => {
+	try {
+		if (globalThis.crypto?.randomUUID) return "d-" + globalThis.crypto.randomUUID();
+	} catch {}
+	return "d-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 12);
+})();
 function serverRecognizer(opts = {}) {
-	const mic = opts.mic || new MicKeeper();
+	const mic = opts.mic || new MicKeeper(KEEP_STREAM_MS, void 0, runningAudioCtx);
 	let holding = false;
 	let h = null;
 	let want = false;
@@ -44058,11 +45217,16 @@ function serverRecognizer(opts = {}) {
 	let lastEnd = Promise.resolve();
 	const open = /* @__PURE__ */ new Set();
 	let skipUntil = 0;
+	let firstSkipMs = 0;
+	const skipFromNow = () => {
+		if (firstSkipMs) skipUntil = Math.max(skipUntil, Date.now() + firstSkipMs);
+	};
 	let muted = false;
 	const barge = new BargeDetector();
 	let bargeTimer;
 	let bargeTap = null;
 	let lastBargeAt = 0;
+	let lostAt = 0;
 	let micStream = null;
 	let micCtx = null;
 	const listenOver = () => {
@@ -44124,13 +45288,14 @@ function serverRecognizer(opts = {}) {
 		h?.onError(code, detail);
 		maybeEnd();
 	};
-	const upload = async (blob) => {
+	const upload = async (clip, spokeAt) => {
 		const hh = h;
 		uploads++;
 		const ac = new AbortController();
 		aborters.add(ac);
 		const timer = setTimeout(() => ac.abort(), UPLOAD_TIMEOUT_MS);
 		try {
+			const blob = await clip;
 			const r = await apiRaw("/api/voice/transcribe?lang=" + encodeURIComponent(langTag$1()), {
 				method: "POST",
 				headers: { "Content-Type": "audio/wav" },
@@ -44142,7 +45307,7 @@ function serverRecognizer(opts = {}) {
 			if (r.ok) {
 				self.lastError = "";
 				const text = String(j.text || "").trim();
-				if (text) hh.onFinal(text);
+				if (text) hh.onFinal(text, spokeAt || void 0);
 			} else {
 				self.lastError = String(j.error || "HTTP " + r.status);
 				want = false;
@@ -44227,7 +45392,10 @@ function serverRecognizer(opts = {}) {
 				const r = await call("/api/voice/stream", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ lang: langTag$1() })
+					body: JSON.stringify({
+						lang: langTag$1(),
+						client: VOICE_CLIENT_ID
+					})
 				});
 				const id = String(r.j.id || "");
 				if (h !== hh || !c.stream) {
@@ -44248,8 +45416,10 @@ function serverRecognizer(opts = {}) {
 			}
 		});
 	};
-	const sendChunk = async (c, blob, hh) => {
+	const sendChunk = async (c, blob, hh, takenAt = Date.now()) => {
 		try {
+			const pre = joined(c, blob);
+			if (pre !== blob) blob = await pre;
 			const r = await call(streamPath(c.sid, "/chunk"), {
 				method: "POST",
 				headers: { "Content-Type": "audio/wav" },
@@ -44263,6 +45433,7 @@ function serverRecognizer(opts = {}) {
 				self.passMs = ms;
 				voicePass(ms);
 			}
+			c.turn = parseTurn(r.j.turn, takenAt);
 			const w = wordsOf(r.j.committed);
 			const p = wordsOf(r.j.partial);
 			if (hh.onStream) hh.onStream(w, p);
@@ -44277,12 +45448,13 @@ function serverRecognizer(opts = {}) {
 	const pump = (c) => {
 		if (!c.stream || !c.sid || !c.heard || c.busy || c.ending || !c.rec || h === null) return;
 		const min = c.sent ? chunkMinS(self.passMs) : Math.max(0, c.speechS - c.trimS) + FIRST_CHUNK_S;
+		const takenAt = Date.now();
 		const blob = c.rec.take(min);
 		if (!blob) return;
 		c.sent = true;
 		c.fresh = false;
 		const hh = h;
-		run(c, () => sendChunk(c, blob, hh));
+		run(c, () => sendChunk(c, blob, hh, takenAt));
 	};
 	const endStream = async (c) => {
 		const hh = h;
@@ -44299,7 +45471,7 @@ function serverRecognizer(opts = {}) {
 			if (c.busy) await c.busy;
 			if (h !== hh || !hh) return;
 			if (!c.stream) {
-				if (c.heard && tail && tail.size > 44) upload(tail);
+				if (c.heard && tail && tail.size > 44) upload(joined(c, tail), c.spokeAt);
 				return;
 			}
 			if (!c.sid) return;
@@ -44324,7 +45496,7 @@ function serverRecognizer(opts = {}) {
 				}
 				const final = typeof r.j.final === "string" && r.j.same !== true ? wordsOf(r.j.final) : "";
 				hh.onPartial?.("");
-				hh.onFlush?.(wordsOf(r.j.committed), final || void 0);
+				hh.onFlush?.(wordsOf(r.j.committed), final || void 0, c.spokeAt || void 0);
 			} catch (err) {
 				if (h !== hh) return;
 				c.sid = sid;
@@ -44342,11 +45514,17 @@ function serverRecognizer(opts = {}) {
 		c.sid = null;
 		if (sid) abandon(sid);
 	};
+	const joined = (c, blob) => {
+		const pre = c.pre;
+		c.pre = null;
+		return pre ? withPreRoll(pre, blob) : blob;
+	};
 	const endClip = () => {
 		const c = cur;
 		cur = null;
 		clearTimeout(capTimer);
 		if (!c?.rec) return;
+		mic.cut();
 		if (c.stream) {
 			endStream(c);
 			return;
@@ -44355,7 +45533,7 @@ function serverRecognizer(opts = {}) {
 		c.rec.stop().then((blob) => {
 			if (token !== mine) return;
 			token = null;
-			if (c.heard && blob.size) upload(blob);
+			if (c.heard && blob.size) upload(joined(c, blob), c.spokeAt);
 			if (want && !finishing) clip();
 			else maybeEnd();
 		}, () => {
@@ -44378,7 +45556,12 @@ function serverRecognizer(opts = {}) {
 			ending: false,
 			sent: false,
 			trimS: 0,
-			speechS: 0
+			speechS: 0,
+			spokeAt: 0,
+			clock: new RecordingClock(),
+			loudAt: 0,
+			turn: null,
+			pre: null
 		};
 		if (c.stream) openStream(c);
 		let s;
@@ -44391,7 +45574,10 @@ function serverRecognizer(opts = {}) {
 		}
 		if (token !== mine) return discard(c);
 		const ctx = voiceAudioCtx();
-		if (ctx && ctx.state === "suspended") await ctx.resume().catch(() => {});
+		if (ctx && ctx.state === "suspended") {
+			await ctx.resume().catch(() => {});
+			skipFromNow();
+		}
 		if (token !== mine) return discard(c);
 		micStream = s;
 		micCtx = ctx;
@@ -44406,8 +45592,21 @@ function serverRecognizer(opts = {}) {
 			failed("start-failed", "The audio engine isn't running — click the mic again");
 			return;
 		}
-		let floor = 0;
-		let lastLoud = 0;
+		let cap = mic.capture(ctx);
+		if (cap instanceof Promise) {
+			cap = await cap;
+			if (token !== mine) return discard(c);
+			if (!want) {
+				discard(c);
+				token = null;
+				maybeEnd();
+				return;
+			}
+		}
+		const skip = Math.max(0, skipUntil - Date.now());
+		firstSkipMs = 0;
+		const pre = skip || muted ? null : mic.preRoll();
+		let floor = mic.quietFloor();
 		let blockAt = 0;
 		const onLevel = (rms) => {
 			if (cur !== c) return;
@@ -44416,9 +45615,15 @@ function serverRecognizer(opts = {}) {
 			h?.onLevel?.(rms);
 			floor = noiseFloor(floor, rms);
 			const now = Date.now();
+			c.clock.block(blockAt, now);
 			if (isLoud(rms, floor)) {
 				if (!c.heard) {
 					c.speechS = at;
+					c.spokeAt = c.clock.at(at);
+					if (at < PRE_ROLL_ONSET_S) {
+						c.pre = pre;
+						if (pre) c.spokeAt -= PRE_ROLL_MS;
+					}
 					h?.onSpeech?.();
 					if (c.stream && c.sid && now - c.opened > STREAM_FRESH_MS) {
 						discard(c);
@@ -44428,20 +45633,20 @@ function serverRecognizer(opts = {}) {
 				}
 				c.heard = true;
 				c.fresh = true;
-				lastLoud = now;
+				c.loudAt = now;
 			} else if (!c.heard && c.stream) {
 				if (c.rec?.take()) c.trimS = blockAt;
 			}
-			if (c.heard && now - lastLoud > SILENCE_MS) endClip();
+			if (c.heard && now - c.loudAt > turnHoldMs(c.stream ? c.turn : null, c.loudAt, h?.blank?.() ?? true)) endClip();
 			else pump(c);
 		};
 		try {
-			const skip = Math.max(0, skipUntil - Date.now());
-			c.rec = startWavRecording(s, ctx, {
+			const ro = {
 				targetRate: CLIP_RATE$1,
 				onLevel,
 				skipS: skip / 1e3
-			});
+			};
+			c.rec = cap ? cap.record(ro) : startWavRecording(s, ctx, ro);
 		} catch {
 			discard(c);
 			failed("start-failed");
@@ -44455,6 +45660,23 @@ function serverRecognizer(opts = {}) {
 			if (cur === c) endClip();
 		}, CLIP_MAX_MS);
 	};
+	mic.onLost(() => {
+		if (!want || !h) return;
+		const now = Date.now();
+		const again = now - lostAt < MIC_LOST_RETRY_MS;
+		lostAt = now;
+		if (again) {
+			if (cur) endClip();
+			want = false;
+			self.lastError = "the microphone went away";
+			h.onError("mic-lost", MIC_GONE_LINE);
+			maybeEnd();
+			return;
+		}
+		h.onNotice?.(MIC_LOST_LINE);
+		if (cur) endClip();
+		else if (!token) clip();
+	});
 	const self = {
 		name: "server",
 		lastError: "",
@@ -44465,12 +45687,16 @@ function serverRecognizer(opts = {}) {
 		get streaming() {
 			return streaming;
 		},
+		get spokeAt() {
+			return cur?.heard ? cur.spokeAt : 0;
+		},
 		mute(on) {
 			muted = on;
 			if (on) listenOver();
 			else unlistenOver();
 			const barged = !on && Date.now() - lastBargeAt < BARGE_FRESH_MS;
 			cur?.rec?.mute?.(on, barged ? 0 : BARGE_SKIP_MS / 1e3, barged ? BARGE_REWIND_MS / 1e3 : 0);
+			cur?.clock.reset();
 		},
 		endPhrase() {
 			if (cur?.heard && want) endClip();
@@ -44479,6 +45705,14 @@ function serverRecognizer(opts = {}) {
 			self.stop();
 			if (!self.available()) return false;
 			skipUntil = Date.now() + Math.max(0, o.skipMs || 0);
+			firstSkipMs = Math.max(0, o.skipMs || 0);
+			const cold = audioCtx && audioCtx.state !== "running" ? audioCtx : null;
+			if (cold && firstSkipMs) {
+				const mine = handlers;
+				whenRunning(cold).then((ok) => {
+					if (ok && h === mine) skipFromNow();
+				});
+			}
 			muted = false;
 			h = handlers;
 			want = true;
@@ -44598,6 +45832,11 @@ function finalLine(finalMs) {
 }
 function sentLine(ms) {
 	return ms != null && ms >= 0 ? "over → sent " + (ms / 1e3).toFixed(1) + " s" : "";
+}
+function keysLine(times = keyTimes) {
+	if (!times.length) return "";
+	const sorted = [...times].sort((a, b) => a - b);
+	return "typing ~" + sorted[Math.floor(sorted.length / 2)] + " ms/batch";
 }
 function recognizerErrorLine(code, detail) {
 	if (code === "network") return "Speech recognition failed (network): use Chrome, Edge or Safari, or turn on server recognition in Settings → Voice";
@@ -45532,7 +46771,8 @@ var tracker = new ReplyTracker();
 var heard = new HeardTurns();
 var clock = new HeardClock();
 var speakingListeners = /* @__PURE__ */ new Set();
-var queue = new SpeechQueue(() => ttsEngine(cfgNow) === "server" ? serverSp : browserSp, (on) => speakingListeners.forEach((l) => l(on)));
+var audibleListeners = /* @__PURE__ */ new Set();
+var queue = new SpeechQueue(() => ttsEngine(cfgNow) === "server" ? serverSp : browserSp, (on) => speakingListeners.forEach((l) => l(on)), { onAudible: (on) => audibleListeners.forEach((l) => l(on)) });
 var standbyMeter = false;
 var wakeFrom = null;
 var lastWakeMs = null;
@@ -45610,7 +46850,8 @@ function micDiagnostics() {
 		engineDiagnostics(c, stt, tts),
 		...pass,
 		wakeLine(lastWakeMs),
-		sentLine(lastSentMs)
+		sentLine(lastSentMs),
+		keysLine()
 	].filter(Boolean).join(" · ");
 }
 function talkHotkey() {
@@ -45716,6 +46957,7 @@ function TopBarMic() {
 	const [cfg, setCfg] = (0, import_react.useState)(null);
 	const [listening, setListening] = (0, import_react.useState)(false);
 	const [speaking, setSpeaking] = (0, import_react.useState)(queue.busy);
+	const [sounding, setSounding] = (0, import_react.useState)(queue.audibleNow);
 	const [caption, setCaptionState] = (0, import_react.useState)("");
 	const [quiet, setQuiet] = (0, import_react.useState)(false);
 	const [menuOpen, setMenuOpen] = (0, import_react.useState)(false);
@@ -45754,6 +46996,9 @@ function TopBarMic() {
 	const quietTimer = (0, import_react.useRef)(void 0);
 	const holding = (0, import_react.useRef)(false);
 	const keyHeld = (0, import_react.useRef)(false);
+	const keyDownAt = (0, import_react.useRef)(0);
+	const keyLatched = (0, import_react.useRef)(false);
+	const haltedAt = (0, import_react.useRef)(0);
 	const hands = (0, import_react.useRef)(null);
 	const handsLive = (0, import_react.useRef)(null);
 	const standby = (0, import_react.useRef)(null);
@@ -45778,6 +47023,13 @@ function TopBarMic() {
 		quietTimer.current = setTimeout(() => setQuiet(false), HUSH_CAPTION_MS);
 	};
 	(0, import_react.useEffect)(() => onVoicePrefs((p) => setPrefsState(p)), []);
+	(0, import_react.useEffect)(() => {
+		const feed = () => dialogSeen.rows(queryClient.getQueryData(["instances"]) || []);
+		feed();
+		return queryClient.getQueryCache().subscribe((ev) => {
+			if (ev.type === "updated" && ev.query.queryKey[0] === "instances") feed();
+		});
+	}, []);
 	const setPrefs = (p) => {
 		setPrefsState(p);
 		saveVoicePrefs(p);
@@ -45803,11 +47055,13 @@ function TopBarMic() {
 			const want = sayAllMismatch(prefsRef.current.replies, c.say_all);
 			if (want !== null) syncSayAll(want);
 		});
-		const l = (on) => {
-			setSpeaking(on);
+		const l = (on) => setSpeaking(on);
+		speakingListeners.add(l);
+		const a = (on) => {
+			setSounding(on);
 			if (gated.current) rec.current?.mute?.(on);
 		};
-		speakingListeners.add(l);
+		audibleListeners.add(a);
 		const onFocus = () => void refreshCfg();
 		window.addEventListener("focus", onFocus);
 		const unsubSettings = queryClient.getQueryCache().subscribe((event) => {
@@ -45816,6 +47070,7 @@ function TopBarMic() {
 		});
 		return () => {
 			speakingListeners.delete(l);
+			audibleListeners.delete(a);
 			window.removeEventListener("focus", onFocus);
 			unsubSettings();
 			clearTimeout(idleTimer.current);
@@ -45889,6 +47144,10 @@ function TopBarMic() {
 			const replay = (env) => typeof ev.isReplay === "function" && ev.isReplay(env);
 			unsubs = [ev.subscribe("session.activity_changed", (env) => {
 				if (replay(env)) return;
+				dialogSeen.activity(env.session, env.new, env.old);
+				if (dialogUp(String(env.new || ""))) fetchDialog(env.session).then((dl) => {
+					if (dl?.id) dialogSeen.note(env.session, dl.id);
+				}).catch(() => {});
 				if (env.new === "working") {
 					tracker.working(env.session);
 					questions.delete(env.session);
@@ -45934,6 +47193,8 @@ function TopBarMic() {
 		}
 		clearTimeout(idleTimer.current);
 		deciding.current = null;
+		haltedAt.current = Date.now();
+		keyLatched.current = false;
 		live.current = null;
 		rec.current?.stop();
 		rec.current = null;
@@ -45987,7 +47248,7 @@ function TopBarMic() {
 			halt: () => {
 				if (live.current === d) halt();
 			},
-			route: async (text) => {
+			route: async (text, spokeAt) => {
 				const session = opts.title || useUi.getState().focused || "";
 				const ask = askVoice();
 				if (ask && ask.title === session && ask.phrase?.(text)) {
@@ -45996,10 +47257,10 @@ function TopBarMic() {
 					}, 150);
 					return "end";
 				}
-				const reply = await routePhrase(text, session);
+				const reply = await routePhrase(text, session, void 0, spokeAt);
 				if (reply.kind === "prompt") return false;
 				if (reply.kind === "hush") return "hush";
-				await routed(reply, text, session);
+				await routed(reply, text, session, spokeAt);
 				return reply.kind === "stop" || reply.kind === "off" || reply.kind === "cancel" ? "end" : true;
 			},
 			retarget: () => {
@@ -46024,23 +47285,24 @@ function TopBarMic() {
 				quietPill();
 			},
 			activity: liveActivity,
+			dialogCheck: (title) => void recheckDialog(title, (t) => fetchDialog(t)),
 			replies: () => prefsRef.current.replies !== "off",
 			submitted: (title, wantSay) => {
 				tracker.sent(title, wantSay);
 				questions.delete(title);
 			},
-			pending: (title) => liveActivity(title) === "clarify" || questions.has(title),
+			pending: (title) => liveActivity(title) === "clarify" || dialogSeen.blocks(title) || questions.has(title),
 			done: (how) => opts.done?.(how),
 			confirm: (kind) => void confirmer.current?.say(kind),
-			quietMs: () => {
-				const at = lastLoudAt();
-				return at ? Date.now() - at : Infinity;
-			},
+			quietMs: meterQuietMs,
+			loudAt: lastLoudAt,
 			endPhrase: () => {
 				if (live.current === d) rec.current?.endPhrase?.();
 			},
 			sentIn: (ms) => void (lastSentMs = ms),
-			finalMs: () => r === serverRec ? serverRec.finalMs : null
+			finalMs: () => r === serverRec ? serverRec.finalMs : null,
+			endsSurely: () => r === serverRec && serverRec.streaming,
+			spokeAt: () => r === serverRec ? serverRec.spokeAt : 0
 		}, {
 			hint: opts.hint,
 			continuous
@@ -46054,7 +47316,7 @@ function TopBarMic() {
 		});
 		d.show();
 		armIdle();
-		meterStart();
+		meterStart(serverRec.mic.quietFloor());
 		const ok = r.start({
 			onInterim: (t) => {
 				if (live.current !== d) return;
@@ -46076,11 +47338,11 @@ function TopBarMic() {
 			onSpeech: () => {
 				if (live.current === d) armIdle();
 			},
-			onFinal: (t) => {
+			onFinal: (t, at) => {
 				if (live.current !== d) return;
 				armIdle();
 				voiceMark("commit");
-				d.heard(t);
+				d.heard(t, at);
 			},
 			onStream: (w, p) => {
 				if (live.current !== d) return;
@@ -46089,9 +47351,10 @@ function TopBarMic() {
 				if (w) voiceMark("commit");
 				d.stream(w, p);
 			},
-			onFlush: (t, final) => {
-				if (live.current === d) d.flush(t, final);
+			onFlush: (t, final, at) => {
+				if (live.current === d) d.flush(t, final, at);
 			},
+			blank: () => live.current !== d || !d.dict.typed,
 			onPartial: (t) => {
 				if (live.current === d) d.unsure(t);
 			},
@@ -46208,7 +47471,7 @@ function TopBarMic() {
 		say(line);
 		if (prefsRef.current.replies !== "off") queue.say(line);
 	};
-	const routed = async (r, text, session) => {
+	const routed = async (r, text, session, spokeAt) => {
 		if (await runVoiceCommand(r, text, {
 			railOrder: () => useUi.getState().railOrder,
 			focused: () => session,
@@ -46220,7 +47483,7 @@ function TopBarMic() {
 				say(line, true);
 				queue.say(line);
 			},
-			route: routePhrase,
+			route: (t, s, at) => routePhrase(t, s, void 0, at),
 			approveDialogs: () => refreshCfg().then((c) => !!c.approve_dialogs),
 			activity: liveActivity,
 			replies: () => prefsRef.current.replies !== "off",
@@ -46228,7 +47491,7 @@ function TopBarMic() {
 				tracker.sent(title, wantSay);
 				questions.delete(title);
 			}
-		})) return;
+		}, spokeAt)) return;
 		switch (r.kind) {
 			case "switch":
 			case "new":
@@ -46424,11 +47687,25 @@ function TopBarMic() {
 			const phase = e.detail?.phase;
 			if (phase !== "down" && phase !== "up") return;
 			const k = keyRef.current;
-			const act = talkKeyAction(phase, k.hold, !!live.current, keyHeld.current);
+			if (phase === "down" && !live.current) warmMic(true);
+			const now = Date.now();
+			const act = talkKeyAction(phase, k.hold, !!live.current, keyHeld.current, {
+				heldMs: phase === "up" && keyHeld.current ? now - keyDownAt.current : void 0,
+				latched: keyLatched.current,
+				busy: !!deciding.current || now - haltedAt.current < TALK_DEBOUNCE_MS
+			});
 			if (phase === "up") keyHeld.current = false;
 			if (act === "start") {
-				if (k.start(textField(document.activeElement)) && k.hold) keyHeld.current = true;
-			} else if (act === "finish") k.finish();
+				keyLatched.current = false;
+				if (k.start(textField(document.activeElement)) && k.hold) {
+					keyHeld.current = true;
+					keyDownAt.current = now;
+				}
+			} else if (act === "latch") keyLatched.current = true;
+			else if (act === "finish") {
+				keyLatched.current = false;
+				k.finish();
+			}
 		};
 		window.addEventListener(TALK_EVENT, onTalk);
 		return () => window.removeEventListener(TALK_EVENT, onTalk);
@@ -46459,7 +47736,8 @@ function TopBarMic() {
 	}, [menuOpen]);
 	const who = focusedName || "a session";
 	const base = !supported ? noRecognizerLine() + " — right-click for options" : listening ? hold ? "Listening — release to stop (the words stay), Esc to take them back" : "Listening — click to stop (the words stay), Esc to take them back" : "Talk to " + who + " — " + (hold ? "hold to talk" : "click to talk") + (wake.on ? ", or say " + quoted(wakeName(words)) : "") + ", right-click for options";
-	const title = caption && !listening ? base + "\n" + caption : base;
+	const paused = listening && sounding;
+	const title = paused ? MIC_PAUSED_LINE : caption && !listening ? base + "\n" + caption : base;
 	const pill = micPill({
 		listening,
 		speaking,
@@ -46485,12 +47763,13 @@ function TopBarMic() {
 				"tb-item",
 				"mic-ring",
 				listening && "listening",
+				paused && "muted",
 				wake.on && !listening && "standby",
 				speaking && !listening && "speaking",
 				!supported && "unsupported"
 			].filter(Boolean).join(" "),
 			title,
-			"aria-label": listening ? "Listening — stop" : "Talk to " + who,
+			"aria-label": paused ? MIC_PAUSED_LINE : listening ? "Listening — stop" : "Talk to " + who,
 			"aria-pressed": listening,
 			"aria-haspopup": "menu",
 			"aria-expanded": menuOpen,
@@ -76571,16 +77850,21 @@ function placeCard(t, W, H, cardH) {
 function clipBox(el) {
 	let x1 = 0;
 	let y1 = 0;
-	let x2 = typeof window === "undefined" ? 0 : window.innerWidth;
-	let y2 = typeof window === "undefined" ? 0 : window.innerHeight;
+	let x2 = typeof window === "undefined" ? 0 : window.innerWidth ?? Infinity;
+	let y2 = typeof window === "undefined" ? 0 : window.innerHeight ?? Infinity;
 	for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
 		const cs = getComputedStyle(p);
-		if (cs.overflowX === "visible" && cs.overflowY === "visible") continue;
-		const b = p.getBoundingClientRect();
-		x1 = Math.max(x1, b.left);
-		y1 = Math.max(y1, b.top);
-		x2 = Math.min(x2, b.right);
-		y2 = Math.min(y2, b.bottom);
+		const clips = (o) => !!o && o !== "visible";
+		if (!clips(cs.overflowX) && !clips(cs.overflowY)) continue;
+		const b = edges(p.getBoundingClientRect());
+		if (clips(cs.overflowX)) {
+			x1 = Math.max(x1, b.left);
+			x2 = Math.min(x2, b.right);
+		}
+		if (clips(cs.overflowY)) {
+			y1 = Math.max(y1, b.top);
+			y2 = Math.min(y2, b.bottom);
+		}
 	}
 	return {
 		x: x1,
@@ -76589,7 +77873,22 @@ function clipBox(el) {
 		h: Math.max(0, y2 - y1)
 	};
 }
-function shownShare(r, c) {
+function edges(r) {
+	const width = r.width ?? 0;
+	const height = r.height ?? 0;
+	const left = r.left ?? 0;
+	const top = r.top ?? 0;
+	return {
+		left,
+		top,
+		width,
+		height,
+		right: r.right ?? left + width,
+		bottom: r.bottom ?? top + height
+	};
+}
+function shownShare(raw, c) {
+	const r = edges(raw);
 	const w = Math.max(0, Math.min(r.right, c.x + c.w) - Math.max(r.left, c.x));
 	const h = Math.max(0, Math.min(r.bottom, c.y + c.h) - Math.max(r.top, c.y));
 	const a = r.width * r.height;
@@ -76635,10 +77934,10 @@ function scrollPanes(el) {
 	return out;
 }
 function whollyShown(el) {
-	const r = el.getBoundingClientRect();
+	const r = edges(el.getBoundingClientRect());
 	const c = clipBox(el);
 	const M = 4;
-	const fitsX = r.width <= c.w - 8 ? r.left >= c.x + M && r.right <= c.x + c.w - M : r.left <= c.x && r.right >= c.x + c.w;
+	const fitsX = r.width <= c.w ? r.left >= c.x - .5 && r.right <= c.x + c.w + .5 : r.left <= c.x && r.right >= c.x + c.w;
 	const fitsY = r.height <= c.h - 8 ? r.top >= c.y + M && r.bottom <= c.y + c.h - M : r.top <= c.y + M;
 	return fitsX && fitsY;
 }
@@ -76735,7 +78034,7 @@ function CoachTour({ steps, onClose, rootRef, step: controlled, onStep, prefix =
 			H
 		});
 		const el = findTarget(scope, step.target);
-		const raw = el ? el.getBoundingClientRect() : null;
+		const raw = el ? edges(el.getBoundingClientRect()) : null;
 		let r = raw;
 		if (el && raw) {
 			const c = clipBox(el);
@@ -97018,11 +98317,22 @@ var REPO_KIND = {
 	sub: "Every PR or new issue in a repo"
 };
 function AddFlowShell({ title = "Add a source", step, kinds, picked, onPick, onCancel, cancelLabel = "Cancel", children, footer }) {
+	const steps = [
+		"What",
+		"Connect",
+		"What it does"
+	];
+	const shell = (0, import_react.useRef)(null);
+	(0, import_react.useEffect)(() => {
+		const el = shell.current;
+		if (el && typeof el.scrollIntoView === "function") el.scrollIntoView({ block: "nearest" });
+	}, [step]);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "ik-add",
 		id: "ik-add-flow",
 		"aria-label": title,
 		"data-step": step,
+		ref: shell,
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "ik-add-head",
@@ -97034,11 +98344,7 @@ function AddFlowShell({ title = "Add a source", step, kinds, picked, onPick, onC
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)("ol", {
 						className: "ik-steps",
 						"aria-label": "Steps",
-						children: [
-							"What",
-							"Connect",
-							"What it does"
-						].map((label, i) => {
+						children: steps.map((label, i) => {
 							const n = i + 1;
 							const state = n < step ? "done" : n === step ? "cur" : "todo";
 							return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("li", {
@@ -100055,7 +101361,6 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd, draftStash }) {
 		}) : null
 	}, "add-tracker");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		addFlow,
 		/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", {
 			className: "set-hint set-block-hint",
 			children: [
@@ -100094,7 +101399,8 @@ function TicketsTab({ gotoTab, focus, adding, startAdd, endAdd, draftStash }) {
 					children: "+ Add a ticket source"
 				})]
 			})
-		}) : null
+		}) : null,
+		addFlow
 	] });
 }
 function StatePicker({ field, source, states, loadStates, onChange }) {
@@ -101435,7 +102741,6 @@ function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 		]
 	}, "work");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		addFlow,
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "caps-gate",
 			"data-caps-gate": "git",
@@ -101569,7 +102874,8 @@ function PullRequestsTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 					})
 				]
 			})]
-		}) : null
+		}) : null,
+		addFlow
 	] });
 }
 //#endregion
@@ -101744,7 +103050,6 @@ function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 		]
 	}, "work");
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		addFlow,
 		/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 			className: "caps-gate",
 			"data-caps-gate": "git",
@@ -101857,7 +103162,8 @@ function IssuesTab({ gotoTab, focus, adding, startAdd, endAdd }) {
 					})
 				]
 			})]
-		}) : null
+		}) : null,
+		addFlow
 	] });
 }
 //#endregion
@@ -102582,7 +103888,6 @@ function IntakeDialog({ embedded = false, target: embeddedTarget = null } = {}) 
 		if (on) setTab(on);
 		setFocus("");
 		setAdding(intent);
-		document.getElementById("intake-body")?.scrollTo({ top: 0 });
 	};
 	const props = {
 		gotoTab: switchTab,
@@ -105318,7 +106623,7 @@ function TryRow({ view, install }) {
 		}
 		let stream;
 		try {
-			stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+			stream = await navigator.mediaDevices.getUserMedia({ audio: MIC_CONSTRAINTS });
 		} catch (err) {
 			heard({
 				ok: false,

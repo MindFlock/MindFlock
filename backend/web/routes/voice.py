@@ -447,16 +447,17 @@ _SELECT_FIRST = ("switch_rel", "cancel")
 
 
 async def _select_answer(text: str, session: str, request):
-    """The ``answer`` to ``session``'s question tool that ``text`` is
-    ("red", "one and three", "next", "submit", the free-text row's words),
-    or None — not asking such a question, or not an answer to it."""
+    """``(answer, rows)``: the ``answer`` to ``session``'s question tool
+    that ``text`` is ("red", "one and three", "next", "submit", the
+    free-text row's words) and the rows it read — or ``(None, None)``: not
+    asking such a question, or not an answer to it."""
     dialog = await _read_dialog(session)
     if not _voice_router.is_select(dialog):
-        return None
+        return None, None
     if _voice_router.select_answer(text, dialog) is None:
-        return None
+        return None, None
     rows = await asyncio.to_thread(_session_rows, request)
-    return _voice_router.select_route(text, session, dialog, rows)
+    return _voice_router.select_route(text, session, dialog, rows), rows
 
 
 @router.post("/api/voice/route")
@@ -473,6 +474,9 @@ async def voice_route(request: Request) -> JSONResponse:
     session = str(payload.get("session") or "")
     title = str(payload.get("title") or "")
     pending = payload.get("pending")
+    # When the phrase began and when the client first had each dialog, on
+    # this clock (read at arrival): an answer pressed only after its dialog.
+    spoke, seen = _voice_router.phrase_timing(payload)
     words = await asyncio.to_thread(_words)
     rows = None
     if isinstance(pending, dict) and text.strip():
@@ -484,9 +488,11 @@ async def voice_route(request: Request) -> JSONResponse:
     if session and (
         cmd is None or cmd["kind"] in _SELECT_FIRST or cmd.get("mode") == "strict"
     ):
-        picked = await _select_answer(text, session, request)
+        picked, sel_rows = await _select_answer(text, session, request)
         if picked is not None:
-            return JSONResponse(picked)
+            return JSONResponse(
+                _voice_router.answer_in_time(picked, spoke, seen, sel_rows or ())
+            )
     if cmd is None:
         return JSONResponse({"kind": "prompt"})
     if cmd["kind"] in _voice_router.LOCAL_KINDS:
@@ -498,7 +504,7 @@ async def voice_route(request: Request) -> JSONResponse:
     ans = _voice_router.answer(text, session, rows, title=title, words=words)
     if ans.get("kind") in ("answer", "question") and ans.get("title"):
         ans = await _finish_answer(ans, rows)
-    return JSONResponse(ans)
+    return JSONResponse(_voice_router.answer_in_time(ans, spoke, seen, rows))
 
 
 # ---- voice help: questions about MindFlock -------------------------------------
