@@ -42,10 +42,11 @@
  * `count` once its prompts name more than one worker. */
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import type { Instance } from "../../api/types";
 import { toast } from "../../lib/toast";
 import { optimistic, optimisticDelete, withSteps, withoutSteps } from "../../lib/flightOptimism";
-import { isShown, newStep, planFromSteps, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
+import { isShown, newStep, planFromSteps, type Flight, type IntakeDefault, type IntakeSourceRef, type SubjectKind, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
 import { drawnCanvas, findNode, firstStepOf, loopSlotAfter, loopStepTo, receiptOf, sessionDiagram, type DiagramNode } from "../../lib/flightDiagram";
 import {
   dropGroup,
@@ -65,10 +66,12 @@ import {
   tackOnPlan,
   tackOnSteps,
   takeOff,
+  intakeSourceOfFlight,
+  setIntakeDefault,
   ungroupStops,
 } from "../../lib/flightsApi";
 import { groupHaltStep, undoPayload, type StopDrop } from "../../lib/stopEditing";
-import { pushUndo, takeUndo } from "../../lib/skyUndo";
+import { pushUndo, takeUndo, undoAction } from "../../lib/skyUndo";
 import { removalNeedsAsk } from "../../lib/skySelect";
 import { InlineConfirm } from "../InlineConfirm";
 import { errMsg } from "../../lib/format";
@@ -118,6 +121,76 @@ export function inspectorDef(def: StepKindDef | undefined, step: FlightStep): St
 
 /** Built-ins first, then the owner's own. */
 export const orderedPlans = (plans: readonly FlightPlan[]) => [...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)];
+
+/** A source's default stops, promoted from one ticket's line (docs/flights.md
+ * "default stops"): our built-in stops are every intake source's default, and
+ * editing ONE ticket's line never changes it — only this explicit choice in
+ * the line's ⋯ does. It changes what NEW items from that source fly; the
+ * ticket whose line it was keeps flying as it is. */
+
+/** The subjects that came from intake (a flight Intake started). */
+export const INTAKE_SUBJECTS: readonly SubjectKind[] = ["ticket", "pr", "issue"];
+
+/** The ⋯ item applies only to a flight Intake started. */
+export const isIntakeSubject = (kind: SubjectKind | undefined | null): boolean => !!kind && INTAKE_SUBJECTS.includes(kind);
+
+/** A source kind in words: one item, many items. */
+export function intakeWords(kind: IntakeSourceRef["kind"]): { one: string; many: string } {
+  if (kind === "prs") return { one: "PR", many: "PRs" };
+  if (kind === "issues") return { one: "issue", many: "issues" };
+  return { one: "ticket", many: "tickets" };
+}
+
+/** The source's name for a sentence: the lane's label without its kind
+ * prefix ("Tickets · Shortcut" → "Shortcut"), so "every ticket from
+ * Shortcut" doesn't say the kind twice. A label with no such prefix stays. */
+export function intakeSourceName(src: Pick<IntakeDefault, "kind" | "label" | "target">): string {
+  const label = (src.label || "").trim();
+  const m = /^(tickets|prs|pull requests|issues)\s*[·:—-]\s*(.+)$/i.exec(label);
+  return (m ? m[2].trim() : label) || src.target;
+}
+
+/** The ⋯ item's label, its tooltip, and the toast once it is done. */
+export function promoteWords(src: Pick<IntakeDefault, "kind" | "label" | "target">): { label: string; title: string; done: string } {
+  const w = intakeWords(src.kind);
+  const name = intakeSourceName(src);
+  return {
+    label: "Use these stops for every " + w.one + " from " + name,
+    title: "Changes what NEW " + w.many + " from " + name + " fly: each one starts with this line's stops. This " + w.one + " keeps running as it is.",
+    done: "New " + w.many + " from " + name + " fly these stops",
+  };
+}
+
+/** Make one flight's stops its source's default (`from_flight`), with Undo
+ * in the toast and on Ctrl+Z: the source back to the stops it flew before
+ * (`previous_plan_id`; "" = our built-in). False when the server refused. */
+export async function promoteStops(flightId: string): Promise<boolean> {
+  const res = await setIntakeDefault({ from_flight: flightId });
+  if (!res) return false;
+  const words = promoteWords(res);
+  const back = { kind: res.kind, target: res.target, plan_id: res.previous_plan_id };
+  // One undo, two roads: the toast's button and Ctrl+Z in the sky.
+  const promoted = pushUndo({ label: words.label, undo: () => setIntakeDefault(back) });
+  toast(words.done, { action: undoAction(promoted, "Undo: new " + intakeWords(res.kind).many + " from " + intakeSourceName(res) + " fly the stops they did before") });
+  return true;
+}
+
+/** The line's "Use these stops for every …" (null: not from intake, or its
+ * source is gone). The source is fetched once per flight id, not per render. */
+export function usePromoteStops(flight: Pick<Flight, "id" | "subject"> | null | undefined): { label: string; title: string; run(): Promise<boolean> } | null {
+  const id = flight?.id || "";
+  const intake = !!id && isIntakeSubject(flight?.subject?.kind);
+  const q = useQuery({
+    queryKey: ["intake-source-of-flight", id],
+    queryFn: () => intakeSourceOfFlight(id),
+    enabled: intake,
+    staleTime: Infinity,
+  });
+  const src = intake ? q.data : null;
+  if (!src) return null;
+  const words = promoteWords(src);
+  return { label: words.label, title: words.title, run: () => promoteStops(id) };
+}
 
 /** The toast after a stop came off: removing the one the flight was at
  * pauses the flight right before the stop that followed (or at the end). */

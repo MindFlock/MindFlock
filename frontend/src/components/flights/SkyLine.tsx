@@ -86,7 +86,7 @@ import { ReadyHead, startWord } from "./ReadyHead";
 import { SkyChain, agentTitle, hangFromAgent, subFrameBoxes, subFramesOf } from "./SkyChain";
 import { ChainPanels } from "./SkyWires";
 import { HEAD, useChainEntry, useNodeMoves, useTourHooks, type ChainEntry } from "./useSkyWiring";
-import { nodeIndexes, useSessionLine, type LineSource } from "./useSessionLine";
+import { nodeIndexes, usePromoteStops, useSessionLine, type LineSource } from "./useSessionLine";
 import "./SkyLine.css";
 import "./SkyVisibility.css";
 
@@ -542,6 +542,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
     }
   };
 
+  const promote = usePromoteStops(line.flight);
   // The ⋯, in groups (a group's first item draws the rule above it): the
   // session · how the line looks · what flies on it · closing it.
   const items: MenuItem[] = [
@@ -565,6 +566,9 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
       ? { key: "tidy", label: "Tidy this line", title: "Forget where you put it: back to its place in the rows", onSelect: () => p.onLayout({ pinned: false }) }
       : { key: "pin", label: "Pin here", title: "Keep this chain where it is when the others move", onSelect: () => p.onLayout({ x: p.layout.x, y: p.layout.y, pinned: true }) },
     { key: "flyway", label: "Add a stop…", title: "A stop or a saved stop, at the end of the chain", className: "skl-mi-group", onSelect: () => line.togglePalette(true) },
+    // A ticket's line: its stops for every NEW item from its source (this one
+    // keeps flying as it is) — the only way a line changes a source's default.
+    ...(promote ? [{ key: "promote", label: promote.label, title: promote.title, className: "skl-mi-promote", onSelect: () => void promote.run() }] : []),
     { key: "close", label: "Close session", danger: true, className: "skl-mi-group", title: "Stops the agent and moves it to Recently closed", onSelect: () => askClose(p.title) },
   ];
   // Round 20: the agent tile's right-click menu — the agent's own items, then
