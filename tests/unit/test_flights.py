@@ -82,7 +82,11 @@ def test_kinds_registry_drives_the_editor():
             assert fld["type"] in ("text", "textarea", "int", "bool", "select")
             if fld["type"] == "select":
                 # A dynamic select (the Loop's back_to) is filled by the editor.
-                assert fld["options"] or fld.get("dynamic") == "stops_before"
+                assert fld["options"] or fld.get("dynamic") in (
+                    "stops_before",
+                    "chains",
+                    "sessions",
+                )
     assert dto["on_fail"] == ["halt", "agent", "skip", "you"]
 
 
