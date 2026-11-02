@@ -170,23 +170,27 @@ describe("the lane's stops chip opens the editor", () => {
 describe("the editor chain", () => {
   const html = render(editor());
 
-  it("its bar names it, with the muted hint, and it is not renamed", () => {
-    expect(html).toContain('class="skl-name skl-default-name" title="Default stops · Tickets · Shortcut">Default stops · Tickets · Shortcut<');
+  it("its bar names the source (the kind on its Default tag), the hint a caption under it, and it is not renamed", () => {
+    expect(html).toContain('class="skl-name skl-default-name" title="Default stops for Tickets · Shortcut. New items from this source fly these.">Shortcut<');
+    expect(html).toContain('class="fl-box-chip skl-chip skl-default-tag"');
+    expect(html).toContain(">Default · Tickets<");
     expect(html).not.toContain("skl-name-edit");
-    expect(html).toContain('class="skl-default-hint muted">New items from this source fly these<');
+    expect(html).toContain('<div class="skl-default-hint">New items from Shortcut fly these stops</div>');
     expect(html).toContain("is-default-editor");
     expect(html).toContain('data-edits-default="tickets:sc"');
     expect(html).toContain('aria-label="Default stops · Tickets · Shortcut — new items from this source fly these"');
   });
 
-  it("Save as default (primary) and Discard on its bar; Reset only while the source has its own", () => {
+  it("Save as default (primary) and a quiet × Discard on its bar; Reset only while the source has its own", () => {
+    // The default isn't read yet on the first render: Save stays pressable.
     expect(html).toMatch(/<button type="button" class="btn-primary fl-btn skl-default-save"[^>]*>Save as default</);
-    expect(html).toMatch(/<button type="button" class="test-btn fl-btn skl-default-discard"[^>]*>Discard</);
+    expect(html).toMatch(/<button type="button" class="fl-icon-btn skl-default-discard" aria-label="Discard this edit"[^>]*>×</);
     // `own` is read after mount (getIntakeDefault): not yet known, not shown.
     expect(html).not.toContain(">Reset to default<");
     const src = code("components/flights/GroundedLine.tsx");
     expect(src).toContain("{ownDefault && (");
-    expect(src).toContain("void getIntakeDefault({ kind: edKind, target: edTarget }).then((d) => live && setOwnDefault(!!d?.own));");
+    expect(src).toContain("void getIntakeDefault({ kind: edKind, target: edTarget }).then((d) => {");
+    expect(src).toContain("setOwnDefault(!!d?.own);");
   });
 
   it("no ▶ and no Run on a session… — it never runs", () => {

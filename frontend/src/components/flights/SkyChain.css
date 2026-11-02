@@ -884,3 +884,16 @@
   color: var(--bg);
   outline: none;
 }
+
+/* A free chain's ▶ takes the empty socket's place (`.has-run`): on hover it
+   is the one circle left of the first stop, its dashed stub the wire into
+   it. The socket comes back — and the ▶ steps aside — only while something
+   is dragged that could land there (a wire: `.is-target`; a Session chip:
+   GroundedLine.css `.is-session-over`). */
+.sky-chain.has-run .sky-socket:not(.is-target) {
+  opacity: 0;
+}
+.sky-chain.has-run:has(.sky-socket.is-target) .sky-run:not(.is-running) {
+  opacity: 0;
+  pointer-events: none;
+}

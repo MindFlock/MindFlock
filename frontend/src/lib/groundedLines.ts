@@ -9,6 +9,7 @@
 import { flightDiagram, type Diagram } from "./flightDiagram";
 import { isLive, newStep, planFromSteps, stepActor, type Flight, type FlightPlan, type FlightStep, type IntakeSourceRef, type StepKindDef } from "./flights";
 import { chainColor, type ChainHead } from "./skyGraph";
+import { relTime } from "./format";
 
 /** A grounded flight's line is laid out under `"flight:" + id` (a session's
  * line under its title — a title never starts with this). */
@@ -211,4 +212,56 @@ export function editorLabel(f: Pick<Flight, "plan_name" | "edits_default">): str
 export function chainRunFor<R>(f: Pick<Flight, "edits_default"> & { steps: readonly unknown[] }, headKind: ChainHead["kind"], make: () => R): R | null {
   if (isDefaultEditor(f) || !f.steps.length || headKind === "trigger") return null;
   return make();
+}
+
+/** An editor's bar, split from its label ("Tickets · Jira — payments", "PRs ·
+ * owner/repo"): the source's own name as the title ("Jira — payments") and
+ * the kind ("Tickets") for the small tag beside it. A label with no " · "
+ * is all name. */
+export function editorTitle(label: string): { kind: string; name: string } {
+  const at = label.indexOf(" · ");
+  if (at <= 0 || at + 3 >= label.length) return { kind: "", name: label };
+  return { kind: label.slice(0, at), name: label.slice(at + 3) };
+}
+
+/** The same value, keys in any order (a step's config as JSON). */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((v, i) => sameValue(v, b[i]));
+  }
+  if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+  const ka = Object.keys(a as object).filter((k) => (a as Record<string, unknown>)[k] !== undefined);
+  const kb = Object.keys(b as object).filter((k) => (b as Record<string, unknown>)[k] !== undefined);
+  return ka.length === kb.length && ka.every((k) => sameValue((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]));
+}
+
+type DefaultStepShape = Pick<FlightStep, "kind" | "title" | "config"> & Partial<Pick<FlightStep, "on_fail" | "halt" | "when">>;
+
+/** An editor chain's steps differ from the source's current default: another
+ * count, or a step whose kind, title, config, on-fail, halt or condition
+ * changed (ids and where a tile sits are not a change). Save as default is
+ * only worth pressing then. */
+export function defaultChanged(steps: readonly DefaultStepShape[], base: readonly DefaultStepShape[]): boolean {
+  if (steps.length !== base.length) return true;
+  return steps.some((s, i) => {
+    const b = base[i];
+    return (
+      s.kind !== b.kind ||
+      s.title !== b.title ||
+      (s.on_fail || "") !== (b.on_fail || "") ||
+      !!s.halt !== !!b.halt ||
+      (s.when || "") !== (b.when || "") ||
+      !sameValue(s.config || {}, b.config || {})
+    );
+  });
+}
+
+/** A free chain's "Last run …" chip and its tooltip: how it went and when
+ * ("Last run done · 3m ago"), and why it stopped when it says. */
+export function lastRunWords(last: NonNullable<Flight["last_run"]>, now?: number): { label: string; title: string } {
+  const label = last.state === "done" ? "Last run done" : "Last run stopped";
+  const when = last.at ? " · " + relTime(last.at, now === undefined ? {} : { now }) : "";
+  return { label, title: label + when + (last.reason ? " — " + last.reason : "") };
 }

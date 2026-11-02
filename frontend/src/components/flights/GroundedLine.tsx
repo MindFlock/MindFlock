@@ -29,22 +29,27 @@
  * takes its stops on release (docs/flights.md "As built: round 13 sky").
  *
  * A chain with `flight.edits_default` EDITS an intake source's default stops
- * (the intake lane's stops chip made it): its bar says "Default stops ·
- * <source>" with the hint "New items from this source fly these", it has no
+ * (the intake lane's stops chip made it). It is a pending edit, so it reads as
+ * a draft at rest (GroundedLine.css: a dashed accent outline round the chain,
+ * its bar always shown): the bar names the source ("Jira — payments",
+ * lib/groundedLines `editorTitle`) with a "Default · <kind>" tag, and the
+ * caption under it says "New items from <source> fly these stops". It has no
  * ▶ (lib/groundedLines `chainRunFor`) and no Run on a session…, and it is not
- * renamed. Its bar's **Save as default** writes its steps as the source's own
- * default (`setIntakeDefault`), **Reset to default** (only while the source
- * has its own) puts the source back on our built-in stops — each takes the
- * editor off the board with an Undo toast — and **Discard** (also ⋯, Delete)
- * just takes it off. Its stops edit as any grounded chain's. */
+ * renamed. Its bar's **Save as default** (pressable once its stops differ from
+ * the source's default — `defaultChanged`; "No changes" till then) writes its
+ * steps as the source's own default (`setIntakeDefault`), **Reset to default**
+ * (only while the source has its own) puts the source back on our built-in
+ * stops — each takes the editor off the board with an Undo toast — and the
+ * quiet **×** Discard (also ⋯, Delete) just takes it off. Its stops edit as
+ * any grounded chain's. */
 
 import { optimisticDelete } from "../../lib/flightOptimism";
 import { useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
-import type { Flight, FlightPlan, StepKindDef } from "../../lib/flights";
+import type { Flight, FlightPlan, FlightStep, StepKindDef } from "../../lib/flights";
 import { birdPerch, type DiagramNode } from "../../lib/flightDiagram";
 import { chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
 import { attachGrounded, controlFlight, DEFAULT_SESSION, deleteFlight, getIntakeDefault, renameFlight, savePlan, setIntakeDefault, startGrounded } from "../../lib/flightsApi";
-import { chainRunFor, editorLabel, isDefaultEditor, isFreeRun, isRemoveKey, planToSave, sourcePlanId } from "../../lib/groundedLines";
+import { chainRunFor, defaultChanged, editorLabel, editorTitle, isDefaultEditor, isFreeRun, isRemoveKey, lastRunWords, planToSave, sourcePlanId } from "../../lib/groundedLines";
 import { lodFor, nearLines, type SkyLineLayout } from "../../lib/skyLayout";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
@@ -137,19 +142,30 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   const ed = isDefaultEditor(flight) ? flight.edits_default! : null;
   const edLabel = ed ? editorLabel(flight) : "";
   const name = ed ? "Default stops · " + edLabel : groundedName(flight);
+  // Its bar names the source ("Jira — payments"); the kind rides the tag.
+  const edTitle = editorTitle(edLabel);
+  const edHint = "New items from " + (edTitle.name || "this source") + " fly these stops";
   const lod = lodFor(p.zoom || 1);
-  // Whether the source has its own default now (Reset to default only then).
+  // Whether the source has its own default now (Reset to default only then),
+  // and the steps it flies now — Save as default only once these differ.
   const [ownDefault, setOwnDefault] = useState(false);
+  const [baseSteps, setBaseSteps] = useState<FlightStep[] | null>(null);
   const edKind = ed?.kind;
   const edTarget = ed?.target;
   useEffect(() => {
     if (!edKind || !edTarget) return;
     let live = true;
-    void getIntakeDefault({ kind: edKind, target: edTarget }).then((d) => live && setOwnDefault(!!d?.own));
+    void getIntakeDefault({ kind: edKind, target: edTarget }).then((d) => {
+      if (!live) return;
+      setOwnDefault(!!d?.own);
+      setBaseSteps(d ? d.steps : null);
+    });
     return () => {
       live = false;
     };
   }, [edKind, edTarget]);
+  // Unknown (not read yet, or unreadable): Save stays pressable.
+  const changed = !baseSteps || defaultChanged(flight.steps, baseSteps);
 
   useEffect(() => {
     const el = rootRef.current;
@@ -379,9 +395,14 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
       >
         <Bird size={14} />
         {ed ? (
-          <span className="skl-name skl-default-name" title={name}>
-            {name}
-          </span>
+          <>
+            <span className="skl-name skl-default-name" title={"Default stops for " + edLabel + ". New items from this source fly these."}>
+              {edTitle.name}
+            </span>
+            <span className="fl-box-chip skl-chip skl-default-tag" title={"You are editing the stops new items from " + edLabel + " fly"}>
+              {edTitle.kind ? "Default · " + edTitle.kind : "Default"}
+            </span>
+          </>
         ) : naming === null ? (
           <span className="skl-name skl-name-edit" title="Click to rename (F2)" onClick={onNameClick}>
             {name}
@@ -422,24 +443,35 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
             {flight.state === "waiting_you" ? "Waiting on you" : flight.state === "running" ? "Running" : "Paused"}
           </span>
         )}
-        {!running && flight.last_run && (
-          <span className={"fl-box-chip skl-chip " + (flight.last_run.state === "done" ? "tone-ready" : "tone-muted")} title={flight.last_run.reason || undefined}>
-            {flight.last_run.state === "done" ? "Last run done" : "Last run stopped"}
-          </span>
-        )}
-        {ed && <span className="skl-default-hint muted">New items from this source fly these</span>}
+        {!running && flight.last_run && (() => {
+          const w = lastRunWords(flight.last_run);
+          return (
+            <span className={"fl-box-chip skl-chip " + (flight.last_run.state === "done" ? "tone-ready" : "tone-muted")} title={w.title}>
+              {w.label}
+            </span>
+          );
+        })()}
+        {/* An editor is a pending edit: its bar stays shown, Save as default
+            the one primary (pressable once the stops differ from the source's
+            default), Reset a quiet secondary, Discard a quiet ×. */}
         {ed && (
           <span className="skl-default-acts" data-no-drag>
-            <button type="button" className="btn-primary fl-btn skl-default-save" disabled={busy || !flight.steps.length} title={"New items from " + edLabel + " fly these stops"} onClick={() => void writeDefault(false)}>
-              Save as default
+            <button
+              type="button"
+              className="btn-primary fl-btn skl-default-save"
+              disabled={busy || !flight.steps.length || !changed}
+              title={changed ? edHint : "These are the stops " + edLabel + " flies now — change one to save"}
+              onClick={() => void writeDefault(false)}
+            >
+              {changed ? "Save as default" : "No changes"}
             </button>
             {ownDefault && (
               <button type="button" className="test-btn fl-btn skl-default-reset" disabled={busy} title={"Put " + edLabel + " back on our built-in stops"} onClick={() => void writeDefault(true)}>
                 Reset to default
               </button>
             )}
-            <button type="button" className="test-btn fl-btn skl-default-discard" disabled={busy} title="Take this editor off the board — the default stops stay as they are" onClick={() => void discard()}>
-              Discard
+            <button type="button" className="fl-icon-btn skl-default-discard" disabled={busy} aria-label="Discard this edit" title="Discard — take this editor off the board; the default stops stay as they are" onClick={() => void discard()}>
+              ×
             </button>
           </span>
         )}
@@ -447,6 +479,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
           <OverflowMenu label={"Actions for " + name} items={items} />
         </span>
       </div>
+      {ed && <div className="skl-default-hint">{edHint}</div>}
       <div ref={wrapRef} className="skl-chain-wrap" onPointerDownCapture={(e) => (shift.current = e.shiftKey)}>
         <SkyChain
           graph={graph}

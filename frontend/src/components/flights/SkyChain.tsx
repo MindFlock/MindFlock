@@ -546,7 +546,7 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
 
   return (
     <div
-      className={"sky-chain" + (p.className ? " " + p.className : "") + (drag?.live ? " is-dragging-node" : "")}
+      className={"sky-chain" + (p.className ? " " + p.className : "") + (drag?.live ? " is-dragging-node" : "") + (p.run && socket ? " has-run" : "")}
       style={{ position: "relative", width: Math.max(0, b.x + b.w), height: Math.max(0, b.y + b.h), ["--sky-chain-color" as string]: head.color }}
       data-chain={g.key}
       data-flight={g.flightId || undefined}
@@ -580,7 +580,10 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
           <button
             type="button"
             className={"sky-run fl-icon-btn" + (r.running ? " is-running" : "")}
-            style={{ left: at.x - (socket ? 46 : 22), top: at.y }}
+            // One affordance, not two circles: the ▶ sits where the empty
+            // socket does (the socket shows again only while something is
+            // dragged that could land there — SkyChain.css `.has-run`).
+            style={{ left: at.x - 24, top: at.y }}
             data-no-drag
             aria-label={r.label}
             title={r.label}
