@@ -1235,3 +1235,12 @@
   outline: none;
 }
 
+
+/* "Use these stops for every ticket from <source>": a long source name wraps
+   rather than stretching the whole menu wide. */
+.skl-menu .vf-menu-list .vf-menu-item.skl-mi-promote {
+  max-width: 300px;
+  white-space: normal;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
