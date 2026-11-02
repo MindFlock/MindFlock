@@ -37888,7 +37888,10 @@ function tackOnPlan(flightId, planId, at) {
 }
 function tackOnSteps(flightId, steps, at, groupName) {
 	return flightAction("Tack on", flightPath(flightId, "/steps"), {
-		steps: steps.map(wireStep),
+		steps: steps.map((s) => ({
+			...wireStep(s),
+			id: s.id
+		})),
 		...at === void 0 ? {} : { at },
 		...groupName ? { group: { name: groupName } } : {}
 	});
@@ -79382,6 +79385,23 @@ function liftLoops(line) {
 function loopAtWork(d) {
 	return d.edges.find((e) => e.kind === "loop" && !!e.via && !!STOP_TONE[e.via.state]) || null;
 }
+function firstStepOf(n) {
+	return n.step || n.group?.steps[0];
+}
+function loopSlotAfter(n) {
+	if (n.index === void 0) return void 0;
+	return n.index + (n.kind === "group" ? n.group?.total || 1 : 1);
+}
+function loopStepTo(def, taken, target) {
+	const step = newStep(def, taken);
+	return {
+		...step,
+		config: {
+			...step.config,
+			back_to: target.id
+		}
+	};
+}
 function findNode(d, id) {
 	if (!id) return null;
 	for (const n of d.nodes) {
@@ -79991,7 +80011,9 @@ function drawnCanvas(d, canvas) {
 				const m = flightMove(d, from, to);
 				c.onMove(m.from, m.to);
 			}),
-			onDropStop: c.onDropStop && ((drop, at) => c.onDropStop(drop, at === null ? null : flightIndexAt(d, at)))
+			onDropStop: c.onDropStop && ((drop, at) => c.onDropStop(drop, at === null ? null : flightIndexAt(d, at))),
+			onLoopFrom: c.onLoopFrom && ((from, to) => c.onLoopFrom(orig(from), orig(to))),
+			onLoopTo: c.onLoopTo && ((loop, to) => c.onLoopTo(orig(loop), orig(to)))
 		}
 	};
 }
@@ -80559,6 +80581,9 @@ var LOOP_TO = .28;
 var LOOP_DROP = 22;
 function loopRise(span) {
 	return Math.round(Math.min(84, Math.max(30, 18 + Math.abs(span) * .16)));
+}
+function loopWirePath(a, b, boxes, vertical = false) {
+	return loopArc(a, b, (p) => p.h / 2, vertical, boxes).d;
 }
 function loopArc(a, b, anchorOf, vertical, boxes) {
 	if (!vertical) {
@@ -81931,6 +81956,72 @@ function FlywayCanvas(p) {
 	const isHere = (n) => !!p.diagram.flightId && (n.kind === "stop" && !!n.step && n.index === p.diagram.insertFrom - 1 || n.kind === "group") && flying(n);
 	const flown = (n) => n.state === "done" || n.state === "skipped" || n.state === "failed";
 	const removable = (n) => !!p.onRemove && (n.kind === "group" || n.kind === "stop" && (!!n.editable || !!p.diagram.flightId && !!n.step));
+	const [loopDraw, setLoopDraw] = (0, import_react.useState)(null);
+	const loopMoved = (0, import_react.useRef)(false);
+	const loopable = (n) => (n.kind === "stop" ? !!n.step && n.step.kind !== "loop" : n.kind === "group") && n.index !== void 0;
+	const canLoopFrom = (n) => !!p.onLoopFrom && loopable(n) && n.index + 1 >= p.diagram.insertFrom;
+	const loopTargetAt = (pt, end) => {
+		if (!end || end.index === void 0) return null;
+		const hit = shown.boxes.find((b) => pt.x >= b.x - 8 && pt.x <= b.x + b.w + 8 && pt.y >= b.y - 8 && pt.y <= b.y + b.h + 8 && loopable(b.node));
+		return hit && hit.node.index <= end.index ? hit.node.id : null;
+	};
+	const startLoop = (e, mode, src, end) => {
+		if (e.button !== 0) return;
+		e.stopPropagation();
+		const endNode = p.diagram.nodes.find((n) => n.id === end);
+		const cur = {
+			mode,
+			src,
+			end,
+			sx: e.clientX,
+			sy: e.clientY,
+			x: 0,
+			y: 0,
+			over: null,
+			moved: false
+		};
+		loopMoved.current = false;
+		const stop = () => {
+			window.removeEventListener("pointermove", move);
+			window.removeEventListener("pointerup", up);
+			window.removeEventListener("pointercancel", cancel);
+			window.removeEventListener("keydown", key, true);
+			setLoopDraw(null);
+			if (cur.moved) setTimeout(() => loopMoved.current = false, 0);
+		};
+		const move = (ev) => {
+			if (!cur.moved && Math.hypot(ev.clientX - cur.sx, ev.clientY - cur.sy) < 4) return;
+			cur.moved = true;
+			loopMoved.current = true;
+			const pt = stagePoint(ev.clientX, ev.clientY);
+			if (!pt) return;
+			cur.x = pt.x - pad;
+			cur.y = pt.y - top;
+			cur.over = loopTargetAt({
+				x: cur.x,
+				y: cur.y
+			}, endNode);
+			setLoopDraw({ ...cur });
+		};
+		const up = () => {
+			const to = cur.moved && cur.over ? p.diagram.nodes.find((n) => n.id === cur.over) : void 0;
+			stop();
+			if (!to) return;
+			if (mode === "new") p.onLoopFrom?.(src, to);
+			else p.onLoopTo?.(src, to);
+		};
+		const cancel = () => stop();
+		const key = (ev) => {
+			if (ev.key !== "Escape") return;
+			ev.preventDefault();
+			ev.stopPropagation();
+			stop();
+		};
+		window.addEventListener("pointermove", move);
+		window.addEventListener("pointerup", up);
+		window.addEventListener("pointercancel", cancel);
+		window.addEventListener("keydown", key, true);
+	};
 	const tooled = (n) => {
 		if (n.kind === "group") return !!(p.onEdit || p.onRemove || p.onToggleHalt);
 		if (n.kind !== "stop") return false;
@@ -82264,13 +82355,23 @@ function FlywayCanvas(p) {
 							d: "M 0 0 L 10 5 L 0 10 z",
 							className: "fl-arrowhead"
 						})
-					}) }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("g", {
+					}) }), /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("g", {
 						transform: `translate(${pad} ${top})`,
-						children: shown.wires.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
-							className: "fl-wire fl-wire-" + w.kind + (w.done ? " fl-wire-done" : "") + (w.kind === "loop" ? " fl-edge-loop fl-loop-" + (w.loop?.state || "pending") : ""),
+						children: [shown.wires.map((w) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+							className: "fl-wire fl-wire-" + w.kind + (w.done ? " fl-wire-done" : "") + (w.kind === "loop" ? " fl-edge-loop fl-loop-" + (w.loop?.state || "pending") : "") + (loopDraw?.moved && loopDraw.mode === "aim" && w.via?.id === loopDraw.src.id ? " fl-loop-aiming" : ""),
 							d: w.d,
 							markerEnd: w.kind === "add" || w.kind === "fan" ? void 0 : `url(#${uid}-arrow)`
-						}, w.from + ">" + w.to + (w.kind === "loop" ? ">loop" : "")))
+						}, w.from + ">" + w.to + (w.kind === "loop" ? ">loop" : ""))), loopDraw?.moved && (() => {
+							const a = shown.boxes.find((b) => b.node.id === loopDraw.end);
+							const t = loopDraw.over ? shown.boxes.find((b) => b.node.id === loopDraw.over) : void 0;
+							if (!a) return null;
+							const d = t ? loopWirePath(a, t, shown.boxes, vertical) : `M ${a.x + a.w * LOOP_FROM} ${a.y + a.h} L ${loopDraw.x} ${loopDraw.y}`;
+							return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", {
+								className: "fl-wire fl-wire-loop fl-loop-drawing" + (t ? " is-landing" : ""),
+								d,
+								markerEnd: t ? `url(#${uid}-arrow)` : void 0
+							});
+						})()]
 					})]
 				}),
 				shown.wires.map((w) => {
@@ -82287,7 +82388,8 @@ function FlywayCanvas(p) {
 						"aria-label": title,
 						role: n ? "button" : void 0,
 						tabIndex: n ? 0 : void 0,
-						onClick: n ? () => edit(n) : void 0,
+						onClick: n ? () => !loopMoved.current && edit(n) : void 0,
+						onPointerDown: n && p.onLoopTo && n.editable ? (e) => startLoop(e, "aim", n, w.from) : void 0,
 						onContextMenu: n ? (e) => onBoxMenu(e, n) : void 0,
 						onKeyDown: n ? (e) => {
 							if (e.key === "Enter" || e.key === " ") {
@@ -82371,7 +82473,7 @@ function FlywayCanvas(p) {
 					const hold = here && (!n.editable || n.kind === "group") ? flightHold(n) : null;
 					const haltable = !!p.onToggleHalt && canHalt(n, here);
 					const waiting = n.join && n.join.waiting > 0 ? n.join : null;
-					const cls = "fl-box fl-box-" + n.kind + (open ? " fl-box-open" : "") + (drop ? " fl-drop" : "") + " fl-st-" + n.state + (n.perch ? " fl-perch" : "") + (p.selected === n.id ? " selected" : "") + (p.highlight?.has(n.id) ? " fl-described" : "") + (p.highlighted?.has(n.id) ? " fl-box-selected" : "") + (lifted ? " fl-lifted" : "") + (tools ? " fl-has-tools" : "") + (mark ? " fl-halt-point" : "") + (n.inGroup ? " fl-in-group" : "") + (canDrag(n) ? " fl-draggable" : "") + (lit?.has(n.id) ? " fl-jump-target" : "") + (lit && birdDrag?.over === n.id ? " fl-jump-over" : "");
+					const cls = "fl-box fl-box-" + n.kind + (open ? " fl-box-open" : "") + (drop ? " fl-drop" : "") + " fl-st-" + n.state + (n.perch ? " fl-perch" : "") + (p.selected === n.id ? " selected" : "") + (p.highlight?.has(n.id) ? " fl-described" : "") + (p.highlighted?.has(n.id) ? " fl-box-selected" : "") + (lifted ? " fl-lifted" : "") + (tools ? " fl-has-tools" : "") + (mark ? " fl-halt-point" : "") + (n.inGroup ? " fl-in-group" : "") + (canDrag(n) ? " fl-draggable" : "") + (lit?.has(n.id) ? " fl-jump-target" : "") + (lit && birdDrag?.over === n.id ? " fl-jump-over" : "") + (loopDraw?.over === n.id ? " fl-loop-target" : "");
 					const said = n.kind === "add" ? drop ? addLabel : n.title : n.title + (n.group ? ", a stop of " + n.group.total + (n.group.total === 1 ? " sub-step" : " sub-steps") + (n.group.current ? ", " + n.group.done + " of " + n.group.total + " done" : "") : "") + (n.kind === "stop" || n.kind === "rung" || n.kind === "group" ? ", " + (STATE_WORD[n.state] || "") : "") + (n.inGroup ? ", in “" + n.inGroup.name + "”" : "") + (mark ? ", halt point" : "") + (n.chip ? ", " + n.chip.label : "") + (waiting ? ", " + joinLabel(waiting) : "");
 					return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 						ref: (el) => {
@@ -82411,6 +82513,15 @@ function FlywayCanvas(p) {
 						onKeyDown: (e) => onBoxKey(e, n),
 						onContextMenu: (e) => onBoxMenu(e, n),
 						children: [
+							canLoopFrom(n) && !open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "fl-loop-handle",
+								"data-no-drag": true,
+								"aria-hidden": "true",
+								title: "Drag back onto a stop to loop from there to here",
+								onPointerDown: (e) => startLoop(e, "new", n, n.id),
+								onClick: (e) => e.stopPropagation(),
+								children: "↻"
+							}),
 							n.risk && n.risk.length > 0 && !open && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 								className: "fl-risk",
 								title: riskTitle(n.risk),
@@ -84943,6 +85054,21 @@ function useSessionLine(title, src, opts) {
 		} : void 0,
 		onToggleHalt: flight ? (n) => toggleHalt(own(n)) : void 0,
 		onToggleGroup: toggleGroup,
+		onLoopFrom: flight ? (from, to) => {
+			const def = kindOf.get("loop");
+			const target = firstStepOf(to);
+			const at = loopSlotAfter(from);
+			if (!def || !target || at === void 0) return void toast("This server has no Loop stop");
+			tackOn(flight.id, loopStepTo(def, flight.steps.map((s) => s.id), target), at < end ? at : void 0).then((ok) => ok && toast("Loops back to “" + target.title + "”"));
+		} : void 0,
+		onLoopTo: flight ? (loop, to) => {
+			const target = firstStepOf(to);
+			if (!loop.step || !target || loop.step.config?.back_to === target.id) return;
+			patchStop(flight.id, loop.step.id, { config: {
+				...loop.step.config,
+				back_to: target.id
+			} }).then((ok) => ok && toast("Loops back to “" + target.title + "” now"));
+		} : void 0,
 		onDropStop: (drop, at) => {
 			if ("planId" in drop) {
 				const plan = plans.find((p) => p.id === drop.planId);
@@ -130258,6 +130384,21 @@ function useGroundedLine(flight, src) {
 			const step = n.kind === "group" ? n.group?.steps[0] : n.index !== void 0 ? flight.steps[n.index] : void 0;
 			if (step) setHalt(flight.id, step.id, !step.halt);
 		},
+		onLoopFrom: (from, to) => {
+			const def = kindOf.get("loop");
+			const target = firstStepOf(to);
+			const at = loopSlotAfter(from);
+			if (!def || !target || at === void 0) return void toast("This server has no Loop stop");
+			tackOn(flight.id, loopStepTo(def, flight.steps.map((s) => s.id), target), where(at)).then((ok) => ok && toast("Loops back to “" + target.title + "”"));
+		},
+		onLoopTo: (loop, to) => {
+			const target = firstStepOf(to);
+			if (!loop.step || !target || loop.step.config?.back_to === target.id) return;
+			patchStop(flight.id, loop.step.id, { config: {
+				...loop.step.config,
+				back_to: target.id
+			} }).then((ok) => ok && toast("Loops back to “" + target.title + "” now"));
+		},
 		onDropStop: (drop, at) => {
 			const d = readDrop(drop);
 			if ("planId" in d) {
@@ -132645,9 +132786,76 @@ function SkyView() {
 		};
 	};
 	const press = (0, import_react.useRef)(null);
+	const [connect, setConnect] = (0, import_react.useState)(null);
+	const startConnect = (e, from, plus) => {
+		const targets = lines.filter((l) => l.flight).map((l) => ({
+			id: l.id,
+			rect: {
+				...posOf(l.id),
+				w: l.w,
+				h: l.h
+			}
+		}));
+		if (!targets.length) return false;
+		const r = plus.getBoundingClientRect();
+		const x1 = r.left + r.width / 2;
+		const y1 = r.top + r.height / 2;
+		const g = {
+			pid: e.pointerId,
+			sx: e.clientX,
+			sy: e.clientY,
+			moved: false,
+			over: ""
+		};
+		const move = (ev) => {
+			if (ev.pointerId !== g.pid) return;
+			if (!g.moved && Math.hypot(ev.clientX - g.sx, ev.clientY - g.sy) < 5) return;
+			g.moved = true;
+			g.over = hitAt(planeAt(ev.clientX, ev.clientY), targets);
+			setSessionOver((cur) => cur === g.over ? cur : g.over);
+			setConnect({
+				x1,
+				y1,
+				x2: ev.clientX,
+				y2: ev.clientY,
+				over: !!g.over
+			});
+		};
+		const done = (ev) => {
+			if (ev.pointerId !== g.pid) return;
+			window.removeEventListener("pointermove", move);
+			window.removeEventListener("pointerup", done);
+			window.removeEventListener("pointercancel", done);
+			setConnect(null);
+			setSessionOver("");
+			if (!g.moved) return;
+			const eat = (c) => {
+				c.stopPropagation();
+				c.preventDefault();
+			};
+			window.addEventListener("click", eat, {
+				capture: true,
+				once: true
+			});
+			setTimeout(() => window.removeEventListener("click", eat, { capture: true }), 0);
+			if (ev.type === "pointerup" && g.over) mergeGrounded(g.over, from, posOf(g.over));
+		};
+		window.addEventListener("pointermove", move);
+		window.addEventListener("pointerup", done);
+		window.addEventListener("pointercancel", done);
+		return true;
+	};
 	const onDownCapture = (e) => {
 		if (focusMode) setFocusMode(false);
 		if (e.pointerType === "mouse" && e.button !== 0) return;
+		const el = e.target instanceof Element ? e.target : null;
+		if (el?.closest(".fl-loop-handle, .fl-loop-pill[role='button']")) return;
+		const plus = el?.closest(".fl-box-add");
+		const slot = plus?.closest("[data-slot]")?.getAttribute("data-slot") || "";
+		if (plus && slot && !isGroundedKey(slot) && startConnect(e, slot, plus)) {
+			e.stopPropagation();
+			return;
+		}
 		const t = space.current ? "click" : tool;
 		if (t === "drag") return;
 		const g = gestureFor(t, skyTargetOf(e.target, ground), {
@@ -133757,6 +133965,16 @@ function SkyView() {
 			toolbar,
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyGuide, {}),
 			pick,
+			connect && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
+				className: "sky-connect" + (connect.over ? " is-over" : ""),
+				"aria-hidden": "true",
+				focusable: "false",
+				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("path", { d: `M ${connect.x1} ${connect.y1} C ${connect.x1 + 60} ${connect.y1}, ${connect.x2 - 60} ${connect.y2}, ${connect.x2} ${connect.y2}` }), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("circle", {
+					cx: connect.x2,
+					cy: connect.y2,
+					r: 5
+				})]
+			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "sky-main",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {

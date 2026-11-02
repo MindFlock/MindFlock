@@ -44,6 +44,7 @@ import { windowName } from "./windowName";
 import { riskOf, type RiskTag } from "./stopRisk";
 import {
   isLive,
+  newStep,
   perchLabel,
   stepActor,
   stepStateOf,
@@ -363,6 +364,27 @@ export function liftLoops(line: readonly DiagramNode[]): { line: DiagramNode[]; 
  * pace or a limit, halted on it): its wire, else null. */
 export function loopAtWork(d: Pick<Diagram, "edges">): DiagramEdge | null {
   return d.edges.find((e) => e.kind === "loop" && !!e.via && !!STOP_TONE[e.via.state]) || null;
+}
+
+// --- Drawing a loop by hand --------------------------------------------------------
+
+/** The step a box starts with: a stop's own, a group box's first sub-step —
+ * what a Loop drawn back onto that box repeats from. */
+export function firstStepOf(n: Pick<DiagramNode, "step" | "group">): FlightStep | undefined {
+  return n.step || n.group?.steps[0];
+}
+
+/** Where a Loop drawn out of box `n` goes, in the flight's indexes: right
+ * after the box (after a group box's last sub-step). */
+export function loopSlotAfter(n: Pick<DiagramNode, "index" | "kind" | "group">): number | undefined {
+  if (n.index === undefined) return undefined;
+  return n.index + (n.kind === "group" ? n.group?.total || 1 : 1);
+}
+
+/** A new Loop step of `def` that repeats from `target` (its `back_to`). */
+export function loopStepTo(def: StepKindDef, taken: readonly string[], target: FlightStep): FlightStep {
+  const step = newStep(def, taken);
+  return { ...step, config: { ...step.config, back_to: target.id } };
 }
 
 /** A node by id: the line's own, a sub-step of one of its group boxes, or
@@ -961,6 +983,8 @@ export interface IndexedCanvas {
   onDuplicate?(n: DiagramNode): void;
   onToggleHalt?(n: DiagramNode): void;
   onDropStop?(drop: never, at: number | null): void;
+  onLoopFrom?(from: DiagramNode, to: DiagramNode): void;
+  onLoopTo?(loop: DiagramNode, to: DiagramNode): void;
   renderInBox?(n: DiagramNode): unknown;
   sizeOf?(n: DiagramNode, base: BoxSize): BoxSize;
 }
@@ -997,6 +1021,8 @@ export function drawnCanvas<C extends IndexedCanvas>(d: Diagram, canvas: C): { d
         c.onMove!(m.from, m.to);
       }),
       onDropStop: c.onDropStop && ((drop: never, at: number | null) => c.onDropStop!(drop, at === null ? null : flightIndexAt(d, at))),
+      onLoopFrom: c.onLoopFrom && ((from: DiagramNode, to: DiagramNode) => c.onLoopFrom!(orig(from), orig(to))),
+      onLoopTo: c.onLoopTo && ((loop: DiagramNode, to: DiagramNode) => c.onLoopTo!(orig(loop), orig(to))),
     },
   };
 }
@@ -1571,6 +1597,12 @@ export const LOOP_DROP = 22;
  * for a longer reach, never less than 30 px nor more than 84. */
 export function loopRise(span: number): number {
   return Math.round(Math.min(84, Math.max(30, 18 + Math.abs(span) * 0.16)));
+}
+
+/** The return wire from box `a` back to box `b` — the path a Loop would
+ * draw, for the canvas's preview while one is being drawn or re-aimed. */
+export function loopWirePath(a: Placed, b: Placed, boxes: readonly Placed[], vertical = false): string {
+  return loopArc(a, b, (p) => p.h / 2, vertical, boxes).d;
 }
 
 /** A Loop's return wire — a flowchart's loop-back. Horizontal: down out of

@@ -927,3 +927,37 @@ details.fl-group-waiting > summary {
   transition: none;
   z-index: 7;
 }
+
+/* A session line's + being dragged onto a stops-only line (SkyView
+   `startConnect`): a wire from the + to the pointer, solid once it is over a
+   line that would take it. */
+.sky-connect {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 60;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.sky-connect path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+
+.sky-connect circle {
+  fill: var(--panel);
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+.sky-connect.is-over path {
+  stroke-dasharray: none;
+}
+
+.sky-connect.is-over circle {
+  fill: var(--accent);
+}

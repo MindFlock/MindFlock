@@ -330,7 +330,9 @@ export function tackOnPlan(flightId: string, planId: string, at?: number): Promi
 /** Several stops tacked on at once, grouped under `groupName` when given. */
 export function tackOnSteps(flightId: string, steps: FlightStep[], at?: number, groupName?: string): Promise<boolean> {
   return flightAction("Tack on", flightPath(flightId, "/steps"), {
-    steps: steps.map(wireStep),
+    // Their ids ride along: the server gives them new ones and re-aims a Loop
+    // among them that repeats from one of them.
+    steps: steps.map((s) => ({ ...wireStep(s), id: s.id })),
     ...(at === undefined ? {} : { at }),
     ...(groupName ? { group: { name: groupName } } : {}),
   });

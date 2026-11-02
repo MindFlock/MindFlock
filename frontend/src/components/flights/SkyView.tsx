@@ -1365,10 +1365,64 @@ export function SkyView() {
   // lands on it, so a box is selected and a double-click opens it, as ever.
   // Shift+drag draws the marquee.
   const press = useRef<{ id: number; sx: number; sy: number; el: Element | null } | null>(null);
+  // --- Connect: a session line's + dragged onto a stops-only line -------------
+  // The same as dragging the stops-only line onto the session's (`mergeGrounded`):
+  // its stops fly on that session. A wire follows the pointer from the +; the
+  // stops-only line under it lights. A press that never moves stays the +'s
+  // own click (the palette).
+  const [connect, setConnect] = useState<{ x1: number; y1: number; x2: number; y2: number; over: boolean } | null>(null);
+  const startConnect = (e: ReactPointerEvent<HTMLDivElement>, from: string, plus: Element): boolean => {
+    const targets = lines.filter((l) => l.flight).map((l) => ({ id: l.id, rect: { ...posOf(l.id), w: l.w, h: l.h } }));
+    if (!targets.length) return false;
+    const r = plus.getBoundingClientRect();
+    const x1 = r.left + r.width / 2;
+    const y1 = r.top + r.height / 2;
+    const g = { pid: e.pointerId, sx: e.clientX, sy: e.clientY, moved: false, over: "" };
+    const move = (ev: PointerEvent) => {
+      if (ev.pointerId !== g.pid) return;
+      if (!g.moved && Math.hypot(ev.clientX - g.sx, ev.clientY - g.sy) < 5) return;
+      g.moved = true;
+      g.over = hitAt(planeAt(ev.clientX, ev.clientY), targets);
+      setSessionOver((cur) => (cur === g.over ? cur : g.over));
+      setConnect({ x1, y1, x2: ev.clientX, y2: ev.clientY, over: !!g.over });
+    };
+    const done = (ev: PointerEvent) => {
+      if (ev.pointerId !== g.pid) return;
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", done);
+      window.removeEventListener("pointercancel", done);
+      setConnect(null);
+      setSessionOver("");
+      if (!g.moved) return;
+      // The click that follows the release is the drag's, not the +'s.
+      const eat = (c: Event) => {
+        c.stopPropagation();
+        c.preventDefault();
+      };
+      window.addEventListener("click", eat, { capture: true, once: true });
+      setTimeout(() => window.removeEventListener("click", eat, { capture: true }), 0);
+      if (ev.type === "pointerup" && g.over) void mergeGrounded(g.over, from, posOf(g.over));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", done);
+    window.addEventListener("pointercancel", done);
+    return true;
+  };
+
   const onDownCapture = (e: ReactPointerEvent<HTMLDivElement>) => {
     // Round 17: any press on the sky lifts the focus mode.
     if (focusMode) setFocusMode(false);
     if (e.pointerType === "mouse" && e.button !== 0) return;
+    const el = e.target instanceof Element ? e.target : null;
+    // A loop being drawn or re-aimed is the line's own (FlywayCanvas).
+    if (el?.closest(".fl-loop-handle, .fl-loop-pill[role='button']")) return;
+    // A session line's + pressed: it may be dragged onto a stops-only line.
+    const plus = el?.closest(".fl-box-add");
+    const slot = plus?.closest("[data-slot]")?.getAttribute("data-slot") || "";
+    if (plus && slot && !isGroundedKey(slot) && startConnect(e, slot, plus)) {
+      e.stopPropagation();
+      return;
+    }
     const t = space.current ? "click" : tool;
     if (t === "drag") return;
     const g = gestureFor(t, skyTargetOf(e.target as Element, ground), { shift: e.shiftKey, space: space.current, touch: e.pointerType === "touch" });
@@ -2400,6 +2454,12 @@ export function SkyView() {
       {toolbar}
       <SkyGuide />
       {pick}
+      {connect && (
+        <svg className={"sky-connect" + (connect.over ? " is-over" : "")} aria-hidden="true" focusable="false">
+          <path d={`M ${connect.x1} ${connect.y1} C ${connect.x1 + 60} ${connect.y1}, ${connect.x2 - 60} ${connect.y2}, ${connect.x2} ${connect.y2}`} />
+          <circle cx={connect.x2} cy={connect.y2} r={5} />
+        </svg>
+      )}
       <div className="sky-main">
         <div className="sky-stage">
           <div

@@ -1305,6 +1305,66 @@
   color: var(--muted);
 }
 
+/* Drawing a loop by hand: each stop that can take one wears a small ↻ on
+   its bottom-right corner (on hover, selection or focus); dragged back onto a
+   stop it draws the wire there. The stop it would land on lights. */
+.fl-loop-handle {
+  position: absolute;
+  right: 10px;
+  bottom: -9px;
+  z-index: 2;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  background: var(--panel);
+  color: var(--fl-ink-accent, var(--accent));
+  font-size: 11px;
+  line-height: 1;
+  cursor: crosshair;
+  user-select: none;
+  touch-action: none;
+  opacity: 0;
+  transform: scale(calc(1 / var(--sky-z, 1)));
+  transition: opacity 0.12s;
+}
+
+.fl-box:hover > .fl-loop-handle,
+.fl-box.selected > .fl-loop-handle,
+.fl-box:focus-within > .fl-loop-handle,
+.fl-canvas.fl-loop-drawing-on .fl-loop-handle {
+  opacity: 1;
+}
+
+.fl-loop-handle:hover {
+  background: color-mix(in srgb, var(--accent) 18%, var(--panel));
+}
+
+.fl-box.fl-loop-target {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.fl-wire-loop.fl-loop-drawing {
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-dasharray: 5 4;
+}
+
+.fl-wire-loop.fl-loop-drawing.is-landing {
+  stroke-dasharray: none;
+}
+
+.fl-wire-loop.fl-loop-aiming {
+  opacity: 0.25;
+}
+
+.fl-loop-pill[role="button"] {
+  touch-action: none;
+  user-select: none;
+}
+
 /* --- What has flown: one pill ------------------------------------------------ */
 
 /* Two or more stops the flight has already flown, folded (lib/flightDiagram

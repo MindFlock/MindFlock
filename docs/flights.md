@@ -5498,6 +5498,25 @@ moved:
 - Drops and moves count drawn places (`drawnCanvas`): a stop dropped in the gap
   after the wire's last stop lands AFTER the Loop (outside it).
 
+**Drawing loops by hand (same day).**
+- Every stop that can take a Loop after it wears a small ↻ on its bottom-right
+  corner (hover / selected / focused). Drag it back onto a stop at or before
+  it (itself = loop just that stop): `onLoopFrom(from, to)` tacks a Loop right
+  after `from` (`loopSlotAfter`) with `back_to` = `to`'s first step
+  (`loopStepTo`, `firstStepOf`). The wire follows the pointer and snaps onto
+  the stop under it (`.fl-loop-target`, `loopWirePath`); Esc or a drop on
+  nothing cancels.
+- A Loop's pill dragged onto another stop at or before the wire's start
+  re-aims it: `onLoopTo(loop, to)` PATCHes `config.back_to`. A press that
+  never moves still opens the dialog.
+- In the Sky, a session line's trailing + dragged onto a stops-only line does
+  what dragging that line onto the session does (`mergeGrounded`): a wire
+  follows the pointer (`.sky-connect`), the line under it lights.
+- Moved stops keep their Loop's target: `POST /steps {steps}` now carries the
+  steps' old ids and `_follow_loop_targets` re-aims a Loop whose `back_to`
+  names one of the batch at its new id (also for a saved stop tacked on,
+  `op_add_plan`). Before this, a moved Loop pointed at whatever had the old id.
+
 ## Round 17: the Sky as a canvas tool (contract)
 
 The owner (2026-10-31, a standing ask, one round per cycle): "iterate on the

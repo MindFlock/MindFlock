@@ -12,7 +12,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "../../lib/toast";
 import { newStep, type Flight, type FlightPlan, type FlightStep, type StepKindDef } from "../../lib/flights";
-import { collapseGroups, drawnCanvas, findNode, type DiagramNode } from "../../lib/flightDiagram";
+import { collapseGroups, drawnCanvas, findNode, firstStepOf, loopSlotAfter, loopStepTo, type DiagramNode } from "../../lib/flightDiagram";
 import { errMsg } from "../../lib/format";
 import { dropGroup, dropStop, moveStop, patchStop, patchStopGroup, savePlan, setHalt, tackOn, tackOnPlan, ungroupStops } from "../../lib/flightsApi";
 import { undoPayload } from "../../lib/stopEditing";
@@ -167,7 +167,7 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
 
   const raw: Pick<
     FlywayCanvasProps,
-    "selected" | "onSelect" | "onEdit" | "onOpen" | "onInsert" | "onRemove" | "onMove" | "onDuplicate" | "onToggleHalt" | "onToggleGroup" | "onDropStop"
+    "selected" | "onSelect" | "onEdit" | "onOpen" | "onInsert" | "onRemove" | "onMove" | "onDuplicate" | "onToggleHalt" | "onToggleGroup" | "onDropStop" | "onLoopFrom" | "onLoopTo"
   > = {
     selected: paletteAt !== null && paletteAt >= end ? "add" : dialog?.id || selected,
     onSelect,
@@ -190,6 +190,20 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
     onToggleHalt: (n) => {
       const step = n.kind === "group" ? n.group?.steps[0] : n.index !== undefined ? flight.steps[n.index] : undefined;
       if (step) void setHalt(flight.id, step.id, !step.halt);
+    },
+    // A loop drawn by hand: a Loop right after `from`, back to `to`.
+    onLoopFrom: (from, to) => {
+      const def = kindOf.get("loop");
+      const target = firstStepOf(to);
+      const at = loopSlotAfter(from);
+      if (!def || !target || at === undefined) return void toast("This server has no Loop stop");
+      void tackOn(flight.id, loopStepTo(def, flight.steps.map((s) => s.id), target), where(at)).then((ok) => ok && toast("Loops back to “" + target.title + "”"));
+    },
+    // A Loop's pill dropped on another stop: it repeats from there.
+    onLoopTo: (loop, to) => {
+      const target = firstStepOf(to);
+      if (!loop.step || !target || loop.step.config?.back_to === target.id) return;
+      void patchStop(flight.id, loop.step.id, { config: { ...loop.step.config, back_to: target.id } }).then((ok) => ok && toast("Loops back to “" + target.title + "” now"));
     },
     // A stop kind, or a saved stop (as one group) — the canvas's new drop
     // shape; a bare kind from the older one reads the same.

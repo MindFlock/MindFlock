@@ -63,8 +63,10 @@ import {
   birdPerches,
   joinLabel,
   layoutDiagram,
+  LOOP_FROM,
   loopIdlePill,
   loopPill,
+  loopWirePath,
   loopPillTitle,
   reorderDiagram,
   sizedBoxFor,
@@ -199,6 +201,12 @@ export interface FlywayCanvasProps {
   dragStop?: string | null;
   /** The + between two boxes: insert a stop before stop `at`. */
   onInsert?(at: number): void;
+  /** A stop's ↻ handle dragged back onto a stop at or before it: draw a Loop
+   * right after `from` that repeats from `to`. */
+  onLoopFrom?(from: DiagramNode, to: DiagramNode): void;
+  /** A Loop's pill dragged onto another stop at or before the wire's start:
+   * the Loop repeats from `to` now. */
+  onLoopTo?(loop: DiagramNode, to: DiagramNode): void;
   /** Extra content inside a box (a perch's checklist and Done / Skip, ⋯). */
   renderInBox?(n: DiagramNode): ReactNode;
   /** A box drawn bigger than the rest. */
@@ -324,6 +332,11 @@ function useNarrow(ref: RefObject<HTMLElement | null>, forced?: boolean): boolea
   }, [ref, forced]);
   return forced ?? narrow;
 }
+
+/** A loop being drawn by hand: from a stop's ↻ handle (`new`) or a Loop's
+ * pill (`aim`); `end` is the box its wire leaves from, `over` the stop under
+ * the pointer it would land on (stage coordinates in `x`/`y`). */
+type LoopDraw = { mode: "new" | "aim"; src: DiagramNode; end: string; sx: number; sy: number; x: number; y: number; over: string | null; moved: boolean };
 
 /** A bird in hand: the pointer, where it went down, where it is now (stage
  * px), and the stop under it. `live` once it moved (a touch: once held). */
@@ -564,6 +577,65 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
   // On a live line any stop comes off: one still ahead, the one the flight
   // is at, one that has flown.
   const removable = (n: DiagramNode) => !!p.onRemove && (n.kind === "group" || (n.kind === "stop" && (!!n.editable || (!!p.diagram.flightId && !!n.step))));
+
+  // --- Drawing a loop by hand ----------------------------------------------------
+  // A stop's ↻ handle dragged back onto a stop at or before it (itself too)
+  // draws a Loop right after it (`onLoopFrom`); a Loop's pill dragged onto
+  // another stop re-aims it (`onLoopTo`). The wire it would draw follows the
+  // pointer and snaps onto the stop under it; Esc or a drop on nothing cancels.
+  const [loopDraw, setLoopDraw] = useState<LoopDraw | null>(null);
+  const loopMoved = useRef(false);
+  const loopable = (n: DiagramNode) => (n.kind === "stop" ? !!n.step && n.step.kind !== "loop" : n.kind === "group") && n.index !== undefined;
+  const canLoopFrom = (n: DiagramNode) => !!p.onLoopFrom && loopable(n) && n.index! + 1 >= p.diagram.insertFrom;
+  const loopTargetAt = (pt: { x: number; y: number }, end: DiagramNode | undefined) => {
+    if (!end || end.index === undefined) return null;
+    const hit = shown.boxes.find((b) => pt.x >= b.x - 8 && pt.x <= b.x + b.w + 8 && pt.y >= b.y - 8 && pt.y <= b.y + b.h + 8 && loopable(b.node));
+    return hit && hit.node.index! <= end.index ? hit.node.id : null;
+  };
+  const startLoop = (e: PointerEvent<HTMLElement>, mode: LoopDraw["mode"], src: DiagramNode, end: string) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    const endNode = p.diagram.nodes.find((n) => n.id === end);
+    const cur: LoopDraw = { mode, src, end, sx: e.clientX, sy: e.clientY, x: 0, y: 0, over: null, moved: false };
+    loopMoved.current = false;
+    const stop = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
+      window.removeEventListener("keydown", key, true);
+      setLoopDraw(null);
+      if (cur.moved) setTimeout(() => (loopMoved.current = false), 0);
+    };
+    const move = (ev: globalThis.PointerEvent) => {
+      if (!cur.moved && Math.hypot(ev.clientX - cur.sx, ev.clientY - cur.sy) < 4) return;
+      cur.moved = true;
+      loopMoved.current = true;
+      const pt = stagePoint(ev.clientX, ev.clientY);
+      if (!pt) return;
+      cur.x = pt.x - pad;
+      cur.y = pt.y - top;
+      cur.over = loopTargetAt({ x: cur.x, y: cur.y }, endNode);
+      setLoopDraw({ ...cur });
+    };
+    const up = () => {
+      const to = cur.moved && cur.over ? p.diagram.nodes.find((n) => n.id === cur.over) : undefined;
+      stop();
+      if (!to) return;
+      if (mode === "new") p.onLoopFrom?.(src, to);
+      else p.onLoopTo?.(src, to);
+    };
+    const cancel = () => stop();
+    const key = (ev: globalThis.KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      stop();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
+    window.addEventListener("keydown", key, true);
+  };
 
   // The hover toolbar: on a stop that can change, when there is something
   // to change it with; on the current stop, to halt the flight (or remove
@@ -889,12 +961,25 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
             {shown.wires.map((w) => (
               <path
                 key={w.from + ">" + w.to + (w.kind === "loop" ? ">loop" : "")}
-                className={"fl-wire fl-wire-" + w.kind + (w.done ? " fl-wire-done" : "") + (w.kind === "loop" ? " fl-edge-loop fl-loop-" + (w.loop?.state || "pending") : "")}
+                className={
+                  "fl-wire fl-wire-" + w.kind + (w.done ? " fl-wire-done" : "") + (w.kind === "loop" ? " fl-edge-loop fl-loop-" + (w.loop?.state || "pending") : "") +
+                  (loopDraw?.moved && loopDraw.mode === "aim" && w.via?.id === loopDraw.src.id ? " fl-loop-aiming" : "")
+                }
                 d={w.d}
                 // Arrowheads only where the line arrives: a fan-out has none.
                 markerEnd={w.kind === "add" || w.kind === "fan" ? undefined : `url(#${uid}-arrow)`}
               />
             ))}
+            {loopDraw?.moved &&
+              (() => {
+                // The loop being drawn (or re-aimed): onto the stop under the
+                // pointer, else a dashed lead to the pointer.
+                const a = shown.boxes.find((b) => b.node.id === loopDraw.end);
+                const t = loopDraw.over ? shown.boxes.find((b) => b.node.id === loopDraw.over) : undefined;
+                if (!a) return null;
+                const d = t ? loopWirePath(a, t, shown.boxes, vertical) : `M ${a.x + a.w * LOOP_FROM} ${a.y + a.h} L ${loopDraw.x} ${loopDraw.y}`;
+                return <path className={"fl-wire fl-wire-loop fl-loop-drawing" + (t ? " is-landing" : "")} d={d} markerEnd={t ? `url(#${uid}-arrow)` : undefined} />;
+              })()}
           </g>
         </svg>
         {shown.wires.map((w) => {
@@ -918,7 +1003,9 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
               aria-label={title}
               role={n ? "button" : undefined}
               tabIndex={n ? 0 : undefined}
-              onClick={n ? () => edit(n) : undefined}
+              onClick={n ? () => !loopMoved.current && edit(n) : undefined}
+              // Dragged onto another stop: the Loop repeats from there.
+              onPointerDown={n && p.onLoopTo && n.editable ? (e) => startLoop(e, "aim", n, w.from) : undefined}
               onContextMenu={n ? (e) => onBoxMenu(e, n) : undefined}
               onKeyDown={
                 n
@@ -1027,7 +1114,8 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
             (n.inGroup ? " fl-in-group" : "") +
             (canDrag(n) ? " fl-draggable" : "") +
             (lit?.has(n.id) ? " fl-jump-target" : "") +
-            (lit && birdDrag?.over === n.id ? " fl-jump-over" : "");
+            (lit && birdDrag?.over === n.id ? " fl-jump-over" : "") +
+            (loopDraw?.over === n.id ? " fl-loop-target" : "");
           const said =
             n.kind === "add"
               ? drop
@@ -1081,6 +1169,20 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
               onKeyDown={(e) => onBoxKey(e, n)}
               onContextMenu={(e) => onBoxMenu(e, n)}
             >
+              {canLoopFrom(n) && !open && (
+                // Draw a loop: drag this back onto a stop at or before this
+                // one (this one itself loops just it).
+                <span
+                  className="fl-loop-handle"
+                  data-no-drag
+                  aria-hidden="true"
+                  title="Drag back onto a stop to loop from there to here"
+                  onPointerDown={(e) => startLoop(e, "new", n, n.id)}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  ↻
+                </span>
+              )}
               {n.risk && n.risk.length > 0 && !open && (
                 // Round 15: the risk stripe — one 3px band per tag down the
                 // left edge; the tooltip names them (lib/stopRisk).
