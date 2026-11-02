@@ -391,7 +391,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   // (its name, state chip and bird, in the session's colour), its stops are
   // free-floating tiles at their saved spots, wires join their ports.
   const where = row ? lineWhere(line.diagram) : "";
-  const moves = useNodeMoves(line.flight?.id, line.graphDiagram);
+  const moves = useNodeMoves(line.flight?.id, line.graphDiagram, p.title);
   const sessionNode = useMemo(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
   const headSub = where || (row ? firstLine(row.task_headline || row.task || "") : "");
   const head: ChainHead = useMemo(

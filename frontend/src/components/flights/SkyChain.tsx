@@ -17,11 +17,11 @@
  * `onNodeMove`, Esc cancels. A press without movement is a click
  * (`onSelect`; a head / child / flown tile: `onOpen`). */
 
-import { useMemo, useRef, useState, type JSX, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
 import type { BirdPerch, DiagramNode } from "../../lib/flightDiagram";
-import { loopIdlePill, loopPill, loopPillTitle } from "../../lib/flightDiagram";
+import { leftWord, loopIdlePill, loopPill, loopPillTitle } from "../../lib/flightDiagram";
 import type { StepKindDef } from "../../lib/flights";
-import { HEAD_ID, TILE, inPortOf, moveNode, snapPos, type ChainGraph, type GraphNode, type GraphWire } from "../../lib/skyGraph";
+import { HEAD_ID, TILE, inPortOf, isBranchRow, moveNode, snapPos, type ChainGraph, type GraphNode, type GraphWire } from "../../lib/skyGraph";
 import type { Pos } from "../../lib/skyLayout";
 import { haltMark } from "../../lib/stopEditing";
 import { riskTitle } from "../../lib/stopRisk";
@@ -138,7 +138,9 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
   const edit = (n: GraphNode) => (p.onEdit ? p.onEdit(n.node) : p.onSelect?.(n.node));
 
   // --- Node drag ---------------------------------------------------------------
-  const draggable = (n: GraphNode) => !!p.onNodeMove && n.id !== HEAD_ID && isStopish(n.node);
+  // Every tile moves (the owner: "I should be able to drag every block
+  // around") — stops, groups, and sub-sessions / workers hung under them.
+  const draggable = (n: GraphNode) => !!p.onNodeMove && n.id !== HEAD_ID && (isStopish(n.node) || isBranchRow(n.node));
   const endDrag = (commit: boolean) => {
     const d = dragRef.current;
     dragRef.current = null;
@@ -325,6 +327,7 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
         </div>
         <div className="sky-node-title">{isHead ? head.title : dn.title}</div>
         {sub && <div className="sky-node-sub">{sub}</div>}
+        {!isHead && dn.until && (dn.state === "current" || dn.state === "paused" || dn.state === "halted") ? <Countdown until={dn.until} /> : null}
         {isHead ? (
           <div className="sky-head-extra" data-no-drag>
             {p.renderHead ? p.renderHead() : dn.chip ? <span className={"sky-head-chip tone-" + dn.chip.tone}>{dn.chip.label}</span> : null}
@@ -472,6 +475,22 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
         );
       })}
       {birdOn && p.bird && <BirdMarker tone={p.bird.tone} x={birdOn.x + birdOn.w / 2} y={birdOn.y} size={22} label={"The flight is at “" + (birdOn.id === HEAD_ID ? head.title : birdOn.node.title) + "”"} className="sky-chain-bird" />}
+    </div>
+  );
+}
+
+/** A waiting stop's live countdown (a Wait's timer, a paced Loop's next run):
+ * "12:34 left", ticking each second; "due" once it is up. */
+function Countdown({ until }: { until: number }): JSX.Element {
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const at = new Date(until * 1000);
+  return (
+    <div className="sky-node-left" title={"Until " + at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })} aria-live="off">
+      ⏱ {leftWord(until - now)}
     </div>
   );
 }

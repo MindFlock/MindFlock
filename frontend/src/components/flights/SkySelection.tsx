@@ -13,6 +13,7 @@
  * has none. The intake lane can be among the lines (round 12): it moves and
  * tidies with them, and Remove leaves it alone. */
 
+import { optimisticDelete, patchFlightCache, withoutSteps } from "../../lib/flightOptimism";
 import { useEffect, useRef, useState, type JSX } from "react";
 import type { Flight, FlightStep, StepKindDef } from "../../lib/flights";
 import { isLive, planFromSteps } from "../../lib/flights";
@@ -162,7 +163,7 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
         if (isGroundedKey(id)) {
           const f = p.flightOf(id);
           const at = p.posOf?.(id);
-          if (await deleteFlight(groundedIdOf(id))) gone.push({ steps: f?.steps || [], name: f?.plan_name || "", at });
+          if (await optimisticDelete(groundedIdOf(id), () => deleteFlight(groundedIdOf(id)))) gone.push({ steps: f?.steps || [], name: f?.plan_name || "", at });
         } else {
           await closeSession(id);
           if (!sessionOpen(id)) closed.push(id);
@@ -190,7 +191,10 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
       const title = isGroundedKey(one.line) ? "" : one.line;
       const taken = takenStops(one.nodes, flight.steps);
       const out: TakenStops[] = [];
+      // Every taken stop leaves the board at once; any the server refuses come back.
+      const rollback = patchFlightCache(fid, withoutSteps(new Set(taken.flatMap((t) => t.steps.map((s) => s.id)))));
       for (const t of taken) if (await (t.group ? dropGroup(fid, t.steps[0].id) : dropStop(fid, t.steps[0].id))) out.push(t);
+      if (out.length < taken.length) rollback();
       if (!out.length) return;
       const n = out.length;
       const entry = pushUndo({

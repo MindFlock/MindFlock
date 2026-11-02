@@ -229,6 +229,7 @@ export function Appearance(_: ScreenProps) {
       </div>
       <h3 className="set-section-title">Comfort</h3>
       <ReduceMotionRow />
+      <SkyBirdsRow />
       <TakeABreakRow />
       <IdleFlockRow />
     </>
@@ -261,6 +262,33 @@ function ReduceMotionRow() {
           onChange={(e) => {
             setReduceMotion(e.target.checked);
             toast(e.target.checked ? "Reduce motion on" : "Reduce motion off");
+          }}
+        />
+        <span className="ca-slider" />
+      </label>
+    </div>
+  );
+}
+
+/** Birds in the Sky: the flock drifting across the Sky's background
+ * (SkyFlock). On by default; off, the Sky draws none. */
+function SkyBirdsRow() {
+  const on = useUi((s) => s.skyBirds);
+  const setOn = useUi((s) => s.setSkyBirds);
+  return (
+    <div className="set-row set-switch-row">
+      <span className="notif-rule-text">
+        <span className="set-label">Birds in the Sky</span>
+        <span className="set-hint notif-rule-desc">The flock drifting across the Sky's background. The birds on your chains stay.</span>
+      </span>
+      <label className="ca-switch">
+        <input
+          type="checkbox"
+          aria-label="Birds in the Sky"
+          checked={on}
+          onChange={(e) => {
+            setOn(e.target.checked);
+            toast(e.target.checked ? "Birds in the Sky on" : "Birds in the Sky off");
           }}
         />
         <span className="ca-slider" />

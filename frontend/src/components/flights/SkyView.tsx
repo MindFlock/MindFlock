@@ -113,6 +113,7 @@
  * stop's dashed wire to the chain it starts — are drawn on the plane
  * (SkyWires); a stops-only chain something hands off to wears a trigger head. */
 
+import { optimisticDelete } from "../../lib/flightOptimism";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useDevices, useFlightKinds, useFlightPlans, useFlights, useInstances, usePeerLinks } from "../../state/queries";
 import { saveSkyNotes, type SkyNote } from "../../api/skyApi";
@@ -492,6 +493,8 @@ export function SkyView() {
   // A grounded line dragged by its bar: the session line under the pointer,
   // which takes its stops on release.
   const [mergeOver, setMergeOver] = useState("");
+  // Settings → Appearance → Birds in the Sky: the background flock, or none.
+  const skyBirds = useUi((s) => s.skyBirds);
   const [drop, setDrop] = useState<{ title: string; plan: FlightPlan } | null>(null);
   // What a shelf chip being dragged carries (read at its dragstart).
   const dragged = useRef<{ plan: FlightPlan } | { kind: string } | null>(null);
@@ -1243,7 +1246,8 @@ export function SkyView() {
     const f = flights?.find((x) => x.id === groundedIdOf(key));
     if (!f) return;
     const was = posOf(key);
-    if (!(await deleteFlight(f.id))) return;
+    // Gone from the board at once; a refusal puts it back (lib/flightOptimism).
+    if (!(await optimisticDelete(f.id, () => deleteFlight(f.id)))) return;
     const steps = f.steps;
     const name = f.plan_name || "";
     const shown = groundedName(f);
@@ -2533,7 +2537,7 @@ export function SkyView() {
             onDrop={onNewDrop}
             onScroll={onViewportScroll}
           >
-            <SkyFlock width={vp.w} height={vp.h} zoom={cam.z} paused={motionOff || !!drag} />
+            {skyBirds && <SkyFlock width={vp.w} height={vp.h} zoom={cam.z} paused={motionOff || !!drag} />}
             <div
               className={"sky-plane" + (focusMode ? " sky-focus" : "")}
               data-dragging={drag ? "" : undefined}

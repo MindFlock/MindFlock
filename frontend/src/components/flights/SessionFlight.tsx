@@ -30,11 +30,13 @@ import type { Instance } from "../../api/types";
 import { useFlightKinds, useFlightPlans, useFlights, useInstances } from "../../state/queries";
 import { selectSession } from "../../lib/sessionActions";
 import { flightProgress, type FlightPlan, type StepKindDef } from "../../lib/flights";
-import { birdPerch, flywayDiagram, hasSessionDiagram } from "../../lib/flightDiagram";
+import { flywayDiagram, hasSessionDiagram } from "../../lib/flightDiagram";
 import { windowName } from "../../lib/windowName";
 import { showInSky } from "../../lib/viewMode";
 import { savePlan, takeOff } from "../../lib/flightsApi";
-import { FlywayCanvas } from "./FlywayCanvas";
+import { FlightChain } from "./FlightChain";
+import "./SkyChain.css";
+import "./Sky.css";
 import { FlightMenu } from "./FlightStrip";
 import { DescribeField } from "./StopParts";
 import { useSessionLine } from "./useSessionLine";
@@ -118,7 +120,8 @@ export function SessionFlight({ inst, active = true }: { inst: Pick<Instance, "t
         </button>
       </div>
       {cancel.node}
-      <FlywayCanvas diagram={diagram} label={"What " + windowName(title) + " is doing and will do"} bird={birdPerch(diagram)} {...line.canvas} />
+      {/* The same n8n-style chain the Sky draws (FlightChain). */}
+      <FlightChain title={title} line={line} kinds={kinds} label={"What " + windowName(title) + " is doing and will do"} />
       {line.palette}
       {line.inspector}
       {!hasSessionDiagram(rows, title) && (

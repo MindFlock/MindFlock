@@ -197,7 +197,7 @@ describe("the grounded line", () => {
     expect(src).not.toContain("setConfirming");
     // The host removes it (and pins the Undo where it sat); alone, it deletes and pushes its own entry.
     expect(src).toContain("if (p.onRemove) await p.onRemove();");
-    expect(src).toContain("else if (await deleteFlight(flight.id)) {");
+    expect(src).toContain("else if (await optimisticDelete(flight.id, () => deleteFlight(flight.id))) {");
     expect(src).toMatch(/const entry = pushUndo\(\{ label: "Remove “" \+ name \+ "”", undo: \(\) => startGrounded\(/);
     expect(src).toContain('toast("Removed “" + name + "”", { action: undoAction(entry,');
     expect(src).toContain("const saved = await savePlan(plan);");

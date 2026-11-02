@@ -44,6 +44,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Instance } from "../../api/types";
 import { toast } from "../../lib/toast";
+import { optimistic, withSteps, withoutSteps } from "../../lib/flightOptimism";
 import { isLive, newStep, planFromSteps, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
 import { drawnCanvas, findNode, firstStepOf, loopSlotAfter, loopStepTo, receiptOf, sessionDiagram, type DiagramNode } from "../../lib/flightDiagram";
 import {
@@ -287,7 +288,8 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     try {
       if (flight) {
         const where = at !== null && at < end ? at : undefined;
-        if ((await tackOn(flight.id, step, where)) && openIt) setSelectIndex(where ?? end);
+        // Shown at once; the server's flight replaces the guess (lib/flightOptimism).
+        if ((await optimistic(flight.id, withSteps([step], where), () => tackOn(flight.id, step, where))) && openIt) setSelectIndex(where ?? end);
       } else {
         const f = await tackOnNew(title, [step]);
         if (f) {
@@ -308,7 +310,10 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     try {
       if (flight) {
         const where = at !== null && at < end ? at : undefined;
-        if (await tackOnPlan(flight.id, plan.id, where)) toast("Tacked on “" + plan.name + "”" + (plan.steps ? " — " + plan.steps.length + (plan.steps.length === 1 ? " stop" : " stops") : ""));
+        const steps = plan.steps || plans.find((p) => p.id === plan.id)?.steps;
+        const fid = flight.id;
+        const go = () => tackOnPlan(fid, plan.id, where);
+        if (await (steps?.length ? optimistic(fid, withSteps(steps, where), go) : go())) toast("Tacked on “" + plan.name + "”" + (plan.steps ? " — " + plan.steps.length + (plan.steps.length === 1 ? " stop" : " stops") : ""));
       } else await takeOff({ plan_id: plan.id, title });
     } finally {
       setBusy(false);
@@ -322,7 +327,8 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     const id = flight.id;
     const wasHere = index === flight.cursor;
     const next = flight.steps[index + 1]?.title;
-    if (!(await dropStop(id, step.id))) return false;
+    // Gone at once; a refusal puts it back (lib/flightOptimism).
+    if (!(await optimistic(id, withoutSteps(new Set([step.id])), () => dropStop(id, step.id)))) return false;
     // One undo, two roads: the toast's button and Ctrl+Z in the sky (lib/skyUndo).
     const entry = pushUndo({
       label: "Remove “" + step.title + "”",
@@ -354,7 +360,7 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     const first = n.index;
     const wasHere = flight.cursor >= first && flight.cursor < first + g.total;
     const next = flight.steps[first + g.total]?.title;
-    if (!(await dropGroup(id, g.steps[0].id))) return false;
+    if (!(await optimistic(id, withoutSteps(new Set(g.steps.map((s) => s.id))), () => dropGroup(id, g.steps[0].id)))) return false;
     const entry = pushUndo({
       label: "Remove “" + g.name + "”",
       undo: () => {

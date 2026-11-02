@@ -15,6 +15,7 @@
  *   pointer (`over`) — and on release asks `wireIntent` (lib/skyGraph) what
  *   the drop does and hands that to the host. Esc cancels. */
 
+import { loadNodePos, saveNodePos } from "../../lib/skyNodePos";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { firstStepOf, loopSlotAfter, loopStepTo, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
 import { moveStop, queueStopPos, saveStopPositions, splitOffChain, tackOn, tackOnNew } from "../../lib/flightsApi";
@@ -352,8 +353,11 @@ export function withLocalPos(d: Diagram, local: Readonly<Record<string, Pos>>): 
 /** A chain's dragged tiles: drawn at once where they were dropped, saved a
  * moment later (`queueStopPos`); a spot the server now has (or refused) is
  * let go. `move` is undefined with no flight (nothing to keep it on). */
-export function useNodeMoves(flightId: string | null | undefined, d: Diagram) {
+export function useNodeMoves(flightId: string | null | undefined, d: Diagram, chainKey?: string) {
   const [local, setLocal] = useState<Record<string, Pos>>({});
+  // Sub-sessions and workers (no step to carry a `pos`): kept per device.
+  const [mine, setMine] = useState<Record<string, Pos>>(() => (chainKey ? loadNodePos(chainKey) : {}));
+  useEffect(() => setMine(chainKey ? loadNodePos(chainKey) : {}), [chainKey]);
   // Spots the flights query already has are the server's again.
   useEffect(() => {
     const ids = Object.keys(local);
@@ -369,20 +373,36 @@ export function useNodeMoves(flightId: string | null | undefined, d: Diagram) {
     });
     if (keep.length !== ids.length) setLocal(Object.fromEntries(keep.map((id) => [id, local[id]])));
   }, [d, local]);
-  const move = flightId
-    ? (node: GraphNode, pos: Pos) => {
-        const st = posStepOf(node.node);
-        if (!st) return;
-        const p = { x: Math.round(pos.x), y: Math.round(pos.y) };
-        setLocal((l) => ({ ...l, [st.id]: p }));
-        queueStopPos(flightId, st.id, p, (ok) => {
-          if (!ok) setLocal((l) => Object.fromEntries(Object.entries(l).filter(([id]) => id !== st.id)));
-        });
-      }
-    : undefined;
+  const move =
+    flightId || chainKey
+      ? (node: GraphNode, pos: Pos) => {
+          const p = { x: Math.round(pos.x), y: Math.round(pos.y) };
+          const st = posStepOf(node.node);
+          if (st && flightId) {
+            setLocal((l) => ({ ...l, [st.id]: p }));
+            queueStopPos(flightId, st.id, p, (ok) => {
+              if (!ok) setLocal((l) => Object.fromEntries(Object.entries(l).filter(([id]) => id !== st.id)));
+            });
+            return;
+          }
+          if (!st && chainKey) {
+            setMine((m) => {
+              const next = { ...m, [node.id]: p };
+              saveNodePos(chainKey, next);
+              return next;
+            });
+          }
+        }
+      : undefined;
   // Memoized: the chain's graph (and so the host's registry) follows it.
-  const diagram = useMemo(() => withLocalPos(d, local), [d, local]);
+  const diagram = useMemo(() => withNodePos(withLocalPos(d, local), mine), [d, local, mine]);
   return { diagram, move };
+}
+
+/** The diagram with the per-device spots of its non-step nodes (`node.pos`). */
+export function withNodePos(d: Diagram, spots: Readonly<Record<string, Pos>>): Diagram {
+  if (!Object.keys(spots).length) return d;
+  return { ...d, nodes: d.nodes.map((n) => (!n.step && !n.group && spots[n.id] ? { ...n, pos: spots[n.id] } : n)) };
 }
 
 /** Hand the host this chain's entry whenever its graph, or where it sits in

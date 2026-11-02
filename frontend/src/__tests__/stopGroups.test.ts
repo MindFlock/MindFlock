@@ -343,7 +343,7 @@ describe("the group box on the canvas", () => {
     expect(stopDropOf(dt({ "text/plain": "x" }))).toBeNull();
     const src = code("components/flights/useSessionLine.tsx");
     expect(src).toMatch(/if \("planId" in drop\)/);
-    expect(src).toContain("tackOnPlan(flight.id, plan.id, where)");
+    expect(src).toContain("tackOnPlan(fid, plan.id, where)");
   });
 });
 

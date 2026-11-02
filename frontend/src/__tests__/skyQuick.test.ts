@@ -1,0 +1,55 @@
+/** 2026-11-02 Sky polish: optimistic flight edits (lib/flightOptimism), the
+ * waiting stop's countdown (`untilOf` / `leftWord`, its tile chip), and the
+ * per-device spots of sub-sessions (`withNodePos`). */
+import { describe, expect, it } from "vitest";
+import type { Flight, FlightStep } from "../lib/flights";
+import { leftWord, untilOf, type Diagram } from "../lib/flightDiagram";
+import { withSteps, withoutSteps } from "../lib/flightOptimism";
+import { withNodePos } from "../components/flights/useSkyWiring";
+
+const step = (id: string): FlightStep => ({ id, kind: "agent", title: id, config: {}, on_fail: "halt" });
+const flight = (cursor: number, state: Flight["state"] = "running"): Flight =>
+  ({ id: "f", plan_id: "", plan_name: "", steps: ["s1", "s2", "s3", "s4"].map(step), state, cursor, step_states: {}, session: "x" }) as unknown as Flight;
+
+describe("optimistic edits", () => {
+  it("withoutSteps drops them and the cursor follows what left before it", () => {
+    const f = withoutSteps(new Set(["s1", "s4"]))(flight(2));
+    expect(f.steps.map((s) => s.id)).toEqual(["s2", "s3"]);
+    expect(f.cursor).toBe(1);
+  });
+  it("withSteps inserts under temporary ids, pending, at `at` (end when undefined)", () => {
+    const f = withSteps([step("n")], 3)(flight(1));
+    expect(f.steps.map((s) => s.id.startsWith("s_tmp"))).toEqual([false, false, false, true, false]);
+    expect(f.step_states[f.steps[3].id].state).toBe("pending");
+    expect(f.cursor).toBe(1);
+    expect(withSteps([step("n")])(flight(1)).steps).toHaveLength(5);
+    // Before the cursor of a flying flight: the cursor moves with its stop.
+    expect(withSteps([step("n")], 0)(flight(2)).cursor).toBe(3);
+    expect(withSteps([step("n")], 0)(flight(0, "grounded")).cursor).toBe(0);
+  });
+});
+
+describe("the countdown", () => {
+  it("untilOf reads a Wait's until or a paced Loop's next_at", () => {
+    expect(untilOf({ until: 1800000000 })).toBe(1800000000);
+    expect(untilOf({ next_at: 1800000100 })).toBe(1800000100);
+    expect(untilOf({})).toBe(0);
+    expect(untilOf(null)).toBe(0);
+  });
+  it("leftWord says m:ss, h:mm:ss, and due", () => {
+    expect(leftWord(754)).toBe("12:34 left");
+    expect(leftWord(3723)).toBe("1:02:03 left");
+    expect(leftWord(0.2)).toBe("0:01 left");
+    expect(leftWord(0)).toBe("due");
+  });
+});
+
+describe("sub-sessions keep their spot per device", () => {
+  it("withNodePos puts a spot on a node that is not a step, never on a stop", () => {
+    const d = { nodes: [{ id: "child:w1", kind: "child", row: "below" }, { id: "stop:s1", kind: "stop", row: "main", step: step("s1") }], edges: [] } as unknown as Diagram;
+    const out = withNodePos(d, { "child:w1": { x: 10, y: 20 }, "stop:s1": { x: 1, y: 1 } });
+    expect(out.nodes[0].pos).toEqual({ x: 10, y: 20 });
+    expect(out.nodes[1].pos).toBeUndefined();
+    expect(withNodePos(d, {})).toBe(d);
+  });
+});

@@ -11,6 +11,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "../../lib/toast";
+import { optimistic, withSteps, withoutSteps } from "../../lib/flightOptimism";
 import { newStep, type Flight, type FlightPlan, type FlightStep, type StepKindDef } from "../../lib/flights";
 import { collapseGroups, drawnCanvas, findNode, firstStepOf, loopSlotAfter, loopStepTo, type DiagramNode } from "../../lib/flightDiagram";
 import { errMsg } from "../../lib/format";
@@ -82,7 +83,8 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
     try {
       const fresh = newStep(def, flight.steps.map((s) => s.id));
       const step = pos ? { ...fresh, pos } : fresh;
-      if (await tackOn(flight.id, step, where(at))) setSelectIndex(where(at) ?? end);
+      // Shown at once; the server's flight replaces the guess (lib/flightOptimism).
+      if (await optimistic(flight.id, withSteps([step], where(at)), () => tackOn(flight.id, step, where(at)))) setSelectIndex(where(at) ?? end);
     } finally {
       setBusy(false);
     }
@@ -92,7 +94,9 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
     setBusy(true);
     setPaletteAt(null);
     try {
-      if (await tackOnPlan(flight.id, plan.id, where(at))) toast("Added “" + plan.name + "”");
+      const steps = plans.find((p) => p.id === plan.id)?.steps;
+      const go = () => tackOnPlan(flight.id, plan.id, where(at));
+      if (await (steps?.length ? optimistic(flight.id, withSteps(steps, where(at)), go) : go())) toast("Added “" + plan.name + "”");
     } finally {
       setBusy(false);
     }
@@ -100,7 +104,8 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
 
   const removeStop = async (step: FlightStep, index: number): Promise<boolean> => {
     const id = flight.id;
-    if (!(await dropStop(id, step.id))) return false;
+    // Gone at once; a refusal puts it back (lib/flightOptimism).
+    if (!(await optimistic(id, withoutSteps(new Set([step.id])), () => dropStop(id, step.id)))) return false;
     toast("Removed “" + step.title + "”", {
       action: {
         label: "Undo",
@@ -119,7 +124,8 @@ export function useGroundedLine(flight: Flight, src: { kinds: readonly StepKindD
   const removeGroup = async (n: DiagramNode): Promise<boolean> => {
     const first = n.group?.steps[0];
     if (!first) return false;
-    if (!(await dropGroup(flight.id, first.id))) return false;
+    const ids = new Set((n.group?.steps || []).map((s) => s.id));
+    if (!(await optimistic(flight.id, withoutSteps(ids), () => dropGroup(flight.id, first.id)))) return false;
     toast("Removed “" + (n.group?.name || n.title) + "” — its " + (n.group?.steps.length || 0) + " stops");
     return true;
   };

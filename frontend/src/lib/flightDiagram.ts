@@ -155,6 +155,13 @@ export interface DiagramNode {
   /** A flown stop's receipt (`detail.receipt`, ≤ 80 chars: "312 passed",
    * "PR #291"), under the title at mid and near. */
   receipt?: string;
+  /** A stop the flight is at that waits for a moment (a Wait's timer
+   * `detail.until`, a paced Loop's `detail.next_at`): epoch seconds, for the
+   * tile's live "12:34 left". */
+  until?: number;
+  /** Round 18: where the Sky draws a node that is not a step (a sub-session,
+   * a worker), chain-local — kept per device (lib/skyNodePos). */
+  pos?: { x: number; y: number };
   /** The stop's `when` condition, when it has one (the "if" chip). */
   when?: string;
   /** Round 16: a Loop stop's count (its return arc's pill). */
@@ -488,6 +495,7 @@ export function flightStops(f: Flight, kinds?: readonly StepKindDef[] | null): D
       ...looksOf(s, kinds),
       ...(flown ? { receipt: receiptOf(rec?.detail) } : {}),
       ...(loop ? { loop } : {}),
+      ...(!flown && untilOf(rec?.detail) ? { until: untilOf(rec?.detail) } : {}),
     };
   });
 }
@@ -501,6 +509,23 @@ function looksOf(s: FlightStep, kinds?: readonly StepKindDef[] | null): Pick<Dia
   const when = String((s as { when?: unknown }).when ?? "").trim();
   if (when) out.when = when;
   return out;
+}
+
+/** When a waiting stop is due (epoch seconds): a Wait's `detail.until`, a
+ * paced Loop's `detail.next_at`; 0 when it has none. */
+export function untilOf(detail: Record<string, unknown> | null | undefined): number {
+  const v = Number(detail?.until ?? detail?.next_at ?? 0);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
+/** "12:34 left", "1:02:03 left", "due" — what a countdown says `secs` before. */
+export function leftWord(secs: number): string {
+  if (secs <= 0) return "due";
+  const s = Math.ceil(secs);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = String(s % 60).padStart(2, "0");
+  return (h ? h + ":" + String(m).padStart(2, "0") : String(m)) + ":" + ss + " left";
 }
 
 /** A flown stop's receipt: `detail.receipt` on one line, at most 80 chars. */

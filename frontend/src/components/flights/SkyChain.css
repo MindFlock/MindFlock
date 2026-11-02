@@ -191,15 +191,19 @@
   overflow-wrap: anywhere;
 }
 
+/* Two lines, wrapped at words (the owner: "text is cut off on blocks"); the
+   tile's tooltip still carries all of it. */
 .sky-node-sub {
   margin-top: 1px;
   max-width: 100%;
   font-size: 11px;
-  line-height: 15px;
+  line-height: 14px;
   color: var(--muted);
-  white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: break-word;
 }
 
 .sky-node-extra,
@@ -605,4 +609,26 @@
   .sky-plus {
     transition: none;
   }
+}
+
+/* A waiting stop's countdown under its summary (a Wait's timer, a paced
+   Loop's next run). */
+.sky-node-left {
+  margin-top: 3px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--tone-working) 55%, transparent);
+  color: var(--fl-ink-working, var(--tone-working));
+  background: var(--panel);
+  font-size: 10.5px;
+  line-height: 15px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Sub-sessions' bus: dashed, quiet, square corners (lib/skyGraph). */
+.sky-wire.sky-wire-fan {
+  stroke-dasharray: 4 4;
+  stroke-linejoin: round;
+  opacity: 0.75;
 }

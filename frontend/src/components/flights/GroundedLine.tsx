@@ -28,6 +28,7 @@
  * removes the line. `merging`: dragged over a session's line, which
  * takes its stops on release (docs/flights.md "As built: round 13 sky"). */
 
+import { optimisticDelete } from "../../lib/flightOptimism";
 import { useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { Flight, FlightPlan, StepKindDef } from "../../lib/flights";
 import { birdPerch, type DiagramNode } from "../../lib/flightDiagram";
@@ -149,7 +150,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
     setBusy(true);
     try {
       if (p.onRemove) await p.onRemove();
-      else if (await deleteFlight(flight.id)) {
+      else if (await optimisticDelete(flight.id, () => deleteFlight(flight.id))) {
         const steps = flight.steps;
         const entry = pushUndo({ label: "Remove “" + name + "”", undo: () => startGrounded({ steps, ...(flight.plan_name ? { name: flight.plan_name } : {}) }) });
         toast("Removed “" + name + "”", { action: undoAction(entry, "Undo: put “" + name + "” back on the board") });
@@ -243,7 +244,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   // headless (an empty socket on the first tile: wire a session's out port
   // there) or headed by the trigger tile of the chain that hands off to it.
   const wrapRef = useRef<HTMLDivElement>(null);
-  const moves = useNodeMoves(flight.id, line.graphDiagram);
+  const moves = useNodeMoves(flight.id, line.graphDiagram, "flight:" + flight.id);
   const head = p.head || NO_HEAD;
   const graph = useMemo(() => chainGraph(moves.diagram, { head, key: "flight:" + flight.id, flightId: flight.id }), [moves.diagram, head, flight.id]);
   useChainEntry(p.registerChain, graph, wrapRef, line.paletteAfter);
