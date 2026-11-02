@@ -342,7 +342,7 @@ export function loopLine(step: Pick<FlightStep, "config">, rec?: Pick<StepRunSta
  * with nothing before it to repeat (or whose target is gone) draws no wire —
  * it stays a box. Folding (the flown pill, a collapsed group) re-aims the
  * wires at the box that holds their ends (`foldRun`). */
-export function loopEdges(line: readonly DiagramNode[]): DiagramEdge[] {
+export function loopEdges(line: readonly DiagramNode[], head?: string): DiagramEdge[] {
   const stops = line.filter((n) => n.row === "main" && n.kind === "stop" && n.step);
   const out: DiagramEdge[] = [];
   stops.forEach((n, i) => {
@@ -353,6 +353,13 @@ export function loopEdges(line: readonly DiagramNode[]): DiagramEdge[] {
     const gid = s.group?.id;
     const target = back ? before.find((b) => b.step!.id === back) : gid ? before.find((b) => b.step!.group?.id === gid) : before[0];
     const end = before[before.length - 1];
+    // First on a session's chain (nothing before it, aimed nowhere): it
+    // repeats the session's own prompt — a wire from the session tile back
+    // into it (backend flight_kinds/loop `repeats_prompt`).
+    if (!before.length && !back && head) {
+      out.push({ from: head, to: head, kind: "loop", loop: n.loop || loopMark(s), via: n });
+      return;
+    }
     if (!target || !end) return;
     out.push({ from: end.id, to: target.id, kind: "loop", loop: n.loop || loopMark(s), via: n });
   });
@@ -362,8 +369,8 @@ export function loopEdges(line: readonly DiagramNode[]): DiagramEdge[] {
 /** The line with its Loops lifted off it: each Loop that draws a return
  * wire (`loopEdges`) leaves the line — the line runs straight past it — and
  * comes back as that wire. */
-export function liftLoops(line: readonly DiagramNode[]): { line: DiagramNode[]; loops: DiagramEdge[] } {
-  const loops = loopEdges(line);
+export function liftLoops(line: readonly DiagramNode[], head?: string): { line: DiagramNode[]; loops: DiagramEdge[] } {
+  const loops = loopEdges(line, head);
   const lifted = new Set(loops.map((e) => e.via!.id));
   return { line: line.filter((n) => !lifted.has(n.id)), loops };
 }
@@ -657,7 +664,7 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
     insertFrom = fl.state === "ready" ? 0 : fl.cursor + 1;
     const full = opts.flights?.find((f) => f.id === fl.id);
     if (full) {
-      const lifted = liftLoops(flightStops(full, opts.kinds));
+      const lifted = liftLoops(flightStops(full, opts.kinds), me.id);
       line.push(...lifted.line);
       loops = lifted.loops;
     } else

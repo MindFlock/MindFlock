@@ -79,6 +79,7 @@ def _config(raw: dict, strict: bool, where: str) -> dict:
         "wait_limits": F._bool(c.get("wait_limits"), True),
         "fresh": F._bool(c.get("fresh"), False),
         "until": until,
+        "prompt": F._text(c.get("prompt"), 4000),
     }
 
 
@@ -123,9 +124,82 @@ def _until(cfg: dict, obs: dict) -> Optional[dict]:
     return F._receipt({"action": "done", "note": receipt}, receipt)
 
 
+def repeats_prompt(flight: dict, step: dict) -> bool:
+    """A Loop first on a session's chain (no stop before it to go back to, no
+    ``back_to``) repeats the SESSION'S OWN prompt (2026-11-02, the owner put a
+    Loop right after the session tile to loop a prompt): each run sends the
+    session's last prompt again (or the Loop's ``prompt``), and waits out the
+    agent's turn."""
+    if not flight.get("session") or str(step["config"].get("back_to") or ""):
+        return False
+    steps = flight["steps"]
+    i = next((n for n, s in enumerate(steps) if s["id"] == step["id"]), -1)
+    return i >= 0 and all(s.get("kind") == "loop" for s in steps[:i])
+
+
+#: How long a sent run may take to show a turn before the Loop stops waiting.
+TURN_GRACE = 600
+
+
+def _turn(
+    cfg: dict, d: dict, sess: dict, seen: dict, runs: int, now: float
+) -> Optional[dict]:
+    """Prompt mode: a wait while the agent's turn (the session's own, or the
+    one a run sent) is under way; None once it is over. ``seen`` is the
+    Loop's own look at the session (``turn_ended_at`` / ``worked_at``)."""
+    act = str(sess.get("activity") or seen.get("activity") or "")
+    label = "run %d" % (runs + 1)
+    if act == "working":
+        return F._wait("%s: the agent is working" % label, saw_work=True)
+    if act in ("clarify", "asking", "attention"):
+        return F._wait("%s: the agent asks you something" % label)
+    if d.get("awaiting"):
+        sent = float(d.get("sent_at") or 0.0)
+        ended = float(seen.get("turn_ended_at") or 0.0)
+        worked = float(seen.get("worked_at") or 0.0)
+        over = ended > sent or worked > sent or bool(d.get("saw_work"))
+        if not over and now - sent < TURN_GRACE:
+            return F._wait("%s: sent — waiting for the agent" % label)
+    return None
+
+
+def _judge_prompt(flight, step, ss, obs, now) -> dict:
+    cfg = step["config"]
+    d = ss["detail"]
+    runs = int(d.get("runs") or 0)
+    times = int(cfg.get("times") or 0)
+    sess = obs.get("session") or {}
+    busy = _turn(cfg, d, sess, obs.get("loop") or {}, runs, now)
+    if busy is not None:
+        return busy
+    met = _until(cfg, obs)
+    if met is not None:
+        return met
+    if times > 0 and runs + 1 >= times:
+        receipt = "your prompt %s" % F.plural(runs + 1, "time")
+        return F._receipt({"action": "done", "note": receipt}, receipt)
+    limited = sess.get("limited") or (obs.get("loop") or {}).get("limited")
+    if cfg.get("wait_limits", True) and limited:
+        return F._wait("waiting on the usage limit", next_at=None)
+    every = int(cfg.get("every_minutes") or 0) * 60
+    last = float(d.get("last_start") or 0.0)
+    if every and last and now - last < every:
+        left = int(math.ceil((last + every - now) / 60.0))
+        return F._wait("next run in %d min" % max(1, left), next_at=last + every)
+    return {
+        "action": "run",
+        "phase": "loop",
+        "note": "run %d%s — your prompt again"
+        % (runs + 2, " of %d" % times if times else ""),
+        "detail": {"target": "session", "awaiting": False, "saw_work": None},
+    }
+
+
 def _judge(flight, step, ss, obs, now) -> dict:
     cfg = step["config"]
     to = F.loop_target(flight, step)
+    if to is None and repeats_prompt(flight, step):
+        return _judge_prompt(flight, step, ss, obs, now)
     if to is None:
         return {"action": "fail", "reason": F.NOTHING_TO_REPEAT}
     d = ss["detail"]
@@ -173,7 +247,63 @@ def _clear_command(title: str) -> Optional[str]:
     return fn() if callable(fn) else None
 
 
+def _last_prompt(title: str) -> str:
+    """The session's newest user prompt, whole (the pinned line's source)."""
+    from backend.web.core import agent_state
+    from backend.web.core import flight_driver as D
+
+    inst = D._server().ENGINE.instances.get(title) if title else None
+    return (
+        (agent_state._session_last_prompt_full(inst) or "") if inst is not None else ""
+    )
+
+
+async def _run_prompt(flight, step, action, now) -> dict:
+    """Prompt mode's run: clear the context when asked, send the prompt again
+    (the Loop's own, else the session's last), count the run."""
+    from backend.web.core import flight_driver as D
+
+    title = flight["session"]
+    text = str(step["config"].get("prompt") or "").strip() or await asyncio.to_thread(
+        _last_prompt, title
+    )
+    if not text:
+        raise _kinds.StepFailed(
+            "no prompt to repeat — give the Loop a prompt of its own"
+        )
+    if step["config"].get("fresh"):
+        cmd = await asyncio.to_thread(_clear_command, title)
+        if cmd:
+            await asyncio.to_thread(D._deliver, title, cmd)
+    await asyncio.to_thread(D._deliver, title, text)
+    ss = flight["step_states"][step["id"]]
+    runs = int(ss["detail"].get("runs") or 0) + 1
+    return {
+        "action": "wait",
+        "note": "run %d: sent your prompt again" % (runs + 1),
+        "detail": {
+            "runs": runs,
+            "last_start": now,
+            "sent_at": now,
+            "awaiting": True,
+            "saw_work": None,
+        },
+    }
+
+
 async def _run(flight, step, action, now) -> dict:
+    if (
+        action.get("phase") != "loop"
+        and repeats_prompt(flight, step)
+        and F.loop_target(flight, step) is None
+    ):
+        # First arrival in prompt mode: the session's own turn is run 1.
+        return dict(action, detail={"runs": 0, "last_start": now})
+    if (
+        action.get("phase") == "loop"
+        and (action.get("detail") or {}).get("target") == "session"
+    ):
+        return await _run_prompt(flight, step, action, now)
     if action.get("phase") != "loop":
         # First arrival: count run 1 and when it began; the judge decides.
         to = F.loop_target(flight, step)
@@ -207,6 +337,13 @@ async def _observe(flight, step, ss, sess, now) -> dict:
 
     cfg = step["config"]
     out: dict = {}
+    if repeats_prompt(flight, step) and sess.get("present"):
+        # Prompt mode reads the agent's turn like an Agent stop does.
+        full = await asyncio.to_thread(D._session_obs, flight, now, True)
+        out["turn_ended_at"] = float(full.get("turn_ended_at") or 0.0)
+        out["worked_at"] = float(full.get("worked_at") or 0.0)
+        out["activity"] = str(full.get("activity") or "")
+        out["limited"] = bool(full.get("limited"))
     if cfg.get("until"):
         out["facts"] = await D.when_facts(
             flight, {"id": step["id"], "when": cfg["until"]}, sess, now
@@ -254,6 +391,13 @@ KIND = _kinds.register(
                     "Stop looping when",
                     default="",
                     placeholder="e.g. judge is yes (empty = by count)",
+                ),
+                F._f(
+                    "prompt",
+                    "text",
+                    "Prompt to repeat (first on a session's chain)",
+                    default="",
+                    placeholder="empty = the session's last prompt",
                 ),
             ],
         },

@@ -12204,6 +12204,28 @@ details.fl-group-waiting > summary {
 .skl.skl-chainline.is-selected {
   border-radius: 14px;
 }
+
+/* The session's card, open in its tile's place (SkyLine): the card at the
+   chain's origin, the chain moved right of it (padding), the head tile itself
+   hidden but for its out port, whose wire now leaves the card's right edge. */
+.skl-chain-wrap.has-card {
+  position: relative;
+}
+.skl-own-card {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 3;
+}
+.skl-chain-wrap.has-card .sky-head > :not(.sky-tile),
+.skl-chain-wrap.has-card .sky-head .sky-tile > :not(.sky-port-out) {
+  visibility: hidden;
+}
+.skl-chain-wrap.has-card .sky-head .sky-tile {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
 /* The Sky's readability overrides for parts drawn by SkyView (the toolbar,
    the drawer) whose own rules live in Sky.css. Imported by SkyLine.tsx; CSS
    is global. The sizes and contrast numbers are in docs/flights-visibility.md.

@@ -80850,7 +80850,7 @@ function loopLine(step, rec) {
 	if (/^run \d/i.test(note)) return clip(note, 40);
 	return counter + " · " + clip(note, 28);
 }
-function loopEdges(line) {
+function loopEdges(line, head) {
 	const stops = line.filter((n) => n.row === "main" && n.kind === "stop" && n.step);
 	const out = [];
 	stops.forEach((n, i) => {
@@ -80861,6 +80861,16 @@ function loopEdges(line) {
 		const gid = s.group?.id;
 		const target = back ? before.find((b) => b.step.id === back) : gid ? before.find((b) => b.step.group?.id === gid) : before[0];
 		const end = before[before.length - 1];
+		if (!before.length && !back && head) {
+			out.push({
+				from: head,
+				to: head,
+				kind: "loop",
+				loop: n.loop || loopMark(s),
+				via: n
+			});
+			return;
+		}
 		if (!target || !end) return;
 		out.push({
 			from: end.id,
@@ -80872,8 +80882,8 @@ function loopEdges(line) {
 	});
 	return out;
 }
-function liftLoops(line) {
-	const loops = loopEdges(line);
+function liftLoops(line, head) {
+	const loops = loopEdges(line, head);
 	const lifted = new Set(loops.map((e) => e.via.id));
 	return {
 		line: line.filter((n) => !lifted.has(n.id)),
@@ -81141,7 +81151,7 @@ function sessionDiagram(rows, title, opts = {}) {
 		insertFrom = fl.state === "ready" ? 0 : fl.cursor + 1;
 		const full = opts.flights?.find((f) => f.id === fl.id);
 		if (full) {
-			const lifted = liftLoops(flightStops(full, opts.kinds));
+			const lifted = liftLoops(flightStops(full, opts.kinds), me.id);
 			line.push(...lifted.line);
 			loops = lifted.loops;
 		} else for (let i = 0; i < Math.max(0, Number(fl.total) || 0); i++) {
@@ -85253,7 +85263,8 @@ function wirePath(a, b) {
 function loopWirePathG(a, b, others, lane = 0) {
 	const o = outPortOf(a);
 	const i = inPortOf(b);
-	const y = Math.max(a.y + a.h, b.y + b.h, ...others.map((n) => n.y + n.h)) + LOOP_CLEAR + lane * LOOP_LANE;
+	const headRoom = a.id === HEAD_ID || b.id === HEAD_ID ? 60 : 0;
+	const y = Math.max(a.y + a.h, b.y + b.h, ...others.map((n) => n.y + n.h)) + headRoom + LOOP_CLEAR + lane * LOOP_LANE;
 	const k = LOOP_HOOK;
 	return {
 		d: `M ${o.x} ${o.y} C ${o.x + k} ${o.y}, ${o.x + k} ${y}, ${o.x} ${y} L ${i.x} ${y} C ${i.x - k} ${y}, ${i.x - k} ${i.y}, ${i.x} ${i.y}`,
@@ -133435,17 +133446,22 @@ function SkyLine(p) {
 	const age = ageOf(row?.activity_since);
 	const still = ageWord(row?.activity_since);
 	const cards = [];
-	if (p.layout.open && row) cards.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneCard, {
-		inst: row,
-		w: p.layout.paneW ?? PANE_W,
-		h: p.layout.paneH ?? PANE_H,
-		zoom: p.zoom,
-		onSize: (w, h) => p.onLayout({
-			paneW: w,
-			paneH: h
-		}),
-		onClose: () => p.onLayout({ open: false })
-	}, row.title));
+	const own = p.layout.open && row ? clampPane(p.layout.paneW ?? PANE_W, p.layout.paneH ?? PANE_H) : null;
+	const ownCard = own && row ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "skl-own-card",
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneCard, {
+			inst: row,
+			w: own.w,
+			h: own.h,
+			zoom: p.zoom,
+			onSize: (w, h) => p.onLayout({
+				paneW: w,
+				paneH: h
+			}),
+			onClose: () => p.onLayout({ open: false })
+		}, row.title)
+	}) : null;
+	const cardShift = own ? Math.max(0, own.w - (NODE_W + TILE) / 2) : 0;
 	for (const [t, ks] of Object.entries(kids)) {
 		const kid = rowOf(t);
 		if (kid) cards.push(/* @__PURE__ */ (0, import_jsx_runtime.jsx)(PaneCard, {
@@ -133538,12 +133554,17 @@ function SkyLine(p) {
 			}),
 			row ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				ref: wrapRef,
-				className: "skl-chain-wrap",
+				className: "skl-chain-wrap" + (ownCard ? " has-card" : ""),
+				style: own ? {
+					paddingLeft: cardShift,
+					minHeight: own.h + CARD_HEAD_H
+				} : void 0,
 				onPointerDownCapture: onChainDown,
 				onPointerMoveCapture: (e) => {
 					if (!press.current.moved && Math.hypot(e.clientX - press.current.x, e.clientY - press.current.y) >= 4) press.current.moved = e.buttons !== 0;
 				},
 				children: [
+					ownCard,
 					/* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyChain, {
 						graph,
 						zoom: p.zoom,

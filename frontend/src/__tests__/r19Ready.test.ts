@@ -40,3 +40,15 @@ describe("a ready flight", () => {
     expect(startWord({ start_on: "run" })).toBe("runs when you press ▶ Run");
   });
 });
+
+describe("a Loop first on a session's chain", () => {
+  it("repeats the session's prompt: a wire from the session tile back into it", () => {
+    const f = { ...ready(), steps: [{ id: "s1", kind: "loop", title: "Loop ×3", config: { times: 3, back_to: "" }, on_fail: "halt" }, step("s2", "ship")] } as unknown as Flight;
+    const d = sessionDiagram([row(f)], "me", { flights: [f] });
+    const loops = d.edges.filter((e) => e.kind === "loop");
+    expect(loops).toHaveLength(1);
+    expect(loops[0]).toMatchObject({ from: "session:me", to: "session:me" });
+    expect(loops[0].via?.id).toBe("stop:s1");
+    expect(d.nodes.some((n) => n.id === "stop:s1")).toBe(false);
+  });
+});

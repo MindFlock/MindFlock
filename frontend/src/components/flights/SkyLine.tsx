@@ -62,7 +62,7 @@ import { pushUndo } from "../../lib/skyUndo";
 import { deriveSessionState } from "../../lib/sessionState";
 import { firstLine } from "../../lib/format";
 import { birdPerch, drawnIndexes, flownCount, lineWhere, sessionDiagram, type Diagram, type DiagramNode } from "../../lib/flightDiagram";
-import { chainColor, chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
+import { NODE_W, TILE, chainColor, chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
 import { ageOf, ageWord, fmtDuration, segmentTitle, segmentsFor, totalSeconds, type LineSegment } from "../../lib/lineTime";
 import type { FlightPlan, StepKindDef } from "../../lib/flights";
 import { InlineConfirm } from "../InlineConfirm";
@@ -512,13 +512,20 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   const age = ageOf(row?.activity_since);
   const still = ageWord(row?.activity_since);
 
-  // The open cards: the session's (from its tile) and each opened worker's,
-  // in a row under the chain.
+  // The session's card opens IN its tile's place (the owner: "open up like in
+  // its box, so it is clear where the session is"): the card sits where the
+  // tile was, the chain moves right of it, and the head's wire leaves the
+  // card's right edge. Each opened worker's card goes in a row under it.
   const cards: ReactNode[] = [];
-  if (p.layout.open && row)
-    cards.push(
-      <PaneCard key={row.title} inst={row} w={p.layout.paneW ?? PANE_W} h={p.layout.paneH ?? PANE_H} zoom={p.zoom} onSize={(w, h) => p.onLayout({ paneW: w, paneH: h })} onClose={() => p.onLayout({ open: false })} />
-    );
+  const own = p.layout.open && row ? clampPane(p.layout.paneW ?? PANE_W, p.layout.paneH ?? PANE_H) : null;
+  const ownCard =
+    own && row ? (
+      <div className="skl-own-card">
+        <PaneCard key={row.title} inst={row} w={own.w} h={own.h} zoom={p.zoom} onSize={(w, h) => p.onLayout({ paneW: w, paneH: h })} onClose={() => p.onLayout({ open: false })} />
+      </div>
+    ) : null;
+  // The head's out port (chain-local) lands on the card's right edge.
+  const cardShift = own ? Math.max(0, own.w - (NODE_W + TILE) / 2) : 0;
   for (const [t, ks] of Object.entries(kids)) {
     const kid = rowOf(t);
     if (kid) cards.push(<PaneCard key={t} inst={kid} w={ks.w} h={ks.h} zoom={p.zoom} onSize={(w, h) => setKids((k) => ({ ...k, [t]: { w, h } }))} onClose={() => foldKid(t)} />);
@@ -594,12 +601,14 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
       {row ? (
         <div
           ref={wrapRef}
-          className="skl-chain-wrap"
+          className={"skl-chain-wrap" + (ownCard ? " has-card" : "")}
+          style={own ? { paddingLeft: cardShift, minHeight: own.h + CARD_HEAD_H } : undefined}
           onPointerDownCapture={onChainDown}
           onPointerMoveCapture={(e) => {
             if (!press.current.moved && Math.hypot(e.clientX - press.current.x, e.clientY - press.current.y) >= 4) press.current.moved = e.buttons !== 0;
           }}
         >
+          {ownCard}
           <SkyChain
             graph={graph}
             zoom={p.zoom}

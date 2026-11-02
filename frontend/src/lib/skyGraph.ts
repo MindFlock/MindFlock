@@ -445,7 +445,10 @@ export function wirePath(a: Pos, b: Pos): string {
 export function loopWirePathG(a: GraphNode, b: GraphNode, others: readonly GraphNode[], lane = 0): { d: string; mid: Pos } {
   const o = outPortOf(a);
   const i = inPortOf(b);
-  const low = Math.max(a.y + a.h, b.y + b.h, ...others.map((n) => n.y + n.h));
+  // The session tile's text runs taller than its box (its chip, the Ready
+  // controls): a loop round it (a Loop first on the chain) clears that too.
+  const headRoom = a.id === HEAD_ID || b.id === HEAD_ID ? 60 : 0;
+  const low = Math.max(a.y + a.h, b.y + b.h, ...others.map((n) => n.y + n.h)) + headRoom;
   const y = low + LOOP_CLEAR + lane * LOOP_LANE;
   const k = LOOP_HOOK;
   return {
