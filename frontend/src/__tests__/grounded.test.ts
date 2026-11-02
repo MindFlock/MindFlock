@@ -237,8 +237,9 @@ describe("the Sky hosts them", () => {
     expect(block).toContain("attach ? await attachGrounded(attach.id, { title })");
   });
 
-  it("the line picker shows names, never raw titles", () => {
-    expect(sky).toMatch(/<button key=\{t\} type="button" className="fl-chip" title=\{t\} onClick=\{\(\) => asking\.on\(t\)\}>\s*\{windowName\(t\)\}/);
+  it("the place picker (a popup with a search) shows names, never raw titles", () => {
+    expect(sky).toContain("<PlacePicker");
+    expect(code("components/flights/PlacePicker.tsx")).toContain("label: windowName(s.title)");
   });
 });
 

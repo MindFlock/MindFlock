@@ -250,6 +250,7 @@ import { SkyShortcuts } from "./SkyShortcuts";
 import { TakeoffDialog } from "./TakeoffDialog";
 import { TourButton } from "../onboarding/TourButton";
 import { QuickAdd } from "./QuickAdd";
+import { PlacePicker } from "./PlacePicker";
 import { TOUR_REVEAL } from "../onboarding/CoachTour";
 import { revealCamera } from "../../lib/skyReveal";
 import { useAutoTour } from "../onboarding/useAutoTour";
@@ -2155,50 +2156,23 @@ export function SkyView() {
     </div>
   );
 
-  // Which line: a grounded line's stops (⋯ Fly on a session…) looking for
-  // their session. A palette click never asks: it places.
-  const asking = attachPick ? { word: "Run", name: groundedName(attachPick), on: (t: string) => onAttach(attachPick, t) } : null;
   // A grounded flight flies on a session with no flight in the air.
   const pickable = attachPick ? titles.filter((t) => !liveFlightOf(t)) : titles;
-  const pick = asking && (
-    <div className="sky-flypick" role="group" aria-label={asking.word + " " + asking.name + " on which line?"}>
-      <span className="muted">
-        {asking.word} {asking.name} on
-      </span>
-      {pickable.slice(0, 12).map((t) => (
-        <button key={t} type="button" className="fl-chip" title={t} onClick={() => asking.on(t)}>
-          {windowName(t)}
-        </button>
-      ))}
-      {attachPick && (
-        // The default session: the default place, made the first time.
-        <button type="button" className="fl-chip" title="Run them in the default session" onClick={() => asking.on(DEFAULT_SESSION)}>
-          Default session
-        </button>
-      )}
-      {attachPick && (
-        // Or a new session for these stops (the new-session block, made for them).
-        <button
-          type="button"
-          className="fl-chip"
-          title="Start a new session that runs these stops"
-          onClick={() => {
-            const f = attachPick;
-            setAttachPick(null);
-            newForGrounded(groundedKey(f.id));
-          }}
-        >
-          New session…
-        </button>
-      )}
-      <button
-        type="button"
-        className="linklike"
-        onClick={() => setAttachPick(null)}
-      >
-        Cancel
-      </button>
-    </div>
+  // Where a stops-only chain runs: a popup with a search (PlacePicker) — the
+  // default session, a session without a flight, or a folder (a new session).
+  const pick = attachPick && (
+    <PlacePicker
+      name={groundedName(attachPick)}
+      sessions={pickable.map((t) => ({ title: t, folder: String(rows.find((r) => r.title === t)?.folder || "") }))}
+      onClose={() => setAttachPick(null)}
+      onPick={(place) => {
+        const f = attachPick;
+        setAttachPick(null);
+        if (place.kind === "default") onAttach(f, DEFAULT_SESSION);
+        else if (place.kind === "session") onAttach(f, place.title);
+        else void attachGrounded(f.id, { title: "", repo_path: place.path }).then((x) => x && toast("Running “" + groundedName(f) + "” in a new session"));
+      }}
+    />
   );
 
   const drawer = (

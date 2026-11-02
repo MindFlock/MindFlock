@@ -93858,13 +93858,13 @@ function prNeedsGithubReason(fallbackHint) {
 function advancedSummary(parts) {
 	return parts.filter(([, shown]) => shown).map(([name]) => name).join(", ");
 }
-function looksLikePath(text) {
+function looksLikePath$1(text) {
 	const t = text.trim();
 	return t.startsWith("/") || t.startsWith("~");
 }
 function isNameQuery(text) {
 	const t = text.trim();
-	return !!t && !looksLikePath(t);
+	return !!t && !looksLikePath$1(t);
 }
 function homeRelative(path, home) {
 	if (!home || !path.startsWith(home)) return path;
@@ -94890,7 +94890,7 @@ function PathField({ value, onChange, onPicked, device = "", pickerTitle, browse
 function useFolderLookups({ open, repoPath, dapi, setFolderCheck, setSearch, setSearchSel, searchListRef, searchSel, search, searchOpen }) {
 	(0, import_react.useEffect)(() => {
 		const asked = repoPath.trim();
-		if (!open || !asked || !looksLikePath(asked)) {
+		if (!open || !asked || !looksLikePath$1(asked)) {
 			setFolderCheck(null);
 			return;
 		}
@@ -94921,7 +94921,7 @@ function useFolderLookups({ open, repoPath, dapi, setFolderCheck, setSearch, set
 	]);
 	(0, import_react.useEffect)(() => {
 		const asked = repoPath.trim();
-		if (!open || looksLikePath(asked) || asked.length < SEARCH_MIN_CHARS) {
+		if (!open || looksLikePath$1(asked) || asked.length < SEARCH_MIN_CHARS) {
 			setSearch(null);
 			return;
 		}
@@ -95429,7 +95429,7 @@ function useBaseBranches({ open, page, repoPath, dapi, setBaseBranch, setBranche
 		if (!open || page !== 2) return;
 		const path = repoPath.trim();
 		setBaseBranch("");
-		if (!path || !looksLikePath(path)) {
+		if (!path || !looksLikePath$1(path)) {
 			setBranches(null);
 			return;
 		}
@@ -136444,6 +136444,188 @@ function QuickAdd(p) {
 	});
 }
 //#endregion
+//#region src/components/flights/PlacePicker.tsx
+var homeShort = (p, home) => home && p.startsWith(home) ? "~" + p.slice(home.length) : p;
+var looksLikePath = (q) => /^(~|\/|\.{1,2}\/)/.test(q.trim());
+function placeRows(q, defaultFolder, sessions, folders, home = "") {
+	const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+	const hit = (s) => terms.every((t) => s.toLowerCase().includes(t));
+	const rows = [];
+	if (!terms.length || hit("default session " + defaultFolder)) rows.push({
+		key: "default",
+		label: "Default session",
+		hint: defaultFolder,
+		place: { kind: "default" },
+		section: "Default"
+	});
+	for (const s of sessions) if (!terms.length || hit(s.title + " " + windowName(s.title) + " " + s.folder)) rows.push({
+		key: "s:" + s.title,
+		label: windowName(s.title),
+		hint: homeShort(s.folder, home),
+		place: {
+			kind: "session",
+			title: s.title
+		},
+		section: "Sessions"
+	});
+	const typed = q.trim();
+	if (looksLikePath(typed)) rows.push({
+		key: "p:" + typed,
+		label: "New session in " + typed,
+		hint: "a typed folder",
+		place: {
+			kind: "folder",
+			path: typed
+		},
+		section: "Folders"
+	});
+	for (const f of folders) if (!terms.length || looksLikePath(typed) || hit(f.name + " " + f.path)) rows.push({
+		key: "f:" + f.path,
+		label: "New session in " + f.name,
+		hint: homeShort(f.path, home),
+		place: {
+			kind: "folder",
+			path: f.path
+		},
+		section: "Folders"
+	});
+	return rows;
+}
+function PlacePicker(p) {
+	const [q, setQ] = (0, import_react.useState)("");
+	const [at, setAt] = (0, import_react.useState)(0);
+	const [defaultFolder, setDefaultFolder] = (0, import_react.useState)("~/.mindflock/default");
+	const [recent, setRecent] = (0, import_react.useState)([]);
+	const [found, setFound] = (0, import_react.useState)(null);
+	(0, import_react.useEffect)(() => {
+		api("/api/flights/default-place").then((d) => d?.folder && setDefaultFolder(d.folder)).catch(() => {});
+		api("/api/repos/suggest").then((d) => setRecent(d?.suggestions || [])).catch(() => {});
+	}, []);
+	(0, import_react.useEffect)(() => {
+		const asked = q.trim();
+		if (asked.length < 2 || looksLikePath(asked)) return setFound(null);
+		let live = true;
+		const t = window.setTimeout(() => {
+			api("/api/repos/search?q=" + encodeURIComponent(asked)).then((d) => live && setFound({
+				q: asked,
+				folders: d?.matches || [],
+				home: d?.home || ""
+			})).catch(() => live && setFound(null));
+		}, 180);
+		return () => {
+			live = false;
+			window.clearTimeout(t);
+		};
+	}, [q]);
+	const folders = (0, import_react.useMemo)(() => {
+		const out = [];
+		const seen = /* @__PURE__ */ new Set();
+		for (const f of [...found && found.q === q.trim() ? found.folders : [], ...recent]) if (!seen.has(f.path)) seen.add(f.path) && out.push(f);
+		return out;
+	}, [
+		found,
+		recent,
+		q
+	]);
+	const rows = (0, import_react.useMemo)(() => placeRows(q, defaultFolder, p.sessions, folders.slice(0, 30), found?.home || ""), [
+		q,
+		defaultFolder,
+		p.sessions,
+		folders,
+		found
+	]);
+	const sel = Math.min(at, Math.max(0, rows.length - 1));
+	const onKey = (e) => {
+		if (e.key === "ArrowDown") {
+			e.preventDefault();
+			setAt((i) => Math.min(rows.length - 1, i + 1));
+		} else if (e.key === "ArrowUp") {
+			e.preventDefault();
+			setAt((i) => Math.max(0, i - 1));
+		} else if (e.key === "Enter") {
+			e.preventDefault();
+			if (rows[sel]) p.onPick(rows[sel].place);
+		} else if (e.key === "Escape") {
+			e.preventDefault();
+			e.stopPropagation();
+			p.onClose();
+		}
+	};
+	let last = "";
+	return (0, import_react_dom.createPortal)(/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+		className: "sky-place-scrim",
+		onPointerDown: (e) => e.target === e.currentTarget && p.onClose(),
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+			className: "sky-place",
+			role: "dialog",
+			"aria-label": "Where should “" + p.name + "” run?",
+			children: [
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "sky-place-head",
+					children: [
+						"Run ",
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("b", { children: p.name }),
+						" in…"
+					]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+					className: "sky-quick-field",
+					autoFocus: true,
+					placeholder: "Search a session or a folder, or type a path",
+					"aria-label": "Search places",
+					value: q,
+					onChange: (e) => {
+						setQ(e.target.value);
+						setAt(0);
+					},
+					onKeyDown: onKey
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+					className: "sky-place-list",
+					role: "listbox",
+					"aria-label": "Places",
+					children: [rows.map((r, i) => {
+						return [r.section !== last ? (last = r.section, /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+							className: "sky-place-section",
+							children: r.section
+						}, "h:" + r.section)) : null, /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("button", {
+							type: "button",
+							role: "option",
+							"aria-selected": i === sel,
+							className: "fl-stopmenu-item sky-place-row" + (i === sel ? " is-sel" : ""),
+							onMouseEnter: () => setAt(i),
+							onClick: () => p.onPick(r.place),
+							children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-quick-label",
+								children: r.label
+							}), r.hint && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+								className: "sky-quick-hint",
+								children: r.hint
+							})]
+						}, r.key)];
+					}), !rows.length && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
+						className: "sky-quick-none",
+						children: [
+							"Nothing matches “",
+							q,
+							"” — type a path (~/… or /…) for a new session there"
+						]
+					})]
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
+					className: "sky-place-foot",
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+						type: "button",
+						className: "linklike",
+						onClick: p.onClose,
+						children: "Cancel"
+					})
+				})
+			]
+		})
+	}), document.body);
+}
+//#endregion
 //#region src/lib/skyReveal.ts
 function revealCamera(c, r, vw, vh, margin = .8) {
 	const k = Math.min(1, r.w > 0 ? vw * margin / r.w : 1, r.h > 0 ? vh * margin / r.h : 1);
@@ -138444,58 +138626,24 @@ function SkyView() {
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)(TourButton, { tour: "sky" })
 		]
 	});
-	const asking = attachPick ? {
-		word: "Run",
-		name: groundedName(attachPick),
-		on: (t) => onAttach(attachPick, t)
-	} : null;
 	const pickable = attachPick ? titles.filter((t) => !liveFlightOf(t)) : titles;
-	const pick = asking && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
-		className: "sky-flypick",
-		role: "group",
-		"aria-label": asking.word + " " + asking.name + " on which line?",
-		children: [
-			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
-				className: "muted",
-				children: [
-					asking.word,
-					" ",
-					asking.name,
-					" on"
-				]
-			}),
-			pickable.slice(0, 12).map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "fl-chip",
-				title: t,
-				onClick: () => asking.on(t),
-				children: windowName(t)
-			}, t)),
-			attachPick && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "fl-chip",
-				title: "Run them in the default session",
-				onClick: () => asking.on(DEFAULT_SESSION),
-				children: "Default session"
-			}),
-			attachPick && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "fl-chip",
-				title: "Start a new session that runs these stops",
-				onClick: () => {
-					const f = attachPick;
-					setAttachPick(null);
-					newForGrounded(groundedKey(f.id));
-				},
-				children: "New session…"
-			}),
-			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-				type: "button",
-				className: "linklike",
-				onClick: () => setAttachPick(null),
-				children: "Cancel"
-			})
-		]
+	const pick = attachPick && /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PlacePicker, {
+		name: groundedName(attachPick),
+		sessions: pickable.map((t) => ({
+			title: t,
+			folder: String(rows.find((r) => r.title === t)?.folder || "")
+		})),
+		onClose: () => setAttachPick(null),
+		onPick: (place) => {
+			const f = attachPick;
+			setAttachPick(null);
+			if (place.kind === "default") onAttach(f, DEFAULT_SESSION);
+			else if (place.kind === "session") onAttach(f, place.title);
+			else attachGrounded(f.id, {
+				title: "",
+				repo_path: place.path
+			}).then((x) => x && toast("Running “" + groundedName(f) + "” in a new session"));
+		}
 	});
 	const drawer = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyDrawer, {
 		open: drawerOpen,

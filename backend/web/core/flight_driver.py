@@ -920,9 +920,54 @@ def _session_payload(plan_session: dict, repo_path: str, prompt: str) -> dict:
 DEFAULT_SESSION = "@default"
 
 
+#: MindFlock's own place for the default session (the owner: "a folder like
+#: mindflock pastes, created for this specific purpose"), a git repo so a
+#: chain's commit / push stops work there too.
+DEFAULT_PLACE = "~/.mindflock/default"
+
+
+def _ensure_default_place() -> str:
+    """``~/.mindflock/default``, made (``git init`` + one empty commit) the
+    first time; never touched after."""
+    import os
+    import subprocess
+
+    folder = os.path.expanduser(DEFAULT_PLACE)
+    os.makedirs(folder, exist_ok=True)
+    if not os.path.isdir(os.path.join(folder, ".git")):
+        readme = os.path.join(folder, "README.md")
+        if not os.path.exists(readme):
+            with open(readme, "w", encoding="utf-8") as fh:
+                fh.write(
+                    "# MindFlock's default place\n\n"
+                    "Chains run here when no session is picked (the default session).\n"
+                )
+        git = [
+            "git",
+            "-c",
+            "user.name=MindFlock",
+            "-c",
+            "user.email=mindflock@localhost",
+        ]
+        try:
+            subprocess.run(["git", "init", "-q", folder], check=True, timeout=30)
+            subprocess.run(
+                git + ["-C", folder, "add", "README.md"], check=True, timeout=30
+            )
+            subprocess.run(
+                git + ["-C", folder, "commit", "-q", "-m", "MindFlock default place"],
+                check=True,
+                timeout=30,
+            )
+        except Exception:  # noqa: BLE001
+            pass  # a plain folder still works for agents
+    return folder
+
+
 def _default_folder() -> str:
     """Where the default session lives: the ``general.default_folder``
-    setting, else the newest local session's folder, else the home dir."""
+    setting when it names a folder, else MindFlock's own place
+    (:data:`DEFAULT_PLACE`, made on first use)."""
     import os
 
     from backend.config.settings import load_settings
@@ -933,21 +978,7 @@ def _default_folder() -> str:
         folder = ""
     if folder and os.path.isdir(os.path.expanduser(folder)):
         return os.path.expanduser(folder)
-    best, when = "", -1.0
-    for inst in list(_server().ENGINE.instances.values()):
-        path = str(getattr(inst, "Path", "") or "")
-        started = getattr(inst, "CreatedAt", None) or getattr(inst, "Created", None)
-        try:
-            t = (
-                float(started.timestamp())
-                if hasattr(started, "timestamp")
-                else float(started or 0)
-            )
-        except Exception:  # noqa: BLE001
-            t = 0.0
-        if path and os.path.isdir(path) and t >= when:
-            best, when = path, t
-    return best or os.path.expanduser("~")
+    return _ensure_default_place()
 
 
 async def ensure_default_session() -> str:

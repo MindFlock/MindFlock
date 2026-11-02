@@ -235,6 +235,29 @@ async def flights_start(payload: Optional[dict] = None) -> JSONResponse:
     return JSONResponse({"flight": flight, "absorbed": absorbed}, status_code=202)
 
 
+@router.get("/api/flights/default-place")
+def flights_default_place() -> JSONResponse:
+    """Where the default session lives (``{folder}``, ``~`` folded) and its
+    title once made (``{session}``, "" before) — for the place picker."""
+    import os
+
+    from backend.config.settings import load_settings
+
+    try:
+        g = load_settings().general
+        folder, session = (
+            str(g.default_folder or "").strip(),
+            str(g.default_session or "").strip(),
+        )
+    except Exception:  # noqa: BLE001
+        folder, session = "", ""
+    shown = folder or _driver.DEFAULT_PLACE
+    home = os.path.expanduser("~")
+    if shown.startswith(home):
+        shown = "~" + shown[len(home) :]
+    return JSONResponse({"folder": shown, "session": session})
+
+
 @router.get("/api/flights/{flight_id}")
 def flights_get(flight_id: str) -> JSONResponse:
     f = _flights.get(flight_id)

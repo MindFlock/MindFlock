@@ -3,7 +3,6 @@ chain run with no session picked runs in the default one — made the first
 time (in-place, "default", in the default folder) and remembered."""
 
 import asyncio
-import datetime as dt
 from types import SimpleNamespace
 
 import pytest
@@ -54,20 +53,21 @@ def test_a_missing_one_is_made_in_place_in_the_default_folder_and_remembered(
     assert load_settings().general.default_session == "default"
 
 
-def test_the_default_folder_falls_back_to_the_newest_session_then_home(
+def test_the_default_folder_is_mindflocks_own_place_made_as_a_git_repo(
     monkeypatch, tmp_path
 ):
-    a, b = tmp_path / "a", tmp_path / "b"
-    a.mkdir()
-    b.mkdir()
-    old = SimpleNamespace(Path=str(a), CreatedAt=dt.datetime(2026, 1, 1))
-    new = SimpleNamespace(Path=str(b), CreatedAt=dt.datetime(2026, 6, 1))
-    _srv(monkeypatch, {"old": old, "new": new})
-    assert D._default_folder() == str(b)
-    _srv(monkeypatch, {})
+    monkeypatch.setenv("HOME", str(tmp_path))
+    folder = D._default_folder()
+    assert folder == str(tmp_path / ".mindflock" / "default")
     import os
 
-    assert D._default_folder() == os.path.expanduser("~")
+    assert os.path.isdir(os.path.join(folder, ".git"))
+    assert os.path.exists(os.path.join(folder, "README.md"))
+    # A set default_folder that exists wins.
+    other = tmp_path / "proj"
+    other.mkdir()
+    update_settings(general={"default_folder": str(other)})
+    assert D._default_folder() == str(other)
 
 
 def test_attach_names_it_by_at_default():
