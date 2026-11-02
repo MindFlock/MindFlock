@@ -21,22 +21,27 @@
  * lib/skyIntake.ts `sourceBlocks`; the Fly request is the Board's own
  * (`flyRequest`, with the source's saved stop).
  *
- * The stops chip is a button: "Edit the default stops for <source>" — the
- * source's default as a grounded chain on the board that edits it
- * (`openDefaultEditor`; GroundedLine draws it with Save as default). Editing
- * one ticket's line never changes the default; only this does. */
+ * The stops chip ("Stops  built-in ✎", "Stops  Payments stops ✎") is a
+ * button: "Edit the default stops for <source>" — the source's default as a
+ * grounded chain on the board that edits it (`openDefaultEditor`;
+ * GroundedLine draws it with Save as default). While that chain is on the
+ * board (`editorFor`) the chip stays lit and says "editing…". Editing one
+ * ticket's line never changes the default; only this does.
+ *
+ * A block's title is the source without the kind word its badge says
+ * (`SourceBlock.name`), in normal case, wrapping a repo path at its "/". */
 
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { Fragment, useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { api } from "../../api/client";
 import type { Instance } from "../../api/types";
 import { refreshInstances, useFlights, useMindflockStatus, usePanelQuery, useSettingsDoc, useTicketingCatalog } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
 import { windowName } from "../../lib/windowName";
-import { WAITING_KIND_BADGE, WAITING_KIND_HEAD, type Flight, type FlightPlan, type IntakeDefault, type IntakeSourceRef } from "../../lib/flights";
+import { WAITING_KIND_BADGE, type Flight, type FlightPlan, type IntakeDefault, type IntakeSourceRef } from "../../lib/flights";
 import { flyRequest, getIntakeDefault, refreshFlights, startGrounded, type WaitingTarget } from "../../lib/flightsApi";
 import { defaultEditorName, editorFor } from "../../lib/groundedLines";
-import { laneCount, shownWaiting, sourceBlocks, type LanePanels, type LaneWaiting, type SourceBlock } from "../../lib/skyIntake";
+import { laneCount, nameParts, shownWaiting, sourceBlocks, stopsTip, stopsWords, type LanePanels, type LaneWaiting, type SourceBlock } from "../../lib/skyIntake";
 import { useWaiting } from "./useWaiting";
 import "./Flights.css";
 import "./IntakeLane.css";
@@ -169,14 +174,38 @@ function WaitingChip({ w, block, onFly }: { w: LaneWaiting; block: SourceBlock; 
   );
 }
 
-function Block({ block, onFly, open, onEditDefault }: { block: SourceBlock; onFly(title: string): void; open?: boolean; onEditDefault(ref: IntakeSourceRef, label: string): void }) {
+function Block({
+  block,
+  onFly,
+  open,
+  editing,
+  onEditDefault,
+}: {
+  block: SourceBlock;
+  onFly(title: string): void;
+  open?: boolean;
+  /** Its default's editor chain is on the board (lib/groundedLines `editorFor`). */
+  editing?: boolean;
+  onEditDefault(ref: IntakeSourceRef, label: string): void;
+}) {
   const { shown, more } = shownWaiting(block, open ? Infinity : undefined);
+  const parts = nameParts(block.name);
   return (
-    <section className={"sky-lane-block sky-lane-block-" + block.kind} data-lane-source={block.key} aria-label={block.label}>
+    <section
+      className={"sky-lane-block sky-lane-block-" + block.kind + (block.stray ? " sky-lane-block-stray" : "")}
+      data-lane-source={block.key}
+      aria-label={block.label}
+      title={block.stray ? "Not in your settings: items from " + block.id + " are listed all the same" : undefined}
+    >
       <header className="sky-lane-block-head">
         <span className={"fl-kind-badge fl-kind-badge-" + block.kind}>{WAITING_KIND_BADGE[block.kind]}</span>
         <span className="sky-lane-block-name" title={block.label}>
-          {block.label}
+          {parts.map((p, i) => (
+            <Fragment key={i}>
+              {p}
+              {i < parts.length - 1 && <wbr />}
+            </Fragment>
+          ))}
         </span>
         <button
           type="button"
@@ -194,10 +223,17 @@ function Block({ block, onFly, open, onEditDefault }: { block: SourceBlock; onFl
           type="button"
           className="fl-icon-btn sky-lane-flyway-btn"
           aria-label={"Edit the default stops for " + block.label}
-          title={(block.flyway.own ? "This source's saved stop" : "The built-in stops for " + WAITING_KIND_HEAD[block.kind].toLowerCase()) + " — click to edit them on the board"}
+          data-editing={editing ? "" : undefined}
+          title={stopsTip(block, editing)}
           onClick={() => onEditDefault({ kind: block.kind, target: block.id }, block.label)}
         >
-          <span className={"sky-lane-flyway" + (block.flyway.own ? " own" : "")}>{block.flyway.name}</span>
+          <span className={"sky-lane-stops" + (block.flyway.own ? " own" : "") + (editing ? " editing" : "")}>
+            <span className="sky-lane-stops-key">Stops</span>
+            <span className={"sky-lane-flyway" + (block.flyway.own ? " own" : "")}>{stopsWords(block.flyway)}</span>
+            <span className="sky-lane-stops-edit" aria-hidden="true">
+              {editing ? "editing…" : "✎"}
+            </span>
+          </span>
         </button>
       </div>
       {block.waiting.length === 0 ? (
@@ -374,7 +410,9 @@ export function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, 
           </button>
         </p>
       ) : (
-        blocks.map((b) => <Block key={b.key} block={b} onFly={onFly} open={open} onEditDefault={editDefault} />)
+        blocks.map((b) => (
+          <Block key={b.key} block={b} onFly={onFly} open={open} editing={!!editorFor(flights, { kind: b.kind, target: b.id })} onEditDefault={editDefault} />
+        ))
       )}
       {onResize && (
         <span

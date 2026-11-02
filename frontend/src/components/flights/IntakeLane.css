@@ -73,28 +73,44 @@
   border-radius: 8px;
 }
 
+/* The badge and ⋯ sit on the title's first line; a long title wraps to a
+   second (a repo path at its "/", the view's <wbr>) and clamps there, the
+   full label in its tooltip. Normal case: the badge already says the kind. */
 .sky-lane-block-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 7px;
   min-width: 0;
 }
 
 .sky-lane-block-head .fl-kind-badge {
   margin-top: 0;
+  flex: none;
+}
+
+.sky-lane-block-head .sky-lane-more {
+  margin-top: -2px;
 }
 
 .sky-lane-block-name {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  padding-top: 1px;
   font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-weight: 650;
+  line-height: 1.3;
   color: var(--text);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+
+/* A source the settings don't name (items arrived from it all the same): a
+   dashed edge says it is not one of yours; the tooltip says why it's here. */
+.sky-lane-block-stray {
+  border-style: dashed;
 }
 
 .sky-lane-chips {
@@ -104,7 +120,7 @@
 }
 
 .sky-lane-auto,
-.sky-lane-flyway {
+.sky-lane-stops {
   font-size: 12px;
   line-height: 1;
   padding: 4px 7px;
@@ -123,9 +139,11 @@
   background: color-mix(in srgb, var(--green) 10%, transparent);
 }
 
-/* The stops chip sits in a quiet button (edit this source's default stops
-   on the board): the button is bare, the chip keeps its look and lights its
-   edge on hover. */
+/* The stops chip: "Stops  built-in ✎" / "Stops  Payments stops ✎" — the
+   source's default stops, and a button that edits them on the board. The
+   button is bare; the pill inside is the chip. It reads as pressable at rest
+   (the muted key, the pencil) and lights its edge on hover / focus. While the
+   source's editor chain is on the board it stays lit and says "editing…". */
 .sky-lane-chips .sky-lane-flyway-btn {
   display: inline-flex;
   min-width: 0;
@@ -133,25 +151,70 @@
   padding: 0;
   border: none;
   border-radius: 999px;
+  cursor: pointer;
 }
 
 .sky-lane-chips .sky-lane-flyway-btn:hover:not(:disabled) {
   background: transparent;
 }
 
-.sky-lane-flyway-btn .sky-lane-flyway {
-  cursor: pointer;
-}
-
-.sky-lane-flyway-btn:hover .sky-lane-flyway {
+.sky-lane-stops {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
   color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: var(--bg);
 }
 
-.sky-lane-flyway.own {
+.sky-lane-stops-key {
+  flex: none;
+  color: var(--fl-ink-muted, var(--muted));
+}
+
+.sky-lane-flyway {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.sky-lane-stops-edit {
+  flex: none;
+  color: var(--fl-ink-muted, var(--muted));
+  opacity: 0.6;
+}
+
+.sky-lane-flyway-btn:hover .sky-lane-stops,
+.sky-lane-flyway-btn:focus-visible .sky-lane-stops {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  background: rgba(var(--accent-rgb), 0.06);
+}
+
+.sky-lane-flyway-btn:hover .sky-lane-stops-edit,
+.sky-lane-flyway-btn:focus-visible .sky-lane-stops-edit {
   color: var(--accent);
-  border-color: rgba(var(--accent-rgb), 0.45);
-  background: rgba(var(--accent-rgb), 0.1);
+  opacity: 1;
+}
+
+.sky-lane-chips .sky-lane-flyway-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sky-lane-stops.own .sky-lane-flyway {
+  color: var(--accent);
+}
+
+.sky-lane-stops.editing {
+  border-color: rgba(var(--accent-rgb), 0.6);
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+.sky-lane-stops.editing .sky-lane-stops-edit {
+  color: var(--accent);
+  opacity: 1;
+  font-style: italic;
 }
 
 .sky-lane-empty {
@@ -332,8 +395,25 @@
   zoom: clamp(1, calc(0.6 / var(--sky-z, 1)), 1.4);
 }
 
-/* The name gets the block's width: its badge, menu and items wait for mid. */
-.sky-intake[data-lod="far"] :is(.sky-lane-block-head .fl-kind-badge, .sky-lane-block-head button, .sky-lane-block-head details, .sky-lane-chips, .sky-lane-items, .sky-lane-stubs, .sky-lane-error, .sky-lane-n-more) {
+/* The kind badge stays (the name no longer says it: "quickpay/quickpay" is
+   a PR repo or an issue repo by its badge alone), grown with the words, on
+   its own row so the name keeps the block's width. */
+.sky-intake[data-lod="far"] .sky-lane-block-head {
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.sky-intake[data-lod="far"] .sky-lane-block-head .fl-kind-badge {
+  zoom: var(--sky-far);
+}
+
+.sky-intake[data-lod="far"] .sky-lane-block-name {
+  flex-basis: 100%;
+}
+
+/* The name gets the rest of the block's width: its menu and items wait for
+   mid. */
+.sky-intake[data-lod="far"] :is(.sky-lane-block-head button, .sky-lane-block-head details, .sky-lane-chips, .sky-lane-items, .sky-lane-stubs, .sky-lane-error, .sky-lane-n-more) {
   display: none;
 }
 
@@ -347,7 +427,7 @@
   font-size: calc(13px * var(--sky-mid));
 }
 
-.sky-intake[data-lod="mid"] :is(.sky-lane-auto, .sky-lane-flyway, .sky-lane-stub, .sky-lane-n-more) {
+.sky-intake[data-lod="mid"] :is(.sky-lane-auto, .sky-lane-stops, .sky-lane-stub, .sky-lane-n-more) {
   font-size: calc(12px * var(--sky-mid));
 }
 

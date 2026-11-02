@@ -84,12 +84,15 @@ describe("the intake lane", () => {
     expect(html).toContain('class="fl-kind-badge fl-kind-badge-tickets">Ticket<');
     expect(html).toContain('class="fl-kind-badge fl-kind-badge-prs">PR<');
     expect(html).toContain('class="fl-kind-badge fl-kind-badge-issues">Issue<');
-    expect(html).toContain(">Shortcut · quickpay<");
-    expect(html).toContain(">PRs · acme/app<");
+    // The title drops the kind its badge says; a repo path may break at "/".
+    expect(html).toContain('class="sky-lane-block-name" title="Shortcut · quickpay">Shortcut · quickpay<');
+    expect(html).toContain('class="sky-lane-block-name" title="PRs · acme/app">acme/<wbr/>app<');
     expect(html).toContain('class="sky-lane-auto on">auto-start on · every 20 s<');
     expect(html).toContain('class="sky-lane-auto">manual<');
     expect(html).toMatch(/class="sky-lane-flyway own"[^>]*>Mine</);
-    expect(html).toMatch(/class="sky-lane-flyway"[^>]*>Review a PR</);
+    // A built-in default says so, not the plan's name (that echoed the badge).
+    expect(html).toMatch(/class="sky-lane-flyway"[^>]*>built-in</);
+    expect(html).not.toMatch(/class="sky-lane-flyway"[^>]*>Review a PR</);
     expect(html).not.toContain("<select");
   });
 

@@ -71,6 +71,10 @@ describe("sourceBlocks: one block per source, in pipeline order", () => {
     ]);
   });
 
+  it("names each block without the kind its badge says (the label keeps it for tooltips)", () => {
+    expect(blocks.map((b) => b.name)).toEqual(["Shortcut · quickpay", "Jira", "acme/app", "acme/site", "acme/app"]);
+  });
+
   it("counts the eligible items without a session, oldest first, into their own block", () => {
     const sc = blocks[0];
     expect(sc.waiting.map((w) => w.item.reference)).toEqual(["sc-2", "sc-1"]);
@@ -103,6 +107,19 @@ describe("sourceBlocks: one block per source, in pipeline order", () => {
       ["issues:acme/app", true],
     ]);
     expect(b[0].waiting).toHaveLength(2);
+    // Its name is the repo alone, as a configured block's: a stray issues
+    // block for another repo reads as that repo, not as a second copy.
+    expect(b.map((x) => x.name)).toEqual(["sc", "acme/app", "acme/app"]);
+  });
+
+  it("an issue repo settings names is one block, however its items spell it", () => {
+    const b = sourceBlocks(
+      { github: { issue_repos: ["Acme/App", "acme/app"] } },
+      waiting({ issues: { issues: [{ repo: "acme/app", number: 4, title: "Crash", eligible: true }] } }),
+      [],
+      { plans: PLANS }
+    );
+    expect(b.map((x) => [x.key, x.waiting.length, !!x.stray])).toEqual([["issues:Acme/App", 1, false]]);
   });
 });
 
