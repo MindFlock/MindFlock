@@ -26,15 +26,25 @@
  * (docs/flights.md "As built: round 12 sky"): a stop or group box leaves
  * through the canvas's Remove, anything else (the head, the bar, the line)
  * removes the line. `merging`: dragged over a session's line, which
- * takes its stops on release (docs/flights.md "As built: round 13 sky"). */
+ * takes its stops on release (docs/flights.md "As built: round 13 sky").
+ *
+ * A chain with `flight.edits_default` EDITS an intake source's default stops
+ * (the intake lane's stops chip made it): its bar says "Default stops ·
+ * <source>" with the hint "New items from this source fly these", it has no
+ * ▶ (lib/groundedLines `chainRunFor`) and no Run on a session…, and it is not
+ * renamed. Its bar's **Save as default** writes its steps as the source's own
+ * default (`setIntakeDefault`), **Reset to default** (only while the source
+ * has its own) puts the source back on our built-in stops — each takes the
+ * editor off the board with an Undo toast — and **Discard** (also ⋯, Delete)
+ * just takes it off. Its stops edit as any grounded chain's. */
 
 import { optimisticDelete } from "../../lib/flightOptimism";
 import { useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { Flight, FlightPlan, StepKindDef } from "../../lib/flights";
 import { birdPerch, type DiagramNode } from "../../lib/flightDiagram";
 import { chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
-import { attachGrounded, controlFlight, DEFAULT_SESSION, deleteFlight, renameFlight, savePlan, startGrounded } from "../../lib/flightsApi";
-import { isFreeRun, isRemoveKey, planToSave, sourcePlanId } from "../../lib/groundedLines";
+import { attachGrounded, controlFlight, DEFAULT_SESSION, deleteFlight, getIntakeDefault, renameFlight, savePlan, setIntakeDefault, startGrounded } from "../../lib/flightsApi";
+import { chainRunFor, editorLabel, isDefaultEditor, isFreeRun, isRemoveKey, planToSave, sourcePlanId } from "../../lib/groundedLines";
 import { lodFor, nearLines, type SkyLineLayout } from "../../lib/skyLayout";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
@@ -122,8 +132,24 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef(p.onMeasure);
   measureRef.current = p.onMeasure;
-  const name = groundedName(flight);
+  // An intake source's default stops, edited here (the lane's stops chip):
+  // never run — Save as default, Reset to default or Discard on its bar.
+  const ed = isDefaultEditor(flight) ? flight.edits_default! : null;
+  const edLabel = ed ? editorLabel(flight) : "";
+  const name = ed ? "Default stops · " + edLabel : groundedName(flight);
   const lod = lodFor(p.zoom || 1);
+  // Whether the source has its own default now (Reset to default only then).
+  const [ownDefault, setOwnDefault] = useState(false);
+  const edKind = ed?.kind;
+  const edTarget = ed?.target;
+  useEffect(() => {
+    if (!edKind || !edTarget) return;
+    let live = true;
+    void getIntakeDefault({ kind: edKind, target: edTarget }).then((d) => live && setOwnDefault(!!d?.own));
+    return () => {
+      live = false;
+    };
+  }, [edKind, edTarget]);
 
   useEffect(() => {
     const el = rootRef.current;
@@ -153,8 +179,44 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
     }
   };
 
+  /** Save as default / Reset to default: write the source's default, take the
+   * editor off the board, and say so with an Undo that puts back the saved
+   * stop the source had (`previous_plan_id`). */
+  const writeDefault = async (reset: boolean) => {
+    if (!ed || busy) return;
+    setBusy(true);
+    try {
+      const ref = { kind: ed.kind, target: ed.target };
+      const res = await setIntakeDefault(reset ? { ...ref, plan_id: "" } : { ...ref, steps: flight.steps });
+      if (!res) return;
+      await optimisticDelete(flight.id, () => deleteFlight(flight.id));
+      const label = res.label || edLabel;
+      const prev = res.previous_plan_id || "";
+      const entry = pushUndo({
+        label: (reset ? "Reset the default stops for " : "Save the default stops for ") + label,
+        undo: () => setIntakeDefault({ ...ref, plan_id: prev }),
+      });
+      toast(reset ? label + " is back on the built-in stops" : "New items from " + label + " fly these stops", {
+        action: undoAction(entry, "Undo: " + label + " back on the stops it had"),
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+  /** Discard: the editor leaves the board; the default stays as it was. */
+  const discard = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await optimisticDelete(flight.id, () => deleteFlight(flight.id));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // Remove: at once, never asked — a grounded line has nothing in the air.
   const remove = async () => {
+    if (ed) return discard();
     if (busy) return;
     setBusy(true);
     try {
@@ -172,7 +234,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   const updates = !!sourcePlanId(flight.steps, p.plans);
   const items: MenuItem[] = [
     { key: "add", label: "Add a stop…", title: "One stop, or a saved stop, at the end of the line", onSelect: () => line.togglePalette(true) },
-    { key: "fly", label: "Run on a session…", title: "Pick a session (or a new one): these stops run in it", onSelect: p.onFlyOn },
+    ...(ed ? [] : [{ key: "fly", label: "Run on a session…", title: "Pick a session (or a new one): these stops run in it", onSelect: p.onFlyOn }]),
     {
       key: "save",
       label: "Save to the shelf",
@@ -180,13 +242,16 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
       className: "skl-mi-group",
       onSelect: () => void save(),
     },
-    { key: "remove", label: "Remove", danger: true, className: "skl-mi-group", title: "Take these stops off the board (Ctrl+Z puts them back)", onSelect: () => void remove() },
+    ed
+      ? { key: "remove", label: "Discard", danger: true, className: "skl-mi-group", title: "Take this editor off the board — the default stops stay as they are", onSelect: () => void discard() }
+      : { key: "remove", label: "Remove", danger: true, className: "skl-mi-group", title: "Take these stops off the board (Ctrl+Z puts them back)", onSelect: () => void remove() },
   ];
 
   // The edit ends once: Enter or Esc hands the focus back to the line, and
   // the input's blur that follows must not save it again.
   const named = useRef(false);
   const startRename = () => {
+    if (ed) return;
     named.current = false;
     setNaming(name);
   };
@@ -266,19 +331,17 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   // A chain with no session runs on its own in a folder — nothing is started
   // for it (only a stop that needs a session gets one, made in that folder).
   const running = isFreeRun(flight);
-  const run =
-    flight.steps.length > 0 && head.kind !== "trigger"
-      ? {
-          running,
-          label: running ? "Stop this run" : "Run these stops (⋯ Run on a session… to pick where)",
-          onRun: () =>
-            void attachGrounded(flight.id, { title: DEFAULT_SESSION }).then((f) => {
-              if (!f) return;
-              toast(f.session ? "Running “" + name + "” in a new session, " + f.session : "Running “" + name + "”");
-            }),
-          onStop: () => void controlFlight(flight.id, "cancel"),
-        }
-      : null;
+  // No ▶ on a default-stops editor (it never runs), nor on a chain another starts.
+  const run = chainRunFor(flight, head.kind, () => ({
+    running,
+    label: running ? "Stop this run" : "Run these stops (⋯ Run on a session… to pick where)",
+    onRun: () =>
+      void attachGrounded(flight.id, { title: DEFAULT_SESSION }).then((f) => {
+        if (!f) return;
+        toast(f.session ? "Running “" + name + "” in a new session, " + f.session : "Running “" + name + "”");
+      }),
+    onStop: () => void controlFlight(flight.id, "cancel"),
+  }));
 
   return (
     <div
@@ -290,15 +353,17 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
         (p.selected ? " is-selected" : "") +
         (p.sessionOver ? " is-session-over" : "") +
         (p.merging ? " is-merging" : "") +
-        (line.editing ? " is-editing" : "")
+        (line.editing ? " is-editing" : "") +
+        (ed ? " is-default-editor" : "")
       }
       data-flight={flight.id}
+      data-edits-default={ed ? ed.kind + ":" + ed.target : undefined}
       data-lod={lod}
       style={{ "--sky-z": p.zoom || 1, "--sky-lines": nearLines(p.zoom || 1) } as React.CSSProperties}
       role="group"
       tabIndex={0}
       data-sky-box
-      aria-label={name + (head.kind === "trigger" ? " — " + head.title : " — stops with no session yet")}
+      aria-label={name + (ed ? " — new items from this source fly these" : head.kind === "trigger" ? " — " + head.title : " — stops with no session yet")}
       onKeyDown={onKey}
       onPointerDownCapture={() => {
         if (!p.focused) p.onFocus();
@@ -313,7 +378,11 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
         onPointerDown={onBarDown}
       >
         <Bird size={14} />
-        {naming === null ? (
+        {ed ? (
+          <span className="skl-name skl-default-name" title={name}>
+            {name}
+          </span>
+        ) : naming === null ? (
           <span className="skl-name skl-name-edit" title="Click to rename (F2)" onClick={onNameClick}>
             {name}
           </span>
@@ -356,6 +425,22 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
         {!running && flight.last_run && (
           <span className={"fl-box-chip skl-chip " + (flight.last_run.state === "done" ? "tone-ready" : "tone-muted")} title={flight.last_run.reason || undefined}>
             {flight.last_run.state === "done" ? "Last run done" : "Last run stopped"}
+          </span>
+        )}
+        {ed && <span className="skl-default-hint muted">New items from this source fly these</span>}
+        {ed && (
+          <span className="skl-default-acts" data-no-drag>
+            <button type="button" className="btn-primary fl-btn skl-default-save" disabled={busy || !flight.steps.length} title={"New items from " + edLabel + " fly these stops"} onClick={() => void writeDefault(false)}>
+              Save as default
+            </button>
+            {ownDefault && (
+              <button type="button" className="test-btn fl-btn skl-default-reset" disabled={busy} title={"Put " + edLabel + " back on our built-in stops"} onClick={() => void writeDefault(true)}>
+                Reset to default
+              </button>
+            )}
+            <button type="button" className="test-btn fl-btn skl-default-discard" disabled={busy} title="Take this editor off the board — the default stops stay as they are" onClick={() => void discard()}>
+              Discard
+            </button>
           </span>
         )}
         <span className="skl-menu" data-no-drag>

@@ -19,17 +19,23 @@
  *
  * The grouping, counts, default saved stop and started-session matching are
  * lib/skyIntake.ts `sourceBlocks`; the Fly request is the Board's own
- * (`flyRequest`, with the source's saved stop). */
+ * (`flyRequest`, with the source's saved stop).
+ *
+ * The stops chip is a button: "Edit the default stops for <source>" — the
+ * source's default as a grounded chain on the board that edits it
+ * (`openDefaultEditor`; GroundedLine draws it with Save as default). Editing
+ * one ticket's line never changes the default; only this does. */
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { api } from "../../api/client";
 import type { Instance } from "../../api/types";
-import { refreshInstances, useMindflockStatus, usePanelQuery, useSettingsDoc, useTicketingCatalog } from "../../state/queries";
+import { refreshInstances, useFlights, useMindflockStatus, usePanelQuery, useSettingsDoc, useTicketingCatalog } from "../../state/queries";
 import { useUi } from "../../state/store";
 import { errMsg } from "../../lib/format";
 import { windowName } from "../../lib/windowName";
-import { WAITING_KIND_BADGE, WAITING_KIND_HEAD, type FlightPlan } from "../../lib/flights";
-import { flyRequest, refreshFlights, type WaitingTarget } from "../../lib/flightsApi";
+import { WAITING_KIND_BADGE, WAITING_KIND_HEAD, type Flight, type FlightPlan, type IntakeDefault, type IntakeSourceRef } from "../../lib/flights";
+import { flyRequest, getIntakeDefault, refreshFlights, startGrounded, type WaitingTarget } from "../../lib/flightsApi";
+import { defaultEditorName, editorFor } from "../../lib/groundedLines";
 import { laneCount, shownWaiting, sourceBlocks, type LanePanels, type LaneWaiting, type SourceBlock } from "../../lib/skyIntake";
 import { useWaiting } from "./useWaiting";
 import "./Flights.css";
@@ -56,6 +62,10 @@ export interface IntakeLaneProps {
   draggable?: boolean;
   /** The lane's drawn size (plane px), whenever it changes. */
   onMeasure?(w: number, h: number): void;
+  /** A source's stops chip pressed: edit that source's default stops on the
+   * board (the host: `openDefaultEditor`, then focus/place the chain). Unset:
+   * `openDefaultEditor` as is. */
+  onEditDefault?(ref: IntakeSourceRef, label: string): void;
 }
 
 /** Per browser: whether the lane is folded to its rail. */
@@ -94,6 +104,28 @@ export async function flyLaneItem(w: LaneWaiting, block: Pick<SourceBlock, "flyw
   } finally {
     void refreshInstances();
   }
+}
+
+/** A source's stops chip: its default stops as a grounded chain on the board
+ * that IS the editor (`edits_default`; Save as default on its bar). One per
+ * source — the chain already there (lib/groundedLines `editorFor`) is handed
+ * to `existing` instead of making a second. A new one is handed to `made`.
+ * Resolves to the chain (null: the server couldn't say or make it). */
+export async function openDefaultEditor(
+  ref: IntakeSourceRef,
+  flights: readonly Flight[] | null | undefined,
+  on: { existing?(f: Flight): void; made?(f: Flight, d: IntakeDefault): void } = {}
+): Promise<Flight | null> {
+  const have = editorFor(flights, ref);
+  if (have) {
+    on.existing?.(have);
+    return have;
+  }
+  const d = await getIntakeDefault(ref);
+  if (!d) return null;
+  const f = await startGrounded({ steps: d.steps, name: defaultEditorName(d.label), edits_default: { kind: ref.kind, target: ref.target } });
+  if (f) on.made?.(f, d);
+  return f;
 }
 
 function WaitingChip({ w, block, onFly }: { w: LaneWaiting; block: SourceBlock; onFly(title: string): void }) {
@@ -137,7 +169,7 @@ function WaitingChip({ w, block, onFly }: { w: LaneWaiting; block: SourceBlock; 
   );
 }
 
-function Block({ block, onFly, open }: { block: SourceBlock; onFly(title: string): void; open?: boolean }) {
+function Block({ block, onFly, open, onEditDefault }: { block: SourceBlock; onFly(title: string): void; open?: boolean; onEditDefault(ref: IntakeSourceRef, label: string): void }) {
   const { shown, more } = shownWaiting(block, open ? Infinity : undefined);
   return (
     <section className={"sky-lane-block sky-lane-block-" + block.kind} data-lane-source={block.key} aria-label={block.label}>
@@ -158,9 +190,15 @@ function Block({ block, onFly, open }: { block: SourceBlock; onFly(title: string
       </header>
       <div className="sky-lane-chips">
         <span className={"sky-lane-auto" + (block.auto ? " on" : "")}>{block.autoText}</span>
-        <span className={"sky-lane-flyway" + (block.flyway.own ? " own" : "")} title={block.flyway.own ? "This source's saved stop" : "The built-in stops for " + WAITING_KIND_HEAD[block.kind].toLowerCase()}>
-          {block.flyway.name}
-        </span>
+        <button
+          type="button"
+          className="fl-icon-btn sky-lane-flyway-btn"
+          aria-label={"Edit the default stops for " + block.label}
+          title={(block.flyway.own ? "This source's saved stop" : "The built-in stops for " + WAITING_KIND_HEAD[block.kind].toLowerCase()) + " — click to edit them on the board"}
+          onClick={() => onEditDefault({ kind: block.kind, target: block.id }, block.label)}
+        >
+          <span className={"sky-lane-flyway" + (block.flyway.own ? " own" : "")}>{block.flyway.name}</span>
+        </button>
       </div>
       {block.waiting.length === 0 ? (
         <p className="sky-lane-empty muted">Nothing waiting</p>
@@ -189,7 +227,13 @@ function Block({ block, onFly, open }: { block: SourceBlock; onFly(title: string
 /** A press on the head that is the head's own (not one of its buttons). */
 const headPress = (e: ReactPointerEvent) => e.button === 0 && !(e.target as Element).closest("button, a, input, summary, [data-no-drag]");
 
-export function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResize, open = false, onToggleOpen, onHeadDown, draggable = true, onMeasure }: IntakeLaneProps) {
+export function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResize, open = false, onToggleOpen, onHeadDown, draggable = true, onMeasure, onEditDefault }: IntakeLaneProps) {
+  const flights = useFlights().data;
+  // The host's (it focuses and places the editor); unset, made here as is.
+  const editDefault = (ref: IntakeSourceRef, label: string) => {
+    if (onEditDefault) onEditDefault(ref, label);
+    else void openDefaultEditor(ref, flights);
+  };
   const [live, setLive] = useState<{ w: number; h: number } | null>(null);
   const grab = useRef<{ id: number; sx: number; sy: number; w: number; h: number } | null>(null);
   const frameNow = live || { w: width, h: height ?? 0 };
@@ -330,7 +374,7 @@ export function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, 
           </button>
         </p>
       ) : (
-        blocks.map((b) => <Block key={b.key} block={b} onFly={onFly} open={open} />)
+        blocks.map((b) => <Block key={b.key} block={b} onFly={onFly} open={open} onEditDefault={editDefault} />)
       )}
       {onResize && (
         <span

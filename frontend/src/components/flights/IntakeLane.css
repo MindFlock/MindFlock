@@ -123,6 +123,31 @@
   background: color-mix(in srgb, var(--green) 10%, transparent);
 }
 
+/* The stops chip sits in a quiet button (edit this source's default stops
+   on the board): the button is bare, the chip keeps its look and lights its
+   edge on hover. */
+.sky-lane-chips .sky-lane-flyway-btn {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+}
+
+.sky-lane-chips .sky-lane-flyway-btn:hover:not(:disabled) {
+  background: transparent;
+}
+
+.sky-lane-flyway-btn .sky-lane-flyway {
+  cursor: pointer;
+}
+
+.sky-lane-flyway-btn:hover .sky-lane-flyway {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
 .sky-lane-flyway.own {
   color: var(--accent);
   border-color: rgba(var(--accent-rgb), 0.45);

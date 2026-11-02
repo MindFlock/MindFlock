@@ -92,3 +92,38 @@
   opacity: 0.72;
   border-color: var(--accent);
 }
+
+/* --- A source's default stops, edited on the board (the intake lane's
+   stops chip): the label names it, a muted hint says what it means, and its
+   own buttons (Save as default, Reset to default, Discard) sit in the pill,
+   sized to it. It never runs: no ▶ on its first stop. */
+.skl-chainline.is-default-editor > .skl-bar.skl-label {
+  max-width: 760px;
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.skl-grounded .skl-default-hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.skl-grounded .skl-default-acts {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  cursor: default;
+}
+
+.skl-grounded .skl-default-acts > button {
+  height: 20px;
+  min-height: 0;
+  padding: 0 8px;
+  font-size: 11.5px;
+  line-height: 1;
+}

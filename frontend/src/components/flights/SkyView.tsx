@@ -140,7 +140,7 @@ import { effectiveViewMode, useUi } from "../../state/store";
 import { selectSession } from "../../lib/sessionActions";
 import { overlayOpen } from "../../lib/keymap";
 import { layoutDiagram, sessionDiagram, type Diagram } from "../../lib/flightDiagram";
-import { STOP_MIME, isShown, newStep, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef } from "../../lib/flights";
+import { STOP_MIME, isShown, newStep, type Flight, type FlightPlan, type FlightRow, type FlightStep, type IntakeSourceRef, type StepKindDef } from "../../lib/flights";
 import { attachGrounded, DEFAULT_SESSION, deleteFlight, startFlightOn, startGrounded, tackOn, tackOnNew, tackOnPlan, tackOnSteps } from "../../lib/flightsApi";
 import { NODE_H, PITCH_X, type WireEnd, type WireIntent } from "../../lib/skyGraph";
 import type { CatalogDrop } from "../../lib/stopCatalog";
@@ -233,7 +233,7 @@ import {
 import { ChipRow, TextField } from "./controls";
 import { OverflowMenu } from "../OverflowMenu";
 import { liveBoxParts } from "./FlightStrip";
-import { IntakeLane } from "./IntakeLane";
+import { IntakeLane, openDefaultEditor } from "./IntakeLane";
 import { NewSessionBlock } from "./NewSessionBlock";
 import { SkyDrawer } from "./SkyDrawer";
 import { SkyFlock, WeatherWord } from "./SkyFlock";
@@ -376,6 +376,10 @@ interface NewBlockAt extends Pos {
 }
 
 /** The empty lists a query stands for before it has loaded (one object each). */
+/** Where a block placed on the board lands beside: the shelf, the floating
+ * palette, or the intake lane (a source's default stops). */
+type PlaceNear = "shelf" | "palette" | "lane";
+
 const NO_KINDS: StepKindDef[] = [];
 const NO_PLANS: FlightPlan[] = [];
 
@@ -1159,7 +1163,7 @@ export function SkyView() {
    * spot nearest just above the shelf's middle, or right of the floating
    * palette, inside the view, clear of every line, the lane and the palette.
    * Read at the moment it lands (after the flight is made), so a ref. */
-  const spotRef = useRef<(f: Flight, near: "shelf" | "palette") => Pos>(() => ({ x: 0, y: 0 }));
+  const spotRef = useRef<(f: Flight, near: PlaceNear) => Pos>(() => ({ x: 0, y: 0 }));
   spotRef.current = (f, near) => {
     const key = groundedKey(f.id);
     const size = measured[key] || chainSize(groundedDiagram(f, kinds), false);
@@ -1167,14 +1171,16 @@ export function SkyView() {
     const pad = 16 / c.z;
     const view: Rect = { x: -c.x / c.z + pad, y: -c.y / c.z + pad, w: vp.w / c.z - 2 * pad, h: vp.h / c.z - 2 * pad };
     const taken = [...lines.map((l) => l.id).filter((id) => id !== key), INTAKE_KEY, PALETTE_KEY].map(rectOf).concat(objects.map((o) => rectOf(o.key))).filter((r): r is Rect => !!r);
-    const pal = near === "palette" ? rectOf(PALETTE_KEY) : null;
+    // Right of the intake lane (a source's default stops, from its stops
+    // chip) or of the floating palette, else just above the shelf.
+    const pal = near === "palette" ? rectOf(PALETTE_KEY) : near === "lane" ? rectOf(INTAKE_KEY) : null;
     const want = pal ? { x: pal.x + pal.w + PLACE_GAP, y: pal.y } : { x: view.x + view.w / 2 - size.w / 2, y: view.y + view.h - size.h };
     return spotNear(want, taken, size, view);
   };
   // A placed line lands at its estimated size; once drawn and measured it is
   // placed once more at its real size (as `assignSpots` keeps a spot only once
   // a line is measured), so it never spills out of the view or onto a line.
-  const placing = useRef(new Map<string, "shelf" | "palette">());
+  const placing = useRef(new Map<string, PlaceNear>());
   useEffect(() => {
     for (const [key, near] of placing.current) {
       if (!measured[key]) continue;
@@ -1201,6 +1207,28 @@ export function SkyView() {
     const m = useUi.getState().skyMode;
     if (m === "one" || m === "perched") toast("“" + groundedName(f) + "” is on the board — All or Mine shows it");
   };
+  /** The intake lane's stops chip: that source's default stops as an editor
+   * chain on the board (IntakeLane `openDefaultEditor`) — placed right of the
+   * lane and focused; the one already there (one per source) is jumped to
+   * instead of making a second. */
+  const editDefault = (ref: IntakeSourceRef) =>
+    void openDefaultEditor(ref, flights, {
+      existing: (f) => {
+        const key = groundedKey(f.id);
+        if (rectOf(key)) jumpTo(key);
+        else toast("“" + groundedName(f) + "” is on the board — All or Mine shows it");
+      },
+      made: (f) => {
+        if (!alive.current) return;
+        const key = groundedKey(f.id);
+        const at = spotRef.current(f, "lane");
+        setLayout((l) => patchSkyLine(l, key, { x: at.x, y: at.y, pinned: true }));
+        placing.current.set(key, "lane");
+        setGroundFocus(key);
+        const m = useUi.getState().skyMode;
+        if (m === "one" || m === "perched") toast("“" + groundedName(f) + "” is on the board — All or Mine shows it");
+      },
+    });
   /** Pin a line at `at` — through the layout store even when the sky has
    * gone (an Undo pressed from the grid). */
   const pinAt = (key: string, at: Pos) => {
@@ -2380,6 +2408,7 @@ export function SkyView() {
           onHeadDown={(e) => onDragStart(INTAKE_KEY, e)}
           draggable={liveTool === "drag"}
           onMeasure={(w, h) => onMeasure(INTAKE_KEY, w, h)}
+          onEditDefault={editDefault}
         />
       </div>
     );

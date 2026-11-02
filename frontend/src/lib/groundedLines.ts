@@ -7,7 +7,7 @@
  * saving. */
 
 import { flightDiagram, type Diagram } from "./flightDiagram";
-import { isLive, newStep, planFromSteps, stepActor, type Flight, type FlightPlan, type FlightStep, type StepKindDef } from "./flights";
+import { isLive, newStep, planFromSteps, stepActor, type Flight, type FlightPlan, type FlightStep, type IntakeSourceRef, type StepKindDef } from "./flights";
 import { chainColor, type ChainHead } from "./skyGraph";
 
 /** A grounded flight's line is laid out under `"flight:" + id` (a session's
@@ -177,4 +177,38 @@ export function triggerHeadFor(f: Pick<Flight, "id">, flights: readonly Flight[]
 export function handoffStepFor(def: StepKindDef, taken: readonly string[], target: string): FlightStep {
   const st = newStep(def, taken);
   return { ...st, config: { ...st.config, target, session: "new", wait: false } };
+}
+
+// --- An intake source's default stops, edited on the board -------------------
+
+/** The name a default-stops editor chain is made with: "Default · <label>". */
+export const DEFAULT_EDITOR_PREFIX = "Default · ";
+export const defaultEditorName = (label: string) => DEFAULT_EDITOR_PREFIX + label;
+
+/** The two refs name the same intake source. */
+export const sameSource = (a: IntakeSourceRef | null | undefined, b: IntakeSourceRef | null | undefined) => !!a && !!b && a.kind === b.kind && a.target === b.target;
+
+/** A grounded chain that edits an intake source's default stops (never run). */
+export const isDefaultEditor = (f: Pick<Flight, "edits_default"> | null | undefined): boolean => !!f?.edits_default?.kind && !!f.edits_default.target;
+
+/** The editor chain already on the board for that source (grounded, editing
+ * it), or null — the lane's stops chip selects it instead of making another. */
+export function editorFor<F extends Pick<Flight, "state" | "edits_default">>(flights: readonly F[] | null | undefined, ref: IntakeSourceRef): F | null {
+  return (flights || []).find((f) => f.state === "grounded" && sameSource(f.edits_default, ref)) || null;
+}
+
+/** What an editor chain's source is called: its name without "Default · "
+ * (the label it was made with), else the target. */
+export function editorLabel(f: Pick<Flight, "plan_name" | "edits_default">): string {
+  const n = (f.plan_name || "").trim();
+  if (n.startsWith(DEFAULT_EDITOR_PREFIX) && n.length > DEFAULT_EDITOR_PREFIX.length) return n.slice(DEFAULT_EDITOR_PREFIX.length);
+  return n && n !== "Stops" ? n : f.edits_default?.target || "";
+}
+
+/** A chain's ▶: none for an editor of a source's default (it never runs —
+ * Save as default is what it does), none for one another chain starts, none
+ * with no stops; else `make()`'s. */
+export function chainRunFor<R>(f: Pick<Flight, "edits_default"> & { steps: readonly unknown[] }, headKind: ChainHead["kind"], make: () => R): R | null {
+  if (isDefaultEditor(f) || !f.steps.length || headKind === "trigger") return null;
+  return make();
 }
