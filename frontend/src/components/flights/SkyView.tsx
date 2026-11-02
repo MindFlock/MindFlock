@@ -237,6 +237,8 @@ import { SkyShortcuts } from "./SkyShortcuts";
 import { TakeoffDialog } from "./TakeoffDialog";
 import { Bird } from "./Bird";
 import { TourButton } from "../onboarding/TourButton";
+import { TOUR_REVEAL } from "../onboarding/CoachTour";
+import { revealCamera } from "../../lib/skyReveal";
 import { useAutoTour } from "../onboarding/useAutoTour";
 import "./Sky.css";
 import "./SkyObjects.css";
@@ -680,6 +682,23 @@ export function SkyView() {
     return () => ro.disconnect();
   }, [narrow]);
 
+  // The coach tour asks for a target it can't see (onboarding/CoachTour
+  // `TOUR_REVEAL`): the camera glides to it — a scroll can't move the plane.
+  useEffect(() => {
+    const el = vpRef.current;
+    if (!el) return;
+    const onReveal = (e: Event) => {
+      const t = e.target instanceof Element ? e.target : null;
+      if (!t || !el.contains(t) || t === el) return;
+      e.preventDefault();
+      const v = el.getBoundingClientRect();
+      const r = t.getBoundingClientRect();
+      goToRef.current(revealCamera(camRef.current, { x: r.left - v.left, y: r.top - v.top, w: r.width, h: r.height }, v.width, v.height));
+    };
+    el.addEventListener(TOUR_REVEAL, onReveal);
+    return () => el.removeEventListener(TOUR_REVEAL, onReveal);
+  }, []);
+
   /** The camera glides to `target` (round 17): ~220 ms ease-out on
    * requestAnimationFrame, the last frame exactly the target. Instant under
    * reduced motion, `instant`, with no frame scheduler, or when it is already
@@ -706,7 +725,9 @@ export function SkyView() {
       ease.current = requestAnimationFrame(step);
     },
     [motionOff, stopEase]
-  );
+  );  const goToRef = useRef(goTo);
+  goToRef.current = goTo;
+
   useEffect(() => stopEase, [stopEase]);
   /** Every line and the intake lane — legibly (`firstFit`: the width at no
    * less than mid, top-left, when everything would need far), or, `whole`

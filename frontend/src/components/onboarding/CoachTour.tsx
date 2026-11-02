@@ -50,6 +50,11 @@ interface Rect {
 }
 
 const CARD_W = 320;
+
+/** The event a step's target hears when it is not wholly on screen: a host
+ * that moves its content by a transform (the Sky) brings it into view and
+ * calls `preventDefault()`. */
+export const TOUR_REVEAL = "mf:tour-reveal";
 const GAP = 12;
 
 /** Where the card goes for a target rect inside a W×H box: beside a tall
@@ -63,17 +68,73 @@ export function placeCard(t: Rect | null, W: number, H: number, cardH: number): 
   // a tall column on the left (a list, a nav): to its right
   if (t.x + t.w + GAP + cw <= W - 8 && t.h > H * 0.4) return { left: t.x + t.w + GAP, top: clampY(t.y) };
   // below
-  if (t.y + t.h + GAP + cardH <= H - 8) return { left: clampX(t.x), top: t.y + t.h + GAP };
+  if (t.y + t.h + GAP + cardH <= H - 8) return { left: clampX(t.x), top: clampY(t.y + t.h + GAP) };
   // above
-  if (t.y - GAP - cardH >= 8) return { left: clampX(t.x), top: t.y - GAP - cardH };
+  if (t.y - GAP - cardH >= 8) return { left: clampX(t.x), top: clampY(t.y - GAP - cardH) };
   // a big target that fills the height: beside it, right then left
   if (t.x + t.w + GAP + cw <= W - 8) return { left: t.x + t.w + GAP, top: clampY(t.y) };
   if (t.x - GAP - cw >= 8) return { left: t.x - GAP - cw, top: clampY(t.y) };
   return { left: clampX((W - cw) / 2), top: clampY((H - cardH) / 2) };
 }
 
-/** The first VISIBLE match of `selector` under `root` (a selector list
- * matches in document order, and a hidden duplicate must not win), or null.
+/** The part of the window `el` can show in: the window cut by every
+ * ancestor that clips (overflow other than visible — a scrolling pane, the
+ * Sky's viewport, whose plane is panned by a transform). */
+export function clipBox(el: Element): Rect {
+  let x1 = 0;
+  let y1 = 0;
+  let x2 = typeof window === "undefined" ? 0 : window.innerWidth ?? Infinity;
+  let y2 = typeof window === "undefined" ? 0 : window.innerHeight ?? Infinity;
+  for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
+    const cs = getComputedStyle(p);
+    const clips = (o: string | undefined) => !!o && o !== "visible";
+    if (!clips(cs.overflowX) && !clips(cs.overflowY)) continue;
+    const b = edges(p.getBoundingClientRect());
+    if (clips(cs.overflowX)) {
+      x1 = Math.max(x1, b.left);
+      x2 = Math.min(x2, b.right);
+    }
+    if (clips(cs.overflowY)) {
+      y1 = Math.max(y1, b.top);
+      y2 = Math.min(y2, b.bottom);
+    }
+  }
+  return { x: x1, y: y1, w: Math.max(0, x2 - x1), h: Math.max(0, y2 - y1) };
+}
+
+/** A client rect's four edges, filled in from its size where a partial one
+ * (an old engine, a test double) leaves some out. */
+function edges(r: Partial<DOMRect>): { left: number; top: number; right: number; bottom: number; width: number; height: number } {
+  const width = r.width ?? 0;
+  const height = r.height ?? 0;
+  const left = r.left ?? 0;
+  const top = r.top ?? 0;
+  return { left, top, width, height, right: r.right ?? left + width, bottom: r.bottom ?? top + height };
+}
+
+/** How much of `r` lies inside `c` (0–1). */
+function shownShare(raw: DOMRect, c: Rect): number {
+  const r = edges(raw);
+  const w = Math.max(0, Math.min(r.right, c.x + c.w) - Math.max(r.left, c.x));
+  const h = Math.max(0, Math.min(r.bottom, c.y + c.h) - Math.max(r.top, c.y));
+  const a = r.width * r.height;
+  return a > 0 ? (w * h) / a : 0;
+}
+
+/** Whether an element is drawn at all (not display:none / visibility:hidden
+ * / opacity 0 — a hover-only toolbar), where the engine can tell. */
+function drawn(el: HTMLElement): boolean {
+  const r = el.getBoundingClientRect();
+  if (!(r.width > 0 && r.height > 0)) return false;
+  const check = (el as HTMLElement & { checkVisibility?(o?: object): boolean }).checkVisibility;
+  return typeof check === "function" ? check.call(el, { opacityProperty: true, visibilityProperty: true }) : true;
+}
+
+/** The match of `selector` under `root` to point at: of the drawn ones (a
+ * hidden duplicate must not win), the first that is on screen — wholly, else
+ * mostly, else at all — then the first drawn one (the coach mark brings it
+ * into view). A selector list matches in document order, so in the Sky (a
+ * panned plane) the first match is often off screen while another one shows.
  * A broken selector is "nothing to point at", never a crash. */
 export function findTarget(root: ParentNode, selector: string): HTMLElement | null {
   if (!selector) return null;
@@ -83,11 +144,15 @@ export function findTarget(root: ParentNode, selector: string): HTMLElement | nu
   } catch {
     return null;
   }
-  for (const el of Array.from(all)) {
-    const r = el.getBoundingClientRect();
-    if (r.width > 0 && r.height > 0) return el;
+  const seen = Array.from(all).filter(drawn);
+  if (!seen.length) return null;
+  if (typeof window === "undefined" || typeof getComputedStyle !== "function") return seen[0];
+  const share = seen.map((el) => shownShare(el.getBoundingClientRect(), clipBox(el)));
+  for (const min of [0.999, 0.5, 0.001]) {
+    const i = share.findIndex((s) => s >= min);
+    if (i >= 0) return seen[i];
   }
-  return null;
+  return seen[0];
 }
 
 /** The ancestors of `el` that scroll (overflow auto/scroll), innermost first. */
@@ -100,17 +165,19 @@ function scrollPanes(el: HTMLElement): HTMLElement[] {
   return out;
 }
 
-/** Whether all of `el` shows: inside the window and every pane it scrolls in
- * (a sliver of margin, so a ring at a pane's very edge counts as cut off). */
+/** Whether all of `el` shows: inside the window and every ancestor that
+ * clips it (a scrolling pane, the Sky's viewport) — a sliver of margin, so a
+ * ring at an edge counts as cut off. A target bigger than its room counts as
+ * shown once it fills it. */
 function whollyShown(el: HTMLElement): boolean {
-  const r = el.getBoundingClientRect();
+  const r = edges(el.getBoundingClientRect());
+  const c = clipBox(el);
   const M = 4;
-  if (r.top < M || r.bottom > window.innerHeight - M) return false;
-  for (const p of scrollPanes(el)) {
-    const b = p.getBoundingClientRect();
-    if (r.top < b.top + M || r.bottom > b.bottom - M) return false;
-  }
-  return true;
+  // Sideways only the clip itself counts (a target flush with the window's
+  // left edge is shown); up and down keep the sliver of margin.
+  const fitsX = r.width <= c.w ? r.left >= c.x - 0.5 && r.right <= c.x + c.w + 0.5 : r.left <= c.x && r.right >= c.x + c.w;
+  const fitsY = r.height <= c.h - 2 * M ? r.top >= c.y + M && r.bottom <= c.y + c.h - M : r.top <= c.y + M;
+  return fitsX && fitsY;
 }
 
 function reducedMotion(): boolean {
@@ -145,6 +212,15 @@ export function revealTarget(scope: ParentNode, selector: string): { el: HTMLEle
     if (!el) return null;
   }
   if (whollyShown(el)) return { el, scrolled: false };
+  // A surface that moves its content by a transform (the Sky pans and zooms
+  // a plane) can't be scrolled: it brings the target into view itself when
+  // it hears this, and says so by preventing the default.
+  try {
+    const ask = new CustomEvent(TOUR_REVEAL, { bubbles: true, cancelable: true });
+    if (!el.dispatchEvent(ask)) return { el, scrolled: true };
+  } catch {
+    /* no CustomEvent: scroll as below */
+  }
   const pane = scrollPanes(el)[0];
   const room = pane ? pane.clientHeight : window.innerHeight;
   try {
@@ -227,7 +303,19 @@ export function CoachTour({
     }
     setBox((b) => (b.W === W && b.H === H ? b : { W, H }));
     const el = findTarget(scope, step.target);
-    const r = el ? el.getBoundingClientRect() : null;
+    const raw = el ? edges(el.getBoundingClientRect()) : null;
+    // The ring goes round the part that shows (a target half off a pane's
+    // edge); nothing showing yet (still being brought into view): no ring,
+    // the card centred — never a ring and card off screen.
+    let r: { left: number; top: number; width: number; height: number } | null = raw;
+    if (el && raw) {
+      const c = clipBox(el);
+      const left = Math.max(raw.left, c.x);
+      const top = Math.max(raw.top, c.y);
+      const width = Math.min(raw.right, c.x + c.w) - left;
+      const height = Math.min(raw.bottom, c.y + c.h) - top;
+      r = width > 2 && height > 2 ? { left, top, width, height } : null;
+    }
     const next = r ? { x: r.left - x0, y: r.top - y0, w: r.width, h: r.height } : null;
     setRect((p) =>
       p === next || (p && next && p.x === next.x && p.y === next.y && p.w === next.w && p.h === next.h) ? p : next
