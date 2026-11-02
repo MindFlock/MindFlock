@@ -32,6 +32,7 @@ from __future__ import annotations
 import copy
 import datetime as _dt
 import json
+import math
 import os
 import re
 import secrets
@@ -454,7 +455,8 @@ AGENT_KINDS = frozenset({"agent", "reviews"})
 
 #: The palette's grouping (docs/flights.md "Round 15"): work (the agent and
 #: what judges its work), ship (the way to main), outside (the world beyond
-#: the worktree), people (perches). A plug-in names its own in ``spec``.
+#: the worktree), people (perches), flow (one chain driving another: the
+#: Handoff). A plug-in names its own in ``spec``.
 _FAMILY = {
     "agent": "work",
     "split": "work",
@@ -469,7 +471,7 @@ _FAMILY = {
     "you": "people",
     "verify": "people",
 }
-FAMILIES = ("work", "ship", "outside", "people")
+FAMILIES = ("work", "ship", "outside", "people", "flow")
 
 
 def kinds_dto() -> dict:
@@ -648,6 +650,27 @@ def _normalize_group(raw) -> Optional[dict]:
     return {"id": gid, "name": name, "plan_id": _text(raw.get("plan_id"), 64)}
 
 
+#: How far a stop's ``pos`` may sit from its chain's origin (plane px).
+MAX_POS = 100000
+
+
+def _normalize_pos(raw) -> Optional[dict]:
+    """A step's ``pos`` (docs/flights.md "Round 18: Free positions"): ``{x, y}``
+    as ints, rounded and clamped to ±:data:`MAX_POS`; None (dropped, never an
+    error) for anything but two finite numbers."""
+    if not isinstance(raw, dict):
+        return None
+    out = {}
+    for key in ("x", "y"):
+        v = raw.get(key)
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        if not math.isfinite(v):
+            return None
+        out[key] = max(-MAX_POS, min(MAX_POS, int(round(v))))
+    return out
+
+
 def normalize_step(
     raw,
     index: int = 0,
@@ -656,8 +679,9 @@ def normalize_step(
     config_strict: Optional[bool] = None,
 ) -> Optional[dict]:
     """One step coerced to ``{id, kind, title, config, on_fail}`` plus
-    ``halt: True`` on a halt point (omitted when false) and ``group`` on a
-    sub-step of a compound stop (omitted when it has none).
+    ``halt: True`` on a halt point (omitted when false), ``group`` on a
+    sub-step of a compound stop (omitted when it has none) and ``pos`` (its
+    free position on the Sky, :func:`_normalize_pos`; omitted when unset).
 
     Strict (a POSTed plan, a describe answer): raises :class:`PlanError`. Lenient
     (a stored file): returns None for a step that cannot be a step. ``taken``
@@ -718,6 +742,9 @@ def normalize_step(
     when = _normalize_when(raw.get("when"), strict, where)
     if when:
         step["when"] = when
+    pos = _normalize_pos(raw.get("pos"))
+    if pos is not None:
+        step["pos"] = pos
     return step
 
 
@@ -1537,7 +1564,7 @@ def _normalize_flight(fid, raw) -> Optional[dict]:
     by = _text(raw.get("by"), 200) or "user"
     if by not in BY_KINDS and not by.startswith("agent:"):
         by = "user"
-    return {
+    out = {
         "id": fid,
         "plan_id": _text(raw.get("plan_id"), 64),
         "plan_name": _text(raw.get("plan_name"), 120),
@@ -1567,6 +1594,27 @@ def _normalize_flight(fid, raw) -> Optional[dict]:
         "boot": _text(raw.get("boot"), 64),
         "owner": _text(raw.get("owner"), 64),
         "owner_at": _float(raw.get("owner_at")),
+    }
+    trig = _normalize_triggered_by(raw.get("triggered_by"))
+    if trig is not None:
+        out["triggered_by"] = trig
+    return out
+
+
+def _normalize_triggered_by(raw) -> Optional[dict]:
+    """A flight's ``triggered_by`` (docs/flights.md "Round 18: One chain
+    triggers another"): ``{flight, step, session}`` — the flight and Handoff
+    stop that started it and the session THAT flight runs in. None (omitted)
+    when it has no flight id."""
+    if not isinstance(raw, dict):
+        return None
+    fid = _text(raw.get("flight"), 64)
+    if not fid:
+        return None
+    return {
+        "flight": fid,
+        "step": _text(raw.get("step"), 32),
+        "session": _text(raw.get("session"), 300),
     }
 
 
@@ -3812,9 +3860,14 @@ def op_edit_step(flight: dict, sid: str, patch, now: Optional[float] = None) -> 
     ``group``; its kind and id stay. ``halt`` alone may also change on the
     current step (any flight not yet over, a halted one too): clearing it
     there un-marks a halt point without resuming. ``group`` is
-    :func:`_edit_group`'s."""
+    :func:`_edit_group`'s. ``pos`` is layout only (:func:`_set_pos`): any
+    step of any flight, never refused for where the flight is."""
     ts = float(now if now is not None else time.time())
     patch = dict(patch) if isinstance(patch, dict) else {}
+    if "pos" in patch:
+        _set_pos(flight, sid, patch.pop("pos"))
+        if not patch:
+            return flight
     if "group" in patch:
         _edit_group(flight, sid, patch.pop("group"), ts)
         if not patch:
@@ -3855,6 +3908,32 @@ def op_edit_step(flight: dict, sid: str, patch, now: Optional[float] = None) -> 
         note += ": halt point %s" % ("set" if step.get("halt") else "cleared")
     _hist(flight, ts, sid, "edited", note)
     flight["updated"] = ts
+    return flight
+
+
+def _set_pos(flight: dict, sid: str, value) -> None:
+    """A step's free position on the Sky (``pos``): layout only, so ANY step
+    (flown, current, ahead) of any flight may move — no history, no
+    ``updated`` bump. ``None`` or anything that is not two finite numbers
+    clears it. 404 ``unknown_step``."""
+    i = _step_index(flight, sid)
+    pos = _normalize_pos(value)
+    if pos is None:
+        flight["steps"][i].pop("pos", None)
+    else:
+        flight["steps"][i]["pos"] = pos
+
+
+def op_layout(flight: dict, positions) -> dict:
+    """``POST /api/flights/{id}/layout {positions: {<sid>: {x, y} | null}}``:
+    many :func:`_set_pos` at once; ids the flight does not have are ignored.
+    400 ``bad_layout`` when ``positions`` is not an object."""
+    if not isinstance(positions, dict):
+        raise FlightError("bad_layout", 400, "positions is {step id: {x, y} | null}")
+    ids = {s["id"] for s in flight["steps"]}
+    for sid, value in positions.items():
+        if sid in ids:
+            _set_pos(flight, sid, value)
     return flight
 
 
@@ -4110,15 +4189,20 @@ def op_attach(
     branch: str = "",
     seeded: bool = False,
     now: Optional[float] = None,
+    triggered_by: Optional[dict] = None,
 ) -> dict:
     """Bind a grounded ``flight`` to session ``title`` and take off from its
     cursor: ``running`` (history ``attached``), or ``paused`` at a halt point
     on that step. ``seeded``: the session was just created with the first
     (agent) step as its initial prompt, so that step is already running —
-    :func:`take_off`'s rule. 409 ``not_grounded`` on any other flight."""
+    :func:`take_off`'s rule. ``triggered_by`` (a Handoff stop started it):
+    recorded on the flight. 409 ``not_grounded`` on any other flight."""
     ts = float(now if now is not None else time.time())
     if flight["state"] != GROUNDED:
         raise FlightError("not_grounded", 409, "this flight already has a session")
+    trig = _normalize_triggered_by(triggered_by)
+    if trig is not None:
+        flight["triggered_by"] = trig
     flight["session"] = str(title)
     flight["repo_root"] = str(repo_root or "")
     flight["branch"] = str(branch or "")
@@ -4149,6 +4233,7 @@ def attach(
     branch: str = "",
     seeded: bool = False,
     now: Optional[float] = None,
+    triggered_by: Optional[dict] = None,
 ) -> dict:
     """:func:`op_attach` under the store lock, refusing (404 ``unknown_flight``,
     409 ``not_grounded``, 409 ``in_flight`` when ``title`` already has an
@@ -4167,11 +4252,93 @@ def attach(
                     409,
                     "%s is already on a flight (%s)" % (title, g["plan_name"]),
                 )
-        op_attach(f, title, repo_root, branch, seeded, now)
+        op_attach(f, title, repo_root, branch, seeded, now, triggered_by)
         f = _normalize_flight(f["id"], f) or f
         flights[f["id"]] = f
         _save_flights_locked(flights)
     return copy.deepcopy(f)
+
+
+def op_split_off(flight: dict, sid: str, pos=None, now: Optional[float] = None) -> dict:
+    """``POST /api/flights/{id}/steps/{sid}/split_off`` (docs/flights.md
+    "Round 18: Split off"): ``sid`` and every step after it leave ``flight``
+    for a new grounded flight (returned, not stored — :func:`split_off` stores
+    both), named "<plan name> (from <step title>)", its steps ``s1..sN`` with
+    a Loop among them re-aimed at its target's new id. Each keeps its ``pos``;
+    the first one's becomes ``pos`` (the drop) when given. 409
+    ``not_pending`` when any of them has started (or sits at/before the
+    current step), 409 ``whole_chain`` when it would take every step,
+    ``finished`` on a flight that is over, 404 ``unknown_step``."""
+    ts = float(now if now is not None else time.time())
+    _editable(flight)
+    i = _step_index(flight, sid)
+    moved = flight["steps"][i:]
+    for k, s in enumerate(moved):
+        ss = flight["step_states"][s["id"]]
+        if i + k < _first_open(flight) or ss["state"] != "pending" or ss["detail"]:
+            raise FlightError(
+                "not_pending",
+                409,
+                "%s has already started — only stops still ahead can split off"
+                % s["title"],
+            )
+    if i == 0:
+        raise FlightError(
+            "whole_chain", 409, "that is the whole chain — move the chain instead"
+        )
+    was = [s["id"] for s in moved]
+    new = copy.deepcopy(moved)
+    _renumber_after([], new)
+    _follow_loop_targets(new, was)
+    drop = _normalize_pos(pos)
+    if drop is not None:
+        new[0]["pos"] = drop
+    name = "%s (from %s)" % (flight["plan_name"] or "Stops", moved[0]["title"])
+    chain = _normalize_flight(
+        "pending",
+        {
+            "id": "pending",
+            "plan_id": ADHOC_PLAN_ID,
+            "plan_name": name[:120],
+            "steps": new,
+            "subject": {"kind": "manual"},
+            "session": "",
+            "state": GROUNDED,
+            "cursor": 0,
+            "started": ts,
+            "updated": ts,
+            "by": flight.get("by") or "user",
+        },
+    )
+    if chain is None:  # pragma: no cover — moved is never empty
+        raise FlightError("needs_steps", 400, "nothing to split off")
+    del flight["steps"][i:]
+    for s in moved:
+        flight["step_states"].pop(s["id"], None)
+        _hist(flight, ts, s["id"], "removed", "%s, split off" % s["title"])
+    flight["cursor"] = min(flight["cursor"], len(flight["steps"]))
+    flight["updated"] = ts
+    return chain
+
+
+def split_off(
+    flight_id: str, sid: str, pos=None, now: Optional[float] = None
+) -> Tuple[dict, dict]:
+    """:func:`op_split_off` under the store lock → ``(flight, chain)``, both
+    written at once (404 ``unknown_flight``)."""
+    with _LOCK:
+        flights = _load_flights_locked()
+        f = flights.get(str(flight_id or ""))
+        if f is None:
+            raise FlightError("unknown_flight", 404, "no such flight")
+        f = copy.deepcopy(f)
+        chain = op_split_off(f, sid, pos, now)
+        f = _normalize_flight(f["id"], f) or f
+        flights[f["id"]] = f
+        chain["id"] = _new_id("f_", flights)
+        flights[chain["id"]] = chain
+        _save_flights_locked(flights)
+    return copy.deepcopy(f), copy.deepcopy(chain)
 
 
 def next_until(spec: str, now: float) -> float:

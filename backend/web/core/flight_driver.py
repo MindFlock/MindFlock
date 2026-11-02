@@ -2181,6 +2181,29 @@ def change_steps(
     return _changed(flight_id, _do)
 
 
+def layout(flight_id: str, positions) -> dict:
+    """``POST /api/flights/{id}/layout``: free positions of many stops at once
+    (:func:`flights.op_layout`, layout only — any step, any state)."""
+    return _changed(flight_id, lambda f: _flights.op_layout(f, positions))
+
+
+def split_off(flight_id: str, sid: str, pos=None) -> Tuple[dict, dict]:
+    """``POST /api/flights/{id}/steps/{sid}/split_off``: ``sid`` and every
+    stop after it leave into a new grounded flight → ``(flight, chain)``
+    (:func:`flights.split_off`), both announced, the loop woken."""
+    before = _flights.get(flight_id)
+    if before is None:
+        raise _flights.FlightError("unknown_flight", 404, "no such flight")
+    after, chain = _flights.split_off(flight_id, sid, pos)
+    if _view_key(before) == _view_key(after):
+        _emit("flight.changed", after)
+    _announce(before, after)
+    _stop_removed(before, after)
+    _emit("flight.changed", chain)
+    wake()
+    return after, chain
+
+
 def group_steps(flight_id: str, sids, name) -> Tuple[dict, dict]:
     """``POST /api/flights/{id}/group``: the steps ``sids`` become one new
     stop → ``(flight, group)`` (blocking)."""

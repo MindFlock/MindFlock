@@ -301,7 +301,8 @@ def flights_step_edit(
 ) -> JSONResponse:
     """``{title?, config?, on_fail?, halt?, when?, group?}`` on a step still ahead →
     ``{"flight"}``; ``{halt}`` alone may also mark / clear the current step;
-    ``group: {name}`` renames the step's group, ``null`` takes the step out."""
+    ``group: {name}`` renames the step's group, ``null`` takes the step out.
+    ``{pos: {x, y} | null}`` is layout only: allowed on ANY step."""
     return _change(flight_id, "edit", step_id, raw=payload or {})
 
 
@@ -353,6 +354,36 @@ async def flights_attach(
     except _flights.FlightError as err:
         return _err(err)
     return JSONResponse({"flight": flight})
+
+
+@router.post("/api/flights/{flight_id}/layout")
+def flights_layout(flight_id: str, payload: Optional[dict] = None) -> JSONResponse:
+    """``{"positions": {<sid>: {x, y} | null}}`` → ``{"flight"}``: free
+    positions on the Sky (docs/flights.md "Round 18: Free positions") —
+    layout only, so any step of any flight; ``null`` clears one, unknown ids
+    are ignored (400 ``bad_layout`` when ``positions`` is not an object)."""
+    try:
+        flight = _driver.layout(flight_id, (payload or {}).get("positions"))
+    except _flights.FlightError as err:
+        return _err(err)
+    return JSONResponse({"flight": flight})
+
+
+@router.post("/api/flights/{flight_id}/steps/{step_id}/split_off")
+def flights_step_split_off(
+    flight_id: str, step_id: str, payload: Optional[dict] = None
+) -> JSONResponse:
+    """``{"pos"?: {x, y}}`` → ``{"flight", "chain"}``: the step and every one
+    after it leave into a new grounded flight (``chain``), the first one at
+    ``pos`` (docs/flights.md "Round 18: Split off"). 409 ``not_pending`` when
+    any of them has started, 409 ``whole_chain`` for the first step."""
+    try:
+        flight, chain = _driver.split_off(
+            flight_id, step_id, (payload or {}).get("pos")
+        )
+    except _flights.FlightError as err:
+        return _err(err)
+    return JSONResponse({"flight": flight, "chain": chain})
 
 
 @router.post("/api/flights/{flight_id}/steps/{step_id}/move")
