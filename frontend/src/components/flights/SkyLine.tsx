@@ -270,8 +270,21 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }: CardProps) {
   };
 
   return (
-    <div className="skl-card sky-own-scroll" data-no-drag style={{ width: cur.w, height: cur.h + CARD_HEAD_H }}>
-      <div className="skl-card-head">
+    <div
+      className="skl-card sky-own-scroll"
+      data-no-drag
+      style={{ width: cur.w, height: cur.h + CARD_HEAD_H }}
+      // A double-click on the card's top — its own head, or the pane's head
+      // under it (not its buttons, tabs or fields) — folds it back into a box.
+      onDoubleClick={(e) => {
+        const t = e.target as HTMLElement;
+        if (!t.closest(".skl-card-head, .pane-head") || t.closest("button, input, textarea, select, a, [role='tab'], [contenteditable='true']")) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }}
+    >
+      <div className="skl-card-head" title="Double-click to fold it back into a box">
         <span className="skl-card-name">{windowName(inst.title)}</span>
         <button type="button" className="skl-card-fold" aria-label={"Fold " + windowName(inst.title) + " back into a box"} title="Back to a box" onClick={onClose}>
           ▣

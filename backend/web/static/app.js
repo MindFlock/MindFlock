@@ -77812,6 +77812,7 @@ function SessionPanel({ m, a }) {
 //#endregion
 //#region src/components/onboarding/CoachTour.tsx
 var CARD_W$1 = 320;
+var TOUR_REVEAL = "mf:tour-reveal";
 var GAP$1 = 12;
 function placeCard(t, W, H, cardH) {
 	const cw = Math.min(CARD_W$1, W - 16);
@@ -77827,11 +77828,11 @@ function placeCard(t, W, H, cardH) {
 	};
 	if (t.y + t.h + GAP$1 + cardH <= H - 8) return {
 		left: clampX(t.x),
-		top: t.y + t.h + GAP$1
+		top: clampY(t.y + t.h + GAP$1)
 	};
 	if (t.y - GAP$1 - cardH >= 8) return {
 		left: clampX(t.x),
-		top: t.y - GAP$1 - cardH
+		top: clampY(t.y - GAP$1 - cardH)
 	};
 	if (t.x + t.w + GAP$1 + cw <= W - 8) return {
 		left: t.x + t.w + GAP$1,
@@ -77846,6 +77847,42 @@ function placeCard(t, W, H, cardH) {
 		top: clampY((H - cardH) / 2)
 	};
 }
+function clipBox(el) {
+	let x1 = 0;
+	let y1 = 0;
+	let x2 = typeof window === "undefined" ? 0 : window.innerWidth;
+	let y2 = typeof window === "undefined" ? 0 : window.innerHeight;
+	for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
+		const cs = getComputedStyle(p);
+		if (cs.overflowX === "visible" && cs.overflowY === "visible") continue;
+		const b = p.getBoundingClientRect();
+		x1 = Math.max(x1, b.left);
+		y1 = Math.max(y1, b.top);
+		x2 = Math.min(x2, b.right);
+		y2 = Math.min(y2, b.bottom);
+	}
+	return {
+		x: x1,
+		y: y1,
+		w: Math.max(0, x2 - x1),
+		h: Math.max(0, y2 - y1)
+	};
+}
+function shownShare(r, c) {
+	const w = Math.max(0, Math.min(r.right, c.x + c.w) - Math.max(r.left, c.x));
+	const h = Math.max(0, Math.min(r.bottom, c.y + c.h) - Math.max(r.top, c.y));
+	const a = r.width * r.height;
+	return a > 0 ? w * h / a : 0;
+}
+function drawn(el) {
+	const r = el.getBoundingClientRect();
+	if (!(r.width > 0 && r.height > 0)) return false;
+	const check = el.checkVisibility;
+	return typeof check === "function" ? check.call(el, {
+		opacityProperty: true,
+		visibilityProperty: true
+	}) : true;
+}
 function findTarget(root, selector) {
 	if (!selector) return null;
 	let all;
@@ -77854,11 +77891,19 @@ function findTarget(root, selector) {
 	} catch {
 		return null;
 	}
-	for (const el of Array.from(all)) {
-		const r = el.getBoundingClientRect();
-		if (r.width > 0 && r.height > 0) return el;
+	const seen = Array.from(all).filter(drawn);
+	if (!seen.length) return null;
+	if (typeof window === "undefined" || typeof getComputedStyle !== "function") return seen[0];
+	const share = seen.map((el) => shownShare(el.getBoundingClientRect(), clipBox(el)));
+	for (const min of [
+		.999,
+		.5,
+		.001
+	]) {
+		const i = share.findIndex((s) => s >= min);
+		if (i >= 0) return seen[i];
 	}
-	return null;
+	return seen[0];
 }
 function scrollPanes(el) {
 	const out = [];
@@ -77870,13 +77915,11 @@ function scrollPanes(el) {
 }
 function whollyShown(el) {
 	const r = el.getBoundingClientRect();
+	const c = clipBox(el);
 	const M = 4;
-	if (r.top < M || r.bottom > window.innerHeight - M) return false;
-	for (const p of scrollPanes(el)) {
-		const b = p.getBoundingClientRect();
-		if (r.top < b.top + M || r.bottom > b.bottom - M) return false;
-	}
-	return true;
+	const fitsX = r.width <= c.w - 8 ? r.left >= c.x + M && r.right <= c.x + c.w - M : r.left <= c.x && r.right >= c.x + c.w;
+	const fitsY = r.height <= c.h - 8 ? r.top >= c.y + M && r.bottom <= c.y + c.h - M : r.top <= c.y + M;
+	return fitsX && fitsY;
 }
 function reducedMotion() {
 	if (useUi.getState().reduceMotion) return true;
@@ -77906,6 +77949,16 @@ function revealTarget(scope, selector) {
 		el,
 		scrolled: false
 	};
+	try {
+		const ask = new CustomEvent(TOUR_REVEAL, {
+			bubbles: true,
+			cancelable: true
+		});
+		if (!el.dispatchEvent(ask)) return {
+			el,
+			scrolled: true
+		};
+	} catch {}
 	const pane = scrollPanes(el)[0];
 	const room = pane ? pane.clientHeight : window.innerHeight;
 	try {
@@ -77961,7 +78014,21 @@ function CoachTour({ steps, onClose, rootRef, step: controlled, onStep, prefix =
 			H
 		});
 		const el = findTarget(scope, step.target);
-		const r = el ? el.getBoundingClientRect() : null;
+		const raw = el ? el.getBoundingClientRect() : null;
+		let r = raw;
+		if (el && raw) {
+			const c = clipBox(el);
+			const left = Math.max(raw.left, c.x);
+			const top = Math.max(raw.top, c.y);
+			const width = Math.min(raw.right, c.x + c.w) - left;
+			const height = Math.min(raw.bottom, c.y + c.h) - top;
+			r = width > 2 && height > 2 ? {
+				left,
+				top,
+				width,
+				height
+			} : null;
+		}
 		const next = r ? {
 			x: r.left - x0,
 			y: r.top - y0,
@@ -130678,9 +130745,17 @@ function PaneCard({ inst, w, h, zoom, onSize, onClose }) {
 			width: cur.w,
 			height: cur.h + CARD_HEAD_H
 		},
+		onDoubleClick: (e) => {
+			const t = e.target;
+			if (!t.closest(".skl-card-head, .pane-head") || t.closest("button, input, textarea, select, a, [role='tab'], [contenteditable='true']")) return;
+			e.preventDefault();
+			e.stopPropagation();
+			onClose();
+		},
 		children: [
 			/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 				className: "skl-card-head",
+				title: "Double-click to fold it back into a box",
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "skl-card-name",
 					children: windowName(inst.title)
@@ -132863,6 +132938,18 @@ function SkyShortcuts(p) {
 	return typeof document !== "undefined" && document.body ? (0, import_react_dom.createPortal)(sheet, document.body) : sheet;
 }
 //#endregion
+//#region src/lib/skyReveal.ts
+function revealCamera(c, r, vw, vh, margin = .8) {
+	const k = Math.min(1, r.w > 0 ? vw * margin / r.w : 1, r.h > 0 ? vh * margin / r.h : 1);
+	const z = clampZoom(c.z * k);
+	const p = toPlane(c, r.x + r.w / 2, r.y + r.h / 2);
+	return {
+		z,
+		x: vw / 2 - p.x * z,
+		y: vh / 2 - p.y * z
+	};
+}
+//#endregion
 //#region src/components/flights/SkyView.tsx
 var BAR_H = 34;
 var LINE_MIN_W = 280;
@@ -133347,6 +133434,25 @@ function SkyView() {
 		ro.observe(el);
 		return () => ro.disconnect();
 	}, [narrow]);
+	(0, import_react.useEffect)(() => {
+		const el = vpRef.current;
+		if (!el) return;
+		const onReveal = (e) => {
+			const t = e.target instanceof Element ? e.target : null;
+			if (!t || !el.contains(t) || t === el) return;
+			e.preventDefault();
+			const v = el.getBoundingClientRect();
+			const r = t.getBoundingClientRect();
+			goToRef.current(revealCamera(camRef.current, {
+				x: r.left - v.left,
+				y: r.top - v.top,
+				w: r.width,
+				h: r.height
+			}, v.width, v.height));
+		};
+		el.addEventListener(TOUR_REVEAL, onReveal);
+		return () => el.removeEventListener(TOUR_REVEAL, onReveal);
+	}, []);
 	const goTo = (0, import_react.useCallback)((target, instant = false) => {
 		stopEase();
 		const from = camRef.current;
@@ -133367,6 +133473,8 @@ function SkyView() {
 		};
 		ease.current = requestAnimationFrame(step);
 	}, [motionOff, stopEase]);
+	const goToRef = (0, import_react.useRef)(goTo);
+	goToRef.current = goTo;
 	(0, import_react.useEffect)(() => stopEase, [stopEase]);
 	const fitAll = (0, import_react.useCallback)((whole = false, instant = false) => {
 		const rects = lines.map((l) => ({
