@@ -77850,16 +77850,21 @@ function placeCard(t, W, H, cardH) {
 function clipBox(el) {
 	let x1 = 0;
 	let y1 = 0;
-	let x2 = typeof window === "undefined" ? 0 : window.innerWidth;
-	let y2 = typeof window === "undefined" ? 0 : window.innerHeight;
+	let x2 = typeof window === "undefined" ? 0 : window.innerWidth ?? Infinity;
+	let y2 = typeof window === "undefined" ? 0 : window.innerHeight ?? Infinity;
 	for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
 		const cs = getComputedStyle(p);
-		if (cs.overflowX === "visible" && cs.overflowY === "visible") continue;
-		const b = p.getBoundingClientRect();
-		x1 = Math.max(x1, b.left);
-		y1 = Math.max(y1, b.top);
-		x2 = Math.min(x2, b.right);
-		y2 = Math.min(y2, b.bottom);
+		const clips = (o) => !!o && o !== "visible";
+		if (!clips(cs.overflowX) && !clips(cs.overflowY)) continue;
+		const b = edges(p.getBoundingClientRect());
+		if (clips(cs.overflowX)) {
+			x1 = Math.max(x1, b.left);
+			x2 = Math.min(x2, b.right);
+		}
+		if (clips(cs.overflowY)) {
+			y1 = Math.max(y1, b.top);
+			y2 = Math.min(y2, b.bottom);
+		}
 	}
 	return {
 		x: x1,
@@ -77868,7 +77873,22 @@ function clipBox(el) {
 		h: Math.max(0, y2 - y1)
 	};
 }
-function shownShare(r, c) {
+function edges(r) {
+	const width = r.width ?? 0;
+	const height = r.height ?? 0;
+	const left = r.left ?? 0;
+	const top = r.top ?? 0;
+	return {
+		left,
+		top,
+		width,
+		height,
+		right: r.right ?? left + width,
+		bottom: r.bottom ?? top + height
+	};
+}
+function shownShare(raw, c) {
+	const r = edges(raw);
 	const w = Math.max(0, Math.min(r.right, c.x + c.w) - Math.max(r.left, c.x));
 	const h = Math.max(0, Math.min(r.bottom, c.y + c.h) - Math.max(r.top, c.y));
 	const a = r.width * r.height;
@@ -77914,10 +77934,10 @@ function scrollPanes(el) {
 	return out;
 }
 function whollyShown(el) {
-	const r = el.getBoundingClientRect();
+	const r = edges(el.getBoundingClientRect());
 	const c = clipBox(el);
 	const M = 4;
-	const fitsX = r.width <= c.w - 8 ? r.left >= c.x + M && r.right <= c.x + c.w - M : r.left <= c.x && r.right >= c.x + c.w;
+	const fitsX = r.width <= c.w ? r.left >= c.x - .5 && r.right <= c.x + c.w + .5 : r.left <= c.x && r.right >= c.x + c.w;
 	const fitsY = r.height <= c.h - 8 ? r.top >= c.y + M && r.bottom <= c.y + c.h - M : r.top <= c.y + M;
 	return fitsX && fitsY;
 }
@@ -78014,7 +78034,7 @@ function CoachTour({ steps, onClose, rootRef, step: controlled, onStep, prefix =
 			H
 		});
 		const el = findTarget(scope, step.target);
-		const raw = el ? el.getBoundingClientRect() : null;
+		const raw = el ? edges(el.getBoundingClientRect()) : null;
 		let r = raw;
 		if (el && raw) {
 			const c = clipBox(el);
