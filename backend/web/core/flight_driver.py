@@ -981,28 +981,95 @@ def _default_folder() -> str:
     return _ensure_default_place()
 
 
-async def ensure_default_session() -> str:
-    """The default session's title, made the first time it is needed: an
-    in-place session ("default") in :func:`_default_folder` with the default
-    agent. Remembered in ``general.default_session``; a remembered one that is
-    gone is made again."""
+def needs_agent(flight: dict) -> bool:
+    """Whether a chain types into an agent: an agent / reviews stop, a verify
+    the agent takes part in, a plug-in that types to the agent, or a Loop that
+    repeats the session's prompt. A perch, a wait, a notify… need none."""
+    from backend.web.core import flight_kinds as _kinds
+
+    steps = flight.get("steps") or []
+    for i, st in enumerate(steps):
+        k = st.get("kind")
+        cfg = st.get("config") or {}
+        if k in _flights.AGENT_KINDS:
+            return True
+        if k == "verify" and str(cfg.get("who") or "both") != "you":
+            return True
+        plug = _kinds.get(k)
+        if plug is not None and getattr(plug, "types_to_agent", False):
+            return True
+        if (
+            k == "loop"
+            and not str(cfg.get("back_to") or "")
+            and all(x.get("kind") == "loop" for x in steps[:i])
+        ):
+            return True
+    return False
+
+
+_SHELLS = ("bash", "zsh", "sh", "fish", "dash", "ksh")
+
+
+def _is_shell(program: str) -> bool:
+    import os
+
+    return os.path.basename(str(program or "").split()[0] if program else "") in _SHELLS
+
+
+async def ensure_default_session(agent: bool = False) -> str:
+    """The default session's title — a session is a place in the file tree, so
+    the default one is MindFlock's own folder (:func:`_default_folder`). An
+    agent runs there only when the chain needs one: ``agent=False`` gives a
+    plain-shell session ("default"), ``agent=True`` one running the default
+    agent ("default-agent"). An existing session in that folder of the right
+    sort, not on a flight, is reused; else one is made (in place) and, for the
+    shell one, remembered in ``general.default_session``."""
+    import os
+
     from backend.config.settings import load_settings, update_settings
 
     srv = _server()
+    folder = await asyncio.to_thread(_default_folder)
     try:
         known = str(load_settings().general.default_session or "").strip()
     except Exception:  # noqa: BLE001
         known = ""
-    if known and known in srv.ENGINE.instances:
+
+    def fits(title: str) -> bool:
+        inst = srv.ENGINE.instances.get(title)
+        if inst is None or _flights.for_session(title) is not None:
+            return False
+        shell = _is_shell(getattr(inst, "Program", "") or "")
+        return shell != agent
+
+    if known and fits(known):
         return known
-    folder = await asyncio.to_thread(_default_folder)
-    title = await _create_session(
-        {"title": "default", "repo_path": folder, "prompt": "", "in_place": True}
-    )
-    try:
-        await asyncio.to_thread(update_settings, general={"default_session": title})
-    except Exception:  # noqa: BLE001
-        pass
+    for title, inst in list(srv.ENGINE.instances.items()):
+        try:
+            same = os.path.realpath(
+                str(getattr(inst, "Path", "") or "")
+            ) == os.path.realpath(folder)
+        except Exception:  # noqa: BLE001
+            same = False
+        if same and fits(title):
+            return title
+    payload = {
+        "title": "default-agent" if agent else "default",
+        "repo_path": folder,
+        "prompt": "",
+        "in_place": True,
+    }
+    if not agent:
+        # No agent: the session is a plain shell in the default place.
+        payload["program"] = (
+            os.path.basename(os.environ.get("SHELL", "") or "") or "bash"
+        )
+    title = await _create_session(payload)
+    if not agent:
+        try:
+            await asyncio.to_thread(update_settings, general={"default_session": title})
+        except Exception:  # noqa: BLE001
+            pass
     return title
 
 
@@ -1625,7 +1692,7 @@ async def _perform(flight: dict, action: dict, now: float) -> dict:
             until = (
                 _flights.next_until(cfg["until"], now)
                 if cfg.get("until")
-                else now + float(cfg.get("minutes") or 0) * 60.0
+                else now + float(_flights.wait_seconds(cfg))
             )
             return dict(action, detail={"until": until})
         if sk == "reviews":
@@ -2507,7 +2574,8 @@ async def attach(flight_id: str, body: dict) -> dict:
     title = str(body.get("title") or "").strip()
     # No session picked: the default session (made the first time it is needed).
     if title == DEFAULT_SESSION:
-        title = await ensure_default_session()
+        f0 = _flights.get(flight_id) or {}
+        title = await ensure_default_session(agent=needs_agent(f0))
     seeded = False
     no_prompt = False
     if title:

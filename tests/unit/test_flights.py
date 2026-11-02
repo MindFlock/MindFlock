@@ -79,7 +79,14 @@ def test_kinds_registry_drives_the_editor():
         assert k["actor"] in ("robot", "you")
         assert k["default_title"] and k["label"] and k["summary"]
         for fld in k["fields"]:
-            assert fld["type"] in ("text", "textarea", "int", "bool", "select")
+            assert fld["type"] in (
+                "text",
+                "textarea",
+                "int",
+                "bool",
+                "select",
+                "duration",
+            )
             if fld["type"] == "select":
                 # A dynamic select (the Loop's back_to) is filled by the editor.
                 assert fld["options"] or fld.get("dynamic") in (
@@ -147,7 +154,7 @@ def test_steps_get_ids_titles_and_defaults():
         "Wait until 18:30",
     ]
     assert p["steps"][1]["config"]["lane"] == "push"
-    assert p["steps"][3]["config"] == {"minutes": 0, "until": "18:30"}
+    assert p["steps"][3]["config"] == {"seconds": 0, "minutes": 0, "until": "18:30"}
     assert p["steps"][4]["config"]["items"] == ["one", "two"]
     assert p["steps"][4]["on_fail"] == "halt"  # a you step cannot fail
     assert p["steps"][5]["config"] == {

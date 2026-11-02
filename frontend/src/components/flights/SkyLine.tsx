@@ -407,7 +407,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   const sessionNode = useMemo(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
   // The head is the session's AGENT (round 20): its name, what it is doing
   // now; where the flight is goes on the frame's bar.
-  const agent = agentTitle(row?.provider || row?.program);
+  const agent = agentTitle(row?.provider || row?.program, row?.program);
   // (the task headline — read from its newest meaningful prompt — else the
   // create task, else the last prompt).
   const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : row ? firstLine(row.task_headline || row.task || "") || firstLine(row.last_prompt || "") : "";

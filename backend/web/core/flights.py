@@ -407,10 +407,10 @@ STEP_KINDS: Dict[str, dict] = {
     "wait": {
         "label": "Wait",
         "actor": "robot",
-        "summary": "Wait a number of minutes, or until a time of day.",
+        "summary": "Wait a while (seconds, minutes or hours), or until a time of day.",
         "default_title": "Wait",
         "fields": [
-            _f("minutes", "int", "Minutes", default=10),
+            _f("seconds", "duration", "How long", default=600),
             _f("until", "text", "Or until (HH:MM)", default="", placeholder="18:00"),
         ],
     },
@@ -808,12 +808,21 @@ def _step_config(kind: str, raw: dict, strict: bool, where: str) -> dict:
             if strict:
                 raise PlanError("until is a time like 18:00", where + ".until")
             until = ""
-        minutes = _int(c.get("minutes"), 0, 0, 60 * 24 * 14)
-        if not until and minutes <= 0:
-            if strict and c.get("minutes") not in (None, ""):
-                raise PlanError("wait at least one minute", where + ".minutes")
-            minutes = 10
-        return {"minutes": 0 if until else minutes, "until": until}
+        # How long, in SECONDS (2026-11-02: the owner wants seconds and hours,
+        # not only minutes); an older `minutes` still reads. `minutes` stays in
+        # the config (rounded up) for readers that only know it.
+        seconds = _int(c.get("seconds"), 0, 0, 60 * 60 * 24 * 14)
+        if seconds <= 0:
+            seconds = _int(c.get("minutes"), 0, 0, 60 * 24 * 14) * 60
+        if not until and seconds <= 0:
+            if strict and (
+                c.get("seconds") not in (None, "") or c.get("minutes") not in (None, "")
+            ):
+                raise PlanError("wait at least one second", where + ".seconds")
+            seconds = 600
+        if until:
+            seconds = 0
+        return {"seconds": seconds, "minutes": -(-seconds // 60), "until": until}
     if kind == "reviews":
         return {
             "quiet_minutes": _int(c.get("quiet_minutes"), 10, 1, 24 * 60),
@@ -986,7 +995,7 @@ def _default_title(kind: str, config: dict) -> str:
     if kind == "wait":
         if config.get("until"):
             return "Wait until %s" % config["until"]
-        return "Wait %d min" % int(config.get("minutes") or 0)
+        return "Wait %s" % duration_word(wait_seconds(config))
     plug = _kinds.get(kind)
     if plug is not None and plug.default_title is not None:
         return (
@@ -2536,6 +2545,26 @@ def _wait(note: str, **detail) -> dict:
     return out
 
 
+def wait_seconds(config: dict) -> int:
+    """A Wait's length in seconds (`seconds`, else the older `minutes`)."""
+    s = int(config.get("seconds") or 0)
+    return s if s > 0 else int(config.get("minutes") or 0) * 60
+
+
+def duration_word(seconds: float) -> str:
+    """ "45 s", "10 min", "1 h 30 min", "2 h" — a duration as a box says it."""
+    n = int(round(max(0.0, float(seconds))))
+    if n < 60:
+        return "%d s" % n
+    if n % 3600 == 0:
+        return "%d h" % (n // 3600)
+    if n < 3600:
+        return (
+            "%d min" % (n // 60) if n % 60 == 0 else "%d min %d s" % (n // 60, n % 60)
+        )
+    return "%d h %d min" % (n // 3600, (n % 3600) // 60)
+
+
 def _mins(seconds: float) -> str:
     m = int(max(0.0, seconds) // 60)
     return "%dm" % m if m < 60 else "%dh%02dm" % (m // 60, m % 60)
@@ -3078,7 +3107,7 @@ def _judge_wait(flight, step, ss, obs, now) -> dict:
             (
                 "until %s" % cfg["until"]
                 if cfg.get("until")
-                else "%d min" % int(cfg.get("minutes") or 0)
+                else duration_word(wait_seconds(cfg))
             ),
         )
     return _wait("%s left" % _mins(until - now))

@@ -6426,6 +6426,17 @@ details.fl-group-waiting > summary {
 .fl-skipped-note {
   color: var(--fl-ink-muted, var(--muted));
 }
+
+/* A duration: the amount, then its unit (seconds / minutes / hours). */
+.fl-duration {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.fl-duration-unit {
+  width: auto;
+  padding-right: 22px;
+}
 /* A stop's dialog (StopDialog.tsx): the same card as #rename-form
    (smallDialogs.css), wider for a stop's fields. The fields keep the
    inspector's look (.fl-form, StopParts.css). */

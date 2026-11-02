@@ -80831,7 +80831,8 @@ function stopSummary(step) {
 		}
 		case "wait": {
 			const until = String(c.until ?? "").trim();
-			return until ? "until " + until : num(c.minutes, 10) + " min";
+			const secs = num(c.seconds, 0) > 0 ? num(c.seconds, 0) : num(c.minutes, 10) * 60;
+			return until ? "until " + until : durationWord(secs);
 		}
 		case "reviews": return num(c.quiet_minutes, 10) + " min quiet";
 		case "checks": return "up to " + num(c.timeout_minutes, 60) + " min";
@@ -80855,10 +80856,10 @@ function stopSummary(step) {
 		case "loop": {
 			const times = Math.max(0, num(c.times, 3));
 			const until = String(c.until ?? "").trim();
-			const every = Math.max(0, num(c.every_minutes, 0));
+			const every = num(c.every_seconds, 0) > 0 ? num(c.every_seconds, 0) : Math.max(0, num(c.every_minutes, 0)) * 60;
 			const parts = [times > 0 ? times + (times === 1 ? " run" : " runs") : until ? "" : "until stopped"];
 			if (until) parts.push("until " + clip(until, 22));
-			if (every) parts.push("every " + minutesWord(every));
+			if (every) parts.push("every " + durationWord(every));
 			if (c.fresh) parts.push("fresh context");
 			return parts.filter(Boolean).join(" · ");
 		}
@@ -80866,11 +80867,12 @@ function stopSummary(step) {
 		default: return step.kind;
 	}
 }
-function minutesWord(m) {
-	const n = Math.round(m);
-	if (n >= 1440 && n % 1440 === 0) return n / 1440 + " d";
-	if (n < 60) return n + " min";
-	return Math.floor(n / 60) + " h" + (n % 60 ? " " + n % 60 + " min" : "");
+function durationWord(seconds) {
+	const n = Math.round(Math.max(0, seconds));
+	if (n < 60) return n + " s";
+	if (n % 3600 === 0) return n / 3600 + " h";
+	if (n < 3600) return n % 60 === 0 ? n / 60 + " min" : Math.floor(n / 60) + " min " + n % 60 + " s";
+	return Math.floor(n / 3600) + " h " + Math.floor(n % 3600 / 60) + " min";
 }
 function loopMark(step, rec) {
 	const times = Math.max(0, Math.floor(num(step.config?.times, 3)));
@@ -85765,8 +85767,10 @@ function TileIcon({ kind, size = 28 }) {
 }
 //#endregion
 //#region src/components/flights/SkyChain.tsx
-function agentTitle(provider) {
+function agentTitle(provider, program) {
 	const p = String(provider || "").trim();
+	const shell = (s) => /^(bash|zsh|sh|fish|dash|ksh)$/.test(s.trim().split(/\s+/)[0]?.split("/").pop() || "");
+	if (shell(String(program || "")) || shell(p)) return "Shell";
 	return p ? agentName(p).replace(/ Code$/, "") : "Agent";
 }
 function agentDoing(row) {
@@ -85811,7 +85815,7 @@ function subFramesOf(rows, parent, flights, kinds) {
 			icon: n.perch ? "perch" : n.icon
 		}));
 		out[k.title] = {
-			agent: agentTitle(k.provider || k.program),
+			agent: agentTitle(k.provider || k.program, k.program),
 			stops
 		};
 	}
@@ -87459,7 +87463,7 @@ function FlightChain({ title, line, kinds, label }) {
 	const moves = useNodeMoves(line.flight?.id, line.graphDiagram, title);
 	const sessionNode = (0, import_react.useMemo)(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
 	const where = row ? lineWhere(line.diagram) : "";
-	const agent = agentTitle(row?.provider || row?.program);
+	const agent = agentTitle(row?.provider || row?.program, row?.program);
 	const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : agentDoing(row);
 	const head = (0, import_react.useMemo)(() => ({
 		kind: "session",
@@ -87957,6 +87961,55 @@ function ChipRow({ value, options, onChange, label, className, field }) {
 		}, o.value || "default"))
 	});
 }
+function DurationField({ value, onChange, label }) {
+	const secs = value === void 0 || value === null || value === "" ? null : Math.max(0, Math.trunc(Number(value) || 0));
+	const auto = secs && secs % 3600 === 0 ? "h" : secs && secs % 60 === 0 ? "min" : secs ? "s" : "min";
+	const [picked, setPicked] = (0, import_react.useState)(null);
+	const unit = picked ?? auto;
+	const per = DURATION_UNITS[unit];
+	const amount = secs === null ? "" : secs % per === 0 ? secs / per : Math.round(secs / per * 100) / 100;
+	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+		className: "fl-num fl-duration",
+		children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("input", {
+			type: "text",
+			inputMode: "decimal",
+			className: "fl-input fl-num-input",
+			"aria-label": label + " (" + unit + ")",
+			value: String(amount),
+			onChange: (e) => {
+				const raw = e.target.value.replace(/[^\d.]/g, "");
+				onChange(raw === "" ? "" : Math.max(0, Math.round(Number(raw) * per)));
+			}
+		}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Seg, {
+			label: label + " unit",
+			value: unit,
+			options: [
+				{
+					v: "s",
+					label: "sec"
+				},
+				{
+					v: "min",
+					label: "min"
+				},
+				{
+					v: "h",
+					label: "hours"
+				}
+			],
+			onChange: (x) => {
+				const next = x;
+				setPicked(next);
+				if (secs !== null) onChange(Math.max(0, Math.round(Number(amount) * DURATION_UNITS[next])));
+			}
+		})]
+	});
+}
+var DURATION_UNITS = {
+	s: 1,
+	min: 60,
+	h: 3600
+};
 //#endregion
 //#region src/components/flights/StopParts.tsx
 function kindName(def, kind = "") {
@@ -88119,6 +88172,14 @@ function StopField({ f, value, onChange, readOnly, choices }) {
 				disabled: readOnly
 			})),
 			onChange: (x) => onChange(x)
+		})
+	});
+	if (f.type === "duration") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
+		label,
+		children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(DurationField, {
+			label,
+			value: v,
+			onChange: (x) => !readOnly && onChange(x)
 		})
 	});
 	if (f.type === "int") return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(FlField, {
@@ -134062,7 +134123,7 @@ function SkyLine(p) {
 	const where = row ? lineWhere(line.diagram) : "";
 	const moves = useNodeMoves(line.flight?.id, line.graphDiagram, p.title);
 	const sessionNode = (0, import_react.useMemo)(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
-	const agent = agentTitle(row?.provider || row?.program);
+	const agent = agentTitle(row?.provider || row?.program, row?.program);
 	const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : row ? firstLine$1(row.task_headline || row.task || "") || firstLine$1(row.last_prompt || "") : "";
 	const head = (0, import_react.useMemo)(() => ({
 		kind: "session",

@@ -344,3 +344,14 @@
 .fl-skipped-note {
   color: var(--fl-ink-muted, var(--muted));
 }
+
+/* A duration: the amount, then its unit (seconds / minutes / hours). */
+.fl-duration {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.fl-duration-unit {
+  width: auto;
+  padding-right: 22px;
+}

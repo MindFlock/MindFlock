@@ -96,8 +96,12 @@ export interface SkyChainProps {
 
 /** The agent's name on its tile: the provider's product name, short
  * ("Claude", "Codex"), else "Agent". */
-export function agentTitle(provider?: string | null): string {
+export function agentTitle(provider?: string | null, program?: string | null): string {
   const p = String(provider || "").trim();
+  // A session with no agent (a plain shell — the default session when no stop
+  // needs one): it is a place, the tile says "Shell".
+  const shell = (s: string) => /^(bash|zsh|sh|fish|dash|ksh)$/.test(s.trim().split(/\s+/)[0]?.split("/").pop() || "");
+  if (shell(String(program || "")) || shell(p)) return "Shell";
   return p ? agentName(p).replace(/ Code$/, "") : "Agent";
 }
 
@@ -155,7 +159,7 @@ export function subFramesOf(rows: readonly Instance[], parent: string, flights?:
     if (k.parent !== parent || k.title === parent) continue;
     const d = sessionDiagram(rows, k.title, { family: false, flights: flights || undefined, kinds: kinds || undefined });
     const stops = d.mode === "none" ? [] : d.nodes.filter((n) => n.row === "main" && MINI_KINDS.has(n.kind)).map((n) => ({ id: n.id, title: n.title, state: n.state, icon: n.perch ? "perch" : n.icon }));
-    out[k.title] = { agent: agentTitle(k.provider || k.program), stops };
+    out[k.title] = { agent: agentTitle(k.provider || k.program, k.program), stops };
   }
   return out;
 }

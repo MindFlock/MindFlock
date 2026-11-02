@@ -189,7 +189,7 @@ export interface Flight {
   ready_since?: number;
 }
 
-export type FieldType = "text" | "textarea" | "int" | "bool" | "select";
+export type FieldType = "text" | "textarea" | "int" | "bool" | "select" | "duration";
 
 export interface StepKindField {
   name: string;

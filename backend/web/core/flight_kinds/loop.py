@@ -52,11 +52,15 @@ def _config(raw: dict, strict: bool, where: str) -> dict:
         raise F.PlanError(
             "times is 0 (until stopped) to %d" % MAX_TIMES, where + ".times"
         )
-    every = F._int(c.get("every_minutes"), 0, -1, MAX_EVERY + 1)
-    if strict and not 0 <= every <= MAX_EVERY:
-        raise F.PlanError(
-            "every_minutes is 0 to %d (7 days)" % MAX_EVERY, where + ".every_minutes"
-        )
+    # The pace in SECONDS (`every_seconds`; the owner wants seconds and
+    # hours); an older `every_minutes` still reads.
+    every_s = F._int(c.get("every_seconds"), 0, -1, MAX_EVERY * 60 + 1)
+    if every_s <= 0 and c.get("every_minutes") not in (None, ""):
+        every_s = F._int(c.get("every_minutes"), 0, -1, MAX_EVERY + 1) * 60
+    if strict and not 0 <= every_s <= MAX_EVERY * 60:
+        raise F.PlanError("the pace is 0 to 7 days", where + ".every_seconds")
+    every_s = max(0, min(every_s, MAX_EVERY * 60))
+    every = -(-every_s // 60)
     until = str(c.get("until") if c.get("until") is not None else "")
     until = until.replace("\x00", "").strip()
     if until:
@@ -76,6 +80,7 @@ def _config(raw: dict, strict: bool, where: str) -> dict:
         "back_to": back_to,
         "times": max(0, min(times, MAX_TIMES)),
         "every_minutes": max(0, min(every, MAX_EVERY)),
+        "every_seconds": every_s,
         "wait_limits": F._bool(c.get("wait_limits"), True),
         "fresh": F._bool(c.get("fresh"), False),
         "until": until,
@@ -93,9 +98,15 @@ def _title(config: dict) -> str:
     if config.get("until"):
         return "Loop until %s" % config["until"]
     times = int(config.get("times") or 0)
-    every = int(config.get("every_minutes") or 0)
+    every = _every_s(config)
     head = "Loop ×%d" % times if times else ("Loop" if every else "Loop forever")
-    return head + (" every %s" % _every(every) if every else "")
+    return head + (" every %s" % F.duration_word(every) if every else "")
+
+
+def _every_s(cfg: dict) -> int:
+    """The pace in seconds (`every_seconds`, else the older `every_minutes`)."""
+    s = int(cfg.get("every_seconds") or 0)
+    return s if s > 0 else int(cfg.get("every_minutes") or 0) * 60
 
 
 def _first_start(flight: dict, to: int) -> float:
@@ -181,11 +192,13 @@ def _judge_prompt(flight, step, ss, obs, now) -> dict:
     limited = sess.get("limited") or (obs.get("loop") or {}).get("limited")
     if cfg.get("wait_limits", True) and limited:
         return F._wait("waiting on the usage limit", next_at=None)
-    every = int(cfg.get("every_minutes") or 0) * 60
+    every = _every_s(cfg)
     last = float(d.get("last_start") or 0.0)
     if every and last and now - last < every:
-        left = int(math.ceil((last + every - now) / 60.0))
-        return F._wait("next run in %d min" % max(1, left), next_at=last + every)
+        return F._wait(
+            "next run in %s" % F.duration_word(max(1, math.ceil(last + every - now))),
+            next_at=last + every,
+        )
     return {
         "action": "run",
         "phase": "loop",
@@ -215,11 +228,13 @@ def _judge(flight, step, ss, obs, now) -> dict:
     limited = sess.get("limited") or (obs.get("loop") or {}).get("limited")
     if cfg.get("wait_limits", True) and limited:
         return F._wait("waiting on the usage limit", next_at=None)
-    every = int(cfg.get("every_minutes") or 0) * 60
+    every = _every_s(cfg)
     last = float(d.get("last_start") or 0.0) or _first_start(flight, to)
     if every and last and now - last < every:
-        left = int(math.ceil((last + every - now) / 60.0))
-        return F._wait("next run in %d min" % max(1, left), next_at=last + every)
+        return F._wait(
+            "next run in %s" % F.duration_word(max(1, math.ceil(last + every - now))),
+            next_at=last + every,
+        )
     target = flight["steps"][to]
     return {
         "action": "run",
@@ -376,9 +391,9 @@ KIND = _kinds.register(
                 ),
                 F._f("times", "int", "Runs in all (0 = until stopped)", default=3),
                 F._f(
-                    "every_minutes",
-                    "int",
-                    "At most every N minutes (0 = straight away)",
+                    "every_seconds",
+                    "duration",
+                    "At most every (0 = straight away)",
                     default=0,
                 ),
                 F._f("wait_limits", "bool", "Wait out usage limits", default=True),

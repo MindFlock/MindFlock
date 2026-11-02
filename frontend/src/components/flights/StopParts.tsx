@@ -19,7 +19,7 @@ import { stopSummary } from "../../lib/flightDiagram";
 import { describeSteps } from "../../lib/flightsApi";
 import { WHEN_COMBINE, WHEN_GRAMMAR, WHEN_MAX, checkWhen, skippedNote, whenChecker, whenError, type WhenCheck } from "../../lib/whenHelp";
 import { StopIcon } from "./Bird";
-import { ChipRow, FlField, NumberField, PromptBox, Seg, TextField, Toggle } from "./controls";
+import { ChipRow, FlField, NumberField, PromptBox, Seg, TextField, Toggle, DurationField } from "./controls";
 import "./Flights.css";
 import "./StopParts.css";
 
@@ -197,6 +197,12 @@ export function StopField({
           options={fieldOptions(f).map((o) => ({ v: o.value, label: choiceLabel(f.name, o.value, o.label), disabled: readOnly }))}
           onChange={(x) => onChange(x)}
         />
+      </FlField>
+    );
+  if (f.type === "duration")
+    return (
+      <FlField label={label}>
+        <DurationField label={label} value={v} onChange={(x) => !readOnly && onChange(x)} />
       </FlField>
     );
   if (f.type === "int")

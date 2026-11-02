@@ -37,7 +37,7 @@ export function FlightChain({ title, line, kinds, label }: { title: string; line
   const moves = useNodeMoves(line.flight?.id, line.graphDiagram, title);
   const sessionNode = useMemo(() => moves.diagram.nodes.find((n) => n.kind === "session" && n.row === "main"), [moves.diagram]);
   const where = row ? lineWhere(line.diagram) : "";
-  const agent = agentTitle(row?.provider || row?.program);
+  const agent = agentTitle(row?.provider || row?.program, row?.program);
   const headSub = line.flight?.state === "ready" ? "ready · " + startWord(line.flight) : agentDoing(row);
   const head: ChainHead = useMemo(
     () => ({ kind: "session", title: agent, sub: headSub, session: title, color: chainColor(title), node: sessionNode }),

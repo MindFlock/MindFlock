@@ -263,7 +263,9 @@ export function stopSummary(step: Pick<FlightStep, "kind" | "config">): string {
     }
     case "wait": {
       const until = String(c.until ?? "").trim();
-      return until ? "until " + until : num(c.minutes, 10) + " min";
+      // Seconds since 2026-11-02 (an older `minutes` still reads).
+      const secs = num(c.seconds, 0) > 0 ? num(c.seconds, 0) : num(c.minutes, 10) * 60;
+      return until ? "until " + until : durationWord(secs);
     }
     case "reviews":
       return num(c.quiet_minutes, 10) + " min quiet";
@@ -290,10 +292,10 @@ export function stopSummary(step: Pick<FlightStep, "kind" | "config">): string {
     case "loop": {
       const times = Math.max(0, num(c.times, 3));
       const until = String(c.until ?? "").trim();
-      const every = Math.max(0, num(c.every_minutes, 0));
+      const every = num(c.every_seconds, 0) > 0 ? num(c.every_seconds, 0) : Math.max(0, num(c.every_minutes, 0)) * 60;
       const parts = [times > 0 ? times + (times === 1 ? " run" : " runs") : until ? "" : "until stopped"];
       if (until) parts.push("until " + clip(until, 22));
-      if (every) parts.push("every " + minutesWord(every));
+      if (every) parts.push("every " + durationWord(every));
       if (c.fresh) parts.push("fresh context");
       return parts.filter(Boolean).join(" · ");
     }
@@ -302,6 +304,16 @@ export function stopSummary(step: Pick<FlightStep, "kind" | "config">): string {
     default:
       return step.kind;
   }
+}
+
+/** A duration in seconds the way a box says it: "45 s", "10 min", "1 min 30
+ * s", "2 h", "1 h 30 min" (the server's `duration_word`). */
+export function durationWord(seconds: number): string {
+  const n = Math.round(Math.max(0, seconds));
+  if (n < 60) return n + " s";
+  if (n % 3600 === 0) return n / 3600 + " h";
+  if (n < 3600) return n % 60 === 0 ? n / 60 + " min" : Math.floor(n / 60) + " min " + (n % 60) + " s";
+  return Math.floor(n / 3600) + " h " + Math.floor((n % 3600) / 60) + " min";
 }
 
 /** Minutes the way a box says them: "30 min", "2 h", "1 h 30 min", "1 d". */
