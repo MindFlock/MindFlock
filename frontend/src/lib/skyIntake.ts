@@ -47,6 +47,9 @@ export interface SourceBlock {
   id: string;
   /** "Shortcut · quickpay", "PRs · owner/name", "Issues · owner/name". */
   label: string;
+  /** The block's title: the label without the kind word its badge already
+   * says ("Shortcut · quickpay", "owner/name"). */
+  name: string;
   /** Intake's deep link for the block's ⋯ ("tickets:sc": the tab and the
    * source). */
   target: string;
@@ -174,6 +177,7 @@ export function sourceBlocks(
       kind,
       id,
       label,
+      name: kind === "tickets" ? label : id,
       target: kind + ":" + id,
       auto,
       every,
@@ -277,6 +281,27 @@ function escapeRe(s: string): string {
  * named themselves on a similar branch is not one the source started. */
 function looksLikeTicket(title: string): boolean {
   return /^[A-Za-z][A-Za-z0-9]*-\d+$/.test(title);
+}
+
+/** The stops chip's words: the source's own saved stop by name, else
+ * "built-in" (the built-in plan's name — "Ticket", "Review a PR" — only
+ * repeated the kind badge beside it). */
+export function stopsWords(flyway: SourceBlock["flyway"]): string {
+  return flyway.own ? flyway.name : "built-in";
+}
+
+/** The stops chip's tooltip: what pressing it does, what the source flies
+ * now, and — while its editor chain is on the board — that it goes there. */
+export function stopsTip(block: Pick<SourceBlock, "name" | "flyway">, editing = false): string {
+  const now = block.flyway.own ? "its own: " + block.flyway.name : "built-in: " + block.flyway.name;
+  return editing ? "Editing on the board — go to the editor for " + block.name + " (" + now + ")" : "Edit the default stops for " + block.name + " (" + now + ")";
+}
+
+/** A title split after each "/" so a repo path wraps at its owner, not mid
+ * word ("quickpay/" + "quickpay"); the view puts a break chance after each
+ * part but the last. */
+export function nameParts(name: string): string[] {
+  return name.split(/(?<=\/)/);
 }
 
 /** What the collapsed rail shows per block: its waiting count. */
