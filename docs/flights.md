@@ -6655,3 +6655,55 @@ The scratch directory is
 - Known gaps: a tile dragged left of / above its chain's origin overflows the
   slot (marquee / minimap / Tidy measure the slot); the worker-bird formation
   and the bird's click/drag are not on the graph's bird yet.
+
+## Round 19: a chain starts when you say so — contract
+
+The owner (2026-11-02): "why does it start right away when I add something?
+Once I run a chain or start a new prompt I should start the chain — this
+logic needs expanding out." Building a chain on a session is not running it.
+
+### The `ready` state
+- New flight state **`ready`**: attached to a session, not flying. The driver
+  never moves it (not in `ACTIVE`); it is `UNFINISHED` and `HOLDING` (one
+  unfinished chain per session, as today — a second start on that session is
+  409 `in_flight`). Every stop of a ready flight can change (`_editable`
+  accepts it: tack on, edit, move, drop, group, layout, split_off), its
+  cursor is 0, nothing is marked flown.
+- `flight.start_on`: **`"prompt"`** — it takes off on ▶ Run OR the session's
+  next prompt; **`"run"`** — only on ▶ Run; **`"now"`** — takes off at once
+  (today's behaviour; never stored as ready). Stored on the flight; shown in
+  the dto. A ready flight's `start_on` can change: `PATCH /api/flights/{id}
+  {start_on}` (ready only, else 409 `not_ready`); `"now"` on a ready flight
+  = run it.
+- Who passes what: `POST /api/flights/start` and `POST /api/flights/{id}/
+  attach` take an optional `start_on`; **absent = `"now"`** (back-compat: the
+  Intake Fly button, schedules, triggers, the handoff kind, MCP `start_flight`
+  keep starting at once). The Sky passes `"prompt"` when you build a chain by
+  hand (a stop added to a session with no flight, a stops-only chain wired
+  onto a session).
+
+### Taking off
+- **▶ Run**: `POST /api/flights/{id}/run` (ready → `running` at cursor 0, its
+  first stop starts on the next driver pass; 409 `not_ready` otherwise).
+  `control_flight` (MCP) gains verb `"run"`; `controlFlight(id, "run")` in
+  lib/flightsApi.
+- **The session's next prompt** (`start_on: "prompt"`): a ready flight takes
+  off when its session starts a NEW turn after it became ready — the
+  server's own send paths (`/api/instances/{title}/send`, voice, MCP
+  `send_message` to that session, the prompt queue) call
+  `flights.on_prompt(title)`, and the driver's tick also catches a turn the
+  user typed straight into the terminal (activity → working with
+  `activity_since` > `ready_since`). It then flies **after that turn**: state
+  `running` with `detail.after_turn = true` on the first stop — the first stop
+  waits until the session's turn ends (idle / waiting on you), then runs.
+  When the first stop is an Agent stop with no prompt of its own, that turn IS
+  it: it is marked done with receipt "your prompt" once the turn ends, and the
+  flight goes on. History event `took_off` with `{by: "run" | "prompt"}`.
+- A turn already under way when the chain became ready does not count; the
+  next one does.
+
+### UI (integrator, after the backend lands)
+The head tile of a ready chain wears a "Ready" chip and a ▶ Run button; its
+⋯ (and the chain's) says how it starts: "On your next prompt" / "Only when I
+press Run" / "Run it now". `lineWhere` says "ready · runs on your next
+prompt". Building a chain in the Sky no longer starts anything.
