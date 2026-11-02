@@ -253,7 +253,8 @@ def _session_obs(flight: dict, now: float, agent: bool) -> dict:
     srv = _server()
     title = flight["session"]
     if not title:
-        return {"present": False}
+        # A free chain: no session, its folder is where it runs.
+        return {"present": False, "folder": str(flight.get("repo_root") or "")}
     inst = srv.ENGINE.instances.get(title)
     row = _row(title)
     try:
@@ -916,13 +917,14 @@ def _session_payload(plan_session: dict, repo_path: str, prompt: str) -> dict:
     return payload
 
 
-#: The title a client names the default session by (``attach {title}``).
+#: What a client names "no session — the default folder" by (``attach
+#: {title}``); ``attach {folder}`` names another folder.
 DEFAULT_SESSION = "@default"
 
 
-#: MindFlock's own place for the default session (the owner: "a folder like
-#: mindflock pastes, created for this specific purpose"), a git repo so a
-#: chain's commit / push stops work there too.
+#: MindFlock's own default folder (the owner: "a folder like mindflock
+#: pastes, created for this specific purpose"): where a chain runs when no
+#: session is picked. A git repo so a session made there can commit.
 DEFAULT_PLACE = "~/.mindflock/default"
 
 
@@ -940,7 +942,7 @@ def _ensure_default_place() -> str:
             with open(readme, "w", encoding="utf-8") as fh:
                 fh.write(
                     "# MindFlock's default place\n\n"
-                    "Chains run here when no session is picked (the default session).\n"
+                    "Chains run here when no session is picked.\n"
                 )
         git = [
             "git",
@@ -965,7 +967,7 @@ def _ensure_default_place() -> str:
 
 
 def _default_folder() -> str:
-    """Where the default session lives: the ``general.default_folder``
+    """Where a chain with no session picked runs: the ``general.default_folder``
     setting when it names a folder, else MindFlock's own place
     (:data:`DEFAULT_PLACE`, made on first use)."""
     import os
@@ -1007,70 +1009,18 @@ def needs_agent(flight: dict) -> bool:
     return False
 
 
-_SHELLS = ("bash", "zsh", "sh", "fish", "dash", "ksh")
-
-
-def _is_shell(program: str) -> bool:
-    import os
-
-    return os.path.basename(str(program or "").split()[0] if program else "") in _SHELLS
-
-
-async def ensure_default_session(agent: bool = False) -> str:
-    """The default session's title — a session is a place in the file tree, so
-    the default one is MindFlock's own folder (:func:`_default_folder`). An
-    agent runs there only when the chain needs one: ``agent=False`` gives a
-    plain-shell session ("default"), ``agent=True`` one running the default
-    agent ("default-agent"). An existing session in that folder of the right
-    sort, not on a flight, is reused; else one is made (in place) and, for the
-    shell one, remembered in ``general.default_session``."""
-    import os
-
-    from backend.config.settings import load_settings, update_settings
-
-    srv = _server()
-    folder = await asyncio.to_thread(_default_folder)
-    try:
-        known = str(load_settings().general.default_session or "").strip()
-    except Exception:  # noqa: BLE001
-        known = ""
-
-    def fits(title: str) -> bool:
-        inst = srv.ENGINE.instances.get(title)
-        if inst is None or _flights.for_session(title) is not None:
-            return False
-        shell = _is_shell(getattr(inst, "Program", "") or "")
-        return shell != agent
-
-    if known and fits(known):
-        return known
-    for title, inst in list(srv.ENGINE.instances.items()):
-        try:
-            same = os.path.realpath(
-                str(getattr(inst, "Path", "") or "")
-            ) == os.path.realpath(folder)
-        except Exception:  # noqa: BLE001
-            same = False
-        if same and fits(title):
-            return title
-    payload = {
-        "title": "default-agent" if agent else "default",
-        "repo_path": folder,
-        "prompt": "",
-        "in_place": True,
-    }
-    if not agent:
-        # No agent: the session is a plain shell in the default place.
-        payload["program"] = (
-            os.path.basename(os.environ.get("SHELL", "") or "") or "bash"
-        )
-    title = await _create_session(payload)
-    if not agent:
-        try:
-            await asyncio.to_thread(update_settings, general={"default_session": title})
-        except Exception:  # noqa: BLE001
-            pass
-    return title
+def needs_session(flight: dict) -> bool:
+    """Whether a chain needs a session at all: an agent (:func:`needs_agent`)
+    or a stop that works on a session (a ship lane, a verify, checks, a
+    split…). A chain of perches, waits, notifies, commands and Loops runs on
+    its own in a folder — like an n8n workflow, nothing is started for it."""
+    if needs_agent(flight):
+        return True
+    for st in flight.get("steps") or []:
+        k = st.get("kind")
+        if k in _flights.SESSION_KINDS and k not in _flights.FOLDER_KINDS:
+            return True
+    return False
 
 
 async def _create_session(payload: dict) -> str:
@@ -2572,10 +2522,35 @@ async def attach(flight_id: str, body: dict) -> dict:
         )
     _flights.validate_for_takeoff(f)
     title = str(body.get("title") or "").strip()
-    # No session picked: the default session (made the first time it is needed).
-    if title == DEFAULT_SESSION:
-        f0 = _flights.get(flight_id) or {}
-        title = await ensure_default_session(agent=needs_agent(f0))
+    folder = str(body.get("folder") or "").strip()
+    if title == DEFAULT_SESSION or folder:
+        # No session picked: the chain runs in a folder (the default one
+        # unless named). Nothing is started for a chain that needs no
+        # session; one that does gets a new session there.
+        folder = (
+            os.path.expanduser(folder)
+            if folder
+            else await asyncio.to_thread(_default_folder)
+        )
+        if not os.path.isdir(folder):
+            raise _flights.FlightError("bad_folder", 400, "no folder %s" % folder)
+        if not needs_session(f):
+            flight = await asyncio.to_thread(
+                _flights.attach,
+                flight_id,
+                "",
+                folder,
+                "",
+                False,
+                None,
+                None,
+                start_on,
+            )
+            _emit("flight.changed", flight)
+            wake()
+            return flight
+        title = ""
+        body = dict(body, repo_path=folder)
     seeded = False
     no_prompt = False
     if title:

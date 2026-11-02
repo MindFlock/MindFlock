@@ -4941,6 +4941,43 @@ a.fl-waiting-ref:hover {
   align-items: stretch;
   text-align: left;
 }
+
+/* --- A chain with no session: its run button (n8n's trigger ▶) --------------
+   On the left of the first stop, where a run starts — never a label floating
+   over the chain. At rest it shows on hover; while the chain runs it stays,
+   as ■ (stop the run). */
+.sky-chain .sky-run {
+  position: absolute;
+  z-index: 3;
+  width: 26px;
+  height: 26px;
+  box-sizing: border-box;
+  transform: translate(-50%, -50%) scale(calc(1 / var(--sky-z, 1)));
+  border-radius: 50%;
+  border: 1.5px solid var(--accent);
+  background: var(--sky-tile-bg, var(--bg));
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 1;
+  padding: 0 0 0 2px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+.sky-chain .sky-run.is-running {
+  padding: 0;
+  opacity: 1;
+}
+.sky-chain:hover .sky-run,
+.sky-chain .sky-run:focus-visible {
+  opacity: 1;
+}
+.sky-chain .sky-run:hover,
+.sky-chain .sky-run:focus-visible {
+  background: var(--accent);
+  color: var(--bg);
+  outline: none;
+}
 /* The sky (SkyView.tsx) — prefix sky-.
  *
  * The main area's second view, in the grid's place (#sky-view is the body
@@ -12746,15 +12783,6 @@ details.fl-group-waiting > summary {
   outline: none;
 }
 
-/* A stops-only chain's ▶ Run… on its label (it runs inside a session). */
-.skl-run {
-  padding: 1px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--tone-working);
-  color: var(--fl-ink-working, var(--tone-working));
-  font-size: 11px;
-  font-weight: 600;
-}
 /* The Sky's readability overrides for parts drawn by SkyView (the toolbar,
    the drawer) whose own rules live in Sky.css. Imported by SkyLine.tsx; CSS
    is global. The sizes and contrast numbers are in docs/flights-visibility.md.

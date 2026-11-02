@@ -33,8 +33,8 @@ import { useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent, typ
 import type { Flight, FlightPlan, StepKindDef } from "../../lib/flights";
 import { birdPerch, type DiagramNode } from "../../lib/flightDiagram";
 import { chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
-import { attachGrounded, DEFAULT_SESSION, deleteFlight, renameFlight, savePlan, startGrounded } from "../../lib/flightsApi";
-import { isRemoveKey, planToSave, sourcePlanId } from "../../lib/groundedLines";
+import { attachGrounded, controlFlight, DEFAULT_SESSION, deleteFlight, renameFlight, savePlan, startGrounded } from "../../lib/flightsApi";
+import { isFreeRun, isRemoveKey, planToSave, sourcePlanId } from "../../lib/groundedLines";
 import { lodFor, nearLines, type SkyLineLayout } from "../../lib/skyLayout";
 import { errMsg } from "../../lib/format";
 import { toast } from "../../lib/toast";
@@ -263,6 +263,22 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   const chainMenu = useChainMenu(gc, flight.id, { steps: flight.steps, kinds: p.kinds });
   const onPillDown = pillAimer(graph, gc.onLoopTo);
   const shift = useRef(false);
+  // A chain with no session runs on its own in a folder — nothing is started
+  // for it (only a stop that needs a session gets one, made in that folder).
+  const running = isFreeRun(flight);
+  const run =
+    flight.steps.length > 0 && head.kind !== "trigger"
+      ? {
+          running,
+          label: running ? "Stop this run" : "Run these stops (⋯ Run on a session… to pick where)",
+          onRun: () =>
+            void attachGrounded(flight.id, { title: DEFAULT_SESSION }).then((f) => {
+              if (!f) return;
+              toast(f.session ? "Running “" + name + "” in a new session, " + f.session : "Running “" + name + "”");
+            }),
+          onStop: () => void controlFlight(flight.id, "cancel"),
+        }
+      : null;
 
   return (
     <div
@@ -330,19 +346,17 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
             Started by a chain
           </span>
         )}
-        {/* A session is a place in the file tree; a chain runs in one. ▶ Run
-            runs these stops in the DEFAULT session (made the first time); ⋯
-            Run on a session… picks another place. */}
-        {flight.steps.length > 0 && head.kind !== "trigger" && (
-          <button
-            type="button"
-            className="fl-icon-btn skl-run"
-            data-no-drag
-            title="Run these stops in the default session (⋯ Run on a session… to pick another)"
-            onClick={() => void attachGrounded(flight.id, { title: DEFAULT_SESSION }).then((f) => f && toast("Running “" + name + "” in the default session"))}
-          >
-            ▶ Run
-          </button>
+        {/* No Run label up here: the chain's ▶ sits on the left of its first
+            stop, where a run starts (n8n's trigger button) — SkyChain `run`. */}
+        {running && (
+          <span className={"fl-box-chip skl-chip " + (flight.state === "waiting_you" ? "tone-you" : flight.state === "running" ? "tone-working" : "tone-paused")} title={flight.repo_root ? "Running in " + flight.repo_root : undefined}>
+            {flight.state === "waiting_you" ? "Waiting on you" : flight.state === "running" ? "Running" : "Paused"}
+          </span>
+        )}
+        {!running && flight.last_run && (
+          <span className={"fl-box-chip skl-chip " + (flight.last_run.state === "done" ? "tone-ready" : "tone-muted")} title={flight.last_run.reason || undefined}>
+            {flight.last_run.state === "done" ? "Last run done" : "Last run stopped"}
+          </span>
         )}
         <span className="skl-menu" data-no-drag>
           <OverflowMenu label={"Actions for " + name} items={items} />
@@ -368,6 +382,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
           onNodeMove={moves.move}
           onPortDown={p.onPortDown}
           onPlus={(after) => (after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true))}
+          run={run}
         />
         {chainMenu.menu}
           <ChainPanels graph={graph} anchor={line.anchor} anchorPos={line.anchorPos}>

@@ -163,6 +163,11 @@ export interface FlightHistoryEntry {
 export interface Flight {
   /** Round 18: started by another chain's Handoff stop. */
   triggered_by?: { flight: string; step: string; session: string };
+  /** A FREE chain (2026-11-02): run with no session, in the folder
+   * `repo_root` — like an n8n workflow, nothing is started for it. When a run
+   * ends it goes back on the ground (`last_run` says how it went). */
+  free?: boolean;
+  last_run?: { state: "done" | "cancelled"; reason: string; at: number };
   id: string;
   plan_id: string;
   plan_name: string;

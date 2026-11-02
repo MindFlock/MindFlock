@@ -467,7 +467,7 @@ export async function startGrounded(body: { plan_id?: string; steps?: FlightStep
  * the session first (`title: ""` + `repo_path`…) and then attach. */
 export async function attachGrounded(
   flightId: string,
-  body: { title: string; repo_path?: string; program?: string; model?: string; in_place?: boolean; prompt?: string; start_on?: FlightStartOn }
+  body: { title: string; folder?: string; repo_path?: string; program?: string; model?: string; in_place?: boolean; prompt?: string; start_on?: FlightStartOn }
 ): Promise<Flight | null> {
   try {
     const d = await api<{ flight?: Flight }>(flightPath(flightId, "/attach"), { json: body });
@@ -481,9 +481,10 @@ export async function attachGrounded(
   }
 }
 
-/** The default session's name for `attachGrounded` (`{title: DEFAULT_SESSION}`):
- * the server runs the stops in the default session, making it the first time
- * (a session is a place in the file tree; this one is the default place). */
+/** "No session — the default folder" for `attachGrounded` (`{title:
+ * DEFAULT_SESSION}`): a chain that needs no session runs there on its own
+ * (nothing is started); one that needs a session gets a new one there.
+ * `{folder}` names another folder the same way. */
 export const DEFAULT_SESSION = "@default";
 
 /** Delete a flight that is not in the air (a grounded one, or a finished one). */

@@ -7311,3 +7311,31 @@ optional `parallel` object.
 - Parallel fork / join wires are solid (only the sub-session bus is dashed).
 - Also: only a DONE flight lingers on its session's line (cancelled ones —
   old Loop tests — had reappeared); sub-session frames are left-aligned.
+
+## Free chains: a default FOLDER, not a default session (2026-11-02)
+
+The owner, after the default session shipped: "you still spawned a shell …
+I really don't like that some sort of agent thing is required … I just meant
+there should be a default dir we work in", plus the floating "▶ Run" label
+over stops-only chains looked wrong. Taken from n8n:
+
+| n8n | Sky before | Sky now |
+|---|---|---|
+| A workflow runs in the n8n process; nothing is started per workflow (Execute Command runs on the host) | ▶ Run made a `default` session (a zsh in tmux, or an agent) and moved the chain onto it | A chain that needs no session runs FREE: `session ""`, `free: true`, `repo_root` = the folder. Nothing is started |
+| The workflow stays; a run is an execution of it | The chain became the session's flight and left the board | The chain stays where it is while it runs (bird, ✓s, countdown); when the run ends it goes back on the ground with `last_run {state, reason, at}` and runs again from the top |
+| Run from the trigger: ▶ beside the trigger node / Execute workflow | "▶ Run" pill on the chain's label bar | ▶ on the LEFT of the first stop (SkyChain `run`, `.sky-run`): on hover at rest, ■ (stop the run) while it runs; the bar shows Running / Waiting on you / Last run done |
+| A node not wired to a trigger just does not run | — | (unchanged: a split-off stop is its own chain with its own ▶) |
+
+Backend: `attach {title: "@default"}` = the default folder
+(`general.default_folder`, else `~/.mindflock/default`); `attach {folder}` =
+that folder. `needs_session(flight)` = `needs_agent` or any stop in
+`SESSION_KINDS − FOLDER_KINDS` (`FOLDER_KINDS` = command, loop): a chain that
+needs one gets a NEW session in the folder (the old `title: "" + repo_path`
+path) — never a reused "default". A free chain's command / loop stops skip the
+session hold; `_session_obs` gives a sessionless flight its `repo_root` as
+`folder` (commands run there). `_finish` re-grounds a free chain unless it is
+really over (`_FREE_GONE`: replaced, last stop removed); `op_attach` on a
+chain with `last_run` resets every stop to pending, cursor 0. `prune` never
+touches a sessionless flight. Removed: `ensure_default_session`,
+`general.default_session`; `GET /api/flights/default-place` → `{folder}`.
+The picker says "Default folder" / "Run in <folder>".

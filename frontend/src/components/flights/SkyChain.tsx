@@ -71,6 +71,9 @@ export interface SkyChainProps {
   onPortDown?(node: GraphNode, side: "in" | "out", e: PointerEvent<HTMLElement>): void;
   /** The trailing + clicked without a drag: the palette after the last node. */
   onPlus?(after: GraphNode | null): void;
+  /** A chain with no session (n8n's trigger button): ▶ on the left of its
+   * first stop runs it; while it runs the same button stops it. */
+  run?: { running: boolean; label: string; onRun(): void; onStop(): void } | null;
   /** Extra content in or under a tile (a perch's Done / Skip …). */
   renderInBox?(n: DiagramNode): ReactNode;
   /** A node drawn open instead of as a tile (an open sub-session's card):
@@ -539,7 +542,7 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
 
   const b = g.bbox;
   const plusAfter = g.plus ? byId.get(g.plus.after) || null : null;
-  const socket = head.kind === "none" && firstStop ? inPortOf(firstStop) : null;
+  const socket = head.kind === "none" && firstStop && !p.run?.running ? inPortOf(firstStop) : null;
 
   return (
     <div
@@ -570,6 +573,28 @@ export function SkyChain(p: SkyChainProps): JSX.Element {
           title="Wire a session's out port here to run it"
         />
       )}
+      {p.run && firstStop && (() => {
+        const at = inPortOf(firstStop);
+        const r = p.run;
+        return (
+          <button
+            type="button"
+            className={"sky-run fl-icon-btn" + (r.running ? " is-running" : "")}
+            style={{ left: at.x - (socket ? 46 : 22), top: at.y }}
+            data-no-drag
+            aria-label={r.label}
+            title={r.label}
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (r.running) r.onStop();
+              else r.onRun();
+            }}
+          >
+            {r.running ? "■" : "▶"}
+          </button>
+        );
+      })()}
       {g.plus && (
         <button
           type="button"

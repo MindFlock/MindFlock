@@ -330,7 +330,7 @@ async def _run(flight, step, action, now) -> dict:
     if to is None:
         raise _kinds.StepFailed(F.NOTHING_TO_REPEAT)
     sent = False
-    if step["config"].get("fresh"):
+    if step["config"].get("fresh") and flight["session"]:
         cmd = await asyncio.to_thread(_clear_command, flight["session"])
         if cmd:
             await asyncio.to_thread(D._deliver, flight["session"], cmd)

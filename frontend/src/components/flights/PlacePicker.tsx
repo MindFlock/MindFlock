@@ -1,9 +1,9 @@
 /** Where a stops-only chain runs — a popup with a search (the owner: "fly on
  * session should pop up the search for folder menu, not a weird tab on the
- * top"). A session is a place in the file tree, so the places are: the
- * DEFAULT session (MindFlock's own folder), the sessions without a flight,
- * and folders — recent ones (`/api/repos/suggest`), a name search
- * (`/api/repos/search`), or a typed path — where a new session is made.
+ * top"). The places: the DEFAULT folder (MindFlock's own), the sessions
+ * without a flight, and folders — recent ones (`/api/repos/suggest`), a name
+ * search (`/api/repos/search`), or a typed path. In a folder a chain runs on
+ * its own; only one that needs a session (an agent, a ship…) gets one there.
  * ↑ ↓ pick, Enter runs, Esc closes. */
 import { useEffect, useMemo, useState, type JSX, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
@@ -32,11 +32,11 @@ export function placeRows(q: string, defaultFolder: string, sessions: readonly {
   const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
   const hit = (s: string) => terms.every((t) => s.toLowerCase().includes(t));
   const rows: Row[] = [];
-  if (!terms.length || hit("default session " + defaultFolder)) rows.push({ key: "default", label: "Default session", hint: defaultFolder, place: { kind: "default" }, section: "Default" });
+  if (!terms.length || hit("default folder " + defaultFolder)) rows.push({ key: "default", label: "Default folder", hint: defaultFolder, place: { kind: "default" }, section: "Default" });
   for (const s of sessions) if (!terms.length || hit(s.title + " " + windowName(s.title) + " " + s.folder)) rows.push({ key: "s:" + s.title, label: windowName(s.title), hint: homeShort(s.folder, home), place: { kind: "session", title: s.title }, section: "Sessions" });
   const typed = q.trim();
-  if (looksLikePath(typed)) rows.push({ key: "p:" + typed, label: "New session in " + typed, hint: "a typed folder", place: { kind: "folder", path: typed }, section: "Folders" });
-  for (const f of folders) if (!terms.length || looksLikePath(typed) || hit(f.name + " " + f.path)) rows.push({ key: "f:" + f.path, label: "New session in " + f.name, hint: homeShort(f.path, home), place: { kind: "folder", path: f.path }, section: "Folders" });
+  if (looksLikePath(typed)) rows.push({ key: "p:" + typed, label: "Run in " + typed, hint: "a typed folder", place: { kind: "folder", path: typed }, section: "Folders" });
+  for (const f of folders) if (!terms.length || looksLikePath(typed) || hit(f.name + " " + f.path)) rows.push({ key: "f:" + f.path, label: "Run in " + f.name, hint: homeShort(f.path, home), place: { kind: "folder", path: f.path }, section: "Folders" });
   return rows;
 }
 

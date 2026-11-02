@@ -2159,7 +2159,7 @@ export function SkyView() {
   // A grounded flight flies on a session with no flight in the air.
   const pickable = attachPick ? titles.filter((t) => !liveFlightOf(t)) : titles;
   // Where a stops-only chain runs: a popup with a search (PlacePicker) — the
-  // default session, a session without a flight, or a folder (a new session).
+  // default folder, a session without a flight, or another folder.
   const pick = attachPick && (
     <PlacePicker
       name={groundedName(attachPick)}
@@ -2170,7 +2170,7 @@ export function SkyView() {
         setAttachPick(null);
         if (place.kind === "default") onAttach(f, DEFAULT_SESSION);
         else if (place.kind === "session") onAttach(f, place.title);
-        else void attachGrounded(f.id, { title: "", repo_path: place.path }).then((x) => x && toast("Running “" + groundedName(f) + "” in a new session"));
+        else void attachGrounded(f.id, { title: "", folder: place.path }).then((x) => x && toast("Running “" + groundedName(f) + "” in " + (x.session ? "a new session, " + x.session : place.path)));
       }}
     />
   );

@@ -1314,12 +1314,9 @@ class GeneralSettings:
     agent_max_spawned: Optional[int] = None  # None = lineage default (24)
     heavy_slots: Optional[int] = None  # None = by RAM (see docstring)
     mcp_shared_servers: List[str] = field(default_factory=list)
-    # The DEFAULT SESSION (2026-11-02): a session is a place in the file tree;
-    # a chain run with no session picked runs in this one. ``default_folder``
-    # is where it lives ("" = the newest local session's folder, else home);
-    # ``default_session`` is its title once made (MindFlock keeps it).
+    # The DEFAULT FOLDER (2026-11-02): a chain run with no session picked
+    # runs here ("" = MindFlock's own ~/.mindflock/default).
     default_folder: str = ""
-    default_session: str = ""
     workers_request: str = DEFAULT_WORKERS_REQUEST
     workers_model: str = DEFAULT_WORKERS_MODEL
 
@@ -1366,8 +1363,6 @@ class GeneralSettings:
             d["agent_mcp_scope"] = self.agent_mcp_scope
         if self.default_folder:
             d["default_folder"] = self.default_folder
-        if self.default_session:
-            d["default_session"] = self.default_session
         for key in AGENT_SPAWN_CAP_FIELDS:
             value = getattr(self, key)
             if value is not None:
@@ -1417,7 +1412,6 @@ class GeneralSettings:
             heavy_slots=_opt_pos_int(d.get("heavy_slots")),
             mcp_shared_servers=_mcp_server_names(d.get("mcp_shared_servers")),
             default_folder=str(d.get("default_folder") or "").strip()[:1024],
-            default_session=str(d.get("default_session") or "").strip()[:200],
             workers_request=str(d.get("workers_request", "") or "").strip()
             or DEFAULT_WORKERS_REQUEST,
             workers_model=str(d.get("workers_model", "") or "").strip()

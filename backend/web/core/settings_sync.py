@@ -232,9 +232,8 @@ LOCAL: Dict[str, Tuple[str, ...]] = {
         "auth_token",
         "auth_mode",
         "onboarded",
-        # The default session: a path and a session title on THIS device.
+        # The default folder: a path on THIS device.
         "default_folder",
-        "default_session",
         "setup",
         "last_repo_path",
         "remote_control",

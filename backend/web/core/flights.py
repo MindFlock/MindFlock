@@ -473,6 +473,9 @@ SESSION_KINDS = frozenset(
 )
 #: Kinds that type into the session's agent (the driver wakes it first).
 AGENT_KINDS = frozenset({"agent", "reviews"})
+#: Session kinds a FREE chain (no session, a folder) still runs: a command
+#: runs in the folder, a Loop that repeats earlier stops needs nothing.
+FOLDER_KINDS = frozenset({"command", "loop"})
 
 
 #: The palette's grouping (docs/flights.md "Round 15"): work (the agent and
@@ -1825,6 +1828,17 @@ def _normalize_flight(fid, raw) -> Optional[dict]:
     trig = _normalize_triggered_by(raw.get("triggered_by"))
     if trig is not None:
         out["triggered_by"] = trig
+    if raw.get("free"):
+        # A chain on the board, run in a folder with no session (n8n's
+        # workflow: the run is an execution, the chain stays).
+        out["free"] = True
+    last = raw.get("last_run")
+    if isinstance(last, dict) and last.get("state") in FINAL:
+        out["last_run"] = {
+            "state": last["state"],
+            "reason": _text(last.get("reason"), 1000),
+            "at": _float(last.get("at")),
+        }
     if out["cursor"] < len(steps):
         # At a parallel group the cursor stands on its first member.
         out["cursor"] = group_span(steps, out["cursor"])[0]
@@ -2584,6 +2598,8 @@ def _session_hold(flight: dict, step: dict, sess: dict) -> Optional[dict]:
     if step["kind"] not in SESSION_KINDS:
         return None
     if not flight["session"]:
+        if flight.get("free") and step["kind"] in FOLDER_KINDS:
+            return None  # runs in the chain's folder; no session needed
         return _wait("no session yet")
     if not sess.get("present"):
         if sess.get("pending"):
@@ -3470,11 +3486,28 @@ def _hist(flight: dict, now: float, sid: str, event: str, note: str = "") -> Non
         del flight["history"][: len(flight["history"]) - MAX_HISTORY]
 
 
+#: Why a free chain is really over (not just this run): it goes for good.
+_FREE_GONE = ("replaced by a new flight", "its last stop was removed")
+
+
 def _finish(flight: dict, state: str, reason: str, now: float) -> None:
     flight["state"] = state
     flight["reason"] = reason
     flight["finished"] = now
     flight["updated"] = now
+    if (
+        flight.get("free")
+        and not flight.get("session")
+        and flight.get("steps")
+        and reason not in _FREE_GONE
+    ):
+        # A free chain is a chain on the board, not a run: when a run ends
+        # (landed or stopped) the chain goes back on the ground, its stops
+        # still showing how the run went, ready to run again.
+        flight["last_run"] = {"state": state, "reason": reason, "at": now}
+        flight["state"] = GROUNDED
+        flight["reason"] = ""
+        flight["finished"] = 0.0
 
 
 def _advance(flight: dict, now: float) -> None:
@@ -4746,16 +4779,32 @@ def op_attach(
     trig = _normalize_triggered_by(triggered_by)
     if trig is not None:
         flight["triggered_by"] = trig
+    if flight.pop("last_run", None) is not None:
+        # Run again: every stop pending, from the top.
+        for s in flight["steps"]:
+            flight["step_states"][s["id"]] = _blank_step_state()
+        flight["cursor"] = 0
     flight["session"] = str(title)
     flight["repo_root"] = str(repo_root or "")
     flight["branch"] = str(branch or "")
+    # No session: a free chain, run in the folder ``repo_root``.
+    if title:
+        flight.pop("free", None)
+    else:
+        flight["free"] = True
     flight["state"] = "running"
     flight["reason"] = ""
     flight["started"] = ts
     flight["updated"] = ts
     flight["gone_since"] = 0.0
     cur = _current(flight)
-    _hist(flight, ts, cur["id"] if cur else "", "attached", "attached to %s" % title)
+    _hist(
+        flight,
+        ts,
+        cur["id"] if cur else "",
+        "attached",
+        ("attached to %s" % title) if title else ("running in %s" % repo_root),
+    )
     if start_on in ("prompt", "run") and cur is not None:
         flight["state"] = READY
         flight["start_on"] = start_on

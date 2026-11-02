@@ -289,3 +289,21 @@ describe("round 13: renaming a grounded line", () => {
     expect(cleanFlightName("x".repeat(200))).toHaveLength(120);
   });
 });
+
+describe("free chains (2026-11-02): run in a folder with no session, like an n8n workflow", () => {
+  const f = (over: Partial<Flight>) => ({ id: "x", state: "grounded", started: 1, session: "", ...over }) as Flight;
+  it("a free chain mid-run stays on the board; a session's flight does not", () => {
+    expect(G.groundedFlights([f({ state: "running", free: true })]).length).toBe(1);
+    expect(G.groundedFlights([f({ state: "waiting_you", free: true })]).length).toBe(1);
+    expect(G.groundedFlights([f({ state: "running", session: "s1" })]).length).toBe(0);
+    expect(G.groundedFlights([f({ state: "done", free: true })]).length).toBe(0);
+    expect(G.isFreeRun(f({ state: "running", free: true }))).toBe(true);
+    expect(G.isFreeRun(f({ state: "grounded", free: true }))).toBe(false);
+  });
+  it("its ▶ sits on the first stop (SkyChain run), never a Run label on the chain's bar", () => {
+    const src = code("components/flights/GroundedLine.tsx");
+    expect(src).not.toContain("skl-run");
+    expect(src).toContain("run={run}");
+    expect(code("components/flights/SkyChain.tsx")).toContain('className={"sky-run fl-icon-btn"');
+  });
+});

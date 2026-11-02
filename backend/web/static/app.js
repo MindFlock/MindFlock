@@ -86245,7 +86245,7 @@ function SkyChain(p) {
 	const tinted = (w) => w.kind === "line" || w.kind === "head";
 	const b = g.bbox;
 	const plusAfter = g.plus ? byId.get(g.plus.after) || null : null;
-	const socket = head.kind === "none" && firstStop ? inPortOf(firstStop) : null;
+	const socket = head.kind === "none" && firstStop && !p.run?.running ? inPortOf(firstStop) : null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		className: "sky-chain" + (p.className ? " " + p.className : "") + (drag?.live ? " is-dragging-node" : ""),
 		style: {
@@ -86297,6 +86297,28 @@ function SkyChain(p) {
 				"aria-label": "Wire a session's out port here to run it",
 				title: "Wire a session's out port here to run it"
 			}),
+			p.run && firstStop && (() => {
+				const at = inPortOf(firstStop);
+				const r = p.run;
+				return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "sky-run fl-icon-btn" + (r.running ? " is-running" : ""),
+					style: {
+						left: at.x - (socket ? 46 : 22),
+						top: at.y
+					},
+					"data-no-drag": true,
+					"aria-label": r.label,
+					title: r.label,
+					onPointerDown: (e) => e.stopPropagation(),
+					onClick: (e) => {
+						e.stopPropagation();
+						if (r.running) r.onStop();
+						else r.onRun();
+					},
+					children: r.running ? "■" : "▶"
+				});
+			})(),
 			g.plus && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",
 				className: "sky-plus fl-icon-btn",
@@ -86827,10 +86849,16 @@ var GROUNDED_PREFIX = "flight:";
 var groundedKey = (id) => GROUNDED_PREFIX + id;
 var isGroundedKey = (key) => key.startsWith(GROUNDED_PREFIX);
 var groundedIdOf = (key) => isGroundedKey(key) ? key.slice(7) : "";
+var isFreeRun = (f) => !!f.free && !f.session && isLive(f);
 function groundedFlights(flights) {
-	return (flights || []).filter((f) => f.state === "grounded").sort((a, b) => (b.started || 0) - (a.started || 0) || (a.id < b.id ? 1 : -1));
+	return (flights || []).filter((f) => f.state === "grounded" || isFreeRun(f)).sort((a, b) => (b.started || 0) - (a.started || 0) || (a.id < b.id ? 1 : -1));
 }
 function groundedDiagram(f, kinds) {
+	if (isFreeRun(f)) return {
+		...flightDiagram(f, kinds),
+		flightId: f.id,
+		mode: "flight"
+	};
 	let d = flightDiagram(f, kinds);
 	const nodes = d.nodes.map((n) => n.kind === "stop" ? {
 		...n,
@@ -135440,6 +135468,16 @@ function GroundedLine(p) {
 	});
 	const onPillDown = pillAimer(graph, gc.onLoopTo);
 	const shift = (0, import_react.useRef)(false);
+	const running = isFreeRun(flight);
+	const run = flight.steps.length > 0 && head.kind !== "trigger" ? {
+		running,
+		label: running ? "Stop this run" : "Run these stops (⋯ Run on a session… to pick where)",
+		onRun: () => void attachGrounded(flight.id, { title: DEFAULT_SESSION }).then((f) => {
+			if (!f) return;
+			toast(f.session ? "Running “" + name + "” in a new session, " + f.session : "Running “" + name + "”");
+		}),
+		onStop: () => void controlFlight(flight.id, "cancel")
+	} : null;
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		ref: rootRef,
 		className: "skl skl-chainline skl-grounded" + (head.kind === "trigger" ? " is-triggered" : "") + (p.focused ? " is-focused" : "") + (p.selected ? " is-selected" : "") + (p.sessionOver ? " is-session-over" : "") + (p.merging ? " is-merging" : "") + (line.editing ? " is-editing" : ""),
@@ -135494,13 +135532,15 @@ function GroundedLine(p) {
 					title: head.title + " — " + head.sub,
 					children: "Started by a chain"
 				}),
-				flight.steps.length > 0 && head.kind !== "trigger" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
-					type: "button",
-					className: "fl-icon-btn skl-run",
-					"data-no-drag": true,
-					title: "Run these stops in the default session (⋯ Run on a session… to pick another)",
-					onClick: () => void attachGrounded(flight.id, { title: DEFAULT_SESSION }).then((f) => f && toast("Running “" + name + "” in the default session")),
-					children: "▶ Run"
+				running && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-box-chip skl-chip " + (flight.state === "waiting_you" ? "tone-you" : flight.state === "running" ? "tone-working" : "tone-paused"),
+					title: flight.repo_root ? "Running in " + flight.repo_root : void 0,
+					children: flight.state === "waiting_you" ? "Waiting on you" : flight.state === "running" ? "Running" : "Paused"
+				}),
+				!running && flight.last_run && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "fl-box-chip skl-chip " + (flight.last_run.state === "done" ? "tone-ready" : "tone-muted"),
+					title: flight.last_run.reason || void 0,
+					children: flight.last_run.state === "done" ? "Last run done" : "Last run stopped"
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "skl-menu",
@@ -135534,7 +135574,8 @@ function GroundedLine(p) {
 					kinds: p.kinds,
 					onNodeMove: moves.move,
 					onPortDown: p.onPortDown,
-					onPlus: (after) => after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true)
+					onPlus: (after) => after && after.id !== HEAD ? line.paletteAfter(after.node, null) : line.togglePalette(true),
+					run
 				}),
 				chainMenu.menu,
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)(ChainPanels, {
@@ -136512,9 +136553,9 @@ function placeRows(q, defaultFolder, sessions, folders, home = "") {
 	const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
 	const hit = (s) => terms.every((t) => s.toLowerCase().includes(t));
 	const rows = [];
-	if (!terms.length || hit("default session " + defaultFolder)) rows.push({
+	if (!terms.length || hit("default folder " + defaultFolder)) rows.push({
 		key: "default",
-		label: "Default session",
+		label: "Default folder",
 		hint: defaultFolder,
 		place: { kind: "default" },
 		section: "Default"
@@ -136532,7 +136573,7 @@ function placeRows(q, defaultFolder, sessions, folders, home = "") {
 	const typed = q.trim();
 	if (looksLikePath(typed)) rows.push({
 		key: "p:" + typed,
-		label: "New session in " + typed,
+		label: "Run in " + typed,
 		hint: "a typed folder",
 		place: {
 			kind: "folder",
@@ -136542,7 +136583,7 @@ function placeRows(q, defaultFolder, sessions, folders, home = "") {
 	});
 	for (const f of folders) if (!terms.length || looksLikePath(typed) || hit(f.name + " " + f.path)) rows.push({
 		key: "f:" + f.path,
-		label: "New session in " + f.name,
+		label: "Run in " + f.name,
 		hint: homeShort(f.path, home),
 		place: {
 			kind: "folder",
@@ -138702,8 +138743,8 @@ function SkyView() {
 			else if (place.kind === "session") onAttach(f, place.title);
 			else attachGrounded(f.id, {
 				title: "",
-				repo_path: place.path
-			}).then((x) => x && toast("Running “" + groundedName(f) + "” in a new session"));
+				folder: place.path
+			}).then((x) => x && toast("Running “" + groundedName(f) + "” in " + (x.session ? "a new session, " + x.session : place.path)));
 		}
 	});
 	const drawer = /* @__PURE__ */ (0, import_jsx_runtime.jsx)(SkyDrawer, {

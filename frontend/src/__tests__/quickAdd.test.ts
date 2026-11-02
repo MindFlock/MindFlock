@@ -24,17 +24,17 @@ describe("quickRows", () => {
 });
 
 describe("placeRows (where a stops-only chain runs)", () => {
-  it("lists the default session, sessions and folders; filters them; a typed path offers a new session there", async () => {
+  it("lists the default folder, sessions and folders; filters them; a typed path runs there", async () => {
     const { placeRows } = await import("../components/flights/PlacePicker");
     const sessions = [{ title: "api-fix", folder: "/home/u/api" }];
     const folders = [{ path: "/home/u/web", name: "web" }];
     const all = placeRows("", "~/.mindflock/default", sessions, folders, "/home/u");
     expect(all.map((r) => [r.section, r.label])).toEqual([
-      ["Default", "Default session"],
+      ["Default", "Default folder"],
       ["Sessions", "api-fix"],
-      ["Folders", "New session in web"],
+      ["Folders", "Run in web"],
     ]);
-    expect(placeRows("web", "~/.mindflock/default", sessions, folders).map((r) => r.label)).toEqual(["New session in web"]);
+    expect(placeRows("web", "~/.mindflock/default", sessions, folders).map((r) => r.label)).toEqual(["Run in web"]);
     expect(placeRows("~/code/x", "~/.mindflock/default", sessions, folders)[0].place).toEqual({ kind: "folder", path: "~/code/x" });
   });
 });

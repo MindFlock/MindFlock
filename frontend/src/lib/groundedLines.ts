@@ -7,7 +7,7 @@
  * saving. */
 
 import { flightDiagram, type Diagram } from "./flightDiagram";
-import { newStep, planFromSteps, stepActor, type Flight, type FlightPlan, type FlightStep, type StepKindDef } from "./flights";
+import { isLive, newStep, planFromSteps, stepActor, type Flight, type FlightPlan, type FlightStep, type StepKindDef } from "./flights";
 import { chainColor, type ChainHead } from "./skyGraph";
 
 /** A grounded flight's line is laid out under `"flight:" + id` (a session's
@@ -17,16 +17,24 @@ export const groundedKey = (id: string) => GROUNDED_PREFIX + id;
 export const isGroundedKey = (key: string) => key.startsWith(GROUNDED_PREFIX);
 export const groundedIdOf = (key: string) => (isGroundedKey(key) ? key.slice(GROUNDED_PREFIX.length) : "");
 
-/** The flights that draw as a grounded line: `state === "grounded"`, newest
- * first (they follow the session lines). */
-export function groundedFlights<F extends Pick<Flight, "state" | "started" | "id">>(flights: readonly F[] | null | undefined): F[] {
-  return (flights || []).filter((f) => f.state === "grounded").sort((a, b) => (b.started || 0) - (a.started || 0) || (a.id < b.id ? 1 : -1));
+/** A free chain in the air: running with no session, in a folder. */
+export const isFreeRun = (f: Pick<Flight, "state"> & { free?: boolean; session?: string }) => !!f.free && !f.session && isLive(f);
+
+/** The flights that draw as a chain on the board (no session): grounded,
+ * or a free chain mid-run — it stays put while it runs (n8n: a run happens
+ * ON the workflow). Newest first (they follow the session lines). */
+export function groundedFlights<F extends Pick<Flight, "state" | "started" | "id"> & { free?: boolean; session?: string }>(flights: readonly F[] | null | undefined): F[] {
+  return (flights || []).filter((f) => f.state === "grounded" || isFreeRun(f)).sort((a, b) => (b.started || 0) - (a.started || 0) || (a.id < b.id ? 1 : -1));
 }
 
 /** A grounded flight's stops as the canvas draws them: the flight's own
  * diagram, every stop editable (none has flown, none is current), the + at
  * the end and between any two. */
 export function groundedDiagram(f: Flight, kinds?: readonly StepKindDef[] | null): Diagram {
+  if (isFreeRun(f)) {
+    // Mid-run: the stops as they are flying (the bird, the ✓s, the countdown).
+    return { ...flightDiagram(f, kinds), flightId: f.id, mode: "flight" };
+  }
   let d = flightDiagram(f, kinds);
   const nodes = d.nodes.map((n) => (n.kind === "stop" ? { ...n, state: "pending" as const, editable: true } : n));
   // A Loop rides its return wire (lib/flightDiagram `liftLoops`): it changes the same way.

@@ -1235,12 +1235,3 @@
   outline: none;
 }
 
-/* A stops-only chain's ▶ Run… on its label (it runs inside a session). */
-.skl-run {
-  padding: 1px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--tone-working);
-  color: var(--fl-ink-working, var(--tone-working));
-  font-size: 11px;
-  font-weight: 600;
-}
