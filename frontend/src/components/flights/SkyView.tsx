@@ -1237,8 +1237,9 @@ export function SkyView() {
   };
   /** A grounded line made again from its stops and name, pinned where the
    * old one sat (every Undo of a grounded line's removal or merge). */
-  const reground = async (steps: FlightStep[], name: string, was: Pos | undefined) => {
-    const g = await startGrounded({ steps, ...(name ? { name } : {}) });
+  const reground = async (steps: FlightStep[], name: string, was: Pos | undefined, editsDefault?: IntakeSourceRef) => {
+    // An editor of a source's default comes back an editor (never runnable).
+    const g = await startGrounded({ steps, ...(name ? { name } : {}), ...(editsDefault ? { edits_default: editsDefault } : {}) });
     if (g && was) pinAt(groundedKey(g.id), was);
     return g;
   };
@@ -1253,12 +1254,13 @@ export function SkyView() {
     const steps = f.steps;
     const name = f.plan_name || "";
     const shown = groundedName(f);
+    const ed = f.edits_default;
     // Undo makes the line again (a new flight id); Redo removes THAT one.
     let cur = f.id;
     const entry = pushUndo({
       label: "Remove “" + shown + "”",
       undo: async () => {
-        const g = await reground(steps, name, was);
+        const g = await reground(steps, name, was, ed);
         if (g) cur = g.id;
         return g;
       },

@@ -99,9 +99,11 @@ def test_get_is_the_builtin_cut_at_the_sources_depth():
     iss = _get("issues", "O/LIB").json()  # a repo matches case-insensitively
     assert iss["target"] == "o/lib" and iss["label"] == "Issues · o/lib"
     assert iss["plan_id"] == "builtin:ticket@pr"
-    # No depth and no plan of its own: nothing flies.
+    # No depth and no plan of its own: no flight — just the agent, which is
+    # what the editor starts from (an empty chain has nothing to add after).
     none = _get("issues", "o/app").json()
-    assert (none["plan_id"], none["steps"], none["own"]) == ("", [], False)
+    assert (none["plan_id"], none["own"], none["name"]) == ("", False, "Just the agent")
+    assert [s["kind"] for s in none["steps"]] == ["agent"]
 
 
 def test_get_is_the_sources_own_plan_when_it_exists():

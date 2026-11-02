@@ -70,7 +70,7 @@ describe("the sky wires it", () => {
     // Round 17: the entry can be redone (the remade line goes again).
     expect(sky).toMatch(/const entry = pushUndo\(\{\s*label: msg,\s*undo: async \(\) => \{\s*const g = await reground\(steps, name, was\);[\s\S]*?redo: async \(\) => \(cur \? deleteFlight\(cur\) : false\),/);
     expect(sky).toContain("toast(msg, { action: undoAction(entry, ");
-    expect(sky).toContain("const g = await startGrounded({ steps, ...(name ? { name } : {}) });");
+    expect(sky).toContain("const g = await startGrounded({ steps, ...(name ? { name } : {}), ...(editsDefault ? { edits_default: editsDefault } : {}) });");
     expect(sky).toContain("if (g && was) pinAt(groundedKey(g.id), was);");
     expect(sky).toContain("if (alive.current) setLayout((l) => patchSkyLine(l, key, { x: at.x, y: at.y, pinned: true }));");
     expect(sky).toContain("else patchSkyLine(loadSkyLayout(), key, { x: at.x, y: at.y, pinned: true });");

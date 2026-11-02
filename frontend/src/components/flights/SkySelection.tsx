@@ -15,7 +15,7 @@
 
 import { optimisticDelete, patchFlightCache, withoutSteps } from "../../lib/flightOptimism";
 import { useEffect, useRef, useState, type JSX } from "react";
-import type { Flight, FlightStep, StepKindDef } from "../../lib/flights";
+import type { Flight, FlightStep, IntakeSourceRef, StepKindDef } from "../../lib/flights";
 import { isLive, planFromSteps } from "../../lib/flights";
 import { flightStops } from "../../lib/flightDiagram";
 import { deleteFlight, dropGroup, dropStop, groupStops, savePlan, startGrounded, tackOn, tackOnNew, tackOnSteps } from "../../lib/flightsApi";
@@ -98,7 +98,7 @@ export interface SkySelectionProps {
   /** Where a line sits now (plane px): a grounded line put back lands there. */
   posOf?(id: string): Pos | undefined;
   /** Make a removed grounded line again from its stops, pinned at `at`. */
-  restoreGrounded?(steps: FlightStep[], name: string, at: Pos | undefined): Promise<unknown>;
+  restoreGrounded?(steps: FlightStep[], name: string, at: Pos | undefined, editsDefault?: IntakeSourceRef): Promise<unknown>;
 }
 
 const plural = (n: number, one: string, many = one + "s") => n + " " + (n === 1 ? one : many);
@@ -158,12 +158,12 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
   const removeLines = () =>
     run(async () => {
       const closed: string[] = [];
-      const gone: Array<{ steps: FlightStep[]; name: string; at: Pos | undefined }> = [];
+      const gone: Array<{ steps: FlightStep[]; name: string; at: Pos | undefined; ed?: IntakeSourceRef }> = [];
       for (const id of removable) {
         if (isGroundedKey(id)) {
           const f = p.flightOf(id);
           const at = p.posOf?.(id);
-          if (await optimisticDelete(groundedIdOf(id), () => deleteFlight(groundedIdOf(id)))) gone.push({ steps: f?.steps || [], name: f?.plan_name || "", at });
+          if (await optimisticDelete(groundedIdOf(id), () => deleteFlight(groundedIdOf(id)))) gone.push({ steps: f?.steps || [], name: f?.plan_name || "", at, ed: f?.edits_default });
         } else {
           await closeSession(id);
           if (!sessionOpen(id)) closed.push(id);
@@ -176,7 +176,7 @@ export function SkySelectionBar(p: SkySelectionProps): JSX.Element | null {
       const entry = pushUndo({
         label: "Remove " + plural(n, "line"),
         undo: async () => {
-          for (const g of gone) if (g.steps.length) await (p.restoreGrounded ? p.restoreGrounded(g.steps, g.name, g.at) : startGrounded({ steps: g.steps, ...(g.name ? { name: g.name } : {}) }));
+          for (const g of gone) if (g.steps.length) await (p.restoreGrounded ? p.restoreGrounded(g.steps, g.name, g.at, g.ed) : startGrounded({ steps: g.steps, ...(g.name ? { name: g.name } : {}), ...(g.ed ? { edits_default: g.ed } : {}) }));
           await reopenClosed(closed);
         },
       });

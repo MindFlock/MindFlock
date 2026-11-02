@@ -11037,6 +11037,31 @@ details.fl-group-waiting > summary {
   background: color-mix(in srgb, var(--green) 10%, transparent);
 }
 
+/* The stops chip sits in a quiet button (edit this source's default stops
+   on the board): the button is bare, the chip keeps its look and lights its
+   edge on hover. */
+.sky-lane-chips .sky-lane-flyway-btn {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+}
+
+.sky-lane-chips .sky-lane-flyway-btn:hover:not(:disabled) {
+  background: transparent;
+}
+
+.sky-lane-flyway-btn .sky-lane-flyway {
+  cursor: pointer;
+}
+
+.sky-lane-flyway-btn:hover .sky-lane-flyway {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
 .sky-lane-flyway.own {
   color: var(--accent);
   border-color: rgba(var(--accent-rgb), 0.45);
@@ -12783,6 +12808,15 @@ details.fl-group-waiting > summary {
   outline: none;
 }
 
+
+/* "Use these stops for every ticket from <source>": a long source name wraps
+   rather than stretching the whole menu wide. */
+.skl-menu .vf-menu-list .vf-menu-item.skl-mi-promote {
+  max-width: 300px;
+  white-space: normal;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
 /* The Sky's readability overrides for parts drawn by SkyView (the toolbar,
    the drawer) whose own rules live in Sky.css. Imported by SkyLine.tsx; CSS
    is global. The sizes and contrast numbers are in docs/flights-visibility.md.
@@ -13121,6 +13155,41 @@ details.fl-group-waiting > summary {
 .skl.skl-grounded.is-merging {
   opacity: 0.72;
   border-color: var(--accent);
+}
+
+/* --- A source's default stops, edited on the board (the intake lane's
+   stops chip): the label names it, a muted hint says what it means, and its
+   own buttons (Save as default, Reset to default, Discard) sit in the pill,
+   sized to it. It never runs: no ▶ on its first stop. */
+.skl-chainline.is-default-editor > .skl-bar.skl-label {
+  max-width: 760px;
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.skl-grounded .skl-default-hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.skl-grounded .skl-default-acts {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  cursor: default;
+}
+
+.skl-grounded .skl-default-acts > button {
+  height: 20px;
+  min-height: 0;
+  padding: 0 8px;
+  font-size: 11.5px;
+  line-height: 1;
 }
 /* The minimap and the off-screen hints (Minimap.tsx, lib/minimap). Screen-
    sized chrome over the plane: the sky places the map (its bottom-right,

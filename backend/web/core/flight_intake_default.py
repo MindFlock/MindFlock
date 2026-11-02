@@ -195,15 +195,27 @@ def _dto(src: _Source) -> dict:
         if own_plan is not None
         else (_flights.get_plan(plan_id) if plan_id else None)
     )
+    steps = copy.deepcopy(plan["steps"]) if plan else _agent_only(src)
     return {
         "kind": src.kind,
         "target": src.target,
         "label": src.label,
         "plan_id": plan["id"] if plan else "",
-        "name": plan["name"] if plan else "",
+        "name": plan["name"] if plan else ("Just the agent" if steps else ""),
         "own": own_plan is not None,
-        "steps": copy.deepcopy(plan["steps"]) if plan else [],
+        "steps": steps,
     }
+
+
+def _agent_only(src: _Source) -> List[dict]:
+    """What a source with no flight (Fast-track off / agent only) runs: the
+    kind's built-in agent step alone — the editor's starting point, so the
+    owner adds blocks after it rather than to an empty chain."""
+    base = _flights.get_plan(_flights._BUILTIN_FOR_KIND.get(_INTAKE_KIND[src.kind], ""))
+    agent = next(
+        (s for s in (base or {}).get("steps") or [] if s.get("kind") == "agent"), None
+    )
+    return [dict(copy.deepcopy(agent), id="s1")] if agent else []
 
 
 def resolve(kind, target) -> dict:

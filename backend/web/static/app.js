@@ -38055,7 +38055,8 @@ async function startGrounded(body) {
 			grounded: true,
 			...body.plan_id ? { plan_id: body.plan_id } : {},
 			...body.steps ? { steps: body.steps.map(wireStep) } : {},
-			...body.name ? { name: body.name } : {}
+			...body.name ? { name: body.name } : {},
+			...body.edits_default ? { edits_default: body.edits_default } : {}
 		} }))?.flight || null;
 	} catch (err) {
 		errorPop("Adding the stops failed", errMsg(err));
@@ -38145,6 +38146,40 @@ function queueStopPos(flightId, stepId, pos, onDone) {
 		posQueue.delete(flightId);
 		saveStopPositions(flightId, cur.positions).then((ok) => cur.done.forEach((f) => f(ok)));
 	}, POS_BATCH_MS);
+}
+var defaultQuery = (ref) => "kind=" + encodeURIComponent(ref.kind) + "&target=" + encodeURIComponent(ref.target);
+async function getIntakeDefault(ref) {
+	try {
+		return await api("/api/flights/intake-default?" + defaultQuery(ref));
+	} catch (err) {
+		errorPop("Couldn't read the default stops", errMsg(err));
+		return null;
+	}
+}
+async function intakeSourceOfFlight(flightId) {
+	try {
+		return await api("/api/flights/intake-default/for-flight/" + encodeURIComponent(flightId));
+	} catch {
+		return null;
+	}
+}
+async function setIntakeDefault(body) {
+	try {
+		return await api("/api/flights/intake-default", {
+			method: "PUT",
+			json: "steps" in body ? {
+				...body,
+				steps: body.steps.map(wireStep)
+			} : body
+		});
+	} catch (err) {
+		errorPop("Saving the default stops failed", errMsg(err));
+		return null;
+	} finally {
+		refreshFlights();
+		queryClient.invalidateQueries({ queryKey: ["settings"] });
+		queryClient.invalidateQueries({ queryKey: ["ticketing-sources"] });
+	}
 }
 //#endregion
 //#region src/components/outbox/WaitingRow.tsx
@@ -87054,6 +87089,22 @@ function handoffStepFor(def, taken, target) {
 		}
 	};
 }
+var DEFAULT_EDITOR_PREFIX = "Default · ";
+var defaultEditorName = (label) => DEFAULT_EDITOR_PREFIX + label;
+var sameSource = (a, b) => !!a && !!b && a.kind === b.kind && a.target === b.target;
+var isDefaultEditor = (f) => !!f?.edits_default?.kind && !!f.edits_default.target;
+function editorFor(flights, ref) {
+	return (flights || []).find((f) => f.state === "grounded" && sameSource(f.edits_default, ref)) || null;
+}
+function editorLabel(f) {
+	const n = (f.plan_name || "").trim();
+	if (n.startsWith(DEFAULT_EDITOR_PREFIX) && n.length > 10) return n.slice(10);
+	return n && n !== "Stops" ? n : f.edits_default?.target || "";
+}
+function chainRunFor(f, headKind, make) {
+	if (isDefaultEditor(f) || !f.steps.length || headKind === "trigger") return null;
+	return make();
+}
 //#endregion
 //#region src/components/flights/useSkyWiring.ts
 var HEAD = "head";
@@ -89297,6 +89348,74 @@ function inspectorDef(def, step) {
 	};
 }
 var orderedPlans = (plans) => [...plans.filter((p) => p.builtin), ...plans.filter((p) => !p.builtin)];
+var INTAKE_SUBJECTS = [
+	"ticket",
+	"pr",
+	"issue"
+];
+var isIntakeSubject = (kind) => !!kind && INTAKE_SUBJECTS.includes(kind);
+function intakeWords(kind) {
+	if (kind === "prs") return {
+		one: "PR",
+		many: "PRs"
+	};
+	if (kind === "issues") return {
+		one: "issue",
+		many: "issues"
+	};
+	return {
+		one: "ticket",
+		many: "tickets"
+	};
+}
+function intakeSourceName(src) {
+	const label = (src.label || "").trim();
+	const m = /^(tickets|prs|pull requests|issues)\s*[·:—-]\s*(.+)$/i.exec(label);
+	return (m ? m[2].trim() : label) || src.target;
+}
+function promoteWords(src) {
+	const w = intakeWords(src.kind);
+	const name = intakeSourceName(src);
+	return {
+		label: "Use these stops for every " + w.one + " from " + name,
+		title: "Changes what NEW " + w.many + " from " + name + " fly: each one starts with this line's stops. This " + w.one + " keeps running as it is.",
+		done: "New " + w.many + " from " + name + " fly these stops"
+	};
+}
+async function promoteStops(flightId) {
+	const res = await setIntakeDefault({ from_flight: flightId });
+	if (!res) return false;
+	const words = promoteWords(res);
+	const back = {
+		kind: res.kind,
+		target: res.target,
+		plan_id: res.previous_plan_id
+	};
+	const promoted = pushUndo({
+		label: words.label,
+		undo: () => setIntakeDefault(back)
+	});
+	toast(words.done, { action: undoAction(promoted, "Undo: new " + intakeWords(res.kind).many + " from " + intakeSourceName(res) + " fly the stops they did before") });
+	return true;
+}
+function usePromoteStops(flight) {
+	const id = flight?.id || "";
+	const intake = !!id && isIntakeSubject(flight?.subject?.kind);
+	const q = useQuery({
+		queryKey: ["intake-source-of-flight", id],
+		queryFn: () => intakeSourceOfFlight(id),
+		enabled: intake,
+		staleTime: Infinity
+	});
+	const src = intake ? q.data : null;
+	if (!src) return null;
+	const words = promoteWords(src);
+	return {
+		label: words.label,
+		title: words.title,
+		run: () => promoteStops(id)
+	};
+}
 function removedToast(title, wasHere, next) {
 	if (!wasHere) return "Removed “" + title + "” from the line";
 	return "Removed “" + title + "” — the flight is paused " + (next ? "before “" + next + "”" : "at the end");
@@ -131877,6 +131996,25 @@ async function flyLaneItem(w, block) {
 		refreshInstances();
 	}
 }
+async function openDefaultEditor(ref, flights, on = {}) {
+	const have = editorFor(flights, ref);
+	if (have) {
+		on.existing?.(have);
+		return have;
+	}
+	const d = await getIntakeDefault(ref);
+	if (!d) return null;
+	const f = await startGrounded({
+		steps: d.steps,
+		name: defaultEditorName(d.label),
+		edits_default: {
+			kind: ref.kind,
+			target: ref.target
+		}
+	});
+	if (f) on.made?.(f, d);
+	return f;
+}
 function WaitingChip({ w, block, onFly }) {
 	const [busy, setBusy] = (0, import_react.useState)(false);
 	const [error, setError] = (0, import_react.useState)("");
@@ -131922,7 +132060,7 @@ function WaitingChip({ w, block, onFly }) {
 		})]
 	});
 }
-function Block({ block, onFly, open }) {
+function Block({ block, onFly, open, onEditDefault }) {
 	const { shown, more } = shownWaiting(block, open ? Infinity : void 0);
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", {
 		className: "sky-lane-block sky-lane-block-" + block.kind,
@@ -131956,10 +132094,19 @@ function Block({ block, onFly, open }) {
 				children: [/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "sky-lane-auto" + (block.auto ? " on" : ""),
 					children: block.autoText
-				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-					className: "sky-lane-flyway" + (block.flyway.own ? " own" : ""),
-					title: block.flyway.own ? "This source's saved stop" : "The built-in stops for " + WAITING_KIND_HEAD[block.kind].toLowerCase(),
-					children: block.flyway.name
+				}), /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "fl-icon-btn sky-lane-flyway-btn",
+					"aria-label": "Edit the default stops for " + block.label,
+					title: (block.flyway.own ? "This source's saved stop" : "The built-in stops for " + WAITING_KIND_HEAD[block.kind].toLowerCase()) + " — click to edit them on the board",
+					onClick: () => onEditDefault({
+						kind: block.kind,
+						target: block.id
+					}, block.label),
+					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+						className: "sky-lane-flyway" + (block.flyway.own ? " own" : ""),
+						children: block.flyway.name
+					})
 				})]
 			}),
 			block.waiting.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", {
@@ -131996,7 +132143,12 @@ function Block({ block, onFly, open }) {
 	});
 }
 var headPress = (e) => e.button === 0 && !e.target.closest("button, a, input, summary, [data-no-drag]");
-function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResize, open = false, onToggleOpen, onHeadDown, draggable = true, onMeasure }) {
+function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResize, open = false, onToggleOpen, onHeadDown, draggable = true, onMeasure, onEditDefault }) {
+	const flights = useFlights().data;
+	const editDefault = (ref, label) => {
+		if (onEditDefault) onEditDefault(ref, label);
+		else openDefaultEditor(ref, flights);
+	};
 	const [live, setLive] = (0, import_react.useState)(null);
 	const grab = (0, import_react.useRef)(null);
 	const frameNow = live || {
@@ -132172,7 +132324,8 @@ function IntakeLane({ rows, plans, onFly, width = 260, height, zoom = 1, onResiz
 			}) : blocks.map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Block, {
 				block: b,
 				onFly,
-				open
+				open,
+				onEditDefault: editDefault
 			}, b.key)),
 			onResize && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 				className: "sky-lane-resize skl-resize",
@@ -134351,6 +134504,7 @@ function SkyLine(p) {
 			setClosing("");
 		}
 	};
+	const promote = usePromoteStops(line.flight);
 	const items = [
 		p.layout.open ? {
 			key: "open",
@@ -134407,6 +134561,13 @@ function SkyLine(p) {
 			className: "skl-mi-group",
 			onSelect: () => line.togglePalette(true)
 		},
+		...promote ? [{
+			key: "promote",
+			label: promote.label,
+			title: promote.title,
+			className: "skl-mi-promote",
+			onSelect: () => void promote.run()
+		}] : [],
 		{
 			key: "close",
 			label: "Close session",
@@ -134778,7 +134939,8 @@ function SkySelectionBar(p) {
 			if (await optimisticDelete(groundedIdOf(id), () => deleteFlight(groundedIdOf(id)))) gone.push({
 				steps: f?.steps || [],
 				name: f?.plan_name || "",
-				at
+				at,
+				ed: f?.edits_default
 			});
 		} else {
 			await closeSession(id);
@@ -134789,9 +134951,10 @@ function SkySelectionBar(p) {
 		const entry = pushUndo({
 			label: "Remove " + plural(n, "line"),
 			undo: async () => {
-				for (const g of gone) if (g.steps.length) await (p.restoreGrounded ? p.restoreGrounded(g.steps, g.name, g.at) : startGrounded({
+				for (const g of gone) if (g.steps.length) await (p.restoreGrounded ? p.restoreGrounded(g.steps, g.name, g.at, g.ed) : startGrounded({
 					steps: g.steps,
-					...g.name ? { name: g.name } : {}
+					...g.name ? { name: g.name } : {},
+					...g.ed ? { edits_default: g.ed } : {}
 				}));
 				await reopenClosed(closed);
 			}
@@ -135342,8 +135505,24 @@ function GroundedLine(p) {
 	const rootRef = (0, import_react.useRef)(null);
 	const measureRef = (0, import_react.useRef)(p.onMeasure);
 	measureRef.current = p.onMeasure;
-	const name = groundedName(flight);
+	const ed = isDefaultEditor(flight) ? flight.edits_default : null;
+	const edLabel = ed ? editorLabel(flight) : "";
+	const name = ed ? "Default stops · " + edLabel : groundedName(flight);
 	const lod = lodFor(p.zoom || 1);
+	const [ownDefault, setOwnDefault] = (0, import_react.useState)(false);
+	const edKind = ed?.kind;
+	const edTarget = ed?.target;
+	(0, import_react.useEffect)(() => {
+		if (!edKind || !edTarget) return;
+		let live = true;
+		getIntakeDefault({
+			kind: edKind,
+			target: edTarget
+		}).then((d) => live && setOwnDefault(!!d?.own));
+		return () => {
+			live = false;
+		};
+	}, [edKind, edTarget]);
 	(0, import_react.useEffect)(() => {
 		const el = rootRef.current;
 		if (!el || typeof ResizeObserver === "undefined") return;
@@ -135370,7 +135549,48 @@ function GroundedLine(p) {
 			toast("Saving to the shelf failed: " + errMsg(err), { error: true });
 		}
 	};
+	const writeDefault = async (reset) => {
+		if (!ed || busy) return;
+		setBusy(true);
+		try {
+			const ref = {
+				kind: ed.kind,
+				target: ed.target
+			};
+			const res = await setIntakeDefault(reset ? {
+				...ref,
+				plan_id: ""
+			} : {
+				...ref,
+				steps: flight.steps
+			});
+			if (!res) return;
+			await optimisticDelete(flight.id, () => deleteFlight(flight.id));
+			const label = res.label || edLabel;
+			const prev = res.previous_plan_id || "";
+			const entry = pushUndo({
+				label: (reset ? "Reset the default stops for " : "Save the default stops for ") + label,
+				undo: () => setIntakeDefault({
+					...ref,
+					plan_id: prev
+				})
+			});
+			toast(reset ? label + " is back on the built-in stops" : "New items from " + label + " fly these stops", { action: undoAction(entry, "Undo: " + label + " back on the stops it had") });
+		} finally {
+			setBusy(false);
+		}
+	};
+	const discard = async () => {
+		if (busy) return;
+		setBusy(true);
+		try {
+			await optimisticDelete(flight.id, () => deleteFlight(flight.id));
+		} finally {
+			setBusy(false);
+		}
+	};
 	const remove = async () => {
+		if (ed) return discard();
 		if (busy) return;
 		setBusy(true);
 		try {
@@ -135398,12 +135618,12 @@ function GroundedLine(p) {
 			title: "One stop, or a saved stop, at the end of the line",
 			onSelect: () => line.togglePalette(true)
 		},
-		{
+		...ed ? [] : [{
 			key: "fly",
 			label: "Run on a session…",
 			title: "Pick a session (or a new one): these stops run in it",
 			onSelect: p.onFlyOn
-		},
+		}],
 		{
 			key: "save",
 			label: "Save to the shelf",
@@ -135411,7 +135631,14 @@ function GroundedLine(p) {
 			className: "skl-mi-group",
 			onSelect: () => void save()
 		},
-		{
+		ed ? {
+			key: "remove",
+			label: "Discard",
+			danger: true,
+			className: "skl-mi-group",
+			title: "Take this editor off the board — the default stops stay as they are",
+			onSelect: () => void discard()
+		} : {
 			key: "remove",
 			label: "Remove",
 			danger: true,
@@ -135422,6 +135649,7 @@ function GroundedLine(p) {
 	];
 	const named = (0, import_react.useRef)(false);
 	const startRename = () => {
+		if (ed) return;
 		named.current = false;
 		setNaming(name);
 	};
@@ -135503,7 +135731,7 @@ function GroundedLine(p) {
 	const onPillDown = pillAimer(graph, gc.onLoopTo);
 	const shift = (0, import_react.useRef)(false);
 	const running = isFreeRun(flight);
-	const run = flight.steps.length > 0 && head.kind !== "trigger" ? {
+	const run = chainRunFor(flight, head.kind, () => ({
 		running,
 		label: running ? "Stop this run" : "Run these stops (⋯ Run on a session… to pick where)",
 		onRun: () => void attachGrounded(flight.id, { title: DEFAULT_SESSION }).then((f) => {
@@ -135511,11 +135739,12 @@ function GroundedLine(p) {
 			toast(f.session ? "Running “" + name + "” in a new session, " + f.session : "Running “" + name + "”");
 		}),
 		onStop: () => void controlFlight(flight.id, "cancel")
-	} : null;
+	}));
 	return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", {
 		ref: rootRef,
-		className: "skl skl-chainline skl-grounded" + (head.kind === "trigger" ? " is-triggered" : "") + (p.focused ? " is-focused" : "") + (p.selected ? " is-selected" : "") + (p.sessionOver ? " is-session-over" : "") + (p.merging ? " is-merging" : "") + (line.editing ? " is-editing" : ""),
+		className: "skl skl-chainline skl-grounded" + (head.kind === "trigger" ? " is-triggered" : "") + (p.focused ? " is-focused" : "") + (p.selected ? " is-selected" : "") + (p.sessionOver ? " is-session-over" : "") + (p.merging ? " is-merging" : "") + (line.editing ? " is-editing" : "") + (ed ? " is-default-editor" : ""),
 		"data-flight": flight.id,
+		"data-edits-default": ed ? ed.kind + ":" + ed.target : void 0,
 		"data-lod": lod,
 		style: {
 			"--sky-z": p.zoom || 1,
@@ -135524,7 +135753,7 @@ function GroundedLine(p) {
 		role: "group",
 		tabIndex: 0,
 		"data-sky-box": true,
-		"aria-label": name + (head.kind === "trigger" ? " — " + head.title : " — stops with no session yet"),
+		"aria-label": name + (ed ? " — new items from this source fly these" : head.kind === "trigger" ? " — " + head.title : " — stops with no session yet"),
 		onKeyDown: onKey,
 		onPointerDownCapture: () => {
 			if (!p.focused) p.onFocus();
@@ -135536,7 +135765,11 @@ function GroundedLine(p) {
 			onPointerDown: onBarDown,
 			children: [
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)(Bird, { size: 14 }),
-				naming === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+				ed ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "skl-name skl-default-name",
+					title: name,
+					children: name
+				}) : naming === null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "skl-name skl-name-edit",
 					title: "Click to rename (F2)",
 					onClick: onNameClick,
@@ -135575,6 +135808,40 @@ function GroundedLine(p) {
 					className: "fl-box-chip skl-chip " + (flight.last_run.state === "done" ? "tone-ready" : "tone-muted"),
 					title: flight.last_run.reason || void 0,
 					children: flight.last_run.state === "done" ? "Last run done" : "Last run stopped"
+				}),
+				ed && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
+					className: "skl-default-hint muted",
+					children: "New items from this source fly these"
+				}),
+				ed && /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", {
+					className: "skl-default-acts",
+					"data-no-drag": true,
+					children: [
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "btn-primary fl-btn skl-default-save",
+							disabled: busy || !flight.steps.length,
+							title: "New items from " + edLabel + " fly these stops",
+							onClick: () => void writeDefault(false),
+							children: "Save as default"
+						}),
+						ownDefault && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn fl-btn skl-default-reset",
+							disabled: busy,
+							title: "Put " + edLabel + " back on our built-in stops",
+							onClick: () => void writeDefault(true),
+							children: "Reset to default"
+						}),
+						/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+							type: "button",
+							className: "test-btn fl-btn skl-default-discard",
+							disabled: busy,
+							title: "Take this editor off the board — the default stops stay as they are",
+							onClick: () => void discard(),
+							children: "Discard"
+						})
+					]
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "skl-menu",
@@ -137734,7 +138001,7 @@ function SkyView() {
 			INTAKE_KEY,
 			PALETTE_KEY
 		].map(rectOf).concat(objects.map((o) => rectOf(o.key))).filter((r) => !!r);
-		const pal = near === "palette" ? rectOf(PALETTE_KEY) : null;
+		const pal = near === "palette" ? rectOf(PALETTE_KEY) : near === "lane" ? rectOf(INTAKE_KEY) : null;
 		return spotNear(pal ? {
 			x: pal.x + pal.w + PLACE_GAP,
 			y: pal.y
@@ -137773,6 +138040,27 @@ function SkyView() {
 		const m = useUi.getState().skyMode;
 		if (m === "one" || m === "perched") toast("“" + groundedName(f) + "” is on the board — All or Mine shows it");
 	};
+	const editDefault = (ref) => void openDefaultEditor(ref, flights, {
+		existing: (f) => {
+			const key = groundedKey(f.id);
+			if (rectOf(key)) jumpTo(key);
+			else toast("“" + groundedName(f) + "” is on the board — All or Mine shows it");
+		},
+		made: (f) => {
+			if (!alive.current) return;
+			const key = groundedKey(f.id);
+			const at = spotRef.current(f, "lane");
+			setLayout((l) => patchSkyLine(l, key, {
+				x: at.x,
+				y: at.y,
+				pinned: true
+			}));
+			placing.current.set(key, "lane");
+			setGroundFocus(key);
+			const m = useUi.getState().skyMode;
+			if (m === "one" || m === "perched") toast("“" + groundedName(f) + "” is on the board — All or Mine shows it");
+		}
+	});
 	const pinAt = (key, at) => {
 		if (alive.current) setLayout((l) => patchSkyLine(l, key, {
 			x: at.x,
@@ -137785,10 +138073,11 @@ function SkyView() {
 			pinned: true
 		});
 	};
-	const reground = async (steps, name, was) => {
+	const reground = async (steps, name, was, editsDefault) => {
 		const g = await startGrounded({
 			steps,
-			...name ? { name } : {}
+			...name ? { name } : {},
+			...editsDefault ? { edits_default: editsDefault } : {}
 		});
 		if (g && was) pinAt(groundedKey(g.id), was);
 		return g;
@@ -137801,11 +138090,12 @@ function SkyView() {
 		const steps = f.steps;
 		const name = f.plan_name || "";
 		const shown = groundedName(f);
+		const ed = f.edits_default;
 		let cur = f.id;
 		const entry = pushUndo({
 			label: "Remove “" + shown + "”",
 			undo: async () => {
-				const g = await reground(steps, name, was);
+				const g = await reground(steps, name, was, ed);
 				if (g) cur = g.id;
 				return g;
 			},
@@ -138988,7 +139278,8 @@ function SkyView() {
 				onToggleOpen: () => onLayout(INTAKE_KEY, { open: !intakeOpen }),
 				onHeadDown: (e) => onDragStart(INTAKE_KEY, e),
 				draggable: liveTool === "drag",
-				onMeasure: (w, h) => onMeasure(INTAKE_KEY, w, h)
+				onMeasure: (w, h) => onMeasure(INTAKE_KEY, w, h),
+				onEditDefault: editDefault
 			})
 		});
 	};

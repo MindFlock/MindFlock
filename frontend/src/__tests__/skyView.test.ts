@@ -503,7 +503,7 @@ describe("round 14: Ctrl+Z, removals that don't ask, All blocks… on the board"
   it("a grounded line goes at once through the host: one entry, its toast takes it, Undo makes it again where it sat", () => {
     expect(v).toContain("onRemove={() => removeGrounded(id)}");
     // Round 17: the entry carries redo (the remade line, by its new id, goes again).
-    expect(v).toMatch(/const entry = pushUndo\(\{\s*label: "Remove “" \+ shown \+ "”",\s*undo: async \(\) => \{\s*const g = await reground\(steps, name, was\);\s*if \(g\) cur = g\.id;[\s\S]*?redo: \(\) => deleteFlight\(cur\),/);
+    expect(v).toMatch(/const entry = pushUndo\(\{\s*label: "Remove “" \+ shown \+ "”",\s*undo: async \(\) => \{\s*const g = await reground\(steps, name, was, ed\);\s*if \(g\) cur = g\.id;[\s\S]*?redo: \(\) => deleteFlight\(cur\),/);
     expect(v).toContain('toast("Removed “" + shown + "”", { action: undoAction(entry, ');
     expect(grounded).not.toContain("InlineConfirm");
   });
