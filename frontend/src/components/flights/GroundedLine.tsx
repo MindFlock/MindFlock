@@ -33,7 +33,7 @@ import { useEffect, useMemo, useRef, useState, type JSX, type KeyboardEvent, typ
 import type { Flight, FlightPlan, StepKindDef } from "../../lib/flights";
 import { birdPerch, type DiagramNode } from "../../lib/flightDiagram";
 import { chainGraph, type ChainHead, type GraphNode } from "../../lib/skyGraph";
-import { deleteFlight, renameFlight, savePlan, startGrounded } from "../../lib/flightsApi";
+import { attachGrounded, DEFAULT_SESSION, deleteFlight, renameFlight, savePlan, startGrounded } from "../../lib/flightsApi";
 import { isRemoveKey, planToSave, sourcePlanId } from "../../lib/groundedLines";
 import { lodFor, nearLines, type SkyLineLayout } from "../../lib/skyLayout";
 import { errMsg } from "../../lib/format";
@@ -172,7 +172,7 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
   const updates = !!sourcePlanId(flight.steps, p.plans);
   const items: MenuItem[] = [
     { key: "add", label: "Add a stop…", title: "One stop, or a saved stop, at the end of the line", onSelect: () => line.togglePalette(true) },
-    { key: "fly", label: "Fly on a session…", title: "Pick a session: these stops take off on it", onSelect: p.onFlyOn },
+    { key: "fly", label: "Run on a session…", title: "Pick a session (or a new one): these stops run in it", onSelect: p.onFlyOn },
     {
       key: "save",
       label: "Save to the shelf",
@@ -329,6 +329,20 @@ export function GroundedLine(p: GroundedLineProps): JSX.Element {
           <span className="fl-box-chip skl-chip tone-working" title={head.title + " — " + head.sub}>
             Started by a chain
           </span>
+        )}
+        {/* A session is a place in the file tree; a chain runs in one. ▶ Run
+            runs these stops in the DEFAULT session (made the first time); ⋯
+            Run on a session… picks another place. */}
+        {flight.steps.length > 0 && head.kind !== "trigger" && (
+          <button
+            type="button"
+            className="fl-icon-btn skl-run"
+            data-no-drag
+            title="Run these stops in the default session (⋯ Run on a session… to pick another)"
+            onClick={() => void attachGrounded(flight.id, { title: DEFAULT_SESSION }).then((f) => f && toast("Running “" + name + "” in the default session"))}
+          >
+            ▶ Run
+          </button>
         )}
         <span className="skl-menu" data-no-drag>
           <OverflowMenu label={"Actions for " + name} items={items} />

@@ -1070,3 +1070,9 @@ details.fl-group-waiting > summary {
   border-top: 1px solid var(--border);
   margin-top: 2px;
 }
+
+/* An open stop dialog or palette sits over the off-screen hints: they hide
+   while one is open (they drew through the dialog). */
+.sky-viewport:has(.skl-panels) .sky-offscreen {
+  display: none;
+}

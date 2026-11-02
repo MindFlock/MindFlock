@@ -38056,6 +38056,7 @@ async function attachGrounded(flightId, body) {
 		refreshInstances();
 	}
 }
+var DEFAULT_SESSION = "@default";
 async function deleteFlight(flightId) {
 	try {
 		await api(flightPath(flightId), { method: "DELETE" });
@@ -135276,8 +135277,8 @@ function GroundedLine(p) {
 		},
 		{
 			key: "fly",
-			label: "Fly on a session…",
-			title: "Pick a session: these stops take off on it",
+			label: "Run on a session…",
+			title: "Pick a session (or a new one): these stops run in it",
 			onSelect: p.onFlyOn
 		},
 		{
@@ -135431,6 +135432,14 @@ function GroundedLine(p) {
 					className: "fl-box-chip skl-chip tone-working",
 					title: head.title + " — " + head.sub,
 					children: "Started by a chain"
+				}),
+				flight.steps.length > 0 && head.kind !== "trigger" && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+					type: "button",
+					className: "fl-icon-btn skl-run",
+					"data-no-drag": true,
+					title: "Run these stops in the default session (⋯ Run on a session… to pick another)",
+					onClick: () => void attachGrounded(flight.id, { title: DEFAULT_SESSION }).then((f) => f && toast("Running “" + name + "” in the default session")),
+					children: "▶ Run"
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
 					className: "skl-menu",
@@ -138436,7 +138445,7 @@ function SkyView() {
 		]
 	});
 	const asking = attachPick ? {
-		word: "Fly",
+		word: "Run",
 		name: groundedName(attachPick),
 		on: (t) => onAttach(attachPick, t)
 	} : null;
@@ -138462,9 +138471,23 @@ function SkyView() {
 				onClick: () => asking.on(t),
 				children: windowName(t)
 			}, t)),
-			attachPick && pickable.length === 0 && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-				className: "muted",
-				children: "no session without a flight — drop a Session chip on the stops instead"
+			attachPick && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "fl-chip",
+				title: "Run them in the default session",
+				onClick: () => asking.on(DEFAULT_SESSION),
+				children: "Default session"
+			}),
+			attachPick && /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
+				type: "button",
+				className: "fl-chip",
+				title: "Start a new session that runs these stops",
+				onClick: () => {
+					const f = attachPick;
+					setAttachPick(null);
+					newForGrounded(groundedKey(f.id));
+				},
+				children: "New session…"
 			}),
 			/* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", {
 				type: "button",

@@ -190,7 +190,7 @@ describe("the grounded line", () => {
 
   it("its ⋯: Add a stop…, Fly on a session…, Save to the shelf, Remove — Remove at once, undoable (round 14: a grounded line never runs)", () => {
     const src = code("components/flights/GroundedLine.tsx");
-    for (const l of ['label: "Add a stop…"', 'label: "Fly on a session…"', 'label: "Save to the shelf"', 'label: "Remove", danger: true'])
+    for (const l of ['label: "Add a stop…"', 'label: "Run on a session…"', 'label: "Save to the shelf"', 'label: "Remove", danger: true'])
       expect(src).toContain(l);
     expect(src).toContain("onSelect: () => void remove() },");
     expect(src).not.toContain("<InlineConfirm");

@@ -141,7 +141,7 @@ import { selectSession } from "../../lib/sessionActions";
 import { overlayOpen } from "../../lib/keymap";
 import { layoutDiagram, sessionDiagram, type Diagram } from "../../lib/flightDiagram";
 import { STOP_MIME, isShown, newStep, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef } from "../../lib/flights";
-import { attachGrounded, deleteFlight, startFlightOn, startGrounded, tackOn, tackOnNew, tackOnPlan, tackOnSteps } from "../../lib/flightsApi";
+import { attachGrounded, DEFAULT_SESSION, deleteFlight, startFlightOn, startGrounded, tackOn, tackOnNew, tackOnPlan, tackOnSteps } from "../../lib/flightsApi";
 import { NODE_H, PITCH_X, type WireEnd, type WireIntent } from "../../lib/skyGraph";
 import type { CatalogDrop } from "../../lib/stopCatalog";
 import { toast } from "../../lib/toast";
@@ -2157,7 +2157,7 @@ export function SkyView() {
 
   // Which line: a grounded line's stops (⋯ Fly on a session…) looking for
   // their session. A palette click never asks: it places.
-  const asking = attachPick ? { word: "Fly", name: groundedName(attachPick), on: (t: string) => onAttach(attachPick, t) } : null;
+  const asking = attachPick ? { word: "Run", name: groundedName(attachPick), on: (t: string) => onAttach(attachPick, t) } : null;
   // A grounded flight flies on a session with no flight in the air.
   const pickable = attachPick ? titles.filter((t) => !liveFlightOf(t)) : titles;
   const pick = asking && (
@@ -2170,7 +2170,27 @@ export function SkyView() {
           {windowName(t)}
         </button>
       ))}
-      {attachPick && pickable.length === 0 && <span className="muted">no session without a flight — drop a Session chip on the stops instead</span>}
+      {attachPick && (
+        // The default session: the default place, made the first time.
+        <button type="button" className="fl-chip" title="Run them in the default session" onClick={() => asking.on(DEFAULT_SESSION)}>
+          Default session
+        </button>
+      )}
+      {attachPick && (
+        // Or a new session for these stops (the new-session block, made for them).
+        <button
+          type="button"
+          className="fl-chip"
+          title="Start a new session that runs these stops"
+          onClick={() => {
+            const f = attachPick;
+            setAttachPick(null);
+            newForGrounded(groundedKey(f.id));
+          }}
+        >
+          New session…
+        </button>
+      )}
       <button
         type="button"
         className="linklike"

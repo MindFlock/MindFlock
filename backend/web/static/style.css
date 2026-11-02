@@ -6013,6 +6013,12 @@ details.fl-group-waiting > summary {
   border-top: 1px solid var(--border);
   margin-top: 2px;
 }
+
+/* An open stop dialog or palette sits over the off-screen hints: they hide
+   while one is open (they drew through the dialog). */
+.sky-viewport:has(.skl-panels) .sky-offscreen {
+  display: none;
+}
 /* The stop palette, the stop inspector, Describe a stop…, and a flyway's
  * trigger (FlywayInspector.tsx) — prefix fl-. Shared by the flyway card on
  * the Sky's shelf (FlywayCard) and the pane's Flight tab (useSessionLine's
@@ -12666,6 +12672,16 @@ details.fl-group-waiting > summary {
 .skl-chainline.skl-frame.is-merge-target .sky-head,
 .skl-chainline.skl-frame.is-drop .sky-head {
   outline: none;
+}
+
+/* A stops-only chain's ▶ Run… on its label (it runs inside a session). */
+.skl-run {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--tone-working);
+  color: var(--fl-ink-working, var(--tone-working));
+  font-size: 11px;
+  font-weight: 600;
 }
 /* The Sky's readability overrides for parts drawn by SkyView (the toolbar,
    the drawer) whose own rules live in Sky.css. Imported by SkyLine.tsx; CSS

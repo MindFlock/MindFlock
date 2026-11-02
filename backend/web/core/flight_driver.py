@@ -916,6 +916,65 @@ def _session_payload(plan_session: dict, repo_path: str, prompt: str) -> dict:
     return payload
 
 
+#: The title a client names the default session by (``attach {title}``).
+DEFAULT_SESSION = "@default"
+
+
+def _default_folder() -> str:
+    """Where the default session lives: the ``general.default_folder``
+    setting, else the newest local session's folder, else the home dir."""
+    import os
+
+    from backend.config.settings import load_settings
+
+    try:
+        folder = str(load_settings().general.default_folder or "").strip()
+    except Exception:  # noqa: BLE001
+        folder = ""
+    if folder and os.path.isdir(os.path.expanduser(folder)):
+        return os.path.expanduser(folder)
+    best, when = "", -1.0
+    for inst in list(_server().ENGINE.instances.values()):
+        path = str(getattr(inst, "Path", "") or "")
+        started = getattr(inst, "CreatedAt", None) or getattr(inst, "Created", None)
+        try:
+            t = (
+                float(started.timestamp())
+                if hasattr(started, "timestamp")
+                else float(started or 0)
+            )
+        except Exception:  # noqa: BLE001
+            t = 0.0
+        if path and os.path.isdir(path) and t >= when:
+            best, when = path, t
+    return best or os.path.expanduser("~")
+
+
+async def ensure_default_session() -> str:
+    """The default session's title, made the first time it is needed: an
+    in-place session ("default") in :func:`_default_folder` with the default
+    agent. Remembered in ``general.default_session``; a remembered one that is
+    gone is made again."""
+    from backend.config.settings import load_settings, update_settings
+
+    srv = _server()
+    try:
+        known = str(load_settings().general.default_session or "").strip()
+    except Exception:  # noqa: BLE001
+        known = ""
+    if known and known in srv.ENGINE.instances:
+        return known
+    folder = await asyncio.to_thread(_default_folder)
+    title = await _create_session(
+        {"title": "default", "repo_path": folder, "prompt": "", "in_place": True}
+    )
+    try:
+        await asyncio.to_thread(update_settings, general={"default_session": title})
+    except Exception:  # noqa: BLE001
+        pass
+    return title
+
+
 async def _create_session(payload: dict) -> str:
     from backend.web.core import session_create as _session_create
 
@@ -2415,6 +2474,9 @@ async def attach(flight_id: str, body: dict) -> dict:
         )
     _flights.validate_for_takeoff(f)
     title = str(body.get("title") or "").strip()
+    # No session picked: the default session (made the first time it is needed).
+    if title == DEFAULT_SESSION:
+        title = await ensure_default_session()
     seeded = False
     no_prompt = False
     if title:
