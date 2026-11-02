@@ -26,8 +26,10 @@ export function groundedFlights<F extends Pick<Flight, "state" | "started" | "id
  * diagram, every stop editable (none has flown, none is current), the + at
  * the end and between any two. */
 export function groundedDiagram(f: Flight, kinds?: readonly StepKindDef[] | null): Diagram {
-  const d = flightDiagram(f, kinds);
+  let d = flightDiagram(f, kinds);
   const nodes = d.nodes.map((n) => (n.kind === "stop" ? { ...n, state: "pending" as const, editable: true } : n));
+  // A Loop rides its return wire (lib/flightDiagram `liftLoops`): it changes the same way.
+  d = { ...d, edges: d.edges.map((e) => (e.via ? { ...e, via: { ...e.via, state: "pending" as const, editable: true } } : e)) };
   const hasAdd = nodes.some((n) => n.kind === "add");
   if (!hasAdd) {
     // flightDiagram adds its + only to a flight in the air; a grounded one

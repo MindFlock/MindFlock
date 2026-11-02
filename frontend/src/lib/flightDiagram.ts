@@ -172,8 +172,8 @@ export interface LoopMark {
 }
 
 /** `fan` runs from a stop out to a branch, `join` from a branch into the
- * join point, `loop` from a Loop stop back to the stop it repeats from (an
- * arc over the line, round 16). */
+ * join point, `loop` from the last stop a Loop repeats back to the first one
+ * (a return wire under the line — the Loop itself draws no box). */
 export type DiagramEdgeKind = "line" | "up" | "branch" | "add" | "fan" | "join" | "loop";
 
 export interface DiagramEdge {
@@ -182,8 +182,11 @@ export interface DiagramEdge {
   kind: DiagramEdgeKind;
   /** A fan-in whose branch has arrived (or whose join let go): drawn done. */
   done?: boolean;
-  /** A `loop` edge: its Loop's count (the pill on the arc). */
+  /** A `loop` edge: its Loop's count (the pill on the return wire). */
   loop?: LoopMark;
+  /** A `loop` edge: the Loop stop it stands for (in the flight's indexes) —
+   * the wire's pill opens, edits and removes it. */
+  via?: DiagramNode;
 }
 
 export interface Diagram {
@@ -323,25 +326,51 @@ export function loopLine(step: Pick<FlightStep, "config">, rec?: Pick<StepRunSta
   return counter + " · " + clip(note, 28);
 }
 
-/** The line's return arcs: for every Loop stop of `line`, an edge back to the
- * box drawn for its `back_to` — `""` is the line's first stop, or its own
- * group's first sub-step when it is in one; a stop not before it (or gone)
- * draws no arc. Folding (the flown pill, a collapsed group) re-aims them at
- * the box that holds the target (`foldRun`). */
+/** The line's return wires: for every Loop stop of `line`, an edge from the
+ * last stop before it (the end of what it repeats) back to the box drawn for
+ * its `back_to` — `""` is the line's first stop, or its own group's first
+ * sub-step when it is in one. The edge carries the Loop node (`via`). A Loop
+ * with nothing before it to repeat (or whose target is gone) draws no wire —
+ * it stays a box. Folding (the flown pill, a collapsed group) re-aims the
+ * wires at the box that holds their ends (`foldRun`). */
 export function loopEdges(line: readonly DiagramNode[]): DiagramEdge[] {
   const stops = line.filter((n) => n.row === "main" && n.kind === "stop" && n.step);
   const out: DiagramEdge[] = [];
   stops.forEach((n, i) => {
     const s = n.step!;
     if (s.kind !== "loop") return;
-    const before = stops.slice(0, i);
+    const before = stops.slice(0, i).filter((b) => b.step!.kind !== "loop");
     const back = String(s.config?.back_to ?? "").trim();
     const gid = s.group?.id;
     const target = back ? before.find((b) => b.step!.id === back) : gid ? before.find((b) => b.step!.group?.id === gid) : before[0];
-    if (!target) return;
-    out.push({ from: n.id, to: target.id, kind: "loop", loop: n.loop || loopMark(s) });
+    const end = before[before.length - 1];
+    if (!target || !end) return;
+    out.push({ from: end.id, to: target.id, kind: "loop", loop: n.loop || loopMark(s), via: n });
   });
   return out;
+}
+
+/** The line with its Loops lifted off it: each Loop that draws a return
+ * wire (`loopEdges`) leaves the line — the line runs straight past it — and
+ * comes back as that wire. */
+export function liftLoops(line: readonly DiagramNode[]): { line: DiagramNode[]; loops: DiagramEdge[] } {
+  const loops = loopEdges(line);
+  const lifted = new Set(loops.map((e) => e.via!.id));
+  return { line: line.filter((n) => !lifted.has(n.id)), loops };
+}
+
+/** The Loop the flight is at (deciding whether to go round, waiting out its
+ * pace or a limit, halted on it): its wire, else null. */
+export function loopAtWork(d: Pick<Diagram, "edges">): DiagramEdge | null {
+  return d.edges.find((e) => e.kind === "loop" && !!e.via && !!STOP_TONE[e.via.state]) || null;
+}
+
+/** The pill on a Loop's wire before it runs: "↻ ×3", "↻ until checks
+ * green", "↻ until stopped". */
+export function loopIdlePill(m: LoopMark, via?: Pick<DiagramNode, "step"> | null): string {
+  if (m.times > 0) return "↻ ×" + m.times;
+  const until = String(via?.step?.config?.until ?? "").trim();
+  return until ? "↻ until " + clip(until, 18) : "↻ until stopped";
 }
 
 /** A stop's title as its box says it: a perch reads "Perch: <title>". */
@@ -365,7 +394,7 @@ function addNode(title: string): DiagramNode {
 
 /** A flyway being drawn: its stops, then the trailing "+". */
 export function flywayDiagram(steps: readonly FlightStep[], kinds?: readonly StepKindDef[] | null): Diagram {
-  const line: DiagramNode[] = steps.map((s, i) => ({
+  const stops: DiagramNode[] = steps.map((s, i) => ({
     id: stopId(s, i),
     kind: "stop",
     row: "main",
@@ -380,11 +409,12 @@ export function flywayDiagram(steps: readonly FlightStep[], kinds?: readonly Ste
     ...looksOf(s, kinds),
     ...(s.kind === "loop" ? { loop: loopMark(s) } : {}),
   }));
+  const { line, loops } = liftLoops(stops);
   line.push(addNode("Add a stop"));
   const nodes: DiagramNode[] = [];
   const edges: DiagramEdge[] = [];
   chain(nodes, edges, line);
-  edges.push(...loopEdges(line));
+  edges.push(...loops);
   return { nodes, edges, flightId: "", mode: "none", insertFrom: 0 };
 }
 
@@ -449,12 +479,12 @@ export function receiptOf(detail: Record<string, unknown> | null | undefined): s
 /** A flight on its own (no session box): its stops, then the trailing "+"
  * while it is in the air. */
 export function flightDiagram(f: Flight, kinds?: readonly StepKindDef[] | null): Diagram {
-  const line = flightStops(f, kinds);
+  const { line, loops } = liftLoops(flightStops(f, kinds));
   if (isLive(f) || f.state === "grounded") line.push(addNode("Tack on a stop"));
   const nodes: DiagramNode[] = [];
   const edges: DiagramEdge[] = [];
   chain(nodes, edges, line);
-  edges.push(...loopEdges(line));
+  edges.push(...loops);
   return { nodes, edges, flightId: f.id, mode: "flight", insertFrom: f.cursor + 1 };
 }
 
@@ -557,14 +587,18 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
   let mode: Diagram["mode"] = "none";
   let flightId = "";
   let insertFrom = 0;
+  let loops: DiagramEdge[] = [];
   const fl = row.flight as FlightRow | null | undefined;
   if (fl && isLive(fl)) {
     mode = "flight";
     flightId = fl.id;
     insertFrom = fl.cursor + 1;
     const full = opts.flights?.find((f) => f.id === fl.id);
-    if (full) line.push(...flightStops(full, opts.kinds));
-    else
+    if (full) {
+      const lifted = liftLoops(flightStops(full, opts.kinds));
+      line.push(...lifted.line);
+      loops = lifted.loops;
+    } else
       for (let i = 0; i < Math.max(0, Number(fl.total) || 0); i++) {
         const cur = i === fl.cursor;
         const perch = cur && fl.step?.actor === "you";
@@ -641,7 +675,7 @@ export function sessionDiagram(rows: readonly Instance[], title: string, opts: S
       edges.push(c.branch!.state === "done" ? { from: c.id, to: next.id, kind: "join", done: true } : { from: c.id, to: next.id, kind: "join" });
     }
   }
-  edges.push(...loopEdges(line));
+  edges.push(...loops);
   const d: Diagram = { nodes, edges, flightId, mode, insertFrom };
   if (mode !== "flight") return d;
   const grouped = collapseGroups(d, opts.expandedGroups);
@@ -710,7 +744,9 @@ function foldRun(d: Diagram, run: readonly DiagramNode[], into: DiagramNode): Di
     let dest = to(e.to);
     // A fan-in into a folded box from a branch of the run joins past it.
     if (e.kind === "join" && dest === into.id && inner.has(e.from) && after) dest = after.id;
-    if (from === dest) continue;
+    // A return wire folded to one box (a Loop inside a collapsed group, a
+    // finished loop in the flown pill) stays: it goes round that box.
+    if (from === dest && e.kind !== "loop") continue;
     // The line reaches the box after the run THROUGH its branches.
     if (fanned && from === into.id && (e.kind === "line" || e.kind === "add")) continue;
     const key = from + ">" + dest + ">" + e.kind;
@@ -959,11 +995,13 @@ export function drawnCanvas<C extends IndexedCanvas>(d: Diagram, canvas: C): { d
  * sits on the session box itself (its state chip says it) or nowhere. */
 export function lineWhere(d: Diagram): string {
   let b = birdPerch(d);
-  let n = b ? d.nodes.find((x) => x.id === b!.nodeId) : undefined;
+  const lp = loopAtWork(d);
+  let n = b ? (lp && lp.from === b.nodeId && !d.nodes.some((x) => x.id === b!.nodeId && STOP_TONE[x.state]) ? lp.via : d.nodes.find((x) => x.id === b!.nodeId)) : undefined;
   if (!n || n.kind === "session") {
     // The bird may sit on a busy session while the flight is parked at a
     // stop (birdPerch): the bar still says where the flight is.
-    const parked = d.nodes.find((x) => x.row === "main" && (x.kind === "stop" || x.kind === "group") && (x.state === "halted" || x.state === "paused"));
+    const isParked = (x: DiagramNode) => x.state === "halted" || x.state === "paused";
+    const parked = d.nodes.find((x) => x.row === "main" && (x.kind === "stop" || x.kind === "group") && isParked(x)) || (lp?.via && isParked(lp.via) ? lp.via : undefined);
     if (!parked) return "";
     n = parked;
     b = { nodeId: parked.id, tone: STOP_TONE[parked.state]! };
@@ -1173,7 +1211,11 @@ const STOP_TONE: Partial<Record<DiagramNodeState, BirdTone>> = {
  * the session is idle with nothing armed. */
 export function birdPerch(d: Diagram): BirdPerch | null {
   const main = d.nodes.filter((n) => n.row === "main");
-  const stop = main.find((n) => (n.kind === "stop" || n.kind === "group") && STOP_TONE[n.state]);
+  // A Loop draws no box: while the flight is at one, the bird stands on the
+  // stop its wire leaves from (the end of what it repeats).
+  const lp = loopAtWork(d);
+  const stop: Pick<DiagramNode, "id" | "state"> | undefined =
+    main.find((n) => (n.kind === "stop" || n.kind === "group") && STOP_TONE[n.state]) || (lp ? { id: lp.from, state: lp.via!.state } : undefined);
   const me = main.find((n) => n.kind === "session");
   // The bird follows the work: a flight halted or paused at a stop while
   // the agent itself is busy puts the bird on the session box, not on the
@@ -1260,8 +1302,10 @@ export interface Wire {
   d: string;
   /** A fan-in drawn done (its branch arrived, or the join let go). */
   done?: boolean;
-  /** A `loop` arc: its Loop's count, and the arc's apex (where its pill sits). */
+  /** A `loop` wire: its Loop's count, the Loop stop itself, and the middle
+   * of the wire's run under the line (where its pill sits). */
   loop?: LoopMark;
+  via?: DiagramNode;
   apex?: { x: number; y: number };
 }
 
@@ -1446,8 +1490,8 @@ export function layoutDiagram(d: Diagram, opts: LayoutOpts = {}): Layout {
     const kind: DiagramEdgeKind = e.kind === "branch" && b.node.branch ? "fan" : e.kind;
     let path = "";
     if (kind === "loop") {
-      const arc = loopArc(a, b, anchorOf, !!opts.vertical);
-      wires.push({ from: e.from, to: e.to, kind, d: arc.d, apex: arc.apex, ...(e.loop ? { loop: e.loop } : {}) });
+      const arc = loopArc(a, b, anchorOf, !!opts.vertical, boxes);
+      wires.push({ from: e.from, to: e.to, kind, d: arc.d, apex: arc.apex, ...(e.loop ? { loop: e.loop } : {}), ...(e.via ? { via: e.via } : {}) });
       continue;
     }
     if (opts.vertical && kind === "fan") {
@@ -1494,91 +1538,60 @@ export function layoutDiagram(d: Diagram, opts: LayoutOpts = {}): Layout {
 
   const arcs = wires.filter((w) => w.apex);
   const width = Math.max(0, ...boxes.map((p) => p.x + p.w), ...arcs.map((w) => w.apex!.x + LOOP_PILL_ROOM));
-  const height = Math.max(0, ...boxes.map((p) => p.y + p.h));
+  const height = Math.max(0, ...boxes.map((p) => p.y + p.h), ...arcs.map((w) => w.apex!.y + LOOP_PILL_ROOM));
   const rise = Math.max(0, ...arcs.map((w) => LOOP_PILL_ROOM - w.apex!.y));
   return { boxes, wires, width, height, gap: m.gap, rise: arcs.length ? rise : 0 };
 }
 
-/** Room kept past a return arc's apex for its pill (half its height and a
- * margin). */
+/** Room kept past a return wire's pill (half its height and a margin). */
 export const LOOP_PILL_ROOM = 14;
 
-/** A return arc's height over the line from its span: taller for a longer
- * reach, never flatter than 30 px nor taller than 84. */
-/** Where the horizontal return arc leaves the Loop box and lands on the
- * target, as a share of each box's width (round 16 follow-up: the bird sits
- * over a box's centre and hid the arrowhead). */
-export const LOOP_FROM = 0.3;
-export const LOOP_TO = 0.72;
+/** Where the horizontal return wire leaves the last repeated box and comes
+ * back up into the first one, as a share of each box's width: it spans as
+ * much of the loop as it can, so a one-stop loop is still a U. */
+export const LOOP_FROM = 0.72;
+export const LOOP_TO = 0.28;
 
-/** The band round the stops a Loop repeats: the target to the Loop itself,
- * on the main row (the canvas draws it under the boxes, with its label). */
-export interface LoopBand {
-  id: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  label: string;
-  state: LoopMark["state"];
-}
+/** How far under the lowest box it passes the return wire runs. */
+export const LOOP_DROP = 22;
 
-/** "↻ Repeats ×3", "↻ Repeats until stopped", "↻ Repeated ×3". */
-export function loopBandLabel(m: LoopMark): string {
-  const n = m.times > 0 ? "×" + m.times : "until stopped";
-  return (m.state === "done" ? "↻ Repeated " : "↻ Repeats ") + n;
-}
-
-/** One band per loop wire: the union of the target, the Loop and every
- * main-row box between them along the line, padded. */
-export function loopBands(boxes: readonly Placed[], wires: readonly Wire[], vertical: boolean): LoopBand[] {
-  const out: LoopBand[] = [];
-  for (const w of wires) {
-    if (w.kind !== "loop" || !w.loop) continue;
-    const a = boxes.find((b) => b.node.id === w.from);
-    const b = boxes.find((x) => x.node.id === w.to);
-    if (!a || !b) continue;
-    const lo = vertical ? Math.min(a.y, b.y) : Math.min(a.x, b.x);
-    const hi = vertical ? Math.max(a.y + a.h, b.y + b.h) : Math.max(a.x + a.w, b.x + b.w);
-    const inside = boxes.filter((p) => {
-      if (p.node.row !== "main") return false;
-      const c = vertical ? p.y + p.h / 2 : p.x + p.w / 2;
-      return c >= lo && c <= hi;
-    });
-    const x = Math.min(...inside.map((p) => p.x)) - 10;
-    const y = Math.min(...inside.map((p) => p.y)) - 14;
-    const r = Math.max(...inside.map((p) => p.x + p.w)) + 10;
-    const btm = Math.max(...inside.map((p) => p.y + p.h)) + 10;
-    out.push({ id: w.from, x, y, w: r - x, h: btm - y, label: loopBandLabel(w.loop), state: w.loop.state });
-  }
-  return out;
-}
-
+/** A return wire's reach past the column on a phone, from its span: taller
+ * for a longer reach, never less than 30 px nor more than 84. */
 export function loopRise(span: number): number {
   return Math.round(Math.min(84, Math.max(30, 18 + Math.abs(span) * 0.16)));
 }
 
-/** A Loop's return arc: horizontal, from the loop box's left shoulder over
- * the line back down onto the target's right shoulder (the arrowhead lands on
- * it — off-centre, where the bird never perches over it);
- * vertical (a phone), out of the loop box's right edge, round the right of
- * the column, into the target's right edge. A cubic whose apex sits
- * `loopRise(span)` past the boxes. */
-function loopArc(a: Placed, b: Placed, anchorOf: (p: Placed) => number, vertical: boolean): { d: string; apex: { x: number; y: number } } {
-  // The cubic's control points stand 4/3 of the rise out: its midpoint
-  // (the apex) then sits the full rise out.
+/** A Loop's return wire — a flowchart's loop-back. Horizontal: down out of
+ * the bottom of the last box it repeats, back along under the line (under
+ * every box in its span: branches, children), and up into the bottom of the
+ * first, arrowhead on it, rounded corners. Vertical (a phone): out of the last
+ * box's right edge, round the right of the column, into the first one's right
+ * edge. `apex` is the middle of its far run, where its pill sits. */
+function loopArc(
+  a: Placed,
+  b: Placed,
+  anchorOf: (p: Placed) => number,
+  vertical: boolean,
+  boxes: readonly Placed[]
+): { d: string; apex: { x: number; y: number } } {
   if (!vertical) {
     const x1 = a.x + a.w * LOOP_FROM;
     const x2 = b.x + b.w * LOOP_TO;
-    const y1 = a.y;
-    const y2 = b.y - 2;
-    const h = loopRise(x2 - x1);
-    const cy = Math.min(a.y, b.y) - (h * 4) / 3;
+    const lo = Math.min(a.x, b.x);
+    const hi = Math.max(a.x + a.w, b.x + b.w);
+    const floor = Math.max(a.y + a.h, b.y + b.h, ...boxes.filter((p) => p.x < hi && p.x + p.w > lo).map((p) => p.y + p.h));
+    const yb = floor + LOOP_DROP;
+    const r = Math.max(0, Math.min(10, Math.abs(x1 - x2) / 2, LOOP_DROP / 2));
+    const y1 = a.y + a.h;
+    const y2 = b.y + b.h + 2;
+    const dir = x2 <= x1 ? -1 : 1;
     return {
-      d: `M ${x1} ${y1} C ${x1} ${cy}, ${x2} ${cy}, ${x2} ${y2}`,
-      apex: { x: (x1 + x2) / 2, y: 0.125 * y1 + 0.75 * cy + 0.125 * y2 },
+      d: `M ${x1} ${y1} V ${yb - r} Q ${x1} ${yb} ${x1 + dir * r} ${yb} H ${x2 - dir * r} Q ${x2} ${yb} ${x2} ${yb - r} V ${y2}`,
+      apex: { x: (x1 + x2) / 2, y: yb },
     };
   }
+  // The cubic's control points stand 4/3 of the reach out: its midpoint
+  // (the apex) then sits the full reach out.
   const x1 = a.x + a.w;
   const x2 = b.x + b.w + 2;
   const y1 = a.y + anchorOf(a);

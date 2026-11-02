@@ -5461,6 +5461,43 @@ against the in-memory API, the scope and confirm refusals, the kinds list in
 `describe_flight`, `flight_status` compactness on a 40-stop flight, and
 `Api.patch`. The 34-tool and INSTRUCTIONS pins are in `test_mcp_tools.py`.
 
+
+### Redrawn: a Loop is its return wire, not a box (2026-11-02)
+
+The owner: "why are loops their own block that doesn't actually loop around
+to the bottom — I want to see the loop in the block diagram, not a block in
+the chain". The data model and the backend are unchanged (a Loop is still a
+`loop` step in `steps`, and its mechanics are round 16's); only the drawing
+moved:
+
+- **No Loop box.** `liftLoops(line)` (lib/flightDiagram) takes every Loop
+  that has something to repeat off the line — the line runs straight past it
+  — and gives back its `loop` edge from the LAST stop it repeats (the last
+  non-Loop stop before it) to its `back_to` box, carrying the Loop node as
+  `edge.via` (in the flight's indexes). A Loop with nothing before it, or whose
+  target is gone, stays a box. flywayDiagram, flightDiagram and sessionDiagram
+  all lift; `groundedDiagram` maps `via` the way it maps the boxes.
+- **Under the line.** `loopArc` draws a flowchart loop-back: down out of the
+  bottom of the last repeated box (`LOOP_FROM` 0.72 of its width), back along
+  under every box in its span (branches and children too) `LOOP_DROP` px below
+  the lowest, and up into the bottom of the first (`LOOP_TO` 0.28), arrowhead
+  on it, rounded corners. A one-stop loop is a U under that stop. `Layout.height`
+  grows for it (`rise` stays 0); the phone's vertical wire still goes round
+  the right of the column. The cycle band is gone (the wire says it).
+- **The pill is the Loop.** Always shown on the middle of the run under the
+  line: "↻ ×3" / "↻ until <until>" / "↻ until stopped" before it runs
+  (`loopIdlePill`), "2 / 3" while it goes round. It is a button: a click or
+  Enter opens the Loop's dialog (`edit`), right-click its menu, Delete removes it.
+- **Folding.** `foldRun` keeps a loop edge whose ends fold into one box (a
+  Loop inside a collapsed group, a finished loop inside the flown pill): it
+  goes round that box.
+- **The bird** at a Loop (deciding, waiting out its pace or a limit, halted
+  on it — `loopAtWork`) stands on the stop its wire leaves from; `lineWhere`
+  names the Loop ("at Loop ×3 · run 2 of 3 · next in 12 min");
+  `currentNodeId` reveals that stop.
+- Drops and moves count drawn places (`drawnCanvas`): a stop dropped in the gap
+  after the wire's last stop lands AFTER the Loop (outside it).
+
 ## Round 17: the Sky as a canvas tool (contract)
 
 The owner (2026-10-31, a standing ask, one round per cycle): "iterate on the

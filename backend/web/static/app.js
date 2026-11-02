@@ -52,7 +52,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 	}
 })();
 //#endregion
-//#region ../../app-flight/frontend/node_modules/react/cjs/react.production.js
+//#region node_modules/react/cjs/react.production.js
 /**
 * @license React
 * react.production.js
@@ -439,12 +439,12 @@ var require_react_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.version = "19.3.0";
 }));
 //#endregion
-//#region ../../app-flight/frontend/node_modules/react/index.js
+//#region node_modules/react/index.js
 var require_react = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_production();
 }));
 //#endregion
-//#region ../../app-flight/frontend/node_modules/scheduler/cjs/scheduler.production.js
+//#region node_modules/scheduler/cjs/scheduler.production.js
 /**
 * @license React
 * scheduler.production.js
@@ -699,12 +699,12 @@ var require_scheduler_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	};
 }));
 //#endregion
-//#region ../../app-flight/frontend/node_modules/scheduler/index.js
+//#region node_modules/scheduler/index.js
 var require_scheduler = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_scheduler_production();
 }));
 //#endregion
-//#region ../../app-flight/frontend/node_modules/react-dom/cjs/react-dom.production.js
+//#region node_modules/react-dom/cjs/react-dom.production.js
 /**
 * @license React
 * react-dom.production.js
@@ -857,7 +857,7 @@ var require_react_dom_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.version = "19.3.0";
 }));
 //#endregion
-//#region ../../app-flight/frontend/node_modules/react-dom/index.js
+//#region node_modules/react-dom/index.js
 var require_react_dom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	function checkDCE() {
 		if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ === "undefined" || typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE !== "function") return;
@@ -871,7 +871,7 @@ var require_react_dom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_dom_production();
 }));
 //#endregion
-//#region ../../app-flight/frontend/node_modules/react-dom/cjs/react-dom-client.production.js
+//#region node_modules/react-dom/cjs/react-dom-client.production.js
 /**
 * @license React
 * react-dom-client.production.js
@@ -11446,7 +11446,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 	};
 }));
 //#endregion
-//#region ../../app-flight/frontend/node_modules/react-dom/client.js
+//#region node_modules/react-dom/client.js
 var require_client = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	function checkDCE() {
 		if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ === "undefined" || typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE !== "function") return;
@@ -11460,7 +11460,7 @@ var require_client = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_dom_client_production();
 }));
 //#endregion
-//#region ../../app-flight/frontend/node_modules/react/cjs/react-jsx-runtime.production.js
+//#region node_modules/react/cjs/react-jsx-runtime.production.js
 /**
 * @license React
 * react-jsx-runtime.production.js
@@ -11495,12 +11495,12 @@ var require_react_jsx_runtime_production = /* @__PURE__ */ __commonJSMin(((expor
 	exports.jsxs = jsxProd;
 }));
 //#endregion
-//#region ../../app-flight/frontend/node_modules/react/jsx-runtime.js
+//#region node_modules/react/jsx-runtime.js
 var require_jsx_runtime = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_jsx_runtime_production();
 }));
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/react-query/build/modern/QueryClientProvider.js
+//#region node_modules/@tanstack/react-query/build/modern/QueryClientProvider.js
 var import_react = /* @__PURE__ */ __toESM(require_react(), 1);
 var import_jsx_runtime = require_jsx_runtime();
 var QueryClientContext = import_react.createContext(void 0);
@@ -11523,7 +11523,7 @@ var QueryClientProvider = ({ client, children }) => {
 	});
 };
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/timeoutManager.js
+//#region node_modules/@tanstack/query-core/build/modern/timeoutManager.js
 var defaultTimeoutProvider = {
 	setTimeout: (callback, delay) => setTimeout(callback, delay),
 	clearTimeout: (timeoutId) => clearTimeout(timeoutId),
@@ -11554,7 +11554,7 @@ function systemSetTimeoutZero(callback) {
 	setTimeout(callback, 0);
 }
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/utils.js
+//#region node_modules/@tanstack/query-core/build/modern/utils.js
 var isServer$1 = typeof window === "undefined" || "Deno" in globalThis;
 function noop$1() {}
 function functionalUpdate(updater, input) {
@@ -11717,11 +11717,11 @@ function addConsumeAwareSignal(object, getSignal, onCancelled) {
 	return object;
 }
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/environmentManager.js
+//#region node_modules/@tanstack/query-core/build/modern/environmentManager.js
 var isServerFn = () => isServer$1;
 var isServer = () => isServerFn();
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/subscribable.js
+//#region node_modules/@tanstack/query-core/build/modern/subscribable.js
 var Subscribable = class {
 	constructor() {
 		this.listeners = /* @__PURE__ */ new Set();
@@ -11742,7 +11742,7 @@ var Subscribable = class {
 	onUnsubscribe() {}
 };
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/focusManager.js
+//#region node_modules/@tanstack/query-core/build/modern/focusManager.js
 var FocusManager = class extends Subscribable {
 	#focused;
 	#cleanup;
@@ -11795,7 +11795,7 @@ var FocusManager = class extends Subscribable {
 };
 var focusManager = new FocusManager();
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/notifyManager.js
+//#region node_modules/@tanstack/query-core/build/modern/notifyManager.js
 var defaultScheduler = systemSetTimeoutZero;
 function createNotifyManager() {
 	let queue = [];
@@ -11857,7 +11857,7 @@ function createNotifyManager() {
 }
 var notifyManager = createNotifyManager();
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/onlineManager.js
+//#region node_modules/@tanstack/query-core/build/modern/onlineManager.js
 var OnlineManager = class extends Subscribable {
 	#online = true;
 	#cleanup;
@@ -11905,7 +11905,7 @@ var OnlineManager = class extends Subscribable {
 };
 var onlineManager = new OnlineManager();
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/retryer.js
+//#region node_modules/@tanstack/query-core/build/modern/retryer.js
 function defaultRetryDelay(failureCount) {
 	return Math.min(1e3 * 2 ** failureCount, 3e4);
 }
@@ -12020,7 +12020,7 @@ function createRetryer(config) {
 	};
 }
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/removable.js
+//#region node_modules/@tanstack/query-core/build/modern/removable.js
 var Removable = class {
 	#gcTimeout;
 	destroy() {
@@ -12043,7 +12043,7 @@ var Removable = class {
 	}
 };
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/infiniteQueryBehavior.js
+//#region node_modules/@tanstack/query-core/build/modern/infiniteQueryBehavior.js
 function infiniteQueryBehavior(pages) {
 	return { onFetch: (context, query) => {
 		const options = context.options;
@@ -12122,7 +12122,7 @@ function getPreviousPageParam(options, { pages, pageParams }) {
 	return pages.length > 0 ? options.getPreviousPageParam?.(pages[0], pages, pageParams[0], pageParams) : void 0;
 }
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/query.js
+//#region node_modules/@tanstack/query-core/build/modern/query.js
 var Query = class extends Removable {
 	#queryType;
 	#initialState;
@@ -12495,7 +12495,7 @@ function getDefaultState$1(options) {
 	};
 }
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/queryObserver.js
+//#region node_modules/@tanstack/query-core/build/modern/queryObserver.js
 var QueryObserver = class extends Subscribable {
 	#client;
 	#currentQuery = void 0;
@@ -12824,7 +12824,7 @@ function isStale(query, options) {
 	return resolveQueryValue(options.enabled, query) !== false && query.isStaleByTime(resolveQueryValue(options.staleTime, query));
 }
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/mutation.js
+//#region node_modules/@tanstack/query-core/build/modern/mutation.js
 var Mutation = class extends Removable {
 	#client;
 	#observers;
@@ -13041,7 +13041,7 @@ function getDefaultState() {
 	};
 }
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/mutationCache.js
+//#region node_modules/@tanstack/query-core/build/modern/mutationCache.js
 var MutationCache = class extends Subscribable {
 	#mutations;
 	#scopes;
@@ -13148,7 +13148,7 @@ function scopeFor(mutation) {
 	return mutation.options.scope?.id;
 }
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/queryCache.js
+//#region node_modules/@tanstack/query-core/build/modern/queryCache.js
 var QueryCache = class extends Subscribable {
 	#queries;
 	constructor(config = {}) {
@@ -13240,7 +13240,7 @@ var QueryCache = class extends Subscribable {
 	}
 };
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/query-core/build/modern/queryClient.js
+//#region node_modules/@tanstack/query-core/build/modern/queryClient.js
 var QueryClient = class {
 	#queryCache;
 	#mutationCache;
@@ -13489,12 +13489,12 @@ var QueryClient = class {
 	}
 };
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/react-query/build/modern/IsRestoringProvider.js
+//#region node_modules/@tanstack/react-query/build/modern/IsRestoringProvider.js
 var IsRestoringContext = import_react.createContext(false);
 var useIsRestoring = () => import_react.useContext(IsRestoringContext);
 IsRestoringContext.Provider;
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/react-query/build/modern/QueryErrorResetBoundary.js
+//#region node_modules/@tanstack/react-query/build/modern/QueryErrorResetBoundary.js
 function createValue() {
 	let isReset = false;
 	return {
@@ -13512,7 +13512,7 @@ function createValue() {
 var QueryErrorResetBoundaryContext = import_react.createContext(createValue());
 var useQueryErrorResetBoundary = () => import_react.useContext(QueryErrorResetBoundaryContext);
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/react-query/build/modern/errorBoundaryUtils.js
+//#region node_modules/@tanstack/react-query/build/modern/errorBoundaryUtils.js
 var ensurePreventErrorBoundaryRetry = (options, errorResetBoundary, query) => {
 	const throwOnError = query?.state.error && typeof options.throwOnError === "function" ? shouldThrowError(options.throwOnError, [query.state.error, query]) : options.throwOnError;
 	if (options.suspense || throwOnError) {
@@ -13528,7 +13528,7 @@ var getHasError = ({ result, errorResetBoundary, throwOnError, query, suspense }
 	return result.isError && !errorResetBoundary.isReset() && !result.isFetching && query && (suspense && result.data === void 0 || shouldThrowError(throwOnError, [result.error, query]));
 };
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/react-query/build/modern/suspense.js
+//#region node_modules/@tanstack/react-query/build/modern/suspense.js
 var ensureSuspenseTimers = (defaultedOptions) => {
 	if (defaultedOptions.suspense) {
 		const MIN_SUSPENSE_TIME_MS = 1e3;
@@ -13543,7 +13543,7 @@ var fetchOptimistic = (defaultedOptions, observer, errorResetBoundary) => observ
 	errorResetBoundary.clearReset();
 });
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/react-query/build/modern/useBaseQuery.js
+//#region node_modules/@tanstack/react-query/build/modern/useBaseQuery.js
 function useBaseQuery(options, Observer, queryClient) {
 	const isRestoring = useIsRestoring();
 	const errorResetBoundary = useQueryErrorResetBoundary();
@@ -13577,12 +13577,12 @@ function useBaseQuery(options, Observer, queryClient) {
 	return !defaultedOptions.notifyOnChangeProps ? observer.trackResult(result) : result;
 }
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@tanstack/react-query/build/modern/useQuery.js
+//#region node_modules/@tanstack/react-query/build/modern/useQuery.js
 function useQuery(options, queryClient) {
 	return useBaseQuery(options, QueryObserver, queryClient);
 }
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@xterm/xterm/lib/xterm.mjs
+//#region node_modules/@xterm/xterm/lib/xterm.mjs
 var import_client = require_client();
 /**
 * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
@@ -23946,7 +23946,7 @@ var Dl = class extends D {
 	}
 };
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@xterm/addon-fit/lib/addon-fit.mjs
+//#region node_modules/@xterm/addon-fit/lib/addon-fit.mjs
 /**
 * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
 * @license MIT
@@ -23989,7 +23989,7 @@ var o = class {
 	}
 };
 //#endregion
-//#region ../../app-flight/frontend/node_modules/@xterm/addon-web-links/lib/addon-web-links.mjs
+//#region node_modules/@xterm/addon-web-links/lib/addon-web-links.mjs
 /**
 * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
 * @license MIT
@@ -25961,7 +25961,7 @@ function sessionLabel(title, branch) {
 	};
 }
 //#endregion
-//#region ../../app-flight/frontend/node_modules/zustand/esm/vanilla.mjs
+//#region node_modules/zustand/esm/vanilla.mjs
 var createStoreImpl = (createState) => {
 	let state;
 	const listeners = /* @__PURE__ */ new Set();
@@ -25990,7 +25990,7 @@ var createStoreImpl = (createState) => {
 };
 var createStore = ((createState) => createState ? createStoreImpl(createState) : createStoreImpl);
 //#endregion
-//#region ../../app-flight/frontend/node_modules/zustand/esm/react.mjs
+//#region node_modules/zustand/esm/react.mjs
 var identity = (arg) => arg;
 function useStore(api, selector = identity) {
 	const slice = import_react.useSyncExternalStore(api.subscribe, import_react.useCallback(() => selector(api.getState()), [api, selector]), import_react.useCallback(() => selector(api.getInitialState()), [api, selector]));
@@ -79355,19 +79355,37 @@ function loopEdges(line) {
 	stops.forEach((n, i) => {
 		const s = n.step;
 		if (s.kind !== "loop") return;
-		const before = stops.slice(0, i);
+		const before = stops.slice(0, i).filter((b) => b.step.kind !== "loop");
 		const back = String(s.config?.back_to ?? "").trim();
 		const gid = s.group?.id;
 		const target = back ? before.find((b) => b.step.id === back) : gid ? before.find((b) => b.step.group?.id === gid) : before[0];
-		if (!target) return;
+		const end = before[before.length - 1];
+		if (!target || !end) return;
 		out.push({
-			from: n.id,
+			from: end.id,
 			to: target.id,
 			kind: "loop",
-			loop: n.loop || loopMark(s)
+			loop: n.loop || loopMark(s),
+			via: n
 		});
 	});
 	return out;
+}
+function liftLoops(line) {
+	const loops = loopEdges(line);
+	const lifted = new Set(loops.map((e) => e.via.id));
+	return {
+		line: line.filter((n) => !lifted.has(n.id)),
+		loops
+	};
+}
+function loopAtWork(d) {
+	return d.edges.find((e) => e.kind === "loop" && !!e.via && !!STOP_TONE[e.via.state]) || null;
+}
+function loopIdlePill(m, via) {
+	if (m.times > 0) return "↻ ×" + m.times;
+	const until = String(via?.step?.config?.until ?? "").trim();
+	return until ? "↻ until " + clip(until, 18) : "↻ until stopped";
 }
 function stopTitle(step, kinds) {
 	return stepActor(step, kinds) === "you" ? perchLabel(step.title) : step.title;
@@ -79393,7 +79411,7 @@ function addNode(title) {
 	};
 }
 function flywayDiagram(steps, kinds) {
-	const line = steps.map((s, i) => ({
+	const { line, loops } = liftLoops(steps.map((s, i) => ({
 		id: stopId(s, i),
 		kind: "stop",
 		row: "main",
@@ -79407,12 +79425,12 @@ function flywayDiagram(steps, kinds) {
 		editable: true,
 		...looksOf(s, kinds),
 		...s.kind === "loop" ? { loop: loopMark(s) } : {}
-	}));
+	})));
 	line.push(addNode("Add a stop"));
 	const nodes = [];
 	const edges = [];
 	chain(nodes, edges, line);
-	edges.push(...loopEdges(line));
+	edges.push(...loops);
 	return {
 		nodes,
 		edges,
@@ -79468,12 +79486,12 @@ function receiptOf(detail) {
 	return clip(String(r).replace(/\s+/g, " ").trim(), 80);
 }
 function flightDiagram(f, kinds) {
-	const line = flightStops(f, kinds);
+	const { line, loops } = liftLoops(flightStops(f, kinds));
 	if (isLive(f) || f.state === "grounded") line.push(addNode("Tack on a stop"));
 	const nodes = [];
 	const edges = [];
 	chain(nodes, edges, line);
-	edges.push(...loopEdges(line));
+	edges.push(...loops);
 	return {
 		nodes,
 		edges,
@@ -79575,14 +79593,18 @@ function sessionDiagram(rows, title, opts = {}) {
 	let mode = "none";
 	let flightId = "";
 	let insertFrom = 0;
+	let loops = [];
 	const fl = row.flight;
 	if (fl && isLive(fl)) {
 		mode = "flight";
 		flightId = fl.id;
 		insertFrom = fl.cursor + 1;
 		const full = opts.flights?.find((f) => f.id === fl.id);
-		if (full) line.push(...flightStops(full, opts.kinds));
-		else for (let i = 0; i < Math.max(0, Number(fl.total) || 0); i++) {
+		if (full) {
+			const lifted = liftLoops(flightStops(full, opts.kinds));
+			line.push(...lifted.line);
+			loops = lifted.loops;
+		} else for (let i = 0; i < Math.max(0, Number(fl.total) || 0); i++) {
 			const cur = i === fl.cursor;
 			const perch = cur && fl.step?.actor === "you";
 			line.push({
@@ -79686,7 +79708,7 @@ function sessionDiagram(rows, title, opts = {}) {
 			});
 		}
 	}
-	edges.push(...loopEdges(line));
+	edges.push(...loops);
 	const d = {
 		nodes,
 		edges,
@@ -79755,7 +79777,7 @@ function foldRun(d, run, into) {
 		const from = to(e.from);
 		let dest = to(e.to);
 		if (e.kind === "join" && dest === into.id && inner.has(e.from) && after) dest = after.id;
-		if (from === dest) continue;
+		if (from === dest && e.kind !== "loop") continue;
 		if (fanned && from === into.id && (e.kind === "line" || e.kind === "add")) continue;
 		const key = from + ">" + dest + ">" + e.kind;
 		if (seen.has(key)) continue;
@@ -79966,9 +79988,11 @@ function drawnCanvas(d, canvas) {
 }
 function lineWhere(d) {
 	let b = birdPerch(d);
-	let n = b ? d.nodes.find((x) => x.id === b.nodeId) : void 0;
+	const lp = loopAtWork(d);
+	let n = b ? lp && lp.from === b.nodeId && !d.nodes.some((x) => x.id === b.nodeId && STOP_TONE[x.state]) ? lp.via : d.nodes.find((x) => x.id === b.nodeId) : void 0;
 	if (!n || n.kind === "session") {
-		const parked = d.nodes.find((x) => x.row === "main" && (x.kind === "stop" || x.kind === "group") && (x.state === "halted" || x.state === "paused"));
+		const isParked = (x) => x.state === "halted" || x.state === "paused";
+		const parked = d.nodes.find((x) => x.row === "main" && (x.kind === "stop" || x.kind === "group") && isParked(x)) || (lp?.via && isParked(lp.via) ? lp.via : void 0);
 		if (!parked) return "";
 		n = parked;
 		b = {
@@ -80130,7 +80154,11 @@ var STOP_TONE = {
 };
 function birdPerch(d) {
 	const main = d.nodes.filter((n) => n.row === "main");
-	const stop = main.find((n) => (n.kind === "stop" || n.kind === "group") && STOP_TONE[n.state]);
+	const lp = loopAtWork(d);
+	const stop = main.find((n) => (n.kind === "stop" || n.kind === "group") && STOP_TONE[n.state]) || (lp ? {
+		id: lp.from,
+		state: lp.via.state
+	} : void 0);
 	const me = main.find((n) => n.kind === "session");
 	if (stop && (stop.state === "halted" || stop.state === "paused")) {
 		if (me?.chip?.tone === "working") return {
@@ -80446,14 +80474,15 @@ function layoutDiagram(d, opts = {}) {
 		const kind = e.kind === "branch" && b.node.branch ? "fan" : e.kind;
 		let path = "";
 		if (kind === "loop") {
-			const arc = loopArc(a, b, anchorOf, !!opts.vertical);
+			const arc = loopArc(a, b, anchorOf, !!opts.vertical, boxes);
 			wires.push({
 				from: e.from,
 				to: e.to,
 				kind,
 				d: arc.d,
 				apex: arc.apex,
-				...e.loop ? { loop: e.loop } : {}
+				...e.loop ? { loop: e.loop } : {},
+				...e.via ? { via: e.via } : {}
 			});
 			continue;
 		}
@@ -80504,7 +80533,7 @@ function layoutDiagram(d, opts = {}) {
 	}
 	const arcs = wires.filter((w) => w.apex);
 	const width = Math.max(0, ...boxes.map((p) => p.x + p.w), ...arcs.map((w) => w.apex.x + LOOP_PILL_ROOM));
-	const height = Math.max(0, ...boxes.map((p) => p.y + p.h));
+	const height = Math.max(0, ...boxes.map((p) => p.y + p.h), ...arcs.map((w) => w.apex.y + LOOP_PILL_ROOM));
 	const rise = Math.max(0, ...arcs.map((w) => LOOP_PILL_ROOM - w.apex.y));
 	return {
 		boxes,
@@ -80516,58 +80545,28 @@ function layoutDiagram(d, opts = {}) {
 	};
 }
 var LOOP_PILL_ROOM = 14;
-var LOOP_FROM = .3;
-var LOOP_TO = .72;
-function loopBandLabel(m) {
-	const n = m.times > 0 ? "×" + m.times : "until stopped";
-	return (m.state === "done" ? "↻ Repeated " : "↻ Repeats ") + n;
-}
-function loopBands(boxes, wires, vertical) {
-	const out = [];
-	for (const w of wires) {
-		if (w.kind !== "loop" || !w.loop) continue;
-		const a = boxes.find((b) => b.node.id === w.from);
-		const b = boxes.find((x) => x.node.id === w.to);
-		if (!a || !b) continue;
-		const lo = vertical ? Math.min(a.y, b.y) : Math.min(a.x, b.x);
-		const hi = vertical ? Math.max(a.y + a.h, b.y + b.h) : Math.max(a.x + a.w, b.x + b.w);
-		const inside = boxes.filter((p) => {
-			if (p.node.row !== "main") return false;
-			const c = vertical ? p.y + p.h / 2 : p.x + p.w / 2;
-			return c >= lo && c <= hi;
-		});
-		const x = Math.min(...inside.map((p) => p.x)) - 10;
-		const y = Math.min(...inside.map((p) => p.y)) - 14;
-		const r = Math.max(...inside.map((p) => p.x + p.w)) + 10;
-		const btm = Math.max(...inside.map((p) => p.y + p.h)) + 10;
-		out.push({
-			id: w.from,
-			x,
-			y,
-			w: r - x,
-			h: btm - y,
-			label: loopBandLabel(w.loop),
-			state: w.loop.state
-		});
-	}
-	return out;
-}
+var LOOP_FROM = .72;
+var LOOP_TO = .28;
+var LOOP_DROP = 22;
 function loopRise(span) {
 	return Math.round(Math.min(84, Math.max(30, 18 + Math.abs(span) * .16)));
 }
-function loopArc(a, b, anchorOf, vertical) {
+function loopArc(a, b, anchorOf, vertical, boxes) {
 	if (!vertical) {
 		const x1 = a.x + a.w * LOOP_FROM;
 		const x2 = b.x + b.w * LOOP_TO;
-		const y1 = a.y;
-		const y2 = b.y - 2;
-		const h = loopRise(x2 - x1);
-		const cy = Math.min(a.y, b.y) - h * 4 / 3;
+		const lo = Math.min(a.x, b.x);
+		const hi = Math.max(a.x + a.w, b.x + b.w);
+		const yb = Math.max(a.y + a.h, b.y + b.h, ...boxes.filter((p) => p.x < hi && p.x + p.w > lo).map((p) => p.y + p.h)) + LOOP_DROP;
+		const r = Math.max(0, Math.min(10, Math.abs(x1 - x2) / 2, LOOP_DROP / 2));
+		const y1 = a.y + a.h;
+		const y2 = b.y + b.h + 2;
+		const dir = x2 <= x1 ? -1 : 1;
 		return {
-			d: `M ${x1} ${y1} C ${x1} ${cy}, ${x2} ${cy}, ${x2} ${y2}`,
+			d: `M ${x1} ${y1} V ${yb - r} Q ${x1} ${yb} ${x1 + dir * r} ${yb} H ${x2 - dir * r} Q ${x2} ${yb} ${x2} ${yb - r} V ${y2}`,
 			apex: {
 				x: (x1 + x2) / 2,
-				y: .125 * y1 + .75 * cy + .125 * y2
+				y: yb
 			}
 		};
 	}
@@ -81984,7 +81983,7 @@ function FlywayCanvas(p) {
 			y: pt.y
 		});
 	};
-	const menuNode = menu ? p.diagram.nodes.find((n) => n.id === menu.id) || null : null;
+	const menuNode = menu ? p.diagram.nodes.find((n) => n.id === menu.id) || p.diagram.edges.find((e) => e.via?.id === menu.id)?.via || null : null;
 	const menuItems = menuNode ? withRewind(menuItemsFor(menuNode, {
 		can: {
 			edit: !!(p.onEdit || p.onSelect),
@@ -82238,19 +82237,6 @@ function FlywayCanvas(p) {
 			onPointerUp: onStageUp,
 			onPointerCancel: onStageUp,
 			children: [
-				loopBands(shown.boxes, shown.wires, vertical).map((b) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
-					className: "fl-loop-band fl-loop-" + b.state,
-					style: {
-						transform: `translate(${b.x + pad}px, ${b.y + top}px)`,
-						width: b.w,
-						height: b.h
-					},
-					"aria-hidden": "true",
-					children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "fl-loop-band-label",
-						children: b.label
-					})
-				}, "band:" + b.id)),
 				/* @__PURE__ */ (0, import_jsx_runtime.jsxs)("svg", {
 					className: "fl-wires",
 					width: shown.width + 12,
@@ -82279,15 +82265,32 @@ function FlywayCanvas(p) {
 					})]
 				}),
 				shown.wires.map((w) => {
-					const text = w.kind === "loop" && w.apex && w.loop ? loopPill(w.loop) : "";
-					if (!text) return null;
+					if (w.kind !== "loop" || !w.apex || !w.loop) return null;
+					const m = w.loop;
+					const n = w.via;
+					const text = loopPill(m) || loopIdlePill(m, n);
+					const title = (m.state === "pending" && m.runs === 0 ? "Loop: " + (n?.sub || text) : loopPillTitle(m)) + (n ? " — click to change it" : "");
 					return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", {
-						className: "fl-loop-pill fl-loop-" + w.loop.state,
+						className: "fl-loop-pill fl-loop-" + m.state + (n ? " fl-st-" + n.state : "") + (n && p.selected === n.id ? " selected" : ""),
 						style: { transform: `translate(${w.apex.x + pad}px, ${w.apex.y + top}px) translate(-50%, -50%) scale(calc(1 / var(--sky-z, 1)))` },
-						title: loopPillTitle(w.loop),
-						"aria-label": loopPillTitle(w.loop),
+						"data-node": n?.id,
+						title,
+						"aria-label": title,
+						role: n ? "button" : void 0,
+						tabIndex: n ? 0 : void 0,
+						onClick: n ? () => edit(n) : void 0,
+						onContextMenu: n ? (e) => onBoxMenu(e, n) : void 0,
+						onKeyDown: n ? (e) => {
+							if (e.key === "Enter" || e.key === " ") {
+								e.preventDefault();
+								edit(n);
+							} else if ((e.key === "Delete" || e.key === "Backspace") && removable(n)) {
+								e.preventDefault();
+								p.onRemove(n);
+							}
+						} : void 0,
 						children: text
-					}, "loop:" + w.from);
+					}, "loop:" + (n?.id || w.from));
 				}),
 				groupFrames(shown.boxes).map((f) => /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", {
 					className: "fl-group-frame",
@@ -83069,7 +83072,7 @@ function liveBoxParts(flight, expand, onCancelAsk) {
 }
 function currentNodeId(d, flight) {
 	if (!flight) return null;
-	return nodeAtIndex(d, flight.cursor)?.id || null;
+	return nodeAtIndex(d, flight.cursor)?.id || d.edges.find((e) => e.kind === "loop" && e.via?.step?.id === flight.steps[flight.cursor]?.id)?.from || null;
 }
 function FlightCard({ flight, kinds, expand = false }) {
 	const now = useNow(isLive(flight) ? 3e4 : false);
@@ -124797,12 +124800,23 @@ function groundedFlights(flights) {
 	return (flights || []).filter((f) => f.state === "grounded").sort((a, b) => (b.started || 0) - (a.started || 0) || (a.id < b.id ? 1 : -1));
 }
 function groundedDiagram(f, kinds) {
-	const d = flightDiagram(f, kinds);
+	let d = flightDiagram(f, kinds);
 	const nodes = d.nodes.map((n) => n.kind === "stop" ? {
 		...n,
 		state: "pending",
 		editable: true
 	} : n);
+	d = {
+		...d,
+		edges: d.edges.map((e) => e.via ? {
+			...e,
+			via: {
+				...e.via,
+				state: "pending",
+				editable: true
+			}
+		} : e)
+	};
 	if (!nodes.some((n) => n.kind === "add")) {
 		const last = [...nodes].reverse().find((n) => n.row === "main");
 		nodes.push({

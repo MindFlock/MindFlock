@@ -254,10 +254,11 @@ export function liveBoxParts(flight: Flight | null, expand: boolean, onCancelAsk
 }
 
 /** The box of the stop a flight is at — the group box holding it, when it is
- * a sub-step of one (the canvas scrolls it into view). */
+ * a sub-step of one; at a Loop (no box), the stop its wire leaves from (the
+ * canvas scrolls it into view). */
 export function currentNodeId(d: Diagram, flight: Flight | null): string | null {
   if (!flight) return null;
-  return nodeAtIndex(d, flight.cursor)?.id || null;
+  return nodeAtIndex(d, flight.cursor)?.id || d.edges.find((e) => e.kind === "loop" && e.via?.step?.id === flight.steps[flight.cursor]?.id)?.from || null;
 }
 
 /** One flight on the Board: its headline, the bird and its flyway, the

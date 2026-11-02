@@ -63,7 +63,7 @@ import {
   birdPerches,
   joinLabel,
   layoutDiagram,
-  loopBands,
+  loopIdlePill,
   loopPill,
   loopPillTitle,
   reorderDiagram,
@@ -622,14 +622,15 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
 
   // Right-click: the box's menu, at the pointer. Inside an open card (the
   // session's pane, its terminal) the card keeps its own.
-  const onBoxMenu = (e: MouseEvent<HTMLDivElement>, n: DiagramNode) => {
+  const onBoxMenu = (e: MouseEvent<HTMLElement>, n: DiagramNode) => {
     if (opened.has(n.id) && e.target !== e.currentTarget) return;
     e.preventDefault();
     e.stopPropagation();
     const pt = stagePoint(e.clientX, e.clientY);
     if (pt) setMenu({ id: n.id, x: pt.x, y: pt.y });
   };
-  const menuNode = menu ? p.diagram.nodes.find((n) => n.id === menu.id) || null : null;
+  // A Loop has no box: its menu opens on its wire's pill (the edge's `via`).
+  const menuNode = menu ? p.diagram.nodes.find((n) => n.id === menu.id) || p.diagram.edges.find((e) => e.via?.id === menu.id)?.via || null : null;
   const menuItems: SkyMenuItem[] = menuNode
     ? withRewind(
         menuItemsFor(menuNode, {
@@ -878,19 +879,6 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
         onPointerUp={onStageUp}
         onPointerCancel={onStageUp}
       >
-        {loopBands(shown.boxes, shown.wires, vertical).map((b) => (
-          // A Loop's cycle: a band round the stops it repeats (the target
-          // through the Loop), under the wires and the boxes, so the line
-          // reads "these go round" before the arc is even followed.
-          <div
-            key={"band:" + b.id}
-            className={"fl-loop-band fl-loop-" + b.state}
-            style={{ transform: `translate(${b.x + pad}px, ${b.y + top}px)`, width: b.w, height: b.h }}
-            aria-hidden="true"
-          >
-            <span className="fl-loop-band-label">{b.label}</span>
-          </div>
-        ))}
         <svg className="fl-wires" width={shown.width + pad * 2} height={shown.height + top + pad} aria-hidden="true" focusable="false">
           <defs>
             <marker id={uid + "-arrow"} viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -910,17 +898,41 @@ export function FlywayCanvas(p: FlywayCanvasProps) {
           </g>
         </svg>
         {shown.wires.map((w) => {
-          // A Loop's count on its arc's apex: "2 / 3" — screen-sized at any
-          // zoom of the Sky, like the join pill.
-          const text = w.kind === "loop" && w.apex && w.loop ? loopPill(w.loop) : "";
-          if (!text) return null;
+          // A Loop is its return wire: the pill in the middle of its run under
+          // the line says how many times ("↻ ×3", then "2 / 3" while it goes
+          // round) and stands for the Loop itself — a click opens it, the
+          // right-click menu and Delete work on it as on a box. Screen-sized
+          // at any zoom of the Sky, like the join pill.
+          if (w.kind !== "loop" || !w.apex || !w.loop) return null;
+          const m = w.loop;
+          const n = w.via;
+          const text = loopPill(m) || loopIdlePill(m, n);
+          const title = (m.state === "pending" && m.runs === 0 ? "Loop: " + (n?.sub || text) : loopPillTitle(m)) + (n ? " — click to change it" : "");
           return (
             <span
-              key={"loop:" + w.from}
-              className={"fl-loop-pill fl-loop-" + w.loop!.state}
-              style={{ transform: `translate(${w.apex!.x + pad}px, ${w.apex!.y + top}px) translate(-50%, -50%) scale(calc(1 / var(--sky-z, 1)))` }}
-              title={loopPillTitle(w.loop!)}
-              aria-label={loopPillTitle(w.loop!)}
+              key={"loop:" + (n?.id || w.from)}
+              className={"fl-loop-pill fl-loop-" + m.state + (n ? " fl-st-" + n.state : "") + (n && p.selected === n.id ? " selected" : "")}
+              style={{ transform: `translate(${w.apex.x + pad}px, ${w.apex.y + top}px) translate(-50%, -50%) scale(calc(1 / var(--sky-z, 1)))` }}
+              data-node={n?.id}
+              title={title}
+              aria-label={title}
+              role={n ? "button" : undefined}
+              tabIndex={n ? 0 : undefined}
+              onClick={n ? () => edit(n) : undefined}
+              onContextMenu={n ? (e) => onBoxMenu(e, n) : undefined}
+              onKeyDown={
+                n
+                  ? (e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        edit(n);
+                      } else if ((e.key === "Delete" || e.key === "Backspace") && removable(n)) {
+                        e.preventDefault();
+                        p.onRemove!(n);
+                      }
+                    }
+                  : undefined
+              }
             >
               {text}
             </span>
