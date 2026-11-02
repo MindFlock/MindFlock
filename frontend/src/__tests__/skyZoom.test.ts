@@ -117,7 +117,9 @@ describe("the first picture", () => {
 
   it("the sky wires it: an automatic fit and 0 are legible, the Fit button whole", () => {
     const sky = code("components/flights/SkyView.tsx");
-    expect(sky).toContain("setCam((whole ? fitCamera : firstFit)(boundsOf(rects), vp.w, vp.h, mode === \"one\" ? 1.5 : 1));");
+    // Round 17: through the eased camera (`goTo`), instant only for the first picture.
+    expect(sky).toContain("goTo((whole ? fitCamera : firstFit)(boundsOf(rects), vp.w, vp.h, mode === \"one\" ? 1.5 : 1), instant);");
+    expect(sky).toContain("else fitAll(false, true);");
     expect(sky).toContain("onClick={() => fitAll(true)}");
     expect(sky).toMatch(/k === "0"\) \{\s*handled\(\);\s*fitAll\(\);/);
     expect(sky).toMatch(/title="See everything: every line in the window, however small/);
@@ -153,7 +155,7 @@ describe("room on the screen", () => {
     expect(sheet).toMatch(/\.sky-toolbar \{[^}]*flex-wrap: nowrap;[^}]*max-height: 36px;/);
     expect(sheet).toMatch(/\.sky \{[^}]*container: sky \/ inline-size;/);
     expect(sheet).toMatch(/@container sky \(max-width: 860px\) \{\s*\.sky-zoom-100,\s*\.sky-toolbar > \.tour-btn \{\s*display: none;/);
-    expect(code("components/flights/SkyView.tsx")).toContain('className="sky-zoom-btn sky-zoom-100" title="Back to 100%"');
+    expect(code("components/flights/SkyView.tsx")).toContain('className="sky-zoom-btn sky-zoom-100" title="Back to 100% (Shift+0)"');
   });
 
   it("every line sits at its placed spot (its slot is translated there), so the gap and Tidy show", () => {

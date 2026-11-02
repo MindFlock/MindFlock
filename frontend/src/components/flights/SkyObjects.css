@@ -9,6 +9,23 @@
   left: 0;
   top: 0;
   z-index: 3;
+  /* The ring (round 17), as a line's: drawn round the object, transparent
+     at rest, screen-sized at any zoom; the box radius so it hugs the card. */
+  border-radius: 8px;
+  outline: calc(1px / var(--sky-z, 1)) solid transparent;
+  outline-offset: calc(2px / var(--sky-z, 1));
+  transition: outline-color 120ms ease;
+}
+
+/* Hover the object's head (the handle it is dragged by): the hover ring.
+   Zero weight, so the selection ring (SkySelection.css) wins over it. */
+.sky-object:where(:has(:is(.sky-block-head, .sky-note-head, .sky-lane-head):hover)) {
+  outline-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+/* Keyboard focus inside it: the hover ring in the selection's colour. */
+.sky-object:where(:has(:focus-visible)) {
+  outline-color: var(--accent);
 }
 
 /* They glide only under Tidy, as the slots do (Sky.css). */
@@ -19,6 +36,11 @@
 .sky-object.is-dragging {
   transition: none;
   z-index: 7;
+}
+
+/* In the hand: the object's card raised (the one shadow scale). */
+.sky-object.is-dragging > :is(.sky-block, .sky-note, .sky-lane) {
+  box-shadow: var(--sky-shadow-raised);
 }
 
 .sky-object-note {
@@ -40,9 +62,11 @@
   gap: 4px;
   padding: 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 8px;
   background: color-mix(in srgb, var(--panel) 94%, transparent);
   font-size: 13px;
+  box-shadow: var(--sky-shadow-rest);
+  transition: box-shadow 120ms ease;
 }
 
 .sky-block-head {
@@ -127,7 +151,7 @@
 .sky-block.is-merge-target {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, var(--panel));
-  box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0.55);
+  box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0.55), var(--sky-shadow-rest);
 }
 
 /* The session line being dragged toward a block: see-through. */
@@ -150,4 +174,11 @@
   display: block;
   width: 100%;
   text-align: left;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sky-object,
+  .sky-block {
+    transition: none;
+  }
 }

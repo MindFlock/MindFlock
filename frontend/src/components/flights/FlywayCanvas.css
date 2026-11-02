@@ -9,6 +9,23 @@
  * phone never scrolls the page sideways. Colours are the app's tokens, so
  * both themes follow. */
 
+/* --- Round 17 polish: one shadow scale ------------------------------------
+ * Every box, line and sky object draws one of two shadows: resting, or
+ * raised while it is dragged (.is-dragging, a lifted box). Defined once,
+ * here, on the sky and on any canvas drawn outside it (the pane's Flight tab,
+ * the flyway editor); the light theme's are softer. */
+.sky,
+.fl-canvas {
+  --sky-shadow-rest: 0 1px 2px rgba(0, 0, 0, 0.16), 0 4px 14px rgba(0, 0, 0, 0.14);
+  --sky-shadow-raised: 0 6px 12px rgba(0, 0, 0, 0.22), 0 18px 40px rgba(0, 0, 0, 0.34);
+}
+
+.light .sky,
+.light .fl-canvas {
+  --sky-shadow-rest: 0 1px 2px rgba(0, 0, 0, 0.08), 0 4px 14px rgba(0, 0, 0, 0.08);
+  --sky-shadow-raised: 0 6px 12px rgba(0, 0, 0, 0.12), 0 18px 40px rgba(0, 0, 0, 0.18);
+}
+
 .fl-canvas {
   position: relative;
   overflow: auto;
@@ -98,26 +115,38 @@
   flex-direction: column;
   gap: 3px;
   padding: 9px 11px 9px;
-  border-radius: 10px;
+  border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--panel-2);
   color: var(--text);
   font-size: 12.5px;
   cursor: pointer;
   user-select: none;
-  transition: transform 0.18s ease, box-shadow 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
-  outline: none;
+  transition: transform 120ms ease, box-shadow 120ms ease, outline-color 120ms ease, opacity 120ms ease;
+  box-shadow: var(--sky-shadow-rest);
+  /* The ring (round 17): always drawn, transparent at rest, so hover, focus
+     and selection only change its colour and width — never the geometry.
+     Screen-sized at any zoom of the Sky (--sky-z). */
+  outline: calc(1px / var(--sky-z, 1)) solid transparent;
+  outline-offset: calc(2px / var(--sky-z, 1));
 }
 
 .fl-box:hover {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
 }
 
+/* The hover ring: 1px at half the accent (an open box is never restyled). */
+.fl-box:where(:not(.fl-box-open):hover) {
+  outline-color: color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
+/* Keyboard focus: the hover ring in the selection's colour. The one
+   selected box: the selection ring (2px accent, 2px out — SkySelection.css
+   holds the rule for every selected thing). */
 .fl-box:focus-visible,
 .fl-box.selected {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.55);
+  outline-color: var(--accent);
 }
 
 .fl-draggable {
@@ -127,8 +156,14 @@
 
 .fl-lifted {
   z-index: 3;
-  transition: box-shadow 0.15s ease;
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.4), 0 0 0 2px rgba(var(--accent-rgb), 0.45);
+  transition: box-shadow 120ms ease, outline-color 120ms ease;
+  box-shadow: var(--sky-shadow-raised);
+}
+
+/* A box in the hand wears the selection ring over the raised shadow. */
+.fl-box.fl-lifted {
+  outline-width: calc(2px / var(--sky-z, 1));
+  outline-color: var(--accent);
 }
 
 .fl-box-head {
@@ -514,7 +549,9 @@
   font-weight: 600;
   white-space: nowrap;
   opacity: 1;
-  box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0.25);
+  /* Round 17: a crisp 2px accent ring over a 2px panel gap (was a faint
+     25% halo) — it reads at the far band too, where the line is small. */
+  box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--accent);
   pointer-events: none;
 }
 
@@ -1569,4 +1606,28 @@
 
 .fl-loop-band.fl-loop-done .fl-loop-band-label {
   color: var(--muted);
+}
+
+/* --- Round 17 polish: touch targets ------------------------------------------
+ * On a touch screen every button, chip and handle of the Sky takes a finger:
+ * an invisible hit area at least 40px square, centred on the control. It is a
+ * pseudo-element, so nothing at rest moves or grows (the geometry never
+ * depends on the device either); controls in normal flow become its
+ * containing block, the absolutely placed handles already are one. */
+@media (hover: none) {
+  :is(.skl-size, .skl-card-fold, .skl-menu .vf-menu > summary, .fl-tool, .fl-box-menu .vf-menu summary, .fl-toggle, .fl-pick, .fl-icon-btn, .fl-palette-item, .sky .fl-btn, .sky-lane-toggle, .sky-lane-more, .sky-lane-rail-icon, .sky-shelf-fold, .sky-stop-chip, .sky-selbar button) {
+    position: relative;
+  }
+
+  :is(.skl-size, .skl-card-fold, .skl-menu .vf-menu > summary, .fl-tool, .fl-box-menu .vf-menu summary, .fl-toggle, .fl-pick, .fl-icon-btn, .fl-palette-item, .sky .fl-btn, .sky-lane-toggle, .sky-lane-more, .sky-lane-rail-icon, .sky-shelf-fold, .sky-stop-chip, .sky-selbar button, .skl-box-resize, .skl-resize, .sky-palette-resize, .fl-gap-add, .fl-bird-marker)::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    min-width: 40px;
+    min-height: 40px;
+    width: 100%;
+    height: 100%;
+    transform: translate(-50%, -50%);
+  }
 }

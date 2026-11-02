@@ -305,8 +305,11 @@ describe("the wiring", () => {
     }
     expect(code("components/flights/FlywayCanvas.tsx")).toContain('(p.highlighted?.has(n.id) ? " fl-box-selected" : "")');
     const sheet = css("components/flights/SkySelection.css");
-    expect(sheet).toMatch(/\.skl\.is-selected \{[^}]*outline: 2px dashed var\(--accent\)/);
-    expect(sheet).toMatch(/\.fl-box\.fl-box-selected \{[^}]*outline: 2px dashed var\(--accent\)/);
+    // Round 17 polish: ONE selection ring (2 screen px, solid accent) for every
+    // ringable thing, in one selector list; skyPolish.test.ts pins the rule.
+    expect(sheet).toContain("outline: calc(2px / var(--sky-z, 1)) solid var(--accent)");
+    expect(sheet).toMatch(/\.skl\.is-selected/);
+    expect(sheet).toMatch(/\.fl-box\.fl-box-selected/);
     expect(sheet).toMatch(/\.sky-marquee \{[^}]*pointer-events: none/);
   });
 });

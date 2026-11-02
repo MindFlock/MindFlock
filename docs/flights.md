@@ -5460,3 +5460,515 @@ Tests: `tests/unit/test_mcp_flights.py` covers each tool's request shape
 against the in-memory API, the scope and confirm refusals, the kinds list in
 `describe_flight`, `flight_status` compactness on a 40-stop flight, and
 `Api.patch`. The 34-tool and INSTRUCTIONS pins are in `test_mcp_tools.py`.
+
+## Round 17: the Sky as a canvas tool (contract)
+
+The owner (2026-10-31, a standing ask, one round per cycle): "iterate on the
+sky design and user experience to make it as seamless and intuitive as
+possible; look to other apps that exist for inspiration; take the best parts
+of all of them; make sure you have a judge agent." This round takes the
+manners every good infinite canvas has settled on and a fresh-eyes judge
+measures the Sky against them before and after.
+
+### The inspiration digest (what the best canvases agree on)
+
+| From | The manner | Sky today | This round |
+|---|---|---|---|
+| Figma / FigJam | Space+drag pans; wheel zooms about the cursor; `Shift+1` fit all, `Shift+2` fit selection, `Shift+0` 100 %; the zoom readout is a MENU of presets; smart guides snap edges and centres while dragging; a selected thing wears one thin accent outline, hover a fainter one | pan/zoom yes; 0 / Fit / 100 % buttons; no selection fit; no guides | zoom menu, fit selection, snapping guides, hover/selected rings |
+| tldraw | the select tool is the default and a drag on empty space marquees; `H` hand; the context toolbar floats ABOVE the selection; smooth eased camera moves; a `?` sheet of shortcuts | click/drag tools (V/H), selection bar at the foot | eased fit/focus, `?` sheet |
+| Miro | a minimap in the corner with the viewport rectangle; frames list to jump; zoom presets | none | minimap + off-screen hints |
+| n8n | `Tab` opens the node panel with its search focused; double-click on empty canvas opens it at the pointer; "Tidy up"; sticky notes; a node shows its run status inline | palette float/dock; Tidy; notes; status on boxes | Tab / double-click to the palette |
+| Zapier | each step's status chip reads at a glance; the path's label on the edge | receipts, states | (judge checks legibility) |
+| Excalidraw | Delete removes, Ctrl+Z / Ctrl+Shift+Z undo / redo; zen mode hides chrome; cursors say what a drag will do (grab, grabbing, crosshair, move) | undo only; cursors partial | redo, cursor contract, focus mode |
+| Linear | keyboard first; one accent colour; calm density; the `?` overlay | — | `?` sheet, density pass |
+| Apple Freeform | touch: pinch, two-finger pan, long-press menu; big targets | pinch/pan | ≥ 40 px targets on phone (judge checks) |
+
+Principles kept from rounds 13–15: nothing lands by itself, direct
+manipulation, every object has a name and can go, selection may be empty,
+palettes dock or float, geometry never depends on zoom.
+
+### The judge (task `judge`, read-only, runs first and again after the builders)
+
+A fresh-eyes judge session SEES the Sky, never reads its source. It builds a
+screenshot harness in its scratch dir (the recipe in the brief at
+`~/MindFlock/ux-lab/JUDGE_BRIEF_R17.md`: the built bundle served statically +
+the demo mocks + its own `/api/flights/*` and `/api/instances` rows), shoots
+six states (first visit with nothing; three lines; twelve lines; a flight
+mid-way with a perch waiting on you; zoomed far; a 390 px phone), tries the
+gestures (wheel, Space+drag, marquee, Tab, `?`, double-click, Delete,
+Ctrl+Z), and scores the Sky 1–5 on: first-five-minutes clarity,
+discoverability, feedback (does every action show its effect?), consistency,
+speed/smoothness, forgiveness (undo, confirm only when it must), delight.
+Its report (`JUDGE-R17-<n>.md` in `~/MindFlock/ux-lab/round17/`, with the
+PNGs beside it) lists at most twelve findings, each: what I saw / what the
+best apps do / the fix in one sentence / severity. The second pass re-shoots
+the same six states on the rebuilt bundle and says what changed and what is
+still wrong; its leftovers seed the next cycle.
+
+### The builders (disjoint files; the seams are the three placeholder components and `lib/skySnap.ts`, committed with this contract)
+
+**`sky-core`** (`SkyView.tsx`, `Sky.css`, `lib/skyLayout.ts`, `lib/skySnap.ts`,
+`lib/skyUndo.ts`, `lib/skySelect.ts`, `lib/viewMode.ts`, tests
+`skySnap.test.ts`, `skyCanvas.test.ts`, existing sky*.test.ts updates):
+(1) **snapping**: `snapBox(moving, others, threshold)` snaps a dragged line or
+object's left/centre/right and top/middle/bottom to the others' within 8
+screen px (threshold = 8 / zoom), returns the guides; the sky draws them as
+1 px accent lines (`.sky-guide`) while the drag lasts; `Alt` held = no snap;
+(2) **fit selection**: `Shift+2` / the zoom menu's "Fit selection" fits the
+selected boxes (lines and objects), `Shift+1` fits all (0 stays), `Shift+0` =
+100 %; (3) **eased camera**: fit / focus / jump animate the camera over
+~220 ms (ease-out; none under `prefers-reduced-motion`), no FLIP ghosts
+involved; (4) **redo**: `lib/skyUndo` gains a redo stack (`popRedo`,
+`redoCount`; an undo pushes its inverse when the entry provides `redo()`,
+else nothing — the kinds that can: stop/group removal, grounded line delete,
+note delete), `Ctrl+Shift+Z` / `⌘⇧Z` redoes, toast "Redid: …"; (5) **Tab**
+opens the palette floating with its filter focused (`onFocusFilter`), a
+second Tab docks it; **double-click on empty sky** opens it at the pointer
+(placing lands there) — a double-click on a line keeps its meaning; (6) the
+**cursor contract** (`Sky.css`): `grab` on a bar, `grabbing` while dragging,
+`crosshair` for the marquee, `move` for a snapping box, `zoom-in`/`zoom-out`
+never (the wheel does it), `copy` while a chip drags over a line; (7)
+**focus mode**: `F` with a selection dims everything else to 35 % (a `.sky-
+focus` class on the plane, `data-dim` on the rest), any click or Esc lifts
+it; (8) mounts `<Minimap>`, `<OffscreenHints>`, `<ZoomMenu>` (replacing the
+`sky-zoom-read` span) and `<SkyShortcuts>` (`?` opens, Esc closes) with the
+seam props, feeding the rects from `rectOf` + the objects' frames and the
+lines' state tones; passes `groups` = the sky's real shortcut list.
+
+**`minimap`** (`Minimap.tsx` + `Minimap.css`, `lib/minimap.ts`, tests
+`minimap.test.ts`): the map in the sky's bottom-right (above the shelf,
+right of the selection bar), 180×120 px, folded to a ◰ glyph by a click on
+its head and remembered (`mf_sky_minimap`); draws every rect as a rounded
+block in its state tone (lines), a muted block (objects), the intake lane
+and landing strip as thin bars; the viewport as an accent rectangle that
+DRAGS (plane = map × scale) and a click outside it centres the camera there;
+a click on a block → `onJump(id)`; hover names the line; a plane bigger than
+the map is scaled to fit with 8 px padding; hidden under 520 px wide.
+**Off-screen hints**: for each line outside the viewport, a 22 px chip at
+the nearest edge (clamped to the edge, 8 px in), the bird-coloured dot of its
+state + the title (ellipsis at 14 chars), click = `onJump`; at most 8, the
+nearest first; none while the minimap is open AND wide enough — no, keep
+both: the hints are for "where did my line go" at a glance, the map for the
+whole picture; hidden at lod far (everything is on screen then anyway).
+
+**`zoom-shortcuts`** (`ZoomMenu.tsx` + `ZoomMenu.css`, `SkyShortcuts.tsx` +
+`SkyShortcuts.css`, `lib/skyShortcuts.ts`, tests `zoomMenu.test.ts`,
+`skyShortcuts.test.ts`): the readout becomes a button opening a small menu
+(inline DOM, Esc/outside closes, arrow keys walk it): Fit all (Shift+1 / 0),
+Fit selection (Shift+2, disabled without one), Fit the focused line (1),
+then 50 % · 100 % (Shift+0) · 150 % · 200 %, each with its key; the current
+zoom ticked. The shortcuts sheet: a centred card (not a native dialog)
+listing the groups in two columns with key caps (`<kbd>`), a filter field at
+the top, `?` or Esc closes, the sky's real list in `lib/skyShortcuts.ts`
+(`SKY_SHORTCUT_GROUPS`: Move around / Select / Edit stops / Lines and
+objects / The palette / Help) — `sky-core` imports it for `groups`.
+
+**`polish-css`** (`SkyLine.css`, `FlywayCanvas.css`, `GroundedLine.css`,
+`IntakeLane.css`, `LandingStrip.css`, `SkyObjects.css`, `StickyNote.css`,
+`SkySelection.css`, `SkyPalette.css`, `StopShelf.css`; tests: a
+`skyPolish.test.ts` that pins the tokens): one accent ring for selection
+(2 px, `--accent`, 2 px offset), a fainter hover ring (1 px, 50 %) on every
+box, line bar and object head; `:focus-visible` matches hover + the ring;
+transitions 120 ms on transform/box-shadow/outline only (never on layout);
+one shadow scale (resting / raised while dragging); radii unified (lines 10,
+boxes 8, chips 999); touch targets ≥ 40 px for every control on `@media
+(hover: none)`; the drop gap's highlight reads at far too; no colour that
+is not a token. Nothing moves; nothing changes size at rest.
+
+### After the builders
+
+The integrator merges, rebuilds the bundle in the round's worktree, the
+judge re-shoots, the integrator fixes what is quick, merges into
+`emandel2630/flights`, deploys. The judge's leftovers are the next cycle's
+seed, written at the top of the next round's contract.
+
+### As built: round 17 minimap
+
+`components/flights/Minimap.tsx` fills both seams; the maths is
+`lib/minimap.ts`, the look `Minimap.css`, the tests `minimap.test.ts`. The
+props are the seam's, unchanged.
+
+**The map** (`.sky-minimap`, absolute; the sky places it, the CSS defaults to
+`right: 12px; bottom: 12px` until it does) is a 22 px head row ("Map" + the
+◰ glyph) over a 180 × 120 body. Folded, only the glyph shows (`.is-folded`,
+30 px; 40 px on `hover: none`). `open` / `onToggle` belong to the sky, and so
+does storing the fold: `lib/minimap` exports `MINIMAP_KEY = "mf_sky_minimap"`
+and `minimapOpen(pref)` (open unless `"0"`) for it. `mapScale(rects, map,
+pad)` fits the content's bounds into the body with 8 px of padding, centred,
+one scale for both axes, never over 1:1. The map is drawn from the content
+alone, not content ∪ viewport, so the scale holds still while the viewport
+rectangle is dragged; a viewport off the content is clipped at the map's
+edge. `mapBlocks` draws:
+
+- lines (`line`, `grounded`) as rounded blocks in their state tone;
+- objects (palette, note, person, device) as muted blocks;
+- `intake` and `landing` as a 3 px bar along their long side.
+
+Every block is at least 3 px. Objects are drawn first, then lines, so a line
+wins a shared pixel and a click. Hovering a block shows its `title`: the
+label, or the kind. `selected` and `focused` add an accent or a text-coloured
+outline.
+
+**Tones** (`toneVar`) follow the birds: `working` is `--tone-working`;
+`asking`, `waiting_you` and `you` are `--tone-attention`; `waiting` is
+`--tone-waiting`; `halted`, `broken` and `failed` are `--tone-broken`; `idle`
+and `done` are `--tone-neutral`; anything else is `--tone-muted`. The colour
+reaches the CSS as an inline `--mm-tone`.
+
+**Pointer**: one handler set on the map body, with pointer capture.
+
+- A press that moves more than 3 px is a drag. It pans by `dragCamera`
+  (Δmap ÷ scale × z, same zoom), grabbing wherever you pressed: the viewport
+  rectangle or empty map.
+- A press that doesn't move is a click. On a block it calls `onJump(id)`;
+  anywhere else it calls `onCamera(centreAt(point))`, same zoom.
+
+Both components are **hookless**: a press's start lives in a module
+`WeakMap` keyed by the map element. The suite has no jsdom, so the tests call
+`Minimap(props)` and drive `onPointerDown/Move/Up` with plain event objects.
+The root carries `data-no-drag`, so SkyView's `SKY_CONTROLS` reads a press on
+it as a control, not a marquee or a pan. A double-click on the map stops
+there. Below 520 px wide, `@media` hides the map.
+
+**Off-screen hints** (`.sky-offscreen`, inset 0, `pointer-events: none`
+except on the chips) cover lines only. `edgeHints(rects, cam, viewport, max)`
+takes each rect wholly off screen and pins its chip 8 px in from the edge it
+lies beyond (past a corner, the edge on the axis where it lies further
+out). The chip sits at the rect's middle along that edge, clamped so it stays
+whole (a top or bottom chip assumes the 140 px max width). It keeps the
+nearest 8, sorted by distance from the viewport, and pushes chips on one edge
+apart so none covers another. A chip is a 22 px pill:
+
+- an arrow for the side the line lies on, the state dot, and the title cut at
+  14 characters (`shortLabel`);
+- `title` / `aria-label` "Go to <name>";
+- a click calls `onJump`.
+
+There are no hints at lod far.
+
+**Tiers**: `flightsButtons.test.ts` requires every flights button to carry a
+tier class. The glyph wears `fl-icon-btn` (quiet) and the chip `fl-pick`
+(chip). The minimap's own rules are scoped (`.sky-minimap .sky-minimap-glyph`,
+`.sky-offscreen .sky-offscreen-chip`), so they win over the tier's geometry
+whatever order the stylesheets load in. The chip resets `.fl-pick`'s 28 px
+`min-height` to 0. Under `prefers-reduced-motion` there are no transitions.
+
+For `sky-core`, when mounting: feed `rects` with `tone` = the line's state
+tone and `label` = its title; persist the fold under `MINIMAP_KEY`. The wheel
+over the map still reaches the sky's native wheel listener, which zooms about
+the pointer; `.sky-own-scroll` on the map would silence that if the judge
+finds it odd.
+### As built: round 17 zoom-shortcuts
+
+The two seams filled in, their props unchanged; `sky-core` mounts them.
+
+**`ZoomMenu`** (`ZoomMenu.tsx` + `ZoomMenu.css`). The readout is now a
+button (`sky-zoom-btn sky-zoom-read sky-zoom-menu-btn`, so it wears the zoom
+group's secondary tier and keeps the readout's muted tabular look) reading
+`87 %` with a small ▾, `aria-haspopup="menu"` / `aria-expanded`. A click, or
+↓ / ↑ on it, opens an inline `role="menu"` (never a native select), portalled
+to `<body>` at fixed coordinates under the button with right edges aligned
+(above it when the window is short): the zoom group clips (`overflow:
+hidden`) and the toolbar must not grow. Rows, each a `menuitem` with its caps
+on the right (`aria-keyshortcuts` too): **Fit all** (Shift 1 / 0), **Fit
+selection** (Shift 2, disabled when `!canFitSelection`), **Fit the focused
+line** (1, disabled when `!canFitFocused`), a separator, then **50 % · 100 %
+(Shift 0) · 150 % · 200 %**: a preset outside `min..max` is disabled, the one
+the zoom sits on is ticked ✓ with `aria-current` (`presetAt`: the nearest
+preset within 2 percentage points, none in between). Picking a row calls its
+prop and closes, the focus back on the button; ↑ / ↓ wrap over the enabled
+rows, Home / End jump, Esc or Tab close (Esc listened in the capture phase
+and stopped, so the sky's own Esc doesn't also clear a selection), a press
+outside, a resize or the window losing focus close. Opening focuses the
+ticked row, else the first. The rows are the menu-row tier (`fl-stopmenu-
+item`, StopMenu.css): `flightsButtons.test.ts` pins every flights button to a
+tier, so ZoomMenu.css only lays a row out (tick · label · caps) and draws the
+caps. Exported for the tests (no DOM in the node environment): `ZOOM_PRESETS`,
+`zoomLabel`, `presetAt`, `zoomMenuItems(props)`, `zoomMenuKey(key, at,
+live)` and `ZoomMenuList` (the open rows without positioning).
+
+**`SkyShortcuts`** (`SkyShortcuts.tsx` + `SkyShortcuts.css`). A centred card
+(`role="dialog"`, `aria-modal`, `aria-label="Keyboard shortcuts"`, not a
+native `<dialog>`) over a fixed dimmed backdrop, portalled to `<body>`; a
+press on the backdrop closes. The head says "? or Esc to close" beside a ×
+(the quiet tier, `fl-icon-btn`); under it the filter, then the groups in two
+balanced CSS columns (one under 640 px) inside a scrolling body, each row its
+caps as `<kbd>` (a pointer word — drag, click, double-click, right-click,
+Wheel — drawn as a dashed, muted "gesture" cap) and the words. While open a
+window keydown listener in the capture phase owns the keys: Esc closes, `?`
+closes while the filter is empty (with text in it, `?` is a character to
+search for), Tab cycles inside the card, a character typed with the focus on
+the × goes to the filter, and nothing reaches the sky's keys underneath (T,
+V, 0… typed in the filter never tidy or fit). On open the filter is cleared
+and focused; on close the focus returns to where it was. The sheet applies
+`withPlatform(groups, isMacLike())` itself, so the sky may pass
+`SKY_SHORTCUT_GROUPS` as is. Exported for the tests: `sheetKey(key,
+filter)` and `SkyShortcutsCard` (the card alone).
+
+**`lib/skyShortcuts.ts`**: `SKY_SHORTCUT_GROUPS`, read off SkyView's key
+handlers and the round 12–17 sections, in six groups — Move around (Space
+drag, Wheel, Ctrl Wheel, Arrows, + / −, Shift 1 and 0, Shift 2, 1, Shift 0,
+H), Select (V, drag, Shift drag, Shift click, Ctrl A, F, Esc), Edit stops
+(double-click, Enter, right-click, Delete, Backspace, Ctrl Z, Ctrl Shift Z,
+Esc), Lines and objects (drag a bar, Alt drag = no snap, T, Ctrl N, Ctrl Y),
+The palette (Tab, double-click on empty sky, click, drag onto a line, Esc),
+Help (?, Esc). Each key is one cap; a key's row says what it does, not how
+it is wired. `withPlatform(groups, isMac)` maps Ctrl → ⌘ and Alt → ⌥ (the
+keys the sky reads as `metaKey` / `altKey` there), never mutates, and is
+idempotent. `filterShortcuts(groups, query)` keeps the rows whose group,
+caps or words hold every word of the query, case-folded, "+" splitting
+words ("ctrl+z" = "ctrl z"); a one-character word is a KEY and matches a cap
+only ("ctrl z" finds Undo and Redo, not Ctrl Wheel's "zoom"); caps answer to
+aliases (⌘ to ctrl / cmd, ⌥ to alt / option, − to minus, ? to help, Esc to
+escape); emptied groups drop out, and the sheet says "No shortcut matches
+“…”." when nothing is left.
+
+Open for `sky-core`: the rows name the keys the contract adds (Shift 1 / 2 /
+0, Ctrl Shift Z, Tab, double-click on empty sky to the palette, F, ?, Alt to
+skip snapping); a key that lands differently should change its row here.
+Note that Shift 1 arrives as `e.key === "!"` (and Shift 2 as "@", Shift 0 as
+")") on a US layout: match `e.code` (`Digit1`) with `shiftKey`.
+
+Tests: `zoomMenu.test.ts` (the closed button, the rows and their order, the
+caps, greying, the tick, each row's callback, the menu keys, the stylesheet)
+and `skyShortcuts.test.ts` (the six groups and the keys SkyView answers to,
+`withPlatform`, the filter by words and by keys, the card's markup, closed =
+nothing, `sheetKey`, the capture listener and focus wiring, the two columns).
+### As built: round 17 polish-css
+
+CSS only, no component changed. Tests: `frontend/src/__tests__/skyPolish.test.ts`
+(13 tests, the sheets read as text).
+
+**One ring, one outline.** Every ringed thing wears it at rest, transparent:
+`outline: calc(1px / var(--sky-z, 1)) solid transparent; outline-offset:
+calc(2px / var(--sky-z, 1))`. That covers `.fl-box`, `.skl` (a session's line
+and a grounded one), `.sky-object` (people/device blocks, notes, the landing
+strip; radius 8px so it hugs the card) and the intake lane
+(`.sky .sky-intake > .sky-lane`). So hover, focus and selection change only
+the colour and width. The ring eases in, and nothing moves or grows. Every
+width is divided by `--sky-z`, so the ring is 2 (or 1) **screen** px at any
+zoom. At 40 % a plane-px ring would be under one pixel on screen.
+
+| State | The ring | Where |
+|---|---|---|
+| rest | 1px, transparent | each element's own rule |
+| hover | 1px, `color-mix(accent 50%)` | `.fl-box:where(:not(.fl-box-open):hover)`, the line's bar (`.skl:where(:has(> .skl-bar:hover))`), an object's head (`.sky-block-head` / `.sky-note-head` / `.sky-lane-head`), the lane's head. `:where` keeps it at zero weight, so the selection always wins. An open box is never restyled. |
+| `:focus-visible` | 1px, the accent (the hover ring in the selection's colour) | `.fl-box`, `.skl`, `.skl.skl-grounded`, `.sky-object:where(:has(:focus-visible))`, a focused note (`.sky-object:has(> .sky-note:focus)`) |
+| selected | **2px, the accent, 2px out, solid** | ONE rule in `SkySelection.css`: `.skl.is-selected`, `.skl.is-focused`, `.fl-box.selected`, `.fl-box.fl-box-selected`, `.sky-object.is-selected`, `.sky .sky-intake.is-selected > .sky-lane` (this beats Sky.css's dashed lane rule by weight). A lifted box (`.fl-box.fl-lifted`) wears it too. |
+
+These replaced: the dashed selection outlines (lines 5px out, boxes 3px out),
+the 3px `box-shadow` focus/selected rings on `.fl-box`, `.skl.is-focused` and
+the grounded line, and the note's 2px box-shadow ring. The border-colour
+cues stay (a selected line or box keeps its accent edge). The state rings
+(`.fl-st-current` / `-perched` / `-halted` / `-paused`, `.fl-described`) are
+still box-shadows, so a running box that is also selected shows both.
+
+The `.skl:focus:not(:focus-visible) { outline: none }` rule became
+`.skl:where(:focus:not(:focus-visible)) { outline-color: transparent }`. At
+weight (0,3,0) it had hidden a selected line's ring as soon as a press on its
+bar focused it.
+
+**One shadow scale.** `--sky-shadow-rest` and `--sky-shadow-raised` are
+defined once, in `FlywayCanvas.css` on `.sky, .fl-canvas`, with a softer pair
+under `.light`. FlywayCanvas.css rather than SkyLine.css, because the pane's
+Flight tab and the flyway editor draw boxes outside `.sky`. Rest is used on
+`.skl`, `.fl-box`, `.sky-block` (it had none), `.sky-note` and `.sky-palette`,
+and under the merge-target halos. Raised is used on
+`.sky-line-slot.is-dragging > .skl`,
+`.sky-object.is-dragging > :is(.sky-block, .sky-note, .sky-lane)`,
+`.sky .sky-intake.is-dragging > .sky-lane`,
+`.sky-palette-slot.is-dragging .sky-palette`, `.fl-lifted` (it lost its 45 %
+accent halo for the ring) and the selection bar. Popovers and menus
+(`.fl-tools`, `.sky-ground-menu`, StopParts' menus, `.fl-rewind`) and an
+open box's cards are chrome, so they keep their own shadows.
+
+**Radii.** Lines are 10px: `.skl` (was 12) and its corner handle; the floating
+`.sky-palette` (was 12). Boxes are 8px: `.fl-box` (was 10), the sky's roomy
+box (was 12) and branch (was 10), the grounded line's head box (was 10),
+`.sky-block` (was 10), `.sky-note` and its head (was 6), and `.sky-lane-block`
+(was 9). Chips are 999px: the shelf's `.sky-stop-chip` (was the button
+tier's 6px). Kept on purpose: the perch's 18px (its shape says "waits on
+you", and `flightsUi.test.ts` pins it) and the flown pill's 999px.
+
+**Motion.** The new transitions are 120ms ease on transform, box-shadow,
+outline-color and opacity only. `.fl-box` dropped its border-color leg and
+its 0.15–0.18s timings, and the line's corner handle went from 0.15s to
+120ms. No sheet in the round transitions a size. Under
+`prefers-reduced-motion: reduce` they are off: `.fl-box` (as before), `.skl`,
+`.skl-box-resize`, `.sky-object`, `.sky-block`, `.sky-note`, `.sky-palette`
+and the lane.
+
+**Touch.** In one `@media (hover: none)` block at the end of
+FlywayCanvas.css, every Sky control gets a centred `::after` at least 40px
+square (`min-width` / `min-height: 40px`, `translate(-50%, -50%)`). That
+covers the ◧ size control, the card fold, the ⋯ summaries, `.fl-tool`,
+`.fl-toggle`, `.fl-pick`, `.fl-icon-btn`, `.fl-palette-item`, `.sky .fl-btn`,
+the lane's toggles and rail icon, the shelf's fold and chips, the selection
+bar's buttons, and the absolutely placed handles (`.skl-box-resize`,
+`.skl-resize`, `.sky-palette-resize`, `.fl-gap-add`, `.fl-bird-marker`).
+Controls in flow get `position: relative`, while the absolutely placed ones
+already are a containing block. Nothing grows: a bigger `min-height` would
+have pushed the 42px line bar and the shelf.
+
+The hit area is in plane px. The phone's list view has no camera, so it is
+40 screen px there. A tablet's zoomed-out sky gets proportionally less, and
+the counter-scaled controls (the gaps, the handles) keep their full 40.
+
+**The drop.** The lit gap (`.fl-gap-add.fl-gap-lit`, "Tack on here") is now
+a 2px accent ring over a 2px panel gap (`0 0 0 2px var(--panel), 0 0 0 4px
+var(--accent)`); it was a 25 % halo. The pill is screen-sized, so this reads
+at every band. At far, the end + that takes a flyway
+(`.skl[data-lod="far"] .fl-box-add.fl-drop`) keeps a 2 screen-px ring
+(`calc(2px / var(--sky-z, 1))`) and a 30 % wash (was 16 %).
+
+**Open.** Two pins outside the fence still describe the old look and fail
+until they are updated. `skySelect.test.ts:308-309` wants
+`outline: 2px dashed var(--accent)` on `.skl.is-selected` and
+`.fl-box.fl-box-selected`; it should pin the one rule's
+`outline: calc(2px / var(--sky-z, 1)) solid var(--accent)` (skyPolish pins it
+already). `skyVisibility.test.ts:428` wants `0 0 0 3px` in `.fl-box.selected`;
+it should want `outline-color: var(--accent)`. Sky.css (sky-core's) still has
+the dashed `.sky-intake.is-selected > .sky-lane` rule. It is dead weight now
+that the heavier rule overrides it.
+
+### As built: round 17 sky-core
+
+The `sky-core` task of round 17 (2026-10-31). Files: `SkyView.tsx`,
+`Sky.css`, `lib/skyLayout.ts`, `lib/skySnap.ts`, `lib/skyUndo.ts`. Tests:
+new `skySnap.test.ts` (9: the pure `snapBox` and the sky's wiring) and
+`skyCanvas.test.ts` (15: fit selection, the eased camera, the redo stack,
+Tab / double-click, the cursor contract, focus mode, the seams mounted);
+`sky*.test.ts` all pass (21 files, 444 tests). `lib/skySelect.ts` and
+`lib/viewMode.ts` needed no change (the selection and reduced-motion
+readers already said what the round needs).
+
+**What each key does now** (all with the sky's keys owning the keyboard —
+nothing that takes keys itself has the focus, no dialog over the sky):
+
+| Key | Does |
+|---|---|
+| `0` | fit all, legibly (`firstFit`) — as before, now eased |
+| `Shift+1` | fit all (the same as `0`; Figma's key) |
+| `1` | fit the focused line — as before, eased |
+| `Shift+2` | fit the selection: the selected lines' and objects' bounds, or the selected stops' boxes (`fitSelection`, 1.25 cap; 1.5 for stops); nothing selected — nothing happens |
+| `Shift+0` | 100 % about the window's middle (eased); the toolbar's 100 % button says it |
+| `+` `−` arrows, the wheel, a pan, a pinch | as before, direct — and any of them stops a glide where it is |
+| `Tab` | the palette floats with its filter focused (where it was last pinned, else the view's left third under the toolbar); floating already — docks it. Inside the floating palette's filter (where the first Tab put the keyboard) a second Tab docks it too (Shift+Tab stays the browser's). Not on a phone |
+| double-click on empty sky | the palette floats AT THE POINTER with its filter focused (n8n); placing from it lands beside it (`placeGrounded(…, "palette")`). A double-click on a line keeps its meaning (it never reaches the sky). A phone (narrow) keeps the new-session block |
+| `F` | with a selection: focus mode — `.sky-focus` on the plane, `data-dim` on every slot and object not selected (a stop selection keeps its line bright); everything dimmed fades to 35 % (60 % under the pointer), opacity only, 120 ms. Any press on the sky, Esc, or clearing the selection lifts it |
+| `?` | the shortcuts sheet (`SkyShortcuts`, `open`); Esc closes it before anything else Esc does; the ⋯ menu has "Keyboard shortcuts…" for the mouse |
+| `Ctrl+Z` / `⌘Z` | undo, as round 14 |
+| `Ctrl+Shift+Z` / `⌘⇧Z` | redo: `popRedo` → "Redid: <label>", or "Nothing to redo". Same gates as undo (not in a field, a pane, a menu, a dialog, nor mid-drag). `Ctrl+Y` stays the view toggle |
+| `Alt` held while dragging | no snapping (the raw delta) |
+
+**Snapping** (`lib/skySnap`). `snapBox(moving, others, threshold)`: the
+moving box's left / centre / right and top / middle / bottom against every
+other box's, each axis on its own, the nearest alignment within `threshold`
+winning (ties: the first found, the others in drawing order); returns the
+snapped `x`, `y` and the guides — a vertical one at the aligned x spanning
+from the moving box to the box it aligned with (both heights), a horizontal
+one likewise. `snapThreshold(z) = 8 / z` (8 screen px). The sky
+(`onDragStart`'s `delta`) snaps the PRESSED box against everything that
+stays put (every line, object, the lane, the palette — not the selection
+being dragged) and moves the rest of the selection by the same snapped
+delta; the last move's delta is what the drop pins (so a drop lands where
+the guides said). The guides are drawn in the plane (`.sky-guide`,
+`data-axis="x|y"`, `left/top/height` or `top/left/width` in plane px) at 1
+SCREEN px of `--accent` whatever the zoom (`calc(1px / var(--sky-z))`),
+`pointer-events: none`, gone on release (`setGuides([])`). The plane
+carries `data-snapping` while any guide shows; the dragged slot wears
+`is-snapping`.
+
+**The eased camera.** `goTo(target, instant?)` in SkyView: ~220 ms
+(`CAM_EASE_MS`) on `requestAnimationFrame`, ease-out cubic (`easeOut`), the
+zoom interpolated in log space (`lerpCamera`), the LAST frame
+`setCamState(target)` exactly — then nothing moves. Instant when: `instant`
+(the first picture after the lines settle — there is nothing to glide
+from), reduced motion (the setting or the media query, `motionOff`), the
+camera is already there (`sameCamera`), or no frame scheduler. `setCam` is
+now a wrapper that cancels a glide first: the wheel, a pan, a pinch, `+`/`−`,
+the arrows, the minimap's drag all cut a glide short where it is. Goes
+through `goTo`: `0` / `Shift+1` / Fit, `1`, `Shift+2`, `Shift+0` and the
+zoom menu's presets (`zoomTo`), the focus effect's centring when a session
+picked elsewhere is off screen (`centerOn`), the minimap's and the hints'
+jump (`jumpTo`). No FLIP ghosts: the plane's transform is the only thing
+that moves.
+
+**Redo** (`lib/skyUndo`). `UndoInput.redo?()`; `popUndo` / `takeUndo` move
+an entry that has `redo()` onto the redo stack (its clock restarted), else
+nothing; `popRedo` takes the newest back onto the undo stack and returns it
+(the caller runs `redo()`); `redoCount`; any `pushUndo` empties the redo
+stack (the branch is gone); the redo stack expires and caps like the undo
+stack; `clearUndo` empties both. Entries that carry `redo()` now:
+- the grounded line's delete (`removeGrounded` in SkyView): undo remakes
+  the line (a NEW flight id, kept in a closure), redo deletes that one;
+- the merge onto a session (`mergeGrounded`): undo remakes the grounded
+  line, redo removes the remade line again (the stops stay on the session
+  either way, as round 14 said);
+- the note's delete (`removeNote`): it is one `pushUndo` entry now (so
+  Ctrl+Z reaches it too), the toast's Undo is `undoAction(entry, …)`, redo
+  removes it again.
+- NOT yet: a stop's or a group's removal (`removeStop` / `removeGroup` in
+  `useSessionLine.tsx`, the selection bar's `removeStops` / `removeLines`
+  in `SkySelection.tsx`, a grounded line's own Remove in
+  `GroundedLine.tsx`, a close in `SkyLine.tsx`'s `pushCloseUndo`). Those
+  entries are pushed OUTSIDE this task's fence; each needs a `redo()`
+  that drops the re-tacked step (`dropStop` / `dropGroup` by the id the
+  undo's `tackOn` returned) — the integrator or the next cycle wires them.
+  Ctrl+Shift+Z after undoing one of these says "Nothing to redo".
+
+**The cursor contract** (`Sky.css`, under `.sky-viewport` so it wins over
+the bars' own sheets): `grab` on `.skl-bar`, `.sky-line-bar`,
+`.sky-lane-head`, `[data-sky-head]`, `.sky-object-head`,
+`.sky-palette-head`; `grabbing` on the same inside `.is-dragging`;
+`crosshair` on the viewport in drag mode (`.sky[data-tool="drag"]` — a drag
+on empty sky is the marquee; click mode's `grab` stays); `move` on the bar
+of the slot that is snapping (`.is-snapping`) and on a dragging object's
+head while the plane says `data-snapping`; `copy` on and inside
+`.is-drop-target` / `.is-merge-target`; no `zoom-in` / `zoom-out` anywhere
+in the sheet.
+
+**The seams mounted** (inside the viewport, after the selection bar):
+- `<OffscreenHints rects cam viewport onJump>` and, in
+  `.sky-minimap-host` (absolute, right 12 / bottom 12, z 9, hidden under
+  520 px), `<Minimap rects cam viewport onCamera onJump open onToggle>`.
+  `rects` (`mapRects`): every line from `rectOf` — `kind` "line" or
+  "grounded", `tone` = the session's state word (`deriveSessionState(row)
+  .state`: starting / working / needs_you / idle / limit / offline) or the
+  grounded flight's `state`, `label` = its name, `selected`, `focused` (the
+  focus line, or the grounded focus) — and every object (`kind` = the
+  registry kind, label "Intake" for the lane, else its key). `onCamera` sets
+  the camera directly (a drag); `onJump` = `jumpTo`: eased `centerOn` at the
+  current zoom (≥ 0.85) and the line focused as a press on it would (no box
+  opens). `open` is remembered in `localStorage` `mf_sky_minimap` ("0" =
+  folded; default open).
+- `<ZoomMenu zoom min max onZoomTo onFitAll onFitSelection onFitFocused
+  canFitSelection canFitFocused>` in the toolbar's zoom group where the
+  `sky-zoom-read` span was (the seam still renders that span until the
+  `zoom-shortcuts` task fills it, so the readout never goes missing).
+- `<SkyShortcuts open onClose groups={[]}>` with a `TODO(zoom-shortcuts)`
+  comment: `lib/skyShortcuts.ts` (`SKY_SHORTCUT_GROUPS`) is that task's file
+  and did not exist in this worktree; the integrator imports it and passes
+  it as `groups`.
+
+**Copy that moved.** The empty sky's line reads "double-click anywhere for
+the blocks, or press the Session chip in the shelf below, to start one";
+the viewport's aria-label ends "double-click for the blocks, ? for every
+key". The ⋯ menu gained "Keyboard shortcuts…".
+
+**Test pins changed deliberately** (round 14/15 literals that round 17
+replaces): `sky.test.ts` (the plane's className now carries `sky-focus`);
+`skyZoom.test.ts` (`setCam((whole ? …` → `goTo(…, instant)`; the 100 %
+button's title says Shift+0); `skyView.test.ts` (`setCam(centerOn` →
+`goTo(centerOn`; the first fit is `fitFocused(true)`; the 1 button's
+`onClick={() => fitFocused()}`; the "no redo" test is now the redo test;
+the grounded delete's entry has `redo`; `focusFilter={!!catalogOpen ||
+filterFocus}`; `setPaletteMode("shelf")` is a block); `skyMerge.test.ts`
+(the merge's entry has `redo`); `skyObjects.test.ts` (the ⋯ menu has two
+items; the note's toast uses `undoAction`). Every other pin holds.
+
+**Open.** The judge's second pass decides whether Tab stealing the keyboard
+from a focused line is right (n8n's manner, but it is also the browser's
+focus key); the stop / group redo entries above; `SkyGuide`'s and the
+tour's copy still say a double-click starts a session where they mention
+it (outside this fence).

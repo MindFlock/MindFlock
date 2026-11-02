@@ -425,7 +425,7 @@ describe("type and contrast", () => {
     expect(cssRule(canvas, ".fl-st-current")).toContain("0 0 0 2px var(--tone-working)");
     expect(cssRule(canvas, ".fl-st-perched")).toMatch(/background: color-mix\(in srgb, var\(--tone-attention\) 14%, var\(--panel-2\)\)[\s\S]*0 0 0 2px var\(--tone-attention\)/);
     expect(cssRule(canvas, ".fl-st-halted")).toContain("0 0 0 2px var(--red)");
-    expect(cssRule(canvas, ".fl-box.selected")).toContain("0 0 0 3px");
+    expect(cssRule(canvas, ".fl-box.selected")).toContain("outline-color: var(--accent)");
     expect(cssRule(canvas, ".fl-wire")).toContain("stroke-width: 2");
   });
 

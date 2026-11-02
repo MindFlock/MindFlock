@@ -413,6 +413,96 @@ body.view-switch #sky-view {
   cursor: grabbing;
 }
 
+/* --- Round 17: the cursor contract (docs/flights.md "Round 17") -----------
+   The pointer says what a drag will do, as Excalidraw's does:
+   - grab on a bar or head (it can be picked up), grabbing while it is
+     dragged;
+   - crosshair on empty sky in drag mode (a drag there is the marquee);
+   - move while a dragged box is snapping to a neighbour (`is-snapping`);
+   - copy while a chip or a grounded line drags over a line that takes it;
+   - zoom-in / zoom-out never: the wheel and + / − zoom.
+   The bars' own sheets say `move`; these rules sit under .sky-viewport so
+   they win. A control keeps its own pointer. */
+.sky-viewport :is(.skl-bar, .sky-line-bar, .sky-lane-head, [data-sky-head], .sky-object-head, .sky-palette-head) {
+  cursor: grab;
+}
+
+.sky-viewport :is(.sky-line-slot.is-dragging, .sky-intake.is-dragging, .sky-palette-slot.is-dragging, .sky-object.is-dragging)
+  :is(.skl-bar, .sky-line-bar, .sky-lane-head, [data-sky-head], .sky-object-head, .sky-palette-head) {
+  cursor: grabbing;
+}
+
+/* Drag mode: a drag on empty sky draws the marquee. */
+.sky[data-tool="drag"] .sky-viewport {
+  cursor: crosshair;
+}
+
+/* A snapping box: the pointer says it is being placed. */
+.sky-viewport .sky-line-slot.is-snapping :is(.skl-bar, .sky-line-bar),
+.sky-plane[data-snapping] :is(.sky-intake.is-dragging, .sky-palette-slot.is-dragging, .sky-object.is-dragging) :is(.sky-lane-head, [data-sky-head], .sky-object-head, .sky-palette-head) {
+  cursor: move;
+}
+
+/* A chip, a saved stop or a grounded line over a line that will take it. */
+.sky-viewport :is(.is-drop-target, .is-merge-target),
+.sky-viewport :is(.is-drop-target, .is-merge-target) * {
+  cursor: copy;
+}
+
+/* --- Round 17: the alignment guides (lib/skySnap) ------------------------
+   Drawn in the plane while a drag snaps: 1 SCREEN px of accent, however the
+   plane is zoomed (the plane's scale is undone by --sky-z). */
+.sky-guide {
+  position: absolute;
+  pointer-events: none;
+  z-index: 8;
+  background: var(--accent);
+  opacity: 0.9;
+}
+
+.sky-guide[data-axis="x"] {
+  width: calc(1px / var(--sky-z, 1));
+  margin-left: calc(-0.5px / var(--sky-z, 1));
+}
+
+.sky-guide[data-axis="y"] {
+  height: calc(1px / var(--sky-z, 1));
+  margin-top: calc(-0.5px / var(--sky-z, 1));
+}
+
+/* --- Round 17: focus mode (F with a selection) -----------------------------
+   Everything not selected fades to 35 %; a click or Esc lifts it. Only
+   opacity moves, over 120 ms — nothing changes place or size. */
+.sky-plane.sky-focus [data-dim] {
+  opacity: 0.35;
+  transition: opacity 0.12s ease;
+}
+
+.sky-plane.sky-focus [data-dim]:hover {
+  opacity: 0.6;
+}
+
+/* --- Round 17: the minimap's corner ----------------------------------------
+   Bottom-right of the sky, above the shelf and right of the selection bar;
+   the map itself (Minimap.css) is what the `minimap` task draws. */
+.sky-minimap-host {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 9;
+  pointer-events: none;
+}
+
+.sky-minimap-host > * {
+  pointer-events: auto;
+}
+
+@media (max-width: 520px) {
+  .sky-minimap-host {
+    display: none;
+  }
+}
+
 .sky-line-bar > .fl-bird {
   flex: none;
   color: var(--accent);
@@ -781,6 +871,9 @@ details.fl-group-waiting > summary {
   .sky-line-leaving {
     animation: none;
     opacity: 0;
+  }
+  .sky-plane.sky-focus [data-dim] {
+    transition: none;
   }
 }
 
