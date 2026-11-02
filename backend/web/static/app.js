@@ -87495,7 +87495,7 @@ function FlightChain({ title, line, kinds, label }) {
 		big
 	]);
 	const gc = line.graphCanvas;
-	const chainMenu = useChainMenu(gc, flightId, {
+	const chainMenu = useChainMenu(gc, flightId || line.landedId, {
 		steps: line.flight?.steps,
 		kinds
 	});
@@ -89429,7 +89429,15 @@ function useSessionLine(title, src, opts) {
 		} });
 		return true;
 	};
+	const landedId = !flight && line.mode === "flight" && line.flightId ? line.flightId : "";
+	const clearLanded = async () => {
+		if (!landedId) return false;
+		const ok = await optimisticDelete(landedId, () => deleteFlight(landedId));
+		if (ok) toast("Cleared the finished chain");
+		return ok;
+	};
 	const removeNode = async (n) => {
+		if (!flight && landedId) return clearLanded();
 		if (n.kind === "group") return removeGroup(n);
 		return n.step && n.index !== void 0 ? removeStop(n.step, n.index) : false;
 	};
@@ -89567,7 +89575,7 @@ function useSessionLine(title, src, opts) {
 			else if (n.session && n.session !== title) opts.onSession(n.session);
 		},
 		onInsert: flight ? (at) => setPaletteAt(paletteAt === at ? null : at) : void 0,
-		onRemove: flight ? (n) => requestRemove(own(n)) : void 0,
+		onRemove: flight ? (n) => requestRemove(own(n)) : landedId ? () => void clearLanded() : void 0,
 		onMove: flight ? (from, to) => {
 			const step = flight.steps[from];
 			const n = stops.find((s) => s.index === from);
@@ -89720,6 +89728,7 @@ function useSessionLine(title, src, opts) {
 	return {
 		row,
 		flight,
+		landedId,
 		diagram: shown.diagram,
 		busy,
 		setBusy,
@@ -134108,7 +134117,7 @@ function SkyLine(p) {
 		".sky-node:not(.sky-head):not(.sky-subframe)": "sky-stop"
 	});
 	const gc = line.graphCanvas;
-	const chainMenu = useChainMenu(gc, line.flight?.id || "", {
+	const chainMenu = useChainMenu(gc, line.flight?.id || line.landedId, {
 		steps: line.flight?.steps,
 		kinds
 	});

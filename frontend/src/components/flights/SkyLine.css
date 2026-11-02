@@ -374,6 +374,10 @@
   position: relative;
   display: flex;
   flex-direction: column;
+  /* A card opened inside a tile (a sub-session's, in its agent tile's place)
+     must not inherit the tile's centred text: the terminal reads left-aligned. */
+  text-align: left;
+  align-items: stretch;
   box-sizing: content-box;
   border-radius: 10px;
   background: var(--panel);

@@ -63,3 +63,13 @@ describe("a stops-only chain's name", () => {
     expect(groundedName({ plan_name: "" })).toBe("Stops");
   });
 });
+
+describe("a landed chain's blocks come off", () => {
+  it("removing one clears the finished chain (Delete and the menu's Remove)", async () => {
+    const src = (await import("../components/flights/useSessionLine.tsx?raw")).default;
+    expect(src).toContain("if (!flight && landedId) return clearLanded();");
+    expect(src).toContain("landedId ? () => void clearLanded() : undefined");
+    const sky = (await import("../components/flights/SkyLine.tsx?raw")).default;
+    expect(sky).toContain("useChainMenu(gc, line.flight?.id || line.landedId");
+  });
+});

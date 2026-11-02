@@ -437,7 +437,7 @@ export function SkyLine(p: SkyLineProps): JSX.Element {
   useTourHooks(wrapRef, { ".sky-head": "sky-session-box", ".sky-node:not(.sky-head):not(.sky-subframe)": "sky-stop" });
   const gc = line.graphCanvas;
   // Round 18: a tile's right-click menu; a Loop's pill dragged onto a stop re-aims it.
-  const chainMenu = useChainMenu(gc, line.flight?.id || "", { steps: line.flight?.steps, kinds });
+  const chainMenu = useChainMenu(gc, line.flight?.id || line.landedId, { steps: line.flight?.steps, kinds });
   const agentMenu = useAgentMenu();
   const onPillDown = pillAimer(graph, gc.onLoopTo);
 

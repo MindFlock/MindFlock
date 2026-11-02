@@ -840,3 +840,10 @@
 .sky-agent-prompt-row .muted {
   margin-right: auto;
 }
+
+/* A node drawn open (a sub-session's card in its tile's place): a container,
+   not a tile — nothing centred, the card fills it. */
+.sky-node.sky-node-open {
+  align-items: stretch;
+  text-align: left;
+}

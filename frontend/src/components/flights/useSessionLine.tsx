@@ -44,11 +44,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Instance } from "../../api/types";
 import { toast } from "../../lib/toast";
-import { optimistic, withSteps, withoutSteps } from "../../lib/flightOptimism";
+import { optimistic, optimisticDelete, withSteps, withoutSteps } from "../../lib/flightOptimism";
 import { isShown, newStep, planFromSteps, type Flight, type FlightPlan, type FlightRow, type FlightStep, type StepKindDef, type StepRunState } from "../../lib/flights";
 import { drawnCanvas, findNode, firstStepOf, loopSlotAfter, loopStepTo, receiptOf, sessionDiagram, type DiagramNode } from "../../lib/flightDiagram";
 import {
   dropGroup,
+  deleteFlight,
   dropStop,
   moveStop,
   patchStop,
@@ -389,7 +390,20 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
     return true;
   };
 
+  // A flight that LANDED stays drawn on the line (lib/flightDiagram
+  // landedFlightOf) but its stops are read-only: removing one of them clears
+  // that finished chain off the session (the owner couldn't delete a finished
+  // Commit). Its record goes; there is nothing to undo into.
+  const landedId = !flight && line.mode === "flight" && line.flightId ? line.flightId : "";
+  const clearLanded = async (): Promise<boolean> => {
+    if (!landedId) return false;
+    const ok = await optimisticDelete(landedId, () => deleteFlight(landedId));
+    if (ok) toast("Cleared the finished chain");
+    return ok;
+  };
+
   const removeNode = async (n: DiagramNode): Promise<boolean> => {
+    if (!flight && landedId) return clearLanded();
     if (n.kind === "group") return removeGroup(n);
     return n.step && n.index !== undefined ? removeStop(n.step, n.index) : false;
   };
@@ -531,7 +545,8 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
       else if (n.session && n.session !== title) opts.onSession(n.session);
     },
     onInsert: flight ? (at) => setPaletteAt(paletteAt === at ? null : at) : undefined,
-    onRemove: flight ? (n) => requestRemove(own(n)) : undefined,
+    // A landed chain's tiles come off too: that clears the finished chain.
+    onRemove: flight ? (n) => requestRemove(own(n)) : landedId ? () => void clearLanded() : undefined,
     // Indexes among the line's stops are the flight's (drawnCanvas maps the
     // canvas's places onto them).
     onMove: flight
@@ -729,6 +744,8 @@ export function useSessionLine(title: string, src: LineSource, opts: SessionLine
   return {
     row,
     flight,
+    /** A landed flight drawn on the line (read-only), "" when none. */
+    landedId,
     /** The line as the canvas counts it (drawn places). */
     diagram: shown.diagram,
     busy,

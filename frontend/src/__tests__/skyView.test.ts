@@ -521,7 +521,7 @@ describe("round 14: Ctrl+Z, removals that don't ask, All blocks… on the board"
     expect(hook.match(/const entry = pushUndo\(\{/g)?.length).toBe(2);
     expect(hook.match(/onClick: \(\) => \{\s*if \(takeUndo\(entry\)\) void entry\.undo\(\);\s*\}/g)?.length).toBe(2);
     expect(hook).toContain('if (opts.askRunning && removalNeedsAsk({ kind: "stops", indexes: nodeIndexes(n), flight })) setRemoveAsk(n);');
-    expect(hook).toContain("onRemove: flight ? (n) => requestRemove(own(n)) : undefined,");
+    expect(hook).toContain("onRemove: flight ? (n) => requestRemove(own(n)) : landedId ? () => void clearLanded() : undefined,");
     expect(line).toContain("askRunning: true");
     // Delete from the sky reaches the stop the flight is at (not editable), which then asks.
     expect(line).toContain("nodeIndexes(n).includes(line.flight.cursor);");
